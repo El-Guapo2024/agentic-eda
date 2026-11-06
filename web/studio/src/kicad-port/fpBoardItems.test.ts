@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Part } from "../api/types";
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
-import { fpItemsBounds, fpItemsHitDistance, parseFpItemId, shownFootprintImages } from "./fpBoardItems";
+import { fpDimensionHitDistance, fpItemsBounds, fpItemsHitDistance, fpTableHitDistance, parseFpItemId, shownFootprintImages } from "./fpBoardItems";
 import { footprintBox } from "./footprintBox";
 
 const box: BoardTextBox = {
@@ -16,6 +16,8 @@ const part = { ref: "U1", placed: true, at: [0, 0], side: "top", items: { text_b
 
 test("the id of a footprint's item names the footprint and the item", () => {
   assert.deepEqual(parseFpItemId("U1~img_000000000002"), { ref: "U1", item: "img_000000000002" });
+  assert.deepEqual(parseFpItemId("U1~dim_000000000005"), { ref: "U1", item: "dim_000000000005" }, "a dimension (UI-LEFT PP14)");
+  assert.deepEqual(parseFpItemId("U1~tbl_000000000006"), { ref: "U1", item: "tbl_000000000006" }, "a table");
   assert.equal(parseFpItemId("U1~t0"), null, "a footprint's text is not one");
   assert.equal(parseFpItemId("img_000000000002"), null);
 });
@@ -40,4 +42,20 @@ test("the images of the footprints whose side and layer show", () => {
   assert.equal(shownFootprintImages({ parts: [part] }, {}).length, 1);
   assert.equal(shownFootprintImages({ parts: [part] }, { "obj:footprints_front": false }).length, 0);
   assert.equal(shownFootprintImages({ parts: [{ ...part, placed: false }] }, {}).length, 0);
+});
+
+// UI-LEFT PP14: a footprint's dimension and table are hit by their lines and cells (a click picks the footprint), and count in its box -- the dimension only with the text
+test("a footprint's dimension and table are hit and boxed with it", () => {
+  const dim = { id: "U1~dim_000000000005", layer: "F.Fab", lines: [[[0, 20_000_000], [10_000_000, 20_000_000]]], text_at: [5_000_000, 19_000_000] };
+  const cell = { id: "c", col_span: 1, row_span: 1, corners: [[20_000_000, 0], [24_000_000, 0], [24_000_000, 2_000_000], [20_000_000, 2_000_000]] };
+  const table = { id: "U1~tbl_000000000006", layer: "F.Fab", cells: [cell], bbox: [20_000_000, 0, 24_000_000, 2_000_000] };
+  assert.equal(fpDimensionHitDistance(dim as never, 5_000_000, 21_000_000), 1_000_000, "a millimetre under the crossbar");
+  assert.equal(fpTableHitDistance(table as never, 22_000_000, 1_000_000), 0, "inside the cell");
+  const withBoth = { ...part, items: { ...part.items, dimensions: [dim], tables: [table] } } as unknown as Part;
+  assert.equal(fpItemsHitDistance(withBoth, 22_000_000, 1_000_000, {}), 0);
+  const without = { ...withBoth, items: { ...part.items } } as unknown as Part;
+  assert.equal(fpItemsHitDistance(withBoth, 5_000_000, 20_000_000, { "F.Fab": false }), fpItemsHitDistance(without, 5_000_000, 20_000_000, {}), "a hidden layer hides them");
+  assert.deepEqual(fpItemsBounds(withBoth), [-6_000_000, -1_000_000, 24_000_000, 20_000_000]);
+  assert.deepEqual(footprintBox(withBoth, false)?.[3], 12_050_000, "without the text the dimension goes");
+  assert.deepEqual(footprintBox(withBoth, false)?.[2], 24_000_000, "the table stays");
 });
