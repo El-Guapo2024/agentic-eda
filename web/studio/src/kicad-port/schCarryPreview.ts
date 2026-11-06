@@ -18,6 +18,7 @@
 import type { LibFill, LibGraphic, LibPin, LibSymbol, LibSymbols, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, PinKind, PowerSymbol, SchField, SchematicLabel, SchematicPin, SchematicSymbol, SchematicText } from "../api/types";
 import type { SchGraphic } from "../api/schEditTypes";
 import { bezierPolyline, SYMBOL_BEZIER_MAX_ERROR_NM } from "./bezierPoly";
+import { textBoxMarginMm } from "./symTextBox";
 import type { SchPastePreview } from "./schClipboard";
 import { PREVIEW_AT, symbolOrientation, type CarriedItem, type CarriedSymbol } from "./schPlaceTool";
 
@@ -58,6 +59,8 @@ const fillOf = (f: LibraryFill): LibFill => f;
  */
 export function libSymbolOfLibrary(sym: LibrarySymbol): LibSymbol {
   const graphics: LibGraphic[] = [];
+  // a text box's place among the symbol's (`LibConnectivity::text_boxes`, private ones left out), which a placed symbol's `text_box_shown` names
+  let boxes = 0;
   for (const g of sym.graphics) {
     const unit = g.unit ?? 0;
     const body_style = g.body_style ?? 0;
@@ -86,9 +89,9 @@ export function libSymbolOfLibrary(sym: LibrarySymbol): LibSymbol {
         break;
       case "text_box":
         if (g.private) break;
-        // the border and the fill are the box; no border (a negative width) and no fill draws nothing of it
-        if (g.stroke_mm < 0 && g.fill === "none") break;
-        graphics.push(textBoxGraphic(g, unit, body_style));
+        // the border and the fill are the box (no border, a negative width, and no fill: none), and the text is drawn in it
+        if (!(g.stroke_mm < 0 && g.fill === "none")) graphics.push(textBoxGraphic(g, unit, body_style));
+        graphics.push(textBoxText(g, boxes++, unit, body_style));
         break;
     }
   }
@@ -118,9 +121,30 @@ export function libSymbolOfLibrary(sym: LibrarySymbol): LibSymbol {
   };
 }
 
-/** A library text box as a placed symbol's drawing has it: its box, the text it holds riding along for a painter that draws it. */
+/** A library text box's border and fill, as a placed symbol's drawing has them (`lib_symbol_json`): a rectangle. */
 function textBoxGraphic(g: Extract<LibrarySymbolGraphic, { kind: "text_box" }>, unit: number, body_style: number): LibGraphic {
   return { kind: "rectangle", start: pt(g.start), end: pt(g.end), stroke_width: g.stroke_mm, fill: g.fill === "none" ? "none" : "background", unit, body_style };
+}
+
+/** A library text box's text, as `lib_symbol_json` sends it: the margin resolved (`SCH_TEXTBOX::GetLegacyTextMargin` for none, kicad-port/symTextBox.ts). */
+function textBoxText(g: Extract<LibrarySymbolGraphic, { kind: "text_box" }>, index: number, unit: number, body_style: number): LibGraphic {
+  return {
+    kind: "text_box",
+    index,
+    text: g.text,
+    start: pt(g.start),
+    end: pt(g.end),
+    angle_deg: g.angle_deg,
+    size_mm: g.size_mm,
+    bold: !!g.bold,
+    italic: !!g.italic,
+    h_align: g.h_align,
+    v_align: g.v_align,
+    margin_mm: textBoxMarginMm(g),
+    ...(g.text_color && g.text_color.a > 0 ? { text_color: g.text_color } : {}),
+    unit,
+    body_style,
+  };
 }
 
 // ------------------------------------------------------------------------------------------------------------- the carried items
@@ -169,13 +193,116 @@ export function carriedFields(fields: readonly SchField[], was: { rotDeg: number
   });
 }
 
-/** The library symbol a carried symbol or power symbol is drawn by: the sheet's, else its own, else the server's. */
-function libOf(libId: string, ctx: CarriedPreviewContext): LibSymbol | null {
-  return ctx.libSymbols[libId] ?? ctx.lib ?? ctx.server?.preview.lib_symbols[libId] ?? null;
+/** The library symbol a carried symbol or power symbol is drawn by: the sheet's, else the server's drawing's, else its own (the chooser's, in the server's frame). */
+function libOf(libId: string, ctx: CarriedPreviewContext, cornerUnit: number | null): LibSymbol | null {
+  const own = ctx.lib ? (cornerUnit === null ? ctx.lib : corneredSymbol(ctx.lib, cornerUnit)) : null;
+  return ctx.libSymbols[libId] ?? ctx.server?.preview.lib_symbols[libId] ?? own;
+}
+
+// ------------------------------------------------------------------------------------------------------------- the placed frame
+
+/** `eda_engine::geometry`'s `GRID` (1.27 mm) and `STUB` (one grid cell). */
+const GRID_MM = 1.27;
+const STUB_MM = 1.27;
+
+/**
+ * `eda_engine::geometry::real_symbol_bbox`: the box a placed symbol is put down by -- its pins' stub tips where it has pins on a side, else its graphics (both bodies
+ * together), snapped out to the 1.27 mm grid. Library frame: mm, +y up.
+ */
+export function realSymbolBox(lib: LibSymbol, unit: number): { x0: number; y0: number; x1: number; y1: number } {
+  const onUnit = (u: number) => u === 0 || u === unit;
+  let [gx0, gy0, gx1, gy1] = [Infinity, Infinity, -Infinity, -Infinity];
+  const feed = (x: number, y: number) => {
+    gx0 = Math.min(gx0, x);
+    gy0 = Math.min(gy0, y);
+    gx1 = Math.max(gx1, x);
+    gy1 = Math.max(gy1, y);
+  };
+  for (const g of lib.graphics.filter((x) => onUnit(x.unit))) {
+    switch (g.kind) {
+      case "rectangle":
+        feed(...g.start);
+        feed(...g.end);
+        break;
+      case "polyline":
+        g.pts.forEach((p) => feed(...p));
+        break;
+      case "circle":
+        feed(g.center[0] - g.radius, g.center[1] - g.radius);
+        feed(g.center[0] + g.radius, g.center[1] + g.radius);
+        break;
+      case "arc":
+        feed(...g.start);
+        feed(...g.mid);
+        feed(...g.end);
+        break;
+      case "text":
+        feed(...g.at);
+        break;
+      case "text_box":
+        // the engine's symbol has the box's border as a rectangle (above), not the text
+        break;
+    }
+  }
+  if (!Number.isFinite(gx0)) [gx0, gy0, gx1, gy1] = [0, 0, 0, 0];
+  let left: number | null = null;
+  let right: number | null = null;
+  let bottom: number | null = null;
+  let top: number | null = null;
+  for (const p of lib.pins.filter((x) => onUnit(x.unit))) {
+    // `side_from_pin_angle`: the direction from the pin's outer point toward the body
+    switch (((Math.round((((p.angle_deg % 360) + 360) % 360) / 90) % 4) + 4) % 4) {
+      case 0:
+        left = left === null ? p.at[0] + STUB_MM : Math.max(left, p.at[0] + STUB_MM);
+        break;
+      case 1:
+        bottom = bottom === null ? p.at[1] + STUB_MM : Math.max(bottom, p.at[1] + STUB_MM);
+        break;
+      case 2:
+        right = right === null ? p.at[0] - STUB_MM : Math.min(right, p.at[0] - STUB_MM);
+        break;
+      default:
+        top = top === null ? p.at[1] - STUB_MM : Math.min(top, p.at[1] - STUB_MM);
+    }
+  }
+  // snapped out to the grid, with a hair of slack for an edge already on it
+  return {
+    x0: Math.floor((left ?? gx0) / GRID_MM + 1e-6) * GRID_MM,
+    y0: Math.floor((bottom ?? gy0) / GRID_MM + 1e-6) * GRID_MM,
+    x1: Math.ceil((right ?? gx1) / GRID_MM - 1e-6) * GRID_MM,
+    y1: Math.ceil((top ?? gy1) / GRID_MM - 1e-6) * GRID_MM,
+  };
+}
+
+/**
+ * `eda_engine::placed::corner_symbol` of a library symbol the page loaded itself (the chooser's): the studio puts a symbol down by its box's top-left corner, so the
+ * sheet's and the server's drawings of a placed symbol have the library's points moved by `(-x0, -y1)` of `realSymbolBox`; the page's drawing of a symbol in the
+ * hand is moved the same way, or it would ride off the place the click puts it.
+ */
+export function corneredSymbol(lib: LibSymbol, unit: number): LibSymbol {
+  const b = realSymbolBox(lib, unit);
+  const [dx, dy] = [-b.x0, -b.y1];
+  const sh = (p: [number, number]): [number, number] => [p[0] + dx, p[1] + dy];
+  const graphics = lib.graphics.map((g): LibGraphic => {
+    switch (g.kind) {
+      case "rectangle":
+      case "text_box":
+        return { ...g, start: sh(g.start), end: sh(g.end) };
+      case "polyline":
+        return { ...g, pts: g.pts.map(sh) };
+      case "circle":
+        return { ...g, center: sh(g.center) };
+      case "arc":
+        return { ...g, start: sh(g.start), mid: sh(g.mid), end: sh(g.end) };
+      case "text":
+        return { ...g, at: sh(g.at) };
+    }
+  });
+  return { ...lib, graphics, pins: lib.pins.map((p) => ({ ...p, at: sh(p.at) })) };
 }
 
 function symbolPreview(item: CarriedSymbol, ctx: CarriedPreviewContext): SchPastePreview {
-  const lib = libOf(item.libId, ctx);
+  const lib = libOf(item.libId, ctx, item.unit);
   const o = symbolOrientation(item);
   const rotDeg = o.rotMillideg / 1000;
   const style = item.bodyStyle ?? 1;
@@ -208,11 +335,14 @@ function symbolPreview(item: CarriedSymbol, ctx: CarriedPreviewContext): SchPast
     if (drawn.fields_autoplaced !== undefined) sym.fields_autoplaced = drawn.fields_autoplaced;
     if (same && drawn.shown) sym.shown = drawn.shown;
   }
+  // its library text boxes' `${..}` as the server resolves them for it (`expandLibItemTextVars`)
+  if (drawn?.text_box_shown) sym.text_box_shown = drawn.text_box_shown;
   return { ...EMPTY, symbols: [sym], lib_symbols: lib ? { [item.libId]: lib } : {} };
 }
 
 function powerPreview(item: Extract<CarriedItem, { kind: "power" }>, ctx: CarriedPreviewContext): SchPastePreview {
-  const lib = libOf(item.libId, ctx);
+  // a power symbol is put down by its own origin, its pin (`eda_engine::fields::power_value_placement`)
+  const lib = libOf(item.libId, ctx, null);
   const libPin = lib?.pins[0];
   const server = ctx.server?.item.kind === "power" && ctx.server.item.libId === item.libId ? ctx.server : null;
   const drawn = server?.preview.power_symbols[0];

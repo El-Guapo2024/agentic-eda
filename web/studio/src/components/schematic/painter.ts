@@ -50,7 +50,7 @@ import { drawnUnit, referenceUnitSuffix, subpartIdsOf } from "../../kicad-port/s
 import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from "./displayOptions";
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
-import { dashPattern, drawSelectionBox, paintGraphics, paintImages, rgba } from "./schGraphicsPainter";
+import { dashPattern, drawSelectionBox, drawTextBoxText, paintGraphics, paintImages, rgba } from "./schGraphicsPainter";
 import { dnpCross } from "./symbolMarkers";
 import { paintSchTables } from "./schTablePaint";
 import { drawGroups } from "./schGroupPainter";
@@ -473,6 +473,11 @@ function applyFill(ctx: CanvasRenderingContext2D, mode: "none" | "outline" | "ba
 export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphic, strokeColor: string) {
   if (g.kind === "text") {
     drawStrokeText(ctx, g.content, g.at[0], g.at[1], { sizeNm: g.sizeNm, angleRad: -(g.angleDeg * Math.PI) / 180, justify: "center", color: strokeColor });
+    return;
+  }
+  if (g.kind === "text_box") {
+    // a library text box's text, drawn as a sheet text box's (`SCH_PAINTER::draw( SCH_TEXTBOX )`): its own text colour, else the symbol's; the border and fill are a rectangle
+    drawTextBoxText(ctx, { id: "", shape: g.shape }, g.color && g.color.a > 0 ? rgba(g.color) : strokeColor);
     return;
   }
 

@@ -165,11 +165,17 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
                 pins: alt.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
             })
         });
+        // the text boxes (`LibConnectivity::text_boxes`, beside the rectangles of their borders) move with the rest
+        let mut connectivity = sym.connectivity.clone();
+        for t in &mut connectivity.text_boxes {
+            t.translate(dx, dy);
+        }
         return LibSymbol {
             lib_id: lib_id.to_string(),
             graphics: sym.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
             pins: sym.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
             alternate,
+            connectivity,
             ..sym.clone()
         };
     }

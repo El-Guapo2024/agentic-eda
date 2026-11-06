@@ -292,6 +292,14 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
         .collect();
     // `ki_keywords` and `ki_fp_filters` (`parseProperty`: the keywords and the footprint filters, not fields), which the cache writes back (r7 H3)
     let ki = |name: &str| sexpr::find_all(node, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
+    // the text boxes of the unit and body style sub-symbols (`parseSymbolTextBox`, of the sub-symbol's unit and style; one of a body style above 2 is not drawn, as
+    // `graphics_and_pins` has it, and one private to the Symbol Editor is not drawn on a sheet), which a placed symbol writes its text in and the cache writes back
+    let text_boxes = sexpr::find_all(node, "symbol")
+        .filter_map(|sub| Some((sub, unit_and_style_of_subname(sexpr::txt(sub, 1)?))))
+        .filter(|(_, (_, style))| *style <= 2)
+        .flat_map(|(sub, (unit, style))| sexpr::find_all(sub, "text_box").filter_map(move |t| crate::symbol_import::text_box(t, unit, style)))
+        .filter(|t| !t.is_private())
+        .collect();
     eda_model::symbol::LibConnectivity {
         unit_names,
         user_fields,
@@ -301,6 +309,7 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
         duplicate_pin_numbers_are_jumpers: sexpr::find(node, "duplicate_pin_numbers_are_jumpers").and_then(|p| sexpr::txt(p, 1)) == Some("yes"),
         jumper_pin_groups,
         pin_alternates,
+        text_boxes,
     }
 }
 
@@ -398,6 +407,13 @@ fn sub_symbol_items(sub: &[Sexpr], unit: u32) -> (Vec<SymbolGraphic>, Vec<LibPin
                     let size = sexpr::find(t, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).unwrap_or(1.27);
                     graphics.push(SymbolGraphic::Text { unit, text: content.to_string(), at: SPoint::new(x, y), angle_deg: angle, size_mm: size });
                 }
+            }
+        }
+        // a text box's border and fill (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbolTextBox`), as the engine draws it ([`eda_model::ir::LibrarySymbolGraphic::to_engine_graphics`]);
+        // the box itself, its text with it, is in the symbol's `connectivity.text_boxes` ([`connectivity_of`])
+        for t in find_all(sub, "text_box") {
+            if let Some(tb) = crate::symbol_import::text_box(t, unit, 1) {
+                graphics.extend(tb.to_engine_graphics());
             }
         }
         for p in sexpr::find_all(sub, "pin") {
@@ -789,7 +805,7 @@ fn write_field(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField) 
     .unwrap();
 }
 
-fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic, stroke_type: Option<&str>, text_style: Option<&eda_model::lib_keep::KeptTextStyle>) {
+pub(crate) fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic, stroke_type: Option<&str>, text_style: Option<&eda_model::lib_keep::KeptTextStyle>) {
     use eda_model::ir::{LibraryFill, LibrarySymbolGraphic as G};
     use std::fmt::Write as _;
     // a shape has no fill colour of its own here: a colour fill is the body's background (`fill_of` reads it so)

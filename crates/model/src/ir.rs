@@ -4733,7 +4733,8 @@ impl LibrarySymbolGraphic {
     /// `true` -- a real difference in real KiCad rendering this port's
     /// engine-side type has never modeled, same approximation
     /// `LibraryPad::to_engine_pad`'s shape collapse already documents).
-    /// A text box has no engine counterpart: it comes out as what it is made of, its border (a rectangle) and its text (see `crate::sym_textbox`).
+    /// A text box has no engine counterpart: it comes out as its border and fill (a rectangle); the engine symbol keeps the box itself, its text with it, in
+    /// [`crate::symbol::LibConnectivity::text_boxes`] (drawn by a placed symbol as [`crate::sym_textbox`] has it).
     /// `SCH_ITEM::IsPrivate`: a text or text box marked "Private to Symbol Editor". (A shape's private flag is not held here.)
     pub fn is_private(&self) -> bool {
         matches!(self, LibrarySymbolGraphic::Text { private: true, .. } | LibrarySymbolGraphic::TextBox { private: true, .. })
@@ -5180,6 +5181,18 @@ impl LibrarySymbol {
                 user_fields: self.fields.iter().filter(|f| !crate::sym_fields::is_mandatory_field(&f.name) && !f.name.starts_with("ki_")).map(|f| (f.name.clone(), f.text.clone())).collect(),
                 keywords: self.keywords.clone(),
                 fp_filters: self.footprint_filters.iter().map(|f| f.replace(' ', "{space}")).collect::<Vec<_>>().join(" "),
+                // the text boxes a placed symbol draws (not one private to the Symbol Editor), of the body styles its graphics are taken from, without the editor's
+                // ids: the engine symbol of a library's symbol and of the same one opened in the editor have the same boxes
+                text_boxes: self
+                    .graphics
+                    .iter()
+                    .filter(|g| matches!(g, LibrarySymbolGraphic::TextBox { .. }) && !g.is_private() && (g.body_style() <= 1 || (self.is_multi_body_style() && g.body_style() == 2)))
+                    .map(|g| {
+                        let mut g = g.clone();
+                        g.set_id(String::new());
+                        g
+                    })
+                    .collect(),
             },
         }
     }

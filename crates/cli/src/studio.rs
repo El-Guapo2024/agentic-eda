@@ -2127,6 +2127,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
                 symbol["shown"] = shown;
             }
+            // the shown texts of its library text boxes where a variable changes one (`expandLibItemTextVars`), by the box's `index` in `lib_symbols`
+            if let Some(boxes) = shown.as_ref().zip(resolved.as_ref()).and_then(|(sh, lib)| sh.text_box_shown_json(&owner, lib)) {
+                symbol["text_box_shown"] = boxes;
+            }
             if path_unit != s.unit {
                 symbol["path_unit"] = json!(path_unit);
             }
@@ -2785,6 +2789,19 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     if let Some(a) = alt {
         graphics.extend(a.0.iter().filter(|g| !normal.0.contains(g)).map(|g| graphic(g, 2)));
         pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
+    }
+    // the text in each library text box (`SCH_PAINTER::draw( SCH_TEXTBOX )` of the placed symbol's temp copy, `eda_model::sym_textbox`): its border and fill are the
+    // rectangle above. `index` is the box's place in `LibConnectivity::text_boxes`, by which a placed symbol's `text_box_shown` gives its shown text; `margin_mm`
+    // the margin it has (`GetLegacyTextMargin` when it says none)
+    for (i, t) in s.connectivity.text_boxes.iter().enumerate() {
+        if let eda_model::ir::LibrarySymbolGraphic::TextBox { unit, body_style, text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, text_color, .. } = t {
+            let style = if alt.is_none() { 0 } else { *body_style };
+            let mut j = json!({ "kind": "text_box", "index": i, "unit": unit, "body_style": style, "text": text, "start": pt(*start), "end": pt(*end), "angle_deg": angle_deg, "size_mm": size_mm, "bold": bold, "italic": italic, "h_align": h_align, "v_align": v_align, "margin_mm": eda_model::ir::text_box_margin_mm(*size_mm, *margin_mm) });
+            if let Some(c) = text_color {
+                j["text_color"] = json!(c);
+            }
+            graphics.push(j);
+        }
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
     json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
