@@ -47,6 +47,17 @@ export function withSwappedPlaces(pins: LibPin[], swaps: Record<string, string> 
   });
 }
 
+/**
+ * A library pin as a placed symbol draws it when the pin took the alternate function `alt` (`SCH_PIN::SetAlt`): named, typed and shaped by the alternate
+ * (`SCH_PIN::GetShownName` / `GetType` / `GetShape`: `m_alt` first). An alternate the library pin has not is no alternate (`SetAlt`'s `contains` check), and
+ * the pin keeps its own name, type and shape; so does a pin with none.
+ */
+export function withAlternate(pin: LibPin, alt: string | null | undefined): LibPin {
+  if (!alt || alt === pin.name) return pin;
+  const a = pin.alternates?.find((x) => x.name === alt);
+  return a ? { ...pin, name: a.name, electrical_type: a.electrical_type, shape: a.shape } : pin;
+}
+
 export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): ResolvedLibSymbol | null {
   if (!instance.lib_id) return null;
   const sym = lib[instance.lib_id];
@@ -75,8 +86,10 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
   }
 
   const pins: ResolvedPin[] = [];
+  // the alternate function each placed pin took (`SchematicPin.alt`, the symbol's `SchExtras::pin_alternates`)
+  const alts = new Map((instance.pins ?? []).filter((p) => p.alt).map((p) => [p.number, p.alt]));
   for (const p of withSwappedPlaces(sym.pins.filter((q) => visibleFor(q.unit, q.body_style, unit, bodyStyle)), instance.pin_swaps)) {
-    const resolved = resolvePin(p, m, at);
+    const resolved = resolvePin(withAlternate(p, alts.get(p.number)), m, at);
     grow(resolved.tip);
     grow(resolved.root);
     pins.push(resolved);

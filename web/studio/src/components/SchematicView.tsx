@@ -31,7 +31,7 @@ import { useWheelPrefs } from "../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../hooks/useNonPassiveWheel";
 import { paintSchematic } from "./schematic/painter";
 import { withVariant } from "../kicad-port/designVariants";
-import { resolveLibSymbol } from "./schematic/libSymbol";
+import { resolveLibSymbol, symbolBounds as libSymbolBounds } from "./schematic/libSymbol";
 import { SchSnap, SCH_PLACING_TOOLS, toolCategory, type SchSnapMods } from "./schematic/schSnap";
 import { useGridOverrides } from "../state/gridOverrides";
 import { useGridSettings } from "../state/gridSettings";
@@ -53,8 +53,6 @@ import { hasNetCollision } from "../kicad-port/schNetCollision";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
 import type { SchMovePatch } from "../api/schEditTypes";
-import { nextReference, placementMinRef } from "../kicad-port/nextReference";
-import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 import { wireTail } from "../kicad-port/schLineMode";
 import { boxItems } from "./schematic/schItems";
 import { pickItem } from "./schematic/schPick";
@@ -96,9 +94,9 @@ import { pickNewMemberAt } from "../actions/schGroupActions";
 import { pasteOffset, previewIds, withPaste } from "../kicad-port/schClipboard";
 import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
 import { useSchImageHand } from "../state/schImageHand";
-import { cancelSchCarry, noteCarryCursor, useSchCarry } from "../state/schCarryStore";
+import { cancelSchCarry, carryCursor, noteCarryCursor, useSchCarry } from "../state/schCarryStore";
 import { isCarryTool, PREVIEW_AT } from "../kicad-port/schPlaceTool";
-import { beginItem, placeCarried } from "../actions/schPlaceActions";
+import { beginItem, carrySymbol, placeCarried } from "../actions/schPlaceActions";
 import { imageSizeNm, SCALE_PPM } from "../kicad-port/refImage";
 import { useImageVersion } from "./canvas/imageCache";
 import "../styles/canvas.css";
@@ -352,6 +350,17 @@ export function SchematicView() {
     if (carry && (carry.tool !== state.activeTool || carry.sheet.join("/") !== state.currentSheetPath.join("/"))) cancelSchCarry();
   }, [carry, state.activeTool, state.currentSheetPath]);
   useEffect(() => () => void cancelSchCarry(), []);
+  // A symbol an action hands Place Symbol (`PLACE_SYMBOL_PARAMS{ symbol, .. }`: Place Next Symbol Unit, the Symbol Editor's Add Symbol to Schematic) rides at once
+  // (`if( symbol ) { addSymbol( symbol ); .. }`), from the cursor, and the tool ends once it is placed (`placeOneOnly`).
+  useEffect(() => {
+    const armed = state.armedSymbol;
+    if (state.activeTool !== "sch_place_symbol" || !armed) return;
+    dispatch({ type: "SET_ARMED_SYMBOL", symbol: null });
+    // `WarpMouseCursor( GetMousePosition( false ) )`: where the pointer is
+    const at: [number, number] = state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : (carryCursor() ?? [0, 0]);
+    carrySymbol({ api }, { ...armed, oneOnly: true }, at, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.activeTool, state.armedSymbol]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -748,7 +757,7 @@ export function SchematicView() {
         // KiCad). The tool stays armed.
         if (isCarryTool(state.activeTool)) {
           const at = snapToGrid(wx, wy);
-          if (carry && carry.tool === state.activeTool) placeCarried({ api }, at);
+          if (carry && carry.tool === state.activeTool) placeCarried({ api, dispatch }, at);
           else beginItem({ api, dispatch }, state.activeTool, at);
           return;
         }
@@ -806,29 +815,6 @@ export function SchematicView() {
           api.cmd({ op: "add_bus_entry", at: { x: sx, y: sy }, size: { x: 2_540_000, y: 2_540_000 } });
           return;
         }
-        // `A`: SymbolChooserDialog already picked the symbol (state.
-        // armedSymbol); this click only decides where. `id` is a real,
-        // already-numbered reference assigned right now, not a "U?"
-        // placeholder -- see nextReference.ts's own doc for why. `value`
-        // defaults to the symbol's own bare name (e.g. "Device:R" ->
-        // "R"), matching what a real library's own default Value usually
-        // is for a part this simple.
-        if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
-          const { libId, referencePrefix, unit, ref } = state.armedSymbol;
-          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U", state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start), sch.page_number ?? 1));
-          const value = state.armedSymbol.value ?? (libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
-          const [sx, sy] = snapToGrid(wx, wy);
-          // the project's numbering numbers it on the further paths of a screen shown more than once, each by its page (`PlaceSymbol`, r4 D4-M1)
-          const numbering = rememberedAnnotateSettings();
-          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit, annotate: { algo: numbering.algo, start_number: startNumber(numbering.start) } });
-          // `PlaceNextSymbolUnit` hands the tool one symbol -- "place that and get out of the placement tool" (`placeOneOnly`).
-          if (ref) {
-            dispatch({ type: "SET_ARMED_SYMBOL", symbol: null });
-            dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-          }
-          return;
-        }
-
         // `M`/`G`-armed move/drag: this click drops whatever is being held, same two-step ("arm, then click to commit") flow
         // useActionRunner.ts's pcbnew.InteractiveMove.move already uses -- Escape (the ESCAPE reducer case, generic across
         // tabs) cancels it instead, never this handler. A drop with the pointer never moved and nothing turned sends nothing.
@@ -1007,7 +993,9 @@ export function SchematicView() {
         if (hit && !state.selection.has(hit)) ids = [hit];
         else if (!hit && ids.length > 0) ids = [];
         if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null })) });
+        // a reference's placed units are one item: the Symbol Unit submenu is for the one under the pointer (else the first)
+        const underPointer = ids.length === 1 ? sch.symbols.filter((x) => x.id === ids[0]).find((x) => { const b = libSymbolBounds(x, sch.lib_symbols); return wx >= b.minX && wx <= b.maxX && wy >= b.minY && wy <= b.maxY; })?.unit : undefined;
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer })) });
       }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties
@@ -1036,7 +1024,7 @@ export function SchematicView() {
             dispatch({ type: "ENTER_SCH_GROUP", id: ids[0]! });
             return;
           }
-          if (openSchProperties(sch, ids, dispatch)) return;
+          if (openSchProperties(sch, ids, dispatch, [wx, wy])) return;
         }
         const draw = state.drawState;
         // `IsDblClick( BUT_LEFT )` in DrawShape / DrawRuleArea: finish the shape as it stands, at the point that was clicked.

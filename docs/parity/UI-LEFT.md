@@ -187,7 +187,11 @@ Notes:
   - Left: Properties of a power symbol in the hand; the right-button menu of the item in the hand; the label dialog lists the sheet in view's labels only (no other sheets, bus aliases); "Place all units" and the global/local power preference; the placed item is not left selected; Repeat puts a power symbol 100 mil down, not at the cursor.
   - (was: you click first and the dialog comes after, and nothing follows the cursor before the click; Place Power is a text field with presets, its rotation set in the dialog.)
   - M. PARITY-sch §3, §3a, §54.
-- **S1b [BD] Place Symbol (A) has no symbol following the cursor** (found by task-u1-schplace). After the chooser, it waits for a click with nothing drawn at the cursor; KiCad carries the symbol, with R/X/Y while carried. The `POST /api/sch/place_preview` endpoint from task-u1-schplace can draw it. S. PARITY-sch §54.
+- **S1b [BD] Place Symbol (A) carries the symbol.** **done (task-u2-symprops)**: A opens the chooser at once, OK puts the symbol in the hand numbered, it rides the cursor drawn by `POST /api/sch/place_preview`, R / Shift+R / X / Y turn it, the click places it (one undo step); "Place all units" (on) brings the next unit and "Place repeated copies" a copy with the next reference, Esc with it reopens the chooser; Place Next Symbol Unit and Add Symbol to Schematic hand the tool a symbol that rides at once and ends the tool (PARITY-sch §59). Left:
+  - Properties, U / V / F, Cycle Body Style and the attribute toggles on the symbol in the hand are refused (KiCad edits it), and the right-button menu's Unit / Body Style for it.
+  - After a mirror in the hand the fields are not autoplaced again on the click; a unit placed only on another sheet counts as free for "Place all units".
+  - (was: after the chooser it waited for a click with nothing drawn at the cursor.)
+  - S. PARITY-sch §54, §59.
 - **S2 [FM] Design variants.** **done (task-u1-variants)**: Add, Remove, Edit Description, Rename and Copy Design Variant (Tools > Variants, the schematic toolbar's selector with "Add New Design Variant...", the Fields Table's "Schematic variants:" list), each in KiCad 25ec2335's words; a symbol's DNP, exclusion flags and field texts per variant, shown and edited for the current variant on the canvas, in Symbol Properties (the title names the variant), the Properties panel, the attribute toggles and the Fields Table (the variant's cells highlighted); KiCad's `(variant ..)` records and `schematic.variants` read and written, the board's `(variants ..)` and footprint variants derived; the PCB editor's own selector; "Design variant:" enabled in Plot, Generate Placement Files and Plot Schematic, and the Fields Table's BOM export is its variant's: kicad-cli's `--variant` (PARITY-sch §58). Left:
   - A variant's own symbol (Set / Clear Variant Symbol) and pin map; a sheet's own variants; `${VARIANT}` / `${VARIANT_DESC}` in texts; a variant field's `${..}` on the canvas.
   - The PCB canvas and Properties panel per board variant (the board's selector feeds the dialogs only); a variant footprint; a pasted symbol's records.
@@ -199,23 +203,24 @@ Notes:
   - "Allow reference reuse" is stored, not applied (no designator tracker); the URL column has no URL editor; the studio saves no BOM presets of its own.
   - The net class table lists Default first (KiCad: last).
   - L. PARITY-sch §9, §28, §56.
-- **S4 [BD] Symbol Properties.**
-  - No unit choice, pin table, font or colour.
-  - U, V and F open the full dialog.
-  - A power symbol's Properties has no footprint, datasheet, exclusion flags, pin table or user fields.
-  - M. PARITY-sch §1, §26, §30.
-- **S5 [FM] Placed symbols.**
-  - A pin's alternate function can't be chosen or drawn, and there is no Show Pin Alternate Icons.
+- **S4 [BD] Symbol Properties.** **done (task-u2-symprops)**: General and Pin Functions tabs; the fields grid's Show Name, H / V Align, Italic, Bold, Text Size, Font (KiCad's two choices and the machine's families) and Color (`SchExtras::field_looks`, drawn, written, read back); the Unit and Body style choices; the pin table (assignments synced to the reference's units on the sheet); Update Symbol from Library..., Change Symbol..., Edit Symbol..., Edit Library Symbol...; U / V / F open Field Properties on the one field; a power symbol's Properties has the Footprint, Datasheet, the five flags, user fields, the field looks and the pin table (`SchExtras::power_props`) (PARITY-sch §59). Left:
+  - Angle and Mirror, Show pin numbers / names (S10), Embedded Files; the grid's Orientation, Position, Allow Autoplacement and Private columns, Move Up / Down.
+  - A unit already placed on the sheet is refused (KiCad duplicates it); both Edit buttons open the one library copy (S10); a field added in the dialog takes its looks after OK.
+  - The canvas draws an outline font's field with the stroke font; a power symbol's user fields are kept and written, not drawn.
+  - (was: no unit choice, pin table, font or colour; U, V and F opened the full dialog; a power symbol's Properties had only Reference and Value.)
+  - M. PARITY-sch §1, §26, §30, §59.
+- **S5 [FM] Placed symbols.** Pin alternates **done (task-u2-symprops)**: a placed pin's alternate is chosen in Symbol Properties' Pin Functions tab and in the pin's Pin Function submenu (`set_pin_alternates`, one undo step), drawn with the alternate's name, type and shape, with View > Show Pin Alternate Icons (on by default); the Symbol Unit submenu (units, "(already placed)", "Place unit %s", Swap); connectivity and kicad-cli's netlist follow the alternate (`pinfunction "<alt>_<n>"`, `pintype`, a slow kicad-cli proof) (PARITY-sch §59). Left:
   - A library text box shows only its border.
   - Only the Normal and De Morgan body styles exist.
-  - M. GAPS 12/19; PARITY-sch §48; r5 D5-H3.
+  - Alternates are synced to the reference's units on the sheet in view only; the Symbol Unit submenu's Duplicate is not possible.
+  - M. GAPS 12/19; PARITY-sch §48, §59; r5 D5-H3.
 - **S6 [BD] Text looks.**
   - Font face, colour and hyperlink can't be edited.
   - A free text's bold, italic and colour are kept but not drawn.
   - A label's own fields can't be clicked or moved, and a hand-moved one is autoplaced again.
   - M. GAPS 12; PARITY-sch §39, §52.
 - **S7 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows (a test replays the C++), and the symbol's and sheet's fields are rows as KiCad's panel adds them; a label's size, bold, italic, colour and justification, a text's bold, italic, colour and hyperlink, wire ends, Body Style, Exclude From Position Files and user fields are edited; Sheetfile shows the field's own text (B3-M1) (PARITY-sch §55). Left, read-only with the reason as the tooltip:
-  - Fonts; a symbol's pin display (one library symbol per lib_id) and its Unit (no verb switches a placed unit).
+  - Fonts; a symbol's pin display (one library symbol per lib_id). (Its Unit is `set_symbol_unit` since task-u2-symprops.)
   - A sheet's border, fill and attributes (not kept: S8); a text box's margins, fill, colour and hyperlink; an image's transform offset.
   - M. PARITY-sch §17, §30, §45, §55.
 - **S8 [FM] Hierarchy.**

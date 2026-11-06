@@ -56,3 +56,12 @@ export function noteCarryCursor(p: [number, number] | null): void {
 }
 
 export const carryCursor = (): [number, number] | null => cursor;
+
+/** Where Place Symbol's first click (or its hotkey) was when it opened the Symbol Chooser: the symbol chosen rides from there. */
+let chooserAt: [number, number] | null = null;
+
+export function noteChooserAt(p: [number, number] | null): void {
+  chooserAt = p;
+}
+
+export const pendingChooserAt = (): [number, number] | null => chooserAt;

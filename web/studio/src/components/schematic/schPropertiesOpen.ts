@@ -8,9 +8,11 @@ import type { Action } from "../../state/store";
 import { groupsOf } from "../../kicad-port/schGroups";
 import { openGroupDialog } from "../../state/commonDialogs";
 import { openTablePropertiesFor } from "../../actions/tableActions";
+import { symbolBounds } from "./libSymbol";
 
-/** Opens the dialog the selection `ids` calls for; false when it calls for none. */
-export function openSchProperties(sch: Schematic, ids: readonly string[], dispatch: Dispatch<Action>): boolean {
+/** Opens the dialog the selection `ids` calls for; false when it calls for none. `at` (the cursor) names the placed unit of a reference whose units are
+ *  one item of the selection: Symbol Properties opens on the unit under it (KiCad's dialog is the one `SCH_SYMBOL`'s), else on the first placed one. */
+export function openSchProperties(sch: Schematic, ids: readonly string[], dispatch: Dispatch<Action>, at?: readonly [number, number] | null): boolean {
   // a group has the dialog of the group tool (`SCH_EDIT_TOOL::Properties`: `case SCH_GROUP_T: RunAction( ACTIONS::groupProperties, group )`)
   const group = ids.length === 1 ? groupsOf(sch).find((g) => g.id === ids[0]) : undefined;
   if (group) {
@@ -28,9 +30,11 @@ export function openSchProperties(sch: Schematic, ids: readonly string[], dispat
   const target = propertiesTarget(sch, ids);
   if (!target) return false;
   switch (target.kind) {
-    case "symbol":
-      dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id: target.id, field: null } });
+    case "symbol": {
+      const under = at ? sch.symbols.filter((x) => x.id === target.id).find((x) => { const b = symbolBounds(x, sch.lib_symbols); return at[0] >= b.minX && at[0] <= b.maxX && at[1] >= b.minY && at[1] <= b.maxY; }) : undefined;
+      dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id: target.id, field: null, ...(under ? { unit: under.unit } : {}) } });
       return true;
+    }
     case "power":
       dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_power", id: target.id } });
       return true;

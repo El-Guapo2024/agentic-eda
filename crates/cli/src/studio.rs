@@ -714,6 +714,8 @@ fn handle(
         ("POST", "/api/dimension/preview") => respond(stream, "200 OK", "application/json", crate::dimension_api::preview(&body).to_string().as_bytes()),
         // The item a placing tool carries before the click that places it (a label, a text, a directive label, a power symbol): its command tried on a copy (`crate::sch_place_api`).
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
+        // The font families the machine has, for Symbol Properties' Font column (`crate::fonts_api`).
+        ("GET", "/api/fonts") => respond(stream, "200 OK", "application/json", crate::fonts_api::fonts().to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
@@ -2125,7 +2127,14 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let power_symbols: Vec<Value> = sch
         .power_symbols
         .iter()
-        .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json(&p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) }))
+        .map(|p| {
+            let mut v = json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
+            // what its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`): its Footprint, Datasheet, flags and user fields
+            if let Some(props) = sch.extras.power_props.get(&p.id) {
+                v["props"] = json!(props);
+            }
+            v
+        })
         .collect();
     let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
     let title_block = sch.title_block.as_ref().map(|tb| match &shown {
@@ -2185,7 +2194,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .sheets
         .iter()
         .map(|s| {
-            let mut fields = eda_engine::fields::sheet_fields_on(&sch, s, &placing_key).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>();
+            let mut fields = eda_engine::fields::sheet_fields_on(&sch, s, &placing_key).iter().map(|f| page_field_json_in(&sch, &s.id, f)).collect::<Vec<_>>();
             if let Some(sh) = &shown {
                 sh.annotate_sheet_fields(&mut fields);
             }
@@ -2486,6 +2495,21 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
 /// One field as the studio draws and selects it: the text, its anchor on the sheet and which way it runs, how it is justified there, its size and look, and the
 /// id (`fld:<owner key>:<name>`) every move and edit verb takes it by. `owner` is the item's key in `field_layout` (a symbol's reference, `#<unit>` after it for a
 /// unit but the first, a power symbol's or a sheet's id).
+/// [`page_field_json`] with the font face and colour the item keeps for the field (`SchExtras::field_looks`: Symbol Properties' Font and Color columns), when it
+/// has them.
+pub(crate) fn page_field_json_in(sch: &eda_model::ir::SchematicSection, owner: &str, f: &eda_engine::fields::PageField) -> Value {
+    let mut v = page_field_json(owner, f);
+    if let Some(look) = sch.extras.field_look(owner, &f.name) {
+        if let Some(font) = &look.font {
+            v["font"] = json!(font);
+        }
+        if let Some(c) = look.color {
+            v["color"] = json!(c);
+        }
+    }
+    v
+}
+
 pub(crate) fn page_field_json(owner: &str, f: &eda_engine::fields::PageField) -> Value {
     use eda_model::kicad_font::{HJustify, VJustify};
     json!({
@@ -2510,7 +2534,7 @@ pub(crate) fn page_field_json(owner: &str, f: &eda_engine::fields::PageField) ->
 /// fields of (a part the model does not know, a schematic read from a KiCad file).
 pub(crate) fn owner_fields_json(sch: &eda_model::ir::SchematicSection, model: &eda_model::ConstraintModel, owner: &str) -> Vec<Value> {
     match eda_engine::fields_edit::OwnerCtx::new(sch, model, owner) {
-        Some(ctx) => ctx.page_fields(sch).iter().map(|f| page_field_json(owner, f)).collect(),
+        Some(ctx) => ctx.page_fields(sch).iter().map(|f| page_field_json_in(sch, owner, f)).collect(),
         None => Vec::new(),
     }
 }
@@ -2545,7 +2569,15 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
             Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": style, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
         }
     };
-    let pin = |p: &eda_model::LibPin, style: u32| json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": style, "hidden": false });
+    let pin = |p: &eda_model::LibPin, style: u32| {
+        let mut j = json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": style, "hidden": false });
+        // the pin's alternate functions (`SCH_PIN::GetAlternates`), which a placed symbol's pin may take (`SCH_PIN::SetAlt`): the Pin Functions table, the
+        // Pin Function submenu, the name, type and shape it is drawn with, and Show Pin Alternate Icons (left out when it has none)
+        if let Some(alts) = s.connectivity.pin_alternates.get(&p.number).filter(|a| !a.is_empty()) {
+            j["alternates"] = json!(alts);
+        }
+        j
+    };
     let (normal, alt) = s.bodies();
     let mut graphics: Vec<Value> = normal.0.iter().map(|g| graphic(g, if alt.is_none_or(|a| a.0.contains(g)) { 0 } else { 1 })).collect();
     let mut pins: Vec<Value> = normal.1.iter().map(|p| pin(p, if alt.is_none_or(|a| a.1.contains(p)) { 0 } else { 1 })).collect();

@@ -472,7 +472,8 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   add({ owner: "SCH_SYMBOL", name: "Library Link", kind: "string", get: (i) => i.symbol?.lib_id ?? i.power?.lib_id ?? "" }, FIELDS);
   add({ owner: "SCH_SYMBOL", name: "Library Description", kind: "string", get: (i, c) => libOf(i, c)?.description ?? "" }, FIELDS);
   add({ owner: "SCH_SYMBOL", name: "Keywords", kind: "string", get: (i, c) => libOf(i, c)?.keywords ?? "" }, FIELDS);
-  // "Unit" (`SetUnitProp`, `multiUnit`): the units by display name (`GetUnitDisplayName`: the unit's name, else its letter). No verb switches a placed unit.
+  // "Unit" (`SetUnitProp`, `multiUnit`): the units by display name (`GetUnitDisplayName`: the unit's name, else its letter). `SetUnitSelection( .. ); SetUnit( aUnit )`: the
+  // `set_symbol_unit` verb, which refuses a unit already placed on the sheet (KiCad makes a second placement of it; the Symbol Unit menu swaps the two).
   add({
     owner: "SCH_SYMBOL",
     name: "Unit",
@@ -483,7 +484,10 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     get: (i) => i.symbol?.unit ?? 1,
     available: (i, c) => isReal(i) && unitCountOf(libOf(i, c)) > 1,
-    readOnlyReason: "No verb switches a placed unit to another here (the sheet keys a placement by its unit): place the other unit with Place Next Unit.",
+    set: (i, v) => {
+      const unit = Number(v);
+      return !i.symbol || !Number.isFinite(unit) || unit === (i.symbol.unit ?? 1) ? [] : [{ op: "sch_edit", verb: "set_symbol_unit", id: i.symbol.id, unit: i.symbol.unit ?? 1, new_unit: unit }];
+    },
   });
   // "Body Style" (`SetBodyStyleProp`, `multiBodyStyle`): "Standard" and "Alternate" for a De Morgan symbol (`GetBodyStyleDescription`), `set_body_style`.
   const BODY_STYLES = ["Standard", "Alternate"];

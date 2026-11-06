@@ -864,6 +864,12 @@ export async function fetchSchFormatting(): Promise<SchFormattingReply> {
   return getJson<SchFormattingReply>("/api/sch/formatting");
 }
 
+/** The font families the server's machine has (`GET /api/fonts`, `fc-list`): Symbol Properties' Font column lists them after "Default Font" and "KiCad Font". */
+export async function fetchFontFamilies(): Promise<string[]> {
+  const r = await getJson<{ ok: boolean; families?: string[] }>("/api/fonts");
+  return r.families ?? [];
+}
+
 /** Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages (`GET /api/sch/setup`). */
 export async function fetchSchSetup(): Promise<SchSetupReply> {
   return getJson<SchSetupReply>("/api/sch/setup");

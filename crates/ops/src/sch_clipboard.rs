@@ -266,6 +266,13 @@ impl<'a> Board<'a> {
         }
         for (p, new) in src.power_symbols.iter().zip(power_refs) {
             remap.insert(p.id.clone(), new.clone());
+            // what its Symbol Properties set, and its fields' font faces and colours, go with the copy (`SchExtras::power_props`, `field_looks`)
+            if let Some(props) = src.extras.power_props.get(&p.id) {
+                sch.extras.power_props.insert(new.clone(), props.clone());
+            }
+            if let Some(looks) = src.extras.field_looks.get(&p.id) {
+                sch.extras.field_looks.insert(new.clone(), looks.clone());
+            }
         }
         for (k, old) in wire_olds.iter().enumerate() {
             if let Some(w) = sch.wires.get(first_wire + k) {
@@ -332,6 +339,10 @@ impl<'a> Board<'a> {
             // ... and the alternate functions picked for them (r5 D5-H3)
             if let Some(alts) = src.extras.pin_alternates.get(&eda_model::ir::field_key(&s.id, s.unit)) {
                 sch.extras.pin_alternates.insert(eda_model::ir::field_key(new, s.unit), alts.clone());
+            }
+            // ... and its fields' font faces and colours (`SchExtras::field_looks`)
+            if let Some(looks) = src.extras.field_looks.get(&eda_model::ir::field_key(&s.id, s.unit)) {
+                sch.extras.field_looks.insert(eda_model::ir::field_key(new, s.unit), looks.clone());
             }
         }
         // a pasted label keeps its spin, size, bold and italic, and its fields

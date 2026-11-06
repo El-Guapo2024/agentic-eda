@@ -2,6 +2,7 @@
 // (components/SchChangeSymbolsDialog.tsx) on the selected symbol, in change or update mode.
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import type { SchEditContext } from "./schEditActions";
+import { parseSelectUnitArg, selectUnit, SELECT_UNIT_ACTION } from "../kicad-port/schSymbolMenus";
 
 export function registerSchSymbolActions(registry: ActionMap, ctx: SchEditContext): void {
   const { state, dispatch, requestSelection } = ctx;
@@ -17,6 +18,20 @@ export function registerSchSymbolActions(registry: ActionMap, ctx: SchEditContex
   m.set("eeschema.InteractiveEdit.changeSymbols", open("change"));
   m.set("eeschema.InteractiveEdit.updateSymbol", open("update"));
   m.set("eeschema.InteractiveEdit.updateSymbols", open("update"));
+
+  // The Symbol Unit submenu (`SYMBOL_UNIT_MENU`, `ID_POPUP_SCH_SELECT_UNIT` -> `SCH_EDIT_FRAME::SelectUnit( symbol, unit )`): the placed unit the menu was opened on draws the
+  // unit chosen ("Change Unit"); a unit the reference has placed on the sheet asks first ("Unit Already Placed"). The argument is "<placed unit>:<unit chosen>".
+  m.set(SELECT_UNIT_ACTION, (arg) => {
+    const pick = parseSelectUnitArg(arg);
+    if (state.tab !== "schematic" || !sch || !pick) return;
+    const ref = [...new Set(requestSelection().filter((id) => sch.symbols.some((s) => s.id === id)))];
+    if (ref.length !== 1) return;
+    // `PathHumanReadable( true, true )` of the sheet, "Root" for the top one
+    const sheetName = (sch.sheet_path ?? []).map((p) => p.name).join("/");
+    const r = selectUnit(sch, ref[0]!, pick.unit, pick.newUnit, sheetName ? `/${sheetName}` : "");
+    if (r.do === "cmd") void ctx.api.cmd(r.cmd);
+    else if (r.do === "ask") dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "unit_placed", id: ref[0]!, unit: pick.unit, newUnit: r.newUnit, message: r.message, swapLabel: r.swapLabel, duplicateLabel: r.duplicateLabel } });
+  });
 
   // Edit Text & Graphics Properties... -- SCH_EDIT_TOOL::GlobalEdit -> DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS (components/SchGlobalEditDialog.tsx), on the selection or the whole sheet.
   m.set("eeschema.InteractiveEdit.editTextAndGraphics", () => {

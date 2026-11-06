@@ -231,8 +231,14 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         alternates: BTreeMap<String, String>,
         /// Its records of the design variants, `(variant ..)` inside its `(instances ..)` (`SchExtras::symbol_variants`, KiCad 25ec2335).
         variants: BTreeMap<String, eda_model::variants::SymbolVariant>,
+        /// The font face and colour of each of its fields, `(effects (font (face ..) .. (color ..)))` (`SchExtras::field_looks`).
+        field_looks: BTreeMap<String, eda_model::sch_extras::FieldFontLook>,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
+    // the font faces and colours of the fields of the symbols and power symbols, by `field_key` / id (`SchExtras::field_looks`)
+    let mut field_look_entries: Vec<(String, BTreeMap<String, eda_model::sch_extras::FieldFontLook>)> = Vec::new();
+    // what the power symbols' Symbol Properties set (`SchExtras::power_props`), by id
+    let mut power_props_read: Vec<(String, eda_model::sch_extras::PowerProps)> = Vec::new();
     // each power symbol's `(uuid ..)`, parallel to `power_symbols`
     let mut power_uuid: Vec<Option<String>> = Vec::new();
     let mut locked_refs: BTreeSet<String> = BTreeSet::new();
@@ -328,6 +334,24 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             let pin_local = resolved.pins.first().map(|p| p.at).unwrap_or(SPoint::new(0.0, 0.0));
             let world = transform_local_point(pin_local, angle_deg, mirrored, mirror_y);
             let at_pin = Point { x: at_nm.x + crate::import::sch_mm_to_nm(world.x), y: at_nm.y + crate::import::sch_mm_to_nm(world.y) };
+            // what its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`): its Footprint, Datasheet, flags and user fields
+            let props = eda_model::sch_extras::PowerProps {
+                footprint: property_text(item, "Footprint").unwrap_or_default(),
+                datasheet: datasheet.clone(),
+                exclude_from_sim,
+                exclude_from_bom,
+                exclude_from_board,
+                dnp,
+                exclude_from_pos_files,
+                fields: user_fields_of(item).into_iter().map(|f| eda_model::sch_extras::LabelField { name: f.name, text: f.text, visible: !f.hidden, italic: false }).collect(),
+            };
+            if !props.is_default() {
+                power_props_read.push((reference.clone(), props));
+            }
+            let looks = field_font_looks(item);
+            if !looks.is_empty() {
+                field_look_entries.push((reference.clone(), looks));
+            }
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
             power_uuid.push(uuid_of(item));
             continue;
@@ -341,7 +365,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         }
         let base_flags = eda_model::variants::SymbolFlags { dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, exclude_from_pos_files };
         let variants = symbol_variants_of(item, base_flags, file_version);
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps, exclude_from_pos_files, alternates: placed_pin_alternates(item), variants });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps, exclude_from_pos_files, alternates: placed_pin_alternates(item), variants, field_looks: field_font_looks(item) });
     }
 
     if opts.unique_references {
@@ -478,6 +502,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             }
             if !r.alternates.is_empty() {
                 pin_alternate_entries.push((eda_model::ir::field_key(&reference, r.unit), r.alternates.clone()));
+            }
+            if !r.field_looks.is_empty() {
+                field_look_entries.push((eda_model::ir::field_key(&reference, r.unit), r.field_looks.clone()));
             }
             if !r.swaps.is_empty() {
                 pin_swap_entries.push((eda_model::ir::field_key(&reference, r.unit), r.swaps.clone()));
@@ -809,6 +836,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         sch.extras.symbol_variants.extend(variant_records);
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.pin_alternates.extend(pin_alternate_entries);
+        sch.extras.field_looks.extend(field_look_entries);
+        sch.extras.power_props.extend(power_props_read);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
         // the local power symbols of the file's library cache (`(power local)`, `parseSymbol`'s `T_power`)
@@ -1392,6 +1421,24 @@ fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
             show_name: parse_bool(p, "show_name").unwrap_or(false),
             do_not_autoplace: parse_bool(p, "do_not_autoplace").unwrap_or(false),
         });
+    }
+    out
+}
+
+/// The font face and colour of each `(property ..)` of a placed symbol that has one (`SCH_IO_KICAD_SEXPR_PARSER::parseEDA_TEXT`: `T_face`, `T_color` in
+/// `(font ..)`), by the field's name; a colour of all zeroes is KiCad's "unspecified" (`SchExtras::field_looks`).
+fn field_font_looks(item: &[Sexpr]) -> BTreeMap<String, eda_model::sch_extras::FieldFontLook> {
+    let mut out = BTreeMap::new();
+    for p in sexpr::find_all(item, "property") {
+        let shift = usize::from(sexpr::txt(p, 1) == Some("private") && p.get(3).is_some_and(|n| n.text().is_some()));
+        let Some(name) = sexpr::txt(p, 1 + shift) else { continue };
+        let Some(font) = sexpr::find(p, "effects").and_then(|e| sexpr::find(e, "font")) else { continue };
+        let face = sexpr::find(font, "face").and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(String::from);
+        let color = sexpr::find(font, "color").and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
+        let look = eda_model::sch_extras::FieldFontLook { font: face, color };
+        if !look.is_default() {
+            out.insert(name.to_string(), look);
+        }
     }
     out
 }

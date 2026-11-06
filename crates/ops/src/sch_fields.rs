@@ -478,6 +478,7 @@ fn keys_of(sch: &SchematicSection, id: &str) -> Vec<String> {
     keys.extend(sch.extras.body_styles.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.pin_swaps.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.pin_alternates.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
+    keys.extend(sch.extras.field_looks.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.path_units.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.excluded_from_pos_files.iter().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.into_iter().collect()
@@ -490,6 +491,8 @@ pub(crate) fn drop_field_placements(sch: &mut SchematicSection, refs: &[String],
             if let Some(placements) = sch.field_layout.get_mut(&key) {
                 placements.retain(|p| p.name != name);
             }
+            // its font face and colour go with it (`SchExtras::field_looks`)
+            sch.extras.set_field_look(&key, name, Default::default());
         }
     }
 }
@@ -502,6 +505,9 @@ pub(crate) fn rename_field_placements(sch: &mut SchematicSection, refs: &[String
                 for p in placements.iter_mut().filter(|p| p.name == from) {
                     p.name = to.to_string();
                 }
+            }
+            if let Some(look) = sch.extras.field_looks.get_mut(&key).and_then(|m| m.remove(from)) {
+                sch.extras.field_looks.entry(key.clone()).or_default().insert(to.to_string(), look);
             }
         }
     }
@@ -532,6 +538,9 @@ pub(crate) fn rename_symbol_keys(sch: &mut SchematicSection, id: &str, new_id: &
         if let Some(v) = sch.extras.pin_alternates.remove(&old) {
             sch.extras.pin_alternates.insert(new.clone(), v);
         }
+        if let Some(v) = sch.extras.field_looks.remove(&old) {
+            sch.extras.field_looks.insert(new.clone(), v);
+        }
         if let Some(v) = sch.extras.path_units.remove(&old) {
             sch.extras.path_units.insert(new.clone(), v);
         }
@@ -549,6 +558,7 @@ pub(crate) fn drop_symbol_keys(sch: &mut SchematicSection, id: &str, unit: u32) 
     sch.extras.body_styles.remove(&key);
     sch.extras.pin_swaps.remove(&key);
     sch.extras.pin_alternates.remove(&key);
+    sch.extras.field_looks.remove(&key);
     sch.extras.path_units.remove(&key);
     sch.extras.excluded_from_pos_files.remove(&key);
 }

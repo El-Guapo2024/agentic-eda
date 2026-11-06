@@ -131,7 +131,8 @@
     const title = await until(() => document.querySelector("[data-testid=symbol-properties-title]"));
     t("Symbol Properties names the variant", title?.textContent === "Symbol Properties - Lite Design Variant", title?.textContent);
     if (title) {
-      const valueInput = [...dialog().querySelectorAll(".kv-grid > input")][1];
+      // the fields grid's Value cell (Symbol Properties is a grid since task-u2-symprops)
+      const valueInput = dialog().querySelector('input[aria-label="Value"]');
       await set(valueInput, "VARIANT-VAL");
       const dnpBox = dialog().querySelector("[data-testid=symbol-attr-dnp]");
       if (dnpBox && !dnpBox.checked) dnpBox.click();

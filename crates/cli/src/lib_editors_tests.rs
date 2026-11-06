@@ -594,6 +594,50 @@ fn kicad_cli_loads_pin_alternates_and_keeps_them_through_sym_upgrade() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// UI-LEFT S5: a placed pin that takes an alternate function (`SCH_EDIT_FRAME::SetAltPinFunction`, the Pin Functions table) is that function in the derived
+/// schematic (`(pin "1" (uuid ..) (alternate "UART_TX"))`), in the studio's connectivity (the pin's type is the alternate's: an output) and -- the slow tier --
+/// in kicad-cli's netlist: the node of the pin says `(pinfunction "UART_TX_1") (pintype "output")` (`NETLIST_EXPORTER_XML::makeListOfNets`: `fullName =
+/// baseName + "_" + num`, `baseName = GetShownName()`, the type `GetCanonicalElectricalTypeName()`, both `m_alt`'s); back to its own function it says `PA0_1` and
+/// `bidirectional`.
+#[test]
+fn a_placed_pins_alternate_function_is_the_netlists_pinfunction_and_pintype() {
+    use eda_ops::sch_edit::SchCmd;
+    let dir = scratch("u2_pin_alternate_netlist");
+    setup(&dir);
+    let mut mcu = mcu_with_alternates();
+    mcu.assign_missing_ids();
+    step(&dir, Cmd::EmbedLibSymbol { symbol: mcu }, false, "test").unwrap();
+    step(&dir, Cmd::AddSymbol { id: "U9".into(), lib_id: "Lib:Mcu".into(), at: Point { x: mm(50.8), y: mm(50.8) }, rot_millideg: 0, value: "MCU".into(), footprint: String::new(), unit: 1, annotate: None }, false, "test").unwrap();
+    let alt = |name: &str| Cmd::SchEdit(SchCmd::SetPinAlternates { id: "U9".into(), unit: None, alternates: [("1".to_string(), name.to_string())].into(), other_units: false });
+    step(&dir, alt("UART_TX"), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    assert_eq!(design.schematic.as_ref().unwrap().extras.pin_alternate("U9", "1"), Some("UART_TX"));
+    let sch_text = eda_kicad::export_kicad_sch(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-06", title: "alt" }).unwrap();
+    assert!(sch_text.contains("(alternate \"UART_TX\")"), "the derived schematic names the pin's alternate:\n{sch_text}");
+    let lib = model.symbol_of("Lib:Mcu").expect("the embedded symbol");
+    assert_eq!(lib.placed_pin_type(lib.pin_by_number("1").unwrap(), Some("UART_TX")), "output");
+    if !slow() || eda_kicad_engine::find_cli().is_none() {
+        return;
+    }
+    let node = |dir: &Path| -> String {
+        let _ = std::fs::remove_dir_all(dir.join("export").join("kicad").join("sch-netlist"));
+        crate::kicad_engine::export_sch(dir, "netlist", &["--format".into(), "kicadsexpr".into()]).unwrap_or_else(|e| panic!("kicad-cli sch export netlist: {e:?}"));
+        let out = dir.join("export").join("kicad").join("sch-netlist");
+        let file = std::fs::read_dir(&out).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "net")).expect("a .net file");
+        let text = std::fs::read_to_string(&file).unwrap();
+        // `(node (ref "U9") (pin "1") (pinfunction "..") (pintype ".."))`, written over several lines: the text from the node's ref to the next node
+        let start = text.find("(ref \"U9\")\n\t\t\t\t(pin \"1\")").or_else(|| text.find("(ref \"U9\") (pin \"1\")")).unwrap_or_else(|| panic!("no node of U9.1 in\n{text}"));
+        let rest = &text[start..];
+        rest[..rest[1..].find("(node").map_or(rest.len(), |e| e + 1)].to_string()
+    };
+    let with = node(&dir);
+    assert!(with.contains("(pinfunction \"UART_TX_1\")") && with.contains("(pintype \"output\")"), "kicad-cli's node of U9.1: {with}");
+    step(&dir, alt("PA0"), false, "test").unwrap();
+    let without = node(&dir);
+    assert!(without.contains("(pinfunction \"PA0_1\")") && without.contains("(pintype \"bidirectional\")"), "back to its own function: {without}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ======================================================================================================================================== shape properties and text boxes
 
 fn text_box_at(text: &str, start: (f64, f64), end: (f64, f64)) -> LibrarySymbolGraphic {

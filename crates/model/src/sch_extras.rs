@@ -25,6 +25,8 @@
 //! - `groups`: the sheet's groups (`SCH_GROUP`, `(group ...)` in the file), the same [`crate::ir::Group`] the board's drawings keep; see `crate::groups`.
 //! - `label_fields`: a label's own fields (`SCH_LABEL_BASE::m_fields`): its net class (`Netclass`) and any other, as Label Properties' grid edits them.
 //! - `intersheet_refs`: Schematic Setup > Formatting > Inter-sheet References, how a global label's Sheet References field reads (`SCHEMATIC_SETTINGS`).
+//! - `field_looks`: the font face and colour of a field of a symbol, power symbol or sheet (`EDA_TEXT::GetFont`, `GetTextColor`), as Symbol Properties' fields grid sets them.
+//! - `power_props`: a power symbol's Footprint, Datasheet, exclusion flags and user fields, as its Symbol Properties sets them.
 
 use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Nm};
 use serde::{Deserialize, Serialize};
@@ -176,6 +178,21 @@ pub struct SchExtras {
     /// Read from a KiCad file and written back as `saveText` / `saveTextBox` write them (r7 H4, M5). An item with no entry has KiCad's defaults. Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_attrs: BTreeMap<String, TextAttrs>,
+    /// The font face and colour of a field of a symbol, a power symbol or a sheet (`EDA_TEXT::GetFont` / `GetTextColor`: the "Font" and "Color" columns of
+    /// Symbol Properties' fields grid, `FIELDS_GRID_TABLE`'s `FDC_FONT` / `FDC_COLOR`), by the key of the item that has the field ([`crate::ir::field_key`]
+    /// of a placed unit, a power symbol's or a sheet's id), then by the field's name. Kept apart from [`crate::ir::FieldPlacement`] (built with literals in
+    /// many places) and carried with the key wherever `field_layout`'s entry goes (a rename, a unit change, a paste, a delete). Written in the field's
+    /// `(effects (font (face ..) .. (color ..)))` (`EDA_TEXT::Format`) and read back from a KiCad file. A field with no entry has the default font and the
+    /// layer's colour. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub field_looks: BTreeMap<String, BTreeMap<String, FieldFontLook>>,
+    /// What a power symbol's Symbol Properties sets beyond its Reference and Value, by power symbol id: KiCad's power symbol is an `SCH_SYMBOL` with every field
+    /// and flag of one (`DIALOG_SYMBOL_PROPERTIES` shows them all, the Simulation Model button hidden), so its Footprint and Datasheet, its five exclusion flags
+    /// and its user-defined fields (`SCH_FIELD`s beyond the mandatory ones) are kept here. Written in the power symbol's `(symbol ..)` -- the flags, a
+    /// `(property ..)` for each field -- and read back from a KiCad file. A power symbol with no entry has KiCad's defaults (empty Footprint and Datasheet, in the
+    /// BOM, on the board, simulated, populated, in the position files, no user field). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub power_props: BTreeMap<String, PowerProps>,
     /// The tables of this sheet (`SCH_TABLE`, written as `(table ..)`), in the order of the file: the cells' text, sizes and strokes, the grid -- see [`crate::table::Table`]. A table is
     /// selected, moved, locked and grouped like any item of the sheet (its id is `tbl_..`), and a click picks one of its cells. Additive: empty and not written for a sheet with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -427,6 +444,57 @@ pub struct TextAttrs {
     pub color: Option<SchColor>,
 }
 
+/// See [`SchExtras::power_props`]. A user field's place is the power symbol's anchor (not kept, as a sheet's user fields are not: r2 B-L1).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PowerProps {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub footprint: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub datasheet: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_sim: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_bom: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_board: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dnp: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_pos_files: bool,
+    /// Its user-defined fields, in their order: name, text, shown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<LabelField>,
+}
+
+impl PowerProps {
+    pub fn is_default(&self) -> bool {
+        *self == PowerProps::default()
+    }
+}
+
+/// See [`SchExtras::field_looks`]: what an `EDA_TEXT` field holds beyond its place, size, bold and italic.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldFontLook {
+    /// The font (`EDA_TEXT::GetFont`): `None` is the default one (`DEFAULT_FONT_NAME`, "Default Font": `SetFont( nullptr )`, which writes no `(face ..)`);
+    /// `Some("KiCad Font")` names the stroke font (`KICAD_FONT_NAME`); anything else is the family of an outline font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    /// The text colour; `None` is `COLOR4D::UNSPECIFIED`, the layer's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<SchColor>,
+}
+
+impl FieldFontLook {
+    pub fn is_default(&self) -> bool {
+        *self == FieldFontLook::default()
+    }
+}
+
+/// `KICAD_FONT_NAME`: the name the stroke font goes by (`include/font/kicad_font_name.h`), what `(face "KiCad Font")` names.
+pub const KICAD_FONT_NAME: &str = "KiCad Font";
+
 impl TextAttrs {
     pub fn is_default(&self) -> bool {
         *self == TextAttrs::default()
@@ -631,6 +699,29 @@ impl SchExtras {
         self.pin_alternates.get(key).and_then(|m| m.get(number)).map(String::as_str)
     }
 
+    /// The font face and colour of the field `name` of the item keyed `key` ([`Self::field_looks`]); the default look when nothing set one.
+    pub fn field_look(&self, key: &str, name: &str) -> Option<&FieldFontLook> {
+        self.field_looks.get(key).and_then(|m| m.get(name))
+    }
+
+    /// Set the font face and colour of the field `name` of the item keyed `key`; the default look is kept as no entry. Returns whether anything changed.
+    pub fn set_field_look(&mut self, key: &str, name: &str, look: FieldFontLook) -> bool {
+        if self.field_look(key, name).cloned().unwrap_or_default() == look {
+            return false;
+        }
+        if look.is_default() {
+            if let Some(m) = self.field_looks.get_mut(key) {
+                m.remove(name);
+                if m.is_empty() {
+                    self.field_looks.remove(key);
+                }
+            }
+        } else {
+            self.field_looks.entry(key.to_string()).or_default().insert(name.to_string(), look);
+        }
+        true
+    }
+
     /// The places of the pins of the symbol keyed `key`, as [`permute_pins`] takes them; `None` for a symbol whose pins are all where the library has them.
     pub fn pin_swaps_of(&self, key: &str) -> Option<&BTreeMap<String, String>> {
         self.pin_swaps.get(key)
@@ -708,6 +799,8 @@ impl SchExtras {
             && self.pin_alternates.is_empty()
             && self.text_justify.is_empty()
             && self.text_attrs.is_empty()
+            && self.field_looks.is_empty()
+            && self.power_props.is_empty()
             && self.tables.is_empty()
             && self.groups.is_empty()
             && self.embedded.is_empty()
