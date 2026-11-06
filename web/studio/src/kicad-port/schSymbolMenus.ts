@@ -9,7 +9,7 @@
 import type { Cmd, LibPin, Schematic, SchematicSymbol } from "../api/types";
 import type { MenuNode } from "../kicad/types";
 import { parsePinItemId, referenceOfKey } from "./schPins";
-import { unitCountOf } from "./schUnits";
+import { drawnUnit, unitCountOf } from "./schUnits";
 import { unitLetter } from "./unitLetter";
 
 /** The actions the two submenus' entries run (`ID_POPUP_SCH_SELECT_UNIT`, `ID_POPUP_SCH_PLACE_UNIT`, `ID_POPUP_SCH_ALT_PIN_FUNCTION`): studio actions where KiCad's
@@ -47,13 +47,15 @@ export function symbolUnitMenu(sch: Schematic, ref: string, unit?: number): Menu
   const lib = sch.lib_symbols[s.lib_id];
   const n = unitCountOf(lib);
   if (n < 2) return null;
-  const placed = new Set(sch.symbols.filter((x) => x.id === ref).map((x) => x.unit));
+  // the units this sheet's placement draws of the reference it gives the symbol (`GetRef( &sheet )`, `GetUnitSelection( &sheet )`; UI-LEFT S9)
+  const shownRef = s.reference ?? s.id;
+  const placed = new Set(sch.symbols.filter((x) => (x.reference ?? x.id) === shownRef && x.lib_id === s.lib_id).map(drawnUnit));
   const items: MenuNode[] = [];
   for (let u = 1; u <= n; u++) {
     // `if( missingUnits.count( ii + 1 ) == 0 ) unit_text += _( " (already placed)" );`
     const label = unitDisplayName(lib, u) + (placed.has(u) ? " (already placed)" : "");
     // the argument names the placed unit the menu is for and the unit chosen ("<unit>:<new unit>"): a reference's units are one item of the selection
-    items.push({ type: "item", action: SELECT_UNIT_ACTION, arg: `${s.unit}:${u}`, label, checked: u === s.unit });
+    items.push({ type: "item", action: SELECT_UNIT_ACTION, arg: `${s.unit}:${u}`, label, checked: u === drawnUnit(s) });
   }
   const missing = Array.from({ length: n }, (_, i) => i + 1).filter((u) => !placed.has(u));
   if (missing.length > 0) {
@@ -77,10 +79,12 @@ export function selectUnit(sch: Schematic, ref: string, unit: number, newUnit: n
   const lib = sch.lib_symbols[s.lib_id];
   const n = unitCountOf(lib);
   const target = Math.min(newUnit, n);
-  if (n <= 1 || target === s.unit) return { do: "nothing" };
-  if (sch.symbols.some((x) => x.id === ref && x.unit === target)) {
+  // `currentUnit`: the unit of the sheet in view (`GetUnitSelection( &sheetPath )`); `FindSymbolByRefAndUnit` looks for the reference this sheet gives it
+  const current = drawnUnit(s);
+  if (n <= 1 || target === current) return { do: "nothing" };
+  if (sch.symbols.some((x) => x !== s && (x.reference ?? x.id) === (s.reference ?? s.id) && x.lib_id === s.lib_id && drawnUnit(x) === target)) {
     const targetName = unitDisplayName(lib, target);
-    const currName = unitDisplayName(lib, s.unit);
+    const currName = unitDisplayName(lib, current);
     return {
       do: "ask",
       message: `Symbol unit '${targetName}' is already placed (on sheet '${sheetName || "Root"}')`,

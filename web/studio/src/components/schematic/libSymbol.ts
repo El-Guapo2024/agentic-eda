@@ -67,7 +67,8 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
 
   const m = symbolTransformMatrix(instance.rot, instance.mirror);
   const at = instance.at;
-  const unit = instance.unit || 1;
+  // the unit the placement in view draws (`GetUnitSelection( &GetCurrentSheet() )`, UI-LEFT S9)
+  const unit = instance.path_unit || instance.unit || 1;
   const bodyStyle = instance.body_style || 1;
 
   let minX = Infinity,

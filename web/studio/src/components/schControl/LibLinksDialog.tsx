@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { fetchSymbolEditorNames } from "../../api/client";
+import { fetchSymbolPlacements } from "../../api/schControlClient";
 import { libIdIsValid, libLinkChanges, libLinkRows, orphanCandidates } from "../../kicad-port/libLinks";
 import { SchDialogFrame } from "./SchDialogFrame";
 
@@ -15,11 +16,18 @@ export function LibLinksDialog({ onClose }: { onClose: () => void }) {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [updateFields, setUpdateFields] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // every symbol of the hierarchy, a row per sheet path under the reference that path gives it (`initDlg`: `Hierarchy().GetSymbols( references,
+  // SYMBOL_FILTER_ALL, true )`, `GetRef( &sheetpath )`; UI-LEFT S9); the sheet in view's until they are read
+  const [placements, setPlacements] = useState<Array<{ id: string; lib_id: string | null }> | null>(null);
 
   useEffect(() => {
     let alive = true;
     fetchSymbolEditorNames().then(
       (r) => alive && setNames(r.names),
+      () => undefined
+    );
+    fetchSymbolPlacements().then(
+      (p) => alive && setPlacements(p.map((r) => ({ id: r.reference, lib_id: r.lib_id || null }))),
       () => undefined
     );
     return () => {
@@ -28,7 +36,7 @@ export function LibLinksDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   const known = useMemo(() => new Set(names), [names]);
-  const rows = useMemo(() => libLinkRows(state.schematic?.symbols ?? [], known), [state.schematic, known]);
+  const rows = useMemo(() => libLinkRows(placements ?? (state.schematic?.symbols ?? []).map((s) => ({ id: s.reference ?? s.id, lib_id: s.lib_id })), known), [placements, state.schematic, known]);
   const orphans = rows.filter((r) => r.orphan);
   const changes = libLinkChanges(rows, edits);
   const invalid = changes.find(([, to]) => !libIdIsValid(to));

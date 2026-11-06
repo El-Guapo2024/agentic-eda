@@ -24,7 +24,7 @@ import { circumcircle } from "./trackArc";
 import { DEFAULT_PPI, imageSizeNm, SCALE_PPM, scaleForHeightNm, scaleForWidthNm } from "./refImage";
 import { registerSchTableProperties, schTableItemOf } from "./schTableProperties";
 import { defaultTextBoxMargin } from "./schTextBox";
-import { unitCountOf } from "./schUnits";
+import { drawnUnit, unitCountOf } from "./schUnits";
 import { letterSubReference } from "./unitLetter";
 import { setSymbolVariantCmd, type VariantFlagKey } from "./designVariants";
 
@@ -482,11 +482,12 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       const lib = libOf(i, c);
       return Array.from({ length: unitCountOf(lib) }, (_, k) => ({ label: lib?.unit_names?.[String(k + 1)] ?? letterSubReference(k + 1), value: k + 1 }));
     },
-    get: (i) => i.symbol?.unit ?? 1,
+    // the unit the sheet in view draws (`GetUnitProp`: `GetUnitSelection( &Schematic()->CurrentSheet() )`, UI-LEFT S9)
+    get: (i) => (i.symbol ? drawnUnit(i.symbol) : 1),
     available: (i, c) => isReal(i) && unitCountOf(libOf(i, c)) > 1,
     set: (i, v) => {
       const unit = Number(v);
-      return !i.symbol || !Number.isFinite(unit) || unit === (i.symbol.unit ?? 1) ? [] : [{ op: "sch_edit", verb: "set_symbol_unit", id: i.symbol.id, unit: i.symbol.unit ?? 1, new_unit: unit }];
+      return !i.symbol || !Number.isFinite(unit) || unit === drawnUnit(i.symbol) ? [] : [{ op: "sch_edit", verb: "set_symbol_unit", id: i.symbol.id, unit: i.symbol.unit ?? 1, new_unit: unit }];
     },
   });
   // "Body Style" (`SetBodyStyleProp`, `multiBodyStyle`): "Standard" and "Alternate" for a De Morgan symbol (`GetBodyStyleDescription`), `set_body_style`.

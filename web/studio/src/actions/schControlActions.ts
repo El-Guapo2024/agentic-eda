@@ -212,9 +212,12 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       if (ids.length === 0) return;
       const variant = state.schVariant;
       const items = sch.symbols.filter((s) => ids.includes(s.id)).map((s) => variantFlags(s, variant));
+      // the default variant: the server collects the units of the reference this sheet path gives each symbol on every sheet and works out `new_state`
+      // over all of them (`CollectOtherUnits` over `Hierarchy()`, r5 D5-M2, UI-LEFT S9); a variant's records are the sheet in view's
+      if (variant === "") return void api.cmd({ op: "sch_edit", verb: "toggle_symbol_attribute", ids, attribute: key });
       const next = nextAttributeState(items, key);
-      const cmd = variant === "" ? null : setSymbolVariantCmd(variant, ids, { flags: { [key]: next } });
-      void api.cmd(cmd ?? { op: "set_symbol_attrs", ids, [key]: next });
+      const cmd = setSymbolVariantCmd(variant, ids, { flags: { [key]: next } });
+      if (cmd) void api.cmd(cmd);
     });
   };
   m.set("eeschema.EditorControl.setDNP", setAttribute("eeschema.EditorControl.setDNP"));

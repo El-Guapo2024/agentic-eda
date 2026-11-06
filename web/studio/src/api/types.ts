@@ -3009,8 +3009,13 @@ export interface SchematicSymbol {
   rot: Degrees;
   /** KiCad mirrors one axis at a time, never both at once as a single flag -- `(mirror x)` flips the symbol vertically (negates Y), `(mirror y)` flips it horizontally (negates X). Replaces an earlier, incomplete `mirrored: boolean` that could only ever express one of the two. */
   mirror: "x" | "y" | null;
-  /** 1-based unit (gate) of a multi-unit symbol -- e.g. a quad op-amp, or ecc83-pp's three-triode ECC83. */
+  /** 1-based unit (gate) of a multi-unit symbol -- e.g. a quad op-amp, or ecc83-pp's three-triode ECC83. The symbol's own unit, which the verbs tell it apart by. */
   unit: number;
+  /**
+   * The unit this sheet's placement draws, when it is not `unit` (`SCH_SYMBOL::GetUnitSelection( &sheetPath )`: a screen shown by several sheets can draw U1A on
+   * one and U1B on the other, `SchExtras::path_units`). Its body and pins are that unit's (`drawnUnit`, kicad-port/schUnits.ts; UI-LEFT S9).
+   */
+  path_unit?: number;
   /** The body style the symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`): 1 the normal one, 2 the alternate ("De Morgan") one of a library symbol that has it. */
   body_style: number;
   value: string | null;

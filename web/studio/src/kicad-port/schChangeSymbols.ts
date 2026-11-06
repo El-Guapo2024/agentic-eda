@@ -21,6 +21,59 @@ export interface SymbolRow {
   lib_id: string | null;
   unit: number;
   value: string | null;
+  /** The reference the row's sheet path gives it (`GetRef( aInstance )`), when that is not `id` (a screen shown by several sheets). */
+  reference?: string;
+  /** The sheet path of the row (`/`-joined placement ids) and the screen it shows; absent: the sheet in view. */
+  sheet?: string;
+  file?: string;
+}
+
+/**
+ * `processMatchingSymbols` over the hierarchy (`for( SCH_SHEET_PATH& instance : Hierarchy() )`, `isMatch( symbol, &instance )`): the symbols that match on any
+ * sheet path, grouped by the screen they are on, each screen with the sheet path its verbs go to and the symbols' ids (each
+ * once, in walk order). A symbol of a screen shown on two paths is one symbol: matched on either path, it is changed once (`std::map<SCH_SYMBOL*, ..>`),
+ * through the first path it matched on.
+ * `selected` are ids on the sheet in view (`inView`, a `/`-joined path).
+ */
+export function matchOverHierarchy(rows: readonly SymbolRow[], spec: MatchSpec, selected: ReadonlySet<string>, inView: string): Array<{ sheet: string; file: string; refs: string[] }> {
+  const out: Array<{ sheet: string; file: string; refs: string[] }> = [];
+  for (const s of rows) {
+    const shown = s.reference ?? s.id;
+    let hit: boolean;
+    switch (spec.by) {
+      case "all":
+        hit = true;
+        break;
+      case "selection":
+        hit = (s.sheet ?? "") === inView && selected.has(s.id);
+        break;
+      case "reference":
+        hit = wildMatch(spec.reference, shown);
+        break;
+      case "value":
+        hit = wildMatch(spec.value, s.value ?? "");
+        break;
+      case "id":
+        hit = s.lib_id === spec.id;
+        break;
+    }
+    if (!hit) continue;
+    const file = s.file ?? "";
+    let group = out.find((g) => g.file === file);
+    if (!group) {
+      group = { sheet: s.sheet ?? "", file, refs: [] };
+      out.push(group);
+    }
+    if (!group.refs.includes(s.id)) group.refs.push(s.id);
+  }
+  return out;
+}
+
+/** `getSymbolReferences`: every reference a symbol has on the paths of the hierarchy (`GetInstances()`), space separated, for the report. */
+export function referencesOf(rows: readonly SymbolRow[], file: string, id: string): string {
+  const refs: string[] = [];
+  for (const r of rows) if ((r.file ?? "") === file && r.id === id && !refs.includes(r.reference ?? r.id)) refs.push(r.reference ?? r.id);
+  return refs.join(" ");
 }
 
 /** `WildCompareString( pattern, text, aCaseSensitive )`: `*` any run, `?` any one character. */
@@ -97,6 +150,8 @@ export interface ChangeOptions {
   updateValue: boolean;
   /** `m_resetEmptyFields`: reset a field even when the library's own is empty. */
   resetEmpty: boolean;
+  /** How the report names a symbol (`getSymbolReferences`: its references on every sheet path); its id when absent. */
+  shown?: (ref: string) => string;
 }
 
 export interface ChangePlan {
@@ -111,19 +166,20 @@ export function planChange(refs: readonly string[], symbols: readonly SymbolRow[
   const cmds: Cmd[] = [];
   const report: string[] = [];
   let changed = 0;
+  const shown = opts.shown ?? ((r: string) => r);
   for (const ref of refs) {
     const units = symbols.filter((s) => s.id === ref);
     const was = units[0]?.lib_id ?? "";
     if (!lib.found) {
-      report.push(`${ref}: ${opts.newLibId} *** symbol not found ***`);
+      report.push(`${shown(ref)}: ${opts.newLibId} *** symbol not found ***`);
       continue;
     }
     if (units.some((u) => u.unit > lib.unitCount)) {
-      report.push(`${ref}: ${was} -> ${opts.newLibId} *** new symbol has too few units ***`);
+      report.push(`${shown(ref)}: ${was} -> ${opts.newLibId} *** new symbol has too few units ***`);
       continue;
     }
     if (units.every((u) => u.lib_id === opts.newLibId) && !opts.updateReference && !opts.updateValue) {
-      report.push(`${ref}: already ${opts.newLibId}`);
+      report.push(`${shown(ref)}: already ${opts.newLibId}`);
       continue;
     }
     const steps: Cmd[] = [];
@@ -135,7 +191,7 @@ export function planChange(refs: readonly string[], symbols: readonly SymbolRow[
     // Renaming last: the field edits above name the reference as it still is.
     if (newRef !== ref) steps.push({ op: "rename_symbol", id: ref, new_id: newRef });
     if (steps.length === 0) {
-      report.push(`${ref}: nothing to change`);
+      report.push(`${shown(ref)}: nothing to change`);
       continue;
     }
     cmds.push(...steps);

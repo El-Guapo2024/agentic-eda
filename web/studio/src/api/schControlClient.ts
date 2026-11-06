@@ -40,6 +40,27 @@ export async function fetchHierarchy(): Promise<HierarchyEntry[]> {
   return j.sheets;
 }
 
+/**
+ * One placed symbol as one sheet path shows it (`GET /api/sch/symbols`, `SCH_SHEET_LIST::GetSymbols`): `id` and `unit` tell it apart on its screen (`file`), `reference`
+ * and `path_unit` are the path's own (`GetRef( &path )`, `GetUnitSelection( &path )`; a screen shown by several sheets lists its symbols once per path).
+ */
+export interface SymbolPlacement {
+  sheet: string;
+  file: string;
+  id: string;
+  unit: number;
+  reference: string;
+  path_unit: number;
+  lib_id: string;
+  value: string;
+}
+
+/** Every placed symbol of the hierarchy, a row per sheet path that shows it, in walk order (Change Symbols' and Update Symbols' matching, UI-LEFT S9). */
+export async function fetchSymbolPlacements(): Promise<SymbolPlacement[]> {
+  const j = await getJson<{ ok: boolean; symbols: SymbolPlacement[] }>("/api/sch/symbols");
+  return j.symbols;
+}
+
 /** One of KiCad's legacy BOM generator scripts (`GET /api/sch/bom_plugins`, `BOM_GENERATOR_HANDLER`): its name in the list, the header it carries, the command it runs. */
 export interface BomPlugin {
   name: string;
