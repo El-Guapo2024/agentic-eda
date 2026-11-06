@@ -488,7 +488,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let (value, footprint, datasheet) = (value.as_str(), footprint.as_str(), datasheet.as_str());
         // where each field is drawn: the placements the section keeps for this symbol, else Autoplace Fields' (`eda_engine::fields`)
         let lib_for_geometry = real_symbol.map(|r| if body_style > 1 { r.in_style(body_style).into_owned() } else { r });
-        let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, lib_for_geometry.as_ref());
+        let geom = eda_engine::symgeom::SymbolGeom::of_in(sch, sym, part, lib_for_geometry.as_ref());
         let mut shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), lib_for_geometry.as_ref(), &geom);
         // the texts this symbol is written with (the instance's own, else the part's), which the placement is for
         for f in shown.iter_mut() {
@@ -1070,7 +1070,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
             let (_, _, datasheet) = symbol_texts(sym, part, resolved.as_ref());
             // the fields as the writer writes them: every one the sheet shows but the Reference, Value and Footprint, then the simulation fields
             let real_symbol = model.real_symbol_of(&lib_id, part);
-            let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, real_symbol.as_ref());
+            let geom = eda_engine::symgeom::SymbolGeom::of_in(sch, sym, part, real_symbol.as_ref());
             let shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), real_symbol.as_ref(), &geom);
             let mut fields: Vec<(String, String)> = Vec::new();
             for f in &shown {

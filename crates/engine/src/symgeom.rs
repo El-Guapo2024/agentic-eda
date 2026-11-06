@@ -114,6 +114,24 @@ impl SymbolGeom {
         Self::of_corner_symbol(sym.at, rot, mirrored, width, &cs, sym.unit, Some(part))
     }
 
+    /// [`Self::of`] for the placed `sym` of `sch`: the places Swap Pins traded are in it (`SchExtras::pin_swaps`), as `SwapPinGeometry` leaves them in the
+    /// symbol's own copy of its library pins, which `AUTOPLACER` (`pinsOnSide`, `getPinsBox`), the pin texts and the checker read.
+    pub fn of_in(sch: &eda_model::ir::SchematicSection, sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol>) -> SymbolGeom {
+        Self::of(sym, part, resolved).with_swaps(sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)))
+    }
+
+    /// `SwapPinGeometry` (`eeschema/tools/sch_tool_utils.cpp`) over every swapped pin: a pin takes the position, orientation and length of the pin whose
+    /// place it has (`swaps`: number -> number, [`eda_model::sch_extras::permute_pins`]), and keeps its number, its name and whether it is shown -- so a
+    /// shown pin that took a hidden pin's place is a shown pin on that side for Autoplace Fields (UI-LEFT S20).
+    pub fn with_swaps(mut self, swaps: Option<&std::collections::BTreeMap<String, String>>) -> SymbolGeom {
+        let Some(swaps) = swaps.filter(|s| !s.is_empty()) else { return self };
+        let places: Vec<(String, ((f64, f64), PinOrient, f64))> = self.pins.iter().map(|p| (p.number.clone(), (p.tip, p.orient, p.length))).collect();
+        for (pin, (_, (tip, orient, length))) in self.pins.iter_mut().zip(eda_model::sch_extras::permute_pins(places, swaps)) {
+            (pin.tip, pin.orient, pin.length) = (tip, orient, length);
+        }
+        self
+    }
+
     /// The geometry of a symbol whose library frame has its origin at the symbol's `at` (a power symbol, a sheet-less glyph): no
     /// box corner to measure from, no mirror about a box.
     pub fn of_origin_symbol(at: Point, rot: u32, lib: &LibSymbol) -> SymbolGeom {

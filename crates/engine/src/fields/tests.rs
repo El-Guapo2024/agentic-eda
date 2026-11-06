@@ -216,3 +216,41 @@ fn autoplace_ignores_hidden_pins() {
     let body = geom.body.unwrap();
     assert!(rx > body.x1, "the Reference is right of the body ({rx} > {})", body.x1);
 }
+
+/// UI-LEFT S20: Autoplace Fields reads the pins where Swap Pins left them (`SwapPinGeometry` moves the position, orientation and length, the pin keeps
+/// whether it is shown, and `AUTOPLACER::pinsOnSide` reads the symbol's own pins). The resistor above with pin 1 (shown, at the top) traded with its hidden
+/// pin 3 (on the right): a shown pin is on the right now, so the fields go elsewhere -- exactly where they go for a library symbol drawn that way.
+#[test]
+fn autoplace_reads_the_places_swap_pins_traded() {
+    let mut lib = eda_model::symbol::builtin("Device:R").unwrap();
+    let mut hidden = lib.pins[0].clone();
+    hidden.number = "3".into();
+    hidden.electrical_type = "power_in".into();
+    hidden.at = eda_model::symbol::SPoint { x: 2.54, y: 0.0 };
+    hidden.angle_deg = 180.0;
+    hidden.length_mm = 1.27;
+    hidden.hidden = true;
+    lib.pins.push(hidden);
+    // the same symbol drawn with pin 1 and pin 3 at each other's places
+    let mut drawn = lib.clone();
+    let (i1, i3) = (drawn.pins.iter().position(|p| p.number == "1").unwrap(), drawn.pins.iter().position(|p| p.number == "3").unwrap());
+    let (a, b) = (drawn.pins[i1].clone(), drawn.pins[i3].clone());
+    (drawn.pins[i1].at, drawn.pins[i1].angle_deg, drawn.pins[i1].length_mm) = (b.at, b.angle_deg, b.length_mm);
+    (drawn.pins[i3].at, drawn.pins[i3].angle_deg, drawn.pins[i3].length_mm) = (a.at, a.angle_deg, a.length_mm);
+
+    let sym = resistor(Point { x: mm(50.8), y: mm(50.8) }, 0, false);
+    let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
+    sch.extras.pin_swaps.insert("R1".into(), [("1".to_string(), "3".to_string()), ("3".to_string(), "1".to_string())].into());
+    let specs = symbol_specs(&sym, None, "");
+    let plain = SymbolGeom::of(&sym, &part("R1", 3), Some(&lib));
+    let swapped = SymbolGeom::of_in(&sch, &sym, &part("R1", 3), Some(&lib));
+    let as_drawn = SymbolGeom::of(&sym, &part("R1", 3), Some(&drawn));
+    let at = |g: &SymbolGeom| autoplace_symbol(&sym, g, &specs).iter().map(|p| page_field(sym.at, sym.rot, sym.mirrored, g.width, p, "x").at).collect::<Vec<_>>();
+    assert_eq!(at(&swapped), at(&as_drawn), "the swapped symbol's fields are the drawn symbol's");
+    assert_ne!(at(&swapped), at(&plain), "and not where they are with the pins at the library's places");
+    let body = plain.body.unwrap();
+    assert!(at(&plain)[0].0 > body.x1 && at(&swapped)[0].0 <= body.x1, "the Reference leaves the right side, where a shown pin is now");
+    // a pin keeps its number, name and whether it is shown; only its place moves
+    let p1 = swapped.pins.iter().find(|p| p.number == "1").unwrap();
+    assert!(!p1.hidden && p1.tip == plain.pins.iter().find(|p| p.number == "3").unwrap().tip);
+}

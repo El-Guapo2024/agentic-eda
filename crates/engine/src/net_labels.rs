@@ -38,7 +38,7 @@ fn obstacles(sch: &SchematicSection, model: &ConstraintModel, net: &str) -> Vec<
             sym.lib_id = format!("eda:{}", sym.id);
         }
         let resolved = model.real_symbol_of_instance(sch, &sym, part);
-        let geom = crate::symgeom::SymbolGeom::of(&sym, part, resolved.as_ref());
+        let geom = crate::symgeom::SymbolGeom::of_in(sch, &sym, part, resolved.as_ref());
         for f in crate::fields::symbol_fields(sch, &sym, Some(part), resolved.as_ref(), &geom).iter().filter(|f| f.visible && !f.text.is_empty()) {
             out.push(crate::fields::field_rect(f));
         }
