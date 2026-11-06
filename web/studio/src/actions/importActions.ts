@@ -27,7 +27,7 @@ import {
 import { easyEdaProject } from "../kicad-port/zipEntry";
 import { readAppendBoard } from "../api/importClient";
 import { pickBinaryFile, pickBinaryFiles, postImportForeign } from "../api/foreignImportClient";
-import { postCarry, postCmd } from "../api/client";
+import { fetchState, postCarry, postCmd } from "../api/client";
 import { isContentModified, markContentSaved, type ModifiedEditor } from "../state/contentModified";
 import { pickTextFile } from "../api/libraryClient";
 import { askChooseProject, askImportQuestion, askLayerMapping, importKeepKiCadLayerNames, importShowIssues, showImportReport } from "../state/foreignImport";
@@ -278,8 +278,11 @@ function openImportNetlist(ctx: ImportActionContext, given: PickedFile | null): 
     strict: () => ctx.api.getState().strict,
     refresh: () => ctx.api.refresh(),
     toast: (message, kind) => ctx.dispatch({ type: "TOAST", message, kind }),
-    carry: (refs, paths) => {
-      const parts = ctx.api.getState().board?.parts ?? [];
+    carry: async (refs, paths) => {
+      // The server's board: the page's state follows a refresh only once React has drawn it, and a Close right after Update PCB came before that (the new footprints
+      // were not in it yet, nothing was carried, and the step held open was later settled unjudged).
+      const board = await fetchState().catch(() => null);
+      const parts = board?.parts ?? ctx.api.getState().board?.parts ?? [];
       const items: SpreadItem[] = [];
       refs.forEach((ref, i) => {
         const part = parts.find((p) => p.ref === ref);
@@ -287,7 +290,14 @@ function openImportNetlist(ctx: ImportActionContext, given: PickedFile | null): 
         if (part && bbox) items.push({ ref, bbox, path: paths[i] ?? "" });
       });
       const first = parts.find((p) => p.ref === items[0]?.ref);
-      if (!first?.at) return;
+      if (!first?.at) {
+        // nothing to carry after all: the held step ends here, judged by the Strict switch (a refusal takes the import back)
+        const done = await postCarry("commit", ctx.api.getState().strict);
+        if (!done.ok) ctx.dispatch({ type: "TOAST", message: done.message, kind: "error" });
+        await ctx.api.refresh();
+        return;
+      }
+      await ctx.api.refresh();
       ctx.api.carryPlaced(items.map((i) => i.ref), { x: first.at[0], y: first.at[1] }, spreadBySheet(items));
     },
   };

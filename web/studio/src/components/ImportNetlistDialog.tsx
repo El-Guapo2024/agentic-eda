@@ -42,8 +42,8 @@ export interface ImportNetlistHost {
   strict: () => boolean;
   /** The board read again after the update. */
   refresh: () => Promise<void>;
-  /** The added footprints handed to the Move tool (their refs and paths); nothing to carry is `[]`. */
-  carry: (refs: string[], paths: string[]) => void;
+  /** The added footprints handed to the Move tool (their refs and paths), read from the server's board (the page's may not have them yet); a carry that cannot start ends the held step, judged. */
+  carry: (refs: string[], paths: string[]) => Promise<void>;
   /** Says something on the canvas (a refused drop, ...). */
   toast: (message: string, kind: "error" | "info") => void;
 }
@@ -68,12 +68,16 @@ export function ImportNetlistDialog({ host, given }: { host: ImportNetlistHost; 
   const [alert, setAlert] = useState<string | null>(null);
   // the footprints the last Update PCB added, and whether a step is held open for them (`carry: "begin"`)
   const pending = useRef<{ refs: string[]; paths: string[] } | null>(null);
+  // Update PCB while it runs: Close waits for it, so the step it holds open is carried or ended, never left open unjudged
+  const inflight = useRef<Promise<void> | null>(null);
 
   /** `loadNetlist( true )`: the dry run, the message panel cleared and filled. */
   const test = useCallback(
     async (f: NetlistFile | null, o: NetlistOptions) => {
       if (!f) return;
       setBusy(true);
+      // `loadNetlist`: `m_MessageWindow->Clear()` before the run
+      setLines([]);
       try {
         const r: NetlistReport = await testNetlist({ text: f.text, name: f.name, options: o });
         // `ReadNetlistFromFile` refuses a file in a message box (`DisplayErrorMessage`) and the panel keeps the head lines
@@ -123,7 +127,19 @@ export function ImportNetlistDialog({ host, given }: { host: ImportNetlistHost; 
       setAlert(NO_VALID_FILE);
       return;
     }
+    const run = update(file);
+    inflight.current = run;
+    try {
+      await run;
+    } finally {
+      if (inflight.current === run) inflight.current = null;
+    }
+  };
+
+  const update = async (file: NetlistFile) => {
     setBusy(true);
+    // `loadNetlist`: `m_MessageWindow->Clear()` before the run
+    setLines([]);
     try {
       const earlier = await settlePending();
       if (earlier && !earlier.ok) host.toast(earlier.message, "error");
@@ -146,14 +162,15 @@ export function ImportNetlistDialog({ host, given }: { host: ImportNetlistHost; 
     }
   };
 
-  const onClose = () => {
+  const onClose = async () => {
+    await inflight.current?.catch(() => undefined);
     closeSweepDialog();
     // `~DIALOG_IMPORT_NETLIST`: with footprints added, the Move tool picks them up
     const p = pending.current;
     pending.current = null;
-    if (p) host.carry(p.refs, p.paths);
+    if (p) await host.carry(p.refs, p.paths);
   };
-  useEscape(onClose);
+  useEscape(() => void onClose());
 
   const allShown = SHOW_LABELS.every(([k]) => show[k]);
   const shown = shownLines(lines, show);
@@ -224,7 +241,7 @@ export function ImportNetlistDialog({ host, given }: { host: ImportNetlistHost; 
           <button className="primary" data-testid="import-netlist-update" disabled={busy} onClick={() => void onUpdate()}>
             {BUTTON_UPDATE}
           </button>
-          <button data-testid="import-netlist-close" onClick={onClose}>
+          <button data-testid="import-netlist-close" onClick={() => void onClose()}>
             {BUTTON_CLOSE}
           </button>
         </div>
