@@ -1,15 +1,15 @@
-// One window-level keydown listener, driven entirely by src/kicad/
-// actions.json's extracted hotkey/altHotkey strings matched against
-// useActionRunner's registry -- an action fires from its keyboard
+// One window-level keydown listener, driven entirely by each action's
+// hotkey/altHotkey as `effectiveHotkey` gives it -- the person's own
+// (Preferences > Hotkeys, state/userHotkeys.ts) else the default of
+// src/kicad/actions.json (actions/hotkeyActions.ts' table) -- matched
+// against useActionRunner's registry: an action fires from its keyboard
 // shortcut only once it's actually implemented, same rule as the menu/
 // toolbar's disabled state. Call once, near the app's root (App.tsx).
 import { useEffect, useMemo } from "react";
-import actionsData from "../kicad/actions.json";
-import type { ActionsFile } from "../kicad/types";
 import { useActionRunner } from "./useActionRunner";
 import { eventToHotkeyCandidates, effectiveHotkey } from "./hotkeys";
-
-const actionsFile = actionsData as ActionsFile;
+import { HOTKEY_TABLE } from "./hotkeyActions";
+import { useUserHotkeysVersion } from "../state/userHotkeys";
 
 const TEXT_INPUT_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA"]);
 const NAV_COMBO = /^(?:(?:Ctrl|Shift)\+)?(?:Up|Down|Left|Right)$|^(?:Enter|End)$/;
@@ -25,6 +25,8 @@ export function useGlobalHotkeys() {
   // here and the first one that's actually enabled wins at dispatch time.
   // A plain "first name wins" index would let an unimplemented action
   // permanently shadow an implemented one that happens to share its key.
+  // `ACTION_MANAGER::UpdateHotKeys`: rebuilt when the person's hotkeys change (Preferences' OK, List Hotkeys' OK).
+  const hotkeysVersion = useUserHotkeysVersion();
   const hotkeyIndex = useMemo(() => {
     const idx = new Map<string, string[]>();
     const add = (hk: string | null, name: string) => {
@@ -33,33 +35,17 @@ export function useGlobalHotkeys() {
       if (list) list.push(name);
       else idx.set(hk, [name]);
     };
-    for (const a of actionsFile.actions) {
+    // Every key comes from `effectiveHotkey`, the hand-corrected defaults included (Create Corner's and Repeat Last Item's Insert, Draw Filled Zones' Ctrl+Shift+Z,
+    // KiCad 10's Cycle Arc Drawing Mode on Alt+/: actions/hotkeys.ts `DEFAULT_HOTKEY_FIXES`), so a person can move them. Group Items has no key, as in KiCad
+    // 8303b2ad (Ctrl+G is Search's); Ungroup neither -- both stay on the toolbar and in the context menu.
+    for (const a of HOTKEY_TABLE) {
       const { hotkey, altHotkey } = effectiveHotkey(a);
       add(hotkey, a.name);
       add(altHotkey, a.name);
     }
-    // Task item 5: common.Interactive.group/ungroup's extracted hotkey is
-    // null (same extraction gap group_tool.cpp's own default-hotkey
-    // registration apparently hits -- every other common.Groups.*/
-    // common.Interactive.*Group* action is null too), but the task brief
-    // names Ctrl+G/Ctrl+Shift+G explicitly, matching real KiCad's actual
-    // shipped defaults; added directly here rather than guessed at in the
-    // extractor.
-    // pcbnew.PointEditor.addCorner ("Create Corner"): source is
-    // `#ifdef __WXMAC__ WXK_F1 #else WXK_INSERT`, and the extractor kept only the
-    // macOS arm (F1, which on every other platform is zoomIn's). Insert is the
-    // real non-Mac default.
-    add("Insert", "pcbnew.PointEditor.addCorner");
-    // eeschema.InteractiveEdit.repeatDrawItem: `#ifdef __WXMAC__ WXK_F1 #else WXK_INSERT` -- the extractor kept the macOS arm
-    // (F1, which off macOS is zoomIn's); Insert is the real non-Mac default (macOS keeps F1 from the table).
-    add("Insert", "eeschema.InteractiveEdit.repeatDrawItem");
-    add("Ctrl+G", "common.Interactive.group");
-    // KiCad 25ec2335's `ACTIONS::cycleArcDrawMode` (`MD_ALT + '/'`), newer than the extracted table: the schematic's Draw Arc modes (kicad-port/schArcDraw.ts, UI-LEFT-2 SS3).
-    add("Alt+/", "common.InteractiveDrawing.cycleArcDrawMode");
-    // (Ctrl+Shift+G is `ACTIONS::toggleGridOverrides` in KiCad's table and, wired now, in this one; KiCad leaves Ungroup without a key -- it stays on the toolbar
-    // and in the context menu.)
     return idx;
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotkeysVersion]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
