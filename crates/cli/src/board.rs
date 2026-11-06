@@ -106,6 +106,9 @@ mod multichannel_board_tests;
 #[cfg(test)]
 #[path = "table_tests.rs"]
 mod table_tests;
+#[cfg(test)]
+#[path = "netlist_import_tests.rs"]
+mod netlist_import_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize)]
