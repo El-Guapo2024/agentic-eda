@@ -1228,10 +1228,66 @@ fn points_box(pts: &[Point64]) -> (i64, i64, i64, i64) {
     pts.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |b, p| (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y)))
 }
 
+/// A spatial index of boxes on a 1 mm grid (standing for KiCad's `DRC_RTREE`s, `m_tracksRTree`, `m_copperRTree`, `m_createdTdRTree`): what may meet a box.
+#[derive(Debug, Clone, Default)]
+struct Grid {
+    cells: HashMap<(i64, i64), Vec<usize>>,
+    /// Boxes too large to file cell by cell, asked by every query.
+    big: Vec<usize>,
+}
+
+const GRID_CELL: i64 = 1_000_000;
+
+impl Grid {
+    fn span(b: (i64, i64, i64, i64)) -> (i64, i64, i64, i64) {
+        (b.0.div_euclid(GRID_CELL), b.1.div_euclid(GRID_CELL), b.2.div_euclid(GRID_CELL), b.3.div_euclid(GRID_CELL))
+    }
+
+    fn insert(&mut self, i: usize, b: (i64, i64, i64, i64)) {
+        let (x0, y0, x1, y1) = Self::span(b);
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > 4096 {
+            self.big.push(i);
+            return;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                self.cells.entry((x, y)).or_default().push(i);
+            }
+        }
+    }
+
+    /// The indices filed in a cell `b` reaches, each once, in increasing order (the board's order).
+    fn query(&self, b: (i64, i64, i64, i64)) -> Vec<usize> {
+        let (x0, y0, x1, y1) = Self::span(b);
+        let mut out = self.big.clone();
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > 4096 {
+            out.extend(self.cells.values().flatten().copied());
+        } else {
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    if let Some(v) = self.cells.get(&(x, y)) {
+                        out.extend_from_slice(v);
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
 /// The board's items a teardrop is made from and measured against, and the parameters of its track-to-track teardrops.
 pub struct TeardropWorld {
     anchors: Vec<Anchor>,
+    /// Each anchor's copper on each of its layers, with its box: what the touch tests ask, made once.
+    anchor_copper: Vec<Vec<(String, Shape, (i64, i64, i64, i64))>>,
     items: Vec<TrackItem>,
+    /// Each item's copper and its box (`TrackItem::shape`, made once), and the items by layer in a grid.
+    item_copper: Vec<(Shape, (i64, i64, i64, i64))>,
+    item_grid: HashMap<String, Grid>,
+    /// The anchors of each net.
+    anchors_by_net: HashMap<String, Vec<usize>>,
     /// The board's graphics on copper layers (`m_board->Drawings()`, "Graphics, text and dimensions all plot as copper when they sit on a copper layer"), each
     /// with its layer and shape: obstacles of the fit, and copper an edit can move. The third member names the shape for the comparison of two states of the board.
     graphics: Vec<(String, Shape, String)>,
@@ -1239,6 +1295,14 @@ pub struct TeardropWorld {
     track_params: TeardropParams,
     /// The teardrop zones of the board, as they were.
     zones: Vec<Zone>,
+}
+
+/// Each anchor's copper on each of its layers, with its box.
+fn copper_of(anchors: &[Anchor]) -> Vec<Vec<(String, Shape, (i64, i64, i64, i64))>> {
+    anchors
+        .iter()
+        .map(|a| a.groups.iter().flat_map(|(layers, _)| layers.iter()).filter_map(|l| a.shape_on(l).map(|s| (l.clone(), bbox_of(&s), s))).map(|(l, b, s)| (l, s, b)).collect())
+        .collect()
 }
 
 impl TeardropWorld {
@@ -1264,23 +1328,57 @@ impl TeardropWorld {
             .map(|d| d.shapes.iter().filter(|s| eda_model::layers::is_copper_layer_name(s.layer())).flat_map(|s| eda_drc::board::effective_shapes(s).into_iter().map(move |sh| (s.layer().to_string(), format!("{sh:?}"), sh)).map(|(l, k, sh)| (l, sh, k))).collect())
             .unwrap_or_default();
         let zones = design.routing.as_ref().map(|r| r.zones.iter().filter(|z| z.teardrop).cloned().collect()).unwrap_or_default();
-        TeardropWorld { anchors, items, graphics, track_params: settings.track_end, zones }
+        let mut world = TeardropWorld { anchors, anchor_copper: Vec::new(), items, item_copper: Vec::new(), item_grid: HashMap::new(), anchors_by_net: HashMap::new(), graphics, track_params: settings.track_end, zones };
+        world.index();
+        world
+    }
+
+    /// The caches of the touch tests: each anchor's and item's copper, the items' grid, the anchors by net.
+    fn index(&mut self) {
+        self.anchor_copper = copper_of(&self.anchors);
+        self.anchors_by_net.clear();
+        for (i, a) in self.anchors.iter().enumerate() {
+            self.anchors_by_net.entry(a.net.clone()).or_default().push(i);
+        }
+        self.item_copper = self.items.iter().map(|t| {
+            let s = t.shape();
+            let b = bbox_of(&s);
+            (s, b)
+        }).collect();
+        self.item_grid.clear();
+        for (i, (t, (_, b))) in self.items.iter().zip(&self.item_copper).enumerate() {
+            self.item_grid.entry(t.layer.clone()).or_default().insert(i, *b);
+        }
+    }
+
+    /// The items on `layer` whose box meets `b`, in the board's order.
+    fn items_near(&self, layer: &str, b: (i64, i64, i64, i64)) -> Vec<usize> {
+        self.item_grid.get(layer).map(|g| g.query(b)).unwrap_or_default().into_iter().filter(|&i| boxes_meet(self.item_copper[i].1, b)).collect()
+    }
+
+    /// [`Self::connected`] of the world's `i`-th item, its copper as the cache has it.
+    fn connected_item(&self, i: usize) -> (Vec<usize>, Vec<usize>) {
+        let (shape, b) = &self.item_copper[i];
+        self.connected_shape(&self.items[i], shape, *b)
     }
 
     /// `GetConnectedPadsAndVias( aTrack )`: the anchors of the track's net whose copper on its layer touches it, the pads first and then the vias, each in the
     /// board's order. (KiCad asks its connectivity, whose items' copper collides.)
     fn connected(&self, item: &TrackItem) -> (Vec<usize>, Vec<usize>) {
+        let shape = item.shape();
+        let b = bbox_of(&shape);
+        self.connected_shape(item, &shape, b)
+    }
+
+    fn connected_shape(&self, item: &TrackItem, shape: &Shape, b: (i64, i64, i64, i64)) -> (Vec<usize>, Vec<usize>) {
         if item.net.is_empty() {
             return (Vec::new(), Vec::new());
         }
-        let shape = item.shape();
         let (mut pads, mut vias) = (Vec::new(), Vec::new());
-        for (i, a) in self.anchors.iter().enumerate() {
-            if a.net != item.net {
-                continue;
-            }
-            let Some(s) = a.shape_on(&item.layer) else { continue };
-            if s.collides(&shape, Nm::ZERO).is_some() {
+        for &i in self.anchors_by_net.get(&item.net).map_or(&[][..], |v| v.as_slice()) {
+            let a = &self.anchors[i];
+            let Some((_, s, _)) = self.anchor_copper[i].iter().find(|(l, _, ab)| *l == item.layer && boxes_meet(*ab, b)) else { continue };
+            if s.collides(shape, Nm::ZERO).is_some() {
                 if a.is_pad() {
                     pads.push(i);
                 } else {
@@ -1298,8 +1396,21 @@ impl TeardropWorld {
             return (Vec::new(), Vec::new());
         }
         let poly = Shape::Polygon { pts: z.outline.clone() };
-        let anchors = self.anchors.iter().filter(|a| a.net == z.net).filter(|a| a.shape_on(&z.layer).is_some_and(|s| s.collides(&poly, Nm::ZERO).is_some())).map(|a| a.key.clone()).collect();
-        let tracks = self.items.iter().filter(|t| t.net == z.net && t.layer == z.layer).filter(|t| t.shape().collides(&poly, Nm::ZERO).is_some()).filter_map(|t| t.key.clone()).collect();
+        let b = bbox_of(&poly);
+        let anchors = self
+            .anchors_by_net
+            .get(&z.net)
+            .map_or(&[][..], |v| v.as_slice())
+            .iter()
+            .filter(|&&i| self.anchor_copper[i].iter().any(|(l, s, ab)| *l == z.layer && boxes_meet(*ab, b) && s.collides(&poly, Nm::ZERO).is_some()))
+            .map(|&i| self.anchors[i].key.clone())
+            .collect();
+        let tracks = self
+            .items_near(&z.layer, b)
+            .into_iter()
+            .filter(|&i| self.items[i].net == z.net && self.item_copper[i].0.collides(&poly, Nm::ZERO).is_some())
+            .filter_map(|i| self.items[i].key.clone())
+            .collect();
         (anchors, tracks)
     }
 }
@@ -1310,9 +1421,12 @@ struct Manager<'a> {
     rules: &'a eda_model::BoardRules,
     /// `ensureCopperIndex`: tracks, vias, pads, graphics on copper and the board's teardrops; no pour ("The filler's priority rules knock a different-net pour back
     /// around a teardrop, but nothing keeps two teardrops out of the same gap").
-    copper: Vec<Obstacle>,
+    copper: std::cell::OnceCell<(Vec<Obstacle>, HashMap<String, Grid>)>,
+    /// The teardrops of the board the index holds.
+    zones: Vec<Zone>,
     /// `m_createdTdRTree`: the teardrops made so far ("The next teardrop has to see this one, or two of them flare into the same gap").
     created: Vec<Obstacle>,
+    created_grid: HashMap<String, Grid>,
     /// `BOARD::GetMaxClearanceValue()`.
     max_clearance: i64,
     out: Vec<Zone>,
@@ -1327,30 +1441,36 @@ const DRC_EPSILON: i64 = 500;
 impl<'a> Manager<'a> {
     /// The manager on `world`, the teardrop zones `zones` (the board's that are left) part of its copper index.
     fn new(world: &'a TeardropWorld, rules: &'a eda_model::BoardRules, zones: &[Zone]) -> Manager<'a> {
-        let mut copper = Vec::new();
-        for (i, t) in world.items.iter().enumerate() {
-            let shape = t.shape();
-            copper.push(Obstacle { id: ObsId::Item(i), layer: t.layer.clone(), net: t.net.clone(), bbox: bbox_of(&shape), shape });
-        }
-        for (i, a) in world.anchors.iter().enumerate() {
-            for (layers, _) in &a.groups {
-                for l in layers {
-                    if let Some(shape) = a.shape_on(l) {
-                        copper.push(Obstacle { id: ObsId::Anchor(i), layer: l.clone(), net: a.net.clone(), bbox: bbox_of(&shape), shape });
-                    }
+        let zones = zones.iter().filter(|z| z.outline.len() >= 3 && eda_model::layers::is_copper_layer_name(&z.layer)).cloned().collect();
+        Manager { world, rules, copper: std::cell::OnceCell::new(), zones, created: Vec::new(), created_grid: HashMap::new(), max_clearance: eda_drc::constraints::worst_case_clearance(rules).get(), out: Vec::new() }
+    }
+
+    /// `ensureCopperIndex`, made the first time it is asked: every track, via and pad on each of its layers, the graphics on copper and the board's teardrops.
+    fn copper(&self) -> &(Vec<Obstacle>, HashMap<String, Grid>) {
+        self.copper.get_or_init(|| {
+            let world = self.world;
+            let mut copper = Vec::new();
+            for (i, (t, (shape, b))) in world.items.iter().zip(&world.item_copper).enumerate() {
+                copper.push(Obstacle { id: ObsId::Item(i), layer: t.layer.clone(), net: t.net.clone(), bbox: *b, shape: shape.clone() });
+            }
+            for (i, (a, shapes)) in world.anchors.iter().zip(&world.anchor_copper).enumerate() {
+                for (l, shape, b) in shapes {
+                    copper.push(Obstacle { id: ObsId::Anchor(i), layer: l.clone(), net: a.net.clone(), bbox: *b, shape: shape.clone() });
                 }
             }
-        }
-        for (i, (l, shape, _)) in world.graphics.iter().enumerate() {
-            copper.push(Obstacle { id: ObsId::Graphic(i), layer: l.clone(), net: String::new(), bbox: bbox_of(shape), shape: shape.clone() });
-        }
-        for (i, z) in zones.iter().enumerate() {
-            if z.outline.len() >= 3 && eda_model::layers::is_copper_layer_name(&z.layer) {
+            for (i, (l, shape, _)) in world.graphics.iter().enumerate() {
+                copper.push(Obstacle { id: ObsId::Graphic(i), layer: l.clone(), net: String::new(), bbox: bbox_of(shape), shape: shape.clone() });
+            }
+            for (i, z) in self.zones.iter().enumerate() {
                 let shape = Shape::Polygon { pts: z.outline.clone() };
                 copper.push(Obstacle { id: ObsId::Zone(i), layer: z.layer.clone(), net: z.net.clone(), bbox: bbox_of(&shape), shape });
             }
-        }
-        Manager { world, rules, copper, created: Vec::new(), max_clearance: eda_drc::constraints::worst_case_clearance(rules).get(), out: Vec::new() }
+            let mut grid: HashMap<String, Grid> = HashMap::new();
+            for (i, o) in copper.iter().enumerate() {
+                grid.entry(o.layer.clone()).or_default().insert(i, o.bbox);
+            }
+            (copper, grid)
+        })
     }
 
     /// `TEARDROP_MANAGER::pairClearance`: the clearance the rules ask between the track and the item (`EvalRules( CLEARANCE_CONSTRAINT, .. )`), less the DRC's
@@ -1387,7 +1507,9 @@ impl<'a> Manager<'a> {
             let clearance = Nm::new(self.pair_clearance(&source.net, &o.net));
             shapes.iter().any(|s| s.collides(&o.shape, clearance).is_some())
         };
-        self.copper.iter().any(collides) || self.created.iter().any(collides)
+        let near = |grid: &HashMap<String, Grid>| grid.get(&source.layer).map(|g| g.query(reach)).unwrap_or_default();
+        let (copper, grid) = self.copper();
+        near(grid).into_iter().any(|i| collides(&copper[i])) || near(&self.created_grid).into_iter().any(|i| collides(&self.created[i]))
     }
 
     /// `TEARDROP_MANAGER::findTouchingTrack( aMatchType, aTrackRef, aSourceTrack, aEndPoint )`: the board track on the reference's layer, other than the reference
@@ -1396,12 +1518,13 @@ impl<'a> Manager<'a> {
     fn find_touching_track(&self, track_ref: &TrackItem, source: &TrackItem, end: Point64) -> Option<(usize, u8)> {
         let ref_shape = track_ref.shape();
         let mut candidate: Option<(usize, u8)> = None;
-        for (i, t) in self.world.items.iter().enumerate() {
+        for i in self.world.items_near(&track_ref.layer, bbox_of(&ref_shape)) {
+            let t = &self.world.items[i];
             // "A stub shares an endpoint with the track it stands in for, and continuing back onto that is not a continuation."
-            if t.layer != track_ref.layer || (t.key.is_some() && (t.key == track_ref.key || t.key == source.key)) {
+            if t.key.is_some() && (t.key == track_ref.key || t.key == source.key) {
                 continue;
             }
-            if ref_shape.collides(&t.shape(), Nm::ZERO).is_none() {
+            if ref_shape.collides(&self.world.item_copper[i].0, Nm::ZERO).is_none() {
                 continue;
             }
             let m = t.is_point_on_ends(end, TOLERANCE);
@@ -1675,11 +1798,8 @@ impl<'a> Manager<'a> {
         if other.round(layer) {
             compute_curved_for_round_shape(params, &mut curve, w, track_halfwidth, if two_segments { vec_via } else { vec_t }, other_pos, &mut pts);
         } else {
-            let mut td_width = (w as f64 * params.best_width_ratio).round() as i64;
-            if params.max_width.get() > 0 && params.max_width.get() < td_width {
-                td_width = params.max_width.get();
-            }
-            let _ = td_width; // `aTdWidth` is not read by `computeCurvedForRectShape`
+            // (`td_width`, `KiROUND( GetWidth( aOther, layer ) * m_BestWidthRatio )` clamped by `m_TdMaxWidth`, is handed to `computeCurvedForRectShape`, which
+            // does not read it.)
             compute_curved_for_rect_shape(&mut curve, &pts, intersection, pad_geo.map(|g| g.rect), other_pos);
         }
         if two_segments {
@@ -1752,7 +1872,9 @@ impl<'a> Manager<'a> {
         let layer = source.layer.clone();
         let outline: Vec<Point> = points.iter().map(|&p| pt(p)).collect();
         let shape = Shape::Polygon { pts: outline.clone() };
-        self.created.push(Obstacle { id: ObsId::Created(self.created.len()), layer: layer.clone(), net: net.clone(), bbox: bbox_of(&shape), shape });
+        let (ci, cb) = (self.created.len(), bbox_of(&shape));
+        self.created_grid.entry(layer.clone()).or_default().insert(ci, cb);
+        self.created.push(Obstacle { id: ObsId::Created(ci), layer: layer.clone(), net: net.clone(), bbox: cb, shape });
         let track_end = variant == Variant::TrackEnd;
         self.out.push(Zone { id: String::new(), net, layer: layer.clone(), outline, teardrop: true, teardrop_track_end: track_end, ..Default::default() });
         // `if( aSourceTrack->HasSolderMask() && IsExternalCopperLayer( aSourceTrack->GetLayer() ) )`: `createTeardropMask`, on F.Mask or B.Mask, the copper's
@@ -1791,9 +1913,14 @@ impl<'a> Manager<'a> {
     /// `m_TdOnPadsInZones` is off) is not asked: the fills are kicad-cli's and not part of this crate's input.
     fn update(&mut self, dirty: Option<&Dirty>) {
         let world = self.world;
+        // A track that is not stale is built on only at a stale anchor, which is of its net.
+        let dirty_nets: HashSet<&str> = dirty.map(|d| world.anchors.iter().filter(|a| d.anchors.contains(&a.key)).map(|a| a.net.as_str()).collect()).unwrap_or_default();
         for (ti, item) in world.items.iter().enumerate() {
             let force_update = dirty.is_none_or(|d| item.key.as_ref().is_some_and(|k| d.tracks.contains(k)));
-            let (pads, vias) = world.connected(item);
+            if !force_update && !dirty_nets.contains(item.net.as_str()) {
+                continue;
+            }
+            let (pads, vias) = world.connected_item(ti);
             for ai in pads.into_iter().chain(vias) {
                 let anchor = &world.anchors[ai];
                 if !force_update && !dirty.is_some_and(|d| d.anchors.contains(&anchor.key)) {
@@ -1896,7 +2023,7 @@ impl<'a> Manager<'a> {
                     if !track_needs_update && !is_dirty(ci) {
                         continue;
                     }
-                    let (pads, vias) = world.connected(track);
+                    let (pads, vias) = world.connected_item(ti);
                     if pads.into_iter().chain(vias).any(|a| world.anchors[a].hit_test(pos, None)) {
                         continue;
                     }
@@ -2053,6 +2180,7 @@ pub fn generate_teardrops(design: &Design, model: &ConstraintModel, settings: &T
     let mut world = TeardropWorld::of(design, model);
     if design.routing.as_ref().map(|r| r.teardrop_settings) != Some(*settings) {
         world.anchors = collect_anchors(design, model, settings);
+        world.index();
         world.track_params = settings.track_end;
     }
     let mut manager = Manager::new(&world, &model.board, &[]);
@@ -2100,7 +2228,7 @@ pub fn update_after_edit(design: &mut Design, model: &ConstraintModel, before: &
     // The vias and pads the edit added, changed or took away (a footprint's pads with it).
     let index = |w: &TeardropWorld| -> HashMap<AnchorKey, usize> { w.anchors.iter().enumerate().map(|(i, a)| (a.key.clone(), i)).collect() };
     let (bi, ai) = (index(before), index(&after));
-    let changed_anchor = |w: &TeardropWorld, a: &Anchor, out: &mut Vec<(String, String, (i64, i64, i64, i64))>| {
+    let changed_anchor = |a: &Anchor, out: &mut Vec<(String, String, (i64, i64, i64, i64))>| {
         for (layers, _) in &a.groups {
             for l in layers {
                 if let Some(s) = a.shape_on(l) {
@@ -2108,18 +2236,17 @@ pub fn update_after_edit(design: &mut Design, model: &ConstraintModel, before: &
                 }
             }
         }
-        let _ = w;
     };
     for a in &before.anchors {
         if ai.get(&a.key).is_none_or(|&j| after.anchors[j] != *a) {
             dirty.anchors.insert(a.key.clone());
-            changed_anchor(before, a, &mut dirty_copper);
+            changed_anchor(a, &mut dirty_copper);
         }
     }
     for a in &after.anchors {
         if bi.get(&a.key).is_none_or(|&j| before.anchors[j] != *a) {
             dirty.anchors.insert(a.key.clone());
-            changed_anchor(&after, a, &mut dirty_copper);
+            changed_anchor(a, &mut dirty_copper);
         }
     }
     // The graphics on copper the edit moved (dirty copper only: nothing anchors on them).
@@ -2136,21 +2263,52 @@ pub fn update_after_edit(design: &mut Design, model: &ConstraintModel, before: &
     let Some(rt) = design.routing.as_mut() else { return false };
     let max_clearance = eda_drc::constraints::worst_case_clearance(&model.board).get();
     let copper_td: Vec<usize> = rt.zones.iter().enumerate().filter(|(_, z)| z.teardrop && eda_model::layers::is_copper_layer_name(&z.layer)).map(|(i, _)| i).collect();
-    let zone_anchors: HashMap<usize, (Vec<AnchorKey>, Vec<SegKey>)> = copper_td
-        .iter()
-        .filter(|&&i| before.zones.iter().any(|z| z.outline == rt.zones[i].outline && z.layer == rt.zones[i].layer && z.net == rt.zones[i].net))
-        .map(|&i| (i, before.zone_anchors(&rt.zones[i])))
-        .collect();
+    let key = |z: &Zone| (z.layer.clone(), z.net.clone(), z.outline.iter().map(|p| (p.x.get(), p.y.get())).collect::<Vec<_>>());
+    let existed: HashSet<(String, String, Vec<(i64, i64)>)> = before.zones.iter().map(key).collect();
+    let zone_box = |z: &Zone| points_box(&z.outline.iter().map(|&p| p64(p)).collect::<Vec<_>>());
+    // Only a teardrop whose box meets what the edit touched can be stale (its anchors touch it): the copper the edit changed, and the copper of each stale anchor as
+    // the board had it. The others are not looked at (KiCad asks every teardrop's anchors of its connectivity).
+    let anchor_boxes = |keys: &HashSet<AnchorKey>| -> Vec<(String, (i64, i64, i64, i64))> {
+        before.anchors.iter().enumerate().filter(|(_, a)| keys.contains(&a.key)).flat_map(|(i, _)| before.anchor_copper[i].iter().map(|(l, _, b)| (l.clone(), *b))).collect()
+    };
+    let mut touched: Vec<(String, (i64, i64, i64, i64))> = dirty_copper.iter().map(|(l, _, b)| (l.clone(), *b)).collect();
+    touched.extend(anchor_boxes(&dirty.anchors));
+    let candidates = |touched: &[(String, (i64, i64, i64, i64))], grow: i64, skip: &HashMap<usize, (Vec<AnchorKey>, Vec<SegKey>)>| -> Vec<usize> {
+        copper_td
+            .iter()
+            .copied()
+            .filter(|i| !skip.contains_key(i) && existed.contains(&key(&rt.zones[*i])))
+            .filter(|&i| {
+                let reach = inflate_box(zone_box(&rt.zones[i]), grow);
+                touched.iter().any(|(l, b)| *l == rt.zones[i].layer && boxes_meet(reach, *b))
+            })
+            .collect()
+    };
+    let mut zone_anchors: HashMap<usize, (Vec<AnchorKey>, Vec<SegKey>)> = HashMap::new();
+    for i in candidates(&touched, max_clearance, &zone_anchors) {
+        zone_anchors.insert(i, before.zone_anchors(&rt.zones[i]));
+    }
     // "A width fitted to the neighbours goes stale when one of them moves, though the teardrop anchors on neither. Pre- and post-edit geometry both count".
+    let (mut more_anchors, mut more_tracks) = (HashSet::new(), HashSet::new());
     for (&i, (anchors, tracks)) in &zone_anchors {
         let z = &rt.zones[i];
-        let reach = inflate_box(points_box(&z.outline.iter().map(|&p| p64(p)).collect::<Vec<_>>()), max_clearance);
+        let reach = inflate_box(zone_box(z), max_clearance);
         // "Net 0 is "no net", not a net that every unassigned item shares."
         let moved = dirty_copper.iter().any(|(l, net, b)| *l == z.layer && !(!z.net.is_empty() && *net == z.net) && boxes_meet(reach, *b));
         if moved {
-            dirty.anchors.extend(anchors.iter().cloned());
-            dirty.tracks.extend(tracks.iter().cloned());
+            more_anchors.extend(anchors.iter().filter(|a| !dirty.anchors.contains(*a)).cloned());
+            more_tracks.extend(tracks.iter().filter(|t| !dirty.tracks.contains(*t)).cloned());
         }
+    }
+    // The teardrops that share an anchor or a track with one fitted again are stale too ("Dirty the anchors first, or the rebuild passes these teardrops by").
+    if !more_anchors.is_empty() || !more_tracks.is_empty() {
+        let mut more: Vec<(String, (i64, i64, i64, i64))> = anchor_boxes(&more_anchors);
+        more.extend(before.items.iter().enumerate().filter(|(_, t)| t.key.as_ref().is_some_and(|k| more_tracks.contains(k))).map(|(i, t)| (t.layer.clone(), before.item_copper[i].1)));
+        for i in candidates(&more, 0, &zone_anchors) {
+            zone_anchors.insert(i, before.zone_anchors(&rt.zones[i]));
+        }
+        dirty.anchors.extend(more_anchors);
+        dirty.tracks.extend(more_tracks);
     }
     let stale: HashSet<usize> = zone_anchors
         .iter()
