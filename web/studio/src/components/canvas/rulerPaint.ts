@@ -1,12 +1,17 @@
 // Draws a `RULER_ITEM` (kicad-port/rulerItem.ts `rulerDrawing`) on a context already in world coordinates: the strokes at their widths, the texts in KiCad's
-// stroke font, left or right aligned and centred vertically on their anchor, turned by their angle (counterclockwise on screen, as KiCad's).
+// stroke font, left or right aligned and centred vertically on their anchor, turned by their angle (counterclockwise on screen, as KiCad's). The browser checks
+// read the last ruler of each canvas through `window.__edaRuler[tag]` ({ texts, segs }).
 import type { RulerDrawing } from "../../kicad-port/rulerItem";
 import { drawStrokeText } from "../text/strokeFont";
 
 /** `drawStrokeText` draws on the baseline; KiCad centres a preview's text on its position (`GR_TEXT_V_ALIGN_CENTER`): half the glyph height down, along the text's own up. */
 const V_CENTER = 0.5;
 
-export function paintRuler(ctx: CanvasRenderingContext2D, r: RulerDrawing, color: string): void {
+export function paintRuler(ctx: CanvasRenderingContext2D, r: RulerDrawing, color: string, tag?: string): void {
+  if (tag && typeof window !== "undefined") {
+    const w = window as unknown as { __edaRuler?: Record<string, unknown> };
+    w.__edaRuler = { ...(w.__edaRuler ?? {}), [tag]: { texts: r.texts.map((t) => t.text), segs: r.segs.length, color } };
+  }
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineCap = "round";

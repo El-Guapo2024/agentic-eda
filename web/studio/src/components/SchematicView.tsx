@@ -394,7 +394,7 @@ export function SchematicView() {
     const page = pageOf(sch.paper);
     drawPaper(ctx, page);
     // `GAL::DrawGrid` over the whole canvas (eeschema clips it to nothing), in the Schematic Editor's Display Options > Grid Display style
-    if (state.gridVisible) paintEditorGrid(ctx, state.schematicView, width, height, { size: { x: gridNm, y: gridYOf(gridSettingsList, gridNm) }, origin: [0, 0], style: gridDisplay.style, lineWidthPx: gridDisplay.lineWidthPx, minSpacingPx: gridDisplay.minSpacingPx }, layerColor("LAYER_SCHEMATIC_GRID"));
+    if (state.gridVisible) paintEditorGrid(ctx, state.schematicView, width, height, { size: { x: gridNm, y: gridYOf(gridSettingsList, gridNm) }, origin: [0, 0], style: gridDisplay.style, lineWidthPx: gridDisplay.lineWidthPx, minSpacingPx: gridDisplay.minSpacingPx }, layerColor("LAYER_SCHEMATIC_GRID"), undefined, "schematic");
     // The drawing sheet (`SCH_VIEW::DisplaySheet`): the `.kicad_wks` Page Settings chose, else KiCad's default, on this sheet's page
     drawSchematicDrawingSheet(ctx, state.schematicView, schematicSheetPage(sch, state.board?.name), sch.drawing_sheet?.text);
     // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)

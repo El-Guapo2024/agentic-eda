@@ -164,7 +164,7 @@ export function CommonOverlay() {
         ctx.save();
         ctx.translate(v.x, v.y);
         ctx.scale(v.scale, v.scale);
-        paintRuler(ctx, rulerDrawing([start[0], start[1]], [end[0], end[1]], { scale: v.scale, viewport }, { units: studio.units }, measureStrokeText), layerColor("LAYER_AUX_ITEMS"));
+        paintRuler(ctx, rulerDrawing([start[0], start[1]], [end[0], end[1]], { scale: v.scale, viewport }, { units: studio.units }, measureStrokeText), layerColor("LAYER_AUX_ITEMS"), tab);
         ctx.restore();
       }
     }

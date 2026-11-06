@@ -1445,7 +1445,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   if (draw.kind === "measure") {
     const end = frozen ? pts[1]! : rubberEnd;
     // Interactive Offset's ruler (`arrow`): the anchor colour, no ticks, an arrowhead (`POSITION_RELATIVE_TOOL::InteractiveOffset`)
-    if (end) paintRuler(ctx, rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true }, measureStrokeText), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"));
+    if (end) paintRuler(ctx, rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true }, measureStrokeText), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"), "pcb");
     return;
   }
   strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);
@@ -1580,7 +1580,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
         // A grid item's coverage hides the editor grid (`drawGridSource`'s wash): see gridItemPaint.ts.
         const covered = grids.map(gridGeometry);
         const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
-        paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), covered.length > 0 ? (x, y) => gridItemCovers(covered, x, y) : undefined);
+        paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), covered.length > 0 ? (x, y) => gridItemCovers(covered, x, y) : undefined, "pcb");
       }
       const box: [number, number, number, number] = [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
       drawGridItems(ctx, view, board, opts.layerVisible, opts.selection, DEFAULT_GRID_STYLE, box);
