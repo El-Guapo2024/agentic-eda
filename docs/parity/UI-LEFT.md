@@ -435,22 +435,20 @@ Notes:
 
 ## Board Setup, rules, DRC, ERC
 
-- **B1 [FM] Component Classes.** There is no page; the rules are read and honoured, but nothing edits them. M. GAPS 3; PARITY-pcb §9.
-- **B2 [FM] DRC Rule Editor.**
-  - No Show Matches, syntax help, auto-complete or tree drag-and-drop.
-  - Custom Rules is a plain textarea.
-  - Check Rule Syntax doesn't expand variables (R6-D5).
-  - M. GAPS 3; PARITY-pcb §48, §63.
-- **B3 [FM] Physical Stackup.**
-  - One row per dielectric, with the sublayers summed.
-  - No Add or Remove Dielectric, and no impedance control.
-  - Removing a used copper layer is refused.
-  - M. PARITY-pcb §9; r2 F17.
-- **B4 [FM] Net Classes.**
-  - No `D[0..7]` bus patterns, schematic net-class labels, colour or Tuning Profile columns.
-  - No transmission-line calculator.
-  - Assign Netclass has no live preview.
-  - M. PARITY-pcb §9.
+- **B1 [FM] Component Classes.** **done (task-u2-boardsetup)**: Design Rules > Component Classes is KiCad's page -- Assign component class per sheet, the custom assignments with the seven condition kinds of the "+" menu, Import references from selection, Show library, Highlight matching footprints, Match all / any, Validate's "Error with conditions for component class assignment %s" -- one undoable verb (`set_component_classes`) kept in the derived project's `component_class_settings`; kicad-cli's DRC reads a class the page defined through `A.hasComponentClass(..)` (proved; PARITY-pcb §70). Left: nothing known.
+- **B2 [FM] DRC Rule Editor.** **done (task-u2-boardsetup)**: Show Matches (`GetItemsMatchingRule` on the rule board: select, frame, brighten, "Show Matches (%d)" / "(error)"); the rule tree's drag-and-drop (one verb, the file's order follows); Check rule syntax expands the text variables (R6-D5) and adds `checkPlausibility`'s warnings; the Custom Rules editor with brace matching, auto-complete and KiCad's Syntax help (PARITY-pcb §71). Left:
+  - Show Matches does not see a footprint's own fields, graphics and texts, dimensions or tables (the rule board has no item for them).
+  - Dragging a category, a constraint node or an unsaved rule does nothing (KiCad moves the tree item).
+  - M. GAPS 3; PARITY-pcb §48, §63, §71.
+- **B3 [FM] Physical Stackup.** **done (task-u2-boardsetup, from task-u2-stackup)**: one row per dielectric sublayer (`addsublayer` read and written with every value and `locked`, r2 F17), Add/Remove Dielectric Layer, Impedance controlled, the thickness lock and Adjust Dielectric Thickness, the "Errors" checks; fewer copper layers ask KiCad's question and delete the items in one undoable step (PARITY-pcb §72). Left:
+  - The material list ("..."), Export to Clipboard, selecting an item from Show Details, pads with inner-layer shapes in the list.
+  - S. PARITY-pcb §72.
+- **B4 [FM] Net Classes.** **done (task-u2-boardsetup)**: a bus pattern (`D[0..7]`, `{SDA SCL}`) is stored as its members, in the page, Assign Netclass and the project reader (`ForEachBusMember`); the Tuning Profile column (one undo step with the classes; the Tuning Profiles page's class table is gone, as KiCad has none) and the PCB Color column with Import colors from schematic; Assign Netclass previews the matching nets on the board and the schematic; Schematic Setup's page keeps both (PARITY-pcb §70). Left:
+  - The schematic's net class labels are not read as assignments.
+  - The PCB colour is the Appearance panel's (`appearance.json`), outside Undo.
+  - The Default class is first in the table (KiCad lists it last).
+  - The transmission-line calculator is not ported (the Tuning Profiles grid's cells take typed values).
+  - S. PARITY-pcb §9, §70.
 - **B5 [BD] Text variables.**
   - No `@{}` math functions, VCSHASH or PIN_NAME(n).
   - Not expanded in schematic text boxes or power-symbol fields.

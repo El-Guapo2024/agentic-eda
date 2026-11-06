@@ -636,6 +636,11 @@ fn write_class_micro_and_pair(out: &mut String, class: Option<&eda_model::NetCla
 /// `BOARD_STACKUP::FormatBoardStackup`: `(stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..)` inside `(setup ..)`.
 /// Written only for a stackup whose every layer says what kind it is (one Board Setup or a board file made): the layers of
 /// a stackup an intent listed by name and thickness alone are not enough to describe the board to KiCad.
+///
+/// Each layer writes its sublayers in order, the ones after the first behind an `addsublayer` ("in sub layer list there is at least one item"), each with what its
+/// type has: `(color ..)` when `IsColorEditable` and the colour is specified, `(thickness ..)` when `IsThicknessEditable` (with ` locked` for a dielectric whose
+/// thickness is locked), `(material ..)` when `HasMaterialValue`, and `(epsilon_r ..)` / `(loss_tangent ..)` when the type has them and a material is specified.
+/// A first sublayer whose thickness the model does not know (`None`) writes none, where KiCad would write its type's default; a later one writes 0.
 fn write_stackup(out: &mut String, model: &ConstraintModel) {
     let Some(stackup) = &model.stackup else { return };
     if stackup.layers.is_empty() || stackup.layers.iter().any(|l| l.kind.is_none()) {
@@ -644,27 +649,32 @@ fn write_stackup(out: &mut String, model: &ConstraintModel) {
     writeln!(out, "\t\t(stackup").unwrap();
     for l in &stackup.layers {
         write!(out, "\t\t\t(layer {} (type {})", sexpr_str(&l.name), sexpr_str(l.kind.as_deref().unwrap_or(""))).unwrap();
-        // `(color ..)` is written for a mask, a silkscreen and a dielectric whose colour is specified (`IsColorEditable`, `IsPrmSpecified`), before the thickness.
-        if let Some(c) = l.color.as_deref().filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")) {
-            let kind = l.kind.as_deref().unwrap_or("").to_ascii_lowercase();
-            if kind.contains("silk screen") || kind.contains("solder mask") || kind == "core" || kind == "prepreg" || kind == "dielectric" {
-                write!(out, " (color {})", sexpr_str(c)).unwrap();
+        let dielectric = l.item_type() == eda_model::StackupItemType::Dielectric;
+        for idx in 0..l.sublayer_count() {
+            let Some(sub) = l.sublayer(idx) else { continue };
+            if idx > 0 {
+                write!(out, " addsublayer").unwrap();
             }
-        }
-        if let Some(t) = l.thickness_mm {
-            write!(out, " (thickness {})", crate::mm_f(t)).unwrap();
-        }
-        if let Some(m) = &l.material {
-            write!(out, " (material {})", sexpr_str(m)).unwrap();
-        }
-        if l.material.is_some() || l.epsilon_r.is_some() {
-            if let Some(e) = l.epsilon_r {
-                write!(out, " (epsilon_r {})", fmt_mm_f(e)).unwrap();
+            if l.is_material_editable() && eda_model::stackup_prm_specified(sub.color.as_deref()) {
+                write!(out, " (color {})", sexpr_str(sub.color.as_deref().unwrap_or(""))).unwrap();
             }
-        }
-        if l.material.is_some() || l.loss_tangent.is_some() {
-            if let Some(t) = l.loss_tangent {
-                write!(out, " (loss_tangent {})", fmt_mm_f(t)).unwrap();
+            if l.is_thickness_editable() {
+                if let Some(t) = sub.thickness_mm.or((idx > 0).then_some(0.0)) {
+                    write!(out, " (thickness {}{})", crate::mm_f(t), if dielectric && sub.thickness_locked { " locked" } else { "" }).unwrap();
+                }
+            }
+            // `HasMaterialValue( idx )`: `IsMaterialEditable() && IsPrmSpecified( GetMaterial( idx ) )`.
+            let has_material = l.is_material_editable() && eda_model::stackup_prm_specified(sub.material.as_deref());
+            if has_material {
+                write!(out, " (material {})", sexpr_str(sub.material.as_deref().unwrap_or(""))).unwrap();
+            }
+            if l.has_epsilon_r_value() && has_material {
+                if let Some(e) = sub.epsilon_r {
+                    write!(out, " (epsilon_r {})", fmt_mm_f(e)).unwrap();
+                }
+                if let Some(t) = sub.loss_tangent {
+                    write!(out, " (loss_tangent {})", fmt_mm_f(t)).unwrap();
+                }
             }
         }
         writeln!(out, ")").unwrap();
@@ -3468,7 +3478,7 @@ mod tests {
     fn a_stackup_the_intent_listed_by_name_alone_is_not_written() {
         // `StackupLayer`s without a type (the older shape: name, material, thickness) do not describe the board to KiCad.
         let (design, mut model) = fixture();
-        model.stackup = Some(eda_model::Stackup { layers: vec![eda_model::StackupLayer { name: "F.Cu".into(), material: Some("copper".into()), thickness_mm: Some(0.035), kind: None, epsilon_r: None, loss_tangent: None, color: None }], copper_finish: None, dielectric_constraints: false, edge_connector: 0, edge_plating: false });
+        model.stackup = Some(eda_model::Stackup { layers: vec![eda_model::StackupLayer { name: "F.Cu".into(), material: Some("copper".into()), thickness_mm: Some(0.035), kind: None, epsilon_r: None, loss_tangent: None, color: None, thickness_locked: false, sublayers: vec![] }], copper_finish: None, dielectric_constraints: false, edge_connector: 0, edge_plating: false });
         assert!(!export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(stackup"));
     }
 

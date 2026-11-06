@@ -901,6 +901,23 @@ export async function postCompileRules(text: string): Promise<{ ok: boolean; mes
   return postJson("/api/rule_editor/check", { compile: text });
 }
 
+/**
+ * POST /api/component_classes (crates/cli/src/board_setup_api.rs): what Board Setup > Component Classes needs of the board for the assignments as they stand --
+ * the footprints' field and sheet names for the condition rows, whether each assignment compiles (`CompileAssignmentRule`) and the footprints it matches
+ * ("Highlight matching footprints"; null when it does not compile). Changes nothing.
+ */
+export async function postComponentClasses(assignments: readonly import("./types").ClassAssignment[]): Promise<{ ok: boolean; message?: string; fields?: string[]; sheets?: string[]; compiles?: boolean[]; matches?: (string[] | null)[] }> {
+  return postJson("/api/component_classes", { assignments });
+}
+
+/**
+ * POST /api/rule_editor/show_matches: "Show Matches" of a rule panel (`{ entry, rule }`, as Save takes it; `DIALOG_DRC_RULE_EDITOR::highlightMatchingItems`):
+ * the number of the board's items the panel's rule selects and the ids the studio selects them by, or `error` where KiCad says "Show Matches (error)".
+ */
+export async function postRuleEditorShowMatches(body: unknown): Promise<{ ok: boolean; message?: string; error?: boolean; count?: number; ids?: string[] }> {
+  return postJson("/api/rule_editor/show_matches", body);
+}
+
 /** POST /api/rule_editor/check: what Save would say of a rule panel (`{ entry, rule }`), or a Custom rule's Check Syntax (`{ syntax: { name, body } }`). Changes nothing. */
 export async function postRuleEditorCheck(body: unknown): Promise<{ ok: boolean; valid?: boolean; message: string; generated?: string }> {
   const r = await fetch("/api/rule_editor/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

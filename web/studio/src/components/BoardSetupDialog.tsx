@@ -10,7 +10,7 @@
 // Board Editor Layers (`set_board_layers`) keeps the technical and user layers a board has, their names and types; Formatting, Zone Hatch Offsets, Length-tuning Patterns and
 // Tuning Profiles (`set_formatting`, `set_zone_hatch_offsets`, `set_tuning_patterns`, `set_tuning_profiles`) are pages of the same kind. Board Data > Embedded Files is the
 // shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the board's list, the files only footprints hold listed with it; each of its edits is a verb of its own.
-// Not ported: Component Classes -- nothing in the model holds them yet.
+// Design Rules > Component Classes (`set_component_classes`) edits the project's component class assignments (components/boardSetup/ComponentClassesPage.tsx).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
@@ -20,6 +20,7 @@ import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
 import { FormattingPage } from "./boardSetup/FormattingPage";
 import { CustomRulesPage } from "./boardSetup/CustomRulesPage";
+import { ComponentClassesPage } from "./boardSetup/ComponentClassesPage";
 import { MaskPastePage } from "./boardSetup/MaskPastePage";
 import { NetClassesPage } from "./boardSetup/NetClassesPage";
 import { SeveritiesPage } from "./boardSetup/SeveritiesPage";
@@ -47,6 +48,7 @@ export type Page =
   | "tuning_patterns"
   | "tuning_profiles"
   | "classes"
+  | "component_classes"
   | "custom_rules"
   | "severities"
   | "embedded_files";
@@ -80,6 +82,7 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "tuning_patterns", label: "Length-tuning Patterns" },
       { id: "tuning_profiles", label: "Tuning Profiles" },
       { id: "classes", label: "Net Classes" },
+      { id: "component_classes", label: "Component Classes" },
       { id: "custom_rules", label: "Custom Rules" },
       { id: "severities", label: "Violation Severity" },
     ],
@@ -308,6 +311,7 @@ export function BoardSetupDialog() {
           <TextVariablesPage hidden={page !== "text_variables"} onDirty={markers.text_variables} />
           <ConstraintsPage hidden={page !== "constraints"} onDirty={markers.constraints} />
           <NetClassesPage hidden={page !== "classes"} onDirty={markers.classes} />
+          <ComponentClassesPage hidden={page !== "component_classes"} onDirty={markers.component_classes} />
           <CustomRulesPage hidden={page !== "custom_rules"} onDirty={markers.custom_rules} />
           <SeveritiesPage hidden={page !== "severities"} onDirty={markers.severities} />
           <EmbeddedFilesPanel owner={BOARD_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} />

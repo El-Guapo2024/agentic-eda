@@ -80,6 +80,9 @@ mod review_tests;
 #[path = "rule_editor_tests.rs"]
 mod rule_editor_tests;
 #[cfg(test)]
+#[path = "component_classes_tests.rs"]
+mod component_classes_tests;
+#[cfg(test)]
 #[path = "pcb_items_tests.rs"]
 mod pcb_items_tests;
 #[cfg(test)]
@@ -1836,9 +1839,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetConstraints { .. } => "board-setup constraints".to_string(),
         Cmd::SetMaskPaste { .. } => "board-setup mask-paste".to_string(),
         Cmd::SetTextGraphicsDefaults { .. } => "board-setup text-graphics".to_string(),
-        Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
+        Cmd::SetStackup { settings, .. } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
+        Cmd::DropDrcRule { name, target_name, .. } => format!("drc-rule-editor drop {name:?} on {target_name:?}"),
         Cmd::EditDrcRule { action, name, rule, .. } => format!("drc-rule-editor {} {:?}", serde_json::to_value(action).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(), rule.as_ref().map_or(name.as_str(), |r| r.name.as_str())),
         Cmd::SetTextVariables { variables } => format!("board-setup text-variables ({} variables)", variables.len()),
         Cmd::SetBoardLayers { settings } => format!("board-setup layers ({} enabled)", settings.enabled.len()),
@@ -1846,6 +1850,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetZoneHatchOffsets { offsets } => format!("board-setup zone-hatch-offsets ({} layers)", offsets.len()),
         Cmd::SetTuningPatterns { .. } => "board-setup tuning-patterns".to_string(),
         Cmd::SetTuningProfiles { settings } => format!("board-setup tuning-profiles ({} profiles)", settings.profiles.len()),
+        Cmd::SetComponentClasses { settings } => format!("board-setup component-classes ({} assignments)", settings.assignments.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::ClearDrcExclusions => "drc unexclude --all".to_string(),
@@ -2208,13 +2213,14 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetStackup { .. } => "stackup",
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
-        Cmd::EditDrcRule { .. } => "drc-rule",
+        Cmd::EditDrcRule { .. } | Cmd::DropDrcRule { .. } => "drc-rule",
         Cmd::SetTextVariables { .. } => "text-variables",
         Cmd::SetBoardLayers { .. } => "board-layers",
         Cmd::SetFormatting { .. } => "formatting",
         Cmd::SetZoneHatchOffsets { .. } => "zone-hatch-offsets",
         Cmd::SetTuningPatterns { .. } => "tuning-patterns",
         Cmd::SetTuningProfiles { .. } => "tuning-profiles",
+        Cmd::SetComponentClasses { .. } => "component-classes",
         Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } | Cmd::ClearDrcExclusions => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",

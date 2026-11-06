@@ -1,28 +1,54 @@
-// Board Setup > Board Stackup > Physical Stackup (+ Board Finish) -- port of pcbnew/board_stackup_manager/panel_board_stackup.cpp and
-// panel_board_finish.cpp, reduced to what the model holds: the number of copper layers, each layer's type, material and thickness, the
-// dielectric constant and loss tangent of the dielectrics, and the finish. The table is the `(stackup ..)` of the derived `.kicad_pcb`;
-// the board thickness is what the layers add up to (`BuildBoardThicknessFromStackup`), and the copper layers are the board's layers.
+// Board Setup > Board Stackup > Physical Stackup (+ Board Finish) -- port of pcbnew/board_stackup_manager/panel_board_stackup.cpp and panel_board_finish.cpp: the
+// number of copper layers, "Impedance controlled", one row per sublayer of each layer (`lazyBuildRowUI`: a dielectric's Core / PrePreg choice on its first
+// sublayer only, its thickness lock), Add and Remove Dielectric Layer with KiCad's lists, Adjust Dielectric Thickness, the checks of the "Errors" box, and the
+// finish. The table is the `(stackup ..)` of the derived `.kicad_pcb`; the board thickness is what the layers add up to (`BuildBoardThicknessFromStackup`), and
+// the copper layers are the board's layers. The pure parts are kicad-port/physicalStackup.ts.
+//
+// Fewer copper layers while something is on a layer that goes asks KiCad's question (`PANEL_SETUP_LAYERS::TransferDataFromWindow`: "Warning", "Items have been found
+// on removed layers ...", "Show Details" with each item's description); OK sends `set_stackup` with `delete_items_on_removed_layers`, and the backend deletes them as
+// `BOARD::RemoveAllItemsOnLayer` does, in the same step -- which one Undo brings back here, where KiCad clears its undo list.
 //
 // Colours: a mask, a silkscreen and a dielectric carry KiCad's colour name (or a typed `#RRGGBB`), which the 3D viewer's "Use board stackup colors" paints the board
-// with (kicad-port/appearance3d.ts). Not ported: sub-layers of a dielectric, "Add/Remove Dielectric Layer...", "Adjust Dielectric Thickness" and the impedance-
-// controlled switch. A different copper layer count rebuilds the table from the default stackup, keeping what the layers that remain say
-// (`withCopperLayers`); reducing it is refused up front while a track, via or zone is still on a layer that would go.
-import { useEffect, useMemo } from "react";
+// with (kicad-port/appearance3d.ts). Not ported: the material list ("..." beside a material, `DIALOG_DIELECTRIC_MATERIAL`) and "Export to Clipboard"
+// (`BuildStackupReport`). A different copper layer count rebuilds the table from the default stackup, keeping what the layers that remain say (`withCopperLayers`),
+// and shares the board's old thickness among the unlocked dielectrics (`onCopperLayersSelCount`'s `setDefaultLayerWidths( oldBoardWidth )`).
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStudioState } from "../../state/store";
+import { defaultStackup, mmText, validateStackup, withCopperLayers, withKnownKinds } from "../../kicad-port/boardSetupRules";
 import {
-  copperLayersLost,
-  defaultStackup,
-  isDielectric,
-  isMaterialEditable,
-  isThicknessEditable,
-  mmText,
-  stackupThicknessNm,
-  validateStackup,
-  withCopperLayers,
-  withKnownKinds,
-} from "../../kicad-port/boardSetupRules";
+  CORE_PREPREG,
+  REMOVED_LAYERS_DETAILS,
+  REMOVED_LAYERS_MESSAGE,
+  REMOVED_LAYERS_TITLE,
+  addDielectricChoices,
+  addDielectricSublayer,
+  adjustDielectricThickness,
+  adjustThicknessPrompt,
+  canRemoveDielectric,
+  corePrepregOf,
+  itemHasEpsilonR,
+  itemMaterialEditable,
+  itemThicknessEditable,
+  itemsOnRemovedLayers,
+  kindOfChoice,
+  removeDielectricChoices,
+  removeDielectricSublayer,
+  stackupEntryErrors,
+  stackupRows,
+  stackupTotalThicknessNm,
+  sublayerOf,
+  withCopperLayerCount,
+  withSublayer,
+  type DielectricChoice,
+  type StackupRow,
+} from "../../kicad-port/physicalStackup";
+import { layerDisplayName } from "../../kicad-port/boardLayers";
+import { parseLength } from "../../kicad-port/importGraphics";
 import { NOT_SPECIFIED, STACKUP_COLOR_NAMES, parseColor, stackupColorKind, toRgbHex } from "../../kicad-port/appearance3d";
-import type { StackupLayer, StackupSettings } from "../../api/types";
+import type { StackupSettings, StackupSublayer } from "../../api/types";
+import { DialogShell } from "../pcbDialogKit";
+import { MessageDialog, NameDialog, Pane, PickDialog } from "../panels/appearance/shared";
 import { Check, FieldRow, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
 const COPPER_COUNTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 2);
@@ -35,9 +61,9 @@ const EDGE_CONNECTORS = ["No", "Yes", "Yes, bevelled"];
 const USER_DEFINED = "User defined";
 
 /** The colour cell of a stackup row (`PANEL_BOARD_STACKUP`'s colour combo): KiCad's names for the item's kind, "User defined" for a typed `#RRGGBB`. */
-function StackupColor({ kind, value, ariaLabel, onChange }: { kind: "silk" | "mask" | "dielectric"; value: string | undefined; ariaLabel: string; onChange: (color: string | undefined) => void }) {
+function StackupColor({ kind, value, ariaLabel, onChange }: { kind: "silk" | "mask" | "dielectric"; value: string | null | undefined; ariaLabel: string; onChange: (color: string | undefined) => void }) {
   const names: readonly string[] = STACKUP_COLOR_NAMES[kind];
-  const custom = value !== undefined && value.startsWith("#");
+  const custom = typeof value === "string" && value.startsWith("#");
   const selected = custom ? USER_DEFINED : (value ?? NOT_SPECIFIED);
   return (
     <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
@@ -46,7 +72,7 @@ function StackupColor({ kind, value, ariaLabel, onChange }: { kind: "silk" | "ma
         value={selected}
         onChange={(e) => {
           const v = e.target.value;
-          onChange(v === NOT_SPECIFIED ? undefined : v === USER_DEFINED ? (custom ? value : "#808080") : v);
+          onChange(v === NOT_SPECIFIED ? undefined : v === USER_DEFINED ? (custom ? value! : "#808080") : v);
         }}
       >
         {names.map((n) => (
@@ -54,7 +80,7 @@ function StackupColor({ kind, value, ariaLabel, onChange }: { kind: "silk" | "ma
             {n}
           </option>
         ))}
-        {!custom && value !== undefined && !names.includes(value) && <option value={value}>{value}</option>}
+        {!custom && typeof value === "string" && !names.includes(value) && <option value={value}>{value}</option>}
         <option value={USER_DEFINED}>{USER_DEFINED}</option>
       </select>
       {custom && <input type="color" aria-label={`${ariaLabel} (user defined)`} value={toRgbHex(parseColor(value!) ?? { r: 0.5, g: 0.5, b: 0.5, a: 1 })} onChange={(e) => onChange(e.target.value)} style={{ width: 22, height: 18, padding: 0 }} />}
@@ -62,38 +88,90 @@ function StackupColor({ kind, value, ariaLabel, onChange }: { kind: "silk" | "ma
   );
 }
 
+/** `DIALOG_ITEMS_LIST`: a message, a collapsed "Show Details" pane with the list, OK and Cancel. */
+function ItemsListDialog({ title, message, details, items, onOk, onCancel }: { title: string; message: string; details: string; items: string[]; onOk: () => void; onCancel: () => void }) {
+  return createPortal(
+    <div className="bs-items-dialog" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <DialogShell title={title} width={460} onCancel={onCancel} onOk={onOk}>
+        <div style={{ fontSize: 12, marginBottom: 8 }}>{message}</div>
+        <Pane title={details}>
+          <ul aria-label="Items on removed layers" style={{ margin: 0, paddingLeft: 16, maxHeight: 200, overflow: "auto", fontSize: 12 }}>
+            {items.map((it, i) => (
+              <li key={i}>{it}</li>
+            ))}
+          </ul>
+        </Pane>
+      </DialogShell>
+    </div>,
+    document.body
+  );
+}
+
+/** A small padlock: the header of the thickness-lock column (`m_bitmapLockThickness`, `BITMAPS::locked`). */
+function LockIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-label="Thickness locked" role="img" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <rect x="2" y="5.5" width="8" height="5.5" rx="1" />
+      <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" />
+    </svg>
+  );
+}
+
+type Dialog =
+  | { kind: "add" }
+  | { kind: "remove" }
+  | { kind: "adjust"; prompt: string; title: string }
+  | { kind: "message"; title: string; text: string }
+  | { kind: "removed"; items: string[]; settings: StackupSettings };
+
 export function StackupPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
   const board = state.board;
   const rules = board?.board_rules;
+  const units = state.units;
+  const boardCopper = rules?.copper_layers ?? rules?.layer_names?.length ?? board?.layers.length ?? 2;
   const source = useMemo<StackupSettings | undefined>(() => {
     if (!rules) return undefined;
-    const copper = rules.copper_layers ?? rules.layer_names?.length ?? board?.layers.length ?? 2;
-    return { copper_layers: copper, stackup: withKnownKinds(rules.stackup ?? defaultStackup(copper, rules.board_thickness_nm ?? 1_600_000)) };
-  }, [rules, board?.layers.length]);
+    return { copper_layers: boardCopper, stackup: withKnownKinds(rules.stackup ?? defaultStackup(boardCopper, rules.board_thickness_nm ?? 1_600_000)) };
+  }, [rules, boardCopper]);
   const page = usePageDraft<StackupSettings>(source);
   const apply = usePageApply();
+  const [dialog, setDialog] = useState<Dialog | null>(null);
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;
-  const problem = draft ? validateStackup(draft) : null;
-  const lost = draft && board ? copperLayersLost(board.routing, draft.copper_layers) : [];
+  const layerName = (file: string) => layerDisplayName(rules?.layer_setup, file);
+  const rows = draft ? stackupRows(draft.stackup, layerName) : [];
 
-  const setLayer = (name: string, kind: string | undefined, patch: Partial<StackupLayer>) =>
-    page.edit((d) => ({ ...d, stackup: { ...d.stackup, layers: d.stackup.layers.map((l) => (l.name === name && l.kind === kind ? { ...l, ...patch } : l)) } }));
+  const editRow = (r: StackupRow, patch: Partial<StackupSublayer>) =>
+    page.edit((d) => ({ ...d, stackup: { ...d.stackup, layers: d.stackup.layers.map((l, i) => (i === r.layer ? withSublayer(l, r.sub, patch) : l)) } }));
+  const setKind = (r: StackupRow, kind: string) => page.edit((d) => ({ ...d, stackup: { ...d.stackup, layers: d.stackup.layers.map((l, i) => (i === r.layer ? { ...l, kind } : l)) } }));
   const setStackup = (patch: Partial<StackupSettings["stackup"]>) => page.edit((d) => ({ ...d, stackup: { ...d.stackup, ...patch } }));
+
+  const send = (settings: StackupSettings, deleteItems: boolean) =>
+    void apply.run(deleteItems ? { op: "set_stackup", settings, delete_items_on_removed_layers: true } : { op: "set_stackup", settings }, page.markClean);
 
   const onApply = () => {
     if (!draft) return;
+    // `transferDataFromUIToStackup`: `wxMessageBox( error_msg, _( "Errors" ) )`
+    const errors = stackupEntryErrors(draft.stackup);
+    if (errors) {
+      setDialog({ kind: "message", title: "Errors", text: errors });
+      return;
+    }
+    const problem = validateStackup(draft);
     if (problem) {
       apply.setMessage({ text: problem, bad: true });
       return;
     }
-    if (lost.length > 0) {
-      apply.setMessage({ text: `${lost.map((l) => l.layer).join(", ")} still carry copper: move or delete it before reducing the number of layers.`, bad: true });
+    const items = itemsOnRemovedLayers(board, boardCopper, draft.copper_layers, units, layerName);
+    if (items.length > 0) {
+      setDialog({ kind: "removed", items, settings: draft });
       return;
     }
-    void apply.run({ op: "set_stackup", settings: draft }, page.markClean);
+    send(draft, false);
   };
+
+  const pickedChoice = (choices: DielectricChoice[], label: string) => choices.find((c) => c.label === label);
 
   return (
     <PageFrame title="Physical Stackup" hidden={hidden} dirty={page.dirty} busy={apply.busy} message={apply.message?.text ?? null} bad={apply.message?.bad} onApply={onApply} onRevert={() => (page.revert(), apply.setMessage(null))}>
@@ -102,7 +180,7 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
       ) : (
         <>
           <FieldRow label="Copper layers:" title="Select the number of copper layers in the stackup">
-            <select aria-label="Copper layers" value={draft.copper_layers} onChange={(e) => page.edit((d) => withCopperLayers(d, Number(e.target.value)))}>
+            <select aria-label="Copper layers" value={draft.copper_layers} onChange={(e) => page.edit((d) => withCopperLayerCount(d, Number(e.target.value), withCopperLayers))}>
               {COPPER_COUNTS.map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -110,11 +188,17 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
               ))}
             </select>
           </FieldRow>
-          {lost.length > 0 && (
-            <p className="bs-error">
-              {lost.map((l) => `${l.layer} (${l.items} item${l.items === 1 ? "" : "s"})`).join(", ")} would go with this many layers, and still carry copper.
-            </p>
-          )}
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, margin: "4px 0" }}>
+            <Check checked={draft.stackup.dielectric_constraints ?? false} onChange={(v) => setStackup({ dielectric_constraints: v })} title={"If Impedance Controlled option is set,\nLoss tangent and EpsilonR will be added to constraints."}>
+              Impedance controlled
+            </Check>
+            <button type="button" onClick={() => setDialog({ kind: "add" })}>
+              Add Dielectric Layer...
+            </button>
+            <button type="button" disabled={!canRemoveDielectric(draft.stackup)} onClick={() => setDialog({ kind: "remove" })}>
+              Remove Dielectric Layer...
+            </button>
+          </div>
 
           <div className="bs-scroll-x">
             <table className="bs-grid">
@@ -123,59 +207,72 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
                   <th>Layer</th>
                   <th>Type</th>
                   <th>Material</th>
-                  <th>Color</th>
                   <th>Thickness (mm)</th>
+                  <th>
+                    <LockIcon />
+                  </th>
+                  <th>Color</th>
                   <th>Epsilon R</th>
                   <th>Loss Tan</th>
                 </tr>
               </thead>
               <tbody>
-                {draft.stackup.layers.map((l, i) => {
-                  const edit = (patch: Partial<StackupLayer>) => setLayer(l.name, l.kind, patch);
-                  const badThickness = l.thickness_mm !== null && (!Number.isFinite(l.thickness_mm) || l.thickness_mm < 0);
+                {rows.map((r) => {
+                  const l = draft.stackup.layers[r.layer]!;
+                  const sub = sublayerOf(l, r.sub);
+                  const id = r.label;
+                  const t = sub.thickness_mm;
+                  const badThickness = t !== null && t !== undefined && (!Number.isFinite(t) || t < 0);
+                  const colorKind = stackupColorKind(l.kind);
                   return (
-                    <tr key={`${i}:${l.name}`}>
-                      <td>{l.name}</td>
-                      <td>{l.kind ?? ""}</td>
+                    <tr key={`${r.layer}:${r.sub}`} data-row={id}>
+                      <td>{r.label}</td>
                       <td>
-                        {isMaterialEditable(l.kind) ? (
-                          <input type="text" aria-label={`${l.name} material`} value={l.material ?? ""} onChange={(e) => edit({ material: e.target.value === "" ? null : e.target.value })} style={{ width: 110 }} />
+                        {r.typeLabel === "choice" ? (
+                          <select aria-label={`${id} type`} value={corePrepregOf(l.kind)} onChange={(e) => setKind(r, kindOfChoice(e.target.value))}>
+                            {CORE_PREPREG.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
                         ) : (
-                          (l.material ?? "")
+                          r.typeLabel
                         )}
                       </td>
                       <td>
-                        {stackupColorKind(l.kind) && (
-                          <StackupColor kind={stackupColorKind(l.kind)!} value={l.color} ariaLabel={`${l.name} color`} onChange={(color) => (color === undefined ? edit({ color: undefined }) : edit({ color }))} />
-                        )}
-                      </td>
-                      <td>
-                        {isThicknessEditable(l.kind) && l.thickness_mm !== null ? (
-                          <NumberField ariaLabel={`${l.name} thickness`} width={72} value={l.thickness_mm} invalid={badThickness} onChange={(v) => edit({ thickness_mm: v ?? Number.NaN })} />
-                        ) : (
-                          (l.thickness_mm ?? "")
-                        )}
-                      </td>
-                      <td>
-                        {isDielectric(l.kind) && (
-                          <NumberField
-                            ariaLabel={`${l.name} epsilon r`}
-                            width={54}
-                            optional
-                            value={l.epsilon_r}
-                            onChange={(v) => setLayer(l.name, l.kind, v === undefined ? { epsilon_r: undefined } : { epsilon_r: v })}
+                        {itemMaterialEditable(l.name) && (
+                          <input
+                            type="text"
+                            aria-label={`${id} material`}
+                            placeholder={NOT_SPECIFIED}
+                            value={sub.material ?? ""}
+                            onChange={(e) => editRow(r, { material: e.target.value === "" ? null : e.target.value })}
+                            style={{ width: 110 }}
                           />
                         )}
                       </td>
                       <td>
-                        {isDielectric(l.kind) && (
-                          <NumberField
-                            ariaLabel={`${l.name} loss tangent`}
-                            width={54}
-                            optional
-                            value={l.loss_tangent}
-                            onChange={(v) => setLayer(l.name, l.kind, v === undefined ? { loss_tangent: undefined } : { loss_tangent: v })}
-                          />
+                        {itemThicknessEditable(l.name) && (r.sub > 0 || (t !== null && t !== undefined)) ? (
+                          <NumberField ariaLabel={`${id} thickness`} width={72} value={t ?? 0} invalid={badThickness} onChange={(v) => editRow(r, { thickness_mm: v ?? Number.NaN })} />
+                        ) : (
+                          (t ?? "")
+                        )}
+                      </td>
+                      <td style={{ textAlign: "center" }}>
+                        {r.type === "dielectric" && (
+                          <input type="checkbox" aria-label={`${id} thickness locked`} checked={sub.thickness_locked === true} onChange={(e) => editRow(r, { thickness_locked: e.target.checked ? true : undefined })} />
+                        )}
+                      </td>
+                      <td>{colorKind && <StackupColor kind={colorKind} value={sub.color} ariaLabel={`${id} color`} onChange={(color) => editRow(r, { color })} />}</td>
+                      <td>
+                        {itemHasEpsilonR(l.name) && (
+                          <NumberField ariaLabel={`${id} epsilon r`} width={54} optional value={sub.epsilon_r ?? undefined} onChange={(v) => editRow(r, { epsilon_r: v })} />
+                        )}
+                      </td>
+                      <td>
+                        {itemHasEpsilonR(l.name) && (
+                          <NumberField ariaLabel={`${id} loss tangent`} width={54} optional value={sub.loss_tangent ?? undefined} onChange={(v) => editRow(r, { loss_tangent: v })} />
                         )}
                       </td>
                     </tr>
@@ -184,8 +281,19 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
               </tbody>
             </table>
           </div>
-          <div className="bs-stack-total" title="BuildBoardThicknessFromStackup: every layer's thickness added up">
-            Board thickness from stackup: {mmText(stackupThicknessNm(draft.stackup))} mm
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
+            <div className="bs-stack-total" title="BuildBoardThicknessFromStackup: every layer's thickness, every sublayer's, added up">
+              Board thickness from stackup: <span aria-label="Board thickness from stackup">{mmText(stackupTotalThicknessNm(draft.stackup))}</span> mm
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const p = adjustThicknessPrompt(draft.stackup, units);
+                setDialog({ kind: "adjust", prompt: p.prompt, title: p.title });
+              }}
+            >
+              Adjust Dielectric Thickness
+            </button>
           </div>
 
           <div className="bs-section">Board Finish</div>
@@ -212,6 +320,64 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
               ))}
             </select>
           </FieldRow>
+
+          {dialog?.kind === "add" && (
+            <PickDialog
+              title="Add Dielectric Layer"
+              header="Layers"
+              label="Select layer to add:"
+              items={addDielectricChoices(draft.stackup).map((c) => c.label)}
+              onCancel={() => setDialog(null)}
+              onOk={(label) => {
+                const c = pickedChoice(addDielectricChoices(draft.stackup), label);
+                if (c) page.edit((d) => ({ ...d, stackup: addDielectricSublayer(d.stackup, c.layer, c.sub) }));
+                setDialog(null);
+              }}
+            />
+          )}
+          {dialog?.kind === "remove" && (
+            <PickDialog
+              title="Remove Dielectric Layer"
+              header="Layers"
+              label="Select layer to remove:"
+              items={removeDielectricChoices(draft.stackup).map((c) => c.label)}
+              onCancel={() => setDialog(null)}
+              onOk={(label) => {
+                const c = pickedChoice(removeDielectricChoices(draft.stackup), label);
+                if (c) page.edit((d) => ({ ...d, stackup: removeDielectricSublayer(d.stackup, c.layer, c.sub) }));
+                setDialog(null);
+              }}
+            />
+          )}
+          {dialog?.kind === "adjust" && (
+            <NameDialog
+              title={dialog.title}
+              label={dialog.prompt}
+              onCancel={() => setDialog(null)}
+              onOk={(text) => {
+                // `m_frame->ValueFromString( dlg.GetValue() )`: a bare number is in the user's units; text that is no length is 0
+                const value = parseLength(text, units) ?? 0;
+                const r = adjustDielectricThickness(draft.stackup, draft.copper_layers, value, units);
+                if (r.stackup) page.edit((d) => ({ ...d, stackup: r.stackup! }));
+                setDialog(r.message ? { kind: "message", title: "Message", text: r.message } : null);
+              }}
+            />
+          )}
+          {dialog?.kind === "message" && <MessageDialog title={dialog.title} message={dialog.text} onOk={() => setDialog(null)} onCancel={() => setDialog(null)} />}
+          {dialog?.kind === "removed" && (
+            <ItemsListDialog
+              title={REMOVED_LAYERS_TITLE}
+              message={REMOVED_LAYERS_MESSAGE}
+              details={REMOVED_LAYERS_DETAILS}
+              items={dialog.items}
+              onCancel={() => setDialog(null)}
+              onOk={() => {
+                const settings = dialog.settings;
+                setDialog(null);
+                send(settings, true);
+              }}
+            />
+          )}
         </>
       )}
     </PageFrame>

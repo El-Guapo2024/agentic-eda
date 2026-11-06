@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, activeLayer, appearance, viewer3d, carry }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], brightened, entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, activeLayer, appearance, viewer3d, carry }
 //   __eda.viewer3dScreen(ref)  -> { x, y } | null   where a part is on the 3D canvas (CSS px from its top-left), for hovering it without guessing pixels
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
@@ -20,6 +20,7 @@ import { useCommonDialogs } from "../state/commonDialogs";
 import { useActionRunner } from "./useActionRunner";
 import { setCheckerRunner } from "./checkerOps";
 import { picker } from "./pcbPicker";
+import { getCommonTool } from "../state/commonTool";
 import { viewer3dProbe, type Viewer3dSnapshot } from "../components/viewer3d/viewer3dProbe";
 import { getGridOverrides } from "../state/gridOverrides";
 import { gridEditorOfTab } from "../kicad-port/gridSettings";
@@ -69,6 +70,8 @@ export interface HookState {
   /** The display units of the editor (`mm`, `mil`, `in`) and the nets highlighted on the board (the first, then the rest of a multi-net highlight). */
   units: string;
   highlight: string[];
+  /** The items brightened on the board (`BrightenItem`: Component Classes' "Highlight matching footprints", Show Matches), and on the schematic the ones a Find or Assign Netclass brightens. */
+  brightened: string[];
   /** The grid of the editor on screen, in um; null on the 3D tab, which has none. */
   grid: number | null;
   /** Grid Overrides (Ctrl+Shift+G) of the editor on screen: on or off; null on the 3D tab. */
@@ -247,6 +250,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         counts: countsOf(studio.board, studio.schematic),
         units: studio.units,
         highlight: highlightedNets(studio.netHighlight, studio.bcx.netHighlightMore),
+        brightened: studio.tab === "schematic" ? [...getCommonTool().findHighlights] : [...studio.hot],
         grid: studio.tab === "pcb" ? studio.gridNm : studio.tab === "footprint" ? L.fp.gridNm : studio.tab === "symbol" ? L.sym.gridNm : studio.tab === "schematic" ? studio.schGridNm : null,
         gridOverrides: editor ? getGridOverrides(editor).enabled : null,
         snap: lastSnapReport(),

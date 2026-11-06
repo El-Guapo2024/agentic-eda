@@ -403,8 +403,11 @@ pub fn stackup_distance(stackup: &Stackup, copper: &[String], first: &str, secon
         if start && layer == Some(b.as_str()) && inner(&b) {
             half = true;
         }
-        let thickness = ki_round_nm(l.thickness_mm.unwrap_or(0.0) * PCB_IU_PER_MM);
-        total += if half { thickness / 2 } else { thickness };
+        // `for( int sublayer = 0; sublayer < item->GetSublayersCount(); sublayer++ )`: every sublayer, each halved on its own
+        for t in l.sublayer_thicknesses_mm() {
+            let thickness = ki_round_nm(t * PCB_IU_PER_MM);
+            total += if half { thickness / 2 } else { thickness };
+        }
         half = false;
         if layer == Some(b.as_str()) {
             break;

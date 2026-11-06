@@ -901,6 +901,9 @@ fn handle(
         // What Swap Pad Nets / Swap Gate Nets would ask first: the unselected pads the copper connected to the swapped pads reaches (`PromptConnectedPadDecision`).
         ("GET", "/api/rule_editor") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::view(dir).to_string().as_bytes()),
         ("POST", "/api/rule_editor/check") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::check(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/rule_editor/show_matches") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::show_matches(dir, &body).to_string().as_bytes()),
+        // Board Setup > Component Classes (`crate::board_setup_api`): the field and sheet names of the board's footprints, whether each assignment compiles and what it matches.
+        ("POST", "/api/component_classes") => respond(stream, "200 OK", "application/json", crate::board_setup_api::component_classes(dir, &body).to_string().as_bytes()),
         ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
         // What Track & Via Properties' OK would ask first: a short, then the pads a net change takes along (`confirmShortingNets`, `confirmPadChange`).
         ("POST", "/api/track_via_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::track_via_preview(dir, &body).to_string().as_bytes()),
@@ -1536,7 +1539,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // board folder's `path-variables.json` (`crate::text_variables`).
             "text_variables": crate::text_variables::project_variables(dir),
             "overlay": design.drawings.as_ref().and_then(|d| d.rules.as_ref()).map(|r| {
-                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some()), ("board_layers", r.board_layers.is_some()), ("formatting", r.formatting.is_some()), ("zone_hatch_offsets", r.zone_hatch_offsets.is_some()), ("tuning_patterns", r.tuning_patterns.is_some()), ("tuning_profiles", r.tuning_profiles.is_some())]
+                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some()), ("board_layers", r.board_layers.is_some()), ("formatting", r.formatting.is_some()), ("zone_hatch_offsets", r.zone_hatch_offsets.is_some()), ("tuning_patterns", r.tuning_patterns.is_some()), ("tuning_profiles", r.tuning_profiles.is_some()), ("component_classes", r.component_classes.is_some())]
                     .iter()
                     .filter(|(_, set)| *set)
                     .map(|(name, _)| *name)
@@ -1565,6 +1568,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     // Schematic Setup > Net Classes' columns of the board's classes (wire and bus widths, colour, line style), by class name -- set apart, the `json!` above being
     // at the macro's recursion limit
     state["board_rules"]["net_class_schematic"] = json!(model.board.net_class_schematic);
+    // Design Rules > Component Classes (`COMPONENT_CLASS_SETTINGS`): "Assign component class per sheet" and the custom assignments, as the board is judged by them now
+    state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
     state["variants"] = json!(design_variants_json(&design));
     Ok(state)

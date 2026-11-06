@@ -1,0 +1,153 @@
+[
+  {
+    "members": [
+      "D0",
+      "D1",
+      "D2",
+      "D3"
+    ],
+    "pattern": "D[0..3]"
+  },
+  {
+    "members": [
+      "A1",
+      "A2",
+      "A3"
+    ],
+    "pattern": "A[3..1]"
+  },
+  {
+    "members": [
+      "D0+",
+      "D1+"
+    ],
+    "pattern": "D[0..1]+"
+  },
+  {
+    "members": [
+      "D0P",
+      "D1P"
+    ],
+    "pattern": "D[0..1]P"
+  },
+  {
+    "members": [
+      "A[2..2]"
+    ],
+    "pattern": "A[2..2]"
+  },
+  {
+    "members": [
+      "D0",
+      "D1",
+      "D2"
+    ],
+    "pattern": "D[..2]"
+  },
+  {
+    "members": [
+      "D0",
+      "D1"
+    ],
+    "pattern": "D[1..]"
+  },
+  {
+    "members": [
+      "I^{2}C0",
+      "I^{2}C1"
+    ],
+    "pattern": "I^{2}C[0..1]"
+  },
+  {
+    "members": [
+      "D1",
+      "D2"
+    ],
+    "pattern": "D_{[1..2]}"
+  },
+  {
+    "members": [
+      "~{BE0}",
+      "~{BE1}"
+    ],
+    "pattern": "~{BE[0..1]}"
+  },
+  {
+    "members": [
+      "SDA",
+      "SCL"
+    ],
+    "pattern": "{SDA SCL}"
+  },
+  {
+    "members": [
+      "SDA",
+      "SCL"
+    ],
+    "pattern": "I2C{SDA,SCL}"
+  },
+  {
+    "members": [
+      "D0",
+      "D1",
+      "CLK"
+    ],
+    "pattern": "{D[0..1] CLK}"
+  },
+  {
+    "members": [
+      "my\\ net",
+      "slash"
+    ],
+    "pattern": "{\"my net\" x/y}"
+  },
+  {
+    "members": [
+      "~{CAS}",
+      "RAS"
+    ],
+    "pattern": "{~{CAS} RAS}"
+  },
+  {
+    "members": [
+      "USB_D[PM]"
+    ],
+    "pattern": "USB_D[PM]"
+  },
+  {
+    "members": [
+      "(CLK|DAT)[0-3]"
+    ],
+    "pattern": "(CLK|DAT)[0-3]"
+  },
+  {
+    "members": [
+      "V*"
+    ],
+    "pattern": "V*"
+  },
+  {
+    "members": [
+      "2"
+    ],
+    "pattern": "A{2}"
+  },
+  {
+    "members": [
+      "D[0..1"
+    ],
+    "pattern": "D[0..1"
+  },
+  {
+    "members": [
+      "{A"
+    ],
+    "pattern": "{A"
+  },
+  {
+    "members": [
+      ""
+    ],
+    "pattern": ""
+  }
+]

@@ -657,8 +657,13 @@ pub enum Cmd {
     SetMaskPaste { settings: MaskPaste },
     /// Text & Graphics > Defaults.
     SetTextGraphicsDefaults { settings: TextGraphicsDefaults },
-    /// Board Stackup > Physical Stackup: the copper layer count and the layers' thickness.
-    SetStackup { settings: StackupSettings },
+    /// Board Stackup > Physical Stackup: the copper layer count and the layers, with a dielectric's sublayers. Fewer copper layers while items are still on a layer that
+    /// goes is refused, unless `delete_items_on_removed_layers` says to delete them as KiCad does once asked (`board_setup::set_stackup`). Additive: absent is `false`.
+    SetStackup {
+        settings: StackupSettings,
+        #[serde(default)]
+        delete_items_on_removed_layers: bool,
+    },
     /// Design Rules > Violation Severity: DRC settings key -> `error` | `warning` | `ignore`.
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
@@ -674,6 +679,9 @@ pub enum Cmd {
         #[serde(default)]
         rule: Option<eda_drc::rule_editor::RuleEdit>,
     },
+    /// The DRC Rule Editor's tree drag-and-drop (`onRuleTreeItemLeftUp`): the rule at `entry` (named `name`) dropped on the rule at `target` (named
+    /// `target_name`) of the same kind takes its place among them (first, last, or just before the target), and the file is written in that order.
+    DropDrcRule { entry: usize, name: String, target: usize, target_name: String },
     /// Board Stackup > Board Editor Layers (`panel_setup_layers.cpp`): the non-copper layers the board has (the technical ones and User.1 to User.45), the
     /// names the user gave its layers and their types. The whole page; refused with the layer's name when a name or type is out of the panel's rules or
     /// a layer is turned off while items are on it.
@@ -686,6 +694,9 @@ pub enum Cmd {
     SetTuningPatterns { settings: eda_model::setup_pages::TuningPatterns },
     /// Design Rules > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the profiles and the profile each net class names.
     SetTuningProfiles { settings: eda_model::setup_pages::TuningProfiles },
+    /// Design Rules > Component Classes (`panel_assign_component_classes.cpp`): "Assign component class per sheet" and the custom assignments (a class, Match
+    /// all / Match any and its conditions), the project's whole `component_class_settings`. Refused with KiCad's message when an assignment does not compile.
+    SetComponentClasses { settings: eda_model::component_classes::ComponentClassSettings },
     /// Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` in a text, a field or the title
     /// block shows the value, and the derived `.kicad_pro` carries them (`text_variables`) so kicad-cli's plots show the same.
     SetTextVariables { variables: BTreeMap<String, String> },
@@ -2607,12 +2618,14 @@ impl Cmd {
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
             Cmd::EditDrcRule { .. } => vec!["custom_rules"],
+            Cmd::DropDrcRule { .. } => vec!["custom_rules"],
             Cmd::SetTextVariables { .. } => vec!["text_variables"],
             Cmd::SetBoardLayers { .. } => vec!["board_layers"],
             Cmd::SetFormatting { .. } => vec!["formatting"],
             Cmd::SetZoneHatchOffsets { .. } => vec!["zone_hatch_offsets"],
             Cmd::SetTuningPatterns { .. } => vec!["tuning_patterns"],
             Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
+            Cmd::SetComponentClasses { .. } => vec!["component_classes"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::ClearDrcExclusions => vec!["drc_exclusions"],
@@ -3127,7 +3140,7 @@ impl<'a> Board<'a> {
             Cmd::SetConstraints { constraints } => board_setup::set_constraints(&mut self.design, constraints),
             Cmd::SetMaskPaste { settings } => board_setup::set_mask_paste(&mut self.design, settings),
             Cmd::SetTextGraphicsDefaults { settings } => board_setup::set_text_graphics(&mut self.design, settings),
-            Cmd::SetStackup { settings } => board_setup::set_stackup(&mut self.design, self.model, settings),
+            Cmd::SetStackup { settings, delete_items_on_removed_layers } => board_setup::set_stackup(&mut self.design, self.model, settings, *delete_items_on_removed_layers),
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
             Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
@@ -3143,12 +3156,14 @@ impl<'a> Board<'a> {
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::EditDrcRule { action, entry, name, rule } => rule_editor::edit_drc_rule(&mut self.design, self.model, *action, *entry, name, rule.as_ref()),
+            Cmd::DropDrcRule { entry, name, target, target_name } => rule_editor::drop_drc_rule(&mut self.design, self.model, *entry, name, *target, target_name),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
             Cmd::SetFormatting { settings } => board_setup::set_formatting(&mut self.design, settings),
             Cmd::SetZoneHatchOffsets { offsets } => board_setup::set_zone_hatch_offsets(&mut self.design, self.model, offsets),
             Cmd::SetTuningPatterns { settings } => board_setup::set_tuning_patterns(&mut self.design, settings),
             Cmd::SetTuningProfiles { settings } => board_setup::set_tuning_profiles(&mut self.design, self.model, settings),
+            Cmd::SetComponentClasses { settings } => board_setup::set_component_classes(&mut self.design, self.model, settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),

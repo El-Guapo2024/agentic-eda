@@ -1220,9 +1220,35 @@ export interface BoardState {
     tuning_patterns?: TuningPatterns;
     /** Design Rules > Tuning Profiles: the profiles and the profile each net class names. */
     tuning_profiles?: TuningProfiles;
-    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`, `formatting`, `zone_hatch_offsets`, `tuning_patterns`, `tuning_profiles`. */
+    /** Design Rules > Component Classes (`eda_model::component_classes`): "Assign component class per sheet" and the custom assignments, as the board is judged by them now. Absent from an older backend. */
+    component_classes?: ComponentClassSettings;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`, `formatting`, `zone_hatch_offsets`, `tuning_patterns`, `tuning_profiles`, `component_classes`. */
     overlay?: string[];
   };
+}
+
+/** `COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE` (`eda_model::component_classes::ConditionKind`). */
+export type ClassConditionKind = "reference" | "footprint" | "side" | "rotation" | "footprint_field" | "custom" | "sheet_name";
+
+/** One condition of a component class assignment: `primary` is what it matches (a footprint field's name for a field condition), `secondary` a field condition's value. */
+export interface ClassCondition {
+  kind: ClassConditionKind;
+  primary?: string;
+  secondary?: string;
+}
+
+/** One custom assignment (`COMPONENT_CLASS_ASSIGNMENT_DATA`): the footprints that meet its conditions -- all of them (`all`, the default) or any -- get `class`. */
+export interface ClassAssignment {
+  class: string;
+  /** Absent is true ("Match all"). */
+  all?: boolean;
+  conditions?: ClassCondition[];
+}
+
+/** `COMPONENT_CLASS_SETTINGS`: the project's `component_class_settings`. Absent fields are their defaults (off, none). */
+export interface ComponentClassSettings {
+  sheet_classes?: boolean;
+  assignments?: ClassAssignment[];
 }
 
 export type RuleSeverity = "error" | "warning" | "ignore";
@@ -1491,6 +1517,20 @@ export interface StackupLayer {
   loss_tangent?: number;
   /** `(color ..)` of a solder mask, silkscreen or dielectric: KiCad's name for a standard colour (`Green`, `FR4 natural`, ..) or `#RRGGBB[AA]`; absent = not specified. The 3D viewer paints the board with it ("Use board stackup colors"). */
   color?: string;
+  /** `(thickness .. locked)` of a dielectric's first sublayer; absent = unlocked. */
+  thickness_locked?: boolean;
+  /** A dielectric's sublayers after the first (`addsublayer`; the fields above are the first). Absent = one sublayer. See kicad-port/physicalStackup.ts. */
+  sublayers?: StackupSublayer[];
+}
+/** `crates/model/src/lib.rs` `StackupSublayer` (`DIELECTRIC_PRMS`): one sublayer of a dielectric after its first. A key left out is not written to the file. */
+export interface StackupSublayer {
+  material?: string | null;
+  /** mm; absent reads as 0. */
+  thickness_mm?: number | null;
+  thickness_locked?: boolean;
+  epsilon_r?: number | null;
+  loss_tangent?: number | null;
+  color?: string | null;
 }
 
 // ---------------------------------------------------------------- Cmd
@@ -1805,15 +1845,18 @@ export type Cmd =
   | { op: "set_constraints"; constraints: Constraints }
   | { op: "set_mask_paste"; settings: MaskPaste }
   | { op: "set_text_graphics_defaults"; settings: TextGraphicsDefaults }
-  | { op: "set_stackup"; settings: StackupSettings }
+  /** `delete_items_on_removed_layers`: fewer copper layers delete what is on the layers that go (KiCad's question answered OK); without it the backend refuses. */
+  | { op: "set_stackup"; settings: StackupSettings; delete_items_on_removed_layers?: boolean }
   /** DRC settings key -> severity, for the checks that differ from KiCad's default. */
   | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
   /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
   | { op: "set_custom_rules"; text: string }
   /** The DRC Rule Editor's Save, Delete, Move Up and Move Down (`Cmd::EditDrcRule`; kicad-port/ruleEditor.ts has the rule's shape). */
   | { op: "edit_drc_rule"; action: "save" | "delete" | "move_up" | "move_down"; entry: number | null; name: string; rule?: import("../kicad-port/ruleEditor").RuleEditPayload }
+  | { op: "drop_drc_rule"; entry: number; name: string; target: number; target_name: string }
   /** Board Setup > Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` shows the value; the derived `.kicad_pro` carries them for kicad-cli. */
   | { op: "set_text_variables"; variables: Record<string, string> }
+  | { op: "set_component_classes"; settings: ComponentClassSettings }
   /** Board Setup > Board Editor Layers (`panel_setup_layers.cpp`): the whole page -- the layers the board has, their names and types. Refused with the layer's name when a name or type is out of the panel's rules or a layer is turned off while items are on it. */
   | { op: "set_board_layers"; settings: LayerSetup }
   /** Board Setup > Formatting (`panel_setup_formatting.cpp`): the whole page. Refused with the setting's name (`dash_length_ratio`) when a ratio is not above 0 and at most 1000. */
