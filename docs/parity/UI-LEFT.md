@@ -259,54 +259,16 @@ Notes:
   - Library metadata: KiCad's dialog has no box for `searchMetadata` either; groups and ERC markers are not searched.
   - The engine's match is leftmost-first (POSIX: leftmost-longest), which shows only in Replace's span with alternations; it does not upper-case the pattern as KiCad does; a power symbol's Reference is found, not replaced.
   - S. GAPS 1/4; PARITY-sch §8, §60.
-- **S13 [FM] Arcs.** Two clicks make a fixed 90° arc, and there is no arc point editor. M. PARITY-sch §12.
-- **S14 [BD] Annotation.**
-  - Placing a unit never fills a free unit of an existing part (D-A1).
-  - `R?` becomes `R?1`.
-  - The dialog's settings aren't saved.
-  - M. r2 D-A1; PARITY-sch §39, §42.
+- **S13 [FM] Arcs.** **done (task-u4-schleft)**: Draw Arc takes KiCad 25ec2335's three clicks (`EE_GRAPHIC_TOOL::DrawArc`, `ARC_GEOM_MANAGER`'s centre, start, end angle; `/` turns it, Backspace steps back, the arc assistant drawn); the arc point editor drags the start, middle, end and centre in the three arc editing modes (Ctrl+Space, the menu's Cycle Arc Editing Mode). Left: 25ec2335's other four arc draw modes and their toolbar palette; the point editor of the sheet's other shapes (rectangle, circle, curve, polygon). M. PARITY-sch §12, §61.
+- **S14 [BD] Annotation.** **done (task-u4-schleft)**: a placed unit joins a part of the same symbol and value whose unit is free, on any sheet (r2 D-A1: the server's `PlaceSymbol` `annotate()`, `POST /api/sch/next_reference`); a placeholder `R?1` is drawn and written as `R?`; the Annotate dialog's order, numbering and start number are the project's (read on load, stored on close), its scope and options the user's (the browser's). Left: Repeat's reference is the page's guess; the design still keeps `R?1`, `R?2` as names (two parts cannot both be `R?`). M. r2 D-A1; PARITY-sch §5, §61.
 - **S15 [KO] Annotation by design.** No Clear Annotation and no Annotate Automatically switch, and Paste Special's keep/clear differs: every part has a real reference. S. GAPS 4/6; PARITY-sch §5.
-- **S16 [BD] Edit Text & Graphics, Change and Update Symbols.**
-  - Edit Text & Graphics skips fields, labels, wires and junctions.
-  - Change and Update Symbols can't reset field sizes, positions or visibility.
-  - S. PARITY-sch §12.
-- **S17 [BD] Import Sheet and dropped schematics.**
-  - No "Place as group", and no ghost while carried.
-  - A chooser opens instead of putting the sheet in your hand.
-  - One file per drop.
-  - S. GAPS 4; PARITY-sch §19, §37.
-- **S18 [BD] Wires.**
-  - Break and Repeat across a two-pin part trims between the pins (C3-L1).
-  - Some sheet-pin drag cases differ.
-  - Swap and Properties skip the commit clean-up (C3-M1).
-  - The no-connect tool doesn't remove an existing flag.
-  - Enter doesn't finish a wire. **done (task-u1-schplace)**: Enter is KiCad's `cursorClick`, a click where the cursor is (it does not finish a wire in KiCad either), and End now keeps the segment to the cursor (PARITY-sch §2, §54).
-  - S. PARITY-sch §2, §46.
-- **S19 [BD] Bus unfold, swap and groups.**
-  - Unfold from Bus has no member submenus and no ghost.
-  - Alt+S doesn't swap sheets or bus entries.
-  - Some small group differences.
-  - Reorganize drops a label's spin and the groups.
-  - S. PARITY-sch §11, §29, §50; r7 A7-L2.
-- **S20 [BD] Fields.**
-  - Copy and paste lose a user field's shown state and position.
-  - Find treats user fields as hidden.
-  - Autoplace ignores swapped pins.
-  - An imported power symbol loses its flags and its hand-placed Value (D4-L2).
-  - S. PARITY-sch §21, §30.
-- **S21 [BD] Sheets.**
-  - A duplicate sheet name is refused; KiCad allows it and ERC reports it.
-  - No "Untitled Sheet" and no "Link to this file?".
-  - The root page is fixed at 1.
-  - Sync Sheet Pins can't make labels in the subsheet.
-  - No bus-to-bus entry.
-  - S. PARITY-sch §32, §39, §40, §47.
-- **S22 [BD] Net-name corner cases.**
-  - Which of two equal names gets `_1`.
-  - A pin number used twice.
-  - An `@{}` error keeps its raw text.
-  - `${U1A:FIELD}` works only in the letter form.
-  - S. PARITY-sch §44, §47; r2 A-N11.
+- **S16 [BD] Edit Text & Graphics, Change and Update Symbols.** **done (task-u4-schleft)**: Edit Text & Graphics reaches the symbols' fields (references, values, other fields with the name filter), wires and buses with their labels and junctions, global and hierarchical labels, sheet pins (Orientation, Visible, Show field name, junction size; lengths in mm); Change / Update Symbols' Reset field visibilities / sizes and styles / positions (`reset_symbol_fields`). Left: Edit Text & Graphics works on the sheet in view (KiCad: every sheet), no colours, fonts or field alignment, no reference / symbol / net / power filters, sheet titles and fields, label fields, sheet borders; a field's reset place is Autoplace's (KiCad: the library's place), its justification is kept; the reset is a second undo step after the change. S. PARITY-sch §12, §61.
+- **S17 [BD] Import Sheet and dropped schematics.** **done (task-u4-schleft)**: Place as group (there since the design blocks work); a file's contents ride the cursor before the click (the place preview reads the file); a dropped schematic is placed with the options last chosen, no chooser; every file of a drop in turn (`DoWithAcceptedFiles`). Left: the contents are placed by a click, not handed to the move tool (no R / X while they ride). S. PARITY-sch §19, §37, §61.
+- **S18 [BD] Wires.** **done (task-u4-schleft)**: Break and Repeat no longer cut a wire between a two-pin part's pins (`add_wire_as`, C3-L1); Swap and the Properties verbs of connectable items run the commit clean-up (C3-M1); a sheet pin keeps one special-case line and none past a junction (C3-L3); a click of the no-connect tool on a flag removes it. Enter: done before (task-u1-schplace). Left: C3-L3's effect is unconfirmed (no case that shows it). S. PARITY-sch §2, §46, §61.
+- **S19 [BD] Bus unfold, swap and groups.** **done (task-u4-schleft)**: Unfold from Bus lists a bus in a group as a submenu of its members and its label rides the cursor; Alt+S swaps sheets, shapes, text boxes, directive labels, images, junctions and no-connects, two labels trade their spin and two texts their justification (a bus entry is not swappable in KiCad either); Reorganize keeps the groups on the sheet their symbols land on. Left: the diff-pair grouping of the unfold menu (`+`/`-`/`P`/`N`); R / Shift+R on the riding label (r7 A7-L2); a label's spin is the layout's after Reorganize (its wires are new); the small group differences (a group of one dissolves, the Align tools are not group-aware, Group Properties' rows do not take the view to the item). S. PARITY-sch §11, §29, §50, §61; r7 A7-L2.
+- **S20 [BD] Fields.** **done (task-u4-schleft)** in part: Find finds a field by its own visibility (a user field shown, a Value hidden); Autoplace honours swapped pins; an imported power symbol keeps its flags and its hand-placed Value (D4-L2). Left: Copy and Paste still carry a user field's text only (the pasted fields are autoplaced); a mirrored power symbol's fields are read unmirrored. S. PARITY-sch §21, §30, §61.
+- **S21 [BD] Sheets.** **done (task-u4-schleft)**: a name another sheet has is allowed and kicad-cli's ERC reports `duplicate_sheet_names`; a new sheet is "Untitled Sheet" / `untitled.kicad_sch` and a file the hierarchy shows is linked after "'%s' already exists. Link '%s' to this file?"; the root's page number is edited (Edit Sheet Page Number, the Navigator's root row); Sync Sheet Pins' Add label(s) put hierarchical labels in the hand in the subsheet; the bus-to-bus entry needs nothing (only legacy `.sch` files have one and KiCad writes it as a bus line). Left: an unplaced screen kept in the project is linked without the question; Sync Sheet Pins does not reopen after the labels are placed; a legacy `.sch` cannot be imported (the box's kicad-cli refuses it). S. PARITY-sch §32, §39, §40, §47, §61.
+- **S22 [BD] Net-name corner cases.** **done (task-u4-schleft)** in part: `${U1.1:FIELD}` in the project's notation both ways (and each placed unit has a uuid of its own); `@{..}` takes the rest of KiCad's expression grammar (a failing one stays as written, as in KiCad). Left: which of two equal names gets `_1` (the derived uuids are seeded with the net name); a pin number used twice (one pin, one net in `design.nets`); the clock, random and version-control functions of `@{..}`. S. PARITY-sch §44, §47, §61; r2 A-N11.
 
 ## Router
 
