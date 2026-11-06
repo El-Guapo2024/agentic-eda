@@ -141,6 +141,7 @@
 
   await scenario("under Strict, a drop the gates refuse takes the import back, with the reason", async (t) => {
     await setStrict(true);
+    t(strictBox()?.checked === true, "Strict is on");
     await E.run("pcbnew.EditorControl.importNetlist", { name: "check.net", text });
     await until(() => tid("import-netlist-dialog"));
     tid("import-netlist-link-1").click();
@@ -149,8 +150,10 @@
     t(await until(() => tid("import-netlist-label")?.textContent === "Changes Applied to PCB" && messages().some((m) => /^Total/.test(m))), "applied");
     tid("import-netlist-close").click();
     await until(() => E.state().tool === "move");
-    // far off the board: a placement the gates refuse
-    await click(-60, -60, 2000);
+    // far off the board: a placement the gates refuse (the view read again: the carry may have moved it)
+    toScreen = (await screenOf()) ?? toScreen;
+    await click(-40, -40, 2000);
+    t(readout() && readout()[0] < -20, `the drop was off the board: ${readout()}`);
     const refused = await until(async () => (await partOf("R2")).value === r2Before && !(await partOf("TP99"))?.placed, 15000);
     t(!!refused, `the import is taken back: R2 ${(await partOf("R2")).value}, TP99 ${JSON.stringify((await partOf("TP99"))?.placed)}`);
     const toast = document.querySelector(".toast")?.textContent ?? "";

@@ -100,7 +100,7 @@ export function ImportNetlistDialog({ host, given }: { host: ImportNetlistHost; 
       setLines([{ severity: "error", text: NO_SUCH_FILE }]);
       return;
     }
-    setLabel(LABEL_TO_APPLY);
+    // (the label stays as Update PCB left it: `onImportNetlist` does not set it)
     void test(file, options);
   };
 
