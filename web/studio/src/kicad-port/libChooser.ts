@@ -4,7 +4,7 @@
 //
 // Ported from common/lib_tree_model.cpp (`LIB_TREE_NODE::Compare`, `UpdateScore`, `AssignIntrinsicRanks`), common/lib_tree_model_adapter.cpp
 // (`UpdateSearchString`, `showResults`, `GetChildren`: a node with no score is hidden), common/eda_pattern_match.cpp (`EDA_COMBINED_MATCHER::ScoreTerms`,
-// CTX_LIBITEM), eeschema/lib_symbol.cpp (`cacheSearchTerms`), common/footprint_info.cpp (`FOOTPRINT_INFO::GetSearchTerms`),
+// CTX_LIBITEM: the regular-expression, wildcard, relational and substring matchers), eeschema/lib_symbol.cpp (`cacheSearchTerms`), common/footprint_info.cpp (`FOOTPRINT_INFO::GetSearchTerms`),
 // eeschema/symbol_chooser_frame.cpp and pcbnew/footprint_chooser_frame.cpp (`AddSymbolToHistory`: 8 recent; `filterFootprint`), commit 8303b2ad.
 //
 // The installed libraries are searched on the server (crates/cli/src/library_search.rs scores the same way: the two tests share their cases); the
@@ -24,13 +24,129 @@ export function searchTerm(text: string, weight: number): SearchTerm {
   return { text: t, weight };
 }
 
-/** One word of the query (`EDA_COMBINED_MATCHER`, CTX_LIBITEM): the lower-case word, and for `*` / `?` the wildcard form that is searched anywhere in a term. */
+/** `EDA_PATTERN_MATCH_RELATIONAL`'s relations; `any` is a word whose value is not typed yet (`voltage>`). */
+type Relation = "lt" | "le" | "eq" | "ge" | "gt" | "any";
+
+/** `EDA_PATTERN_MATCH_RELATIONAL`: the key, the relation and the value (its unit's multiplier applied). */
+export interface Relational {
+  key: string;
+  relation: Relation;
+  value: number;
+}
+
+/**
+ * One word of the query (`EDA_COMBINED_MATCHER`, CTX_LIBITEM): the lower-case word (`UpdateSearchString` lowers every word) and the matchers whose `SetPattern`
+ * took it, in KiCad's order -- `EDA_PATTERN_MATCH_REGEX` (a word written `/re/` or `^re$`), `EDA_PATTERN_MATCH_WILDCARD` (`*` / `?`, searched anywhere in a
+ * term; for a word with neither it finds what the substring finds, so it is kept only for a word that has one), `EDA_PATTERN_MATCH_RELATIONAL`
+ * (`voltage>3.3`) and `EDA_PATTERN_MATCH_SUBSTR`, which takes every word.
+ */
 export interface Matcher {
   pattern: string;
   /** The pieces between `*`; `null` is `?`. Empty for a plain word. */
   segments: (string | null)[][];
   leadingStar: boolean;
   wild: boolean;
+  /**
+   * `EDA_PATTERN_MATCH_REGEX`: compiled with JavaScript's RegExp (the `u` flag), as kicad-port/edaPatternMatch.ts does -- wxRegEx compiles `wxRE_ADVANCED`
+   * (the server's search runs `eda_model::wx_regex`); the usual classes, quantifiers, groups and anchors read the same. A pattern RegExp refuses is a matcher
+   * not added, as wxRegEx's refusal is.
+   */
+  regex: RegExp | null;
+  relational: Relational | null;
+}
+
+/** `EDA_PATTERN_MATCH_RELATIONAL::m_units`, by the lower-case unit. */
+const UNITS: Readonly<Record<string, number>> = {
+  p: 1e-12,
+  n: 1e-9,
+  u: 1e-6,
+  m: 1e-3,
+  "": 1,
+  k: 1e3,
+  meg: 1e6,
+  g: 1e9,
+  t: 1e12,
+  ki: 1024,
+  mi: 1048576,
+  gi: 1073741824,
+  ti: 1099511627776,
+};
+
+/** `\w` as wxRegEx's advanced syntax (and `eda_model::wx_regex`) reads it: a letter or digit of any script, or `_`. */
+const W = "[\\p{Alphabetic}\\p{N}_]";
+/** `EDA_PATTERN_MATCH_RELATIONAL::SetPattern`'s and `FindOne`'s expressions. */
+const RELATIONAL_WORD = new RegExp(`^(${W}+)(<|<=|=|>=|>)([-+]?[\\d.]*)(${W}*)$`, "u");
+const RELATIONAL_FIELD = new RegExp(`(${W}+)[=:]([-+]?[\\d.]+)(${W}*)`, "u");
+
+/** `wxString::ToCDouble`: the whole text a number (its characters are `[-+]?[\d.]+` already). */
+function toCDouble(text: string): number | null {
+  if (text === "") return null;
+  const v = Number(text);
+  return Number.isFinite(v) ? v : null;
+}
+
+/** `EDA_PATTERN_MATCH_RELATIONAL::SetPattern`: the key lowered, an empty value matching any, a value that is no number or a unit not in the table refusing the word. */
+export function makeRelational(word: string): Relational | null {
+  const m = RELATIONAL_WORD.exec(word);
+  if (!m) return null;
+  const [, key = "", rel = "", val = "", unit = ""] = m;
+  const relations: Record<string, Relation> = { "<": "lt", "<=": "le", "=": "eq", ">=": "ge", ">": "gt" };
+  let relation = relations[rel];
+  if (!relation) return null;
+  let value = 0;
+  if (val === "") relation = "any";
+  else {
+    const v = toCDouble(val);
+    if (v === null) return null;
+    value = v;
+  }
+  const mult = UNITS[unit.toLowerCase()];
+  if (mult === undefined) return null;
+  return { key: key.toLowerCase(), relation, value: value * mult };
+}
+
+/** `EDA_PATTERN_MATCH_RELATIONAL::FindOne`: the first `key=value[unit]` (or `key:value`) of one token, its key this one's, its value (scaled by a known unit) in the relation. */
+function findOneRelational(r: Relational, token: string): number | null {
+  if (!token.includes("=") && !token.includes(":")) return null;
+  const m = RELATIONAL_FIELD.exec(token);
+  if (!m) return null;
+  const [, key = "", val = "", unit = ""] = m;
+  if (key.toLowerCase() !== r.key) return null;
+  let parsed = toCDouble(val);
+  if (parsed === null) return null;
+  const mult = UNITS[unit.toLowerCase()];
+  if (mult !== undefined) parsed *= mult;
+  const hit =
+    r.relation === "lt" ? parsed < r.value : r.relation === "le" ? parsed <= r.value : r.relation === "eq" ? parsed === r.value : r.relation === "ge" ? parsed >= r.value : r.relation === "gt" ? parsed > r.value : true;
+  return hit ? m.index : null;
+}
+
+/** `EDA_PATTERN_MATCH_RELATIONAL::Find`: the text split on blanks (`wxTOKEN_STRTOK`), the first token with a match; its place in the text. */
+export function findRelational(r: Relational, text: string): number | null {
+  let offset = 0;
+  for (const token of text.split(/[ \t\r\n]/)) {
+    if (token !== "") {
+      const at = findOneRelational(r, token);
+      if (at !== null) return offset + at;
+    }
+    offset += token.length + 1;
+  }
+  return null;
+}
+
+/** `EDA_PATTERN_MATCH_REGEX::SetPattern`: `^...$` as it is, `/...` less the slashes ("Requiring a '/' on the end means they get no feedback while they type"), else none. */
+export function explicitRegex(word: string): RegExp | null {
+  let pattern: string;
+  if (word.startsWith("^") && word.endsWith("$")) pattern = word;
+  else if (word.startsWith("/")) {
+    pattern = word.slice(1);
+    if (pattern.endsWith("/")) pattern = pattern.slice(0, -1);
+  } else return null; // "For now regular expressions must be explicit"
+  try {
+    return new RegExp(pattern, "u");
+  } catch {
+    return null;
+  }
 }
 
 export function makeMatcher(word: string): Matcher {
@@ -42,7 +158,7 @@ export function makeMatcher(word: string): Matcher {
         .filter((s) => s !== "")
         .map((s) => [...s].map((c) => (c === "?" ? null : c)))
     : [];
-  return { pattern, segments, leadingStar: wild && pattern.startsWith("*"), wild };
+  return { pattern, segments, leadingStar: wild && pattern.startsWith("*"), wild, regex: explicitRegex(pattern), relational: makeRelational(pattern) };
 }
 
 function findWild(m: Matcher, text: string): number | null {
@@ -67,11 +183,22 @@ function findWild(m: Matcher, text: string): number | null {
 
 /** Where the word first matches in `text` (0 only when from the first character), or null: `EDA_COMBINED_MATCHER::Find`, the earliest of its matchers. */
 export function findIn(m: Matcher, text: string): number | null {
+  const found: number[] = [];
+  if (m.regex) {
+    const r = m.regex.exec(text);
+    if (r) found.push(r.index);
+  }
+  if (m.wild) {
+    const w = findWild(m, text);
+    if (w !== null) found.push(w);
+  }
+  if (m.relational) {
+    const r = findRelational(m.relational, text);
+    if (r !== null) found.push(r);
+  }
   const plain = text.indexOf(m.pattern);
-  const a = plain >= 0 ? plain : null;
-  if (!m.wild) return a;
-  const b = findWild(m, text);
-  return a === null ? b : b === null ? a : Math.min(a, b);
+  if (plain >= 0) found.push(plain);
+  return found.length === 0 ? null : Math.min(...found);
 }
 
 /** `EDA_COMBINED_MATCHER::ScoreTerms`: an exact term is worth 8 times its weight, a match at its start twice, a match anywhere once. */

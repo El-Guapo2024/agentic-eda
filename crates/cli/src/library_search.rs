@@ -20,8 +20,9 @@
 //! The scoring is `EDA_COMBINED_MATCHER::ScoreTerms` and `LIB_TREE_NODE_ITEM::UpdateScore` (`common/eda_pattern_match.cpp`,
 //! `common/lib_tree_model.cpp`): the query is split on blanks, every word must score against the item's terms (an exact term is
 //! worth 8 times its weight, a match at the start of a term 2 times, a match anywhere once), and an item's score is 1 plus the sum.
-//! A word may carry `*` and `?` wildcards. KiCad's other two matchers -- the regular expression (`/pattern/`) and the relational
-//! one (`voltage>3.3`) -- are not ported; such a word is searched as the plain text it is.
+//! A word is matched by the four matchers `EDA_COMBINED_MATCHER` builds in `CTX_LIBITEM`, each only when the word suits it ([`Matcher`]): a regular
+//! expression (`/pattern/`, or `^...$`, on `eda_model::wx_regex`), the `*` / `?` wildcard form, the relational one (`voltage>3.3`, `resistance<10k`)
+//! and the plain text.
 
 use crate::library_index::{legal_library_name, libraries_in, modified, Kind, LibSource};
 use eda_kicad::{FootprintSummary, SymbolSummary};
@@ -56,8 +57,13 @@ pub(crate) fn term(text: &str, weight: u32) -> Term {
     Term { text, weight }
 }
 
-/// One word of the query (`EDA_COMBINED_MATCHER` in `CTX_LIBITEM`): the lower-case word, and when it has `*` / `?` the wildcard form
-/// `EDA_PATTERN_MATCH_WILDCARD` compiles it to -- found anywhere in a term, not anchored (`*` any run, `?` any one character).
+/// One word of the query (`EDA_COMBINED_MATCHER` in `CTX_LIBITEM`, common/eda_pattern_match.cpp): the lower-case word (`UpdateSearchString` lowers every
+/// word before it builds the matcher) and the matchers whose `SetPattern` took it, in KiCad's order -- `EDA_PATTERN_MATCH_REGEX`, `EDA_PATTERN_MATCH_WILDCARD`,
+/// `EDA_PATTERN_MATCH_RELATIONAL`, `EDA_PATTERN_MATCH_SUBSTR` ("If any of the above matchers couldn't be created because the pattern syntax does not match,
+/// the substring will try its best", and it always takes the word). [`Matcher::find`] is `EDA_COMBINED_MATCHER::Find`: the earliest place any of them finds.
+///
+/// The wildcard matcher compiles every word to a regular expression (each regex character escaped, `?` as `.`, `*` as `.*`), so for a word with neither
+/// it finds what the substring finds, where the substring does: it is kept here only for a word that has one, as the leftmost match of its pieces.
 #[derive(Debug, Clone)]
 pub(crate) struct Matcher {
     pattern: String,
@@ -65,6 +71,154 @@ pub(crate) struct Matcher {
     segments: Vec<Vec<Option<char>>>,
     /// Starts with `*`: the regex `.*x` matches from the first character on.
     leading_star: bool,
+    /// `EDA_PATTERN_MATCH_REGEX`: a word written `/re/` (the closing `/` may be left off: "Requiring a '/' on the end means they get no feedback while
+    /// they type") or `^re$`, compiled as `wxRegEx::Compile( .., wxRE_ADVANCED )` is -- `Flavor::NetClass` -- and found anywhere in a term. `None` when the
+    /// word is not written as one, or does not compile.
+    regex: Option<eda_model::wx_regex::Regex>,
+    /// `EDA_PATTERN_MATCH_RELATIONAL`: a word `key<op>value[unit]`.
+    relational: Option<Relational>,
+}
+
+/// `EDA_PATTERN_MATCH_RELATIONAL`'s relations; `Any` is a word whose value is not typed yet (`voltage>`: "Matching on empty values keeps the match list
+/// from going empty when the user types the relational operator character").
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Relation {
+    Lt,
+    Le,
+    Eq,
+    Ge,
+    Gt,
+    Any,
+}
+
+/// `EDA_PATTERN_MATCH_RELATIONAL`: the key, the relation and the value (its unit's multiplier applied).
+#[derive(Debug, Clone)]
+struct Relational {
+    key: String,
+    relation: Relation,
+    value: f64,
+}
+
+/// `EDA_PATTERN_MATCH_RELATIONAL::m_units`, by the lower-case unit.
+fn unit_multiplier(unit: &str) -> Option<f64> {
+    Some(match unit {
+        "p" => 1e-12,
+        "n" => 1e-9,
+        "u" => 1e-6,
+        "m" => 1e-3,
+        "" => 1.,
+        "k" => 1e3,
+        "meg" => 1e6,
+        "g" => 1e9,
+        "t" => 1e12,
+        "ki" => 1024.,
+        "mi" => 1_048_576.,
+        "gi" => 1_073_741_824.,
+        "ti" => 1_099_511_627_776.,
+        _ => return None,
+    })
+}
+
+/// `wxString::ToCDouble`: the whole text a number (the value's characters are `[-+]?[\d.]+` already).
+fn to_c_double(text: &str) -> Option<f64> {
+    text.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+fn relational_regexes() -> &'static (eda_model::wx_regex::Regex, eda_model::wx_regex::Regex) {
+    use eda_model::wx_regex::{Flavor, Regex};
+    static R: OnceLock<(Regex, Regex)> = OnceLock::new();
+    R.get_or_init(|| {
+        (
+            Regex::compile(r"^(\w+)(<|<=|=|>=|>)([-+]?[\d.]*)(\w*)$", false, Flavor::NetClass).expect("SetPattern's regex compiles"),
+            Regex::compile(r"(\w+)[=:]([-+]?[\d.]+)(\w*)", false, Flavor::NetClass).expect("FindOne's regex compiles"),
+        )
+    })
+}
+
+/// The text of group `g` of a match over `chars`.
+fn group_text(chars: &[char], caps: &eda_model::wx_regex::Captures, g: usize) -> String {
+    caps.group(g).map(|(a, b)| chars[a..b].iter().collect()).unwrap_or_default()
+}
+
+impl Relational {
+    /// `EDA_PATTERN_MATCH_RELATIONAL::SetPattern`: `^(\w+)(<|<=|=|>=|>)([-+]?[\d.]*)(\w*)$`, the key lowered, an empty value matching any, a value that is
+    /// no number or a unit not in the table refusing the word.
+    fn new(word: &str) -> Option<Relational> {
+        let chars: Vec<char> = word.chars().collect();
+        let caps = relational_regexes().0.find_at(&chars, 0)?;
+        let (key, rel, val, unit) = (group_text(&chars, &caps, 1), group_text(&chars, &caps, 2), group_text(&chars, &caps, 3), group_text(&chars, &caps, 4));
+        let mut relation = match rel.as_str() {
+            "<" => Relation::Lt,
+            "<=" => Relation::Le,
+            "=" => Relation::Eq,
+            ">=" => Relation::Ge,
+            ">" => Relation::Gt,
+            _ => return None,
+        };
+        let mut value = 0.0;
+        if val.is_empty() {
+            relation = Relation::Any;
+        } else {
+            value = to_c_double(&val)?;
+        }
+        value *= unit_multiplier(&unit.to_lowercase())?;
+        Some(Relational { key: key.to_lowercase(), relation, value })
+    }
+
+    /// `EDA_PATTERN_MATCH_RELATIONAL::FindOne`: the first `key=value[unit]` (or `key:value`) of one token, its key this one's, its value (scaled by its
+    /// unit when the unit is known) in the relation. Where it starts in the token.
+    fn find_one(&self, token: &str) -> Option<usize> {
+        // `[=:]` must be there for the regex to match: the regex is only run on a token that has one
+        if !token.contains(['=', ':']) {
+            return None;
+        }
+        let chars: Vec<char> = token.chars().collect();
+        let caps = relational_regexes().1.find_at(&chars, 0)?;
+        let start = caps.group(0)?.0;
+        if group_text(&chars, &caps, 1).to_lowercase() != self.key {
+            return None;
+        }
+        let mut parsed = to_c_double(&group_text(&chars, &caps, 2))?;
+        if let Some(m) = unit_multiplier(&group_text(&chars, &caps, 3).to_lowercase()) {
+            parsed *= m;
+        }
+        let hit = match self.relation {
+            Relation::Lt => parsed < self.value,
+            Relation::Le => parsed <= self.value,
+            Relation::Eq => parsed == self.value,
+            Relation::Ge => parsed >= self.value,
+            Relation::Gt => parsed > self.value,
+            Relation::Any => true,
+        };
+        hit.then_some(start)
+    }
+
+    /// `EDA_PATTERN_MATCH_RELATIONAL::Find`: the text split on blanks (`wxTOKEN_STRTOK`), the first token that has a match; its place in the text.
+    fn find(&self, text: &str) -> Option<usize> {
+        let mut offset = 0usize;
+        for token in text.split([' ', '\t', '\r', '\n']) {
+            if !token.is_empty() {
+                if let Some(at) = self.find_one(token) {
+                    return Some(offset + at);
+                }
+            }
+            offset += token.chars().count() + 1;
+        }
+        None
+    }
+}
+
+/// `EDA_PATTERN_MATCH_REGEX::SetPattern`: a word written `^...$` is a regular expression as it is, one that starts with `/` is what follows it (less a
+/// closing `/`); anything else is no regular expression ("For now regular expressions must be explicit"). `None` too when it does not compile.
+fn explicit_regex(word: &str) -> Option<eda_model::wx_regex::Regex> {
+    let pattern = if word.starts_with('^') && word.ends_with('$') {
+        word
+    } else if let Some(rest) = word.strip_prefix('/') {
+        rest.strip_suffix('/').unwrap_or(rest)
+    } else {
+        return None;
+    };
+    eda_model::wx_regex::Regex::compile(pattern, false, eda_model::wx_regex::Flavor::NetClass)
 }
 
 impl Matcher {
@@ -73,7 +227,9 @@ impl Matcher {
         let wild = pattern.contains(['*', '?']);
         let segments = if wild { pattern.split('*').filter(|s| !s.is_empty()).map(|s| s.chars().map(|c| (c != '?').then_some(c)).collect()).collect() } else { Vec::new() };
         let leading_star = wild && pattern.starts_with('*');
-        Matcher { pattern, segments, leading_star }
+        let regex = explicit_regex(&pattern);
+        let relational = Relational::new(&pattern);
+        Matcher { pattern, segments, leading_star, regex, relational }
     }
 
     fn wild(&self) -> bool {
@@ -83,15 +239,14 @@ impl Matcher {
     /// Where the word first matches in `text` (a position that is 0 only when it matches from the first character), if it does.
     /// `EDA_COMBINED_MATCHER::Find`: the earliest position over its matchers.
     fn find(&self, text: &str) -> Option<usize> {
+        let regex = self.regex.as_ref().and_then(|re| {
+            let chars: Vec<char> = text.chars().collect();
+            re.find_at(&chars, 0).and_then(|caps| caps.group(0)).map(|(start, _)| start)
+        });
+        let wild = if self.wild() { self.find_wild(text) } else { None };
+        let relational = self.relational.as_ref().and_then(|r| r.find(text));
         let plain = text.find(&self.pattern);
-        if !self.wild() {
-            return plain;
-        }
-        let wild = self.find_wild(text);
-        match (plain, wild) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [regex, wild, relational, plain].into_iter().flatten().min()
     }
 
     /// The leftmost match of the wildcard form: its pieces in order, each at its earliest place after the one before (a fixed-length
@@ -111,7 +266,8 @@ impl Matcher {
         Some(if self.leading_star { 0 } else { first.unwrap_or(0) })
     }
 
-    /// `EDA_COMBINED_MATCHER::ScoreTerms`.
+    /// `EDA_COMBINED_MATCHER::ScoreTerms`: a term that is the whole word (as typed, `GetPattern() == term.Text`) is worth 8 times its weight, one a matcher
+    /// finds at its start 2 times, anywhere else once.
     pub(crate) fn score(&self, terms: &[Term]) -> u32 {
         let mut score = 0;
         for t in terms {
@@ -827,9 +983,44 @@ mod tests {
         assert_eq!(matcher_score("soic*qfn", &terms), 0);
         assert_eq!(matcher_score("p1*soic", &terms), 0, "the pieces must come in order");
         assert_eq!(matcher_score("soic*3.9x4.9mm_p1.27mm", &terms), 1 + 2 * 8);
-        // `/regex/` and `a>3` are not ported: they are searched as the text they are
-        assert_eq!(matcher_score("/soic/", &terms), 0);
-        assert_eq!(matcher_score("voltage>3.3", &[("a voltage>3.3 b", 1)]), 1 + 1);
+        assert_eq!(matcher_score("voltage>3.3", &[("a voltage>3.3 b", 1)]), 1 + 1, "a relational word is found as its text too");
+    }
+
+    /// `EDA_PATTERN_MATCH_REGEX` (the same cases as `libChooser.test.ts`).
+    #[test]
+    fn a_word_written_slash_re_slash_or_caret_re_dollar_is_a_regular_expression_found_anywhere_in_a_term() {
+        let t = [("R_0603_1608Metric", 8), ("Resistor_SMD", 4), ("Resistor_SMD:R_0603_1608Metric", 16)];
+        assert_eq!(matcher_score("/^R_0603/", &t), 1 + 2 * 8, "the word is lowered first; ^ starts only the name");
+        assert_eq!(matcher_score("/^r_0603", &t), 1 + 2 * 8, "the closing slash may be left off");
+        assert_eq!(matcher_score("/0603/", &t), 1 + 8 + 16, "found inside the name and inside Lib:Name");
+        assert_eq!(matcher_score("^r_0603.*$", &t), 1 + 2 * 8, "^...$ is a regular expression as it is");
+        assert_eq!(matcher_score("/^r_0805/", &t), 0);
+        assert_eq!(matcher_score("/(/", &t), 0, "a pattern that does not compile is no matcher, and its text is nowhere");
+        assert_eq!(matcher_score("/smd$/", &t), 1 + 4, "the end of a term");
+        assert_eq!(matcher_score("/r_0[68]0[35]/", &t), 1 + 2 * 8 + 16, "classes");
+    }
+
+    /// `EDA_PATTERN_MATCH_RELATIONAL` (the same cases as `libChooser.test.ts`).
+    #[test]
+    fn a_relational_word_matches_a_key_value_of_the_terms_words() {
+        let r = [("resistance=4.7k 1% 0603", 1)];
+        assert_eq!(matcher_score("resistance<10k", &r), 1 + 2, "4.7k is below 10k, at the start of the term");
+        assert_eq!(matcher_score("resistance<10k", &[("resistance=22k", 1)]), 0, "22k is not");
+        assert_eq!(matcher_score("resistance>=4700", &r), 1 + 2, "a unit scales the value: 4.7k is 4700");
+        assert_eq!(matcher_score("resistance=4.7k", &r), 1 + 2);
+        assert_eq!(matcher_score("resistance>4.7k", &r), 0);
+        assert_eq!(matcher_score("voltage>3.3", &[("vin voltage=5v", 1)]), 1 + 1, "a unit not in the table leaves the value as it is; found past the first word");
+        assert_eq!(matcher_score("voltage>", &[("voltage:1", 4)]), 1 + 2 * 4, "no value yet matches any value (ANY)");
+        assert_eq!(matcher_score("current<1", &[("voltage=0.5", 1)]), 0, "another key");
+        assert_eq!(matcher_score("size>=1ki", &[("size=1024", 1)]), 1 + 2, "ki is 1024");
+        assert_eq!(matcher_score("c=100n", &[("c=100n", 4)]), 1 + 8 * 4, "the whole term is still 8 times");
+        assert_eq!(matcher_score("voltage>3.3v", &[("voltage=5", 1)]), 0, "a unit not in the table makes the word no relational one");
+        // SetPattern's parse: the relation, the value and the unit
+        let rel = Relational::new("resistance<=10k").unwrap();
+        assert_eq!((rel.key.as_str(), rel.relation, rel.value), ("resistance", Relation::Le, 10_000.0));
+        assert_eq!(Relational::new("v>").map(|r| r.relation), Some(Relation::Any));
+        assert!(Relational::new("v>1.2.3").is_none() && Relational::new("v>x").is_none() && Relational::new("lm358").is_none());
+        assert_eq!(Relational::new("f>=2meg").map(|r| r.value), Some(2e6));
     }
 
     #[test]
