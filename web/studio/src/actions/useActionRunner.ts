@@ -81,7 +81,7 @@ import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
 import { cancelAreaTool, getCommonTool } from "../state/commonTool";
 import { commonChecked } from "../kicad-port/commonChecked";
-import { getCommonOptions, useCommonOptions } from "../state/commonOptions";
+import { getCommonOptions, setWindowOptions, useCommonOptions, windowOptionsOf } from "../state/commonOptions";
 import { unfilledZoneWarning, ZONE_FILL_WARNING_MS } from "../kicad-port/checkRevision";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
@@ -980,8 +980,9 @@ export function useActionRunner() {
     m.set("common.Control.highContrastModeCycle", () =>
       dispatch({ type: "APPEARANCE", op: { op: "contrast", mode: nextContrastMode(!state.highContrast ? "normal" : state.appearance.contrastHidden ? "hidden" : "dimmed") } })
     );
-    m.set("common.Control.togglePolarCoords", () => dispatch({ type: "TOGGLE_POLAR" }));
-    // cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs: actions/commonActions.ts (one setting, all four canvases).
+    // `ACTIONS::togglePolarCoords` -> `PCB_BASE_FRAME::m_polarCoords`, saved as each frame's `editing.polar_coords`: the board editor's and the Footprint Editor's own (state/commonOptions.ts).
+    m.set("common.Control.togglePolarCoords", () => setWindowOptions(state.tab, { polarCoords: !windowOptionsOf(getCommonOptions(), state.tab).polarCoords }));
+    // cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs: actions/commonActions.ts (each editor's own setting).
 
     m.set("common.Control.metricUnits", () => dispatch({ type: "SET_UNITS", units: "mm" }));
     m.set("common.Control.imperialUnits", () => dispatch({ type: "SET_UNITS", units: "in" }));
@@ -2516,7 +2517,7 @@ export function useActionRunner() {
         // The simulator's toggles (View > Show Legend, Dark Mode Plots, ...), and the grid of its plot while its window has the keyboard.
         const sim = simChecked(name, simUi);
         if (sim !== undefined) return sim;
-        const shared = commonChecked(name, commonOptions);
+        const shared = commonChecked(name, { ...commonOptions, ...windowOptionsOf(commonOptions, state.tab) });
         if (shared !== undefined) return shared;
         // View > Design Blocks (`designBlockCond`: the pane is shown)
         const blocks = designBlockChecked(name);

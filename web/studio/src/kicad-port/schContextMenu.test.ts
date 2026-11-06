@@ -136,3 +136,17 @@ test("a table that is not a selection of cells has no table editing entries, and
   // neither is offered when nothing is selected
   assert.ok(!actionsOf(schContextMenu(sel({}))).includes("common.TableEditor.deleteRows"));
 });
+
+test("UI-LEFT C2: AddStandardSubMenus -- the menu ends with a separator, Zoom (each zoomPreset from 1) and Grid (Grid Origin..., a line, each gridPreset), the current ones checked", () => {
+  const nodes = schContextMenu(emptySummary(), { zoom: [{ label: "Zoom: 0.05", checked: false }, { label: "Zoom: 0.07", checked: true }], grid: [{ label: "100 mil (2.54 mm)", checked: false }, { label: "50 mil (1.27 mm)", checked: true }] });
+  const [sepNode, zoom, grid] = nodes.slice(-3);
+  assert.deepEqual(sepNode, { type: "separator" });
+  assert.deepEqual(zoom, { type: "submenu", label: "Zoom", items: [ { type: "item", action: "common.Control.zoomPreset", label: "Zoom: 0.05", arg: 1, checked: false }, { type: "item", action: "common.Control.zoomPreset", label: "Zoom: 0.07", arg: 2, checked: true } ] });
+  assert.equal(grid?.type, "submenu");
+  if (!grid || grid.type !== "submenu") return;
+  assert.equal(grid.label, "Grid");
+  assert.deepEqual(grid.items.slice(0, 2), [{ type: "item", action: "common.Control.editGridOrigin" }, { type: "separator" }]);
+  assert.deepEqual(grid.items[3], { type: "item", action: "common.Control.gridPreset", label: "50 mil (1.27 mm)", arg: 1, checked: true });
+  // without the lists (the old callers) the menu is as it was
+  assert.equal(schContextMenu(emptySummary()).some((n) => n.type === "submenu" && n.label === "Zoom"), false);
+});

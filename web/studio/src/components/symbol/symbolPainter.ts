@@ -23,7 +23,8 @@ import { layerColor } from "../canvas/layers";
 import { drawPinDecoration, drawPinText, drawRealGraphic } from "../schematic/painter";
 import type { ResolvedGraphic } from "../schematic/libSymbol";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix } from "../schematic/transform";
-import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
+import { paintEditorGrid } from "../canvas/gridPaint";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { defaultPenNm, textOrigin, FIELD_SIZE_NM } from "../../kicad-port/schText";
 import { shownText } from "../../kicad-port/schFieldEdit";
@@ -94,7 +95,8 @@ export function nmPointToMm(xNm: number, yNm: number): { x: number; y: number } 
   return { x: xNm / 1e6, y: -yNm / 1e6 };
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number) {
+/** INACTIVE since UI-LEFT C2 (task-u4-common): the grid is `paintEditorGrid` (components/canvas/gridPaint.ts), DrawGrid's three styles. Kept, not called. */
+export function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number) {
   const visible = computeVisibleGridSize(gridNm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return;
@@ -213,6 +215,10 @@ export interface SymPaintOptions {
   selection: Set<string>;
   gridNm: number;
   gridVisible: boolean;
+  /** The current grid's Y size when it is not square. */
+  gridYNm?: number;
+  /** The Symbol Editor's Display Options > Grid Display. */
+  gridDisplay?: GridDisplay;
   activeUnit: number;
   activeBodyStyle: number;
   drawState: { shapeKind: SymShapeKind; pts: [number, number][] } | null;
@@ -284,7 +290,10 @@ export function paintSymbol(
   symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean; pin_name_offset_mm?: number } | null,
   opts: SymPaintOptions
 ) {
-  if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm);
+  if (opts.gridVisible) {
+    const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
+    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"));
+  }
   if (!symbol) {
     drawOrigin(ctx, view);
     return;

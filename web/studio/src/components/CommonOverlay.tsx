@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStudioState } from "../state/store";
 import { useFpState } from "../state/footprintEditorStore";
 import { useSymState } from "../state/symbolEditorStore";
-import { useCommonOptions } from "../state/commonOptions";
+import { useCommonOptions, windowOptionsOf } from "../state/commonOptions";
 import { useCommonTool } from "../state/commonTool";
 import { crosshairSegments, cursorVisible } from "../kicad-port/crosshair";
 import { lassoContained } from "../kicad-port/lasso";
@@ -186,13 +186,15 @@ export function CommonOverlay() {
     }
 
     // `blitCursor`: at the cursor, in the chosen mode, when a tool wants it or the setting forces it.
-    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null || tool.zoomArea != null || tool.measure != null)) {
+    // the editor's own cursor settings (`WINDOW_SETTINGS::cursor`, one per frame)
+    const win = windowOptionsOf(opts, tab);
+    if (adapter.cursor && cursorVisible(win.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null || tool.zoomArea != null || tool.measure != null)) {
       const px = sx(adapter.cursor.x);
       const py = sy(adapter.cursor.y);
       ctx.strokeStyle = cursorColor(tab);
       ctx.lineWidth = 1;
       ctx.beginPath();
-      for (const [x0, y0, x1, y1] of crosshairSegments(opts.crossHairMode, px, py, size.width, size.height)) {
+      for (const [x0, y0, x1, y1] of crosshairSegments(win.crossHairMode, px, py, size.width, size.height)) {
         ctx.moveTo(x0, y0);
         ctx.lineTo(x1, y1);
       }

@@ -4,10 +4,12 @@
 // hotkeys switch between) and Reset to Defaults. The editors are the pages of the Preferences tree: the PCB Editor, the Footprint Editor and the Symbol Editor each
 // have their own list, and OK keeps all of them (state/gridSettings.ts) and makes the row selected on each page the current grid of that editor.
 //
-// Add and Edit ask for one size in the display unit, checked the way `DIALOG_GRID_SETTINGS` checks it (0.001 to 1000 mm; "Grid size '%s' already exists." for one in the
-// list). Under the list, "Grid Overrides": a grid of its own for each category of item (connected items, wires, vias, text, graphics -- the rows each editor has are
-// `PANEL_GRID_SETTINGS`'s), which the snapping uses while Grid Overrides (Ctrl+Shift+G) is on; an override follows its grid when the list is edited (`RebuildGridSizes` keeps
-// the selection by name). Not here: the grid's name and a different Y size -- see kicad-port/gridSettings.ts.
+// Add and Edit open Grid Settings (`DIALOG_GRID_SETTINGS`): "Name:" (optional), "X:", "Linked" (on: Y is X; on by default, and when an edited grid is square) and "Y:", in
+// the display unit, checked the way it checks them (0.001 to 1000 mm, "Grid size X out of range." / "Grid size Y out of range."; "Grid size '%s' already exists." for a
+// grid the list has -- the same name, X and Y). The list shows each grid as "name: X x Y (in the other unit)" (`RebuildGridSizes`). Under the list, "Grid Overrides": a grid
+// of its own for each category of item (connected items, wires, vias, text, graphics -- the rows each editor has are `PANEL_GRID_SETTINGS`'s), which the snapping uses while
+// Grid Overrides (Ctrl+Shift+G) is on; an override follows its grid when the list is edited (`RebuildGridSizes` keeps the selection by its text). The editors keep their
+// current grid by its X size, so of two grids with the same X the first is the one chosen (kicad-port/gridSettings.ts `gridYOf`).
 import { useState } from "react";
 import actionsData from "../kicad/actions.json";
 import type { ActionsFile } from "../kicad/types";
@@ -19,7 +21,7 @@ import { getGridSettings, setGridSettings } from "../state/gridSettings";
 import { getGridOverrides, setGridOverrides } from "../state/gridOverrides";
 import { formatLength, nmTo, type LengthUnit } from "../state/units";
 import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
-import { GRID_EDITORS, GRID_EDITOR_LABEL, insertGrid, moveGrid, parseGridSize, removeGrid, replaceGrid, resetGrids, type GridEdit, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
+import { GRID_EDITORS, GRID_EDITOR_LABEL, gridAt, gridDefs, gridListLabel, gridMessageText, insertGrid, moveGrid, parseGridSize, removeGrid, replaceGrid, resetGrids, sameGrid, type GridDef, type GridEdit, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
 import { overrideRows, rebuildOverrides, safeOverrideIndex, type GridOverrides } from "../kicad-port/gridOverrides";
 
 interface Page {
@@ -30,7 +32,6 @@ interface Page {
   overrides: GridOverrides;
 }
 
-const sameSize = (a: number | undefined, b: number | undefined) => a !== undefined && b !== undefined && Math.abs(a - b) < 1e-9;
 
 const actionsByName = new Map((actionsData as unknown as ActionsFile).actions.map((a) => [a.name, a]));
 
@@ -41,9 +42,18 @@ function hotkeyLabel(name: string): string {
   return hk ? `(${hk})` : "";
 }
 
-/** A grid as the list shows it (`BuildChoiceList`: the display unit, and in brackets the other system's). */
-function gridLabel(um: number, units: LengthUnit): string {
-  return `${formatLength(um, units)} (${formatLength(um, units === "mm" ? "mil" : "mm")})`;
+/** A grid as the list shows it (`RebuildGridSizes`: "name: ", the display unit, and in brackets the other system's). */
+function gridLabel(g: GridDef, units: LengthUnit): string {
+  return gridListLabel(g, (nm) => formatLength(nm, units), (nm) => formatLength(nm, units === "mm" ? "mil" : "mm"));
+}
+
+/** The Grid Settings sub-dialog's fields (`DIALOG_GRID_SETTINGS`). */
+interface Entry {
+  mode: "add" | "edit";
+  name: string;
+  x: string;
+  y: string;
+  linked: boolean;
 }
 
 /** A size as it is typed into the entry: the number in the display unit, without trailing zeros. */
@@ -77,7 +87,7 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
   const [editor, setEditor] = useState<GridEditor>(initial);
   /** The pages that were shown: OK makes the row selected on each of them the current grid of its editor (a page never opened is left as it was). */
   const [seen, setSeen] = useState<ReadonlySet<GridEditor>>(new Set([initial]));
-  const [entry, setEntry] = useState<{ mode: "add" | "edit"; text: string } | null>(null);
+  const [entry, setEntry] = useState<Entry | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const page = pages[editor];
@@ -108,30 +118,40 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
     close();
   };
 
-  /** `OnAddGrid` / `onEditGrid` after the size dialog: the entry typed is checked and applied. */
+  /** `OnAddGrid` / `onEditGrid`: the new grid starts empty with Linked on; an edited one shows its name and X, and its Y unless it is square (`TransferDataToWindow`). */
+  const openEntry = (mode: "add" | "edit") => {
+    const g = mode === "edit" ? gridAt(settings, row) : undefined;
+    const linked = !g || Math.abs(g.x - g.y) < 1e-9;
+    setEntry({ mode, name: g?.name ?? "", x: g ? entryText(g.x, units) : "", y: g && !linked ? entryText(g.y, units) : "", linked });
+    setError(null);
+  };
+
+  /** `DIALOG_GRID_SETTINGS::TransferDataFromWindow`, then `OnAddGrid` / `onEditGrid`: the grid typed is checked and applied. */
   const commitEntry = () => {
     if (!entry) return;
-    const um = parseGridSize(entry.text, units);
-    const result: GridEdit = um === null ? { ok: false, error: "range" } : entry.mode === "add" ? insertGrid(settings, row, um) : replaceGrid(settings, row, um);
+    const x = parseGridSize(entry.x, units);
+    const y = entry.linked ? x : parseGridSize(entry.y, units);
+    const grid: GridDef | null = x === null ? null : { name: entry.name, x, y: y ?? NaN };
+    const result: GridEdit = grid === null ? { ok: false, error: "range" } : entry.mode === "add" ? insertGrid(settings, row, grid) : replaceGrid(settings, row, grid);
     if (!result.ok) {
-      setError(result.error === "duplicate" ? `Grid size '${formatLength(um ?? 0, units)}' already exists.` : "Grid size out of range.");
+      setError(result.error === "duplicate" && grid ? `Grid size '${gridMessageText(grid, (nm) => formatLength(nm, units))}' already exists.` : result.error === "range_y" ? "Grid size Y out of range." : "Grid size X out of range.");
       return;
     }
-    setPage({ settings: result.settings, row: result.row, overrides: rebuildOverrides(page.overrides, settings.grids, result.settings.grids, sameSize) });
+    setPage({ settings: result.settings, row: result.row, overrides: rebuildOverrides(page.overrides, gridDefs(settings), gridDefs(result.settings), sameGrid) });
     setEntry(null);
     setError(null);
   };
 
   const apply = (next: { settings: GridSettings; row: number }) => {
-    setPage({ ...next, overrides: rebuildOverrides(page.overrides, settings.grids, next.settings.grids, sameSize) });
+    setPage({ ...next, overrides: rebuildOverrides(page.overrides, gridDefs(settings), gridDefs(next.settings), sameGrid) });
     setError(null);
   };
 
   const reset = () => {
     const next = resetGrids(settings, editor);
-    const keptAt = next.grids.findIndex((g) => Math.abs(g - (settings.grids[row] ?? NaN)) < 1e-9);
-    // `ResetPanel` puts the list back (only the list); the overrides keep their grids by size, as after any edit of the list.
-    setPage({ settings: next, row: Math.max(0, keptAt), overrides: rebuildOverrides(page.overrides, settings.grids, next.grids, sameSize) });
+    const keptAt = gridDefs(next).findIndex((g) => sameGrid(g, gridAt(settings, row)));
+    // `ResetPanel` puts the list back (only the list); the overrides keep their grids, as after any edit of the list.
+    setPage({ settings: next, row: Math.max(0, keptAt), overrides: rebuildOverrides(page.overrides, gridDefs(settings), gridDefs(next), sameGrid) });
     setEntry(null);
     setError(null);
   };
@@ -139,9 +159,9 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
   const setOverride = (category: Exclude<keyof GridOverrides, "enabled">, patch: Partial<{ on: boolean; index: number }>) =>
     setPage({ ...page, overrides: { ...page.overrides, [category]: { ...page.overrides[category], ...patch } } });
 
-  const gridOptions = settings.grids.map((um, i) => (
-    <option key={`${i}-${um}`} value={i}>
-      {gridLabel(um, units)}
+  const gridOptions = gridDefs(settings).map((g, i) => (
+    <option key={`${i}-${g.name}-${g.x}-${g.y}`} value={i}>
+      {gridLabel(g, units)}
     </option>
   ));
   const iconButton = (label: string, glyph: string, onClick: () => void, disabled = false) => (
@@ -174,8 +194,8 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
               {gridOptions}
             </select>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {iconButton("Add Grid", "+", () => (setEntry({ mode: "add", text: "" }), setError(null)))}
-              {iconButton("Edit Grid", "✎", () => (setEntry({ mode: "edit", text: entryText(settings.grids[row] ?? 0, units) }), setError(null)))}
+              {iconButton("Add Grid", "+", () => openEntry("add"))}
+              {iconButton("Edit Grid", "✎", () => openEntry("edit"))}
               {iconButton("Remove Grid", "−", () => apply(removeGrid(settings, row)), settings.grids.length <= 1)}
               {iconButton("Move Grid Up", "▲", () => apply(moveGrid(settings, row, -1)), settings.grids.length <= 1 || row <= 0)}
               {iconButton("Move Grid Down", "▼", () => apply(moveGrid(settings, row, 1)), settings.grids.length <= 1 || row >= settings.grids.length - 1)}
@@ -183,26 +203,39 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
           </div>
 
           {entry && (
-            <div style={{ marginTop: 8 }}>
-              <div className="kv-grid" style={{ gridTemplateColumns: "70px 1fr 36px auto auto" }}>
-                <span>{entry.mode === "add" ? "New grid:" : "Grid size:"}</span>
-                <input
-                  aria-label="Grid size"
-                  autoFocus
-                  value={entry.text}
-                  onChange={(e) => setEntry({ ...entry, text: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      commitEntry();
-                    } else if (e.key === "Escape") {
-                      e.stopPropagation();
-                      setEntry(null);
-                      setError(null);
-                    }
-                  }}
-                />
+            <div role="group" aria-label="Grid Settings" style={{ marginTop: 8, padding: 8, border: "1px solid var(--chrome-border)" }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Grid Settings</div>
+              <div
+                className="kv-grid"
+                style={{ gridTemplateColumns: "50px 1fr 50px", rowGap: 4 }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitEntry();
+                  } else if (e.key === "Escape") {
+                    e.stopPropagation();
+                    setEntry(null);
+                    setError(null);
+                  }
+                }}
+              >
+                <span>Name:</span>
+                <input aria-label="Grid name" autoFocus value={entry.name} onChange={(e) => setEntry({ ...entry, name: e.target.value })} />
+                <span style={{ opacity: 0.7 }}>(optional)</span>
+                <span>X:</span>
+                <input aria-label="Grid size X" value={entry.x} onChange={(e) => setEntry({ ...entry, x: e.target.value })} />
                 <span>{units}</span>
+                <span />
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" aria-label="Linked" checked={entry.linked} onChange={(e) => setEntry({ ...entry, linked: e.target.checked })} />
+                  Linked
+                </label>
+                <span />
+                <span>Y:</span>
+                <input aria-label="Grid size Y" disabled={entry.linked} value={entry.linked ? "" : entry.y} onChange={(e) => setEntry({ ...entry, y: e.target.value })} />
+                <span>{units}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
                 <button onClick={() => (setEntry(null), setError(null))}>Cancel</button>
                 <button className="primary" onClick={commitEntry}>
                   OK

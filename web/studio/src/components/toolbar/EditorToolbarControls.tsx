@@ -1,7 +1,7 @@
 // The combo boxes of the Footprint Editor's and the Symbol Editor's top toolbars (`ACTION_TOOLBAR_CONTROLS`: the grid, zoom and layer selectors of
 // toolbars_footprint_editor.cpp, the symbol body style and unit selectors of toolbars_symbol_editor.cpp), bound to each editor's own store. The board
 // editor's controls are in Toolbar.tsx, bound to the board's.
-import type { GridEditor } from "../../kicad-port/gridSettings";
+import { gridMenuEntries, type GridEditor } from "../../kicad-port/gridSettings";
 import { zoomAbout } from "../../kicad-port/view";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
@@ -25,27 +25,33 @@ function editorCanvasRect(): DOMRect | null {
 /** The grid box's last entry (`EDA_DRAW_FRAME::UpdateGridSelectBox`: the grids, a "---" line and "Edit Grids..."). Picking it runs the action instead of choosing a grid. */
 const EDIT_GRIDS = "edit-grids";
 
-/** The grid box of an editor's toolbar: its own list of grids (state/gridSettings.ts), then a line and "Edit Grids..." (`EDA_DRAW_FRAME::OnSelectGrid`). */
+/**
+ * The grid box of an editor's toolbar: its own list of grids (state/gridSettings.ts) as `GRID_MENU::BuildChoiceList` words them ("name: " and the grid in the display unit,
+ * the other system's in brackets), then a line and "Edit Grids..." (`EDA_DRAW_FRAME::UpdateGridSelectBox`, `OnSelectGrid`).
+ */
 export function GridSelect({ editor, gridNm, onChange }: { editor: GridEditor; gridNm: number; onChange: (um: number) => void }) {
   const { units } = useStudioState();
-  const { grids } = useGridSettings(editor);
+  const settings = useGridSettings(editor);
   const { run, isEnabled } = useActionRunner();
+  const entries = gridMenuEntries(settings, gridNm, (nm) => formatLength(nm, units), (nm) => formatLength(nm, units === "mm" ? "mil" : "mm"));
+  const current = entries.findIndex((e) => e.checked);
   // A grid that left the list (it was edited away in another editor's session) stays on screen as the box's current value until another is chosen.
-  const options = grids.includes(gridNm) ? grids : [...grids, gridNm];
+  const stray = current < 0 ? "stray" : null;
   return (
     <div className="toolbar-control" title="Grid">
       <select
-        value={gridNm}
+        value={current >= 0 ? String(current) : "stray"}
         onChange={(e) => {
           if (e.target.value === EDIT_GRIDS) run("common.Control.editGrids");
-          else onChange(Number(e.target.value));
+          else if (e.target.value !== "stray") onChange(settings.grids[Number(e.target.value)]!);
         }}
       >
-        {options.map((um) => (
-          <option key={um} value={um}>
-            {formatLength(um, units)}
+        {entries.map((entry, i) => (
+          <option key={i} value={String(i)}>
+            {entry.label}
           </option>
         ))}
+        {stray && <option value="stray">{formatLength(gridNm, units)}</option>}
         <option disabled>---</option>
         <option value={EDIT_GRIDS} disabled={!isEnabled("common.Control.editGrids")}>
           Edit Grids...

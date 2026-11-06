@@ -12,6 +12,8 @@
 // already happens once, up front, this file's own `screenToWorld`/
 // `worldToScreen` calls are completely ordinary -- no second Y-flip
 // belongs here.
+import { useGridDisplay } from "../../state/commonOptions";
+import { gridYOf } from "../../kicad-port/gridSettings";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import { drawTarget, useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
@@ -150,7 +152,11 @@ export function SymbolEditorCanvas() {
   const dispatch = useSymDispatch();
   const api = useSymApi();
   // Grid overrides (`common.Control.toggleGridOverrides`): each kind of item snaps to the grid its category is overridden to while they are on.
-  const gridList = useGridSettings("symbol").grids;
+  const gridSettingsList = useGridSettings("symbol");
+  const gridList = gridSettingsList.grids;
+  // the editor's own Display Options > Grid Display, and the Y of its grid (Edit Grids' "Y:")
+  const gridDisplay = useGridDisplay("symbol");
+  const gridYNm = gridYOf(gridSettingsList, state.gridNm);
   const gridOverrides = useGridOverrides("symbol");
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held (a pin is a connectable item, a graphic is text or a shape). */
@@ -202,7 +208,7 @@ export function SymbolEditorCanvas() {
   if (!snapRef.current) snapRef.current = new SymbolSnap();
   const snap = snapRef.current;
   const [snapTick, bumpSnap] = useState(0);
-  snap.update({ symbol: sym, fields: shownFields, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, overrides: gridOverrides });
+  snap.update({ symbol: sym, fields: shownFields, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides });
   useEffect(() => {
     snap.reset();
     bumpSnap((n) => n + 1);
@@ -317,6 +323,8 @@ export function SymbolEditorCanvas() {
       selection: state.selection,
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
+      gridYNm,
+      gridDisplay,
       activeUnit: state.activeUnit,
       activeBodyStyle: state.activeBodyStyle,
       drawState: state.drawState,
@@ -339,7 +347,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick]);
+  }, [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

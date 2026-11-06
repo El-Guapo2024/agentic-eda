@@ -26,7 +26,8 @@ import { trapezoidCorners } from "../../kicad-port/padShape";
 import type { ArcGeom } from "../../kicad-port/arcGeom";
 import type { BezierGeom } from "../../kicad-port/bezierGeom";
 import { drawStrokeText } from "../text/strokeFont";
-import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
+import { paintEditorGrid } from "../canvas/gridPaint";
 import type { FieldInfo } from "../../api/types";
 import type { FootprintItemsDisplay } from "../../api/fpItemTypes";
 import { paintFpFields, paintFpItems } from "./fpItemsPaint";
@@ -39,7 +40,8 @@ function realLayerKey(layer: string): string {
   return layer.replace(/\./g, "_");
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0]) {
+/** INACTIVE since UI-LEFT C2 (task-u4-common): the grid is `paintEditorGrid` (components/canvas/gridPaint.ts), DrawGrid's three styles. Kept, not called. */
+export function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0]) {
   const visible = computeVisibleGridSize(gridNm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return;
@@ -411,6 +413,10 @@ export interface FpPaintOptions {
   gridVisible: boolean;
   /** The point the grid is anchored at (`common.Control.gridSetOrigin` in this editor): the dots follow it and its marker is drawn when it is not at (0, 0). */
   gridOrigin?: [number, number] | null;
+  /** The current grid's Y size when it is not square. */
+  gridYNm?: number;
+  /** The Footprint Editor's Display Options > Grid Display. */
+  gridDisplay?: GridDisplay;
   drawState: FpPaintDrawState | null;
   cursorNm: { x: number; y: number } | null;
   movePreview: { refs: string[]; dxNm: number; dyNm: number } | null;
@@ -460,7 +466,10 @@ export function paintFootprint(
   footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[]; fieldsToDraw?: FieldInfo[]; display?: FootprintItemsDisplay; kicad?: LibraryKeep } | null,
   opts: FpPaintOptions
 ) {
-  if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm, opts.gridOrigin ?? [0, 0]);
+  if (opts.gridVisible) {
+    const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
+    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"));
+  }
   drawGridOrigin(ctx, view, opts.gridOrigin, "#1a1a1a"); // the canvas is filled with this colour (FootprintCanvas.tsx)
   if (!footprint) {
     drawAnchor(ctx, view);

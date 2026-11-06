@@ -6,6 +6,8 @@
 // much smaller tool set than Canvas.tsx's (no routing/zones/vias, no
 // box-select disambiguation menu, no auto-pan) since a footprint has no
 // board-scale content to need them for.
+import { useGridDisplay } from "../../state/commonOptions";
+import { gridYOf } from "../../kicad-port/gridSettings";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, LibraryPad, PadKind } from "../../api/types";
 import { FP_ITEM_TOOLS, useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/footprintEditorStore";
@@ -147,7 +149,11 @@ export function FootprintCanvas() {
   const api = useFpApi();
   const gridOrigin = useFootprintGridOrigin();
   // Grid overrides (`common.Control.toggleGridOverrides`): a pad on the connected-items grid, a shape on the graphics grid, text on the text grid -- `GetItemGrid`.
-  const gridList = useGridSettings("footprint").grids;
+  const gridSettingsList = useGridSettings("footprint");
+  const gridList = gridSettingsList.grids;
+  // the editor's own Display Options > Grid Display, and the Y of its grid (Edit Grids' "Y:")
+  const gridDisplay = useGridDisplay("footprint");
+  const gridYNm = gridYOf(gridSettingsList, state.gridNm);
   const gridOverrides = useGridOverrides("footprint");
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held. */
@@ -200,7 +206,7 @@ export function FootprintCanvas() {
   });
 
   const fp = state.footprint;
-  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
+  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {
@@ -335,6 +341,8 @@ export function FootprintCanvas() {
       gridNm: state.gridNm,
       gridVisible: state.gridVisible && state.layerVisible["obj:grid"] !== false,
       gridOrigin: [gridOrigin.x, gridOrigin.y],
+      gridYNm,
+      gridDisplay,
       drawState: draw && constrained?.leader ? { ...draw, leader: constrained.leader } : draw,
       cursorNm: constrained ? { x: constrained.end[0], y: constrained.end[1] } : rubber,
       movePreview: state.movePreview,
@@ -360,7 +368,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden]);
+  }, [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

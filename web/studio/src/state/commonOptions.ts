@@ -1,23 +1,27 @@
-// Display and editing options every editor shares -- KiCad keeps each of these once per editor window
-// (`WINDOW_SETTINGS`: `cursor.*`, `grid.*`, the render settings), but the four canvases here (board,
-// schematic, footprint editor, symbol editor) read the same few switches, so they live in one small
-// external store instead of in each editor's own reducer. Read with `useCommonOptions()`; changed with
-// `setCommonOptions`. Kept in the browser's local storage, like `Preferences`.
+// Display and editing options of the editors. KiCad keeps the cursor and the grid display once per editor window (`WINDOW_SETTINGS`: `cursor.*`, `grid.style`,
+// `grid.line_width`, `grid.min_spacing` of `APP_SETTINGS_BASE::addParamsForWindow`, in each editor's own settings file -- pcbnew, eeschema, footprint_editor,
+// symbol_editor) and the polar coordinates in pcbnew's and the Footprint Editor's (`editing.polar_coords`); `window` holds them per editor here, and the canvases,
+// the actions and the Display Options pages read the editor's own (`windowOptionsOf`). The rest is shared by the four canvases. Read with `useCommonOptions()`;
+// changed with `setCommonOptions` / `setWindowOptions`. Kept in the browser's local storage, like `Preferences`.
 //
 //   common/tool/common_tools.cpp  ToggleCursor / CursorSmallCrosshairs / CursorFullCrosshairs / Cursor45Crosshairs /
 //                                 ToggleBoundingBoxes
-//   common/settings/app_settings.cpp  cursor.always_show_cursor (default true), cursor.cross_hair_mode (default small)
+//   common/settings/app_settings.cpp  cursor.always_show_cursor (default true), cursor.cross_hair_mode (default small), grid.style (0 dots),
+//                                 grid.line_width (1.0), grid.min_spacing (10)
+//   common/dialogs/panel_gal_options.cpp  the Grid Display and Cursor sections of each editor's Display Options page
+//   pcbnew/pcbnew_settings.cpp, footprint_editor_settings.cpp  editing.polar_coords (default false)
 //   include/tool/selection_tool.h     SELECTION_MODE (the selection tool's rectangle / lasso mode)
-import { useSyncExternalStore } from "react";
-import type { CrossHairMode } from "../kicad-port/crosshair";
+import { useMemo, useSyncExternalStore } from "react";
+import type { GridDisplay } from "../kicad-port/grid";
+import { DEFAULT_WINDOW_OPTIONS, editorWindowOf, parseWindowOptions, type EditorWindow, type WindowOptions } from "../kicad-port/windowOptions";
+
+export { DEFAULT_WINDOW_OPTIONS, EDITOR_WINDOWS, editorWindowOf, parseWindowOptions, type EditorWindow, type WindowOptions } from "../kicad-port/windowOptions";
 
 export type SelectionAreaMode = "rect" | "lasso";
 
 export interface CommonOptions {
-  /** `cursor.cross_hair_mode` -- default `SMALL_CROSS`. */
-  crossHairMode: CrossHairMode;
-  /** `cursor.always_show_cursor` -- default true. */
-  alwaysShowCursor: boolean;
+  /** Each editor's own cursor, grid display and polar coordinates. */
+  window: Record<EditorWindow, WindowOptions>;
   /** `RENDER_SETTINGS::GetDrawBoundingBoxes` -- default off. */
   drawBoundingBoxes: boolean;
   /** `PCB_SELECTION_TOOL::m_selectionMode` / `SCH_SELECTION_TOOL`'s: which tool a drag on empty space starts. Default rectangle. */
@@ -27,8 +31,7 @@ export interface CommonOptions {
 }
 
 export const DEFAULT_COMMON_OPTIONS: CommonOptions = {
-  crossHairMode: "small",
-  alwaysShowCursor: true,
+  window: { pcb: DEFAULT_WINDOW_OPTIONS, schematic: DEFAULT_WINDOW_OPTIONS, footprint: DEFAULT_WINDOW_OPTIONS, symbol: DEFAULT_WINDOW_OPTIONS },
   drawBoundingBoxes: false,
   selectionMode: "rect",
   zoneFillWarningDismissed: false,
@@ -48,11 +51,13 @@ function storage(): Storage | null {
 export function parseCommonOptions(raw: string | null): CommonOptions {
   if (!raw) return DEFAULT_COMMON_OPTIONS;
   try {
-    const j = JSON.parse(raw) as Partial<Record<keyof CommonOptions, unknown>>;
+    const j = JSON.parse(raw) as Partial<Record<keyof CommonOptions | "crossHairMode" | "alwaysShowCursor", unknown>>;
     const d = DEFAULT_COMMON_OPTIONS;
+    // a save from before the options were per editor: its one crosshair goes to every editor
+    const legacy = parseWindowOptions({ crossHairMode: j.crossHairMode, alwaysShowCursor: j.alwaysShowCursor });
+    const w = (j.window && typeof j.window === "object" ? j.window : {}) as Partial<Record<EditorWindow, unknown>>;
     return {
-      crossHairMode: j.crossHairMode === "small" || j.crossHairMode === "full" || j.crossHairMode === "diag45" ? j.crossHairMode : d.crossHairMode,
-      alwaysShowCursor: typeof j.alwaysShowCursor === "boolean" ? j.alwaysShowCursor : d.alwaysShowCursor,
+      window: { pcb: parseWindowOptions(w.pcb, legacy), schematic: parseWindowOptions(w.schematic, legacy), footprint: parseWindowOptions(w.footprint, legacy), symbol: parseWindowOptions(w.symbol, legacy) },
       drawBoundingBoxes: typeof j.drawBoundingBoxes === "boolean" ? j.drawBoundingBoxes : d.drawBoundingBoxes,
       selectionMode: j.selectionMode === "rect" || j.selectionMode === "lasso" ? j.selectionMode : d.selectionMode,
       zoneFillWarningDismissed: typeof j.zoneFillWarningDismissed === "boolean" ? j.zoneFillWarningDismissed : d.zoneFillWarningDismissed,
@@ -67,6 +72,20 @@ const listeners = new Set<() => void>();
 
 export function getCommonOptions(): CommonOptions {
   return current;
+}
+
+/** The window options of the editor on `tab`. */
+export function windowOptionsOf(opts: CommonOptions, tab: string): WindowOptions {
+  return opts.window[editorWindowOf(tab)];
+}
+
+/** Changes the window options of one editor (`COMMON_TOOLS`' cursor actions change the frame's own, `GetWindowSettings( cfg )`). */
+export function setWindowOptions(tab: string, patch: Partial<WindowOptions>): void {
+  const e = editorWindowOf(tab);
+  const was = current.window[e];
+  const next = { ...was, ...patch };
+  if ((Object.keys(next) as (keyof WindowOptions)[]).every((k) => next[k] === was[k])) return;
+  setCommonOptions({ window: { ...current.window, [e]: next } });
 }
 
 export function setCommonOptions(patch: Partial<CommonOptions>): void {
@@ -89,4 +108,10 @@ function subscribe(listener: () => void): () => void {
 /** The shared options, re-rendering the caller whenever one changes. */
 export function useCommonOptions(): CommonOptions {
   return useSyncExternalStore(subscribe, getCommonOptions, getCommonOptions);
+}
+
+/** How the editor draws its grid (its Display Options > Grid Display), re-rendering the caller when that changes. */
+export function useGridDisplay(editor: EditorWindow): GridDisplay {
+  const w = useCommonOptions().window[editor];
+  return useMemo(() => ({ style: w.gridStyle, lineWidthPx: w.gridLineWidth, minSpacingPx: w.gridMinSpacing }), [w.gridStyle, w.gridLineWidth, w.gridMinSpacing]);
 }

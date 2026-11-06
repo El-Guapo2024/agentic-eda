@@ -1,5 +1,8 @@
-// KiCad's Preferences dialog (`PAGED_DIALOG`, `EDA_BASE_FRAME::ShowPreferences`) with two of its pages: Mouse and Touchpad (below) and PCB Editor > Colors
-// (components/PcbColorsPage.tsx, `PANEL_PCBNEW_COLOR_SETTINGS`), with the dialog's "Reset Colors to Defaults" on the Colors page.
+// KiCad's Preferences dialog (`PAGED_DIALOG`, `EDA_BASE_FRAME::ShowPreferences`) with these of its pages: Mouse and Touchpad (below), each editor's Display Options --
+// the Grid Display and Cursor part of it (`PANEL_GAL_OPTIONS`, common/dialogs/panel_gal_options.cpp: Dots / Lines / Small crosses, "Grid thickness:" 0.5 to 10 pixels,
+// "Minimum grid spacing:" 5 to 200 pixels, the three crosshairs and "Always show crosshairs"; each editor keeps its own, state/commonOptions.ts `window`) -- and PCB
+// Editor > Colors (components/PcbColorsPage.tsx, `PANEL_PCBNEW_COLOR_SETTINGS`), with the dialog's "Reset Colors to Defaults" on the Colors page. Not here of Display
+// Options: "Snap to grid:" (Always / When grid shown / Never; the snapping always uses the grid) and the editors' other display settings.
 //
 // Port of PANEL_MOUSE_SETTINGS, the "Mouse and Touchpad" page of KiCad's Preferences dialog
 // (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Step for rotate commands" and
@@ -17,9 +20,13 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizePinStepMils, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
+import { EDITOR_WINDOWS, getCommonOptions, setWindowOptions, type EditorWindow, type WindowOptions } from "../state/commonOptions";
+import { GRID_MIN_SPACING_RANGE, GRID_THICKNESS_CHOICES, gridMinSpacingValue } from "../kicad-port/grid";
 
-/** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`): Mouse and Touchpad, and PCB Editor > Colors. */
-type PrefsPage = "mouse" | "pcb_colors";
+/** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`): Mouse and Touchpad, each editor's Display Options, and PCB Editor > Colors. */
+type PrefsPage = "mouse" | "pcb_colors" | `display_${EditorWindow}`;
+
+const EDITOR_PAGE_LABEL: Record<EditorWindow, string> = { pcb: "PCB Editor", schematic: "Schematic Editor", footprint: "Footprint Editor", symbol: "Symbol Editor" };
 
 /** `PAGED_DIALOG` opens on the page it was last closed on (its `g_lastPage` by title). */
 let lastPage: PrefsPage = "mouse";
@@ -46,12 +53,15 @@ export function PreferencesDialog() {
     setPageState(p);
   };
   const colors = usePcbColorsPage(open, page === "pcb_colors");
+  // each editor's Display Options as edited so far (`PANEL_GAL_OPTIONS` of its frame); OK keeps them
+  const [windows, setWindows] = useState<Record<EditorWindow, WindowOptions>>(getCommonOptions().window);
 
   useEffect(() => {
     if (open) {
       setDraft(state.prefs);
       setRotationText(String(state.prefs.rotationStepDeg));
       setPageState(lastPage);
+      setWindows(getCommonOptions().window);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -67,6 +77,7 @@ export function PreferencesDialog() {
   const submit = () => {
     if (!valid) return;
     dispatch({ type: "SET_PREFERENCES", prefs: sanitizePreferences({ ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) }) });
+    for (const e of EDITOR_WINDOWS) setWindowOptions(e, windows[e]);
     colors.commit();
     close();
   };
@@ -93,11 +104,69 @@ export function PreferencesDialog() {
 
   const heading = (text: string) => <div style={{ fontWeight: 600, margin: "10px 0 4px" }}>{text}</div>;
 
+  /** `PANEL_GAL_OPTIONS`: an editor's Grid Display and Cursor. */
+  const displayPage = (editor: EditorWindow) => {
+    const w = windows[editor];
+    const setW = (patch: Partial<WindowOptions>) => setWindows((all) => ({ ...all, [editor]: { ...all[editor], ...patch } }));
+    const radio = (name: string, label: string, checked: boolean, onChange: () => void, testid?: string) => (
+      <label style={{ marginRight: 12 }}>
+        <input type="radio" name={`${name}-${editor}`} data-testid={testid} checked={checked} onChange={onChange} /> {label}
+      </label>
+    );
+    return (
+      <div data-testid={`display-options-${editor}`}>
+        {heading("Grid Display")}
+        <div className="filter-row">
+          <span style={{ width: 170 }}>Style:</span>
+          {radio("grid-style", "Dots", w.gridStyle === "dots", () => setW({ gridStyle: "dots" }), "pref-grid-dots")}
+          {radio("grid-style", "Lines", w.gridStyle === "lines", () => setW({ gridStyle: "lines" }), "pref-grid-lines")}
+          {radio("grid-style", "Small crosses", w.gridStyle === "small-cross", () => setW({ gridStyle: "small-cross" }), "pref-grid-crosses")}
+        </div>
+        <div className="filter-row">
+          <span style={{ width: 170 }}>Grid thickness:</span>
+          <select aria-label="Grid thickness" data-testid="pref-grid-thickness" value={String(w.gridLineWidth)} onChange={(e) => setW({ gridLineWidth: Number(e.target.value) })}>
+            {GRID_THICKNESS_CHOICES.map((t) => (
+              <option key={t} value={String(t)}>
+                {t.toFixed(1)}
+              </option>
+            ))}
+          </select>
+          <span>pixels</span>
+        </div>
+        <div className="filter-row">
+          <span style={{ width: 170 }}>Minimum grid spacing:</span>
+          <input
+            type="number"
+            aria-label="Minimum grid spacing"
+            data-testid="pref-grid-min-spacing"
+            style={{ width: 70 }}
+            min={GRID_MIN_SPACING_RANGE.min}
+            max={GRID_MIN_SPACING_RANGE.max}
+            step={GRID_MIN_SPACING_RANGE.step}
+            value={w.gridMinSpacing}
+            onChange={(e) => setW({ gridMinSpacing: gridMinSpacingValue(Number(e.target.value)) })}
+          />
+          <span>pixels</span>
+        </div>
+        {heading("Cursor")}
+        <div className="filter-row">
+          {radio("crosshair", "Small crosshairs", w.crossHairMode === "small", () => setW({ crossHairMode: "small" }))}
+          {radio("crosshair", "Full window crosshairs", w.crossHairMode === "full", () => setW({ crossHairMode: "full" }))}
+          {radio("crosshair", "45 degree crosshairs", w.crossHairMode === "diag45", () => setW({ crossHairMode: "diag45" }))}
+        </div>
+        <label className="filter-row">
+          <input type="checkbox" checked={w.alwaysShowCursor} onChange={(e) => setW({ alwaysShowCursor: e.target.checked })} />
+          Always show crosshairs
+        </label>
+      </div>
+    );
+  };
+
   return (
     <div className="dialog-backdrop" onClick={cancel}>
       <div className="dialog" style={{ width: page === "pcb_colors" ? 600 : 700, maxWidth: "95vw" }} onClick={(e) => e.stopPropagation()} data-testid="preferences-dialog">
         <div className="dialog-header">
-          <span>Preferences - {page === "pcb_colors" ? "Colors" : "Mouse and Touchpad"}</span>
+          <span>Preferences - {page === "pcb_colors" ? "Colors" : page.startsWith("display_") ? "Display Options" : "Mouse and Touchpad"}</span>
         </div>
         <div className="dialog-body" style={{ display: "flex", gap: 12 }}>
           {/* The page tree (`PAGED_DIALOG`'s `wxTreebook`): "PCB Editor" is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). */}
@@ -105,12 +174,15 @@ export function PreferencesDialog() {
             {(
               [
                 ["mouse", "Mouse and Touchpad", 0],
-                [null, "PCB Editor", 0],
-                ["pcb_colors", "Colors", 1],
-              ] as const
-            ).map(([id, label, depth]) => (
+                ...EDITOR_WINDOWS.flatMap((e) => [
+                  [null, EDITOR_PAGE_LABEL[e], 0],
+                  [`display_${e}`, "Display Options", 1],
+                  ...(e === "pcb" ? [["pcb_colors", "Colors", 1]] : []),
+                ]),
+              ] as [PrefsPage | null, string, number][]
+            ).map(([id, label, depth], i) => (
               <div
-                key={label}
+                key={`${i}-${label}`}
                 role="treeitem"
                 aria-selected={id !== null && page === id}
                 style={{ padding: "3px 4px", paddingLeft: 4 + depth * 14, cursor: id ? "pointer" : "default", background: id !== null && page === id ? "var(--chrome-accent-bg, rgba(74,163,255,0.2))" : undefined, opacity: id ? 1 : 0.75 }}
@@ -122,6 +194,7 @@ export function PreferencesDialog() {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             {page === "pcb_colors" && colors.element}
+            {page.startsWith("display_") && displayPage(page.slice("display_".length) as EditorWindow)}
             {page === "mouse" && (
               <>
               {heading("Pan and Zoom")}

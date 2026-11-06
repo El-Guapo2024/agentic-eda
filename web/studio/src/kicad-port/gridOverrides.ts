@@ -73,6 +73,22 @@ export function gridSizeFor(category: GridCategory, current: number, grids: read
   return current;
 }
 
+/** `GetGridSize( category ).y`: the Y size of the category's grid (its override's Y, `ys` beside `grids`; else the current grid's Y). */
+export function gridSizeYFor(category: GridCategory, currentY: number, grids: readonly number[], ys: readonly number[] | undefined, overrides: GridOverrides | null | undefined): number {
+  if (!overrides || !overrides.enabled || category === "current") return currentY;
+  const o = overrides[category];
+  if (o.on && o.index >= 0 && o.index < grids.length) return ys?.[o.index] ?? grids[o.index]!;
+  return currentY;
+}
+
+/** The Y sizes the grid helpers' `GridEnv` takes for a list whose grids may not be square: the current grid's (the first grid with the current X) and each category's. */
+export function gridEnvY(v: { gridNm: number; grids: readonly number[]; gridYs?: readonly number[]; overrides: GridOverrides | null | undefined }): { gridYNm?: number; gridSizeYOf?: (c: GridCategory) => number } {
+  if (!v.gridYs) return {};
+  const at = v.grids.findIndex((g) => Math.abs(g - v.gridNm) < 1e-9);
+  const currentY = at >= 0 ? (v.gridYs[at] ?? v.gridNm) : v.gridNm;
+  return { gridYNm: currentY, gridSizeYOf: (c) => gridSizeYFor(c, currentY, v.grids, v.gridYs, v.overrides) };
+}
+
 /** True when `category` is overridden right now. */
 export function isOverridden(category: GridCategory, grids: readonly number[], overrides: GridOverrides | null | undefined): boolean {
   if (!overrides || !overrides.enabled || category === "current") return false;
@@ -208,7 +224,7 @@ export function overrideRows(editor: "pcb" | "footprint" | "schematic" | "symbol
 }
 
 /** Keeps an override's grid when the list is rebuilt: found again by size (`RebuildGridSizes` keeps the string selection), else the first entry. */
-export function rebuildOverrides(old: GridOverrides, oldGrids: readonly number[], newGrids: readonly number[], same: (a: number, b: number) => boolean): GridOverrides {
+export function rebuildOverrides<T>(old: GridOverrides, oldGrids: readonly T[], newGrids: readonly T[], same: (a: T, b: T) => boolean): GridOverrides {
   const keep = (index: number): number => {
     const at = newGrids.findIndex((g) => oldGrids[index] !== undefined && same(g, oldGrids[index]!));
     return at >= 0 ? at : 0;

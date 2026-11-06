@@ -751,7 +751,6 @@ export interface StudioState {
   units: LengthUnit;
   /** `COMMON_TOOLS::m_imperialUnit` (`system.last_imperial_units`): the imperial unit Toggle Units returns to -- inches until mils were chosen, mils after. */
   lastImperialUnit: "in" | "mil";
-  polar: boolean;
   gridNm: number;
   /** The Schematic Editor's current grid (`GRID_SETTINGS::last_size_idx` of eeschema), um: one of its grid list (state/gridSettings.ts), 50 mil to start. */
   schGridNm: number;
@@ -1022,7 +1021,6 @@ const initialState: StudioState = {
   schematicView: { scale: 0, x: 0, y: 0 },
   units: "mm",
   lastImperialUnit: "in",
-  polar: false,
   gridNm: 1_000_000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
   schGridNm: 1_270_000, // eeschema's default grid: 50 mil
   gridVisible: true,
@@ -1132,7 +1130,6 @@ export type Action =
   | { type: "SET_SCHEMATIC_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
   | { type: "SET_UNITS"; units: LengthUnit }
-  | { type: "TOGGLE_POLAR" }
   | { type: "SET_GRID_NM"; um: number }
   | { type: "SET_SCH_GRID_NM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
@@ -1521,8 +1518,6 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_UNITS":
       // `COMMON_TOOLS::SwitchUnits` remembers the imperial unit that was picked, so that Toggle Units (Ctrl+U) comes back to it.
       return { ...state, units: action.units, lastImperialUnit: rememberedImperial(state.lastImperialUnit, action.units) };
-    case "TOGGLE_POLAR":
-      return { ...state, polar: !state.polar };
     case "SET_GRID_NM":
       return { ...state, gridNm: action.um };
     case "SET_SCH_GRID_NM":

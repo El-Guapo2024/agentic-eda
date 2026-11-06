@@ -13,7 +13,8 @@ import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
-import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
+import { paintEditorGrid } from "./gridPaint";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
@@ -142,6 +143,10 @@ export interface PaintOptions {
   auxOrigin?: [number, number] | null;
   /** The point the grid is anchored at (`common.Control.gridSetOrigin`): the grid dots follow it and its marker is drawn when it is not at (0, 0). */
   gridOrigin?: [number, number] | null;
+  /** The current grid's Y size when it is not square (Edit Grids' "Y:"). */
+  gridYNm?: number;
+  /** The board editor's Display Options > Grid Display: the style, thickness and minimum spacing the grid is drawn with. */
+  gridDisplay?: GridDisplay;
   /** pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), for the via tool's ghost -- null until the hotkey's first press, same board-default fallback `Canvas.tsx`'s own via-placement click uses. */
   currentViaPreset: { diameter: number; drill: number } | null;
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
@@ -1193,6 +1198,9 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
 }
 
 /**
+ * INACTIVE since UI-LEFT C2 (task-u4-common): the grid is `paintEditorGrid` (components/canvas/gridPaint.ts, kicad-port/grid.ts `gridMarks`), DrawGrid's three styles
+ * with the thickness and minimum spacing of Display Options and a grid whose X and Y differ. Kept, not called.
+ *
  * graphics_abstraction_layer.h GAL::GetVisibleGridSize() + opengl_gal.cpp
  * DrawGrid(), for the DOTS style (KiCad's own real default --
  * gal_display_options.cpp). Source draws this as two stencil-masked line
@@ -1210,7 +1218,7 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
  * (computeVisibleGridSize) is the behaviorally important part and IS
  * ported exactly; see PARITY-pcb.md.
  */
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
+export function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridNm: number, origin: readonly [number, number] = [0, 0], covered: readonly GridGeometry[] = []) {
   const visible = computeVisibleGridSize(gridNm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return; // gridNm <= 0 or a degenerate scale -- nothing sane to draw
@@ -1574,7 +1582,12 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     // The editor grid and KiCad 10's grid items (`drawGridSources`), the one leaving out what the others cover.
     grid: () => {
       const grids = shownGridItems(board, opts.layerVisible);
-      if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridNm, opts.gridOrigin ?? [0, 0], grids.map(gridGeometry));
+      if (opts.gridVisible) {
+        // A grid item's coverage hides the editor grid (`drawGridSource`'s wash): see gridItemPaint.ts.
+        const covered = grids.map(gridGeometry);
+        const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
+        paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), covered.length > 0 ? (x, y) => gridItemCovers(covered, x, y) : undefined);
+      }
       const box: [number, number, number, number] = [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale];
       drawGridItems(ctx, view, board, opts.layerVisible, opts.selection, DEFAULT_GRID_STYLE, box);
     },

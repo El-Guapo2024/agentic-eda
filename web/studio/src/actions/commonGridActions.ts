@@ -22,6 +22,12 @@ function pointOfParameter(arg: unknown): Origin | null {
 
 export function registerGridActions(m: Map<string, ActionHandler>, ctx: CommonActionContext): void {
   const tab = ctx.tab;
+  // The schematic editors list Grid Origin... in their Grid submenu as every frame does (`GRID_MENU::update`), but their grid origin is always (0, 0): the dialog
+  // shows it and OK changes nothing (`SCH_BASE_FRAME::SetGridOrigin` is empty, and they have no `gridSetOrigin`).
+  if (tab === "schematic" || tab === "symbol") {
+    m.set("common.Control.editGridOrigin", () => setGridOriginDialogOpen(true));
+    return;
+  }
   if (tab !== "pcb" && tab !== "footprint") return;
 
   /** The origin the editor on screen has now. */
