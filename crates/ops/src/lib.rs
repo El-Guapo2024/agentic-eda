@@ -124,6 +124,7 @@ mod sch_annotate;
 mod sch_setup;
 mod sch_clipboard;
 pub mod sch_control;
+mod sch_rescue;
 mod sch_variants;
 mod sch_sheets;
 mod sheet_units;
@@ -1934,6 +1935,14 @@ pub enum Cmd {
         #[serde(default)]
         update_fields: bool,
     },
+    /// `eeschema.EditorControl.rescueSymbols` (`RESCUE_SYMBOL_LIB_TABLE_CANDIDATE::PerformAction`): every symbol of every sheet linked to a `from` library
+    /// id is linked to the paired `to` id, the rescue library's copy, which `symbols` gives and the design keeps (`sch_rescue.rs`).
+    /// `symbols` may be empty: Remap Legacy Library Symbols (`DIALOG_SYMBOL_REMAP::remapSymbolToLibTable`) only gives each bare name its library's nickname.
+    RescueSymbols {
+        changes: Vec<(String, String)>,
+        #[serde(default)]
+        symbols: Vec<LibrarySymbol>,
+    },
     /// `eeschema.EditorControl.incrementAnnotations` (`SCH_EDITOR_CONTROL::IncrementAnnotations`): every reference with the start
     /// reference's letters and a number at least its own moves by `increment`.
     /// `all_sheets`: the dialog's "All sheets" (`Hierarchy().GetSymbols( .. )`) rather than "Current sheet only" (`CurrentSheet().GetSymbols( .. )`).
@@ -2471,6 +2480,7 @@ impl Cmd {
             | Cmd::SetSheetPage { .. }
             | Cmd::SetSchItemText { .. }
             | Cmd::SetSymbolLibIds { .. }
+            | Cmd::RescueSymbols { .. }
             | Cmd::IncrementAnnotations { .. } => Domain::Schematic,
             Cmd::OpenFootprintForEdit { .. }
             | Cmd::NewFootprint { .. }
@@ -2808,6 +2818,7 @@ impl Cmd {
             Cmd::SetSheetPage { sheet, .. } => vec![sheet.as_str()],
             Cmd::SetSchItemText { id, .. } => vec![id.as_str()],
             Cmd::SetSymbolLibIds { .. } => vec!["symbol_lib_ids"],
+            Cmd::RescueSymbols { .. } => vec!["rescue_symbols"],
             Cmd::IncrementAnnotations { start, .. } => vec![start.as_str()],
             Cmd::SetSymbolFields { .. } => vec!["symbol_fields"],
             Cmd::ReplaceText { .. } => vec!["replace_text"],
@@ -3573,6 +3584,7 @@ impl<'a> Board<'a> {
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
+            Cmd::RescueSymbols { changes, symbols } => self.rescue_symbols(changes, symbols),
             Cmd::IncrementAnnotations { start, increment, all_sheets } => self.increment_annotations(start, *increment, *all_sheets),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
             Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),

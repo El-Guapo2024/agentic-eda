@@ -1062,6 +1062,28 @@ pub(crate) fn put_library_row(dir: &Path, kind: TableKind, path: &Path, replace:
     Ok((nickname, uri))
 }
 
+/// The board's project table of `kind` with a row `nickname` pointing at `uri` (written as it is) of type `lib_type`: the row of that nickname updated, or one
+/// added (`projectTable->Row( libNickname )` else `InsertRow()`, `SYMBOL_LIB_TABLE_RESCUER::WriteRescueLibrary`).
+pub(crate) fn set_project_row(dir: &Path, kind: TableKind, nickname: &str, uri: &str, lib_type: &str) -> Result<(), String> {
+    refuse_kicads_configuration(&Env::discover(), dir)?;
+    let mut table = project_table(dir, kind)?;
+    match table.rows.iter_mut().find(|r| r.nickname == nickname) {
+        Some(row) => {
+            row.uri = uri.to_string();
+            row.lib_type = lib_type.to_string();
+        }
+        None => table.rows.push(lt::Row { nickname: nickname.to_string(), uri: uri.to_string(), lib_type: lib_type.to_string(), ..Default::default() }),
+    }
+    lt::write_table(&project_table_path(dir, kind), &table)
+}
+
+/// `NormalizePath( fn, &Pgm().GetLocalEnvVariables(), &Prj() )`: `path` as a table row of the board in `dir` writes it (`${KIPRJMOD}/x.lib` for a file beside the board).
+pub(crate) fn normalized_uri(dir: &Path, path: &Path) -> String {
+    let env = Env::discover();
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
+    lt::normalize_path(path, &normalize_vars(&env, &vars, dir), Some(dir))
+}
+
 /// A library file the studio is asked to write that lies in KiCad's own configuration folder: refused, as every write there is.
 pub(crate) fn refuse_inside_kicads_configuration(env: &Env, path: &Path) -> Result<(), String> {
     let Some(config) = &env.config_dir else { return Ok(()) };

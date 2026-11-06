@@ -631,8 +631,25 @@ pub(crate) fn library_descriptions(kind: Kind, root: &Path) -> Arc<HashMap<Strin
 
 // ------------------------------------------------------------------------------------------------ the answers
 
+/// `LIB_SYMBOL::GetChooserFields` (`cacheChooserFields`): every field of the symbol by name (each is shown in the chooser, `m_showInChooser` is never cleared
+/// at 8303b2ad), and "Keywords" -- the symbol's keywords unless a field of that name is its own: the values the library tree's extra columns show
+/// (`LIB_TREE_MODEL_ADAPTER::GetValue`; Select Columns, UI-LEFT A2). The Description column shows `description`.
+fn chooser_fields(s: &SymbolSummary) -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    for (k, v) in [("Reference", &s.reference), ("Value", &s.value), ("Footprint", &s.footprint), ("Datasheet", &s.datasheet), ("Description", &s.description)] {
+        m.insert(k.to_string(), json!(v));
+    }
+    for (k, v) in &s.user_fields {
+        m.insert(k.clone(), json!(v));
+    }
+    if !m.contains_key("Keywords") {
+        m.insert("Keywords".to_string(), json!(s.keywords));
+    }
+    m
+}
+
 fn symbol_item(s: &SymbolSummary, score: Option<u32>) -> Value {
-    let mut v = json!({ "name": s.name, "description": s.description, "units": s.unit_count(), "pins": s.pin_count(), "power": s.power });
+    let mut v = json!({ "name": s.name, "description": s.description, "units": s.unit_count(), "pins": s.pin_count(), "power": s.power, "fields": chooser_fields(s) });
     if let Some(score) = score {
         v["score"] = json!(score);
     }
@@ -1180,6 +1197,10 @@ mod tests {
         assert_eq!(e["entries"][0]["description"], "Low-Power, Dual Operational Amplifier, DIP-8/SOIC-8");
         assert_eq!((e["entries"][0]["units"].clone(), e["entries"][0]["pins"].clone()), (json!(3), json!(8)));
         assert_eq!(e["entries"][1]["description"], "Low-Power, Dual Operational Amplifier, DIP-8/SOIC-8", "a derived symbol with no description of its own shows its base's");
+        // the chooser fields the tree's extra columns show (`GetChooserFields`): every field, and the keywords as "Keywords"
+        assert_eq!(e["entries"][0]["fields"]["Value"], "LM358");
+        assert_eq!(e["entries"][0]["fields"]["Datasheet"], "http://ti.com/lm358.pdf");
+        assert_eq!(e["entries"][0]["fields"]["Keywords"], "dual opamp");
         assert!(entries_in(Kind::Symbol, &root, "../x", &Filter::default())["error"].is_string());
         assert!(entries_in(Kind::Symbol, &root, "Missing", &Filter::default())["error"].is_string());
         // power symbols are left out on request

@@ -751,6 +751,11 @@ fn handle(
         ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir, &query_value(target, "net")).to_string().as_bytes()),
         // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
         ("POST", "/api/sch/export_symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::export_symbols(dir, &body).to_string().as_bytes()),
+        // Rescue Symbols (`crate::rescue_api`): the candidates the rescuer finds, and the rescue library written with the command that relinks the symbols.
+        ("GET", "/api/sch/rescue") => respond(stream, "200 OK", "application/json", crate::rescue_api::candidates(dir).to_string().as_bytes()),
+        ("POST", "/api/sch/rescue") => respond(stream, "200 OK", "application/json", crate::rescue_api::rescue(dir, &body).to_string().as_bytes()),
+        // Remap Legacy Library Symbols (`DIALOG_SYMBOL_REMAP::OnRemapSymbols`): the backup, the project table made again, the command that names each symbol's library.
+        ("POST", "/api/sch/remap") => respond(stream, "200 OK", "application/json", crate::rescue_api::remap(dir).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())

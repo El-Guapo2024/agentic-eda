@@ -2333,6 +2333,9 @@ export type Cmd =
   | { op: "set_sch_item_text"; id: string; text: string }
   /** `eeschema.EditorControl.editSymbolLibraryLinks`: every symbol linked to a `from` library id is linked to the paired `to` id (`update_fields`: the Datasheet follows the library symbol). */
   | { op: "set_symbol_lib_ids"; changes: Array<[string, string]>; update_fields?: boolean }
+  /** `eeschema.EditorControl.rescueSymbols` / `remapSymbols`: every symbol of every sheet linked to a `from` library id is linked to the paired `to` id; `symbols` are the
+   *  rescue library's copies the schematic keeps (none for a remap: the copy kept under `from` is the one of `to`). The server makes it (`POST /api/sch/rescue`, `/api/sch/remap`). */
+  | { op: "rescue_symbols"; changes: Array<[string, string]>; symbols?: LibrarySymbol[] }
   /** `eeschema.EditorControl.incrementAnnotations`: every reference with the start's letters and a number at least its own moves by `increment`. */
   | { op: "increment_annotations"; start: string; increment: number; all_sheets?: boolean }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */

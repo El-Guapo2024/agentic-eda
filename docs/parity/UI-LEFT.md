@@ -575,10 +575,15 @@ Notes:
   - Python plugins and the footprint wizards.
   - Hyperlynx and `.rpt` export.
   - The app shell: New, Open, Revert, Quit, Project Manager, Rescue, open in the file manager, open in a text editor, Calculator Tools, and drop-to-add-library.
-- **A2 [FM] Other missing actions.**
-  - Remote Symbols.
-  - Remap Legacy and Rescue Symbols.
-  - Select Columns.
+- **A2 [FM] Other missing actions.** **done in part (task-u5-shared)** (PARITY-sch §67, PARITY-common §18):
+  - Remote Symbols: **left**, with its reason in `ui-parity-missing.json`: KiCad 25ec2335's panel is a remote provider's web page (a provider URL the user adds, its
+    `/.well-known/kicad-remote-provider` metadata, OAuth sign-in, HTTPS downloads of each part's assets); KiCad ships no provider and the studio reaches none.
+  - Remap Legacy and Rescue Symbols: **done (task-u5-shared)**: Rescue Symbols (`SYMBOL_LIB_TABLE_RESCUER`, the Project Rescue Helper, `<project>-rescue.kicad_sym` and
+    its table row, the relink as one undo step) and Remap Legacy Library Symbols (the backup, the project table made again with Legacy rows, the bare ids given their
+    library; enabled for a schematic none of whose symbols names a library). Left: the legacy rescuer (a legacy `.lib` rescue library) and bringing in a KiCad 5
+    `.sch`; the rescue reads the design's own copy where the project has no `-cache.lib` (a Differs).
+  - Select Columns: **done (task-u5-shared)**: the header's menu of the two choosers' and the two library editors' trees, KiCad's dialog, every field of a symbol library
+    and Keywords offered as columns. Left: the server's search does not search the shown columns; already placed and project items show no field columns.
 - **A3 [KO] Annotate Automatically.** Kept out by design.
 
 Left out of this list: about 150 mentions of file-format or internal items with no UI effect.
