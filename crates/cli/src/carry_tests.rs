@@ -114,10 +114,10 @@ fn a_drop_that_changes_nothing_ends_the_carry_and_the_duplicate_stands_as_one_st
     let dir = scratch("carry_commit_alone");
     setup(&dir);
     begin(&dir, duplicate_u1());
-    commit(&dir).unwrap();
+    commit(&dir, None).unwrap();
     assert!(!is_carrying(&dir));
     assert_eq!(footprints(&dir).len(), 3);
-    assert!(commit(&dir).is_err(), "nothing is carried now");
+    assert!(commit(&dir, None).is_err(), "nothing is carried now");
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir).len(), 2);
     assert!(undo_pcb(&dir).is_err());
@@ -177,7 +177,7 @@ fn move_individually_is_one_undo_step_and_cancelling_reverts_every_drop() {
     assert!(is_carrying(&dir), "the first drop opens the step");
     hold_with(Cmd::MoveItems { ids: vec!["U2".into()], dx: Nm::ZERO, dy: mm(1.0) });
     assert!(is_carrying(&dir), "the next drop joins it");
-    commit(&dir).unwrap();
+    commit(&dir, None).unwrap();
     assert_ne!(footprints(&dir), at0);
     undo_pcb(&dir).unwrap();
     assert_eq!(footprints(&dir), at0, "one undo puts both back");

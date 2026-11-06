@@ -1226,19 +1226,48 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
     // A carried placement is one edit (KiCad's one commit, pushed at the drop): the command that makes the items (`begin`) is not judged on its own -- they are on
     // the cursor, not where they will be put -- and the drop that ends it (`commit`) is judged against the design the step began from. (UI-LEFT P19: Place
     // Footprint makes its footprint where the pointer is, over another part as often as not, and Strict refused it before it could be carried anywhere.)
+    // (the carry remembers whether it began under Strict: a drop that changes nothing is judged by it, `carry::commit`)
+    let judged_strictly = strictness != Strictness::Off;
     let strictness = if carry == Some(carry::Carry::Begin) && !cmd.always_judged() { Strictness::Off } else { strictness };
     let baseline = if carry == Some(carry::Carry::Commit) && strictness != Strictness::Off { carry::pending_design(dir) } else { None };
     let r = step_quiet(dir, &cmd, strictness, baseline);
     match &r {
         Ok((summary, tag)) => {
             if let Some(before) = before.filter(|_| !outside_history(&cmd)) {
-                carry::record(dir, carry, &before, tag, by);
+                carry::record(dir, carry, &before, tag, by, judged_strictly);
             }
             log_activity(dir, by, &line, true, summary)
         }
-        Err(e) => log_activity(dir, by, &line, false, &reasons(e)),
+        Err(e) => {
+            log_activity(dir, by, &line, false, &reasons(e));
+            // A drop the gates refuse ends a strict carry with nothing left behind (`carry.rs`): what the carry began with is taken back.
+            if matches!(carry, Some(carry::Carry::Commit | carry::Carry::Hold)) && strictness != Strictness::Off && e.iter().any(|c| c.check == "board_worse") {
+                carry::refuse_pending_locked(dir, e);
+            }
+        }
     }
     r.map(|(summary, _)| summary)
+}
+
+/// The gates on the board as it is against `baseline` (the design a carried placement began from: the drop of a strict carry that changes nothing,
+/// `carry::commit`): refused as [`step_quiet`] refuses a command when the board has more in-process gate failures than `baseline` had.
+pub(crate) fn judge_against(dir: &Path, baseline: eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
+    let (meta, design, model) = load(dir)?;
+    let board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+    let base_model = build_model(dir, &meta, &baseline)?;
+    let was = Board::new(baseline, &base_model, meta.snap_nm, meta.spacing_nm);
+    let (now, then) = (all_checks(&board, &model), all_checks(&was, &base_model));
+    let (before, after) = (failures_in(&then), failures_in(&now));
+    if after <= before {
+        return Ok(());
+    }
+    let new: Vec<String> = now
+        .iter()
+        .filter(|c| matches!(c.status, CheckStatus::Fail))
+        .filter(|c| !then.iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, CheckStatus::Fail)))
+        .map(|c| format!("{} @ {}", c.check, c.location.clone().unwrap_or_default()))
+        .collect();
+    Err(fail("board_worse", "carry", format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; "))))
 }
 
 /// A command KiCad applies with no commit, so no undo entry: the Plot and Generate Drill Files dialogs' choices (`DIALOG_PLOT::applyPlotSettings`:

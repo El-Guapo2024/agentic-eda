@@ -2453,8 +2453,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // once), so the whole of it is one undo step and Escape reverts every drop (`revertCarriedPlacement`).
       const individually = kind === "pcb" && stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0;
       const carry: CarryStep | undefined = individually ? "hold" : carrying ? "commit" : undefined;
+      // Whether what was carried stands once the drop is over. A strict drop the gates refuse has taken the carry back (crates/cli/src/carry.rs: nothing is
+      // left behind), and so has a drop that changes nothing whose commit the gates refuse; the placement's loop then ends.
+      let stands = true;
       const settle = async (sent: boolean, ok: boolean) => {
-        if (carrying && (!sent || !ok)) await postCarry("commit");
+        if (!carrying || (sent && ok)) return;
+        const r = await postCarry("commit", stateRef.current.strict);
+        stands = r.ok;
+        if (!r.ok && !sent && /refused because --strict/.test(r.message ?? "")) {
+          dispatch({ type: "TOAST", message: r.message, kind: "error" });
+          await refresh();
+        }
       };
       // A tuning pattern moved on its own (`doMoveSelection` of a lone generator, `genStartEdit` / `genUpdateEdit` / `genFinishEdit`): it slides along its track
       // and is tuned again there, not carried off it (components/canvas/tuneRouting.ts `slidePattern`)
@@ -2484,7 +2493,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           afterCancelRef.current = null;
           afterSettleRef.current = null;
         }
-        if (carrying && next) next();
+        if (carrying && next && stands) next();
         return;
       }
       const cmds: Cmd[] = [];

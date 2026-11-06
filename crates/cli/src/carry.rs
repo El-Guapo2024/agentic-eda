@@ -18,6 +18,12 @@
 //! * **anything else** that touches the history (another command, Undo, Redo, an edit of `design.json` by hand) first *settles* the pending step as a step of
 //!   its own: the duplicate stands, as it would had the Move tool been left some other way.
 //!
+//! Under the studio's Strict switch (UI-LEFT P7, the studio's own; KiCad's Move tool never refuses a drop) the command that begins a carry is not judged -- the
+//! items are on the cursor, not where they will be put -- and the drop is judged against the design the step began from (`board::step_carrying`). A drop the
+//! gates refuse ends the carry with nothing left behind: the pending design comes back, as **cancel** has it, and the refusal is the answer. A drop that changes
+//! nothing (**commit** through `/api/carry`) is judged the same way, so a strict carry never lands unjudged. The strictness is the drop's own (`"strict"` in the
+//! request), or, when the request does not say, the one the carry began with.
+//!
 //! A pending step survives a restart of the server the same way: it is on disk, and the next command settles it.
 
 use super::{clear_dir, fail, history_root, lock, log_activity, push_snapshot_tagged, redo_dir, save, undo_dir};
@@ -51,11 +57,12 @@ fn pending_dir(dir: &Path) -> PathBuf {
     history_root(dir).join("pending")
 }
 
-/// The step held open: the design before the command that began it, the undo scope tag and who made it.
+/// The step held open: the design before the command that began it, the undo scope tag, who made it, and whether it began under Strict.
 struct Pending {
     design: eda_model::ir::Design,
     tag: String,
     by: String,
+    strict: bool,
 }
 
 fn read_pending(dir: &Path) -> Option<Pending> {
@@ -65,7 +72,8 @@ fn read_pending(dir: &Path) -> Option<Pending> {
     let mut lines = meta.lines();
     let tag = lines.next().filter(|t| !t.is_empty()).unwrap_or("pcb").to_string();
     let by = lines.next().unwrap_or("ui").to_string();
-    Some(Pending { design, tag, by })
+    let strict = lines.next() == Some("strict");
+    Some(Pending { design, tag, by, strict })
 }
 
 /// The design the step held open began from (before the command that began it), if a step is held open: what the drop of a carried placement is judged
@@ -78,12 +86,12 @@ fn drop_pending(dir: &Path) {
     let _ = std::fs::remove_dir_all(pending_dir(dir));
 }
 
-/// Holds `before` open as the pending step, under the history tag `tag` (`board::snapshot_tag`).
-fn hold(dir: &Path, before: &eda_model::ir::Design, tag: &str, by: &str) {
+/// Holds `before` open as the pending step, under the history tag `tag` (`board::snapshot_tag`), begun under Strict or not.
+fn hold(dir: &Path, before: &eda_model::ir::Design, tag: &str, by: &str, strict: bool) {
     let root = pending_dir(dir);
     let _ = std::fs::create_dir_all(&root);
     let _ = std::fs::write(root.join("design.json"), serde_json::to_string(before).unwrap_or_default());
-    let _ = std::fs::write(root.join("meta"), format!("{tag}\n{by}\n"));
+    let _ = std::fs::write(root.join("meta"), format!("{tag}\n{by}\n{}\n", if strict { "strict" } else { "off" }));
 }
 
 /// Puts the pending step on the undo stack as a step of its own and clears the redo stack (a new edit erases old redos). Called with the lock held.
@@ -96,13 +104,14 @@ pub(super) fn settle_locked(dir: &Path) -> bool {
 }
 
 /// What a command that succeeded leaves in the history: for a normal command the design before it on the undo stack (and the redo stack cleared); for the
-/// start of a carry that design kept aside; for the drop the pending design in its place, so the carry and the drop are one step.
-pub(super) fn record(dir: &Path, carry: Option<Carry>, before: &eda_model::ir::Design, tag: &str, by: &str) {
+/// start of a carry that design kept aside (with `strict`, the Strict switch it began under); for the drop the pending design in its place, so the carry and
+/// the drop are one step.
+pub(super) fn record(dir: &Path, carry: Option<Carry>, before: &eda_model::ir::Design, tag: &str, by: &str, strict: bool) {
     match carry {
-        Some(Carry::Begin) => hold(dir, before, tag, by),
+        Some(Carry::Begin) => hold(dir, before, tag, by, strict),
         // a step already held open keeps the design from before its first command
         Some(Carry::Hold) if read_pending(dir).is_some() => {}
-        Some(Carry::Hold) => hold(dir, before, tag, by),
+        Some(Carry::Hold) => hold(dir, before, tag, by, strict),
         Some(Carry::Commit) if settle_locked(dir) => {}
         _ => {
             let _ = push_snapshot_tagged(&undo_dir(dir), before, tag, by);
@@ -112,13 +121,39 @@ pub(super) fn record(dir: &Path, carry: Option<Carry>, before: &eda_model::ir::D
 }
 
 /// `POST /api/carry` `{"action": "commit"}`: the drop changed nothing (a click where the items already were), so the carry just ends: the pending step is
-/// a step of its own.
-pub(crate) fn commit(dir: &Path) -> Result<String, Vec<CheckResult>> {
+/// a step of its own. Under Strict (`strict`, or the carry's own when `None`) the board as the carry left it is judged first against the design the step
+/// began from; one the gates refuse is taken back, as a cancel, and the refusal is the answer.
+pub(crate) fn commit(dir: &Path, strict: Option<bool>) -> Result<String, Vec<CheckResult>> {
     let _lock = lock(dir);
-    if settle_locked(dir) {
-        Ok("the carried placement stands".into())
-    } else {
-        Err(fail("board_no_carry", "carry", "nothing is being carried"))
+    let Some(p) = read_pending(dir) else {
+        return Err(fail("board_no_carry", "carry", "nothing is being carried"));
+    };
+    if strict.unwrap_or(p.strict) {
+        if let Err(e) = super::judge_against(dir, p.design.clone()) {
+            refuse_locked(dir, &p.design, &e);
+            return Err(e);
+        }
+    }
+    settle_locked(dir);
+    Ok("the carried placement stands".into())
+}
+
+/// A drop the gates refused (`board::step_carrying`, a strict drop that makes the board worse; [`commit`]): the carry ends with nothing left behind -- the
+/// design from before the command that began it comes back, as [`cancel`] brings it, with no undo entry and no redo entry. Called with the lock held.
+pub(super) fn refuse_locked(dir: &Path, before: &eda_model::ir::Design, why: &[CheckResult]) {
+    let _ = save(dir, before);
+    drop_pending(dir);
+    log_activity(dir, "ui", "cancel carried placement", true, &format!("the drop was refused, so nothing of the carried placement is left: {}", super::reasons(why)));
+}
+
+/// [`refuse_locked`] for the step held open, if one is.
+pub(super) fn refuse_pending_locked(dir: &Path, why: &[CheckResult]) -> bool {
+    match read_pending(dir) {
+        Some(p) => {
+            refuse_locked(dir, &p.design, why);
+            true
+        }
+        None => false,
     }
 }
 
