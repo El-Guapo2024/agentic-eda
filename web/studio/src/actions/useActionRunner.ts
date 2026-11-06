@@ -596,10 +596,12 @@ export function useActionRunner() {
     m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
     // `7` / `8` / `9` (`PCB_ACTIONS::tuneSingleTrack` / `tuneDiffPair` / `tuneDiffPairSkew`, `DRAWING_TOOL::PlaceTuningPattern`): arms the length tuner -- hover a track to
     // read its length, click to start a pattern on it, click again where it ends (the canvas does the clicking: components/canvas/tuneRouting.ts). The tool's settings are
-    // Board Setup's Length-tuning Patterns page for the kind, over what the Tuning Pattern dialog (Ctrl+L) set.
+    // Board Setup's Length-tuning Patterns page for the kind, over what the Tuning Pattern dialog (Ctrl+L) and the 1-4 keys set while the tool runs: each time the tool
+    // is entered they start from the page again (`PlaceTuningPattern`: `meanderSettings = bds.m_SingleTrackMeanderSettings` ..), its corner style and single-sided too.
     const startTuner = (mode: "single" | "diffpair" | "skew") =>
       pcbOnly(() => {
         void cancelTune(state, dispatch);
+        dispatch({ type: "PCBX", patch: { tuneSettings: {} } });
         dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: false, mode });
         dispatch({ type: "SET_DRAW_STATE", draw: null });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "tune" });

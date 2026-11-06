@@ -800,6 +800,44 @@ mod tests {
         assert!((net_ps(&dir, "/SIG") - 122.0).abs() < 0.01);
     }
 
+    /// `PCB_TUNING_PATTERN::CreateNew` / `PlaceTuningPattern`: a pattern starts from Board Setup's Length-tuning Patterns for its kind, the corner style and
+    /// single-sided included -- chamfered corners are 45-degree segments (no arc), and a single-sided meander has every loop on one side of the track.
+    #[test]
+    fn the_corner_style_and_single_sided_of_board_setup_shape_the_meander() {
+        let dir = scratch("chamfer_single_sided");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.tuning_patterns.single_track.corner_style = eda_model::setup_pages::CornerStyle::Chamfer;
+        model.board.tuning_patterns.single_track.single_sided = true;
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!((m["pattern"]["rounded"].as_bool(), m["pattern"]["single_sided"].as_bool()), (Some(false), Some(true)), "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let pts = |m: &Value| -> Vec<Vec<(i64, i64)>> {
+            m["preview"]["pieces"].as_array().unwrap().iter().filter(|p| p["member"] == json!(true)).map(|p| p["pts"].as_array().unwrap().iter().map(|q| (q[0].as_i64().unwrap(), q[1].as_i64().unwrap())).collect()).collect()
+        };
+        let segs = |runs: &[Vec<(i64, i64)>]| runs.iter().flat_map(|r| r.windows(2).map(|w| (w[1].0 - w[0].0, w[1].1 - w[0].1)).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let chamfered = pts(&m);
+        let d = segs(&chamfered);
+        assert!(d.len() > 10, "{m}");
+        // chamfered: every segment is straight along an axis or at 45 degrees (an arc's chords are not), and there are 45-degree ones
+        assert!(d.iter().all(|&(dx, dy)| dx == 0 || dy == 0 || dx.abs() == dy.abs()), "no arc: {d:?}");
+        assert!(d.iter().any(|&(dx, dy)| dx != 0 && dx.abs() == dy.abs()), "a 45-degree chamfer: {d:?}");
+        // single-sided: the meanders go above the track (y < 9.5 mm, the cursor's side) and never below it
+        assert!(chamfered.iter().flatten().all(|q| q.1 <= 9_500_000), "{m}");
+        assert!(chamfered.iter().flatten().any(|q| q.1 < 9_000_000));
+        // the same pattern rounded and on both sides, for contrast
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000, "rounded": true, "single_sided": false } })));
+        assert_eq!(s["ok"], json!(true));
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        let rounded = pts(&m);
+        assert!(segs(&rounded).iter().any(|&(dx, dy)| dx != 0 && dy != 0 && dx.abs() != dy.abs()), "rounded corners are arcs");
+        assert!(rounded.iter().flatten().any(|q| q.1 > 9_800_000), "both sides");
+    }
+
     /// The board's rules as `.kicad_dru` text (what the rule engine compiles).
     fn with_rules_text(dir: &Path, text: &str) {
         let intent = dir.join("intent.yaml");

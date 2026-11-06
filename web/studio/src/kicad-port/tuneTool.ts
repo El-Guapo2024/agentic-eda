@@ -73,8 +73,17 @@ export interface ReadoutBox {
   bad: [boolean, boolean, boolean];
 }
 
-/** `TUNING_STATUS_VIEW_ITEM::ViewDraw`: the length is red when it is outside `[min, max]`, the minimum when the length is below it, the maximum when it is above. `fmt` prints a length in micrometres. */
-export function readoutBox(r: TuneReadout, fmt: (um: number) => string): ReadoutBox {
+/** The number of a formatted value without its unit: `MessageTextFromValue( aValue, false )`. */
+function withoutUnit(text: string): string {
+  return text.replace(/\s*(mm|mil|in|ps|\u00b5m|um)$/, "");
+}
+
+/**
+ * `TUNING_STATUS_VIEW_ITEM`: the length is red when it is outside `[min, max]`, the minimum when the length is below it, the maximum when it is above (`ViewDraw`).
+ * The current value has its unit, the minimum and the maximum not (`SetCurrent`: `MessageTextFromValue( aCurrent, true, .. )`, `SetMinMax`: `.., false, ..`); no target
+ * is `---` (`ClearMinMax`). `fmt` prints a length in nanometres.
+ */
+export function readoutBox(r: TuneReadout, fmt: (nm: number) => string): ReadoutBox {
   const um = (mm: number) => mm * 1e6; // mm to nm
   // a time domain pattern: the box reads the delay and the range of the delay, in picoseconds (`SetIsTimeDomain`)
   if (r.time_domain && r.delay) {
@@ -82,7 +91,7 @@ export function readoutBox(r: TuneReadout, fmt: (um: number) => string): Readout
     const has = d.min != null && d.max != null;
     const below = has && d.current < (d.min as number);
     const above = has && d.current > (d.max as number);
-    return { header: [d.label, "min", "max"], values: [fmtPs(d.current), d.min == null ? "---" : fmtPs(d.min), d.max == null ? "---" : fmtPs(d.max)], bad: [below || above, below, above] };
+    return { header: [d.label, "min", "max"], values: [fmtPs(d.current), d.min == null ? "---" : withoutUnit(fmtPs(d.min)), d.max == null ? "---" : withoutUnit(fmtPs(d.max))], bad: [below || above, below, above] };
   }
   const min = r.min, max = r.max;
   const has = min != null && max != null;
@@ -90,8 +99,39 @@ export function readoutBox(r: TuneReadout, fmt: (um: number) => string): Readout
   const above = has && r.current > max;
   return {
     header: [r.label, "min", "max"],
-    values: [fmt(um(r.current)), min == null ? "---" : fmt(um(min)), max == null ? "---" : fmt(um(max))],
+    values: [fmt(um(r.current)), min == null ? "---" : withoutUnit(fmt(um(min))), max == null ? "---" : withoutUnit(fmt(um(max)))],
     bad: [below || above, below, above],
+  };
+}
+
+/** Where `TUNING_STATUS_VIEW_ITEM::ViewDraw` puts the box and its texts, in board nanometres, for the status item at `at` (the mouse position,
+ *  `statusItem->SetPosition( GetMousePosition() )`); `px` turns screen pixels into nanometres at the view's zoom (`GetConstantGlyphHeight`: a size in pixels
+ *  over the world scale, so the box is the same size on the screen at every zoom).
+ *
+ *  `GetConstantGlyphHeight( gal, -2 )` is the header's glyph (10 px), `( gal, -1 )` the values' (12 px); a glyph is as wide as it is high, its stroke a fifth of it, its
+ *  line pitch 1.9 of it. `margin( KiROUND( glyphWidth * 0.4 ), glyphWidth )`, `size( glyphWidth * 25 + margin.x * 2, header + text )`, `offset( margin.x * 2, -( size.y +
+ *  margin.y * 2 ) )`: the drop shadow box runs from `pos + offset - margin` to `pos + offset + size + margin` -- above and to the right of the cursor. The header row
+ *  is at `pos + offset` (the label, then `min` 11 glyphs and a margin further, `max` 7 glyphs and a margin further), the values `KiROUND( headerLinePitch * 1.3 )`
+ *  below it, each text left-aligned and centred on its row (`TEXT_ATTRIBUTES`' default vertical centre). The sizes are KiCad's for a canvas that is not HiDPI. */
+export function statusBoxLayout(at: [number, number], px: (n: number) => number): {
+  box: [number, number, number, number];
+  header: { size: number; stroke: number; y: number; xs: [number, number, number] };
+  values: { size: number; stroke: number; y: number; xs: [number, number, number] };
+} {
+  const headerH = 10, textH = 12;
+  const glyph = textH;
+  const margin = [Math.round(glyph * 0.4), glyph];
+  const size = [glyph * 25 + margin[0]! * 2, headerH + textH];
+  const offset = [margin[0]! * 2, -(size[1]! + margin[1]! * 2)];
+  const x0 = offset[0]!, y0 = offset[1]!;
+  const xs: [number, number, number] = [x0, x0 + glyph * 11 + margin[0]!, x0 + glyph * 11 + margin[0]! + glyph * 7 + margin[0]!];
+  const valuesY = y0 + Math.round(headerH * 1.9 * 1.3);
+  const X = (dx: number) => at[0] + px(dx);
+  const Y = (dy: number) => at[1] + px(dy);
+  return {
+    box: [X(x0 - margin[0]!), Y(y0 - margin[1]!), X(x0 + size[0]! + margin[0]!), Y(y0 + size[1]! + margin[1]!)],
+    header: { size: px(headerH), stroke: px(headerH) / 5, y: Y(y0), xs: xs.map(X) as [number, number, number] },
+    values: { size: px(textH), stroke: px(textH) / 5, y: Y(valuesY), xs: xs.map(X) as [number, number, number] },
   };
 }
 

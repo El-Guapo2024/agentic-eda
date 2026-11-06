@@ -8,7 +8,7 @@ import { copperColorKey, layerColor } from "./layers";
 import { hairlineNm } from "./view";
 import { drawStrokeText } from "../text/strokeFont";
 import { formatLength, type LengthUnit } from "../../state/units";
-import { patternBaselines, patternOutline, readoutBox, type TuneDrawState } from "../../kicad-port/tuneTool";
+import { patternBaselines, patternOutline, readoutBox, statusBoxLayout, type TuneDrawState } from "../../kicad-port/tuneTool";
 
 type Pt = [number, number];
 
@@ -42,43 +42,29 @@ function drawHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, handles
 }
 
 /**
- * `TUNING_STATUS_VIEW_ITEM::ViewDraw`: a box at the cursor with the label, `min` and `max` over the length and the range, each green when it is inside and red when it
- * is not. The box is the same size on the screen at every zoom.
+ * `TUNING_STATUS_VIEW_ITEM::ViewDraw` at the mouse position: the drop shadow box (`wxSYS_COLOUR_BTNFACE` at 0.9, a 2 px `wxSYS_COLOUR_BTNTEXT` line) above and to the
+ * right of the cursor, the label, `min` and `max` over the length and the range -- each green when it is inside and red when it is not (`FromHSL( 0, 1, 0.3 )` and
+ * `FromHSL( 120, 1, 0.2 )` on a light background). The box is the same size on the screen at every zoom ([`statusBoxLayout`]).
  */
 export function drawReadoutBox(ctx: CanvasRenderingContext2D, view: ViewTransform, readout: TuneReadout, at: Pt, units: LengthUnit) {
-  const box = readoutBox(readout, (um) => formatLength(um, units));
-  const px = (n: number) => hairlineNm(view, n);
-  const head = px(10);
-  const text = px(12);
-  const colW = [px(120), px(82), px(82)];
-  const pad = px(6);
-  const w = colW[0]! + colW[1]! + colW[2]! + pad * 2;
-  const h = head + text + pad * 3;
-  // above and to the right of the cursor, as KiCad's `offset( margin.x * 2, -( size.y + margin.y * 2 ) )`
-  const x0 = at[0] + px(14);
-  const y0 = at[1] - h - px(14);
+  const box = readoutBox(readout, (nm) => formatLength(nm, units));
+  const L = statusBoxLayout(at, (n) => hairlineNm(view, n));
+  const [x0, y0, x1, y1] = L.box;
   ctx.save();
-  ctx.fillStyle = "rgba(235, 235, 235, 0.92)";
-  ctx.strokeStyle = "rgb(30, 30, 30)";
-  ctx.lineWidth = px(1.5);
+  ctx.fillStyle = "rgba(240, 240, 240, 0.9)";
+  ctx.strokeStyle = "rgb(0, 0, 0)";
+  ctx.lineWidth = hairlineNm(view, 2);
   ctx.beginPath();
-  ctx.rect(x0, y0, w, h);
+  ctx.rect(x0, y0, x1 - x0, y1 - y0);
   ctx.fill();
   ctx.stroke();
   ctx.restore();
-  const green = "rgb(0, 140, 0)";
-  const red = "rgb(210, 20, 20)";
-  const dark = "rgb(30, 30, 30)";
-  let x = x0 + pad;
-  box.header.forEach((label, i) => {
-    drawStrokeText(ctx, label, x, y0 + pad + head / 2, { sizeNm: head, justify: "left", color: dark, thicknessNm: px(1) });
-    x += colW[i]!;
-  });
-  x = x0 + pad;
-  box.values.forEach((value, i) => {
-    drawStrokeText(ctx, value, x, y0 + pad * 2 + head + text / 2, { sizeNm: text, justify: "left", color: box.bad[i] ? red : green, thicknessNm: px(1.2) });
-    x += colW[i]!;
-  });
+  const green = "rgb(0, 102, 0)";
+  const red = "rgb(153, 0, 0)";
+  const normal = "rgb(0, 0, 0)";
+  // (the rows' y is the texts' centre, `GR_TEXT_V_ALIGN_CENTER`; the stroke font is anchored on its baseline, half a glyph below)
+  box.header.forEach((label, i) => drawStrokeText(ctx, label, L.header.xs[i]!, L.header.y + L.header.size / 2, { sizeNm: L.header.size, justify: "left", color: normal, thicknessNm: L.header.stroke }));
+  box.values.forEach((value, i) => drawStrokeText(ctx, value, L.values.xs[i]!, L.values.y + L.values.size / 2, { sizeNm: L.values.size, justify: "left", color: box.bad[i] ? red : green, thicknessNm: L.values.stroke }));
 }
 
 /** The track under the cursor with the tool armed (`updateHoverStatus`): its line highlighted, and the box. */

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { carriedSettings, handleAt, kindOfMode, modeOfKind, offsetOutline, offsetSide, pageSettings, patternBaselines, patternOutline, readoutBox, readoutSummary, settingsOfPattern, TUNE_KEY_ACTIONS, tuneStateFromReply } from "./tuneTool";
+import { carriedSettings, handleAt, statusBoxLayout, kindOfMode, modeOfKind, offsetOutline, offsetSide, pageSettings, patternBaselines, patternOutline, readoutBox, readoutSummary, settingsOfPattern, TUNE_KEY_ACTIONS, tuneStateFromReply } from "./tuneTool";
 import type { TuneReadout, TuningPattern } from "../api/tuneTypes";
 
 const area = (poly: readonly (readonly [number, number])[]) => {
@@ -45,7 +45,8 @@ const readout = (over: Partial<TuneReadout> = {}): TuneReadout => ({ label: "cur
 
 test("the status box prints the length red outside the range, the minimum red below it and the maximum red above it", () => {
   const fmt = (nm: number) => `${(nm / 1e6).toFixed(2)} mm`;
-  assert.deepEqual(readoutBox(readout(), fmt), { header: ["current length", "min", "max"], values: ["21.50 mm", "21.90 mm", "22.10 mm"], bad: [true, true, false] });
+  // the minimum and the maximum without their unit (`SetMinMax`: `MessageTextFromValue( .., false, .. )`), the current length with it
+  assert.deepEqual(readoutBox(readout(), fmt), { header: ["current length", "min", "max"], values: ["21.50 mm", "21.90", "22.10"], bad: [true, true, false] });
   assert.deepEqual(readoutBox(readout({ current: 22 }), fmt).bad, [false, false, false]);
   assert.deepEqual(readoutBox(readout({ current: 23 }), fmt).bad, [true, false, true]);
   // a pattern with no target: `---` and nothing is red
@@ -57,7 +58,7 @@ test("the status box prints the length red outside the range, the minimum red be
 test("a time domain pattern's box reads the delay in picoseconds, red outside its range, and its pattern settings carry the target delay in picoseconds", () => {
   const fmt = (nm: number) => `${(nm / 1e6).toFixed(2)} mm`;
   const timeDomain = (over: Partial<TuneReadout> = {}) => readout({ time_domain: true, delay: { label: "current delay", current: 122, min: 149.9, opt: 150, max: 150.1, delta: -28 }, ...over });
-  assert.deepEqual(readoutBox(timeDomain(), fmt), { header: ["current delay", "min", "max"], values: ["122 ps", "149.9 ps", "150.1 ps"], bad: [true, true, false] });
+  assert.deepEqual(readoutBox(timeDomain(), fmt), { header: ["current delay", "min", "max"], values: ["122 ps", "149.9", "150.1"], bad: [true, true, false] });
   assert.deepEqual(readoutBox(timeDomain({ delay: { label: "current delay", current: 150.05, min: 149.9, opt: 150, max: 150.1, delta: 0.05 } }), fmt).bad, [false, false, false]);
   assert.deepEqual(readoutBox(timeDomain({ delay: { label: "current delay", current: 151, min: null, opt: null, max: null, delta: null } }), fmt), { header: ["current delay", "min", "max"], values: ["151 ps", "---", "---"], bad: [false, false, false] });
   assert.equal(readoutSummary(timeDomain({ status: "too_short" }), fmt), "current delay 122 ps, target 150 ps (-28 ps), too short");
@@ -156,4 +157,15 @@ test("modes and keys", () => {
   assert.equal(modeOfKind("diffpair"), "diff_pair");
   assert.equal(modeOfKind(kindOfMode("single")), "single");
   assert.deepEqual(Object.values(TUNE_KEY_ACTIONS).sort(), ["amplitude_down", "amplitude_up", "spacing_down", "spacing_up"]);
+});
+
+test("the status box sits where TUNING_STATUS_VIEW_ITEM::ViewDraw puts it: above and to the right of the mouse, 330 x 46 px, three columns", () => {
+  // 1 px = 1000 nm at this zoom
+  const L = statusBoxLayout([1_000_000, 2_000_000], (n) => n * 1000);
+  // margin (5, 12), size (310, 22), offset (10, -46): the box from pos + offset - margin to pos + offset + size + margin
+  assert.deepEqual(L.box, [1_005_000, 1_942_000, 1_325_000, 1_988_000]);
+  // the header at pos + offset, `min` 11 glyphs and a margin on, `max` 7 glyphs and a margin further; 10 px glyphs, a 2 px stroke
+  assert.deepEqual(L.header, { size: 10_000, stroke: 2_000, y: 1_954_000, xs: [1_010_000, 1_147_000, 1_236_000] });
+  // the values KiROUND( 19 * 1.3 ) = 25 px below the header, in 12 px glyphs
+  assert.deepEqual(L.values, { size: 12_000, stroke: 2_400, y: 1_979_000, xs: [1_010_000, 1_147_000, 1_236_000] });
 });
