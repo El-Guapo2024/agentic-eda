@@ -469,10 +469,9 @@ function buildSlab(shape: THREE.Shape): THREE.Mesh | null {
  * relative to the mesh, so `position.y` alone becomes the final,
  * absolute world Y).
  *
- * Simplification: covers the *entire* outline uniformly, not just the
- * copper-adjacent areas / minus pad apertures the way real solder mask
- * does -- this data model has no mask-aperture geometry to draw
- * instead.
+ * The pads' apertures are not cut out of the geometry: the mask's material
+ * draws only where [`buildMaskOpenings`] left the stencil clear, as KiCad's
+ * `renderSolderMaskLayer` culls the mask layer's items out of `m_board`.
  */
 function buildMask(shape: THREE.Shape, side: Side): THREE.Mesh {
   const geometry = new THREE.ShapeGeometry(shape);
