@@ -174,7 +174,8 @@ pub struct SchExtras {
     pub text_justify: BTreeMap<String, SchTextJustify>,
     /// What a text item's `EDA_TEXT` and `SCH_ITEM` hold that the item itself does not, by item id -- a free text (`SchematicText`), a text box, a label, a
     /// directive label: "exclude from simulation" (`SCH_TEXT` and `SCH_TEXTBOX`'s `m_excludedFromSim`, which the SPICE netlister skips a directive by), the
-    /// hyperlink (`m_hyperlink`, `(href ..)`), a free text's bold and italic and the font colour (`EDA_TEXT::GetTextColor`, `(color ..)` in `(font ..)`).
+    /// hyperlink (`m_hyperlink`, `(href ..)`), a free text's bold and italic, the font face (`EDA_TEXT::GetFont`, `(face ..)`) and the font colour
+    /// (`EDA_TEXT::GetTextColor`, `(color ..)` in `(font ..)`).
     /// Read from a KiCad file and written back as `saveText` / `saveTextBox` write them (r7 H4, M5). An item with no entry has KiCad's defaults. Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_attrs: BTreeMap<String, TextAttrs>,
@@ -442,6 +443,12 @@ pub struct TextAttrs {
     /// The font colour; `None` is `COLOR4D::UNSPECIFIED`, the layer's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<SchColor>,
+    /// The font (`EDA_TEXT::GetFont`, the Font choice of Text, Label and Text Box Properties, `FONT_CHOICE`): `None` is the default one
+    /// (`DEFAULT_FONT_NAME`, "Default Font", `SetFont( nullptr )`, which writes no `(face ..)`); `Some("KiCad Font")` names the stroke font
+    /// (`KICAD_FONT_NAME`); anything else is the family of an outline font. Written as `(face ..)` first in `(font ..)` (`EDA_TEXT::Format`) and read
+    /// back. Kept for a free text, a text box and a label (a directive label hides the choice: `DIALOG_LABEL_PROPERTIES`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
 }
 
 /// See [`SchExtras::power_props`]. A user field's place is the power symbol's anchor (not kept, as a sheet's user fields are not: r2 B-L1).
@@ -502,7 +509,9 @@ impl TextAttrs {
 }
 
 /// One of a label's own fields (`SCH_FIELD` of an `SCH_LABEL_BASE`): its name as stored (`Netclass` for the net class), its text, whether it is shown and whether it
-/// is set in italics. It is placed where `SCH_LABEL_BASE::AutoplaceFields` puts it, under the label's text (a field moved by hand is placed there again).
+/// is set in italics. It is placed where `SCH_LABEL_BASE::AutoplaceFields` puts it, under the label's text, while the label's fields are autoplaced
+/// (`m_fieldsAutoplaced`); once one of them was moved by hand (`SetFieldsAutoplaced( AUTOPLACE_NONE )`), every field of the label keeps the place
+/// `SchematicSection::field_layout` has for it under the label's id (`eda_engine::label_fields`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LabelField {

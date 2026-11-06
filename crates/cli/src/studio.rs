@@ -2048,7 +2048,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y], "look": sch.extras.junction_looks.get(&j.id) })).collect();
     let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_nm": l.width_nm, "stroke": sch.extras.strokes.get(&l.id) })).collect();
     // Drawn shapes, text boxes, rule areas, directive labels and images (`SchGraphic`, serialized as stored; an image is described, its pixels are `GET /api/sch_image`) and the ids of locked items.
-    let graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
+    let mut graphics: Value = crate::image_api::sch_graphics_json(&sch.extras.graphics);
+    // a text box's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), for its Properties and its drawing
+    if let Some(list) = graphics.as_array_mut() {
+        for g in list.iter_mut() {
+            if let Some(a) = g.get("id").and_then(Value::as_str).and_then(|id| sch.extras.text_attrs.get(id)) {
+                g["text_attrs"] = serde_json::to_value(a).unwrap_or(Value::Null);
+            }
+        }
+    }
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
@@ -2093,7 +2101,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                         eda_model::kicad_font::HJustify::Right => "right",
                         eda_model::kicad_font::HJustify::Center => "center",
                     };
-                    json!({ "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "size_nm": 1_270_000 })
+                    let v = match f.v {
+                        eda_model::kicad_font::VJustify::Top => "top",
+                        eda_model::kicad_font::VJustify::Center => "center",
+                        eda_model::kicad_font::VJustify::Bottom => "bottom",
+                    };
+                    // the id the studio selects, moves and edits the field by (`fld:<label id>:<name>`, `eda_engine::fields_edit`), and the font and colour
+                    // Field Properties set (`SchExtras::field_looks` under the label's id)
+                    let look = sch.extras.field_look(&l.id, &f.name);
+                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": 1_270_000, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)
@@ -2107,7 +2123,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     net_of_pin(&pin_net, &reference, &number).map(str::to_string)
                 })
             });
-            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color) })
+            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "fields_hand_placed": eda_engine::label_fields::hand_placed(&sch, &l.id), "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color), "font": sch.extras.text_attrs.get(&l.id).and_then(|a| a.font.clone()) })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -2487,6 +2503,9 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
         "italic": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.italic),
         "color": sch.extras.text_attrs.get(&t.id).and_then(|a| a.color),
         "href": sch.extras.text_attrs.get(&t.id).and_then(|a| a.href.clone()),
+        // the font Text Properties chose (absent: the default) and "Exclude from simulation"
+        "font": sch.extras.text_attrs.get(&t.id).and_then(|a| a.font.clone()),
+        "exclude_from_sim": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.exclude_from_sim),
     })
 }
 

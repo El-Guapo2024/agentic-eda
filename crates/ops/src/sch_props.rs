@@ -101,6 +101,31 @@ pub(crate) fn label_fields_after(id: &str, fields: &[eda_model::sch_extras::Labe
     Ok(out)
 }
 
+/// What [`SchCmd::SetTextAttrs`](crate::sch_edit::SchCmd::SetTextAttrs) changes; a member left out is unchanged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TextAttrsEdit {
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub color: Option<SchColor>,
+    pub href: Option<String>,
+    pub font: Option<String>,
+    pub exclude_from_sim: Option<bool>,
+}
+
+/// `DEFAULT_FONT_NAME` (`include/font/kicad_font_name.h`, "Default Font"): the font choice that is the text's default font, no font of its own.
+pub(crate) const DEFAULT_FONT_NAME: &str = "Default Font";
+
+/// `EDA_TEXT::ValidateHyperlink`: none, a page of this schematic (`IsGotoPageHref`: "#" and the page), or a URL with a scheme (`wxURI::Create( aURL ) &&
+/// uri.HasScheme()`: letters, digits, `+`, `-` and `.` after a letter, then ':').
+pub(crate) fn valid_hyperlink(url: &str) -> bool {
+    if url.is_empty() || url.starts_with('#') {
+        return true;
+    }
+    let Some((scheme, _)) = url.split_once(':') else { return false };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 impl<'a> Board<'a> {
     /// Label Properties: see [`SchCmd::EditLabel`](crate::sch_edit::SchCmd::EditLabel).
     pub(crate) fn edit_sch_label(&mut self, id: &str, text: Option<&str>, shape: Option<LabelShape>, spin: Option<LabelSpin>, look: LabelLookEdit) -> Result<(), Vec<CheckResult>> {
@@ -310,22 +335,37 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// The panel's Bold, Italic, Color and Hyperlink of free texts and Color of labels: see [`SchCmd::SetTextAttrs`](crate::sch_edit::SchCmd::SetTextAttrs). A
-    /// label's bold or italic, or its hyperlink, is refused: they are Label Properties' (`EditLabel`) and `SCH_LABEL_BASE_DESC` masks the hyperlink. Refused when
-    /// nothing changes.
-    pub(crate) fn set_sch_text_attrs(&mut self, ids: &[String], bold: Option<bool>, italic: Option<bool>, color: Option<SchColor>, href: Option<&str>) -> Result<(), Vec<CheckResult>> {
+    /// The panel's Bold, Italic, Color and Hyperlink of free texts and Color of labels, and the Font, Color, Link and Exclude from simulation of Text, Label and
+    /// Text Box Properties: see [`SchCmd::SetTextAttrs`](crate::sch_edit::SchCmd::SetTextAttrs). A label's bold or italic, its hyperlink or its exclusion, and a
+    /// text box's bold or italic, are refused: they are Label Properties' (`EditLabel`), `SCH_LABEL_BASE_DESC` masks the hyperlink, and a text box keeps its
+    /// own (`EditGraphic`). A hyperlink that is neither "#<page>" nor a URL with a scheme is refused with `DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`'s
+    /// message. Refused when nothing changes.
+    pub(crate) fn set_sch_text_attrs(&mut self, ids: &[String], edit: &TextAttrsEdit) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_nothing_selected", "text", "no items given"));
+        }
+        if let Some(h) = edit.href.as_deref() {
+            if !valid_hyperlink(h.trim()) {
+                return Err(fail(
+                    "ops_bad_hyperlink",
+                    h,
+                    "Invalid hyperlink destination. Please enter either a valid URL (e.g. file:// or http(s)://) or \"#<page number>\" to create a hyperlink to a page in this schematic.",
+                ));
+            }
         }
         let sch = self.schematic_mut()?;
         for id in ids {
             let text = sch.texts.iter().any(|t| &t.id == id);
             let label = sch.labels.iter().any(|l| &l.id == id);
-            if !text && !label {
-                return Err(fail("ops_unknown_item", id, "no free text or label with this id"));
+            let text_box = sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, eda_model::sch_extras::SchGraphicKind::TextBox { .. }));
+            if !text && !label && !text_box {
+                return Err(fail("ops_unknown_item", id, "no free text, text box or label with this id"));
             }
-            if label && (bold.is_some() || italic.is_some() || href.is_some()) {
-                return Err(fail("ops_bad_text", id, "a label's bold and italic are set in Label Properties, and a label has no hyperlink"));
+            if label && (edit.bold.is_some() || edit.italic.is_some() || edit.href.is_some() || edit.exclude_from_sim.is_some()) {
+                return Err(fail("ops_bad_text", id, "a label's bold and italic are set in Label Properties, and a label has no hyperlink or simulation exclusion"));
+            }
+            if text_box && (edit.bold.is_some() || edit.italic.is_some()) {
+                return Err(fail("ops_bad_text", id, "a text box's bold and italic are set with its shape"));
             }
             if sch.extras.is_locked(id) {
                 return Err(fail("ops_locked", id, "the item is locked"));
@@ -334,17 +374,25 @@ impl<'a> Board<'a> {
         let before = sch.extras.text_attrs.clone();
         for id in ids {
             let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
-            if let Some(b) = bold {
+            if let Some(b) = edit.bold {
                 a.bold = b;
             }
-            if let Some(i) = italic {
+            if let Some(i) = edit.italic {
                 a.italic = i;
             }
-            if let Some(c) = color {
+            if let Some(c) = edit.color {
                 a.color = specified(c);
             }
-            if let Some(h) = href {
+            if let Some(h) = edit.href.as_deref() {
                 a.href = (!h.trim().is_empty()).then(|| h.trim().to_string());
+            }
+            if let Some(f) = edit.font.as_deref() {
+                // `FONT_CHOICE::GetFontSelection`: the first choice, "Default Font", is no font of the text's own (`nullptr`)
+                let f = f.trim();
+                a.font = (!f.is_empty() && f != DEFAULT_FONT_NAME).then(|| f.to_string());
+            }
+            if let Some(x) = edit.exclude_from_sim {
+                a.exclude_from_sim = x;
             }
             if a.is_default() {
                 sch.extras.text_attrs.remove(id);

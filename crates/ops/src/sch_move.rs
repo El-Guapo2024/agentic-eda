@@ -838,7 +838,9 @@ fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Nm) {
             let spin = effective_spin(scene, i);
             scene.sch.labels[i].at = rotate_point(at, c, ccw);
             let id = scene.sch.labels[i].id.clone();
-            scene.sch.extras.label_spins.insert(id, spin.rotated(ccw));
+            scene.sch.extras.label_spins.insert(id.clone(), spin.rotated(ccw));
+            // `Rotate90`: fields placed by hand turn about the anchor (`field.Rotate( GetPosition(), .. )`); autoplaced ones are placed again (live)
+            eda_engine::label_fields::rotate_hand_placed(&mut scene.sch, &id, ccw);
         }
         Item::Text(i) => {
             // `SCH_TEXT::Rotate( aCenter, aRotateCCW )`: the anchor about the centre, then "Rotate90( false )" whichever way the anchor went
@@ -910,7 +912,9 @@ fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, grid: Nm) {
         Item::Label(i) => {
             let spin = effective_spin(scene, i);
             let id = scene.sch.labels[i].id.clone();
-            scene.sch.extras.label_spins.insert(id, spin.mirrored(!vertical));
+            scene.sch.extras.label_spins.insert(id.clone(), spin.mirrored(!vertical));
+            // `SCH_LABEL_BASE::MirrorSpinStyle( !vertical )`: fields placed by hand flip about the anchor
+            eda_engine::label_fields::mirror_spin_hand_placed(&mut scene.sch, &id, !vertical);
         }
         Item::Graphic(i) if matches!(scene.graphic(i).shape, SchGraphicKind::Directive { .. }) => mirror_item_in_place(scene, head, vertical),
         Item::SheetPin(s, p) => {
@@ -1012,8 +1016,10 @@ fn mirror_item(scene: &mut Scene, it: Item, c: Point, vertical: bool, grid: Nm) 
         Item::Label(i) => {
             let spin = effective_spin(scene, i);
             let id = scene.sch.labels[i].id.clone();
-            scene.sch.extras.label_spins.insert(id, spin.mirrored(!vertical));
+            scene.sch.extras.label_spins.insert(id.clone(), spin.mirrored(!vertical));
             scene.sch.labels[i].at = flip(scene.sch.labels[i].at);
+            // `SCH_LABEL_BASE::MirrorHorizontally` / `MirrorVertically`: fields placed by hand go to the other side of the anchor
+            eda_engine::label_fields::mirror_hand_placed(&mut scene.sch, &id, vertical);
         }
         Item::Text(i) => {
             // `SCH_TEXT::MirrorHorizontally` / `MirrorVertically`: "FlipHJustify" for a text that lies along the mirror, then the anchor about the axis

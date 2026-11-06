@@ -244,6 +244,11 @@ pub enum SchCmd {
     /// `SetItalic`, `SetTextColor`, `SetHyperlink`) and the "Color" of labels, kept in `SchExtras::text_attrs` (which the reader and writer carry). A field left
     /// out is unchanged; a colour with every channel 0 is `COLOR4D::UNSPECIFIED`; an empty hyperlink is none. A label's bold and italic are Label Properties'
     /// (`EditLabel`), and a label has no hyperlink (`SCH_LABEL_BASE_DESC` masks it).
+    ///
+    /// Text, Label and Text Box Properties (UI-LEFT S6) send it too, in the batch of their OK: the "Font" (`FONT_CHOICE`: `font` "" or "Default Font" is the
+    /// default one, `SetFont( nullptr )`), the "Color" swatch, the "Link" (`DIALOG_TEXT_PROPERTIES`: `EDA_TEXT::ValidateHyperlink` -- "#<page>" or a URL with a
+    /// scheme) and "Exclude from simulation" (`SetExcludedFromSim`) of a free text or a text box; a label's font and colour. A text box's bold and italic are
+    /// its shape's (`EditGraphic`).
     SetTextAttrs {
         ids: Vec<String>,
         #[serde(default)]
@@ -254,6 +259,10 @@ pub enum SchCmd {
         color: Option<SchColor>,
         #[serde(default)]
         href: Option<String>,
+        #[serde(default)]
+        font: Option<String>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
     },
     /// "Exclude From Position Files" of symbols (`SCH_SYMBOL::SetExcludedFromPosFilesProp`, `(in_pos_files no)`): every placed unit of each listed reference on the
     /// sheet in view (`SchExtras::excluded_from_pos_files`, by the placement's key).
@@ -549,7 +558,7 @@ impl<'a> Board<'a> {
             SchCmd::EditText { id, text, size_nm, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_nm, *angle, *h, *v),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_nm, style, color, diameter_nm } => self.set_sch_stroke(ids, *width_nm, *style, *color, *diameter_nm),
-            SchCmd::SetTextAttrs { ids, bold, italic, color, href } => self.set_sch_text_attrs(ids, *bold, *italic, *color, href.as_deref()),
+            SchCmd::SetTextAttrs { ids, bold, italic, color, href, font, exclude_from_sim } => self.set_sch_text_attrs(ids, &crate::sch_props::TextAttrsEdit { bold: *bold, italic: *italic, color: *color, href: href.clone(), font: font.clone(), exclude_from_sim: *exclude_from_sim }),
             SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
             SchCmd::SetPinAlternates { id, unit, alternates, other_units } => self.set_pin_alternates(id, *unit, alternates, *other_units),

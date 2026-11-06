@@ -650,8 +650,10 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut label_uuid: Vec<Option<String>> = Vec::new();
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
-    // each label's font colour, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
-    let mut label_colors: Vec<Option<eda_model::sch_extras::SchColor>> = Vec::new();
+    // each label's font colour and face, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
+    let mut label_colors: Vec<(Option<eda_model::sch_extras::SchColor>, Option<String>)> = Vec::new();
+    // each label's field places when they are not autoplaced, parallel to `labels` (`field_layout` under the label's id, `eda_engine::label_fields`)
+    let mut label_field_places: Vec<Option<Vec<eda_model::ir::FieldPlacement>>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
     let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
@@ -680,8 +682,10 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
-            label_colors.push(crate::sch_extras_io::read_text_attrs(l).color);
+            let attrs = crate::sch_extras_io::read_text_attrs(l);
+            label_colors.push((attrs.color, attrs.font));
             label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
+            label_field_places.push(crate::label_fields::read_label_field_places(l, tag == "global_label", labels.last().map(|x| x.at).unwrap_or_default()));
         }
     }
 
@@ -869,11 +873,17 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 sch.extras.label_fields.insert(id, fields);
             }
         }
+        // Where a label's fields are when the file has them placed by hand (no `(fields_autoplaced ..)`): `field_layout` under the label's id.
+        for (id, places) in sch.labels.iter().map(|l| l.id.clone()).zip(label_field_places) {
+            if let (false, Some(places)) = (id.is_empty(), places) {
+                sch.field_layout.insert(id, places);
+            }
+        }
         // A text's, a text box's, a label's and a directive label's attributes beyond what the item keeps (`SchExtras::text_attrs`, r7 H4, M5); the default keeps
         // no entry.
         let attrs = sch.texts.iter().map(|t| t.id.clone()).zip(text_attrs)
             .chain(sch.extras.graphics.iter().map(|g| g.id.clone()).zip(graphic_attrs))
-            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|color| eda_model::sch_extras::TextAttrs { color, ..Default::default() })));
+            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|(color, font)| eda_model::sch_extras::TextAttrs { color, font, ..Default::default() })));
         for (id, a) in attrs.filter(|(id, a)| !id.is_empty() && !a.is_default()).collect::<Vec<_>>() {
             sch.extras.text_attrs.insert(id, a);
         }
