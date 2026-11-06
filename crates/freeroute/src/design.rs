@@ -14,7 +14,9 @@
 //!
 //! The board is the one the routing gates judge, so what the router makes
 //! of it passes them: every pad is the rectangle the gates measure it by,
-//! the outline keeps copper the gates' edge clearance away, the strips
+//! the outline keeps copper the gates' edge clearance away, so does each
+//! cutout of the board (a hole of the Edge.Cuts outline, a keep-out on every
+//! signal layer as KiCad's own export writes it: `board_cutouts`), the strips
 //! between adjacent SMD pads of a part and the refdes labels are
 //! keep-outs, as the gates want them, and traces keep their class's
 //! width into narrow pins. Every clearance carries a small margin for the
