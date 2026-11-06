@@ -144,9 +144,11 @@ export async function fetchAnyFootprint(name: string): Promise<{ footprint: Libr
 
 /**
  * Opening a library footprint (`Lib:Name`) that the project library does not hold yet -- one of KiCad's installed libraries, or what the board's own model
- * resolved -- first copies it in, as one undoable `put_library_footprint`: `open_footprint_for_edit` knows only the project library, the model and the
- * built-in table, and starts a BLANK footprint for any other name, so without this an installed footprint would open empty. `overwrite`, because the
- * model may resolve the same name (a part that uses it) and a plain put treats that as taken. A name nothing resolves is left to that verb.
+ * resolved -- first copies it in, as one undoable `put_library_footprint`. `overwrite`, because the model may resolve the same name (a part that uses it)
+ * and a plain put treats that as taken. A name nothing resolves is left to the open verb, which starts a blank one. The open verb copies a library's
+ * footprint in itself too when the design has none by the time it lands (`crates/cli/src/library_place.rs::with_opened_footprint`): this read and the
+ * open are requests of their own, and a command between them (another client deleting the design's copy) used to leave the open to start a BLANK
+ * footprint under the library's name.
  */
 export async function ensureFootprintInProject(name: string): Promise<string | null> {
   if (!name.includes(":")) return null;
