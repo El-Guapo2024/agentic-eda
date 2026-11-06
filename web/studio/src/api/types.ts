@@ -260,6 +260,8 @@ export interface ExchangeOptions {
   reset_clearance_overrides: boolean;
   /** "Update/reset 3D models". */
   reset_3d_models: boolean;
+  /** Update PCB from Schematic's exchange: the pads' nets by number (the netlist's); absent or false, the dialogs' KiCad pad matching (UI-LEFT P21). */
+  pads_by_number?: boolean;
 }
 
 /** The dialog of Geographical Reannotate (`DIALOG_BOARD_REANNOTATE`; crates/model/src/reannotate.rs `ReannotateOptions`, kicad-port/reannotate.ts has the values it opens with). */
