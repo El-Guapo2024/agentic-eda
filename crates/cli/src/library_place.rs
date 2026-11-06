@@ -13,9 +13,10 @@
 //!   * `SetSymbolLibIds { changes }` (Edit Symbol Library Links) keeps the definition of every installed symbol it links to first, the same way.
 //!   * `sch_edit change_symbol { lib_id }` (Change Symbols, `DIALOG_CHANGE_SYMBOLS::processSymbol` with the `LIB_SYMBOL` `GetLibSymbol( newId )` reads from the
 //!     library -- one the Symbol Chooser found in any library of the tables) keeps the new symbol's definition first, the same way.
-//!   * `PlaceFootprint { footprint }` carries the footprint's pads, graphics and courtyard as `definition`.
-//!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`, and its text boxes, images, points and barcodes in
-//!     `library_items`: the exchange gives the board footprint the library's, UI-LEFT P30), and a symbol's Footprint field that is edited
+//!   * `PlaceFootprint { footprint }` carries the footprint as `definition`, the library's file as the Footprint Editor reads it: its pads, graphics and courtyard where the
+//!     model does not know the footprint, and always what the board's footprint has of it beyond those (its pads' layers, its record and items: UI-LEFT PP5).
+//!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`, and in `library_items` the footprint as the Footprint Editor reads
+//!     it: the exchange gives the board footprint the library's pads' layers, record and items, UI-LEFT P30, PP5), and a symbol's Footprint field that is edited
 //!     (`EditSymbolFields`, the Symbol Fields Table's `SetSymbolFields`) is followed by the board in the same step: the exchange of the part's footprint is
 //!     added to the command, `board_netlist_updater.cpp`'s `replaceFootprint`.
 //!   * `OpenFootprintForEdit { name }` of a `Lib:Name` the design has no copy of becomes the `PutLibraryFootprint` of the library's footprint
@@ -189,8 +190,8 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
                     continue;
                 }
                 if let Some(copy) = crate::library_search::installed_engine_footprint(footprints, &name) {
-                    if let Some(items) = installed_items(footprints, &name) {
-                        library_items.insert(name.clone(), items);
+                    if let Some(lib) = installed_library_footprint(footprints, &name) {
+                        library_items.insert(name.clone(), lib);
                     }
                     library.insert(name, copy);
                     added = true;
@@ -213,11 +214,8 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
             (filled != *req).then_some(Cmd::ImportNetlist(filled))
         }
         Cmd::PlaceFootprint { footprint, at, reference, value, definition: None } => {
-            // The model knows it already (the intent's, a library's it resolved, the built-in table): nothing to bring.
-            let probe = eda_model::Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.trim().to_string()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
-            if model.footprint_of(&probe).is_some() {
-                return None;
-            }
+            // The library's footprint (`PCB_BASE_FRAME::LoadFootprint`): the verb takes the pads of one the model knows already (the intent's, a library's it resolved, the
+            // built-in table) from the model, and the rest -- what the engine footprint does not carry -- from this (UI-LEFT PP5). A name no library has: nothing to bring.
             let definition = crate::library_search::installed_footprint(footprints, footprint.trim())?;
             Some(Cmd::PlaceFootprint { footprint: footprint.clone(), at: *at, reference: reference.clone(), value: value.clone(), definition: Some(definition) })
         }
@@ -225,11 +223,10 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
     }
 }
 
-/// The text boxes, images, points and barcodes of the installed footprint `name` (`eda_model::fp_items_place::placed_kinds` of the footprint the Footprint Editor reads),
-/// `None` where it has none: what an exchange gives the board footprint of them (`ExchangeFootprint` keeps `aNew`'s own).
-fn installed_items<F: LibSource + ?Sized>(footprints: &F, name: &str) -> Option<eda_model::fp_items::FootprintItems> {
-    let fp = crate::library_search::installed_footprint(footprints, name)?;
-    Some(eda_model::fp_items_place::placed_kinds(&fp.items)).filter(|i| !i.is_empty())
+/// The installed footprint `name` as the Footprint Editor reads it: what an exchange gives the board footprint beyond the engine's footprint (`ExchangeFootprint` keeps
+/// `aNew`'s own children and record: its pads' layer sets, its items, its description ..., UI-LEFT P30, PP5).
+fn installed_library_footprint<F: LibSource + ?Sized>(footprints: &F, name: &str) -> Option<eda_model::ir::LibraryFootprint> {
+    crate::library_search::installed_footprint(footprints, name)
 }
 
 /// Does something have the footprint `wanted` for the part `id`: a library of the tables, the Footprint Editor, or the model itself (another part's, a built-in package)?
@@ -287,8 +284,8 @@ fn exchange_for_field<F: LibSource + ?Sized>(id: &str, wanted: &str, design: &De
     let (mut library, mut library_items) = (BTreeMap::new(), BTreeMap::new());
     if let Some(copy) = find_footprint(wanted, id, design, model, footprints)? {
         library.insert(wanted.to_string(), copy);
-        if let Some(items) = installed_items(footprints, wanted) {
-            library_items.insert(wanted.to_string(), items);
+        if let Some(lib) = installed_library_footprint(footprints, wanted) {
+            library_items.insert(wanted.to_string(), lib);
         }
     }
     Some(Cmd::ExchangeFootprints { references: vec![id.to_string()], footprint: Some(wanted.to_string()), options: ExchangeOptions::replace(), library, library_items })

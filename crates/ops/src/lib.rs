@@ -86,6 +86,7 @@ pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, I
 mod import_graphics_sch;
 pub use import_graphics_sch::{sch_items as graphics_sch_items, symbol_items as graphics_symbol_items, ImportSchGraphics, ImportSymbolGraphics};
 mod fp_exchange;
+mod fp_on_board;
 pub use fp_exchange::{board_footprint, footprint_name_of, names_footprint_of, pending_footprint_changes, BoardFootprint, ExchangeOptions, FootprintChange};
 mod library_place;
 pub mod microwave;
@@ -1098,8 +1099,9 @@ pub enum Cmd {
     /// (`PCB_EDIT_FRAME::ExchangeFootprint`; see `fp_exchange.rs`). The part's assignment (`DrawingsSection::footprint_assignments`) and, in a change, its symbol's Footprint
     /// field are set; one undo step on both editors. `library` is the library copy of each footprint the command needs (`Lib:Name` -> footprint), which the studio's
     /// server fills in from the library tables when it is left out: a command has to replay and undo the same on a machine without the libraries. `library_items` is,
-    /// likewise, the text boxes, images, points and barcodes of each library footprint that has any (`eda_model::fp_items::FootprintItems`, which the engine footprint does
-    /// not carry): KiCad's exchange takes them from the new footprint.
+    /// likewise, each library footprint as the Footprint Editor reads it (`LibraryFootprint`), for what the engine footprint does not carry and KiCad's exchange takes from
+    /// the new footprint: its pads' layer sets, die lengths and properties, its description, tags, jumper groups, private layers, margins and 3D body, its pads with no
+    /// copper, its text boxes, images, points, barcodes, dimensions, tables and zones (UI-LEFT P30, PP5; `fp_on_board.rs`).
     ExchangeFootprints {
         references: Vec<String>,
         #[serde(default)]
@@ -1109,7 +1111,7 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         library: BTreeMap<String, Footprint>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        library_items: BTreeMap<String, eda_model::fp_items::FootprintItems>,
+        library_items: BTreeMap<String, LibraryFootprint>,
     },
     /// Geographical Reannotate (`pcbnew.ReannotateTool.ShowReannotateDialog`, `DIALOG_BOARD_REANNOTATE`): the footprints on the board renumbered by where they are, in the order,
     /// scope, prefixes and start numbers of `options` (`eda_model::reannotate`); `selection` is the footprints the "Selection" scope names (the studio's selection). Refused when two
@@ -3253,7 +3255,12 @@ impl<'a> Board<'a> {
         if let (Some(before), Some(id)) = (zones_before.as_mut(), cmd.zone_kept_filled()) {
             before.remove(id);
         }
+        // a footprint's own zones follow it (`FOOTPRINT::Move`, `SetOrientation`, `Flip`: UI-LEFT PP14, `fp_on_board.rs`); a board brought in whole has its own where they are
+        let footprint_zone_poses = (!matches!(cmd, Cmd::ReplaceBoard { .. })).then(|| self.footprint_zone_poses());
         self.apply_cmd(cmd)?;
+        if let Some(before) = footprint_zone_poses {
+            self.tidy_footprint_zones(before);
+        }
         // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
         self.tidy_zone_fills(zones_before);
         self.tidy_shared_screens(shared_before, cmd.numbering());

@@ -403,7 +403,8 @@ export function collectSelectionCandidates(
     consider("via", v.id, d, Math.max((v.drill / 2) ** 2, 1), null);
   }
   for (const z of board.routing?.zones ?? []) {
-    if (z.outline.length < 3) continue;
+    // "Most footprint children can only be selected in the footprint editor" (`PCB_SELECTION_TOOL::Selectable`): a footprint's zone is not picked on the board (UI-LEFT PP14)
+    if (z.outline.length < 3 || z.parent) continue;
     // `PCB_COLLECTOR::Inspect`: a zone is hit on a side of its outline or of one of its holes (`HitTestForCorner( accuracy * 2 ) || HitTestForEdge( accuracy )`,
     // every contour), or inside its area -- inside the outline and in none of its holes (`zoneContainsPoint`, standing in for `HitTestFilledArea`, which
     // reads the fill; a rule area's is `m_Poly->Contains`). A click deep in a hole is outside the zone: its slop is the distance to the hole's side.
@@ -611,7 +612,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("via", v.id, [v.x - r, v.y - r, v.x + r, v.y + r], null);
   }
   for (const z of board.routing?.zones ?? []) {
-    if (z.outline.length < 3) continue;
+    if (z.outline.length < 3 || z.parent) continue;
     consider("zone", z.id, boxOf(z.outline), zonePickLayer(z, layerVisible, activeLayer), z.id, !!z.is_rule_area);
   }
   for (const s of board.drawings?.shapes ?? []) {

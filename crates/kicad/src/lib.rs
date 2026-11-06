@@ -40,6 +40,8 @@ mod overbar;
 mod via_io;
 mod fp_art_io;
 mod fp_board_items_io;
+mod fp_library_record;
+pub use fp_library_record::{library_on_board, LibraryOnBoard};
 mod fp_fields;
 mod pad_shape;
 mod padstack_io;
@@ -1989,7 +1991,7 @@ pub(crate) fn fmt_double_2_str(v: f64) -> String {
 
 /// `OUTPUTFORMATTER::Quotes`: a string in quotes with a backslash, a quote, a line feed and a carriage return escaped -- a raw line feed inside a string is a library
 /// KiCad cannot load ("Unable to load library"), and a text box's text has them.
-pub(crate) fn sexpr_str(s: &str) -> String {
+pub fn sexpr_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r"))
 }
 

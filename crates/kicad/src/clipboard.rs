@@ -372,13 +372,28 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
     let (dx, dy) = (-reference.x, -reference.y);
     let mv = |p: Point| Point { x: p.x + dx, y: p.y + dy };
     let fp_pieces = |fp: &FootprintInstance| fp_pieces(model, fp, mv(fp.at));
+    // A footprint's own zones (`Zone::parent_footprint`), moved with it, written inside it as `format( FOOTPRINT )` writes its `Zones()` (`CLIPBOARD_IO::SaveSelection` copies
+    // the footprint whole: UI-LEFT PP14), a copper one on its net of `nets` (none on a footprint alone).
+    let own_zones = |id: &str, nets: &BTreeMap<&str, usize>| -> String {
+        let mut text = String::new();
+        for z in design.routing.iter().flat_map(|r| r.zones.iter()).filter(|z| z.parent_footprint.as_deref() == Some(id)) {
+            let mut moved = z.clone();
+            moved.outline = z.outline.iter().map(|p| mv(*p)).collect();
+            moved.holes = z.holes.iter().map(|h| h.iter().map(|p| mv(*p)).collect()).collect();
+            let n = if z.is_rule_area { 0 } else { nets.get(z.net.as_str()).copied().unwrap_or(0) };
+            let uuid = duid(&format!("clip:zone:{}", z.id));
+            write_zone(&mut text, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], filled: false, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None });
+        }
+        text
+    };
 
     // A footprint on its own: bare, its pads on no net (`for( PAD* pad : newFootprint.Pads() ) pad->SetNetCode( 0 )`).
     // `aSelected.Size() == 1 && aSelected.Front()->Type() == PCB_FOOTPRINT_T`: a selected group is a `PCB_GROUP_T`, so a group of one footprint takes the board branch
     if picked.total() == 1 && picked.footprints.len() == 1 && picked.groups.is_empty() {
         let (part, footprint, moved) = fp_pieces(picked.footprints[0])?;
         let mut out = String::new();
-        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, "", &FpExtra::of(design, &moved.id, &footprint), &Default::default());
+        let zones = own_zones(&moved.id, &BTreeMap::new());
+        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, &zones, &FpExtra::of(design, &moved.id, &footprint), &Default::default());
         return Ok(out);
     }
 
@@ -420,7 +435,8 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
 
     for fp in &picked.footprints {
         let (part, footprint, moved) = fp_pieces(fp)?;
-        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, "", &FpExtra::of(design, &moved.id, &footprint), &Default::default());
+        let zones = own_zones(&moved.id, &net_num);
+        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, &zones, &FpExtra::of(design, &moved.id, &footprint), &Default::default());
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     for id in &picked.pads {

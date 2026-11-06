@@ -382,10 +382,14 @@ impl Board<'_> {
                 edit: self.design.footprint_edit(id).cloned(),
                 shown_reference: None,
                 zone_overrides,
-                extra: self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == id)).cloned(),
+                extra: self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == id)).map(|e| FootprintExtra { zones_pose: None, ..e.clone() }),
                 reuse_unplaced: false,
                 annotation: PasteMode::Unique,
             });
+            // its zones (`FOOTPRINT::Duplicate` clones every child): copies of the footprint's, given to the copy when it lands (UI-LEFT PP14)
+            if let Some(rt) = &self.design.routing {
+                copies.zones.extend(rt.zones.iter().filter(|z| z.parent_footprint.as_deref() == Some(id)).cloned());
+            }
             return Some(Member::Footprint(copies.footprints.len() - 1));
         }
         if let Some(rt) = &self.design.routing {
@@ -517,7 +521,7 @@ impl Board<'_> {
             }
             let mut c = z.clone();
             c.net = if z.is_rule_area { String::new() } else { net_of(&z.net) };
-            c.parent_footprint = None;
+            // a footprint's zone stays its (`CLIPBOARD_IO::Parse` reads it into the footprint): the copy of the footprint takes it when it lands (UI-LEFT PP14)
             c.outline = z.outline.iter().map(|p| mv(*p)).collect();
             c.holes = z.holes.iter().map(|h| h.iter().map(|p| mv(*p)).collect()).collect();
             zone_ix.push(Some(copies.zones.len()));
@@ -809,6 +813,17 @@ impl Board<'_> {
         let joins: Vec<(String, String)> = copies.join.iter().filter_map(|(m, g)| id_of(m, &group_ids).map(|id| (id, g.clone()))).collect();
         let locked_copies: Vec<String> = copies.locked.iter().filter_map(|m| id_of(m, &group_ids)).collect();
 
+        // A footprint's zones are the copy's: the parent each names is the footprint copied (its reference, `#n` for the n-th of a repeated one on the clipboard), which
+        // lands as `fp_refs`' (a zone whose footprint is not among the copies is a zone of the board).
+        for z in copies.zones.iter_mut() {
+            let Some(parent) = z.parent_footprint.take() else { continue };
+            let owner = copies.footprints.iter().position(|f| f.reference == parent).or_else(|| {
+                let (base, n) = parent.split_once('#')?;
+                let n: usize = n.parse().ok()?;
+                copies.footprints.iter().enumerate().filter(|(_, f)| f.reference == base).nth(n.checked_sub(1)?).map(|(k, _)| k)
+            });
+            z.parent_footprint = owner.and_then(|k| fp_refs.get(k).cloned());
+        }
         // Land them.
         if !copies.tracks.is_empty() || !copies.vias.is_empty() || !copies.zones.is_empty() {
             let rt = self.routing_mut();
@@ -874,6 +889,13 @@ impl Board<'_> {
             fps.extend(replaced);
             fps.extend(new_parts.into_iter().map(|(_, f)| f));
             self.sort_footprints();
+        }
+        // a copy's zones are where the copy lands: a move or a turn of it after (Create Array's, the Move tool's) takes them along (`fp_on_board.rs`)
+        let owners: BTreeSet<String> = self.design.routing.iter().flat_map(|r| r.zones.iter()).filter_map(|z| z.parent_footprint.clone()).filter(|p| fp_refs.contains(p)).collect();
+        for r in owners {
+            if let Some(pose) = self.pose_of(&r).cloned() {
+                self.mark_zones_at(&r, &pose);
+            }
         }
         Ok(top)
     }

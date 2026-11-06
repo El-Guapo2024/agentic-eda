@@ -95,6 +95,9 @@ mod fp_board_items_tests;
 #[path = "fp_keep_tests.rs"]
 mod fp_keep_tests;
 #[cfg(test)]
+#[path = "fp_library_record_tests.rs"]
+mod fp_library_record_tests;
+#[cfg(test)]
 #[path = "microwave_tests.rs"]
 mod microwave_tests;
 #[cfg(test)]
