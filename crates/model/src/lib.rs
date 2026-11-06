@@ -41,6 +41,7 @@ pub mod model_subst;
 pub mod modules;
 pub mod multichannel;
 pub mod net_pattern;
+pub mod netlist_import;
 pub mod wx_regex;
 pub mod outline;
 pub mod pad_geom;
