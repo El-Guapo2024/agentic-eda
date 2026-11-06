@@ -749,6 +749,95 @@ pub fn configured_env_vars(json_text: &str) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+/// `meta.version` of a `kicad_common.json` (`JSON_SETTINGS::LoadFromFile`: `m_internals->Get<int>( "meta.version" )`); `None` when the text is no JSON or has none.
+pub fn settings_schema_version(json_text: &str) -> Option<i64> {
+    serde_json::from_str::<serde_json::Value>(json_text).ok()?.pointer("/meta/version")?.as_i64()
+}
+
+/// One entry of KiCad 5's 3D search-path list (`LEGACY_3D_SEARCH_PATH`): the alias, the path it stands for (which may hold variables) and its description.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Legacy3dSearchPath {
+    pub alias: String,
+    pub pathvar: String,
+    pub description: String,
+}
+
+/// `COMMON_SETTINGS::getLegacy3DHollerith`: the Hollerith string at `*index` of `line` -- `"N:text"`, N characters of text between the quotes -- with `*index` moved past
+/// its closing quote; `None` for a line that holds none there ("bad Hollerith string on line", "missing opening quote mark in config file", "invalid entry (unexpected
+/// end of line)", "missing closing quote mark in config file", which KiCad only traces).
+fn legacy_3d_hollerith(line: &[u8], index: &mut usize) -> Option<String> {
+    if *index >= line.len() {
+        return None;
+    }
+    let mut i2 = *index + line[*index..].iter().position(|&c| c == b'"')? + 1;
+    if i2 >= line.len() {
+        return None;
+    }
+    let digits_start = i2;
+    while i2 < line.len() && line[i2].is_ascii_digit() {
+        i2 += 1;
+    }
+    if i2 == digits_start || i2 >= line.len() || line[i2] != b':' {
+        return None;
+    }
+    let nchars: usize = std::str::from_utf8(&line[digits_start..i2]).ok()?.parse().ok()?;
+    i2 += 1;
+    if i2 + nchars >= line.len() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&line[i2..i2 + nchars]).into_owned();
+    i2 += nchars;
+    if i2 >= line.len() || line[i2] != b'"' {
+        return None;
+    }
+    *index = i2 + 1;
+    Some(text)
+}
+
+/// `COMMON_SETTINGS::readLegacy3DResolverCfg`: the entries of a KiCad 5 `3d/3Dresolver.cfg` -- a first line `#V<version>`, then one line per search path, three Hollerith
+/// strings each (alias, path, description). A line that does not read is skipped, and so is an alias that is one of KiCad's own variables ("Don't add KICADn_3DMODEL_DIR,
+/// one of its legacy equivalents, or KIPRJMOD from a config file. They're system variables which are defined at runtime."): `${KICAD<major>_3DMODEL_DIR}`, `${KIPRJMOD}`,
+/// `$(KIPRJMOD)`, `${KISYS3DMOD}`, `$(KISYS3DMOD)`.
+pub fn read_legacy_3d_resolver_cfg(text: &str, major: u32) -> Vec<Legacy3dSearchPath> {
+    let versioned = format!("${{KICAD{major}_3DMODEL_DIR}}");
+    let mut out = Vec::new();
+    for (lineno, line) in text.split('\n').enumerate() {
+        // `std::getline` leaves a carriage return in the line: text after the quotes, which nothing reads
+        if line.is_empty() || (lineno == 0 && line.starts_with("#V")) {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let mut idx = 0;
+        let Some(alias) = legacy_3d_hollerith(bytes, &mut idx) else { continue };
+        if alias == versioned || ["${KIPRJMOD}", "$(KIPRJMOD)", "${KISYS3DMOD}", "$(KISYS3DMOD)"].contains(&alias.as_str()) {
+            continue;
+        }
+        let Some(pathvar) = legacy_3d_hollerith(bytes, &mut idx) else { continue };
+        let Some(description) = legacy_3d_hollerith(bytes, &mut idx) else { continue };
+        out.push(Legacy3dSearchPath { alias, pathvar, description });
+    }
+    out
+}
+
+/// `COMMON_SETTINGS::migrateSchema2to3`: the path variables KiCad makes of a KiCad 5 3D search-path list when it reads a `kicad_common.json` of schema 2 or older -- each
+/// alias "sanitized" to a variable's name ("upper case only", "logically swap - with _", "remove any other chars": `[^A-Z0-9_]+`), with the alias's path as its value,
+/// unless `defined` says KiCad has a variable of that name already (`if( !m_Env.vars.count( key ) )`: the predefined ones, set before the settings are read). In the order
+/// of the file; a later alias that sanitizes to a name an earlier one took is skipped too.
+///
+/// Differs from KiCad: only ASCII letters are upper-cased (`wxString::MakeUpper` turns other letters too, which the next step then removes either way), and an alias that
+/// sanitizes to nothing is skipped where KiCad would define a variable with no name.
+pub fn migrated_3d_search_paths(paths: &[Legacy3dSearchPath], defined: &dyn Fn(&str) -> bool) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for p in paths {
+        let key: String = p.alias.to_ascii_uppercase().replace('-', "_").chars().filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+        if key.is_empty() || defined(&key) || out.iter().any(|(k, _)| *k == key) {
+            continue;
+        }
+        out.push((key, p.pathvar.clone()));
+    }
+    out
+}
+
 /// The major version in a KiCad configuration folder's name (`10.99` -> 10).
 pub fn major_of(version_dir: &str) -> Option<u32> {
     version_dir.split('.').next()?.parse().ok()
@@ -1441,6 +1530,47 @@ mod tests {
         assert_eq!(m.get("MYLIBS").map(String::as_str), Some("/x"));
         assert!(!m.contains_key("N"));
         assert_eq!((major_of("10.99"), major_of("9.0"), major_of("nightly")), (Some(10), Some(9), None));
+    }
+
+    #[test]
+    fn a_kicad5_3d_resolver_cfg_is_read_as_read_legacy_3d_resolver_cfg_reads_it() {
+        let h = |s: &str| format!("\"{}:{s}\"", s.len());
+        let line = |a: &str, p: &str, d: &str| format!("{},{},{}", h(a), h(p), h(d));
+        // the version line, KiCad's own variables (skipped), a good entry, a line with a bad count, one with a missing quote, an empty description and a CR line end
+        let cfg = [
+            "#V1".to_string(),
+            line("${KICAD10_3DMODEL_DIR}", "/lib", ""),
+            line("${KISYS3DMOD}", "/lib", ""),
+            line("$(KIPRJMOD)", "/p", ""),
+            line("my-parts", "${HOME}/models", "team parts"),
+            "\"x:bad\",\"1:/\",\"0:\"".to_string(),
+            format!("{},\"2:/q", h("abc")),
+            format!("{}\r", line("Lib_2", "/tmp/l", "")),
+            String::new(),
+        ]
+        .join("\n");
+        let read = read_legacy_3d_resolver_cfg(&cfg, 10);
+        let got: Vec<(&str, &str, &str)> = read.iter().map(|p| (p.alias.as_str(), p.pathvar.as_str(), p.description.as_str())).collect();
+        assert_eq!(got, [("my-parts", "${HOME}/models", "team parts"), ("Lib_2", "/tmp/l", "")]);
+        // an older KiCad's versioned variable is no system variable of KiCad 10: it is kept
+        assert_eq!(read_legacy_3d_resolver_cfg(&line("${KICAD9_3DMODEL_DIR}", "/x", ""), 10).len(), 1);
+        // a count that does not end at the closing quote
+        assert!(read_legacy_3d_resolver_cfg("\"9:abc\",\"2:/q\",\"0:\"", 10).is_empty());
+        assert_eq!(read_legacy_3d_resolver_cfg(&format!("{}\n#V2", line("A", "/a", "")), 10).len(), 1, "a #V line after the first is an entry that does not read");
+    }
+
+    #[test]
+    fn migrate_schema_2_to_3_names_the_aliases_as_variables_and_keeps_what_kicad_defines() {
+        let p = |alias: &str, path: &str| Legacy3dSearchPath { alias: alias.into(), pathvar: path.into(), description: String::new() };
+        let paths = [p("my-parts", "/m"), p("Lib 2.0", "/l"), p("KICAD10_3DMODEL_DIR", "/x"), p("MY_PARTS", "/again"), p("äö", "/u"), p("team_lib", "/t")];
+        let defined = |name: &str| name == "KICAD10_3DMODEL_DIR";
+        assert_eq!(
+            migrated_3d_search_paths(&paths, &defined),
+            vec![("MY_PARTS".to_string(), "/m".to_string()), ("LIB20".to_string(), "/l".to_string()), ("TEAM_LIB".to_string(), "/t".to_string())],
+            "upper case, `-` as `_`, the rest dropped; a predefined name and a name taken already are kept as they were"
+        );
+        assert_eq!(settings_schema_version(r#"{"meta": {"filename": "kicad_common.json", "version": 2}}"#), Some(2));
+        assert_eq!(settings_schema_version("{}"), None);
     }
 
     #[test]

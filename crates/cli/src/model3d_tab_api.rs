@@ -9,7 +9,7 @@
 //!   - **`GET /api/3dmodel/browse?dir=..&filter=..`**: the model chooser's folders and files. `dir` is a path in the forms a footprint writes (`${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes`,
 //!     `${KIPRJMOD}/models`, a folder one of the board's path variables names); without it, only the roots are answered. Every entry carries the path to write in the footprint:
 //!     the file shortened to the first root that holds it (`FILENAME_RESOLVER::ShortenPath`), so a model chosen in KiCad's library is `${KICAD10_3DMODEL_DIR}/...` and one in
-//!     the board's folder `${KIPRJMOD}/...`. Only the folders `resolve` may read are listed, and only model files (`.wrl`, `.step`, `.stp`) in them.
+//!     the board's folder `${KIPRJMOD}/...`. Only the folders `resolve` may read are listed, and only model files in them (VRML, X3D, STEP and IGES: `model_family`).
 //!   - **`GET /api/3dmodel/migrate?dirs=..`**: what Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS`) shows -- the `.wrl` and `.wrz` models of the footprints on the board that are not there
 //!     (`collectMissingModels`), each with the footprints that use it, the first one's placement of it, and the STEP-family files of the folders the resolver searches that could stand
 //!     for it, ranked (`rankCandidatesFor`, [`eda_model::model_subst`]), as the paths to write in the footprint. `dirs` are the folders the person added (`m_Extra3DSearchDirs`), `|`
@@ -20,7 +20,7 @@
 
 use eda_model::units::Nm;
 use crate::library_tables::{model_names, ModelNames};
-use crate::model3d_api::{board_roots, expand, finds_file, format_of, models_dir, percent_decode, resolve, Format, Reject, Reply, Roots};
+use crate::model3d_api::{board_roots, expand, finds_file, model_family, models_dir, percent_decode, resolve, ModelFamily, Reject, Reply, Roots};
 use eda_model::footprint::placed_pads;
 use eda_model::fp_models::{self, PathProblem};
 use eda_model::model_subst::{self, CatalogEntry};
@@ -121,13 +121,20 @@ fn query_value(target: &str, key: &str) -> Option<String> {
     target.split_once('?').map(|(_, q)| q)?.split('&').find_map(|kv| kv.strip_prefix(key).and_then(|v| v.strip_prefix('='))).and_then(percent_decode)
 }
 
-/// What the chooser's filter shows (`m_FileTree->SetFilter`): every model file the studio can show, or only the STEP or only the VRML ones.
+/// What the chooser's filter shows (`DIALOG_SELECT_3DMODEL`'s `m_FileTree->SetFilter`, built from `S3D_PLUGIN_MANAGER::GetFileFilters`): "All supported files" (`all`), or one
+/// plugin filter's family -- `step` (STEP), `iges` (IGES), `wrl` (VRML 1.0/2.0) or `x3d` (X3D) -- and `candidates`, Migrate 3D Models' "Open External File..." wildcard
+/// (`OnOpenExternalFileClick`: `stepExtensions()`, "3D Models (*.step;*.stp;*.stpz;*.step.gz;*.stp.gz;*.iges;*.igs)").
+///
+/// Differs from KiCad: there is no "All Files (*.*)" (the route serves model files only), and no IDF filters (`libs3d_plugin_idf`'s files are not served).
 fn wanted(path: &Path, filter: &str) -> bool {
-    match (format_of(path), filter) {
-        (None, _) => false,
-        (Some(_), "all" | "") => true,
-        (Some(Format::Step), "step") => true,
-        (Some(Format::Vrml), "wrl" | "vrml") => true,
+    let Some(family) = model_family(path) else { return false };
+    match filter {
+        "all" | "" => true,
+        "step" => family == ModelFamily::Step,
+        "iges" => family == ModelFamily::Iges,
+        "wrl" | "vrml" => family == ModelFamily::Vrml,
+        "x3d" => family == ModelFamily::X3d,
+        "candidates" => path.file_name().and_then(|n| n.to_str()).is_some_and(model_subst::has_step_extension),
         _ => false,
     }
 }
@@ -402,7 +409,7 @@ mod tests {
 
     impl Fixture {
         fn roots(&self) -> Roots {
-            Roots { models: self.models.clone(), project: self.project.clone(), extra: vec![self.extra.clone()] }
+            Roots { models: self.models.clone(), project: self.project.clone(), extra: vec![self.extra.clone()], aliases: Vec::new() }
         }
         fn listing(&self) -> Vec<Root> {
             vec![

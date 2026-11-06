@@ -39,7 +39,21 @@ export interface ModelListing {
   truncated: boolean;
 }
 
-export type ModelFilter = "all" | "step" | "wrl";
+/** What `GET /api/3dmodel/browse` lists (crates/cli/src/model3d_tab_api.rs `wanted`): every model file, one plugin filter's family, or Migrate 3D Models' "Open External File..." wildcard. */
+export type ModelFilter = "all" | "step" | "iges" | "wrl" | "x3d" | "candidates";
+
+/** The plugin filters of KiCad's 3D plugins, as `S3D_PLUGIN_MANAGER::GetFileFilters` gives them on Linux and macOS (the `FILE_DATA` of KiCad 25ec2335's plugins/3d/oce/oce.cpp and
+ *  plugins/3d/vrml/plugin.cpp: the label before the `|`, the patterns after it), the IDF plugin's left out (the studio serves no IDF file). */
+const PLUGIN_FILTERS: Array<{ value: ModelFilter; label: string; patterns: string }> = [
+  { value: "step", label: "STEP (*.stp;*.STP;*.stpZ;*.stpz;*.STPZ;*.step;*.STEP;*.stp.gz;*.STP.GZ;*.step.gz;*.STEP.GZ)", patterns: "*.stp;*.STP;*.stpZ;*.stpz;*.STPZ;*.step;*.STEP;*.stp.gz;*.STP.GZ;*.step.gz;*.STEP.GZ" },
+  { value: "iges", label: "IGES (*.igs;*.IGS;*.iges;*.IGES)", patterns: "*.igs;*.IGS;*.iges;*.IGES" },
+  { value: "wrl", label: "VRML 1.0/2.0 (*.wrl;*.WRL;*.wrz;*.WRZ)", patterns: "*.wrl;*.WRL;*.wrz;*.WRZ" },
+  { value: "x3d", label: "X3D (*.x3d;*.X3D)", patterns: "*.x3d;*.X3D" },
+];
+
+/** The model chooser's filter list (`DIALOG_SELECT_3DMODEL`'s constructor): "All supported files (%s)" with every plugin filter's patterns, then each plugin filter. KiCad's "All Files (*.*)"
+ *  is not offered: the route lists model files only. */
+export const MODEL_FILTERS: Array<{ value: ModelFilter; label: string }> = [{ value: "all", label: `All supported files (${PLUGIN_FILTERS.map((f) => f.patterns).join(";")})` }, ...PLUGIN_FILTERS];
 
 /** `GET /api/3dmodel/browse`: the folders and model files in `dir` (a path as a footprint writes it; empty for the roots). Throws with the server's reason for a folder it will not list. */
 export async function browseModels(dir: string, filter: ModelFilter = "all"): Promise<ModelListing> {

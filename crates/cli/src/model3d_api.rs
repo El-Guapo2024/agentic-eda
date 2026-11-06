@@ -7,19 +7,24 @@
 //!   - **`GET /api/3dmodel?name=<model path>`** serves one model, read-only. `name` is the path a footprint's `(model "...")` line writes
 //!     (`${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step`, a legacy `${KISYS3DMOD}/...wrl`, a project-relative one), percent-encoded. It is
 //!     resolved the way KiCad's `FILENAME_RESOLVER` does (see [`resolve`]) and then held to an allow-list: the file must lie, once symlinks are resolved,
-//!     under KiCad's 3D model directory or the board's own directory, and be a `.wrl`, `.step` or `.stp`. Nothing else is readable through this route.
+//!     under KiCad's 3D model directory or the board's own directory, and be a model file KiCad's 3D plugins read ([`model_family`]: VRML, X3D, STEP, IGES).
+//!     Nothing else is readable through this route.
 //!   - **STEP models** are what KiCad's installed library holds (7238 `.step`, no `.wrl`), and the browser has no STEP reader. The first request for one
 //!     converts it with `kicad-cli pcb export vrml --models-dir` (`eda_kicad_engine::convert_models_to_vrml`: KiCad's own 3D cache reads the STEP and
 //!     writes the VRML KiCad's libraries are written in) and keeps the result in a cache directory, keyed by the file's path, size and modification time,
 //!     so a model is converted once, not once per board or per session. The route answers `202 {"status":"pending"}` while it runs and the browser asks
 //!     again; the request loop never waits for kicad-cli. Requests that arrive together (one per distinct model of the board) are converted in one
 //!     kicad-cli run, up to 16: a run costs 2 to 3.7 s of CPU whether it converts 2, 5 or 15 models (measured), so splitting a board's models into runs
-//!     (tried: two models first, the rest after) puts the first model no sooner and the last one later.
+//!     (tried: two models first, the rest after) puts the first model no sooner and the last one later. IGES, X3D and compressed VRML (`.wrz`) go the same way
+//!     ([`Format::Converted`]): the box's kicad-cli (10.99.0-4fe1ca2060) converts a hand-written `.x3d`, a hand-written `.igs` / `.iges`, a `.wrz`, a
+//!     `.stpz` and a `.step.gz` with `--models-dir` as it converts a STEP (2026-11-06, scratch files). `kicad-cli pcb export glb` (the Render section's exact
+//!     export) takes IGES but not X3D: its STEP exporter's `getModelLabel` has no X3D reader ("Cannot identify actual file type for '%s'.").
 //!   - **The models of each part** go out in `/api/state` (`parts[].models`, `parts[].kind3d`), from [`part_json`].
 
 use crate::kicad_lane::Lane;
 use eda_kicad::part_models;
 use eda_model::embedded_files;
+use eda_model::model_subst;
 use eda_model::{ConstraintModel, Footprint, Part};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -48,6 +53,10 @@ pub struct Roots {
     pub project: PathBuf,
     /// The folders the person named in Configure Paths (the board's variables, or KiCad's own): `library_tables::ModelNames::folders`. Never the environment's.
     pub extra: Vec<PathBuf>,
+    /// The resolver's search paths by their bare names (`FILENAME_RESOLVER::createPathList` with `GetKicadPaths`: each of KiCad's path variables, "the path without the
+    /// ${} to act as legacy alias support for older files"), each with the folder it stands for: what a KiCad 5 alias -- `NAME:file`, `:NAME:file`, or a `${NAME}/file`
+    /// no variable expands -- is looked up in ([`search`]). `library_tables::ModelNames::aliases`.
+    pub aliases: Vec<(String, PathBuf)>,
 }
 
 /// Why a model name does not name a readable model.
@@ -61,10 +70,47 @@ pub enum Reject {
     Forbidden(String),
 }
 
+/// How the route serves a model file: a VRML 2.0 file as it is (three.js's `VRMLLoader` reads it), every other format KiCad's 3D plugins read through
+/// kicad-cli's conversion to VRML ([`Store`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Vrml,
+    /// STEP, IGES, X3D and a compressed VRML (`.wrz`): converted once by `kicad-cli pcb export vrml --models-dir`, whose 3D cache reads it with the plugin KiCad's 3D
+    /// viewer reads it with (`libs3d_plugin_oce` for STEP and IGES, `libs3d_plugin_vrml` for X3D; a `.wrz` is gunzipped).
+    Converted,
+}
+
+/// The families of model file KiCad's 3D plugins read (`S3D_PLUGIN_MANAGER`'s extension map), each a filter of the model chooser of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelFamily {
+    /// `libs3d_plugin_oce`'s "STEP (*.stp;*.STP;*.stpZ;*.stpz;*.STPZ;*.step;*.STEP;*.stp.gz;*.STP.GZ;*.step.gz;*.STEP.GZ)".
     Step,
+    /// `libs3d_plugin_oce`'s "IGES (*.igs;*.IGS;*.iges;*.IGES)".
+    Iges,
+    /// `libs3d_plugin_vrml`'s "VRML 1.0/2.0 (*.wrl;*.WRL;*.wrz;*.WRZ)".
+    Vrml,
+    /// `libs3d_plugin_vrml`'s "X3D (*.x3d;*.X3D)".
+    X3d,
+}
+
+/// The family of a model file by its extension, as `S3D_PLUGIN_MANAGER::Load3DModel` finds the plugin for it: the part after the last dot, or, for a `.gz`, the one
+/// before it and `.gz` ("`.gz` files are compressed versions that may have additional information in the previous extension"), looked up in the extensions the plugins
+/// list (the `FILE_DATA` of KiCad 25ec2335's `plugins/3d/oce/oce.cpp` and `plugins/3d/vrml/plugin.cpp`; 8303b2ad's tree has no `plugins/`). `None` for a file no plugin
+/// here reads. IDF component outlines (`libs3d_plugin_idf`'s `.idf` and `.emn`) are not served: a conversion of one was not verified.
+///
+/// Differs from KiCad in one way: on Linux and macOS the plugins list each spelling they take (`stp`, `STP`, `stpZ`, ...) and the map is matched as the file has it, so
+/// a `.Step` loads nowhere in KiCad; here the extension is matched without regard to case.
+pub fn model_family(path: &Path) -> Option<ModelFamily> {
+    let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    let (stem, ext) = name.rsplit_once('.')?;
+    let ext = if ext == "gz" { format!("{}.gz", stem.rsplit_once('.')?.1) } else { ext.to_string() };
+    match ext.as_str() {
+        "stp" | "step" | "stpz" | "stp.gz" | "step.gz" => Some(ModelFamily::Step),
+        "igs" | "iges" => Some(ModelFamily::Iges),
+        "wrl" | "wrz" => Some(ModelFamily::Vrml),
+        "x3d" => Some(ModelFamily::X3d),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,8 +125,7 @@ pub struct Resolved {
 /// order, to the board's directory (`KIPRJMOD`), to the process environment, and -- for a name that contains `KISYS3DMOD` or is any `KICAD*_3DMODEL_DIR`, however
 /// old -- to the model library of the KiCad that is installed ("Replace unmatched older variables with current locations"). Anything else is left as written,
 /// and then names no file; so is a bracket left open (KiCad logs "Environment variables expansion failed: missing '%c' ..." and goes on with the text after
-/// the name). Not ported: `FILENAME_RESOLVER::ResolvePath`'s try of an unresolved `${NAME}` against the user's 3D search-path aliases (KiCad 5's alias list,
-/// which the studio has no settings for).
+/// the name). An unresolved `${NAME}` is tried against the resolver's aliases afterwards, by [`search`].
 pub(crate) fn expand(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> String {
     let s: Vec<char> = name.chars().collect();
     let mut out = String::with_capacity(name.len());
@@ -141,42 +186,110 @@ pub(crate) fn expand(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<Str
     out
 }
 
-/// Lower case, `-` and ` ` turned into `_`, the extension (any 3D one) taken off: how KiCad matches a missing VRML to a STEP of the same part
-/// (`MODEL_SUBSTITUTION::normalizeStem`).
-fn normalized_stem(file_name: &str) -> String {
-    let lower = file_name.to_lowercase();
-    let stem = [".step.gz", ".stp.gz", ".wrl", ".wrz", ".step", ".stp", ".stpz", ".iges", ".igs"].iter().find_map(|ext| lower.strip_suffix(ext)).unwrap_or(&lower);
-    stem.replace(['-', ' '], "_")
-}
-
-/// The STEP that stands in for a VRML model that is not there (`kicad-cli ... --subst-models`, `MODEL_SUBSTITUTION`): the same name with a STEP extension
-/// in the same directory, else the file there whose normalized name is the same.
+/// The STEP-family file that stands in for a VRML model that is not there, in the same directory: `S3D_CACHE::load`'s substitution for a missing reference in
+/// kicad-cli and scripting ("In CLI / scripting contexts, transparently substitute a matching STEP model for a missing WRL reference", `!Pgm().IsGUI() &&
+/// MODEL_SUBSTITUTION::IsWrlExtension( aModelFile )`, then `STEP_CATALOG::FindMatchFor`): only for a `.wrl` or `.wrz` name, and the candidates are KiCad's
+/// `stepExtensions` -- STEP, STPZ, the gzipped STEPs and IGES -- with the same normalised stem (`normalizeStem`).
+///
+/// Differs from KiCad: KiCad's GUI does no such substitution when it draws (it migrates the references when the board opens, `AutoMigrateByFilename`, which
+/// the studio now does too: `model3d_tab_api::auto_migrate`); kicad-cli's catalog walks every search path (`gatherScanDirs`), this looks only beside the missing
+/// file, the same name with each of `stepExtensions` in KiCad's order of preference first, then any file of the same normalised stem there.
 fn step_for_missing_wrl(wrl: &Path) -> Option<PathBuf> {
-    let ext = wrl.extension()?.to_str()?.to_ascii_lowercase();
-    if ext != "wrl" && ext != "wrz" {
+    let name = wrl.file_name()?.to_str()?;
+    if !model_subst::is_wrl(name) {
         return None;
     }
-    for step_ext in ["step", "stp"] {
-        let sibling = wrl.with_extension(step_ext);
+    let stem = &name[..name.rfind('.')?];
+    for ext in model_subst::STEP_EXTENSIONS {
+        let sibling = wrl.with_file_name(format!("{stem}.{ext}"));
         if sibling.is_file() {
             return Some(sibling);
         }
     }
-    let want = normalized_stem(wrl.file_name()?.to_str()?);
-    std::fs::read_dir(wrl.parent()?).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "step" | "stp")) && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| normalized_stem(n) == want))
+    let want = model_subst::normalize_stem(name);
+    let mut found: Vec<PathBuf> = std::fs::read_dir(wrl.parent()?).ok()?.flatten().map(|e| e.path()).filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| model_subst::has_step_extension(n) && model_subst::normalize_stem(n) == want)).collect();
+    found.sort();
+    found.into_iter().next()
 }
 
+/// How the route serves the file at `path` (see [`Format`]), by its extension ([`model_family`]): a `.wrl` as it is, every other model file converted.
+///
+/// A VRML 1.0 `.wrl` (and a `.wrz` holding one) is not drawn: KiCad's VRML plugin reads it (`WRL1BASE`), three.js's `VRMLLoader` reads VRML 2.0 only, and kicad-cli's
+/// export is no way round that -- `EXPORTER_PCB_VRML::ExportVrmlFootprint` copies a `.wrl` into `--models-dir` as it is and only gunzips a `.wrz` ("copy VRML models
+/// and use the scenegraph library to translate other model types"; verified: a VRML 1.0 file came back unchanged).
 pub(crate) fn format_of(path: &Path) -> Option<Format> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "wrl" => Some(Format::Vrml),
-        "step" | "stp" => Some(Format::Step),
-        _ => None,
-    }
+    let family = model_family(path)?;
+    let plain_vrml = family == ModelFamily::Vrml && path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("wrl"));
+    Some(if plain_vrml { Format::Vrml } else { Format::Converted })
 }
 
-/// Whether `name` finds a file the way `FILENAME_RESOLVER::ResolvePath` searches for one -- the name with its variables expanded, relative to the project, relative to the model library
-/// -- and nothing else: a `.wrl` that is not there is *not* found because a `.step` of the same name is (that stand-in is [`resolve`]'s, for the 3D view). The Migrate 3D Models dialog's
-/// "missing" is this. The allow-list is not asked: a file that is there is there, whether this route may serve it or not.
+/// `FILENAME_RESOLVER::SplitAlias`: `ALIAS:relative/path` or `:ALIAS:relative/path` into the alias and the path; `None` when there is no colon after the alias's
+/// first character, or nothing after the colon.
+pub(crate) fn split_alias(name: &str) -> Option<(&str, &str)> {
+    let search_start = usize::from(name.starts_with(':'));
+    let tagpos = search_start + name[search_start..].find(':')?;
+    if tagpos == search_start || tagpos + 1 >= name.len() {
+        return None;
+    }
+    Some((&name[search_start..tagpos], &name[tagpos + 1..]))
+}
+
+/// `FILENAME_RESOLVER::ResolvePath` (`common/filename_resolver.cpp`) without its embedded files (each caller asks those first): the file `name` finds, or `None`.
+///
+///   1. The name with its variables expanded ([`expand`]), when that is a file: "full paths, leading expanded vars".
+///   2. A name that begins with `${` or `$(` and is not a file after that is a file nowhere -- unless the expansion left it as it was (no variable of that name), when
+///      the variable's name is tried as one of the resolver's aliases ("a user-defined alias that was incorrectly stored in ${} format by older versions of KiCad"):
+///      the folder of the search path whose bare name it is, with the rest of the name after its separator.
+///   3. The name relative to the project's folder (`m_paths.begin()`: `${KIPRJMOD}`), then relative to the 3D model library (`${KICAD10_3DMODEL_DIR}/name`, "legacy
+///      behavior"); neither for a name that begins with `:`.
+///   4. A KiCad 5 aliased name (`ALIAS:path`, `:ALIAS:path`: [`split_alias`]): the folder of the search path whose bare name is the alias ([`Roots::aliases`]), with the
+///      path after it.
+///
+/// Differs from KiCad, all because a server answers here and not a program run in the board's folder: a relative name is not tried against the process's working
+/// directory (step 1's "paths relative to the current working directory"), nor against the footprint's library folder (`aWorkingPath`, which
+/// `RENDER_3D_OPENGL::load3dModels` passes as the footprint library row's path: this route is asked a model name alone); `checkEnvVarPath`'s adding of a variable
+/// to the search paths is not needed, the paths being read on every request.
+pub(crate) fn search(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let name = name.replace('\\', "/");
+    let tname = expand(&name, roots, env);
+    let given = PathBuf::from(&tname);
+    if given.is_absolute() && given.is_file() {
+        return Some(given);
+    }
+    if name.starts_with("${") || name.starts_with("$(") {
+        if tname != name {
+            return None;
+        }
+        let close = if name.starts_with("${") { '}' } else { ')' };
+        let alias_end = name.find(close).filter(|&e| e > 2)?;
+        let alias = &name[2..alias_end];
+        let rel = name[alias_end + 1..].strip_prefix('/').unwrap_or(&name[alias_end + 1..]);
+        return in_alias(alias, rel, roots, env);
+    }
+    if !tname.starts_with(':') && !given.is_absolute() {
+        for base in [&roots.project, &roots.models] {
+            let full = base.join(&given);
+            if full.is_file() {
+                return Some(full);
+            }
+        }
+    }
+    let (alias, rel) = split_alias(&tname)?;
+    in_alias(alias, rel, roots, env)
+}
+
+/// The file `rel` in the folder of the search path whose bare name is `alias` (`path.m_Alias == alias && !path.m_Pathexp.empty()`, then
+/// `ExpandEnvVarSubstitutions( fpath.GetPathWithSep() + relpath )` and `wxFileName::FileExists`).
+fn in_alias(alias: &str, rel: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    roots.aliases.iter().filter(|(a, folder)| a == alias && !folder.as_os_str().is_empty()).find_map(|(_, folder)| {
+        let full = PathBuf::from(expand(&format!("{}/{rel}", folder.display()), roots, env));
+        full.is_file().then_some(full)
+    })
+}
+
+/// Whether `name` finds a file the way `FILENAME_RESOLVER::ResolvePath` searches for one ([`search`]) and nothing else: a `.wrl` that is not there is *not* found
+/// because a `.step` of the same name is (that stand-in is [`resolve`]'s, for the 3D view). The Migrate 3D Models dialog's "missing" is this. The allow-list is
+/// not asked: a file that is there is there, whether this route may serve it or not.
 pub(crate) fn finds_file(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> bool {
     if name.is_empty() || name.len() > 4096 || name.contains('\0') {
         return false;
@@ -185,16 +298,12 @@ pub(crate) fn finds_file(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option
     if embedded_files::name_of_link(&name.replace('\\', "/")).is_some() {
         return crate::embedded_api::embeds(&roots.project, &name.replace('\\', "/"));
     }
-    let expanded = expand(&name.replace('\\', "/"), roots, env);
-    if expanded.contains("${") || expanded.contains("$(") {
-        return false;
-    }
-    let given = PathBuf::from(&expanded);
-    if given.is_absolute() {
-        given.is_file()
-    } else {
-        roots.project.join(&given).is_file() || roots.models.join(&given).is_file()
-    }
+    search(name, roots, env).is_some()
+}
+
+/// Whether `path` (canonical) lies inside one of the folders the route may read.
+fn allowed(canonical: &Path, roots: &Roots) -> bool {
+    [&roots.models, &roots.project].into_iter().chain(&roots.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r))
 }
 
 /// The file a model name finds and this route may read, as [`finds_file`] searches for it -- no `.step` stands in for a `.wrl` that is not there. What Collect and Embed 3D Models
@@ -204,28 +313,21 @@ pub(crate) fn resolve_exact(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Opt
     if name.is_empty() || name.len() > 4096 || name.contains('\0') {
         return None;
     }
-    let name = name.replace('\\', "/");
-    let expanded = expand(&name, roots, env);
-    if expanded.contains("${") || expanded.contains("$(") {
-        return None;
-    }
-    let given = PathBuf::from(&expanded);
-    let candidates: Vec<PathBuf> = if given.is_absolute() { vec![given] } else { vec![roots.project.join(&given), roots.models.join(&given)] };
-    let found = candidates.into_iter().find(|c| c.is_file())?;
-    let canonical = found.canonicalize().ok()?;
-    let inside = [&roots.models, &roots.project].into_iter().chain(&roots.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
-    inside.then_some(canonical)
+    let canonical = search(name, roots, env)?.canonicalize().ok()?;
+    allowed(&canonical, roots).then_some(canonical)
 }
 
-/// The file a footprint's `(model "name")` names, found the way KiCad's `FILENAME_RESOLVER::ResolvePath` finds it and then held to the allow-list.
+/// The words of a refusal for a file that is not a model file.
+const NOT_A_MODEL: &str = "only the 3D model files KiCad reads are served (VRML .wrl and .wrz, X3D .x3d, STEP .step, .stp, .stpz, .step.gz and .stp.gz, IGES .iges and .igs)";
+
+/// The file a footprint's `(model "name")` names, found the way KiCad's `FILENAME_RESOLVER::ResolvePath` finds it ([`search`]) and then held to the allow-list.
 ///
-/// KiCad's search: the name with its variables expanded as it stands (an absolute path), relative to the project's directory, relative to the model library
-/// ("the legacy partial path": `Resistor_SMD.3dshapes/R_0603_1608Metric.wrl`); a `.wrl` that is not there is a `.step` in the same place.
+/// A `.wrl` or `.wrz` that is not there is the STEP-family file of the same name beside it, as kicad-cli finds one ([`step_for_missing_wrl`]).
 ///
 /// The allow-list is the part KiCad does not have, because KiCad reads files for the person who owns them and this route answers a browser: after the
 /// search, the file is made canonical (every symlink and `..` resolved) and must lie under the model library, the board's directory or a folder one of the
-/// board's path variables names ([`Roots::extra`]), and be a model file (`.wrl`, `.step`, `.stp`). A name that finds a file anywhere else is
-/// [`Reject::Forbidden`], whatever it holds.
+/// board's path variables names ([`Roots::extra`]), and be a model file ([`format_of`]). A name that finds a file anywhere else is [`Reject::Forbidden`], whatever
+/// it holds.
 pub fn resolve(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Result<Resolved, Reject> {
     if name.is_empty() || name.len() > 4096 || name.contains('\0') {
         return Err(Reject::BadName);
@@ -237,25 +339,25 @@ pub fn resolve(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) 
         let canonical = found.canonicalize().map_err(|_| Reject::NotFound)?;
         return match format_of(&canonical) {
             Some(format) => Ok(Resolved { path: canonical, format }),
-            None => Err(Reject::Forbidden("only .wrl, .step and .stp files are served".into())),
+            None => Err(Reject::Forbidden(NOT_A_MODEL.into())),
         };
     }
-    let expanded = expand(&name, roots, env);
-    if expanded.contains("${") || expanded.contains("$(") {
-        return Err(Reject::NotFound);
-    }
-    let given = PathBuf::from(&expanded);
-    let candidates: Vec<PathBuf> = if given.is_absolute() { vec![given] } else { vec![roots.project.join(&given), roots.models.join(&given)] };
-    let found = candidates.into_iter().find_map(|c| if c.is_file() { Some(c) } else { step_for_missing_wrl(&c) }).ok_or(Reject::NotFound)?;
-
+    let found = match search(&name, roots, env) {
+        Some(found) => found,
+        None => {
+            // the stand-in for a missing VRML is looked for where the name would have been: as it expands, or relative to the project or the library
+            let expanded = PathBuf::from(expand(&name, roots, env));
+            let places: Vec<PathBuf> = if expanded.is_absolute() { vec![expanded] } else { vec![roots.project.join(&expanded), roots.models.join(&expanded)] };
+            places.iter().find_map(|p| step_for_missing_wrl(p)).ok_or(Reject::NotFound)?
+        }
+    };
     let canonical = found.canonicalize().map_err(|_| Reject::NotFound)?;
-    let inside = [&roots.models, &roots.project].into_iter().chain(&roots.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
-    if !inside {
+    if !allowed(&canonical, roots) {
         return Err(Reject::Forbidden("the file is outside KiCad's 3D model directory, the board's directory and the folders its path variables name".into()));
     }
     match format_of(&canonical) {
         Some(format) => Ok(Resolved { path: canonical, format }),
-        None => Err(Reject::Forbidden("only .wrl, .step and .stp files are served".into())),
+        None => Err(Reject::Forbidden(NOT_A_MODEL.into())),
     }
 }
 
@@ -543,7 +645,7 @@ pub fn reply(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
 /// Where the board in `dir` may read models from: KiCad's library, its own folder and the folders its path variables name. A name's `${VARIABLE}` is asked of
 /// `names` (the board's variables, KiCad's, the environment), so a variable that gives a library its folder gives the 3D models theirs.
 pub(crate) fn board_roots(dir: &Path, names: &crate::library_tables::ModelNames) -> Roots {
-    Roots { models: models_dir(), project: dir.to_path_buf(), extra: names.folders.clone() }
+    Roots { models: models_dir(), project: dir.to_path_buf(), extra: names.folders.clone(), aliases: names.aliases.clone() }
 }
 
 /// How long a request with `wait=1` is held for its model: the page asks again after this (a conversion that long is a conversion that is stuck, or a queue of
@@ -565,7 +667,7 @@ pub fn reply_waiting(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
 /// [`reply`] with the model library and the environment given (the tests'), and how long to wait for a model that is being converted (`None`: not at all).
 #[cfg(test)]
 pub fn reply_with(dir: &Path, target: &str, store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>, wait: Option<Duration>) -> Reply {
-    reply_in(target, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new() }, env, wait)
+    reply_in(target, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new(), aliases: Vec::new() }, env, wait)
 }
 
 /// [`reply_with`] with the roots given.
@@ -581,7 +683,7 @@ pub fn reply_in(target: &str, store: &Arc<Store>, roots: &Roots, env: &dyn Fn(&s
         Err(Reject::NotFound) => json_reply("404 Not Found", json!({ "status": "missing", "error": format!("no 3D model file for {name}") })),
         Err(Reject::Forbidden(why)) => json_reply("403 Forbidden", json!({ "status": "forbidden", "error": why })),
         Ok(Resolved { path, format: Format::Vrml }) => file_reply(&path),
-        Ok(Resolved { path, format: Format::Step }) => {
+        Ok(Resolved { path, format: Format::Converted }) => {
             let mut asked = store.ask(&path, retry);
             if let (Ask::Pending, Some(limit)) = (&asked, wait) {
                 store.wait(&path, limit);
@@ -610,7 +712,7 @@ pub fn prepare(dir: &Path, body: &[u8], store: &Arc<Store>) -> Value {
 
 #[cfg(test)]
 pub fn prepare_with(dir: &Path, body: &[u8], store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>) -> Value {
-    prepare_in(body, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new() }, env)
+    prepare_in(body, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new(), aliases: Vec::new() }, env)
 }
 
 /// [`prepare_with`] with the roots given.
@@ -620,7 +722,7 @@ pub fn prepare_in(body: &[u8], store: &Arc<Store>, roots: &Roots, env: &dyn Fn(&
     for name in names.iter().take(MAX_PREPARE) {
         match resolve(name, roots, env) {
             Ok(Resolved { format: Format::Vrml, .. }) => ready += 1,
-            Ok(Resolved { path, format: Format::Step }) => match store.ask(&path, false) {
+            Ok(Resolved { path, format: Format::Converted }) => match store.ask(&path, false) {
                 Ask::Ready(_) => ready += 1,
                 Ask::Pending => pending += 1,
                 Ask::Failed(_) => failed += 1,
@@ -690,7 +792,7 @@ mod tests {
             Tree { root }
         }
         fn roots(&self) -> Roots {
-            Roots { models: self.root.join("models"), project: self.root.join("project"), extra: Vec::new() }
+            Roots { models: self.root.join("models"), project: self.root.join("project"), extra: Vec::new(), aliases: Vec::new() }
         }
         fn path(&self, rel: &str) -> PathBuf {
             self.root.join(rel).canonicalize().unwrap()
@@ -720,15 +822,71 @@ mod tests {
         assert_eq!(ok("${KIPRJMOD}/prj.3dshapes/p.wrl"), Ok(Resolved { path: t.path("project/prj.3dshapes/p.wrl"), format: Format::Vrml }));
         assert_eq!(ok("prj.3dshapes/p.wrl"), Ok(Resolved { path: t.path("project/prj.3dshapes/p.wrl"), format: Format::Vrml }), "and relative to the project first");
         assert_eq!(ok("Lib.3dshapes\\a.wrl"), Ok(a), "a Windows separator is a separator");
-        assert_eq!(ok("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.step"), Ok(Resolved { path: t.path("models/Lib.3dshapes/b.step"), format: Format::Step }));
+        assert_eq!(ok("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.step"), Ok(Resolved { path: t.path("models/Lib.3dshapes/b.step"), format: Format::Converted }));
         // A VRML that is not there is the STEP of the same part (kicad-cli's --subst-models).
-        assert_eq!(ok("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.wrl"), Ok(Resolved { path: t.path("models/Lib.3dshapes/b.step"), format: Format::Step }));
-        assert_eq!(ok("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/c_d_e.wrl"), Ok(Resolved { path: t.path("models/Lib.3dshapes/C-d e.step"), format: Format::Step }), "a name that differs in case, '-' and ' ' too");
+        assert_eq!(ok("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.wrl"), Ok(Resolved { path: t.path("models/Lib.3dshapes/b.step"), format: Format::Converted }));
+        assert_eq!(ok("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/c_d_e.wrl"), Ok(Resolved { path: t.path("models/Lib.3dshapes/C-d e.step"), format: Format::Converted }), "a name that differs in case, '-' and ' ' too");
         assert_eq!(ok("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/nothing.step"), Err(Reject::NotFound));
         assert_eq!(ok("${NOT_A_VARIABLE}/Lib.3dshapes/a.wrl"), Err(Reject::NotFound), "a variable nobody defines is left as written");
         // The process environment is read like KiCad's own.
         let env = |v: &str| (v == "MY_3D").then(|| t.root.join("models").to_string_lossy().into_owned());
         assert!(resolve("${MY_3D}/Lib.3dshapes/a.wrl", &r, &env).is_ok());
+    }
+
+    #[test]
+    fn every_format_kicads_3d_plugins_read_is_served_vrml_2_as_it_is_and_the_rest_converted() {
+        use ModelFamily::*;
+        for (file, family) in [("a.step", Step), ("A.STP", Step), ("a.stpZ", Step), ("a.step.gz", Step), ("a.STP.GZ", Step), ("a.igs", Iges), ("a.IGES", Iges), ("a.wrl", Vrml), ("a.WRZ", Vrml), ("a.x3d", X3d), ("a.X3D", X3d)] {
+            assert_eq!(model_family(Path::new(file)), Some(family), "{file}");
+        }
+        for no in ["a.idf", "a.emn", "a.txt", "a.gz", "a.wrl.gz", "step", "a.wrl.txt"] {
+            assert_eq!(model_family(Path::new(no)), None, "{no}: no plugin reads it here");
+        }
+        let t = Tree::new("formats");
+        let lib = t.root.join("models/Lib.3dshapes");
+        for (f, text) in [("x.x3d", "<X3D/>"), ("i.igs", "S      1"), ("j.iges", "S      1"), ("z.wrz", "gz"), ("s.stpz", "gz"), ("g.igs", "S      1"), ("h.igs", "S      1"), ("h.step", "ISO-10303-21;")] {
+            std::fs::write(lib.join(f), text).unwrap();
+        }
+        let r = t.roots();
+        let format = |name: &str| resolve(name, &r, &no_env).map(|x| (x.path.file_name().unwrap().to_string_lossy().into_owned(), x.format));
+        let conv = |f: &str| Ok((f.to_string(), Format::Converted));
+        assert_eq!(format("Lib.3dshapes/a.wrl"), Ok(("a.wrl".to_string(), Format::Vrml)), "a VRML 2.0 file goes as it is");
+        for f in ["x.x3d", "i.igs", "j.iges", "z.wrz", "s.stpz"] {
+            assert_eq!(format(&format!("Lib.3dshapes/{f}")), conv(f), "{f}");
+        }
+        // a missing VRML: the STEP-family file of the same stem beside it, KiCad's `stepExtensions` in order (STEP before IGES), IGES when it is the only one
+        assert_eq!(format("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/g.wrl"), conv("g.igs"));
+        assert_eq!(format("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/h.wrz"), conv("h.step"));
+        assert_eq!(format("Lib.3dshapes/missing.igs"), Err(Reject::NotFound), "only a missing .wrl or .wrz has a stand-in");
+        assert!(!finds_file("Lib.3dshapes/g.wrl", &r, &no_env), "a stand-in is no file KiCad's resolver finds (Migrate 3D Models' missing)");
+    }
+
+    #[test]
+    fn a_kicad5_alias_is_looked_up_in_the_resolvers_search_paths() {
+        let t = Tree::new("aliases");
+        let team = t.root.join("models/Team.3dshapes");
+        std::fs::create_dir_all(&team).unwrap();
+        std::fs::write(team.join("q.wrl"), "#VRML V2.0 utf8\n# q").unwrap();
+        let mut r = t.roots();
+        r.aliases = vec![("TEAM".into(), team.clone()), ("EMPTY".into(), PathBuf::new()), ("KICAD10_3DMODEL_DIR".into(), t.root.join("models")), ("OUT".into(), t.root.join("outside"))];
+        let found = |name: &str| resolve(name, &r, &no_env).map(|x| x.path);
+        let q = Ok(t.path("models/Team.3dshapes/q.wrl"));
+        assert_eq!(found("TEAM:q.wrl"), q, "ALIAS:path");
+        assert_eq!(found(":TEAM:q.wrl"), q, ":ALIAS:path");
+        assert_eq!(found("${TEAM}/q.wrl"), q, "an alias stored as ${{ALIAS}} by an older KiCad, where no variable has that name");
+        assert_eq!(found("$(TEAM)q.wrl"), q, "with no separator after the bracket");
+        assert_eq!(found("KICAD10_3DMODEL_DIR:Lib.3dshapes/a.wrl"), Ok(t.path("models/Lib.3dshapes/a.wrl")), "a path variable is an alias under its bare name");
+        assert_eq!(found("team:q.wrl"), Err(Reject::NotFound), "an alias is matched as it is spelled");
+        assert_eq!(found("EMPTY:q.wrl"), Err(Reject::NotFound), "a search path with no folder is skipped");
+        assert_eq!(found("${}/q.wrl"), Err(Reject::NotFound), "`${{}}` names no alias");
+        assert_eq!(found(":prj.3dshapes/p.wrl"), Err(Reject::NotFound), "a name that begins with a colon is not tried against the project");
+        assert!(matches!(found("OUT:secret.wrl"), Err(Reject::Forbidden(_))), "an alias leads only where the route may read");
+        // a variable that does expand is no alias, even where the file is not there
+        let env = |v: &str| (v == "TEAM").then(|| t.root.join("outside").to_string_lossy().into_owned());
+        assert_eq!(resolve("${TEAM}/q.wrl", &r, &env), Err(Reject::NotFound));
+        for (name, want) in [("a:b", Some(("a", "b"))), (":a:b/c.wrl", Some(("a", "b/c.wrl"))), ("C:/x/y.wrl", Some(("C", "/x/y.wrl"))), ("a:", None), (":a", None), ("::b", None), ("ab", None)] {
+            assert_eq!(split_alias(name), want, "{name}");
+        }
     }
 
     #[test]
@@ -801,7 +959,7 @@ mod tests {
         let mut env = m.env();
         env.real.insert("FROM_THE_SHELL".into(), shell.display().to_string());
         let names = crate::library_tables::model_names_with(&env, &m.board);
-        let roots = Roots { models: m.share.join("3dmodels"), project: m.board.clone(), extra: names.folders.clone() };
+        let roots = Roots { models: m.share.join("3dmodels"), project: m.board.clone(), extra: names.folders.clone(), aliases: names.aliases.clone() };
         let store = Store::new(m.root.join("cache"), Arc::new(|b: &[PathBuf]| b.iter().map(|_| Err("no converter".to_string())).collect()), Duration::from_millis(1));
         let enc = |s: &str| s.replace('%', "%25").replace('{', "%7B").replace('}', "%7D").replace('/', "%2F");
         let get = |name: &str| reply_in(&format!("/api/3dmodel?name={}", enc(name)), &store, &roots, &|v| names.get(v), None);
@@ -993,7 +1151,7 @@ mod tests {
     /// model library too, and a bare `$NAME` is a variable as well.
     #[test]
     fn variables_are_scanned_as_kiwxexpandenvvars_scans_them() {
-        let roots = Roots { models: PathBuf::from("/m"), project: PathBuf::from("/p"), extra: Vec::new() };
+        let roots = Roots { models: PathBuf::from("/m"), project: PathBuf::from("/p"), extra: Vec::new(), aliases: Vec::new() };
         let env = |n: &str| (n == "MY").then(|| "/my".to_string());
         assert_eq!(expand("${NO LIB}/x.wrl", &roots, &env), "${NO LIB}/x.wrl", "the name `NO` ends at the space and is no variable");
         assert_eq!(expand("${MY LIB}/x.wrl", &roots, &env), "/my LIB}/x.wrl", "`MY` is one, and the bracket left open is text (KiCad's warning, no skip)");
@@ -1045,6 +1203,79 @@ mod tests {
         let text = std::fs::read_to_string(vrml).unwrap();
         assert!(text.starts_with("#VRML V2.0 utf8"), "{}", &text[..text.len().min(80)]);
         assert!(text.contains("IndexedFaceSet"), "geometry");
+    }
+
+    /// An X3D cube of side 1 (KiCad reads an X3D, like a VRML, in units of 0.1 inch) in one red `Shape`.
+    pub(crate) const X3D_CUBE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<X3D profile="Immersive" version="3.2"><Scene><Transform><Shape>
+<Appearance><Material diffuseColor="0.8 0.1 0.1"/></Appearance>
+<IndexedFaceSet coordIndex="0 1 2 3 -1 7 6 5 4 -1 0 4 5 1 -1 1 5 6 2 -1 2 6 7 3 -1 3 7 4 0 -1"><Coordinate point="0 0 0 1 0 0 1 1 0 0 1 0 0 0 1 1 0 1 1 1 1 0 1 1"/></IndexedFaceSet>
+</Shape></Transform></Scene></X3D>
+"#;
+
+    /// A minimal IGES 5.3 file, millimetres: a box of `size` made of six bilinear B-spline surfaces (entity 128), the fixed 80-column records KiCad's
+    /// `fileType` recognises (`iline[72] == 'S'`) and OpenCascade's IGES reader takes.
+    pub(crate) fn iges_box(size: [f64; 3]) -> String {
+        let line = |text: &str, sec: char, n: usize| format!("{text:<72}{sec}{n:>7}\n");
+        let out = line("eda hand-written IGES: a box of six B-spline faces", 'S', 1);
+        let global = "1H,,1H;,3Hbox,7Hbox.igs,3Heda,3H1.0,32,38,6,308,15,3Hbox,1.,2,2HMM,1,1.,15H20261106.000000,0.001,10.,3Heda,3Heda,11,0,15H20261106.000000;";
+        let g: Vec<String> = global.as_bytes().chunks(72).enumerate().map(|(i, c)| line(std::str::from_utf8(c).unwrap(), 'G', i + 1)).collect();
+        let [x, y, z] = size;
+        let faces = [
+            [[0.0, 0.0, 0.0], [0.0, y, 0.0], [x, 0.0, 0.0], [x, y, 0.0]],
+            [[0.0, 0.0, z], [x, 0.0, z], [0.0, y, z], [x, y, z]],
+            [[0.0, 0.0, 0.0], [x, 0.0, 0.0], [0.0, 0.0, z], [x, 0.0, z]],
+            [[0.0, y, 0.0], [0.0, y, z], [x, y, 0.0], [x, y, z]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, z], [0.0, y, 0.0], [0.0, y, z]],
+            [[x, 0.0, 0.0], [x, y, 0.0], [x, 0.0, z], [x, y, z]],
+        ];
+        let (mut d, mut p): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        for (i, face) in faces.iter().enumerate() {
+            let de = 2 * i + 1;
+            let mut params: Vec<String> = "128,1,1,1,1,0,0,1,0,0,0.,0.,1.,1.,0.,0.,1.,1.,1.,1.,1.,1.".split(',').map(String::from).collect();
+            params.extend(face.iter().flatten().map(|c| format!("{c:?}")));
+            params.extend(["0.", "1.", "0.", "1."].map(String::from));
+            let mut text = params.join(",") + ";";
+            let first = p.len() + 1;
+            while !text.is_empty() {
+                let cut = if text.len() > 64 { text[..64].rfind(',').unwrap() + 1 } else { text.len() };
+                p.push(format!("{:<64}{de:>8}P{:>7}\n", &text[..cut], p.len() + 1));
+                text = text[cut..].to_string();
+            }
+            d.push(line(&format!("{:>8}{first:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}", 128, 0, 0, 0, 0, 0, 0, "00000000"), 'D', de));
+            d.push(line(&format!("{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}", 128, 0, 0, p.len() + 1 - first, 0, "", "", "", 0), 'D', de + 1));
+        }
+        let t = line(&format!("S{:>7}G{:>7}D{:>7}P{:>7}", 1, g.len(), d.len(), p.len()), 'T', 1);
+        out + &g.concat() + &d.concat() + &p.concat() + &t
+    }
+
+    /// The slow tier: kicad-cli converts the formats it reads besides STEP -- a hand-written X3D and IGES (`.igs` and `.iges`) -- into VRML in KiCad's units, in one run.
+    #[test]
+    fn x3d_and_iges_models_are_converted_by_kicad_cli_as_a_step_is() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+            return;
+        }
+        let t = Tree::new("formats-real");
+        let dir = t.root.join("project/prj.3dshapes");
+        std::fs::write(dir.join("cube.x3d"), X3D_CUBE).unwrap();
+        std::fs::write(dir.join("box.igs"), iges_box([2.0, 1.0, 0.5])).unwrap();
+        std::fs::write(dir.join("tall.iges"), iges_box([1.0, 1.0, 3.0])).unwrap();
+        assert!(iges_box([2.0, 1.0, 0.5]).lines().all(|l| l.len() == 80), "IGES records are 80 columns");
+        let store = Store::new(t.root.join("cache"), kicad_cli_converter(Arc::new(Lane::default()), t.root.join("cache")), Duration::from_millis(1));
+        let files: Vec<PathBuf> = ["cube.x3d", "box.igs", "tall.iges"].iter().map(|f| dir.join(f).canonicalize().unwrap()).collect();
+        for f in &files {
+            assert_eq!(format_of(f), Some(Format::Converted));
+            assert!(matches!(store.ask(f, false), Ask::Pending | Ask::Ready(_)));
+        }
+        for (f, top) in files.iter().zip([1.0, 0.5 / 2.54, 3.0 / 2.54]) {
+            let Ask::Ready(vrml) = wait_for_long(&store, f) else { panic!("{} converted", f.display()) };
+            let text = std::fs::read_to_string(vrml).unwrap();
+            assert!(text.starts_with("#VRML V2.0 utf8") && text.contains("IndexedFaceSet"), "{}: {}", f.display(), &text[..text.len().min(80)]);
+            // the highest point, in 0.1 inch: the cube's 1 as it is, the IGES boxes' millimetres divided by 2.54
+            let zs: Vec<f64> = text.split("point [").skip(1).flat_map(|b| b[..b.find(']').unwrap()].split(',').filter_map(|p| p.split_whitespace().nth(2)?.parse::<f64>().ok()).collect::<Vec<_>>()).collect();
+            let max = zs.iter().cloned().fold(f64::MIN, f64::max);
+            assert!((max - top).abs() < 1e-4, "{}: top at {max}, want {top}", f.display());
+        }
     }
 
     fn wait_for_long(store: &Arc<Store>, step: &Path) -> Ask {

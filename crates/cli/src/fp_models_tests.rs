@@ -378,7 +378,7 @@ fn migrate_3d_models_lists_the_missing_vrml_models_with_their_candidates_and_rep
     eda_model::fp_models::set_models(&mut model.footprints[0], &[placed.clone(), Model3d::identity(there)]);
     std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-    let roots = Roots { models: lib.clone(), project: dir.clone(), extra: vec![] };
+    let roots = Roots { models: lib.clone(), project: dir.clone(), extra: vec![], aliases: Vec::new() };
     let listing = vec![Root { name: "KIPRJMOD".into(), path: dir.canonicalize().unwrap() }, Root { name: "KICAD10_3DMODEL_DIR".into(), path: lib.canonicalize().unwrap() }];
     let answer = migrate_in(&dir, "", &roots, &listing, &|_| None);
     assert_eq!(answer.status, "200 OK", "{}", String::from_utf8_lossy(&answer.body));
