@@ -110,7 +110,7 @@ impl Board<'_> {
             None => StackupSettings::new(have, self.model.board.board_thickness_nm),
         });
         let grown = current.with_copper_layers(want);
-        super::board_setup::set_stackup(&mut self.design, self.model, &grown)?;
+        super::board_setup::set_stackup(&mut self.design, self.model, &grown, false)?;
         Ok(eda_model::rules::copper_layer_names(want))
     }
 

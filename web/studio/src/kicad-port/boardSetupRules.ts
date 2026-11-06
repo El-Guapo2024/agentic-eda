@@ -388,9 +388,9 @@ export function defaultStackup(copperLayers: number, boardThicknessNm: Nm): Stac
   return { layers };
 }
 
-/** `BuildBoardThicknessFromStackup`: every layer's thickness, in µm. */
+/** `BuildBoardThicknessFromStackup`: every layer's thickness with its sublayers' ("add thickness of all sublayers"), in nm. */
 export function stackupThicknessNm(s: Stackup): Nm {
-  return Math.round(s.layers.reduce((sum, l) => sum + (l.thickness_mm ?? 0), 0) * 1e6);
+  return Math.round(s.layers.reduce((sum, l) => sum + (l.thickness_mm ?? 0) + (l.sublayers ?? []).reduce((a, x) => a + (x.thickness_mm ?? 0), 0), 0) * 1e6);
 }
 
 /** The default stackup for `copperLayers` and `boardThicknessNm`, as the settings the page edits. */
@@ -423,6 +423,9 @@ export function withKnownKinds(s: Stackup): Stackup {
 }
 
 /**
+ * INACTIVE (UI-LEFT B3, 2026-11-06): the Physical Stackup page asks KiCad's question with `itemsOnRemovedLayers` (kicad-port/physicalStackup.ts) and the backend
+ * deletes the items when told to; this is kept, not deleted.
+ *
  * The copper layers a board of `copperLayers` would lose that still carry something: a track, a via end or a zone on them. KiCad asks, then deletes
  * the items; the backend refuses instead (an edit that deletes copper is not one to hide in a settings dialog), so the page says so up front.
  */

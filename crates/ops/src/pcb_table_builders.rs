@@ -321,24 +321,43 @@ pub fn stackup_table(layer: &str, stackup: &Stackup, units: Units) -> Table {
     let mut dielectrics = 0;
     for l in &stackup.layers {
         let kind = item_type(l);
-        let item = item_of(l, kind);
-        let name = if kind == ItemType::Dielectric {
+        if kind == ItemType::Dielectric {
             dielectrics += 1;
-            // "Dielectric N": the N of the file's "dielectric N" name, else the count so far (`GetDielectricLayerId`).
-            let n = l.name.strip_prefix("dielectric").and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(dielectrics);
-            format!("Dielectric {n}")
-        } else {
-            l.name.clone()
-        };
-        // `IsThicknessEditable`: copper, dielectric and solder mask; a silkscreen or a paste layer has no thickness to give.
-        let thickness = if matches!(kind, ItemType::Copper | ItemType::Dielectric | ItemType::SolderMask) { string_from_value(item.thickness_nm.as_f64(), units, true) } else { NOT_SPECIFIED.to_string() };
-        cells.push(cell(&name, 1.5, 0.2, false));
-        cells.push(cell(&initial_caps(&type_name(l)), 1.5, 0.2, false));
-        cells.push(cell(&item.material, 1.5, 0.2, false));
-        cells.push(cell(&thickness, 1.5, 0.2, true));
-        cells.push(cell(&item.color, 1.5, 0.2, false));
-        cells.push(cell(&unitless_text(item.epsilon_r), 1.5, 0.2, true));
-        cells.push(cell(&unitless_text(item.loss_tangent), 1.5, 0.2, true));
+        }
+        // A row for each sublayer (`for( int sublayer_id = 0; sublayer_id < stackup_item->GetSublayersCount(); sublayer_id++ )`); a sublayer after the first
+        // starts from `DIELECTRIC_PRMS`' defaults (no material or colour, thickness 0, epsilon R 1, loss tangent 0).
+        let count = l.sublayer_count();
+        for sub_id in 0..count {
+            let item = if sub_id == 0 {
+                item_of(l, kind)
+            } else {
+                let sub = &l.sublayers[sub_id - 1];
+                Item {
+                    material: sub.material.clone().unwrap_or_default(),
+                    thickness_nm: Nm::kiround(sub.thickness_mm.unwrap_or(0.0) * 1_000_000.0),
+                    color: sub.color.clone().unwrap_or_default(),
+                    epsilon_r: sub.epsilon_r.unwrap_or(1.0),
+                    loss_tangent: sub.loss_tangent.unwrap_or(0.0),
+                }
+            };
+            let name = if kind == ItemType::Dielectric {
+                // "Dielectric N": the N of the file's "dielectric N" name, else the count so far (`GetDielectricLayerId`); "Dielectric N (k/n)" for a
+                // layer of sublayers (`_( " %d (%d/%d)" )`).
+                let n = l.name.strip_prefix("dielectric").and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(dielectrics);
+                if count < 2 { format!("Dielectric {n}") } else { format!("Dielectric {n} ({}/{count})", sub_id + 1) }
+            } else {
+                l.name.clone()
+            };
+            // `IsThicknessEditable`: copper, dielectric and solder mask; a silkscreen or a paste layer has no thickness to give.
+            let thickness = if matches!(kind, ItemType::Copper | ItemType::Dielectric | ItemType::SolderMask) { string_from_value(item.thickness_nm.as_f64(), units, true) } else { NOT_SPECIFIED.to_string() };
+            cells.push(cell(&name, 1.5, 0.2, false));
+            cells.push(cell(&initial_caps(&type_name(l)), 1.5, 0.2, false));
+            cells.push(cell(&item.material, 1.5, 0.2, false));
+            cells.push(cell(&thickness, 1.5, 0.2, true));
+            cells.push(cell(&item.color, 1.5, 0.2, false));
+            cells.push(cell(&unitless_text(item.epsilon_r), 1.5, 0.2, true));
+            cells.push(cell(&unitless_text(item.loss_tangent), 1.5, 0.2, true));
+        }
     }
     let mut t = table_of(layer, 7, cells);
     autosize(&mut t);

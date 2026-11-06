@@ -552,8 +552,11 @@ fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: 
         if layer == Some(b) && inner(b) {
             half = true;
         }
-        let t = Nm::kiround(l.thickness_mm.unwrap_or(0.0) * 1_000_000.0);
-        total += if half { t / 2 } else { t };
+        // every sublayer, each halved on its own (`for( int sublayer = 0; sublayer < item->GetSublayersCount(); sublayer++ )`)
+        for t in l.sublayer_thicknesses_mm() {
+            let t = Nm::kiround(t * 1_000_000.0);
+            total += if half { t / 2 } else { t };
+        }
         half = false;
         if layer == Some(b) {
             break;
@@ -575,8 +578,11 @@ pub fn drill_depth_nm(stackup: &Stackup, first: &str, second: &str) -> Nm {
         if !is_copper(l) && !is_dielectric(l) {
             continue;
         }
-        let t = Nm::kiround(l.thickness_mm.unwrap_or(0.0) * 1_000_000.0);
-        total += if half { t / 2 } else { t };
+        // `for( int sublayer = 0; sublayer < item->GetSublayersCount(); sublayer++ ) total += half ? ( subThickness / 2 ) : subThickness;` (KiCad 25ec2335)
+        for t in l.sublayer_thicknesses_mm() {
+            let t = Nm::kiround(t * 1_000_000.0);
+            total += if half { t / 2 } else { t };
+        }
         if half {
             return total;
         }

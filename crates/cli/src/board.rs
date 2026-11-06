@@ -1839,7 +1839,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetConstraints { .. } => "board-setup constraints".to_string(),
         Cmd::SetMaskPaste { .. } => "board-setup mask-paste".to_string(),
         Cmd::SetTextGraphicsDefaults { .. } => "board-setup text-graphics".to_string(),
-        Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
+        Cmd::SetStackup { settings, .. } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
         Cmd::DropDrcRule { name, target_name, .. } => format!("drc-rule-editor drop {name:?} on {target_name:?}"),
