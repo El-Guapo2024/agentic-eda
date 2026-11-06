@@ -90,11 +90,16 @@ test("an orthogonal dimension drawn right to left keeps its orientation inside t
   let r = fpDimensionClick(null, "orthogonal", "Cmts.User", [20 * MM, 10 * MM], false);
   r = fpDimensionClick(r.draw, "orthogonal", "Cmts.User", [0, 0], false);
   assert.equal(r.draw?.step, "height");
-  // above the box, between the x of the points: `cursorPos.x > GetLeft() && cursorPos.x < GetRight()` is false for a box drawn leftwards (left 20, right 0),
-  // and so is the y test, so the orientation comes from the cursor's offset from the centre: |dy| 15 > |dx| 0 -> horizontal
-  const m = fpDimensionMotion(r.draw!, [10 * MM, -10 * MM], false);
-  assert.ok(m.dim.kind.kind === "orthogonal" && m.dim.kind.horizontal);
-  assert.equal(m.dim.kind.kind === "orthogonal" && m.dim.kind.height, -20 * MM, "the offset from the start across");
+  // just above the box near its left, between the x of the points: `cursorPos.x > GetLeft() && cursorPos.x < GetRight()` is false for a box drawn leftwards
+  // (left 20, right 0), and so is the y test, so the orientation comes from the cursor's offset from the centre (10, 5): |dy| 6 < |dx| 9 -> vertical (a
+  // normalised box would have called it horizontal)
+  const m = fpDimensionMotion(r.draw!, [1 * MM, -1 * MM], false);
+  assert.ok(m.dim.kind.kind === "orthogonal" && !m.dim.kind.horizontal);
+  assert.equal(m.dim.kind.kind === "orthogonal" && m.dim.kind.height, -19 * MM, "the offset from the start across");
+  // above its middle: horizontal, the height the offset in y
+  const h = fpDimensionMotion(r.draw!, [10 * MM, -10 * MM], false);
+  assert.ok(h.dim.kind.kind === "orthogonal" && h.dim.kind.horizontal);
+  assert.equal(h.dim.kind.kind === "orthogonal" && h.dim.kind.height, -20 * MM);
 });
 
 test("a radial dimension and a leader are done at the second click; a centre mark's end is held to 45 degrees", () => {
