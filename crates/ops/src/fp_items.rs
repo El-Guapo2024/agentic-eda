@@ -78,11 +78,26 @@ pub enum FpItemCmd {
     /// `name` shows `text` and is laid out as `layout` says (its `visible` is the field's Show). An empty `text` leaves the field's text as it is (`if(
     /// !m_SingleLineText->GetValue().IsEmpty() ) m_item->SetText( .. )`). Refused for a field the footprint does not have, a glyph size out of range and a layer that is empty.
     EditField { footprint: String, name: String, text: String, layout: FieldLayout },
-    /// `DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow` (`ShowGraphicItemPropertiesDialog`): the graphic replaced by `shape`, keeping its id and its kept line style.
-    SetGraphic { footprint: String, id: String, shape: Shape },
+    /// `DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow` (`ShowGraphicItemPropertiesDialog`): the graphic replaced by `shape`, keeping its id and its kept line style --
+    /// or, with `look`, taking its line style and hatch (the dialog's "Line style:" and "Fill:", UI-LEFT F5).
+    SetGraphic {
+        footprint: String,
+        id: String,
+        shape: Shape,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        look: Option<ShapeLook>,
+    },
     /// `DIALOG_TEXT_PROPERTIES` on a text of the footprint (`case PCB_TEXT_T`): the text replaced by `text`, its place included, keeping its id; an empty content leaves
     /// the text's own (the dialog sets the text only when the box is not empty).
-    SetText { footprint: String, id: String, text: Text },
+    SetText {
+        footprint: String,
+        id: String,
+        text: Text,
+        /// With it, the text's bold, italic, vertical justification, glyph width, knockout and keep-upright (the dialog's rows of a footprint text, UI-LEFT F5: what
+        /// `eda_model::ir::Text` has no field for, kept by id in `LibraryFootprintKeep`); without it they stay as they are.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        look: Option<TextLook>,
+    },
     /// `DRAWING_TOOL` placing an item of [`FpItem`]'s kinds in the footprint (Draw Dimension, Draw Rule Area, Draw Text Box, Place Point, Place Reference Image, Add Barcode,
     /// Draw Table): the item's `id`, if the caller sent one, is ignored.
     Add { footprint: String, item: FpItem },
@@ -97,6 +112,43 @@ pub enum FpItemCmd {
     /// `DIALOG_GROUP_PROPERTIES`: the group's name.
     SetGroupName { footprint: String, id: String, name: String },
 }
+
+/// A graphic's looks the library footprint keeps by id ([`eda_model::lib_keep::LibraryFootprintKeep`]): `STROKE_PARAMS`' line style (`solid`, `dash`, `dot`, `dash_dot`,
+/// `dash_dot_dot`, or `default`) and a hatched fill.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeLook {
+    pub line_style: String,
+    #[serde(default)]
+    pub hatch: Option<eda_model::fp_art::Hatch>,
+}
+
+/// A footprint text's looks beyond [`Text`] (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`: `SetBoldFlag`, `SetItalicFlag`, `SetVertJustify`, `SetTextWidth`,
+/// `SetIsKnockout`, `SetKeepUpright`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextLook {
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    /// -1 top, 0 centre, 1 bottom.
+    #[serde(default)]
+    pub valign: i8,
+    /// The glyph width when it is not the height (`Text::size_nm`).
+    #[serde(default)]
+    pub width_nm: Option<Nm>,
+    #[serde(default)]
+    pub knockout: bool,
+    #[serde(default = "yes")]
+    pub keep_upright: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+const LINE_STYLES: &[&str] = &["solid", "default", "dash", "dot", "dash_dot", "dash_dot_dot"];
 
 impl FpItemCmd {
     /// The footprint the verb edits.
@@ -444,7 +496,7 @@ impl Board<'_> {
             FpItemCmd::Mirror { ids, pivot, direction, .. } => mirror(fp, ids, *pivot, *direction),
             FpItemCmd::Delete { ids, .. } => delete(fp, ids),
             FpItemCmd::EditField { name, text, layout, .. } => edit_field(fp, name, text, layout),
-            FpItemCmd::SetGraphic { id, shape, .. } => {
+            FpItemCmd::SetGraphic { id, shape, look, .. } => {
                 if shape.layer().is_empty() {
                     return Err(fail("ops_bad_shape", id, "a shape needs a layer"));
                 }
@@ -453,17 +505,58 @@ impl Board<'_> {
                         return Err(fail("ops_bad_shape", id, "a polygon needs at least three points"));
                     }
                 }
+                if let Some(l) = look.as_ref().filter(|l| !LINE_STYLES.contains(&l.line_style.as_str())) {
+                    return Err(fail("ops_bad_shape", id, format!("'{}' is not a line style", l.line_style)));
+                }
                 let slot = fp.graphics.iter_mut().find(|g| g.id() == id).ok_or_else(|| fail("ops_unknown_shape", id, "no shape with this id"))?;
                 let mut s = shape.clone();
                 s.set_id(id.clone());
                 *slot = s;
+                if let Some(l) = look {
+                    // `STROKE_PARAMS`' style (solid is the writer's own) and the hatch (`SetFillMode`), kept by id
+                    if l.line_style == "solid" {
+                        fp.kicad.stroke_types.remove(id);
+                    } else {
+                        fp.kicad.stroke_types.insert(id.clone(), l.line_style.clone());
+                    }
+                    match l.hatch {
+                        Some(h) => {
+                            fp.kicad.hatches.insert(id.clone(), h);
+                        }
+                        None => {
+                            fp.kicad.hatches.remove(id);
+                        }
+                    }
+                }
                 Ok(())
             }
-            FpItemCmd::SetText { id, text, .. } => {
-                check_text_look(id, &text.layer, &[text.size_nm])?;
+            FpItemCmd::SetText { id, text, look, .. } => {
+                check_text_look(id, &text.layer, &[text.size_nm, look.as_ref().and_then(|l| l.width_nm).unwrap_or(text.size_nm)])?;
                 let slot = fp.texts.iter_mut().find(|t| &t.id == id).ok_or_else(|| fail("ops_unknown_text", id, "no text with this id"))?;
                 let content = if text.content.is_empty() { slot.content.clone() } else { text.content.clone() };
                 *slot = Text { id: id.clone(), content, ..text.clone() };
+                if let Some(l) = look {
+                    // the text's extras, kept by id: what the dialog sets, over what the file said beyond it (a font, the line spacing, an automatic pen)
+                    let mut e = fp.kicad.text_extra(id).cloned().unwrap_or_else(|| eda_model::board_text::TextExtra { id: id.clone(), ..Default::default() });
+                    e.bold = l.bold;
+                    e.italic = l.italic;
+                    e.valign = match l.valign {
+                        -1 => eda_model::ir::TextVAlign::Top,
+                        1 => eda_model::ir::TextVAlign::Bottom,
+                        _ => eda_model::ir::TextVAlign::Center,
+                    };
+                    e.width_nm = l.width_nm.filter(|w| *w != text.size_nm);
+                    e.knockout = l.knockout;
+                    fp.kicad.text_extras.retain(|x| &x.id != id);
+                    if !e.is_default() {
+                        fp.kicad.text_extras.push(e);
+                    }
+                    if l.keep_upright {
+                        fp.kicad.unlocked_texts.remove(id);
+                    } else {
+                        fp.kicad.unlocked_texts.insert(id.clone());
+                    }
+                }
                 Ok(())
             }
             FpItemCmd::Add { item, .. } => {

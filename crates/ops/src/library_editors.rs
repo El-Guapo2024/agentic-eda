@@ -374,6 +374,11 @@ impl<'a> Board<'a> {
     /// See [`Cmd::RenameLibraryFootprint`](crate::Cmd::RenameLibraryFootprint).
     pub(crate) fn rename_library_footprint(&mut self, name: &str, new_name: &str, overwrite: bool) -> Result<(), Vec<CheckResult>> {
         check_footprint_name(new_name)?;
+        // A footprint loaded from the board (UI-LEFT F3) keeps its key; the name Footprint Properties edits is its own `GetFPID()`, which the board takes with it.
+        if let Some(copy) = self.design.footprint_library.as_mut().and_then(|l| l.board_copy_mut(name)) {
+            copy.fpid = new_name.to_string();
+            return Ok(());
+        }
         if self.design.footprint_library.as_ref().and_then(|l| l.by_name(name)).is_none() {
             return Err(vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint is not in the project library; open it in the Footprint Editor first")]);
         }
