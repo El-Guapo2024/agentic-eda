@@ -53,7 +53,7 @@ import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../componen
 import { findDraggableAt, startGroupDrag, startInlineDrag } from "../components/canvas/dragging";
 import { findGroupDragTarget } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
-import { findNetAtCursor } from "../components/canvas/netAtCursor";
+import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
 import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
@@ -767,8 +767,8 @@ export function useActionRunner() {
       "pcbnew.EditorControl.highlightNet",
       pcbOnly(() => {
         if (!state.board || !state.cursorNm) return;
-        const toleranceNm = 10 / (state.view.scale || 1);
-        const net = findNetAtCursor(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm);
+        // `GENERAL_COLLECTOR` with the guide's five-pixel accuracy, the active layer preferred (components/canvas/netAtCursor.ts, r7 C7-11)
+        const net = findNetAtCursor(state.board, state.cursorNm.x, state.cursorNm.y, collectorAccuracyNm(state.view.scale), { activeLayer: state.activeLayer, layerVisible: state.layerVisible, highContrast: state.highContrast, fills: state.zoneFill?.zones });
         dispatch({ type: "SET_NET_HIGHLIGHT", net: net && net === state.netHighlight ? null : net });
       })
     );

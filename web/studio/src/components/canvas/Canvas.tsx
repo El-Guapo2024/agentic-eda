@@ -434,6 +434,7 @@ export function Canvas() {
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintBoard(ctx, state.view, width, height, board, {
+      viewFlipped: state.bcx.boardFlipped,
       selection: state.selection,
       hot: state.hot,
       netHighlight: state.bcx.netHighlightMore.length > 0 ? highlightedNets(state.netHighlight, state.bcx.netHighlightMore) : state.netHighlight,
@@ -839,6 +840,8 @@ export function Canvas() {
         const flipped = state.bcx.localRatsnestPads;
         const next = pad ? toggleLocalRatsnestPad(flipped, pad.id) : part ? toggleLocalRatsnestFootprint(flipped, (part.pads ?? []).map((q) => `${part.ref}.${q.num}`), state.showRatsnest) : [];
         dispatch({ type: "BCX", patch: { localRatsnestPads: next } });
+        // `RunAction( ACTIONS::selectionClear )`, then `selectionCursor` with the pad (else the footprint) filter: the item clicked is left selected (r7 C7-10)
+        dispatch({ type: "SET_SELECTION", refs: pad ? [pad.id] : part ? [part.ref] : [] });
         return;
       }
 
