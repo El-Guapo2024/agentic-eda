@@ -115,7 +115,9 @@ function shapeOfResolved(g: LibGraphic): Shape | null {
     }
     case "arc":
       return { ...base, type: 2, start: iu(...g.start), end: iu(...g.end), mid: iu(...g.mid), width: iuLen(g.stroke_width), fill: g.fill };
+    // a text box's text, as the library's text box is not a shape here (its border is the `rectangle` beside it)
     case "text":
+    case "text_box":
       return null;
   }
 }

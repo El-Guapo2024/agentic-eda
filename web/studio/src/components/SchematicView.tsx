@@ -115,7 +115,7 @@ import { pickNewMemberAt } from "../actions/schGroupActions";
 import { pasteOffset, previewIds, withPaste } from "../kicad-port/schClipboard";
 import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
 import { useSchImageHand } from "../state/schImageHand";
-import { cancelSchCarry, carryCursor, noteCarryCursor, useSchCarry } from "../state/schCarryStore";
+import { cancelSchCarry, carryCursor, carryDrawing, noteCarryCursor, noteCarryPainted, useSchCarry } from "../state/schCarryStore";
 import { isCarryTool, PREVIEW_AT } from "../kicad-port/schPlaceTool";
 import { beginItem, carrySymbol, placeCarried } from "../actions/schPlaceActions";
 import { imageSizeNm, SCALE_PPM } from "../kicad-port/refImage";
@@ -372,10 +372,11 @@ export function SchematicView() {
   const pasteDx = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[0] : 0;
   const pasteDy = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[1] : 0;
   const pasteShown = paste != null && pasteSnap != null;
-  // The item a placing tool holds (`TwoClickPlace`'s `m_view->AddToPreview( item )`, `PlaceSymbol`'s `addSymbol`): the server's drawing of the command the
-  // placing click will send, made at `PREVIEW_AT`, shifted to the cursor as the tool's grid snaps it (`BestSnapAnchor`), and drawn selected (it is the
-  // selection while it rides). Until the pointer moves it is where it was made.
-  const carrying = carry != null && carry.preview != null && carry.tool === state.activeTool && carry.sheet.join("/") === state.currentSheetPath.join("/");
+  // The item a placing tool holds (`TwoClickPlace`'s `m_view->AddToPreview( item )`, `PlaceSymbol`'s `addSymbol`): drawn by the page at `PREVIEW_AT` from the item and
+  // its library drawing, with what the server's drawing of the click's command adds once it is back (kicad-port/schCarryPreview.ts), shifted to the cursor as the
+  // tool's grid snaps it (`BestSnapAnchor`), and drawn selected (it is the selection while it rides). Until the pointer moves it is where it was made.
+  const carrying = carry != null && carry.tool === state.activeTool && carry.sheet.join("/") === state.currentSheetPath.join("/");
+  const carryShown = useMemo(() => (carrying && carry && sch ? carryDrawing(carry, sch) : null), [carrying, carry, sch?.lib_symbols]);
   const carrySnap = carrying ? (state.cursorNm ? (snap.lastPoint() ?? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, toolCategory(state.activeTool))) : carry.at) : null;
   const carryDx = carrySnap ? carrySnap[0] - PREVIEW_AT[0] : 0;
   const carryDy = carrySnap ? carrySnap[1] - PREVIEW_AT[1] : 0;
@@ -415,13 +416,13 @@ export function SchematicView() {
   const importSnap = importShown && state.cursorNm ? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, "connectable") : null;
   const displaySch: Schematic | null = useMemo(() => {
     if (baseDisplaySch && paste && pasteShown) return withPaste(baseDisplaySch, paste.preview, pasteDx, pasteDy);
-    if (baseDisplaySch && carrying && carry?.preview) return withPaste(baseDisplaySch, carry.preview, carryDx, carryDy);
+    if (baseDisplaySch && carryShown) return withPaste(baseDisplaySch, carryShown, carryDx, carryDy);
     if (baseDisplaySch && importShown && importSnap) return withPaste(baseDisplaySch, importShown, importSnap[0] - PREVIEW_AT[0], importSnap[1] - PREVIEW_AT[1]);
     return baseDisplaySch;
-  }, [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy, carrying, carry?.preview, carryDx, carryDy, importShown, importSnap?.[0], importSnap?.[1]]);
+  }, [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy, carryShown, carryDx, carryDy, importShown, importSnap?.[0], importSnap?.[1]]);
   const pasteSelection = useMemo(
-    () => (paste && pasteShown ? new Set(previewIds(paste.preview)) : carrying && carry?.preview ? new Set(previewIds(carry.preview)) : importShown ? new Set(previewIds(importShown)) : null),
-    [paste, pasteShown, carrying, carry?.preview, importShown]
+    () => (paste && pasteShown ? new Set(previewIds(paste.preview)) : carryShown ? new Set(previewIds(carryShown)) : importShown ? new Set(previewIds(importShown)) : null),
+    [paste, pasteShown, carryShown, importShown]
   );
   // A paste belongs to the sheet it was started on and to the select tool: leaving the sheet, the tab or the tool throws it away.
   useEffect(() => {
@@ -478,6 +479,8 @@ export function SchematicView() {
     // the graphic being edited is drawn as its points have it so far (the point editor changes the item as it goes)
     const shownSch = shapeEditor && pointDrag ? { ...displaySch, graphics: (displaySch.graphics ?? []).map((g) => (g.id === shapeEditor.id ? shapeEditor.shown : g)) } : displaySch;
     paintSchematic(ctx, state.schematicView, withOpVars(withVariant(shownSch, state.schVariant), simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
+    // the carried item is on the canvas, in this state of it (the test hook's timing: no round trip before it shows)
+    if (carryShown && carry) noteCarryPainted(carry.seq);
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
     if (shapeEditor) paintEditPoints(ctx, state.schematicView, shapeEditor.edit);
     // The simulator's operating point (View > Show OP Voltages / Currents, components/simulator/opPainter.ts).
@@ -1137,6 +1140,18 @@ export function SchematicView() {
         // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
         const scale = state.schematicView.scale || 1;
+        // An item in the hand: the menu of the selection, which is the item (`TwoClickPlace` / `PlaceSymbol`: `m_menu->ShowContextMenu( m_selectionTool->GetSelection() )`);
+        // its entries reach the tool's loop like its keys (actions/schPlaceActions.ts), the Symbol Unit choices included
+        if (carryShown && carry) {
+          const view = withPaste(sch, carryShown, carryDx, carryDy);
+          const carriedId = previewIds(carryShown)[0] ?? (carry.item.kind === "symbol" ? carry.item.ref : null);
+          if (carriedId) {
+            const other = state.units === "mm" ? "mil" : "mm";
+            const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other)) };
+            setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(view, [carriedId], [wx, wy], 10 / scale, { allowPinSwaps: false, inGroup: false, unit: carry.item.kind === "symbol" ? carry.item.unit : undefined }), std) });
+          }
+          return;
+        }
         const hit0 = pickItem(sch, wx, wy, scale, selectable, "first");
         const hit = hit0 ? (substituteSchSelection(sch, [hit0], state.schEnteredGroupId).ids[0] ?? hit0) : null;
         let ids = [...state.selection];

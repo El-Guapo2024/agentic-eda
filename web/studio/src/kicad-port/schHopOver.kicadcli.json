@@ -1,0 +1,29 @@
+{
+  "about": "Hop-overs as kicad-cli 10.99 plots them (`sch export svg --draw-hop-over`), read by kicad-port/schHopOver.test.ts and crates/cli/src/sch_setup_tests.rs (slow_kicad_cli_plots_the_hops_schematic_setup_sizes). The wires in mm (a bus is a bus), Formatting's default line width in nm (7 mils), and for each hop-over choice the arcs: the wire that hops (its index), the hop's two ends in mm (before and after the crossing, from the wire's start) and the radius kicad-cli writes.",
+  "default_line_width_nm": 177800,
+  "wires": [
+    { "pts": [[30, 50], [80, 50]] },
+    { "pts": [[55, 30], [55, 70]] },
+    { "pts": [[30.33, 80.81], [70.97, 101.13]] },
+    { "pts": [[40, 110], [60, 75]] },
+    { "pts": [[30, 120], [80, 120]], "bus": true },
+    { "pts": [[65, 112], [65, 135]] }
+  ],
+  "arcs": {
+    "1": [
+      { "wire": 0, "ends": [[54.6977, 50], [55.3023, 50]], "radius_mm": 0.3023 },
+      { "wire": 2, "ends": [[50.5541, 90.922], [51.0947, 91.1924]], "radius_mm": 0.3022 },
+      { "wire": 4, "ends": [[64.6977, 120], [65.3023, 120]], "radius_mm": 0.3023 }
+    ],
+    "3": [
+      { "wire": 0, "ends": [[53.9332, 50], [56.0668, 50]], "radius_mm": 1.0668 },
+      { "wire": 2, "ends": [[49.8702, 90.5801], [51.7786, 91.5343]], "radius_mm": 1.0668 },
+      { "wire": 4, "ends": [[63.9332, 120], [66.0668, 120]], "radius_mm": 1.0668 }
+    ],
+    "5": [
+      { "wire": 0, "ends": [[52.8664, 50], [57.1336, 50]], "radius_mm": 2.1336 },
+      { "wire": 2, "ends": [[48.9161, 90.103], [52.7327, 92.0114]], "radius_mm": 2.1336 },
+      { "wire": 4, "ends": [[62.8664, 120], [67.1336, 120]], "radius_mm": 2.1336 }
+    ]
+  }
+}

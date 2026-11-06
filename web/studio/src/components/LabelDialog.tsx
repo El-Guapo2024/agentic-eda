@@ -41,7 +41,9 @@ const TITLE: Record<"local" | "global" | "hierarchical", string> = {
   hierarchical: "Hierarchical Label Properties",
 };
 
-const DEFAULT_SIZE_NM = 1_270_000; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
+/** A label's size the IR keeps as none (50 mil, KiCad's `DEFAULT_TEXT_SIZE`); a new label starts at Schematic Setup's `m_DefaultTextSize` (`createNewLabel`:
+ *  `labelItem->SetTextSize( VECTOR2I( settings.m_DefaultTextSize, settings.m_DefaultTextSize ) )`). */
+const DEFAULT_SIZE_NM = 1_270_000;
 
 /** The label in the hand whose Properties are open, if they are. */
 function carriedBeingEdited(): CarriedLabel | null {
@@ -77,7 +79,7 @@ export function LabelDialog() {
     setShape(from?.shape ?? last.shape);
     setSpin(from ? from.spin : last.spin);
     setAuto(from?.autoRotate ?? last.autoRotate);
-    setSize(nmToMm(from?.sizeNm ?? DEFAULT_SIZE_NM));
+    setSize(nmToMm(from ? (from.sizeNm ?? DEFAULT_SIZE_NM) : (state.schematic?.setup?.default_text_size_nm ?? DEFAULT_SIZE_NM)));
     setBold(from?.bold ?? last.bold);
     setItalic(from?.italic ?? last.italic);
     // eslint-disable-next-line react-hooks/exhaustive-deps

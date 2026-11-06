@@ -543,7 +543,7 @@ fn stroke_type(item: &[Sexpr]) -> Option<String> {
 /// `SCH_IO_KICAD_SEXPR_PARSER::parseSymbolTextBox`: `(text_box [private] "text" (at x y angle) (size w h) (margins l t r b) (stroke ...) (fill ...) (effects ...))`. A box begun at `(at ..)`
 /// and `(size w h)` long, the size in the file's Y-up mm; the four margins are kept as the greatest of them; with no stroke the width is the default one (6 mil), and with no
 /// `(effects ...)` the box is left and top (the constructor's alignment) where an `(effects ...)` without `(justify ...)` is centred (the file format's default).
-fn text_box(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolGraphic> {
+pub(crate) fn text_box(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolGraphic> {
     let private = is_private(item);
     let text_at = 1 + usize::from(private);
     let text = sexpr::txt(item, text_at)?.to_string();

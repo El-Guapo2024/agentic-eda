@@ -96,8 +96,9 @@ pub(crate) const FORMATS: [&str; 5] = ["ps", "pdf", "svg", "dxf", "png"];
 ///
 /// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Page size:" (kicad-cli plots at the schematic's size,
 /// `m_pageSizeSelect = PAGE_SIZE_AUTO`), "Minimum line width:", DXF's "Export units:" (kicad-cli always exports in mm, as KiCad's own comment
-/// in `onPlotFormatSelection` says), "Open file after plot". The design variant is `--variant` ([`crate::fab_api::variant_args`]). The hop-over and the default font
-/// are the defaults of both (no hop-over scale, the KiCad font).
+/// in `onPlotFormatSelection` says), "Open file after plot". The design variant is `--variant` ([`crate::fab_api::variant_args`]). The hop-over is the
+/// project's ([`plot`] passes `--draw-hop-over` as `m_plotHopOver` is set, [`eda_kicad_engine::pictures::hop_over_args`]); the default font is the
+/// default of both (the KiCad font).
 pub(crate) fn plot_args_for(format: &str, req: &Value, page: Option<String>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     let color = bool_of(req, "color", true);
@@ -191,6 +192,12 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     args.extend(crate::fab_api::variant_args(&req));
     // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`): the plot draws the sheet the editor draws
     args.extend(crate::drawing_sheet_api::plot_args(dir, crate::drawing_sheet_api::schematic_sheet(dir).as_deref()));
+    // The hops the editor draws where wires cross (KiCad 25ec2335 `DIALOG_PLOT_SCHEMATIC::plotSchematic`: `plotOpts.m_plotHopOver =
+    // Schematic().Settings().GetHopOverScale() > 0.0`), from Schematic Setup > Formatting's "Hop-over size:"
+    match &renumbered {
+        Some((design, _)) => args.extend(eda_kicad_engine::pictures::hop_over_args(design)),
+        None => args.extend(crate::board::load(dir).map(|(_, design, _)| eda_kicad_engine::pictures::hop_over_args(&design)).unwrap_or_default()),
+    }
     let mut v = reply(match &renumbered {
         Some((design, model)) => kicad_engine::export_sch_design_into(dir, design, model, kind, &args, &out_dir),
         None => kicad_engine::export_sch_into(dir, kind, &args, &out_dir),

@@ -38,6 +38,7 @@ import type { SchColor } from "../../api/schEditTypes";
 import { rgba } from "../schematic/schGraphicsPainter";
 import { paintEditPoints } from "../schematic/schArcEditPaint";
 import type { EeEditPoints } from "../../kicad-port/eePointEdit";
+import { withDefaultSchLook } from "../../kicad-port/schFormattingLook";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
 export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox";
@@ -291,14 +292,15 @@ export function drawPinAltIcon(ctx: CanvasRenderingContext2D, icon: PinAltIcon, 
   ctx.restore();
 }
 
-export function paintSymbol(
-  ctx: CanvasRenderingContext2D,
-  view: ViewTransform,
-  widthPx: number,
-  heightPx: number,
-  symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean; pin_name_offset_mm?: number } | null,
-  opts: SymPaintOptions
-) {
+type PaintedSymbol = { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean; pin_name_offset_mm?: number } | null;
+
+/** The Symbol Editor's canvas and the choosers' previews: drawn with the library editor's render settings, KiCad's defaults, not the schematic's Formatting
+ *  (kicad-port/schFormattingLook.ts `withDefaultSchLook`). */
+export function paintSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, symbol: PaintedSymbol, opts: SymPaintOptions) {
+  withDefaultSchLook(() => paintSymbolDefaults(ctx, view, widthPx, heightPx, symbol, opts));
+}
+
+function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, symbol: PaintedSymbol, opts: SymPaintOptions) {
   if (opts.gridVisible) {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
     paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), undefined, "symbol");
