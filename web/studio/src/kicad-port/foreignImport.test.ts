@@ -14,6 +14,10 @@ import {
   isRequiredLayer,
   issuesOf,
   keptGuesses,
+  boardIndexOf,
+  chooserCells,
+  projectToSelectorRows,
+  rowsOfBoards,
   kicadLayerLabel,
   kicadLayerList,
   layerMapRequest,
@@ -137,7 +141,7 @@ test("< and << put layers back, Auto-Match matches what the importer has a guess
   assert.equal(s.matched.length, 5);
   assert.deepEqual(unmatchedRequired(s, LAYERS), []);
   assert.deepEqual(layerMapRequest(s), {});
-  // A layer left out that has a guess keeps it in kicad-cli: the dialog says which.
+  // A layer left unmatched that has a guess is one the server is asked to leave out (`UNDEFINED_LAYER` in KiCad's callback); kicad-cli leaves out one with no guess itself.
   s = removeMappings(s, ["tNames", "bNames"]);
   assert.deepEqual(keptGuesses(s).sort(), ["bNames", "tNames"]);
   assert.deepEqual(layerMapRequest(s), {}, "and no pair is sent for them");
@@ -145,4 +149,31 @@ test("< and << put layers back, Auto-Match matches what the importer has a guess
   assert.equal(removeMappings(s, ["nothing"]), s);
   const empty = initialMapping([]);
   assert.equal(autoMatch(empty), empty);
+});
+
+/** The `project.json` of QA's `ProProject_Yuzuki Chameleon_2023-09-02.epro`, cut to what the chooser reads. */
+const YUZUKI = {
+  boards: { "1.0 OpenSource": { schematic: "0e8e", pcb: "016b" }, "合作量产版本100ASK": { schematic: "7c81", pcb: "9ead" } },
+  pcbs: { "016b": "PCB", "2778": "树莓派A版形状", "8242": "点位图", "9ead": "100ASK", d18a: { title: "散热器外形" }, ffff: "" },
+  schematics: { "7c81": { name: "100ASK" }, "510e": { name: "H616 内存重排布图" }, "0e8e": { name: "Main" } },
+};
+
+test("DIALOG_IMPORT_CHOOSE_PROJECT's rows are ProjectToSelectorDialog's: the combinations, then the lone boards, then (not for a board import) the lone schematics", () => {
+  const rows = projectToSelectorRows(YUZUKI, true, false);
+  assert.deepEqual(rows.map(chooserCells), [
+    ["1.0 OpenSource", "PCB", "Main"],
+    ["合作量产版本100ASK", "100ASK", "100ASK"],
+    ["", "树莓派A版形状", ""],
+    ["", "点位图", ""],
+    ["", "散热器外形", ""],
+    ["", "ffff", ""],
+  ], "a board with an empty title is shown by its id");
+  const all = projectToSelectorRows(YUZUKI, false, false);
+  assert.deepEqual(all.at(-1) && chooserCells(all.at(-1)!), ["", "", "H616 内存重排布图"]);
+  // kicad-cli converts the boards in the order of their ids: the chosen row's board is found in it
+  assert.equal(boardIndexOf(YUZUKI, "9ead"), 3);
+  assert.equal(boardIndexOf(YUZUKI, "016b"), 0);
+  assert.equal(boardIndexOf(YUZUKI, ""), -1);
+  assert.deepEqual(rowsOfBoards(["A", "B"]).map(chooserCells), [["", "A", ""], ["", "B", ""]]);
+  assert.deepEqual(projectToSelectorRows(null, true, false), []);
 });

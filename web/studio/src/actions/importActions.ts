@@ -5,12 +5,32 @@ import { openImportGraphics, type PickedFile } from "../state/importDialogs";
 import { graphicsFormatOf } from "../kicad-port/importGraphics";
 import { appendBoardCmd, describeAppended, isKicadBoardName } from "../kicad-port/appendBoard";
 import { getDesignBlocksUi } from "../state/designBlocks";
-import { acceptFor, asForeignParam, describeImport, describeIssues, describeRules, issuesOf, type ForeignFile, type ForeignParam, type ImportKind } from "../kicad-port/foreignImport";
+import {
+  acceptFor,
+  asForeignParam,
+  boardIndexOf,
+  describeImport,
+  describeIssues,
+  describeRules,
+  issuesOf,
+  PCB_MODIFIED_MESSAGE,
+  projectToSelectorRows,
+  REPLACE_SCHEMATIC_QUESTION,
+  rowsOfBoards,
+  SAVE_CHANGES,
+  SCHEMATIC_MODIFIED_MESSAGE,
+  type ConvertKind,
+  type ForeignFile,
+  type ForeignParam,
+  type ImportKind,
+} from "../kicad-port/foreignImport";
+import { easyEdaProject } from "../kicad-port/zipEntry";
 import { readAppendBoard } from "../api/importClient";
-import { pickBinaryFile, postImportForeign } from "../api/foreignImportClient";
-import { postCmd } from "../api/client";
+import { pickBinaryFile, pickBinaryFiles, postImportForeign } from "../api/foreignImportClient";
+import { postCarry, postCmd } from "../api/client";
+import { isContentModified, markContentSaved, type ModifiedEditor } from "../state/contentModified";
 import { pickTextFile } from "../api/libraryClient";
-import { askLayerMapping, importKeepKiCadLayerNames, importShowIssues, showImportReport } from "../state/foreignImport";
+import { askChooseProject, askImportQuestion, askLayerMapping, importKeepKiCadLayerNames, importShowIssues, showImportReport } from "../state/foreignImport";
 import { boundsOfPoints, fitTransform } from "../components/canvas/view";
 import { schematicBounds } from "../components/schematic/schHit";
 import type { Action, StudioApi } from "../state/store";
@@ -18,6 +38,22 @@ import type { Dispatch } from "react";
 import type { ActionHandler } from "./commonActions";
 import { describeExport, describeImport as describeSessionImport, SESSION_ACCEPT, specctraImportCmd } from "../kicad-port/specctra";
 import { exportSpecctraDsn } from "../api/specctraClient";
+
+/** The project import's parameter: a list of files, or `{ files: [..], layerMap, .. }` with the options for the first. */
+function asProjectParam(param: unknown): ForeignParam[] | null {
+  if (Array.isArray(param)) {
+    const files = param.map(asForeignParam).filter((f): f is ForeignParam => !!f);
+    return files.length > 0 ? files : null;
+  }
+  if (param && typeof param === "object" && Array.isArray((param as { files?: unknown }).files)) {
+    const { files, ...options } = param as { files: unknown[] } & Record<string, unknown>;
+    const list = files.map(asForeignParam).filter((f): f is ForeignParam => !!f);
+    if (list.length === 0) return null;
+    list[0] = { ...list[0]!, ...(options as Partial<ForeignParam>) };
+    return list;
+  }
+  return null;
+}
 
 /** A drop action's parameter: the file the drop host read. */
 export function asPickedFile(param: unknown): PickedFile | null {
@@ -70,49 +106,126 @@ function fitToImport(ctx: ImportActionContext, kind: ImportKind): void {
   if (bounds) ctx.dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) });
 }
 
+/** `HandleUnsavedChanges`: "Save changes?" with Save / Discard Changes / Cancel. Save is the studio's File > Save (design.json is written as each edit is made, so it only
+ * clears the flag and says so); false is Cancel, which stops the import. */
+async function handleUnsavedChanges(ctx: ImportActionContext, editor: ModifiedEditor, message: string): Promise<boolean> {
+  if (!isContentModified(editor)) return true;
+  const answer = await askImportQuestion({ title: SAVE_CHANGES.title, message, detail: SAVE_CHANGES.detail, buttons: [SAVE_CHANGES.save, SAVE_CHANGES.discard, SAVE_CHANGES.cancel] });
+  if (answer === null) return false;
+  if (answer === SAVE_CHANGES.save) {
+    markContentSaved(editor);
+    ctx.dispatch({ type: "TOAST", message: "File 'design.json' saved.", kind: "info" });
+  }
+  return true;
+}
+
+/** Does the schematic in view hold anything (`Schematic().RootScreen()->Items().empty()`), which `OnImportProject` asks before it replaces it? */
+function schematicHasItems(ctx: ImportActionContext): boolean {
+  const sch = ctx.api.getState().schematic;
+  if (!sch) return false;
+  const s = sch as unknown as Record<string, unknown>;
+  return ["symbols", "wires", "labels", "sheets", "texts", "lines", "power_symbols", "junctions", "no_connects", "bus_entries"].some((k) => Array.isArray(s[k]) && (s[k] as unknown[]).length > 0);
+}
+
 /**
- * File > Import > Non-KiCad Board File... (`BOARD_EDITOR_CONTROL::OpenNonKicadBoard`) and Non-KiCad Schematic File... (`SCH_EDIT_FRAME::OnImportProject`): a file of another EDA format
- * replaces the board (or the schematic) that is open -- one command, so one undo step; KiCad cannot take it back, and the schematic's asks first because of that.
- *
- *   1. the file is chosen (a browser gives the page its bytes, not its path) and kicad-cli converts it (`POST /api/import_foreign`; nothing on the board changes yet);
- *   2. an importer that asks which KiCad layer each of its layers goes to (Altium, Eagle, PADS, CADSTAR, ...) is answered by the layer dialog (DIALOG_MAP_LAYERS), and the file is
- *      converted again with the layers the person moved (`--layer-map`);
- *   3. `replace_board` / `replace_schematic` makes it the board or the schematic;
- *   4. what the importers said is the toast and, with "Show import issues", a report.
- *
- * `given` is the file when the action was run with one (`window.__eda.run(id, { name, data })`) instead of through the chooser.
+ * `DIALOG_IMPORT_CHOOSE_PROJECT`: a project file of several boards (an EasyEDA Pro project) asks which. The rows are `ProjectToSelectorDialog`'s, read from the file's
+ * `project.json` here (the board import asks with `aPcbOnly`); a file this cannot read shows the boards kicad-cli named. Resolves to the board's place in kicad-cli's list,
+ * or `null` when the dialog is closed (KiCad then imports nothing).
  */
-async function importForeign(ctx: ImportActionContext, kind: ImportKind, given: ForeignParam | null): Promise<void> {
+async function chooseBoard(file: ForeignFile, boards: string[], pcbOnly: boolean): Promise<number | null> {
+  const project = await easyEdaProject(file.data);
+  const rows = project ? projectToSelectorRows(project, pcbOnly, false).filter((r) => r.pcbId) : [];
+  if (rows.length === 0) {
+    const i = await askChooseProject(rowsOfBoards(boards));
+    return i;
+  }
+  const i = await askChooseProject(rows);
+  if (i === null) return null;
+  const index = boardIndexOf(project, rows[i]!.pcbId);
+  return index >= 0 ? index : null;
+}
+
+/**
+ * File > Import > Non-KiCad Board File... (`BOARD_EDITOR_CONTROL::OpenNonKicadBoard`), Non-KiCad Schematic File... (`SCH_EDIT_FRAME::OnImportProject`) and the studio's Import
+ * Non-KiCad Project... (the project manager's, `IMPORT_PROJ_HELPER::ImportFiles`: a board and its schematic together): a file of another EDA format replaces the board (or the
+ * schematic, or both) that is open -- one command, or for a project one step of two commands, so one undo step; KiCad cannot take it back.
+ *
+ *   1. the schematic's import asks first, before the file is chosen, when the sheet holds anything (`IsOK`: "This operation replaces the contents of the current schematic,
+ *      which will be permanently lost."); the board's asks "The current PCB has been modified.  Save changes?" after it (`OpenProjectFiles`' `HandleUnsavedChanges`), when the
+ *      board was modified since the page opened or was saved (state/contentModified.ts);
+ *   2. the file is chosen (a browser gives the page its bytes, not its path) and kicad-cli converts it (`POST /api/import_foreign`; nothing on the board changes yet); a project
+ *      file of several boards asks which (`DIALOG_IMPORT_CHOOSE_PROJECT`);
+ *   3. an importer that asks which KiCad layer each of its layers goes to (Altium, Eagle, PADS, CADSTAR, ...) is answered by the layer dialog (DIALOG_MAP_LAYERS), and the file is
+ *      converted again with the layers the person moved and without the ones left unmatched;
+ *   4. `replace_board` / `replace_schematic` makes it the board or the schematic;
+ *   5. what the importers said is the toast and, with "Show import issues", a report.
+ *
+ * `given` is the file (or a project's files) when the action was run with one (`window.__eda.run(id, { name, data })`) instead of through the chooser.
+ */
+async function importForeign(ctx: ImportActionContext, kind: ConvertKind, given: ForeignParam | ForeignParam[] | null): Promise<void> {
   const toast = (message: string, tone: "error" | "info") => ctx.dispatch({ type: "TOAST", message, kind: tone });
   try {
-    const file: ForeignFile | null = given ?? (await pickBinaryFile(acceptFor(kind)));
-    if (!file) return;
-    let reply = await postImportForeign(kind, file, given?.layerMap);
-    if (!reply.ok) return toast(reply.message ?? `The file '${file.name}' could not be imported.`, "error");
-    let keepNames = given?.keepKicadLayerNames ?? importKeepKiCadLayerNames();
-    if (kind === "board" && reply.maps_layers && !given?.layerMap && !given?.skipLayerMapping && reply.layers) {
+    if (kind === "schematic" && schematicHasItems(ctx)) {
+      const yes = await askImportQuestion({ title: "Confirmation", message: REPLACE_SCHEMATIC_QUESTION, buttons: ["Yes", "No"] });
+      if (yes !== "Yes") return;
+    }
+    const files: ForeignFile[] = given ? (Array.isArray(given) ? given : [given]) : kind === "project" ? await pickBinaryFiles(acceptFor(kind)) : [await pickBinaryFile(acceptFor(kind))].filter((f): f is ForeignFile => !!f);
+    if (files.length === 0) return;
+    const first = (Array.isArray(given) ? given[0] : given) ?? null;
+    const file = files[0]!;
+    const shown = files.map((f) => f.name).join(" + ");
+    if (kind !== "schematic" && !(await handleUnsavedChanges(ctx, "pcb", PCB_MODIFIED_MESSAGE))) return;
+    if (kind === "project" && !(await handleUnsavedChanges(ctx, "schematic", SCHEMATIC_MODIFIED_MESSAGE))) return;
+    const target = kind === "project" ? files : file;
+    let board: number | undefined = first?.board;
+    let reply = await postImportForeign(kind, target, first?.layerMap, first?.dropLayers, board);
+    if (reply.ok && reply.choose_board) {
+      const chosen = board ?? (await chooseBoard(file, reply.boards ?? [], kind !== "project"));
+      if (chosen === null || chosen === undefined) return toast(`Import of '${shown}' cancelled.`, "info");
+      board = chosen;
+      reply = await postImportForeign(kind, target, first?.layerMap, first?.dropLayers, board);
+    }
+    if (!reply.ok) return toast(reply.message ?? `The file '${shown}' could not be imported.`, "error");
+    let keepNames = first?.keepKicadLayerNames ?? importKeepKiCadLayerNames();
+    if (kind !== "schematic" && reply.maps_layers && !first?.layerMap && !first?.dropLayers && !first?.skipLayerMapping && reply.layers) {
       // `PCB_IO_EAGLE::mapEagleLayersToKicad`, `ALTIUM_PCB::...`: the importer asks, and the person answers.
-      const answer = await askLayerMapping({ name: file.name, format: reply.format ?? "", layers: reply.layers, keepNames });
-      if (!answer) return toast(`Import of '${file.name}' cancelled.`, "info");
+      const answer = await askLayerMapping({ name: reply.name ?? file.name, format: reply.format ?? "", layers: reply.layers, keepNames });
+      if (!answer) return toast(`Import of '${shown}' cancelled.`, "info");
       keepNames = answer.keepNames;
-      if (Object.keys(answer.map).length > 0) {
-        reply = await postImportForeign(kind, file, answer.map);
-        if (!reply.ok) return toast(reply.message ?? `The file '${file.name}' could not be imported.`, "error");
+      if (Object.keys(answer.map).length > 0 || answer.drop.length > 0) {
+        reply = await postImportForeign(kind, target, answer.map, answer.drop, board);
+        if (!reply.ok) return toast(reply.message ?? `The file '${shown}' could not be imported.`, "error");
       }
     }
     // The board comes with the project kicad-cli made of it: the design rules and the net classes the importer set are in that file and not in the board's.
-    const cmd = kind === "board" ? ({ op: "replace_board", text: reply.text ?? "", name: file.name, keep_kicad_layer_names: keepNames, ...(reply.project ? { project: reply.project } : {}), ...(reply.rules ? { rules: reply.rules } : {}) } as const) : ({ op: "replace_schematic", content: reply.content, name: file.name } as const);
-    // An import is not a move the gates judge: Strict is off for it, as for a paste.
-    const done = await postCmd(cmd, false);
-    if (!done.ok) return toast(done.message, "error");
+    const boardCmd = { op: "replace_board", text: reply.text ?? "", name: reply.name ?? file.name, keep_kicad_layer_names: keepNames, ...(reply.project ? { project: reply.project } : {}), ...(reply.rules ? { rules: reply.rules } : {}) } as const;
+    const schCmd = { op: "replace_schematic", content: reply.content, name: kind === "project" ? (files.find((f) => f.name !== reply.name)?.name ?? file.name) : file.name } as const;
+    // An import is not a move the gates judge: Strict is off for it, as for a paste. A project's two commands are one step: the board's holds the step open and the
+    // schematic's ends it (crates/cli/src/carry.rs), so one Undo, from either tab, takes both back.
+    let done;
+    if (kind === "project") {
+      done = await postCmd(boardCmd, false, "begin");
+      if (done.ok) {
+        const second = await postCmd(schCmd, false, "commit");
+        if (!second.ok) await postCarry("cancel");
+        done = second;
+      }
+    } else {
+      done = await postCmd(kind === "board" ? boardCmd : schCmd, false);
+    }
+    if (!done.ok) {
+      await ctx.api.refresh();
+      return toast(done.message, "error");
+    }
     await ctx.api.refresh();
-    if (kind === "schematic") await ctx.api.navigateToSheet([]);
-    fitToImport(ctx, kind);
+    if (kind !== "board") await ctx.api.navigateToSheet([]);
+    fitToImport(ctx, kind === "schematic" ? "schematic" : "board");
     const issues = describeIssues(reply.findings);
     const rules = describeRules(reply);
-    toast(`${describeImport(reply)}${issues ? ` ${issues}` : ""}${rules ? ` ${rules}` : ""} Undo brings the ${kind === "board" ? "old board" : "old schematic"} back.`, "info");
-    if (issuesOf(reply.findings).length > 0 && !given?.skipReport && importShowIssues()) {
-      showImportReport({ name: file.name, format: reply.format ?? "", summary: `${describeImport(reply)} ${issues}`.trim(), findings: issuesOf(reply.findings), notes: reply.notes ?? [] });
+    const notes = (reply.notes ?? []).filter((n) => kind !== "schematic" && n);
+    toast(`${describeImport(reply)}${issues ? ` ${issues}` : ""}${rules ? ` ${rules}` : ""}${notes.length > 0 ? ` ${notes.join(" ")}` : ""} Undo brings the ${kind === "board" ? "old board" : kind === "project" ? "old board and schematic" : "old schematic"} back.`, "info");
+    if (issuesOf(reply.findings).length > 0 && !first?.skipReport && importShowIssues()) {
+      showImportReport({ name: shown, format: reply.format ?? "", summary: `${describeImport(reply)} ${issues}`.trim(), findings: issuesOf(reply.findings), notes: [...(reply.notes ?? []), ...(reply.schematic_notes ?? [])] });
     }
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), "error");
@@ -185,6 +298,12 @@ export function registerImportActions(m: Map<string, ActionHandler>, ctx: Import
   if (ctx.tab === "schematic") {
     // SCH_ACTIONS::importNonKicadSchematic ("Import Non-KiCad Schematic..."): the same, for the schematic.
     m.set("eeschema.EditorControl.importNonKicadSchematic", (param) => void importForeign(ctx, "schematic", asForeignParam(param)));
+  }
+  if (ctx.tab === "pcb" || ctx.tab === "schematic") {
+    // The project manager's File > Import Non-KiCad Project... (`KICAD_MANAGER_FRAME::ImportNonKiCadProject`, `IMPORT_PROJ_HELPER::ImportFiles`): a board and its schematic
+    // (an Eagle `.brd` and `.sch`, a CADSTAR `.cpa` and `.csa`, an EasyEDA Pro project) come in together. The studio has no project manager, so it is an entry of both editors'
+    // File > Import (kicad/menuExtras.ts); the parameter is the files (`[{ name, data }, ..]`, or `{ files: [..] }` with the options of the first).
+    m.set("studio.Import.nonKicadProject", (param) => void importForeign(ctx, "project", asProjectParam(param)));
   }
   if (ctx.tab === "schematic" || ctx.tab === "symbol") {
     // SCH_ACTIONS::importGraphics (the schematic's and the Symbol Editor's File > Import > Graphics...) and ddImportGraphics: DIALOG_IMPORT_GFX_SCH.

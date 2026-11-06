@@ -13,6 +13,7 @@
 // the exact same flow the M/Escape keyboard shortcuts do, and
 // Canvas.tsx no longer needs any keydown handling of its own.
 
+import { markContentSaved } from "../state/contentModified";
 import { saveSymbolLibraryAs } from "./librarySaveOps";
 import { useCallback, useMemo, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
@@ -1671,7 +1672,11 @@ export function useActionRunner() {
     // left to flush -- only KiCad's status message is shown (no file dialog).
     m.set(
       "common.Control.save",
-      canvasOnly(() => dispatch({ type: "TOAST", message: "File 'design.json' saved.", kind: "info" }))
+      canvasOnly(() => {
+        // `SavePcbFile` / `SaveProject` clear the modified flag "Save changes?" asks about (state/contentModified.ts)
+        if (state.tab === "pcb" || state.tab === "schematic") markContentSaved(state.tab);
+        dispatch({ type: "TOAST", message: "File 'design.json' saved.", kind: "info" });
+      })
     );
     // common.Control.print (Ctrl+P): KiCad opens its print dialog for the
     // current sheet/board; here the browser's print of the current view

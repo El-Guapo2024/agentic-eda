@@ -2344,6 +2344,8 @@ export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelS
 export interface CmdReply {
   ok: boolean;
   message: string;
+  /** The history tag of the step the command made (`pcb`, `schematic`, `both`, ...): which editor's content it modified. */
+  domain?: string;
 }
 
 /**
