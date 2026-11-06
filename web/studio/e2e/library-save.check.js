@@ -30,7 +30,9 @@
   const dialog = (label) => document.querySelector(`[role=dialog][aria-label="${label}"]`);
   const button = (scope, label) => [...(scope?.querySelectorAll("button") ?? [])].find((b) => b.textContent.trim() === label);
   const treeRow = (id) => document.querySelector(`[role=treeitem][data-name="${CSS.escape(id)}"]`);
-  const libRow = (lib) => [...document.querySelectorAll(".library-tree-group")].find((g) => g.textContent.replace(/[▾▸]/g, "").trim().replace(/\s*\*?\s*[\d…]*$/, "").replace(/^☆ /, "") === lib);
+  // the library's row by the name it carries: its text ends in the count (and " *" when modified), and a name that ends in a digit -- the base-36 time in these
+  // checks' names does, 10 times in 36 -- read as part of the count once the digits were stripped from the text
+  const libRow = (lib) => document.querySelector(`.library-tree-group[data-library="${CSS.escape(lib)}"]`);
   const modified = (kind) => json(`/api/library/modified?kind=${kind}`);
   const savedSymbol = async (id) => (await json(`/api/library/saved?kind=symbol&id=${encodeURIComponent(id)}`)).symbol;
   const savedFootprint = async (id) => (await json(`/api/library/saved?kind=footprint&id=${encodeURIComponent(id)}`)).footprint;
@@ -140,6 +142,8 @@
     await sleep(100);
     button(d, "Save").click();
     const copy = `${SYM_B}:LsR2`;
+    // Save As is over when its dialog is (it puts the copy, opens it, then closes)
+    t(await until(() => !dialog("Save Symbol As"), 8000), "Save Symbol As closes");
     t(await until(async () => (await json("/api/symbol_editor/names")).project.includes(copy), 5000), `the copy ${copy} is in the library's buffer`);
     t((await modified("symbol")).items.includes(copy), "and is modified until the library is saved");
     // Save: the open symbol is the copy (Save As opens it)
@@ -219,6 +223,8 @@
     await sleep(100);
     button(d, "Save").click();
     const id = `${FP_A}:LsFp1`;
+    // Save As is over when its dialog is: after the file it opens the copy and closes; an action run before that is the dialog's to lose
+    t(await until(() => !dialog("Save Footprint As"), 8000), "Save Footprint As closes");
     t(await until(async () => savedFootprint(id), 6000), `Save As wrote ${id} into the library's folder`);
     // an edit: modified until Save; Save writes it
     const fp = await footprint(id);
@@ -251,6 +257,8 @@
     await sleep(100);
     button(d, "Save").click();
     const copy = `${FP_B}:LsFp1`;
+    // (the second Save As below, run while this one still opened its copy, was closed by this one's close: "Save Footprint As" never showed)
+    t(await until(() => !dialog("Save Footprint As"), 8000), "Save Footprint As closes");
     t(await until(async () => savedFootprint(copy), 6000), `the copy is in ${FP_B}'s folder`);
     // the name the library's file has: the question before it is replaced
     await selectItem(from);

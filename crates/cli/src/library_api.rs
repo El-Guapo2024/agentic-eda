@@ -21,9 +21,10 @@ fn path_safe(part: &str) -> bool {
 
 /// A footprint of the libraries of the library tables (`Lib:Name` -> the folder the row nicknamed `Lib` names, `/Name.kicad_mod`) in the editable type, with
 /// every graphic, text, attribute and pad layer the file holds (`eda_kicad::parse_library_footprint`, the reader behind Import -- the engine's own loader
-/// keeps only pads and a courtyard) and named `Lib:Name`, the key the library tree shows it under.
-fn installed_footprint_in<S: LibSource + ?Sized>(src: &S, name: &str) -> Option<LibraryFootprint> {
-    crate::library_search::installed_footprint(src, name)
+/// keeps only pads and a courtyard) and named `Lib:Name`, the key the library tree shows it under. `Ok(None)` when the libraries have no footprint by this
+/// name; `Err` (why) when its file is there and cannot be read or parsed (`library_search::read_installed_footprint`).
+fn installed_footprint_in<S: LibSource + ?Sized>(src: &S, name: &str) -> Result<Option<LibraryFootprint>, String> {
+    crate::library_search::read_installed_footprint(src, name)
 }
 
 /// A symbol of the libraries of the library tables (`Lib:Name` in the file the row nicknamed `Lib` names) in the editable type: units, body styles, keywords
@@ -37,15 +38,18 @@ fn installed_symbol_in<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Option<L
 }
 
 /// A footprint by name from the project library, else KiCad's installed libraries, else whatever the model resolves it to (intent, a loaded
-/// `.kicad_mod`, the builtin table) -- for a *read-only* answer; opening one in the editor copies it into the project library first.
+/// `.kicad_mod`, the builtin table) -- for a *read-only* answer; opening one in the editor copies it into the project library first. A library's file
+/// that is there and cannot be read is an error that says why, not "no footprint with this name", for which the editor would start a blank footprint.
 pub(crate) fn footprint_any(dir: &Path, name: &str) -> Result<(LibraryFootprint, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     if let Some(fp) = design.footprint_library.as_ref().and_then(|l| l.by_name(name)) {
         return Ok((fp.clone(), true));
     }
     // The libraries of the library tables come before what the board's own model resolved the name to: that is the pad-only copy of the same file.
-    if let Some(fp) = installed_footprint_in(&*crate::library_tables::libs(dir, Kind::Footprint), name) {
-        return Ok((fp, false));
+    match installed_footprint_in(&*crate::library_tables::libs(dir, Kind::Footprint), name) {
+        Ok(Some(fp)) => return Ok((fp, false)),
+        Ok(None) => {}
+        Err(why) => return Err(vec![CheckResult::fail("ops_bad_footprint", name, why)]),
     }
     resolve_footprint(&model, name)
         .map(|fp| {
@@ -286,13 +290,13 @@ mod tests {
                 (fp_line (start -2 -1) (end 2 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS")) (fp_text user "${REFERENCE}" (at 0 2) (layer "F.Fab")))"#,
         )
         .unwrap();
-        let fp = installed_footprint_in(&root, "Package_X:Chip-4").expect("found");
+        let fp = installed_footprint_in(&root, "Package_X:Chip-4").unwrap().expect("found");
         assert_eq!(fp.name, "Package_X:Chip-4", "the project key is the tree's: Lib:Name");
         assert_eq!(fp.pads.len(), 2);
         assert_eq!(fp.graphics.len(), 1, "the silkscreen line the engine's pad-only loader would drop");
         assert!(fp.pads.iter().all(|p| !p.id.is_empty()), "ids are assigned, so every edit verb can address a pad");
-        assert!(installed_footprint_in(&root, "Package_X:Missing").is_none());
-        assert!(installed_footprint_in(&root, "Chip-4").is_none(), "a bare name is not an installed-library id");
+        assert!(installed_footprint_in(&root, "Package_X:Missing").unwrap().is_none());
+        assert!(installed_footprint_in(&root, "Chip-4").unwrap().is_none(), "a bare name is not an installed-library id");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -318,7 +322,7 @@ mod tests {
         std::fs::create_dir_all(root.join("Lib.pretty")).unwrap();
         std::fs::write(root.parent().unwrap().join("outside.kicad_mod"), r#"(footprint "outside" (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))"#).unwrap();
         for bad in ["Lib:../../outside", "Lib:../outside", "..:outside", "Lib:a/b", "Lib:..\\outside"] {
-            assert!(installed_footprint_in(&root, bad).is_none(), "{bad}");
+            assert!(installed_footprint_in(&root, bad).is_ok_and(|f| f.is_none()), "{bad}");
             assert!(installed_symbol_in(&root, bad).is_none(), "{bad}");
         }
         let _ = std::fs::remove_file(root.parent().unwrap().join("outside.kicad_mod"));
@@ -332,7 +336,7 @@ mod tests {
         if !fp_root.is_dir() || !sym_root.is_dir() {
             return;
         }
-        let fp = installed_footprint_in(&fp_root, "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm").expect("SOIC-16 is installed");
+        let fp = installed_footprint_in(&fp_root, "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm").unwrap().expect("SOIC-16 is installed");
         assert_eq!(fp.pads.len(), 16);
         assert!(!fp.graphics.is_empty(), "silkscreen, fab and courtyard graphics");
         assert!(fp.model.as_deref().is_some_and(|m| m.contains("SOIC-16_3.9x9.9mm_P1.27mm")), "and its 3D model path: {:?}", fp.model);
