@@ -48,11 +48,16 @@ function Isolated({ children }: { children: ReactNode }) {
   );
 }
 
-/** `DIALOG_COLOR_PICKER`'s part that matters here: pick a colour and an opacity, or "no colour" (`COLOR4D::UNSPECIFIED`). Calls back with the colour text, or null for none. */
-export function ColorDialog({ title, initial, onPick, onCancel }: { title: string; initial: string | null; onPick: (css: string | null) => void; onCancel: () => void }) {
+/**
+ * `DIALOG_COLOR_PICKER`'s part that matters here: pick a colour and an opacity, or "no colour" (`COLOR4D::UNSPECIFIED`). Calls back with the colour text, or null for none.
+ * With `defaultColor` (a theme colour: "Theme colors have a default value, and the Reset to Default button reverts to it") the button is "Reset to Default" and puts the
+ * default in the picker (`OnResetButton`), taken with OK; without one it is the studio's "No color", which picks none at once.
+ */
+export function ColorDialog({ title, initial, onPick, onCancel, defaultColor }: { title: string; initial: string | null; onPick: (css: string | null) => void; onCancel: () => void; defaultColor?: string }) {
   const start: Rgba = specifiedColor(initial) ?? { r: 200, g: 52, b: 52, a: 1 };
   const [hex, setHex] = useState(toHex6(start));
   const [alpha, setAlpha] = useState(Math.round(start.a * 100));
+  const reset = defaultColor !== undefined ? parseCssColor(defaultColor) : null;
   const rgb = parseCssColor(hex) ?? start;
   const out: Rgba = { ...rgb, a: alpha / 100 };
   return (
@@ -66,9 +71,23 @@ export function ColorDialog({ title, initial, onPick, onCancel }: { title: strin
           <span>Preview</span>
           <div className="ap-preview" style={{ background: toCssColor(out) }} />
           <span />
-          <button type="button" onClick={() => onPick(null)}>
-            No color
-          </button>
+          {defaultColor !== undefined ? (
+            <button
+              type="button"
+              disabled={!reset}
+              onClick={() => {
+                if (!reset) return;
+                setHex(toHex6(reset));
+                setAlpha(Math.round(reset.a * 100));
+              }}
+            >
+              Reset to Default
+            </button>
+          ) : (
+            <button type="button" onClick={() => onPick(null)}>
+              No color
+            </button>
+          )}
         </div>
       </DialogShell>
     </Isolated>
