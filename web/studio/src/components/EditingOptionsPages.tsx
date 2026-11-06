@@ -2,8 +2,8 @@
 // the others greyed with the reason as their tooltip (components/CommonPreferencesPages.tsx's `NotOffered` look).
 //
 //   * PCB Editor > Editing Options (`PANEL_EDIT_OPTIONS( .., false )`, pcbnew/dialogs/panel_edit_options.cpp and _base; `loadPCBSettings`, `TransferDataFromWindow`):
-//     Constrain actions to H, V, 45 degrees (`m_AngleSnapMode`: checked is DEG45, unchecked DIRECT -- so OK on a board in 90 degree mode makes it 45, as KiCad's
-//     `TransferDataFromWindow` does), Step for rotate commands, Arc editing mode, Flip board items, the Magnetic Points, Show ratsnest with curved lines (the View
+//     Constrain actions to H, V, 45 degrees (`m_AngleSnapMode`: checked is DEG45, unchecked DIRECT -- so OK, once the page was shown, makes a board in 90 degree mode
+//     45, as KiCad's `TransferDataFromWindow` does), Step for rotate commands, Arc editing mode, Flip board items, the Magnetic Points, Show ratsnest with curved lines (the View
 //     menu's toggle), Ratsnest line thickness, <ESC> clears net highlighting, Show courtyard collisions when moving/dragging. Greyed: Track mouse-drag mode,
 //     Allow free pads, Ctrl+click's Highlight net, Always show selected ratsnest, Show page limits, Automatically refill zones.
 //   * Schematic Editor > Editing Options (`PANEL_EESCHEMA_EDITING_OPTIONS`, eeschema/dialogs/panel_eeschema_editing_options.cpp and _base): Line drawing mode,

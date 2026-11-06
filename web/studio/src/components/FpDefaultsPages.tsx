@@ -67,11 +67,25 @@ function useRowSelection(): [ReadonlySet<number>, (row: number, on: boolean) => 
 }
 
 /** `PANEL_FP_EDITOR_FIELD_DEFAULTS`. */
+/**
+ * Whether the page was shown while the dialog is up: KiCad builds these pages lazily (`AddLazySubPage`), so a page never opened is never transferred and OK
+ * leaves its settings as they were (here: nothing written, so a default stays a default).
+ */
+function useSeen(open: boolean, shown: boolean): boolean {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    if (!open) setSeen(false);
+    else if (shown) setSeen(true);
+  }, [open, shown]);
+  return seen;
+}
+
 export function useFpFieldDefaultsPage(open: boolean, shown: boolean): PreferencesPageHandle {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const [page, setPage] = useState<FieldDefaultsPage>(() => loadFieldDefaults(fpTextItemsOf(state.prefs.fpDefaultTextItems)));
   const [selected, toggle, clearSelected] = useRowSelection();
+  const seen = useSeen(open, shown);
   // `TransferDataToWindow` when the dialog opens: the settings as they are
   useEffect(() => {
     if (open) {
@@ -159,7 +173,9 @@ export function useFpFieldDefaultsPage(open: boolean, shown: boolean): Preferenc
 
   return {
     element,
-    commit: () => dispatch({ type: "PATCH_PREFERENCES", patch: { fpDefaultTextItems: fieldDefaultsItems(page) } }),
+    commit: () => {
+      if (seen) dispatch({ type: "PATCH_PREFERENCES", patch: { fpDefaultTextItems: fieldDefaultsItems(page) } });
+    },
     cancel: () => {},
     reset: () => {
       setPage(resetFieldDefaults());
@@ -176,6 +192,7 @@ export function useFpLayerNamesPage(open: boolean, shown: boolean): PreferencesP
   const [rows, setRows] = useState<LayerNameRow[]>(() => loadLayerNames(state.prefs.fpUserLayerNames));
   const [error, setError] = useState<string | null>(null);
   const [selected, toggle, clearSelected] = useRowSelection();
+  const seen = useSeen(open, shown);
   useEffect(() => {
     if (open) {
       setCount(state.prefs.fpUserLayerCount);
@@ -254,7 +271,9 @@ export function useFpLayerNamesPage(open: boolean, shown: boolean): PreferencesP
 
   return {
     element,
-    commit: () => dispatch({ type: "PATCH_PREFERENCES", patch: { fpUserLayerCount: count, fpUserLayerNames: layerNamesOf(rows) } }),
+    commit: () => {
+      if (seen) dispatch({ type: "PATCH_PREFERENCES", patch: { fpUserLayerCount: count, fpUserLayerNames: layerNamesOf(rows) } });
+    },
     cancel: () => {},
     // `ResetPanel`: a fresh `FOOTPRINT_EDITOR_SETTINGS`' -- four user layers, none named
     reset: () => {

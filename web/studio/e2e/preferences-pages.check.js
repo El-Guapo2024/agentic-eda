@@ -44,7 +44,10 @@
   };
   const stored = (key) => { try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; } };
   const errors0 = E.errors ? E.errors().length : 0;
-  const prefs0 = JSON.stringify(stored("eda-studio.preferences.v1"));
+  /** The stored preferences, keys sorted (a save may list them in another order). */
+  const sortedJson = (v) => JSON.stringify(v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
+  const prefs0Obj = stored("eda-studio.preferences.v1");
+  const prefs0 = sortedJson(prefs0Obj);
   const common0 = JSON.stringify(stored("eda-studio.common-options")?.common ?? null);
 
   await scenario("The tree is KiCad's, in KiCad's order; the dialog opens on Common", async (t) => {
@@ -135,7 +138,9 @@
   });
 
   await scenario("end: the preferences are as they were, no console errors", async (t) => {
-    t(JSON.stringify(stored("eda-studio.preferences.v1")) === prefs0 || prefs0 === "null", "the preferences");
+    const end = stored("eda-studio.preferences.v1");
+    const changed = prefs0Obj && end ? Object.keys({ ...prefs0Obj, ...end }).filter((k) => JSON.stringify(prefs0Obj[k]) !== JSON.stringify(end[k])) : [];
+    t(sortedJson(end) === prefs0 || prefs0 === "null", `the preferences${changed.length ? `: changed ${changed.map((k) => `${k} ${JSON.stringify(prefs0Obj[k])} -> ${JSON.stringify(end[k])}`).join(", ")}` : ""}`);
     t(JSON.stringify(stored("eda-studio.common-options")?.common ?? null) === common0 || common0 === "null", "the common settings");
     const errs = E.errors ? E.errors().slice(errors0) : [];
     t(errs.length === 0, `errors: ${JSON.stringify(errs)}`);

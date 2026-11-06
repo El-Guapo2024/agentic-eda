@@ -165,9 +165,12 @@ export function PreferencesDialog() {
   // The step is typed as text and taken when the dialog is accepted: `m_rotationAngle.GetAngleValue()` in `TransferDataFromWindow`, which keeps the old step for a value that is nothing.
   const [rotationText, setRotationText] = useState(String(state.prefs.rotationStepDeg));
   const [page, setPageState] = useState<PrefsPage>(lastPage);
+  /** The pages shown since the dialog opened: KiCad builds most pages lazily (`AddLazySubPage`), and a page never shown is never transferred on OK. */
+  const [shownPages, setShownPages] = useState<ReadonlySet<PrefsPage>>(new Set([lastPage]));
   const setPage = (p: PrefsPage) => {
     lastPage = p;
     setPageState(p);
+    setShownPages((s) => (s.has(p) ? s : new Set(s).add(p)));
     const g = GRIDS_PAGE[p];
     if (g) grids.show(g);
   };
@@ -235,6 +238,7 @@ export function PreferencesDialog() {
       setFpExtraState({ lineMode: fpState.lineMode });
       setEditingExtraState(editingExtraNow());
       setPageState(lastPage);
+      setShownPages(new Set([lastPage]));
       setWindows(getCommonOptions().window);
       setDraft3d(getViewer3DUserSettings().prefs);
       grids.restart(GRIDS_PAGE[lastPage] ?? null);
@@ -269,8 +273,9 @@ export function PreferencesDialog() {
     if (fpExtra.lineMode !== fpState.lineMode) fpDispatch({ type: "SET_LINE_MODE", mode: fpExtra.lineMode });
     // the board's `m_AngleSnapMode = m_cbConstrainHV45Mode->GetValue() ? LEADER_MODE::DEG45 : LEADER_MODE::DIRECT` (written whatever it was), and its ratsnest's curves;
     // the schematic's `m_Drawing.line_mode = m_choiceLineMode->GetSelection()`
+    // (only when the page was shown: a lazy page never built is never transferred)
     const angle = editingExtra.pcbConstrain45 ? "45" : "direct";
-    if (angle !== state.pcbx.angleSnapMode) dispatch({ type: "PCBX", patch: { angleSnapMode: angle } });
+    if (shownPages.has("pcb_edit") && angle !== state.pcbx.angleSnapMode) dispatch({ type: "PCBX", patch: { angleSnapMode: angle } });
     if (editingExtra.ratsnestCurved !== state.ratsnestCurved) dispatch({ type: "TOGGLE_RATSNEST_CURVED" });
     if (editingExtra.schLineMode !== state.schLineMode) dispatch({ type: "SET_SCH_LINE_MODE", mode: editingExtra.schLineMode });
     colors.commit();
