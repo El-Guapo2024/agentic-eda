@@ -123,6 +123,8 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // Mirror Horizontally / Vertically (`EDIT_TOOL::Mirror`, no default hotkey): the mirrorable items of the selection about the modification point, on their own layers.
     m.set("pcbnew.InteractiveEdit.mirrorHoriontally", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("left_right", gridSnap));
     m.set("pcbnew.InteractiveEdit.mirrorVertically", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("top_bottom", gridSnap));
+    // Show Properties (`ACTIONS::showProperties`, `FOOTPRINT_EDITOR_CONTROL::ToggleProperties`): the frame's `PCB_PROPERTIES_PANEL` beside the Libraries tree (UI-LEFT Y3).
+    m.set("common.Control.showProperties", () => toggleDockPane("fpProperties"));
     // Group / Ungroup (Ctrl+G / Ctrl+Shift+G, `PCB_GROUP_TOOL::Group` in the footprint editor, `GROUP_TOOL::Ungroup`).
     m.set("common.Interactive.group", () => void ctx.fpApi.groupSelection());
     m.set("common.Interactive.ungroup", () => void ctx.fpApi.ungroupSelection());

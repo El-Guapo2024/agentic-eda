@@ -22,7 +22,8 @@ import { FpShapeDialog } from "./FpShapeDialog";
 import { FpGroupDialog } from "./FpGroupDialog";
 import { FpBarcodeDialog, FpDimensionDialog, FpRefImageDialog, FpTableDialog, FpTextBoxDialog, FpZoneDialog } from "./FpItemDialogs";
 import { LibraryDialogHost } from "../library/libraryDialogs";
-import { DockColumn } from "../panels/Dock";
+import { DockColumn, DockPanel } from "../panels/Dock";
+import { FootprintPropertiesPane } from "./FootprintPropertiesPane";
 import { Toolbar } from "../Toolbar";
 import { FootprintAppearancePanel } from "./FootprintAppearancePanel";
 
@@ -141,7 +142,17 @@ export function FootprintEditorView() {
       <div className="editor-frame-body">
         {/* FOOTPRINT_TREE_PANE: the project's own footprints and KiCad's installed libraries; folds to a handle (Show Library Tree). */}
         <DockColumn side="left" column="tree" label="Libraries">
-          <FootprintLibraryPanel />
+          {/* the Libraries tree and, beside it in KiCad (`.Left().Layer( 3 )`), the frame's Properties pane (`PCB_PROPERTIES_PANEL`, shown by default; Show Properties toggles it) */}
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+            <div style={{ display: "flex", flex: "1 1 0", minHeight: 120 }}>
+              <FootprintLibraryPanel />
+            </div>
+            <div style={{ flex: "0 1 auto", maxHeight: "55%", overflowY: "auto", width: 236, background: "var(--chrome-bg-raised)", borderRight: "1px solid var(--chrome-border)" }}>
+              <DockPanel id="fpProperties" title="Properties">
+                <FootprintPropertiesPane />
+              </DockPanel>
+            </div>
+          </div>
         </DockColumn>
         <Toolbar id="options" editor="footprint" />
         <div className="editor-canvas-col">
