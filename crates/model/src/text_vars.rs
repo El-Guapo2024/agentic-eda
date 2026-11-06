@@ -18,13 +18,53 @@
 //!   eeschema/sch_field.cpp, sch_text.cpp, sch_item.cpp   `GetShownText`, `ResolveText`: which resolvers an item's text goes through
 //!
 //! The `@{..}` math expressions (`common/text_eval`) are evaluated for their arithmetic after each pass, as 25ec2335's `ResolveTextVars` does
-//! ([`evaluate_math`]), with the grammar's strings, units and the functions that do not read the clock or the version control.
-//! Not ported: `VCSHASH` / `VCSSHORTHASH` (the project's git hash: left as written) and design variants. Simulation `OP` values are left as written here and
-//! resolved by the studio, which holds the last run (`web/studio/src/kicad-port/sim/opVars.ts`).
+//! ([`evaluate_math`]), with the grammar's strings, units, the functions that do not read the clock and the version control's (`vcs..`), and `VCSHASH` /
+//! `VCSSHORTHASH`: those ask the repository the project is in through a [`Vcs`] the caller sets for its thread ([`set_vcs`], as KiCad's text
+//! evaluator reads `TEXT_EVAL_VCS`'s context path), and are left as written when none is set. Not ported: design variants. Simulation `OP` values are left
+//! as written here and resolved by the studio, which holds the last run (`web/studio/src/kicad-port/sim/opVars.ts`).
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use crate::ir::TitleBlock;
+
+// ------------------------------------------------------------------------------------------------ the version control
+
+/// What `${VCSHASH}`, `${VCSSHORTHASH}` and the `@{vcs..}` functions ask of the repository the project is in (KiCad 25ec2335 `common/text_eval/text_eval_vcs.cpp`,
+/// `common/git/project_git_utils.cpp::GetCurrentHash`). Each answer is empty (or 0, false) where KiCad's reader gives nothing: no repository, no commit, no
+/// tag. A `path` is `"."` for the repository's HEAD, else a file, relative to the project's folder (`ResolveEffectivePath`).
+pub trait Vcs {
+    /// `ReadCommitHash`: HEAD's id for `"."`, else the last commit that changed the file (`GetFileCommit`), 40 hex digits.
+    fn commit_hash(&self, path: &str) -> String;
+    /// `ReadDescribeInfo`: the tag nearest HEAD among those matching `pattern` (`*` for none; annotated tags only, lightweight ones too with `any_tags`)
+    /// and the number of commits walked before it.
+    fn describe(&self, pattern: &str, any_tags: bool) -> (String, i64);
+    /// `ReadIsDirty`: the index or the work tree differs from HEAD (untracked files counted with `include_untracked`).
+    fn is_dirty(&self, include_untracked: bool) -> bool;
+    /// `ReadCommitSignatureField`: the name or e-mail of the author or the committer of the commit [`Vcs::commit_hash`] names.
+    fn signature(&self, path: &str, committer: bool, email: bool) -> String;
+    /// `GetBranch`: the branch HEAD is on.
+    fn branch(&self) -> String;
+    /// `GetCommitTimestamp`: that commit's time, seconds since the epoch; 0 for none.
+    fn commit_time(&self, path: &str) -> i64;
+}
+
+thread_local! {
+    static VCS: RefCell<Option<Rc<dyn Vcs>>> = const { RefCell::new(None) };
+}
+
+/// The repository this thread's texts ask from now on (`TEXT_EVAL_VCS::SetContextPath`); `None` leaves the version control's variables and functions as
+/// written. Returns the one set before.
+pub fn set_vcs(vcs: Option<Rc<dyn Vcs>>) -> Option<Rc<dyn Vcs>> {
+    VCS.with(|v| std::mem::replace(&mut *v.borrow_mut(), vcs))
+}
+
+/// `f` of the repository set for this thread, `None` when none is.
+fn with_vcs<T>(f: impl FnOnce(&dyn Vcs) -> T) -> Option<T> {
+    let vcs = VCS.with(|v| v.borrow().clone())?;
+    Some(f(vcs.as_ref()))
+}
 
 /// `ERC_DRC` flag of `ExpandTextVars`: the report-only tokens (`ERC_WARNING ...`) are kept.
 pub const FOR_ERC_DRC: u32 = 1;
@@ -753,8 +793,106 @@ mod text_eval {
             .collect()
     }
 
-    /// `EVAL_VISITOR::evaluateFunction`, but the clock's, `random` and the version control's functions.
+    /// `DATE_UTILS::DaysToYmd`: a day count from 1970-01-01 as (year, month, day).
+    fn days_to_ymd(days: i64) -> (i64, i64, i64) {
+        let leap = |y: i64| (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let in_year = |y: i64| if leap(y) { 366 } else { 365 };
+        let in_month = |m: i64, y: i64| if m == 2 && leap(y) { 29 } else { [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][(m - 1) as usize] };
+        let (mut year, mut rest) = (1970, days);
+        if rest >= 0 {
+            while rest >= in_year(year) {
+                rest -= in_year(year);
+                year += 1;
+            }
+        } else {
+            while rest < 0 {
+                year -= 1;
+                rest += in_year(year);
+            }
+        }
+        let mut month = 1;
+        while month <= 12 && rest >= in_month(month, year) {
+            rest -= in_month(month, year);
+            month += 1;
+        }
+        (year, month, rest + 1)
+    }
+
+    /// `DATE_UTILS::FormatDate`: ISO (`2026-11-06`, also any format it does not know), US, EU, long, short, and the Chinese, Japanese and Korean forms.
+    fn format_date(days: i64, format: &str) -> String {
+        const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+        let (y, m, d) = days_to_ymd(days);
+        let month = MONTHS[(m - 1) as usize];
+        match format {
+            "US" | "us" => format!("{m:02}/{d:02}/{y:04}"),
+            "EU" | "european" => format!("{d:02}/{m:02}/{y:04}"),
+            "long" => format!("{month} {d}, {y}"),
+            "short" => format!("{} {d}, {y}", &month[..3]),
+            "Chinese" | "chinese" | "CN" | "cn" | "中文" | "Japanese" | "japanese" | "JP" | "jp" | "日本語" => format!("{y}年{m:02}月{d:02}日"),
+            "Korean" | "korean" | "KR" | "kr" | "한국어" => format!("{y}년 {m:02}월 {d:02}일"),
+            _ => format!("{y:04}-{m:02}-{d:02}"),
+        }
+    }
+
+    /// The version control's functions of `EVAL_VISITOR::evaluateFunction` (KiCad 25ec2335 `text_eval_parser.cpp`), over the repository [`super::set_vcs`]
+    /// set; `None` when `name` is not one of them, or none is set (the expression is then left as written). An answer the repository does not have is
+    /// "<unknown>" (`vcsResult`); a hash is cut to the length asked, from 4 to 40 characters (`GetCommitHash`).
+    fn vcs_function(name: &str, args: &[Value]) -> Option<Value> {
+        let argc = args.len();
+        let text = |i: usize| args[i].to_text();
+        let flag = |i: usize| args.get(i).and_then(Value::num).is_some_and(|n| n != 0.0);
+        let known = |s: String| if s.is_empty() { "<unknown>".to_string() } else { s };
+        let hash = |v: &dyn super::Vcs, path: &str, length: Option<f64>| {
+            let n = length.map_or(40, |l| l as i64).clamp(4, 40) as usize;
+            known(v.commit_hash(path).chars().take(n).collect())
+        };
+        let date = |v: &dyn super::Vcs, path: &str, format: String| match v.commit_time(path) {
+            0 => known(String::new()),
+            t => format_date(t.div_euclid(24 * 3600), &format),
+        };
+        let s = match (name, argc) {
+            ("vcsidentifier", 0..=1) => super::with_vcs(|v| hash(v, ".", args.first().and_then(Value::num)))?,
+            ("vcsnearestlabel", 0..=2) => {
+                let pattern = if argc >= 1 { text(0) } else { String::new() };
+                super::with_vcs(|v| known(v.describe(&pattern, flag(1)).0))?
+            }
+            ("vcslabeldistance", 0..=2) => {
+                let pattern = if argc >= 1 { text(0) } else { String::new() };
+                super::with_vcs(|v| v.describe(&pattern, flag(1)).1.to_string())?
+            }
+            ("vcsdirty", 0..=1) => super::with_vcs(|v| if v.is_dirty(flag(0)) { "1" } else { "0" }.to_string())?,
+            ("vcsdirtysuffix", 0..=2) => {
+                let suffix = if argc >= 1 { text(0) } else { "-dirty".to_string() };
+                super::with_vcs(|v| if v.is_dirty(flag(1)) { suffix } else { String::new() })?
+            }
+            ("vcsauthor", 0) => super::with_vcs(|v| known(v.signature(".", false, false)))?,
+            ("vcsauthoremail", 0) => super::with_vcs(|v| known(v.signature(".", false, true)))?,
+            ("vcscommitter", 0) => super::with_vcs(|v| known(v.signature(".", true, false)))?,
+            ("vcscommitteremail", 0) => super::with_vcs(|v| known(v.signature(".", true, true)))?,
+            ("vcsbranch", 0) => super::with_vcs(|v| known(v.branch()))?,
+            ("vcscommitdate", 0..=1) => {
+                let format = if argc == 1 { text(0) } else { "ISO".to_string() };
+                super::with_vcs(|v| date(v, ".", format))?
+            }
+            ("vcsfileidentifier", 1..=2) => super::with_vcs(|v| hash(v, &text(0), args.get(1).and_then(Value::num)))?,
+            ("vcsfileauthor", 1) => super::with_vcs(|v| known(v.signature(&text(0), false, false)))?,
+            ("vcsfileauthoremail", 1) => super::with_vcs(|v| known(v.signature(&text(0), false, true)))?,
+            ("vcsfilecommitter", 1) => super::with_vcs(|v| known(v.signature(&text(0), true, false)))?,
+            ("vcsfilecommitteremail", 1) => super::with_vcs(|v| known(v.signature(&text(0), true, true)))?,
+            ("vcsfilecommitdate", 1..=2) => {
+                let format = if argc == 2 { text(1) } else { "ISO".to_string() };
+                super::with_vcs(|v| date(v, &text(0), format))?
+            }
+            _ => return None,
+        };
+        Some(Value::Str(s))
+    }
+
+    /// `EVAL_VISITOR::evaluateFunction`, but the clock's and `random`; the version control's when a repository is set ([`vcs_function`]).
     fn function(name: &str, args: &[Value]) -> Option<Value> {
+        if name.starts_with("vcs") {
+            return vcs_function(name, args);
+        }
         let argc = args.len();
         let text = |i: usize| args[i].to_text();
         match name {
@@ -922,8 +1060,16 @@ impl Project {
             "CURRENT_DATE" => Some(self.clock.date.clone()),
             "CURRENT_TIME_HH_MM_SS" => Some(self.clock.time_hms.clone()),
             "CURRENT_TIME_LOCALE" => Some(self.clock.time_locale.clone()),
-            // The project's git hash is not something the studio knows.
-            "VCSHASH" | "VCSSHORTHASH" => None,
+            // `PROJECT_GIT_UTILS::GetCurrentHash`: HEAD's id, "no hash" outside a repository; the short one its first 8 characters (`Left( 8 )`)
+            "VCSHASH" | "VCSSHORTHASH" => with_vcs(|v| {
+                let hash = v.commit_hash(".");
+                let hash = if hash.is_empty() { "no hash".to_string() } else { hash };
+                if token == "VCSSHORTHASH" {
+                    hash.chars().take(8).collect()
+                } else {
+                    hash
+                }
+            }),
             _ => self.variables.get(token).cloned(),
         }
     }
@@ -1000,6 +1146,12 @@ pub struct PcbFootprint {
     /// The fields, Reference and Value first.
     pub fields: Vec<PcbField>,
     pub pads: Vec<PcbPad>,
+    /// `GetDNPForVariant`, `GetExcludedFromBOMForVariant`, `GetExcludedFromPosFilesForVariant`, `GetExcludedFromSimForVariant`: the footprint's attributes
+    /// (`FP_DNP`, `FP_EXCLUDE_FROM_BOM`, `FP_EXCLUDE_FROM_POS_FILES`) and its symbol's "Exclude from simulation".
+    pub dnp: bool,
+    pub exclude_from_bom: bool,
+    pub exclude_from_pos_files: bool,
+    pub exclude_from_sim: bool,
 }
 
 /// A field of a footprint (`PCB_FIELD`): its name, its stored text and the layer it is on (what `${LAYER}` in it stands for).
@@ -1088,6 +1240,12 @@ impl PcbFootprint {
             "LAYER" => return Some(board.layer_name(&self.layer)),
             "FOOTPRINT_LIBRARY" => return Some(self.lib_nickname.clone()),
             "FOOTPRINT_NAME" => return Some(self.lib_item_name.clone()),
+            // KiCad 25ec2335 `FOOTPRINT::ResolveTextVar`: the flags, by the words the symbol's resolver uses (a footprint is never excluded from the board)
+            "EXCLUDE_FROM_BOM" => return Some(if self.exclude_from_bom { "Excluded from BOM" } else { "" }.to_string()),
+            "EXCLUDE_FROM_POS_FILES" => return Some(if self.exclude_from_pos_files { "Excluded from position files" } else { "" }.to_string()),
+            "EXCLUDE_FROM_BOARD" => return Some(String::new()),
+            "EXCLUDE_FROM_SIM" => return Some(if self.exclude_from_sim { "Excluded from simulation" } else { "" }.to_string()),
+            "DNP" => return Some(if self.dnp { "DNP" } else { "" }.to_string()),
             _ => {}
         }
         for prefix in ["SHORT_NET_NAME(", "NET_NAME(", "NET_CLASS(", "PIN_NAME("] {
@@ -1128,11 +1286,16 @@ pub fn pcb_text_shown(raw: &str, layer: &str, footprint: Option<&PcbFootprint>, 
 
 // ------------------------------------------------------------------------------------------------ the schematic
 
-/// One pin of a symbol, for `NET_NAME(n)`, `SHORT_NET_NAME(n)`, `NET_CLASS(n)`, `PIN_NAME(n)` and `REFERENCE(n)`.
+/// One pin of a symbol, for `NET_NAME(n)`, `SHORT_NET_NAME(n)`, `NET_CLASS(n)`, `PIN_NAME(n)`, `PIN_BASE_NAME(n)`, `PIN_ALT_LIST(n)` and `REFERENCE(n)`.
 #[derive(Debug, Clone, Default)]
 pub struct SchPin {
     pub number: String,
+    /// `SCH_PIN::GetBaseName`: the library pin's own name.
     pub name: String,
+    /// `SCH_PIN::GetAlt`: the alternate function the placed pin is set to (`SCH_PIN::SetAlt`), empty for none.
+    pub alt: String,
+    /// `SCH_PIN::GetAlternates`: the names of the pin's alternate functions, in the map's order (by name).
+    pub alternates: Vec<String>,
     /// The net the pin is on, empty when it is on none.
     pub net: String,
     pub net_class: String,
@@ -1290,7 +1453,9 @@ impl SchSheet {
             "DNP" => return Some(if sym.dnp { "DNP" } else { "" }.to_string()),
             _ => {}
         }
-        for prefix in ["SHORT_NET_NAME(", "NET_NAME(", "NET_CLASS(", "PIN_NAME(", "REFERENCE(", "SHORT_REFERENCE(", "UNIT("] {
+        // KiCad 25ec2335 `SCH_SYMBOL::ResolveTextVar`: `PIN_NAME` is the alternate the pin is set to, else its name; `PIN_BASE_NAME` its own name;
+        // `PIN_ALT_LIST` its alternates' names, joined by ", "
+        for prefix in ["SHORT_NET_NAME(", "NET_NAME(", "NET_CLASS(", "PIN_NAME(", "PIN_BASE_NAME(", "PIN_ALT_LIST(", "REFERENCE(", "SHORT_REFERENCE(", "UNIT("] {
             if token.starts_with(prefix) {
                 let number = token[prefix.len()..].rsplit_once(')').map_or("", |(n, _)| n);
                 let Some(pin) = sym.pins.iter().find(|p| p.number == number) else { return Some(format!("<Unresolved: pin {number}>")) };
@@ -1299,7 +1464,9 @@ impl SchSheet {
                     "REFERENCE(" => format!("{}{}", sym.short_reference, unit_letter(pin)),
                     "SHORT_REFERENCE(" => sym.short_reference.clone(),
                     "UNIT(" => unit_letter(pin),
-                    "PIN_NAME(" => pin.name.clone(),
+                    "PIN_NAME(" => if pin.alt.is_empty() { pin.name.clone() } else { pin.alt.clone() },
+                    "PIN_BASE_NAME(" => pin.name.clone(),
+                    "PIN_ALT_LIST(" => pin.alternates.join(", "),
                     "SHORT_NET_NAME(" => {
                         if pin.net.is_empty() || pin.net.to_lowercase().starts_with("unconnected") {
                             "NC".to_string()
@@ -1418,6 +1585,62 @@ mod tests {
         assert_eq!(e("@{${X}+1}"), "@{${X}+1}");
     }
 
+    /// A repository that answers what a test says (`TEXT_EVAL_VCS`' readers).
+    struct FakeVcs {
+        hash: String,
+    }
+
+    impl Vcs for FakeVcs {
+        fn commit_hash(&self, path: &str) -> String {
+            if path == "." { self.hash.clone() } else if path == "board.kicad_sch" { "f".repeat(40) } else { String::new() }
+        }
+        fn describe(&self, pattern: &str, any_tags: bool) -> (String, i64) {
+            match (pattern, any_tags) {
+                ("", false) | ("v*", false) => ("v1.2".into(), 3),
+                (_, true) => ("light".into(), 0),
+                _ => (String::new(), 0),
+            }
+        }
+        fn is_dirty(&self, include_untracked: bool) -> bool {
+            include_untracked
+        }
+        fn signature(&self, _path: &str, committer: bool, email: bool) -> String {
+            match (committer, email) {
+                (false, false) => "Ada".into(),
+                (false, true) => "ada@x".into(),
+                (true, false) => "Bob".into(),
+                (true, true) => String::new(),
+            }
+        }
+        fn branch(&self) -> String {
+            "main".into()
+        }
+        fn commit_time(&self, path: &str) -> i64 {
+            if path == "." { 1_762_387_200 } else { 0 }
+        }
+    }
+
+    /// KiCad 25ec2335 `text_eval_parser.cpp`'s version control functions and `PROJECT::TextVarResolver`'s `VCSHASH` / `VCSSHORTHASH`, over the repository
+    /// the thread's texts are set to; with none set they stay as written.
+    #[test]
+    fn the_version_control_functions_ask_the_repository_set_for_the_thread() {
+        let p = project(&[]);
+        assert_eq!(expand("${VCSHASH} @{vcsbranch()}", &p), "${VCSHASH} @{vcsbranch()}", "no repository set: left as written");
+        let before = set_vcs(Some(Rc::new(FakeVcs { hash: "0123456789abcdef0123456789abcdef01234567".into() })));
+        assert_eq!(expand("${VCSHASH}", &p), "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(expand("${VCSSHORTHASH}", &p), "01234567");
+        assert_eq!(expand("@{vcsidentifier()} @{vcsidentifier(7)} @{vcsidentifier(2)}", &p), "0123456789abcdef0123456789abcdef01234567 0123456 0123", "the length clamped to 4 .. 40");
+        assert_eq!(expand("@{vcsnearestlabel()}-@{vcslabeldistance()} @{vcsnearestlabel(\"x*\")} @{vcsnearestlabel(\"\", 1)}", &p), "v1.2-3 <unknown> light");
+        assert_eq!(expand("@{vcsdirty()} @{vcsdirty(1)} [@{vcsdirtysuffix()}] @{vcsdirtysuffix(\"+\", 1)}", &p), "0 1 [] +");
+        assert_eq!(expand("@{vcsauthor()} @{vcsauthoremail()} @{vcscommitter()} @{vcscommitteremail()} @{vcsbranch()}", &p), "Ada ada@x Bob <unknown> main");
+        assert_eq!(expand("@{vcscommitdate()} @{vcscommitdate(\"US\")} @{vcscommitdate(\"long\")} @{vcscommitdate(\"short\")}", &p), "2025-11-06 11/06/2025 November 6, 2025 Nov 6, 2025");
+        assert_eq!(expand("@{vcsfileidentifier(\"board.kicad_sch\", 8)} @{vcsfileidentifier(\"nope\")} @{vcsfilecommitdate(\"nope\")} @{vcsfileauthor(\"board.kicad_sch\")}", &p), "ffffffff <unknown> <unknown> Ada");
+        assert_eq!(expand("@{vcsauthor(1)}", &p), "@{vcsauthor(1)}", "the wrong number of arguments is no function");
+        set_vcs(Some(Rc::new(FakeVcs { hash: String::new() })));
+        assert_eq!(expand("${VCSHASH} ${VCSSHORTHASH}", &p), "no hash no hash", "outside a repository");
+        set_vcs(before);
+    }
+
     #[test]
     fn nesting_is_bounded_and_a_loop_ends() {
         let p = project(&[("A", "${B}"), ("B", "${A}")]);
@@ -1469,6 +1692,9 @@ mod tests {
                 PcbPad { number: "1".into(), net: "/Power/VCC".into(), net_class: "power".into(), pin_function: "".into() },
                 PcbPad { number: "2".into(), net: "GND".into(), net_class: "Default".into(), pin_function: "".into() },
             ],
+            dnp: reference == "R2",
+            exclude_from_pos_files: reference == "R2",
+            ..Default::default()
         };
         PcbBoard {
             project: project(&[("REV", "B")]),
@@ -1506,6 +1732,10 @@ mod tests {
         assert_eq!(shown("${FOOTPRINT_LIBRARY}:${FOOTPRINT_NAME}", "F.Fab"), "Resistor_SMD:R_0603");
         assert_eq!(shown("${MPN}", "F.Fab"), "ERJ-3 10k", "a user field, whose own text names the footprint's Value");
         assert_eq!(shown("${NET_NAME(2)} ${SHORT_NET_NAME(1)} ${NET_CLASS(1)}", "F.Fab"), "GND VCC power");
+        // KiCad 25ec2335 `FOOTPRINT::ResolveTextVar`'s flags
+        let r2 = &b.footprints[1];
+        assert_eq!(r2.shown(&b, "[${DNP}] [${EXCLUDE_FROM_POS_FILES}] [${EXCLUDE_FROM_BOM}] [${EXCLUDE_FROM_BOARD}]", "B.Fab", 0), "[DNP] [Excluded from position files] [] []");
+        assert_eq!(b.footprints[0].shown(&b, "[${DNP}]", "F.Fab", 0), "[]");
         assert_eq!(shown("${NET_NAME(9)}", "F.Fab"), "${NET_NAME(9)}", "no such pad: unresolved");
         assert_eq!(shown("${REV} ${TITLE}", "F.Fab"), "B Demo", "then the board and the project");
         // The field of a footprint, shown: its Value names a project variable.
@@ -1548,7 +1778,7 @@ mod tests {
             footprint: "Resistor_SMD:R_0603".into(),
             description: "Resistor".into(),
             dnp: reference == "R2",
-            pins: vec![SchPin { number: "1".into(), name: "~".into(), net: "/VCC".into(), net_class: "power".into(), unit: 1 }, SchPin { number: "2".into(), name: "~".into(), net: "".into(), net_class: "Default".into(), unit: 1 }],
+            pins: vec![SchPin { number: "1".into(), name: "~".into(), net: "/VCC".into(), net_class: "power".into(), unit: 1, ..Default::default() }, SchPin { number: "2".into(), name: "~".into(), net: "".into(), net_class: "Default".into(), unit: 1, ..Default::default() }],
             ..Default::default()
         };
         SchSheet {
@@ -1595,6 +1825,10 @@ mod tests {
         assert_eq!(shown("[${DNP}] [${EXCLUDE_FROM_BOM}]", r1), "[] []");
         assert_eq!(shown("[${DNP}]", &s.symbols[1]), "[DNP]");
         assert_eq!(shown("${NET_NAME(1)} ${SHORT_NET_NAME(1)} ${NET_CLASS(1)} ${PIN_NAME(1)} ${SHORT_NET_NAME(2)} ${NET_NAME(2)}", r1), "/VCC VCC power ~ NC ");
+        // KiCad 25ec2335: a pin set to an alternate is named by it; its own name and its alternates are asked for apart
+        let mut alt = r1.clone();
+        alt.pins[0] = SchPin { name: "PA0".into(), alt: "TIM2_CH1".into(), alternates: vec!["ADC_IN0".into(), "TIM2_CH1".into()], ..alt.pins[0].clone() };
+        assert_eq!(shown("${PIN_NAME(1)} ${PIN_BASE_NAME(1)} [${PIN_ALT_LIST(1)}] [${PIN_ALT_LIST(2)}]", &alt), "TIM2_CH1 PA0 [ADC_IN0, TIM2_CH1] []");
         assert_eq!(shown("${NET_NAME(7)}", r1), "<Unresolved: pin 7>");
         assert_eq!(shown("${REFERENCE(2)} ${UNIT(2)}", r1), "R1A A");
         assert_eq!(shown("${SIM.DEVICE}.", r1), ".");

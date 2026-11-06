@@ -2115,6 +2115,19 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
+    // a text box's shown text (`SCH_TEXTBOX::GetShownText`: the sheet's variables, as a free text's), by the graphic's id, where `${..}` or `@{..}` changes it
+    // (UI-LEFT B5): beside the graphics, not in them, as the edit verbs take a graphic back whole
+    let graphic_shown: serde_json::Map<String, Value> = sch
+        .extras
+        .graphics
+        .iter()
+        .filter_map(|g| match (&g.shape, &shown) {
+            (eda_model::sch_extras::SchGraphicKind::TextBox { text, .. }, Some(sh)) => Some((g.id.clone(), sh.text_shown(text), text)),
+            _ => None,
+        })
+        .filter(|(_, shown, raw)| shown != *raw)
+        .map(|(id, shown, _)| (id, Value::String(shown)))
+        .collect();
     // The sheet's tables (`SCH_TABLE`): every cell's corners and placed text lines, worked out once here (`crate::table_json`); a cell's own variables (`${ROW}`, `${CELL(..)}`) and then the sheet's.
     let tables: Vec<Value> = sch
         .extras
@@ -2199,7 +2212,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .power_symbols
         .iter()
         .map(|p| {
-            let mut v = json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
+            let mut fields: Vec<Value> = eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect();
+            if let Some(sh) = &shown {
+                sh.annotate_power_fields(p, &mut fields);
+            }
+            let mut v = json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": fields, "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
             // what its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`): its Footprint, Datasheet, flags and user fields
             if let Some(props) = sch.extras.power_props.get(&p.id) {
                 v["props"] = json!(props);
@@ -2330,6 +2347,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "graphic_text_attrs": graphic_text_attrs,
         "tables": tables,
         "locked": locked,
+        "graphic_shown": graphic_shown,
         "groups": groups,
         "title_block": title_block,
         "page": crate::page_json::page_json(&page),
