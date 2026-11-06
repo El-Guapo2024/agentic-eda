@@ -358,3 +358,24 @@ fn a_renamed_symbol_keeps_its_unit_on_each_path_and_a_deleted_one_leaves_none() 
     let a = &b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"];
     assert_eq!(a.extras.path_units.keys().cloned().collect::<Vec<_>>(), vec!["R7".to_string()]);
 }
+
+/// r2 D-A1 (UI-LEFT S14): `PlaceSymbol`'s `annotate()` over every reference of the hierarchy: a resistor takes the first free R number (R1 on B, R5 and R9 on A:
+/// R2), the sheet number method counts from the sheet's page; a second unit of a two-unit part joins a part of the same symbol and value whose unit is free
+/// (`areUnitsAvailable`), on any sheet, and a part of another value or one with the unit taken is passed over.
+#[test]
+fn a_placed_symbol_takes_the_first_free_number_and_a_unit_joins_a_part_that_has_it_free() {
+    let m = ConstraintModel::default();
+    let mut d = design();
+    d.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![dual()], ..Default::default() });
+    d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap().symbols.push(symbol("U1", "Test:Dual", "TL072", 1, p(Nm::ZERO, mm(40.0))));
+    d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap().symbols.push(symbol("U2", "Test:Dual", "TL082", 1, p(Nm::ZERO, mm(50.0))));
+    let b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let first_free = AnnotateOptions { algo: Algo::FirstFree, ..Default::default() };
+    assert_eq!(b.placement_reference("", "R", "Device:R", "10k", 1, 1, &first_free).unwrap(), "R2");
+    assert_eq!(b.placement_reference("sa", "R", "Device:R", "10k", 1, 1, &AnnotateOptions { algo: Algo::SheetX100, ..Default::default() }).unwrap(), "R201", "page 2 counts from 201");
+    // unit B of a TL072 joins U1 (on sheet B, placed from the root), unit A of one takes the first free number past U1 and U2
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL072", 2, 2, &first_free).unwrap(), "U1");
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL072", 1, 2, &first_free).unwrap(), "U3");
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL999", 2, 2, &first_free).unwrap(), "U3", "another value is another part");
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL072", 2, 2, &AnnotateOptions { algo: Algo::FirstFree, start_number: 10, ..Default::default() }).unwrap(), "U11");
+}

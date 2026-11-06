@@ -369,6 +369,15 @@ fn first_unused(list: &[Entry], r: &Entry, min: i64, required: &[u32]) -> i64 {
     }
 }
 
+/// The number `PlaceSymbol`'s `annotate()` gives a symbol just placed (`ReannotateByOptions` over every reference of the hierarchy, `SYMBOL_FILTER_ALL`): the
+/// first from `min` up that `list` (split) does not hold -- for a unit of a part of several units, one whose holders are all the same library symbol and value
+/// and leave that unit free (`Annotate`'s `units = { ref_unit.GetUnit() }` for a new multi-unit reference, `areUnitsAvailable`), so a unit joins an existing
+/// part that has it free (r2 D-A1).
+pub fn placement_number(list: &[Entry], new: &Entry, min: i64) -> i64 {
+    let required: Vec<u32> = if new.unit_count > 1 { vec![new.unit] } else { Vec::new() };
+    first_unused(list, new, min, &required)
+}
+
 /// `buildFullReference`: reference, number and unit, the key of the "already allocated" set.
 fn full_reference(e: &Entry, unit: u32) -> String {
     format!("{}{}..{unit}", e.text, e.number_text())

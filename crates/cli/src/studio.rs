@@ -724,6 +724,7 @@ fn handle(
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
         ("POST", "/api/sch/annotate") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::annotate(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/next_reference") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::next_reference(dir, &body).to_string().as_bytes()),
         // Import Sheet / Draw Sheet from File: the project's schematics, and the checks on one (`LoadSheetFromFile`) before it is taken in.
         ("GET", "/api/sch/sheet_files") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_files(dir).to_string().as_bytes()),
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
