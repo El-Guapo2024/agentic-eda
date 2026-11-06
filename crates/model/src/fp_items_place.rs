@@ -524,11 +524,68 @@ mod tests {
         assert_eq!((turned.text_boxes[0].angle, turned.barcodes[0].angle), (270_000, 270_000));
     }
 
+    fn dimension(kind: DimensionKind) -> Dimension {
+        use crate::ir::{ArrowDirection, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+        Dimension {
+            id: "dim_1".into(),
+            layer: "F.Fab".into(),
+            kind,
+            start: p(-1.0, 2.0),
+            end: p(1.0, 2.0),
+            prefix: String::new(),
+            suffix: String::new(),
+            override_text: None,
+            units: DimensionUnits::Mm,
+            units_format: DimensionUnitsFormat::NoSuffix,
+            precision: 2,
+            suppress_trailing_zeros: true,
+            text_position: DimensionTextPosition::Outside,
+            keep_text_aligned: true,
+            text_angle: 0,
+            text_size_nm: mm(1.0),
+            stroke_width: mm(0.1),
+            arrow_length: mm(1.27),
+            extension_offset: mm(0.5),
+            extension_height: mm(0.58),
+            arrow_direction: ArrowDirection::Outward,
+            text_pos: None,
+            text_frame: Default::default(),
+            text_thickness_nm: None,
+        }
+    }
+
+    /// UI-LEFT PP14: a footprint's dimension and table go where the footprint's pose puts them and come back exactly at a quarter turn: the board's own transforms
+    /// (`PCB_DIMENSION_BASE::Rotate` with `PCB_DIM_ORTHOGONAL::Rotate`'s crossbar swap, `Mirror`; `PCB_TABLE::Rotate`, `Flip`).
+    #[test]
+    fn a_footprints_dimension_and_table_are_placed_and_unplaced_as_its_other_items() {
+        let items = FootprintItems {
+            dimensions: vec![dimension(DimensionKind::Aligned { height: mm(1.0) }), dimension(DimensionKind::Orthogonal { height: mm(1.0), horizontal: true })],
+            tables: vec![Table::new_grid("F.Fab", p(-1.5, -2.0), 2, 1, mm(1.5), mm(1.0), mm(0.1))],
+            ..Default::default()
+        };
+        for (rot, side) in [(0, Side::Top), (90_000, Side::Top), (180_000, Side::Top), (0, Side::Bottom), (270_000, Side::Bottom)] {
+            let fp = pose(p(50.0, 40.0), rot, side);
+            let on_board = placed(&items, &fp);
+            assert_eq!(on_board.dimensions[0].start, crate::footprint::to_board(&fp, (mm(-1.0), mm(2.0))), "{rot} {side:?}");
+            assert_eq!(transformed(&on_board, &unplacement_steps(&fp)), items, "{rot} {side:?}");
+        }
+        let turned = placed(&items, &pose(p(0.0, 0.0), 90_000, Side::Top));
+        assert_eq!(turned.dimensions[1].kind, DimensionKind::Orthogonal { height: mm(-1.0), horizontal: false }, "a quarter turn makes the horizontal crossbar vertical");
+        assert_eq!(turned.tables[0].angle, 270_000, "the table turns with the footprint (a clockwise quarter is KiCad's 270)");
+        let flipped = placed(&items, &pose(p(0.0, 0.0), 0, Side::Bottom));
+        assert_eq!((flipped.dimensions[0].layer.as_str(), flipped.tables[0].layer.as_str()), ("B.Fab", "B.Fab"));
+        assert_eq!(flipped.dimensions[0].kind, DimensionKind::Aligned { height: mm(-1.0) }, "a mirror puts the crossbar on the other side");
+        assert!(flipped.tables[0].cells.iter().all(|c| c.style.mirror), "the cells' text reads mirrored from the back");
+        assert_eq!(repose_steps(&pose(p(1.0, 2.0), 90_000, Side::Top), &pose(p(1.0, 2.0), 90_000, Side::Top)).iter().fold(p(3.0, 4.0), |q, x| x.point(q)), p(3.0, 4.0));
+    }
+
     #[test]
     fn a_board_id_names_the_footprint_and_the_item() {
         assert_eq!(board_id("U1", "img_0123456789ab"), "U1~img_0123456789ab");
         assert_eq!(parse_board_id("U1~img_0123456789ab"), Some(("U1", "img_0123456789ab")));
         assert_eq!(parse_board_id("U1~t0"), None, "a footprint's text is no item of these kinds");
+        assert_eq!(parse_board_id("U1~dim_0123456789ab"), Some(("U1", "dim_0123456789ab")));
+        assert_eq!(parse_board_id("U1~tbl_0123456789ab"), Some(("U1", "tbl_0123456789ab")));
         assert_eq!(parse_board_id("img_0123456789ab"), None);
     }
 }
