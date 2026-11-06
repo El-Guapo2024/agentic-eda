@@ -185,7 +185,11 @@ export async function ensureFootprintInProject(name: string): Promise<string | n
 /**
  * The symbol sibling of [`ensureFootprintInProject`]: an installed `Lib:Name` is put into the project library before the editor opens it. Null when it is there now
  * or nothing knows the id (the open verb then starts a blank symbol); else why it could not be copied in -- the caller opens nothing and says it
- * (kicad-port/libraryEnsure.ts: a read error used to be taken for "unknown" and the put's refusal ignored, so a library's symbol could open blank).
+ * (kicad-port/libraryEnsure.ts: a read error used to be taken for "unknown" and the put's refusal ignored, so a library's symbol could open blank). A library
+ * symbol whose file cannot be read is such an error (`library_api::symbol_any`: `ops_bad_symbol`). The open verb copies a library's symbol in itself too
+ * when the design has none by the time it lands (`crates/cli/src/library_place.rs::with_opened_symbol`): this read, the names read and the open are
+ * requests of their own, and a command between them (another client deleting the design's copy) used to leave the open to start a BLANK symbol under the
+ * library's id.
  */
 export async function ensureSymbolInProject(libId: string): Promise<string | null> {
   return ensureInProject(

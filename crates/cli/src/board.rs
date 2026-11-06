@@ -1558,6 +1558,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // The Footprint Editor opening a library's footprint the design has no copy of: the library's file goes in with the open (`crate::library_place`).
     let with_opened = crate::library_place::with_opened_footprint(dir, cmd, &design)?;
     let cmd = with_opened.as_ref().unwrap_or(cmd);
+    // ... and the Symbol Editor opening a library's symbol the design has no copy of: the library's symbol goes in with the open.
+    let with_opened_symbol = crate::library_place::with_opened_symbol(dir, cmd, &design)?;
+    let cmd = with_opened_symbol.as_ref().unwrap_or(cmd);
     let tag = snapshot_tag(cmd);
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;

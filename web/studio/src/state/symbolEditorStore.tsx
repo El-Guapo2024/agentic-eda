@@ -667,18 +667,21 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     openSymbol: async (libId, at) => {
       // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one; when that fails nothing is opened and the
       // symbol being edited stays (`LoadSymbol`: "Error loading symbol %s from library '%s'.", then `return false`)
+      const notLoaded = (why: string) => dispatch({ type: "TOAST", message: symbolNotLoaded(libId, why), kind: "error" });
       const problem = await ensureSymbolInProject(libId);
-      if (problem) {
-        dispatch({ type: "TOAST", message: symbolNotLoaded(libId, problem), kind: "error" });
-        return;
-      }
-      dispatch({ type: "SET_LIB_ID", libId });
+      if (problem) return notLoaded(problem);
       // a symbol the project library has is opened as it is: the verb would change nothing and still be an undo step, so Undo after a rename (which opens the
       // renamed symbol) would undo the opening and not the rename
       const inProject = await fetchSymbolEditorNames()
         .then((n) => (n.project ?? []).includes(libId))
         .catch(() => false);
-      if (!inProject) await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
+      // the verb copies a library's symbol in itself when the design has lost its copy since the read above (`library_place::with_opened_symbol`) and
+      // refuses one whose library cannot be read: that refusal is said too, and the symbol being edited stays
+      if (!inProject) {
+        const opened = await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
+        if (!opened.ok) return notLoaded(opened.message);
+      }
+      dispatch({ type: "SET_LIB_ID", libId });
       const { symbol, own } = await fetchSymbolForEditor(libId);
       dispatch({ type: "SYMBOL_OK", symbol, own });
       // `LoadSymbolFromSchematic`: `m_unit = std::max( 1, aSymbol->GetUnit() ); m_bodyStyle = std::max( 1, aSymbol->GetBodyStyle() );`

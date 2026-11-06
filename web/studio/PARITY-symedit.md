@@ -325,6 +325,16 @@ Ported from KiCad 8303b2ad's `SYMBOL_EDITOR_EDIT_TOOL`, `SYMBOL_EDITOR_DRAWING_T
 | Copy / Cut: the symbol with only the selected pins and graphics as `.kicad_sym` text on the system clipboard (`POST /api/symbol/clipboard/copy`), so a paste in KiCad takes it; Paste reads KiCad's own text (`ParseLibSymbols`), else pastes the clipboard as a text (at most 5000 characters) | **identical**; the clipboard's SVG and PNG images are not made | `SYMBOL_EDITOR_EDIT_TOOL::Copy`, `Paste` |
 | Increment, Increment / Decrement Primary and Secondary, and Shift+Alt / Ctrl+Alt with the wheel: a selected pin's number when the cursor is on the number, else its name when it is on the name; a text's text; `STRING_INCREMENTER` with I, O, S, Q, X and Z skipped. Repeat Pin's step and label increment are Preferences' "Pitch of repeated pins" (a multiple of 25 mils) and "Label increment" | **identical**; Increment of the pin being placed (`TwoClickPlace`'s `ACTIONS::increment`) is not wired | `SCH_TOOL_BASE::Increment`, `SCH_SELECTION_TOOL::Main` (the wheel), `PANEL_SYM_EDITING_OPTIONS`; `kicad-port/symIncrement.ts` |
 
+Opening a symbol of an installed library copies it into the project library first (`ensureSymbolInProject`); since 2026-11-06 a failed copy opens nothing and keeps the symbol
+being edited, with `LoadSymbol`'s "Error loading symbol %s from library '%s'." and the reason (a read error used to be taken for "unknown" and a refused put ignored, so the
+symbol opened blank; only the server's "no symbol with this lib_id" starts a blank one; `kicad-port/libraryEnsure.ts`, the sibling of the Footprint Editor's 23f4a206). The
+read, the project's names and `open_symbol_for_edit` are requests of their own, and a command between them (another client deleting the design's copy) left the open verb, which
+read no library, to start a blank symbol under the library's id that then stood in for the file. `OpenSymbolForEdit` of a `Lib:Name` the design has no copy of now puts the
+library's symbol in the same step, as `SYMBOL_EDIT_FRAME::LoadSymbol` reads the library when it opens (`library_place::with_opened_symbol`, the sibling of e383c684's
+`with_opened_footprint`; one undo step). A library or a symbol's text that is there and cannot be read (a truncated `.kicad_sym`, a folder library's file that does not parse)
+is "Error loading symbol ..." with why (`library_search::read_installed_symbol`, `ops_bad_symbol`), from the read and from the open verb, and nothing is opened. Tests:
+`library_save_tests.rs` (the interleaving forced: 0 pins without the fix, the file's pin and description with it; the unreadable file and folder).
+
 A design written before keeps a text's bold, italic and justification in the kept text style (`LibrarySymbolKeep::text_styles`): `LibrarySymbol::absorb_kept_text_styles` moves
 them into the text before an edit, a write and a `GET`, so nothing is lost and the edit's are the ones written. A bezier kept as text by the older reader stays kept (written back,
 not drawn) until the symbol is read again from its file.

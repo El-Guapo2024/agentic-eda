@@ -73,7 +73,7 @@ pub use symbol_import::{parse_library_symbols, ParsedSymbols};
 
 // What the Symbol and Footprint Choosers index of the installed libraries without parsing their drawings (see each module's doc).
 mod symbol_scan;
-pub use symbol_scan::{inherit as inherit_symbol_summaries, parse_symbol, scan_symbols, symbol_text, SymbolSummary};
+pub use symbol_scan::{inherit as inherit_symbol_summaries, parse_symbol, parse_symbol_checked, scan_symbols, symbol_text, SymbolSummary};
 mod footprint_scan;
 pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 

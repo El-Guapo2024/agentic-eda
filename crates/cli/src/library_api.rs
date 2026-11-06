@@ -31,10 +31,16 @@ fn installed_footprint_in<S: LibSource + ?Sized>(src: &S, name: &str) -> Result<
 /// and footprint filters as the file has them. Only that symbol (and the ones it extends) is cut out of the file and parsed -- a library of hundreds of
 /// symbols is scanned once for the chooser and kept (`library_search::symbol_lib`), never parsed whole to open one of them.
 fn installed_symbol_in<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Option<LibrarySymbol> {
-    if !path_safe(lib_id.split_once(':')?.1) {
-        return None;
+    read_installed_symbol_in(src, lib_id).ok().flatten()
+}
+
+/// [`installed_symbol_in`] that tells a symbol the libraries do not have (`Ok(None)`) from one whose library or text cannot be read (`Err`, why:
+/// `library_search::read_installed_symbol`).
+fn read_installed_symbol_in<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Result<Option<LibrarySymbol>, String> {
+    match lib_id.split_once(':') {
+        Some((_, name)) if path_safe(name) => Ok(crate::library_search::read_installed_symbol(src, lib_id)?.map(|(sym, _)| sym)),
+        _ => Ok(None),
     }
-    crate::library_search::installed_symbol(src, lib_id).map(|(sym, _)| sym)
 }
 
 /// A footprint by name from the project library, else KiCad's installed libraries, else whatever the model resolves it to (intent, a loaded
@@ -71,9 +77,16 @@ fn resolve_footprint(model: &ConstraintModel, name: &str) -> Option<eda_model::F
     eda_model::footprint::builtin(name)
 }
 
-/// A symbol by `lib_id` from the project library, else KiCad's installed libraries, else the resolved one (the board's model, the builtin table).
+/// A symbol by `lib_id` from the project library, else KiCad's installed libraries, else the resolved one (the board's model, the builtin table). A library
+/// symbol whose library or text is there and cannot be read is an error that says why, not "no symbol with this lib_id", for which the editor would start a
+/// blank symbol (`SYMBOL_EDIT_FRAME::LoadSymbol`: "Error loading symbol %s from library '%s'.").
 pub(crate) fn symbol_any(dir: &Path, lib_id: &str) -> Result<(LibrarySymbol, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
+    if design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).is_none() {
+        if let Err(why) = read_installed_symbol_in(&*crate::library_tables::libs(dir, Kind::Symbol), lib_id) {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", lib_id, why)]);
+        }
+    }
     symbol_in(dir, &design, &model, lib_id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the project library or anything it loads")])
 }
 
