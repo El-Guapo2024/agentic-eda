@@ -11,7 +11,12 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
     - P7, **pending the user's decision**: Strict mode, on by default, refuses a move, swap, delete, drop or append that breaks a complete net, and KiCad never refuses. A refused strict drop ends the carry with nothing left (task-u6-regress).
 - **The gates on main 2026-11-07:**
   - `tools/check.sh full`: Rust 4771 passed, 3 failed (the box's three, below), 25 ignored; web 3330; build ok.
-  - `tools/run-all-checks.sh -j 3`: 112 of 114 passed. simulator fails because there is no ngspice; placement-u5's Escape was a load race, since fixed and passing twice under load.
+  - `tools/run-all-checks.sh -j 3`: 112 of 114 passed. placement-u5's Escape was a load race, since fixed and passing twice under load.
+  - ngspice was set up afterwards (below), and `simulator` 12/12, `sim-left-u5` 7/7 and `sim-model` 7/7 now pass against it. eda-sim 40/40 and eda-cli's sim tests 10/10 pass with `EDA_SLOW_TESTS=1`.
+- **ngspice on this box (2026-11-07):**
+  - ngspice 42 comes from Ubuntu's deb (`apt-get download ngspice`), extracted with `dpkg -x` into `~/tools/ngspice`. apt's package conflicts with the nightly's `libngspice-kicad`.
+  - `~/.local/bin/ngspice` is a wrapper that sets `SPICE_LIB_DIR` to the extracted `usr/share/ngspice`.
+  - The `spinit` there has its code-model paths rewritten to the extracted `.cm` files, so XSPICE parts load.
 - **The studio was restarted** at 14:11 on that build.
 - **Agents' leftovers worth a later round**, each written in its entry's "Left" and its PARITY section:
   - The hit test: board texts are still measured by their box, and the area pass and `CoverageRatio` use text boxes; KiCad uses strokes.

@@ -46,6 +46,6 @@ Run only what your change touches: `cargo check --workspace --tests --keep-going
   - `$HOME/src/kicad-src-8303b2ad` is the default.
   - `$HOME/src/kicad-src-25ec2335` is for KiCad 10 items newer than 8303b2ad. Cite those as "KiCad 25ec2335".
 - kicad-cli: nightly 10.99.0 (4fe1ca2060). Three slow tests fail on this box before any change: corpus `through_hole_headers` seed 0, `gate_vs_kicad` shove on mcu30, and `pad_details`. They are not yours to fix.
-- Tools: Playwright is in `~/tools/pw`. There is no ngspice. 16 cores are shared by up to four agents, so use `CARGO_BUILD_JOBS=3`.
+- Tools: Playwright is in `~/tools/pw`. ngspice 42 is `~/.local/bin/ngspice` (2026-11-07), a wrapper around the deb extracted into `~/tools/ngspice`, so the simulator checks run here. 16 cores are shared by up to four agents, so use `CARGO_BUILD_JOBS=3`.
 - The work list is `docs/parity/UI-LEFT.md`. Mark each entry you finish there: **done (task-<name>)**, plus a short note on what is left.
 - Never build in main's checkout. `cd <worktree> && cargo build & (cd web/studio && npm run build)` applies the leading `cd` only to the backgrounded group, so the second half runs in the caller's directory. That has rebuilt main's `web/studio/dist` twice, which leaves the user's running studio serving a UI newer than its server. Always `cd` to your worktree on its own line, or use absolute paths (`npm --prefix <worktree>/web/studio run build`).
