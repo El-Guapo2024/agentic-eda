@@ -1,4 +1,4 @@
-// Colour themes of the schematic, the Symbol Editor and the Footprint Editor (UI-LEFT-2 SS9, FF7, CC2; PARITY-sch.md section 71): Preferences > Schematic
+// Colour themes of the schematic, the Symbol Editor and the Footprint Editor (UI-LEFT-2 SS9, FF7, CC2; PARITY-sch.md section 73): Preferences > Schematic
 // Editor > Colors, Symbol Editor > Colors and Footprint Editor > Colors, and KiCad theme files in and out. It drives the dialogs' own controls and reads the
 // canvases' pixels and the store (`localStorage` "eda-studio.color-themes.v1"):
 //   page        Schematic Editor > Colors: KiCad's theme list, 46 swatches in LayerName() order ("Anchors", "Axes (symbol editor only)", ...), Override individual
