@@ -395,7 +395,13 @@ pub fn pattern(dir: &Path, body: &[u8]) -> Value {
     let constraint = p.member_ids.first().and_then(|t| tune_edit::rule_constraint(&scene.design, &scene.model, p.mode, t, &p.layer));
     json!({
         "ok": true, "pattern": pattern_json(&p), "mode": mode_name(p.mode), "nets": nets, "info": p.tuning_info(),
-        "constraint": constraint.map(|c| json!({ "name": c.name, "min": c.range.min, "opt": c.range.opt, "max": c.range.max })),
+        // a time domain rule's range is a delay: picoseconds, as the dialog's target delay
+        "constraint": constraint.map(|c| if c.time_domain {
+            let ps = |a: i64| a as f64 / 1e6;
+            json!({ "name": c.name, "time_domain": true, "min": ps(c.range.min), "opt": ps(c.range.opt), "max": ps(c.range.max) })
+        } else {
+            json!({ "name": c.name, "min": c.range.min, "opt": c.range.opt, "max": c.range.max })
+        }),
     })
 }
 
@@ -792,6 +798,84 @@ mod tests {
 
         board::undo(&dir, "test", None).expect("one undo takes the whole pattern back");
         assert!((net_ps(&dir, "/SIG") - 122.0).abs() < 0.01);
+    }
+
+    /// The board's rules as `.kicad_dru` text (what the rule engine compiles).
+    fn with_rules_text(dir: &Path, text: &str) {
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.custom_rules_text = Some(text.to_string());
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    }
+
+    /// `PCB_TUNING_PATTERN::EditStart`: a time domain rule (`(constraint length (min 149.9ps) (opt 150ps) (max 150.1ps))`, `m_IsTimeDomain`) gives the pattern its target
+    /// delay (`SetTargetLengthDelay( constraint.m_Value )`) and makes it a time domain pattern; the status box reads the delay against the rule's range, and the
+    /// pattern is tuned to it. A length rule makes the pattern a length one, whatever the profile (`m_isTimeDomain = constraint.m_IsTimeDomain`).
+    #[test]
+    fn a_time_domain_rule_gives_the_target_delay() {
+        let dir = scratch("delay_rule");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        with_profile(&dir, true);
+        with_rules_text(&dir, "(version 1)\n(rule sig_delay (constraint length (min 149.9ps) (opt 150ps) (max 150.1ps)) (condition \"A.NetName == '/SIG'\"))\n");
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(h["ok"], json!(true), "{h}");
+        assert_eq!(h["readout"]["time_domain"], json!(true), "{h}");
+        assert_eq!(h["readout"]["constraint"], "sig_delay");
+        let d = &h["readout"]["delay"];
+        assert_eq!((d["min"].as_f64(), d["opt"].as_f64(), d["max"].as_f64()), (Some(149.9), Some(150.0), Some(150.1)), "the rule's range: {h}");
+        assert_eq!(h["pattern"]["is_time_domain"], json!(true));
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let now = m["readout"]["delay"]["current"].as_f64().unwrap();
+        assert!((149.9..=150.1).contains(&now), "{m}");
+        assert_eq!(fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })))["ok"], json!(true));
+        let pat = &tune_edit::patterns_of(&design_of(&dir))[0];
+        assert!(pat.is_time_domain && (pat.target_delay.min, pat.target_delay.opt, pat.target_delay.max) == (149_900_000, 150_000_000, 150_100_000), "{pat:?}");
+        assert!((149.85..=150.15).contains(&net_ps(&dir, "/SIG")), "{}", net_ps(&dir, "/SIG"));
+        // the dialog's view of the pattern: the rule's range in picoseconds
+        let pv = pattern(&dir, &body(json!({ "id": pat.id })));
+        assert_eq!((pv["constraint"]["time_domain"].as_bool(), pv["constraint"]["min"].as_f64()), (Some(true), Some(149.9)), "{pv}");
+
+        // a length rule on the net: a length pattern, the profile's time domain notwithstanding
+        let dir = scratch("length_rule_over_profile");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        with_profile(&dir, true);
+        with_rules_text(&dir, "(version 1)\n(rule sig_len (constraint length (min 22mm) (max 22.2mm)))\n");
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!((h["readout"]["time_domain"].as_bool(), h["readout"]["min"].as_f64()), (Some(false), Some(22.0)), "{h}");
+    }
+
+    /// `MEANDER_PLACER::Start`: the pad-to-die length a board file gave the pads (`(die_length ..)`, kept among the pad's tokens) is part of the tuned length; the
+    /// track is lengthened by what the target asks less what the pads have inside the packages.
+    #[test]
+    fn the_pad_to_die_length_of_the_pads_counts_in_the_tuned_length() {
+        use eda_model::ir::{DrawingsSection, FootprintExtra, PadMaskInfo};
+        let dir = scratch("die_length");
+        let rule = eda_model::CustomRule { name: "sig_length".into(), constraint_type: "length".into(), min: Some(mm(24.0)), max: Some(mm(24.1)), opt: None, layer: None, severity: None, condition: None };
+        setup(&dir, ["SIG", "OTHER"], vec![rule]);
+        let mut design = design_of(&dir);
+        let pad_info = |tokens: Vec<String>| PadMaskInfo { tokens, ..Default::default() };
+        let extra = |id: &str, die: &str| FootprintExtra { id: id.into(), pads: vec![pad_info(vec![format!("(die_length {die})"), "(die_delay 4.5)".into()]), pad_info(vec![])], ..Default::default() };
+        design.drawings.get_or_insert_with(DrawingsSection::default).footprint_extras = vec![extra("U1", "1.5"), extra("U2", "0.5")];
+        board::save(&dir, &design).unwrap();
+        let (_, d, m) = board::load(&dir).unwrap();
+        let die = tune_edit::pad_to_die(&d, &m);
+        assert_eq!(die.get("U1.1"), Some(&(mm(1.5), 4_500_000)), "{die:?}");
+        assert_eq!(die.get("U2.1"), Some(&(mm(0.5), 4_500_000)));
+        assert!(!die.contains_key("U1.2"), "a pad with no pad-to-die length has none");
+        let h = hover(&dir, &body(json!({ "x": 15_000_000, "y": 9_550_000, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
+        assert!((h["readout"]["current"].as_f64().unwrap() - 22.0).abs() < 0.01, "20 mm of track and 2 mm inside the packages: {h}");
+        let net = h["pick"]["net"].as_str().unwrap().to_string();
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let mv_ = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(mv_["readout"]["status"], "tuned", "{mv_}");
+        let f = fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(f["ok"], json!(true), "{f}");
+        let track = net_mm(&dir, &net);
+        assert!((22.0..=22.1).contains(&track), "the track is 2 mm short of the 24 mm target, the pads have the rest: {track}");
     }
 
     #[test]

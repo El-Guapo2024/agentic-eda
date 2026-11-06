@@ -188,5 +188,6 @@ export interface TunePatternReply {
   mode?: TuneKind;
   nets?: string[];
   info?: string;
-  constraint?: { name: string; min: Nm; opt: Nm; max: Nm } | null;
+  /** The design rule's target (`EvalRules`): lengths in nanometres, or with `time_domain` (a rule in ps) delays in picoseconds. */
+  constraint?: { name: string; time_domain?: boolean; min: number; opt: number; max: number } | null;
 }
