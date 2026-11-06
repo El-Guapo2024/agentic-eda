@@ -690,6 +690,9 @@ export function SchematicView() {
     <div
       ref={containerRef}
       className="pcb-canvas-container"
+      // how many items Import Sheet's contents in the hand show, and the arc point editor's points (for a browser check; KiCad draws both on the canvas)
+      data-import-ghost={importShown ? previewIds(importShown).length : undefined}
+      data-arc-points={arcEditor ? arcEditor.edit.points.map((q) => `${q.role}:${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
