@@ -1154,7 +1154,7 @@ fn repeat_judges_items_against_the_areas_holes_and_copies_zones_with_their_holes
         ..Default::default()
     };
     d.routing.as_mut().unwrap().zones.push(pour.clone());
-    let mut b = board_with_areas(&m, d, 2, &[]);
+    let b = board_with_areas(&m, d, 2, &[]);
     let ids = areas_of(&b, 2);
     let disp = displacement(&b);
     // a hole in the reference area round the output track, one in the target area
