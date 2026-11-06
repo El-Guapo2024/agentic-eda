@@ -84,7 +84,7 @@ export interface FrameTurn {
  * position (`frameFp->GetPosition()`), or else the cursor (the grab point moved) -- and, when it differs from `prevDeg`, a turn of `GridFrameRotationDelta` about that pivot
  * added to the presses (in the items' frame before the move, where the presses are kept). `prevDeg` undefined: the carry has just picked the items up, and the frame there
  * "already carries that frame's orientation, so the first cursor move must not rotate it again" -- it is taken at the pick-up position. Null when the carry turns nothing: no
- * footprint is in it (`frameRotate` false).
+ * footprint is in it (`frameRotate` false), or the board has no grid item.
  */
 export function carryFrameTurn(
   board: BoardState,
@@ -97,9 +97,11 @@ export function carryFrameTurn(
   stepDeg: number,
   selected: ReadonlySet<string> = new Set(refs)
 ): FrameTurn | null {
+  const grids = board.drawings?.grid_items ?? [];
+  // No grid item: every frame is 0, nothing ever turns.
+  if (grids.length === 0) return null;
   const { single, any } = frameFootprint(board, refs);
   if (!single && !any) return null;
-  const grids = board.drawings?.grid_items ?? [];
   const part = single ? board.parts.find((p) => p.ref === single) : undefined;
   // The pivot before the move: the footprint's position as the presses so far have left it, or the grab point.
   const m = opsMatrix(ops);
