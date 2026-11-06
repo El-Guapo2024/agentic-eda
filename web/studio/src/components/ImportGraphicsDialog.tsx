@@ -3,9 +3,11 @@
 // tolerance; the schematic's and the symbol editor's has "Interactive placement" or "At" X, Y and nothing else.
 //
 // A browser gives the page a file's text and not its path, so "File:" is filled by a Browse... button (a file chooser) or by a file dropped on the dialog; the page reads it, and
-// the server says what it holds (lines, arcs, ...; what it could not handle) before OK. OK sends the one command (crates/ops/src/import_graphics.rs, import_graphics_sch.rs): with "Place at"
-// off the items are put at the cursor and carried by the Move tool until a click drops them (Escape takes them back), as a Paste is in this studio. The Symbol Editor has no carried move:
-// its items are added at the cursor and selected, to be dragged.
+// the server says what it holds (lines, arcs, ...; what it could not handle) before OK. OK sends the one command (crates/ops/src/import_graphics.rs, import_graphics_sch.rs). On the board,
+// with "Place at" off, the items are a preview under the cursor (`PlaceImportedGraphics`: the server makes them on a copy of the board, `POST /api/import_graphics/preview`, and the
+// canvas draws them where the snapped cursor holds them, state/importPreview.ts) until a click places them -- the command at that offset -- or Escape drops them. The schematic's
+// items are put at the cursor and carried by the Move tool until a click drops them (Escape takes them back), as a Paste is in this studio. The Symbol Editor has no carried
+// move: its items are added at the cursor and selected, to be dragged.
 import { useEffect, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
@@ -13,7 +15,9 @@ import { fetchLibrarySymbol } from "../api/client";
 import { closeImportGraphics, openImportGraphics, useImportGraphicsDialog, type PickedFile } from "../state/importDialogs";
 import { DialogShell } from "./pcbDialogKit";
 import { pickTextFile } from "../api/libraryClient";
-import { readGraphics } from "../api/importClient";
+import { previewGraphics, readGraphics } from "../api/importClient";
+import { setImportPreview } from "../state/importPreview";
+import { pickPoint } from "../actions/pcbPicker";
 import { DXF_UNITS, buildImportCmd, buildSchImportCmd, defaultImportValues, defaultSchImportValues, describeInfo, graphicsFormatOf, importLayers, type GraphicsInfo, type ImportValues, type SchImportValues } from "../kicad-port/importGraphics";
 
 /** The dialog keeps what it was last set to while the page lives (KiCad saves a dialog's controls between runs). */
@@ -103,13 +107,42 @@ function PcbImportGraphics({ file }: { file: PickedFile | null }) {
     }
     setBusy(true);
     lastValues = values;
-    const placed = await api.placeNewItems((at) => built.build(at), built.interactive);
-    setBusy(false);
-    if (!placed) return; // the refusal is on screen as a toast
     // `HTML_MESSAGE_BOX`: "Items in the imported file could not be handled properly."
     const warnings = (info?.messages ?? []).map((m) => m.text);
-    if (warnings.length > 0) dispatch({ type: "TOAST", message: `Items in the imported file could not be handled properly. ${warnings.join(" ")}`, kind: "info" });
+    const sayWarnings = () => {
+      if (warnings.length > 0) dispatch({ type: "TOAST", message: `Items in the imported file could not be handled properly. ${warnings.join(" ")}`, kind: "info" });
+    };
+    if (!built.interactive) {
+      const placed = await api.placeNewItems((at) => built.build(at), false);
+      setBusy(false);
+      if (!placed) return; // the refusal is on screen as a toast
+      sayWarnings();
+      closeImportGraphics();
+      return;
+    }
+    // `DRAWING_TOOL::PlaceImportedGraphics`: the items are a preview under the cursor -- held by the top left item -- until a click places them (one command, one undo step,
+    // the new items selected) or Escape drops them; nothing is on the board meanwhile.
+    let preview;
+    try {
+      preview = await previewGraphics(built.atOffset({ x: 0, y: 0 }));
+    } catch (e) {
+      setBusy(false);
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setBusy(false);
+    if (!preview.ok || !preview.reference) {
+      setError(preview.message ?? "No graphic items found in file.");
+      return;
+    }
     closeImportGraphics();
+    const reference = preview.reference;
+    setImportPreview({ shapes: preview.shapes ?? [], texts: preview.texts ?? [], reference });
+    const at = await pickPoint("");
+    setImportPreview(null);
+    if (!at) return;
+    const placed = await api.placeNewItems(() => built.atOffset({ x: at.x - reference.x, y: at.y - reference.y }), false);
+    if (placed) sayWarnings();
   };
 
   const row = { display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 6 } as const;

@@ -209,7 +209,7 @@ fn track_position(t: &eda_model::ir::Track) -> Point {
 }
 
 /// `EDA_SHAPE::getPosition`: an arc's centre, a polygon's first vertex, the start of anything else (a circle's is its centre).
-fn shape_position(s: &Shape) -> Point {
+pub(crate) fn shape_position(s: &Shape) -> Point {
     match s {
         Shape::Segment { start, .. } | Shape::Rect { start, .. } | Shape::Bezier { start, .. } => *start,
         Shape::Circle { center, .. } => *center,

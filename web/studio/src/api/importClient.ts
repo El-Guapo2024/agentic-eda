@@ -19,3 +19,8 @@ export function readGraphics(req: { format: "dxf" | "svg"; text: string; dxf_uni
 export function readAppendBoard(file: { name: string; text: string }): Promise<AppendInfo> {
   return postJson<AppendInfo>("/api/append_board/read", file);
 }
+
+/** The items an interactive Import Graphics would put on the board and the point they are held by (`POST /api/import_graphics/preview`; nothing on the board changes). */
+export function previewGraphics(cmd: unknown): Promise<{ ok: boolean; message?: string; shapes?: unknown[]; texts?: unknown[]; reference?: { x: number; y: number } }> {
+  return postJson("/api/import_graphics/preview", { cmd });
+}

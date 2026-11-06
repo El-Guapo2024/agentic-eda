@@ -898,6 +898,8 @@ fn handle(
         ("POST", "/api/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::clipboard_api::copy(dir, &body).to_string().as_bytes()),
         // Import Graphics (DXF, SVG): what a file holds, for the dialog (a read; the import is `Cmd::ImportGraphics`).
         ("POST", "/api/import_graphics/read") => respond(stream, "200 OK", "application/json", crate::graphics_api::read(&body).to_string().as_bytes()),
+        // Import Graphics' interactive placement: the items it would put on the board, for the preview that follows the cursor (`PlaceImportedGraphics`).
+        ("POST", "/api/import_graphics/preview") => respond(stream, "200 OK", "application/json", crate::graphics_api::preview(dir, &body).to_string().as_bytes()),
         // File > Import > Non-KiCad Board / Schematic: the file the page posts converted by kicad-cli (so through `offload`) and read; the import itself is
         // `Cmd::ReplaceBoard` / `Cmd::ReplaceSchematic` with what this answers.
         ("POST", "/api/import_foreign") => offload(stream, lane, dir, job, path, &body, crate::foreign_api::convert),
