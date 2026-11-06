@@ -33,7 +33,7 @@ export interface EditorFrameContext {
   symApi: SymbolEditorApi;
   symDispatch: Dispatch<SymAction>;
   /** The studio's preferences (the Symbol Editor's Repeated Items: `SYMBOL_EDITOR_SETTINGS::m_Repeat`); the defaults when absent. */
-  prefs?: Pick<Preferences, "symRepeatPinStepMils" | "symRepeatLabelDelta">;
+  prefs?: Pick<Preferences, "symRepeatPinStepMils" | "symRepeatLabelDelta" | "fpRotationStepDeg">;
 }
 
 /** The canvas of the editor frame on screen (only one editor is mounted at a time). */
@@ -107,20 +107,24 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // footprint editor's 90 degrees about its pivot (kicad-port/fpItems.ts `fpRotationPivot`), one undo step.
     // With the Pad tool armed they turn the pad it carries instead (`doInteractiveItemPlacement`, IPO_ROTATE: `newItem->Rotate( newItem->GetPosition(), rotationAngle )`,
     // the Footprint Editor's 90 degree step), which the placed pad then hands on to the default pad (kicad-port/fpPadPlacer.ts).
+    // The step is the Footprint Editor's own (`FOOTPRINT_EDITOR_SETTINGS::m_RotationAngle`, Preferences > Footprint Editor > Editing Options, UI-LEFT F8), 90 degrees by default.
     const rotate = (quarterTurns: number) => () => {
       const st = ctx.fpApi.getState();
+      const step = ctx.prefs?.fpRotationStepDeg ?? 90;
       if (st.activeTool === "pad") {
-        ctx.fpDispatch({ type: "SET_CARRIED_PAD", pad: rotateCarriedPad(st.carriedPad ?? newPadFromMaster(st.defaultPad, "", { x: 0, y: 0 }), quarterTurns * 90) });
+        ctx.fpDispatch({ type: "SET_CARRIED_PAD", pad: rotateCarriedPad(st.carriedPad ?? newPadFromMaster(st.defaultPad, "", { x: 0, y: 0 }), quarterTurns * step) });
         return;
       }
       if (st.selection.size === 0) return;
-      void ctx.fpApi.rotateSelection(quarterTurns, gridSnap);
+      void ctx.fpApi.rotateSelection(quarterTurns, gridSnap, step);
     };
     m.set("pcbnew.InteractiveEdit.rotateCcw", rotate(1));
     m.set("pcbnew.InteractiveEdit.rotateCw", rotate(-1));
     // Mirror Horizontally / Vertically (`EDIT_TOOL::Mirror`, no default hotkey): the mirrorable items of the selection about the modification point, on their own layers.
     m.set("pcbnew.InteractiveEdit.mirrorHoriontally", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("left_right", gridSnap));
     m.set("pcbnew.InteractiveEdit.mirrorVertically", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("top_bottom", gridSnap));
+    // Show Properties (`ACTIONS::showProperties`, `FOOTPRINT_EDITOR_CONTROL::ToggleProperties`): the frame's `PCB_PROPERTIES_PANEL` beside the Libraries tree (UI-LEFT Y3).
+    m.set("common.Control.showProperties", () => toggleDockPane("fpProperties"));
     // Group / Ungroup (Ctrl+G / Ctrl+Shift+G, `PCB_GROUP_TOOL::Group` in the footprint editor, `GROUP_TOOL::Ungroup`).
     m.set("common.Interactive.group", () => void ctx.fpApi.groupSelection());
     m.set("common.Interactive.ungroup", () => void ctx.fpApi.ungroupSelection());

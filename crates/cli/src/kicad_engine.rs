@@ -392,7 +392,8 @@ pub fn footprint_check(dir: &Path, body: &[u8]) -> Value {
     };
     let run = || -> Result<Value, Vec<CheckResult>> {
         let (fp, _) = crate::library_api::footprint_any(dir, name)?;
-        Ok(eda_kicad_engine::footprint_check::footprint_check(&fp)?.to_json())
+        // the markers where `DIALOG_FOOTPRINT_CHECKER::runChecks` puts them on this footprint (UI-LEFT F9)
+        Ok(eda_kicad_engine::footprint_check::footprint_check(&fp)?.to_json_for(&fp))
     };
     run().unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }))
 }

@@ -178,6 +178,15 @@ export function registerImportActions(m: Map<string, ActionHandler>, ctx: Import
       openImportGraphics("pcb", file);
     });
   }
+  if (ctx.tab === "footprint") {
+    // PCB_ACTIONS::placeImportedGraphics in the Footprint Editor (File > Import > Graphics..., UI-LEFT F8): the same dialog, the items the footprint's.
+    m.set("pcbnew.InteractiveDrawing.placeImportedGraphics", () => openImportGraphics("footprint"));
+    m.set("pcbnew.InteractiveDrawing.ddImportGraphics", (param) => {
+      const file = asPickedFile(param);
+      if (file && !graphicsFormatOf(file.name)) return ctx.dispatch({ type: "TOAST", message: "There is no plugin to handle this file type.", kind: "error" });
+      openImportGraphics("footprint", file);
+    });
+  }
   if (ctx.tab === "schematic") {
     // SCH_ACTIONS::importNonKicadSchematic ("Import Non-KiCad Schematic..."): the same, for the schematic.
     m.set("eeschema.EditorControl.importNonKicadSchematic", (param) => void importForeign(ctx, "schematic", asForeignParam(param)));

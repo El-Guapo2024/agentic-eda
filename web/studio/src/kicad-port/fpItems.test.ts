@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CmdShape, CmdText, LibraryFootprint, LibraryPad } from "../api/types";
-import { fieldLayoutOf, fpCanMirror, fpEditTarget, fpFields, fpGroupCmd, fpHitTest, fpItemKind, fpItemPosition, fpLeaves, fpMirrorCmd, fpModificationPoint, fpMoveCmd, fpRotateCmd, fpRotationPivot, fpSelectionTarget, fpUngroupCmd } from "./fpItems";
+import { fieldLayoutOf, fpCanMirror, fpEditTarget, fpFields, fpGroupCmd, fpHitTest, fpItemBounds, fpItemKind, fpItemPosition, fpLeaves, fpMirrorCmd, fpModificationPoint, fpMoveCmd, fpRotateCmd, fpRotationPivot, fpSelectionTarget, fpUngroupCmd } from "./fpItems";
 
 const pad = (id: string, number: string, x: number, y: number): LibraryPad =>
   ({ id, number, at: { x, y }, size: [1_000_000, 600_000], offset: { x: 0, y: 0 }, shape: "rect", kind: "smd", drill: null, drill_slot: null, rot: 0, layers: ["F.Cu"], chamfer_corners: {} }) as unknown as LibraryPad;
@@ -108,4 +108,15 @@ test("E / a double click opens OnEditItemRequest's dialog of the item; nothing s
   assert.deepEqual(fpEditTarget(fp, ["fpg_1"]), { dialog: "shape", id: "fpg_1" });
   assert.equal(fpEditTarget(fp, ["pnt_1"]), null);
   assert.equal(fpEditTarget(fp, ["pad_1", "pad_2"]), null);
+});
+
+test("a centred text's box is about its anchor, a top- or bottom-justified one's below or above it, as the painter draws them (UI-LEFT F5)", () => {
+  // `${REFERENCE}` at (0, 2.5 mm), 1 mm high: a line 0.83 mm below the anchor is the line's, not the text's
+  const fp = footprint({ texts: [text("fpt_r", "${REFERENCE}", 0, 2_500_000)], graphics: [line("fpg_l", 1_130_000, 3_330_000, 2_130_000, 3_330_000)] });
+  const b = fpItemBounds(fp, "fpt_r")!;
+  assert.deepEqual([b[1], b[3]], [2_000_000, 3_000_000]);
+  assert.deepEqual(fpHitTest(fp, 1_130_000, 3_330_000, 80_000), { kind: "graphic", id: "fpg_l" });
+  const top = fpItemBounds({ ...fp, kicad: { text_extras: [{ id: "fpt_r", valign: "top" }] } } as unknown as LibraryFootprint, "fpt_r")!;
+  const bottom = fpItemBounds({ ...fp, kicad: { text_extras: [{ id: "fpt_r", valign: "bottom" }] } } as unknown as LibraryFootprint, "fpt_r")!;
+  assert.deepEqual([top[1], top[3], bottom[1], bottom[3]], [2_360_000, 3_360_000, 1_640_000, 2_640_000]);
 });

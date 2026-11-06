@@ -102,6 +102,7 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
     // the library editors' own column; the Appearance manager is the board editor's right dock.
     case "common.Control.showProperties":
       if (c.tab === "symbol") return c.dock.shown.symProperties && !c.dock.treeCollapsed;
+      if (c.tab === "footprint") return c.dock.shown.fpProperties && !c.dock.treeCollapsed;
       return c.tab === "pcb" || c.tab === "schematic" ? c.dock.shown.properties && !c.dock.leftCollapsed : undefined;
     case "eeschema.EditorTool.showHierarchy":
       return c.dock.shown.hierarchy && !c.dock.leftCollapsed;

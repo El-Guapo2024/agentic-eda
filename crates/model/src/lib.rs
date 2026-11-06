@@ -24,6 +24,7 @@ pub mod fp_edit;
 pub mod fp_units;
 pub mod fp_exchange;
 pub mod fp_models;
+pub mod fp_settings;
 pub mod gensym;
 pub mod grid_item;
 pub mod groups;

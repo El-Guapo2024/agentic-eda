@@ -4,6 +4,7 @@
 // ahead and place it there") and selected (`ACTIONS::selectItem`), any other follows the cursor until the click that commits it. A size outside KiCad's limits gets
 // `UNIT_BINDER::Validate`'s message ("Width must be at least 0.001 mm."); a pen too thick for the size is clamped with KiCad's message.
 // The model's text has one size (square), no italic, bold, knockout or keep-upright, and no vertical justification: those controls are left out.
+import { textLookOf } from "../../kicad-port/fpKeep";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { fpTextSizeMessage, noPrintableChars } from "../../kicad-port/fpTextTool";
@@ -199,10 +200,17 @@ export function FpTextEditDialog() {
       setKnockout(field.knockout);
       setUpright(field.upright);
     } else if (text) {
+      // what the text keeps beyond `CmdText` (UI-LEFT F5): its width, bold, italic, vertical justification, knockout and keep-upright
+      const look = textLookOf(fp, text.id ?? "");
       setContent(text.content);
       setLayer(text.layer);
-      setWidth(mm(text.size_nm));
+      setWidth(mm(look.width_nm ?? text.size_nm));
       setHeight(mm(text.size_nm));
+      setValign(look.valign);
+      setBold(look.bold);
+      setItalic(look.italic);
+      setKnockout(look.knockout);
+      setUpright(look.keep_upright);
       setThickness(mm(text.stroke_width));
       setX(mm(text.at.x));
       setY(mm(text.at.y));
@@ -221,8 +229,8 @@ export function FpTextEditDialog() {
   const label = field?.name === "Reference" ? "Reference:" : field?.name === "Value" ? "Value:" : "Text:";
   const ok = async () => {
     const w = nm(width);
-    const h = field ? nm(height) : w;
-    const sizeError = sizeMessage("Width", w) ?? (field ? sizeMessage("Height", h) : null);
+    const h = nm(height);
+    const sizeError = sizeMessage("Width", w) ?? sizeMessage("Height", h);
     if (sizeError) return setError(sizeError);
     // `ClampTextPenSize( thickness, size )`: a quarter of the smaller side at most
     let pen = Math.max(0, nm(thickness) || 0);
@@ -239,7 +247,8 @@ export function FpTextEditDialog() {
       done = await api.editField(field.name, content, layout);
     } else {
       const justify: TextJustify = halign < 0 ? "left" : halign > 0 ? "right" : "center";
-      done = await api.setText(id, { ...text!, content, layer, size_nm: w, stroke_width: pen, angle: angleMdeg, justify, mirror, at });
+      // the height is the text's size (`CmdText.size_nm`); the width, the vertical justification, bold, italic, knockout and keep-upright are kept by its id
+      done = await api.setText(id, { ...text!, content, layer, size_nm: h, stroke_width: pen, angle: angleMdeg, justify, mirror, at }, { bold, italic, valign, width_nm: w === h ? null : w, knockout, keep_upright: upright });
     }
     if (done) close();
   };
@@ -275,14 +284,10 @@ export function FpTextEditDialog() {
                 </option>
               ))}
             </select>
-            <span>{field ? "Width:" : "Size:"}</span>
+            <span>Width:</span>
             {num(width, setWidth, "fp-text-edit-width")}
-            {field && (
-              <>
-                <span>Height:</span>
-                {num(height, setHeight, "fp-text-edit-height")}
-              </>
-            )}
+            <span>Height:</span>
+            {num(height, setHeight, "fp-text-edit-height")}
             <span>Thickness:</span>
             {num(thickness, setThickness, "fp-text-edit-thickness")}
             <span>Offset X:</span>
@@ -298,22 +303,21 @@ export function FpTextEditDialog() {
                 <option value={0}>Center</option>
                 <option value={1}>Right</option>
               </select>
-              {field && (
-                <select value={valign} data-testid="fp-text-edit-valign" onChange={(e) => setValign(Number(e.target.value) as -1 | 0 | 1)} style={{ marginLeft: 6 }}>
-                  <option value={-1}>Top</option>
-                  <option value={0}>Center</option>
-                  <option value={1}>Bottom</option>
-                </select>
-              )}
+              <select value={valign} data-testid="fp-text-edit-valign" onChange={(e) => setValign(Number(e.target.value) as -1 | 0 | 1)} style={{ marginLeft: 6 }}>
+                <option value={-1}>Top</option>
+                <option value={0}>Center</option>
+                <option value={1}>Bottom</option>
+              </select>
             </span>
           </div>
           <div style={{ marginTop: 8 }}>
+            {/* `DIALOG_TEXT_PROPERTIES` for a footprint text hides only Show (`m_Visible->Show( false )`) and Locked (UI-LEFT F5) */}
             {field && check("Show", visible, setVisible, "fp-text-edit-visible")}
-            {field && check("Bold", bold, setBold, "fp-text-edit-bold")}
-            {field && check("Italic", italic, setItalic, "fp-text-edit-italic")}
+            {check("Bold", bold, setBold, "fp-text-edit-bold")}
+            {check("Italic", italic, setItalic, "fp-text-edit-italic")}
             {check("Mirrored", mirror, setMirror, "fp-text-edit-mirror")}
-            {field && check("Knockout", knockout, setKnockout, "fp-text-edit-knockout")}
-            {field && check("Keep upright", upright, setUpright, "fp-text-edit-upright")}
+            {check("Knockout", knockout, setKnockout, "fp-text-edit-knockout")}
+            {check("Keep upright", upright, setUpright, "fp-text-edit-upright")}
           </div>
           {error && <p style={{ color: "var(--error, #e66)", margin: "8px 0 0" }}>{error}</p>}
         </div>

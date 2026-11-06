@@ -128,6 +128,9 @@
     t(selection().join() === "field:Reference", `a click on REF** selects the Reference: ${JSON.stringify(__eda.state().selection)}`);
     await selectAt(0, 1_000_000);
     t(selection().join() === "field:Value", `a click on the Value selects it: ${selection()}`);
+    // Left button drag's default is "Drag selected objects" (`MOUSE_DRAG_ACTION::DRAG_SELECTED`, UI-LEFT C1): a drag from an item not selected draws the selection
+    // rectangle, so the Reference is selected first
+    await selectAt(0, -500_000);
     await dragFrom(0, -500_000, 0, -2_500_000);
     const fp = await footprint(name);
     t(fp.reference && near(fp.reference.at.y, -2_500_000, 300_000) && fp.reference.layer === "F.SilkS", `the Reference moved: ${JSON.stringify(fp.reference?.at)}`);

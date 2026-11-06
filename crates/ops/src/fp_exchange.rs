@@ -274,7 +274,7 @@ impl Board<'_> {
     }
 
     /// One footprint (`ExchangeFootprint`): `old` is the footprint the part is on as the board has it (pad edits laid on), `new` the one it is put on.
-    fn exchange_one(&mut self, reference: &str, name: &str, old: &Footprint, mut new: Footprint, options: &ExchangeOptions, change: bool) {
+    pub(crate) fn exchange_one(&mut self, reference: &str, name: &str, old: &Footprint, mut new: Footprint, options: &ExchangeOptions, change: bool) {
         let placed_pose = self.pose_of(reference).cloned();
         let old_pose = placed_pose.clone().unwrap_or_else(|| FootprintInstance { id: reference.to_string(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::default() });
 
