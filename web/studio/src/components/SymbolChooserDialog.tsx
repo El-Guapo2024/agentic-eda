@@ -277,7 +277,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
   };
 
   const s = chooser.status;
-  const hint = loadError ?? s.error ?? (s.searching ? (s.indexing ? `Searching… ${s.indexed} of ${s.total || "…"} libraries read` : `${s.matches} match${s.matches === 1 ? "" : "es"}${s.truncated ? " (showing the best)" : ""}`) : "");
+  const hint = loadError ?? s.error ?? (s.searching ? (s.indexing ? (s.total ? `Searching… ${s.indexed} of ${s.total} libraries read` : "Searching…") : `${s.matches} match${s.matches === 1 ? "" : "es"}${s.truncated ? " (showing the best)" : ""}`) : "");
   const sym = shown?.symbol ?? null;
   const pinCount = info?.pins ?? chosen?.item.pins ?? 0;
 
@@ -295,7 +295,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
             <div className="chooser-left">
               <div className="chooser-search">
                 <input id="library-tree-search" data-chooser-search autoFocus placeholder="Search symbols (name, description, keywords)" value={chooser.query} onChange={(e) => chooser.setQuery(e.target.value)} />
-                <div className="chooser-hint" data-chooser-status>
+                <div className="chooser-hint" data-chooser-status data-chooser-answered={s.answered ?? undefined}>
                   {hint}
                 </div>
                 {loadErrors.length > 0 && (

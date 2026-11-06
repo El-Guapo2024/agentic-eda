@@ -54,11 +54,12 @@
     try { await closeChoosers(); } catch { /* ignore */ }
     results.push(entry);
   };
-  /** Type a search into the open chooser and wait until the server has read every library and answered. */
+  /** Type a search into the open chooser and wait until the list answers those very words: the chooser says which search its list answers in full
+   *  (`data-chooser-answered`, null while the server has not answered the one typed or is still reading libraries). Waiting for "N matches" alone read the
+   *  last search's list when the new answer came late (the flake of 2026-11-06: `resistance>10k` answered with `resistance<10k`'s LcRes_Low). */
   const search = async (root, q, ms = 90000) => {
     setValue(root.querySelector("#library-tree-search"), q);
-    await sleep(400);
-    return until(() => / match(es)?/.test(status(root)) && !/Searching/.test(status(root)), ms);
+    return until(() => root.querySelector("[data-chooser-status]")?.dataset.chooserAnswered === q && / match(es)?/.test(status(root)), ms);
   };
 
   const s = Date.now().toString(36);
@@ -139,7 +140,24 @@
     let found = items(root);
     t(found.includes(`${LIB}:LcRes_Low`), `resistance<10k finds LcRes_Low (resistance=4.7k): ${found.join(", ")}`);
     t(!found.includes(`${LIB}:LcRes_High`), "and not LcRes_High (resistance=22k)");
-    await search(root, "resistance>10k");
+    // the answer to the new words held back 2 s, as a loaded machine does: until it comes the chooser says "Searching…" and does not list the last search's
+    // matches under the new words (the flake of 2026-11-06 read resistance<10k's LcRes_Low here)
+    const realFetch = window.fetch;
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (/\/api\/library\/search\?.*q=resistance%3E10k/.test(url)) await sleep(2000);
+      return realFetch(input, init);
+    };
+    try {
+      setValue(root.querySelector("#library-tree-search"), "resistance>10k");
+      // once the chooser has taken the new words (the 200 ms debounce), the server's answer is 2 s away
+      const taken = await until(() => root.querySelector("[data-chooser-status]")?.dataset.chooserAnswered !== "resistance<10k", 8000);
+      const waiting = items(root);
+      t(taken && /Searching/.test(status(root)) && !waiting.includes(`${LIB}:LcRes_Low`), `while the answer is on its way: "${status(root)}", ${waiting.join(", ") || "nothing"} listed`);
+      await search(root, "resistance>10k");
+    } finally {
+      window.fetch = realFetch;
+    }
     found = items(root);
     t(found.includes(`${LIB}:LcRes_High`) && !found.includes(`${LIB}:LcRes_Low`), `resistance>10k the other way round: ${found.join(", ")}`);
     await search(root, "/^lcres_l/");

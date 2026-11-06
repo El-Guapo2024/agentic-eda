@@ -150,7 +150,10 @@ function installCapture(): void {
       }
       return response;
     } catch (e) {
-      errorLog.add(`${init?.method ?? "GET"} ${url}: ${e instanceof Error ? e.message : String(e)}`);
+      // A request the studio itself aborted -- a chooser's search overtaken by the next one, the footprint selector's for a symbol no longer selected
+      // (`AbortController.abort()`) -- is not an error: only a failure the page did not ask for is logged.
+      const aborted = init?.signal?.aborted === true || (e instanceof DOMException && e.name === "AbortError");
+      if (!aborted) errorLog.add(`${init?.method ?? "GET"} ${url}: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
     } finally {
       inFlight--;
