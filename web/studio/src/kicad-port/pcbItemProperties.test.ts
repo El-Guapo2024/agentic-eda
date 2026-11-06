@@ -62,7 +62,7 @@ test("a text box has the rows of PCB_TEXTBOX_DESC: position, lock and layer, the
   const groups = names(board(), ["tbx_a"]);
   assert.deepEqual(groups.map((g) => g[0]), ["Basic Properties", "Text Properties", "Border Properties", "Margins"]);
   assert.deepEqual(groups[0]![1], ["Position X", "Position Y", "Locked", "Layer"]);
-  assert.deepEqual(groups[1]![1], ["Text", "Thickness", "Italic", "Bold", "Mirrored", "Knockout", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Orientation"]);
+  assert.deepEqual(groups[1]![1], ["Text", "Font", "Thickness", "Italic", "Bold", "Mirrored", "Knockout", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Orientation"]);
   assert.deepEqual(groups[2]![1], ["Border", "Border Style", "Border Width"]);
   assert.deepEqual(groups[3]![1], ["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"]);
 });
@@ -72,6 +72,8 @@ test("every edit of a text box is one edit_text_box of the whole box", () => {
   assert.equal(sent(edit(b, ["tbx_a"], "Text", "bye")).text, "bye");
   assert.equal(sent(edit(b, ["tbx_a"], "Layer", "F.Fab")).layer, "F.Fab");
   assert.equal(sent(edit(b, ["tbx_a"], "Knockout", true)).knockout, true);
+  // the Font row (UI-LEFT-2 CC1): a face, or "KiCad Font" for none
+  assert.equal(sent(edit(b, ["tbx_a"], "Font", "DejaVu Sans")).face, "DejaVu Sans");
   assert.equal(sent(edit(b, ["tbx_a"], "Border", false)).border, false);
   assert.equal(sent(edit(b, ["tbx_a"], "Border Style", "dash")).line_style, "dash");
   assert.equal(sent(edit(b, ["tbx_a"], "Border Width", 250_000)).stroke_width_nm, 250_000);

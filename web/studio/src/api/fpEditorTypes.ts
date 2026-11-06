@@ -44,6 +44,8 @@ export interface TextLook {
   width_nm: Nm | null;
   knockout: boolean;
   keep_upright: boolean;
+  /** The font to set (`SetFont`): a face, or "" for KiCad's stroke font; left out, the text keeps its own (UI-LEFT-2 CC1). */
+  face?: string;
 }
 
 /** The key a board footprint's copy is held by in the editor (`BoardFootprintCopy::key_of`): no footprint name can have `<`, `>` or `/`. */
