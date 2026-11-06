@@ -103,6 +103,8 @@ struct Sources {
     imports: Vec<ForeignImport>,
     /// When the sheets are a KiCad project's top-level sheets (`schematic.top_level_sheets`), each one's file, relative to the project; empty otherwise.
     top_level_files: Vec<String>,
+    /// An Altium project's variants (`[ProjectVariantN]` of the `.PrjPcb`), put on the schematic once its sheets are one (`crate::altium_variants`).
+    altium_variants: Vec<crate::altium_variants::ProjectVariant>,
 }
 
 fn stem_of(path: &Path) -> String {
@@ -125,7 +127,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
     let input = PathBuf::from(&args.input);
     let ext = input.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new(), top_level_files: Vec::new() };
+    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new(), top_level_files: Vec::new(), altium_variants: Vec::new() };
     let mut runs = 0;
     let mut convert_one = |s: &mut Sources, path: &Path, kind: Option<Kind>| -> Result<ForeignImport, Vec<CheckResult>> {
         runs += 1;
@@ -163,6 +165,8 @@ fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
         }
         "prjpcb" => {
             let project = foreign::altium_project(&input)?;
+            // the project's variants (KiCad 25ec2335's project import passes the `.PrjPcb` as `project_file` to the schematic importer, which kicad-cli's `sch import` cannot)
+            s.altium_variants = std::fs::read(&input).map(|b| crate::altium_variants::parse_project_variants(&String::from_utf8_lossy(&b))).unwrap_or_default();
             for gone in &project.missing {
                 eprintln!("  the project lists {gone}, which is not there");
             }
@@ -394,6 +398,10 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
             }
         };
         let mut content = content;
+        if !sources.altium_variants.is_empty() {
+            let made = crate::altium_variants::apply(&mut content, &sources.altium_variants);
+            eprintln!("import-kicad: {} design variant(s) of the Altium project ({}), {made} symbol record(s)", sources.altium_variants.len(), sources.altium_variants.iter().map(|v| v.name.as_str()).collect::<Vec<_>>().join(", "));
+        }
         // The project's Schematic Setup, before the nets are traced: its unit notation names them (`U1.1`, r7 H5), and the rest is kept for the derived
         // project (r7 M1, `eda_kicad::project_schematic`).
         if args.input.to_ascii_lowercase().ends_with(".kicad_sch") {
