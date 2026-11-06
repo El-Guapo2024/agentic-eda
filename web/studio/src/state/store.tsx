@@ -17,6 +17,7 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKin
 import { defaultSearch } from "../kicad-port/schFind";
 import { cleanHistory, initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
+import { getCheckerView } from "./checkerView";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
@@ -1189,7 +1190,7 @@ export type Action =
   /** A check's severity changed (`set_rule_severities`): the report on screen takes it (`patchDrcSeverity`) -- an ignored check leaves the list and joins the ignored ones. */
   | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   /** The same for the schematic (`set_erc_severities`). */
-  | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
+  | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null; /** Ignore on a pin-to-pin warning: the errors stay (`patchErcSeverity`). */ keepPinErrors?: boolean }
   /** Delete Marker / Delete All Markers (`DIALOG_DRC::OnDeleteOneClick`, `OnDeleteAllClick`) on the report on screen: the rows leave the lists and the canvas. `version` is given when the deletion also changed the design (an excluded marker's exclusion goes with it): see `ERC_DELETE_MARKER`. */
   | { type: "DRC_DELETE_MARKER"; page: DrcPage; index: number; /** The row selected after it (an index of the list as it is then), or null. */ select: number | null; version?: string | null }
   | { type: "DRC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
@@ -1635,7 +1636,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drc: patchDrcSeverity(state.drc, action.check, action.severity, action.description), drcVersion: action.version, drcSelected: null };
     case "ERC_PATCH_SEVERITY":
       if (!state.erc) return state;
-      return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description), ercVersion: action.version, ercSelected: null };
+      return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description, action.keepPinErrors), ercVersion: action.version, ercSelected: null };
     case "DRC_DELETE_MARKER":
       if (!state.drc) return state;
       return { ...state, drc: patchDrcDeleteMarker(state.drc, action.page, action.index), drcSelected: action.page === "violations" ? action.select : state.drcSelected, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };
@@ -2009,7 +2010,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     const askedAt = stateRef.current.version;
     dispatch({ type: "DRC_RUNNING" });
     try {
-      const drc = await fetchDrc(stateRef.current.drcRefillZones, stateRef.current.drcParity);
+      // the dialog's options menu: "Report All Errors for Each Track" (`DRC_TOOL::RunTests( .., m_report_all_track_errors, .. )`)
+      const drc = await fetchDrc(stateRef.current.drcRefillZones, stateRef.current.drcParity, getCheckerView().drc.options.reportAllTrackErrors);
       dispatch({ type: "DRC_OK", drc, version: revisionOf(drc, askedAt) });
     } catch (e) {
       dispatch({ type: "DRC_ERR", message: e instanceof Error ? e.message : String(e) });
@@ -2214,6 +2216,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+      // what KiCad says once the command worked (`ShowInfoBarMsg`, `wxLogMessage`): "Some of the polygons could not be merged.", ...
+      if (reply.ok && reply.info) dispatch({ type: "TOAST", message: reply.info, kind: "info" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
       if (reply.ok && stateRef.current.tab === "schematic") {
         const source = repeatSource(cmd);

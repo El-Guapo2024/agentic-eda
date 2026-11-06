@@ -1,6 +1,8 @@
 // The Simulation Model dialog's reads (`crates/cli/src/sim_model_api.rs`): the symbol's simulation fields and pins, a SPICE library's models, and the
 // library files of the board folder. Kept apart from `client.ts` so the dialog's additions never grow that shared file.
 import type { LibraryModelInfo, SymbolPin } from "../kicad-port/sim/simModel";
+import simModelsUrl from "../kicad/sim_models.json?url";
+import { decodeTables, type SimModelTables, type SimModelsJson } from "../kicad-port/sim/simModelBuiltin";
 
 export interface SimModelSymbolReply {
   ok: boolean;
@@ -47,3 +49,18 @@ export async function fetchSimLibraryFiles(): Promise<string[]> {
   const j = (await r.json()) as { files?: string[] };
   return j.files ?? [];
 }
+
+let tablesPromise: Promise<SimModelTables> | null = null;
+/** The simulation model tables (src/kicad/sim_models.json, 0.8 MB, copied from the C++ by tools/extract-sim-models.js): fetched once, the first
+ *  time the Simulation Model dialog or the tuner's Save needs them. */
+export function loadSimModelTables(): Promise<SimModelTables> {
+  tablesPromise ??= fetch(simModelsUrl)
+    .then((r) => r.json() as Promise<SimModelsJson>)
+    .then(decodeTables)
+    .catch((e: unknown) => {
+      tablesPromise = null;
+      throw e;
+    });
+  return tablesPromise;
+}
+

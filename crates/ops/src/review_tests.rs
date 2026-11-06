@@ -144,6 +144,32 @@ fn erc_severities_are_stored_as_sent_and_replace_the_whole_table() {
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore")]) }).unwrap();
 }
 
+/// r3 D3-M2: Ignore on a pin-to-pin error comes as the table with `pin_to_pin` and the error's slot ignored; the slot is kept beside the table (no project
+/// names it), held through a table that leaves it out while `pin_to_pin` stays ignored (Schematic Setup's page), and gone when `pin_to_pin` is set back.
+#[test]
+fn ignoring_the_pin_to_pin_errors_is_remembered_while_the_pin_to_pin_warning_is_ignored() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let sev = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+    let errors_ignored = |b: &Board| b.design().schematic.as_ref().unwrap().extras.pin_to_pin_errors_ignored;
+    let stored = |b: &Board| b.design().schematic.as_ref().unwrap().extras.erc_severities.clone();
+    b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore"), (eda_model::erc_checks::PIN_TO_PIN_ERROR_SLOT, "ignore")]) }).unwrap();
+    assert!(errors_ignored(&b));
+    assert_eq!(stored(&b), sev(&[("pin_to_pin", "ignore")]), "the error's slot is not a check of the table");
+    // Another check's severity changed, the table sent again without the slot: still ignored.
+    b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore"), ("wire_dangling", "ignore")]) }).unwrap();
+    assert!(errors_ignored(&b));
+    // Ignore on a warning names no slot: the errors were not ignored and are not now.
+    b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "warning")]) }).unwrap();
+    assert!(!errors_ignored(&b), "pin_to_pin set back takes the errors back too");
+    b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore")]) }).unwrap();
+    assert!(!errors_ignored(&b));
+    // The slot with no ignored warning means nothing.
+    b.apply(&Cmd::SetErcSeverities { severities: sev(&[(eda_model::erc_checks::PIN_TO_PIN_ERROR_SLOT, "ignore")]) }).unwrap();
+    assert!(!errors_ignored(&b));
+    assert!(b.apply(&Cmd::SetErcSeverities { severities: sev(&[(eda_model::erc_checks::PIN_TO_PIN_ERROR_SLOT, "loud")]) }).is_err());
+}
+
 #[test]
 fn the_commands_read_from_the_json_the_studio_sends() {
     let body = serde_json::json!({

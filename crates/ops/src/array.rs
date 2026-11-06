@@ -269,6 +269,10 @@ impl Board<'_> {
         if let Some(t) = dr.tables.iter().find(|t| t.id == id) {
             return Some(t.at);
         }
+        // `PCB_GENERATOR::GetPosition()`: `m_origin`
+        if let Some(p) = dr.tuning_patterns.iter().find(|p| p.id == id) {
+            return Some(p.origin);
+        }
         if let Some(g) = dr.groups.iter().find(|g| g.id == id) {
             if let Some(p) = boxes.get(id) {
                 return Some(*p);
@@ -310,7 +314,7 @@ impl Board<'_> {
         let mut boxes = group_positions.clone();
         let selection = self.array_selection(ids, &boxes);
         if selection.is_empty() {
-            return Err(vec![CheckResult::fail("ops_unknown_array", "array", "none of the given ids name a footprint, track, via, zone, shape, text, dimension, point, barcode, text box, image, table or group on the board")]);
+            return Err(vec![CheckResult::fail("ops_unknown_array", "array", "none of the given ids name a footprint, track, via, zone, shape, text, dimension, point, barcode, text box, image, table, tuning pattern or group on the board")]);
         }
         if arrange {
             self.arrange_into_array(&selection, geometry, &mut boxes)
@@ -363,8 +367,67 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// The tuning patterns of `selection`, and the rest of it less the tracks of those patterns (a generator is selected as itself: its tracks
+    /// are its children, `PCB_GENERATOR::DeepClone` copies them).
+    fn split_patterns(&self, selection: &[String]) -> (Vec<String>, Vec<String>) {
+        let Some(dr) = self.design.drawings.as_ref() else { return (Vec::new(), selection.to_vec()) };
+        let patterns: Vec<String> = selection.iter().filter(|id| dr.tuning_patterns.iter().any(|p| &p.id == *id)).cloned().collect();
+        let members: BTreeSet<&String> = dr.tuning_patterns.iter().filter(|p| patterns.contains(&p.id)).flat_map(|p| p.member_ids.iter()).collect();
+        let rest = selection.iter().filter(|id| !patterns.contains(id) && !members.contains(id)).cloned().collect();
+        (patterns, rest)
+    }
+
+    /// `PCB_GENERATOR::DeepClone` of the tuning pattern `id`, put on the board where the original is: a new pattern of its settings with copies
+    /// of its tracks as its members (new ids; the copies of tracks in a group join that group, as a duplicated group's members do). The new
+    /// pattern's id, or `None` when there is no such pattern.
+    fn clone_pattern(&mut self, id: &str) -> Option<String> {
+        let pattern = self.design.drawings.as_ref()?.tuning_patterns.iter().find(|p| p.id == id)?.clone();
+        let tracks: Vec<eda_model::ir::Track> = self.design.routing.as_ref().map(|rt| pattern.member_ids.iter().filter_map(|m| rt.tracks.iter().find(|t| &t.id == m)).cloned().collect()).unwrap_or_default();
+        let groups: Vec<Option<String>> = tracks.iter().map(|t| self.design.drawings.as_ref().and_then(|d| d.parent_group(&t.id)).map(|g| g.id.clone())).collect();
+        let rt = self.routing_mut();
+        let first = rt.tracks.len();
+        rt.tracks.extend(tracks.into_iter().map(|mut t| {
+            t.id.clear();
+            t
+        }));
+        rt.assign_missing_ids();
+        let member_ids: Vec<String> = rt.tracks[first..].iter().map(|t| t.id.clone()).collect();
+        let dr = self.drawings_mut();
+        for (m, g) in member_ids.iter().zip(groups) {
+            if let Some(grp) = g.and_then(|g| dr.groups.iter_mut().find(|x| x.id == g)) {
+                grp.member_ids.push(m.clone());
+            }
+        }
+        let mut copy = pattern;
+        copy.id.clear();
+        copy.member_ids = member_ids;
+        dr.tuning_patterns.push(copy);
+        let before: BTreeSet<String> = dr.tuning_patterns.iter().map(|p| p.id.clone()).collect();
+        dr.assign_missing_ids();
+        let new_id = dr.tuning_patterns.iter().map(|p| p.id.clone()).find(|i| !before.contains(i));
+        self.sort_routing();
+        new_id
+    }
+
     /// The default branch: one set of copies for every point after the first, each moved to its point, and the selection to the first.
+    /// A tuning pattern is copied whole at every point (`case PCB_GENERATOR_T: this_item = static_cast<PCB_GENERATOR*>( item )->DeepClone();`),
+    /// then moved and turned as a generator is (`TransformItem`: `PCB_TUNING_PATTERN::Move`, `Rotate`, its tracks with it).
     fn duplicate_into_array(&mut self, selection: &[String], geometry: &ArrayGeometry, reannotate: bool, boxes: &mut BTreeMap<String, Point>) -> Result<(), Vec<CheckResult>> {
+        let (patterns, rest) = self.split_patterns(selection);
+        for id in &patterns {
+            for index in 1..geometry.size() {
+                if let Some(copy) = self.clone_pattern(id) {
+                    self.transform_on_board(&copy, geometry, index, boxes)?;
+                }
+            }
+        }
+        if rest.is_empty() {
+            for id in &patterns {
+                self.transform_on_board(id, geometry, 0, boxes)?;
+            }
+            return Ok(());
+        }
+        let selection = &rest[..];
         let size = geometry.size();
         let copper = self.model.board.layers.len();
         let outer = (self.model.board.layers.first().cloned(), self.model.board.layers.last().cloned());
@@ -385,7 +448,7 @@ impl Board<'_> {
         if !all.is_empty() {
             self.insert_copies_all(all)?;
         }
-        for id in selection {
+        for id in selection.iter().chain(patterns.iter()) {
             self.transform_on_board(id, geometry, 0, boxes)?;
         }
         Ok(())

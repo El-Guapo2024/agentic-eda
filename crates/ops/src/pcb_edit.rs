@@ -41,6 +41,22 @@ impl BooleanOp {
             BooleanOp::Intersect => "intersect",
         }
     }
+
+    /// `POLYGON_*_ROUTINE::GetStatusMessage`: `GetSuccesses() == 0`, or some failures.
+    fn status_message(self, successes: usize, failures: usize) -> Option<String> {
+        let done = match self {
+            BooleanOp::Merge => "merged",
+            BooleanOp::Subtract => "subtracted",
+            BooleanOp::Intersect => "intersected",
+        };
+        if successes == 0 {
+            Some(format!("Unable to {} the selected polygons.", self.verb()))
+        } else if failures > 0 {
+            Some(format!("Some of the polygons could not be {done}."))
+        } else {
+            None
+        }
+    }
 }
 
 /// `SHAPE_ARC::DefaultAccuracyForPCB() / 5` (`getArcPolygonizationMaxError`,
@@ -210,9 +226,13 @@ pub fn boolean_shapes(dr: &mut DrawingsSection, op: BooleanOp, ids: &[String]) -
         items.sort_by(|a, b| bbox_area(b).partial_cmp(&bbox_area(a)).unwrap_or(std::cmp::Ordering::Equal));
         outcome = run_routine(op, &items);
     }
-    if outcome.successes == 0 {
-        // `GetStatusMessage()`'s words (`GetSuccesses() == 0`); KiCad still pushes the commit then, which here is a refusal (round 3 D-11)
-        return Err(vec![CheckResult::fail("ops_bad_boolean", op.verb(), format!("Unable to {} the selected polygons.", op.verb()))]);
+    // `commit.Push( .. )` whatever the routine made, then `ShowInfoBarMsg( *msg )` (round 3 D-11): with no success the first shape still went
+    // (`ProcessShape`'s `DeleteItem` of the first polygon) and comes back from the working polygon as a polygon (`Finalize`); a shape that could not
+    // be taken in (an intersection with nothing in common) stays as it was.
+    let taken = outcome.removed.len();
+    let failures = items.iter().filter(|s| poly_of(s).is_some()).count().saturating_sub(taken);
+    if let Some(message) = op.status_message(outcome.successes, failures) {
+        crate::notice::note(message);
     }
 
     let consumed: Vec<String> = outcome.removed.iter().map(|&i| items[i].id().to_string()).collect();
@@ -315,14 +335,39 @@ mod tests {
         assert!((area(&dr.shapes[0]) - 16_000_000_000_000.0).abs() < 1e6);
     }
 
+    /// Round 3 D-11: with no success KiCad still pushes the commit -- the first shape went (`ProcessShape`'s `DeleteItem`) and comes back from the
+    /// working polygon as a polygon (`Finalize`), the other stays -- and says "Unable to intersect the selected polygons." (`GetStatusMessage`).
     #[test]
-    fn intersect_of_disjoint_shapes_is_refused_and_changes_nothing() {
+    fn intersect_of_disjoint_shapes_turns_the_first_into_a_polygon_and_says_it_was_unable() {
         let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0)), rect("b", mm(5.0), mm(5.0), mm(6.0), mm(6.0))]);
         let all = ids(&dr);
-        let before = dr.shapes.clone();
-        let err = boolean_shapes(&mut dr, BooleanOp::Intersect, &all).unwrap_err();
-        assert_eq!(err[0].check, "ops_bad_boolean");
-        assert_eq!(dr.shapes, before);
+        let b = dr.shapes[1].clone();
+        crate::notice::clear();
+        boolean_shapes(&mut dr, BooleanOp::Intersect, &all).unwrap();
+        assert_eq!(crate::notice::take(), vec!["Unable to intersect the selected polygons.".to_string()]);
+        assert_eq!(dr.shapes.len(), 2);
+        assert!(dr.shapes.contains(&b), "the shape that could not be taken in stays");
+        let poly = dr.shapes.iter().find(|s| s.id() != b.id()).unwrap();
+        assert!((area(poly) - 1_000_000_000_000.0).abs() < 1e6, "the first rectangle, now a polygon");
+    }
+
+    /// "Some of the polygons could not be intersected.": a shape with nothing in common with the working polygon is skipped and stays, the others
+    /// are intersected.
+    #[test]
+    fn intersect_with_one_disjoint_shape_says_some_could_not_be_intersected() {
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), rect("b", mm(6.0), mm(6.0), mm(20.0), mm(20.0)), rect("c", mm(30.0), mm(30.0), mm(31.0), mm(31.0))]);
+        let all = ids(&dr);
+        let c = dr.shapes[2].clone();
+        crate::notice::clear();
+        boolean_shapes(&mut dr, BooleanOp::Intersect, &all).unwrap();
+        assert_eq!(crate::notice::take(), vec!["Some of the polygons could not be intersected.".to_string()]);
+        assert_eq!(dr.shapes.len(), 2);
+        assert!(dr.shapes.contains(&c));
+        // a merge of every shape has no failure and says nothing
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), rect("b", mm(6.0), mm(6.0), mm(20.0), mm(20.0))]);
+        let all = ids(&dr);
+        boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
+        assert!(crate::notice::take().is_empty());
     }
 
     #[test]

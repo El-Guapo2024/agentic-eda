@@ -3,8 +3,8 @@
 //! (`PCB_CONTROL::CollectAndEmbed3DModels`, `pcbnew/tools/pcb_control.cpp`).
 //!
 //! They are one variant of [`crate::Cmd`], `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64 of the file>"}`. The panel edits a copy
-//! of the list and applies it on OK; here every edit is a verb of its own, one undo step, which is what the other setup pages of the studio do for their edits that are not a table of
-//! rows (the panel's own Apply is the click).
+//! of the list (`m_localFiles`) and applies it on OK (`PANEL_EMBEDDED_FILES::TransferDataFromWindow`): that is [`EmbeddedCmd::Apply`], one undo step for everything the panel did.
+//! The single edits (`add`, `remove`, `set_fonts`) stay for the CLI, the tool actions and the journal of older steps.
 //!
 //! A list belongs to its [`EmbeddedOwner`]: the board (`DrawingsSection::embedded`), the schematic (the root sheet's `SchExtras::embedded`), a footprint on the board
 //! (`FootprintEdit::embedded` over the list its board file gave it), a footprint or a symbol of the project libraries (`FootprintLibrarySection::embedded`,
@@ -40,6 +40,16 @@ pub struct CollectedModel {
     pub files: Vec<EmbeddedFile>,
 }
 
+/// A file the panel's Add Files took in (`PANEL_EMBEDDED_FILES::AddEmbeddedFile`): its name, its content (base64 of the bytes) and the type, when it is not the extension's. The
+/// panel has asked its conflict question already: a file added under a name the list has replaces it ("Replace"; "Reuse Existing" adds nothing).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddedFile {
+    pub name: String,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<EmbeddedFileType>,
+}
+
 /// One edit of an embedded files list. On the wire `{"op": "embedded", "verb": "<verb>", ...}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "verb", rename_all = "snake_case")]
@@ -68,6 +78,31 @@ pub enum EmbeddedCmd {
     SetFonts { owner: EmbeddedOwner, embed: bool },
     /// The whole list replaced -- what a footprint or a symbol brings in with it when it is imported from a file.
     SetList { owner: EmbeddedOwner, list: EmbeddedFiles },
+    /// The panel's OK (`PANEL_EMBEDDED_FILES::TransferDataFromWindow`): the panel edited a copy of the list (`m_localFiles`) and this writes it back, one undo step. In the order
+    /// the copy came to be: when the "Embed fonts" box was clicked (`refresh_fonts`, `onFontEmbedClick`) the fonts the list held go, then the files the panel removed
+    /// (`removed`, by name or `kicad-embed://` link), then the files Add Files took in (`added`, each replacing a file of its name), then -- the box ticked -- the fonts the
+    /// text uses (`font_files`: `onFontEmbedClick`'s `AddFile( font->GetFileName(), true )`, typed `FONT`); last, the box's state (`SetAreFontsEmbedded`). On the board,
+    /// `nested` takes the removed files out of the footprints' lists too (the answer to "Deleted embedded files are also referenced in some footprints. Delete from
+    /// footprints as well?").
+    ///
+    /// `text_fonts` names the rows of fonts the click took in that the panel still lists, and `font_files` is their content: the studio's server reads it in when the
+    /// command comes with none (`crates/cli/src/embedded_api.rs` `with_text_fonts`), so the command replays and undoes the same on a machine without the fonts.
+    Apply {
+        owner: EmbeddedOwner,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        removed: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        added: Vec<AddedFile>,
+        fonts: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        refresh_fonts: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        text_fonts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_files: Option<Vec<EmbeddedFile>>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        nested: bool,
+    },
     /// `pcbnew.EditorControl.collect3DModels`: the models the footprints of the board use are embedded in the board, and the footprints name them by `kicad-embed://`. The studio's
     /// server fills `models` in from the files it finds; a command that carries none embeds nothing.
     CollectModels {
@@ -80,7 +115,7 @@ impl EmbeddedCmd {
     /// Which editor the step belongs to, for the undo scope.
     pub fn domain(&self) -> super::Domain {
         match self {
-            EmbeddedCmd::Add { owner, .. } | EmbeddedCmd::Remove { owner, .. } | EmbeddedCmd::SetFonts { owner, .. } | EmbeddedCmd::SetList { owner, .. } => owner_domain(owner),
+            EmbeddedCmd::Add { owner, .. } | EmbeddedCmd::Remove { owner, .. } | EmbeddedCmd::SetFonts { owner, .. } | EmbeddedCmd::SetList { owner, .. } | EmbeddedCmd::Apply { owner, .. } => owner_domain(owner),
             EmbeddedCmd::CollectModels { .. } => super::Domain::Pcb,
         }
     }
@@ -91,6 +126,7 @@ impl EmbeddedCmd {
             EmbeddedCmd::Add { owner, name, .. } => owner_ids(owner).into_iter().chain([name.as_str()]).collect(),
             EmbeddedCmd::Remove { owner, names, .. } => owner_ids(owner).into_iter().chain(names.iter().map(String::as_str)).collect(),
             EmbeddedCmd::SetFonts { owner, .. } | EmbeddedCmd::SetList { owner, .. } => owner_ids(owner),
+            EmbeddedCmd::Apply { owner, removed, added, .. } => owner_ids(owner).into_iter().chain(removed.iter().map(String::as_str)).chain(added.iter().map(|a| a.name.as_str())).collect(),
             EmbeddedCmd::CollectModels { models } => models.iter().map(|m| m.path.as_str()).collect(),
         }
     }
@@ -102,6 +138,19 @@ impl EmbeddedCmd {
             EmbeddedCmd::Remove { owner, names, nested } => format!("embed remove {} {}{}", owner.label(), names.join(","), if *nested { " --nested" } else { "" }),
             EmbeddedCmd::SetFonts { owner, embed } => format!("embed fonts {} {}", owner.label(), if *embed { "on" } else { "off" }),
             EmbeddedCmd::SetList { owner, list } => format!("embed set {} ({} files)", owner.label(), list.files.len()),
+            EmbeddedCmd::Apply { owner, removed, added, fonts, refresh_fonts, text_fonts, nested, .. } => {
+                let mut parts: Vec<String> = Vec::new();
+                if !removed.is_empty() {
+                    parts.push(format!("-{}", removed.join(",")));
+                }
+                if !added.is_empty() {
+                    parts.push(format!("+{}", added.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(",")));
+                }
+                if *refresh_fonts {
+                    parts.push(format!("fonts {}", if text_fonts.is_empty() { "cleared".to_string() } else { text_fonts.join(",") }));
+                }
+                format!("embed apply {} {}fonts {}{}", owner.label(), parts.iter().map(|p| format!("{p} ")).collect::<String>(), if *fonts { "on" } else { "off" }, if *nested { " --nested" } else { "" })
+            }
             EmbeddedCmd::CollectModels { models } => format!("embed collect-3d-models ({} models)", models.len()),
         }
     }
@@ -203,12 +252,13 @@ impl Board<'_> {
                     Ok(())
                 })
             }
+            EmbeddedCmd::Apply { owner, removed, added, fonts, refresh_fonts, font_files, nested, .. } => self.apply_panel(owner, removed, added, *fonts, *refresh_fonts, font_files.as_deref().unwrap_or_default(), *nested),
             EmbeddedCmd::CollectModels { models } => self.collect_models(models),
         }
     }
 
-    /// `PANEL_EMBEDDED_FILES::AddEmbeddedFile` and `EMBEDDED_FILES::AddFile( .., aOverwrite = true )`.
-    fn add_embedded(&mut self, owner: &EmbeddedOwner, name: &str, data: &str, replace: bool, kind: Option<EmbeddedFileType>) -> Result<(), Vec<CheckResult>> {
+    /// The content of a file Add Files took in, kept as KiCad keeps it (`EMBEDDED_FILES::AddFile`: read, `CompressAndEncode`), refused as `AddEmbeddedFile` refuses it.
+    fn new_file(name: &str, data: &str, kind: Option<EmbeddedFileType>) -> Result<EmbeddedFile, Vec<CheckResult>> {
         let name = full_name_of(name.trim());
         if name.is_empty() {
             return Err(refuse("ops_bad_embedded_name", name, "the file has no name"));
@@ -229,6 +279,69 @@ impl Board<'_> {
         if let Some(kind) = kind {
             file.kind = kind;
         }
+        Ok(file)
+    }
+
+    /// [`EmbeddedCmd::Apply`]: `PANEL_EMBEDDED_FILES::TransferDataFromWindow` with the copy the panel made.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_panel(&mut self, owner: &EmbeddedOwner, removed: &[String], added: &[AddedFile], fonts: bool, refresh_fonts: bool, font_files: &[EmbeddedFile], nested: bool) -> Result<(), Vec<CheckResult>> {
+        let what = owner.label();
+        let was = self.embedded_now(owner)?;
+        let mut list = was.clone();
+        // `onFontEmbedClick`: "the fonts the list held go" -- every row of type FONT, `m_localFiles->RemoveFile( name )`
+        if refresh_fonts {
+            list.clear_fonts();
+        }
+        let removed: Vec<&str> = removed.iter().map(|n| plain_name(n)).collect();
+        for n in &removed {
+            // a font the click above dropped is gone already; anything else the panel removed has to be there (the panel showed the list as it is now)
+            if list.remove(n).is_none() && !(refresh_fonts && was.get(n).is_some_and(|f| f.kind == EmbeddedFileType::Font)) {
+                return Err(refuse("ops_unknown_embedded_file", n, format!("no file named '{n}' is embedded in the {what}")));
+            }
+        }
+        for a in added {
+            list.put(Self::new_file(&a.name, &a.data, a.kind)?);
+        }
+        if refresh_fonts && fonts {
+            for f in font_files {
+                // `m_localFiles->AddFile( font->GetFileName(), true )`, and `EmbedFonts`' `file->type = FONT`
+                list.put(EmbeddedFile { kind: EmbeddedFileType::Font, ..f.clone() });
+            }
+        }
+        // `m_files->SetAreFontsEmbedded( m_cbEmbedFonts->IsChecked() )`
+        list.fonts = fonts;
+        // `RunOnNestedEmbeddedFiles`: the footprints of the board that list a file the board's copy no longer has, when the answer was yes
+        let mut nested_lists: Vec<(String, EmbeddedFiles)> = Vec::new();
+        if nested && matches!(owner, EmbeddedOwner::Board) {
+            let gone: Vec<&str> = was.files.iter().map(|f| f.name.as_str()).filter(|n| list.get(n).is_none()).collect();
+            for fp in self.design.placement.iter().flat_map(|p| p.footprints.iter()) {
+                let mut l = eda_model::embedded_files::of_footprint(&self.design, &fp.id).cloned().unwrap_or_default();
+                let before = l.files.len();
+                for n in &gone {
+                    l.remove(n);
+                }
+                if l.files.len() != before {
+                    nested_lists.push((fp.id.clone(), l));
+                }
+            }
+        }
+        if list == was && nested_lists.is_empty() {
+            return Err(nothing_to_change(&what, "the embedded files are as they were"));
+        }
+        if list != was {
+            self.store_embedded(owner, list)?;
+        }
+        for (reference, l) in nested_lists {
+            self.store_embedded(&EmbeddedOwner::Footprint { reference }, l)?;
+        }
+        Ok(())
+    }
+
+    /// `PANEL_EMBEDDED_FILES::AddEmbeddedFile` and `EMBEDDED_FILES::AddFile( .., aOverwrite = true )`.
+    fn add_embedded(&mut self, owner: &EmbeddedOwner, name: &str, data: &str, replace: bool, kind: Option<EmbeddedFileType>) -> Result<(), Vec<CheckResult>> {
+        let file = Self::new_file(name, data, kind)?;
+        let name = file.name.clone();
+        let name = name.as_str();
         self.change_embedded(owner, name, |list| {
             if let Some(old) = list.get(name) {
                 let same = old.checksum == file.checksum || eda_kicad::embedded::decode(old).is_ok_and(|d| d.checksum == file.checksum);

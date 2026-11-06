@@ -700,8 +700,9 @@ fn handle(
         ("GET", "/api/drc") => {
             // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC". `&schematic_parity=1`: "Test for parity between PCB and schematic".
             let asked = |name: &str| target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv.split_once('=').is_some_and(|(k, v)| k == name && v == "1"));
-            let (refill, parity) = (asked("refill_zones"), asked("schematic_parity"));
-            offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
+            // `&all_track_errors=1`: its options menu's "Report All Errors for Each Track" (`--all-track-errors`).
+            let opts = eda_kicad_engine::DrcOptions { refill_zones: asked("refill_zones"), schematic_parity: asked("schematic_parity"), all_track_errors: asked("all_track_errors") };
+            offload(stream, lane, dir, job, &format!("{path} refill={} parity={} all_track_errors={}", opts.refill_zones, opts.schematic_parity, opts.all_track_errors), &[], move |dir, _| crate::kicad_engine::drc_with_options(dir, opts).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
         // The dialogs' "Save...": kicad-cli's own report file (`ERC_REPORT`, `DRC_REPORT`), for the severities and units the dialog shows.
@@ -727,6 +728,8 @@ fn handle(
         ("POST", "/api/drawing_sheet/upload") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::upload(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
+        // The Symbol Editor's Find and Replace: the schematic's matcher over the texts of the symbol being edited (`sch_api::find_text`).
+        ("POST", "/api/find/text") => respond(stream, "200 OK", "application/json", sch_api::find_text(&body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
         ("POST", "/api/sch/annotate") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::annotate(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/next_reference") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::next_reference(dir, &body).to_string().as_bytes()),
@@ -883,6 +886,19 @@ fn handle(
             let r = crate::embedded_api::collect_plan(dir);
             respond(stream, r.status, r.kind, &r.body)
         }
+        // The fonts the board's texts use (the "Embed fonts" box), and a document a datasheet names by `kicad-embed://` (`GetAssociatedDocument`).
+        ("GET", "/api/embedded/fonts") => {
+            let r = crate::embedded_api::fonts(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/fonts/file") => {
+            let r = crate::embedded_api::font_file(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/doc") => {
+            let r = crate::embedded_api::document(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
@@ -964,15 +980,22 @@ fn handle(
                     let copied = crate::fill_api::copies_zones(&cmd).then(|| board::load(dir).ok().map(|(_, d, _)| (d, cmd.clone()))).flatten();
                     // which editor's content the step modified (the page's `IsContentModified`)
                     let domain = board::step_tag(&cmd);
+                    // what the verb tells the user once it worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), as `info`
+                    eda_ops::notice::clear();
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                         Ok(summary) => {
                             if let Some((before, cmd)) = &copied {
                                 crate::fill_api::carry_copied_fills(dir, before, cmd);
                             }
-                            match session.then(crate::specctra_api::take_session_warning).flatten() {
+                            let mut reply = match session.then(crate::specctra_api::take_session_warning).flatten() {
                                 Some(w) => json!({ "ok": true, "message": summary, "warning": w, "domain": domain }),
                                 None => json!({ "ok": true, "message": summary, "domain": domain }),
+                            };
+                            let info = eda_ops::notice::take();
+                            if !info.is_empty() {
+                                reply["info"] = json!(info.join("\n"));
                             }
+                            reply
                         }
                         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
                     }
@@ -2136,6 +2159,19 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // a text box's (and a directive label's) font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id, for its Properties and
     // its drawing: kept beside the graphics, which the edit verbs take back whole
     let graphic_text_attrs: serde_json::Map<String, Value> = sch.extras.graphics.iter().filter_map(|g| Some((g.id.clone(), serde_json::to_value(sch.extras.text_attrs.get(&g.id)?).ok()?))).collect();
+    // a text box's shown text (`SCH_TEXTBOX::GetShownText`: the sheet's variables, as a free text's), by the graphic's id, where `${..}` or `@{..}` changes it
+    // (UI-LEFT B5): beside the graphics, not in them, as the edit verbs take a graphic back whole
+    let graphic_shown: serde_json::Map<String, Value> = sch
+        .extras
+        .graphics
+        .iter()
+        .filter_map(|g| match (&g.shape, &shown) {
+            (eda_model::sch_extras::SchGraphicKind::TextBox { text, .. }, Some(sh)) => Some((g.id.clone(), sh.text_shown(text), text)),
+            _ => None,
+        })
+        .filter(|(_, shown, raw)| shown != *raw)
+        .map(|(id, shown, _)| (id, Value::String(shown)))
+        .collect();
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
     let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
@@ -2224,6 +2260,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .iter()
         .map(|p| {
             let mut fields: Vec<Value> = eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json_in(&sch, &p.id, f)).collect();
+            if let Some(sh) = &shown {
+                sh.annotate_power_fields(p, &mut fields);
+            }
             // the reference this placement gives it, as for a symbol (`GetRef( &GetCurrentSheet() )`: a power symbol has one per sheet path, UI-LEFT S9)
             let reference = eda_model::sheet_list::power_reference_under(&sch, p, &sheet_ids);
             if reference != p.id {
@@ -2362,6 +2401,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "junctions": junctions,
         "lines": lines,
         "graphics": graphics,
+        "graphic_shown": graphic_shown,
         "graphic_text_attrs": graphic_text_attrs,
         "tables": tables,
         "locked": locked,
@@ -2408,6 +2448,12 @@ fn schematic_setup_json(design: &eda_model::ir::Design, model: &eda_model::Const
         "dash_ratio": f.dash_ratio,
         "gap_ratio": f.gap_ratio,
         "hop_over_size_choice": f.hop_over_size_choice,
+        // the operating-point overlay's formats (`m_OPO_VPrecision`, `m_OPO_VRange`, `m_OPO_IPrecision`, `m_OPO_IRange`), which
+        // `RefreshOperatingPointDisplay` gives `GetOperatingPoint`
+        "opo_v_precision": f.opo_v_precision,
+        "opo_v_range": f.opo_v_range,
+        "opo_i_precision": f.opo_i_precision,
+        "opo_i_range": f.opo_i_range,
     })
 }
 

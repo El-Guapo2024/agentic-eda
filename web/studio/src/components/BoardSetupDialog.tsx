@@ -9,7 +9,7 @@
 //
 // Board Editor Layers (`set_board_layers`) keeps the technical and user layers a board has, their names and types; Formatting, Zone Hatch Offsets, Length-tuning Patterns and
 // Tuning Profiles (`set_formatting`, `set_zone_hatch_offsets`, `set_tuning_patterns`, `set_tuning_profiles`) are pages of the same kind. Board Data > Embedded Files is the
-// shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the board's list, the files only footprints hold listed with it; each of its edits is a verb of its own.
+// shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the board's list, the files only footprints hold listed with it; it edits a copy, which its Apply sends as one verb.
 // Design Rules > Component Classes (`set_component_classes`) edits the project's component class assignments (components/boardSetup/ComponentClassesPage.tsx).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -128,7 +128,6 @@ export function BoardSetupDialog() {
   const open = state.boardSetupDialogOpen;
   const [page, setPage] = useState<Page>("classes");
   const units = state.units;
-  const rules = state.board?.board_rules;
   const routing = state.board?.routing;
   const drawings = state.board?.drawings;
 
@@ -314,7 +313,7 @@ export function BoardSetupDialog() {
           <ComponentClassesPage hidden={page !== "component_classes"} onDirty={markers.component_classes} />
           <CustomRulesPage hidden={page !== "custom_rules"} onDirty={markers.custom_rules} />
           <SeveritiesPage hidden={page !== "severities"} onDirty={markers.severities} />
-          <EmbeddedFilesPanel owner={BOARD_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} />
+          <EmbeddedFilesPanel owner={BOARD_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} onDirty={markers.embedded_files} />
 
           <section className="bs-page" hidden={page !== "tracks_vias"} aria-label="Pre-defined Sizes">
             <h3 className="bs-title">Pre-defined Sizes</h3>
@@ -336,7 +335,8 @@ export function BoardSetupDialog() {
                   <button onClick={() => setWidths((ws) => ws.filter((_, j) => j !== i))}>Remove</button>
                 </div>
               ))}
-              <button onClick={() => setWidths((ws) => [...ws, (rules?.track_width ?? 250_000) as Nm])}>Add Track Width</button>
+              {/* `OnAddTrackWidthsClick`: `AppendTrackWidth( 0 )`, a row of 0 to edit (r5 R5-10) */}
+              <button onClick={() => setWidths((ws) => [...ws, 0 as Nm])}>Add Track Width</button>
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 14 }}>Via Sizes (the via-size-cycle hotkey, plus the board default above)</p>
               {vias.map((v, i) => (
@@ -357,7 +357,7 @@ export function BoardSetupDialog() {
                   <input
                     type="number"
                     step="any"
-                    value={nmTo(v.drill, units)}
+                    value={v.drill > 0 ? nmTo(v.drill, units) : ""}
                     onChange={(e) => {
                       const n = Number(e.target.value);
                       if (!Number.isFinite(n)) return;
@@ -369,7 +369,8 @@ export function BoardSetupDialog() {
                   <button onClick={() => setVias((vs) => vs.filter((_, j) => j !== i))}>Remove</button>
                 </div>
               ))}
-              <button onClick={() => setVias((vs) => [...vs, { diameter: (rules?.via_diameter ?? 600_000) as Nm, drill: (rules?.via_drill ?? 300_000) as Nm }])}>Add Via Size</button>
+              {/* `OnAddViaSizesClick`: `AppendViaSize( 0, 0 )`, the drill cell left empty (`if( aDrill > 0 )`) */}
+              <button onClick={() => setVias((vs) => [...vs, { diameter: 0 as Nm, drill: 0 as Nm }])}>Add Via Size</button>
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 14 }}>Differential Pairs (width, gap and via gap; `m_DiffPairDimensionsList`)</p>
               {diffPairs.map((d, i) => {
@@ -378,7 +379,7 @@ export function BoardSetupDialog() {
                     type="number"
                     step="any"
                     aria-label={`Differential pair ${i + 1} ${label}`}
-                    value={nmTo(d[key], units)}
+                    value={key === "width" || d[key] > 0 ? nmTo(d[key], units) : ""}
                     onChange={(e) => {
                       const n = Number(e.target.value);
                       if (!Number.isFinite(n)) return;
@@ -400,18 +401,8 @@ export function BoardSetupDialog() {
                   </div>
                 );
               })}
-              <button
-                onClick={() =>
-                  setDiffPairs((ds) => [
-                    ...ds,
-                    {
-                      width: (rules?.default_class?.diff_pair_width ?? 200_000) as Nm,
-                      gap: (rules?.default_class?.diff_pair_gap ?? 250_000) as Nm,
-                      via_gap: (rules?.default_class?.diff_pair_via_gap ?? rules?.default_class?.diff_pair_gap ?? 250_000) as Nm,
-                    },
-                  ])
-                }
-              >
+              {/* `OnAddDiffPairsClick`: `AppendDiffPairs( 0, 0, 0 )`, the gap cells left empty (`if( aGap > 0 )`) */}
+              <button onClick={() => setDiffPairs((ds) => [...ds, { width: 0 as Nm, gap: 0 as Nm, via_gap: 0 as Nm }])}>
                 Add Differential Pair
               </button>
 

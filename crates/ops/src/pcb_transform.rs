@@ -296,6 +296,60 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// `FOOTPRINT::Flip` hands the flip to each of its items (`PCB_SHAPE::Flip`, `PCB_TEXT::Flip`, `PCB_FIELD`'s): `SetLayer( GetBoard()->FlipLayer( GetLayer() ) )`,
+    /// and `BOARD::FlipLayer` takes a user layer typed front or back to its pair (`m_layers[..].m_opposite`, `recalcOpposites`); a text that lands on such a
+    /// layer toggles its mirror (`if( IsSideSpecific() ) SetMirrored( !IsMirrored() )`: `IsSideSpecific` is true on a layer of type front or back).
+    ///
+    /// The footprint's graphics and texts are kept per definition, the side's own layers in the top-side frame (`fp_art::layer_on_side` turns F. and B. over),
+    /// a user layer as it is on the board; so the part turned over gets its own copy of the definition (`FootprintAssignment::definition`, as Edit Text &
+    /// Graphics makes one) with those items on the paired layer, and its fields' layouts (`footprint_edits`, board layers) follow. Nothing happens on a board
+    /// with no typed user layer pair, or to a footprint that draws on none.
+    pub(crate) fn flip_footprint_user_layers(&mut self, reference: &str) {
+        let setup = &self.model.board.layer_setup;
+        let opp = setup.user_layer_opposites();
+        if opp.is_empty() {
+            return;
+        }
+        let typed = |l: &str| l.starts_with("User.") && matches!(setup.types.get(l), Some(eda_model::layers::LayerType::Front | eda_model::layers::LayerType::Back));
+        let swap = |l: &mut String| match opp.get(l.as_str()) {
+            Some(o) => {
+                *l = o.clone();
+                true
+            }
+            None => false,
+        };
+        // the fields' layouts are board layers (`flip_footprint_fields` has turned F. and B. over)
+        if let Some(edit) = self.design.drawings.as_mut().and_then(|dr| dr.footprint_edits.iter_mut().find(|e| e.id == reference)) {
+            let layouts = edit.reference.iter_mut().chain(edit.value.iter_mut()).chain(edit.fields.iter_mut().map(|f| &mut f.layout));
+            for l in layouts {
+                if swap(&mut l.layer) && typed(&l.layer) {
+                    l.mirror = !l.mirror;
+                }
+            }
+        }
+        let Some(part) = self.model.part(reference) else { return };
+        let Some(before) = self.unedited_footprint(part) else { return };
+        let mut fp = before.clone();
+        for s in fp.art.shapes.iter_mut() {
+            let mut layer = s.shape.layer().to_string();
+            if swap(&mut layer) {
+                s.shape.set_layer(layer);
+            }
+            for l in s.layers.iter_mut() {
+                swap(l);
+            }
+        }
+        for t in fp.art.texts.iter_mut() {
+            if swap(&mut t.layout.layer) && typed(&t.layout.layer) {
+                t.layout.mirror = !t.layout.mirror;
+            }
+        }
+        if fp != before {
+            let name = self.design.footprint_assignment(reference).map(|a| a.footprint.clone()).unwrap_or_else(|| crate::fp_exchange::footprint_name_of(part));
+            self.drawings_mut().set_footprint_assignment(eda_model::fp_assign::FootprintAssignment { reference: reference.to_string(), footprint: name, definition: Some(fp) });
+        }
+    }
+
     pub(crate) fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
         let targets = self.resolve_targets(verb, ids)?;
         let copper = self.model.board.layers.len();
@@ -312,9 +366,10 @@ impl Board<'_> {
                 f.side = side;
                 f.label = label;
             }
-            // Its fields turn over with it (`FOOTPRINT::Flip`).
+            // Its fields turn over with it (`FOOTPRINT::Flip`), and what it draws on a user layer typed front or back goes to that layer's pair.
             if turned_over {
                 self.flip_footprint_fields(r, copper);
+                self.flip_footprint_user_layers(r);
             }
         }
         // A field of a footprint that is itself being transformed goes with the footprint, not on its own.

@@ -386,7 +386,7 @@ pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, dire
     let (mut pos, mut total) = (via.pos, NO_FORCE);
     let mut iter = 0;
     while iter < max_iterations {
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false, head_hole: None, head_via: None };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false, box_hull: false, head_hole: None, head_via: None, root_world: false };
         let obstacles = node.via_colliding(&Via { pos, ..via.clone() }, rules, exclude, opts);
         let Some(first) = obstacles.first() else { break };
         let force = via_pushout_from(node, rules, via, pos, node.get(first.id)?);
@@ -794,7 +794,7 @@ impl<'a> Shove<'a> {
         }
         let circle = Shape::Circle { c: v.pos, r: v.diameter / 2 };
         if !same_net(&v.net, &l.line.net) && l.line.layer >= v.layers.start() && l.line.layer <= v.layers.end() {
-            let clearance = self.collide_clearance(Side::via(v), Side::track(&l.line.net, l.line.layer));
+            let clearance = self.collide_clearance(Side::via(v), Side::of_line(&l.line));
             if l.line.segs().any(|(a, b)| Shape::Stadium { a, b, r: l.line.width / 2 }.collides(&circle, clearance).is_some()) {
                 return true;
             }
@@ -815,7 +815,7 @@ impl<'a> Shove<'a> {
     fn lines_collide(&self, l: &SLine, cur: &SLine) -> bool {
         // `ITEM::collideSimple`: "check if we are not on completely different layers first" -- the vias are tested below on their own layers
         if !same_net(&l.line.net, &cur.line.net) && l.line.layer == cur.line.layer {
-            let clearance = self.collide_clearance(Side::track(&l.line.net, l.line.layer), Side::track(&cur.line.net, cur.line.layer));
+            let clearance = self.collide_clearance(Side::of_line(&l.line), Side::of_line(&cur.line));
             let hit = l.line.segs().any(|(a, b)| cur.line.segs().any(|(c, d)| Shape::Stadium { a, b, r: l.line.width / 2 }.collides(&Shape::Stadium { a: c, b: d, r: cur.line.width / 2 }, clearance).is_some()));
             if hit {
                 return true;
@@ -876,7 +876,7 @@ impl<'a> Shove<'a> {
     fn shove_line_from_lone_via(&self, cur: &SLine, obstacle: &SLine, result: &mut SLine) -> bool {
         let Some(lv) = &cur.via else { return false };
         let via = &lv.data;
-        let clearance = self.get_clearance(Side::via(via), Side::track(&obstacle.line.net, obstacle.line.layer));
+        let clearance = self.get_clearance(Side::via(via), Side::of_line(&obstacle.line));
         let hull = Item::Via(via.clone()).hull(clearance, obstacle.line.width, cur.line.layer);
         let Some(path_cw) = walkaround::walk_around_hull(&obstacle.line.pts, &hull, true) else { return false };
         let Some(path_ccw) = walkaround::walk_around_hull(&obstacle.line.pts, &hull, false) else { return false };
@@ -989,7 +989,7 @@ impl<'a> Shove<'a> {
             return ok;
         }
         let obstacle_width = obstacle_line.line.width;
-        let clearance = self.get_clearance(Side::track(&cur.line.net, cur.line.layer), Side::track(&obstacle_line.line.net, obstacle_line.line.layer));
+        let clearance = self.get_clearance(Side::of_line(&cur.line), Side::of_line(&obstacle_line.line));
         // "Arcs need additional clearance to ensure the hulls are always bigger than the arc" (`SHAPE_ARC::DefaultAccuracyForPCB()`, 5 um): KiCad adds
         // it to the `clearance` the loops carry, so it piles up arc chord after arc chord -- every later hull of the line, a straight one too, is
         // bigger -- and attempt after attempt
@@ -1010,7 +1010,7 @@ impl<'a> Shove<'a> {
                 }
             }
             if let Some(lv) = &cur.via {
-                let via_clearance = self.get_clearance(Side::via(&lv.data), Side::track(&obstacle_line.line.net, obstacle_line.line.layer));
+                let via_clearance = self.get_clearance(Side::via(&lv.data), Side::of_line(&obstacle_line.line));
                 hulls.push(Item::Via(lv.data.clone()).hull(via_clearance, obstacle_width, obstacle_line.line.layer));
             }
             let (adj_start, adj_end) = (attempt >= 2 && !voe_start, attempt >= 2 && !voe_end);
@@ -1166,7 +1166,7 @@ impl<'a> Shove<'a> {
         let (mut mtv, mut collided) = (NO_FORCE, false);
         match &cur {
             Pusher::Line(line) => {
-                let clearance = self.get_clearance(Side::track(&line.line.net, line.line.layer), Side::via(&obstacle_via));
+                let clearance = self.get_clearance(Side::of_line(&line.line), Side::via(&obstacle_via));
                 let mut vtmp = obstacle_via.clone();
                 if info.max_fanout_width > Nm::ZERO && info.max_fanout_width > vtmp.diameter {
                     vtmp.diameter = info.max_fanout_width;
@@ -1199,7 +1199,7 @@ impl<'a> Shove<'a> {
     fn degenerate_push(&self, cur: &Pusher, via: &Via) -> Force {
         let (dir, reach) = match cur {
             Pusher::Line(line) => {
-                let clearance = self.clearance(Side::track(&line.line.net, line.line.layer), Side::via(via));
+                let clearance = self.clearance(Side::of_line(&line.line), Side::via(via));
                 let seg = line.line.segs().min_by_key(|&(a, b)| Seg::new(a, b).sq_distance_to_point(via.pos));
                 let dir = seg.map(|(a, b)| (-(b.y - a.y), b.x - a.x)).filter(|d| *d != NO_FORCE).unwrap_or((Nm::ZERO, Nm::new(1)));
                 (dir, clearance + line.line.width / 2 + via.diameter / 2 + Nm::new(1))
@@ -1428,7 +1428,7 @@ impl<'a> Shove<'a> {
     fn nearest_for(&self, cur: &SLine, mask: u8) -> Option<NearestHit> {
         let exclude = cur.links();
         // `NODE::NearestObstacle` reads the router's corner mode itself: box hulls in a 90-degree mode
-        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90(), head_hole: None, head_via: None };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true, box_hull: self.settings.corner_mode.is_90(), head_hole: None, head_via: None, root_world: false };
         self.node.nearest_obstacle(&cur.line, cur.via.as_ref().map(|v| &v.data), self.rules, &exclude, opts)
     }
 

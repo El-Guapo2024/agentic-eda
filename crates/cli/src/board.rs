@@ -1579,6 +1579,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // Collect and Embed 3D Models: the model files the footprints name are read here, into the command (`crate::embedded_api`).
     let with_models = crate::embedded_api::with_collected_models(cmd, dir, &design, &model)?;
     let cmd = with_models.as_ref().unwrap_or(cmd);
+    // The Embedded Files panel's OK with "Embed fonts" ticked: the files of the fonts the board's texts use are read here, into the command (`crate::embedded_api`).
+    let with_fonts = crate::embedded_api::with_text_fonts(cmd, &design);
+    let cmd = with_fonts.as_ref().unwrap_or(cmd);
     // KiCad 10's via stitching: the vias a `set_via_stitch` leaves out are placed here, from the zone fills (`crate::via_stitch_api`).
     let with_vias = crate::via_stitch_api::with_planned_vias(cmd, dir, &design, &model, meta.snap_nm, meta.spacing_nm);
     let cmd = with_vias.as_ref().unwrap_or(cmd);
@@ -2744,7 +2747,14 @@ pub fn run(
             // `eda board import-ses FILE.ses`: File > Import > Specctra Session..., `Cmd::Specctra` (one undo step), the session's text in the command as the studio sends it.
             let file = rest.get(1).filter(|a| !a.starts_with('-')).map(PathBuf::from).ok_or_else(|| fail("board_usage", "import-ses", "usage: eda board import-ses <file.ses> [-C dir]"))?;
             let cmd = crate::specctra_api::import_cmd(&file)?;
-            step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}\nSession file imported and merged OK."))
+            // KiCad 25ec2335 warns once when it skipped unresolvable items (`specctra_api::take_session_warning`, as the studio's reply carries it).
+            step_with(&dir, cmd, strict, &actor()).map(|s| {
+                eprintln!("{s}");
+                if let Some(w) = crate::specctra_api::take_session_warning() {
+                    eprintln!("{w}");
+                }
+                eprintln!("Session file imported and merged OK.");
+            })
         }
         "export" if rest.get(1).map(String::as_str) == Some("specctra") => {
             // `eda board export specctra -o FILE.dsn`: the Specctra DSN of the board, written by kicad-cli (`pcb export specctra`), or by our own exporter where
@@ -4655,8 +4665,9 @@ pub(crate) mod tests {
 
     /// A violation waived in the studio reaches kicad-cli through the derived `.kicad_pro` (slow tier: a dozen kicad-cli runs): it is
     /// listed as excluded when asked for exclusions and left out of a report that is not, and Remove (or Undo) puts it back. That holds where the report
-    /// says enough to guess the marker's position (a via, the middle of a track); for a clearance, whose marker sits at the contact point of the two
-    /// items -- a position kicad-cli's report does not give -- the studio's own report holds the waiver and kicad-cli's does not.
+    /// says enough to guess the marker's position (a via, the middle of a track), and for a clearance between a via and a track, whose marker sits at
+    /// the contact point of the two -- a position kicad-cli's report does not give, which the studio computes as KiCad's collision does
+    /// (`eda_kicad::drc_exclusions::contact_point`).
     #[test]
     fn a_waived_violation_reaches_kicad_cli_through_the_derived_project_and_kicad_cli_stops_reporting_it() {
         if std::env::var_os("EDA_SLOW_TESTS").is_none() {
@@ -4670,7 +4681,7 @@ pub(crate) mod tests {
         let dir = scratch("drc_exclusions");
         setup(&dir);
         // A via with a 25 um ring (minimum 100), a 100 um track (minimum 200), and a via 100 um from the side of a track (clearance 200):
-        // the marker of that one sits on the track beside the via, at a point no position in the report is.
+        // the marker of that one sits on the track beside the via, at a point no position in the report is (the track's nearest point to the via's centre).
         step(&dir, Cmd::AddVia { net: "GND".into(), x: mm(10.0), y: mm(15.0), drill: mm(0.3), diameter: mm(0.35), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
         step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.1), pts: vec![Point { x: mm(2.0), y: mm(8.0) }, Point { x: Nm::new(6_001_000), y: mm(8.0) }] }, false, "test").unwrap();
         step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: mm(2.0), y: mm(12.0) }, Point { x: mm(12.0), y: mm(12.0) }] }, false, "test").unwrap();
@@ -4686,10 +4697,10 @@ pub(crate) mod tests {
         // Exclude the three together, as "Exclude all of this type" would: one step.
         step(&dir, Cmd::AddDrcExclusions { exclusions: vec![exclusion_of(&via, ""), exclusion_of(&track, "thin on purpose"), exclusion_of(&clearance, "")] }, false, "ui").unwrap();
         let after = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
-        for (kind, matched) in [("annular_width", true), ("track_width", true), ("clearance", false)] {
+        for kind in ["annular_width", "track_width", "clearance"] {
             let v = find(&after, kind);
             assert_eq!(v["excluded"], true, "{kind} is waived in the studio's report");
-            assert_eq!(v["kicad_matched"], matched, "{kind}: kicad-cli matches the exclusion only when the marker sits where the report can tell");
+            assert_eq!(v["kicad_matched"], true, "{kind}: kicad-cli matches the exclusion itself");
             assert_eq!(counts(&after, kind), 0, "a waived violation is not counted");
         }
         assert_eq!(find(&after, "track_width")["comment"], "thin on purpose", "the comment goes to kicad-cli and comes back");
@@ -4700,7 +4711,8 @@ pub(crate) mod tests {
         let plain = ["--severity-error", "--severity-warning"];
         assert!(kicad_cli_lists(&dir, &plain, "annular_width").is_empty(), "kicad-cli stops reporting the via");
         assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "and the track");
-        assert_eq!(kicad_cli_lists(&dir, &plain, "clearance").len(), 1, "but the clearance, whose marker position the report cannot give, is still found by a plain run");
+        assert!(kicad_cli_lists(&dir, &plain, "clearance").is_empty(), "and the clearance, at the contact point the studio computed");
+        assert_eq!(kicad_cli_lists(&dir, &["--severity-exclusions"], "clearance"), vec![(true, "error".to_string())], "one excluded marker, no stray one of a guess");
         assert_eq!(kicad_cli_lists(&dir, &["--severity-exclusions"], "annular_width"), vec![(true, "error".to_string())], "asked for exclusions it lists the via, flagged");
         assert_eq!(kicad_cli_lists(&dir, &["--severity-all"], "track_width"), vec![(true, "error".to_string())]);
 

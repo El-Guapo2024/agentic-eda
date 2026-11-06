@@ -70,6 +70,11 @@ pub fn default_severity(key: &str) -> Option<&'static str> {
 }
 
 /// Whether `key` is one of [`ERC_CHECKS`].
+/// The key a severity table gives the pin-to-pin *error*'s slot (`ERCE_PIN_TO_PIN_ERROR`), which KiCad's projects have none for: `"ignore"` there is the ERC
+/// dialog's Ignore on a pin-to-pin error, kept by the studio while `pin_to_pin` is ignored ([`crate::sch_extras::SchExtras::pin_to_pin_errors_ignored`], r3 D3-M2).
+/// It is not a check of its own ([`is_erc_check`] says no) and no project file lists it.
+pub const PIN_TO_PIN_ERROR_SLOT: &str = "pin_to_pin_error";
+
 pub fn is_erc_check(key: &str) -> bool {
     default_severity(key).is_some()
 }

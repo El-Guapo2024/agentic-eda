@@ -114,7 +114,7 @@ export interface SymbolSvgReply {
   svg?: { name: string; text: string };
 }
 
-export function postSymbolSvg(req: { lib_id: string; unit: number; body_style: number }): Promise<SymbolSvgReply> {
+export function postSymbolSvg(req: { lib_id: string; unit: number; body_style: number; theme?: string; include_hidden_pins?: boolean; include_hidden_fields?: boolean; black_and_white?: boolean }): Promise<SymbolSvgReply> {
   return postJson("/api/sym/svg", req);
 }
 

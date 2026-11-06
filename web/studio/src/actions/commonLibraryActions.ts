@@ -3,6 +3,7 @@
 // (common/tool/library_editor_control.cpp) run them in every library editor frame; `registerCommonActions` (commonActions.ts) calls
 // `registerLibraryActions` once while the registry is built. The tree's pins, folds and library selection are state/libraryTree.ts; whether it is
 // shown is the dock layout's (the Libraries column: `ACTIONS::showLibraryTree` itself is `registerEditorFrameActions`'s).
+import { openEmbeddedDocument } from "../api/embeddedClient";
 import type { ActionHandler, CommonActionContext } from "./commonActions";
 import { datasheetTarget } from "../kicad-port/itemText";
 import { footprintDocumentationUrl } from "../kicad-port/footprintDatasheet";
@@ -53,6 +54,8 @@ export function registerLibraryActions(m: Map<string, ActionHandler>, ctx: Commo
       if (!open) return dispatch({ type: "TOAST", message: "Open a footprint first.", kind: "info" });
       const target = datasheetTarget(footprintDocumentationUrl(open.fields ?? [], open.description ?? ""));
       if (target.kind === "url") window.open(target.url, "_blank", "noopener,noreferrer");
+      // `{ m_frame->GetBoard(), footprint }`: the Footprint Editor's board holds nothing else here, so the footprint's own files
+      else if (target.kind === "embedded") void openEmbeddedDocument([{ kind: "library_footprint", name: open.name }], target.link);
       else if (target.kind === "unresolvable") dispatch({ type: "TOAST", message: `Cannot open datasheet '${target.text}': only absolute http(s)/file URLs can be opened from a browser.`, kind: "error" });
       else dispatch({ type: "TOAST", message: "No datasheet found in the footprint.", kind: "info" });
     });

@@ -161,3 +161,81 @@ fn kicad_cli_counts_the_stubs_the_filtered_cleanup_left() {
     assert_eq!(reply["ok"], true, "{reply}");
     assert_eq!(dangling(&dir), 0);
 }
+
+// ---------------------------------------------------------------------------------------------------------------- Cleanup Tracks & Vias: Merge co-linear tracks
+
+/// U1.1 (4, 5) to U2.1 (14, 5) on GND: down to y = 8, along it as two overlapping collinear tracks, the first with a solder-mask opening and both
+/// in a group, and up again. Returns the two overlapping tracks' ids (the first, the second).
+fn two_overlapping(dir: &Path) -> (String, String) {
+    let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+    for pts in [vec![p(4.0, 5.0), p(4.0, 8.0)], vec![p(4.0, 8.0), p(10.0, 8.0)], vec![p(8.0, 8.0), p(14.0, 8.0)], vec![p(14.0, 8.0), p(14.0, 5.0)]] {
+        step(dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts }, false, "test").unwrap();
+    }
+    let (_, design, _) = load(dir).unwrap();
+    let tracks = &design.routing.as_ref().unwrap().tracks;
+    let id_of = |a: Point, b: Point| tracks.iter().find(|t| t.pts == vec![a, b]).unwrap().id.clone();
+    let (first, second) = (id_of(p(4.0, 8.0), p(10.0, 8.0)), id_of(p(8.0, 8.0), p(14.0, 8.0)));
+    step(dir, Cmd::SetSolderMask { ids: vec![first.clone()], solder_mask: true, margin: Some(mm(0.05)) }, false, "test").unwrap();
+    step(dir, Cmd::Group { ids: vec![first.clone(), second.clone()] }, false, "test").unwrap();
+    (first, second)
+}
+
+/// UI-LEFT P24: "Merge co-linear tracks" merges two overlapping collinear tracks into their span (`testMergeCollinearSegments`' four ends), and
+/// the merged track is the first one modified in place (`mergeCollinearSegments`: `*aSeg1 = dummy_seg`): its id, its mask opening and its group
+/// stay. Update PCB is one undo step.
+#[test]
+fn cleanup_merges_overlapping_collinear_tracks_into_the_first_and_keeps_its_id_mask_and_group() {
+    let dir = scratch("cleanup_merge_overlap");
+    setup(&dir);
+    let (first, second) = two_overlapping(&dir);
+    let reply = crate::cleanup_api::apply(&dir, &body(serde_json::json!({ "merge_segments": true })));
+    assert_eq!(reply["ok"], true, "{reply}");
+    let (_, design, _) = load(&dir).unwrap();
+    let tracks = &design.routing.as_ref().unwrap().tracks;
+    assert_eq!(tracks.len(), 3, "{tracks:?}");
+    let merged = tracks.iter().find(|t| t.id == first).expect("the first track is still there");
+    assert_eq!(merged.pts, vec![Point { x: mm(4.0), y: mm(8.0) }, Point { x: mm(14.0), y: mm(8.0) }]);
+    assert!(!tracks.iter().any(|t| t.id == second));
+    let dr = design.drawings.as_ref().unwrap();
+    assert_eq!(dr.track_mask(&first).map(|m| m.margin), Some(Some(mm(0.05))), "the mask opening stays");
+    let group = dr.parent_group(&first).expect("the merged track is still in its group");
+    assert!(!group.member_ids.contains(&second), "the second track left the group with the board");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert_eq!(design.routing.as_ref().unwrap().tracks.len(), 4, "Update PCB is one undo step");
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): the merged track is one `(segment ..)` kicad-cli reads with its mask opening and group, and its DRC
+/// finds the board as connected as before the merge (no unconnected item, no dangling track).
+#[test]
+fn kicad_cli_reads_the_merged_track_as_one_connected_segment() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    }
+    let dir = scratch("cleanup_merge_kicad_cli");
+    setup(&dir);
+    let (first, _) = two_overlapping(&dir);
+    // the VCC pads joined too (above the parts), so the only unconnected items would be the merge's doing
+    let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(6.0, 5.0), p(6.0, 3.0), p(16.0, 3.0), p(16.0, 5.0)] }, false, "test").unwrap();
+    let before = drc_counts(&dir);
+    let segments = |dir: &Path| std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pcb")).expect("the derived board").matches("(segment").count();
+    let segments_before = segments(&dir);
+    let reply = crate::cleanup_api::apply(&dir, &body(serde_json::json!({ "merge_segments": true })));
+    assert_eq!(reply["ok"], true, "{reply}");
+    let after = drc_counts(&dir);
+    for key in ["unconnected_items", "track_dangling"] {
+        assert_eq!(after.get(key).copied().unwrap_or(0), before.get(key).copied().unwrap_or(0), "{key}: before {before:?}, after {after:?}");
+    }
+    assert_eq!(after.get("unconnected_items").copied().unwrap_or(0), 0, "{after:?}");
+    assert_eq!(segments(&dir), segments_before - 1, "the two overlapping segments are one");
+    let pcb = std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pcb")).expect("the derived board");
+    assert!(pcb.contains("(solder_mask_margin 0.05)"), "the merged track keeps its opening");
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.routing.as_ref().unwrap().tracks.iter().any(|t| t.id == first), "under the first track's id");
+}

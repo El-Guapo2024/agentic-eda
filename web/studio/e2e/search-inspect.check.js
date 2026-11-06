@@ -82,10 +82,15 @@
     t(!!dialog("find-by-properties"), "Edit > Find by Properties... opens the dialog");
     t(text("fbp-status") === "Footprint", `the line says what is selected: ${text("fbp-status")}`);
     const names = rowNames();
-    // the properties in the alphabetical order of their names, then the fields the properties do not show (`getCommonFootprintFieldNames`), Value among them
-    // (`FOOTPRINT_DESC` has no Value property)
-    const props = names.slice(0, Math.max(0, names.indexOf("Value")));
-    t(names.length >= 10 && props.length >= 8 && JSON.stringify(props) === JSON.stringify([...props].sort()), `${props.length} property rows in the alphabetical order of their names, then the field rows (${names.slice(props.length).join(", ")})`);
+    // the properties in the alphabetical order of their names, then the fields the properties do not show (`getCommonFootprintFieldNames`: a `std::set` of the
+    // footprint's fields, so in their order too): the mandatory Value, Datasheet and Description among them (`FOOTPRINT_DESC` has none of the three as a property;
+    // a footprint has all four mandatory fields since task-u5-pcbfp), Reference left out as it is a property
+    const fieldStart = names.findIndex((n) => ["Datasheet", "Description", "Value"].includes(n));
+    const props = names.slice(0, Math.max(0, fieldStart));
+    const fields = names.slice(Math.max(0, fieldStart));
+    const sorted = (list) => JSON.stringify(list) === JSON.stringify([...list].sort());
+    t(names.length >= 10 && props.length >= 8 && sorted(props), `${props.length} property rows in the alphabetical order of their names (${props.join(", ")})`);
+    t(fields.includes("Value") && fields.includes("Datasheet") && fields.includes("Description") && !fields.includes("Reference") && sorted(fields), `then the field rows, in their order (${fields.join(", ")})`);
     t(names.includes("Type") && rowValue("Type") === "Footprint", `Type is a row, though the Properties panel hides it: ${rowValue("Type")}`);
     t(rowValue("Library Link") === c1.footprint, `Library Link is ${rowValue("Library Link")}`);
     t(rowValue("Value") === (c1.value ?? ""), `Value is ${rowValue("Value")}`);

@@ -2042,7 +2042,7 @@ export type Cmd =
   | { op: "swap_pad_nets"; ids: string[]; connected_pads?: boolean | null }
   | { op: "swap_gate_nets"; ids: string[]; target?: string | null; connected_pads?: boolean | null }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
-  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[]; /** indices into `tracks` of the new tracks that are locked */ lock_tracks?: number[] }
+  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[]; /** indices into `tracks` of the new tracks that are locked */ lock_tracks?: number[]; /** (index into `tracks`, the removed track it stands for): it takes that track's mask opening and group */ track_sources?: [number, string][] }
   /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */
   | { op: "boolean_shapes"; operation: "merge" | "subtract" | "intersect"; ids: string[] }
   /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
@@ -2082,7 +2082,7 @@ export type Cmd =
    */
   | ({ op: "edit_zone"; id: string; net: string; layer: string; /** The layers the zone is on (`ZONE_SETTINGS::m_Layers`); absent leaves a set that holds `layer` as it is. */ layers?: string[] } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
-  | { op: "set_zone_outline"; id: string; outline: PointXY[]; holes?: PointXY[][] }
+  | { op: "set_zone_outline"; id: string; outline: PointXY[]; holes?: PointXY[][]; /** `SetNeedRefill( true )`: the fill stays, out of date (Add / Remove / Chamfer Corner, Simplify). */ keep_fill?: boolean }
   | { op: "add_shape"; shape: CmdShape }
   | { op: "delete_shape"; id: string }
   | { op: "move_shape"; id: string; dx: Nm; dy: Nm }
@@ -2450,6 +2450,8 @@ export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelS
 export interface CmdReply {
   ok: boolean;
   message: string;
+  /** What KiCad tells the user once the command worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), one message a line. */
+  info?: string;
   /** The history tag of the step the command made (`pcb`, `schematic`, `both`, ...): which editor's content it modified. */
   domain?: string;
 }
@@ -3365,6 +3367,8 @@ export interface Schematic {
   graphics?: SchGraphic[];
   /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
   graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
+  /** A text box's shown text by its graphic's id, where `${..}` or `@{..}` in it changes it (`SCH_TEXTBOX::GetShownText`); the box's `text` stays the stored one. */
+  graphic_shown?: Record<string, string>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
   tables?: BoardTable[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
@@ -3410,6 +3414,12 @@ export interface SchematicSetupLook {
   dash_ratio: number;
   gap_ratio: number;
   hop_over_size_choice: number;
+  /** Formatting's operating-point overlay (`drawing.operating_point_overlay_*`): significant digits and range ("~V" / "~A" for Auto) of the
+   *  voltages and currents the simulator shows on the sheet. An older backend sends none. */
+  opo_v_precision?: number;
+  opo_v_range?: string;
+  opo_i_precision?: number;
+  opo_i_range?: string;
 }
 
 // ---------------------------------------------------------------- Symbol library
@@ -3800,6 +3810,8 @@ export interface SavedReportRequest {
   units: "mm" | "mil" | "in";
   refill_zones?: boolean;
   schematic_parity?: boolean;
+  /** The DRC dialog's options menu, "Report All Errors for Each Track" (`--all-track-errors`). */
+  all_track_errors?: boolean;
 }
 
 /** The report kicad-cli wrote: the file name the dialog suggests (`ERC.rpt`, `DRC.json`) and its text. */

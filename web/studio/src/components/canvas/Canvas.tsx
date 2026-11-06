@@ -434,6 +434,7 @@ export function Canvas() {
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintBoard(ctx, state.view, width, height, board, {
+      viewFlipped: state.bcx.boardFlipped,
       selection: state.selection,
       hot: state.hot,
       netHighlight: state.bcx.netHighlightMore.length > 0 ? highlightedNets(state.netHighlight, state.bcx.netHighlightMore) : state.netHighlight,
@@ -572,7 +573,10 @@ export function Canvas() {
       // route's or a pair's end only its current layer's (`updateEndItem`: `layer = m_router->GetCurrentLayer()`, -1 while placing a via)
       const routing = draw?.kind === "route" || draw?.kind === "diffpair" ? draw : null;
       const layer = routing ? (routing.placingVia ? { top: routing.layer } : { top: routing.layer, only: true }) : draw?.kind === "drag" ? undefined : { top: state.activeLayer ?? board?.layers[0] ?? "F.Cu" };
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip, layer });
+      // `updateEndItem`: `pickSingleItem( mousePos, net, .. )` for the router's current nets -- a route's, and a single-track or via drag's (`DRAGGER`'s
+      // `CurrentNets()`, the dragged line's net: UI-LEFT P29); a drag of no net goes on the wire grid (`snapToItem( nullptr, mousePos )`; no item is on "\u0001")
+      const net = draw?.kind === "route" ? draw.net : draw?.kind === "drag" ? (draw.net || "\u0001") : null;
+      const p = snap.routePoint([wx, wy], mods, { net, isEnd: started, skip, layer });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};
@@ -839,6 +843,8 @@ export function Canvas() {
         const flipped = state.bcx.localRatsnestPads;
         const next = pad ? toggleLocalRatsnestPad(flipped, pad.id) : part ? toggleLocalRatsnestFootprint(flipped, (part.pads ?? []).map((q) => `${part.ref}.${q.num}`), state.showRatsnest) : [];
         dispatch({ type: "BCX", patch: { localRatsnestPads: next } });
+        // `RunAction( ACTIONS::selectionClear )`, then `selectionCursor` with the pad (else the footprint) filter: the item clicked is left selected (r7 C7-10)
+        dispatch({ type: "SET_SELECTION", refs: pad ? [pad.id] : part ? [part.ref] : [] });
         return;
       }
 

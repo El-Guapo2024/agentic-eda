@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Shape } from "../api/types";
-import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, planCleanupGraphics, planGlobalDeletions, wildMatch } from "./pcbGlobalEdit";
+import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, cleanupGraphicsCmds, planCleanupGraphics, planGlobalDeletions, wildMatch } from "./pcbGlobalEdit";
+import type { BoardTextBox } from "../api/pcbItemTypes";
 
 function board(partial: Record<string, unknown>): BoardState {
   return {
@@ -117,6 +118,23 @@ test("cleanup: zero-size and duplicated graphics are listed and removed", () => 
   assert.deepEqual(plan.remove, ["a2", "zero"]);
 });
 
+test("cleanup: a text box is a PCB_SHAPE to cleanupShapes, a zero-size one goes and one on a rectangle's corners, layer and width is its duplicate", () => {
+  const box = (id: string, start: [number, number], end: [number, number], extra: Partial<BoardTextBox> = {}): BoardTextBox =>
+    ({ id, layer: "F.SilkS", text: "T", start, end, pts: [], angle: 0, margins: [0, 0, 0, 0], border: true, stroke_width: 100, line_style: "solid", stroke_color: null, knockout: false, size: 1_000_000, width: 1_000_000, thickness: 0, thickness_auto: true, ...extra }) as BoardTextBox;
+  const rect: Shape = { id: "r", kind: "rect", layer: "F.SilkS", stroke_width: 100, filled: false, start: [0, 0], end: [5_000_000, 2_000_000] };
+  const boxes = [box("tbx_b", [0, 0], [5_000_000, 2_000_000]), box("tbx_a", [10, 10], [200, 300]), box("tbx_c", [0, 0], [5_000_000, 2_000_000], { stroke_width: 200 }), box("tbx_d", [0, 0], [5_000_000, 2_000_000], { pts: [[0, 0], [5_000_000, 0], [5_000_000, 2_000_000], [0, 2_000_000]] })];
+  const plan = planCleanupGraphics([rect], cleanup({ deleteRedundant: true }), true, boxes);
+  // the boxes come after the shapes, by id: tbx_a (zero size within 500 nm), tbx_b (the rectangle's twin); tbx_c is wider, tbx_d a polygon
+  assert.deepEqual(plan.items.map((i) => [i.kind, i.ids]), [["duplicate", ["tbx_b"]], ["null", ["tbx_a"]]]);
+  assert.deepEqual(plan.removeTextBoxes, ["tbx_b", "tbx_a"]);
+  assert.deepEqual(cleanupGraphicsCmds(plan), [
+    { op: "pcb_item", verb: "delete_text_box", id: "tbx_b" },
+    { op: "pcb_item", verb: "delete_text_box", id: "tbx_a" },
+  ]);
+  // merge-rectangles and the outline fix leave the boxes alone
+  assert.deepEqual(planCleanupGraphics([], cleanup({ mergeRects: true, fixBoardOutlines: true }), false, boxes).remove, []);
+});
+
 test("cleanup graphics uses KiCad's 500 nm epsilon (GetDRCEpsilon, round 5 B5-3)", () => {
   // (0,0)-(10 mm,0), then (300 nm,0)-(10 mm,200 nm) within 0.5 um of it at both ends, then (0,0)-(400 nm,0): ends within 0.5 um, zero size.
   const shapes: Shape[] = [seg("a", "F.SilkS", [0, 0], [10_000_000, 0]), seg("near", "F.SilkS", [300, 0], [10_000_000, 200]), seg("tiny", "F.SilkS", [0, 0], [400, 0])];
@@ -181,7 +199,7 @@ test("cleanup: three lines are not a rectangle, and lines already deleted as dup
 test("cleanup: the board-outline fix runs on a real cleanup, not on the preview", () => {
   const edge: Shape[] = [seg("e1", "Edge.Cuts", [0, 0], [10000, 0], 50), seg("e2", "Edge.Cuts", [10100, 0], [10100, 5000], 50)];
   const dry = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceNm: 2000 }), true);
-  assert.deepEqual(dry, { items: [], remove: [], replace: [], add: [] });
+  assert.deepEqual(dry, { items: [], remove: [], removeTextBoxes: [], replace: [], add: [] });
   const real = planCleanupGraphics(edge, cleanup({ fixBoardOutlines: true, toleranceNm: 2000 }), false);
   assert.ok(real.replace.length > 0, "the 100 nm gap is closed, the lines edited in place");
 });

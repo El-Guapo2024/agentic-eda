@@ -236,3 +236,33 @@ fn rotate_and_flip_items_turn_a_tuning_pattern_as_kicad_does() {
     assert_eq!(member.layer, "F.Cu", "the pattern's tracks stay on their layer");
     assert!(member.pts.iter().all(|q| q.x <= Nm::ZERO), "mirrored: {:?}", member.pts);
 }
+
+/// UI-LEFT P24 (round 4 C-2's left): Create Array of a tuning pattern copies it whole at every point (`ARRAY_TOOL::onDialogClosed`: `case
+/// PCB_GENERATOR_T: this_item = static_cast<PCB_GENERATOR*>( item )->DeepClone();`, its tracks added with it), and each copy is moved there with its
+/// tracks, origin, end and base line (`TransformItem`); the original keeps the first point. One undo step.
+#[test]
+fn create_array_copies_a_tuning_pattern_with_its_tracks_at_every_point() {
+    let mut b = tuned_on_four_layers();
+    let pat = drawings(&b).tuning_patterns[0].clone();
+    let tracks_before = routing(&b).tracks.len();
+    let member = routing(&b).tracks.iter().find(|t| t.id == pat.member_ids[0]).unwrap().clone();
+    let geometry = crate::array::ArrayGeometry::Grid { nx: 3, ny: 1, dx: mm(20.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+    // the pattern and one of its tracks selected: the track comes with the pattern, not as a copy of its own
+    b.apply(&Cmd::CreateArray { ids: vec![pat.id.clone(), member.id.clone()], geometry, arrange: false, reannotate: true, group_positions: Default::default() }).unwrap();
+    let patterns = drawings(&b).tuning_patterns.clone();
+    assert_eq!(patterns.len(), 3);
+    assert_eq!(routing(&b).tracks.len(), tracks_before + 2 * pat.member_ids.len());
+    let mut origins: Vec<Point> = patterns.iter().map(|q| q.origin).collect();
+    origins.sort_by_key(|q| q.x);
+    assert_eq!(origins, vec![pat.origin, p(pat.origin.x + mm(20.0), pat.origin.y), p(pat.origin.x + mm(40.0), pat.origin.y)]);
+    for q in &patterns {
+        let dx = q.origin.x - pat.origin.x;
+        assert_eq!((q.end, q.base_line.clone()), (p(pat.end.x + dx, pat.end.y), pat.base_line.iter().map(|v| p(v.x + dx, v.y)).collect::<Vec<_>>()));
+        assert_eq!(q.member_ids.len(), pat.member_ids.len());
+        let m = routing(&b).tracks.iter().find(|t| t.id == q.member_ids[0]).unwrap();
+        assert_eq!(m.pts, member.pts.iter().map(|v| p(v.x + dx, v.y)).collect::<Vec<_>>(), "pattern at {dx:?}: its own copy of the meander");
+        assert_eq!(m.layer, member.layer);
+    }
+    let all_members: std::collections::BTreeSet<&String> = patterns.iter().flat_map(|q| q.member_ids.iter()).collect();
+    assert_eq!(all_members.len(), 3 * pat.member_ids.len(), "no track is shared between patterns");
+}

@@ -25,9 +25,11 @@
 //!   carries a [`run_tag`] in the frame's world, so what a shove made of it is in the frame's [`World::tracks`] under that tag, and the
 //!   preview and the commit draw the runs from there ([`World::placed_runs`]). Its ends are locked joints (`LockJoint`, which `SHOVE::Run`
 //!   does to each head's start and which the frames inherit), so a pushed run keeps its ends and a shoved line never runs on into the
-//!   head. The vias the clicks placed are locked (KiCad's are not: a shove could push one that is not at the head's start; here the commit
-//!   puts a via where two runs on different layers meet). (Until the review of 2026-10-23 the runs were locked here, and what a later leg
-//!   pushed into the tail was walked round it or stopped the head.)
+//!   head. The vias the clicks placed are ordinary vias of the frame too, as `FixRoute`'s `m_lastNode->Add( Clone( pl.Via() ) )` makes them
+//!   (under a [`fixed_via_tag`]): a later leg's shove that meets one at a leg's locked joint stops there (`pushOrShoveVia`'s `SH_INCOMPLETE`)
+//!   and one elsewhere it pushes; the commit writes each where the newest frame has it ([`World::placed_vias`]). (Until the review of
+//!   2026-10-23 the runs were locked here, and what a later leg pushed into the tail was walked round it or stopped the head; until UI-LEFT R6
+//!   the vias were, and a track pushed onto one was walked round it.)
 //! - `SetSpringbackDoNotTouchNode` (the node that owns the placer's end item) has no counterpart: the end item is always picked from the
 //!   session's world, which is not a frame. The place of a dragged via in each frame (`m_draggedVias`) is not part of a [`World`],
 //!   because only the dragger has one: it keeps those places itself, one per frame (`crate::dragger`'s `DragShove`), and truncates
@@ -50,9 +52,16 @@ pub fn run_tag(i: usize) -> String {
     format!("\u{1}run{i}")
 }
 
-/// [`run_tag`]'s ids.
+/// [`run_tag`]'s ids, and [`fixed_via_tag`]'s: the route's own items in a frame's world.
 pub fn is_run_tag(id: &str) -> bool {
     id.starts_with('\u{1}')
+}
+
+/// The via id the `i`th via the clicks placed carries in a frame's world ([`World::fixed_vias`]), as [`run_tag`] for a run: `FixRoute` adds the
+/// via a head ends in to `m_lastNode` as an ordinary via (`Clone( pl.Via() )`, not locked), which a later leg's shove may push
+/// (`SHOVE::pushOrShoveVia`) -- where it is then is in the frame's [`World::vias`] under this tag ([`World::placed_vias`]).
+pub fn fixed_via_tag(i: usize) -> String {
+    format!("\u{1}via{i}")
 }
 
 /// What a frame's world is, against the session's world: every IR track a shove replaced (by `Track::id`, with every line that replaces
@@ -60,7 +69,8 @@ pub fn is_run_tag(id: &str) -> bool {
 /// track of the world, as `FixRoute`'s `m_lastNode->Add( segment )` makes it: a later shove may push it (it is then in `tracks`, under its
 /// [`run_tag`]), and its ends are locked joints (`SHOVE::Run`'s `LockJoint` of each head's start, which the frames keep: every leg's start
 /// stays a locked joint of the worlds after it), so a pushed run keeps its ends and the shove never runs on into the head. The vias the
-/// clicks placed are locked.
+/// clicks placed are ordinary vias of the world too (under their [`fixed_via_tag`]): a shove that meets one where a leg starts or ends stops at
+/// the locked joint (`pushOrShoveVia`: `if( jt->IsLocked() ) return SH_INCOMPLETE`), one that is not there it pushes, with the runs on it.
 #[derive(Debug, Clone, Default)]
 pub struct World {
     pub tracks: BTreeMap<String, Vec<Line>>,
@@ -116,8 +126,19 @@ impl World {
         out
     }
 
+    /// The IR vias this world has moved (not the route's own: [`Self::placed_vias`]).
     pub fn displaced_vias(&self) -> Vec<DisplacedVia> {
-        self.vias.iter().map(|(id, &pos)| DisplacedVia { source_via: id.clone(), pos }).collect()
+        self.moved_vias().into_iter().map(|(id, pos)| DisplacedVia { source_via: id, pos }).collect()
+    }
+
+    /// The IR vias this world has moved, by `Via::id`, without the vias the clicks placed.
+    pub fn moved_vias(&self) -> BTreeMap<String, Point> {
+        self.vias.iter().filter(|(v, _)| !is_run_tag(v)).map(|(v, &p)| (v.clone(), p)).collect()
+    }
+
+    /// `vias` (the vias the clicks placed, in order) as this world has them: where a later leg's shove pushed one, else where it was placed.
+    pub fn placed_vias(&self, vias: &[Via]) -> Vec<Via> {
+        vias.iter().enumerate().map(|(i, v)| Via { pos: self.vias.get(&fixed_via_tag(i)).copied().unwrap_or(v.pos), ..v.clone() }).collect()
     }
 
     /// The IR tracks this world has replaced, without the route's own runs.
@@ -174,8 +195,9 @@ impl World {
         for (i, l) in self.fixed.iter().enumerate().filter(|(i, l)| l.point_count() >= 2 && !self.tracks.contains_key(&run_tag(*i))) {
             node.add_line_tagged(l, &run_tag(i));
         }
-        for v in &self.fixed_vias {
-            node.add(Item::Via(Via { locked: true, ..v.clone() }));
+        // `m_lastNode->Add( std::move( newVia ) )`: an ordinary via, where a shove may have moved it
+        for (i, v) in self.placed_vias(&self.fixed_vias).into_iter().enumerate() {
+            node.add(Item::Via(Via { source_via: Some(fixed_via_tag(i)), ..v }));
         }
         // every leg's start (and so every run's end) is a locked joint, as `LockJoint` left it in the frame each leg was routed in
         for l in &self.fixed {
@@ -358,6 +380,24 @@ mod tests {
 
     fn head<'a>(pts: &'a [Point], net: &'a Net) -> HeadSet<'a> {
         HeadSet { pts, net, layer: 0, width: mm(0.25), via: None }
+    }
+
+    /// `FixRoute`'s via is an ordinary via of the frame's world (`m_lastNode->Add( Clone( pl.Via() ) )`), not locked, named by its tag; where a shove
+    /// moved it (`World::vias` under the tag) is where the frame puts it and the commit writes it, and it is not one of the board's vias the
+    /// preview reports moved.
+    #[test]
+    fn a_clicks_via_is_an_ordinary_via_of_the_frame_and_follows_a_shove() {
+        let n = base();
+        let v = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: mm(5.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
+        let mut w = World::default().with_fixed(None, Some(v.clone()));
+        let in_frame = |w: &World| w.apply(&n).iter().find_map(|(_, it)| match it { Item::Via(x) => Some(x.clone()), _ => None }).unwrap();
+        let f = in_frame(&w);
+        assert!(!f.locked && f.source_via.as_deref() == Some(fixed_via_tag(0).as_str()) && f.pos == v.pos);
+        let to = Point { x: mm(5.0), y: mm(-0.2) };
+        w.merge_shove(&[], &[DisplacedVia { source_via: fixed_via_tag(0), pos: to }]);
+        assert_eq!(in_frame(&w).pos, to);
+        assert_eq!(w.placed_vias(&w.fixed_vias)[0].pos, to);
+        assert!(w.displaced_vias().is_empty() && w.moved_vias().is_empty(), "not a board via");
     }
 
     fn moved(y: Nm) -> World {

@@ -186,9 +186,16 @@ export function removeContourCorner(contours: ReadonlyArray<ReadonlyArray<readon
 /**
  * The `set_zone_outline` of `contours` (the outline, then the holes) for zone `id`: the holes ride along when the zone has some or had some before the edit
  * (`hadHoles`: a hole removed, or the last one), else the command keeps the plain shape it always had (the server keeps the holes a command does not send).
+ * `keepFill`: the edit leaves the fill as it was, out of date (`zone->SetNeedRefill( true )`: Add / Remove / Chamfer Corner, Simplify Shapes); without it the
+ * fill is emptied, as a dragged or typed corner does (`ZONE_POINT_EDIT_BEHAVIOR::UpdateItem`: `m_zone.UnFill()`). UI-LEFT P29.
  */
-export function zoneOutlineCmd(id: string, contours: ReadonlyArray<ReadonlyArray<readonly [Nm, Nm]>>, hadHoles: boolean): { op: "set_zone_outline"; id: string; outline: { x: Nm; y: Nm }[]; holes?: { x: Nm; y: Nm }[][] } {
+export function zoneOutlineCmd(
+  id: string,
+  contours: ReadonlyArray<ReadonlyArray<readonly [Nm, Nm]>>,
+  hadHoles: boolean,
+  keepFill = false
+): { op: "set_zone_outline"; id: string; outline: { x: Nm; y: Nm }[]; holes?: { x: Nm; y: Nm }[][]; keep_fill?: boolean } {
   const xy = (ring: ReadonlyArray<readonly [Nm, Nm]>) => ring.map(([x, y]) => ({ x, y }));
   const holes = contours.slice(1);
-  return { op: "set_zone_outline", id, outline: xy(contours[0] ?? []), ...(hadHoles || holes.length > 0 ? { holes: holes.map(xy) } : {}) };
+  return { op: "set_zone_outline", id, outline: xy(contours[0] ?? []), ...(hadHoles || holes.length > 0 ? { holes: holes.map(xy) } : {}), ...(keepFill ? { keep_fill: true } : {}) };
 }

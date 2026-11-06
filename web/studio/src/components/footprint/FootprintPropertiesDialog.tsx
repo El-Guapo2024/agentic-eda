@@ -10,8 +10,8 @@
 // The Fields grid (`PCB_FIELDS_GRID_TABLE`, components/footprint/FootprintFieldsGrid.tsx) is the General tab's first part: the Reference and the Value with their texts and places, and the
 // user fields -- named, shown or hidden, with their layer, size, orientation and offset.
 //
-// The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the library footprint's list; each of its edits is a verb of its own,
-// sent at once (KiCad applies it with the dialog's OK).
+// The Embedded Files tab is the shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the library footprint's list: the dialog holds the panel's copy, and OK
+// sends it as one `embedded apply` in the same batch, before a rename (`TransferDataFromWindow`, kicad-port/embeddedFiles.ts `applyCmd`).
 //
 // Not ported: the Layers tab's Custom Layers ("Use custom stackup", the copper layer count and the user layers of `FOOTPRINT_STACKUP::CUSTOM_LAYERS`), which a footprint's
 // file keeps as written (`(stackup ..)`) and the studio does not edit.
@@ -28,6 +28,8 @@ import { COMPONENT_TYPES, componentTypeOf, gridProblem, panelOfRows, rowsOfFootp
 import { formatLength } from "../../state/units";
 import { FootprintFieldsGrid } from "./FootprintFieldsGrid";
 import { EmbeddedFilesPanel } from "../EmbeddedFilesPanel";
+import { applyCmd, EMPTY_DRAFT, type EmbeddedDraft } from "../../kicad-port/embeddedFiles";
+import type { EmbeddedListing } from "../../api/embeddedTypes";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { PAD_CONNECTION_OPTIONS } from "../../kicad-port/padSettings";
 import { libraryModels, rowsOfLibrary, type ModelRow } from "../../kicad-port/fpModels";
@@ -61,6 +63,8 @@ export function FootprintLibraryPropertiesDialog() {
   // "Footprint name:" (the item name of `GetFPID()`), and the Layers, Clearance Overrides and Pad Connections tabs
   const [itemName, setItemName] = useState("");
   const [tabs, setTabs] = useState<SettingsForm | null>(null);
+  // The Embedded Files tab's copy of the footprint's list (`m_localFiles`), which OK sends
+  const [embedded, setEmbedded] = useState<{ draft: EmbeddedDraft; listing: EmbeddedListing | null }>({ draft: EMPTY_DRAFT, listing: null });
   const studio = useStudioState();
   const units = studio.units;
   // The layers the board has (Board Setup > Board Editor Layers): a field can be put on any of them.
@@ -80,6 +84,7 @@ export function FootprintLibraryPropertiesDialog() {
       setTabs(settingsForm(state.footprint.settings, units));
       setError(null);
       setTab("general");
+      setEmbedded({ draft: EMPTY_DRAFT, listing: null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -124,6 +129,9 @@ export function FootprintLibraryPropertiesDialog() {
       { op: "edit_footprint_properties", name: fp.name, ...form, ...panelOfRows(rows, fp.name), ...libraryModels(models) },
       { op: "fp_editor", verb: "set_settings", footprint: fp.name, settings: settings.settings },
     ];
+    // The Embedded Files tab's copy (`PANEL_EMBEDDED_FILES::TransferDataFromWindow`), on the footprint's list under the name it has now
+    const embeddedCmd = applyCmd({ kind: "library_footprint", name: fp.name }, embedded.listing, embedded.draft);
+    if (embeddedCmd) cmds.push(embeddedCmd);
     // `fpID.SetLibItemName( m_FootprintNameCtrl->GetValue() )`: the library entry takes the new name (a board copy its own name, its key stays)
     const newName = joinLibName(lib, itemName);
     if (itemName !== item) cmds.push({ op: "rename_library_footprint", name: fp.name, new_name: newName, overwrite });
@@ -166,7 +174,9 @@ export function FootprintLibraryPropertiesDialog() {
             ))}
           </div>
           {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ footprint: fp.name }} units={units} />}
-          {tab === "embedded" && <EmbeddedFilesPanel owner={{ kind: "library_footprint", name: fp.name }} run={api.cmd} version={studio.version} />}
+          {tab === "embedded" && (
+            <EmbeddedFilesPanel owner={{ kind: "library_footprint", name: fp.name }} run={api.cmd} version={studio.version} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
+          )}
           <div style={{ display: tab === "general" ? undefined : "none" }}>
             <FootprintFieldsGrid rows={rows} onChange={setRows} units={units} layers={layers} layerSetup={layerSetup} onError={setError} />
             {box("Metadata")}

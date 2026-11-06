@@ -10,6 +10,7 @@ import {
   isHighlighted,
   moveZone,
   netsOfSelection,
+  NO_NET,
   panDeltaX,
   rankPriorities,
   ratsnestModeCycle,
@@ -118,16 +119,24 @@ const board = {
   routing: { tracks: [{ id: "trk_1", net: "SIG" }], vias: [{ id: "via_1", net: "GND" }], zones: [{ id: "zon_1", net: "" }, { id: "zon_2", net: "VCC" }] },
 };
 
-test("netsOfSelection: the nets of the selected connected items in first-seen order, footprints standing for their pads, the unnamed net left out", () => {
-  assert.deepEqual(netsOfSelection(["U1"], board), ["VCC", "GND"]);
+test("netsOfSelection: the nets of the selected connected items in first-seen order, footprints standing for their pads, no net as net 0 (r7 C7-5)", () => {
+  // `netcodes.insert( ci->GetNetCode() )` whatever it is: U1's pad 3 with no net is on net 0
+  assert.deepEqual(netsOfSelection(["U1"], board), ["VCC", "GND", NO_NET]);
   assert.deepEqual(netsOfSelection(["R1", "trk_1", "via_1"], board), ["SIG", "GND"]);
-  assert.deepEqual(netsOfSelection(["zon_1", "zon_2"], board), ["VCC"], "a zone with no net adds none");
+  assert.deepEqual(netsOfSelection(["zon_1", "zon_2"], board), [NO_NET, "VCC"], "a zone with no net is on net 0");
   assert.deepEqual(netsOfSelection(["H1", "nope"], board), []);
   // a selected pad is its own item (REF.NUMBER, #k for a repeat): its net alone
   assert.deepEqual(netsOfSelection(["U1.2"], board), ["GND"]);
   assert.deepEqual(netsOfSelection(["U1.1#2", "R1.1"], board), ["VCC", "SIG"]);
-  assert.deepEqual(netsOfSelection(["U1.3"], board), [], "an unconnected pad has no net");
+  assert.deepEqual(netsOfSelection(["U1.3"], board), [NO_NET], "an unconnected pad highlights the unconnected items");
+  assert.deepEqual(netsOfSelection(["U1.3", "U1.2"], board), [NO_NET, "GND"], "with a GND pad: a two-net highlight");
+  // Hide Net and Assign Netclass leave net 0 out (`GetNetCode() > 0`)
+  assert.deepEqual(netsOfSelection(["U1"], board, false), ["VCC", "GND"]);
   assert.deepEqual(netsOfSelection(new Set(["trk_1"]), { parts: [], routing: null }), []);
+  // an item with no net is on net 0 when that is the one highlighted, and dimmed when another is
+  assert.equal(isHighlighted(null, NO_NET), true);
+  assert.equal(isHighlighted("", [NO_NET, "GND"]), true);
+  assert.equal(isHighlighted(null, "GND"), false);
 });
 
 test("swapHighlight: the current and the last highlight trade places", () => {

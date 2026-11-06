@@ -20,6 +20,18 @@ export type EmbeddedCmd =
   | { verb: "remove"; owner: EmbeddedOwner; names: string[]; nested?: boolean }
   /** The "Embed fonts" box. */
   | { verb: "set_fonts"; owner: EmbeddedOwner; embed: boolean }
+  /** The panel's OK (`TransferDataFromWindow`): its copy written back, one undo step -- see `crates/ops/src/embedded.rs` `EmbeddedCmd::Apply`. The server reads the files of
+   *  `text_fonts` in. */
+  | {
+      verb: "apply";
+      owner: EmbeddedOwner;
+      removed?: string[];
+      added?: { name: string; data: string; kind?: EmbeddedFileType }[];
+      fonts: boolean;
+      refresh_fonts?: boolean;
+      text_fonts?: string[];
+      nested?: boolean;
+    }
   /** `pcbnew.EditorControl.collect3DModels`: the server reads the model files in. */
   | { verb: "collect_models" };
 
@@ -58,4 +70,20 @@ export interface CollectPlan {
   count: number;
   models: { path: string; files: string[]; footprints: string[] | null }[];
   skipped: { path: string; reason: string }[];
+}
+
+/** One font of `GET /api/embedded/fonts`: a font the owner's texts use that may be embedded (`BOARD::GetFonts`). */
+export interface TextFont {
+  /** The name it is embedded under (the file's). */
+  name: string;
+  family: string;
+  path: string;
+  size: number;
+  permission: string;
+  faces: { face: string; bold: boolean; italic: boolean }[];
+}
+
+export interface TextFonts {
+  fonts: TextFont[];
+  skipped: { face: string; bold: boolean; italic: boolean; reason: string }[];
 }

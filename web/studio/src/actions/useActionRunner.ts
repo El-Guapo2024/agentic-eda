@@ -13,6 +13,7 @@
 // the exact same flow the M/Escape keyboard shortcuts do, and
 // Canvas.tsx no longer needs any keydown handling of its own.
 
+import { openEmbeddedDocument } from "../api/embeddedClient";
 import { markContentSaved } from "../state/contentModified";
 import { boardCopyKey } from "../api/fpEditorTypes";
 import { saveSymbolLibraryAs } from "./librarySaveOps";
@@ -52,7 +53,7 @@ import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../componen
 import { findDraggableAt, startGroupDrag, startInlineDrag } from "../components/canvas/dragging";
 import { findGroupDragTarget } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
-import { findNetAtCursor } from "../components/canvas/netAtCursor";
+import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
 import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
@@ -380,6 +381,11 @@ export function useActionRunner() {
       if (k === "undoSegment") m.get("pcbnew.InteractiveRouter.UndoLastSegment")?.();
       else if (k === "customSize") m.get("pcbnew.InteractiveRouter.CustomTrackViaSize")?.();
       else if (k === "cancel") m.get("common.Interactive.cancel")?.();
+      // Delete under a drag: the drag ends (another tool's `Activate()`), then the key is the editor's (`SetPassEvent` to `EDIT_TOOL::Remove`)
+      else if (k === "cancelThenPass") {
+        m.get("common.Interactive.cancel")?.();
+        return false;
+      }
       return k != null;
     };
     // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
@@ -761,8 +767,8 @@ export function useActionRunner() {
       "pcbnew.EditorControl.highlightNet",
       pcbOnly(() => {
         if (!state.board || !state.cursorNm) return;
-        const toleranceNm = 10 / (state.view.scale || 1);
-        const net = findNetAtCursor(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm);
+        // `GENERAL_COLLECTOR` with the guide's five-pixel accuracy, the active layer preferred (components/canvas/netAtCursor.ts, r7 C7-11)
+        const net = findNetAtCursor(state.board, state.cursorNm.x, state.cursorNm.y, collectorAccuracyNm(state.view.scale), { activeLayer: state.activeLayer, layerVisible: state.layerVisible, highContrast: state.highContrast, fills: state.zoneFill?.zones });
         dispatch({ type: "SET_NET_HIGHLIGHT", net: net && net === state.netHighlight ? null : net });
       })
     );
@@ -1710,6 +1716,8 @@ export function useActionRunner() {
         const target = datasheetTarget(symbol.datasheet);
         if (target.kind === "none") dispatch({ type: "TOAST", message: "No datasheet defined.", kind: "error" });
         else if (target.kind === "url") window.open(target.url, "_blank", "noopener,noreferrer");
+        // `filesStack`: the schematic's files, then the symbol's library symbol's
+        else if (target.kind === "embedded") void openEmbeddedDocument([{ kind: "schematic" }, ...(symbol.lib_id ? [{ kind: "library_symbol" as const, lib_id: symbol.lib_id }] : [])], target.link);
         else dispatch({ type: "TOAST", message: `Cannot open datasheet '${target.text}': only absolute http(s)/file URLs can be opened from a browser.`, kind: "error" });
       });
     }

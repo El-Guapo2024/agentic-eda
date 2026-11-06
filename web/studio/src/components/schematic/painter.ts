@@ -1130,7 +1130,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
 
   // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`).
   // `SCH_PAINTER::draw( SCH_DIRECTIVE_LABEL )`: with Show Directive Labels off, a directive label is drawn only while it is selected.
-  paintGraphics(ctx, view, display.showDirectiveLabels ? (sch.graphics ?? []) : (sch.graphics ?? []).filter((g) => g.shape.type !== "directive" || opts.selection.has(g.id)), opts.selection, sch.graphic_text_attrs);
+  paintGraphics(ctx, view, display.showDirectiveLabels ? (sch.graphics ?? []) : (sch.graphics ?? []).filter((g) => g.shape.type !== "directive" || opts.selection.has(g.id)), opts.selection, sch.graphic_text_attrs, sch.graphic_shown);
 
   // Tables (`SCH_TABLE`): the cells' fills and text, then the border and separator lines.
   paintSchTables(ctx, view, sch.tables ?? [], opts.selection);

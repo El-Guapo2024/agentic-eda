@@ -91,11 +91,28 @@ pub struct QueryOpts<'a> {
     /// The board via the probe is, when it is one (`aHead->Parent()`, a dragged or shoved `PCB_VIA`: [`crate::item::Via::source_via`]):
     /// [`Node::via_colliding`] sets it, for `IsFlashedOnLayer( aHead, Layers() )` (r4 R4-2).
     pub head_via: Option<&'a str>,
+    /// The query is of the router's world itself (`ROUTER::m_world`, the root `NODE`), not of a branch of it: only then does a collision with the
+    /// board edge inside a castellated pad's hole not count (`NODE::QueryEdgeExclusions` reads the node's own `m_edgeExclusions`, which
+    /// `SyncWorld` fills in the world and `NODE::Branch` does not copy; [`Node::query_edge_exclusions`]). KiCad's world is asked so by
+    /// `isStartingPointRoutable`'s start check; every placer and dragger works in a branch.
+    pub root_world: bool,
 }
 
 impl Default for QueryOpts<'_> {
     fn default() -> Self {
-        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true, box_hull: false, head_hole: None, head_via: None }
+        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true, box_hull: false, head_hole: None, head_via: None, root_world: false }
+    }
+}
+
+/// `ITEM::collideSimple`'s `shapeH->Collide( shapeI, clearance + lineWidthH + lineWidthI - 1 )`: "The extra "1" here is to account for the fact that
+/// the hulls are built to exactly the clearance distance, so we need to allow for no collision when exactly at the clearance distance." -- a gap
+/// of the clearance less 1 nm is no collision either. A clearance of 0 or less (a keepout's exact boundary) is left as it is: `Shape::collides`
+/// takes no negative clearance, and two shapes that touch collide either way.
+fn collide_clearance(clearance: Nm) -> Nm {
+    if clearance > Nm::ZERO {
+        clearance - Nm::new(1)
+    } else {
+        clearance
     }
 }
 
@@ -154,11 +171,14 @@ pub struct Node {
     /// `NODE::GetRuleResolver()`: the board's rules ([`crate::rule_resolver::RuleResolver`]), shared by every branch. A world built item by
     /// item (`Node::new`) has none and answers clearances with the net classes alone ([`Node::clearance_between`]).
     rules: Option<std::rc::Rc<crate::rule_resolver::RuleResolver>>,
+    /// `NODE::m_edgeExclusions`: the holes of the castellated pads (`AddEdgeExclusion`, [`crate::from_ir`]), where a collision with the board edge
+    /// is none -- asked only of the world itself ([`QueryOpts::root_world`]).
+    edge_exclusions: std::rc::Rc<Vec<Shape>>,
 }
 
 impl Clone for Node {
     fn clone(&self) -> Self {
-        Node { items: self.items.clone(), next_id: self.next_id, joints: self.joints.clone(), index: self.index.clone(), npth: self.npth.clone(), rules: self.rules.clone() }
+        Node { items: self.items.clone(), next_id: self.next_id, joints: self.joints.clone(), index: self.index.clone(), npth: self.npth.clone(), rules: self.rules.clone(), edge_exclusions: self.edge_exclusions.clone() }
     }
 }
 
@@ -169,7 +189,24 @@ const INDEX_CELL_NM: Nm = Nm::new(5_000_000); // 5 mm
 
 impl Node {
     pub fn new() -> Self {
-        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM), npth: Default::default(), rules: None }
+        Node { items: HashMap::new(), next_id: 1, joints: HashMap::new(), index: Index::new(INDEX_CELL_NM), npth: Default::default(), rules: None, edge_exclusions: Default::default() }
+    }
+
+    /// `NODE::AddEdgeExclusion`: a castellated pad's hole (`pad->GetEffectiveHoleShape()`).
+    pub fn add_edge_exclusion(&mut self, shape: Shape) {
+        std::rc::Rc::make_mut(&mut self.edge_exclusions).push(shape);
+    }
+
+    /// `NODE::QueryEdgeExclusions( aPos )`: is `pos` in one of the castellated pads' holes (`edgeExclusion->Collide( aPos )`)?
+    pub fn query_edge_exclusions(&self, pos: Point) -> bool {
+        let probe = Shape::Circle { c: pos, r: Nm::ZERO };
+        self.edge_exclusions.iter().any(|h| h.collides(&probe, Nm::ZERO).is_some())
+    }
+
+    /// `ITEM::collideSimple`'s `checkCastellation` for the copper of `item`: a graphic on Edge.Cuts (`m_parent->GetLayer() == Edge_Cuts`; the Margin
+    /// layer's edges are not).
+    fn checks_castellation(item: &Item) -> bool {
+        matches!(item, Item::Solid(s) if s.edge && s.source.starts_with("edge:"))
     }
 
     /// An empty world with this one's rules (`NODE::SetRuleResolver`) and non-plated holes: for the items a frame adds.
@@ -1026,9 +1063,14 @@ impl Node {
     /// and filter are tested first (`DEFAULT_OBSTACLE_VISITOR::operator()`),
     /// and `use_epsilon` switches `m_useClearanceEpsilon`.
     pub fn colliding_with(&self, shape: &Shape, net: &Net, layers: LayerRange, rules: &BoardRules, exclude: &[ItemId], opts: QueryOpts) -> Vec<Obstacle> {
+        self.colliding_as(shape, Side::of_shape(shape, net, layers), layers, rules, exclude, opts)
+    }
+
+    /// [`Self::colliding_with`] of a piece `shape` of the probe `head`: a segment of a line asks the rules as the whole line ([`Side::Line`], whose
+    /// clearance with a rule that looks at shapes is the smallest of its segments', `evaluateLineSegments`), as `LINE::Collide` does.
+    pub fn colliding_as(&self, shape: &Shape, head: Side, layers: LayerRange, rules: &BoardRules, exclude: &[ItemId], opts: QueryOpts) -> Vec<Obstacle> {
         let margin = self.search_margin(rules);
         let bbox = shape.bbox(margin);
-        let head = Side::of_shape(shape, net, layers);
         let mut out = Vec::new();
         for id in self.index.query(bbox) {
             if exclude.contains(&id) {
@@ -1106,7 +1148,7 @@ impl Node {
         if !same && flashed && head_flashed {
             // `COLLISION_SEARCH_OPTIONS::m_useClearanceEpsilon` (default on): `rv - m_clearanceEpsilon`, the board's DRC epsilon (0.5 um)
             let clearance = self.clearance_between(rules, Side::Item(item), head, opts.use_epsilon);
-            match shape.collides(&item_shape, clearance) {
+            match shape.collides(&item_shape, collide_clearance(clearance)) {
                 Some(c) => {
                     let net_tie = self.rules.as_ref().is_some_and(|r| {
                         r.is_in_net_tie(item) && {
@@ -1114,6 +1156,12 @@ impl Node {
                             r.is_net_tie_exclusion(net, layers.start(), at, item)
                         }
                     });
+                    // `if( checkCastellation && aNode->QueryEdgeExclusions( pos ) ) return false;`: the board edge where it passes through a
+                    // castellated pad's hole, asked of the world itself
+                    let castellated = opts.root_world && Self::checks_castellation(item) && self.query_edge_exclusions(c.1);
+                    if castellated {
+                        return None;
+                    }
                     if !net_tie {
                         return Some(hit(clearance, c));
                     }
@@ -1145,7 +1193,11 @@ impl Node {
         let hole = self.hole_of(item);
         if let (Some((hole_shape, hole_side)), true) = (&hole, item_hole_counts) {
             let clearance = self.clearance_between(rules, *hole_side, head, opts.use_epsilon);
-            if let Some(c) = shape.collides(hole_shape, clearance) {
+            if let Some(c) = shape.collides(hole_shape, collide_clearance(clearance)) {
+                // `checkCastellation` of a non-plated slot's hole (`IsNonPlatedSlot( this )`), asked of the world itself
+                if opts.root_world && r.is_non_plated_slot(hole_side) && self.query_edge_exclusions(c.1) {
+                    return None;
+                }
                 return Some(hit(clearance, c));
             }
         }
@@ -1154,7 +1206,7 @@ impl Node {
             let head_hole_shape = Shape::Circle { c: centre, r: hr };
             if !same && reach(head_depth) {
                 let clearance = self.clearance_between(rules, Side::Item(item), head_hole, opts.use_epsilon);
-                if let Some(c) = head_hole_shape.collides(&item_shape, clearance) {
+                if let Some(c) = head_hole_shape.collides(&item_shape, collide_clearance(clearance)) {
                     return Some(hit(clearance, c));
                 }
             }
@@ -1163,7 +1215,7 @@ impl Node {
             let copy = matches!(item, Item::Via(v) if v.pos == centre && v.drill / 2 == hr && same);
             if let (Some((hole_shape, hole_side)), false, true) = (&hole, copy, same || reach(head_depth + item_depth)) {
                 let clearance = self.clearance_between(rules, *hole_side, head_hole, opts.use_epsilon);
-                if let Some(c) = head_hole_shape.collides(hole_shape, clearance) {
+                if let Some(c) = head_hole_shape.collides(hole_shape, collide_clearance(clearance)) {
                     return Some(hit(clearance, c));
                 }
             }
@@ -1202,7 +1254,8 @@ impl Node {
             // `GetClearance( item, aLine ) + aLine->Width() / 2`, hull thickness 0.
             // `makeHull`: the bounding box of the hull in a 90-degree corner mode (`simplifyHull`)
             let make_hull = |h: Vec<Point>| if opts.box_hull { crate::hull::bbox_hull(&h) } else { h };
-            let head = Side::Track { net: &line.net, layer: line.layer, seg: line.segs().next() };
+            // `GetClearance( item, aLine )`: of the whole line (`evaluateLineSegments`)
+            let head = Side::Line { net: &line.net, layer: line.layer, width: line.width, pts: &line.pts };
             let hull = make_hull(self.obstacle_hull(rules, item, head, line.width / 2, Nm::ZERO, line.layer, opts.use_epsilon));
             let mut dist: Option<(Nm, Point)> = first_entry(&hull);
             if let Some(v) = via {
@@ -1374,10 +1427,11 @@ impl Node {
     /// path*, not just the first leg's own nearest.
     pub fn line_colliding(&self, line: &Line, rules: &BoardRules, exclude: &[ItemId]) -> Vec<(usize, Obstacle)> {
         let layers = LayerRange::single(line.layer);
+        let head = Side::Line { net: &line.net, layer: line.layer, width: line.width, pts: &line.pts };
         let mut out = Vec::new();
         for (i, (a, b)) in line.segs().enumerate() {
             let shape = Shape::Stadium { a, b, r: line.width / 2 };
-            for obs in self.all_colliding(&shape, &line.net, layers, rules, exclude) {
+            for obs in self.colliding_as(&shape, head, layers, rules, exclude, QueryOpts::default()) {
                 out.push((i, obs));
             }
         }

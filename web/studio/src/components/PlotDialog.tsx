@@ -10,6 +10,7 @@
 // output folder (empty: export/kicad/<format>/). The controls kicad-cli has no flag for are shown disabled with the reason.
 import { useEffect, useRef, useState } from "react";
 import { postFabPlot } from "../api/client";
+import { withWarnings } from "../kicad-port/schOutputs";
 import { VariantChoice } from "./VariantChoice";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength } from "../state/units";
@@ -149,7 +150,7 @@ export function PlotDialog() {
         return;
       }
       const reply = await postFabPlot({ ...plotRequest(form, applied.ps), ...(variant ? { variant } : {}) });
-      const message = [...applied.messages, reply.message ?? (reply.ok ? "Done." : "Plot failed.")].join("\n");
+      const message = [...applied.messages, reply.ok ? withWarnings(reply, reply.message ?? "Done.") : (reply.message ?? "Plot failed.")].join("\n");
       setResult({ ok: reply.ok, message, files: reply.files ?? [] });
     } finally {
       setBusy(false);

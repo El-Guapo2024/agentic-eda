@@ -3,7 +3,7 @@
 //   eeschema/sch_edit_frame.cpp  SCH_EDIT_FRAME::RefreshOperatingPointDisplay: a net's voltage on its longest wire, a two-pin symbol's current on its
 //                                first pin, every other simulated symbol's currents on the pins its model names (`<item>:<model pin>`)
 //   eeschema/schematic.cpp       SCHEMATIC::GetOperatingPoint: the name lower-cased and made SPICE's, ground none, `SPICE_VALUE( v ).ToString( precision, range )`
-//                                with the project's OP formats (`OpFormats`; 3 digits, "~V" and "~A" by default)
+//                                with the project's OP formats (`OpFormats`, Schematic Setup > Formatting; 3 digits, "~V" and "~A" by default)
 //   eeschema/sch_painter.cpp     SCH_PAINTER::draw( SCH_LINE ) / draw( SCH_PIN ) on LAYER_OP_VOLTAGES / LAYER_OP_CURRENTS, getOperatingPointTextSize
 //
 // The values are those of the last operating-point run (state/simulator.ts `opPoints`, keyed as `SCHEMATIC::SetOperatingPoint` keys them); a net's
@@ -44,7 +44,7 @@ export interface OpPin {
 }
 
 /** The project's OP formats (`SCHEMATIC_SETTINGS`: `drawing.operating_point_overlay_v_precision` / `_v_range` / `_i_precision` / `_i_range`, Schematic Setup >
- * Formatting), at their defaults. The studio's project does not carry them yet, so the overlay uses these. */
+ * Formatting): the schematic's `setup` sends them ([`opFormatsOf`]); [`DEFAULT_OP_FORMATS`] are `SCHEMATIC_SETTINGS`' defaults. */
 export interface OpFormats {
   vPrecision: number;
   vRange: string;
@@ -53,6 +53,19 @@ export interface OpFormats {
 }
 
 export const DEFAULT_OP_FORMATS: OpFormats = { vPrecision: 3, vRange: "~V", iPrecision: 3, iRange: "~A" };
+
+/** The formats `RefreshOperatingPointDisplay` draws with: the project's (each at its default when the backend sent none), and its "Patch for bug
+ *  early in V7.99 dev": a voltage range ending in 'A' ends in 'V'. */
+export function opFormatsOf(setup: { opo_v_precision?: number; opo_v_range?: string; opo_i_precision?: number; opo_i_range?: string } | null | undefined): OpFormats {
+  let vRange = setup?.opo_v_range ?? DEFAULT_OP_FORMATS.vRange;
+  if (vRange.endsWith("A")) vRange = `${vRange.slice(0, -1)}V`;
+  return {
+    vPrecision: setup?.opo_v_precision ?? DEFAULT_OP_FORMATS.vPrecision,
+    vRange,
+    iPrecision: setup?.opo_i_precision ?? DEFAULT_OP_FORMATS.iPrecision,
+    iRange: setup?.opo_i_range ?? DEFAULT_OP_FORMATS.iRange,
+  };
+}
 
 /** `SCHEMATIC::GetOperatingPoint`: "" for ground, "--" without a run, "?" for a name the run has not. */
 export function operatingPoint(points: Map<string, number>, name: string, precision: number, range: string): string {

@@ -154,6 +154,13 @@ pub struct Env {
     /// The property names the language knows, lower-cased, when the items come with their own registry (the studio's Properties panel, for Find by
     /// Properties); `None` is KiCad's list ([`crate::known_props`]).
     pub property_names: Option<HashSet<String>>,
+    /// `NETINFO_ITEM::GetNetCode` by net name: what `A.Net` is (`BOARD_CONNECTED_ITEM`'s "Net" is a `PROPERTY_ENUM<.., int>`, so `CreateVarRef` gives it
+    /// `VT_NUMERIC`: the code, not the name). The codes of the board file kicad-cli reads ([`Env::number_nets`]); a net not in it is 0, the unconnected net's.
+    pub net_codes: HashMap<String, i64>,
+    /// `BOARD::GetConnectivity()->GetFromToCache()`: whether the item of an id is on the copper path of `fromTo( from, to )` ([`crate::from_to`]); `None`
+    /// where the board's connectivity is not at hand, and `fromTo` is then false, as KiCad's with no cache ("Attempting to call fromTo() with non-existent
+    /// from-to cache."). Set after the rules are compiled ([`crate::rule_board::RuleBoard::enable_from_to`]), hence the cell.
+    pub from_to: RefCell<Option<Rc<dyn Fn(&str, &str, &str) -> bool>>>,
 }
 
 impl Env {
@@ -169,11 +176,27 @@ impl Env {
             classes: Box::new(|_| ("Default".to_string(), vec!["Default".to_string()])),
             literal_booleans: false,
             property_names: None,
+            net_codes: HashMap::new(),
+            from_to: RefCell::new(None),
         }
     }
 
+    /// Codes for `nets` as the board writer numbers them (`eda_kicad::pcb`: sorted by name, from 1; 0 is no net). Where the caller knows the derived board's
+    /// own numbering (which counts the nets KiCad's netlist gives a lone pin, `unconnected-(..)`, too) it sets [`Env::net_codes`] to that instead.
+    pub fn number_nets<'n>(&mut self, nets: impl IntoIterator<Item = &'n str>) {
+        let mut names: Vec<&str> = nets.into_iter().filter(|n| !n.is_empty()).collect();
+        names.sort();
+        names.dedup();
+        self.net_codes = names.into_iter().enumerate().map(|(i, n)| (n.to_string(), i as i64 + 1)).collect();
+    }
+
+    /// `A.Net` of an item on `net`.
+    pub fn net_code(&self, net: &str) -> i64 {
+        self.net_codes.get(net).copied().unwrap_or(0)
+    }
+
     pub fn new(layer_entries: Vec<(String, String)>, standard_names: HashMap<String, String>, classes: Box<dyn Fn(&str) -> (String, Vec<String>)>) -> Env {
-        Env { layer_entries, layer_cache: RefCell::new(HashMap::new()), standard_names, nets: HashSet::new(), footprints: Vec::new(), areas: Vec::new(), classes, literal_booleans: false, property_names: None }
+        Env { layer_entries, layer_cache: RefCell::new(HashMap::new()), standard_names, nets: HashSet::new(), footprints: Vec::new(), areas: Vec::new(), classes, literal_booleans: false, property_names: None, net_codes: HashMap::new(), from_to: RefCell::new(None) }
     }
 
     /// `m_LayerExpressionCache`: the layers a pattern names (`entry.GetText().Matches( layerName )` for each entry of the enum map).
@@ -595,12 +618,14 @@ impl VarRef {
         }
         let Some(item) = self.object(ctx) else { return Value::undefined() };
         let name = self.field.as_str();
+        // `Net` (`PROPERTY_ENUM<BOARD_CONNECTED_ITEM, int>`, `PT_NET`): a number, the item's net code (`GetNetCode`), on every connected item
+        if name.eq_ignore_ascii_case("net") && item.is_connected() {
+            return Value::number(ctx.env.net_code(&item.net) as f64);
+        }
         // "If the property isn't defined on the item itself but is defined on its parent footprint (e.g. Reference, Value), resolve against the parent so that
         // conditions like "A.Reference == 'J1'" match pads and graphics belonging to J1."
         let prop = match item.prop(name) {
             Some(p) => Some(p.clone()),
-            // `Net`: the net's name, for the items that have one.
-            None if name.eq_ignore_ascii_case("net") && item.is_connected() => Some(Prop::Enum(item.net.clone())),
             // Items that come with their own registry (Find by Properties) carry their footprint's properties already, merged under their own.
             None if ctx.env.property_names.is_some() => None,
             None => item.footprint.as_ref().filter(|_| item.class != Class::Footprint).and_then(|fp| footprint_prop(fp, name)),
@@ -1001,10 +1026,17 @@ fn enclosed_in_ring(shape: &Shape, ring: &[eda_model::ir::Point]) -> bool {
 fn call_func(f: Func, ctx: &mut Ctx, vref: Option<&VarRef>) {
     let item = vref.and_then(|v| v.object(ctx));
     match f {
+        // `fromToFunc`: the item is on a path of the board's from-to cache (`FROM_TO_CACHE::IsOnFromToPath`)
         Func::FromTo => {
-            ctx.pop();
-            ctx.pop();
-            ctx.push(Value::number(0.0));
+            let to = ctx.pop();
+            let from = ctx.pop();
+            let (from, to) = (from.as_string(ctx), to.as_string(ctx));
+            let cache = ctx.env.from_to.borrow().clone();
+            let on = match (&item, cache) {
+                (Some(it), Some(f)) => f(&it.id, &from, &to),
+                _ => false,
+            };
+            ctx.push(Value::number(if on { 1.0 } else { 0.0 }));
         }
         Func::IsMicroVia | Func::IsBlindVia | Func::IsBuriedVia | Func::IsBlindBuriedVia | Func::IsPlated => {
             let mut r = 0.0;

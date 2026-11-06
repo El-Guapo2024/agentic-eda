@@ -13,6 +13,18 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import { strNumCmp } from "../schSheetPins";
+import {
+  SIM_DEVICE_FIELD,
+  SIM_DEVICE_SUBTYPE_FIELD,
+  SIM_PARAMS_FIELD,
+  SIM_PINS_FIELD,
+  createModelFromFields,
+  inferSimModel,
+  referencePrefix,
+  setFieldValue,
+  type Fields,
+  type SimModelTables,
+} from "./simModelBuiltin";
 
 /** `SIM_MODEL_PIN`. */
 export interface ModelPin {
@@ -206,4 +218,36 @@ export function tunerSaveEdit(ref: string, param: string, text: string, fields: 
   const re = new RegExp(`(^|\\s)${param.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=("[^"]*"|\\S*)`, "i");
   if (params !== undefined && re.test(params)) return { id: ref, field: SIM_FIELDS.params, value: params.replace(re, `$1${param}=${text}`) };
   return { id: ref, field: "Value", value: text };
+}
+
+/**
+ * `SIMULATOR_FRAME_UI::UpdateTunerValue` (the tuner's Save) with KiCad's model: the symbol's model made as `SIM_LIB_MGR::CreateModel( sheet, symbol,
+ * true, .. )` makes it -- Reference, Value and the `Sim.*` fields copied, a passive or a DC source with none inferred (`InferSimModel`, its
+ * primary value then stored in the Value), the model read from them -- its tuner parameter set to `text` (`SetParamValue`), and `WriteFields`
+ * written over the symbol's own fields. So an inferred R saved at "2.2k" gets its Value "2.2k" and the hidden `Sim.Device` "R" and `Sim.Pins`
+ * "1=+ 2=-" KiCad adds (r7 R7-SM-1); a potentiometer its `Sim.Params` "r=10k pos=0.3". `fields` hold the symbol's fields (the instance's over the
+ * library symbol's, Value among them), `pins` its pins. The fields after the save, or KiCad's error ("%s is not tunable").
+ */
+export function tunerWrittenFields(tables: SimModelTables, ref: string, fields: Fields, pins: readonly { number: string }[], text: string): { fields: Fields } | { error: string } {
+  const copy: Fields = { Reference: ref };
+  for (const [k, v] of Object.entries(fields)) if (k === "Value" || k.startsWith("Sim.")) copy[k] = v;
+  let storeInValue = false;
+  const inf = inferSimModel(referencePrefix(ref), copy, pins, "SI");
+  if (inf) {
+    setFieldValue(copy, SIM_DEVICE_FIELD, inf.deviceType);
+    if (inf.modelType !== "") setFieldValue(copy, SIM_DEVICE_SUBTYPE_FIELD, inf.modelType);
+    copy[SIM_PARAMS_FIELD] = inf.modelParams;
+    copy[SIM_PINS_FIELD] = inf.pinMap;
+    storeInValue = true;
+  }
+  // `StrNumCmp` order, as `GetAllLibPins` is sorted
+  const sorted = [...pins].sort((a, b) => strNumCmp(a.number, b.number, true));
+  const model = createModelFromFields(tables, copy, sorted);
+  model.setIsStoredInValue(storeInValue);
+  const param = model.getTunerParam();
+  if (!param) return { error: `${ref} is not tunable` };
+  model.setParamValue(param.info.name, text);
+  const out: Fields = { ...fields };
+  model.writeFields(out);
+  return { fields: out };
 }

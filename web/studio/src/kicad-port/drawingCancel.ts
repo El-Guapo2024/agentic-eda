@@ -101,8 +101,11 @@ export function undoDropsDrawing(tab: string, activeTool: string, drawState: Dra
   return escapeKeepsDrawingTool(tab, activeTool, drawState) && drawState!.kind !== "measure" && !drawZoneStarted(tab, activeTool, drawState);
 }
 
-/** What a board edit key does while the router has a session live (R7-R1, R7-R5): `null` when the key is the editor's as usual. */
-export type RouterEditKey = "undoSegment" | "cancel" | "customSize" | "nothing";
+/**
+ * What a board edit key does while the router has a session live (R7-R1, R7-R5): `null` when the key is the editor's as usual. `cancelThenPass`: the
+ * session ends with nothing committed, then the key goes on to the editor as usual.
+ */
+export type RouterEditKey = "undoSegment" | "cancel" | "customSize" | "nothing" | "cancelThenPass";
 
 /**
  * The edit keys while a route or a pair is drawn, or a track dragged (`ROUTER_TOOL`, pcbnew/router/router_tool.cpp):
@@ -120,12 +123,13 @@ export type RouterEditKey = "undoSegment" | "cancel" | "customSize" | "nothing";
  *
  *   so Undo and Delete take back the last fixed segment, E opens Custom Track/Via Size, and Redo (blocked) and the fill actions do nothing.
  * - `performDragging` / `InlineDrag`: "treat an undo as an escape" (`if( m_startItem ) break;`, the drag is dropped, `StopRouting()`); the fill actions,
- *   cut, copy and paste ring the bell. Delete is passed on there (`SetPassEvent`), and KiCad's selection tool would then delete under the drag; here it does
- *   nothing, as the drag's server session was built from the board as it was (a difference, kept on purpose).
+ *   cut, copy and paste ring the bell. Delete is passed on there (`evt->SetPassEvent()`) to `EDIT_TOOL::Remove`, whose `Activate()` ends the drag as the
+ *   activation of another tool does (`evt->IsActivate()`: `m_cancelled = true; break;`, nothing committed) and which then deletes what is selected or
+ *   under the cursor (`RequestSelection`): `cancelThenPass`.
  */
 export function routerEditKey(tab: string, drawState: { kind: string } | null | undefined, key: "undo" | "redo" | "delete" | "fill" | "properties"): RouterEditKey | null {
   if (tab !== "pcb" || drawState == null) return null;
   if (drawState.kind === "route" || drawState.kind === "diffpair") return key === "undo" || key === "delete" ? "undoSegment" : key === "properties" ? "customSize" : "nothing";
-  if (drawState.kind === "drag") return key === "undo" ? "cancel" : key === "properties" ? null : "nothing";
+  if (drawState.kind === "drag") return key === "undo" ? "cancel" : key === "properties" ? null : key === "delete" ? "cancelThenPass" : "nothing";
   return null;
 }

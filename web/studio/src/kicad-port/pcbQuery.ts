@@ -35,7 +35,7 @@ export interface PcbQueryItem {
   footprint: { reference: string; fpid: string; fields: [string, string][] } | null;
   groups: string[];
   plated: boolean;
-  via_type: "Through" | "Blind" | "Buried" | null;
+  via_type: "Through" | "Blind" | "Buried" | "Micro" | null;
 }
 
 export interface PcbQueryRequest {
@@ -167,11 +167,15 @@ function groupChain(board: BoardState, item: PcbItem): string[] {
   return names;
 }
 
-/** `PCB_VIA::GetViaType` as the studio tells it from the via's span (no micro vias). */
+/** `PCB_VIA::GetViaType`: the via's own type (`VIATYPE::MICROVIA`, `BLIND`, `BURIED`: the file's `(via micro ..)`, the router's Place Microvia), else told from its span
+ * (UI-LEFT B6). */
 function viaType(item: PcbItem, ctx: PcbCtx): PcbQueryItem["via_type"] {
   if (item.type !== "PCB_VIA") return null;
   const c = ctx.copperLayers;
   const v = item.via!;
+  if (v.type === "micro") return "Micro";
+  if (v.type === "blind") return "Blind";
+  if (v.type === "buried") return "Buried";
   const first = c[0];
   const last = c[c.length - 1];
   if ((v.from === first && v.to === last) || (v.from === last && v.to === first)) return "Through";

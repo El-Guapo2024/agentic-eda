@@ -124,15 +124,14 @@ fn round_trip(tag: &str, fallback: bool) -> (PathBuf, PathBuf, Value) {
 fn a_routed_board_comes_back_from_the_session_of_its_own_dsn_in_one_undo_step() {
     // The fallback, our own exporter, with the probe forced off: what a machine whose kicad-cli has no `pcb export specctra` gets.
     let (b, ses, _) = round_trip("fast", true);
-    // A session of another board names a part this one has not got: KiCad's words, and nothing changes.
+    // A session that names a part this board has not got: KiCad 25ec2335's `FromSESSION` skips it, counts it and goes on ("A single unresolvable place, wire, or
+    // via ... must not sink the whole session"), then says so once (`eda_kicad::specctra::session::skipped_warning`); 8303b2ad threw "Reference '%s' not found.".
+    // Since task-u4-import our port does what 25ec2335 does, as the api-server lane already did (tests/specctra_api_server.rs).
     let other = std::fs::read_to_string(&ses).unwrap().replacen("(place ", "(place NOPE_", 1);
     let bad = b.parent().unwrap().join("bad.ses");
     std::fs::write(&bad, other).unwrap();
-    let before = std::fs::read_to_string(b.join("design.json")).unwrap();
-    // (Our port of 8303b2ad's `FromSESSION`; KiCad 25ec2335's, through kicad-cli api-server, skips the part instead: tests/specctra_api_server.rs.)
     let (good, log) = eda_with(&["board", "import-ses", bad.to_str().unwrap(), "-C", b.to_str().unwrap()], true);
-    assert!(!good && log.contains("Reference 'NOPE_"), "{log}");
-    assert_eq!(std::fs::read_to_string(b.join("design.json")).unwrap(), before);
+    assert!(good && log.contains("session item(s) were skipped due to unresolved reference, layer, or padstack."), "{log}");
     let _ = std::fs::remove_dir_all(b.parent().unwrap());
 }
 

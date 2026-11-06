@@ -72,6 +72,33 @@
   // R6-D6: `dialog_drc_base.cpp`: `m_cbRefillZones->SetValue(true);`
   const refillBox = [...document.querySelectorAll(".dialog label")].find((l) => /Refill all zones before performing DRC/.test(l.innerText))?.querySelector("input");
   check("Refill all zones before performing DRC starts checked, as KiCad's", refillBox?.checked === true, String(refillBox?.checked));
+  // UI-LEFT B8 / R6-D9: `dialog_drc_base.fbp` starts Errors and Warnings ticked, Exclusions and All not; then everything is shown for what follows.
+  const showBoxes = () => [...document.querySelectorAll(".dialog .rc-show input")];
+  check("the Show boxes start as KiCad's: Errors and Warnings, not Exclusions or All", showBoxes().map((b) => b.checked).join() === "false,true,true,false", showBoxes().map((b) => b.checked).join());
+  showBoxes()[0].click();
+  await sleep(200);
+  check("All ticks the other three", showBoxes().every((b) => b.checked), showBoxes().map((b) => b.checked).join());
+  // The options menu (`DIALOG_DRC::OnMenu`): its three check items, Report All Errors for Each Track off, the cross-probe ones on.
+  const gear = () => document.querySelector(".dialog button[aria-label='DRC options']");
+  gear()?.click();
+  await sleep(200);
+  const optionLabels = menuLabels();
+  check("the options menu has KiCad's three entries", ["Report All Errors for Each Track", "Cross-probe Selected Items", "Center on Cross-probe"].every((l) => optionLabels.some((x) => x.includes(l))), JSON.stringify(optionLabels));
+  const optionItem = (label) => menuItems().find((e) => e.innerText.includes(label));
+  const checkedOf = (label) => (optionItem(label) ? optionItem(label).innerText.includes("\u2713") : null);
+  const pickOption = async (label) => {
+    optionItem(label)?.click();
+    await sleep(300);
+  };
+  check("Report All Errors for Each Track starts off and the cross-probe entries on (PCBNEW_SETTINGS)", checkedOf("Report All Errors for Each Track") === false && checkedOf("Cross-probe Selected Items") === true && checkedOf("Center on Cross-probe") === true, JSON.stringify(optionLabels));
+  await pickOption("Report All Errors for Each Track");
+  let kept = null;
+  try { kept = JSON.parse(localStorage.getItem("eda.drcDialog") ?? "null"); } catch {}
+  check("a menu entry toggled is kept for the next session", kept?.options?.reportAllTrackErrors === true, JSON.stringify(kept));
+  gear()?.click();
+  await sleep(200);
+  check("and the menu draws it checked", checkedOf("Report All Errors for Each Track") === true);
+  await pickOption("Report All Errors for Each Track");
   const loaded = await until(() => rows().length >= 3);
   check("the Violations page lists the findings", !!loaded, `${rows().length} rows`);
   if (!loaded) return results;
@@ -208,7 +235,10 @@
       const setup = await until(() => [...document.querySelectorAll(".dialog")].find((d) => d.innerText.startsWith("Schematic Setup")), 3000);
       check("Edit violation severities opens Schematic Setup on Violation Severity", !!setup && /Violation Severity/.test(setup.querySelector(".bs-nav-item.active")?.innerText ?? ""), setup?.querySelector(".bs-nav-item.active")?.innerText);
       if (setup) {
-        const radios = setup.querySelectorAll('section[aria-label="Violation Severity"] input[type=radio]');
+        // the page reads the table first (`GET /api/sch/erc_severities`, "Reading the ERC severities…"): wait for its rows, which a busy server answers late
+        const radiosOf = () => setup.querySelectorAll('section[aria-label="Violation Severity"] input[type=radio]');
+        await until(() => radiosOf().length >= 46 * 3, 15000);
+        const radios = radiosOf();
         check("the page has a row of Error / Warning / Ignore for every ERC check", radios.length >= 46 * 3, `${radios.length} radios`);
         await closeDialog("Schematic Setup");
       }

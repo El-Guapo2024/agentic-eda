@@ -135,7 +135,8 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     }
 
     add_board_outline(&mut node, &drc_board, &layers);
-    add_margin(&mut node, design, &layers);
+    add_margin(&mut node, design, model, &layers);
+    add_castellated_exclusions(&mut node, design, model, &drc_board);
     add_copper_texts(&mut node, design, &layers, &mut rules);
     add_copper_graphics(&mut node, design, model, &layers, &mut rules);
     add_keepouts(&mut node, design, &layers, &mut rules);
@@ -171,6 +172,26 @@ fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: 
     add_edge_solids(node, board.edge_cuts.iter(), layers, "edge:", false);
 }
 
+/// The source of the `index`th edge solid: `<prefix><index>`, with `@<REF>` for a solid of a footprint's own Edge.Cuts or Margin graphic (the shape's id is
+/// the footprint's reference, `eda_drc::outline::footprint_edge_cuts_shapes`), so `D` on the footprint takes it along as KiCad's `InlineDrag` does
+/// (`for( BOARD_ITEM* shape : footprint->GraphicalItems() ) if( shape->GetLayer() == Edge_Cuts || shape->GetLayer() == Margin || .. )
+/// itemsToDrag.Add( solid )`).
+fn edge_source(prefix: &str, index: usize, shape_id: &str) -> String {
+    // a board shape's id is `shp_..` (the outline polygon's sides `outline`); a footprint's graphic is named by its reference
+    let fp = !shape_id.is_empty() && !shape_id.starts_with("shp_") && shape_id != eda_model::outline::POLYGON_OUTLINE_ID;
+    if fp {
+        format!("{prefix}{index}@{shape_id}")
+    } else {
+        format!("{prefix}{index}")
+    }
+}
+
+/// The footprint an edge solid of [`edge_source`] belongs to, if any.
+pub(crate) fn edge_footprint(source: &str) -> Option<&str> {
+    let rest = source.strip_prefix("edge:").or_else(|| source.strip_prefix("margin:"))?;
+    rest.split_once('@').map(|(_, fp)| fp)
+}
+
 /// The solids of edge graphics (Edge.Cuts, Margin) as [`add_board_outline`] describes them, their sources `<prefix><n>`.
 /// `with_width`: the shape keeps half its width round its line (Margin); an Edge.Cuts one is given none (`SetWidth( 0 )`).
 fn add_edge_solids<'a>(node: &mut Node, shapes: impl Iterator<Item = &'a eda_model::ir::Shape>, layers: &LayerMap, prefix: &str, with_width: bool) {
@@ -192,7 +213,7 @@ fn add_edge_solids<'a>(node: &mut Node, shapes: impl Iterator<Item = &'a eda_mod
                     continue;
                 }
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: format!("{prefix}{index}"), edge: true, rule: 0, anchor_points: Vec::new() }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: edge_source(prefix, index, shape.id()), edge: true, rule: 0, anchor_points: Vec::new() }));
             }
         }
     }
@@ -202,11 +223,47 @@ fn add_edge_solids<'a>(node: &mut Node, shapes: impl Iterator<Item = &'a eda_mod
 /// aItem->GetLayer() == Margin` -- a `SOLID` on every copper layer, not routable -- and `isEdge`'s `parent->IsOnLayer( Edge_Cuts ) ||
 /// parent->IsOnLayer( Margin )`, so copper keeps the copper-to-edge clearance from it (`CT_EDGE_CLEARANCE`), as KiCad's DRC does
 /// (`drc_test_provider_edge_clearance.cpp`: `LSET( { Edge_Cuts, Margin } )`). The shape keeps its width (`SetWidth( 0 )` is for Edge.Cuts only), so
-/// the clearance is kept from its stroke's edge, as kicad-cli measures it. **Differs:** a footprint's own Margin graphics are not read; to the rules
-/// the solid is the board edge's item (on Edge.Cuts).
-fn add_margin(node: &mut Node, design: &Design, layers: &LayerMap) {
-    let Some(d) = design.drawings.as_ref() else { return };
-    add_edge_solids(node, d.shapes.iter().filter(|s| s.layer() == "Margin"), layers, "margin:", true);
+/// the clearance is kept from its stroke's edge, as kicad-cli measures it. A footprint's own Margin graphics are edges too (`SyncWorld` syncs each
+/// footprint's `GraphicalItems()` through `syncGraphicalItem` as it does the board's; R3-6's leftover): its art placed where the footprint is
+/// (`FpShape::placed`, as the footprint's own Edge.Cuts are read, `eda_drc::outline::footprint_edge_cuts_shapes`). To the rules the solid is the
+/// board edge's item (on Edge.Cuts).
+fn add_margin(node: &mut Node, design: &Design, model: &ConstraintModel, layers: &LayerMap) {
+    let board: Vec<eda_model::ir::Shape> = design.drawings.as_ref().map(|d| d.shapes.iter().filter(|s| s.layer() == "Margin").cloned().collect()).unwrap_or_default();
+    let mut footprints: Vec<eda_model::ir::Shape> = Vec::new();
+    for fp in design.placement.iter().flat_map(|pl| pl.footprints.iter()) {
+        let Some(footprint) = model.part(&fp.id).and_then(|part| model.footprint_of(part)) else { continue };
+        footprints.extend(footprint.art.shapes.iter().filter(|s| s.on_layer("Margin")).map(|s| {
+            let mut shape = s.placed(fp).shape;
+            shape.set_layer("Margin".to_string());
+            // named by the footprint (`edge_source`), as its Edge.Cuts are
+            shape.set_id(fp.id.clone());
+            shape
+        }));
+    }
+    add_edge_solids(node, board.iter().chain(footprints.iter()), layers, "margin:", true);
+}
+
+/// The holes of the castellated pads as the board edge's exclusions (`SyncWorld`: "`if( pad->GetProperty() == PAD_PROP::CASTELLATED ) {
+/// hole.reset( pad->GetEffectiveHoleShape()->Clone() ); aWorld->AddEdgeExclusion( std::move( hole ) ); }`"): where the board edge passes through
+/// one, a collision with the edge there is none (`ITEM::collideSimple`'s `checkCastellation`, [`Node::add_edge_exclusion`]). The fabrication
+/// property is the pad's `(property pad_prop_castellated)`, kept with the footprint's pads (`FootprintExtra::pads`' tokens, as the drill
+/// chart reads it). Like KiCad's, the list is the world's own -- a branch has none ([`Node::query_edge_exclusions`]).
+fn add_castellated_exclusions(node: &mut Node, design: &Design, model: &ConstraintModel, board: &eda_drc::board::DrcBoard) {
+    let Some(pl) = &design.placement else { return };
+    let extras = design.drawings.as_ref().map(|d| d.footprint_extras.as_slice()).unwrap_or_default();
+    // `eda_drc::board::build` makes the pads footprint by footprint, in this order, each footprint's in its own order
+    let mut next = board.pads.iter();
+    for fp in &pl.footprints {
+        let Some(footprint) = model.part(&fp.id).and_then(|part| model.footprint_of(part)) else { continue };
+        let extra = extras.iter().find(|e| e.id == fp.id).filter(|e| e.pads.len() == footprint.pads.len());
+        for i in 0..footprint.pads.len() {
+            let Some(pad) = next.next() else { return };
+            let castellated = extra.and_then(|e| e.pads.get(i)).is_some_and(|m| m.tokens.iter().any(|t| t == "(property pad_prop_castellated)"));
+            if let (true, Some(hole)) = (castellated, pad.hole.as_ref()) {
+                node.add_edge_exclusion(hole.clone());
+            }
+        }
+    }
 }
 
 /// `PNS_KICAD_IFACE_BASE::syncZone` for each keepout rule area (`!aZone->GetIsRuleArea() || !aZone->HasKeepoutParametersSet()` returns at
@@ -371,25 +428,35 @@ fn connection_points(shape: &eda_model::ir::Shape) -> Vec<Point> {
 ///   the table's box grown by half its widest rule, not routable, of no net;
 /// - a footprint's own text on copper (`syncTextItem` of its reference, value, fields and texts): its bounding hull, as a board text's.
 ///
-/// **Differs:** a dimension's and a barcode's text is the box of its glyphs, not the glyphs (`syncDimension` adds each glyph outline); a
-/// barcode's printed text is left out of its hull; a rounded rectangle on copper is its square corners; the line style (dashes) of a shape is
-/// not read; an arc or a circle's ring is its chords with the flattening error (5 um) added to the stroke, where KiCad has one `SHAPE_ARC`.
+/// A dimension's text is the box of its glyphs, as KiCad's (`syncDimension`: `aDimension->PCB_TEXT::TransformShapeToPolygon`, which is
+/// `buildBoundingHull` of the glyphs); a barcode's printed text is a box of its own under the symbol ([`barcode_text_hull`]); a rounded rectangle
+/// on copper is its rounded outline. **Differs:** the line style (dashes) of a shape is not read; an arc or a circle's ring is its chords with the flattening error (5 um) added to the stroke, where KiCad has one `SHAPE_ARC`.
 /// A hidden board text and a dimension whose text is hidden are not in the model (the importer leaves them out, so the board kicad-cli checks
 /// has none either); a footprint's hidden text is a hidden field, which `syncTextItem` leaves out too.
 fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
     use eda_drc::rule_item::Class;
     let copper = |l: &str| layers.index_of(l).filter(|_| l.ends_with(".Cu"));
-    let add_shape = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, shape: &eda_model::ir::Shape, net: Option<&str>, footprint: Option<&str>, type_name: Option<&str>| {
+    // `rounded`: the rectangle `shape` is, with that corner radius (a board shape's `ShapeStyle::corner_radius`): `makeEffectiveShapes`' `ROUNDRECT( ..,
+    // m_cornerRadius ).TransformToPolygon( poly, getMaxError() )` -- its outline filled when the shape is, and its sides and corner arcs stroked -- for
+    // which the polygon of its rounded rectangle stands here (`eda_model::fp_art::rounded_rect_points`, the corners at 5 um), the arcs given the
+    // error as a curve's are. Its anchors stay the rectangle's corners (`GetConnectionPoints`: `GetRectCorners()`).
+    let add_shape = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, shape: &eda_model::ir::Shape, net: Option<&str>, footprint: Option<&str>, type_name: Option<&str>, rounded: Nm| {
         let Some(layer) = copper(shape.layer()) else { return };
         let source = format!("{}{id}", Solid::GRAPHIC_SOURCE);
         let rule = rules.add_graphic_as(&source, layer, net, footprint, Class::Shape, type_name);
         let anchors = connection_points(shape);
         let pos = anchors.first().copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
         let net = net.and_then(crate::item::net_of);
+        let effective = match shape {
+            eda_model::ir::Shape::Rect { id, layer, stroke_width, filled, start, end } if rounded > Nm::ZERO => {
+                eda_model::ir::Shape::Polygon { id: id.clone(), layer: layer.clone(), stroke_width: *stroke_width, filled: *filled, pts: eda_model::fp_art::rounded_rect_points(*start, *end, rounded) }
+            }
+            other => other.clone(),
+        };
         // KiCad keeps an arc and an unfilled circle's ring one `SHAPE_ARC` (`makeEffectiveShapes`); its chords here lie up to the flattening error
         // inside it, so, as for an Edge.Cuts arc ([`add_edge_solids`]), the stroke is given that error more: the band holds the true curve (r4 R4-6)
-        let curved = matches!(shape, eda_model::ir::Shape::Arc { .. } | eda_model::ir::Shape::Circle { .. });
-        for (k, piece) in eda_drc::board::effective_shapes(shape).into_iter().enumerate() {
+        let curved = matches!(shape, eda_model::ir::Shape::Arc { .. } | eda_model::ir::Shape::Circle { .. }) || (rounded > Nm::ZERO && matches!(shape, eda_model::ir::Shape::Rect { .. }));
+        for (k, piece) in eda_drc::board::effective_shapes(&effective).into_iter().enumerate() {
             let piece = match piece {
                 Shape::Strokes { segs, r } if curved => Shape::Strokes { segs, r: r + eda_model::outline::MAX_ERROR_NM },
                 piece => piece,
@@ -409,7 +476,7 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
     if let Some(d) = design.drawings.as_ref() {
         for (i, shape) in d.shapes.iter().enumerate() {
             let id = if shape.id().is_empty() { format!("shape{i}") } else { shape.id().to_string() };
-            add_shape(node, rules, &id, shape, d.board_items.net_of(shape.id()), None, None);
+            add_shape(node, rules, &id, shape, d.board_items.net_of(shape.id()), None, None, d.board_items.corner_radius_of(shape.id()));
         }
         // a text box: `syncGraphicalItem( static_cast<PCB_SHAPE*>( gitem ) )`, its rectangle (`PCB_SHAPE` part); not filled, its border at the
         // stroke's width whether the border is drawn or not (`makeEffectiveShapes` takes `GetEffectiveWidth()`, the stroke's; `m_borderEnabled` is
@@ -422,7 +489,7 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             let id = if tb.id.is_empty() { format!("textbox{i}") } else { tb.id.clone() };
             let shape = eda_model::ir::Shape::Polygon { id: id.clone(), layer: tb.layer.clone(), stroke_width: tb.stroke_width_nm.max(Nm::ZERO), filled: false, pts: corners };
             // `A.Type` is "Text Box" (`solid->SetParent( aItem )`, the text box itself)
-            add_shape(node, rules, &id, &shape, None, None, Some("Text Box"));
+            add_shape(node, rules, &id, &shape, None, None, Some("Text Box"), Nm::ZERO);
         }
         for (i, dim) in d.dimensions.iter().enumerate() {
             let Some(layer) = copper(&dim.layer) else { continue };
@@ -460,8 +527,11 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             let (sin, cos) = (b.angle as f64 / 1000.0).to_radians().sin_cos();
             let pts = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].iter().map(|&(x, y)| Point { x: b.at.x + Nm::kiround(x * cos + y * sin), y: b.at.y + Nm::kiround(-x * sin + y * cos) }).collect();
             let id = if b.id.is_empty() { format!("barcode{i}") } else { b.id.clone() };
+            // `getBoundingHull( aBuffer, m_textPoly, aClearance )`: the printed text's own box under the symbol, a second solid
+            let mut pieces = vec![Shape::Polygon { pts }];
+            pieces.extend(barcode_text_hull(b));
             // `A.Type == 'Barcode'`: the implicit 1 mm physical clearance ("barcode visual separation default") holds a route off it
-            add_obstacle(node, rules, &id, layer, vec![Shape::Polygon { pts }], Class::Shape, Some("Barcode"));
+            add_obstacle(node, rules, &id, layer, pieces, Class::Shape, Some("Barcode"));
         }
         for (i, t) in d.tables.iter().enumerate() {
             let Some(layer) = copper(&t.layer) else { continue };
@@ -479,7 +549,7 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
     }
     for (i, (fp, piece)) in eda_drc::fp_art::footprint_copper_of(design, model).into_iter().enumerate() {
         match piece {
-            eda_drc::fp_art::FpCopper::Shape(shape) => add_shape(node, rules, &format!("{fp}:{i}"), &shape, None, Some(&fp), None),
+            eda_drc::fp_art::FpCopper::Shape(shape) => add_shape(node, rules, &format!("{fp}:{i}"), &shape, None, Some(&fp), None, Nm::ZERO),
             eda_drc::fp_art::FpCopper::Text(t) => {
                 let (Some(layer), Some(Shape::Strokes { segs, r })) = (copper(&t.layer), eda_drc::board::footprint_text_shape(&t)) else { continue };
                 if segs.is_empty() {
@@ -492,6 +562,34 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             }
         }
     }
+}
+
+/// `PCB_BARCODE::GetBoundingHull`'s second outline, `getBoundingHull( aBuffer, m_textPoly, aClearance )`: the box of the printed text, as
+/// `ComputeTextPoly` puts it -- `m_text.TransformTextToPolySet( .., GetMaxError(), ERROR_INSIDE )` of the text at the barcode's text height with
+/// `GetPenSizeForNormal( height )` (`KiROUND( height / 8.0 )`), moved so that its box is centred under the symbol's, its top 1 mm below the
+/// symbol's bottom (`textPos.y = symbolBBox.GetBottom() - textBBox.GetTop() + textOffset`) -- in the barcode's unturned frame, its corners turned
+/// by the barcode's angle about its position (`RotatePoint( corner, m_pos, m_angle )`). None when the text is not shown (`ComputeTextPoly`:
+/// `if( !m_text.IsVisible() ) return;`). **Differs:** KiCad still adds an outline for a hidden text: the box of the empty polygon, a point at the
+/// board's origin turned about the barcode -- a solid of no size there; it is left out.
+fn barcode_text_hull(b: &eda_model::barcode::Barcode) -> Option<Shape> {
+    if !b.show_text || b.text.is_empty() {
+        return None;
+    }
+    let h = b.text_height_nm.max(Nm::new(1));
+    let pen = Nm::new(crate::kigeom::ki_round(h.as_f64() / 8.0).max(1));
+    let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &b.text, pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (h, h), thickness: pen, angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
+    if segs.is_empty() {
+        return None;
+    }
+    let r = pen / 2;
+    let (x0, x1) = (segs.iter().flat_map(|s| [s.a.x, s.b.x]).min()? - r, segs.iter().flat_map(|s| [s.a.x, s.b.x]).max()? + r);
+    let (y0, y1) = (segs.iter().flat_map(|s| [s.a.y, s.b.y]).min()? - r, segs.iter().flat_map(|s| [s.a.y, s.b.y]).max()? + r);
+    let (tw, th) = ((x1 - x0).as_f64(), (y1 - y0).as_f64());
+    // in the barcode's frame, about its position: centred, its top 1 mm under the symbol (which `SetRect` keeps to the barcode's width and height)
+    let top = b.height_nm.as_f64() / 2.0 + 1_000_000.0;
+    let (sin, cos) = (b.angle as f64 / 1000.0).to_radians().sin_cos();
+    let corner = |x: f64, y: f64| Point { x: b.at.x + Nm::kiround(x * cos + y * sin), y: b.at.y + Nm::kiround(-x * sin + y * cos) };
+    Some(Shape::Polygon { pts: vec![corner(-tw / 2.0, top), corner(tw / 2.0, top), corner(tw / 2.0, top + th), corner(-tw / 2.0, top + th)] })
 }
 
 /// `PCB_TEXT::buildBoundingHull`: the glyph strokes turned back by the draw rotation about `at` (`poly.Rotate( -GetDrawRotation(), GetDrawPos() )`),
@@ -539,6 +637,99 @@ mod tests {
             drawings: None,
         };
         (design, model)
+    }
+
+    /// A one-pad through-hole footprint J1 (pad 1 on net N1, a 0.6 mm hole) at (10, 0) mm, on the top edge of a 20 mm board, with `art` as its art.
+    fn edge_pad_board(art: eda_model::fp_art::FpArt, castellated: bool) -> (Design, ConstraintModel) {
+        use eda_model::{Footprint, Net, Pad, PadKind, PadShape};
+        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("TH1".into()), footprint: Some("TH1".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
+        let pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.2), mm(1.2)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.6)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+        let model = ConstraintModel {
+            parts: vec![part],
+            nets: vec![Net { name: "N1".into(), pins: vec!["J1.1".into()] }],
+            footprints: vec![Footprint { name: "TH1".into(), pads: vec![pad], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art }],
+            ..Default::default()
+        };
+        let (mut design, _) = two_pad_board();
+        let outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }];
+        design.placement = Some(PlacementSection { outline, footprints: vec![FootprintInstance { id: "J1".into(), at: Point { x: mm(10.0), y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] });
+        design.routing = None;
+        let tokens = if castellated { vec!["(property pad_prop_castellated)".to_string()] } else { vec![] };
+        let extra = eda_model::ir::FootprintExtra { id: "J1".into(), pads: vec![eda_model::ir::PadMaskInfo { tokens, ..Default::default() }], ..Default::default() };
+        design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![extra], ..Default::default() });
+        (design, model)
+    }
+
+    /// `SyncWorld`'s castellated pads: the hole of a pad `(property pad_prop_castellated)` is an edge exclusion of the world (`AddEdgeExclusion`), so a
+    /// route may start on such a pad on the board edge -- `isStartingPointRoutable` asks the world itself, where the edge inside the hole collides with
+    /// nothing (`checkCastellation`, `QueryEdgeExclusions`). The same pad without the property is refused there; and a branch of the world has no
+    /// exclusions (`NODE::Branch` does not copy `m_edgeExclusions`), so the head's own collision with the edge is a collision as before.
+    #[test]
+    fn a_route_may_start_on_a_castellated_pad_on_the_board_edge() {
+        let start = Point { x: mm(10.0), y: Nm::ZERO };
+        for castellated in [true, false] {
+            let (design, model) = edge_pad_board(Default::default(), castellated);
+            let mut router = crate::router::Router::new(&design, &model);
+            let r = router.start(start, "F.Cu", mm(0.2));
+            if castellated {
+                assert_eq!(r, Ok(()), "the start on the castellated pad");
+            } else {
+                assert_eq!(r, Err("The routing start point violates DRC.".to_string()));
+            }
+        }
+        let (design, model) = edge_pad_board(Default::default(), true);
+        let (node, _) = build_node(&design, &model);
+        let dot = Shape::Stadium { a: start, b: start, r: mm(0.1) };
+        let edge = |opts: crate::node::QueryOpts| node.colliding_with(&dot, &net_of("N1"), crate::layer::LayerRange::single(0), &model.board, &[], opts).iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if s.edge));
+        assert!(!edge(crate::node::QueryOpts { root_world: true, ..Default::default() }), "the world itself: excluded");
+        assert!(edge(crate::node::QueryOpts::default()), "a branch's query: the edge");
+        // off the hole, the edge is the edge even for the world
+        let off = Shape::Stadium { a: Point { x: mm(11.0), y: mm(0.3) }, b: Point { x: mm(11.0), y: mm(0.3) }, r: mm(0.1) };
+        assert!(node.colliding_with(&off, &net_of("N1"), crate::layer::LayerRange::single(0), &model.board, &[], crate::node::QueryOpts { root_world: true, ..Default::default() }).iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if s.edge)));
+    }
+
+    /// `QueryConstraint`'s `evaluateLineSegments`: with a rule that looks at shapes (`HasGeometryDependentRules`), a line of the router of several
+    /// segments is asked segment by segment -- each a dummy track of the line's width -- and the smallest clearance is the line's. Here a rule gives
+    /// 0.05 mm to a track that crosses the rule area Z, which only the line's second segment does: the whole line has 0.05 mm. (It was asked by its
+    /// first segment, 0.2 mm.) Without a rule on shapes the line is one dummy from its first point to its last.
+    #[test]
+    fn a_line_is_asked_segment_by_segment_by_a_rule_on_shapes() {
+        use crate::rule_resolver::Side;
+        let (mut design, mut model) = two_pad_board();
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        model.board.custom_rules_text = Some("(version 1)\n(rule tight\n  (constraint clearance (min 0.05mm))\n  (condition \"A.intersectsArea('Z')\"))\n".into());
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks = vec![Track { id: "trkB".into(), net: "B".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(0.0, 5.0), pt(10.0, 5.0)], arc_mid_offset: None }];
+        rt.zones.push(eda_model::ir::Zone { id: "zone_z".into(), name: "Z".into(), layer: "F.Cu".into(), outline: vec![pt(5.0, -1.0), pt(10.0, -1.0), pt(10.0, 1.0), pt(5.0, 1.0)], is_rule_area: true, ..Default::default() });
+        model.nets.push(eda_model::Net { name: "B".into(), pins: vec![] });
+        let (node, _) = build_node(&design, &model);
+        let r = node.rule_resolver().expect("the board's rules");
+        let other = node.iter().find_map(|(_, it)| matches!(it, Item::Segment(s) if s.net.as_deref() == Some("B")).then_some(it)).expect("B's track");
+        let net = net_of("A");
+        let pts = [pt(0.0, 0.0), pt(4.0, 0.0), pt(8.0, 0.0)];
+        let line = Side::Line { net: &net, layer: 0, width: mm(0.2), pts: &pts };
+        assert_eq!(r.clearance(&line, &Side::Item(other), false), mm(0.05), "the second segment crosses Z");
+        let first = Side::Track { net: &net, layer: 0, seg: Some((pts[0], pts[1])) };
+        assert_eq!(r.clearance(&first, &Side::Item(other), false), mm(0.2), "the first alone does not");
+        let outside = [pt(0.0, 0.0), pt(2.0, 0.0), pt(4.0, 0.0)];
+        assert_eq!(r.clearance(&Side::Line { net: &net, layer: 0, width: mm(0.2), pts: &outside }, &Side::Item(other), false), mm(0.2));
+    }
+
+    /// R3-6's leftover: a footprint's own graphic on Margin is a board edge to the router as the board's are (`SyncWorld` syncs every footprint's
+    /// `GraphicalItems()` through `syncGraphicalItem`: `GetLayer() == Margin` -> every copper layer, not routable; `isEdge`), placed where the footprint is.
+    #[test]
+    fn a_footprints_margin_graphic_is_an_edge() {
+        use eda_model::ir::Shape as S;
+        let line = S::Segment { id: String::new(), layer: "Margin".into(), stroke_width: mm(0.1), filled: false, start: Point { x: mm(-2.0), y: mm(5.0) }, end: Point { x: mm(2.0), y: mm(5.0) } };
+        let art = eda_model::fp_art::FpArt { shapes: vec![eda_model::fp_art::FpShape::new(line)], ..Default::default() };
+        let (design, model) = edge_pad_board(art, false);
+        let (node, layers) = build_node(&design, &model);
+        let margin: Vec<&Solid> = node.iter().filter_map(|(_, it)| match it { Item::Solid(s) if s.source.starts_with("margin:") => Some(s), _ => None }).collect();
+        assert_eq!(margin.len(), 1);
+        assert!(margin[0].edge && !margin[0].routable() && margin[0].layers == layers.all());
+        // at (8, 5) .. (12, 5) mm on the board: the footprint's place, the stroke kept
+        let Shape::Stadium { a, b, r } = margin[0].shape else { panic!("a stroked line: {:?}", margin[0].shape) };
+        assert_eq!((a, b, r), (Point { x: mm(8.0), y: mm(5.0) }, Point { x: mm(12.0), y: mm(5.0) }, mm(0.05)));
     }
 
     /// A through-hole pad whose copper differs from layer to layer, on a four-layer board.
@@ -735,6 +926,47 @@ mod tests {
         let bar = graphic_solids(&node, "bar_1");
         let (x0, y0, x1, y1) = bar[0].shape.bbox(Nm::ZERO);
         assert_eq!((x1 - x0, y1 - y0), (mm(2.0), mm(4.0)), "4 x 2 mm turned by 90 degrees");
+    }
+
+    /// `PCB_BARCODE::GetBoundingHull` is two outlines: the symbol's box and the printed text's (`m_textPoly`, 1 mm under the symbol, centred), each
+    /// turned by the barcode's angle; and a board rectangle with rounded corners on copper is its rounded outline (`makeEffectiveShapes`' `ROUNDRECT`),
+    /// so copper may come into its corners.
+    #[test]
+    fn a_barcodes_printed_text_is_an_obstacle_and_a_rounded_rectangle_has_round_corners() {
+        use eda_model::ir::{DrawingsSection, Shape as S};
+        let (mut design, model) = two_pad_board();
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut d = DrawingsSection::default();
+        d.barcodes.push(eda_model::barcode::Barcode { id: "bar_1".into(), at: pt(60.0, 10.0), angle: 0, layer: "F.Cu".into(), width_nm: mm(4.0), height_nm: mm(2.0), text: "XY".into(), text_height_nm: mm(1.0), kind: Default::default(), ecc: Default::default(), show_text: true, knockout: false, margin_x_nm: Nm::ZERO, margin_y_nm: Nm::ZERO });
+        d.barcodes.push(eda_model::barcode::Barcode { id: "bar_2".into(), at: pt(80.0, 10.0), angle: 90_000, layer: "F.Cu".into(), width_nm: mm(4.0), height_nm: mm(2.0), text: "XY".into(), text_height_nm: mm(1.0), kind: Default::default(), ecc: Default::default(), show_text: true, knockout: false, margin_x_nm: Nm::ZERO, margin_y_nm: Nm::ZERO });
+        d.shapes.push(S::Rect { id: "shp_rr".into(), layer: "F.Cu".into(), stroke_width: mm(0.2), filled: true, start: pt(10.0, 30.0), end: pt(20.0, 36.0) });
+        d.board_items.set_corner_radius("shp_rr", mm(2.0));
+        design.drawings = Some(d);
+        let (node, layers) = build_node(&design, &model);
+        let f = layers.index_of("F.Cu").unwrap();
+        let bar = graphic_solids(&node, "bar_1");
+        assert_eq!(bar.len(), 2, "the symbol and its text");
+        let mut boxes: Vec<(Nm, Nm, Nm, Nm)> = bar.iter().map(|s| s.shape.bbox(Nm::ZERO)).collect();
+        boxes.sort();
+        let text = boxes.iter().find(|b| b.1 > mm(10.0)).expect("the text's box below the symbol");
+        // the symbol ends at y = 11 mm; the text's top is 1 mm under it, its box centred on x = 60 mm, about the glyphs' height (1 mm and the pen)
+        assert_eq!(text.1, mm(12.0));
+        assert!((text.0 + text.2 - mm(120.0)).abs() <= Nm::new(2) && text.3 - text.1 > mm(0.9) && text.3 - text.1 < mm(1.4), "{text:?}");
+        // turned by 90 degrees the text is to the right of the symbol (`RotatePoint`, counter-clockwise on the screen with y down: +y goes to +x)
+        let turned: Vec<(Nm, Nm, Nm, Nm)> = graphic_solids(&node, "bar_2").iter().map(|s| s.shape.bbox(Nm::ZERO)).collect();
+        assert!(turned.iter().any(|b| b.0 == mm(82.0)), "{turned:?}");
+        // a SIG track just past the symbol's box, across the text: it collides now
+        let rules = model.board.clone();
+        let under = Shape::Stadium { a: pt(57.0, 12.5), b: pt(63.0, 12.5), r: mm(0.1) };
+        assert!(node.first_colliding(&under, &net_of("SIG"), crate::layer::LayerRange::single(f), &rules, &[]).is_some());
+        // the rounded rectangle: a track crossing a corner's cut of the square is clear of the rounded outline (2 mm radius: the corner arc is
+        // 2 - 2/sqrt(2) = 0.59 mm inside the square's corner along the diagonal)
+        let corner = Shape::Stadium { a: pt(9.75, 29.75), b: pt(9.76, 29.76), r: mm(0.1) };
+        let rr = graphic_solids(&node, "shp_rr");
+        assert!(!rr.is_empty());
+        assert!(node.first_colliding(&corner, &net_of("SIG"), crate::layer::LayerRange::single(f), &rules, &[]).is_none(), "the square corner is not copper");
+        let side = Shape::Stadium { a: pt(15.0, 29.75), b: pt(15.01, 29.75), r: mm(0.1) };
+        assert!(node.first_colliding(&side, &net_of("SIG"), crate::layer::LayerRange::single(f), &rules, &[]).is_some(), "its side is");
     }
 
     /// r4 R4-6: a text box with its border off keeps its stroke's width (`makeEffectiveShapes` takes `GetEffectiveWidth()`), and an arc on copper

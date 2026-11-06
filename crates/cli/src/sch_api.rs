@@ -305,6 +305,24 @@ pub fn find(dir: &Path, body: &[u8]) -> Value {
     json!({ "ok": true, "current_rank": rank_of(&in_view), "matches": matches })
 }
 
+/// `POST /api/find/text`: `{search: SearchData, texts: [..], replace?: bool}` -> `{ok, matches: [bool], replaced: [string | null]}` -- `EDA_ITEM::Matches( aText,
+/// aSearchData )` of each text, and with `replace` `EDA_ITEM::Replace`'s new text (null where nothing was replaced), with the one matcher of the schematic's
+/// Find ([`search::matches_text`], [`search::replace_text`]: plain, whole words, wildcards and `eda_model::wx_regex`). The Symbol Editor's Find and Replace
+/// (`SCH_FIND_REPLACE_TOOL` in a `SYMBOL_EDIT_FRAME`) walks the symbol it is editing in the browser and asks this which of its texts match: the rules of
+/// which item is searched are the walk's (`web/studio/src/kicad-port/symFind.ts`), the matching is this.
+pub fn find_text(body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let search: SearchData = match serde_json::from_value(req.get("search").cloned().unwrap_or_else(|| json!({}))) {
+        Ok(s) => s,
+        Err(e) => return err(format!("bad search: {e}")),
+    };
+    let texts: Vec<String> = req.get("texts").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
+    let replace = req.get("replace").and_then(Value::as_bool).unwrap_or(false);
+    let matches: Vec<bool> = texts.iter().map(|t| search::matches_text(t, &search)).collect();
+    let replaced: Vec<Value> = if replace { texts.iter().map(|t| search::replace_text(t, &search).map_or(Value::Null, Value::String)).collect() } else { Vec::new() };
+    json!({ "ok": true, "matches": matches, "replaced": replaced })
+}
+
 /// `GET /api/sch/erc_pin_map`: `{ok, matrix, custom}` -- the matrix ERC
 /// actually runs with (the design's own, else KiCad's default; the project file
 /// carries it to kicad-cli, `eda_kicad::export_kicad_pro_for`) and whether the design
@@ -372,6 +390,21 @@ pub fn setup(dir: &Path) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Symbol Editor's Find asks the schematic's matcher: plain (any case), whole words, a regular expression, and Replace's new text.
+    #[test]
+    fn find_text_matches_and_replaces_with_the_schematics_matcher() {
+        let ask = |search: Value, texts: &[&str], replace: bool| find_text(json!({ "search": search, "texts": texts, "replace": replace }).to_string().as_bytes());
+        let r = ask(json!({ "find": "vcc" }), &["VCC", "AVCC_1", "GND"], false);
+        assert_eq!(r["matches"], json!([true, true, false]), "plain, case ignored");
+        let r = ask(json!({ "find": "VCC", "mode": "whole_word", "match_case": true }), &["VCC", "AVCC", "VCC_1", "VCC 3"], false);
+        assert_eq!(r["matches"], json!([true, false, false, true]), "whole words: `_` is a word character");
+        let r = ask(json!({ "find": "^P[0-9]+$", "mode": "regex" }), &["P12", "PA", "p3"], false);
+        assert_eq!(r["matches"], json!([true, false, true]), "a regular expression, any case");
+        let r = ask(json!({ "find": "vcc", "replace": "VDD" }), &["AVCC", "GND"], true);
+        assert_eq!(r["replaced"], json!(["AVDD", null]));
+        assert_eq!(find_text(b"{}")["ok"], json!(true), "no search is an empty one");
+    }
 
     #[test]
     fn output_paths_must_stay_inside_the_board_directory() {

@@ -1,0 +1,15 @@
+# The board web/studio/e2e/sim-left-u5.check.js runs on (UI-LEFT M3, task-u5-dialogs): two voltage sources the check makes S-parameter ports
+# (`Simulation_SPICE:VDC`, Sim.Params `portnum`), a potentiometer with its wiper on R1 (`Device:R_Potentiometer`, Sim.Device R, Sim.Type POT), and
+# R1 / R2 inferred as ideal resistors. `eda board new web/studio/e2e/sim-left-board.yaml -o <dir>`, then `eda board serve -C <dir>`. No ngspice
+# is needed: the check answers the runs itself.
+parts:
+  - { reference: V1, value: "1", symbol: "Simulation_SPICE:VDC", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: V2, value: "0", symbol: "Simulation_SPICE:VDC", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: RV1, value: 10k, symbol: "Device:R_Potentiometer", package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }, { number: "3", kind: passive }] }
+  - { reference: R1, value: 1k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R2, value: "50", package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+nets:
+  - { name: IN, pins: [V1.1, RV1.1] }
+  - { name: GND, pins: [V1.2, V2.2, RV1.3, R1.2] }
+  - { name: W, pins: [RV1.2, R1.1, R2.1] }
+  - { name: OUT, pins: [R2.2, V2.1] }
