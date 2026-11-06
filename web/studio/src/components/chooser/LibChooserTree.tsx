@@ -1,9 +1,14 @@
 // The tree of a chooser (`LIB_TREE`'s wxDataViewCtrl): a row per library, per symbol of an open library and, under an open multi-unit symbol, per unit,
-// in the Item and Description columns. The rows are kicad-port/libChooser.ts's `visibleRows`; this draws them and tells the dialog what was clicked.
+// in the Item column and the columns Select Columns... shows (Description by default; a right click on the header offers the chooser,
+// `LIB_TREE::onHeaderContextMenu`, kicad-port/libTreeColumns.ts). The rows are kicad-port/libChooser.ts's `visibleRows`; this draws them and tells the
+// dialog what was clicked.
 // A click selects, a double click (or Enter) chooses an item and opens or folds a library, a click on the arrow does the same without choosing. The
 // context menu of a library row pins or unpins it (`LIB_TREE_MODEL_ADAPTER::PinLibrary`).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PIN_GLYPH } from "../../kicad-port/libraryTreeState";
+import { availableColumns, cellText, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
+import { closeSelectColumns, openSelectColumns, setLibTreeColumns, useLibTreeColumns, useSelectColumnsOpen } from "../../state/libTreeColumns";
+import { SelectColumnsDialog } from "../library/SelectColumnsDialog";
 import type { ChooserRow } from "../../kicad-port/libChooser";
 import { unitLetter } from "../../kicad-port/unitLetter";
 import { setLibraryPinned, type TreeKind } from "../../state/libraryTree";
@@ -26,6 +31,14 @@ export interface LibChooserTreeProps {
 export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onChoose, onToggleGroup, onToggleItem, emptyText }: LibChooserTreeProps) {
   const holder = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  const treeId = kind === "symbol" ? "symbol_chooser" : "footprint_chooser";
+  const shown = useLibTreeColumns(treeId);
+  const choosing = useSelectColumnsOpen(treeId);
+  const columns = useMemo(() => treeColumns(shown), [shown]);
+  const extra = columns.slice(1);
+  // `addColumnIfNecessary` for each library loaded: the fields of its items
+  const available = useMemo(() => availableColumns(rows.filter((r) => r.kind === "group").map((r) => (r.kind === "group" ? extraFieldsOf(r.group.items) : []))), [rows]);
+  const grid = { gridTemplateColumns: ["minmax(150px, 38%)", ...extra.map(() => "1fr")].join(" ") };
 
   // The selected row stays in view as the arrow keys move it.
   useEffect(() => {
@@ -36,14 +49,25 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
 
   return (
     <div className="chooser-tree" ref={holder} role="tree" aria-label="Libraries" data-chooser-tree={kind}>
-      <div className="chooser-header">
-        <div>Item</div>
-        <div>Description</div>
+      <div
+        className="chooser-header"
+        style={grid}
+        data-chooser-header
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY, entries: [{ label: SELECT_COLUMNS_LABEL, hint: SELECT_COLUMNS_ACTION, onSelect: () => openSelectColumns(treeId) }] });
+        }}
+      >
+        {columns.map((c) => (
+          <div key={c} data-column={c}>
+            {c}
+          </div>
+        ))}
       </div>
       {rows.length === 0 && <div style={{ padding: "10px 12px", color: "var(--chrome-text-dim)" }}>{emptyText}</div>}
       {rows.map((row) => {
         const selected = row.key === selectedKey;
-        const common = { "data-key": row.key, "aria-selected": selected, className: `chooser-row ${row.kind}${selected ? " selected" : ""}` } as const;
+        const common = { "data-key": row.key, "aria-selected": selected, className: `chooser-row ${row.kind}${selected ? " selected" : ""}`, style: grid } as const;
         if (row.kind === "group") {
           const g = row.group;
           const count = loading.has(g.lib) ? "…" : g.count !== undefined ? String(g.count) : g.items.length > 0 ? String(g.items.length) : "";
@@ -70,7 +94,11 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
                 {g.pinned ? PIN_GLYPH : ""}
                 {g.lib} {count !== "" && <span className="dim">({count})</span>}
               </div>
-              <div title={g.description}>{g.description ?? ""}</div>
+              {extra.map((c) => (
+                <div key={c} title={c === "Description" ? g.description : undefined}>
+                  {c === "Description" ? (g.description ?? "") : ""}
+                </div>
+              ))}
             </div>
           );
         }
@@ -102,18 +130,28 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
                 </span>
                 {row.item.name}
               </div>
-              <div title={row.item.description}>{row.item.description}</div>
+              {extra.map((c) => {
+                const text = cellText(row.item, c);
+                return (
+                  <div key={c} title={text} data-column={c}>
+                    {text}
+                  </div>
+                );
+              })}
             </div>
           );
         }
         return (
           <div key={row.key} role="treeitem" data-id={row.item.id} data-unit={row.unit} {...common} onClick={() => onSelect(row.key)} onDoubleClick={() => onChoose(row)}>
             <div>Unit {unitLetter(row.unit)}</div>
-            <div />
+            {extra.map((c) => (
+              <div key={c} />
+            ))}
           </div>
         );
       })}
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} onClose={() => setMenu(null)} />}
+      {choosing && <SelectColumnsDialog available={available} shown={shown} onOk={(c) => setLibTreeColumns(treeId, c)} onClose={closeSelectColumns} />}
     </div>
   );
 }

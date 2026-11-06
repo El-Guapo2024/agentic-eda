@@ -53,6 +53,9 @@ pub struct SymbolSummary {
     pub pin_numbers: Vec<String>,
     /// A second body style (DeMorgan) is drawn.
     pub alternate_body_style: bool,
+    /// The symbol's other fields (`(property "MPN" ..)`, not the five mandatory ones nor a `ki_` key), in file order: the library tree's extra columns
+    /// (`LIB_SYMBOL::GetChooserFields`, UI-LEFT A2's Select Columns).
+    pub user_fields: Vec<(String, String)>,
 }
 
 impl SymbolSummary {
@@ -166,6 +169,9 @@ pub fn scan_symbols(text: &str) -> Vec<SymbolSummary> {
                                     };
                                     if let Some(slot) = slot {
                                         *slot = value;
+                                    } else if !key.starts_with("ki_") {
+                                        sym.user_fields.retain(|(k, _)| *k != key);
+                                        sym.user_fields.push((key, value));
                                     }
                                     next = after_val;
                                 }
@@ -336,6 +342,12 @@ pub fn inherit(list: &mut [SymbolSummary]) {
                 }
             }
             sym.power |= from.power;
+            // a field of the base the derived symbol has not got (`Flatten` adds the parent's fields it does not override)
+            for (k, v) in &from.user_fields {
+                if !sym.user_fields.iter().any(|(mine, _)| mine == k) {
+                    sym.user_fields.push((k.clone(), v.clone()));
+                }
+            }
             base = from.extends.as_ref().and_then(|e| index.get(e)).copied();
             hops += 1;
         }
@@ -394,6 +406,7 @@ mod tests {
             (property "Description" "Low-Power, Dual Operational Amplifier, DIP-8/SOIC-8/TO-99-8 (with a paren)")
             (property "ki_keywords" "dual opamp")
             (property "ki_fp_filters" "SOIC*3.9x4.9mm*P1.27mm* DIP*W7.62mm*")
+            (property "MPN" "LM358DR" (at 0 0 0) (hide yes))
             (symbol "LM358_1_1" (polyline (pts (xy -5.08 5.08) (xy 5.08 0) (xy -5.08 -5.08) (xy -5.08 5.08)))
                 (pin input line (at -7.62 2.54 0) (length 2.54) (name "+" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
                 (pin input line (at -7.62 -2.54 0) (length 2.54) (name "-") (number "2"))
@@ -431,6 +444,16 @@ mod tests {
         assert!(!lm.power && !lm.alternate_body_style && lm.extends.is_none());
         assert_eq!(&LIB[lm.span.clone()][..16], "(symbol \"LM358\" ");
         assert!(LIB[lm.span.clone()].ends_with("(number \"4\"))))"), "the span is the whole form, closing paren included");
+    }
+
+    #[test]
+    fn a_symbols_other_fields_are_kept_and_a_derived_symbol_takes_its_bases() {
+        let list = scan_symbols(LIB);
+        let base = list.iter().find(|s| s.name == "LM358").unwrap();
+        assert_eq!(base.user_fields, vec![("MPN".to_string(), "LM358DR".to_string())], "the mandatory fields and the ki_ keys are not user fields");
+        let mut all = list.clone();
+        inherit(&mut all);
+        assert_eq!(all.iter().find(|s| s.name == "LM2904").unwrap().user_fields, vec![("MPN".to_string(), "LM358DR".to_string())]);
     }
 
     #[test]

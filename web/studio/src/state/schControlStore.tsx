@@ -12,6 +12,9 @@ export type SchControlDialog =
   /** Edit Sheet Page Number for the sheet at this path (root to it); `[]` is the root sheet. */
   | { kind: "page_number"; path: string[] }
   | { kind: "library_links" }
+  /** Rescue Symbols... (`RESCUER::RescueProject` with `DIALOG_RESCUE_EACH`) and Remap Legacy Library Symbols... (`DIALOG_SYMBOL_REMAP`). */
+  | { kind: "rescue_symbols" }
+  | { kind: "remap_symbols" }
   | { kind: "assign_footprints" }
   | { kind: "export_symbols" }
   | { kind: "legacy_bom" }

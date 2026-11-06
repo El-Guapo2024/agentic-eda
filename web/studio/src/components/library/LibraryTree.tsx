@@ -14,6 +14,11 @@
 // symbol row (`LIB_TREE_NODE::TYPE::LIBRARY`); a pinned library is listed first with a star in front of its name. Whether the tree is shown is the
 // dock layout's (the Libraries column folds to its handle).
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchEntries } from "../../api/libraryChooserClient";
+import type { ChooserItem } from "../../kicad-port/libChooser";
+import { availableColumns, cellText, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
+import { closeSelectColumns, openSelectColumns, setLibTreeColumns, useLibTreeColumns, useSelectColumnsOpen } from "../../state/libTreeColumns";
+import { SelectColumnsDialog } from "./SelectColumnsDialog";
 import { splitLibName } from "../../kicad-port/libraryNames";
 import { buildTreeGroups, defaultGroupOpen, needsLoading, type InstalledLib, type TreeGroup, type TreeItem } from "../../kicad-port/libraryTreeModel";
 import { isGroupOpen, libraryLabel, pinnedFirst } from "../../kicad-port/libraryTreeState";
@@ -71,6 +76,34 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
   const isOpen = (g: TreeGroup) => (q ? true : isGroupOpen(ui.fold, g.lib, { hasItems: g.items.length > 0, defaultOpen: defaultGroupOpen(g) }));
   const flat = useMemo(() => groups.flatMap((g) => (isOpen(g) ? g.items.map((i) => i.name) : [])), [groups, ui.fold, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const projectOf = useMemo(() => new Map(items.map((i) => [i.name, i.project])), [items]);
+
+  // The columns (`LIB_TREE`'s Item column and the ones Select Columns... shows: Description by default, kicad-port/libTreeColumns.ts); a library's
+  // descriptions and fields are read when its group is open and a column needs them (the chooser's `GET /api/library/entries`, cached).
+  const treeId = kind === "symbol" ? "symbol_editor" : "footprint_editor";
+  const shown = useLibTreeColumns(treeId);
+  const choosing = useSelectColumnsOpen(treeId);
+  const columns = useMemo(() => treeColumns(shown), [shown]);
+  const extra = columns.slice(1);
+  const [details, setDetails] = useState<ReadonlyMap<string, readonly ChooserItem[]>>(new Map());
+  const openInstalled = groups.filter((g) => g.installed && isOpen(g)).map((g) => g.lib);
+  const openKey = openInstalled.join("\u0001");
+  useEffect(() => {
+    if (extra.length === 0) return;
+    let alive = true;
+    for (const lib of openInstalled) {
+      if (details.has(lib)) continue;
+      fetchEntries(kind, lib).then(
+        (list) => alive && setDetails((prev) => (prev.has(lib) ? prev : new Map(prev).set(lib, list))),
+        () => undefined
+      );
+    }
+    return () => {
+      alive = false;
+    };
+  }, [openKey, extra.length, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  const detailOf = useMemo(() => new Map([...details.values()].flat().map((d) => [d.id, d])), [details]);
+  const available = useMemo(() => availableColumns([...details.values()].map(extraFieldsOf)), [details]);
+  const grid = { display: "grid", gridTemplateColumns: ["minmax(110px, 1fr)", ...extra.map(() => "minmax(80px, 1fr)")].join(" "), columnGap: 6 } as const;
 
   // An open group of an installed library gets its items (the groups KiCad has libraries for open by default only when the editor already lists names in them).
   useEffect(() => {
@@ -180,6 +213,22 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
           {"⋯"}
         </button>
       </div>
+      <div
+        data-library-tree-header={kind}
+        style={{ ...grid, padding: "2px 8px 2px 24px", fontSize: 11, fontWeight: 600, color: "var(--chrome-text-dim)", borderBottom: "1px solid var(--chrome-border)" }}
+        onContextMenu={(e) => {
+          // `LIB_TREE::onHeaderContextMenu`
+          e.preventDefault();
+          e.stopPropagation();
+          setCtx({ x: e.clientX, y: e.clientY, entries: [{ label: SELECT_COLUMNS_LABEL, hint: SELECT_COLUMNS_ACTION, onSelect: () => openSelectColumns(treeId) }] });
+        }}
+      >
+        {columns.map((c) => (
+          <span key={c} data-column={c} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {c}
+          </span>
+        ))}
+      </div>
       <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: 8 }}>
         {q && searchIndex === "loading" && <div style={{ padding: "2px 10px 6px", color: "var(--chrome-text-dim)", fontSize: 11 }}>Searching every installed library…</div>}
         {groups.length === 0 && <div style={{ padding: "8px 10px", color: "var(--chrome-text-dim)", fontSize: 12 }}>{nothing ? "Nothing in the library yet." : "No match."}</div>}
@@ -230,6 +279,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
                       onDoubleClick={() => onOpen(it.name)}
                       onContextMenu={(e) => onContextMenu(e, it.name)}
                       style={{
+                        ...grid,
                         padding: "2px 8px 2px 24px",
                         fontSize: 12,
                         cursor: "pointer",
@@ -243,7 +293,16 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
                         background: isSel ? "var(--chrome-selected-bg)" : "transparent",
                       }}
                     >
-                      {modifiedLabel(splitLibName(it.name).item, modified.has(it.name))}
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{modifiedLabel(splitLibName(it.name).item, modified.has(it.name))}</span>
+                      {extra.map((c) => {
+                        const d = detailOf.get(it.name);
+                        const text = d ? cellText(d, c) : "";
+                        return (
+                          <span key={c} data-column={c} title={text} style={{ overflow: "hidden", textOverflow: "ellipsis", fontStyle: "normal", fontWeight: 400 }}>
+                            {text}
+                          </span>
+                        );
+                      })}
                     </div>
                   );
                 })}
@@ -253,6 +312,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
         {truncated && <div style={{ padding: "6px 10px", color: "var(--chrome-text-dim)", fontSize: 11 }}>Showing the first matches only -- type more to narrow the search.</div>}
       </div>
       {ctx && <ContextMenu x={ctx.x} y={ctx.y} entries={ctx.entries} onClose={() => setCtx(null)} />}
+      {choosing && <SelectColumnsDialog available={available} shown={shown} onOk={(c) => setLibTreeColumns(treeId, c)} onClose={closeSelectColumns} />}
     </div>
   );
 }
