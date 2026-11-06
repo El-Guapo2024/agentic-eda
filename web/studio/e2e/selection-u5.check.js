@@ -1,4 +1,4 @@
-// Selection check (UI-LEFT P22, PARITY-pcb.md section 81): the Selection Filter's right-click "Only ..." menu and the filter kept with the project, the
+// Selection check (UI-LEFT P22, PARITY-pcb.md section 82): the Selection Filter's right-click "Only ..." menu and the filter kept with the project, the
 // clarification menu's numbered rows and keys and the item its row brightens, GuessSelectionCandidates' coverage pass for overlapping footprints, and Select
 // Connection (U) along a chain of graphic lines with the selection filter -- driven through `window.__eda`, the panel's rows, the menu and the canvas's
 // pointer events, and checked against what the page and the server hold.

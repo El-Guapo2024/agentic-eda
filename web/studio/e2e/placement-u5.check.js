@@ -1,4 +1,4 @@
-// Placement check (UI-LEFT P19, PARITY-pcb.md section 80): Place Footprint's loop, the microwave tools carrying their footprint, a footprint's position on the
+// Placement check (UI-LEFT P19, PARITY-pcb.md section 81): Place Footprint's loop, the microwave tools carrying their footprint, a footprint's position on the
 // grid, Pack and Move's packer and the two autoplacer actions on the studio's placer -- driven the way a person does it, through `window.__eda`, the
 // chooser's controls and the canvas's pointer events, and checked against what the server holds (`/api/state`).
 // Run it in the page of a served board whose parts are placed (`eda place examples/mcu_board_30plus.yaml -o <w>`, `eda board new examples/mcu_board_30plus.yaml
