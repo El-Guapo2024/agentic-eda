@@ -16,7 +16,7 @@ import { useChecked } from "../actions/useChecked";
 import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useStudioDispatch, useStudioState } from "../state/store";
-import { formatLength } from "../state/units";
+import { BOX_SEPARATOR, sizeBoxPick, trackWidthBoxLabels, viaSizeBoxLabels } from "../kicad-port/routerSizes";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { FootprintToolbarControl, GridSelect, SymbolToolbarControl } from "./toolbar/EditorToolbarControls";
 import { PcbVariantSelector, SchVariantSelector } from "./toolbar/VariantSelector";
@@ -125,16 +125,7 @@ function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "con
     );
   }
 
-  if (item.control === "trackWidth" || item.control === "viaDiameter") {
-    const rules = state.board?.board_rules;
-    const value = !rules ? null : item.control === "trackWidth" ? rules.track_width : rules.via_diameter;
-    return (
-      <div className="toolbar-control" title={`${item.label} (display-only -- no command to change it yet)`}>
-        <span className="icon-placeholder" aria-hidden />
-        <span>{value != null ? formatLength(value, state.units) : "–"}</span>
-      </div>
-    );
-  }
+  if (item.control === "trackWidth" || item.control === "viaDiameter") return <SizeSelectBox control={item.control} label={item.label ?? item.control} />;
 
   // overrideLocks and anything else this script didn't specifically
   // handle: shown, but inert -- this app has no per-item lock concept.
@@ -142,6 +133,47 @@ function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "con
     <div className="toolbar-control" title={`${item.label ?? item.control} (not ported yet)`} style={{ opacity: 0.5 }}>
       <span className="icon-placeholder" aria-hidden />
       <span>{item.label ?? item.control}</span>
+    </div>
+  );
+}
+
+/**
+ * The auxiliary toolbar's Track Width and Via Size boxes (`m_SelTrackWidthBox`, `m_SelViaSizeBox`, UI-LEFT R7): KiCad's entries (kicad-port/routerSizes.ts
+ * `trackWidthBoxLabels`, `viaSizeBoxLabels`), the chosen list index selected (`SetSelection( GetTrackWidthIndex() )`), and a pick as
+ * `Tracks_and_Vias_Size_Event`'s (`sizeBoxPick`): the router width menu's own actions (`studio.Router.setTrackWidth` / `setViaSize`: the index, custom sizes
+ * off, the override, a route in progress re-sized), or Board Setup on "Pre-defined Sizes".
+ */
+function SizeSelectBox({ control, label }: { control: "trackWidth" | "viaDiameter"; label: string }) {
+  const state = useStudioState();
+  const dispatch = useStudioDispatch();
+  const { run } = useActionRunner();
+  const routing = state.board?.routing;
+  const unit = state.units === "mil" ? "mil" : state.units === "in" ? "in" : "mm";
+  const labels = control === "trackWidth" ? trackWidthBoxLabels(routing?.track_width_presets ?? [], unit) : viaSizeBoxLabels(routing?.via_presets ?? [], unit);
+  const index = Math.max(0, Math.min((control === "trackWidth" ? state.currentTrackWidthIndex : state.currentViaIndex) ?? 0, labels.length - 3));
+  return (
+    <div className="toolbar-control" title={label}>
+      <select
+        aria-label={label}
+        data-control={control}
+        value={index}
+        disabled={!state.board}
+        onChange={(e) => {
+          const pick = sizeBoxPick(Number(e.target.value), labels.length);
+          if (pick.kind === "edit") {
+            dispatch({ type: "SET_BOARD_SETUP_INITIAL_PAGE", page: "tracks_vias" });
+            dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true });
+          } else if (pick.kind === "index") {
+            run(control === "trackWidth" ? "studio.Router.setTrackWidth" : "studio.Router.setViaSize", pick.index);
+          }
+        }}
+      >
+        {labels.map((text, i) => (
+          <option key={i} value={i} disabled={text === BOX_SEPARATOR}>
+            {text}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

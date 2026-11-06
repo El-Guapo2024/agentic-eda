@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RouterEventSizes, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
@@ -642,8 +642,9 @@ export function routeSetSettings(settings: RouterSettings): Promise<{ ok: boolea
 /** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
  * `Router::flip_posture`'s own doc comment on why they ride along with the
  * next cursor move instead of being their own round trip. */
-export function routeMove(x: Nm, y: Nm, flipPosture?: boolean, width?: Nm): Promise<RoutePreview> {
-  return postJson("/api/route/move", { x, y, flip_posture: flipPosture, width });
+/** `useNetClass` with `width`: the width is the list's first entry, the net class's (`UseNetClassTrack()`, which `updateSizesAfterRouterEvent` reads). */
+export function routeMove(x: Nm, y: Nm, flipPosture?: boolean, width?: Nm, useNetClass?: boolean): Promise<RoutePreview> {
+  return postJson("/api/route/move", { x, y, flip_posture: flipPosture, width, ...(width != null && useNetClass != null ? { use_net_class: useNetClass } : {}) });
 }
 
 export function routeFix(x: Nm, y: Nm): Promise<RouteFixReply> {
@@ -661,8 +662,15 @@ export function routeToggleVia(enabled: boolean, diameter?: Nm, drill?: Nm, toLa
 }
 
 /** A layer key while routing (`ROUTER_TOOL::onLayerCommand`, R6-R3): `switched` when the head moved to `layer` (`ROUTER::SwitchLayer`); not switched, the caller arms a via to it. */
-export function routeSwitchLayer(layer: string): Promise<{ ok: boolean; message?: string; switched?: boolean }> {
-  return postJson("/api/route/layer", { layer });
+export function routeSwitchLayer(layer: string, at?: { x: Nm; y: Nm }): Promise<{ ok: boolean; message?: string; switched?: boolean; sizes?: RouterEventSizes | null }> {
+  // `at`: the cursor, where `updateSizesAfterRouterEvent` asks the sizes again on the new layer (UI-LEFT R5)
+  return postJson("/api/route/layer", { layer, ...(at ? { x: Math.round(at.x), y: Math.round(at.y) } : {}) });
+}
+
+/** `ROUTER::GetNearestRatnestAnchor` with the head at `(x, y)`, for the route or the pair in progress: Place Through Via's implicit target is the first of
+ *  `layers` (`handleLayerSwitch`, UI-LEFT R5). `found` false when there is none. */
+export function routeRatsnestAnchor(x: Nm, y: Nm): Promise<{ ok: boolean; message?: string; found?: boolean; at?: [Nm, Nm]; layers?: [string, string] }> {
+  return postJson("/api/route/ratsnest_anchor", { x: Math.round(x), y: Math.round(y) });
 }
 
 export function routeFinish(x: Nm, y: Nm): Promise<CmdReply> {
@@ -756,8 +764,9 @@ export function dpStart(x: Nm, y: Nm, layer: string, dims?: { width: Nm; gap: Nm
 }
 
 /** `ROUTER_TOOL::DpDimensionsDialog` while a pair is being routed: the new width, gap and via gap apply from the next move (`ok: false` when no pair is running). */
-export function dpSetDims(width: Nm, gap: Nm, viaGap?: Nm): Promise<{ ok: boolean }> {
-  return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap), via_gap: viaGap !== undefined ? Math.round(viaGap) : undefined });
+/** `useNetClass`: the pair list's first entry (`UseNetClassDiffPair()`, which `updateSizesAfterRouterEvent` reads). */
+export function dpSetDims(width: Nm, gap: Nm, viaGap?: Nm, useNetClass?: boolean): Promise<{ ok: boolean }> {
+  return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap), via_gap: viaGap !== undefined ? Math.round(viaGap) : undefined, ...(useNetClass != null ? { use_net_class: useNetClass } : {}) });
 }
 
 export function dpMove(x: Nm, y: Nm, flipPosture?: boolean): Promise<DiffPairPreview> {
@@ -769,8 +778,15 @@ export function dpFix(x: Nm, y: Nm): Promise<DpFixReply> {
 }
 
 /** `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a pair of vias, and the next fix places them and goes on from them on `toLayer`. */
-export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Nm, drill?: Nm): Promise<{ ok: boolean }> {
-  return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill });
+/** `viaType`: the router's blind/buried and micro via commands in the pair tool (`handleLayerSwitch`, UI-LEFT R2); a through via without it. */
+export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Nm, drill?: Nm, viaType?: string): Promise<{ ok: boolean; message?: string }> {
+  return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill, ...(viaType && viaType !== "through" ? { via_type: viaType } : {}) });
+}
+
+/** AttemptFinish (`F`) while a pair is routed (`ROUTER::Finish` with the P line as the trace, UI-LEFT R2): the pair is finished on the coupled pair at the
+ *  nearest unconnected anchor (`finished`), or goes on with its end where it got (`warp`, `preview`); it is never finished at the cursor. */
+export function dpAttemptFinish(x: Nm, y: Nm): Promise<{ ok: boolean; message?: string; finished?: boolean; warp?: [Nm, Nm]; preview?: DiffPairPreview }> {
+  return postJson("/api/route/dp_attempt_finish", { x: Math.round(x), y: Math.round(y) });
 }
 
 /** Route From Other End for a pair (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, Ctrl+E): what the pair has fixed is committed and a new pair starts at the far end of the connection, heading for where this one's head ended. The reply is the new pair's preview, with `committed` and `from`. */

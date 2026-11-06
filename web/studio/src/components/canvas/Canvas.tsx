@@ -883,7 +883,7 @@ export function Canvas() {
           const width = chosenTrackWidthOf(board.routing?.track_width_presets ?? [], state.currentTrackWidthIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia.trackNm);
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           // `m_startWithVia` (V before the route started, actions/routerViaActions.ts): the route starts with a via armed, and the flag is spent
-          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current } : undefined;
+          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current, copper: board.layers } : undefined;
           if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
           void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth, startWithVia);
           return;
@@ -904,7 +904,7 @@ export function Canvas() {
           const custom = state.pcbx.customDiffPair;
           const dims = chosenDiffPair(board.routing?.diff_pair_presets ?? [], state.pcbx.diffPairIndex, state.pcbx.useCustomDiffPair, custom ? { width: custom.widthNm, gap: custom.gapNm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapNm : custom.viaGapNm } : null);
           // `m_startWithVia` for a pair too (R7-R3), spent at the start
-          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current } : undefined;
+          const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current, copper: board.layers } : undefined;
           if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
           void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth, startWithVia);
           return;
