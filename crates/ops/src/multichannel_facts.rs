@@ -377,10 +377,11 @@ pub(crate) fn block_items(clip: &eda_kicad::Clipboard) -> super::multichannel_co
     items.extend(clip.texts.iter().cloned().map(|t| Item::Text(t, None)));
     items.extend(clip.dimensions.iter().cloned().map(Item::Dimension));
     // the block's other items (`findOtherItemsInRuleArea` of a `DESIGN_BLOCK` area: every one that is not a footprint, a group or connected, no enclosure asked): its text boxes,
-    // barcodes, reference images and points. (Its tables wait for the clipboard reader to read them.)
+    // barcodes, reference images, points and tables (`PCB_TABLE_T` is not connected, so it is one of them; the clipboard reader reads a block's tables since `task-u5-pcbitems`).
     items.extend(clip.text_boxes.iter().cloned().map(Item::TextBox));
     items.extend(clip.barcodes.iter().cloned().map(Item::Barcode));
     items.extend(clip.images.iter().cloned().map(Item::Image));
     items.extend(clip.points.iter().cloned().map(Item::Point));
+    items.extend(clip.tables.iter().cloned().map(Item::Table));
     RefItems { items, ..Default::default() }
 }

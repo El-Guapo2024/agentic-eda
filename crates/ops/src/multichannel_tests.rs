@@ -868,6 +868,35 @@ fn the_layout_of_a_design_block_is_applied_to_the_footprints_of_a_group_matched_
     assert!(rule_areas(&b).is_empty());
 }
 
+/// `findOtherItemsInRuleArea` of a `DESIGN_BLOCK` area takes every item of the block that is not a footprint, a group or connected: a table of the block on copper comes across
+/// with the layout and joins the group; one on the silkscreen does not, since both of `PCB_CONTROL::ApplyDesignBlockLayout`'s areas are `LSET::AllCuMask()` and
+/// `copyRuleAreaContents` copies only what is on a layer of both.
+#[test]
+fn a_design_blocks_table_comes_with_its_layout_into_the_group() {
+    let m = model(2);
+    let mut d = design(2);
+    {
+        let dr = d.drawings.as_mut().unwrap();
+        dr.tables.push(eda_model::table::Table::new_grid("F.Cu", p(mm(22.5), mm(19.0)), 1, 1, mm(1.5), mm(1.0), mm(0.1)));
+        dr.tables.push(eda_model::table::Table::new_grid("F.SilkS", p(mm(22.5), mm(23.0)), 1, 1, mm(1.5), mm(1.0), mm(0.1)));
+        dr.assign_table_ids();
+    }
+    let tables: Vec<String> = d.drawings.as_ref().unwrap().tables.iter().map(|t| t.id.clone()).collect();
+    let mut ids: Vec<String> = ["U1", "R1", "C1", "trk_mid0"].iter().map(|s| s.to_string()).collect();
+    ids.extend(tables);
+    let text = eda_kicad::export_pcb_clipboard(&d, &m, &ids, p(Nm::ZERO, Nm::ZERO)).unwrap();
+    assert_eq!(eda_kicad::parse_pcb_clipboard(&text).unwrap().tables.len(), 2, "the block file has its tables");
+    let (mut b, gid) = board_with_group(&m);
+    let before = drawings(&b).tables.len();
+    b.apply(&apply_block(&gid, text)).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.tables.len(), before + 1, "the block's copper table is copied, its silkscreen one is not");
+    let copy = dr.tables.last().unwrap();
+    assert_eq!(copy.layer, "F.Cu");
+    let g = dr.groups.iter().find(|g| g.id == gid).unwrap();
+    assert!(g.member_ids.contains(&copy.id), "the copy joins the group: {g:?}");
+}
+
 #[test]
 fn a_group_that_does_not_match_the_block_or_is_locked_is_refused_in_kicads_words() {
     let m = model(2);
