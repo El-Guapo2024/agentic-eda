@@ -17,6 +17,9 @@ import { splitCarried } from "../../kicad-port/pcbCarry";
 import { courtyardConflicts, movedBox, type Box, type MovePreview } from "../../kicad-port/courtyardConflicts";
 import { scaleToZoomFactor } from "../../kicad-port/zoomFit";
 import { shownTitleBlock } from "../../kicad-port/pageSettings";
+import type { DsPageContext } from "../../kicad-port/dsDataModel";
+import { paintDrawingSheet, sheetModel } from "../drawingSheet/dsPainter";
+import { KICAD_VERSION_TEXT } from "../drawingSheet/sheetInfo";
 
 /** Everything the painter needs from the panel's settings, assembled once per change (components/canvas/Canvas.tsx). */
 export interface PaintAppearance {
@@ -28,15 +31,17 @@ export interface PaintAppearance {
   palette: ReadonlyMap<string, Rgba>;
   /** The locked-item shadow's margin, µm (`m_lockedShadowMargin`: four times the silkscreen line width). */
   lockedMargin: number;
-  /** The board's paper for the drawing sheet, µm, and its title block. */
-  sheet: { widthNm: number; heightNm: number; paper: string; title: string; date: string; rev: string; company: string; comments: string[]; file: string } | null;
+  /** The board's paper for the drawing sheet, nm, its title block, and the text of the `.kicad_wks` Page Settings chose (null: KiCad's default sheet). */
+  sheet: { widthNm: number; heightNm: number; paper: string; title: string; date: string; rev: string; company: string; comments: string[]; file: string; text?: string | null } | null;
 }
 
 export const PLAIN_APPEARANCE: PaintAppearance = { opacity: DEFAULT_OPACITY, contrastHidden: false, netColorMode: "ratsnest", palette: new Map(), lockedMargin: 400_000, sheet: null };
 
 /** The painter's view of the panel's settings for this board: the opacities, the net colours resolved per net, the locked shadow margin (four silkscreen line widths) and the sheet. */
 export function buildPaintAppearance(a: AppearanceState, nets: NetsContext, board: BoardState | null): PaintAppearance {
-  const paper = board?.page?.size_nm ?? ([297_000, 210_000] as const);
+  // A4 landscape when the board has no page of its own (the state's `page` is null then); nm (this read 297_000 x 210_000, a micrometre leftover
+  // the sheet being off by default hid)
+  const paper = board?.page?.size_nm ?? ([297_000_000, 210_000_000] as const);
   const tb = shownTitleBlock(board?.title_block);
   const silk = board?.board_rules?.text_graphics?.silk.line_width_nm ?? 100_000;
   return {
@@ -46,7 +51,7 @@ export function buildPaintAppearance(a: AppearanceState, nets: NetsContext, boar
     palette: netPalette(a, nets.nets, nets.classOf),
     lockedMargin: silk * 4,
     sheet: board
-      ? { widthNm: paper[0], heightNm: paper[1], paper: board.page?.paper ?? "A4", title: tb?.title ?? "", date: tb?.date ?? "", rev: tb?.rev ?? "", company: tb?.company ?? "", comments: tb?.comments ?? [], file: `${board.name}.kicad_pcb` }
+      ? { widthNm: paper[0], heightNm: paper[1], paper: board.page?.paper ?? "A4", title: tb?.title ?? "", date: tb?.date ?? "", rev: tb?.rev ?? "", company: tb?.company ?? "", comments: tb?.comments ?? [], file: `${board.name}.kicad_pcb`, text: board.drawing_sheet?.text ?? null }
       : null,
   };
 }
@@ -207,10 +212,38 @@ const TB_HEIGHT_NM = 32_000_000;
 const ROWS_NM = [15_507_000, 21_507_000, 25_507_000, 28_507_000];
 
 /**
- * The drawing sheet (`LAYER_DRAWINGSHEET`, KiCad's default sheet): the double frame ten and twelve millimetres in from the paper's edge, the title block flush with
- * the inner frame's bottom right corner. Lines in the drawing sheet colour on the board's dark background -- the paper is not filled, as the board editor does not.
+ * The drawing sheet (`LAYER_DRAWINGSHEET`): the `.kicad_wks` Page Settings chose, else KiCad's default sheet, laid out on the board's paper by the port of
+ * `DS_DRAW_ITEM_LIST::BuildDrawItemsList` (kicad-port/dsDataModel.ts) and painted by the port of `DS_PAINTER` (components/drawingSheet/dsPainter.ts) -- the frame,
+ * the zone references and the title block, in the drawing sheet colour on the board's dark background (the paper is not filled, as the board editor does not).
+ * The board is its first and only page (`PCB_EDIT_FRAME::SetPageSettings`: `SetIsFirstPage( true )`, page "1" of 1), its sheet name and path empty, its file
+ * the board's `.kicad_pcb`.
  */
 export function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: Opts): void {
+  const sheet = opts.appearance?.sheet;
+  if (!sheet || !on(opts.layerVisible, "drawing_sheet")) return;
+  const { model } = sheetModel(sheet.text);
+  const page: DsPageContext = {
+    widthNm: sheet.widthNm,
+    heightNm: sheet.heightNm,
+    paperName: sheet.paper,
+    titleBlock: { title: sheet.title, date: sheet.date, rev: sheet.rev, company: sheet.company, comments: sheet.comments },
+    fileName: sheet.file,
+    sheetName: "",
+    sheetPath: "",
+    pageNumber: "1",
+    sheetCount: 1,
+    isFirstPage: true,
+    kicadVersion: KICAD_VERSION_TEXT,
+  };
+  paintDrawingSheet(ctx, model, page, { tag: "pcb", color: layerColor("LAYER_DRAWINGSHEET"), pixelNm: hairlineNm(view, 1) });
+}
+
+/**
+ * INACTIVE (replaced 2026-11-06 by [`drawSheet`] over the port of `DS_DATA_MODEL` / `DS_PAINTER`; kept, not called, per the port-vs-reuse rule): the default sheet
+ * measured by hand -- the double frame ten and twelve millimetres in from the paper's edge, the title block flush with the inner frame's bottom right corner,
+ * no zone references.
+ */
+export function drawSheetInactive(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: Opts): void {
   const sheet = opts.appearance?.sheet;
   if (!sheet || !on(opts.layerVisible, "drawing_sheet")) return;
   const { widthNm: w, heightNm: h } = sheet;

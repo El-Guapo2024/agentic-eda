@@ -11,7 +11,7 @@ function source(): AppearanceSource {
 
 test("the summary of a new project says only what differs from KiCad's defaults", () => {
   const a = appearanceSummary(source());
-  assert.deepEqual(a.hiddenObjects, ["board_outline_area", "drawing_sheet", "drc_exclusions"]);
+  assert.deepEqual(a.hiddenObjects, ["board_outline_area", "drc_exclusions"]);
   assert.deepEqual([a.hiddenLayers, a.opacity, a.contrast, a.netColorMode, a.ratsnest, a.hiddenNets, a.hiddenNetclasses, a.preset, a.flipped], [[], {}, "normal", "ratsnest", "all", [], [], "All Layers", false]);
 });
 
@@ -29,7 +29,7 @@ test("the summary follows the panel's edits", () => {
     { op: "ratsnest_display", mode: "none" },
   ] as const) s = reduceView(s, op, ctx);
   const a = appearanceSummary({ appearance: s.appearance, layerVisible: s.layerVisible, highContrast: s.highContrast, showRatsnest: s.showRatsnest, gridVisible: s.gridVisible, bcx: { ratsnestMode: s.ratsnestMode, hiddenRatsnestNets: s.hiddenNets, boardFlipped: s.boardFlipped } });
-  assert.deepEqual(a.hiddenObjects, ["board_outline_area", "drawing_sheet", "drc_exclusions", "grid", "ratsnest", "tracks"]);
+  assert.deepEqual(a.hiddenObjects, ["board_outline_area", "drc_exclusions", "grid", "ratsnest", "tracks"]);
   assert.deepEqual(a.opacity, { zones: 0.3 });
   assert.equal(a.contrast, "hidden");
   assert.deepEqual(a.netColors, { GND: "rgb(1, 2, 3)" });
