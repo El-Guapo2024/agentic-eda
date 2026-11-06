@@ -20,17 +20,12 @@
 //!    track posture" is off or `/` has flipped it (`flip_posture`). A fix
 //!    starts a new trail from the last fixed point, continuing in the
 //!    direction of the last segment, as `FixRoute` does.
-//! 2. **No live "tail" mutation between fixes (`reduceTail`/`mergeHead`/
-//!    `handlePullback`).** Those exist to stop a *continuously re-walked*
-//!    tail from accumulating zig-zags across thousands of small mouse
-//!    deltas. Here, the head is recomputed from scratch from the last
-//!    fixed point on every `preview()` call -- there is no accumulated
-//!    tail state to need periodic straightening. `handleSelfIntersections`'
-//!    core correctness property (a head that loops back over its own
-//!    fixed tail must retract, not overlap) doesn't need separate handling
-//!    for the same reason: the head is always freshly built from the last
-//!    fixed point, so it can't accumulate a stale self-crossing tail to
-//!    begin with.
+//! 2. **The leg's tail is KiCad's (UI-LEFT R6).** In Walk around and Shove (`FollowMouse()`) the leg is a settled tail and a head routed on
+//!    from its end, kept from one `Move` to the next ([`TailState`]): `routeStep`'s `reduceTail`, `handleSelfIntersections`, `handlePullback`,
+//!    `optimizeTailHeadTransition` (its `FANOUT_CLEANUP` straightens a short fan-out from a pad) and `mergeHead` are ported
+//!    ([`LinePlacer::build_head`]), and the walk and the shove are of the whole leg, split back into head and tail (`splitHeadTail`). A repeated
+//!    request for the same cursor starts from the state before the last one, as the tracer does. **Differs:** a head with an arc (the rounded
+//!    corner modes) never goes into the tail, so there the head is the leg from its start.
 //!
 //! Each fixed "run" is single-layer (`crate::line::Line`); a via placed
 //! mid-route (`switch_layer`) ends the current run and starts a new one on
@@ -175,7 +170,12 @@ pub struct LinePlacer {
     trail: RefCell<MouseTrailTracer>,
     /// The cursor of the last `Move` and the tracer as it was before it: asking again about the same cursor (a click at the place the cursor is) starts
     /// from that state, so it gives the posture the person saw.
-    last_move: RefCell<Option<(Point, MouseTrailTracer)>>,
+    last_move: RefCell<Option<(Point, MouseTrailTracer, TailState)>>,
+    /// `m_tail`, `m_head`, `m_direction` and `m_initial_direction` of the leg being routed: what `routeStep` keeps from one `Move` to the next in
+    /// Walk around and Shove ([`TailState`]).
+    tail_state: RefCell<TailState>,
+    /// `FIXED_TAIL::STAGE::pts[0].direction` of each stage ([`Self::stages`]): `m_direction` when the run was fixed, which Backspace gives back.
+    stage_dirs: Vec<Direction45>,
     /// The direction of the first segment of the head last shown (`m_currentTrace.CSegment( 0 )`), which `/` flips from.
     last_head_dir: Cell<Direction45>,
     pub placing_via: bool,
@@ -243,7 +243,14 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), tail_state: RefCell::new(TailState::new(direction)), stage_dirs: Vec::new(), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
+    }
+
+    /// `FixRoute`'s `setInitialDirection( d_last )` -- "if( m_tail.SegmentCount() == 0 ) m_direction = aDirection;" -- then
+    /// `m_fixedTail.AddStage( .., m_direction, .. )`: the direction Backspace gives back to the leg the stage starts.
+    fn push_stage_direction(&mut self, d_last: Direction45) {
+        let st = self.tail_state.borrow();
+        self.stage_dirs.push(if st.tail.len() < 2 { d_last } else { st.direction });
     }
 
     /// `LINE_PLACER::HasPlacedAnything`: `m_placementCorrect || m_fixedTail.StageCount() > 1`.
@@ -263,20 +270,78 @@ impl LinePlacer {
         Vec::new()
     }
 
-    /// `LINE_PLACER::buildInitialLine` + `routeHead`: the raw 45-degree
-    /// candidate from the last fixed point to `p`, then resolved per the
-    /// active routing mode. In `Mode::Shove` it reduces the springback
-    /// stack, shoves from the newest frame left and pushes the world the
-    /// shove leaves (`SHOVE::Run`); the result carries that world, and what
-    /// it has moved, for [`Self::preview`]/[`Self::fix`].
-    /// `routeStep`: `routeHead`, and when it fails (the walk is stuck, or in Shove mode the walk round the pads is: `rhShoveOnly`'s `if( !
-    /// rhWalkBase( aP, walkSolids, ITEM::SOLID_T, RM_Shove, viaOk ) ) return false;`) the head and tail as they were (`m_tail = std::move(
-    /// prevTail ); m_head = std::move( prevHead );`), or, with no head yet, a zero-length one at the start ("so that the user gets some
-    /// feedback that routing is happening"). In Walk around and Shove the head is never shown colliding: it stays at the last position
+    /// `LINE_PLACER::routeStep`: in Walk around and Shove (`Settings().FollowMouse()`, which is off in Highlight collisions) the leg is a settled
+    /// tail and a head routed on from its end, kept from one `Move` to the next ([`TailState`]); each step first shortens the tail where a straight
+    /// run from one of its segments reaches the cursor (`reduceTail`), routes the head (`routeHead`), cuts the tail back where the new head crosses
+    /// it (`handleSelfIntersections`) or turns back on it at a right or acute angle (`handlePullback`) -- routing again after either -- and at the
+    /// end straightens a fan-out from a pad (`optimizeTailHeadTransition`'s `FANOUT_CLEANUP`), merges the tail's last segments with the head's
+    /// first (its `MERGE_SEGMENTS`) or else moves a head of three segments or more with no acute or reversed corner into the tail (`mergeHead`). The
+    /// trace shown, fixed and committed is the tail and the head (`Trace()`). In Highlight collisions the tail stays empty and the head is the
+    /// elbow from the leg's start.
+    ///
+    /// When `routeHead` fails (the walk is stuck, or in Shove mode the walk round the pads is: `rhShoveOnly`'s `if( ! rhWalkBase( aP, walkSolids,
+    /// ITEM::SOLID_T, RM_Shove, viaOk ) ) return false;`) the head and tail are as they were (`m_tail = std::move( prevTail ); m_head = std::move(
+    /// prevHead );`), with no tail a zero-length one at the start ("so that the user gets some feedback that routing is happening"), and the head
+    /// shown is the one of the last `Move` that routed. In Walk around and Shove the head is never shown colliding: it stays at the last position
     /// that worked, and a click fixes that (findings p5 F2-4, F2-5).
+    ///
+    /// **Differs:** a head with an arc in it (a rounded corner mode) is never moved into the tail (KiCad's merges handle arcs); so in the rounded
+    /// modes the tail stays empty and the head is the leg from its start, as before this port.
     fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> HeadResult {
-        match self.route_head(node, rules, settings, p) {
-            Some(r) => {
+        let follow_mouse = settings.mode != Mode::MarkObstacles;
+        let mut st = self.tail_state.borrow().clone();
+        let (mut n_iter, mut go_back, mut fail) = (1, false, false);
+        let mut routed: Option<HeadResult> = None;
+        let mut i = 0;
+        while i < n_iter {
+            let prev = st.clone();
+            if !go_back && follow_mouse {
+                self.reduce_tail(&mut st, node, rules, settings, p);
+            }
+            go_back = false;
+            match self.route_head(node, rules, settings, p, &st) {
+                Some((r, head, tail)) => {
+                    st.head = head;
+                    st.tail = tail;
+                    routed = Some(r);
+                }
+                None => {
+                    st = prev;
+                    // `if( m_tail.PointCount() == 0 ) { m_tail.Line().Append( m_p_start ); m_tail.Line().Append( m_p_start, true ); }`
+                    if st.tail.is_empty() {
+                        let p_start = self.fixed_start();
+                        st.tail = vec![p_start, p_start];
+                    }
+                    fail = true;
+                    break;
+                }
+            }
+            if handle_self_intersections(&mut st) {
+                n_iter += 1;
+                go_back = true;
+            }
+            if !go_back && handle_pullback(&mut st) {
+                n_iter += 1;
+                st.head.clear();
+                go_back = true;
+            }
+            i += 1;
+        }
+        let arcs = routed.as_ref().is_some_and(|r| !r.arcs.is_empty());
+        if !fail && follow_mouse && !arcs {
+            let world = routed.as_ref().map(|r| r.world.clone()).unwrap_or_default();
+            if !self.optimize_tail_head_transition(&mut st, node, rules, settings, &world) {
+                merge_head(&mut st);
+            }
+        }
+        *self.tail_state.borrow_mut() = st.clone();
+        match routed.filter(|_| !fail) {
+            Some(mut r) => {
+                // `Trace()`: the tail and the head; a head with an arc has no tail (above), and is the line as routed
+                if !st.tail.is_empty() || r.arcs.is_empty() {
+                    r.pts = trace_of(&st);
+                    r.arcs.clear();
+                }
                 *self.last_good.borrow_mut() = Some(r.clone());
                 r
             }
@@ -290,28 +355,154 @@ impl LinePlacer {
         }
     }
 
-    /// `routeHead`: `None` when it fails.
-    fn route_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Option<HeadResult> {
-        let start = self.fixed_start();
-        // the world the last `Move` left (`m_currentNode`): in Shove mode the newest springback frame, in the others the world the last click
-        // left (those modes never shove, so their `m_currentNode` is `m_lastNode` of the last `FixRoute`)
-        let current = if settings.mode == Mode::Shove { self.springback.borrow().top().0 } else { self.springback.borrow().locked_top() };
+    /// The world the last `Move` left (`m_currentNode`): in Shove mode the newest springback frame, in the others the world the last click left
+    /// (those modes never shove, so their `m_currentNode` is `m_lastNode` of the last `FixRoute`).
+    fn current_world(&self, settings: &RoutingSettings) -> World {
+        if settings.mode == Mode::Shove {
+            self.springback.borrow().top().0
+        } else {
+            self.springback.borrow().locked_top()
+        }
+    }
+
+    /// `LINE_PLACER::reduceTail( aEnd )`: from the tail's last segment back to its first, a straight-first trace from the segment's start to the
+    /// cursor (`dir.BuildInitialTrace( s.A, aEnd )`, `MITERED_45`); the walk back stops at the first that collides with anything of the world
+    /// (`m_currentNode->CheckColliding( &tmp, ITEM::ANY_T )`), and of those that leave in the segment's own direction the earliest is taken: the tail
+    /// is cut at that segment's start, the head cleared, the direction the segment's. Not for a tail of fewer than two segments or with no head.
+    fn reduce_tail(&self, st: &mut TailState, node: &Node, rules: &BoardRules, settings: &RoutingSettings, end: Point) -> bool {
+        let n = st.tail.len().saturating_sub(1);
+        if st.head.len() < 2 || n < 2 {
+            return false;
+        }
+        let current = self.current_world(settings);
+        let moved;
+        let world = if current.tracks.is_empty() && current.vias.is_empty() {
+            node
+        } else {
+            moved = current.apply(node);
+            &moved
+        };
+        let mut reduce: Option<(usize, Direction45)> = None;
+        for i in (0..n).rev() {
+            let (a, b) = (st.tail[i], st.tail[i + 1]);
+            let dir = Direction45::from_seg(a, b);
+            let replacement = dir.build_initial_trace(a, end, false, crate::direction45::CornerMode::Mitered45);
+            if replacement.len() < 2 {
+                continue;
+            }
+            if walkaround::path_collides(world, rules, &self.net, self.current_layer, self.width, &replacement, &self.exclude()) {
+                break;
+            }
+            if Direction45::from_seg(replacement[0], replacement[1]) == dir {
+                reduce = Some((i, dir));
+            }
+        }
+        if let Some((i, dir)) = reduce {
+            st.direction = dir;
+            st.tail.truncate(i + 1);
+            st.head.clear();
+            return true;
+        }
+        if st.tail.len() < 2 {
+            st.direction = st.initial;
+        }
+        false
+    }
+
+    /// `LINE_PLACER::optimizeTailHeadTransition`: the trace from a pad or via, short (under ten widths) and ending on a pad or via or in the head's
+    /// via, made the direct trace (`OPTIMIZER::Optimize( &linetmp, OPTIMIZER::FANOUT_CLEANUP, m_currentNode )`, not with the posture forced by
+    /// `/`): it becomes the head, the tail goes. Else, with three or more segments in the tail, its last three (or fewer) with the head's first two
+    /// merged by `MERGE_SEGMENTS`: when that shortens them, they replace the tail's last points and the head is cleared (the head's further points
+    /// too, as KiCad's `head.Slice( 0, end )` takes no more), the direction that of the merged line's last segment. `world` is `m_currentNode`.
+    fn optimize_tail_head_transition(&self, st: &mut TailState, node: &Node, rules: &BoardRules, settings: &RoutingSettings, world: &World) -> bool {
+        let exclude = self.exclude();
+        let moved;
+        let world_node = if world.tracks.is_empty() && world.vias.is_empty() && world.fixed.is_empty() && world.fixed_vias.is_empty() {
+            node
+        } else {
+            moved = world.apply(node);
+            &moved
+        };
+        let trace = Line::from_points(self.net.clone(), self.current_layer, self.width, trace_of(st));
+        if !self.trail.borrow().is_manually_forced() {
+            if let Some(t) = optimizer::fanout_cleanup_trace(&trace, self.placing_via, world_node, rules, &exclude, settings.corner_mode) {
+                if t.pts.len() < 2 || !t.arcs.is_empty() {
+                    return false;
+                }
+                st.direction = Direction45::from_seg(t.pts[0], t.pts[1]);
+                st.head = t.pts;
+                st.tail.clear();
+                return true;
+            }
+        }
+        // `tail.ShapeCount() < 3`
+        if st.tail.len() < 4 {
+            return false;
+        }
+        // `int threshold = std::min( tail.PointCount(), tailLookbackSegments + 1 )` with `tailLookbackSegments = 3`
+        let threshold = st.tail.len().min(4);
+        let mut opt_line: Vec<Point> = st.tail[st.tail.len() - threshold..].to_vec();
+        // `head.Slice( 0, end )` with `end = std::min( 2, head.PointCount() - 1 )`
+        if !st.head.is_empty() {
+            let end = 2.min(st.head.len() - 1);
+            append_points(&mut opt_line, &st.head[..=end]);
+        }
+        let new_head = Line::from_points(self.net.clone(), self.current_layer, self.width, opt_line);
+        let merged = optimizer::optimize_constrained(&new_head, world_node, rules, &exclude, optimizer::effort::MERGE_SEGMENTS, &optimizer::Constraints { corner_mode: settings.corner_mode, ..Default::default() });
+        // `mergeFull` returns `current_path.SegmentCount() < segs_pre`
+        if merged.segment_count() < new_head.segment_count() && merged.pts.len() >= 2 {
+            st.head.clear();
+            let keep = st.tail.len() - threshold;
+            st.tail.truncate(keep);
+            append_points(&mut st.tail, &merged.pts);
+            simplify_points(&mut st.tail);
+            let n = merged.pts.len();
+            st.direction = Direction45::from_seg(merged.pts[n - 2], merged.pts[n - 1]);
+            return true;
+        }
+        false
+    }
+
+    /// `routeHead` (`rhMarkObstacles`, `rhWalkOnly`, `rhShoveOnly`) from the tail's end: the head and tail it leaves (`splitHeadTail` of the walked or
+    /// shoved line against the old tail, the head then optimized), with the result whose points are the whole line. `None` when it fails.
+    fn route_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point, st: &TailState) -> Option<(HeadResult, Vec<Point>, Vec<Point>)> {
+        // `updatePStart( m_tail )`: the tail's end, else where the leg starts
+        let start = st.tail.last().copied().unwrap_or_else(|| self.fixed_start());
+        let current = self.current_world(settings);
         if start == p {
-            return Some(HeadResult::plain(vec![start], false, node, current));
+            // `buildInitialLine`: "if( m_p_start == aP ) l.Clear()" -- no head
+            let mut r = HeadResult::plain(vec![start], false, node, current);
+            if !st.tail.is_empty() {
+                r.pts = st.tail.clone();
+            }
+            return Some((r, Vec::new(), st.tail.clone()));
         }
         // `buildInitialLine`: `if( GetFreeAngleMode() && Mode() == RM_MarkObstacles ) l = SHAPE_LINE_CHAIN( { m_p_start, aP } )`, else the trace in the
-        // corner mode (`guessedDir.BuildInitialTrace( m_p_start, aP, false, cornerMode )`): a rounded corner is an arc of the head
-        let build_raw = |to: Point| {
+        // corner mode (`guessedDir.BuildInitialTrace( m_p_start, aP, false, cornerMode )`): a rounded corner is an arc of the head. With a tail the
+        // trace leaves in the placer's direction (`m_direction.BuildInitialTrace`), not the posture (which is asked all the same: `GetPosture( aP )`).
+        let build_l1 = |to: Point| {
             let mut raw = Line::new(self.net.clone(), self.current_layer, self.width);
             if settings.free_angle() {
                 raw.pts = vec![start, to];
             } else {
-                let trace = self.posture(settings, to).build_initial_line(start, to, false, settings.corner_mode);
+                let posture = self.posture(settings, to);
+                let dir = if st.tail.is_empty() { posture } else { st.direction };
+                let trace = dir.build_initial_line(start, to, false, settings.corner_mode);
                 (raw.pts, raw.arcs) = (trace.pts, trace.arcs);
             }
             raw
         };
-        let raw = build_raw(p);
+        // `rhWalkBase`: `LINE initTrack( m_tail ); initTrack.Line().Append( l1.CLine() ); initTrack.Line().Simplify();` -- the walk is of the whole leg
+        let with_tail = |l1: Line| -> Line {
+            if st.tail.is_empty() {
+                return l1;
+            }
+            let mut full = Line::from_points(self.net.clone(), self.current_layer, self.width, st.tail.clone());
+            append_points(&mut full.pts, &l1.pts);
+            full.simplify();
+            full
+        };
+        let raw = build_l1(p);
         let exclude = self.exclude();
         let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
         // `rhWalkBase`: with a via pending, `buildInitialLine` pushes the via off what it sits on first (`v.PushoutForce( m_currentNode, lead,
@@ -321,13 +512,13 @@ impl LinePlacer {
         // (`v.SetPos( walkFull.CLastPoint() ); walkFull.AppendVia( v )`). Without a via, one round.
         let walk_base = |world: &Node, mask: u8| -> Option<Line> {
             if !self.placing_via {
-                return walkaround::walk_base_line(world, rules, &raw, mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode);
+                return walkaround::walk_base_line(world, rules, &with_tail(raw.clone()), mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode);
             }
             let to_layer = self.via_to_layer.unwrap_or(self.current_layer);
             let (mut walk_p, mut walked) = (p, None);
             for _round in 0..2 {
                 let target = self.push_via(world, rules, settings, walk_p, to_layer, mask);
-                let l1 = build_raw(target);
+                let l1 = with_tail(build_l1(target));
                 let w = walkaround::walk_base_line(world, rules, &l1, mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode)?;
                 walk_p = w.last().unwrap_or(target);
                 walked = Some(w);
@@ -338,6 +529,20 @@ impl LinePlacer {
         // for the leg it was pressed in, not for the rest of the route (findings p5 F2-13)
         let effort = head_effort(settings, self.trail.borrow().is_manually_forced());
         let optimize = |line: &Line, world: &Node| optimizer::optimize_constrained(line, world, rules, &exclude, effort, &optimizer::Constraints { corner_mode: settings.corner_mode, ..Default::default() });
+        // `splitHeadTail( newHead, m_tail, aNewHead, aNewTail )`, then `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`: the whole line (a
+        // line with no tail is all head, as before there was a tail) and the new head and tail
+        let split_and_optimize = |line: Line, world: &Node| -> (Line, Vec<Point>, Vec<Point>) {
+            if st.tail.len() < 2 || line.arc_count() > 0 {
+                let optimized = optimize(&line, world);
+                let head = optimized.pts.clone();
+                return (optimized, head, Vec::new());
+            }
+            let (head_pts, tail_pts) = split_head_tail(&line.pts, &st.tail);
+            let head = optimize(&Line::from_points(self.net.clone(), self.current_layer, self.width, head_pts), world);
+            let mut full = Line::from_points(self.net.clone(), self.current_layer, self.width, tail_pts.clone());
+            append_points(&mut full.pts, &head.pts);
+            (full, head.pts, tail_pts)
+        };
 
         let mut current = current;
         if settings.mode == Mode::Shove {
@@ -358,7 +563,9 @@ impl LinePlacer {
                 let mut parent_node = parent.apply(node);
                 // `SHOVE::Run`: "m_currentNode->LockJoint( head.CPoint( 0 ), &head, true ); if( !head.EndsWithVia() ) m_currentNode->LockJoint(
                 // head.CLastPoint(), &head, true )" -- a line of the head's net the shove pushes (the route's own tail) ends there
-                parent_node.lock_joint(start, &self.net);
+                if let Some(&first) = walked.pts.first() {
+                    parent_node.lock_joint(first, &self.net);
+                }
                 if let (None, Some(&end)) = (&head_via, walked.pts.last()) {
                     parent_node.lock_joint(end, &self.net);
                 }
@@ -372,13 +579,14 @@ impl LinePlacer {
                     // Like `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`
                     // after the shove: against the world the shove left, so a
                     // shortcut is only taken where the pushed items now allow it.
-                    let optimized = optimize(&line, &outcome.world);
+                    let (optimized, head, tail) = split_and_optimize(line, &outcome.world);
                     let via = head_via.as_ref().and_then(|_| optimized.pts.last().copied());
                     // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame
                     let mut world = parent;
                     world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
                     self.springback.borrow_mut().push(node, world.clone(), outcome.area);
-                    return Some(HeadResult { pts: optimized.pts, arcs: optimized.arcs, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via, via_shoved: true, kept: false });
+                    let r = HeadResult { pts: optimized.pts, arcs: optimized.arcs, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via, via_shoved: true, kept: false };
+                    return Some((r, head, tail));
                 }
                 // the shove failed: "m_currentNode = parent", and `rhWalkOnly` walks the head in it
                 current = parent;
@@ -403,14 +611,23 @@ impl LinePlacer {
                 // `rhMarkObstacles`: "If the head is in colliding state, snap to the hull of the first obstacle. This way, one can route tracks as
                 // tightly as possible without enabling the shove/walk mode that certain users find too intrusive."
                 let raw = match self.mark_obstacles_snap(world_node, rules, settings, &raw, p) {
-                    Some(nearest) => build_raw(nearest),
+                    Some(nearest) => build_l1(nearest),
                     None => raw,
                 };
                 let colliding = raw.pts.windows(2).any(|w| {
                     let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
                     world_node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
                 });
-                Some(HeadResult::plain_line(raw, colliding, node, current))
+                // `aNewHead = m_head; aNewTail = m_tail;`
+                let head = raw.pts.clone();
+                let mut r = HeadResult::plain_line(raw, colliding, node, current);
+                if !st.tail.is_empty() {
+                    let mut full = st.tail.clone();
+                    append_points(&mut full, &head);
+                    r.pts = full;
+                    r.arcs.clear();
+                }
+                Some((r, head, st.tail.clone()))
             }
             Mode::Walkaround | Mode::Shove => {
                 // `rhWalkOnly`: `rhWalkBase( aP, walkFull, ITEM::ANY_T, RM_Walkaround )`, refused if the walk still
@@ -418,9 +635,9 @@ impl LinePlacer {
                 let walked = walk_base(world_node, crate::node::kind_mask::ANY).filter(|path| !walkaround::path_collides(world_node, rules, &self.net, self.current_layer, self.width, &path.pts, &exclude));
                 // `rhWalkOnly` fails when the walk does (ST_STUCK) or still collides
                 walked.map(|path| {
-                    let optimized = optimize(&path, world_node);
+                    let (optimized, head, tail) = split_and_optimize(path, world_node);
                     let via = if self.placing_via { optimized.last() } else { None };
-                    HeadResult { via, ..HeadResult::plain_line(optimized, false, node, current) }
+                    (HeadResult { via, ..HeadResult::plain_line(optimized, false, node, current) }, head, tail)
                 })
             }
         }
@@ -456,13 +673,16 @@ impl LinePlacer {
         trail.get_posture(p)
     }
 
-    /// The start of a `Move` to `p`: the tracer goes back to how it was before the last `Move` when that was to the same cursor, and is remembered
-    /// otherwise.
+    /// The start of a `Move` to `p`: the tracer and the leg's tail and head ([`TailState`]) go back to how they were before the last `Move` when that
+    /// was to the same cursor (a click on the cursor shows what was shown), and are remembered otherwise.
     fn begin_move(&self, p: Point) {
         let mut last = self.last_move.borrow_mut();
         match &*last {
-            Some((at, before)) if *at == p => *self.trail.borrow_mut() = before.clone(),
-            _ => *last = Some((p, self.trail.borrow().clone())),
+            Some((at, before, tail)) if *at == p => {
+                *self.trail.borrow_mut() = before.clone();
+                *self.tail_state.borrow_mut() = tail.clone();
+            }
+            _ => *last = Some((p, self.trail.borrow().clone(), self.tail_state.borrow().clone())),
         }
     }
 
@@ -544,6 +764,10 @@ impl LinePlacer {
                 if crate::seg_ops::collinear(track, last_seg) && crate::seg_ops::overlaps(track, last_seg) {
                     let split_point = eda_drc::kimath::Seg::new(track.0, track.1).nearest_point(last_seg.0);
                     head.pts[n - 1] = split_point;
+                    // `m_head.Line().SetPoint( m_head.PointCount() - 1, splitPoint )`
+                    if let Some(last) = self.tail_state.borrow_mut().head.last_mut() {
+                        *last = split_point;
+                    }
                     head.simplify();
                     snapped_end = Some(split_point);
                 }
@@ -677,12 +901,15 @@ impl LinePlacer {
             head.pts.pop();
         }
         self.direction = head.pts.windows(2).rev().find(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).unwrap_or(self.direction);
-        // the stage's `commit` is the newest frame now (`m_fixedTail.AddStage( .., m_currentNode )`)
+        // the stage's `commit` is the newest frame now (`m_fixedTail.AddStage( .., m_direction, m_currentNode )`)
         self.stages.push(self.springback.borrow().len());
+        self.push_stage_direction(self.direction);
         self.lock_fixed(node, Some(&head), None);
         self.runs.push(head);
         *self.last_good.borrow_mut() = None;
         self.placement_correct = true;
+        // `setInitialDirection( d_last )`, then "m_direction = m_initial_direction; m_head.Line().Clear(); m_tail.Line().Clear();"
+        self.tail_state.borrow_mut().reset(self.direction);
         if !real_end {
             // `FixRoute`: "m_startItem = nullptr; .. m_chainedPlacement = !pl.EndsWithVia();"
             self.start_layers = None;
@@ -725,7 +952,13 @@ impl LinePlacer {
         let via = crate::item::Via { layers: self.via_layers(new_layer), ..self.make_via(via_pos) };
         let via = crate::item::Via { diameter, drill, ..via };
         if head.point_count() >= 2 {
+            // `SEG lastDirSeg = ( !fixAll && l.SegmentCount() > 1 ) ? l.CSegment( -2 ) : l.CSegment( -1 )`, `setInitialDirection( d_last )`
+            let segs: Vec<(Point, Point)> = head.segs().filter(|(a, b)| a != b).collect();
+            let last = if !settings.fix_all_segments && segs.len() > 1 { segs[segs.len() - 2] } else { segs[segs.len() - 1] };
+            let d_last = Direction45::from_seg(last.0, last.1);
             self.stages.push(self.springback.borrow().len());
+            self.push_stage_direction(d_last);
+            self.tail_state.borrow_mut().reset(d_last);
             self.lock_fixed(node, Some(&head), Some(via.clone()));
             self.runs.push(head);
         } else {
@@ -768,6 +1001,12 @@ impl LinePlacer {
         }
         self.current_layer = layer;
         self.direction = self.initial_direction;
+        // `m_direction = m_initial_direction; .. m_head.Line().Clear(); m_tail.Line().Clear();`
+        {
+            let mut st = self.tail_state.borrow_mut();
+            let initial = st.initial;
+            st.reset(initial);
+        }
         *self.last_good.borrow_mut() = None;
         *self.last_move.borrow_mut() = None;
         self.restart_trail(self.fixed_start(), self.initial_direction);
@@ -810,6 +1049,16 @@ impl LinePlacer {
         // what its shoves had moved
         if let Some(len) = self.stages.pop() {
             self.springback.borrow_mut().rewind_to(len);
+        }
+        // `UnfixRoute`: "m_head.Line().Clear(); m_tail.Line().Clear(); .. m_direction = st.pts[0].direction;" (`m_initial_direction` is kept)
+        {
+            let dir = self.stage_dirs.pop();
+            let mut st = self.tail_state.borrow_mut();
+            let initial = st.initial;
+            st.reset(initial);
+            if let Some(d) = dir {
+                st.direction = d;
+            }
         }
         let world = self.springback.borrow().top().0;
         self.take_displacement(&world);
@@ -985,6 +1234,241 @@ impl LinePlacer {
     pub fn displaced_vias(&self) -> impl Iterator<Item = (&str, Point)> {
         self.displaced_vias.iter().map(|(k, &v)| (k.as_str(), v))
     }
+}
+
+/// What `LINE_PLACER` keeps of the leg being routed from one `Move` to the next (Walk around and Shove): the settled `m_tail` from the leg's start,
+/// the `m_head` routed on from its end, the direction the head leaves the tail in (`m_direction`) and the direction the leg started in
+/// (`m_initial_direction`: `InitialDirection()`, then each click's last segment, `setInitialDirection( d_last )`). Points only: a head with an arc
+/// never becomes a tail ([`LinePlacer::build_head`]).
+#[derive(Debug, Clone)]
+pub(crate) struct TailState {
+    tail: Vec<Point>,
+    head: Vec<Point>,
+    direction: Direction45,
+    initial: Direction45,
+}
+
+impl TailState {
+    fn new(initial: Direction45) -> Self {
+        TailState { tail: Vec::new(), head: Vec::new(), direction: initial, initial }
+    }
+
+    /// `FixRoute`, `SetLayer`, a via: "m_head.Line().Clear(); m_tail.Line().Clear(); .. m_direction = m_initial_direction;".
+    fn reset(&mut self, initial: Direction45) {
+        *self = TailState::new(initial);
+    }
+}
+
+/// `LINE_PLACER::Trace()`: the tail and the head, simplified when there are more than two points ("if we have a zero-length seg as the only part
+/// of the trace, we don't want it to be removed at this stage").
+fn trace_of(st: &TailState) -> Vec<Point> {
+    let mut l = st.tail.clone();
+    append_points(&mut l, &st.head);
+    if l.len() > 2 {
+        simplify_points(&mut l);
+    }
+    l
+}
+
+/// `SHAPE_LINE_CHAIN::Append( chain )`: the points of `more`, the first left out when it repeats the last.
+fn append_points(v: &mut Vec<Point>, more: &[Point]) {
+    for (i, &p) in more.iter().enumerate() {
+        if i == 0 && v.last() == Some(&p) {
+            continue;
+        }
+        v.push(p);
+    }
+}
+
+/// `SHAPE_LINE_CHAIN::Simplify()` of plain points ([`Line::simplify`]).
+fn simplify_points(v: &mut Vec<Point>) {
+    let mut l = Line::from_points(None, 0, Nm::ZERO, std::mem::take(v));
+    l.simplify();
+    *v = l.pts;
+}
+
+/// `SHAPE_LINE_CHAIN::Find( aP )`: the index of the point itself.
+fn find_point(chain: &[Point], p: Point) -> Option<usize> {
+    chain.iter().position(|q| *q == p)
+}
+
+/// `LINE_PLACER::splitHeadTail( aNewLine, aOldTail, aNewHead, aNewTail )`: the routed line `line` (the old tail and the new head together) cut
+/// where it leaves the old tail -- at the first point of the old tail it no longer has (`l2.CLine().Find( aOldTail.CPoint( i ) ) < 0`), the old
+/// tail's end first split into it when it lies on one of its segments (`PointOnEdge`, `Split`). `(head, tail)`; with an old tail of fewer than two
+/// points the whole line is the head.
+fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>, Vec<Point>) {
+    let mut l2 = line.to_vec();
+    let n = l2.len();
+    if !(n > 1 && old_tail.len() > 1) {
+        return (l2, Vec::new());
+    }
+    let last = *old_tail.last().unwrap();
+    // `if( l2.CLine().PointOnEdge( aOldTail.CLastPoint() ) ) l2.Line().Split( aOldTail.CLastPoint() );`
+    if let Some(i) = (0..l2.len() - 1).find(|&i| {
+        let (a, b) = (l2[i], l2[i + 1]);
+        a == last || b == last || eda_drc::kimath::Seg::new(a, b).sq_distance_to_point(last) <= 1
+    }) {
+        if !l2.contains(&last) {
+            l2.insert(i + 1, last);
+        }
+    }
+    let mut i = 0;
+    let mut found = false;
+    while i < old_tail.len() {
+        if find_point(&l2, old_tail[i]).is_none() {
+            found = true;
+            break;
+        }
+        i += 1;
+    }
+    if !found {
+        i -= 1;
+    }
+    if i >= l2.len() {
+        i = l2.len() - 1;
+    }
+    let tail = if i == 0 { Vec::new() } else { l2[..=i].to_vec() };
+    (l2[i..].to_vec(), tail)
+}
+
+/// `SHAPE_LINE_CHAIN::Intersect( aChain, aIp )` of two open chains, `ours` against `theirs` (KiCad 8303b2ad's: `theirs`' segments taken in the order
+/// of their least x, a collinear pair by `SEG::Contains` of each end, any other by `SEG::Intersect`): each crossing's point and `index_our`, the
+/// segment of `ours` it is on (the next one at that segment's end).
+fn chain_intersections(ours: &[Point], theirs: &[Point]) -> Vec<(Point, usize)> {
+    use eda_drc::kimath::Seg;
+    let cross = |o: Point, a: Point, b: Point| (a.x - o.x).area(b.y - o.y) - (a.y - o.y).area(b.x - o.x);
+    let contains = |a: Point, b: Point, p: Point| Seg::new(a, b).sq_distance_to_point(p) <= 3;
+    let mut sorted: Vec<usize> = (0..theirs.len().saturating_sub(1)).collect();
+    sorted.sort_by_key(|&j| theirs[j].x.min(theirs[j + 1].x));
+    let mut out = Vec::new();
+    for s1 in 0..ours.len().saturating_sub(1) {
+        let (a1, b1) = (ours[s1], ours[s1 + 1]);
+        for &j in &sorted {
+            let (a2, b2) = (theirs[j], theirs[j + 1]);
+            if cross(a1, b1, a2).abs() <= 1 && cross(a1, b1, b2).abs() <= 1 {
+                if contains(a1, b1, a2) {
+                    out.push((a2, s1));
+                }
+                if contains(a1, b1, b2) {
+                    out.push((b2, s1));
+                }
+                if contains(a2, b2, a1) {
+                    out.push((a1, s1));
+                }
+                if contains(a2, b2, b1) {
+                    out.push((b1, s1 + 1));
+                }
+            } else if let Some(p) = Seg::new(a1, b1).intersect(&Seg::new(a2, b2)) {
+                out.push((p, if p == b1 { s1 + 1 } else { s1 }));
+            }
+        }
+    }
+    out
+}
+
+/// `LINE_PLACER::handleSelfIntersections`: a head that starts where the tail does replaces it ("completely new head trace? chop off the tail");
+/// one that crosses the tail cuts it back -- at the crossing nearest the tail's start that is neither the head's start nor the tail's end: before
+/// its segment, the direction that segment's, or, on the tail's first two segments, the tail and head both cleared ("just start routing from the
+/// beginning"). True when the tail was cut (`routeStep` routes again).
+fn handle_self_intersections(st: &mut TailState) -> bool {
+    if st.tail.len() < 2 || st.head.len() < 2 {
+        return false;
+    }
+    if st.tail[0] == st.head[0] {
+        st.direction = st.initial;
+        st.tail.clear();
+        return true;
+    }
+    let ips = chain_intersections(&st.tail, &st.head);
+    if ips.is_empty() {
+        return false;
+    }
+    let (mut n, mut ipoint) = (usize::MAX, Point { x: Nm::ZERO, y: Nm::ZERO });
+    for &(p, index_our) in &ips {
+        if index_our < n {
+            n = index_our;
+            ipoint = p;
+        }
+    }
+    if ipoint == st.head[0] || Some(&ipoint) == st.tail.last() {
+        return false;
+    }
+    if n < 2 {
+        st.direction = st.initial;
+        st.tail.clear();
+        st.head.clear();
+        return true;
+    }
+    // `const SEG last = tail.CSegment( n - 1 ); m_direction = DIRECTION_45( last ); tail.Remove( n, -1 );`
+    st.direction = Direction45::from_seg(st.tail[n - 1], st.tail[n]);
+    st.tail.truncate(n);
+    true
+}
+
+/// `LINE_PLACER::handlePullback`: a tail of one point goes; a head that leaves the tail at a right or acute angle takes the tail's last point back
+/// ("hoping that the next iteration will result with a head trace that starts with a segment following our current direction"), the direction
+/// the tail's last segment's (the leg's first once the tail has none). True when the tail changed (`routeStep` routes again).
+fn handle_pullback(st: &mut TailState) -> bool {
+    if st.head.len() < 2 {
+        return false;
+    }
+    let n = st.tail.len();
+    if n == 0 {
+        return false;
+    }
+    if n == 1 {
+        st.tail.clear();
+        return true;
+    }
+    let first_head = Direction45::from_seg(st.head[0], st.head[1]);
+    let last_tail = Direction45::from_seg(st.tail[n - 2], st.tail[n - 1]);
+    let angle = first_head.angle_to(&last_tail);
+    if matches!(angle, crate::direction45::AngleType::Right | crate::direction45::AngleType::Acute) {
+        st.direction = last_tail;
+        st.tail.pop();
+        if st.tail.len() < 2 {
+            st.direction = st.initial;
+        }
+        return true;
+    }
+    false
+}
+
+/// `LINE_PLACER::mergeHead`: a head of three segments or more, joined to the tail's end, with no acute, reversed or undefined corner of its own
+/// or where it leaves the tail (`ANG_ACUTE | ANG_HALF_FULL | ANG_UNDEFINED`), becomes part of the tail; the direction is the tail's last segment's.
+fn merge_head(st: &mut TailState) -> bool {
+    use crate::direction45::AngleType;
+    let forbidden = |a: AngleType| matches!(a, AngleType::Acute | AngleType::HalfFull | AngleType::Undefined);
+    simplify_points(&mut st.head);
+    simplify_points(&mut st.tail);
+    let n_head = st.head.len().saturating_sub(1);
+    let n_tail = st.tail.len().saturating_sub(1);
+    if n_head < 3 {
+        return false;
+    }
+    if n_tail > 0 && st.head.first() != st.tail.last() {
+        return false;
+    }
+    // `m_head.CountCorners( ForbiddenAngles ) != 0`
+    if st.head.windows(3).any(|w| forbidden(Direction45::from_seg(w[0], w[1]).angle_to(&Direction45::from_seg(w[1], w[2])))) {
+        return false;
+    }
+    if n_tail > 0 {
+        let dir_head = Direction45::from_seg(st.head[0], st.head[1]);
+        let k = st.tail.len();
+        let dir_tail = Direction45::from_seg(st.tail[k - 2], st.tail[k - 1]);
+        if forbidden(dir_head.angle_to(&dir_tail)) {
+            return false;
+        }
+    }
+    let head = std::mem::take(&mut st.head);
+    append_points(&mut st.tail, &head);
+    simplify_points(&mut st.tail);
+    let k = st.tail.len();
+    if k >= 2 {
+        st.direction = Direction45::from_seg(st.tail[k - 2], st.tail[k - 1]);
+    }
+    true
 }
 
 /// `SHAPE_LINE_CHAIN::NearestPoint( aP )` of a closed chain (a hull): the segment nearest `p` by `SEG::Distance` (the first of equals, the closing
@@ -1516,6 +2000,123 @@ mod tests {
         assert!(!near_via(&pv), "GND is not shoved onto the via, nor walked round it: {:?}", pv.displaced_lines);
         assert_eq!(placer.placed_vias().len(), 1);
         assert_eq!(placer.placed_vias()[0].pos, at(5.0, 0.0), "the via stays where it was placed");
+    }
+
+    fn ts(tail: &[(f64, f64)], head: &[(f64, f64)]) -> TailState {
+        let at = |&(x, y): &(f64, f64)| Point { x: mm(x), y: mm(y) };
+        TailState { tail: tail.iter().map(at).collect(), head: head.iter().map(at).collect(), direction: Direction45::E, initial: Direction45::N }
+    }
+
+    /// The tail's own steps, held to `pns_line_placer.cpp`: `mergeHead` takes a head of three segments with no acute corner into the tail (one of
+    /// two, or one that turns back, stays the head); `handlePullback` takes the tail's last point back when the head leaves it at a right angle;
+    /// `handleSelfIntersections` cuts the tail before the segment the head crosses (and clears both when it is one of the first two); and
+    /// `splitHeadTail` keeps as tail what the routed line still has of the old one.
+    #[test]
+    fn the_tail_is_merged_pulled_back_cut_and_split_as_kicads() {
+        let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut st = ts(&[], &[(0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (4.0, 1.0)]);
+        assert!(merge_head(&mut st));
+        assert_eq!((st.tail.len(), st.head.len(), st.direction), (4, 0, Direction45::E));
+        let mut two = ts(&[], &[(0.0, 0.0), (1.0, 0.0), (2.0, 1.0)]);
+        assert!(!merge_head(&mut two), "two segments stay the head");
+        let mut back = ts(&[], &[(0.0, 0.0), (2.0, 0.0), (1.0, 0.0), (1.0, 1.0)]);
+        assert!(!merge_head(&mut back), "a reversal (ANG_HALF_FULL) is forbidden");
+        // the head leaves the tail's eastward end going south: a right angle, the tail's last point goes
+        let mut pb = ts(&[(0.0, 0.0), (1.0, 0.0), (3.0, 0.0)], &[(3.0, 0.0), (3.0, 2.0)]);
+        assert!(handle_pullback(&mut pb));
+        assert_eq!(pb.tail, vec![p(0.0, 0.0), p(1.0, 0.0)]);
+        assert_eq!(pb.direction, Direction45::E);
+        let mut on = ts(&[(0.0, 0.0), (1.0, 0.0), (3.0, 0.0)], &[(3.0, 0.0), (4.0, 1.0)]);
+        assert!(!handle_pullback(&mut on), "an obtuse turn is no pullback");
+        // a head that comes back across the tail's third segment cuts the tail before it
+        let mut si = ts(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)], &[(4.0, 0.0), (4.0, 1.0), (2.5, 1.0), (2.5, -1.0)]);
+        assert!(handle_self_intersections(&mut si));
+        assert_eq!(si.tail, vec![p(0.0, 0.0), p(1.0, 0.0)], "points 0..n-1 of the tail kept, n the crossed segment");
+        let mut early = ts(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)], &[(3.0, 0.0), (3.0, 1.0), (0.5, 1.0), (0.5, -1.0)]);
+        assert!(handle_self_intersections(&mut early));
+        assert!(early.tail.is_empty() && early.head.is_empty() && early.direction == Direction45::N, "on the first two segments: start again");
+        // `splitHeadTail`: the walked line has the old tail's first two points, not its third
+        let (head, tail) = split_head_tail(&[p(0.0, 0.0), p(1.0, 0.0), p(2.0, 0.5), p(4.0, 0.5)], &[p(0.0, 0.0), p(1.0, 0.0), p(2.0, 0.0)]);
+        assert_eq!(tail, vec![p(0.0, 0.0), p(1.0, 0.0), p(2.0, 0.5)]);
+        assert_eq!(head, vec![p(2.0, 0.5), p(4.0, 0.5)]);
+    }
+
+    /// `optimizeTailHeadTransition`'s `FANOUT_CLEANUP`: a trace from a pad to a pad shorter than ten widths is the direct straight-first trace
+    /// when that is clear, whatever posture the mouse gave it (here diagonal first, from a cursor that went diagonally); not when `/` forced the
+    /// posture (`!m_mouseTrailTracer.IsManuallyForced()`), and not from empty space.
+    #[test]
+    fn a_short_fan_out_from_a_pad_is_straightened() {
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let pads = |with_start: bool| {
+            let mut node = Node::new();
+            let mut pad = |c: Point| node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.15) }, source: format!("U1.{}", c.x.get()), edge: false, rule: 0, anchor_points: Vec::new() }));
+            if with_start {
+                pad(at(0.0, 0.0));
+            }
+            pad(at(1.2, 0.4));
+            node
+        };
+        let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
+        let route = |node: &Node, flip: bool| {
+            let mut placer = LinePlacer::start(node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+            for q in [at(0.1, 0.1), at(0.2, 0.2), at(0.3, 0.3), at(0.4, 0.4)] {
+                placer.preview(node, &rules, &settings, q);
+            }
+            if flip {
+                placer.flip_posture();
+            }
+            placer.preview(node, &rules, &settings, at(1.2, 0.4)).head.pts
+        };
+        let straight = Direction45::Undefined.build_initial_trace(at(0.0, 0.0), at(1.2, 0.4), false, crate::direction45::CornerMode::Mitered45);
+        let posture = route(&pads(false), false);
+        assert_ne!(posture, straight, "the mouse made it diagonal first: {posture:?}");
+        assert_eq!(route(&pads(true), false), straight, "from the pad: straightened");
+        assert_ne!(route(&pads(true), true), straight, "a posture forced by / is kept");
+    }
+
+    /// `routeStep` in Walk around: a head walked round a pad has three segments or more and becomes the tail (`mergeHead`), and the cursor's next
+    /// moves are routed on from the tail (`splitHeadTail` keeps what the walk still has of it); the trace reaches the cursor, collides with nothing,
+    /// starts at the leg's start, and the click fixes it and clears the tail.
+    #[test]
+    fn a_walked_head_becomes_the_tail_and_a_click_fixes_the_trace() {
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+        let mut pv = None;
+        for x in [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.5] {
+            pv = Some(placer.preview(&node, &rules, &settings, at(x, 0.0)));
+            assert!(!placer.tail_state.borrow().tail.is_empty() || x < 4.0, "the walk round the pad went into the tail by x = {x}");
+        }
+        let pv = pv.unwrap();
+        assert!(!pv.colliding && pv.head.first() == Some(at(0.0, 0.0)) && pv.head.last() == Some(at(6.5, 0.0)), "{:?}", pv.head.pts);
+        assert!(!walkaround::path_collides(&node, &rules, &net_of("SIG"), 0, mm(0.2), &pv.head.pts, &[]));
+        assert_eq!(placer.fix(&node, &rules, &settings, at(6.5, 0.0)), FixOutcome::Fixed { real_end: false });
+        assert_eq!(placer.runs[0].pts.first(), Some(&at(0.0, 0.0)));
+        assert!(placer.tail_state.borrow().tail.is_empty() && placer.tail_state.borrow().head.is_empty());
+    }
+
+    /// `reduceTail`: from the tail's last segment back, the earliest whose straight-first trace to the cursor leaves in its own direction and is
+    /// clear: the tail is cut at its start, the head cleared, the direction its own. A trace that collides stops the walk back.
+    #[test]
+    fn reduce_tail_takes_the_tail_back_to_the_earliest_segment_that_reaches_the_cursor() {
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
+        let node = Node::new();
+        let placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+        let mut st = ts(&[(0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (3.0, 1.0)], &[(3.0, 1.0), (4.0, 1.0)]);
+        assert!(placer.reduce_tail(&mut st, &node, &rules, &settings, at(5.0, 0.0)));
+        assert_eq!((st.tail.clone(), st.head.len(), st.direction), (vec![at(0.0, 0.0)], 0, Direction45::E));
+        // a pad on the straight run from the start: the walk back stops at the segment whose trace meets it, and the last clear one is taken
+        let mut blocked = Node::new();
+        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(1.5, 0.3), shape: Shape::Circle { c: at(1.5, 0.3), r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        let mut st = ts(&[(0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (3.0, 1.0)], &[(3.0, 1.0), (4.0, 1.0)]);
+        assert!(placer.reduce_tail(&mut st, &blocked, &rules, &settings, at(5.0, 0.0)));
+        assert_eq!(st.tail, vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 1.0)]);
     }
 
     /// `rhMarkObstacles`' hull snap: in Highlight collisions a cursor within half the head's width of the hull of the first obstacle the head meets
