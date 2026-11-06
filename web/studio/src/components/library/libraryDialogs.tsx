@@ -4,6 +4,7 @@
 // resolves the action's promise with the answer. With no host mounted (neither editor on screen) a question is answered
 // "no" at once rather than left hanging.
 import { useEffect, useRef, useState } from "react";
+import { noteAnswer, rememberedAnswer } from "../../kicad-port/kidialog";
 
 export interface PromptOptions {
   title: string;
@@ -20,6 +21,12 @@ export interface ConfirmOptions {
   message: string;
   okLabel?: string;
   cancelLabel?: string;
+  /**
+   * `KIDIALOG::DoNotShowCheckbox( __FILE__, __LINE__ )`: the question shows a "Do not show again" box, and once it is answered OK with the box ticked
+   * the same question (this key) is answered so at once for as long as the page is open (`g_doNotShowAgainDlgs`). A Cancel is never remembered
+   * (`m_cancelMeansCancel`).
+   */
+  doNotShowKey?: string;
 }
 
 /** A question with two ways to go on and a way out (`KIDIALOG` with `wxYES_NO | wxCANCEL`): "Overwrite All" / "Rename All" / "Cancel". */
@@ -45,9 +52,11 @@ export function askText(options: PromptOptions): Promise<string | null> {
   });
 }
 
-/** Ask a yes/no question. */
+/** Ask a yes/no question (one asked with "Do not show again" ticked before is answered at once, `KIDIALOG::ShowModal`). */
 export function askConfirm(options: ConfirmOptions): Promise<boolean> {
   return new Promise((resolve) => {
+    const remembered = rememberedAnswer(options.doNotShowKey);
+    if (remembered !== undefined) return resolve(remembered);
     if (!sink) return resolve(false);
     sink({ id: nextId++, kind: "confirm", options, resolve });
   });
@@ -171,6 +180,13 @@ function PromptDialog({ options, onDone }: { options: PromptOptions; onDone: (v:
 }
 
 function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (v: boolean) => void }) {
+  const [ticked, setTicked] = useState(false);
+  const tickedRef = useRef(false);
+  tickedRef.current = ticked;
+  const answer = (v: boolean) => {
+    noteAnswer(options.doNotShowKey, tickedRef.current, v);
+    onDone(v);
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onDone(false);
@@ -186,10 +202,15 @@ function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (
         </div>
         <div className="dialog-body" style={{ whiteSpace: "pre-wrap" }}>
           {options.message}
+          {options.doNotShowKey !== undefined && (
+            <label style={{ display: "block", marginTop: 10 }}>
+              <input type="checkbox" checked={ticked} onChange={(e) => setTicked(e.target.checked)} data-testid="do-not-show-again" /> Do not show again
+            </label>
+          )}
         </div>
         <div className="dialog-footer">
-          <button onClick={() => onDone(false)}>{options.cancelLabel ?? "Cancel"}</button>
-          <button className="primary" autoFocus onClick={() => onDone(true)}>
+          <button onClick={() => answer(false)}>{options.cancelLabel ?? "Cancel"}</button>
+          <button className="primary" autoFocus onClick={() => answer(true)}>
             {options.okLabel ?? "OK"}
           </button>
         </div>

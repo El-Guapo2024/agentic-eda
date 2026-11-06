@@ -455,7 +455,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       void (async () => {
         // `m_startItem->IsLocked()`: KiCad asks, and the halves stay locked (`PNS_KICAD_IFACE::AddItem`: `if( aItem->IsLocked() ) newBoardItem->SetLocked( true )`)
         if (lockedIds.has(id)) {
-          if (!(await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Break Track", cancelLabel: "Cancel" }))) return;
+          if (!(await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Break Track", cancelLabel: "Cancel", doNotShowKey: "router_tool.cpp:InlineBreakTrack" }))) return;
           if (cmd.op === "commit_route") return void api.cmd({ ...cmd, lock_tracks: (cmd.tracks ?? []).map((_, i) => i) });
         }
         void api.cmd(cmd);
