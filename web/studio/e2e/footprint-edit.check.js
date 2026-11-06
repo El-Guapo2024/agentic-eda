@@ -269,16 +269,18 @@
     });
 
     // ----- the Properties panel edits a footprint's attributes
-    await scenario("footprint: the Properties panel sets Do not Populate, Exclude From BOM and Component Type; the symbol follows", async (t) => {
+    // (no Component Type row: `FOOTPRINT_DESC` registers none, the type is the Footprint Properties dialog's radio -- kicad-port/pcbProperties.ts since UI-LEFT P2)
+    await scenario("footprint: the Properties panel sets Do not Populate, Exclude From BOM and Exclude From Position Files; it has no Component Type row", async (t) => {
       await select([refA]);
       let applied = 0;
-      for (const [name, v] of [["Do not Populate", true], ["Exclude From Bill of Materials", true], ["Exclude From Position Files", true], ["Component Type", "through_hole"]]) {
+      for (const [name, v] of [["Do not Populate", true], ["Exclude From Bill of Materials", true], ["Exclude From Position Files", true]]) {
         const r = await edit(name, v);
         t(r.startsWith("ok"), `${name} -> ${r}`);
         if (r.startsWith("ok")) applied++;
       }
+      t(!row("Component Type"), "no Component Type row, as KiCad's panel");
       const attrs = (await partOf(refA)).attrs;
-      t(attrs.dnp && attrs.exclude_from_bom && attrs.exclude_from_pos_files && attrs.kind === "through_hole", `attributes are ${JSON.stringify(attrs)}`);
+      t(attrs.dnp && attrs.exclude_from_bom && attrs.exclude_from_pos_files, `attributes are ${JSON.stringify(attrs)}`);
       for (let i = 0; i < applied; i++) await undo();
       t((await snapshot()) === base, "undoing every edit puts the board back");
     });
