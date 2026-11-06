@@ -1,0 +1,104 @@
+// The schematic's point editor on its drawn graphics -- `SCH_POINT_EDITOR` on one selected `SCH_SHAPE` (rectangle, circle, arc, bezier, polyline), `SCH_TEXTBOX` or
+// `SCH_RULE_AREA` (eeschema/tools/sch_point_editor.cpp at 8303b2ad; the behaviours are kicad-port/eePointEdit.ts): a graphic as the behaviour sees it, and what a drag
+// makes of the graphic (`sch_edit` `edit_graphic`, one undo step: `commit.Push( _( "Move Point" ) )` on the mouse-up). UI-LEFT-2 SS3, after S13's arc editor
+// (kicad-port/schArcEdit.ts, whose mode setting this reads).
+//
+// - A circle is kept as its centre and radius (`(circle (center ..) (radius ..))`): its end point is where `parseSchCircle` puts it, the radius to the right of the
+//   centre (`SetEnd( center + VECTOR2I( radius, 0 ) )`); a drag of the end gives the radius the distance to it. KiCad keeps a drawn circle's end where it was clicked
+//   until the file is read again; here it is back on the right once the drag lands.
+// - A text box's `GetMinSize()`: its text laid out in the box as it is being dragged (kicad-port/schTextBox.ts) -- the lines' height plus the top and bottom margins
+//   (the left and right ones for a vertical text) across the text, none along it; nothing for an empty text.
+// - A polyline is open (`parseSchPolyLine` leaves its chain open) and a rule area closed; the studio paints both closed (components/schematic/schGraphicsPainter.ts).
+//
+// Pure: no React, no DOM; the caller passes the stroke font's measure.
+import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
+import { eeDrag, eeMakePoints, type EeDragResult, type EeEditPoints, type EeEditShape, type EeHandle, type P } from "./eePointEdit";
+import type { ArcEditMode } from "./pcbPointEdit";
+import { CAP_HEIGHT_RATIO, INTERLINE_PITCH, defaultTextBoxMargin, wrapText, type Measure } from "./schTextBox";
+
+/** `SCH_SHAPE`'s default line width (`schIUScale.MilsToIU( DEFAULT_LINE_WIDTH_MILS )`, 6 mil), what a text box's default margin is made from. */
+const DEFAULT_WIDTH_NM = 152_400;
+
+const p = (q: { x: number; y: number }): P => [q.x, q.y];
+const xy = (q: readonly [number, number]) => ({ x: Math.round(q[0]), y: Math.round(q[1]) });
+
+/** The graphics the point editor has a behaviour for (`pointEditorTypes` and `makePointsAndBehavior`'s shapes). */
+export function hasPointEditor(g: SchGraphic): boolean {
+  return ["rectangle", "circle", "arc", "bezier", "polygon", "text_box", "rule_area"].includes(g.shape.type);
+}
+
+/** `SCH_TEXTBOX::GetMinSize` of a box with its text: the text's height and the margins across the text's direction (vertical text: a width, horizontal: a height). */
+export function textBoxMinSize(g: SchGraphic, start: P, end: P, measure: Measure): P {
+  const s = g.shape;
+  if (s.type !== "text_box" || s.text === "") return [0, 0];
+  const width = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
+  const margin = s.margin_nm && s.margin_nm > 0 ? s.margin_nm : defaultTextBoxMargin(s.size_nm, width);
+  const vertical = Math.round((s.angle ?? 0) / 1000) % 180 === 90;
+  const along = vertical ? Math.abs(end[1] - start[1]) : Math.abs(end[0] - start[0]);
+  const lines = wrapText(s.text, Math.max(along - 2 * margin, 0), s.size_nm, measure);
+  const textHeight = Math.round(s.size_nm * CAP_HEIGHT_RATIO + (lines.length - 1) * s.size_nm * INTERLINE_PITCH);
+  return vertical ? [textHeight + 2 * margin, 0] : [0, textHeight + 2 * margin];
+}
+
+/** The graphic as its behaviour sees it, or null for a graphic the point editor has none for (a directive label, an image, a table ...). */
+export function schEditShape(g: SchGraphic, measure: Measure): EeEditShape | null {
+  const s = g.shape;
+  switch (s.type) {
+    case "rectangle":
+      return { kind: "rectangle", start: p(s.start), end: p(s.end), radius: s.corner_radius_nm ?? 0 };
+    case "circle":
+      return { kind: "circle", center: p(s.center), end: [s.center.x + s.radius_nm, s.center.y] };
+    case "arc":
+      return { kind: "arc", start: p(s.start), mid: p(s.mid), end: p(s.end) };
+    case "bezier":
+      return { kind: "bezier", start: p(s.start), c1: p(s.c1), c2: p(s.c2), end: p(s.end) };
+    case "polygon":
+      return { kind: "polygon", pts: s.pts.map(p) };
+    case "rule_area":
+      return { kind: "polygon", pts: s.pts.map(p), closed: true, ruleArea: true };
+    case "text_box":
+      return { kind: "text_box", start: p(s.start), end: p(s.end), minSize: textBoxMinSize(g, p(s.start), p(s.end), measure) };
+    default:
+      return null;
+  }
+}
+
+/** The graphic's shape as the behaviour left it (its other properties as they were). */
+export function schShapeFrom(e: EeEditShape, was: SchGraphicShape): SchGraphicShape {
+  switch (e.kind) {
+    case "rectangle":
+      if (was.type !== "rectangle") return was;
+      return { ...was, start: xy(e.start), end: xy(e.end), ...(e.radius ? { corner_radius_nm: e.radius } : { corner_radius_nm: undefined }) };
+    case "text_box":
+      return was.type === "text_box" ? { ...was, start: xy(e.start), end: xy(e.end) } : was;
+    case "circle":
+      return was.type === "circle" ? { ...was, center: xy(e.center), radius_nm: Math.round(Math.hypot(e.end[0] - e.center[0], e.end[1] - e.center[1])) } : was;
+    case "arc":
+      return { type: "arc", start: xy(e.start), mid: xy(e.mid), end: xy(e.end) };
+    case "bezier":
+      return { type: "bezier", start: xy(e.start), c1: xy(e.c1), c2: xy(e.c2), end: xy(e.end) };
+    case "polygon":
+      return was.type === "rule_area" || was.type === "polygon" ? { ...was, pts: e.pts.map(xy) } : was;
+  }
+}
+
+/**
+ * One drag step of handle `h` of graphic `g` to `to` (the snapped cursor), in `mode`: the shape the behaviour makes (a text box's minimum size is that of the box as the
+ * drag has it, as KiCad's `GetMinSize` reads the box it is editing), or null when it makes none.
+ */
+export function schDrag(g: SchGraphic, h: EeHandle, to: readonly [number, number], mode: ArcEditMode, measure: Measure): EeDragResult | null {
+  const e = schEditShape(g, measure);
+  if (!e) return null;
+  const first = eeDrag(e, h, to, mode);
+  if (!first || e.kind !== "text_box" || first.shape.kind !== "text_box") return first;
+  return eeDrag({ ...e, minSize: textBoxMinSize(g, first.shape.start, first.shape.end, measure) }, h, to, mode);
+}
+
+/** The edit points of a graphic as a drag leaves it (or as it is), and the graphic itself as drawn. */
+export function schPointEditor(g: SchGraphic, drag: { handle: EeHandle; to: readonly [number, number] } | null, mode: ArcEditMode, measure: Measure): { edit: EeEditPoints; graphic: SchGraphic } | null {
+  const e = schEditShape(g, measure);
+  if (!e) return null;
+  const dragged = drag ? schDrag(g, drag.handle, drag.to, mode, measure) : null;
+  const shown = dragged?.shape ?? e;
+  return { edit: eeMakePoints(shown), graphic: dragged ? { ...g, shape: schShapeFrom(shown, g.shape) } : g };
+}

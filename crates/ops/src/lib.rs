@@ -61,6 +61,7 @@ pub use array::ArrayGeometry;
 mod array_numbering;
 pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
 mod fp_array;
+pub mod fp_copy;
 mod pad_edit;
 mod unused_pads;
 mod via_layers;
@@ -7529,6 +7530,8 @@ mod pcb_transform_tests;
 mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
+#[cfg(test)]
+mod fp_copy_tests;
 #[cfg(test)]
 mod fp_items_tests;
 #[cfg(test)]

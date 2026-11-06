@@ -543,6 +543,8 @@ export interface SymbolEditorApi {
   editGraphic: (id: string, strokeMm: number, fill: LibraryFill, scope?: { unit?: number; bodyStyle?: number }) => Promise<boolean>;
   /** A text box's dialog: the whole graphic as it was left (`replace_symbol_graphic`). */
   replaceGraphic: (id: string, graphic: LibrarySymbolGraphic) => Promise<boolean>;
+  /** The point editor's drag (`SCH_POINT_EDITOR`, kicad-port/symPointEdit.ts): the graphic replaced and the pins a rectangle's side took along moved, one undo step. */
+  reshapeGraphic: (id: string, graphic: LibrarySymbolGraphic, pins: { id: string; x: number; y: number }[]) => Promise<boolean>;
   deleteGraphic: (id: string) => Promise<void>;
   editText: (id: string, text: string, angleDeg: number, sizeMm: number) => Promise<void>;
   editProperties: (fields: SymbolPropertiesFields) => Promise<boolean>;
@@ -1017,6 +1019,13 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const libId = stateRef.current.libId;
       if (!libId) return false;
       return runCmd({ op: "replace_symbol_graphic", lib_id: libId, id, graphic });
+    },
+    reshapeGraphic: async (id, graphic, pins) => {
+      const libId = stateRef.current.libId;
+      if (!libId) return false;
+      // `dragPinsOnEdge`'s pins are moved one by one (`pin->Move`), their twins in other units left: no Synchronized Pins Mode here
+      const cmds: Cmd[] = [{ op: "replace_symbol_graphic", lib_id: libId, id, graphic }, ...pins.map((p): Cmd => ({ op: "move_symbol_pin", lib_id: libId, id: p.id, x: p.x, y: p.y }))];
+      return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     deleteGraphic: async (id) => {
       const libId = stateRef.current.libId;

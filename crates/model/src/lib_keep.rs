@@ -7,8 +7,9 @@
 //! library and saved again is the one KiCad wrote. The round trip of KiCad's installed libraries through the editors' readers and writers is checked against kicad-cli
 //! (`crates/kicad/tests/library_roundtrip.rs`).
 //!
-//! What is kept by item id (a graphic's line style, a text's looks) stays with the item through moves and edits; a copy of the item (Duplicate, Create Array, Paste)
-//! is a new item with the editor's defaults. A footprint form kept verbatim (a zone, a point, a dimension) is not moved by Set Anchor.
+//! What is kept by item id (a graphic's line style, a text's looks) stays with the item through moves and edits; a copy of a footprint's item (Duplicate, Create Array,
+//! Paste) takes its original's ([`LibraryFootprintKeep::copy_looks`], [`LibraryFootprintKeep::copy_looks_from`], UI-LEFT-2 FF2). A footprint form kept verbatim (a zone,
+//! a point, a dimension) is not moved by Set Anchor.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -152,6 +153,26 @@ impl LibraryFootprintKeep {
         for set in [&mut self.unlocked_texts, &mut self.locked, &mut self.hidden_texts] {
             if set.contains(from) {
                 set.insert(to.to_string());
+            }
+        }
+    }
+
+    /// What `other` keeps by the id `from` (another footprint's: the clipboard's, or the one copied to it), kept here by the id `to` -- a pasted or copied item looks
+    /// as it did there. Nothing of `to` is kept here before.
+    pub fn copy_looks_from(&mut self, other: &LibraryFootprintKeep, from: &str, to: &str) {
+        self.forget(to);
+        if let Some(t) = other.stroke_types.get(from) {
+            self.stroke_types.insert(to.to_string(), t.clone());
+        }
+        if let Some(h) = other.hatches.get(from) {
+            self.hatches.insert(to.to_string(), *h);
+        }
+        if let Some(e) = other.text_extra(from) {
+            self.text_extras.push(TextExtra { id: to.to_string(), ..e.clone() });
+        }
+        for (dst, src) in [(&mut self.unlocked_texts, &other.unlocked_texts), (&mut self.locked, &other.locked), (&mut self.hidden_texts, &other.hidden_texts)] {
+            if src.contains(from) {
+                dst.insert(to.to_string());
             }
         }
     }

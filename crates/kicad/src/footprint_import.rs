@@ -90,6 +90,19 @@ fn layer_of(item: &[Sexpr]) -> String {
     sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.SilkS").to_string()
 }
 
+/// The footprints a clipboard text holds for a paste into the Footprint Editor (`CLIPBOARD_IO::Parse` in `PCB_CONTROL::Paste`, UI-LEFT-2 FF1): the one footprint of
+/// a footprint's text (`(footprint ..)` or `(module ..)`, what KiCad's Footprint Editor copies), or every `(footprint ..)` of a board's (`(kicad_pcb ..)`, what the
+/// board editor copies), each read as a library footprint is. `Ok(None)` for a text that is neither (the paste then makes a text of it).
+pub fn parse_clipboard_footprints(text: &str) -> Result<Option<Vec<ParsedFootprint>>, String> {
+    let Ok(tree) = sexpr::parse(text) else { return Ok(None) };
+    let Some(root) = tree.as_list() else { return Ok(None) };
+    match sexpr::tag(root) {
+        Some("footprint") | Some("module") => Ok(Some(vec![parse_library_footprint(text)?])),
+        Some("kicad_pcb") => root.iter().filter_map(|n| n.as_list().filter(|l| sexpr::tag(l) == Some("footprint"))).map(|l| parse_library_footprint(&sexpr::to_text(&Sexpr::List(l.to_vec())))).collect::<Result<Vec<_>, _>>().map(Some),
+        _ => Ok(None),
+    }
+}
+
 /// Parse a `.kicad_mod` file (`(footprint "Name" ...)`, or the KiCad 6 `(module ...)`).
 pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     let mut tree = sexpr::parse(text).map_err(|e| format!("not a valid s-expression file: {e}"))?;

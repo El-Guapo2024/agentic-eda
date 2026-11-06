@@ -878,6 +878,8 @@ fn handle(
         // The Symbol Editor's Copy / Cut of pins and graphics: the selection as `.kicad_sym` text (`SYMBOL_EDITOR_EDIT_TOOL::Copy`); its Paste reads it back through `/api/symbol_library/parse`.
         ("POST", "/api/symbol/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::library_api::symbol_items_copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
+        // The Footprint Editor's Copy / Cut of items: the selection as KiCad's `.kicad_mod` clipboard text (`CLIPBOARD_IO::SaveSelection`); its Paste is the `fp_item paste` verb.
+        ("POST", "/api/footprint/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::library_api::footprint_items_copy(dir, &body).to_string().as_bytes()),
         // The Embedded Files panel (`crate::embedded_api`): a list without the data, one file extracted, and what Collect and Embed 3D Models would embed.
         ("GET", "/api/embedded") => {
             let r = crate::embedded_api::list(dir, target);

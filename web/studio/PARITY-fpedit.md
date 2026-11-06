@@ -379,7 +379,7 @@ the editor's verbs on any item are one family, `{"op": "fp_item", "verb": ...}` 
 
 Left, and why:
 - ~~The Properties pane (`common.Control.showProperties`) is another task's (UI-LEFT Y3).~~ Done in section 21.
-- Duplicate (Ctrl+D) and Create Array copy pads, graphics and texts only, not fields or the new kinds; Copy and Paste of items inside a footprint is not ported.
+- ~~Duplicate (Ctrl+D) and Create Array copy pads, graphics and texts only, not fields or the new kinds; Copy and Paste of items inside a footprint is not ported.~~ Done in section 23 (fields stay out, as KiCad leaves them out).
 - A footprint's barcode and reference image are drawn as their boxes (their symbol and pixels are served for a board's items only); a zone that is not a rule area has no fill on the canvas.
 - ~~A text of the footprint (`eda_model::Text`) has one size and no bold, italic, vertical justification, knockout or keep-upright in the model, so its dialog offers what it holds (a field has the whole look); F5.~~ Kept by id and in the dialog since section 21.
 - The kept-as-text items (a locked item, a filled zone, ...) are written back but not drawn; a library footprint keeps no lock.
@@ -413,7 +413,7 @@ Differs, by decision:
 
 Left, and why:
 - On the board: a library pad's layer set, die length and fabrication property are not carried onto a placed footprint (GAPS 26), and Update Footprint on Board does not carry the footprint's own paste margins, private layers or jumper groups (the board model has no place for them).
-- Duplicate does not copy the kept looks of the items it copies (`copy_looks` exists, not wired).
+- ~~Duplicate does not copy the kept looks of the items it copies (`copy_looks` exists, not wired).~~ Done in section 23.
 - Preferences: the Grids, Colors, Toolbars, Footprint Defaults and User Layer Names pages; the arc editing mode is kept, not read by the point editor.
 - The Properties pane: a pad's type, shape and hole shape, its copper layers, post-machining, backdrill and teardrop rows, fonts, colours, line endings and a footprint's orientation are read-only with the reason as the tooltip (Pad Properties sets the first ones; the others are a board's).
 
@@ -435,6 +435,25 @@ Left:
 - KiCad 25ec2335 replaces the dialog's three refusals of a zero spacing ("horizontal delta of zero with %ld objects", vertical, angular) with a question, "The array configuration would place %d items at the same position and rotation, stacking them on top of one another. Proceed anyway?" ("Confirm Array", `arrayHasStackedPositions`); the studio keeps 8303b2ad's refusals.
 - KiCad 25ec2335's `findMatching` tests no layer for a pad of the NORMAL padstack mode and the shape's own layer otherwise, and recombines each layer of a padstack (`ForEachUniqueLayer`); the studio, as 8303b2ad, tests the pad's layer set and recombines the one edit layer.
 - A graphic identical to one of the pad's proxy items is not deleted with it: the proxies wait in the mode, not among the footprint's graphics, so `findMatching` never runs for them (`PARITY-pcb.md` section 42).
+
+## 23. Copy, Cut and Paste of items, and Duplicate and Create Array of every kind with its looks (UI-LEFT-2 FF1, FF2; 2026-11-07, `task-v1-handles`; KiCad 8303b2ad `pcbnew/tools/edit_tool.cpp` (`copyToClipboard`, `cutToClipboard`, `Duplicate`), `pcbnew/kicad_clipboard.cpp::CLIPBOARD_IO::SaveSelection` (`isFootprintEditor`), `pcbnew/tools/pcb_control.cpp` (`Paste`, `pasteFootprintItemsToFootprintEditor`, `placeBoardItems`, `pruneItemLayers`), `pcbnew/footprint.cpp::DuplicateItem`, `pcbnew/tools/array_tool.cpp::onDialogClosed`, `pcbnew/pcb_group.cpp::DeepDuplicate`; KiCad 25ec2335 `edit_tool.cpp::Duplicate` and `footprint.cpp::DuplicateItem`, which copy tables)
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Copy (Ctrl+C) / Cut (Ctrl+X): the selection as KiCad's clipboard footprint -- `(footprint "clipboard:<uuid>" ..)` holding the selected items (a user field too; the mandatory fields not; a group with what is below it; a membership of a group not copied dropped), measured from the cursor's grid point -- on the system clipboard (`POST /api/footprint/clipboard/copy`, `eda_ops::fp_copy::clipboard_footprint`, written by the `.kicad_mod` writer); "Selection copied"; Cut then deletes the selection (one undo step) | **done** (not bound on this tab) | `copyToClipboard`, `SaveSelection` |
+| Paste (Ctrl+V): KiCad's clipboard text -- a footprint's (KiCad's Footprint Editor's Copy, or this one's), a KiCad 6 `(module ..)`, or a board's `(kicad_pcb ..)` (the items of its footprints) -- goes in new (`ResetUuid`), with every look the text gives (line style, hatch, text looks, lock, keep-upright), pads, user fields, graphics, texts, text boxes, dimensions, zones, points, images, barcodes, tables and groups, the clipboard's origin on the cursor; the items are selected and ride the cursor until a click (`placeBoardItems( .., aAnchorAtOrigin )` then `PCB_ACTIONS::move`), the paste and the drop one undo step, Escape leaving nothing (the server's carry, crates/cli/src/carry.rs); any other text is a text item on the active layer (`EDA_TEXT`'s defaults, the long-text question) | **done** | `Paste`, `pasteFootprintItemsToFootprintEditor`, `placeBoardItems` (verb `fp_item paste`, `kicad-port/fpClipboard.ts`) |
+| Duplicate (Ctrl+D) and Duplicate and Increment (Ctrl+Shift+D): every kind of item -- pads, graphics, texts, dimensions, zones and rule areas, text boxes, points, images, barcodes, tables, groups with what is below them -- with its looks (`copy_looks`: the line style, the hatch, a text's font, bold, italic, justification, width, knockout, keep-upright, lock, hidden flag; the other kinds hold theirs); a field is not copied ("PCB_FIELD items ... cannot be duplicated like other footprint items. So skip it"); the copied pads take Duplicate and Increment's number (section 22); the copies ride the cursor, the duplicate and the drop one undo step (it was two), Escape leaves nothing | **done** (pads, graphics and texts only, without their kept looks) | `EDIT_TOOL::Duplicate`, `FOOTPRINT::DuplicateItem`, `PCB_GROUP::DeepDuplicate` (verb `fp_item duplicate`, `eda_ops::fp_copy::duplicate`) |
+| Create Array: the same copies of every kind with their looks; a group moves and turns as one about its position | **done** (pads, graphics and texts only) | `ARRAY_TOOL::onDialogClosed` (`fp->DuplicateItem`, `TransformItem`), `crates/ops/src/fp_array.rs` |
+
+Differs:
+- A group's position in a circular array is the centre of its items' own positions (KiCad's `PCB_GROUP::GetPosition` is its drawn box's centre); the two differ only for a circular array's offsets.
+- A user field whose name the footprint already has is not pasted (a footprint here holds one field of a name); a board clipboard's own drawings (not in a footprint) are not pasted; a pasted board footprint's items keep the board's angles (KiCad turns them back by the footprint's orientation).
+- Copy's reference point is the cursor's grid point (KiCad's `BestDragOrigin` snaps it to the nearest anchor of the copied items).
+- KiCad 8303b2ad's Duplicate skips a table ("JEY TODO: tables"); the studio copies it as 25ec2335 does.
+
+Left: Paste Special (`pasteSpecial`) on this tab; Copy as Text; the clipboard's images; Paste of a table's cells into selected cells.
+
+Tests: `crates/ops/src/fp_copy_tests.rs` 5 (Duplicate's every kind, looks, group and no field; Create Array's dimension and dashed line at each point; Copy's clipboard footprint and its Paste back, moved, with the looks, mandatory fields left; a paste of KiCad's own clipboard text, a pad and a dotted line, new uuids; and, slow, kicad-cli's `fp upgrade` loads our clipboard footprint with the dashed line, the dimension and the text box), `fp_array_tests.rs` (as before), `kicad-port/fpClipboard.test.ts`; browser: `e2e/fpedit-clipboard-v1.check.js` (4 scenarios on `ldo`: Copy writes KiCad's clipboard footprint, Paste rides the cursor and is one undo step and Escape leaves nothing, a paste of a `.kicad_mod`'s text, Duplicate of a dimension and a dashed line keeping the line style and the dimension's style).
 
 ## Known gaps summary (ranked, highest first)
 

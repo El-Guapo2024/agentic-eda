@@ -54,4 +54,9 @@ export type FpItemCmd =
   | { verb: "set"; footprint: string; id: string; item: FpItemWire }
   | { verb: "group"; footprint: string; ids: string[] }
   | { verb: "ungroup"; footprint: string; ids: string[] }
-  | { verb: "set_group_name"; footprint: string; id: string; name: string };
+  | { verb: "set_group_name"; footprint: string; id: string; name: string }
+  /** `EDIT_TOOL::Duplicate` in the footprint editor: a copy of every item but a field, with its looks, a group with its members; `pad_number` the number Duplicate and
+   *  Increment gives the copied pads (crates/ops/src/fp_copy.rs, UI-LEFT-2 FF2). */
+  | { verb: "duplicate"; footprint: string; ids: string[]; pad_number?: string }
+  /** `PCB_CONTROL::Paste` in the footprint editor: the items of KiCad's clipboard footprint text, new, its origin at `at` (UI-LEFT-2 FF1). */
+  | { verb: "paste"; footprint: string; text: string; at: PointXY };

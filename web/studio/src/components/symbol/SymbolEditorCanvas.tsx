@@ -18,7 +18,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import { drawTarget, useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
-import { paintSymbol, mmPointToNm, nmPointToMm, toLibPin, IDENTITY, POINT_EDIT_HALF_PX, type SymShapeKind } from "./symbolPainter";
+import { paintSymbol, mmPointToNm, nmPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
 import { useGridSettings } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
@@ -52,7 +52,9 @@ import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
 import { newTextBox } from "../../kicad-port/symTextBox";
 import { carriedItems } from "../../kicad-port/symCarry";
-import { bezierEditPoints, bezierFromClicks, bezierGraphic, bezierWithPoint } from "../../kicad-port/symBezier";
+import { bezierFromClicks, bezierGraphic } from "../../kicad-port/symBezier";
+import { addCorner, canAddCorner, eeFindHandle, handlePos, POINT_SIZE_PX, removableCorner, removeCorner, type EeHandle } from "../../kicad-port/eePointEdit";
+import { pinsDraggedWithEdge, symArcEditMode, symDrag, symEditShape, symGraphicFrom, symPointEditor } from "../../kicad-port/symPointEdit";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
@@ -103,8 +105,8 @@ type DragState =
    * without a drag ("Left button drag:" sent the drag to the rectangle). */
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; modifiers: ClickModifiers; click: string | null }
   | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic" | "field"; startWorld: [number, number]; snapOrigin: [number, number] }
-  /** The point editor's drag of one edit point (`SCH_POINT_EDITOR::Main`): which shape and which point. */
-  | { kind: "point"; id: string; index: number };
+  /** The point editor's drag of one handle (`SCH_POINT_EDITOR::Main`): which shape and which point or side. */
+  | { kind: "point"; id: string; handle: EeHandle };
 
 function symbolGraphicFromDraw(kind: SymShapeKind, ptsNm: [number, number][], unit: number, bodyStyle: number, cursorNm: readonly [number, number] | null = null): LibrarySymbolGraphic | null {
   const p = (i: number) => nmPointToMm(ptsNm[i]![0], ptsNm[i]![1]);
@@ -238,18 +240,20 @@ export function SymbolEditorCanvas() {
     return [p[0], p[1]];
   };
   const carried = useMemo(() => (state.carry ? carriedItems(state.carry) : null), [state.carry]);
-  /** The point editor's drag in progress: the shape, the point and where the snapped cursor has it. */
-  const [pointDrag, setPointDrag] = useState<{ id: string; index: number; at: [number, number] } | null>(null);
-  /** `SCH_POINT_EDITOR` on a selection of one shape it edits (`EDA_BEZIER_POINT_EDIT_BEHAVIOR` for a curve), with the select tool: its points, lines and the shape as dragged. */
+  /** The point editor's drag in progress: the shape, the handle and where the snapped cursor has it. */
+  const [pointDrag, setPointDrag] = useState<{ id: string; handle: EeHandle; to: [number, number] } | null>(null);
+  /**
+   * `SCH_POINT_EDITOR` on a selection of one shape it edits -- a rectangle, circle, arc, bezier, polyline or text box (kicad-port/symPointEdit.ts; UI-LEFT-2 YY1) --
+   * with the select tool and nothing carried: its points and lines, and the shape as dragged. Not on a derived symbol (`IsSymbolAlias`: its graphics are its parent's).
+   */
   const pointEditor = useMemo(() => {
-    if (state.activeTool !== "select" || state.carry || state.selection.size !== 1 || !sym) return null;
+    if (state.activeTool !== "select" || state.carry || state.selection.size !== 1 || !sym || state.derivedOwn) return null;
     const id = [...state.selection][0]!;
     const g = sym.graphics.find((x) => x.id === id);
-    if (g?.kind !== "bezier") return null;
-    const shown = pointDrag && pointDrag.id === id ? bezierWithPoint(g, pointDrag.index, pointDrag.at) : g;
-    const e = bezierEditPoints(shown);
-    return { id, graphic: g, points: e.points as [number, number][], lines: e.lines as [[number, number], [number, number]][], replace: shown };
-  }, [state.activeTool, state.carry, state.selection, sym, pointDrag]);
+    if (!g) return null;
+    const ed = symPointEditor(g, pointDrag && pointDrag.id === id ? pointDrag : null, symArcEditMode(), measureStrokeText);
+    return ed ? { id, graphic: g, edit: ed.edit, replace: ed.graphic } : null;
+  }, [state.activeTool, state.carry, state.selection, sym, state.derivedOwn, pointDrag]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -483,13 +487,14 @@ export function SymbolEditorCanvas() {
       return;
     }
 
-    // Select tool. An edit point of the shape the point editor is on is picked first (`EDIT_POINTS::FindPoint`): its drag moves that point.
+    // Select tool. A handle of the shape the point editor is on is picked first (`EDIT_POINTS::FindPoint`: a point, else a side's middle, `POINT_SIZE` either way):
+    // its drag moves that point or side.
     if (pointEditor) {
-      const tol = (POINT_EDIT_HALF_PX + 1) / (state.view.scale || 1);
-      const index = pointEditor.points.findIndex(([px, py]) => Math.abs(px - wx) <= tol && Math.abs(py - wy) <= tol);
-      if (index >= 0) {
-        dragRef.current = { kind: "point", id: pointEditor.id, index };
-        setPointDrag({ id: pointEditor.id, index, at: pointEditor.points[index]! });
+      const handle = eeFindHandle(pointEditor.edit, [wx, wy], POINT_SIZE_PX / (state.view.scale || 1));
+      if (handle) {
+        const at = handlePos(pointEditor.edit, handle);
+        dragRef.current = { kind: "point", id: pointEditor.id, handle };
+        setPointDrag({ id: pointEditor.id, handle, to: [at[0], at[1]] });
         return;
       }
     }
@@ -532,7 +537,7 @@ export function SymbolEditorCanvas() {
       // `BestSnapAnchor( cursor, graphics grid, the edited item )`
       if (!motion?.dragging) return;
       const p = snap.point("pointEditor", [wx, wy], snapMods(e), "graphics", new Set([drag.id]));
-      setPointDrag({ id: drag.id, index: drag.index, at: [p[0], p[1]] });
+      setPointDrag({ id: drag.id, handle: drag.handle, to: [p[0], p[1]] });
       return;
     }
     if (drag.kind === "box") {
@@ -575,13 +580,15 @@ export function SymbolEditorCanvas() {
       return;
     }
     if (drag.kind === "point") {
-      // the drag ends: the shape with the point where it was dropped, one undo step (`SCH_COMMIT::Push`)
+      // the drag ends: the shape as its points have it, and the pins a rectangle's side took along (`dragPinsOnEdge`), one undo step (`commit.Push( _( "Move Point" ) )`)
       const g = api.graphicById(drag.id);
-      const at = pointDrag && pointDrag.id === drag.id ? pointDrag.at : null;
+      const to = pointDrag && pointDrag.id === drag.id ? pointDrag.to : null;
       setPointDrag(null);
-      if (g?.kind === "bezier" && at) {
-        const edited = bezierWithPoint(g, drag.index, at);
-        if (JSON.stringify(edited) !== JSON.stringify(g)) void api.replaceGraphic(drag.id, edited);
+      const moved = g && to ? symDrag(g, drag.handle, to, symArcEditMode(), measureStrokeText) : null;
+      if (g && moved) {
+        const edited = symGraphicFrom(moved.shape, g);
+        const pins = sym ? pinsDraggedWithEdge(g, moved, sym.pins, (p) => resolvePin(toLibPin(p), IDENTITY, [0, 0]).root, studioPrefs.symDragPinsWithEdges) : [];
+        if (JSON.stringify(edited) !== JSON.stringify(g) || pins.length > 0) void api.reshapeGraphic(drag.id, edited, pins);
       }
       return;
     }
@@ -687,6 +694,28 @@ export function SymbolEditorCanvas() {
       { label: "Pin Properties...", onSelect: () => dispatch({ type: "SET_PIN_PROPERTIES_ID", id: pinRefs[0]! }), disabled: pinRefs.length !== 1 },
       // `SCH_EDIT_TOOL::Properties` on the one graphic that is selected: Shape Properties or Text Box Properties
       ...(refs.length === 1 && propertied.length === 1 ? ([{ label: "Properties...", onSelect: () => openGraphicProperties(propertied[0]!) }] as MenuEntry[]) : []),
+      // `SCH_POINT_EDITOR::Init`'s rows: Create Corner and Remove Corner on one polyline (`addCornerCondition`: the cursor on its outline; `removeCornerCondition`: the edited
+      // point on a vertex), Cycle Arc Editing Mode on one arc (`arcIsEdited`)
+      ...(() => {
+        const g = refs.length === 1 ? api.graphicById(refs[0]!) : undefined;
+        if (!g || state.derivedOwn) return [];
+        if (g.kind === "arc") return [{ label: "Cycle Arc Editing Mode", onSelect: () => run("common.Interactive.cycleArcEditMode") }] as MenuEntry[];
+        const shape = g.kind === "polyline" ? symEditShape(g, measureStrokeText) : null;
+        if (shape?.kind !== "polygon") return [];
+        const tol = POINT_SIZE_PX / (state.view.scale || 1);
+        const grid = state.gridNm || 1;
+        // `GetCursorPosition( !DisableGridSnapping() )`: the cursor on the grid
+        const at: [number, number] = [Math.round(wx / grid) * grid, Math.round(wy / grid) * grid];
+        const ed = pointEditor && pointEditor.id === g.id ? pointEditor.edit : null;
+        const handle = ed ? eeFindHandle(ed, [wx, wy], tol) : null;
+        const edited = ed && handle?.kind === "point" ? handlePos(ed, handle) : null;
+        const idx = removableCorner(shape, edited);
+        const id = g.id!;
+        return [
+          ...(canAddCorner(shape, [wx, wy], tol) ? [{ label: "Create Corner", onSelect: () => void api.reshapeGraphic(id, symGraphicFrom(addCorner(shape, at), g), []) }] : []),
+          ...(idx >= 0 ? [{ label: "Remove Corner", onSelect: () => { const next = removeCorner(shape, idx); if (next) void api.reshapeGraphic(id, symGraphicFrom(next, g), []); } }] : []),
+        ] as MenuEntry[];
+      })(),
       // `SYMBOL_EDITOR_PIN_TOOL::Init`: with a single pin selected (`singlePinCondition`) the menu offers to push its length / sizes to every other pin.
       ...(refs.length === 1 && pinRefs.length === 1
         ? ([

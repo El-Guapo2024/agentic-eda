@@ -238,7 +238,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Unfold from Bus's submenus and label ghost (r6's leftover done); Find by a field's own visibility; Autoplace with swapped pins (the "Missing" line's item, done);
   `${U1.1:FIELD}` in the project's notation both ways (r7's letter-form leftover, done) and `@{..}`'s full grammar. **Left**: which of two equal default net names
   takes `_1` (the derived uuids are seeded with the net name); Copy / Paste of a user field's shown state and place; Edit Text & Graphics over the whole
-  hierarchy, colours and fonts; the other arc draw modes and the other shapes' point editor.
+  hierarchy, colours and fonts; ~~the other arc draw modes and the other shapes' point editor~~ (done below).
+- Done 2026-11-07 (`task-v1-handles`, UI-LEFT-2 SS3, YY1, FF1, FF2; `PARITY-sch.md` section 70, PARITY-symedit "The point editor of every shape", `PARITY-fpedit.md` section 23):
+  the point editor of every drawn shape (rectangles, circles, arcs, beziers, polygons, text boxes, rule areas) in the schematic and the Symbol Editor, with "Keep pins
+  attached when dragging edges"; Draw Arc's five KiCad 10 modes with the Arc palette and tangent seeds; the Footprint Editor's Copy / Cut / Paste through KiCad's
+  clipboard footprint and Duplicate / Create Array of every kind with its looks. **Left**: the sheet's, image's, table cell's and graphic line's point editors; the
+  Symbol Editor's Draw Arc modes; Paste Special and Copy as Text in the Footprint Editor.
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
