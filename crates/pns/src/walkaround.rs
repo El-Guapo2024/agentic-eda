@@ -302,7 +302,8 @@ impl<'a> Walker<'a> {
             self.node.item_collision(self.rules, id, item, &shape, Side::Line { net, layer, width, pts }, LayerRange::single(layer), opts).is_some()
         }) || self.end_via.as_ref().is_some_and(|v| {
             let opts = QueryOpts { head_hole: (v.drill > Nm::ZERO).then_some(v.drill / 2), head_via: v.source_via.as_deref(), ..opts };
-            self.node.item_collision(self.rules, id, item, &Shape::Circle { c: v.pos, r: v.diameter / 2 }, Side::via(v), v.layers, opts).is_some()
+            // each run of the via's layers with its own diameter (a padstack that is not a normal one)
+            v.diameter_runs(v.layers).into_iter().any(|(range, d)| self.node.item_collision(self.rules, id, item, &Shape::Circle { c: v.pos, r: d / 2 }, Side::via(v), range, opts).is_some())
         })
     }
 

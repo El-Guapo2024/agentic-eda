@@ -592,7 +592,7 @@ impl DiffPairPlacer {
     /// `makeVia`: a via of the pair's size on the layers between the current one and the one the route goes on to.
     fn make_via(&self, pos: Point, net: &Net) -> Via {
         let to = self.via_to_layer.unwrap_or(self.current_layer);
-        Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false, is_virtual: false }
+        Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }
     }
 
     /// The end item of a cursor (`TOOL_BASE::updateEndItem`: `for( NET_HANDLE net : nets ) { endItem = pickSingleItem( mousePos, net, layer, false,
@@ -1238,7 +1238,7 @@ mod tests {
     #[test]
     fn a_layer_key_moves_a_pair_on_vias_to_the_layer() {
         let mut node = Node::new();
-        let via = |net: &str, at: Point| Item::Via(Via { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false });
+        let via = |net: &str, at: Point| Item::Via(Via { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false });
         let start = node.add(via("USB_DP", p(Nm::ZERO, Nm::ZERO)));
         node.add(via("USB_DN", p(Nm::ZERO, mm(1.0))));
         let mut dp = DiffPairPlacer::start(&node, &rules(), &RoutingSettings::default(), start, p(Nm::ZERO, Nm::ZERO), 0, LayerRange::new(0, 1), true).expect("starts");
@@ -1552,7 +1552,7 @@ mod tests {
     fn a_via_the_pair_pushed_stays_pushed_until_the_leg_is_fixed() {
         let (mut node, start) = two_pad_pairs();
         // a GND via just above the N line's lane, in the pair's way to the target pads
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(5.0), mm(1.0)), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaG".into()), locked: false, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(5.0), mm(1.0)), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaG".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         // and, out of the way, a GND pad with a row of small ones after it: `propagateDpHeadForces` pushes the cursor out of the big one
         // (1.515 mm, the largest force of the loop, which every later step adds again) into each small one in turn, until its 40 steps
         // run out still colliding -- so `routeHead` fails

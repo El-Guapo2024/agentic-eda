@@ -319,7 +319,7 @@ impl Node {
             }
             let (Some(pos), Some(net)) = (pos, net) else { continue };
             let layer = joint.layers.start();
-            let vvia = |at: Point| Via { net: net.clone(), layers: LayerRange::single(layer), pos: at, diameter: max_w + 2 * crate::hull::PNS_HULL_MARGIN, drill: (max_w + 2 * crate::hull::PNS_HULL_MARGIN) / 2, source_via: None, locked: false, is_virtual: true };
+            let vvia = |at: Point| Via { net: net.clone(), layers: LayerRange::single(layer), pos: at, diameter: max_w + 2 * crate::hull::PNS_HULL_MARGIN, drill: (max_w + 2 * crate::hull::PNS_HULL_MARGIN) / 2, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: true };
             if (is_width_change || n_seg >= 3 || is_locked) && n_solid == 0 && n_vias == 0 {
                 vvias.push(vvia(pos));
             }
@@ -1026,7 +1026,7 @@ impl Node {
         }
         // a hole far enough inside its copper reaches no further than the copper does ([`crate::rule_resolver::RuleResolver::hole_reach`])
         let depth = match item {
-            Item::Via(v) => (v.diameter - v.drill) / 2,
+            Item::Via(v) => (v.diameter_on(layer) - v.drill) / 2,
             Item::Solid(s) => self.rules.as_ref().map_or(Nm::ZERO, |r| r.hole_annulus(s)),
             _ => return hull,
         };
@@ -1093,9 +1093,22 @@ impl Node {
     }
 
     /// [`Self::colliding_with`] of a via: its copper, and its hole (`opts.head_hole`, `aHead->Hole()`).
+    /// A via whose padstack is not a normal one asks each run of its layers with that run's diameter (`INDEX::Query( aItem )`: `aItem->Shape( i )` for
+    /// each layer of its span), an item met on several runs counted once (`OBSTACLES` is a set).
     pub fn via_colliding(&self, via: &Via, rules: &BoardRules, exclude: &[ItemId], opts: QueryOpts) -> Vec<Obstacle> {
         let opts = QueryOpts { head_hole: (via.drill > Nm::ZERO).then_some(via.drill / 2), head_via: via.source_via.as_deref(), ..opts };
-        self.colliding_with(&Shape::Circle { c: via.pos, r: via.diameter / 2 }, &via.net, via.layers, rules, exclude, opts)
+        if via.layer_diameters.is_empty() {
+            return self.colliding_with(&Shape::Circle { c: via.pos, r: via.diameter / 2 }, &via.net, via.layers, rules, exclude, opts);
+        }
+        let mut out: Vec<Obstacle> = Vec::new();
+        for (range, d) in via.diameter_runs(via.layers) {
+            for o in self.colliding_with(&Shape::Circle { c: via.pos, r: d / 2 }, &via.net, range, rules, exclude, opts) {
+                if !out.iter().any(|x| x.id == o.id) {
+                    out.push(o);
+                }
+            }
+        }
+        out
     }
 
     /// `ITEM::collideSimple( aHead, aNode, .. )` of the item `id` of the world against a probe `shape` on `layers`, the rules' `head` (a line's
@@ -1120,9 +1133,18 @@ impl Node {
         }
         let net = head.net();
         let same = same_net(item.net(), net);
-        // A multilayer item (a via) may present a different shape per layer in a fuller port; this one shape per item is exact for every kind
-        // we construct (see `Item::shape`'s own doc note).
-        let item_shape = item.shape(item.layers().start());
+        // `INDEX::Query` asks layer by layer, `Shape( aLayer )` of each side: a via whose padstack is not a normal one (`layer_diameters`) is a circle of
+        // each layer's own diameter. The probe is one shape on `layers`, so the circles of the layers both share are concentric round one centre and the
+        // widest of them collides where any of them does: that one stands for the item here.
+        let via_widest = match item {
+            Item::Via(v) if !v.layer_diameters.is_empty() => v.diameter_runs(layers).into_iter().map(|(_, d)| d).max().unwrap_or(v.diameter),
+            Item::Via(v) => v.diameter,
+            _ => Nm::ZERO,
+        };
+        let item_shape = match item {
+            Item::Via(v) => Shape::Circle { c: v.pos, r: via_widest / 2 },
+            _ => item.shape(item.layers().start()),
+        };
         let hit = |clearance: Nm, (actual, pos): (Nm, Point)| Obstacle { id, kind: item.kind(), actual, clearance_needed: clearance, pos };
         if let (Some(r), Item::Solid(s)) = (&self.rules, item) {
             if let Some(k) = r.keepout(s) {
@@ -1176,7 +1198,7 @@ impl Node {
         }
         // how far inside its copper the item's hole is, and the probe's
         let item_depth = match item {
-            Item::Via(v) => (v.diameter - v.drill) / 2,
+            Item::Via(v) => (via_widest - v.drill) / 2,
             Item::Solid(s) => r.hole_annulus(s),
             _ => Nm::ZERO,
         };
@@ -1259,7 +1281,7 @@ impl Node {
             let hull = make_hull(self.obstacle_hull(rules, item, head, line.width / 2, Nm::ZERO, line.layer, opts.use_epsilon));
             let mut dist: Option<(Nm, Point)> = first_entry(&hull);
             if let Some(v) = via {
-                let via_hull = make_hull(self.obstacle_hull(rules, item, Side::via(v), v.diameter / 2, Nm::ZERO, line.layer, opts.use_epsilon));
+                let via_hull = make_hull(self.obstacle_hull(rules, item, Side::via(v), v.diameter_on(line.layer) / 2, Nm::ZERO, line.layer, opts.use_epsilon));
                 if let Some(d) = first_entry(&via_hull) {
                     if dist.is_none_or(|(bd, _)| d.0 < bd) {
                         dist = Some(d);
@@ -1679,7 +1701,7 @@ mod tests {
         let net = net_of("SIG");
         let s1 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(Nm::ZERO, Nm::ZERO), b: p(mm(1.0), Nm::ZERO), width: mm(0.2), source_track: None, locked: false }));
         let _s2 = n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: p(mm(1.0), Nm::ZERO), b: p(mm(2.0), Nm::ZERO), width: mm(0.2), source_track: None, locked: false }));
-        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(mm(2.0), Nm::ZERO), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }));
+        let _via = n.add(Item::Via(Via { net: net.clone(), layers: LayerRange::new(0, 1), pos: p(mm(2.0), Nm::ZERO), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         let line = n.assemble_line(s1).expect("line");
         assert_eq!(line.pts, vec![p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO), p(mm(2.0), Nm::ZERO)]);
         assert_eq!(line.segment_ids.len(), 2);
@@ -1740,11 +1762,37 @@ mod tests {
     #[test]
     fn branch_is_independent_clone() {
         let mut n = Node::new();
-        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }));
+        let id = n.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         let mut child = n.branch();
         child.remove(id);
         assert!(n.contains(id), "removing from a branch must not affect the parent");
         assert!(!child.contains(id));
+    }
+
+    /// UI-LEFT-2 PP12: a board via whose padstack gives its inner layers a wider ring (`layer_diameters`) is that ring there and its front's on the front
+    /// (`VIA::Shape( aLayer )`); a padstack via as the head asks each run of its layers at that run's diameter (`INDEX::Query( aItem )`).
+    #[test]
+    fn a_padstack_via_is_each_layers_own_circle() {
+        let mut n = Node::new();
+        let rules = rules();
+        let at = p(Nm::ZERO, Nm::ZERO);
+        let via = Via { net: net_of("GND"), layers: LayerRange::new(0, 3), pos: at, diameter: mm(0.6), drill: mm(0.3), source_via: Some("v".into()), locked: false, layer_diameters: vec![(1, mm(1.2)), (2, mm(1.2))], is_virtual: false };
+        assert_eq!((via.diameter_on(0), via.diameter_on(1), via.diameter_on(3), via.max_diameter()), (mm(0.6), mm(1.2), mm(0.6), mm(1.2)));
+        assert_eq!(via.diameter_runs(LayerRange::new(0, 3)), vec![(LayerRange::single(0), mm(0.6)), (LayerRange::new(1, 2), mm(1.2)), (LayerRange::single(3), mm(0.6))]);
+        n.add(Item::Via(via.clone()));
+        // a 0.2 mm track whose edge is 0.65 mm from the centre: 0.35 mm clear of the front's ring, 0.05 mm of the inner one (the clearance is 0.2 mm)
+        let shape = Shape::Stadium { a: p(mm(0.75), mm(-2.0)), b: p(mm(0.75), mm(2.0)), r: mm(0.1) };
+        assert!(n.first_colliding(&shape, &net_of("SIG"), LayerRange::single(0), &rules, &[]).is_none(), "the front's ring is 0.6 mm");
+        assert!(n.first_colliding(&shape, &net_of("SIG"), LayerRange::single(1), &rules, &[]).is_some(), "an inner ring is 1.2 mm");
+        assert!(n.first_colliding(&shape, &net_of("SIG"), LayerRange::single(3), &rules, &[]).is_none());
+        // the walkaround's hull on an inner layer is the inner ring's
+        let hull = |layer: i32| Item::Via(via.clone()).hull(Nm::ZERO, Nm::ZERO, layer).iter().map(|q| q.x).max().unwrap();
+        assert!(hull(1) > hull(0) + mm(0.25));
+        // the same via as a head: a track of another net on In1.Cu 0.85 mm away is met on that run only
+        let mut m = Node::new();
+        m.add(Item::Segment(Segment { net: net_of("SIG"), layer: 1, a: p(mm(0.85), mm(-2.0)), b: p(mm(0.85), mm(2.0)), width: mm(0.2), source_track: None, locked: false }));
+        assert_eq!(m.via_colliding(&Via { source_via: None, ..via.clone() }, &rules, &[], QueryOpts::default()).len(), 1);
+        assert!(m.via_colliding(&Via { source_via: None, layer_diameters: Vec::new(), ..via }, &rules, &[], QueryOpts::default()).is_empty());
     }
 
     fn seg_item(net: &str, a: Point, b: Point, width: Nm) -> Item {
@@ -1797,7 +1845,7 @@ mod tests {
         let pad = n.add(pad_item("A", p(mm(1.0), mm(3.0)), mm(0.3)));
         let line = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO)]);
         assert!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).is_none(), "the track alone is clear of the pad");
-        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(2.5)), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
+        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(2.5)), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         assert_eq!(n.nearest_obstacle(&line, Some(&via), &rules, &[], QueryOpts::default()).unwrap().id, pad);
     }
 

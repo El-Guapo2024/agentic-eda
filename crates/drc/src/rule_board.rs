@@ -855,7 +855,7 @@ impl<'a> RuleBoard<'a> {
     /// A via that is not on the board, as the rules see it -- `PCB_VIA_STITCH::buildPlacementCells`' probe, "it must carry the stitch net because clearance rules can key off
     /// the net class": the via item of a board with it on.
     pub fn probe_via(&self, net: &str, at: Point, diameter: Nm, drill: Nm, from_layer: &str, to_layer: &str) -> Rc<RuleItem> {
-        let v = crate::board::DrcVia { id: "via_probe".into(), net: (!net.is_empty()).then(|| net.to_string()), at, drill, diameter, from_layer: from_layer.to_string(), to_layer: to_layer.to_string() };
+        let v = crate::board::DrcVia { id: "via_probe".into(), net: (!net.is_empty()).then(|| net.to_string()), at, drill, diameter, from_layer: from_layer.to_string(), to_layer: to_layer.to_string(), padstack: None };
         let copper = self.copper_layers();
         let (i0, i1) = (copper.iter().position(|l| *l == v.from_layer), copper.iter().position(|l| *l == v.to_layer));
         let (lo, hi) = match (i0, i1) {

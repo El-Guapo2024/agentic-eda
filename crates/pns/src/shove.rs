@@ -1932,7 +1932,7 @@ mod tests {
     fn a_multi_head_shove_locks_the_joints_at_the_heads_ends() {
         let origin = Point { x: Nm::ZERO, y: Nm::ZERO };
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: origin, diameter: mm(0.6), drill: mm(0.3), source_via: Some("vA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: origin, diameter: mm(0.6), drill: mm(0.3), source_via: Some("vA".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         let head = || ShoveHead { line: Line::from_points(net_of("A"), 0, mm(0.2), vec![origin, Point { x: mm(3.0), y: Nm::ZERO }]), via: None };
         let (rules, settings) = (rules(), RoutingSettings::default());
         let locked = shove_heads_locked_after(&node, vec![head()], &rules, &settings, None).expect("nothing in the way");
@@ -1947,7 +1947,7 @@ mod tests {
     fn a_via_on_a_locked_joint_is_not_shoved() {
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("A"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(3.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("vA".into()), locked: false, is_virtual: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("vA".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
         let mut free = Shove::new(&node, &rules, &settings);
         assert_eq!(free.push_or_shove_via(via_id, (mm(0.5), Nm::ZERO), 0, false), Status::Ok, "a free via is pushed");
@@ -1967,7 +1967,7 @@ mod tests {
         let rules = rules();
         let settings = RoutingSettings { mode: crate::settings::Mode::Shove, ..RoutingSettings::default() };
         let line = Line::from_points(net_of("A"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }]);
-        let via = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: mm(5.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
+        let via = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: mm(5.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         let outcome = shove_heads_after(&node, vec![ShoveHead { line, via: Some(via) }], &rules, &settings, None).expect("the B.Cu track can be shoved round the via");
         assert_eq!(outcome.displaced_lines.len(), 1);
         let moved = &outcome.displaced_lines[0].line;
@@ -2139,7 +2139,7 @@ mod tests {
     fn a_locked_via_is_walked_around() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: true, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: true, layer_diameters: Vec::new(), is_virtual: false }));
         let (rules, settings) = (rules(), RoutingSettings::default());
         let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
         let out = shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules, &settings).expect("walks around");
@@ -2151,7 +2151,7 @@ mod tests {
     fn pushes_a_stitching_via_aside() {
         use crate::item::Via;
         let mut node = Node::new();
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];

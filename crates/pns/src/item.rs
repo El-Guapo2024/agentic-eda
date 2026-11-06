@@ -230,15 +230,18 @@ impl Arc {
     }
 }
 
-/// `PNS::VIA`. This port only models round, single-diameter-per-layer
-/// through vias (`STACK_MODE::NORMAL`, `VIATYPE::THROUGH`) -- the only kind
-/// `eda_model::ir::Via` can express.
+/// `PNS::VIA`: a round via, one diameter on every layer (`STACK_MODE::NORMAL`) or each layer's own (`layer_diameters`: a board via whose padstack is
+/// front/inner/back or custom, `PNS_KICAD_IFACE_BASE::syncVia`'s `SetStackMode` and `SetDiameter( layer, via->GetWidth( layer ) )` for each unique layer).
 #[derive(Debug, Clone)]
 pub struct Via {
     pub net: Net,
     pub layers: LayerRange,
     pub pos: Point,
+    /// The front's diameter (`Diameter( ALL_LAYERS )`): the diameter on every layer `layer_diameters` does not name.
     pub diameter: Nm,
+    /// `VIA::m_diameters` of a stack that is not NORMAL, by router layer: the diameter of each layer of the via's span that differs from `diameter` (a
+    /// layer not named has `diameter`). Empty for a normal stack -- every via the router makes (`CreateItem`, `makeVia`: `SetDiameter( ALL_LAYERS, .. )`).
+    pub layer_diameters: Vec<(i32, Nm)>,
     pub drill: Nm,
     pub source_via: Option<String>,
     pub locked: bool,
@@ -248,6 +251,42 @@ pub struct Via {
     /// the dragger, which drags it as a via when a segment is taken hold of at such an end (`DRAGGER::checkVirtualVia`), and the joints, which end a line
     /// there.
     pub is_virtual: bool,
+}
+
+impl Via {
+    /// `VIA::Diameter( aLayer )`: the layer's own diameter in a stack that is not NORMAL (`layer_diameters`), else the via's. A negative layer
+    /// (`-1`, "any layer" as `Shape( -1 )` asks) is the front's.
+    pub fn diameter_on(&self, layer: i32) -> Nm {
+        self.layer_diameters.iter().find(|(l, _)| *l == layer).map_or(self.diameter, |&(_, d)| d)
+    }
+
+    /// The widest of the via's diameters (`ROUTER_PREVIEW_ITEM`'s `largestDiameter` over `UniqueShapeLayers()`, the via's bounding box).
+    pub fn max_diameter(&self) -> Nm {
+        self.layer_diameters.iter().map(|&(_, d)| d).fold(self.diameter, Nm::max)
+    }
+
+    /// The narrowest of the via's diameters on its span: how far inside its copper its hole is at the least.
+    pub fn min_diameter(&self) -> Nm {
+        self.layer_diameters.iter().map(|&(_, d)| d).fold(self.diameter, Nm::min)
+    }
+
+    /// The runs of `range` (within the via's span) on which the via has one diameter, with it: `[(range, diameter)]`, one run for a normal stack. What
+    /// `INDEX::Query( aItem )` asks layer by layer (`aItem->Shape( i )` for each layer of its span), the layers that share a shape asked once.
+    pub fn diameter_runs(&self, range: LayerRange) -> Vec<(LayerRange, Nm)> {
+        let (lo, hi) = (self.layers.start().max(range.start()), self.layers.end().min(range.end()));
+        if self.layer_diameters.is_empty() || lo > hi {
+            return vec![(LayerRange::new(lo.min(hi), hi.max(lo)), self.diameter)];
+        }
+        let mut out: Vec<(LayerRange, Nm)> = Vec::new();
+        for l in lo..=hi {
+            let d = self.diameter_on(l);
+            match out.last_mut() {
+                Some((r, rd)) if *rd == d && r.end() + 1 == l => *r = LayerRange::new(r.start(), l),
+                _ => out.push((LayerRange::single(l), d)),
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,12 +386,13 @@ impl Item {
     /// consulted for a `Solid`'s compound shape in a fuller port; here it is
     /// accepted for interface symmetry with KiCad but every kind currently
     /// returns one shape regardless.
-    pub fn shape(&self, _layer: i32) -> Shape {
+    pub fn shape(&self, layer: i32) -> Shape {
         match self {
             Item::Solid(s) => s.shape.clone(),
             Item::Segment(s) => Shape::Stadium { a: s.a, b: s.b, r: s.width / 2 },
             Item::Arc(a) => arcs::arc_shape(&a.poly, a.width),
-            Item::Via(v) => Shape::Circle { c: v.pos, r: v.diameter / 2 },
+            // `VIA::Shape( aLayer )`: `m_shapes[EffectiveLayer( aLayer )]`, the circle of that layer's diameter
+            Item::Via(v) => Shape::Circle { c: v.pos, r: v.diameter_on(layer) / 2 },
         }
     }
 
@@ -364,7 +404,8 @@ impl Item {
             // `SEGMENT::Hull` -> `SegmentHull`, `VIA::Hull`, `SOLID::Hull`.
             Item::Segment(s) => hull::segment_hull(s.a, s.b, s.width, clearance, walkaround_width),
             Item::Arc(a) => arcs::arc_hull(&a.arc, a.width, clearance, walkaround_width),
-            Item::Via(v) => hull::make_clockwise(hull::via_hull(v.pos, v.diameter, clearance, walkaround_width)),
+            // `VIA::Hull( .., aLayer )`: `int width = Diameter( aLayer )`
+            Item::Via(v) => hull::make_clockwise(hull::via_hull(v.pos, v.diameter_on(layer), clearance, walkaround_width)),
             Item::Solid(_) => hull::primitive_hull(&self.shape(layer), clearance, walkaround_width),
         }
     }
