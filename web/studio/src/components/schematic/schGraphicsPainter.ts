@@ -129,9 +129,10 @@ function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: Sc
 /**
  * The text of a text box (`SCH_PAINTER::draw( SCH_TEXTBOX )`, kicad-port/schTextSpecs.ts `schTextBoxDrawSpec`): broken to the box less its margins in its face
  * (`SCH_TEXTBOX::GetShownText`'s `LinebreakText`), laid out from `GetDrawPos` with the box's justification, in the face Text Box Properties set (`face`; UI-LEFT-2 CC1).
- * `shownText` is `SCH_TEXTBOX::GetShownText` (the server's `graphic_shown`), when a variable changes the stored text.
+ * `shownText` is `SCH_TEXTBOX::GetShownText` (the server's `graphic_shown`), when a variable changes the stored text. Also draws the text of a placed symbol's library
+ * text box (painter.ts `drawRealGraphic`).
  */
-function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string, shownText: string | undefined, face: string | null | undefined, defaultPen: number): void {
+export function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string, shownText?: string, face?: string | null, defaultPen = SCH_DEFAULT_PEN_NM): void {
   const s = g.shape;
   if (s.type !== "text_box") return;
   const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
@@ -148,7 +149,7 @@ function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: st
     bold: !!s.bold,
     italic: !!s.italic,
   };
-  paintKicadText(ctx, schTextBoxDrawSpec(look, resolveFont(face, look.bold, look.italic), defaultPen), face, { color, record: { tag: "sch", id: g.id } });
+  paintKicadText(ctx, schTextBoxDrawSpec(look, resolveFont(face, look.bold, look.italic), defaultPen), face, { color, record: g.id ? { tag: "sch", id: g.id } : undefined });
 }
 
 /**

@@ -3130,7 +3130,7 @@ Browser check: `e2e/selection-v1.check.js` (6 scenarios, a placed `mcu_board_30p
 `web/studio/src/kicad-port/kicadText.ts` is KiCad's text layout, for both fonts: `linePositions` (`getLinePositions`), the markup tree (`parseMarkup`, `MARKUP_PARSER`'s grammar), the stroke
 runs (`GetTextAsGlyphs`: each advance `KiROUND`ed, a space's, a tab's column, `INTER_CHAR` taken off the box only), the outline runs, the overbar, `GetTextBox` (`kicadTextBox`), the pens and the
 knockout's box; `textSpecs.ts` turns each board item into what `FONT::Draw` is given (`boardTextSpec`, `fieldSpec`, `dimensionTextSpec`, `textBoxSpec`; `schTextSpecs.ts` the sheet's and the Symbol
-Editor's, PARITY-sch section 70); `components/text/kicadTextPaint.ts` draws a layout (`paintKicadText`); `components/text/outlineFonts.ts` loads the faces. The painters and the hit test
+Editor's, PARITY-sch section 72); `components/text/kicadTextPaint.ts` draws a layout (`paintKicadText`); `components/text/outlineFonts.ts` loads the faces. The painters and the hit test
 (`kicad-port/textHit.ts`) read the same layout.
 
 | Behaviour | Status | KiCad file:function |

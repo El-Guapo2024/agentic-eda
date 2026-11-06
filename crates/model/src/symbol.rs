@@ -293,11 +293,24 @@ pub struct LibConnectivity {
     /// escaped), written back the same way (r7 H3).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fp_filters: String,
+    /// The library symbol's text boxes (`SCH_TEXTBOX`es of its draw items, `(text_box "text" ..)`), each a [`crate::ir::LibrarySymbolGraphic::TextBox`] in the symbol's mm
+    /// with Y up, of its unit and body style (0: every one), none private to the Symbol Editor (`SCH_PAINTER::draw( SCH_TEXTBOX )` returns for one on a sheet). Not
+    /// connectivity: [`LibSymbol::graphics`] has each box's border and fill as a rectangle ([`crate::ir::LibrarySymbolGraphic::to_engine_graphics`]), and this list is
+    /// the rest of it -- the text a placed symbol draws in the box (`crate::sym_textbox`) and the `(text_box ..)` the schematic's cache writes in place of that
+    /// rectangle. Kept here, as [`Self::pin_alternates`] is, so the symbol's literals and `SymbolGraphic`'s matches stay as they are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_boxes: Vec<crate::ir::LibrarySymbolGraphic>,
 }
 
 impl LibConnectivity {
     pub fn is_default(&self) -> bool {
         *self == LibConnectivity::default()
+    }
+
+    /// The text boxes a symbol drawn in body style `style` has: those of that style and those of every style (body style 0, `SCH_PAINTER::draw( LIB_SYMBOL )`:
+    /// `if( aBodyStyle && item.GetBodyStyle() && aBodyStyle != item.GetBodyStyle() ) continue`).
+    pub fn text_boxes_of_style(&self, style: u32) -> impl Iterator<Item = &crate::ir::LibrarySymbolGraphic> {
+        self.text_boxes.iter().filter(move |t| t.body_style() == 0 || t.body_style() == style)
     }
 }
 

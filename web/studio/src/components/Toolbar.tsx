@@ -21,6 +21,7 @@ import { BOX_SEPARATOR, sizeBoxPick, trackWidthBoxLabels, viaSizeBoxLabels } fro
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { FootprintToolbarControl, GridSelect, SymbolToolbarControl } from "./toolbar/EditorToolbarControls";
 import { PcbVariantSelector, SchVariantSelector } from "./toolbar/VariantSelector";
+import { KICAD10_ACTIONS, KICAD10_ICONS, SCH_ARC_GROUP } from "../kicad/kicad10Actions";
 
 // No source-verified "100% = this many px/mm" reference for KiCad's own
 // zoom percentage readout either; this defines 100% as 1 screen px per
@@ -36,13 +37,21 @@ const FILES: Record<ToolbarEditor, ToolbarsFile> = {
   pcb: toolbarsWithoutAdvanced(toolbarsData as ToolbarsFile),
   // eeschema has no auxiliary toolbar at all (toolbars_sch_editor.cpp's TOOLBAR_LOC::TOP_AUX case returns std::nullopt) -- sch_toolbars.json only ever
   // has main/options/drawing, so an "auxiliary" lookup on it falls through to the "no such toolbar" empty state below, the honest thing to show.
-  schematic: schToolbarsData as ToolbarsFile,
+  schematic: withKicad10ArcGroup(schToolbarsData as ToolbarsFile),
   footprint: fpToolbarsData as ToolbarsFile,
   symbol: symToolbarsData as ToolbarsFile,
 };
 const actionsFile = actionsData as ActionsFile;
 const iconsFile = iconsData as IconsFile;
 const actionsByName = new Map(actionsFile.actions.map((a) => [a.name, a]));
+// KiCad 10's actions the extracted table does not have yet (kicad/kicad10Actions.ts)
+for (const a of KICAD10_ACTIONS) if (!actionsByName.has(a.name)) actionsByName.set(a.name, { ...(actionsFile.actions[0] as ActionsFile["actions"][number]), name: a.name, label: a.label, tooltip: a.tooltip, icon: a.icon, hotkey: null, altHotkey: null, hotkeyRaw: null, altHotkeyRaw: null, macHotkey: null, macAltHotkey: null, macHotkeyRaw: null, macAltHotkeyRaw: null, flags: [] });
+
+/** The schematic's drawing toolbar with KiCad 25ec2335's Arc group (the five draw modes) where 8303b2ad's Draw Arcs button is. */
+function withKicad10ArcGroup(file: ToolbarsFile): ToolbarsFile {
+  const swap = (it: ToolbarItem): ToolbarItem => (it.type === "action" && it.action === "eeschema.InteractiveDrawing.drawArc" ? SCH_ARC_GROUP : it);
+  return { ...file, toolbars: file.toolbars.map((t) => ({ ...t, items: t.items.map(swap) })) };
+}
 const SUPPORT = editorSupportData as unknown as { footprint: Record<string, string>; symbol: Record<string, string> };
 
 /** The editor a tab's toolbars belong to: the 3D tab keeps the board editor's. */
@@ -53,7 +62,7 @@ function editorOfTab(tab: string): ToolbarEditor {
 /** The KiCad icon of a BITMAPS name, drawn at KiCad's default toolbar size; a blank square only for a name with no icon (which the icon test forbids on any toolbar). */
 export function ActionIcon({ iconName, size = 24 }: { iconName: string | null; size?: number }) {
   const scheme = useColorScheme();
-  const file = iconName ? iconsFile.icons[iconName] : null;
+  const file = iconName ? (iconsFile.icons[iconName] ?? KICAD10_ICONS[iconName]) : null;
   if (!file) return <span className="icon-placeholder" aria-hidden />;
   // KiCad's default toolbar icon size (common/settings/common_settings.cpp:
   // "appearance.toolbar_icon_size", default 24, options 16/24/32).

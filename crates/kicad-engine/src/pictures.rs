@@ -62,10 +62,26 @@ fn clear(out_dir: &Path, ext: &str) -> Result<(), Vec<CheckResult>> {
     std::fs::create_dir_all(out_dir).map_err(|e| fail("kicad_engine_dir", &out_dir.display().to_string(), format!("cannot create {}: {e} ({ext} plot)", out_dir.display())))
 }
 
+/// `--draw-hop-over` when Schematic Setup > Formatting's "Hop-over size:" is not None: KiCad 25ec2335's Plot Schematic dialog and the editor's
+/// SVG copy of a selection plot the hops the editor draws (`DIALOG_PLOT_SCHEMATIC::plotSchematic`, `tools/sch_editor_control.cpp::plotSelectionToSvg`:
+/// `plotOpts.m_plotHopOver = Schematic().Settings().GetHopOverScale() > 0.0`), while kicad-cli plots them only when asked
+/// (`SCH_EXPORT_PLOT_COMMAND`'s `--draw-hop-over`, `EESCHEMA_JOBS_HANDLER::JobExportPlot`: `m_plotHopOver = aPlotJob->m_show_hop_over`). The arc's
+/// size is the project's (`SCH_SCREEN::Plot`: `defaultLineWidth * hopOverScale`, both read from the derived `.kicad_pro`). With the flag and the
+/// choice None kicad-cli plots a dot at each crossing (an arc of radius 0, the wire's width across), so the flag follows the choice.
+pub fn hop_over_args(design: &Design) -> Vec<String> {
+    let scale = design.schematic.as_ref().and_then(|s| s.extras.formatting.as_ref()).map_or(0.0, |f| f.hop_over_scale());
+    if scale > 0.0 {
+        vec!["--draw-hop-over".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// The design's schematic plotted by `kicad-cli sch export svg|png` with KiCad's defaults (the drawing sheet, the theme's background): one file per
 /// sheet, the root's first and then in KiCad's page order (`SCH_SHEET_LIST`), as kicad-cli names them -- `<name>.<ext>` for the root, the sheet's unique
 /// file name (`SCHEMATIC::GetUniqueFilenameForCurrentSheet`, `/` made `_`) for each other sheet (`SCH_PLOTTER::getOutputFilenameSingle`). The derived schematic (and its project) is written into `work`, named
-/// `name`, so the title block shows that file; the plots go into `out_dir`, which is emptied first. PNG pages are plotted at [`PICTURE_DPI`].
+/// `name`, so the title block shows that file; the plots go into `out_dir`, which is emptied first. PNG pages are plotted at [`PICTURE_DPI`]. The
+/// wires hop over each other as Schematic Setup says ([`hop_over_args`]), as the editor draws them.
 pub fn schematic_plot(design: &Design, model: &ConstraintModel, work: &Path, out_dir: &Path, name: &str, format: PictureFormat) -> Result<Vec<PathBuf>, Vec<CheckResult>> {
     let cli = need_cli()?;
     if design.schematic.is_none() {
@@ -78,6 +94,7 @@ pub fn schematic_plot(design: &Design, model: &ConstraintModel, work: &Path, out
     if format == PictureFormat::Png {
         cmd.args(["--dpi", &PICTURE_DPI.to_string()]);
     }
+    cmd.args(hop_over_args(design));
     // kicad-cli takes a schematic plot's `-o` as a folder (one file per page).
     cmd.arg("-o").arg(format!("{}/", out_dir.display())).arg(&sch);
     let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;

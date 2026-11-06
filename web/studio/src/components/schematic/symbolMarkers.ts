@@ -49,6 +49,11 @@ export function bodyBoundsOf(graphics: readonly ResolvedGraphic[]): Box | null {
       case "text":
         grow(g.at[0], g.at[1]);
         break;
+      // a text box is its box (`SCH_TEXTBOX`'s shape), bordered or not
+      case "text_box":
+        grow(g.shape.start.x, g.shape.start.y);
+        grow(g.shape.end.x, g.shape.end.y);
+        break;
     }
   }
   return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;

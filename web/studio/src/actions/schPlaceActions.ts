@@ -16,16 +16,21 @@ import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
 import actionsData from "../kicad/actions.json";
 import type { ActionsFile } from "../kicad/types";
-import { postPlacePreview } from "../api/client";
+import { fetchSchematic, postPlacePreview } from "../api/client";
+import type { Cmd, LibSymbol, Schematic } from "../api/types";
 import { inferSpin } from "../components/schematic/labelShape";
 import { labelNameFromWire } from "../kicad-port/schLabelName";
 import { lastPlaced } from "../kicad-port/schLastPlaced";
 import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 import { fetchPlacementReference } from "../api/hierarchyClient";
-import { afterPlaced, armedKey, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, rotateCarried, scopeOfTool, type CarriedItem, type CarriedSymbol, type CarryTool } from "../kicad-port/schPlaceTool";
+import { afterPlaced, applyCarriedCmds, armedKey, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, renameInCmd, rotateCarried, scopeOfTool, settledSymbol, type CarriedItem, type CarriedSymbol, type CarryTool } from "../kicad-port/schPlaceTool";
+import { needsServerDrawing } from "../kicad-port/schCarryPreview";
+import { bodyStyleCount } from "../kicad-port/schBodyStyle";
+import { editFieldTarget } from "../kicad-port/schFieldEdit";
+import type { SymbolAttrKey } from "../kicad-port/schControl";
 import { nextReference, placementMinRef } from "../kicad-port/nextReference";
 import { unitCountOf } from "../kicad-port/schUnits";
-import { carryCursor, getSchCarry, noteChooserAt, setSchCarry, type SchCarry } from "../state/schCarryStore";
+import { carryCursor, getSchCarry, noteCarryMade, noteCarryRequest, noteChooserAt, schematicWithCarry, setSchCarry, type SchCarry } from "../state/schCarryStore";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 
 export interface PlaceContext {
@@ -40,28 +45,51 @@ export interface PlaceContext {
 const ACTIVATES: ReadonlySet<string> = new Set((actionsData as ActionsFile).actions.filter((a) => (a.flags ?? []).includes("AF_ACTIVATE")).map((a) => a.name));
 
 let seq = 0;
+/** The state of the carried item the server's last kept drawing is of (a drawing of an older state that comes back after a newer one is dropped). */
+let serverSeq = -1;
 
-/** Ask the server for the drawing of `carry`'s item; it is kept only if the item has not changed since. */
+/**
+ * Ask the server for its drawing of `carry`'s item, for what only it knows (kicad-port/schCarryPreview.ts `needsServerDrawing`: a symbol's fields, a global
+ * label's Sheet References, a text's variables). The page draws the item meanwhile; the drawing is kept, as of the state it was asked for, while the tool holds
+ * an item, and laid over the page's own when it is of this very state.
+ */
 function fetchPreview(carry: SchCarry): void {
-  void postPlacePreview({ sheet: carry.sheet.join("/"), cmd: previewCmd(carry.item) }).then((preview) => {
+  if (!needsServerDrawing(carry.item)) return;
+  noteCarryRequest();
+  const item = carry.item;
+  const asked = carry.seq;
+  void postPlacePreview({ sheet: carry.sheet.join("/"), cmd: previewCmd(item, powerIdOf(carry)) }).then((preview) => {
     const now = getSchCarry();
-    if (now && now.seq === carry.seq) setSchCarry({ ...now, preview });
+    if (!preview || !now || asked < serverSeq || now.tool !== carry.tool) return;
+    serverSeq = asked;
+    setSchCarry({ ...now, server: { item, preview } });
   });
 }
 
-/** The tool now holds `item` (`prepItemForPlacement` / `addSymbol`): it rides the cursor, drawn as the server draws its command. */
-export function carryItem(ctx: Pick<PlaceContext, "api">, tool: CarryTool, item: CarriedItem, at: [number, number], queue: CarriedItem[] = [], keep = false): void {
+/** The id the server numbers the carried power symbol with: its drawing's (the same at the preview's point and the click's). */
+function powerIdOf(carry: SchCarry): string | undefined {
+  return carry.item.kind === "power" ? carry.server?.preview.power_symbols[0]?.id : undefined;
+}
+
+/**
+ * The tool now holds `item` (`prepItemForPlacement` / `addSymbol`): it rides the cursor, drawn by the page at once. `lib` is a carried symbol's library drawing
+ * when the sheet has none (the chooser's).
+ */
+export function carryItem(ctx: Pick<PlaceContext, "api">, tool: CarryTool, item: CarriedItem, at: [number, number], queue: CarriedItem[] = [], keep = false, lib: LibSymbol | null = null): void {
   const st = ctx.api.getState();
-  const carry: SchCarry = { tool, item, queue, keep, sheet: [...st.currentSheetPath], at, preview: null, seq: ++seq };
+  serverSeq = -1;
+  const carry: SchCarry = { tool, item, queue, keep, sheet: [...st.currentSheetPath], at, lib, server: null, seq: ++seq };
+  noteCarryMade();
   setSchCarry(carry);
   fetchPreview(carry);
 }
 
-/** The carried item changed (turned, mirrored, edited, incremented): the old drawing stays until the new one arrives. */
+/** The carried item changed (turned, mirrored, edited, incremented): the page draws it anew at once; the server's drawing of it follows where it is needed. */
 export function changeCarried(item: CarriedItem): void {
   const now = getSchCarry();
   if (!now) return;
   const next: SchCarry = { ...now, item, seq: ++seq, editing: false };
+  noteCarryMade();
   setSchCarry(next);
   fetchPreview(next);
 }
@@ -119,7 +147,8 @@ function refineCarriedReference(ctx: Pick<PlaceContext, "api">, item: CarriedSym
     if (!reference || !now || now.item.kind !== "symbol") return;
     const held = now.item;
     if (held.libId !== item.libId || held.ref !== item.ref || held.unit !== item.unit || reference === held.ref) return;
-    changeCarried({ ...held, ref: reference });
+    // what the dialogs did to it named it by the reference it rode with
+    changeCarried({ ...held, ref: reference, ...(held.edits ? { edits: held.edits.map((c) => renameInCmd(c, held.ref, reference)) } : {}) });
   });
 }
 
@@ -138,6 +167,8 @@ export interface SymbolToCarry {
   placeAllUnits?: boolean;
   /** `placeOneOnly`: a symbol the action was handed; the tool ends after it is placed. */
   oneOnly?: boolean;
+  /** Its library drawing, when the sheet has none (the chooser's): the page draws it in the hand from this. */
+  lib?: LibSymbol | null;
 }
 
 /** `addSymbol( symbol )`: the symbol rides the cursor, drawn as the server draws its `add_symbol` (`POST /api/sch/place_preview`). */
@@ -160,7 +191,7 @@ export function carrySymbol(ctx: Pick<PlaceContext, "api">, pick: SymbolToCarry,
     placeAllUnits: pick.placeAllUnits ?? false,
     oneOnly: pick.oneOnly ?? false,
   };
-  carryItem(ctx, "sch_place_symbol", item, at, [], keep);
+  carryItem(ctx, "sch_place_symbol", item, at, [], keep, pick.lib ?? null);
   if (!pick.ref) refineCarriedReference(ctx, item);
 }
 
@@ -172,7 +203,7 @@ export function placeCarried(ctx: Pick<PlaceContext, "api"> & Partial<Pick<Place
   const plainSpin = carry.item.kind === "label" && !carry.item.spin ? inferSpin(sch.wires, at) : null;
   // `PlaceSymbol` numbers a power symbol by the project's Annotate method and start number (r3 D3-M5)
   const a = rememberedAnnotateSettings();
-  const committed = ctx.api.cmd(placeCmd(carry.item, at, { plainSpin, annotate: { algo: a.algo, start_number: startNumber(a.start) } }));
+  const committed = ctx.api.cmd(placeCmd(carry.item, at, { plainSpin, annotate: { algo: a.algo, start_number: startNumber(a.start) }, powerId: powerIdOf(carry) }));
   const placed = carry.item;
   // the units of the reference already on the sheet, the one just placed among them (`unitOccupied`), and the next free reference past it (`annotate()`)
   const next = afterPlaced(
@@ -182,13 +213,56 @@ export function placeCarried(ctx: Pick<PlaceContext, "api"> & Partial<Pick<Place
       : undefined
   );
   if (next) {
-    carryItem(ctx, next.tool, next.item, at, next.queue, next.keep);
+    // the next one rides, selected in its place (`addSymbol` / `prepItemForPlacement`: `ClearSelection(); AddItemToSel( item )`)
+    ctx.dispatch?.({ type: "SET_SELECTION", refs: [] });
+    carryItem(ctx, next.tool, next.item, at, next.queue, next.keep, carry.lib ?? null);
     // a new reference for the next symbol: the server's, once the one just placed is in (the next unit of the same reference keeps it)
     const nextItem = next.item;
     if (nextItem.kind === "symbol" && placed.kind === "symbol" && nextItem.ref !== placed.ref) void committed.then(() => refineCarriedReference(ctx, nextItem));
-  } else setSchCarry(null);
+  } else {
+    setSchCarry(null);
+    selectPlaced(ctx, sch, carry.sheet, placed, committed);
+  }
   // `if( placeOneOnly ) { m_frame->PopTool( aEvent ); break; }`
   if (placed.kind === "symbol" && placed.oneOnly) ctx.dispatch?.({ type: "SET_ACTIVE_TOOL", tool: "select" });
+}
+
+let placing = 0;
+
+/**
+ * The item just placed is left selected: the tool had it in the selection while it rode (`addSymbol`'s and `prepItemForPlacement`'s `AddItemToSel( item )`), and
+ * the click that commits it clears nothing (`commit.Push`, then `item = nullptr` / `symbol = nextSymbol`). The new item is read off the sheet once the command is
+ * in -- unless the tool holds something again by then, or another placement followed.
+ */
+function selectPlaced(ctx: Pick<PlaceContext, "api"> & Partial<Pick<PlaceContext, "dispatch">>, before: Schematic, sheet: readonly string[], placed: CarriedItem, committed: Promise<boolean>): void {
+  const mine = ++placing;
+  void committed.then(async (ok) => {
+    if (!ok || mine !== placing || getSchCarry()) return;
+    const after = await fetchSchematic(sheet).catch(() => null);
+    if (!after || mine !== placing || getSchCarry() || ctx.api.getState().currentSheetPath.join("/") !== sheet.join("/")) return;
+    const ids = placedIds(before, after, placed);
+    if (ids.length > 0) ctx.dispatch?.({ type: "SET_SELECTION", refs: ids });
+  });
+}
+
+/** What a placing click added of `placed`'s kind (the label, text, directive label, power symbol or symbol; not a junction or a wire it cut). */
+export function placedIds(before: Schematic, after: Schematic, placed: CarriedItem): string[] {
+  const added = <T extends { id: string }>(was: readonly T[] | undefined, now: readonly T[] | undefined): string[] => {
+    const old = new Set((was ?? []).map((x) => x.id));
+    return (now ?? []).filter((x) => !old.has(x.id)).map((x) => x.id);
+  };
+  switch (placed.kind) {
+    case "label":
+      return added(before.labels, after.labels);
+    case "text":
+      return added(before.texts, after.texts);
+    case "directive":
+      return added(before.graphics, after.graphics);
+    case "power":
+      return added(before.power_symbols, after.power_symbols);
+    case "symbol":
+      return after.symbols.some((x) => x.id === placed.ref && x.unit === placed.unit) && !before.symbols.some((x) => x.id === placed.ref && x.unit === placed.unit) ? [placed.ref] : [];
+  }
 }
 
 /**
@@ -218,15 +292,84 @@ function armPlacingTool(ctx: PlaceContext, tool: CarryTool): void {
   beginItem(ctx, tool, cursorAt(ctx));
 }
 
-/** Properties of the carried item (`SCH_EDIT_TOOL::Properties` on the selection, which is the item): its dialog opens on it, and OK changes it. */
+/** The id the carried item has in the page's drawing of it (`schematicWithCarry`): a symbol's reference, a power symbol's number once the server gave it. */
+function carriedIdOf(carry: SchCarry): string | null {
+  return carry.item.kind === "symbol" ? carry.item.ref : carry.item.kind === "power" ? (powerIdOf(carry) ?? null) : null;
+}
+
+/**
+ * Properties of the carried item (`SCH_EDIT_TOOL::Properties` on the selection, which is the item): its dialog opens on it, and OK changes it -- Symbol
+ * Properties on a carried symbol, the power symbol's Properties on a carried power symbol (once the server has numbered it), a label's, a text's or a directive
+ * label's dialog on those.
+ */
 function reopenDialog(ctx: PlaceContext, carry: SchCarry): void {
   const at = cursorAt(ctx);
   const item = carry.item;
-  if (item.kind === "power" || item.kind === "symbol") return;
+  if (item.kind === "symbol") {
+    ctx.dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id: item.ref, unit: item.unit, field: null, carried: true } });
+    return;
+  }
+  if (item.kind === "power") {
+    const id = powerIdOf(carry);
+    if (!id) return;
+    ctx.dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_power", id, carried: true } });
+    return;
+  }
   setSchCarry({ ...carry, editing: true });
   if (item.kind === "label") ctx.dispatch({ type: "SET_SCH_LABEL_PENDING", pending: { at, scope: item.scope } });
   else if (item.kind === "text") ctx.dispatch({ type: "SET_SCH_TEXT_PENDING", pending: { at } });
   else ctx.dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "directive", at: { x: at[0], y: at[1] } } });
+}
+
+/**
+ * U, V, F with a symbol or power symbol carried (`SCH_EDIT_TOOL::EditField` on the selection): Field Properties on that field of it, as the page draws it with the
+ * server's fields; a symbol whose fields have not come back yet opens Symbol Properties at the field (`editFieldTarget`'s fallback).
+ */
+function editCarriedField(ctx: PlaceContext, carry: SchCarry, name: "Reference" | "Value" | "Footprint"): void {
+  const sch = ctx.api.getState().schematic;
+  const id = carriedIdOf(carry);
+  if (!sch || !id) return;
+  const target = editFieldTarget(schematicWithCarry(sch, carry), [id], name, carry.item.kind === "symbol" ? carry.item.unit : undefined);
+  if (target.kind === "none") return;
+  if (target.kind === "field") ctx.dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_field", id: target.id, carried: true } });
+  else if (carry.item.kind === "symbol") ctx.dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id: carry.item.ref, unit: carry.item.unit, field: name === "Reference" ? "reference" : name === "Value" ? "value" : "footprint", carried: true } });
+}
+
+/** Cycle Body Style on the symbol in the hand (`SCH_EDIT_TOOL::CycleBodyStyle`): the next body style of its library symbol, back to the first past the last. */
+function cycleCarriedBodyStyle(ctx: PlaceContext, carry: SchCarry): void {
+  const item = carry.item;
+  const sch = ctx.api.getState().schematic;
+  if (item.kind !== "symbol" || !sch) return;
+  const view = schematicWithCarry(sch, carry);
+  const count = bodyStyleCount(view, { lib_id: item.libId });
+  if (count <= 1) return void ctx.dispatch({ type: "TOAST", message: "Select a symbol that has more than one body style.", kind: "info" });
+  changeCarried({ ...item, bodyStyle: ((item.bodyStyle ?? 1) % count) + 1 });
+}
+
+/**
+ * An attribute toggle with a symbol or power symbol in the hand (`SCH_EDIT_TOOL::SetAttribute` on the selection, which is the one item: `new_state` is on when it
+ * lacks the attribute). A carried symbol keeps the flags it is made with; a power symbol's are its Properties' (`set_power_props`, by the id the server numbers it with).
+ */
+function toggleCarriedAttribute(carry: SchCarry, key: SymbolAttrKey): void {
+  const item = carry.item;
+  if (item.kind === "symbol") return changeCarried({ ...item, attrs: { ...item.attrs, [key]: !item.attrs?.[key] } });
+  if (item.kind !== "power") return;
+  const id = powerIdOf(carry);
+  if (!id) return;
+  const props = carry.server?.preview.power_symbols[0]?.props;
+  const now = !!(props as Partial<Record<SymbolAttrKey, boolean>> | null | undefined)?.[key];
+  changeCarried({ ...item, edits: [...(item.edits ?? []), { op: "sch_edit", verb: "set_power_props", id, [key]: !now } as unknown as Cmd] });
+}
+
+/**
+ * OK in a dialog opened on the carried symbol or power symbol (Symbol Properties, a power symbol's Properties, Field Properties): the dialog's commands change the
+ * item in the hand (kicad-port/schPlaceTool.ts `applyCarriedCmds`) instead of the sheet. False when the tool holds no such item any more.
+ */
+export function editCarried(cmds: readonly Cmd[]): boolean {
+  const carry = getSchCarry();
+  if (!carry || (carry.item.kind !== "symbol" && carry.item.kind !== "power")) return false;
+  if (cmds.length > 0) changeCarried(applyCarriedCmds(carry.item, cmds));
+  return true;
 }
 
 /** Esc, Undo or Delete with an item carried: it goes and the tool stays. Place Symbol and Place Power with "Place repeated copies" open the chooser again ("Re-enter symbol chooser"). */
@@ -279,6 +422,22 @@ export function registerSchPlaceActions(registry: ActionMap, ctx: PlaceContext):
         }
         case "properties":
           return reopenDialog(ctx, carry);
+        case "edit_field":
+          return editCarriedField(ctx, carry, k.name);
+        case "autoplace":
+          // `AutoplaceFields( screen, AUTOPLACE_MANUAL )` on the symbol in the hand: its fields where Autoplace Fields puts them, whatever its turns left
+          if (carry.item.kind === "symbol" && carry.item.turns.length > 0) changeCarried(settledSymbol(carry.item));
+          return;
+        case "body_style":
+          return cycleCarriedBodyStyle(ctx, carry);
+        case "attribute":
+          return toggleCarriedAttribute(carry, k.key);
+        case "unit": {
+          // "<placed unit>:<unit chosen>" (kicad-port/schSymbolMenus.ts): `m_frame->SelectUnit( symbol, unit )` on the symbol in the hand
+          const unit = Number(String(param ?? "").split(":")[1]);
+          if (carry.item.kind === "symbol" && Number.isInteger(unit) && unit >= 1 && unit <= carry.item.unitCount && unit !== carry.item.unit) changeCarried({ ...carry.item, unit });
+          return;
+        }
         case "drop":
           return dropCarried(ctx, carry);
         case "busy":

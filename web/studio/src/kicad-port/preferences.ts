@@ -80,6 +80,9 @@ export interface Preferences {
   symRepeatPinStepMils: number;
   /** `m_Repeat.label_delta` ("Label increment:", -10 .. 10): what Repeat Pin adds to the pin's number and name. Default 1. */
   symRepeatLabelDelta: number;
+  /** `SYMBOL_EDITOR_SETTINGS::m_dragPinsAlongWithEdges` ("Keep pins attached when dragging edges", `drag_pins_along_with_edges`): a rectangle side dragged by the point
+   *  editor takes the pins on it along (`RECTANGLE_POINT_EDIT_BEHAVIOR::dragPinsOnEdge`). Default on. */
+  symDragPinsWithEdges: boolean;
   /** `FOOTPRINT_EDITOR_SETTINGS::m_RotationAngle` (Preferences > Footprint Editor > Editing Options, "Step for rotate commands", UI-LEFT F8): the Footprint Editor's own
    *  step, the degrees one R or Shift+R turns by there. Default 90. */
   fpRotationStepDeg: number;
@@ -143,6 +146,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   allowUnconstrainedPinSwaps: false,
   symRepeatPinStepMils: 100,
   symRepeatLabelDelta: 1,
+  symDragPinsWithEdges: true,
   fpRotationStepDeg: 90,
   fpMagneticPads: true,
   fpMagneticGraphics: true,
@@ -259,6 +263,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     allowUnconstrainedPinSwaps: bool(o.allowUnconstrainedPinSwaps, d.allowUnconstrainedPinSwaps),
     symRepeatPinStepMils: sanitizePinStepMils(o.symRepeatPinStepMils, d.symRepeatPinStepMils),
     symRepeatLabelDelta: clampInt(o.symRepeatLabelDelta, -10, 10, d.symRepeatLabelDelta),
+    symDragPinsWithEdges: bool(o.symDragPinsWithEdges, d.symDragPinsWithEdges),
     fpRotationStepDeg: sanitizeRotationStep(o.fpRotationStepDeg, d.fpRotationStepDeg),
     fpMagneticPads: bool(o.fpMagneticPads, d.fpMagneticPads),
     fpMagneticGraphics: bool(o.fpMagneticGraphics, d.fpMagneticGraphics),

@@ -13,12 +13,12 @@
 //     `SCH_GLOBALLABEL::GetSchematicTextOffset` (past the flag's `GetLabelBoxExpansion`, three quarters of the height more past an input, bidirectional or tri-state point,
 //     0.0715 of it down "on the center line of E"), `SCH_HIERLABEL::GetSchematicTextOffset` (`GetTextOffset() + GetTextWidth()`), `GetLabelBoxExpansion`,
 //     `SCH_GLOBALLABEL::CreateGraphicShape` (the flag as long as `GetTextBox( aRenderSettings ).GetWidth()`, which an outline face changes);
-//   - `sch_text.cpp`: `SCH_TEXT::GetTextOffset` (`DEFAULT_TEXT_OFFSET_RATIO` 0.15 of the height), `GetPenWidth`, `GetBoundingBox`;
+//   - `sch_text.cpp`: `SCH_TEXT::GetTextOffset` (`m_TextOffsetRatio` of the height, 0.15 by default), `GetPenWidth`, `GetBoundingBox`;
 //   - `sch_field.cpp::SCH_FIELD::GetBoundingBox` (`GetTextBox` turned by the text angle about the position);
 //   - `sch_textbox.cpp`: `SCH_TEXTBOX::GetDrawPos` (the corner or the middle of a side, the margins in), `GetShownText` (`FONT::LinebreakText` to the column).
 //
-// The positions are the server's (`SchField.at`, the label's and the text's anchors) in nm; KiCad's ints are eeschema's 100 nm (`SCH_IU`). Ratios are Schematic Setup's
-// defaults (`DEFAULT_TEXT_OFFSET_RATIO`, `DEFAULT_LABEL_SIZE_RATIO`): the canvas does not read Formatting's ratios (UI-LEFT-2 SS4).
+// The positions are the server's (`SchField.at`, the label's and the text's anchors) in nm; KiCad's ints are eeschema's 100 nm (`SCH_IU`). The label offset and margin
+// ratios are Schematic Setup > Formatting's for the sheet being drawn, KiCad's defaults in the Symbol Editor (kicad-port/schFormattingLook.ts, UI-LEFT-2 SS4).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { SchematicText } from "../api/types";
@@ -27,14 +27,12 @@ import { linebreakText } from "./pcbTextBox";
 import { FIELD_SIZE_NM } from "./schText";
 import { textLie } from "./schTextItem";
 import type { LabelSpin } from "./labelSpin";
+import { schFormattingLook } from "./schFormattingLook";
 
 /** eeschema's internal unit, in the sheet's nm. */
 export const SCH_IU = 100;
 /** `DEFAULT_LINE_WIDTH_MILS` (6 mil): `SCH_RENDER_SETTINGS`' default pen, what a text with no pen of its own is drawn with. */
 export const SCH_DEFAULT_PEN_NM = 152_400;
-/** `DEFAULT_TEXT_OFFSET_RATIO`, `DEFAULT_LABEL_SIZE_RATIO` (eeschema/default_values.h). */
-const TEXT_OFFSET_RATIO = 0.15;
-const LABEL_SIZE_RATIO = 0.375;
 
 /** `KiROUND` and an int's truncation in eeschema's units. */
 const iuRound = (v: number): number => kiRound(v / SCH_IU) * SCH_IU;
@@ -131,7 +129,7 @@ function spinAttrs(spin: LabelSpin): { halign: HJustify; angleDeg: number } {
 }
 
 /** `GetLabelBoxExpansion`: `KiROUND( m_LabelSizeRatio * GetTextSize().y )`. */
-export const labelBoxExpansion = (size: number): number => iuRound(LABEL_SIZE_RATIO * size);
+export const labelBoxExpansion = (size: number): number => iuRound(schFormattingLook().labelSizeRatio * size);
 
 /** `GetSchematicTextOffset` of a label of `scope` (a global label's by its shape): where its text's position is from its anchor. */
 export function labelTextOffset(l: Pick<SchLabelLook, "scope" | "shape" | "size_nm" | "bold">, spin: LabelSpin): [number, number] {
@@ -145,11 +143,11 @@ export function labelTextOffset(l: Pick<SchLabelLook, "scope" | "shape" | "size_
     return spin === "left" ? [-horiz, vert] : spin === "up" ? [vert, -horiz] : spin === "right" ? [horiz, vert] : [vert, horiz];
   }
   if (l.scope === "hierarchical" && l.shape) {
-    const dist = iuRound(TEXT_OFFSET_RATIO * size) + size;
+    const dist = iuRound(schFormattingLook().textOffsetRatio * size) + size;
     return spin === "left" ? [-dist, 0] : spin === "up" ? [0, -dist] : spin === "right" ? [dist, 0] : [0, dist];
   }
   // a local label: "add an offset to x (or y) position to aid readability of text on a wire or line"
-  const dist = iuRound(TEXT_OFFSET_RATIO * size) + schOwnPen(size, !!l.bold);
+  const dist = iuRound(schFormattingLook().textOffsetRatio * size) + schOwnPen(size, !!l.bold);
   return spin === "up" || spin === "bottom" ? [-dist, 0] : [0, -dist];
 }
 

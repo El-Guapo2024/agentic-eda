@@ -59,6 +59,7 @@ pub mod sheet_file;
 pub mod sheet_list;
 pub mod symbol;
 pub mod sym_fields;
+pub mod sym_textbox;
 pub mod table;
 pub mod table_edit;
 pub mod table_paste;

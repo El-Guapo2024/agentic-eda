@@ -1,0 +1,7 @@
+{
+  "about": "Schematic Setup > Formatting's Label offset ratio (text_offset_ratio) and Global label margin ratio (label_size_ratio) as kicad-cli 10.99 plots them (`kicad-cli sch export svg`, the hidden <text> anchors and the flag's path, mm): read by schFormattingLook.test.ts and crates/cli/src/sch_setup_tests.rs `slow_kicad_cli_lays_labels_out_by_the_formatting_ratios`",
+  "text_offset_ratio": 0.5,
+  "label_size_ratio": 0.6,
+  "local": { "text": "LOFS", "at": [30.48, 50.8], "text_at": [30.48, 50.0062] },
+  "global": { "text": "GOFS", "shape": "passive", "at": [30.48, 76.2], "text_x": 31.242, "outline": [[30.48, 76.2], [30.48, 77.7561], [37.2841, 77.7561], [37.2841, 76.2], [37.2841, 74.6439], [30.48, 74.6439]] }
+}

@@ -9,6 +9,7 @@
 // board, and `on`, a point on its first stroke (a press there is on the text, as a person presses on it).
 import { FAKE_ITALIC_ANGLE, frameToWorld, inkBox, kicadTextBox, knockoutBox, layoutKicadText, boxCorners, resolveFont, runInk, type KicadFont, type KicadTextLayout, type KicadTextSpec } from "../../kicad-port/kicadText";
 import { RUN_FONT_PX, setRunFont } from "./outlineFonts";
+import { strokeOverbarHeight } from "./strokeFont";
 
 export interface PaintTextOptions {
   color: string;
@@ -92,7 +93,7 @@ const layouts = new Map<string, KicadTextLayout>();
 const MAX_LAYOUTS = 4000;
 
 function layoutOf(spec: KicadTextSpec, font: KicadFont): KicadTextLayout {
-  const key = `${font.kind === "stroke" ? "" : font.face.family}\u0000${JSON.stringify(spec)}`;
+  const key = `${font.kind === "stroke" ? "" : font.face.family}\u0000${strokeOverbarHeight()}\u0000${JSON.stringify(spec)}`;
   let l = layouts.get(key);
   if (!l) {
     l = layoutKicadText(spec, font);

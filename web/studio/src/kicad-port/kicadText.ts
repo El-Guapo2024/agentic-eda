@@ -21,7 +21,7 @@
 // a text's URLs are not split from it (`MARKUP::url`; they are drawn the same); an outline glyph is hit by its ink box, not its triangles.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`); the outline font's measurements come in through `OutlineFace`.
-import { getGlyph } from "../components/text/strokeFont";
+import { getGlyph, strokeOverbarHeight } from "../components/text/strokeFont";
 
 export type HJustify = "left" | "center" | "right";
 export type VJustify = "top" | "center" | "bottom";
@@ -39,9 +39,9 @@ export function isStrokeFace(face: string | null | undefined): boolean {
 
 /** `ITALIC_TILT` (`include/font/font.h`). */
 export const ITALIC_TILT = 1 / 8;
-/** `METRICS::m_InterlinePitch`, `m_OverbarHeight` (`include/font/font_metrics.h`). */
+/** `METRICS::m_InterlinePitch` (`include/font/font_metrics.h`); `m_OverbarHeight` (1.23) is the stroke font's current one (`strokeOverbarHeight`: a sheet's
+ * Formatting while it is drawn, `SCH_ITEM::GetFontMetrics`). */
 const INTERLINE_PITCH = 1.68;
-const OVERBAR_HEIGHT = 1.23;
 /** `STROKE_FONT::GetInterline`'s `LEGACY_FACTOR`. */
 const LEGACY_FACTOR = 0.9583;
 /** `STROKE_FONT::GetTextAsGlyphs`' constants. */
@@ -415,7 +415,7 @@ function drawMarkup(nodes: readonly MarkupNode[], font: KicadFont, size: readonl
     next = drawMarkup(node.children, font, size, next, origin, inner, iu, sink, bbox);
     if (node.kind === "over" && sink) {
       const trim = size[0] * 0.1;
-      const offset = size[1] * OVERBAR_HEIGHT;
+      const offset = size[1] * strokeOverbarHeight();
       sink.strokes.push([
         [start[0] + trim, start[1] - offset],
         [next[0] - trim, next[1] - offset],

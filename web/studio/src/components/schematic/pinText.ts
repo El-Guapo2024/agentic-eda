@@ -9,6 +9,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 
 import type { HAlign, VAlign } from "../../kicad-port/schText";
+import { pinTextClearanceNm } from "../../kicad-port/schFormattingLook";
 
 /** How one symbol's pins show their texts (`LIB_SYMBOL::m_showPinNames`, `m_showPinNumbers`, `m_pinNameOffset`). */
 export interface PinTexts {
@@ -23,7 +24,8 @@ export const DEFAULT_PIN_TEXTS: PinTexts = { namesHidden: false, numbersHidden: 
 
 /** The size every pin name and number is set in: 50 mils. */
 export const PIN_TEXT_SIZE_NM = 1_270_000;
-/** `getPinTextOffset() + PIN_TEXT_MARGIN`: the gap between a pin line and its text, 8 mils. */
+/** `getPinTextOffset() + PIN_TEXT_MARGIN`: the gap between a pin line and its text, 8 mils at the default Label offset ratio (kicad-port/schFormattingLook.ts
+ *  `pinTextClearanceNm` follows Schematic Setup's). */
 export const PIN_TEXT_CLEARANCE_NM = 203_200;
 /** The thickness of a pin's text, 6 mils. */
 export const PIN_TEXT_PEN_NM = 152_400;
@@ -62,7 +64,7 @@ export function pinTextPlacements(pin: { name: string | null; number: string }, 
   const nameInside = texts.nameOffsetNm > 0;
   // the number goes under the line (right of a vertical pin) when the name is over it
   const both = showName && !nameInside;
-  const off = PIN_TEXT_CLEARANCE_NM + sizeNm / 2 + PIN_TEXT_PEN_NM;
+  const off = pinTextClearanceNm() + sizeNm / 2 + PIN_TEXT_PEN_NM;
 
   let nameAt: PinTextPlacement | null = null;
   if (showName) {

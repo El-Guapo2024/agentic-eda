@@ -54,6 +54,8 @@ export function useGlobalHotkeys() {
     // (F1, which off macOS is zoomIn's); Insert is the real non-Mac default (macOS keeps F1 from the table).
     add("Insert", "eeschema.InteractiveEdit.repeatDrawItem");
     add("Ctrl+G", "common.Interactive.group");
+    // KiCad 25ec2335's `ACTIONS::cycleArcDrawMode` (`MD_ALT + '/'`), newer than the extracted table: the schematic's Draw Arc modes (kicad-port/schArcDraw.ts, UI-LEFT-2 SS3).
+    add("Alt+/", "common.InteractiveDrawing.cycleArcDrawMode");
     // (Ctrl+Shift+G is `ACTIONS::toggleGridOverrides` in KiCad's table and, wired now, in this one; KiCad leaves Ungroup without a key -- it stays on the toolbar
     // and in the context menu.)
     return idx;
