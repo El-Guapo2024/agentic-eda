@@ -6,7 +6,7 @@
 // dialog needs no HTML. This is KiCad's own symbol check, run on the symbol in the editor -- not a copy of an ERC or DRC engine.
 import type { LibrarySymbol, LibrarySymbolPin } from "../api/types";
 import { expandStackedPinNotation } from "./stackedPins";
-import { unitLetter } from "./unitLetter";
+import { bodyStyleDescription, isMultiBodyStyle, unitDisplayName } from "./symBodyStyles";
 
 /** One piece of a message: plain text, or one of the bold facts. */
 export interface CheckPart {
@@ -37,14 +37,14 @@ function comparePins(a: LibrarySymbolPin, c: LibrarySymbolPin): number {
   return cmp(a.number, c.number) || a.body_style - c.body_style || a.unit - c.unit;
 }
 
-/** `LIB_SYMBOL::GetBodyStyleDescription( style, true ).Lower()` for the two styles a symbol with a DeMorgan alternate has. */
-function bodyStyleName(style: number): string {
-  return style === 2 ? "alternate" : style === 1 ? "standard" : "?";
+/** `GetBodyStyleDescription( style, true ).Lower()`: "standard" / "alternate" of a De Morgan symbol, a custom style's name in lower case. */
+function bodyStyleName(symbol: LibrarySymbol, style: number): string {
+  return bodyStyleDescription(symbol, style).toLowerCase();
 }
 
-/** `LIB_SYMBOL::GetUnitDisplayName( unit, false )`: the unit's letter (the IR keeps no custom unit names). */
-function unitName(unit: number): string {
-  return unitLetter(unit);
+/** `LIB_SYMBOL::GetUnitDisplayName( unit, false )`: the unit's display name, else its letters (r7 E7-S16). */
+function unitName(symbol: LibrarySymbol, unit: number): string {
+  return unitDisplayName(symbol, unit, false);
 }
 
 interface LogicalPin {
@@ -55,7 +55,7 @@ interface LogicalPin {
 /** `CheckDuplicatePins`. */
 export function checkDuplicatePins(symbol: LibrarySymbol, fmt: LengthFormatter): CheckMessage[] {
   const out: CheckMessage[] = [];
-  const multiBody = symbol.has_alternate_body_style;
+  const multiBody = isMultiBodyStyle(symbol);
   const logical: LogicalPin[] = [];
   for (const pin of symbol.pins) {
     const { numbers, valid } = expandStackedPinNotation(pin.number);
@@ -84,10 +84,10 @@ export function checkDuplicatePins(symbol: LibrarySymbol, fmt: LengthFormatter):
         ...head,
         t(`${shown(prev)}${prevName} at location `),
         b(at(prev.pin)),
-        t(eitherUnitless ? ` in ${bodyStyleName(prev.pin.body_style)} body style.` : ` in units ${unitName(next.pin.unit)} and ${unitName(prev.pin.unit)} of ${bodyStyleName(prev.pin.body_style)} body style.`),
+        t(eitherUnitless ? ` in ${bodyStyleName(symbol, prev.pin.body_style)} body style.` : ` in units ${unitName(symbol, next.pin.unit)} and ${unitName(symbol, prev.pin.unit)} of ${bodyStyleName(symbol, prev.pin.body_style)} body style.`),
       ]);
     } else {
-      out.push([...head, t(`${shown(prev)}${quoted(prev.pin)} at location `), b(at(prev.pin)), t(eitherUnitless ? "." : ` in units ${unitName(next.pin.unit)} and ${unitName(prev.pin.unit)}.`)]);
+      out.push([...head, t(`${shown(prev)}${quoted(prev.pin)} at location `), b(at(prev.pin)), t(eitherUnitless ? "." : ` in units ${unitName(symbol, next.pin.unit)} and ${unitName(symbol, prev.pin.unit)}.`)]);
     }
   }
   return out;
@@ -128,7 +128,7 @@ export function checkLibSymbol(symbol: LibrarySymbol, gridIu: number, fmt: Lengt
 
   const pinList = [...symbol.pins].sort(comparePins);
   const clamped = gridIu < MIN_PIN_GRID_IU ? MIN_PIN_GRID_IU : gridIu;
-  const multiBody = symbol.has_alternate_body_style;
+  const multiBody = isMultiBodyStyle(symbol);
   const where = (pin: LibrarySymbolPin) => `(${fmt(pin.at.x)}, ${fmt(pin.at.y)})`;
 
   // A valid power symbol has one unit, no alternate body style and one pin, which is a power input (hidden pins are no longer needed) or a power output (a flag).
@@ -153,7 +153,7 @@ export function checkLibSymbol(symbol: LibrarySymbol, gridIu: number, fmt: Lengt
     // one -- the two messages differ there), by unit for a multi-unit symbol, nothing for a plain one.
     const suffix = (bodyWord: "in" | "of"): string => {
       if (multiBody && pin.body_style !== 0) {
-        return symbol.unit_count <= 1 ? ` ${bodyWord} ${bodyStyleName(pin.body_style)} body style.` : ` in unit ${unitLetterOf} of ${bodyStyleName(pin.body_style)} body style.`;
+        return symbol.unit_count <= 1 ? ` ${bodyWord} ${bodyStyleName(symbol, pin.body_style)} body style.` : ` in unit ${unitLetterOf} of ${bodyStyleName(symbol, pin.body_style)} body style.`;
       }
       return symbol.unit_count <= 1 ? "." : ` in unit ${unitLetterOf}.`;
     };

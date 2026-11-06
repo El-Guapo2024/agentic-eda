@@ -9,6 +9,7 @@ import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { useGridSettings } from "../../state/gridSettings";
 import { useStudioState } from "../../state/store";
 import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
+import { bodyStyleSelectorEntries, isMultiBodyStyle, unitDisplayName } from "../../kicad-port/symBodyStyles";
 import { formatLength } from "../../state/units";
 
 /** The Footprint Editor's layer box: every layer a footprint item can be on (kicad-port/fpDrawDefaults.ts). */
@@ -108,11 +109,6 @@ export function FootprintToolbarControl({ control }: { control: string }) {
   return null;
 }
 
-/** `SYMBOL::SubReference`: unit 1 is "A", 2 is "B", ... (`Unit A` in KiCad's unit box). */
-function unitLetter(unit: number): string {
-  return unit >= 1 && unit <= 26 ? String.fromCharCode(64 + unit) : String(unit);
-}
-
 export function SymbolToolbarControl({ control }: { control: string }) {
   const state = useSymState();
   const dispatch = useSymDispatch();
@@ -122,9 +118,10 @@ export function SymbolToolbarControl({ control }: { control: string }) {
     return (
       <div className="toolbar-control" title="Which unit new pins and graphics are placed on">
         <select value={state.activeUnit} onChange={(e) => dispatch({ type: "SET_ACTIVE_UNIT", unit: Number(e.target.value) })} disabled={!sym}>
+          {/* `RebuildSymbolUnitAndBodyStyleLists`: `GetUnitDisplayName( i + 1, true )`, the unit's display name or "Unit A" */}
           {units.map((u) => (
             <option key={u} value={u}>
-              {`Unit ${unitLetter(u)}`}
+              {unitDisplayName(sym, u)}
             </option>
           ))}
         </select>
@@ -133,10 +130,14 @@ export function SymbolToolbarControl({ control }: { control: string }) {
   }
   if (control === "bodyStyleSelector") {
     return (
-      <div className="toolbar-control" title="Which body style (De Morgan) new pins and graphics are placed on">
-        <select value={state.activeBodyStyle} onChange={(e) => dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: Number(e.target.value) })} disabled={!sym?.has_alternate_body_style}>
-          <option value={1}>Standard</option>
-          <option value={2}>Alternate</option>
+      <div className="toolbar-control" title="Which body style new pins and graphics are placed on">
+        {/* `RebuildSymbolUnitAndBodyStyleLists`: an empty entry for one body style, "Standard" and "Alternate" of a De Morgan symbol, else the custom names */}
+        <select value={state.activeBodyStyle} onChange={(e) => dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: Number(e.target.value) })} disabled={!isMultiBodyStyle(sym)} data-testid="sym-body-style-select">
+          {bodyStyleSelectorEntries(sym).map((label, i) => (
+            <option key={i} value={i + 1}>
+              {label}
+            </option>
+          ))}
         </select>
       </div>
     );

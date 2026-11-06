@@ -2,6 +2,10 @@
 // uses it for `eeschema.SymbolDrawing.placeSymbolText`, and `SYMBOL_EDITOR_EDIT_TOOL::editTextProperties` for a text that is there: UI-LEFT Y4).
 import type { FieldHAlign, FieldVAlign, LibrarySymbolGraphic } from "../api/types";
 import { defaultPenNm, textOrigin } from "./schText";
+import { isMultiBodyStyle, type BodyStyled } from "./symBodyStyles";
+import type { SchColor } from "../api/schEditTypes";
+import { chosenFont, DEFAULT_FONT } from "./textLooks";
+import { isUnspecified } from "./schProperties";
 
 /** `cfg->m_Defaults.text_size` = `DEFAULT_TEXT_SIZE` (eeschema/default_values.h): 50 mil. */
 export const DEFAULT_SYMBOL_TEXT_SIZE_MM = 1.27;
@@ -25,8 +29,14 @@ export function textAngleDeg(vertical: boolean): number {
 /** A symbol's text (`SCH_TEXT` on `LAYER_DEVICE`), as the dialog reads and writes it. */
 export type LibText = Extract<LibrarySymbolGraphic, { kind: "text" }>;
 
-/** What `DIALOG_TEXT_PROPERTIES` shows for a symbol's text (the font, the colour, the hyperlink and "Private to symbol editor" are not part of a library text here). */
+/** What `DIALOG_TEXT_PROPERTIES` shows for a symbol's text (the hyperlink is the schematic's only: `m_hyperlinkCb->Hide()` in the symbol editor). */
 export interface TextForm {
+  /** "Private to symbol editor" (`m_privateCheckbox`, `IsPrivate`). */
+  private: boolean;
+  /** The Font choice (`m_fontCtrl`): "Default Font", "KiCad Font" or a family, as kicad-port/textLooks.ts names them. */
+  font: string;
+  /** The text colour swatch (`m_textColorSwatch`); `null` is its "Default", `COLOR4D::UNSPECIFIED`. */
+  color: SchColor | null;
   text: string;
   /** Text size, mm, as typed. */
   size: string;
@@ -43,8 +53,11 @@ export interface TextForm {
 
 /** `DIALOG_TEXT_PROPERTIES::TransferDataToWindow` for a symbol's text: its text, size, bold, italic, the justification buttons (left/centre/right, top/centre/bottom),
  *  Horizontal or Vertical (`GetTextAngle() == ANGLE_VERTICAL`), and the two "Common to all ..." boxes. */
-export function textFormOf(t: LibText, symbol: { unit_count: number; has_alternate_body_style: boolean }): TextForm {
+export function textFormOf(t: LibText, symbol: { unit_count: number } & BodyStyled): TextForm {
   return {
+    private: !!t.private,
+    font: t.font || DEFAULT_FONT,
+    color: t.text_color ?? null,
     text: t.text,
     size: String(t.size_mm),
     bold: !!t.bold,
@@ -53,7 +66,7 @@ export function textFormOf(t: LibText, symbol: { unit_count: number; has_alterna
     v: t.v_align ?? "center",
     vertical: Math.abs(t.angle_deg % 180) === 90,
     commonUnits: symbol.unit_count > 1 && t.unit === 0,
-    commonStyles: symbol.has_alternate_body_style && t.body_style === 0,
+    commonStyles: isMultiBodyStyle(symbol) && t.body_style === 0,
   };
 }
 
@@ -69,7 +82,7 @@ export function textFromForm(prev: LibText, form: TextForm, unit: number, bodySt
   return {
     ok: true,
     text: {
-      ...prev,
+      ...withoutLooks(prev),
       text: form.text,
       size_mm: sizeMm,
       bold: form.bold,
@@ -79,8 +92,27 @@ export function textFromForm(prev: LibText, form: TextForm, unit: number, bodySt
       angle_deg: textAngleDeg(form.vertical),
       unit: form.commonUnits ? 0 : unit,
       body_style: form.commonStyles ? 0 : bodyStyle,
+      ...looksFromForm(prev, form),
     },
   };
+}
+
+/**
+ * The looks `TransferDataFromWindow` sets of a text and a text box of a symbol: `SetPrivate( m_privateCheckbox->GetValue() )`, `SetFont` only when the choice
+ * gives a font (`HaveFontSelection`: a font that was not found keeps the text's own; "Default Font" is none), `SetTextColor( m_textColorSwatch->GetSwatchColor() )`.
+ */
+export function looksFromForm(prev: { font?: string | null }, form: Pick<TextForm, "private" | "font" | "color">): { private?: boolean; font?: string; text_color?: SchColor } {
+  const chosen = chosenFont(form.font);
+  const font = chosen === undefined ? prev.font ?? null : chosen === "" ? null : chosen;
+  const color = form.color && !isUnspecified(form.color) ? form.color : null;
+  // what is off is left out, as the server writes it
+  return { ...(form.private ? { private: true } : {}), ...(font ? { font } : {}), ...(color ? { text_color: color } : {}) };
+}
+
+/** An item without the looks [`looksFromForm`] gives, so that what the dialog turned off is gone. */
+export function withoutLooks<T extends { private?: boolean; font?: string | null; text_color?: SchColor | null }>(item: T): Omit<T, "private" | "font" | "text_color"> {
+  const { private: _private, font: _font, text_color: _color, ...rest } = item;
+  return rest;
 }
 
 /**

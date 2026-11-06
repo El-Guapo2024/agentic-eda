@@ -11,6 +11,7 @@ import { drawPaper, drawSchematicDrawingSheet, pageOf } from "../components/sche
 import { schematicSheetPage } from "../components/drawingSheet/sheetInfo";
 import { paintSchematic } from "../components/schematic/painter";
 import { DEFAULT_SCH_DISPLAY } from "../components/schematic/displayOptions";
+import { isMultiBodyStyle } from "../kicad-port/symBodyStyles";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -108,7 +109,7 @@ export async function exportSymbolSvg(ctx: SchControlContext): Promise<void> {
     const r = await postSymbolSvg({
       lib_id: symbol.lib_id,
       unit: Math.max(st.activeUnit, 1),
-      body_style: symbol.has_alternate_body_style && st.activeBodyStyle === 2 ? 2 : 1,
+      body_style: isMultiBodyStyle(symbol) ? Math.max(1, st.activeBodyStyle) : 1,
       theme: SYMBOL_EDITOR_THEME,
       include_hidden_pins: true,
       include_hidden_fields: true,
