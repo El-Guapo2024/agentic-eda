@@ -409,6 +409,10 @@ the studio's port is the same module (`kicad-port/eePointEdit.ts`, PARITY-sch se
 
 Tests: `kicad-port/symPointEdit.test.ts` (the conversion both ways, `dragPinsOnEdge` with and without the setting, a corner's drag, the circle, polyline and arc, the Symbol Editor's own arc mode), `eePointEdit.test.ts`; browser: `e2e/handles-v1.check.js` (the rectangle's side taking the pin along and its corner not, a circle's radius, a polyline's vertex and Create Corner from the context menu, an arc's end, one undo step each).
 
+## The colour theme (UI-LEFT-2 SS9; 2026-11-07, `task-v2-prefs`)
+
+The Symbol Editor draws in the schematic editor's theme while Preferences > Symbol Editor > Colors says "Use schematic editor color theme" (the default, `SYMBOL_EDITOR_SETTINGS::m_UseEeschemaColorSettings`), else in the theme chosen under "Use theme:" (`m_ColorTheme`), as `SYMBOL_EDIT_FRAME::GetColorSettings` picks it (KiCad 8303b2ad `eeschema/dialogs/panel_sym_color_settings.cpp`); its swatches are edited on Schematic Editor > Colors (PARITY-sch section 71), whose "Axes (symbol editor only)" row is the Symbol Editor's. Every item of the symbol is drawn in it, its own colours too unless the theme overrides them. **Differs**: the canvas keeps the studio's dark `#1a1a1a` background (KiCad: the theme's `LAYER_SCHEMATIC_BACKGROUND`), and the grid, the anchor and the snap guides keep the board's colours. Browser: `e2e/sch-color-theme.check.js` (the outlines in the schematic's theme, gone with "Use theme:" KiCad Default, back with the schematic's).
+
 ## Differs from KiCad
 
 - ~~**Where a pin is placed.**~~ Since 2026-11-05 the Pin tool is KiCad's `TwoClickPlace`: the click opens Pin Properties, the pin then
