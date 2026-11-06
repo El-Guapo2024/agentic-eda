@@ -17,6 +17,24 @@ import { applyExtrusionTransform, bodyDrawn, bodyMaterial3d, bodyZRange, pinMate
 import { glShininess, type Material3d, type Rgb } from "../../kicad-port/material3d";
 import type { Stack } from "../../kicad-port/model3d";
 
+/** What was drawn for each part's body, for the test hook `window.__edaExtrudedBodies` (a browser check reads it; a part's entry goes with its meshes). */
+export interface DrawnBody {
+  /** The heights, scene millimetres (`zBot`, `zTop`), and the box of the outline drawn, board millimetres. */
+  low: number;
+  high: number;
+  box: [number, number, number, number];
+  pins: boolean;
+  material: string;
+  color: string;
+}
+const drawn = new Map<string, DrawnBody>();
+declare global {
+  interface Window {
+    __edaExtrudedBodies?: Map<string, DrawnBody>;
+  }
+}
+if (typeof window !== "undefined") window.__edaExtrudedBodies = drawn;
+
 export interface BuiltBody {
   object: THREE.Group;
   /** What was made here and is to be disposed with the part. */
@@ -100,7 +118,8 @@ export function buildExtrudedBody(part: Part, stack: Stack): BuiltBody | null {
   const [low, high] = bodyZRange(body, stack, bottom);
   const material = kicadMaterial(bodyMaterial3d(body.material, body.color));
   owned.push(material);
-  const solid = slab(applyExtrusionTransform(body.outline, body, body.at), low, high, material, "extruded-body-solid");
+  const outline = applyExtrusionTransform(body.outline, body, body.at);
+  const solid = slab(outline, low, high, material, "extruded-body-solid");
   if (solid) {
     group.add(solid);
     owned.push(solid.geometry);
@@ -120,6 +139,11 @@ export function buildExtrudedBody(part: Part, stack: Stack): BuiltBody | null {
     for (const o of owned) o.dispose();
     return null;
   }
-  group.userData.extrudedBody = { low, high };
+  const xs = outline.flatMap((p) => p[0] ?? []).map((q) => q[0] / 1e6);
+  const ys = outline.flatMap((p) => p[0] ?? []).map((q) => q[1] / 1e6);
+  const info: DrawnBody = { low, high, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], pins: group.children.length > 1, material: body.material, color: `#${material.color.getHexString(THREE.SRGBColorSpace)}` };
+  drawn.set(part.ref, info);
+  owned.push({ dispose: () => drawn.get(part.ref) === info && drawn.delete(part.ref) });
+  group.userData.extrudedBody = info;
   return { object: group, owned };
 }
