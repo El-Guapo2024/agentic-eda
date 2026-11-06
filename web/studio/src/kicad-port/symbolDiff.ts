@@ -27,6 +27,7 @@ import { messageTextFromValue } from "./messageText";
 import { ELECTRICAL_TYPE_NAMES } from "./symPinText";
 import { PIN_SHAPE_OPTIONS } from "./symPinAlternates";
 import { allFields } from "./symFields";
+import { libBezierPointsNm } from "./itemBoxes";
 
 /** The schematic's side: the resolved library symbol, with what the server may add of its options. */
 export type SchematicLibSymbol = LibSymbol & { power?: boolean; power_local?: boolean; keywords?: string; footprint_filters?: string[] };
@@ -134,6 +135,11 @@ function shapeOfLibrary(g: LibrarySymbolGraphic): Shape | null {
     }
     case "arc":
       return { ...base, type: 2, start: iu(g.start.x, g.start.y), end: iu(g.end.x, g.end.y), mid: iu(g.mid.x, g.mid.y), width: iuLen(g.stroke_mm), fill: g.fill };
+    // the schematic's side draws a library bezier as the polyline it is cut into (`LibrarySymbolGraphic::to_engine_graphics`), so that is what it is compared as
+    case "bezier": {
+      const pts = libBezierPointsNm(g).map(([x, y]) => [Math.round(x / NM_PER_IU), Math.round(y / NM_PER_IU)] as [number, number]);
+      return { ...base, type: 4, start: [0, 0], end: [0, 0], pts, width: iuLen(g.stroke_mm), fill: g.fill };
+    }
     case "text":
     case "text_box":
       return null;

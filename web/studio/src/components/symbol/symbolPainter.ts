@@ -32,9 +32,13 @@ import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/sy
 import { DEFAULT_PIN_TEXTS, PIN_TEXT_SIZE_NM, shownPinName, type PinTexts } from "../schematic/pinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
 import { boxOfTextBox, layoutLibTextBox, type LibTextBox } from "../../kicad-port/symTextBox";
+import { bezierFromClicks } from "../../kicad-port/symBezier";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
-export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "textbox";
+export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox";
+
+/** Half the side of an edit point's square, screen pixels (`EDIT_POINT::POINT_SIZE` is 10). */
+export const POINT_EDIT_HALF_PX = 5;
 
 /** Half the cap height, the shift that centres stroke text on its line (`MIDDLE_OFFSET_FACTOR` of `components/schematic/painter.ts`). */
 const MIDDLE_OFFSET_FACTOR = 0.35;
@@ -48,7 +52,7 @@ export function toLibPin(p: LibrarySymbolPin): LibPin {
 }
 
 /** A `LibrarySymbolGraphic` resolved to internal (µm, Y-down) space via the exact same `resolveLibPoint` pipeline a placed instance's own graphics go through. */
-function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" }>): ResolvedGraphic {
+function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" | "text" }>): ResolvedGraphic {
   const pt = (p: { x: number; y: number }) => resolveLibPoint([p.x, p.y], IDENTITY, [0, 0]);
   switch (g.kind) {
     case "rectangle":
@@ -59,9 +63,25 @@ function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" }>):
       return { kind: "circle", center: pt(g.center), radiusNm: g.radius_mm * 1e6, strokeWidthNm: g.stroke_mm * 1e6, fill: g.fill };
     case "arc":
       return { kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthNm: g.stroke_mm * 1e6, fill: g.fill };
-    case "text":
-      return { kind: "text", content: g.text, at: pt(g.at), angleDeg: g.angle_deg, sizeNm: g.size_mm * 1e6 };
+    case "bezier":
+      return { kind: "bezier", start: pt(g.start), c1: pt(g.c1), c2: pt(g.c2), end: pt(g.end), strokeWidthNm: g.stroke_mm * 1e6, fill: g.fill };
   }
+}
+
+/**
+ * `SCH_PAINTER::draw( SCH_TEXT )` of a symbol's text: at its size, bold with a fifth of the size for a pen (`GetPenSizeForBold`), italic leaning, justified against its anchor in
+ * its own axes (centred on both unless it says otherwise), a text at 90 degrees running up the sheet -- as a field of the symbol is drawn (`drawField`).
+ */
+export function drawLibText(ctx: CanvasRenderingContext2D, g: Pick<Extract<LibrarySymbolGraphic, { kind: "text" }>, "text" | "at" | "angle_deg" | "size_mm" | "bold" | "italic" | "h_align" | "v_align">, color: string, atNm?: [number, number]) {
+  const sizeNm = g.size_mm * 1e6;
+  const thickness = g.bold ? Math.round(sizeNm / 5) : defaultPenNm(sizeNm);
+  const [x, y] = atNm ?? mmPointToNm(g.at);
+  const [dx, dy] = textOrigin(measureStrokeText(g.text, sizeNm), sizeNm, thickness, g.h_align ?? "center", g.v_align ?? "center");
+  ctx.save();
+  ctx.translate(x, y);
+  if (Math.abs(g.angle_deg % 180) === 90) ctx.rotate(-Math.PI / 2);
+  drawStrokeText(ctx, g.text, dx, dy, { sizeNm, thicknessNm: thickness, justify: "left", color, italic: !!g.italic });
+  ctx.restore();
 }
 
 /** Internal-space (µm) point for one `LibrarySymbolGraphic`/`LibrarySymbolPin`'s own anchor -- used only by the canvas's hit-testing/move-preview, not by this file's own drawing (which goes through `resolveGraphic`/`resolvePin` above instead). */
@@ -143,6 +163,21 @@ function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, color: str
 /** Rubber-band preview for the graphics tool currently in progress -- points already internal-space (µm), same convention the Footprint/PCB editors' own `drawInProgress` uses. */
 function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: SymShapeKind; pts: [number, number][] } | null, cursorNm: { x: number; y: number } | null) {
   if (!draw) return;
+  if (draw.shapeKind === "bezier") {
+    // `CalcEdit( cursorPos )` of the bezier's edit state, as `AddToPreview( item->Clone() )` shows it
+    const b = bezierFromClicks(draw.pts, cursorNm ? [cursorNm.x, cursorNm.y] : null);
+    if (!b) return;
+    ctx.save();
+    ctx.strokeStyle = layerColor("selection");
+    ctx.lineWidth = hairlineNm(view, 1.5);
+    ctx.setLineDash([hairlineNm(view, 4), hairlineNm(view, 3)]);
+    ctx.beginPath();
+    ctx.moveTo(b.start[0], b.start[1]);
+    ctx.bezierCurveTo(b.c1[0], b.c1[1], b.c2[0], b.c2[1], b.end[0], b.end[1]);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   // The floating vertex of a poly shape (`EDA_SHAPE::calcEdit`) follows the cursor.
   const pts = polyPreview(draw.pts, cursorNm ? [cursorNm.x, cursorNm.y] : null);
   if (pts.length < 2) return;
@@ -191,8 +226,12 @@ export interface SymPaintOptions {
   showPinNumbers: boolean;
   /** `m_ShowPinAltIcons`: the icon beside the name of a pin that has alternate functions. */
   showPinAltIcons?: boolean;
-  /** The Text tool's text between its dialog and the placing click: it follows the cursor (`SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace`). */
-  pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
+  /** What the cursor carries until a click places it -- the Pin tool's pin and the Text tool's text after their dialogs, the items of Paste and Duplicate -- where they are now
+   * (kicad-port/symCarry.ts `carriedItems`): drawn as the selection, over the symbol (`m_view->AddToPreview( item )`). */
+  carried?: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null;
+  /** The point editor (`SCH_POINT_EDITOR`) on the one selected shape: its edit points and indicator lines (internal nm), and the shape as a drag of one point has it so far
+   * (`replace`, drawn in place of the symbol's). */
+  pointEditor?: { points: [number, number][]; lines: [[number, number], [number, number]][]; replace?: LibrarySymbolGraphic } | null;
   /** The symbol's fields that are on show (kicad-port/symFieldLayout.ts `fieldsOnShow`: the ones with a text, the hidden ones only while Show Hidden Fields is on). */
   fields?: SchField[];
 }
@@ -254,17 +293,22 @@ export function paintSymbol(
   const moved = (id: string | undefined) => (id && opts.movePreview?.refs.includes(id) ? opts.movePreview : null);
   const strokeColor = layerColor("LAYER_DEVICE");
 
-  for (const g of symbol.graphics) {
+  const drawGraphic = (g: LibrarySymbolGraphic, color: string) => {
+    // `drawRealGraphic` strokes with whatever `strokeStyle` is current (a placed symbol's painter sets it first); left alone it is the canvas default, black.
+    ctx.strokeStyle = color;
+    if (g.kind === "text_box") drawLibTextBox(ctx, g, color);
+    else if (g.kind === "text") drawLibText(ctx, g, color);
+    else drawRealGraphic(ctx, resolveGraphic(g), color);
+  };
+  const replace = opts.pointEditor?.replace;
+  for (const stored of symbol.graphics) {
+    const g = replace && replace.id === stored.id ? replace : stored;
     if (!visibleHere(g.unit, g.body_style, opts.activeUnit, opts.activeBodyStyle)) continue;
     const mv = moved(g.id);
     ctx.save();
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     const selected = opts.selection.has(g.id ?? "");
-    const color = selected ? layerColor("selection") : strokeColor;
-    // `drawRealGraphic` strokes with whatever `strokeStyle` is current (a placed symbol's painter sets it first); left alone it is the canvas default, black.
-    ctx.strokeStyle = color;
-    if (g.kind === "text_box") drawLibTextBox(ctx, g, color);
-    else drawRealGraphic(ctx, resolveGraphic(g), color);
+    drawGraphic(g, selected ? layerColor("selection") : strokeColor);
     ctx.restore();
   }
 
@@ -272,15 +316,8 @@ export function paintSymbol(
   // `(pin_names (offset x))`: the names are inside the body from `x` on, over the pin line when it is zero (`GetPinNameInfo`)
   const texts: PinTexts = { ...DEFAULT_PIN_TEXTS, nameOffsetNm: symbol.pin_name_offset_mm === undefined ? DEFAULT_PIN_TEXTS.nameOffsetNm : symbol.pin_name_offset_mm * 1e6 };
   const hiddenColor = layerColor("LAYER_HIDDEN");
-  for (const p of symbol.pins) {
-    // `SCH_PAINTER::draw( SCH_PIN )`: a pin marked invisible is drawn only while hidden pins are shown, and then in the hidden colour
-    // (the symbol editor starts with them shown, `show_hidden_lib_pins`).
-    if (!pinShown(p.hidden, opts.showHiddenPins) || !visibleHere(p.unit, p.body_style, opts.activeUnit, opts.activeBodyStyle)) continue;
-    const mv = moved(p.id);
-    ctx.save();
-    if (mv) ctx.translate(mv.dxNm, mv.dyNm);
+  const drawPin = (p: LibrarySymbolPin, selected: boolean) => {
     const rp = resolvePin(toLibPin(p), IDENTITY, [0, 0]);
-    const selected = opts.selection.has(p.id ?? "");
     ctx.beginPath();
     ctx.strokeStyle = selected ? layerColor("selection") : p.hidden ? hiddenColor : layerColor("LAYER_PIN");
     ctx.lineWidth = Math.max(152.4, hairlineNm(view, 1));
@@ -302,6 +339,15 @@ export function paintSymbol(
       if (l.vertical) drawStrokeText(ctx, l.text, l.at[0] + shift, l.at[1], { sizeNm: l.sizeNm, thicknessNm: l.thicknessNm, angleRad: -Math.PI / 2, justify: l.justify, color });
       else drawStrokeText(ctx, l.text, l.at[0], l.at[1] + shift, { sizeNm: l.sizeNm, thicknessNm: l.thicknessNm, justify: l.justify, color });
     }
+  };
+  for (const p of symbol.pins) {
+    // `SCH_PAINTER::draw( SCH_PIN )`: a pin marked invisible is drawn only while hidden pins are shown, and then in the hidden colour
+    // (the symbol editor starts with them shown, `show_hidden_lib_pins`).
+    if (!pinShown(p.hidden, opts.showHiddenPins) || !visibleHere(p.unit, p.body_style, opts.activeUnit, opts.activeBodyStyle)) continue;
+    const mv = moved(p.id);
+    ctx.save();
+    if (mv) ctx.translate(mv.dxNm, mv.dyNm);
+    drawPin(p, opts.selection.has(p.id ?? ""));
     ctx.restore();
   }
 
@@ -316,9 +362,39 @@ export function paintSymbol(
 
   drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorNm);
-  if (opts.pendingText && opts.cursorNm) {
-    // (the canvas hands over the cursor its grid helper gave -- on the text grid, or an anchor -- while the Text tool runs)
-    const [x, y] = [opts.cursorNm.x, opts.cursorNm.y];
-    drawRealGraphic(ctx, { kind: "text", content: opts.pendingText.text, at: [x, y], angleDeg: opts.pendingText.angleDeg, sizeNm: opts.pendingText.sizeMm * 1e6 }, layerColor("selection"));
+  // `EDIT_POINTS_PAINTER`: the indicator lines, then a square at each edit point
+  if (opts.pointEditor) {
+    ctx.save();
+    ctx.strokeStyle = layerColor("selection");
+    ctx.lineWidth = hairlineNm(view, 1);
+    ctx.setLineDash([hairlineNm(view, 3), hairlineNm(view, 3)]);
+    ctx.beginPath();
+    for (const [a, b] of opts.pointEditor.lines) {
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const half = hairlineNm(view, POINT_EDIT_HALF_PX);
+    ctx.fillStyle = "#1a1a1a";
+    for (const [x, y] of opts.pointEditor.points) {
+      ctx.fillRect(x - half, y - half, 2 * half, 2 * half);
+      ctx.strokeRect(x - half, y - half, 2 * half, 2 * half);
+    }
+    ctx.restore();
+  }
+
+  // what the cursor carries, where it is now, as the selection (`AddToPreview`)
+  if (opts.carried) {
+    for (const g of opts.carried.graphics) {
+      ctx.save();
+      drawGraphic(g, layerColor("selection"));
+      ctx.restore();
+    }
+    for (const p of opts.carried.pins) {
+      ctx.save();
+      drawPin(p, true);
+      ctx.restore();
+    }
   }
 }

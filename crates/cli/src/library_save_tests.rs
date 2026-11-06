@@ -287,3 +287,64 @@ fn a_library_footprint_whose_file_cannot_be_parsed_is_not_opened_blank() {
     crate::board::step(&dir, Cmd::OpenFootprintForEdit { name: "Mine:Fresh".into() }, false, "ui").unwrap();
     assert!(design_footprint(&dir, "Mine:Fresh").is_some_and(|f| f.pads.is_empty() && f.graphics.is_empty()));
 }
+
+/// The Symbol Editor's open has the Footprint Editor's race (`a_footprint_whose_design_copy_goes_..`): it reads (`GET /api/library/symbol`: the design's copy,
+/// else the file's, which it puts in), reads the project's names, and opens (`open_symbol_for_edit`), in requests of their own. The interleaving, forced: the
+/// design's copy goes between the read and the open, and the open -- which used to read no library and start a blank `Mine:Zeta` that then stood in for the
+/// file -- reads the file itself in the same step (`library_place::with_opened_symbol`).
+#[test]
+fn a_symbol_whose_design_copy_goes_between_the_editors_read_and_its_open_opens_from_its_file() {
+    let dir = board_with_symbol_library("libsave_sym_reopen_race");
+    let (sym, in_project) = crate::library_api::symbol_any(&dir, "Mine:Zeta").unwrap();
+    assert!(!in_project);
+    put(&dir, &sym);
+    assert!(items(&modified(&dir, "symbol")).is_empty(), "the copy the editor put in is the file's");
+    // the editor looks: the design's copy is there, so it puts nothing in ...
+    assert!(crate::library_api::symbol_any(&dir, "Mine:Zeta").unwrap().1, "in the project");
+    // ... another client forgets the design's copy ...
+    crate::board::step(&dir, Cmd::DeleteLibrarySymbol { lib_id: "Mine:Zeta".into() }, false, "check").unwrap();
+    // ... and the editor's open lands
+    crate::board::step(&dir, Cmd::OpenSymbolForEdit { lib_id: "Mine:Zeta".into() }, false, "ui").unwrap();
+    let opened = in_design(&dir, "Mine:Zeta");
+    assert_eq!((opened.pins.len(), opened.pins.first().map(|p| p.name.as_str()), opened.description.as_str()), (1, Some("A"), "the root"), "the file's symbol, not a blank one");
+    assert!(items(&modified(&dir, "symbol")).is_empty(), "and not modified: the design's copy is the file's");
+    // one undo step, as the editor's own put is: undone, the design has no copy again
+    crate::board::undo(&dir, "ui", None).unwrap();
+    let (_, design, _) = board::load(&dir).unwrap();
+    assert!(design.symbol_library.as_ref().and_then(|l| l.by_lib_id("Mine:Zeta")).is_none(), "undone: the copy the open put in is gone");
+}
+
+/// A library symbol whose text is there and cannot be read is not "no symbol with this lib_id" (for which the editor starts a blank one): the read says why
+/// and the open is refused -- `SYMBOL_EDIT_FRAME::LoadSymbol`: "Error loading symbol %s from library '%s'.", the editor as it was. A truncated `.kicad_sym`, and a
+/// folder library's `Name.kicad_sym` that does not parse (the folder reader skips it); an id no library has is still KiCad's New Symbol, a blank one.
+#[test]
+fn a_library_symbol_whose_text_cannot_be_read_is_not_opened_blank() {
+    let dir = board_with_symbol_library("libsave_sym_reopen_broken");
+    let lacks = |id: &str| board::load(&dir).unwrap().1.symbol_library.as_ref().and_then(|l| l.by_lib_id(id)).is_none();
+    // a file whose symbol is cut off
+    let file = dir.join("libs").join("Bad.kicad_sym");
+    std::fs::write(&file, "(kicad_symbol_lib (version 20251024) (generator \"kicad_symbol_editor\")\n\t(symbol \"Broken\" (property \"Reference\" \"U\" (at 0 0 0))\n\t\t(symbol \"Broken_1_1\" (pin input line").unwrap();
+    let added = library_tables::add_library(&dir, br#"{"kind":"symbol","path":"${KIPRJMOD}/libs/Bad.kicad_sym"}"#);
+    assert_eq!(added["ok"], true, "{added}");
+    let why = crate::board::reasons(&crate::library_api::symbol_any(&dir, "Bad:Broken").unwrap_err());
+    assert!(why.contains(&file.display().to_string()) && !why.contains("no symbol with this lib_id"), "{why}");
+    let refused = crate::board::step(&dir, Cmd::OpenSymbolForEdit { lib_id: "Bad:Broken".into() }, false, "ui").unwrap_err();
+    assert!(crate::board::reasons(&refused).contains(&file.display().to_string()), "{}", crate::board::reasons(&refused));
+    assert!(lacks("Bad:Broken"), "nothing opened");
+    // a folder library with one good and one unparseable symbol file
+    let folder = dir.join("libs").join("Fold.kicad_symdir");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("Good.kicad_sym"), "(kicad_symbol_lib (version 20251024) (generator \"kicad_symbol_editor\")\n\t(symbol \"Good\" (property \"Reference\" \"U\" (at 0 0 0)) (symbol \"Good_1_1\" (pin input line (at 0 0 0) (length 2.54) (name \"G\") (number \"1\"))))\n)\n").unwrap();
+    std::fs::write(folder.join("Torn.kicad_sym"), "(kicad_symbol_lib (version 20251024) (symbol \"Torn\" (symbol \"Torn_1_1\"").unwrap();
+    let added = library_tables::add_library(&dir, br#"{"kind":"symbol","path":"${KIPRJMOD}/libs/Fold.kicad_symdir"}"#);
+    assert_eq!(added["ok"], true, "{added}");
+    assert_eq!(crate::library_api::symbol_any(&dir, "Fold:Good").unwrap().0.pins.len(), 1, "the good one reads");
+    let why = crate::board::reasons(&crate::library_api::symbol_any(&dir, "Fold:Torn").unwrap_err());
+    assert!(why.contains("Torn.kicad_sym"), "{why}");
+    assert!(crate::board::step(&dir, Cmd::OpenSymbolForEdit { lib_id: "Fold:Torn".into() }, false, "ui").is_err() && lacks("Fold:Torn"), "refused, nothing opened");
+    // an id no library has is KiCad's New Symbol still: a blank one
+    let missing = crate::board::reasons(&crate::library_api::symbol_any(&dir, "Mine:Fresh").unwrap_err());
+    assert!(missing.contains("no symbol with this lib_id"), "{missing}");
+    crate::board::step(&dir, Cmd::OpenSymbolForEdit { lib_id: "Mine:Fresh".into() }, false, "ui").unwrap();
+    assert!(!lacks("Mine:Fresh") && in_design(&dir, "Mine:Fresh").pins.is_empty());
+}

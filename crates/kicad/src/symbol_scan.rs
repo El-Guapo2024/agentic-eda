@@ -351,10 +351,16 @@ pub fn symbol_text<'a>(text: &'a str, s: &SymbolSummary) -> &'a str {
 /// of the file. Named by its bare name (`LibrarySymbol::lib_id`), which the caller turns into `Lib:Name`. `None` for a name the file lacks or a
 /// form that does not parse.
 pub fn parse_symbol(text: &str, summaries: &[SymbolSummary], name: &str) -> Option<LibrarySymbol> {
+    parse_symbol_checked(text, summaries, name).ok().flatten()
+}
+
+/// [`parse_symbol`], telling a symbol the summaries do not name (`Ok(None)`) from one whose text is there and cannot be read (`Err`, the reader's why): the
+/// Symbol Editor must not open the second blank (`SYMBOL_EDIT_FRAME::LoadSymbol`: "Error loading symbol %s from library '%s'." and nothing opened).
+pub fn parse_symbol_checked(text: &str, summaries: &[SymbolSummary], name: &str) -> Result<Option<LibrarySymbol>, String> {
     let index: HashMap<&str, &SymbolSummary> = summaries.iter().map(|s| (s.name.as_str(), s)).collect();
     // The symbol and, before it, every base it extends (the reader looks sideways for them).
     let mut chain: Vec<&SymbolSummary> = Vec::new();
-    let mut at = index.get(name).copied()?;
+    let Some(mut at) = index.get(name).copied() else { return Ok(None) };
     chain.push(at);
     while let Some(base) = at.extends.as_ref().and_then(|b| index.get(b.as_str()).copied()) {
         if chain.iter().any(|c| c.name == base.name) || chain.len() > 8 {
@@ -369,10 +375,10 @@ pub fn parse_symbol(text: &str, summaries: &[SymbolSummary], name: &str) -> Opti
         wrapped.push('\n');
     }
     wrapped.push(')');
-    let parsed = crate::symbol_import::parse_library_symbols(&wrapped).ok()?;
+    let parsed = crate::symbol_import::parse_library_symbols(&wrapped)?;
     // opened on its own, a derived symbol is the flat symbol it stands for (`LIB_SYMBOL::Flatten`): the parents come with the file text but not with the answer
     let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols, ..Default::default() };
-    section.flatten(name).ok()
+    section.flatten(name).map(Some)
 }
 
 #[cfg(test)]

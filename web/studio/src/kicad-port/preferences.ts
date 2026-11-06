@@ -13,7 +13,8 @@
 //     Preferences > Editing Options), which decide what the drawing and move tools snap to (kicad-port/snapAnchors.ts);
 //   * the board editor's "Step for rotate commands" (`PCBNEW_SETTINGS::m_RotationAngle`, `editing.rotation_angle`) and "Flip board items" (`m_FlipDirection`,
 //     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts);
-//   * the schematic editor's "Allow unconstrained pin swaps" (`EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps`), without which Swap Pins is not offered.
+//   * the schematic editor's "Allow unconstrained pin swaps" (`EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps`), without which Swap Pins is not offered;
+//   * the symbol editor's Repeated Items, "Pitch of repeated pins" and "Label increment" (`SYMBOL_EDITOR_SETTINGS::m_Repeat`), which Repeat Pin (Insert) reads.
 // Not offered: "Center and warp cursor on zoom" (it moves the real pointer, which a page may not and this studio
 // never does), the left button's drag (box select, drag selected, drag any: the canvases' own handling is not configurable), the middle and right drags
 // on the board and the library canvases (they pan with both buttons), "Pan on mouse movement with key", and "Pan left/right with horizontal movement" (stored
@@ -64,6 +65,18 @@ export interface Preferences {
   flipDirection: FlipDirection;
   /** `EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps` ("Allow unconstrained pin swaps", Preferences > Schematic Editor > Editing Options): Swap Pins is offered and runs only with it on. Default off. */
   allowUnconstrainedPinSwaps: boolean;
+  /** `SYMBOL_EDITOR_SETTINGS::m_Repeat.pin_step` ("Pitch of repeated pins:", Preferences > Symbol Editor > Editing Options > Repeated Items), mils: how far Repeat Pin puts the
+   * next pin. Default 100; a multiple of 25 (`MIN_GRID`, "Force pin_step to a grid multiple"). */
+  symRepeatPinStepMils: number;
+  /** `m_Repeat.label_delta` ("Label increment:", -10 .. 10): what Repeat Pin adds to the pin's number and name. Default 1. */
+  symRepeatLabelDelta: number;
+}
+
+/** `PANEL_SYM_EDITING_OPTIONS::TransferDataFromWindow`: "Force pin_step to a grid multiple" of 25 mils (`MIN_GRID`), `KiROUND( pin_step / MIN_GRID ) * MIN_GRID`. */
+export function sanitizePinStepMils(v: unknown, fallback = 100): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const r = v / 25;
+  return (r < 0 ? -Math.round(-r) : Math.round(r)) * 25;
 }
 
 /**
@@ -99,6 +112,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   rotationStepDeg: 90,
   flipDirection: "left_right",
   allowUnconstrainedPinSwaps: false,
+  symRepeatPinStepMils: 100,
+  symRepeatLabelDelta: 1,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH">;
@@ -199,6 +214,8 @@ export function sanitizePreferences(raw: unknown): Preferences {
     rotationStepDeg: sanitizeRotationStep(o.rotationStepDeg, d.rotationStepDeg),
     flipDirection: o.flipDirection === "top_bottom" ? "top_bottom" : d.flipDirection,
     allowUnconstrainedPinSwaps: bool(o.allowUnconstrainedPinSwaps, d.allowUnconstrainedPinSwaps),
+    symRepeatPinStepMils: sanitizePinStepMils(o.symRepeatPinStepMils, d.symRepeatPinStepMils),
+    symRepeatLabelDelta: clampInt(o.symRepeatLabelDelta, -10, 10, d.symRepeatLabelDelta),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

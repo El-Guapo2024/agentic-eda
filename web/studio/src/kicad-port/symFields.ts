@@ -31,6 +31,8 @@ export interface FieldRow {
   italic: boolean;
   h_align: FieldHAlign;
   v_align: FieldVAlign;
+  /** `(property private ..)` (`SCH_FIELD::IsPrivate`): kept through an edit of the fields. */
+  private?: boolean;
 }
 
 /** The part of a `lib_id` after the library nickname. */
@@ -54,6 +56,7 @@ export function fieldRow(f: LibrarySymbolField): FieldRow {
     italic: f.italic ?? false,
     h_align: f.h_align ?? "center",
     v_align: f.v_align ?? "center",
+    ...(f.private ? { private: true } : {}),
   };
 }
 

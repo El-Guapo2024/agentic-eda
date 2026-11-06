@@ -8,8 +8,9 @@
 import type { CmdShape, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibraryFootprint } from "../api/types";
 import { distToSegment, shapeHitDistance } from "../components/canvas/itemHitTest";
 import { libPointToInternalNm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
-import { cmdShapeToShape } from "./itemBoxes";
+import { cmdShapeToShape, libBezierPointsNm } from "./itemBoxes";
 import { textBoxDistanceNm } from "./symTextBox";
+import { libTextBoxNm } from "./symText";
 
 /** The two editors' tolerance: `Math.max( 80, 6 px )` in um. */
 export function pickTolerance(scale: number): number {
@@ -74,13 +75,18 @@ export function pickFootprintItem(fp: LibraryFootprint, x: number, y: number, sc
 
 const um = (p: { x: number; y: number }): [number, number] => libPointToInternalNm([p.x, p.y]);
 
-/** Distance from a point to a library symbol graphic's outline, in internal um. */
-export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: number): number {
+/** Distance from a point to a library symbol graphic's outline, in internal um. With `measure` (the stroke font's advance) a text is hit by its box (`SCH_TEXT::HitTest`:
+ *  `GetBoundingBox()` inflated by the accuracy), which a justified text needs -- its anchor is a corner of it; without, by its anchor. */
+export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: number, measure?: (text: string, sizeNm: number) => number): number {
   if (g.kind === "circle") {
     const [cx, cy] = um(g.center);
     return Math.abs(Math.hypot(x - cx, y - cy) - g.radius_mm * 1e6);
   }
   if (g.kind === "text") {
+    if (measure) {
+      const b = libTextBoxNm(g, measure);
+      return Math.hypot(Math.max(b.minX - x, 0, x - b.maxX), Math.max(b.minY - y, 0, y - b.maxY));
+    }
     const [tx, ty] = um(g.at);
     return Math.hypot(x - tx, y - ty);
   }
@@ -92,6 +98,8 @@ export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: num
     const [x1, y1] = um(g.end);
     pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
   } else if (g.kind === "arc") pts = [um(g.start), um(g.mid), um(g.end)];
+  // `EDA_SHAPE::hitTest` of a bezier: the segments of its curve (`m_bezierPoints`)
+  else if (g.kind === "bezier") pts = libBezierPointsNm(g);
   else pts = g.pts.map(um);
   let best = Infinity;
   for (let i = 0; i + 1 < pts.length; i++) best = Math.min(best, distToSegment(x, y, pts[i]![0], pts[i]![1], pts[i + 1]![0], pts[i + 1]![1]));

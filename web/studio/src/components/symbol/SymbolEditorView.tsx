@@ -1,5 +1,5 @@
 // The Symbol Editor tab's frame (eeschema/symbol_editor/symbol_edit_frame.cpp): the top toolbar (`SYMBOL_EDIT_TOOLBAR_SETTINGS`, TOP_MAIN), then the
-// Libraries tree (`SYMBOL_TREE_PANE`, far left), the left (options) toolbar, the canvas and the right (drawing) toolbar. The toolbars are the extracted KiCad
+// Libraries tree (`SYMBOL_TREE_PANE`, far left) with the Properties pane under it (`SCH_PROPERTIES_PANEL`), the left (options) toolbar, the canvas and the right (drawing) toolbar. The toolbars are the extracted KiCad
 // ones (sym_toolbars.json, drawn by components/Toolbar.tsx with KiCad's icons); the canvas is always there -- with nothing open it is the empty canvas and
 // its grid, like KiCad's, and a symbol is opened from the tree. The studio's own "Update Symbol on Board" and "Show Pin Numbers" are in the menus
 // (kicad/menuExtras.ts).
@@ -21,7 +21,8 @@ import { NewSymbolDialog } from "./NewSymbolDialog";
 import { UpdateSymbolFieldsDialog } from "./UpdateSymbolFieldsDialog";
 import { DerivedSymbolBanner } from "./DerivedSymbolBanner";
 import { LibraryDialogHost } from "../library/libraryDialogs";
-import { DockColumn } from "../panels/Dock";
+import { DockColumn, DockPanel } from "../panels/Dock";
+import { SymbolPropertiesPane } from "./SymbolPropertiesPane";
 import { Toolbar } from "../Toolbar";
 
 export function SymbolEditorView() {
@@ -43,7 +44,17 @@ export function SymbolEditorView() {
       <div className="editor-frame-body">
         {/* SYMBOL_TREE_PANE: the project's own symbols and KiCad's installed libraries; folds to a handle (Show Library Tree). */}
         <DockColumn side="left" column="tree" label="Libraries">
-          <SymbolLibraryPanel />
+          {/* the Libraries tree and, below it, the frame's Properties pane (`defaultPropertiesPaneInfo`, shown by default; Show Properties toggles it) */}
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+            <div style={{ display: "flex", flex: "1 1 0", minHeight: 120 }}>
+              <SymbolLibraryPanel />
+            </div>
+            <div style={{ flex: "0 1 auto", maxHeight: "55%", overflowY: "auto", width: 236, background: "var(--chrome-bg-raised)", borderRight: "1px solid var(--chrome-border)" }}>
+              <DockPanel id="symProperties" title="Properties">
+                <SymbolPropertiesPane />
+              </DockPanel>
+            </div>
+          </div>
         </DockColumn>
         <Toolbar id="options" editor="symbol" />
         <div className="editor-canvas-col">
