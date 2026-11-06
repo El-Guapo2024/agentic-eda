@@ -181,10 +181,21 @@ export const MANDATORY_FIELDS = [REFERENCE, VALUE, "Datasheet", "Description"] a
 export const MANDATORY_ROW_COUNT = MANDATORY_FIELDS.length;
 
 /**
- * Two fields of one name, as KiCad treats them: `DIALOG_FOOTPRINT_PROPERTIES::Validate` refuses neither a repeated name nor a mandatory one, the board file is
- * written with both, and `parseFOOTPRINT_unchecked` reads the later `(property ..)` into the field the name already has (`HasField( pName )`: `SetText`, then
+ * A user row named like a mandatory field (Reference, Value, Datasheet, Description), or null. Not KiCad's: `DIALOG_FOOTPRINT_PROPERTIES::Validate` checks
+ * only for an empty name, and its footprint holds a USER field called "Reference" beside the Reference until the board is read again, when
+ * `parseFOOTPRINT_unchecked`'s `HasField( pName )` puts its text on the Reference itself. The studio keys a footprint's fields by name, so it cannot hold the
+ * two, and taking the row as that read does would rename (or revalue) the part with the user row's text: the row is refused instead.
+ */
+export function mandatoryNameProblem(name: string, index: number): string | null {
+  const n = name.trim();
+  return index >= MANDATORY_ROW_COUNT && (MANDATORY_FIELDS as readonly string[]).includes(n) ? `"${n}" is the name of a mandatory field.` : null;
+}
+
+/**
+ * Two user fields of one name, as KiCad treats them: `DIALOG_FOOTPRINT_PROPERTIES::Validate` refuses no repeated name, the board file is written with both, and
+ * `parseFOOTPRINT_unchecked` reads the later `(property ..)` into the field the name already has (`HasField( pName )`: `SetText`, then
  * `parsePCB_TEXT_effects`). The studio's fields are keyed by name, so the rows are taken the way that read takes them: a later row's text and look land on the
- * first row of its name (a mandatory field's too), and the later row goes.
+ * first row of its name, and the later row goes (a user row named like a mandatory field is refused before: `mandatoryNameProblem`).
  */
 export function mergeDuplicateFields<T extends { name: string; text: string; layout: unknown }>(rows: readonly T[]): T[] {
   const out: T[] = [];
