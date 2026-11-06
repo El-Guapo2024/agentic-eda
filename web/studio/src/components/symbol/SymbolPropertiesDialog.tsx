@@ -8,7 +8,7 @@
 // OK is one undo step: `set_symbol_parent`, `edit_symbol_properties` and `edit_library_symbol_fields`.
 //
 // The lower General panel has KiCad's groups and words: General (Define as power symbol, Define as local power symbol), Attributes (the four "Exclude from" boxes, checked and
-// disabled for a power symbol, `onPowerCheckBox`), Pin Text Options (Show pin number, Show pin name, Place pin names inside with its Position offset), Symbol Units (Number of units,
+// disabled when "Define as power symbol" is ticked, `onPowerCheckBox`, and enabled when the dialog opens, power symbol or not), Pin Text Options (Show pin number, Show pin name, Place pin names inside with its Position offset), Symbol Units (Number of units,
 // All units are interchangeable -- `LockUnits`) and Body Styles (single or De Morgan).
 //
 // Not ported: per-body-style custom names (KiCad's "Custom" body-style mode beyond plain DeMorgan Standard/Alternate), the unit display names grid (the names are kept in the
@@ -64,6 +64,9 @@ export function LibrarySymbolPropertiesDialog() {
   const [symbolName, setSymbolName] = useState("");
   /** "Place pin names inside": `m_PinsNameInsideButt->SetValue( GetPinNameOffset() != 0 )`. */
   const [namesInside, setNamesInside] = useState(true);
+  /** The four "Exclude from" boxes are disabled by `onPowerCheckBox` only: `TransferDataToWindow` sets their values and leaves them enabled, so a power symbol
+   *  opens with them editable, and ticking "Define as power symbol" checks and disables them (r7 E7-S9). */
+  const [excludeLocked, setExcludeLocked] = useState(false);
 
   useEffect(() => {
     if (!subject || !state.propertiesOpen) return;
@@ -71,6 +74,7 @@ export function LibrarySymbolPropertiesDialog() {
     setForm(formOf(subject));
     setSymbolName(unescapeString(bareName(subject.lib_id)));
     setNamesInside(subject.pin_name_offset_mm !== 0);
+    setExcludeLocked(false);
     setFiltersText(subject.footprint_filters.join(" "));
     setError(null);
     setParent(subject.extends ?? "");
@@ -96,8 +100,10 @@ export function LibrarySymbolPropertiesDialog() {
   const set = <K extends keyof SymbolPropertiesFields>(key: K, value: SymbolPropertiesFields[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
   /** `onPowerCheckBox`: a power symbol is excluded from simulation, the BOM, the board and the position files (the boxes checked and disabled); unchecked, they are enabled
    * again as they are. */
-  const setPower = (power: boolean) =>
+  const setPower = (power: boolean) => {
+    setExcludeLocked(power);
     setForm((f) => (f ? (power ? { ...f, power, exclude_from_sim: true, in_bom: false, on_board: false, exclude_from_pos_files: true } : { ...f, power }) : f));
+  };
 
   const submit = async () => {
     const problem = gridProblem(rows, !derived);
@@ -220,11 +226,11 @@ export function LibrarySymbolPropertiesDialog() {
                   ] as const
                 ).map(([key, label, checked]) => (
                   <div key={key}>
-                    <label style={{ opacity: form.power ? 0.5 : 1 }}>
+                    <label style={{ opacity: excludeLocked ? 0.5 : 1 }}>
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={form.power}
+                        disabled={excludeLocked}
                         data-testid={`props-${key}`}
                         onChange={(e) => (key === "in_bom" || key === "on_board" ? set(key, !e.target.checked) : set(key, e.target.checked))}
                       />{" "}

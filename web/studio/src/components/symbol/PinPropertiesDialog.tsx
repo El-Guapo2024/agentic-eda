@@ -9,7 +9,12 @@
 //
 // It is also where the Pin tool's click lands: `SYMBOL_EDITOR_PIN_TOOL::CreatePin` makes the pin and opens this dialog first, so Cancel drops
 // the pin; OK hands it to the canvas, where it follows the cursor until the click that places it (`TwoClickPlace`, then `PlacePin` with its
-// Synchronized Pins Mode confirmation). An existing pin has an id and is edited; the pending one (`state.pendingPin`) has no Delete Pin.
+// Synchronized Pins Mode confirmation). An existing pin has an id and is edited.
+//
+// The rows are `DIALOG_PIN_PROPERTIES_BASE`'s, with its words and in its order (Pin name:, Pin number:, Electrical type:, Graphic style:, X position:,
+// Y position:, Orientation:, Pin length:, Name text size:, Number text size:; then the "Common to all units in symbol", "Common to all body styles" and
+// Visible boxes). The lengths are `UNIT_BINDER`s with no validator, so a value is taken as typed (r7 E7-S4: no clamp to a length of 0 or a text of
+// 0.1 mm), and there is no Delete Pin button (KiCad's dialog has none; a pin is deleted with Delete on the canvas, which `DoDelete`s its sync twins).
 import { useEffect, useState } from "react";
 import type { LibrarySymbolPin, PinElectricalType, PinShape } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
@@ -118,12 +123,12 @@ export function PinPropertiesDialog() {
             </div>
           )}
           <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr" }}>
-            <span>Pin name</span>
+            <span>Pin name:</span>
             <input value={form.name} onChange={(e) => set("name", e.target.value)} style={{ width: 140 }} />
-            <span>Pin number</span>
+            <span title="Pin number: 1 to 4 ASCII letters and/or digits">Pin number:</span>
             <input value={form.number} onChange={(e) => set("number", e.target.value)} style={{ width: 80 }} />
 
-            <span>Electrical type</span>
+            <span title="Used by the ERC.">Electrical type:</span>
             <select value={form.electrical_type} onChange={(e) => set("electrical_type", e.target.value as PinElectricalType)}>
               {ELECTRICAL_TYPE_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -131,7 +136,7 @@ export function PinPropertiesDialog() {
                 </option>
               ))}
             </select>
-            <span>Graphic style</span>
+            <span>Graphic style:</span>
             <select value={form.shape} onChange={(e) => set("shape", e.target.value as PinShape)}>
               {SHAPE_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -139,7 +144,14 @@ export function PinPropertiesDialog() {
                 </option>
               ))}
             </select>
-            <span>Orientation</span>
+
+            {/* `m_posY.SetValue( m_origPos.y )`: KiCad's internal Y, which points down -- the file's Y negated (r7 E7-S3) */}
+            <span>X position:</span>
+            {len(form.at.x, (x) => set("at", { ...form.at, x }))}
+            <span>Y position:</span>
+            {len(displayY(form.at.y), (y) => set("at", { ...form.at, y: storedY(y) }))}
+
+            <span>Orientation:</span>
             <select value={angleDegToOrientation(form.angle_deg)} onChange={(e) => set("angle_deg", orientationToAngleDeg(e.target.value as PinOrientation))}>
               {PIN_ORIENTATIONS.map((o) => (
                 <option key={o} value={o}>
@@ -148,23 +160,12 @@ export function PinPropertiesDialog() {
               ))}
             </select>
 
-            <span>Pin length</span>
-            {len(form.length_mm, (v) => set("length_mm", Math.max(0, v)))}
-            <span>Name text size</span>
-            {len(form.name_size_mm ?? 1.27, (v) => set("name_size_mm", Math.max(0.1, v)))}
-            <span>Number text size</span>
-            {len(form.number_size_mm ?? 1.27, (v) => set("number_size_mm", Math.max(0.1, v)))}
-
-            <span>Position</span>
-            <span>
-              {/* `m_posY.SetValue( m_origPos.y )`: KiCad's internal Y, which points down -- the file's Y negated (r7 E7-S3) */}
-              {len(form.at.x, (x) => set("at", { ...form.at, x }))} {len(displayY(form.at.y), (y) => set("at", { ...form.at, y: storedY(y) }))}
-            </span>
-
-            <span>Visible</span>
-            <label>
-              <input type="checkbox" checked={!form.hidden} onChange={(e) => set("hidden", !e.target.checked)} />
-            </label>
+            <span>Pin length:</span>
+            {len(form.length_mm, (v) => set("length_mm", v))}
+            <span>Name text size:</span>
+            {len(form.name_size_mm ?? 1.27, (v) => set("name_size_mm", v))}
+            <span>Number text size:</span>
+            {len(form.number_size_mm ?? 1.27, (v) => set("number_size_mm", v))}
 
             <span>Common to all units in symbol</span>
             <label title={unitsBox.tooltip ?? undefined}>
@@ -173,6 +174,10 @@ export function PinPropertiesDialog() {
             <span>Common to all body styles</span>
             <label>
               <input type="checkbox" data-testid="pin-common-styles" disabled={!stylesBox.enabled} checked={stylesBox.checked} onChange={(e) => set("body_style", e.target.checked ? 0 : state.activeBodyStyle)} />
+            </label>
+            <span>Visible</span>
+            <label>
+              <input type="checkbox" checked={!form.hidden} onChange={(e) => set("hidden", !e.target.checked)} />
             </label>
           </div>
           <PinAlternatesGrid rows={form.alternates ?? []} onChange={(rows) => set("alternates", rows)} pin={pin} available={!state.symbol?.has_alternate_body_style} onError={setError} />
@@ -183,16 +188,6 @@ export function PinPropertiesDialog() {
           )}
         </div>
         <div className="dialog-footer">
-          {id !== null && (
-            <button
-              onClick={() => {
-                void api.deletePin(id);
-                close();
-              }}
-            >
-              Delete Pin
-            </button>
-          )}
           <button onClick={close} data-testid="pin-props-cancel">
             Cancel
           </button>

@@ -71,3 +71,16 @@ export function planPaste(
   }
   return { puts, ids: clipboard.map((s) => newId.get(s)!) };
 }
+
+/**
+ * What `DuplicateSymbol` leaves on the canvas and in the tree: it loads each new symbol in turn at the frame's unit and body style
+ * (`LoadOneLibrarySymbolAux( symbol, lib, GetUnit(), GetBodyStyle() )`), so the last one is shown at the unit and body style that were being edited, and
+ * the tree selects the first (`SelectLibId( LIB_ID( lib, newSymbols[0]->GetName() ) )`) -- r7 E7-S21.
+ */
+export function duplicateLanding(ids: readonly string[], unit: number, bodyStyle: number): { open: string; at: { unit: number; bodyStyle: number }; select: string } | null {
+  const first = ids[0];
+  const last = ids[ids.length - 1];
+  if (first === undefined || last === undefined) return null;
+  // `m_unit = aUnit > 0 ? aUnit : 1; m_bodyStyle = aBodyStyle > 0 ? aBodyStyle : 1;`
+  return { open: last, at: { unit: unit > 0 ? unit : 1, bodyStyle: bodyStyle > 0 ? bodyStyle : 1 }, select: first };
+}

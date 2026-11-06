@@ -16,7 +16,7 @@ import { symbolTarget } from "../kicad-port/librarySave";
 import { getLibraryTree } from "../state/libraryTree";
 import { clipboardTextForSymbols, looksLikeSymbolText } from "../kicad-port/symClipboard";
 import { bareName, descendantsOf, treeConditions } from "../kicad-port/symFields";
-import { planImport, planPaste } from "../kicad-port/symImportPlan";
+import { duplicateLanding, planImport, planPaste } from "../kicad-port/symImportPlan";
 import type { ConflictStrategy } from "../kicad-port/symSaveAsPlan";
 import { askChoice, askConfirm, askText } from "../components/library/libraryDialogs";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
@@ -111,10 +111,18 @@ export async function copySymbols(c: SymCtx, cut: boolean): Promise<void> {
   if (cut) await deleteSymbols(c);
 }
 
-/** `SYMBOL_EDIT_FRAME::DuplicateSymbol( true )`: the clipboard's symbols are added to the target library, each under a free name, and the first is opened. */
+async function landOn(c: SymCtx, ids: readonly string[], unit: number, bodyStyle: number): Promise<void> {
+  const land = duplicateLanding(ids, unit, bodyStyle);
+  if (!land) return;
+  await c.api.openSymbol(land.open, land.at);
+  select(c, [land.select]);
+}
+
+/** `SYMBOL_EDIT_FRAME::DuplicateSymbol( true )`: the clipboard's symbols are added to the target library, each under a free name; the last is opened (`duplicateLanding`). */
 export async function pasteSymbols(c: SymCtx): Promise<void> {
   try {
     const st = c.api.getState();
+    const { activeUnit, activeBodyStyle } = st;
     const text = await readClipboardText();
     let symbols: LibrarySymbol[];
     if (st.copied && (text === null || text === st.copied.text)) {
@@ -133,24 +141,23 @@ export async function pasteSymbols(c: SymCtx): Promise<void> {
     const { puts, ids } = planPaste(symbols, lib, all, (id, taken) => ensureUniqueLibId(id, taken, true), joinLibName);
     const cmds = puts.map((sym): Cmd => ({ op: "put_library_symbol", symbol: { ...sym, published: false } }));
     if (!(await runBatch(c, cmds))) return;
-    await c.api.openSymbol(ids[0]!);
-    select(c, [ids[0]!]);
+    await landOn(c, ids, activeUnit, activeBodyStyle);
   } catch (e) {
     fail(c, e);
   }
 }
 
-/** `SYMBOL_EDIT_FRAME::DuplicateSymbol( false )`: a copy of the target under the next free name (`name_1`, ...), opened. */
+/** `SYMBOL_EDIT_FRAME::DuplicateSymbol( false )`: a copy of the target under the next free name (`name_1`, ...), opened at the unit and body style being edited. */
 export async function duplicateSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
   if (!id) return info(c, "No symbol selected.");
   try {
+    const { activeUnit, activeBodyStyle } = c.api.getState();
     const { symbol } = await fetchAnySymbol(id);
     const { all } = await names();
     const libId = ensureUniqueLibId(id, all, true);
     if (!(await runBatch(c, [{ op: "put_library_symbol", symbol: { ...symbol, lib_id: libId, published: false } }]))) return;
-    await c.api.openSymbol(libId);
-    select(c, [libId]);
+    await landOn(c, [libId], activeUnit, activeBodyStyle);
   } catch (e) {
     fail(c, e);
   }
