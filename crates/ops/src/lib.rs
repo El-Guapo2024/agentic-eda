@@ -3252,10 +3252,12 @@ impl<'a> Board<'a> {
         if let (Some(before), Some(id)) = (zones_before.as_mut(), cmd.zone_kept_filled()) {
             before.remove(id);
         }
-        // a footprint's own zones follow it (`FOOTPRINT::Move`, `SetOrientation`, `Flip`: UI-LEFT PP14, `fp_on_board.rs`)
-        let footprint_zone_poses = self.footprint_zone_poses();
+        // a footprint's own zones follow it (`FOOTPRINT::Move`, `SetOrientation`, `Flip`: UI-LEFT PP14, `fp_on_board.rs`); a board brought in whole has its own where they are
+        let footprint_zone_poses = (!matches!(cmd, Cmd::ReplaceBoard { .. })).then(|| self.footprint_zone_poses());
         self.apply_cmd(cmd)?;
-        self.tidy_footprint_zones(footprint_zone_poses);
+        if let Some(before) = footprint_zone_poses {
+            self.tidy_footprint_zones(before);
+        }
         // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
         self.tidy_zone_fills(zones_before);
         self.tidy_shared_screens(shared_before, cmd.numbering());

@@ -1672,14 +1672,17 @@ pub(crate) fn write_footprint(
         // `(pintype "free")` and the other pin types a pad was given (`PAD::SetPinType`): a free pad takes part in no net, and the copper clearance, solder mask and
         // connectivity checks leave it be (`PAD::IsFreePad`). Written after the net, as `format( const PAD* )` does.
         // A pad of a footprint made here has its pin's (`updateComponentPadConnections`: `SetPinFunction( net.GetPinFunction() )`, `SetPinType( net.GetPinType() )`).
-        let from_pin = link.filter(|_| pad_infos.is_none() && pad.kind != PadKind::NonPlatedHole).and_then(|l| l.pins.get(&pad.number));
+        // (a library footprint's record, `FootprintExtra::from_library`, has the library pads' facts and no pin of the board's: a footprint made here's)
+        let made_here = pad_infos.is_none() || own_extra.is_some_and(|e| e.from_library);
+        let from_pin = link.filter(|_| made_here && pad.kind != PadKind::NonPlatedHole).and_then(|l| l.pins.get(&pad.number));
         // A pad edit's Pin Name and Pin Type (the Properties panel's, `PAD::SetPinFunction` / `SetPinType`) over what the file or the schematic pin gave.
         let pad_edit = extra.edit.and_then(|e| e.pad(&pad.number, nth));
-        let function = pad_edit.and_then(|e| e.pin_function.as_deref()).or(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str())).or(from_pin.map(|(f, _)| f.as_str()));
+        let info_of = |f: fn(&eda_model::ir::PadMaskInfo) -> &str| pad_infos.and_then(|p| p.get(pad_idx)).map(f).filter(|t| !(made_here && t.is_empty()));
+        let function = pad_edit.and_then(|e| e.pin_function.as_deref()).or(info_of(|i| i.pin_function.as_str())).or(from_pin.map(|(f, _)| f.as_str()));
         if let Some(function) = function.filter(|t| !t.is_empty()) {
             write!(out, " (pinfunction {})", sexpr_str(function)).unwrap();
         }
-        let pin_type = pad_edit.and_then(|e| e.pin_type.as_deref()).or(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str())).or(from_pin.map(|(_, t)| t.as_str()));
+        let pin_type = pad_edit.and_then(|e| e.pin_type.as_deref()).or(info_of(|i| i.pin_type.as_str())).or(from_pin.map(|(_, t)| t.as_str()));
         if let Some(pin_type) = pin_type.filter(|t| !t.is_empty()) {
             write!(out, " (pintype {})", sexpr_str(pin_type)).unwrap();
         }

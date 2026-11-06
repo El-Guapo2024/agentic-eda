@@ -188,7 +188,7 @@ impl Board<'_> {
     }
 
     /// The record of `reference` says its zones are where its pose `pose` puts them (made when there is none).
-    fn mark_zones_at(&mut self, reference: &str, pose: &FootprintInstance) {
+    pub(crate) fn mark_zones_at(&mut self, reference: &str, pose: &FootprintInstance) {
         let dr = self.drawings_mut();
         if !dr.footprint_extras.iter().any(|e| e.id == reference) {
             dr.footprint_extras.push(FootprintExtra { id: reference.to_string(), library_frame: true, ..Default::default() });
@@ -201,21 +201,27 @@ impl Board<'_> {
 
     /// Before a command: the pose each footprint with zones has (`Board::apply` hands it to [`Self::tidy_footprint_zones`]).
     pub(crate) fn footprint_zone_poses(&self) -> Vec<(String, FootprintInstance)> {
+        self.zone_owners().into_iter().filter_map(|r| self.pose_of(&r).map(|p| (r, p.clone()))).collect()
+    }
+
+    /// The footprints the board's zones are the children of (`Zone::parent_footprint`).
+    fn zone_owners(&self) -> Vec<String> {
         let Some(rt) = &self.design.routing else { return Vec::new() };
-        let mut owners: Vec<&str> = rt.zones.iter().filter_map(|z| z.parent_footprint.as_deref()).collect();
+        let mut owners: Vec<String> = rt.zones.iter().filter_map(|z| z.parent_footprint.clone()).collect();
         owners.sort();
         owners.dedup();
-        owners.into_iter().filter_map(|r| self.pose_of(r).map(|p| (r.to_string(), p.clone()))).collect()
+        owners
     }
 
     /// After a command: each footprint's zones put where its pose now puts them -- from the pose its record says they were put for, else the pose it had before the
-    /// command (`before`, [`Self::footprint_zone_poses`]) -- and the record set to say so. A command nested in a batch has done its own, which the record then says.
+    /// command (`before`, [`Self::footprint_zone_poses`]) -- and the record set to say so. A command nested in a batch has done its own, which the record then says; a
+    /// footprint put back on the board (Rip, then Place) takes its zones from where they were put.
     pub(crate) fn tidy_footprint_zones(&mut self, before: Vec<(String, FootprintInstance)>) {
         let copper = self.model.board.layers.len();
-        for (reference, was) in before {
+        for reference in self.zone_owners() {
             let Some(now) = self.pose_of(&reference).cloned() else { continue };
             let recorded = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).and_then(|e| e.zones_pose);
-            let from = recorded.map(|p| p.instance()).unwrap_or(was);
+            let Some(from) = recorded.map(|p| p.instance()).or_else(|| before.iter().find(|(r, _)| *r == reference).map(|(_, p)| p.clone())) else { continue };
             if ZonesPose::of(&from) == ZonesPose::of(&now) {
                 continue;
             }

@@ -312,7 +312,9 @@ pub(crate) fn exchanged_record(old: Option<&FootprintExtra>, live: bool, referen
         Some(lib) => FootprintExtra { id: reference.to_string(), source_name: written_name.to_string(), ..lib.record.clone() },
         None => FootprintExtra { id: reference.to_string(), library_frame: true, ..Default::default() },
     };
-    let (mut paste_margin, mut paste_ratio) = (library.and_then(|l| l.paste_margin), library.and_then(|l| l.paste_ratio));
+    // (a footprint with no record keeps its edit's paste margins with "update/reset clearance overrides" off: the exchange leaves the edit's)
+    let reset = options.reset_clearance_overrides;
+    let (mut paste_margin, mut paste_ratio) = (library.and_then(|l| l.paste_margin).filter(|_| reset), library.and_then(|l| l.paste_ratio).filter(|_| reset));
     if let Some(old) = old {
         paste_margin = None;
         paste_ratio = None;
