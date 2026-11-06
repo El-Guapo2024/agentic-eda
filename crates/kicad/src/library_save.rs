@@ -40,10 +40,11 @@ pub struct SymbolSave<'a> {
     pub embedded: Option<&'a EmbeddedFiles>,
 }
 
-/// What a save wrote: the files, in the order written.
+/// What a save wrote: the files, in the order written, and the files it removed (a folder library's file left with no symbol, UI-LEFT-2 LL1).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LibraryWrite {
     pub written: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
 }
 
 // ------------------------------------------------------------------------------------------------ names and checks
@@ -230,8 +231,33 @@ fn check_parents(all: &HashMap<&str, &Block>, written: &[Block]) -> Result<(), S
 /// library at `path` -- a `.kicad_sym` file, which need not exist yet (`CreateLibrary` makes an empty one), or a folder library -- with `symbols` in it.
 /// A derived symbol's parent must be in the library or among `symbols`.
 pub fn save_symbols(path: &Path, symbols: &[SymbolSave]) -> Result<LibraryWrite, String> {
+    save_symbols_deleting(path, symbols, &[])
+}
+
+/// The bare names `deleted` leaves out of a library's `blocks` -- `SCH_IO_KICAD_SEXPR_LIB_CACHE::DeleteSymbol`: a root symbol takes the symbols derived from it
+/// with it ("Remove the root symbol and all its children") -- less the names being written (`written`, a symbol renamed back or made again).
+fn deleted_names(blocks: &[Block], deleted: &[&str], written: &[Block]) -> std::collections::BTreeSet<String> {
+    let mut gone: std::collections::BTreeSet<String> = deleted.iter().map(|d| d.to_string()).collect();
+    loop {
+        let more: Vec<String> = blocks.iter().filter(|b| !gone.contains(&b.name) && b.parent.as_ref().is_some_and(|p| gone.contains(p))).map(|b| b.name.clone()).collect();
+        if more.is_empty() {
+            break;
+        }
+        gone.extend(more);
+    }
+    gone.retain(|n| !written.iter().any(|w| &w.name == n));
+    gone
+}
+
+/// [`save_symbols`] that also takes the symbols named `deleted` (bare names) out of the library: `SYMBOL_LIBRARY_MANAGER::SaveLibrary`'s "Delete symbols that
+/// were removed from the buffer" (`pi->DeleteSymbol( aFileName, originalName )` of each `GetDeletedBuffers()`) and `LIB_BUFFER::SaveBuffer`'s "Delete the
+/// original symbol if the symbol name has been changed" (UI-LEFT-2 LL1). A file library is written without them; a folder library writes each file that lost
+/// one, and removes a file left with no symbol (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_LIB_CACHE::Save`: "Remove files for deleted symbols that are no longer
+/// needed" -- so a renamed symbol's file is renamed: the old one goes and the new name has a file of its own). A name the library does not hold is passed over
+/// (KiCad: `if( pi->LoadSymbol( aFileName, originalName ) )`).
+pub fn save_symbols_deleting(path: &Path, symbols: &[SymbolSave], deleted: &[&str]) -> Result<LibraryWrite, String> {
     if path.is_dir() {
-        return save_symbols_in_folder(path, symbols);
+        return save_symbols_in_folder(path, symbols, deleted);
     }
     let mut blocks: Vec<Block> = match std::fs::read_to_string(path) {
         Ok(text) => read_blocks(&text).ok_or_else(|| parse_error_message(path))?,
@@ -239,6 +265,8 @@ pub fn save_symbols(path: &Path, symbols: &[SymbolSave]) -> Result<LibraryWrite,
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
     let written: Vec<Block> = symbols.iter().map(written_block).collect();
+    let gone = deleted_names(&blocks, deleted, &written);
+    blocks.retain(|b| !gone.contains(&b.name));
     for w in &written {
         // `m_symbols[ name ] = symbol`: the one of that name (a file holding the name twice keeps the last, as `ParseLib` does) gives way
         blocks.retain(|b| b.name != w.name);
@@ -250,13 +278,13 @@ pub fn save_symbols(path: &Path, symbols: &[SymbolSave]) -> Result<LibraryWrite,
     let unique: Vec<&Block> = blocks.iter().enumerate().filter(|(i, b)| blocks.iter().rposition(|o| o.name == b.name) == Some(*i)).map(|(_, b)| b).collect();
     let depths = inheritance_depths(&unique);
     let file = write_atomically(path, &library_text(&unique, &depths))?;
-    Ok(LibraryWrite { written: vec![file] })
+    Ok(LibraryWrite { written: vec![file], removed: Vec::new() })
 }
 
 /// The folder branch of `SCH_IO_KICAD_SEXPR_LIB_CACHE::Save` (see the module doc): each symbol into the file it was read from, a new one into a file of its
 /// own, each file written with the symbols that are its own (`m_symbolSourceFiles`: a name two files define is the later file's). Only the files a symbol
-/// went into are written.
-fn save_symbols_in_folder(dir: &Path, symbols: &[SymbolSave]) -> Result<LibraryWrite, String> {
+/// went into, or a deleted one left, are written; a file left with no symbol is removed (KiCad 25ec2335, `m_pendingFileDeletes`).
+fn save_symbols_in_folder(dir: &Path, symbols: &[SymbolSave], deleted: &[&str]) -> Result<LibraryWrite, String> {
     // (file, its forms) in the order `Load` reads them here (by name: `crate::symbol_lib_dir`)
     let mut files: Vec<(PathBuf, Vec<Block>)> = Vec::new();
     for file in crate::symbol_library_files(dir) {
@@ -272,6 +300,17 @@ fn save_symbols_in_folder(dir: &Path, symbols: &[SymbolSave]) -> Result<LibraryW
     }
     let written: Vec<Block> = symbols.iter().map(written_block).collect();
     let mut dirty: Vec<usize> = Vec::new();
+    // `DeleteSymbol`: the name leaves the file it was read from (`recordSourceFileForDeletion`)
+    let all_blocks: Vec<Block> = files.iter().flat_map(|(_, b)| b.iter().cloned()).collect();
+    let gone = deleted_names(&all_blocks, deleted, &written);
+    for name in &gone {
+        if let Some(i) = source.remove(name) {
+            files[i].1.retain(|b| &b.name != name);
+            if !dirty.contains(&i) {
+                dirty.push(i);
+            }
+        }
+    }
     for w in &written {
         let at = match source.get(&w.name) {
             Some(&i) => i,
@@ -309,6 +348,14 @@ fn save_symbols_in_folder(dir: &Path, symbols: &[SymbolSave]) -> Result<LibraryW
     for i in dirty {
         let (file, blocks) = &files[i];
         let own: Vec<&Block> = blocks.iter().enumerate().filter(|(k, b)| source.get(&b.name) == Some(&i) && blocks.iter().rposition(|o| o.name == b.name) == Some(*k)).map(|(_, b)| b).collect();
+        if own.is_empty() {
+            // "Remove files for deleted symbols that are no longer needed" (`wxRemoveFile( deadFile )`: a link is removed, not what it names)
+            if file.is_file() {
+                std::fs::remove_file(file).map_err(|e| format!("Cannot delete '{}': {e}", file.display()))?;
+                out.removed.push(file.clone());
+            }
+            continue;
+        }
         out.written.push(write_atomically(file, &library_text(&own, &depths))?);
     }
     Ok(out)
@@ -339,11 +386,20 @@ fn saved_blocks(path: &Path) -> Result<Vec<Block>, String> {
 /// `dst` -- `SCH_IO_KICAD_SEXPR::SaveLibrary` writes the cache to the new path as a file. `src` may not exist yet (a library made and never saved); `None`
 /// is no library at all (the studio's own project library, whose symbols are all in `symbols`).
 pub fn save_symbol_library_as(src: Option<&Path>, dst: &Path, symbols: &[SymbolSave]) -> Result<LibraryWrite, String> {
+    save_symbol_library_as_deleting(src, dst, symbols, &[])
+}
+
+/// [`save_symbol_library_as`] of a library whose buffer has lost the symbols `deleted` (bare names: Delete, Rename's old names, UI-LEFT-2 LL1): the new file
+/// has the library as the buffer holds it, without them (`SaveLibrary` writes `GetBuffers()`, which the deleted ones have left), and the library saved from
+/// keeps them (`ClearDeletedBuffer` only "if data is saved to the original file").
+pub fn save_symbol_library_as_deleting(src: Option<&Path>, dst: &Path, symbols: &[SymbolSave], deleted: &[&str]) -> Result<LibraryWrite, String> {
     let mut blocks: Vec<Block> = match src {
         None => Vec::new(),
         Some(src) => saved_blocks(src)?,
     };
     let written: Vec<Block> = symbols.iter().map(written_block).collect();
+    let gone = deleted_names(&blocks, deleted, &written);
+    blocks.retain(|b| !gone.contains(&b.name));
     for w in &written {
         blocks.retain(|b| b.name != w.name);
     }
@@ -358,7 +414,7 @@ pub fn save_symbol_library_as(src: Option<&Path>, dst: &Path, symbols: &[SymbolS
         }
     }
     let file = write_atomically(dst, &library_text(&unique, &depths))?;
-    Ok(LibraryWrite { written: vec![file] })
+    Ok(LibraryWrite { written: vec![file], removed: Vec::new() })
 }
 
 // ------------------------------------------------------------------------------------------------ footprints
@@ -383,6 +439,26 @@ pub fn save_footprint(pretty: &Path, fp: &LibraryFootprint, embedded: &EmbeddedF
     let mut copy = fp.clone();
     copy.name = bare.to_string();
     write_atomically(&file, &crate::export_kicad_mod_with(&copy, embedded))
+}
+
+/// `PCB_IO_KICAD_SEXPR::FootprintDelete` of each footprint `names` names (`Lib:Name` or a bare name) out of the `.pretty` folder `pretty`: `FP_CACHE::Remove`
+/// deletes its file, `ReplaceIllegalFileNameChars( name, '_' ).kicad_mod` (UI-LEFT-2 LL1: `DeleteFootprintFromLibrary`, and the old name `SaveFootprint`
+/// deletes after a rename). A folder that cannot be written is refused with KiCad's words ("Library '%s' is read only.", the folder's path); a name with no
+/// file is passed over (`FP_CACHE::Remove`'s "Library '%s' has no footprint '%s'." is shown by `DeleteFootprintFromLibrary` and changes nothing). The answer
+/// is the files removed.
+pub fn delete_footprints(pretty: &Path, names: &[&str]) -> Result<Vec<PathBuf>, String> {
+    let files: Vec<PathBuf> = names.iter().map(|n| pretty.join(footprint_file_name(n.rsplit_once(':').map_or(*n, |(_, item)| item)))).filter(|f| f.is_file()).collect();
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !is_footprint_library_writable(pretty) {
+        return Err(format!("Library '{}' is read only.", pretty.display()));
+    }
+    for f in &files {
+        // `wxRemoveFile( fullPath )`
+        std::fs::remove_file(f).map_err(|_| format!("Insufficient permissions to delete '{}'.", f.display()))?;
+    }
+    Ok(files)
 }
 
 /// The footprint files of a `.pretty` folder (`FP_CACHE::Load` reads `*.kicad_mod`), sorted by name; hidden files left out.
@@ -578,6 +654,78 @@ mod tests {
         assert_eq!(crate::scan_symbols(&text).into_iter().map(|s| s.name).collect::<Vec<_>>(), ["Zeta", "Alpha"]);
         assert!(text.contains("\"Reference\" \"Q\""));
         assert_eq!(std::fs::read_to_string(lib.join("Zeta.kicad_sym")).unwrap(), LIB, "the library saved from is untouched");
+    }
+
+    #[test]
+    fn a_file_library_loses_a_deleted_symbol_and_its_children_and_a_renamed_one_goes_under_its_new_name() {
+        let dir = temp_dir("delete-file");
+        let path = dir.join("Mine.kicad_sym");
+        std::fs::write(&path, LIB).unwrap();
+        // the root goes, and Alpha, derived from it, with it (`DeleteSymbol`: "Remove the root symbol and all its children")
+        let other = symbol("Mine:Other");
+        let w = save_symbols_deleting(&path, &[SymbolSave { symbol: &other, embedded: None }], &["Zeta"]).unwrap();
+        assert_eq!(w.written, [path.clone()]);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(crate::scan_symbols(&text).into_iter().map(|s| s.name).collect::<Vec<_>>(), ["Other"]);
+        // a rename: the old name deleted and the symbol written under the new one; a name the file does not hold is passed over
+        std::fs::write(&path, LIB).unwrap();
+        let mut renamed = symbol("Mine:Omega");
+        renamed.extends = Some("Mine:Zeta".into());
+        save_symbols_deleting(&path, &[SymbolSave { symbol: &renamed, embedded: None }], &["Alpha", "Nobody"]).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(crate::scan_symbols(&text).into_iter().map(|s| (s.name, s.extends)).collect::<Vec<_>>(), [("Zeta".to_string(), None), ("Omega".to_string(), Some("Zeta".to_string()))]);
+        // a name deleted and written again (renamed back) is the written one
+        save_symbols_deleting(&path, &[SymbolSave { symbol: &other, embedded: None }], &["Other"]).unwrap();
+        assert!(crate::scan_symbols(&std::fs::read_to_string(&path).unwrap()).iter().any(|s| s.name == "Other"));
+        // a derived symbol whose parent is deleted in the same save is refused, and the file is kept
+        let before = std::fs::read_to_string(&path).unwrap();
+        let mut orphan = symbol("Mine:Orphan");
+        orphan.extends = Some("Mine:Zeta".into());
+        assert_eq!(save_symbols_deleting(&path, &[SymbolSave { symbol: &orphan, embedded: None }], &["Zeta"]).unwrap_err(), "Derived symbol 'Orphan' found with undefined parent.");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_folder_library_removes_a_deleted_symbols_file_and_renames_a_renamed_ones() {
+        let dir = temp_dir("delete-folder");
+        let lib = dir.join("Mine.kicad_symdir");
+        std::fs::create_dir(&lib).unwrap();
+        let one = |name: &str| format!("(kicad_symbol_lib (version 20251024)\n\t(symbol \"{name}\" (property \"Reference\" \"U\") (symbol \"{name}_1_1\"))\n)\n");
+        std::fs::write(lib.join("A.kicad_sym"), one("A")).unwrap();
+        std::fs::write(lib.join("B.kicad_sym"), one("B")).unwrap();
+        // Zeta.kicad_sym holds Zeta and Alpha (derived)
+        std::fs::write(lib.join("Zeta.kicad_sym"), LIB).unwrap();
+        // delete A: its file goes; rename B to C: B.kicad_sym goes, C.kicad_sym is written
+        let c = symbol("Mine:C");
+        let w = save_symbols_deleting(&lib, &[SymbolSave { symbol: &c, embedded: None }], &["A", "B"]).unwrap();
+        assert_eq!(w.removed, [lib.join("A.kicad_sym"), lib.join("B.kicad_sym")]);
+        assert_eq!(w.written, [lib.join("C.kicad_sym")]);
+        let mut names: Vec<String> = std::fs::read_dir(&lib).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["C.kicad_sym", "Zeta.kicad_sym"]);
+        // a file that keeps another symbol is written without the deleted one
+        let w = save_symbols_deleting(&lib, &[], &["Alpha"]).unwrap();
+        assert_eq!((w.written, w.removed), (vec![lib.join("Zeta.kicad_sym")], vec![]));
+        let zeta = std::fs::read_to_string(lib.join("Zeta.kicad_sym")).unwrap();
+        assert_eq!(crate::scan_symbols(&zeta).into_iter().map(|s| s.name).collect::<Vec<_>>(), ["Zeta"]);
+        // the folder reads back as the library that is left
+        let text = crate::read_symbol_library_text(&lib).unwrap();
+        let mut left: Vec<String> = crate::scan_symbols(&text).into_iter().map(|s| s.name).collect();
+        left.sort();
+        assert_eq!(left, ["C", "Zeta"]);
+    }
+
+    #[test]
+    fn a_deleted_footprints_file_leaves_its_pretty_folder() {
+        let dir = temp_dir("delete-pretty");
+        let pretty = dir.join("Mine.pretty");
+        std::fs::create_dir(&pretty).unwrap();
+        let mut fp = LibraryFootprint::new_empty("Mine:R_0603");
+        fp.assign_missing_ids();
+        save_footprint(&pretty, &fp, &EmbeddedFiles::default()).unwrap();
+        assert_eq!(delete_footprints(&pretty, &["Mine:R_0603", "Mine:Gone"]).unwrap(), [pretty.join("R_0603.kicad_mod")]);
+        assert!(!pretty.join("R_0603.kicad_mod").exists());
+        assert_eq!(delete_footprints(&pretty, &["Mine:R_0603"]).unwrap(), Vec::<PathBuf>::new(), "a name with no file is passed over");
     }
 
     #[test]
