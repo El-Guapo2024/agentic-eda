@@ -16,7 +16,7 @@
 //     warn; the row is taken back out.
 // The project library file the check makes stays in the board's folder (its row is taken out of the table); every design edit is undone.
 // It answers through `window.__libChoosersCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
-// run-all-checks: board=mcu30 minutes=12   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
+// run-all-checks: board=mcu30 minutes=12 fixtures=broken-symdir   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
   const results = [];
   const check = (window.__libChoosersCheck = { results, done: false, ok: false, wait: null });
