@@ -1816,6 +1816,7 @@ export type Cmd =
   | { op: "set_custom_rules"; text: string }
   /** The DRC Rule Editor's Save, Delete, Move Up and Move Down (`Cmd::EditDrcRule`; kicad-port/ruleEditor.ts has the rule's shape). */
   | { op: "edit_drc_rule"; action: "save" | "delete" | "move_up" | "move_down"; entry: number | null; name: string; rule?: import("../kicad-port/ruleEditor").RuleEditPayload }
+  | { op: "drop_drc_rule"; entry: number; name: string; target: number; target_name: string }
   /** Board Setup > Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` shows the value; the derived `.kicad_pro` carries them for kicad-cli. */
   | { op: "set_text_variables"; variables: Record<string, string> }
   | { op: "set_component_classes"; settings: ComponentClassSettings }

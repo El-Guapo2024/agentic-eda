@@ -204,3 +204,14 @@ select.re-field {
   font-size: 12px;
   margin: 0;
 }
+/* `m_dropTargetItem`: the tree item a dragged rule would be dropped on (`wxSYS_COLOUR_HIGHLIGHT`). */
+.re-item.re-drop-target {
+  background: var(--chrome-selected-bg);
+  color: var(--chrome-selected-text);
+}
+/* `buttonSizer`, `wxALIGN_RIGHT`: Show Matches under the panel. */
+.re-show-matches {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}

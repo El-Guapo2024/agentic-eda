@@ -1864,6 +1864,34 @@ pub fn move_entry(entries: &mut [Entry], at: usize, up: bool) -> Option<usize> {
     Some(other)
 }
 
+/// A rule dragged onto another under the same tree node and dropped (`RULE_EDITOR_DIALOG_BASE::onRuleTreeItemLeftUp`): a drop on the node's first rule puts the
+/// dragged one first (`PrependItem`), a drop on its last rule puts it last (`AppendItem`, after the target), a drop on any other puts it just before the target
+/// (`InsertItem( targetParent, previous, .. )` with `previous` the rule before the target) -- so a rule dropped on the one right after it stays where it is --
+/// and then the dragged original goes. A drop under another node, or on itself, does nothing (`draggedParent != targetParent`). As with Move Up and Move Down
+/// ([`move_entry`]) the file's order follows the tree here; KiCad's drag moves the tree item only. The rule's new place in the list, `None` when nothing moved.
+pub fn drop_entry(entries: &mut Vec<Entry>, dragged: usize, target: usize) -> Option<usize> {
+    let panel = entries.get(dragged)?.panel;
+    if dragged == target || entries.get(target)?.panel != panel {
+        return None;
+    }
+    let siblings: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].panel == panel).collect();
+    let t = siblings.iter().position(|&i| i == target)?;
+    let adjust = |i: usize| if i > dragged { i - 1 } else { i };
+    let at = if t == 0 {
+        adjust(siblings[0])
+    } else if t + 1 == siblings.len() {
+        adjust(target) + 1
+    } else {
+        adjust(target)
+    };
+    if at == dragged {
+        return None;
+    }
+    let e = entries.remove(dragged);
+    entries.insert(at, e);
+    Some(at)
+}
+
 /// `DIALOG_DRC_RULE_EDITOR::buildRuleTreeNode`'s name: `base 1`, `base 2`, .. the first no node of the tree has. `base` is the constraint node's name for
 /// a new rule, the source rule's name without a trailing ` <number>` for a duplicate (`DuplicateRule`).
 pub fn unique_rule_name(base: &str, taken: &[String]) -> String {

@@ -154,6 +154,11 @@ impl<'a> RuleBoard<'a> {
         rb
     }
 
+    /// The environment the board's rules are read and evaluated in (`env`), for a rule the caller parses itself (Show Matches).
+    pub fn env_for_rules(&self) -> Env {
+        self.env()
+    }
+
     /// The environment: layers by name, nets, classes, footprints, areas.
     fn env(&self) -> Env {
         let (rules, model) = (self.rules, self.model);
@@ -931,6 +936,56 @@ impl<'a> RuleBoard<'a> {
         self.rules
     }
 
+    /// The items of the board as `BOARD::GetItemByIdCache` holds them for Show Matches (`collectShowMatchCandidates`), each with the id the studio selects it by
+    /// and the layers `getShowMatchLayers` tries it on: every footprint (its side's copper layer, `BOARD_ITEM::GetLayerSet`), pad and via (`Padstack().UniqueLayers()`:
+    /// `ALL_LAYERS`, which is `F_Cu`, for a pad of one shape on every layer, else the first layer of each of its shapes), track segment (the studio's track id; KiCad
+    /// counts each segment), zone and rule area, graphic and text of the board. Not here: a footprint's own fields, texts and graphics, dimensions and tables
+    /// (the rule board has no item for them).
+    pub fn show_match_items(&self) -> Vec<(String, Rc<RuleItem>, Vec<String>)> {
+        let mut out: Vec<(String, Rc<RuleItem>, Vec<String>)> = Vec::new();
+        let own_layers = |it: &RuleItem| it.layers.clone();
+        let mut refs: Vec<&Rc<RuleItem>> = self.footprints.values().collect();
+        refs.sort_by(|a, b| a.id.cmp(&b.id));
+        for fp in refs {
+            out.push((fp.id.clone(), fp.clone(), own_layers(fp)));
+        }
+        for (pid, idx) in &self.pad_ids {
+            let pad = &self.board.pads[*idx];
+            let unique: Vec<String> = if pad.copper_by_layer.len() <= 1 { vec!["F.Cu".to_string()] } else { pad.copper_by_layer.iter().filter_map(|(layers, _)| layers.first().cloned()).collect() };
+            // the studio selects a pad by its first id (`REF.NUMBER`), the rule board names a second pad of one number `REF.NUMBER#2`
+            out.push((pid.split('#').next().unwrap_or(pid).to_string(), Rc::new(self.pad_item(pid, *idx)), unique));
+        }
+        for (i, seg) in self.board.tracks.iter().enumerate() {
+            let it = Rc::new(self.track_item(i));
+            let id = seg.id.rsplit_once('#').map_or(seg.id.as_str(), |(base, _)| base).to_string();
+            let layers = own_layers(&it);
+            out.push((id, it, layers));
+        }
+        for (i, v) in self.board.vias.iter().enumerate() {
+            out.push((v.id.clone(), Rc::new(self.via_item(i)), vec!["F.Cu".to_string()]));
+        }
+        if let Some(rt) = &self.design.routing {
+            for z in &rt.zones {
+                let it = Rc::new(self.zone_item(z));
+                let layers = own_layers(&it);
+                out.push((z.id.clone(), it, layers));
+            }
+        }
+        if let Some(d) = &self.design.drawings {
+            for s in &d.shapes {
+                let it = Rc::new(self.shape_item(s));
+                let layers = own_layers(&it);
+                out.push((s.id().to_string(), it, layers));
+            }
+            for t in &d.texts {
+                let it = Rc::new(self.text_item(t));
+                let layers = own_layers(&it);
+                out.push((t.id.clone(), it, layers));
+            }
+        }
+        out
+    }
+
     // ------------------------------------------------------------------------------------------------------------------------- component classes
 
     /// `COMPONENT_CLASS_MANAGER::CompileAssignmentRule` on one assignment of Design Rules > Component Classes: its condition compiled on this board, or `None`
@@ -1318,5 +1373,27 @@ mod footprint_facts_tests {
         let stand_in = rb.footprint_stand_in(&fp);
         assert_eq!(stand_in.class, Class::Pad);
         assert_eq!(stand_in.position.x, mm(12.0), "the last pad, at x = 10 + 2 mm");
+    }
+
+    /// Show Matches (`highlightMatchingItems`, `GetItemsMatchingRule`): a clearance rule looks at copper items (the pads, and the footprints, whose layer is
+    /// a copper one), a courtyard rule at footprints, a condition on `B.` at pairs; a text that does not parse or a condition that does not compile is an
+    /// error, and no text matches nothing.
+    #[test]
+    fn show_matches_finds_what_the_rule_selects() {
+        use crate::show_matches::{show_matches, Matches};
+        let (design, model) = hv_board(|_, _| {});
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let ids = |text: &str| show_matches(&rb, text).map(|m| m.ids);
+        assert_eq!(ids("(rule a (condition \"A.NetName == 'HV'\") (constraint clearance (min 1mm)))"), Ok(vec!["R5.1".to_string(), "R6.1".to_string()]));
+        assert_eq!(ids("(rule a (condition \"A.Type == 'Footprint'\") (constraint clearance (min 1mm)))"), Ok(vec!["R5".to_string(), "R6".to_string()]), "a footprint's layer is a copper one");
+        assert_eq!(ids("(rule a (condition \"A.Reference == 'R5'\") (constraint courtyard_clearance (min 1mm)))"), Ok(vec!["R5".to_string()]));
+        assert_eq!(ids("(rule a (condition \"A.Reference == 'R5' && B.Reference == 'R6'\") (constraint courtyard_clearance (min 1mm)))"), Ok(vec!["R5".to_string(), "R6".to_string()]), "a pair");
+        assert_eq!(ids("(rule a (condition \"A.Pad_Type == 'SMD'\") (constraint hole_size (min 1mm)))"), Ok(vec![]), "an SMD pad has no hole");
+        assert_eq!(ids("(rule a (layer B.Cu) (condition \"A.NetName == 'HV'\") (constraint clearance (min 1mm)))"), Ok(vec![]), "a pad is tried on its padstack's one layer, F.Cu");
+        assert_eq!(show_matches(&rb, ""), Ok(Matches { count: 0, ids: vec![] }));
+        assert_eq!(show_matches(&rb, "(rule a (condition \"A.NetName ==\") (constraint clearance (min 1mm)))"), Err(()), "a condition that does not compile");
+        assert_eq!(show_matches(&rb, "(rule a (constraint clearance (min 1mm))"), Err(()), "a text that does not parse");
+        assert_eq!(show_matches(&rb, "(rule a (constraint clearance (min 1mm)))").map(|m| m.count), Ok(4), "no condition: every copper item");
     }
 }

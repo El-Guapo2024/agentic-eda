@@ -76,3 +76,21 @@ pub(crate) fn edit_drc_rule(design: &mut Design, model: &ConstraintModel, action
     }
     crate::board_setup::set_custom_rules(design, &rule_editor::save(&list, &board))
 }
+
+/// `Cmd::DropDrcRule`: the rule at `entry` (named `name`) dragged onto the rule at `target` (named `target_name`) in the editor's tree
+/// (`onRuleTreeItemLeftUp`, [`rule_editor::drop_entry`]); the file is written in the new order, one undo step. Refused when the rules changed since the
+/// editor read them, or when the drop moves nothing.
+pub(crate) fn drop_drc_rule(design: &mut Design, model: &ConstraintModel, entry: usize, name: &str, target: usize, target_name: &str) -> Done {
+    let board = editor_board(model);
+    let mut list = entries(model, &board).map_err(refuse)?;
+    for (i, n) in [(entry, name), (target, target_name)] {
+        match list.get(i) {
+            Some(e) if e.rule_name == n => {}
+            _ => return Err(refuse(format!("The rules changed since the editor read them (no rule {n:?} at {i}); reopen the DRC Rule Editor."))),
+        }
+    }
+    if rule_editor::drop_entry(&mut list, entry, target).is_none() {
+        return Err(vec![CheckResult::fail("ops_nothing_to_change", "custom_rules", "the rule stays where it is (a rule moves among the rules of its own kind)")]);
+    }
+    crate::board_setup::set_custom_rules(design, &rule_editor::save(&list, &board))
+}

@@ -494,6 +494,28 @@ fn moving_deleting_and_naming() {
     assert_eq!(duplicate_base_name("HV"), "HV");
 }
 
+/// The tree's drag-and-drop (`onRuleTreeItemLeftUp`): among the rules of one node a drop on the first puts the dragged rule first, on the last puts it last,
+/// on another just before it -- a drop on the rule right after it moves nothing -- and a drop under another node, or on itself, does nothing.
+#[test]
+fn dragging_a_rule_onto_another_puts_it_where_kicads_tree_puts_it() {
+    let b = board();
+    let text = "(version 1)\n(rule a (constraint clearance (min 1mm)))\n(rule t (constraint track_width (min 1mm)))\n(rule b (constraint clearance (min 2mm)))\n(rule c (constraint clearance (min 3mm)))\n(rule d (constraint clearance (min 4mm)))\n";
+    let names = |e: &[Entry]| e.iter().map(|x| x.rule_name.clone()).collect::<Vec<_>>().join(" ");
+    let dropped = |from: &str, on: &str| {
+        let mut e = load(text, &b.env()).unwrap();
+        let (f, o) = (e.iter().position(|x| x.rule_name == from).unwrap(), e.iter().position(|x| x.rule_name == on).unwrap());
+        let moved = drop_entry(&mut e, f, o);
+        (moved, names(&e))
+    };
+    assert_eq!(dropped("c", "a"), (Some(0), "c a t b d".to_string()), "on the first: first");
+    assert_eq!(dropped("a", "d"), (Some(4), "t b c d a".to_string()), "on the last: after it");
+    assert_eq!(dropped("d", "b"), (Some(2), "a t d b c".to_string()), "on another: before it");
+    assert_eq!(dropped("a", "c"), (Some(2), "t b a c d".to_string()));
+    assert_eq!(dropped("b", "c"), (None, "a t b c d".to_string()), "on the next one: stays");
+    assert_eq!(dropped("a", "t"), (None, "a t b c d".to_string()), "another node: nothing");
+    assert_eq!(dropped("a", "a"), (None, "a t b c d".to_string()));
+}
+
 #[test]
 fn the_layer_selector_offers_what_kicad_offers() {
     let b = board();

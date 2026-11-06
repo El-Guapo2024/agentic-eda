@@ -899,6 +899,7 @@ fn handle(
         // What Swap Pad Nets / Swap Gate Nets would ask first: the unselected pads the copper connected to the swapped pads reaches (`PromptConnectedPadDecision`).
         ("GET", "/api/rule_editor") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::view(dir).to_string().as_bytes()),
         ("POST", "/api/rule_editor/check") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::check(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/rule_editor/show_matches") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::show_matches(dir, &body).to_string().as_bytes()),
         // Board Setup > Component Classes (`crate::board_setup_api`): the field and sheet names of the board's footprints, whether each assignment compiles and what it matches.
         ("POST", "/api/component_classes") => respond(stream, "200 OK", "application/json", crate::board_setup_api::component_classes(dir, &body).to_string().as_bytes()),
         ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),

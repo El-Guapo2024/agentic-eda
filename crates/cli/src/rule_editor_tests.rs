@@ -287,3 +287,37 @@ fn check_rule_syntax_expands_the_text_variables_and_warns_as_kicad_does() {
     let warned = check("(version 1)\n(rule a (condition \"A.NetClass == 'power'\") (constraint clearance (min 1mm)))\n(rule b (condition \"A.NetClass == 'power'\") (constraint clearance (min 2mm)))\n");
     assert_eq!(warned, ["No errors found.", "Rule 'a' references undefined netclass 'power'.", "Rules 'b' and 'a' share the same condition.", "Rule 'b' references undefined netclass 'power'."], "{warned:?}");
 }
+
+/// Show Matches through the server (`highlightMatchingItems`): the open panel's rule, generated as Save would generate it, selects the pads of a net; a
+/// condition that does not compile is the button's "(error)".
+#[test]
+fn show_matches_answers_with_the_items_the_panels_rule_selects() {
+    let dir = scratch("rule_editor_show_matches");
+    setup(&dir);
+    let mut rule = clearance("gnd", "0.5");
+    rule.condition = "A.NetName == 'GND'".into();
+    let reply = crate::rule_editor_api::show_matches(&dir, serde_json::json!({ "rule": rule }).to_string().as_bytes());
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["ids"], serde_json::json!(["U1.1", "U2.1"]), "{reply}");
+    assert_eq!(reply["count"], 2);
+    rule.condition = "A.NetName ==".into();
+    let reply = crate::rule_editor_api::show_matches(&dir, serde_json::json!({ "rule": rule }).to_string().as_bytes());
+    assert_eq!(reply["error"], true, "{reply}");
+}
+
+/// The tree's drag-and-drop as a verb (`Cmd::DropDrcRule`): one undo step, the file in the new order; refused when the names no longer match.
+#[test]
+fn a_rule_dropped_on_another_moves_in_the_file_one_undo_step() {
+    let dir = scratch("rule_editor_drop");
+    setup(&dir);
+    for (name, mm) in [("a", "1"), ("b", "2"), ("c", "3")] {
+        step(&dir, save_rule(None, "", clearance(name, mm)), false, "ui").unwrap();
+    }
+    step(&dir, Cmd::DropDrcRule { entry: 2, name: "c".into(), target: 0, target_name: "a".into() }, false, "ui").unwrap();
+    let order: Vec<String> = rules(&dir).lines().filter_map(|l| l.strip_prefix("(rule ").map(str::to_string)).collect();
+    assert_eq!(order, ["c", "a", "b"]);
+    let err = step(&dir, Cmd::DropDrcRule { entry: 2, name: "c".into(), target: 0, target_name: "a".into() }, false, "ui").unwrap_err();
+    assert!(err[0].hint.as_deref().unwrap_or("").contains("reopen the DRC Rule Editor"), "{err:?}");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(rules(&dir).contains("(rule a") && rules(&dir).find("(rule a") < rules(&dir).find("(rule c"));
+}
