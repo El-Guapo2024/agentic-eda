@@ -102,7 +102,7 @@ fn normalize_footprint(fp: &mut Vec<Sexpr>, scaled: &mut Vec<String>) {
 ///   `derivePadBoardOffset`: `sx c² + sy s²`, `sx s² + sy c²` by the pad's angle to the footprint), a round pad and a round drill by the mean of the two
 ///   (`( sx + sy ) * 0.5`: "Circular pads use a uniform mean of Sx and Sy so they stay circular");
 /// * a text's size by `|sx|` across and `|sy|` up (`PCB_TEXT::GetTextSize`), its thickness by the mean (`GetTextThickness`);
-/// * a graphic's points (`rebakeFromTransform`), its line width as it was.
+/// * a graphic's points (`rebakeFromTransform`), and its line width by the mean (`PCB_SHAPE::GetWidth`: `fpScaleLinear`).
 ///
 /// **Approximated**: under a scale that differs across and up, KiCad makes a circle an ellipse and an arc an elliptical arc (`SHAPE_T::ELLIPSE`), which the model has not:
 /// their points are scaled, so a circle keeps the radius its point on the circle gives. A custom pad's primitives are not scaled.
@@ -118,6 +118,23 @@ fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
                 let (c, s) = { let r = (angle - fp_angle).to_radians(); (r.cos(), r.sin()) };
                 let (lx, ly) = (sx.abs() * c * c + sy.abs() * s * s, sx.abs() * s * s + sy.abs() * c * c);
                 let round = item.get(3).and_then(Sexpr::text) == Some("circle");
+                // A rounded or chamfered corner is the ratio times the smaller side of the pad stack's own size, the library's (`PADSTACK::RoundRectRadius`:
+                // `std::min( size.x, size.y ) * RoundRectRadiusRatio()`), so the corner keeps its size while the pad grows: the ratio of the baked pad is that radius
+                // over its own smaller side.
+                let lib_size = sexpr::find(item, "size").and_then(|l| Some((sexpr::num(l, 1)?, sexpr::num(l, 2)?)));
+                let board_min = lib_size.map(|(w, h)| if round { (w * mean).min(h * mean) } else { (w * lx).min(h * ly) });
+                let corner = |ratio: f64| match (lib_size, board_min) {
+                    (Some((w, h)), Some(b)) if b > 0.0 => (ratio * w.min(h) / b).clamp(0.0, 0.5),
+                    _ => ratio,
+                };
+                for part in item.iter_mut() {
+                    let Sexpr::List(l) = part else { continue };
+                    if matches!(sexpr::tag(l), Some("roundrect_rratio") | Some("chamfer_ratio")) {
+                        if let Some(r) = sexpr::num(l, 1) {
+                            l[1] = atom(&format!("{}", (corner(r) * 1e6).round() / 1e6));
+                        }
+                    }
+                }
                 for part in item.iter_mut() {
                     let Sexpr::List(l) = part else { continue };
                     match sexpr::tag(l) {
@@ -176,11 +193,30 @@ fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
                 }
             }
             Some("fp_line") | Some("fp_arc") | Some("fp_circle") | Some("fp_rect") | Some("fp_poly") | Some("fp_curve") => {
+                // `PCB_SHAPE::GetWidth`: the line width times `fpScaleLinear`, `( sx + sy ) * 0.5` (signed, as KiCad has it)
+                let linear = (sx + sy) * 0.5;
                 for part in item.iter_mut() {
                     let Sexpr::List(l) = part else { continue };
                     match sexpr::tag(l) {
                         Some("start") | Some("end") | Some("mid") | Some("center") => map_xy(l, &point),
                         Some("pts") => map_pts_in(l, &point),
+                        Some("stroke") => {
+                            for w in l.iter_mut() {
+                                if let Sexpr::List(wl) = w {
+                                    if sexpr::tag(wl) == Some("width") {
+                                        if let Some(v) = sexpr::num(wl, 1) {
+                                            wl[1] = atom(&mm((v * linear).max(0.0)));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // a file before strokes: `(width ..)`
+                        Some("width") => {
+                            if let Some(v) = sexpr::num(l, 1) {
+                                l[1] = atom(&mm((v * linear).max(0.0)));
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -365,24 +401,25 @@ mod tests {
 
     /// A footprint at a scale of 2 across and 1.5 up (KiCad 25ec2335's getters): its pad at (1, 1) is at (2, 1.5), a rectangular pad of 1 x 0.5 is 2 x 0.75, the same pad
     /// turned a quarter is 1.5 x 1 (the scale in its own frame), a round pad of 1 is 1.75 (the mean), a round drill 0.7, a text of 1 mm is 2 across and 1.5 up with a
-    /// thickness of 0.15 x 1.75, a line's points are scaled and its width is not.
+    /// thickness of 0.15 x 1.75, a line's points are scaled and so is its width, by the mean.
     #[test]
     fn a_scaled_footprint_has_the_scale_baked_into_its_children() {
         let mut tree = parse(
             r#"(kicad_pcb (version 20260901) (footprint "X" (transform (translate 10 10) (rotate 0) (scale 2 1.5))
                 (property "Reference" "U1" (at 0 -2 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
                 (fp_line (start -1 -1) (end 1 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
-                (pad "1" smd rect (at 1 1) (size 1 0.5) (layers "F.Cu"))
+                (pad "1" smd roundrect (at 1 1) (size 1 0.5) (layers "F.Cu") (roundrect_rratio 0.25))
                 (pad "2" smd rect (at -1 1 90) (size 1 0.5) (layers "F.Cu"))
                 (pad "3" thru_hole circle (at 0 0) (size 1 1) (drill 0.4) (layers "*.Cu"))))"#,
         );
         assert_eq!(normalize(&mut tree), vec!["U1".to_string()]);
         let text = to_text(&tree);
-        assert!(text.contains("(at 2 1.5) (size 2 0.75)"), "{text}");
+        // the corner stays 0.125 (0.25 of the library's 0.5): 0.125 / 0.75
+        assert!(text.contains("(at 2 1.5) (size 2 0.75) (layers F.Cu) (roundrect_rratio 0.166667)") || text.contains("(at 2 1.5) (size 2 0.75) (layers \"F.Cu\") (roundrect_rratio 0.166667)"), "{text}");
         assert!(text.contains("(at -2 1.5 90) (size 1.5 1)"), "{text}");
         assert!(text.contains("(size 1.75 1.75) (drill 0.7)"), "{text}");
         assert!(text.contains("(at 0 -3 0)") && text.contains("(size 1.5 2) (thickness 0.2625)"), "{text}");
-        assert!(text.contains("(start -2 -1.5) (end 2 -1.5) (stroke (width 0.12)"), "{text}");
+        assert!(text.contains("(start -2 -1.5) (end 2 -1.5) (stroke (width 0.21)"), "{text}");
     }
 
     fn to_text(tree: &Sexpr) -> String {
