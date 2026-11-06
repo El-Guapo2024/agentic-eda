@@ -178,9 +178,15 @@ fn a_footprints_attributes_margins_net_ties_zones_points_and_groups_are_written_
     let text = export_kicad_mod(&fp);
     // `allow_soldermask_bridges` was read and never written
     assert!(text.contains("(attr smd allow_soldermask_bridges)"), "{text}");
-    for kept in ["(solder_mask_margin 0.033)", "(clearance 0.04)", "(net_tie_pad_groups \"1, 2\")", "(duplicate_pad_numbers_are_jumpers no)", "(point (at 3 3)", "(zone (layer \"F.Cu\") (uuid \"66666666-0000-4000-8000-000000000001\")", "(group \"\""] {
+    for kept in ["(solder_mask_margin 0.033)", "(clearance 0.04)", "(net_tie_pad_groups \"1, 2\")", "(point (at 3 3)", "(zone (layer \"F.Cu\") (uuid \"66666666-0000-4000-8000-000000000001\")", "(group \"\""] {
         assert!(text.contains(kept), "{kept} is kept: {text}");
     }
+    // the margins, the clearance and the net ties are the footprint's settings since UI-LEFT F4 (Footprint Properties edits them); the jumper flag that is off is not
+    // written (the file is written as version 20240108, which has no such token, and absent reads as off)
+    assert_eq!(fp.settings.solder_mask_margin, Some(eda_model::units::Nm::new(33_000)));
+    assert_eq!(fp.settings.clearance, Some(eda_model::units::Nm::new(40_000)));
+    assert_eq!(fp.settings.net_tie_pad_groups, vec!["1, 2".to_string()]);
+    assert!(!fp.settings.duplicate_pad_numbers_are_jumpers && !text.contains("duplicate_pad_numbers_are_jumpers"), "{text}");
     // the point, the zone and the group are the footprint's items (`FootprintItems`), the zone with no net
     assert_eq!((fp.items.points.len(), fp.items.zones.len(), fp.items.groups.len()), (1, 1, 1));
     assert!(fp.kicad.tokens.iter().all(|t| !t.starts_with("(zone") && !t.starts_with("(point") && !t.starts_with("(group")), "{:?}", fp.kicad.tokens);
@@ -190,6 +196,7 @@ fn a_footprints_attributes_margins_net_ties_zones_points_and_groups_are_written_
     assert_eq!(back.kicad.tokens, fp.kicad.tokens);
     assert_eq!(back.kicad.uuids, fp.kicad.uuids);
     assert_eq!(back.items, fp.items);
+    assert_eq!(back.settings, fp.settings);
 }
 
 #[test]
@@ -227,4 +234,85 @@ fn a_footprints_line_styles_text_looks_and_datasheet_and_description_fields_are_
     assert_eq!((back.datasheet, back.description_field), (fp.datasheet.clone(), fp.description_field.clone()));
     assert_eq!(back.kicad.text_extras, fp.kicad.text_extras);
     assert_eq!(back.kicad.stroke_types, fp.kicad.stroke_types);
+}
+
+/// UI-LEFT F4 and F5: a footprint's private layers, jumper settings and paste margins are its settings, and a graphic's hatch and lock, a text's lock and its hidden
+/// flag, its looks and keep-upright survive the editor's writer and reader -- and the footprint the board takes from the editor (`to_engine_footprint`) and the one the
+/// editor makes of a board's (`from_engine_footprint`) keep the line styles, hatches, the texts' looks and the hidden text.
+#[test]
+fn a_footprints_settings_hatches_locks_and_hidden_texts_survive_the_writer_and_the_board() {
+    const F: &str = r#"(footprint "Looks"
+  (version 20260206) (generator "pcbnew") (layer "F.Cu")
+  (solder_paste_margin -0.05)
+  (solder_paste_margin_ratio -0.1)
+  (attr smd)
+  (private_layers "User.1" "Eco1.User")
+  (duplicate_pad_numbers_are_jumpers yes)
+  (jumper_pad_groups ("1" "3") ("2" "4"))
+  (fp_rect (start -2 -1) (end 2 1) (stroke (width 0.12) (type dash_dot)) (fill cross_hatch) (locked yes) (layer "F.SilkS") (uuid "22222222-0000-4000-8000-000000000002"))
+  (fp_text user "hidden" (at 0 3 0) (layer "F.Fab") (hide yes) (uuid "33333333-0000-4000-8000-000000000001") (effects (font (size 1 1) (thickness 0.15))))
+  (fp_text user "kept" (locked yes) (at 0 -3 45) (unlocked yes) (layer "F.SilkS") (uuid "33333333-0000-4000-8000-000000000002") (effects (font (size 1 1.2) (thickness 0.15) italic) (justify left top)))
+  (pad "1" smd rect (at -1 0) (size 0.6 1) (layers "F.Cu" "F.Mask" "F.Paste") (locked yes) (uuid "44444444-0000-4000-8000-000000000001"))
+  (pad "2" smd rect (at 1 0) (size 0.6 1) (layers "F.Cu" "F.Mask" "F.Paste") (uuid "44444444-0000-4000-8000-000000000002"))
+  (pad "3" smd rect (at -1 2) (size 0.6 1) (layers "F.Cu" "F.Mask" "F.Paste") (uuid "44444444-0000-4000-8000-000000000003"))
+  (pad "4" smd rect (at 1 2) (size 0.6 1) (layers "F.Cu" "F.Mask" "F.Paste") (uuid "44444444-0000-4000-8000-000000000004"))
+)"#;
+    let fp = parse_library_footprint(F).expect("parses").footprint;
+    let s = &fp.settings;
+    assert_eq!(s.solder_paste_margin, Some(eda_model::units::Nm::new(-50_000)));
+    assert_eq!(s.solder_paste_margin_ratio, Some(-0.1));
+    assert_eq!(s.private_layers, vec!["User.1".to_string(), "Eco1.User".to_string()]);
+    assert!(s.duplicate_pad_numbers_are_jumpers);
+    assert_eq!(s.jumper_pad_groups, vec![vec!["1".to_string(), "3".to_string()], vec!["2".to_string(), "4".to_string()]]);
+    assert!(fp.kicad.tokens.is_empty(), "every form is the footprint's own: {:?}", fp.kicad.tokens);
+    let rect = fp.graphics[0].id().to_string();
+    let hidden = fp.texts.iter().find(|t| t.content == "hidden").unwrap().id.clone();
+    let kept = fp.texts.iter().find(|t| t.content == "kept").unwrap().id.clone();
+    assert_eq!(fp.kicad.hatches.get(&rect), Some(&eda_model::fp_art::Hatch::CrossHatch));
+    assert_eq!(fp.kicad.stroke_types.get(&rect).map(String::as_str), Some("dash_dot"));
+    assert!(fp.kicad.locked.contains(&rect) && fp.kicad.locked.contains(&kept) && !fp.kicad.locked.contains(&hidden));
+    assert!(fp.kicad.hidden_texts.contains(&hidden) && !fp.kicad.hidden_texts.contains(&kept));
+    assert!(fp.kicad.unlocked_texts.contains(&kept));
+    let look = fp.kicad.text_extra(&kept).expect("the text's looks");
+    assert!(look.italic && look.valign == eda_model::ir::TextVAlign::Top);
+    // a pad's lock is one of its own kept forms
+    assert!(fp.pads.iter().find(|p| p.number == "1").unwrap().kicad.tokens.iter().any(|t| t == "(locked yes)"));
+
+    let text = export_kicad_mod(&fp);
+    for written in [
+        "(solder_paste_margin -0.05)",
+        "(solder_paste_margin_ratio -0.1)",
+        "(private_layers \"User.1\" \"Eco1.User\")",
+        "(duplicate_pad_numbers_are_jumpers yes)",
+        "(jumper_pad_groups (\"1\" \"3\") (\"2\" \"4\"))",
+        "(type dash_dot)) (fill cross_hatch) (locked yes) (layer \"F.SilkS\")",
+        "(fp_text user \"kept\" (locked yes) (at",
+        "(layer \"F.Fab\") (hide yes)",
+    ] {
+        assert!(text.contains(written), "{written}: {text}");
+    }
+    let back = parse_library_footprint(&text).expect("parses back").footprint;
+    assert_eq!(back.settings, fp.settings);
+    assert_eq!(back.kicad.hatches, fp.kicad.hatches);
+    assert_eq!(back.kicad.locked, fp.kicad.locked);
+    assert_eq!(back.kicad.hidden_texts, fp.kicad.hidden_texts);
+    assert_eq!(back.kicad.text_extras, fp.kicad.text_extras);
+
+    // to the board and back: the art keeps the dash-dot cross-hatched rectangle, the italic top-justified text that turns with the footprint and the hidden text
+    let engine = fp.to_engine_footprint();
+    let art_rect = engine.art.shapes.iter().find(|s| s.shape.layer() == "F.SilkS").unwrap();
+    assert_eq!((art_rect.style, art_rect.hatch), (eda_model::fp_art::LineStyle::DashDot, Some(eda_model::fp_art::Hatch::CrossHatch)));
+    let art_kept = engine.art.texts.iter().find(|t| t.text == "kept").unwrap();
+    assert!(art_kept.layout.italic && art_kept.layout.valign == -1 && !art_kept.layout.keep_upright && art_kept.layout.size == (eda_model::units::Nm::new(1_200_000), eda_model::units::Nm::new(1_000_000)));
+    assert!(!engine.art.texts.iter().find(|t| t.text == "hidden").unwrap().layout.visible);
+    let again = eda_model::ir::LibraryFootprint::from_engine_footprint(&engine);
+    let r = again.graphics.iter().find(|g| g.layer() == "F.SilkS").unwrap().id().to_string();
+    assert_eq!(again.kicad.hatches.get(&r), Some(&eda_model::fp_art::Hatch::CrossHatch));
+    assert_eq!(again.kicad.stroke_types.get(&r).map(String::as_str), Some("dash_dot"));
+    let h = again.texts.iter().find(|t| t.content == "hidden").expect("a hidden text comes back").id.clone();
+    assert!(again.kicad.hidden_texts.contains(&h));
+    let k = again.texts.iter().find(|t| t.content == "kept").unwrap().id.clone();
+    assert!(again.kicad.unlocked_texts.contains(&k));
+    let e = again.kicad.text_extra(&k).unwrap();
+    assert!(e.italic && e.valign == eda_model::ir::TextVAlign::Top && e.width_nm == Some(eda_model::units::Nm::new(1_200_000)));
 }

@@ -14,7 +14,7 @@ Notes:
 - These findings still have open parts:
   - E3-1 (high);
   - D-A1, B-M4/D3-M5/D4-M1, C3-M1, B3-M1, A-3, D-8, D-10, C-2 and R3-6 (medium, rounds 2-4).
-- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane). **Symbol Editor: 3 left since task-u1-symedit** (Find, Find and Replace, the Symbol Checker).
+- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane); **1 since task-u3-fpedit2** (Create Footprint). **Symbol Editor: 3 left since task-u1-symedit** (Find, Find and Replace, the Symbol Checker).
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
@@ -22,7 +22,7 @@ Notes:
 3. S1: placing labels, power symbols and text -- **done (task-u1-schplace)**
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
-6. F1+F2: Footprint Editor fields and dimmed tools -- **done (task-u1-fpedit)**; the Properties pane (Y3) left
+6. F1+F2: Footprint Editor fields and dimmed tools -- **done (task-u1-fpedit)**; the Properties pane (Y3) **done (task-u3-fpedit2)**
 7. Y1: Symbol Editor Rotate -- **done (task-u1-symedit)**
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
 9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
@@ -53,7 +53,7 @@ Notes:
   - M. PARITY-pcb §39, §60 B5-2, §62 A6-3.
 - **P5 [BD] Line styles.** **done (task-u2-lines)**: a board shape's line style (dash, dot, dash-dot, dash-dot-dot, the file's default) is read, written, drawn as `STROKE_PARAMS::Stroke` cuts it with the width-scaled lengths and the board's dash ratios (board shapes, footprint graphics on the board and in the Footprint Editor), edited in Shape Properties' "Line style:" and the Properties panel's Line Style; kicad-cli plots a dashed F.SilkS line as dashes (slow proof); the QA round trip 22497 -> 20873 lines (PARITY-pcb §69). Left:
   - A shape drawn in the studio is written `(type solid)`, pcbnew's new shapes `(type default)` (both drawn solid).
-  - The Footprint Editor's shape dialog has no Line style row (the library's stroke type is drawn and written, not edited).
+  - ~~The Footprint Editor's shape dialog has no Line style row (the library's stroke type is drawn and written, not edited).~~ **done (task-u3-fpedit2)**: the shape dialog's Line style and hatched Fill, and the Properties pane's Line Style (F5, PARITY-fpedit §21).
   - The 3D view's silkscreen stand-in draws a dashed line solid (KiCad's 3D viewer dashes it, `create_3Dgraphic_brd_items.cpp`).
   - M. GAPS 2; PARITY-pcb §37, §69; r5 B5-5.
 - **P6 [BD] Swap (Alt+S).** **done (task-u1-pcb)** for zones: a zone stays put and two zones swap layers, as `ZONE::SetPosition` is a no-op (R7-2; PARITY-pcb §66). Left:
@@ -329,41 +329,45 @@ Notes:
 ## Footprint editor
 
 - **F1 [FM] Fields and texts on the canvas.** **done (task-u1-fpedit)**, PARITY-fpedit §20: the Reference, the Value and the user fields are drawn, picked, dragged, turned and mirrored (a delete hides one); a double click or E opens the item's dialog (Footprint Reference / Value / Field / Text Properties, the shape's Properties, Pad Properties, the new kinds' dialogs, Group Properties).
-  - Left: a footprint text's bold, italic, vertical justification and keep-upright are not in the model (F5), so its dialog leaves them out (a field has them); Duplicate and Create Array of a field.
+  - Left: Duplicate and Create Array of a field. (A footprint text's bold, italic, vertical justification and keep-upright are in its dialog since task-u3-fpedit2, F5.)
   - ~~Reference, Value and user fields are not drawn or pickable.~~
   - ~~Texts and graphics have no Properties dialog.~~
   - M. PARITY-fpedit §13, §15, §17.
 - **F2 [FM] Dimmed tools.** **done (task-u1-fpedit)**, PARITY-fpedit §20: every tool listed below runs on the footprint's items, one undo step each; a library footprint holds its zones, dimensions, text boxes, points, images, barcodes, tables and groups as items (read and written by the board's readers and writers, kicad-cli keeps them), drawn and editable; Set Anchor moves them (F7's zones and dimensions).
-  - Left: the Properties pane (Y3, another task); Create Footprint (the wizards); a barcode and a reference image are drawn as their boxes; Duplicate, Create Array and the clipboard of the new kinds; the Appearance manager's presets, viewports and Selection Filter; items still kept as text (a locked item, a filled zone) are not drawn; the board's footprints still carry these items as text (GAPS 25).
+  - Left: Create Footprint (the wizards) (the Properties pane is done, Y3, task-u3-fpedit2); a barcode and a reference image are drawn as their boxes; Duplicate, Create Array and the clipboard of the new kinds; the Appearance manager's presets, viewports and Selection Filter; items still kept as text (a locked item, a filled zone) are not drawn; the board's footprints still carry these items as text (GAPS 25).
   - ~~Mirror, Group and Ungroup, the line modes, the sketch and outline modes, the Appearance manager and the Properties pane.~~
   - ~~Dimensions, rule areas and keepouts, text boxes, tables, barcodes, points and reference images.~~
   - ~~A footprint's zones and dimensions are kept but not drawn.~~
   - L. editor_toolbar_support.json; fpedit §8, §16.
-- **F3 [BD] Ctrl+E from the board.**
-  - It edits the library entry, with no link back to that footprint.
-  - Update Footprint on Board updates every footprint of that name.
-  - M. fpedit §1, §6.
-- **F4 [FM] Footprint Properties.**
-  - The name is read-only.
-  - Clearances has only the zone connection.
-  - No Private Layers tab, and no Net Ties or jumper groups.
-  - M. fpedit §5.
-- **F5 [BD] What saving loses.**
-  - Stroke type, hatch, vertical justification, bold, italic, keep-upright and the locked flags are lost on save.
-  - Hidden user text shows.
-  - M. GAPS 25; fpedit §4, §16; r4 E4-F2.
-- **F6 [BD] Pad Properties.**
-  - Layers are set only through presets.
-  - No fabrication property or pad-to-die length.
-  - Round/Slot resets the size, and the type is named "Slot" where KiCad says "Oblong" (E7-F6/F7).
-  - M. fpedit §3, §18.
-- **F7 [BD] Set Anchor.** It leaves zones, dimensions and the courtyard override behind (E3-1). S. r3 E3-1. (task-u1-fpedit: the zones, dimensions, text boxes, images, barcodes and tables move with it now, as `MoveAnchorPosition` does; the courtyard override and the items still kept as text do not.)
-- **F8 [FM] Missing tools and settings.**
-  - No Import Graphics and no preference pages.
-  - The rotation is fixed at 90°.
+- **F3 [BD] Ctrl+E from the board.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: Edit Footprint opens a copy linked to that board footprint (the info bar, Open in library), and Save / Update Footprint on Board puts it back on that one footprint (`ExchangeFootprint` with the pads matched by position), one undo step of the board; the board's Footprint Properties has Edit Footprint... and Edit Library Footprint...; a library edit stays the library's.
+  - Left: the footprint's own paste margins, private layers and jumper groups are not carried onto the board (the board model has no place for them), nor a library pad's layer set, die length or fabrication property (GAPS 26).
+  - ~~It edits the library entry, with no link back to that footprint.~~
+  - ~~Update Footprint on Board updates every footprint of that name.~~
+  - M. fpedit §1, §6, §21.
+- **F4 [FM] Footprint Properties.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: the name is editable with `checkFootprintName`'s refusals and the Overwrite question; Clearance Overrides (clearance, mask, paste absolute and relative through `MARGIN_OFFSET_BINDER`, zone connection), Private Layers, Net Ties and jumper groups ("Pads with duplicate numbers are jumpers"), read, written where KiCad writes them and read back, one undo step.
+  - ~~The name is read-only.~~
+  - ~~Clearances has only the zone connection.~~
+  - ~~No Private Layers tab, and no Net Ties or jumper groups.~~
+  - M. fpedit §5, §21.
+- **F5 [BD] What saving loses.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: a shape's stroke type and hatch, a text's vertical justification, bold, italic, width, knockout and keep-upright and the locked flags are kept by item id, edited in the dialogs, written and read back, and carried to the board and back; a hidden user text is neither drawn nor picked.
+  - Left: Duplicate does not copy the looks of what it copies; a hidden user text is written `(hide yes)`, which KiCad's own writer keeps for fields only.
+  - ~~Stroke type, hatch, vertical justification, bold, italic, keep-upright and the locked flags are lost on save.~~
+  - ~~Hidden user text shows.~~
+  - M. GAPS 25; fpedit §4, §16, §21; r4 E4-F2.
+- **F6 [BD] Pad Properties.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: the copper choice (`UpdateLayersDropdown`, a PTH pad's unconnected-layer modes) and the technical layer boxes beside the presets; Fabrication property; Pad To Die Length and Delay; Round / Oblong keeps the size and is named "Oblong"; the padstack mode was there.
+  - Left: the board's footprints do not carry a library pad's layer set, die length or property (GAPS 26). (E7-F7, the preset against a pad's `*.Mask`, is fixed: the sets are compared with the wildcards spread.)
+  - ~~Layers are set only through presets.~~
+  - ~~No fabrication property or pad-to-die length.~~
+  - ~~Round/Slot resets the size, and the type is named "Slot" where KiCad says "Oblong" (E7-F6/F7).~~
+  - M. fpedit §3, §18, §21.
+- **F7 [BD] Set Anchor.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: the courtyard and the items kept as the text of their forms (a locked or filled zone ...) move with it too, as `MoveAnchorPosition` moves `Zones()`, `GraphicalItems()` and the courtyard cache; a point stays. Left: nothing. ~~It leaves zones, dimensions and the courtyard override behind (E3-1).~~ S. r3 E3-1. (task-u1-fpedit: the zones, dimensions, text boxes, images, barcodes and tables.)
+- **F8 [FM] Missing tools and settings.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: File > Import > Graphics... (and a dropped file) puts a file's shapes into the footprint with the board's importer, one undo step; Preferences > Footprint Editor has Display Options (task-u4-common's), Origins & Axes, Editing Options (the rotation step R turns by, the 45-degree constraint, the arc editing mode, the magnetic points) and Graphics Defaults (what the drawing and Text tools start with).
+  - Left: the Grids, Colors, Toolbars, Footprint Defaults and User Layer Names pages; the arc editing mode is kept, not read by the point editor.
+  - ~~No Import Graphics and no preference pages.~~
+  - ~~The rotation is fixed at 90°.~~
   - ~~No Save Library As.~~ **done (task-u1-libsave)**: a library row's Save As makes a new `.pretty` with its row and copies every footprint into it (PARITY-fpedit §19).
   - M. GAPS 28; fpedit §14, §17; PARITY-common §6.
-- **F9 [BD] Footprint Checker.** Reference and Value aren't checked, and markers sit on the first item. S. GAPS 29; fpedit §12.
+- **F9 [BD] Footprint Checker.** **done (task-u3-fpedit2)**, PARITY-fpedit §21: the markers are where `runChecks` puts them (a short at `Collide`'s contact point, the hole checks at the first pad, the footprint's findings at its origin), and the scratch board carries the footprint's Reference and Value, so the findings name it. KiCad's checker tests no field itself (`CheckFootprintAttributes` and the DRC providers it runs read none), so there is no Reference or Value test to port. ~~Reference and Value aren't checked, and markers sit on the first item.~~ S. GAPS 29; fpedit §12, §21.
 - **F10 [CO] Arrays and numbering.**
   - The Create Array preview.
   - Recombine deduplicates by exact match only.
@@ -377,7 +381,7 @@ Notes:
   - ~~Mirror H and V are not ported.~~
   - ~~No bezier tool, beziers aren't drawn, and Import Symbol drops them.~~
   - M. editor_toolbar_support.json; PARITY-symedit.
-- **Y3 [FM] Properties pane.** The Symbol and Footprint editors have none. M. GAPS 10; PARITY-common §12. **Symbol Editor done (task-u1-symedit)**: KiCad's rows of pins, shapes, texts, text boxes, fields and the symbol, edits on the editor's undo stack; left: the rows a library symbol has no place for (font, colours, line style, hyperlink) are read-only. The Footprint Editor's half is still open (task-u1-fpedit left it).
+- **Y3 [FM] Properties pane.** The Symbol and Footprint editors have none. M. GAPS 10; PARITY-common §12. **Symbol Editor done (task-u1-symedit)**: KiCad's rows of pins, shapes, texts, text boxes, fields and the symbol, edits on the editor's undo stack; left: the rows a library symbol has no place for (font, colours, line style, hyperlink) are read-only. **Footprint Editor done (task-u3-fpedit2)**, PARITY-fpedit §21: `PCB_PROPERTIES_PANEL` beside the Libraries tree on the selected pads, shapes, texts and fields (the footprint with nothing selected), KiCad's rows as a library editor lists them (a test against the PCB registration table), one undo step per edit, Show Properties toggles it; left: a pad's type, shape, hole shape, copper layers, post-machining, backdrill and teardrop rows, fonts, colours, line endings and the footprint's orientation are read-only with the reason as the tooltip.
 - **Y4 [FM] Symbol Properties and text.**
   - No unit display-name grid, no Pin Connections tab and no named body styles.
   - ~~Plain text has no Properties dialog.~~ **done (task-u1-symedit)**: Text Properties (double click, E, Properties), and a library text keeps bold, italic and its justification.
@@ -478,24 +482,19 @@ Notes:
 
 ## 3D viewer
 
-- **D1 [BD] The scene.**
-  - Trapezoid, chamfered and custom pads are drawn as boxes.
-  - NPTH holes aren't cut from the board.
-  - Inner copper takes the F/B colour.
-  - Paste-only pads are grown (V7-1).
-  - No per-layer ambient or specular.
-  - M. GAPS 23/27/31; PARITY-3d §3, §5.
-- **D2 [FM] Controls.**
-  - No right-click menu, 3D Navigator, layer presets, saved viewports or preferences page.
-  - The PCB selection isn't highlighted.
-  - M. PARITY-3d §1-§5.
-- **D3 [FM] Layer tree.** No Values, Footprint Text or Off-board Silkscreen rows. S. PARITY-3d §5.
-- **D4 [FM] Models.**
-  - No X3D or IGES, and no Extruded 3D Body.
-  - Migrate 3D Models doesn't run at load.
-  - KiCad 5 path aliases aren't used.
-  - A bottom-side footprint's tab shows top-side numbers.
-  - M. GAPS 30; PARITY-3d §6; PARITY-pcb §31.
+- **D1 [BD] The scene.** **done (task-u3-3d)**: every pad in its real shape (trapezoid, chamfered, custom, a turned one turned), the body less every through and non-plated hole (`GET /api/board3d`), vias as rings with barrels, inner copper drawn when the body does not hide it and in its own PCB editor colour, the pads' openings in the solder mask, no paste margin for a pad with no copper (V7-1), `render_3d_opengl`'s ambient, specular, shininess and transparency per layer (PARITY-3d §3, §9). Left:
+  - A track's, a shape's or an untented via's own mask opening (the pads' openings are done).
+  - Tracks and zones are not cut at the holes (a track stops where it ends in one).
+  - A custom pad's paste margin, the off-board pads, plated vs bare copper, counterbores and backdrills.
+  - The lights are three.js's: the shading is close to KiCad's, not the same.
+- **D2 [FM] Controls.** **done (task-u3-3d)**: the right-click menu with its Rotate Board and Move Board submenus, the 3D Navigator, layer presets (Follow PCB Editor, Follow PCB Plot Settings, "legacy colors", saved ones), saved viewports, Preferences > 3D Viewer > General and Realtime Rendering, the PCB selection drawn in the selection colour and a click in 3D selecting the footprint (PARITY-3d §2, §5, §9). Left:
+  - The presets' and viewports' Ctrl+Tab / Shift+Tab switchers.
+  - The Render Options and While Moving preferences (not offered).
+  - The viewports are not written into the derived `.kicad_pro`.
+- **D3 [FM] Layer tree.** **done (task-u3-3d)**: the Values, Footprint Text (KiCad's meta-control) and Off-board Silkscreen rows (the silkscreen clipped to the board while it is off), and the 3D Navigator row. Left: the silkscreen is not clipped at the holes or the mask. PARITY-3d §5.
+- **D4 [FM] Models.** **done (task-u3-3d)**: X3D, IGES and .wrz models through kicad-cli's conversion; the Extruded 3D Body read, written, drawn and set in the board's 3D Models tab; Migrate 3D Models when the board opens, with KiCad's notice; KiCad 5 aliases (`${KISYS3DMOD}`, `ALIAS:file`, a `3Dresolver.cfg` migrated into path variables); a bottom-side footprint's tab shows the file's numbers (PARITY-3d §6, GAPS 30). Left:
+  - The body's Export..., the body in the tab's preview and in the Footprint Editor's dialog.
+  - Migrate's folder picker over the whole disk.
 - **D5 [KO] Raytracing.** It is out of scope, and a part with no model shows its F.Fab box. XL. PARITY-3d §2, §6.
 
 ## Import

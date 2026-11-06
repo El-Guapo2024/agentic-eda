@@ -6,8 +6,9 @@
 // The list is the dialog's working copy (`m_shapes3D_list`): nothing is sent until its OK (kicad-port/fpModels.ts `boardModelsCmds`, or the Footprint Editor's whole panel).
 // The rows are the file's numbers; the rotation fields show them the other way round, as the dialog does. The status cell is the server's (`POST /api/3dmodel/check`).
 //
-// Not ported: the "Extruded 3D Body" box of this tab (`EXTRUDED_3D_BODY`: a body made from the courtyard or fab outline, its height and standoff, a material and a colour, and its export) and
-// the embedded files (`PANEL_EMBEDDED_FILES`): GAPS.md item 30.
+// The "Extruded 3D Body" box (`EXTRUDED_3D_BODY`: Enable, Show, the overall and standoff heights, the extrusion source, the colour swatch and the material) is the board's dialog's
+// (`body` / `onBody`: kicad-port/fpModels.ts `BodyDraft`, sent by OK as `set_extruded_body`). Not ported: its "Export..." (STEP, GLB, STL or BREP of the body through
+// `STEP_PCB_MODEL`, which no kicad-cli command makes), the body drawn in this tab's preview, and the box in the Footprint Editor's dialog.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import type { Part } from "../../api/types";
@@ -29,6 +30,10 @@ import {
   stepOffset,
   stepRotation,
   stepScale,
+  EXTRUSION_MATERIALS,
+  EXTRUSION_SOURCES,
+  withMaterial,
+  type BodyDraft,
   type ModelCheck,
   type ModelRow,
   type Vec3,
@@ -44,6 +49,9 @@ export interface FootprintModelsPanelProps {
   /** The footprint the preview shows under the models. */
   previewOf: PreviewOf | null;
   units: LengthUnit;
+  /** The Extruded 3D Body box, shown when given (the board's Footprint Properties). */
+  body?: BodyDraft;
+  onBody?: (body: BodyDraft) => void;
 }
 
 const AXES = ["X", "Y", "Z"] as const;
@@ -98,7 +106,67 @@ function Field({ shown, onText, onStep, testId, disabled }: { shown: string; onT
 
 const withAxis = (v: Vec3, axis: number, value: number): Vec3 => v.map((x, i) => (i === axis ? value : x)) as Vec3;
 
-export function FootprintModelsPanel({ rows, onRows, previewOf, units }: FootprintModelsPanelProps) {
+/** `#rrggbb` of a 0..1 colour, and back (the swatch's alpha is kept: an HTML colour input has none). */
+const hexOf = (c: readonly number[]): string => `#${c.slice(0, 3).map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0")).join("")}`;
+const colourOf = (hex: string, alpha: number): [number, number, number, number] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).concat(alpha) as [number, number, number, number];
+
+/** The box (`m_extrusionSizer`, "Extruded 3D Body"), its controls enabled with "Enable" (`updateExtrusionControls`). */
+function ExtrudedBodyBox({ body, onBody }: { body: BodyDraft; onBody: (b: BodyDraft) => void }) {
+  const off = !body.enabled;
+  const set = (patch: Partial<BodyDraft>) => onBody({ ...body, ...patch });
+  const row = { display: "flex", alignItems: "center", gap: 6, marginTop: 3 } as const;
+  const label = { width: 112, fontSize: 12 } as const;
+  return (
+    <fieldset style={{ margin: 0, padding: "2px 6px 6px" }} data-testid="extruded-body">
+      <legend style={{ fontSize: 11, padding: "0 3px" }}>Extruded 3D Body</legend>
+      <div style={row}>
+        <label title="Enable extruded 3D model for this footprint">
+          <input type="checkbox" checked={body.enabled} onChange={(e) => set({ enabled: e.target.checked })} data-testid="extruded-enable" /> Enable
+        </label>
+        <label title="Show extruded 3D model" style={{ marginLeft: 12 }}>
+          <input type="checkbox" checked={body.show} disabled={off} onChange={(e) => set({ show: e.target.checked })} data-testid="extruded-show" /> Show
+        </label>
+      </div>
+      <div style={row}>
+        <span style={label}>Overall height:</span>
+        <input value={body.height} disabled={off} style={{ width: 80 }} onChange={(e) => set({ height: e.target.value })} data-testid="extruded-height" />
+        <span>mm</span>
+      </div>
+      <div style={row}>
+        <span style={label}>Standoff height:</span>
+        <input value={body.standoff} disabled={off} style={{ width: 80 }} onChange={(e) => set({ standoff: e.target.value })} data-testid="extruded-standoff" />
+        <span>mm</span>
+      </div>
+      <div style={row}>
+        <span style={label}>Extrusion source:</span>
+        <select value={body.source} disabled={off} onChange={(e) => set({ source: Number(e.target.value) })} data-testid="extruded-source">
+          {EXTRUSION_SOURCES.map((s, i) => (
+            <option key={s.layer} value={i}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div style={row}>
+        <span style={label}>Color:</span>
+        {/* `onExtrusionColorChanged`: a colour chosen is the body's own from then on (`m_userSetExtrusionColor = true`) */}
+        <input type="color" value={hexOf(body.color)} disabled={off} onChange={(e) => set({ color: colourOf(e.target.value, body.color[3]), userColor: true })} data-testid="extruded-color" />
+      </div>
+      <div style={row}>
+        <span style={label}>Material:</span>
+        <select value={body.material} disabled={off} onChange={(e) => onBody(withMaterial(body, Number(e.target.value)))} data-testid="extruded-material">
+          {EXTRUSION_MATERIALS.map((m, i) => (
+            <option key={m.material} value={i}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    </fieldset>
+  );
+}
+
+export function FootprintModelsPanel({ rows, onRows, previewOf, units, body, onBody }: FootprintModelsPanelProps) {
   const [selected, setSelected] = useState(0);
   const [checks, setChecks] = useState<Record<string, ModelCheck>>({});
   const [chooser, setChooser] = useState(false);
@@ -296,6 +364,7 @@ export function FootprintModelsPanel({ rows, onRows, previewOf, units }: Footpri
         </div>
         <ModelPreview3D part={part} rows={shownRows} height={290} />
       </div>
+      {body && onBody && <ExtrudedBodyBox body={body} onBody={onBody} />}
       {chooser && (
         <Model3dChooserDialog
           onCancel={() => setChooser(false)}

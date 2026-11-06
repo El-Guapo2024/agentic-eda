@@ -1,7 +1,7 @@
 // `FOOTPRINT_EDIT_FRAME::SelectFootprintFromBoard` (pcbnew/load_select_footprint.cpp), the list `LoadFootprintFromBoard` shows
 // (`pcbnew.ModuleEditor.loadFootprintFromBoard`, "Load footprint from current PCB"): "Footprints [%u items]", one row per footprint
-// of the board, named by its reference. The chosen one is opened in the editor, linked to its board part so "Insert footprint into
-// PCB" knows what it updates.
+// of the board, named by its reference. The chosen one is opened in the editor as `LoadFootprintFromBoard` opens it: a copy of the board's footprint linked to it
+// (`fp_editor open_from_board`, UI-LEFT F3), which Save and "Insert footprint into PCB" put back on that footprint only.
 import { useState } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
@@ -19,8 +19,7 @@ export function LoadFromBoardDialog() {
     const part = parts.find((p) => p.ref === ref);
     if (!part?.footprint) return;
     close();
-    await api.openFootprint(part.footprint);
-    dispatch({ type: "SET_LINKED_PART", ref: part.ref });
+    await api.openFromBoard(part.ref);
   };
   return (
     <div className="dialog-backdrop" onClick={close}>

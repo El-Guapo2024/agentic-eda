@@ -23,6 +23,7 @@ use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 pub mod embedded;
+pub mod extruded_body_io;
 mod barcode_io;
 mod pcb_image;
 mod pcb_items_io;

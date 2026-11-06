@@ -76,6 +76,11 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.InteractiveDrawing.drawTable",
   "pcbnew.InteractiveDrawing.barcode",
   "pcbnew.InteractiveDrawing.placeReferenceImage",
+  // File > Import > Graphics... (`DRAWING_TOOL::PlaceImportedGraphics`, both frames) and Edit Library Footprint (the board's selected footprint; the Footprint Editor's
+  // footprint loaded from the board: `FOOTPRINT_EDITOR_CONTROL::EditLibraryFootprint`) -- UI-LEFT F3, F8.
+  "pcbnew.InteractiveDrawing.placeImportedGraphics",
+  "pcbnew.InteractiveDrawing.ddImportGraphics",
+  "pcbnew.EditorControl.EditLibFpInFpEditor",
 ]);
 
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */

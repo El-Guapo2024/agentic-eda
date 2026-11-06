@@ -110,3 +110,24 @@ export function saveSearchDirs(dirs: readonly string[]): void {
 export function withSearchDir(dirs: readonly string[], dir: string): string[] {
   return dirs.includes(dir) ? [...dirs] : [...dirs, dir];
 }
+
+// ------------------------------------------------------------------------------------------------------------ at load
+
+/** What `GET /api/3dmodel/automigrate` answers (crates/cli/src/model3d_tab_api.rs `auto_migrate`): `AutoMigrateByFilename`'s replacements, the one step that makes them (null for none),
+ *  and `CountUnresolvedWrlReferences` once it is made. */
+export interface AutoMigration {
+  replacements: Record<string, string>;
+  cmd: Cmd | null;
+  unresolved: number;
+  missing: number;
+}
+
+/** The load notice's text (`PCB_EDIT_FRAME::OnBoardLoaded`): `wxPLURAL( "%d WRL 3D model could not be matched to an equivalent STEP model.", "%d WRL 3D models could not be matched to equivalent
+ *  STEP models.", unresolved )` -- English's plural rule, one is singular. `null` when every reference was matched (no info bar: `if( unresolved > 0 )`). */
+export function autoMigrateNotice(unresolved: number): string | null {
+  if (unresolved <= 0) return null;
+  return unresolved === 1 ? `${unresolved} WRL 3D model could not be matched to an equivalent STEP model.` : `${unresolved} WRL 3D models could not be matched to equivalent STEP models.`;
+}
+
+/** How long the load notice stays (`m_loadNoticeInfoBar->ShowMessageFor( msg, 10000, wxICON_INFORMATION )`). */
+export const AUTO_MIGRATE_NOTICE_MS = 10000;

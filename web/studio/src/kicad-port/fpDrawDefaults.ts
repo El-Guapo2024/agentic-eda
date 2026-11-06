@@ -6,9 +6,9 @@
 //   pcbnew/tools/zone_create_helper.cpp      ZONE_CREATE_HELPER::commitZone, a graphic polygon:
 //                                           `poly->SetFilled( layer != Edge_Cuts && layer != F_CrtYd && layer != B_CrtYd )` with the layer's line thickness
 //
-// The studio has no Footprint Editor preferences page for these defaults, so the factory values are the ones used.
+// Preferences > Footprint Editor > Graphics Defaults (UI-LEFT F8) sets them (`Preferences.fpTextGraphics`); without it the factory values are the ones used.
 
-import type { CmdShape } from "../api/types";
+import type { CmdShape, TextGraphicsDefaults } from "../api/types";
 import { lineThicknessNm } from "./layerDefaults";
 
 /**
@@ -20,9 +20,9 @@ export const FP_EDITOR_LAYERS = [
   "Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab", "User.1", "User.2", "User.3", "User.4", "User.5", "User.6", "User.7", "User.8", "User.9",
 ];
 
-/** `bds.GetLineThickness( layer )` with the Footprint Editor's defaults. */
-export function fpStrokeWidthNm(layer: string): number {
-  return lineThicknessNm(undefined, layer);
+/** `bds.GetLineThickness( layer )` with the Footprint Editor's defaults (`defaults`: the Graphics Defaults page's, the factory table without it). */
+export function fpStrokeWidthNm(layer: string, defaults?: TextGraphicsDefaults | null): number {
+  return lineThicknessNm(defaults ?? undefined, layer);
 }
 
 /** `ZONE_CREATE_HELPER::commitZone`: a graphic polygon is filled unless it is on Edge.Cuts or a courtyard. */
@@ -33,9 +33,9 @@ export function fpPolygonFilled(layer: string): boolean {
 export type FpPointShapeKind = "segment" | "rect" | "circle" | "arc" | "polygon";
 
 /** The shape a point-counted drawing tool commits from its clicks, with the layer's width (and, for a polygon, its fill); null while the points are too few. */
-export function fpShape(kind: FpPointShapeKind, pts: readonly (readonly [number, number])[], layer: string): CmdShape | null {
+export function fpShape(kind: FpPointShapeKind, pts: readonly (readonly [number, number])[], layer: string, defaults?: TextGraphicsDefaults | null): CmdShape | null {
   const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
-  const stroke_width = fpStrokeWidthNm(layer);
+  const stroke_width = fpStrokeWidthNm(layer, defaults);
   switch (kind) {
     case "segment":
       return pts.length >= 2 ? { kind: "segment", layer, stroke_width, filled: false, start: p(0), end: p(1) } : null;

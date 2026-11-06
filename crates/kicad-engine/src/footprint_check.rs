@@ -262,9 +262,24 @@ pub fn scratch_board(fp: &LibraryFootprint) -> Scratch {
             },
         }
     }
-    // The Footprint Editor's footprint carries the Reference `REF**`; here it is hidden, so that what the checks say of the footprint names it and no field lands on a pad.
-    body.insert_str(0, &format!("\t\t(property \"Reference\" \"REF**\" (at 0 0 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n", uuid_of(next)));
-    next += 1;
+    // The footprint's own Reference and Value as the Footprint Editor holds them (`REF**` and the name of a library footprint, the part's reference and value of one loaded
+    // from the board: UI-LEFT F9), so that what the checks say of the footprint names it as KiCad's checker does ("Footprint R1", "Pad 1 [1] of R1"). Both hidden: the
+    // checker's tests do not look at the fields (`CheckClippedSilk` walks `m_drawings`, never `m_fields`), and a shown one on the silkscreen would be clipped by the
+    // board DRC's silk test over a pad near the origin.
+    let quote = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
+    let reference = fp.reference.as_ref().and_then(|l| l.text.clone()).unwrap_or_else(|| eda_model::fp_edit::LIBRARY_REFERENCE_TEXT.to_string());
+    let value = fp.value.as_ref().and_then(|l| l.text.clone()).unwrap_or_else(|| fp.name.rsplit(':').next().unwrap_or(&fp.name).to_string());
+    body.insert_str(
+        0,
+        &format!(
+            "\t\t(property \"Reference\" \"{}\" (at 0 0 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n\t\t(property \"Value\" \"{}\" (at 0 0 0) (layer \"F.Fab\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n",
+            quote(&reference),
+            uuid_of(next),
+            quote(&value),
+            uuid_of(next + 1)
+        ),
+    );
+    next += 2;
     let r = reach(fp) + mm(10.0);
     let mut pcb = String::from("(kicad_pcb\n\t(version 20241229)\n\t(generator \"eda-kicad\")\n\t(generator_version \"9.0\")\n\t(general\n\t\t(thickness 1.6)\n\t\t(legacy_teardrops no)\n\t)\n\t(paper \"A3\")\n");
     pcb.push_str(LAYERS);
@@ -293,8 +308,9 @@ pub struct FootprintCheck {
     pub violations: Vec<Violation>,
 }
 
-/// Where a violation's marker goes (nanometres, the footprint's own frame): its first item's position, the middle of the first two when there are two (a short is
-/// marked where the pads meet), the origin for a violation that names the footprint alone.
+/// Where a violation's marker goes (nanometres, the footprint's own frame) when nothing more is known of it than kicad-cli's report says: its first item's position,
+/// the middle of the first two when there are two, the origin for a violation that names the footprint alone. [`marker_in`] places the checker's markers as
+/// `DIALOG_FOOTPRINT_CHECKER::runChecks` does.
 pub fn marker_at(v: &Violation) -> (Nm, Nm) {
     match v.items.as_slice() {
         [] => (Nm::ZERO, Nm::ZERO),
@@ -303,14 +319,225 @@ pub fn marker_at(v: &Violation) -> (Nm, Nm) {
     }
 }
 
+/// Where `DIALOG_FOOTPRINT_CHECKER::runChecks` puts the marker of `v` on the footprint `fp` (UI-LEFT F9; kicad-cli's report gives the items' positions, not the marker's):
+/// - the footprint's own findings (no courtyard, the type, a net tie's pad groups) at `{ 0, 0 }`;
+/// - a pad's (`CheckPads`) at the pad (`aPad->GetPosition()`), and the two hole checks (`CheckShortingPads`: `pos = pad->GetPosition()`) at the first of the two pads
+///   in the footprint's order;
+/// - two pads that short (`padShape->Collide( otherShape, 0, nullptr, &pos )`) where they meet: for two pads whose shape is a polygon (a rectangle, a trapezoid) KiCad's
+///   `Collide( SHAPE_LINE_CHAIN_BASE, SHAPE_LINE_CHAIN_BASE )` location ([`chain_contact`]); for other shapes the middle of the overlap of their boxes;
+/// - silkscreen clipped by the mask (`CheckClippedSilk`'s `Collide` location) at the middle of the overlap of the drawing's and the pad's boxes;
+/// - anything else as [`marker_at`].
+pub fn marker_in(fp: &LibraryFootprint, v: &Violation) -> (Nm, Nm) {
+    let pad_index = |id: &Option<String>| id.as_ref().and_then(|id| fp.pads.iter().position(|p| &p.id == id));
+    let mut pads: Vec<usize> = v.items.iter().filter_map(|it| pad_index(&it.id)).collect();
+    pads.sort_unstable();
+    match v.kind.as_str() {
+        "missing_courtyard" | "footprint_type_mismatch" | "footprint" => (Nm::ZERO, Nm::ZERO),
+        "padstack" | "padstack_invalid" | "through_hole_pad_without_hole" | "holes_co_located" | "hole_to_hole" if !pads.is_empty() => {
+            let p = &fp.pads[pads[0]];
+            (p.at.x, p.at.y)
+        }
+        "shorting_items" if pads.len() >= 2 => {
+            let (a, b) = (&fp.pads[pads[0]], &fp.pads[pads[1]]);
+            match (pad_outline(a), pad_outline(b)) {
+                (Some(pa), Some(pb)) => chain_contact(&pa, &pb).map(|(x, y)| (Nm::new(x), Nm::new(y))).unwrap_or_else(|| box_overlap_centre(pad_box(a), pad_box(b))),
+                _ => box_overlap_centre(pad_box(a), pad_box(b)),
+            }
+        }
+        "silk_over_copper" if pads.len() == 1 => {
+            let graphic = v.items.iter().find_map(|it| it.id.as_ref().and_then(|id| fp.graphics.iter().find(|g| g.id() == id)));
+            match graphic {
+                Some(g) => box_overlap_centre(shape_box(g), pad_box(&fp.pads[pads[0]])),
+                None => marker_at(v),
+            }
+        }
+        _ => marker_at(v),
+    }
+}
+
+type Box2 = (i64, i64, i64, i64);
+
+/// The middle of the overlap of two boxes (of the nearer edges when they do not overlap).
+fn box_overlap_centre(a: Box2, b: Box2) -> (Nm, Nm) {
+    let (x0, y0, x1, y1) = (a.0.max(b.0), a.1.max(b.1), a.2.min(b.2), a.3.min(b.3));
+    (Nm::new((x0 + x1) / 2), Nm::new((y0 + y1) / 2))
+}
+
+/// `RotatePoint( x, y, angle )`: KiCad's turn of a point, positive counter-clockwise on the screen (y down).
+fn rotate(p: (f64, f64), deg: f64) -> (f64, f64) {
+    let (s, c) = deg.to_radians().sin_cos();
+    (p.0 * c + p.1 * s, p.1 * c - p.0 * s)
+}
+
+/// The pad's orientation as KiCad keeps it (`GetOrientation()`, counter-clockwise; the file's angle).
+fn pad_orientation_deg(p: &eda_model::ir::LibraryPad) -> f64 {
+    -(p.rot as f64) / 1000.0
+}
+
+/// `PAD::ShapePos`: the copper's centre, the pad's position with its offset turned with it.
+fn shape_pos(p: &eda_model::ir::LibraryPad) -> (f64, f64) {
+    let o = rotate((p.offset.x.get() as f64, p.offset.y.get() as f64), pad_orientation_deg(p));
+    (p.at.x.get() as f64 + o.0, p.at.y.get() as f64 + o.1)
+}
+
+/// `PAD::buildEffectiveShape` of a rectangle or a trapezoid (no corner radius): the four corners in its order, turned and moved -- and, when they make a rectangle on the
+/// axes, `SHAPE_RECT`'s outline instead (`TransformToPolygon`: the top-left corner, then clockwise on the screen). `None` for any other shape.
+fn pad_outline(p: &eda_model::ir::LibraryPad) -> Option<Vec<(i64, i64)>> {
+    use eda_model::ir::LibraryPadShape;
+    let (hx, hy) = (p.size.0.get() / 2, p.size.1.get() / 2);
+    let (dx, dy) = match p.shape {
+        LibraryPadShape::Rect => (0, 0),
+        LibraryPadShape::Trapezoid => p.trapezoid_delta.map(|(x, y)| (x.get() / 2, y.get() / 2)).unwrap_or((0, 0)),
+        _ => return None,
+    };
+    let corners = [(-hx - dy, hy + dx), (hx + dy, hy - dx), (hx - dy, -hy + dx), (-hx + dy, -hy - dx)];
+    let deg = pad_orientation_deg(p);
+    let c = shape_pos(p);
+    let pts: Vec<(i64, i64)> = corners
+        .iter()
+        .map(|&(x, y)| {
+            let r = rotate((x as f64, y as f64), deg);
+            ((r.0 + c.0).round() as i64, (r.1 + c.1).round() as i64)
+        })
+        .collect();
+    let axis_rect = (pts[0].1 == pts[1].1 && pts[1].0 == pts[2].0 && pts[2].1 == pts[3].1 && pts[3].0 == pts[0].0) || (pts[0].0 == pts[1].0 && pts[1].1 == pts[2].1 && pts[2].0 == pts[3].0 && pts[3].1 == pts[0].1);
+    if axis_rect {
+        let (x0, y0) = (pts[0].0.min(pts[2].0), pts[0].1.min(pts[2].1));
+        let (w, h) = ((pts[2].0 - pts[0].0).abs(), (pts[2].1 - pts[0].1).abs());
+        return Some(vec![(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]);
+    }
+    Some(pts)
+}
+
+/// The box of a pad's copper (its corners for a polygon, else its size about its centre, turned).
+fn pad_box(p: &eda_model::ir::LibraryPad) -> Box2 {
+    let pts: Vec<(i64, i64)> = pad_outline(p).unwrap_or_else(|| {
+        let (hx, hy) = (p.size.0.get() as f64 / 2.0, p.size.1.get() as f64 / 2.0);
+        let c = shape_pos(p);
+        [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)].iter().map(|&q| rotate(q, pad_orientation_deg(p))).map(|(x, y)| ((x + c.0).round() as i64, (y + c.1).round() as i64)).collect()
+    });
+    let xs = pts.iter().map(|q| q.0);
+    let ys = pts.iter().map(|q| q.1);
+    (xs.clone().min().unwrap_or(0), ys.clone().min().unwrap_or(0), xs.max().unwrap_or(0), ys.max().unwrap_or(0))
+}
+
+/// The box of a drawing, its stroke counted.
+fn shape_box(s: &Shape) -> Box2 {
+    let half = s.stroke_width().get() / 2;
+    let pts = s.points();
+    let xs = pts.iter().map(|q| q.x.get());
+    let ys = pts.iter().map(|q| q.y.get());
+    (xs.clone().min().unwrap_or(0) - half, ys.clone().min().unwrap_or(0) - half, xs.max().unwrap_or(0) + half, ys.max().unwrap_or(0) + half)
+}
+
+/// `SHAPE_LINE_CHAIN_BASE::PointInside( aPt, 0 )`: the ray to the right crosses an odd number of edges (`rescale( diff.x, aPt.y - p1.y, diff.y )`).
+fn point_inside(poly: &[(i64, i64)], pt: (i64, i64)) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    for i in 0..poly.len() {
+        let p1 = poly[i];
+        let p2 = poly[(i + 1) % poly.len()];
+        let diff = (p2.0 - p1.0, p2.1 - p1.1);
+        if diff.1 == 0 {
+            continue;
+        }
+        // `rescale( a, b, c )`: a * b / c rounded to the nearest
+        let d = ((diff.0 as i128 * (pt.1 - p1.1) as i128) as f64 / diff.1 as f64).round() as i64;
+        if (p1.1 >= pt.1) != (p2.1 >= pt.1) && pt.0 - p1.0 < d {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// `rescale( a, b, c )`: `a * b / c`, rounded.
+fn rescale(a: i128, b: i128, c: i128) -> i128 {
+    ((a * b) as f64 / c as f64).round() as i128
+}
+
+/// `SEG::Intersect( aSeg )` (`SEG::intersects`, libs/kimath/src/geometry/seg.cpp at 8303b2ad): where segment `a` meets segment `b`, their ends included; two collinear
+/// segments that overlap meet at the middle of the overlap (`checkCollinearOverlap`, measured along the axis `a` runs most along).
+fn seg_intersection(a: ((i64, i64), (i64, i64)), b: ((i64, i64), (i64, i64))) -> Option<(i64, i64)> {
+    let ((ax, ay), (bx, by)) = a;
+    let ((cx, cy), (dx_, dy_)) = b;
+    if ax.max(bx) < cx.min(dx_) || cx.max(dx_) < ax.min(bx) || ay.max(by) < cy.min(dy_) || cy.max(dy_) < ay.min(by) {
+        return None;
+    }
+    let cross = |u: (i128, i128), v: (i128, i128)| u.0 * v.1 - u.1 * v.0;
+    let dir1 = ((bx - ax) as i128, (by - ay) as i128);
+    let dir2 = ((dx_ - cx) as i128, (dy_ - cy) as i128);
+    let offset = ((cx - ax) as i128, (cy - ay) as i128);
+    let det = cross(dir2, dir1);
+    if det == 0 {
+        if cross(dir1, offset) != 0 {
+            return None;
+        }
+        // collinear: the middle of the overlap on the axis `a` runs most along, the other coordinate on `a`'s line
+        let use_x = dir1.0.abs() >= dir1.1.abs();
+        let (s1, e1, s2, e2, o1, oe) = if use_x { (ax, bx, cx, dx_, ay, by) } else { (ay, by, cy, dy_, ax, bx) };
+        let (min1, max1, min2, max2) = (s1.min(e1), s1.max(e1), s2.min(e2), s2.max(e2));
+        if !(max1 >= min2 && max2 >= min1) {
+            return None;
+        }
+        let proj = (min1.max(min2) + max1.min(max2)) / 2;
+        let other = if e1 != s1 { o1 + rescale((proj - s1) as i128, (oe - o1) as i128, (e1 - s1) as i128) as i64 } else { o1 };
+        return Some(if use_x { (proj, other) } else { (other, proj) });
+    }
+    let p2 = cross(dir2, offset);
+    let p1 = cross(dir1, offset);
+    let outside = if det > 0 { p1 < 0 || p1 > det || p2 < 0 || p2 > det } else { p1 > 0 || p1 < det || p2 > 0 || p2 < det };
+    if outside {
+        return None;
+    }
+    Some(((cx as i128 + rescale(p1, dir2.0, det)) as i64, (cy as i128 + rescale(p1, dir2.1, det)) as i64))
+}
+
+/// `Collide( const SHAPE_LINE_CHAIN_BASE& aA, const SHAPE_LINE_CHAIN_BASE& aB, 0, nullptr, &location )` (libs/kimath/src/geometry/shape_collisions.cpp): `aA`'s first point
+/// when `aB` holds it, else `aB`'s first point when `aA` holds it, else where the first of `aA`'s edges (sorted by their start, x then y) crosses the first of `aB`'s that it
+/// crosses. `None` when the outlines do not touch.
+pub fn chain_contact(a: &[(i64, i64)], b: &[(i64, i64)]) -> Option<(i64, i64)> {
+    if !a.is_empty() && point_inside(b, a[0]) {
+        return Some(a[0]);
+    }
+    if !b.is_empty() && point_inside(a, b[0]) {
+        return Some(b[0]);
+    }
+    let segs = |poly: &[(i64, i64)]| {
+        let mut v: Vec<((i64, i64), (i64, i64))> = (0..poly.len()).map(|i| (poly[i], poly[(i + 1) % poly.len()])).collect();
+        v.sort_by(|x, y| (x.0 .0, x.0 .1).cmp(&(y.0 .0, y.0 .1)));
+        v
+    };
+    let (sa, sb) = (segs(a), segs(b));
+    for x in &sa {
+        for y in &sb {
+            if let Some(p) = seg_intersection(*x, *y) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 impl FootprintCheck {
-    /// `{ ok, engine, markers: [{ type, description, severity, at: [x, y], items: [{ description, pos: [x, y], id }] }], counts: { errors, warnings } }`.
+    /// `{ ok, engine, markers: [{ type, description, severity, at: [x, y], items: [{ description, pos: [x, y], id }] }], counts: { errors, warnings } }`, each marker where
+    /// `runChecks` puts it on `fp` ([`marker_in`]).
+    pub fn to_json_for(&self, fp: &LibraryFootprint) -> Value {
+        self.json_with(|v| marker_in(fp, v))
+    }
+
+    /// [`Self::to_json_for`] without the footprint: the markers by [`marker_at`].
     pub fn to_json(&self) -> Value {
+        self.json_with(marker_at)
+    }
+
+    fn json_with(&self, place: impl Fn(&Violation) -> (Nm, Nm)) -> Value {
         let markers: Vec<Value> = self
             .violations
             .iter()
             .map(|v| {
-                let at = marker_at(v);
+                let at = place(v);
                 json!({
                     "type": v.kind,
                     "description": v.description,
@@ -407,8 +634,14 @@ mod tests {
         assert!(s.pcb.contains("(footprint \"TEST:Two\"\n\t\t(layer \"F.Cu\")") && s.pcb.contains("(at 0 0)"), "placed at the origin on the front");
         assert!(!s.pcb.contains("(generator \"eda\")") && !s.pcb.contains("(version 20240108)"), "a board's footprint has no version of its own");
         assert!(s.pcb.contains("(property \"Reference\" \"REF**\"") && s.pcb.contains("(hide yes)"), "a hidden Reference, as the editor's footprint has one");
-        // the library file's own fields (a visible REF** on the silkscreen, the Value) are not on it: the checker's silk test never looks at fields
-        assert_eq!(s.pcb.matches("(property ").count(), 1, "{}", s.pcb);
+        assert!(s.pcb.contains("(property \"Value\" \"Two\""), "and its Value, the footprint's name: {}", s.pcb);
+        // the library file's own fields (a visible REF** on the silkscreen) are not on it: the checker's silk test never looks at fields; the two the board has are hidden
+        assert_eq!(s.pcb.matches("(property ").count(), 2, "{}", s.pcb);
+        assert_eq!(s.pcb.matches("(hide yes)").count(), 2, "{}", s.pcb);
+        // a footprint loaded from the board names the part: "Footprint R1"
+        let mut linked = fp.clone();
+        linked.reference = Some(eda_model::fp_edit::FieldLayout { text: Some("R1".into()), ..eda_model::fp_edit::default_library_reference_layout() });
+        assert!(scratch_board(&linked).pcb.contains("(property \"Reference\" \"R1\""));
         // pads carry their net; the two pads numbered 2 share one; the hole has none
         let pad_lines: Vec<&str> = s.pcb.lines().filter(|l| l.trim_start().starts_with("(pad ")).collect();
         assert_eq!(pad_lines.len(), 4);
@@ -567,4 +800,44 @@ mod tests {
         got.sort();
         assert_eq!(got, expected);
     }
+    fn violation(kind: &str, items: &[(&str, Nm, Nm)]) -> Violation {
+        Violation {
+            kind: kind.into(),
+            description: String::new(),
+            severity: "error".into(),
+            items: items.iter().map(|(id, x, y)| super::super::Item { description: String::new(), pos: Point { x: *x, y: *y }, id: Some(id.to_string()), uuid: String::new() }).collect(),
+            excluded: false,
+            comment: String::new(),
+            markers_nm: vec![],
+            sheet: String::new(),
+            marker: None,
+        }
+    }
+
+    /// UI-LEFT F9: the markers are where `DIALOG_FOOTPRINT_CHECKER::runChecks` puts them -- two rectangular pads that short at `Collide`'s location (the first point of one
+    /// inside the other, else where the first edges cross), a hole check at the first pad, a footprint's finding at the origin.
+    #[test]
+    fn the_checkers_markers_are_where_kicads_are() {
+        let fp = footprint(vec![pad("p1", "1", Nm::ZERO, Nm::ZERO, PadKind::Smd, None), pad("p2", "2", mm(0.6), Nm::ZERO, PadKind::Smd, None), pad("p3", "3", mm(5.0), mm(0.3), PadKind::Smd, None)]);
+        // p1 [-0.5, 0.5]^2 and p2 [0.1, 1.1] x [-0.5, 0.5]: neither's first corner is inside the other (p2's top-left lies on p1's edge, where the ray test says outside);
+        // the first edges that meet, in their sorted order, are the two top edges, collinear: they meet in the middle of their overlap, (0.3, -0.5)
+        let short = violation("shorting_items", &[("p1", Nm::ZERO, Nm::ZERO), ("p2", mm(0.6), Nm::ZERO)]);
+        assert_eq!(marker_in(&fp, &short), (mm(0.3), mm(-0.5)));
+        // a pad down and to the side: its top-left corner is inside the first pad, and is the marker's place
+        let cross = footprint(vec![pad("a", "1", Nm::ZERO, Nm::ZERO, PadKind::Smd, None), pad("b", "2", mm(0.6), mm(0.7), PadKind::Smd, None)]);
+        assert_eq!(marker_in(&cross, &violation("shorting_items", &[("a", Nm::ZERO, Nm::ZERO), ("b", mm(0.6), mm(0.7))])), (mm(0.1), mm(0.2)));
+        // a pad turned 45 degrees (a polygon, `SHAPE_SIMPLE`): its first corner, (-hx, +hy) turned, is its left one, inside the first pad
+        let turned = footprint(vec![pad("a", "1", Nm::ZERO, Nm::ZERO, PadKind::Smd, None), LibraryPad { rot: 45_000, ..pad("b", "2", mm(1.1), Nm::ZERO, PadKind::Smd, None) }]);
+        let at = marker_in(&turned, &violation("shorting_items", &[("a", Nm::ZERO, Nm::ZERO), ("b", mm(1.1), Nm::ZERO)]));
+        assert!((at.0.get() - (1_100_000 - 707_107)).abs() <= 1 && at.1 == Nm::ZERO, "b's left corner: {at:?}");
+        assert_eq!(marker_at(&short), (mm(0.3), Nm::ZERO), "kicad-cli's report alone puts it between the pads");
+        // a pad inside the other: its first corner
+        let inner = footprint(vec![pad("big", "1", Nm::ZERO, Nm::ZERO, PadKind::Smd, None), LibraryPad { size: (mm(0.2), mm(0.2)), ..pad("small", "2", mm(0.1), mm(0.1), PadKind::Smd, None) }]);
+        assert_eq!(marker_in(&inner, &violation("shorting_items", &[("small", mm(0.1), mm(0.1)), ("big", Nm::ZERO, Nm::ZERO)])), (mm(0.0), mm(0.0)));
+        // the hole checks: the first pad of the two in the footprint's order
+        assert_eq!(marker_in(&fp, &violation("holes_co_located", &[("p3", mm(5.0), mm(0.3)), ("p1", Nm::ZERO, Nm::ZERO)])), (Nm::ZERO, Nm::ZERO));
+        assert_eq!(marker_in(&fp, &violation("missing_courtyard", &[])), (Nm::ZERO, Nm::ZERO));
+        assert_eq!(marker_in(&fp, &violation("padstack", &[("p3", mm(5.0), mm(0.3))])), (mm(5.0), mm(0.3)));
+    }
 }
+

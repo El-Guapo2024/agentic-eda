@@ -69,6 +69,7 @@ mod pad_nets;
 mod net_edit;
 mod fp_lib_fields;
 pub mod fp_items;
+pub mod fp_editor;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
@@ -829,6 +830,9 @@ pub enum Cmd {
     /// `eda_model::fp_items` adds; a field's Text Properties; Shape Properties; the dimensions, zones, text boxes, points, images, barcodes and tables; Group and Ungroup.
     /// One verb family, see [`fp_items::FpItemCmd`]. On the wire: `{"op": "fp_item", "verb": "mirror", "footprint": "..", "ids": [..], ..}`.
     FpItem(fp_items::FpItemCmd),
+    /// Edit Footprint from the board and Update Footprint on Board for that one instance (UI-LEFT F3), see [`fp_editor::FpEditorCmd`]. On the wire:
+    /// `{"op": "fp_editor", "verb": "open_from_board", "reference": "R1"}`, `{"op": "fp_editor", "verb": "save_to_board", "footprint": "<board>/R1"}`.
+    FpEditor(fp_editor::FpEditorCmd),
     /// The files embedded in a board, a schematic, a footprint or a symbol (GAPS.md items 24 and 30): the Embedded Files panel's Add, Remove and Embed fonts, the tool actions
     /// `common.Embed.embededFile` and `removeFile`, and Collect and Embed 3D Models -- one verb family, see [`embedded::EmbeddedCmd`]. On the wire:
     /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
@@ -1301,6 +1305,14 @@ pub enum Cmd {
     },
     /// "Remove 3D model" (`OnRemove3DModel`): the model at `index` (0-based) leaves the list. Refused for a position the list has none at.
     RemoveBoardModel { part: String, index: usize },
+    /// The 3D Models tab's Extruded 3D Body box (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`, [`fp_models`]): the footprint `part`'s body becomes `body` (`None`: the box
+    /// off, `ClearExtrudedBody`), its layer the top side's. Refused, in KiCad's words, for a height of zero or less and a standoff not below the height, and when nothing changes;
+    /// one undo step.
+    SetExtrudedBody {
+        part: String,
+        #[serde(default)]
+        body: Option<eda_model::extruded_body::ExtrudedBody>,
+    },
     /// Put the model at `from` where `to` is (0-based), the others keeping their order; refused for a position the list has none at.
     MoveBoardModel { part: String, from: usize, to: usize },
     /// Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): every model of every footprint on the board whose file name is a key of `replacements` takes the name it maps to --
@@ -2358,6 +2370,7 @@ impl Cmd {
     pub fn domain(&self) -> Domain {
         match self {
             Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
+            Cmd::FpEditor(c) => c.domain(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.domain(),
             Cmd::ReorganizeSheets => Domain::Schematic,
             Cmd::SetDrawingSheet { schematic: true, .. } => Domain::Schematic,
@@ -2557,6 +2570,8 @@ impl Cmd {
             Cmd::SetTextVariables { .. } => true,
             // the board's footprint and the symbol's Footprint field are put right together
             Cmd::ExchangeFootprints { .. } => true,
+            // a footprint the Footprint Editor puts back on the board may carry a DNP or BOM flag the symbol takes
+            Cmd::FpEditor(fp_editor::FpEditorCmd::SaveToBoard { .. }) => true,
             // the footprints' references and the symbols' go together
             Cmd::ReannotateBoard { .. } => true,
             // a board that comes in has its own nets: the netlist the schematic's drawing had set goes (`design.nets`)
@@ -2641,6 +2656,7 @@ impl Cmd {
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
+            Cmd::SetExtrudedBody { part, .. } => vec![part.as_str()],
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
@@ -2794,6 +2810,7 @@ impl Cmd {
             | Cmd::ExplodePad { footprint, .. }
             | Cmd::RecombinePad { footprint } => vec![footprint.as_str()],
             Cmd::FpItem(c) => vec![c.footprint()],
+            Cmd::FpEditor(c) => vec![c.subject()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -3367,6 +3384,7 @@ impl<'a> Board<'a> {
             Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
             Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
             Cmd::RemoveBoardModel { part, index } => self.remove_board_model(part, *index),
+            Cmd::SetExtrudedBody { part, body } => self.set_extruded_body(part, body.as_ref()),
             Cmd::MoveBoardModel { part, from, to } => self.move_board_model(part, *from, *to),
             Cmd::EditBoardModel { part, index, path, offset, scale, rotate, opacity, show } => {
                 self.edit_board_model(part, *index, &eda_model::fp_models::ModelPatch { path: path.clone(), offset: *offset, scale: *scale, rotate: *rotate, opacity: *opacity, show: *show })
@@ -3462,6 +3480,7 @@ impl<'a> Board<'a> {
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
             Cmd::FpItem(c) => self.apply_fp_item(c),
+            Cmd::FpEditor(c) => self.apply_fp_editor(c),
             Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
             Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
@@ -6574,6 +6593,8 @@ impl<'a> Board<'a> {
         }
         // the dimensions, text boxes, images, barcodes, tables and zones (`GraphicalItems()`, `Zones()`), not the points
         fp_items::move_items_with_anchor(fp, dx, dy);
+        // the courtyard and the items kept as the text of their forms (UI-LEFT F7)
+        fp_editor::move_kept_with_anchor(fp, dx, dy);
         Ok(())
     }
 
@@ -7303,6 +7324,8 @@ mod part_rename_tests;
 mod reannotate_tests;
 #[cfg(test)]
 mod fp_exchange_tests;
+#[cfg(test)]
+mod fp_editor_tests;
 #[cfg(test)]
 mod sch_hierarchy_tests;
 #[cfg(test)]

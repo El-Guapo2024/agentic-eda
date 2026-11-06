@@ -468,6 +468,8 @@ export interface Viewer3DOptions {
   orthographic: boolean;
   /** True = "exact export": show GET /api/board.glb's whole board as kicad-cli renders it (every model through OpenCascade, seconds to minutes) in place of the live scene. The live scene is the default: it loads each part's KiCad 3D model by itself (components/viewer3d/modelCache.ts, GET /api/3dmodel) and has them in seconds. Viewer3D falls back to the live scene when the GLB hasn't loaded (still being built, or failed). */
   kicadModels: boolean;
+  /** `m_CurrentPreset` (kicad-port/viewer3dSettings.ts): `follow_plot_settings` (what KiCad's viewer opens on), `follow_pcb_editor`, a preset of the person's by name, or "" (none matches). A "Follow" preset decides the board's rows. */
+  preset: string;
 }
 
 /**
@@ -487,6 +489,7 @@ export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   flipped: false,
   orthographic: false,
   kicadModels: false,
+  preset: "follow_plot_settings",
 };
 
 /**

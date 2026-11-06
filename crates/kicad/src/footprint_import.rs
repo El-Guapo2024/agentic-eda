@@ -69,6 +69,18 @@ fn filled(item: &[Sexpr]) -> bool {
     }
 }
 
+/// A graphic's hatched fill, `(fill hatch|reverse_hatch|cross_hatch)` (`parsePCB_SHAPE`'s `T_fill`); `None` for a solid fill or none.
+fn hatch_of(item: &[Sexpr]) -> Option<eda_model::fp_art::Hatch> {
+    use eda_model::fp_art::Hatch;
+    let fill = sexpr::find(item, "fill")?;
+    fill.iter().skip(1).filter_map(Sexpr::text).find_map(|w| match w {
+        "hatch" => Some(Hatch::Hatch),
+        "reverse_hatch" => Some(Hatch::ReverseHatch),
+        "cross_hatch" => Some(Hatch::CrossHatch),
+        _ => None,
+    })
+}
+
 /// `(uuid "..")`, or the `(tstamp ..)` of a file before KiCad 7; `None` for none or an empty one.
 fn uuid_of(item: &[Sexpr]) -> Option<String> {
     sexpr::find(item, "uuid").or_else(|| sexpr::find(item, "tstamp")).and_then(|u| sexpr::txt(u, 1)).filter(|u| !u.is_empty()).map(str::to_string)
@@ -103,9 +115,10 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     fp.model = fp.models3d.first().map(|m| m.path.clone());
     fp.courtyard = crate::footprint_lib::courtyard_from(root);
 
-    // in step with `fp.graphics`: each graphic's stroke type when it is not `solid`; with `fp.texts`: each text's looks beyond `Text` (see `LibraryFootprintKeep`)
-    let mut strokes: Vec<Option<String>> = Vec::new();
-    let mut text_looks: Vec<(eda_model::board_text::TextExtra, bool)> = Vec::new();
+    // in step with `fp.graphics`: each graphic's stroke type when it is not `solid`, its hatch and its lock; with `fp.texts`: each text's looks beyond `Text`, whether it
+    // keeps upright, is shown and is locked (see `LibraryFootprintKeep`)
+    let mut strokes: Vec<(Option<String>, Option<eda_model::fp_art::Hatch>, bool)> = Vec::new();
+    let mut text_looks: Vec<(eda_model::board_text::TextExtra, bool, bool, bool)> = Vec::new();
     // and each pad's, graphic's and text's uuid
     let (mut pad_uuids, mut graphic_uuids, mut text_uuids): (Vec<Option<String>>, Vec<Option<String>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
     // the items of `fp.items` with their uuids, the groups as the file names their members, and the uuids of the forms kept as the file wrote them
@@ -153,10 +166,15 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
             }
             Some("fp_text") => match sexpr::txt(child, 1) {
                 Some("user") => {
-                    if let Some(t) = parse_text(child, sexpr::txt(child, 2).unwrap_or("")) {
+                    // `(fp_text user locked "text" ..)`: the bare `locked` of KiCad 5.99 sits before the text
+                    let at = if sexpr::txt(child, 2) == Some("locked") { 3 } else { 2 };
+                    if let Some(t) = parse_text(child, sexpr::txt(child, at).unwrap_or("")) {
                         fp.texts.push(t);
                         let look = crate::board_text_io::read_style(child).extra;
-                        text_looks.push((look, crate::fp_fields::parse_layout(child, Side::Top, 0).keep_upright));
+                        let layout = crate::fp_fields::parse_layout(child, Side::Top, 0);
+                        // `parsePCB_TEXT`'s `T_hide` (a text of a footprint) and the older bare `hide` of its effects
+                        let shown = layout.visible && !sexpr::find(child, "effects").is_some_and(|e| hidden(e));
+                        text_looks.push((look, layout.keep_upright, shown, crate::import_items::is_locked(child)));
                     }
                 }
                 // the pre-KiCad-8 form: `(fp_text reference "REF**" (at ..) (layer ..) (effects ..))`
@@ -226,9 +244,12 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
             }
             // `parseGROUP`: the members are resolved once every item has its id (`resolveGroups`), below.
             Some("group") => raw_groups.push((crate::import_items::read_group(child), sexpr::to_text(&Sexpr::List(child.to_vec())))),
-            // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) ..)`, `parseFOOTPRINT`'s `case T_model:` "Typed model"): no
-            // path for `models_from` to take, so kept as the file wrote it until the body is ported.
-            Some("model") if sexpr::txt(child, 1).is_none() => fp.kicad.tokens.push(sexpr::to_text(&Sexpr::List(child.to_vec()))),
+            // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) ..)`, `parseFOOTPRINT`'s `case T_model:` "Typed model"): the footprint's
+            // body (`crate::extruded_body_io`; a second one goes on setting it, `EnsureExtrudedBody()`); a typed model of another type is kept as the file wrote it.
+            Some("model") if sexpr::txt(child, 1).is_none() => match crate::extruded_body_io::read(child, fp.extruded_body.clone()) {
+                Some(body) => fp.extruded_body = Some(body),
+                None => fp.kicad.tokens.push(sexpr::to_text(&Sexpr::List(child.to_vec()))),
+            },
             Some(tag) if !OWN_TOKENS.contains(&tag) => {
                 // In a file before KiCad 9 a margin or clearance of 0 meant "inherit" (`parseFOOTPRINT_unchecked`): it says nothing, and is not kept.
                 let inherit = version <= 20240201 && KEPT_NUMBERS.contains(&tag) && sexpr::num(child, 1) == Some(0.0);
@@ -240,7 +261,8 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
             _ => {}
         }
         if fp.graphics.len() > drawn {
-            strokes.push(sexpr::find(child, "stroke").and_then(|st| sexpr::find(st, "type")).and_then(|t| sexpr::txt(t, 1)).filter(|t| *t != "solid").map(str::to_string));
+            let stroke = sexpr::find(child, "stroke").and_then(|st| sexpr::find(st, "type")).and_then(|t| sexpr::txt(t, 1)).filter(|t| *t != "solid").map(str::to_string);
+            strokes.push((stroke, hatch_of(child), crate::import_items::is_locked(child)));
             graphic_uuids.push(uuid_of(child));
         }
         if fp.texts.len() > written {
@@ -260,20 +282,35 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     fp.kicad.uuids.extend(uuids);
     items.keep_uuids(&mut fp);
     resolve_groups(&mut fp, raw_groups, kept_uuids);
-    for (g, stroke) in fp.graphics.iter().zip(strokes) {
+    for (g, (stroke, hatch, locked)) in fp.graphics.iter().zip(strokes) {
         if let Some(t) = stroke {
             fp.kicad.stroke_types.insert(g.id().to_string(), t);
         }
+        if let Some(h) = hatch {
+            fp.kicad.hatches.insert(g.id().to_string(), h);
+        }
+        if locked {
+            fp.kicad.locked.insert(g.id().to_string());
+        }
     }
-    for (t, (mut look, keep_upright)) in fp.texts.iter().zip(text_looks) {
+    for (t, (mut look, keep_upright, shown, locked)) in fp.texts.iter().zip(text_looks) {
         if !keep_upright {
             fp.kicad.unlocked_texts.insert(t.id.clone());
+        }
+        if !shown {
+            fp.kicad.hidden_texts.insert(t.id.clone());
+        }
+        if locked {
+            fp.kicad.locked.insert(t.id.clone());
         }
         if !look.is_default() {
             look.id = t.id.clone();
             fp.kicad.text_extras.push(look);
         }
     }
+    // The footprint's clearance, margins, private layers, net ties and jumpers (Footprint Properties' Clearance Overrides and Pad Connections, UI-LEFT F4): out of
+    // the kept forms into their fields.
+    fp.settings.absorb_kept(&mut fp.kicad.tokens);
     let embedded = crate::embedded::read_owner(root, &mut warnings);
     warnings.sort();
     warnings.dedup();

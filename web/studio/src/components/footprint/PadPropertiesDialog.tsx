@@ -1,11 +1,8 @@
-// Port of pcbnew/dialogs/dialog_pad_properties.cpp (GAPS.md #8 step 3) --
-// shape/size (the nine shape choices, a trapezoid's delta, a chamfer, a custom
-// pad's basic shapes: the rows are the board dialog's own, `PadShapeFields.tsx`),
-// offset, drill, layer presets, clearance/thermal overrides, and for a plated
-// through-hole pad the padstack (`kicad-port/padStack.ts`: "Padstack mode", "Edit
-// layer", "Copper layers"). Not ported: the fabrication-property dropdown
-// (BGA/fiducial/testpoint/...; cosmetic metadata with no consumer anywhere in
-// this app yet).
+// Port of pcbnew/dialogs/dialog_pad_properties.cpp (GAPS.md #8 step 3, UI-LEFT F6) -- shape/size (the nine shape choices, a trapezoid's delta, a chamfer, a custom
+// pad's basic shapes: the rows are the board dialog's own, `PadShapeFields.tsx`), offset, the hole (Round / Oblong keeping its size, `OnDrillShapeSelected`), the
+// layers (the type's presets, `m_rbCopperLayersSel`'s copper choice -- a plated hole's is its unconnected-layer mode -- and the technical layers' boxes:
+// kicad-port/padLayers.ts), the fabrication property, the pad-to-die length and delay, the clearance/thermal overrides, and for a plated through-hole pad the
+// padstack (`kicad-port/padStack.ts`: "Padstack mode", "Edit layer").
 import { useEffect, useState } from "react";
 import type { LibraryPad, PadConnection } from "../../api/types";
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";
@@ -17,15 +14,23 @@ import { chooseShape, customPadBoxes, libraryFieldsOf, shapeFormOfLibraryPad, ty
 import { FRONT, changeMode, checkStack, layerFormOf, padstackControlsShown, stackOf, stackStateOf, withLayerForm, type LayerForm, type PadStackState } from "../../kicad-port/padStack";
 import { PAD_DLG_TYPES, padDlgTypeOf, padTypeHas, padTypeSelected, type PadDlgType } from "../../kicad-port/padType";
 import { FIRST_LAST_PAD_NUMBER } from "../../kicad-port/padNumbering";
-import { CopperLayersRow, PadPrimitivePanel, PadShapeRows, PadStackRows } from "../PadShapeFields";
+import { PadPrimitivePanel, PadShapeRows, PadStackRows } from "../PadShapeFields";
+import { FAB_PROPERTY_CHOICES, PAD_TECH_LAYERS, copperChoiceEnabled, copperChoices, holeShapeSelected, layersOfForm, padLayerForm, padToDieOf, spreadLayers, withPadFab, type CopperMode } from "../../kicad-port/padLayers";
 
-/** `pad.cpp`'s static layer masks (`PTHMask`/`SMDMask`/`ConnSMDMask`/`UnplatedHoleMask`) -- the dialog's own "preset" buttons rather than a full per-layer checkbox grid, matching this task's own "layers (SMD/THT/NPTH/connector presets)" scope. */
+/** `pad.cpp`'s static layer masks (`PTHMask`/`SMDMask`/`ConnSMDMask`/`UnplatedHoleMask`) as quick presets beside the layer controls; a preset shows as the current one when the
+ *  pad's set is the preset's (wildcards spread: `*.Mask` is `F.Mask B.Mask`, E7-F7). */
 const LAYER_PRESETS: { label: string; type: PadDlgType; layers: string[] }[] = [
   { label: "SMD", type: "smd", layers: ["F.Cu", "F.Paste", "F.Mask"] },
   { label: "Connector (no paste)", type: "conn", layers: ["F.Cu", "F.Mask"] },
-  { label: "THT", type: "pth", layers: ["*.Cu", "F.Mask", "B.Mask"] },
+  { label: "THT", type: "pth", layers: ["*.Cu", "*.Mask"] },
   { label: "NPTH, mechanical", type: "npth", layers: ["*.Cu", "*.Mask"] },
 ];
+
+const sameLayerSet = (a: readonly string[], b: readonly string[]): boolean => {
+  const x = spreadLayers(a);
+  const y = spreadLayers(b);
+  return x.size === y.size && [...x].every((l) => y.has(l));
+};
 
 export function PadPropertiesDialog() {
   const state = useFpState();
@@ -45,6 +50,11 @@ export function PadPropertiesDialog() {
   const [shapeForm, setShapeForm] = useState<PadShapeForm | null>(null);
   /** The padstack (`kicad-port/padStack.ts`): the mode, the layer being edited and the shapes of the layers but the front, whose shape is `shapeForm` and offset `form.offset`. */
   const [stack, setStack] = useState<PadStackState | null>(null);
+  /** `m_holeY`: the oblong hole's Y, which the control keeps while the hole is round. */
+  const [holeY, setHoleY] = useState<number | null>(null);
+  /** "Specify pad to die length" / "delay" and their values (nm, ps). */
+  const [dieLength, setDieLength] = useState<number | null>(null);
+  const [dieDelay, setDieDelay] = useState<number | null>(null);
 
   // Populate the editable copy only when the dialog opens on a (possibly
   // different) pad -- not every render, same convention every other
@@ -56,6 +66,10 @@ export function PadPropertiesDialog() {
       setForm(pad);
       setShapeForm(s);
       setStack(stackStateOf(pad.stack, { s, ox: pad.offset.x, oy: pad.offset.y, tokens: [] }));
+      setHoleY(pad.drill_slot?.[1] ?? pad.drill ?? null);
+      const die = padToDieOf(pad.kicad as { tokens?: string[] } | undefined);
+      setDieLength(die.length);
+      setDieDelay(die.delay);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, defaultMode]);
@@ -101,6 +115,10 @@ export function PadPropertiesDialog() {
     // `transferDataToPad`: an NPTH (and an aperture) pad has no number, an SMD or connector pad no hole.
     const has = padTypeHas(padDlgTypeOf(form));
     const edited: LibraryPad = { ...form, ...shape, number: has.connection ? form.number : "", ...(has.hole ? {} : { drill: null, drill_slot: null }) };
+    // the fabrication property and the pad-to-die length and delay (`SetProperty`, `SetPadToDieLength`, `SetPadToDieDelay`): kept forms of the pad, none for a pad without a
+    // connection (`OnUpdateUI` turns the boxes off)
+    const fab = (form.kicad ?? {}) as { property?: string | null; tokens?: string[] };
+    edited.kicad = withPadFab(fab, fab.property ?? null, has.connection ? dieLength : null, has.connection ? dieDelay : null) as LibraryPad["kicad"];
     // The padstack travels with the pad (`PAD::SetPadstack`); a pad that has none sends none.
     const stackNow = stackOf(stack);
     edited.stack = Object.keys(stackNow).length > 0 ? stackNow : undefined;
@@ -140,6 +158,14 @@ export function PadPropertiesDialog() {
       return layers ? { ...r, layers: [...layers] } : r;
     });
   const isSlot = form.drill_slot != null;
+  // The layer controls show the pad's set (`updatePadLayersList`) and write it back as `transferDataToPad` does: a plated hole's copper choice is its unconnected-layer mode.
+  const unconnected: CopperMode = stack.unconnected === "start_end_only" ? "remove_except_start_and_end" : stack.unconnected;
+  const layerForm = padLayerForm(type, form.layers, unconnected);
+  const setLayerForm = (next: typeof layerForm) => {
+    const r = layersOfForm(type, next);
+    setForm((f) => (f ? { ...f, layers: r.layers } : f));
+    if (type === "pth") setStack({ ...stack, unconnected: r.mode });
+  };
 
   return (
     <div className="dialog-backdrop" onClick={close}>
@@ -191,47 +217,103 @@ export function PadPropertiesDialog() {
             <span>Layer preset</span>
             <span>
               {LAYER_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  className={type === p.type && form.layers.join(",") === p.layers.join(",") ? "primary" : undefined}
-                  style={{ marginRight: 6, marginBottom: 4 }}
-                  onClick={() => chooseType(p.type, p.layers)}
-                >
+                <button key={p.label} className={type === p.type && sameLayerSet(form.layers, p.layers) ? "primary" : undefined} style={{ marginRight: 6, marginBottom: 4 }} onClick={() => chooseType(p.type, p.layers)}>
                   {p.label}
                 </button>
               ))}
             </span>
-            <span>Layers</span>
-            <span style={{ color: "var(--chrome-text-dim)" }}>{form.layers.join(", ") || "(none set)"}</span>
-            {stackShown && <CopperLayersRow value={stack.unconnected} boardLayers={boardLayers} onChange={(v) => setStack({ ...stack, unconnected: v })} />}
+            {/* `m_rbCopperLayersSel` (UpdateLayersDropdown): a plated hole's choice is its unconnected-layer mode; the technical layers' boxes below */}
+            <span>Copper layers:</span>
+            <select value={layerForm.copper} disabled={!copperChoiceEnabled(type)} onChange={(e) => setLayerForm({ ...layerForm, copper: Number(e.target.value) })} data-testid="pad-copper-layers">
+              {copperChoices(type, boardLayers[0] ?? "F.Cu", boardLayers[boardLayers.length - 1] ?? "B.Cu").map((c, i) => (
+                <option key={c} value={i}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <span>Technical layers:</span>
+            <span style={{ display: "grid", gridTemplateColumns: "repeat(2, auto)", gap: "2px 12px", justifyContent: "start" }} data-testid="pad-tech-layers">
+              {PAD_TECH_LAYERS.map((l) => (
+                <label key={l}>
+                  <input
+                    type="checkbox"
+                    checked={layerForm.tech.has(l)}
+                    data-testid={`pad-layer-${l}`}
+                    onChange={(e) => {
+                      const tech = new Set(layerForm.tech);
+                      if (e.target.checked) tech.add(l);
+                      else tech.delete(l);
+                      setLayerForm({ ...layerForm, tech });
+                    }}
+                  />{" "}
+                  {l}
+                </label>
+              ))}
+            </span>
 
             {hasDrill && (
               <>
-                <span>Drill</span>
-                <span>
-                  <label style={{ marginRight: 10 }}>
-                    <input type="radio" checked={!isSlot} onChange={() => setForm((f) => (f ? { ...f, drill: f.drill ?? 800_000, drill_slot: null } : f))} /> Round
-                  </label>
-                  <label>
-                    <input type="radio" checked={isSlot} onChange={() => setForm((f) => (f ? { ...f, drill_slot: f.drill_slot ?? [600_000, 1_000_000], drill: null } : f))} /> Slot
-                  </label>
-                </span>
+                {/* "Hole shape:" Round / Oblong (`m_holeShapeCtrl`): a change keeps the size (`OnDrillShapeSelected`, E7-F6); "Diameter:" or "Hole size X:" and "Y:" (`updateHoleControls`) */}
+                <span>Hole shape:</span>
+                <select
+                  value={isSlot ? "oblong" : "round"}
+                  data-testid="pad-hole-shape"
+                  onChange={(e) => {
+                    const shape = e.target.value as "round" | "oblong";
+                    if (form.drill_slot) setHoleY(form.drill_slot[1]);
+                    setForm((f) => (f ? { ...f, ...holeShapeSelected(f.drill, f.drill_slot ?? null, shape, holeY) } : f));
+                  }}
+                >
+                  <option value="round">Round</option>
+                  <option value="oblong">Oblong</option>
+                </select>
                 {!isSlot && (
                   <>
-                    <span />
+                    <span>Diameter:</span>
                     <span>{len(form.drill ?? 0, (d) => set("drill", d))}</span>
                   </>
                 )}
                 {isSlot && (
                   <>
-                    <span />
+                    <span>Hole size X:</span>
                     <span>
-                      {len(form.drill_slot?.[0] ?? 600_000, (w) => set("drill_slot", [w, form.drill_slot?.[1] ?? 1000]))} × {len(form.drill_slot?.[1] ?? 1_000_000, (h) => set("drill_slot", [form.drill_slot?.[0] ?? 600_000, h]))}
+                      {len(form.drill_slot?.[0] ?? 0, (w) => set("drill_slot", [w, form.drill_slot?.[1] ?? w]))} Y: {len(form.drill_slot?.[1] ?? 0, (h) => set("drill_slot", [form.drill_slot?.[0] ?? h, h]))}
                     </span>
                   </>
                 )}
               </>
             )}
+            {/* "Fabrication property:" (`m_choiceFabProperty`) and the pad-to-die length and delay (`m_padToDieOpt`, `m_padToDieDelayOpt`: a pad without a connection has none) */}
+            <span>Fabrication property:</span>
+            <select
+              value={((form.kicad ?? {}) as { property?: string | null }).property ?? ""}
+              data-testid="pad-fab-property"
+              onChange={(e) => setForm((f) => (f ? { ...f, kicad: { ...((f.kicad ?? {}) as object), property: e.target.value || null } as LibraryPad["kicad"] } : f))}
+            >
+              {FAB_PROPERTY_CHOICES.map((c) => (
+                <option key={c.label} value={c.token ?? ""}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <span />
+            <span>
+              <label>
+                <input type="checkbox" disabled={!has.connection} checked={has.connection && dieLength !== null} data-testid="pad-to-die-on" onChange={(e) => setDieLength(e.target.checked ? 0 : null)} /> Specify pad to die length
+              </label>{" "}
+              {has.connection && dieLength !== null && len(dieLength, (v) => setDieLength(v))}
+            </span>
+            <span />
+            <span>
+              <label>
+                <input type="checkbox" disabled={!has.connection} checked={has.connection && dieDelay !== null} data-testid="pad-to-die-delay-on" onChange={(e) => setDieDelay(e.target.checked ? 0 : null)} /> Specify pad to die delay
+              </label>{" "}
+              {has.connection && dieDelay !== null && (
+                <span>
+                  <input type="number" step="any" value={dieDelay} data-testid="pad-to-die-delay" onChange={(e) => Number.isFinite(Number(e.target.value)) && setDieDelay(Number(e.target.value))} style={{ width: 80 }} /> ps
+                </span>
+              )}
+            </span>
           </div>
 
           <PadPrimitivePanel form={active.s} onForm={(next) => setActive({ ...active, s: next })} units={units} />

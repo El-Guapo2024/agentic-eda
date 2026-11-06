@@ -51,6 +51,7 @@ import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
 import { PcbParityDialogs } from "./components/PcbParityDialogs";
 import { PcbSweepDialogs } from "./components/PcbSweepDialogs";
+import { AutoMigrate3dModels } from "./components/AutoMigrate3dModels";
 import { VertexEditorPane } from "./components/PcbPointEditDialogs";
 import { PcbPickerPrompt } from "./components/PcbPickerPrompt";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
@@ -241,6 +242,8 @@ function StudioFrame() {
           {!is3d && <CommonOverlay />}
           {!is3d && <CommonToolHost />}
           <Toast />
+          {/* Migrate 3D Models when the board opens (`PCB_EDIT_FRAME::OnBoardLoaded`) and its load notice */}
+          <AutoMigrate3dModels />
         </div>
         {/* The board editor's Net Inspector and Search panes (`.Bottom()`), under the canvas */}
         {state.tab === "pcb" && (

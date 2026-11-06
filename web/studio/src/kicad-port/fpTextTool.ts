@@ -12,13 +12,13 @@
 // Differs: the text model (`eda_model::Text`) has no vertical justification, italic or keep-upright, so the text is bottom-justified only in KiCad's file; ours has
 // the model's own vertical centre.
 
-import type { CmdText, PointXY } from "../api/types";
+import type { CmdText, PointXY, TextGraphicsDefaults } from "../api/types";
 import { TEXT_MAX_NM, TEXT_MIN_NM } from "./fpFields";
 import { isBackLayer, textStyleOf } from "./layerDefaults";
 
 /** The text PlaceText's first click makes on `layer` at `at`, before the dialog fills its content. */
-export function fpNewText(layer: string, at: PointXY): CmdText {
-  const s = textStyleOf(undefined, layer);
+export function fpNewText(layer: string, at: PointXY, defaults?: TextGraphicsDefaults | null): CmdText {
+  const s = textStyleOf(defaults ?? undefined, layer);
   return { content: "", at: { x: at.x, y: at.y }, angle: 0, layer, size_nm: s.heightNm, stroke_width: s.thicknessNm, justify: "left", mirror: isBackLayer(layer) };
 }
 

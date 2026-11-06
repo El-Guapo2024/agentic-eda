@@ -502,6 +502,102 @@ impl FpArt {
     pub fn to_library(&self) -> (Vec<Shape>, Vec<Text>) {
         (self.shapes.iter().map(|s| s.shape.clone()).collect(), self.texts.iter().filter(|t| t.layout.visible).map(FpText::to_library).collect())
     }
+
+    /// [`FpArt::from_library`] with what the library footprint keeps of its items by id ([`crate::lib_keep::LibraryFootprintKeep`]): each graphic's line style and
+    /// hatch, each text's bold, italic, vertical justification, glyph width, automatic pen, knockout, line spacing and font, whether it keeps upright and whether it is
+    /// shown (UI-LEFT F5: the footprint the board takes from the Footprint Editor looks as the editor's does, `FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard` clones it whole).
+    pub fn from_library_kept(graphics: &[Shape], texts: &[Text], keep: &crate::lib_keep::LibraryFootprintKeep) -> FpArt {
+        let shapes = graphics
+            .iter()
+            .filter(|g| is_art_layer(g.layer()))
+            .map(|g| {
+                let mut s = FpShape::new(strip_id(g));
+                s.style = keep.stroke_types.get(g.id()).and_then(|t| LineStyle::from_token(t)).unwrap_or(LineStyle::Solid);
+                s.hatch = keep.hatches.get(g.id()).copied();
+                s
+            })
+            .collect();
+        let texts = texts
+            .iter()
+            .map(|t| {
+                let mut text = FpText::from_library(t);
+                let l = &mut text.layout;
+                l.keep_upright = !keep.unlocked_texts.contains(&t.id);
+                l.visible = !keep.hidden_texts.contains(&t.id);
+                if let Some(e) = keep.text_extra(&t.id) {
+                    if let Some(w) = e.width_nm {
+                        l.size.0 = w;
+                    }
+                    if e.auto_thickness {
+                        l.thickness = Nm::ZERO;
+                    }
+                    l.valign = match e.valign {
+                        crate::ir::TextVAlign::Top => -1,
+                        crate::ir::TextVAlign::Center => 0,
+                        crate::ir::TextVAlign::Bottom => 1,
+                    };
+                    l.bold = e.bold;
+                    l.italic = e.italic;
+                    l.knockout = e.knockout;
+                    text.face = e.face.clone();
+                    text.line_spacing_permille = e.line_spacing_permille;
+                }
+                text
+            })
+            .collect();
+        FpArt { shapes, texts, courtyard: vec![] }
+    }
+
+    /// The reverse of [`FpArt::from_library_kept`]: the editor's shapes and texts -- every text the art has, a hidden one too -- and what the editor keeps of them by id,
+    /// into `keep`. `ids` names the shapes and texts of the lists it is given (the caller's `assign_missing_ids`) and answers their ids, in order.
+    pub fn to_library_kept(&self, keep: &mut crate::lib_keep::LibraryFootprintKeep, ids: impl FnOnce(&mut Vec<Shape>, &mut Vec<Text>) -> (Vec<String>, Vec<String>)) -> (Vec<Shape>, Vec<Text>) {
+        let mut shapes: Vec<Shape> = self.shapes.iter().map(|s| s.shape.clone()).collect();
+        let mut texts: Vec<Text> = self.texts.iter().map(FpText::to_library).collect();
+        let (shape_ids, text_ids) = ids(&mut shapes, &mut texts);
+        // an automatic pen is held as the pen the reader gives such a text (`GetPenSizeForNormal`, an eighth of the height)
+        for (text, t) in texts.iter_mut().zip(&self.texts) {
+            if t.layout.thickness == Nm::ZERO {
+                text.stroke_width = text.size_nm / 8;
+            }
+        }
+        for (s, id) in self.shapes.iter().zip(&shape_ids) {
+            if s.style != LineStyle::Solid {
+                keep.stroke_types.insert(id.clone(), s.style.token().to_string());
+            }
+            if let Some(h) = s.hatch {
+                keep.hatches.insert(id.clone(), h);
+            }
+        }
+        for (t, id) in self.texts.iter().zip(&text_ids) {
+            let l = &t.layout;
+            if !l.keep_upright {
+                keep.unlocked_texts.insert(id.clone());
+            }
+            if !l.visible {
+                keep.hidden_texts.insert(id.clone());
+            }
+            let e = crate::board_text::TextExtra {
+                id: id.clone(),
+                width_nm: (l.size.0 != l.size.1).then_some(l.size.0),
+                auto_thickness: l.thickness == Nm::ZERO,
+                valign: match l.valign {
+                    -1 => crate::ir::TextVAlign::Top,
+                    1 => crate::ir::TextVAlign::Bottom,
+                    _ => crate::ir::TextVAlign::Center,
+                },
+                bold: l.bold,
+                italic: l.italic,
+                knockout: l.knockout,
+                line_spacing_permille: t.line_spacing_permille,
+                face: t.face.clone(),
+            };
+            if !e.is_default() {
+                keep.text_extras.retain(|x| x.id != *id);
+                keep.text_extras.push(e);
+            }
+        }
+        (shapes, texts)
+    }
 }
 
 fn strip_id(s: &Shape) -> Shape {

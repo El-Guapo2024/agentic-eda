@@ -44,8 +44,10 @@ export interface ChooserOptions {
 export interface SearchStatus {
   /** There is a search text. */
   searching: boolean;
-  /** The server is still reading libraries for it. */
+  /** The server is still reading libraries for it, or has not answered it yet. */
   indexing: boolean;
+  /** The search text the list answers in full (`""` with no search), or `null` while the answer to the one typed is still to come. */
+  answered: string | null;
   indexed: number;
   total: number;
   matches: number;
@@ -88,7 +90,10 @@ export function useChooser(o: ChooserOptions): Chooser {
   const [installed, setInstalled] = useState<InstalledLibrary[]>([]);
   const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly ChooserItem[]>>(new Map());
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
-  const [results, setResults] = useState<SearchAnswer | null>(null);
+  // The server's answer, with the search it answers (kind, words, filter): an answer is shown only under the search it was asked for. While the answer to a new
+  // search is on its way the chooser says "Searching…" and lists what the browser holds, never the last search's matches under the new words (they read as
+  // matches of the new search: a stale `resistance<10k` list under `resistance>10k`, lib-choosers' flake of 2026-11-06).
+  const [answer, setAnswer] = useState<{ for: string; answer: SearchAnswer } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
   const [openItems, setOpenItems] = useState<ReadonlySet<string>>(new Set());
@@ -97,6 +102,8 @@ export function useChooser(o: ChooserOptions): Chooser {
 
   const filterKey = JSON.stringify(o.filter ?? {});
   const searching = parseQuery(debounced).length > 0;
+  const searchKey = `${kind}\u0001${debounced}\u0001${filterKey}`;
+  const results = answer && answer.for === searchKey ? answer.answer : null;
   const treeKey = o.treeKey ?? kind;
   const onlyPower = !!o.filter?.onlyPower;
   /** With the power filter: the installed libraries that hold a power symbol, as far as the server has read them (null until it answers). */
@@ -108,7 +115,7 @@ export function useChooser(o: ChooserOptions): Chooser {
     if (!active) return;
     setQueryState("");
     setDebounced("");
-    setResults(null);
+    setAnswer(null);
     setError(null);
     setOpenItems(new Set());
     setSelectedKey(null);
@@ -180,19 +187,20 @@ export function useChooser(o: ChooserOptions): Chooser {
   useEffect(() => {
     if (!active) return;
     if (!searching) {
-      setResults(null);
+      setAnswer(null);
       return;
     }
+    const key = searchKey;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ctl = new AbortController();
     const run = async () => {
       try {
-        const answer = await searchInstalled(kind, debounced, o.filter, ctl.signal);
+        const got = await searchInstalled(kind, debounced, o.filter, ctl.signal);
         if (cancelled) return;
-        setResults(answer);
+        setAnswer({ for: key, answer: got });
         setError(null);
-        if (answer.status === "indexing") timer = setTimeout(() => void run(), 500);
+        if (got.status === "indexing") timer = setTimeout(() => void run(), 500);
       } catch (e) {
         if (cancelled || (e instanceof DOMException && e.name === "AbortError")) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -349,6 +357,7 @@ export function useChooser(o: ChooserOptions): Chooser {
     status: {
       searching,
       indexing: searching && (results === null || results.status === "indexing"),
+      answered: !searching ? "" : results !== null && results.status !== "indexing" ? debounced : null,
       indexed: results?.indexed ?? 0,
       total: results?.total ?? 0,
       matches: results?.matches ?? 0,
