@@ -1,0 +1,85 @@
+/* components/HtmlMessageBox.tsx: KiCad's HTML_MESSAGE_BOX shown modeless, above the dialog it came from. */
+.dialog.hmb-window {
+  position: fixed;
+  z-index: 2600;
+  max-height: none;
+  min-width: 320px;
+  min-height: 200px;
+  resize: both;
+  outline: none;
+}
+.dialog.hmb-window[hidden] {
+  display: none;
+}
+.hmb-title {
+  cursor: move;
+  user-select: none;
+  align-items: center;
+}
+.dialog button.hmb-close {
+  border: 0;
+  background: transparent;
+  color: var(--chrome-text);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+/* `m_searchPanel`: inserted at the top, at the right (`wxALIGN_RIGHT|wxTOP|wxRIGHT, 5`). */
+.hmb-search {
+  display: flex;
+  align-self: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin: 5px 5px 0 0;
+}
+.hmb-count {
+  min-width: 60px;
+  text-align: right;
+  font-size: 12px;
+}
+.dialog button.hmb-step {
+  min-width: 25px;
+  border: 0;
+  background: transparent;
+  color: var(--chrome-text);
+  cursor: pointer;
+}
+/* `m_htmlWindow`, with a 10 px border (`wxALL|wxEXPAND, 10`). */
+.hmb-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 10px;
+  padding: 4px 8px;
+  background: var(--chrome-input-bg);
+  color: var(--chrome-text);
+  border: 1px solid var(--chrome-border);
+  font-size: 13px;
+  line-height: 1.35;
+  user-select: text;
+}
+.hmb-page pre,
+.hmb-page code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.hmb-page table {
+  border-collapse: separate;
+  border-spacing: 2px;
+}
+.hmb-page td,
+.hmb-page th {
+  padding: 1px 3px;
+  text-align: left;
+}
+.hmb-page a {
+  color: var(--chrome-accent);
+}
+.hmb-page blockquote {
+  margin: 0 0 0 2em;
+}
+/* `updateSearch`'s marks are light (#FFFFAA, #DDAAFF): their text stays dark on a dark theme. */
+.hmb-page span[style*="background-color"] {
+  color: #000;
+}
