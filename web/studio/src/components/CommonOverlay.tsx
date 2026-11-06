@@ -126,8 +126,9 @@ export function CommonOverlay() {
       }
     }
 
-    // The items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`), on any editor.
-    if (tool.menuHighlight && tool.menuHighlight.length > 0) {
+    // The items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`): the board draws
+    // them brightened itself (components/canvas/painter.ts, UI-LEFT-2 PP19); the other editors still outline their boxes.
+    if (tab !== "pcb" && tool.menuHighlight && tool.menuHighlight.length > 0) {
       const boxes = adapter.itemBoxes();
       ctx.strokeStyle = HOVER_BOX_COLOR;
       ctx.lineWidth = 2;

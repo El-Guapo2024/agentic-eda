@@ -1382,6 +1382,56 @@ impl Router {
         Ok(())
     }
 
+    /// `ROUTER_TOOL::InlineDrag` of a selected track or via (pcbnew/router/router_tool.cpp at 8303b2ad): the item dragged is the one selected, never one
+    /// found again at the point (a pad or a via the track ends on). KiCad's steps:
+    ///
+    ///   itemsToDrag.Add( m_router->GetWorld()->FindItemByParent( boardItem ) )       the PNS items whose parent is the selected board item
+    ///   for( pitem : itemsToDrag ) distSq = pitem->Shape( layer )->SquaredDistance( p0, 0 );   layer: the frame's active layer
+    ///   p = snapToItem( closestItem, p0 ); m_startItem = closestItem;                 `TOOL_BASE::snapToItem`
+    ///   m_router->StartDragging( p, itemsToDrag, dragMode )                         `ROUTER::StartDragging` -> `DRAGGER::Start( aP, aPrimitives )`, whose
+    ///                                                                               `startItem = aPrimitives[0]`: `checkVirtualVia( aP, seg )`, then
+    ///                                                                               `startDragSegment` / `startDragVia` / `startDragArc` at the snapped point
+    ///
+    /// `board_id` is a board track (each of its segments and arcs, `source_track_id()`) or via (`source_via`). A track of the studio is a polyline, a run of
+    /// KiCad's `PCB_TRACK`s, so the segment of it nearest `at` stands for the one a KiCad user has selected there, and the drag is the single one
+    /// (`DRAGGER`), as KiCad's of one selected segment. The point is snapped onto that item (`Node::snap_to_item`: a via's centre, a track's end within half
+    /// its width, else the nearest point of the track; the grid alignment along it, `AlignToSegment`, is the studio's cursor). With `drag_locked`
+    /// ("Drag Anyway", or `InlineDrag`'s `item->SetLocked( false )` once a lock was overridden) the item is unlocked in the router's world, as
+    /// [`Self::drag_start_locked`] does; without it a locked item is refused with [`crate::dragger::LOCKED_MESSAGE`]. Returns the point the drag starts at.
+    /// "nothing to drag" when no item of the world comes from `board_id` (`if( !pnsItem ) continue;`, then `StartDragging` of an empty set is false).
+    /// Replaces any route or drag in progress.
+    pub fn drag_start_item(&mut self, at: Point, layer_name: &str, board_id: &str, free_angle: bool, drag_locked: bool) -> Result<Point, String> {
+        let layer = self.layer_index(layer_name);
+        let probe = eda_drc::kimath::Shape::Circle { c: at, r: Nm::ZERO };
+        let item_id = self
+            .world
+            .iter()
+            .filter(|(_, it)| match it {
+                Item::Segment(_) | Item::Arc(_) => it.source_track_id() == Some(board_id),
+                Item::Via(v) => !v.is_virtual && v.source_via.as_deref() == Some(board_id),
+                _ => false,
+            })
+            // `pitem->Shape( layer )` on the active layer where the item has it, else on its own first layer
+            .map(|(id, it)| {
+                let on = layer.filter(|&l| it.layers().overlaps_layer(l)).unwrap_or_else(|| it.layers().start());
+                (it.shape(on).clearance_to(&probe).0, id)
+            })
+            .min()
+            .map(|(_, id)| id)
+            .ok_or("nothing to drag")?;
+        let p = self.world.snap_to_item(item_id, at).map_or(at, |(p, _)| p);
+        if drag_locked {
+            self.world.set_locked(item_id, false);
+        }
+        let dragger = crate::dragger::Dragger::start_checked(&self.world, p, item_id, free_angle)?;
+        self.session = None;
+        self.diff = None;
+        self.group_drag = None;
+        self.drag = Some(dragger);
+        self.drag_mode = Some(self.settings.mode);
+        Ok(p)
+    }
+
     /// `ROUTER::Move`/`moveDragging`: the live drag preview, `DRAGGER::Drag` at `at`. The drag remembers the last position that
     /// worked: one that does not shows that one again (`DragPreview::restored`).
     pub fn drag_preview(&mut self, at: Point) -> Option<crate::dragger::DragPreview> {

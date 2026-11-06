@@ -31,11 +31,10 @@ import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStu
 import { drawStrokeWidthNm, graphicPolygonStyle } from "../../kicad-port/layerDefaults";
 import { activeLayerName, layerIsVisible } from "../../kicad-port/layerPresets";
 import { carryStart, isLocked } from "../../kicad-port/pcbTransform";
-import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
-import { EXTRA_KINDS, extraItemLabel } from "../../kicad-port/pcbExtraItems";
-import { fieldById } from "../../kicad-port/fpFields";
+import { itemBounds, padParent } from "../../kicad-port/pcbItems";
+import { EXTRA_KINDS } from "../../kicad-port/pcbExtraItems";
 import { isGroup, substituteSelection, topLevelGroup, withinScope } from "../../kicad-port/groupTree";
-import type { DrawState, ToolId } from "../../state/store";
+import type { DrawState, MovePreview, ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
 import { reshapeCmds } from "../../kicad-port/shapeFill";
@@ -72,7 +71,7 @@ import { handleAt } from "../../kicad-port/tuneTool";
 import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { MENU_LIMIT, clarificationRows } from "../../kicad-port/clarificationMenu";
-import { setMenuHighlight } from "../../state/commonTool";
+import { setMenuHighlight, useMenuHighlight } from "../../state/commonTool";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, leftDragOutcome, motionPan } from "../../kicad-port/viewControls";
 import { wheelInputOf } from "../../hooks/canvasWheel";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
@@ -80,7 +79,10 @@ import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
-import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
+import { pickSelectionCandidates, collectBoxSelection, newFilterRejections, rowsToFlash, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
+import { flashSelectionFilter } from "../../kicad-port/filterFlash";
+import { candidateLabel as boardCandidateLabel } from "./candidateLabel";
+import { gridCarryAnchor as placeCarryAnchor, gridCarryDrop as placeCarryDrop } from "../../kicad-port/placeCarry";
 import { openPropertiesFor } from "./properties";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { SchContextMenu } from "../schematic/SchContextMenu";
@@ -92,7 +94,7 @@ import { fpDimensionClick, fpDimensionMotion } from "../../kicad-port/fpDrawTool
 import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPointId } from "../../kicad-port/dimensionDraw";
 import { toCmdDimension } from "../../kicad-port/dimensionConvert";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
-import { cellAddress, cellById, drawTableSession, tableById } from "../../kicad-port/tables";
+import { drawTableSession } from "../../kicad-port/tables";
 import { cellsBetween, cellUnder, onlyCells } from "../../kicad-port/tableCells";
 import { openDrawnTableDialog } from "../../state/tableDialogs";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
@@ -268,6 +270,8 @@ export function Canvas() {
     });
   };
   const moveMode = state.activeTool === "move";
+  /** The items the clarification menu's row under the pointer stands for (state/commonTool.ts), drawn brightened. */
+  const menuHighlight = useMenuHighlight();
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[]; clarification?: boolean } | null>(null);
   /** The right-click menu of whichever tool owns the click (kicad-port/pcbContextMenu.ts): nested, with the menu bar's own entries. */
@@ -444,6 +448,8 @@ export function Canvas() {
       viewFlipped: state.bcx.boardFlipped,
       selection: state.selection,
       hot: state.hot,
+      // the clarification menu's row under the pointer (`doSelectionMenu`'s BRIGHTENED), on the board drawn brightened (UI-LEFT-2 PP19)
+      brightened: menuHighlight,
       netHighlight: state.bcx.netHighlightMore.length > 0 ? highlightedNets(state.netHighlight, state.bcx.netHighlightMore) : state.netHighlight,
       // The ratsnest lines `RATSNEST_VIEW_ITEM::ViewDraw` would draw: the global switch, hidden nets, the Local Ratsnest tool's pads and the visible-layers mode.
       showRatsnest: state.showRatsnest || state.bcx.localRatsnestPads.length > 0,
@@ -527,7 +533,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -614,6 +620,16 @@ export function Canvas() {
     return [p[0], p[1]];
   };
 
+  /** Place Footprint's carry (`StudioState.moveGridCarry`, kicad-port/placeCarry.ts): the anchor of the one footprint carried, which the grid point under the cursor moves; null for any other move. */
+  const gridCarryAnchor = (b: NonNullable<typeof board>, refs: readonly string[]): [number, number] | null => (state.moveGridCarry ? placeCarryAnchor(b, refs) : null);
+
+  /** The drop of a Place Footprint carry the pointer never moved: the footprint on the grid point under the cursor, turned to the frame it lands in (kicad-port/placeCarry.ts). */
+  const gridCarryDrop = (b: NonNullable<typeof board>, wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): MovePreview | null => {
+    if (!state.moveGridCarry) return null;
+    const drop = placeCarryDrop(b, [...state.selection], snap.align("place", [wx, wy], snapMods(e), "current"), state.moveFrameStartDeg ?? undefined, state.prefs.rotationStepDeg, modificationSnapFor(state));
+    return drop ? { ...drop, kind: "pcb" } : null;
+  };
+
   /** `BestDragOrigin`: the point of the items picked up that the move starts from -- the nearest of their origins and corners to the mouse. */
   const moveOrigin = (wx: number, wy: number, refs: readonly string[]): [number, number] => {
     const p = snap.dragOrigin("move", [wx, wy], refs, state.selectionFilter);
@@ -630,52 +646,8 @@ export function Canvas() {
     return [p[0], p[1]];
   };
 
-  /** A human-readable label for a disambiguation-menu row. */
-  const candidateLabel = useCallback(
-    (c: SelectionCandidate): string => {
-      switch (c.kind) {
-        case "part": {
-          const p = api.partByRef(c.id);
-          return `${c.id}${p?.value ? ` (${p.value})` : ""} [footprint]`;
-        }
-        case "track":
-          return `Track [${api.trackById(c.id)?.layer ?? c.id}]`;
-        case "via":
-          return `Via`;
-        case "zone":
-          return `Zone [${api.zoneById(c.id)?.layer ?? c.id}]`;
-        case "shape":
-          return `${api.shapeById(c.id)?.kind ?? "Shape"} [${c.layer ?? ""}]`;
-        case "text":
-          return `Text "${api.textById(c.id)?.content ?? ""}"`;
-        case "dimension": {
-          const kind = api.dimensionById(c.id)?.kind ?? "dimension";
-          return `${kind[0]!.toUpperCase()}${kind.slice(1)} Dimension`;
-        }
-        case "pad": {
-          const hit = board ? padById(board, c.id) : null;
-          return hit ? `Pad ${hit.pad.num} of ${hit.part.ref}${hit.pad.net ? ` (${hit.pad.net})` : ""}` : `Pad ${c.id}`;
-        }
-        case "field": {
-          const hit = board ? fieldById(board, c.id) : null;
-          return hit ? `${hit.field.name} field of ${hit.part.ref}${hit.field.name === "Reference" ? "" : ` (${hit.field.text})`}` : `Field ${c.id}`;
-        }
-        // `PCB_TABLE::GetItemDescription`, `PCB_TABLECELL::GetItemDescription`.
-        case "table": {
-          const t = board ? tableById(board, c.id) : undefined;
-          return t ? `${t.cols} column table` : `Table ${c.id}`;
-        }
-        case "tablecell": {
-          const hit = board ? cellById(board, c.id) : undefined;
-          return hit ? `Table cell ${cellAddress(hit.cell.row, hit.cell.col)}` : `Table cell ${c.id}`;
-        }
-        default:
-          // The text boxes, images, points and barcodes (`GetItemDescription`).
-          return extraItemLabel(board, c.id);
-      }
-    },
-    [api, board]
-  );
+  /** A human-readable label for a disambiguation-menu row (components/canvas/candidateLabel.ts, shared with the edit tools' menu). */
+  const candidateLabel = useCallback((c: SelectionCandidate): string => boardCandidateLabel(board, c), [board]);
 
   /**
    * pcb_selection_tool.cpp doSelectionMenu: where several items overlap
@@ -1235,7 +1207,10 @@ export function Canvas() {
 
     if (moveMode) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxNm, state.movePreview.dyNm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped, state.movePreview.perRefOffsetNm, state.movePreview.ops);
+      // Place Footprint: a click that never moved the footprint puts it down where the loop's `refreshPreview` after the pick put it -- on the grid point under
+      // the cursor, turned to a placement grid's frame (`fp->SetPosition( cursorPos ); applyPlacementFrameOrientation();`, UI-LEFT-2 PP4)
+      const p = state.movePreview ?? (board ? gridCarryDrop(board, wx, wy, e) : null);
+      if (p) api.commitMove(p.refs, p.dxNm, p.dyNm, p.kind, p.rotateQuarterTurns, p.flipped, p.perRefOffsetNm, p.ops);
       return;
     }
     if (state.armed) {
@@ -1289,8 +1264,15 @@ export function Canvas() {
     }
     const groupsNow = board?.drawings?.groups ?? [];
     const pickable = (id: string): boolean => scope === null || (board != null && withinScope(groupsNow, padParent(board, id) ?? id, scope));
-    const runPick = (skipHeuristics: boolean): SelectionCandidate[] =>
-      board ? pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics).filter((c) => pickable(c.id)) : [];
+    // `selectPoint`: "if( collector.GetCount() == 0 && preFilterCount > 0 ) HighlightSelectionFilter( rejected )" -- the rows that refused every item flash (UI-LEFT-2 PP19)
+    const runPick = (skipHeuristics: boolean): SelectionCandidate[] => {
+      if (!board) return [];
+      const rejected = newFilterRejections();
+      const picked = pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics, rejected).filter((c) => pickable(c.id));
+      const flash = rowsToFlash(rejected);
+      if (flash.length > 0) flashSelectionFilter(flash);
+      return picked;
+    };
 
     // pcb_selection_tool.cpp SELECTION_TOOL::hasModifier's `m_skip_heuristics`
     // (Alt): go straight to the full candidate list/clarification menu,
@@ -1519,8 +1501,11 @@ export function Canvas() {
       // the dragged item's own anchors for a single-item move; a
       // multi-select drag doesn't exclude any member (a reasonable,
       // documented simplification -- see PARITY-pcb.md).
-      const [ox, oy] = moveOrigin(origin.x, origin.y, refs);
-      const [sx, sy] = moveCursor(wx, wy, e, refs, [ox, oy], [origin.x, origin.y]);
+      // Place Footprint's carry (`PlaceFootprint`: `fp->SetPosition( cursorPos )`, `cursorPos = GetCursorPosition( !evt->DisableGridSnapping() )`, UI-LEFT-2 PP4):
+      // the footprint's anchor on the grid point under the cursor (Ctrl: the cursor itself), not a move's `BestDragOrigin` / `BestSnapAnchor`
+      const gridCarry = !packing && gridCarryAnchor(board, refs);
+      const [ox, oy] = gridCarry ? gridCarry : moveOrigin(origin.x, origin.y, refs);
+      const [sx, sy] = gridCarry ? snap.align("place", [wx, wy], snapMods(e), "current") : moveCursor(wx, wy, e, refs, [ox, oy], [origin.x, origin.y]);
       // Preserve whatever R/Shift+R/F have already accumulated on this
       // same preview (useActionRunner.ts) -- a fresh preview object every
       // pointer-move must not reset the live rotate/flip state.

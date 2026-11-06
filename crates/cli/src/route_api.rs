@@ -622,8 +622,11 @@ fn ids_of(req: &Value, key: &str) -> Vec<String> {
     req.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
-/// `POST /api/route/drag_start`: `{x, y, layer, settings?, free_angle?, drag_locked?}` (`mode` at the top level still works). A locked item is refused
-/// (`{ok: false, locked: true}`) unless `drag_locked`. Builds a fresh
+/// `POST /api/route/drag_start`: `{x, y, layer, settings?, free_angle?, drag_locked?, item?, footprints?, tracks?, warp?}` (`mode` at the top level still
+/// works). A locked item is refused (`{ok: false, locked: true}`) unless `drag_locked`. `item` is the selected track or via (its board id):
+/// `ROUTER_TOOL::InlineDrag` (pcbnew/router/router_tool.cpp at 8303b2ad) drags the selection, so that item is dragged, not one found again at the
+/// point (a pad or a via the track ends on), and the drag starts at the point snapped onto it (`TOOL_BASE::snapToItem`; `Router::drag_start_item`),
+/// which the reply gives as `start: [x, y]`. Without `item` (an older client) the item under the point is taken, as before. Builds a fresh
 /// `Router` from the board as it stands right now, same as `start` -- a
 /// drag reads the live board just as much as a route does. `settings` are the same
 /// `ROUTING_SETTINGS` a route session takes ([`settings_of`]) --
@@ -667,12 +670,23 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
             Err(message) => err(message),
         };
     }
-    match router.drag_start_locked(at, layer, free_angle, drag_locked) {
-        Ok(()) => {
-            let mut reply = router.drag_preview(at).map(|p| drag_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+    // `InlineDrag`: the selected item (`itemsToDrag` from the selection), its start snapped onto it; else the item under the point
+    let item = req.get("item").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let started = match item {
+        Some(id) => router.drag_start_item(at, layer, id, free_angle, drag_locked).map(Some),
+        None => router.drag_start_locked(at, layer, free_angle, drag_locked).map(|()| None),
+    };
+    match started {
+        Ok(start) => {
+            let p = start.unwrap_or(at);
+            let mut reply = router.drag_preview(p).map(|pv| drag_preview_json(&router, &pv)).unwrap_or_else(|| err("internal: started but no preview"));
             // the tracks of the line being dragged: the cursor must not snap onto them (`TOOL_BASE::checkSnap`)
             if let Some(obj) = reply.as_object_mut() {
                 obj.insert("line_tracks".into(), json!(router.drag_line_tracks()));
+                // where the drag of the selected item starts (`p = snapToItem( closestItem, p0 )`)
+                if let Some(start) = start {
+                    obj.insert("start".into(), json!([start.x, start.y]));
+                }
             }
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply
@@ -1493,6 +1507,69 @@ mod tests {
         // near an end it is the corner instead
         let near_end = drag_start(&dir, &cell, &body(json!({ "x": 2_000_000, "y": 8_050_000, "layer": "F.Cu" })));
         assert_eq!(near_end["drag"], json!("corner"), "{near_end}");
+    }
+
+    /// `ROUTER_TOOL::InlineDrag` drags the selection (UI-LEFT-2 RR2): D on a track that ends on a via, pressed on the via, drags the selected track from
+    /// its end (`snapToItem`: within half its width of an end, that end), where the point alone takes the via (`pickSingleItem`'s via before a track).
+    #[test]
+    fn d_drags_the_selected_track_not_the_via_found_again_at_the_point() {
+        let dir = scratch("drag_item_via");
+        let via = Via { id: "v".into(), net: "SIG".into(), at: p(mm(10.0), mm(5.0)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        setup_board(&dir, vec![track("sig", "SIG", &[p(mm(10.0), mm(9.0)), p(mm(10.0), mm(5.0))])], vec![via]);
+        let cell: RouteCell = Mutex::new(None);
+        let found_again = drag_start(&dir, &cell, &body(json!({ "x": 10_050_000, "y": 5_050_000, "layer": "F.Cu" })));
+        assert_eq!(found_again["drag"], json!("via"), "the point alone takes the via: {found_again}");
+        assert!(found_again.get("start").is_none(), "no item, no snapped start: {found_again}");
+        let selected = drag_start(&dir, &cell, &body(json!({ "x": 10_050_000, "y": 5_050_000, "layer": "F.Cu", "item": "sig" })));
+        assert_eq!(selected["ok"], json!(true), "{selected}");
+        assert_eq!(selected["drag"], json!("corner"), "the selected track, from its end on the via: {selected}");
+        assert_eq!(selected["start"], json!([10_000_000, 5_000_000]), "snapped onto the track's end: {selected}");
+        assert_eq!(selected["line_tracks"], json!(["sig"]), "{selected}");
+        // the via selected is the via, wherever on it the press is
+        let via_selected = drag_start(&dir, &cell, &body(json!({ "x": 10_100_000, "y": 5_000_000, "layer": "F.Cu", "item": "v" })));
+        assert_eq!(via_selected["drag"], json!("via"), "{via_selected}");
+        assert_eq!(via_selected["start"], json!([10_000_000, 5_000_000]), "a via snaps to its centre: {via_selected}");
+        // an id the board has no track or via of
+        assert_eq!(drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 7_000_000, "layer": "F.Cu", "item": "nope" })))["ok"], json!(false));
+    }
+
+    /// `snapToItem` of the selected track: off its centre line the drag starts on the nearest point of the segment nearest the press (the polyline's
+    /// segments are KiCad's `PCB_TRACK`s), and slides that segment; the commit replaces the track with the slid one.
+    #[test]
+    fn d_on_a_selected_track_starts_on_the_nearest_point_of_its_nearest_segment() {
+        let dir = scratch("drag_item_snap");
+        setup_board(&dir, vec![track("u", "SIG", &[p(mm(2.0), mm(12.0)), p(mm(2.0), mm(10.0)), p(mm(12.0), mm(10.0)), p(mm(12.0), mm(12.0))]), track("w", "GND", &[p(mm(4.0), mm(10.5)), p(mm(10.0), mm(10.5))])], vec![]);
+        let cell: RouteCell = Mutex::new(None);
+        // 0.4 mm below u's middle segment, on w: the point alone takes w, the selected u is dragged all the same
+        let found_again = drag_start(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 10_400_000, "layer": "F.Cu" })));
+        assert_eq!(found_again["line_tracks"], json!(["w"]), "{found_again}");
+        let started = drag_start(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 10_400_000, "layer": "F.Cu", "item": "u" })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        assert_eq!(started["drag"], json!("segment"), "{started}");
+        assert_eq!(started["start"], json!([7_000_000, 10_000_000]), "on u's centre line: {started}");
+        assert_eq!(started["line_tracks"], json!(["u"]), "{started}");
+        let moved = drag_move(&cell, &body(json!({ "x": 7_000_000, "y": 8_000_000 })));
+        assert_eq!(pts_of(&moved, "pts"), vec![p(mm(2.0), mm(12.0)), p(mm(2.0), mm(8.0)), p(mm(12.0), mm(8.0)), p(mm(12.0), mm(12.0))], "{moved}");
+        assert_eq!(drag_finish(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 8_000_000 })))["ok"], json!(true));
+        let tracks = tracks_of(&dir);
+        assert!(tracks.contains(&("SIG".to_string(), vec![p(mm(2.0), mm(12.0)), p(mm(2.0), mm(8.0)), p(mm(12.0), mm(8.0)), p(mm(12.0), mm(12.0))])), "{tracks:?}");
+        assert!(tracks.contains(&("GND".to_string(), vec![p(mm(4.0), mm(10.5)), p(mm(10.0), mm(10.5))])), "w untouched: {tracks:?}");
+    }
+
+    /// A locked selected track: refused with `locked` (the studio asks "Drag Anyway"), dragged with `drag_locked`.
+    #[test]
+    fn d_on_a_selected_locked_track_is_refused_until_drag_anyway() {
+        let dir = scratch("drag_item_locked");
+        setup_board(&dir, vec![track("u", "SIG", &[p(mm(2.0), mm(10.0)), p(mm(12.0), mm(10.0))])], vec![]);
+        let (_, mut design, _) = board::load(&dir).unwrap();
+        design.drawings = Some(eda_model::ir::DrawingsSection { locked_ids: vec!["u".into()], ..Default::default() });
+        board::save(&dir, &design).unwrap();
+        let cell: RouteCell = Mutex::new(None);
+        let refused = drag_start(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 10_000_000, "layer": "F.Cu", "item": "u" })));
+        assert_eq!((refused["ok"].clone(), refused["locked"].clone()), (json!(false), json!(true)), "{refused}");
+        let anyway = drag_start(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 10_000_000, "layer": "F.Cu", "item": "u", "drag_locked": true })));
+        assert_eq!(anyway["ok"], json!(true), "{anyway}");
+        assert_eq!(anyway["drag"], json!("segment"), "{anyway}");
     }
 
     /// `DRAGGER::Drag` / `FixRoute`: the cursor goes somewhere the drag cannot be resolved and the line stays at the last valid position;

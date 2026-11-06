@@ -21,6 +21,8 @@ export interface DraggableHit {
    * though a via spans every layer it's placed on and so matches almost
    * any choice. */
   layer: string;
+  /** The item is the selection (or the hover selection `RequestSelection` made): the router drags it by its id (`InlineDrag`), not what it finds at the point. */
+  selected?: boolean;
 }
 
 /** `ROUTER_TOOL::CanInlineDrag`/`InlineDrag`'s own item-finding step,
@@ -102,7 +104,9 @@ export async function startGroupDrag(x: number, y: number, target: GroupDragTarg
  * (`PCB_ACTIONS::dragFreeAngle` -> `DM_ANY | DM_FREE_ANGLE`): the drag only
  * marks obstacles, whatever `mode` says. */
 export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false, fromRouterTool = false): Promise<void> {
-  let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle);
+  // `InlineDrag` drags the selected item (`itemsToDrag` from the selection), never one picked again at the point (UI-LEFT-2 RR2): the router is told which
+  const item = hit.selected ? hit.id : undefined;
+  let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, false, item);
   // `D` from the selection tool is `EDIT_TOOL::Drag`, whose selection filter drops a locked item (`FilterCollectorForLockedItems`): the
   // selection comes out empty and the tool only warns (`ReportFilteredLockedItems`; this studio has no "Override locks"). (findings p5 F3-3)
   if (!preview.ok && preview.locked && !fromRouterTool) {
@@ -113,7 +117,7 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
   if (!preview.ok && preview.locked) {
     const anyway = await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Drag Anyway", doNotShowKey: "router_tool.cpp:performDragging" }); // `dlg.DoNotShowCheckbox( __FILE__, __LINE__ )`
     if (!anyway) return;
-    preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, true);
+    preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, true, item);
   }
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Nothing to drag there.", kind: "error" });

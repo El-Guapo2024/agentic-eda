@@ -24,7 +24,8 @@ import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighl
 import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, type MovedEdge } from "../../kicad-port/localRatsnest";
 import { EDGE_CUTS_DIM_FACTOR, HI_CONTRAST_FACTOR, cssOf, hiContrastDim, highlightBrighten, highlightDarken, parseColor, ratsnestCurveControl, ratsnestLineColor } from "../../kicad-port/color4d";
 import { activeCopperOnTop, COPPER_BUCKETS, padContrast, padHoleContrast, viaContrast, type ContrastLook } from "../../kicad-port/hiContrast";
-import { installColourScopes, memoColours, withColourScope } from "./colourScope";
+import { installColourScopes, memoColours, withColourScope, withFinalColourScope } from "./colourScope";
+import { brightenedBoard, brightenedCss } from "../../kicad-port/brightened";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { dimensionTextAngleRad, itemBounds, padIds } from "../../kicad-port/pcbItems";
@@ -95,6 +96,8 @@ export interface PaintOptions {
   importPreview?: { shapes: unknown[]; texts: unknown[]; dx: number; dy: number } | null;
   selection: Set<string>;
   hot: Set<string>;
+  /** The items the clarification menu's row under the pointer stands for, drawn brightened over the board (`doSelectionMenu`'s BRIGHTENED, kicad-port/brightened.ts). */
+  brightened?: readonly string[];
   /** The highlighted net, or every net of a multi-net highlight (`highlightNetSelection`); null = none. */
   netHighlight: string | readonly string[] | null;
   showRatsnest: boolean;
@@ -1677,19 +1680,19 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // port's own cue that nothing outside it can be picked). The split puts the group's items in `moving`, the rest in `still`.
   const entered = opts.enteredGroup ? splitCarried(board, [opts.enteredGroup]) : null;
   const passes: { b: BoardState; alpha: number }[] = entered ? [{ b: entered.still, alpha: OUTSIDE_ENTERED_GROUP_ALPHA }, { b: entered.moving, alpha: 1 }] : [{ b: board, alpha: 1 }];
-  const copper = (b: BoardState): Record<string, () => void> => ({
+  const copper = (b: BoardState, o: PaintOptions = opts): Record<string, () => void> => ({
     b_cu: () => {
-      drawZones(ctx, view, b, opts, "b_cu");
-      drawTracksAndVias(ctx, view, b, opts, "b_cu", viaBucket === "b_cu");
+      drawZones(ctx, view, b, o, "b_cu");
+      drawTracksAndVias(ctx, view, b, o, "b_cu", viaBucket === "b_cu");
     },
     in2_cu: () => {
-      drawZones(ctx, view, b, opts, "inner");
-      drawTracksAndVias(ctx, view, b, opts, "inner", viaBucket === "in2_cu");
+      drawZones(ctx, view, b, o, "inner");
+      drawTracksAndVias(ctx, view, b, o, "inner", viaBucket === "in2_cu");
     },
     in1_cu: () => {},
     f_cu: () => {
-      drawZones(ctx, view, b, opts, "f_cu");
-      drawTracksAndVias(ctx, view, b, opts, "f_cu", viaBucket === "f_cu");
+      drawZones(ctx, view, b, o, "f_cu");
+      drawTracksAndVias(ctx, view, b, o, "f_cu", viaBucket === "f_cu");
     },
   });
   const copperPasses = passes.map((pass) => ({ alpha: pass.alpha, layers: copper(pass.b) }));
@@ -1778,6 +1781,24 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawViaStitches(ctx, view, carry.moving, own.layerVisible, own.selection);
     drawSelectedGroups(ctx, view, carry.moving, own);
     ctx.restore();
+  }
+  // The items the clarification menu points at (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`, UI-LEFT-2 PP19): drawn again over the board,
+  // every colour they set brightened (`GetColor`: `color.Brightened( m_selectFactor ).WithAlpha( 0.8 )`), as the highlight group is drawn in the overlay.
+  if (opts.brightened && opts.brightened.length > 0) {
+    const lit = brightenedBoard(fullBoard, opts.brightened);
+    const own: PaintOptions = { ...opts, selection: new Set(), hot: new Set(), movePreview: null, netHighlight: null };
+    const litCopper = copper(lit.board, own);
+    withFinalColourScope(ctx, memoColours("brightened", brightenedCss), () => {
+      drawRefImages(ctx, view, lit.board, own);
+      for (const key of order) litCopper[key]?.();
+      for (const part of lit.board.parts) drawFootprint(ctx, view, part, own);
+      drawFields(ctx, view, [...fieldsToDraw(lit.board.parts), ...lit.fields.map((field) => ({ field }))], own);
+      drawShapes(ctx, view, lit.board, own);
+      drawTexts(ctx, view, lit.board, own);
+      drawTables(ctx, view, lit.board, own);
+      drawDimensions(ctx, view, lit.board, own);
+      drawPcbItems(ctx, view, lit.board, own);
+    });
   }
   if (opts.auxOrigin) drawAuxOrigin(ctx, view, opts.auxOrigin);
   drawGridOrigin(ctx, view, opts.gridOrigin, layerColor("background"));

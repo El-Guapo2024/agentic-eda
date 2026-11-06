@@ -915,6 +915,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-11-06 (`task-u4-common`, UI-LEFT C4, `PARITY-common.md` sections 2, 3 and 17): Enter during a PCB route is KiCad's `cursorClick` -- a click where the cursor is, which fixes the route there and goes on (End finishes it); each editor keeps its own
   crosshair, Always Show Crosshairs and polar coordinates (`WINDOW_SETTINGS::cursor`, `editing.polar_coords`); the Measure tool's ruler is `RULER_ITEM` (ticks with their labels, the back ticks, x, y, r and θ next to its end -- the
   Measure tool has no arrowhead in 8303b2ad; Interactive Offset's ruler has it). Left: about 310 handlers added since 2026-10-07 have still not been compared with KiCad's code; the rulers' drop shadows.
+- Done 2026-11-07 (`task-v1-select`, UI-LEFT-2 PP2, PP4, RR2, PP19, `PARITY-pcb.md` section 93, pns Stage 25): the board's edit tools (M, R, F, D, G, Delete, Shift+Delete, E) ask with the clarification menu when
+  several items are left under the cursor, D with `EDIT_TOOL::Drag`'s own filter, and D drags the selected track or via by its id; pads are hit by their real outline and board texts by their strokes, the
+  area and coverage passes over strokes; Place Footprint's carry is on the grid point and E does nothing while it carries; the filter row that refused a click flashes; Select Connection walks copper
+  graphic shapes; Highlight Net under the cursor goes through the filter; the menu's hover draws the item brightened. Left: Copy, Cut, Lock, Swap and the other edit tools still take the first candidate;
+  the schematic and library editors box the hovered item.
 
 ### 16. The PCB context menu
 **Mostly done (2026-10-08/09, `4c041a6`).** Hit: constantly. Blocks: no.
