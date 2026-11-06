@@ -707,6 +707,14 @@ export interface TeardropSettings {
   max_len_nm: Nm;
   max_width_nm: Nm;
   width_to_size_filter_ratio: number;
+  /** `m_CurvedEdges` ("Curved edges"); absent is off. UI-LEFT-2 PP7. */
+  curved_edges?: boolean;
+  /** `m_AllowUseTwoTracks` ("Allow teardrop to span two track segments"); absent is on. */
+  allow_two_segments?: boolean;
+  /** `!m_TdOnPadsInZones` ("Prefer zone connection"); absent is on. */
+  prefer_zone_connections?: boolean;
+  /** `TARGET_TRACK`'s block ("Properties for Track-to-Track Teardrops", the Edit Teardrops dialog's "Track to track"); absent is `TEARDROP_PARAMETERS()`, off. */
+  track_end?: TeardropParams;
 }
 
 // ---------------------------------------------------------------- drawings
