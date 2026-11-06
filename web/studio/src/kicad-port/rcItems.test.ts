@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import type { DrcReport, DrcViolation, ErcReport, ErcViolation } from "../api/types";
 import {
+  DRC_MENU_DEFAULTS,
+  DRC_SHOW_START,
   SHOW_ALL,
   allShown,
   canExclude,
@@ -31,6 +33,7 @@ import {
   refilterDrc,
   rcKind,
   rcMenu,
+  savedDrcControls,
   selectionAfterRowGone,
   setShowAll,
   severitiesAfter,
@@ -64,6 +67,23 @@ test("the All box turns warnings and exclusions on or off with it and leaves the
   assert.deepEqual(setShowAll(true), SHOW_ALL);
   assert.equal(allShown(SHOW_ALL), true);
   assert.equal(allShown({ errors: true, warnings: true, exclusions: false }), false);
+});
+
+test("the DRC dialog's Show boxes start as its base has them and its options menu as pcbnew's settings do, then as they were left", () => {
+  // dialog_drc_base.fbp: m_showErrors and m_showWarnings checked, m_showExclusions and m_showAll not (R6-D9)
+  assert.deepEqual(DRC_SHOW_START, { errors: true, warnings: true, exclusions: false, all: false });
+  assert.equal(allShown(DRC_SHOW_START), false);
+  assert.equal(isListed("exclusion", DRC_SHOW_START), false);
+  // PCBNEW_SETTINGS: drc_dialog.report_all_track_errors false, crossprobe true, scroll_on_crossprobe true
+  assert.deepEqual(DRC_MENU_DEFAULTS, { reportAllTrackErrors: false, crossprobe: true, scrollOnCrossprobe: true });
+  assert.deepEqual(savedDrcControls(null), { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS });
+  // DIALOG_SHIM::LoadControlState: what was left last time, each value on its own
+  const kept = savedDrcControls(JSON.stringify({ filter: { errors: true, warnings: false, exclusions: true, all: true }, options: { reportAllTrackErrors: true, crossprobe: false } }));
+  assert.deepEqual(kept.filter, { errors: true, warnings: false, exclusions: true, all: true });
+  assert.deepEqual(kept.options, { reportAllTrackErrors: true, crossprobe: false, scrollOnCrossprobe: true });
+  // something else in the slot is the start state
+  assert.deepEqual(savedDrcControls("not json"), { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS });
+  assert.deepEqual(savedDrcControls(JSON.stringify({ filter: { exclusions: "yes" } })).filter, DRC_SHOW_START);
 });
 
 test("the counts are of every marker, whatever the Show boxes say, and the exclusions are their own", () => {

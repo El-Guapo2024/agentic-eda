@@ -700,8 +700,9 @@ fn handle(
         ("GET", "/api/drc") => {
             // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC". `&schematic_parity=1`: "Test for parity between PCB and schematic".
             let asked = |name: &str| target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv.split_once('=').is_some_and(|(k, v)| k == name && v == "1"));
-            let (refill, parity) = (asked("refill_zones"), asked("schematic_parity"));
-            offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
+            // `&all_track_errors=1`: its options menu's "Report All Errors for Each Track" (`--all-track-errors`).
+            let opts = eda_kicad_engine::DrcOptions { refill_zones: asked("refill_zones"), schematic_parity: asked("schematic_parity"), all_track_errors: asked("all_track_errors") };
+            offload(stream, lane, dir, job, &format!("{path} refill={} parity={} all_track_errors={}", opts.refill_zones, opts.schematic_parity, opts.all_track_errors), &[], move |dir, _| crate::kicad_engine::drc_with_options(dir, opts).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
         // The dialogs' "Save...": kicad-cli's own report file (`ERC_REPORT`, `DRC_REPORT`), for the severities and units the dialog shows.

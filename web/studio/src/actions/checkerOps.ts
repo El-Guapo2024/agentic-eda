@@ -141,14 +141,14 @@ export function drcSelectedOf(state: Pick<StudioState, "drcSelected">, tab: DrcT
  * board and frame them (the same click the real dialog turns into `FocusOnItems`). `showPcb`: also bring the PCB tab up, for a click that may come from
  * another editor.
  */
-export function frameDrc(ctx: CheckerCtx, v: Pick<DrcViolation, "items"> | undefined, showPcb = false): void {
+export function frameDrc(ctx: CheckerCtx, v: Pick<DrcViolation, "items"> | undefined, showPcb = false, scroll = true): void {
   const { dispatch } = ctx;
   if (v) {
     const refs = v.items.flatMap((it) => (it.id && it.id !== "outline" ? [baseRef(it.id)] : []));
     dispatch({ type: "SET_SELECTION", refs });
     dispatch({ type: "SET_HOT", refs });
     const rect = canvasRect();
-    if (rect && rect.width >= 50 && rect.height >= 50 && v.items.length > 0) {
+    if (scroll && rect && rect.width >= 50 && rect.height >= 50 && v.items.length > 0) {
       const xs = v.items.map((it) => it.pos[0]);
       const ys = v.items.map((it) => it.pos[1]);
       const bounds = { minX: Math.min(...xs) - FRAME_PAD_NM, minY: Math.min(...ys) - FRAME_PAD_NM, maxX: Math.max(...xs) + FRAME_PAD_NM, maxY: Math.max(...ys) + FRAME_PAD_NM };
@@ -158,7 +158,11 @@ export function frameDrc(ctx: CheckerCtx, v: Pick<DrcViolation, "items"> | undef
   if (showPcb) dispatch({ type: "SET_TAB", tab: "pcb" });
 }
 
-/** Select a row of one of the DRC dialog's marker pages, and its violation on the board ([`frameDrc`]). */
+/**
+ * Select a row of one of the DRC dialog's marker pages, and its violation on the board ([`frameDrc`]) as the options menu says (`OnDRCItemSelected`):
+ * nothing more with "Cross-probe Selected Items" off (`if( !m_crossprobe ) return`), the items selected but the view left where it is with "Center on
+ * Cross-probe" off (`FocusOnItems( items, layer, m_scroll_on_crossprobe )`).
+ */
 export function selectDrc(ctx: CheckerCtx, tab: DrcTab, index: number, showPcb = false): void {
   const { api, dispatch } = ctx;
   if (tab === "violations") dispatch({ type: "SET_DRC_SELECTED", index });
@@ -166,7 +170,9 @@ export function selectDrc(ctx: CheckerCtx, tab: DrcTab, index: number, showPcb =
     dispatch({ type: "SET_DRC_SELECTED", index: null });
     setDrcView(tab === "unconnected" ? { unconnectedSelected: index } : { paritySelected: index });
   }
-  frameDrc(ctx, drcListOf(api.getState().drc, tab)[index], showPcb);
+  const { crossprobe, scrollOnCrossprobe } = getCheckerView().drc.options;
+  if (!crossprobe) return;
+  frameDrc(ctx, drcListOf(api.getState().drc, tab)[index], showPcb, scrollOnCrossprobe);
 }
 
 /**
@@ -473,6 +479,7 @@ export async function saveReport(ctx: CheckerCtx, domain: "erc" | "drc", format:
   if (domain === "drc") {
     request.refill_zones = state.drcRefillZones;
     request.schematic_parity = state.drcParity;
+    request.all_track_errors = getCheckerView().drc.options.reportAllTrackErrors;
   }
   try {
     const reply = await postSavedReport(domain, request);

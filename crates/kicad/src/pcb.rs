@@ -1163,7 +1163,9 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         defaults["dimension_precision"] = precision;
         defaults["dimensions"] = dims;
     }
-    let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
+    // (a check whose marker names its layer is listed on each copper layer of the board: `drc_exclusions::markers_on`)
+    let copper: Vec<String> = model.board.layers.iter().filter(|l| eda_model::layers::is_copper_layer_name(l)).cloned().collect();
+    let waived = crate::drc_exclusions::project_entries_on(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()), &copper);
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
         // The entries are structured records (`kiapi.board.DrcExclusion`), the form of a section at schema 3. A section that says it is at 2 or less is what KiCad

@@ -34,6 +34,11 @@
 // "Ignored Tests" is the report's `ignored_checks`: the checks whose severity is
 // Ignore, which kicad-cli does not run; a right click changes a check's severity.
 //
+// The gear button is `DIALOG_DRC::OnMenu`: "Report All Errors for Each Track" (`--all-track-errors` on the next run and on Save...),
+// "Cross-probe Selected Items" and "Center on Cross-probe" (what a row's selection does to the board: `OnDRCItemSelected`), kept in the user's
+// settings (`PCBNEW_SETTINGS::m_DRCDialog`; here this browser's). The Show boxes start as the dialog's base does -- Errors and Warnings, not
+// Exclusions or All -- and are kept from one opening to the next (`DIALOG_SHIM::SaveControlState`): state/checkerView.ts.
+//
 // "Lint" is a tab of its own: crates/lint, our own checks that KiCad does not have
 // (placement quality, net-class track width). In-process and cheap, so it follows
 // the board live while the dialog is open; it never mixes into kicad-cli's lists.
@@ -41,7 +46,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DrcViolation } from "../api/types";
 import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
 import { allShown, canExclude, countKinds, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
-import { askExclusionComment, setDrcView, useCheckerView, type DrcTab } from "../state/checkerView";
+import { askExclusionComment, setDrcOptions, setDrcView, useCheckerView, type DrcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { saveReport, deleteAllMarkersDrc, deleteMarkerDrc, drcListOf, drcMenuContext, drcSelectedOf, drcSettingSeverity, excludeDrc, excludeMarkerDrc, frameDrc, openSeveritySetup, restoreDrc, runMarkerMenu, selectDrc, setDrcSeverity, stepDrc, toMenuEntries } from "../actions/checkerOps";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
@@ -171,6 +176,21 @@ export function DrcDialog() {
   /** What the lists say when they have nothing in them: a clean board, or markers that were deleted by hand. */
   const emptyText = (clean: string) => (report?.markers_deleted ? "All markers were deleted. Run DRC to check the board again." : clean);
 
+  /** `DIALOG_DRC::OnMenu`, the gear button (`m_bMenu`): three check items kept in the user's settings (`PCBNEW_SETTINGS::m_DRCDialog`). */
+  const optionsMenu = (at: DOMRect) => {
+    const o = view.options;
+    setMenu({
+      x: at.left,
+      y: at.bottom,
+      entries: [
+        { label: "Report All Errors for Each Track", hint: "If unchecked, only the first error will be reported for each track", checked: o.reportAllTrackErrors, onSelect: () => setDrcOptions({ reportAllTrackErrors: !o.reportAllTrackErrors }) },
+        { label: "", separator: true, onSelect: () => undefined },
+        { label: "Cross-probe Selected Items", hint: "Highlight corresponding items on canvas when selected in the DRC list", checked: o.crossprobe, onSelect: () => setDrcOptions({ crossprobe: !o.crossprobe }) },
+        { label: "Center on Cross-probe", hint: "When cross-probing, scroll the canvas so that the item is visible", checked: o.scrollOnCrossprobe, onSelect: () => setDrcOptions({ scrollOnCrossprobe: !o.scrollOnCrossprobe }) },
+      ],
+    });
+  };
+
   const ignoredMenu = (key: string, x: number, y: number) => {
     const current = drcSettingSeverity(state, key);
     const entries: MenuEntry[] = (["error", "warning", "ignore"] as const).map((sev) => ({
@@ -234,6 +254,10 @@ export function DrcDialog() {
               <input type="checkbox" checked={state.drcParity} onChange={(e) => dispatch({ type: "SET_DRC_PARITY", parity: e.target.checked })} />
               Test for parity between PCB and schematic
             </label>
+            <span style={{ flex: 1 }} />
+            <button className="rc-options" title="DRC options" aria-label="DRC options" onClick={(e) => optionsMenu(e.currentTarget.getBoundingClientRect())}>
+              ⚙
+            </button>
           </div>
 
           <div className="dock-tabs" style={{ marginBottom: 10 }}>

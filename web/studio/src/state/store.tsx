@@ -17,6 +17,7 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdText, CmdDimensionKin
 import { defaultSearch } from "../kicad-port/schFind";
 import { cleanHistory, initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
+import { getCheckerView } from "./checkerView";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
@@ -2009,7 +2010,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     const askedAt = stateRef.current.version;
     dispatch({ type: "DRC_RUNNING" });
     try {
-      const drc = await fetchDrc(stateRef.current.drcRefillZones, stateRef.current.drcParity);
+      // the dialog's options menu: "Report All Errors for Each Track" (`DRC_TOOL::RunTests( .., m_report_all_track_errors, .. )`)
+      const drc = await fetchDrc(stateRef.current.drcRefillZones, stateRef.current.drcParity, getCheckerView().drc.options.reportAllTrackErrors);
       dispatch({ type: "DRC_OK", drc, version: revisionOf(drc, askedAt) });
     } catch (e) {
       dispatch({ type: "DRC_ERR", message: e instanceof Error ? e.message : String(e) });

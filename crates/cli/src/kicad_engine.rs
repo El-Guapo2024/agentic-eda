@@ -56,10 +56,15 @@ pub fn drc(dir: &Path, refill_zones: bool) -> Result<Value, Vec<CheckResult>> {
 /// The violations the design waived (`design.drawings.drc_exclusions`) are in the derived project, so kicad-cli matches the ones it can;
 /// the report marks them `excluded` here either way (`DrcReport::to_json_with`).
 pub fn drc_with(dir: &Path, refill_zones: bool, schematic_parity: bool) -> Result<Value, Vec<CheckResult>> {
-    let (design, model) = if schematic_parity { load_with_schematic(dir)? } else { board::load(dir).map(|(_, d, m)| (d, m))? };
+    drc_with_options(dir, eda_kicad_engine::DrcOptions { refill_zones, schematic_parity, ..Default::default() })
+}
+
+/// [`drc_with`] with every option of the dialog, the options menu's "Report All Errors for Each Track" too (`DrcOptions::all_track_errors`).
+pub fn drc_with_options(dir: &Path, opts: eda_kicad_engine::DrcOptions) -> Result<Value, Vec<CheckResult>> {
+    let (design, model) = if opts.schematic_parity { load_with_schematic(dir)? } else { board::load(dir).map(|(_, d, m)| (d, m))? };
     let waived = design.drawings.as_ref().map(|d| d.drc_exclusions.clone()).unwrap_or_default();
     let revision = crate::fill_api::design_stamp(dir);
-    let mut report = eda_kicad_engine::drc_with(&design, &model, &work(dir), eda_kicad_engine::DrcOptions { refill_zones, schematic_parity })?;
+    let mut report = eda_kicad_engine::drc_with(&design, &model, &work(dir), opts)?;
     // "Refill all zones before performing DRC" made fills: they are the board's now, kept beside the design like the ones Fill All Zones makes.
     if let Some(mut fills) = report.zone_fills.take() {
         fills.revision = revision;
@@ -115,7 +120,8 @@ pub fn erc_report(dir: &Path, body: &[u8]) -> Value {
     saved(eda_kicad_engine::erc_report(&design, &model, &work(dir), &report_options(&body)))
 }
 
-/// `POST /api/drc/report`: the DRC dialog's "Save..." (`DRC.rpt`, `DRC.json`), with the dialog's refill and parity options.
+/// `POST /api/drc/report`: the DRC dialog's "Save..." (`DRC.rpt`, `DRC.json`), with the dialog's refill and parity options and its menu's
+/// "Report All Errors for Each Track" (`all_track_errors`).
 pub fn drc_report(dir: &Path, body: &[u8]) -> Value {
     let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let parity = body["schematic_parity"].as_bool().unwrap_or(false);
@@ -124,7 +130,7 @@ pub fn drc_report(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
     };
-    let drc = eda_kicad_engine::DrcOptions { refill_zones: body["refill_zones"].as_bool().unwrap_or(false), schematic_parity: parity };
+    let drc = eda_kicad_engine::DrcOptions { refill_zones: body["refill_zones"].as_bool().unwrap_or(false), schematic_parity: parity, all_track_errors: body["all_track_errors"].as_bool().unwrap_or(false) };
     saved(eda_kicad_engine::drc_report(&design, &model, &work(dir), drc, &report_options(&body)))
 }
 

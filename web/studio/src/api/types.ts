@@ -3745,6 +3745,8 @@ export interface SavedReportRequest {
   units: "mm" | "mil" | "in";
   refill_zones?: boolean;
   schematic_parity?: boolean;
+  /** The DRC dialog's options menu, "Report All Errors for Each Track" (`--all-track-errors`). */
+  all_track_errors?: boolean;
 }
 
 /** The report kicad-cli wrote: the file name the dialog suggests (`ERC.rpt`, `DRC.json`) and its text. */

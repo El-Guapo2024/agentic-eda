@@ -252,3 +252,80 @@ fn a_saved_report_is_the_file_kicad_cli_writes_for_the_severities_the_dialog_sho
     let drc_json = crate::kicad_engine::drc_report(&dir, &body("json", true, true, true));
     assert!(serde_json::from_str::<Value>(drc_json["report"].as_str().unwrap()).unwrap()["violations"].is_array());
 }
+
+/// A `kicad-cli pcb drc` violation of the studio's report: `(type, item uuids, excluded, kicad_matched)`.
+fn drc_rows(report: &Value, kind: &str) -> Vec<Value> {
+    report["violations"].as_array().unwrap().iter().filter(|v| v["type"] == kind).cloned().collect()
+}
+
+/// The DRC exclusion the web client sends for a violation of the studio's report (`drcExclusionSpec`).
+fn drc_exclusion_of(v: &Value) -> eda_model::ir::DrcExclusion {
+    let strings = |key: &str| -> Vec<String> { v["items"].as_array().unwrap().iter().map(|i| i[key].as_str().unwrap_or("").to_string()).collect() };
+    eda_model::ir::DrcExclusion {
+        check: v["type"].as_str().unwrap().to_string(),
+        items: strings("uuid"),
+        ids: strings("id"),
+        positions_nm: v["marker_nm"].as_array().unwrap().iter().map(|p| [Nm::new(p[0].as_i64().unwrap()), Nm::new(p[1].as_i64().unwrap())]).collect(),
+        comment: String::new(),
+    }
+}
+
+/// `kicad-cli pcb drc` run by hand on the board the studio derived in `dir`, asked for `severities`: the number of violations of `kind` it lists.
+fn kicad_cli_drc_lists(dir: &Path, severities: &[&str], kind: &str) -> usize {
+    let cli = eda_kicad_engine::find_cli().expect("checked by the caller");
+    let board = dir.join(".kicad").join("board.kicad_pcb");
+    let out = dir.join(".kicad").join("direct-drc.json");
+    let _ = std::fs::remove_file(&out);
+    let ran = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "drc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&board).output().expect("kicad-cli runs");
+    assert!(out.exists(), "kicad-cli wrote no report: {}{}", String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
+    let report: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    report["violations"].as_array().unwrap().iter().filter(|v| v["type"] == kind).count()
+}
+
+/// UI-LEFT B7/B8 (slow tier): the marker of a clearance between two tracks and of two crossing tracks is where KiCad's collision puts it, so an exclusion
+/// of either reaches kicad-cli (`eda_kicad::drc_exclusions::contact_point`); and the DRC dialog's "Report All Errors for Each Track" is `--all-track-errors`:
+/// without it a track reports its first error only (`DRC_ENGINE::GetReportAllTrackErrors`; each track is tested against the tracks of a greater uuid).
+#[test]
+fn a_track_clearance_and_a_crossing_reach_kicad_cli_and_all_track_errors_reports_every_one() {
+    if slow_tests_off() {
+        return;
+    }
+    let dir = scratch("review_drc_tracks");
+    setup(&dir);
+    let track = |net: &str, pts: &[(f64, f64)]| Cmd::AddTrack { net: net.into(), layer: "F.Cu".into(), width: mm(0.2), pts: pts.iter().map(|&(x, y)| eda_model::ir::Point { x: mm(x), y: mm(y) }).collect() };
+    // Every track starts on a pad of its net (U1.1 GND at 4,5; U1.2 VCC at 6,5; U2.1 GND at 14,5), so kicad-cli keeps its net: a VCC track down from U1.2,
+    // a GND track from each side ending 0.15 mm from it (0.2 mm clearance), and a GND track crossing it.
+    step(&dir, track("VCC", &[(6.0, 5.0), (6.0, 15.0)]), false, "test").unwrap();
+    step(&dir, track("GND", &[(4.0, 5.0), (4.0, 12.0), (5.65, 12.0)]), false, "test").unwrap();
+    step(&dir, track("GND", &[(14.0, 5.0), (14.0, 12.0), (6.35, 12.0)]), false, "test").unwrap();
+    step(&dir, track("GND", &[(4.0, 5.0), (4.0, 8.0), (8.0, 8.0)]), false, "test").unwrap();
+    let errors_of = |r: &Value| drc_rows(r, "clearance").len() + drc_rows(r, "tracks_crossing").len();
+
+    let every = eda_kicad_engine::DrcOptions { all_track_errors: true, ..Default::default() };
+    let all = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    assert_eq!((drc_rows(&all, "clearance").len(), drc_rows(&all, "tracks_crossing").len()), (2, 1), "every error of the VCC track: {all:#}");
+    // Without the option the VCC track keeps its first error against the tracks of a greater uuid; a track of a smaller uuid reports its own.
+    let pairs: Vec<Vec<String>> = drc_rows(&all, "clearance").into_iter().chain(drc_rows(&all, "tracks_crossing")).map(|v| v["items"].as_array().unwrap().iter().map(|i| i["uuid"].as_str().unwrap().to_string()).collect()).collect();
+    let vcc = pairs[0].iter().find(|u| pairs.iter().all(|p| p.contains(u))).cloned().expect("the VCC track is in every pair");
+    let others: Vec<&String> = pairs.iter().flatten().filter(|u| **u != vcc).collect();
+    let expected = others.iter().filter(|u| ***u < vcc).count() + usize::from(others.iter().any(|u| **u > vcc));
+    let first = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+    assert_eq!(errors_of(&first), expected, "the first error of each track only (VCC {vcc}, the others {others:?})");
+    eprintln!("without --all-track-errors: {expected} of the 3 errors");
+
+    // Exclude a clearance and the crossing: kicad-cli matches both, a run of it no longer lists them, and it made no stray marker of a guess.
+    let (clearance, crossing) = (drc_rows(&all, "clearance")[0].clone(), drc_rows(&all, "tracks_crossing")[0].clone());
+    step(&dir, Cmd::AddDrcExclusions { exclusions: vec![drc_exclusion_of(&clearance), drc_exclusion_of(&crossing)] }, false, "ui").unwrap();
+    let after = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    for kind in ["clearance", "tracks_crossing"] {
+        let waived: Vec<Value> = drc_rows(&after, kind).into_iter().filter(|v| v["excluded"] == true).collect();
+        assert_eq!(waived.len(), 1, "{kind}: {after:#}");
+        assert_eq!(waived[0]["kicad_matched"], true, "{kind}: kicad-cli matched the exclusion at the contact point the studio computed");
+    }
+    let plain = ["--all-track-errors", "--severity-error", "--severity-warning"];
+    assert_eq!(kicad_cli_drc_lists(&dir, &plain, "clearance"), 1, "kicad-cli stops reporting the waived clearance and keeps the other");
+    assert_eq!(kicad_cli_drc_lists(&dir, &plain, "tracks_crossing"), 0, "and the crossing");
+    let excluded = ["--all-track-errors", "--severity-exclusions"];
+    assert_eq!((kicad_cli_drc_lists(&dir, &excluded, "clearance"), kicad_cli_drc_lists(&dir, &excluded, "tracks_crossing")), (1, 1), "one excluded marker each");
+    let _ = std::fs::remove_dir_all(&dir);
+}
