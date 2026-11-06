@@ -217,6 +217,11 @@ pub struct SchExtras {
     /// Read from a KiCad file and written back as `saveText` / `saveTextBox` write them (r7 H4, M5). An item with no entry has KiCad's defaults. Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_attrs: BTreeMap<String, TextAttrs>,
+    /// An image's transform origin offset, by the graphic's id (`REFERENCE_IMAGE::m_transformOriginOffset`, the Properties panel's "Transform Offset X/Y"): the point
+    /// Scale scales it about, from its centre (`REFERENCE_IMAGE::scaleBy`). KiCad keeps it in the editor and does not write it (`saveBitmap`); here it is kept in the
+    /// design, not in the derived file. An image with no entry is scaled about its centre. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub image_offsets: BTreeMap<String, crate::ir::Point>,
     /// The font face and colour of a field of a symbol, a power symbol or a sheet (`EDA_TEXT::GetFont` / `GetTextColor`: the "Font" and "Color" columns of
     /// Symbol Properties' fields grid, `FIELDS_GRID_TABLE`'s `FDC_FONT` / `FDC_COLOR`), by the key of the item that has the field ([`crate::ir::field_key`]
     /// of a placed unit, a power symbol's or a sheet's id), then by the field's name. Kept apart from [`crate::ir::FieldPlacement`] (built with literals in
@@ -914,6 +919,7 @@ impl SchExtras {
             && self.pin_alternates.is_empty()
             && self.text_justify.is_empty()
             && self.text_attrs.is_empty()
+            && self.image_offsets.is_empty()
             && self.field_looks.is_empty()
             && self.power_props.is_empty()
             && self.tables.is_empty()
@@ -1173,6 +1179,10 @@ pub enum SchGraphicKind {
         #[serde(default, skip_serializing_if = "is_zero_nm")]
         #[serde(alias = "margin_um", deserialize_with = "crate::units::de")]
         margin_nm: Nm,
+        /// The four margins, left, top, right and bottom (`SCH_TEXTBOX::m_marginLeft` .. `m_marginBottom`, `(margins l t r b)`), when they are not one; they win
+        /// over `margin_nm` ([`text_box_margins`]). Additive.
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::units::de")]
+        margins_nm: Option<[Nm; 4]>,
     },
     /// `SCH_RULE_AREA`: a polygon that applies its attributes to everything inside it and to the
     /// nets crossing it (a netclass directive label on its border names the class).
@@ -1202,6 +1212,9 @@ pub enum SchGraphicKind {
         netclass: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         component_class: String,
+        /// Its text size (`SCH_DIRECTIVE_LABEL` is an `SCH_TEXT`: `SetSchTextSize`, `(effects (font (size ..)))`); 0 is the default, 50 mil. Additive.
+        #[serde(default, skip_serializing_if = "is_zero_nm", deserialize_with = "crate::units::de")]
+        text_size_nm: Nm,
     },
     /// `SCH_BITMAP`: an image on the sheet, drawn under everything else and plotted. `at` is its centre (`REFERENCE_IMAGE::GetPosition`); its size is the pixels of the file at
     /// their definition times `scale_ppm` ([`crate::image_info::size_nm`]). The file is held as the base64 text a `(data ..)` token carries, no white space, so a sheet written
@@ -1241,6 +1254,12 @@ impl SchGraphicKind {
     pub fn is_closed_shape(&self) -> bool {
         matches!(self, SchGraphicKind::Rectangle { .. } | SchGraphicKind::Circle { .. } | SchGraphicKind::Polygon { .. } | SchGraphicKind::TextBox { .. } | SchGraphicKind::RuleArea { .. } | SchGraphicKind::Bezier { .. })
     }
+}
+
+/// The four margins of a text box, left, top, right and bottom (`SCH_TEXTBOX::GetMarginLeft` ..): its own four (`margins`), else the one it keeps for every side
+/// (`margin`), else the legacy one of its text size and stroke (`legacy`, `GetLegacyTextMargin`).
+pub fn text_box_margins(margin: Nm, margins: Option<[Nm; 4]>, legacy: Nm) -> [Nm; 4] {
+    margins.unwrap_or([if margin > Nm::ZERO { margin } else { legacy }; 4])
 }
 
 /// One drawn graphic or annotation -- see [`SchGraphicKind`]. Stroke and fill apply to every kind
@@ -1351,7 +1370,7 @@ mod tests {
         e.graphics.push(r);
         e.graphics.push(SchGraphic::new(SchGraphicKind::Circle { center: p(Nm::new(1), Nm::new(2)), radius_nm: Nm::new(3_000) }));
         e.graphics.push(SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, Nm::ZERO), p(Nm::new(10), Nm::ZERO), p(Nm::new(10), Nm::new(10))], exclude_from_sim: false, exclude_from_bom: true, exclude_from_board: false, dnp: false }));
-        e.graphics.push(SchGraphic::new(SchGraphicKind::Directive { at: p(Nm::new(5), Nm::new(5)), orientation: 90_000, shape: DirectiveShape::Round, pin_length_nm: Nm::new(2_540), netclass: "HV".into(), component_class: String::new() }));
+        e.graphics.push(SchGraphic::new(SchGraphicKind::Directive { at: p(Nm::new(5), Nm::new(5)), orientation: 90_000, shape: DirectiveShape::Round, pin_length_nm: Nm::new(2_540), netclass: "HV".into(), component_class: String::new(), text_size_nm: Nm::ZERO }));
         let mut taken = BTreeSet::new();
         e.assign_missing_ids(&mut taken);
         let ids: Vec<&str> = e.graphics.iter().map(|g| g.id.as_str()).collect();

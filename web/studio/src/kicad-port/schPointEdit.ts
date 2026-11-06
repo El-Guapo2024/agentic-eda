@@ -17,7 +17,7 @@
 import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
 import { addCorner, canAddCorner, eeDrag, eeFindHandle, eeMakePoints, handlePos, removableCorner, removeCorner, type EeDragResult, type EeEditPoints, type EeEditShape, type EeHandle, type P } from "./eePointEdit";
 import type { ArcEditMode } from "./pcbPointEdit";
-import { CAP_HEIGHT_RATIO, INTERLINE_PITCH, defaultTextBoxMargin, wrapText, type Measure } from "./schTextBox";
+import { CAP_HEIGHT_RATIO, INTERLINE_PITCH, textBoxMargins, wrapText, type Measure } from "./schTextBox";
 
 /** `SCH_SHAPE`'s default line width (`schIUScale.MilsToIU( DEFAULT_LINE_WIDTH_MILS )`, 6 mil), what a text box's default margin is made from. */
 const DEFAULT_WIDTH_NM = 152_400;
@@ -35,12 +35,13 @@ export function textBoxMinSize(g: SchGraphic, start: P, end: P, measure: Measure
   const s = g.shape;
   if (s.type !== "text_box" || s.text === "") return [0, 0];
   const width = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
-  const margin = s.margin_nm && s.margin_nm > 0 ? s.margin_nm : defaultTextBoxMargin(s.size_nm, width);
+  const [ml, mt, mr, mb] = textBoxMargins(s, width);
   const vertical = Math.round((s.angle ?? 0) / 1000) % 180 === 90;
   const along = vertical ? Math.abs(end[1] - start[1]) : Math.abs(end[0] - start[0]);
-  const lines = wrapText(s.text, Math.max(along - 2 * margin, 0), s.size_nm, measure);
+  // `GetShownText`'s column: the box less the margins along the text; `GetMinSize`: the text's height and the margins across it
+  const lines = wrapText(s.text, Math.max(along - (vertical ? mt + mb : ml + mr), 0), s.size_nm, measure);
   const textHeight = Math.round(s.size_nm * CAP_HEIGHT_RATIO + (lines.length - 1) * s.size_nm * INTERLINE_PITCH);
-  return vertical ? [textHeight + 2 * margin, 0] : [0, textHeight + 2 * margin];
+  return vertical ? [textHeight + ml + mr, 0] : [0, textHeight + mt + mb];
 }
 
 /** The graphic as its behaviour sees it, or null for a graphic the point editor has none for (a directive label, an image, a table ...). */

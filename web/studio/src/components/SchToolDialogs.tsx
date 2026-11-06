@@ -153,7 +153,7 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
   const submit = () => {
     if (!text.trim() || !state.schematic) return;
     if (!validHyperlink(href.trim())) return setProblem(HYPERLINK_ERROR);
-    const shape = { type: "text_box" as const, start: dialog.start, end: dialog.end, text, angle: vertical ? 90_000 : 0, size_nm: size, bold, italic, h_align: h, v_align: v, margin_nm: box?.margin_nm };
+    const shape = { type: "text_box" as const, start: dialog.start, end: dialog.end, text, angle: vertical ? 90_000 : 0, size_nm: size, bold, italic, h_align: h, v_align: v, margin_nm: box?.margin_nm, ...(box?.margins_nm ? { margins_nm: box.margins_nm } : {}) };
     const colors: Partial<SchGraphic> = { color: borderColor ?? undefined, fill_color: fillColor ?? undefined };
     if (edit) {
       const { color: _c, fill_color: _f, ...rest } = edit;

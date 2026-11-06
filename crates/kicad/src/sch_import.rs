@@ -3009,9 +3009,9 @@ mod tests {
         rect.fill = SchFill::Background;
         sch.extras.graphics = vec![
             rect,
-            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, mm(40.0)), end: p(mm(30.0), mm(50.0)), text: "boxed".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO }),
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, mm(40.0)), end: p(mm(30.0), mm(50.0)), text: "boxed".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO, margins_nm: None }),
             SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, mm(60.0)), p(mm(10.0), mm(60.0)), p(mm(10.0), mm(70.0))], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: true }),
-            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(20.0), Nm::ZERO), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "Power".into(), component_class: String::new() }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(20.0), Nm::ZERO), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "Power".into(), component_class: String::new(), text_size_nm: Nm::ZERO }),
         ];
         sch.assign_missing_ids();
         let wire_id = sch.wires[0].id.clone();

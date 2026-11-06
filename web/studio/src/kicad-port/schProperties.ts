@@ -334,13 +334,13 @@ function normalised(g: SchGraphic): unknown {
       shape = { ...s, corner_radius_nm: s.corner_radius_nm ?? 0 };
       break;
     case "text_box":
-      shape = { ...s, angle: s.angle ?? 0, bold: !!s.bold, italic: !!s.italic, h_align: s.h_align ?? "left", v_align: s.v_align ?? "top", margin_nm: s.margin_nm ?? 0 };
+      shape = { ...s, angle: s.angle ?? 0, bold: !!s.bold, italic: !!s.italic, h_align: s.h_align ?? "left", v_align: s.v_align ?? "top", margin_nm: s.margin_nm ?? 0, margins_nm: s.margins_nm ?? null };
       break;
     case "rule_area":
       shape = { ...s, exclude_from_sim: !!s.exclude_from_sim, exclude_from_bom: !!s.exclude_from_bom, exclude_from_board: !!s.exclude_from_board, dnp: !!s.dnp };
       break;
     case "directive":
-      shape = { ...s, orientation: s.orientation ?? 0, shape: s.shape ?? "round", netclass: s.netclass ?? "", component_class: s.component_class ?? "" };
+      shape = { ...s, orientation: s.orientation ?? 0, shape: s.shape ?? "round", netclass: s.netclass ?? "", component_class: s.component_class ?? "", text_size_nm: s.text_size_nm ?? 0 };
       break;
     default:
       break;

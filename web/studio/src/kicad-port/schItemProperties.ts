@@ -14,16 +14,17 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BoardTable, BoardTableCell, Cmd, LabelShape, LibSymbol, PointXY, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, PowerSymbol, SchJunction, SchLine, BusEntry, Sheet } from "../api/types";
-import type { SchColor, SchGraphic, SchGraphicShape, SchLineStyle } from "../api/schEditTypes";
+import type { SchColor, SchFill, SchGraphic, SchGraphicShape, SchLineStyle } from "../api/schEditTypes";
 import type { LengthUnit } from "../state/units";
 import { buildGrid, extractValueAndWritability, planEdit, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { colorToHex, hexToColor, isUnspecified, strokeEditCmd, UNSPECIFIED_COLOR } from "./schProperties";
 import { inferSpin, type LabelSpin } from "./labelSpin";
 import { circumcircle } from "./trackArc";
+import { kiRound } from "./pcbGeom";
 import { DEFAULT_PPI, imageSizeNm, SCALE_PPM, scaleForHeightNm, scaleForWidthNm } from "./refImage";
 import { registerSchTableProperties, schTableItemOf } from "./schTableProperties";
-import { defaultTextBoxMargin } from "./schTextBox";
+import { textBoxMargins } from "./schTextBox";
 import { drawnUnit, unitCountOf } from "./schUnits";
 import { letterSubReference } from "./unitLetter";
 import { setSymbolVariantCmd, type VariantFlagKey } from "./designVariants";
@@ -330,6 +331,18 @@ const pointOf = (s: SchGraphicShape, which: "start" | "end"): PointXY => {
   }
 };
 
+/**
+ * `SCH_LINE::SetLength`: the end point that gives the line from `start` the length `length` (nm) along the way it runs (`end = start + KiROUND( delta * scale )`); a
+ * negative length is 0, and a line of no length runs to the right (`start + KiROUND( aLength, 0.0 )`).
+ */
+export function lineEndForLength(start: readonly [number, number], end: readonly [number, number], length: number): [number, number] {
+  const want = Math.max(0, length);
+  const now = Math.hypot(end[0] - start[0], end[1] - start[1]);
+  if (now <= 0) return [start[0] + kiRound(want), start[1]];
+  const k = want / now;
+  return [start[0] + kiRound((end[0] - start[0]) * k), start[1] + kiRound((end[1] - start[1]) * k)];
+}
+
 /** `EDA_SHAPE::GetArcAngle` in degrees. */
 function arcAngle(s: Extract<SchGraphicShape, { type: "arc" }>): number {
   const c = circumcircle([s.start.x, s.start.y], [s.mid.x, s.mid.y], [s.end.x, s.end.y]);
@@ -349,6 +362,32 @@ const FILL_CHOICES: Choice[] = [
   { label: "Body background color", value: "background" },
   { label: "Fill color", value: "color" },
 ];
+
+/** `UI_FILL_MODE` as `EDA_SHAPE_DESC` maps it (`hatchModeEnum`): what the "Fill" row of a shape offers, in KiCad's order. */
+export const UI_FILL_CHOICES: Choice[] = [
+  { label: "None", value: "none" },
+  { label: "Solid", value: "solid" },
+  { label: "Hatch", value: "hatch" },
+  { label: "Reverse Hatch", value: "reverse_hatch" },
+  { label: "Cross-hatch", value: "cross_hatch" },
+];
+
+/** `EDA_SHAPE::IsSolidFill`: filled with the outline's, the body background's or its own colour. */
+const isSolidFill = (f: SchFill | undefined): boolean => f === "outline" || f === "background" || f === "color";
+
+/** `EDA_SHAPE::GetFillModeProp`: the `UI_FILL_MODE` a fill shows as (every solid fill is "Solid"). */
+export function uiFillMode(f: SchFill | undefined): string {
+  return f === "hatch" || f === "reverse_hatch" || f === "cross_hatch" ? f : isSolidFill(f) ? "solid" : "none";
+}
+
+/**
+ * `EDA_SHAPE::SetFillModeProp` on a shape of the sheet: none and the hatches are themselves; "Solid" is `SetFilled( true )`, which `SCH_SHAPE::SetFilled` makes
+ * `FILLED_WITH_COLOR` for a shape with no parent symbol. A fill that already shows as the mode is kept (the grid sets only a changed value).
+ */
+export function fillOfUiMode(mode: string, now: SchFill | undefined): SchFill {
+  if (uiFillMode(now) === mode) return now ?? "none";
+  return mode === "solid" ? "color" : (mode as SchFill);
+}
 
 const ATTRIBUTES = "Attributes";
 /** A label's text with no size of its own: 50 mil (`LabelLook::text_size_nm`). */
@@ -544,10 +583,16 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   // Label Properties' (`edit_label`), its colour its `text_attrs`; a text box's are its shape's.
   pm.registerType("EDA_TEXT");
   const isTextBox = (i: SchItem): boolean => i.graphic?.shape.type === "text_box";
+  const directiveSize = (i: SchItem): number => {
+    const s = i.graphic!.shape as Extract<SchGraphicShape, { type: "directive" }>;
+    return s.text_size_nm && s.text_size_nm > 0 ? s.text_size_nm : LABEL_SIZE_NM;
+  };
   const textBox = (i: SchItem): Extract<SchGraphicShape, { type: "text_box" }> => i.graphic!.shape as Extract<SchGraphicShape, { type: "text_box" }>;
   const attrsCmd = (i: SchItem, patch: { bold?: boolean; italic?: boolean; color?: SchColor; href?: string }): Cmd => ({ op: "sch_edit", verb: "set_text_attrs", ids: [i.id], ...patch });
   const labelCmd = (i: SchItem, patch: { size_nm?: number; bold?: boolean; italic?: boolean; spin?: LabelSpin }): Cmd => ({ op: "sch_edit", verb: "edit_label", id: i.id, ...patch });
-  const BOX_REASON = "A text box's font colour and hyperlink are kept as the file had them, not shown or edited here.";
+  const isDirective = (i: SchItem): boolean => i.graphic?.shape.type === "directive";
+  /** A text box's and a directive label's font, colour and link (`SchExtras::text_attrs` by the graphic's id; the state's `graphic_text_attrs`). */
+  const graphicAttrs = (i: SchItem, c: SchCtx) => (i.graphic ? c.sch.graphic_text_attrs?.[i.id] : undefined);
   // Orientation: every schematic text masks it ("Orientation is exposed differently in schematic").
   add({ owner: "EDA_TEXT", name: "Orientation", kind: "double", display: "degree", get: () => 0 });
   add(
@@ -567,17 +612,15 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     TEXT_PROPS
   );
-  // "Font" (`GetFontProp` / `SetFontProp`): eeschema's "Default Font" first; a free text's, a label's and a text box's face is its `text_attrs` (`set_text_attrs`, UI-LEFT S6;
-  // a text box's is the sheet's `graphic_text_attrs`). A directive label has none.
-  const faceOf = (i: SchItem, c: SchCtx): string => i.text?.font ?? i.label?.font ?? (isTextBox(i) ? c.sch.graphic_text_attrs?.[i.id]?.font : undefined) ?? "";
+  // "Font" (`GetFontProp` / `SetFontProp`): eeschema's "Default Font" first; a free text's, a label's, a text box's and a directive label's face is its `text_attrs`
+  // (`set_text_attrs`, UI-LEFT S6; a text box's and a directive label's are the sheet's `graphic_text_attrs`).
+  const faceOf = (i: SchItem, c: SchCtx): string => i.text?.font ?? i.label?.font ?? graphicAttrs(i, c)?.font ?? "";
   add(
     {
       owner: "EDA_TEXT",
       name: "Font",
       kind: "string",
       get: (i, c) => faceOf(i, c) || "Default Font",
-      writeable: (i) => !!(i.text || i.label || isTextBox(i)),
-      readOnlyReason: "A directive label has no text of its own, and so no font.",
       set: (i, v, c) => {
         const next = String(v).trim();
         const font = next === "Default Font" ? "" : next;
@@ -666,27 +709,27 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
     },
     TEXT_PROPS
   );
+  // "Color" (`SetTextColor`) and "Hyperlink" (`SetHyperlink`): a free text's, a label's, a text box's and a directive label's `text_attrs` (`set_text_attrs`); a
+  // label's and a directive label's link is masked (`SCH_LABEL_BASE_DESC`)
+  const colorNow = (i: SchItem, c: SchCtx): string => colorValue(i.text?.color ?? i.label?.color ?? graphicAttrs(i, c)?.color);
   add(
     {
       owner: "EDA_TEXT",
       name: "Color",
       kind: "color",
-      get: (i) => colorValue(i.text?.color ?? i.label?.color),
-      writeable: (i) => !!i.text || !!i.label,
-      readOnlyReason: BOX_REASON,
-      set: (i, v) => (colorValue(i.text?.color ?? i.label?.color) === String(v) ? [] : [attrsCmd(i, { color: colorOf(String(v)) })]),
+      get: colorNow,
+      set: (i, v, c) => (colorNow(i, c) === String(v) ? [] : [attrsCmd(i, { color: colorOf(String(v)) })]),
     },
     TEXT_PROPS
   );
+  const hrefNow = (i: SchItem, c: SchCtx): string => i.text?.href ?? graphicAttrs(i, c)?.href ?? "";
   add(
     {
       owner: "EDA_TEXT",
       name: "Hyperlink",
       kind: "string",
-      get: (i) => i.text?.href ?? "",
-      writeable: (i) => !!i.text,
-      readOnlyReason: BOX_REASON,
-      set: (i, v) => ((i.text!.href ?? "") === String(v).trim() ? [] : [attrsCmd(i, { href: String(v).trim() })]),
+      get: hrefNow,
+      set: (i, v, c) => (hrefNow(i, c) === String(v).trim() ? [] : [attrsCmd(i, { href: String(v).trim() })]),
     },
     TEXT_PROPS
   );
@@ -705,15 +748,15 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         name: "Text Size",
         kind: "int",
         display: "size",
-        get: (i) => (i.text ? i.text.size_nm : i.label ? (i.label.size_nm ?? LABEL_SIZE_NM) : isTextBox(i) ? textBox(i).size_nm : LABEL_SIZE_NM),
-        writeable: (i) => !!i.text || !!i.label || isTextBox(i),
-        readOnlyReason: "A directive label's text size is not modelled: it is drawn at 50 mil.",
+        get: (i) => (i.text ? i.text.size_nm : i.label ? (i.label.size_nm ?? LABEL_SIZE_NM) : isTextBox(i) ? textBox(i).size_nm : isDirective(i) ? directiveSize(i) : LABEL_SIZE_NM),
         // `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear" (0.01 to 1000 mm)
         validate: (v, _i, c) => (num(v) < 10_000 ? tooSmall(10_000, "size", c.units) : num(v) > 1_000_000_000 ? "Value must be less than or equal to 1000 mm" : null),
         set: (i, v) => {
           const size = Math.round(num(v));
           if (i.text) return i.text.size_nm === size ? [] : [{ op: "sch_edit", verb: "edit_text", id: i.id, size_nm: size }];
           if (i.label) return (i.label.size_nm ?? LABEL_SIZE_NM) === size ? [] : [labelCmd(i, { size_nm: size })];
+          // a directive label's own size (`SCH_DIRECTIVE_LABEL` is an `SCH_TEXT`: `SetSchTextSize`), kept in its shape (`text_size_nm`, 0 the default 50 mil)
+          if (isDirective(i)) return directiveSize(i) === size ? [] : [withShape(i.graphic!, { ...(i.graphic!.shape as Extract<SchGraphicShape, { type: "directive" }>), text_size_nm: size === LABEL_SIZE_NM ? 0 : size })];
           return isTextBox(i) && textBox(i).size_nm !== size ? [withShape(i.graphic!, { ...textBox(i), size_nm: size })] : [];
         },
       },
@@ -808,13 +851,21 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   lineEndRow("Start Y", "start", 1);
   lineEndRow("End X", "end", 0);
   lineEndRow("End Y", "end", 1);
+  // "Length" (`SCH_LINE::GetLength` / `SetLength`): the end goes along the line to the length typed (`set_line_ends`). A wire drawn here as several segments is several
+  // `SCH_LINE`s in KiCad, each of its own length: its sum is shown, not set.
   add({
     owner: "SCH_LINE",
     name: "Length",
     kind: "double",
     display: "size",
     get: (i) => Math.round(pts(i).slice(1).reduce((n, p, k) => n + Math.hypot(p[0] - pts(i)[k]![0], p[1] - pts(i)[k]![1]), 0)),
-    readOnlyReason: "A line's length is not typed here (SetLength moves its end along it): move its end point.",
+    writeable: (i, c) => pts(i).length === 2 && !c.locked.has(i.id),
+    readOnlyReason: (i) => (pts(i).length === 2 ? LOCKED : "A line of several segments has no one length to set: KiCad's lines are one segment each."),
+    set: (i, v) => {
+      const p = pts(i);
+      const end = lineEndForLength(p[0]!, p[1]!, num(v));
+      return end[0] === p[1]![0] && end[1] === p[1]![1] ? [] : [{ op: "sch_edit", verb: "set_line_ends", id: i.id, end: { x: end[0], y: end[1] } } as Cmd];
+    },
   });
   add({
     owner: "SCH_LINE",
@@ -1025,10 +1076,14 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       owner: "EDA_SHAPE",
       name: "Fill",
       kind: "enum",
-      choices: () => FILL_CHOICES,
-      get: (i) => i.graphic!.fill ?? "none",
+      // `PROPERTY_ENUM<EDA_SHAPE, UI_FILL_MODE>`: None, Solid and the three hatches (`GetFillModeProp` / `SetFillModeProp`)
+      choices: () => UI_FILL_CHOICES,
+      get: (i) => uiFillMode(i.graphic!.fill),
       available: fillAvailable,
-      set: (i, v) => ((i.graphic!.fill ?? "none") === v ? [] : [graphicCmd(i.graphic!, { fill: String(v) as SchGraphic["fill"] })]),
+      set: (i, v) => {
+        const next = fillOfUiMode(String(v), i.graphic!.fill);
+        return (i.graphic!.fill ?? "none") === next ? [] : [graphicCmd(i.graphic!, { fill: next })];
+      },
     },
     SHAPE_PROPS
   );
@@ -1039,8 +1094,9 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       kind: "color",
       get: (i) => colorValue(i.graphic!.fill_color),
       available: fillAvailable,
-      // "isFillColorEditable": the colour only counts for a shape filled with a colour
-      writeable: (i) => (i.graphic!.fill ?? "none") === "color",
+      // `SCH_SHAPE_DESC`'s `isFillColorEditable`: a shape of the sheet (no parent symbol) takes a fill colour while it is solid filled (`IsSolidFill`)
+      writeable: (i) => isSolidFill(i.graphic!.fill),
+      readOnlyReason: "Only a solid fill has a colour of its own.",
       set: (i, v) => (colorValue(i.graphic!.fill_color) === String(v) ? [] : [graphicCmd(i.graphic!, { fill_color: colorOf(String(v)) })]),
     },
     SHAPE_PROPS
@@ -1060,15 +1116,29 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Width");
   pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Height");
   pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Thickness");
-  // `fillAvailable` gives a schematic text box its fill rows (only a board's text box and table cell are left without); not edited here.
-  pm.overrideWriteability("SCH_TEXTBOX", "EDA_SHAPE", "Fill", () => false, "A text box's fill is not edited here.");
-  pm.overrideWriteability("SCH_TEXTBOX", "EDA_SHAPE", "Fill Color", () => false, "A text box's fill is not edited here.");
-  // "Margins": the model keeps one margin for the four sides (`margin_nm`; 0 is `GetLegacyTextMargin`), so the rows show it, read-only.
+  // `fillAvailable` gives a schematic text box its fill rows (only a board's text box and table cell are left without), edited as a shape's are.
+  // "Margins" (`SetMarginLeft` .. `SetMarginBottom`): each side its own (`margins_nm`, `(margins l t r b)`); a box that keeps one for the four sides, or none
+  // (`GetLegacyTextMargin`), shows it on each.
   const MARGINS = "Margins";
-  const margin = (i: SchItem): number => textBox(i).margin_nm || defaultTextBoxMargin(textBox(i).size_nm, i.graphic!.width_nm ?? 0);
-  for (const side of ["Left", "Top", "Right", "Bottom"]) {
-    add({ owner: "SCH_TEXTBOX", name: `Margin ${side}`, kind: "int", display: "size", get: margin, readOnlyReason: "The model keeps one margin for the four sides of a text box: set it in Text Box Properties." }, MARGINS);
-  }
+  (["Left", "Top", "Right", "Bottom"] as const).forEach((side, k) => {
+    add(
+      {
+        owner: "SCH_TEXTBOX",
+        name: `Margin ${side}`,
+        kind: "int",
+        display: "size",
+        get: (i) => textBoxMargins(textBox(i), i.graphic!.width_nm ?? 0)[k]!,
+        set: (i, v) => {
+          const margins = textBoxMargins(textBox(i), i.graphic!.width_nm ?? 0);
+          const n = Math.round(num(v));
+          if (margins[k] === n) return [];
+          margins[k] = n;
+          return [withShape(i.graphic!, { ...textBox(i), margins_nm: margins })];
+        },
+      },
+      MARGINS
+    );
+  });
   textSize("SCH_TEXTBOX");
   pm.mask("SCH_TEXTBOX", "EDA_TEXT", "Orientation");
 
@@ -1106,9 +1176,27 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   add({ owner: "SCH_BITMAP", name: "Position X", kind: "int", display: "coord", get: (i) => image(i).at.x, writeable: unlocked, set: imagePos(0) });
   add({ owner: "SCH_BITMAP", name: "Position Y", kind: "int", display: "coord", get: (i) => image(i).at.y, writeable: unlocked, set: imagePos(1) });
   const IMAGE_PROPS = "Image Properties";
-  /** `edit_graphic` of the image with another scale: no `data` (the pixels stay), and none of the state's `px`, `ppi`, `hash`, which the command does not know. */
-  const rescale = (i: SchItem, scalePpm: number): Cmd[] =>
-    scalePpm <= 0 || scalePpm === (image(i).scale_ppm ?? SCALE_PPM) ? [] : [{ op: "sch_edit", verb: "edit_graphic", id: i.id, graphic: { shape: { type: "image", at: image(i).at, scale_ppm: scalePpm } } }];
+  const imageOffset = (i: SchItem, c: SchCtx): [number, number] => {
+    const o = c.sch.image_offsets?.[i.id];
+    return [o?.x ?? 0, o?.y ?? 0];
+  };
+  /**
+   * `REFERENCE_IMAGE::SetImageScale` -> `scaleBy( ratio )`: the image is scaled about its transform origin (its centre plus the offset), so its centre moves and the offset
+   * scales with it. `edit_graphic` of the image with the new centre and scale (no `data`: the pixels stay; none of the state's `px`, `ppi`, `hash`, which the command does
+   * not know), and `set_image_offset` when there is an offset, in the one step.
+   */
+  const rescale = (i: SchItem, scalePpm: number, c: SchCtx): Cmd[] => {
+    const was = image(i).scale_ppm ?? SCALE_PPM;
+    if (scalePpm <= 0 || scalePpm === was) return [];
+    const ratio = scalePpm / was;
+    const [ox, oy] = imageOffset(i, c);
+    const origin = { x: image(i).at.x + ox, y: image(i).at.y + oy };
+    const offset = { x: kiRound(ox * ratio), y: kiRound(oy * ratio) };
+    const at = { x: kiRound(origin.x - ox * ratio), y: kiRound(origin.y - oy * ratio) };
+    const cmds: Cmd[] = [{ op: "sch_edit", verb: "edit_graphic", id: i.id, graphic: { shape: { type: "image", at, scale_ppm: scalePpm } } }];
+    if (ox !== 0 || oy !== 0) cmds.push({ op: "sch_edit", verb: "set_image_offset", id: i.id, offset } as Cmd);
+    return cmds;
+  };
   add(
     {
       owner: "SCH_BITMAP",
@@ -1116,7 +1204,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       kind: "double",
       get: (i) => (image(i).scale_ppm ?? SCALE_PPM) / SCALE_PPM,
       validate: (v) => (num(v) <= 0 ? "Scale must be a positive number." : null),
-      set: (i, v) => rescale(i, Math.round(num(v) * SCALE_PPM)),
+      set: (i, v, c) => rescale(i, Math.round(num(v) * SCALE_PPM), c),
     },
     IMAGE_PROPS
   );
@@ -1129,20 +1217,35 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         display: "size",
         get: (i) => imageSizeNm(image(i).px ?? [0, 0], image(i).ppi ?? DEFAULT_PPI, image(i).scale_ppm ?? SCALE_PPM)[name === "Width" ? 0 : 1],
         validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
-        set: (i, v) => {
+        set: (i, v, c) => {
           const want = Math.round(num(v));
           const px = image(i).px ?? [0, 0];
           const ppi = image(i).ppi ?? DEFAULT_PPI;
-          return want <= 0 ? [] : rescale(i, name === "Width" ? scaleForWidthNm(px, ppi, want) : scaleForHeightNm(px, ppi, want));
+          return want <= 0 ? [] : rescale(i, name === "Width" ? scaleForWidthNm(px, ppi, want) : scaleForHeightNm(px, ppi, want), c);
         },
       },
       IMAGE_PROPS
     );
   };
-  // "Transform Offset X/Y" (`SetTransformOriginOffset*`): the point the image is scaled and turned about, relative to its centre -- not kept by the model.
-  for (const axis of ["X", "Y"]) {
-    add({ owner: "SCH_BITMAP", name: `Transform Offset ${axis}`, kind: "int", display: "size", get: () => 0, readOnlyReason: "An image is scaled about its centre here: the model keeps no transform origin offset." }, IMAGE_PROPS);
-  }
+  // "Transform Offset X/Y" (`SCH_BITMAP::SetTransformOriginOffsetX` / `Y`): the point the image is scaled about, from its centre (`SchExtras::image_offsets`, `set_image_offset`).
+  (["X", "Y"] as const).forEach((axis) => {
+    add(
+      {
+        owner: "SCH_BITMAP",
+        name: `Transform Offset ${axis}`,
+        kind: "int",
+        display: "size",
+        get: (i, c) => imageOffset(i, c)[axis === "X" ? 0 : 1],
+        set: (i, v, c) => {
+          const [ox, oy] = imageOffset(i, c);
+          const n = Math.round(num(v));
+          if ((axis === "X" ? ox : oy) === n) return [];
+          return [{ op: "sch_edit", verb: "set_image_offset", id: i.id, offset: axis === "X" ? { x: n, y: oy } : { x: ox, y: n } } as Cmd];
+        },
+      },
+      IMAGE_PROPS
+    );
+  });
   imageSide("Width");
   imageSide("Height");
 
@@ -1165,9 +1268,15 @@ export const SCH_PROPERTIES: PropertyManager<SchItem, SchCtx, Cmd> = build();
 const currentSymbolFields = new Set<string>();
 const currentSheetFields = new Set<string>();
 
-/** A symbol's fields by name (`GetFields()`, none private here): the state's, else the four a symbol always has. A power symbol's are its Reference and Value. */
+/**
+ * A symbol's fields by name (`GetFields()`, none private here): the state's, else the four standard ones, and the mandatory Description (`FIELD_T::DESCRIPTION`, KiCad 8's
+ * fifth mandatory field, which every `SCH_SYMBOL` has: its text "" while the symbol keeps none, a user field here once set). A power symbol's are its Reference and Value.
+ */
 function symbolFieldNames(i: SchItem): string[] {
-  if (i.symbol) return i.symbol.fields?.map((f) => f.name) ?? ["Reference", "Value", "Footprint", "Datasheet"];
+  if (i.symbol) {
+    const names = i.symbol.fields?.map((f) => f.name) ?? ["Reference", "Value", "Footprint", "Datasheet"];
+    return names.some((n) => n.toLowerCase() === "description") ? names : [...names, "Description"];
+  }
   return i.power?.fields?.map((f) => f.name) ?? ["Reference", "Value"];
 }
 

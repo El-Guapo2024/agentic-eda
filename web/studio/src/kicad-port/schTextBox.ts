@@ -14,6 +14,16 @@ export function defaultTextBoxMargin(sizeNm: number, strokeWidthNm: number): num
   return Math.round(strokeWidthNm / 2) + Math.round(sizeNm * 0.75);
 }
 
+/**
+ * The four margins of a text box (left, top, right, bottom: `SCH_TEXTBOX::GetMarginLeft` ..): its own four when they differ (`margins_nm`, `(margins l t r b)`), else the one it keeps
+ * for every side, else the legacy one (`GetLegacyTextMargin`).
+ */
+export function textBoxMargins(s: { margin_nm?: number; margins_nm?: readonly [number, number, number, number]; size_nm: number }, strokeWidthNm: number): [number, number, number, number] {
+  if (s.margins_nm) return [s.margins_nm[0], s.margins_nm[1], s.margins_nm[2], s.margins_nm[3]];
+  const m = s.margin_nm && s.margin_nm > 0 ? s.margin_nm : defaultTextBoxMargin(s.size_nm, strokeWidthNm);
+  return [m, m, m, m];
+}
+
 export type Measure = (text: string, sizeNm: number) => number;
 
 /** Greedy word wrap of `text` to `maxWidthNm` (explicit newlines are kept; a single word longer than the width stays whole on its own line). */

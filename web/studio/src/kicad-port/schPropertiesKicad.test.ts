@@ -130,3 +130,46 @@ test("the table itself: a placed symbol's rows as KiCad 8303b2ad lists them (SYM
     `${TEXT}/Text Size`,
   ]);
 });
+
+// UI-LEFT-2 SS11: the rows KiCad's registrations give a setter (`PROPERTY<..>( name, &Set.., &Get.. )`) that were read-only here are edited: a text box's four
+// margins, fill, colour and hyperlink (`SCH_TEXTBOX_DESC`, `EDA_SHAPE_DESC`, `EDA_TEXT_DESC`), a directive label's font, colour and size (`SCH_DIRECTIVE_LABEL_DESC`
+// masks neither), an image's transform offset (`SCH_BITMAP_DESC`), a line's length (`SCH_LINE_DESC`), the Fill row with `UI_FILL_MODE`'s choices.
+test("UI-LEFT-2 SS11: the rows KiCad gives a setter are writable, Fill offers UI_FILL_MODE", async () => {
+  const { schGrid } = await import("./schItemProperties");
+  const g = (id: string, shape: unknown, over: Record<string, unknown> = {}) => ({ id, shape, ...over });
+  const s = {
+    lib_symbols: {},
+    symbols: [],
+    power_symbols: [],
+    wires: [],
+    no_connects: [],
+    labels: [],
+    texts: [],
+    title_block: null,
+    bus_entries: [],
+    junctions: [],
+    lines: [{ id: "sln", pts: [[0, 0], [9_000, 0]], width_nm: 0 }],
+    graphics: [
+      g("box", { type: "text_box", start: { x: 0, y: 0 }, end: { x: 20_000, y: 10_000 }, text: "t", size_nm: 1_270_000 }, { fill: "color" }),
+      g("dir", { type: "directive", at: { x: 0, y: 0 }, pin_length_nm: 2_540_000 }),
+      g("img", { type: "image", at: { x: 0, y: 0 }, px: [10, 10], ppi: 300 }),
+      g("rect", { type: "rectangle", start: { x: 0, y: 0 }, end: { x: 5, y: 5 } }),
+    ],
+    sheets: [],
+    sheet_path: [],
+  } as never;
+  const writable = (id: string) => new Map(schGrid(s, [id], "mm").groups.flatMap((grp) => grp.rows).map((r) => [r.name, r.writable] as const));
+  const table: Array<[string, string[]]> = [
+    ["box", ["Margin Left", "Margin Top", "Margin Right", "Margin Bottom", "Font", "Color", "Hyperlink", "Fill", "Fill Color", "Text Size"]],
+    ["dir", ["Font", "Color", "Text Size", "Shape", "Pin length"]],
+    ["img", ["Transform Offset X", "Transform Offset Y", "Scale", "Width", "Height"]],
+    ["sln", ["Length", "Start X", "End Y"]],
+    ["rect", ["Fill"]],
+  ];
+  for (const [id, rows] of table) {
+    const w = writable(id);
+    for (const r of rows) assert.equal(w.get(r), true, `${id}: ${r}`);
+  }
+  const fill = schGrid(s, ["rect"], "mm").groups.flatMap((grp) => grp.rows).find((r) => r.name === "Fill")!;
+  assert.deepEqual((fill.choices ?? []).map((c: { label: string }) => c.label), ["None", "Solid", "Hatch", "Reverse Hatch", "Cross-hatch"]);
+});
