@@ -50,6 +50,8 @@ export type SchGraphicShape =
       v_align?: SchVAlign;
       /** Border-to-text gap; 0/absent means KiCad's default (`SCH_TEXTBOX::GetLegacyTextMargin`). */
       margin_nm?: Nm;
+      /** The four margins (left, top, right, bottom: `SCH_TEXTBOX::m_marginLeft` ..), when they are not one; they win over `margin_nm` (`(margins l t r b)`). */
+      margins_nm?: [Nm, Nm, Nm, Nm];
     }
   | { type: "rule_area"; pts: PointXY[]; exclude_from_sim?: boolean; exclude_from_bom?: boolean; exclude_from_board?: boolean; dnp?: boolean }
   | {
@@ -61,6 +63,8 @@ export type SchGraphicShape =
       pin_length_nm: Nm;
       netclass?: string;
       component_class?: string;
+      /** Its text size (`SCH_TEXT::SetSchTextSize`, `(effects (font (size ..)))`); 0/absent: 50 mil. */
+      text_size_nm?: Nm;
     }
   | {
       /** `SCH_BITMAP`: an image on the sheet (crates/model/src/sch_extras.rs `SchGraphicKind::Image`). */
@@ -220,6 +224,8 @@ export type SchEditCmd =
   | { verb: "add_top_level_sheet"; name: string }
   | { verb: "delete_top_level_sheet"; id: string }
   | { verb: "set_text_attrs"; ids: string[]; bold?: boolean; italic?: boolean; color?: SchColor; href?: string; font?: string; exclude_from_sim?: boolean }
+  /** "Transform Offset X/Y" of an image (`SCH_BITMAP::SetTransformOriginOffsetX/Y`): the point it is scaled about, from its centre (`SchExtras::image_offsets`). */
+  | { verb: "set_image_offset"; id: string; offset: PointXY }
   /** "Start X" .. "End Y" of a wire, a bus or a graphic line: its first and/or last point. */
   | { verb: "set_line_ends"; id: string; start?: PointXY; end?: PointXY }
   /** "Exclude From Position Files" of symbols (every placed unit of each reference on the sheet in view). */

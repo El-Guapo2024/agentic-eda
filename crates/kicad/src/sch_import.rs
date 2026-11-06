@@ -247,6 +247,11 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         uuid: Option<String>,
         /// The properties beyond the standard fields: user-defined fields (`FIELD_T::USER`), with where and how each is drawn.
         user_fields: Vec<RawUserField>,
+        /// Its Reference, Value, Footprint and Datasheet as the file has them, with where and how each is drawn (`parseSchField`: every field's own
+        /// `(at ..)`, `(effects ..)`, `(hide ..)`, `(show_name ..)`, `(do_not_autoplace ..)`).
+        standard_fields: Vec<RawUserField>,
+        /// `(fields_autoplaced yes)` (`SCH_ITEM::SetFieldsAutoplaced( AUTOPLACE_AUTO )`): its fields are where Autoplace Fields put them.
+        fields_autoplaced: bool,
         /// The places Swap Pins traded, read from the symbol's own copy of its library symbol (`(lib_name ..)`): pin number -> the pin whose place it has (`SchExtras::pin_swaps`).
         swaps: BTreeMap<String, String>,
         /// The alternate functions picked for its pins, `(pin "3" (uuid ..) (alternate "3.out"))` (`SchExtras::pin_alternates`, r5 D5-H3).
@@ -412,7 +417,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         }
         let base_flags = eda_model::variants::SymbolFlags { dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, exclude_from_pos_files };
         let variants = symbol_variants_of(item, base_flags, file_version);
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps, exclude_from_pos_files, alternates: placed_pin_alternates(item), variants, field_looks: field_font_looks(item) });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_nm, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), standard_fields: eda_engine::fields::STANDARD_FIELDS.iter().filter_map(|name| standard_field_of(item, name)).collect(), fields_autoplaced: crate::sch_extras_io::parse_bool(item, "fields_autoplaced").unwrap_or(false), swaps, exclude_from_pos_files, alternates: placed_pin_alternates(item), variants, field_looks: field_font_looks(item) });
     }
 
     if opts.unique_references {
@@ -464,6 +469,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
 
     // `(body_style 2)` of the symbols placed in the alternate body style of a library symbol that has one, by `field_key` (`SchExtras::body_styles`)
     let mut body_style_entries: Vec<(String, u32)> = Vec::new();
+    // the symbols whose fields the file says Autoplace Fields put where they are, by `field_key` (`SchExtras::fields_autoplaced`)
+    let mut autoplaced_entries: Vec<String> = Vec::new();
     let mut pos_files_excluded: Vec<String> = Vec::new();
     // the symbols' records of the design variants, by reference: a reference's first unit read that has one of a variant gives it (`SchExtras::symbol_variants`)
     let mut variant_records: BTreeMap<String, BTreeMap<String, eda_model::variants::SymbolVariant>> = BTreeMap::new();
@@ -578,9 +585,15 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 exclude_from_board: r.exclude_from_board,
                 exclude_from_sim: r.exclude_from_sim,
             });
-            if !r.user_fields.is_empty() {
-                // the text of a user field is the symbol's, whatever the unit; the place is each unit's own, in the frame the writer measures it in
-                // (`eda_engine::fields::page_field`: from the symbol's origin, through its turn and mirror and the width of the box a mirror is about)
+            if r.fields_autoplaced {
+                autoplaced_entries.push(eda_model::ir::field_key(&reference, r.unit));
+            }
+            if !r.user_fields.is_empty() || !r.standard_fields.is_empty() {
+                // `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol` reads every field's own `(at ..)` (`parseSchField`) and `saveSymbol` writes it back: the
+                // Reference, Value, Footprint and Datasheet stay where the file has them as the user fields do -- placed by hand or by an Autoplace Fields
+                // KiCad ran (`(fields_autoplaced yes)`, which lets a turn place them again). The text of a user field is the symbol's, whatever the unit;
+                // the place is each unit's own, in the frame the writer measures it in (`eda_engine::fields::page_field`: from the symbol's origin, through
+                // its turn and mirror).
                 let part = parts.last().expect("the part of this reference");
                 let sym = symbols.last().expect("the symbol just pushed");
                 let lib_for_geometry = resolved.map(|l| if r.body_style > 1 && l.has_alternate_body() { l.in_style(r.body_style).into_owned() } else { l.clone() });
@@ -588,7 +601,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 for u in &r.user_fields {
                     user_fields_read.entry(reference.clone()).or_default().entry(u.name.clone()).or_insert_with(|| u.text.clone());
                 }
-                field_layout_read.insert(eda_model::ir::field_key(&reference, r.unit), r.user_fields.iter().map(|u| u.placement(sym, width)).collect());
+                field_layout_read.insert(eda_model::ir::field_key(&reference, r.unit), r.standard_fields.iter().chain(&r.user_fields).map(|u| u.placement(sym, width)).collect());
             }
         }
     }
@@ -902,6 +915,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             sch.extras.set_locked(&id, true);
         }
         sch.extras.body_styles.extend(body_style_entries);
+        sch.extras.fields_autoplaced.extend(autoplaced_entries.into_iter().map(|k| (k, eda_model::sch_extras::AutoplaceAlgo::Auto)));
         sch.extras.excluded_from_pos_files.extend(pos_files_excluded);
         sch.extras.symbol_variants.extend(variant_records);
         sch.extras.pin_swaps.extend(pin_swap_entries);
@@ -1511,7 +1525,9 @@ impl RawUserField {
     /// The field as a placement in the frame of `sym` (`SCH_FIELD::SetPosition`: the page position taken back through the symbol's transform; `eda_engine::fields::
     /// local_placement_on_page`), `width` being the box a mirror is about.
     fn placement(&self, sym: &SymbolInstance, width: f64) -> eda_model::ir::FieldPlacement {
-        self.placement_on(sym.at, sym.rot, sym.mirrored, width)
+        // the turn and mirror the writer and the editor bake a field through (`kicad_turn`: `(mirror x)` is a half turn and a `(mirror y)`)
+        let (rot, mirrored) = eda_engine::symgeom::kicad_turn(sym.rot, sym.mirrored, sym.mirror_y);
+        self.placement_on(sym.at, rot, mirrored, width)
     }
 
     /// [`Self::placement`] in the frame of a symbol at `at`, turned `rot`, mirrored about a box `width` wide.
@@ -3011,9 +3027,9 @@ mod tests {
         rect.fill = SchFill::Background;
         sch.extras.graphics = vec![
             rect,
-            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, mm(40.0)), end: p(mm(30.0), mm(50.0)), text: "boxed".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO }),
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, mm(40.0)), end: p(mm(30.0), mm(50.0)), text: "boxed".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO, margins_nm: None }),
             SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, mm(60.0)), p(mm(10.0), mm(60.0)), p(mm(10.0), mm(70.0))], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: true }),
-            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(20.0), Nm::ZERO), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "Power".into(), component_class: String::new() }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(20.0), Nm::ZERO), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "Power".into(), component_class: String::new(), text_size_nm: Nm::ZERO }),
         ];
         sch.assign_missing_ids();
         let wire_id = sch.wires[0].id.clone();

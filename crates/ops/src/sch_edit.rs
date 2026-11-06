@@ -395,6 +395,10 @@ pub enum SchCmd {
         #[serde(default)]
         fields: Option<Vec<eda_model::sch_extras::LabelField>>,
     },
+    /// "Transform Offset X/Y" of an image (`SCH_BITMAP::SetTransformOriginOffsetX` / `Y`): the point it is scaled about, from its centre
+    /// (`SchExtras::image_offsets`; `REFERENCE_IMAGE::scaleBy`). The studio's Scale, Width and Height rows send the centre and the offset `scaleBy` leaves with the new
+    /// scale in the same step.
+    SetImageOffset { id: String, offset: Point },
     /// "Start X", "Start Y", "End X", "End Y" of a wire, a bus or a graphic line (`SCH_LINE::SetStartX` ..): its first and/or last point goes there, and the sheet
     /// is cleaned up as a commit cleans it (`SCHEMATIC::CleanUp`: wires merged and split, junctions where they are needed).
     SetLineEnds {
@@ -509,7 +513,7 @@ impl SchCmd {
             SchCmd::SetStroke { ids, .. } | SchCmd::SetTextAttrs { ids, .. } | SchCmd::SetExcludeFromPosFiles { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::SetPinAlternates { id, .. } | SchCmd::SetSymbolUnit { id, .. } | SchCmd::SetPowerProps { id, .. } => vec![id.as_str()],
             SchCmd::SetFieldLooks { ids, .. } => ids.iter().map(String::as_str).collect(),
-            SchCmd::SetLineEnds { id, .. } => vec![id.as_str()],
+            SchCmd::SetLineEnds { id, .. } | SchCmd::SetImageOffset { id, .. } => vec![id.as_str()],
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
@@ -565,6 +569,7 @@ impl SchCmd {
             SchCmd::SetFieldLooks { ids, .. } => format!("schematic field-looks {}", ids.join(" ")),
             SchCmd::SetPowerProps { id, .. } => format!("schematic power-props {id}"),
             SchCmd::SetLineEnds { id, .. } => format!("schematic line-ends {id}"),
+            SchCmd::SetImageOffset { id, offset } => format!("schematic image-offset {id} {:.4},{:.4}", eda_model::units::to_mm(offset.x), eda_model::units::to_mm(offset.y)),
             SchCmd::SwapPins { pins } => format!("schematic swap-pins {}", pins.join(" ")),
             SchCmd::SwapPinLabels { pins } => format!("schematic swap-pin-labels {}", pins.join(" ")),
             SchCmd::SwapUnitLabels { ids } => format!("schematic swap-unit-labels {}", ids.join(" ")),
@@ -592,7 +597,7 @@ impl SchCmd {
     pub fn kind(&self) -> &'static str {
         match self {
             SchCmd::SetLocked { .. } => "schematic-lock",
-            SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } | SchCmd::SetImageData { .. } => "schematic-graphic",
+            SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } | SchCmd::SetImageData { .. } | SchCmd::SetImageOffset { .. } => "schematic-graphic",
             SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
@@ -629,8 +634,8 @@ impl SchCmd {
             // a sheet's style and attributes name no net; its user fields are text variables of what it shows (`SCH_SHEET::ResolveTextVar`), which a label's
             // `${..}` may read, so they are read from the drawing again
             SchCmd::SetSheetProps { .. } => false,
-            // an image's pixels
-            SchCmd::SetImageData { .. } => false,
+            // an image's pixels and the point it is scaled about
+            SchCmd::SetImageData { .. } | SchCmd::SetImageOffset { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
@@ -740,6 +745,7 @@ impl<'a> Board<'a> {
             }
             SchCmd::SetTextAttrs { ids, bold, italic, color, href, font, exclude_from_sim } => self.set_sch_text_attrs(ids, &crate::sch_props::TextAttrsEdit { bold: *bold, italic: *italic, color: *color, href: href.clone(), font: font.clone(), exclude_from_sim: *exclude_from_sim }),
             SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
+            SchCmd::SetImageOffset { id, offset } => self.set_image_offset(id, *offset),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
             SchCmd::SetPinAlternates { id, unit, alternates, other_units } => self.set_pin_alternates(id, *unit, alternates, *other_units).and_then(|_| self.commit_clean_up()),
             SchCmd::SetSymbolUnit { id, unit, new_unit, swap } => self.set_symbol_unit(id, *unit, *new_unit, *swap).and_then(|_| self.commit_clean_up()),

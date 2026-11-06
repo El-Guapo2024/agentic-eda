@@ -123,7 +123,7 @@ fn slow_kicad_cli_plots_a_text_boxs_and_a_power_symbols_variables_as_the_studio_
     let build = |name: &str, box_text: &str, power: &str| -> PathBuf {
         let dir = empty_board(name);
         step(&dir, Cmd::SetTextVariables { variables: [("RAIL".to_string(), "+5V".to_string()), ("REV".to_string(), "B7".to_string())].into_iter().collect() }, false, "test").unwrap();
-        let shape = SchGraphicKind::TextBox { start: Point { x: mm(50.8), y: mm(50.8) }, end: Point { x: mm(101.6), y: mm(63.5) }, text: box_text.into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: eda_model::units::Nm::ZERO };
+        let shape = SchGraphicKind::TextBox { start: Point { x: mm(50.8), y: mm(50.8) }, end: Point { x: mm(101.6), y: mm(63.5) }, text: box_text.into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: eda_model::units::Nm::ZERO, margins_nm: None };
         step(&dir, Cmd::sch(eda_ops::sch_edit::SchCmd::AddGraphic { graphic: SchGraphic::new(shape) }), false, "test").unwrap();
         step(&dir, Cmd::AddPowerSymbol { lib_id: "power:+5V".into(), at: Point { x: mm(25.4), y: mm(25.4) }, rot_millideg: 0, net: power.into(), pin: String::new(), annotate: None }, false, "test").unwrap();
         dir

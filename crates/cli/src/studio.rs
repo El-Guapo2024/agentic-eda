@@ -2453,6 +2453,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "graphics": graphics,
         "graphic_shown": graphic_shown,
         "graphic_text_attrs": graphic_text_attrs,
+        // an image's transform origin offset (`SchExtras::image_offsets`, the Properties panel's "Transform Offset X/Y"), by the graphic's id
+        "image_offsets": sch.extras.image_offsets.iter().map(|(id, p)| (id.clone(), json!({ "x": p.x, "y": p.y }))).collect::<serde_json::Map<_, _>>(),
         "tables": tables,
         "locked": locked,
         "groups": groups,

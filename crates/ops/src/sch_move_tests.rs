@@ -108,7 +108,7 @@ fn every_kind() -> eda_model::ir::SchematicSection {
     s.junctions.push(Junction { id: "jct_a".into(), at: p(mm(127.0), mm(38.1)) });
     s.lines.push(SchLine { id: "sln_a".into(), pts: vec![p(mm(127.0), mm(50.8)), p(mm(139.7), mm(50.8))], width_nm: Nm::ZERO });
     s.extras.graphics.push(SchGraphic::new(SchGraphicKind::Rectangle { start: p(mm(152.4), mm(12.7)), end: p(mm(165.1), mm(25.4)), corner_radius_nm: Nm::ZERO }));
-    s.extras.graphics.push(SchGraphic::new(SchGraphicKind::TextBox { start: p(mm(152.4), mm(38.1)), end: p(mm(177.8), mm(50.8)), text: "note".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: eda_model::sch_extras::SchHAlign::Left, v_align: eda_model::sch_extras::SchVAlign::Top, margin_nm: Nm::ZERO }));
+    s.extras.graphics.push(SchGraphic::new(SchGraphicKind::TextBox { start: p(mm(152.4), mm(38.1)), end: p(mm(177.8), mm(50.8)), text: "note".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: eda_model::sch_extras::SchHAlign::Left, v_align: eda_model::sch_extras::SchVAlign::Top, margin_nm: Nm::ZERO, margins_nm: None }));
     s.sheets.push(SheetInstance {
         id: "sheet_a".into(),
         name: "Sub".into(),

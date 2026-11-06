@@ -218,12 +218,13 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     fill_str(g)
                 );
             }
-            SchGraphicKind::TextBox { start, end, text, angle, size_nm, bold, italic, h_align, v_align, margin_nm } => {
-                let margin = if *margin_nm > Nm::ZERO { *margin_nm } else { default_text_box_margin(*size_nm, g.width_nm) };
+            SchGraphicKind::TextBox { start, end, text, angle, size_nm, bold, italic, h_align, v_align, margin_nm, margins_nm } => {
+                // `saveTextBox`: `(margins left top right bottom)`
+                let [ml, mt, mr, mb] = eda_model::sch_extras::text_box_margins(*margin_nm, *margins_nm, default_text_box_margin(*size_nm, g.width_nm));
                 let (w, h) = (end.x - start.x, end.y - start.y);
                 let _ = writeln!(
                     out,
-                    "\t(text_box {}\n\t\t(exclude_from_sim {})\n\t\t(at {} {} {})\n\t\t(size {} {})\n\t\t(margins {m} {m} {m} {m})\n\t\t{}\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)",
+                    "\t(text_box {}\n\t\t(exclude_from_sim {})\n\t\t(at {} {} {})\n\t\t(size {} {})\n\t\t(margins {} {} {} {})\n\t\t{}\n\t\t{}\n\t\t{}\n\t\t(uuid \"{uuid}\"){locked}\n\t)",
                     sexpr_str(text),
                     // `saveTextBox`: `FormatBool( m_out, "exclude_from_sim", aTextBox->GetExcludedFromSim() )`, as the box has it (r7 H4: it was always `no`)
                     yes(attrs.exclude_from_sim),
@@ -232,10 +233,13 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     angle_str(*angle),
                     sch_mm(w),
                     sch_mm(h),
+                    sch_mm(ml),
+                    sch_mm(mt),
+                    sch_mm(mr),
+                    sch_mm(mb),
                     stroke_str(g),
                     fill_str(g),
-                    effects_with(*size_nm, *bold, *italic, *h_align, *v_align, attrs.color, attrs.href.as_deref(), attrs.font.as_deref()),
-                    m = sch_mm(margin)
+                    effects_with(*size_nm, *bold, *italic, *h_align, *v_align, attrs.color, attrs.href.as_deref(), attrs.font.as_deref())
                 );
             }
             SchGraphicKind::Image { at, scale_ppm, data } => {
@@ -243,7 +247,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                 let scale = if *scale_ppm != eda_model::image_info::SCALE_PPM { format!("\n\t\t(scale {})", scale_str(*scale_ppm)) } else { String::new() };
                 let _ = writeln!(out, "\t(image\n\t\t(at {} {}){scale}\n\t\t(uuid \"{uuid}\"){locked}\n{}\t)", sch_mm(at.x), sch_mm(at.y), data_str(data, "\t\t"));
             }
-            SchGraphicKind::Directive { at, orientation, shape, pin_length_nm, netclass, component_class } => {
+            SchGraphicKind::Directive { at, orientation, shape, pin_length_nm, netclass, component_class, text_size_nm } => {
                 // `SCH_DIRECTIVE_LABEL::AutoplaceFields`: the fields stack along the flag's pole.
                 // the field's 1.27 mm text, `m_symbolSize` (`MilsToIU( 20 )`, twice for a diamond or a rectangle) and `GetTextOffset()` (0.15 of the text: 1905 IU)
                 let size = mm(1.27);
@@ -273,7 +277,8 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     sch_mm(at.x),
                     sch_mm(at.y),
                     angle_str(*orientation),
-                    effects_with(mm(1.27), false, false, SchHAlign::Left, SchVAlign::Bottom, attrs.color, None, None)
+                    // its own size and font face (`EDA_TEXT::Format`), with the colour
+                    effects_with(if *text_size_nm > Nm::ZERO { *text_size_nm } else { mm(1.27) }, false, false, SchHAlign::Left, SchVAlign::Bottom, attrs.color, None, attrs.font.as_deref())
                 );
             }
         }
@@ -444,7 +449,13 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let Some(size) = sexpr::find(item, "size").and_then(|s| Some((sexpr::num(s, 1)?, sexpr::num(s, 2)?))) else { continue };
                 let start = Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) };
                 let end = Point { x: start.x + crate::import::sch_mm_to_nm(size.0), y: start.y + crate::import::sch_mm_to_nm(size.1) };
-                let margin_nm = sexpr::find(item, "margins").and_then(|m| sexpr::num(m, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(Nm::ZERO);
+                // `T_margins`: `parseMargins( left, top, right, bottom )`, each side its own; one for every side is kept as one
+                let sides: Option<[Nm; 4]> = sexpr::find(item, "margins").and_then(|m| Some([sexpr::num(m, 1)?, sexpr::num(m, 2)?, sexpr::num(m, 3)?, sexpr::num(m, 4)?].map(crate::import::sch_mm_to_nm)));
+                let first = sexpr::find(item, "margins").and_then(|m| sexpr::num(m, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(Nm::ZERO);
+                let (margin_nm, margins_nm) = match sides {
+                    Some(m) if m.iter().any(|v| *v != m[0]) => (m[0], Some(m)),
+                    _ => (first, None),
+                };
                 let effects = sexpr::find(item, "effects");
                 let font = effects.and_then(|e| sexpr::find(e, "font"));
                 let size_nm = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::sch_mm_to_nm).unwrap_or(mm(1.27));
@@ -464,7 +475,7 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 } else {
                     SchVAlign::Center
                 };
-                let shape = SchGraphicKind::TextBox { start, end, text, angle, size_nm, bold: flag("bold"), italic: flag("italic"), h_align, v_align, margin_nm };
+                let shape = SchGraphicKind::TextBox { start, end, text, angle, size_nm, bold: flag("bold"), italic: flag("italic"), h_align, v_align, margin_nm, margins_nm };
                 let mut read = ReadGraphic::new(styled(shape, item), locked_of(item));
                 // its exclude from simulation, font colour and hyperlink (the shape keeps the bold and the italic)
                 read.attrs = eda_model::sch_extras::TextAttrs { bold: false, italic: false, ..read_text_attrs(item) };
@@ -497,10 +508,14 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                     if n == "Net Class" { "Netclass" } else { n }
                 }
                 let field = |name: &str| sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1).map(canonical) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
-                let kind = SchGraphicKind::Directive { at: Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class") };
+                // its own text size (`parseEDA_TEXT`: an `SCH_DIRECTIVE_LABEL` is an `SCH_TEXT`), the default 50 mil kept as none
+                let size = read_effects(item).size_nm;
+                let text_size_nm = if size == mm(1.27) { Nm::ZERO } else { size };
+                let kind = SchGraphicKind::Directive { at: Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class"), text_size_nm };
                 let mut read = ReadGraphic::new(SchGraphic::new(kind), locked_of(item));
-                // the flag's font colour (r7 M5)
-                read.attrs = eda_model::sch_extras::TextAttrs { color: read_text_attrs(item).color, ..Default::default() };
+                // the flag's font colour (r7 M5) and face (`T_face`)
+                let attrs = read_text_attrs(item);
+                read.attrs = eda_model::sch_extras::TextAttrs { color: attrs.color, font: attrs.font, ..Default::default() };
                 out.push(read);
             }
             _ => {}
@@ -561,8 +576,8 @@ mod tests {
                 poly
             },
             SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(10.0)), p(Nm::ZERO, mm(10.0))], exclude_from_sim: true, exclude_from_bom: false, exclude_from_board: true, dnp: true }),
-            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, Nm::ZERO), end: p(mm(40.0), mm(10.0)), text: "Hello\nworld".into(), angle: 90_000, size_nm: mm(1.27), bold: true, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO }),
-            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(50.8), mm(25.4)), orientation: 90_000, shape: DirectiveShape::Diamond, pin_length_nm: mm(2.54), netclass: "HV".into(), component_class: "Power".into() }),
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, Nm::ZERO), end: p(mm(40.0), mm(10.0)), text: "Hello\nworld".into(), angle: 90_000, size_nm: mm(1.27), bold: true, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO, margins_nm: None }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(50.8), mm(25.4)), orientation: 90_000, shape: DirectiveShape::Diamond, pin_length_nm: mm(2.54), netclass: "HV".into(), component_class: "Power".into(), text_size_nm: Nm::ZERO }),
             SchGraphic::new(SchGraphicKind::Image { at: p(mm(60.0), mm(40.0)), scale_ppm: 750_000, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(60, 40, [10, 20, 30], 254)) }),
         ]
     }
@@ -594,6 +609,35 @@ mod tests {
             assert_eq!(w, g, "{:?}", want.shape);
             assert!(!got.locked);
         }
+    }
+
+    /// UI-LEFT-2 SS11: a text box's four margins (`saveTextBox`'s `(margins left top right bottom)`, `parseMargins`), and a directive label's own text size and font
+    /// face (`EDA_TEXT::Format` in its `(effects ..)`, `parseEDA_TEXT`), written and read back.
+    #[test]
+    fn a_text_boxs_four_margins_and_a_directive_labels_size_and_face_round_trip() {
+        let mut sch = SchematicSection::default();
+        let margins = [mm(0.5), mm(1.0), mm(1.5), mm(2.0)];
+        sch.extras.graphics = vec![
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(Nm::ZERO, Nm::ZERO), end: p(mm(40.0), mm(10.0)), text: "sides".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_nm: Nm::ZERO, margins_nm: Some(margins) }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(mm(50.8), mm(25.4)), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "HV".into(), component_class: String::new(), text_size_nm: mm(2.0) }),
+        ];
+        sch.assign_missing_ids();
+        let dir = sch.extras.graphics[1].id.clone();
+        sch.extras.text_attrs.insert(dir, eda_model::sch_extras::TextAttrs { font: Some("KiCad Font".into()), color: Some(SchColor { r: 200, g: 0, b: 0, a: 255 }), ..Default::default() });
+        let mut text = String::new();
+        write_graphics(&mut text, &sch);
+        assert!(text.contains("(margins 0.5 1 1.5 2)"), "{text}");
+        assert!(text.contains("(face \"KiCad Font\") (size 2 2)"), "{text}");
+        let back = read_back(&sch);
+        assert!(matches!(back[0].graphic.shape, SchGraphicKind::TextBox { margins_nm: Some(m), .. } if m == margins), "{:?}", back[0].graphic.shape);
+        assert!(matches!(back[1].graphic.shape, SchGraphicKind::Directive { text_size_nm, .. } if text_size_nm == mm(2.0)), "{:?}", back[1].graphic.shape);
+        assert_eq!((back[1].attrs.font.as_deref(), back[1].attrs.color), (Some("KiCad Font"), Some(SchColor { r: 200, g: 0, b: 0, a: 255 })));
+        // four equal margins are one, as before
+        let mut one = sch.clone();
+        if let SchGraphicKind::TextBox { margins_nm, .. } = &mut one.extras.graphics[0].shape {
+            *margins_nm = Some([mm(1.0); 4]);
+        }
+        assert!(matches!(read_back(&one)[0].graphic.shape, SchGraphicKind::TextBox { margins_nm: None, margin_nm, .. } if margin_nm == mm(1.0)));
     }
 
     /// A text box's line break is written as `\n` inside the quotes, as `OUTPUTFORMATTER::Quotes` writes it: a raw line feed in a string is a schematic kicad-cli

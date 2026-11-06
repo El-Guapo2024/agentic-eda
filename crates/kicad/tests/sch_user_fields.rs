@@ -171,7 +171,43 @@ fn a_file_with_user_fields_reads_back_with_their_texts_their_looks_and_their_pla
     assert_eq!((mpn.h, mpn.v, mpn.size_nm, mpn.angle), (TextJustify::Left, TextVAlign::Center, mm(2.0), 0));
     let maker = placed.iter().find(|p| p.name == "Manufacturer").expect("the place of Manufacturer");
     assert!(!maker.visible);
-    assert!(placed.iter().all(|p| p.name == "MPN" || p.name == "Manufacturer"), "only the user fields keep a place on a sheet read from a file");
+    // `parseSchField` reads every field's own `(at ..)` and `saveSymbol` writes it back: the four standard fields keep their places too (UI-LEFT-2 SS8)
+    let names: Vec<&str> = placed.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["Reference", "Value", "Footprint", "Datasheet", "MPN", "Manufacturer"], "every field of the symbol keeps the place the file gives it");
+    assert!(!sch.extras.fields_autoplaced.contains_key("U1"), "a symbol the file does not mark `(fields_autoplaced yes)` is not autoplaced again");
+}
+
+#[test]
+fn every_field_is_written_again_where_it_was_whatever_the_symbol_is_turned_or_mirrored_to() {
+    // `(mirror x)` too: the reader takes a field back through the symbol's turn and mirror as the writer bakes it (`kicad_turn`)
+    let m = model();
+    for rot in [0, 90_000, 180_000, 270_000] {
+        for (mirrored, mirror_y) in [(false, false), (true, false), (false, true)] {
+            let mut sch = sheet(rot, mirrored);
+            sch.symbols[0].mirror_y = mirror_y;
+            // the Reference placed by hand, off where Autoplace Fields would put it
+            sch.field_layout.get_mut("U1").unwrap().push(FieldPlacement { dx: mm(-20.32), dy: mm(7.62), visible: true, ..FieldPlacement::at_origin("Reference") });
+            let first = export(&sch, &m);
+            let (design, model2, _) = import_kicad_sch(&first).unwrap_or_else(|e| panic!("rot {rot} mirrored {mirrored} {mirror_y}: {e:?}"));
+            let second = export_kicad_sch(&design, &model2, &META).expect("the sheet reads and writes again");
+            for name in ["Reference", "Value", "Footprint", "Datasheet", "MPN", "Manufacturer"] {
+                assert_eq!(property_of(&second, name), property_of(&first, name), "rot {rot} mirrored {mirrored} {mirror_y}: {name}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_symbol_marked_fields_autoplaced_keeps_its_places_and_its_mark() {
+    let m = model();
+    let mut sch = sheet(0, false);
+    sch.extras.fields_autoplaced.insert("U1".into(), eda_model::sch_extras::AutoplaceAlgo::Auto);
+    let first = export(&sch, &m);
+    assert!(first.contains("(fields_autoplaced yes)"), "the writer marks it");
+    let (design, _, _) = import_kicad_sch(&first).unwrap();
+    let back = design.schematic.unwrap();
+    assert_eq!(back.extras.fields_autoplaced.get("U1"), Some(&eda_model::sch_extras::AutoplaceAlgo::Auto), "`(fields_autoplaced yes)`: a turn places them again (`SetFieldsAutoplaced( AUTOPLACE_AUTO )`)");
+    assert!(back.field_layout["U1"].iter().any(|p| p.name == "Value"), "and they are where KiCad's Autoplace Fields put them until then");
 }
 
 #[test]
@@ -251,7 +287,8 @@ fn a_sheet_with_no_user_fields_reads_with_none() {
     plain.field_layout.clear();
     let (design, _model, _) = import_kicad_sch(&export(&plain, &m)).unwrap();
     let sch = design.schematic.unwrap();
-    assert!(sch.user_fields.is_empty() && sch.field_layout.is_empty());
+    assert!(sch.user_fields.is_empty());
+    assert!(sch.field_layout["U1"].iter().all(|p| eda_engine::fields::is_standard_field(&p.name)), "the standard fields keep their places, no user field is made");
 }
 
 // ------------------------------------------------------------------------------------------------------------- a sheet pin's text look

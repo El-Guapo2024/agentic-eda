@@ -42,7 +42,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     sch.extras.text_attrs.insert("txt_look".into(), TextAttrs { bold: true, italic: true, color: Some(blue()), href: Some("#1".into()), font: Some("KiCad Font".into()), exclude_from_sim: true });
     sch.extras.graphics.push(SchGraphic {
         id: "shp_look".into(),
-        shape: SchGraphicKind::TextBox { start: Point { x: mm(200.0), y: mm(40.0) }, end: Point { x: mm(230.0), y: mm(50.0) }, text: "LOOK_BOX".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: Nm::ZERO },
+        shape: SchGraphicKind::TextBox { start: Point { x: mm(200.0), y: mm(40.0) }, end: Point { x: mm(230.0), y: mm(50.0) }, text: "LOOK_BOX".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: Nm::ZERO, margins_nm: None },
         width_nm: Nm::ZERO,
         line_style: Default::default(),
         color: None,

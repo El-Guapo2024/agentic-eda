@@ -3425,6 +3425,9 @@ export interface Schematic {
   graphics?: SchGraphic[];
   /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
   graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
+  /** An image's transform origin offset by its graphic's id (`REFERENCE_IMAGE::m_transformOriginOffset`, `SchExtras::image_offsets`): the point Scale scales it about, from its
+   *  centre; absent: its centre. */
+  image_offsets?: Record<string, PointXY>;
   /** A text box's shown text by its graphic's id, where `${..}` or `@{..}` in it changes it (`SCH_TEXTBOX::GetShownText`); the box's `text` stays the stored one. */
   graphic_shown?: Record<string, string>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */

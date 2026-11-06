@@ -366,8 +366,13 @@ impl<'a> Board<'a> {
             let text = sch.texts.iter().any(|t| &t.id == id);
             let label = sch.labels.iter().any(|l| &l.id == id);
             let text_box = sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, eda_model::sch_extras::SchGraphicKind::TextBox { .. }));
-            if !text && !label && !text_box {
+            // a directive label is an `SCH_TEXT` too: its "Font" and "Color" rows (`EDA_TEXT_DESC`; its bold, italic and link are masked, `SCH_DIRECTIVE_LABEL_DESC`)
+            let directive = sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, eda_model::sch_extras::SchGraphicKind::Directive { .. }));
+            if !text && !label && !text_box && !directive {
                 return Err(fail("ops_unknown_item", id, "no free text, text box or label with this id"));
+            }
+            if directive && (edit.bold.is_some() || edit.italic.is_some() || edit.href.is_some() || edit.exclude_from_sim.is_some()) {
+                return Err(fail("ops_bad_text", id, "a directive label has no bold, italic, hyperlink or simulation exclusion of its own"));
             }
             if label && (edit.bold.is_some() || edit.italic.is_some() || edit.href.is_some() || edit.exclude_from_sim.is_some()) {
                 return Err(fail("ops_bad_text", id, "a label's bold and italic are set in Label Properties, and a label has no hyperlink or simulation exclusion"));
@@ -410,6 +415,28 @@ impl<'a> Board<'a> {
         }
         if sch.extras.text_attrs == before {
             return Err(fail("ops_nothing_to_change", "text", "the items already have these attributes"));
+        }
+        Ok(())
+    }
+
+    /// "Transform Offset X/Y" of an image: see [`SchCmd::SetImageOffset`](crate::sch_edit::SchCmd::SetImageOffset). Refused for an item that is no image, a
+    /// locked one, and an offset it already has.
+    pub(crate) fn set_image_offset(&mut self, id: &str, offset: Point) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if !sch.extras.graphics.iter().any(|g| g.id == id && matches!(g.shape, eda_model::sch_extras::SchGraphicKind::Image { .. })) {
+            return Err(fail("ops_unknown_item", id, "no image with this id"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the image is locked"));
+        }
+        let now = sch.extras.image_offsets.get(id).copied().unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+        if now == offset {
+            return Err(fail("ops_nothing_to_change", id, "the image already has this transform offset"));
+        }
+        if offset == (Point { x: Nm::ZERO, y: Nm::ZERO }) {
+            sch.extras.image_offsets.remove(id);
+        } else {
+            sch.extras.image_offsets.insert(id.to_string(), offset);
         }
         Ok(())
     }
