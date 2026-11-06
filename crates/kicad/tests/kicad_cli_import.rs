@@ -443,6 +443,7 @@ fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts()
         arrow_direction: ArrowDirection::Inward,
         text_pos: None,
         text_frame: Default::default(),
+        text_effects: Default::default(),
         text_thickness_nm: Some(mm(0.18)),
     };
     board.drawings = Some(eda_model::ir::DrawingsSection { dimensions: vec![dimension.clone()], ..Default::default() });

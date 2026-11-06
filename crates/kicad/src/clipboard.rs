@@ -724,6 +724,7 @@ mod tests {
             arrow_direction: ArrowDirection::Inward,
             text_pos: None,
             text_frame: Default::default(),
+            text_effects: Default::default(),
             text_thickness_nm: None,
         };
         let design = Design {

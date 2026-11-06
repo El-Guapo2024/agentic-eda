@@ -3222,6 +3222,7 @@ mod tests {
             arrow_direction: ArrowDirection::Inward,
             text_pos: None,
             text_frame: Default::default(),
+            text_effects: Default::default(),
             text_thickness_nm: Some(Nm::from_mm(0.18)),
         };
         let mut dims = vec![

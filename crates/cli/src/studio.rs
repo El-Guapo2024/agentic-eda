@@ -1854,7 +1854,7 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
 
     let geom = eda_connectivity::dimension::compute_dimension_geometry(d);
 
-    json!({
+    let mut out = json!({
         "id": d.id,
         "layer": d.layer,
         "kind": kind,
@@ -1900,7 +1900,24 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "computed_text_angle": geom.text_angle,
         "measured_value_nm": geom.measured_value_nm,
         "text": geom.text,
-    })
+    });
+    // The label's other looks (`Dimension::text_effects`, UI-LEFT-2 PP11): the width (`GetTextWidth`), the face (null: the stroke font), bold, italic, the
+    // mirror as drawn (`text_mirrored`; `text_effects` says whether it is the label's own), the horizontal justification and keep-upright; and the overlay
+    // itself, which a whole-dimension edit sends back. (Apart: one `json!` of them all is past the macro's recursion limit.)
+    let looks = json!({
+        "text_width_nm": d.text_width_nm(),
+        "face": d.text_effects.face,
+        "bold": d.text_effects.bold,
+        "italic": d.text_effects.italic,
+        "mirrored": d.text_mirrored(),
+        "h_justify": d.text_effects.h_justify,
+        "keep_upright": d.text_effects.keep_upright,
+        "text_effects": d.text_effects,
+    });
+    if let (Some(o), Value::Object(l)) = (out.as_object_mut(), looks) {
+        o.extend(l);
+    }
+    out
 }
 
 fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {

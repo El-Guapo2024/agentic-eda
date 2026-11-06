@@ -10,7 +10,7 @@
 //!   * `PCB_SHAPE::StyleFromSettings`: the stroke width is the line thickness of the layer class;
 //!   * `PCB_TEXT::StyleFromSettings`: the text size (width and height), the text thickness and italic are the layer class's (the width and italic of a
 //!     board text land on its `TextExtra`; keep-upright is only for a footprint's text, which this dialog does not reach here). A text box and a table
-//!     cell take the same; a dimension's label has one size in this model (the class's height) and no italic;
+//!     cell take the same, and so does a dimension's label (its width and italic in `Dimension::text_effects`, UI-LEFT-2 PP11);
 //!   * `PCB_DIMENSION_BASE::StyleFromSettings`: the text as above, `SetLineThickness( GetLineThickness( layer ) )`, and the units, units format,
 //!     precision, zero suppression, text position and "keep text aligned" of the board's dimension settings.
 //!
@@ -37,8 +37,8 @@
 //! footprint's text) and `PCB_SHAPE::StyleFromSettings`.
 //!
 //! The board's own texts take the same rows: a width that is not the height, bold, italic and the face land on the text's `TextExtra`; "auto" is
-//! `TextExtra::auto_thickness` with the pen `GetEffectiveTextPenWidth` gives. A dimension's label has one size here (the height) and no bold, italic or
-//! face; its "auto" thickness is written as that pen.
+//! `TextExtra::auto_thickness` with the pen `GetEffectiveTextPenWidth` gives. A dimension's label takes them too, in its `Dimension::text_effects` (UI-LEFT-2
+//! PP11); its "auto" thickness is written as that pen (no automatic pen is kept for it).
 //!
 //! # Track & Via Properties' via rows
 //!
@@ -67,7 +67,7 @@ pub fn line_thickness(d: &TextGraphicsDefaults, layer: &str) -> Nm {
     d.line_thickness_nm(layer)
 }
 
-/// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )`'s height, the one size a dimension's label has in this model.
+/// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )`'s height (a barcode's text size).
 pub fn text_size(d: &TextGraphicsDefaults, layer: &str) -> Nm {
     d.text_size_nm(layer).1
 }
@@ -421,9 +421,13 @@ impl Board<'_> {
         }
         for d in dr.dimensions.iter_mut().filter(|d| dims.contains(d.id.as_str())) {
             if e.layer_defaults {
-                // `PCB_TEXT::StyleFromSettings`, then `PCB_DIMENSION_BASE::StyleFromSettings`.
-                d.text_size_nm = text_size(&defaults, &d.layer);
+                // `PCB_TEXT::StyleFromSettings` (the size, width and height, the pen and italic; keep upright only for a footprint's), then
+                // `PCB_DIMENSION_BASE::StyleFromSettings`.
+                let (h, w) = text_height_width(&defaults, &d.layer);
+                d.text_size_nm = h;
+                d.text_effects.width_nm = w;
                 d.text_thickness_nm = Some(text_thickness(&defaults, &d.layer));
+                d.text_effects.italic = defaults.text_italic_upright(&d.layer).0;
                 d.stroke_width = line_thickness(&defaults, &d.layer);
                 d.units = dim_style.units;
                 d.units_format = dim_style.units_format;
@@ -439,14 +443,36 @@ impl Board<'_> {
             if let Some(w) = e.line_width {
                 d.stroke_width = w;
             }
-            // The label has one size here: the height (or the width when only that is given).
-            if let Some(s) = e.height().or(e.width()) {
-                d.text_size_nm = s;
+            // The label's own width and height (UI-LEFT-2 PP11): `SetTextSize( VECTOR2I( width, GetTextSize().y ) )`, then the height.
+            let (mut w, mut h) = (d.text_width_nm(), d.text_size_nm);
+            if let Some(x) = e.width() {
+                w = x;
             }
+            if let Some(y) = e.height() {
+                h = y;
+            }
+            d.text_size_nm = h;
+            d.text_effects.width_nm = (w != h).then_some(w);
             if e.rows.auto_thickness {
-                d.text_thickness_nm = Some(auto_pen_nm(d.text_size_nm, false));
+                // no automatic pen for a dimension's label here: the pen it would have (`GetPenSizeForNormal` / `GetPenSizeForBold` of the width)
+                d.text_thickness_nm = Some(auto_pen_nm(w, d.text_effects.bold));
             } else if let Some(th) = e.text_thickness {
                 d.text_thickness_nm = Some(th);
+            }
+            // "Must be after SetTextSize()": `EDA_TEXT::SetBold` -- in the stroke font the pen goes to the bold or the normal one of the smaller size (KiCad gives
+            // back a pen it kept aside; the model keeps none) -- and `SetItalic`; then the font, asked for with them.
+            if let Some(b) = e.rows.bold {
+                if b != d.text_effects.bold && d.text_effects.face.is_none() {
+                    let size = w.min(h);
+                    d.text_thickness_nm = Some(Nm::kiround(size.as_f64() / if b { 5.0 } else { 8.0 }));
+                }
+                d.text_effects.bold = b;
+            }
+            if let Some(i) = e.rows.italic {
+                d.text_effects.italic = i;
+            }
+            if let Some(face) = e.rows.face() {
+                d.text_effects.face = face;
             }
         }
         Ok(())

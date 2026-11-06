@@ -720,6 +720,7 @@ pub(crate) fn transform_dimension(d: &mut Dimension, x: Xform, copper: usize) {
                 }
                 DimensionKind::Radial { .. } | DimensionKind::Leader | DimensionKind::Center => {}
             }
+            d.flip_text_mirror();
             d.layer = flip_layer(&d.layer, copper);
         }
     }

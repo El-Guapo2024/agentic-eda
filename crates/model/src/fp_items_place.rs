@@ -244,6 +244,7 @@ pub fn transform_dimension(d: &mut Dimension, x: ItemXform, flip_layer: &dyn Fn(
                 }
                 DimensionKind::Radial { .. } | DimensionKind::Leader | DimensionKind::Center => {}
             }
+            d.flip_text_mirror();
             d.layer = flip_layer(&d.layer);
         }
     }
@@ -550,6 +551,7 @@ mod tests {
             arrow_direction: ArrowDirection::Outward,
             text_pos: None,
             text_frame: Default::default(),
+            text_effects: Default::default(),
             text_thickness_nm: None,
         }
     }

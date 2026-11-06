@@ -2629,6 +2629,7 @@ fn aligned_dim(start: Point, end: Point) -> Dimension {
         arrow_direction: ArrowDirection::Outward,
         text_pos: None,
         text_frame: Default::default(),
+        text_effects: Default::default(),
         text_thickness_nm: None,
     }
 }

@@ -1015,6 +1015,7 @@ mod tests {
             text_position: DimensionTextPosition::Outside, keep_text_aligned: false, text_angle: 0, text_size_nm: mm(1.0), stroke_width: mm(0.1), arrow_length: mm(1.0),
             extension_offset: mm(0.5), extension_height: mm(0.5), arrow_direction: ArrowDirection::Outward, text_thickness_nm: None, text_pos: Some(pt(35.0, 15.0)),
             text_frame: frame,
+            text_effects: Default::default(),
         };
         let (c, r) = eda_connectivity::dimension::compute_dimension_geometry(&leader(DimensionTextBorder::Circle)).circles[0];
         // a short track across the top of the circle, well above the text

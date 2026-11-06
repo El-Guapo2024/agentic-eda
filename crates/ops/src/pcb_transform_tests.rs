@@ -85,6 +85,7 @@ pub(super) fn dimension(id: &str, kind: DimensionKind, start: Point, end: Point)
         arrow_direction: ArrowDirection::Inward,
         text_pos: None,
         text_frame: Default::default(),
+        text_effects: Default::default(),
         text_thickness_nm: None,
     }
 }
@@ -542,6 +543,31 @@ fn a_flipped_leader_mirrors_its_text_position() {
     assert_eq!(r.text_pos, Some(p(mm(-30.0), mm(22.0))));
     b.apply(&Cmd::FlipItems { ids: ids(&["leader"]), pivot: p(Nm::ZERO, mm(10.0)), direction: FlipDirection::TopBottom }).unwrap();
     assert_eq!(by_id(&b, "leader").text_pos, Some(p(mm(-10.0), mm(15.0))));
+}
+
+/// `PCB_DIMENSION_BASE::Mirror`'s `if( IsSideSpecific() ) SetMirrored( !IsMirrored() )` (UI-LEFT-2 PP11): a label with a mirror of its own on F.Fab turns
+/// it over as the dimension goes to B.Fab, one without follows the layer (mirrored on B.Fab), and on a layer of no side the mirror stays.
+#[test]
+fn a_flipped_dimensions_label_turns_its_own_mirror_over_on_a_sided_layer() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let mut own = dimension("own", DimensionKind::Aligned { height: mm(2.0) }, p(mm(10.0), Nm::ZERO), p(mm(20.0), Nm::ZERO));
+    own.layer = "F.Fab".into();
+    own.text_effects.mirrored = Some(false);
+    let mut by_layer = own.clone();
+    by_layer.id = "by_layer".into();
+    by_layer.text_effects.mirrored = None;
+    let mut sideless = own.clone();
+    sideless.id = "sideless".into();
+    sideless.layer = "Dwgs.User".into();
+    sideless.text_effects.mirrored = Some(true);
+    d.drawings.as_mut().unwrap().dimensions = vec![own, by_layer, sideless];
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["own", "by_layer", "sideless"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
+    let by_id = |name: &str| drawings(&b).dimensions.iter().find(|d| d.id == name).unwrap().clone();
+    assert_eq!((by_id("own").layer.as_str(), by_id("own").text_effects.mirrored, by_id("own").text_mirrored()), ("B.Fab", Some(true), true));
+    assert_eq!((by_id("by_layer").layer.as_str(), by_id("by_layer").text_effects.mirrored, by_id("by_layer").text_mirrored()), ("B.Fab", None, true));
+    assert_eq!((by_id("sideless").layer.as_str(), by_id("sideless").text_mirrored()), ("Dwgs.User", true), "a layer of no side keeps the mirror");
 }
 
 #[test]
