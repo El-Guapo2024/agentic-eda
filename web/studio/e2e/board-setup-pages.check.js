@@ -698,7 +698,8 @@
       await pickLayer("f_silks");
       await arm("pcbnew.InteractiveDrawing.alignedDimension", "dimension");
       const dimsBefore = ((await state()).drawings?.dimensions ?? []).length;
-      await click(3, 28); await click(11, 28);
+      // `DRAWING_TOOL::DrawDimension`: an aligned dimension takes its start, its end, then the height click (task-u2-lines ported it).
+      await click(3, 28); await click(11, 28); await click(11, 30);
       await sleep(500);
       const dims = (await state()).drawings?.dimensions ?? [];
       if (dims.length > dimsBefore) steps.push("pcb");
