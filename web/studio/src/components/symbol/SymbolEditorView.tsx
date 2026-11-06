@@ -10,6 +10,7 @@ import { PinPropertiesDialog } from "./PinPropertiesDialog";
 import { SymbolShapePropertiesDialog } from "./SymbolShapePropertiesDialog";
 import { SymbolTextBoxDialog } from "./SymbolTextBoxDialog";
 import { PinTableDialog } from "./PinTableDialog";
+import { SymbolFindDialog } from "./SymbolFindDialog";
 import { LibrarySymbolPropertiesDialog } from "./SymbolPropertiesDialog";
 import { SymbolLibraryPanel } from "./SymbolLibraryPanel";
 import { SaveSymbolAsDialog } from "./SaveSymbolAsDialog";
@@ -67,6 +68,7 @@ export function SymbolEditorView() {
       <SymbolShapePropertiesDialog />
       <SymbolTextBoxDialog />
       <PinTableDialog />
+      <SymbolFindDialog />
       <LibrarySymbolPropertiesDialog />
       <SaveSymbolAsDialog />
       <ImportSymbolDialog />

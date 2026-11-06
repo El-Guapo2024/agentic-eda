@@ -36,6 +36,46 @@ export interface RcFilter {
 
 export const SHOW_ALL: RcFilter = { errors: true, warnings: true, exclusions: true, all: true };
 
+/** The DRC dialog's Show boxes as `dialog_drc_base.fbp` starts them: Errors and Warnings ticked (`m_showErrors->SetValue(true)`, `m_showWarnings->SetValue(true)`),
+ *  Exclusions and All not (R6-D9). */
+export const DRC_SHOW_START: RcFilter = { errors: true, warnings: true, exclusions: false, all: false };
+
+/**
+ * `DIALOG_DRC::OnMenu`'s check items, kept in `PCBNEW_SETTINGS::m_DRCDialog` (`pcbnew_settings.cpp`: `drc_dialog.report_all_track_errors` false,
+ * `drc_dialog.crossprobe` true, `drc_dialog.scroll_on_crossprobe` true).
+ */
+export interface DrcMenuOptions {
+  /** "Report All Errors for Each Track": "If unchecked, only the first error will be reported for each track" (`--all-track-errors`). */
+  reportAllTrackErrors: boolean;
+  /** "Cross-probe Selected Items": "Highlight corresponding items on canvas when selected in the DRC list" (`OnDRCItemSelected` returns at once without it). */
+  crossprobe: boolean;
+  /** "Center on Cross-probe": "When cross-probing, scroll the canvas so that the item is visible" (`FocusOnItems( .., m_scroll_on_crossprobe )`). */
+  scrollOnCrossprobe: boolean;
+}
+
+export const DRC_MENU_DEFAULTS: DrcMenuOptions = { reportAllTrackErrors: false, crossprobe: true, scrollOnCrossprobe: true };
+
+/**
+ * The DRC dialog's Show boxes and options menu as they were last left (`raw`, this browser's copy of `DIALOG_SHIM::SaveControlState`'s controls and
+ * `PCBNEW_SETTINGS::m_DRCDialog`), each value that is not there or not a boolean at its start state ([`DRC_SHOW_START`], [`DRC_MENU_DEFAULTS`]).
+ */
+export function savedDrcControls(raw: string | null): { filter: RcFilter; options: DrcMenuOptions } {
+  const start = { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS };
+  if (!raw) return start;
+  try {
+    const j = JSON.parse(raw) as { filter?: Partial<RcFilter>; options?: Partial<DrcMenuOptions> } | null;
+    const bool = (v: unknown, d: boolean) => (typeof v === "boolean" ? v : d);
+    const f = j?.filter ?? {};
+    const o = j?.options ?? {};
+    return {
+      filter: { errors: bool(f.errors, DRC_SHOW_START.errors), warnings: bool(f.warnings, DRC_SHOW_START.warnings), exclusions: bool(f.exclusions, DRC_SHOW_START.exclusions), all: bool(f.all, DRC_SHOW_START.all ?? false) },
+      options: { reportAllTrackErrors: bool(o.reportAllTrackErrors, DRC_MENU_DEFAULTS.reportAllTrackErrors), crossprobe: bool(o.crossprobe, DRC_MENU_DEFAULTS.crossprobe), scrollOnCrossprobe: bool(o.scrollOnCrossprobe, DRC_MENU_DEFAULTS.scrollOnCrossprobe) },
+    };
+  } catch {
+    return start;
+  }
+}
+
 /** `OnSeverity` on the "All" box: errors stay on, warnings and exclusions follow the box. Unchecking it leaves the errors only. */
 export function setShowAll(checked: boolean): RcFilter {
   return { errors: true, warnings: checked, exclusions: checked, all: checked };
@@ -565,9 +605,15 @@ export function patchErcDeleteAll(report: ErcReport, includeExclusions: boolean)
 }
 
 /** [`patchDrcSeverity`] for the schematic: an excluded finding stays excluded, whatever the check becomes. */
-export function patchErcSeverity(report: ErcReport, check: string, severity: RuleSeverity, description: string): ErcReport {
+/**
+ * `ID_SET_SEVERITY_TO_IGNORE` on a pin-to-pin finding (`DIALOG_ERC::OnERCItemRClick`): on a warning only the warning's slot is ignored and only its markers
+ * go (`DeleteMarkers( MARKER_ERC, rcItem->GetErrorCode() )`, `ERCE_PIN_TO_PIN_WARNING`) -- the errors stay; on an error both slots are
+ * (`SetSeverity( ERCE_PIN_TO_PIN_WARNING, RPT_SEVERITY_IGNORE )` too). `keepPinErrors` is the first case.
+ */
+export function patchErcSeverity(report: ErcReport, check: string, severity: RuleSeverity, description: string, keepPinErrors = false): ErcReport {
   const ignoring = severity === "ignore";
-  const violations = report.violations.filter((v) => !(ignoring && v.check === check)).map((v) => (v.check === check && !ignoring && v.severity !== "excluded" ? { ...v, severity } : v));
+  const goes = (v: ErcViolation) => ignoring && v.check === check && !(keepPinErrors && v.check === "pin_to_pin" && (v.base_severity ?? (v.severity === "warning" ? "warning" : "error")) === "error");
+  const violations = report.violations.filter((v) => !goes(v)).map((v) => (v.check === check && !ignoring && v.severity !== "excluded" ? { ...v, severity } : v));
   const counts: Record<string, number> = {};
   for (const v of violations) if (v.severity !== "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
   const rest = (report.ignored_checks ?? []).filter((c) => c.key !== check);

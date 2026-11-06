@@ -154,6 +154,13 @@ impl<'a> RuleBoard<'a> {
         rb
     }
 
+    /// `fromTo( from, to )` in the board's rules (Clearance and Constraints Resolution): the board's from-to cache ([`crate::from_to`]) given to the environment the
+    /// rules were compiled in. Not made unless asked for: it is the whole board's connectivity.
+    pub fn enable_from_to(&self) {
+        let cache = crate::from_to::of_board(self);
+        self.engine.env.from_to.replace(Some(cache));
+    }
+
     /// The environment the board's rules are read and evaluated in (`env`), for a rule the caller parses itself (Show Matches).
     pub fn env_for_rules(&self) -> Env {
         self.env()
@@ -180,6 +187,7 @@ impl<'a> RuleBoard<'a> {
             }),
         );
         env.nets = model.nets.iter().map(|n| n.name.clone()).collect();
+        env.number_nets(model.nets.iter().map(|n| n.name.as_str()));
         env.footprints = self.footprints.values().cloned().collect();
         env.footprints.sort_by(|a, b| a.id.cmp(&b.id));
         env.areas = self.areas();
@@ -804,6 +812,34 @@ impl<'a> RuleBoard<'a> {
     pub fn pad_item_at(&self, idx: usize) -> Option<Rc<RuleItem>> {
         let (pid, i) = self.pad_ids.iter().find(|(_, i)| *i == idx).cloned()?;
         Some(Rc::new(self.pad_item(&pid, i)))
+    }
+
+    /// The items the connectivity is made of (`CN_ITEM`s, zones aside: [`crate::from_to`]): every pad, track segment and via of the board, in that order,
+    /// each with the studio's id (a pad's `REF.NUMBER`, a segment's track, a via's).
+    pub fn copper_items(&self) -> Vec<(String, Rc<RuleItem>)> {
+        let mut out: Vec<(String, Rc<RuleItem>)> = Vec::new();
+        for (pid, idx) in &self.pad_ids {
+            out.push((pid.split('#').next().unwrap_or(pid).to_string(), Rc::new(self.pad_item(pid, *idx))));
+        }
+        for (i, seg) in self.board.tracks.iter().enumerate() {
+            out.push((seg.id.rsplit_once('#').map_or(seg.id.as_str(), |(base, _)| base).to_string(), Rc::new(self.track_item(i))));
+        }
+        for (i, v) in self.board.vias.iter().enumerate() {
+            out.push((v.id.clone(), Rc::new(self.via_item(i))));
+        }
+        out
+    }
+
+    /// The item `id` names as the geometry functions see it (`GetEffectiveShape`, a zone's outline, a footprint's courtyards) -- a track the studio draws
+    /// as one polyline with every segment's shape -- for Find by Properties' items (`crate::query`, which the studio sends without their shapes).
+    pub fn shaped_item(&self, id: &str) -> Option<Rc<RuleItem>> {
+        if self.kind_of(id)? == ItemKind::Track {
+            let segs: Vec<usize> = self.board.tracks.iter().enumerate().filter(|(_, s)| s.id.rsplit_once('#').is_some_and(|(base, _)| base == id)).map(|(i, _)| i).collect();
+            let mut it = self.track_item(*segs.first()?);
+            it.shapes = segs.iter().map(|&i| self.board.tracks[i].shape()).collect();
+            return Some(Rc::new(it));
+        }
+        self.item(id, None).ok()
     }
 
     /// The rule item of the `idx`th track segment of the board (`DrcBoard::tracks`).

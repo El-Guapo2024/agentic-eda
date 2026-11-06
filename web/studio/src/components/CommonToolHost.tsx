@@ -62,7 +62,7 @@ export function CommonToolHost() {
   useEffect(() => {
     const el = document.querySelector<HTMLElement>(".pcb-canvas-container");
     if (!el) return;
-    el.style.cursor = session?.cursor === "remove" ? "not-allowed" : zoomArmed ? "zoom-in" : "";
+    el.style.cursor = session?.cursor === "remove" ? "not-allowed" : (session?.cursorCss ?? (zoomArmed ? "zoom-in" : ""));
     return () => {
       el.style.cursor = "";
     };
@@ -179,6 +179,11 @@ export function CommonToolHost() {
         const w = toWorld(a, c, e);
         setPickerHover(s.hover({ x: w[0], y: w[1] }));
       } else if (getCommonTool().hover !== null) setPickerHover(null);
+      // a session's motion handler choosing the pointer (`SetCursor` in `SetMotionHandler`)
+      if (s?.cursorAt) {
+        const w = toWorld(a, c, e);
+        c.style.cursor = s.cursorAt({ x: w[0], y: w[1] });
+      }
 
       const zoom = getCommonTool().zoomArea;
       if (zoom?.drag) {

@@ -86,9 +86,18 @@ export async function copySheetImage(ctx: SchControlContext): Promise<void> {
   }
 }
 
+/** The colour theme the Symbol Editor draws in, by the key kicad-cli's `--theme` takes (`COLOR_SETTINGS::COLOR_BUILTIN_DEFAULT`). */
+export const SYMBOL_EDITOR_THEME = "_builtin_default";
+
 /**
  * `SYMBOL_EDITOR_CONTROL::ExportSymbolAsSVG`: the symbol open in the Symbol Editor, in the unit and body style being edited, plotted to `<symbol name>.svg`. The plot is
  * kicad-cli's (`kicad-cli sym export svg` through the server's lane); the browser saves the SVG it wrote.
+ *
+ * `SYMBOL_EDIT_FRAME::SVGPlotSymbol` plots with the editor's colour theme (`renderSettings.LoadColors( GetColorSettings() )`) and a fresh `SCH_RENDER_SETTINGS`, whose
+ * `m_ShowHiddenPins` and `m_ShowHiddenFields` are on: the theme goes to kicad-cli as `--theme`, the hidden items as `--include-hidden-pins` and
+ * `--include-hidden-fields` (X11). The studio's Symbol Editor draws in "KiCad Default" (it has no colour theme setting of its own; Preferences has the board's), so that
+ * is the theme sent. **Differs**: kicad-cli's box takes the hidden fields in with `--include-hidden-fields` (`GetSymbolPlotBBox( .., m_includeHiddenFields )`), the
+ * editor's leaves them out (`GetSymbolPlotBBox( .., false )`), so the SVG's page can be a little larger; and the pen is kicad-cli's 6 mils, the editor's its own default.
  */
 export async function exportSymbolSvg(ctx: SchControlContext): Promise<void> {
   const toast = (text: string, kind: "info" | "error") => ctx.dispatch({ type: "TOAST", message: text, kind });
@@ -96,7 +105,14 @@ export async function exportSymbolSvg(ctx: SchControlContext): Promise<void> {
   const symbol = st.symbol;
   if (!symbol) return toast("No symbol to export", "error");
   try {
-    const r = await postSymbolSvg({ lib_id: symbol.lib_id, unit: Math.max(st.activeUnit, 1), body_style: symbol.has_alternate_body_style && st.activeBodyStyle === 2 ? 2 : 1 });
+    const r = await postSymbolSvg({
+      lib_id: symbol.lib_id,
+      unit: Math.max(st.activeUnit, 1),
+      body_style: symbol.has_alternate_body_style && st.activeBodyStyle === 2 ? 2 : 1,
+      theme: SYMBOL_EDITOR_THEME,
+      include_hidden_pins: true,
+      include_hidden_fields: true,
+    });
     if (!r.ok || !r.svg) return toast(r.message ?? "kicad-cli wrote no SVG", "error");
     saveTextFile(r.svg.text, r.svg.name, "image/svg+xml");
     toast(`Saved ${r.svg.name}`, "info");

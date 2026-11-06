@@ -345,7 +345,7 @@
       setValue(texts[0], "Reference");
       const before = await lastAct();
       await click("footprint-properties-ok"); await sleep(300);
-      t(/two fields called|reserved|unique|already|duplicate/i.test(tid("footprint-properties-error")?.textContent ?? ""), `a reserved name is refused: ${JSON.stringify(tid("footprint-properties-error")?.textContent)}`);
+      t(/two fields called|mandatory field|reserved|unique|already|duplicate/i.test(tid("footprint-properties-error")?.textContent ?? ""), `a reserved name is refused: ${JSON.stringify(tid("footprint-properties-error")?.textContent)}`);
       t(JSON.stringify(await lastAct()) === JSON.stringify(before), "nothing was sent");
       await closeDialogs();
       await select([refA]); await open(props);

@@ -966,12 +966,18 @@
     const rows = () => [...document.querySelectorAll('[data-testid="pin-table-row"]')];
     t(rows().length === 3, `a row per pin: ${rows().length}`);
     const cell = (row, label) => row.querySelector(`[aria-label="${label}"]`);
-    t([...cell(rows()[0], "Unit").options].map((o) => o.textContent).join(",") === "ALL,Unit A,Unit B,Unit C", `the Unit choices are ALL and the symbol's units: ${[...cell(rows()[0], "Unit").options].map((o) => o.textContent)}`);
-    t(cell(rows()[0], "Orientation").value === "right", "file angle 0 is Right (parseSymbolPin)");
+    // the Unit column is one KiCad's `ShowHideColumns( "0 1 2 3 4 5 9 10" )` hides: the column header's menu shows it
+    tid("pin-table-header").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 200, clientY: 200 }));
+    await sleep(150);
+    [...document.querySelectorAll(".menubar-dropdown [role=menuitem]")].find((b) => b.textContent.replace(/[\u2713\u2003]/g, "").trim() === "Unit")?.click();
+    await sleep(150);
+    t(!!cell(rows()[0], "Unit"), "the header's menu shows the Unit column");
+    t([...(cell(rows()[0], "Unit")?.options ?? [])].map((o) => o.textContent).join(",") === "ALL,Unit A,Unit B,Unit C", `the Unit choices are ALL and the symbol's units: ${[...(cell(rows()[0], "Unit")?.options ?? [])].map((o) => o.textContent)}`);
+    t(cell(rows()[0], "Orientation").value === "Right", "file angle 0 is Right (parseSymbolPin)");
     await type(cell(rows()[0], "Name"), "A");
     await click(tid("pin-table-add"), 300);
     const added = rows()[3];
-    t(!!added && cell(added, "Number").value === "" && cell(added, "Y Position").value === "-2.54", `Add Pin: no number, a pin step up the file, shown as KiCad's internal Y: ${added && cell(added, "Y Position").value}`);
+    t(!!added && cell(added, "Number").value === "" && parseFloat(cell(added, "Y Position").value) === -2.54, `Add Pin: no number, a pin step up the file, shown as KiCad's internal Y: ${added && cell(added, "Y Position").value}`);
     await type(cell(added, "Number"), "9");
     t((await symbol(id)).pins.every((p) => p.name === "N1"), "nothing is written before OK");
     await click(tid("pin-table-ok"), 1500);

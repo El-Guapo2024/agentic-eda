@@ -315,3 +315,31 @@ fn import_graphics_puts_the_files_shapes_in_the_footprint_on_the_layer_and_group
     let e = b.apply(&Cmd::FpEditor(FpEditorCmd::ImportGraphics { footprint: "Lib:Logo".into(), import: empty })).unwrap_err();
     assert!(e[0].hint.as_deref().unwrap_or("").starts_with("No graphic items found in file."), "{e:?}");
 }
+
+/// UI-LEFT X5 (r7 X7-1's leftover): File > Export > Footprints writes each footprint as `Duplicate()` copies it -- the board instance's Reference layout with
+/// `REF**`, its Value text, its user fields, the symbol's Datasheet and user fields the board gives it, and its attributes -- over the entry of its name.
+#[test]
+fn export_footprints_writes_the_instances_fields_and_attributes() {
+    let (mut model, mut design) = fixture();
+    model.parts.truncate(1);
+    // (a footprint with extras of its own, as one read from a board file, is written without the symbol's fields: the board writer's rule)
+    design.drawings.as_mut().unwrap().footprint_extras.clear();
+    model.symbol_links.insert("R1".into(), eda_model::SymbolLink { fields: vec![("Datasheet".into(), "https://x/r.pdf".into()), ("MPN".into(), "RC0402".into()), ("Vendor".into(), "from the symbol".into())], ..Default::default() });
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
+    b.apply(&Cmd::ExportFootprintsToLibrary).unwrap();
+    let lib = b.design().footprint_library.as_ref().unwrap();
+    assert!(lib.board_copies.is_empty(), "the copies made for the export are not left in the editor");
+    let e = lib.by_name("Test:R_A").expect("the entry");
+    let r = e.reference.as_ref().unwrap();
+    assert_eq!((r.text.as_deref(), r.at, r.layer.as_str()), (None, Point { x: Nm::ZERO, y: mm(-3.0) }, "F.SilkS"), "REF** where the instance has its Reference");
+    assert_eq!(e.value.as_ref().unwrap().text.as_deref(), Some("10k"), "the board's value");
+    let fields: Vec<(&str, &str, bool)> = e.fields.iter().map(|f| (f.name.as_str(), f.value.as_str(), f.visible)).collect();
+    assert_eq!(fields, [("Vendor", "ACME", true), ("MPN", "RC0402", false)], "the instance's own field wins over the symbol's of that name");
+    assert_eq!(e.datasheet.as_ref().and_then(|l| l.text.as_deref()), Some("https://x/r.pdf"));
+    assert!(e.attributes.smd && e.attributes.exclude_from_position_files);
+    // the library file KiCad reads has them
+    let text = eda_kicad::export_kicad_mod(e);
+    assert!(text.contains("(property \"Reference\" \"REF**\"") && text.contains("(property \"Value\" \"10k\"") && text.contains("(property \"MPN\" \"RC0402\""), "{text}");
+    // and the board is as it was
+    assert_eq!(b.design().footprint_edit("R1").unwrap().fields.len(), 1);
+}

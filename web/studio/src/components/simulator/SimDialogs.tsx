@@ -19,6 +19,8 @@ import { applyPlotSetup, labelOf, plotSetupOf, unitsOf, type PlotTab } from "../
 import { formatToString, type SpiceValueFormat } from "../../kicad-port/sim/spiceValue";
 import { applyAnalysis, doFourier, getSimUi, rerunIfFinished, saveWorkbookAs, setSimDialog, touch, useSimUi } from "../../state/simulator";
 import { sortSignals, signalMatches } from "../../kicad-port/sim/simSignals";
+import { USER_SIGNALS_HELP, simPlotVectors, userSignalCharAdded } from "../../kicad-port/sim/userSignals";
+import { RuleTextEditor } from "../RuleTextEditor";
 
 function Shell({ title, width = 520, onCancel, onOk, okLabel = "OK", children, footer }: { title: string; width?: number; onCancel: () => void; onOk?: () => void; okLabel?: string; children: React.ReactNode; footer?: React.ReactNode }) {
   return (
@@ -398,6 +400,8 @@ function UserSignalsDialog() {
   // the grid cursor's row (`GetGridCursorRow`), which Delete takes when no row is selected
   const [cursor, setCursor] = useState(() => (ui.frame.userSignals.size > 0 ? 0 : -1));
   const [help, setHelp] = useState(false);
+  // `m_frame->SimPlotVectors()`: the vectors of the last run of the current tab
+  const vectors = simPlotVectors(currentTab(ui.frame)?.plots[0]);
   const ok = () => {
     const m = new Map<number, string>();
     for (const r of rows) if (r.s !== "") m.set(r.id, r.s);
@@ -411,8 +415,17 @@ function UserSignalsDialog() {
         <tbody>
           {rows.map((r, i) => (
             <tr key={r.id} className={i === cursor ? "selected" : undefined} aria-selected={i === cursor}>
-              <td style={{ width: "100%" }}>
-                <input className="sim-cell" aria-label={`Signal ${i + 1}`} value={r.s} onFocus={() => setCursor(i)} onChange={(e) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, s: e.target.value } : x)))} />
+              <td style={{ width: "100%" }} onFocus={() => setCursor(i)}>
+                {/* `GRID_CELL_STC_EDITOR( true, true, onScintillaCharAdded )`: one line, the plot's vectors and ngspice's functions offered */}
+                <RuleTextEditor
+                  className="sim-cell sim-signal-editor"
+                  ariaLabel={`Signal ${i + 1}`}
+                  testId={`sim-user-signal-${i}`}
+                  singleLine
+                  value={r.s}
+                  onCharAdded={(text, caret) => userSignalCharAdded(text, caret, vectors)}
+                  onChange={(t) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, s: t } : x)))}
+                />
               </td>
             </tr>
           ))}
@@ -439,9 +452,9 @@ function UserSignalsDialog() {
         </button>
       </div>
       {help && (
-        <div className="sim-help">
-          Expressions of the signals and the functions ngspice knows: V(net), I(device), sqrt(x), sin(x), cos(x), tan(x), exp(x), ln(x), log(x), abs(x), pow(x,y), min(x,y), max(x,y) ... (KiCad's
-          user_defined_signals_help.md).
+        // `OnFormattingHelp`: the "Syntax Help" page, `user_defined_signals_help.md`
+        <div className="sim-help" role="note" aria-label="Syntax Help">
+          <pre>{USER_SIGNALS_HELP}</pre>
         </div>
       )}
     </Shell>

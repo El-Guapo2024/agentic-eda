@@ -180,7 +180,7 @@
     const u = dialog("User-defined Signals");
     click(u?.querySelector('button[aria-label="Add signal"]'));
     await sleep(150);
-    setValue(u.querySelector('input[aria-label="Signal 1"]'), `${RC}*2`);
+    setValue(u.querySelector('textarea[aria-label="Signal 1"]'), `${RC}*2`);
     click([...u.querySelectorAll("button")].find((b) => b.textContent.trim() === "OK"));
     await settle();
     t(!!signalRow(`${RC}*2`), "the user-defined signal is listed");
@@ -310,14 +310,14 @@
     await sleep(100);
     click(u?.querySelector('button[aria-label="Add signal"]'));
     await sleep(150);
-    setValue(u.querySelector('input[aria-label="Signal 2"]'), "V(/IN)");
-    setValue(u.querySelector('input[aria-label="Signal 3"]'), "V(/OUT)");
+    setValue(u.querySelector('textarea[aria-label="Signal 2"]'), "V(/IN)");
+    setValue(u.querySelector('textarea[aria-label="Signal 3"]'), "V(/OUT)");
     await sleep(100);
-    u.querySelector('input[aria-label="Signal 2"]')?.focus();
+    u.querySelector('textarea[aria-label="Signal 2"]')?.focus();
     await sleep(100);
     click(u?.querySelector('button[aria-label="Delete signal"]'));
     await sleep(150);
-    const left = [...u.querySelectorAll("input.sim-cell")].map((i) => i.value);
+    const left = [...u.querySelectorAll('textarea[aria-label^="Signal "]')].map((i) => i.value);
     t(JSON.stringify(left) === JSON.stringify([`${RC}*2`, "V(/OUT)"]), `Delete removed the cursor's row, not the last: ${JSON.stringify(left)}`);
     click([...u.querySelectorAll("button")].find((b) => b.textContent.trim() === "Cancel"));
     await sleep(300);

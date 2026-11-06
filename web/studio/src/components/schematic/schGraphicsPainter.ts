@@ -122,7 +122,8 @@ function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: Sc
   });
 }
 
-function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string): void {
+/** `shownText` is `SCH_TEXTBOX::GetShownText` (the server's `graphic_shown`), when a variable changes the stored text. */
+function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string, shownText?: string): void {
   const s = g.shape;
   if (s.type !== "text_box") return;
   const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
@@ -130,7 +131,7 @@ function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: st
     {
       start: [s.start.x, s.start.y],
       end: [s.end.x, s.end.y],
-      text: s.text,
+      text: shownText ?? s.text,
       angle: s.angle ?? 0,
       sizeNm: s.size_nm,
       hAlign: s.h_align ?? "left",
@@ -150,7 +151,7 @@ function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: st
  * Paint every graphic, in drawing order. `selection`: ids drawn in the selection colour. Fills go first (a filled
  * shape's body, then its outline), the way `SCH_PAINTER::draw( SCH_SHAPE )` layers the background and the stroke.
  */
-export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform, graphics: readonly SchGraphic[], selection: ReadonlySet<string>, textAttrs?: Readonly<Record<string, { color?: SchColor }>>): void {
+export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform, graphics: readonly SchGraphic[], selection: ReadonlySet<string>, textAttrs?: Readonly<Record<string, { color?: SchColor }>>, shown?: Readonly<Record<string, string>>): void {
   const hair = 1 / view.scale;
   for (const g of graphics) {
     // An image is painted under everything else (`paintImages`).
@@ -203,7 +204,7 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
     ctx.setLineDash([]);
     // `SCH_PAINTER::getRenderColor` for an `SCH_TEXTBOX`: its own text colour (Text Box Properties' Color) wins over `LAYER_NOTES`
     const own = textAttrs?.[g.id]?.color;
-    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 ? rgba(own) : layerColor("LAYER_NOTES"));
+    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 ? rgba(own) : layerColor("LAYER_NOTES"), shown?.[g.id]);
     ctx.restore();
   }
 }

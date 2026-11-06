@@ -82,6 +82,7 @@ mod import_foreign;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;
+mod vcs;
 mod sim_api;
 mod sim_model_api;
 mod sheet_drop_api;
@@ -90,6 +91,8 @@ mod sheet_import;
 mod sch_hierarchy_tests;
 #[cfg(test)]
 mod sch_setup_tests;
+#[cfg(test)]
+mod u5_dialogs_tests;
 mod studio;
 mod view_api;
 mod appearance_api;

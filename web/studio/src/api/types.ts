@@ -3366,6 +3366,8 @@ export interface Schematic {
   graphics?: SchGraphic[];
   /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
   graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
+  /** A text box's shown text by its graphic's id, where `${..}` or `@{..}` in it changes it (`SCH_TEXTBOX::GetShownText`); the box's `text` stays the stored one. */
+  graphic_shown?: Record<string, string>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
   tables?: BoardTable[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
@@ -3411,6 +3413,12 @@ export interface SchematicSetupLook {
   dash_ratio: number;
   gap_ratio: number;
   hop_over_size_choice: number;
+  /** Formatting's operating-point overlay (`drawing.operating_point_overlay_*`): significant digits and range ("~V" / "~A" for Auto) of the
+   *  voltages and currents the simulator shows on the sheet. An older backend sends none. */
+  opo_v_precision?: number;
+  opo_v_range?: string;
+  opo_i_precision?: number;
+  opo_i_range?: string;
 }
 
 // ---------------------------------------------------------------- Symbol library
@@ -3801,6 +3809,8 @@ export interface SavedReportRequest {
   units: "mm" | "mil" | "in";
   refill_zones?: boolean;
   schematic_parity?: boolean;
+  /** The DRC dialog's options menu, "Report All Errors for Each Track" (`--all-track-errors`). */
+  all_track_errors?: boolean;
 }
 
 /** The report kicad-cli wrote: the file name the dialog suggests (`ERC.rpt`, `DRC.json`) and its text. */

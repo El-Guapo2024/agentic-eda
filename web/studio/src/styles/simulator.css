@@ -332,3 +332,15 @@
 .sim-lock {
   margin-bottom: 6px;
 }
+/* User-defined Signals' expression cell: the one-line completing editor (`GRID_CELL_STC_EDITOR( .., aSingleLine = true, .. )`). */
+.rte.sim-signal-editor {
+  min-height: 0;
+  resize: none;
+  overflow: hidden;
+}
+.sim-help pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

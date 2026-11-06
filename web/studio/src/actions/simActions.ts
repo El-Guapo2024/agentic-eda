@@ -32,6 +32,7 @@ import { currentTab } from "../kicad-port/sim/simFrame";
 import { addTuner, probeTrace, setSimFocused, toggleOp } from "../state/simulator";
 import { picker } from "./pcbPicker";
 import { hitPin, pinItems } from "../kicad-port/schPins";
+import { probeCursorCss } from "../kicad-port/sim/probeCursors";
 import { pickItem } from "../components/schematic/schPick";
 import { measureStrokeText } from "../components/text/strokeFont";
 import type { Schematic } from "../api/types";
@@ -155,9 +156,37 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
   // SIMULATOR_CONTROL::Probe -> SCH_EDITOR_CONTROL::SimProbe: a pick on the sheet until Escape. A pin is a current (`SPICE_GENERATOR::CurrentNames`, the one
   // of the model pin the symbol pin is when the device has several), a wire or a junction the voltage of its net (`V(<net>)`).
   m.set("eeschema.Simulation.probe", () => {
+    // The motion handler: a pin under the pointer is brightened and gets the current probe, a wire highlights its net (`SetHighlightedConnection`),
+    // anything else is the voltage probe; the finalize handler takes the highlight away.
+    let highlighted: string | null = null;
+    const under = (at: { x: number; y: number }) => {
+      const s = api.getState();
+      const sch = s.schematic;
+      if (!sch) return { pin: null, wire: null };
+      const tol = Math.max(5 / (s.schematicView.scale || 1), 254_000);
+      const pin = pinItems(sch).find((p) => hitPin(p, [at.x, at.y], tol / 2, measureStrokeText)) ?? null;
+      return { pin, wire: pin ? null : wireAt(sch, at.x, at.y, tol) };
+    };
     picker.start({
       kind: "point",
       prompt: "Probe: a wire for its voltage, a pin for its current",
+      cursorCss: probeCursorCss("voltage_probe"),
+      cursorAt: (at) => probeCursorCss(under(at).pin ? "current_probe" : "voltage_probe"),
+      hover: (at) => {
+        const { pin, wire } = under(at);
+        const net = wire?.net ?? null;
+        if (net !== highlighted) {
+          highlighted = net;
+          dispatch({ type: "SET_NET_HIGHLIGHT", net });
+        }
+        return pin?.id ?? null;
+      },
+      onFinalize: () => {
+        if (highlighted !== null) {
+          highlighted = null;
+          dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
+        }
+      },
       onPoint: (at) => {
         const s = api.getState();
         const sch = s.schematic;

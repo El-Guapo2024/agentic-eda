@@ -211,7 +211,7 @@ impl Board<'_> {
     }
 
     /// See [`FpEditorCmd::Open`].
-    fn open_footprint_from_board(&mut self, reference: &str) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn open_footprint_from_board(&mut self, reference: &str) -> Result<(), Vec<CheckResult>> {
         let pose = self.pose_of(reference).cloned().ok_or_else(|| fail("ops_unknown_part", reference, "no footprint with this reference is on the board"))?;
         let part = self.model.part(reference).cloned().ok_or_else(|| fail("ops_unknown_part", reference, "no footprint with this reference is on the board"))?;
         let bf = board_footprint(&self.design, self.model, reference).ok_or_else(|| fail("ops_unknown_footprint", reference, format!("{reference} has no footprint to edit")))?;

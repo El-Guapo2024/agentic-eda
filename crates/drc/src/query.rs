@@ -11,15 +11,17 @@
 //! `selectMatchingFromQuery`. `true` and `false` are 1 and 0 ([`crate::pcbexpr::Env::literal_booleans`]): the queries Create from Selection Tab writes
 //! use them. `memberOfSheet`, `hasComponentClass` and `A.ComponentClass` are KiCad's: the studio sends no sheet path and no classes, and the server
 //! fills each footprint's from the board's rule board (`GetSheetname`, `GetComponentClass`: [`handle_with`], R6-D3); without them a footprint is on the
-//! root sheet, `/`, with no class. The functions that need shapes (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea` and their old names) find no courtyard or area
-//! here and say false, as the TypeScript copy did.
+//! root sheet, `/`, with no class. The functions that need shapes (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea` and their old names) and `fromTo` ask the
+//! board too ([`BoardFacts`], UI-LEFT B6): each item is given the shapes, outline and courtyards of the board's item of its id, the language's footprints and areas are the
+//! board's (`searchFootprints`, `searchAreas`), and `fromTo` reads the board's from-to cache ([`crate::from_to`]); without the board (a request alone) they say false, as
+//! the TypeScript copy did. `A.Net` is the net's code ([`crate::pcbexpr::Env::net_codes`]), the board writer's numbering of the request's nets.
 //!
 //! Request: `{ "expression": "...", "items": [...], "env": {...} }` (see [`Request`]). Answer: `{ "ok": bool, "errors": [..], "ids": [..] | null }`:
 //! `ok` is `Compile`'s answer (the text lexes and parses), `errors` every message the compiler told, and `ids` the matches in the order of the items
 //! (null when it does not compile).
 
 use crate::pcbexpr::{compile, Ctx, Env, PCB_UNITS};
-use crate::rule_item::{Class, FootprintFacts, Prop, RuleItem};
+use crate::rule_item::{AreaFacts, Class, FootprintFacts, Prop, RuleItem};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -138,7 +140,22 @@ fn prop_of(p: &QueryProp) -> Option<Prop> {
     })
 }
 
-fn rule_item(q: &QueryItem, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>) -> RuleItem {
+/// What the board itself says of the items a request names (`selectMatchingFromQuery` evaluates the board's own items), beyond what the studio sends: the server's
+/// rule board ([`crate::rule_board::RuleBoard`]).
+#[derive(Default)]
+pub struct BoardFacts<'a> {
+    /// A footprint's sheet and component classes by its reference.
+    pub footprint: Option<&'a dyn Fn(&str) -> Option<(String, Vec<String>)>>,
+    /// The board's item of a studio id, with its shapes (`GetEffectiveShape`), a zone's outline and a footprint's courtyards.
+    pub item: Option<&'a dyn Fn(&str) -> Option<Rc<RuleItem>>>,
+    /// The footprints `searchFootprints` and the areas `searchAreas` visit.
+    pub footprints: Vec<Rc<RuleItem>>,
+    pub areas: Vec<Rc<AreaFacts>>,
+    /// The board's from-to cache ([`crate::from_to::of_board`]).
+    pub from_to: Option<Rc<dyn Fn(&str, &str, &str) -> bool>>,
+}
+
+fn rule_item(q: &QueryItem, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>, shaped: Option<&RuleItem>) -> RuleItem {
     let mut it = RuleItem::new(q.id.clone(), class_of(&q.class));
     it.type_name = Some(q.type_name.clone());
     it.layers = q.layers.clone();
@@ -154,7 +171,10 @@ fn rule_item(q: &QueryItem, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)
         let board = (f.sheet.is_none() || f.classes.is_none()).then(|| facts(&f.reference)).flatten().unwrap_or_default();
         let sheet = f.sheet.clone().unwrap_or(board.0);
         let classes = f.classes.clone().unwrap_or(board.1);
-        Rc::new(FootprintFacts { reference: f.reference.clone(), fpid: f.fpid.clone(), fields: f.fields.clone(), sheet, classes, ..Default::default() })
+        // its side and courtyards: the board's footprint's (`GetCourtyard( F_CrtYd / B_CrtYd )`)
+        let own = shaped.and_then(|b| b.footprint.clone());
+        let (flipped, courtyard_front, courtyard_back) = own.map(|o| (o.flipped, o.courtyard_front.clone(), o.courtyard_back.clone())).unwrap_or_default();
+        Rc::new(FootprintFacts { reference: f.reference.clone(), fpid: f.fpid.clone(), fields: f.fields.clone(), sheet, classes, flipped, courtyard_front, courtyard_back })
     });
     it.groups = q.groups.clone();
     it.plated = q.plated;
@@ -165,6 +185,18 @@ fn rule_item(q: &QueryItem, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)
         Some("Micro") => Some("Micro"),
         _ => None,
     };
+    // what the item occupies, as the board has it (`GetEffectiveShape`, a zone's `Outline()`)
+    if let Some(b) = shaped {
+        it.shapes = b.shapes.clone();
+        it.hole = b.hole.clone();
+        it.position = b.position;
+        it.outline = b.outline.clone();
+        it.holes = b.holes.clone();
+        // `GetViaType` as the board has it (a microvia's `ViaExtra::kind`, which the span alone does not tell)
+        if it.class == Class::Via && b.via_type.is_some() {
+            it.via_type = b.via_type;
+        }
+    }
     it
 }
 
@@ -176,6 +208,8 @@ fn env_of(e: &QueryEnv) -> Env {
         Box::new(move |net: &str| classes.get(net).cloned().unwrap_or_else(|| ("Default".to_string(), vec!["Default".to_string()]))),
     );
     env.nets = e.nets.iter().cloned().collect::<HashSet<_>>();
+    // `A.Net` is the net's code: the board writer's numbering of the board's nets
+    env.number_nets(e.nets.iter().map(String::as_str));
     env.literal_booleans = true;
     env.property_names = e.properties.as_ref().map(|p| p.iter().map(|n| n.to_lowercase()).collect());
     env
@@ -189,7 +223,18 @@ pub fn run(req: &Request) -> Value {
 /// [`run`] with `facts`: a footprint's sheet and component classes by its reference (the board's, `eda_drc::rule_board::RuleBoard`), for the footprints the
 /// request sends without them.
 pub fn run_with(req: &Request, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>) -> Value {
-    let env = Rc::new(env_of(&req.env));
+    run_on(req, &BoardFacts { footprint: Some(facts), ..Default::default() })
+}
+
+/// [`run`] on the board's own facts ([`BoardFacts`]).
+pub fn run_on(req: &Request, board: &BoardFacts) -> Value {
+    let none = |_: &str| None;
+    let facts: &dyn Fn(&str) -> Option<(String, Vec<String>)> = board.footprint.unwrap_or(&none);
+    let mut env = env_of(&req.env);
+    env.footprints = board.footprints.clone();
+    env.areas = board.areas.clone();
+    env.from_to = std::cell::RefCell::new(board.from_to.clone());
+    let env = Rc::new(env);
     let compiled = compile(&req.expression, &PCB_UNITS, &env);
     let errors: Vec<String> = compiled.errors.iter().map(|e| e.message.clone()).collect();
     if !compiled.ok {
@@ -197,7 +242,8 @@ pub fn run_with(req: &Request, facts: &dyn Fn(&str) -> Option<(String, Vec<Strin
     }
     let mut ids = Vec::new();
     for q in &req.items {
-        let item = Rc::new(rule_item(q, facts));
+        let own = board.item.and_then(|f| f(&q.id));
+        let item = Rc::new(rule_item(q, facts, own.as_deref()));
         for layer in &q.layers {
             let mut ctx = Ctx::new(env.clone(), 0, Some(layer));
             ctx.set_items(Some(item.clone()), None);
@@ -217,8 +263,13 @@ pub fn handle(body: &[u8]) -> Value {
 
 /// [`handle`] with the board's footprint facts ([`run_with`]).
 pub fn handle_with(body: &[u8], facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>) -> Value {
+    handle_on(body, &BoardFacts { footprint: Some(facts), ..Default::default() })
+}
+
+/// [`handle`] on the board's own facts ([`run_on`]).
+pub fn handle_on(body: &[u8], board: &BoardFacts) -> Value {
     match serde_json::from_slice::<Request>(body) {
-        Ok(req) => run_with(&req, facts),
+        Ok(req) => run_on(&req, board),
         Err(e) => json!({ "ok": false, "errors": [format!("bad request: {e}")], "ids": Value::Null }),
     }
 }
