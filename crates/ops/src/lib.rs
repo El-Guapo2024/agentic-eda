@@ -100,6 +100,7 @@ mod multichannel;
 mod multichannel_copy;
 mod multichannel_facts;
 mod multichannel_geom;
+mod multichannel_poly;
 pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
 pub mod embedded;
 pub use embedded::{CollectedModel, EmbeddedCmd, EmbeddedOwner};

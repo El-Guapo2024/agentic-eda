@@ -4,10 +4,13 @@
 //! `GetBoundingBox( false )`. A footprint here is a pose of a part, so those answers are put together from the places this model keeps them:
 //!
 //! * **The sheet.** An imported board has what its file said (`FootprintExtra::sheetname`, `sheetfile`: the netlist update's `Sheetname` and `Sheetfile`). A board made
-//!   here has its schematic, stored or -- until an edit stores it -- the module sheets the studio derives from the intent (`eda_model::modules::infer_modules`, the
-//!   names `derive_hierarchy` gives the sheets): the sheet path of a symbol is `SCH_SHEET_PATH::PathHumanReadable`, `/` and the name of each sheet down to it, each followed
-//!   by a `/`. A sheet placed more than once has the reference of each symbol per placement (`SymbolPathOverride`), and the symbol the footprint stands for is identified
-//!   by the sheet's file and the symbol's place in it, which is what the tail of `FOOTPRINT::GetPath()` is to KiCad's tie breaker.
+//!   here has the sheet its file is written with (`ConstraintModel::symbol_links`, what the board's loader reads of its schematic -- the stored one, else the one derived
+//!   from the intent -- and the writer puts in `(sheetname ..)` and `(sheetfile ..)`: what KiCad's Update PCB from Schematic gives the footprint, its symbol's
+//!   `PathHumanReadable` and its sheet's file), so the studio's Repeat Layout and KiCad's on the written board see the same sheets (R7-D5); the tail of the link's path is
+//!   the symbol's uuid, which is what `FOOTPRINT::GetPath()` gives KiCad's tie breaker. A model the loader did not link (a test's) falls back to the schematic, stored, or
+//!   the module sheets the studio derives from the intent (`eda_model::modules::infer_modules`, the names `derive_hierarchy` gives the sheets): the sheet path of a symbol
+//!   is `SCH_SHEET_PATH::PathHumanReadable`, `/` and the name of each sheet down to it, each followed by a `/`. A sheet placed more than once has the reference of each
+//!   symbol per placement (`SymbolPathOverride`), and the symbol the footprint stands for is identified by the sheet's file and the symbol's place in it.
 //! * **The component classes.** The footprint's own (`FootprintExtra::component_classes`, `GetStaticComponentClass`) and the ones the project's assignment rules give it
 //!   (`COMPONENT_CLASS_MANAGER::GetDynamicComponentClassesForFootprint`: each rule is a DRC-language condition, `COMPONENT_CLASS_ASSIGNMENT_DATA::
 //!   GetAssignmentInDRCLanguage`, here evaluated for the footprint), and a class per sheet when the project asks.
@@ -125,6 +128,15 @@ fn courtyard_half_stroke(extra: Option<&FootprintExtra>) -> Nm {
 impl Board<'_> {
     /// The sheet of each part: see the module doc.
     pub(crate) fn mc_part_sheets(&self) -> BTreeMap<String, PartSheet> {
+        // the sheet the board file is written with (`eda_kicad`'s writer: `(sheetname ..)` and `(sheetfile ..)` from the link), the root's file left unnamed as below
+        if !self.model.symbol_links.is_empty() {
+            return self
+                .model
+                .symbol_links
+                .iter()
+                .map(|(reference, l)| (reference.clone(), PartSheet { name: l.sheetname.clone(), file: l.sheetfile.clone(), symbol: l.path.rsplit('/').next().filter(|s| !s.is_empty()).map(String::from) }))
+                .collect();
+        }
         if self.design.schematic.is_some() {
             return sheets_of_schematic(&self.design);
         }
@@ -364,5 +376,11 @@ pub(crate) fn block_items(clip: &eda_kicad::Clipboard) -> super::multichannel_co
     }
     items.extend(clip.texts.iter().cloned().map(|t| Item::Text(t, None)));
     items.extend(clip.dimensions.iter().cloned().map(Item::Dimension));
+    // the block's other items (`findOtherItemsInRuleArea` of a `DESIGN_BLOCK` area: every one that is not a footprint, a group or connected, no enclosure asked): its text boxes,
+    // barcodes, reference images and points. (Its tables wait for the clipboard reader to read them.)
+    items.extend(clip.text_boxes.iter().cloned().map(Item::TextBox));
+    items.extend(clip.barcodes.iter().cloned().map(Item::Barcode));
+    items.extend(clip.images.iter().cloned().map(Item::Image));
+    items.extend(clip.points.iter().cloned().map(Item::Point));
     RefItems { items, ..Default::default() }
 }

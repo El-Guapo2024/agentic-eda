@@ -4,8 +4,14 @@ import type { Group, Zone } from "../api/types";
 import {
   anchorChoices,
   chooseMode,
+  afterGenerate,
+  afterRepeat,
   copiedMessage,
   DEFAULT_REPEAT_OPTIONS,
+  DEFAULT_TOOL_MEMORY,
+  generateFlagsOf,
+  parseToolMemory,
+  repeatOptionsOf,
   generateCommand,
   groupItemsAvailable,
   initialGenerateTab,
@@ -105,4 +111,30 @@ test("the Repeat Layout rows start ticked for the targets that match, and the co
   assert.equal(copiedMessage(3), "Copied to 3 Rule Areas.");
   assert.deepEqual(anchorChoices(["U2", "C1", "R1"]), ["", "C1", "R1", "U2"]);
   assert.deepEqual(DEFAULT_REPEAT_OPTIONS, { copy_placement: true, copy_routing: true, connected_routing_only: false, copy_other_items: true, group_items: false, include_locked_items: true, anchor: null });
+});
+
+test("the tool keeps the options of both dialogs, one Group box for both, and never the anchor", () => {
+  // KiCad's defaults: `REPEAT_LAYOUT_OPTIONS` and `m_replaceExisting = false`
+  assert.deepEqual(generateFlagsOf(DEFAULT_TOOL_MEMORY), { replace: false, group: false });
+  assert.deepEqual(repeatOptionsOf(DEFAULT_TOOL_MEMORY), DEFAULT_REPEAT_OPTIONS);
+  // Repeat Layout's OK keeps the six boxes, not the anchor
+  const afterR = afterRepeat(DEFAULT_TOOL_MEMORY, { ...DEFAULT_REPEAT_OPTIONS, copy_routing: false, group_items: true, anchor: "U1" });
+  assert.equal(repeatOptionsOf(afterR).copy_routing, false);
+  assert.equal(repeatOptionsOf(afterR).anchor, null, "the dialog opens on the empty anchor (`SetSelection( 0 )`)");
+  // the Group box is `m_options.m_groupItems`: Generate opens with what Repeat Layout left
+  assert.deepEqual(generateFlagsOf(afterR), { replace: false, group: true });
+  // Generate's OK on the Sheets tab keeps both boxes; on the Groups tab "Don't allow grouping for groups" turns the shared box off
+  const onSheets = afterGenerate(afterR, { replace: true, group: true }, "sheet");
+  assert.deepEqual(generateFlagsOf(onSheets), { replace: true, group: true });
+  const onGroups = afterGenerate(onSheets, { replace: true, group: true }, "group");
+  assert.deepEqual(generateFlagsOf(onGroups), { replace: true, group: false });
+  assert.equal(repeatOptionsOf(onGroups).group_items, false, "and Repeat Layout's Group box with it");
+  assert.equal(repeatOptionsOf(onGroups).copy_routing, false, "the other boxes stay");
+});
+
+test("the kept options read back from storage, anything that is not a boolean taking KiCad's default", () => {
+  const kept = afterGenerate(afterRepeat(DEFAULT_TOOL_MEMORY, { ...DEFAULT_REPEAT_OPTIONS, include_locked_items: false }), { replace: true, group: false }, "sheet");
+  assert.deepEqual(parseToolMemory(JSON.parse(JSON.stringify(kept))), kept);
+  assert.deepEqual(parseToolMemory(null), DEFAULT_TOOL_MEMORY);
+  assert.deepEqual(parseToolMemory({ replaceExisting: "yes", options: { copy_routing: 0, anchor: "U1" } }), DEFAULT_TOOL_MEMORY);
 });

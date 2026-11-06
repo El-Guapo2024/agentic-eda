@@ -386,16 +386,27 @@ fn board_made(dir: &Path) -> Result<Made, String> {
     Ok(Made { text, default_name: project, fields: Vec::new(), items })
 }
 
-/// `saveSelectionToDesignBlock`: a temporary board with the selected items alone -- clones of them, with the nets they use and without the group they were picked by --
-/// saved as a board file. Here the temporary board is the design with everything else taken out: the footprints, the copper, the graphics and the texts that were not
-/// selected, the board's outline, and the nets nothing selected is on. A group in the selection brings the items below it (`DeepClone`).
+/// `saveSelectionToDesignBlock`: a temporary board with the selected items alone -- clones of them, with the nets they use -- saved as a board file. Here the temporary board
+/// is the design with everything else taken out: the footprints, the copper, the graphics, the texts, the text boxes, the tables, the barcodes, the images, the points and the
+/// tuning patterns that were not selected, the board's outline, and the nets nothing selected is on.
+///
+/// The groups are KiCad's (P18-3): a lone selected group is stripped to what is directly in it (`SaveSelectionAsDesignBlock`, `UpdateDesignBlockFromSelection`: "Don't
+/// recurse; if we have a group of groups the user probably intends the inner groups to be saved"), and every group that is selected after that is saved whole with every
+/// group below it (`DeepClone()`, its parent group cleared); an item picked without its group is in none in the block (`copy->SetParentGroup( nullptr )`). A selected tuning
+/// pattern comes with its tracks (`PCB_GENERATOR::DeepClone`); a track picked without its pattern comes without it.
 fn board_selection_made(dir: &Path, ids: &[String]) -> Result<Made, String> {
     if ids.is_empty() {
         return Err("Please select some items to save as a design block.".into());
     }
     let (meta, design, model) = board::load(dir).map_err(|e| board::reasons(&e))?;
     let project = project_name(&meta, dir);
-    let leaves: Vec<String> = design.drawings.as_ref().map_or_else(|| ids.to_vec(), |d| d.expand_groups(ids));
+    let (picked, kept_groups) = block_selection(&design, ids);
+    let mut leaves: Vec<String> = design.drawings.as_ref().map_or_else(|| picked.clone(), |d| d.expand_groups(&picked));
+    // a selected tuning pattern brings its tracks
+    if let Some(dr) = design.drawings.as_ref() {
+        let tracks: Vec<String> = dr.tuning_patterns.iter().filter(|p| leaves.contains(&p.id)).flat_map(|p| p.member_ids.iter().cloned()).collect();
+        leaves.extend(tracks);
+    }
     let keep: std::collections::BTreeSet<&str> = leaves.iter().map(String::as_str).collect();
     let mut d = design.clone();
     let mut m = model.clone();
@@ -422,15 +433,18 @@ fn board_selection_made(dir: &Path, ids: &[String]) -> Result<Made, String> {
         dr.board_parts.retain(|p| keep.contains(p.reference.as_str()));
         dr.footprint_edits.retain(|e| keep.contains(e.id.as_str()));
         dr.zone_overrides.retain(|z| keep.contains(z.id.as_str()));
-        // the groups inside the selection stay (with the members that stay), the group the selection was picked by does not
-        let picked: std::collections::BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        dr.groups.retain(|g| !picked.contains(g.id.as_str()));
-        // the groups that lost members to the cut fall under the `< 2` rule; a group of one that was one already stays
-        let affected: std::collections::BTreeSet<String> = dr.groups.iter().filter(|g| g.member_ids.iter().any(|x| !keep.contains(x.as_str()))).map(|g| g.id.clone()).collect();
-        for g in dr.groups.iter_mut() {
-            g.member_ids.retain(|x| keep.contains(x.as_str()));
-        }
-        eda_model::groups::prune_affected_groups(&mut dr.groups, &affected);
+        dr.tables.retain(|t| keep.contains(t.id.as_str()));
+        dr.barcodes.retain(|b| keep.contains(b.id.as_str()));
+        dr.tuning_patterns.retain(|p| keep.contains(p.id.as_str()));
+        let bi = &mut dr.board_items;
+        bi.text_boxes.retain(|t| keep.contains(t.id.as_str()));
+        bi.images.retain(|i| keep.contains(i.id.as_str()));
+        bi.points.retain(|p| keep.contains(p.id.as_str()));
+        bi.grid_items.retain(|g| keep.contains(g.id.as_str()));
+        bi.via_stitches.retain(|v| keep.contains(v.id.as_str()));
+        bi.drill_maps.retain(|x| keep.contains(x.id.as_str()));
+        // the groups saved whole (`DeepClone`): their members are all in the block
+        dr.groups.retain(|g| kept_groups.contains(&g.id));
     }
     let placed: std::collections::BTreeSet<String> = d.placement.iter().flat_map(|p| p.footprints.iter().map(|f| f.id.clone())).collect();
     for n in m.nets.iter_mut() {
@@ -439,7 +453,7 @@ fn board_selection_made(dir: &Path, ids: &[String]) -> Result<Made, String> {
     m.nets.retain(|n| !n.pins.is_empty() || used_nets.contains(&n.name));
     let items = d.placement.as_ref().map_or(0, |p| p.footprints.len())
         + d.routing.as_ref().map_or(0, |r| r.tracks.len() + r.vias.len() + r.zones.len())
-        + d.drawings.as_ref().map_or(0, |x| x.shapes.len() + x.texts.len() + x.dimensions.len());
+        + d.drawings.as_ref().map_or(0, |x| x.shapes.len() + x.texts.len() + x.dimensions.len() + x.tables.len() + x.barcodes.len() + x.board_items.text_boxes.len() + x.board_items.images.len() + x.board_items.points.len());
     if items == 0 {
         return Err("Please select some items to save as a design block.".into());
     }
@@ -450,6 +464,21 @@ fn board_selection_made(dir: &Path, ids: &[String]) -> Result<Made, String> {
     }
     .unwrap_or(project);
     Ok(Made { text, default_name, fields: Vec::new(), items })
+}
+
+/// What a selection of the board saves (`SaveSelectionAsDesignBlock` then `saveSelectionToDesignBlock`): the items picked -- a lone group stands for what is directly in it --
+/// and the groups the block keeps, every picked group with every group below it.
+fn block_selection(design: &eda_model::ir::Design, ids: &[String]) -> (Vec<String>, std::collections::BTreeSet<String>) {
+    let Some(dr) = design.drawings.as_ref() else { return (ids.to_vec(), Default::default()) };
+    let picked: Vec<String> = match ids {
+        [one] if dr.is_group(one) => dr.group(one).map(|g| g.member_ids.clone()).unwrap_or_default(),
+        _ => ids.to_vec(),
+    };
+    let mut kept: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for id in picked.iter().filter(|id| dr.is_group(id)) {
+        kept.extend(eda_model::groups::GroupTree(&dr.groups).group_and_descendants(id));
+    }
+    (picked, kept)
 }
 
 /// What a request asks to be saved: the design of the sheet in view, a selection of it, the board, or a selection of the board.

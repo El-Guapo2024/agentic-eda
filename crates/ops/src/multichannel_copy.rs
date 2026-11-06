@@ -5,7 +5,11 @@
 //! 1. **Routing** ("Copy routing"). What is in the target area -- the tracks, vias and copper shapes the area encloses (`findRoutingInRuleArea`: `A.enclosedByArea( area )`) -- goes,
 //!    and the same of the reference area comes in, turned and moved to the target and on the nets of the target's pads (`fixupNet`). "Restrict to routing connected within the
 //!    area" keeps to the nets of the footprints that were matched. Locked items stay unless "Include locked items" is on.
-//! 2. **Other items** ("Copy other items"): the zones and the drawings the area encloses (`findOtherItemsInRuleArea`), the same way.
+//!    A tuning pattern one of whose tracks meets the outline of the area brings all its tracks into the routing (`generator->HitTest( aRAPoly.Outline( 0 ), false )`), and the
+//!    copies of its tracks are the members of a copy of the pattern, turned and moved with them (`fixupParentGroup`: the parent of a track is its generator).
+//! 2. **Other items** ("Copy other items"): the zones and the drawings the area encloses (`findOtherItemsInRuleArea`), the same way: zones (their holes with them), shapes,
+//!    texts, text boxes, dimensions, tables and barcodes. A reference image and a point have no polygon to be enclosed (`multichannel_poly.rs`), so Repeat Layout leaves them;
+//!    Apply Design Block Layout takes every item of the block, these too.
 //! 3. **Placement** ("Copy footprint placement"): each footprint of the target takes the side, the place, the turn, the text fields and the 3D models of the footprint of
 //!    the reference area that stands for it.
 //! 4. The target area itself takes the shape of the reference area, turned and moved.
@@ -13,16 +17,21 @@
 //! The copy is turned and moved so that the target's footprint matching the anchor lands where the anchor is (`aOpts.m_anchorFp`), else so that the centres of the two areas
 //! meet. A target that is a group (Apply Design Block Layout) takes the first matched pair as its anchor, keeps its own items, and the copies join the group.
 //!
-//! What is selected, copied and removed is worked out on the board as it was when the command began, so a target does not see what the one before it did.
+//! What is selected, copied and removed is worked out on the board as it was when the command began, so a target does not see what the one before it did. "Enclosed" is
+//! KiCad's polygon test, the item's polygon minus the area's (with its holes) leaving nothing (`multichannel_poly.rs`).
 
 use super::multichannel::{resolve_topology, RepeatOptions, RuleArea};
 use super::multichannel_facts::McFootprint;
 use super::multichannel_geom::{polygon_meets_box, Enclosure};
+use super::multichannel_poly::AreaPoly;
 use super::pcb_transform::Xform;
 use super::Board;
 use eda_model::fp_edit::{self, FieldLayout, FootprintEdit};
 use eda_model::ir::{next_item_id, Design, Dimension, FootprintInstance, Group, Point, Shape, Side, Text, Track, Nm, Via, Zone};
-use eda_model::pcb_items::{PcbPoint, TextBox};
+use eda_model::barcode::Barcode;
+use eda_model::pcb_items::{PcbPoint, RefImage, TextBox};
+use eda_model::table::Table;
+use eda_model::tuning::TuningPattern;
 use eda_model::CheckResult;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,6 +52,9 @@ pub(crate) enum Item {
     Dimension(Dimension),
     TextBox(TextBox),
     Point(PcbPoint),
+    Table(Table),
+    Barcode(Barcode),
+    Image(RefImage),
 }
 
 impl Item {
@@ -56,6 +68,9 @@ impl Item {
             Item::Dimension(d) => &d.id,
             Item::TextBox(t) => &t.id,
             Item::Point(p) => &p.id,
+            Item::Table(t) => &t.id,
+            Item::Barcode(b) => &b.id,
+            Item::Image(i) => &i.id,
         }
     }
 
@@ -70,6 +85,9 @@ impl Item {
             Item::Dimension(d) => d.layer.clone(),
             Item::TextBox(t) => t.layer.clone(),
             Item::Point(p) => p.layer.clone(),
+            Item::Table(t) => t.layer.clone(),
+            Item::Barcode(b) => b.layer.clone(),
+            Item::Image(i) => i.layer.clone(),
         }
     }
 
@@ -142,10 +160,17 @@ impl Item {
             Item::Dimension(v) => t::transform_dimension(v, x, copper),
             Item::TextBox(v) => super::pcb_items::transform_text_box(v, x, copper),
             Item::Point(v) => super::pcb_items::transform_point(v, x, copper),
+            Item::Table(v) => super::pcb_tables::transform_table(v, x, copper),
+            Item::Barcode(v) => super::pcb_items::transform_barcode(v, x, copper),
+            Item::Image(v) => super::pcb_items::transform_ref_image(v, x, copper),
         }
     }
 
-    /// Is the item inside the outline (`enclosedByAreaFunc`)?
+    /// Is the item inside the outline (`enclosedByAreaFunc`), judged on its centre line and width, its circle, its outline or the box of its text?
+    ///
+    /// INACTIVE (2026-11-06): replaced by KiCad's polygon test ([`AreaPoly::encloses`] of [`Item::shape`], `multichannel_poly.rs`), which subtracts the area with its holes;
+    /// kept for a reader that has no polygons.
+    #[allow(dead_code)]
     fn enclosed_by(&self, e: &Enclosure) -> bool {
         use eda_model::ir::tessellate_arc;
         match self {
@@ -179,18 +204,32 @@ impl Item {
                 e.contains_box((x0, y0, x1, y1))
             }
             Item::Point(p) => e.contains_point(p.at),
+            Item::Table(_) | Item::Barcode(_) | Item::Image(_) => false,
         }
     }
 }
 
-/// Every item of the board the outline encloses and that shares a layer with the area (`enclosedByAreaFunc`: "the item's layers meet the area's"), in the order the
-/// board lists them. Teardrops (made by the Add Teardrops tool, not drawn) and the zones of footprints are not among them.
-pub(crate) fn enclosed_items(design: &Design, outline: &[Point], area_layers: &[String], copper: &[String], skip_zone: Option<&str>) -> Vec<Item> {
-    let e = Enclosure { outline };
-    let overlaps = |it: &Item| it.layer_set(copper).iter().any(|l| area_layers.contains(l));
+/// A rule area as the tool's queries see it: its polygon (outline and holes) and its layers.
+pub(crate) struct AreaGeom<'a> {
+    pub poly: AreaPoly,
+    pub layers: &'a [String],
+}
+
+impl<'a> AreaGeom<'a> {
+    pub(crate) fn new(outline: &[Point], holes: &[Vec<Point>], layers: &'a [String]) -> AreaGeom<'a> {
+        AreaGeom { poly: AreaPoly::new(outline, holes), layers }
+    }
+}
+
+/// Every item of the board the area encloses (`findRoutingInRuleArea`, `findOtherItemsInRuleArea`: `A.enclosedByArea( '<uuid>' )` on the board's tracks and vias, its zones but the
+/// area's own, and its drawings), in the order the board lists them, and the tracks of every tuning pattern one of whose tracks meets the area's outline. An item counts when it
+/// shares a layer with the area and its polygon minus the area's is nothing (`enclosedByAreaFunc`, `multichannel_poly.rs`). Teardrops (made by the Add Teardrops tool, not
+/// drawn) and the zones of footprints are not among them; a reference image and a point have no polygon to be enclosed and are not either.
+pub(crate) fn enclosed_items(design: &Design, area: &AreaGeom, copper: &[String], skip_zone: Option<&str>, max_error: Nm) -> Vec<Item> {
+    let overlaps = |it: &Item| it.layer_set(copper).iter().any(|l| area.layers.contains(l));
     let mut out: Vec<Item> = Vec::new();
     let mut take = |it: Item| {
-        if overlaps(&it) && it.enclosed_by(&e) {
+        if overlaps(&it) && area.poly.encloses(&it.shape(max_error)) {
             out.push(it);
         }
     };
@@ -218,8 +257,25 @@ pub(crate) fn enclosed_items(design: &Design, outline: &[Point], area_layers: &[
         for t in &dr.board_items.text_boxes {
             take(Item::TextBox(t.clone()));
         }
-        for p in &dr.board_items.points {
-            take(Item::Point(p.clone()));
+        for t in &dr.tables {
+            take(Item::Table(t.clone()));
+        }
+        for b in &dr.barcodes {
+            take(Item::Barcode(b.clone()));
+        }
+    }
+    // `for( PCB_GENERATOR* generator : board()->Generators() )`: a tuning pattern that meets the outline brings its tracks, wherever they are
+    if let (Some(dr), Some(rt)) = (&design.drawings, &design.routing) {
+        for p in &dr.tuning_patterns {
+            let members: Vec<&Track> = p.member_ids.iter().filter_map(|m| rt.tracks.iter().find(|t| &t.id == m)).collect();
+            if !members.iter().any(|t| area.poly.outline_meets(&Item::Track((*t).clone()).shape(max_error))) {
+                continue;
+            }
+            for t in members {
+                if !out.iter().any(|it| it.id() == t.id) {
+                    out.push(Item::Track(t.clone()));
+                }
+            }
         }
     }
     out
@@ -234,17 +290,25 @@ pub(crate) struct RefItems {
     pub group_of: BTreeMap<String, String>,
     /// Group id -> (name, design block).
     pub groups: BTreeMap<String, (String, String)>,
+    /// Track id -> the tuning pattern it is a track of (`GetParentGroup()` of a track is its generator, not the group the generator is in).
+    pub pattern_of: BTreeMap<String, String>,
+    /// Pattern id -> the pattern.
+    pub patterns: BTreeMap<String, TuningPattern>,
 }
 
 impl RefItems {
     /// The items a board's reference area encloses, with the locks and groups they carry.
-    pub(crate) fn of_board(design: &Design, area: &RuleArea, copper: &[String]) -> RefItems {
-        let items = enclosed_items(design, &area.outline, &area.layers, copper, Some(&area.zone_id));
+    pub(crate) fn of_board(design: &Design, area: &RuleArea, copper: &[String], max_error: Nm) -> RefItems {
+        let geom = AreaGeom::new(&area.outline, &area.holes, &area.layers);
+        let items = enclosed_items(design, &geom, copper, Some(&area.zone_id), max_error);
         let mut r = RefItems { items, ..Default::default() };
         if let Some(dr) = &design.drawings {
             r.locked = dr.locked_ids.iter().cloned().collect();
             for it in &r.items {
-                if let Some(g) = dr.parent_group(it.id()) {
+                if let Some(p) = dr.tuning_patterns.iter().find(|p| p.member_ids.iter().any(|m| m == it.id())) {
+                    r.pattern_of.insert(it.id().to_string(), p.id.clone());
+                    r.patterns.insert(p.id.clone(), p.clone());
+                } else if let Some(g) = dr.parent_group(it.id()) {
                     r.group_of.insert(it.id().to_string(), g.id.clone());
                     r.groups.insert(g.id.clone(), (g.name.clone(), g.design_block.clone()));
                 }
@@ -270,6 +334,7 @@ pub(crate) struct TargetSide<'a> {
     /// The zone of the target area, `None` for the group an Apply Design Block Layout works on (its area is a temporary one that is not on the board).
     pub zone: Option<&'a str>,
     pub outline: &'a [Point],
+    pub holes: &'a [Vec<Point>],
     pub layers: &'a [String],
     pub center: Point,
     /// `PLACEMENT_SOURCE_T::GROUP_PLACEMENT`.
@@ -296,6 +361,14 @@ impl Placing {
     fn point(self, p: Point) -> Point {
         let r = if self.rot == 0 { p } else { super::multichannel_facts::rotate_about_origin(p, self.rot) };
         Point { x: r.x + self.disp.x, y: r.y + self.disp.y }
+    }
+
+    /// `newGroup->Rotate( VECTOR2( 0, 0 ), rot ); newGroup->Move( disp );` of a tuning pattern copied with its tracks (`PCB_TUNING_PATTERN::Rotate`, `Move`): its
+    /// origin, its end and its base lines.
+    fn apply_pattern(self, p: &mut TuningPattern) {
+        for q in std::iter::once(&mut p.origin).chain(std::iter::once(&mut p.end)).chain(p.base_line.iter_mut()).chain(p.base_line_coupled.iter_mut()) {
+            *q = self.point(*q);
+        }
     }
 
     fn apply(self, it: &mut Item, copper: usize, outer: &(Option<String>, Option<String>), max_error: Nm) {
@@ -362,8 +435,10 @@ impl Board<'_> {
 
         // What leaves the target: its routing, then its other items (a group's temporary area is not on the board, so it finds nothing).
         let mut gone: BTreeSet<String> = BTreeSet::new();
+        let max_error = self.model.board.max_error_nm;
         if t.zone.is_some() {
-            for it in enclosed_items(orig, t.outline, t.layers, &copper_layers, t.zone) {
+            let geom = AreaGeom::new(t.outline, t.holes, t.layers);
+            for it in enclosed_items(orig, &geom, &copper_layers, t.zone, max_error) {
                 let wanted = if it.is_routing() {
                     opts.copy_routing && !(locked_now.contains(it.id()) && !opts.include_locked_items) && !(opts.connected_routing_only && !target_nets.contains(&it.net())) && target_layers.contains(it.layer().as_str())
                 } else {
@@ -424,6 +499,7 @@ impl Board<'_> {
         {
             let mut taken = self.mc_all_ids();
             let mut new_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            let mut new_patterns: BTreeMap<String, Vec<String>> = BTreeMap::new();
             let mut minted: Vec<(String, String)> = Vec::new();
             self.mc_remove_items(&gone);
             for (n, (mut it, source)) in incoming.into_iter().enumerate() {
@@ -437,10 +513,26 @@ impl Board<'_> {
                     dr.locked_ids.dedup();
                 }
                 if preserve_groups {
-                    if let Some(g) = r.items.group_of.get(&source) {
+                    if let Some(p) = r.items.pattern_of.get(&source) {
+                        new_patterns.entry(p.clone()).or_default().push(new_id);
+                    } else if let Some(g) = r.items.group_of.get(&source) {
                         new_groups.entry(g.clone()).or_default().push(new_id);
                     }
                 }
+            }
+            // `fixupParentGroup`: the pattern a copied track was a track of is duplicated (`Duplicate( false )`, its items cleared, out of any group), turned and moved
+            // like its tracks (`if( newGroup->Type() == PCB_GENERATOR_T ) { newGroup->Rotate(..); newGroup->Move(..); }`), and the copies are its tracks.
+            if !new_patterns.is_empty() {
+                let dr = self.drawings_mut();
+                for (p, members) in new_patterns {
+                    let Some(mut copy) = r.items.patterns.get(&p).cloned() else { continue };
+                    copy.id.clear();
+                    placing.apply_pattern(&mut copy);
+                    copy.member_ids = members;
+                    dr.tuning_patterns.push(copy);
+                }
+                // (`m_groupableItems` has the copied tracks, not the pattern: it is added to the board by `aCommit->Add( newGroup )` only)
+                dr.assign_missing_ids();
             }
             if !new_groups.is_empty() {
                 for (g, members) in new_groups {
@@ -477,13 +569,15 @@ impl Board<'_> {
             }
         }
 
-        // The target's own area takes the reference area's shape.
+        // The target's own area takes the reference area's shape: `RemoveAllContours(); AddPolygon( newTargetOutline )`, the reference's outline alone (`COutline( 0 )`),
+        // so the target loses its holes and does not take the reference's.
         if let Some(zone) = t.zone {
             if !r.outline.is_empty() {
                 let outline: Vec<Point> = r.outline.iter().map(|p| placing.point(*p)).collect();
                 if let Some(rt) = self.design.routing.as_mut() {
                     if let Some(z) = rt.zones.iter_mut().find(|z| z.id == zone) {
                         z.outline = outline;
+                        z.holes.clear();
                     }
                 }
             }
@@ -509,6 +603,7 @@ impl Board<'_> {
             out.extend(dr.tables.iter().map(|t| t.id.clone()));
             out.extend(dr.barcodes.iter().map(|b| b.id.clone()));
             out.extend(dr.board_items.ids().map(String::from));
+            out.extend(dr.tuning_patterns.iter().map(|p| p.id.clone()));
         }
         out
     }
@@ -530,6 +625,9 @@ impl Board<'_> {
             dr.dimensions.retain(|d| !ids.contains(&d.id));
             dr.board_items.text_boxes.retain(|t| !ids.contains(&t.id));
             dr.board_items.points.retain(|p| !ids.contains(&p.id));
+            dr.board_items.images.retain(|i| !ids.contains(&i.id));
+            dr.tables.retain(|t| !ids.contains(&t.id));
+            dr.barcodes.retain(|b| !ids.contains(&b.id));
             dr.locked_ids.retain(|l| !ids.contains(l));
         }
     }
@@ -602,6 +700,29 @@ impl Board<'_> {
                 p.id = mint("pnt", format!("{},{}", p.at.x, p.at.y));
                 let id = p.id.clone();
                 self.drawings_mut().board_items.points.push(p.clone());
+                id
+            }
+            Item::Table(tb) => {
+                tb.id = mint("tbl", tb.id_seed());
+                // a copy is a new table of KiCad's (`Clone()` keeps the uuid, the commit's `Add` gives the board a new one when the file is written)
+                tb.uuid.clear();
+                for c in tb.cells.iter_mut() {
+                    c.uuid.clear();
+                }
+                let id = tb.id.clone();
+                self.drawings_mut().tables.push(tb.clone());
+                id
+            }
+            Item::Barcode(b) => {
+                b.id = mint("bar", format!("{}|{},{}|{}", b.text, b.at.x, b.at.y, b.layer));
+                let id = b.id.clone();
+                self.drawings_mut().barcodes.push(b.clone());
+                id
+            }
+            Item::Image(i) => {
+                i.id = mint("img", format!("{}|{},{}", i.layer, i.at.x, i.at.y));
+                let id = i.id.clone();
+                self.drawings_mut().board_items.images.push(i.clone());
                 id
             }
         }
@@ -682,7 +803,7 @@ impl Board<'_> {
             None => None,
         };
         let copper: Vec<String> = self.model.board.layers.clone();
-        let items = RefItems::of_board(&orig, refa, &copper);
+        let items = RefItems::of_board(&orig, refa, &copper, self.model.board.max_error_nm);
         let ref_side = RefSide { fps: &mc.fps, outline: &refa.outline, layers: &refa.layers, center: refa.center, items: &items, design_block: false };
 
         let mut outcomes: Vec<Outcome> = Vec::new();
@@ -699,7 +820,7 @@ impl Board<'_> {
                 first_problem.get_or_insert_with(|| format!("{}: {}", if target.name.is_empty() { &target.zone_id } else { &target.name }, res.message));
                 continue;
             }
-            let tgt_side = TargetSide { zone: Some(&target.zone_id), outline: &target.outline, layers: &target.layers, center: target.center, group: false };
+            let tgt_side = TargetSide { zone: Some(&target.zone_id), outline: &target.outline, holes: &target.holes, layers: &target.layers, center: target.center, group: false };
             outcomes.push(self.mc_copy_contents(&orig, &ref_side, &tgt_side, &mc.fps, &res.pairs, opts, anchor));
         }
         if outcomes.is_empty() {
@@ -726,6 +847,12 @@ impl Board<'_> {
                     g.member_ids.retain(|m| !members.contains(m));
                 }
                 dr.groups.retain(|g| !g.member_ids.is_empty());
+                // a copied track leaves the tuning pattern copied for it the same way; a pattern left with no track is a ghost KiCad does not save
+                // (`format( const PCB_GENERATOR* )`: "Some conditions appear to still be creating ghost tuning patterns. Don't save them.")
+                for p in dr.tuning_patterns.iter_mut() {
+                    p.member_ids.retain(|m| !members.contains(m));
+                }
+                dr.tuning_patterns.retain(|p| !p.member_ids.is_empty());
                 dr.groups.push(Group { id: String::new(), name: String::new(), member_ids: members, design_block: String::new() });
                 eda_model::groups::GroupHost::assign_group_ids(dr);
             }
@@ -782,7 +909,7 @@ impl Board<'_> {
         let items = super::multichannel_facts::block_items(&clip);
         // The block's area is all the copper layers (`LSET::AllCuMask()`): only what is on copper comes across.
         let ref_side = RefSide { fps: &block_fps, outline: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, items: &items, design_block: true };
-        let tgt_side = TargetSide { zone: None, outline: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, group: true };
+        let tgt_side = TargetSide { zone: None, outline: &[], holes: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, group: true };
         let opts = RepeatOptions { copy_routing: true, connected_routing_only: false, copy_placement: true, copy_other_items: true, group_items: false, include_locked_items: true, anchor: None };
         // "If no anchor is provided, pick the first matched pair": the group stays where it is.
         let anchor = res.pairs.first().map(|(r, _)| *r);
