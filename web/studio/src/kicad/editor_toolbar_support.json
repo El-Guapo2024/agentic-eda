@@ -90,7 +90,7 @@
     "eeschema.InteractiveEdit.symbolProperties": "supported",
     "eeschema.InteractiveEdit.pinTable": "supported",
     "common.Control.showDatasheet": "supported",
-    "eeschema.InspectionTool.checkSymbol": "not ported: the symbol checker is ERC, which only kicad-cli runs",
+    "eeschema.InspectionTool.checkSymbol": "supported",
     "eeschema.SymbolLibraryControl.toggleSyncedPinsMode": "supported",
     "eeschema.SymbolLibraryControl.addSymbolToSchematic": "supported",
     "common.Control.toggleGrid": "supported",
