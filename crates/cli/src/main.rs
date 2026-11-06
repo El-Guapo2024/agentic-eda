@@ -96,6 +96,7 @@ mod kicad_lane;
 mod tune_api;
 mod inspect_api;
 mod net_inspector_api;
+mod drill_groups_api;
 mod board_net_edits;
 mod tune_edit;
 

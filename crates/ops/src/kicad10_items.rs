@@ -109,10 +109,20 @@ impl<'a> Board<'a> {
                 removed.push(v.id.clone());
             }
         }
-        // `matchesRef`: the template's size, drill, layers and net (the position aside). A new stitch net is no mismatch: `PCB_VIA_STITCH::SetNetCode` gave every member the
-        // net before `Update` (the dialog's `SetNetCode( newNetCode )`), so a kept via keeps its id and takes the net.
+        // `matchesRef`: the template's size, drill, layers and net (the position aside), its via type and its padstack -- "size, drill, layer span, mask/paste attributes,
+        // backdrill and post-machining" and the teardrops: the tokens of the template's `(via ..)` but `free` and the zone layer connections, which `matchesRef` does not
+        // compare. A new stitch net is no mismatch: `PCB_VIA_STITCH::SetNetCode` gave every member the net before `Update` (the dialog's `SetNetCode( newNetCode )`), so a
+        // kept via keeps its id and takes the net.
         let t = &stitch.via;
-        let matches = |v: &Via| v.diameter == t.size_nm && v.drill == t.drill_nm && v.from_layer == t.from_layer && v.to_layer == t.to_layer;
+        let template = eda_kicad::via_template_extra(t);
+        let extras: BTreeMap<String, eda_model::via_extra::ViaExtra> = self.design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|x| members.contains(&x.id)).map(|x| (x.id.clone(), x.clone())).collect();
+        let padstack = |e: &eda_model::via_extra::ViaExtra| -> (eda_model::via_extra::ViaKind, Vec<String>) {
+            (e.kind, e.tokens.iter().filter(|tok| !(tok.as_str() == "free" || tok.starts_with("(free ") || tok.starts_with("(zone_layer_connections"))).cloned().collect())
+        };
+        let wanted = padstack(&template);
+        let matches = |v: &Via| {
+            v.diameter == t.size_nm && v.drill == t.drill_nm && v.from_layer == t.from_layer && v.to_layer == t.to_layer && padstack(extras.get(&v.id).unwrap_or(&Default::default())) == wanted
+        };
         let mut keep_ids: Vec<String> = Vec::new();
         let mut moves: Vec<(String, Point)> = Vec::new();
         let mut adds: Vec<Point> = Vec::new();
@@ -150,11 +160,16 @@ impl<'a> Board<'a> {
         rt.assign_missing_ids();
         let new_ids: Vec<String> = rt.vias.iter().filter(|v| !before.contains(&v.id)).map(|v| v.id.clone()).collect();
         self.sort_routing();
-        // "Vias must be marked free to avoid connectivity stealing them away"
+        // A copy of the template (`m_viaTemplate->Clone()`): its type and tokens. "Vias must be marked free to avoid connectivity stealing them away" -- the template's own
+        // `(free yes)`, or one added when its text has none.
+        let mut made = template.clone();
+        if !made.tokens.iter().any(|tok| tok == "free" || tok.starts_with("(free ")) {
+            made.tokens.push("(free yes)".into());
+        }
         let dr = self.drawings_mut();
         dr.via_extras.retain(|x| !removed.contains(&x.id));
         for vid in &new_ids {
-            dr.via_extras.push(eda_model::via_extra::ViaExtra { id: vid.clone(), kind: Default::default(), tokens: vec!["(free yes)".into()] });
+            dr.via_extras.push(eda_model::via_extra::ViaExtra { id: vid.clone(), ..made.clone() });
         }
         let mut member_ids: Vec<String> = keep_ids.into_iter().chain(new_ids).collect();
         member_ids.sort();

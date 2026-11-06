@@ -114,6 +114,12 @@ pub enum PcbItemCmd {
         #[serde(default)]
         filter: eda_model::drill_chart::DrillChartFilter,
     },
+    /// Drill Chart Properties' OK (`DIALOG_GENERATED_TABLE_PROPERTIES` with `PANEL_DRILL_CHART_OPTIONS`, KiCad 25ec2335; "Edit Drill Chart"): the layer, units, decimal places,
+    /// columns, filter, totals row, the board's grouping keys and the strokes, the chart rebuilt. See [`crate::drill_chart::DrillChartEdit`].
+    EditDrillChart { id: String, chart: crate::drill_chart::DrillChartEdit },
+    /// The board's drill symbol profile: Drill Groups' mark of a group and its Freeze assignments (`DIALOG_DRILL_GROUPS`), Board Setup's Drill Chart page; every chart rebuilt.
+    /// See [`crate::drill_chart::DrillProfileEdit`].
+    SetDrillProfile { profile: crate::drill_chart::DrillProfileEdit },
     /// `PCB_CONTROL::PlaceDrillMap` ("Place Drill Map"): a drill map on `layer`, no offset, the profile's mark size.
     PlaceDrillMap { layer: String },
     /// The Properties panel's edits of a drill map (Offset X / Y, Symbol Size, Hole Span, Outline Slots, Guide Cross): every field replaced, in place.
@@ -143,7 +149,8 @@ impl PcbItemCmd {
             PcbItemCmd::SetViaStitch { id, stitch, .. } => vec![id.as_deref().unwrap_or(stitch.net.as_str())],
             PcbItemCmd::DeleteViaStitch { id } => vec![id.as_str()],
             PcbItemCmd::PlaceDrillChart { layer, .. } | PcbItemCmd::PlaceDrillMap { layer } => vec![layer.as_str()],
-            PcbItemCmd::SetDrillChart { id, .. } | PcbItemCmd::EditDrillMap { id, .. } | PcbItemCmd::DeleteDrillMap { id } => vec![id.as_str()],
+            PcbItemCmd::SetDrillChart { id, .. } | PcbItemCmd::EditDrillChart { id, .. } | PcbItemCmd::EditDrillMap { id, .. } | PcbItemCmd::DeleteDrillMap { id } => vec![id.as_str()],
+            PcbItemCmd::SetDrillProfile { .. } => vec!["drill_profile"],
             PcbItemCmd::EditBarcode { id, .. } | PcbItemCmd::DeleteBarcode { id } => vec![id.as_str()],
             PcbItemCmd::EditTextBox { id, .. }
             | PcbItemCmd::DeleteTextBox { id }
@@ -190,6 +197,27 @@ impl PcbItemCmd {
             PcbItemCmd::DeleteViaStitch { id } => format!("via-stitch delete {id}"),
             PcbItemCmd::PlaceDrillChart { layer, at } => format!("drill-chart place --layer {layer} --at {},{}", mm(at.x), mm(at.y)),
             PcbItemCmd::SetDrillChart { id, units, precision, show_totals, .. } => format!("drill-chart edit {id} --units {} --precision {precision} --totals {show_totals}", units.token()),
+            PcbItemCmd::EditDrillChart { id, chart: c } => format!(
+                "drill-chart edit {id} --layer {} --units {} --precision {} --columns {} --totals {}",
+                c.layer,
+                c.units.token(),
+                c.precision,
+                c.columns.iter().map(|col| col.id.token()).collect::<Vec<_>>().join(","),
+                c.show_totals
+            ),
+            PcbItemCmd::SetDrillProfile { profile: p } => {
+                let mut out = "drill-profile set".to_string();
+                if let Some(g) = &p.assignment {
+                    out.push_str(&format!(" --group {:?} --mark {}", g.key, g.mark.mode.token()));
+                }
+                if let Some(f) = p.freeze_assignments {
+                    out.push_str(&format!(" --freeze {f}"));
+                }
+                if let Some(g) = &p.group_by {
+                    out.push_str(&format!(" --group-by {}", g.iter().map(|k| k.token()).collect::<Vec<_>>().join(",")));
+                }
+                out
+            }
             PcbItemCmd::PlaceDrillMap { layer } => format!("drill-map place --layer {layer}"),
             PcbItemCmd::EditDrillMap { id, map: m } => format!("drill-map edit {id} --layer {} --offset {},{} --size {}", m.layer, mm(m.offset.x), mm(m.offset.y), mm(m.size_nm)),
             PcbItemCmd::DeleteDrillMap { id } => format!("drill-map delete {id}"),
@@ -218,7 +246,8 @@ impl PcbItemCmd {
             PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
             PcbItemCmd::AddGridItem { .. } | PcbItemCmd::EditGridItem { .. } | PcbItemCmd::DeleteGridItem { .. } => "grid-item",
             PcbItemCmd::SetViaStitch { .. } | PcbItemCmd::DeleteViaStitch { .. } => "via-stitch",
-            PcbItemCmd::PlaceDrillChart { .. } | PcbItemCmd::SetDrillChart { .. } => "drill-chart",
+            PcbItemCmd::PlaceDrillChart { .. } | PcbItemCmd::SetDrillChart { .. } | PcbItemCmd::EditDrillChart { .. } => "drill-chart",
+            PcbItemCmd::SetDrillProfile { .. } => "drill-profile",
             PcbItemCmd::PlaceDrillMap { .. } | PcbItemCmd::EditDrillMap { .. } | PcbItemCmd::DeleteDrillMap { .. } => "drill-map",
         }
     }
@@ -249,6 +278,8 @@ impl<'a> Board<'a> {
             PcbItemCmd::DeleteViaStitch { id } => self.delete_via_stitch(id),
             PcbItemCmd::PlaceDrillChart { layer, at } => self.place_drill_chart(layer, *at),
             PcbItemCmd::SetDrillChart { id, units, precision, show_totals, filter } => self.set_drill_chart(id, *units, *precision, *show_totals, *filter),
+            PcbItemCmd::EditDrillChart { id, chart } => self.edit_drill_chart(id, chart),
+            PcbItemCmd::SetDrillProfile { profile } => self.set_drill_profile(profile),
             PcbItemCmd::PlaceDrillMap { layer } => self.place_drill_map(layer),
             PcbItemCmd::EditDrillMap { id, map } => self.edit_drill_map(id, map.clone()),
             PcbItemCmd::DeleteDrillMap { id } => self.delete_drill_map(id),

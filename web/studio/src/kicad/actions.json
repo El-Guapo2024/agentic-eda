@@ -11,7 +11,7 @@
       "common/hotkey_store.cpp",
       "eeschema/tools/sch_actions.cpp"
     ],
-    "kicad10Additions": "pcbnew.GridItem.place, pcbnew.InteractiveDrawing.drawViaStitchArea, pcbnew.Generator.excludeStitchVia, pcbnew.Generator.clearStitchViaExclusions, pcbnew.InteractiveDrawing.placeDrillChart, pcbnew.InteractiveDrawing.placeDrillMap: from pcbnew/tools/pcb_actions.cpp of KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
+    "kicad10Additions": "pcbnew.GridItem.place, pcbnew.InteractiveDrawing.drawViaStitchArea, pcbnew.Generator.excludeStitchVia, pcbnew.Generator.clearStitchViaExclusions, pcbnew.InteractiveDrawing.placeDrillChart, pcbnew.InteractiveDrawing.placeDrillMap, pcbnew.InteractiveDrawing.showDrillGroups: from pcbnew/tools/pcb_actions.cpp of KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
   },
   "actions": [
     {
@@ -12208,6 +12208,21 @@
       "flags": [
         "AF_ACTIVATE"
       ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.showDrillGroups",
+      "label": "Drill Groups...",
+      "tooltip": "Inspect drill groups and assign symbols",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": []
     }
   ]
 }

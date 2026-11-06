@@ -1096,6 +1096,8 @@ fn handle(
         ("POST", "/api/tune/regenerate") => respond(stream, "200 OK", "application/json", tune_api::regenerate(dir, &body).to_string().as_bytes()),
         // Inspect > Clearance Resolution / Constraints Resolution: read-only reports on which rule wins (`inspect_api`), no kicad-cli.
         ("GET", "/api/net_inspector") => respond(stream, "200 OK", "application/json", crate::net_inspector_api::net_inspector(dir).to_string().as_bytes()),
+        // KiCad 10's Drill Groups dialog: the board's holes grouped by its drill symbol profile, each with its mark (`drill_groups_api`).
+        ("GET", "/api/drill_groups") => respond(stream, "200 OK", "application/json", crate::drill_groups_api::drill_groups(dir).to_string().as_bytes()),
         ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
         ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
         // Find by Properties' Query tab: the expression language runs here, on the items the studio sends (`eda_drc::query`).

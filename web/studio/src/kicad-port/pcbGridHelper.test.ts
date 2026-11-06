@@ -309,3 +309,15 @@ test("Align leaves a selected grid item out (FindActiveGridAt's grid->IsSelected
   h.visibility = { ...visible, selected: new Set(["grd_a"]) };
   assert.deepEqual(h.align([610, 0]), [1_000, 0], "selected: the editor grid");
 });
+
+test("the router's points follow a grid item's Cursor role, not its Routing role (KiCad 25ec2335 reads PCB_GRID_ROLE::ROUTING nowhere)", () => {
+  const g = { ...newGridItem(0, 0), id: "grd_r", extent: [5_000, 5_000] as [number, number], spacing: [300, 300] as [number, number] };
+  // `snapToItem` with nothing under the cursor: `Align` on the wire grid (the via grid for a via), the grid helper's Align with the grid items.
+  const routing = { ...g, affects: { cursor: false, routing: true, placement: false } };
+  const { h: r } = make({ drawings: { shapes: [], texts: [], dimensions: [], grid_items: [routing] } as never });
+  assert.deepEqual(r.align([610, 0], "wires"), [1_000, 0], "a routing-only grid: the editor's wire grid");
+  const cursor = { ...g, affects: { cursor: true, routing: false, placement: false } };
+  const { h: c } = make({ drawings: { shapes: [], texts: [], dimensions: [], grid_items: [cursor] } as never });
+  assert.deepEqual(c.align([610, 0], "wires"), [600, 0], "a cursor grid owns the route's point");
+  assert.deepEqual(c.align([610, 0], "vias"), [600, 0], "and the via's");
+});

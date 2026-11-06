@@ -7,7 +7,7 @@ import type { Dispatch } from "react";
 import type { Action, StudioApi } from "../../state/store";
 import { openGroupDialog } from "../../state/commonDialogs";
 import { openBarcodeDialog, openRefImageDialog, openTextBoxDialog } from "../../state/pcbItemDialogs";
-import { openGridItemDialog, openViaStitchDialog } from "../../state/kicad10Dialogs";
+import { openDrillChartDialog, openGridItemDialog, openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { barcodeToCmd } from "../../kicad-port/barcodeShapes";
 import { padById } from "../../kicad-port/pcbItems";
 import { fieldById } from "../../kicad-port/fpFields";
@@ -15,6 +15,8 @@ import { tablesOf } from "../../kicad-port/tables";
 import { openTablePropertiesFor } from "../../actions/tableActions";
 
 export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch<Action>): void {
+  // KiCad 10's drill chart: Drill Chart Properties (`ShowPropertiesDialog`'s `PCB_DRILL_CHART_T`: "Not the generic table dialog").
+  if (api.getState().board?.drawings?.drill_charts?.some((c) => c.table_id === id)) return openDrillChartDialog(id);
   // `EDIT_TOOL::Properties`: table cells open Table Cell Properties (on every selected cell of the table), a table Table Properties.
   if (openTablePropertiesFor(tablesOf(api.getState().board), [...api.getState().selection], id)) return;
   // A tuning pattern (`PCB_TUNING_PATTERN::ShowPropertiesDialog`): the Tuning Pattern dialog, which tunes it again.

@@ -18,6 +18,8 @@
 import { useGridDisplay } from "../../state/commonOptions";
 import { gridYOf } from "../../kicad-port/gridSettings";
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
+import { chartRowCells } from "../../kicad-port/drillChartDialog";
+import { carryFrameTurn } from "../../kicad-port/gridFrame";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
 import { chosenViaOf, currentViaSize } from "../../kicad-port/routerVia";
@@ -724,7 +726,9 @@ export function Canvas() {
           void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
         } else if (plan.kind === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
-          openViaStitchDialog(null, newViaStitch(outline, board?.board_rules?.via_diameter ?? 0, board?.board_rules?.via_drill ?? 0));
+          // `defaultViaSize` / `defaultViaDrill`: `GetCurrentViaSize()` / `GetCurrentViaDrill()`, the via size chosen in the toolbar (kicad-port/routerVia.ts `currentViaSize`).
+          const current = board ? currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia) : null;
+          openViaStitchDialog(null, newViaStitch(outline, current?.diameter ?? 0, current?.drill ?? 0));
         } else if (plan.kind === "add") {
           const z = plan.zone;
           void api.addZone(z.net, z.layers[0] ?? activeLayerName(state.activeLayer, "F.Cu"), outline, z.settings, { layers: z.layers, name: z.name, locked: z.locked }).then(selectNew);
@@ -1470,7 +1474,10 @@ export function Canvas() {
       // (`perRefOffsetNm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
       // The grab point (`BestDragOrigin`): what R turns the carried items about, before the move (kicad-port/pcbCarry.ts `carryPress`).
       const { rotateQuarterTurns, flipped, perRefOffsetNm, ops } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, ops, grabNm: [ox, oy], pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
+      // KiCad 10's placement grids: a footprint carried into one turns to its frame (`applyMoveFrameOrientation`, kicad-port/gridFrame.ts).
+      const frame = packing ? null : carryFrameTurn(board, refs, ops ?? [], sx - ox, sy - oy, [ox, oy], state.movePreview?.frameDeg, state.prefs.rotationStepDeg);
+      const turned = frame && frame.ops.length !== (ops?.length ?? 0) ? frame.ops : ops;
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, ops: turned, frameDeg: frame?.frameDeg, grabNm: [ox, oy], pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
       return;
     }
 
@@ -1494,7 +1501,9 @@ export function Canvas() {
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
       const { rotateQuarterTurns, flipped, ops } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxNm: dx, dyNm: dy, rotateQuarterTurns, flipped, ops, grabNm: [drag.snapOrigin[0], drag.snapOrigin[1]], pivotNm: drag.pivotNm, flipPivotNm: drag.flipPivotNm } });
+      const frame = board ? carryFrameTurn(board, drag.refs, ops ?? [], dx, dy, drag.snapOrigin, state.movePreview?.frameDeg, state.prefs.rotationStepDeg) : null;
+      const turned = frame && frame.ops.length !== (ops?.length ?? 0) ? frame.ops : ops;
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxNm: dx, dyNm: dy, rotateQuarterTurns, flipped, ops: turned, frameDeg: frame?.frameDeg, grabNm: [drag.snapOrigin[0], drag.snapOrigin[1]], pivotNm: drag.pivotNm, flipPivotNm: drag.flipPivotNm } });
     } else if (drag.kind === "zoneCorner") {
       if (!motion?.dragging) return; // PCB_POINT_EDITOR::Main starts editing at the drag (`evt->IsDrag`), not at the press
       // `grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ), { item } )`: on the zone's layer, not onto the zone itself.
@@ -1763,6 +1772,11 @@ export function Canvas() {
         dispatch({ type: "ENTER_GROUP", id: hitGroup });
         return;
       }
+      // `selectChartRow`: a double click on a data row of the one selected drill chart selects that row's cells, not the chart's dialog (kicad-port/drillChartDialog.ts).
+      const chart = board.drawings?.drill_charts?.find((c) => c.table_id === refs[0]);
+      const chartTable = chart ? board.drawings?.tables?.find((t) => t.id === chart.table_id) : undefined;
+      const rowCells = chart && chartTable ? chartRowCells(chart, chartTable, ...worldAt(e)) : null;
+      if (rowCells) return dispatch({ type: "SET_SELECTION", refs: rowCells, raw: true });
       openPropertiesFor(refs[0]!, api, dispatch);
     }
   };

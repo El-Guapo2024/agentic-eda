@@ -271,7 +271,7 @@ fn text_box_knockout(out: &mut ShapePolySet, tb: &TextBox) {
 }
 
 /// The fields of a placed footprint that have a text and a place: Reference, Value and the user fields (`add_footprint_art` lists the same ones), with the text each shows.
-fn footprint_fields(design: &Design, part: &eda_model::Part, fp: &FootprintInstance, footprint: &eda_model::Footprint) -> Vec<(FieldLayout, String)> {
+pub(crate) fn footprint_fields(design: &Design, part: &eda_model::Part, fp: &FootprintInstance, footprint: &eda_model::Footprint) -> Vec<(FieldLayout, String)> {
     let value = part.value.as_deref().unwrap_or(&fp.id);
     let reference = effective_reference(design, fp, footprint);
     let value_layout = effective_value(design, fp);
