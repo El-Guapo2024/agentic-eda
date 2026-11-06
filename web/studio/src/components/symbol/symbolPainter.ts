@@ -26,13 +26,16 @@ import { resolveLibPoint, resolvePin, symbolTransformMatrix } from "../schematic
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
 import { paintEditorGrid } from "../canvas/gridPaint";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
-import { defaultPenNm, textOrigin, FIELD_SIZE_NM } from "../../kicad-port/schText";
+import { FIELD_SIZE_NM } from "../../kicad-port/schText";
+import { beginTextRecord, paintKicadText } from "../text/kicadTextPaint";
+import { resolveFont } from "../../kicad-port/kicadText";
+import { deviceTextDrawSpec, schFieldDrawSpec, schTextBoxDrawSpec } from "../../kicad-port/schTextSpecs";
 import { shownText } from "../../kicad-port/schFieldEdit";
 import { electricalTypeLayout, pinLabelsShown, pinShown } from "../../kicad-port/symPinText";
 import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/symPinAltIcon";
 import { DEFAULT_PIN_TEXTS, PIN_TEXT_SIZE_NM, shownPinName, type PinTexts } from "../schematic/pinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
-import { boxOfTextBox, layoutLibTextBox, type LibTextBox } from "../../kicad-port/symTextBox";
+import { boxOfTextBox, isVertical, textBoxMarginMm, type LibTextBox } from "../../kicad-port/symTextBox";
 import { bezierFromClicks } from "../../kicad-port/symBezier";
 import type { SchColor } from "../../api/schEditTypes";
 import { rgba } from "../schematic/schGraphicsPainter";
@@ -75,19 +78,13 @@ function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" | "t
 }
 
 /**
- * `SCH_PAINTER::draw( SCH_TEXT )` of a symbol's text: at its size, bold with a fifth of the size for a pen (`GetPenSizeForBold`), italic leaning, justified against its anchor in
- * its own axes (centred on both unless it says otherwise), a text at 90 degrees running up the sheet -- as a field of the symbol is drawn (`drawField`).
+ * `SCH_PAINTER::draw( SCH_TEXT )` of a symbol's text (`LAYER_DEVICE`, kicad-port/schTextSpecs.ts `deviceTextDrawSpec`): at its size, bold with a fifth of the size for a pen
+ * (`GetPenSizeForBold`), italic leaning, at the centre of its box (its left or right edge for a left or right justification -- centred on both unless it says otherwise) and
+ * centred vertically, a text at 90 degrees running up the sheet, in its face (Text Properties' Font: an outline font's once the browser has it, UI-LEFT-2 CC1).
  */
-export function drawLibText(ctx: CanvasRenderingContext2D, g: Pick<Extract<LibrarySymbolGraphic, { kind: "text" }>, "text" | "at" | "angle_deg" | "size_mm" | "bold" | "italic" | "h_align" | "v_align">, color: string, atNm?: [number, number]) {
-  const sizeNm = g.size_mm * 1e6;
-  const thickness = g.bold ? Math.round(sizeNm / 5) : defaultPenNm(sizeNm);
-  const [x, y] = atNm ?? mmPointToNm(g.at);
-  const [dx, dy] = textOrigin(measureStrokeText(g.text, sizeNm), sizeNm, thickness, g.h_align ?? "center", g.v_align ?? "center");
-  ctx.save();
-  ctx.translate(x, y);
-  if (Math.abs(g.angle_deg % 180) === 90) ctx.rotate(-Math.PI / 2);
-  drawStrokeText(ctx, g.text, dx, dy, { sizeNm, thicknessNm: thickness, justify: "left", color, italic: !!g.italic });
-  ctx.restore();
+export function drawLibText(ctx: CanvasRenderingContext2D, g: Pick<Extract<LibrarySymbolGraphic, { kind: "text" }>, "text" | "at" | "angle_deg" | "size_mm" | "bold" | "italic" | "h_align" | "v_align" | "font" | "id">, color: string, atNm?: [number, number]) {
+  const look = { at: atNm ?? mmPointToNm(g.at), h: g.h_align ?? "center", v: g.v_align ?? "center", vertical: Math.abs(g.angle_deg % 180) === 90, size_nm: g.size_mm * 1e6, bold: !!g.bold, italic: !!g.italic };
+  paintKicadText(ctx, deviceTextDrawSpec(g.text, look, resolveFont(g.font, look.bold, look.italic)), g.font, { color, record: g.id ? { tag: "sym", id: g.id } : undefined });
 }
 
 /** Internal-space (µm) point for one `LibrarySymbolGraphic`/`LibrarySymbolPin`'s own anchor -- used only by the canvas's hit-testing/move-preview, not by this file's own drawing (which goes through `resolveGraphic`/`resolvePin` above instead). */
@@ -157,13 +154,12 @@ function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, layerCol: 
     ctx.fillStyle = g.fill === "color" ? own(g.fill_color) ?? layerColor("LAYER_DEVICE_BACKGROUND") : g.fill === "background" ? layerColor("LAYER_DEVICE_BACKGROUND") : color;
     ctx.fillRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
   }
-  const sizeNm = g.size_mm * 1e6;
-  const layout = layoutLibTextBox(g, measureStrokeText);
-  ctx.save();
-  ctx.translate(layout.origin[0], layout.origin[1]);
-  if (layout.vertical) ctx.rotate(-Math.PI / 2);
-  for (const l of layout.lines) drawStrokeText(ctx, l.text, l.u, l.v, { sizeNm, justify: l.justify, italic: !!g.italic, thicknessNm: g.bold ? sizeNm / 5 : undefined, color });
-  ctx.restore();
+  // the text broken to the box less its margin, from `SCH_TEXTBOX::GetDrawPos`, in its face (kicad-port/schTextSpecs.ts `schTextBoxDrawSpec`)
+  if (g.text) {
+    const m = Math.round(textBoxMarginMm(g) * 1e6);
+    const look = { start: [b.left, b.top] as const, end: [b.right, b.bottom] as const, margins: [m, m, m, m] as const, text: g.text, angleDeg: isVertical(g) ? 90 : 0, size_nm: g.size_mm * 1e6, h: g.h_align, v: g.v_align, bold: !!g.bold, italic: !!g.italic };
+    paintKicadText(ctx, schTextBoxDrawSpec(look, resolveFont(g.font, look.bold, look.italic)), g.font, { color, record: g.id ? { tag: "sym", id: g.id } : undefined });
+  }
   if (g.stroke_mm >= 0) {
     ctx.strokeStyle = selected ? layerCol : own(g.stroke_color) ?? layerCol;
     ctx.lineWidth = g.stroke_mm > 0 ? Math.max(g.stroke_mm * 1e6, 21_200) : 152_400;
@@ -257,19 +253,16 @@ function fieldColor(name: string): string {
   return layerColor(name === "Reference" ? "LAYER_REFERENCEPART" : name === "Value" ? "LAYER_VALUEPART" : "LAYER_FIELDS");
 }
 
-/** One field where KiCad puts it: the anchor, the justification in the text's own axes, a text at 90 degrees turned a quarter counter-clockwise about its anchor. */
+/**
+ * One field where KiCad draws it (`SCH_PAINTER::draw( SCH_FIELD )`, kicad-port/schTextSpecs.ts `schFieldDrawSpec`): centred on the centre of its box (the box of its text
+ * with its own justification, turned a quarter counter-clockwise about its anchor for a field at 90 degrees), in its face; a bold one with a fifth of its size for a pen
+ * (`GetPenSizeForBold`), an italic one leaning.
+ */
 function drawField(ctx: CanvasRenderingContext2D, f: SchField, color: string) {
   const text = shownText(f);
   if (!text) return;
-  const sizeNm = f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM;
-  // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
-  const thickness = f.bold ? Math.round(sizeNm / 5) : defaultPenNm(sizeNm);
-  const [dx, dy] = textOrigin(measureStrokeText(text, sizeNm), sizeNm, thickness, f.h, f.v);
-  ctx.save();
-  ctx.translate(f.at[0], f.at[1]);
-  if (f.vertical) ctx.rotate(-Math.PI / 2);
-  drawStrokeText(ctx, text, dx, dy, { sizeNm, thicknessNm: thickness, justify: "left", color, italic: f.italic });
-  ctx.restore();
+  const look = { at: f.at, h: f.h, v: f.v, vertical: f.vertical, size_nm: f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM, bold: !!f.bold, italic: !!f.italic };
+  paintKicadText(ctx, schFieldDrawSpec(text, look, resolveFont(f.font, look.bold, look.italic)), f.font, { color, record: f.id ? { tag: "sym", id: f.id } : undefined });
 }
 
 /** `drawAltPinModesIcon`: the strokes of the glyph, turned a quarter counter-clockwise about its centre beside a pin that runs up or down. */
@@ -301,6 +294,8 @@ export function paintSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, 
 }
 
 function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, symbol: PaintedSymbol, opts: SymPaintOptions) {
+  // what `window.__edaText.sym` reports is what this paint draws
+  beginTextRecord("sym");
   if (opts.gridVisible) {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
     paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx }, layerColor("grid"), undefined, "symbol");

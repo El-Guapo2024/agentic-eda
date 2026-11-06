@@ -12,30 +12,26 @@
 // footprint, and one on the reference's strokes picks the text -- the text being much the smaller (UI-LEFT P15).
 //
 // The collector itself takes a text by its box (`EDA_TEXT::TextHitTest`: the point turned into the text's frame, `GetTextBox().GetInflated( aAccuracy ).Contains`);
-// only the heuristics read the strokes. The box here is that of the strokes, in the text's own frame. The strokes are the stroke font's glyphs
-// (components/text/strokeFont.ts `strokeTextSegments`) placed where KiCad places them (`FONT::getLinePositions`, `STROKE_FONT::GetTextAsGlyphs`), not where the
-// canvas draws them: the canvas centres a text on half its advance and puts its baseline 0.36 of its size below the anchor, KiCad on the advance less
-// `INTER_CHAR` and 0.415 of the size less 0.052 of the pen, so the canvas' strokes stand 0.1 of the size along the text and 0.05 of it up from KiCad's. A click
-// at a field's anchor is on KiCad's strokes of "U1" and 0.1 mm off the canvas' (UI-LEFT P15, footprint-edit.check.js); a click on a drawn stroke is still
-// well within the slop of KiCad's.
+// only the heuristics read the strokes. The box here is that of the strokes, in the text's own frame. The strokes are the painter's: `kicad-port/kicadText.ts` lays the
+// text out as `FONT::getLinePositions` and `STROKE_FONT::GetTextAsGlyphs` do (kicad-cli's plot is the proof, `kicadText.test.ts`), and the canvas draws that layout
+// (UI-LEFT-2 PP1; before, the canvas stood 0.1 of the size along the text and 0.05 up from KiCad's place, and this file's hit test centred a line on its advance less `INTER_CHAR`,
+// which KiCad takes off the box only, so the two differed by 0.1 of the size the other way). A text in an outline font is hit in the box of each run's ink (KiCad's
+// `GetEffectiveTextShape` gives the glyphs' triangles).
 //
 // Pure: no store, no DOM.
 import type { FieldInfo } from "../api/types";
-import { measureStrokeText, strokeTextSegments, type StrokeSegment } from "../components/text/strokeFont";
-import { fieldAsText } from "./fpFields";
+import type { StrokeSegment } from "../components/text/strokeFont";
+import { frameToWorld, layoutKicadText, layoutSegments, resolveFont, runInk } from "./kicadText";
+import { fieldSpec } from "./textSpecs";
 
 /** `GuessSelectionCandidates`' `MAX_SLOP` (pixels): `maxSlop = KiROUND( MAX_SLOP * aCollector.GetGuide()->OnePixelInIU() )`. */
 export const MAX_SLOP_PX = 5;
 
-/** `STROKE_FONT::GetInterline`: `FONT_METRICS`' 1.62 glyph heights, times the legacy factor 0.9583 (fpArtPaint.ts's INTERLINE). */
-const INTERLINE = 1.62 * 0.9583;
-
-/** `STROKE_FONT::GetTextAsGlyphs`' `INTER_CHAR`: the bounding box of a line ends this much of the size short of the cursor. */
-const INTER_CHAR = 0.2;
-
 /** A text's strokes and its pen, and its box: that of its strokes (the pen's width round them) in its own frame, about `anchor` turned by `angleRad`. */
 export interface TextStrokes {
   segs: StrokeSegment[];
+  /** An outline font's runs: the four corners of each one's ink on the board. */
+  areas: [number, number][][];
   pen: number;
   anchor: readonly [number, number];
   /** The canvas' (clockwise) turn of the text. */
@@ -52,49 +48,35 @@ function toFrame(s: Pick<TextStrokes, "anchor" | "angleRad">, x: number, y: numb
 }
 
 /**
- * The strokes of a footprint's field or text (a `FpTextInfo` through `artTextAsField`), at its real size, placed as `FONT::getLinePositions` places a stroke
- * text's lines in its own frame -- the turn and the mirror about the anchor (`GetTextAsGlyphs`' `aOrigin`) after:
- *
- *   offset.y = size - 0.052 * pen                                          ("Fudge factors to match 6.0 positioning"), less half of the block's height
- *                                                                          (centred) or all of it (bottom); the block is 1.17 sizes for the first line and an
- *                                                                          interline more for each other
- *   lineOffset.x = pen / 1.52 (left), -lineSize.x / 2 (centred), -( lineSize.x + pen / 1.52 ) (right)
- *                                                                          where `lineSize.x` is the line's advance less `INTER_CHAR` of the size
- *
- * The pen is the text's thickness (at most a quarter of the size, `Clamp_Text_PenSize`), or the default one of its size (`GetPenSizeForNormal`,
- * `GetPenSizeForBold`). The size is the text's height both ways, as the canvas draws it.
+ * The strokes of a footprint's field or text (a `FpTextInfo` through `artTextAsField`), at its real size, as the canvas draws them: `kicad-port/textSpecs.ts::fieldSpec`
+ * laid out by `layoutKicadText` (`FONT::getLinePositions`: the first baseline a size less 0.052 pens below the top of the block, the block centred or hung by the
+ * vertical justification, a line `pen / 1.52` in from the left, centred on half its advance or ended `pen / 1.52` short of the right), mirrored and turned about the
+ * anchor. The pen is `GetEffectiveTextPenWidth`.
  */
 export function fieldStrokes(f: FieldInfo): TextStrokes {
-  const t = fieldAsText(f);
-  const size = f.h;
-  const pen = f.thickness > 0 ? Math.min(f.thickness, size / 4) : f.bold ? size / 5 : size / 8;
-  const lines = t.content.split("\n");
-  // KiCad's counter-clockwise millidegrees; the canvas turns clockwise
-  const angleRad = (-t.angle / 1000) * (Math.PI / 180);
-  const [cos, sin] = [Math.cos(angleRad), Math.sin(angleRad)];
-  const interline = INTERLINE * size;
-  const height = 1.17 * size + (lines.length - 1) * interline;
-  const top = size - 0.052 * pen - (f.valign === 0 ? height / 2 : f.valign > 0 ? height : 0);
-  const mirror = f.mirror ? -1 : 1;
-  const segs: StrokeSegment[] = [];
-  lines.forEach((line, i) => {
-    if (!line) return;
-    const lineWidth = measureStrokeText(line, size) - INTER_CHAR * size;
-    const lx = t.justify === "left" ? pen / 1.52 : t.justify === "center" ? -lineWidth / 2 : -(lineWidth + pen / 1.52);
-    const ly = top + i * interline;
-    // the line's start in the text's frame, mirrored about the anchor, turned with the text
-    const [u, v] = [mirror * lx, ly];
-    segs.push(...strokeTextSegments(line, f.x + u * cos - v * sin, f.y + u * sin + v * cos, { sizeNm: size, justify: "left", angleRad, mirror: f.mirror, italic: f.italic }));
-  });
+  const { spec, face } = fieldSpec(f);
+  const l = layoutKicadText(spec, resolveFont(face, spec.bold, spec.italic));
+  const segs: StrokeSegment[] = layoutSegments(l);
+  const areas: [number, number][][] = [];
+  for (const r of l.runs) {
+    const ink = runInk(l, r);
+    if (ink) areas.push([frameToWorld(l, ink.x0, ink.y0), frameToWorld(l, ink.x1, ink.y0), frameToWorld(l, ink.x1, ink.y1), frameToWorld(l, ink.x0, ink.y1)]);
+  }
+  // the canvas turns clockwise
+  const angleRad = (-(spec.angleDeg ?? 0) * Math.PI) / 180;
   const frame = { anchor: [f.x, f.y] as const, angleRad };
   let box: [number, number, number, number] | null = null;
+  const take = (x: number, y: number, grow: number) => {
+    const [u, v] = toFrame(frame, x, y);
+    box = box ? [Math.min(box[0], u - grow), Math.min(box[1], v - grow), Math.max(box[2], u + grow), Math.max(box[3], v + grow)] : [u - grow, v - grow, u + grow, v + grow];
+  };
+  const half = l.pen / 2;
   for (const [x0, y0, x1, y1] of segs) {
-    for (const [u, v] of [toFrame(frame, x0, y0), toFrame(frame, x1, y1)]) {
-      box = box ? [Math.min(box[0], u), Math.min(box[1], v), Math.max(box[2], u), Math.max(box[3], v)] : [u, v, u, v];
-    }
+    take(x0, y0, half);
+    take(x1, y1, half);
   }
-  const half = pen / 2;
-  return { segs, pen, ...frame, box: box && [box[0] - half, box[1] - half, box[2] + half, box[3] + half] };
+  for (const a of areas) for (const [x, y] of a) take(x, y, 0);
+  return { segs, areas, pen: l.pen, ...frame, box };
 }
 
 /** How far `(x, y)` is outside a text's box (0 inside), in its frame: `TextHitTest`'s test with `aAccuracy` the distance allowed. Infinity with no box. */
@@ -118,11 +100,26 @@ function distToSegment(px: number, py: number, [x0, y0, x1, y1]: StrokeSegment):
   return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
 }
 
-/** How far `(x, y)` is from the nearest stroke's edge (`SHAPE_SEGMENT::Collide`'s actual distance: 0 on a stroke); Infinity for a text with no strokes. */
+/** How far `(x, y)` is from an outline run's ink box (0 inside it). */
+function areaDistance(a: readonly [number, number][], x: number, y: number): number {
+  let inside = false;
+  let best = Infinity;
+  for (let i = 0, j = a.length - 1; i < a.length; j = i++) {
+    const [xi, yi] = a[i]!;
+    const [xj, yj] = a[j]!;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    best = Math.min(best, distToSegment(x, y, [xj, yj, xi, yi]));
+  }
+  return inside ? 0 : best;
+}
+
+/** How far `(x, y)` is from the nearest stroke's edge (`SHAPE_SEGMENT::Collide`'s actual distance: 0 on a stroke) or an outline run's ink; Infinity for a text with neither. */
 export function strokeDistance(s: TextStrokes, x: number, y: number): number {
   let best = Infinity;
   for (const seg of s.segs) best = Math.min(best, distToSegment(x, y, seg));
-  return Math.max(0, best - s.pen / 2);
+  best = Math.max(0, best - s.pen / 2);
+  for (const a of s.areas ?? []) best = Math.min(best, areaDistance(a, x, y));
+  return best;
 }
 
 /**

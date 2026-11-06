@@ -1,6 +1,7 @@
-// A board's tables on the canvas: `PCB_PAINTER::draw( const PCB_TABLE* )` and `draw( const PCB_TEXTBOX* )` for a table cell. Each cell's text is drawn in the stroke font a
+// A board's tables on the canvas: `PCB_PAINTER::draw( const PCB_TABLE* )` and `draw( const PCB_TEXTBOX* )` for a table cell. Each cell's text in the stroke font is drawn a
 // line at a time, at the points the server placed the lines at (`eda_model::table_text`: `GetDrawPos`, `EDA_TEXT::GetLinePositions`), turned by the table's angle and mirrored
-// as the cell says; the border lines are `DrawBorders`' (`eda_model::table::Table::borders`), in the layer's colour with the stroke's width and dashes. A selected cell, or any cell
+// as the cell says, its glyphs as `STROKE_FONT::GetTextAsGlyphs` lays them out (kicad-port/kicadText.ts `layoutLineAt`, the width apart from the height); a cell in an outline
+// face is laid out here from its `GetDrawPos` (`FONT::Draw`, UI-LEFT-2 CC1: the server measures in the stroke font, so its line breaks stay the stroke font's); the border lines are `DrawBorders`' (`eda_model::table::Table::borders`), in the layer's colour with the stroke's width and dashes. A selected cell, or any cell
 // of a selected table, is washed with the layer's colour at half alpha ("Highlight selected tablecells with a background wash").
 //
 // A cell another one covers draws nothing (`if( cell->GetColSpan() == 0 || cell->GetRowSpan() == 0 ) return`). The border and separator colours of the stroke are not used: the
@@ -8,7 +9,8 @@
 
 import type { BoardState, BoardTable } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
-import { drawStrokeText } from "../text/strokeFont";
+import { layoutKicadText, layoutLineAt, resolveFont } from "../../kicad-port/kicadText";
+import { paintLayout } from "../text/kicadTextPaint";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { dashPattern } from "../../kicad-port/fpArt";
 import { layerColor } from "./layers";
@@ -28,27 +30,22 @@ function drawTable(ctx: CanvasRenderingContext2D, view: ViewTransform, t: BoardT
   const tableSelected = opts.selection.has(t.id);
   const base = layerColor(realLayerKey(t.layer));
   const selectedColor = layerColor("selection");
-  const angleRad = (-t.angle / 1000) * (Math.PI / 180);
 
   for (const c of t.cells) {
     if (c.col_span === 0 || c.row_span === 0) continue;
     const selected = tableSelected || opts.selection.has(c.id);
     const color = selected ? selectedColor : base;
+    const size: [number, number] = [c.size_w || c.size_h, c.size_h];
+    const pen = opts.sketchText ? hairlineNm(view, 1) : c.pen;
+    const font = resolveFont(c.face, c.bold, c.italic);
+    const look = { size, pen: c.pen, angleDeg: t.angle / 1000, mirror: c.mirror, italic: c.italic, bold: c.bold };
+    if (font.kind === "outline" && c.draw_pos) {
+      paintLayout(ctx, layoutKicadText({ ...look, text: c.shown ?? c.text, pos: c.draw_pos, halign: c.h_align, valign: c.v_align, lineSpacing: (c.line_spacing || 1000) / 1000 }, font), { color, pen });
+      continue;
+    }
     for (const line of c.lines) {
       if (!line.text) continue;
-      const sizeNm = Math.max(c.size_h, hairlineNm(view, 8));
-      const thicknessNm = opts.sketchText ? hairlineNm(view, 1) : c.pen;
-      if (c.size_w !== c.size_h && c.size_h > 0) {
-        // A glyph wider or narrower than it is tall: the stroke font is drawn square, so scale it across the text's own axis.
-        ctx.save();
-        ctx.translate(line.x, line.y);
-        ctx.rotate(angleRad);
-        ctx.scale(c.size_w / c.size_h, 1);
-        drawStrokeText(ctx, line.text, 0, 0, { sizeNm, thicknessNm, justify: "left", mirror: c.mirror, italic: c.italic, color });
-        ctx.restore();
-      } else {
-        drawStrokeText(ctx, line.text, line.x, line.y, { sizeNm, thicknessNm, justify: "left", angleRad, mirror: c.mirror, italic: c.italic, color });
-      }
+      paintLayout(ctx, layoutLineAt(line.text, [line.x, line.y], look), { color, pen });
     }
   }
 

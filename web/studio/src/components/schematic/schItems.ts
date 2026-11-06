@@ -13,6 +13,8 @@ import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-
 import { hitPin, pinBox, pinById, pinItems } from "../../kicad-port/schPins";
 import { sheetPinBox, sheetPinById, sheetPinItems } from "../../kicad-port/schSheetPinItems";
 import { schTextBox } from "../../kicad-port/schTextItem";
+import { labelTextBoxWidth } from "../../kicad-port/schTextSpecs";
+import { resolveFont } from "../../kicad-port/kicadText";
 import { cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
 
 export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "sheet_pin" | "graphic" | "table" | "tablecell" | "field" | "pin";
@@ -54,7 +56,8 @@ export function labelBounds(sch: Schematic, l: SchematicLabel): Box {
   const spin = l.spin ?? inferSpin(sch.wires, l.at);
   const size = l.size_nm && l.size_nm > 0 ? l.size_nm : LABEL_TEXT_SIZE_NM;
   if (l.scope !== "local" && l.shape) {
-    const outline = l.scope === "global" ? globalLabelOutline(l.net, l.shape, spin, l.at, size) : hierLabelOutline(l.shape, spin, l.at, size);
+    // the global flag as long as the text's box in the label's face, as it is drawn (`SCH_GLOBALLABEL::CreateGraphicShape`)
+    const outline = l.scope === "global" ? globalLabelOutline(l.net, l.shape, spin, l.at, size, labelTextBoxWidth(l, resolveFont(l.font, !!l.bold, !!l.italic))) : hierLabelOutline(l.shape, spin, l.at, size);
     return boxOfPoints(outline as P[]) ?? { minX: l.at[0], minY: l.at[1], maxX: l.at[0], maxY: l.at[1] };
   }
   const { pos, justify } = localLabelTextPlacement(spin, l.at, size);

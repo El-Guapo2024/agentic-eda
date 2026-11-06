@@ -99,7 +99,8 @@ export function fpFieldById(fp: Fp, id: string): FieldInfo | undefined {
 
 /** The layout a field's dialog starts from and sends back (`FieldInfo` -> `FieldLayoutCmd`). */
 export function fieldLayoutOf(f: FieldInfo): FieldLayoutCmd {
-  return { at: { x: f.x, y: f.y }, angle: f.angle, size: [f.w, f.h], thickness: f.thickness, layer: f.layer, visible: f.visible, halign: f.halign, valign: f.valign, mirror: f.mirror, bold: f.bold, italic: f.italic, keep_upright: f.upright, knockout: f.knockout };
+  // the field's outline font, so an edit of anything else keeps it
+  return { at: { x: f.x, y: f.y }, angle: f.angle, size: [f.w, f.h], thickness: f.thickness, layer: f.layer, visible: f.visible, halign: f.halign, valign: f.valign, mirror: f.mirror, bold: f.bold, italic: f.italic, keep_upright: f.upright, knockout: f.knockout, ...(f.face ? { face: f.face } : {}) };
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------ kinds

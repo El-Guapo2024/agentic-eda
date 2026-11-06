@@ -141,6 +141,8 @@ pub(crate) struct TextStyleEdit {
     pub italic: Option<bool>,
     pub knockout: Option<bool>,
     pub auto_thickness: Option<bool>,
+    /// `EDA_TEXT::SetFont( FONT::GetFont( face, .. ) )`: a face; "" or one naming the stroke font ("KiCad Font") is the stroke font (no `(face ..)`).
+    pub face: Option<String>,
 }
 
 /// `IsExternalCopperLayer`: the front or the back copper.
@@ -150,7 +152,7 @@ fn is_outer_copper(layer: &str) -> bool {
 
 impl Board<'_> {
     /// `Cmd::EditTextStyle`: the board text `id`'s glyph width (`SetTextWidth`; the height is `Text::size_nm`, a width equal to it keeps no entry), vertical
-    /// justification, bold, italic, knockout and automatic stroke width (`SetAutoThickness`: the file then has no `(thickness ..)`, and the text is drawn with
+    /// justification, bold, italic, knockout, font (`SetFont`) and automatic stroke width (`SetAutoThickness`: the file then has no `(thickness ..)`, and the text is drawn with
     /// `GetPenSizeForNormal`, or `GetPenSizeForBold` for a bold one, of its smaller size -- which `Text::stroke_width` takes). Refused when nothing changes.
     pub(crate) fn edit_text_style(&mut self, id: &str, edit: &TextStyleEdit) -> Result<(), Vec<CheckResult>> {
         let d = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_text", id, "the board has no drawings yet"))?;
@@ -178,6 +180,11 @@ impl Board<'_> {
         }
         if let Some(a) = edit.auto_thickness {
             extra.auto_thickness = a;
+        }
+        if let Some(f) = &edit.face {
+            let f = f.trim();
+            // `FONT::GetFont`: no face, or one starting with "KiCad Font", is the stroke font (written with no `(face ..)`)
+            extra.face = (!f.is_empty() && !f.starts_with("KiCad Font")).then(|| f.to_string());
         }
         let stroke_before = d.texts[ti].stroke_width;
         if extra.auto_thickness {

@@ -46,11 +46,26 @@ export function boardTextAsField(t: BoardText): FieldInfo {
   };
 }
 
-/** The strokes of a text as polygons, each grown by `margin` (`TransformOvalToPolygon` of the pen's width, then `Inflate( aClearance )`). */
+/**
+ * The strokes of a text as polygons, each grown by `margin` (`TransformOvalToPolygon` of the pen's width, then `Inflate( aClearance )`); an outline font's runs as the
+ * boxes of their ink, grown likewise (KiCad's glyphs are their triangles: task-v1-text, UI-LEFT-2 CC1).
+ */
 export function strokeRings(s: TextStrokes, margin = 0, error = ARC_LOW_DEF_NM): Ring[] {
   const width = s.pen + 2 * margin;
-  if (width <= 0) return [];
-  return s.segs.map(([x0, y0, x1, y1]) => stadiumRing([x0, y0], [x1, y1], width, error));
+  const strokes = width <= 0 ? [] : s.segs.map(([x0, y0, x1, y1]) => stadiumRing([x0, y0], [x1, y1], width, error));
+  return [...strokes, ...(s.areas ?? []).map((q) => grownQuad(q, margin))];
+}
+
+/** A run's ink box (its corners in order) grown by `m` along both of its sides. */
+function grownQuad(q: readonly (readonly [number, number])[], m: number): Ring {
+  const [a, b, , d] = q as [readonly [number, number], readonly [number, number], readonly [number, number], readonly [number, number]];
+  const unit = (p: readonly [number, number], r: readonly [number, number]): [number, number] => {
+    const len = Math.hypot(r[0] - p[0], r[1] - p[1]) || 1;
+    return [(r[0] - p[0]) / len, (r[1] - p[1]) / len];
+  };
+  const [u, v] = [unit(a, b), unit(a, d)];
+  const signs: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+  return q.map((p, i) => [p[0] + m * (signs[i]![0] * u[0] + signs[i]![1] * v[0]), p[1] + m * (signs[i]![0] * u[1] + signs[i]![1] * v[1])] as Pt);
 }
 
 /** `GetCoverageArea` of a text: the area its strokes, grown by the collector's accuracy, cover (0 for a text with no strokes). */

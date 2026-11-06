@@ -61,3 +61,10 @@ test("textAttrsCmd: only what changed, a label's bold left to its own verb, one 
   assert.equal(oneStep([a, null]), a);
   assert.deepEqual(oneStep([a, a]), { op: "batch", cmds: [a, a] });
 });
+
+test("fontChoices for pcbnew's dialogs: no Default Font, KiCad Font first and selected for no face", () => {
+  const { choices, selected } = fontChoices(["DejaVu Sans"], null, false);
+  assert.deepEqual(choices, [KICAD_FONT, "DejaVu Sans"]);
+  assert.equal(selected, KICAD_FONT);
+  assert.equal(fontChoices(["DejaVu Sans"], "Gone Sans", false).selected, "Gone Sans <not found>");
+});

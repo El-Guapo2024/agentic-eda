@@ -1275,6 +1275,9 @@ pub enum Cmd {
         knockout: Option<bool>,
         #[serde(default)]
         auto_thickness: Option<bool>,
+        /// The font (`EDA_TEXT::SetFont`, the Properties panel's Font row, UI-LEFT-2 CC1): a face, or "" (or "KiCad Font") for KiCad's stroke font.
+        #[serde(default)]
+        face: Option<String>,
     },
     /// "Soldermask" and "Soldermask Margin Override" of tracks and shapes on an outer copper layer (`PCB_TRACK::SetHasSolderMask`, `SetLocalSolderMaskMargin`,
     /// and `PCB_SHAPE`'s): `margin` `None` is the board's.
@@ -3508,9 +3511,9 @@ impl<'a> Board<'a> {
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
             Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),
-            Cmd::EditTextStyle { id, width_nm, valign, bold, italic, knockout, auto_thickness } => self.edit_text_style(
+            Cmd::EditTextStyle { id, width_nm, valign, bold, italic, knockout, auto_thickness, face } => self.edit_text_style(
                 id,
-                &pcb_props::TextStyleEdit { width_nm: *width_nm, valign: *valign, bold: *bold, italic: *italic, knockout: *knockout, auto_thickness: *auto_thickness },
+                &pcb_props::TextStyleEdit { width_nm: *width_nm, valign: *valign, bold: *bold, italic: *italic, knockout: *knockout, auto_thickness: *auto_thickness, face: face.clone() },
             ),
             Cmd::SetSolderMask { ids, solder_mask, margin } => self.set_solder_mask(ids, *solder_mask, *margin),
             Cmd::SetCornerRadius { ids, radius } => self.set_corner_radius(ids, *radius),

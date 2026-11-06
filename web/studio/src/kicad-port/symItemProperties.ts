@@ -236,7 +236,7 @@ function arcSweepDeg(g: Extract<LibrarySymbolGraphic, { kind: "arc" }>): number 
 }
 
 const READ_ONLY = {
-  font: "A library symbol's text keeps no font face here: KiCad's default font is drawn.",
+  font: "A library symbol's field keeps no font face here: KiCad's default font is drawn.",
   pen: "A library symbol's text keeps its file's pen as it was; it is not edited here.",
   color: "A library symbol's text, text box or shape keeps no colour here.",
   link: "A library symbol's text keeps no hyperlink here.",
@@ -465,7 +465,28 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
   const textWith = (i: SymItem, c: SymCtx, patch: { text?: string; bold?: boolean; italic?: boolean; h_align?: string; v_align?: string; size_mm?: number }): SymCmd[] => (i.field ? fieldWith(i, patch as Partial<FieldRow>) : graphicWith(i, c, patch));
   add({ owner: "EDA_TEXT", name: "Orientation", kind: "double", display: "degree", get: () => 0 });
   add({ owner: "EDA_TEXT", name: "Text", kind: "string", get: (i) => textOf(i).text, set: (i, v, c) => textWith(i, c, { text: String(v) }) }, TEXT_PROPS);
-  add({ owner: "EDA_TEXT", name: "Font", kind: "string", get: () => "Default Font", readOnlyReason: READ_ONLY.font }, TEXT_PROPS);
+  // "Font" (`EDA_TEXT::GetFontProp` / `SetFontProp`): eeschema's "Default Font" is none, any other name the face (`SetFont( FONT::GetFont( aFontName, IsBold(), IsItalic() ) )`);
+  // a text's and a text box's is its `font` (LibTextLooks, the verb of Text Properties' Font, UI-LEFT Y4), a field keeps none here.
+  const fontOf = (i: SymItem): string => (i.graphic?.kind === "text" || i.graphic?.kind === "text_box" ? i.graphic.font || "Default Font" : "Default Font");
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Font",
+      kind: "string",
+      get: fontOf,
+      writeable: (i) => i.graphic?.kind === "text" || i.graphic?.kind === "text_box",
+      readOnlyReason: READ_ONLY.font,
+      set: (i, v, c) => {
+        const next = String(v).trim();
+        if (!next || next === fontOf(i)) return [];
+        const g = { ...i.graphic! } as LibrarySymbolGraphic & { font?: string | null };
+        if (next === "Default Font") delete g.font;
+        else g.font = next;
+        return [graphicCmd(c, g)];
+      },
+    },
+    TEXT_PROPS
+  );
   add({ owner: "EDA_TEXT", name: "Auto Thickness", kind: "bool", get: (i) => !textOf(i).bold, readOnlyReason: READ_ONLY.pen }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Thickness", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Italic", kind: "bool", get: (i) => textOf(i).italic, set: (i, v, c) => textWith(i, c, { italic: Boolean(v) }) }, TEXT_PROPS);

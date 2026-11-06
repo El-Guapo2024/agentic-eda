@@ -130,6 +130,9 @@
     results.push(entry);
   };
   const near = (a, b, tol = 2_000) => Math.abs(a - b) <= tol;
+  // A point on a field's strokes, mm, as the canvas drew them (`window.__edaText`): KiCad picks a text by its strokes (`hitTestDistance`), and a field's anchor can fall
+  // between two letters (centred "U1": 0.19 of the size from the U's right stroke, KiCad's `getLinePositions`, UI-LEFT-2 PP1), where KiCad takes the footprint.
+  const onText = (f) => { const on = window.__edaText?.pcb?.[f.id]?.on; return on ? [on[0] / 1e6, on[1] / 1e6] : [f.x / 1e6, f.y / 1e6]; };
 
   // --------------------------------------------------------------------------------------------------------------------------- run
   const strict = [...document.querySelectorAll("label.toggle")].find((l) => /strict/i.test(l.textContent))?.querySelector("input");
@@ -196,7 +199,7 @@
       await __eda.run("common.InteractiveSelection.clear");
       const to = await screenOf();
       if (!to) return t(false, "no mapping");
-      const [px, py] = to(f0.x / 1e6, f0.y / 1e6);
+      const [px, py] = to(...onText(f0));
       fire("pointermove", px, py, { buttons: 0 }); await sleep(120);
       fire("pointerdown", px, py, { buttons: 1 }); await sleep(100);
       fire("pointermove", px + 40, py + 20, { buttons: 1 }); await sleep(150);
@@ -219,7 +222,7 @@
       const box = (id) => document.querySelector(`.ap-row[data-object="${id}"] .ap-eye`); // the eye of an Objects row
       const to = await screenOf();
       if (!to) return t(false, "no mapping");
-      const at = (f) => to(f.x / 1e6, f.y / 1e6);
+      const at = (f) => to(...onText(f));
       const pick = async (f) => {
         const [px, py] = at(f);
         await __eda.run("common.InteractiveSelection.clear");

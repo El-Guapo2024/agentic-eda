@@ -1,4 +1,4 @@
-// Teardrops, round 2 (docs/parity/UI-LEFT-2.md PP6, PP7; web/studio/PARITY-pcb.md section 94): teardrops kept current as the board is edited (KiCad 25ec2335
+// Teardrops, round 2 (docs/parity/UI-LEFT-2.md PP6, PP7; web/studio/PARITY-pcb.md section 95): teardrops kept current as the board is edited (KiCad 25ec2335
 // `BOARD_COMMIT::Push`: `RemoveTeardrops` and `UpdateTeardrops` of what the commit made stale, in the commit's own undo step), fitted to other nets' clearance
 // (`computeFittedTeardropPolygon`), and curved (`m_CurvedEdges`, Board Setup's "Curved edges"). Driven the way a person does it -- Board Setup's page, a click on
 // a track, the `D` action, a move and a click, Ctrl+Z -- and read from `/api/state`.
