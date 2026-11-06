@@ -157,7 +157,12 @@ export function registerSchClipboardActions(registry: ActionMap, ctx: SchEditCon
   m.set("common.Interactive.paste", () => void startPaste(ctx, { mode: "unique", duplicate: false }));
 
   // Ctrl+Shift+V -- the same through DIALOG_PASTE_SPECIAL. The board editor's Paste Special (clear the nets of pasted copper) has no counterpart here: say so.
-  registry.set("common.Interactive.pasteSpecial", () => (state.tab === "schematic" ? openPasteSpecial() : toast(dispatch, "Paste Special is only offered on the Schematic tab.")));
+  // With table cells selected and a table on the clipboard, the cells are pasted into before the dialog would ask (`Paste`'s `hasTableCells` branch comes first).
+  registry.set("common.Interactive.pasteSpecial", () => {
+    if (state.tab !== "schematic") return toast(dispatch, "Paste Special is only offered on the Schematic tab.");
+    if (!hasTableCells(state.selection, state.schematic?.tables ?? [])) return openPasteSpecial();
+    void readSystemClipboard().then((text) => (text && clipboardHasTable(text, 0) ? startPaste(ctx, { mode: "unique", duplicate: false, text }) : openPasteSpecial()));
+  });
 
   // Ctrl+D -- SCH_EDITOR_CONTROL::Duplicate: `doCopy( true )` into the buffer of its own, then Paste. With nothing selected `RequestSelection` took the
   // item under the cursor: a hover selection, which is not left selected when the copy is dropped (r2 D-C8).

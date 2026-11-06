@@ -3,7 +3,8 @@
 // Table Properties is a grid of the cells' text (a table on a back layer is shown from the other side), the layer and the lock, the border (outline, the line under the header,
 // width and style) and the separators (rows, columns, width, style). It opens on `Ctrl+E` / Edit Table... and right after Draw Table's second click on the table the tool has just
 // sized, which is not on the board until OK ("Draw Table"); Cancel there adds nothing. Table Cell Properties edits the selected cells together: a field they disagree on is shown as
-// `<...>` and left alone, and it has the "Edit Table..." button that opens the table's own dialog.
+// `<...>` and left alone, and it has the "Edit Table..." button that opens the table's own dialog. A sheet's (eeschema `DIALOG_TABLECELL_PROPERTIES`) has "Text color:" and
+// "Background fill:" too, each a swatch or, for cells that disagree, the `-- mixed values --` popup (kicad-port/tables.ts `cellColorEditOf`); the board's has neither.
 //
 // Not ported: the syntax help window and the text-variable autocomplete of the cell editors (a plain text area is the cell's editor, and `${ROW}`, `${COL}`, `${ADDR}`, `${LAYER}`
 // and the board's variables are resolved as they are anywhere else).
