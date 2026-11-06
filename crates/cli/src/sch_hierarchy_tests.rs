@@ -149,6 +149,23 @@ fn import_sheet_contents_goes_on_the_root_and_keep_annotations_numbers_only_what
     assert!(units.len() >= 30 + 6);
 }
 
+/// UI-LEFT S17: Import Sheet's contents ride the cursor before the click (`placeSheetContents` starts a move of what it read): the place preview reads the file into the
+/// command as the commit does and answers the items the import would add, nothing written; a file that is not there is refused.
+#[test]
+fn the_place_preview_draws_a_files_contents_before_the_click() {
+    let dir = mcu30_board("import_contents_preview");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
+    let cmd = serde_json::to_value(import_cmd("ldo_stage.kicad_sch", false, false)).unwrap();
+    let r = crate::sch_place_api::place_preview(&dir, json!({ "sheet": "", "cmd": cmd }).to_string().as_bytes());
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["preview"]["symbols"].as_array().map(Vec::len), Some(6), "the LDO's six symbols: {}", r["preview"]["symbols"]);
+    assert!(r["preview"]["wires"].as_array().is_some_and(|w| !w.is_empty()));
+    assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before, "nothing is written");
+    let gone = serde_json::to_value(import_cmd("nope.kicad_sch", false, false)).unwrap();
+    assert_eq!(crate::sch_place_api::place_preview(&dir, json!({ "sheet": "", "cmd": gone }).to_string().as_bytes())["ok"], false);
+}
+
 #[test]
 fn the_sheet_files_and_the_checks_are_answered_without_writing() {
     let dir = mcu30_board("sheet_files");

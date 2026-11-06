@@ -60,7 +60,12 @@ import { useSimUi } from "../state/simulator";
 import { withOpVars } from "../kicad-port/sim/opVars";
 import { hasNetCollision } from "../kicad-port/schNetCollision";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
-import { postMovePreview } from "../api/client";
+import { postMovePreview, postPlacePreview } from "../api/client";
+import type { SchPastePreview } from "../kicad-port/schClipboard";
+import { importContentsCmd, importNumbering } from "../kicad-port/schImportSheet";
+import { rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
+import { droppedLeft } from "../kicad-port/sheetDrop";
+import { placeNextDropped } from "../actions/schSheetFileActions";
 import type { SchMovePatch } from "../api/schEditTypes";
 import { wireTail } from "../kicad-port/schLineMode";
 import { boxItems } from "./schematic/schItems";
@@ -364,12 +369,43 @@ export function SchematicView() {
   const carrySnap = carrying ? (state.cursorNm ? (snap.lastPoint() ?? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, toolCategory(state.activeTool))) : carry.at) : null;
   const carryDx = carrySnap ? carrySnap[0] - PREVIEW_AT[0] : 0;
   const carryDy = carrySnap ? carrySnap[1] - PREVIEW_AT[1] : 0;
+  // Import Sheet's contents in the hand (`placeSheetContents`: the file's items are read, moved to the cursor and handed to the move tool; UI-LEFT S17): the server's
+  // drawing of the very `import_sheet` the click sends, made at `PREVIEW_AT` (the command puts the contents' anchor there), shifted to the grid-snapped cursor
+  // and drawn selected. A sheet (Place as sheet) is drawn by its two clicks instead.
+  const importPlan = state.activeTool === "sch_import_sheet" && state.schSheetImport && !state.schSheetImport.asSheet ? state.schSheetImport : null;
+  const [importGhost, setImportGhost] = useState<{ key: string; preview: SchPastePreview } | null>(null);
+  const importKey = importPlan ? JSON.stringify([importPlan, state.currentSheetPath]) : null;
+  useEffect(() => {
+    if (!importPlan || !importKey) return setImportGhost(null);
+    let alive = true;
+    void postPlacePreview({ sheet: state.currentSheetPath.join("/"), cmd: importContentsCmd(importPlan, [PREVIEW_AT[0], PREVIEW_AT[1]], importNumbering(rememberedAnnotateSettings())) }).then((preview) => {
+      if (alive) setImportGhost(preview ? { key: importKey, preview } : null);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importKey, state.version]);
+  // A drop of several schematics places each in turn (`DoWithAcceptedFiles`): when one file's placement ends -- placed, or dropped with Esc -- the next is in the hand
+  const hadImport = useRef(false);
+  useEffect(() => {
+    const has = state.schSheetImport != null;
+    if (hadImport.current && !has && droppedLeft() > 0) placeNextDropped({ dispatch });
+    hadImport.current = has;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.schSheetImport]);
+  const importShown = importPlan && importGhost && importGhost.key === importKey && state.cursorNm ? importGhost.preview : null;
+  const importSnap = importShown && state.cursorNm ? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, "connectable") : null;
   const displaySch: Schematic | null = useMemo(() => {
     if (baseDisplaySch && paste && pasteShown) return withPaste(baseDisplaySch, paste.preview, pasteDx, pasteDy);
     if (baseDisplaySch && carrying && carry?.preview) return withPaste(baseDisplaySch, carry.preview, carryDx, carryDy);
+    if (baseDisplaySch && importShown && importSnap) return withPaste(baseDisplaySch, importShown, importSnap[0] - PREVIEW_AT[0], importSnap[1] - PREVIEW_AT[1]);
     return baseDisplaySch;
-  }, [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy, carrying, carry?.preview, carryDx, carryDy]);
-  const pasteSelection = useMemo(() => (paste && pasteShown ? new Set(previewIds(paste.preview)) : carrying && carry?.preview ? new Set(previewIds(carry.preview)) : null), [paste, pasteShown, carrying, carry?.preview]);
+  }, [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy, carrying, carry?.preview, carryDx, carryDy, importShown, importSnap?.[0], importSnap?.[1]]);
+  const pasteSelection = useMemo(
+    () => (paste && pasteShown ? new Set(previewIds(paste.preview)) : carrying && carry?.preview ? new Set(previewIds(carry.preview)) : importShown ? new Set(previewIds(importShown)) : null),
+    [paste, pasteShown, carrying, carry?.preview, importShown]
+  );
   // A paste belongs to the sheet it was started on and to the select tool: leaving the sheet, the tab or the tool throws it away.
   useEffect(() => {
     if (paste && (paste.sheet.join("/") !== state.currentSheetPath.join("/") || state.activeTool !== "select")) cancelSchPaste();

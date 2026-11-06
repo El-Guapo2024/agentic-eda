@@ -1,18 +1,19 @@
 // Import Sheet... and Draw Sheet from File -- `eeschema.InteractiveDrawing.importSheet` / `drawSheetFromFile` (`SCH_DRAWING_TOOLS::ImportSheet` / `DrawSheet`):
 //   Import Sheet...        opens the "Choose Schematic" chooser (components/schControl/ImportSheetDialog.tsx); Open arms the placement tool.
 //   ddAppendFile           a schematic dropped on the sheet (`SCH_EDIT_TOOL::DdAppendFile` runs Import Sheet with the file). A browser gives the page the text of every file of the drop and no
-//                          folder, so the files are posted (`POST /api/sch/dropped_sheets`: the sheets a file places are found among them and the missing ones named) and the chooser opens on the
-//                          file the server made of them, with `LoadSheetFromFile`'s checks and the options it remembers; Open arms the placement tool as for a file picked in it.
+//                          folder, so the files are posted (`POST /api/sch/dropped_sheets`: the sheets a file places are found among them and the missing ones named). Given a file,
+//                          Import Sheet asks for nothing: the file is checked (`LoadSheetFromFile`) and placed with the options the chooser last held -- its contents ride the cursor,
+//                          or a sheet waits for its two clicks -- and each file of the drop is placed in turn (`DoWithAcceptedFiles`; UI-LEFT S17).
 //   Draw Sheet from File   KiCad posts it with the file once the chooser is done (`new wxString( sheetFileName )`); the parameter here is that path, or an object
 //                          `{ path, keepAnnotations? }`. It checks the file at once (`wxFileExists`: "File '%s' does not exist.") and arms the tool to draw the sheet.
 //                          Without a parameter there is no file yet, so it opens the chooser, which then only places a sheet.
 import type { Dispatch } from "react";
 import { fetchSheetFileCheck } from "../api/hierarchyClient";
 import { putDroppedSheets } from "../api/sheetDropClient";
-import { droppedFilesOf, droppedSaid } from "../kicad-port/sheetDrop";
+import { droppedFilesOf, droppedSaid, nextDropped, queueDropped } from "../kicad-port/sheetDrop";
 import type { Action, StudioApi, StudioState } from "../state/store";
 import type { SchControlAction } from "../state/schControlStore";
-import { defaultImportOptions } from "../kicad-port/schImportSheet";
+import { defaultImportOptions, rememberedImportOptions } from "../kicad-port/schImportSheet";
 
 type Registry = Map<string, (param?: unknown) => void>;
 
@@ -56,7 +57,8 @@ export function registerSchSheetFileActions(m: Registry, ctx: SchSheetFileContex
           if (!r.ok || !r.path) return toast(r.message ?? "The dropped schematics could not be read.", "error");
           const said = droppedSaid(r);
           if (said) toast(said);
-          controlDispatch({ type: "OPEN_DIALOG", dialog: { kind: "import_sheet", initialPath: r.path } });
+          queueDropped(r.paths && r.paths.length > 0 ? r.paths : [r.path]);
+          placeNextDropped(ctx);
         },
         (e) => toast(e instanceof Error ? e.message : String(e), "error")
       );
@@ -78,5 +80,30 @@ export function registerSchSheetFileActions(m: Registry, ctx: SchSheetFileContex
         (e) => toast(e instanceof Error ? e.message : String(e), "error")
       );
     })
+  );
+}
+
+/**
+ * `ImportSheet` given a file (`aEvent.Parameter<wxString*>()`, no chooser): the next file of a drop is checked as `LoadSheetFromFile` checks it and put in the hand with the options
+ * the chooser last held -- or, when its check refuses it, said and passed over for the one after. Nothing happens when the drop's files are all placed.
+ */
+export function placeNextDropped(ctx: Pick<SchSheetFileContext, "dispatch">): void {
+  const path = nextDropped();
+  if (!path) return;
+  const toast = (message: string, kind: "info" | "error" = "info") => ctx.dispatch({ type: "TOAST", message, kind });
+  const options = rememberedImportOptions();
+  void fetchSheetFileCheck({ path, keep_annotations: options.keepAnnotations }).then(
+    (check) => {
+      const error = check.ok ? check.findings.find((f) => f.severity === "error") : null;
+      if (!check.ok || error) {
+        toast(error?.text ?? check.message ?? `File '${path}' does not exist.`, "error");
+        return placeNextDropped(ctx);
+      }
+      ctx.dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: { ...options, path } });
+    },
+    (e) => {
+      toast(e instanceof Error ? e.message : String(e), "error");
+      placeNextDropped(ctx);
+    }
   );
 }
