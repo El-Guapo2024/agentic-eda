@@ -51,7 +51,7 @@ test("the Unit choice: every unit's display name, none for a symbol of one unit;
 test("the fields grid's look columns: what changed becomes edit_field and set_field_looks, the Font's first choices are KiCad's", () => {
   const f: SchField = { name: "Value", text: "10k", at: [0, 0], vertical: false, h: "left", v: "center", visible: true, id: "fld:U1:Value", size_nm: 1_270_000, bold: false, italic: false };
   const was = lookOf(f);
-  assert.deepEqual(was, { nameShown: false, h: "left", v: "center", italic: false, bold: false, sizeMm: 1.27, font: "Default Font", color: "" });
+  assert.deepEqual(was, { nameShown: false, h: "left", v: "center", italic: false, bold: false, sizeMm: 1.27, font: "Default Font", color: "", allowAutoplace: true }, "no place in its own frame sent: no place cells");
   assert.deepEqual(fieldLookCmds(f.id!, was, was), []);
   assert.deepEqual(fieldLookCmds(f.id!, was, { ...was, h: "right", bold: true, sizeMm: 2 }), [{ op: "sch_edit", verb: "edit_field", id: "fld:U1:Value", h: "right", bold: true, size_nm: 2_000_000 }]);
   assert.deepEqual(fieldLookCmds(f.id!, was, { ...was, font: "DejaVu Sans", color: "#ff0000" }), [{ op: "sch_edit", verb: "set_field_looks", ids: ["fld:U1:Value"], font: "DejaVu Sans", color: { r: 255, g: 0, b: 0, a: 255 } }]);

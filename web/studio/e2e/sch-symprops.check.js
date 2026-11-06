@@ -262,6 +262,14 @@
       await select(["U90"]);
       await run("eeschema.InteractiveEdit.properties");
       dlg = await opened(/^Symbol Properties/);
+      // the Font and Color columns are hidden when the dialog opens (`ShowHideColumns( "0 1 2 3 4 5 6 7" )`): the column labels' menu shows them
+      for (const label of ["Font", "Color"]) {
+        const head = dlg.querySelector("[data-testid=symbol-fields-grid] thead");
+        head?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200, button: 2 }));
+        await sleep(200);
+        [...document.querySelectorAll(".menu-node-item")].find((i) => i.textContent.replace(/[\u2713\u2003]/g, "").trim() === label)?.click();
+        await sleep(200);
+      }
       setValue(dlg.querySelector('input[aria-label="Value font"]'), "DejaVu Sans");
       setValue(dlg.querySelector('input[aria-label="Value color"]'), "#ff0000");
       dlg.querySelector('input[aria-label="Value bold"]').click();

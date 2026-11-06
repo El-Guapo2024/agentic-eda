@@ -284,8 +284,9 @@ export function fieldDialogCaption(name: string, ofSheet: boolean): string {
   return `Edit '${name}' Field`;
 }
 
-/** What U, V or F opens (`SCH_EDIT_TOOL::EditField`): Field Properties on a field (`editFieldText`), the full Symbol Properties where the symbol's fields have no places
- *  yet (a sheet read from a KiCad file), or nothing. */
+/** What U, V or F opens (`SCH_EDIT_TOOL::EditField`): Field Properties on a field (`editFieldText`), or nothing. A sheet read from a KiCad file is taken into the
+ *  design's frame (Import Sheet, File > Import, Paste), so its symbols' fields are items like any other's (UI-LEFT-2 SS6); the full Symbol Properties is the answer
+ *  only where a symbol's fields have no places -- a section still in KiCad's frame, kept by a design.json from before 2026-10-25 (`imported_from_kicad`). */
 export type EditFieldTarget = { kind: "field"; id: string } | { kind: "symbol"; id: string } | { kind: "none" };
 
 /**

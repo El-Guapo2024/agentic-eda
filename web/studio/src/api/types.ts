@@ -3043,6 +3043,10 @@ export interface SchField {
   name_shown?: boolean;
   /** `SCH_FIELD::CanAutoplace`: false leaves the field where it is when its item's fields are autoplaced. */
   allow_autoplace?: boolean;
+  /** Its anchor in its item's own unturned frame, nanometres from the item's origin: Symbol Properties' X and Y Position (`FDC_POSX`, `FDC_POSY`). */
+  local?: [Nm, Nm];
+  /** Its text's angle before the item turns it is vertical: Symbol Properties' Orientation (`FDC_ORIENTATION`). */
+  local_vertical?: boolean;
   /** `EDA_TEXT::GetFont` (`SchExtras::field_looks`): absent is the default font; "KiCad Font" the stroke font; anything else an outline font's family. */
   font?: string | null;
   /** `EDA_TEXT::GetTextColor`: absent is the layer's colour. */

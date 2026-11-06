@@ -184,9 +184,21 @@ export type SchEditCmd =
       visible?: boolean;
       name_shown?: boolean;
       allow_autoplace?: boolean;
+      /** Symbol Properties' X / Y Position (`FDC_POSX`, `FDC_POSY`): the anchor in the item's own unturned frame, from its origin. */
+      local_at?: PointXY;
+      /** Symbol Properties' Orientation (`FDC_ORIENTATION`): the text's angle before the item turns it. */
+      local_vertical?: boolean;
+      /** Symbol Properties' edit, not Field Properties': the item's fields stay autoplaced until the step's `autoplace_fields_kept`. */
+      keep_autoplaced?: boolean;
     }
   /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on these symbols, power symbols, sheets, or the item each listed field belongs to. */
   | { verb: "autoplace_fields"; ids: string[] }
+  /** After Symbol Properties' OK (`SCH_EDIT_TOOL::Properties`): the items `keys` names whose fields are autoplaced have them placed again, in the way they were. */
+  | { verb: "autoplace_fields_kept"; keys: string[] }
+  /** Symbol Properties' Move Up / Move Down: the user fields of the placed unit `key` (`<reference>[#<unit>]`) in the order `names` gives. */
+  | { verb: "reorder_fields"; key: string; names: string[] }
+  /** Symbol Properties' Angle and Mirror (`SetOrientation`): the symbol (`unit`) or power symbol `id` takes the orientation `angle` (0, 90, 180, 270) mirrored about `mirror`. */
+  | { verb: "set_symbol_orientation"; id: string; unit?: number; angle: number; mirror?: "x" | "y" }
   /**
    * Pin Helpers (`PIN_TRICKS_MENU`): a wire stub, a no-connect or a local, hierarchical or global label on each pin (`pin:<reference>:<number>`) and sheet pin of `pins` (anything else is passed
    * over; none is refused). A stub is one step of `grid`, the wire grid (nm, 0 is 50 mil); a label says the pin's name and reads away from it. One undo step.
