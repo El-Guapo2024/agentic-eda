@@ -74,3 +74,37 @@ export function padPaste3d(pad: Pad, part: Pick<Part, "paste_margin" | "paste_ma
   const [bx, by] = straight ? [mx, my] : turned ? [my, mx] : [(mx + my) / 2, (mx + my) / 2];
   return { w: Math.max(0, pad.w + 2 * bx), h: Math.max(0, pad.h + 2 * by) };
 }
+
+/**
+ * The sides whose solder mask a pad opens (`BOARD_ADAPTER::addPads` on F.Mask / B.Mask: `if( !pad->IsOnLayer( aLayerId ) ) continue;`): its `(layers ..)` in the footprint's
+ * frame (`F.Mask` the footprint's side, `B.Mask` the other, `*.Mask` both), else its kind's (an SMD pad its side's mask, a hole both).
+ */
+export function padMaskSides(pad: Pick<Pad, "layers" | "th">, side: "top" | "bottom"): Array<"top" | "bottom"> {
+  const other = side === "top" ? "bottom" : "top";
+  if (!pad.layers) return pad.th ? [side, other] : [side];
+  const out = new Set<"top" | "bottom">();
+  for (const l of pad.layers) {
+    if (l === "*.Mask" || l === "F&B.Mask") {
+      out.add(side);
+      out.add(other);
+    } else if (l === "F.Mask") out.add(side);
+    else if (l === "B.Mask") out.add(other);
+  }
+  return [...out];
+}
+
+/**
+ * `PAD::GetSolderMaskExpansion`: no expansion for a pad with no copper layer ("Pads defined only on mask layers ... use the shape defined by the pad settings only"); else the
+ * pad's own margin, else the board's (`m_SolderMaskExpansion`, Board Setup's "Solder mask expansion"), "ensure mask have a size always >= 0": no less than minus half the
+ * pad's smaller side. The footprint's own margin and custom DRC rules are not in the state.
+ */
+export function padMaskMargin3d(pad: Pad, board: Pick<MaskPaste, "expansion_nm"> | undefined | null): number {
+  if (!padHasCopper(pad)) return 0;
+  const margin = pad.mask_margin ?? board?.expansion_nm ?? 0;
+  if (margin < 0) {
+    const [sx, sy] = pad.size ?? [pad.w, pad.h];
+    const minsize = -Math.trunc(Math.min(sx, sy) / 2);
+    if (margin < minsize) return minsize;
+  }
+  return margin;
+}

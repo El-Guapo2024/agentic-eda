@@ -3,7 +3,7 @@
 // `window.__eda` (`state().viewer3d`, components/viewer3d/viewer3dProbe.ts) and the panel's and the menu's own controls:
 //
 //   1  the scene: the body has every through and non-plated hole cut out (GET /api/board3d), the pads are their real polygons (a trapezoid four corners, a chamfered and a
-//      rounded rectangle more), the plated holes have barrels
+//      rounded rectangle more), the plated holes have barrels, the pads open the solder masks
 //   2  the layer tree: Values, Footprint Text (off takes References and Values with it), Off-board Silkscreen (off: the silkscreen is clipped, the stencil pieces are there),
 //      3D Navigator
 //   3  the right-click menu: a right click that is not a drag opens it, Rotate Board opens its submenu, View Front moves the camera to the front view
@@ -66,6 +66,7 @@
     const rr = shapes.round_rect;
     ok("a rounded rectangle has its arcs", rr && rr.meshes > 0 && rr.corners > 16 * rr.meshes, [JSON.stringify(rr)]);
     ok("the plated holes have barrels", (view().scene["plated-barrel"] ?? 0) >= pth, [`${view().scene["plated-barrel"]} barrels for ${pth} plated holes`]);
+    ok("the pads open both solder masks (the stencil pieces of renderSolderMaskLayer's culling)", (view().scene["mask-opening-top"] ?? 0) === 1 && (view().scene["mask-opening-bottom"] ?? 0) === 1, [JSON.stringify([view().scene["mask-opening-top"], view().scene["mask-opening-bottom"]])]);
 
     // 2 ---------------------------------------------------------------------------------------------------------------------------------- the layer tree
     const ids = [...document.querySelectorAll("[data-row]")].map((r) => r.getAttribute("data-row"));

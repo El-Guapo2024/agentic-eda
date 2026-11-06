@@ -502,8 +502,8 @@ Notes:
 
 ## 3D viewer
 
-- **D1 [BD] The scene.** **done (task-u3-3d)**: every pad in its real shape (trapezoid, chamfered, custom, a turned one turned), the body less every through and non-plated hole (`GET /api/board3d`), vias as rings with barrels, inner copper drawn when the body does not hide it and in its own PCB editor colour, no paste margin for a pad with no copper (V7-1), `render_3d_opengl`'s ambient, specular, shininess and transparency per layer (PARITY-3d §3, §9). Left:
-  - The solder mask has no openings at the pads.
+- **D1 [BD] The scene.** **done (task-u3-3d)**: every pad in its real shape (trapezoid, chamfered, custom, a turned one turned), the body less every through and non-plated hole (`GET /api/board3d`), vias as rings with barrels, inner copper drawn when the body does not hide it and in its own PCB editor colour, the pads' openings in the solder mask, no paste margin for a pad with no copper (V7-1), `render_3d_opengl`'s ambient, specular, shininess and transparency per layer (PARITY-3d §3, §9). Left:
+  - A track's, a shape's or an untented via's own mask opening (the pads' openings are done).
   - Tracks and zones are not cut at the holes (a track stops where it ends in one).
   - A custom pad's paste margin, the off-board pads, plated vs bare copper, counterbores and backdrills.
   - The lights are three.js's: the shading is close to KiCad's, not the same.

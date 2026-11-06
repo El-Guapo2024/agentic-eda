@@ -234,7 +234,7 @@ The rows of sections 2, 3 and 5 that this work changed say so ("task-u3-3d"). Th
 | Preferences > 3D Viewer > Realtime Rendering | **identical for what is offered** | `dialogs/panel_3D_opengl_options.cpp`: "Show copper and tech layers thickness (slow)" (`render.opengl_copper_thickness`, off: copper and paste are drawn flat at their outer face, `scene.ts:flatten`), "Highlight items on rollover" (`render.opengl_highlight_on_rollover`: the hovered part is still named, it is drawn highlighted only with it), "Anti-aliasing:" (`render.opengl_AA_mode`, 8x; "3D-Viewer must be closed and re-opened to apply this setting": the browser's multisampling is on or off, so 2x, 4x and 8x are all on), "Selection color:" (`render.opengl_selection_color`, green). "Show model bounding boxes" is the Appearance manager's row; the While Moving options are not offered (the view keeps its detail while it moves) |
 | The mouse in the 3D view | **identical** (unchanged) | The 3D canvas reads the common Mouse and Touchpad page (`VC_SETTINGS`, section 1's wheel rows); KiCad's 3D viewer has no mouse page of its own |
 
-**Checked in a browser** (headless Chromium, `e2e/viewer3d-controls.check.js`, 32 checks on the `padstacks-3d` board of `tools/run-all-checks.sh`: KiCad 8303b2ad's
+**Checked in a browser** (headless Chromium, `e2e/viewer3d-controls.check.js`, 33 checks on the `padstacks-3d` board of `tools/run-all-checks.sh`: KiCad 8303b2ad's
 `qa/data/pcbnew/padstacks_normal.kicad_pcb` with an Edge.Cuts rectangle, through `replace_board`): the body has every hole of `GET /api/board3d` (2 non-plated, 20 plated:
 22); the trapezoid pads are four corners each, the chamfered and the rounded ones more; every plated hole has its barrel; the tree lists Values, Footprint Text, Off-board
 Silkscreen and 3D Navigator in KiCad's order and Footprint Text drags References and Values with it; the silkscreen is clipped while Off-board Silkscreen is off; a right click
@@ -249,6 +249,12 @@ under `~/src/kicad-libs/3dmodels` lacks `C_0402_1005Metric`, `PinHeader_1x04_P2.
 the two non-plated holes where the studio's live scene has them (compared by eye on screenshots, not committed: the repository holds no images). The colours differ: kicad-cli's
 render is the raytracer's, with its own materials and lights.
 
-**Not seen or not done:** the solder mask has no openings at the pads (it is the body's polygon, so a pad shows through it tinted; KiCad's mask is `m_board` less the pads'
-mask openings); the board's other copper (tracks, zones) is not cut at the holes but where a track ends; the silkscreen is not clipped at the holes or the mask; a custom
+**The solder mask's openings.** `renderSolderMaskLayer` draws `m_board` culled by the mask layer's items (`m_layers[F_Mask]`: each pad on the mask grown by
+`GetSolderMaskExpansion`) and the through holes; the studio draws the pads on each side's mask (`footprint3d.ts:padMaskSides`, `padMaskMargin3d`: the pad's own margin, else
+Board Setup's expansion, none for a pad with no copper, never below minus half the pad) into a stencil bit of their own and the mask plane only where it is clear
+(`scene.ts:buildMaskOpenings`, `maskMaterial`), so a pad is bare copper as in KiCad; the mask plane sits on the copper's face (`InitSettings`: F.Mask from
+`zpos_copperTop_front`), the tracks under it. Not done: a track's or a shape's own mask opening, an untented via's, the footprint's own mask margin (not in the state), custom
+DRC mask rules.
+
+**Not seen or not done:** the board's other copper (tracks, zones) is not cut at the holes but where a track ends; the silkscreen is not clipped at the holes or the mask; a custom
 pad's paste margin; the off-board pads; Differentiate plated and bare copper; the raytracer (D5, out by decision).

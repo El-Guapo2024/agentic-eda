@@ -64,7 +64,7 @@ import { artTextAsField, graphicsOf, layersOf } from "../../kicad-port/fpArt";
 import { fieldAsText } from "../../kicad-port/fpFields";
 import { zoneCopperLayers } from "../../kicad-port/zoneLayers";
 import { DEFAULT_STACK, stackOfBoard, type Stack } from "../../kicad-port/model3d";
-import { fieldsDrawn3d, padPasteMargin3d } from "../../kicad-port/footprint3d";
+import { fieldsDrawn3d, padMaskMargin3d, padMaskSides, padPasteMargin3d } from "../../kicad-port/footprint3d";
 import { MAX_ERROR_NM, circlePolygon, nestContours, ovalPolygon, padContours, padPlacement, toBoard, type Contour, type PadPlacement, type Pt } from "../../kicad-port/padShape3d";
 import { boardMaterial3d, copperLayerMaterial3d, copperMaterial3d, glShininess, innerLayersDrawn, maskMaterial3d, pasteMaterial3d, plasticMaterial3d, silkMaterial3d, type Material3d, type Rgb } from "../../kicad-port/material3d";
 
@@ -118,8 +118,9 @@ function surfaceY(side: Side): number {
   return outwardSign(side) * halfThickness();
 }
 
+/** The solder mask's plane: on the outer copper's face (`InitSettings`: F.Mask from `zpos_copperTop_front` to it plus the mask's thickness), the middle of that. */
 function maskCenterY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (copperMm(side) / 2 + maskMm(side) / 2);
+  return surfaceY(side) + outwardSign(side) * (copperMm(side) + maskMm(side) / 2);
 }
 
 function silkY(side: Side): number {
@@ -260,7 +261,41 @@ function pasteMaterial(): THREE.MeshPhongMaterial {
 
 /** The solder mask (`setLayerMaterial`'s `F_Mask` / `B_Mask`: `TransparencyControl` of its colour, a darker mask more opaque and shinier), drawn from both sides. */
 function maskMaterial(side: Side): THREE.MeshPhongMaterial {
-  return kicadMaterial(maskMaterial3d(paletteRgba(side === "top" ? "soldermask_top" : "soldermask_bottom")), { side: THREE.DoubleSide, depthWrite: false });
+  const m = kicadMaterial(maskMaterial3d(paletteRgba(side === "top" ? "soldermask_top" : "soldermask_bottom")), { side: THREE.DoubleSide, depthWrite: false });
+  // The pads' openings (`renderSolderMaskLayer`: `m_board->DrawCulled( aShowThickness, solder_mask, via_holes )`, the mask layer's items culled out of the board):
+  // the mask is drawn only where [`buildMaskOpenings`] left its side's stencil bit clear.
+  m.stencilWrite = true;
+  m.stencilWriteMask = 0;
+  m.stencilRef = MASK_STENCIL_BIT[side];
+  m.stencilFuncMask = MASK_STENCIL_BIT[side];
+  m.stencilFunc = THREE.NotEqualStencilFunc;
+  return m;
+}
+
+/** The stencil bit of a side's mask openings ([`buildMaskOpenings`]); the silkscreen's clip has bits 1 and 2. */
+const MASK_STENCIL_BIT: Record<Side, number> = { top: 4, bottom: 8 };
+
+/** The openings of a side's solder mask (the pads on that mask, grown by their expansion), drawn into the stencil buffer only, before anything else, on the mask's plane. */
+function buildMaskOpenings(shapes: readonly THREE.Shape[], side: Side): THREE.Mesh | null {
+  if (shapes.length === 0) return null;
+  const bit = MASK_STENCIL_BIT[side];
+  const material = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+    stencilWrite: true,
+    stencilRef: bit,
+    stencilWriteMask: bit,
+    stencilFunc: THREE.AlwaysStencilFunc,
+    stencilZPass: THREE.ReplaceStencilOp,
+  });
+  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shapes as THREE.Shape[]), material);
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.y = maskCenterY(side);
+  mesh.renderOrder = -10;
+  mesh.name = `mask-opening-${side}`;
+  return mesh;
 }
 
 function silkMaterial(side: Side): THREE.LineBasicMaterial {
@@ -1209,11 +1244,19 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     return { line, fill, color };
   };
 
+  // The pads' openings in each side's solder mask (`addPads` on F.Mask / B.Mask, `GetSolderMaskExpansion`), collected and drawn as one stencil piece per side below.
+  const openings: Record<Side, THREE.Shape[]> = { top: [], bottom: [] };
   for (const part of board.parts) {
     const side = part.side;
     if (!part.placed || !side) continue;
     for (const pad of part.pads ?? []) {
       const plated = pad.th && pad.kind !== "non_plated_hole";
+      const maskSides = padMaskSides(pad, side).filter((s) => shown(s === "top" ? "soldermask_top" : "soldermask_bottom"));
+      if (maskSides.length > 0) {
+        const m = padMaskMargin3d(pad, board.board_rules?.mask_paste);
+        const shapes = shapesOf(padContours(pad, padPlacement(pad, part), [m, m]));
+        for (const s of maskSides) openings[s].push(...shapes);
+      }
       // The hole taken out of the pad's copper: a plated one grown by the plating (`m_TH_ODPolys`), a non-plated one as drilled (`m_NPTH_ODPolys`).
       const cut = pad.th ? padHoleContour(pad, part, plated ? plating : 0) : null;
       const cuts = cut ? [cut] : [];
@@ -1264,6 +1307,10 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
 
     // The footprint's own silkscreen and drawings (`part.graphics`, `part.texts`): on the layers KiCad's 3D viewer draws, as a free drawing is.
     addFootprintArt(group, part, { shown, silkLineMat, silkFillMat, inkOf });
+  }
+  for (const s of ["top", "bottom"] as const) {
+    const mesh = buildMaskOpenings(openings[s], s);
+    if (mesh) group.add(mesh);
   }
 
   // Free drawings, each on the layer KiCad's 3D viewer would draw it on: silkscreen, adhesive, a user layer -- and nothing for the layers it does not draw (`Edge.Cuts`,

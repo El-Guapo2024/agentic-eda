@@ -942,12 +942,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   and the `convert_basic_shapes_to_polygon` builders; a turned pad turned, a custom pad its union), on the copper layers they have, less their holes; the body less every through and non-plated hole
   (`GET /api/board3d`, `crates/cli/src/board3d_api.rs`: `m_boardWithHoles` with Clipper2), vias as rings with barrels, the plated holes' shells; inner copper drawn when the body does not hide it, each
   layer in its PCB editor colour with "Use PCB editor copper colors"; every board layer with `render_3d_opengl`'s material (ambient, specular, shininess, transparency; `kicad-port/material3d.ts`);
-  the paste the pad's shape grown by its margin, none for a pad with no copper (V7-1); the right-click menu (`EDA_3D_CONTROLLER::Init`); the 3D Navigator (`SPHERES_GIZMO`); layer presets (Follow PCB
+  the paste the pad's shape grown by its margin, none for a pad with no copper (V7-1); the pads' openings in the solder mask (`GetSolderMaskExpansion`); the right-click menu (`EDA_3D_CONTROLLER::Init`); the 3D Navigator (`SPHERES_GIZMO`); layer presets (Follow PCB
   Editor, Follow PCB Plot Settings, "legacy colors", saved ones, in this browser) and viewports (in `appearance.json`'s `viewer3d` section); Preferences > 3D Viewer > General and Realtime Rendering
   (rotation increment, animation and its speed, copper thickness, highlight on rollover, anti-aliasing, selection colour); the PCB selection drawn in the selection colour and a click in 3D selecting
-  the footprint; the Values, Footprint Text and Off-board Silkscreen rows (the silkscreen clipped to the board through the stencil buffer). Measured: 3 Rust tests, 25 new `node --test` cases,
-  `e2e/viewer3d-controls.check.js` 32 of 32 on the new `padstacks-3d` board of `tools/run-all-checks.sh`.
-- Missing: raytracing (out of scope); the solder mask's openings at the pads (the mask is the body's polygon); the other copper (tracks, zones) cut at the holes (a track stops where it ends in one);
+  the footprint; the Values, Footprint Text and Off-board Silkscreen rows (the silkscreen clipped to the board through the stencil buffer). Measured: 4 Rust tests (board3d_api 3, appearance_api 1), 25 new `node --test` cases,
+  `e2e/viewer3d-controls.check.js` 33 of 33 on the new `padstacks-3d` board of `tools/run-all-checks.sh`.
+- Missing: raytracing (out of scope); a track's, a shape's or an untented via's own mask opening (the pads' are cut out of the mask through the stencil buffer); the other copper (tracks, zones) cut at the holes (a track stops where it ends in one);
   the silkscreen clipped at the holes or the mask (Render Options); a custom pad's paste margin (KiCad `Inflate`s it); the off-board pads; Differentiate plated and bare copper; the counterbores,
   countersinks and backdrills; the presets' and viewports' quick switchers (Ctrl+Tab, Shift+Tab); the lights are three.js's, so the shading is close to KiCad's OpenGL view and not the same.
 - V7-1 (round 7): a pad on the paste layers only (no copper) is grown by the footprint's or the board's paste margin in 3D; KiCad's `GetSolderPasteMargin` gives such a pad none (the Gerbers are kicad-cli's). **Fixed on `task-u3-3d`** (`footprint3d.ts:padPasteMargin3d`)

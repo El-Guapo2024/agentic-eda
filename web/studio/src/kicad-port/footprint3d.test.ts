@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FieldInfo, Pad, Part } from "../api/types";
-import { fieldsDrawn3d, padHasCopper, padPaste3d, padPasteMargin3d } from "./footprint3d";
+import { fieldsDrawn3d, padHasCopper, padMaskMargin3d, padMaskSides, padPaste3d, padPasteMargin3d } from "./footprint3d";
 
 const field = (name: string, over: Partial<FieldInfo> = {}): FieldInfo => ({
   id: `R1:${name}`,
@@ -79,4 +79,18 @@ test("a pad on the paste layer only gets no paste margin (PAD::GetSolderPasteMar
   assert.deepEqual(padPasteMargin3d(pad({ layers: ["F.Cu", "F.Paste"] }), part([]), board), [-50_000, -50_000]);
   assert.equal(padHasCopper({ layers: ["*.Cu", "*.Mask"] }), true);
   assert.equal(padHasCopper({ layers: ["F.Paste", "F.Mask"] }), false);
+});
+
+// The solder mask's openings (task-u3-3d): `addPads` on F.Mask / B.Mask opens the mask where a pad is on it, grown by `PAD::GetSolderMaskExpansion`.
+test("a pad opens the masks it is on, grown by its expansion (addPads, PAD::GetSolderMaskExpansion)", () => {
+  assert.deepEqual(padMaskSides(pad({ layers: ["F.Cu", "F.Paste", "F.Mask"] }), "top"), ["top"]);
+  assert.deepEqual(padMaskSides(pad({ layers: ["F.Cu", "F.Paste", "F.Mask"] }), "bottom"), ["bottom"], "F.Mask is the footprint's side");
+  assert.deepEqual(padMaskSides(pad({ layers: ["*.Cu", "*.Mask"], th: true }), "top").sort(), ["bottom", "top"]);
+  assert.deepEqual(padMaskSides(pad({ layers: ["F.Cu"] }), "top"), [], "a pad on no mask opens none");
+  assert.deepEqual(padMaskSides(pad({ th: true }), "top").sort(), ["bottom", "top"], "a hole's kind: both");
+  // The pad's own margin, else the board's; never less than minus half the smaller side; none for a pad with no copper.
+  assert.equal(padMaskMargin3d(pad({ mask_margin: 50_000 }), { expansion_nm: 20_000 }), 50_000);
+  assert.equal(padMaskMargin3d(pad(), { expansion_nm: 20_000 }), 20_000);
+  assert.equal(padMaskMargin3d(pad({ mask_margin: -900_000 }), undefined), -300_000);
+  assert.equal(padMaskMargin3d(pad({ layers: ["F.Mask"] }), { expansion_nm: 20_000 }), 0);
 });
