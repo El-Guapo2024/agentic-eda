@@ -184,9 +184,20 @@
       await select(["pin:R1:1"]);
       const sel = __eda.state().selection;
       t(sel.length === 1 && sel[0].id === "pin:R1:1" && sel[0].kind === "pin", `a pin is an item of the selection (${JSON.stringify(sel)})`);
-      // R1's pin 1 is on the PA0 net (KiCad's `/LED channels (D1–D8)/PA0`): its end is at (44450, 83820), its wire runs up from there to a hierarchical label
+      // R1's pin 1 is on the PA0 net (KiCad's `/LED channels (D1–D8)/PA0`), and its wire runs up from its end to a hierarchical label. Where that end is comes from the
+      // sheet as the server lays it out, which depends on the symbols it found: (44450, 83820) with KiCad's Device:R, (34290, 86360) with the built-in one
+      // (`EDA_KICAD_SYMBOLS` pointing at no library). The library pin's end (mm, y up, in the symbol's frame) put at the symbol's place, the symbol not turned.
+      const lp = r1 ? s.lib_symbols?.[r1.lib_id]?.pins.find((p) => p.number === "1") : null;
+      t(!!lp && r1.rot === 0 && !r1.mirror, `R1 is drawn by its library symbol, not turned (${r1?.lib_id}, ${r1?.rot}, ${r1?.mirror})`);
+      const end = lp ? [Math.round(r1.at[0] + lp.at[0] * 1e6), Math.round(r1.at[1] - lp.at[1] * 1e6)] : [0, 0];
+      const same = (a, b) => Math.abs(a[0] - b[0]) < 2 && Math.abs(a[1] - b[1]) < 2;
+      const pinWire = s.wires.find((w) => (w.pins ?? []).includes("R1.1") && w.pts.some((q) => same(q, end)));
+      const k = pinWire ? pinWire.pts.findIndex((q) => same(q, end)) : -1;
+      const nextPt = pinWire ? pinWire.pts[k === 0 ? 1 : k - 1] : end;
+      const onWire = [Math.round((end[0] + nextPt[0]) / 2), Math.round((end[1] + nextPt[1]) / 2)];
+      t(!!pinWire && !same(onWire, end), `a wire of R1.1 ends at the pin's end (${end}), and ${onWire} is on it (${pinWire?.id})`);
       await select([]);
-      await hoverAt(44_450_000, 83_820_000);
+      await hoverAt(end[0], end[1]);
       await __eda.run("eeschema.EditorControl.highlightNet");
       await sleep(600);
       t(__eda.state().highlight.includes("/LED channels (D1–D8)/PA0"), `Highlight Net with the cursor on a pin highlights its net (${__eda.state().highlight})`);
@@ -196,7 +207,7 @@
       await __eda.run("eeschema.InteractiveSelection.SelectNode");
       await sleep(500);
       t(__eda.state().selection.map((x) => x.id).join() === "pin:R1:1", `Select Node on a pin's end selects the pin (an exact hit on a pin wins over the wire there): ${__eda.state().selection.map((x) => x.id)}`);
-      await hoverAt(44_450_000, 82_550_000);
+      await hoverAt(onWire[0], onWire[1]);
       await __eda.run("eeschema.InteractiveSelection.SelectNode");
       await sleep(500);
       const ids = __eda.state().selection.map((x) => x.id);
