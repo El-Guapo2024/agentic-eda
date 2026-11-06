@@ -584,26 +584,23 @@ Notes:
 
 ## Common and app shell
 
-- **C1 [BD] Mouse and touchpad.**
-  - The drag-button preferences are ignored.
-  - No pinch zoom.
-  - The library canvases never auto-pan.
-  - No pointer warp (a browser limit).
+- **C1 [BD] Mouse and touchpad.** **done (task-u4-common)**: every canvas reads Left button drag (KiCad's three choices), Middle and Right button drag (Pan, Zoom, None) and Pan on mouse movement with key; the library editors draw the selection rectangle and auto-pan; a touchpad pinch zooms as `onMagnify` does (PARITY-common §3, §17). Left:
+  - The studio's Left button drag default is "Drag any object" (KiCad's is "Drag selected objects"): a decision for the lead.
+  - No pointer warp ("Center and warp cursor on zoom", the infinite drag at the edge): a browser limit.
+  - A pinch made with Control held reads as Ctrl and the wheel.
   - M. GAPS 20; PARITY-sch §27.
-- **C2 [FM] Grid.**
-  - Dots only.
-  - Edit Grids has no names and no separate X/Y.
-  - The schematic context menu has no Zoom or Grid submenu.
+- **C2 [FM] Grid.** **done (task-u4-common)**: Dots, Lines and Small crosses with the grid thickness and minimum spacing on each editor's Display Options page, one port of `DrawGrid` for the four canvases; Edit Grids has KiCad's Grid Settings (name, X, Linked, Y), drawn and snapped to with X and Y; the schematic context menu has its Zoom and Grid submenus (PARITY-common §10, §17). Left:
+  - "Snap to grid:" (Always / When grid shown / Never) is not offered.
+  - An editor keeps its grid by its X size: of two grids with the same X the first is current.
   - S. PARITY-pcb §1; PARITY-common §10.
-- **C3 [FM] Page Settings.**
-  - No custom drawing sheet (`.kicad_wks`).
-  - The board's drawing sheet starts off and has no zone letters.
+- **C3 [FM] Page Settings.** **done (task-u4-common)**: a port of the `.kicad_wks` reader and draw-item list draws KiCad's default sheet or a chosen one on the board and the sheet; Page Settings chooses, browses or uploads the file; the derived `.kicad_pro` names it and kicad-cli's plots get `--drawing-sheet`; the board's sheet is on by default with its zone references; a `User` paper is clamped and turned for portrait (PARITY-common §9). Left:
+  - The board's sheet now shows from the start, and the placer starts boards at the page corner, so the frame crosses them: a decision for the lead.
+  - Upload copies the file into the board's folder (KiCad never copies); the file choice is an undo step (in KiCad a project setting).
+  - Embedding the sheet, the schematic's "export to other sheets" boxes, `@{..}` expressions, outline fonts.
   - M. PARITY-common §9; GAPS 18.
-- **C4 [BD] Small differences.**
-  - Enter finishes a PCB route.
-  - The crosshair and polar coordinates are shared across editors.
-  - The Measure tool has no arrowheads.
+- **C4 [BD] Small differences.** **done (task-u4-common)**: Enter during a PCB route is `cursorClick` (fixes, End finishes); each editor keeps its own crosshair, Always Show Crosshairs and polar coordinates; the Measure tool's ruler is `RULER_ITEM` with its ticks and x, y, r and θ, and Interactive Offset's ruler its arrowhead (the Measure tool has none in 8303b2ad) (PARITY-common §2, §3, §17). Left:
   - About 310 handlers have never been compared with KiCad's code.
+  - The rulers' drop shadows.
   - S. GAPS 15; PARITY-common §2-§4.
 - **C5 [KO] Browser limits.**
   - The Ctrl+Tab and Alt+Tab switchers (the browser keeps those keys).
