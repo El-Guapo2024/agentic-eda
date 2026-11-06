@@ -16,7 +16,7 @@
 #
 # Which board a check needs is written in its header, on a line of its own:
 #
-#   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign]
+#   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign|import-files]
 #
 # and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
@@ -214,6 +214,16 @@ ensure_ui() { # ensure_ui <kind>: the directory to serve as --ui
                     && cp "$q/cadstar/route_offset/minimal_route_offset_curved_track.cpa" "$u.tmp/e2e-import-foreign/" \
                     && cp "$q/altium/eDP_adapter_dvt1_source/power.SchDoc" "$u.tmp/e2e-import-foreign/" \
                     && cp "$e2e/import-foreign.check.js" "$u.tmp/e2e-import-foreign/" && mv "$u.tmp" "$u"
+            ) 9> "$scratch/ui-$kind.lock" && echo "$u" ;;
+        import-files)
+            # import-files.check.js (task-u4-import): KiCad's QA Eagle project as aht20.brd / aht20.sch under e2e-import-files/.
+            (
+                flock 9
+                [ -d "$u" ] && exit 0
+                local q="${KICAD_SRC_DIR:?KICAD_SRC_DIR is needed for ui=import-files}/qa/data/pcbnew/plugins/eagle/Adafruit-AHT20-PCB"
+                cp -r "$repo/web/studio/dist" "$u.tmp" && mkdir -p "$u.tmp/e2e-import-files" \
+                    && cp "$q/Adafruit AHT20 Temperature & Humidity.brd" "$u.tmp/e2e-import-files/aht20.brd" \
+                    && cp "$q/Adafruit AHT20 Temperature & Humidity.sch" "$u.tmp/e2e-import-files/aht20.sch" && mv "$u.tmp" "$u"
             ) 9> "$scratch/ui-$kind.lock" && echo "$u" ;;
         *) echo "unknown ui $kind" >&2; return 1 ;;
     esac
