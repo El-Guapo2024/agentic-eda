@@ -280,13 +280,14 @@ export async function postTrackViaPreview(cmd: Cmd): Promise<{ ok: true; ask: { 
 
 /**
  * The end of a carried placement without a command of its own (crates/cli/src/carry.rs): "commit" when the drop changed nothing, "cancel" for Escape --
- * `commit.Revert()`, which takes the carried items away and leaves the undo and redo history as it was. `ok` is false when nothing was being carried.
+ * `commit.Revert()`, which takes the carried items away and leaves the undo and redo history as it was. `ok` is false when nothing was being carried, or when
+ * the commit of a strict carry (`strict`, or the Strict switch the carry began under) was refused by the gates -- which took the carry back.
  */
-export async function postCarry(action: "commit" | "cancel"): Promise<CmdReply> {
+export async function postCarry(action: "commit" | "cancel", strict?: boolean): Promise<CmdReply> {
   const r = await fetch("/api/carry", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify(strict === undefined ? { action } : { action, strict }),
   });
   return (await r.json()) as CmdReply;
 }

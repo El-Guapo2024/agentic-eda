@@ -1012,7 +1012,8 @@ fn handle(
         ("POST", "/api/carry") => {
             let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             let done = match req.get("action").and_then(Value::as_str) {
-                Some("commit") => board::carry::commit(dir),
+                // `"strict"`: the drop's Strict switch; absent, the one the carry began with
+                Some("commit") => board::carry::commit(dir, req.get("strict").and_then(Value::as_bool)),
                 Some("cancel") => board::carry::cancel(dir, "ui"),
                 _ => Err(vec![eda_model::CheckResult::fail("board_bad_carry", "carry", "the action is commit or cancel")]),
             };

@@ -122,21 +122,48 @@ fn an_editor_placement_keeps_its_point_on_any_grid() {
 }
 
 #[test]
+fn a_strict_carry_dropped_where_it_was_made_is_judged_too() {
+    // `POST /api/carry` `{"action": "commit"}` -- a click before the pointer moved: the footprint Place Footprint made off the board is judged where it is, by
+    // the Strict switch the carry began under, and refused with nothing left behind; without Strict it stands.
+    use super::carry::{commit, is_carrying, Carry};
+    use super::{step_carrying, Strictness};
+    let dir = scratch("carry_judged_empty_drop");
+    setup(&dir);
+    let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
+    let make = || Cmd::PlaceFootprint { footprint: "2PAD".into(), at: Point { x: mm(35.0), y: mm(5.0) }, reference: String::new(), value: String::new(), definition: None };
+    step_carrying(&dir, make(), Strictness::Gates, "ui", Some(Carry::Begin)).unwrap();
+    let e = commit(&dir, None).unwrap_err();
+    assert_eq!(e[0].check, "board_worse", "{e:?}");
+    assert!(!is_carrying(&dir));
+    assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before, "nothing of the carry is left");
+    step_carrying(&dir, make(), Strictness::Off, "ui", Some(Carry::Begin)).unwrap();
+    commit(&dir, None).expect("without Strict the drop stands");
+    assert!(!is_carrying(&dir));
+    assert_ne!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_carried_placement_is_judged_at_its_drop_against_the_design_it_began_from() {
     // Place Footprint makes its footprint where the pointer is and the Move tool carries it: with Strict on, making it on top of U1 is not refused (it is on the
-    // cursor, not put down); a drop off the board is refused against the board before the footprint was made; a drop in the clear is the one step.
+    // cursor, not put down); a drop off the board is refused against the board before the footprint was made, and the carry ends with nothing left behind
+    // (carry.rs: the footprint is gone, no undo entry); made again, a drop in the clear is the one step.
     use super::carry::Carry;
     use super::{step_carrying, Strictness};
     let dir = scratch("carry_judged_at_drop");
     setup(&dir);
     let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
-    let make = Cmd::PlaceFootprint { footprint: "2PAD".into(), at: Point { x: mm(5.0), y: mm(5.0) }, reference: String::new(), value: String::new(), definition: None };
-    step_carrying(&dir, make, Strictness::Gates, "ui", Some(Carry::Begin)).expect("making the carried footprint over U1 is not judged on its own");
+    let make = || Cmd::PlaceFootprint { footprint: "2PAD".into(), at: Point { x: mm(5.0), y: mm(5.0) }, reference: String::new(), value: String::new(), definition: None };
+    step_carrying(&dir, make(), Strictness::Gates, "ui", Some(Carry::Begin)).expect("making the carried footprint over U1 is not judged on its own");
     let made = load(&dir).unwrap().1.drawings.unwrap().board_parts.last().unwrap().reference.clone();
     let off = Cmd::MoveItems { ids: vec![made.clone()], dx: mm(30.0), dy: Nm::ZERO };
     let e = step_carrying(&dir, off, Strictness::Gates, "ui", Some(Carry::Commit)).unwrap_err();
     assert_eq!(e[0].check, "board_worse", "a drop off the board adds a failure to the board the step began from: {e:?}");
-    // the refused drop settled nothing: the footprint is still carried, and a drop in the clear ends the step
+    assert!(!super::carry::is_carrying(&dir), "the refused drop ends the carry");
+    assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before, "and leaves nothing of it behind");
+    assert!(undo(&dir, "ui", Some(Domain::Pcb)).is_err(), "nor an undo step");
+    step_carrying(&dir, make(), Strictness::Gates, "ui", Some(Carry::Begin)).unwrap();
+    let made = load(&dir).unwrap().1.drawings.unwrap().board_parts.last().unwrap().reference.clone();
     let clear = Cmd::MoveItems { ids: vec![made.clone()], dx: mm(5.0), dy: mm(10.0) };
     step_carrying(&dir, clear, Strictness::Gates, "ui", Some(Carry::Commit)).expect("a drop in the clear");
     assert_eq!(pose(&dir, &made).map(|p| p.0), Some(Point { x: mm(10.0), y: mm(15.0) }));

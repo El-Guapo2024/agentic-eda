@@ -18,6 +18,8 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "esModuleInterop": true,
+    // The stroke font's glyphs (src/kicad/strokeFont.json): a text is hit-tested by its strokes (kicad-port/textHit.ts).
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
     "noUnusedLocals": true,

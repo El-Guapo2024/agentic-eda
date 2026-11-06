@@ -304,3 +304,42 @@ export function drawStrokeText(ctx: CanvasRenderingContext2D, text: string, x: n
   }
   ctx.restore();
 }
+
+/** One pen stroke of a laid-out text, from (x0, y0) to (x1, y1), in the caller's (board) units. */
+export type StrokeSegment = readonly [number, number, number, number];
+
+/**
+ * The pen strokes `drawStrokeText` draws for `text` at (x, y), as segments in the same units, laid out and placed exactly as it places them (justify, the
+ * turn, the mirror and the italic shear; not `keepReadable`, a flipped view's redraw): what `EDA_TEXT::GetEffectiveTextShape` gives a stroke-font text -- one
+ * `SHAPE_SEGMENT` of the pen's width per stroke -- for hit tests and coverage (kicad-port/textHit.ts) that agree with what the canvas shows.
+ */
+export function strokeTextSegments(text: string, x: number, y: number, opts: Pick<StrokeTextOptions, "sizeNm" | "justify" | "angleRad" | "mirror" | "italic">): StrokeSegment[] {
+  if (!text) return [];
+  const { sizeNm, justify = "left", angleRad = 0, mirror = false, italic = false } = opts;
+  const { glyphs: placed, width, overbars } = layout(text, sizeNm);
+  const startX = justify === "center" ? -width / 2 : justify === "right" ? -width : 0;
+  const [cos, sin] = [Math.cos(angleRad), Math.sin(angleRad)];
+  // drawStrokeText's canvas transform, applied to one point: the italic shear, the mirror, the turn, the anchor
+  const at = (lx: number, ly: number): [number, number] => {
+    let px = italic ? lx - ITALIC_TILT * ly : lx;
+    if (mirror) px = -px;
+    return [x + px * cos - ly * sin, y + px * sin + ly * cos];
+  };
+  const out: StrokeSegment[] = [];
+  for (const pg of placed) {
+    for (const stroke of pg.glyph.strokes) {
+      for (let i = 1; i < stroke.length; i++) {
+        const [a, b] = [stroke[i - 1]!, stroke[i]!];
+        const p = at(startX + pg.x + a[0] * pg.size, pg.y + a[1] * pg.size);
+        const q = at(startX + pg.x + b[0] * pg.size, pg.y + b[1] * pg.size);
+        out.push([p[0], p[1], q[0], q[1]]);
+      }
+    }
+  }
+  for (const [x0, x1, oy] of overbars) {
+    const p = at(startX + x0, oy);
+    const q = at(startX + x1, oy);
+    out.push([p[0], p[1], q[0], q[1]]);
+  }
+  return out;
+}

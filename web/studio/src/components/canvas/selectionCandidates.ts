@@ -14,7 +14,7 @@
 // user clicked on a small item within a much larger one...").
 import { stitchFilteredAsVia } from "../../kicad-port/viaStitch";
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
-import { padIds, padParent } from "../../kicad-port/pcbItems";
+import { fpTextById, padIds, padParent } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, artTextAsField, artTextShown, unionBox } from "../../kicad-port/fpArt";
 import { fpItemsHitDistance } from "../../kicad-port/fpBoardItems";
@@ -32,6 +32,7 @@ import { stitchArea } from "../../kicad-port/viaStitch";
 import { cellArea, cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
 import { circleRing, coverageRatio, ringArea, type Ring } from "../../kicad-port/coverage";
 import { boxRing, footprintHull, padRing, shapeCoverageArea, shapeRings, trackRings } from "../../kicad-port/footprintCoverage";
+import { fieldStrokes, textBoxArea, textBoxDistance, textHitSlop } from "../../kicad-port/textHit";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "fptext" | "table" | "tablecell" | ExtraKind;
 
@@ -237,6 +238,9 @@ const sideShown = (layerVisible: Record<string, boolean>, p: Pick<Part, "side">)
  * subtractive (Ctrl/Cmd+Shift) modifier: "we only want items that are
  * selected" -- applied here rather than by the caller so every caller
  * gets it automatically.
+ *
+ * With `onePixelNm`, a footprint's field or text is collected by its box, as the collector takes it, but measured by its strokes for the heuristics
+ * (`hitTestDistance`, kicad-port/textHit.ts): a click in its box off its strokes is no hit of it when anything else is hit exactly. Without it, by its box.
  */
 export function collectSelectionCandidates(
   board: BoardState,
@@ -248,11 +252,13 @@ export function collectSelectionCandidates(
   activeLayer: string | null,
   highContrast: boolean,
   selection: ReadonlySet<string>,
-  subtractiveOnly: boolean
+  subtractiveOnly: boolean,
+  onePixelNm?: number
 ): SelectionCandidate[] {
   const out: SelectionCandidate[] = [];
   const locked = new Set(board.locked ?? []);
-  const consider = (kind: SelectableKind, id: string, slopNm: number, areaNm2: number, layer: string | null, lockedId: string = id, ruleArea = false) => {
+  // `guessSlopNm`: the slop the heuristics weigh when it is not the one the item is collected by (a text's strokes against its box)
+  const consider = (kind: SelectableKind, id: string, slopNm: number, areaNm2: number, layer: string | null, lockedId: string = id, ruleArea = false, guessSlopNm?: number) => {
     if (slopNm > toleranceNm) return;
     if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, filterKindOf(board, kind, id))) || !objectSelectable(kind, layerVisible)) return;
     // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected -- but a click may pick a lone pad of a locked
@@ -260,7 +266,24 @@ export function collectSelectionCandidates(
     if (!filter.lockedItems && kind !== "pad" && lockedForFilter(board, locked, lockedId)) return;
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
     if (subtractiveOnly && !selection.has(id)) return;
-    out.push({ kind, id, slopNm: Math.max(slopNm, 0), areaNm2: Math.max(areaNm2, 1), layer });
+    out.push({ kind, id, slopNm: guessSlopNm ?? Math.max(slopNm, 0), areaNm2: Math.max(areaNm2, 1), layer });
+  };
+  // A footprint's field or text: collected by the box of its strokes (`TextHitTest`), weighed by its strokes (`hitTestDistance`); by the rough box without `onePixelNm`.
+  const considerText = (kind: "field" | "fptext", f: FieldInfo, id: string, lockedId: string) => {
+    if (onePixelNm !== undefined && onePixelNm > 0) {
+      // nowhere near it (no glyph advances more than 1.72 of the size, a line is 1.6 sizes below the last): no need of its strokes
+      const lines = (f.shown ?? f.text).split("\n");
+      const reach = (Math.max(...lines.map((l) => l.length)) + 1) * 2 * f.h + lines.length * 1.6 * f.h + toleranceNm;
+      if (Math.abs(xNm - f.x) > reach || Math.abs(yNm - f.y) > reach) return;
+      const s = fieldStrokes(f);
+      const d = textBoxDistance(s, xNm, yNm);
+      if (d <= toleranceNm) consider(kind, id, d, Math.max(textBoxArea(s), 1), f.layer, lockedId, false, textHitSlop(s, xNm, yNm, onePixelNm));
+      return;
+    }
+    const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
+    const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
+    const d = inside ? 0 : Math.hypot(xNm - (x0 + x1) / 2, yNm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
+    consider(kind, id, d, Math.max((x1 - x0) * (y1 - y0), 1), f.layer, lockedId);
   };
 
   // Footprints: containment-only (courtyard rect), same as this app's
@@ -270,14 +293,9 @@ export function collectSelectionCandidates(
   // footprint spans many layers at once), matching GuessCandidate's
   // documented `layer: null` convention.
   for (const p of board.parts as Part[]) {
-    if (!p.placed || !p.courtyard || !sideShown(layerVisible, p)) continue;
-    const [x0, y0, x1, y1] = p.courtyard;
-    // A click on a stroke of the footprint's own silkscreen or fab drawing picks the footprint too, wherever the stroke is (`FOOTPRINT::HitTest` counts its graphics).
-    const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
-    const slop = inside ? 0 : Math.min(artHitDistance(p, xNm, yNm, layerVisible), fpItemsHitDistance(p, xNm, yNm, layerVisible));
-    if (slop > toleranceNm) continue;
-    // `FOOTPRINT::GetCoverageArea`: the area of its bounding hull (UI-LEFT P22; it was the courtyard's box)
-    consider("part", p.ref, slop, Math.max(ringArea(partHull(p)), 1), null);
+    const hit = partHit(p, xNm, yNm, layerVisible);
+    if (!hit || hit.slopNm > toleranceNm) continue;
+    consider("part", p.ref, hit.slopNm, hit.areaNm2, null);
   }
 
   // Pads: `PAD::IsLocked()` is the footprint's. A pad is a copper item on its footprint's side (a through-hole one is on every layer); its area is the
@@ -295,10 +313,7 @@ export function collectSelectionCandidates(
     if (!p.placed || !p.fields?.length) continue;
     for (const f of p.fields) {
       if (!f.visible || !f.text || !fieldShownByObjects(layerVisible, p, f)) continue;
-      const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
-      const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
-      const d = inside ? 0 : Math.hypot(xNm - (x0 + x1) / 2, yNm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
-      consider("field", f.id, d, Math.max((x1 - x0) * (y1 - y0), 1), f.layer, p.ref);
+      considerText("field", f, f.id, p.ref);
     }
   }
   // A footprint's own texts (UI-LEFT P15): `PCB_SELECTION_TOOL::Selectable` lets a footprint's `PCB_TEXT` be picked on the board ("Most footprint children can only be
@@ -307,10 +322,7 @@ export function collectSelectionCandidates(
     if (!p.placed || !p.texts?.length) continue;
     for (const t of p.texts) {
       if (!t.text || !artTextShown(layerVisible, p, t)) continue;
-      const { x0, y0, x1, y1 } = textBoundingBoxRotated(artTextAsField(t));
-      const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
-      const d = inside ? 0 : Math.hypot(xNm - (x0 + x1) / 2, yNm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
-      consider("fptext", t.id, d, Math.max((x1 - x0) * (y1 - y0), 1), t.layer, p.ref);
+      considerText("fptext", artTextAsField(t), t.id, p.ref);
     }
   }
   for (const t of board.routing?.tracks ?? []) {
@@ -383,6 +395,62 @@ export function collectSelectionCandidates(
   }
 
   return out;
+}
+
+/**
+ * A footprint's hit at (xNm, yNm), containment-only (courtyard rect) as `collectSelectionCandidates` takes it: inside, an exact hit; outside, the distance to
+ * the nearest stroke of its own silkscreen or fab drawing (`FOOTPRINT::HitTest` counts its graphics); its area that of its bounding hull
+ * (`FOOTPRINT::GetCoverageArea`, UI-LEFT P22). Null for a footprint that is not placed, has no courtyard or is on a side not shown.
+ */
+function partHit(p: Part, xNm: number, yNm: number, layerVisible: Record<string, boolean>): { slopNm: number; areaNm2: number } | null {
+  if (!p.placed || !p.courtyard || !sideShown(layerVisible, p)) return null;
+  const [x0, y0, x1, y1] = p.courtyard;
+  const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
+  const slop = inside ? 0 : Math.min(artHitDistance(p, xNm, yNm, layerVisible), fpItemsHitDistance(p, xNm, yNm, layerVisible));
+  return { slopNm: Math.max(slop, 0), areaNm2: Math.max(ringArea(partHull(p)), 1) };
+}
+
+/** The footprint a pad, a field or a footprint's own text belongs to (`GetParentFootprint()`); null for an item of the board. */
+function parentFootprintOf(board: BoardState, c: Pick<SelectionCandidate, "kind" | "id">): string | null {
+  switch (c.kind) {
+    case "pad":
+      return padParent(board, c.id);
+    case "fptext":
+      return fpTextById(board, c.id)?.part.ref ?? null;
+    case "field":
+      return board.parts.find((p) => p.fields?.some((f) => f.id === c.id))?.ref ?? null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * The edit tools' client filter on the items under the cursor (`EDIT_TOOL::Drag`: `FilterCollectorForFreePads( aCollector )` then
+ * `FilterCollectorForHierarchy( aCollector, true )`; Move, Rotate, Flip, Properties and the rest have the same two): a pad stands for its footprint
+ * (`FilterCollectorForFreePads`: "if( !aCollector.HasItem( item->GetParent() ) ) to_add.insert( item->GetParent() ); aCollector.Remove( item )"), and a
+ * field, a text or a pad of a footprint that is itself under the cursor goes ("Remove children of selected items": with `aMultiselect` every item of the
+ * collector is a CANDIDATE, so a child of one is dropped). Groups are left as they are here: the callers take a group's member as the member.
+ */
+export function applyToolFilter(board: BoardState, candidates: readonly SelectionCandidate[], xNm: number, yNm: number, layerVisible: Record<string, boolean>): SelectionCandidate[] {
+  const out: SelectionCandidate[] = [];
+  const parts = new Set(candidates.filter((c) => c.kind === "part").map((c) => c.id));
+  for (const c of candidates) {
+    if (c.kind !== "pad") {
+      out.push(c);
+      continue;
+    }
+    const ref = padParent(board, c.id);
+    if (!ref || parts.has(ref)) continue;
+    const p = board.parts.find((q) => q.ref === ref);
+    const hit = p ? partHit(p, xNm, yNm, layerVisible) : null;
+    // the footprint of a pad on a side not shown, or of one without a courtyard, still stands for the pad: it is what the tool works on
+    out.push({ kind: "part", id: ref, slopNm: hit?.slopNm ?? c.slopNm, areaNm2: hit?.areaNm2 ?? c.areaNm2, layer: null });
+    parts.add(ref);
+  }
+  return out.filter((c) => {
+    const parent = parentFootprintOf(board, c);
+    return parent === null || !parts.has(parent);
+  });
 }
 
 /** Closest approach to any of a dimension's own line segments (or its
@@ -616,6 +684,28 @@ export function footprintCoverageRatio(board: BoardState, ref: string, pool: rea
   return coverageRatio(hull, covered);
 }
 
+/**
+ * `RequestSelection` with the edit tools' client filter, for the item under the cursor when nothing is selected (M, R, F, D, E, Delete ...): the items
+ * collected, `applyToolFilter`, then the heuristics -- in `selectPoint`'s order (the client filter runs before `GuessSelectionCandidates`). Over a footprint's
+ * fab reference this takes the footprint, as a click there takes the text.
+ */
+export function pickToolCandidates(
+  board: BoardState,
+  xNm: number,
+  yNm: number,
+  toleranceNm: number,
+  onePixelNm: number,
+  filter: SelectionFilter,
+  layerVisible: Record<string, boolean>,
+  activeLayer: string | null,
+  highContrast: boolean,
+  selection: ReadonlySet<string>
+): SelectionCandidate[] {
+  const all = applyToolFilter(board, collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, false, onePixelNm), xNm, yNm, layerVisible);
+  const accuracy = Math.round(5 * onePixelNm);
+  return guessSelectionCandidates(all, onePixelNm, activeLayer, highContrast, (c, pool) => footprintCoverageRatio(board, c.id, pool, accuracy));
+}
+
 export function pickSelectionCandidates(
   board: BoardState,
   xNm: number,
@@ -630,7 +720,7 @@ export function pickSelectionCandidates(
   subtractiveOnly: boolean,
   skipHeuristics: boolean
 ): SelectionCandidate[] {
-  const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly);
+  const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly, onePixelNm);
   if (skipHeuristics) return all;
   // `textMargin = aCollector.GetGuide()->Accuracy()`: `KiROUND( 5 * OnePixelInIU() )`
   const accuracy = Math.round(5 * onePixelNm);

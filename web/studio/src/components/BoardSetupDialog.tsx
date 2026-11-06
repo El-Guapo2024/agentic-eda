@@ -63,6 +63,8 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "board_layers", label: "Board Editor Layers" },
       { id: "stackup", label: "Physical Stackup" },
       { id: "mask_paste", label: "Solder Mask/Paste" },
+      // KiCad 25ec2335 adds Drill Chart here, after Solder Mask/Paste (`m_drillChartPage`); 8303b2ad's Zone Hatch Offsets, which 25ec2335 folds into Design
+      // Rules > Zones (`PANEL_SETUP_ZONES`), stays the last of the group as 8303b2ad has it.
       { id: "drill_chart", label: "Drill Chart" },
       { id: "hatch_offsets", label: "Zone Hatch Offsets" },
     ],

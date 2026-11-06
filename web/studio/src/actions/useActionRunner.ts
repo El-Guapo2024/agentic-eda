@@ -32,7 +32,7 @@ import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
-import { itemPassesFilter, pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { itemPassesFilter, pickSelectionCandidates, pickToolCandidates } from "../components/canvas/selectionCandidates";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
@@ -189,7 +189,7 @@ export function useActionRunner() {
      * clarification menu, the best candidate wins). Used by every edit hotkey (R/F/M/Del/E/U/Shift+M...)
      * so hover + key works without a prior click.
      */
-    const requestSelection = (): string[] => {
+    const requestSelection = (plain = false): string[] => {
       // `RequestSelection` with the tool's scan types: a pin is no item of the tools that move, turn or edit, so a selection of pins is trimmed to nothing (a selection that was not empty is
       // not replaced by what is under the cursor); `requestPins` asks for the pins.
       if (state.selection.size > 0) return state.tab === "schematic" ? [...state.selection].filter((id) => !isPinItemId(id)) : [...state.selection];
@@ -203,9 +203,13 @@ export function useActionRunner() {
       }
       if (state.tab !== "pcb" || !state.board) return [];
       const toleranceNm = Math.max(150_000, 6 / state.view.scale);
-      const cands = pickSelectionCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+      // The edit tools' client filter (`FilterCollectorForFreePads`, `FilterCollectorForHierarchy( aCollector, true )`) before the heuristics: a pad under the
+      // cursor stands for its footprint, and a footprint's field or text goes for the footprint it lies on -- the edit tools work on that. `plain`: a tool
+      // whose filter is empty (`EDIT_TOOL::Properties`) takes what a click takes.
+      const cands = plain
+        ? pickSelectionCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
+        : pickToolCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection);
       const hit = cands[0];
-      // `FilterCollectorForFreePads`: a pad under the cursor stands for its footprint -- the edit tools work on that.
       return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
     };
     /** `RequestSelection( { SCH_PIN_T } )` (Swap Pins, Swap Pin Labels): the selected pins in selection order, or the pin under the cursor when nothing is selected. */
@@ -997,7 +1001,8 @@ export function useActionRunner() {
           dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "carried" } });
           return;
         }
-        const ref = requestSelection()[0];
+        // `EDIT_TOOL::Properties`: `RequestSelection` with an empty client filter -- over a footprint's text, the text's properties
+        const ref = requestSelection(true)[0];
         if (ref) openPropertiesFor(ref, api, dispatch);
       })
     );

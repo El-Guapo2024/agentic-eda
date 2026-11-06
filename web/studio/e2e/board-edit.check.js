@@ -75,6 +75,49 @@
     mmPerPx = Math.abs(sx);
     return (xum, yum) => [100 + (xum / 1e6 - a[0]) / sx, 100 + (yum / 1e6 - a[1]) / sy];
   };
+  /**
+   * A point on a footprint's body that holds nothing else (UI-LEFT P15): inside its courtyard, off every pad and track, and clear of every footprint's field
+   * and text. A click at a footprint's anchor is often on its fab reference (`${REFERENCE}` on F.Fab, at the anchor); KiCad's selection takes that text
+   * there -- `PCB_SELECTION_TOOL::Selectable` lets a footprint's `PCB_TEXT` be picked, and `GuessSelectionCandidates` keeps the smaller of two exact hits --
+   * so a check that means the footprint presses on its body. `nmPerPx` is the canvas' scale; the point is the one farthest from all of those (at least
+   * `minPx` pixels when the body has room), the nearest the anchor of the equally good.
+   */
+  const bodyPoint = (st, part, nmPerPx, minPx = 7) => {
+    const boxDist = (x, y, cx, cy, hw, hh, angDeg = 0) => {
+      const a = (-angDeg * Math.PI) / 180, dx = x - cx, dy = y - cy;
+      const u = dx * Math.cos(a) + dy * Math.sin(a), v = -dx * Math.sin(a) + dy * Math.cos(a);
+      return Math.hypot(Math.max(Math.abs(u) - hw, 0), Math.max(Math.abs(v) - hh, 0));
+    };
+    const segDist = (x, y, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l)); return Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy)); };
+    const texts = st.parts.filter((p) => p.placed).flatMap((p) => [...(p.fields ?? []).filter((f) => f.visible && f.text), ...(p.texts ?? []).filter((t) => t.text)]);
+    const pads = st.parts.filter((p) => p.placed).flatMap((p) => p.pads ?? []);
+    const others = st.parts.filter((p) => p.placed && p.ref !== part.ref && p.courtyard);
+    const clearance = (x, y) => {
+      let d = Infinity;
+      for (const q of pads) d = Math.min(d, boxDist(x, y, q.x, q.y, q.w / 2, q.h / 2));
+      for (const t of texts) {
+        const n = Math.max(String(t.shown ?? t.text).length, 1);
+        // generous: a glyph's advance is about its height, the box 1.3 heights tall; a text not centred may run either way from its anchor
+        d = Math.min(d, boxDist(x, y, t.x, t.y, (t.halign ? n : n / 2) * t.h, (t.valign ? 1.3 : 0.65) * t.h, (t.angle ?? 0) / 1000));
+      }
+      for (const tr of st.routing?.tracks ?? []) for (let i = 1; i < tr.pts.length; i++) d = Math.min(d, segDist(x, y, tr.pts[i - 1], tr.pts[i]) - tr.width / 2);
+      for (const v of st.routing?.vias ?? []) d = Math.min(d, Math.hypot(x - v.x, y - v.y) - v.d / 2);
+      return d;
+    };
+    const [x0, y0, x1, y1] = part.courtyard;
+    const [mx, my] = [(x1 - x0) * 0.15, (y1 - y0) * 0.15];
+    let best = null;
+    const step = Math.max(nmPerPx, (x1 - x0) / 150, (y1 - y0) / 150);
+    for (let x = x0 + mx; x <= x1 - mx; x += step) {
+      for (let y = y0 + my; y <= y1 - my; y += step) {
+        if (others.some((o) => x >= o.courtyard[0] && x <= o.courtyard[2] && y >= o.courtyard[1] && y <= o.courtyard[3])) continue;
+        const c = Math.min(clearance(x, y) / nmPerPx, minPx * 2);
+        const r = Math.hypot(x - part.at[0], y - part.at[1]);
+        if (!best || c > best.c + 1e-9 || (Math.abs(c - best.c) <= 1e-9 && r < best.r)) best = { x, y, c, r };
+      }
+    }
+    return best ? [Math.round(best.x), Math.round(best.y)] : [part.at[0], part.at[1]];
+  };
   const click = async (px, py, extra = {}) => { fire("pointermove", px, py, extra); await sleep(150); fire("pointerdown", px, py, { buttons: 1, ...extra }); await sleep(60); fire("pointerup", px, py, extra); await sleep(700); };
   /** A press, a motion in steps with the button held, a release: a drag. */
   const drag = async (x0, y0, x1, y1, extra = {}) => {
@@ -131,11 +174,13 @@
     await scenario("select: a click on a footprint selects it, Shift+click adds another, a click on nothing clears, a window takes what it encloses", async (t) => {
       await select([]);
       const a = await partOf(A), b = await partOf(B);
-      const [ax, ay] = to(a.at[0], a.at[1]);
+      // on each footprint's body: its anchor is under its fab reference, which a click there picks (bodyPoint)
+      const st0 = await state();
+      const [ax, ay] = to(...bodyPoint(st0, a, mmPerPx * 1e6));
       await click(ax, ay);
       t(JSON.stringify(selected()) === JSON.stringify([A]), `a click on ${A} selects it: ${JSON.stringify(__eda.state().selection)}`);
       t(__eda.state().selection[0]?.kind === "footprint", `as a footprint (${__eda.state().selection[0]?.kind})`);
-      const [bx, by] = to(b.at[0], b.at[1]);
+      const [bx, by] = to(...bodyPoint(st0, b, mmPerPx * 1e6));
       await click(bx, by, { shiftKey: true });
       t(JSON.stringify(selected()) === JSON.stringify([A, B].sort()), `Shift+click adds ${B}: ${selected()}`);
       const st = await state();
@@ -163,7 +208,7 @@
     await scenario("move: dragging a footprint moves it by the pointer's distance, one undo step; redo moves it again", async (t) => {
       await select([]);
       const p0 = await partOf(B);
-      const [px, py] = to(p0.at[0], p0.at[1]);
+      const [px, py] = to(...bodyPoint(await state(), p0, mmPerPx * 1e6));
       await drag(px, py, px + 60, py + 30);
       const p1 = await partOf(B);
       const want = [60 * mmPerPx * 1e6, 30 * mmPerPx * 1e6];

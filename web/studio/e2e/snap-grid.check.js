@@ -37,6 +37,49 @@
 
   // ---- the page
   const canvas = () => [...document.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  /**
+   * A point on a footprint's body that holds nothing else (UI-LEFT P15): inside its courtyard, off every pad and track, and clear of every footprint's field
+   * and text. A click at a footprint's anchor is often on its fab reference (`${REFERENCE}` on F.Fab, at the anchor); KiCad's selection takes that text
+   * there -- `PCB_SELECTION_TOOL::Selectable` lets a footprint's `PCB_TEXT` be picked, and `GuessSelectionCandidates` keeps the smaller of two exact hits --
+   * so a check that means the footprint presses on its body. `nmPerPx` is the canvas' scale; the point is the one farthest from all of those (at least
+   * `minPx` pixels when the body has room), the nearest the anchor of the equally good.
+   */
+  const bodyPoint = (st, part, nmPerPx, minPx = 7) => {
+    const boxDist = (x, y, cx, cy, hw, hh, angDeg = 0) => {
+      const a = (-angDeg * Math.PI) / 180, dx = x - cx, dy = y - cy;
+      const u = dx * Math.cos(a) + dy * Math.sin(a), v = -dx * Math.sin(a) + dy * Math.cos(a);
+      return Math.hypot(Math.max(Math.abs(u) - hw, 0), Math.max(Math.abs(v) - hh, 0));
+    };
+    const segDist = (x, y, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l)); return Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy)); };
+    const texts = st.parts.filter((p) => p.placed).flatMap((p) => [...(p.fields ?? []).filter((f) => f.visible && f.text), ...(p.texts ?? []).filter((t) => t.text)]);
+    const pads = st.parts.filter((p) => p.placed).flatMap((p) => p.pads ?? []);
+    const others = st.parts.filter((p) => p.placed && p.ref !== part.ref && p.courtyard);
+    const clearance = (x, y) => {
+      let d = Infinity;
+      for (const q of pads) d = Math.min(d, boxDist(x, y, q.x, q.y, q.w / 2, q.h / 2));
+      for (const t of texts) {
+        const n = Math.max(String(t.shown ?? t.text).length, 1);
+        // generous: a glyph's advance is about its height, the box 1.3 heights tall; a text not centred may run either way from its anchor
+        d = Math.min(d, boxDist(x, y, t.x, t.y, (t.halign ? n : n / 2) * t.h, (t.valign ? 1.3 : 0.65) * t.h, (t.angle ?? 0) / 1000));
+      }
+      for (const tr of st.routing?.tracks ?? []) for (let i = 1; i < tr.pts.length; i++) d = Math.min(d, segDist(x, y, tr.pts[i - 1], tr.pts[i]) - tr.width / 2);
+      for (const v of st.routing?.vias ?? []) d = Math.min(d, Math.hypot(x - v.x, y - v.y) - v.d / 2);
+      return d;
+    };
+    const [x0, y0, x1, y1] = part.courtyard;
+    const [mx, my] = [(x1 - x0) * 0.15, (y1 - y0) * 0.15];
+    let best = null;
+    const step = Math.max(nmPerPx, (x1 - x0) / 150, (y1 - y0) / 150);
+    for (let x = x0 + mx; x <= x1 - mx; x += step) {
+      for (let y = y0 + my; y <= y1 - my; y += step) {
+        if (others.some((o) => x >= o.courtyard[0] && x <= o.courtyard[2] && y >= o.courtyard[1] && y <= o.courtyard[3])) continue;
+        const c = Math.min(clearance(x, y) / nmPerPx, minPx * 2);
+        const r = Math.hypot(x - part.at[0], y - part.at[1]);
+        if (!best || c > best.c + 1e-9 || (Math.abs(c - best.c) <= 1e-9 && r < best.r)) best = { x, y, c, r };
+      }
+    }
+    return best ? [Math.round(best.x), Math.round(best.y)] : [part.at[0], part.at[1]];
+  };
   const w2c = (wx, wy) => { const v = state().view, r = canvas().getBoundingClientRect(); return [r.left + v.x + wx * v.scale, r.top + v.y + wy * v.scale]; };
   const c2w = (cx, cy) => { const v = state().view, r = canvas().getBoundingClientRect(); return [(cx - r.left - v.x) / v.scale, (cy - r.top - v.y) / v.scale]; };
   /** The part of the canvas a pointer can reach, as a box of the sheet or board (`inset` px in from its edges): the canvas can be wider than the window. */
@@ -77,7 +120,8 @@
     const clearOfTracks = (p) => (st0.routing?.tracks ?? []).every((t) => t.pts.every((q, i) => i === 0 || segDist(p.at, t.pts[i - 1], q) > t.width / 2 + 500_000));
     const bySize = [...st0.parts].filter((p) => p.placed && p.size).sort((a, b) => b.size[0] * b.size[1] - a.size[0] * a.size[1]);
     const target = bySize.find(clearOfTracks) ?? bySize[0];
-    const px0 = target.at;
+    // on its body, clear of its fab reference at the anchor (which a press there takes: bodyPoint)
+    const px0 = bodyPoint(st0, target, 1 / state().view.scale);
     /** Press on the part, wait `dwell` ms, move by (dx, dy) px in one event, report whether the move tool started; Escape, then release: nothing may be committed. */
     const trial = async (dx, dy, dwell = 0, back = false) => {
       const [x0, y0] = w2c(px0[0], px0[1]);
