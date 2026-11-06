@@ -125,6 +125,7 @@ mod zone_overrides;
 pub mod zone_priority;
 pub mod autoplace;
 mod zone_unfill;
+mod teardrop_upkeep;
 pub mod rule_editor;
 pub use rule_editor::DrcRuleAction;
 mod sch_annotate;
@@ -3250,7 +3251,10 @@ impl<'a> Board<'a> {
         if let (Some(before), Some(id)) = (zones_before.as_mut(), cmd.zone_kept_filled()) {
             before.remove(id);
         }
+        // `BOARD_COMMIT::Push`'s teardrop update, once per commit: a batch's commands are one (`teardrop_upkeep.rs`).
+        let teardrops_before = if self.pending_clean_up.is_none() { self.teardrops_before(cmd) } else { None };
         self.apply_cmd(cmd)?;
+        self.tidy_teardrops(teardrops_before);
         // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
         self.tidy_zone_fills(zones_before);
         self.tidy_shared_screens(shared_before, cmd.numbering());
@@ -7667,3 +7671,5 @@ pub(crate) struct ZoneDisplayEdit<'a> {
     pub border_hatch_pitch: Option<Nm>,
     pub hatch_offsets: Option<&'a eda_model::setup_pages::HatchOffsets>,
 }
+#[cfg(test)]
+mod teardrop_upkeep_tests;
