@@ -71,7 +71,8 @@ export function SymbolPropertiesDialog() {
   const symApi = useSymApi();
   const open = state.symbolProperties;
   const variant = state.schVariant;
-  const baseSymbol = open ? api.symbolById(open.id) : undefined;
+  // the placed unit it was opened on (KiCad's dialog is one `SCH_SYMBOL`'s), else the reference's first
+  const baseSymbol = open ? (state.schematic?.symbols.find((s) => s.id === open.id && (open.unit === undefined || s.unit === open.unit)) ?? api.symbolById(open.id)) : undefined;
   // the symbol as the current variant shows it (`GetFieldText( .., variant )`)
   const symbol = useMemo(() => (baseSymbol ? symbolInVariant(baseSymbol, variant) : undefined), [baseSymbol, variant]);
 
@@ -175,7 +176,7 @@ export function SymbolPropertiesDialog() {
     const t = setTimeout(() => focusTarget.current?.select(), 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open?.id, open?.field, variant]);
+  }, [open?.id, open?.field, open?.unit, variant]);
 
   if (!open || !symbol) return null;
   const sch = state.schematic;

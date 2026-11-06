@@ -1024,7 +1024,7 @@ export function SchematicView() {
             dispatch({ type: "ENTER_SCH_GROUP", id: ids[0]! });
             return;
           }
-          if (openSchProperties(sch, ids, dispatch)) return;
+          if (openSchProperties(sch, ids, dispatch, [wx, wy])) return;
         }
         const draw = state.drawState;
         // `IsDblClick( BUT_LEFT )` in DrawShape / DrawRuleArea: finish the shape as it stands, at the point that was clicked.

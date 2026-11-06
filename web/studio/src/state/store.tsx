@@ -715,7 +715,7 @@ export interface StudioState {
   /** `A`: SymbolChooserDialog's own open/closed flag. */
   symbolChooserOpen: boolean;
   /** `E`/`U`/`V`/`F` on a selected symbol: SymbolPropertiesDialog's own open/closed+focus state -- `field` picks which input autofocuses (`E` opens the same dialog with nothing singled out). */
-  symbolProperties: { id: string; field: "reference" | "value" | "footprint" | "datasheet" | null } | null;
+  symbolProperties: { id: string; field: "reference" | "value" | "footprint" | "datasheet" | null; /** The placed unit it opens on (the one under the pointer); absent: the first placed one. */ unit?: number } | null;
   /** `Ctrl+A`: AnnotateDialog's own open/closed flag (dialog_annotate.cpp's scope/order/reset options). */
   annotateDialogOpen: boolean;
   /** Which of the Symbol Fields Table / Find / Find and Replace / Schematic Setup dialogs is open (eeschema's editSymbolFields / find / findAndReplace / schematicSetup actions) -- one slot because they are never open together. */

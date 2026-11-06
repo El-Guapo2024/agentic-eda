@@ -1306,7 +1306,7 @@ export function useActionRunner() {
       "eeschema.InteractiveEdit.properties",
       schematicOnly(() => {
         // a single selected pin stands for its symbol (`Properties`: "If a single pin is selected, promote to its parent symbol")
-        if (state.schematic) openSchProperties(state.schematic, promoteLonePin(state.selection.size > 0 ? [...state.selection] : requestSelection()), dispatch);
+        if (state.schematic) openSchProperties(state.schematic, promoteLonePin(state.selection.size > 0 ? [...state.selection] : requestSelection()), dispatch, state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null);
       })
     );
     m.set("eeschema.InteractiveEdit.symbolProperties", openSymbolProperties(null));
