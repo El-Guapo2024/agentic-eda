@@ -1802,25 +1802,16 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     // KiCad's STEP dialog shows the exporter's output in its log window (`DIALOG_EXPORT_STEP_LOG`): kept in the reply, not thrown away.
     let log = log.trim().to_string();
     let mut reply = json!({ "ok": true, "engine": engine, "files": files });
+    let warnings = warnings_of(&log, &files, root);
+    if !warnings.is_empty() {
+        reply["warnings"] = json!(warnings);
+    }
     if !log.is_empty() {
         reply["log"] = Value::String(log);
     }
     Ok(reply)
 }
 
-fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
-    if kind.is_empty() || !kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err(fail("kicad_cli_export", kind, "unknown export kind"));
-    let warnings = warnings_of(&log, &files, root);
-    if !warnings.is_empty() {
-        reply["warnings"] = json!(warnings);
-    }
-    }
-    Ok(())
-}
-
-/// `kicad-cli pcb export <kind> [args...]` on `design`, into
-/// `<root>/export/kicad/<kind>/`. `name` is the project's name: the derived
 /// What kicad-cli said on a run that succeeded beyond its report of the files it wrote: the warnings and notes of the job's reporter (`CLI_REPORTER`
 /// prints every severity but an error to stdout, with no prefix: `common/reporter.cpp`), such as `PCB_PLOTTER::Plot`'s "Color theme '%s' not found, will
 /// use theme from PCB Editor." or a `JS_WARNING` job's message, which KiCad's dialogs show in their Messages panel (`WX_HTML_REPORT_PANEL`) with the
@@ -1838,6 +1829,15 @@ pub fn warnings_of(log: &str, files: &[String], root: &Path) -> Vec<String> {
         .collect()
 }
 
+fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
+    if kind.is_empty() || !kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(fail("kicad_cli_export", kind, "unknown export kind"));
+    }
+    Ok(())
+}
+
+/// `kicad-cli pcb export <kind> [args...]` on `design`, into
+/// `<root>/export/kicad/<kind>/`. `name` is the project's name: the derived
 /// board is written under it, so kicad-cli names its files after it
 /// (`<name>-F_Cu.gtl`, `<name>.pos`). `args` are passed through (e.g. `--layers
 /// F.Cu,B.Cu`, `--format csv`). Returns `{ ok, engine, files }`, files
@@ -1962,6 +1962,10 @@ pub fn export_pcb_placement_into(design: &Design, model: &ConstraintModel, work:
     }
     let log = log.trim().to_string();
     let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {}{}", cli_version(&cli), if served { " (api-server)" } else { "" }), "files": files });
+    let warnings = warnings_of(&log, &files, root);
+    if !warnings.is_empty() {
+        reply["warnings"] = json!(warnings);
+    }
     if !log.is_empty() {
         reply["log"] = Value::String(log);
     }
@@ -1971,10 +1975,6 @@ pub fn export_pcb_placement_into(design: &Design, model: &ConstraintModel, work:
 /// `args` with `--side` set to `side` (`PLACE_FILE_EXPORTER`'s one side per run).
 fn args_with_side(args: &[String], side: &str) -> Vec<String> {
     let mut out = args.to_vec();
-    let warnings = warnings_of(&log, &files, root);
-    if !warnings.is_empty() {
-        reply["warnings"] = json!(warnings);
-    }
     match out.iter().position(|a| a == "--side") {
         Some(i) if i + 1 < out.len() => out[i + 1] = side.to_string(),
         Some(_) => out.push(side.to_string()),
@@ -2205,15 +2205,6 @@ mod tests {
     }
 
     #[test]
-    fn top_level_forms_are_found_past_strings_and_comments_and_unbalanced_text_is_refused() {
-        let text = "(version 1)\n# a comment with ( an open paren\n(rule \"a ) b\"\n  (constraint clearance (min 0.2mm)))\n(rule two (condition \"x\\\"y\"))";
-        let forms = top_level_forms(text).expect("balanced");
-        let texts: Vec<&str> = forms.iter().map(|&(a, b)| &text[a..b]).collect();
-        assert_eq!(texts.len(), 3);
-        assert_eq!(texts[0], "(version 1)");
-        assert!(texts[1].starts_with("(rule \"a ) b\"") && texts[1].ends_with("0.2mm)))"));
-        assert!(texts[2].starts_with("(rule two"));
-    #[test]
     fn a_runs_warnings_are_the_lines_that_report_no_file_it_wrote() {
         let root = Path::new("/b");
         let files = vec!["export/kicad/gerbers/b-F_Cu.gbr".to_string(), "export/kicad/gerbers/b-job.gbrjob".to_string()];
@@ -2225,6 +2216,15 @@ mod tests {
         assert!(warnings_of("Successfully created IPC-D-356 file", &[], root).is_empty());
     }
 
+    #[test]
+    fn top_level_forms_are_found_past_strings_and_comments_and_unbalanced_text_is_refused() {
+        let text = "(version 1)\n# a comment with ( an open paren\n(rule \"a ) b\"\n  (constraint clearance (min 0.2mm)))\n(rule two (condition \"x\\\"y\"))";
+        let forms = top_level_forms(text).expect("balanced");
+        let texts: Vec<&str> = forms.iter().map(|&(a, b)| &text[a..b]).collect();
+        assert_eq!(texts.len(), 3);
+        assert_eq!(texts[0], "(version 1)");
+        assert!(texts[1].starts_with("(rule \"a ) b\"") && texts[1].ends_with("0.2mm)))"));
+        assert!(texts[2].starts_with("(rule two"));
         for bad in ["(version 1", "(version 1))", "(rule \"open string)", ""] {
             assert!(top_level_forms(bad).is_none() || bad.is_empty(), "{bad:?}");
         }

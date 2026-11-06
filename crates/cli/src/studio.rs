@@ -2115,9 +2115,6 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // a text box's (and a directive label's) font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id, for its Properties and
     // its drawing: kept beside the graphics, which the edit verbs take back whole
     let graphic_text_attrs: serde_json::Map<String, Value> = sch.extras.graphics.iter().filter_map(|g| Some((g.id.clone(), serde_json::to_value(sch.extras.text_attrs.get(&g.id)?).ok()?))).collect();
-    let locked: Vec<&String> = sch.extras.locked.iter().collect();
-    // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
-    let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
     // a text box's shown text (`SCH_TEXTBOX::GetShownText`: the sheet's variables, as a free text's), by the graphic's id, where `${..}` or `@{..}` changes it
     // (UI-LEFT B5): beside the graphics, not in them, as the edit verbs take a graphic back whole
     let graphic_shown: serde_json::Map<String, Value> = sch
@@ -2131,6 +2128,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .filter(|(_, shown, raw)| shown != *raw)
         .map(|(id, shown, _)| (id, Value::String(shown)))
         .collect();
+    let locked: Vec<&String> = sch.extras.locked.iter().collect();
+    // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
+    let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
     // The sheet's tables (`SCH_TABLE`): every cell's corners and placed text lines, worked out once here (`crate::table_json`); a cell's own variables (`${ROW}`, `${CELL(..)}`) and then the sheet's.
     let tables: Vec<Value> = sch
         .extras
@@ -2347,10 +2347,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "junctions": junctions,
         "lines": lines,
         "graphics": graphics,
+        "graphic_shown": graphic_shown,
         "graphic_text_attrs": graphic_text_attrs,
         "tables": tables,
         "locked": locked,
-        "graphic_shown": graphic_shown,
         "groups": groups,
         "title_block": title_block,
         "page": crate::page_json::page_json(&page),
