@@ -177,4 +177,27 @@ mod tests {
         assert!(design.symbol_library.as_ref().is_none_or(|l| l.by_lib_id("power:+3V3").is_none()), "and its definition with it");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A mirror while the symbol rides (UI-LEFT-2 SS2): the click makes the symbol in the orientation the turns left it in (`kicad-port/schPlaceTool.ts`
+    /// `placeSymbolCmd`: `add_symbol` and the mirror flag, not the placed unit's own `sch_move`), so its fields are where Autoplace Fields puts them
+    /// (`PlaceSymbol`'s `AutoplaceFields( screen, AUTOPLACE_AUTO )` before the commit): Autoplace Fields after it has nothing to move.
+    #[test]
+    fn a_symbol_mirrored_in_the_hand_is_placed_with_its_fields_autoplaced() {
+        let dir = board("mirror_autoplace");
+        let at = json!({ "x": mm(-254.0).get(), "y": mm(-254.0).get() });
+        let add = json!({ "op": "add_symbol", "id": "R5", "lib_id": "Device:R", "at": at, "rot_millideg": 90_000, "value": "4k7", "footprint": "", "unit": 1 });
+        let ridden = preview(&dir, json!({ "op": "batch", "cmds": [add.clone(), { "op": "sch_move", "verb": "mirror", "ids": ["R5#1"], "vertical": true, "vertices": {} }] }));
+        // 90 degrees mirrored top to bottom is the matrix of 90 + `mirror_y`
+        let placed = json!({ "op": "batch", "cmds": [add, { "op": "mirror_symbol_vertical", "id": "R5", "unit": 1 }] });
+        let v = preview(&dir, placed.clone());
+        let orientation = |v: &Value| (v["preview"]["symbols"][0]["rot"].clone(), v["preview"]["symbols"][0]["mirror"].clone());
+        assert_eq!(orientation(&v), orientation(&ridden), "the orientation the turns leave: {v}");
+        assert!(v["preview"]["symbols"][0]["fields"].as_array().is_some_and(|f| f.iter().any(|f| f["name"] == "Value" && f["visible"] == true)), "{v}");
+        let mut cmds = placed["cmds"].as_array().unwrap().clone();
+        cmds.push(json!({ "op": "sch_edit", "verb": "autoplace_fields", "ids": ["R5"] }));
+        let again = preview(&dir, json!({ "op": "batch", "cmds": cmds }));
+        assert_eq!(again["ok"], false, "{again}");
+        assert!(again["message"].as_str().is_some_and(|m| m.contains("already where Autoplace Fields puts them")), "placed, the fields are where Autoplace Fields puts them: {again}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

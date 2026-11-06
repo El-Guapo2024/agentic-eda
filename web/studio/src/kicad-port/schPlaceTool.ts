@@ -341,9 +341,10 @@ export function applyCarriedCmds(item: CarriedSymbol | CarriedPower, cmds: reado
       continue;
     }
     if (c.op === "edit_symbol_fields") {
+      // the Value and the Footprint go into what it is made with (a later dialog's change of them wins); the Datasheet runs after it
       if (typeof x.value === "string") next.value = x.value;
       if (typeof x.footprint === "string") next.footprint = x.footprint;
-      kept.push(c);
+      if (typeof x.datasheet === "string") kept.push({ op: "edit_symbol_fields", id: x.id, datasheet: x.datasheet } as unknown as Cmd);
       continue;
     }
     if (c.op === "set_symbol_attrs") {
@@ -647,9 +648,9 @@ export function describeCarried(item: CarriedItem): Record<string, unknown> {
     case "text":
       return { kind: "text", text: item.content, vertical: item.vertical, h: item.h, v: item.v };
     case "power":
-      return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg };
+      return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg, edits: item.edits?.length ?? 0 };
     case "symbol":
-      return { kind: "symbol", libId: item.libId, ref: item.ref, unit: item.unit, turns: [...item.turns], placeAllUnits: item.placeAllUnits, oneOnly: item.oneOnly };
+      return { kind: "symbol", libId: item.libId, ref: item.ref, unit: item.unit, turns: [...item.turns], placeAllUnits: item.placeAllUnits, oneOnly: item.oneOnly, value: item.value, footprint: item.footprint, bodyStyle: item.bodyStyle ?? 1, attrs: { ...item.attrs }, edits: item.edits?.length ?? 0 };
   }
 }
 

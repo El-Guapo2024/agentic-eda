@@ -314,7 +314,7 @@ test("the keys while a symbol rides are PlaceSymbol's: A places it, R / X / Y tu
   assert.deepEqual(k("common.Control.zoomIn"), { do: "pass" });
   // armed with nothing in the hand, Place Symbol lets Undo through (it checks Undo only with a symbol in hand)
   assert.equal(armedKey("sch_place_symbol", "common.Interactive.undo"), "pass");
-  assert.deepEqual(describeCarried(symbol({ turns: ["rot_ccw"] })), { kind: "symbol", libId: "Amplifier_Operational:LM358", ref: "U3", unit: 1, turns: ["rot_ccw"], placeAllUnits: false, oneOnly: false });
+  assert.deepEqual(describeCarried(symbol({ turns: ["rot_ccw"] })), { kind: "symbol", libId: "Amplifier_Operational:LM358", ref: "U3", unit: 1, turns: ["rot_ccw"], placeAllUnits: false, oneOnly: false, value: "LM358", footprint: "", bodyStyle: 1, attrs: {}, edits: 0 });
 });
 
 test("the turns of a carried symbol fold into KiCad's orientation as `Matrix::then` composes them and `GetOrientation` reads them back", () => {
@@ -365,7 +365,7 @@ test("a dialog's OK on the carried symbol changes what it is made with and keeps
   // the commands kept name the new reference: the field ids, the symbol's own id
   assert.deepEqual(next.edits, [
     { op: "sch_edit", verb: "set_field_looks", ids: ["fld:U9:Value"], font: "KiCad Font" },
-    { op: "edit_symbol_fields", id: "U9", value: "TL072", footprint: "Package_SO:SOIC-8", datasheet: "" },
+    { op: "edit_symbol_fields", id: "U9", datasheet: "" },
     { op: "sch_edit", verb: "edit_field", id: "fld:U9:Reference", visible: false },
   ]);
   // Field Properties' text of the Value: the symbol is made with it; the edit keeps only what else it changes, and goes when that is nothing
