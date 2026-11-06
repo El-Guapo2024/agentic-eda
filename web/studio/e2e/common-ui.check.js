@@ -108,7 +108,8 @@
   const choose = async (el, value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, value); el.dispatchEvent(new Event("change", { bubbles: true })); await sleep(80); };
   const type = async (el, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, String(value)); el.dispatchEvent(new Event("input", { bubbles: true })); await sleep(60); };
   const buttonIn = (root, label) => [...(root?.querySelectorAll("button") ?? [])].find((b) => b.textContent.trim() === label || b.getAttribute("aria-label") === label);
-  /** Opens Preferences on `page` (the tree's label; for Display Options the editor's), applies `fn` to the dialog and presses OK. */
+  /** Opens Preferences on `page` (the tree's label; for a page every editor has, `editorIndex` in KiCad's order: 0 Symbol, 1 Schematic, 2 Footprint, 3 PCB Editor),
+   *  applies `fn` to the dialog and presses OK. */
   const prefs = async (fn, page = "Mouse and Touchpad", editorIndex = 0) => {
     await E.run("common.SuiteControl.openPreferences");
     const d = await until(() => prefsDialog(), 4000);
@@ -246,7 +247,7 @@
       page.querySelector('[data-testid="pref-grid-lines"]').click();
       await choose(page.querySelector('[data-testid="pref-grid-thickness"]'), "2");
       await type(page.querySelector('[data-testid="pref-grid-min-spacing"]'), 20);
-    }, "Display Options", 0);
+    }, "Display Options", 3);
     await redraw();
     const g = window.__edaGrid?.pcb;
     t(g?.style === "lines" && (g.marks.line ?? 0) > 0 && !g.marks.rect, `the board draws lines (${JSON.stringify(g)})`);
@@ -267,7 +268,7 @@
       page.querySelector('[data-testid="pref-grid-dots"]').click();
       await choose(page.querySelector('[data-testid="pref-grid-thickness"]'), "1");
       await type(page.querySelector('[data-testid="pref-grid-min-spacing"]'), 10);
-    }, "Display Options", 0);
+    }, "Display Options", 3);
     await redraw();
     t(window.__edaGrid?.pcb?.style === "dots", "back to dots");
   });

@@ -111,12 +111,17 @@
 
   // Preferences: the four this script changes, read and set through the dialog (the page keeps them in memory, so the stored copy alone would not do).
   const PREF = { pinSwaps: /unconstrained pin swaps/i, autoPan: /Automatically pan/i, dragMiddle: "Middle button drag", dragRight: "Right button drag" };
-  const prefEl = (k) => (PREF[k] instanceof RegExp ? [...document.querySelectorAll(".dialog input[type=checkbox]")].find((i) => PREF[k].test(i.closest("label")?.textContent ?? "")) : aria(PREF[k]));
+  // the page of the Preferences tree each one is on (KiCad's tree: Schematic Editor > Editing Options, Mouse and Touchpad)
+  const PREF_PAGE = { pinSwaps: "sch_edit", autoPan: "mouse", dragMiddle: "mouse", dragRight: "mouse" };
+  const prefEl = (k) => {
+    document.querySelector(`[data-testid="prefs-page-${PREF_PAGE[k]}"]`)?.click();
+    return PREF[k] instanceof RegExp ? [...document.querySelectorAll(".dialog input[type=checkbox]")].find((i) => PREF[k].test(i.closest("label")?.textContent ?? "")) : aria(PREF[k]);
+  };
   const readPrefs = async () => {
     await __eda.run("common.SuiteControl.openPreferences");
     await sleep(500);
     const out = {};
-    for (const k of Object.keys(PREF)) { const el = prefEl(k); out[k] = el == null ? null : el.type === "checkbox" ? el.checked : el.value; }
+    for (const k of Object.keys(PREF)) { prefEl(k); await sleep(150); const el = prefEl(k); out[k] = el == null ? null : el.type === "checkbox" ? el.checked : el.value; }
     buttonText(document.querySelector(".dialog"), "Cancel")?.click();
     await sleep(300);
     return out;
@@ -125,6 +130,8 @@
     await __eda.run("common.SuiteControl.openPreferences");
     await sleep(500);
     for (const [k, v] of Object.entries(values)) {
+      prefEl(k);
+      await sleep(150);
       const el = prefEl(k);
       if (!el) throw new Error(`the Preferences dialog has no ${k}`);
       if (el.type === "checkbox") { if (el.checked !== v) el.click(); } else setValue(el, v);
@@ -451,6 +458,8 @@
       await enter(led.id);
       await __eda.run("common.SuiteControl.openPreferences");
       await sleep(500);
+      document.querySelector('[data-testid="prefs-page-mouse"]')?.click();
+      await sleep(200);
       const opts = (k) => [...(aria(k)?.options ?? [])].map((o) => o.value);
       t(["pan", "zoom", "none"].every((v) => opts("Middle button drag").includes(v) && opts("Right button drag").includes(v)), `Preferences has the middle and right button drag settings (${opts("Right button drag")})`);
       await closeDialogs();
