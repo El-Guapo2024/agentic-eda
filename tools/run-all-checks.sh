@@ -23,7 +23,10 @@
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
 # simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
-# copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
+# copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
+# configuration folder of its own, empty (`EDA_KICAD_CONFIG_DIR`): a check that writes the global library tables or KiCad's path variables never touches the
+# machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
+# `gps.lbr` (an Eagle library), for Migrate Libraries and the libraries kicad-cli converts (needs $KICAD_SRC_DIR).
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
 # (or $EDA_KICAD_CLI), ngspice for the simulator check.
@@ -204,7 +207,14 @@ run_one() { # run_one <check> <port>: prints the check's line; its logs are in $
     if ! ensure_board "$kind"; then printf 'FAIL %-22s board %s could not be made: %s\n' "$c" "$kind" "$scratch/boards/$kind.log"; return 1; fi
     if ! uidir="$(ensure_ui "$ui")"; then printf 'FAIL %-22s ui %s could not be made\n' "$c" "$ui"; return 1; fi
     cp -r "$scratch/boards/$kind" "$r/board"
-    "$eda" board serve -C "$r/board" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
+    local served=()
+    if [ "$(meta "$c" kicad_config default)" = fresh ]; then mkdir -p "$r/kicad-config"; served+=("EDA_KICAD_CONFIG_DIR=$r/kicad-config" "EDA_LIBRARY_CACHE=$r/library-cache"); fi
+    if [ "$(meta "$c" fixtures none)" = library-formats ]; then
+        local q="${KICAD_SRC_DIR:-$HOME/src/kicad-src-8303b2ad}/qa/data"
+        cp "$q/eeschema/netlists/legacy_power4/symbols.lib" "$r/board/legacy.lib" && cp "$q/pcbnew/plugins/eagle/lbr/SparkFun-GPS.lbr" "$r/board/gps.lbr" \
+            || { printf 'FAIL %-22s the library fixtures are not in %s (set KICAD_SRC_DIR)\n' "$c" "$q"; return 1; }
+    fi
+    env "${served[@]}" "$eda" board serve -C "$r/board" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
     pid=$!
     url=""
     for _ in $(seq 1 100); do

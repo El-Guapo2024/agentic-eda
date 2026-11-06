@@ -7,7 +7,7 @@
 //
 // What it checks:
 //   the actions: Manage Symbol Libraries, Manage Footprint Libraries and Configure Paths run on every tab, New Library and Add Library on the two library editors;
-//   the Global tab is KiCad's table, read only, says so, and the table it chains (KiCad's 200-odd libraries) opens in a tab of its own, every library of it readable and the same
+//   the Global tab is KiCad's table, editable where KiCad's configuration folder is (library-manage.check.js writes it), and the table it chains (KiCad's 200-odd libraries) opens in a tab of its own, every library of it readable and the same
 //     libraries the index lists;
 //   the Project tab: KiCad's OK checks (a missing nickname, an illegal one, a duplicate: the message, the cell with the cursor, nothing written), a path gives the row its format and
 //     a status (a missing file is a warning with KiCad's words), OK writes the board's table and the trees, the index and the choosers have the library at once;
@@ -55,7 +55,9 @@
   let baseVars = 0;
   const mine = (v, kind) => v.tables[kind].project.rows.filter((r) => /^Lt/.test(r.nickname));
   const kicad = (kind) => ({ symbol: "KICAD10_SYMBOL_DIR", footprint: "KICAD10_FOOTPRINT_DIR" })[kind].replace("10", String(lt.major));
-  const dev = `\${${kicad("symbol")}}/Device.kicad_sym`;
+  // KiCad's Device library as the global table names it: `Device.kicad_sym`, or KiCad 10's folder `Device.kicad_symdir` (the only form kicad-symbols ships now)
+  const deviceUri = (function find(rows) { for (const r of rows) { if (r.nickname === "Device" && r.type !== "Table") return r.uri; const inner = r.table && find(r.table.rows); if (inner) return inner; } return null; })(lt.tables.symbol.global.rows);
+  const dev = deviceUri && deviceUri.startsWith(`\${${kicad("symbol")}}`) ? deviceUri : `\${${kicad("symbol")}}/Device.kicad_sym`;
   const mount = `\${${kicad("footprint")}}/MountingHole.pretty`;
 
   /** Take everything the check added back out through the dialogs: the rows whose nickname starts with Lt, the variable LT_CHECK_DIR. */
@@ -107,9 +109,10 @@
     const fpActs = Object.fromEntries(E.actions({ all: true }).map((a) => [a.id, a]));
     check("New Library and Add Library are wired in the Footprint Editor", fpActs["common.Control.newLibrary"]?.enabled && fpActs["common.Control.addLibrary"]?.enabled);
 
-    // ============================================================================================================================ the global table is KiCad's: read only
+    // ============================================================================================================================ the global table is the user's: editable where KiCad's configuration is
     const sym0 = lt.tables.symbol;
-    check("the server says the global table is not writable and the board's is", sym0.global.writable === false && sym0.project.writable === true && lt.tables.footprint.global.writable === false);
+    // the global table is the user's, in KiCad's configuration folder: writable where there is one (library-manage.check.js edits it, on a folder of its own)
+    check("the server says whether the global table can be written (KiCad's configuration folder) and that the board's can", sym0.global.writable === !!sym0.global.target && sym0.project.writable === true && lt.tables.footprint.global.writable === !!lt.tables.footprint.global.target, JSON.stringify([sym0.global.writable, sym0.global.target]));
     await clickTab("Symbol");
     const opened = await E.run("common.SuiteControl.showSymbolLibTable");
     await waitFor(() => document.querySelector(".lt-grid"));
@@ -118,9 +121,9 @@
     tabByName("Global Libraries").click();
     await sleep(300);
     const globalInputs = [...document.querySelectorAll(".lt-grid input[type=text]")];
-    check("the Global tab's cells are read only", globalInputs.length > 0 && globalInputs.every((i) => i.readOnly) && [...document.querySelectorAll(".lt-grid input[type=checkbox], .lt-grid select")].every((i) => i.disabled));
-    check("it says KiCad's global table is never written by the studio", /never writes (it|a global table)/.test(top().querySelector(".lt-note")?.textContent ?? ""), top().querySelector(".lt-note")?.textContent);
-    check("it has no add, move or delete buttons", !top().querySelector('[aria-label="Add empty row to table"]') && !top().querySelector('[aria-label="Remove library from table"]'));
+    check("the Global tab's cells are editable exactly when the global table can be written", globalInputs.length > 0 && globalInputs.every((i) => i.readOnly === !sym0.global.writable) && [...document.querySelectorAll(".lt-grid input[type=checkbox], .lt-grid select")].every((i) => i.disabled === !sym0.global.writable));
+    check("it says what OK does with KiCad's global table", /OK writes|cannot be written/.test(top().querySelector(".lt-note")?.textContent ?? ""), top().querySelector(".lt-note")?.textContent);
+    check("its add and delete buttons follow it", top().querySelector('[aria-label="Add empty row to table"]')?.disabled === !sym0.global.writable && !!top().querySelector('[aria-label="Remove library from table"]'));
     if (sym0.global.rows.some((r) => r.type === "Table")) {
       top().querySelector(".lt-status.lt-open").click();
       await sleep(400);
@@ -245,22 +248,26 @@
     const paths = await E.run("common.SuiteControl.configurePaths");
     await waitFor(() => document.querySelector('[aria-label="Board variables"]'));
     check("Configure Paths opens", paths.dialog === "Configure Paths", JSON.stringify(paths));
-    const kicadVars = [...top().querySelectorAll('[aria-label="KiCad\'s variables"] tbody tr')].map((tr) => tr.children[0].textContent);
-    check("KiCad's variables are listed, KIPRJMOD first, read only", kicadVars[0] === "KIPRJMOD" && kicadVars.includes(kicad("symbol")) && kicadVars.includes(kicad("footprint")) && !top().querySelector('[aria-label="KiCad\'s variables"] input'), kicadVars.join(" "));
+    const kicadRows = [...top().querySelectorAll('[aria-label="KiCad\'s variables"] tbody tr')];
+    const kicadVars = kicadRows.map((tr) => tr.children[0].querySelector("input")?.value ?? tr.children[0].textContent);
+    // KiCad's own grid (`DIALOG_CONFIGURE_PATHS`): KIPRJMOD read only, a predefined name that cannot be changed, a path that can (written to kicad_common.json; library-manage.check.js writes one)
+    const symVar = kicadRows.find((tr) => (tr.children[0].querySelector("input")?.value ?? tr.children[0].textContent) === kicad("symbol"));
+    const symName = symVar?.children[0].querySelector("input");
+    check("KiCad's variables are listed, KIPRJMOD first, a predefined name not editable", kicadVars[0] === "KIPRJMOD" && !kicadRows[0].querySelector("input") && kicadVars.includes(kicad("symbol")) && kicadVars.includes(kicad("footprint")) && (!symName || symName.readOnly), kicadVars.join(" "));
     top().querySelector('[aria-label="Add variable"]').click();
     await sleep(150);
-    setNative(top().querySelector(`[data-row="${baseVars}"][data-col="name"]`), "lt_check-dir");
-    check("a variable's name takes capitals, digits and underscores (a lower-case letter gives the capital, anything else is dropped)", top().querySelector(`[data-row="${baseVars}"][data-col="name"]`).value === "LT_CHECKDIR", top().querySelector(`[data-row="${baseVars}"][data-col="name"]`).value);
+    setNative(top().querySelector(`[aria-label="Board variables"] [data-row="${baseVars}"][data-col="name"]`), "lt_check-dir");
+    check("a variable's name takes capitals, digits and underscores (a lower-case letter gives the capital, anything else is dropped)", top().querySelector(`[aria-label="Board variables"] [data-row="${baseVars}"][data-col="name"]`).value === "LT_CHECKDIR", top().querySelector(`[aria-label="Board variables"] [data-row="${baseVars}"][data-col="name"]`).value);
     button("OK").click();
     await sleep(300);
     check("a name with no path is refused, in KiCad's words", /Environment variable path cannot be empty\./.test(top().querySelector(".lt-error")?.textContent ?? ""), top().querySelector(".lt-error")?.textContent);
-    setNative(top().querySelector(`[data-row="${baseVars}"][data-col="name"]`), "KIPRJMOD");
-    setNative(top().querySelector(`[data-row="${baseVars}"][data-col="value"]`), "/x");
+    setNative(top().querySelector(`[aria-label="Board variables"] [data-row="${baseVars}"][data-col="name"]`), "KIPRJMOD");
+    setNative(top().querySelector(`[aria-label="Board variables"] [data-row="${baseVars}"][data-col="value"]`), "/x");
     button("OK").click();
     await sleep(300);
     check("KIPRJMOD is reserved", /reserved/.test(top().querySelector(".lt-error")?.textContent ?? ""), top().querySelector(".lt-error")?.textContent);
-    setNative(top().querySelector(`[data-row="${baseVars}"][data-col="name"]`), "LT_CHECK_DIR");
-    setNative(top().querySelector(`[data-row="${baseVars}"][data-col="value"]`), "${KIPRJMOD}");
+    setNative(top().querySelector(`[aria-label="Board variables"] [data-row="${baseVars}"][data-col="name"]`), "LT_CHECK_DIR");
+    setNative(top().querySelector(`[aria-label="Board variables"] [data-row="${baseVars}"][data-col="value"]`), "${KIPRJMOD}");
     button("OK").click();
     await sleep(900);
     check("OK saves the board's variable", titles().length === 0 && (await tables()).variables.project.some((v) => v.name === "LT_CHECK_DIR" && v.value === "${KIPRJMOD}"), JSON.stringify((await tables()).variables.project));
