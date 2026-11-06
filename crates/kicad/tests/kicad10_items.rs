@@ -575,6 +575,44 @@ fn a_placement_rule_areas_one_member_group_is_kept() {
     }
 }
 
+/// B-9: a footprint's group can hold a group (`resolveGroups` puts the footprint's groups in its item map before it resolves the members). `issue14559`'s
+/// `ICON101` with a third group, "outer", whose member is the first of its two: read, written back with the inner group's uuid as its member, and kicad-cli's
+/// own re-save keeps the three groups and the nesting.
+#[test]
+fn a_footprints_group_of_a_group_survives_the_round_trip() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(qa), Some(cli)) = (qa_data(), kicad_cli()) else {
+        eprintln!("skipped: no KiCad 25ec2335 QA data or kicad-cli");
+        return;
+    };
+    let text = std::fs::read_to_string(qa.join("pcbnew/issue14559.kicad_pcb")).unwrap();
+    let inner = "7edb7d0c-347d-41b8-a16c-b39d779820d0";
+    let at = text.find(&format!("(group \"\" (id {inner})")).expect("ICON101's first group");
+    let nested = format!("{}(group \"outer\" (id 11111111-2222-3333-4444-555555555555) (members {inner}))\n    {}", &text[..at], &text[at..]);
+    let (design, model, _) = import_kicad_pcb(&nested).unwrap();
+    let extra = design.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "ICON101").expect("ICON101's extra");
+    let outer = extra.groups.iter().find(|g| g.name == "outer").expect("the outer group is read");
+    assert_eq!(outer.members.len(), 1);
+    assert!(outer.members[0].starts_with("group:"), "its member is a group: {:?}", outer.members);
+    let out = export_kicad_pcb(&design, &model, &ExportMeta { date: "2026-01-01", title: "issue14559" }).unwrap();
+    let dir = work_dir("issue14559_nested_groups");
+    let pcb = dir.join("issue14559.kicad_pcb");
+    std::fs::write(&pcb, &out).unwrap();
+    let run = Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&pcb).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let saved = std::fs::read_to_string(&pcb).unwrap();
+    // kicad-cli's file: the outer group's one member is the uuid of a group of the same footprint
+    let o = saved.find("(group \"outer\"").expect("kicad-cli kept the outer group");
+    let members = &saved[o..];
+    let members = &members[members.find("(members").unwrap() + 8..];
+    let member = members.split('"').nth(1).expect("a member").to_string();
+    assert!(saved.contains(&format!("(uuid \"{member}\")")) && saved[..o].rfind("(footprint").is_some(), "the member {member} is an item of the file");
+    let groups_in_fp = saved.matches("(group ").count();
+    assert!(groups_in_fp >= 3, "three groups: {groups_in_fp}");
+}
+
 /// r2-board-io F14: a footprint's own groups (`issue14559`'s `ICON101` has two, of its silkscreen polygons) are read and written back inside the footprint,
 /// every member named by the uuid its item is written with: kicad-cli, re-saving our file, keeps both groups with all their members.
 #[test]

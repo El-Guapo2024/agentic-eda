@@ -47,7 +47,8 @@ export function PcbPickerPrompt() {
     if (base.tool !== state.activeTool || base.tab !== state.tab) picker.cancel(true);
   }, [session, state.activeTool, state.tab]);
 
-  if (!session) return null;
+  // a session with no prompt (Import Graphics' placement: `PlaceImportedGraphics` shows none) shows nothing
+  if (!session || !session.prompt) return null;
   return (
     <div
       role="status"

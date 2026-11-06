@@ -49,6 +49,9 @@
   const toastText = () => [...document.querySelectorAll("div")].find((el) => el.style.zIndex === "3000" && el.style.position === "absolute")?.textContent ?? ""; // the page's toast: a div with no class
   const click = async (el) => { el?.click(); await sleep(60); };
   const errorsBefore = E.errors().length;
+  // Since task-u4-import an import first asks "The current PCB has been modified.  Save changes?" (a board this page changed) or, on the Schematic tab, "This operation replaces
+  // the contents of the current schematic ..." (a sheet that holds anything), as KiCad does: this check answers so as to go on (import-files.check.js checks the questions).
+  const answering = setInterval(() => (byId("import-question:Discard Changes") ?? byId("import-question:Yes"))?.click(), 100);
   const firstTab = E.state().tab;
   let applied = 0; // PCB steps this check left on the board, taken back at the end
   let appliedSch = 0;
@@ -93,7 +96,8 @@
     await click(byId("matched:tNames"));
     await click(byId("map-remove"));
     check("< puts the selected layer back in the unmatched list", unmatched().includes("tNames") && matchedTo("tNames") === undefined, JSON.stringify(unmatched()));
-    check("and says that kicad-cli maps a layer it has a guess for all the same", /kicad-cli maps/.test(byId("map-kept")?.textContent ?? ""), byId("map-kept")?.textContent);
+    // `DIALOG_MAP_LAYERS`: a layer left unmatched is `UNDEFINED_LAYER`, left out with what is on it (since task-u4-import; before, kicad-cli kept its guess)
+    check("and says that a layer left unmatched is not imported, with what is on it", /tNames\) is not imported/.test(byId("map-kept")?.textContent ?? ""), byId("map-kept")?.textContent);
     // `>` puts it on the KiCad layer chosen: F.Fab, not the guess (F.SilkS)
     await click(byId("unmatched:tNames"));
     await click(byId("kicad:F.Fab"));
@@ -242,6 +246,7 @@
     const meant = [/importer recognizes the file format/];
     const now = E.errors().slice(errorsBefore).filter((x) => !/Unable to preventDefault/.test(x.message) && !meant.some((re) => re.test(x.message)));
     check("no error was raised in the page", now.length === 0, now.map((x) => x.message).join(" | "));
+    clearInterval(answering);
     window.__importForeignCheck.done = true;
   }
   const failed = results.filter((r) => !r.ok);

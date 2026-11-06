@@ -117,7 +117,28 @@ impl ImportGraphics {
 pub struct BoardItems {
     pub shapes: Vec<Shape>,
     pub texts: Vec<Text>,
+    /// What a text of `texts` holds that `Text` does not (its glyph width, its vertical justification), by its place in `texts`; the ids are given when they are on the board.
+    pub text_extras: Vec<(usize, eda_model::board_text::TextExtra)>,
     pub messages: Vec<String>,
+}
+
+/// A text whose vertical justification has no place to be kept (a library footprint's text, which has no `TextExtra`): its anchor moved half a height along the
+/// text's own up, so a text centred on it stands where the justified one stood (what the board's importer did before it kept the justification).
+pub(crate) fn centre_vertically(t: &mut Text, valign: eda_model::ir::TextVAlign) {
+    let shift = match valign {
+        eda_model::ir::TextVAlign::Bottom => t.size_nm.as_f64() / 2.0,
+        eda_model::ir::TextVAlign::Top => -t.size_nm.as_f64() / 2.0,
+        eda_model::ir::TextVAlign::Center => return,
+    };
+    let a = (t.angle as f64 / 1000.0).to_radians();
+    let up = (-a.sin(), -a.cos());
+    t.at = Point { x: t.at.x + Nm::kiround(up.0 * shift), y: t.at.y + Nm::kiround(up.1 * shift) };
+}
+
+/// `EDA_TEXT::SetTextSize` / `SetTextWidth` / `SetTextHeight`: a size in the editor's unit as `int( value )` makes it (truncated), held to 1 micrometre .. 250 mm
+/// (`TEXT_MIN_SIZE_MM`, `TEXT_MAX_SIZE_MM`).
+fn text_size(v: f64) -> Nm {
+    Nm::new((v as i64).clamp(1_000, 250_000_000))
 }
 
 fn point(p: (i64, i64)) -> Point {
@@ -185,22 +206,14 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                     out.shapes.push(Shape::Polygon { id: String::new(), layer: layer.clone(), stroke_width: stroke_width(&m, stroke), filled: *filled, pts: mapped });
                 }
             }
-            ImportedShape::Text { origin, text, height, thickness, orientation_deg, h, v, .. } => {
-                let size = Nm::kiround(height * m.scaling_factor());
-                if size <= Nm::ZERO || text.is_empty() {
-                    continue;
-                }
-                let at = m.coord(*origin);
-                // The board's text is centred vertically on its position; a bottom or top justification moves it up or down by half its height,
-                // along the text's own up direction.
-                let a = orientation_deg.to_radians();
-                let up = (-a.sin(), -a.cos());
-                let shift = match v {
-                    VJustify::Bottom => size.as_f64() / 2.0,
-                    VJustify::Top => -size.as_f64() / 2.0,
-                    VJustify::Center => 0.0,
-                };
-                let at = Point { x: Nm::new(at.0) + Nm::kiround(up.0 * shift), y: Nm::new(at.1) + Nm::kiround(up.1 * shift) };
+            ImportedShape::Text { origin, text, height, width, thickness, orientation_deg, h, v } => {
+                // `GRAPHICS_IMPORTER_PCBNEW::AddText`: the thickness mapped as a line width, the position mapped, the angle as it is, the width and the height each
+                // times the scale (`SetTextWidth( aWidth * ImportScalingFactor().x )`, truncated and held to EDA_TEXT's limits), both justifications kept. A text
+                // with nothing in it is added as KiCad adds it.
+                let sf = m.scaling_factor();
+                let size = text_size(height * sf);
+                let glyph_width = text_size(width * sf);
+                let at = point(m.coord(*origin));
                 let mut mdeg = (orientation_deg * 1000.0).round() as i64 % 360_000;
                 if mdeg < 0 {
                     mdeg += 360_000;
@@ -210,7 +223,18 @@ pub fn board_items(imported: &Imported, mapper: &mut Mapper, layer: &str) -> Boa
                     HJustify::Center => TextJustify::Center,
                     HJustify::Right => TextJustify::Right,
                 };
-                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: Nm::new(m.line_width(*thickness)).max(Nm::new(1)), justify, mirror: false });
+                let valign = match v {
+                    VJustify::Top => eda_model::ir::TextVAlign::Top,
+                    VJustify::Center => eda_model::ir::TextVAlign::Center,
+                    VJustify::Bottom => eda_model::ir::TextVAlign::Bottom,
+                };
+                // `MapLineWidth`; the scale's sign is not kept (a width is never negative here)
+                let stroke = Nm::new(m.line_width(*thickness)).max(Nm::new(1));
+                let extra = eda_model::board_text::TextExtra { id: String::new(), width_nm: (glyph_width != size).then_some(glyph_width), valign, ..Default::default() };
+                if !extra.is_default() {
+                    out.text_extras.push((out.texts.len(), extra));
+                }
+                out.texts.push(Text { id: String::new(), content: text.clone(), at, angle: mdeg as u32, layer: layer.clone(), size_nm: size, stroke_width: stroke, justify, mirror: false });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
                 let (ps, p1, p2, pe) = (point(m.coord(*start)), point(m.coord(*c1)), point(m.coord(*c2)), point(m.coord(*end)));
@@ -280,6 +304,14 @@ impl Board<'_> {
         dr.shapes.extend(items.shapes);
         dr.texts.extend(items.texts);
         dr.assign_missing_ids();
+        // the texts' glyph widths and vertical justifications, by the ids the texts were given
+        for (i, mut extra) in items.text_extras {
+            if let Some(t) = dr.texts.get(first_text + i) {
+                extra.id = t.id.clone();
+                dr.text_extras.retain(|e| e.id != extra.id);
+                dr.text_extras.push(extra);
+            }
+        }
         let new_ids: Vec<String> = dr.shapes[first_shape..].iter().map(|s| s.id().to_string()).chain(dr.texts[first_text..].iter().map(|t| t.id.clone())).collect();
         if flips_outline {
             dr.outline_is_shapes = true;

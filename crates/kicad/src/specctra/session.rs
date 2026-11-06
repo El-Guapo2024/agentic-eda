@@ -11,7 +11,10 @@
 //! Here the board is the design, which this module does not change: [`from_session`] reads the session against the board as KiCad would read it (the `.kicad_pcb` the
 //! studio derives from the design, [`super::board::BoardView`], whose copper layers are `buildLayerMaps`' and whose nets are `FindNet`'s) and answers what the import
 //! puts on the board, in the design's units ([`SessionImport`]); `eda_ops`' `Cmd::Specctra` takes the old routing away and puts this in its place, as one undo step.
-//! The errors are the `IO_ERROR`s `FromSESSION`, `makeTRACK`, `makeARC` and `makeVIA` throw, in KiCad's words.
+//! The errors are the `IO_ERROR`s `FromSESSION`, `makeTRACK`, `makeARC` and `makeVIA` throw, in KiCad's words. As KiCad 25ec2335's `FromSESSION` (the kicad-cli of the active
+//! lane is later still), an item that cannot be resolved -- a `(place ..)` of a reference the board has not got, a wire on a layer it has not got, a via of a padstack the
+//! session lacks, a wire of a shape KiCad does not take -- is left out and counted ([`SessionImport::skipped`], `m_skippedCount`: "A single unresolvable place, wire, or via
+//! ... must not sink the whole session"), and the import says so once ([`skipped_warning`]); 8303b2ad threw "Reference '%s' not found." for the first.
 
 use eda_model::units::Nm;
 use super::board::BoardView;
@@ -46,6 +49,13 @@ pub struct SessionImport {
     /// One track per `PCB_TRACK` (a segment of a path) or `PCB_ARC`, with whether it is locked.
     pub tracks: Vec<(Track, bool)>,
     pub vias: Vec<SessionVia>,
+    /// KiCad 25ec2335 `SPECCTRA_DB::m_skippedCount`: the places, wires and vias that could not be resolved and were left out.
+    pub skipped: u32,
+}
+
+/// The warning `FromSESSION` gives at its end when it skipped items (KiCad 25ec2335 `specctra_import.cpp`, word for word).
+pub fn skipped_warning(skipped: u32) -> Option<String> {
+    (skipped > 0).then(|| format!("{skipped} session item(s) were skipped due to unresolved reference, layer, or padstack."))
 }
 
 /// `scale( double distance, UNIT_RES* aResolution )`: a session distance in nanometres (`KiROUND( factor * distance / resValue )`).
@@ -217,8 +227,10 @@ pub fn from_session_db(session: &Session, board: &BoardView, via_drill_default: 
         let res = placement.unit.unwrap_or(UnitRes::DEFAULT);
         for component in &placement.components {
             for place in &component.places {
+                // `FindFootprintByReference` fails: KiCad 25ec2335 counts it and goes on (`++m_skippedCount; continue;`; 8303b2ad threw "Reference '%s' not found.")
                 if !board.footprints.iter().any(|f| f.reference == place.component_id) {
-                    return Err(format!("Reference '{}' not found.", place.component_id));
+                    out.skipped += 1;
+                    continue;
                 }
                 let Some(vertex) = &place.vertex else { continue };
                 let at = pt(map_pt(vertex, &res));
@@ -237,23 +249,38 @@ pub fn from_session_db(session: &Session, board: &BoardView, via_drill_default: 
     for net_out in &route.net_outs {
         // Page 143 of the spec says a wire's net_id is optional; a net the board does not have is no net.
         let net = if !net_out.net_id.is_empty() && board.nets.iter().any(|(c, n)| *c > 0 && n == &net_out.net_id) { net_out.net_id.clone() } else { String::new() };
+        // KiCad 25ec2335's `skipOnError`: an item whose `make*` throws is counted and left out, and what it added before the throw stays (`aCommit.Add` as it goes).
         for wire in &net_out.wires {
-            match &wire.shape {
-                Some(ShapeElem::Path(path)) if !path.polygon => {
-                    for i in 0..path.points.len().saturating_sub(1) {
-                        out.tracks.push(db.make_track(wire, path, i, &net, &res)?);
+            let built: Result<(), String> = (|| {
+                match &wire.shape {
+                    Some(ShapeElem::Path(path)) if !path.polygon => {
+                        for i in 0..path.points.len().saturating_sub(1) {
+                            out.tracks.push(db.make_track(wire, path, i, &net, &res)?);
+                        }
                     }
+                    Some(ShapeElem::Qarc(qarc)) => out.tracks.push(db.make_arc(wire, qarc, &net, &res)?),
+                    // A polygon is what FreeRouting returns for a zone on a signal layer: KiCad kept its own zones, so this so-called wire is ignored.
+                    Some(ShapeElem::Path(_)) | None => {}
+                    // `THROW_IO_ERRORF( _( "Unsupported wire shape: '%s' for net: '%s'" ), .. )`, skipped in 25ec2335
+                    Some(other) => return Err(format!("Unsupported wire shape: {} for net: '{}'", shape_token(other), net_out.net_id)),
                 }
-                Some(ShapeElem::Qarc(qarc)) => out.tracks.push(db.make_arc(wire, qarc, &net, &res)?),
-                // A polygon is what FreeRouting returns for a zone on a signal layer: KiCad kept its own zones, so this so-called wire is ignored.
-                _ => {}
+                Ok(())
+            })();
+            if built.is_err() {
+                out.skipped += 1;
             }
         }
         for wire_via in &net_out.wire_vias {
-            let padstack = library.find_padstack(&wire_via.padstack_id).ok_or_else(|| format!("A wire_via refers to missing padstack '{}'.", wire_via.padstack_id))?;
-            let drill = drill_of_net(&net);
-            for v in &wire_via.vertexes {
-                out.vias.push(db.make_via(wire_via, padstack, v, &net, via_drill_default, drill, &res)?);
+            let built: Result<(), String> = (|| {
+                let padstack = library.find_padstack(&wire_via.padstack_id).ok_or_else(|| format!("A wire_via refers to missing padstack '{}'.", wire_via.padstack_id))?;
+                let drill = drill_of_net(&net);
+                for v in &wire_via.vertexes {
+                    out.vias.push(db.make_via(wire_via, padstack, v, &net, via_drill_default, drill, &res)?);
+                }
+                Ok(())
+            })();
+            if built.is_err() {
+                out.skipped += 1;
             }
         }
     }

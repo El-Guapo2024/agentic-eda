@@ -120,7 +120,10 @@ static SESSION_WARNING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new
 
 /// The warning of the session import just applied, if KiCad skipped items of it (taken: the next import starts without one).
 pub(crate) fn take_session_warning() -> Option<String> {
-    SESSION_WARNING.lock().ok().and_then(|mut w| w.take())
+    let kicad = SESSION_WARNING.lock().ok().and_then(|mut w| w.take());
+    // our own port's, when it read the session (the same words, `eda_kicad::specctra::session::skipped_warning`)
+    let port = eda_ops::take_port_session_warning();
+    kicad.or(port)
 }
 
 /// Set to anything, `kicad_session_importer` reports which engine read each session on stderr (`eda board import-ses` prints it; the tests read it).

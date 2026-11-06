@@ -13,6 +13,11 @@
 //!
 //! The group's name is the block's (`designBlock->GetLibId().GetLibItemName()`), or, for a plain file, the file's stem (`wxFileName( sheetFileName ).GetName()`); "Place repeated
 //! copies" numbers the names (`group->GetName() + wxString::Format( "%d", suffix++ )`), which the caller does by passing `group_name`.
+//!
+//! **Append Board** (`PCB_CONTROL::AppendBoardFromFile` -> `AppendBoard( *pi, fileName )`, with no design block) is the same command with an empty `block`: the file's
+//! copper layers, its technical and user layers and its nets come in as they do for a block, and with the Design Blocks pane's "Place as group"
+//! (`m_DesignBlockChooserPanel.place_as_group`, which `AppendBoard` reads for a plain board as well) what came in is one group named after the file's stem
+//! (`group->SetName( wxFileName( fileName ).GetName() )`, the caller's `group_name`), linked to nothing.
 
 use super::Board;
 use eda_model::groups::GroupHost;
@@ -61,11 +66,15 @@ impl Board<'_> {
     }
 
     /// `Cmd::PlaceDesignBlock`: see the module doc. The file's text is the clipboard form (`eda_kicad::parse_pcb_clipboard` reads a board file as it reads a copy).
+    /// An empty `block` is Append Board (`AppendBoard( .., aDesignBlock = nullptr )`): see the module doc.
     pub(crate) fn place_design_block(&mut self, text: &str, at: Point, block: &str, as_group: bool, group_name: &str) -> Result<(), Vec<CheckResult>> {
-        if let Err(why) = eda_model::groups::check_design_block_id(block) {
-            return Err(vec![CheckResult::fail("ops_bad_design_block", block, why)]);
+        if !block.is_empty() {
+            if let Err(why) = eda_model::groups::check_design_block_id(block) {
+                return Err(vec![CheckResult::fail("ops_bad_design_block", block, why)]);
+            }
         }
-        let clip = eda_kicad::parse_pcb_clipboard(text).map_err(|e| vec![CheckResult::fail("ops_bad_clipboard", "design block", e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))])?;
+        let what = if block.is_empty() { "board" } else { "design block" };
+        let clip = eda_kicad::parse_pcb_clipboard(text).map_err(|e| vec![CheckResult::fail("ops_bad_clipboard", what, e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))])?;
         // `AppendBoard` loads the block's file into the board itself, so nothing of it is left out: the copper layers grow to the block's
         // (`if( copperLayerCount > initialCopperLayerCount ) brd->SetCopperLayerCount( copperLayerCount );`) and every net of the file is
         // the board's by name (`BuildListOfNets`).
@@ -73,15 +82,23 @@ impl Board<'_> {
         let nets = self.add_block_nets(&clip);
         let copies = self.copies_from_clipboard_on(&clip, at, super::pcb_paste_special::PasteMode::Keep, false, &layers, &nets);
         if copies.is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_clipboard", "design block", "the design block's board is empty")]);
+            return Err(vec![CheckResult::fail("ops_bad_clipboard", what, if block.is_empty() { "the board is empty" } else { "the design block's board is empty" })]);
         }
         let top = self.insert_copies_all(copies)?;
-        // `AppendBoard`: `if( groupableCount >= 2 )`
+        // `AppendBoard`: `if( groupableCount >= 2 )`; a group is locked when any of its members is (`if( IsLocked() ) group->SetLocked( true )`)
         if as_group && top.len() >= 2 {
             let name = if group_name.trim().is_empty() { block.split_once(':').map_or(block, |(_, n)| n).to_string() } else { group_name.trim().to_string() };
             let dr = self.drawings_mut();
-            dr.groups.push(Group { id: String::new(), name, member_ids: top, design_block: block.to_string() });
+            let locked = top.iter().any(|m| dr.locked_ids.contains(m));
+            dr.groups.push(Group { id: String::new(), name, member_ids: top.clone(), design_block: block.to_string() });
             dr.assign_group_ids();
+            if locked {
+                if let Some(id) = dr.groups.iter().find(|g| g.member_ids == top).map(|g| g.id.clone()) {
+                    dr.locked_ids.push(id);
+                    dr.locked_ids.sort();
+                    dr.locked_ids.dedup();
+                }
+            }
         }
         Ok(())
     }
@@ -90,7 +107,9 @@ impl Board<'_> {
     /// `copperLayerCount = cu.size()` from the file's `(layers ..)` table, then `if( copperLayerCount > initialCopperLayerCount )
     /// brd->SetCopperLayerCount( copperLayerCount )`; `BOARD_STACKUP::SynchronizeWithBoard` keeps what the stackup says of the layers both have,
     /// [`StackupSettings::with_copper_layers`]), and every layer the file enables is enabled on the board as well (`enabledLayers |=
-    /// initialEnabledLayers`). Returns the board's copper layers after.
+    /// initialEnabledLayers`). A layer that is new to the board comes with the name and the type the file gives it, and a layer the board has keeps its own (KiCad
+    /// 25ec2335's `parseLayers` under `APPEND_PRESERVE_DESTINATION_STACKUP`: `if( !m_preserveDestinationStackup || !m_board->IsLayerEnabled( .. ) ) m_board->SetLayerDescr(
+    /// .., layer )`; 8303b2ad's parser overwrote the board's own names too, which `AppendBoard` then left). Returns the board's copper layers after.
     fn grow_copper_layers_for(&mut self, text: &str) -> Result<Vec<String>, Vec<CheckResult>> {
         let have = self.model.board.layers.len().max(2);
         let table = layer_table(text);
@@ -100,7 +119,22 @@ impl Board<'_> {
         let more: Vec<String> = table.iter().filter(|l| eda_model::layers::is_optional_layer(l) && !setup.enabled.contains(l)).cloned().collect();
         if !more.is_empty() {
             let mut next = setup.clone();
-            next.enabled.extend(more);
+            next.enabled.extend(more.iter().cloned());
+            // the file's descriptor of each new layer: its name and, for a user layer, its type -- unless a name would clash with one the board shows (the page refuses
+            // two layers of one name, `testLayerNames`), when the new layers keep their standard names
+            let file = eda_kicad::board_layer_setup(text).unwrap_or_default();
+            let mut described = next.clone();
+            for l in &more {
+                if let Some(name) = file.names.get(l) {
+                    described.names.insert(l.clone(), name.clone());
+                }
+                if let Some(t) = file.types.get(l) {
+                    described.types.insert(l.clone(), *t);
+                }
+            }
+            if described.validate(&self.model.board.layers).is_ok() {
+                next = described;
+            }
             super::board_setup::set_board_layers(&mut self.design, self.model, &next)?;
         }
         let want = copper.min(32);
@@ -141,7 +175,7 @@ impl Board<'_> {
 
 /// The canonical layer names of a board file's `(layers (0 "F.Cu" signal) (2 "B.Cu" signal) ..)` table (`PCB_IO_KICAD_SEXPR_PARSER::parseLayers`): the second
 /// token of each entry. Empty when the text has no table (a lone footprint).
-pub(crate) fn layer_table(text: &str) -> Vec<String> {
+pub fn layer_table(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut from = 0;
     while let Some(k) = text[from..].find("(layers") {

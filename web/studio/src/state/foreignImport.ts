@@ -2,11 +2,13 @@
 // (the DIALOG_HTML_REPORTER KiCad shows when "Show import issues" is on). Plain module state with subscribers, like `state/importDialogs.ts`, so an action registered in the
 // action runner can open one and wait for the answer without a place in the big reducer; `components/ForeignImportDialogs.tsx` renders them.
 import { useSyncExternalStore } from "react";
-import type { ImportFinding, SourceLayer } from "../kicad-port/foreignImport";
+import type { ImportFinding, ImportProjectDesc, SourceLayer } from "../kicad-port/foreignImport";
 
-/** What the layer dialog answers: the layers moved off the importer's guess (kicad-cli's `--layer-map`) and the "Keep KiCad layer names" box. */
+/** What the layer dialog answers: the layers moved off the importer's guess (kicad-cli's `--layer-map`), the layers left unmatched to leave out, and the "Keep KiCad layer names" box. */
 export interface LayerMapAnswer {
   map: Record<string, string>;
+  /** `DIALOG_MAP_LAYERS`: a layer left in the Unmatched list is `UNDEFINED_LAYER`, and what is on it is left out. */
+  drop: string[];
   keepNames: boolean;
 }
 
@@ -28,12 +30,30 @@ export interface ImportReport {
   notes: string[];
 }
 
+/** A question before an import (`HandleUnsavedChanges`' Save / Discard Changes / Cancel, `IsOK`'s Yes / No): the button pressed, or `null` for the way out. */
+export interface ImportQuestion {
+  title: string;
+  message: string;
+  detail?: string;
+  /** The buttons, in order; the last is the way out (Cancel, No). */
+  buttons: string[];
+  resolve: (button: string | null) => void;
+}
+
+/** `DIALOG_IMPORT_CHOOSE_PROJECT`: the rows, and the index of the one chosen (`null`: closed, which imports nothing). */
+export interface ChooseProjectDialog {
+  rows: ImportProjectDesc[];
+  resolve: (row: number | null) => void;
+}
+
 interface Dialogs {
   layers: LayerMapDialog | null;
   report: ImportReport | null;
+  question: ImportQuestion | null;
+  choose: ChooseProjectDialog | null;
 }
 
-let current: Dialogs = { layers: null, report: null };
+let current: Dialogs = { layers: null, report: null, question: null, choose: null };
 const listeners = new Set<() => void>();
 
 function set(next: Dialogs): void {
@@ -67,6 +87,30 @@ export function answerLayerMapping(answer: LayerMapAnswer | null): void {
   const open = current.layers;
   set({ ...current, layers: null });
   open?.resolve(answer);
+}
+
+/** Ask a question before an import and wait for the button pressed (`null` when the dialog is closed). One at a time: a second ask answers the first with its way out. */
+export function askImportQuestion(args: Omit<ImportQuestion, "resolve">): Promise<string | null> {
+  current.question?.resolve(null);
+  return new Promise((resolve) => set({ ...current, question: { ...args, resolve } }));
+}
+
+export function answerImportQuestion(button: string | null): void {
+  const open = current.question;
+  set({ ...current, question: null });
+  open?.resolve(button);
+}
+
+/** `DIALOG_IMPORT_CHOOSE_PROJECT::RunModal`: the rows shown, the first selected; resolves with the row chosen or `null`. */
+export function askChooseProject(rows: ImportProjectDesc[]): Promise<number | null> {
+  current.choose?.resolve(null);
+  return new Promise((resolve) => set({ ...current, choose: { rows, resolve } }));
+}
+
+export function answerChooseProject(row: number | null): void {
+  const open = current.choose;
+  set({ ...current, choose: null });
+  open?.resolve(row);
 }
 
 export function showImportReport(report: ImportReport): void {
