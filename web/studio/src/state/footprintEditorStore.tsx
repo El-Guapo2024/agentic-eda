@@ -17,6 +17,7 @@ import { FIRST_LAST_PAD_NUMBER } from "../kicad-port/padNumbering";
 import { DEFAULT_PAD_MASTER, importPadSettings, settingsOf, type PadSettings } from "../kicad-port/padSettings";
 import { DEFAULT_ENUMERATE_PARAMS, enumerateCommit, type EnumerateParams, type EnumerateState } from "../kicad-port/padEnumeration";
 import { editPadCommand, enterContrast, exitContrast, padEditLayer } from "../kicad-port/padEditMode";
+import { boardCopyKey } from "../api/fpEditorTypes";
 import type { ViewTransform } from "./store";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
@@ -461,6 +462,11 @@ export interface FootprintEditorApi {
   getState: () => FootprintEditorState;
   /** Open (or re-open -- a no-op server-side if already open) a footprint by name and start polling it. */
   openFootprint: (name: string) => Promise<void>;
+  /**
+   * `FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard` (Edit Footprint, Ctrl+E on the board; Load footprint from current PCB): a copy of the board footprint `reference`, linked to it
+   * (`fp_editor open_from_board`, UI-LEFT F3), opened under its key. Save then updates that one footprint on the board.
+   */
+  openFromBoard: (reference: string) => Promise<void>;
   /** `pcbnew.ModuleEditor.newFootprint` (Ctrl+N): a new, empty SMD footprint named `Untitled` (made unique), opened in the editor. */
   newFootprint: () => Promise<void>;
   /**
@@ -524,9 +530,9 @@ export interface FootprintEditorApi {
   /** `DIALOG_TEXT_PROPERTIES`' OK on a field (`fp_item edit_field`). */
   editField: (name: string, text: string, layout: import("../api/types").FieldLayoutCmd) => Promise<boolean>;
   /** `DIALOG_TEXT_PROPERTIES`' OK on a text of the footprint, its place included (`fp_item set_text`). */
-  setText: (id: string, text: CmdText) => Promise<boolean>;
-  /** `DIALOG_SHAPE_PROPERTIES`' OK on a graphic (`fp_item set_graphic`). */
-  setGraphic: (id: string, shape: CmdShape) => Promise<boolean>;
+  setText: (id: string, text: CmdText, look?: import("../api/fpEditorTypes").TextLook) => Promise<boolean>;
+  /** `DIALOG_SHAPE_PROPERTIES`' OK on a graphic (`fp_item set_graphic`), with its line style and hatch (UI-LEFT F5). */
+  setGraphic: (id: string, shape: CmdShape, look?: import("../api/fpEditorTypes").ShapeLook) => Promise<boolean>;
   /** Place an item of `eda_model::fp_items`' kinds (`fp_item add`) and answer with its id, or `undefined` when refused. */
   addItem: (item: FpItemWire) => Promise<string | undefined>;
   /** An item of `eda_model::fp_items`' kinds replaced by its dialog (`fp_item set`). */
@@ -606,6 +612,21 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!opened.ok) return notLoaded(opened.message);
       const footprint = await fetchFootprint(name);
       dispatch({ type: "FOOTPRINT_OK", footprint });
+    },
+    openFromBoard: async (reference) => {
+      const key = boardCopyKey(reference);
+      const opened = await postCmd({ op: "fp_editor", verb: "open_from_board", reference }, false);
+      if (!opened.ok) {
+        dispatch({ type: "TOAST", message: opened.message, kind: "error" });
+        return;
+      }
+      dispatch({ type: "SET_NAME", name: key });
+      dispatch({ type: "SET_LINKED_PART", ref: reference });
+      try {
+        dispatch({ type: "FOOTPRINT_OK", footprint: await fetchFootprint(key) });
+      } catch (e) {
+        dispatch({ type: "FOOTPRINT_ERR", message: e instanceof Error ? e.message : String(e) });
+      }
     },
     newFootprint: async () => {
       let existing: string[] = [];
@@ -867,15 +888,15 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!name) return false;
       return runCmd({ op: "fp_item", verb: "edit_field", footprint: name, name: fieldName, text, layout });
     },
-    setText: async (id, text) => {
+    setText: async (id, text, look) => {
       const name = stateRef.current.name;
       if (!name) return false;
-      return runCmd({ op: "fp_item", verb: "set_text", footprint: name, id, text });
+      return runCmd({ op: "fp_item", verb: "set_text", footprint: name, id, text, ...(look ? { look } : {}) });
     },
-    setGraphic: async (id, shape) => {
+    setGraphic: async (id, shape, look) => {
       const name = stateRef.current.name;
       if (!name) return false;
-      return runCmd({ op: "fp_item", verb: "set_graphic", footprint: name, id, shape });
+      return runCmd({ op: "fp_item", verb: "set_graphic", footprint: name, id, shape, ...(look ? { look } : {}) });
     },
     addItem: async (item) => {
       const st = stateRef.current;

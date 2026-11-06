@@ -13,6 +13,7 @@
 // the exact same flow the M/Escape keyboard shortcuts do, and
 // Canvas.tsx no longer needs any keydown handling of its own.
 
+import { boardCopyKey } from "../api/fpEditorTypes";
 import { saveSymbolLibraryAs } from "./librarySaveOps";
 import { useCallback, useMemo, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
@@ -2102,7 +2103,8 @@ export function useActionRunner() {
       // ---- addCorner (Insert): pcb_point_editor.cpp PCB_POINT_EDITOR::addCorner -- actions/pcbEditDetailsActions.ts.
 
       // ---- EditFpInFpEditor (Ctrl+E) / EditLibFpInFpEditor (Ctrl+Shift+E) -- board_editor_control.cpp BOARD_EDITOR_CONTROL::EditFpInFpEditor / EditLibFpInFpEditor.
-      // The Footprint Editor is its own store; useFootprintEditHotkey.ts performs the request. This model's board footprint IS its library footprint (by name), so both open that name.
+      // The Footprint Editor is its own store; useFootprintEditHotkey.ts performs the request. Edit Footprint opens a copy of the board footprint linked to it
+      // (`LoadFootprintFromBoard`, requested by its key: kicad-port's `boardCopyKey`, UI-LEFT F3); Edit Library Footprint the library footprint it names (`LoadFootprintFromLibrary`).
       // Not while routing (there Ctrl+E is ContinueFromEnd).
       const openFootprintEditor = (lib: boolean) =>
         pcbOnly(() => {
@@ -2113,7 +2115,7 @@ export function useActionRunner() {
             dispatch({ type: "TOAST", message: `${part.ref} has no footprint${lib ? "" : "/package"} to open`, kind: "error" });
             return;
           }
-          dispatch({ type: "PCBX", patch: { fpEditRequest: part.footprint } });
+          dispatch({ type: "PCBX", patch: { fpEditRequest: lib ? part.footprint : boardCopyKey(part.ref) } });
         });
       if (!routing) m.set("pcbnew.EditorControl.EditFpInFpEditor", openFootprintEditor(false));
       m.set("pcbnew.EditorControl.EditLibFpInFpEditor", openFootprintEditor(true));

@@ -18,6 +18,7 @@
 import { useEffect } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { useFpApi } from "../state/footprintEditorStore";
+import { boardCopyReference } from "../api/fpEditorTypes";
 
 export function useFootprintEditHotkey() {
   const state = useStudioState();
@@ -29,6 +30,8 @@ export function useFootprintEditHotkey() {
     if (!name) return;
     dispatch({ type: "PCBX", patch: { fpEditRequest: null } });
     dispatch({ type: "SET_TAB", tab: "footprint" });
-    void fpApi.openFootprint(name);
+    // Edit Footprint asks for the board footprint (`LoadFootprintFromBoard`, by its copy's key), Edit Library Footprint for the library's (`LoadFootprintFromLibrary`)
+    const reference = boardCopyReference(name);
+    void (reference ? fpApi.openFromBoard(reference) : fpApi.openFootprint(name));
   }, [name, dispatch, fpApi]);
 }

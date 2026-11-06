@@ -3,7 +3,7 @@
 // (fp_toolbars.json, drawn by components/Toolbar.tsx with KiCad's icons); the canvas is always there -- with nothing open it is the empty canvas and its
 // grid, like KiCad's, and a footprint is opened from the tree.
 import { useEffect, useRef, useState } from "react";
-import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
+import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { ENUM_PREFIX_MAX_LENGTH, enumSpinValue, enumeratePopupText, enumerateStart } from "../../kicad-port/padEnumeration";
 import { inPadEditMode, PAD_EDIT_MODE_MESSAGE, padEditLayer } from "../../kicad-port/padEditMode";
 import { FootprintCanvas } from "./FootprintCanvas";
@@ -81,9 +81,15 @@ function RenumberPadsDialog() {
   );
 }
 
+/** `ReloadFootprint`'s message for a footprint loaded from the board: "Editing %s from board.  Saving will update the board only." with the footprint's reference. */
+export const boardLinkMessage = (reference: string): string => `Editing ${reference} from board.  Saving will update the board only.`;
+/** Its link: "Open in library %s", the footprint's library nickname. */
+export const openInLibraryLabel = (fpid: string): string => `Open in library ${fpid.includes(":") ? fpid.slice(0, fpid.indexOf(":")) : ""}`;
+
 export function FootprintEditorView() {
   const state = useFpState();
   const dispatch = useFpDispatch();
+  const api = useFpApi();
 
   // The editor's own toast (every library action reports through it) goes away by itself, like the studio's (App.tsx's `Toast`).
   useEffect(() => {
@@ -108,6 +114,15 @@ export function FootprintEditorView() {
       <div className="main-toolbar-row">
         <Toolbar id="main" editor="footprint" />
       </div>
+      {state.footprint?.board_link && (
+        // `FOOTPRINT_EDIT_FRAME::ReloadFootprint`'s info bar for a footprint loaded from the board, with its "Open in library %s" link (`PCB_ACTIONS::editLibFpInFpEditor`)
+        <div role="status" data-testid="fp-board-link-banner" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12, display: "flex", gap: 12 }}>
+          <span>{boardLinkMessage(state.footprint.board_link.reference)}</span>
+          <a href="#" data-testid="fp-board-link-open-library" onClick={(e) => (e.preventDefault(), void api.openFootprint(state.footprint!.board_link!.fpid))}>
+            {openInLibraryLabel(state.footprint.board_link.fpid)}
+          </a>
+        </div>
+      )}
       {editing && (
         <div role="status" data-testid="pad-edit-banner" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12 }}>
           {PAD_EDIT_MODE_MESSAGE}

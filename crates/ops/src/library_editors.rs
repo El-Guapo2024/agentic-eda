@@ -356,6 +356,10 @@ impl<'a> Board<'a> {
             k.uuids = std::mem::take(&mut k.uuids).into_iter().map(|(id, u)| (re(&id), u)).collect();
             k.stroke_types = std::mem::take(&mut k.stroke_types).into_iter().map(|(id, t)| (re(&id), t)).collect();
             k.unlocked_texts = std::mem::take(&mut k.unlocked_texts).into_iter().map(|id| re(&id)).collect();
+            // the hatches, the locks and the hidden texts (UI-LEFT F5)
+            k.hatches = std::mem::take(&mut k.hatches).into_iter().map(|(id, h)| (re(&id), h)).collect();
+            k.locked = std::mem::take(&mut k.locked).into_iter().map(|id| re(&id)).collect();
+            k.hidden_texts = std::mem::take(&mut k.hidden_texts).into_iter().map(|id| re(&id)).collect();
             for e in &mut k.text_extras {
                 e.id = re(&e.id);
             }
@@ -765,6 +769,8 @@ mod verb_tests {
         fp.graphics.push(eda_model::ir::Shape::Segment { id: "stale_line".into(), layer: "F.SilkS".into(), stroke_width: Nm::new(120_000), filled: false, start: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, end: eda_model::ir::Point { x: Nm::new(1_000_000), y: Nm::ZERO } });
         fp.kicad.uuids.insert("stale_line".into(), "u-line".into());
         fp.kicad.stroke_types.insert("stale_line".into(), "dash".into());
+        fp.kicad.hatches.insert("stale_line".into(), eda_model::fp_art::Hatch::Hatch);
+        fp.kicad.locked.insert("stale_line".into());
         fp.items.groups.push(eda_model::ir::Group { id: "grp_x".into(), name: String::new(), member_ids: vec!["stale_line".into(), "field:Value".into()], design_block: String::new() });
         b.apply(&Cmd::PutLibraryFootprint { footprint: fp, overwrite: false }).unwrap();
         let stored = b.design().footprint_library.as_ref().unwrap().by_name("K").unwrap();
@@ -772,6 +778,8 @@ mod verb_tests {
         assert_ne!(line, "stale_line");
         assert_eq!(stored.kicad.uuids.get(&line).map(String::as_str), Some("u-line"));
         assert_eq!(stored.kicad.stroke_types.get(&line).map(String::as_str), Some("dash"));
+        assert_eq!(stored.kicad.hatches.get(&line), Some(&eda_model::fp_art::Hatch::Hatch));
+        assert!(stored.kicad.locked.contains(&line) && !stored.kicad.locked.contains("stale_line"));
         assert_eq!(stored.items.groups[0].member_ids, vec![line, "field:Value".to_string()]);
     }
 

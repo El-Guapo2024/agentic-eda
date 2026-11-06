@@ -1076,6 +1076,10 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   items?: FootprintItemsIr;
   /** The same items in the board's display shapes, for the board's painters (`crates/cli/src/fp_items_json.rs`); absent when none. */
   display?: FootprintItemsDisplay;
+  /** Footprint Properties' Clearance Overrides, Private Layers, Net Ties and jumper groups (`eda_model::fp_settings`, UI-LEFT F4); absent when none. */
+  settings?: import("./fpEditorTypes").FootprintSettings;
+  /** A footprint loaded from the board (UI-LEFT F3): the instance it is linked to and its own name; absent for a library footprint. */
+  board_link?: import("./fpEditorTypes").BoardLink;
 }
 
 /** `crates/model/src/ir.rs` `PadEditMode`: the pad flagged `ENTERED`, and what its explode set aside (the custom pad's zone option and proxy items, which the recombine gives back). */
@@ -2170,6 +2174,7 @@ export type Cmd =
   | ({ op: "pcb_item" } & PcbItemCmd)
   /** The Footprint Editor's verbs on any item of the open footprint (`crates/ops/src/fp_items.rs`). */
   | ({ op: "fp_item" } & FpItemCmd)
+  | ({ op: "fp_editor" } & import("./fpEditorTypes").FpEditorCmd)
   /** The microwave tools: a gap, a stub, an arc stub, a polygonal shape or an inductor as a footprint of its own (crates/ops/src/microwave.rs) -- see api/microwaveTypes.ts. */
   | ({ op: "microwave" } & MicrowaveCmd)
   | ({ op: "embedded" } & EmbeddedCmd)

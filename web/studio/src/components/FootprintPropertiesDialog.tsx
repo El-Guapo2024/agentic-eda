@@ -505,6 +505,26 @@ export function FootprintPropertiesDialog() {
           >
             Change Footprint...
           </button>
+          {/* `FP_PROPS_EDIT_BOARD_FP` / `FP_PROPS_EDIT_LIBRARY_FP` (`PCB_EDIT_FRAME::ShowFootprintPropertiesDialog`): this footprint in the Footprint Editor, linked to it
+              (`LoadFootprintFromBoard`, UI-LEFT F3), or the library footprint it names (`LoadFootprintFromLibrary`) */}
+          <button
+            data-testid="footprint-properties-edit-footprint"
+            onClick={() => {
+              close();
+              run("pcbnew.EditorControl.EditFpInFpEditor");
+            }}
+          >
+            Edit Footprint...
+          </button>
+          <button
+            data-testid="footprint-properties-edit-library-footprint"
+            onClick={() => {
+              close();
+              run("pcbnew.EditorControl.EditLibFpInFpEditor");
+            }}
+          >
+            Edit Library Footprint...
+          </button>
           <button onClick={close}>Cancel</button>
           <button className="primary" onClick={() => void submit()} disabled={busy} data-testid="footprint-properties-ok">
             OK

@@ -9,6 +9,7 @@
 // text variable (`FOOTPRINT::ResolveTextVar` returns false), so the Reference shows `REF**` and a text `${REFERENCE}` shows as it is written.
 //
 // Pure: no store, no DOM. Unit-tested in fpItems.test.ts.
+import { isHiddenText, textLookOf } from "./fpKeep";
 import type { Cmd, CmdShape, CmdText, FieldInfo, FieldLayoutCmd, Group, LibraryFootprint, LibraryPad } from "../api/types";
 import type { FlipDirectionWire, FootprintItemsDisplay, FpZoneDisplay } from "../api/fpItemTypes";
 import { defaultInfoFieldLayout, defaultReferenceLayout, defaultValueLayout, LIBRARY_REFERENCE_TEXT, newFieldLayout } from "./fpLibFields";
@@ -176,6 +177,16 @@ function fieldBox(f: FieldInfo): Box {
   return turnedTextBox({ ...t, x: t.x - down * Math.sin(rad), y: t.y + down * Math.cos(rad), size: f.h });
 }
 
+/** A text of the footprint's box: its anchor is where the text box is centred (or its top or bottom edge sits: the kept vertical justification, UI-LEFT F5), as
+ *  footprintPainter.ts draws it -- the box of `textBoundingBox` is about the baseline, so it moves down as `fieldBox`'s does. */
+function cmdTextBox(fp: Fp, t: CmdText): Box {
+  const valign = t.id ? textLookOf(fp as { kicad?: Record<string, unknown> }, t.id).valign : 0;
+  const base = textOfCmd(t);
+  const down = valign > 0 ? 0 : valign < 0 ? 0.72 * base.size : 0.36 * base.size;
+  const rad = (-base.angle / 1000) * (Math.PI / 180);
+  return turnedTextBox({ ...base, x: base.x - down * Math.sin(rad), y: base.y + down * Math.cos(rad) });
+}
+
 /** `EDA_ITEM::GetBoundingBox()` of the item `id`, `[x0, y0, x1, y1]`; a group's is its members'. */
 export function fpItemBounds(fp: Fp, id: string): Box | null {
   const kind = fpItemKind(fp, id);
@@ -186,7 +197,7 @@ export function fpItemBounds(fp: Fp, id: string): Box | null {
     case "graphic":
       return shapeBoundingBox(cmdShapeToShape(fp.graphics.find((g) => g.id === id)!));
     case "text":
-      return turnedTextBox(textOfCmd(fp.texts.find((t) => t.id === id)!));
+      return cmdTextBox(fp, fp.texts.find((t) => t.id === id)!);
     case "field":
       return fieldBox(fpFieldById(fp, id)!);
     case "dimension": {
@@ -344,7 +355,9 @@ export function fpHitTest(fp: Fp, wx: number, wy: number, tol: number, vis?: FpV
   for (let i = fp.texts.length - 1; i >= 0; i--) {
     const t = fp.texts[i]!;
     if (vis && !fpTextSelectable(vis, t)) continue;
-    if (t.id && inBox(turnedTextBox(textOfCmd(t)), wx, wy, tol / 2)) return { kind: "text", id: t.id };
+    // a text read hidden is neither drawn nor picked (`PCB_TEXT::ViewGetLOD`, UI-LEFT F5)
+    if (isHiddenText(fp as { kicad?: Record<string, unknown> }, t.id)) continue;
+    if (t.id && inBox(cmdTextBox(fp, t), wx, wy, tol / 2)) return { kind: "text", id: t.id };
   }
   const d = displayOf(fp);
   for (const item of extraItems({ drawings: d as never }).reverse()) if ((!vis || fpItemSelectable(vis, item.kind, item.layer)) && extraHitDistance(item, wx, wy) <= tol) return { kind: item.kind as FpItemKind, id: item.id };

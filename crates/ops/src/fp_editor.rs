@@ -172,7 +172,8 @@ impl Board<'_> {
         fp.reference_visible = reference_layout.visible;
         fp.reference = Some(reference_layout);
         let mut value_layout = turned(edit.as_ref().and_then(|e| e.value.clone()).unwrap_or_else(|| default_value_layout(&pose)), pose.side);
-        value_layout.text = part.value.clone().filter(|v| !v.is_empty());
+        // (a part with no value shows the footprint's name, as a footprint's Value does when the netlist gives it none)
+        value_layout.text = Some(part.value.clone().filter(|v| !v.is_empty()).unwrap_or_else(|| fpid.rsplit(':').next().unwrap_or(&fpid).to_string()));
         fp.value_visible = value_layout.visible;
         fp.value = Some(value_layout);
         fp.fields = edit
