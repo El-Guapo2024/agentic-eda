@@ -4,7 +4,10 @@
 //
 // The preview pane has KiCad's two switches (`FOOTPRINT_CHOOSER_FRAME`: "Show/hide footprint view panel" and "Show/hide 3D view panel", at least one of them on): the footprint's drawing, and
 // its 3D view -- the footprint with the models its file lists on it, placed the way KiCad places them (components/footprint/ModelPreview3D.tsx, the preview of the 3D Models tab).
-// "Show 3D viewer in own window" (the second frame of `FOOTPRINT_CHOOSER_FRAME`) is not ported.
+// "Show 3D viewer in own window" (`m_show3DViewer`, unchecked as the frame is made; `onExternalViewer3DEnable`, `Show3DViewerFrame`, `Update3DView`): while it is
+// ticked and the 3D view is on, a window of its own (`EDA_3D_VIEWER_FRAME`, titled "3D Viewer — Lib:Name") shows the selected footprint in 3D and follows
+// the selection (`updateViews`); unticking it closes that window, and so does its own close box. Here it is a window inside the page, moved by its title
+// bar and sized by its corner, over the chooser.
 //
 // Two places use it: Place Footprint (`BOARD_EDITOR_CONTROL::PlaceFootprint`: a footprint of its own on the board -- a mounting hole, a fiducial -- beside
 // the unplaced parts of the schematic) and the Footprint field of a symbol (`SelectFootprintFromLibrary`, assigning a footprint). The dialog only
@@ -88,7 +91,10 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
     if (!next.fp && !next.view3d) return;
     setViews(next);
     saveViews(next);
+    // `on3DviewReq` turning the 3D view on: the own window opens when its box is ticked, and closes when it is not
+    if (which === "view3d" && next.view3d) setOwn3dOpen(own3dRef.current);
   };
+  const own3dRef = useRef(false);
   const [byPins, setByPins] = useState(initial.pins);
   const [byPatterns, setByPatterns] = useState(initial.patterns);
   const patterns = useMemo(() => footprintFilterPatterns(fpFilters), [fpFilters]);
@@ -148,6 +154,24 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
     };
   }, [views.view3d, selectedId]);
   const models3d = useMemo(() => (shown?.drawing ? rowsOfLibrary(shown.drawing) : []), [shown?.drawing]);
+  // "Show 3D viewer in own window": the box, and whether the window is up (`Get3DViewerFrame()`): ticking the box opens it when the 3D view is on (`if(
+  // m_grButton3DView->IsChecked() ) Show3DViewerFrame()`), turning the 3D view on with the box ticked opens it too (`on3DviewReq`), and unticking it closes it.
+  const [own3d, setOwn3d] = useState(false);
+  const [own3dOpen, setOwn3dOpen] = useState(false);
+  const external3d = own3dOpen && own3d;
+  // the window's 3D view reads the selected footprint as the pane's does
+  const [external, setExternal] = useState<{ id: string; part: Part | null } | null>(null);
+  useEffect(() => {
+    if (!external3d || !selectedId) {
+      setExternal(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchPreviewPart({ footprint: selectedId }).then((part) => !cancelled && setExternal({ id: selectedId, part }));
+    return () => {
+      cancelled = true;
+    };
+  }, [external3d, selectedId]);
 
   const choose = useCallback(
     (row: ChooserRow | undefined) => {
@@ -291,6 +315,21 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
           </div>
         </div>
         <div className="dialog-footer">
+          <label style={{ marginRight: "auto" }}>
+            <input
+              type="checkbox"
+              checked={own3d}
+              onChange={(e) => {
+                const on = e.target.checked;
+                own3dRef.current = on;
+                setOwn3d(on);
+                // `onExternalViewer3DEnable`: ticked, the window opens if the 3D view is on; unticked, it closes
+                setOwn3dOpen(on && views.view3d);
+              }}
+              data-chooser-own-3d
+            />{" "}
+            Show 3D viewer in own window
+          </label>
           <button onClick={onCancel} data-chooser-cancel>
             Cancel
           </button>
@@ -299,6 +338,55 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
           </button>
         </div>
       </div>
+      {external3d && <Viewer3DWindow id={selectedId} part={external && external.id === selectedId ? external.part : null} rows={models3d} onClose={() => setOwn3dOpen(false)} />}
+    </div>
+  );
+}
+
+/** `EDA_3D_VIEWER_FRAME` as the Footprint Chooser opens it: "3D Viewer — Lib:Name" (`FOOTPRINT_CHOOSER_FRAME::Update3DView`), a window moved by its title bar and
+ *  sized by its corner, closed by its close box. */
+function Viewer3DWindow({ id, part, rows, onClose }: { id: string | null; part: Part | null; rows: ReturnType<typeof rowsOfLibrary>; onClose: () => void }) {
+  const [pos, setPos] = useState(() => ({ x: Math.max(16, window.innerWidth - 680), y: 60 }));
+  const [size, setSize] = useState({ w: 600, h: 460 });
+  const drag = useRef<{ kind: "move" | "size"; x: number; y: number; from: { x: number; y: number } } | null>(null);
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (d.kind === "move") setPos({ x: Math.max(0, d.from.x + dx), y: Math.max(0, d.from.y + dy) });
+    else setSize({ w: Math.max(320, d.from.x + dx), h: Math.max(240, d.from.y + dy) });
+  };
+  const start = (kind: "move" | "size") => (e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    drag.current = { kind, x: e.clientX, y: e.clientY, from: kind === "move" ? pos : { x: size.w, y: size.h } };
+  };
+  return (
+    <div
+      className="dialog"
+      role="dialog"
+      aria-label="3D Viewer"
+      data-chooser-3d-window
+      style={{ position: "fixed", left: pos.x, top: pos.y, width: size.w, zIndex: 1100, display: "flex", flexDirection: "column", boxShadow: "0 4px 18px rgba(0,0,0,0.45)" }}
+      onClick={(e) => e.stopPropagation()}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => (drag.current = null)}
+    >
+      <div className="dialog-header" style={{ cursor: "move", display: "flex", alignItems: "center" }} onPointerDown={start("move")}>
+        <span style={{ flex: 1 }} data-chooser-3d-window-title>{`3D Viewer \u2014 ${id ?? ""}`}</span>
+        <button aria-label="Close 3D Viewer" onPointerDown={(e) => e.stopPropagation()} onClick={onClose} data-chooser-3d-window-close>
+          {"×"}
+        </button>
+      </div>
+      <div style={{ padding: 6 }}>
+        {id ? (
+          <ModelPreview3D part={part} rows={rows} height={size.h - 60} testId="chooser-3d-window" />
+        ) : (
+          <div style={{ height: size.h - 60, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--chrome-text-dim)" }}>No footprint selected</div>
+        )}
+      </div>
+      <div style={{ position: "absolute", right: 0, bottom: 0, width: 14, height: 14, cursor: "nwse-resize" }} onPointerDown={start("size")} aria-hidden />
     </div>
   );
 }

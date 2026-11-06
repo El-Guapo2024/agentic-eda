@@ -55,6 +55,7 @@ const SYMBOL_FILTER = { excludePower: true } as const;
 const POWER_FILTER = { onlyPower: true } as const;
 const notPower = (item: ChooserItem) => !item.power;
 const isPower = (item: ChooserItem) => !!item.power;
+const anySymbol = () => true;
 
 interface Loaded {
   id: string;
@@ -70,10 +71,27 @@ export function SymbolChooserDialog() {
   return state.symbolChooserOpen ? <SymbolChooser power={false} /> : null;
 }
 
-function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] }) {
+/** What a dialog that only picks a symbol asks of the chooser: the id to open on, and where the choice goes. */
+export interface SymbolPick {
+  preselect?: string | null;
+  onChoose: (libId: string) => void;
+  onCancel: () => void;
+}
+
+/**
+ * `SYMBOL_CHOOSER_FRAME` (`FRAME_SYMBOL_CHOOSER`, eeschema/symbol_chooser_frame.cpp) as another dialog opens it to pick a library id (`ShowModal( &newName )`:
+ * Change Symbols' browse buttons, `launchNewIdSymbolBrowser` / `launchMatchIdSymbolBrowser`): every library of the tables, power symbols included (no filter:
+ * `nullptr`), no "Already Placed" (`dummyAlreadyPlaced`), no footprint pane (`aShowFootprints = false`), opened on the id the field holds (`SetPreselect`); OK
+ * gives the chosen symbol's `Lib:Name`.
+ */
+export function SymbolPickerDialog(props: SymbolPick) {
+  return <SymbolChooser power={false} pick={props} />;
+}
+
+function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, number]; pick?: SymbolPick }) {
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  const close = () => dispatch(power ? { type: "SET_SCH_POWER_PENDING", pending: null } : { type: "SET_SYMBOL_CHOOSER_OPEN", open: false });
+  const close = () => (pick ? pick.onCancel() : dispatch(power ? { type: "SET_SCH_POWER_PENDING", pending: null } : { type: "SET_SYMBOL_CHOOSER_OPEN", open: false }));
   /** "Place repeated copies" (`m_keepSymbol`, unchecked as the dialog is made). */
   const [keep, setKeep] = useState(false);
   /** "Place all units" (`m_useUnits->SetValue( true )`): "Sequentially place all units of the symbol." */
@@ -97,11 +115,11 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
   }, []);
 
   const recent = recentItems(power ? "power" : "symbol");
-  const wanted = power ? isPower : notPower;
-  const placed = useMemo(() => project.filter((p) => p.placed && wanted(p)), [project, wanted]);
+  const wanted = pick ? anySymbol : power ? isPower : notPower;
+  const placed = useMemo(() => (pick ? [] : project.filter((p) => p.placed && wanted(p))), [project, wanted, pick]);
   // The project's libraries are the ones KiCad does not have; the stand-in table only where KiCad's libraries are not installed.
   const own = useMemo(() => project.filter((p) => wanted(p) && !installedNames.has(p.lib) && (p.source !== "builtin" || installedNames.size === 0)), [project, installedNames, wanted]);
-  const chooser = useChooser({ kind: "symbol", active: true, recent, placed, project: own, filter: power ? POWER_FILTER : SYMBOL_FILTER, keep: wanted, preselect: recent[0]?.id ?? null, treeKey: power ? "power" : "symbols" });
+  const chooser = useChooser({ kind: "symbol", active: true, recent, placed, project: own, filter: pick ? undefined : power ? POWER_FILTER : SYMBOL_FILTER, keep: wanted, preselect: (pick?.preselect || null) ?? recent[0]?.id ?? null, treeKey: power ? "power" : "symbols" });
 
   const chosen = chosenOf(chooser.selectedRow);
   const id = chosen?.item.id ?? null;
@@ -167,7 +185,7 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
   // pins share one) and its footprint filters; disabled while the symbol is not loaded (`m_fp_sel_ctrl->Disable()`).
   const selPins = info?.pins ?? (shown?.symbol ? chosen?.item.pins ?? 0 : 0);
   const selFilters = useMemo(() => (info ? (info.fp_filters ? info.fp_filters.split(/\s+/).filter((f) => f !== "") : []) : (shown?.symbol?.footprint_filters ?? [])), [info, shown?.symbol]);
-  const selReady = !!shown && !shown.error && !power;
+  const selReady = !!shown && !shown.error && !power && !pick;
   const selKey = selReady ? `${id}\u0001${selPins}\u0001${selFilters.join(" ")}` : "";
   const [selection, setSelection] = useState<{ key: string; footprints: string[]; indexing: boolean } | null>(null);
   useEffect(() => {
@@ -205,6 +223,12 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
         return;
       }
       const lib = c.item.id.slice(0, Math.max(0, c.item.id.indexOf(":")));
+      if (pick) {
+        // `SYMBOL_CHOOSER_FRAME::OnOK`: the chosen symbol's id goes back to the dialog that asked (`DismissModal( true, libId.Format() )`)
+        rememberChosen("symbol", c.item);
+        pick.onChoose(c.item.id);
+        return;
+      }
       const details = shown && shown.id === c.item.id ? shown.info : installedNames.has(lib) ? await fetchSymbolDetails(c.item.id).catch(() => null) : null;
       const reference = details?.reference || c.item.reference || "";
       rememberChosen(power ? "power" : "symbol", { ...c.item, reference, value: details?.value ?? c.item.value, footprint: details?.footprint ?? c.item.footprint, units: details?.units ?? c.item.units, pins: details?.pins ?? c.item.pins, description: details?.description ?? c.item.description });
@@ -233,7 +257,7 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, allUnits, at]
+    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, allUnits, at, pick]
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -259,7 +283,7 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
 
   return (
     <>
-      <div className="dialog-backdrop" data-symbol-chooser onKeyDown={(e) => e.stopPropagation()}>
+      <div className="dialog-backdrop" data-symbol-chooser data-symbol-picker={pick ? "" : undefined} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
         <div className="dialog chooser-dialog" onKeyDown={onKeyDown} {...chooserFocusGuard} role="dialog" aria-label="Symbol Chooser">
           <div className="dialog-header">
             <span>
@@ -305,7 +329,7 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
                   ))}
                 </div>
               )}
-              {id && !power && (
+              {id && !power && !pick && (
                 <>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
                     <span style={{ fontWeight: 600 }}>Footprint</span>
@@ -356,12 +380,18 @@ function SymbolChooser({ power, at }: { power: boolean; at?: [number, number] })
             </div>
           </div>
           <div className="dialog-footer">
-            <label title="Keep the symbol selected for subsequent clicks.">
-              <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} data-chooser-keep /> Place repeated copies
-            </label>
-            <label style={{ marginRight: "auto", marginLeft: 30 }} title="Sequentially place all units of the symbol.">
-              <input type="checkbox" checked={allUnits} onChange={(e) => setAllUnits(e.target.checked)} data-chooser-all-units /> Place all units
-            </label>
+            {pick ? (
+              <span style={{ marginRight: "auto" }} />
+            ) : (
+              <>
+                <label title="Keep the symbol selected for subsequent clicks.">
+                  <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} data-chooser-keep /> Place repeated copies
+                </label>
+                <label style={{ marginRight: "auto", marginLeft: 30 }} title="Sequentially place all units of the symbol.">
+                  <input type="checkbox" checked={allUnits} onChange={(e) => setAllUnits(e.target.checked)} data-chooser-all-units /> Place all units
+                </label>
+              </>
+            )}
             <button onClick={close} data-chooser-cancel>
               Cancel
             </button>

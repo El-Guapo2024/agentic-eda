@@ -1,13 +1,20 @@
 // Change Symbols / Update Symbols (`DIALOG_CHANGE_SYMBOLS`): pick which symbols (the selection, all, or by reference / value / library id), then either give
 // them a new library symbol (Change) or refresh them from the project's edited library symbols (Update). Like KiCad's, the dialog stays open after Apply and
 // lists what happened to each symbol; Close ends it. The rules are kicad-port/schChangeSymbols.ts.
+//
+// The browse buttons beside "matching library identifier" and "New library identifier" (`launchMatchIdSymbolBrowser`, `launchNewIdSymbolBrowser`) open the Symbol
+// Chooser over every library of the tables (`FRAME_SYMBOL_CHOOSER`, SymbolChooserDialog.tsx's `SymbolPickerDialog`), opened on the id the field holds; OK puts
+// the chosen `Lib:Name` in the field. A new id from a library the design does not use yet is read from that library (`GetLibSymbol( newId )`: its units, its
+// Reference prefix and its Value), and the server keeps its definition with the schematic in the same step as the change (crates/cli/src/library_place.rs).
 import { useEffect, useState } from "react";
 import { fetchSymbolLibrary } from "../api/client";
+import { fetchSymbolDetails } from "../api/libraryChooserClient";
 import type { SchToolDialog } from "../api/schEditTypes";
 import type { SymbolLibraryEntry } from "../api/types";
 import { matchReferences, planChange, type LibInfo, type MatchBy, type SymbolRow } from "../kicad-port/schChangeSymbols";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
+import { SymbolPickerDialog } from "./SymbolChooserDialog";
 
 export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "change_symbols" }> }) {
   const state = useStudioState();
@@ -28,6 +35,8 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
   const [entries, setEntries] = useState<SymbolLibraryEntry[]>([]);
   const [report, setReport] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  /** Which field the Symbol Chooser is browsing for. */
+  const [browsing, setBrowsing] = useState<"match" | "new" | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -50,7 +59,11 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
       if (change) {
         const id = newId.trim();
         const entry = entries.find((e) => e.lib_id === id);
-        const lib: LibInfo = { found: entry !== undefined, unitCount: entry?.unit_count ?? 1, prefix: entry?.reference_prefix ?? "", value: id.includes(":") ? id.slice(id.indexOf(":") + 1) : id };
+        // not one of the design's libraries: the library of the tables that has it (`GetLibSymbol( newId )`)
+        const installed = entry ? null : await fetchSymbolDetails(id).catch(() => null);
+        const lib: LibInfo = installed
+          ? { found: true, unitCount: Math.max(1, installed.units), prefix: installed.reference, value: installed.value || (id.includes(":") ? id.slice(id.indexOf(":") + 1) : id) }
+          : { found: entry !== undefined, unitCount: entry?.unit_count ?? 1, prefix: entry?.reference_prefix ?? "", value: id.includes(":") ? id.slice(id.indexOf(":") + 1) : id };
         const plan = planChange(refs, rows, lib, { newLibId: id, updateReference, updateValue, resetEmpty });
         if (plan.cmds.length > 0 && !(await api.cmdBatch(plan.cmds))) return setReport([...plan.report, "*** The change was refused; nothing was changed ***"]);
         return setReport(plan.report);
@@ -82,12 +95,32 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
         {!change && radio("all", "Update all symbols in schematic")}
         {radio("reference", `${verb} symbols matching reference designator:`, <input value={reference} onChange={(e) => setReference(e.target.value)} onFocus={() => setBy("reference")} />)}
         {radio("value", `${verb} symbols matching value:`, <input value={value} onChange={(e) => setValue(e.target.value)} onFocus={() => setBy("value")} />)}
-        {radio("id", `${verb} symbols matching library identifier:`, <input value={matchId} onChange={(e) => setMatchId(e.target.value)} onFocus={() => setBy("id")} />)}
+        {radio(
+          "id",
+          `${verb} symbols matching library identifier:`,
+          <>
+            <input value={matchId} onChange={(e) => setMatchId(e.target.value)} onFocus={() => setBy("id")} data-change-match-id />
+            <button
+              title="Browse the symbol libraries"
+              aria-label="Browse the symbol libraries for the identifier to match"
+              onClick={() => {
+                setBy("id");
+                setBrowsing("match");
+              }}
+              data-change-match-browse
+            >
+              {"…"}
+            </button>
+          </>
+        )}
       </fieldset>
       {change && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <span style={{ minWidth: 150 }}>New library identifier:</span>
-          <input list="sch-change-symbol-ids" style={{ flex: 1 }} value={newId} onChange={(e) => setNewId(e.target.value)} placeholder="Library:Symbol" autoFocus />
+          <input list="sch-change-symbol-ids" style={{ flex: 1 }} value={newId} onChange={(e) => setNewId(e.target.value)} placeholder="Library:Symbol" autoFocus data-change-new-id />
+          <button title="Browse the symbol libraries" aria-label="Browse the symbol libraries for the new identifier" onClick={() => setBrowsing("new")} data-change-new-browse>
+            {"…"}
+          </button>
           <datalist id="sch-change-symbol-ids">
             {entries.map((e) => (
               <option key={e.lib_id} value={e.lib_id}>
@@ -110,6 +143,17 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
         </label>
       </fieldset>
       {report.length > 0 && <pre style={{ margin: 0, maxHeight: 160, overflow: "auto", fontSize: 11, whiteSpace: "pre-wrap" }}>{report.join("\n")}</pre>}
+      {browsing && (
+        <SymbolPickerDialog
+          preselect={(browsing === "new" ? newId : matchId).trim() || null}
+          onCancel={() => setBrowsing(null)}
+          onChoose={(id) => {
+            if (browsing === "new") setNewId(id);
+            else setMatchId(id);
+            setBrowsing(null);
+          }}
+        />
+      )}
     </SchDialogShell>
   );
 }
