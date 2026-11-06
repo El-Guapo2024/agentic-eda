@@ -511,6 +511,15 @@ fn default_layers() -> Vec<String> {
 /// outline, the margin) are on whatever the file lists (`BOARD_DESIGN_SETTINGS::SetEnabledLayers`); a technical layer the file does not list is off, as KiCad has it (r2-board-io
 /// F17: `issue18839` lists no adhesive, paste, mask, silkscreen or fabrication layer; every board this studio wrote lists them all). A layer name the file has that is not one of
 /// KiCad's (`Rescue`, a name from before KiCad 5) is skipped. An item on a layer the list does not name keeps its layer and does not turn it on (r4-board-io N6).
+/// The Board Editor Layers page a board file's `(layers ..)` table makes ([`import_layer_setup`]): the layers it enables, the names it gives them and their types. For
+/// Append Board (`PCB_CONTROL::AppendBoard`), whose new layers take the appended file's descriptor (KiCad 25ec2335 `parseLayers`: `if( !m_preserveDestinationStackup ||
+/// !m_board->IsLayerEnabled( .. ) ) m_board->SetLayerDescr( .., layer )`). `None` for a text that is not a board.
+pub fn board_layer_setup(text: &str) -> Option<LayerSetup> {
+    let Ok(Sexpr::List(root)) = sexpr::parse(text) else { return None };
+    sexpr::find(&root, "layers")?;
+    Some(import_layer_setup(&root))
+}
+
 fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
     let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut setup = LayerSetup { enabled: Vec::new(), names: BTreeMap::new(), types: BTreeMap::new() };

@@ -55,7 +55,7 @@ pub use page::drawing_sheet_in;
 mod import;
 mod fp_transform;
 mod import_items;
-pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_net_classes_for_schematic, parse_project_net_classes_for_schematic, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, merge_project_teardrops, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
+pub use import::{board_layer_setup, import_kicad_pcb, merge_project_design_rules, merge_project_dimension_defaults, project_json_for_board, merge_project_net_classes, merge_project_net_classes_for_schematic, parse_project_net_classes_for_schematic, merge_project_predefined_sizes, merge_project_rule_severities, merge_project_setup_pages, merge_project_teardrops, mm_to_nm, parse_project_net_classes, sch_mm_to_nm, parse_rule_severities, ImportNotes};
 
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules, rule_layer_matches};

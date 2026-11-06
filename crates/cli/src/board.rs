@@ -1843,6 +1843,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
         Cmd::EditGroup { id, name, member_ids, design_block } => format!("group edit {id} --name {name:?} --members {}{}", member_ids.join(" "), design_block.as_ref().map_or(String::new(), |b| format!(" --design-block {b:?}"))),
         Cmd::LinkDesignBlock { ids, block } => format!("design-block link {block} {}", ids.join(" ")),
+        // no block: Append Board (`AppendBoard( .., nullptr )`)
+        Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } if block.is_empty() => format!("append-board --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
         Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } => format!("design-block place {block} --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
         Cmd::CreateArray { ids, arrange, .. } => format!("array{} {}", if *arrange { " --arrange" } else { "" }, ids.join(" ")),
         Cmd::AddDimension { .. } => "dimension add".to_string(),

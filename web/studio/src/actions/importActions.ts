@@ -4,6 +4,7 @@
 import { openImportGraphics, type PickedFile } from "../state/importDialogs";
 import { graphicsFormatOf } from "../kicad-port/importGraphics";
 import { appendBoardCmd, describeAppended, isKicadBoardName } from "../kicad-port/appendBoard";
+import { getDesignBlocksUi } from "../state/designBlocks";
 import { acceptFor, asForeignParam, describeImport, describeIssues, describeRules, issuesOf, type ForeignFile, type ForeignParam, type ImportKind } from "../kicad-port/foreignImport";
 import { readAppendBoard } from "../api/importClient";
 import { pickBinaryFile, postImportForeign } from "../api/foreignImportClient";
@@ -32,8 +33,9 @@ export interface ImportActionContext {
 }
 
 /**
- * `PCB_CONTROL::AppendBoard`: the file's items are put on the board (the paste of its text, `Cmd::PasteClipboard`, one undo step) with the top left item at the cursor and carried by the
- * Move tool until a click drops them; Escape takes them back. What the paste leaves out or changes on this board is said afterwards.
+ * `PCB_CONTROL::AppendBoard`: the file is loaded into the board (`place_design_block` with no block, one undo step: its layers, nets and items, in one group named after the file
+ * when "Place as group" is on) with the top left item at the cursor and carried by the Move tool until a click drops them; Escape takes them back. What the append added or
+ * changed on this board is said afterwards.
  */
 async function appendBoardFile(ctx: ImportActionContext, file: PickedFile): Promise<void> {
   const toast = (message: string, kind: "error" | "info") => ctx.dispatch({ type: "TOAST", message, kind });
@@ -46,7 +48,9 @@ async function appendBoardFile(ctx: ImportActionContext, file: PickedFile): Prom
   }
   if (!info.ok || !info.reference) return toast(info.message ?? "Error loading board.", "error");
   const reference = info.reference;
-  const placed = await ctx.api.placeNewItems((at) => appendBoardCmd(file.text, reference, at), true);
+  // `AppendBoard` reads the Design Blocks pane's "Place as group" for a plain board too (`cfg->m_DesignBlockChooserPanel.place_as_group`)
+  const asGroup = getDesignBlocksUi().options.asGroup;
+  const placed = await ctx.api.placeNewItems((at) => appendBoardCmd(file.text, reference, at, file.name, asGroup), true);
   if (!placed) return; // the refusal is on screen as a toast
   const notes = info.notes ?? [];
   toast(`Appended ${describeAppended(info.counts)}.${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`, "info");

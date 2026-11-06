@@ -95,6 +95,7 @@ mod specctra;
 pub use specctra::{set_session_importer, SessionImporter};
 mod pcb_paste_special;
 mod design_blocks;
+pub use design_blocks::layer_table;
 mod multichannel;
 mod multichannel_copy;
 mod multichannel_facts;
@@ -596,7 +597,8 @@ pub enum Cmd {
     /// text, the same text Append Board reads -- put on the board with the file's origin (the point Append Board holds it by, the studio's server finds it) at `at`. The
     /// references the file has are kept (`AppendBoard` never renumbers: "Don't reannotate dupes on Append Board"). With `as_group` and at least two items at its top, what
     /// came in is put in one group named `group_name` (the block's name when that is empty) and linked to `block` (`Lib:Name`): `placeAsGroup`, `SetDesignBlockLibId`. One undo
-    /// step. See `design_blocks.rs`.
+    /// step. See `design_blocks.rs`. An empty `block` is Append Board (`PCB_CONTROL::AppendBoard( *pi, fileName )`, no design block): the same load of the file, a group
+    /// named `group_name` (the file's stem) linked to nothing.
     PlaceDesignBlock {
         text: String,
         at: Point,
