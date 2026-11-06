@@ -9,21 +9,15 @@
 // sends to the session that is running (`routeSetSettings`), so a change applies from the next move as upstream's does.
 //
 // "Optimize entire track being dragged" (`DRAGGER::optimizeAndUpdateDraggedLine`: the optimizer's KEEP_TOPOLOGY and PRESERVE_VERTEX) and
-// "Use mouse path to set track posture" (`MOUSE_TRAIL_TRACER`) are live rows like the others. The optimizer effort
-// is the one row this dialog has that KiCad's does not: KiCad keeps `OptimizerEffort` in the settings file only
-// (`tools.pns.effort`).
+// "Use mouse path to set track posture" (`MOUSE_TRAIL_TRACER`) are live rows like the others. The optimizer effort has no row, as
+// in KiCad, which keeps `OptimizerEffort` in the settings file only (`tools.pns.effort`, `OE_MEDIUM` by default): the studio's stays at
+// its default (`routerSettings.ts`) and is still sent with every session (UI-LEFT R8).
 import { useEffect, useState } from "react";
 import { routeMove, routeSetSettings } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import type { RouteMode } from "../api/types";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
-import { modeOptionEnabled, type OptimizerEffort, type RouterSettings } from "../kicad-port/routerSettings";
-
-const EFFORT_OPTIONS: { value: OptimizerEffort; label: string }[] = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "full", label: "Full" },
-];
+import { modeOptionEnabled, type RouterSettings } from "../kicad-port/routerSettings";
 
 function Check({ label, checked, onChange, title, disabled, indent }: { label: string; checked: boolean; onChange?: (v: boolean) => void; title?: string; disabled?: boolean; indent?: boolean }) {
   return (
@@ -140,16 +134,6 @@ export function RouterSettingsDialog() {
                 onChange={(v) => set({ fixAllSegments: v })}
                 title="When enabled, all track segments will be fixed in place up to the cursor location.  When disabled, the last segment (closest to the cursor) will remain free and follow the cursor."
               />
-              <label className="filter-row" title="Bigger means cleaner traces, but slower routing. KiCad keeps this one in its settings file (tools.pns.effort) and has no row for it in this dialog.">
-                Optimizer effort
-                <select value={s.optimizerEffort} onChange={(e) => set({ optimizerEffort: e.target.value as OptimizerEffort })}>
-                  {EFFORT_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
             </fieldset>
           </div>
           <div style={{ fontSize: 11, opacity: 0.7, marginTop: 8 }}>A route or drag in progress takes the new settings from its next move.</div>
