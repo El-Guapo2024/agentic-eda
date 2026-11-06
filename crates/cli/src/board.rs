@@ -1974,6 +1974,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
         Cmd::PcbItem(c) => c.describe(),
+        Cmd::FpItem(c) => c.describe(),
         Cmd::Embedded(c) => c.describe(),
         Cmd::Microwave(c) => c.describe(),
         Cmd::Multichannel(c) => c.describe(),
@@ -2031,6 +2032,12 @@ fn cmd_line(c: &Cmd) -> String {
             let flag = |name: &str, v: &Option<bool>| v.map(|v| format!(" --{name} {}", if v { "on" } else { "off" })).unwrap_or_default();
             format!("schematic attrs {}{}{}{}{}", ids.join(","), flag("dnp", dnp), flag("exclude-from-bom", exclude_from_bom), flag("exclude-from-board", exclude_from_board), flag("exclude-from-sim", exclude_from_sim))
         }
+        Cmd::AddDesignVariant { name, description } => format!("schematic variant add {name:?} {description:?}"),
+        Cmd::RemoveDesignVariant { name } => format!("schematic variant remove {name:?}"),
+        Cmd::EditDesignVariantDescription { name, description } => format!("schematic variant describe {name:?} {description:?}"),
+        Cmd::RenameDesignVariant { name, new_name } => format!("schematic variant rename {name:?} {new_name:?}"),
+        Cmd::CopyDesignVariant { name, new_name } => format!("schematic variant copy {name:?} {new_name:?}"),
+        Cmd::SetSymbolVariant { variant, ids, .. } => format!("schematic variant set {variant:?} {}", ids.join(",")),
         Cmd::SetSheetPage { sheet, page, .. } => format!("schematic sheet-page {sheet} {page:?}"),
         Cmd::SetSchItemText { id, text } => format!("schematic item-text {id} {text:?}"),
         Cmd::SetSymbolLibIds { changes, .. } => format!("schematic lib-ids {}", changes.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(",")),
@@ -2269,6 +2276,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
         Cmd::PcbItem(c) => c.kind(),
+        Cmd::FpItem(_) => "footprint",
         Cmd::Embedded(c) => c.kind(),
         Cmd::Microwave(c) => c.kind(),
         Cmd::Multichannel(c) => c.kind(),
@@ -2295,6 +2303,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => "schematic-erc-pin-map",
         Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => "schematic-annotate",
         Cmd::SetSymbolAttrs { .. } => "schematic-attrs",
+        Cmd::AddDesignVariant { .. } | Cmd::RemoveDesignVariant { .. } | Cmd::EditDesignVariantDescription { .. } | Cmd::RenameDesignVariant { .. } | Cmd::CopyDesignVariant { .. } | Cmd::SetSymbolVariant { .. } => "schematic-variant",
         Cmd::SetSheetPage { .. } => "schematic-sheet-page",
         Cmd::SetSchItemText { .. } => "schematic-text",
         Cmd::SetSymbolLibIds { .. } => "schematic-lib-ids",

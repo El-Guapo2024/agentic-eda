@@ -303,6 +303,12 @@ fn cell_uuid(t: &Table, i: usize) -> String {
 /// One table as `format( const PCB_TABLE* )` writes it; returns its uuid. A board's table is on its layer, so are its cells.
 pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
     let uuid = table_uuid(t);
+    write_with_uuid(out, t, locked, &uuid);
+    uuid
+}
+
+/// [`write`] with the table's uuid given (a library footprint's table keeps the uuid its file gave it; its cells keep theirs, `TableCell::uuid`).
+pub(crate) fn write_with_uuid(out: &mut String, t: &Table, locked: bool, uuid: &str) {
     let layer = sexpr_str(&t.layer);
     let _ = write!(out, "\t(table (column_count {}) (uuid \"{uuid}\")", t.col_count());
     if locked {
@@ -310,7 +316,6 @@ pub(crate) fn write(out: &mut String, t: &Table, locked: bool) -> String {
     }
     let _ = write!(out, " (layer {layer})");
     write_body(out, t, false);
-    uuid
 }
 
 /// The uuid `t` is written with: the file's, else one made from its id.

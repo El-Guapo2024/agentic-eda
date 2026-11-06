@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FieldsTableSpec } from "../api/types";
+import { deleteStoredVariant, fieldSupportsVariants, renameStoredVariant, stageVariantEdit, variantApplyCmds, variantEditsRemoved, variantEditsRenamed, VARIANT_OVERRIDE_COLOR } from "./fieldsTableStage";
 import { attributeState, bomFmtPresets, isAttributeColumn, matchingBomPreset, emptyChanges, isEditableColumn, isEmptyChanges, toggledAttribute, specAddColumn, specRemoveColumn, specRenameColumn, stageAddField, stageEdit, stageRemoveField, stageRenameField, validNewFieldName } from "./fieldsTableStage";
 
 const spec = (): FieldsTableSpec => ({
@@ -125,4 +126,49 @@ test("the attribute columns are generated names but cells to edit: a click on a 
   let c = emptyChanges();
   for (const ref of ["R1", "R2"]) c = stageEdit(c, ref, "${DNP}", toggledAttribute("0", false));
   assert.deepEqual(c.edits, [{ id: "R1", field: "${DNP}", value: "1" }, { id: "R2", field: "${DNP}", value: "1" }]);
+});
+
+// ---- design variants (KiCad 25ec2335)
+
+
+test("fieldSupportsVariants: every column but the Reference and ${EXCLUDE_FROM_BOARD}", () => {
+  assert.equal(fieldSupportsVariants("Value"), true);
+  assert.equal(fieldSupportsVariants("${DNP}"), true);
+  assert.equal(fieldSupportsVariants("Reference"), false);
+  assert.equal(fieldSupportsVariants("${EXCLUDE_FROM_BOARD}"), false);
+});
+
+test("a variant's cells are staged per variant and cell, the last edit winning", () => {
+  let v = stageVariantEdit([], "Lite", "R1", "Value", "22k");
+  v = stageVariantEdit(v, "Lite", "R1", "Value", "47k");
+  v = stageVariantEdit(v, "Pro", "R1", "Value", "1k");
+  assert.deepEqual(v, [
+    { variant: "Lite", id: "R1", field: "Value", value: "47k" },
+    { variant: "Pro", id: "R1", field: "Value", value: "1k" },
+  ]);
+  assert.deepEqual(deleteStoredVariant(v, "Lite"), [{ variant: "Pro", id: "R1", field: "Value", value: "1k" }]);
+  assert.deepEqual(renameStoredVariant(v, "Pro", "Max").map((e) => e.variant), ["Lite", "Max"]);
+});
+
+test("a field renamed or removed takes the variants' cells along (field existence is shared by every variant)", () => {
+  const v = stageVariantEdit(stageVariantEdit([], "Lite", "R1", "MPN", "A"), "Lite", "R1", "Value", "22k");
+  assert.deepEqual(variantEditsRenamed(v, "MPN", "PartNo").map((e) => e.field), ["PartNo", "Value"]);
+  assert.deepEqual(variantEditsRemoved(v, "MPN").map((e) => e.field), ["Value"]);
+});
+
+test("Apply: one set_symbol_variant per variant and symbol, the attribute cells as flags", () => {
+  let v = stageVariantEdit([], "Lite", "R2", "${DNP}", "1");
+  v = stageVariantEdit(v, "Lite", "R1", "Value", "22k");
+  v = stageVariantEdit(v, "Lite", "R1", "${EXCLUDE_FROM_BOM}", "0");
+  v = stageVariantEdit(v, "Alt", "R1", "MPN", "X");
+  v = stageVariantEdit(v, "Alt", "R1", "${QUANTITY}", "9");
+  assert.deepEqual(variantApplyCmds(v), [
+    { op: "set_symbol_variant", variant: "Alt", ids: ["R1"], fields: { MPN: "X" } },
+    { op: "set_symbol_variant", variant: "Lite", ids: ["R1"], exclude_from_bom: false, fields: { Value: "22k" } },
+    { op: "set_symbol_variant", variant: "Lite", ids: ["R2"], dnp: true },
+  ]);
+});
+
+test("the highlight of a variant's own value is KiCad's yellow", () => {
+  assert.deepEqual(VARIANT_OVERRIDE_COLOR, { light: "rgb(255, 255, 200)", dark: "rgb(80, 80, 40)" });
 });

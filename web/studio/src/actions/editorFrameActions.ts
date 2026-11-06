@@ -9,14 +9,17 @@
 import type { Dispatch } from "react";
 import support from "../kicad/editor_toolbar_support.json";
 import { datasheetTarget } from "../kicad-port/itemText";
-import { footprintPropertiesTarget, symbolPropertiesTarget } from "../kicad-port/libEditorEdit";
+import { symbolPropertiesTarget } from "../kicad-port/libEditorEdit";
 import { libFieldName } from "../kicad-port/symFieldLayout";
 import { rotateCarriedPad } from "../kicad-port/fpPadPlacer";
 import { newPadFromMaster } from "../kicad-port/padSettings";
 import { worldToScreen, zoomAbout, type ViewTransform } from "../kicad-port/view";
 import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbol } from "./librarySaveOps";
+import { fpEditTarget, type Snap } from "../kicad-port/fpItems";
 import { getDockLayout, setDockColumnCollapsed } from "../state/dockLayoutStore";
-import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
+import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
+import { asPickedImage } from "./imageFiles";
+import { fpChooseImage } from "../components/footprint/fpItemTools";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 
 /** common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the factor of one Zoom In / Zoom Out step. */
@@ -92,7 +95,13 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
   if (fp) {
     // Select (`ACTIONS::selectSetRect`, the first button of the right toolbar's Selection modes group): back to the select tool.
     m.set("common.Interactive.selectSetRect", () => void ctx.fpApi.setTool("select"));
-    // Rotate Counterclockwise / Clockwise (R / Shift+R): the selected pads, a quarter turn. (The verbs rotate pads only: graphics and text have none.)
+    // `updateModificationPoint`'s grid snap of a several-item pivot (`grid.BestSnapAnchor( refPt, nullptr )`), on the footprint editor's grid.
+    const gridSnap: Snap = (p) => {
+      const g = ctx.fpApi.getState().gridNm || 1;
+      return [Math.round(p[0] / g) * g, Math.round(p[1] / g) * g];
+    };
+    // Rotate Counterclockwise / Clockwise (R / Shift+R, `EDIT_TOOL::Rotate`): the selection -- pads, graphics, texts, fields, dimensions, zones, text boxes ..., groups -- a turn of the
+    // footprint editor's 90 degrees about its pivot (kicad-port/fpItems.ts `fpRotationPivot`), one undo step.
     // With the Pad tool armed they turn the pad it carries instead (`doInteractiveItemPlacement`, IPO_ROTATE: `newItem->Rotate( newItem->GetPosition(), rotationAngle )`,
     // the Footprint Editor's 90 degree step), which the placed pad then hands on to the default pad (kicad-port/fpPadPlacer.ts).
     const rotate = (quarterTurns: number) => () => {
@@ -101,22 +110,66 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
         ctx.fpDispatch({ type: "SET_CARRIED_PAD", pad: rotateCarriedPad(st.carriedPad ?? newPadFromMaster(st.defaultPad, "", { x: 0, y: 0 }), quarterTurns * 90) });
         return;
       }
-      const pads = [...ctx.fpApi.getState().selection].filter((id) => ctx.fpApi.padById(id));
-      if (pads.length === 0) return toast("Select one or more pads to rotate: pads are the only items this editor rotates so far.");
-      for (const id of pads) void ctx.fpApi.rotatePad(id, quarterTurns);
+      if (st.selection.size === 0) return;
+      void ctx.fpApi.rotateSelection(quarterTurns, gridSnap);
     };
     m.set("pcbnew.InteractiveEdit.rotateCcw", rotate(1));
     m.set("pcbnew.InteractiveEdit.rotateCw", rotate(-1));
-    // Properties (E): `EDIT_TOOL::Properties` -- the one selected pad's Pad Properties, Footprint Properties with nothing selected (kicad-port/libEditorEdit.ts).
+    // Mirror Horizontally / Vertically (`EDIT_TOOL::Mirror`, no default hotkey): the mirrorable items of the selection about the modification point, on their own layers.
+    m.set("pcbnew.InteractiveEdit.mirrorHoriontally", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("left_right", gridSnap));
+    m.set("pcbnew.InteractiveEdit.mirrorVertically", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("top_bottom", gridSnap));
+    // Group / Ungroup (Ctrl+G / Ctrl+Shift+G, `PCB_GROUP_TOOL::Group` in the footprint editor, `GROUP_TOOL::Ungroup`).
+    m.set("common.Interactive.group", () => void ctx.fpApi.groupSelection());
+    m.set("common.Interactive.ungroup", () => void ctx.fpApi.ungroupSelection());
+    // Line modes (`FOOTPRINT_EDITOR_CONTROL::ChangeLineMode`): the drawing tools' angle constraint, the editor's own setting.
+    m.set("pcbnew.EditorControl.lineModeFree", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "direct" }));
+    m.set("pcbnew.EditorControl.lineModeOrthonal", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "90" }));
+    m.set("pcbnew.EditorControl.lineMode45", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "45" }));
+    // The right toolbar's tools for the footprint's dimensions, rule areas, text boxes, points, tables, barcodes and reference images: `DRAWING_TOOL`'s on the footprint
+    // (components/footprint/fpItemTools.ts has their clicks). `if( m_isFootprintEditor && !m_frame->GetModel() ) return 0;`; choosing the tool in force again leaves it.
+    const armItemTool = (tool: FpToolId) => () => {
+      const st = ctx.fpApi.getState();
+      if (!st.name) return toast("Open a footprint first.");
+      void ctx.fpApi.setTool(st.activeTool === tool ? "select" : tool);
+    };
+    m.set("pcbnew.InteractiveDrawing.alignedDimension", armItemTool("dim_aligned"));
+    m.set("pcbnew.InteractiveDrawing.orthogonalDimension", armItemTool("dim_orthogonal"));
+    m.set("pcbnew.InteractiveDrawing.centerDimension", armItemTool("dim_center"));
+    m.set("pcbnew.InteractiveDrawing.radialDimension", armItemTool("dim_radial"));
+    m.set("pcbnew.InteractiveDrawing.leader", armItemTool("dim_leader"));
+    m.set("pcbnew.InteractiveDrawing.ruleArea", armItemTool("rule_area"));
+    m.set("pcbnew.InteractiveDrawing.textbox", armItemTool("textbox"));
+    m.set("pcbnew.InteractiveDrawing.placePoint", armItemTool("point"));
+    m.set("pcbnew.InteractiveDrawing.drawTable", armItemTool("table"));
+    m.set("pcbnew.InteractiveDrawing.barcode", armItemTool("barcode"));
+    // Place Reference Image asks for the file at once (the tool is primed with a click); a parameter that is a picked image ({ name, data }) is the file already chosen.
+    const m2 = m as Map<string, (param?: unknown) => void>;
+    m2.set("pcbnew.InteractiveDrawing.placeReferenceImage", (param?: unknown) => {
+      const st = ctx.fpApi.getState();
+      if (!st.name) return toast("Open a footprint first.");
+      if (st.activeTool === "ref_image" && !param) return void ctx.fpApi.setTool("select");
+      void ctx.fpApi.setTool("ref_image").then(() => fpChooseImage({ dispatch: ctx.fpDispatch }, asPickedImage(param)));
+    });
+    // The display modes of the left toolbar (`PCB_VIEWER_TOOLS::ShowPadNumbers` family: `PadDisplayMode`, `GraphicOutlines`, `TextOutlines`).
+    m.set("pcbnew.Control.padDisplayMode", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchPads: !ctx.fpApi.getState().sketchPads } }));
+    m.set("pcbnew.Control.graphicOutlines", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchGraphics: !ctx.fpApi.getState().sketchGraphics } }));
+    m.set("pcbnew.Control.textOutlines", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchText: !ctx.fpApi.getState().sketchText } }));
+    // Show Appearance Manager (`FOOTPRINT_EDITOR_CONTROL::ToggleLayersManager`): the frame's Appearance pane.
+    m.set("pcbnew.Control.showLayersManager", () => ctx.fpDispatch({ type: "SET_APPEARANCE_SHOWN", shown: !ctx.fpApi.getState().appearanceShown }));
+    // Properties (E): `EDIT_TOOL::Properties` -> `FOOTPRINT_EDIT_FRAME::OnEditItemRequest` -- the one selected item's dialog (a pad's, a text's or a field's, a shape's, ...),
+    // Footprint Properties with nothing selected (kicad-port/fpItems.ts `fpEditTarget`).
     // The window-level hotkey runs it, and so do the Edit menu and the context menu; the canvas no longer reads E itself.
     const footprintProperties = m.get("pcbnew.ModuleEditor.footprintProperties");
     m.set("pcbnew.InteractiveEdit.properties", () => {
       const st = ctx.fpApi.getState();
-      if (st.activeTool !== "select") return;
-      const selection = [...st.selection].map((id) => ({ id, kind: ctx.fpApi.padById(id) ? "pad" : "other" }));
-      const target = footprintPropertiesTarget(selection);
-      if (target?.dialog === "pad") ctx.fpDispatch({ type: "SET_PAD_PROPERTIES_ID", id: target.id });
-      else if (target?.dialog === "footprint") footprintProperties?.();
+      if (st.activeTool !== "select" || !st.footprint) return;
+      const target = fpEditTarget(st.footprint, [...st.selection]);
+      if (!target) return;
+      if (target.dialog === "pad") ctx.fpDispatch({ type: "SET_PAD_PROPERTIES_ID", id: target.id });
+      else if (target.dialog === "footprint") footprintProperties?.();
+      else if (target.dialog === "field" || target.dialog === "text") ctx.fpDispatch({ type: "SET_TEXT_EDIT_ID", id: target.id });
+      else if (target.dialog === "shape") ctx.fpDispatch({ type: "SET_SHAPE_DIALOG_ID", id: target.id });
+      else ctx.fpDispatch({ type: "SET_ITEM_DIALOG", dialog: { id: target.id, kind: target.dialog } });
     });
     // Delete (`EDIT_TOOL::Remove` in the footprint editor): the selected pads, graphics and texts in one commit, one undo step. The Delete key reaches it through the
     // hotkey table (the canvas keeps Backspace, which the table does not bind).

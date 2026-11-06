@@ -67,6 +67,7 @@ pub mod via_place;
 pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
+pub mod fp_items;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
@@ -117,6 +118,7 @@ mod sch_annotate;
 mod sch_setup;
 mod sch_clipboard;
 pub mod sch_control;
+mod sch_variants;
 mod sch_sheets;
 mod sheet_units;
 mod sheets;
@@ -796,6 +798,10 @@ pub enum Cmd {
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
+    /// The Footprint Editor's verbs on any item of the open footprint (UI-LEFT F1, F2): Move, Rotate, Mirror, Delete of pads, graphics, texts, fields and the items
+    /// `eda_model::fp_items` adds; a field's Text Properties; Shape Properties; the dimensions, zones, text boxes, points, images, barcodes and tables; Group and Ungroup.
+    /// One verb family, see [`fp_items::FpItemCmd`]. On the wire: `{"op": "fp_item", "verb": "mirror", "footprint": "..", "ids": [..], ..}`.
+    FpItem(fp_items::FpItemCmd),
     /// The files embedded in a board, a schematic, a footprint or a symbol (GAPS.md items 24 and 30): the Embedded Files panel's Add, Remove and Embed fonts, the tool actions
     /// `common.Embed.embededFile` and `removeFile`, and Collect and Embed 3D Models -- one verb family, see [`embedded::EmbeddedCmd`]. On the wire:
     /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
@@ -1767,6 +1773,45 @@ pub enum Cmd {
         #[serde(default)]
         exclude_from_sim: Option<bool>,
     },
+    // ----------------------------------------- design variants (sch_variants.rs; KiCad 25ec2335)
+    /// `eeschema.EditorControl.addVariant` (`SCH_EDIT_FRAME::ShowAddVariantDialog`): a design variant of that name (trimmed, checked as
+    /// `ValidateNewVariantName` checks it, refused in KiCad's words) with that description.
+    AddDesignVariant {
+        name: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// `eeschema.EditorControl.removeVariant` (`SCHEMATIC::DeleteVariant`): the variant and every symbol's record of it.
+    RemoveDesignVariant { name: String },
+    /// `eeschema.EditorControl.editVariantDescription` (`SCHEMATIC::SetVariantDescription`).
+    EditDesignVariantDescription {
+        name: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// `eeschema.EditorControl.renameVariant` (`SCHEMATIC::RenameVariant`): the variant, its description and every record of it under `new_name`.
+    RenameDesignVariant { name: String, new_name: String },
+    /// `eeschema.EditorControl.copyVariant` (`SCHEMATIC::CopyVariant`): a variant `new_name` with the description and a copy of every record of `name`.
+    CopyDesignVariant { name: String, new_name: String },
+    /// The current variant's edit of the symbols `ids` (`SCH_SYMBOL::SetDNP( .., aVariantName )` and the other attribute setters, `SetFieldText( ..,
+    /// aVariantName )`): each flag given and each field text (a text equal to the symbol's own takes the override away), on every unit of every reference.
+    /// `variant` is a variant's name; the default variant is the symbol itself (`SetSymbolAttrs` and the field verbs).
+    SetSymbolVariant {
+        variant: String,
+        ids: Vec<String>,
+        #[serde(default)]
+        dnp: Option<bool>,
+        #[serde(default)]
+        exclude_from_bom: Option<bool>,
+        #[serde(default)]
+        exclude_from_board: Option<bool>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
+        #[serde(default)]
+        exclude_from_pos_files: Option<bool>,
+        #[serde(default)]
+        fields: Option<BTreeMap<String, String>>,
+    },
     /// `eeschema.EditorControl.editPageNumber` (`SCH_EDIT_TOOL::EditPageNumber`): the page number of the placement `sheet` (a
     /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy. With `path` (the whole sheet
     /// path, the placement ids from the root down to `sheet`), the page of that sheet path only (`SCH_SHEET_PATH::SetPageNumber`), as KiCad
@@ -2311,6 +2356,12 @@ impl Cmd {
             | Cmd::SetSchematicPage { .. }
             | Cmd::Annotate { .. }
             | Cmd::SetSymbolAttrs { .. }
+            | Cmd::AddDesignVariant { .. }
+            | Cmd::RemoveDesignVariant { .. }
+            | Cmd::EditDesignVariantDescription { .. }
+            | Cmd::RenameDesignVariant { .. }
+            | Cmd::CopyDesignVariant { .. }
+            | Cmd::SetSymbolVariant { .. }
             | Cmd::SetSheetPage { .. }
             | Cmd::SetSchItemText { .. }
             | Cmd::SetSymbolLibIds { .. }
@@ -2343,6 +2394,7 @@ impl Cmd {
             | Cmd::CreateFootprintArray { .. }
             | Cmd::ExplodePad { .. }
             | Cmd::RecombinePad { .. }
+            | Cmd::FpItem(_)
             | Cmd::ExportFootprintsToLibrary => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
@@ -2578,6 +2630,7 @@ impl Cmd {
             Cmd::SetIpc2581Bom { .. } => vec!["ipc2581_bom"],
             Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
+            Cmd::AddDesignVariant { name, .. } | Cmd::RemoveDesignVariant { name } | Cmd::EditDesignVariantDescription { name, .. } | Cmd::RenameDesignVariant { name, .. } | Cmd::CopyDesignVariant { name, .. } => vec![name],
             Cmd::RepairBoard => vec!["repair_board"],
             Cmd::ExportFootprintsToLibrary => vec!["export_footprints"],
 
@@ -2632,6 +2685,7 @@ impl Cmd {
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
             Cmd::SetSymbolAttrs { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSymbolVariant { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetSheetPage { sheet, .. } => vec![sheet.as_str()],
             Cmd::SetSchItemText { id, .. } => vec![id.as_str()],
             Cmd::SetSymbolLibIds { .. } => vec!["symbol_lib_ids"],
@@ -2669,6 +2723,7 @@ impl Cmd {
             | Cmd::CreateFootprintArray { footprint, .. }
             | Cmd::ExplodePad { footprint, .. }
             | Cmd::RecombinePad { footprint } => vec![footprint.as_str()],
+            Cmd::FpItem(c) => vec![c.footprint()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -3325,6 +3380,7 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::FpItem(c) => self.apply_fp_item(c),
             Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
             Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
@@ -3358,6 +3414,15 @@ impl<'a> Board<'a> {
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
+            Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
+            Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
+            Cmd::EditDesignVariantDescription { name, description } => self.edit_design_variant_description(name, description),
+            Cmd::RenameDesignVariant { name, new_name } => self.rename_design_variant(name, new_name),
+            Cmd::CopyDesignVariant { name, new_name } => self.copy_design_variant(name, new_name),
+            Cmd::SetSymbolVariant { variant, ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, exclude_from_pos_files, fields } => {
+                let flags = sch_variants::VariantFlags { dnp: *dnp, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, exclude_from_sim: *exclude_from_sim, exclude_from_pos_files: *exclude_from_pos_files };
+                self.set_symbol_variant(variant, ids, &flags, fields.as_ref().unwrap_or(&BTreeMap::new()))
+            }
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
@@ -5316,9 +5381,10 @@ impl<'a> Board<'a> {
         let sch = self.schematic_mut()?;
         let removed = sch.symbols.remove(i);
         sch_fields::drop_symbol_keys(sch, &removed.id, removed.unit);
-        // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it.
+        // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it, and its records of the design variants.
         if !sch.symbols.iter().any(|s| s.id == id) {
             sch.user_fields.remove(id);
+            sch.extras.symbol_variants.remove(id);
         }
         Ok(())
     }
@@ -6283,7 +6349,8 @@ impl<'a> Board<'a> {
     /// `RotatePoint` is a no-op): the fields (Reference and Value at their default places when they have no layout of their own, the
     /// Datasheet and Description when the footprint has them, every user field), the pads, the graphics and texts move; each 3D model's
     /// offset follows, in millimetres with y up (`m_Offset.x += IUTomm( moveVector.x ); m_Offset.y -= IUTomm( moveVector.y )`).
-    /// Differs: the kept items the editor does not draw (`kicad.tokens`: zones, dimensions, ...) stay put, and the `courtyard`
+    /// The footprint's dimensions, text boxes, images, barcodes, tables and zones move too (`GraphicalItems()`, `Zones()`), its points do not, as in KiCad.
+    /// Differs: the items still kept as text (`kicad.tokens`: a locked or filled zone, ...) stay put, and the `courtyard`
     /// half-extents override is centred on the origin by definition (KiCad has no such override: its courtyard is the F.CrtYd graphics,
     /// which move).
     fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
@@ -6311,6 +6378,8 @@ impl<'a> Board<'a> {
             m.offset[0] += dx.mm();
             m.offset[1] -= dy.mm();
         }
+        // the dimensions, text boxes, images, barcodes, tables and zones (`GraphicalItems()`, `Zones()`), not the points
+        fp_items::move_items_with_anchor(fp, dx, dy);
         Ok(())
     }
 
@@ -6973,6 +7042,8 @@ mod tests;
 #[cfg(test)]
 mod sch_control_tests;
 #[cfg(test)]
+mod sch_variants_tests;
+#[cfg(test)]
 mod board_setup_tests;
 #[cfg(test)]
 mod pcb_transform_tests;
@@ -6980,6 +7051,8 @@ mod pcb_transform_tests;
 mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
+#[cfg(test)]
+mod fp_items_tests;
 #[cfg(test)]
 mod pad_edit_tests;
 #[cfg(test)]

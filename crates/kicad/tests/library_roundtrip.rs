@@ -6,6 +6,8 @@
 //!
 //! Slow tier (`EDA_SLOW_TESTS=1`, and kicad-cli and the installed libraries must be there). `EDA_LIB_ROUNDTRIP_REPORT=1` prints
 //! every difference; the test fails when an item's difference is not one of [`KNOWN`], the losses this port still has.
+//! `EDA_LIB_ROUNDTRIP_ITEMS=1` adds to the footprints every one that has a zone, a dimension, a text box, a point, an image, a barcode, a
+//! table or a group (`eda_model::fp_items`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -187,10 +189,31 @@ fn footprint_sample(root: &Path, n: usize) -> Vec<PathBuf> {
         "Symbol.pretty/KiCad-Logo_5mm_SilkScreen.kicad_mod",
         "Connector_PinHeader_2.54mm.pretty/PinHeader_2x05_P2.54mm_Vertical.kicad_mod",
         "Capacitor_THT.pretty/CP_Radial_D5.0mm_P2.00mm.kicad_mod",
+        // the items of `FootprintItems`: keepouts, dimensions and leaders, text boxes, groups, points
+        "Connector_Hirose.pretty/Hirose_DF57H-2P-2.4V_1x02_P2.4mm_Socket.kicad_mod",
+        "Connector_FFC-FPC.pretty/Molex_502244-1530_1x15-1MP_P0.5mm_Horizontal.kicad_mod",
+        "RF_GSM.pretty/SIMCom_SIM900.kicad_mod",
+        "Symbol.pretty/Smolhaj_Scale_0.1.kicad_mod",
+        "RF_Module.pretty/Raytac_MDBT42Q.kicad_mod",
+        "Panelization.pretty/MouseBite-Slot_2.54x5.08mm_on-edge_D0.5mm_P0.85mm_5h_Trace.kicad_mod",
+        "Package_TO_SOT_THT.pretty/TO-251-2_Vertical.kicad_mod",
     ] {
         let p = root.join(extra);
         if p.exists() && !out.contains(&p) {
             out.push(p);
+        }
+    }
+    // `EDA_LIB_ROUNDTRIP_ITEMS=1`: every footprint that has one of the items of `FootprintItems` (a zone, a dimension, a text box, a point, an image, a barcode, a
+    // table or a group of its own), besides the sample.
+    if std::env::var_os("EDA_LIB_ROUNDTRIP_ITEMS").is_some() {
+        let forms = ["\n\t(zone", "\n\t(dimension", "\n\t(fp_text_box", "\n\t(point", "\n\t(image", "\n\t(barcode", "\n\t(table", "\n\t(group"];
+        for lib in libs.iter() {
+            for fp in sorted_dir(lib, "kicad_mod") {
+                let has = std::fs::read_to_string(&fp).is_ok_and(|t| forms.iter().any(|f| t.contains(f)));
+                if has && !out.contains(&fp) {
+                    out.push(fp);
+                }
+            }
         }
     }
     out

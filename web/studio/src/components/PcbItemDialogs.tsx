@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { greyscalePng } from "../actions/imageFiles";
 import { applyCommands } from "../actions/pcbSweepKit";
-import type { BoardRefImage, BoardTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
+import type { BoardRefImage, BoardTextBox, CmdTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
 import type { SchLineStyle } from "../api/schEditTypes";
 import type { Cmd } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
@@ -89,34 +89,75 @@ export function PcbItemDialogs() {
   );
 }
 
+/**
+ * What Text Box Properties needs from the editor it is open in (the board's, below, or the Footprint Editor's, components/footprint/FpItemDialogs.tsx): `DIALOG_TEXTBOX_PROPERTIES`
+ * is one dialog for both frames (`ShowTextBoxPropertiesDialog`).
+ */
+export interface TextBoxHost {
+  /** A new value opens the form afresh on `box`. */
+  openKey: unknown;
+  box: BoardTextBox;
+  /** The box's lock; null where the editor keeps none (no Locked row). */
+  locked: boolean | null;
+  layers: string[];
+  layerName: (layer: string) => string;
+  toast: (message: string) => void;
+  /** OK: the box as the verbs take it and the lock asked for, one undo step; null when it was taken, else why not. */
+  submit: (box: CmdTextBox, locked: boolean) => Promise<string | null>;
+  close: () => void;
+}
+
+/** The board's dialog: `pcb_item` `add_text_box` for the Draw Text Box tool's box, `edit_text_box` (and the lock) for one the board has. */
 export function PcbTextBoxDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const { textBox: req } = usePcbItemDialogs();
+  if (!req || !state.board) return null;
+  const board = state.board;
+  const host: TextBoxHost = {
+    openKey: req,
+    box: req.box,
+    locked: req.id ? (board.locked ?? []).includes(req.id) : false,
+    layers: boardLayerList(board.layers ?? [], board.board_rules?.layer_setup),
+    layerName: (l) => layerDisplayName(board.board_rules?.layer_setup, l),
+    toast: (message) => dispatch({ type: "TOAST", message, kind: "info" }),
+    submit: async (cmd, locked) => {
+      const cmds: Cmd[] = req.id ? [{ op: "pcb_item", verb: "edit_text_box", id: req.id, text_box: cmd }] : [{ op: "pcb_item", verb: "add_text_box", text_box: cmd }];
+      if (req.id && locked !== (board.locked ?? []).includes(req.id)) cmds.push({ op: "set_locked", ids: [req.id], locked });
+      const done = await applyCommands(api, dispatch, cmds);
+      if (!done) return "The board refused the text box.";
+      if (!req.id && locked) {
+        // a new box takes its lock after it is added: it is the one new item the selection now holds
+        const created = [...api.getState().selection].filter((id) => api.getState().board?.drawings?.text_boxes?.some((t) => t.id === id));
+        if (created.length > 0) await api.cmd({ op: "set_locked", ids: created, locked: true });
+      }
+      return null;
+    },
+    close: () => closeTextBoxDialog(),
+  };
+  return <TextBoxForm host={host} />;
+}
+
+export function TextBoxForm({ host }: { host: TextBoxHost }) {
   const [form, setForm] = useState<Form | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // the form starts from the box the dialog was opened on, and keeps what is typed through the state's refreshes
   useEffect(() => {
-    if (!req) {
-      setForm(null);
-      return;
-    }
-    setForm(formOf(req.box, req.id ? (state.board?.locked ?? []).includes(req.id) : false));
+    setForm(formOf(host.box, host.locked ?? false));
     setError(null);
     ref.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [req]);
+  }, [host.openKey]);
 
-  if (!req || !form || !state.board) return null;
-  const board = state.board;
+  if (!form) return null;
   const set = <K extends keyof Form>(key: K, value: Form[K]) => {
     setForm((f) => (f ? { ...f, [key]: value } : f));
     setError(null);
   };
-  const close = () => closeTextBoxDialog();
+  const close = host.close;
 
   const ok = async () => {
     // `m_textWidth.Validate( minSize, maxSize )`
@@ -124,13 +165,13 @@ export function PcbTextBoxDialog() {
     for (const [label, v] of [["width", w], ["height", h]] as const) {
       if (!Number.isFinite(v) || v < TEXT_MIN_SIZE_NM || v > TEXT_MAX_SIZE_NM) return setError(`The text ${label} must be between 0.001 mm and 250 mm.`);
     }
-    const prev = req.box;
+    const prev = host.box;
     let pen = form.autoThickness ? 0 : um(form.thickness);
     if (!Number.isFinite(pen) || pen < 0) return setError("The text thickness must not be negative.");
     if (pen > 0) {
       const max = clampPenNm(pen, Math.min(w, h));
       if (pen > max) {
-        dispatch({ type: "TOAST", message: "The text thickness is too large for the text size. It will be clamped.", kind: "info" });
+        host.toast("The text thickness is too large for the text size. It will be clamped.");
         pen = max;
       }
     }
@@ -163,16 +204,8 @@ export function PcbTextBoxDialog() {
     box = withTextAngle(box, angle);
     // the box is as big as its text needs (`GetMinSize`)
     box = grownToFit(box, measureStrokeText);
-    const cmd = textBoxToCmd(box);
-    const cmds: Cmd[] = req.id ? [{ op: "pcb_item", verb: "edit_text_box", id: req.id, text_box: cmd }] : [{ op: "pcb_item", verb: "add_text_box", text_box: cmd }];
-    if (req.id && form.locked !== (board.locked ?? []).includes(req.id)) cmds.push({ op: "set_locked", ids: [req.id], locked: form.locked });
-    const done = await applyCommands(api, dispatch, cmds);
-    if (!done) return setError("The board refused the text box.");
-    if (!req.id && form.locked) {
-      // a new box takes its lock after it is added: it is the one new item the selection now holds
-      const created = [...api.getState().selection].filter((id) => api.getState().board?.drawings?.text_boxes?.some((t) => t.id === id));
-      if (created.length > 0) await api.cmd({ op: "set_locked", ids: created, locked: true });
-    }
+    const refused = await host.submit(textBoxToCmd(box), form.locked);
+    if (refused) return setError(refused);
     close();
   };
 
@@ -207,9 +240,10 @@ export function PcbTextBoxDialog() {
           <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr", marginTop: 10 }}>
             <span>Layer</span>
             <select value={form.layer} onChange={(e) => set("layer", e.target.value)} data-testid="ptb-layer">
-              {boardLayerList(board.layers ?? [], board.board_rules?.layer_setup).map((l) => (
+              {!host.layers.includes(form.layer) && <option value={form.layer}>{form.layer}</option>}
+              {host.layers.map((l) => (
                 <option key={l} value={l}>
-                  {layerDisplayName(board.board_rules?.layer_setup, l)}
+                  {host.layerName(l)}
                 </option>
               ))}
             </select>
@@ -277,10 +311,14 @@ export function PcbTextBoxDialog() {
             <label>
               <input type="checkbox" checked={form.knockout} onChange={(e) => set("knockout", e.target.checked)} data-testid="ptb-knockout" /> Fill the box and cut the text out of it
             </label>
-            <span>Locked</span>
-            <label>
-              <input type="checkbox" checked={form.locked} onChange={(e) => set("locked", e.target.checked)} data-testid="ptb-locked" />
-            </label>
+            {host.locked !== null && (
+              <>
+                <span>Locked</span>
+                <label>
+                  <input type="checkbox" checked={form.locked} onChange={(e) => set("locked", e.target.checked)} data-testid="ptb-locked" />
+                </label>
+              </>
+            )}
           </div>
           {error && (
             <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="ptb-error">
@@ -322,36 +360,73 @@ function refImageFormOf(i: BoardRefImage, locked: boolean): RefImageForm {
  * shares, the scale and Convert to Greyscale. Width, height and scale move together (`onWidthChanged`, `onHeightChanged`, `onScaleChanged`); OK checks the scale (`CheckValues`) and applies
  * everything as one step, Cancel leaves the image as it was.
  */
+/** What Reference Image Properties needs from the editor it is open in (`ShowReferenceImagePropertiesDialog` of the board editor and of the footprint editor). */
+export interface RefImageHost {
+  /** A new value opens the form afresh on `image`. */
+  openKey: unknown;
+  image: BoardRefImage;
+  /** The image's pixels, for the preview and Convert to Greyscale. */
+  previewUrl: string;
+  /** The image's lock; null where the editor keeps none (no Locked row). */
+  locked: boolean | null;
+  layers: string[];
+  layerName: (layer: string) => string;
+  /** OK: the position, the layer, the scale, the greyscale pixels (null: unchanged) and the lock, one undo step; null when taken, else why not. */
+  submit: (edit: { layer: string; at: { x: number; y: number }; scalePpm: number; grey: string | null; locked: boolean }) => Promise<string | null>;
+  close: () => void;
+}
+
+/** The board's dialog: `edit_ref_image`, `set_ref_image_data` and the lock, on an image the board has. */
 export function PcbRefImageDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const { refImage: req } = usePcbItemDialogs();
+  const image = req ? (state.board?.drawings?.images ?? []).find((i) => i.id === req.id) : undefined;
+  if (!req || !image || !state.board) return null;
+  const board = state.board;
+  const host: RefImageHost = {
+    openKey: req,
+    image,
+    previewUrl: pcbImageUrl(image.id, image.hash),
+    locked: (board.locked ?? []).includes(image.id),
+    layers: boardLayerList(board.layers ?? [], board.board_rules?.layer_setup),
+    layerName: (l) => layerDisplayName(board.board_rules?.layer_setup, l),
+    submit: async ({ layer, at, scalePpm, grey, locked }) => {
+      const cmds: Cmd[] = [];
+      if (at.x !== image.x || at.y !== image.y || layer !== image.layer || scalePpm !== image.scale_ppm) {
+        cmds.push({ op: "pcb_item", verb: "edit_ref_image", id: image.id, layer, at, scale_ppm: scalePpm });
+      }
+      if (grey) cmds.push({ op: "pcb_item", verb: "set_ref_image_data", id: image.id, data: grey });
+      if (locked !== (board.locked ?? []).includes(image.id)) cmds.push({ op: "set_locked", ids: [image.id], locked });
+      if (cmds.length > 0 && !(await applyCommands(api, dispatch, cmds, [], null, { keep: true }))) return "The board refused the image.";
+      return null;
+    },
+    close: () => closeRefImageDialog(),
+  };
+  return <RefImagePropertiesForm host={host} />;
+}
+
+export function RefImagePropertiesForm({ host }: { host: RefImageHost }) {
+  const image = host.image;
   const [form, setForm] = useState<RefImageForm | null>(null);
   const [grey, setGrey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const image = req ? (state.board?.drawings?.images ?? []).find((i) => i.id === req.id) : undefined;
 
   useEffect(() => {
-    if (!req || !image) {
-      setForm(null);
-      setGrey(null);
-      return;
-    }
-    setForm(refImageFormOf(image, (state.board?.locked ?? []).includes(image.id)));
+    setForm(refImageFormOf(image, host.locked ?? false));
     setGrey(null);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [req]);
+  }, [host.openKey]);
 
-  if (!req || !image || !form || !state.board) return null;
-  const board = state.board;
+  if (!form) return null;
   const set = <K extends keyof RefImageForm>(key: K, value: RefImageForm[K]) => {
     setForm((f) => (f ? { ...f, [key]: value } : f));
     setError(null);
   };
-  const close = () => closeRefImageDialog();
+  const close = host.close;
   const sizeAt = (scalePpm: number): [number, number] => imageSizeNm(image.px, image.ppi, scalePpm);
   /** The scale was typed: the size follows (`onScaleChanged`). */
   const onScale = (text: string) => {
@@ -379,7 +454,7 @@ export function PcbRefImageDialog() {
   const greyscale = async () => {
     setBusy(true);
     try {
-      setGrey(await greyscalePng(pcbImageUrl(image.id, image.hash), image.ppi));
+      setGrey(await greyscalePng(host.previewUrl, image.ppi));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -394,13 +469,8 @@ export function PcbRefImageDialog() {
     const check = checkImageScale(image.px, scalePpm);
     if (!check.ok) return setError(check.error);
     if (check.confirm && !window.confirm(check.confirm)) return;
-    const cmds: Cmd[] = [];
-    if (x !== image.x || y !== image.y || form.layer !== image.layer || scalePpm !== image.scale_ppm) {
-      cmds.push({ op: "pcb_item", verb: "edit_ref_image", id: image.id, layer: form.layer, at: { x, y }, scale_ppm: scalePpm });
-    }
-    if (grey) cmds.push({ op: "pcb_item", verb: "set_ref_image_data", id: image.id, data: grey });
-    if (form.locked !== (board.locked ?? []).includes(image.id)) cmds.push({ op: "set_locked", ids: [image.id], locked: form.locked });
-    if (cmds.length > 0 && !(await applyCommands(api, dispatch, cmds, [], null, { keep: true }))) return setError("The board refused the image.");
+    const refused = await host.submit({ layer: form.layer, at: { x, y }, scalePpm, grey, locked: form.locked });
+    if (refused) return setError(refused);
     close();
   };
 
@@ -422,19 +492,24 @@ export function PcbRefImageDialog() {
             <input type="number" step="0.01" min="0" value={form.height} onChange={(e) => onSide("height", e.target.value)} style={{ width: 100 }} data-testid="pri-height" />
             <span>Layer</span>
             <select value={form.layer} onChange={(e) => set("layer", e.target.value)} data-testid="pri-layer">
-              {boardLayerList(board.layers ?? [], board.board_rules?.layer_setup).map((l) => (
+              {!host.layers.includes(form.layer) && <option value={form.layer}>{form.layer}</option>}
+              {host.layers.map((l) => (
                 <option key={l} value={l}>
-                  {layerDisplayName(board.board_rules?.layer_setup, l)}
+                  {host.layerName(l)}
                 </option>
               ))}
             </select>
-            <span>Locked</span>
-            <label>
-              <input type="checkbox" checked={form.locked} onChange={(e) => set("locked", e.target.checked)} data-testid="pri-locked" />
-            </label>
+            {host.locked !== null && (
+              <>
+                <span>Locked</span>
+                <label>
+                  <input type="checkbox" checked={form.locked} onChange={(e) => set("locked", e.target.checked)} data-testid="pri-locked" />
+                </label>
+              </>
+            )}
           </div>
           <div style={{ marginTop: 10 }}>
-            <ImageEditorPanel previewUrl={grey ? `data:image/png;base64,${grey}` : pcbImageUrl(image.id, image.hash)} ppi={image.ppi} scale={form.scale} onScale={onScale} onGreyscale={() => void greyscale()} busy={busy} testid="pri" />
+            <ImageEditorPanel previewUrl={grey ? `data:image/png;base64,${grey}` : host.previewUrl} ppi={image.ppi} scale={form.scale} onScale={onScale} onGreyscale={() => void greyscale()} busy={busy} testid="pri" />
           </div>
           {error && (
             <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="pri-error">

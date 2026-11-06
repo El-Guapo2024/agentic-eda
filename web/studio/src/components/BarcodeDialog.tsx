@@ -101,11 +101,52 @@ function PreviewSvg({ paths }: { paths: BarcodePath[] }) {
   );
 }
 
+/** What Barcode Properties needs from the editor it is open in (`ShowBarcodePropertiesDialog` of the board editor and of the footprint editor). */
+export interface BarcodeHost {
+  /** A new value opens the form afresh on `barcode`. */
+  openKey: unknown;
+  barcode: CmdBarcode;
+  /** The barcode's lock; null where the editor keeps none (no Locked row). */
+  locked: boolean | null;
+  layers: string[];
+  layerName: (layer: string) => string;
+  /** OK: the barcode (without its id) and the lock asked for, one undo step; null when taken, else why not. */
+  submit: (barcode: CmdBarcode, locked: boolean) => Promise<string | null>;
+  close: () => void;
+}
+
+/** The board's dialog: `pcb_item` `add_barcode` for the Add Barcode tool's barcode, `edit_barcode` (and the lock) for one the board has. */
 export function PcbBarcodeDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const { barcode: req } = usePcbItemDialogs();
+  if (!req || !state.board) return null;
+  const board = state.board;
+  const host: BarcodeHost = {
+    openKey: req,
+    barcode: req.barcode,
+    locked: req.id ? (board.locked ?? []).includes(req.id) : false,
+    layers: boardLayerList(board.layers ?? [], board.board_rules?.layer_setup),
+    layerName: (l) => layerDisplayName(board.board_rules?.layer_setup, l),
+    submit: async (rest, locked) => {
+      const cmds: Cmd[] = req.id ? [{ op: "pcb_item", verb: "edit_barcode", id: req.id, barcode: rest }] : [{ op: "pcb_item", verb: "add_barcode", barcode: rest }];
+      if (req.id && locked !== (board.locked ?? []).includes(req.id)) cmds.push({ op: "set_locked", ids: [req.id], locked });
+      const done = await applyCommands(api, dispatch, cmds);
+      if (!done) return "The board refused the barcode.";
+      if (!req.id && locked) {
+        // a new barcode takes its lock after it is added: it is the one new item the selection now holds
+        const created = [...api.getState().selection].filter((id) => api.getState().board?.drawings?.barcodes?.some((b) => b.id === id));
+        if (created.length > 0) await api.cmd({ op: "set_locked", ids: created, locked: true });
+      }
+      return null;
+    },
+    close: () => closeBarcodeDialog(),
+  };
+  return <BarcodeForm host={host} />;
+}
+
+export function BarcodeForm({ host }: { host: BarcodeHost }) {
   const [form, setForm] = useState<Form | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<BarcodeReply | null>(null);
@@ -114,17 +155,12 @@ export function PcbBarcodeDialog() {
 
   // the form starts from the barcode the dialog was opened on, and keeps what is typed through the state's refreshes
   useEffect(() => {
-    if (!req) {
-      setForm(null);
-      setPreview(null);
-      return;
-    }
-    setForm(formOf(req.barcode, req.id ? (state.board?.locked ?? []).includes(req.id) : false));
+    setForm(formOf(host.barcode, host.locked ?? false));
     setError(null);
     setPreview(null);
     ref.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [req]);
+  }, [host.openKey]);
 
   // `refreshPreview`: the barcode as it is now, after a pause in the typing; the plot takes a moment, so ask again while it runs
   const previewKey = form ? JSON.stringify([form.text, form.kind, form.ecc, form.layer, form.width, form.height, form.textSize, form.angle, form.showText, form.knockout, form.marginX, form.marginY]) : "";
@@ -157,16 +193,15 @@ export function PcbBarcodeDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewKey]);
 
-  if (!req || !form || !state.board) return null;
-  const board = state.board;
+  if (!form) return null;
   const set = <K extends keyof Form>(key: K, value: Form[K]) => {
     setForm((f) => (f ? { ...f, [key]: value } : f));
     setError(null);
   };
-  const close = () => closeBarcodeDialog();
+  const close = host.close;
 
   const ok = async () => {
-    const built = barcodeOf(form, req.id);
+    const built = barcodeOf(form, null);
     if (typeof built === "string") return setError(built);
     // `TransferDataFromWindow`: a text that made no symbol is refused with the reason ("Barcode Error"); an empty text has none to make.
     if (form.text.length > 0) {
@@ -178,15 +213,8 @@ export function PcbBarcodeDialog() {
       if (reply?.status === "ready" && reply.paths.length === 0) return setError(`Barcode Error: ${barcodeProblem(built.kind ?? "qr", form.text)}`);
     }
     const { id: _id, ...rest } = built;
-    const cmds: Cmd[] = req.id ? [{ op: "pcb_item", verb: "edit_barcode", id: req.id, barcode: rest }] : [{ op: "pcb_item", verb: "add_barcode", barcode: rest }];
-    if (req.id && form.locked !== (board.locked ?? []).includes(req.id)) cmds.push({ op: "set_locked", ids: [req.id], locked: form.locked });
-    const done = await applyCommands(api, dispatch, cmds);
-    if (!done) return setError("The board refused the barcode.");
-    if (!req.id && form.locked) {
-      // a new barcode takes its lock after it is added: it is the one new item the selection now holds
-      const created = [...api.getState().selection].filter((id) => api.getState().board?.drawings?.barcodes?.some((b) => b.id === id));
-      if (created.length > 0) await api.cmd({ op: "set_locked", ids: created, locked: true });
-    }
+    const refused = await host.submit(rest, form.locked);
+    if (refused) return setError(refused);
     close();
   };
 
@@ -241,9 +269,10 @@ export function PcbBarcodeDialog() {
             </select>
             <span>Layer</span>
             <select value={form.layer} onChange={(e) => set("layer", e.target.value)} data-testid="pbc-layer">
-              {boardLayerList(board.layers ?? [], board.board_rules?.layer_setup).map((l) => (
+              {!host.layers.includes(form.layer) && <option value={form.layer}>{form.layer}</option>}
+              {host.layers.map((l) => (
                 <option key={l} value={l}>
-                  {layerDisplayName(board.board_rules?.layer_setup, l)}
+                  {host.layerName(l)}
                 </option>
               ))}
             </select>
@@ -269,10 +298,14 @@ export function PcbBarcodeDialog() {
                 Margin X, Y (mm): {text("marginX", "pbc-margin-x", { disabled: !form.knockout, min: 0 })} {text("marginY", "pbc-margin-y", { disabled: !form.knockout, min: 0 })}
               </span>
             </span>
-            <span>Locked</span>
-            <label>
-              <input type="checkbox" checked={form.locked} onChange={(e) => set("locked", e.target.checked)} data-testid="pbc-locked" />
-            </label>
+            {host.locked !== null && (
+              <>
+                <span>Locked</span>
+                <label>
+                  <input type="checkbox" checked={form.locked} onChange={(e) => set("locked", e.target.checked)} data-testid="pbc-locked" />
+                </label>
+              </>
+            )}
           </div>
           <div style={{ marginTop: 10, height: 190, border: "1px solid var(--chrome-border, #888)", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", padding: 6, boxSizing: "border-box" }} data-testid="pbc-preview">
             {preview?.status === "ready" && preview.paths.length > 0 && <PreviewSvg paths={preview.paths} />}

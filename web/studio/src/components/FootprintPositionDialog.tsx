@@ -16,11 +16,14 @@
 // folder; empty is `export/kicad/pos/`. Shown disabled with the reason:
 // "Exclude all footprints with the Exclude from BOM flag set" (kicad-cli
 // 10.99's `pcb export pos` still has no flag for it; only the api-server's
-// position job has `exclude_from_bom`), the design variant (kicad-cli has
-// `--variant`, the studio has no design variants) and the folder browser.
-import { useState } from "react";
+// position job has `exclude_from_bom`) and the folder browser. "Design variant:"
+// (KiCad 25ec2335 `m_variantChoiceCtrl`) starts at the board's current variant
+// (`GetBoard()->GetCurrentVariant()`) and goes to kicad-cli as `--variant`
+// (`exporter.SetVariant( getSelectedVariant() )`).
+import { useEffect, useState } from "react";
 import { postFabPos, type FabPosOptions } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
+import { VariantChoice } from "./VariantChoice";
 
 export function FootprintPositionDialog() {
   const state = useStudioState();
@@ -39,6 +42,13 @@ export function FootprintPositionDialog() {
   const [outputDirectory, setOutputDirectory] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
+  const [variant, setVariant] = useState("");
+  const variants = state.board?.variants ?? state.schematic?.variants ?? [];
+  // the board's current variant at each opening (`m_variantChoiceCtrl->SetSelection( FindString( currentVariant ) )`)
+  useEffect(() => {
+    if (state.footprintPositionDialogOpen) setVariant(state.pcbVariant);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.footprintPositionDialogOpen]);
 
   if (!state.footprintPositionDialogOpen) return null;
   // Gerber X3 (`m_formatCtrl` choice 2): units, the single file and the filters do not apply (`onUpdateUIUnits`, `onUpdateUIFileOpt`, `onUpdateUIOnlySMD`, ...).
@@ -61,6 +71,7 @@ export function FootprintPositionDialog() {
         negate_x: !gerber && negateX,
         board_edge: gerber && boardEdge,
         output_directory: outputDirectory,
+        ...(variant ? { variant } : {}),
       });
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Position file written." : "Failed."), files: reply.files ?? [] });
     } finally {
@@ -73,12 +84,7 @@ export function FootprintPositionDialog() {
       <div className="dialog" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">Generate Placement Files</div>
         <div className="dialog-body" style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, opacity: 0.6 }} title="Not available: the studio has no design variants">
-            Design variant:
-            <select disabled value="">
-              <option value="">Default</option>
-            </select>
-          </label>
+          <VariantChoice variants={variants} value={variant} onChange={setVariant} testId="pos-variant" />
           <label style={{ display: "flex", alignItems: "center", gap: 6 }} title="Target directory for plot files. Can be absolute or relative to the board file location.">
             Output directory:
             <input type="text" value={outputDirectory} placeholder="export/kicad/pos/" onChange={(e) => setOutputDirectory(e.target.value)} style={{ flex: 1 }} data-testid="pos-output-dir" />

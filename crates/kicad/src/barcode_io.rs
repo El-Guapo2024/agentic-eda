@@ -78,6 +78,12 @@ pub(crate) fn read_all(root: &[Sexpr], refs: &mut Vec<crate::import_items::ItemR
 /// One barcode as `format( const PCB_BARCODE* )` writes it; returns its uuid.
 pub(crate) fn write(out: &mut String, b: &Barcode, locked: bool) -> String {
     let uuid = crate::duid_for(&format!("barcode:{}", b.id), &b.id);
+    write_with_uuid(out, b, locked, &uuid);
+    uuid
+}
+
+/// [`write`] with the uuid given (a library footprint's barcode keeps the uuid its file gave it).
+pub(crate) fn write_with_uuid(out: &mut String, b: &Barcode, locked: bool, uuid: &str) {
     write!(out, "\t(barcode").unwrap();
     if locked {
         write!(out, " (locked yes)").unwrap();
@@ -97,5 +103,4 @@ pub(crate) fn write(out: &mut String, b: &Barcode, locked: bool) -> String {
         write!(out, " (margins {} {})", mm(b.margin_x_nm), mm(b.margin_y_nm)).unwrap();
     }
     writeln!(out, " (uuid \"{uuid}\"))").unwrap();
-    uuid
 }

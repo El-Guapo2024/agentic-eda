@@ -219,3 +219,14 @@
   padding: 4px 0 6px;
   flex-shrink: 0;
 }
+
+/* The Footprint Editor's Appearance manager (components/footprint/FootprintAppearancePanel.tsx): a pane of the frame, outside the drawing toolbar, which keeps its border
+   on the canvas's side. */
+.editor-frame-body > .toolbar.vertical[data-toolbar="drawing"] {
+  border-right: none;
+  border-left: 1px solid var(--chrome-border);
+}
+.editor-frame-body > .fp-appearance {
+  flex: none;
+  border-left: 1px solid var(--chrome-border);
+}

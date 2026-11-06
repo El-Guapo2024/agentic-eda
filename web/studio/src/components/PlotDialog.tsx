@@ -10,6 +10,7 @@
 // output folder (empty: export/kicad/<format>/). The controls kicad-cli has no flag for are shown disabled with the reason.
 import { useEffect, useRef, useState } from "react";
 import { postFabPlot } from "../api/client";
+import { VariantChoice } from "./VariantChoice";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
@@ -82,6 +83,9 @@ export function PlotDialog() {
   const [menu, setMenu] = useState<{ list: "layers" | "all"; x: number; y: number } | null>(null);
   const [selectedAll, setSelectedAll] = useState<string | null>(null);
   const open = state.plotDialogOpen;
+  // "Design variant:" (KiCad 25ec2335 `m_variantChoiceCtrl`): the board's current variant at each opening, `getSelectedVariant` to kicad-cli's `--variant`
+  const [variant, setVariant] = useState("");
+  const variants = state.board?.variants ?? state.schematic?.variants ?? [];
 
   // KiCad builds the dialog at each opening (`TransferDataToWindow`), so it starts from the board as it is then.
   useEffect(() => {
@@ -89,6 +93,7 @@ export function PlotDialog() {
     setForm(initialPlotForm(state.board?.plot_params ?? null, listed, session));
     setResult(null);
     setMenu(null);
+    setVariant(state.pcbVariant);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -143,7 +148,7 @@ export function PlotDialog() {
         setResult({ ok: false, message: "No layer selected, Nothing to plot", files: [] });
         return;
       }
-      const reply = await postFabPlot(plotRequest(form, applied.ps));
+      const reply = await postFabPlot({ ...plotRequest(form, applied.ps), ...(variant ? { variant } : {}) });
       const message = [...applied.messages, reply.message ?? (reply.ok ? "Done." : "Plot failed.")].join("\n");
       setResult({ ok: reply.ok, message, files: reply.files ?? [] });
     } finally {
@@ -199,12 +204,7 @@ export function PlotDialog() {
                   </option>
                 ))}
               </select>
-              <label style={{ display: "flex", gap: 6, alignItems: "center", opacity: 0.6 }} title={`Not available: ${KICAD_CLI_LIMITS.variant}`}>
-                Design variant:
-                <select disabled value="">
-                  <option value="">Default</option>
-                </select>
-              </label>
+              <VariantChoice variants={variants} value={variant} onChange={setVariant} testId="plot-variant" />
             </span>
             <span>Output directory:</span>
             <span style={{ display: "flex", gap: 4 }}>

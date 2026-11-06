@@ -12,20 +12,56 @@
 // (no point-editor-style text dragging); the interactive centre-point/
 // -item picker buttons (plain numeric X/Y fields instead, same convention
 // every other dialog in this app already uses).
+//
+// The form is one for both editors (`DIALOG_DIMENSION_PROPERTIES` is opened by the board editor's and the footprint editor's `OnEditItemRequest`): the board's dialog is
+// `DimensionPropertiesDialog` below, the Footprint Editor's components/footprint/FpItemDialogs.tsx, each a host of `DimensionPropertiesForm`.
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DIM_PRECISION_CHOICES, toCmdDimension } from "../kicad-port/dimensionConvert";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
-import type { ArrowDirection, CmdDimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
+import type { ArrowDirection, CmdDimension, CmdDimensionKind, Dimension, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
 
+/** What the form needs from the editor it is open in. */
+export interface DimensionHost {
+  /** The dimension as the editor's state shows it. */
+  dim: Dimension;
+  /** The dimension as the verbs take it, which OK starts from (the fields the dialog has no control for ride through). */
+  base: () => CmdDimension;
+  units: LengthUnit;
+  layers: string[];
+  layerName: (layer: string) => string;
+  /** OK: the edited dimension, one undo step; true when it was taken. */
+  submit: (cmd: CmdDimension) => Promise<boolean>;
+  remove: () => Promise<boolean>;
+  close: () => void;
+}
+
+/** The board's dialog: on the board's dimension `state.dimensionEditId`, `edit_dimension` / `delete_dimension`. */
 export function DimensionPropertiesDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const id = state.dimensionEditId;
   const dim = id ? api.dimensionById(id) : undefined;
-  const unit: LengthUnit = state.units;
+  if (!id || !dim) return null;
+  const layerSetup = state.board?.board_rules?.layer_setup;
+  const host: DimensionHost = {
+    dim,
+    base: () => toCmdDimension(dim),
+    units: state.units,
+    layers: boardLayerList(state.board?.layers ?? [], layerSetup),
+    layerName: (l) => layerDisplayName(layerSetup, l),
+    submit: (cmd) => api.cmd({ op: "edit_dimension", id, dimension: cmd }),
+    remove: () => api.cmd({ op: "delete_dimension", id }),
+    close: () => dispatch({ type: "SET_DIMENSION_EDIT_ID", id: null }),
+  };
+  return <DimensionPropertiesForm host={host} />;
+}
+
+export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
+  const dim = host.dim;
+  const unit: LengthUnit = host.units;
 
   const [layer, setLayer] = useState("");
   const [startX, setStartX] = useState(0);
@@ -87,9 +123,7 @@ export function DimensionPropertiesDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dim?.id]);
 
-  if (!id || !dim) return null;
-
-  const close = () => dispatch({ type: "SET_DIMENSION_EDIT_ID", id: null });
+  const close = host.close;
 
   const kindObj: CmdDimensionKind =
     dim.kind === "aligned"
@@ -105,7 +139,7 @@ export function DimensionPropertiesDialog() {
   const save = async () => {
     setBusy(true);
     try {
-      const cmd = toCmdDimension(dim);
+      const cmd = host.base();
       cmd.layer = layer;
       cmd.kind = kindObj;
       cmd.start = { x: Math.round(nmFrom(startX, unit)), y: Math.round(nmFrom(startY, unit)) };
@@ -126,7 +160,7 @@ export function DimensionPropertiesDialog() {
       cmd.extension_offset = Math.round(nmFrom(extensionOffset, unit));
       cmd.extension_height = Math.round(nmFrom(extensionHeight, unit));
       cmd.arrow_direction = arrowDirection;
-      const ok = await api.cmd({ op: "edit_dimension", id, dimension: cmd });
+      const ok = await host.submit(cmd);
       if (ok) close();
     } finally {
       setBusy(false);
@@ -136,7 +170,7 @@ export function DimensionPropertiesDialog() {
   const remove = async () => {
     setBusy(true);
     try {
-      const ok = await api.cmd({ op: "delete_dimension", id });
+      const ok = await host.remove();
       if (ok) close();
     } finally {
       setBusy(false);
@@ -144,12 +178,11 @@ export function DimensionPropertiesDialog() {
   };
 
   const kindLabel = dim.kind[0]!.toUpperCase() + dim.kind.slice(1);
-  const layerSetup = state.board?.board_rules?.layer_setup;
-  const layers = boardLayerList(state.board?.layers ?? [], layerSetup);
+  const layers = host.layers;
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 480, maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" data-testid="dimension-properties" style={{ width: 480, maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>{kindLabel} Dimension</span>
         </div>
@@ -160,7 +193,7 @@ export function DimensionPropertiesDialog() {
               {!layers.includes(layer) && <option value={layer}>{layer}</option>}
               {layers.map((l) => (
                 <option key={l} value={l}>
-                  {layerDisplayName(layerSetup, l)}
+                  {host.layerName(l)}
                 </option>
               ))}
             </select>
@@ -211,13 +244,13 @@ export function DimensionPropertiesDialog() {
               <div style={{ fontWeight: 600, fontSize: 11, marginTop: 10, marginBottom: 4 }}>Text</div>
               <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr", rowGap: 6 }}>
                 <span>Prefix</span>
-                <input type="text" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
+                <input type="text" data-testid="dim-prefix" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
                 <span>Suffix</span>
                 <input type="text" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
                 <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <input type="checkbox" checked={overrideOn} onChange={(e) => setOverrideOn(e.target.checked)} /> Override value
                 </label>
-                <input type="text" value={overrideText} disabled={!overrideOn} onChange={(e) => setOverrideText(e.target.value)} placeholder={dim.text} />
+                <input type="text" data-testid="dim-override" value={overrideText} disabled={!overrideOn} onChange={(e) => setOverrideText(e.target.value)} placeholder={dim.text} />
 
                 {!overrideOn && (
                   <>
@@ -302,7 +335,7 @@ export function DimensionPropertiesDialog() {
             Delete
           </button>
           <button onClick={close}>Cancel</button>
-          <button className="primary" onClick={save} disabled={busy}>
+          <button className="primary" data-testid="dim-ok" onClick={save} disabled={busy}>
             OK
           </button>
         </div>

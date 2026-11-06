@@ -102,6 +102,7 @@ pub mod sch_overlap;
 mod sch_import;
 mod sch_crossref;
 mod sheet_file;
+mod variant_io;
 pub use sheet_file::{load_sheet_file, referenced_sheet_files};
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_tree_with, import_kicad_sch_with, pin_kind_from_electrical_type, project_bus_aliases, reconcile, transform_local_point, ImportOptions};
 
@@ -291,7 +292,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     let file_uuid = ctx.file_uuid.as_str();
     let paper = sch.title_block.as_ref().map(|t| t.paper.as_str()).filter(|p| !p.is_empty()).unwrap_or("A4");
     writeln!(out, "(kicad_sch").unwrap();
-    writeln!(out, "\t(version 20250114)").unwrap();
+    writeln!(out, "\t(version {SCH_FILE_VERSION})").unwrap();
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
     writeln!(out, "\t(generator_version \"9.0\")").unwrap();
     writeln!(out, "\t(uuid \"{file_uuid}\")").unwrap();
@@ -520,6 +521,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
             writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
             writeln!(out, "\t\t\t\t\t(unit {})", eda_model::sheet_list::unit_under(sch, sym, model_path)).unwrap();
+            write_symbol_variants(&mut out, sch, sym);
             writeln!(out, "\t\t\t\t)").unwrap();
         }
         writeln!(out, "\t\t\t)").unwrap();
@@ -1210,6 +1212,50 @@ fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), ve
         hide
     )
     .unwrap();
+}
+
+/// The schematic file's version this writer gives (`(version 20250114)`): what kicad-cli reads a variant's `in_bom` by.
+const SCH_FILE_VERSION: i64 = 20250114;
+
+/// KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`'s `T_in_bom` of a `(variant ..)`: "The "in_bom" token used in the file format is the
+/// positive logic", but a file before 20260306 ("Variant in_bom semantics corrected") wrote the exclusion itself, and is read that way
+/// (`if( m_requiredVersion >= 20260306 ) variant.m_ExcludedFromBOM = !variant.m_ExcludedFromBOM`). The word that says `excluded` in a file of `version`.
+pub(crate) fn variant_in_bom_word(excluded: bool, version: i64) -> &'static str {
+    let in_bom = if version >= 20260306 { !excluded } else { excluded };
+    if in_bom { "yes" } else { "no" }
+}
+
+/// A placed symbol's design variants inside each `(path ..)` of its `(instances ..)` (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR::saveSymbol`): one `(variant (name ..)
+/// ..)` per record with differentials (`SCH_SYMBOL_VARIANT::HasDifferentials`), each flag only where it is not the symbol's own (`dnp`, `exclude_from_sim`,
+/// `in_bom`, `on_board` and `in_pos_files` as the positive words), then its field texts (`(field (name ..) (value ..))`). The record is the reference's, so
+/// every path of a screen shown twice gets it (`eda_model::variants`). `in_bom` is written in the sense this file's version is read in
+/// ([`variant_in_bom_word`]): **differs** from 25ec2335's writer, whose files are at 20261015.
+fn write_symbol_variants(out: &mut String, sch: &eda_model::ir::SchematicSection, sym: &SymbolInstance) {
+    use eda_model::variants::{Flag, SymbolFlags};
+    let yes_no = |b: bool| if b { "yes" } else { "no" };
+    let base = SymbolFlags::of(sch, sym);
+    for (name, rec) in eda_model::variants::written_records(sch, sym) {
+        let flags = rec.flags(base);
+        write!(out, "\t\t\t\t\t(variant (name {})", sexpr_str(name)).unwrap();
+        for f in Flag::ALL {
+            if flags.get(f) == base.get(f) {
+                continue;
+            }
+            let v = flags.get(f);
+            match f {
+                Flag::Dnp => write!(out, " (dnp {})", yes_no(v)),
+                Flag::ExcludeFromSim => write!(out, " (exclude_from_sim {})", yes_no(v)),
+                Flag::ExcludeFromBom => write!(out, " (in_bom {})", variant_in_bom_word(v, SCH_FILE_VERSION)),
+                Flag::ExcludeFromBoard => write!(out, " (on_board {})", yes_no(!v)),
+                Flag::ExcludeFromPosFiles => write!(out, " (in_pos_files {})", yes_no(!v)),
+            }
+            .unwrap();
+        }
+        for (field, text) in &rec.fields {
+            write!(out, " (field (name {}) (value {}))", sexpr_str(field), sexpr_str(text)).unwrap();
+        }
+        writeln!(out, ")").unwrap();
+    }
 }
 
 fn write_page_field(out: &mut String, f: &eda_engine::fields::PageField) {

@@ -37,8 +37,9 @@ export function useActionChecked(): (name: string) => boolean | undefined {
     zoomArmed,
     polar: state.polar,
     measureArmed,
+    fpView: { lineMode: fp.lineMode, sketchPads: fp.sketchPads, sketchGraphics: fp.sketchGraphics, sketchText: fp.sketchText, appearanceShown: fp.appearanceShown },
   };
   // The context is rebuilt every render; the callback only changes when a fact it reads does.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, gridOverrides, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, sym.showHiddenFields, sym.showPinAltIcons, dock, state.rightDockTab, highContrast, zoomArmed, state.polar, measureArmed]);
+  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, gridOverrides, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, sym.showHiddenFields, sym.showPinAltIcons, dock, state.rightDockTab, highContrast, zoomArmed, state.polar, measureArmed, fp.lineMode, fp.sketchPads, fp.sketchGraphics, fp.sketchText, fp.appearanceShown]);
 }

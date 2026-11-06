@@ -15,10 +15,14 @@ import { PushPadPropertiesDialog } from "./PushPadPropertiesDialog";
 import { LoadFromBoardDialog } from "./LoadFromBoardDialog";
 import { FootprintCheckerDialog } from "./FootprintCheckerDialog";
 import { FootprintCreateArrayDialog } from "./FootprintArrayDialog";
-import { FpTextDialog } from "./FpTextDialog";
+import { FpTextDialog, FpTextEditDialog } from "./FpTextDialog";
+import { FpShapeDialog } from "./FpShapeDialog";
+import { FpGroupDialog } from "./FpGroupDialog";
+import { FpBarcodeDialog, FpDimensionDialog, FpRefImageDialog, FpTableDialog, FpTextBoxDialog, FpZoneDialog } from "./FpItemDialogs";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn } from "../panels/Dock";
 import { Toolbar } from "../Toolbar";
+import { FootprintAppearancePanel } from "./FootprintAppearancePanel";
 
 /**
  * `DIALOG_ENUM_PADS` (pcbnew/dialogs/dialog_enum_pads.cpp): the prefix, start number and step of `pcbnew.PadTool.enumeratePads`. OK arms the click-to-number
@@ -124,11 +128,22 @@ export function FootprintEditorView() {
           <FootprintCanvas />
         </div>
         <Toolbar id="drawing" editor="footprint" />
+        {/* The "LayersManager" pane (footprint_edit_frame.cpp: `.Right().Layer( 3 )`, outside the drawing toolbar's `.Right().Layer( 2 )`), while `appearanceShown` (ToggleLayersManager). */}
+        {state.appearanceShown && <FootprintAppearancePanel />}
       </div>
       <PadPropertiesDialog />
       <FootprintLibraryPropertiesDialog />
       <RenumberPadsDialog />
       <FpTextDialog />
+      <FpTextEditDialog />
+      <FpShapeDialog />
+      <FpGroupDialog />
+      <FpDimensionDialog />
+      <FpZoneDialog />
+      <FpTextBoxDialog />
+      <FpBarcodeDialog />
+      <FpTableDialog />
+      <FpRefImageDialog />
       <PadTableDialog />
       <PushPadPropertiesDialog />
       <LoadFromBoardDialog />

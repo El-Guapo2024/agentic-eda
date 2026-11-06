@@ -14,7 +14,7 @@ Notes:
 - These findings still have open parts:
   - E3-1 (high);
   - D-A1, B-M4/D3-M5/D4-M1, C3-M1, B3-M1, A-3, D-8, D-10, C-2 and R3-6 (medium, rounds 2-4).
-- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor.
+- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane).
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
@@ -22,12 +22,12 @@ Notes:
 3. S1: placing labels, power symbols and text -- **done (task-u1-schplace)**
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
-6. F1+F2: Footprint Editor fields and dimmed tools
+6. F1+F2: Footprint Editor fields and dimmed tools -- **done (task-u1-fpedit)**; the Properties pane (Y3) left
 7. Y1: Symbol Editor Rotate
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
 9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
 10. P8: zones -- **done (task-u1-zones)**
-11. S2: design variants
+11. S2: design variants -- **done (task-u1-variants)**
 12. M1: the Simulation Model dialog -- **done (task-u1-simmodel)**
 
 ## PCB editor
@@ -184,7 +184,11 @@ Notes:
   - (was: you click first and the dialog comes after, and nothing follows the cursor before the click; Place Power is a text field with presets, its rotation set in the dialog.)
   - M. PARITY-sch §3, §3a, §54.
 - **S1b [BD] Place Symbol (A) has no symbol following the cursor** (found by task-u1-schplace). After the chooser, it waits for a click with nothing drawn at the cursor; KiCad carries the symbol, with R/X/Y while carried. The `POST /api/sch/place_preview` endpoint from task-u1-schplace can draw it. S. PARITY-sch §54.
-- **S2 [FM] Design variants.** No Add, Remove or Edit Variant, no per-variant DNP or fields, and no variant columns in the Fields Table or the placement files. XL. ui-parity-missing (3 rows); PARITY-sch §13, §25.
+- **S2 [FM] Design variants.** **done (task-u1-variants)**: Add, Remove, Edit Description, Rename and Copy Design Variant (Tools > Variants, the schematic toolbar's selector with "Add New Design Variant...", the Fields Table's "Schematic variants:" list), each in KiCad 25ec2335's words; a symbol's DNP, exclusion flags and field texts per variant, shown and edited for the current variant on the canvas, in Symbol Properties (the title names the variant), the Properties panel, the attribute toggles and the Fields Table (the variant's cells highlighted); KiCad's `(variant ..)` records and `schematic.variants` read and written, the board's `(variants ..)` and footprint variants derived; the PCB editor's own selector; "Design variant:" enabled in Plot, Generate Placement Files and Plot Schematic, and the Fields Table's BOM export is its variant's: kicad-cli's `--variant` (PARITY-sch §58). Left:
+  - A variant's own symbol (Set / Clear Variant Symbol) and pin map; a sheet's own variants; `${VARIANT}` / `${VARIANT_DESC}` in texts; a variant field's `${..}` on the canvas.
+  - The PCB canvas and Properties panel per board variant (the board's selector feeds the dialogs only); a variant footprint; a pasted symbol's records.
+  - A record is the reference's, on every path of a screen shown twice.
+  - XL. PARITY-sch §13, §25, §58.
 - **S3 [FM] Schematic Setup.** **done (task-u1-schsetup)**: every page of KiCad's tree -- Formatting's every row, Annotation, Field Name Templates, BOM Presets, Net Classes (Board Setup's page with the Eeschema columns, one table for both), Bus Alias Definitions, Text Variables -- each Apply one undoable verb, the settings in the derived `.kicad_pro` kicad-cli reads; ERC's "Edit Netclasses…" opens Net Classes (PARITY-sch §56). Left:
   - Import Settings from Another Project… (Board Setup has none either).
   - Hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio reach kicad-cli but not the studio's own drawing.
@@ -334,14 +338,16 @@ Notes:
 
 ## Footprint editor
 
-- **F1 [FM] Fields and texts on the canvas.**
-  - Reference, Value and user fields are not drawn or pickable.
-  - Texts and graphics have no Properties dialog.
+- **F1 [FM] Fields and texts on the canvas.** **done (task-u1-fpedit)**, PARITY-fpedit §20: the Reference, the Value and the user fields are drawn, picked, dragged, turned and mirrored (a delete hides one); a double click or E opens the item's dialog (Footprint Reference / Value / Field / Text Properties, the shape's Properties, Pad Properties, the new kinds' dialogs, Group Properties).
+  - Left: a footprint text's bold, italic, vertical justification and keep-upright are not in the model (F5), so its dialog leaves them out (a field has them); Duplicate and Create Array of a field.
+  - ~~Reference, Value and user fields are not drawn or pickable.~~
+  - ~~Texts and graphics have no Properties dialog.~~
   - M. PARITY-fpedit §13, §15, §17.
-- **F2 [FM] Dimmed tools.**
-  - Mirror, Group and Ungroup, the line modes, the sketch and outline modes, the Appearance manager and the Properties pane.
-  - Dimensions, rule areas and keepouts, text boxes, tables, barcodes, points and reference images.
-  - A footprint's zones and dimensions are kept but not drawn.
+- **F2 [FM] Dimmed tools.** **done (task-u1-fpedit)**, PARITY-fpedit §20: every tool listed below runs on the footprint's items, one undo step each; a library footprint holds its zones, dimensions, text boxes, points, images, barcodes, tables and groups as items (read and written by the board's readers and writers, kicad-cli keeps them), drawn and editable; Set Anchor moves them (F7's zones and dimensions).
+  - Left: the Properties pane (Y3, another task); Create Footprint (the wizards); a barcode and a reference image are drawn as their boxes; Duplicate, Create Array and the clipboard of the new kinds; the Appearance manager's presets, viewports and Selection Filter; items still kept as text (a locked item, a filled zone) are not drawn; the board's footprints still carry these items as text (GAPS 25).
+  - ~~Mirror, Group and Ungroup, the line modes, the sketch and outline modes, the Appearance manager and the Properties pane.~~
+  - ~~Dimensions, rule areas and keepouts, text boxes, tables, barcodes, points and reference images.~~
+  - ~~A footprint's zones and dimensions are kept but not drawn.~~
   - L. editor_toolbar_support.json; fpedit §8, §16.
 - **F3 [BD] Ctrl+E from the board.**
   - It edits the library entry, with no link back to that footprint.
@@ -361,7 +367,7 @@ Notes:
   - No fabrication property or pad-to-die length.
   - Round/Slot resets the size, and the type is named "Slot" where KiCad says "Oblong" (E7-F6/F7).
   - M. fpedit §3, §18.
-- **F7 [BD] Set Anchor.** It leaves zones, dimensions and the courtyard override behind (E3-1). S. r3 E3-1.
+- **F7 [BD] Set Anchor.** It leaves zones, dimensions and the courtyard override behind (E3-1). S. r3 E3-1. (task-u1-fpedit: the zones, dimensions, text boxes, images, barcodes and tables move with it now, as `MoveAnchorPosition` does; the courtyard override and the items still kept as text do not.)
 - **F8 [FM] Missing tools and settings.**
   - No Import Graphics and no preference pages.
   - The rotation is fixed at 90°.
@@ -405,12 +411,12 @@ Notes:
 
 ## Fab outputs and exports
 
-- **X1 [FM] PCB Plot is Gerber only.** **done (task-u1-plot)**: Gerber, PostScript, SVG, DXF, PDF, PNG with every option of `DIALOG_PLOT`, Plot on All Layers, the output folder, Run DRC, the mask alert. HPGL is not offered (KiCad's dialog dropped it; kicad-cli: "No longer supported"); 8303b2ad's dialog has no values/references boxes. The job file box works (unticked, the job file kicad-cli always writes is deleted). Left, disabled with the reason: the origin outside Gerber/DXF, SVG precision, PDF metadata, the PDF popups apart, DXF's font, the design variant.
+- **X1 [FM] PCB Plot is Gerber only.** **done (task-u1-plot)**: Gerber, PostScript, SVG, DXF, PDF, PNG with every option of `DIALOG_PLOT`, Plot on All Layers, the output folder, Run DRC, the mask alert. HPGL is not offered (KiCad's dialog dropped it; kicad-cli: "No longer supported"); 8303b2ad's dialog has no values/references boxes. The job file box works (unticked, the job file kicad-cli always writes is deleted). Left, disabled with the reason: the origin outside Gerber/DXF, SVG precision, PDF metadata, the PDF popups apart, DXF's font. (The design variant is done: S2.)
   - L. GAPS 37; PARITY-boardctl §5, §8.
 - **X2 [FM] Drill files.** **done (task-u1-plot)**: Excellon and Gerber X2, map files and their format, units, zeros, precision, mirror, minimal header, tenting layers, the output folder, Generate Report File. Left: the report is the selected format's writer's (KiCad's dialog inverts the test). M. GAPS 37; PARITY-boardctl §8.
-- **X3 [FM] Schematic exports.** **done (task-u1-plot)**: Plot Schematic has PostScript, PDF, SVG, DXF, PNG, the colour theme, the PDF and PNG options, the output folder, Plot All / Current Page; Export Netlist has KiCad, OrcadPCB2, Allegro, CadStar, PADS, SPICE, SPICE Model (and XML). Left, disabled with the reason (no kicad-cli flag): page size, minimum line width, DXF units, the SPICE page's options, Open file after plot, custom exporters, the variant.
+- **X3 [FM] Schematic exports.** **done (task-u1-plot)**: Plot Schematic has PostScript, PDF, SVG, DXF, PNG, the colour theme, the PDF and PNG options, the output folder, Plot All / Current Page; Export Netlist has KiCad, OrcadPCB2, Allegro, CadStar, PADS, SPICE, SPICE Model (and XML). Left, disabled with the reason (no kicad-cli flag): page size, minimum line width, DXF units, the SPICE page's options, Open file after plot, custom exporters. (The variant is done: S2.)
   - S. PARITY-sch §10, §53.
-- **X4 [FM] Placement files.** **done (task-u1-plot)** as far as kicad-cli goes: kicad-cli 10.99 (4fe1ca2060) still has no Exclude from BOM flag for `pcb export pos` (disabled with the reason; the api-server's position job has `exclude_from_bom`, unused), and the variant choice is disabled (kicad-cli has `--variant`, the studio has no variants, S2); the dialog's output folder is wired. S. GAPS 37; r2 X8.
+- **X4 [FM] Placement files.** **done (task-u1-plot)** as far as kicad-cli goes: kicad-cli 10.99 (4fe1ca2060) still has no Exclude from BOM flag for `pcb export pos` (disabled with the reason; the api-server's position job has `exclude_from_bom`, unused); the variant choice is `--variant` since S2 (task-u1-variants); the dialog's output folder is wired. S. GAPS 37; r2 X8.
 - **X5 [BD] Small differences.**
   - Sketched fab pads at 0.1 mm (X3-9).
   - An export with warnings shows none (X5-1).

@@ -98,3 +98,11 @@ test("an action that does not toggle has no pressed state at all", () => {
   assert.equal(actionChecked("common.Interactive.undo", base), undefined);
   assert.equal(actionChecked("common.Control.zoomFitScreen", { ...base, tab: "footprint" }), undefined);
 });
+
+test("the Footprint Editor's line mode, display modes and Appearance pane show as its settings hold them (FOOTPRINT_EDIT_FRAME::setupUIConditions)", () => {
+  const fpView = { lineMode: "45" as const, sketchPads: true, sketchGraphics: false, sketchText: true, appearanceShown: false };
+  const fp: CheckedContext = { ...base, tab: "footprint", fpView };
+  assert.deepEqual(["pcbnew.EditorControl.lineModeFree", "pcbnew.EditorControl.lineModeOrthonal", "pcbnew.EditorControl.lineMode45"].map((n) => actionChecked(n, fp)), [false, false, true]);
+  assert.deepEqual(["pcbnew.Control.padDisplayMode", "pcbnew.Control.graphicOutlines", "pcbnew.Control.textOutlines", "pcbnew.Control.showLayersManager"].map((n) => actionChecked(n, fp)), [true, false, true, false]);
+  assert.equal(actionChecked("pcbnew.EditorControl.lineModeFree", { ...fp, fpView: { ...fpView, lineMode: "direct" } }), true);
+});

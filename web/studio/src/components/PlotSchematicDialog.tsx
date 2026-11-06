@@ -7,9 +7,10 @@
 // POSTs to /api/sch/plot (crates/cli/src/sch_output_api.rs), which runs `kicad-cli sch export <format>` on the exported schematic with each
 // option mapped onto its flag, into the dialog's output folder (relative to the board's folder; empty: export/kicad/sch-<format>/). The
 // controls kicad-cli has no flag for (page size, minimum line width, DXF units) and the ones a browser cannot do (open the file, browse for a
-// folder) are shown disabled with the reason; the studio has no design variants.
+// folder) are shown disabled with the reason. "Design variant:" is kicad-cli's `--variant` (KiCad 25ec2335 `SCH_PLOT_OPTS::m_variant`).
 import { useEffect, useState } from "react";
 import { postSchPlot } from "../api/client";
+import { VariantChoice } from "./VariantChoice";
 import { buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, SCH_CLI_LIMITS, SCH_COLOR_THEMES, SCH_PAGE_SIZES, SCH_PLOT_FORMATS, schPlotEnables, summarizeOutputs, type SchPlotForm, type SchPlotScope } from "../kicad-port/schOutputs";
 import { useStudioDispatch, useStudioState } from "../state/store";
 
@@ -27,11 +28,15 @@ export function PlotSchematicDialog() {
   const [form, setForm] = useState<SchPlotForm>(kept);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
+  // "Design variant:" (KiCad 25ec2335 `m_variantChoiceCtrl->Append( GetVariantNamesForUI() ); Select( 0 )`): the default at each opening, `plotOpts.m_variant` to kicad-cli's `--variant`
+  const [variant, setVariant] = useState("");
+  const variants = state.schematic?.variants ?? [];
 
   useEffect(() => {
     if (!open) return;
     setForm(kept);
     setResult(null);
+    setVariant("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -49,7 +54,7 @@ export function PlotSchematicDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postSchPlot(buildSchPlotRequest({ ...form, currentSheetIds }, scope));
+      const reply = await postSchPlot({ ...buildSchPlotRequest({ ...form, currentSheetIds }, scope), ...(variant ? { variant } : {}) });
       const files = reply.files ?? [];
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? summarizeOutputs(files) : "Plot failed."), files });
     } finally {
@@ -67,12 +72,7 @@ export function PlotSchematicDialog() {
             <input type="text" value={form.outputDirectory} placeholder={`export/kicad/sch-${form.format}/`} onChange={(e) => set({ outputDirectory: e.target.value })} style={{ flex: 1 }} data-testid="sch-plot-output-dir" />
             <button disabled title={`Not available: ${SCH_CLI_LIMITS.browse}`}>…</button>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, opacity: 0.6 }} title={`Not available: ${SCH_CLI_LIMITS.variant}`}>
-            Design variant:
-            <select disabled value="">
-              <option value="">Default</option>
-            </select>
-          </label>
+          <VariantChoice variants={variants} value={variant} onChange={setVariant} testId="sch-plot-variant" style={{ marginBottom: 10 }} />
           <div style={{ display: "flex", gap: 12 }}>
             <fieldset style={{ minWidth: 110 }}>
               <legend>Output Format</legend>
