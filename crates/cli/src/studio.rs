@@ -728,6 +728,8 @@ fn handle(
         ("POST", "/api/drawing_sheet/upload") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::upload(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
+        // The Symbol Editor's Find and Replace: the schematic's matcher over the texts of the symbol being edited (`sch_api::find_text`).
+        ("POST", "/api/find/text") => respond(stream, "200 OK", "application/json", sch_api::find_text(&body).to_string().as_bytes()),
         // Annotate Schematic's message window and the other dialogs that work across sheets (`crate::sch_hierarchy_api`).
         ("POST", "/api/sch/annotate") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::annotate(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/next_reference") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::next_reference(dir, &body).to_string().as_bytes()),
