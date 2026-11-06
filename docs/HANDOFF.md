@@ -4,6 +4,7 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## Start here (2026-11-07): the UI list is done, apart from what needs the user
 
+- **The safety-power board is dropped (the user, 2026-11-07):** "we might not have to do this PCB after all". Do not work on `designs/safety-power/`. The studio may keep serving it as a demo board. The focus is the software itself.
 - **Later on 2026-11-07, the user's decisions:**
   - Strict mode stays on by default (P7 closed).
   - Import Netlist is built and merged (`task-u7-netlist`, PARITY-pcb §92: the netlist's word is kept in `DrawingsSection::imported_netlist` over reloads).
