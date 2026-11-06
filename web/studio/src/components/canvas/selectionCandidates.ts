@@ -17,6 +17,7 @@ import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/type
 import { padIds } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, unionBox } from "../../kicad-port/fpArt";
+import { fpItemsHitDistance } from "../../kicad-port/fpBoardItems";
 import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox, zoneArea, zoneContainsPoint, zoneEdgeDistance } from "./itemHitTest";
@@ -259,7 +260,7 @@ export function collectSelectionCandidates(
     const [x0, y0, x1, y1] = p.courtyard;
     // A click on a stroke of the footprint's own silkscreen or fab drawing picks the footprint too, wherever the stroke is (`FOOTPRINT::HitTest` counts its graphics).
     const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
-    const slop = inside ? 0 : artHitDistance(p, xNm, yNm, layerVisible);
+    const slop = inside ? 0 : Math.min(artHitDistance(p, xNm, yNm, layerVisible), fpItemsHitDistance(p, xNm, yNm, layerVisible));
     if (slop > toleranceNm) continue;
     consider("part", p.ref, slop, Math.max((x1 - x0) * (y1 - y0), 1), null);
   }

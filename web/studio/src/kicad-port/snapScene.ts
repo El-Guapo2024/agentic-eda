@@ -41,6 +41,8 @@ export interface FootprintItem extends SnapItemBase {
   /** `GetBoundingBox( false ).Centre()`. */
   center: Pt;
   pads: PadItem[];
+  /** The footprint's points (`FOOTPRINT::Points()`, UI-LEFT P17): "Points are also pick-up points" of the footprint. */
+  points?: PointItem[];
 }
 
 export interface PadItem extends SnapItemBase {
@@ -115,7 +117,7 @@ export interface SnapScene {
 /** The part of the board state the scene reads (a test builds one by hand; a `BoardState` is one). */
 export interface SceneBoard {
   layers?: readonly string[];
-  parts: ReadonlyArray<Pick<Part, "ref" | "placed"> & Partial<Pick<Part, "at" | "side" | "pads" | "courtyard" | "body">>>;
+  parts: ReadonlyArray<Pick<Part, "ref" | "placed"> & Partial<Pick<Part, "at" | "side" | "pads" | "courtyard" | "body" | "items">>>;
   routing?: { tracks: readonly Track[]; vias: readonly Via[]; zones: readonly Zone[] } | null;
   drawings?: { shapes: readonly Shape[]; texts: readonly BoardText[]; dimensions: readonly Dimension[]; points?: readonly { id: string; layer: string; x: number; y: number; size: number }[]; grid_items?: readonly BoardGridItem[] } | null;
 }
@@ -308,6 +310,10 @@ export function buildScene(board: SceneBoard): SnapScene {
       at,
       center: [(fpBox.x0 + fpBox.x1) / 2, (fpBox.y0 + fpBox.y1) / 2],
       pads,
+      points: (part.items?.points ?? []).map((p) => {
+        const half = p.size / 2;
+        return { id: p.id, owner: part.ref, type: "point" as const, layers: [p.layer], bbox: box(p.x - half, p.y - half, p.x + half, p.y + half), hit: (q: Pt) => Math.abs(q[0] - p.x) <= half && Math.abs(q[1] - p.y) <= half, at: [p.x, p.y] as Pt };
+      }),
     };
     items.push(fp, ...pads);
   }
