@@ -59,6 +59,8 @@ pub mod symbol;
 pub mod sym_fields;
 pub mod table;
 pub mod table_edit;
+pub mod table_paste;
+pub mod cross_refs;
 pub mod table_text;
 pub mod text_vars;
 pub mod topo_match;

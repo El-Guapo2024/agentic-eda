@@ -78,6 +78,10 @@ pub struct CellEdit {
     /// `EDA_SHAPE::SetFillColor` ("Background Fill Color"): the colour a fill of `color` is drawn with.
     #[serde(default)]
     pub fill_color: Option<TableColor>,
+    /// `EDA_TEXT::SetTextColor` (a sheet's Table Cell Properties, "Text color:"): the colour the cell's text is drawn in. `COLOR4D::UNSPECIFIED` (all four channels 0)
+    /// is the swatch's default and takes the colour away, so the text is drawn in the theme's colour again (a colour with no alpha, as the Properties panel's colours).
+    #[serde(default)]
+    pub text_color: Option<TableColor>,
 }
 
 impl CellEdit {
@@ -305,6 +309,9 @@ pub fn edit_cells(t: &mut Table, cells: &[(usize, usize)], e: &CellEdit) -> Resu
             if let Some(c) = e.fill_color {
                 cell.fill_color = Some(c);
             }
+            if let Some(c) = e.text_color {
+                cell.style.color = (c.a != 0).then_some(c);
+            }
         }
         if let Some(w) = e.col_width_nm {
             if let Some(slot) = t.col_widths.get_mut(col) {
@@ -397,6 +404,17 @@ mod tests {
         assert_eq!(t.cell(0, 0).unwrap().style, TableText::pcb_default());
         assert!(edit_cells(&mut t, &[(5, 5)], &e).is_err());
         assert!(edit_cells(&mut t, &[], &e).is_err());
+    }
+
+    #[test]
+    fn the_sheet_dialogs_text_colour_sets_the_colour_and_unspecified_takes_it_away() {
+        let mut t = table();
+        let red = TableColor { r: 200, g: 10, b: 10, a: 255 };
+        edit_cells(&mut t, &[(0, 0), (1, 0)], &CellEdit { text_color: Some(red), fill: Some(SchFill::Color), fill_color: Some(red), ..CellEdit::default() }).unwrap();
+        assert_eq!((t.cell(0, 0).unwrap().style.color, t.cell(1, 0).unwrap().fill, t.cell(1, 0).unwrap().fill_color), (Some(red), SchFill::Color, Some(red)));
+        assert_eq!(t.cell(0, 1).unwrap().style.color, None, "a cell not named keeps its colour");
+        edit_cells(&mut t, &[(0, 0)], &CellEdit { text_color: Some(TableColor { r: 0, g: 0, b: 0, a: 0 }), ..CellEdit::default() }).unwrap();
+        assert_eq!(t.cell(0, 0).unwrap().style.color, None);
     }
 
     #[test]
