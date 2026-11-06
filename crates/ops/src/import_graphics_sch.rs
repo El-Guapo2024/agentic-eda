@@ -27,9 +27,9 @@
 use super::Board;
 use crate::import_graphics::{GraphicsFormat, ImportGraphics};
 use eda_kicad::graphics_import::{arc_points, prepare, spline_or_line, HJustify, Imported, ImportedShape, LineStyle, Mapper, Rgba, SplineOrLine, Stroke, VJustify, V2};
-use eda_model::ir::{LibraryFill, LibrarySymbolGraphic, Millideg, Point, SchLine, SchematicText, Nm};
+use eda_model::ir::{LibraryFill, LibrarySymbolGraphic, Millideg, Point, SchLine, SchematicText, Nm, TextJustify, TextVAlign};
 use eda_model::kicad_font;
-use eda_model::sch_extras::{SchColor, SchFill, SchGraphic, SchGraphicKind, SchLineStyle, SchStroke};
+use eda_model::sch_extras::{SchColor, SchFill, SchGraphic, SchGraphicKind, SchLineStyle, SchStroke, SchTextJustify};
 use eda_model::symbol::SPoint;
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -183,6 +183,8 @@ pub struct SchItems {
     pub lines: Vec<(SchLine, Option<SchStroke>)>,
     pub graphics: Vec<SchGraphic>,
     pub texts: Vec<SchematicText>,
+    /// The justification of a text of `texts` that is not left and bottom (`SchExtras::text_justify`), by its place in `texts`.
+    pub text_justify: Vec<(usize, SchTextJustify)>,
 }
 
 /// `GRAPHICS_IMPORTER_SCH`'s items for `imported`, in nanometres (`mapper.iu_per_mm` is 1e6; the sheet's writer rounds to its 100 nm unit).
@@ -269,16 +271,28 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 out.graphics.push(g);
             }
             ImportedShape::Text { origin, text, height, orientation_deg, h, v, .. } => {
-                let size_nm = Nm::kiround(height * m.scaling_factor());
-                if size_nm <= Nm::ZERO || text.is_empty() {
-                    continue;
+                // `GRAPHICS_IMPORTER_SCH::AddText`: the position mapped, the angle as given, the height times the scale (`SetTextHeight( aHeight *
+                // ImportScalingFactor().y )`: truncated to the schematic's unit of 100 nm and held to EDA_TEXT's limits), both justifications kept; a text with nothing in it
+                // is added. The file then keeps the angle upright (`parseSchText`: `KeepUpright`), 0 or 90 degrees with the justification as it is, which is what is made
+                // here. The glyph width (`SetTextWidth`) has no place in the design: a schematic text is as wide as it is high.
+                let size_nm = Nm::new((((height * m.scaling_factor()) / 100.0) as i64 * 100).clamp(1_000, 250_000_000));
+                let angle: Millideg = if eda_model::kicad_geom::keep_upright_is_vertical(*orientation_deg) { 90_000 } else { 0 };
+                let j = SchTextJustify {
+                    h: match h {
+                        HJustify::Left => TextJustify::Left,
+                        HJustify::Center => TextJustify::Center,
+                        HJustify::Right => TextJustify::Right,
+                    },
+                    v: match v {
+                        VJustify::Top => TextVAlign::Top,
+                        VJustify::Center => TextVAlign::Center,
+                        VJustify::Bottom => TextVAlign::Bottom,
+                    },
+                };
+                if j != SchTextJustify::default() {
+                    out.text_justify.push((out.texts.len(), j));
                 }
-                // A schematic text runs along a row or up a column: the nearer of the two.
-                let turn = orientation_deg.rem_euclid(180.0);
-                let (angle, angle_deg): (Millideg, f64) = if (45.0..135.0).contains(&turn) { (90_000, 90.0) } else { (0, 0.0) };
-                // The file's alignment, in its own millimetres before the scale, to the left end of the baseline.
-                let at = justified_anchor_mm(*origin, text, *height, angle_deg, *h, *v, false);
-                out.texts.push(SchematicText { id: String::new(), content: text.clone(), at: point(m.coord(at)), angle, size_nm });
+                out.texts.push(SchematicText { id: String::new(), content: text.clone(), at: point(m.coord(*origin)), angle, size_nm });
             }
             ImportedShape::Spline { start, c1, c2, end, stroke } => {
                 let (ps, p1, p2, pe) = (point(m.coord(*start)), point(m.coord(*c1)), point(m.coord(*c2)), point(m.coord(*end)));
@@ -405,11 +419,18 @@ impl Board<'_> {
         }
         let sch = self.schematic_mut_or_create();
         let first_line = sch.lines.len();
+        let first_text = sch.texts.len();
         let (lines, strokes): (Vec<SchLine>, Vec<Option<SchStroke>>) = items.lines.into_iter().unzip();
         sch.lines.extend(lines);
         sch.extras.graphics.extend(items.graphics);
         sch.texts.extend(items.texts);
         sch.assign_missing_ids();
+        // a text's justification, by the id it was given
+        for (i, j) in items.text_justify {
+            if let Some(id) = sch.texts.get(first_text + i).map(|t| t.id.clone()) {
+                sch.extras.set_text_justify(&id, j);
+            }
+        }
         // A graphic line keeps its width in the line and its style and colour in the stroke table.
         for (i, st) in strokes.into_iter().enumerate() {
             if let Some(st) = st {

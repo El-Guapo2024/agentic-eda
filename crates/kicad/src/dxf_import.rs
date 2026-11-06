@@ -295,6 +295,20 @@ struct Plugin {
     /// The blocks being expanded, innermost last: an INSERT of one of them is a loop.
     active: Vec<usize>,
     nesting_reported: bool,
+    /// `DL_Dxf::libVersion`: the version of dxflib a `999` comment `dxflib x.y.z.w` names (`getLibVersion`), 0 for none. An MTEXT angle is in radians up to 2.0.2.0.
+    lib_version: i64,
+}
+
+/// `DL_Dxf::getLibVersion`: `2.5.0.0` as `0x02050000`; a string of fewer than three dots is 0.
+fn lib_version_of(s: &str) -> i64 {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() < 3 {
+        return 0;
+    }
+    // `atoi` of each part: its leading digits
+    let atoi = |p: &str| p.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<i64>().unwrap_or(0);
+    let v = |i: usize| parts.get(i).map_or(0, |p| atoi(p));
+    (v(0) << 24) + (v(1) << 16) + (v(2) << 8) + v(3)
 }
 
 type V3 = [f64; 3];
@@ -507,6 +521,7 @@ impl Plugin {
             layers: vec![Layer { name: String::new(), line_weight: LW_BY_LW_DEFAULT }],
             blocks: Vec::new(),
             styles: Vec::new(),
+            lib_version: 0,
             current_block: None,
             main: Buffer::default(),
             messages: Vec::new(),
@@ -596,14 +611,22 @@ impl Plugin {
     fn run(&mut self, groups: &[(i32, String)]) {
         let mut section = Section::None;
         let mut i = 0;
+        // `DL_Dxf::processDXFGroup`: a `999` group is a comment, and one that starts with `dxflib` names the library version that wrote the file.
+        let note_version = |g: &(i32, String), version: &mut i64| {
+            if g.0 == 999 && g.1.starts_with("dxflib") {
+                *version = lib_version_of(g.1.get(7..).unwrap_or(""));
+            }
+        };
         while i < groups.len() {
             if groups[i].0 != 0 {
                 // Anything before the first group 0 is a comment (999) or a stray.
+                note_version(&groups[i], &mut self.lib_version);
                 i += 1;
                 continue;
             }
             let mut j = i + 1;
             while j < groups.len() && groups[j].0 != 0 {
+                note_version(&groups[j], &mut self.lib_version);
                 j += 1;
             }
             let rec = Rec { name: groups[i].1.as_str(), g: &groups[i + 1..j] };
@@ -671,9 +694,11 @@ impl Plugin {
         self.layers.push(Layer { name, line_weight: lw });
     }
 
+    /// `DL_Dxf::addTextStyle`: `getRealValue( 41, 0.0 )`, so a style that gives no width factor makes its texts as narrow as a text can be (the importer's width is
+    /// `0.9 * height * factor`, which `EDA_TEXT` clamps to its least, 1 micrometre); the DXF spec has group 41 in every style.
     fn add_text_style(&mut self, rec: &Rec) {
         let name = rec.string(2, "");
-        self.styles.push(Style { name, width_factor: rec.real(41, 1.0) });
+        self.styles.push(Style { name, width_factor: rec.real(41, 0.0) });
     }
 
     // -- entities
@@ -1117,21 +1142,29 @@ impl Plugin {
             2 => HJustify::Center,
             _ => HJustify::Right,
         };
-        // dxflib: the text direction is the X direction vector (group 11, 21) when there is one, else the angle (group 50, degrees).
-        let angle_degree = if rec.get(11).is_some() {
+        // `DL_Dxf::addMText`: the angle (group 50) when there is one -- radians, as the DXF spec has it, unless the file says dxflib above 2.0.2.0 wrote it (degrees)
+        // --, else the X direction vector (groups 11 and 21, both), else none; `DXF_IMPORT_PLUGIN::addMText` turns the radians into degrees.
+        let angle_rad = if rec.get(50).is_some() {
+            if self.lib_version <= 0x0200_0200 {
+                rec.real(50, 0.0)
+            } else {
+                rec.real(50, 0.0) * 2.0 * std::f64::consts::PI / 360.0
+            }
+        } else if rec.get(11).is_some() && rec.get(21).is_some() {
             let (x, y) = (rec.real(11, 0.0), rec.real(21, 0.0));
             if x.abs() < 1.0e-6 {
                 if y > 0.0 {
-                    90.0
+                    std::f64::consts::PI / 2.0
                 } else {
-                    270.0
+                    std::f64::consts::PI / 2.0 * 3.0
                 }
             } else {
-                (y / x).atan().to_degrees()
+                (y / x).atan()
             }
         } else {
-            rec.real(50, 0.0)
+            0.0
         };
+        let angle_degree = angle_rad * 180.0 / std::f64::consts::PI;
         self.emit_text(textpos, text, text_height, char_width, thickness, angle_degree, h, v, text_width);
     }
 

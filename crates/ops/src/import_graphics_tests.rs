@@ -229,8 +229,31 @@ fn text_becomes_a_board_text_on_the_layer() {
     b.apply(&Cmd::ImportGraphics(req(dxf, "F.SilkS"))).unwrap();
     let t = drawings(&b).texts.iter().find(|t| t.content == "REV A").unwrap();
     assert_eq!((t.layer.as_str(), t.size_nm, t.angle, t.justify), ("F.SilkS", mm(2.0), 90_000, TextJustify::Left));
-    // Baseline justified (bottom): the board's text is centred, so the anchor moved up half a height along the text's own up (here to the left).
-    assert_eq!((t.at.x, t.at.y), (mm(4.0), mm(-5.0)), "{t:?}");
+    // `GRAPHICS_IMPORTER_PCBNEW::AddText`: the anchor is the file's point, and the vertical justification (bottom, the baseline) is the text's own; the glyph width is
+    // `0.9 * height` (`DXF_IMPORT_PLUGIN::addText`, a text with no style), kept beside the text
+    assert_eq!((t.at.x, t.at.y), (mm(5.0), mm(-5.0)), "{t:?}");
+    let extra = drawings(&b).text_extras.iter().find(|e| e.id == t.id).expect("the text's extra");
+    assert_eq!((extra.valign, extra.width_nm), (eda_model::ir::TextVAlign::Bottom, Some(mm(1.8))), "{extra:?}");
+}
+
+/// `DXF_IMPORT_PLUGIN::addMText` and dxflib's `addMText`: an MTEXT's angle (group 50) is in radians -- as the DXF spec has it, and as dxflib reads it unless the file says a
+/// dxflib above 2.0.2.0 wrote it --; its attachment point (group 71) is its justification; KiCad keeps an empty text.
+#[test]
+fn an_mtext_is_turned_by_its_angle_in_radians_and_justified_by_its_attachment_point() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nMTEXT\n10\n5\n20\n5\n40\n2\n71\n5\n1\nNOTE\n50\n1.5707963267948966\n0\nTEXT\n10\n0\n20\n0\n40\n1\n1\n\n0\nENDSEC\n0\nEOF\n".to_string();
+    b.apply(&Cmd::ImportGraphics(req(dxf, "F.SilkS"))).unwrap();
+    let t = drawings(&b).texts.iter().find(|t| t.content == "NOTE").unwrap();
+    assert_eq!((t.angle, t.justify, (t.at.x, t.at.y)), (90_000, TextJustify::Center, (mm(5.0), mm(-5.0))), "{t:?}");
+    let extra = drawings(&b).text_extras.iter().find(|e| e.id == t.id);
+    assert!(extra.is_none_or(|e| e.valign == eda_model::ir::TextVAlign::Center), "attachment 5 is the middle centre: {extra:?}");
+    assert!(drawings(&b).texts.iter().any(|t| t.content.is_empty()), "the empty TEXT is a text, as KiCad adds it");
+    // a file dxflib 2.5 wrote has its MTEXT angle in degrees
+    let mut b = board(&m);
+    let dxf = "999\ndxflib 2.5.0.0\n0\nSECTION\n2\nENTITIES\n0\nMTEXT\n10\n5\n20\n5\n40\n2\n1\nNOTE\n50\n45\n0\nENDSEC\n0\nEOF\n".to_string();
+    b.apply(&Cmd::ImportGraphics(req(dxf, "F.SilkS"))).unwrap();
+    assert_eq!(drawings(&b).texts.iter().find(|t| t.content == "NOTE").unwrap().angle, 45_000);
 }
 
 #[test]
