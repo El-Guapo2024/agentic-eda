@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
+import { slidePattern } from "../components/canvas/tuneRouting";
 import type { NewZoneSettings } from "../kicad-port/pcbDrawZone";
 import type { FpDimDraw } from "../kicad-port/fpDrawTools";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
@@ -2418,6 +2419,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const settle = async (sent: boolean, ok: boolean) => {
         if (carrying && (!sent || !ok)) await postCarry("commit");
       };
+      // A tuning pattern moved on its own (`doMoveSelection` of a lone generator, `genStartEdit` / `genUpdateEdit` / `genFinishEdit`): it slides along its track
+      // and is tuned again there, not carried off it (components/canvas/tuneRouting.ts `slidePattern`)
+      if (kind === "pcb" && refs.length === 1 && !rotateQuarterTurns && !flipped && !(ops?.length) && !carrying && !(stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0)) {
+        const pattern = stateRef.current.board?.drawings?.tuning_patterns?.find((p) => p.id === refs[0]);
+        if (pattern) {
+          if (dxNm !== 0 || dyNm !== 0) await slidePattern(dispatch, api, pattern, dxNm, dyNm);
+          advanceMoveQueue();
+          return;
+        }
+      }
       // Any mix of PCB items: turned and flipped about where it was picked up, then moved, as one batch (`planCarry`).
       if (kind === "pcb") {
         const board = stateRef.current.board;

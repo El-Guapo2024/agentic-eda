@@ -219,7 +219,7 @@ mod tests {
         let mut rules = BoardRules::default();
         rules.layers = vec!["F.Cu".into(), "B.Cu".into()];
         rules.clearance = mm(0.2);
-        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules }
+        LengthEnv { stackup: eda_model::rules::default_stackup(2, mm(1.6)), rules, pad_to_die: Default::default() }
     }
 
     fn settings(target_nm: i64) -> MeanderSettings {

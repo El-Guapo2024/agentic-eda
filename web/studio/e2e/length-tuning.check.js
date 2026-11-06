@@ -168,11 +168,19 @@
   await scenario("a pattern is placed: the meander is of the length asked, the keys step it, the second click puts it on the board as one undo step", async (t) => {
     key("7");
     await sleep(200);
-    // the tool keeps the settings of the dialog: the target is still there
+    // entering the tool again starts from Board Setup's page again (`PlaceTuningPattern`: `meanderSettings = bds.m_SingleTrackMeanderSettings`, a local of each
+    // run of the tool; the dialog does not write the board's defaults): no target, so the dialog is asked for it again
+    await E.run("pcbnew.LengthTuner.Settings");
+    await sleep(400);
+    const f0 = fields();
+    t(f0.length >= 9 && f0[0].value === "", `the tool starts again from the page, no target: ${JSON.stringify(f0.map((x) => x.value))}`);
+    if (f0[0]) setVal(f0[0], String(targetMm));
+    await sleep(100);
+    await press("OK");
     let n = replies.length;
     await clickAt(startX, pa0[0][1]);
     const s = await waitReply("start", n);
-    t(s && s.body.ok === true && s.req.settings && s.req.settings.target_length === targetMm * 1e6, "the tool keeps what the dialog set");
+    t(s && s.body.ok === true && s.req.settings && s.req.settings.target_length === targetMm * 1e6, "the tool takes what the dialog set");
     const m = await moveTo(endX, pa0[0][1] - 400_000);
     t(m && m.ok && m.moved === true, `moving the cursor fits the meander: ${m && JSON.stringify([m.ok, m.moved, m.message])}`);
     t(m && m.readout && m.readout.status === "tuned" && near(m.readout.current, targetMm, 0.1), `it reads ${targetMm} mm, tuned: ${m && JSON.stringify(m.readout)}`);
