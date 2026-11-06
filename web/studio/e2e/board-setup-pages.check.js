@@ -400,7 +400,9 @@
       let p = await openPage("Formatting");
       const order = nav();
       const after = (a, b) => order.indexOf(a) >= 0 && order.indexOf(b) === order.indexOf(a) + 1;
-      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
+      // KiCad 25ec2335's `DIALOG_BOARD_SETUP`: Drill Chart is the last page of Board Stackup, right after Solder Mask/Paste; 8303b2ad's Zone Hatch Offsets
+      // (25ec2335 moved it into Design Rules > Zones, which the studio has not) follows it, the last of the group as it was in 8303b2ad.
+      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Drill Chart") && after("Drill Chart", "Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
       const stored = async () => (await state()).board_rules;
       const formattingBefore = JSON.stringify((await stored()).formatting);
       const dash = () => p.querySelector('input[aria-label="Dash length"]');

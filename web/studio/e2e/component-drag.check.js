@@ -10,7 +10,7 @@
 //   eda board serve -C board --port 8840 --ui web/studio/dist
 //
 // What it checks:
-//   component  R1 placed at (10, 10) (and R2 in a corner) with a track on each pad (PA0 from R1.1 up and west, LED1 from R1.2 down and east). The pointer on R1.1 and D (nothing selected:
+//   component  R1 placed at (10, 10) (and R2 in a corner) with a track on each pad (PA0 from R1.1 up and west, LED1 from R1.2 down and east). The pointer on R1.1 (clear of PA0's end: `G1`) and D (nothing selected:
 //              the footprint under the cursor is the hover selection) starts a component drag at R1's anchor (`drag: "component"`, `start` = R1's position, where KiCad
 //              warps the cursor); a click before the pointer has moved does nothing (`hasMouseMoved`); moving the pointer 2 mm east and 3 mm south moves R1 by that
 //              (`offset`) with both tracks following (`fanout`, their ends on the pads' new centres); the click commits: R1 at (12, 13), each track from its pad's new centre
@@ -130,11 +130,17 @@
   st = await state();
   const withR1 = snapshot(st);
   const r1Tracks = (s) => tracksOf(s).filter((t) => t.net === pad1.net || t.net === pad2.net);
+  // Where D is pressed: on R1.1 but off PA0, which ends at the pad's centre. At the centre the track is under the cursor too, and `EDIT_TOOL::Drag`'s
+  // selection filter (`FilterCollectorForFreePads`, then `GuessSelectionCandidates` since it holds a track) weighs R1 against it: the track's area is
+  // `width * width` (`FOOTPRINT::GetCoverageArea`), far smaller, and R1 is kept only while its `CoverageRatio` -- its pads, its texts and fields grown by the
+  // collector's 5 pixels, the track -- is over 0.70; on this board at this zoom it is 0.76 or so, which leaves both and asks (`doSelectionMenu`). 0.4 mm
+  // below the centre, still on the pad, the track is past the collector's reach and R1 alone is under the cursor: the component drag.
+  const G1 = [P1[0], P1[1] + 400_000];
 
   await scenario("component", async (t) => {
     await clearSelection();
     t(E.state().selection.length === 0, "nothing is selected");
-    await pointerTo(P1[0], P1[1]);
+    await pointerTo(G1[0], G1[1]);
     let n = replies.length;
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
     const s = await waitReply("drag_start", n);
@@ -145,21 +151,21 @@
     t(E.state().tool === "drag", `the drag tool is active: ${E.state().tool}`);
     // a click before the pointer moves does nothing
     n = replies.length;
-    const [cx, cy] = w2c(P1[0], P1[1]);
+    const [cx, cy] = w2c(G1[0], G1[1]);
     fire("pointerdown", cx, cy, {});
     await sleep(40);
     fire("pointerup", cx, cy, {});
     await sleep(500);
     t(!replies.slice(n).some((r) => r.name === "drag_finish") && E.state().tool === "drag", "a click before any move commits nothing; the drag goes on");
     // 2 mm east, 3 mm south
-    const m = await moveTo(P1[0] + 2_000_000, P1[1] + 3_000_000);
+    const m = await moveTo(G1[0] + 2_000_000, G1[1] + 3_000_000);
     t(m && JSON.stringify(m.body.offset) === JSON.stringify([2_000_000, 3_000_000]), `R1 follows the cursor from its anchor: offset ${m && JSON.stringify(m.body.offset)}`);
     t(m && m.body.colliding === false, `the drag is clear: ${m && m.body.colliding}`);
     const N1 = [P1[0] + 2_000_000, P1[1] + 3_000_000], N2 = [P2[0] + 2_000_000, P2[1] + 3_000_000];
     const fan = m ? m.body.fanout : [];
     t(fan.length === 2 && fan.some((l) => nearPt(l.pts[0], N1) || nearPt(l.pts[l.pts.length - 1], N1)) && fan.some((l) => nearPt(l.pts[0], N2) || nearPt(l.pts[l.pts.length - 1], N2)), `both tracks follow their pads: ${JSON.stringify(fan.map((l) => [l.pts[0], l.pts[l.pts.length - 1]]))}`);
     n = replies.length;
-    await clickAt(N1[0], N1[1]);
+    await clickAt(G1[0] + 2_000_000, G1[1] + 3_000_000);
     const f = await waitReply("drag_finish", n);
     t(f && f.body.ok === true, `the click commits: ${f && JSON.stringify(f.body)}`);
     await settle();
@@ -179,12 +185,12 @@
 
   await scenario("esc", async (t) => {
     await clearSelection();
-    await pointerTo(P1[0], P1[1]);
+    await pointerTo(G1[0], G1[1]);
     let n = replies.length;
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
     const s = await waitReply("drag_start", n);
     t(s && s.body.drag === "component", `D starts a component drag: ${s && s.body.drag}`);
-    const m = await moveTo(P1[0] + 1_000_000, P1[1] - 2_000_000);
+    const m = await moveTo(G1[0] + 1_000_000, G1[1] - 2_000_000);
     t(m && m.body.ok === true, "a move");
     n = replies.length;
     await E.run("common.Interactive.cancel");
@@ -203,15 +209,15 @@
     await settle();
     const withGnd = snapshot(await state());
     await clearSelection();
-    await pointerTo(P1[0], P1[1]);
+    await pointerTo(G1[0], G1[1]);
     let n = replies.length;
     await E.run("pcbnew.InteractiveRouter.Drag45Degree");
     await waitReply("drag_start", n);
-    const m = await moveTo(P1[0], 22_000_000);
+    const m = await moveTo(G1[0], G1[1] + 22_000_000 - P1[1]);
     t(m && m.body.colliding === true, `R1 on the GND track collides: ${m && m.body.colliding}`);
     const errs = E.errors().length;
     n = replies.length;
-    await clickAt(P1[0], 22_000_000);
+    await clickAt(G1[0], G1[1] + 22_000_000 - P1[1]);
     const f = await waitReply("drag_finish", n);
     await sleep(500);
     t(f && f.body.ok === false && f.body.refused === true && f.body.dragging === false, `the click is refused and the drag is over: ${f && JSON.stringify(f.body)}`);

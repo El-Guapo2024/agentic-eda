@@ -318,11 +318,25 @@
     const partsBefore = (await board()).parts.length;
     check("nothing came of the refusals", (await board()).parts.length === partsBefore && added(await board()).length === base.shapes);
 
-    // Under strict (the default) a command that makes the board worse is refused, as any other is: the part would land outside this 35 x 35 mm board.
-    await hover(...C);
-    const strictRefusal = await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
-    const afterStrict = await board();
-    check("in strict mode an append that makes the board worse is refused with the reason, and nothing is added or carried", /refused because --strict/.test(strictRefusal.toast ?? "") && afterStrict.parts.length === partsBefore && added(afterStrict).length === base.shapes && E.state().tool === "select", JSON.stringify([strictRefusal.toast, E.state().tool]));
+    // Under strict (the default) a command that makes the board worse is refused, as any other is -- a carried placement at its drop, which is what the gates
+    // judge of it (the append is on the cursor until then, not put down: crates/cli/src/carry.rs), and a refused drop leaves nothing of the append behind. The
+    // part would land outside this 35 x 35 mm board. KiCad's `AppendBoard` has no such refusal: Strict is the studio's own (UI-LEFT P7).
+    const errorToasts = (from) => E.errors().slice(from).map((x) => x.message);
+    for (const [how, to] of [["dropped where it was put (a click before any move)", C], ["moved and dropped", [C[0] + 2_000_000, C[1] + 2_000_000]]]) {
+      await hover(...C);
+      const errs = E.errors().length;
+      const strictAppend = await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
+      await sleep(800);
+      const carried = E.state().tool === "move";
+      await hover(...to);
+      const [tx, ty] = w2c(...to);
+      fire("pointerdown", tx, ty, 1);
+      fire("pointerup", tx, ty);
+      await sleep(1500);
+      const afterStrict = await board();
+      const said = errorToasts(errs);
+      check(`in strict mode an append that makes the board worse is carried, then refused at its drop with the reason (${how}), and nothing is added or carried`, carried && said.some((m) => /refused because --strict/.test(m)) && afterStrict.parts.length === partsBefore && added(afterStrict).length === base.shapes && E.state().tool === "select", JSON.stringify([strictAppend.toast, carried, said, afterStrict.parts.length - partsBefore, added(afterStrict).length - base.shapes, E.state().tool]));
+    }
     const strictBox = () => [...document.querySelectorAll("label")].find((l) => l.textContent.trim() === "strict")?.querySelector("input");
     const wasStrict = strictBox()?.checked;
     if (wasStrict) { strictBox().click(); await sleep(300); }
