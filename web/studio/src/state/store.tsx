@@ -46,6 +46,7 @@ import { inEnteredGroup } from "../kicad-port/groupEdit";
 import { DEFAULT_BOARD_CONTROL, localRatsnestPadsAfter, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
 import { reduceView, type AppearanceOp, type ViewSlice } from "../kicad-port/appearanceOps";
+import { selectionFilterFromJson } from "../kicad-port/selectionFilterRows";
 import { applyAppearanceFile } from "../kicad-port/appearanceFile";
 import { netsContext } from "../kicad-port/appearanceNets";
 import { highlightedNets } from "../kicad-port/boardControl";
@@ -1769,8 +1770,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, bcx: { ...state.bcx, ...action.patch } };
     case "APPEARANCE":
       return withViewSlice(state, reduceView(viewSliceOf(state), action.op, netsContext(state.board)));
-    case "APPEARANCE_LOAD":
-      return withViewSlice(state, applyAppearanceFile(viewSliceOf(state), action.file, { copper: state.board?.layers ?? [] }));
+    case "APPEARANCE_LOAD": {
+      // ... and the Selection Filter, which KiCad keeps with the same local settings (`m_PcbSelectionFilter`, kicad-port/selectionFilterRows.ts)
+      const local = typeof action.file === "object" && action.file !== null ? (action.file as { local?: { selection_filter?: unknown } }).local : undefined;
+      const loaded = withViewSlice(state, applyAppearanceFile(viewSliceOf(state), action.file, { copper: state.board?.layers ?? [] }));
+      return { ...loaded, selectionFilter: selectionFilterFromJson(loaded.selectionFilter, local?.selection_filter) };
+    }
     case "SET_NEXT_ZONE_IS_RULE_AREA":
       // Arming a plain zone/rule-area draw also drops any pending cutout/similar mode (pcbx.zoneDrawMode).
       return { ...state, nextZoneIsRuleArea: action.value, pcbx: { ...state.pcbx, zoneDrawMode: null } };

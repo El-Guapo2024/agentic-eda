@@ -4,8 +4,13 @@
 // subset of KiCad's real categories this app's model has a selectable
 // equivalent for -- see that file's own doc comment for what's
 // deliberately left out).
+// A row's right-click menu offers "Only <row>" (`onRightClick` / `onPopupSelection`, kicad-port/selectionFilterRows.ts); the filter is the project's, kept with the
+// Appearance panel's settings (`appearance.json`, the derived `.kicad_prl`'s `board.selection_filter`).
+import { useState } from "react";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import type { SelectionFilter } from "../canvas/selectionCandidates";
+import { ContextMenu } from "../canvas/ContextMenu";
+import { onlyFilter, onlyLabel } from "../../kicad-port/selectionFilterRows";
 
 // `PANEL_SELECTION_FILTER`'s rows in its order (panel_selection_filter_base.cpp): Footprints, Text, Tracks, Vias, Pads, Graphics, Zones, Rule Areas,
 // Dimensions, Points, Other items.
@@ -28,6 +33,8 @@ export function SelectionFilterPanel() {
   const dispatch = useStudioDispatch();
   const f = state.selectionFilter;
   const allOn = ROWS.every((r) => f[r.key] !== false);
+  /** The row a right-click opened the "Only ..." menu on (`m_onlyCheckbox`), and where. */
+  const [menu, setMenu] = useState<{ key: (typeof ROWS)[number]["key"]; label: string; x: number; y: number } | null>(null);
   return (
     <div className="panel-section">
       <h3>Selection Filter</h3>
@@ -45,11 +52,27 @@ export function SelectionFilterPanel() {
         Locked items
       </label>
       {ROWS.map((r) => (
-        <label className="filter-row" key={r.key}>
+        <label
+          className="filter-row"
+          key={r.key}
+          data-filter-row={r.key}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setMenu({ key: r.key, label: r.label, x: e.clientX, y: e.clientY });
+          }}
+        >
           <input type="checkbox" checked={f[r.key] !== false} onChange={(e) => dispatch({ type: "SET_SELECTION_FILTER", filter: { [r.key]: e.target.checked } })} />
           {r.label}
         </label>
       ))}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          entries={[{ label: onlyLabel(menu.label), onSelect: () => dispatch({ type: "SET_SELECTION_FILTER", filter: onlyFilter(f, menu.key as Parameters<typeof onlyFilter>[1]) }) }]}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }
