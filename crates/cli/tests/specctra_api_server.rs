@@ -267,7 +267,7 @@ fn kicads_session_import_and_ours_put_the_same_routing_on_every_example_board() 
             assert_eq!(k["placement"]["footprints"], o["placement"]["footprints"], "{name}: every part");
             rows.push(format!("{name:28} moved {}: {} (both ways)", words[0], fp(&k)));
 
-            // A part the board has not got: KiCad 25ec2335 skips it and imports the rest (`m_skippedCount`); our port of 8303b2ad refuses the session.
+            // A part the board has not got: KiCad 25ec2335 skips it and imports the rest (`m_skippedCount`); since task-u4-import our port does the same.
             let other = text.replacen("(place ", "(place NOPE_", 1);
             let bad = dir.join("other.ses");
             std::fs::write(&bad, other).unwrap();
@@ -279,7 +279,8 @@ fn kicads_session_import_and_ours_put_the_same_routing_on_every_example_board() 
             let b = board("eda-other");
             std::fs::write(b.join("design.json"), serde_json::to_string_pretty(&stripped).unwrap()).unwrap();
             let (good, log) = eda(&["board", "import-ses", bad.to_str().unwrap(), "-C", b.to_str().unwrap()], &[("EDA_KICAD_API", "0")]);
-            assert!(!good && log.contains("Reference 'NOPE_"), "{name}: our port refuses it in 8303b2ad's words: {log}");
+            assert!(good && log.contains("1 session item(s) were skipped due to unresolved reference, layer, or padstack."), "{name}: our port skips it as 25ec2335 does: {log}");
+            assert_eq!(tracks(&design(&b)), kt_, "{name}: and imports the same routing as KiCad");
         }
         compared += 1;
     }
