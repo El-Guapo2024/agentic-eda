@@ -1224,7 +1224,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
-    let flashed = eda_connectivity::flashed_layers(&design, &model);
+    // With the layers the last fill forced them to flash on (`ZLO_FORCE_FLASHED`, kicad-cli's, kept in the fill cache).
+    let forced = eda_kicad::zone_fills::load(dir).map(|f| f.forced).unwrap_or_default();
+    let flashed = eda_connectivity::flashed_layers_with_forced(&design, &model, &forced);
     let block_of: std::collections::HashMap<String, String> = view["parts"]
         .as_array()
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())

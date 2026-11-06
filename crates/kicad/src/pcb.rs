@@ -62,7 +62,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // (`unconnected-(U1-NC1-Pad12)`, `SCH_PIN::GetDefaultNetName( .., aForceNoConnect = true )`), which Update PCB from Schematic puts on the pad
     // (`BOARD_NETLIST_UPDATER::updateComponentPadConnections`). A footprint read from a KiCad file keeps the pads the file gave no net.
     let unconnected = unconnected_pin_nets(design, model, &footprints, &parts_by_ref);
-    let from_schematic = FromSchematic { unconnected: unconnected.clone(), root_sheetfile: format!("{}.kicad_sch", meta.title) };
+    let from_schematic = FromSchematic { unconnected: unconnected.clone(), root_sheetfile: format!("{}.kicad_sch", meta.title), forced: fills.map(|f| f.forced.clone()).unwrap_or_default() };
     // Net name -> number, sorted by name, 1-indexed (0 is the unconnected net).
     let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).chain(unconnected.values().map(String::as_str)).collect();
     net_names.sort();
@@ -422,8 +422,13 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
             }
             let uuid = crate::duid_for(&seed, &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
-            // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them.
-            let (kind, tokens) = crate::via_io::words(design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)));
+            // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them, the layers the last fill
+            // forced it to flash on in its `(zone_layer_connections ..)`.
+            let mut extra = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)).cloned();
+            if let Some(e) = extra.as_mut() {
+                with_forced_layers(&mut e.tokens, fills.and_then(|f| f.forced.get(&v.id)));
+            }
+            let (kind, tokens) = crate::via_io::words(extra.as_ref());
             writeln!(
                 out,
                 "\t(via{kind} (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}){tokens}{lock} (net {n}) (uuid \"{uuid}\"))",
@@ -1190,6 +1195,18 @@ pub(crate) struct FromSchematic {
     pub unconnected: BTreeMap<String, String>,
     /// The root sheet's file (`<title>.kicad_sch`): the `(sheetfile ..)` of a footprint whose symbol is on the root.
     pub root_sheetfile: String,
+    /// The layers the last fill forced a pad (`REF.NUM`) or via (its id) to flash on (`KicadFills::forced`, `ZLO_FORCE_FLASHED`): written as the item's
+    /// `(zone_layer_connections ..)`, as KiCad's writer writes its overrides, so that a DRC that does not refill sees the flashing the fill made.
+    pub forced: BTreeMap<String, Vec<String>>,
+}
+
+/// `tokens` with their `(zone_layer_connections ..)` naming `layers` (`format( const PAD* )`, `format( const PCB_TRACK* )`: the layers whose override is
+/// `ZLO_FORCE_FLASHED`), for an item that has the token (one that removes its unconnected layers); an item without it is left as it is.
+pub(crate) fn with_forced_layers(tokens: &mut [String], layers: Option<&Vec<String>>) {
+    let Some(layers) = layers else { return };
+    for t in tokens.iter_mut().filter(|t| t.starts_with("(zone_layer_connections")) {
+        *t = format!("(zone_layer_connections{})", layers.iter().map(|l| format!(" {}", sexpr_str(l))).collect::<String>());
+    }
 }
 
 /// The nets the derived board gives the pads the model has on no net: "REF.PIN" -> `unconnected-(..)` (a pin the schematic has alone, its own net in
@@ -1613,6 +1630,11 @@ pub(crate) fn write_footprint(
         let stack_modelled = !pad.ext.stack.is_default();
         if pad.kind == PadKind::ThroughHole {
             out.push_str(&crate::padstack_io::unconnected_text(pad.ext.stack.unconnected));
+            // the layers the last fill forced it to flash on, for a pad whose file kept no `(zone_layer_connections ..)` of its own (`format( const PAD* )`)
+            let kept_own = pad_infos.and_then(|p| p.get(pad_idx)).is_some_and(|i| i.tokens.iter().any(|t| t.starts_with("(zone_layer_connections")));
+            if let (true, false, Some(layers)) = (pad.ext.stack.unconnected.removes(), kept_own, from_schematic.forced.get(&format!("{}.{}", fp.id, pad.number))) {
+                write!(out, " (zone_layer_connections{})", layers.iter().map(|l| format!(" {}", sexpr_str(l))).collect::<String>()).unwrap();
+            }
         }
         // A non-plated hole has no net by definition -- nothing to look up.
         if pad.kind != PadKind::NonPlatedHole {
@@ -1638,7 +1660,8 @@ pub(crate) fn write_footprint(
         }
         // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..), with what a pad
         // edit sets of them in their place (the fabrication property, the pad-to-die length and delay, the teardrop parameters).
-        let kept = crate::fp_fields::pad_kept_tokens(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default(), pad_edit);
+        let mut kept = crate::fp_fields::pad_kept_tokens(pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default(), pad_edit);
+        with_forced_layers(&mut kept, from_schematic.forced.get(&format!("{}.{}", fp.id, pad.number)));
         for token in &kept {
             // A design from before the padstack was modelled kept these as tokens; once the pad has a padstack of its own they are written from it.
             if stack_modelled && ["(remove_unused_layers", "(keep_end_layers", "(padstack"].iter().any(|t| token.starts_with(t)) {

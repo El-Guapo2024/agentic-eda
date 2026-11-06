@@ -1124,7 +1124,10 @@ pub fn refill_zones(design: &Design, model: &ConstraintModel, work: &Path) -> Re
     let mut map = map;
     map.extend(eda_kicad::zone_fills::teardrop_keys(design));
     let zones = eda_kicad::zone_fills::entries_by_zone(design, eda_kicad::zone_fills::scan_zone_fills(&refilled), &map);
-    Ok(KicadFills::new(engine, String::new(), started.elapsed().as_millis() as u64, zones))
+    let mut fills = KicadFills::new(engine, String::new(), started.elapsed().as_millis() as u64, zones);
+    // The layers the fill forced the pads and vias that remove their unconnected layers to flash on (`ZLO_FORCE_FLASHED`, UI-LEFT P3).
+    fills.forced = eda_kicad::zone_fills::forced_by_item(eda_kicad::zone_fills::scan_zone_layer_connections(&refilled), &map);
+    Ok(fills)
 }
 
 /// Every DRC check set to `ignore` in a derived project, so kicad-cli runs none of them.

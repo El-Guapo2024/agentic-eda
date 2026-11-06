@@ -105,13 +105,18 @@ pub struct KicadFills {
     /// Zone id -> its fill.
     #[serde(default)]
     pub zones: BTreeMap<String, ZoneEntry>,
+    /// The layers the fill told a pad or a via that removes its unconnected layers to flash on (`ZLO_FORCE_FLASHED`: `ZONE_FILLER::Fill` sets it where a zone of the
+    /// item's net covers it, and `PAD::FlashLayer` / `PCB_VIA::FlashLayer` then keep the ring there), as kicad-cli saved them (`(zone_layer_connections "In1.Cu" ..)`):
+    /// a via by its id, a pad by `REF.NUM`. Kept until the next fill, as KiCad keeps the overrides. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub forced: BTreeMap<String, Vec<String>>,
 }
 
 impl KicadFills {
     pub const SCHEMA: u32 = 3;
 
     pub fn new(engine: String, revision: String, millis: u64, zones: BTreeMap<String, ZoneEntry>) -> Self {
-        KicadFills { schema: Self::SCHEMA, engine, revision, millis, zones }
+        KicadFills { schema: Self::SCHEMA, engine, revision, millis, zones, forced: BTreeMap::new() }
     }
 
     /// How long kicad-cli took, in seconds.
@@ -256,6 +261,8 @@ impl KicadFills {
                 self.engine = fresh.engine;
                 self.revision = fresh.revision;
                 self.millis = fresh.millis;
+                // `ZONE_FILLER::Fill` works the flash overrides out again for every pad and via, whichever zones it fills
+                self.forced = fresh.forced;
             }
         }
     }
@@ -507,6 +514,74 @@ pub fn scan_zone_fills(text: &str) -> Vec<ScannedFill> {
         }
     }
     out
+}
+
+/// Every pad and via of a `.kicad_pcb` whose `(zone_layer_connections ..)` names a layer (`ZLO_FORCE_FLASHED`, written by `format( const PAD* )` and `format( const
+/// PCB_TRACK* )` for an item that removes its unconnected layers): the item's `(uuid ..)` and the layers, in the file's order. Read off the text without a tree, as
+/// [`scan_zone_fills`] reads the fills.
+pub fn scan_zone_layer_connections(text: &str) -> Vec<(String, Vec<String>)> {
+    const KEY: &str = "(zone_layer_connections";
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(KEY).map(|i| from + i) {
+        from = at + KEY.len();
+        // the layers: quoted words up to the list's `)`
+        let close = text[from..].find(')').map_or(text.len(), |i| from + i);
+        let layers: Vec<String> = text[from..close].split('"').skip(1).step_by(2).map(str::to_string).collect();
+        if layers.is_empty() {
+            continue;
+        }
+        // the list it is in: walk back to the `(` one level up
+        let mut depth = 0i32;
+        let mut start = None;
+        let mut i = at;
+        while i > 0 {
+            i -= 1;
+            match b[i] {
+                b')' => depth += 1,
+                b'(' if depth == 0 => {
+                    start = Some(i);
+                    break;
+                }
+                b'(' => depth -= 1,
+                _ => {}
+            }
+        }
+        let Some(start) = start else { continue };
+        let head = &text[start + 1..(start + 8).min(text.len())];
+        if !(head.starts_with("pad ") || head.starts_with("via ") || head.starts_with("via\n")) {
+            continue;
+        }
+        // its uuid: the `(uuid ..)` of the list itself, at depth one
+        let mut depth = 0i32;
+        let mut j = start + 1;
+        let mut uuid = None;
+        while j < b.len() {
+            match b[j] {
+                b'(' => {
+                    if depth == 0 && text[j..].starts_with("(uuid ") {
+                        uuid = text[j + 6..].trim_start().strip_prefix('"').and_then(|r| r.split('"').next()).map(str::to_string);
+                        break;
+                    }
+                    depth += 1;
+                }
+                b')' if depth == 0 => break,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            j += 1;
+        }
+        if let Some(u) = uuid {
+            out.push((u, layers));
+        }
+    }
+    out
+}
+
+/// [`scan_zone_layer_connections`] keyed by our ids (`ids` mapping the uuid an item was written with to its id): a via's id, a pad's `REF.NUM`.
+pub fn forced_by_item(scanned: Vec<(String, Vec<String>)>, ids: &HashMap<String, String>) -> BTreeMap<String, Vec<String>> {
+    scanned.into_iter().filter_map(|(uuid, layers)| ids.get(&uuid).map(|id| (id.clone(), layers))).collect()
 }
 
 /// The fill of each zone of `design` as the scanned fills of a `.kicad_pcb` hold it, `ids` mapping the uuid a zone was written with in that file to its id. A zone
@@ -969,6 +1044,24 @@ pub fn fmt_nm(v: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// UI-LEFT P3: the layers a fill forced a pad or a via to flash on, read off kicad-cli's saved board by the item's uuid; an empty list is no override.
+    #[test]
+    fn the_zone_layer_connections_of_pads_and_vias_are_read_by_their_uuid() {
+        let text = r#"(kicad_pcb
+  (footprint "L:F" (layer "F.Cu") (uuid "fp-1") (at 1 1)
+    (pad "1" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask") (remove_unused_layers yes) (keep_end_layers yes) (zone_layer_connections "In1.Cu" "In2.Cu") (net 1 "A") (uuid "pad-1"))
+    (pad "2" thru_hole circle (at 2 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask") (remove_unused_layers yes) (keep_end_layers yes) (zone_layer_connections) (uuid "pad-2"))
+  )
+  (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (remove_unused_layers yes) (keep_end_layers yes) (zone_layer_connections "In1.Cu") (net 1) (uuid "via-1"))
+)"#;
+        let scanned = scan_zone_layer_connections(text);
+        assert_eq!(scanned, vec![("pad-1".to_string(), vec!["In1.Cu".to_string(), "In2.Cu".to_string()]), ("via-1".to_string(), vec!["In1.Cu".to_string()])]);
+        let ids: HashMap<String, String> = [("pad-1".to_string(), "J1.1".to_string()), ("via-1".to_string(), "v1".to_string())].into_iter().collect();
+        let forced = forced_by_item(scanned, &ids);
+        assert_eq!(forced.get("J1.1").map(Vec::len), Some(2));
+        assert_eq!(forced.get("v1"), Some(&vec!["In1.Cu".to_string()]));
+    }
+
     use eda_model::units::mm;
     use eda_model::units::Nm;
     use super::*;
