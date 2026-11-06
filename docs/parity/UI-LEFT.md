@@ -300,35 +300,39 @@ Notes:
   - ~~D on several tracks does nothing (MULTI_DRAGGER).~~ Done: the selected tracks drag together, in the three router modes.
   - Left: the multi-track Shove has no springback; the selection is not cleared at the start, restored on Esc, or set to the leader segments after a multi-track drag; the closest net is not highlighted while dragging; a footprint's own Edge.Cuts / Margin graphics stay (board shapes in this model).
   - L. GAPS 7 R7-R9; pns Stages 21-22.
-- **R2 [FM] Diff pairs.**
-  - No arcs in the pair router or the tuners (F4-2).
-  - The blind, buried and microvia commands do nothing in the pair tool.
-  - F finishes at the cursor.
-  - M. GAPS 7; pns Stages 11-12.
-- **R3 [BD] Length tuner.**
-  - No pad-to-die length or delay, and a time-domain rule gives no target.
-  - A pattern can't be moved or rotated.
-  - The corner style and single-sided settings are ignored.
-  - The status box sits at the cursor.
-  - M. GAPS 7; pns Stage 8; PARITY-pcb §35, §65.
-- **R4 [BD] Autoroute.** It routes inside the outline's summary polygon and ignores cutouts. M. GAPS 27.
-- **R5 [BD] Layers and vias.**
-  - V goes to the layer pair's other layer, not to the nearest ratsnest anchor's.
-  - The clearance isn't re-read after a layer switch.
-  - V armed before a route outlives the tool (R7-R6).
-  - Autoroute leaves the active layer changed (R7-R7).
-  - S. pns Stages 11-21.
+- **R2 [FM] Diff pairs. done (task-u3-router)** -- pns Stage 23.
+  - ~~No arcs in the pair router or the tuners (F4-2).~~ Done: a pair goes on from two arc track ends (`DP_PRIMITIVE_PAIR` / `BuildFromPrimitivePair` with `ARC_T`); the pair and skew tuners take an arc (`AssembleDiffPair` by centre and radius, `addCornersUntilIndex`'s `AddArc`). KiCad's pair placer itself draws mitered corners only.
+  - ~~The blind, buried and microvia commands do nothing in the pair tool.~~ Done: `DIFF_PAIR_PLACER::makeVia`'s via type, committed with it.
+  - ~~F finishes at the cursor.~~ Done: `ROUTER::Finish` with the P line, finished on the coupled pair at the nearest anchor, else the pair goes on.
+  - Left: from the arcs' ends a cursor steeply off their chord direction fits no head, in both modes (seen in the kicad-cli proof's setup; not compared with KiCad).
+  - M. GAPS 7; pns Stages 11-12, 23.
+- **R3 [BD] Length tuner. done (task-u3-router)** -- pns Stage 23 (branch `task-u3-router-tune`).
+  - ~~No pad-to-die length or delay, and a time-domain rule gives no target.~~ Done: the pads' `(die_length ..)` / `(die_delay ..)` count; a time-domain rule gives the target delay (`EditStart`).
+  - ~~A pattern can't be moved or rotated.~~ Done: moved, turned and flipped as a generator with other items; alone it slides along its track and is tuned again.
+  - ~~The corner style and single-sided settings are ignored.~~ Done: the tool's settings start from Board Setup's page each time it is entered.
+  - ~~The status box sits at the cursor.~~ Done: `TUNING_STATUS_VIEW_ITEM::ViewDraw`'s box at the mouse position.
+  - Left: the lone move previews rigidly (the slide is applied at the drop) and its start snaps to segments only; a pair pattern's merged outline; the pattern's message-panel lines; a lone pattern's Duplicate refusal; the time domain for a class whose profile has it off.
+  - M. GAPS 7; pns Stages 8, 23; PARITY-pcb §35, §65.
+- **R4 [BD] Autoroute. done (task-u3-router)**: the autoroute (Route, the FreeRouting port) routes round the board outline's cutouts, keep-outs on every copper layer as KiCad's DSN export writes them, the edge clearance kept from their rims; kicad-cli's DRC is clean. Left: the generated pours still cover the cutout (the fill clears it); FreeRouting's own reading of the cutout keep-out not re-dumped. M. GAPS 27.
+- **R5 [BD] Layers and vias. done (task-u3-router)** -- pns Stage 23.
+  - ~~V goes to the layer pair's other layer, not to the nearest ratsnest anchor's.~~ Done (`GetNearestRatnestAnchor`, the sizes' `PairedLayer`), for a route, a pair and V before a route.
+  - ~~The clearance isn't re-read after a layer switch.~~ Done: `updateSizesAfterRouterEvent` after every fix, via and layer switch (the width and a pair's gap too, as the placers' `UpdateSizes` allow); the message panel shows them.
+  - ~~V armed before a route outlives the tool (R7-R6).~~ Done.
+  - ~~Autoroute leaves the active layer changed (R7-R7).~~ Done.
+  - Left: the router sizes' layer pairs start afresh with each route (KiCad keeps the last route's via pair in `m_savedSizes`).
+  - S. pns Stages 11-21, 23.
 - **R6 [BD] The head's shape.**
   - A fan-out elbow isn't straightened (`optimizeTailHeadTransition`).
   - No hull snap in highlight-collisions mode.
   - `reduceTail` and `handlePullback` are not ported.
   - Earlier vias aren't shoved by a later leg.
   - M. pns Stages 2, 10, 12.
-- **R7 [BD] Grab radius and widths.**
-  - The start and end grab radius is a fixed 0.5 mm, not the grid size.
-  - Automatically Select Track Width stays on after a toolbar pick.
-  - The width keys cycle.
-  - S. pns Stage 12; PARITY-boardctl §4.
+- **R7 [BD] Grab radius and widths. done (task-u3-router)** -- pns Stage 23.
+  - ~~The start and end grab radius is a fixed 0.5 mm, not the grid size.~~ Done: the grid, measured to the copper (`pickSingleItem`'s `maxSlopRadius`, `snapToItem`), for routes, pairs and drags.
+  - ~~Automatically Select Track Width stays on after a toolbar pick.~~ Not KiCad's: at 8303b2ad a toolbar pick sets `m_TempOverrideTrackWidth` and leaves "Automatically select track width" on (`Tracks_and_Vias_Size_Event`'s `ID_AUX_TOOLBAR_PCB_TRACK_WIDTH`); the toolbar's Track Width and Via Size boxes, display-only before, now do exactly that.
+  - ~~The width keys cycle.~~ KiCad's already (Stage 18): the first press of a route at an inherited width overrides it, then the index steps and wraps, as `TrackWidthInc` / `Dec`.
+  - Left: `pickSingleItem`'s free-pad and no-net (Highlight collisions) special cases.
+  - S. pns Stages 12, 23; PARITY-boardctl §4.
 - **R8 [BD] Size dialogs.**
   - An extra Optimizer effort row, and "Use Custom Values…".
   - Pre-defined Sizes' Add isn't pre-filled, and a 0 width is refused.

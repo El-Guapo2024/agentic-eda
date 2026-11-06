@@ -909,9 +909,9 @@ either. The box's kicad-cli nightly, newer than 8303b2ad, has a `microvia_crosse
 default stackup has a core under each outer layer) is a DRC violation there. The kicad-cli proof uses a build-up stackup (prepreg outside).
 
 **Differences.** The implicit blind via on the F.Cu / B.Cu pair stays a blind via spanning the board, as in KiCad (the through conversion is
-tested before the implicit target is chosen). In the pair tool the via commands do nothing: the pair placer places through vias only (KiCad's
+tested before the implicit target is chosen). ~~In the pair tool the via commands do nothing: the pair placer places through vias only (KiCad's
 `DIFF_PAIR_PLACER::makeVia` takes the sizes' type and pair too). Place Through Via (V) is still the layer pair's other layer
-(`layerToggle`), not KiCad's nearest-ratsnest-anchor choice. The width menu's "Use Custom Values..." opens the dialog without first turning
+(`layerToggle`), not KiCad's nearest-ratsnest-anchor choice.~~ (Both done, Stage 23.) The width menu's "Use Custom Values..." opens the dialog without first turning
 custom sizes on (KiCad turns them on before the dialog, and leaves them on if it is cancelled). The dialog refuses a track width that is not
 a positive length (KiCad has no check).
 
@@ -966,7 +966,7 @@ item and not on a non-plated hole; Backspace takes a leg that ended in a via bac
 - `Router::commit_fixed` cuts the track the route ended in the middle of (`session_splits( true )`) also in Shove mode, where the
   commit is the newest locked frame's (`RewindToLastLockedNode`), which may not have reached that end.
 - `F` (AttemptFinish) with a via armed fixes the head with its via and goes on on the other layer instead of finishing on the anchor.
-- `F` in a diff pair still finishes at the cursor (no `ROUTER::Finish` for the pair placer).
+- ~~`F` in a diff pair still finishes at the cursor (no `ROUTER::Finish` for the pair placer).~~ Done, Stage 23.
 - A via placed with no run before it (V at the start pad) continues the route where KiCad's `FixRoute` ends it (`m_idle = true`), and
   Backspace cannot take it back by itself.
 - `simplifyNewLine`'s `MERGE_COLINEAR` and its first stage (removing a dangling collinear segment the new one subsumes,
@@ -1289,7 +1289,7 @@ The router and studio findings of `findings/round5/r5-route-rules.md` (R5-1 .. R
   `clearance` and its source (`ImportedSizes::clearance_source`), the pair's width and gap sources, the resolved class
   (`GetHumanReadableName` of `effective_class`), and the rule's sizes. `MessagePanel` shows `routerMessagePanel` while routing: "Routing Track: %s"
   / "Resolved Netclass: %s" (or "Routing Diff Pair"), "Corner Style", "Mode", "Track Width: %s" / "(from %s)", "Min Clearance", "Diff Pair Gap".
-  **Differs:** "DP Max Uncoupled-length" is not shown; after a via the clearance is the start's (KiCad re-imports on a layer change).
+  **Differs:** "DP Max Uncoupled-length" is not shown; ~~after a via the clearance is the start's (KiCad re-imports on a layer change)~~ (re-imported, Stage 23).
 - **R5-10 (part).** Apply sorts the three lists (`TransferDataFromWindow`). **Left:** Add rows pre-filled with the Default class's values, and the
   ops' own "every preset width must be positive" refusal (KiCad checks no width).
 
@@ -1330,8 +1330,8 @@ The router side of `work/findings/round6/r6-route-rules.md` section R (and R6-D1
   /api/route/layer`. The studio registers layerNext / layerPrev / layerTop / layerInner1..30 / layerBottom while a route is drawn
   (`actions/routerViaActions.ts`; `routerLayerTarget` is `handleLayerSwitch`'s target: next / prev in UI order past hidden layers, a layer the board
   has); refused, a through via to the layer is armed, sized as V's. Tests: `a_layer_key_moves_the_head_to_the_layer_until_a_fix_chains_it`
-  (route_api), `routerVia.test.ts`, router-leftovers' r6 scenario. **Differs:** `updateSizesAfterRouterEvent` (the clearance re-imported on the new
-  layer) is not run, as after a via (Stage 18).
+  (route_api), `routerVia.test.ts`, router-leftovers' r6 scenario. **Differs:** ~~`updateSizesAfterRouterEvent` (the clearance re-imported on the new
+  layer) is not run, as after a via (Stage 18)~~ (run, Stage 23).
 - **R6-R4, Autoroute.** Each connection starts at its anchor and goes through `ROUTER::Finish` (`attempt_finish`, as the F key), and `RouteSelected`'s
   undo groups are kept: `append_undo` on every connection of a run but the first of a group, so the routes `Finish` makes are one undo step, and a
   connection it cannot make stays live with the head where it got, and its commit, finished by hand, is an undo step of its own (`performRouting`
@@ -1341,7 +1341,7 @@ The router side of `work/findings/round6/r6-route-rules.md` section R (and R6-D1
 - **R6-R5, V before a route.** With the route tool armed and no route, V (`ACT_PlaceThroughVia` in `MainLoop`) flips the active layer
   (`PCB_CONTROL::LayerToggle`: the pair's other layer) and sets `pcbx.startWithVia`; the next route starts with a through via armed
   (`performRouting`'s `handleLayerSwitch( ACT_PlaceThroughVia, true )`, `components/canvas/routing.ts`), once. Browser: router-leftovers' r6 scenario.
-  **Differs:** the via's implicit target is the pair's other layer, as V's (Stage 11), not the nearest ratsnest anchor's.
+  **Differs:** ~~the via's implicit target is the pair's other layer, as V's (Stage 11), not the nearest ratsnest anchor's~~ (the nearest ratsnest anchor's, Stage 23).
 - **R6-R6, the active layer.** `syncRouterAndFrameLayer`: while a route or pair runs the active layer is the one being routed, made visible
   (the store's `SET_DRAW_STATE`); `m_originalActiveLayer` is saved at every start and given back at the end (`finishInteractive`). GAPS item 7's R5 line
   said the active layer followed the route; now it does. Browser: router-leftovers' r6 scenario.
@@ -1436,6 +1436,76 @@ The router side of `work/findings/round7/r7-route-rules.md` section R, each re-r
   step, a refused drag, two tracks); slow: `gate_vs_kicad::component_drags_add_no_violation_to_kicad_clis_drc` (drags on `pic_programmer` and
   `backspace1` committed through the `Cmd::Batch`: kicad-cli finds no new clearance, short, crossing, hole, edge, track-width, dangling-track or
   unconnected-items violation); web: `dragTool.test.ts` (3); browser: `web/studio/e2e/component-drag.check.js` (component, esc, refused, multi).
+
+## Stage 23 -- pairs on arcs, via types and F in the pair tool, V's target, the sizes after a layer switch, the grab radius, the tuner's leftovers (branch `task-u3-router`, 2026-11-06)
+
+UI-LEFT R2, R3, R5, R7 (and R4, which is `crates/freeroute`'s), each re-read against `pns_diff_pair.cpp` (`DP_PRIMITIVE_PAIR::Directional`, `anchorDirection`,
+`CursorOrientation`, `DP_GATEWAYS::BuildFromPrimitivePair`, `buildDpContinuation`), `pns_diff_pair_placer.cpp` (`makeVia`, `ToggleVia`, `FixRoute`, `Move`),
+`pns_router.cpp` (`Finish`, `GetNearestRatnestAnchor`, `QueryHoverItems`), `router_tool.cpp` (`handleLayerSwitch`, `updateSizesAfterRouterEvent`,
+`switchLayerOnViaPlacement`, `performRouting`, `MainLoop`, `RouteSelected`), `pns_tool_base.cpp` (`pickSingleItem`, `updateEndItem`, `snapToItem`),
+`edit_track_width.cpp` (`Tracks_and_Vias_Size_Event`), `toolbars_pcb_editor.cpp` (`UpdateTrackWidthSelectBox`, `UpdateViaSizeSelectBox`) and
+`board_editor_control.cpp` (`TrackWidthInc` / `Dec`) at 8303b2ad.
+
+- **A pair on arcs (R2, findings p5 F4-2).** `DP_PRIMITIVE_PAIR::Directional` and `anchorDirection` take `SEGMENT_T | ARC_T` (an arc's direction is KiCad's: the
+  chord `Anchor( 0 ) - Anchor( 1 )`, not the tangent), and `BuildFromPrimitivePair` continues a pair of arc ends as a pair of segment ends (`buildDpContinuation`),
+  so a pair started on two arc tracks goes on from their free ends; the pair's end pick ranks arcs with segments. KiCad's pair placer draws mitered corners only
+  (`DIFF_PAIR::BuildInitial` calls `DIRECTION_45().BuildInitialTrace` without a corner mode), so "a pair with arc corners" is a pair meeting arcs, which this is.
+  Tests: `dp_placer` `a_pair_goes_on_from_the_free_ends_of_two_arc_tracks` (it fails without the change); slow `gate_vs_kicad::a_pair_from_two_arc_ends_passes_kicad_clis_drc`
+  (Walk around and Shove on `dp_test`: no new clearance, short, crossing, hole, edge, diff-pair gap or track width violation; the arcs `(arc ..)` in the file).
+- **Via types in the pair tool (R2).** `handleLayerSwitch` is the router tool's in both modes, and `DIFF_PAIR_PLACER::makeVia` gives each via `m_sizes.ViaType()`
+  over `GetLayerTop()` .. `GetLayerBottom()` of the sizes' layer pair: `DiffPairPlacer::toggle_via_typed`, `DpLeg::via_kind`, the commit's `via_kinds`; `dp_via` takes
+  `via_type` and sizes a blind or micro pair from the rules of the P net (`net_class_via_size` serves a pair). The studio's Place Blind/Buried Via, Place Microvia and
+  the Select Layer variants work in the pair tool. Tests: `a_pair_of_blind_vias_keeps_its_type_and_layer_pair`, route_api `a_pair_of_microvias_is_committed_with_its_type_layers_and_the_class_size`.
+- **F on a pair (R2; Stage 12's "`F` in a diff pair still finishes at the cursor").** `ROUTER::Finish` takes `placer->Traces()[0]`, the pair placer's P line:
+  `Router::attempt_finish_diff_pair` moves the pair to the nearest unconnected anchor of the P net (`GetNearestRatnestAnchor`, the pair's `CurrentEnd()` being the point
+  it was moved to, so the second of the five `Move`s settles it) and fixes it there; only a pair that reached the coupled pair (`m_snapOnTarget`) is finished and
+  committed, otherwise it goes on (`DIFF_PAIR_PLACER::FixRoute` returned false) and the cursor is warped to its end. `/api/route/dp_attempt_finish`; the studio's F.
+  Enter and the double click still finish at the cursor (`finishInteractive`: `FixRoute( .., forceFinish = true, .. )`). Test: route_api `f_on_a_pair_finishes_it_on_the_coupled_pair_at_the_nearest_anchor_not_at_the_cursor`.
+- **V's target (R5).** Place Through Via's implicit target is `handleLayerSwitch`'s: `GetNearestRatnestAnchor` (`Router::ratsnest_anchor`, `/api/route/ratsnest_anchor`,
+  for a route or a pair; none for a route of no net), the anchor's first layer, or -- when that is the layer routed -- the layer paired with it in the router's sizes
+  (`PairedLayer`), else the board's layer pair with no anchor. The studio plans it (`kicad-port/routerVia.ts` `planViaCommand`, `components/canvas/routerViaArm.ts`) for
+  V while routing, in a pair, and for the via V armed before a route (`m_startWithVia`); the draw states keep the sizes' layer pairs (the board's pair at the start, each
+  via command's after it). V while the router tool is active is `ACT_PlaceThroughVia` (`AS_CONTEXT` over the global `layerToggle`). Tests: `start_layer`
+  `the_nearest_ratsnest_anchor_is_on_the_layer_of_the_pad_at_the_other_end`, `routerVia.test.ts`. **Differs:** the sizes' layer pairs start afresh with each route
+  (KiCad's `m_savedSizes` keeps the last route's via pair beside the board's).
+- **The sizes after a layer event (R5; Stages 18 and 20's "the clearance is not re-imported").** `ROUTER_TOOL::updateSizesAfterRouterEvent`:
+  `Router::update_sizes_after_router_event` asks the clearance, the track width and a pair's width and gap again of a dummy track on the layer after every fix, via and
+  layer switch, with `UseNetClassTrack()` / `UseNetClassDiffPair()` and `TrackWidthIsExplicit()` tracked (`use_net_class_track`, `width_explicit`, `user_diff_pair`),
+  and applies them as `LINE_PLACER::UpdateSizes` (the head takes a width only when explicit, or before anything is placed on a non-segment start) and
+  `DIFF_PAIR_PLACER::UpdateSizes` (an inherited pair width kept once something is fixed) allow; the fix, layer and dp_fix replies carry them (`EventSizes`) and the
+  message panel shows `sizes.TrackWidth()` and the clearance with their sources. Test: `start_layer` `the_clearance_is_read_again_on_the_layer_a_via_goes_to`.
+- **The grab radius (R7, findings p5 F2-11).** `TOOL_BASE::pickSingleItem`'s `maxSlopRadius` is the grid: `RoutingSettings::grab_radius` (the studio sends its grid,
+  default 0.5 mm), and with nothing exactly under the cursor the slop pass is KiCad's -- `Node::hover_items` (`QueryHoverItems`: the items whose copper is within the
+  slop), `Node::pick_single_item` (`prioritized[0..3]`), `Node::snap_to_item` (`snapToItem`) -- for a route's start and end (avoiding the start item), a pair's start
+  and end (P's net, then N's) and a drag's start. `SNAP_NM` and `START_SNAP_NM` are kept, marked INACTIVE. Two tests that leaned on the 0.5 mm anchor radius run on a
+  finer grid. Test: `start_layer` `the_grab_radius_is_the_grid_measured_to_the_copper`. **Not ported:** a free pad under the cursor and an item of no net in Highlight
+  collisions (`prioritized[0]` / `[4]`'s special cases).
+- **Widths (R7).** The width keys were KiCad's already (Stage 18, R5-6: the first press of a route at an inherited width sets `m_TempOverrideTrackWidth`, then the index
+  steps and wraps). The auxiliary toolbar's Track Width and Via Size boxes, display-only before, are `UpdateTrackWidthSelectBox` / `UpdateViaSizeSelectBox`'s entries and
+  `Tracks_and_Vias_Size_Event`'s picks (the index, custom sizes off, `m_TempOverrideTrackWidth`, "Edit Pre-defined Sizes..." opens Board Setup). **Not as the brief
+  said:** a toolbar pick does not turn "Automatically select track width" off at 8303b2ad (`m_UseConnectedTrackWidth = false` is the `ID_POPUP_PCB_SELECT_WIDTH*` case of
+  the same function, which no menu reaches: the router's `TRACK_WIDTH_MENU::eventHandler` handles those ids and does not skip the event); the override lasts the route in
+  progress and `prepareInteractive` clears it.
+- **R7-R6, R7-R7.** `MainLoop`'s `m_startWithVia = false` on entering the router tool (`routerVia.ts` `startWithViaAfterToolChange`); Autoroute starts each connection
+  from, and gives back, the layer active when it began (`RouteSelected`'s `originalLayer`).
+- **The tuner (R3, and R2's tuner half; branch `task-u3-router-tune`, merged here).** The pair and skew tuners take an arc: `TOPOLOGY::AssembleDiffPair` pairs an arc
+  with the coupled arc of its centre (within `DP_PARALLELITY_THRESHOLD`; distance `SEG::Square( r_p - r_n )`, gap `|r_p - r_n| - width`), `DP_MEANDER_PLACER::Start` /
+  `MEANDER_SKEW_PLACER::Start` accept `SEGMENT_T | ARC_T` (`getSnappedStartPoint`), and `addCornersUntilIndex`'s arc branches keep a pair's arcs (`AddArc( arcP, arcN )`).
+  Every placer counts the pad-to-die length and delay of the pads its path ends on (`origPathLength`, `origPathDelay`; KiCad's `DP_MEANDER_PLACER::origPathDelay` adds
+  P's pad-to-die delay to N's line, and so does this), read from the pads' `(die_length ..)` / `(die_delay ..)`. A time-domain rule gives the target delay through the
+  rule engine (`PCB_TUNING_PATTERN::EditStart`: `SetTargetLengthDelay( m_Value )`), a length rule makes a length pattern. The tool's settings start from Board Setup's
+  Length-tuning Patterns each time it is entered (`PlaceTuningPattern`'s `meanderSettings`), so the corner style and single-sided apply; the status box is
+  `TUNING_STATUS_VIEW_ITEM::ViewDraw`'s at the mouse position. A pattern moved with other items goes as a group (`PCB_TUNING_PATTERN::Move` / `Rotate` / `Flip`; a flip
+  leaves it mirrored on its own layer, KiCad's `SetLayer` then each track's `Flip`), and on its own slides along its track and is tuned again (`doMoveSelection`'s
+  `genStartEdit` / `genUpdateEdit`, `resetToBaseline`'s `NearestPoint`: edit point 4 of `/api/tune/edit_move`). **Differs:** the lone-pattern move previews rigidly and
+  slides at the drop; the slide's start snaps to segments only. Proofs: pns `dp_meander_placer`, `meander_placer`; ops `tuning_tests`; cli `tune_api` (kicad-cli under
+  `EDA_SLOW_TESTS=1`: a pair tuned from an arc within its length and skew rules with its 8 arcs `(arc ..)`, the skew tuner from an arc, a 149.9-150.1 ps rule, the pads'
+  2 mm pad-to-die counted as kicad-cli counts it); `web/studio/e2e/tuner-arcs.check.js`, `length-tuning.check.js`. Stage 8's differences on the pad-to-die length,
+  time-domain rules, the status box and a pattern "as good as locked" are closed.
+- **The autoroute (R4; branch `task-u3-router-ar`, merged here).** Not this crate: `crates/freeroute`'s board and DSN take the outline's cutouts as keep-outs on every
+  signal layer (`SPECCTRA_DB::fillBOUNDARY`), GAPS item 27.
+- Browser: `web/studio/e2e/router-u3.check.js` (7/7: the pair from arc ends with blind vias and F, V's target, V before a route, Autoroute's layer, the toolbar boxes);
+  `diff-pairs.check.js` 11/11 and `router-leftovers.check.js` 17/17 still pass.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
