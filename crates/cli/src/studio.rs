@@ -886,6 +886,10 @@ fn handle(
             let r = crate::embedded_api::fonts(dir, target);
             respond(stream, r.status, r.kind, &r.body)
         }
+        ("GET", "/api/embedded/fonts/file") => {
+            let r = crate::embedded_api::font_file(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
         ("GET", "/api/embedded/doc") => {
             let r = crate::embedded_api::document(dir, target);
             respond(stream, r.status, r.kind, &r.body)

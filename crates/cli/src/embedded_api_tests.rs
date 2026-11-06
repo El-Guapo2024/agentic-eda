@@ -254,6 +254,10 @@ fn the_fonts_box_takes_in_the_fonts_the_boards_texts_use() {
     let names: Vec<&str> = fonts["fonts"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"], "{fonts}");
     assert_eq!(fonts["fonts"][1]["permission"], "installable");
+    let file = crate::embedded_api::font_file(&dir, "/api/embedded/fonts/file?owner=board&name=DejaVuSans.ttf");
+    assert_eq!(file.status, "200 OK");
+    assert_eq!(&file.body[..4], &[0, 1, 0, 0], "the font's own bytes");
+    assert_eq!(crate::embedded_api::font_file(&dir, "/api/embedded/fonts/file?owner=board&name=passwd").status, "404 Not Found", "only a font the texts use");
 
     // the panel's OK: only the rows it still lists come in
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "embedded", "verb": "apply", "owner": { "kind": "board" }, "fonts": true, "refresh_fonts": true, "text_fonts": ["DejaVuSans.ttf"] })).unwrap();
@@ -288,4 +292,6 @@ fn a_datasheet_named_by_kicad_embed_is_served_from_the_first_list_of_the_stack_t
     assert_eq!(doc("ds.pdf", r#"[{"kind":"footprint","reference":"U2"}]"#).status, "404 Not Found");
     assert_eq!(doc("ds.pdf", "[]").status, "404 Not Found");
     assert_eq!(doc("ds.pdf", "not json").status, "400 Bad Request");
+    let probe = |name: &str| json_of(&crate::embedded_api::document(&dir, &format!("/api/embedded/doc?probe=1&name={name}&stack={}", enc(stack))))["found"].clone();
+    assert_eq!((probe("u1.pdf"), probe("none.pdf")), (Value::Bool(true), Value::Bool(false)), "a probe answers whether it is found");
 }

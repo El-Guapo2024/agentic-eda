@@ -6,6 +6,7 @@
 // the Footprint or Symbol tab is showing, this overrides them with the frame's own (`registerEditorFrameActions` is called last, with the tab).
 // Every action on those two toolbars that is NOT supported (src/kicad/editor_toolbar_support.json, with the reason for each) is unregistered on the
 // tab, so the toolbar, the menus and the hotkey table never show it live while it would do nothing.
+import { openEmbeddedDocument } from "../api/embeddedClient";
 import type { Dispatch } from "react";
 import support from "../kicad/editor_toolbar_support.json";
 import { datasheetTarget } from "../kicad-port/itemText";
@@ -244,6 +245,11 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       const target = datasheetTarget(sym.datasheet);
       if (target.kind === "none") toast("No datasheet defined.", "error");
       else if (target.kind === "url") window.open(target.url, "_blank", "noopener,noreferrer");
+      // `filesStack.push_back( entry )`: the library symbol's files
+      else if (target.kind === "embedded") {
+        const libId = ctx.symApi.getState().libId;
+        void openEmbeddedDocument(libId ? [{ kind: "library_symbol", lib_id: libId }] : [], target.link);
+      }
       else toast(`Cannot open datasheet '${target.text}': only absolute http(s)/file URLs can be opened from a browser.`, "error");
     });
   }

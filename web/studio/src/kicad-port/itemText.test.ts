@@ -74,3 +74,8 @@ test("Copy as Text gives what a text variable stands for, as GetShownText( true 
   assert.deepEqual(schSelectionTexts(s, ["txt_a"]), ["rev B\nover two lines"]);
   assert.deepEqual(schSelectionTexts(s, ["fld:R1:Value"]), ["Value: 4k7"]);
 });
+
+test("datasheetTarget: a kicad-embed:// link names an embedded file (GetAssociatedDocument's KiCadUriPrefix branch)", () => {
+  assert.deepEqual(datasheetTarget(" kicad-embed://ds.pdf "), { kind: "embedded", link: "kicad-embed://ds.pdf" });
+  assert.deepEqual(datasheetTarget("KICAD-EMBED://ds.pdf"), { kind: "embedded", link: "KICAD-EMBED://ds.pdf" });
+});

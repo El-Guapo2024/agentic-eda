@@ -12,9 +12,12 @@
 // Show Datasheet -- SCH_INSPECTION_TOOL::ShowDatasheet
 // (eeschema/tools/sch_inspection_tool.cpp): `datasheet.IsEmpty() ||
 // datasheet == "~"` -> "No datasheet defined."; otherwise
-// GetAssociatedDocument() launches it. Here only an absolute http(s)/file
-// URL can be launched from a browser; anything else (a bare file name that
-// KiCad would resolve through the project search stack) cannot.
+// GetAssociatedDocument() launches it. Here an absolute http(s)/file URL is
+// launched from the browser, and a `kicad-embed://` one is opened from the
+// embedded files of the caller's stack (`GetAssociatedDocument`'s
+// `FILEEXT::KiCadUriPrefix` branch, api/embeddedClient.ts
+// `openEmbeddedDocument`); anything else (a bare file name that KiCad would
+// resolve through the project search stack) cannot.
 
 import type { Schematic } from "../api/types";
 import { findField, shownText } from "./schFieldEdit";
@@ -67,11 +70,13 @@ export function selectionAsText(texts: ReadonlyArray<string | null | undefined>)
     .join("\n");
 }
 
-export type DatasheetTarget = { kind: "none" } | { kind: "url"; url: string } | { kind: "unresolvable"; text: string };
+export type DatasheetTarget = { kind: "none" } | { kind: "url"; url: string } | { kind: "embedded"; link: string } | { kind: "unresolvable"; text: string };
 
 export function datasheetTarget(field: string | null | undefined): DatasheetTarget {
   const text = (field ?? "").trim();
   if (text === "" || text === "~") return { kind: "none" };
+  // `uri.GetScheme().Lower() == FILEEXT::KiCadUriPrefix`: a file of the embedded files
+  if (/^kicad-embed:\/\//i.test(text)) return { kind: "embedded", link: text };
   if (/^(https?|file):\/\//i.test(text)) return { kind: "url", url: text };
   // GetAssociatedDocument also accepts "www.x.com/..." style hosts.
   if (/^www\./i.test(text)) return { kind: "url", url: `https://${text}` };

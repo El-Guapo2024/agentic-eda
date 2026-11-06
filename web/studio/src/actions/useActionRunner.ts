@@ -13,6 +13,7 @@
 // the exact same flow the M/Escape keyboard shortcuts do, and
 // Canvas.tsx no longer needs any keydown handling of its own.
 
+import { openEmbeddedDocument } from "../api/embeddedClient";
 import { markContentSaved } from "../state/contentModified";
 import { boardCopyKey } from "../api/fpEditorTypes";
 import { saveSymbolLibraryAs } from "./librarySaveOps";
@@ -380,6 +381,11 @@ export function useActionRunner() {
       if (k === "undoSegment") m.get("pcbnew.InteractiveRouter.UndoLastSegment")?.();
       else if (k === "customSize") m.get("pcbnew.InteractiveRouter.CustomTrackViaSize")?.();
       else if (k === "cancel") m.get("common.Interactive.cancel")?.();
+      // Delete under a drag: the drag ends (another tool's `Activate()`), then the key is the editor's (`SetPassEvent` to `EDIT_TOOL::Remove`)
+      else if (k === "cancelThenPass") {
+        m.get("common.Interactive.cancel")?.();
+        return false;
+      }
       return k != null;
     };
     // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
@@ -1705,6 +1711,8 @@ export function useActionRunner() {
         const target = datasheetTarget(symbol.datasheet);
         if (target.kind === "none") dispatch({ type: "TOAST", message: "No datasheet defined.", kind: "error" });
         else if (target.kind === "url") window.open(target.url, "_blank", "noopener,noreferrer");
+        // `filesStack`: the schematic's files, then the symbol's library symbol's
+        else if (target.kind === "embedded") void openEmbeddedDocument([{ kind: "schematic" }, ...(symbol.lib_id ? [{ kind: "library_symbol" as const, lib_id: symbol.lib_id }] : [])], target.link);
         else dispatch({ type: "TOAST", message: `Cannot open datasheet '${target.text}': only absolute http(s)/file URLs can be opened from a browser.`, kind: "error" });
       });
     }

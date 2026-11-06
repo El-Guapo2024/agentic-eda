@@ -195,7 +195,7 @@ export function SchematicSetupDialog() {
           <NetClassesPage editor="sch" hidden={page !== "netclasses"} onDirty={markers.netclasses} />
           <BusAliasesPage hidden={page !== "bus_aliases"} onDirty={markers.bus_aliases} />
           <TextVariablesPage hidden={page !== "text_variables"} onDirty={markers.text_variables} />
-          <EmbeddedFilesPanel owner={SCHEMATIC_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} />
+          <EmbeddedFilesPanel owner={SCHEMATIC_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} onDirty={markers.embedded_files} />
 
           <section className="bs-page" hidden={page !== "pinmap"} aria-label="Pin Conflicts Map">
             <h3 className="bs-title">Pin Conflicts Map</h3>

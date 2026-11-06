@@ -16,9 +16,10 @@
 //!   - **`GET /api/embedded/fonts?owner=board`**: the fonts the board's texts use that may be embedded (`BOARD::GetFonts`, `eda_kicad_engine::fonts`) -- `{"fonts": [{"name",
 //!     "family", "path", "size", "permission", "faces"}], "skipped": [{"face", "reason"}]}` -- what ticking "Embed fonts" takes into the panel's copy (`onFontEmbedClick`).
 //!     The `apply` verb that comes with the box ticked and no font data has the files read in here ([`with_text_fonts`]), as `collect_models` has its models.
-//!   - **`GET /api/embedded/doc?stack=<owners>&name=<kicad-embed://name>`**: a document a datasheet field names by `kicad-embed://` (`GetAssociatedDocument`,
+//!   - **`GET /api/embedded/doc?stack=<owners>&name=<kicad-embed://name>[&probe=1]`**: a document a datasheet field names by `kicad-embed://` (`GetAssociatedDocument`,
 //!     `common/eda_doc.cpp`): the first list of the stack (a JSON array of owners, `[{"kind":"schematic"},{"kind":"library_symbol","lib_id":".."}]`, the caller's
-//!     `aFilesStack`) that has the file gives it, served with its type so the browser shows it (KiCad extracts it to its cache, `GetTemporaryFileName`, and opens that).
+//!     `aFilesStack`) that has the file gives it, served with its type so the browser shows it (KiCad extracts it to its cache, `GetTemporaryFileName`, and opens that);
+//!     `probe=1` answers `{"found"}` only.
 
 use crate::model3d_api::{percent_decode, Reply};
 use eda_kicad::embedded::{self, EmbedError};
@@ -370,6 +371,26 @@ pub fn fonts(dir: &Path, target: &str) -> Reply {
     )
 }
 
+/// `GET /api/embedded/fonts/file?owner=..&name=..`: the content of a font the owner's texts use, by the name it would be embedded under -- what the panel's Export writes for a
+/// font row "Embed fonts" took in before OK (`onExportFiles` walks `m_localFiles`, which holds it). Only such a font is served, never another file of the machine.
+pub fn font_file(dir: &Path, target: &str) -> Reply {
+    let owner = match owner_of(target) {
+        Ok(o) => o,
+        Err(e) => return reply("400 Bad Request", json!({ "error": e })),
+    };
+    let name = query(target, "name");
+    let design = match read_design(dir) {
+        Ok(d) => d,
+        Err(e) => return reply("404 Not Found", json!({ "error": e })),
+    };
+    let (found, _) = text_fonts_of(&design, &owner);
+    let Some(f) = found.iter().find(|f| f.name == name) else { return reply("404 Not Found", json!({ "error": format!("no font named '{name}' is used by the {}'s texts", owner.label()) })) };
+    match std::fs::read(&f.path) {
+        Ok(bytes) => Reply { status: "200 OK", kind: "application/octet-stream", body: bytes },
+        Err(e) => reply("404 Not Found", json!({ "error": format!("{}: {e}", f.path.display()) })),
+    }
+}
+
 /// The content type a document is served with, by its extension: what the browser shows in a tab of its own (a PDF in its viewer), anything else as bytes.
 fn document_kind(name: &str) -> &'static str {
     match embedded_files::extension_of(name).to_ascii_lowercase().as_str() {
@@ -410,12 +431,19 @@ pub fn document(dir: &Path, target: &str) -> Reply {
             _ => list,
         };
         let Some(f) = list.get(&name).filter(|f| !f.data.is_empty()) else { continue };
+        // `probe=1`: whether the stack finds it, without the content (the studio asks before it points the tab it opened at the file)
+        if query(target, "probe") == "1" {
+            return reply("200 OK", json!({ "found": true, "name": name }));
+        }
         return match embedded::decode(f) {
             Ok(d) => Reply { status: "200 OK", kind: document_kind(&name), body: d.bytes },
             Err(e) => reply("422 Unprocessable Entity", json!({ "error": format!("{name}: {e}") })),
         };
     }
     // "Failed to get temp file '%s' for kicad_embed URI"
+    if query(target, "probe") == "1" {
+        return reply("200 OK", json!({ "found": false, "name": name, "error": format!("Failed to get temp file '{name}' for kicad_embed URI") }));
+    }
     reply("404 Not Found", json!({ "error": format!("Failed to get temp file '{name}' for kicad_embed URI") }))
 }
 

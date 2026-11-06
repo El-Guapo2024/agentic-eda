@@ -9,7 +9,7 @@
 //
 // Board Editor Layers (`set_board_layers`) keeps the technical and user layers a board has, their names and types; Formatting, Zone Hatch Offsets, Length-tuning Patterns and
 // Tuning Profiles (`set_formatting`, `set_zone_hatch_offsets`, `set_tuning_patterns`, `set_tuning_profiles`) are pages of the same kind. Board Data > Embedded Files is the
-// shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the board's list, the files only footprints hold listed with it; each of its edits is a verb of its own.
+// shared `PANEL_EMBEDDED_FILES` (components/EmbeddedFilesPanel.tsx) on the board's list, the files only footprints hold listed with it; it edits a copy, which its Apply sends as one verb.
 // Design Rules > Component Classes (`set_component_classes`) edits the project's component class assignments (components/boardSetup/ComponentClassesPage.tsx).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -314,7 +314,7 @@ export function BoardSetupDialog() {
           <ComponentClassesPage hidden={page !== "component_classes"} onDirty={markers.component_classes} />
           <CustomRulesPage hidden={page !== "custom_rules"} onDirty={markers.custom_rules} />
           <SeveritiesPage hidden={page !== "severities"} onDirty={markers.severities} />
-          <EmbeddedFilesPanel owner={BOARD_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} />
+          <EmbeddedFilesPanel owner={BOARD_OWNER} run={api.cmd} hidden={page !== "embedded_files"} version={state.version} onDirty={markers.embedded_files} />
 
           <section className="bs-page" hidden={page !== "tracks_vias"} aria-label="Pre-defined Sizes">
             <h3 className="bs-title">Pre-defined Sizes</h3>
