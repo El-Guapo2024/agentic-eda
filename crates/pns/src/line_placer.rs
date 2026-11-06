@@ -439,7 +439,7 @@ impl LinePlacer {
         let opts = crate::node::QueryOpts { box_hull: settings.corner_mode.is_90(), ..Default::default() };
         let hit = world.nearest_obstacle(raw, via.as_ref(), rules, &self.exclude(), opts)?;
         let item = world.get(hit.id)?;
-        let head = crate::rule_resolver::Side::Track { net: &self.net, layer: self.current_layer, seg: raw.segs().next() };
+        let head = crate::rule_resolver::Side::of_line(raw);
         let hull = world.obstacle_hull(rules, item, head, Nm::ZERO, self.width, self.current_layer, false);
         if hull.is_empty() {
             return None;

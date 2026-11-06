@@ -321,7 +321,10 @@ impl Router {
         if !self.settings.allow_drc_violations() {
             // `isStartingPointRoutable`: "If the only reason we collide is track width; it's better to allow the user to start anyway and just
             // highlight the resulting collisions, so they can change width later."
-            let collides = |w: Nm| self.world.first_colliding(&eda_drc::kimath::Shape::Stadium { a: start_pos, b: start_pos, r: w / 2 }, &net, LayerRange::single(layer), &self.rules, &[]).is_some();
+            // `m_world->CheckColliding( &dummyStartLine, ITEM::ANY_T )`: the router's world itself, where the board edge in a castellated pad's hole
+            // is no collision (`QueryEdgeExclusions`, `QueryOpts::root_world`)
+            let opts = crate::node::QueryOpts { root_world: true, ..Default::default() };
+            let collides = |w: Nm| !self.world.colliding_with(&eda_drc::kimath::Shape::Stadium { a: start_pos, b: start_pos, r: w / 2 }, &net, LayerRange::single(layer), &self.rules, &[], opts).is_empty();
             if collides(width) && collides(self.rules.track_width_min_nm) {
                 return Err("The routing start point violates DRC.".into());
             }

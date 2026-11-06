@@ -20,13 +20,16 @@ fn side(a: Point, b: Point, p: Point) -> i32 {
     cross(a, b, p).signum() as i32
 }
 
-/// `SEG::Contains( p )`: within 1 unit of the segment.
+/// `SEG::Contains( aP )`: `SquaredDistance( aP ) <= 3`, within 1 nm and a little more of the segment.
 fn seg_contains(a: Point, b: Point, p: Point) -> bool {
-    Seg::new(a, b).sq_distance_to_point(p) <= 1
+    Seg::new(a, b).sq_distance_to_point(p) <= 3
 }
 
+/// `SEG::Collinear( aSeg )` of the segment `a`-`b` and `c`-`d`: both of `c`-`d`'s ends give at most 1 in `a`-`b`'s canonical line equation
+/// (`std::abs( aSeg.A.x * qa + aSeg.A.y * qb + qc ) <= 1`, the cross product of `b - a` and the point less `a`) -- the length of `a`-`b` times
+/// the end's distance from its line, so exact collinearity for any segment longer than a nanometre or two, give or take that rounding.
 fn collinear(a: Point, b: Point, c: Point, d: Point) -> bool {
-    cross(a, b, c) == 0 && cross(a, b, d) == 0
+    cross(a, b, c).abs() <= 1 && cross(a, b, d).abs() <= 1
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -127,9 +130,13 @@ pub(crate) fn hull_intersection(hull: &[Point], line: &[Point]) -> Vec<(Point, u
     ips
 }
 
-/// `SHAPE_LINE_CHAIN::Find( p, aThreshold )`.
+/// `SHAPE_LINE_CHAIN::Find( p, aThreshold )`: the point itself with no threshold, else one whose distance -- `EuclideanNorm()`, rounded to the
+/// nanometre -- is at most the threshold.
 fn find(chain: &[Point], p: Point, threshold: Nm) -> Option<usize> {
-    chain.iter().position(|q| (q.x - p.x).area(q.x - p.x) + (q.y - p.y).area(q.y - p.y) <= threshold.area(threshold))
+    if threshold == Nm::ZERO {
+        return chain.iter().position(|q| *q == p);
+    }
+    chain.iter().position(|q| crate::kigeom::norm_i(q.x - p.x, q.y - p.y) <= threshold)
 }
 
 /// `SHAPE_LINE_CHAIN::Split( p )`: insert `p` into the segment containing it.
@@ -397,6 +404,22 @@ mod tests {
 
     fn square(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<Point> {
         make_clockwise(vec![p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)])
+    }
+
+    /// KiCad's nanometre tolerances: `SEG::Contains` is `SquaredDistance <= 3` (a point 1 nm off along the diagonal is on it), `SEG::Collinear`
+    /// allows each end 1 off the line's canonical equation, and `SHAPE_LINE_CHAIN::Find` with a threshold compares the rounded `EuclideanNorm`.
+    #[test]
+    fn the_nanometre_tolerances_are_kicads() {
+        // (1, 1) off a horizontal segment's end: squared distance 2, contained; (2, 0) beyond it: 4, not
+        assert!(seg_contains(p(0, 0), p(100, 0), p(101, 1)));
+        assert!(!seg_contains(p(0, 0), p(100, 0), p(102, 0)));
+        // against a 1 nm segment, ends 1 nm off its line still are collinear (`|qa x + qb y + qc| <= 1`); 2 nm off they are not
+        assert!(collinear(p(0, 0), p(1, 0), p(5, 1), p(9, -1)));
+        assert!(!collinear(p(0, 0), p(1, 0), p(5, 2), p(9, 0)));
+        // `Find( p, 1 )`: (1, 1) away is sqrt(2) = 1.41, rounded 1: found; with no threshold only the point itself
+        assert_eq!(find(&[p(0, 0), p(10, 10)], p(11, 11), Nm::new(1)), Some(1));
+        assert_eq!(find(&[p(0, 0), p(10, 10)], p(11, 11), Nm::ZERO), None);
+        assert_eq!(find(&[p(0, 0), p(10, 10)], p(12, 11), Nm::new(1)), None);
     }
 
     /// D3 repro from docs/parity/CODE-COMPARE-router.md: the exit crossing

@@ -280,7 +280,7 @@ impl<'a> Walker<'a> {
         let line = Line::from_points(net.clone(), layer, width, pts.to_vec());
         let restricted = &self.restricted;
         let filter = |id: ItemId| restricted.contains(&id);
-        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true, box_hull: self.corner_mode.is_90(), head_hole: None, head_via: None };
+        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true, box_hull: self.corner_mode.is_90(), head_hole: None, head_via: None, root_world: false };
         self.node.nearest_obstacle(&line, self.end_via.as_ref(), self.rules, &self.exclude, opts)
     }
 
@@ -298,7 +298,8 @@ impl<'a> Walker<'a> {
         let opts = QueryOpts::default();
         pts.windows(2).any(|w| {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
-            self.node.item_collision(self.rules, id, item, &shape, Side::Track { net, layer, seg: Some((w[0], w[1])) }, LayerRange::single(layer), opts).is_some()
+            // `shortest->Collide( item, .. )`: the line (`evaluateLineSegments`)
+            self.node.item_collision(self.rules, id, item, &shape, Side::Line { net, layer, width, pts }, LayerRange::single(layer), opts).is_some()
         }) || self.end_via.as_ref().is_some_and(|v| {
             let opts = QueryOpts { head_hole: (v.drill > Nm::ZERO).then_some(v.drill / 2), head_via: v.source_via.as_deref(), ..opts };
             self.node.item_collision(self.rules, id, item, &Shape::Circle { c: v.pos, r: v.diameter / 2 }, Side::via(v), v.layers, opts).is_some()
@@ -310,7 +311,7 @@ impl<'a> Walker<'a> {
         for &id in cluster {
             let Some(item) = self.node.get(id) else { continue };
             // `m_world->GetClearance( clItem, &aLine, false )`, `clItem->Hull( clearance, aLine.Width(), layer )`
-            let hull = self.node.obstacle_hull(self.rules, item, Side::Track { net, layer, seg: pts.first().zip(pts.get(1)).map(|(a, b)| (*a, *b)) }, Nm::ZERO, width, layer, false);
+            let hull = self.node.obstacle_hull(self.rules, item, Side::Line { net, layer, width, pts: pts.as_slice() }, Nm::ZERO, width, layer, false);
             let hull = if self.corner_mode.is_90() { crate::hull::bbox_hull(&hull) } else { hull };
             let mut simplified = Line { arcs: self.arcs.clone(), ..Line::from_points(net.clone(), layer, width, std::mem::take(pts)) };
             simplified.simplify2(); // `aLine.Line().Simplify2()`
@@ -507,9 +508,10 @@ fn cursor_dist_minimum(chain: &[Point], cursor: Point, length_threshold: f64, co
 
 /// Does `pts`, as a track on `net` of `width`, touch anything in the node (`NODE::CheckColliding( &line )`, whatever the kind)?
 pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Nm, pts: &[Point], exclude: &[ItemId]) -> bool {
+    let head = Side::Line { net, layer, width, pts };
     pts.windows(2).any(|w| {
         let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
-        node.first_colliding(&shape, net, LayerRange::single(layer), rules, exclude).is_some()
+        !node.colliding_as(&shape, head, LayerRange::single(layer), rules, exclude, QueryOpts::default()).is_empty()
     })
 }
 
