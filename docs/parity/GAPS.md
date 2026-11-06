@@ -630,7 +630,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `SCH_LABEL_BASE::AutoplaceFields`, drawn, written and read back, carried by the clipboard; the net is in the class (the model's net class, the project kicad-cli reads:
   its ERC's `undefined_netclass` and its netlist's `class` follow the field). **A global label's Sheet References** (`Intersheetrefs`, `${INTERSHEET_REFS}`) with
   Schematic Setup > Formatting > Inter-sheet References (`Cmd::SetIntersheetRefs`, `schematic.drawing.intersheets_ref_*`): the studio shows the pages as kicad-cli plots them.
-- Missing: a field's font face and colour have no place in the IR; a label's field moved by hand is placed by `AutoplaceFields` again; the net class of a label on a bus is not
+- Done 2026-11-06 (`task-u2-symprops`, UI-LEFT S4, `PARITY-sch.md` section 59): **a field's font face and colour** (`SchExtras::field_looks`, by the item's key and the
+  field's name): set in Symbol Properties' fields grid (`set_field_looks`), carried with the key (rename, unit change, paste, delete), drawn (the colour), written
+  in `(effects (font (face ..) .. (color ..)))` and read back. **A power symbol's** Footprint, Datasheet, flags and user fields (`SchExtras::power_props`). The canvas
+  draws an outline font's field with the stroke font.
+- Missing: a label's field moved by hand is placed by `AutoplaceFields` again; the net class of a label on a bus is not
   given to the bus's members; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
@@ -789,6 +793,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Round 4 (2026-10-28, `task-r4-editors-exports`; `PARITY-fpedit.md` section 17): the Footprint Editor's drawing tools take the layer class's width (a polygon unfilled on Edge.Cuts and the courtyards) and the layer box
   lists every layer; the Text tool is KiCad's (Footprint Text Properties on the first click, the text carried, the layer's size and pen, left, mirrored on a back layer, the tool stays); the pad is carried and R / F
   turn or flip it before the click; the library Footprint Properties' size messages, Paste Footprint's Value and the Renumber Pads dialog and popup are KiCad's.
+- 2026-11-06 (`task-u2-symprops`, UI-LEFT S5, `PARITY-sch.md` section 59): **a placed symbol's pin alternates on the sheet** -- chosen in Symbol Properties' Pin
+  Functions tab and the pin's Pin Function submenu (`set_pin_alternates`), drawn with the alternate's name, type and shape and Show Pin Alternate Icons, in kicad-cli's
+  netlist (`pinfunction`, `pintype`); the Symbol Unit submenu and Symbol Properties' Unit (`set_symbol_unit`). Left: units of a reference on other sheets are not synced.
 - Round 7 (`task-r7-sym-editor`; `PARITY-symedit.md` "Round 7"): a pin's orientation label is the file's (`parseSymbolPin`: 0 is Right; every label was the opposite one, and a new pin was written at 180) (E7-S1); fewer units in Symbol Properties ask "Delete extra units from symbol?" and delete the dropped units' items, more units copy unit 1, De Morgan on copies the style-1 pins and off asks and deletes style 2 (E7-S5..S7); a "Symbol name:" field that renames in the same undo step (E7-S8); a pin length edit keeps the body end (`ChangeLength`) and Y is KiCad's internal Y in Pin Properties and the Pin Table (E7-S2, S3); the Pin Table edits copies, OK is one undo step ("Edit Pins"), closing with changes asks "Save changes?", no Synchronized Pins Mode, Unit / Body Style are KiCad's choices (and the verbs refuse a unit or body style the symbol has not), Add Pin is `OnAddRow` (E7-S10..S14); Rename trims and escapes, and a name is taken in any case (`SymbolNameInUse`) (E7-S17, S18). Left, low:
   - E7-S4: Pin Properties has a Delete Pin button KiCad's has not (it leaves the sync twins), clamps the length and text sizes without a message, and its labels have no colons. **Left (low)**
   - E7-S9: the four "Exclude from" boxes are disabled as the dialog opens on a power symbol; KiCad disables them only when the box is ticked. **Left (low)**
