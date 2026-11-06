@@ -3,7 +3,7 @@
 use super::pcb_transform_tests::{board, design, model};
 use super::*;
 use eda_kicad::embedded::base64_encode;
-use eda_model::embedded_files::EmbeddedFileType;
+use eda_model::embedded_files::{EmbeddedFile, EmbeddedFileType};
 use eda_model::footprint::Model3d;
 use eda_model::units::mm;
 
@@ -176,4 +176,85 @@ fn an_empty_file_is_not_added_as_kicad_does_not_add_one() {
     assert_eq!(check(&mut b, add(EmbeddedOwner::Board, "empty.txt", b"")), "ops_bad_embedded_data");
     let e = b.apply(&add(EmbeddedOwner::Board, "empty.txt", b"")).unwrap_err();
     assert_eq!(e[0].hint.as_deref(), Some("Failed to add file 'empty.txt'."));
+}
+
+fn apply_panel(owner: EmbeddedOwner, removed: &[&str], added: &[(&str, &[u8])], fonts: bool) -> EmbeddedCmd {
+    EmbeddedCmd::Apply {
+        owner,
+        removed: removed.iter().map(|s| s.to_string()).collect(),
+        added: added.iter().map(|(n, c)| AddedFile { name: n.to_string(), data: base64_encode(c), kind: None }).collect(),
+        fonts,
+        refresh_fonts: false,
+        text_fonts: vec![],
+        font_files: None,
+        nested: false,
+    }
+}
+
+/// `PANEL_EMBEDDED_FILES::TransferDataFromWindow`: what the panel did to its copy (`m_localFiles`) comes back as one step -- the removals, the files added (replacing
+/// one of their name: the panel asked "Replace" first), the box -- and an OK that changed nothing is no step.
+#[test]
+fn the_panels_ok_writes_its_copy_back_in_one_step() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    for (name, content) in [("a.pdf", &b"%PDF a"[..]), ("b.step", b"ISO-10303-21;")] {
+        b.apply(&add(EmbeddedOwner::Board, name, content)).unwrap();
+    }
+    b.apply(&Cmd::Embedded(apply_panel(EmbeddedOwner::Board, &["kicad-embed://a.pdf"], &[("dir/c.wrl", b"#VRML"), ("b.step", b"ISO-10303-21; new")], true))).unwrap();
+    assert_eq!(board_files(&b), ["b.step", "c.wrl"]);
+    let list = &b.design().drawings.as_ref().unwrap().embedded;
+    assert!(list.fonts, "the box as it was on OK");
+    assert_eq!(eda_kicad::embedded::decode(list.get("b.step").unwrap()).unwrap().bytes, b"ISO-10303-21; new", "Replace");
+    // nothing done: no step; a file the list no longer has: the panel was stale, refused
+    assert_eq!(check(&mut b, Cmd::Embedded(apply_panel(EmbeddedOwner::Board, &[], &[], true))), "ops_nothing_to_change");
+    assert_eq!(check(&mut b, Cmd::Embedded(apply_panel(EmbeddedOwner::Board, &["a.pdf"], &[], true))), "ops_unknown_embedded_file");
+    // an empty file is refused as Add Files refuses it
+    assert_eq!(check(&mut b, Cmd::Embedded(apply_panel(EmbeddedOwner::Board, &[], &[("e.txt", b"")], true))), "ops_bad_embedded_data");
+    // the wire form
+    let cmd: Cmd = serde_json::from_str(r#"{"op":"embedded","verb":"apply","owner":{"kind":"board"},"removed":["c.wrl"],"fonts":false}"#).unwrap();
+    b.apply(&cmd).unwrap();
+    assert_eq!(board_files(&b), ["b.step"]);
+    assert!(!b.design().drawings.as_ref().unwrap().embedded.fonts);
+}
+
+/// `onFontEmbedClick` then OK: the fonts the list held go, the text's fonts the click took in come in typed `FONT` (`AddFile( .., true )`), and unticking drops them.
+#[test]
+fn the_fonts_box_clicked_replaces_the_fonts_with_the_texts_fonts() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&add(EmbeddedOwner::Board, "old.ttf", b"old font")).unwrap();
+    b.apply(&add(EmbeddedOwner::Board, "a.pdf", b"%PDF")).unwrap();
+    let font = EmbeddedFile { kind: EmbeddedFileType::Other, ..eda_kicad::embedded::encode_new("DejaVuSans.ttf", b"the font").unwrap() };
+    let click = |fonts: bool, files: Vec<EmbeddedFile>| {
+        Cmd::Embedded(EmbeddedCmd::Apply { owner: EmbeddedOwner::Board, removed: vec![], added: vec![], fonts, refresh_fonts: true, text_fonts: files.iter().map(|f| f.name.clone()).collect(), font_files: Some(files), nested: false })
+    };
+    b.apply(&click(true, vec![font.clone()])).unwrap();
+    assert_eq!(board_files(&b), ["DejaVuSans.ttf", "a.pdf"]);
+    assert_eq!(b.design().drawings.as_ref().unwrap().embedded.get("DejaVuSans.ttf").unwrap().kind, EmbeddedFileType::Font, "`EmbedFonts`' `file->type = FONT`");
+    // the font removed after the click is not in `removed` (the panel drops its row): the click's list names only what stays
+    b.apply(&click(false, vec![])).unwrap();
+    assert_eq!(board_files(&b), ["a.pdf"]);
+    // removing a font the click dropped is not refused
+    b.apply(&add(EmbeddedOwner::Board, "x.ttf", b"x")).unwrap();
+    let cmd = Cmd::Embedded(EmbeddedCmd::Apply { owner: EmbeddedOwner::Board, removed: vec!["x.ttf".into()], added: vec![], fonts: false, refresh_fonts: true, text_fonts: vec![], font_files: Some(vec![]), nested: false });
+    b.apply(&cmd).unwrap();
+    assert_eq!(board_files(&b), ["a.pdf"]);
+}
+
+/// `TransferDataFromWindow`'s `RunOnNestedEmbeddedFiles`: the board's OK takes a file it dropped out of the footprints that list it, when the question was answered yes.
+#[test]
+fn the_boards_ok_takes_its_removed_files_out_of_the_footprints_when_asked() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&add(EmbeddedOwner::Board, "part.step", b"model")).unwrap();
+    b.apply(&add(EmbeddedOwner::Footprint { reference: "U1".into() }, "part.step", b"model")).unwrap();
+    let mut cmd = apply_panel(EmbeddedOwner::Board, &["part.step"], &[], false);
+    b.apply(&Cmd::Embedded(cmd.clone())).unwrap();
+    assert!(b.design().footprint_edit("U1").and_then(|e| e.embedded.clone()).is_some(), "No: the footprint keeps it");
+    b.apply(&add(EmbeddedOwner::Board, "part.step", b"model")).unwrap();
+    if let EmbeddedCmd::Apply { nested, .. } = &mut cmd {
+        *nested = true;
+    }
+    b.apply(&Cmd::Embedded(cmd)).unwrap();
+    assert!(b.design().footprint_edit("U1").and_then(|e| e.embedded.clone()).is_none(), "Yes: out of the footprint too");
 }

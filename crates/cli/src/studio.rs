@@ -881,6 +881,15 @@ fn handle(
             let r = crate::embedded_api::collect_plan(dir);
             respond(stream, r.status, r.kind, &r.body)
         }
+        // The fonts the board's texts use (the "Embed fonts" box), and a document a datasheet names by `kicad-embed://` (`GetAssociatedDocument`).
+        ("GET", "/api/embedded/fonts") => {
+            let r = crate::embedded_api::fonts(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
+        ("GET", "/api/embedded/doc") => {
+            let r = crate::embedded_api::document(dir, target);
+            respond(stream, r.status, r.kind, &r.body)
+        }
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),

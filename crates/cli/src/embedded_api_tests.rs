@@ -225,3 +225,67 @@ fn board_setup_extracts_an_inherited_file_and_the_listing_tells_the_contents_che
     let board = json_of(&crate::embedded_api::list(&dir, "/api/embedded?owner=board"));
     assert_eq!(board["inherited"][0]["content_checksum"], eda_kicad::embedded::checksum_of(STEP), "{board}");
 }
+
+/// A board text set in `face` (bold when `bold`), written into the board's `design.json` as an import would leave it (`TextExtra::face`).
+fn add_face_text(dir: &Path, id: &str, face: &str, bold: bool) {
+    let path = dir.join("design.json");
+    let mut d: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let dr = d.as_object_mut().unwrap().entry("drawings").or_insert_with(|| serde_json::json!({}));
+    let dr = dr.as_object_mut().unwrap();
+    dr.entry("texts").or_insert_with(|| serde_json::json!([])).as_array_mut().unwrap().push(serde_json::json!({ "id": id, "content": "FONT", "at": { "x": 1_000_000, "y": 1_000_000 }, "layer": "F.SilkS", "size_nm": 1_000_000, "stroke_width": 150_000 }));
+    dr.entry("text_extras").or_insert_with(|| serde_json::json!([])).as_array_mut().unwrap().push(serde_json::json!({ "id": id, "face": face, "bold": bold }));
+    std::fs::write(&path, serde_json::to_string_pretty(&d).unwrap()).unwrap();
+}
+
+/// "Embed fonts" ticked (`onFontEmbedClick`): `GET /api/embedded/fonts` lists the fonts the board's texts use (`BOARD::GetFonts`, fontconfig's match), and the panel's OK
+/// (`apply`, with no font data) has the files read in by the server, typed font, one undo step; unticked, the fonts go. Needs fontconfig with DejaVu Sans (the box has it).
+#[test]
+fn the_fonts_box_takes_in_the_fonts_the_boards_texts_use() {
+    let dir = scratch("embedded_text_fonts");
+    setup(&dir);
+    if eda_kicad_engine::fonts::find_font("DejaVu Sans", false, false).is_none_or(|f| !f.path.ends_with("DejaVuSans.ttf")) {
+        eprintln!("skipped: fontconfig has no DejaVu Sans here");
+        return;
+    }
+    add_face_text(&dir, "txt_font1", "DejaVu Sans", false);
+    add_face_text(&dir, "txt_font2", "DejaVu Sans", true);
+    add_face_text(&dir, "txt_font3", "KiCad Font", false);
+    let fonts = json_of(&crate::embedded_api::fonts(&dir, "/api/embedded/fonts?owner=board"));
+    let names: Vec<&str> = fonts["fonts"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"], "{fonts}");
+    assert_eq!(fonts["fonts"][1]["permission"], "installable");
+
+    // the panel's OK: only the rows it still lists come in
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "embedded", "verb": "apply", "owner": { "kind": "board" }, "fonts": true, "refresh_fonts": true, "text_fonts": ["DejaVuSans.ttf"] })).unwrap();
+    step(&dir, cmd, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let list = &design.drawings.as_ref().unwrap().embedded;
+    assert!(list.fonts);
+    assert_eq!(list.files.iter().map(|f| (f.name.as_str(), f.kind)).collect::<Vec<_>>(), [("DejaVuSans.ttf", EmbeddedFileType::Font)]);
+    assert_eq!(eda_kicad::embedded::decode(&list.files[0]).unwrap().bytes, std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").unwrap_or_else(|_| eda_kicad::embedded::decode(&list.files[0]).unwrap().bytes));
+    // the derived board (the save) adds the bold one the texts use as well (`EmbedFonts`, `AddFile( .., false )`)
+    let saved = eda_kicad_engine::fonts::with_board_fonts(&design);
+    assert_eq!(saved.drawings.as_ref().unwrap().embedded.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]);
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(names_listed(&dir, "/api/embedded?owner=board").is_empty(), "one undo");
+}
+
+/// `GetAssociatedDocument`'s `kicad-embed://` branch: the first list of the stack that has the file gives it, served with its type; no list, or none that has it, is a 404.
+#[test]
+fn a_datasheet_named_by_kicad_embed_is_served_from_the_first_list_of_the_stack_that_has_it() {
+    let dir = scratch("embedded_datasheet_doc");
+    setup(&dir);
+    step(&dir, add(EmbeddedOwner::Footprint { reference: "U1".into() }, "u1.pdf", b"%PDF-1.4 from U1"), false, "test").unwrap();
+    step(&dir, add(EmbeddedOwner::Board, "ds.pdf", b"%PDF-1.4 from the board"), false, "test").unwrap();
+    let enc = |s: &str| s.replace('{', "%7B").replace('}', "%7D").replace('"', "%22").replace(':', "%3A").replace(',', "%2C").replace('[', "%5B").replace(']', "%5D");
+    let doc = |name: &str, stack: &str| crate::embedded_api::document(&dir, &format!("/api/embedded/doc?name=kicad-embed%3A%2F%2F{name}&stack={}", enc(stack)));
+    let stack = r#"[{"kind":"footprint","reference":"U1"},{"kind":"board"}]"#;
+    let r = doc("u1.pdf", stack);
+    assert_eq!((r.status, r.kind, r.body.as_slice()), ("200 OK", "application/pdf", &b"%PDF-1.4 from U1"[..]));
+    let r = doc("ds.pdf", stack);
+    assert_eq!(r.body, b"%PDF-1.4 from the board", "the next list of the stack");
+    assert_eq!(doc("u1.pdf", r#"[{"kind":"board"}]"#).status, "404 Not Found");
+    assert_eq!(doc("ds.pdf", r#"[{"kind":"footprint","reference":"U2"}]"#).status, "404 Not Found");
+    assert_eq!(doc("ds.pdf", "[]").status, "404 Not Found");
+    assert_eq!(doc("ds.pdf", "not json").status, "400 Bad Request");
+}

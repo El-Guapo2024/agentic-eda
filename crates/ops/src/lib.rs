@@ -103,7 +103,7 @@ mod multichannel_facts;
 mod multichannel_geom;
 pub use multichannel::{AreaKind, AreaPick, MultichannelCmd, PlacementSources, PotentialArea, RepeatOptions, RepeatPlan, TargetCompat};
 pub mod embedded;
-pub use embedded::{CollectedModel, EmbeddedCmd, EmbeddedOwner};
+pub use embedded::{AddedFile, CollectedModel, EmbeddedCmd, EmbeddedOwner};
 pub mod pcb_items;
 pub mod kicad10_items;
 pub mod drill_chart;

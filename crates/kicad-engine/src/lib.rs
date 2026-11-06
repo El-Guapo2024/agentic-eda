@@ -27,6 +27,8 @@ pub mod pictures;
 pub use pictures::{board_plot, schematic_plot, PictureFormat};
 // KiCad's IPC API: one `kicad-cli api-server` kept up, for what it does without a per-run start (Specctra session import, export jobs).
 pub mod api;
+// The outline fonts the board's texts use, found through fontconfig and embedded on save as `PCB_IO_KICAD_SEXPR::FormatBoardToFormatter` embeds them.
+pub mod fonts;
 
 use eda_kicad::zone_fills::KicadFills;
 use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
@@ -567,6 +569,9 @@ fn export_board(design: &Design, model: &ConstraintModel, work: &Path, stem: &st
 fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem: &str, fills: Option<&KicadFills>) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
+    // `FormatBoardToFormatter`: "If the user wants fonts embedded, make sure that they are added to the board" (`BOARD::EmbedFonts`, [`fonts::with_board_fonts`]); the writer
+    // drops them when the board does not embed fonts (`ClearEmbeddedFonts`).
+    let design = &*fonts::with_board_fonts(design);
     let (pcb, map) = export_kicad_pcb_mapped_with(design, model, &ExportMeta { date: &date, title: stem }, fills)?;
     // A net class with a colour (Appearance > Net Classes) can only reach KiCad in the project file, and KiCad reads the project's classes only when the board has
     // none of its own: so then the classes move there whole, and kicad-cli judges the board by the same numbers (`eda_kicad::appearance::split_net_classes`).

@@ -13,6 +13,12 @@
 //!     replays the same elsewhere.
 //!   - A footprint's model named `kicad-embed://name` is found by [`crate::model3d_api::resolve`] through [`embedded_model_path`]: the file is extracted under the board's
 //!     `.kicad/embed/` (`EMBEDDED_FILES::GetTemporaryFileName`) and served from there.
+//!   - **`GET /api/embedded/fonts?owner=board`**: the fonts the board's texts use that may be embedded (`BOARD::GetFonts`, `eda_kicad_engine::fonts`) -- `{"fonts": [{"name",
+//!     "family", "path", "size", "permission", "faces"}], "skipped": [{"face", "reason"}]}` -- what ticking "Embed fonts" takes into the panel's copy (`onFontEmbedClick`).
+//!     The `apply` verb that comes with the box ticked and no font data has the files read in here ([`with_text_fonts`]), as `collect_models` has its models.
+//!   - **`GET /api/embedded/doc?stack=<owners>&name=<kicad-embed://name>`**: a document a datasheet field names by `kicad-embed://` (`GetAssociatedDocument`,
+//!     `common/eda_doc.cpp`): the first list of the stack (a JSON array of owners, `[{"kind":"schematic"},{"kind":"library_symbol","lib_id":".."}]`, the caller's
+//!     `aFilesStack`) that has the file gives it, served with its type so the browser shows it (KiCad extracts it to its cache, `GetTemporaryFileName`, and opens that).
 
 use crate::model3d_api::{percent_decode, Reply};
 use eda_kicad::embedded::{self, EmbedError};
@@ -324,6 +330,132 @@ pub fn collect_plan(dir: &Path) -> Reply {
             "skipped": plan.skipped.iter().map(|(p, why)| json!({ "path": p, "reason": why })).collect::<Vec<_>>(),
         }),
     )
+}
+
+// ------------------------------------------------------------------------------------------------------------------ fonts and documents
+
+/// The fonts an owner's texts use, as `GetFonts` finds them: the board's (`BOARD::GetFonts`). The other owners' texts are not asked yet: their panels take in no fonts.
+fn text_fonts_of(design: &Design, owner: &EmbeddedOwner) -> (Vec<eda_kicad_engine::fonts::TextFont>, Vec<(eda_kicad_engine::fonts::FontUse, String)>) {
+    match owner {
+        EmbeddedOwner::Board => eda_kicad_engine::fonts::text_fonts(&eda_kicad_engine::fonts::board_font_uses(design)),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+/// `GET /api/embedded/fonts`.
+pub fn fonts(dir: &Path, target: &str) -> Reply {
+    let owner = match owner_of(target) {
+        Ok(o) => o,
+        Err(e) => return reply("400 Bad Request", json!({ "error": e })),
+    };
+    let design = match read_design(dir) {
+        Ok(d) => d,
+        Err(e) => return reply("404 Not Found", json!({ "error": e })),
+    };
+    let (found, skipped) = text_fonts_of(&design, &owner);
+    reply(
+        "200 OK",
+        json!({
+            "owner": owner,
+            "fonts": found.iter().map(|f| json!({
+                "name": f.name,
+                "family": f.family,
+                "path": f.path.display().to_string(),
+                "size": f.size,
+                "permission": f.permission.word(),
+                "faces": f.uses.iter().map(|u| json!({ "face": u.face, "bold": u.bold, "italic": u.italic })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "skipped": skipped.iter().map(|(u, why)| json!({ "face": u.face, "bold": u.bold, "italic": u.italic, "reason": why })).collect::<Vec<_>>(),
+        }),
+    )
+}
+
+/// The content type a document is served with, by its extension: what the browser shows in a tab of its own (a PDF in its viewer), anything else as bytes.
+fn document_kind(name: &str) -> &'static str {
+    match embedded_files::extension_of(name).to_ascii_lowercase().as_str() {
+        "pdf" => "application/pdf",
+        "htm" | "html" => "text/html; charset=utf-8",
+        "txt" | "md" | "csv" => "text/plain; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// `GET /api/embedded/doc`: `GetAssociatedDocument`'s `kicad-embed` branch -- "docname = docname.Mid( ... )", then `aFilesStack[0]->GetTemporaryFileName( docname )`,
+/// the next list of the stack while the file is not found.
+pub fn document(dir: &Path, target: &str) -> Reply {
+    let link = query(target, "name");
+    let name = embedded_files::name_of_link(&link).unwrap_or(&link).to_string();
+    let stack: Vec<EmbeddedOwner> = match serde_json::from_str(&query(target, "stack")) {
+        Ok(s) => s,
+        Err(e) => return reply("400 Bad Request", json!({ "error": format!("stack must be a JSON array of owners: {e}") })),
+    };
+    if stack.is_empty() {
+        // "No EMBEDDED_FILES object provided for kicad_embed URI"
+        return reply("404 Not Found", json!({ "error": "No EMBEDDED_FILES object provided for kicad_embed URI" }));
+    }
+    let design = match read_design(dir) {
+        Ok(d) => d,
+        Err(e) => return reply("404 Not Found", json!({ "error": e })),
+    };
+    for owner in &stack {
+        let Ok(list) = embedded_files::list_of(&design, owner) else { continue };
+        // a footprint's file that is only a reference has its data in the board's list (`BOARD::FixupEmbeddedData`)
+        let list = match (owner, design.drawings.as_ref()) {
+            (EmbeddedOwner::Footprint { .. }, Some(d)) => list.fixed_up_from(&d.embedded),
+            _ => list,
+        };
+        let Some(f) = list.get(&name).filter(|f| !f.data.is_empty()) else { continue };
+        return match embedded::decode(f) {
+            Ok(d) => Reply { status: "200 OK", kind: document_kind(&name), body: d.bytes },
+            Err(e) => reply("422 Unprocessable Entity", json!({ "error": format!("{name}: {e}") })),
+        };
+    }
+    // "Failed to get temp file '%s' for kicad_embed URI"
+    reply("404 Not Found", json!({ "error": format!("Failed to get temp file '{name}' for kicad_embed URI") }))
+}
+
+/// The `apply` verb (the panel's OK) with the box ticked by a click and no font data: the files of the text's fonts the panel still lists (`text_fonts`), read here
+/// (`onFontEmbedClick`'s `AddFile( font->GetFileName(), true )`), so the command replays and undoes the same on a machine without the fonts. `None` when there is nothing to read.
+pub(crate) fn with_text_fonts(cmd: &Cmd, design: &Design) -> Option<Cmd> {
+    match cmd {
+        Cmd::Batch { cmds } => {
+            let mut changed = false;
+            let out: Vec<Cmd> = cmds
+                .iter()
+                .map(|c| match with_text_fonts(c, design) {
+                    Some(c) => {
+                        changed = true;
+                        c
+                    }
+                    None => c.clone(),
+                })
+                .collect();
+            changed.then_some(Cmd::Batch { cmds: out })
+        }
+        Cmd::Embedded(EmbeddedCmd::Apply { owner, removed, added, fonts, refresh_fonts, text_fonts, font_files: None, nested }) => {
+            let files: Vec<EmbeddedFile> = if *refresh_fonts && *fonts {
+                text_fonts_of(design, owner).0.iter().filter(|f| text_fonts.contains(&f.name)).filter_map(|f| eda_kicad_engine::fonts::font_file(&f.path).ok()).collect()
+            } else {
+                Vec::new()
+            };
+            Some(Cmd::Embedded(EmbeddedCmd::Apply {
+                owner: owner.clone(),
+                removed: removed.clone(),
+                added: added.clone(),
+                fonts: *fonts,
+                refresh_fonts: *refresh_fonts,
+                text_fonts: text_fonts.clone(),
+                font_files: Some(files),
+                nested: *nested,
+            }))
+        }
+        _ => None,
+    }
 }
 
 /// `cmd` with the models of every `collect_models` in it found and read, or `None` when there is nothing to read (`crate::sheet_import::with_loaded_file` does the same for
