@@ -9,7 +9,9 @@
 //     `showHierarchy` / `showProperties` toggle them (`SCH_EDIT_FRAME::setupUIConditions`' CHECK( ... IsShown() )).
 //   - The Selection Filter has no switch of its own: `SCH_EDIT_FRAME::updateSelectionFilterVisbility` shows it while the hierarchy, the net
 //     navigator or the properties pane is shown and docked, and it is a fixed-size pane (`dock_proportion = 0`, 180 wide, no vertical growth).
-//   - pcbnew's frame (pcb_edit_frame.cpp) docks Properties on the left and the Appearance manager (with the selection filter) on the right.
+//   - pcbnew's frame (pcb_edit_frame.cpp) docks Properties on the left and the Appearance manager (with the selection filter) on the right, and the Net
+//     Inspector and the Search panel at the bottom (`.Bottom()`, layer 0: right under the canvas, inside the vertical toolbars), both hidden to begin with
+//     (`aui.show_net_inspector`, `aui.show_search` default false) and toggled by their actions (`ToggleNetInspector`, `ToggleSearch`).
 //
 // What a browser window adds that wxAUI's does not need: an 800 px window cannot hold 300 px of properties next to a canvas, so each column
 // can be folded to a handle (`leftCollapsed` / `rightCollapsed`) and each pane to its caption (`folded`), and a window narrower than
@@ -17,7 +19,10 @@
 // second folds the first, like a drawer: both open leave a 160 px canvas in an 800 px window). The studio's own panes (the Appearance dock)
 // follow the same two switches.
 
-export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter";
+export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter" | "netInspector" | "search";
+
+/** The board editor's panes docked under the canvas (`.Bottom()`), in the order they are added (`m_netInspectorPanel`, then `m_searchPane`). */
+export const PCB_BOTTOM_PANES: readonly DockPaneId[] = ["netInspector", "search"];
 
 /** `wxAuiPaneInfo::Position()` of each pane of the schematic frame's left column (lower = higher up); the order panes are drawn in. */
 export const SCH_LEFT_COLUMN_ORDER: readonly DockPaneId[] = ["netNavigator", "hierarchy", "properties", "selectionFilter"];
@@ -54,8 +59,8 @@ export function defaultDockLayout(windowWidth: number): DockLayout {
     // `show_schematic_hierarchy` and `show_properties` default true; the Appearance manager is shown by default in pcbnew too.
     // `show_net_nav_panel` defaults false. Whether the Net Navigator is OPEN is the schematic control store's (`netNavigatorOpen`, which its action and its check
     // mark read), passed in below; this flag is not read for it.
-    shown: { netNavigator: false, hierarchy: true, properties: true, selectionFilter: true },
-    folded: { netNavigator: false, hierarchy: false, properties: false, selectionFilter: false },
+    shown: { netNavigator: false, hierarchy: true, properties: true, selectionFilter: true, netInspector: false, search: false },
+    folded: { netNavigator: false, hierarchy: false, properties: false, selectionFilter: false, netInspector: false, search: false },
   };
 }
 
@@ -84,7 +89,9 @@ export function togglePane(layout: DockLayout, id: DockPaneId, windowWidth = Inf
   const next: DockLayout = { ...layout, shown: { ...layout.shown, [id]: show } };
   if (show) {
     next.folded = { ...layout.folded, [id]: false };
-    return setColumnCollapsed(next, "left", false, windowWidth); // every pane here is docked in the left column
+    // the bottom panes are no column's: showing one leaves the side columns as they are
+    if (PCB_BOTTOM_PANES.includes(id)) return next;
+    return setColumnCollapsed(next, "left", false, windowWidth); // every other pane here is docked in the left column
   }
   return next;
 }

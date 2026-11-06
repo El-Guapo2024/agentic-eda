@@ -85,6 +85,7 @@ import { getCommonOptions, useCommonOptions } from "../state/commonOptions";
 import { unfilledZoneWarning, ZONE_FILL_WARNING_MS } from "../kicad-port/checkRevision";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
+import { toggleSearchPane } from "../state/searchPane";
 import { netAtClick, registerSchControlActions, schControlChecked } from "./schControlActions";
 import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
@@ -1224,11 +1225,10 @@ export function useActionRunner() {
 
     // Next / Previous Grid, the grid presets and the fast grids work on the editor's grid list (state/gridSettings.ts): actions/commonGridListActions.ts.
 
-    // common.Interactive.search: this app has no KiCad Search panel --
-    // the task put Search on the non-KiCad Activity tab instead (see
-    // panels/RightDock.tsx), so that's what this jumps to.
-    m.set("common.Interactive.search", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "activity" }));
-    m.set("pcbnew.Control.showNetInspector", () => dispatch({ type: "SET_NET_INSPECTOR_OPEN", open: true }));
+    // ACTIONS::showSearch ("Search", Ctrl+G) and PCB_ACTIONS::showNetInspector: `PCB_EDIT_FRAME::ToggleSearch` / `ToggleNetInspector` show or hide the board
+    // editor's bottom panes (components/panels/BottomDock.tsx); a shown Search pane takes the focus (`FocusSearch`). The schematic has no Search pane here.
+    m.set("common.Interactive.search", pcbOnly(() => toggleSearchPane()));
+    m.set("pcbnew.Control.showNetInspector", pcbOnly(() => toggleDockPane("netInspector")));
 
     // common.Interactive.selectAll/unselectAll: every placed footprint
     // (respecting the footprints selection-filter toggle, same as a box

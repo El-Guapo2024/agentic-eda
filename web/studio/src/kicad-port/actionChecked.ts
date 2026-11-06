@@ -106,6 +106,11 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
     case "pcbnew.Control.showLayersManager":
       if (c.tab === "footprint") return c.fpView?.appearanceShown;
       return c.tab === "pcb" ? !c.dock.rightCollapsed && c.rightDockTab === "appearance" : undefined;
+    // `PCB_EDIT_FRAME::setupUIConditions`: CHECK( netInspectorCond ) and CHECK( searchPaneCond ), the board editor's two bottom panes
+    case "pcbnew.Control.showNetInspector":
+      return c.tab === "pcb" ? c.dock.shown.netInspector : undefined;
+    case "common.Interactive.search":
+      return c.tab === "pcb" ? c.dock.shown.search : undefined;
     case "common.Control.showLibraryTree":
       return c.tab === "footprint" || c.tab === "symbol" ? !c.dock.treeCollapsed : undefined;
     case "eeschema.SymbolLibraryControl.showElectricalTypes":
