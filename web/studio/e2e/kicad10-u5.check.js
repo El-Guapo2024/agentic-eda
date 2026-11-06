@@ -15,6 +15,7 @@
 //   5  a grid item's role in a route: the route tool's point snaps to a grid item that affects the cursor, not to one that affects only routing
 //   6  Via Stitching's via: Draw Via Stitch Area, Via Stitching Properties' Configure (Track & Via Properties on the template: the toolbar's via size, ValidateViaParameters'
 //      words, the annular rings), OK: the stitching's template and every via it made
+//   7  Board Setup > Drill Chart: the profile's Default marks applied (one undo step); Close and Edit Drill Groups... closes Board Setup and opens Drill Groups
 //
 // It answers through `window.__kicad10u5Check`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
 // run-all-checks: board=kicad10-stitch minutes=15   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
@@ -385,6 +386,36 @@
       await E.run("common.Interactive.delete");
       await waitFor(async () => (await stitches()).length === n0, 10000);
       t((await stitches()).length === n0, "Delete removes it");
+    });
+
+    // ------------------------------------------------------------------------------------------------------------------ 7. Board Setup's Drill Chart page
+    await scenario("Board Setup > Drill Chart: Default marks applied, one undo step; Close and Edit Drill Groups... opens Drill Groups", async (t) => {
+      const policy = async () => (await board()).drawings?.drill_profile?.mark_policy;
+      const p0 = await policy();
+      await E.run("pcbnew.EditorControl.boardSetup");
+      await sleep(600);
+      const nav = [...document.querySelectorAll(".bs-nav-item")].find((b) => b.textContent.trim() === "Drill Chart");
+      t(!!nav, "Board Setup has the Drill Chart page");
+      if (!nav) return;
+      nav.click();
+      await sleep(300);
+      const pageEl = document.querySelector('section.bs-page[aria-label="Drill Chart"]');
+      const marks = pageEl?.querySelector('select[aria-label="Default marks"]');
+      t(!!marks && [...marks.options].map((o) => o.textContent).join("|") === "Curated shapes|Letters|Curated shapes, then letters|Hole size text", `Default marks' choices (${marks ? [...marks.options].map((o) => o.textContent).join("|") : "none"})`);
+      const labels = [...pageEl.querySelectorAll(".bs-check")].map((l) => l.textContent.trim());
+      t(labels.includes("IPC-4761 protection") && labels.includes("Keep existing symbol assignments when holes change"), "the grouping checklist and the freeze");
+      setValue(marks, "letters");
+      await sleep(150);
+      [...pageEl.querySelectorAll("button")].find((b) => b.textContent.trim() === "Apply").click();
+      await waitFor(async () => (await policy()) === "letters", 6000);
+      t((await policy()) === "letters", "Apply sets the profile's default marks");
+      await undo();
+      t((await policy()) === p0, "one undo puts them back");
+      [...pageEl.querySelectorAll("button")].find((b) => b.textContent.trim() === "Close and Edit Drill Groups...").click();
+      await waitFor(() => !!tid("drill-groups"), 6000);
+      t(!!tid("drill-groups") && !document.querySelector(".bs-dialog"), "Board Setup closes and Drill Groups opens");
+      tid("dg-close")?.click();
+      await sleep(300);
     });
 
     const { chart } = await chartOf();
