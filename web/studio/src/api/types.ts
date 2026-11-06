@@ -1469,6 +1469,20 @@ export interface StackupLayer {
   loss_tangent?: number;
   /** `(color ..)` of a solder mask, silkscreen or dielectric: KiCad's name for a standard colour (`Green`, `FR4 natural`, ..) or `#RRGGBB[AA]`; absent = not specified. The 3D viewer paints the board with it ("Use board stackup colors"). */
   color?: string;
+  /** `(thickness .. locked)` of a dielectric's first sublayer; absent = unlocked. */
+  thickness_locked?: boolean;
+  /** A dielectric's sublayers after the first (`addsublayer`; the fields above are the first). Absent = one sublayer. See kicad-port/physicalStackup.ts. */
+  sublayers?: StackupSublayer[];
+}
+/** `crates/model/src/lib.rs` `StackupSublayer` (`DIELECTRIC_PRMS`): one sublayer of a dielectric after its first. A key left out is not written to the file. */
+export interface StackupSublayer {
+  material?: string | null;
+  /** mm; absent reads as 0. */
+  thickness_mm?: number | null;
+  thickness_locked?: boolean;
+  epsilon_r?: number | null;
+  loss_tangent?: number | null;
+  color?: string | null;
 }
 
 // ---------------------------------------------------------------- Cmd
@@ -1783,7 +1797,8 @@ export type Cmd =
   | { op: "set_constraints"; constraints: Constraints }
   | { op: "set_mask_paste"; settings: MaskPaste }
   | { op: "set_text_graphics_defaults"; settings: TextGraphicsDefaults }
-  | { op: "set_stackup"; settings: StackupSettings }
+  /** `delete_items_on_removed_layers`: fewer copper layers delete what is on the layers that go (KiCad's question answered OK); without it the backend refuses. */
+  | { op: "set_stackup"; settings: StackupSettings; delete_items_on_removed_layers?: boolean }
   /** DRC settings key -> severity, for the checks that differ from KiCad's default. */
   | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
   /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
