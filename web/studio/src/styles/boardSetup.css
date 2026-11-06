@@ -342,4 +342,35 @@
 }
 .bs-cc-menu button:hover:not(:disabled) {
   background: var(--chrome-hover);
+/* Custom Rules (CustomRulesPage.tsx): the "DRC Rules" title with the "Syntax help" hyperlink at its right, KiCad's editor, the
+   "Cancel Changes?" question, and the error links of the report. */
+.bs-rules-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 2px 0 4px;
+}
+.dialog button.bs-hyperlink,
+.dialog button.bs-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--chrome-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.bs-rules-editor {
+  height: 300px;
+  min-height: 120px;
+}
+.bs-ask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--chrome-warn);
+  border-radius: 4px;
+  background: var(--chrome-bg-raised);
 }

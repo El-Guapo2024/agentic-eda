@@ -153,7 +153,7 @@ select.re-field {
   line-height: 0;
   padding: 2px 4px;
 }
-.re-custom textarea {
+.re-custom > textarea {
   width: 100%;
   min-height: 220px;
   box-sizing: border-box;
@@ -214,4 +214,22 @@ select.re-field {
   display: flex;
   justify-content: flex-end;
   margin-top: 6px;
+/* The Conditions heading with `m_syntaxHelp` at its right, and KiCad's text editor (RuleTextEditor.tsx) for the Custom rule. */
+.re-cond-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.dialog button.re-hyperlink {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--chrome-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.re-custom-editor {
+  height: 220px;
+  min-height: 120px;
 }

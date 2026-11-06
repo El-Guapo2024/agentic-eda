@@ -14,9 +14,13 @@
 // items the rule selects and counts them on the button ("Show Matches (%d)", "Show Matches (error)"; reset when the conditions change). A saved rule dragged
 // onto another of its node takes its place (`onRuleTreeItemLeftUp`: first, last, or just before the target), one `drop_drc_rule` verb.
 //
-// Not ported: the Syntax help window, the units of the frame (fields are in mm), a new rule's Move Up/Down and drag (KiCad moves its tree item; here only
-// the file's rules move, and the file's order follows, where KiCad's move leaves the file as it is), dragging a category or constraint node (KiCad's moves
-// the tree item and nothing else).
+// The Custom rule's text and the condition rows' Custom Query are KiCad's text editor (RuleTextEditor.tsx: the brace highlight; the Custom rule's
+// completion is `DRC_RE_CUSTOM_RULE_PANEL::onScintillaCharAdded`, kicad-port/ruleCompletion.ts `customRuleCharAdded`; the rows' editor completes
+// nothing, as their SCINTILLA_TRICKS' char-added function does nothing). "Syntax help" beside Conditions is `PANEL_DRC_RULE_EDITOR::onSyntaxHelp`.
+//
+// Not ported: the units of the frame (fields are in mm), a new rule's Move Up/Down and drag (KiCad moves its tree item; here only the file's rules move,
+// and the file's order follows, where KiCad's move leaves the file as it is), dragging a category or constraint node (KiCad's moves the tree item and
+// nothing else).
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchRuleEditor, postRuleEditorCheck, postRuleEditorShowMatches } from "../api/client";
 import { canvasRect } from "../actions/canvasEvents";
@@ -56,6 +60,12 @@ import {
 } from "../kicad-port/ruleEditor";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import "../styles/ruleEditor.css";
+import { isMac } from "../platform";
+import { customRuleCharAdded } from "../kicad-port/ruleCompletion";
+import { SYNTAX_HELP_SIZE_DU, SYNTAX_HELP_TITLE, syntaxHelpHtml } from "../kicad-port/rulesSyntaxHelp";
+import rulesHelp from "../kicad/rules_help.json";
+import { HtmlMessageBox } from "./HtmlMessageBox";
+import { RuleTextEditor } from "./RuleTextEditor";
 
 /** The rule panel as it is being edited (`PANEL_DRC_RULE_EDITOR` and its constraint panel). */
 interface PanelState {
@@ -666,6 +676,13 @@ function GroupHeader({ rows }: { rows: { type: string; name: string; comment: st
   );
 }
 
+let conditionHelp: string | null = null;
+/** `PANEL_DRC_RULE_EDITOR::onSyntaxHelp`'s page: its eight texts (src/kicad/rules_help.json `ruleEditor`), made once. */
+function conditionHelpHtml(): string {
+  const texts = rulesHelp.texts as Record<string, string>;
+  return (conditionHelp ??= syntaxHelpHtml((rulesHelp.ruleEditor as string[]).map((f) => texts[f] ?? ""), isMac()));
+}
+
 /** `PANEL_DRC_RULE_EDITOR`: name and comment, the constraint panel, the conditions, the layer. */
 function RulePanel({
   p,
@@ -692,6 +709,7 @@ function RulePanel({
 }) {
   const options = view.layer_options[p.panel] ?? [];
   const custom = p.panel === "custom_rule";
+  const [helpOpen, setHelpOpen] = useState(false); // `m_helpWindow`
   const twoObjects = needsTwoObjects(p.panel);
   return (
     <div className="re-panel" data-testid="re-panel" data-panel={p.panel}>
@@ -708,7 +726,7 @@ function RulePanel({
       <h4 className="re-section">{constraintName} Constraint</h4>
       {custom ? (
         <div className="re-custom">
-          <textarea data-testid="re-custom-text" spellCheck={false} value={p.customText} onChange={(e) => update({ customText: e.target.value })} />
+          <RuleTextEditor testId="re-custom-text" className="re-custom-editor" value={p.customText} onChange={(t) => update({ customText: t })} onCharAdded={customRuleCharAdded} />
           <div className="re-custom-check">
             {syntaxTip && (
               <span className="re-tip" data-testid="re-syntax-tip">
@@ -725,7 +743,13 @@ function RulePanel({
       )}
       {!custom && (
         <>
-          <h4 className="re-section">Conditions</h4>
+          <div className="re-cond-head">
+            <h4 className="re-section">Conditions</h4>
+            <button className="re-hyperlink" data-testid="re-syntax-help" onClick={() => setHelpOpen(true)}>
+              Syntax help
+            </button>
+          </div>
+          <HtmlMessageBox title={SYNTAX_HELP_TITLE} html={conditionHelpHtml()} open={helpOpen} onClose={() => setHelpOpen(false)} sizeDu={SYNTAX_HELP_SIZE_DU} testId="re-syntax-help-window" />
           <ConditionGroup rows={p.rows} twoObjects={twoObjects} view={view} onChange={(rows) => update({ rows })} />
           {options.length > 1 && (
             <>
@@ -872,7 +896,7 @@ function ConditionGroup({ rows, twoObjects, view, onChange }: { rows: ConditionR
               ))}
             </select>
           )}
-          {r.type === "custom" && <textarea data-testid="re-cond-custom" className="re-cond-custom" spellCheck={false} value={r.value} onChange={(e) => set(i, { value: e.target.value })} />}
+          {r.type === "custom" && <RuleTextEditor testId="re-cond-custom" className="re-cond-custom" value={r.value} onChange={(t) => set(i, { value: t })} />}
           {rows.length > 1 && (
             <button title="Remove this condition" data-testid="re-cond-remove" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
               <Icon name="trash" />
