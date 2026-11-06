@@ -151,32 +151,32 @@ Notes:
   - With Allow DRC violations on, a violating via is placed silently (C6-6).
   - The via check misses unflashed PTH layers, and copper text boxes, tables and dimensions (C6-4/5, R7-4).
   - S. r6/r7-pcb-edit.
-- **P24 [BD] Edit tools, small differences.**
-  - Cleanup Tracks doesn't merge overlapping collinear tracks, and the tracks it merges get new ids.
-  - Cleanup Graphics skips text boxes.
-  - Merge Zones has no "could not be merged" message.
-  - Create Array skips tuning patterns.
-  - An off-quarter rotation flattens a rounded rectangle's arcs.
-  - Flip leaves a footprint's user-layer drawings in place.
-  - Pasting a pad whose footprint was deleted brings the footprint back (B-7).
-  - No "Do not show again" boxes.
+- **P24 [BD] Edit tools, small differences.** **done (task-u5-pcblows)** (PARITY-pcb §79):
+  - ~~Cleanup Tracks doesn't merge overlapping collinear tracks, and the tracks it merges get new ids.~~ Done: `testMergeCollinearSegments` whole (the span of the four ends, `ApproxCollinear`'s 1 nm); the first track is modified in place and keeps its id, mask and group.
+  - ~~Cleanup Graphics skips text boxes.~~ Done: a text box is a `PCB_SHAPE` to `cleanupShapes`.
+  - ~~Merge Zones has no "could not be merged" message.~~ Done: the polygon booleans' "Some of the polygons could not be intersected." (merged, subtracted) and the all-failed push (D-11); Merge Zones' log lines after a merge too.
+  - ~~Create Array skips tuning patterns.~~ Done (`DeepClone` with the tracks).
+  - An off-quarter rotation flattens a rounded rectangle's arcs. **Left:** the polygon IR has no arcs (GAPS 27); it plots the same.
+  - ~~Flip leaves a footprint's user-layer drawings in place.~~ Done: drawings and fields on a typed user layer go to its pair (a text mirrored), in the part's own copy of the definition.
+  - ~~Pasting a pad whose footprint was deleted brings the footprint back (B-7).~~ Done.
+  - ~~No "Do not show again" boxes.~~ Done: Drag Anyway, Break Track on a locked track, Track & Via Properties' two net questions (`KIDIALOG`'s session memory). **Left:** Preferences' Reset "Don't Show Again" Dialogs.
   - S. PARITY-pcb §55-60; r3 B-7/D-8/D-10/D-11, r4 C-2, r5 B5-6/16.
-- **P25 [BD] Net tools.**
-  - Highlight Net drops the no-net net.
-  - Local Ratsnest picks a pad by its box.
-  - The net-under-cursor pick differs.
-  - Repair Board runs in a different order (C7-5/10/11/12).
-  - Flip Board View mirrors text that KiCad keeps readable.
+- **P25 [BD] Net tools.** **done (task-u5-pcblows)** (PARITY-pcb §79):
+  - ~~Highlight Net drops the no-net net.~~ Done: an item of no net is on net 0 (C7-5).
+  - ~~Local Ratsnest picks a pad by its box.~~ Done: `PAD::HitTest`, the clicked item left selected (C7-10).
+  - ~~The net-under-cursor pick differs.~~ Done: `GENERAL_COLLECTOR`'s (C7-11). **Left:** the selection filter is not asked.
+  - ~~Repair Board runs in a different order (C7-5/10/11/12).~~ Done: orphan nets from pads, tracks and vias only. **Kept:** the id order cannot matter here, and it stays an undo step (see §79).
+  - ~~Flip Board View mirrors text that KiCad keeps readable.~~ Done for texts, fields, footprint texts, dimensions and pad numbers. **Left:** text boxes and table cells.
   - S. r7-editors-exports; PARITY-boardctl §1, §7.
-- **P26 [BD] Embedded Files.**
-  - Add and Remove apply at once; KiCad applies them on OK.
-  - Export goes file by file.
-  - Fonts aren't embedded, and `kicad-embed://` datasheets don't open.
-  - S. PARITY-pcb §47.
-- **P27 [FM] Board outline.**
-  - No outline editor.
-  - Fix discontinuities in board outlines does nothing.
-  - A footprint's Edge.Cuts don't follow it when it moves.
+- **P26 [BD] Embedded Files.** **done (task-u5-pcblows)**: the panel edits a copy applied as one step on OK (the dialog's OK in Footprint Properties; the page's Apply in Board Setup / Schematic Setup, with Close asking); Export writes the copy into a folder picked once with KiCad's "File '%s' already exists." (Overwrite / Skip, Do not show again), a download per file where the browser has no folder picker; Embed fonts takes in the fonts the board's texts use (fontconfig's match, the OS/2 licence) and the board embeds them on every save, as kicad-cli does (DejaVuSans-Bold.ttf for issue14549's Calibri); `kicad-embed://` datasheets open from Show Datasheet (PARITY-pcb §78). Left: fonts for the schematic, footprint and symbol panels and their saves; a `kicad-embed://` drawing sheet; the datasheet buttons of the Properties panel and the field grids.
+  - ~~Add and Remove apply at once; KiCad applies them on OK.~~
+  - ~~Export goes file by file.~~
+  - ~~Fonts aren't embedded, and `kicad-embed://` datasheets don't open.~~
+  - S. PARITY-pcb §47, §78.
+- **P27 [FM] Board outline.** **done (task-u5-pcblows)** (PARITY-pcb §79):
+  - ~~No outline editor.~~ KiCad 8303b2ad has none either: `PCB_BOARD_OUTLINE` is the board area's shadow (drawn); Edge.Cuts are edited with the shape tools.
+  - ~~Fix discontinuities in board outlines does nothing.~~ It is Cleanup Graphics' (ported, §60: the lines moved in place on OK, none in the preview, as KiCad); KiCad's Update PCB has no such option.
+  - ~~A footprint's Edge.Cuts don't follow it when it moves.~~ They are its art and follow a move, turn and flip; `D` takes them (and Margin) along in the router too (pns Stage 24).
   - S. GAPS 27.
 - **P28 [CO] Cosmetic.**
   - The ratsnest curve and highlight colour, and other nets not dimmed (C7-8/9).
@@ -185,12 +185,12 @@ Notes:
   - R, F and E on a carried text (A6-6).
   - The Select Net menu's order.
   - S. PARITY-pcb §1, §8, §24.
-- **P29 [BD] Found during the u1 batch (2026-11-05), not yet fixed.**
-  - A new board rule area starts with every keepout off; KiCad keeps out tracks, vias and pads (found by task-u1-fpedit).
-  - `layerPresets.ts` `layerGroupOp` leaves Edge.Cuts out of the copper group; KiCad's `presetAllCopper` counts it (task-u1-fpedit).
-  - Barcode Properties validates the old preview if OK is pressed within about 200 ms of typing (task-u1-fpedit).
-  - The existing single-track D drag snaps the cursor onto items of any net; KiCad snaps only onto the dragged line's net (task-u1-drag).
-  - Add / Remove / Chamfer Corner and Simplify empty a zone's fill; in KiCad only the corner drag calls `UnFill()` (task-u1-zones).
+- **P29 [BD] Found during the u1 batch (2026-11-05).** **done (task-u5-pcblows)** (PARITY-pcb §79), each checked against the C++ first:
+  - ~~A new board rule area starts with every keepout off; KiCad keeps out tracks, vias and pads (found by task-u1-fpedit).~~ Done (`ZONE_SETTINGS::ZONE_SETTINGS()`).
+  - ~~`layerPresets.ts` `layerGroupOp` leaves Edge.Cuts out of the copper group; KiCad's `presetAllCopper` counts it (task-u1-fpedit).~~ Done.
+  - ~~Barcode Properties validates the old preview if OK is pressed within about 200 ms of typing (task-u1-fpedit).~~ Done: OK asks for the barcode of the values shown.
+  - ~~The existing single-track D drag snaps the cursor onto items of any net; KiCad snaps only onto the dragged line's net (task-u1-drag).~~ Done (`updateEndItem`).
+  - ~~Add / Remove / Chamfer Corner and Simplify empty a zone's fill; in KiCad only the corner drag calls `UnFill()` (task-u1-zones).~~ Done: they keep it, out of date (`SetNeedRefill( true )`, `keep_fill`).
   - S. The tasks' PARITY sections.
 
 ## Schematic editor
@@ -275,7 +275,7 @@ Notes:
 - **R1 [FM] The footprint and multi-track draggers. done (task-u1-drag)** -- pns Stage 22.
   - ~~D on a footprint doesn't drag it with its tracks (COMPONENT_DRAGGER).~~ Done: the footprint follows the cursor with its pads, the tracks on them follow, one undo step.
   - ~~D on several tracks does nothing (MULTI_DRAGGER).~~ Done: the selected tracks drag together, in the three router modes.
-  - Left: the multi-track Shove has no springback; the selection is not cleared at the start, restored on Esc, or set to the leader segments after a multi-track drag; the closest net is not highlighted while dragging; a footprint's own Edge.Cuts / Margin graphics stay (board shapes in this model).
+  - Left: the multi-track Shove has no springback; the selection is not cleared at the start, restored on Esc, or set to the leader segments after a multi-track drag; the closest net is not highlighted while dragging; ~~a footprint's own Edge.Cuts / Margin graphics stay (board shapes in this model)~~ (they go along since task-u5-pcblows, pns Stage 24).
   - L. GAPS 7 R7-R9; pns Stages 21-22.
 - **R2 [FM] Diff pairs. done (task-u3-router)** -- pns Stage 23.
   - ~~No arcs in the pair router or the tuners (F4-2).~~ Done: a pair goes on from two arc track ends (`DP_PRIMITIVE_PAIR` / `BuildFromPrimitivePair` with `ARC_T`); the pair and skew tuners take an arc (`AssembleDiffPair` by centre and radius, `addCornersUntilIndex`'s `AddArc`). KiCad's pair placer itself draws mitered corners only.
@@ -298,28 +298,33 @@ Notes:
   - ~~Autoroute leaves the active layer changed (R7-R7).~~ Done.
   - Left: the router sizes' layer pairs start afresh with each route (KiCad keeps the last route's via pair in `m_savedSizes`).
   - S. pns Stages 11-21, 23.
-- **R6 [BD] The head's shape.**
-  - A fan-out elbow isn't straightened (`optimizeTailHeadTransition`).
-  - No hull snap in highlight-collisions mode.
-  - `reduceTail` and `handlePullback` are not ported.
-  - Earlier vias aren't shoved by a later leg.
-  - M. pns Stages 2, 10, 12.
+- **R6 [BD] The head's shape.** **done (task-u5-pcblows)**: the leg's tail is KiCad's in Walk around and Shove: reduceTail, handleSelfIntersections, handlePullback, mergeHead and optimizeTailHeadTransition, whose FANOUT_CLEANUP straightens a short fan-out from a pad. Highlight collisions snaps a colliding head onto the first obstacle's hull. A click's via is an ordinary via, so a later leg's shove onto it stops at the leg's locked joint as KiCad's does. pns Stage 24. Left: in the rounded corner modes a head with an arc never goes into the tail; the second per-winding optimize inside rhWalkBase is not run with a tail.
+  - M. pns Stages 2, 10, 12, 24.
 - **R7 [BD] Grab radius and widths. done (task-u3-router)** -- pns Stage 23.
   - ~~The start and end grab radius is a fixed 0.5 mm, not the grid size.~~ Done: the grid, measured to the copper (`pickSingleItem`'s `maxSlopRadius`, `snapToItem`), for routes, pairs and drags.
   - ~~Automatically Select Track Width stays on after a toolbar pick.~~ Not KiCad's: at 8303b2ad a toolbar pick sets `m_TempOverrideTrackWidth` and leaves "Automatically select track width" on (`Tracks_and_Vias_Size_Event`'s `ID_AUX_TOOLBAR_PCB_TRACK_WIDTH`); the toolbar's Track Width and Via Size boxes, display-only before, now do exactly that.
   - ~~The width keys cycle.~~ KiCad's already (Stage 18): the first press of a route at an inherited width overrides it, then the index steps and wraps, as `TrackWidthInc` / `Dec`.
   - Left: `pickSingleItem`'s free-pad and no-net (Highlight collisions) special cases.
   - S. pns Stages 12, 23; PARITY-boardctl §4.
-- **R8 [BD] Size dialogs.**
-  - An extra Optimizer effort row, and "Use Custom Values…".
-  - Pre-defined Sizes' Add isn't pre-filled, and a 0 width is refused.
-  - Cleanup and Break Track drop the mask opening and the group (R6-R8).
+- **R8 [BD] Size dialogs.** **done (task-u5-pcblows)** (PARITY-pcb §79):
+  - ~~An extra Optimizer effort row, and "Use Custom Values…".~~ Done: no Optimizer effort row (KiCad has none); the width menu's Use Custom Values... takes the custom sizes before the dialog, whatever it returns.
+  - ~~Pre-defined Sizes' Add isn't pre-filled, and a 0 width is refused.~~ Done: Add makes a row of 0 (drill and gaps empty), a 0 width is kept.
+  - ~~Cleanup and Break Track drop the mask opening and the group (R6-R8).~~ Done: Break Track's halves name the track as their source; Cleanup's merged track is the first kept in place.
+  - Left: R6-R8 itself (a shoved line of several tracks takes the mask of the one whose id sorts first, KiCad the seed's: pns Stage 20).
   - S. pns Stages 6, 11, 18, 20.
-- **R9 [BD] Obstacles and rules, edge cases.** Castellated pads, a footprint's Margin graphics, text hulls, track-geometry rules, and 1-2 nm tolerances. M. pns Stages 3, 12, 15-17.
-- **R10 [CO] Toasts.**
-  - Toasts appear on router and corner-mode changes (R7-R8).
-  - Drag Anyway has no "Do not show again".
-  - Delete during a live drag does nothing.
+- **R9 [BD] Obstacles and rules, edge cases.** **done (task-u5-pcblows)** (pns Stage 24):
+  - A route may start on a castellated pad on the board edge; as in KiCad, the exclusion is the world's own and only the start check sees it.
+  - A footprint's Margin graphics are board edges.
+  - A barcode's printed text and a rounded board rectangle's corners are obstacles as KiCad builds them; a dimension's text was already KiCad's box.
+  - With a rule on shapes, a line is asked segment by segment (evaluateLineSegments).
+  - collideSimple's clearance less 1 nm, SEG::Contains, SEG::Collinear and Find's tolerances are KiCad's.
+  - KiCad's recorded sessions replay 13/13 exact.
+  - Left: the castellated exclusion in the pair start check; Highlight collisions' own collision checks ask each segment alone; the hidden-text barcode's zero-size outline at the origin.
+  - M. pns Stages 3, 12, 15-17, 24.
+- **R10 [CO] Toasts.** **done (task-u5-pcblows)** (PARITY-pcb §79):
+  - ~~Toasts appear on router and corner-mode changes (R7-R8).~~ Done: the message panel's rows only.
+  - ~~Drag Anyway has no "Do not show again".~~ Done.
+  - ~~Delete during a live drag does nothing.~~ Done: the drag ends, nothing committed, and the Delete goes on (`SetPassEvent` to `EDIT_TOOL::Remove`).
   - S. GAPS 7.
 - **R11 [KO] Kept by decision.**
   - A chain with a width change stays one line per width when shoved.

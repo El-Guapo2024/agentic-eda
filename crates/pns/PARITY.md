@@ -1571,8 +1571,14 @@ UI-LEFT R6 and R9, each re-read against KiCad 8303b2ad (`pns_line_placer.cpp`: `
   shove's own tests had it, Stage 12); `line_walk`'s `SEG::Contains` is `SquaredDistance <= 3`, `SEG::Collinear` allows `|qa x + qb y + qc| <= 1`,
   `SHAPE_LINE_CHAIN::Find` with a threshold compares the rounded `EuclideanNorm`. `board_edge.rs`'s exact boundary moves by the 1 nm. Tests:
   `the_nanometre_tolerances_are_kicads`, `copper_keeps_the_boards_edge_clearance_from_the_outline_not_its_net_classs`.
+- *A footprint's own Edge.Cuts and Margin graphics under D* (UI-LEFT P27, Stage 22's left): `ROUTER_TOOL::InlineDrag` adds a footprint's
+  `GraphicalItems()` on Edge_Cuts or Margin (and copper) to the items dragged (`itemsToDrag.Add( solid )`). A footprint's Edge.Cuts are its art since
+  the importer keeps them there; their edge solids now carry the footprint (`from_ir::edge_source`: `edge:<n>@REF`, `margin:<n>@REF`) and
+  `Router::footprint_solids` takes them, so the pads keep their distance to the footprint's own slot as it moves. Test:
+  `a_component_drag_takes_the_footprints_own_edge_cuts_along` (`tests/component_drag.rs`).
 - Gates: `qa_regressions` 13 passed (walk-with-teardrops 19/19, backspace1 2/2, simple-shove-1 28/28, issue22749 11/11,
-  walk_drag_seg_against_board_edge 3/3 exact), `dp_boards` 5 passed, `cargo test -p eda-pns` all passed (351 unit tests).
+  walk_drag_seg_against_board_edge 3/3 exact), `dp_boards` 5 passed, `cargo test -p eda-pns` all passed (351 unit tests); after the component-drag
+  change the same, `component_drag` 6 passed.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
