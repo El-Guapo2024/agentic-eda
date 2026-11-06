@@ -357,6 +357,7 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
     const el = e.target;
     onChange(el.value);
     reveal.current = true;
+    readSel();
     if (programmatic.current) return;
     const ne = e.nativeEvent as InputEvent;
     const caret = caretOf(el);
