@@ -1619,14 +1619,22 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     TEXT
   );
-  // "Font" (`SetFontProp`): KiCad's stroke font or an installed one. Only the stroke font is drawn here; an outline font a board file names is kept by name.
+  // "Font" (`SetFontProp`: `SetFont( FONT::GetFont( name, IsBold(), IsItalic() ) )`): KiCad's stroke font or a face, which the canvas draws as fontconfig finds it on the
+  // server (components/text/outlineFonts.ts, UI-LEFT-2 CC1). A text's goes through `edit_text_style`, a field's through its layout; a dimension's label has no face here.
   add(
     {
       owner: "EDA_TEXT",
       name: "Font",
       kind: "string",
-      get: (i) => i.text?.face ?? KICAD_FONT_NAME,
-      readOnlyReason: "Only KiCad's stroke font is drawn here (no installed fonts are listed); an outline font a board file names is kept by name.",
+      get: (i) => (i.text ? i.text.face : i.field ? i.field.face : null) || KICAD_FONT_NAME,
+      writeable: (i) => !!(i.text || i.field),
+      readOnlyReason: "A dimension's label has no font of its own in the model (UI-LEFT-2 PP11).",
+      set: (i, v) => {
+        const next = String(v).trim();
+        const face = next === "" || next.startsWith(KICAD_FONT_NAME) ? "" : next;
+        if (i.field) return (i.field.face ?? "") === face ? [] : [editFieldCmd(i.part!, i.field, { face: face || null })];
+        return !i.text || (i.text.face ?? "") === face ? [] : [styleCmd(i.text, { face })];
+      },
     },
     TEXT
   );

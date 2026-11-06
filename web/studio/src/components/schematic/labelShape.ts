@@ -58,16 +58,17 @@ const THREE_IU_NM = 300;
  * The large eeschema global-label flag -- `SCH_GLOBALLABEL::
  * CreateGraphicShape`. Unlike a hierarchical label, its length depends on
  * the actual rendered text (`textBoxW`), so this needs the text content,
- * not just its shape/spin.
+ * not just its shape/spin. `textBoxW` is `GetTextBox( aRenderSettings ).GetWidth()` in the label's own face (kicad-port/schTextSpecs.ts
+ * `labelTextBoxWidth`, which an outline font changes, UI-LEFT-2 CC1); left out, the stroke font's box of `text`.
  */
-export function globalLabelOutline(text: string, shape: LabelShape, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): [number, number][] {
+export function globalLabelOutline(text: string, shape: LabelShape, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM, textBoxWidth?: number): [number, number][] {
   const H = sizeNm;
   // `GetLabelBoxExpansion`: Schematic Setup's Global label margin ratio of the size (kicad-port/schFormattingLook.ts)
   const E = labelBoxExpansionNm(H);
   const pen = autoPenWidth(H);
   const lw = pen;
   // GetTextBox(): (sum of glyph advances - round(0.2*size)) + 2*round(1.5*pen) -- stroke_font.cpp/font.cpp, ported.
-  const textBoxW = measureStrokeText(text, H) - kiRound(0.2 * H) + 2 * kiRound(1.5 * pen);
+  const textBoxW = textBoxWidth ?? measureStrokeText(text, H) - kiRound(0.2 * H) + 2 * kiRound(1.5 * pen);
   const L = textBoxW + 2 * E;
   const hs = Math.floor(H / 2) + E;
   const x = L + lw + THREE_IU_NM;
@@ -124,7 +125,11 @@ export function globalLabelOutline(text: string, shape: LabelShape, spin: LabelS
   });
 }
 
-/** Global label text position (`GetSchematicTextOffset`) and justify, so painter.ts never has to re-derive which side of the flag the text sits on. */
+/**
+ * Global label text position (`GetSchematicTextOffset`) and justify, so painter.ts never has to re-derive which side of the flag the text sits on.
+ * INACTIVE since UI-LEFT-2 PP1 (task-v1-text): the painter takes the label's text spec from kicad-port/schTextSpecs.ts `schLabelDrawSpec` (the offset in eeschema's
+ * units and the spin's vertical justification). Kept, not called.
+ */
 export function globalLabelTextPlacement(shape: LabelShape, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): { pos: [number, number]; justify: "left" | "center" | "right" } {
   const H = sizeNm;
   // `GetSchematicTextOffset`'s `horiz = GetLabelBoxExpansion( aSettings )`
@@ -309,7 +314,11 @@ export function hierLabelOutline(shape: LabelShape, spin: LabelSpin, at: [number
   return HIER_SHAPES[shape][spin].map(([x, y]) => [x * hs + at[0], y * hs + at[1]]);
 }
 
-/** Hierarchical label text position/justify -- `dist = T + (rendered text width)`, the text width itself standing in for the arrow's own reach (sch_label.cpp:2509-2526, ported). */
+/**
+ * Hierarchical label text position/justify -- `dist = T + (rendered text width)`, the text width itself standing in for the arrow's own reach (sch_label.cpp:2509-2526, ported).
+ * INACTIVE since UI-LEFT-2 PP1 (task-v1-text): `SCH_HIERLABEL::GetSchematicTextOffset` adds `GetTextWidth()` -- the glyph width, `GetTextSize().x`, not the rendered text's
+ * advance this took -- and the painter takes kicad-port/schTextSpecs.ts `schLabelDrawSpec`. Kept, not called.
+ */
 export function hierLabelTextPlacement(text: string, spin: LabelSpin, at: [number, number], sizeNm: number = LABEL_TEXT_SIZE_NM): { pos: [number, number]; justify: "left" | "center" | "right" } {
   // `GetTextOffset( aSettings )`: Schematic Setup's Label offset ratio of the size
   const T = textOffsetNm(sizeNm);

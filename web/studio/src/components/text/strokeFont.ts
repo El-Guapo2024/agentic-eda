@@ -153,6 +153,9 @@ const OVERBAR_HEIGHT = 1.23;
 /** The overbar's height now: the default, or the schematic's Overbar offset ratio while a sheet is drawn (`SCH_ITEM::GetFontMetrics`: `m_FontMetrics`). */
 let overbarHeight = OVERBAR_HEIGHT;
 
+/** The overbar's height now (kicad-port/kicadText.ts draws its overbars at it too). */
+export const strokeOverbarHeight = (): number => overbarHeight;
+
 /** Set the overbar's height (a fraction of the size; null for the default); returns the one it replaces, to put back. */
 export function setStrokeOverbarHeight(h: number | null): number {
   const was = overbarHeight;

@@ -722,6 +722,12 @@ fn handle(
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
         // The font families the machine has, for Symbol Properties' Font column (`crate::fonts_api`).
         ("GET", "/api/fonts") => respond(stream, "200 OK", "application/json", crate::fonts_api::fonts().to_string().as_bytes()),
+        // The outline font a text's face is drawn with (`FONTCONFIG::FindFont`'s file and verdict) and the file itself, for the canvas (`crate::fonts_api`, UI-LEFT-2 CC1).
+        ("GET", "/api/fonts/match") => respond(stream, "200 OK", "application/json", crate::fonts_api::font_match(target).to_string().as_bytes()),
+        ("GET", "/api/fonts/file") => match crate::fonts_api::font_file(target) {
+            Some((bytes, kind)) => respond(stream, "200 OK", kind, &bytes),
+            None => respond(stream, "404 Not Found", "text/plain", b"no font file"),
+        },
         // Page Settings' drawing sheet file: a picked `.kicad_wks` read for the dialog, where to browse, and a file from the person's computer put in the board's folder
         ("GET", "/api/drawing_sheet") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::pick(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("GET", "/api/drawing_sheet/folders") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::folders(dir).to_string().as_bytes()),

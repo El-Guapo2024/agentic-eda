@@ -9,9 +9,11 @@ import { arcFromThreePoints, directiveShape, graphicBounds, pt, rectCorners, sch
 import { hatchLines } from "../../kicad-port/schHatch";
 import { imageFor } from "../canvas/imageCache";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
-import { defaultTextBoxMargin, layoutTextBox } from "../../kicad-port/schTextBox";
+import { defaultTextBoxMargin } from "../../kicad-port/schTextBox";
 import { layerColor } from "../canvas/layers";
-import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { paintKicadText } from "../text/kicadTextPaint";
+import { resolveFont } from "../../kicad-port/kicadText";
+import { schDrawPen, schTextBoxDrawSpec, SCH_DEFAULT_PEN_NM } from "../../kicad-port/schTextSpecs";
 
 /** `DEFAULT_LINE_WIDTH_MILS` (6 mil), um: the width of a stroke with none of its own. */
 const DEFAULT_WIDTH_NM = 152_400;
@@ -88,7 +90,7 @@ function tracePath(ctx: CanvasRenderingContext2D, g: SchGraphic): void {
   }
 }
 
-function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: SchGraphic, color: string): void {
+function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: SchGraphic, color: string, defaultPen: number): void {
   const s = g.shape;
   if (s.type !== "directive") return;
   const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_nm);
@@ -110,48 +112,59 @@ function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: Sc
     d.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.stroke();
   }
-  // The fields (`Netclass`, `Component Class`) stack along the pole, drawn small beside the flag.
+  // The fields (`Netclass`, `Component Class`) stack along the pole, drawn small beside the flag, left-justified and centred on it (the shape keeps no field places:
+  // `AutoplaceFields` is not ported for a directive label), in the stroke font's layout (kicad-port/kicadText.ts).
   const lines = [s.netclass, s.component_class].filter((t): t is string => Boolean(t));
   const size = 1_270_000;
   const spin = (((Math.round((s.orientation ?? 0) / 1000) % 360) + 360) % 360) as number;
   lines.forEach((text, i) => {
     const off = 1_000_000 + i * size * 1.4;
     const [x, y] = d.flagCenter;
-    if (spin === 0 || spin === 180) drawStrokeText(ctx, text, x + off, y + size * 0.35, { sizeNm: size, justify: "left", color });
-    else drawStrokeText(ctx, text, x + size * 0.35, y - off, { sizeNm: size, angleRad: -Math.PI / 2, justify: "left", color });
+    const horizontal = spin === 0 || spin === 180;
+    const spec = { text, pos: horizontal ? ([x + off, y] as const) : ([x, y - off] as const), size: [size, size] as const, pen: schDrawPen(size, false, defaultPen), halign: "left" as const, valign: "center" as const, angleDeg: horizontal ? 0 : 90, multiline: false, iu: 100 };
+    paintKicadText(ctx, spec, null, { color });
   });
 }
 
-/** `shownText` is `SCH_TEXTBOX::GetShownText` (the server's `graphic_shown`), when a variable changes the stored text. Also draws the text of a placed symbol's library text box (painter.ts `drawRealGraphic`). */
-export function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string, shownText?: string): void {
+/**
+ * The text of a text box (`SCH_PAINTER::draw( SCH_TEXTBOX )`, kicad-port/schTextSpecs.ts `schTextBoxDrawSpec`): broken to the box less its margins in its face
+ * (`SCH_TEXTBOX::GetShownText`'s `LinebreakText`), laid out from `GetDrawPos` with the box's justification, in the face Text Box Properties set (`face`; UI-LEFT-2 CC1).
+ * `shownText` is `SCH_TEXTBOX::GetShownText` (the server's `graphic_shown`), when a variable changes the stored text. Also draws the text of a placed symbol's library
+ * text box (painter.ts `drawRealGraphic`).
+ */
+export function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string, shownText?: string, face?: string | null, defaultPen = SCH_DEFAULT_PEN_NM): void {
   const s = g.shape;
   if (s.type !== "text_box") return;
   const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
-  const layout = layoutTextBox(
-    {
-      start: [s.start.x, s.start.y],
-      end: [s.end.x, s.end.y],
-      text: shownText ?? s.text,
-      angle: s.angle ?? 0,
-      sizeNm: s.size_nm,
-      hAlign: s.h_align ?? "left",
-      vAlign: s.v_align ?? "top",
-      marginNm: s.margin_nm && s.margin_nm > 0 ? s.margin_nm : defaultTextBoxMargin(s.size_nm, widthNm),
-    },
-    measureStrokeText
-  );
-  ctx.save();
-  ctx.translate(layout.origin[0], layout.origin[1]);
-  if (layout.vertical) ctx.rotate(-Math.PI / 2);
-  for (const l of layout.lines) drawStrokeText(ctx, l.text, l.u, l.v, { sizeNm: s.size_nm, justify: l.justify, italic: s.italic ?? false, thicknessNm: s.bold ? s.size_nm / 5 : undefined, color });
-  ctx.restore();
+  const m = s.margin_nm && s.margin_nm > 0 ? s.margin_nm : defaultTextBoxMargin(s.size_nm, widthNm);
+  const look = {
+    start: [s.start.x, s.start.y] as const,
+    end: [s.end.x, s.end.y] as const,
+    margins: [m, m, m, m] as const,
+    text: shownText ?? s.text,
+    angleDeg: (s.angle ?? 0) / 1000,
+    size_nm: s.size_nm,
+    h: s.h_align ?? "left",
+    v: s.v_align ?? "top",
+    bold: !!s.bold,
+    italic: !!s.italic,
+  };
+  paintKicadText(ctx, schTextBoxDrawSpec(look, resolveFont(face, look.bold, look.italic), defaultPen), face, { color, record: g.id ? { tag: "sch", id: g.id } : undefined });
 }
 
 /**
  * Paint every graphic, in drawing order. `selection`: ids drawn in the selection colour. Fills go first (a filled
  * shape's body, then its outline), the way `SCH_PAINTER::draw( SCH_SHAPE )` layers the background and the stroke.
  */
-export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform, graphics: readonly SchGraphic[], selection: ReadonlySet<string>, textAttrs?: Readonly<Record<string, { color?: SchColor }>>, shown?: Readonly<Record<string, string>>): void {
+export function paintGraphics(
+  ctx: CanvasRenderingContext2D,
+  view: ViewTransform,
+  graphics: readonly SchGraphic[],
+  selection: ReadonlySet<string>,
+  textAttrs?: Readonly<Record<string, { color?: SchColor; font?: string | null }>>,
+  shown?: Readonly<Record<string, string>>,
+  defaultPen = SCH_DEFAULT_PEN_NM
+): void {
   const hair = 1 / view.scale;
   for (const g of graphics) {
     // An image is painted under everything else (`paintImages`).
@@ -160,7 +173,7 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
     const color = strokeColor(g, selected);
     ctx.save();
     if (g.shape.type === "directive") {
-      drawDirective(ctx, view, g, color);
+      drawDirective(ctx, view, g, color, defaultPen);
       ctx.restore();
       continue;
     }
@@ -204,7 +217,7 @@ export function paintGraphics(ctx: CanvasRenderingContext2D, view: ViewTransform
     ctx.setLineDash([]);
     // `SCH_PAINTER::getRenderColor` for an `SCH_TEXTBOX`: its own text colour (Text Box Properties' Color) wins over `LAYER_NOTES`
     const own = textAttrs?.[g.id]?.color;
-    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 ? rgba(own) : layerColor("LAYER_NOTES"), shown?.[g.id]);
+    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 ? rgba(own) : layerColor("LAYER_NOTES"), shown?.[g.id], textAttrs?.[g.id]?.font, defaultPen);
     ctx.restore();
   }
 }

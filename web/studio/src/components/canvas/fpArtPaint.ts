@@ -4,23 +4,21 @@
 // transform of a footprint in the hand (painter.ts `drawFootprint`) carries them with the rest.
 //
 // The shapes are drawn by the painter's own shape code (the board's graphics are the same `Shape`s, their dashes too). A hatched fill is drawn as its outline and
-// the lines `EDA_SHAPE::UpdateHatching` makes of it, which the server works out from the board as it is (`hatch_lines`, UI-LEFT P15), as a board graphic's. A text is drawn in the stroke font a line at a time (`FONT::Draw` steps a multi-line text down by the interline,
-// `STROKE_FONT::GetInterline`); a knockout text is drawn plain.
+// the lines `EDA_SHAPE::UpdateHatching` makes of it, which the server works out from the board as it is (`hatch_lines`, UI-LEFT P15), as a board graphic's. A text is drawn as
+// `FONT::Draw` lays it out (kicad-port/kicadText.ts through `fieldSpec`: the lines an interline apart, `GetInterline`), in the stroke font or its outline face; a knockout
+// text is its box filled with the text cut out (UI-LEFT-2 PP1, CC1).
 
 import type { Part } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
-import { drawStrokeText } from "../text/strokeFont";
+import { paintKicadText } from "../text/kicadTextPaint";
+import { fieldSpec } from "../../kicad-port/textSpecs";
 import { layerStateKey, isCopper } from "../../kicad-port/layerPresets";
 import { keptReadableInFlippedView } from "../../kicad-port/flipView";
 import { artLayerShown, artTextAsField, artTextShown, graphicsOf, layerRank, layersOf, type ArtShape } from "../../kicad-port/fpArt";
-import { fieldAsText } from "../../kicad-port/fpFields";
 import { opacityOf } from "./appearancePaint";
 import { layerColor } from "./layers";
 import { drawHatchLines, drawShapeGeometry, realLayerKey, shapeDash, withLayer, type PaintOptions } from "./painter";
 import { hairlineNm } from "./view";
-
-/** `STROKE_FONT::GetInterline`: `FONT_METRICS`' 1.62 glyph heights, times the legacy factor 0.9583 that keeps the old spacing. */
-const INTERLINE = 1.62 * 0.9583;
 
 /** Draw the graphics and texts of `part`; nothing when it has none, or its side is not shown. */
 export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part, opts: PaintOptions): void {
@@ -63,31 +61,15 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
   }
 }
 
-/** One text, a line at a time: the lines step down the text's own axis by the interline, the block placed on the anchor by the vertical justification. */
+/** One text where `FONT::Draw` puts it (`fieldSpec`), the hit test's layout (kicad-port/textHit.ts). */
 function drawArtText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: NonNullable<Part["texts"]>[number], color: string, sketch: boolean, viewFlipped = false): void {
-  const text = fieldAsText(artTextAsField(t));
-  const lines = t.text.split("\n");
-  const sizeNm = Math.max(t.h, hairlineNm(view, 8));
-  // KiCad's counter-clockwise millidegrees; the canvas turns clockwise.
-  const angleRad = (-text.angle / 1000) * (Math.PI / 180);
-  const interline = INTERLINE * sizeNm;
-  // The first baseline below the anchor: the glyphs' bottom is on it, 0.72 of the size below the top and 0.36 below the middle of a line; a block of several lines
-  // hangs from the top, is centred on the anchor or ends on it.
-  const block = (lines.length - 1) * interline;
-  const first = t.valign > 0 ? -block : t.valign < 0 ? 0.72 * sizeNm : 0.36 * sizeNm - block / 2;
-  const pen = t.thickness > 0 ? t.thickness : t.bold ? sizeNm / 5 : sizeNm / 8;
-  lines.forEach((line, i) => {
-    if (!line) return;
-    const down = first + i * interline;
-    drawStrokeText(ctx, line, t.x - down * Math.sin(angleRad), t.y + down * Math.cos(angleRad), {
-      sizeNm,
-      thicknessNm: sketch ? hairlineNm(view, 1) : Math.min(Math.max(pen, hairlineNm(view, 0.5)), sizeNm / 4),
-      justify: text.justify,
-      angleRad,
-      mirror: t.mirror,
-      italic: t.italic,
-      color,
-      keepReadable: keptReadableInFlippedView(viewFlipped, t.layer),
-    });
+  const { spec, face } = fieldSpec(artTextAsField(t));
+  paintKicadText(ctx, spec, face, {
+    color,
+    pen: sketch ? hairlineNm(view, 1) : undefined,
+    minPen: hairlineNm(view, 0.5),
+    knockout: t.knockout ? layerColor("background") : null,
+    flippedView: keptReadableInFlippedView(viewFlipped, t.layer),
+    record: { tag: "pcb", id: t.id },
   });
 }

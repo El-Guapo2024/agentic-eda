@@ -486,6 +486,13 @@ test("a free text's and a label's font rows: bold, italic, colour and hyperlink 
   assert.deepEqual(edit(s, ["txt_a"], "Font", "KiCad Font"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], font: "KiCad Font" }]);
   assert.deepEqual(edit(s, ["txt_a"], "Font", "Default Font"), []);
   assert.deepEqual(edit(s, ["lbl_a"], "Font", "DejaVu Sans"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["lbl_a"], font: "DejaVu Sans" }]);
+  // a text box's face is the sheet's `graphic_text_attrs` (set_text_attrs takes a text box's font, UI-LEFT-2 CC1); a directive label has none
+  assert.equal(rowOf(s, ["shp_box"], "Font")!.value, "Default Font");
+  assert.deepEqual(edit(s, ["shp_box"], "Font", "DejaVu Sans"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["shp_box"], font: "DejaVu Sans" }]);
+  const faced = { ...s, graphic_text_attrs: { shp_box: { font: "DejaVu Sans" } } } as Schematic;
+  assert.equal(rowOf(faced, ["shp_box"], "Font")!.value, "DejaVu Sans");
+  assert.deepEqual(edit(faced, ["shp_box"], "Font", "Default Font"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["shp_box"], font: "" }]);
+  assert.equal(rowOf(s, ["shp_dir"], "Font")!.writable, false);
   // A label: its size and look are Label Properties', its colour its text attributes.
   assert.equal(rowOf(s, ["lbl_a"], "Text Size")!.value, 1_270_000, "50 mil when it has none of its own");
   assert.deepEqual(edit(s, ["lbl_a"], "Text Size", 2_000_000), [{ op: "sch_edit", verb: "edit_label", id: "lbl_a", size_nm: 2_000_000 }]);

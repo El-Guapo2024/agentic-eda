@@ -263,7 +263,7 @@ fn shape_and_text_dialogs_set_the_looks_kept_by_id() {
     let t = lib(&b).texts[0].clone();
     b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "dash".into(), hatch: Some(eda_model::fp_art::Hatch::Hatch) }) })).unwrap();
     assert!(b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "wavy".into(), hatch: None }) })).is_err());
-    b.apply(&Cmd::FpItem(FpItemCmd::SetText { footprint: "Lib:Looks".into(), id: t.id.clone(), text: t.clone(), look: Some(TextLook { bold: true, italic: true, valign: 1, width_nm: Some(mm(1.5)), knockout: false, keep_upright: false }) })).unwrap();
+    b.apply(&Cmd::FpItem(FpItemCmd::SetText { footprint: "Lib:Looks".into(), id: t.id.clone(), text: t.clone(), look: Some(TextLook { bold: true, italic: true, valign: 1, width_nm: Some(mm(1.5)), knockout: false, keep_upright: false, face: None }) })).unwrap();
     let fp = lib(&b);
     assert_eq!(fp.kicad.stroke_types.get(g.id()).map(String::as_str), Some("dash"));
     assert_eq!(fp.kicad.hatches.get(g.id()), Some(&eda_model::fp_art::Hatch::Hatch));

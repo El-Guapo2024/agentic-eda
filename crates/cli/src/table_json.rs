@@ -67,6 +67,7 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
             let c = &t.cells[i];
             let draw = draw_of(row, col);
             let corners = t.cell_corners(row, col);
+            let draw_pos = if sheet { eda_model::table_text::sch_draw_pos_nm(t, row, col) } else { eda_model::table_text::draw_pos_nm(t, row, col) };
             let mut v = json!({
                 "id": cell_item_id(&t.id, row, col),
                 "row": row,
@@ -89,6 +90,8 @@ fn table_value(t: &Table, draw_of: &dyn Fn(usize, usize) -> CellDraw, sheet: boo
                 "line_spacing": c.style.line_spacing_permille,
                 "color": color_json(c.style.color),
                 "lines": draw.lines.iter().map(|l| json!({ "text": l.text, "x": l.x_nm, "y": l.y_nm })).collect::<Vec<_>>(),
+                // `GetDrawPos()`: what the lines are placed from, for a cell in an outline face the canvas lays out itself (UI-LEFT-2 CC1)
+                "draw_pos": [draw_pos.0, draw_pos.1],
             });
             if draw.shown != c.text {
                 v["shown"] = json!(draw.shown);

@@ -7,8 +7,10 @@
 // separate, matching item 7's generic move).
 import { useEffect, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import type { TextJustify } from "../api/types";
+import type { Cmd, TextJustify } from "../api/types";
 import { boldTogglePenNm, inferBold, newTextStyle } from "../kicad-port/layerDefaults";
+import { FontSelect, useFontFamilies } from "./TextLookControls";
+import { KICAD_FONT } from "../kicad-port/textLooks";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 
@@ -18,6 +20,9 @@ import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 // Bold is `DIALOG_TEXT_PROPERTIES`' Bold button (pcbnew/dialogs/dialog_text_properties.cpp at 8303b2ad; round 7 R7-3, P4): it starts as the text is
 // (`m_bold->Check( m_item->IsBold() )`, :347), checking it sets the thickness to the bold pen and unchecking it to the normal one (`onBoldToggle`, :396),
 // a thickness typed in sets it to what `InferBold` calls that pen (`onThickness`, :430), and OK writes it (`SetBoldFlag`, :570).
+// The Font choice (`m_fontCtrl`: "KiCad Font" and the server's families, `SetFontSelection( m_item->GetFont() )`, :322; OK's `SetFont( GetFontSelection( bold, italic ) )`,
+// :535) is the text's face: a new text's in its extra, an edit's through `edit_text_style` in the same undo step (UI-LEFT-2 CC1). A face the list lacks shows
+// "<not found>" and is kept (`HaveFontSelection`).
 
 export function TextDialog() {
   const state = useStudioState();
@@ -37,6 +42,8 @@ export function TextDialog() {
   const [mirror, setMirror] = useState(false);
   const [bold, setBold] = useState(false);
   const [angle, setAngle] = useState(0);
+  const [face, setFace] = useState(KICAD_FONT);
+  const families = useFontFamilies();
   // Once the size, the thickness or the mirror was edited by hand, a change of layer leaves them alone.
   const styled = useRef(false);
 
@@ -54,6 +61,7 @@ export function TextDialog() {
       setMirror(editing.mirror);
       setBold(editing.bold ?? false);
       setAngle(editing.angle);
+      setFace(editing.face || KICAD_FONT);
     } else if (dialog.mode === "carried" && carried) {
       const t = carried.text;
       styled.current = true;
@@ -65,6 +73,7 @@ export function TextDialog() {
       setMirror(t.mirror);
       setBold(!!(carried.extra as { bold?: boolean }).bold);
       setAngle(t.angle);
+      setFace((carried.extra as { face?: string }).face || KICAD_FONT);
     } else if (dialog.mode === "add") {
       const start = activeLayerName(state.activeLayer, "F.SilkS");
       const style = newTextStyle(defaults, start);
@@ -77,6 +86,7 @@ export function TextDialog() {
       setMirror(style.mirror);
       setBold(style.bold);
       setAngle(0);
+      setFace(KICAD_FONT);
     }
     // Only when the dialog itself changes identity (opens/switches item) -- not on every keystroke into the fields it seeds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,21 +99,26 @@ export function TextDialog() {
 
   const submit = () => {
     if (!content.trim()) return;
+    // the face the text keeps in its extra (none: the stroke font)
+    const faceExtra = face === KICAD_FONT ? {} : { face };
     if (dialog.mode === "add") {
       // `PlaceText`: the text now follows the cursor until the next click places it ("Draw Text"; components/canvas/Canvas.tsx), with the class's glyph width and
       // italic and the bottom justification `textAttrs` gave it (round 5 B5-2), and the bold `InferBold` gave it (round 6 A6-3). (The dialog has no position field, so it never "modified the location".)
       const style = newTextStyle(defaults, layer);
       // A size typed in the dialog is square (the dialog has one size field); the class's own size keeps the class's width.
-      const extra = { id: "", ...(size === style.sizeNm && style.widthNm !== size ? { width_nm: style.widthNm } : {}), ...(bold ? { bold: true } : {}), ...(style.italic ? { italic: true } : {}), valign: style.valign };
+      const extra = { id: "", ...(size === style.sizeNm && style.widthNm !== size ? { width_nm: style.widthNm } : {}), ...(bold ? { bold: true } : {}), ...(style.italic ? { italic: true } : {}), valign: style.valign, ...faceExtra };
       dispatch({ type: "SET_DRAW_STATE", draw: { kind: "text", text: { content, at: { x: dialog.at[0], y: dialog.at[1] }, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror }, extra } });
     } else if (dialog.mode === "carried") {
       if (!carried) return close();
       // The text in the hand takes the dialog's values and stays carried; a size typed in is square (the class's own width goes with the size it was for).
-      const { bold: _bold, width_nm, ...rest } = carried.extra as typeof carried.extra & { bold?: boolean };
-      const extra = { ...rest, ...(width_nm !== undefined && size === carried.text.size_nm ? { width_nm } : {}), ...(bold ? { bold: true } : {}) };
+      const { bold: _bold, face: _face, width_nm, ...rest } = carried.extra as typeof carried.extra & { bold?: boolean; face?: string };
+      const extra = { ...rest, ...(width_nm !== undefined && size === carried.text.size_nm ? { width_nm } : {}), ...(bold ? { bold: true } : {}), ...faceExtra };
       dispatch({ type: "SET_DRAW_STATE", draw: { kind: "text", text: { ...carried.text, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror }, extra } });
     } else {
-      api.cmd({ op: "edit_text", id: dialog.id, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror, bold });
+      const edit: Cmd = { op: "edit_text", id: dialog.id, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror, bold };
+      const faceNow = editing?.face || KICAD_FONT;
+      const restyle: Cmd[] = face !== faceNow ? [{ op: "edit_text_style", id: dialog.id, face: face === KICAD_FONT ? "" : face }] : [];
+      api.cmd(restyle.length ? { op: "batch", cmds: [edit, ...restyle] } : edit);
     }
     close();
   };
@@ -177,6 +192,8 @@ export function TextDialog() {
               <option value="center">Center</option>
               <option value="right">Right</option>
             </select>
+            <span>Font</span>
+            <FontSelect families={families} current={face === KICAD_FONT ? null : face} value={face} onChange={setFace} withDefault={false} />
             <span>Mirrored</span>
             <input type="checkbox" checked={mirror} onChange={(e) => ((styled.current = true), setMirror(e.target.checked))} style={{ justifySelf: "start" }} />
           </div>
