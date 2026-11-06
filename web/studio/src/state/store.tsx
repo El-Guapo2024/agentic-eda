@@ -422,6 +422,8 @@ export interface MovePreview {
   grabNm?: [number, number];
   /** `"pcb"`: R, Shift+R and F pressed while carrying, in order, each about its own point (kicad-port/pcbCarry.ts `CarryOp`); committed in that order with the move. */
   ops?: CarryOp[];
+  /** `"pcb"`: the orientation of the placement grid item the carried footprint was last in (`prevFrameAngle`, kicad-port/gridFrame.ts `carryFrameTurn`), degrees. */
+  frameDeg?: number;
   /**
    * edit_tool.cpp Rotate/Flip during an active Move: both act on the
    * live preview instead of committing immediately (updateModificationPoint's
