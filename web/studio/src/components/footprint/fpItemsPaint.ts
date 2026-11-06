@@ -111,7 +111,7 @@ export function paintFpItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
         const selected = o.selection.has(z.id);
         const asBoard = { ...z, outline: z.outline_xy, holes: z.holes_xy } as unknown as Zone;
         if (z.is_rule_area) {
-          drawRuleArea(ctx, view, asBoard, selected);
+          drawRuleArea(ctx, view, asBoard, selected, layerColor(realLayerKey(z.layer)));
           continue;
         }
         withAlpha(ctx, 0.8 * fpObjectOpacity(o.layerOpacity, "zones") * layerAlpha(opts, layerStateKey(z.layer)), () => {

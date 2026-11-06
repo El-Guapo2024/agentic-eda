@@ -270,6 +270,7 @@ mod tests {
             pin_name_offset_mm: 0.508,
             unit_count: 1,
             has_alternate_body_style: false,
+            body_style_names: Vec::new(),
             footprint_filters: vec![],
             graphics: vec![],
             pins: vec![],

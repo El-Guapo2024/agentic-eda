@@ -29,7 +29,7 @@ export function padCanHaveNumber(pad: Pick<LibraryPad, "kind">): boolean {
 }
 
 /**
- * `EDIT_TOOL::Duplicate`'s pad branch (pcbnew/tools/edit_tool.cpp): the copy of each
+ * `EDIT_TOOL::Duplicate`'s pad branch (pcbnew/tools/edit_tool.cpp, KiCad 8303b2ad and 25ec2335 alike): the copy of each
  * selected pad lands exactly where the original is (the move that follows pulls it
  * away from the cursor), and with `increment` (`duplicateIncrementPads`,
  * Ctrl+Shift+D) a pad that `CanHaveNumber()` takes the next free pad number:
@@ -39,24 +39,24 @@ export function padCanHaveNumber(pad: Pick<LibraryPad, "kind">): boolean {
  *     padTool->SetLastPadNumber( padNumber );
  *     dupe->SetNumber( padNumber );
  *
- * so several selected pads are numbered consecutively, each continuing from the one
- * before. `existing` is the footprint's current pads (collision check), `lastPadNumber`
- * the pad tool's `m_lastPadNumber` ("1" until a pad is placed, see padNumbering.ts's
- * header). Returns the new pads (no `id` -- the backend
- * assigns it) in selection order, plus the new last pad number.
+ * `GetNextPadNumber` counts the footprint's `m_pads` only, and a copy is not one of them until the commit is pushed
+ * (`DuplicateItem( true, &commit, orig_item )` with `addToFootprint = false`; in the Footprint Editor `commit.Add` stages
+ * the pad itself, `BOARD_COMMIT::undoLevelItem`), so several selected pads all take the same number: pads 1 and 2 with
+ * the last number 2 give 3 and 3 (round 2's E11; it was kept as 3 and 4 before UI-LEFT F10). `existing` is the
+ * footprint's current pads (collision check), `lastPadNumber` the pad tool's `m_lastPadNumber` ("1" until a pad is
+ * placed, see padNumbering.ts's header). Returns the new pads (no `id` -- the backend assigns it) in selection order,
+ * plus the new last pad number.
  */
 export function duplicatePads(existing: readonly LibraryPad[], selected: readonly LibraryPad[], increment: boolean, lastPadNumber: string): { pads: LibraryPad[]; lastPadNumber: string } {
   const out: LibraryPad[] = [];
   let last = lastPadNumber;
-  let used: LibraryPad[] = [...existing];
   for (const src of selected) {
     const copy: LibraryPad = { ...src, id: undefined };
     if (increment && padCanHaveNumber(src)) {
-      last = nextPadNumberAfter(used, last);
+      last = nextPadNumberAfter(existing, last);
       copy.number = last;
     }
     out.push(copy);
-    used = [...used, copy];
   }
   return { pads: out, lastPadNumber: last };
 }

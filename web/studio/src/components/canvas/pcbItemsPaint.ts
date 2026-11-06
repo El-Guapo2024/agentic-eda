@@ -20,7 +20,7 @@ import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { on, opacityOf } from "./appearancePaint";
 import { imageFor } from "./imageCache";
 import { layerColor } from "./layers";
-import { layerAlpha, withAlpha, type PaintOptions } from "./painter";
+import { refImageLayerAlpha, withAlpha, withBoardLayer, withLayer, type PaintOptions } from "./painter";
 import { hairlineNm } from "./view";
 import type { ViewTransform } from "../../state/store";
 
@@ -102,11 +102,11 @@ export function drawRefImages(ctx: CanvasRenderingContext2D, view: ViewTransform
   if (opacity <= 0) return;
   for (const i of images) {
     if (!layerIsVisible(opts.layerVisible, i.layer)) continue;
-    const dim = layerAlpha(opts, layerStateKey(i.layer));
+    const dim = refImageLayerAlpha(opts, layerStateKey(i.layer));
     withAlpha(ctx, dim, () => paintRefImage(ctx, view, i, colourAlpha(i.layer) * opacity, opts.selection.has(i.id)));
   }
   for (const { image: i, part } of ofFootprints) {
-    const dim = layerAlpha(opts, layerStateKey(i.layer));
+    const dim = refImageLayerAlpha(opts, layerStateKey(i.layer));
     // a footprint in a preview that is not the carry (Pack and Move's block: painter.ts `drawFootprint` moves it by the preview's offset) takes its image along
     const preview = opts.movePreview && opts.movePreview.kind !== "pcb" && opts.movePreview.refs.includes(part.ref) ? opts.movePreview : null;
     const own = preview?.perRefOffsetNm?.[part.ref];
@@ -132,7 +132,7 @@ export function drawPoints(ctx: CanvasRenderingContext2D, view: ViewTransform, b
 export function drawPoint(ctx: CanvasRenderingContext2D, view: ViewTransform, p: BoardPoint, selected: boolean, opts: PaintOptions): void {
   if (!on(opts.layerVisible, "ly_points") || !layerIsVisible(opts.layerVisible, p.layer)) return;
   const half = p.size / 2;
-  withAlpha(ctx, layerAlpha(opts, layerStateKey(p.layer)), () => {
+  withLayer(ctx, opts, layerStateKey(p.layer), 1, () => {
     ctx.save();
     ctx.lineWidth = hairlineNm(view, selected ? 2 : 1);
     ctx.lineCap = "round";
@@ -205,7 +205,7 @@ function drawBarcodes(ctx: CanvasRenderingContext2D, view: ViewTransform, board:
   for (const b of board.drawings?.barcodes ?? []) {
     if (!layerIsVisible(opts.layerVisible, b.layer)) continue;
     requestBarcodeShape(b);
-    drawBarcode(ctx, view, b, opts.selection.has(b.id));
+    withBoardLayer(ctx, opts, b.layer, () => drawBarcode(ctx, view, b, opts.selection.has(b.id)));
   }
 }
 
@@ -255,7 +255,7 @@ export function drawBarcode(ctx: CanvasRenderingContext2D, view: ViewTransform, 
 function drawTextBoxes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
   for (const b of board.drawings?.text_boxes ?? []) {
     if (!layerIsVisible(opts.layerVisible, b.layer)) continue;
-    drawTextBox(ctx, view, b, opts.selection.has(b.id), !!opts.sketchText);
+    withBoardLayer(ctx, opts, b.layer, () => drawTextBox(ctx, view, b, opts.selection.has(b.id), !!opts.sketchText));
   }
 }
 

@@ -288,6 +288,21 @@ fn build(name: &str, item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<St
         units_locked: props.units_locked,
         ..LibrarySymbol::default()
     };
+    // `parseBodyStyles`: `(body_styles demorgan)` is a De Morgan symbol, `(body_styles "A" "B" ..)` names its own body styles (`SetBodyStyleNames`).
+    // A file without the form tells De Morgan from its `_N_2` sub-symbols (`HasLegacyAlternateBodyStyle`, for a file before 20250827 that has
+    // no custom styles, KiCad 25ec2335 `parseLibSymbol`).
+    if !derived_symbol {
+        if let Some(styles) = sexpr::find(item, "body_styles") {
+            let names: Vec<String> = styles.iter().skip(1).filter_map(Sexpr::text).filter(|t| *t != "demorgan").map(str::to_string).collect();
+            let demorgan = styles.iter().skip(1).any(|t| t.text() == Some("demorgan"));
+            if demorgan {
+                sym.has_alternate_body_style = true;
+            } else if names.len() > 1 {
+                sym.has_alternate_body_style = false;
+                sym.body_style_names = names;
+            }
+        }
+    }
     sym.kicad.duplicate_pin_numbers_are_jumpers = yes_no(item, "duplicate_pin_numbers_are_jumpers", false);
     sym.kicad.items = kept;
     // a unit's `(unit_name "..")` (`T_unit_name`)
@@ -413,7 +428,9 @@ fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>)
                     }
                 }
                 Some("text") => {
-                    if let (Some(content), Some(at)) = (sexpr::txt(child, 1), sexpr::find(child, "at")) {
+                    // `parseSymbolText`: `(text [private] "text" (at ..) (effects ..))`
+                    let private = is_private(child);
+                    if let (Some(content), Some(at)) = (sexpr::txt(child, 1 + usize::from(private)), sexpr::find(child, "at")) {
                         if let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) {
                             // the looks the text has as members (bold, italic, the justification); the rest of its style is kept beside it (`text_style`)
                             let looks = text_style(child);
@@ -430,6 +447,9 @@ fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>)
                                 italic: looks.italic,
                                 h_align,
                                 v_align,
+                                private,
+                                font: font_face(child),
+                                text_color: text_color(child),
                             });
                         }
                     }
@@ -524,7 +544,8 @@ fn stroke_type(item: &[Sexpr]) -> Option<String> {
 /// and `(size w h)` long, the size in the file's Y-up mm; the four margins are kept as the greatest of them; with no stroke the width is the default one (6 mil), and with no
 /// `(effects ...)` the box is left and top (the constructor's alignment) where an `(effects ...)` without `(justify ...)` is centred (the file format's default).
 fn text_box(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolGraphic> {
-    let text_at = if item.get(1).and_then(Sexpr::text) == Some("private") { 2 } else { 1 };
+    let private = is_private(item);
+    let text_at = 1 + usize::from(private);
     let text = sexpr::txt(item, text_at)?.to_string();
     let at = sexpr::find(item, "at")?;
     let start = SPoint { x: sexpr::num(at, 1)?, y: sexpr::num(at, 2)? };
@@ -556,7 +577,56 @@ fn text_box(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolG
             }
         }
     }
-    Some(LibrarySymbolGraphic::TextBox { id: String::new(), unit, body_style, text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, stroke_mm, fill: fill_of(item) })
+    // `parseFill`: a text box's `color` fill is its own colour (`FILLED_WITH_COLOR`); `(color 0 0 0 0)` is `COLOR4D::UNSPECIFIED`
+    let fill = match sexpr::find(item, "fill").and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1)) {
+        Some("color") => LibraryFill::Color,
+        _ => fill_of(item),
+    };
+    let fill_color = if fill == LibraryFill::Color { sexpr::find(item, "fill").and_then(|f| sexpr::find(f, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !is_unspecified(c)) } else { None };
+    let stroke_color = sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !is_unspecified(c));
+    Some(LibrarySymbolGraphic::TextBox {
+        id: String::new(),
+        unit,
+        body_style,
+        text,
+        start,
+        end,
+        angle_deg,
+        size_mm,
+        bold,
+        italic,
+        h_align,
+        v_align,
+        margin_mm,
+        stroke_mm,
+        fill,
+        private,
+        font: font_face(item),
+        text_color: text_color(item),
+        stroke_color,
+        fill_color,
+    })
+}
+
+/// `(text private ..)`, `(text_box private ..)`: the word `private` before the text (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbolText` / `parseSymbolTextBox`: `if( token == T_private ) SetPrivate( true )`).
+fn is_private(item: &[Sexpr]) -> bool {
+    // the bare keyword, not a quoted text that says "private" (a quoted atom keeps its mark)
+    matches!(item.get(1), Some(Sexpr::Atom(a)) if a == "private")
+}
+
+/// `COLOR4D::UNSPECIFIED`, which a file writes as `(color 0 0 0 0)`.
+fn is_unspecified(c: &eda_model::sch_extras::SchColor) -> bool {
+    c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0
+}
+
+/// `parseEDA_TEXT`'s `(font (face "..") ..)`: the text's own font, `None` for the default one.
+fn font_face(item: &[Sexpr]) -> Option<String> {
+    sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "face")).and_then(|f| sexpr::txt(f, 1)).map(str::to_string)
+}
+
+/// `parseEDA_TEXT`'s `(font .. (color r g b a))`: `None` for `COLOR4D::UNSPECIFIED`.
+fn text_color(item: &[Sexpr]) -> Option<eda_model::sch_extras::SchColor> {
+    sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !is_unspecified(c))
 }
 
 /// A flag of a node that is a bare token or `(key yes)` (`parseMaybeAbsentBool`).
@@ -647,13 +717,14 @@ mod tests {
             pin_name_offset_mm: 0.762,
             unit_count: 2,
             has_alternate_body_style: true,
+            body_style_names: Vec::new(),
             footprint_filters: vec!["SOIC*".into(), "SO-8*".into()],
             graphics: vec![
                 LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 0, body_style: 1, start: SPoint { x: -2.54, y: -2.54 }, end: SPoint { x: 2.54, y: 2.54 }, stroke_mm: 0.3, fill: LibraryFill::Background },
                 LibrarySymbolGraphic::Polyline { id: String::new(), unit: 1, body_style: 1, pts: vec![SPoint { x: 0.0, y: 0.0 }, SPoint { x: 1.0, y: 1.0 }, SPoint { x: 2.0, y: 0.0 }], stroke_mm: 0.2, fill: LibraryFill::Outline },
                 LibrarySymbolGraphic::Circle { id: String::new(), unit: 2, body_style: 1, center: SPoint { x: 0.5, y: 0.5 }, radius_mm: 1.5, stroke_mm: 0.254, fill: LibraryFill::None },
                 LibrarySymbolGraphic::Arc { id: String::new(), unit: 1, body_style: 1, start: SPoint { x: 1.0, y: 0.0 }, mid: SPoint { x: 0.0, y: 1.0 }, end: SPoint { x: -1.0, y: 0.0 }, stroke_mm: 0.254, fill: LibraryFill::None },
-                LibrarySymbolGraphic::Text { id: String::new(), unit: 1, body_style: 1, text: "hello".into(), at: SPoint { x: 0.0, y: -4.0 }, angle_deg: 90.0, size_mm: 1.5, bold: false, italic: false, h_align: Default::default(), v_align: Default::default() },
+                LibrarySymbolGraphic::Text { id: String::new(), unit: 1, body_style: 1, text: "hello".into(), at: SPoint { x: 0.0, y: -4.0 }, angle_deg: 90.0, size_mm: 1.5, bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), private: false, font: None, text_color: None },
             ],
             pins: vec![pin("1", 1, 1, false), pin("2", 1, 1, true), pin("3", 2, 1, false), pin("1", 1, 2, false)],
             published: false,
@@ -750,6 +821,75 @@ mod tests {
         let LibrarySymbolGraphic::TextBox { margin_mm, .. } = &boxes[2] else { panic!() };
         assert_eq!(*margin_mm, 0.0);
         assert!(written.contains("(at 1 2 0) (size 3 -4) (margins 1.016 1.016 1.016 1.016)"), "{written}");
+    }
+
+    /// UI-LEFT Y4: a text box's border colour, colour fill, font, text colour and Private flag, and a private text, are read as `parseSymbolTextBox` /
+    /// `parseSymbolText` read them and written as `saveTextBox` / `saveText` write them (`STROKE_PARAMS::Format`, `formatFill`, `EDA_TEXT::Format`).
+    #[test]
+    fn a_text_boxs_colours_font_and_private_flag_and_a_private_text_round_trip() {
+        use eda_model::ir::LibraryFill;
+        use eda_model::sch_extras::SchColor;
+        let kicad = r#"(kicad_symbol_lib (version 20250324) (generator "kicad_symbol_editor")
+            (symbol "T" (symbol "T_1_1"
+                (text_box private "boxed" (at 0 5 0) (size 10 -5) (margins 1 1 1 1)
+                    (stroke (width 0.2) (type dash) (color 255 0 0 1)) (fill (type color) (color 0 0 255 0.5))
+                    (effects (font (face "DejaVu Sans") (size 1.27 1.27) (color 0 128 0 1)) (justify left top)))
+                (text_box "plain" (at 0 -5 0) (size 4 -2) (margins 1 1 1 1) (stroke (width 0) (type default)) (fill (type color) (color 0 0 0 0)) (effects (font (size 1 1))))
+                (text private "private" (at 1 2 0) (effects (font (face "KiCad Font") (size 1.27 1.27) (color 10 20 30 1))))
+                (text "private" (at 3 4 0) (effects (font (size 1.27 1.27)))))))"#;
+        let parsed = parse_library_symbols(kicad).unwrap();
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        let g = &parsed.symbols[0].graphics;
+        let LibrarySymbolGraphic::TextBox { text, private, font, text_color, stroke_color, fill, fill_color, .. } = &g[0] else { panic!("{:?}", g[0]) };
+        assert_eq!((text.as_str(), *private, font.as_deref(), *fill), ("boxed", true, Some("DejaVu Sans"), LibraryFill::Color));
+        assert_eq!((*stroke_color, *fill_color, *text_color), (Some(SchColor { r: 255, g: 0, b: 0, a: 255 }), Some(SchColor { r: 0, g: 0, b: 255, a: 128 }), Some(SchColor { r: 0, g: 128, b: 0, a: 255 })));
+        let LibrarySymbolGraphic::TextBox { private, fill, fill_color, stroke_color, font, .. } = &g[1] else { panic!() };
+        assert_eq!((*private, *fill, *fill_color, *stroke_color, font.as_deref()), (false, LibraryFill::Color, None, None, None), "(color 0 0 0 0) is COLOR4D::UNSPECIFIED");
+        let LibrarySymbolGraphic::Text { text, private, font, text_color, .. } = &g[2] else { panic!("{:?}", g[2]) };
+        assert_eq!((text.as_str(), *private, font.as_deref(), *text_color), ("private", true, Some("KiCad Font"), Some(SchColor { r: 10, g: 20, b: 30, a: 255 })), "the keyword is not the text");
+        let LibrarySymbolGraphic::Text { text, private, .. } = &g[3] else { panic!() };
+        assert_eq!((text.as_str(), *private), ("private", false), "a text that says \"private\" is no flag");
+
+        let written = export_kicad_sym(&parsed.symbols[0]);
+        assert!(written.contains(r#"(text_box private "boxed" (at 0 5 0) (size 10 -5) (margins 1 1 1 1) (stroke (width 0.2) (type dash) (color 255 0 0 1)) (fill (type color) (color 0 0 255 0.502)) (effects (font (face "DejaVu Sans") (size 1.27 1.27) (color 0 128 0 1)) (justify left top)))"#), "{written}");
+        assert!(written.contains(r#"(stroke (width 0) (type default)) (fill (type color) (color 0 0 0 0)) (effects (font (size 1 1)))"#), "{written}");
+        assert!(written.contains(r#"(text private "private" (at 1 2 0) (effects (font (face "KiCad Font") (size 1.27 1.27) (color 10 20 30 1))))"#), "{written}");
+        assert!(written.contains(r#"(text "private" (at 3 4 0)"#), "{written}");
+        let back = parse_library_symbols(&written).unwrap();
+        assert_eq!(back.symbols[0].graphics, parsed.symbols[0].graphics);
+        // a placed symbol draws neither private item (`SCH_PAINTER::draw`: `IsPrivate() && !m_IsSymbolEditor`)
+        let engine = parsed.symbols[0].to_engine_symbol();
+        assert_eq!(engine.graphics.len(), 2, "{:?}", engine.graphics);
+        let lib = crate::symbol_lib::parse_symbol_library(&written).unwrap();
+        let placed = lib.values().next().unwrap();
+        assert_eq!(placed.graphics.iter().filter(|g| matches!(g, eda_model::symbol::SymbolGraphic::Text { .. })).count(), 1, "the engine's reader skips the private text: {:?}", placed.graphics);
+    }
+
+    /// UI-LEFT Y4: `(body_styles demorgan)` and `(body_styles "A" "B" ..)` (`parseBodyStyles`, `SaveSymbol`): a De Morgan symbol and one of custom body styles, each style's
+    /// sub-symbols with it.
+    #[test]
+    fn body_styles_are_read_and_written_as_kicad_does() {
+        let kicad = r#"(kicad_symbol_lib (version 20250829) (generator "kicad_symbol_editor")
+            (symbol "C" (body_styles "Front" "Side" "Top")
+                (symbol "C_1_1" (rectangle (start -1 1) (end 1 -1) (stroke (width 0.254) (type default)) (fill (type none))))
+                (symbol "C_1_2" (circle (center 0 0) (radius 1) (stroke (width 0.254) (type default)) (fill (type none))))
+                (symbol "C_1_3" (pin passive line (at 0 0 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))
+            (symbol "D" (body_styles demorgan)
+                (symbol "D_1_1" (rectangle (start -1 1) (end 1 -1) (stroke (width 0.254) (type default)) (fill (type none))))))"#;
+        let parsed = parse_library_symbols(kicad).unwrap();
+        let c = &parsed.symbols[0];
+        assert_eq!((c.has_alternate_body_style, c.body_style_names.clone(), c.body_style_count()), (false, vec!["Front".to_string(), "Side".into(), "Top".into()], 3));
+        assert_eq!(c.pins[0].body_style, 3);
+        let d = &parsed.symbols[1];
+        assert!(d.has_alternate_body_style && d.body_style_names.is_empty(), "declared, though it has no _1_2 sub-symbol");
+        let written = export_kicad_sym(c);
+        assert!(written.contains("(body_styles \"Front\" \"Side\" \"Top\")"), "{written}");
+        assert!(written.contains("(symbol \"C_1_3\"") && written.contains("(symbol \"C_1_2\""), "every style's sub-symbol: {written}");
+        assert!(export_kicad_sym(d).contains("(body_styles demorgan)"));
+        let back = parse_library_symbols(&written).unwrap();
+        assert_eq!((back.symbols[0].body_style_names.clone(), back.symbols[0].pins[0].body_style), (c.body_style_names.clone(), 3));
+        // a single body style says nothing
+        assert!(!export_kicad_sym(&LibrarySymbol::new_empty("L:S")).contains("body_styles"));
     }
 
     #[test]

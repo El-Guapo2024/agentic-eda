@@ -34,6 +34,8 @@ import { DEFAULT_PIN_TEXTS, PIN_TEXT_SIZE_NM, shownPinName, type PinTexts } from
 import { polyPreview } from "../../kicad-port/symPolyDraw";
 import { boxOfTextBox, layoutLibTextBox, type LibTextBox } from "../../kicad-port/symTextBox";
 import { bezierFromClicks } from "../../kicad-port/symBezier";
+import type { SchColor } from "../../api/schEditTypes";
+import { rgba } from "../schematic/schGraphicsPainter";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
 export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox";
@@ -140,12 +142,16 @@ function drawOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform) {
 
 /**
  * `SCH_PAINTER::draw( SCH_TEXTBOX )` for a box of the symbol (`LAYER_DEVICE`): the fill first (the body's background colour, or the outline colour), the wrapped text in the box
- * (kicad-port/symTextBox.ts), and the border when it has a width -- 0 is the default line width, a negative one is no border.
+ * (kicad-port/symTextBox.ts), and the border when it has a width -- 0 is the default line width, a negative one is no border. `getRenderColor` (UI-LEFT Y4): a colour fill is
+ * the box's fill colour, `LAYER_DEVICE_BACKGROUND`'s without one; the text is the box's text colour when it has one, the border its stroke colour (`borderColor ==
+ * COLOR4D::UNSPECIFIED` or a brightened box take the layer's). `selected` draws the text and the border in the selection colour, as before.
  */
-function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, color: string) {
+function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, layerCol: string, selected = false) {
   const b = boxOfTextBox(g);
+  const own = (c: SchColor | null | undefined) => (c && !(c.r === 0 && c.g === 0 && c.b === 0 && c.a === 0) ? rgba(c) : null);
+  const color = selected ? layerCol : own(g.text_color) ?? layerCol;
   if (g.fill !== "none") {
-    ctx.fillStyle = g.fill === "background" ? layerColor("LAYER_DEVICE_BACKGROUND") : color;
+    ctx.fillStyle = g.fill === "color" ? own(g.fill_color) ?? layerColor("LAYER_DEVICE_BACKGROUND") : g.fill === "background" ? layerColor("LAYER_DEVICE_BACKGROUND") : color;
     ctx.fillRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
   }
   const sizeNm = g.size_mm * 1e6;
@@ -156,7 +162,7 @@ function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, color: str
   for (const l of layout.lines) drawStrokeText(ctx, l.text, l.u, l.v, { sizeNm, justify: l.justify, italic: !!g.italic, thicknessNm: g.bold ? sizeNm / 5 : undefined, color });
   ctx.restore();
   if (g.stroke_mm >= 0) {
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = selected ? layerCol : own(g.stroke_color) ?? layerCol;
     ctx.lineWidth = g.stroke_mm > 0 ? Math.max(g.stroke_mm * 1e6, 21_200) : 152_400;
     ctx.strokeRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
   }
@@ -305,8 +311,9 @@ export function paintSymbol(
   const drawGraphic = (g: LibrarySymbolGraphic, color: string) => {
     // `drawRealGraphic` strokes with whatever `strokeStyle` is current (a placed symbol's painter sets it first); left alone it is the canvas default, black.
     ctx.strokeStyle = color;
-    if (g.kind === "text_box") drawLibTextBox(ctx, g, color);
-    else if (g.kind === "text") drawLibText(ctx, g, color);
+    if (g.kind === "text_box") drawLibTextBox(ctx, g, color, color !== strokeColor);
+    // `getRenderColor`: a symbol's text in its own colour when it has one (`!isSymbolChild || GetTextColor() != UNSPECIFIED`)
+    else if (g.kind === "text") drawLibText(ctx, g, color === strokeColor && g.text_color && g.text_color.a > 0 ? rgba(g.text_color) : color);
     else drawRealGraphic(ctx, resolveGraphic(g), color);
   };
   const replace = opts.pointEditor?.replace;

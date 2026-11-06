@@ -10,7 +10,8 @@
 //! * **Recombine.** Every graphic on the pad's layer that touches the pad's copper (`BooleanIntersection` of the two polygons, the stroke counted),
 //!   and every proxy item, is merged into the pad as a basic shape (hatched fills made solid, the shape moved and turned back into the pad's frame)
 //!   and leaves the footprint; a pad that was not custom becomes one, its old outline a polygon round a new circular anchor (a circle or a
-//!   rectangle is the anchor itself). Items identical to a merged one (`Compare() == 0`) go too. One undo step.
+//!   rectangle is the anchor itself). A graphic on any layer of the pad that `EDA_SHAPE::Compare`s equal to a merged one (its points within 2 nm)
+//!   goes too, and is not added twice. One undo step.
 //!
 //! The proxy items of a custom pad (the number box and the thermal spoke template) are not copper; this editor has no graphic that is a proxy, so
 //! the explode sets them aside in the mode ([`PadEditMode::proxies`]) and the recombine gives them back.
@@ -111,13 +112,71 @@ fn rotate(p: Point, angle_mdeg: i64) -> Point {
     Point { x: Nm::kiround(p.x.as_f64() * c - p.y.as_f64() * s), y: Nm::kiround(p.x.as_f64() * s + p.y.as_f64() * c) }
 }
 
-/// `PCB_SHAPE::Compare( other ) == 0` for the shapes the editor has: the same kind on the same layer with the same geometry, stroke width and fill.
-fn same_shape(a: &Shape, b: &Shape) -> bool {
-    let mut a = a.clone();
-    let mut b = b.clone();
-    a.set_id(String::new());
-    b.set_id(String::new());
-    a == b
+/// `EPSILON` of `EDA_SHAPE::Compare` (`common/eda_shape.cpp`): "Should be enough for rounding errors on calculated items", in nanometres.
+const COMPARE_EPSILON: i64 = 2;
+
+/// How a graphic of the footprint is filled, as `EDA_SHAPE::m_fill` (`FILL_T`) holds it: the shape's own `filled`, else its kept hatch
+/// ([`eda_model::lib_keep::LibraryFootprintKeep::hatches`]), else `NO_FILL`.
+fn fill_of(shape: &Shape, keep: &eda_model::lib_keep::LibraryFootprintKeep) -> (bool, Option<eda_model::fp_art::Hatch>) {
+    if shape.is_filled() {
+        (true, None)
+    } else {
+        (false, keep.hatches.get(shape.id()).copied())
+    }
+}
+
+/// The line style of a graphic (`STROKE_PARAMS::GetLineStyle`): the kept `(stroke (type ..))` by id ([`eda_model::lib_keep::LibraryFootprintKeep::stroke_types`]), `solid`
+/// when none is kept.
+fn line_style_of<'k>(shape: &Shape, keep: &'k eda_model::lib_keep::LibraryFootprintKeep) -> &'k str {
+    keep.stroke_types.get(shape.id()).map(String::as_str).unwrap_or("solid")
+}
+
+/// `EDA_SHAPE::Compare( other ) == 0` (`common/eda_shape.cpp`, KiCad 8303b2ad), as `PAD::Recombine`'s `findMatching` calls it on two graphics of the footprint:
+/// the start and the end within [`COMPARE_EPSILON`] (`TEST_PT`); the same kind (`TEST( m_shape )`); a rectangle's corner radius equal (the editor's graphics have
+/// none: 0 and 0); an arc's middle point (`GetArcMid`), a curve's two control points and the points it is drawn with (`m_bezierPoints`), within the epsilon; a
+/// polygon's vertex count equal and each vertex within the epsilon; the stroke width within the epsilon; the line style and the fill (`FILL_T`, a hatch counted)
+/// equal. The layer is not compared (`findMatching` tests it apart). A circle's `m_start` is its centre and `m_end` the point on it; a polygon's `m_start` and
+/// `m_end` are unused (both zero). The curve's point lists are compared up to the shorter one after their lengths are found equal, as KiCad 25ec2335's guard
+/// does (8303b2ad indexes the other list by this one's length).
+fn shapes_compare_equal(a: &Shape, b: &Shape, keep: &eda_model::lib_keep::LibraryFootprintKeep) -> bool {
+    let near = |p: Nm, q: Nm| (p.get() - q.get()).abs() <= COMPARE_EPSILON;
+    let near_pt = |p: &Point, q: &Point| near(p.x, q.x) && near(p.y, q.y);
+    let geometry = match (a, b) {
+        (Shape::Segment { start: s1, end: e1, .. }, Shape::Segment { start: s2, end: e2, .. }) | (Shape::Rect { start: s1, end: e1, .. }, Shape::Rect { start: s2, end: e2, .. }) => near_pt(s1, s2) && near_pt(e1, e2),
+        (Shape::Circle { center: c1, end: e1, .. }, Shape::Circle { center: c2, end: e2, .. }) => near_pt(c1, c2) && near_pt(e1, e2),
+        (Shape::Arc { start: s1, mid: m1, end: e1, .. }, Shape::Arc { start: s2, mid: m2, end: e2, .. }) => near_pt(s1, s2) && near_pt(e1, e2) && near_pt(m1, m2),
+        (Shape::Bezier { start: s1, c1: a1, c2: b1, end: e1, .. }, Shape::Bezier { start: s2, c1: a2, c2: b2, end: e2, .. }) => {
+            let (p1, p2) = (a.bezier_points().unwrap_or_default(), b.bezier_points().unwrap_or_default());
+            near_pt(s1, s2) && near_pt(e1, e2) && near_pt(a1, a2) && near_pt(b1, b2) && p1.len() == p2.len() && p1.iter().zip(&p2).all(|(p, q)| near_pt(p, q))
+        }
+        (Shape::Polygon { pts: p1, .. }, Shape::Polygon { pts: p2, .. }) => p1.len() == p2.len() && p1.iter().zip(p2).all(|(p, q)| near_pt(p, q)),
+        _ => false,
+    };
+    geometry && near(a.stroke_width(), b.stroke_width()) && line_style_of(a, keep) == line_style_of(b, keep) && fill_of(a, keep) == fill_of(b, keep)
+}
+
+/// `PAD::GetLayerSet().test( aLayer )`: whether the pad is on the layer, its layer list read as KiCad's reader reads one (`m_layerMasks`: `*.Cu` every copper
+/// layer, `*In.Cu` the inner ones, `F&B.Cu` the outer two, `*.Mask` / `*.Paste` / `*.SilkS` / `*.Adhes` / `*.Fab` / `*.CrtYd` the front and back of the kind). An
+/// empty list is the one the library writer puts in (`F.Cu F.Paste F.Mask` for an SMD pad, `*.Cu *.Mask` for a hole).
+pub fn pad_is_on_layer(pad: &LibraryPad, layer: &str) -> bool {
+    let defaults: Vec<String>;
+    let layers: &[String] = if pad.layers.is_empty() {
+        defaults = match pad.kind {
+            eda_model::PadKind::Smd => vec!["F.Cu".into(), "F.Paste".into(), "F.Mask".into()],
+            _ => vec!["*.Cu".into(), "*.Mask".into()],
+        };
+        &defaults
+    } else {
+        &pad.layers
+    };
+    let inner = layer.strip_prefix("In").and_then(|r| r.strip_suffix(".Cu")).is_some_and(|d| d.parse::<u32>().is_ok());
+    layers.iter().any(|l| match l.as_str() {
+        "*.Cu" => layer == "F.Cu" || layer == "B.Cu" || inner,
+        "*In.Cu" => inner,
+        "F&B.Cu" => layer == "F.Cu" || layer == "B.Cu",
+        "*.Adhes" | "*.Paste" | "*.Mask" | "*.SilkS" | "*.Fab" | "*.CrtYd" => layer.len() > 2 && (layer.starts_with("F.") || layer.starts_with("B.")) && layer[2..] == l[2..],
+        other => other == layer,
+    })
 }
 
 impl Board<'_> {
@@ -194,43 +253,51 @@ fn recombine(fp: &mut LibraryFootprint, index: usize, mode: PadEditMode, copper:
     // graphic that touches the pad only through an earlier merged one is merged too: each merged graphic's polygon (the
     // primitive's own, in the footprint's frame) is added to `pad_polys`.
     let mut pad_polys = eda_drc::pad_shape::pad_polygons_in_footprint(&fp.pads[index].to_engine_pad(), MAX_ERROR_NM);
-    let touches = |shape: &Shape, pad_polys: &eda_shape_poly_set::ShapePolySet| -> bool {
-        let mut draw = eda_drc::pad_shape::shape_polygons(shape, MAX_ERROR_NM);
+    // `PCB_SHAPE::TransformShapeToPolygon` passes `includeFill = false`, so a hatched graphic counts as solid (`IsHatchedFill() && !includeFill`).
+    let polygons_of = |shape: &Shape, keep: &eda_model::lib_keep::LibraryFootprintKeep| {
+        if keep.hatches.contains_key(shape.id()) {
+            let mut solid = shape.clone();
+            solid.set_filled(true);
+            eda_drc::pad_shape::shape_polygons(&solid, MAX_ERROR_NM)
+        } else {
+            eda_drc::pad_shape::shape_polygons(shape, MAX_ERROR_NM)
+        }
+    };
+    let touches = |shape: &Shape, pad_polys: &eda_shape_poly_set::ShapePolySet, keep: &eda_model::lib_keep::LibraryFootprintKeep| -> bool {
+        let mut draw = polygons_of(shape, keep);
         draw.boolean_intersection(pad_polys);
         !draw.is_empty()
     };
 
     // `findNext`, until it finds nothing: the first graphic on the layer, scanning from the start of the list every time,
-    // that touches the pad as it has grown; the matching ones follow it out.
-    let mut merged: Vec<usize> = Vec::new();
+    // that touches the pad as it has grown; the matching ones follow it out. `found` holds what `findNext` returned (each
+    // becomes a primitive), `taken` every graphic that leaves the footprint (`SKIP_STRUCT`, `mergedShapes`).
+    let mut found: Vec<usize> = Vec::new();
     let mut taken = vec![false; fp.graphics.len()];
-    while let Some(i) = (0..fp.graphics.len()).find(|&i| !taken[i] && fp.graphics[i].layer() == layer && touches(&fp.graphics[i], &pad_polys)) {
+    while let Some(i) = (0..fp.graphics.len()).find(|&i| !taken[i] && fp.graphics[i].layer() == layer && touches(&fp.graphics[i], &pad_polys, &fp.kicad)) {
         taken[i] = true;
-        merged.push(i);
-        pad_polys.boolean_add(&eda_drc::pad_shape::shape_polygons(&fp.graphics[i], MAX_ERROR_NM));
-        // `findMatching`: "KiCad won't produce these, but old footprints from other vendors have them".
+        found.push(i);
+        pad_polys.boolean_add(&polygons_of(&fp.graphics[i], &fp.kicad));
+        // `findMatching`: "KiCad won't produce these, but old footprints from other vendors have them" -- a graphic on any layer of the pad
+        // (`GetLayerSet().test( other->GetLayer() )`) that `Compare`s equal to the one just merged, within its two nanometres, is deleted with it.
         for j in 0..fp.graphics.len() {
-            if !taken[j] && fp.graphics[j].layer() == layer && same_shape(&fp.graphics[i], &fp.graphics[j]) {
+            if !taken[j] && pad_is_on_layer(&fp.pads[index], fp.graphics[j].layer()) && shapes_compare_equal(&fp.graphics[i], &fp.graphics[j], &fp.kicad) {
                 taken[j] = true;
-                merged.push(j);
             }
         }
     }
     // The proxy items are on the layer too, and `findNext` returns one whether it touches the pad or not.
-    let have_something = !merged.is_empty() || !mode.proxies.is_empty();
+    let have_something = !found.is_empty() || !mode.proxies.is_empty();
 
     if have_something {
-        // The primitives to add, in the pad's frame: the merged graphics (the ones identical to another are not added twice), then the proxies.
+        // The primitives to add, in the pad's frame: what `findNext` returned (the matching ones are only deleted), then the proxies.
         let mut primitives: Vec<PadPrimitive> = Vec::new();
-        for (n, &i) in merged.iter().enumerate() {
-            // Only the first of a group of identical shapes becomes a primitive (`mergedShapes` has the rest only to delete them): the group's
-            // later members are exactly the ones `findMatching` collected.
-            let duplicate = merged[..n].iter().any(|&k| same_shape(&fp.graphics[k], &fp.graphics[i]));
-            if duplicate {
-                continue;
-            }
+        for &i in &found {
             let mut shape = fp.graphics[i].clone();
-            // Hatched fills become solid is implicit: the editor's graphics have no hatch; a filled shape stays filled.
+            // "Convert any hatched fills to solid": `if( primitive->IsAnyFill() ) primitive->SetFillMode( FILL_T::FILLED_SHAPE )`.
+            if fp.kicad.hatches.contains_key(shape.id()) {
+                shape.set_filled(true);
+            }
             shape.set_id(String::new());
             frame.back(&mut shape, copper);
             shape.set_layer(String::new());
@@ -276,11 +343,13 @@ fn recombine(fp: &mut LibraryFootprint, index: usize, mode: PadEditMode, copper:
         custom.primitives.extend(primitives);
         pad.custom = Some(PadCustom { anchor: custom.anchor, zone: custom.zone, primitives: custom.primitives });
 
-        // The merged graphics leave the footprint.
+        // The merged graphics leave the footprint, and what was kept by their ids with them.
         let mut keep = Vec::with_capacity(fp.graphics.len());
         for (i, g) in std::mem::take(&mut fp.graphics).into_iter().enumerate() {
             if !taken[i] {
                 keep.push(g);
+            } else {
+                fp.kicad.forget(g.id());
             }
         }
         fp.graphics = keep;

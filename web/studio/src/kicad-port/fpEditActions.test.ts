@@ -66,14 +66,26 @@ test("duplicatePads with increment: the copy takes GetNextPadNumber( last ) and 
   assert.equal(lastPadNumber, "4");
 });
 
-test("duplicatePads with increment: several selected pads are numbered consecutively", () => {
+test("duplicatePads with increment: several selected pads all take the next number, as KiCad's GetNextPadNumber does not see the copies before the commit", () => {
   const pads = [pad("1"), pad("2")];
   const { pads: dup, lastPadNumber } = duplicatePads(pads, [pads[0]!, pads[1]!], true, "2");
   assert.deepEqual(
     dup.map((p) => p.number),
-    ["3", "4"]
+    ["3", "3"]
   );
-  assert.equal(lastPadNumber, "4");
+  assert.equal(lastPadNumber, "3");
+  // From a last number that is taken, each copy walks past the same footprint pads: 1 -> 2 (taken) -> 3, for every copy.
+  const { pads: dup2 } = duplicatePads(pads, [pads[0]!, pads[1]!], true, "1");
+  assert.deepEqual(
+    dup2.map((p) => p.number),
+    ["3", "3"]
+  );
+  // A prefix: A5 for each copy of A1 ... A4.
+  const bga = [pad("A1"), pad("A2"), pad("A3"), pad("A4")];
+  assert.deepEqual(
+    duplicatePads(bga, [bga[2]!, bga[3]!], true, "A4").pads.map((p) => p.number),
+    ["A5", "A5"]
+  );
 });
 
 test("duplicatePads with increment skips numbers already used (GetNextPadNumber's collision loop)", () => {

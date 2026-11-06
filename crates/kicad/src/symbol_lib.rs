@@ -352,19 +352,24 @@ fn graphics_and_pins(item: &[Sexpr]) -> Bodies {
     Bodies { graphics: normal.0, pins: normal.1, unit_count: max_unit, alternate: has_alt.then(|| Box::new(AlternateBody::new(alt.0, alt.1))) }
 }
 
-/// The graphics and pins of one `(symbol "Name_<unit>_<style>" ...)` sub-block, all of unit `unit`.
+/// The graphics and pins of one `(symbol "Name_<unit>_<style>" ...)` sub-block, all of unit `unit`. A shape, text or text box private to the Symbol Editor
+/// (`(rectangle private ..)`, `(text private "..")`) is not drawn on a sheet (`SCH_PAINTER::draw`: `if( aItem->IsPrivate() && !m_schSettings.m_IsSymbolEditor ) return`).
 fn sub_symbol_items(sub: &[Sexpr], unit: u32) -> (Vec<SymbolGraphic>, Vec<LibPin>) {
     let mut graphics = Vec::new();
     let mut pins = Vec::new();
+    fn find_all<'a>(node: &'a [Sexpr], tag: &'a str) -> impl Iterator<Item = &'a [Sexpr]> {
+        // the bare keyword `private`, not a text that says "private" (a quoted atom keeps its mark, `Sexpr::Atom`)
+        sexpr::find_all(node, tag).filter(|n| !matches!(n.get(1), Some(Sexpr::Atom(a)) if a == "private"))
+    }
     {
-        for r in sexpr::find_all(sub, "rectangle") {
+        for r in find_all(sub, "rectangle") {
             if let (Some(s), Some(e)) = (sexpr::find(r, "start"), sexpr::find(r, "end")) {
                 if let (Some(sx), Some(sy), Some(ex), Some(ey)) = (sexpr::num(s, 1), sexpr::num(s, 2), sexpr::num(e, 1), sexpr::num(e, 2)) {
                     graphics.push(SymbolGraphic::Rectangle { unit, start: SPoint::new(sx, sy), end: SPoint::new(ex, ey), stroke_mm: stroke_width(r), filled: is_filled(r) });
                 }
             }
         }
-        for p in sexpr::find_all(sub, "polyline") {
+        for p in find_all(sub, "polyline") {
             if let Some(pts_node) = sexpr::find(p, "pts") {
                 let pts: Vec<SPoint> = sexpr::find_all(pts_node, "xy").filter_map(|xy| Some(SPoint::new(sexpr::num(xy, 1)?, sexpr::num(xy, 2)?))).collect();
                 if pts.len() >= 2 {
@@ -372,21 +377,21 @@ fn sub_symbol_items(sub: &[Sexpr], unit: u32) -> (Vec<SymbolGraphic>, Vec<LibPin
                 }
             }
         }
-        for c in sexpr::find_all(sub, "circle") {
+        for c in find_all(sub, "circle") {
             if let (Some(center), Some(radius)) = (sexpr::find(c, "center"), sexpr::find(c, "radius").and_then(|r| sexpr::num(r, 1))) {
                 if let (Some(cx), Some(cy)) = (sexpr::num(center, 1), sexpr::num(center, 2)) {
                     graphics.push(SymbolGraphic::Circle { unit, center: SPoint::new(cx, cy), radius_mm: radius, stroke_mm: stroke_width(c), filled: is_filled(c) });
                 }
             }
         }
-        for a in sexpr::find_all(sub, "arc") {
+        for a in find_all(sub, "arc") {
             if let (Some(s), Some(m), Some(e)) = (sexpr::find(a, "start"), sexpr::find(a, "mid"), sexpr::find(a, "end")) {
                 if let (Some(sx), Some(sy), Some(mx), Some(my), Some(ex), Some(ey)) = (sexpr::num(s, 1), sexpr::num(s, 2), sexpr::num(m, 1), sexpr::num(m, 2), sexpr::num(e, 1), sexpr::num(e, 2)) {
                     graphics.push(SymbolGraphic::Arc { unit, start: SPoint::new(sx, sy), mid: SPoint::new(mx, my), end: SPoint::new(ex, ey), stroke_mm: stroke_width(a), filled: is_filled(a) });
                 }
             }
         }
-        for t in sexpr::find_all(sub, "text") {
+        for t in find_all(sub, "text") {
             if let (Some(content), Some(at)) = (sexpr::txt(t, 1), sexpr::find(t, "at")) {
                 if let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) {
                     let angle = sexpr::num(at, 3).unwrap_or(0.0);
@@ -643,7 +648,7 @@ pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::Lib
     // a sub-block whose name does not start with its parent's)
     let block_name = outer_name.rsplit(':').next().unwrap_or(outer_name);
     let yn = |b: bool| if b { "yes" } else { "no" };
-    let max_style: u32 = if sym.has_alternate_body_style { 2 } else { 1 };
+    let max_style: u32 = sym.body_style_count();
 
     // `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` of a derived symbol: `(symbol "Name" (extends "Parent")`, its fields and the keywords and footprint filters it has -- no drawing,
     // no unit or pin options (they are its root's).
@@ -661,6 +666,16 @@ pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::Lib
     // `(power global)` / `(power local)` (`IsGlobalPower`, `IsLocalPower`)
     if sym.power {
         writeln!(out, "\t\t(power {})", if sym.power_local { "local" } else { "global" }).unwrap();
+    }
+    // `(body_styles demorgan)` / `(body_styles "Name" ..)` of a symbol of several body styles (`IsMultiBodyStyle`, `HasDeMorganBodyStyles`, `GetBodyStyleNames`). This
+    // file's version is before 20250827, where KiCad 8303b2ad tells De Morgan from the `_N_2` sub-symbols whatever the form says; KiCad 25ec2335's reader
+    // (`!symbol->IsMultiBodyStyle()`) keeps the custom names, as the box's kicad-cli does.
+    if sym.is_multi_body_style() {
+        if sym.has_alternate_body_style {
+            writeln!(out, "\t\t(body_styles demorgan)").unwrap();
+        } else {
+            writeln!(out, "\t\t(body_styles {})", sym.body_style_names.iter().map(|n| crate::sexpr_str(n)).collect::<Vec<_>>().join(" ")).unwrap();
+        }
     }
     writeln!(out, "\t\t(pin_numbers (hide {}))", yn(sym.pin_numbers_hidden)).unwrap();
     writeln!(out, "\t\t(pin_names (offset {}) (hide {}))", crate::fmt_mm_f(sym.pin_name_offset_mm), yn(sym.pin_names_hidden)).unwrap();
@@ -777,10 +792,11 @@ fn write_field(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField) 
 fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic, stroke_type: Option<&str>, text_style: Option<&eda_model::lib_keep::KeptTextStyle>) {
     use eda_model::ir::{LibraryFill, LibrarySymbolGraphic as G};
     use std::fmt::Write as _;
+    // a shape has no fill colour of its own here: a colour fill is the body's background (`fill_of` reads it so)
     let fill_tok = |f: LibraryFill| match f {
         LibraryFill::None => "none",
         LibraryFill::Outline => "outline",
-        LibraryFill::Background => "background",
+        LibraryFill::Background | LibraryFill::Color => "background",
     };
     let kind = stroke_type.unwrap_or("default");
     let stroke = |s: f64| format!("(stroke (width {}) (type {kind}))", crate::fmt_mm_f(s));
@@ -803,12 +819,13 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
         G::Arc { start, mid, end, stroke_mm, fill: f, .. } => {
             writeln!(out, "\t\t\t(arc (start {}) (mid {}) (end {}) {} {})", pt(*start), pt(*mid), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
         }
-        G::Text { text, at, angle_deg, size_mm, bold, italic, h_align, v_align, .. } => {
+        G::Text { text, at, angle_deg, size_mm, bold, italic, h_align, v_align, private, font: face, text_color, .. } => {
             use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
-            // `EDA_TEXT::Format`: the size, the pen the file gave, bold and italic; `(justify ..)` with the horizontal word, then the vertical one (each left out when
-            // centred), then what else the file said there; hidden
+            // `EDA_TEXT::Format`: the face, the size, the pen the file gave, bold and italic, the colour; `(justify ..)` with the horizontal word, then the vertical one
+            // (each left out when centred), then what else the file said there; hidden
             let style = text_style.cloned().unwrap_or_default();
-            let mut font = format!("(size {} {})", crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm));
+            let mut font = face_of(face.as_deref());
+            font.push_str(&format!("(size {} {})", crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm)));
             if let Some(t) = style.thickness_mm {
                 font.push_str(&format!(" (thickness {})", crate::fmt_mm_f(t)));
             }
@@ -818,6 +835,7 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
             if *italic || style.italic {
                 font.push_str(" italic");
             }
+            font.push_str(&color_of(*text_color));
             let mut words: Vec<&str> = Vec::new();
             match h_align {
                 FieldHAlign::Left => words.push("left"),
@@ -832,7 +850,9 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
             words.extend(style.justify.iter().map(String::as_str).filter(|w| !matches!(*w, "left" | "right" | "top" | "bottom")));
             let justify = if words.is_empty() { String::new() } else { format!(" (justify {})", words.join(" ")) };
             let hide = if style.hidden { " (hide yes)" } else { "" };
-            writeln!(out, "\t\t\t(text {} (at {} {} {}) (effects (font {font}){justify}{hide}))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg)).unwrap();
+            // `saveText`: `(text private "..")` for a text private to the Symbol Editor
+            let private = if *private { "private " } else { "" };
+            writeln!(out, "\t\t\t(text {private}{} (at {} {} {}) (effects (font {font}){justify}{hide}))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg)).unwrap();
         }
         // `formatBezier`: the four points (start, the two control points, end), the stroke and the fill
         G::Bezier { start, c1, c2, end, stroke_mm, fill: f, .. } => {
@@ -841,7 +861,7 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
         // `SCH_IO_KICAD_SEXPR_LIB_CACHE::saveTextBox`: the box is its start, its angle and the size from the start to the opposite corner (both in the symbol's Y-up mm), the four margins, the
         // stroke and the fill, and `EDA_TEXT::Format`'s effects. A border of no width is the width -1 of a schematic's units, 0.0001 mm (`STROKE_PARAMS`); the file's default
         // alignment is centre, so a text box written left and top says so.
-        G::TextBox { text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, stroke_mm, fill: f, .. } => {
+        G::TextBox { text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, stroke_mm, fill: f, private, font: face, text_color, stroke_color, fill_color, .. } => {
             use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
             let margin = crate::fmt_mm_f(eda_model::ir::text_box_margin_mm(*size_mm, *margin_mm));
             let width = if *stroke_mm < 0.0 { "-0.0001".to_string() } else { crate::fmt_mm_f(*stroke_mm) };
@@ -858,22 +878,38 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
             }
             let justify = if justify.is_empty() { String::new() } else { format!(" (justify {})", justify.join(" ")) };
             let size = crate::fmt_mm_f(*size_mm);
+            // `saveTextBox`: `private` before the text; `STROKE_PARAMS::Format`'s `(color ..)` when the border has one; `formatFill`'s `(color ..)` of a colour fill
+            // (`COLOR4D::UNSPECIFIED` as `0 0 0 0`); `EDA_TEXT::Format`'s face first in `(font ..)` and the colour last
+            let private = if *private { "private " } else { "" };
+            let stroke_color = color_of(*stroke_color);
+            let fill = if *f == LibraryFill::Color { format!("(fill (type color) (color {}))", crate::sch_extras_io::color_str(fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 }))) } else { fill(*f) };
+            let face = face_of(face.as_deref());
+            let font_color = color_of(*text_color);
             writeln!(
                 out,
-                "\t\t\t(text_box {} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type {kind})) {} (effects (font (size {size} {size}){}{}){justify}))",
+                "\t\t\t(text_box {private}{} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type {kind}){stroke_color}) {fill} (effects (font {face}(size {size} {size}){}{}{font_color}){justify}))",
                 crate::sexpr_str(text),
                 crate::fmt_mm_f(start.x),
                 crate::fmt_mm_f(start.y),
                 crate::fmt_mm_f(*angle_deg),
                 crate::fmt_mm_f(end.x - start.x),
                 crate::fmt_mm_f(end.y - start.y),
-                fill(*f),
                 if *bold { " bold" } else { "" },
                 if *italic { " italic" } else { "" },
             )
             .unwrap();
         }
     }
+}
+
+/// `EDA_TEXT::Format`'s `(face "..")`, first in `(font ..)`, when the text has a font of its own; with its trailing space.
+fn face_of(face: Option<&str>) -> String {
+    face.map(|n| format!("(face {}) ", crate::sexpr_str(n))).unwrap_or_default()
+}
+
+/// ` (color r g b a)` of a colour that is not `COLOR4D::UNSPECIFIED` (`STROKE_PARAMS::Format`, `EDA_TEXT::Format`), with its leading space.
+fn color_of(c: Option<eda_model::sch_extras::SchColor>) -> String {
+    c.filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0)).map(|c| format!(" (color {})", crate::sch_extras_io::color_str(c))).unwrap_or_default()
 }
 
 fn write_symbol_pin(out: &mut String, p: &eda_model::ir::LibrarySymbolPin) {
@@ -1242,6 +1278,7 @@ mod tests {
             pin_name_offset_mm: 0.508,
             unit_count: 2,
             has_alternate_body_style: false,
+            body_style_names: Vec::new(),
             footprint_filters: vec!["SOIC*".into()],
             graphics: vec![eda_model::ir::LibrarySymbolGraphic::Rectangle { id: "g1".into(), unit: 0, body_style: 1, start: eda_model::symbol::SPoint::new(-2.54, -2.54), end: eda_model::symbol::SPoint::new(2.54, 2.54), stroke_mm: 0.254, fill: eda_model::ir::LibraryFill::Background }],
             pins: vec![lib_pin("1", 1, 1, 0.0, 5.08, false), lib_pin("2", 1, 1, 0.0, -5.08, false), lib_pin("3", 2, 1, 0.0, 5.08, true)],
@@ -1289,6 +1326,7 @@ mod tests {
             pin_name_offset_mm: 0.508,
             unit_count: 1,
             has_alternate_body_style: false,
+            body_style_names: Vec::new(),
             footprint_filters: vec![],
             graphics: vec![],
             pins: vec![lib_pin(pin, 1, 1, 0.0, 5.08, false)],
@@ -1330,6 +1368,7 @@ mod tests {
             pin_name_offset_mm: 0.508,
             unit_count: 1,
             has_alternate_body_style: false,
+            body_style_names: Vec::new(),
             footprint_filters: vec![],
             graphics: vec![],
             pins: vec![],

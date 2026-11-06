@@ -26,6 +26,8 @@ export function TextDialog() {
   const dialog = state.textDialog;
 
   const editing = dialog?.mode === "edit" ? api.textById(dialog.id) : undefined;
+  // E on the text Draw Text carries (`PlaceText`'s `OnEditItemRequest( text )`): the dialog edits the text in the hand, which stays there.
+  const carried = dialog?.mode === "carried" && state.drawState?.kind === "text" ? state.drawState : null;
   const [content, setContent] = useState("");
   const defaults = state.board?.board_rules?.text_graphics;
   const [layer, setLayer] = useState("F.SilkS");
@@ -52,6 +54,17 @@ export function TextDialog() {
       setMirror(editing.mirror);
       setBold(editing.bold ?? false);
       setAngle(editing.angle);
+    } else if (dialog.mode === "carried" && carried) {
+      const t = carried.text;
+      styled.current = true;
+      setContent(t.content);
+      setLayer(t.layer);
+      setSize(t.size_nm);
+      setStrokeWidth(t.stroke_width);
+      setJustify(t.justify);
+      setMirror(t.mirror);
+      setBold(!!(carried.extra as { bold?: boolean }).bold);
+      setAngle(t.angle);
     } else if (dialog.mode === "add") {
       const start = activeLayerName(state.activeLayer, "F.SilkS");
       const style = newTextStyle(defaults, start);
@@ -71,6 +84,7 @@ export function TextDialog() {
 
   if (!dialog) return null;
   if (dialog.mode === "edit" && !editing) return null;
+  if (dialog.mode === "carried" && !carried) return null;
   const close = () => dispatch({ type: "SET_TEXT_DIALOG", dialog: null });
 
   const submit = () => {
@@ -82,6 +96,12 @@ export function TextDialog() {
       // A size typed in the dialog is square (the dialog has one size field); the class's own size keeps the class's width.
       const extra = { id: "", ...(size === style.sizeNm && style.widthNm !== size ? { width_nm: style.widthNm } : {}), ...(bold ? { bold: true } : {}), ...(style.italic ? { italic: true } : {}), valign: style.valign };
       dispatch({ type: "SET_DRAW_STATE", draw: { kind: "text", text: { content, at: { x: dialog.at[0], y: dialog.at[1] }, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror }, extra } });
+    } else if (dialog.mode === "carried") {
+      if (!carried) return close();
+      // The text in the hand takes the dialog's values and stays carried; a size typed in is square (the class's own width goes with the size it was for).
+      const { bold: _bold, width_nm, ...rest } = carried.extra as typeof carried.extra & { bold?: boolean };
+      const extra = { ...rest, ...(width_nm !== undefined && size === carried.text.size_nm ? { width_nm } : {}), ...(bold ? { bold: true } : {}) };
+      dispatch({ type: "SET_DRAW_STATE", draw: { kind: "text", text: { ...carried.text, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror }, extra } });
     } else {
       api.cmd({ op: "edit_text", id: dialog.id, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror, bold });
     }

@@ -4240,6 +4240,10 @@ pub enum LibraryFill {
     None,
     Outline,
     Background,
+    /// `FILL_T::FILLED_WITH_COLOR`, `(fill (type color) (color r g b a))`: what Text Box Properties' "Filled" gives a library text box (`DIALOG_TEXT_PROPERTIES::
+    /// TransferDataFromWindow`: `SetFillMode( m_filledCtrl->GetValue() ? FILLED_WITH_COLOR : NO_FILL )`), drawn in the box's own fill colour or, with none,
+    /// `LAYER_DEVICE_BACKGROUND`'s (`SCH_PAINTER::getRenderColor`). A shape keeps no colour of its own here, so a shape read with it is filled as with `Background`.
+    Color,
 }
 
 fn d_body_style_one() -> u32 {
@@ -4345,6 +4349,15 @@ pub enum LibrarySymbolGraphic {
         h_align: crate::sym_fields::FieldHAlign,
         #[serde(default, skip_serializing_if = "is_center_v")]
         v_align: crate::sym_fields::FieldVAlign,
+        /// `SCH_ITEM::IsPrivate` ("Private to Symbol Editor", `(text private ..)`): drawn in the Symbol Editor only (`SCH_PAINTER::draw` returns for it elsewhere).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private: bool,
+        /// `EDA_TEXT::GetFont` (Text Properties' Font, `(font (face ..))`): `None` is the default font; see [`crate::sch_extras::TextStyle::font`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font: Option<String>,
+        /// `EDA_TEXT::GetTextColor` (`(font .. (color r g b a))`): `None` is `COLOR4D::UNSPECIFIED`, `LAYER_DEVICE`'s colour.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_color: Option<crate::sch_extras::SchColor>,
     },
     /// `SCH_SHAPE` of `SHAPE_T::BEZIER` in a library symbol, `(bezier (pts (xy start) (xy c1) (xy c2) (xy end)) (stroke ..) (fill ..))`
     /// (`formatBezier`): a cubic curve from `start` to `end` pulled by the two control points, in the symbol's own mm with Y up.
@@ -4391,6 +4404,21 @@ pub enum LibrarySymbolGraphic {
         stroke_mm: f64,
         #[serde(default)]
         fill: LibraryFill,
+        /// `SCH_ITEM::IsPrivate` ("Private to Symbol Editor", `(text_box private ..)`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private: bool,
+        /// The text's font (`(font (face ..))`); `None` is the default one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font: Option<String>,
+        /// The text's colour (`EDA_TEXT::GetTextColor`); `None` is `COLOR4D::UNSPECIFIED`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_color: Option<crate::sch_extras::SchColor>,
+        /// The border's colour (`STROKE_PARAMS::GetColor`, `(stroke .. (color r g b a))`, Text Box Properties' "Border color"); `None` is `COLOR4D::UNSPECIFIED`, the layer's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stroke_color: Option<crate::sch_extras::SchColor>,
+        /// The fill's colour when `fill` is [`LibraryFill::Color`] (`GetFillColor`, "Fill color"); `None` is `COLOR4D::UNSPECIFIED`, written `(color 0 0 0 0)`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill_color: Option<crate::sch_extras::SchColor>,
     },
 }
 
@@ -4482,6 +4510,16 @@ struct LibrarySymbolGraphicWire {
     v_align: Option<crate::sym_fields::FieldVAlign>,
     #[serde(default)]
     margin_mm: Option<f64>,
+    #[serde(default)]
+    private: Option<bool>,
+    #[serde(default)]
+    font: Option<String>,
+    #[serde(default)]
+    text_color: Option<crate::sch_extras::SchColor>,
+    #[serde(default)]
+    stroke_color: Option<crate::sch_extras::SchColor>,
+    #[serde(default)]
+    fill_color: Option<crate::sch_extras::SchColor>,
 }
 
 impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
@@ -4493,9 +4531,9 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
             "polyline" => &["stroke_mm", "fill", "pts"],
             "circle" => &["stroke_mm", "fill", "center", "radius_mm"],
             "arc" => &["stroke_mm", "fill", "start", "mid", "end"],
-            "text" => &["text", "at", "angle_deg", "size_mm", "bold", "italic", "h_align", "v_align"],
+            "text" => &["text", "at", "angle_deg", "size_mm", "bold", "italic", "h_align", "v_align", "private", "font", "text_color"],
             "bezier" => &["stroke_mm", "fill", "start", "c1", "c2", "end"],
-            "text_box" => &["text", "start", "end", "angle_deg", "size_mm", "bold", "italic", "h_align", "v_align", "margin_mm", "stroke_mm", "fill"],
+            "text_box" => &["text", "start", "end", "angle_deg", "size_mm", "bold", "italic", "h_align", "v_align", "margin_mm", "stroke_mm", "fill", "private", "font", "text_color", "stroke_color", "fill_color"],
             other => return Err(D::Error::unknown_variant(other, &["rectangle", "polyline", "circle", "arc", "text", "text_box", "bezier"])),
         };
         let present = [
@@ -4518,13 +4556,19 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
             ("h_align", w.h_align.is_some()),
             ("v_align", w.v_align.is_some()),
             ("margin_mm", w.margin_mm.is_some()),
+            ("private", w.private.is_some()),
+            ("font", w.font.is_some()),
+            ("text_color", w.text_color.is_some()),
+            ("stroke_color", w.stroke_color.is_some()),
+            ("fill_color", w.fill_color.is_some()),
         ];
         for (name, there) in present {
             if there && !allowed.contains(&name) {
                 return Err(D::Error::unknown_field(name, allowed));
             }
         }
-        let LibrarySymbolGraphicWire { kind, id, unit, body_style, fill, stroke_mm, start, mid, c1, c2, end, center, radius_mm, pts, text, at, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm } = w;
+        let LibrarySymbolGraphicWire { kind, id, unit, body_style, fill, stroke_mm, start, mid, c1, c2, end, center, radius_mm, pts, text, at, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, private, font, text_color, stroke_color, fill_color } = w;
+        let private = private.unwrap_or_default();
         let need = |name: &'static str| D::Error::missing_field(name);
         let fill = fill.unwrap_or_default();
         Ok(match kind.as_str() {
@@ -4558,6 +4602,11 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
                 margin_mm: margin_mm.unwrap_or_default(),
                 stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?,
                 fill,
+                private,
+                font,
+                text_color,
+                stroke_color,
+                fill_color,
             },
             "bezier" => LibrarySymbolGraphic::Bezier {
                 id,
@@ -4582,6 +4631,9 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
                 italic: italic.unwrap_or_default(),
                 h_align: h_align.unwrap_or_default(),
                 v_align: v_align.unwrap_or_default(),
+                private,
+                font,
+                text_color,
             },
         })
     }
@@ -4677,8 +4729,18 @@ impl LibrarySymbolGraphic {
     /// engine-side type has never modeled, same approximation
     /// `LibraryPad::to_engine_pad`'s shape collapse already documents).
     /// A text box has no engine counterpart: it comes out as what it is made of, its border (a rectangle) and its text (see `crate::sym_textbox`).
+    /// `SCH_ITEM::IsPrivate`: a text or text box marked "Private to Symbol Editor". (A shape's private flag is not held here.)
+    pub fn is_private(&self) -> bool {
+        matches!(self, LibrarySymbolGraphic::Text { private: true, .. } | LibrarySymbolGraphic::TextBox { private: true, .. })
+    }
+
+    /// The graphic as a placed symbol draws it. A private item draws nothing there: `SCH_PAINTER::draw( SCH_TEXT / SCH_TEXTBOX )` returns
+    /// `if( aText->IsPrivate() && !m_schSettings.m_IsSymbolEditor )`.
     pub fn to_engine_graphics(&self) -> Vec<crate::symbol::SymbolGraphic> {
         use crate::symbol::SymbolGraphic as EG;
+        if self.is_private() {
+            return Vec::new();
+        }
         let filled = |f: LibraryFill| f != LibraryFill::None;
         vec![match self {
             LibrarySymbolGraphic::Rectangle { unit, start, end, stroke_mm, fill, .. } => EG::Rectangle { unit: *unit, start: *start, end: *end, stroke_mm: *stroke_mm, filled: filled(*fill) },
@@ -4727,6 +4789,9 @@ impl LibrarySymbolGraphic {
                 italic: false,
                 h_align: Default::default(),
                 v_align: Default::default(),
+                private: false,
+                font: None,
+                text_color: None,
             },
         }
     }
@@ -4846,6 +4911,10 @@ pub struct LibrarySymbol {
     /// far this app's placed-instance rendering follows it.
     #[serde(default)]
     pub has_alternate_body_style: bool,
+    /// `LIB_SYMBOL::GetBodyStyleNames` (Symbol Properties' "Custom body styles:", `(body_styles "Name" ..)`): the names of a symbol's own body styles, one
+    /// per style from 1, when it is not a De Morgan one ([`Self::has_alternate_body_style`] false); empty for a single body style. See [`Self::body_style_count`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_style_names: Vec<String>,
     /// `dialog_lib_symbol_properties.cpp`'s Footprint Filters list (glob
     /// patterns a footprint-chooser would narrow to for this symbol) --
     /// stored for round-tripping through `.kicad_sym`; nothing in this
@@ -4909,6 +4978,7 @@ impl Default for LibrarySymbol {
             pin_name_offset_mm: d_pin_name_offset_mm(),
             unit_count: 1,
             has_alternate_body_style: false,
+            body_style_names: Vec::new(),
             footprint_filters: Vec::new(),
             graphics: Vec::new(),
             pins: Vec::new(),
@@ -4925,6 +4995,36 @@ impl Default for LibrarySymbol {
 }
 
 impl LibrarySymbol {
+    /// `LIB_SYMBOL::GetBodyStyleCount`: 2 for a De Morgan symbol, else one per custom name (at least 1).
+    pub fn body_style_count(&self) -> u32 {
+        if self.has_alternate_body_style {
+            2
+        } else {
+            (self.body_style_names.len() as u32).max(1)
+        }
+    }
+
+    /// `LIB_SYMBOL::IsMultiBodyStyle`.
+    pub fn is_multi_body_style(&self) -> bool {
+        self.body_style_count() > 1
+    }
+
+    /// `LIB_SYMBOL::GetBodyStyleDescription( aBodyStyle, aLabel = true )`: "Standard" / "Alternate" of a De Morgan symbol, a custom style's name, else "?".
+    pub fn body_style_description(&self, body_style: u32) -> String {
+        if self.has_alternate_body_style {
+            match body_style {
+                2 => return "Alternate".to_string(),
+                1 => return "Standard".to_string(),
+                _ => {}
+            }
+        } else if self.is_multi_body_style() && body_style >= 1 {
+            if let Some(name) = self.body_style_names.get(body_style as usize - 1) {
+                return name.clone();
+            }
+        }
+        "?".to_string()
+    }
+
     /// A text's bold, italic and justification are members of [`LibrarySymbolGraphic::Text`] since 2026-11-05 (the Text Properties dialog edits them, Mirror flips the
     /// justification); before, the reader kept them in [`crate::lib_keep::KeptTextStyle`] by the text's id. This moves what a kept style says into its text and leaves
     /// the pen and the hidden flag (and any other `justify` word) where they were. A kept style is the file's own, so it wins over the text's defaults; once moved it is
@@ -5042,9 +5142,10 @@ impl LibrarySymbol {
     /// The normal body style is the items of `body_style` 0 (shared) and 1; a symbol that declares an alternate one (`has_alternate_body_style`)
     /// also gets [`crate::symbol::LibSymbol::alternate`], the shared items and those of `body_style` 2, which is what a placed symbol in body style 2
     /// draws and is written with (`LIB_SYMBOL::GetBodyStyleCount`). A symbol that declares none keeps no alternate even if a stray item is of
-    /// `body_style` 2: KiCad would not show it either.
+    /// `body_style` 2: KiCad would not show it either. A symbol of custom body styles (`body_style_names`) has its second style as the alternate; the
+    /// engine has no third one.
     pub fn to_engine_symbol(&self) -> crate::symbol::LibSymbol {
-        let alternate = self.has_alternate_body_style.then(|| {
+        let alternate = self.is_multi_body_style().then(|| {
             Box::new(crate::symbol::AlternateBody::new(
                 self.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == 2).flat_map(|g| g.to_engine_graphics()).collect(),
                 self.pins.iter().filter(|p| p.body_style == 0 || p.body_style == 2).map(|p| p.to_engine_pin()).collect(),

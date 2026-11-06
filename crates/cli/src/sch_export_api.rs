@@ -222,11 +222,26 @@ pub fn bom_legacy(dir: &Path, body: &[u8]) -> Value {
 
 // ------------------------------------------------------------------------------------------------------------------------ Export Symbol as SVG
 
-/// The SVG kicad-cli writes for a unit and body style (`doSymExportSvg`): `<symbol>_unit<N>` with `_demorgan` for the second body style of a symbol
-/// that has one; path characters in the name become spaces (`wxFileName::GetForbiddenChars`).
-pub(crate) fn svg_file_name(symbol: &str, unit: u32, demorgan: bool) -> String {
+/// The SVG kicad-cli writes for a unit and body style (`doSymExportSvg`): `<symbol>_unit<N>` with the body style's suffix -- `_demorgan` for a De Morgan
+/// symbol's second style, `_` and the custom style's name in lower case for one of custom body styles (KiCad 25ec2335: `filename += wxS( "_" ) +
+/// GetBodyStyleNames()[bodyStyle - 1].Lower()`), nothing otherwise; path characters in the name become spaces (`wxFileName::GetForbiddenChars`).
+pub(crate) fn svg_file_name_styled(symbol: &str, unit: u32, suffix: &str) -> String {
     let name: String = symbol.chars().map(|c| if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c }).collect();
-    format!("{name}_unit{unit}{}.svg", if demorgan { "_demorgan" } else { "" })
+    format!("{name}_unit{unit}{suffix}.svg")
+}
+
+/// The body style's file suffix of [`svg_file_name_styled`] for the symbol `bare` of a library text.
+fn body_style_suffix(text: &str, bare: &str, style: u32) -> String {
+    let Some(sym) = eda_kicad::parse_library_symbols(text).ok().and_then(|p| p.symbols.into_iter().find(|s| s.lib_id == bare)) else {
+        return if style == 2 { "_demorgan".to_string() } else { String::new() };
+    };
+    if sym.has_alternate_body_style {
+        return if style == 2 { "_demorgan".to_string() } else { String::new() };
+    }
+    match sym.body_style_names.get(style.max(1) as usize - 1) {
+        Some(name) if sym.is_multi_body_style() => format!("_{}", name.to_lowercase()),
+        _ => String::new(),
+    }
 }
 
 /// `kicad-cli sym export svg`'s options for a request: `--theme` with one of the built-in themes kicad-cli knows (`sch_output_api::THEMES`; any other
@@ -255,7 +270,7 @@ pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
         return err("No symbol to export");
     }
     let unit = req.get("unit").and_then(Value::as_u64).unwrap_or(1).max(1) as u32;
-    let demorgan = req.get("body_style").and_then(Value::as_u64).unwrap_or(1) == 2;
+    let style = req.get("body_style").and_then(Value::as_u64).unwrap_or(1).max(1) as u32;
     let text = match crate::library_api::symbol_kicad_sym_any(dir, lib_id) {
         Ok(t) => t,
         Err(e) => return err(crate::board::reasons(&e)),
@@ -263,7 +278,7 @@ pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
     let bare = lib_id.rsplit(':').next().unwrap_or(lib_id);
     let args = symbol_svg_args(&req);
     let mut reply = reply(kicad_engine::export_symbol_svg(dir, bare, &text, &args));
-    let wanted = svg_file_name(bare, unit, demorgan);
+    let wanted = svg_file_name_styled(bare, unit, &body_style_suffix(&text, bare, style));
     let file = reply.get("files").and_then(Value::as_array).and_then(|f| f.iter().filter_map(Value::as_str).find(|f| f.ends_with(&wanted))).map(str::to_string);
     match file {
         Some(file) => {
@@ -403,9 +418,14 @@ mod tests {
 
     #[test]
     fn the_svg_of_a_unit_is_named_the_way_kicad_cli_names_it() {
-        assert_eq!(svg_file_name("R", 1, false), "R_unit1.svg");
-        assert_eq!(svg_file_name("LM358", 2, true), "LM358_unit2_demorgan.svg");
-        assert_eq!(svg_file_name("A/B:C", 1, false), "A B C_unit1.svg", "path characters become spaces");
+        assert_eq!(svg_file_name_styled("R", 1, ""), "R_unit1.svg");
+        assert_eq!(svg_file_name_styled("LM358", 2, "_demorgan"), "LM358_unit2_demorgan.svg");
+        assert_eq!(svg_file_name_styled("A/B:C", 1, ""), "A B C_unit1.svg", "path characters become spaces");
+        let custom = "(kicad_symbol_lib (version 20250324) (symbol \"G\" (body_styles \"Front\" \"Side\") (symbol \"G_1_1\") (symbol \"G_1_2\")))";
+        assert_eq!(svg_file_name_styled("G", 1, &body_style_suffix(custom, "G", 2)), "G_unit1_side.svg", "a custom body style's lower-case name (25ec2335)");
+        let demorgan = "(kicad_symbol_lib (version 20250324) (symbol \"D\" (body_styles demorgan) (symbol \"D_1_1\")))";
+        assert_eq!(body_style_suffix(demorgan, "D", 2), "_demorgan");
+        assert_eq!(body_style_suffix(demorgan, "D", 1), "");
     }
 
     #[test]

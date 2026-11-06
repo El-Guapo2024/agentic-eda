@@ -4,16 +4,15 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 
+import { bodyStyleCount, type BodyStyled } from "./symBodyStyles";
+
 /** The questions, word for word and in `Validate`'s order, each an `IsOK` (Yes / No; No leaves the dialog open). A derived symbol's units and body
- * styles are its parent's (`GetUnitCount` of the root), and its dialog does not show them: no question. */
-export function symbolPropertiesQuestions(
-  before: { unit_count: number; has_alternate_body_style: boolean },
-  after: { unit_count: number; has_alternate_body_style: boolean },
-  derived: boolean
-): string[] {
+ * styles are its parent's (`GetUnitCount` of the root), and its dialog does not show them: no question. The body styles are counted as
+ * `GetBodyStyleCount` counts them (De Morgan 2, else one per custom name), the dialog's as `Validate` does (`bodyStyleCount` of what OK will set). */
+export function symbolPropertiesQuestions(before: { unit_count: number } & BodyStyled, after: { unit_count: number } & BodyStyled, derived: boolean): string[] {
   if (derived) return [];
   const out: string[] = [];
   if (after.unit_count < before.unit_count) out.push("Delete extra units from symbol?");
-  if ((after.has_alternate_body_style ? 2 : 1) < (before.has_alternate_body_style ? 2 : 1)) out.push("Delete extra body styles from symbol?");
+  if (bodyStyleCount(after) < bodyStyleCount(before)) out.push("Delete extra body styles from symbol?");
   return out;
 }

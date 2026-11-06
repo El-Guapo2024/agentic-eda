@@ -25,6 +25,12 @@ export interface RatsnestBoardLike {
   }>;
 }
 
+/**
+ * An edge as the move draws it: `dynamic` when one of its ends is on an item being moved -- the line `RATSNEST_VIEW_ITEM::ViewDraw` draws from
+ * `m_data->GetLocalRatsnest()` (`RN_DYNAMIC_LINE`), brighter than the static ones, which it dims (`dimStatic`).
+ */
+export type MovedEdge<E> = E & { dynamic?: true };
+
 export interface MovePreviewLike {
   refs: readonly string[];
   kind?: string;
@@ -41,7 +47,7 @@ export interface MovePreviewLike {
  * ratsnest of its own in this app's model); returns `edges` unchanged
  * (new array, same edge objects) when there's no part move in progress.
  */
-export function offsetRatsnestForPreview<E extends RatsnestEdgeLike>(edges: readonly E[], board: RatsnestBoardLike, preview: MovePreviewLike | null): E[] {
+export function offsetRatsnestForPreview<E extends RatsnestEdgeLike>(edges: readonly E[], board: RatsnestBoardLike, preview: MovePreviewLike | null): MovedEdge<E>[] {
   if (!preview || (preview.kind ?? "part") !== "part" || (preview.dxNm === 0 && preview.dyNm === 0 && !preview.perRefOffsetNm)) return [...edges];
 
   // Point -> the live delta of the part that owns it (every part shares dxNm/dyNm; a Pack and Move adds its own per-part shift).
@@ -60,8 +66,9 @@ export function offsetRatsnestForPreview<E extends RatsnestEdgeLike>(edges: read
     const d = movingPoints.get(`${pt[0]},${pt[1]}`);
     return d ? [pt[0] + d[0], pt[1] + d[1]] : [pt[0], pt[1]];
   };
+  const moves = (pt: readonly [number, number]) => movingPoints.has(`${pt[0]},${pt[1]}`);
 
-  return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to) }));
+  return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to), ...(moves(e.from) || moves(e.to) ? { dynamic: true as const } : {}) }));
 }
 
 /**
@@ -73,7 +80,7 @@ export function carryRatsnest<E extends RatsnestEdgeLike>(
   _board: RatsnestBoardLike,
   carried: { moving: { parts: RatsnestBoardLike["parts"]; routing: { vias: ReadonlyArray<{ x: number; y: number }>; tracks: ReadonlyArray<{ pts: ReadonlyArray<readonly [number, number]> }> } | null } },
   map: (pt: readonly [number, number]) => [number, number]
-): E[] {
+): MovedEdge<E>[] {
   const key = (x: number, y: number) => `${x},${y}`;
   const moving = new Set<string>();
   for (const part of carried.moving.parts) {
@@ -84,7 +91,8 @@ export function carryRatsnest<E extends RatsnestEdgeLike>(
   for (const track of carried.moving.routing?.tracks ?? []) for (const pt of track.pts) moving.add(key(pt[0], pt[1]));
   if (moving.size === 0) return [...edges];
   const shift = (pt: readonly [number, number]): [number, number] => (moving.has(key(pt[0], pt[1])) ? map(pt) : [pt[0], pt[1]]);
-  return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to) }));
+  const moves = (pt: readonly [number, number]) => moving.has(key(pt[0], pt[1]));
+  return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to), ...(moves(e.from) || moves(e.to) ? { dynamic: true as const } : {}) }));
 }
 
 /** `RATSNEST_VIEW_ITEM::ViewDraw`'s `CROSS_SIZE`: 0.2 mm each way from the point, nm. */

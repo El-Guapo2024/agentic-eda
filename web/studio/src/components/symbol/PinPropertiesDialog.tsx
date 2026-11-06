@@ -28,6 +28,7 @@ import { commonBodyStylesBox, commonUnitsBox, pinOffGridMessage, pinUnitsOnOk, s
 import { askConfirm } from "../library/libraryDialogs";
 import { PinAlternatesGrid } from "./PinAlternatesGrid";
 import { displayY, storedY } from "../../kicad-port/pinTable";
+import { isMultiBodyStyle } from "../../kicad-port/symBodyStyles";
 
 const ORIENTATION_LABELS: Record<PinOrientation, string> = { right: "Right", left: "Left", up: "Up", down: "Down" };
 
@@ -78,7 +79,7 @@ export function PinPropertiesDialog() {
   const unitCount = sym?.unit_count ?? 1;
   // `TransferDataToWindow`: the two "Common to all ..." boxes, their tooltips, and the info bar while `m_SyncPinEdit` is on
   const unitsBox = commonUnitsBox(form, unitCount, state.syncPins);
-  const stylesBox = commonBodyStylesBox(form, !!sym?.has_alternate_body_style);
+  const stylesBox = commonBodyStylesBox(form, isMultiBodyStyle(sym));
 
   const submit = async () => {
     // `TransferDataFromWindow`: a row of the alternates grid needs a name
@@ -180,7 +181,7 @@ export function PinPropertiesDialog() {
               <input type="checkbox" checked={!form.hidden} onChange={(e) => set("hidden", !e.target.checked)} />
             </label>
           </div>
-          <PinAlternatesGrid rows={form.alternates ?? []} onChange={(rows) => set("alternates", rows)} pin={pin} available={!state.symbol?.has_alternate_body_style} onError={setError} />
+          <PinAlternatesGrid rows={form.alternates ?? []} onChange={(rows) => set("alternates", rows)} pin={pin} available={!isMultiBodyStyle(state.symbol)} onError={setError} />
           {error && (
             <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="pin-props-error">
               {error}

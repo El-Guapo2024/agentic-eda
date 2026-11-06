@@ -1,18 +1,34 @@
 // `DIALOG_TEXT_PROPERTIES` of a `SCH_TEXTBOX` (eeschema/dialogs/dialog_text_properties.cpp, "Text Box Properties") as the Symbol Editor opens it: after the Text Box tool's second click
 // -- a box of the two corners, added by OK, and gone with Cancel (`SYMBOL_EDITOR_DRAWING_TOOLS::doDrawShape`) -- or on a box that is there (a double click, `E`, Properties in the
-// context menu). The text, its size, bold and italic, its alignment in the box and the way it runs, the border and its width, the fill, and the two "Common to all ..." boxes; the
-// font, the text and border colours, the border style, the hyperlink and Private to Symbol Editor are not part of a library symbol's text box here. OK makes the box as big as its
-// text needs (`GetMinSize`, kicad-port/symTextBox.ts) and, for a box the tool drew, remembers its looks for the next one.
+// context menu). The text, its font, size, bold and italic and colour, its alignment in the box and the way it runs, the border with its width and colour, "Background fill" with
+// its colour (`FILLED_WITH_COLOR` or `NO_FILL`: a box filled with the body's background before is one filled with the default colour after, drawn the same), "Private to symbol
+// editor" and the two "Common to all ..." boxes (UI-LEFT Y4). Not here: the border style (kept as the file says it, by the box's id) and the hyperlink (the schematic's only).
+// OK makes the box as big as its text needs (`GetMinSize`, kicad-port/symTextBox.ts) and, for a box the tool drew, remembers its looks for the next one.
 import { useEffect, useRef, useState } from "react";
 import type { FieldHAlign, FieldVAlign } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { textSizeError } from "../../kicad-port/symText";
 import { H_ALIGNS, NO_BORDER_MM, V_ALIGNS, grownToFit, isVertical, lastOf, textBoxMarginMm, type LibTextBox } from "../../kicad-port/symTextBox";
 import { measureStrokeText } from "../text/strokeFont";
+import { isMultiBodyStyle, type BodyStyled } from "../../kicad-port/symBodyStyles";
+import type { SchColor } from "../../api/schEditTypes";
+import { looksFromForm, withoutLooks } from "../../kicad-port/symText";
+import { DEFAULT_FONT } from "../../kicad-port/textLooks";
+import { isUnspecified } from "../../kicad-port/schProperties";
+import { ColorSwatch, FontSelect, useFontFamilies } from "../TextLookControls";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** A swatch's colour as the box keeps it: `COLOR4D::UNSPECIFIED` (the swatch's "Default") is none. */
+const specified = (c: SchColor | null): SchColor | undefined => (c && !isUnspecified(c) ? c : undefined);
 
 interface Form {
+  /** "Private to symbol editor", the Font choice and the text colour (kicad-port/symText.ts `looksFromForm`). */
+  private: boolean;
+  font: string;
+  color: SchColor | null;
+  /** The border's "Color:" and the "Fill color:" swatches (`m_borderColorSwatch`, `m_fillColorSwatch`); `null` is "Default". */
+  borderColor: SchColor | null;
+  fillColor: SchColor | null;
   text: string;
   size: string;
   bold: boolean;
@@ -28,8 +44,13 @@ interface Form {
 }
 
 /** `TransferDataToWindow` for a text box in the symbol editor. */
-function formOf(box: LibTextBox, symbol: { unit_count: number; has_alternate_body_style: boolean }): Form {
+function formOf(box: LibTextBox, symbol: { unit_count: number } & BodyStyled): Form {
   return {
+    private: !!box.private,
+    font: box.font || DEFAULT_FONT,
+    color: box.text_color ?? null,
+    borderColor: box.stroke_color ?? null,
+    fillColor: box.fill_color ?? null,
     text: box.text,
     size: String(box.size_mm),
     bold: !!box.bold,
@@ -39,9 +60,10 @@ function formOf(box: LibTextBox, symbol: { unit_count: number; has_alternate_bod
     vertical: isVertical(box),
     border: box.stroke_mm >= 0,
     width: String(box.stroke_mm >= 0 ? box.stroke_mm : 0),
+    // `m_filledCtrl->SetValue( textBox->IsSolidFill() )`
     filled: box.fill !== "none",
     commonUnits: symbol.unit_count > 1 && box.unit === 0,
-    commonStyles: symbol.has_alternate_body_style && box.body_style === 0,
+    commonStyles: isMultiBodyStyle(symbol) && box.body_style === 0,
   };
 }
 
@@ -54,6 +76,7 @@ export function SymbolTextBoxDialog() {
   const [form, setForm] = useState<Form | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const families = useFontFamilies();
 
   // the form starts from the box the dialog was opened on, and keeps what is typed through the editor's polling
   useEffect(() => {
@@ -81,7 +104,7 @@ export function SymbolTextBoxDialog() {
     const prev = req.box;
     const width = Number(form.width);
     let box: LibTextBox = {
-      ...prev,
+      ...withoutLooks(prev),
       text: form.text,
       size_mm: sizeMm,
       bold: form.bold,
@@ -90,8 +113,12 @@ export function SymbolTextBoxDialog() {
       v_align: form.v,
       angle_deg: form.vertical ? 90 : 0,
       stroke_mm: form.border ? Math.max(0, Number.isFinite(width) ? width : 0) : NO_BORDER_MM,
-      // the box keeps the fill it had when it stays filled; a new fill is the body's background (the dialog's fill colour is the one the symbol is drawn on)
-      fill: form.filled ? (prev.fill === "none" ? "background" : prev.fill) : "none",
+      // `stroke.SetColor( m_borderColorSwatch->GetSwatchColor() )`
+      ...(specified(form.borderColor) ? { stroke_color: specified(form.borderColor) } : { stroke_color: undefined }),
+      // `SetFillMode( m_filledCtrl->GetValue() ? FILL_T::FILLED_WITH_COLOR : FILL_T::NO_FILL )`, `SetFillColor( m_fillColorSwatch->GetSwatchColor() )`
+      fill: form.filled ? "color" : "none",
+      ...(specified(form.fillColor) ? { fill_color: specified(form.fillColor) } : { fill_color: undefined }),
+      ...looksFromForm(prev, form),
       // the margins are numbers a box has: a change of the text size leaves them where they were
       margin_mm: (prev.margin_mm ?? 0) > 0 ? prev.margin_mm : textBoxMarginMm(prev),
       unit: form.commonUnits ? 0 : state.activeUnit,
@@ -132,6 +159,10 @@ export function SymbolTextBoxDialog() {
             }}
           />
           <div className="kv-grid" style={{ gridTemplateColumns: "120px 1fr", marginTop: 10 }}>
+            <span>Font:</span>
+            <span data-testid="tb-font">
+              <FontSelect families={families} current={req.box.font} value={form.font} onChange={(v) => set("font", v)} />
+            </span>
             <span>Text size (mm)</span>
             <span>
               <input type="number" step="0.01" value={form.size} onChange={(e) => set("size", e.target.value)} style={{ width: 80 }} data-testid="tb-size" />
@@ -141,6 +172,10 @@ export function SymbolTextBoxDialog() {
               <label style={{ marginLeft: 12 }}>
                 <input type="checkbox" checked={form.italic} onChange={(e) => set("italic", e.target.checked)} data-testid="tb-italic" /> Italic
               </label>
+            </span>
+            <span>Color:</span>
+            <span data-testid="tb-color">
+              <ColorSwatch label="Text color" color={form.color} onChange={(c) => set("color", c)} />
             </span>
             <span>Horizontal alignment</span>
             <span>{H_ALIGNS.map((a) => radio("tb-h", `tb-h-${a}`, form.h === a, cap(a), () => set("h", a)))}</span>
@@ -159,17 +194,29 @@ export function SymbolTextBoxDialog() {
                 <input type="number" step="0.01" min={0} value={form.width} disabled={!form.border} onChange={(e) => set("width", e.target.value)} style={{ width: 70 }} data-testid="tb-width" /> mm
               </span>
             </span>
+            <span style={{ opacity: form.border ? 1 : 0.5 }}>Color:</span>
+            <span data-testid="tb-border-color" style={{ opacity: form.border ? 1 : 0.5, pointerEvents: form.border ? undefined : "none" }}>
+              <ColorSwatch label="Border color" color={form.borderColor} onChange={(c) => set("borderColor", c)} />
+            </span>
             <span>Fill</span>
             <label>
-              <input type="checkbox" checked={form.filled} onChange={(e) => set("filled", e.target.checked)} data-testid="tb-filled" /> Filled
+              <input type="checkbox" checked={form.filled} onChange={(e) => set("filled", e.target.checked)} data-testid="tb-filled" /> Background fill
+            </label>
+            <span style={{ opacity: form.filled ? 1 : 0.5 }}>Fill color:</span>
+            <span data-testid="tb-fill-color" style={{ opacity: form.filled ? 1 : 0.5, pointerEvents: form.filled ? undefined : "none" }}>
+              <ColorSwatch label="Fill color" color={form.fillColor} onChange={(c) => set("fillColor", c)} />
+            </span>
+            <span>Private to symbol editor</span>
+            <label>
+              <input type="checkbox" checked={form.private} onChange={(e) => set("private", e.target.checked)} data-testid="tb-private" />
             </label>
             <span>Common to all units</span>
             <label title={symbol.unit_count > 1 ? undefined : "This symbol only has one unit. This control has no effect."}>
               <input type="checkbox" checked={form.commonUnits} disabled={symbol.unit_count <= 1} onChange={(e) => set("commonUnits", e.target.checked)} data-testid="tb-common-units" />
             </label>
             <span>Common to all body styles</span>
-            <label title={symbol.has_alternate_body_style ? undefined : "This symbol only has one body style. This control has no effect."}>
-              <input type="checkbox" checked={form.commonStyles} disabled={!symbol.has_alternate_body_style} onChange={(e) => set("commonStyles", e.target.checked)} data-testid="tb-common-styles" />
+            <label title={isMultiBodyStyle(symbol) ? undefined : "This symbol only has one body style. This control has no effect."}>
+              <input type="checkbox" checked={form.commonStyles} disabled={!isMultiBodyStyle(symbol)} onChange={(e) => set("commonStyles", e.target.checked)} data-testid="tb-common-styles" />
             </label>
           </div>
           {error && (

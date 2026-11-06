@@ -26,7 +26,7 @@ test("DIALOG_TEXT_PROPERTIES of a symbol's text: the form is the text's looks, O
   const t: LibText = { kind: "text", id: "t1", unit: 2, body_style: 1, text: "IN", at: { x: 1, y: 2 }, angle_deg: 90, size_mm: 1.27, bold: true, h_align: "left" };
   const sym = { unit_count: 2, has_alternate_body_style: false };
   const form = textFormOf(t, sym);
-  assert.deepEqual(form, { text: "IN", size: "1.27", bold: true, italic: false, h: "left", v: "center", vertical: true, commonUnits: false, commonStyles: false });
+  assert.deepEqual(form, { private: false, font: "Default Font", color: null, text: "IN", size: "1.27", bold: true, italic: false, h: "left", v: "center", vertical: true, commonUnits: false, commonStyles: false });
   assert.equal(textFormOf({ ...t, unit: 0 }, sym).commonUnits, true);
   assert.equal(textFormOf({ ...t, unit: 0 }, { unit_count: 1, has_alternate_body_style: false }).commonUnits, false, "a symbol of one unit: unchecked");
   const out = textFromForm(t, { ...form, text: "OUT", size: "2", italic: true, h: "right", v: "bottom", vertical: false, commonUnits: true }, 2, 1);
@@ -35,6 +35,20 @@ test("DIALOG_TEXT_PROPERTIES of a symbol's text: the form is the text's looks, O
   const notCommon = textFromForm({ ...t, unit: 0, body_style: 0 }, form, 2, 1);
   assert.ok(notCommon.ok && notCommon.text.unit === 2 && notCommon.text.body_style === 1, "unchecked: the unit and body style being edited");
   assert.deepEqual(textFromForm(t, { ...form, size: "0" }, 1, 1), { ok: false, error: "Text size must be between 0.01 mm and 1000 mm." });
+});
+
+test("Text Properties' Private box, Font choice and colour of a symbol's text (UI-LEFT Y4)", () => {
+  const t: LibText = { kind: "text", id: "t1", unit: 1, body_style: 1, text: "IN", at: { x: 0, y: 0 }, angle_deg: 0, size_mm: 1.27, private: true, font: "DejaVu Sans", text_color: { r: 1, g: 2, b: 3, a: 255 } };
+  const sym = { unit_count: 1, has_alternate_body_style: false };
+  const form = textFormOf(t, sym);
+  assert.deepEqual([form.private, form.font, form.color], [true, "DejaVu Sans", { r: 1, g: 2, b: 3, a: 255 }]);
+  // `SetPrivate`, the font only when the choice gives one ("<not found>" keeps the text's own), `SetTextColor` -- "Default" is none
+  const off = textFromForm(t, { ...form, private: false, font: "Default Font", color: null }, 1, 1);
+  assert.ok(off.ok && !("private" in off.text) && !("font" in off.text) && !("text_color" in off.text), JSON.stringify(off));
+  const kept = textFromForm(t, { ...form, font: "DejaVu Sans <not found>" }, 1, 1);
+  assert.ok(kept.ok && kept.text.font === "DejaVu Sans" && kept.text.private === true);
+  const stroke = textFromForm(t, { ...form, font: "KiCad Font", color: { r: 0, g: 0, b: 0, a: 0 } }, 1, 1);
+  assert.ok(stroke.ok && stroke.text.font === "KiCad Font" && !("text_color" in stroke.text), "an all-zero colour is COLOR4D::UNSPECIFIED");
 });
 
 test("SCH_TEXT::GetBoundingBox of a symbol's text: a left-top text lies right of and below its anchor, a vertical one runs up the sheet", () => {

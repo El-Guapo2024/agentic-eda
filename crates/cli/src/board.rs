@@ -2199,6 +2199,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::RenameLibrarySymbol { lib_id, new_lib_id, overwrite } => format!("symbol rename {lib_id:?} {new_lib_id:?}{}", if *overwrite { " --overwrite" } else { "" }),
         Cmd::SetSymbolAnchor { lib_id, at } => format!("symbol anchor {lib_id:?} --at {:.2},{:.2}", at.x, at.y),
         Cmd::EditSymbolProperties { lib_id, description, .. } => format!("symbol properties {lib_id:?} --description {description:?}"),
+        Cmd::EditSymbolUnitsAndConnections { lib_id, demorgan, body_style_names, .. } => format!("symbol units {lib_id:?} --demorgan {demorgan} --body-styles {body_style_names:?}"),
         Cmd::UpdateSymbolOnBoard { lib_id } => format!("symbol update-on-board {lib_id:?}"),
         Cmd::AddSymbolPin { lib_id, pin } => format!("pin add {lib_id:?} --number {:?} --at {:.2},{:.2}", pin.number, pin.at.x, pin.at.y),
         Cmd::MoveSymbolPin { lib_id, id, x, y } => format!("pin move {lib_id:?} {id} --to {x:.2},{y:.2}"),
@@ -2429,7 +2430,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::CreateFootprintArray { .. } => "footprint-array",
         Cmd::ExplodePad { .. } | Cmd::RecombinePad { .. } => "pad-edit",
 
-        Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
+        Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::EditSymbolUnitsAndConnections { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
         Cmd::DeriveSymbol { .. } | Cmd::FlattenSymbol { .. } | Cmd::UpdateSymbolFields { .. } | Cmd::SetSymbolParent { .. } | Cmd::EditLibrarySymbolFields { .. } => "symbol-derive",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
         Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } | Cmd::ReplaceSymbolGraphic { .. } => "symbol-shape",

@@ -2428,6 +2428,9 @@ export type Cmd =
   /** `SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor`: `at` (mm, symbol frame, Y up) becomes the new origin. */
   | { op: "set_symbol_anchor"; lib_id: string; at: { x: Mm; y: Mm } }
   | ({ op: "edit_symbol_properties"; lib_id: string } & SymbolPropertiesFields)
+  /** Symbol Properties' unit display names, body styles and Pin Connections (KiCad 25ec2335 `DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`), after
+   *  `edit_symbol_properties` in the dialog's step: `demorgan`, or custom `body_style_names` (none: one body style); the jumper grid's rows as typed. A root symbol's only. */
+  | { op: "edit_symbol_units_and_connections"; lib_id: string; unit_names: Record<string, string>; demorgan: boolean; body_style_names: string[]; duplicate_pin_numbers_are_jumpers: boolean; jumper_rows: string[] }
   | { op: "update_symbol_on_board"; lib_id: string }
   | { op: "add_symbol_pin"; lib_id: string; pin: LibrarySymbolPin }
   | { op: "move_symbol_pin"; lib_id: string; id: string; x: Mm; y: Mm }
@@ -3481,7 +3484,15 @@ export interface MmPoint {
 }
 
 /** `crates/model/src/ir.rs` `LibraryFill` -- the Shape Properties dialog's own three-way fill choice (KiCad's `color`/hatch modes are real file values but not authorable here, same simplification `crate::symbol::SymbolGraphic`'s single `filled: bool` already made for every other reader of a *resolved* symbol). */
-export type LibraryFill = "none" | "outline" | "background";
+export type LibraryFill = "none" | "outline" | "background" | "color";
+
+/** The looks a library text and text box keep beside the text (UI-LEFT Y4): "Private to Symbol Editor" (`SCH_ITEM::IsPrivate`), the font (`EDA_TEXT::GetFont`: absent is the
+ *  default one, "KiCad Font" the stroke font, else an outline family) and the text colour (absent: `COLOR4D::UNSPECIFIED`, the layer's). The server leaves out what is off. */
+export interface LibTextLooks {
+  private?: boolean;
+  font?: string | null;
+  text_color?: import("./schEditTypes").SchColor | null;
+}
 
 /**
  * `crates/model/src/ir.rs` `LibrarySymbolGraphic` -- one drawn primitive of
@@ -3500,7 +3511,7 @@ export type LibrarySymbolGraphic =
    * `SCH_TEXT` of a library symbol: the text at `at` (its anchor), at 0 or 90 degrees, with the looks Text Properties edits -- `bold`, `italic` and the justification
    * against the anchor (absent: plain, centred on both axes; the server leaves them out then).
    */
-  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm; bold?: boolean; italic?: boolean; h_align?: FieldHAlign; v_align?: FieldVAlign }
+  | ({ kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm; bold?: boolean; italic?: boolean; h_align?: FieldHAlign; v_align?: FieldVAlign } & LibTextLooks)
   /** `SCH_SHAPE` of `SHAPE_T::BEZIER` (`(bezier (pts start c1 c2 end) ..)`): a cubic curve from `start` to `end` pulled by the two control points (Y up, mm). */
   | { kind: "bezier"; id?: string; unit: number; body_style: number; start: MmPoint; c1: MmPoint; c2: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
   /**
@@ -3524,8 +3535,13 @@ export type LibrarySymbolGraphic =
       v_align: FieldVAlign;
       margin_mm?: Mm;
       stroke_mm: Mm;
+      /** "Filled" is `color` (`FILLED_WITH_COLOR`), in `fill_color` or, without one, the body's background colour. */
       fill: LibraryFill;
-    };
+      /** The border's colour (`STROKE_PARAMS::GetColor`); absent: the layer's. */
+      stroke_color?: import("./schEditTypes").SchColor | null;
+      /** The fill's colour of a `color` fill; absent: `COLOR4D::UNSPECIFIED`. */
+      fill_color?: import("./schEditTypes").SchColor | null;
+    } & LibTextLooks;
 
 /** `crates/model/src/ir.rs` `PinAlternate` -- one alternate function of a pin (`SCH_PIN::ALT`, `(alternate "name" type shape)`): a name, an electrical type and a graphic style. A pin keeps each name once, in the order of the names. */
 export interface PinAlternate {
@@ -3620,6 +3636,8 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
   extends?: string | null;
   /** The symbol's fields beyond the text members above (`crates/model/src/sym_fields.rs`): the layout of each field, `Value`, `Footprint` and the user fields. Empty for a symbol that never had one. */
   fields?: LibrarySymbolField[];
+  /** `LIB_SYMBOL::GetBodyStyleNames`: the custom body styles' names (`(body_styles "A" "B" ..)`), one per style from 1, for a symbol that is not De Morgan; absent for one body style. See kicad-port/symBodyStyles.ts. */
+  body_style_names?: string[];
   kicad?: LibraryKeep;
 }
 

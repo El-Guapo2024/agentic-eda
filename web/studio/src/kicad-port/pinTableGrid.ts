@@ -25,6 +25,7 @@ import { REPEAT_PIN_STEP_MM } from "./symEditItems";
 import { strNumCmp } from "./schSheetPins";
 import { unitLetter } from "./unitLetter";
 import type { LengthUnit } from "../state/units";
+import { bodyStyleCount, bodyStyleDescription, isMultiBodyStyle } from "./symBodyStyles";
 
 /** `COL_ORDER`. */
 export const COL = {
@@ -85,7 +86,7 @@ export interface TablePin {
 
 /** What a cell needs from the symbol and the frame. */
 export interface GridContext {
-  sym: Pick<LibrarySymbol, "unit_count" | "has_alternate_body_style" | "kicad">;
+  sym: Pick<LibrarySymbol, "unit_count" | "has_alternate_body_style" | "body_style_names" | "kicad">;
   /** `StringFromValue( v, aIncludeUnits )`: a length in mm in the frame's units (with the unit's name when asked). */
   formatLength: (mm: number, withUnits: boolean) => string;
   /** `ValueFromString`: a typed length in the frame's units, in mm. */
@@ -98,9 +99,9 @@ function unitShortName(sym: GridContext["sym"], unit: number): string {
   return names?.[String(unit)] ?? unitLetter(unit);
 }
 
-/** `LIB_SYMBOL::GetBodyStyleDescription( style, true )`: "Standard" and "Alternate" of a De Morgan symbol. */
-function bodyStyleName(style: number): string {
-  return style === 2 ? "Alternate" : "Standard";
+/** `LIB_SYMBOL::GetBodyStyleDescription( style, true )`: "Standard" and "Alternate" of a De Morgan symbol, a custom style's name. */
+function bodyStyleName(sym: GridContext["sym"], style: number): string {
+  return bodyStyleDescription(sym, style);
 }
 
 /** `PIN_INFO_FORMATTER::Format` of one pin's cell (`aIncludeUnits`, the Visible column as 1 / 0 or True / False). */
@@ -133,8 +134,8 @@ export function formatPin(pin: LibrarySymbolPin, col: number, ctx: GridContext, 
       if (ctx.sym.unit_count <= 1 || pin.unit === 0) return ALL;
       return unitDisplayName(ctx.sym, pin.unit);
     case COL.BODY_STYLE:
-      if (!ctx.sym.has_alternate_body_style || pin.body_style === 0) return ALL;
-      return bodyStyleName(pin.body_style);
+      if (!isMultiBodyStyle(ctx.sym) || pin.body_style === 0) return ALL;
+      return bodyStyleName(ctx.sym, pin.body_style);
     default:
       return "";
   }
@@ -306,10 +307,10 @@ export function updatePin(pin: LibrarySymbolPin, value: string, col: number, ctx
       return pin;
     }
     case COL.BODY_STYLE: {
-      if (!ctx.sym.has_alternate_body_style) return pin;
+      if (!isMultiBodyStyle(ctx.sym)) return pin;
       if (ieq(value, ALL)) return { ...pin, body_style: 0 };
-      if (value === "Standard") return { ...pin, body_style: 1 };
-      if (value === "Alternate") return { ...pin, body_style: 2 };
+      // `for( int i = 1; i <= GetBodyStyleCount(); i++ ) if( value == GetBodyStyleDescription( i, true ) )`
+      for (let s = 1; s <= bodyStyleCount(ctx.sym); s++) if (value === bodyStyleDescription(ctx.sym, s)) return { ...pin, body_style: s };
       return pin;
     }
     default:

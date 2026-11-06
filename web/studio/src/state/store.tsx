@@ -710,7 +710,8 @@ export interface StudioState {
   /** `m_viaSizeIndex`, the via list's counterpart of `currentTrackWidthIndex` (0 = use the net class; r4 R4-8). */
   currentViaIndex: number;
   /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
-  textDialog: { mode: "add"; at: [Nm, Nm] } | { mode: "edit"; id: string } | null;
+  /** `carried`: Text Properties of the text Draw Text carries (the draw state's), E while it is carried (`PlaceText`'s `OnEditItemRequest( text )`). */
+  textDialog: { mode: "add"; at: [Nm, Nm] } | { mode: "edit"; id: string } | { mode: "carried" } | null;
   /** `L`/Ctrl+`L`/`H`: LabelDialog is open on the point the tool's first click (or hotkey) made the label at; OK puts the label in the hand (actions/schPlaceActions.ts, `createNewLabel`). */
   schLabelPending: { at: [Nm, Nm]; scope: LabelScope } | null;
   /** `S`: a sheet's two corners, waiting for SheetDialog to name it before `add_sheet` commits (or, with `source`, before `import_sheet` does). */

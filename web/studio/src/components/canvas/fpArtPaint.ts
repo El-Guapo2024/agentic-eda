@@ -16,7 +16,7 @@ import { artLayerShown, artTextAsField, artTextShown, graphicsOf, layerRank, lay
 import { fieldAsText } from "../../kicad-port/fpFields";
 import { opacityOf } from "./appearancePaint";
 import { layerColor } from "./layers";
-import { drawHatchLines, drawShapeGeometry, layerAlpha, realLayerKey, shapeDash, withAlpha, type PaintOptions } from "./painter";
+import { drawHatchLines, drawShapeGeometry, realLayerKey, shapeDash, withLayer, type PaintOptions } from "./painter";
 import { hairlineNm } from "./view";
 
 /** `STROKE_FONT::GetInterline`: `FONT_METRICS`' 1.62 glyph heights, times the legacy factor 0.9583 that keeps the old spacing. */
@@ -38,7 +38,7 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
   }
   items.sort((a, b) => a.rank - b.rank);
   for (const { layer, shape: s } of items) {
-    withAlpha(ctx, layerAlpha(opts, layerStateKey(layer)), () => {
+    withLayer(ctx, opts, layerStateKey(layer), 1, () => {
       ctx.save();
       // A filled shape takes the Filled Shapes opacity, a graphic on copper the track opacity (`PCB_RENDER_SETTINGS::GetColor`), as the board's own shapes do.
       ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled ? opacityOf(opts.appearance, "shapes") : isCopper(layer) ? opacityOf(opts.appearance, "tracks") : 1;
@@ -59,7 +59,7 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
     if (!t.text || !artTextShown(opts.layerVisible, part, t)) continue;
     // the footprint selected, or the text on its own (UI-LEFT P15)
     const color = selected || opts.selection.has(t.id) ? layerColor("selection") : layerColor(realLayerKey(t.layer));
-    withAlpha(ctx, layerAlpha(opts, layerStateKey(t.layer)), () => drawArtText(ctx, view, t, color, !!opts.sketchText, opts.viewFlipped));
+    withLayer(ctx, opts, layerStateKey(t.layer), 1, () => drawArtText(ctx, view, t, color, !!opts.sketchText, opts.viewFlipped));
   }
 }
 

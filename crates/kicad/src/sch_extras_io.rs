@@ -30,7 +30,7 @@ pub(crate) fn alpha_str(a: u8) -> String {
     }
 }
 
-fn color_str(c: SchColor) -> String {
+pub(crate) fn color_str(c: SchColor) -> String {
     format!("{} {} {} {}", c.r, c.g, c.b, alpha_str(c.a))
 }
 

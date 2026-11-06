@@ -657,8 +657,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   arc's polyline and centre: 14 kicad-cli cases point for point); Draw Via ignores hidden layers, takes the board's via list entry and judges copper text by its own shape (and a knockout's hull);
   Create Zone / Rule Area from Selection is one dialog; the line mode is kept between sessions; `eda board via place`; messages KiCad does not have are gone.
 - Missing (round 6): Swap of arc tracks, dimensions, groups, tables, text boxes, barcodes and points, and of two footprints' orientation and side inside a mixed selection, and of two pads as pads
-  (`PAD::SwapShapePositions`); the Select Net menu's order by net code; the via ghost at `SnapItem`'s point (C6-7); "Via location violates DRC." with Allow DRC violations on (C6-6); a PTH pad's
-  unflashed layer and text boxes, tables, dimensions and barcodes on copper in the via's DRC check (C6-4, C6-5); R / F / E on a carried text (A6-6); a rounded rectangle's corners through
+  (`PAD::SwapShapePositions`); ~~the Select Net menu's order by net code~~ (done, `task-u6-last`); the via ghost at `SnapItem`'s point (C6-7); "Via location violates DRC." with Allow DRC violations on (C6-6); a PTH pad's
+  unflashed layer and text boxes, tables, dimensions and barcodes on copper in the via's DRC check (C6-4, C6-5); ~~R / F / E on a carried text (A6-6)~~ (done, `task-u6-last`); a rounded rectangle's corners through
   `TransformRoundChamferedRectToPolygon` (D6-3); the 100 nm chaining's direction (D6-4) and the outline fix's view of a removed duplicate (D6-5), both KiCad quirks; teardrops fitted to other nets'
   clearance (25ec2335's `computeFittedTeardropPolygon`) and the solder-mask teardrops; the text dialog's Bold control.
 - Done 2026-11-05 (`task-u1-pcb`, `PARITY-pcb.md` section 66, the round-7 findings `r7-pcb-edit` R7-1, R7-2, R7-3, R7-5 and UI-LEFT P1, P4, P6, P23): **teardrops on SMD pads of every
@@ -943,6 +943,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   layer presets plus saved ones; viewports. Kept per project in `appearance.json` and written into the derived `.kicad_prl` / `.kicad_pro`. `e2e/appearance-panel.check.js`.
 - Done 2026-11-06 (`task-u3-panels`, UI-LEFT P11, `PARITY-pcb.md` section 75): the colour theme is editable. Preferences > PCB Editor > Colors (`PANEL_PCBNEW_COLOR_SETTINGS`): the theme list (KiCad Default, the read-only built-ins KiCad Default and KiCad Classic, the person's), New Theme... (which is also the duplicate: it starts from the shown theme), a swatch per layer in KiCad's order with Copy / Paste / Revert to saved color, Reset Colors to Defaults; the Appearance panel's layer and object swatches edit the editor's theme (a read-only theme says KiCad's message); the board is drawn in the chosen theme (`layerColor` asks `state/colorThemeStore.ts`), the themes kept per person in the browser like the other preferences (KiCad: `colors/*.json` in the user's folder). "Use Color from Schematic" takes the class's Schematic Setup colour; a class renamed in Board Setup keeps its colour (proved; Undo of the rename does not bring it back). `e2e/color-theme.check.js`.
 - Missing: Images and Points rows (no such items); the quick switchers on Ctrl+Tab and Alt+Tab. (The selection filter is kept with the project's local settings, `appearance.json`'s `local.selection_filter` and the derived `.kicad_prl`'s `board.selection_filter` as KiCad keeps it, and has KiCad's right-click "Only ..." menu: 2026-11-06, `task-u5-pcbitems`, UI-LEFT P22, PARITY-pcb section 87.) (The drawing sheet is on from the start with its zone letters and numbers, and Page Settings chooses a `.kicad_wks` that both editors draw and kicad-cli plots: 2026-11-06, `task-u4-common`, UI-LEFT C3, PARITY-common section 9.) Of the themes: no preview board (the page draws on the board itself), no theme files in or out, the Footprint Editor draws with the board editor's theme and the schematic editors have no Colors page. (The Values row now acts: the Value is a footprint field since 10-09.)
+- 2026-11-06 (`task-u6-last`, UI-LEFT P28, `PARITY-pcb.md` section 90): Inactive layers Dim is KiCad's colour mix (`color.Mix( background, m_hiContrastFactor )`, 0.2 of the colour kept,
+  opaque), with `GetColor`'s pad, hole and via cases and every item kind (texts, shapes, dimensions, text boxes, barcodes and technical-layer zones were not dimmed); Edge.Cuts at 0.3; the active
+  copper layer and the vias are drawn over the other copper (`SetTopLayer`). Left: the Footprint Editor's Dim is still a quarter alpha; the painter's buckets are not KiCad's layer order (the inner
+  layers are one bucket, the pads and technical layers stay over all copper); a through-hole pad is drawn once in its side's colour.
 - Port from: `pcbnew/widgets/appearance_controls.cpp`, `common/dialogs/panel_color_settings.cpp`, `pcbnew/dialogs/panel_pcbnew_color_settings.cpp`.
 
 ### 19. Footprint and symbol editor leftovers
@@ -969,7 +973,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - E7-S4: Pin Properties has a Delete Pin button KiCad's has not (it leaves the sync twins), clamps the length and text sizes without a message, and its labels have no colons. **Fixed (task-u5-dialogs)**
   - E7-S9: the four "Exclude from" boxes are disabled as the dialog opens on a power symbol; KiCad disables them only when the box is ticked. **Fixed (task-u5-dialogs)**
   - E7-S15: the Pin Table has no summary (pin numbers, count, duplicates), no Count or text-size columns, shows the raw type tokens and sorts by unit then number. **Fixed (task-u5-dialogs)**: `PARITY-symedit.md`, the Pin Table section
-  - E7-S16: the Symbol Checker names a unit by its letter, not its display name. **Left (low)**
+  - E7-S16: the Symbol Checker names a unit by its letter, not its display name. **Fixed (task-u6-last)**: `GetUnitDisplayName( unit, false )`, and a body style by `GetBodyStyleDescription`
   - E7-S19: Save As under the symbol's own name in its own library does not ask "Symbol '%s' already exists in library '%s'. Do you want to overwrite it?". **Fixed (task-u1-libsave)**
   - E7-S20: Duplicate and Save As do not refuse a read-only (installed) library with KiCad's messages. Save As **fixed (task-u1-libsave)**; Duplicate and Paste are still not refused ("Symbol library '%s' is not writable."). **Left (low)**
   - E7-S21: after Duplicate or Paste the first new symbol opens at unit 1, not the last at the current unit and body style. **Fixed (task-u5-dialogs)**
@@ -977,8 +981,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - E7-S22: Save As with Rename All opens the renamed copy; KiCad loads the typed name (probably a KiCad bug): kept as a deliberate difference. **Left (low)**
   - E7-S23: "No symbol selected." keeps a full stop; Cut / Delete / Rename on a symbol that cannot be edited do not say KiCad's words (or return silently for Rename). **Left (low)**
 - Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), keeps the alternate pin function a file picked (round 5, PARITY-sch section 48) but the studio cannot choose one or draw its name; the border's colour and
-  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape and text box; a symbol's plain text has had a Properties dialog since 2026-11-05 (UI-LEFT Y4, below), and the Footprint Editor's texts, fields and graphics have theirs since UI-LEFT F1 (below); ~~a footprint text has no vertical justification, italic or keep-upright~~ (kept and edited since `task-u3-fpedit2`); the fields table has no simulation fields; no named body styles;
-  Symbol Properties has no unit display names grid and no Pin Connections tab (both kept in the file, and the unit names in the schematic's cache since round 6); ~~a pad's fabrication property and margins are kept, not edited, in the library Pad Properties~~ (the fabrication property and the die length are edited since `task-u3-fpedit2`, the margins in the Properties pane); the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
+  a custom fill colour (the style is kept since the review, not edited) and Private to Symbol Editor of a library shape (a text box's and a text's are edited since UI-LEFT Y4, `task-u6-last`); a symbol's plain text has had a Properties dialog since 2026-11-05 (UI-LEFT Y4, below), and the Footprint Editor's texts, fields and graphics have theirs since UI-LEFT F1 (below); ~~a footprint text has no vertical justification, italic or keep-upright~~ (kept and edited since `task-u3-fpedit2`); the fields table has no simulation fields; ~~no named body styles;
+  Symbol Properties has no unit display names grid and no Pin Connections tab~~ (done, UI-LEFT Y4, `task-u6-last`); ~~a pad's fabrication property and margins are kept, not edited, in the library Pad Properties~~ (the fabrication property and the die length are edited since `task-u3-fpedit2`, the margins in the Properties pane); the board's Footprint Properties still has two mandatory rows. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Round 7 (2026-10-28, `task-r7-fp-editor`; `PARITY-fpedit.md` section 18): Pad Properties' pad type is KiCad's five (Edge Connector and SMD Aperture too) and a choice resets the layers, the hole and the number
   (`PadTypeSelected`); OK runs `padValuesOK` (warnings shown, a plated hole that reaches the pad edge applied) and makes the pad Add Pad's master with its number the last; the Pad Table's Type is `PAD::SetAttribute`;
   library Footprint Properties has "Component type:" and KiCad's attribute labels. Left (low):
@@ -1005,6 +1009,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   older design's kept text style is moved into the text: `absorb_kept_text_styles`); the Properties pane (item 10); the Pin tool is `TwoClickPlace` (the dialog, then the pin follows the cursor);
   Duplicate and Paste carry their items until a click; Copy writes `.kicad_sym` text and Paste reads KiCad's; Increment of a pin's number or name and of a text, and Repeat Pin's pitch and label
   increment in Preferences. Left: the point editor of the other shapes, Increment of the pin being placed, the clipboard's images, Import Graphics' curves (still segments).
+- **UI-LEFT Y4 (2026-11-06, `task-u6-last`; PARITY-symedit "Symbol Properties' units, body styles and pin connections; ...")**: Symbol Properties' "Unit display names (optional):" grid,
+  "Custom body styles:" with its grid and the Pin Connections tab (KiCad 25ec2335 `DIALOG_LIB_SYMBOL_PROPERTIES`: the unit name and two-entry checks, the refusal of several body styles on a symbol
+  with alternate pin functions, `SetBodyStyleCount` populating every new style and pruning the dropped ones), `edit_symbol_units_and_connections` in the dialog's one undo step; `(body_styles ..)`
+  read and written; the toolbar's unit and body style boxes, the Pin Table, the Properties pane, the "Common to all body styles" boxes and the Symbol Checker follow custom styles and unit names;
+  a library text's and text box's Private flag, font and text colour and a text box's border colour and colour fill ("Background fill") edited, drawn, read and written (`saveText`,
+  `saveTextBox`); a private item is not drawn on a sheet. The library round trip of KiCad's installed libraries passes. Left: a shape's Private flag and colours; the text box's border style in
+  its dialog; a third custom body style on a placed symbol; 25ec2335's Pin Map tab.
+- Duplicate and Increment of several pads gives the copies one number, as KiCad 8303b2ad and 25ec2335 do (E11 followed, `task-u6-last`, `PARITY-fpedit.md` section 7).
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls
@@ -1041,8 +1053,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   designators ("Assign unique" via `ReannotateDuplicates`, or keep). 23 Rust tests, 17 `node --test` cases, the browser check.
 - Done 2026-10-13 (P17, `task-lib-editors`, not merged; `PARITY-fpedit.md` section 13): the footprint editor's array of pads, graphics and texts with the numbering (`ARRAY_AXIS`: numerals, hexadecimal, the two alphabets, 2D coordinates, `ARRAY_PAD_NUMBER_PROVIDER`:
   Use first free number, serpentine, direction, the Coordinate scheme), `create_footprint_array`, one undo step; a footprint with a 3 x 4 BGA array written by this studio loads in kicad-cli and `fp upgrade` keeps its twelve pads.
+- 2026-11-06 (`task-u6-last`, UI-LEFT F10, `PARITY-fpedit.md` section 22): KiCad's Create Array dialog has no preview (`DIALOG_CREATE_ARRAY` holds no picture and `ARRAY_TOOL` draws
+  nothing while it is open), so the studio's picture and line of pad numbers are its own additions; the circle's numbering controls are enabled as `setControlEnablement` enables them (its
+  "Pad numbering start" follows the Grid tab's "Renumber pads" too). Left: KiCad 25ec2335's "Confirm Array" question (`arrayHasStackedPositions`) in place of 8303b2ad's zero-spacing refusals.
 - Missing: the original keeps the first point
-  where KiCad's reverse loop leaves it on the last (same points, same references); the circle's centre starts at the selection, where KiCad's dialog ignores the origin it is given; the circle's "Pad numbering start" follows its own initial-number radio.
+  where KiCad's reverse loop leaves it on the last (same points, same references); the circle's centre starts at the selection, where KiCad's dialog ignores the origin it is given; ~~the circle's "Pad numbering start" follows its own initial-number radio~~ (done, `task-u6-last`).
 - Port from: `pcbnew/tools/array_tool.cpp`, `pcbnew/dialogs/dialog_create_array.cpp`, `pcbnew/array_pad_number_provider.cpp`.
 
 ### 23. The 3D viewer
@@ -1279,6 +1294,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   *padstacks* (`crates/model/src/padstack.rs`, `crates/kicad/src/padstack_io.rs`: a pad's shape on the front, inner and back copper, `front_inner_back` and `custom`, read and written as `pcb_io_kicad_sexpr` does, mirrored on the bottom as `PADSTACK::FlipLayers`, and read per layer by the DRC gates, the router, connectivity,
   the canvas and the 3D scene; Pad Properties has Padstack mode, Edit layer and Copper layers; kicad-cli plots each layer of KiCad's own `padstacks_complex` board as the model has it and our export as the original); *Remove Unused Pads* (`crates/ops/src/unused_pads.rs`, `eda_connectivity::flashed_layers`: `remove_unused_layers` for
   the pads and vias chosen, and the layers that keep their ring).
+- Done 2026-11-06 (`task-u6-last`, UI-LEFT F10, `PARITY-fpedit.md` section 22, `PARITY-pcb.md` section 42): Finish Pad Edit's duplicate removal is `findMatching`'s: a graphic on any layer
+  of the pad's set that `EDA_SHAPE::Compare`s equal within its 2 nm `EPSILON` (the line style and fill exact) goes with the merged one and is not added twice; a hatched graphic counts as solid
+  and comes in solid. Left: KiCad 25ec2335's per-layer recombine of a padstack (`ForEachUniqueLayer`).
 - Left: a custom stack's per-layer thermal and clearance settings (kept as tokens), a via's own padstack and the layer a zone is told to flash a pad or via on (`zone_layer_connections`), a custom pad's proxy spokes as zone-fill templates (the explode keeps them in the mode, not as graphics), `gr_rect` corner radius and arcs inside `gr_poly`. The instant 3D scene draws every pad in its real shape and a padstack's inner layers with their own shapes since `task-u3-3d` (2026-11-06, item 23: `kicad-port/padShape3d.ts`, the state's `pads[].outline` for a custom pad, `stack_layers[].size`); a custom pad's paste margin is not applied there.
 - Measured: 40 new Rust tests (five of them slow-tier, with kicad-cli) and 25 new
   `node --test` cases; `web/studio/e2e/pad-shapes.check.js` runs 6 scenarios through `window.__eda` on a served board. P25: 72 new Rust tests (five slow-tier: kicad-cli's plot of every copper layer of `padstacks_complex`, of a bottom-side footprint and of a library footprint, the rings a pad keeps on a four-layer board, and the schematic parity of a swap), 22 `node --test` cases, `web/studio/e2e/pad-details.check.js` (10 scenarios); the re-export of the 12 QA boards is 12 of 12, as before.
@@ -1417,15 +1435,19 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   layer sets (the command and the menu); the ratsnest mode forgets the local ratsnest pads on every change; a multi-net highlight keeps the last-highlight memory; Hide Net acts on the selection only; a ratsnest
   line whose ends coincide is KiCad's cross. Left (low):
   - C7-5: Highlight Net (selection) drops a selected item with no net; KiCad highlights the unconnected items (net code 0).
-  - C7-8: the curved ratsnest is a quadratic bow of 0.03 L; KiCad's is `DrawCurve( source, center, center, target )` with the centre 0.1 L off the line.
-  - C7-9: a highlighted net's ratsnest is the selection-shadow colour at 2.5 px; KiCad brightens the net's own colour and halves the alpha of the other lines (`dimStatic`).
+  - ~~C7-8, C7-9~~ done (`task-u6-last`, UI-LEFT P28, `PARITY-pcb.md` section 90): KiCad's curve (`DrawCurve( a, c, c, b )`, the centre 0.1 L off the line) and ratsnest colours (one width,
+    a highlighted net brightened, the other lines' alpha halved by `dimStatic`, a move's lines brightened).
   - C7-10: Local Ratsnest picks a pad by its box, not `PAD::HitTest`, and leaves the selection alone (KiCad clears it).
   - C7-11: the net under the cursor is the nearest pad centre or a track within 10 px, not `highlightNet`'s collector (hit test, preferred layer, high-contrast filter).
   - C7-12: Repair Board scans tracks, vias, zones and drawings, not footprints and pads first; it takes orphan nets from zones too; it is an undo step (KiCad's `OnModify` makes none).
 - Done 2026-11-06 (`task-u5-pcblows`, UI-LEFT P25, `PARITY-pcb.md` section 82): C7-5 (an item of no net is on net 0, `NO_NET`: a no-net pad highlights the unconnected items, no-net copper dims
   under another net's highlight), C7-10 (`PAD::HitTest`, the clicked item left selected), C7-11 (`GENERAL_COLLECTOR`'s hit tests at five pixels, the active layer first, zones by rim or shown fill),
   C7-12's orphan nets (pads, tracks and vias, not zones; the id order cannot matter here, and the undo step is kept on purpose), and Flip Board View keeps a text off the side-specific layers
-  readable (`IsFlippedX() && !IsSideSpecific()`, a pad's number as `BitmapText`). Left: C7-8, C7-9; the flipped view's text boxes and table cells; the collector's selection filter.
+  readable (`IsFlippedX() && !IsSideSpecific()`, a pad's number as `BitmapText`). Left: the flipped view's text boxes and table cells; the collector's selection filter.
+- Done 2026-11-06 (`task-u6-last`, UI-LEFT P28, `PARITY-pcb.md` section 90): the net highlight darkens every item off the net (silkscreen, outline and texts too); a rule area is drawn as any
+  zone (the layer's colour, a one-pixel outline and the border hatch, no label); the zone fill's debug views (fracture borders, triangulation) are KiCad's `ExtraZoneDisplayModes` only and are
+  out of the View menu and the toolbar; R, Shift+R, F and E act on the text Draw Text carries (A6-6); the Select Net menu is in net code order (C6-8). Left: the highlight does not darken DRC
+  markers or the locked and conflict shadows.
 
 ### 36. Connectivity against kicad-cli
 **Measured, mostly closed.** `tools/parity_report.py` section 1 (`crates/connectivity/tests/parity_connectivity.rs`), `PARITY-pcb.md` section 51.
