@@ -207,3 +207,28 @@ fn a_segment_the_board_already_has_is_not_added_again() {
     gone.sort();
     assert_eq!(gone, vec!["t_old".to_string(), "t_sig".to_string()]);
 }
+
+/// `ROUTER_TOOL::InlineDrag` of a selection (`Router::drag_start_item`, UI-LEFT-2 RR2): the selected track is dragged, not the one the point would find
+/// again -- pressed nearer t_c, t_a is taken, its start snapped onto it (`snapToItem`) -- and a selected locked track is refused until "Drag Anyway".
+#[test]
+fn the_selected_track_is_dragged_whatever_the_point_would_find_and_a_locked_one_asks_first() {
+    let (design, model) = board(
+        vec![straight("t_a", "GND", &[p(Nm::ZERO, Nm::ZERO), p(mm(4.0), Nm::ZERO)]), straight("t_c", "GND", &[p(Nm::ZERO, mm(0.3)), p(mm(4.0), mm(0.3))]), straight("t_b", "GND", &[p(mm(8.0), Nm::ZERO), p(mm(8.0), mm(4.0))])],
+        vec![],
+        &["t_b"],
+    );
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::MarkObstacles;
+    router.drag_start(p(mm(2.0), mm(0.25)), "F.Cu").expect("the point alone");
+    assert_eq!(router.drag_line_tracks(), vec!["t_c".to_string()], "the point alone finds t_c");
+    let start = router.drag_start_item(p(mm(2.0), mm(0.25)), "F.Cu", "t_a", false, false).expect("t_a is not locked");
+    assert_eq!(start, p(mm(2.0), Nm::ZERO), "snapped onto t_a");
+    assert_eq!(router.drag_line_tracks(), vec!["t_a".to_string()]);
+    let _ = router.drag_preview(p(mm(2.0), mm(-1.0))).unwrap();
+    let commit = router.drag_finish(p(mm(2.0), mm(-1.0))).expect("commits");
+    assert_eq!(commit.remove_track_ids, vec!["t_a".to_string()], "only the selected track");
+    let mut router = Router::new(&design, &model);
+    assert_eq!(router.drag_start_item(p(mm(8.0), mm(2.0)), "F.Cu", "t_b", false, false).unwrap_err(), eda_pns::dragger::LOCKED_MESSAGE);
+    assert_eq!(router.drag_start_item(p(mm(8.0), mm(2.0)), "F.Cu", "t_b", false, true).expect("Drag Anyway"), p(mm(8.0), mm(2.0)));
+    assert_eq!(router.drag_start_item(p(mm(8.0), mm(2.0)), "F.Cu", "nope", false, false).unwrap_err(), "nothing to drag");
+}

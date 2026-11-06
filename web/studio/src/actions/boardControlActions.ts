@@ -93,7 +93,7 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
       if (!board) return;
       let nets = netsOfSelection(state.selection, board);
       if (nets.length === 0 && state.cursorNm) {
-        const net = findNetAtCursor(board, state.cursorNm.x, state.cursorNm.y, collectorAccuracyNm(state.view.scale), { activeLayer: state.activeLayer, layerVisible: state.layerVisible, highContrast: state.highContrast, fills: state.zoneFill?.zones });
+        const net = findNetAtCursor(board, state.cursorNm.x, state.cursorNm.y, collectorAccuracyNm(state.view.scale), { activeLayer: state.activeLayer, layerVisible: state.layerVisible, highContrast: state.highContrast, fills: state.zoneFill?.zones, filter: state.selectionFilter });
         if (net) nets = [net];
       }
       dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets });

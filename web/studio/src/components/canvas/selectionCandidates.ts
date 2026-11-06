@@ -13,12 +13,11 @@
 // size-ratio pass -- see pcb_selection_tool.cpp's own comment: "If the
 // user clicked on a small item within a much larger one...").
 import { stitchFilteredAsVia } from "../../kicad-port/viaStitch";
-import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
+import type { BoardState, Dimension, FieldInfo, Part } from "../../api/types";
 import { fpTextById, padIds, padParent } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, artTextAsField, artTextShown, unionBox } from "../../kicad-port/fpArt";
 import { fpItemsHitDistance } from "../../kicad-port/fpBoardItems";
-import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, shapeBoundingBox, shapeHitDistance, textBoundingBox, zoneArea, zoneContainsPoint, zoneEdgeDistance } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
@@ -31,8 +30,11 @@ import { gridArea } from "../../kicad-port/gridItem";
 import { stitchArea } from "../../kicad-port/viaStitch";
 import { cellArea, cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
 import { circleRing, coverageRatio, ringArea, type Ring } from "../../kicad-port/coverage";
-import { boxRing, footprintHull, padRing, shapeCoverageArea, shapeRings, trackRings } from "../../kicad-port/footprintCoverage";
-import { fieldStrokes, textBoxArea, textBoxDistance, textHitSlop } from "../../kicad-port/textHit";
+import { boxRing, footprintHull, shapeCoverageArea, shapeRings, trackRings } from "../../kicad-port/footprintCoverage";
+import { fieldStrokes, textBoxDistance, textHitSlop } from "../../kicad-port/textHit";
+import { ARC_LOW_DEF_NM } from "../../kicad-port/coverage";
+import { boardTextAsField, strokeRings, strokesBoxRing, textCoverageArea } from "../../kicad-port/textCoverage";
+import { padCopperRings, padCoverageArea, padHitDistance as padShapeDistance, type PadLike } from "../../kicad-port/padHit";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "fptext" | "table" | "tablecell" | ExtraKind;
 
@@ -148,6 +150,56 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   }
 }
 
+/** What the filter did to a click's items (`selectPoint`'s `preFilterCount`, `rejected`): the rows that refused one, and how many it let through. */
+export interface FilterRejections {
+  rows: Set<keyof SelectionFilter>;
+  passed: number;
+}
+
+/** A fresh record for `collectSelectionCandidates`' `rejected`. */
+export function newFilterRejections(): FilterRejections {
+  return { rows: new Set(), passed: 0 };
+}
+
+/** `if( collector.GetCount() == 0 && preFilterCount > 0 ) HighlightSelectionFilter( rejected )`: the rows to flash, none when an item got through. */
+export function rowsToFlash(r: FilterRejections): (keyof SelectionFilter)[] {
+  return r.passed === 0 ? [...r.rows] : [];
+}
+
+/**
+ * The row of the filter that refuses an item of `kind` (`itemPassesFilter`'s `aRejected`), for the flash of that row (`HighlightSelectionFilter`). A text, a field,
+ * a text box, a table and a cell set none: their case is `if( !m_filter.text ) return false;` with no `aRejected->text`, so the Text row never flashes.
+ */
+export function rejectedRowOf(kind: SelectableKind, ruleArea = false): keyof SelectionFilter | null {
+  switch (kind) {
+    case "part":
+      return "footprints";
+    case "track":
+      return "tracks";
+    case "via":
+      return "vias";
+    case "pad":
+      return "pads";
+    case "zone":
+      return ruleArea ? "keepouts" : "zones";
+    case "shape":
+    case "image":
+      return "graphics";
+    case "dimension":
+      return "dimensions";
+    case "point":
+      return "points";
+    case "grid":
+      return "gridItems";
+    case "barcode":
+    case "via_stitch":
+    case "drill_map":
+      return "otherItems";
+    default:
+      return null;
+  }
+}
+
 /** The box around a field's text, turned by its angle (`EDA_TEXT::GetTextBox` and the rotation): the same rough per-character width `textBoundingBox` uses. */
 export function textBoundingBoxRotated(f: FieldInfo): { x0: number; y0: number; x1: number; y1: number } {
   const t = fieldAsText(f);
@@ -171,21 +223,13 @@ export function textBoundingBoxRotated(f: FieldInfo): { x0: number; y0: number; 
   return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
 }
 
-/** How far (um) `(x, y)` is outside a pad -- 0 or less on it: a round pad is a circle or a stadium, any other a box. */
-export function padHitDistance(pad: Pick<Pad, "x" | "y" | "w" | "h" | "round" | "outline">, x: number, y: number): number {
-  // A trapezoid, a chamfered rectangle or a custom pad is the contours of its copper (`PAD::HitTest` asks the effective shape, not the box).
-  if (pad.outline?.length) return outlineDistance(pad.outline, x, y);
-  const hw = pad.w / 2;
-  const hh = pad.h / 2;
-  if (pad.round) {
-    // the two end circles of the stadium lie on the pad's long axis
-    const r = Math.min(hw, hh);
-    const [ax, ay, bx, by] = hw >= hh ? [pad.x - (hw - r), pad.y, pad.x + (hw - r), pad.y] : [pad.x, pad.y - (hh - r), pad.x, pad.y + (hh - r)];
-    return distToSegment(x, y, ax, ay, bx, by) - r;
-  }
-  const dx = Math.max(Math.abs(x - pad.x) - hw, 0);
-  const dy = Math.max(Math.abs(y - pad.y) - hh, 0);
-  return dx === 0 && dy === 0 ? Math.max(Math.abs(x - pad.x) - hw, Math.abs(y - pad.y) - hh) : Math.hypot(dx, dy);
+/**
+ * How far `(x, y)` is outside a pad -- 0 or less on it: `PAD::HitTest`'s effective shape of each of its layers and its hole (kicad-port/padHit.ts): a circle, an
+ * oval's stadium, a turned rectangle, a rounded rectangle by its corner arcs, a trapezoid, a chamfered rectangle or a custom pad by its copper's contours
+ * (UI-LEFT-2 PP2: a rounded, chamfered or custom pad was its rectangle). A pad the state gives no size (an older backend) is its box.
+ */
+export function padHitDistance(pad: PadLike, x: number, y: number): number {
+  return padShapeDistance(pad, x, y);
 }
 
 /**
@@ -239,8 +283,13 @@ const sideShown = (layerVisible: Record<string, boolean>, p: Pick<Part, "side">)
  * selected" -- applied here rather than by the caller so every caller
  * gets it automatically.
  *
- * With `onePixelNm`, a footprint's field or text is collected by its box, as the collector takes it, but measured by its strokes for the heuristics
- * (`hitTestDistance`, kicad-port/textHit.ts): a click in its box off its strokes is no hit of it when anything else is hit exactly. Without it, by its box.
+ * With `onePixelNm`, a field, a footprint's text or a board text is collected by its box, as the collector takes it, but measured by its strokes for the
+ * heuristics (`hitTestDistance`, kicad-port/textHit.ts): a click in its box off its strokes is no hit of it when anything else is hit exactly; its area is
+ * that of its strokes grown by the collector's accuracy (`GetCoverageArea`'s `TransformTextToPolySet( poly, textMargin, .. )`, UI-LEFT-2 PP2). Without it,
+ * by its box.
+ *
+ * `rejected`, when given, gets the rows of the filter that refused an item that could be picked otherwise and the count it let through (`selectPoint`:
+ * `Selectable` first, then `FilterCollectedItems( collector, false, &rejected )`): the caller flashes the rows when nothing got through (`rowsToFlash`).
  */
 export function collectSelectionCandidates(
   board: BoardState,
@@ -253,23 +302,37 @@ export function collectSelectionCandidates(
   highContrast: boolean,
   selection: ReadonlySet<string>,
   subtractiveOnly: boolean,
-  onePixelNm?: number
+  onePixelNm?: number,
+  rejected?: FilterRejections
 ): SelectionCandidate[] {
   const out: SelectionCandidate[] = [];
   const locked = new Set(board.locked ?? []);
+  // `textMargin = aCollector.GetGuide()->Accuracy()`: `KiROUND( 5 * OnePixelInIU() )`
+  const accuracyNm = onePixelNm !== undefined && onePixelNm > 0 ? Math.round(5 * onePixelNm) : 0;
   // `guessSlopNm`: the slop the heuristics weigh when it is not the one the item is collected by (a text's strokes against its box)
   const consider = (kind: SelectableKind, id: string, slopNm: number, areaNm2: number, layer: string | null, lockedId: string = id, ruleArea = false, guessSlopNm?: number) => {
     if (slopNm > toleranceNm) return;
-    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, filterKindOf(board, kind, id))) || !objectSelectable(kind, layerVisible)) return;
-    // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected -- but a click may pick a lone pad of a locked
-    // footprint ("allow a single pad to be selected -- there are a lot of operations that require this").
-    if (!filter.lockedItems && kind !== "pad" && lockedForFilter(board, locked, lockedId)) return;
-    if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
+    // `Selectable` before the filter (`selectPoint`: "Remove unselectable items", then `FilterCollectedItems`)
+    if (!objectSelectable(kind, layerVisible) || !layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
+    // pcb_selection_tool.cpp itemPassesFilter: the lock first -- `!m_filter.lockedItems && aItem->IsLocked()` -> rejected (`aRejected->lockedItems`) -- but a
+    // click may pick a lone pad of a locked footprint ("allow a single pad to be selected -- there are a lot of operations that require this").
+    if (!filter.lockedItems && kind !== "pad" && lockedForFilter(board, locked, lockedId)) {
+      rejected?.rows.add("lockedItems");
+      return;
+    }
+    const filterKind = kind === "zone" ? kind : filterKindOf(board, kind, id);
+    if (!(kind === "zone" ? zoneAllowed(filter, ruleArea) : filterAllows(filter, filterKind))) {
+      const row = rejectedRowOf(filterKind, ruleArea);
+      if (row) rejected?.rows.add(row);
+      return;
+    }
+    if (rejected) rejected.passed++;
     if (subtractiveOnly && !selection.has(id)) return;
     out.push({ kind, id, slopNm: guessSlopNm ?? Math.max(slopNm, 0), areaNm2: Math.max(areaNm2, 1), layer });
   };
-  // A footprint's field or text: collected by the box of its strokes (`TextHitTest`), weighed by its strokes (`hitTestDistance`); by the rough box without `onePixelNm`.
-  const considerText = (kind: "field" | "fptext", f: FieldInfo, id: string, lockedId: string) => {
+  // A field, a footprint's text or a board text: collected by the box of its strokes (`TextHitTest`), weighed by its strokes (`hitTestDistance`), its area
+  // that of its strokes grown by the accuracy (`GetCoverageArea`); by the rough box without `onePixelNm`.
+  const considerText = (kind: "field" | "fptext" | "text", f: FieldInfo, id: string, lockedId: string) => {
     if (onePixelNm !== undefined && onePixelNm > 0) {
       // nowhere near it (no glyph advances more than 1.72 of the size, a line is 1.6 sizes below the last): no need of its strokes
       const lines = (f.shown ?? f.text).split("\n");
@@ -277,7 +340,7 @@ export function collectSelectionCandidates(
       if (Math.abs(xNm - f.x) > reach || Math.abs(yNm - f.y) > reach) return;
       const s = fieldStrokes(f);
       const d = textBoxDistance(s, xNm, yNm);
-      if (d <= toleranceNm) consider(kind, id, d, Math.max(textBoxArea(s), 1), f.layer, lockedId, false, textHitSlop(s, xNm, yNm, onePixelNm));
+      if (d <= toleranceNm) consider(kind, id, d, Math.max(textCoverageArea(s, accuracyNm), 1), f.layer, lockedId, false, textHitSlop(s, xNm, yNm, onePixelNm));
       return;
     }
     const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
@@ -304,7 +367,9 @@ export function collectSelectionCandidates(
     if (!p.placed || !p.pads?.length || !sideShown(layerVisible, p)) continue;
     const ids = padIds(p);
     p.pads.forEach((pad, i) => {
-      consider("pad", ids[i]!, padHitDistance(pad, xNm, yNm), Math.max(pad.w * pad.h, 1), pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref);
+      // `GetCoverageArea` of a pad: the area of its copper (it was its board box)
+      const d = padHitDistance(pad, xNm, yNm);
+      if (d <= toleranceNm) consider("pad", ids[i]!, d, Math.max(padCoverageArea(pad), 1), pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref);
     });
   }
 
@@ -360,6 +425,11 @@ export function collectSelectionCandidates(
     consider("shape", s.id, shapeHitDistance(s, xNm, yNm), shapeCoverageArea(s, isAnyFill(s)), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
+    // A board text as a footprint's (UI-LEFT-2 PP2: it was hit and weighed by its box): `PCB_TEXT::HitTest` is `TextHitTest`, `hitTestDistance` its strokes.
+    if (onePixelNm !== undefined && onePixelNm > 0) {
+      considerText("text", boardTextAsField(t), t.id, t.id);
+      continue;
+    }
     const { x0, y0, x1, y1 } = textBoundingBox(t);
     const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
     const d = inside ? 0 : Math.hypot(xNm - t.x, yNm - t.y) - (x1 - x0) / 2;
@@ -596,12 +666,18 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   return out.length > 0 ? out : padHits;
 }
 
-/** The boxes of a footprint's own texts (`PCB_TEXT`, not its fields): what `GetBoundingHull` takes of them (their polygons; here their boxes). */
-function ownTextBoxes(p: Part, marginNm = 0): Ring[] {
-  return (p.texts ?? []).map((t) => {
-    const b = textBoundingBoxRotated(t as unknown as FieldInfo);
-    return boxRing(b.x0, b.y0, b.x1, b.y1, marginNm);
-  });
+/**
+ * The boxes of a footprint's own texts (`PCB_TEXT`, not its fields): what `GetBoundingHull` takes of them (`TransformShapeToPolygon( .., ARC_LOW_DEF,
+ * ERROR_OUTSIDE )` = `buildBoundingHull`: the box of their strokes, grown by the error, turned with them; it was a rough box of 0.6 of the size a character).
+ */
+function ownTextBoxes(p: Part): Ring[] {
+  const out: Ring[] = [];
+  for (const t of p.texts ?? []) {
+    if (!t.text) continue;
+    const ring = strokesBoxRing(fieldStrokes(artTextAsField(t)), ARC_LOW_DEF_NM);
+    if (ring) out.push(ring);
+  }
+  return out;
 }
 
 /** `FOOTPRINT::GetBoundingHull` of a placed part (kicad-port/footprintCoverage.ts). */
@@ -610,24 +686,30 @@ function partHull(p: Part): Ring {
 }
 
 /**
- * `FOOTPRINT::CoverageRatio( aCollector )`: how much of `part`'s hull its pads (`TransformPadsToPolySet`) and its texts and shown fields grown by the collector's
- * accuracy (`TransformFPShapesToPolySet( .., textMargin, .., true, false, false )`) cover together with what else the click found -- a field, text, text box,
- * shape, barcode, track or via not of this footprint (`TransformShapeToPolygon`), another footprint's hull. A text is its box here, where KiCad takes its glyphs'
- * strokes (the box covers a little more).
+ * `FOOTPRINT::CoverageRatio( aCollector )`: how much of `part`'s hull its pads (`TransformPadsToPolySet`, each layer's copper by its real shape) and its
+ * texts and shown fields (`TransformFPShapesToPolySet( .., textMargin, ARC_LOW_DEF, ERROR_OUTSIDE, true, false, false )`: their strokes grown by the
+ * collector's accuracy and the error, UI-LEFT-2 PP2 -- they were boxes) cover together with what else the click found: a field, text, text box, shape, barcode,
+ * track or via not of this footprint (`TransformShapeToPolygon`: a text the box of its strokes, `buildBoundingHull`), another footprint's hull.
  */
 export function footprintCoverageRatio(board: BoardState, ref: string, pool: readonly SelectionCandidate[], accuracyNm: number): number {
   const part = board.parts.find((p) => p.ref === ref);
   if (!part?.placed) return 0;
   const hull = partHull(part);
   const covered: Ring[] = [];
-  for (const pad of part.pads ?? []) covered.push(padRing(pad));
-  covered.push(...ownTextBoxes(part, accuracyNm));
+  for (const pad of part.pads ?? []) covered.push(...padCopperRings(pad));
+  // `if( aErrorLoc == ERROR_OUTSIDE ) aClearance += aMaxError; textShape.Inflate( aClearance, .. )`
+  const textMargin = accuracyNm + ARC_LOW_DEF_NM;
+  for (const t of part.texts ?? []) if (t.text) covered.push(...strokeRings(fieldStrokes(artTextAsField(t)), textMargin));
   for (const f of part.fields ?? []) {
     if (!f.visible || !f.text) continue;
-    const b = textBoundingBoxRotated(f);
-    covered.push(boxRing(b.x0, b.y0, b.x1, b.y1, accuracyNm));
+    covered.push(...strokeRings(fieldStrokes(f), textMargin));
   }
   const ownFields = new Set((part.fields ?? []).map((f) => f.id));
+  const ownTexts = new Set((part.texts ?? []).map((t) => t.id));
+  const boxOfText = (f: FieldInfo) => {
+    const ring = strokesBoxRing(fieldStrokes(f), ARC_LOW_DEF_NM);
+    if (ring) covered.push(ring);
+  };
   for (const c of pool) {
     switch (c.kind) {
       case "part":
@@ -641,19 +723,22 @@ export function footprintCoverageRatio(board: BoardState, ref: string, pool: rea
         for (const p of board.parts) {
           const f = p.fields?.find((x) => x.id === c.id);
           if (f) {
-            const b = textBoundingBoxRotated(f);
-            covered.push(boxRing(b.x0, b.y0, b.x1, b.y1));
+            boxOfText(f);
             break;
           }
         }
         break;
       }
+      // another footprint's own text (`PCB_TEXT_T` whose parent is not this footprint)
+      case "fptext": {
+        if (ownTexts.has(c.id)) break;
+        const hit = fpTextById(board, c.id);
+        if (hit) boxOfText(artTextAsField(hit.text));
+        break;
+      }
       case "text": {
         const t = board.drawings?.texts.find((x) => x.id === c.id);
-        if (t) {
-          const b = textBoundingBox(t);
-          covered.push(boxRing(b.x0, b.y0, b.x1, b.y1));
-        }
+        if (t) boxOfText(boardTextAsField(t));
         break;
       }
       case "shape": {
@@ -706,6 +791,77 @@ export function pickToolCandidates(
   return guessSelectionCandidates(all, onePixelNm, activeLayer, highContrast, (c, pool) => footprintCoverageRatio(board, c.id, pool, accuracy));
 }
 
+/** Which client filter `RequestSelection` runs: the edit tools' (`FilterCollectorForFreePads` + `FilterCollectorForHierarchy`), none (`EDIT_TOOL::Properties`), or `EDIT_TOOL::Drag`'s. */
+export type ToolPickMode = "tool" | "plain" | "drag";
+
+/**
+ * `EDIT_TOOL::Drag`'s client filter after the free-pad and hierarchy filters, for a hover selection (pcbnew/tools/edit_tool.cpp at 8303b2ad): with a track or a via
+ * under the cursor the candidates are first trimmed by the heuristics ("First trim down selection to active layer, tracks vs zones, etc."), then "If we have a knee
+ * between two tracks, or a via attached to two tracks, then drop the selection to a single item": two tracks that meet at an end leave the first, two tracks and a
+ * via they both end on leave the via. ("Remove non-footprints so box-selection will drag footprints" is for a selection that is not the hover one: the caller's.)
+ * Returns what is left and what the knees took away (gone for good: `aCollector.Remove`, not `Transfer`).
+ */
+export function applyDragFilter(board: BoardState, candidates: readonly SelectionCandidate[], guess: (c: SelectionCandidate[]) => SelectionCandidate[]): { kept: SelectionCandidate[]; removed: Set<string> } {
+  const removed = new Set<string>();
+  const isTrack = (c: SelectionCandidate) => c.kind === "track";
+  if (!candidates.some((c) => c.kind === "track" || c.kind === "via")) return { kept: [...candidates], removed };
+  let kept = candidates.length > 1 ? guess([...candidates]) : [...candidates];
+  const tracks = kept.filter(isTrack);
+  const vias = kept.filter((c) => c.kind === "via");
+  const ends = (id: string): readonly (readonly [number, number])[] => {
+    const t = board.routing?.tracks.find((x) => x.id === id);
+    return t && t.pts.length > 0 ? [t.pts[0]!, t.pts[t.pts.length - 1]!] : [];
+  };
+  // `connected( track, pt )`: `track->GetStart() == pt || track->GetEnd() == pt`
+  const connected = (id: string, pt: readonly [number, number] | undefined) => !!pt && ends(id).some((e) => e[0] === pt[0] && e[1] === pt[1]);
+  if (tracks.length === 2 && vias.length === 0) {
+    const [a, b] = [tracks[0]!.id, tracks[1]!.id];
+    if (ends(b).some((pt) => connected(a, pt))) removed.add(b);
+  } else if (tracks.length === 2 && vias.length === 1) {
+    const via = board.routing?.vias.find((v) => v.id === vias[0]!.id);
+    const at = via ? ([via.x, via.y] as const) : undefined;
+    if (connected(tracks[0]!.id, at) && connected(tracks[1]!.id, at)) {
+      removed.add(tracks[0]!.id);
+      removed.add(tracks[1]!.id);
+    }
+  }
+  kept = kept.filter((c) => !removed.has(c.id));
+  return { kept, removed };
+}
+
+/**
+ * `RequestSelection( aClientFilter )` with nothing selected: `selectPoint` on the cursor with the tool's client filter, then the heuristics. `guessed` is what is
+ * left (one item: the tool takes it; several: `doSelectionMenu` asks); `all` is every candidate the client filter let through, for the menu's "Show More
+ * Choices..." (`HasAdditionalItems()` / `Combine()`: what the heuristics set aside comes back).
+ */
+export function toolCandidateSets(
+  board: BoardState,
+  xNm: number,
+  yNm: number,
+  toleranceNm: number,
+  onePixelNm: number,
+  filter: SelectionFilter,
+  layerVisible: Record<string, boolean>,
+  activeLayer: string | null,
+  highContrast: boolean,
+  selection: ReadonlySet<string>,
+  mode: ToolPickMode,
+  rejected?: FilterRejections
+): { guessed: SelectionCandidate[]; all: SelectionCandidate[] } {
+  const collected = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, false, onePixelNm, rejected);
+  const accuracy = Math.round(5 * onePixelNm);
+  const guess = (cands: SelectionCandidate[]) => guessSelectionCandidates(cands, onePixelNm, activeLayer, highContrast, (c, pool) => footprintCoverageRatio(board, c.id, pool, accuracy));
+  if (mode === "plain") return { guessed: guess(collected), all: collected };
+  let all = applyToolFilter(board, collected, xNm, yNm, layerVisible);
+  let left = all;
+  if (mode === "drag") {
+    const { kept, removed } = applyDragFilter(board, all, guess);
+    all = all.filter((c) => !removed.has(c.id));
+    left = kept;
+  }
+  return { guessed: left.length > 1 ? guess(left) : left, all };
+}
+
 export function pickSelectionCandidates(
   board: BoardState,
   xNm: number,
@@ -718,9 +874,10 @@ export function pickSelectionCandidates(
   highContrast: boolean,
   selection: ReadonlySet<string>,
   subtractiveOnly: boolean,
-  skipHeuristics: boolean
+  skipHeuristics: boolean,
+  rejected?: FilterRejections
 ): SelectionCandidate[] {
-  const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly, onePixelNm);
+  const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly, onePixelNm, rejected);
   if (skipHeuristics) return all;
   // `textMargin = aCollector.GetGuide()->Accuracy()`: `KiROUND( 5 * OnePixelInIU() )`
   const accuracy = Math.round(5 * onePixelNm);

@@ -32,7 +32,9 @@ import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
-import { itemPassesFilter, pickSelectionCandidates, pickToolCandidates } from "../components/canvas/selectionCandidates";
+import { itemPassesFilter, newFilterRejections, pickSelectionCandidates, pickToolCandidates, rowsToFlash, toolCandidateSets, type SelectionCandidate, type ToolPickMode } from "../components/canvas/selectionCandidates";
+import { flashSelectionFilter } from "../kicad-port/filterFlash";
+import { candidateLabel } from "../components/canvas/candidateLabel";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
@@ -52,7 +54,7 @@ import { planSwap } from "../kicad-port/pcbSwap";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../components/canvas/diffPairRouting";
-import { findDraggableAt, startGroupDrag, startInlineDrag } from "../components/canvas/dragging";
+import { findDraggableAt, startGroupDrag, startInlineDrag, type DraggableHit } from "../components/canvas/dragging";
 import { findGroupDragTarget } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
@@ -82,10 +84,10 @@ import { refDesPrefix } from "../kicad-port/packFootprints";
 import { openUpdateDialog } from "./updatePcbAction";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
-import { startPlaceFootprint } from "./placeFootprintTool";
+import { placingFootprint, startPlaceFootprint } from "./placeFootprintTool";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
-import { cancelAreaTool, getCommonTool } from "../state/commonTool";
+import { cancelAreaTool, getCommonTool, getLastPointer, showSelectionMenu } from "../state/commonTool";
 import { commonChecked } from "../kicad-port/commonChecked";
 import { getCommonOptions, setWindowOptions, useCommonOptions, windowOptionsOf } from "../state/commonOptions";
 import { unfilledZoneWarning, ZONE_FILL_WARNING_MS } from "../kicad-port/checkRevision";
@@ -211,6 +213,36 @@ export function useActionRunner() {
         : pickToolCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection);
       const hit = cands[0];
       return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
+    };
+    /**
+     * `RequestSelection( aClientFilter )` as the board's edit tools run it (UI-LEFT-2 PP2): the selection, or the item under the cursor -- and where the tool's
+     * client filter and the heuristics leave several, `selectPoint` asks (`if( !doSelectionMenu( &collector ) ) return false;`): the clarification menu at the
+     * pointer, its numbered rows chosen by their keys, Select All (A) and Show More Choices... (M); the tool runs on what is chosen and does nothing when the menu
+     * is dismissed. `mode` is the tool's client filter (`ToolPickMode`). Off the board, and with a selection, it is `requestSelection` at once.
+     */
+    const withRequestedSelection = (run: (ids: string[]) => void, mode: ToolPickMode = "tool"): void => {
+      const board = state.board;
+      if (state.tab !== "pcb" || !board || state.selection.size > 0 || !state.cursorNm) return run(requestSelection(mode === "plain"));
+      const toleranceNm = Math.max(150_000, 6 / state.view.scale);
+      const rejected = newFilterRejections();
+      const { guessed, all } = toolCandidateSets(board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, mode, rejected);
+      // `selectPoint`'s `HighlightSelectionFilter( rejected )` when the filter refused everything under the cursor
+      const flash = rowsToFlash(rejected);
+      if (flash.length > 0) flashSelectionFilter(flash);
+      // a pad stands for its footprint (`requestSelection`'s own mapping)
+      const asItem = (id: string, kind: string) => (kind === "pad" ? (padParent(board, id) ?? id) : id);
+      if (guessed.length <= 1) return run(guessed.map((c) => asItem(c.id, c.kind)));
+      const kinds = new Map(all.map((c) => [c.id, c.kind] as const));
+      for (const c of guessed) kinds.set(c.id, c.kind);
+      const row = (c: SelectionCandidate) => ({ id: c.id, label: candidateLabel(board, c) });
+      showSelectionMenu({
+        at: getLastPointer(),
+        items: guessed.map(row),
+        more: all.length > guessed.length ? () => all.map(row) : undefined,
+        onChoose: (ids) => {
+          if (ids) run([...new Set(ids.map((id) => asItem(id, kinds.get(id) ?? "")))]);
+        },
+      });
     };
     /** `RequestSelection( { SCH_PIN_T } )` (Swap Pins, Swap Pin Labels): the selected pins in selection order, or the pin under the cursor when nothing is selected. */
     const requestPins = (): string[] => {
@@ -355,14 +387,14 @@ export function useActionRunner() {
       "pcbnew.InteractiveEdit.rotateCcw",
       pcbOnly(() => {
         if (tryCarriedTextTurn("ccw")) return;
-        if (!tryTransformDuringMove(1, false)) void api.rotateSelection(1, requestSelection());
+        if (!tryTransformDuringMove(1, false)) withRequestedSelection((ids) => void api.rotateSelection(1, ids));
       })
     );
     m.set(
       "pcbnew.InteractiveEdit.rotateCw",
       pcbOnly(() => {
         if (tryCarriedTextTurn("cw")) return;
-        if (!tryTransformDuringMove(3, false)) void api.rotateSelection(3, requestSelection());
+        if (!tryTransformDuringMove(3, false)) withRequestedSelection((ids) => void api.rotateSelection(3, ids));
       })
     );
 
@@ -421,18 +453,19 @@ export function useActionRunner() {
       if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
       // `drawShape`'s loop: Delete with a line, rectangle or circle started takes back the chain's last line, or drops the shape (round 4 A-1, A-2)
       if (drawShapeStarted(state.tab, state.activeTool, state.drawState)) return takeBackLine();
-      const refs = requestSelection();
-      // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
-      // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
-      // user wanted)."
-      if (state.tab === "pcb" && state.board && refs.some((id) => itemKind(state.board!, id) === "pad")) {
-        const promoted = editableSelection(state.board, refs).ids;
-        if (promoted.filter((id) => itemKind(state.board!, id) === "part").length > refs.filter((id) => itemKind(state.board!, id) === "part").length) {
-          dispatch({ type: "SET_SELECTION", refs: promoted });
-          return;
+      withRequestedSelection((refs) => {
+        // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
+        // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
+        // user wanted)."
+        if (state.tab === "pcb" && state.board && refs.some((id) => itemKind(state.board!, id) === "pad")) {
+          const promoted = editableSelection(state.board, refs).ids;
+          if (promoted.filter((id) => itemKind(state.board!, id) === "part").length > refs.filter((id) => itemKind(state.board!, id) === "part").length) {
+            dispatch({ type: "SET_SELECTION", refs: promoted });
+            return;
+          }
         }
-      }
-      deleteRefs(refs);
+        deleteRefs(refs);
+      });
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack
@@ -535,7 +568,7 @@ export function useActionRunner() {
         "pcbnew.InteractiveEdit.flip",
         pcbOnly(() => {
           if (tryCarriedTextTurn("flip")) return;
-          if (!tryTransformDuringMove(0, true)) void api.flipSelection(requestSelection());
+          if (!tryTransformDuringMove(0, true)) withRequestedSelection((ids) => void api.flipSelection(ids));
         })
       );
     }
@@ -548,37 +581,55 @@ export function useActionRunner() {
       "pcbnew.InteractiveRouter.DiffPair",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "diffpair" ? "select" : "diffpair" }))
     );
-    // `D` (ROUTER_TOOL::InlineDrag): a one-shot action, not a toggle-arm
-    // like `X` above -- grab whatever's under the cursor right now (or,
-    // failing that, a single already-selected track/via -- see
-    // dragging.ts's `findDraggableAt`) and start dragging it immediately.
-    // Refuses while another click-to-place session (route/zone/shape/wire/
-    // measure) is already mid-flight (`state.drawState`), same as real
-    // pcbnew's tool stack never overlapping two interactive placements.
+    // `D` (EDIT_TOOL::Drag -> ROUTER_TOOL::InlineDrag): a one-shot action, not a toggle-arm like `X` above. Refuses while another click-to-place session
+    // (route/zone/shape/wire/measure) is already mid-flight (`state.drawState`), same as real pcbnew's tool stack never overlapping two interactive placements.
+    //   * From the selection tool, `EDIT_TOOL::Drag`: `RequestSelection` with its client filter (the selection, or the item under the cursor, several asking
+    //     first: the clarification menu, UI-LEFT-2 PP2), then `invokeInlineRouter` -> `CanInlineDrag` -> `InlineDrag`, which drags that selection: the footprints
+    //     (`COMPONENT_DRAGGER`), the tracks (`MULTI_DRAGGER`), or the one track or via, by its id -- never an item found again at the point (UI-LEFT-2 RR2).
+    //   * With the router tool armed, `ROUTER_TOOL::performDragging` drags its start item, the one under the cursor (`updateStartItem`): `findDraggableAt`.
     const startDragAtCursor = (freeAngle: boolean) => () => {
-      if (!state.board || !state.cursorNm || state.drawState) return;
-      // `EDIT_TOOL::Drag` -> `CanInlineDrag` -> `InlineDrag`: a selection of footprints (or the footprint under the cursor) is `COMPONENT_DRAGGER`, one of
-      // several tracks `MULTI_DRAGGER` (kicad-port/dragTool.ts `findGroupDragTarget`)
-      const hovered = state.selection.size === 0 ? (requestSelection()[0] ?? null) : null;
-      const group = findGroupDragTarget(state.board, [...state.selection], hovered, freeAngle);
-      if (group.target) {
-        void startGroupDrag(state.cursorNm.x, state.cursorNm.y, group.target, state.board, state.routerSettings, state.activeLayer ?? state.board.layers[0] ?? "F.Cu", dispatch);
-        return;
-      }
-      if (group.lockedOut) {
-        dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
-        return;
-      }
-      const toleranceNm = Math.max(150_000, 6 / state.view.scale);
-      const onePixelNm = 1 / state.view.scale;
-      const hit = findDraggableAt(state.board, state.selection, state.cursorNm.x, state.cursorNm.y, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
-      if (!hit) {
-        dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
-        return;
-      }
-      // the router tool's own drag asks "Drag Anyway" of a locked item; the selection tool's (`EDIT_TOOL::Drag`) only warns
+      const board = state.board;
+      const cursor = state.cursorNm;
+      if (!board || !cursor || state.drawState) return;
       const fromRouterTool = state.activeTool === "route" || state.activeTool === "diffpair";
-      void startInlineDrag(state.cursorNm.x, state.cursorNm.y, hit, state.board, state.routerSettings, dispatch, freeAngle, fromRouterTool);
+      if (fromRouterTool) {
+        const toleranceNm = Math.max(150_000, 6 / state.view.scale);
+        const hit = findDraggableAt(board, new Set(), cursor.x, cursor.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        if (!hit) {
+          dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
+          return;
+        }
+        // the router tool's own drag asks "Drag Anyway" of a locked item
+        void startInlineDrag(cursor.x, cursor.y, hit, board, state.routerSettings, dispatch, freeAngle, true);
+        return;
+      }
+      const hover = state.selection.size === 0;
+      withRequestedSelection((ids) => {
+        if (ids.length === 0) {
+          dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
+          return;
+        }
+        // `CanInlineDrag`: a selection of footprints (or the footprint under the cursor) is `COMPONENT_DRAGGER`, one of several tracks `MULTI_DRAGGER`
+        // (kicad-port/dragTool.ts `findGroupDragTarget`)
+        const lone = hover && ids.length === 1 ? ids[0]! : null;
+        const group = findGroupDragTarget(board, lone ? [] : ids, lone, freeAngle);
+        if (group.target) {
+          void startGroupDrag(cursor.x, cursor.y, group.target, board, state.routerSettings, state.activeLayer ?? board.layers[0] ?? "F.Cu", dispatch);
+          return;
+        }
+        if (group.lockedOut) {
+          dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+          return;
+        }
+        // `selection.Size() == 1 && selection.Front()->IsType( GENERAL_COLLECTOR::DraggableItems )`: the one track, arc track or via, dragged by its id
+        const id = ids.length === 1 ? ids[0]! : null;
+        const track = id ? board.routing?.tracks.find((t) => t.id === id) : undefined;
+        const via = id && !track ? board.routing?.vias.find((v) => v.id === id) : undefined;
+        if (!track && !via) return;
+        const hit: DraggableHit = track ? { kind: "track", id: track.id, layer: track.layer, selected: true } : { kind: "via", id: via!.id, layer: state.activeLayer ?? board.layers[0] ?? "F.Cu", selected: true };
+        // the selection tool's drag (`EDIT_TOOL::Drag`) only warns of a locked item
+        void startInlineDrag(cursor.x, cursor.y, hit, board, state.routerSettings, dispatch, freeAngle, false);
+      }, "drag");
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
     // `routerInlineDrag` (EDIT_TOOL::invokeInlineRouter -> `RunAction( PCB_ACTIONS::routerInlineDrag, DM_ANY )`): the router's own drag entry point, the one `D` above ends in.
@@ -792,7 +843,7 @@ export function useActionRunner() {
       pcbOnly(() => {
         if (!state.board || !state.cursorNm) return;
         // `GENERAL_COLLECTOR` with the guide's five-pixel accuracy, the active layer preferred (components/canvas/netAtCursor.ts, r7 C7-11)
-        const net = findNetAtCursor(state.board, state.cursorNm.x, state.cursorNm.y, collectorAccuracyNm(state.view.scale), { activeLayer: state.activeLayer, layerVisible: state.layerVisible, highContrast: state.highContrast, fills: state.zoneFill?.zones });
+        const net = findNetAtCursor(state.board, state.cursorNm.x, state.cursorNm.y, collectorAccuracyNm(state.view.scale), { activeLayer: state.activeLayer, layerVisible: state.layerVisible, highContrast: state.highContrast, fills: state.zoneFill?.zones, filter: state.selectionFilter });
         dispatch({ type: "SET_NET_HIGHLIGHT", net: net && net === state.netHighlight ? null : net });
       })
     );
@@ -935,16 +986,20 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveMove.move",
       pcbOnly(() => {
-        if (!state.board) return;
-        // `EDIT_TOOL::Move`: whatever `RequestSelection` hands it -- any kind of item, locked ones filtered out (`FilterCollectorForLockedItems`).
-        const { ids, lockedOut } = editableSelection(state.board, requestSelection());
-        if (ids.length === 0) {
-          if (lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
-          return;
-        }
-        adoptHovered();
-        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorNm });
+        const board = state.board;
+        if (!board) return;
+        // `EDIT_TOOL::Move`: whatever `RequestSelection` hands it -- any kind of item, locked ones filtered out (`FilterCollectorForLockedItems`); several under
+        // the cursor ask first (the clarification menu), and the one chosen is the hover selection that is moved.
+        withRequestedSelection((picked) => {
+          const { ids, lockedOut } = editableSelection(board, picked);
+          if (ids.length === 0) {
+            if (lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+            return;
+          }
+          if (state.selection.size === 0 && picked.length > 0) dispatch({ type: "SET_SELECTION", refs: picked });
+          dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+          dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorNm });
+        });
       })
     );
     // pcb_selection_tool.cpp's IsCancel() handler (see state/store.tsx's
@@ -989,6 +1044,9 @@ export function useActionRunner() {
         // two can never disagree.
         // `performRouting`: `evt->IsAction( &PCB_ACTIONS::properties )` runs `ACT_CustomTrackWidth` (R7-R5)
         if (routerKey("properties")) return;
+        // `PlaceFootprint`'s loop: `fp && evt->IsAction( &PCB_ACTIONS::properties )` only sets `reselect`, and the event is passed to no other tool (no
+        // `SetPassEvent`: `TOOL_MANAGER::dispatchInternal` stops there) -- E does nothing while a footprint is carried (UI-LEFT-2 PP4)
+        if (placingFootprint()) return;
         // `DrawZone`: `started && evt->IsAction( &PCB_ACTIONS::properties )` -> `OnEditItemRequest( zoneTool.GetZone() )`: the settings of the zone being drawn
         // (kicad-port/pcbDrawZone.ts); a cutout or a similar zone has none of its own here.
         const zoneDraw = state.drawState;
@@ -1002,8 +1060,10 @@ export function useActionRunner() {
           return;
         }
         // `EDIT_TOOL::Properties`: `RequestSelection` with an empty client filter -- over a footprint's text, the text's properties
-        const ref = requestSelection(true)[0];
-        if (ref) openPropertiesFor(ref, api, dispatch);
+        withRequestedSelection((ids) => {
+          const ref = ids[0];
+          if (ref) openPropertiesFor(ref, api, dispatch);
+        }, "plain");
       })
     );
     m.set("pcbnew.DRCTool.runDRC", () => dispatch({ type: "SET_DRC_OPEN", open: true }));
@@ -1874,12 +1934,14 @@ export function useActionRunner() {
       // then the one `DeleteItems` -- one `commit.Push( _( "Delete" ) )`, locked items skipped, groups, tables, fields and tuning patterns as Delete takes them (`deleteRefs`).
       m.set(
         "pcbnew.InteractiveEdit.deleteFull",
-        pcbOnly(() => {
-          let ids = requestSelection();
-          if (ids.length === 0) return;
-          if (ids.some((id) => api.trackById(id) || api.viaById(id))) ids = computeConnectionRefs(new Set(ids)) ?? ids;
-          deleteRefs(ids);
-        })
+        pcbOnly(() =>
+          withRequestedSelection((picked) => {
+            let ids = picked;
+            if (ids.length === 0) return;
+            if (ids.some((id) => api.trackById(id) || api.viaById(id))) ids = computeConnectionRefs(new Set(ids)) ?? ids;
+            deleteRefs(ids);
+          })
+        )
       );
 
       // ---- FindMove (T) -- edit_tool.cpp EDIT_TOOL::GetAndPlace: DIALOG_GET_FOOTPRINT_BY_NAME, then select it and start Move (components/PcbParityDialogs.tsx).
