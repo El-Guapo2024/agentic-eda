@@ -132,8 +132,8 @@ export interface GuessCandidate {
   kind?: string;
 }
 
-/** `GuessSelectionCandidates`' `singleLayerSilkTypes`: `PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_TABLE_T, PCB_TABLECELL_T, PCB_SHAPE_T, PCB_BARCODE_T`. */
-const SINGLE_LAYER_SILK_KINDS = new Set(["field", "text", "textbox", "table", "tablecell", "shape", "barcode"]);
+/** `GuessSelectionCandidates`' `singleLayerSilkTypes`: `PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_TABLE_T, PCB_TABLECELL_T, PCB_SHAPE_T, PCB_BARCODE_T` (a footprint's own text, `fptext`, is a `PCB_TEXT_T`). */
+const SINGLE_LAYER_SILK_KINDS = new Set(["field", "text", "fptext", "textbox", "table", "tablecell", "shape", "barcode"]);
 const isSilk = (l: string | null | undefined): boolean => l === "F.SilkS" || l === "B.SilkS";
 
 /** pcb_selection_tool.cpp: "Prefer exact hits to sloppy ones" -- MAX_SLOP's role is in the caller's own hitTestDistance clamp; this constant is the *second* threshold, `singlePixel`, source adds on top of the best candidate's own slop. */

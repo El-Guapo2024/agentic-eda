@@ -32,7 +32,7 @@ import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
-import { itemPassesFilter, pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { itemPassesFilter, pickSelectionCandidates, pickToolCandidates } from "../components/canvas/selectionCandidates";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
@@ -202,9 +202,10 @@ export function useActionRunner() {
       }
       if (state.tab !== "pcb" || !state.board) return [];
       const toleranceNm = Math.max(150_000, 6 / state.view.scale);
-      const cands = pickSelectionCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+      // The edit tools' client filter (`FilterCollectorForFreePads`, `FilterCollectorForHierarchy( aCollector, true )`) before the heuristics: a pad under the
+      // cursor stands for its footprint, and a footprint's field or text goes for the footprint it lies on -- the edit tools work on that.
+      const cands = pickToolCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection);
       const hit = cands[0];
-      // `FilterCollectorForFreePads`: a pad under the cursor stands for its footprint -- the edit tools work on that.
       return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
     };
     /** `RequestSelection( { SCH_PIN_T } )` (Swap Pins, Swap Pin Labels): the selected pins in selection order, or the pin under the cursor when nothing is selected. */
