@@ -754,8 +754,8 @@ impl Router {
         for run in &runs {
             node.add_line(run, None, false);
         }
-        for (v, _) in &placer.fixed_vias {
-            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(Nm::new(1)), drill: v.drill.max(Nm::new(1)), ..v.clone() }));
+        for v in placer.placed_vias() {
+            node.add(Item::Via(crate::item::Via { diameter: v.diameter.max(Nm::new(1)), drill: v.drill.max(Nm::new(1)), ..v }));
         }
         let current_end = head.last().unwrap_or_else(|| placer.fixed_start());
         let (from, layers) = if head.segment_count() > 0 {
@@ -1162,7 +1162,8 @@ impl Router {
         // two runs, at the very start of the route (a via before any segment), or at its end (a route finished on a via). A via is where the
         // walk or the shove left it, which is where the run before it ends and the run after it starts.
         if let Some(s) = self.session() {
-            for (k, (v, _)) in s.placer.fixed_vias.iter().enumerate() {
+            // where a later leg's shove left it (`FixRoute` adds it to `m_lastNode` as an ordinary via)
+            for (k, v) in s.placer.placed_vias().iter().enumerate() {
                 let kind = s.placed_vias.get(k).map_or(ViaKind::Through, |p| p.kind);
                 commit.vias.push(eda_model::ir::Via {
                     id: String::new(),

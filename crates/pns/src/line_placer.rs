@@ -400,6 +400,12 @@ impl LinePlacer {
         };
         match settings.mode {
             Mode::MarkObstacles => {
+                // `rhMarkObstacles`: "If the head is in colliding state, snap to the hull of the first obstacle. This way, one can route tracks as
+                // tightly as possible without enabling the shove/walk mode that certain users find too intrusive."
+                let raw = match self.mark_obstacles_snap(world_node, rules, settings, &raw, p) {
+                    Some(nearest) => build_raw(nearest),
+                    None => raw,
+                };
                 let colliding = raw.pts.windows(2).any(|w| {
                     let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
                     world_node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
@@ -418,6 +424,28 @@ impl LinePlacer {
                 })
             }
         }
+    }
+
+    /// `LINE_PLACER::rhMarkObstacles`' hull snap: the obstacle the head `raw` meets first (`m_currentNode->NearestObstacle( &m_head )`, the
+    /// pending via counted, `simplifyHull` in a 90-degree corner mode), the hull it is walked round at the head's width (`GetClearance( obs->m_item,
+    /// &m_head, false )`, `HullCache( obs->m_item, clearance, m_head.Width(), m_head.Layer() )`) and the point of it nearest the cursor `p` --
+    /// `hull.NearestPoint( aP )`, or in `MITERED_90` / `ROUNDED_90` `hull.BBox().NearestPoint( aP )`. When that point is within half the head's width
+    /// of the cursor (`( nearest - aP ).EuclideanNorm() < m_head.Width() / 2`), the head is built to it instead (`buildInitialLine( nearest, .. )`):
+    /// the caller does that. `None`: no obstacle, or the cursor is not that close to its hull. **Differs:** for a pad or via whose hole reaches
+    /// further than its copper the hull is the hole's ([`Node::obstacle_hull`]), where KiCad's nearest obstacle may be the `HOLE` item itself.
+    fn mark_obstacles_snap(&self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, raw: &Line, p: Point) -> Option<Point> {
+        // `buildInitialLine( aP, m_head, RM_MarkObstacles )`: a pending via is appended at the cursor
+        let via = self.placing_via.then(|| self.make_via(p));
+        let opts = crate::node::QueryOpts { box_hull: settings.corner_mode.is_90(), ..Default::default() };
+        let hit = world.nearest_obstacle(raw, via.as_ref(), rules, &self.exclude(), opts)?;
+        let item = world.get(hit.id)?;
+        let head = crate::rule_resolver::Side::Track { net: &self.net, layer: self.current_layer, seg: raw.segs().next() };
+        let hull = world.obstacle_hull(rules, item, head, Nm::ZERO, self.width, self.current_layer, false);
+        if hull.is_empty() {
+            return None;
+        }
+        let nearest = if settings.corner_mode.is_90() { bbox_nearest_point(&hull, p) } else { chain_nearest_point(&hull, p) };
+        (crate::kigeom::norm_i(nearest.x - p.x, nearest.y - p.y) < self.width / 2).then_some(nearest)
     }
 
     /// `m_mouseTrailTracer.GetPosture( aP )` (`buildInitialLine`): the direction the head's elbow is built from. With "Use mouse path to set track
@@ -595,7 +623,7 @@ impl LinePlacer {
     /// frame the head was resolved in: every shove since the route began that is still in it, the earlier legs' included).
     fn take_displacement(&mut self, world: &World) {
         self.displaced_tracks = world.moved_tracks();
-        self.displaced_vias = world.vias.clone();
+        self.displaced_vias = world.moved_vias();
     }
 
     /// The fixed runs as the world of the last `Move` has them (a later leg's shove may have pushed the route's own tail, as KiCad's does:
@@ -603,6 +631,13 @@ impl LinePlacer {
     /// points each leg started from, locked joints for every shove -- are where they were.
     pub fn placed_runs(&self) -> Vec<Line> {
         self.last_world.borrow().placed_runs(&self.runs)
+    }
+
+    /// The vias the clicks placed ([`Self::fixed_vias`], in order) as the world of the last `Move` has them: a later leg's shove may have pushed one
+    /// (`FixRoute` adds it to `m_lastNode` as an ordinary via; [`World::placed_vias`]). What the commit writes.
+    pub fn placed_vias(&self) -> Vec<crate::item::Via> {
+        let vias: Vec<crate::item::Via> = self.fixed_vias.iter().map(|(v, _)| v.clone()).collect();
+        self.last_world.borrow().placed_vias(&vias)
     }
 
     /// `FixRoute`: `m_shove->AddLockedSpringbackNode( m_lastNode )` -- the world of the last `Move` with the head just fixed in it (and the
@@ -895,8 +930,8 @@ impl LinePlacer {
         for run in runs.iter().filter(|r| r.point_count() >= 2) {
             ours.extend(w.add_line(run, None, false));
         }
-        for (v, _) in &self.fixed_vias {
-            w.add(Item::Via(v.clone()));
+        for v in self.placed_vias() {
+            w.add(Item::Via(v));
         }
         let mut erase: std::collections::BTreeSet<ItemId> = std::collections::BTreeSet::new();
         for &seg in &ours {
@@ -950,6 +985,30 @@ impl LinePlacer {
     pub fn displaced_vias(&self) -> impl Iterator<Item = (&str, Point)> {
         self.displaced_vias.iter().map(|(k, &v)| (k.as_str(), v))
     }
+}
+
+/// `SHAPE_LINE_CHAIN::NearestPoint( aP )` of a closed chain (a hull): the segment nearest `p` by `SEG::Distance` (the first of equals, the closing
+/// segment counted), then `SEG::NearestPoint( aP )` on it.
+fn chain_nearest_point(chain: &[Point], p: Point) -> Point {
+    let n = chain.len();
+    let seg = |i: usize| crate::kigeom::Seg::new(chain[i], chain[(i + 1) % n]);
+    let mut nearest = 0;
+    let mut min_d = Nm::MAX;
+    for i in 0..n {
+        let d = seg(i).distance(p);
+        if d < min_d {
+            min_d = d;
+            nearest = i;
+        }
+    }
+    seg(nearest).nearest_point(p)
+}
+
+/// `hull.BBox().NearestPoint( aP )`: `p` clamped into the box of the chain's points (`BOX2::NearestPoint`; a point inside the box is itself).
+fn bbox_nearest_point(chain: &[Point], p: Point) -> Point {
+    let (x0, x1) = (chain.iter().map(|q| q.x).min().unwrap_or(p.x), chain.iter().map(|q| q.x).max().unwrap_or(p.x));
+    let (y0, y1) = (chain.iter().map(|q| q.y).min().unwrap_or(p.y), chain.iter().map(|q| q.y).max().unwrap_or(p.y));
+    Point { x: p.x.clamp(x0, x1), y: p.y.clamp(y0, y1) }
 }
 
 #[cfg(test)]
@@ -1415,6 +1474,71 @@ mod tests {
         assert!(placer.placed_runs()[0].pts.iter().any(|q| q.y > Nm::ZERO), "and the commit writes it pushed");
         let board = committed_world(&node, &placer);
         assert!(violations(&board, &rules).is_empty(), "the commit is clean: {:?}", violations(&board, &rules));
+    }
+
+    /// `FixRoute` adds the via a click ends in to the world as an ordinary via (`m_lastNode->Add( Clone( pl.Via() ) )`, not locked). A later leg's
+    /// shove that pushes another net's track into it meets it at a locked joint -- the legs on either side of it start and end there (`LockJoint`)
+    /// -- and `pushOrShoveVia` gives up (`if( jt->IsLocked() ) return SH_INCOMPLETE`): the shove fails and the head falls back to the walk
+    /// (`rhShoveOnly` -> `rhWalkOnly`), GND is not wrapped round the via. (With the via locked, as it was here, the shove walked GND round it:
+    /// `SH_TRY_WALK`.) Four legs: east on F.Cu to a via, then on B.Cu east, south, and back west under GND, pushing it north onto the via.
+    #[test]
+    fn a_later_legs_shove_stops_at_an_earlier_clicks_via() {
+        use crate::item::Segment;
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: at(2.0, 0.8), b: at(7.0, 0.8), width: mm(0.2), source_track: Some(("G".into(), 0)), locked: false }));
+        let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+        placer.preview(&node, &rules, &settings, at(0.5, 0.0));
+        placer.preview(&node, &rules, &settings, at(5.0, 0.0));
+        placer.toggle_via(true, mm(0.6), mm(0.3));
+        placer.switch_layer(&node, &rules, &settings, at(5.0, 0.0), 1, mm(0.6), mm(0.3));
+        for (moves, fix) in [(vec![at(6.0, 0.0)], at(8.0, 0.0)), (vec![at(8.0, 0.5)], at(8.0, 0.95))] {
+            for m in moves {
+                placer.preview(&node, &rules, &settings, m);
+            }
+            assert_eq!(placer.fix(&node, &rules, &settings, fix), FixOutcome::Fixed { real_end: false });
+        }
+        let frame = placer.springback.borrow().locked_top().apply(&node);
+        let via = frame.iter().find_map(|(_, it)| match it {
+            Item::Via(v) => Some(v.clone()),
+            _ => None,
+        });
+        let via = via.expect("the click's via is in the world");
+        assert!(!via.locked && via.source_via.as_deref() == Some(crate::springback::fixed_via_tag(0).as_str()), "an ordinary via of the world: {via:?}");
+        let near_via = |pv: &Preview| pv.displaced_lines.iter().flat_map(|d| d.line.segs()).any(|(a, b)| crate::kigeom::Seg::new(a, b).distance(at(5.0, 0.0)) < mm(0.7));
+        let mut last = None;
+        for x in [7.5, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0] {
+            last = Some(placer.preview(&node, &rules, &settings, at(x, 0.95)));
+        }
+        let pv = last.unwrap();
+        assert!(!near_via(&pv), "GND is not shoved onto the via, nor walked round it: {:?}", pv.displaced_lines);
+        assert_eq!(placer.placed_vias().len(), 1);
+        assert_eq!(placer.placed_vias()[0].pos, at(5.0, 0.0), "the via stays where it was placed");
+    }
+
+    /// `rhMarkObstacles`' hull snap: in Highlight collisions a cursor within half the head's width of the hull of the first obstacle the head meets
+    /// (`HullCache( obs, clearance, m_head.Width() )`) ends the head on the hull (`buildInitialLine( nearest, .. )`), so it routes tightly and does not
+    /// collide; one further inside is left where it is, colliding.
+    #[test]
+    fn highlight_collisions_snaps_the_head_onto_the_hull_of_the_first_obstacle() {
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(5.0, 0.0), shape: Shape::Rect { x0: mm(4.5), y0: mm(-0.5), x1: mm(5.5), y1: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        let settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
+        let placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+        // the hull: the pad grown by the clearance and half the width, its left side at 4.5 - 0.2 - 0.1 = 4.2 mm
+        let pv = placer.preview(&node, &rules, &settings, at(4.25, 0.0));
+        assert_eq!(pv.head.last(), Some(at(4.2, 0.0)), "{:?}", pv.head.pts);
+        assert!(!pv.colliding);
+        // outside the hull the head collides with nothing, so there is no obstacle to snap to ("If the head is in colliding state")
+        assert_eq!(placer.preview(&node, &rules, &settings, at(4.15, 0.0)).head.last(), Some(at(4.15, 0.0)));
+        // 150 um inside: no snap, the head collides
+        let pv = placer.preview(&node, &rules, &settings, at(4.35, 0.0));
+        assert_eq!(pv.head.last(), Some(at(4.35, 0.0)));
+        assert!(pv.colliding);
     }
 
     /// `CORNER_MODE` (`buildInitialLine`: `BuildInitialTrace( m_p_start, aP, false, cornerMode )`): arc 45 makes the diagonal leg a 45-degree arc
