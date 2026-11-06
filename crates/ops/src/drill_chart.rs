@@ -361,6 +361,8 @@ pub struct DrillGroup {
     /// Distinct positions, nm.
     pub sites: BTreeSet<(Nm, Nm)>,
     pub symbol: DrillSymbolAssignment,
+    /// `m_Members`: the source of each operation (a via's id, a pad's `REF.PAD`), in the order they were met -- what Drill Groups' Flash on Canvas brightens.
+    pub members: Vec<String>,
 }
 
 /// `matchesFilter`.
@@ -394,9 +396,10 @@ pub fn groups_in(design: &Design, model: &ConstraintModel, stackup: Option<&Stac
                 }
                 let key = group_key(profile, &op);
                 let site = (op.at.x, op.at.y);
-                let g = by_key.entry(key.clone()).or_insert_with(|| DrillGroup { key, first: op.clone(), operations: 0, sites: BTreeSet::new(), symbol: Default::default() });
+                let g = by_key.entry(key.clone()).or_insert_with(|| DrillGroup { key, first: op.clone(), operations: 0, sites: BTreeSet::new(), symbol: Default::default(), members: Vec::new() });
                 g.operations += 1;
                 g.sites.insert(site);
+                g.members.push(op.source.clone());
             }
         }
     }
@@ -959,7 +962,178 @@ impl super::Board<'_> {
         self.refresh_drill_charts();
         Ok(())
     }
+
+    /// `DIALOG_GENERATED_TABLE_PROPERTIES::TransferDataFromWindow` on a drill chart, with `PANEL_DRILL_CHART_OPTIONS::TransferFromWindow` (KiCad 25ec2335), "Edit Drill
+    /// Chart": the shown columns (none: "A table needs at least one column."; `GENERATED_TABLE_SCHEMA::Validate` drops a repeated one and keeps each width within a metre, and a
+    /// set wider than ten metres in total is refused: "The columns are too wide in total."), the filter, the totals row and the board's grouping keys (`DRILL_PROFILE_PENDING`:
+    /// a new grouping is board-wide, so `BumpDrillModelGeneration` makes every chart stale), the layer (a documentation layer: `SetNotAllowedLayerSet( ~DocumentationLayers() )`),
+    /// the units and decimal places, the four strokes and their widths (`aStroked ? std::max( 0, width ) : -1`), then `RebuildCells` of this chart and the refresh of the others.
+    /// The lock is the dialog's other `set_locked` of the same step.
+    pub(crate) fn edit_drill_chart(&mut self, table_id: &str, e: &DrillChartEdit) -> Result<(), Vec<eda_model::CheckResult>> {
+        let fail = |msg: &str| vec![eda_model::CheckResult::fail("ops_bad_drill_chart", table_id, msg.to_string())];
+        if e.columns.is_empty() {
+            return Err(fail("A table needs at least one column."));
+        }
+        // `GENERATED_TABLE_SCHEMA::Validate`: a column whose id was kept already adds nothing; widths clamped to `GENERATED_TABLE_MAX_COLUMN_WIDTH`, their total to
+        // `GENERATED_TABLE_MAX_TOTAL_WIDTH`.
+        let mut seen = BTreeSet::new();
+        let mut columns: Vec<_> = e.columns.iter().filter(|c| seen.insert(c.id.token())).cloned().collect();
+        let mut total: i64 = 0;
+        for c in columns.iter_mut() {
+            c.width_nm = c.width_nm.clamp(Nm::ZERO, GENERATED_TABLE_MAX_COLUMN_WIDTH);
+            total += c.width_nm.get();
+        }
+        if total > GENERATED_TABLE_MAX_TOTAL_WIDTH {
+            return Err(fail("The columns are too wide in total."));
+        }
+        if !eda_model::drill_chart::is_documentation_layer(&e.layer) {
+            return Err(fail("A drill chart goes on a documentation layer."));
+        }
+        self.layer_is_on(&e.layer, table_id)?;
+        let mut profile = profile_of(&self.design);
+        let was_grouped_by = profile.group_by.clone();
+        for k in DrillGroupKey::ALL {
+            profile.set_grouped_by(k, e.group_by.contains(&k));
+        }
+        let regrouped = profile.group_by != was_grouped_by;
+        let dr = self.drawings_mut();
+        let t = dr.tables.iter_mut().find(|t| t.id == table_id).ok_or_else(|| vec![eda_model::CheckResult::fail("ops_unknown_drill_chart", table_id, "no drill chart with this id".to_string())])?;
+        if !dr.board_items.drill_charts.iter().any(|c| c.table_id == table_id) {
+            return Err(vec![eda_model::CheckResult::fail("ops_unknown_drill_chart", table_id, "no drill chart with this id".to_string())]);
+        }
+        t.layer = e.layer.clone();
+        let stroke_width = |stroked: bool, w: Nm| if stroked { w.max(Nm::ZERO) } else { Nm::new(-1) };
+        t.border.external = e.external_border;
+        t.border.header = e.header_separator;
+        t.border.stroke.width_nm = stroke_width(e.external_border || e.header_separator, e.border_width_nm);
+        t.separators.rows = e.row_separators;
+        t.separators.cols = e.column_separators;
+        t.separators.stroke.width_nm = stroke_width(e.row_separators || e.column_separators, e.separators_width_nm);
+        for chart in dr.board_items.drill_charts.iter_mut() {
+            if chart.table_id == table_id {
+                chart.units = e.units;
+                chart.precision = e.precision.clamp(0, 6);
+                chart.columns = columns.clone();
+                chart.filter = e.filter;
+                chart.show_totals = e.show_totals;
+                // "Committed, or the table reads fresh while board state it was built against is still pending": this chart is rebuilt whatever its generation.
+                chart.built_generation = None;
+            } else if regrouped {
+                // "Grouping is board-wide, so every other chart and map has to be rebuilt against it."
+                chart.built_generation = None;
+            }
+        }
+        dr.board_items.drill_profile = (profile != DrillSymbolProfile::default()).then_some(profile);
+        self.refresh_drill_charts();
+        Ok(())
+    }
+
+    /// The board's drill symbol profile edited: `DIALOG_DRILL_GROUPS::commitDetail` (one group's mark: `SetAssignment`), `onFreezeChanged` (`SetFreezeAssignments`), and Board
+    /// Setup's Drill Chart page (`PANEL_SETUP_DRILL_CHART::TransferDataFromWindow`: the grouping keys, the default marks, the symbol size and line width, the freeze) -- each
+    /// followed by `BumpDrillModelGeneration`, so every chart is rebuilt against the new profile. What `e` leaves out stays. An edit that changes nothing is refused, so no empty
+    /// undo step is pushed (`commitDetail`'s `same`).
+    ///
+    /// Differs from KiCad: the profile is in the board's design settings, which KiCad does not put on the undo stack ("the least this can do is mark the board dirty"); here it
+    /// is one undoable step, as every edit of the studio is.
+    pub(crate) fn set_drill_profile(&mut self, e: &DrillProfileEdit) -> Result<(), Vec<eda_model::CheckResult>> {
+        let before = profile_of(&self.design);
+        let mut profile = before.clone();
+        if let Some(g) = &e.assignment {
+            if g.key.is_empty() {
+                return Err(vec![eda_model::CheckResult::fail("ops_bad_drill_profile", "assignment", "a drill group is named by its key".to_string())]);
+            }
+            // `m_shapeCtrl`: a spin of 0 to 63.
+            let a = DrillSymbolAssignment { shape_index: g.mark.shape_index.clamp(0, 63), ..g.mark.clone() };
+            profile.assignments.insert(g.key.clone(), a);
+        }
+        if let Some(freeze) = e.freeze_assignments {
+            profile.freeze_assignments = freeze;
+        }
+        if let Some(keys) = &e.group_by {
+            for k in DrillGroupKey::ALL {
+                profile.set_grouped_by(k, keys.contains(&k));
+            }
+        }
+        if let Some(policy) = e.mark_policy {
+            profile.mark_policy = policy;
+        }
+        if let Some(size) = e.size_nm {
+            profile.size_nm = size;
+        }
+        if let Some(width) = e.width_nm {
+            profile.width_nm = width;
+        }
+        if profile == before {
+            return Err(vec![eda_model::CheckResult::fail("ops_nothing_to_do", "drill_profile", "the drill symbol profile is already so".to_string())]);
+        }
+        let dr = self.drawings_mut();
+        for chart in dr.board_items.drill_charts.iter_mut() {
+            chart.built_generation = None;
+        }
+        dr.board_items.drill_profile = (profile != DrillSymbolProfile::default()).then_some(profile);
+        self.refresh_drill_charts();
+        Ok(())
+    }
 }
+
+/// `GENERATED_TABLE_MAX_COLUMN_WIDTH` (pcbnew/board_tables/generated_table_schema.h): "No real table column is a metre across."
+pub const GENERATED_TABLE_MAX_COLUMN_WIDTH: Nm = Nm::new(1_000_000_000);
+/// `GENERATED_TABLE_MAX_TOTAL_WIDTH`: ten metres, the columns' widths summed.
+pub const GENERATED_TABLE_MAX_TOTAL_WIDTH: i64 = 10_000_000_000;
+
+/// What Drill Chart Properties sets on OK (see [`super::Board::edit_drill_chart`]): the General page's layer, units and decimal places, the Columns page's shown columns in their
+/// order (heading, alignment, minimum width) with the drill chart's options (the filter, the totals row, the board's grouping keys), and the Appearance page's strokes. Widths in
+/// nanometres.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrillChartEdit {
+    pub layer: String,
+    pub units: TableUnits,
+    pub precision: i32,
+    pub columns: Vec<eda_model::drill_chart::DrillChartColumn>,
+    pub filter: DrillChartFilter,
+    pub show_totals: bool,
+    pub group_by: Vec<DrillGroupKey>,
+    /// "External border", "Header separator", "Row separators", "Column separators".
+    pub external_border: bool,
+    pub header_separator: bool,
+    pub row_separators: bool,
+    pub column_separators: bool,
+    /// "Border width:" and "Separator width:" as typed; used only when their lines are drawn.
+    pub border_width_nm: Nm,
+    pub separators_width_nm: Nm,
+}
+
+/// `DRILL_SYMBOL_PROFILE::SetAssignment( key, assignment )`'s two arguments.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrillGroupMark {
+    pub key: String,
+    pub mark: DrillSymbolAssignment,
+}
+
+/// An edit of the board's drill symbol profile (see [`super::Board::set_drill_profile`]); what is `None` stays.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrillProfileEdit {
+    /// One group's mark: its key (`GroupKeyString`) and the mark the Drill Groups dialog's Mark, Shape, Letter and Description say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<DrillGroupMark>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freeze_assignments: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by: Option<Vec<DrillGroupKey>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_policy: Option<DrillMarkPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_nm: Option<Nm>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_nm: Option<Nm>,
+}
+
+#[cfg(test)]
+#[path = "drill_dialogs_tests.rs"]
+mod dialogs_tests;
 
 #[cfg(test)]
 mod tests {
@@ -982,7 +1156,7 @@ mod tests {
         assert_eq!(group_key(&p, &op(mm(0.3))), "v1|d300000|s-|p1|L0-31|k0|m0:0:0:0/0:0:0:0");
         let mut profile = DrillSymbolProfile::default();
         profile.assignments.insert(group_key(&p, &op(mm(0.4))), DrillSymbolAssignment { mode: DrillMarkMode::Shape, shape_index: 0, ..Default::default() });
-        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(mm(0.3) + i * mm(0.1))), first: op(mm(0.3) + i * mm(0.1)), operations: 1, sites: BTreeSet::new(), symbol: Default::default() }).collect();
+        let mut gs: Vec<DrillGroup> = (0..14).map(|i| DrillGroup { key: group_key(&p, &op(mm(0.3) + i * mm(0.1))), first: op(mm(0.3) + i * mm(0.1)), operations: 1, sites: BTreeSet::new(), symbol: Default::default(), members: Vec::new() }).collect();
         assign(&mut gs, &mut profile);
         assert_eq!((gs[0].symbol.mode, gs[0].symbol.shape_index), (DrillMarkMode::Shape, 1), "shape 0 is the frozen 0.4 mm group's");
         assert_eq!(gs[1].symbol.shape_index, 0);
