@@ -51,6 +51,10 @@ export interface PickerSession {
   hover?: (at: PickPoint) => string | null;
   /** `SetCursor`: the pointer over the canvas while the session runs; the delete tool asks for `REMOVE`. */
   cursor?: "default" | "remove";
+  /** `SetCursor` with a picture of the session's own (a CSS cursor): the pointer it starts with (SimProbe's `VOLTAGE_PROBE`). */
+  cursorCss?: string;
+  /** `SetCursor` from the motion handler: the CSS cursor for the point under the pointer (SimProbe's `CURRENT_PROBE` over a pin). */
+  cursorAt?: (at: PickPoint) => string;
   /**
    * The schematic canvas answers a point session with the click aligned to the grid of this category (`EE_GRID_HELPER::Align( .., GRID_GRAPHICS )`) instead of the raw point: the
    * Place Image tool puts an image where the grid holds the cursor. The board's canvas always snaps (`BestSnapAnchor`) and ignores this.

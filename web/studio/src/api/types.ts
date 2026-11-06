@@ -3347,6 +3347,12 @@ export interface SchematicSetupLook {
   dash_ratio: number;
   gap_ratio: number;
   hop_over_size_choice: number;
+  /** Formatting's operating-point overlay (`drawing.operating_point_overlay_*`): significant digits and range ("~V" / "~A" for Auto) of the
+   *  voltages and currents the simulator shows on the sheet. An older backend sends none. */
+  opo_v_precision?: number;
+  opo_v_range?: string;
+  opo_i_precision?: number;
+  opo_i_range?: string;
 }
 
 // ---------------------------------------------------------------- Symbol library

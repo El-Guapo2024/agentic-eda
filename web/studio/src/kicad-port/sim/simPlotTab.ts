@@ -41,6 +41,8 @@ export interface Trace {
   sweepSize: number;
   /** `TRACE::IsMultiRun`: the sweeps are the runs of multi-run tuners. */
   multiRun?: boolean;
+  /** `TRACE::GetMultiRunLabels`: each run's tuned values ("R1=1k, C1=10n"), by run. */
+  multiRunLabels?: string[];
 }
 
 /** `TRACE::GetDisplayName`. */
@@ -264,6 +266,7 @@ export function setTraceData(tab: PlotTab, tr: Trace, xs: number[], ys: number[]
   tr.sweepCount = sweepCount;
   tr.sweepSize = sweepSize;
   tr.multiRun = false;
+  tr.multiRunLabels = [];
   updateScalesOf(tab, tr);
   updateAxisVisibility(tab);
 }
@@ -319,6 +322,48 @@ export function cursorValue(tr: Trace, x: number, sweep = 0): number {
     return valueAt(tr.x, tr.y, x, start, Math.min(tr.x.length, start + tr.sweepSize));
   }
   return valueAt(tr.x, tr.y, x);
+}
+
+/** The condition every multi-run branch of `CURSOR` tests: a multi-run trace of more than one run, each of a known size. */
+export function isMultiRunTrace(tr: Trace): boolean {
+  return !!tr.multiRun && tr.sweepCount > 1 && Number.isFinite(tr.sweepSize) && tr.sweepSize > 0;
+}
+
+/** `CURSOR::Plot`'s run label of a multi-run trace's cursor: the run's own label (`GetMultiRunLabels`), else "Run %d". Null for another trace. */
+export function cursorRunLabel(tr: Trace, sweep: number): string | null {
+  if (!isMultiRunTrace(tr)) return null;
+  const labels = tr.multiRunLabels ?? [];
+  return sweep >= 0 && sweep < labels.length ? labels[sweep]! : `Run ${sweep + 1}`;
+}
+
+/** `CURSOR::OnDoubleClick` on a multi-run trace's cursor: the cursor goes on to the next run (round to the first). False when the trace is not one. */
+export function nextCursorRun(tr: Trace, c: Cursor): boolean {
+  if (!isMultiRunTrace(tr)) return false;
+  let i = c.sweep ?? 0;
+  if (i < 0 || i >= tr.sweepCount) i = 0;
+  c.sweep = (i + 1) % tr.sweepCount;
+  return true;
+}
+
+/** `CURSOR::doSetCoordX`'s snap of a cursor dragged up or down a multi-run trace (`CURSOR::Move`: `m_snapTargetY`, `m_snapToNearest`): the run whose
+ *  value at `x` is nearest `targetY` (the first of equals; a run whose points do not reach `x` is skipped), else the run it was on. */
+export function snapCursorRun(tr: Trace, x: number, targetY: number, sweep: number): number {
+  if (!isMultiRunTrace(tr) || !Number.isFinite(targetY)) return sweep;
+  let best = Number.POSITIVE_INFINITY;
+  let bestSweep = sweep;
+  for (let i = 0; i < tr.sweepCount; i++) {
+    const start = i * tr.sweepSize;
+    const end = Math.min(tr.x.length, start + tr.sweepSize);
+    if (start >= end) continue;
+    const v = valueAt(tr.x, tr.y, x, start, end);
+    if (!Number.isFinite(v)) continue;
+    const d = Math.abs(v - targetY);
+    if (d < best) {
+      best = d;
+      bestSweep = i;
+    }
+  }
+  return bestSweep;
 }
 
 /** `SIM_PLOT_TAB::EnableCursor`: placed at 40 % (cursor 1) or 60 % (the others) of the plot area's width, in data units of the trace's x. */

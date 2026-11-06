@@ -581,4 +581,18 @@ mod tests {
         assert_eq!(item("RV1")["tuner"], json!({ "param": "pos", "value": "0.3" }), "{netlist}");
         assert_eq!(item("RV2")["tuner"], json!({ "param": "pos", "value": "" }), "{netlist}");
     }
+
+    /// The operating-point overlay's formats reach the sheet the studio draws: Schematic Setup > Formatting's significant digits and ranges
+    /// (`SCHEMATIC_SETTINGS::m_OPO_*`, which `RefreshOperatingPointDisplay` passes `GetOperatingPoint`) are in `GET /api/schematic`'s `setup`.
+    #[test]
+    fn the_sheet_s_setup_carries_the_op_overlay_formats() {
+        let b = board("opo", RC);
+        let before = crate::studio::schematic_json(&b, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        assert_eq!((before["setup"]["opo_v_precision"].as_u64(), before["setup"]["opo_v_range"].as_str(), before["setup"]["opo_i_range"].as_str()), (Some(3), Some("~V"), Some("~A")), "KiCad's defaults");
+        let settings = eda_model::sch_setup::SchFormatting { opo_v_precision: 5, opo_v_range: "mV".into(), opo_i_precision: 2, opo_i_range: "uA".into(), ..Default::default() };
+        crate::board::step(&b, eda_ops::Cmd::SetSchFormatting { settings }, false, "test").unwrap();
+        let after = crate::studio::schematic_json(&b, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let s = &after["setup"];
+        assert_eq!((s["opo_v_precision"].as_u64(), s["opo_v_range"].as_str(), s["opo_i_precision"].as_u64(), s["opo_i_range"].as_str()), (Some(5), Some("mV"), Some(2), Some("uA")));
+    }
 }

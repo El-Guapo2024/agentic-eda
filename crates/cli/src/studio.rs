@@ -2373,6 +2373,12 @@ fn schematic_setup_json(design: &eda_model::ir::Design, model: &eda_model::Const
         "dash_ratio": f.dash_ratio,
         "gap_ratio": f.gap_ratio,
         "hop_over_size_choice": f.hop_over_size_choice,
+        // the operating-point overlay's formats (`m_OPO_VPrecision`, `m_OPO_VRange`, `m_OPO_IPrecision`, `m_OPO_IRange`), which
+        // `RefreshOperatingPointDisplay` gives `GetOperatingPoint`
+        "opo_v_precision": f.opo_v_precision,
+        "opo_v_range": f.opo_v_range,
+        "opo_i_precision": f.opo_i_precision,
+        "opo_i_range": f.opo_i_range,
     })
 }
 
