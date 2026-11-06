@@ -50,7 +50,8 @@ export function HtmlMessageBox({
       setPos({ left: Math.max(8, (window.innerWidth - r.width) / 2), top: Math.max(8, (window.innerHeight - r.height) / 2) });
     }
     if (page.current) page.current.scrollTop = 0;
-    el?.focus();
+    // the page has the keys, so the arrows and Page Up / Down scroll it (`m_htmlWindow`)
+    (page.current ?? el)?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -76,7 +77,7 @@ export function HtmlMessageBox({
         consume();
         setSearching(false);
         setTerm("");
-        el.focus();
+        (page.current ?? el).focus();
         return;
       }
       if (searching && inSearch && e.key === "Enter") {
@@ -181,6 +182,7 @@ export function HtmlMessageBox({
       <div
         ref={page}
         className="hmb-page"
+        tabIndex={-1}
         data-testid={testId ? `${testId}-page` : undefined}
         onClick={(e) => {
           const a = (e.target as HTMLElement).closest("a[href]");
