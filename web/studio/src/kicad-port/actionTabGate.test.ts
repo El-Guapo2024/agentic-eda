@@ -35,12 +35,19 @@ test("isActionEnabledForTab: footprint-editor-frame actions (New Footprint, Plac
 });
 
 test("isActionEnabledForTab: actions both pcbnew frames register work on the pcb and footprint tabs", () => {
-  for (const name of ["pcbnew.InteractiveDrawing.arcPosture", "pcbnew.InteractiveDrawing.bezier", "pcbnew.InteractiveEdit.duplicateIncrementPads"]) {
+  for (const name of ["pcbnew.InteractiveDrawing.bezier", "pcbnew.InteractiveEdit.duplicateIncrementPads"]) {
     assert.equal(isActionEnabledForTab(name, "pcb", true), true, name);
     assert.equal(isActionEnabledForTab(name, "footprint", true), true, name);
     assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
     assert.equal(isActionEnabledForTab(name, "symbol", true), false, name);
   }
+});
+
+test("isActionEnabledForTab: `/` (arcPosture) also turns the schematic's arc (KiCad 25ec2335's common action, UI-LEFT S13)", () => {
+  const name = "pcbnew.InteractiveDrawing.arcPosture";
+  for (const tab of ["pcb", "footprint", "schematic"]) assert.equal(isActionEnabledForTab(name, tab, true), true, tab);
+  assert.equal(isActionEnabledForTab(name, "symbol", true), false);
+  assert.equal(isActionEnabledForTab(name, "schematic", false), false, "only while the schematic registers it");
 });
 
 test("isActionEnabledForTab: symbol-editor-frame actions are enabled on the symbol tab only", () => {

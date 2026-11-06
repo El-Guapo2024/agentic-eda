@@ -150,8 +150,16 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   "eeschema.EditorControl.togglePinAltIcons",
 ]);
 
+/**
+ * `/` (`arcPosture`): 8303b2ad's `pcbnew.InteractiveDrawing.arcPosture`, the board's and the footprint editor's; KiCad 25ec2335 makes it the common
+ * `common.InteractiveDrawing.arcPosture` that the schematic's Draw Arc (`EE_GRAPHIC_TOOL::DrawArc`, three clicks since UI-LEFT S13) reads too. The schematic
+ * registers it only while an arc is being drawn.
+ */
+export const ARC_POSTURE = "pcbnew.InteractiveDrawing.arcPosture";
+
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {
   if (!registered) return false;
+  if (name === ARC_POSTURE) return tab === "pcb" || tab === "footprint" || tab === "schematic";
   if (FOOTPRINT_EDITOR_ONLY.has(name)) return tab === "footprint";
   if (SYMBOL_EDITOR_ONLY.has(name)) return tab === "symbol";
   if (FOOTPRINT_EDITOR_TOOL_PREFIXES.some((p) => name.startsWith(p))) return tab === "footprint";

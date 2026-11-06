@@ -1427,6 +1427,11 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveDrawingLineWireBus.switchPosture",
       schematicOnly(() => {
+        // the same key turns an arc being drawn the other way (`arcPosture`, UI-LEFT S13): this action comes first in the hotkey table
+        if (state.drawState?.kind === "sch_shape" && state.drawState.arc) {
+          dispatch({ type: "SET_DRAW_STATE", draw: { ...state.drawState, arc: arcToggleClockwise(state.drawState.arc) } });
+          return;
+        }
         if (state.drawState?.kind !== "wire") return;
         dispatch({ type: "TOGGLE_SCH_POSTURE" });
       })

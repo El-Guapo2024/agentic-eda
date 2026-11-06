@@ -247,8 +247,9 @@ export type DrawState =
   | TuneDrawState
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
   | { kind: "sheet"; start: [Nm, Nm] }
-  /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, arc, Bezier curve or text box, `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */
-  | { kind: "sch_shape"; shape?: ShapeEdit; poly?: PolyGeom; brk?: BreakState; pin?: PinPlacement }
+  /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, Bezier curve or text box, `arc` for an arc (KiCad 25ec2335's
+   *  `ARC_GEOM_MANAGER`: centre, start, end), `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */
+  | { kind: "sch_shape"; shape?: ShapeEdit; arc?: ArcGeom; poly?: PolyGeom; brk?: BreakState; pin?: PinPlacement }
   | {
       kind: "route";
       net: string;

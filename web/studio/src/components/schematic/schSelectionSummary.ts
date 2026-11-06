@@ -99,6 +99,8 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
     s.canAddCorner = canAddCorner(poly.pts, cursor, tolNm);
     s.canRemoveCorner = canRemoveCorner(poly.kind, poly.pts, cursor, tolNm);
   }
+  // `SCH_POINT_EDITOR::Init`'s `arcIsEdited`: the one selected item is an arc (the point editor is on it), for Cycle Arc Editing Mode (UI-LEFT S13)
+  s.arcEdited = ids.length === 1 && (sch.graphics ?? []).some((g) => g.id === ids[0] && g.shape.type === "arc");
   // `SCH_SHEET::HasUndefinedPins` needs the sheet's own file (read when the action runs); a sheet with at least one pin may have an unreferenced one, so Cleanup Sheet Pins is offered for it.
   if (s.sheets === 1) {
     const sheet = sch.sheets.find((x) => ids.includes(x.id));
