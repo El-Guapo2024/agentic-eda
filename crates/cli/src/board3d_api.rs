@@ -19,7 +19,7 @@
 //! The counterbores, countersinks and backdrills KiCad also subtracts are not in the model (a via's post-machining is kept as its tokens only).
 
 use eda_model::footprint::{to_board, PadKind};
-use eda_model::ir::{Design, FootprintInstance, Nm, Point, Side};
+use eda_model::ir::{Design, FootprintInstance, Nm, Point};
 use eda_model::ConstraintModel;
 use eda_shape_poly_set::basic_shapes::{circle_polygon, oval_polygon, ErrorLoc};
 use eda_shape_poly_set::{LineChain, ShapePolySet};
@@ -148,7 +148,7 @@ pub fn report(dir: &std::path::Path) -> Value {
 mod tests {
     use super::*;
     use eda_model::footprint::{Pad, PadShape};
-    use eda_model::ir::LabelSide;
+    use eda_model::ir::{LabelSide, Side};
     use eda_model::units::mm;
 
     fn instance(at: (Nm, Nm), rot: u32, side: Side) -> FootprintInstance {

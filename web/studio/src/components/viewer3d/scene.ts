@@ -1109,7 +1109,10 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   for (const shape of bodyShapes) {
     if (shown("board")) {
       const slab = buildSlab(shape);
-      if (slab) group.add(slab);
+      if (slab) {
+        slab.userData.holes = shape.holes.length;
+        group.add(slab);
+      }
     }
     if (shown("soldermask_top")) group.add(buildMask(shape, "top"));
     if (shown("soldermask_bottom")) group.add(buildMask(shape, "bottom"));
@@ -1231,7 +1234,11 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
         for (const layer of padCopperLayers(pad, part, layerOrder)) {
           if (!copperShown(layer)) continue;
           const mesh = extruded(shapesOf(contours, cuts), copperRange(layer, layerOrder), copperMat(layer), "pad");
-          if (mesh) group.add(mesh);
+          if (mesh) {
+            mesh.userData.padShape = pad.shape ?? (pad.round ? "circle" : "rect");
+            mesh.userData.corners = contours.reduce((n, c) => n + c.length, 0);
+            group.add(mesh);
+          }
         }
       }
       // The barrel of a plated hole (`generatePlatedHoleShells`: the hole grown by the plating less the hole, from B.Cu to F.Cu), the "Plated Barrels" row.
@@ -1381,6 +1388,27 @@ export function boardOutlineBounds(board: BoardState): OutlineBounds | null {
   }
   if (!Number.isFinite(minX)) return null;
   return { minX, minZ, maxX, maxZ };
+}
+
+/** The pads drawn by their shape and the corners of their polygons, for the test hook (a trapezoid has 4, a rounded rectangle dozens, a box would be 4). */
+export function padShapeCounts(root: THREE.Object3D): Record<string, { meshes: number; corners: number }> {
+  const out: Record<string, { meshes: number; corners: number }> = {};
+  root.traverse((o) => {
+    if (o.name !== "pad" || typeof o.userData.padShape !== "string") return;
+    const e = (out[o.userData.padShape] ??= { meshes: 0, corners: 0 });
+    e.meshes++;
+    e.corners += (o.userData.corners as number) ?? 0;
+  });
+  return out;
+}
+
+/** The holes of the board body as drawn (each slab's outline's holes), for the test hook. */
+export function bodyHoleCount(root: THREE.Object3D): number {
+  let n = 0;
+  root.traverse((o) => {
+    if (o.name === "board-slab") n += (o.userData.holes as number) ?? 0;
+  });
+  return n;
 }
 
 /** How many objects of each name the group holds (the pieces `buildBoardGroup` names: `board-slab`, `solder-mask-top`, `track`, `via`, `pad`, `solder-paste`, `zone-fill`, `silk-text`, `part-ref`, ...), for the test hook. */

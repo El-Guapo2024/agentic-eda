@@ -42,7 +42,7 @@
   check("the layer tree lists KiCad's rows", ["board", "plated_barrels", "copper_top", "copper_bottom", "adhesive", "solder_paste", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom", "th_models", "smd_models", "virtual_models", "bounding_boxes", "zones"].every((id) => rows.includes(id)), rows);
   // What each row must take out of the scene when it is turned off, by the names scene.ts gives its pieces (kicad-port/appearance3d.ts has the rows).
   const gates = {
-    board: ["board-slab"], plated_barrels: ["via"], solder_paste: ["solder-paste"], soldermask_top: ["solder-mask-top"], soldermask_bottom: ["solder-mask-bottom"],
+    board: ["board-slab"], plated_barrels: ["plated-barrel"], solder_paste: ["solder-paste"], soldermask_top: ["solder-mask-top"], soldermask_bottom: ["solder-mask-bottom"],
     zones: ["zone-fill"], references: ["part-ref"], adhesive: ["adhesive-shape-line", "adhesive-shape-fill", "adhesive-text"],
     user_drawings: ["user_drawings-shape-line", "user_drawings-shape-fill", "user_drawings-text"], user_comments: ["user_comments-shape-line", "user_comments-shape-fill", "user_comments-text"],
     user_eco1: ["user_eco1-shape-line", "user_eco1-shape-fill", "user_eco1-text"], user_eco2: ["user_eco2-shape-line", "user_eco2-shape-fill", "user_eco2-text"],

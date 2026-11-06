@@ -35,6 +35,13 @@ export interface Viewer3dSnapshot {
   detail: Array<{ name: string; status: string; fetchMs?: number; parseMs?: number; triangles?: number; error?: string }>;
   /** The parts drawn in the selection colour because the PCB editor has them selected (`fp->IsSelected()`). */
   selected: string[];
+  /** The board body's holes as drawn (`m_boardWithHoles`: the outlines' cutouts and every through and non-plated hole of `GET /api/board3d`), and whether the route has answered. */
+  bodyHoles: number;
+  bodyFromServer: boolean;
+  /** The pads drawn, by their shape (`rect`, `trapezoid`, `chamfered_rect`, `custom`, ...), and how many corners the polygons of each have in all. */
+  padShapes: Record<string, { meshes: number; corners: number }>;
+  /** The 3D Navigator is drawn. */
+  navigator: boolean;
 }
 
 const empty = (): Viewer3dSnapshot => ({
@@ -45,6 +52,10 @@ const empty = (): Viewer3dSnapshot => ({
   models: { requested: 0, loading: 0, ready: 0, missing: 0, failed: 0, triangles: 0 },
   parts: { total: 0, asModels: 0, asBoxes: 0, shown: 0 },
   selected: [],
+  bodyHoles: 0,
+  bodyFromServer: false,
+  padShapes: {},
+  navigator: false,
   hovered: null,
   cameraMoving: false,
   scene: {},
@@ -55,6 +66,7 @@ const empty = (): Viewer3dSnapshot => ({
 let state: Viewer3dSnapshot = empty();
 let openedAt: number | null = null;
 let screenOfPart: ((ref: string) => { x: number; y: number } | null) | null = null;
+let cameraOfView: (() => unknown) | null = null;
 let cached: Viewer3dSnapshot | null = null;
 const listeners = new Set<() => void>();
 function changed(): void {
@@ -93,6 +105,13 @@ export const viewer3dProbe = {
   /** The viewer registers where a part is on its canvas (CSS pixels from the canvas's top-left), so a script can hover it without guessing pixels. */
   setScreenOf(fn: ((ref: string) => { x: number; y: number } | null) | null): void {
     screenOfPart = fn;
+  },
+  /** For `window.__eda.viewer3dCamera()`: the camera as a saved viewport keeps it (camera3d.ts `getView`). */
+  setCameraOf(fn: (() => unknown) | null): void {
+    cameraOfView = fn;
+  },
+  cameraOf(): unknown {
+    return cameraOfView ? cameraOfView() : null;
   },
   screenOf(ref: string): { x: number; y: number } | null {
     return screenOfPart ? screenOfPart(ref) : null;

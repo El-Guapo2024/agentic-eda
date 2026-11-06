@@ -38,7 +38,7 @@ import { Navigator3D } from "./navigator";
 import { VIEW_OF } from "../../kicad-port/navigator3d";
 import { getViewer3DUserSettings, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
 import { isMac } from "../../platform";
-import { buildBoardGroup, buildBackgroundTexture, countByName, disposeObject3D, boardOutlineBounds, type Board3d } from "./scene";
+import { buildBoardGroup, buildBackgroundTexture, bodyHoleCount, countByName, disposeObject3D, boardOutlineBounds, padShapeCounts, type Board3d } from "./scene";
 import { copperColorKey, layerColor } from "../canvas/layers";
 import { parseColor } from "../../kicad-port/appearance3d";
 import { ROWS, isSceneRow, toggled } from "../../kicad-port/appearance3d";
@@ -365,6 +365,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       return { x: ((p.x + 1) / 2) * renderer.domElement.clientWidth, y: ((1 - p.y) / 2) * renderer.domElement.clientHeight };
     });
 
+    viewer3dProbe.setCameraOf(() => camera3d.getView());
     threeRef.current = { renderer, scene, perspCamera, orthoCamera, camera3d, boardGroup, glbGroup, cache, partModels };
 
     // ---------------------------------------------------------- input
@@ -407,6 +408,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       camera3d.animatePivot({ x: hit.x, y: 0, z: hit.z }, performance.now());
     };
 
+    const canvasPoint = (e: { clientX: number; clientY: number }) => {
+      const box = el.getBoundingClientRect();
+      return { x: e.clientX - box.left, y: e.clientY - box.top };
+    };
     /** The orientation of the camera the view is drawn with: the 3D Navigator turns with it. */
     const activeOrientation = () => (camera3d.projection === "perspective" ? perspCamera : orthoCamera).quaternion;
     const onPointerDown = (e: PointerEvent) => {
@@ -417,9 +422,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       setMenu(null);
       // `EDA_3D_CANVAS::OnLeftDown`: a click (not a drag) on a footprint selects it in the board editor and the schematic (`ExpressMail( .., MAIL_SELECTION,
       // "$SELECT: 0,F<ref>" )`). Not on the 3D Navigator, whose click is its own.
-      if (e.button === 0 && !camera3d.isMoving() && !(navigatorShownRef.current && gizmo.pick(e.offsetX, e.offsetY, el.clientHeight, activeOrientation()))) {
+      // Where on the canvas, from the client position and the canvas's box (a script's `offsetX` is not reliable, see the hover below).
+      const at = canvasPoint(e);
+      if (e.button === 0 && !camera3d.isMoving() && !(navigatorShownRef.current && gizmo.pick(at.x, at.y, el.clientHeight, activeOrientation()))) {
         const activeCam = camera3d.projection === "perspective" ? perspCamera : orthoCamera;
-        raycaster.setFromCamera(new THREE.Vector2((e.offsetX / el.clientWidth) * 2 - 1, -(e.offsetY / el.clientHeight) * 2 + 1), activeCam);
+        raycaster.setFromCamera(new THREE.Vector2((at.x / el.clientWidth) * 2 - 1, -(at.y / el.clientHeight) * 2 + 1), activeCam);
         const hit = partModels.pick(raycaster);
         if (hit) dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
       }
@@ -427,7 +434,12 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       else if (e.button === 1) dragButton = "middle";
       else if (e.button === 2) dragButton = "right";
       else return;
-      el.setPointerCapture(e.pointerId);
+      // (A pointer a script made has no capture to take: `setPointerCapture` throws for it.)
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* a synthetic pointer */
+      }
     };
     // `EDA_3D_CANVAS::OnMouseMove`'s rollover: when the pointer is not dragging, the part under it is highlighted (`highlight_on_rollover`) and its reference and value are
     // reported. One ray per frame at most, and none while the camera moves (`if( m_camera_is_moving ) return;`).
@@ -496,7 +508,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       if (dragButton === "right" && !draggedThisPress) setMenu({ x: e.clientX, y: e.clientY });
       // `OnLeftUp`: a click on a sphere of the 3D Navigator goes to its view (`SetView3D( viewTable[index] )`).
       if (dragButton === "left" && !draggedThisPress && navigatorShownRef.current && !camera3d.isMoving()) {
-        const sphere = gizmo.pick(e.offsetX, e.offsetY, el.clientHeight, activeOrientation());
+        const at = canvasPoint(e);
+        const sphere = gizmo.pick(at.x, at.y, el.clientHeight, activeOrientation());
         if (sphere) camera3d.animateViewPreset(VIEW_OF[sphere.id], performance.now());
       }
       dragButton = null;
@@ -665,6 +678,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       scene.remove(glbGroup);
       stopPublishing();
       viewer3dProbe.setScreenOf(null);
+      viewer3dProbe.setCameraOf(null);
       gizmo.dispose();
       partModels.dispose();
       scene.remove(partModels.group);
@@ -734,7 +748,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
     syncActiveGroupRef.current();
-    viewer3dProbe.update({ scene: countByName(nextGroup) });
+    viewer3dProbe.update({ scene: countByName(nextGroup), padShapes: padShapeCounts(nextGroup), bodyHoles: bodyHoleCount(nextGroup), bodyFromServer: !!board3d });
 
     const bounds = board ? boardOutlineBounds(board) : null;
     const spanMm = bounds ? Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 1e-3) : EMPTY_BOARD_SPAN_MM;
@@ -754,6 +768,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   }, [board, sceneRows, resolved, zoneFill, board3d, innerKey, userSettings.prefs.copperThickness]);
 
   navigatorShownRef.current = rows.shown("navigator");
+  useEffect(() => {
+    viewer3dProbe.update({ navigator: navigatorShownRef.current });
+  }, [navigatorShownRef.current]);
 
   // `fp->IsSelected()`: the footprints selected in the PCB editor are drawn in the selection colour (`render.opengl_selection_color`).
   const selectionKey = [...state.selection].sort().join("\u0000");
@@ -795,7 +812,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const bboxShown = rows.shown("bounding_boxes");
   useEffect(() => {
     // The models stand on the board's own build-up (BOARD_ADAPTER::InitSettings from the stackup, GetFootprintZPos), as the slab does (scene.ts).
-    threeRef.current?.partModels.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showNotInPos: notInPosShown, showDNP: dnpShown, showBoundingBoxes: bboxShown }, stackOfBoard(board?.board_rules));
+    const pm = threeRef.current?.partModels;
+    pm?.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showNotInPos: notInPosShown, showDNP: dnpShown, showBoundingBoxes: bboxShown }, stackOfBoard(board?.board_rules));
+    // The parts just built that the board editor has selected are drawn in the selection colour (PartModels.sync paints them).
+    if (pm) viewer3dProbe.update({ selected: pm.selectedRefs });
   }, [board, thtShown, smdShown, virtualShown, notInPosShown, dnpShown, bboxShown]);
 
   // The background gradient (the Appearance manager's Background Start / End swatches).
