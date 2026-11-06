@@ -335,6 +335,7 @@ impl<'a> Board<'a> {
         let stored = lib.by_name_mut(&fp.name).expect("just pushed");
         // Ids from another document (a paste, an import) must not collide with each other; blank every
         // one and let the usual deterministic assignment hand them out again.
+        let old: Vec<String> = stored.pads.iter().map(|p| p.id.clone()).chain(stored.graphics.iter().map(|g| g.id().to_string())).chain(stored.texts.iter().map(|t| t.id.clone())).collect();
         for p in &mut stored.pads {
             p.id.clear();
         }
@@ -345,6 +346,28 @@ impl<'a> Board<'a> {
             t.id.clear();
         }
         stored.assign_missing_ids();
+        // What is kept by item id follows the item to its new id: the uuid the file gave it (so a group of the file still names it), a line's style, a text's looks,
+        // and a group's members (`eda_model::fp_items`) -- an item's id is made from its geometry, which an edit since it was read has changed.
+        let new: Vec<String> = stored.pads.iter().map(|p| p.id.clone()).chain(stored.graphics.iter().map(|g| g.id().to_string())).chain(stored.texts.iter().map(|t| t.id.clone())).collect();
+        let renamed: std::collections::BTreeMap<String, String> = old.into_iter().zip(new).filter(|(a, b)| !a.is_empty() && a != b).collect();
+        if !renamed.is_empty() {
+            let re = |id: &str| renamed.get(id).cloned().unwrap_or_else(|| id.to_string());
+            let k = &mut stored.kicad;
+            k.uuids = std::mem::take(&mut k.uuids).into_iter().map(|(id, u)| (re(&id), u)).collect();
+            k.stroke_types = std::mem::take(&mut k.stroke_types).into_iter().map(|(id, t)| (re(&id), t)).collect();
+            k.unlocked_texts = std::mem::take(&mut k.unlocked_texts).into_iter().map(|id| re(&id)).collect();
+            for e in &mut k.text_extras {
+                e.id = re(&e.id);
+            }
+            for g in &mut stored.items.groups {
+                for m in &mut g.member_ids {
+                    *m = re(m);
+                }
+            }
+            if let Some(m) = &mut stored.pad_edit {
+                m.pad = re(&m.pad);
+            }
+        }
         Ok(())
     }
 
@@ -727,6 +750,24 @@ mod verb_tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn put_library_footprint_keeps_what_is_kept_by_item_id_with_the_items_new_ids() {
+        let m = ConstraintModel::default();
+        let mut b = board(&m);
+        let mut fp = footprint_with_pads("K");
+        fp.graphics.push(eda_model::ir::Shape::Segment { id: "stale_line".into(), layer: "F.SilkS".into(), stroke_width: Nm::new(120_000), filled: false, start: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, end: eda_model::ir::Point { x: Nm::new(1_000_000), y: Nm::ZERO } });
+        fp.kicad.uuids.insert("stale_line".into(), "u-line".into());
+        fp.kicad.stroke_types.insert("stale_line".into(), "dash".into());
+        fp.items.groups.push(eda_model::ir::Group { id: "grp_x".into(), name: String::new(), member_ids: vec!["stale_line".into(), "field:Value".into()], design_block: String::new() });
+        b.apply(&Cmd::PutLibraryFootprint { footprint: fp, overwrite: false }).unwrap();
+        let stored = b.design().footprint_library.as_ref().unwrap().by_name("K").unwrap();
+        let line = stored.graphics[0].id().to_string();
+        assert_ne!(line, "stale_line");
+        assert_eq!(stored.kicad.uuids.get(&line).map(String::as_str), Some("u-line"));
+        assert_eq!(stored.kicad.stroke_types.get(&line).map(String::as_str), Some("dash"));
+        assert_eq!(stored.items.groups[0].member_ids, vec![line, "field:Value".to_string()]);
     }
 
     #[test]

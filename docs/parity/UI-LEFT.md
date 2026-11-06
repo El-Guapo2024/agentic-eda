@@ -14,7 +14,7 @@ Notes:
 - These findings still have open parts:
   - E3-1 (high);
   - D-A1, B-M4/D3-M5/D4-M1, C3-M1, B3-M1, A-3, D-8, D-10, C-2 and R3-6 (medium, rounds 2-4).
-- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor (3 since task-u1-symedit: Find, Find and Replace, the Symbol Checker).
+- `web/studio/src/kicad/editor_toolbar_support.json` lists the tools not yet ported in the library editors: 24 in the Footprint Editor and 7 in the Symbol Editor. **Footprint Editor: 2 left since task-u1-fpedit** (Create Footprint, the Properties pane). **Symbol Editor: 3 left since task-u1-symedit** (Find, Find and Replace, the Symbol Checker).
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
@@ -22,13 +22,13 @@ Notes:
 3. S1: placing labels, power symbols and text -- **done (task-u1-schplace)**
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
-6. F1+F2: Footprint Editor fields and dimmed tools
+6. F1+F2: Footprint Editor fields and dimmed tools -- **done (task-u1-fpedit)**; the Properties pane (Y3) left
 7. Y1: Symbol Editor Rotate -- **done (task-u1-symedit)**
 8. P2/S7: Properties panel rows -- **done (task-u1-props)**
-9. S3: Schematic Setup pages
-10. P8: zones
+9. S3: Schematic Setup pages -- **done (task-u1-schsetup)**
+10. P8: zones -- **done (task-u1-zones)**
 11. S2: design variants
-12. M1: the Simulation Model dialog
+12. M1: the Simulation Model dialog -- **done (task-u1-simmodel)**
 
 ## PCB editor
 
@@ -59,12 +59,13 @@ Notes:
   - It refuses a move, swap or delete that breaks a complete net, and a pasted copy keeps its nets, so moving the copy is refused.
   - KiCad never refuses. This may be an intended safety rule.
   - S. GAPS 8; PARITY-pcb §22.
-- **P8 [BD] Zones.**
-  - The outline is drawn first and the dialog comes after; KiCad opens the dialog first.
-  - No outline display style or per-zone hatch offsets, and no Update Displayed Zones in the Zone Manager.
-  - The point editor, Simplify, Convert and the hit test ignore holes.
-  - An unfill doesn't stick (R7-Z1), and a "N zones not filled" note stays up (R7-Z2).
-  - M. PARITY-pcb §8, §11, §52; GAPS 13.
+- **P8 [BD] Zones.** **done (task-u1-zones)**: Add Filled Zone and Add Rule Area open the zone dialog at the first corner (`createNewZone`: the net of the highlight or the selection, the first unused priority), Cancel draws nothing and keeps the tool armed, the zone takes the dialog's settings in one undo step and is selected, E during the draw edits them; the outline display (Line / Hatched / Fully hatched), its pitch and the per-zone hatch offsets are read, written, edited and drawn (`ZONE::HatchBorder`); the Zone Manager's Update Displayed Zones; holes in the point editor, Simplify, Create Lines / Tracks, Create Zone / Polygon from Selection and the hit test; an unfill sticks and Undo gives the fill back (R7-Z1); no standing "not filled" note, KiCad's 5 s warning on Draw Zone Fills (R7-Z2). PARITY-pcb §67. Left:
+  - A zone's settings are not sticky (`Edit_Zone_Params`' `SetDefaultZoneSettings`; Board Setup has no Zones page).
+  - Properties (E) while drawing a cutout or a similar zone does nothing; Escape in the dialog is its Cancel.
+  - A zone picked by its inside stands in for `HitTestFilledArea`: an unfilled pour is picked by a click inside it.
+  - Add / remove / chamfer corner and Simplify empty the zone's fill (KiCad keeps the stale fill: only the corner drag `UnFill()`s).
+  - The IR polygon has no holes, so a zone made a polygon is a slit ring (its holes come back when it is made a zone again).
+  - M. PARITY-pcb §8, §11, §52, §68; GAPS 13.
 - **P9 [FM] Net Inspector.**
   - It is a modal dialog, not a docked panel.
   - No Group by Netclass or custom groups, no time-domain columns, and no Rename, Delete or Add Net.
@@ -168,6 +169,13 @@ Notes:
   - R, F and E on a carried text (A6-6).
   - The Select Net menu's order.
   - S. PARITY-pcb §1, §8, §24.
+- **P29 [BD] Found during the u1 batch (2026-11-05), not yet fixed.**
+  - A new board rule area starts with every keepout off; KiCad keeps out tracks, vias and pads (found by task-u1-fpedit).
+  - `layerPresets.ts` `layerGroupOp` leaves Edge.Cuts out of the copper group; KiCad's `presetAllCopper` counts it (task-u1-fpedit).
+  - Barcode Properties validates the old preview if OK is pressed within about 200 ms of typing (task-u1-fpedit).
+  - The existing single-track D drag snaps the cursor onto items of any net; KiCad snaps only onto the dragged line's net (task-u1-drag).
+  - Add / Remove / Chamfer Corner and Simplify empty a zone's fill; in KiCad only the corner drag calls `UnFill()` (task-u1-zones).
+  - S. The tasks' PARITY sections.
 
 ## Schematic editor
 
@@ -177,10 +185,12 @@ Notes:
   - M. PARITY-sch §3, §3a, §54.
 - **S1b [BD] Place Symbol (A) has no symbol following the cursor** (found by task-u1-schplace). After the chooser, it waits for a click with nothing drawn at the cursor; KiCad carries the symbol, with R/X/Y while carried. The `POST /api/sch/place_preview` endpoint from task-u1-schplace can draw it. S. PARITY-sch §54.
 - **S2 [FM] Design variants.** No Add, Remove or Edit Variant, no per-variant DNP or fields, and no variant columns in the Fields Table or the placement files. XL. ui-parity-missing (3 rows); PARITY-sch §13, §25.
-- **S3 [FM] Schematic Setup.**
-  - Formatting lacks the text sizes, line widths, and junction and hop-over sizes.
-  - No Annotation, Field Name Templates, Net Classes or Bus Alias pages, so ERC's "Edit Netclasses…" fix is missing.
-  - L. PARITY-sch §9, §28.
+- **S3 [FM] Schematic Setup.** **done (task-u1-schsetup)**: every page of KiCad's tree -- Formatting's every row, Annotation, Field Name Templates, BOM Presets, Net Classes (Board Setup's page with the Eeschema columns, one table for both), Bus Alias Definitions, Text Variables -- each Apply one undoable verb, the settings in the derived `.kicad_pro` kicad-cli reads; ERC's "Edit Netclasses…" opens Net Classes (PARITY-sch §56). Left:
+  - Import Settings from Another Project… (Board Setup has none either).
+  - Hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio reach kicad-cli but not the studio's own drawing.
+  - "Allow reference reuse" is stored, not applied (no designator tracker); the URL column has no URL editor; the studio saves no BOM presets of its own.
+  - The net class table lists Default first (KiCad: last).
+  - L. PARITY-sch §9, §28, §56.
 - **S4 [BD] Symbol Properties.**
   - No unit choice, pin table, font or colour.
   - U, V and F open the full dialog.
@@ -324,14 +334,16 @@ Notes:
 
 ## Footprint editor
 
-- **F1 [FM] Fields and texts on the canvas.**
-  - Reference, Value and user fields are not drawn or pickable.
-  - Texts and graphics have no Properties dialog.
+- **F1 [FM] Fields and texts on the canvas.** **done (task-u1-fpedit)**, PARITY-fpedit §20: the Reference, the Value and the user fields are drawn, picked, dragged, turned and mirrored (a delete hides one); a double click or E opens the item's dialog (Footprint Reference / Value / Field / Text Properties, the shape's Properties, Pad Properties, the new kinds' dialogs, Group Properties).
+  - Left: a footprint text's bold, italic, vertical justification and keep-upright are not in the model (F5), so its dialog leaves them out (a field has them); Duplicate and Create Array of a field.
+  - ~~Reference, Value and user fields are not drawn or pickable.~~
+  - ~~Texts and graphics have no Properties dialog.~~
   - M. PARITY-fpedit §13, §15, §17.
-- **F2 [FM] Dimmed tools.**
-  - Mirror, Group and Ungroup, the line modes, the sketch and outline modes, the Appearance manager and the Properties pane.
-  - Dimensions, rule areas and keepouts, text boxes, tables, barcodes, points and reference images.
-  - A footprint's zones and dimensions are kept but not drawn.
+- **F2 [FM] Dimmed tools.** **done (task-u1-fpedit)**, PARITY-fpedit §20: every tool listed below runs on the footprint's items, one undo step each; a library footprint holds its zones, dimensions, text boxes, points, images, barcodes, tables and groups as items (read and written by the board's readers and writers, kicad-cli keeps them), drawn and editable; Set Anchor moves them (F7's zones and dimensions).
+  - Left: the Properties pane (Y3, another task); Create Footprint (the wizards); a barcode and a reference image are drawn as their boxes; Duplicate, Create Array and the clipboard of the new kinds; the Appearance manager's presets, viewports and Selection Filter; items still kept as text (a locked item, a filled zone) are not drawn; the board's footprints still carry these items as text (GAPS 25).
+  - ~~Mirror, Group and Ungroup, the line modes, the sketch and outline modes, the Appearance manager and the Properties pane.~~
+  - ~~Dimensions, rule areas and keepouts, text boxes, tables, barcodes, points and reference images.~~
+  - ~~A footprint's zones and dimensions are kept but not drawn.~~
   - L. editor_toolbar_support.json; fpedit §8, §16.
 - **F3 [BD] Ctrl+E from the board.**
   - It edits the library entry, with no link back to that footprint.
@@ -351,7 +363,7 @@ Notes:
   - No fabrication property or pad-to-die length.
   - Round/Slot resets the size, and the type is named "Slot" where KiCad says "Oblong" (E7-F6/F7).
   - M. fpedit §3, §18.
-- **F7 [BD] Set Anchor.** It leaves zones, dimensions and the courtyard override behind (E3-1). S. r3 E3-1.
+- **F7 [BD] Set Anchor.** It leaves zones, dimensions and the courtyard override behind (E3-1). S. r3 E3-1. (task-u1-fpedit: the zones, dimensions, text boxes, images, barcodes and tables move with it now, as `MoveAnchorPosition` does; the courtyard override and the items still kept as text do not.)
 - **F8 [FM] Missing tools and settings.**
   - No Import Graphics and no preference pages.
   - The rotation is fixed at 90°.
@@ -371,7 +383,7 @@ Notes:
   - ~~Mirror H and V are not ported.~~
   - ~~No bezier tool, beziers aren't drawn, and Import Symbol drops them.~~
   - M. editor_toolbar_support.json; PARITY-symedit.
-- **Y3 [FM] Properties pane.** The Symbol and Footprint editors have none. M. GAPS 10; PARITY-common §12. **Symbol Editor done (task-u1-symedit)**: KiCad's rows of pins, shapes, texts, text boxes, fields and the symbol, edits on the editor's undo stack; left: the rows a library symbol has no place for (font, colours, line style, hyperlink) are read-only. The Footprint Editor's half is task-u1-fpedit's.
+- **Y3 [FM] Properties pane.** The Symbol and Footprint editors have none. M. GAPS 10; PARITY-common §12. **Symbol Editor done (task-u1-symedit)**: KiCad's rows of pins, shapes, texts, text boxes, fields and the symbol, edits on the editor's undo stack; left: the rows a library symbol has no place for (font, colours, line style, hyperlink) are read-only. The Footprint Editor's half is still open (task-u1-fpedit left it).
 - **Y4 [FM] Symbol Properties and text.**
   - No unit display-name grid, no Pin Connections tab and no named body styles.
   - ~~Plain text has no Properties dialog.~~ **done (task-u1-symedit)**: Text Properties (double click, E, Properties), and a library text keeps bold, italic and its justification.
@@ -524,10 +536,11 @@ Notes:
 
 ## Simulator
 
-- **M1 [FM] Simulation Model dialog.**
-  - Only "SPICE model from file".
-  - No built-in device or source models with a parameter grid, no IBIS, no Code tab, and no "Save parameter in Value field".
-  - XL. GAPS 34; PARITY-sch §49, §51.
+- **M1 [FM] Simulation Model dialog.** **done (task-u1-simmodel)**: "Built-in SPICE model" with KiCad's Device and Device type choices, the Parameters grid (every model's parameters copied from the C++ by `tools/extract-sim-models.js`, in KiCad's categories), the Code tab, "Save parameter '%s (%s)' in Value field", the inference of passives and DC sources, OK writing the fields as `WriteFields` does; IBIS files list their components, pins, pin models, differential pins and waveforms; kicad-cli's netlist of what the dialog wrote is KiCad's generator's (PARITY-sch §57). Left:
+  - IBIS: KIBIS's model tables, checks and SPICE (kicad-cli writes the SPICE).
+  - A library `.model`'s parameters in the grid; arithmetic in the grid; K's inductor choice.
+  - OK is its own undo step and adds hidden fields (KiCad's inference adds visible ones).
+  - XL. GAPS 34; PARITY-sch §49, §51, §57.
 - **M2 [KO] Batch runs (`ngspice -b`).**
   - No live plot, and Stop throws the results away.
   - A measurement, Fourier or tuner change starts a new run.

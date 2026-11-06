@@ -15,6 +15,8 @@ import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { lineThicknessNm } from "../kicad-port/layerDefaults";
 import { autoPenFor, cellById, cellDialogValues, cellEditOf, gridColumn, isSelectableCell, schCellAddress, TABLE_LINE_STYLES, tableById, tableDialogValues, tablePatchOf, tablesOf, widthAfterToggle, type CellDialogValues, type TableDialogValues } from "../kicad-port/tables";
 import type { TableCellAddr, TableCmdWire, TableLineStyleName } from "../api/tableTypes";
+import type { BoardTable } from "../api/types";
+import type { DrawnTable } from "../state/tableDialogs";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 
 const GRID: CSSProperties = { gridTemplateColumns: "150px 1fr", rowGap: 6 };
@@ -52,37 +54,108 @@ function StyleSelect(props: { value: TableLineStyleName; disabled?: boolean; onC
 
 // ------------------------------------------------------------------------------------------------------------------------------ Table Properties
 
+/**
+ * What Table Properties needs from the editor it is open in: the board's and the sheet's (`TablePropertiesDialog` below), or the Footprint Editor's
+ * (components/footprint/FpItemDialogs.tsx) -- `DIALOG_TABLE_PROPERTIES` is opened by every frame that has tables.
+ */
+export interface TableHost {
+  /** A new value opens the form afresh. */
+  openKey: string;
+  /** The table being edited, as the editor's state shows it; or the one Draw Table has just sized (`drawn`), which is not added until OK. */
+  table?: BoardTable;
+  drawn?: DrawnTable;
+  /** A sheet's table: rows and columns counted from 0, no layer, no lock. */
+  sch: boolean;
+  /** The table's lock; null where there is none (a sheet's table, a footprint's). */
+  locked: boolean | null;
+  layers: string[];
+  layerName: (layer: string) => string;
+  units: LengthUnit;
+  /** `bds.GetLineThickness( layer )`: what a width starts at when switched on. */
+  defaultLine: (layer: string) => number;
+  /** OK: the dialog's values, one undo step; true when taken. */
+  submit: (v: TableDialogValues) => Promise<boolean>;
+  close: () => void;
+}
+
+/** The board's and the sheet's dialog: `table` / `sch_table` `draw` for the drawn table, `set` for one there is. */
 export function TablePropertiesDialog() {
   const dialogs = useTableDialogs();
   const open = dialogs.table;
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  const unit: LengthUnit = state.units;
   const board = state.board;
   // The board's table or the sheet's: the sheet's has no layer and no lock, and its border and separators start at the default width (0).
   const sch = open?.scope === "sch";
-  const host = sch ? { drawings: { tables: state.schematic?.tables ?? [] } } : board;
+  const tables = sch ? { drawings: { tables: state.schematic?.tables ?? [] } } : board;
   const send = (verb: TableCmdWire): Promise<boolean> => api.cmd(sch ? { op: "sch_table", ...verb } : { op: "table", ...verb });
-  const table = open?.mode === "edit" ? tableById(host, open.tableId) : undefined;
-  const drawn = open?.mode === "draw" ? open.drawn : undefined;
+  const table = open?.mode === "edit" ? tableById(tables, open.tableId) : undefined;
+  if (!open || (open.mode === "edit" && !table)) return null;
+  const textGraphics = board?.board_rules?.text_graphics;
+  const layerSetup = board?.board_rules?.layer_setup;
+  const host: TableHost = {
+    openKey: open.mode === "edit" ? `edit:${open.tableId}` : `draw:${JSON.stringify(open.drawn)}`,
+    table,
+    drawn: open.mode === "draw" ? open.drawn : undefined,
+    sch,
+    locked: sch ? null : table ? (board?.locked ?? []).includes(table.id) : false,
+    layers: boardLayerList(board?.layers ?? [], layerSetup),
+    layerName: (l) => layerDisplayName(layerSetup, l),
+    units: state.units,
+    defaultLine: (layer) => (sch ? 0 : lineThicknessNm(textGraphics, layer)),
+    submit: async (v) => {
+      if (open.mode === "draw") {
+        const d = open.drawn;
+        const before = new Set(tablesOf(tables).map((t) => t.id));
+        const patch = tablePatchOf({ cols: d.cols, layer: d.layer }, v);
+        const ok = await send({
+          verb: "draw",
+          layer: sch ? "" : v.layer,
+          at: { x: Math.round(d.at[0]), y: Math.round(d.at[1]) },
+          cols: d.cols,
+          rows: d.rows,
+          cell_w_nm: Math.round(d.cellW),
+          cell_h_nm: Math.round(d.cellH),
+          line_width_nm: Math.round(d.lineWidth),
+          locked: v.locked,
+          patch,
+        });
+        if (ok) {
+          closeTableDialog();
+          // `selectItem( table )`: the table just made. The board as the backend has it now: `stateRef` only catches up on the next render, so it is not in `getState()` yet.
+          const after = sch ? await fetchSchematic(state.currentSheetPath).then((s) => ({ drawings: { tables: s.tables ?? [] } })).catch(() => null) : await fetchState().catch(() => null);
+          const made = after ? tablesOf(after).find((t) => !before.has(t.id)) : undefined;
+          if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] });
+        }
+        return false; // closed above when it was taken
+      }
+      if (!table) return false;
+      return send({
+        verb: "set",
+        id: table.id,
+        layer: !sch && v.layer !== table.layer ? v.layer : undefined,
+        locked: !sch && v.locked !== (board?.locked ?? []).includes(table.id) ? v.locked : undefined,
+        patch: tablePatchOf(table, v),
+      });
+    },
+    close: closeTableDialog,
+  };
+  return <TablePropertiesForm host={host} />;
+}
+
+export function TablePropertiesForm({ host }: { host: TableHost }) {
+  const { table, drawn, sch } = host;
+  const unit: LengthUnit = host.units;
   const [v, setV] = useState<TableDialogValues | null>(null);
   const [busy, setBusy] = useState(false);
-  const key = open ? (open.mode === "edit" ? `edit:${open.tableId}` : `draw:${JSON.stringify(open.drawn)}`) : "";
-  const textGraphics = board?.board_rules?.text_graphics;
 
   // The dialog's values come from the table (or the one being drawn) each time it opens -- `TransferDataToWindow`.
   useEffect(() => {
-    if (!open) {
-      setV(null);
-      return;
-    }
-    if (open.mode === "edit") {
-      const t = tableById(host, open.tableId);
-      if (!t) return;
-      setV(tableDialogValues(t, ((sch ? state.schematic?.locked : board?.locked) ?? []).includes(t.id), sch ? 0 : lineThicknessNm(textGraphics, t.layer)));
-    } else {
-      const d = open.drawn;
+    if (table) {
+      setV(tableDialogValues(table, host.locked ?? false, host.defaultLine(table.layer)));
+    } else if (drawn) {
+      const d = drawn;
       setV({
         layer: d.layer,
         locked: false,
@@ -98,15 +171,14 @@ export function TablePropertiesDialog() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [host.openKey]);
 
-  if (!open || !v || (open.mode === "edit" && !table)) return null;
+  if (!v) return null;
 
   const cols = table?.cols ?? drawn!.cols;
   const rows = table?.rows ?? drawn!.rows;
-  const layerSetup = board?.board_rules?.layer_setup;
-  const layers = boardLayerList(board?.layers ?? [], layerSetup);
-  const defaultLine = sch ? 0 : lineThicknessNm(textGraphics, v.layer);
+  const layers = host.layers;
+  const defaultLine = host.defaultLine(v.layer);
   const set = (patch: Partial<TableDialogValues>) => setV((cur) => (cur ? { ...cur, ...patch } : cur));
   const borderOn = v.borderExternal || v.borderHeader;
   const separatorsOn = v.rowSeparators || v.colSeparators;
@@ -129,46 +201,14 @@ export function TablePropertiesDialog() {
   const save = async () => {
     setBusy(true);
     try {
-      if (open.mode === "draw") {
-        const d = open.drawn;
-        const before = new Set(tablesOf(host).map((t) => t.id));
-        const patch = tablePatchOf({ cols: d.cols, layer: d.layer }, v);
-        const ok = await send({
-          verb: "draw",
-          layer: sch ? "" : v.layer,
-          at: { x: Math.round(d.at[0]), y: Math.round(d.at[1]) },
-          cols: d.cols,
-          rows: d.rows,
-          cell_w_nm: Math.round(d.cellW),
-          cell_h_nm: Math.round(d.cellH),
-          line_width_nm: Math.round(d.lineWidth),
-          locked: v.locked,
-          patch,
-        });
-        if (ok) {
-          closeTableDialog();
-          // `selectItem( table )`: the table just made. The board as the backend has it now: `stateRef` only catches up on the next render, so it is not in `getState()` yet.
-          const after = sch ? await fetchSchematic(state.currentSheetPath).then((s) => ({ drawings: { tables: s.tables ?? [] } })).catch(() => null) : await fetchState().catch(() => null);
-          const made = after ? tablesOf(after).find((t) => !before.has(t.id)) : undefined;
-          if (made) dispatch({ type: "SET_SELECTION", refs: [made.id] });
-        }
-      } else if (table) {
-        const ok = await send({
-          verb: "set",
-          id: table.id,
-          layer: !sch && v.layer !== table.layer ? v.layer : undefined,
-          locked: !sch && v.locked !== (board?.locked ?? []).includes(table.id) ? v.locked : undefined,
-          patch: tablePatchOf(table, v),
-        });
-        if (ok) closeTableDialog();
-      }
+      if (await host.submit(v)) host.close();
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="dialog-backdrop" onClick={closeTableDialog}>
+    <div className="dialog-backdrop" onClick={host.close}>
       <div className="dialog" data-testid="table-properties" style={{ width: 760, maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Table Properties</span>
@@ -214,14 +254,18 @@ export function TablePropertiesDialog() {
                 {!layers.includes(v.layer) && <option value={v.layer}>{v.layer}</option>}
                 {layers.map((l) => (
                   <option key={l} value={l}>
-                    {layerDisplayName(layerSetup, l)}
+                    {host.layerName(l)}
                   </option>
                 ))}
               </select>
-              <span />
-              <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <input type="checkbox" data-testid="table-locked" checked={v.locked} onChange={(e) => set({ locked: e.target.checked })} /> Locked
-              </label>
+              {host.locked !== null && (
+                <>
+                  <span />
+                  <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="checkbox" data-testid="table-locked" checked={v.locked} onChange={(e) => set({ locked: e.target.checked })} /> Locked
+                  </label>
+                </>
+              )}
             </div>
           )}
           <div style={{ fontWeight: 600, fontSize: 11, marginTop: 10, marginBottom: 4 }}>Border</div>
@@ -256,7 +300,7 @@ export function TablePropertiesDialog() {
           </div>
         </div>
         <div className="dialog-footer">
-          <button data-testid="table-cancel" onClick={closeTableDialog}>
+          <button data-testid="table-cancel" onClick={host.close}>
             Cancel
           </button>
           <button className="primary" data-testid="table-ok" onClick={save} disabled={busy}>

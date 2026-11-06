@@ -487,6 +487,19 @@ impl GroupHost for DrawingsSection {
     }
 }
 
+/// A library footprint's groups (`FOOTPRINT::Groups()`, [`crate::fp_items`]): the Footprint Editor's Group and Ungroup.
+impl GroupHost for crate::ir::LibraryFootprint {
+    fn group_list(&self) -> &[Group] {
+        &self.items.groups
+    }
+    fn group_list_mut(&mut self) -> &mut Vec<Group> {
+        &mut self.items.groups
+    }
+    fn assign_group_ids(&mut self) {
+        self.assign_missing_ids();
+    }
+}
+
 impl GroupHost for SchExtras {
     fn group_list(&self) -> &[Group] {
         &self.groups

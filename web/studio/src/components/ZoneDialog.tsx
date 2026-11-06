@@ -16,21 +16,21 @@
 // for a pour, the technical and user layers for a non-copper zone, both for
 // a rule area; one or more can be checked), the name and "Locked".
 //
-// Per-layer hatch-offset overrides (Zone Properties' table, the Board Setup >
-// Zone Hatch Offsets page's per-zone counterpart) have no IR equivalent and
-// are left out, same "nothing to show, not a bug" convention this app's other
-// dialogs use for a field with no backing data.
+// Every kind has "Outline display:" (Line / Hatched / Fully hatched, `m_OutlineDisplayCtrl`) and "Outline hatch pitch:" (`m_outlineHatchPitch`, 0.1 to 2 mm), how
+// the outline is drawn (kicad-port/zoneHatch.ts, `ZONE::HatchBorder`); a copper zone's hatched fill has "Hatch offset overrides:" (`m_layerSpecificOverrides`,
+// `LAYER_PROPERTIES_GRID_TABLE`: a layer of the zone and its X and Y offset each), the per-zone counterpart of Board Setup > Zone Hatch Offsets.
 //
-// KiCad asks for a zone's full settings *before* you draw the outline;
-// this app's canvas draws the outline first (Canvas.tsx's finishDraw()
-// moves it into state.zonePending once it has 3+ points), then this
-// dialog turns it into a real `add_zone` (+ an immediate `edit_zone` if
-// any setting was actually customized -- see `api.addZone`'s own doc).
-// The same dialog, in "edit" mode (state.zoneEditId), re-opens on an
-// existing zone's current settings and commits everything through
-// `edit_zone` alone (outline unchanged -- no point editor yet).
-import { useEffect, useMemo, useState } from "react";
-import type { Cmd, FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
+// KiCad asks for a new zone's settings *before* the outline is drawn: Add Filled Zone and Add Rule Area open this dialog at the first corner
+// (`ZONE_CREATE_HELPER::OnFirstPoint` -> `createNewZone`, state.pcbx.zoneCreate, kicad-port/pcbDrawZone.ts); its OK locks the corner in and the zone being drawn
+// takes these settings when it is finished (`zoneInfo.ExportSetting( *newZone )`), Cancel draws nothing and leaves the tool armed. Properties (E) during the draw
+// opens it again on those settings. Create Zone from Selection still opens it on an outline the conversion made (state.zonePending), and its OK adds the zones
+// (`api.addZone`: `add_zone` with the settings in one undo step). The same dialog, in "edit" mode (state.zoneEditId), re-opens on an existing zone's current
+// settings and commits everything through `edit_zone` alone (outline unchanged).
+//
+// The form is one for both frames (the footprint editor's `OnEditItemRequest` and its Draw Rule Area run the same `InvokeRuleAreaEditor`, `InvokeCopperZonesEditor` and
+// `InvokeNonCopperZonesEditor`): `ZoneDialog` below is the board's host of `ZoneForm`, components/footprint/FpItemDialogs.tsx the Footprint Editor's.
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Cmd, FillMode, IslandRemovalMode, PadConnection, PlacementArea, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
 import { fetchPlacementSources } from "../api/multichannelClient";
@@ -43,10 +43,72 @@ import { NO_NET_ZONE_WARNING, convertZoneTitle, orderedLayerSet, zoneDialogKind,
 import { convertPolys } from "../api/client";
 import { deleteCmd } from "../kicad-port/pcbConvert";
 import { rememberZoneConversion } from "../actions/pcbConvertSweep";
-import { LengthRow, lengthText, useLengthField } from "./pcbDialogKit";
+import { LengthRow, lengthText, useEscape, useLengthField } from "./pcbDialogKit";
+import { stringFromValue } from "../kicad-port/fpFields";
+import { DEFAULT_ZONE_BORDER_STYLE, ZONE_BORDER_HATCH_DIST_NM, ZONE_BORDER_STYLE_CHOICES, borderHatchPitchError } from "../kicad-port/zoneHatch";
+import { ALL_ZONE_LAYERS_OVERRIDDEN, hatchOffsetRows, hatchOffsetsOf, nextOffsetLayer, sameHatchOffsets, type HatchOffsetRow } from "../kicad-port/zoneHatchOffsets";
+import type { ZoneBorderStyle } from "../api/types";
 
-type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
-const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
+export type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
+export const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
+
+/** "Create Zone from Selection"'s Conversion Settings, as the form holds them. */
+export interface ZoneConvertChoice {
+  strategy: "centerline" | "bounding_hull";
+  gapNm: number;
+  deleteOriginals: boolean;
+}
+
+/** What the form starts from when it opens (`TransferDataToWindow`). `net` null: a new zone nothing was picked for (it starts on the first net). */
+export interface ZoneFormInit {
+  net: string | null;
+  layers: string[];
+  name: string;
+  locked: boolean;
+  settings: ZoneFormSettings;
+  conv?: ZoneConvertChoice;
+}
+
+/** What OK hands the host: the net as the dialog has it, the layer set (and its first layer), the name, the lock, the settings (a rule area's placement in them) and the conversion's choice. */
+export interface ZoneFormResult {
+  net: string;
+  layers: string[];
+  firstLayer: string;
+  name: string;
+  locked: boolean;
+  form: ZoneFormSettings;
+  convert: ZoneConvertChoice | null;
+}
+
+/** What the form needs from the editor it is open in. */
+export interface ZoneHost {
+  /** A new value opens the form afresh: `init()` is read again. */
+  openKey: string;
+  init: () => ZoneFormInit;
+  /** The placement the Placement tab starts from. */
+  placement: PlacementArea | undefined;
+  /** An existing zone: "... Properties", OK and the Delete button. */
+  editing: boolean;
+  /** `zoneDuplicate`'s dialog. */
+  duplicate: boolean;
+  /** The dialog of a zone being drawn (`ZONE_CREATE_HELPER::OnFirstPoint` -> `createNewZone`, or Properties during the draw): OK hands the settings to the draw. */
+  creating?: boolean;
+  /** "Create Zone / Rule Area from Selection": the Conversion Settings box. */
+  convert: boolean;
+  nets: string[];
+  copperLayers: string[];
+  optionalLayers: string[];
+  layerName: (layer: string) => string;
+  units: Parameters<typeof nmTo>[1];
+  /** Whether the editor keeps a lock for the zone (the Locked box). */
+  lockable: boolean;
+  /** The corners of the outline a new zone will have, for the line under the form. */
+  outlinePoints: number | null;
+  placementSources: () => Promise<PlacementChoices>;
+  submit: (r: ZoneFormResult) => Promise<void>;
+  remove: (() => void) | null;
+  close: () => void;
+}
 
 /** `ZONE::GetDoNotAllow*` -- task item 3's five keepout restrictions. */
 const KEEPOUT_OPTIONS: { key: Exclude<keyof RuleAreaFields, "is_rule_area" | "placement">; label: string }[] = [
@@ -97,6 +159,7 @@ function LengthInput({ valueNm, unit, onChange, disabled, testid }: { valueNm: n
 
 const SECTION: React.CSSProperties = { color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 };
 
+/** The board's dialog: a new outline's (`state.zonePending`), an existing zone's (`state.zoneEditId`), a duplicate's (`zoneDuplicate`), Create Zone from Selection's. */
 export function ZoneDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
@@ -104,12 +167,14 @@ export function ZoneDialog() {
   const units = state.units;
 
   const addOutline = state.zonePending;
+  // A zone being drawn: the dialog at its first corner, or Properties (E) during the draw (kicad-port/pcbDrawZone.ts).
+  const create = state.pcbx.zoneCreate ?? null;
   const editId = state.zoneEditId;
   const editZone = editId ? api.zoneById(editId) : undefined;
   // `pcbnew.EditorControl.zoneDuplicate`: the dialog opens on a copy of this zone's settings; OK adds the copy.
   const dupId = state.bcx.duplicateZoneId;
   const dupZone = dupId ? api.zoneById(dupId) : undefined;
-  const open = addOutline != null || (editId != null && editZone != null) || dupZone != null;
+  const open = create != null || addOutline != null || (editId != null && editZone != null) || dupZone != null;
 
   const nets = useMemo(() => {
     const set = new Set<string>();
@@ -117,6 +182,120 @@ export function ZoneDialog() {
     return [...set].sort();
   }, [state.board]);
 
+  // Create Zone / Rule Area from Selection: the dialog's "Conversion Settings" box (`DIALOG_COPPER_ZONE( ..., aConvertSettings )`; round 6 D6-2).
+  const convert = addOutline != null ? state.pcbx.zoneConvert : null;
+  const copperLayers = state.board?.layers ?? [];
+  const optionalLayers = enabledOptionalLayers(state.board?.board_rules?.layer_setup);
+  const lockedIds = state.board?.locked;
+
+  // Escape in the dialog of a zone being drawn is its Cancel (`dialogResult == wxID_CANCEL`): the tool stays armed, so the board's own Escape must not see it.
+  const cancelCreate = useCallback(() => dispatch({ type: "PCBX", patch: { zoneCreate: null } }), [dispatch]);
+  useEscape(create ? cancelCreate : null);
+
+  if (!open) return null;
+
+  const close = () => {
+    if (create) dispatch({ type: "PCBX", patch: { zoneCreate: null } });
+    dispatch({ type: "SET_ZONE_PENDING", outline: null });
+    dispatch({ type: "SET_ZONE_EDIT_ID", id: null });
+    if (dupZone) dispatch({ type: "BCX", patch: { duplicateZoneId: null } });
+    dispatch({ type: "PCBX", patch: { zoneConvert: null } });
+  };
+
+  const host: ZoneHost = {
+    openKey: `${editId ?? ""}|${dupId ?? ""}|${create ? `create:${create.at ? create.at.join(",") : "draw"}` : ""}`,
+    // (Re)populate whenever the dialog opens on a *different* target -- never on every render, or a mid-edit keystroke would be clobbered by
+    // this same effect re-reading the (not yet re-fetched) board.
+    init: () => {
+      // `createNewZone`'s `zoneInfo` (or, for Properties during the draw, the settings the zone being drawn holds).
+      if (create) return { net: create.initial.net, layers: [...create.initial.layers], name: create.initial.name, locked: create.initial.locked, settings: { ...DEFAULT_FORM_SETTINGS, ...create.initial.settings } };
+      if (editZone) return { net: editZone.net, layers: [...zoneLayers(editZone)], name: editZone.name ?? "", locked: !!lockedIds?.includes(editZone.id), settings: { ...editZone } };
+      // `zoneSettings << *oldZone`: the copy starts from the original's net, layers, name, lock and settings.
+      if (dupZone) return { net: dupZone.net, layers: [...zoneLayers(dupZone)], name: dupZone.name ?? "", locked: !!lockedIds?.includes(dupZone.id), settings: { ...dupZone } };
+      // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
+      const fresh: ZoneFormInit = { net: null, layers: [activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")], name: "", locked: false, settings: { ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea } };
+      dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
+      if (convert) fresh.conv = { strategy: convert.strategy, gapNm: convert.gapNm, deleteOriginals: convert.deleteOriginals };
+      return fresh;
+    },
+    placement: (editZone ?? dupZone)?.placement,
+    editing: !!editZone,
+    duplicate: !!dupZone,
+    creating: !!create,
+    convert: !!convert,
+    nets,
+    copperLayers,
+    optionalLayers,
+    layerName: (l) => layerDisplayName(state.board?.board_rules?.layer_setup, l),
+    units,
+    lockable: true,
+    outlinePoints: addOutline ? addOutline.length : null,
+    placementSources: () => fetchPlacementSources().then((r): PlacementChoices => (r.ok ? { sheets: r.sheets, classes: r.classes, groups: r.groups } : NO_CHOICES)),
+    remove: editZone
+      ? () => {
+          api.cmd({ op: "delete_zone", id: editZone.id });
+          close();
+        }
+      : null,
+    close,
+    submit: async ({ net: effectiveNet, layers, firstLayer, name, locked, form, convert: chosen }) => {
+      const settings = form;
+      if (create) {
+        // `createNewZone` returns the settings; `OnFirstPoint` then locks the first corner in (`AddPoint`) and clears the selection (`selectionClear`). Properties
+        // during the draw (`at` null) only changes what the zone being drawn takes.
+        const picked = { net: effectiveNet, layers, name: settings.is_rule_area ? "" : name, locked, settings: form };
+        const draw = state.drawState;
+        if (create.at) {
+          dispatch({ type: "SET_SELECTION", refs: [] });
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts: [create.at], settings: picked } });
+        } else if (draw?.kind === "zone") {
+          dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, settings: picked } });
+        }
+        close();
+        return;
+      }
+      if (editZone) {
+        const cmds: Cmd[] = [{ op: "edit_zone", ...form, id: editZone.id, net: effectiveNet, layer: firstLayer, layers }];
+        if ((editZone.name ?? "") !== name && !settings.is_rule_area) cmds.push({ op: "set_zone_name", id: editZone.id, name });
+        if (!!lockedIds?.includes(editZone.id) !== locked) cmds.push({ op: "set_locked", ids: [editZone.id], locked });
+        const ok = cmds.length === 1 ? await api.cmd(cmds[0]!) : await api.cmdBatch(cmds);
+        if (ok) close();
+      } else if (addOutline) {
+        const extra = { layers, name: settings.is_rule_area ? "" : name, locked };
+        if (convert && chosen) {
+          // "Create Zone from Selection": `getPolys( m_userSettings )` with what the box holds now (nothing to convert: nothing is done), a zone with the dialog's
+          // settings for every outline, then the converted sources go -- all one undo step, as `CreatePolys` pushes one commit (round 5 B5-10): the zones join a
+          // step held open, which the removal (or a bare commit) closes.
+          rememberZoneConversion(chosen);
+          const reply = await convertPolys(convert.ids, chosen.strategy, chosen.gapNm);
+          if (!reply.ok || (reply.polys ?? reply.rings).length === 0 || !state.board) {
+            close();
+            return;
+          }
+          const board = state.board;
+          // `polys.emplace_back( SHAPE_POLY_SET( polySet.COutline( ii ) ) ); polys.back().AddHole( .. )`: each outline with its holes (a zone source's are kept).
+          const polys = reply.polys ?? reply.rings.map((outline) => ({ outline, holes: [] as [number, number][][] }));
+          for (const poly of polys) await api.addZone(effectiveNet, firstLayer, poly.outline, form, { ...extra, holes: poly.holes }, "hold");
+          const deleteCmds: Cmd[] = chosen.deleteOriginals ? reply.consumed.map((id) => deleteCmd(board, id)) : [];
+          if (deleteCmds.length > 0) await api.cmdBatch(deleteCmds, "commit");
+          else await postCarry("commit");
+        } else await api.addZone(effectiveNet, firstLayer, addOutline, form, extra);
+        close();
+      } else if (dupZone) {
+        // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layers as the original --
+        // is offset a bit so it can be picked.
+        const sameLayers = zoneLayers(dupZone).join("|") === layers.join("|");
+        await api.addZone(effectiveNet, firstLayer, duplicatedZoneOutline(dupZone.outline, sameLayers), form, { layers, name: settings.is_rule_area ? "" : name, locked });
+        close();
+      }
+    },
+  };
+  return <ZoneForm host={host} />;
+}
+
+export function ZoneForm({ host }: { host: ZoneHost }) {
+  const units = host.units;
+  const nets = host.nets;
   // `null`: a new zone nothing was picked for (it starts on the first net); `""`: on no net (`<no net>`).
   const [net, setNet] = useState<string | null>(null);
   /** The layers checked in the list (`ZONE_SETTINGS::m_Layers`), in the order the board lists them. */
@@ -124,74 +303,60 @@ export function ZoneDialog() {
   const [name, setName] = useState("");
   const [locked, setLocked] = useState(false);
   const [settings, setSettings] = useState<ZoneFormSettings>(DEFAULT_FORM_SETTINGS);
+  /** The Hatched Fill tab's "Hatch offset overrides:" grid, and what it opened with (an unchanged grid is not sent, so a zone keeps its own). */
+  const [offsets, setOffsets] = useState<HatchOffsetRow[]>([]);
+  const [offsetsAtOpen, setOffsetsAtOpen] = useState<HatchOffsetRow[]>([]);
+  const [offsetNote, setOffsetNote] = useState<string | null>(null);
+  // "Outline hatch pitch:" as typed, in the display units (`UNIT_BINDER`): validated on OK.
+  const pitchField = useLengthField(ZONE_BORDER_HATCH_DIST_NM);
   // The Placement tab of a rule area (`DIALOG_RULE_AREA_PROPERTIES`): the sheets, component classes and groups the board offers, and what is chosen among them.
   const [sources, setSources] = useState<PlacementChoices | null>(null);
   const [placement, setPlacement] = useState<PlacementForm>(() => placementFormOf(undefined, NO_CHOICES));
-  // Create Zone / Rule Area from Selection: the dialog's "Conversion Settings" box (`DIALOG_COPPER_ZONE( ..., aConvertSettings )`; round 6 D6-2).
-  const convert = addOutline != null ? state.pcbx.zoneConvert : null;
+  const convert = host.convert;
   const [convStrategy, setConvStrategy] = useState<"centerline" | "bounding_hull">("centerline");
   const convGap = useLengthField(0);
   const [convDelete, setConvDelete] = useState(false);
+  const copperLayers = host.copperLayers;
+  const optionalLayers = host.optionalLayers;
 
-  const copperLayers = state.board?.layers ?? [];
-  const optionalLayers = enabledOptionalLayers(state.board?.board_rules?.layer_setup);
-  const lockedIds = state.board?.locked;
-
-  // (Re)populate whenever the dialog opens on a *different* target --
-  // never on every render, or a mid-edit keystroke would be clobbered by
-  // this same effect re-reading the (not yet re-fetched) board.
   useEffect(() => {
-    if (!open) return;
-    if (editZone) {
-      setNet(editZone.net);
-      setLayers([...zoneLayers(editZone)]);
-      setName(editZone.name ?? "");
-      setLocked(!!lockedIds?.includes(editZone.id));
-      setSettings({ ...editZone });
-    } else if (dupZone) {
-      // `zoneSettings << *oldZone`: the copy starts from the original's net, layers, name, lock and settings.
-      setNet(dupZone.net);
-      setLayers([...zoneLayers(dupZone)]);
-      setName(dupZone.name ?? "");
-      setLocked(!!lockedIds?.includes(dupZone.id));
-      setSettings({ ...dupZone });
-    } else {
-      // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
-      setNet(null);
-      setLayers([activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")]);
-      setName("");
-      setLocked(false);
-      setSettings({ ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea });
-      dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
-      if (convert) {
-        setConvStrategy(convert.strategy);
-        convGap.setText(lengthText(convert.gapNm, units));
-        setConvDelete(convert.deleteOriginals);
-      }
+    const init = host.init();
+    setNet(init.net);
+    setLayers(init.layers);
+    setName(init.name);
+    setLocked(init.locked);
+    setSettings(init.settings);
+    // the outline display's pitch and the hatch offset overrides the zone starts from (`TransferDataToWindow`)
+    const rows = hatchOffsetRows(init.settings.hatch_offsets);
+    setOffsets(rows);
+    setOffsetsAtOpen(rows);
+    setOffsetNote(null);
+    pitchField.setText(lengthText(init.settings.border_hatch_pitch ?? ZONE_BORDER_HATCH_DIST_NM, units));
+    if (init.conv) {
+      setConvStrategy(init.conv.strategy);
+      convGap.setText(lengthText(init.conv.gapNm, units));
+      setConvDelete(init.conv.deleteOriginals);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editId, dupId]);
+  }, [host.openKey]);
 
   // What the Placement tab offers is read from the board when the dialog opens; the form starts from the zone's own placement once it has them.
   useEffect(() => {
-    if (!open) return;
     let live = true;
     setSources(null);
-    void fetchPlacementSources()
-      .then((r) => {
+    void host
+      .placementSources()
+      .then((found) => {
         if (!live) return;
-        const found: PlacementChoices = r.ok ? { sheets: r.sheets, classes: r.classes, groups: r.groups } : NO_CHOICES;
         setSources(found);
-        setPlacement(placementFormOf((editZone ?? dupZone)?.placement, found));
+        setPlacement(placementFormOf(host.placement, found));
       })
       .catch(() => live && setSources(NO_CHOICES));
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editId, dupId]);
-
-  if (!open) return null;
+  }, [host.openKey]);
 
   const kind = zoneDialogKind(settings.is_rule_area, layers);
   const choices = zoneLayerChoices(kind, copperLayers, optionalLayers);
@@ -208,12 +373,7 @@ export function ZoneDialog() {
   };
   const toggleLayer = (layer: string, on: boolean) => setLayers(orderedLayerSet(on ? [...layers, layer] : layers.filter((l) => l !== layer), listed));
 
-  const close = () => {
-    dispatch({ type: "SET_ZONE_PENDING", outline: null });
-    dispatch({ type: "SET_ZONE_EDIT_ID", id: null });
-    if (dupZone) dispatch({ type: "BCX", patch: { duplicateZoneId: null } });
-    dispatch({ type: "PCBX", patch: { zoneConvert: null } });
-  };
+  const close = host.close;
 
   // panel_zone_properties.cpp's AcceptOptions(): the one cross-field check
   // this app's backend also enforces (`ops_bad_zone`) -- caught here too
@@ -226,57 +386,37 @@ export function ZoneDialog() {
   const thermalSpokeTooNarrow = kind === "copper" && settings.thermal_spoke_width < settings.min_thickness;
   // (a copper zone on no net is allowed: the panel only warns, `updateInfoBar`)
   const convGapNm = convert && convStrategy === "bounding_hull" ? convGap.parse() : 0;
-  const canSubmit = convGapNm !== null && !noLayer && (kind === "rule-area" ? true : kind === "non-copper" ? settings.min_thickness >= 0 : !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0);
+  // `m_outlineHatchPitch.Validate( ZONE_BORDER_HATCH_MINDIST_MM, ZONE_BORDER_HATCH_MAXDIST_MM )` (all three dialogs).
+  const pitchNm = pitchField.parse();
+  const pitchError = pitchNm === null ? "Outline hatch pitch is not a length." : borderHatchPitchError(pitchNm, (nm) => stringFromValue(nm, units));
+  const canSubmit = convGapNm !== null && !pitchError && !noLayer && (kind === "rule-area" ? true : kind === "non-copper" ? settings.min_thickness >= 0 : !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0);
   const firstLayer = layers[0] ?? "F.Cu";
 
   const submit = async () => {
     if (!canSubmit) return;
     // The zone's net is the form's own; the settings carry the rest (a spread of the zone being edited would bring its old net and layer back over the form's).
-    const form = { ...settings, ...(settings.is_rule_area ? { placement: placementOf(placement) } : {}) };
-    if (editZone) {
-      const cmds: Cmd[] = [{ op: "edit_zone", ...form, id: editZone.id, net: effectiveNet, layer: firstLayer, layers }];
-      if ((editZone.name ?? "") !== name && !settings.is_rule_area) cmds.push({ op: "set_zone_name", id: editZone.id, name });
-      if (!!lockedIds?.includes(editZone.id) !== locked) cmds.push({ op: "set_locked", ids: [editZone.id], locked });
-      const ok = cmds.length === 1 ? await api.cmd(cmds[0]!) : await api.cmdBatch(cmds);
-      if (ok) close();
-    } else if (addOutline) {
-      const extra = { layers, name: settings.is_rule_area ? "" : name, locked };
-      if (convert) {
-        // "Create Zone from Selection": `getPolys( m_userSettings )` with what the box holds now (nothing to convert: nothing is done), a zone with the dialog's
-        // settings for every outline, then the converted sources go -- all one undo step, as `CreatePolys` pushes one commit (round 5 B5-10): the zones join a
-        // step held open, which the removal (or a bare commit) closes.
-        const chosen = { strategy: convStrategy, gapNm: convGapNm ?? 0, deleteOriginals: convDelete };
-        rememberZoneConversion(chosen);
-        const reply = await convertPolys(convert.ids, chosen.strategy, chosen.gapNm);
-        if (!reply.ok || reply.rings.length === 0 || !state.board) {
-          close();
-          return;
-        }
-        const board = state.board;
-        for (const outline of reply.rings) await api.addZone(effectiveNet, firstLayer, outline, form, extra, "hold");
-        const deleteCmds: Cmd[] = chosen.deleteOriginals ? reply.consumed.map((id) => deleteCmd(board, id)) : [];
-        if (deleteCmds.length > 0) await api.cmdBatch(deleteCmds, "commit");
-        else await postCarry("commit");
-      } else await api.addZone(effectiveNet, firstLayer, addOutline, form, extra);
-      close();
-    } else if (dupZone) {
-      // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layers as the original --
-      // is offset a bit so it can be picked.
-      const sameLayers = zoneLayers(dupZone).join("|") === layers.join("|");
-      await api.addZone(effectiveNet, firstLayer, duplicatedZoneOutline(dupZone.outline, sameLayers), form, { layers, name: settings.is_rule_area ? "" : name, locked });
-      close();
-    }
+    // `AcceptOptions`: the outline display and its pitch; the hatch offset overrides replace the zone's (`props.hatching_offset = std::nullopt` for each, then the
+    // grid's rows) -- sent only when the grid changed, so a zone keeps the ones it had.
+    const offsetsChanged = !sameHatchOffsets(offsets, offsetsAtOpen);
+    const form = {
+      ...settings,
+      border_style: settings.border_style ?? DEFAULT_ZONE_BORDER_STYLE,
+      border_hatch_pitch: pitchNm ?? ZONE_BORDER_HATCH_DIST_NM,
+      hatch_offsets: offsetsChanged ? hatchOffsetsOf(offsets, layers) : undefined,
+      ...(settings.is_rule_area ? { placement: placementOf(placement) } : {}),
+    };
+    await host.submit({ net: effectiveNet, layers, firstLayer, name, locked, form, convert: convert ? { strategy: convStrategy, gapNm: convGapNm ?? 0, deleteOriginals: convDelete } : null });
   };
 
   const title = convert
     ? convertZoneTitle(kind)
-    : editZone
+    : host.editing
     ? kind === "rule-area"
       ? "Rule Area Properties"
       : kind === "non-copper"
         ? "Non-copper Zone Properties"
         : "Zone Properties"
-    : dupZone
+    : host.duplicate
       ? "Zone Properties -- Duplicate Zone onto Layer"
       : kind === "rule-area"
         ? "Rule Area Properties -- New Rule Area"
@@ -336,7 +476,7 @@ export function ZoneDialog() {
             <div role="group" aria-label="Zone layers" style={{ maxHeight: 130, overflowY: "auto", border: "1px solid var(--chrome-border, #444)", padding: "2px 6px" }}>
               {listed.map((l) => (
                 <label key={l} className="filter-row" style={{ display: "block" }} data-zone-layer={l}>
-                  <input type="checkbox" data-testid={`zone-layer-${l}`} checked={layers.includes(l)} onChange={(e) => toggleLayer(l, e.target.checked)} /> {layerDisplayName(state.board?.board_rules?.layer_setup, l)}
+                  <input type="checkbox" data-testid={`zone-layer-${l}`} checked={layers.includes(l)} onChange={(e) => toggleLayer(l, e.target.checked)} /> {host.layerName(l)}
                 </label>
               ))}
             </div>
@@ -347,9 +487,11 @@ export function ZoneDialog() {
               {NO_NET_ZONE_WARNING}
             </p>
           )}
-          <label className="filter-row" style={{ display: "block", marginTop: 8 }} title="BOARD_ITEM::IsLocked() -- a locked zone is not moved or edited by the selection tools">
-            <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} data-testid="zone-locked" /> Locked
-          </label>
+          {host.lockable && (
+            <label className="filter-row" style={{ display: "block", marginTop: 8 }} title="BOARD_ITEM::IsLocked() -- a locked zone is not moved or edited by the selection tools">
+              <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} data-testid="zone-locked" /> Locked
+            </label>
+          )}
 
           {kind === "rule-area" ? (
             <>
@@ -562,19 +704,98 @@ export function ZoneDialog() {
                   </>
                 )}
               </div>
+              {kind === "copper" && (
+                // "Hatch offset overrides:" (`m_layerSpecificOverrides`), enabled with "Hatched fill" only (`onHatched`); the rows are kept while it is off.
+                <div data-testid="zone-hatch-offsets" style={{ marginTop: 8, opacity: settings.fill_mode === "HatchPattern" ? 1 : 0.5 }}>
+                  <p style={{ ...SECTION, marginTop: 4 }}>Hatch offset overrides:</p>
+                  <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ textAlign: "left" }}>
+                        <th>Layer</th>
+                        <th>Offset X</th>
+                        <th>Offset Y</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {offsets.map((r, i) => (
+                        <tr key={`${r.layer}-${i}`} data-hatch-offset-layer={r.layer}>
+                          <td>
+                            <select
+                              disabled={settings.fill_mode !== "HatchPattern"}
+                              value={r.layer}
+                              onChange={(e) => setOffsets((rows) => rows.map((q, j) => (j === i ? { ...q, layer: e.target.value } : q)))}
+                            >
+                              {[...new Set([r.layer, ...layers.filter(isCopper)])].map((l) => (
+                                <option key={l} value={l}>
+                                  {host.layerName(l)}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td>
+                            <LengthInput valueNm={r.x_nm} unit={units} disabled={settings.fill_mode !== "HatchPattern"} onChange={(v) => setOffsets((rows) => rows.map((q, j) => (j === i ? { ...q, x_nm: v } : q)))} testid={`zone-hatch-offset-x-${r.layer}`} />
+                          </td>
+                          <td>
+                            <LengthInput valueNm={r.y_nm} unit={units} disabled={settings.fill_mode !== "HatchPattern"} onChange={(v) => setOffsets((rows) => rows.map((q, j) => (j === i ? { ...q, y_nm: v } : q)))} testid={`zone-hatch-offset-y-${r.layer}`} />
+                          </td>
+                          <td>
+                            <button disabled={settings.fill_mode !== "HatchPattern"} title="Delete row" onClick={() => setOffsets((rows) => rows.filter((_, j) => j !== i))}>
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <button
+                    disabled={settings.fill_mode !== "HatchPattern"}
+                    data-testid="zone-hatch-offset-add"
+                    title="Add a layer override"
+                    onClick={() => {
+                      const layer = nextOffsetLayer(offsets, layers);
+                      if (!layer) {
+                        setOffsetNote(ALL_ZONE_LAYERS_OVERRIDDEN);
+                        return;
+                      }
+                      setOffsetNote(null);
+                      setOffsets((rows) => [...rows, { layer, x_nm: 0, y_nm: 0 }]);
+                    }}
+                  >
+                    +
+                  </button>
+                  {offsetNote && <span style={{ color: "#e0a030", fontSize: 11, marginLeft: 8 }}>{offsetNote}</span>}
+                </div>
+              )}
             </>
           )}
 
-          {addOutline && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>{addOutline.length} point outline.</p>}
+          {/* "Outline display:" / "Outline style:" and "Outline hatch pitch:" (`m_OutlineDisplayCtrl`, `m_outlineHatchPitch`): the outline as `ZONE::HatchBorder` draws it. */}
+          <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr", marginTop: 12 }}>
+            <span>{kind === "non-copper" ? "Outline style:" : "Outline display:"}</span>
+            <select data-testid="zone-outline-display" value={settings.border_style ?? DEFAULT_ZONE_BORDER_STYLE} onChange={(e) => set("border_style", e.target.value as ZoneBorderStyle)}>
+              {ZONE_BORDER_STYLE_CHOICES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <span>Outline hatch pitch:</span>
+            <span title="Distance between parallel lines used for hatching the area">
+              <input data-testid="zone-outline-hatch-pitch" value={pitchField.text} onChange={(e) => pitchField.setText(e.target.value)} style={{ width: 90 }} /> {units}
+            </span>
+          </div>
+          {pitchError && (
+            <p style={{ color: "#ef5b5b", fontSize: 11, margin: "4px 0 0" }} data-testid="zone-pitch-error">
+              {pitchError}
+            </p>
+          )}
+
+          {host.outlinePoints != null && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>{host.outlinePoints} point outline.</p>}
         </div>
         <div className="dialog-footer">
-          {editZone && (
-            <button
-              onClick={() => {
-                api.cmd({ op: "delete_zone", id: editZone.id });
-                close();
-              }}
-            >
+          {host.remove && (
+            <button onClick={host.remove} data-testid="zone-delete">
               {settings.is_rule_area ? "Delete Rule Area" : "Delete Zone"}
             </button>
           )}
@@ -582,7 +803,7 @@ export function ZoneDialog() {
             Cancel
           </button>
           <button className="primary" disabled={!canSubmit} onClick={submit} data-testid="zone-ok">
-            {editZone || convert ? "OK" : settings.is_rule_area ? "Add Rule Area" : "Add Zone"}
+            {host.editing || convert || host.creating ? "OK" : settings.is_rule_area ? "Add Rule Area" : "Add Zone"}
           </button>
         </div>
       </div>

@@ -9,8 +9,8 @@ import { picker } from "../../actions/pcbPicker";
 import { getGridSettings } from "../../state/gridSettings";
 import { formatLength, type LengthUnit } from "../../state/units";
 import { scaleToZoomFactor, zoomListFor } from "../../kicad-port/zoomFit";
-import { activeEditPoint, canRemoveCorner } from "../../kicad-port/pcbPointEdit";
-import { handleToleranceNm, pointItemOf, pointsOfItem, ringOf } from "../../actions/pcbPointEditSweep";
+import { activeEditPoint } from "../../kicad-port/pcbPointEdit";
+import { canRemoveItemCorner, handleToleranceNm, pointItemOf, pointsOfItem } from "../../actions/pcbPointEditSweep";
 import { boardHasItems, summarizePcbSelection } from "../../kicad-port/pcbSelectionSummary";
 import {
   defaultMenuContext,
@@ -58,8 +58,8 @@ function gridEntries(state: StudioState): PcbMenuContext["grid"] {
 function handleUnder(state: StudioState, board: BoardState, refs: readonly string[], at: readonly [number, number]): PcbMenuContext["handle"] {
   const item = refs.length === 1 ? pointItemOf(board, new Set(refs)) : null;
   const active = item ? activeEditPoint(pointsOfItem(item), at, handleToleranceNm(state.view.scale)) : null;
-  const ring = item ? ringOf(item) : null;
-  return { corner: active?.kind === "corner", midpoint: active?.kind === "midpoint", canRemoveCorner: !!ring && active?.kind === "corner" && active.id.startsWith("v") && canRemoveCorner(ring) };
+  // a corner of a zone's hole can always go (the hole goes with its third-last corner); one of the outline while more than three remain
+  return { corner: active?.kind === "corner", midpoint: active?.kind === "midpoint", canRemoveCorner: !!item && canRemoveItemCorner(item, active) };
 }
 
 /** What the board editor's tools are doing, for the conditions of the menus. */

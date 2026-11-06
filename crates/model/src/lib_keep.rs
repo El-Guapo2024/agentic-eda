@@ -91,8 +91,11 @@ impl LibrarySymbolKeep {
 pub struct LibraryFootprintKeep {
     /// The footprint's own forms the editor has no member for, as the file wrote them, in file order: `(clearance ..)`, `(solder_mask_margin ..)`,
     /// `(solder_paste_margin ..)`, `(solder_paste_margin_ratio ..)`, `(net_tie_pad_groups ..)`, `(private_layers ..)`, `(duplicate_pad_numbers_are_jumpers ..)`,
-    /// `(jumper_pad_groups ..)`, and the items the editor does not draw: `(zone ..)`, `(point ..)`, `(dimension ..)`, `(image ..)`, `(fp_text_box ..)`, `(table ..)`,
-    /// `(barcode ..)`, `(group ..)` (whose members are named by uuid, see [`Self::uuids`]: a member that is gone is left out of the group by KiCad's reader). The writer puts each where `format( FOOTPRINT )` writes its kind.
+    /// `(jumper_pad_groups ..)`, and the items [`crate::fp_items::FootprintItems`] cannot hold: a zone, point, dimension, image, text box, table, barcode or group the
+    /// board's reader of its kind refuses, a locked one (a library footprint keeps no lock), a zone with a fill, thieving, per-layer settings or arcs, and a group that is
+    /// locked or names one of those (its members are named by uuid, see [`Self::uuids`]: a member that is gone is left out of the group by KiCad's reader). Every other
+    /// such item is read into `LibraryFootprint::items` since UI-LEFT F2; a `design.json` written before that still has them here. The writer puts each where
+    /// `format( FOOTPRINT )` writes its kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<String>,
     /// A graphic's `(stroke (type ..))` when it is not `solid` (`default`, `dash`, `dot`, `dash_dot`, `dash_dot_dot`), by the graphic's id.

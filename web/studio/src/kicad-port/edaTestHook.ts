@@ -223,10 +223,33 @@ export interface FootprintLike {
   pads?: IdItems;
   graphics?: IdItems;
   texts?: IdItems;
+  /** The user fields (the Reference and the Value are always there: `field:Reference`, `field:Value`). */
+  fields?: readonly { name: string }[];
+  datasheet?: unknown;
+  description_field?: unknown;
+  /** The groups (`items.groups`) and the display shapes of the other items (`display`, kicad-port/fpItems.ts). */
+  items?: { groups?: IdItems };
+  display?: { dimensions?: IdItems; zones?: IdItems; text_boxes?: IdItems; points?: IdItems; images?: IdItems; barcodes?: IdItems; tables?: IdItems };
 }
 
 export function footprintLists(fp: FootprintLike | null | undefined): ItemLists {
-  return { pad: ids(fp?.pads), graphic: ids(fp?.graphics), text: ids(fp?.texts) };
+  // the fields as the canvas names them (`field:<name>`, kicad-port/fpItems.ts)
+  const fields = fp ? ["field:Reference", "field:Value", ...(fp.datasheet ? ["field:Datasheet"] : []), ...(fp.description_field ? ["field:Description"] : []), ...(fp.fields ?? []).map((f) => `field:${f.name}`)] : [];
+  const d = fp?.display;
+  return {
+    pad: ids(fp?.pads),
+    graphic: ids(fp?.graphics),
+    text: ids(fp?.texts),
+    field: fields,
+    group: ids(fp?.items?.groups),
+    dimension: ids(d?.dimensions),
+    zone: ids(d?.zones),
+    textbox: ids(d?.text_boxes),
+    point: ids(d?.points),
+    image: ids(d?.images),
+    barcode: ids(d?.barcodes),
+    table: ids(d?.tables),
+  };
 }
 
 /** The symbol open in the Symbol Editor: its pins and graphics (text is a graphic there). */

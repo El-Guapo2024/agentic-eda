@@ -724,6 +724,8 @@ fn handle(
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
         ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
+        // Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages (`sch_api::setup`).
+        ("GET", "/api/sch/setup") => respond(stream, "200 OK", "application/json", sch_api::setup(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
@@ -862,6 +864,9 @@ fn handle(
         // beside design.json (`crate::fill_api`). `{"zones": [ids]}` fills the selected zones only (the others keep the fill they had). A kicad-cli route, so it runs off the
         // loop like DRC. `/api/fill/clear` (Unfill All Zones / Unfill Selected Zones) only forgets fills, so it answers inline.
         ("POST", "/api/fill/kicad") => offload(stream, lane, dir, job, path, &body, |dir, body| crate::fill_api::refill(dir, crate::fill_api::zones_asked(body))),
+        // The Zone Manager's "Update Displayed Zones": kicad-cli fills a copy of the board with the dialog's staged zone settings (`{"cmds": [..]}`), and the fills
+        // come back for the dialog's preview, not kept (`crate::fill_api::preview`). A kicad-cli route, so it runs off the loop too.
+        ("POST", "/api/fill/preview") => offload(stream, lane, dir, job, path, &body, crate::fill_api::preview),
         // The Zone Manager's Auto-Assign Priorities (`eda_ops::zone_priority`): the priorities KiCad would give the copper pours, worked out and not applied.
         ("GET", "/api/zone_priorities/auto") => respond(stream, "200 OK", "application/json", crate::fill_api::auto_priorities(dir).to_string().as_bytes()),
         ("POST", "/api/fill/clear") => respond(stream, "200 OK", "application/json", crate::fill_api::clear(dir, crate::fill_api::zones_asked(&body)).to_string().as_bytes()),
@@ -1391,6 +1396,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "name": z.name,
                 // The rule area's placement source (`ZONE::GetPlacementAreaEnabled` and the source type and name): the Placement tab of Zone Properties and what Repeat Layout reads.
                 "placement": z.placement,
+                // `ZONE::GetHatchStyle()` / `GetBorderHatchPitch()`: Zone Properties' "Outline display" and "Outline hatch pitch", and the border hatch the canvas draws
+                // (`ZONE::HatchBorder`). `ZONE::LayerProperties()`' hatch offsets: the Hatched Fill tab's "Hatch offset overrides".
+                "border_style": z.border_style, "border_hatch_pitch": z.border_hatch_pitch,
+                "hatch_offsets": eda_kicad::zone_hatch_offsets(z, design.drawings.as_ref().and_then(|d| d.zone_layer_props.iter().find(|t| t.id == z.id)).map(|t| t.settings.as_str())),
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList`/
             // `m_DiffPairDimensionsList` -- the Board Setup "Track Widths &
@@ -1462,7 +1471,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         crate::pcb_items_json::extend(&mut drawings, &design, &model, d, &tv);
         drawings
     });
-    Ok(json!({
+    let mut state = json!({
         "name": Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board"),
         "dir": dir.display().to_string(),
         "outline": pl.map(|pl| pl.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()),
@@ -1552,7 +1561,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
-    }))
+    });
+    // Schematic Setup > Net Classes' columns of the board's classes (wire and bus widths, colour, line style), by class name -- set apart, the `json!` above being
+    // at the macro's recursion limit
+    state["board_rules"]["net_class_schematic"] = json!(model.board.net_class_schematic);
+    Ok(state)
 }
 
 /// One `Shape` as JSON: every variant carries `id`/`kind`/`layer`/
@@ -1645,7 +1658,7 @@ fn outline_errors_json(design: &eda_model::ir::Design, model: Option<&eda_model:
 /// the one and only place this geometry is computed
 /// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
 /// renderer never re-derives it.
-fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
+pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
     use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
 
     let (kind, height, horizontal, leader_length) = match d.kind {
@@ -1995,6 +2008,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(stroke) = sch.extras.strokes.get(&w.id) {
                 v["stroke"] = json!(stroke);
             }
+            // What the wire's net class draws it with where its own stroke says nothing (`SCH_LINE::GetPenWidth` / `GetLineColor` / `GetEffectiveLineStyle`
+            // over `GetEffectiveNetClass()`): the class's wire or bus width, its colour (none: the layer's) and line style (Schematic Setup > Net Classes).
+            let look = model.board.sch_look_of(&w.net);
+            v["class_look"] = json!({ "width_nm": if w.bus { look.bus_width } else { look.wire_width }, "color": look.color, "style": look.line_style });
             // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias name expansion (`eda_kicad::expand_bus_members`).
             // A bus named with its sheet's path (KiCad's `/LED channels/PB[0..1]`) is expanded from the label's text, and its members are their local names, as
             // the unfold menu lists them (`member->FullLocalName()`, `SCH_LINE_WIRE_BUS_TOOL`'s `BUS_UNFOLD_MENU`).
@@ -2207,9 +2224,29 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "sheets": sheets,
         "sheet_path": sheet_path,
         "page_number": page_number,
+        // Schematic Setup > Formatting as the sheet is drawn by it (`eda_model::sch_setup::SchFormatting::effective`, the sizes KiCad reads back): the junction
+        // dot's diameter (`SCHEMATIC_SETTINGS::GetJunctionSize`, from the Default class's wire width), the default line width, text and pin symbol sizes and the
+        // dashed lines' ratios
+        "setup": schematic_setup_json(design, model),
         // the project's unit notation (the root's `SchExtras::subpart_*`, r7 H5), which the sheet draws a unit's reference by
         "subpart_id_separator": design.schematic.as_ref().and_then(|r| r.extras.subpart_id_separator),
         "subpart_first_id": design.schematic.as_ref().and_then(|r| r.extras.subpart_first_id),
+    })
+}
+
+/// The schematic JSON's `setup`: Schematic Setup > Formatting's sizes the sheet is drawn with -- see [`schematic_json_with`].
+fn schematic_setup_json(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Value {
+    let f = design.schematic.as_ref().and_then(|r| r.extras.formatting.clone()).unwrap_or_default().effective();
+    let default_wire = eda_model::sch_setup::NetClassSchematic::default_class(model.board.net_class_schematic.get("Default")).wire_width.unwrap_or(Nm::new(152_400));
+    json!({
+        "junction_diameter_nm": f.junction_diameter(default_wire),
+        "default_wire_width_nm": default_wire,
+        "default_line_width_nm": f.default_line_width_nm,
+        "default_text_size_nm": f.default_text_size_nm,
+        "pin_symbol_size_nm": f.pin_symbol_size_nm,
+        "dash_ratio": f.dash_ratio,
+        "gap_ratio": f.gap_ratio,
+        "hop_over_size_choice": f.hop_over_size_choice,
     })
 }
 
@@ -2506,13 +2543,19 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// raw, as this route once did, no footprint with a library nickname
 /// (every installed KiCad one) could be fetched back after opening it.
 fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, _) = board::load(dir)?;
+    let (meta, design, model) = board::load(dir)?;
     let fp = design
         .footprint_library
         .as_ref()
         .and_then(|l| l.by_name(name))
         .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
-    serde_json::to_value(fp).map_err(|e| vec![CheckResult::fail("board_bad_design", name, e.to_string())])
+    let mut v = serde_json::to_value(fp).map_err(|e| vec![CheckResult::fail("board_bad_design", name, e.to_string())])?;
+    // The dimensions, zones, text boxes ... (`eda_model::fp_items`) in the board's display shapes, for the board's painters (`crate::fp_items_json`).
+    if !fp.items.is_empty() {
+        let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now()));
+        v["display"] = crate::fp_items_json::display_json(fp, &tv);
+    }
+    Ok(v)
 }
 
 /// `GET /api/footprint_library` -- every footprint name available to open:

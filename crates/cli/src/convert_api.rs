@@ -6,7 +6,8 @@
 //! polygons (or zones) and deletes the sources through ordinary `/api/cmd` commands, as one undo step.
 //!
 //! Request: `{ids: [..], strategy: "centerline" | "copy_linewidth" | "bounding_hull", gap?: um}`.
-//! Reply: `{ok: true, rings: [[[x, y], ..], ..], consumed: [..]}`.
+//! Reply: `{ok: true, rings: [[[x, y], ..], ..], polys: [{outline: [[x, y], ..], holes: [[[x, y], ..], ..]}, ..], consumed: [..]}`: `rings` for a polygon (holes
+//! bridged in, the IR polygon has none), `polys` for a zone or a rule area (each outline with its holes, `CreatePolys`' `AddHole`).
 
 use crate::board;
 use eda_model::units::Nm;
@@ -34,6 +35,10 @@ pub fn polys(dir: &Path, body: &[u8]) -> Value {
     json!({
         "ok": true,
         "rings": r.rings.iter().map(|ring| ring.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        "polys": r.polys.iter().map(|(outline, holes)| json!({
+            "outline": outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+            "holes": holes.iter().map(|h| h.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
         "consumed": r.consumed,
     })
 }

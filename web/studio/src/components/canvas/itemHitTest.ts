@@ -97,6 +97,32 @@ export function polygonArea(pts: readonly (readonly [number, number])[]): number
   return Math.abs(sum) / 2;
 }
 
+/** A zone's outline and holes, as `ZONE::Outline()` holds them: the outline, then each hole of three corners or more. */
+type ZoneRings = { outline: readonly (readonly [number, number])[]; holes?: readonly (readonly (readonly [number, number])[])[] };
+
+const zoneHoles = (z: ZoneRings) => (z.holes ?? []).filter((h) => h.length >= 3);
+
+/**
+ * `SHAPE_POLY_SET::Contains` on a zone's outline (`containsSingle`): inside the outline and in none of its holes ("If the point is inside a hole it is outside of
+ * the polygon"). What a rule area's interior is picked by (`ZONE::HitTestFilledArea`: `m_Poly->Contains( aRefPos, -1, aAccuracy )`), and the selection's stand-in for
+ * a pour's fill (`HitTestFilledArea` on the layer's `m_FilledPolysList`, which has the holes knocked out too).
+ */
+export function zoneContainsPoint(z: ZoneRings, px: number, py: number): boolean {
+  return z.outline.length >= 3 && pointInPolygon(px, py, z.outline) && !zoneHoles(z).some((h) => pointInPolygon(px, py, h));
+}
+
+/** `ZONE::HitTestForEdge`'s distance (`SHAPE_POLY_SET::CollideEdge` over `IterateSegmentsWithHoles`): the nearest side of the outline or of any hole, each contour closed. */
+export function zoneEdgeDistance(z: ZoneRings, px: number, py: number): number {
+  let best = Infinity;
+  for (const ring of [z.outline, ...zoneHoles(z)]) if (ring.length >= 2) best = Math.min(best, distToPolyline(px, py, [...ring, ring[0]!]));
+  return best;
+}
+
+/** `SHAPE_POLY_SET::Area` of a zone's outline: the outline's area less its holes'. */
+export function zoneArea(z: ZoneRings): number {
+  return Math.max(polygonArea(z.outline) - zoneHoles(z).reduce((a, h) => a + polygonArea(h), 0), 0);
+}
+
 export function shapeHitDistance(s: Shape, px: number, py: number): number {
   // A shape with line endings is hit on its endings too (`EDA_SHAPE::hitTest`: `MakeEffectiveShapesWithLineEndings`).
   if ((s.kind === "segment" || s.kind === "arc" || s.kind === "bezier") && hasEndings(s)) return Math.min(bodyHitDistance(s, px, py), endingsHitDistance(s, px, py));

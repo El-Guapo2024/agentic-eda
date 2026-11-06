@@ -15,6 +15,7 @@ pub mod floorplan;
 pub mod footprint;
 pub mod fp_art;
 pub mod fp_assign;
+pub mod fp_items;
 pub mod fp_compare;
 pub mod fp_edit;
 pub mod fp_units;
@@ -45,6 +46,7 @@ pub mod reannotate;
 pub mod rules;
 pub mod sch_clipboard;
 pub mod sch_extras;
+pub mod sch_setup;
 pub mod setup_pages;
 pub mod sheet_file;
 pub mod sheet_list;
@@ -476,6 +478,11 @@ pub struct BoardRules {
     /// footprints are `FootprintExtra::component_classes`. Read from and written to the project; the Board Setup page that edits it is not built.
     #[serde(default, skip_serializing_if = "component_classes::ComponentClassSettings::is_default")]
     pub component_classes: component_classes::ComponentClassSettings,
+    /// The schematic's share of each net class, by class name (`Default` for the Default class): the wire and bus widths, the colour and the line style
+    /// Schematic Setup > Net Classes edits (`PANEL_SETUP_NETCLASSES` with `aIsEEschema`; `NETCLASS::GetWireWidth` ...). A class with no entry sets none of
+    /// them. Read from a project's `net_settings.classes[]`, written back to the derived project, and drawn on the sheet ([`Self::sch_look_of`]). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub net_class_schematic: BTreeMap<String, sch_setup::NetClassSchematic>,
 }
 
 fn is_zero_nm(v: &ir::Nm) -> bool {
@@ -867,6 +874,19 @@ impl BoardRules {
         self.net_classes.iter().filter(|c| c.matches(net)).collect()
     }
 
+    /// The schematic look of `net` (`NET_SETTINGS::makeEffectiveNetclass` for the Eeschema settings): each of the wire width, bus width, colour and line
+    /// style from the first class, in precedence order, that sets it, else from the Default class, whose unset ones are KiCad's defaults (6 and 12 mils, solid,
+    /// no colour of its own). `SCH_LINE::GetPenWidth` / `GetLineColor` / `GetEffectiveLineStyle` draw a wire whose own stroke says nothing by it.
+    pub fn sch_look_of(&self, net: &str) -> sch_setup::NetClassSchematic {
+        let mut look = sch_setup::NetClassSchematic::default();
+        for c in self.matching_classes(net) {
+            if let Some(own) = self.net_class_schematic.get(&c.name) {
+                look = look.or(own);
+            }
+        }
+        look.or(&sch_setup::NetClassSchematic::default_class(self.net_class_schematic.get("Default")))
+    }
+
     /// The class that owns `net` -- the one that takes precedence of those that match it -- if any. A net several classes match has the settings of all of them
     /// ([`Self::effective_class`]); this is the class it is listed under.
     pub fn class_of(&self, net: &str) -> Option<&NetClass> {
@@ -991,6 +1011,7 @@ impl Default for BoardRules {
             layer_setup: layers::LayerSetup::default(),
             formatting: setup_pages::FormattingSettings::default(), hatch_offsets: Default::default(), tuning_patterns: setup_pages::TuningPatterns::default(), tuning_profiles: Default::default(),
             component_classes: Default::default(),
+            net_class_schematic: BTreeMap::new(),
         }
     }
 }

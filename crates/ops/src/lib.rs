@@ -67,6 +67,7 @@ pub mod via_place;
 pub use via_layers::ViaLayerEdit;
 mod pad_nets;
 mod fp_lib_fields;
+pub mod fp_items;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
@@ -110,9 +111,11 @@ mod pcb_transform;
 mod tuning;
 mod zone_overrides;
 pub mod zone_priority;
+mod zone_unfill;
 pub mod rule_editor;
 pub use rule_editor::DrcRuleAction;
 mod sch_annotate;
+mod sch_setup;
 mod sch_clipboard;
 pub mod sch_control;
 mod sch_sheets;
@@ -512,6 +515,18 @@ pub enum Cmd {
         /// for; [`eda_model::multichannel::PlacementArea`]). `None` leaves what the zone has.
         #[serde(default)]
         placement: Option<eda_model::multichannel::PlacementArea>,
+        /// `ZONE_SETTINGS::m_ZoneBorderDisplayStyle`: the dialogs' "Outline display" (Line, Hatched, Fully hatched; `PANEL_ZONE_PROPERTIES::AcceptOptions`,
+        /// `DIALOG_RULE_AREA_PROPERTIES`, `DIALOG_NON_COPPER_ZONES_EDITOR`). `None` leaves what the zone has.
+        #[serde(default)]
+        border_style: Option<eda_model::ir::ZoneBorderStyle>,
+        /// `ZONE_SETTINGS::m_BorderHatchPitch`: "Outline hatch pitch", 0.1 to 2 mm (`m_outlineHatchPitch.Validate( ZONE_BORDER_HATCH_MINDIST_MM,
+        /// ZONE_BORDER_HATCH_MAXDIST_MM )`). `None` leaves what the zone has.
+        #[serde(default)]
+        border_hatch_pitch: Option<Nm>,
+        /// `ZONE_SETTINGS::m_LayerProperties`' hatch offsets: the Hatched Fill tab's "Hatch offset overrides" (layer -> offset), the whole table
+        /// (`AcceptOptions` clears every `hatching_offset`, then sets the table's rows). Only copper layers the zone is on. `None` leaves what the zone has.
+        #[serde(default)]
+        hatch_offsets: Option<eda_model::setup_pages::HatchOffsets>,
     },
 
     /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
@@ -782,6 +797,10 @@ pub enum Cmd {
     /// The board items the IR gained with GAPS.md item 24 (package P16): text boxes, reference images, points and the hatch fill of shapes -- one verb family, see
     /// [`pcb_items::PcbItemCmd`]. On the wire: `{"op": "pcb_item", "verb": "add_text_box", "text_box": {..}}`.
     PcbItem(pcb_items::PcbItemCmd),
+    /// The Footprint Editor's verbs on any item of the open footprint (UI-LEFT F1, F2): Move, Rotate, Mirror, Delete of pads, graphics, texts, fields and the items
+    /// `eda_model::fp_items` adds; a field's Text Properties; Shape Properties; the dimensions, zones, text boxes, points, images, barcodes and tables; Group and Ungroup.
+    /// One verb family, see [`fp_items::FpItemCmd`]. On the wire: `{"op": "fp_item", "verb": "mirror", "footprint": "..", "ids": [..], ..}`.
+    FpItem(fp_items::FpItemCmd),
     /// The files embedded in a board, a schematic, a footprint or a symbol (GAPS.md items 24 and 30): the Embedded Files panel's Add, Remove and Embed fonts, the tool actions
     /// `common.Embed.embededFile` and `removeFile`, and Collect and Embed 3D Models -- one verb family, see [`embedded::EmbeddedCmd`]. On the wire:
     /// `{"op": "embedded", "verb": "add", "owner": {"kind": "board"}, "name": "part.step", "data": "<base64>"}`.
@@ -1532,6 +1551,30 @@ pub enum Cmd {
     /// Schematic Setup > Formatting > Inter-sheet References (`panel_setup_formatting.cpp`): whether a global label shows the pages its net is on, its own page among
     /// them, abbreviated, and the prefix and suffix (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). KiCad's defaults are stored as none. One undo step.
     SetIntersheetRefs { settings: eda_model::sch_extras::IntersheetRefs },
+    /// Schematic Setup > General > Formatting, the rest of the page (`panel_setup_formatting.cpp`): the default text size and line width, the pin symbol size,
+    /// the junction dot and hop-over sizes, the label offset and margin ratios, the overbar offset, the dashed lines and the operating-point overlay
+    /// (`eda_model::sch_setup::SchFormatting`). KiCad's defaults are stored as none. One undo step.
+    SetSchFormatting { settings: eda_model::sch_setup::SchFormatting },
+    /// Schematic Setup > General > Annotation (`panel_eeschema_annotation_options.cpp`): the order, the numbering, the start number, "Allow reference reuse"
+    /// and the symbol unit notation -- the first unit's id ('A' or '1') and the separator (0, '.', '-', '_') as character codes. One undo step.
+    SetAnnotationSettings {
+        settings: eda_model::sch_setup::AnnotationSettings,
+        #[serde(default = "unit_a")]
+        subpart_first_id: u32,
+        #[serde(default)]
+        subpart_id_separator: u32,
+    },
+    /// Schematic Setup > General > Field Name Templates (`panel_template_fieldnames.cpp`): the project's templates in order, each with Visible and URL.
+    SetFieldNameTemplates { fields: Vec<eda_model::sch_setup::TemplateFieldName> },
+    /// Schematic Setup > General > BOM Presets (`panel_bom_presets.cpp`): the names of the project's saved BOM and BOM formatting presets to keep (the page deletes).
+    SetBomPresets {
+        #[serde(default)]
+        bom_presets: Vec<String>,
+        #[serde(default)]
+        bom_fmt_presets: Vec<String>,
+    },
+    /// Schematic Setup > Project > Bus Alias Definitions (`panel_setup_buses.cpp`): every alias of the project with its members. One undo step.
+    SetBusAliases { aliases: Vec<eda_model::ir::BusAlias> },
     /// The SPICE simulator's settings and workbook (`crate::simulator`): `ngspice` is the `.kicad_pro`'s `schematic.ngspice`
     /// (`NGSPICE_SETTINGS`, none for KiCad's defaults), `workbook` the text of the `.wbk` Save Workbook writes (`SIMULATOR_FRAME_UI::SaveWorkbook`),
     /// none for no workbook. Both are replaced as sent; refused when nothing changes.
@@ -2160,6 +2203,11 @@ pub enum Cmd {
 
 /// A schematic with nothing on it: what the first schematic verb creates, and the screen a new
 /// hierarchical sheet starts with.
+/// 'A', the first unit's id when a command does not say (`SCHEMATIC_SETTINGS::m_SubpartFirstId`'s default).
+fn unit_a() -> u32 {
+    'A' as u32
+}
+
 fn empty_schematic_section() -> SchematicSection {
     SchematicSection {
         symbols: vec![],
@@ -2244,6 +2292,11 @@ impl Cmd {
             | Cmd::ClearErcExclusions
             | Cmd::SetConnectionGrid { .. }
             | Cmd::SetIntersheetRefs { .. }
+            | Cmd::SetSchFormatting { .. }
+            | Cmd::SetAnnotationSettings { .. }
+            | Cmd::SetFieldNameTemplates { .. }
+            | Cmd::SetBomPresets { .. }
+            | Cmd::SetBusAliases { .. }
             | Cmd::SetSimulator { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
@@ -2295,6 +2348,7 @@ impl Cmd {
             | Cmd::CreateFootprintArray { .. }
             | Cmd::ExplodePad { .. }
             | Cmd::RecombinePad { .. }
+            | Cmd::FpItem(_)
             | Cmd::ExportFootprintsToLibrary => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
@@ -2337,6 +2391,9 @@ impl Cmd {
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
             // A severity table and the findings waived are about the report, not the drawing.
             Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } | Cmd::SetIntersheetRefs { .. } | Cmd::SetSimulator { .. } => false,
+            // Schematic Setup's sizes, field templates and BOM presets are how the sheet is drawn and listed, not what it connects (a bus alias does connect,
+            // and the unit notation names the nets of a symbol's units: those two are traced again).
+            Cmd::SetSchFormatting { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -2387,6 +2444,10 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::spans_both_editors),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.spans_both_editors(),
             Cmd::RenameSymbol { .. } | Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => true,
+            // the project's net classes: Board Setup and Schematic Setup edit the one table (the board's sizes, the sheet's wires), so either tab takes it back
+            Cmd::SetNetClasses { .. } => true,
+            // the project's text variables: Board Setup's and Schematic Setup's Text Variables page are one list, `${NAME}` read on the board and on the sheet
+            Cmd::SetTextVariables { .. } => true,
             // the board's footprint and the symbol's Footprint field are put right together
             Cmd::ExchangeFootprints { .. } => true,
             // the footprints' references and the symbols' go together
@@ -2566,6 +2627,11 @@ impl Cmd {
             Cmd::ClearErcExclusions => vec!["erc_exclusions"],
             Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
             Cmd::SetIntersheetRefs { .. } => vec!["intersheet_refs"],
+            Cmd::SetSchFormatting { .. } => vec!["formatting"],
+            Cmd::SetAnnotationSettings { .. } => vec!["annotation"],
+            Cmd::SetFieldNameTemplates { .. } => vec!["field_name_templates"],
+            Cmd::SetBomPresets { .. } => vec!["bom_presets"],
+            Cmd::SetBusAliases { .. } => vec!["bus_aliases"],
             Cmd::SetSimulator { .. } => vec!["simulator"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
@@ -2609,6 +2675,7 @@ impl Cmd {
             | Cmd::CreateFootprintArray { footprint, .. }
             | Cmd::ExplodePad { footprint, .. }
             | Cmd::RecombinePad { footprint } => vec![footprint.as_str()],
+            Cmd::FpItem(c) => vec![c.footprint()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -2936,7 +3003,11 @@ impl<'a> Board<'a> {
         let edge_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { outline::snapshot(&self.design, self.model) };
         let shared_before = self.shared_screens_before();
         let pages_before = (self.design.schematic.is_some() && (matches!(cmd.domain(), Domain::Schematic) || matches!(cmd, Cmd::Batch { .. }))).then(|| eda_model::sheet_list::walk(&self.design));
+        // (a board brought in whole has zones of its own, not edits of these: their fills are the file's, filed as they are)
+        let zones_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { self.zones_before() };
         self.apply_cmd(cmd)?;
+        // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
+        self.tidy_zone_fills(zones_before);
         self.tidy_shared_screens(shared_before, cmd.numbering());
         // the page numbers KiCad keeps: a new sheet path numbered, a page shown kept when the walk moves (`sheet_list::keep_pages`)
         if let Some(before) = pages_before {
@@ -3016,6 +3087,11 @@ impl<'a> Board<'a> {
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
             Cmd::SetIntersheetRefs { settings } => review::set_intersheet_refs(&mut self.design, settings),
+            Cmd::SetSchFormatting { settings } => sch_setup::set_formatting(&mut self.design, settings),
+            Cmd::SetAnnotationSettings { settings, subpart_first_id, subpart_id_separator } => sch_setup::set_annotation(&mut self.design, settings, *subpart_first_id, *subpart_id_separator),
+            Cmd::SetFieldNameTemplates { fields } => sch_setup::set_field_name_templates(&mut self.design, fields),
+            Cmd::SetBomPresets { bom_presets, bom_fmt_presets } => sch_setup::set_bom_presets(&mut self.design, bom_presets, bom_fmt_presets),
+            Cmd::SetBusAliases { aliases } => sch_setup::set_bus_aliases(&mut self.design, aliases),
             Cmd::SetSimulator { ngspice, workbook } => simulator::set_simulator(&mut self.design, ngspice.as_ref(), workbook.as_deref()),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::EditDrcRule { action, entry, name, rule } => rule_editor::edit_drc_rule(&mut self.design, self.model, *action, *entry, name, rule.as_ref()),
@@ -3082,6 +3158,9 @@ impl<'a> Board<'a> {
                 smoothing,
                 corner_radius,
                 placement,
+                border_style,
+                border_hatch_pitch,
+                hatch_offsets,
             } => self.edit_zone(
                 id,
                 net,
@@ -3112,6 +3191,7 @@ impl<'a> Board<'a> {
                 *smoothing,
                 *corner_radius,
                 placement.as_ref(),
+                ZoneDisplayEdit { border_style: *border_style, border_hatch_pitch: *border_hatch_pitch, hatch_offsets: hatch_offsets.as_ref() },
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -3252,6 +3332,7 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::PcbItem(c) => self.apply_pcb_item(c),
+            Cmd::FpItem(c) => self.apply_fp_item(c),
             Cmd::Embedded(c) => self.apply_embedded(c),
             Cmd::Microwave(c) => self.apply_microwave(c),
             Cmd::Specctra { session, name } => self.import_specctra_session(session, name),
@@ -4243,6 +4324,7 @@ impl<'a> Board<'a> {
         smoothing: Option<eda_model::ir::ZoneSmoothing>,
         corner_radius: Option<Nm>,
         placement: Option<&eda_model::multichannel::PlacementArea>,
+        display: ZoneDisplayEdit<'_>,
     ) -> Result<(), Vec<CheckResult>> {
         // "" (no net) is normal for a rule area, and allowed for an
         // ordinary zone too -- see `add_zone`'s matching comment.
@@ -4281,9 +4363,20 @@ impl<'a> Board<'a> {
         if corner_radius.is_some_and(|r| r < Nm::ZERO) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "the outline smoothing size cannot be negative")]);
         }
+        // `m_outlineHatchPitch.Validate( mmToIU( ZONE_BORDER_HATCH_MINDIST_MM ), mmToIU( ZONE_BORDER_HATCH_MAXDIST_MM ) )`.
+        if display.border_hatch_pitch.is_some_and(|p| !(eda_model::ir::ZONE_BORDER_HATCH_MIN_PITCH..=eda_model::ir::ZONE_BORDER_HATCH_MAX_PITCH).contains(&p)) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "the outline hatch pitch must be between 0.1 and 2 mm")]);
+        }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
-        if layers.is_some_and(|l| !l.is_empty()) || !z.is_on_layer(layer) {
+        let relayer = layers.is_some_and(|l| !l.is_empty()) || !z.is_on_layer(layer);
+        // The Hatch offset overrides table offers the zone's copper layers only (`LAYER_PROPERTIES_GRID_TABLE` over `m_settings->m_Layers`, the non-copper
+        // layers forbidden).
+        let on = |l: &str| if relayer { wanted.iter().any(|w| w == l) } else { z.is_on_layer(l) };
+        if let Some(bad) = display.hatch_offsets.and_then(|o| o.keys().find(|l| !eda_model::layers::is_copper_layer_name(l) || !on(l))) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, format!("{bad} is not a copper layer of the zone: it cannot have a hatch offset"))]);
+        }
+        if relayer {
             z.set_layer_set(&wanted);
         }
         // A zone on no copper layer has no net.
@@ -4321,6 +4414,20 @@ impl<'a> Board<'a> {
             z.placement = if is_rule_area { pl.clone() } else { Default::default() };
         } else if !is_rule_area {
             z.placement = Default::default();
+        }
+        // `ZONE_SETTINGS::ExportSetting`: `SetBorderDisplayStyle( m_ZoneBorderDisplayStyle, m_BorderHatchPitch, true )` and `SetLayerProperties( m_LayerProperties )`.
+        if let Some(style) = display.border_style {
+            z.border_style = style;
+        }
+        if let Some(pitch) = display.border_hatch_pitch {
+            z.border_hatch_pitch = pitch;
+        }
+        if let Some(offsets) = display.hatch_offsets {
+            z.hatch_offsets = offsets.clone();
+            // The structured offsets replace the file's text the zone was imported with (`DrawingsSection::zone_layer_props`).
+            if let Some(dr) = self.design.drawings.as_mut() {
+                dr.zone_layer_props.retain(|t| t.id != id);
+            }
         }
         Ok(())
     }
@@ -4552,7 +4659,9 @@ impl<'a> Board<'a> {
             }
             for z in rt.zones.iter_mut() {
                 if z.layer_set().into_iter().any(|l| map.contains_key(l)) {
-                    z.map_layers(|l| map.get(l).map_or_else(|| l.to_string(), |d| (*d).to_string()));
+                    // `swapBoardItem`: `aItem->SetLayerSet( newLayers )` -- no flip, so the hatch offsets of the layers left are dropped, not moved.
+                    let set: Vec<String> = z.layer_set().into_iter().map(|l| map.get(l).map_or_else(|| l.to_string(), |d| (*d).to_string())).collect();
+                    z.set_layer_set(&set);
                 }
             }
             // `if( via->GetViaType() == VIATYPE::THROUGH ) continue;` --
@@ -6182,7 +6291,8 @@ impl<'a> Board<'a> {
     /// `RotatePoint` is a no-op): the fields (Reference and Value at their default places when they have no layout of their own, the
     /// Datasheet and Description when the footprint has them, every user field), the pads, the graphics and texts move; each 3D model's
     /// offset follows, in millimetres with y up (`m_Offset.x += IUTomm( moveVector.x ); m_Offset.y -= IUTomm( moveVector.y )`).
-    /// Differs: the kept items the editor does not draw (`kicad.tokens`: zones, dimensions, ...) stay put, and the `courtyard`
+    /// The footprint's dimensions, text boxes, images, barcodes, tables and zones move too (`GraphicalItems()`, `Zones()`), its points do not, as in KiCad.
+    /// Differs: the items still kept as text (`kicad.tokens`: a locked or filled zone, ...) stay put, and the `courtyard`
     /// half-extents override is centred on the origin by definition (KiCad has no such override: its courtyard is the F.CrtYd graphics,
     /// which move).
     fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
@@ -6210,6 +6320,8 @@ impl<'a> Board<'a> {
             m.offset[0] += dx.mm();
             m.offset[1] -= dy.mm();
         }
+        // the dimensions, text boxes, images, barcodes, tables and zones (`GraphicalItems()`, `Zones()`), not the points
+        fp_items::move_items_with_anchor(fp, dx, dy);
         Ok(())
     }
 
@@ -6884,6 +6996,8 @@ mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
 #[cfg(test)]
+mod fp_items_tests;
+#[cfg(test)]
 mod pad_edit_tests;
 #[cfg(test)]
 mod unused_pads_tests;
@@ -6991,3 +7105,14 @@ mod sch_net_collision_tests;
 mod sch_sheet_pin_tests;
 #[cfg(test)]
 mod multichannel_tests;
+#[cfg(test)]
+mod zone_unfill_tests;
+
+/// The display half of `Cmd::EditZone` (Zone Properties' "Outline display" and "Outline hatch pitch", and the Hatched Fill tab's "Hatch offset overrides"):
+/// `None` leaves what the zone has.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ZoneDisplayEdit<'a> {
+    pub border_style: Option<eda_model::ir::ZoneBorderStyle>,
+    pub border_hatch_pitch: Option<Nm>,
+    pub hatch_offsets: Option<&'a eda_model::setup_pages::HatchOffsets>,
+}

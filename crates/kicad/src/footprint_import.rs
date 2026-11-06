@@ -13,6 +13,12 @@
 //! [angle]) (size w h) [(offset x y)] [(drill ..)] (layers ..) [(roundrect_rratio r)] [(chamfer_ratio r)
 //! (chamfer <corners>)] [(rect_delta dx dy)] [(clearance c)] ..)`; a chamfered rectangle is written by KiCad
 //! as `roundrect` plus the chamfer tokens.
+//!
+//! The footprint's dimensions, zones, text boxes, points, reference images, barcodes, tables and groups are its items
+//! ([`eda_model::fp_items::FootprintItems`]), read as `parseFOOTPRINT_unchecked` reads them: each with the board's own reader of the item
+//! (`parseDIMENSION`, `parseZONE`, `parsePCB_TEXTBOX`, `parsePCB_POINT`, `parsePCB_REFERENCE_IMAGE`, `parsePCB_BARCODE`, `parsePCB_TABLE`,
+//! `parseGROUP`), a group's members resolved to the ids of the items their uuids name once every item has its id (`resolveGroups`). A form those
+//! items cannot hold is kept as the file wrote it (`LibraryFootprintKeep::tokens`), as every one of them was before (see `ItemsRead::read`).
 
 use eda_model::units::Nm;
 use eda_model::fp_edit::{FieldLayout, LIBRARY_REFERENCE_TEXT};
@@ -63,6 +69,11 @@ fn filled(item: &[Sexpr]) -> bool {
     }
 }
 
+/// `(uuid "..")`, or the `(tstamp ..)` of a file before KiCad 7; `None` for none or an empty one.
+fn uuid_of(item: &[Sexpr]) -> Option<String> {
+    sexpr::find(item, "uuid").or_else(|| sexpr::find(item, "tstamp")).and_then(|u| sexpr::txt(u, 1)).filter(|u| !u.is_empty()).map(str::to_string)
+}
+
 fn layer_of(item: &[Sexpr]) -> String {
     sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.SilkS").to_string()
 }
@@ -97,7 +108,10 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     let mut text_looks: Vec<(eda_model::board_text::TextExtra, bool)> = Vec::new();
     // and each pad's, graphic's and text's uuid
     let (mut pad_uuids, mut graphic_uuids, mut text_uuids): (Vec<Option<String>>, Vec<Option<String>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
-    let uuid_of = |item: &[Sexpr]| sexpr::find(item, "uuid").or_else(|| sexpr::find(item, "tstamp")).and_then(|u| sexpr::txt(u, 1)).filter(|u| !u.is_empty()).map(str::to_string);
+    // the items of `fp.items` with their uuids, the groups as the file names their members, and the uuids of the forms kept as the file wrote them
+    let mut items = ItemsRead::default();
+    let mut raw_groups: Vec<(crate::import_items::RawGroup, String)> = Vec::new();
+    let mut kept_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for child in root.iter().skip(2).filter_map(Sexpr::as_list) {
         let (drawn, written, padded) = (fp.graphics.len(), fp.texts.len(), fp.pads.len());
         match sexpr::tag(child) {
@@ -203,6 +217,15 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
                 }
             }
             Some("fp_text_private") => warnings.push(format!("{} items are not supported by the library footprint and were left out", sexpr::tag(child).unwrap_or("?"))),
+            // The items of `FootprintItems`, read by the board's readers; a form they cannot hold is kept as the file wrote it.
+            Some(tag @ ("dimension" | "zone" | "fp_text_box" | "gr_text_box" | "point" | "image" | "barcode" | "table")) => {
+                if !items.read(child, tag, version, &mut fp.items) {
+                    kept_uuids.extend(uuid_of(child));
+                    fp.kicad.tokens.push(sexpr::to_text(&Sexpr::List(child.to_vec())));
+                }
+            }
+            // `parseGROUP`: the members are resolved once every item has its id (`resolveGroups`), below.
+            Some("group") => raw_groups.push((crate::import_items::read_group(child), sexpr::to_text(&Sexpr::List(child.to_vec())))),
             // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) ..)`, `parseFOOTPRINT`'s `case T_model:` "Typed model"): no
             // path for `models_from` to take, so kept as the file wrote it until the body is ported.
             Some("model") if sexpr::txt(child, 1).is_none() => fp.kicad.tokens.push(sexpr::to_text(&Sexpr::List(child.to_vec()))),
@@ -210,6 +233,7 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
                 // In a file before KiCad 9 a margin or clearance of 0 meant "inherit" (`parseFOOTPRINT_unchecked`): it says nothing, and is not kept.
                 let inherit = version <= 20240201 && KEPT_NUMBERS.contains(&tag) && sexpr::num(child, 1) == Some(0.0);
                 if !inherit {
+                    kept_uuids.extend(uuid_of(child));
                     fp.kicad.tokens.push(sexpr::to_text(&Sexpr::List(child.to_vec())));
                 }
             }
@@ -226,13 +250,16 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
             pad_uuids.push(uuid_of(child));
         }
     }
-    if fp.pads.is_empty() && fp.graphics.is_empty() && fp.texts.is_empty() {
+    if fp.pads.is_empty() && fp.graphics.is_empty() && fp.texts.is_empty() && fp.items.is_empty() {
         warnings.push("the footprint holds no pad, graphic or text".to_string());
     }
+    // The ids, the groups' excepted: a group's id is made from its members' (`Group::id_seed`), which are named once the items have theirs.
     fp.assign_missing_ids();
     let ids = fp.pads.iter().map(|p| p.id.clone()).zip(pad_uuids).chain(fp.graphics.iter().map(|g| g.id().to_string()).zip(graphic_uuids)).chain(fp.texts.iter().map(|t| t.id.clone()).zip(text_uuids));
     let uuids: Vec<(String, String)> = ids.filter_map(|(id, u)| Some((id, u?))).collect();
     fp.kicad.uuids.extend(uuids);
+    items.keep_uuids(&mut fp);
+    resolve_groups(&mut fp, raw_groups, kept_uuids);
     for (g, stroke) in fp.graphics.iter().zip(strokes) {
         if let Some(t) = stroke {
             fp.kicad.stroke_types.insert(g.id().to_string(), t);
@@ -251,6 +278,143 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     warnings.sort();
     warnings.dedup();
     Ok(ParsedFootprint { footprint: fp, embedded, warnings })
+}
+
+/// The file uuid of each item of [`eda_model::fp_items::FootprintItems`] the reader took, in step with its list, until the items have their ids.
+#[derive(Default)]
+struct ItemsRead {
+    dimensions: Vec<Option<String>>,
+    zones: Vec<Option<String>>,
+    text_boxes: Vec<Option<String>>,
+    points: Vec<Option<String>>,
+    images: Vec<Option<String>>,
+    barcodes: Vec<Option<String>>,
+    tables: Vec<Option<String>>,
+}
+
+impl ItemsRead {
+    /// One `(dimension ..)`, `(zone ..)`, `(fp_text_box ..)`, `(point ..)`, `(image ..)`, `(barcode ..)` or `(table ..)` of the footprint into `items`, read as
+    /// `parseFOOTPRINT_unchecked` reads it -- with the board's own parser of the item (`parseDIMENSION`, `parseZONE`, `parsePCB_TEXTBOX`, `parsePCB_POINT`,
+    /// `parsePCB_REFERENCE_IMAGE`, `parsePCB_BARCODE`, `parsePCB_TABLE`), in the footprint's frame, which a library footprint's file is written in. `version` is the
+    /// footprint file's (`m_requiredVersion`). False when the form says what the item cannot hold, and the caller keeps it as the file wrote it:
+    /// - the board's reader gives none (`parseDIMENSION`'s pre-6.0 form, a zone with no outline, a table whose cells are off its grid, an image that is no image),
+    /// - a lock (`(locked yes)`): a library footprint has nowhere to keep one,
+    /// - a zone's fill (`(filled_polygon ..)`), its teardrop, copper thieving, a per-layer setting the reader cannot take apart or the arcs of its outline, which a
+    ///   board keeps beside the zone (`DrawingsSection::zone_thieving` ..) and a footprint has no place for. The hatch pitch and the layers' hatch offsets
+    ///   (`(property (layer ..) (hatch_position ..))`) are the zone's own (`Zone::border_hatch_pitch`, `Zone::hatch_offsets`).
+    ///
+    /// A zone of a library footprint has no net (whatever `(net ..)` says: a footprint's copper zone takes the net of its pad once placed, which this editor does
+    /// not model), and its uuid is kept with the others' (`LibraryFootprintKeep::uuids`), not in `Zone::uuid`; a table's too, its cells keeping theirs.
+    fn read(&mut self, child: &[Sexpr], tag: &str, version: i64, items: &mut eda_model::fp_items::FootprintItems) -> bool {
+        // `parsePCB_POINT` has no `locked` (the board's reader, `pcb_point`, reads none either)
+        if tag != "point" && crate::import_items::is_locked(child) {
+            return false;
+        }
+        let uuid = uuid_of(child);
+        match tag {
+            "dimension" => {
+                let Some(d) = crate::import_items::read_dimension(child) else { return false };
+                items.dimensions.push(d);
+                self.dimensions.push(uuid);
+            }
+            "zone" => {
+                let unheld = ["filled_polygon", "filled_segments"].iter().any(|t| sexpr::find(child, t).is_some()) || sexpr::find(child, "attr").and_then(|a| sexpr::find(a, "teardrop")).is_some();
+                let Some(read) = crate::import::read_zone(child, &Default::default(), &crate::padstack_io::library_copper_layers()) else { return false };
+                if unheld || read.thieving.is_some() || read.arc_rings.is_some() || read.layer_props.is_some() {
+                    return false;
+                }
+                items.zones.push(eda_model::ir::Zone { net: String::new(), uuid: String::new(), ..read.zone });
+                self.zones.push(uuid);
+            }
+            "fp_text_box" | "gr_text_box" => {
+                let Some(t) = crate::pcb_textbox::read(child, version) else { return false };
+                items.text_boxes.push(t);
+                self.text_boxes.push(uuid);
+            }
+            "point" => {
+                items.points.push(crate::pcb_point::read(child));
+                self.points.push(uuid);
+            }
+            "image" => {
+                let Some(mut img) = crate::pcb_image::read(child) else { return false };
+                img.scale_ppm = crate::pcb_image::scale_from_file(img.scale_ppm, &img.data, version);
+                items.images.push(img);
+                self.images.push(uuid);
+            }
+            "barcode" => {
+                let Some(b) = crate::barcode_io::read(child) else { return false };
+                items.barcodes.push(b);
+                self.barcodes.push(uuid);
+            }
+            "table" => {
+                let Some(t) = crate::pcb_table::read(child) else { return false };
+                items.tables.push(eda_model::table::Table { uuid: String::new(), ..t });
+                self.tables.push(uuid);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Once the items have their ids: each one's uuid into `fp.kicad.uuids`.
+    fn keep_uuids(self, fp: &mut LibraryFootprint) {
+        let it = &fp.items;
+        let ids = (it.dimensions.iter().map(|d| d.id.clone()).zip(self.dimensions))
+            .chain(it.zones.iter().map(|z| z.id.clone()).zip(self.zones))
+            .chain(it.text_boxes.iter().map(|t| t.id.clone()).zip(self.text_boxes))
+            .chain(it.points.iter().map(|p| p.id.clone()).zip(self.points))
+            .chain(it.images.iter().map(|i| i.id.clone()).zip(self.images))
+            .chain(it.barcodes.iter().map(|b| b.id.clone()).zip(self.barcodes))
+            .chain(it.tables.iter().map(|t| t.id.clone()).zip(self.tables));
+        let uuids: Vec<(String, String)> = ids.filter_map(|(id, u)| Some((id, u?))).collect();
+        fp.kicad.uuids.extend(uuids);
+    }
+}
+
+/// `PCB_IO_KICAD_SEXPR_PARSER::resolveGroups` for a footprint's groups (`raw`, each with the text of its form): a member is the item of the footprint the uuid names
+/// -- a pad, a graphic, a text, a field (`field:<name>`), an item of `fp.items`, or another group -- as KiCad looks it up among the footprint's children
+/// (`footprint->RunOnChildren( .., NO_RECURSE )`), and a uuid that names none is dropped. The groups are made with [`crate::import_items::build_groups_with_uuids`],
+/// the board's: an inner group before the group that holds it, each group's id from its members'; each keeps its uuid in `fp.kicad.uuids`.
+///
+/// A group that is locked (a library footprint has nowhere to keep the lock), or that names a form kept as the file wrote it (`kept`: the uuids of
+/// `fp.kicad.tokens`; a group holding such a group too), is kept as the file wrote it, as before `FootprintItems`: its members are named by uuid there, and every
+/// item keeps its uuid, so the group still holds them.
+fn resolve_groups(fp: &mut LibraryFootprint, raw: Vec<(crate::import_items::RawGroup, String)>, mut kept: std::collections::HashSet<String>) {
+    let mut as_text: Vec<bool> = raw.iter().map(|(g, _)| g.locked).collect();
+    kept.extend(raw.iter().filter(|(g, _)| g.locked).filter_map(|(g, _)| g.uuid.clone()));
+    loop {
+        let mut more = false;
+        for (i, (g, _)) in raw.iter().enumerate() {
+            if !as_text[i] && g.members.iter().any(|m| kept.contains(m)) {
+                as_text[i] = true;
+                kept.extend(g.uuid.clone());
+                more = true;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    let mut by_uuid: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (id, uuid) in &fp.kicad.uuids {
+        by_uuid.entry(uuid.clone()).or_default().push(id.clone());
+    }
+    let mut groups = Vec::new();
+    for ((g, text), text_form) in raw.into_iter().zip(as_text) {
+        if text_form {
+            fp.kicad.tokens.push(text);
+        } else {
+            groups.push(g);
+        }
+    }
+    let names: std::collections::BTreeSet<String> = fp.pads.iter().map(|p| p.id.clone()).chain(fp.graphics.iter().map(|g| g.id().to_string())).chain(fp.texts.iter().map(|t| t.id.clone())).chain(fp.items.ids().map(str::to_string)).collect();
+    let (built, _, uuids) = crate::import_items::build_groups_with_uuids(&by_uuid, &groups, names);
+    for (g, uuid) in built.iter().zip(uuids) {
+        if let Some(u) = uuid.filter(|u| !u.is_empty()) {
+            fp.kicad.uuids.insert(g.id.clone(), u);
+        }
+    }
+    fp.items.groups = built;
 }
 
 /// The forms of a footprint this reader takes into the [`LibraryFootprint`] (or knows to leave out: the board-only ones); any other is kept as the file wrote it

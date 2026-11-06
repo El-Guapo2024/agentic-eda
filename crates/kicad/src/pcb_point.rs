@@ -1,5 +1,6 @@
 //! A board's points (`(point (at x y) (size s) (layer ..) (uuid ..))`, KiCad's `PCB_POINT`) read and written: `PCB_IO_KICAD_SEXPR_PARSER::parsePCB_POINT` and
-//! `PCB_IO_KICAD_SEXPR::format( const PCB_POINT* )`, for [`eda_model::pcb_items::PcbPoint`]. A footprint's own `(point ..)` is part of the footprint (`FootprintExtra::tokens`).
+//! `PCB_IO_KICAD_SEXPR::format( const PCB_POINT* )`, for [`eda_model::pcb_items::PcbPoint`]. A board footprint's own `(point ..)` is part of the footprint (`FootprintExtra::tokens`); a library footprint's is read and written with these
+//! (`FootprintItems::points`, [`crate::footprint_import`]).
 //! The parser takes `at`, `size`, `layer` and `uuid` and nothing else -- no `locked` -- and the writer writes the same four.
 
 use std::fmt::Write as _;
@@ -34,8 +35,13 @@ pub(crate) fn read_all(root: &[Sexpr], refs: &mut Vec<crate::import_items::ItemR
 /// One point as `format( const PCB_POINT* )` writes it; returns its uuid.
 pub(crate) fn write(out: &mut String, p: &PcbPoint) -> String {
     let uuid = crate::duid_for(&format!("point:{}", p.id), &p.id);
-    writeln!(out, "\t(point (at {} {}) (size {}) (layer {}) (uuid \"{uuid}\"))", mm(p.at.x), mm(p.at.y), mm(p.size_nm), sexpr_str(&p.layer)).unwrap();
+    write_with_uuid(out, p, &uuid);
     uuid
+}
+
+/// [`write`] with the uuid given: a library footprint's point keeps the uuid its file gave it (`format( const FOOTPRINT* )` writes `Points()` as a board's).
+pub(crate) fn write_with_uuid(out: &mut String, p: &PcbPoint, uuid: &str) {
+    writeln!(out, "\t(point (at {} {}) (size {}) (layer {}) (uuid \"{uuid}\"))", mm(p.at.x), mm(p.at.y), mm(p.size_nm), sexpr_str(&p.layer)).unwrap();
 }
 
 #[cfg(test)]

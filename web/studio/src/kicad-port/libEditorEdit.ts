@@ -28,4 +28,6 @@ export function symbolPropertiesTarget(selection: readonly Selected[]): SymbolPr
   if (only.kind === "graphic") return { dialog: "graphic", id: only.id };
   if (only.kind === "field") return { dialog: "symbol", field: only.id };
   return null;
-}
+}/** INACTIVE (UI-LEFT F1, 2026-11-05): the Footprint Editor's E is `kicad-port/fpItems.ts::fpEditTarget`, which knows every kind of item; this is kept, not deleted.
+ */
+

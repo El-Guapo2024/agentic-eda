@@ -597,10 +597,15 @@ fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem:
 }
 
 /// The board's net classes in the project file's form (`NETCLASS` in `net_settings.classes`, mm): each class with its name, its precedence (`priority`, the
-/// board's order; Default last) and the numbers it sets, and each of its net patterns as a `netclass_patterns` entry.
-fn project_net_classes(model: &ConstraintModel) -> eda_kicad::appearance::SplitClasses {
+/// board's order; Default last), the numbers it sets and its schematic columns (Schematic Setup > Net Classes: the wire and bus widths in mils, the line style
+/// and the colour, `eda_kicad::put_class_schematic`), and each of its net patterns as a `netclass_patterns` entry.
+pub fn project_net_classes(model: &ConstraintModel) -> eda_kicad::appearance::SplitClasses {
     let mm = eda_model::units::to_mm;
-    let mut classes = vec![json!({ "name": "Default", "priority": i64::from(i32::MAX) })];
+    let mut default = serde_json::Map::new();
+    default.insert("name".into(), json!("Default"));
+    default.insert("priority".into(), json!(i64::from(i32::MAX)));
+    eda_kicad::put_class_schematic(&mut default, "Default", &model.board.net_class_schematic);
+    let mut classes = vec![Value::Object(default)];
     let mut patterns = Vec::new();
     for (i, c) in model.board.net_classes.iter().filter(|c| c.name != "Default").enumerate() {
         let mut class = serde_json::Map::new();
@@ -611,6 +616,7 @@ fn project_net_classes(model: &ConstraintModel) -> eda_kicad::appearance::SplitC
                 class.insert(key.into(), json!(mm(v)));
             }
         }
+        eda_kicad::put_class_schematic(&mut class, &c.name, &model.board.net_class_schematic);
         classes.push(Value::Object(class));
         patterns.extend(c.nets.iter().map(|n| json!({ "netclass": c.name, "pattern": n })));
     }

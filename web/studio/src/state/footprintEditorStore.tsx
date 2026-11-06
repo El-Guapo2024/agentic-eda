@@ -20,8 +20,24 @@ import { editPadCommand, enterContrast, exitContrast, padEditLayer } from "../ki
 import type { ViewTransform } from "./store";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
+import type { AngleSnapMode } from "../kicad-port/pcbParityState";
+import type { FlipDirectionWire, FpItemWire } from "../api/fpItemTypes";
+import { fpAllIds, fpGroupCmd, fpLeaves, fpMirrorCmd, fpMoveCmd, fpRotateCmd, fpUngroupCmd, type Snap } from "../kicad-port/fpItems";
+import type { FpDimDraw, FpDimKind, FpDrawnTable } from "../kicad-port/fpDrawTools";
+import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
+import type { CmdZone } from "../api/types";
 
-export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate";
+export type FpToolId =
+  | "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate"
+  // `DRAWING_TOOL`'s tools for the items of `eda_model::fp_items` (kicad-port/fpDrawTools.ts): Draw Dimension of each kind, Draw Rule Area, Draw Text Box, Place Point,
+  // Draw Table, Add Barcode, Place Reference Image
+  | "dim_aligned" | "dim_orthogonal" | "dim_center" | "dim_radial" | "dim_leader" | "rule_area" | "textbox" | "point" | "table" | "barcode" | "ref_image";
+
+/** The dimension kind each Draw Dimension tool draws. */
+export const FP_DIM_TOOL_KIND: Partial<Record<FpToolId, FpDimKind>> = { dim_aligned: "aligned", dim_orthogonal: "orthogonal", dim_center: "center", dim_radial: "radial", dim_leader: "leader" };
+
+/** The tools of the fp_items kinds: Escape drops what one holds and keeps it armed (each one's `cleanup()`); a second Escape leaves it. */
+export const FP_ITEM_TOOLS: ReadonlySet<FpToolId> = new Set<FpToolId>(["dim_aligned", "dim_orthogonal", "dim_center", "dim_radial", "dim_leader", "rule_area", "textbox", "point", "table", "barcode", "ref_image"]);
 
 export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   select: "Select item(s)",
@@ -36,7 +52,34 @@ export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   text: "Click to place text",
   anchor: "Place the footprint anchor: click the new origin of the footprint",
   enumerate: "Renumber pads: click each pad in the order it should be numbered; click a numbered pad again to take its number back; double-click to finish, Esc to cancel",
+  dim_aligned: "Aligned dimension: click the start, the end, then the height",
+  dim_orthogonal: "Orthogonal dimension: click the start, the end, then the height (the cursor's side sets horizontal or vertical)",
+  dim_center: "Center dimension: click the centre, then the end of an arm",
+  dim_radial: "Radial dimension: click the centre, then a point on the circle",
+  dim_leader: "Leader: click the arrow's point, then the end of the line; the text is asked for next",
+  rule_area: "Rule area: click points, Enter/double-click to finish, Esc to cancel",
+  textbox: "Text box: click one corner, then the opposite one",
+  point: "Point: click to put a point down (Esc ends the tool)",
+  table: "Table: click the first corner, then the opposite one to size the grid",
+  barcode: "Barcode: click to place it (Esc ends the tool)",
+  ref_image: "Reference image: click to choose an image file, then click to put it down",
 };
+
+/**
+ * What a tool of the fp_items kinds holds between its clicks (a polygon's or a box's corners are `drawState`'s): a dimension at SET_END or SET_HEIGHT (`DrawDimension`), a
+ * table's first corner (`DrawTable`), the image the cursor holds by its centre (`PlaceReferenceImage`).
+ */
+export type FpItemDraw =
+  | { tool: "dimension"; draw: FpDimDraw }
+  | { tool: "table"; origin: [Nm, Nm] }
+  | { tool: "ref_image"; name: string; data: string; img: HTMLImageElement; w: Nm; h: Nm };
+
+/** An item a tool made whose Properties dialog is open on it before it is added: OK adds it (one `fp_item add`), Cancel drops it. */
+export type FpPendingItem =
+  | { kind: "textbox"; box: BoardTextBox }
+  | { kind: "barcode"; barcode: CmdBarcode }
+  | { kind: "table"; drawn: FpDrawnTable }
+  | { kind: "zone"; zone: CmdZone };
 
 /** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). `arc`/`bezier`: the construction managers' state, see the PCB tab's `DrawState`. */
 export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Nm, Nm][]; arc?: ArcGeom; bezier?: BezierGeom };
@@ -44,7 +87,7 @@ export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect"
 export interface FpMovePreview {
   refs: string[];
   /** The kind of the item a drag started on. Optional because a Duplicate pick-up carries a mixed selection (pads + graphics + text); the commit looks each ref up either way. */
-  kind?: "pad" | "graphic" | "text";
+  kind?: string;
   dxNm: number;
   dyNm: number;
   rotateQuarterTurns?: number;
@@ -121,6 +164,36 @@ export interface FootprintEditorState {
    * made from the default pad as it is. A click places it and the default pad takes its settings.
    */
   carriedPad: LibraryPad | null;
+  /**
+   * `DIALOG_TEXT_PROPERTIES` on an item of the footprint (`FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: `case PCB_FIELD_T: case PCB_TEXT_T: ShowTextPropertiesDialog`): the field or the
+   * text it is open on, by id (`field:Reference`, a text's id); `null` when closed.
+   */
+  textEditId: string | null;
+  /** `DIALOG_SHAPE_PROPERTIES` (`ShowGraphicItemPropertiesDialog`) on a graphic, by id. */
+  shapeDialogId: string | null;
+  /** The Properties dialog of an item of `eda_model::fp_items` (a dimension, a zone, a text box, a table, a barcode, an image, a group), by id and kind. */
+  itemDialog: { id: string; kind: string } | null;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_AngleSnapMode` (`pcbnew.EditorControl.lineModeFree` / `lineModeOrthonal` / `lineMode45`): the footprint editor's own line mode, 45 degrees by default. */
+  lineMode: AngleSnapMode;
+  /** The fp_items tools' state between clicks (`FpItemDraw`). */
+  itemDraw: FpItemDraw | null;
+  /** The item a tool made whose dialog is open on it (`FpPendingItem`). */
+  pendingItem: FpPendingItem | null;
+  /** `PCB_VIEWERS_SETTINGS_BASE::m_ViewersDisplay`: `m_DisplayPadFill` off (Sketch Pads, `pcbnew.Control.padDisplayMode`), `m_DisplayGraphicsFill` off (`graphicOutlines`), `m_DisplayTextFill` off (`textOutlines`). */
+  sketchPads: boolean;
+  sketchGraphics: boolean;
+  sketchText: boolean;
+  /**
+   * The Appearance manager's switches (`APPEARANCE_CONTROLS` of the footprint editor, `pcbnew.Control.showLayersManager`): a layer, or an object row under `obj:<id>`, that is off,
+   * as the board's `layerVisible` keys them. Absent = shown.
+   */
+  layerVisible: Record<string, boolean>;
+  /** The Appearance manager's opacity sliders, by the same keys (0..1); absent = opaque. */
+  layerOpacity: Record<string, number>;
+  /** The Appearance manager is shown (the frame's right column). */
+  appearanceShown: boolean;
+  /** `HIGH_CONTRAST_MODE::HIDDEN` (the Appearance manager's Inactive layers "Hide"): with `highContrast`, what is not on the active layer is not drawn at all. */
+  contrastHidden: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
 }
 
@@ -161,6 +234,19 @@ const initialState: FootprintEditorState = {
   textDialog: null,
   carriedText: null,
   carriedPad: null,
+  textEditId: null,
+  shapeDialogId: null,
+  itemDialog: null,
+  lineMode: "45",
+  itemDraw: null,
+  pendingItem: null,
+  sketchPads: false,
+  sketchGraphics: false,
+  sketchText: false,
+  layerVisible: {},
+  layerOpacity: {},
+  appearanceShown: true,
+  contrastHidden: false,
   toast: null,
 };
 
@@ -206,6 +292,19 @@ export type FpAction =
   | { type: "SET_TEXT_DIALOG"; text: CmdText | null }
   | { type: "SET_CARRIED_TEXT"; text: CmdText | null }
   | { type: "SET_CARRIED_PAD"; pad: LibraryPad | null }
+  | { type: "SET_TEXT_EDIT_ID"; id: string | null }
+  | { type: "SET_SHAPE_DIALOG_ID"; id: string | null }
+  | { type: "SET_ITEM_DIALOG"; dialog: { id: string; kind: string } | null }
+  | { type: "SET_ITEM_DRAW"; draw: FpItemDraw | null }
+  | { type: "SET_PENDING_ITEM"; item: FpPendingItem | null }
+  | { type: "SET_LINE_MODE"; mode: AngleSnapMode }
+  | { type: "SET_DISPLAY"; patch: Partial<Pick<FootprintEditorState, "sketchPads" | "sketchGraphics" | "sketchText">> }
+  | { type: "SET_LAYER_VISIBLE"; key: string; visible: boolean }
+  | { type: "SET_LAYERS_VISIBLE"; visible: Record<string, boolean> }
+  | { type: "SET_LAYER_OPACITY"; key: string; opacity: number }
+  | { type: "SET_APPEARANCE_SHOWN"; shown: boolean }
+  /** The Appearance manager's Inactive layers (`m_ContrastModeDisplay`): Normal, Dim or Hide. */
+  | { type: "SET_CONTRAST_MODE"; mode: "normal" | "dimmed" | "hidden" }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -225,6 +324,14 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
         enumerateParams: state.enumerateParams,
         treeSelection: state.treeSelection,
         copiedFootprint: state.copiedFootprint,
+        lineMode: state.lineMode,
+        sketchPads: state.sketchPads,
+        sketchGraphics: state.sketchGraphics,
+        sketchText: state.sketchText,
+        layerVisible: state.layerVisible,
+        layerOpacity: state.layerOpacity,
+        appearanceShown: state.appearanceShown,
+        contrastHidden: state.contrastHidden,
       };
     case "FOOTPRINT_OK":
       return { ...state, footprint: action.footprint, error: null };
@@ -239,10 +346,12 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs) };
     case "CLEAR_SELECTION":
-      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null, enumerate: null, textDialog: null, carriedText: null, carriedPad: null };
+      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null, enumerate: null, textDialog: null, carriedText: null, carriedPad: null, itemDraw: null };
     case "ESCAPE": {
       // `PlaceText`: `IsCancelInteractive` with a text carried drops the text (`cleanup()`) and keeps the tool; without one it pops the tool.
       if (state.carriedText || state.textDialog) return { ...state, carriedText: null, textDialog: null };
+      // The fp_items tools (`DrawDimension`, `DrawTable`, `PlaceReferenceImage`, `drawShape`, `DrawZone`): `IsCancelInteractive` with something in hand is `cleanup()`, the tool stays.
+      if (FP_ITEM_TOOLS.has(state.activeTool) && (state.itemDraw || state.drawState)) return { ...state, itemDraw: null, drawState: null };
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.movePreview != null;
       // `evt->IsCancelInteractive()` in EnumeratePads: `commit.Revert()` -- nothing was sent, so dropping the tool's state is the revert.
       if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null, enumerate: null, carriedPad: null };
@@ -250,7 +359,7 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     }
     case "SET_ACTIVE_TOOL":
       // Another tool (`evt->IsActivate()`): a carried text or pad is dropped (`cleanup()`).
-      return { ...state, activeTool: action.tool, drawState: null, textDialog: null, carriedText: null, carriedPad: null };
+      return { ...state, activeTool: action.tool, drawState: null, textDialog: null, carriedText: null, carriedPad: null, itemDraw: null };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.text };
     case "SET_CARRIED_TEXT":
@@ -268,7 +377,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "SET_GRID_NM":
       return { ...state, gridNm: action.um };
     case "TOGGLE_HIGH_CONTRAST":
-      return { ...state, highContrast: !state.highContrast };
+      // `PCB_CONTROL::HighContrastMode`: NORMAL becomes DIMMED, anything else NORMAL
+      return { ...state, highContrast: !state.highContrast, contrastHidden: false };
     case "TOGGLE_GRID_VISIBLE":
       return { ...state, gridVisible: !state.gridVisible };
     case "SET_ACTIVE_LAYER":
@@ -313,6 +423,30 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "PAD_EDIT_EXIT":
       if (state.padEditContrast === null) return state;
       return { ...state, highContrast: exitContrast(state.padEditContrast, state.highContrast), padEditContrast: null };
+    case "SET_TEXT_EDIT_ID":
+      return { ...state, textEditId: action.id };
+    case "SET_SHAPE_DIALOG_ID":
+      return { ...state, shapeDialogId: action.id };
+    case "SET_ITEM_DIALOG":
+      return { ...state, itemDialog: action.dialog };
+    case "SET_ITEM_DRAW":
+      return { ...state, itemDraw: action.draw };
+    case "SET_PENDING_ITEM":
+      return { ...state, pendingItem: action.item };
+    case "SET_LINE_MODE":
+      return { ...state, lineMode: action.mode };
+    case "SET_DISPLAY":
+      return { ...state, ...action.patch };
+    case "SET_LAYER_VISIBLE":
+      return { ...state, layerVisible: { ...state.layerVisible, [action.key]: action.visible } };
+    case "SET_LAYERS_VISIBLE":
+      return { ...state, layerVisible: { ...state.layerVisible, ...action.visible } };
+    case "SET_LAYER_OPACITY":
+      return { ...state, layerOpacity: { ...state.layerOpacity, [action.key]: action.opacity } };
+    case "SET_APPEARANCE_SHOWN":
+      return { ...state, appearanceShown: action.shown };
+    case "SET_CONTRAST_MODE":
+      return { ...state, highContrast: action.mode !== "normal", contrastHidden: action.mode === "hidden" };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
@@ -380,6 +514,23 @@ export interface FootprintEditorApi {
   /** `EDIT_TOOL::Remove`: the given pads, graphics and texts in one commit -- one `batch`, one undo step. */
   deleteItems: (ids: readonly string[]) => Promise<void>;
   setAnchor: (at: PointXY) => Promise<void>;
+  /** `EDIT_TOOL::Rotate` (R / Shift+R) of the selection, any kind of item, about its pivot (kicad-port/fpItems.ts), one undo step. `snap` puts a several-item pivot on the grid. */
+  rotateSelection: (quarterTurnsCcw: number, snap?: Snap) => Promise<void>;
+  /** `EDIT_TOOL::Mirror` (`mirrorH` left-right, `mirrorV` top-bottom) of the selection, one undo step. */
+  mirrorSelection: (direction: FlipDirectionWire, snap?: Snap) => Promise<void>;
+  /** `PCB_GROUP_TOOL::Group` (Ctrl+G) / `GROUP_TOOL::Ungroup` (Ctrl+Shift+G) of the selection; the new group is selected. */
+  groupSelection: () => Promise<void>;
+  ungroupSelection: () => Promise<void>;
+  /** `DIALOG_TEXT_PROPERTIES`' OK on a field (`fp_item edit_field`). */
+  editField: (name: string, text: string, layout: import("../api/types").FieldLayoutCmd) => Promise<boolean>;
+  /** `DIALOG_TEXT_PROPERTIES`' OK on a text of the footprint, its place included (`fp_item set_text`). */
+  setText: (id: string, text: CmdText) => Promise<boolean>;
+  /** `DIALOG_SHAPE_PROPERTIES`' OK on a graphic (`fp_item set_graphic`). */
+  setGraphic: (id: string, shape: CmdShape) => Promise<boolean>;
+  /** Place an item of `eda_model::fp_items`' kinds (`fp_item add`) and answer with its id, or `undefined` when refused. */
+  addItem: (item: FpItemWire) => Promise<string | undefined>;
+  /** An item of `eda_model::fp_items`' kinds replaced by its dialog (`fp_item set`). */
+  setItem: (id: string, item: FpItemWire) => Promise<boolean>;
   editProperties: (fields: FootprintPropertiesFields) => Promise<boolean>;
   updateOnBoard: () => Promise<void>;
   deleteFootprint: () => Promise<void>;
@@ -441,7 +592,14 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
     getState: () => stateRef.current,
     openFootprint: async (name) => {
       dispatch({ type: "SET_NAME", name });
-      await ensureFootprintInProject(name); // an installed KiCad footprint is copied into the project library first, or the verb below would open a blank one
+      // an installed KiCad footprint is copied into the project library first, or the verb below would open a blank one; when that fails, nothing is opened
+      const problem = await ensureFootprintInProject(name);
+      if (problem) {
+        const message = `Footprint '${name}' could not be loaded: ${problem}`;
+        dispatch({ type: "FOOTPRINT_ERR", message });
+        dispatch({ type: "TOAST", message, kind: "error" });
+        return;
+      }
       await postCmd({ op: "open_footprint_for_edit", name }, false);
       const footprint = await fetchFootprint(name);
       dispatch({ type: "FOOTPRINT_OK", footprint });
@@ -498,22 +656,9 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });
       const name = stateRef.current.name;
       if (!name || (dxNm === 0 && dyNm === 0)) return;
-      const cmds: Cmd[] = [];
-      for (const id of refs) {
-        const pad = api.padById(id);
-        if (pad) {
-          cmds.push({ op: "move_pad", footprint: name, id, x: pad.at.x + dxNm, y: pad.at.y + dyNm });
-          continue;
-        }
-        if (api.graphicById(id)) {
-          cmds.push({ op: "move_footprint_graphic", footprint: name, id, dx: dxNm, dy: dyNm });
-          continue;
-        }
-        const text = api.textById(id);
-        if (text) cmds.push({ op: "move_footprint_text", footprint: name, id, x: text.at.x + dxNm, y: text.at.y + dyNm });
-      }
-      if (cmds.length === 0) return;
-      await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }); // one undo step, like one BOARD_COMMIT::Push
+      // `EDIT_TOOL::Move`'s commit: every kind of item (pads, graphics, texts, fields, dimensions, zones, text boxes ..., groups) by one `fp_item move`, one undo step.
+      const cmd = fpMoveCmd(name, refs, dxNm, dyNm);
+      if (cmd) await runCmd(cmd);
     },
     closeFootprint: () => dispatch({ type: "SET_NAME", name: null }),
     refresh,
@@ -670,19 +815,81 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const name = st.name;
       const fp = st.footprint;
       if (!name || !fp) return;
-      const cmds: Cmd[] = [];
-      for (const id of ids) {
-        if (fp.pads.some((p) => p.id === id)) cmds.push({ op: "delete_pad", footprint: name, id });
-        else if (fp.graphics.some((g) => g.id === id)) cmds.push({ op: "delete_footprint_graphic", footprint: name, id });
-        else if (fp.texts.some((t) => t.id === id)) cmds.push({ op: "delete_footprint_text", footprint: name, id });
-      }
+      // `EDIT_TOOL::DeleteItems`: one `fp_item delete` takes every kind (a field is hidden, a group goes with its members).
+      const known = fpAllIds(fp);
+      const doomed = ids.filter((id) => known.has(id));
       dispatch({ type: "CLEAR_SELECTION" });
-      if (cmds.length > 0) await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+      if (doomed.length > 0) await runCmd({ op: "fp_item", verb: "delete", footprint: name, ids: doomed });
     },
     setAnchor: async (at) => {
       const name = stateRef.current.name;
       if (!name) return;
       await runCmd({ op: "set_footprint_anchor", name, at });
+    },
+    rotateSelection: async (quarterTurnsCcw, snap) => {
+      const st = stateRef.current;
+      if (!st.name || !st.footprint) return;
+      const cmd = fpRotateCmd(st.footprint, st.name, [...st.selection], quarterTurnsCcw, snap);
+      if (cmd) await runCmd(cmd);
+    },
+    mirrorSelection: async (direction, snap) => {
+      const st = stateRef.current;
+      if (!st.name || !st.footprint) return;
+      const cmd = fpMirrorCmd(st.footprint, st.name, [...st.selection], direction, snap);
+      if (cmd) await runCmd(cmd);
+    },
+    groupSelection: async () => {
+      const st = stateRef.current;
+      if (!st.name || !st.footprint) return;
+      const cmd = fpGroupCmd(st.footprint, st.name, [...st.selection]);
+      if (!cmd) return;
+      const before = new Set((st.footprint.items?.groups ?? []).map((g) => g.id));
+      if (!(await runCmd(cmd))) return;
+      // `RunAction( ACTIONS::selectItem, group )`: the new group is the selection.
+      const after = await fetchFootprint(st.name);
+      const made = (after.items?.groups ?? []).find((g) => !before.has(g.id));
+      dispatch({ type: "SET_SELECTION", refs: made ? [made.id] : [] });
+    },
+    ungroupSelection: async () => {
+      const st = stateRef.current;
+      if (!st.name || !st.footprint) return;
+      const cmd = fpUngroupCmd(st.footprint, st.name, [...st.selection]);
+      if (!cmd) return;
+      // `GROUP_TOOL::Ungroup` selects the members it freed.
+      const members = fpLeaves(st.footprint, [...st.selection]);
+      if (await runCmd(cmd)) dispatch({ type: "SET_SELECTION", refs: members });
+    },
+    editField: async (fieldName, text, layout) => {
+      const name = stateRef.current.name;
+      if (!name) return false;
+      return runCmd({ op: "fp_item", verb: "edit_field", footprint: name, name: fieldName, text, layout });
+    },
+    setText: async (id, text) => {
+      const name = stateRef.current.name;
+      if (!name) return false;
+      return runCmd({ op: "fp_item", verb: "set_text", footprint: name, id, text });
+    },
+    setGraphic: async (id, shape) => {
+      const name = stateRef.current.name;
+      if (!name) return false;
+      return runCmd({ op: "fp_item", verb: "set_graphic", footprint: name, id, shape });
+    },
+    addItem: async (item) => {
+      const st = stateRef.current;
+      if (!st.name) return undefined;
+      const before = st.footprint ? fpAllIds(st.footprint) : new Set<string>();
+      if (!(await runCmd({ op: "fp_item", verb: "add", footprint: st.name, item }))) return undefined;
+      try {
+        const after = await fetchFootprint(st.name);
+        return [...fpAllIds(after)].find((id) => !before.has(id));
+      } catch {
+        return undefined;
+      }
+    },
+    setItem: async (id, item) => {
+      const name = stateRef.current.name;
+      if (!name) return false;
+      return runCmd({ op: "fp_item", verb: "set", footprint: name, id, item });
     },
     editProperties: async (fields) => {
       const name = stateRef.current.name;

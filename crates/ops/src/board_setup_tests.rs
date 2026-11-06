@@ -85,6 +85,7 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
     let settings = NetClassSettings {
         default: NetClass { name: "Default".into(), nets: vec![], track_width: Some(mm(0.25)), clearance: Some(mm(0.22)), via_diameter: Some(mm(0.7)), via_drill: Some(mm(0.35)), ..class("Default", &[], Nm::ZERO) },
         classes: vec![class("power", &["VBUS", "VBUS_*"], mm(0.3)), class("fast", &["SPI_?"], mm(0.15))],
+        schematic: Default::default(),
     };
     b.apply(&Cmd::SetNetClasses { settings }).unwrap();
     let m = effective(&b, &base);
@@ -95,7 +96,7 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
     assert_eq!(m.board.clearance_of("SPI_33"), mm(0.22), "and no more: the whole name must match");
     assert_eq!(m.board.clearance_of("GND"), mm(0.22), "a net no pattern claims is in the Default class");
 
-    let dup = NetClassSettings { default: class("Default", &[], Nm::ZERO), classes: vec![class("a", &["X"], Nm::new(1)), class("a", &["Y"], Nm::new(1))] };
+    let dup = NetClassSettings { default: class("Default", &[], Nm::ZERO), classes: vec![class("a", &["X"], Nm::new(1)), class("a", &["Y"], Nm::new(1))], schematic: Default::default() };
     assert_eq!(b.apply(&Cmd::SetNetClasses { settings: dup }).unwrap_err()[0].check, "ops_bad_netclasses");
 }
 

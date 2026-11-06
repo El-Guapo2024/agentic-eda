@@ -154,15 +154,29 @@ export async function fetchAnyFootprint(name: string): Promise<{ footprint: Libr
  * built-in table, and starts a BLANK footprint for any other name, so without this an installed footprint would open empty. `overwrite`, because the
  * model may resolve the same name (a part that uses it) and a plain put treats that as taken. A name nothing resolves is left to that verb.
  */
-export async function ensureFootprintInProject(name: string): Promise<void> {
-  if (!name.includes(":")) return;
-  try {
-    const { footprint, inProject } = await fetchAnyFootprint(name);
-    if (inProject) return;
-    await postCmd({ op: "put_library_footprint", footprint, overwrite: true }, false);
-  } catch {
-    /* nothing installed or known under this name: the open verb starts a blank footprint */
+export async function ensureFootprintInProject(name: string): Promise<string | null> {
+  if (!name.includes(":")) return null;
+  // Answers null when the footprint is in the project library now, or when nothing knows the name (the open verb then starts a blank one, as KiCad's New
+  // Footprint would); else why it could not be copied in -- the caller must not open a blank footprint over a library's footprint it failed to read or store.
+  // A failure is tried once more (a request that lost a race with another command); the put's own refusal used to be ignored, and a read error read as
+  // "unknown", so either opened the footprint blank.
+  let problem: string | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let found: { footprint: LibraryFootprint; inProject: boolean };
+    try {
+      found = await fetchAnyFootprint(name);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (/no footprint with this name/.test(message)) return null; // `footprint_any`'s "unknown": nothing installed or known under this name
+      problem = message;
+      continue;
+    }
+    if (found.inProject) return null;
+    const reply = await postCmd({ op: "put_library_footprint", footprint: found.footprint, overwrite: true }, false);
+    if (reply.ok) return null;
+    problem = reply.message;
   }
+  return problem;
 }
 
 /** The symbol sibling of [`ensureFootprintInProject`]: an installed `Lib:Name` is put into the project library before the editor opens it. */

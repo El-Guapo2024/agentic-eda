@@ -9,6 +9,7 @@ import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditor
 import { fpTextSizeMessage, noPrintableChars } from "../../kicad-port/fpTextTool";
 import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
 import type { TextJustify } from "../../api/types";
+import { fieldLayoutOf, fpFieldById } from "../../kicad-port/fpItems";
 
 /** The layers a footprint text can be put on: the Footprint Editor's layer box. */
 const FP_TEXT_LAYERS = FP_EDITOR_LAYERS;
@@ -131,6 +132,194 @@ export function FpTextDialog() {
         <div className="dialog-footer">
           <button onClick={close}>Cancel</button>
           <button className="primary" data-testid="fp-text-ok" onClick={ok}>
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** `UNIT_BINDER::Validate`'s message for the size field `label` ("Width", "Height") of `sizeNm` (see `fpTextSizeMessage`, whose wording is the width's). */
+function sizeMessage(label: string, sizeNm: number): string | null {
+  const m = fpTextSizeMessage(sizeNm);
+  return m ? m.replace(/^Width/, label) : null;
+}
+
+/**
+ * `DIALOG_TEXT_PROPERTIES` on an item of the open footprint (`FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: `case PCB_FIELD_T: case PCB_TEXT_T: ShowTextPropertiesDialog`), opened by a
+ * double click or E: "Footprint Reference Properties" (label "Reference:"), "Footprint Value Properties" ("Value:"), "Footprint Field Properties" ("Text:") for a field, with its Show
+ * box; "Footprint Text Properties" for a text, with no Show box. A field has KiCad's whole look -- width and height, thickness, Bold, Italic, the horizontal and vertical justification,
+ * Mirrored, Knockout, Keep upright -- (`fp_item edit_field`); a text has what the model holds of one (one size, the thickness, the justification, Mirrored: `fp_item set_text`).
+ * An empty box leaves the text as it was (`if( !m_SingleLineText->GetValue().IsEmpty() ) SetText`), a size outside KiCad's limits is refused with `UNIT_BINDER::Validate`'s
+ * words, a pen too thick is clamped with KiCad's message. OK is one undo step ("Edit Text Properties").
+ */
+export function FpTextEditDialog() {
+  const state = useFpState();
+  const dispatch = useFpDispatch();
+  const api = useFpApi();
+  const id = state.textEditId;
+  const fp = state.footprint;
+  const field = fp && id ? fpFieldById(fp, id) : undefined;
+  const text = fp && id && !field ? fp.texts.find((t) => t.id === id) : undefined;
+  const [content, setContent] = useState("");
+  const [layer, setLayer] = useState("F.SilkS");
+  const [width, setWidth] = useState("1");
+  const [height, setHeight] = useState("1");
+  const [thickness, setThickness] = useState("0.1");
+  const [x, setX] = useState("0");
+  const [y, setY] = useState("0");
+  const [angle, setAngle] = useState("0");
+  const [halign, setHalign] = useState<-1 | 0 | 1>(0);
+  const [valign, setValign] = useState<-1 | 0 | 1>(0);
+  const [mirror, setMirror] = useState(false);
+  const [bold, setBold] = useState(false);
+  const [italic, setItalic] = useState(false);
+  const [visible, setVisible] = useState(true);
+  const [knockout, setKnockout] = useState(false);
+  const [upright, setUpright] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (field) {
+      setContent(field.text);
+      setLayer(field.layer);
+      setWidth(mm(field.w));
+      setHeight(mm(field.h));
+      setThickness(mm(field.thickness));
+      setX(mm(field.x));
+      setY(mm(field.y));
+      setAngle(String(field.angle / 1000));
+      setHalign(field.halign);
+      setValign(field.valign);
+      setMirror(field.mirror);
+      setBold(field.bold);
+      setItalic(field.italic);
+      setVisible(field.visible);
+      setKnockout(field.knockout);
+      setUpright(field.upright);
+    } else if (text) {
+      setContent(text.content);
+      setLayer(text.layer);
+      setWidth(mm(text.size_nm));
+      setHeight(mm(text.size_nm));
+      setThickness(mm(text.stroke_width));
+      setX(mm(text.at.x));
+      setY(mm(text.at.y));
+      setAngle(String(text.angle / 1000));
+      setHalign(text.justify === "left" ? -1 : text.justify === "right" ? 1 : 0);
+      setMirror(text.mirror);
+    }
+    setError(null);
+    // only when the dialog opens on an item, not on every poll of the footprint
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  if (!id || (!field && !text)) return null;
+  const close = () => dispatch({ type: "SET_TEXT_EDIT_ID", id: null });
+  const title = field ? (field.name === "Reference" ? "Footprint Reference Properties" : field.name === "Value" ? "Footprint Value Properties" : "Footprint Field Properties") : "Footprint Text Properties";
+  const label = field?.name === "Reference" ? "Reference:" : field?.name === "Value" ? "Value:" : "Text:";
+  const ok = async () => {
+    const w = nm(width);
+    const h = field ? nm(height) : w;
+    const sizeError = sizeMessage("Width", w) ?? (field ? sizeMessage("Height", h) : null);
+    if (sizeError) return setError(sizeError);
+    // `ClampTextPenSize( thickness, size )`: a quarter of the smaller side at most
+    let pen = Math.max(0, nm(thickness) || 0);
+    const maxPen = Math.round(Math.min(w, h) * 0.25);
+    if (pen > maxPen) {
+      dispatch({ type: "TOAST", message: "The text thickness is too large for the text size.\nIt will be clamped.", kind: "error" });
+      pen = maxPen;
+    }
+    const at = { x: nm(x) || 0, y: nm(y) || 0 };
+    const angleMdeg = (((Math.round((Number(angle) || 0) * 1000) % 360_000) + 360_000) % 360_000);
+    let done: boolean;
+    if (field) {
+      const layout = { ...fieldLayoutOf(field), at, angle: angleMdeg, size: [w, h] as [number, number], thickness: pen, layer, visible, halign, valign, mirror, bold, italic, keep_upright: upright, knockout };
+      done = await api.editField(field.name, content, layout);
+    } else {
+      const justify: TextJustify = halign < 0 ? "left" : halign > 0 ? "right" : "center";
+      done = await api.setText(id, { ...text!, content, layer, size_nm: w, stroke_width: pen, angle: angleMdeg, justify, mirror, at });
+    }
+    if (done) close();
+  };
+  const enter = (e: KeyboardEvent) => {
+    if (e.key === "Enter") void ok();
+  };
+  const num = (value: string, set: (v: string) => void, testid: string, unit = "mm") => (
+    <span>
+      <input type="number" step="any" value={value} data-testid={testid} onChange={(e) => set(e.target.value)} onKeyDown={enter} style={{ width: 80 }} /> {unit}
+    </span>
+  );
+  const check = (lbl: string, value: boolean, set: (v: boolean) => void, testid: string) => (
+    <label style={{ display: "inline-flex", gap: 4, alignItems: "center", marginRight: 10 }}>
+      <input type="checkbox" checked={value} data-testid={testid} onChange={(e) => set(e.target.checked)} />
+      {lbl}
+    </label>
+  );
+  return (
+    <div className="dialog-backdrop" onClick={close}>
+      <div className="dialog" style={{ width: 420 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label={title} data-testid="fp-text-edit-dialog">
+        <div className="dialog-header">
+          <span>{title}</span>
+        </div>
+        <div className="dialog-body">
+          <div className="kv-grid" style={{ gridTemplateColumns: "100px 1fr" }}>
+            <span>{label}</span>
+            <input autoFocus value={content} data-testid="fp-text-edit-content" onChange={(e) => setContent(e.target.value)} onKeyDown={enter} />
+            <span>Layer:</span>
+            <select value={layer} data-testid="fp-text-edit-layer" onChange={(e) => setLayer(e.target.value)}>
+              {(FP_TEXT_LAYERS.includes(layer) ? FP_TEXT_LAYERS : [layer, ...FP_TEXT_LAYERS]).map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            <span>{field ? "Width:" : "Size:"}</span>
+            {num(width, setWidth, "fp-text-edit-width")}
+            {field && (
+              <>
+                <span>Height:</span>
+                {num(height, setHeight, "fp-text-edit-height")}
+              </>
+            )}
+            <span>Thickness:</span>
+            {num(thickness, setThickness, "fp-text-edit-thickness")}
+            <span>Offset X:</span>
+            {num(x, setX, "fp-text-edit-x")}
+            <span>Offset Y:</span>
+            {num(y, setY, "fp-text-edit-y")}
+            <span>Orientation:</span>
+            {num(angle, setAngle, "fp-text-edit-angle", "°")}
+            <span>Justification:</span>
+            <span>
+              <select value={halign} data-testid="fp-text-edit-halign" onChange={(e) => setHalign(Number(e.target.value) as -1 | 0 | 1)}>
+                <option value={-1}>Left</option>
+                <option value={0}>Center</option>
+                <option value={1}>Right</option>
+              </select>
+              {field && (
+                <select value={valign} data-testid="fp-text-edit-valign" onChange={(e) => setValign(Number(e.target.value) as -1 | 0 | 1)} style={{ marginLeft: 6 }}>
+                  <option value={-1}>Top</option>
+                  <option value={0}>Center</option>
+                  <option value={1}>Bottom</option>
+                </select>
+              )}
+            </span>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            {field && check("Show", visible, setVisible, "fp-text-edit-visible")}
+            {field && check("Bold", bold, setBold, "fp-text-edit-bold")}
+            {field && check("Italic", italic, setItalic, "fp-text-edit-italic")}
+            {check("Mirrored", mirror, setMirror, "fp-text-edit-mirror")}
+            {field && check("Knockout", knockout, setKnockout, "fp-text-edit-knockout")}
+            {field && check("Keep upright", upright, setUpright, "fp-text-edit-upright")}
+          </div>
+          {error && <p style={{ color: "var(--error, #e66)", margin: "8px 0 0" }}>{error}</p>}
+        </div>
+        <div className="dialog-footer">
+          <button onClick={close}>Cancel</button>
+          <button className="primary" data-testid="fp-text-edit-ok" onClick={() => void ok()}>
             OK
           </button>
         </div>
