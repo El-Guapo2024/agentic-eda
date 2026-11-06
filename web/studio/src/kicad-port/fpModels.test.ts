@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Part } from "../api/types";
-import { boardModelsCmds, cleanPath, libraryModels, rowOfCmd, rowsOfLibrary, evaluateExpression, evaluateField, formatOffset, isNumberText, formatRotation, formatScale, modelCmd, movedRows, opacityOf, plainRow, readNumber, readOffset, readRotation, rotationFromString, rowsOf, sameRows, showRotation, sliderOf, statusIcon, stepOffset, stepRotation, stepScale } from "./fpModels";
+import { bodyCmds, bodyDraftOf, bodyDraftProblem, bodyOfDraft, EXTRUSION_MATERIALS, EXTRUSION_SOURCES, extrusionDefaultColor, withMaterial, boardModelsCmds, cleanPath, libraryModels, rowOfCmd, rowsOfLibrary, evaluateExpression, evaluateField, formatOffset, isNumberText, formatRotation, formatScale, modelCmd, movedRows, opacityOf, plainRow, readNumber, readOffset, readRotation, rotationFromString, rowsOf, sameRows, showRotation, sliderOf, statusIcon, stepOffset, stepRotation, stepScale } from "./fpModels";
 
 const part = (models: Part["models"]): Part => ({ ref: "U1", value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: null, models }) as Part;
 const entry = (name: string, over: Record<string, unknown> = {}) => ({ name, offset: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number], rotate: [0, 0, 0] as [number, number, number], opacity: 1, show: true, ...over });
@@ -144,4 +144,32 @@ test("the Footprint Editor's OK sends the whole list, without the blank rows, an
   assert.equal(sent.models3d[1]!.opacity, 0.5);
   assert.deepEqual(libraryModels([]), { model: null, models3d: [] });
   assert.deepEqual(libraryModels([plainRow("  ")]), { model: null, models3d: [] });
+});
+
+test("the Extruded 3D Body box starts as TransferDataToWindow fills it and OK sends the body only when it changed", () => {
+  const none = bodyDraftOf({});
+  assert.deepEqual([none.enabled, none.show, none.height, none.standoff, none.source, none.material, none.color, none.userColor], [false, true, "0.0000", "0.0000", 0, 0, [0.2, 0.2, 0.2, 1], false]);
+  assert.deepEqual(bodyCmds({ ref: "U1" }, none), [], "off and none: nothing");
+  assert.equal(bodyDraftProblem(none), null);
+  // on, with a height and a standoff: one command
+  const on = { ...none, enabled: true, height: "2", standoff: "0.5", source: 2 };
+  assert.deepEqual(bodyCmds({ ref: "U1" }, on), [{ op: "set_extruded_body", part: "U1", body: { height: 2_000_000, standoff: 500_000, layer: "F.Fab", material: "plastic", color: null, offset: [0, 0, 0], scale: [1, 1, 1], rotate: [0, 0, 0], show: true } }]);
+  // the box's refusals, word for word
+  assert.equal(bodyDraftProblem({ ...on, height: "0" }), "Component height must be greater than zero.");
+  assert.equal(bodyDraftProblem({ ...on, height: "abc" }), "Component height must be greater than zero.");
+  assert.equal(bodyDraftProblem({ ...on, standoff: "2" }), "Standoff height must be less than the overall height.");
+  assert.equal(bodyDraftProblem({ ...on, standoff: "-1" }), null, "a negative standoff is none");
+  assert.equal(bodyOfDraft({ ...on, standoff: "-1" })!.standoff, 0);
+  // a footprint's body: the box shows it, and unchanged it sends nothing; off it sends none
+  const info = { height: 1_500_000, standoff: 0, layer: "pad_bbox", material: "metal" as const, color: [0.7, 0.7, 0.7, 1] as [number, number, number, number], color_set: false, offset: [0.5, 0, 0] as [number, number, number], scale: [1, 2, 1] as [number, number, number], rotate: [0, 0, 15] as [number, number, number], show: false, at: [0, 0] as [number, number], outline: [], pins: [] };
+  const d = bodyDraftOf({ extruded_body: info });
+  assert.deepEqual([d.enabled, d.show, d.height, d.source, d.material, d.userColor, d.offset, d.rotate], [true, false, "1.5000", 4, 2, false, [0.5, 0, 0], [0, 0, 15]]);
+  assert.deepEqual(bodyCmds({ ref: "U1", extruded_body: info }, d), []);
+  assert.deepEqual(bodyCmds({ ref: "U1", extruded_body: info }, { ...d, enabled: false }), [{ op: "set_extruded_body", part: "U1", body: null }]);
+  // a material change takes the swatch with it unless the person chose a colour
+  assert.deepEqual(withMaterial(d, 3).color, [0.72, 0.45, 0.2, 1]);
+  assert.deepEqual(withMaterial({ ...d, userColor: true, color: [1, 0, 0, 1] }, 3).color, [1, 0, 0, 1]);
+  assert.deepEqual(bodyOfDraft({ ...d, userColor: true, color: [1, 0, 0, 1] })!.color, [1, 0, 0, 1], "a colour chosen is the body's own");
+  assert.deepEqual([EXTRUSION_SOURCES.map((s) => s.label), EXTRUSION_MATERIALS.map((m) => m.label)], [["Auto", "Courtyard layer", "Fabrication layer", "Silkscreen layer", "Pin bounding box"], ["Plastic", "Matte", "Metal", "Copper"]]);
+  assert.deepEqual(extrusionDefaultColor("matte"), [0.4, 0.4, 0.4, 1]);
 });

@@ -14,6 +14,7 @@ import type { BoardState, Part } from "../../api/types";
 import { DEFAULT_STACK, inferKind, footprintShown, modelsByUse, modelWorldMatrix, type Model3dEntry, type ModelKind, type Stack } from "../../kicad-port/model3d";
 import type { ModelCache, ModelRecord } from "./modelCache";
 import { buildPartPlaceholder, placeholderMaterials } from "./scene";
+import { buildExtrudedBody } from "./extrudedBody";
 
 /** `render.opengl_selection_color`'s default (eda_3d_viewer_settings.cpp): `COLOR4D( 0.0, 1.0, 0.0, 1.0 )`. */
 export const SELECTION_COLOR = 0x00ff00;
@@ -95,7 +96,7 @@ export class PartModels {
         if (record.status === "ready" && record.proto) ready.push({ model, record });
       }
       const kind: ModelKind = part.kind3d ?? inferKind(part.pads);
-      const signature = [part.at.join(","), part.rot ?? 0, part.side, stack.boardThicknessMm, stack.copperMm, stack.copperBackMm, opts.showBoundingBoxes, ready.map((r) => modelSignature(r.model)).join(";"), ready.length === 0 ? JSON.stringify([part.body, part.courtyard, part.pads?.length]) : ""].join("#");
+      const signature = [part.at.join(","), part.rot ?? 0, part.side, stack.boardThicknessMm, stack.copperMm, stack.copperBackMm, opts.showBoundingBoxes, ready.map((r) => modelSignature(r.model)).join(";"), ready.length === 0 ? JSON.stringify([part.body, part.courtyard, part.pads?.length]) : "", part.extruded_body ? JSON.stringify(part.extruded_body) : ""].join("#");
       let entry = this.parts.get(part.ref);
       if (!entry || entry.signature !== signature) {
         if (entry) this.disposeEntry(entry);
@@ -129,7 +130,13 @@ export class PartModels {
     group.name = "part";
     group.userData.ref = part.ref;
     const owned: PartEntry["owned"] = [];
-    if (ready.length === 0) {
+    // The footprint's Extruded 3D Body (extrudedBody.ts), beside its models; a part that has one has no placeholder box ("Suppress placeholder if a valid extruded body was built").
+    const body = buildExtrudedBody(part, stack);
+    if (body) {
+      group.add(body.object);
+      owned.push(...body.owned);
+    }
+    if (ready.length === 0 && !body) {
       const box = buildPartPlaceholder(part, this.materials);
       if (box) {
         group.add(box);

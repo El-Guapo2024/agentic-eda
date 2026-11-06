@@ -475,3 +475,39 @@ fn a_board_opened_has_its_vrml_models_migrated_by_file_name_in_one_step_and_the_
     undo(&dir, "ui", Some(Domain::Pcb)).unwrap();
     assert_eq!(sent(&dir, "U1").unwrap()[0].path, r0603, "one undo takes the migration back");
 }
+
+/// The slow tier: kicad-cli reads the Extruded 3D Body this studio writes -- `pcb upgrade` writes it back with the same numbers (and a uuid of its own: KiCad 25ec2335's
+/// `SEXPR_BOARD_FILE_VERSION` 20260930), which this studio's reader reads to the same body -- on the front and, the footprint flipped, on the back with the back's layer.
+#[test]
+fn kicad_cli_reads_the_extruded_body_this_studio_writes() {
+    use eda_model::extruded_body::{ExtrudedBody, ExtrusionMaterial};
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 (and have kicad-cli) to run it");
+        return;
+    }
+    let dir = scratch("extruded_body_kicad_cli_proof");
+    setup(&dir);
+    let body = ExtrudedBody { height: mm(2.5), standoff: mm(0.3), layer: "F.Fab".into(), material: ExtrusionMaterial::Metal, color: Some([0.1, 0.5, 0.9, 1.0]), offset: [0.5, -0.25, 0.1], scale: [1.0, 1.5, 1.0], rotate: [0.0, 0.0, 30.0], show: true };
+    step(&dir, Cmd::SetExtrudedBody { part: "U1".into(), body: Some(body.clone()) }, false, "test").unwrap();
+    let work = dir.join("kicad");
+    std::fs::create_dir_all(&work).unwrap();
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (round, back_layer) in [("front", "\"F.Fab\""), ("back", "\"B.Fab\"")] {
+        if round == "back" {
+            step(&dir, Cmd::FlipItems { ids: vec!["U1".into()], pivot: eda_model::ir::Point { x: mm(5.0), y: mm(5.0) }, direction: eda_ops::FlipDirection::LeftRight }, false, "test").unwrap();
+        }
+        let ours = derived_board(&dir);
+        let theirs_path = work.join(format!("{round}.kicad_pcb"));
+        std::fs::write(&theirs_path, &ours).unwrap();
+        kicad_cli(&work, &["pcb".as_ref(), "upgrade".as_ref(), "--force".as_ref(), theirs_path.as_os_str()]).unwrap_or_else(|e| panic!("kicad-cli upgrades the board: {e}"));
+        let theirs = std::fs::read_to_string(&theirs_path).unwrap();
+        let block = words(footprint_block(&theirs, "U1"));
+        let typed = &block[block.find("(model (type extruded)").unwrap_or_else(|| panic!("KiCad kept the body ({round}): {block}"))..];
+        assert!(typed.contains(&format!("(layer {back_layer})")), "the layer of the footprint's side ({round}): {typed}");
+        for want in ["(overall_height 2.5)", "(body_pcb_gap 0.3)", "(material metal)", "(color 0.1 0.5 0.9 1)", "(offset (xyz 0.5 -0.25 0.1) )", "(scale (xyz 1 1.5 1) )", "(rotate (xyz 0 0 30) )", "(hide no)"] {
+            assert!(typed.contains(want), "{want} ({round}): {typed}");
+        }
+        let (back, _, _) = eda_kicad::import_kicad_pcb(&theirs).unwrap();
+        assert_eq!(back.extruded_body("U1"), Some(body.clone()), "read back from KiCad's own file ({round})");
+    }
+}

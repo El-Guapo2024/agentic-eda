@@ -739,23 +739,34 @@ fn model_json(m: &eda_model::footprint::Model3d) -> Value {
     json!({ "name": m.path, "offset": m.offset, "scale": m.scale, "rotate": m.rotate, "opacity": m.opacity, "show": m.show })
 }
 
-/// The 3D models of `part` for `/api/state`: `{ "models": [{ name, offset, scale, rotate, opacity, show }], "kind3d": "smd" | "tht" | "virtual", "dnp", "not_in_pos" }`,
-/// `None` when it has no model. `footprint` is what the model resolved the part's footprint to. The placement is the footprint file's, in the studio's frame for a
-/// top-side footprint (`Model3d::flipped_frame`); the 3D view turns it with a bottom-side part.
+/// The 3D models of `part` for `/api/state`: `{ "models": [{ name, offset, scale, rotate, opacity, show }], "kind3d": "smd" | "tht" | "virtual", "dnp", "not_in_pos",
+/// "extruded_body"? }`, `None` when it has neither a model nor an Extruded 3D Body. `footprint` is what the model resolved the part's footprint to. The placement is the
+/// footprint file's, in the studio's frame for a top-side footprint (`Model3d::flipped_frame`); the 3D view turns it with a bottom-side part. `extruded_body` is
+/// [`crate::extruded_body_api::body_json`], present only for a part that has one (a part with a body and no model has `models: []`).
 ///
 /// The kind and the two flags are the board footprint's own attributes (`Design::effective_attrs`: Footprint Properties' edit, else what the board file is written
 /// with), which `BOARD_ADAPTER::IsFootprintShown` reads: `FP_SMD` an SMD model, `FP_THROUGH_HOLE` a through-hole one, neither a virtual one; `FP_DNP` and
-/// `FP_EXCLUDE_FROM_POS_FILES` hide it unless the viewer's "Models marked DNP" / "Models not in POS File" rows are on.
+/// `FP_EXCLUDE_FROM_POS_FILES` hide it unless the viewer's "Models marked DNP" / "Models not in POS File" rows are on. The extruded body is shown by the same rule
+/// (`renderExtrudedBodies`: `if( !body->m_show || !m_boardAdapter.IsFootprintShown( fp ) ) continue;`).
 pub fn part_json(design: &eda_model::ir::Design, model: &ConstraintModel, part: &Part, footprint: &Footprint) -> Option<Value> {
     use eda_model::fp_edit::FootprintKind;
-    let found = part_models(model, part, footprint)?;
+    let found = part_models(model, part, footprint);
+    let body = crate::extruded_body_api::body_json(design, model, part, footprint);
+    if found.is_none() && body.is_none() {
+        return None;
+    }
     let attrs = design.effective_attrs(&part.reference, footprint);
     let kind = match attrs.kind {
         FootprintKind::Smd => "smd",
         FootprintKind::ThroughHole => "tht",
         FootprintKind::Unspecified => "virtual",
     };
-    Some(json!({ "models": found.models.iter().map(model_json).collect::<Vec<_>>(), "kind3d": kind, "dnp": attrs.dnp, "not_in_pos": attrs.exclude_from_pos_files }))
+    let models: Vec<Value> = found.map(|f| f.models.iter().map(model_json).collect()).unwrap_or_default();
+    let mut v = json!({ "models": models, "kind3d": kind, "dnp": attrs.dnp, "not_in_pos": attrs.exclude_from_pos_files });
+    if let Some(body) = body {
+        v["extruded_body"] = body;
+    }
+    Some(v)
 }
 
 #[cfg(test)]

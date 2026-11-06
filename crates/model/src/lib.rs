@@ -10,6 +10,7 @@ pub mod board_text;
 pub mod bus_pattern;
 pub mod component_classes;
 pub mod embedded_files;
+pub mod extruded_body;
 mod drc_checks;
 pub mod erc_checks;
 pub mod floorplan;

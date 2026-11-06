@@ -1289,6 +1289,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 p["kind3d"] = models["kind3d"].clone();
                 p["dnp"] = models["dnp"].clone();
                 p["not_in_pos"] = models["not_in_pos"].clone();
+                // its Extruded 3D Body, when it has one (crates/cli/src/extruded_body_api.rs)
+                if !models["extruded_body"].is_null() {
+                    p["extruded_body"] = models["extruded_body"].clone();
+                }
             }
             p["pads"] = json!(pads);
             // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when

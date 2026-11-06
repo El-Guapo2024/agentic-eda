@@ -2427,8 +2427,8 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
             // In pre-9.0 files a paste margin of 0 meant "inherit" (the parser reads it so, `parseFOOTPRINT_unchecked`); written to a new file it would be a margin of its own.
             Some("solder_paste_margin") | Some("solder_paste_ratio") | Some("solder_paste_margin_ratio") => !(file_version <= 20240201 && sexpr::num(item, 1) == Some(0.0)),
             // KiCad 10's typed model, the Extruded 3D Body (`(model (type extruded) (overall_height ..) (body_pcb_gap ..) ..)`: `parseFOOTPRINT`'s `case T_model:` "Typed
-            // model", written by `format( FOOTPRINT )`'s "Save extruded 3D body info."): it has no path, so `models_from` does not take it; kept as the file wrote it.
-            Some("model") => sexpr::txt(item, 1).is_none(),
+            // model") is the footprint's body (`crate::extruded_body_io`, below); a typed model of another type has no path for `models_from` to take, and is kept as the file wrote it.
+            Some("model") => sexpr::txt(item, 1).is_none() && !crate::extruded_body_io::is_extruded(item),
             Some(t) => !OWN.contains(&t),
             None => false,
         };
@@ -2437,6 +2437,14 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
         }
     }
     e.source_name = name.to_string();
+    // The Extruded 3D Body (`EnsureExtrudedBody()`: every typed model of the extruded type sets the one body), in the frame of the footprint on the top side: a footprint on the back has
+    // its body's layer flipped by `FOOTPRINT::Flip`, which the writer flips back (`ExtrudedBody::flipped`).
+    let back = sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu");
+    for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
+        if let Some(body) = crate::extruded_body_io::read(item, e.extruded_body.clone().map(|b| if back { b.flipped() } else { b })) {
+            e.extruded_body = Some(if back { body.flipped() } else { body });
+        }
+    }
     // The files the footprint lists (`(embedded_files ..)` inside the footprint: names, types and checksums; the data is the board's).
     e.embedded = crate::embedded::read_owner(fp, &mut Vec::new());
     // `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint (`parseFOOTPRINT_unchecked`'s `T_component_classes`), without repeats.

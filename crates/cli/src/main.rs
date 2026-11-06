@@ -24,6 +24,7 @@ mod board_output_api;
 mod body_api;
 mod board3d_api;
 mod model3d_api;
+mod extruded_body_api;
 mod microwave_api;
 mod specctra_api;
 mod model3d_tab_api;

@@ -10,7 +10,7 @@
 // A list here is the file's: millimetres and degrees, the rotation as the file stores it. The dialog shows the rotation the other way round ("Rotation is stored in the file
 // as positive-is-CW, but we use positive-is-CCW in the GUI": `xrot->ChangeValue( formatRotationValue( -modelInfo.m_Rotation.x ) )`), so `showRotation` and `readRotation`
 // carry the sign. The offset is shown in the units of the editor (`formatOffsetValue`: millimetres, inches or mils), stored in millimetres.
-import type { Cmd, Model3dCmd, Part } from "../api/types";
+import type { Cmd, ExtrudedBodyCmd, Model3dCmd, Part } from "../api/types";
 import type { LengthUnit } from "../state/units";
 
 export type Vec3 = [number, number, number];
@@ -81,6 +81,116 @@ export function sameRows(a: readonly ModelRow[], b: readonly ModelRow[]): boolea
 export function boardModelsCmds(part: Part, rows: readonly ModelRow[]): Cmd[] {
   const kept = rows.filter((r) => r.path.trim() !== "").map((r) => ({ ...r, path: cleanPath(r.path) }));
   return sameRows(kept, rowsOf(part.models)) ? [] : [{ op: "set_board_models", part: part.ref, models: kept.map(modelCmd) }];
+}
+
+// ------------------------------------------------------------------------------------------------------------- the Extruded 3D Body box
+
+/** The box's "Extrusion source:" choices (`m_extrusionLayers = { UNDEFINED_LAYER, F_CrtYd, F_Fab, F_SilkS, UNSELECTED_LAYER }`) and their labels. */
+export const EXTRUSION_SOURCES: ReadonlyArray<{ layer: string; label: string }> = [
+  { layer: "auto", label: "Auto" },
+  { layer: "F.CrtYd", label: "Courtyard layer" },
+  { layer: "F.Fab", label: "Fabrication layer" },
+  { layer: "F.SilkS", label: "Silkscreen layer" },
+  { layer: "pad_bbox", label: "Pin bounding box" },
+];
+
+/** The "Material:" choices, in `EXTRUSION_MATERIAL`'s order. */
+export const EXTRUSION_MATERIALS: ReadonlyArray<{ material: NonNullable<ExtrudedBodyCmd["material"]>; label: string }> = [
+  { material: "plastic", label: "Plastic" },
+  { material: "matte", label: "Matte" },
+  { material: "metal", label: "Metal" },
+  { material: "copper", label: "Copper" },
+];
+
+/** `EXTRUDED_3D_BODY::GetDefaultColor`. */
+export function extrusionDefaultColor(material: NonNullable<ExtrudedBodyCmd["material"]>): [number, number, number, number] {
+  return material === "matte" ? [0.4, 0.4, 0.4, 1] : material === "metal" ? [0.7, 0.7, 0.7, 1] : material === "copper" ? [0.72, 0.45, 0.2, 1] : [0.2, 0.2, 0.2, 1];
+}
+
+/** The box as the person sees it: KiCad's controls. */
+export interface BodyDraft {
+  /** "Enable" (`m_enableExtrusionCheckbox`). */
+  enabled: boolean;
+  /** "Show". */
+  show: boolean;
+  /** "Overall height:" and "Standoff height:", millimetres, as typed. */
+  height: string;
+  standoff: string;
+  /** An index of [`EXTRUSION_SOURCES`] and of [`EXTRUSION_MATERIALS`]. */
+  source: number;
+  material: number;
+  /** The swatch, and whether the person chose it (`m_userSetExtrusionColor`); one not chosen follows the material. */
+  color: [number, number, number, number];
+  userColor: boolean;
+  /** What the preview pane's transform mode holds (`SetExtrusionTransformMode`): kept as the body has it. */
+  offset: Vec3;
+  scale: Vec3;
+  rotate: Vec3;
+}
+
+/** `TransferDataToWindow`'s fill of the box: the body the footprint has (the heights with four decimals, `wxString::Format( "%.4f", .. )`; a layer the choices do not have is "Auto"), or KiCad's defaults. */
+export function bodyDraftOf(part: Pick<Part, "extruded_body">): BodyDraft {
+  const b = part.extruded_body;
+  const source = Math.max(0, EXTRUSION_SOURCES.findIndex((s) => s.layer === (b?.layer ?? "auto")));
+  const material = Math.max(0, EXTRUSION_MATERIALS.findIndex((m) => m.material === (b?.material ?? "plastic")));
+  return {
+    enabled: !!b,
+    show: b?.show ?? true,
+    height: ((b?.height ?? 0) / 1e6).toFixed(4),
+    standoff: ((b?.standoff ?? 0) / 1e6).toFixed(4),
+    source,
+    material,
+    color: b ? [...b.color] : extrusionDefaultColor("plastic"),
+    userColor: b?.color_set ?? false,
+    offset: b ? [...b.offset] : [0, 0, 0],
+    scale: b ? [...b.scale] : [1, 1, 1],
+    rotate: b ? [...b.rotate] : [0, 0, 0],
+  };
+}
+
+/** `onExtrusionMaterialChanged`: a new material, and the swatch its colour unless the person chose one. */
+export function withMaterial(d: BodyDraft, material: number): BodyDraft {
+  const m = EXTRUSION_MATERIALS[material]?.material ?? "plastic";
+  return { ...d, material, color: d.userColor ? d.color : extrusionDefaultColor(m) };
+}
+
+/** `wxString::ToDouble`: the number the text starts as a whole, else 0 (a field it cannot read leaves the value at 0). */
+function toDouble(text: string): number {
+  const t = text.trim();
+  return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t) ? Number(t) : 0;
+}
+
+/** `TransferDataFromWindow`'s checks, in its words ("Extruded 3D Body"): a height above zero and a standoff below it; null when the box is off or the values are fine. */
+export function bodyDraftProblem(d: BodyDraft): string | null {
+  if (!d.enabled) return null;
+  const height = toDouble(d.height);
+  const standoff = Math.max(0, toDouble(d.standoff));
+  if (height <= 0) return "Component height must be greater than zero.";
+  if (standoff >= height) return "Standoff height must be less than the overall height.";
+  return null;
+}
+
+/** The body the box stands for (`EnsureExtrudedBody()` and its fields), or null for none (`ClearExtrudedBody()`). */
+export function bodyOfDraft(d: BodyDraft): ExtrudedBodyCmd | null {
+  if (!d.enabled) return null;
+  return {
+    height: Math.round(toDouble(d.height) * 1e6),
+    standoff: Math.round(Math.max(0, toDouble(d.standoff)) * 1e6),
+    layer: EXTRUSION_SOURCES[d.source]?.layer ?? "auto",
+    material: EXTRUSION_MATERIALS[d.material]?.material ?? "plastic",
+    color: d.userColor ? [...d.color] : null,
+    offset: [...d.offset],
+    scale: [...d.scale],
+    rotate: [...d.rotate],
+    show: d.show,
+  };
+}
+
+/** What OK sends for the box: `set_extruded_body` when the body differs from the footprint's, else nothing. Check [`bodyDraftProblem`] first. */
+export function bodyCmds(part: Pick<Part, "ref" | "extruded_body">, d: BodyDraft): Cmd[] {
+  const now = part.extruded_body ? bodyOfDraft(bodyDraftOf(part)) : null;
+  const next = bodyOfDraft(d);
+  return JSON.stringify(now) === JSON.stringify(next) ? [] : [{ op: "set_extruded_body", part: part.ref, body: next }];
 }
 
 /** `PANEL_FP_PROPERTIES_3D_MODEL::cleanupFilename`: the line breaks and tabs a paste brings are taken out. */

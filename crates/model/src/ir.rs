@@ -3243,6 +3243,10 @@ pub struct FootprintExtra {
     /// library's, its orientation the file's, and it is written as it was read. Additive.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub library_frame: bool,
+    /// The footprint's Extruded 3D Body as its board file has it (`FOOTPRINT::GetExtrudedBody`, the typed `(model (type extruded) ..)`: [`crate::extruded_body`]), its layer
+    /// that of the footprint on the top side. `None` for none (`HasExtrudedBody()` false). The 3D Models tab's own setting is [`crate::fp_edit::FootprintEdit::extruded_body`]. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extruded_body: Option<crate::extruded_body::ExtrudedBody>,
     /// The name the footprint had in the file when it had no library link (`(footprint "D5" ..)`: `LIB_ID::GetLibNickname()` empty, which `LIB_ID::Format` writes as the bare
     /// item name). The writer gives a footprint the `eda` library unless the footprint it writes is this one: a board that came from a KiCad file keeps its footprints as
     /// unlinked as it had them, and kicad-cli's library check (`lib_footprint_issues`) has no `eda` library to report as missing. `None` for a footprint that was linked.
@@ -3899,6 +3903,10 @@ pub struct LibraryFootprint {
     /// `design.json` reads as "none" (such a footprint kept them as `kicad.tokens`, which the writer still writes back).
     #[serde(default, skip_serializing_if = "crate::fp_items::FootprintItems::is_empty")]
     pub items: crate::fp_items::FootprintItems,
+    /// The footprint's Extruded 3D Body (`FOOTPRINT::GetExtrudedBody`, the typed `(model (type extruded) ..)` of its `.kicad_mod`: [`crate::extruded_body`]); `None` for none.
+    /// Additive: an older `design.json` kept the typed model among `kicad.tokens`, which the writer still writes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extruded_body: Option<crate::extruded_body::ExtrudedBody>,
 }
 
 impl Default for LibraryFootprint {
@@ -3927,6 +3935,7 @@ impl Default for LibraryFootprint {
             description_field: None,
             kicad: Default::default(),
             items: Default::default(),
+            extruded_body: None,
         }
     }
 }
