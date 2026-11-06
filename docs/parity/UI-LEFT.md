@@ -538,25 +538,27 @@ Notes:
 
 ## Import
 
-- **I1 [BD] Non-KiCad import.**
-  - No "Save changes?" question.
-  - The layer map can't leave a layer out.
-  - Eagle `.brd` and `.sch` are two imports.
-  - No Altium variants.
-  - An EasyEDA Pro file with several boards fails.
-  - No IPC-2581 or ODB++ import.
-  - A graphics-only schematic is refused.
-  - M. GAPS 28; PARITY-pcb §34; PARITY-sch §33.
-- **I2 [BD] Import Graphics.**
-  - No placement preview.
-  - SVG patterns, gradients, text and images are dropped.
-  - DXF text is approximated.
-  - M. PARITY-pcb §29; PARITY-sch §20.
-- **I3 [BD] Append Board and Specctra.**
-  - Append Board doesn't add the file's extra layers or unknown nets, and doesn't group what it appends.
-  - Specctra session import refuses a missing part and gives `/FB` net names.
-  - S. PARITY-pcb §29, §46.
-- **I4 [BD] What imported boards lose.** Hidden board and dimension texts (R4-6), a manual dimension text position, nested footprint groups (B-9), and any footprint scale other than 1:1. S. r3-r7; GAPS 2.
+- **I1 [BD] Non-KiCad import.** **done (task-u4-import)**; PARITY-pcb §77, PARITY-sch §61.
+  - "The current PCB has been modified.  Save changes?" (Save, Discard Changes, Cancel) before an import replaces the board, and the schematic's "This operation replaces the contents of the current schematic ..." before it replaces the sheet.
+  - A layer left unmatched in the layer map is left out with what is on it.
+  - Import Non-KiCad Project... (both editors' File > Import): an Eagle `.brd` and `.sch` as one project, both replaced in one step.
+  - Altium variants on the schematic `eda import-kicad Project.PrjPcb` makes (by designator).
+  - An EasyEDA Pro file with several boards: "Choose Project to Import".
+  - IPC-2581 and ODB++: KiCad reads neither ("Reading currently disabled"), refused as it refuses them.
+  - A graphics-only schematic is taken.
+  - Left: the studio's route reads no `.PrjPcb` (so no variants there, none on the board's footprints); an EasyEDA Pro project's schematic choice; a field on a layer left out stays hidden; `PermittedLayers`.
+- **I2 [BD] Import Graphics.** **done (task-u4-import)** for the board; PARITY-pcb §77, PARITY-sch §61.
+  - The board's interactive placement is a preview under the cursor, placed by a click.
+  - SVG gradients, patterns, images and `use` are what KiCad's nanosvg makes of them.
+  - DXF text is placed as `DXF_IMPORT_PLUGIN` and both editors' importers place it.
+  - Left: the schematic's preview (still carried by the Move tool); SVG text (needs Fontconfig, FreeType and HarfBuzz); a schematic text's glyph width; the Footprint Editor's Import Graphics (another agent's area).
+- **I3 [BD] Append Board and Specctra.** **done (task-u4-import)**; PARITY-pcb §77.
+  - Append Board adds the file's copper, technical and user layers (a new one with the file's name and type) and its nets, and puts what came in in one group named after the file, which is selected.
+  - A Specctra session's missing part, unknown layer or padstack is skipped and counted with KiCad 25ec2335's warning.
+  - Left: Append Board's locks and 25ec2335's remap dialog; the session's `/FB` names are KiCad's (the net names decision), kept: the lead's call.
+- **I4 [BD] What imported boards lose.** **done (task-u4-import)**; GAPS 2, PARITY-pcb §77.
+  - Hidden board texts are copper again (R4-6); a dimension's manual text verified; nested footprint groups (B-9); a scaled footprint baked as KiCad shows it, with a note.
+  - Left: a non-uniformly scaled circle is not an ellipse; a custom pad's primitives are not scaled; the footprint is written back at 1:1.
 - **I5 [KO] A board with its schematic beside it.** Importing a `.kicad_pcb` ignores the `.kicad_sch` next to it; the schematic is derived instead (F12). S.
 
 ## Simulator
