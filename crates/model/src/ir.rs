@@ -4029,7 +4029,10 @@ impl LibraryFootprint {
         let (graphics, texts) = fp.art.to_library_kept(&mut keep, |graphics, texts| {
             out.graphics = std::mem::take(graphics);
             out.texts = std::mem::take(texts);
+            // ids for the graphics and texts only: the pads keep theirs (empty until the editor assigns them)
+            let pads = std::mem::take(&mut out.pads);
             out.assign_missing_ids();
+            out.pads = pads;
             *graphics = out.graphics.clone();
             *texts = out.texts.clone();
             (out.graphics.iter().map(|g| g.id().to_string()).collect(), out.texts.iter().map(|t| t.id.clone()).collect())
