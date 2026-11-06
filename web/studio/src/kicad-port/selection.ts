@@ -144,11 +144,12 @@ export function sloppinessThresholdNm(onePixelNm: number): number {
 /** pcb_selection_tool.cpp GuessSelectionCandidates: "If the user clicked on a small item within a much larger one then it's pretty clear they're trying to select the smaller one." */
 export const SIZE_RATIO = 1.5;
 
+/** `constexpr double maxCoverRatio = 0.70;`. */
+export const MAX_COVER_RATIO = 0.7;
+
 /**
- * Port of PCB_SELECTION_TOOL::GuessSelectionCandidates, narrowed to the
- * passes that translate to this app's simpler item model (no footprint
- * coverage-ratio override -- no Clipper-based exact polygon coverage
- * here, just the approximate `areaNm2` the caller computed):
+ * Port of PCB_SELECTION_TOOL::GuessSelectionCandidates. The areas are the caller's (`FOOTPRINT::GetCoverageArea`, polygon areas from
+ * kicad-port/coverage.ts); `coverage` is `FOOTPRINT::CoverageRatio` over the candidates left after the sloppiness pass (UI-LEFT P22):
  *
  *   0. "If a silk layer is in front ... give preferential treatment to single-layer items on *either* silk layer"; with a courtyard layer in front in
  *      high contrast, to footprints (r2-pcb-edit C9). A single preferred item wins at once.
@@ -162,7 +163,13 @@ export const SIZE_RATIO = 1.5;
  * the caller shows the disambiguation menu, matching source's `if
  * (collector.GetCount() > 1) { ... doSelectionMenu ... }`).
  */
-export function guessSelectionCandidates<T extends GuessCandidate>(candidates: readonly T[], onePixelNm: number, activeLayer: string | null, highContrast = false): T[] {
+export function guessSelectionCandidates<T extends GuessCandidate>(
+  candidates: readonly T[],
+  onePixelNm: number,
+  activeLayer: string | null,
+  highContrast = false,
+  coverage?: (footprint: T, pool: readonly T[]) => number
+): T[] {
   if (candidates.length <= 1) return [...candidates];
 
   let pool: readonly T[] = candidates;
@@ -191,6 +198,11 @@ export function guessSelectionCandidates<T extends GuessCandidate>(candidates: r
   for (let i = 1; i < byArea.length; i++) {
     if (byArea[i]!.areaNm2 > byArea[i - 1]!.areaNm2 * SIZE_RATIO) rejecting = true;
     if (rejecting) rejected.add(byArea[i]!);
+  }
+  // 2a. "Special case: if a footprint is completely covered with other features then there's no way to select it -- so we need to leave it in the list for user
+  // disambiguation": a footprint more than `maxCoverRatio` covered by its pads and texts and the other candidates is not rejected.
+  if (coverage) {
+    for (const c of pool) if (c.kind === "part" && rejected.has(c) && coverage(c, pool) > MAX_COVER_RATIO) rejected.delete(c);
   }
   if (rejected.size > 0 && rejected.size < pool.length) {
     pool = pool.filter((c) => !rejected.has(c));

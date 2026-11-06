@@ -30,7 +30,8 @@ import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
-import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { itemPassesFilter, pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { shapeHitDistance } from "../components/canvas/itemHitTest";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
@@ -783,7 +784,13 @@ export function useActionRunner() {
           cursor && connectedStartCount(board, state.selection) === 0
             ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150_000, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
             : [];
-        const plan = planSelectConnection(board, state.selection, candidates);
+        // `itemPassesFilter( item, true )` on what the walk selects, and `selectAllConnectedShapes`' collector for graphic lines (5 pixels, the shape's hit test)
+        const filter = state.selectionFilter;
+        const plan = planSelectConnection(board, state.selection, candidates, {
+          passes: (kind, id) => itemPassesFilter(board, filter, kind, id),
+          // `EDA_SHAPE::hitTest`: `maxdist = aAccuracy + GetWidth() / 2` -- the distance to the line less half its width
+          shapes: { accuracyNm: Math.round(5 / state.view.scale), hit: (s, x, y) => shapeHitDistance(s, x, y) - s.stroke_width / 2 },
+        });
         if (plan) dispatch({ type: "SET_SELECTION", refs: plan.refs });
       })
     );
@@ -792,7 +799,8 @@ export function useActionRunner() {
      * `selection` plus everything `expandConnection` adds, or null when nothing in it can seed a flood.
      */
     function computeConnectionRefs(selection: ReadonlySet<string>): string[] | null {
-      return state.board ? expandedSelection(state.board, selection) : null;
+      const board = state.board;
+      return board ? expandedSelection(board, selection, undefined, (kind, id) => itemPassesFilter(board, state.selectionFilter, kind, id)) : null;
     }
 
     const fitToBoard = viewTab(() => {

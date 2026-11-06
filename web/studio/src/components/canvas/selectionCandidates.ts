@@ -14,12 +14,12 @@
 // user clicked on a small item within a much larger one...").
 import { stitchFilteredAsVia } from "../../kicad-port/viaStitch";
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
-import { padIds } from "../../kicad-port/pcbItems";
+import { padIds, padParent } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, unionBox } from "../../kicad-port/fpArt";
 import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
-import { distToPolyline, distToSegment, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox, zoneArea, zoneContainsPoint, zoneEdgeDistance } from "./itemHitTest";
+import { distToPolyline, distToSegment, shapeBoundingBox, shapeHitDistance, textBoundingBox, zoneArea, zoneContainsPoint, zoneEdgeDistance } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 import { objectOn } from "../../kicad-port/appearance";
 import { isAnyFill } from "../../kicad-port/shapeFill";
@@ -29,6 +29,8 @@ import { extraHitDistance, extraItems, type ExtraKind } from "../../kicad-port/p
 import { gridArea } from "../../kicad-port/gridItem";
 import { stitchArea } from "../../kicad-port/viaStitch";
 import { cellArea, cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
+import { circleRing, coverageRatio, ringArea, type Ring } from "../../kicad-port/coverage";
+import { boxRing, footprintHull, padRing, shapeCoverageArea, shapeRings, trackRings } from "../../kicad-port/footprintCoverage";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "table" | "tablecell" | ExtraKind;
 
@@ -83,6 +85,17 @@ function lockedForFilter(board: BoardState, locked: ReadonlySet<string>, lockedI
   const groups = board.drawings?.groups ?? [];
   if (groups.length === 0 || locked.size === 0) return false;
   return ancestors(groups, lockedId).some((g) => locked.has(g.id));
+}
+
+/**
+ * `PCB_SELECTION_TOOL::itemPassesFilter( aItem, aMultiSelect = true )` for what Select Connection walks (UI-LEFT P22): the item's row of the filter, and a locked
+ * item only with "Locked items" on -- a pad's lock is its footprint's, and with `aMultiSelect` a pad of a locked footprint is locked too.
+ */
+export function itemPassesFilter(board: BoardState, filter: SelectionFilter, kind: SelectableKind, id: string): boolean {
+  if (!filterAllows(filter, filterKindOf(board, kind, id))) return false;
+  if (filter.lockedItems) return true;
+  const lockedId = kind === "pad" ? (padParent(board, id) ?? id) : id;
+  return !lockedForFilter(board, new Set(board.locked ?? []), lockedId);
 }
 
 /** The kind `itemPassesFilter` filters an item as (kicad-port/viaStitch.ts `stitchFilteredAsVia`: a via stitching with vias follows the Vias row). */
@@ -261,7 +274,8 @@ export function collectSelectionCandidates(
     const inside = xNm >= x0 && xNm <= x1 && yNm >= y0 && yNm <= y1;
     const slop = inside ? 0 : artHitDistance(p, xNm, yNm, layerVisible);
     if (slop > toleranceNm) continue;
-    consider("part", p.ref, slop, Math.max((x1 - x0) * (y1 - y0), 1), null);
+    // `FOOTPRINT::GetCoverageArea`: the area of its bounding hull (UI-LEFT P22; it was the courtyard's box)
+    consider("part", p.ref, slop, Math.max(ringArea(partHull(p)), 1), null);
   }
 
   // Pads: `PAD::IsLocked()` is the footprint's. A pad is a copper item on its footprint's side (a through-hole one is on every layer); its area is the
@@ -287,8 +301,8 @@ export function collectSelectionCandidates(
   }
   for (const t of board.routing?.tracks ?? []) {
     const d = distToPolyline(xNm, yNm, t.pts) - t.width / 2;
-    const len = t.pts.reduce((acc, p, i) => (i === 0 ? 0 : acc + Math.hypot(p[0] - t.pts[i - 1]![0], p[1] - t.pts[i - 1]![1])), 0);
-    consider("track", t.id, d, len * Math.max(t.width, 1), t.layer);
+    // `GetCoverageArea` of a `PCB_TRACE_T` / `PCB_ARC_T`: `width * width`, however long the track (UI-LEFT P22; it was its length times its width)
+    consider("track", t.id, d, Math.max(t.width * t.width, 1), t.layer);
   }
   for (const v of board.routing?.vias ?? []) {
     const d = Math.hypot(xNm - v.x, yNm - v.y) - v.d / 2;
@@ -316,7 +330,8 @@ export function collectSelectionCandidates(
   for (const s of board.drawings?.shapes ?? []) {
     // A filled or hatched shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
     if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && isAnyFill(s) && !objectOn(layerVisible, "shapes")) continue;
-    consider("shape", s.id, shapeHitDistance(s, xNm, yNm), shapeArea(s), s.layer);
+    // `GetCoverageArea` of a `PCB_SHAPE_T`: a line, an arc, a curve or an unfilled outline is `width * width`, a filled one its area (UI-LEFT P22)
+    consider("shape", s.id, shapeHitDistance(s, xNm, yNm), shapeCoverageArea(s, isAnyFill(s)), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
     const { x0, y0, x1, y1 } = textBoundingBox(t);
@@ -488,6 +503,94 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   return out.length > 0 ? out : padHits;
 }
 
+/** The boxes of a footprint's own texts (`PCB_TEXT`, not its fields): what `GetBoundingHull` takes of them (their polygons; here their boxes). */
+function ownTextBoxes(p: Part, marginNm = 0): Ring[] {
+  return (p.texts ?? []).map((t) => {
+    const b = textBoundingBoxRotated(t as unknown as FieldInfo);
+    return boxRing(b.x0, b.y0, b.x1, b.y1, marginNm);
+  });
+}
+
+/** `FOOTPRINT::GetBoundingHull` of a placed part (kicad-port/footprintCoverage.ts). */
+function partHull(p: Part): Ring {
+  return footprintHull(p, ownTextBoxes(p));
+}
+
+/**
+ * `FOOTPRINT::CoverageRatio( aCollector )`: how much of `part`'s hull its pads (`TransformPadsToPolySet`) and its texts and shown fields grown by the collector's
+ * accuracy (`TransformFPShapesToPolySet( .., textMargin, .., true, false, false )`) cover together with what else the click found -- a field, text, text box,
+ * shape, barcode, track or via not of this footprint (`TransformShapeToPolygon`), another footprint's hull. A text is its box here, where KiCad takes its glyphs'
+ * strokes (the box covers a little more).
+ */
+export function footprintCoverageRatio(board: BoardState, ref: string, pool: readonly SelectionCandidate[], accuracyNm: number): number {
+  const part = board.parts.find((p) => p.ref === ref);
+  if (!part?.placed) return 0;
+  const hull = partHull(part);
+  const covered: Ring[] = [];
+  for (const pad of part.pads ?? []) covered.push(padRing(pad));
+  covered.push(...ownTextBoxes(part, accuracyNm));
+  for (const f of part.fields ?? []) {
+    if (!f.visible || !f.text) continue;
+    const b = textBoundingBoxRotated(f);
+    covered.push(boxRing(b.x0, b.y0, b.x1, b.y1, accuracyNm));
+  }
+  const ownFields = new Set((part.fields ?? []).map((f) => f.id));
+  for (const c of pool) {
+    switch (c.kind) {
+      case "part":
+        if (c.id !== ref) {
+          const other = board.parts.find((p) => p.ref === c.id);
+          if (other?.placed) covered.push(partHull(other));
+        }
+        break;
+      case "field": {
+        if (ownFields.has(c.id)) break;
+        for (const p of board.parts) {
+          const f = p.fields?.find((x) => x.id === c.id);
+          if (f) {
+            const b = textBoundingBoxRotated(f);
+            covered.push(boxRing(b.x0, b.y0, b.x1, b.y1));
+            break;
+          }
+        }
+        break;
+      }
+      case "text": {
+        const t = board.drawings?.texts.find((x) => x.id === c.id);
+        if (t) {
+          const b = textBoundingBox(t);
+          covered.push(boxRing(b.x0, b.y0, b.x1, b.y1));
+        }
+        break;
+      }
+      case "shape": {
+        const sh = board.drawings?.shapes.find((x) => x.id === c.id);
+        if (sh) covered.push(...shapeRings(sh, isAnyFill(sh)));
+        break;
+      }
+      case "track": {
+        const t = board.routing?.tracks.find((x) => x.id === c.id);
+        if (t) covered.push(...trackRings(t.pts, t.width));
+        break;
+      }
+      case "via": {
+        const v = board.routing?.vias.find((x) => x.id === c.id);
+        if (v) covered.push(circleRing(v.x, v.y, v.d / 2));
+        break;
+      }
+      case "textbox":
+      case "barcode": {
+        const item = extraItems(board).find((x) => x.id === c.id);
+        if (item) covered.push(boxRing(item.bounds[0], item.bounds[1], item.bounds[2], item.bounds[3]));
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return coverageRatio(hull, covered);
+}
+
 export function pickSelectionCandidates(
   board: BoardState,
   xNm: number,
@@ -504,5 +607,7 @@ export function pickSelectionCandidates(
 ): SelectionCandidate[] {
   const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly);
   if (skipHeuristics) return all;
-  return guessSelectionCandidates(all, onePixelNm, activeLayer, highContrast);
+  // `textMargin = aCollector.GetGuide()->Accuracy()`: `KiROUND( 5 * OnePixelInIU() )`
+  const accuracy = Math.round(5 * onePixelNm);
+  return guessSelectionCandidates(all, onePixelNm, activeLayer, highContrast, (c, pool) => footprintCoverageRatio(board, c.id, pool, accuracy));
 }
