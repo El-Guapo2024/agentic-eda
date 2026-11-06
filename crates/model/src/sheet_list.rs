@@ -276,6 +276,24 @@ pub fn screen_of<'a>(design: &'a Design, path: &[String]) -> Option<&'a Schemati
     Some(here)
 }
 
+/// The screen `file` (a `Design::sheet_contents` key; `""` is the root's `design.schematic`).
+pub fn screen_of_file<'a>(design: &'a Design, file: &str) -> Option<&'a SchematicSection> {
+    if file.is_empty() {
+        design.schematic.as_ref()
+    } else {
+        design.sheet_contents.as_ref()?.get(file)
+    }
+}
+
+/// [`screen_of_file`], to change.
+pub fn screen_of_file_mut<'a>(design: &'a mut Design, file: &str) -> Option<&'a mut SchematicSection> {
+    if file.is_empty() {
+        design.schematic.as_mut()
+    } else {
+        design.sheet_contents.as_mut()?.get_mut(file)
+    }
+}
+
 /// The placement at `path` (none for the root).
 pub fn placement_at<'a>(design: &'a Design, path: &[String]) -> Option<&'a SheetInstance> {
     let (last, parents) = path.split_last()?;
@@ -408,6 +426,38 @@ pub fn unit_under(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, pa
     screen.extras.path_units.get(&crate::ir::field_key(&sym.id, sym.unit)).and_then(|m| m.get(&path.join("/"))).copied().unwrap_or(sym.unit)
 }
 
+/// The reference the power symbol `ps` of `screen` has on the sheet at `path` (`SCH_SYMBOL::GetRef( aSheet )`: a power symbol keeps an instance per sheet
+/// path like any symbol): the one filed for that path ([`crate::sch_extras::SchExtras::power_path_refs`], UI-LEFT S9), else its own id. The root (`[]`) is
+/// always the id.
+pub fn power_reference_under(screen: &SchematicSection, ps: &crate::ir::PowerSymbol, path: &[String]) -> String {
+    if path.is_empty() {
+        return ps.id.clone();
+    }
+    screen.extras.power_path_refs.get(&ps.id).and_then(|m| m.get(&path.join("/"))).cloned().unwrap_or_else(|| ps.id.clone())
+}
+
+/// The sheet path, of `paths` (the paths that show `screen`, in walk order), that the symbol's own id is the reference of: the first with no
+/// [`crate::ir::SymbolPathOverride`] of its own. `None` when every path has one (a file whose `Reference` property names no path's instance): the id then
+/// names no placement.
+pub fn own_path<'a>(screen: &SchematicSection, sym: &crate::ir::SymbolInstance, paths: &'a [Vec<String>]) -> Option<&'a Vec<String>> {
+    paths.iter().find(|p| override_under(screen, sym, p).is_none())
+}
+
+/// The same for a power symbol: the first of `paths` with no per-path reference of its own ([`crate::sch_extras::SchExtras::power_path_refs`]).
+pub fn own_power_path<'a>(screen: &SchematicSection, ps: &crate::ir::PowerSymbol, paths: &'a [Vec<String>]) -> Option<&'a Vec<String>> {
+    let filed = screen.extras.power_path_refs.get(&ps.id);
+    paths.iter().find(|p| p.is_empty() || filed.is_none_or(|m| !m.contains_key(&p.join("/"))))
+}
+
+/// The sheet paths that show each screen, in walk order: file (`""` the root) -> the placement chains.
+pub fn paths_of_screens(design: &Design) -> std::collections::BTreeMap<String, Vec<Vec<String>>> {
+    let mut out: std::collections::BTreeMap<String, Vec<Vec<String>>> = std::collections::BTreeMap::new();
+    for e in walk(design) {
+        out.entry(e.file).or_default().push(e.path);
+    }
+    out
+}
+
 /// The [`crate::ir::SymbolPathOverride`] of `sym` filed under the sheet at `path`, if it has one.
 pub fn override_under<'a>(screen: &'a SchematicSection, sym: &crate::ir::SymbolInstance, path: &[String]) -> Option<&'a crate::ir::SymbolPathOverride> {
     if path.is_empty() {
@@ -438,6 +488,19 @@ pub fn prune_orphaned_overrides(design: &mut Design) -> usize {
         let before = sec.instance_overrides.len();
         sec.instance_overrides.retain(|o| live.contains(&(file.clone(), o.sheet_path.clone())));
         dropped += before - sec.instance_overrides.len();
+        // the power symbols' per-path references go the same way, and so do those of a power symbol no longer on the screen (UI-LEFT S9)
+        if sec.extras.power_path_refs.is_empty() {
+            continue;
+        }
+        let ids: std::collections::BTreeSet<String> = sec.power_symbols.iter().map(|p| p.id.clone()).collect();
+        let refs = &mut sec.extras.power_path_refs;
+        let before: usize = refs.values().map(|m| m.len()).sum();
+        refs.retain(|id, _| ids.contains(id));
+        for m in refs.values_mut() {
+            m.retain(|path, _| live.contains(&(file.clone(), path.split('/').filter(|c| !c.is_empty()).map(String::from).collect())));
+        }
+        refs.retain(|_, m| !m.is_empty());
+        dropped += before - refs.values().map(|m| m.len()).sum::<usize>();
     }
     dropped
 }

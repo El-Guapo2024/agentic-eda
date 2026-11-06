@@ -30,6 +30,14 @@ export function nextUnitToPlace(unitCount: number, placedUnits: Iterable<number>
   return { ok: true, unit: missing[0]! };
 }
 
+/**
+ * The unit a placed symbol draws on the sheet in view (`SCH_SYMBOL::GetUnitSelection( &GetCurrentSheet() )`): the placement's own (`path_unit`, a screen
+ * shown by several sheets) else the symbol's `unit` (UI-LEFT S9). Its body, pins and unit letter are that unit's; the verbs still name it by `unit`.
+ */
+export function drawnUnit(s: { unit: number; path_unit?: number }): number {
+  return s.path_unit ?? (s.unit || 1);
+}
+
 /** The project's unit naming as a sheet response carries it (`Schematic.subpart_id_separator` / `subpart_first_id`). */
 export function subpartIdsOf(sch: { subpart_id_separator?: number | null; subpart_first_id?: number | null } | null | undefined): SubpartIds {
   return { separator: sch?.subpart_id_separator ?? null, firstId: sch?.subpart_first_id ?? null };

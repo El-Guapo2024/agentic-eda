@@ -46,7 +46,7 @@ import { shownText } from "../../kicad-port/schFieldEdit";
 import { schTextLines, textLie } from "../../kicad-port/schTextItem";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
-import { referenceUnitSuffix, subpartIdsOf } from "../../kicad-port/schUnits";
+import { drawnUnit, referenceUnitSuffix, subpartIdsOf } from "../../kicad-port/schUnits";
 import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from "./displayOptions";
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
@@ -1179,7 +1179,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   const subpartIds = subpartIdsOf(sch);
   for (const s of sch.symbols) {
     const selected = opts.selection.has(s.id);
-    const unitSuffix = referenceUnitSuffix(sch.lib_symbols[s.lib_id ?? ""], s.unit, subpartIds);
+    const unitSuffix = referenceUnitSuffix(sch.lib_symbols[s.lib_id ?? ""], drawnUnit(s), subpartIds);
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
       drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins, real.texts, display.showPinAltIcons);

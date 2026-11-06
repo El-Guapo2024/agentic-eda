@@ -2341,6 +2341,9 @@ export type Cmd =
   | { op: "set_sch_item_text"; id: string; text: string }
   /** `eeschema.EditorControl.editSymbolLibraryLinks`: every symbol linked to a `from` library id is linked to the paired `to` id (`update_fields`: the Datasheet follows the library symbol). */
   | { op: "set_symbol_lib_ids"; changes: Array<[string, string]>; update_fields?: boolean }
+  /** `eeschema.EditorControl.rescueSymbols` / `remapSymbols`: every symbol of every sheet linked to a `from` library id is linked to the paired `to` id; `symbols` are the
+   *  rescue library's copies the schematic keeps (none for a remap: the copy kept under `from` is the one of `to`). The server makes it (`POST /api/sch/rescue`, `/api/sch/remap`). */
+  | { op: "rescue_symbols"; changes: Array<[string, string]>; symbols?: LibrarySymbol[] }
   /** `eeschema.EditorControl.incrementAnnotations`: every reference with the start's letters and a number at least its own moves by `increment`. */
   | { op: "increment_annotations"; start: string; increment: number; all_sheets?: boolean }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
@@ -3019,8 +3022,13 @@ export interface SchematicSymbol {
   rot: Degrees;
   /** KiCad mirrors one axis at a time, never both at once as a single flag -- `(mirror x)` flips the symbol vertically (negates Y), `(mirror y)` flips it horizontally (negates X). Replaces an earlier, incomplete `mirrored: boolean` that could only ever express one of the two. */
   mirror: "x" | "y" | null;
-  /** 1-based unit (gate) of a multi-unit symbol -- e.g. a quad op-amp, or ecc83-pp's three-triode ECC83. */
+  /** 1-based unit (gate) of a multi-unit symbol -- e.g. a quad op-amp, or ecc83-pp's three-triode ECC83. The symbol's own unit, which the verbs tell it apart by. */
   unit: number;
+  /**
+   * The unit this sheet's placement draws, when it is not `unit` (`SCH_SYMBOL::GetUnitSelection( &sheetPath )`: a screen shown by several sheets can draw U1A on
+   * one and U1B on the other, `SchExtras::path_units`). Its body and pins are that unit's (`drawnUnit`, kicad-port/schUnits.ts; UI-LEFT S9).
+   */
+  path_unit?: number;
   /** The body style the symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`): 1 the normal one, 2 the alternate ("De Morgan") one of a library symbol that has it. */
   body_style: number;
   value: string | null;
@@ -3084,6 +3092,8 @@ export interface DesignVariantInfo {
  */
 export interface PowerSymbol {
   id: string;
+  /** The reference this sheet's placement gives it (`GetRef( &sheetPath )`: a power symbol has one per sheet path, UI-LEFT S9); `id` unless the screen is shown twice. */
+  reference?: string;
   lib_id: string;
   at: [Nm, Nm];
   rot: Degrees;

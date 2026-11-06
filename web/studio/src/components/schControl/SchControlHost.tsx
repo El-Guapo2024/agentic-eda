@@ -8,6 +8,8 @@ import { IncrementAnnotationsDialog } from "./IncrementAnnotationsDialog";
 import { LegacyBomDialog } from "./LegacyBomDialog";
 import { LibLinksDialog } from "./LibLinksDialog";
 import { PageNumberDialog } from "./PageNumberDialog";
+import { RemapSymbolsDialog } from "./RemapSymbolsDialog";
+import { RescueSymbolsDialog } from "./RescueSymbolsDialog";
 import { SymbolCheckerDialog } from "./SymbolCheckerDialog";
 import { SymbolDiffDialog } from "./SymbolDiffDialog";
 import { DesignVariantDialogs } from "../DesignVariantDialogs";
@@ -23,6 +25,8 @@ export function SchControlHost() {
       {dialog?.kind === "increment_annotations" && <IncrementAnnotationsDialog onClose={close} />}
       {dialog?.kind === "page_number" && <PageNumberDialog path={dialog.path} onClose={close} />}
       {dialog?.kind === "library_links" && <LibLinksDialog onClose={close} />}
+      {dialog?.kind === "rescue_symbols" && <RescueSymbolsDialog onClose={close} />}
+      {dialog?.kind === "remap_symbols" && <RemapSymbolsDialog onClose={close} />}
       {dialog?.kind === "assign_footprints" && <AssignFootprintsDialog onClose={close} />}
       {dialog?.kind === "export_symbols" && <ExportSymbolsDialog onClose={close} />}
       {dialog?.kind === "legacy_bom" && <LegacyBomDialog onClose={close} />}

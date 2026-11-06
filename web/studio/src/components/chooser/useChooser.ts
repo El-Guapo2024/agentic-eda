@@ -22,6 +22,7 @@ import {
   type ChooserRow,
 } from "../../kicad-port/libChooser";
 import { useLibraryTree } from "../../state/libraryTree";
+import { useLibTreeColumns } from "../../state/libTreeColumns";
 
 export interface ChooserOptions {
   kind: ChooserKind;
@@ -244,6 +245,7 @@ export function useChooser(o: ChooserOptions): Chooser {
 
   const keep = o.keep;
   const kept = useCallback((items: readonly ChooserItem[] | undefined) => (items ? (keep ? items.filter(keep) : [...items]) : undefined), [keep]);
+  const shownColumns = useLibTreeColumns(kind === "symbol" ? "symbol_chooser" : "footprint_chooser");
   const groups = useMemo(
     () =>
       composeGroups({
@@ -257,9 +259,10 @@ export function useChooser(o: ChooserOptions): Chooser {
         loaded,
         results: results ? results.libraries : null,
         pinned,
+        shownColumns,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [kind, searching, debounced, o.recent, o.placed, o.project, o.extra, shownInstalled, loaded, results, pinned, kept]
+    [kind, searching, debounced, o.recent, o.placed, o.project, o.extra, shownInstalled, loaded, results, pinned, kept, shownColumns]
   );
   const rows = useMemo(() => visibleRows(groups, { groups: openGroups, items: openItems, searching }, kind), [groups, openGroups, openItems, searching, kind]);
 

@@ -10,6 +10,8 @@
 //      selected); R and F act on it before the click; the click puts it down where the pointer is, on the grid, turned and flipped, one undo step, nothing
 //      selected; the tool then waits, and the next click opens the chooser again; a chooser cancelled leaves the tool waiting; Escape with a footprint carried
 //      takes it away and the tool goes on; Escape with none ends the tool.
+//   1c A while Place Footprint runs ends it (`AF_ACTIVATE`: the loop's `evt->IsActivate()` pops it), taking a carried footprint away first (`cleanup()`);
+//      the next A starts it again with its chooser.
 //   1b Place Footprint into a KiCad 10 placement grid: a footprint fresh from the library turns to the grid's frame where it is made (`prevFrameAngle = ANGLE_0`), and
 //      is unturned again when carried out of it.
 //   2  The microwave tools (`doInteractiveItemPlacement( .., IPO_REPEAT | IPO_ROTATE | IPO_FLIP )`): a gap made at the first click rides the cursor; R and F turn
@@ -178,6 +180,30 @@
       t(!!(await until(() => S().placeFootprint === "waiting", 4000)), `the tool goes on (${S().placeFootprint})`);
       await escape();
       t(S().placeFootprint === "idle", "a second Escape ends it");
+    });
+
+    await scenario("Place Footprint: A while the tool runs ends it, taking a carried footprint away (`AF_ACTIVATE`: the loop's `IsActivate()`)", async (t) => {
+      // waiting for a click: A pops the tool, and the next A starts it again with its chooser
+      await E.run("pcbnew.EditorControl.placeFootprint");
+      await sleep(400);
+      document.querySelector("[data-chooser-cancel]")?.click();
+      t(!!(await until(() => S().placeFootprint === "waiting", 4000)), `a chooser cancelled leaves the tool waiting (${S().placeFootprint})`);
+      await E.run("pcbnew.EditorControl.placeFootprint");
+      t(!!(await until(() => S().placeFootprint === "idle", 4000)) && !document.querySelector("[data-footprint-chooser]"), `A while it waits ends it, no chooser (${S().placeFootprint})`);
+      await E.run("pcbnew.EditorControl.placeFootprint");
+      t(!!(await until(() => document.querySelector("[data-footprint-chooser]"), 5000)), "the next A starts it again with its chooser");
+      // a footprint carried: A takes it away (`cleanup()`) and pops the tool
+      const before = await tps();
+      const err = await choose("TestPoint_Pad_D1.0mm", TP);
+      if (!t(err === null, err ?? "a test point chosen")) return;
+      await until(() => S().placeFootprint === "carrying" && S().tool === "move", 15000);
+      await hover(FREE[2][0], FREE[2][1]);
+      await until(() => S().moving, 4000);
+      t((await tps()).length === before.length + 1, "the footprint is carried");
+      await E.run("pcbnew.EditorControl.placeFootprint");
+      t(!!(await until(async () => (await tps()).length === before.length, 6000)), "A takes the carried footprint away");
+      t(!!(await until(() => S().placeFootprint === "idle", 4000)), `and ends the tool (${S().placeFootprint})`);
+      t(S().tool !== "move" && !document.querySelector("[data-footprint-chooser]"), `nothing is carried and no chooser opens (${S().tool})`);
     });
 
     await scenario("Place Footprint into a placement grid (KiCad 25ec2335): a footprint fresh from the library turns to the grid's frame where it is made, and is unturned when carried out", async (t) => {

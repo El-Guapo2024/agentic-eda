@@ -16,7 +16,7 @@
 // control's own selection state (the position is derived from the selected item instead), the
 // sheet-pin item kind (this studio's sheet pins carry no net).
 import { messageTextFromValue, type MessageUnits } from "./messageText";
-import { referenceUnitSuffix, subpartIdsOf } from "./schUnits";
+import { drawnUnit, referenceUnitSuffix, subpartIdsOf } from "./schUnits";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import type { Schematic } from "../api/types";
 
@@ -137,7 +137,7 @@ export function navSchematic(s: Schematic): NavSchematic {
       const netOf = new Map((sym.pins ?? []).map((p) => [p.number, p.net ?? null] as const));
       const altOf = new Map((sym.pins ?? []).filter((p) => p.alt).map((p) => [p.number, p.alt] as const));
       // the item's text names the symbol by `GetRef( &aSheetPath, true )`: its unit's sub-reference for a symbol of several units (r7 A7-M1)
-      const shownRef = (sym.reference ?? sym.id) + referenceUnitSuffix(s.lib_symbols[sym.lib_id ?? ""], sym.unit, subpartIdsOf(s));
+      const shownRef = (sym.reference ?? sym.id) + referenceUnitSuffix(s.lib_symbols[sym.lib_id ?? ""], drawnUnit(sym), subpartIdsOf(s));
       return (resolveLibSymbol(sym, s.lib_symbols)?.pins ?? []).map((p) => ({ ref: sym.id, shownRef, number: p.pin.number, name: p.pin.name, alt: altOf.get(p.pin.number) ?? null, tip: p.tip, ...(netOf.has(p.pin.number) ? { net: netOf.get(p.pin.number) } : {}) }));
     }),
     wires: s.wires,

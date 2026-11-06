@@ -11,7 +11,7 @@
 import type { Cmd, LibPin, PinElectricalType, PinShape, Schematic, SchematicSymbol, SchField } from "../api/types";
 import { comparePinNumbers } from "./pinNumbersSummary";
 import { PIN_SHAPE_OPTIONS, PIN_TYPE_OPTIONS } from "./symPinAlternates";
-import { unitCountOf } from "./schUnits";
+import { drawnUnit, unitCountOf } from "./schUnits";
 import { unitDisplayName } from "./schSymbolMenus";
 
 // ------------------------------------------------------------------------------------------------------------------------- Pin Functions
@@ -141,10 +141,11 @@ export function unitChoices(sch: Schematic, s: SchematicSymbol): Array<{ unit: n
  * on the sheet already, which the model cannot hold -- it is refused here with the reason, and the canvas's Symbol Unit submenu swaps the two. Null when it can.
  */
 export function unitChangeError(sch: Schematic, s: SchematicSymbol, newUnit: number): string | null {
-  if (newUnit === s.unit) return null;
-  if (!sch.symbols.some((x) => x.id === s.id && x.unit === newUnit)) return null;
+  // the units the sheet in view draws, of the reference it gives the symbol (a screen shown by several sheets, UI-LEFT S9)
+  if (newUnit === drawnUnit(s)) return null;
+  if (!sch.symbols.some((x) => x !== s && (x.reference ?? x.id) === (s.reference ?? s.id) && x.lib_id === s.lib_id && drawnUnit(x) === newUnit)) return null;
   const lib = s.lib_id ? sch.lib_symbols[s.lib_id] : undefined;
-  return `Unit ${unitDisplayName(lib, newUnit)} of ${s.id} is already placed on this sheet: swap the two units from the symbol's Symbol Unit menu instead.`;
+  return `Unit ${unitDisplayName(lib, newUnit)} of ${s.reference ?? s.id} is already placed on this sheet: swap the two units from the symbol's Symbol Unit menu instead.`;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------- Fields

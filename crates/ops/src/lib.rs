@@ -128,6 +128,7 @@ mod sch_annotate;
 mod sch_setup;
 mod sch_clipboard;
 pub mod sch_control;
+mod sch_rescue;
 mod sch_variants;
 mod sch_sheets;
 mod sheet_units;
@@ -1946,6 +1947,14 @@ pub enum Cmd {
         #[serde(default)]
         update_fields: bool,
     },
+    /// `eeschema.EditorControl.rescueSymbols` (`RESCUE_SYMBOL_LIB_TABLE_CANDIDATE::PerformAction`): every symbol of every sheet linked to a `from` library
+    /// id is linked to the paired `to` id, the rescue library's copy, which `symbols` gives and the design keeps (`sch_rescue.rs`).
+    /// `symbols` may be empty: Remap Legacy Library Symbols (`DIALOG_SYMBOL_REMAP::remapSymbolToLibTable`) only gives each bare name its library's nickname.
+    RescueSymbols {
+        changes: Vec<(String, String)>,
+        #[serde(default)]
+        symbols: Vec<LibrarySymbol>,
+    },
     /// `eeschema.EditorControl.incrementAnnotations` (`SCH_EDITOR_CONTROL::IncrementAnnotations`): every reference with the start
     /// reference's letters and a number at least its own moves by `increment`.
     /// `all_sheets`: the dialog's "All sheets" (`Hierarchy().GetSymbols( .. )`) rather than "Current sheet only" (`CurrentSheet().GetSymbols( .. )`).
@@ -2483,6 +2492,7 @@ impl Cmd {
             | Cmd::SetSheetPage { .. }
             | Cmd::SetSchItemText { .. }
             | Cmd::SetSymbolLibIds { .. }
+            | Cmd::RescueSymbols { .. }
             | Cmd::IncrementAnnotations { .. } => Domain::Schematic,
             Cmd::OpenFootprintForEdit { .. }
             | Cmd::NewFootprint { .. }
@@ -2821,6 +2831,7 @@ impl Cmd {
             Cmd::SetSheetPage { sheet, .. } => vec![sheet.as_str()],
             Cmd::SetSchItemText { id, .. } => vec![id.as_str()],
             Cmd::SetSymbolLibIds { .. } => vec!["symbol_lib_ids"],
+            Cmd::RescueSymbols { .. } => vec!["rescue_symbols"],
             Cmd::IncrementAnnotations { start, .. } => vec![start.as_str()],
             Cmd::SetSymbolFields { .. } => vec!["symbol_fields"],
             Cmd::ReplaceText { .. } => vec!["replace_text"],
@@ -2969,6 +2980,11 @@ pub struct Board<'a> {
     /// The screen the schematic verbs act on: the `Design::sheet_contents` key of the sheet [`Cmd::OnSheet`] named, or `None` for
     /// the root (`design.schematic`) -- KiCad's "current sheet". Only ever set while one `OnSheet` runs.
     focus: Option<String>,
+    /// The sheet path in view (`SCH_EDIT_FRAME::GetCurrentSheet()`, a `SCH_SHEET_PATH`): the placement ids from the root down to the sheet
+    /// [`Cmd::OnSheet`] named, set while it runs, `None` for the root or when the focus was set otherwise ([`Self::focus_sheet_path`] then takes the
+    /// first path that shows [`Self::focus`]). A screen shown on several paths has a reference, a unit and the attributes of a variant per path; the
+    /// verbs that act on the current sheet's instance read it (UI-LEFT S9).
+    focus_path: Option<Vec<String>>,
     /// The intent's own nets, when the caller supplied them (`Board::with_intent_nets`): lets Reorganize give a net its declared
     /// name back. `None` for every board built without them.
     intent_nets: Option<Vec<eda_model::Net>>,
@@ -3023,7 +3039,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new() }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, focus_path: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new() }
     }
 
     /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
@@ -3065,6 +3081,7 @@ impl<'a> Board<'a> {
             spacing: self.spacing,
             decoupling: Arc::clone(&self.decoupling),
             focus: self.focus.clone(),
+            focus_path: self.focus_path.clone(),
             intent_nets: self.intent_nets.clone(),
             net_collision: None,
             pending_clean_up: None,
@@ -3594,6 +3611,7 @@ impl<'a> Board<'a> {
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
+            Cmd::RescueSymbols { changes, symbols } => self.rescue_symbols(changes, symbols),
             Cmd::IncrementAnnotations { start, increment, all_sheets } => self.increment_annotations(start, *increment, *all_sheets),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
             Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),
@@ -5414,6 +5432,21 @@ impl<'a> Board<'a> {
         Ok(file)
     }
 
+    /// The sheet path in view (`GetCurrentSheet()`): [`Self::focus_path`] while it names a path that shows the focused screen, else the first path, in
+    /// walk order, that shows [`Self::focus`] (the root, `[]`, when the focus is the root).
+    pub(crate) fn focus_sheet_path(&self) -> Vec<String> {
+        let file = self.focus.clone().unwrap_or_default();
+        if let Some(p) = &self.focus_path {
+            if eda_model::sheet_list::screen_key_at(&self.design, p) == file && (p.is_empty() || eda_model::sheet_list::placement_at(&self.design, p).is_some()) {
+                return p.clone();
+            }
+        }
+        if file.is_empty() {
+            return Vec::new();
+        }
+        eda_model::sheet_list::walk(&self.design).into_iter().find(|e| e.file == file).map(|e| e.path).unwrap_or_default()
+    }
+
     /// [`Cmd::OnSheet`]: run one command with the schematic verbs pointed at another sheet. All or nothing, like a `Batch`.
     fn on_sheet(&mut self, sheet: &str, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         // Only a schematic edit has a sheet to act on. The studio addresses everything it sends from the Schematic tab to the sheet in
@@ -5423,9 +5456,14 @@ impl<'a> Board<'a> {
         }
         let target = self.screen_at(sheet)?;
         let saved_design = self.design.clone();
+        // the sheet path in view: the path named, from the sheet path the verbs act on now (the root, unless one `OnSheet` runs inside another)
+        let mut path = self.focus_sheet_path();
+        path.extend(sheet.split('/').filter(|s| !s.is_empty()).map(String::from));
+        let saved_path = std::mem::replace(&mut self.focus_path, Some(path));
         let saved_focus = std::mem::replace(&mut self.focus, target);
         let r = self.apply(cmd);
         self.focus = saved_focus;
+        self.focus_path = saved_path;
         if r.is_err() {
             self.design = saved_design;
         }
@@ -6117,8 +6155,8 @@ impl<'a> Board<'a> {
     /// number no symbol of that prefix holds on any sheet (`existingRefs` is `GetSymbols( .., SYMBOL_FILTER_ALL )`, `FindFirstUnusedReference`), from the
     /// method's first number up (r3 D3-M5): the start number + 1, or the page of the sheet in view x 100 / x 1000 + 1 (`SetSheetNumber(
     /// GetPageNumberAsInt() )`, the first of the screen's sheet paths in page order). `SCH_REFERENCE::formatRefStr` writes it after a "0" (`#PWR01`,
-    /// `#PWR0201`). **Differs**: a screen shown on several sheet paths gives the symbol one reference for all of them (a power symbol has no per-path
-    /// reference here); KiCad numbers each path's anew.
+    /// `#PWR0201`). On a screen shown on several sheet paths this is the first path's reference; every later path gets its own number
+    /// (`FindAllSheetsForScreen`, `Board::tidy_shared_screens`, `SchExtras::power_path_refs`; UI-LEFT S9).
     fn add_power_symbol(&mut self, lib_id: &str, at: Point, rot: Millideg, net: &str, pin: &str, annotate: Option<&AnnotateOptions>) -> Result<(), Vec<CheckResult>> {
         if net.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_power_symbol", "power_symbol", "a power symbol needs a net name")]);
@@ -6126,7 +6164,10 @@ impl<'a> Board<'a> {
         let prefix = self.design_symbol(lib_id).map(|s| s.reference_prefix).filter(|p| !p.is_empty()).unwrap_or_else(|| "#PWR".to_string());
         let screens = || self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
         let number_of = |id: &str| id.strip_prefix(prefix.as_str()).filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse::<i64>().ok());
-        let used: BTreeSet<i64> = screens().flat_map(|s| s.power_symbols.iter().map(|p| p.id.as_str()).chain(s.symbols.iter().map(|x| x.id.as_str())).chain(s.instance_overrides.iter().map(|o| o.reference.as_str()))).filter_map(number_of).collect();
+        let used: BTreeSet<i64> = screens()
+            .flat_map(|s| s.power_symbols.iter().map(|p| p.id.as_str()).chain(s.symbols.iter().map(|x| x.id.as_str())).chain(s.instance_overrides.iter().map(|o| o.reference.as_str())).chain(s.extras.power_path_refs.values().flat_map(|m| m.values().map(String::as_str))))
+            .filter_map(number_of)
+            .collect();
         let algo = annotate.map(|a| a.algo).unwrap_or_default();
         let min = match algo {
             eda_model::annotate::Algo::FirstFree => annotate.map_or(0, |a| a.start_number.max(0)) + 1,
@@ -6494,10 +6535,54 @@ impl<'a> Board<'a> {
             self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
             return Ok(());
         }
+        // a reference one sheet path of a screen shown twice gives its symbol (`SCH_SYMBOL::SetRef( &GetCurrentSheet(), .. )`, Symbol Properties' and Field
+        // Properties' Reference; the board's Reference of that path's footprint): that path's alone (UI-LEFT S9)
+        if let Some(renames) = self.path_reference_renames(id, new_id)? {
+            self.annotate_apply(&renames, true);
+            return Ok(());
+        }
         if self.rename_symbol_in_schematic(id, new_id)? {
             self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
         }
         Ok(())
+    }
+
+    /// The renames of [`Self::rename_symbol`] that are a sheet path's own (`sch_annotate::Rename::path`): `id` a symbol of the screen in view, which is shown
+    /// on several sheet paths, renamed on the path in view when that is not the path its id names; or `id` no symbol's own id but the reference some path
+    /// gives a symbol (a footprint of that path renamed on the board), renamed on every path that names it so. `None`: an ordinary rename of the id.
+    fn path_reference_renames(&self, id: &str, new_id: &str) -> Result<Option<Vec<sch_annotate::Rename>>, Vec<CheckResult>> {
+        if new_id.trim().is_empty() || new_id == id {
+            return Ok(None);
+        }
+        let paths_of = eda_model::sheet_list::paths_of_screens(&self.design);
+        let file = self.focus.clone().unwrap_or_default();
+        let path = self.focus_sheet_path();
+        let mut renames: Vec<sch_annotate::Rename> = Vec::new();
+        let own_somewhere = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).any(|sch| sch.symbols.iter().any(|s| s.id == id));
+        if own_somewhere {
+            let Some(paths) = paths_of.get(&file).filter(|p| p.len() > 1) else { return Ok(None) };
+            let Ok(sch) = self.schematic() else { return Ok(None) };
+            for (i, s) in sch.symbols.iter().enumerate().filter(|(_, s)| s.id == id) {
+                if eda_model::sheet_list::own_path(sch, s, paths) == Some(&path) {
+                    return Ok(None);
+                }
+                renames.push(sch_annotate::Rename { file: file.clone(), item: sch_annotate::Item::Symbol(i), old: eda_model::sheet_list::reference_under(sch, s, &path), unit: s.unit, new: new_id.to_string(), path: Some(path.clone()) });
+            }
+        } else {
+            renames = self.reference_renames(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
+            if renames.is_empty() {
+                return Ok(None);
+            }
+        }
+        // the new reference is no other placement's (`SCH_REFERENCE_LIST` would hold two of it)
+        let olds: BTreeSet<&str> = renames.iter().map(|r| r.old.as_str()).collect();
+        for e in eda_model::sheet_list::walk(&self.design) {
+            let Some(sch) = eda_model::sheet_list::screen_of(&self.design, &e.path) else { continue };
+            if sch.symbols.iter().any(|s| s.id == new_id || (eda_model::sheet_list::reference_under(sch, s, &e.path) == new_id && !olds.contains(new_id))) {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on another sheet")]);
+            }
+        }
+        Ok(Some(renames))
     }
 
     /// Is `reference` a footprint of the board that no symbol of the schematic is for (a copy, one placed from a library, one whose symbol was deleted)? A
@@ -7468,6 +7553,8 @@ mod fp_exchange_tests;
 mod fp_editor_tests;
 #[cfg(test)]
 mod sch_hierarchy_tests;
+#[cfg(test)]
+mod sch_shared_screen_tests;
 #[cfg(test)]
 mod pcb_edit_details_tests;
 #[cfg(test)]

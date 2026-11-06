@@ -7,7 +7,11 @@
 //   - The tool then stays: the next click opens the chooser again and that footprint is carried from where the click was, and so on.
 //   - Escape while a footprint is carried takes it away (`cleanup()`: `commit.Revert()`) and the tool goes on; Escape with none ends the tool, as does another
 //     tool taking over. A chooser cancelled leaves the tool waiting for a click (`if( fp == nullptr ) continue;`).
-//   - `A` again while the tool runs does nothing (`if( m_inPlaceFootprint ) return 0;`).
+//   - `A` again while the tool runs ends it: `PCB_ACTIONS::placeFootprint` is `AF_ACTIVATE`, so the event reaches the waiting loop as an activation
+//     (`evt->IsActivate()`: `cleanup()` of a footprint carried, then `frame()->PopTool( pushedEvent ); break;`), and `TOOL_MANAGER::dispatchInternal` returns
+//     once the woken tool has it (no `PassEvent`), so nothing starts the tool again -- the next `A` does. It is the toggle of the toolbar's button
+//     (`TOOLBAR_STATE::TOGGLE`). `if( m_inPlaceFootprint ) return 0;` only keeps a run from starting inside another; while the chooser is open (a modal frame)
+//     `A` does nothing.
 //   - The Footprint Editor's Insert hands its footprint to the same tool (`pcb_ToolManager->RunAction( PCB_ACTIONS::placeFootprint, newFootprint )`,
 //     `FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard`): it is carried from the board's cursor, and the tool goes on after its drop; an insert while a
 //     footprint is carried is refused ("Previous footprint placement still in progress.", `PlacingFootprint()`).
@@ -52,10 +56,32 @@ export function placingFootprint(): boolean {
   return stage === "carrying";
 }
 
-/** `PlaceFootprint` from `A`. */
+/** Set by `A` while a footprint is carried: the carry's revert ends the tool instead of leaving it waiting. */
+let popAfterRevert = false;
+
+/** `PlaceFootprint` from `A`; `A` while the tool runs ends it (`evt->IsActivate()`, the file's header). */
 export function startPlaceFootprint(c: PlaceFootprintCtx): void {
-  // `if( m_inPlaceFootprint ) return 0;` -- unless the session it waits in is gone (another tool took the picker over without telling)
-  if (stage !== "idle" && !(stage === "waiting" && picker.session()?.prompt !== WAITING_PROMPT)) return;
+  // the chooser is a modal frame: no activation reaches the loop while it is up
+  if (stage === "choosing") return;
+  // `IsActivate()` with nothing carried: `frame()->PopTool( pushedEvent ); break;` (the wait's own picker session ends it, see `waitForClick`)
+  if (stage === "waiting" && picker.session()?.prompt === WAITING_PROMPT) {
+    picker.cancel();
+    return;
+  }
+  // `IsActivate()` with a footprint carried: `cleanup()` (`commit.Revert()`), then the pop -- the Escape of the Move tool's carry, and the tool ends after it
+  if (stage === "carrying") {
+    popAfterRevert = true;
+    void c.api.revertCarriedPlacement();
+    c.dispatch({ type: "ESCAPE" });
+    return;
+  }
+  // an unplaced part armed for its click (the studio's "-- Unplaced --" group): disarmed, the tool ends
+  if (stage === "armed") {
+    end();
+    c.dispatch({ type: "SET_ARMED", ref: null });
+    return;
+  }
+  // idle, or a wait whose picker session another tool took over without telling: the tool starts
   ctx = c;
   // `m_toolMgr->RunAction( ACTIONS::selectionClear )`
   c.dispatch({ type: "SET_SELECTION", refs: [] });
@@ -117,7 +143,7 @@ function carry(build: (at: PointXY) => Cmd, at: PointXY | null, frameDeg: number
   stage = "carrying";
   void c.api
     // made but nothing new to carry: what it made stands, and the tool goes on
-    .placeNewItems(build, true, placed, { at: at ?? undefined, frameDeg, afterCancel: waitForClick, afterSettle: settled, afterNothing: placed })
+    .placeNewItems(build, true, placed, { at: at ?? undefined, frameDeg, afterCancel: reverted, afterSettle: settled, afterNothing: placed })
     .then((ok) => {
       // refused: no footprint to carry, the tool waits for the next click
       if (!ok && stage === "carrying") waitForClick();
@@ -128,6 +154,14 @@ function carry(build: (at: PointXY) => Cmd, at: PointXY | null, frameDeg: number
 function placed(): void {
   ctx?.dispatch({ type: "SET_SELECTION", refs: [] });
   waitForClick();
+}
+
+/** The carried footprint was taken away (`cleanup()`): Escape leaves the tool waiting for a click, `A` (`IsActivate()`) ends it. */
+function reverted(): void {
+  if (popAfterRevert) {
+    popAfterRevert = false;
+    end();
+  } else waitForClick();
 }
 
 /** The carry was settled by leaving the Move tool: a click that never moved the footprint put it down where it was; another tool taking over ends this one. */
@@ -155,6 +189,7 @@ function waitForClick(): void {
 }
 
 function end(): void {
+  popAfterRevert = false;
   stage = "idle";
   ctx = null;
   chooserAt = null;

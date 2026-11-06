@@ -89,10 +89,18 @@ pub(crate) enum Item {
     Power(usize),
 }
 
+/// One `SCH_REFERENCE`: an item of a screen as one sheet path shows it (`SCH_REFERENCE( aSymbol, aSheetPath )`).
 #[derive(Debug, Clone)]
 pub(crate) struct Slot {
     file: String,
     item: Item,
+    /// The sheet path (`SCH_REFERENCE::m_sheetPath`): the placement ids from the root down, `[]` for the root.
+    path: Vec<String>,
+    /// The path's reference is the item's own id (the first path of its screen with no reference of its own, `sheet_list::own_path`): renaming it renames
+    /// the item. Every other path's reference is the path's own (`SymbolPathOverride`, `SchExtras::power_path_refs`).
+    own: bool,
+    /// The symbol's own unit, which tells it apart on its screen (the unit a path draws is the entry's).
+    own_unit: u32,
 }
 
 /// Which items of a screen the scope takes.
@@ -105,6 +113,8 @@ pub(crate) enum Take {
 #[derive(Debug, Clone)]
 pub(crate) struct ScreenScope {
     pub(crate) file: String,
+    /// The one sheet path of the screen the scope takes (`currentSheet.GetSymbols`, a `SCH_SHEET_PATH`); `None`: every path that shows it.
+    pub(crate) path: Option<Vec<String>>,
     pub(crate) symbols: Take,
     pub(crate) power: bool,
 }
@@ -115,8 +125,12 @@ pub(crate) struct Rename {
     pub(crate) file: String,
     pub(crate) item: Item,
     pub(crate) old: String,
+    /// The symbol's own unit (what tells it apart on its screen).
     pub(crate) unit: u32,
     pub(crate) new: String,
+    /// `None`: the item's own reference (its id) is renamed, with everything keyed by it. `Some(path)`: the reference that sheet path gives it
+    /// (`SCH_SYMBOL::SetRef( aSheet, aReference )` on a screen shown on several paths), which is all that changes.
+    pub(crate) path: Option<Vec<String>>,
 }
 
 /// What annotation tells two library symbols apart by: the whole library id (`SCH_REFERENCE::CompareLibId` in KiCad 25ec2335, the box's kicad-cli, at
@@ -159,55 +173,65 @@ impl<'a> Board<'a> {
     /// parts are not part of it; the caller moves them ([`Board::rename_part`]).
     pub(crate) fn reference_renames(&self, map: &BTreeMap<String, String>) -> Vec<Rename> {
         let mut out = Vec::new();
-        for file in self.hierarchy_files() {
-            let Some(sch) = self.screen_of_file(&file) else { continue };
+        let paths_of = sheet_list::paths_of_screens(&self.design);
+        // one rename per placement: a screen shown on several sheet paths names a part per path (`SCH_SYMBOL::GetRef( &path )`), each of which a rename
+        // of that reference reaches (UI-LEFT S9)
+        for e in sheet_list::walk(&self.design) {
+            let Some(sch) = sheet_list::screen_of(&self.design, &e.path) else { continue };
+            let paths: &[Vec<String>] = paths_of.get(&e.file).map(Vec::as_slice).unwrap_or(&[]);
             for (i, s) in sch.symbols.iter().enumerate() {
-                if let Some(new) = map.get(&s.id) {
-                    out.push(Rename { file: file.clone(), item: Item::Symbol(i), old: s.id.clone(), unit: s.unit, new: new.clone() });
-                }
+                let reference = sheet_list::reference_under(sch, s, &e.path);
+                let Some(new) = map.get(&reference) else { continue };
+                let own = sheet_list::own_path(sch, s, paths).is_some_and(|p| *p == e.path);
+                out.push(Rename { file: e.file.clone(), item: Item::Symbol(i), old: reference, unit: s.unit, new: new.clone(), path: (!own).then(|| e.path.clone()) });
             }
         }
         out
     }
 
-    /// The screens the scope takes, and what of each.
+    /// The sheet paths the scope takes, and what of each (`AnnotateSymbols`' reference list: `sheets.GetSymbols` for the entire schematic,
+    /// `currentSheet.GetSymbols` and the sheets within it for the current sheet, `currentSheet.AppendSymbol` of each selected symbol and the sheets within
+    /// each selected sheet for the selection). The current sheet is the sheet path in view ([`Board::focus_sheet_path`]): on a screen shown twice, the
+    /// one placement's references, not the other's (UI-LEFT S9).
     fn annotate_scopes(&self, scope: AnnotateScope, ids: Option<&[String]>, opts: &AnnotateOptions) -> Vec<ScreenScope> {
         let walk = sheet_list::walk(&self.design);
         let current = self.focus.clone().unwrap_or_default();
+        let current_path = self.focus_sheet_path();
         let mut out: Vec<ScreenScope> = Vec::new();
-        let add = |out: &mut Vec<ScreenScope>, file: &str, symbols: Take, power: bool| {
-            if let Some(have) = out.iter_mut().find(|s| s.file == file) {
+        let add = |out: &mut Vec<ScreenScope>, e: &SheetEntry, symbols: Take, power: bool| {
+            if let Some(have) = out.iter_mut().find(|s| s.path.as_deref() == Some(e.path.as_slice())) {
                 have.power |= power;
                 if matches!(symbols, Take::All) {
                     have.symbols = Take::All;
                 }
             } else {
-                out.push(ScreenScope { file: file.to_string(), symbols, power });
+                out.push(ScreenScope { file: e.file.clone(), path: Some(e.path.clone()), symbols, power });
             }
         };
-        let current_path: Option<Vec<String>> = walk.iter().find(|e| e.file == current).map(|e| e.path.clone());
+        let here = walk.iter().find(|e| e.path == current_path && e.file == current).cloned().unwrap_or_else(|| SheetEntry { path: current_path.clone(), name: String::new(), file: current.clone(), page: String::new(), virtual_page: 1 });
         match scope {
             AnnotateScope::All => {
                 for e in &walk {
-                    add(&mut out, &e.file, Take::All, true);
+                    add(&mut out, e, Take::All, true);
                 }
             }
             AnnotateScope::CurrentSheet => {
-                add(&mut out, &current, Take::All, true);
-                if let (true, Some(path)) = (opts.recursive, &current_path) {
-                    for e in sheet_list::within(&walk, path, false) {
-                        add(&mut out, &e.file, Take::All, false);
+                add(&mut out, &here, Take::All, true);
+                // `subSheets.GetSymbolsWithinPath( references, currentSheet, SYMBOL_FILTER_NON_POWER, true )`
+                if opts.recursive {
+                    for e in sheet_list::within(&walk, &current_path, false) {
+                        add(&mut out, e, Take::All, false);
                     }
                 }
             }
             AnnotateScope::Selection => {
-                add(&mut out, &current, Take::Ids(ids.unwrap_or_default().iter().cloned().collect()), false);
-                if let (true, Some(path)) = (opts.recursive, &current_path) {
+                add(&mut out, &here, Take::Ids(ids.unwrap_or_default().iter().cloned().collect()), false);
+                if opts.recursive {
                     for sheet in &opts.sheets {
-                        let mut under = path.clone();
+                        let mut under = current_path.clone();
                         under.push(sheet.clone());
                         for e in sheet_list::within(&walk, &under, true) {
-                            add(&mut out, &e.file, Take::All, false);
+                            add(&mut out, e, Take::All, false);
                         }
                     }
                 }
@@ -216,20 +240,21 @@ impl<'a> Board<'a> {
         out
     }
 
-    /// Every symbol and power symbol of the design as an annotation entry, with the entries the scope takes split off from the rest
-    /// (`SCH_REFERENCE_LIST`: `references` and `additionalRefs`).
+    /// Every symbol and power symbol of the design as an annotation entry, one per sheet path that shows it (`SCH_SHEET_LIST::GetSymbols` lists a
+    /// `SCH_REFERENCE` per path: its reference `GetRef( &path )`, its unit `GetUnitSelection( &path )`, its sheet number the path's page), with the
+    /// entries the scope takes split off from the rest (`SCH_REFERENCE_LIST`: `references` and `additionalRefs`). A screen shown twice is annotated per
+    /// path, as `SCH_REFERENCE::Annotate` writes `SetRef( &m_sheetPath, .. )` (UI-LEFT S9).
     fn annotation_entries(&self, scopes: &[ScreenScope]) -> (Vec<Slot>, Vec<Entry>, Vec<Entry>) {
         let walk = sheet_list::walk(&self.design);
-        let sheet_num = |file: &str| walk.iter().find(|e| e.file == file).map_or(0, SheetEntry::page_number_as_int);
-        let mut files: Vec<String> = vec![String::new()];
-        let reachable = eda_model::sheet_list::reachable_files(&self.design);
-        files.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().filter(|f| reachable.contains(*f)).cloned()));
+        let paths_of = sheet_list::paths_of_screens(&self.design);
         let mut slots: Vec<Slot> = Vec::new();
         let (mut mine, mut others): (Vec<Entry>, Vec<Entry>) = (Vec::new(), Vec::new());
-        for file in files {
-            let Some(sch) = self.screen_of_file(&file) else { continue };
-            let scope = scopes.iter().find(|s| s.file == file);
-            let num = sheet_num(&file);
+        let in_scope = |file: &str, path: &[String]| scopes.iter().find(|s| s.file == file && s.path.as_deref().is_none_or(|p| p == path));
+        for e in &walk {
+            let Some(sch) = sheet_list::screen_of(&self.design, &e.path) else { continue };
+            let paths: &[Vec<String>] = paths_of.get(&e.file).map(Vec::as_slice).unwrap_or(&[]);
+            let scope = in_scope(&e.file, &e.path);
+            let num = e.page_number_as_int();
             for (i, s) in sch.symbols.iter().enumerate() {
                 let value = if s.value.is_empty() { self.model.part(&s.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() };
                 let units = self
@@ -238,9 +263,12 @@ impl<'a> Board<'a> {
                     .and_then(|p| self.model.real_symbol_of(&s.lib_id, p))
                     .or_else(|| self.design_symbol(&s.lib_id))
                     .map_or(1, |l| l.unit_count.max(1));
+                let own = sheet_list::own_path(sch, s, paths).is_some_and(|p| *p == e.path);
+                let reference = sheet_list::reference_under(sch, s, &e.path);
+                let unit = sheet_list::unit_under(sch, s, &e.path);
                 let key = slots.len();
-                slots.push(Slot { file: file.clone(), item: Item::Symbol(i) });
-                let entry = Entry::new(key, &s.id, s.unit, units, lib_item_name(&s.lib_id), &value, num, (s.at.x, s.at.y), false);
+                slots.push(Slot { file: e.file.clone(), item: Item::Symbol(i), path: e.path.clone(), own, own_unit: s.unit });
+                let entry = Entry::new(key, &reference, unit, units, lib_item_name(&s.lib_id), &value, num, (s.at.x, s.at.y), false);
                 let taken = scope.is_some_and(|sc| match &sc.symbols {
                     Take::All => true,
                     Take::Ids(ids) => ids.contains(&s.id),
@@ -248,23 +276,21 @@ impl<'a> Board<'a> {
                 (if taken { &mut mine } else { &mut others }).push(entry);
             }
             for (i, p) in sch.power_symbols.iter().enumerate() {
+                let own = sheet_list::own_power_path(sch, p, paths).is_some_and(|o| *o == e.path);
                 let key = slots.len();
-                slots.push(Slot { file: file.clone(), item: Item::Power(i) });
-                let entry = Entry::new(key, &p.id, 1, 1, lib_item_name(&p.lib_id), &p.net, num, (p.at.x, p.at.y), true);
+                slots.push(Slot { file: e.file.clone(), item: Item::Power(i), path: e.path.clone(), own, own_unit: 1 });
+                let entry = Entry::new(key, &sheet_list::power_reference_under(sch, p, &e.path), 1, 1, lib_item_name(&p.lib_id), &p.net, num, (p.at.x, p.at.y), true);
                 (if scope.is_some_and(|sc| sc.power) { &mut mine } else { &mut others }).push(entry);
             }
         }
-        // a screen shown on several sheet paths: the references its other paths give its symbols (`SchematicSection::instance_overrides`) are held too
-        // (`SCH_SHEET_LIST::GetSymbols` lists a `SCH_REFERENCE` per sheet path). **Differs**: KiCad annotates each path's reference; here only the screen's
-        // own are annotated, and the others' are counted as taken, so no number is handed out twice
-        for e in walk.iter().skip(1) {
-            let Some(sch) = sheet_list::screen_of(&self.design, &e.path) else { continue };
-            let num = e.page_number_as_int();
-            for s in &sch.symbols {
-                let Some(o) = sheet_list::override_under(sch, s, &e.path) else { continue };
-                let value = if s.value.is_empty() { self.model.part(&s.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() };
-                let units = self.model.part(&s.id).and_then(|p| self.model.real_symbol_of(&s.lib_id, p)).or_else(|| self.design_symbol(&s.lib_id)).map_or(1, |l| l.unit_count.max(1));
-                others.push(Entry::new(usize::MAX, &o.reference, o.unit, units, lib_item_name(&s.lib_id), &value, num, (s.at.x, s.at.y), false));
+        // an item whose every path has a reference of its own: its id names no placement, but it is a part of the model, so it stays taken
+        for (file, paths) in &paths_of {
+            let Some(sch) = self.screen_of_file(file) else { continue };
+            for s in sch.symbols.iter().filter(|s| sheet_list::own_path(sch, s, paths).is_none()) {
+                others.push(Entry::new(usize::MAX, &s.id, s.unit, 1, lib_item_name(&s.lib_id), &s.value, 0, (s.at.x, s.at.y), false));
+            }
+            for p in sch.power_symbols.iter().filter(|p| sheet_list::own_power_path(sch, p, paths).is_none()) {
+                others.push(Entry::new(usize::MAX, &p.id, 1, 1, lib_item_name(&p.lib_id), &p.net, 0, (p.at.x, p.at.y), true));
             }
         }
         // a footprint that exists only on the board (a mounting hole, a test point) is a part of the design too: its reference is taken
@@ -321,8 +347,9 @@ impl<'a> Board<'a> {
                     messages.push(AnnotateMessage { severity: "warning", text: format!("{} is drawn from the generic box of its part, so its reference cannot change; it keeps it.", e.original()) });
                     continue;
                 }
-                let (id, unit) = (e.original().to_string(), e.unit);
-                renames.push(Rename { file: slot.file.clone(), item: slot.item, old: id, unit, new: new_ref });
+                // the path's own reference, or the item's (its id) when the path is the one the id names
+                let path = (!slot.own).then(|| slot.path.clone());
+                renames.push(Rename { file: slot.file.clone(), item: slot.item, old: e.original().to_string(), unit: slot.own_unit, new: new_ref, path });
             }
             // the words of the report: the value stands for the symbol (`symbol->GetValue( true, sheet, false )`)
             let shown = self.annotated_value(slot);
@@ -411,20 +438,35 @@ impl<'a> Board<'a> {
             return;
         }
         let base = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
+        // how many placements (a symbol of a screen on one sheet path) each reference names, before: a reference all of whose placements are
+        // renamed to one new name is renamed as a whole (its part, its footprint and the net list's pins go with it)
+        let occurrences = self.reference_occurrences();
         // the drawing of a generated symbol stays with the design, under a name that is not its old part's
-        self.freeze_generated_symbols(&renames.iter().filter(|r| matches!(r.item, Item::Symbol(_))).map(|r| r.old.clone()).collect());
-        let mut whole_all: BTreeMap<String, String> = BTreeMap::new();
-        let files: BTreeSet<String> = renames.iter().map(|r| r.file.clone()).collect();
+        self.freeze_generated_symbols(&renames.iter().filter(|r| matches!(r.item, Item::Symbol(_)) && r.path.is_none()).map(|r| r.old.clone()).collect());
+        // the references of the other sheet paths of a screen shown more than once (before the screens' own renames sort their symbols)
+        self.apply_path_renames(renames);
+        let files: BTreeSet<String> = renames.iter().filter(|r| r.path.is_none()).map(|r| r.file.clone()).collect();
         for file in files {
-            let mine: Vec<SecRename> = renames.iter().filter(|r| r.file == file).map(|r| SecRename { item: r.item, old: r.old.clone(), unit: r.unit, new: r.new.clone() }).collect();
+            let mine: Vec<SecRename> = renames.iter().filter(|r| r.file == file && r.path.is_none()).map(|r| SecRename { item: r.item, old: r.old.clone(), unit: r.unit, new: r.new.clone() }).collect();
             // pins of a unit that moved alone: which pin numbers belong to which unit
             let pin_units = match self.screen_of_file(&file) {
                 Some(sch) => self.partial_pin_units(sch, &mine),
                 None => BTreeMap::new(),
             };
             let Some(sch) = self.screen_of_file_mut(&file) else { continue };
-            whole_all.extend(rename_in_section(sch, &mine, &pin_units));
+            rename_in_section(sch, &mine, &pin_units);
         }
+        let mut new_of: BTreeMap<&str, (BTreeSet<&str>, usize)> = BTreeMap::new();
+        for r in renames.iter().filter(|r| matches!(r.item, Item::Symbol(_))) {
+            let e = new_of.entry(r.old.as_str()).or_default();
+            e.0.insert(r.new.as_str());
+            e.1 += 1;
+        }
+        let whole_all: BTreeMap<String, String> = new_of
+            .into_iter()
+            .filter(|(old, (news, n))| news.len() == 1 && occurrences.get(*old).copied().unwrap_or(0) <= *n)
+            .filter_map(|(old, (news, _))| news.into_iter().next().map(|new| (old.to_string(), new.to_string())))
+            .collect();
 
         // the board's parts go with their symbols (a sheet that has just come in has none yet, and its references may be a board part's own)
         if remap_nets {
@@ -451,6 +493,71 @@ impl<'a> Board<'a> {
                 })
                 .collect();
             self.design.nets = Some(nets);
+        }
+    }
+
+    /// How many placements each symbol reference of the schematic names: a symbol of a screen on each sheet path that shows it (`SCH_SHEET_LIST::GetSymbols`,
+    /// `GetRef( &path )`).
+    fn reference_occurrences(&self) -> BTreeMap<String, usize> {
+        let mut out: BTreeMap<String, usize> = BTreeMap::new();
+        for e in sheet_list::walk(&self.design) {
+            let Some(sch) = sheet_list::screen_of(&self.design, &e.path) else { continue };
+            for s in &sch.symbols {
+                *out.entry(sheet_list::reference_under(sch, s, &e.path)).or_default() += 1;
+            }
+        }
+        out
+    }
+
+    /// `SCH_SYMBOL::SetRef( aSheet, aReference )` for the renames of one sheet path's reference (`Rename::path`), and, for a screen shown on several
+    /// paths whose item is renamed by its own id, the reference every other path gave it by that id kept as that path's own (the rename is the one
+    /// path's, `SCH_REFERENCE::Annotate`), before the id changes. Symbols are told apart by place and own unit (`SymbolPathOverride`), power symbols by id
+    /// (`SchExtras::power_path_refs`), as the screen is before any of its own renames (UI-LEFT S9).
+    fn apply_path_renames(&mut self, renames: &[Rename]) {
+        // only a screen of the sheets (never the root, which no sheet places) can be shown on several paths
+        if renames.iter().all(|r| r.path.is_none() && r.file.is_empty()) {
+            return;
+        }
+        let paths_of = sheet_list::paths_of_screens(&self.design);
+        for r in renames.iter().filter(|r| r.path.is_none()) {
+            let Some(paths) = paths_of.get(&r.file).filter(|p| p.len() > 1) else { continue };
+            let Some(sch) = self.screen_of_file_mut(&r.file) else { continue };
+            match r.item {
+                Item::Symbol(i) => {
+                    let Some(s) = sch.symbols.get(i).cloned() else { continue };
+                    let own = sheet_list::own_path(sch, &s, paths).cloned();
+                    for p in paths.iter().filter(|p| Some(*p) != own.as_ref()) {
+                        if sheet_list::override_under(sch, &s, p).is_none() {
+                            sch.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: p.clone(), reference: s.id.clone(), unit: s.unit });
+                        }
+                    }
+                }
+                Item::Power(i) => {
+                    let Some(ps) = sch.power_symbols.get(i).cloned() else { continue };
+                    let own = sheet_list::own_power_path(sch, &ps, paths).cloned();
+                    let filed = sch.extras.power_path_refs.entry(ps.id.clone()).or_default();
+                    for p in paths.iter().filter(|p| Some(*p) != own.as_ref() && !p.is_empty()) {
+                        filed.entry(p.join("/")).or_insert_with(|| ps.id.clone());
+                    }
+                }
+            }
+        }
+        for r in renames.iter() {
+            let Some(path) = &r.path else { continue };
+            let Some(sch) = self.screen_of_file_mut(&r.file) else { continue };
+            match r.item {
+                Item::Symbol(i) => {
+                    let Some(s) = sch.symbols.get(i).cloned() else { continue };
+                    match sch.instance_overrides.iter_mut().find(|o| o.sheet_path == *path && o.at == s.at && o.unit == s.unit) {
+                        Some(o) => o.reference = r.new.clone(),
+                        None => sch.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: path.clone(), reference: r.new.clone(), unit: s.unit }),
+                    }
+                }
+                Item::Power(i) => {
+                    let Some(id) = sch.power_symbols.get(i).map(|p| p.id.clone()) else { continue };
+                    sch.extras.power_path_refs.entry(id).or_default().insert(path.join("/"), r.new.clone());
+                }
+            }
         }
     }
 
@@ -508,6 +615,7 @@ impl<'a> Board<'a> {
     pub fn placement_reference(&self, sheet: &str, prefix: &str, lib_id: &str, value: &str, unit: u32, unit_count: u32, opts: &AnnotateOptions) -> Result<String, Vec<CheckResult>> {
         let mut board = self.fork();
         board.focus = board.screen_at(sheet)?;
+        board.focus_path = Some(sheet.split('/').filter(|c| !c.is_empty()).map(String::from).collect());
         let (_, _, mut list) = board.annotation_entries(&[]);
         eda_model::annotate::split_all(&mut list);
         let walk = sheet_list::walk(&board.design);
@@ -530,6 +638,7 @@ impl<'a> Board<'a> {
         let mut board = self.fork();
         let target = board.screen_at(sheet)?;
         board.focus = target;
+        board.focus_path = Some(sheet.split('/').filter(|c| !c.is_empty()).map(String::from).collect());
         board.schematic()?;
         let scope = opts.scope.unwrap_or(if ids.is_some() { AnnotateScope::Selection } else { AnnotateScope::CurrentSheet });
         let (_, renames, mut messages) = board.annotate_plan(reset, order, ids, opts);
@@ -622,6 +731,7 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     let mut path_units = Vec::new();
     let mut pos_excluded = Vec::new();
     let mut power_props = Vec::new();
+    let mut power_refs = Vec::new();
     for r in renames {
         let (old_key, new_key) = (field_key(&r.old, r.unit), field_key(&r.new, r.unit));
         if let Some(v) = sch.field_layout.remove(&old_key) {
@@ -656,9 +766,14 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
             if let Some(v) = sch.extras.power_props.remove(&r.old) {
                 power_props.push((r.new.clone(), v));
             }
+            // and the references its other sheet paths give it (UI-LEFT S9)
+            if let Some(v) = sch.extras.power_path_refs.remove(&r.old) {
+                power_refs.push((r.new.clone(), v));
+            }
         }
     }
     sch.extras.power_props.extend(power_props);
+    sch.extras.power_path_refs.extend(power_refs);
     sch.field_layout.extend(layout);
     sch.extras.fields_autoplaced.extend(autoplaced);
     sch.extras.body_styles.extend(styles);

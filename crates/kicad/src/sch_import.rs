@@ -261,6 +261,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut field_look_entries: Vec<(String, BTreeMap<String, eda_model::sch_extras::FieldFontLook>)> = Vec::new();
     // what the power symbols' Symbol Properties set (`SchExtras::power_props`), by id
     let mut power_props_read: Vec<(String, eda_model::sch_extras::PowerProps)> = Vec::new();
+    // (power symbol id, sheet path, reference) of a power symbol whose sheet path names it otherwise than its Reference (UI-LEFT S9)
+    let mut power_path_reads: Vec<(String, String, String)> = Vec::new();
     // each power symbol's `(uuid ..)`, parallel to `power_symbols`
     let mut power_uuid: Vec<Option<String>> = Vec::new();
     // where a power symbol's Reference and Value are when the file has them placed by hand (no `(fields_autoplaced ..)`), by id (`field_layout`, r4 D4-L2)
@@ -387,6 +389,12 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                     .collect();
                 if !places.is_empty() {
                     power_field_places.push((reference.clone(), places));
+                }
+            }
+            // the reference each sheet path of a shared screen gives it (`SCH_SYMBOL_INSTANCE`, `SchExtras::power_path_refs`; UI-LEFT S9)
+            for (o, _) in parse_instance_overrides(item, at_nm, 1) {
+                if o.reference != reference {
+                    power_path_reads.push((reference.clone(), o.sheet_path.join("/"), o.reference));
                 }
             }
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
@@ -898,6 +906,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         sch.extras.pin_alternates.extend(pin_alternate_entries);
         sch.extras.field_looks.extend(field_look_entries);
         sch.extras.power_props.extend(power_props_read);
+        for (id, path, reference) in power_path_reads {
+            sch.extras.power_path_refs.entry(id).or_default().insert(path, reference);
+        }
         sch.field_layout.extend(power_field_places);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         sch.extras.sheet_pages.extend(sheet_pages);
@@ -1308,6 +1319,8 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
             file_of.insert(sh.id.clone(), sh.file.clone());
         }
     }
+    // (file, symbol uuid) -> (sheet path, reference) of the entries that name no symbol of the screen
+    let mut power_paths: BTreeMap<(String, String), Vec<(Vec<String>, String)>> = BTreeMap::new();
     for path in sexpr::find_all(instances, "path") {
         let Some(path_str) = sexpr::txt(path, 1) else { continue };
         let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
@@ -1319,7 +1332,11 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
         let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).map(|u| u.max(1.0) as u32).or(own_unit).unwrap_or(1);
         let Some(sec) = sheet_contents.get_mut(file) else { continue };
         // the symbol: by its place and own unit; one the file gives no unit by its place alone
-        let Some(i) = sec.symbols.iter().position(|s| s.at == at && s.unit == own_unit.unwrap_or(1)).or_else(|| own_unit.is_none().then(|| sec.symbols.iter().position(|s| s.at == at)).flatten()) else { continue };
+        let Some(i) = sec.symbols.iter().position(|s| s.at == at && s.unit == own_unit.unwrap_or(1)).or_else(|| own_unit.is_none().then(|| sec.symbols.iter().position(|s| s.at == at)).flatten()) else {
+            // not a symbol of the screen: a power symbol (placed by its pin, not its origin), told apart below by the references its paths give it
+            power_paths.entry((file.clone(), symbol.to_string())).or_default().push((sheet_path, reference.to_string()));
+            continue;
+        };
         // a symbol the file gives no unit is drawn as the unit its (first) instance says (`UpdateSymbolInstanceData` -> `SetUnit`)
         if own_unit.is_none() && unit != 1 && sec.symbols[i].unit == 1 && !sec.instance_overrides.iter().any(|o| o.at == at && o.unit == 1) {
             sec.symbols[i].unit = unit;
@@ -1333,6 +1350,17 @@ fn legacy_symbol_instances(root_text: &str, design: &Design, sheet_contents: &mu
             sec.extras.path_units.entry(eda_model::ir::field_key(&sym_id, own)).or_default().insert(sheet_path.join("/"), unit);
         }
         sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at, sheet_path, reference: reference.to_string(), unit: own });
+    }
+    // a power symbol of a screen shown on several paths has a reference per path too (`SCH_SYMBOL_INSTANCE`; QA `complex_hierarchy`: `#PWR035` under one
+    // placement of `ampli_ht`, `#PWR019` under the other): the power symbol is the one whose id (the reference the reader gave it) one of its paths has,
+    // and each other path's reference is filed for that path (`SchExtras::power_path_refs`, UI-LEFT S9)
+    for ((file, _), paths) in power_paths {
+        let Some(sec) = sheet_contents.get_mut(&file) else { continue };
+        let matching: Vec<String> = sec.power_symbols.iter().filter(|p| paths.iter().any(|(_, r)| *r == p.id)).map(|p| p.id.clone()).collect();
+        let [id] = matching.as_slice() else { continue };
+        for (sheet_path, reference) in paths.iter().filter(|(p, r)| r != id && !p.is_empty()) {
+            sec.extras.power_path_refs.entry(id.clone()).or_default().insert(sheet_path.join("/"), reference.clone());
+        }
     }
 }
 

@@ -2288,3 +2288,113 @@ fn a_labels_expression_names_its_net_as_kicad_cli_does() {
         assert_eq!(names(&kicad_cli_named_nets(&derived_dir.join("board.kicad_sch"))), names(&ours), "and of the derived file");
     }
 }
+
+// ---------------------------------------------------------------------------------------- a screen shown twice, annotated (UI-LEFT S9)
+
+/// The references KiCad's Annotate gives with "Entire schematic", "Reset existing annotations", sort by X, first free number (`AnnotateSymbols` ->
+/// `sheets.GetSymbols( references, SYMBOL_FILTER_ALL )`: a `SCH_REFERENCE` per symbol *and sheet path*, `SetSheetNumber( GetPageNumberAsInt() )`;
+/// `SortByXCoordinate`: prefix, then sheet number, then x, then y; `FindFirstUnusedReference` from 1): worked out here from the design's places and pages,
+/// not by the studio's annotation code, for a design whose symbols are all of one unit. Power symbols are numbered the same way under their `#PWR` prefix.
+fn kicad_annotation_by_x(design: &eda_model::ir::Design) -> std::collections::BTreeMap<(Vec<String>, i64, i64, bool), String> {
+    let mut keyed: Vec<(String, i64, i64, i64, Vec<String>, bool)> = Vec::new();
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sch) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        let page = e.page_number_as_int();
+        for s in &sch.symbols {
+            let prefix = s.id.trim_end_matches(|c: char| c.is_ascii_digit() || c == '?').to_string();
+            keyed.push((prefix, page, s.at.x.get(), s.at.y.get(), e.path.clone(), false));
+        }
+        for p in &sch.power_symbols {
+            let prefix = p.id.trim_end_matches(|c: char| c.is_ascii_digit() || c == '?').to_string();
+            keyed.push((prefix, page, p.at.x.get(), p.at.y.get(), e.path.clone(), true));
+        }
+    }
+    keyed.sort();
+    let mut out = std::collections::BTreeMap::new();
+    let mut n: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (prefix, _, x, y, path, power) in keyed {
+        let k = n.entry(prefix.clone()).or_default();
+        *k += 1;
+        // `SCH_REFERENCE::formatRefStr`: a power symbol's number after a "0" (`#PWR01`)
+        let reference = if power { format!("{prefix}0{k}") } else { format!("{prefix}{k}") };
+        out.insert((path, x, y, power), reference);
+    }
+    out
+}
+
+/// What the studio gives each placement after the annotation: (path, x, y, power) -> the path's reference.
+fn studio_references(design: &eda_model::ir::Design) -> std::collections::BTreeMap<(Vec<String>, i64, i64, bool), String> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in eda_model::sheet_list::walk(design) {
+        let Some(sch) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        for s in &sch.symbols {
+            out.insert((e.path.clone(), s.at.x.get(), s.at.y.get(), false), eda_model::sheet_list::reference_under(sch, s, &e.path));
+        }
+        for p in &sch.power_symbols {
+            out.insert((e.path.clone(), p.at.x.get(), p.at.y.get(), true), eda_model::sheet_list::power_reference_under(sch, p, &e.path));
+        }
+    }
+    out
+}
+
+/// A sheet placed twice (the LDO stage imported, copied and pasted: one screen, two sheet paths), its references scrambled, then Annotate over the entire
+/// schematic with a reset: every path's references are numbered (KiCad's `SCH_REFERENCE::Annotate` writes `SetRef( &m_sheetPath, .. )` per path), the
+/// power symbols included, each as KiCad's own algorithm numbers it (`kicad_annotation_by_x`). kicad-cli then reads the derived project as KiCad would
+/// have it: its netlist names the parts of both placements, on nets of their own and the studio's; its ERC has no reference finding; and its netlist export
+/// warns of no annotation error (`SCH_REFERENCE_LIST::CheckAnnotation` over `SYMBOL_FILTER_ALL`, which a power symbol of one reference on both paths
+/// failed before).
+#[test]
+fn slow_a_shared_screen_annotated_by_the_studio_is_numbered_per_path_as_kicad_numbers_it() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = empty_board("slow_shared_annotate");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet = design.schematic.as_ref().unwrap().sheets[0].clone();
+    let copied = crate::sch_clipboard_api::copy(&dir, json!({ "ids": [sheet.id] }).to_string().as_bytes());
+    let parsed = crate::sch_clipboard_api::parse(&dir, json!({ "text": copied["text"] }).to_string().as_bytes());
+    let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"], "dx": 0, "dy": 40_000_000 })).unwrap();
+    step(&dir, cmd, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert_eq!(design.schematic.as_ref().unwrap().sheets.len(), 2);
+    assert_eq!(eda_model::sheet_list::placement_counts(&design).get(&sheet.file).copied(), Some(2), "one screen, two placements");
+    let screen = &design.sheet_contents.as_ref().unwrap()[&sheet.file];
+    assert!(!screen.power_symbols.is_empty(), "the LDO stage has power symbols");
+
+    let options: eda_ops::AnnotateOptions = serde_json::from_value(json!({ "scope": "all", "algo": "first_free" })).unwrap();
+    step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None, options }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let want = kicad_annotation_by_x(&design);
+    let got = studio_references(&design);
+    assert_eq!(got, want, "each placement numbered as KiCad's Annotate numbers it");
+    let second = design.schematic.as_ref().unwrap().sheets.iter().find(|s| s.id != sheet.id).unwrap().id.clone();
+    let power_second: Vec<&String> = got.iter().filter(|((p, _, _, power), _)| *power && *p == [second.clone()]).map(|(_, r)| r).collect();
+    let power_first: Vec<&String> = got.iter().filter(|((p, _, _, power), _)| *power && *p == [sheet.id.clone()]).map(|(_, r)| r).collect();
+    assert!(power_second.iter().all(|r| !power_first.contains(r)), "a power reference per path: {power_first:?} {power_second:?}");
+
+    // kicad-cli reads the derived files: the netlist export warns of no annotation error, and names every placement's parts
+    let (d, m) = crate::kicad_engine::load_with_schematic(&dir).unwrap();
+    let files = eda_kicad::export_kicad_sch_tree(&d, &m, &eda_kicad::ExportMeta { date: "2026-11-06", title: "t" }, "root.kicad_sch").unwrap();
+    let out = dir.join("derived_tree");
+    std::fs::create_dir_all(&out).unwrap();
+    for (f, text) in &files {
+        std::fs::write(out.join(f), text).unwrap();
+    }
+    let net = out.join("root.net.xml");
+    let run = std::process::Command::new(eda_kicad_engine::find_cli().unwrap()).args(["sch", "export", "netlist", "--format", "kicadxml", "-o"]).arg(&net).arg(out.join("root.kicad_sch")).output().unwrap();
+    let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    println!("kicad-cli netlist: {said}");
+    assert!(!said.contains("annotation errors"), "kicad-cli finds the annotation complete: {said}");
+    let text = std::fs::read_to_string(&net).unwrap();
+    for ((_, _, _, power), r) in &got {
+        if !*power {
+            assert!(text.contains(&format!("<comp ref=\"{r}\"")), "kicad-cli's netlist has {r}");
+        }
+    }
+    let kicad = kicad_net_groups(&dir);
+    let ours = our_net_groups(&dir);
+    assert_eq!(ours, kicad, "the studio's nets are kicad-cli's: a net per placement");
+    assert_no_reference_findings(&dir, "after Annotate over a screen shown twice");
+}

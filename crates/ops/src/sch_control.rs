@@ -16,7 +16,8 @@
 //! schematic verb), except [`Cmd::SetSheetPage`], which finds the placement anywhere in the hierarchy.
 
 use eda_model::CheckResult;
-use std::collections::BTreeMap;
+use eda_model::sheet_list;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{fields_table, Board};
 
@@ -67,51 +68,152 @@ pub fn increment_plan(refs: &[String], start: &str, increment: i32) -> Result<Ve
     Ok(plan)
 }
 
+/// [`Board::set_symbol_lib_ids`] on one screen: every symbol linked to a `from` id is linked to its `to` (`SetLibId`), its Value following the item name
+/// when it was the old one's, and with `update_fields` the library symbol's Value, Datasheet and an empty Footprint.
+fn relink(sch: &mut eda_model::ir::SchematicSection, changes: &[(String, String)], resolved: &BTreeMap<String, String>, update_fields: bool) {
+    for (from, to) in changes {
+        if from == to {
+            continue;
+        }
+        let (old_name, new_name) = (item_name(from).to_string(), item_name(to).to_string());
+        for s in sch.symbols.iter_mut().filter(|s| &s.lib_id == from) {
+            if s.value == old_name {
+                s.value = new_name.clone();
+            }
+            if update_fields {
+                if let Some(datasheet) = resolved.get(to) {
+                    s.value = new_name.clone();
+                    s.footprint = String::new();
+                    s.datasheet = datasheet.clone();
+                }
+            }
+            s.lib_id = to.clone();
+        }
+    }
+}
+
 impl<'a> Board<'a> {
-    /// `SCH_EDIT_TOOL::SetAttribute`: `Some(v)` sets the attribute on every placed unit of every listed reference ("The attributes
-    /// should be kept in sync in multi-unit parts"), on every sheet when the reference is annotated, `None` leaves it. Which state a toggle goes to (`new_state`: set when any of the
-    /// items does not have it yet, else cleared) is the caller's decision, as in the C++ where it is computed before the commit.
-    pub(crate) fn set_symbol_attrs(&mut self, ids: &[String], dnp: Option<bool>, exclude_from_bom: Option<bool>, exclude_from_board: Option<bool>, exclude_from_sim: Option<bool>) -> Result<(), Vec<CheckResult>> {
+    /// The screens of the hierarchy (`""` the root, then each sheet file some sheet path shows), each once.
+    fn hierarchy_screens(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for e in sheet_list::walk(&self.design) {
+            if !out.contains(&e.file) {
+                out.push(e.file);
+            }
+        }
+        out
+    }
+
+    /// `SCH_EDIT_TOOL::SetAttribute`'s `collectedItems`: the symbols `ids` of the sheet in view (every placed unit of each), and -- "The attributes should be kept
+    /// in sync in multi-unit parts. Of course the symbol must be annotated to collect other units." (`symbol->IsAnnotated( &GetCurrentSheet() )`, then
+    /// `CollectOtherUnits( ref, unit, libId, sheet, &otherUnits )` for every sheet of `Hierarchy()`) -- every symbol of the same library symbol to which some
+    /// sheet path gives the reference the sheet path in view gives it (`GetRef( &GetCurrentSheet() )`). A screen shown on two paths names a part per path:
+    /// the units collected are those of the reference in view, on whatever screen they are (UI-LEFT S9). As (screen, index), each once; and the references
+    /// the collected symbols have on every path (the board's parts that take the flags).
+    fn attribute_targets(&self, ids: &[String]) -> Result<(Vec<(String, usize)>, BTreeSet<String>), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_nothing_selected", "attributes", "select a symbol first"));
         }
-        let mut targets: Vec<(String, String)> = Vec::new();
+        let here = self.focus.clone().unwrap_or_default();
+        let path = self.focus_sheet_path();
+        let mut wanted: Vec<(String, String)> = Vec::new();
+        let mut out: Vec<(String, usize)> = Vec::new();
         {
             let sch = self.schematic()?;
             for id in ids {
-                let Some(s) = sch.symbols.iter().find(|s| &s.id == id) else {
+                if !sch.symbols.iter().any(|s| &s.id == id) {
                     return Err(fail("ops_unknown_symbol", id, "no symbol instance with this reference"));
-                };
-                targets.push((id.clone(), s.lib_id.clone()));
-            }
-        }
-        // "The attributes should be kept in sync in multi-unit parts. Of course the symbol must be annotated to collect other units."
-        // (`symbol->IsAnnotated( .. )` then `CollectOtherUnits( ref, unit, libId, sheet, &otherUnits )` on every sheet of `Hierarchy()`): an annotated
-        // reference's units of the same library symbol on the other sheets go to the same state (r5 D5-M2). An unannotated one is only the sheet's.
-        let annotated = |id: &str| !id.ends_with('?');
-        let here = self.focus.clone();
-        let screens = std::iter::once((None, self.design.schematic.as_mut())).chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.iter_mut()).map(|(k, v)| (Some(k.clone()), Some(v))));
-        for (key, sch) in screens {
-            let Some(sch) = sch else { continue };
-            let in_view = key == here;
-            for s in sch.symbols.iter_mut().filter(|s| targets.iter().any(|(id, lib)| *id == s.id && (in_view || (annotated(id) && *lib == s.lib_id)))) {
-                if let Some(v) = dnp {
-                    s.dnp = v;
                 }
-                if let Some(v) = exclude_from_bom {
-                    s.exclude_from_bom = v;
-                }
-                if let Some(v) = exclude_from_board {
-                    s.exclude_from_board = v;
-                }
-                if let Some(v) = exclude_from_sim {
-                    s.exclude_from_sim = v;
+                for (i, s) in sch.symbols.iter().enumerate().filter(|(_, s)| &s.id == id) {
+                    out.push((here.clone(), i));
+                    let reference = sheet_list::reference_under(sch, s, &path);
+                    if !eda_model::annotate::is_unannotated(&reference) {
+                        wanted.push((reference, s.lib_id.clone()));
+                    }
                 }
             }
         }
-        // The board's footprint carries the same two flags: the one edited last wins (`Board::sync_footprint_bom_flags`).
-        self.sync_footprint_bom_flags(ids, dnp, exclude_from_bom);
+        for e in sheet_list::walk(&self.design) {
+            let Some(sch) = sheet_list::screen_of(&self.design, &e.path) else { continue };
+            for (i, s) in sch.symbols.iter().enumerate() {
+                let reference = sheet_list::reference_under(sch, s, &e.path);
+                if wanted.iter().any(|(r, lib)| *r == reference && *lib == s.lib_id) && !out.contains(&(e.file.clone(), i)) {
+                    out.push((e.file.clone(), i));
+                }
+            }
+        }
+        let paths_of = sheet_list::paths_of_screens(&self.design);
+        let mut refs: BTreeSet<String> = ids.iter().cloned().collect();
+        for (file, i) in &out {
+            let Some(sch) = sheet_list::screen_of_file(&self.design, file) else { continue };
+            let Some(s) = sch.symbols.get(*i) else { continue };
+            for p in paths_of.get(file).into_iter().flatten() {
+                refs.insert(sheet_list::reference_under(sch, s, p));
+            }
+        }
+        Ok((out, refs))
+    }
+
+    /// `SCH_EDIT_TOOL::SetAttribute`: `Some(v)` sets the attribute on what [`Self::attribute_targets`] collects, `None` leaves it. Which state a toggle goes to
+    /// (`new_state`) is the caller's here; [`Self::toggle_symbol_attribute`] works it out as the C++ does.
+    pub(crate) fn set_symbol_attrs(&mut self, ids: &[String], dnp: Option<bool>, exclude_from_bom: Option<bool>, exclude_from_board: Option<bool>, exclude_from_sim: Option<bool>) -> Result<(), Vec<CheckResult>> {
+        let (targets, refs) = self.attribute_targets(ids)?;
+        for (file, i) in &targets {
+            let Some(s) = sheet_list::screen_of_file_mut(&mut self.design, file).and_then(|sch| sch.symbols.get_mut(*i)) else { continue };
+            if let Some(v) = dnp {
+                s.dnp = v;
+            }
+            if let Some(v) = exclude_from_bom {
+                s.exclude_from_bom = v;
+            }
+            if let Some(v) = exclude_from_board {
+                s.exclude_from_board = v;
+            }
+            if let Some(v) = exclude_from_sim {
+                s.exclude_from_sim = v;
+            }
+        }
+        // The board's footprint carries the same two flags: the one edited last wins (`Board::sync_footprint_bom_flags`); a screen shown on two paths
+        // gives the flags (the symbol's own, `m_DNP`) to the part of each path.
+        let refs: Vec<String> = refs.into_iter().collect();
+        self.sync_footprint_bom_flags(&refs, dnp, exclude_from_bom);
         Ok(())
+    }
+
+    /// [`crate::sch_edit::SchCmd::ToggleSymbolAttribute`]: `SetAttribute`'s `new_state` -- set when any collected item does not have the attribute
+    /// (`!item->GetDNP( sheet, variant )`, ...), else cleared -- over everything [`Self::attribute_targets`] collects, the units on other sheets included
+    /// (r5 D5-M2), then [`Self::set_symbol_attrs`].
+    pub(crate) fn toggle_symbol_attribute(&mut self, ids: &[String], attribute: &str) -> Result<(), Vec<CheckResult>> {
+        let (targets, _) = self.attribute_targets(ids)?;
+        let has = |s: &eda_model::ir::SymbolInstance| -> Option<bool> {
+            Some(match attribute {
+                "dnp" => s.dnp,
+                "exclude_from_bom" => s.exclude_from_bom,
+                "exclude_from_board" => s.exclude_from_board,
+                "exclude_from_sim" => s.exclude_from_sim,
+                _ => return None,
+            })
+        };
+        let mut new_state = false;
+        for (file, i) in &targets {
+            let Some(s) = sheet_list::screen_of_file(&self.design, file).and_then(|sch| sch.symbols.get(*i)) else { continue };
+            match has(s) {
+                None => return Err(fail("ops_bad_attribute", attribute, "the attribute is dnp, exclude_from_bom, exclude_from_board or exclude_from_sim")),
+                Some(false) => {
+                    new_state = true;
+                    break;
+                }
+                Some(true) => {}
+            }
+        }
+        let v = Some(new_state);
+        match attribute {
+            "dnp" => self.set_symbol_attrs(ids, v, None, None, None),
+            "exclude_from_bom" => self.set_symbol_attrs(ids, None, v, None, None),
+            "exclude_from_board" => self.set_symbol_attrs(ids, None, None, v, None),
+            "exclude_from_sim" => self.set_symbol_attrs(ids, None, None, None, v),
+            _ => Err(fail("ops_bad_attribute", attribute, "the attribute is dnp, exclude_from_bom, exclude_from_board or exclude_from_sim")),
+        }
     }
 
     /// `SCH_EDIT_TOOL::EditPageNumber`: the placement `sheet` (a `SheetInstance::id`, found on the root sheet or on any sheet
@@ -185,7 +287,7 @@ impl<'a> Board<'a> {
             if !lib_id_is_valid(to) {
                 return Err(fail("ops_bad_lib_id", to, format!("Symbol library identifier {to} is not valid.")));
             }
-            if self.schematic()?.symbols.iter().all(|s| &s.lib_id != from) {
+            if !self.hierarchy_screens().iter().filter_map(|f| sheet_list::screen_of_file(&self.design, f)).any(|sch| sch.symbols.iter().any(|s| &s.lib_id == from)) {
                 return Err(fail("ops_unknown_lib_id", from, "no placed symbol uses this library identifier"));
             }
             let datasheet = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(to)).map(|s| s.datasheet.clone()).or_else(|| self.model.symbol_of(to).map(|s| s.datasheet.clone()));
@@ -196,25 +298,12 @@ impl<'a> Board<'a> {
                 None => return Err(fail("ops_unknown_symbol", to, format!("Error loading symbol {}: the library has no such symbol.", item_name(to)))),
             }
         }
-        let sch = self.schematic_mut()?;
-        for (from, to) in changes {
-            if from == to {
-                continue;
-            }
-            let (old_name, new_name) = (item_name(from).to_string(), item_name(to).to_string());
-            for s in sch.symbols.iter_mut().filter(|s| &s.lib_id == from) {
-                if s.value == old_name {
-                    s.value = new_name.clone();
-                }
-                if update_fields {
-                    if let Some(datasheet) = resolved.get(to) {
-                        s.value = new_name.clone();
-                        s.footprint = String::new();
-                        s.datasheet = datasheet.clone();
-                    }
-                }
-                s.lib_id = to.clone();
-            }
+        // every screen of the hierarchy (`DIALOG_EDIT_SYMBOLS_LIBID::initDlg`: `Hierarchy().GetSymbols( references, SYMBOL_FILTER_ALL, true )`, a row per symbol and
+        // sheet path; `TransferDataFromWindow` relinks each candidate's symbol, which a screen shown twice holds once; UI-LEFT S9)
+        self.schematic()?;
+        for file in self.hierarchy_screens() {
+            let Some(sch) = sheet_list::screen_of_file_mut(&mut self.design, &file) else { continue };
+            relink(sch, changes, &resolved, update_fields);
         }
         Ok(())
     }

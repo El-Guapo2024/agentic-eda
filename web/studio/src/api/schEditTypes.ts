@@ -217,6 +217,8 @@ export type SchEditCmd =
   | { verb: "set_pin_alternates"; id: string; unit?: number; alternates: Record<string, string>; other_units?: boolean }
   /** The unit a placed symbol draws (`SCH_EDIT_FRAME::SelectUnit`); `swap` gives a placement of that unit on the sheet the unit this one had. */
   | { verb: "set_symbol_unit"; id: string; unit?: number; new_unit: number; swap?: boolean }
+  /** `SCH_EDIT_TOOL::SetAttribute` as a toggle: the server collects the reference's units on every sheet path and works out `new_state` (UI-LEFT S9). */
+  | { verb: "toggle_symbol_attribute"; ids: string[]; attribute: "dnp" | "exclude_from_bom" | "exclude_from_board" | "exclude_from_sim" }
   /** A field's font face ("Default Font", "KiCad Font" or a family) and colour (every channel 0: the layer's) -- Symbol Properties' Font and Color columns. */
   | { verb: "set_field_looks"; ids: string[]; font?: string; color?: SchColor }
   /** Symbol Properties of a power symbol: its Footprint, Datasheet, the Attributes box and its user fields (the whole list); a key left out is unchanged. */

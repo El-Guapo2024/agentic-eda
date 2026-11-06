@@ -747,9 +747,15 @@ fn handle(
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
+        ("GET", "/api/sch/symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::symbol_rows(dir).to_string().as_bytes()),
         ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir, &query_value(target, "net")).to_string().as_bytes()),
         // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
         ("POST", "/api/sch/export_symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::export_symbols(dir, &body).to_string().as_bytes()),
+        // Rescue Symbols (`crate::rescue_api`): the candidates the rescuer finds, and the rescue library written with the command that relinks the symbols.
+        ("GET", "/api/sch/rescue") => respond(stream, "200 OK", "application/json", crate::rescue_api::candidates(dir).to_string().as_bytes()),
+        ("POST", "/api/sch/rescue") => respond(stream, "200 OK", "application/json", crate::rescue_api::rescue(dir, &body).to_string().as_bytes()),
+        // Remap Legacy Library Symbols (`DIALOG_SYMBOL_REMAP::OnRemapSymbols`): the backup, the project table made again, the command that names each symbol's library.
+        ("POST", "/api/sch/remap") => respond(stream, "200 OK", "application/json", crate::rescue_api::remap(dir).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -2017,11 +2023,14 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             // A screen two sheets show: the reference this placement gives the symbol (`SCH_SYMBOL::GetRef( &GetCurrentSheet() )`), which its Reference
             // field shows and its pins' nets are filed under; the symbol's `id` stays what the verbs name it by.
             let reference = eda_model::sheet_list::reference_under(&sch, s, &sheet_ids);
+            // and the unit it draws there (`GetUnitSelection( &GetCurrentSheet() )`, `SchExtras::path_units`): its pins and its body are that unit's
+            // (UI-LEFT S9); `unit` stays the symbol's own, which the verbs tell it apart by
+            let path_unit = eda_model::sheet_list::unit_under(&sch, s, &sheet_ids);
             let pins: Vec<Value> = part
                 .map(|p| {
                     p.pins
                         .iter()
-                        .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
+                        .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == path_unit))
                         .map(|pin| {
                             let mut j = json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": net_of_pin(&pin_net, &reference, &pin.number) });
                             // the alternate the pin keeps (`SCH_PIN::SetAlt`), its shown name (`GetShownName`), for the Net Navigator's line (r7 A7-M1)
@@ -2102,6 +2111,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             // The Value and Footprint the painter writes for a symbol that has no `fields` (a sheet read from a KiCad file), as `${NAME}` makes them read.
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
                 symbol["shown"] = shown;
+            }
+            if path_unit != s.unit {
+                symbol["path_unit"] = json!(path_unit);
             }
             // Its records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SchExtras::symbol_variants`), which the studio lays over the
             // symbol while one is the current variant: by name, each flag it sets and each field text.
@@ -2260,7 +2272,17 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(sh) = &shown {
                 sh.annotate_power_fields(p, &mut fields);
             }
-            let mut v = json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": fields, "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
+            // the reference this placement gives it, as for a symbol (`GetRef( &GetCurrentSheet() )`: a power symbol has one per sheet path, UI-LEFT S9)
+            let reference = eda_model::sheet_list::power_reference_under(&sch, p, &sheet_ids);
+            if reference != p.id {
+                for f in fields.iter_mut().filter(|f| f["name"] == "Reference") {
+                    f["text"] = json!(reference);
+                    if f.get("shown").is_some() {
+                        f["shown"] = json!(reference);
+                    }
+                }
+            }
+            let mut v = json!({ "id": p.id, "reference": reference, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": fields, "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) });
             // what its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`): its Footprint, Datasheet, flags and user fields
             if let Some(props) = sch.extras.power_props.get(&p.id) {
                 v["props"] = json!(props);
