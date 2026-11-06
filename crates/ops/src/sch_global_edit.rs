@@ -502,11 +502,12 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
         }
     }
     let places_set = spec.text_size_nm.is_some() || spec.h_align.is_some() || spec.v_align.is_some() || spec.italic.is_some() || spec.bold.is_some() || spec.visible.is_some() || spec.show_field_names.is_some();
+    // one snapshot for every owner: an owner's placements are its own `field_layout` entry, which no other owner's edit touches
+    let snapshot = (places_set && !by_owner.is_empty()).then(|| sch.clone());
     for (key, fields) in &by_owner {
-        if places_set {
-            let snapshot = sch.clone();
-            if let Some(ctx) = OwnerCtx::new(&snapshot, model, key) {
-                let before = ctx.current(&snapshot);
+        if let Some(snapshot) = &snapshot {
+            if let Some(ctx) = OwnerCtx::new(snapshot, model, key) {
+                let before = ctx.current(snapshot);
                 let mut now = before.clone();
                 for (name, flip_h, flip_v) in fields {
                     if let Some(i) = ctx.specs.iter().position(|s| s.name == *name) {
