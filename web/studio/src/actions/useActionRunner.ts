@@ -2515,7 +2515,7 @@ export function useActionRunner() {
         "eeschema.InteractiveEdit.repeatDrawItem",
         schematicOnly(() => {
           if (!sch || state.schRepeat.length === 0) return;
-          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start), sch.page_number ?? 1)) });
+          const cmds = repeatCmds(state.schRepeat, { offsetNm: [state.prefs.schRepeatOffsetXMils * 25_400, state.prefs.schRepeatOffsetYMils * 25_400], labelIncrement: state.prefs.schRepeatLabelIncrement, cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start), sch.page_number ?? 1)) });
           if (cmds.length > 0) void api.cmdBatch(cmds);
         })
       );

@@ -454,6 +454,8 @@ export function Canvas() {
       // The ratsnest lines `RATSNEST_VIEW_ITEM::ViewDraw` would draw: the global switch, hidden nets, the Local Ratsnest tool's pads and the visible-layers mode.
       showRatsnest: state.showRatsnest || state.bcx.localRatsnestPads.length > 0,
       ratsnestCurved: state.ratsnestCurved,
+      ratsnestThicknessPx: state.prefs.ratsnestThicknessPx,
+      showCourtyardCollisions: state.prefs.showCourtyardCollisions,
       ratsnestEdges: state.ratsnest
         ? displayedRatsnest(state.ratsnest.edges, {
             showGlobal: state.showRatsnest,
@@ -533,7 +535,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
