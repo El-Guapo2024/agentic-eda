@@ -747,10 +747,12 @@ export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
  * route session does (the walkaround/shove/mark-obstacles mode, Shove vias, the optimizer effort, ...). Omit to keep the
  * backend's own defaults. `freeAngle` is `PNS::DM_FREE_ANGLE` (`G`, `pcbnew.InteractiveRouter.DragFreeAngle`):
  * the drag then only marks obstacles whatever the mode is (`DRAGGER::Drag`). `dragLocked` is "Drag Anyway" to a locked item
- * (`ROUTER_TOOL::performDragging`'s dialog): without it the backend refuses one, with `locked: true` in the reply. */
-export function routeDragStart(x: Nm, y: Nm, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean): Promise<DragPreview> {
+ * (`ROUTER_TOOL::performDragging`'s dialog): without it the backend refuses one, with `locked: true` in the reply. `item` is the selected track or via
+ * (`ROUTER_TOOL::InlineDrag` drags the selection, UI-LEFT-2 RR2): the router drags that one, its start snapped onto it (`snapToItem`, the reply's `start`), never
+ * an item found again at the point; without it the item under the point is taken. */
+export function routeDragStart(x: Nm, y: Nm, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean, item?: string): Promise<DragPreview> {
   // The backend reads whole nanometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, group: routerEnteredGroup ?? undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined, item: item || undefined, group: routerEnteredGroup ?? undefined });
 }
 
 /** `ROUTER::StartDragging( aP, ITEM_SET )` of a selection (`ROUTER_TOOL::InlineDrag`): `footprints` is `COMPONENT_DRAGGER` -- the footprints move, the tracks on

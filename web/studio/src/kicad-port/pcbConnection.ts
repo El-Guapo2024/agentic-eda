@@ -12,17 +12,22 @@
 // So the command does not need a selection: with no footprint and no connected item (track, via, pad, zone) selected it clears the selection and takes the connected
 // item under the cursor (`selectCursor( true, .. )`; `connectedItemFilter` drops every item that is not `BOARD_CONNECTED_ITEM`), then expands from it. A pad is a start
 // item like a track (`BOARD_CONNECTED_ITEM::ClassOf`), a footprint stands for all its pads. With graphic lines selected (and nothing connected) the lines they
-// meet end to end are followed (`selectAllConnectedShapes`, UI-LEFT P22). The selection filter (`itemPassesFilter( item, true )`) is the caller's `passes`.
+// meet end to end are followed (`selectAllConnectedShapes`, UI-LEFT P22). A graphic shape on copper is a connected item (`PCB_SHAPE::IsConnected`: "Only board-level
+// copper shapes are connectable"): it counts, starts and is walked like a track, by its connection points (UI-LEFT-2 PP19). The selection filter
+// (`itemPassesFilter( item, true )`) is the caller's `passes`.
 //
 // Pure: no store, no DOM. Unit-tested in pcbConnection.test.ts.
 import type { BoardState, Shape } from "../api/types";
-import { selectAllConnectedTracks, type ConnPad, type ConnSeg, type ConnStart, type ConnVia, type ConnWorld, type StopCondition } from "./expandConnection";
+import { selectAllConnectedTracks, type ConnPad, type ConnSeg, type ConnShape, type ConnStart, type ConnVia, type ConnWorld, type Pt, type StopCondition } from "./expandConnection";
+import { fillOf } from "./shapeFill";
 import { itemKind, padIds, shapeById } from "./pcbItems";
 
 /** What `selectPoint` found under the cursor, best first (`pickSelectionCandidates`). */
 export interface HitCandidate {
   kind: string;
   id: string;
+  /** The item's layer (a shape's tells a copper one). */
+  layer?: string | null;
 }
 
 /** The kinds of selected item that start a connection: footprints (their pads), tracks, vias, zones and pads (`BOARD_CONNECTED_ITEM`). */
@@ -37,14 +42,65 @@ export function connectedStartCount(board: BoardState, selection: Iterable<strin
   let n = 0;
   for (const id of selection) {
     const kind = itemKind(board, id);
-    if (kind != null && (STARTS.has(kind) || (kind === "group" && generators.has(id)))) n++;
+    if (kind != null && (STARTS.has(kind) || (kind === "group" && generators.has(id)) || (kind === "shape" && isCopperShape(shapeById(board, id))))) n++;
   }
   return n;
 }
 
-/** `connectedItemFilter`: the first thing under the cursor that is a connected item -- a pad, a track or a via (a zone has no copper path to expand along here). */
+/** `PCB_SHAPE::IsConnected`: a board graphic shape on a copper layer. */
+function isCopperShape(s: Shape | null | undefined): boolean {
+  return s != null && s.layer.endsWith(".Cu");
+}
+
+/**
+ * `connectedItemFilter`: the first thing under the cursor that is a connected item -- a pad, a track, a via or a copper graphic shape (a zone has no copper path
+ * to expand along here).
+ */
 export function connectedItemAt(candidates: readonly HitCandidate[]): string | null {
-  return candidates.find((c) => c.kind === "track" || c.kind === "via" || c.kind === "pad")?.id ?? null;
+  return candidates.find((c) => c.kind === "track" || c.kind === "via" || c.kind === "pad" || (c.kind === "shape" && (c.layer ?? "").endsWith(".Cu")))?.id ?? null;
+}
+
+/**
+ * `PCB_SHAPE::GetConnectionPoints`: a filled shape its centre ("For filled shapes, we may as well use a centroid": `GetCenter()`, a polygon's or a rectangle's
+ * box centre, a circle's centre); a circle its four quadrant points (`GetCircleKeyPoints( circle, false )`); an arc its middle and ends; a line or a curve its
+ * ends; a polygon its points; a rectangle its corners.
+ */
+export function shapeConnectionPoints(s: Shape): Pt[] {
+  const boxCentre = (pts: readonly (readonly [number, number])[]): Pt => {
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+  };
+  if ((s.kind === "rect" || s.kind === "circle" || s.kind === "polygon") && fillOf(s) === "solid") {
+    if (s.kind === "circle") return [s.center];
+    return [s.kind === "rect" ? boxCentre([s.start, s.end]) : boxCentre(s.pts)];
+  }
+  switch (s.kind) {
+    case "circle": {
+      const r = Math.round(Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]));
+      const [cx, cy] = s.center;
+      return [
+        [cx, cy + r],
+        [cx + r, cy],
+        [cx, cy - r],
+        [cx - r, cy],
+      ];
+    }
+    case "arc":
+      return [s.mid, s.start, s.end];
+    case "segment":
+    case "bezier":
+      return [s.start, s.end];
+    case "polygon":
+      return s.pts.map((p) => [p[0], p[1]] as Pt);
+    case "rect":
+      return [
+        [s.start[0], s.start[1]],
+        [s.end[0], s.start[1]],
+        [s.end[0], s.end[1]],
+        [s.start[0], s.end[1]],
+      ];
+  }
 }
 
 /**
@@ -126,7 +182,9 @@ export function connectionWorld(board: BoardState): ConnWorld {
       pads.push({ id: ids[i]!, at: [pad.px ?? pad.x, pad.py ?? pad.y], layers });
     });
   }
-  return { segs, vias, pads };
+  // the copper graphic shapes (`shapeMap`)
+  const shapes: ConnShape[] = (board.drawings?.shapes ?? []).filter(isCopperShape).map((sh) => ({ id: sh.id, layer: sh.layer, points: shapeConnectionPoints(sh) }));
+  return { segs, vias, pads, shapes };
 }
 
 /**
@@ -145,6 +203,7 @@ export function expandedSelection(board: BoardState, selection: ReadonlySet<stri
     for (const id of ids) {
       const kind = itemKind(board, id);
       if (kind === "track" || kind === "via" || kind === "pad") out.push({ kind, id });
+      else if (kind === "shape" && isCopperShape(shapeById(board, id))) out.push({ kind: "shape", id });
       else if (kind === "part") for (const pid of padIds(board.parts.find((q) => q.ref === id) ?? { ref: id })) out.push({ kind: "pad", id: pid });
       else {
         const g = generators.find((q) => q.id === id);
@@ -155,9 +214,9 @@ export function expandedSelection(board: BoardState, selection: ReadonlySet<stri
   };
   if (startsOf(refs).length === 0) return null;
   for (const stage of ["junction", "pad", "never"] as StopCondition[]) {
-    const selected = { trackIds: new Set<string>(), viaIds: new Set<string>() };
+    const selected = { trackIds: new Set<string>(), viaIds: new Set<string>(), shapeIds: new Set<string>() };
     selectAllConnectedTracks(world, startsOf(refs), stage, selected, passes);
-    for (const id of [...selected.trackIds, ...selected.viaIds]) refs.add(generatorOf.get(id) ?? id);
+    for (const id of [...selected.trackIds, ...selected.viaIds, ...selected.shapeIds]) refs.add(generatorOf.get(id) ?? id);
     for (const id of [...refs]) if (generatorOf.has(id)) refs.delete(id);
     if (refs.size > initialCount) break;
   }
