@@ -120,3 +120,27 @@ fn an_editor_placement_keeps_its_point_on_any_grid() {
     assert_eq!(pose(&dir, "U2").unwrap().0, Point { x: mm(10.05), y: Nm::new(10_160_000) });
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_carried_placement_is_judged_at_its_drop_against_the_design_it_began_from() {
+    // Place Footprint makes its footprint where the pointer is and the Move tool carries it: with Strict on, making it on top of U1 is not refused (it is on the
+    // cursor, not put down); a drop off the board is refused against the board before the footprint was made; a drop in the clear is the one step.
+    use super::carry::Carry;
+    use super::{step_carrying, Strictness};
+    let dir = scratch("carry_judged_at_drop");
+    setup(&dir);
+    let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
+    let make = Cmd::PlaceFootprint { footprint: "2PAD".into(), at: Point { x: mm(5.0), y: mm(5.0) }, reference: String::new(), value: String::new(), definition: None };
+    step_carrying(&dir, make, Strictness::Gates, "ui", Some(Carry::Begin)).expect("making the carried footprint over U1 is not judged on its own");
+    let made = load(&dir).unwrap().1.drawings.unwrap().board_parts.last().unwrap().reference.clone();
+    let off = Cmd::MoveItems { ids: vec![made.clone()], dx: mm(30.0), dy: Nm::ZERO };
+    let e = step_carrying(&dir, off, Strictness::Gates, "ui", Some(Carry::Commit)).unwrap_err();
+    assert_eq!(e[0].check, "board_worse", "a drop off the board adds a failure to the board the step began from: {e:?}");
+    // the refused drop settled nothing: the footprint is still carried, and a drop in the clear ends the step
+    let clear = Cmd::MoveItems { ids: vec![made.clone()], dx: mm(5.0), dy: mm(10.0) };
+    step_carrying(&dir, clear, Strictness::Gates, "ui", Some(Carry::Commit)).expect("a drop in the clear");
+    assert_eq!(pose(&dir, &made).map(|p| p.0), Some(Point { x: mm(10.0), y: mm(15.0) }));
+    undo(&dir, "ui", Some(Domain::Pcb)).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before, "one undo step takes the footprint and its drop back");
+    let _ = std::fs::remove_dir_all(&dir);
+}

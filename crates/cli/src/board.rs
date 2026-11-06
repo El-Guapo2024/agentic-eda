@@ -1217,7 +1217,12 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
     // The autoplacer's placement is judged by the placement gates whatever the Strict switch says (`Cmd::always_judged`, UI-LEFT P19).
     let strictness = if cmd.always_judged() && strictness == Strictness::Off { Strictness::Gates } else { strictness };
-    let r = step_quiet(dir, &cmd, strictness);
+    // A carried placement is one edit (KiCad's one commit, pushed at the drop): the command that makes the items (`begin`) is not judged on its own -- they are on
+    // the cursor, not where they will be put -- and the drop that ends it (`commit`) is judged against the design the step began from. (UI-LEFT P19: Place
+    // Footprint makes its footprint where the pointer is, over another part as often as not, and Strict refused it before it could be carried anywhere.)
+    let strictness = if carry == Some(carry::Carry::Begin) && !cmd.always_judged() { Strictness::Off } else { strictness };
+    let baseline = if carry == Some(carry::Carry::Commit) && strictness != Strictness::Off { carry::pending_design(dir) } else { None };
+    let r = step_quiet(dir, &cmd, strictness, baseline);
     match &r {
         Ok((summary, tag)) => {
             if let Some(before) = before.filter(|_| !outside_history(&cmd)) {
@@ -1560,7 +1565,7 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
 /// [`step_carrying`]'s work: the command applied, judged and saved. Answers the summary and the history tag of the step -- that of the command as it was applied
 /// (the studio's server may have added to it, e.g. the exchange of a footprint a symbol's Footprint field names), so a step that changed both editors' halves of the
 /// design is undone as one.
-fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, &'static str), Vec<CheckResult>> {
+fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<eda_model::ir::Design>) -> Result<(String, &'static str), Vec<CheckResult>> {
     let (meta, mut design, mut model) = load(dir)?;
     // A symbol or footprint out of a library of the library tables goes in with its definition (`crate::library_place`).
     let with_definitions = crate::library_place::with_installed_definitions(dir, cmd, &design, &model);
@@ -1612,6 +1617,14 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     }
     let before = all_failures(&board, &model);
     let was = board.fork();
+    // What the gates compare the result with: the board as it is, or -- for the drop of a carried placement -- the design its step began from, with the model
+    // that design makes (`step_carrying`'s `baseline`).
+    let baseline_model = baseline.as_ref().and_then(|d| build_model(dir, &meta, d).ok());
+    let baseline_board = baseline.zip(baseline_model.as_ref()).map(|(d, m)| (Board::new(d, m, meta.snap_nm, meta.spacing_nm), m));
+    let (judged_before, judged_was, judged_was_model): (usize, &Board, &ConstraintModel) = match &baseline_board {
+        Some((b, m)) => (all_failures(b, m), b, m),
+        None => (before, &was, &model),
+    };
     // What the command clears is judged against the board it found: a move of copper alone leaves the routing be, and so does
     // one that takes a footprint nothing was routed to; one that takes a footprint with copper on its pads does not
     // (`Cmd::clears_routing_in`).
@@ -1653,11 +1666,12 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
     // An import (File > Import > Non-KiCad ...) is not a move: the file is what it is, and the gates do not refuse it.
-    if strictness != Strictness::Off && after > before && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() && !cmd.imports_session() {
+    if strictness != Strictness::Off && after > judged_before && !cmd.replaces_board() && !cmd.replaces_schematic() && !cmd.adds_only_rule_areas() && !cmd.imports_session() {
+        let before = judged_before;
         let new: Vec<String> = all_checks(&board, judged)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
-            .filter(|c| !all_checks(&was, &model).iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
+            .filter(|c| !all_checks(judged_was, judged_was_model).iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
             .map(|c| format!("{} @ {}", c.check, c.location.clone().unwrap_or_default()))
             .collect();
         return Err(fail(
