@@ -29,7 +29,11 @@
   await waitFor("every model to settle", () => view().allModelsMs !== null);
   const v = view();
   check("the viewer draws the live scene", v.source === "live", v.source);
-  check("every model that was asked for is in", v.models.requested > 0 && v.models.ready === v.models.requested, v.models);
+  // A model whose file this machine's KiCad library does not have is the machine's, not the viewer's: the server answers "missing" for it (404, "no 3D model file for
+  // ..."). Those are skipped, with their names and the server's reason printed; every other model must be in, and none may have failed.
+  const missing = v.detail.filter((d) => d.status === "missing");
+  if (missing.length > 0) results.push({ name: `skipped ${missing.length} model(s) this machine's KiCad library lacks`, ok: true, notes: missing.map((d) => `${d.name}: ${d.error ?? "missing"}`) });
+  check("every model that was asked for is in (but those the machine lacks)", v.models.requested > 0 && v.models.failed === 0 && v.models.ready > 0 && v.models.ready === v.models.requested - missing.length, v.models);
   check("every part with models is drawn as its models", v.parts.total > 0 && v.parts.asModels + v.parts.asBoxes === v.parts.total && v.parts.asModels > 0, v.parts);
   check("the first real model came in seconds, not minutes", v.firstModelMs !== null && v.firstModelMs < 30000, v.firstModelMs);
   const state0 = __eda.state();

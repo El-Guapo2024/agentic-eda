@@ -531,12 +531,9 @@ Notes:
   - The Render Options and While Moving preferences (not offered).
   - The viewports are not written into the derived `.kicad_pro`.
 - **D3 [FM] Layer tree.** **done (task-u3-3d)**: the Values, Footprint Text (KiCad's meta-control) and Off-board Silkscreen rows (the silkscreen clipped to the board while it is off), and the 3D Navigator row. Left: the silkscreen is not clipped at the holes or the mask. PARITY-3d §5.
-- **D4 [FM] Models.**
-  - No X3D or IGES, and no Extruded 3D Body.
-  - Migrate 3D Models doesn't run at load.
-  - KiCad 5 path aliases aren't used.
-  - A bottom-side footprint's tab shows top-side numbers.
-  - M. GAPS 30; PARITY-3d §6; PARITY-pcb §31.
+- **D4 [FM] Models.** **done (task-u3-3d)**: X3D, IGES and .wrz models through kicad-cli's conversion; the Extruded 3D Body read, written, drawn and set in the board's 3D Models tab; Migrate 3D Models when the board opens, with KiCad's notice; KiCad 5 aliases (`${KISYS3DMOD}`, `ALIAS:file`, a `3Dresolver.cfg` migrated into path variables); a bottom-side footprint's tab shows the file's numbers (PARITY-3d §6, GAPS 30). Left:
+  - The body's Export..., the body in the tab's preview and in the Footprint Editor's dialog.
+  - Migrate's folder picker over the whole disk.
 - **D5 [KO] Raytracing.** It is out of scope, and a part with no model shows its F.Fab box. XL. PARITY-3d §2, §6.
 
 ## Import
