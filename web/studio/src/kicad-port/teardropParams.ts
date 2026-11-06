@@ -19,10 +19,14 @@ export const DEFAULT_TEARDROP_PARAMS: TeardropParams = {
   filter_ratio: 0.9,
 };
 
-/** `TeardropParams::of_settings`: what Board Setup's block gives an item without parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`), for its kind. */
+/**
+ * `TeardropParams::of_settings`: what Board Setup's block gives an item without parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`), for its kind --
+ * one segment, straight edges, as the studio's teardrops are made (`eda_connectivity::teardrop`: neither is ported).
+ */
 export function paramsOfSettings(s: Partial<TeardropSettings> | undefined, targeted: boolean): TeardropParams {
   return {
     ...DEFAULT_TEARDROP_PARAMS,
+    allow_two_segments: false,
     enabled: !!s?.enabled && targeted,
     best_length_ratio: s?.best_length_ratio ?? DEFAULT_TEARDROP_PARAMS.best_length_ratio,
     best_width_ratio: s?.best_width_ratio ?? DEFAULT_TEARDROP_PARAMS.best_width_ratio,
@@ -39,9 +43,10 @@ export function viaTeardrops(board: BoardState, via: { teardrops?: TeardropParam
 }
 
 /** The parameters in effect on a pad: its own, else Board Setup's (`target_pth_pads` for a plated hole, `target_smd_pads` for the rest). */
-export function padTeardrops(board: BoardState, pad: { teardrops?: TeardropParams | null; kind?: string }): TeardropParams {
+export function padTeardrops(board: BoardState, pad: { teardrops?: TeardropParams | null; kind?: string; th?: boolean }): TeardropParams {
   const s = board.routing?.teardrop_settings;
-  const targeted = pad.kind === "through_hole" ? (s?.target_pth_pads ?? true) : (s?.target_smd_pads ?? true);
+  const pth = (pad.kind ?? (pad.th ? "through_hole" : "smd")) === "through_hole";
+  const targeted = pth ? (s?.target_pth_pads ?? true) : (s?.target_smd_pads ?? true);
   return pad.teardrops ?? paramsOfSettings(s, targeted);
 }
 

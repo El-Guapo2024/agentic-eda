@@ -14,6 +14,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import { stitchPosition } from "./viaStitch";
+import type { TeardropParams } from "../api/types";
 import type { BoardState, BoardTable, BoardTableCell, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadConnection, PadShapeName, Part, PlacementArea, PlacementSourceType, PointXY, Shape, Track, Nm, UnconnectedLayers, Via, ViaProps, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
@@ -33,6 +34,7 @@ import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTablePr
 import { PLACEMENT_SOURCE_CHOICES } from "./multichannel";
 import { zoneEditCmd as zoneCmd } from "./zoneCmd";
 import { padZoneForm, setPadZoneCmd, type PadZoneForm } from "./padZone";
+import { padTeardrops, viaTeardrops } from "./teardropParams";
 import { LINE_STYLE_CHOICES } from "./strokeDash";
 import {
   BACKDRILL_MODE_CHOICES,
@@ -402,6 +404,8 @@ const PAD_PROP_CHOICES: Choice[] = [
   { label: "Mechanical pad", value: "mechanical" },
   { label: "Press-fit pad", value: "pressfit" },
 ];
+/** "Pin Type"'s choices (`GetCanonicalElectricalTypeName` of every `ELECTRICAL_PINTYPE`), and none. */
+const PIN_TYPE_CHOICES: Choice[] = [{ label: "", value: "" }, ...["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"].map((t) => ({ label: t, value: t }))];
 /** `ENUM_MAP<UNCONNECTED_LAYER_MODE>` (pad.cpp), the values `PadStack::unconnected` names them by. */
 const UNCONNECTED_CHOICES: Choice[] = [
   { label: "All copper layers", value: "keep_all" },
@@ -643,35 +647,42 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     set: (i, v) => (netOf(i) === String(v) || i.pad ? [] : [{ op: "set_item_net", ids: [i.id], net: String(v) }]),
   });
 
-  // "Teardrops" (`BOARD_CONNECTED_ITEM_DESC`): a pad's and a via's own teardrop parameters, on a board whose teardrops are not legacy ones (`supportsTeardrops`:
-  // `!GetBoard()->LegacyTeardrops()` and a pad or a via; "Prefer Zone Connections" a pad only). The studio's teardrops are zones it makes from Board Setup's one set of
-  // parameters for every anchor (`AddAllTeardrops`), and the board file is written `(legacy_teardrops yes)` while it has any -- so, as in KiCad on that file, the
-  // rows are gone once a board has teardrops; before, they show what Board Setup would give the item, read-only (each item's own `(teardrops ..)` of a board file is
-  // kept as written, unread: GAPS 8).
+  // "Teardrops" (`BOARD_CONNECTED_ITEM_DESC`): a pad's and a via's own teardrop parameters (`GetTeardropParams()`), each row `SetTeardrop..` of one of them --
+  // `set_teardrop_params` with the item's parameters in effect and the one change (UI-LEFT P3). An item without parameters of its own shows what Board Setup's
+  // block gives it (kicad-port/teardropParams.ts); an edit gives it its own. Differs: KiCad hides the rows on a board with legacy teardrops (`supportsTeardrops`);
+  // the studio's derived file says `(legacy_teardrops yes)` only so that kicad-cli keeps the teardrops it was given, and its teardrops are made from these
+  // parameters (Add All Teardrops), so the rows stay.
   const TEARDROPS = "Teardrops";
-  const TD_REASON = "Each pad's and via's own teardrop parameters are not read: Board Setup's Teardrops page serves every anchor (a board file's `(teardrops ..)` is kept as written).";
-  const supportsTeardrops = (i: PcbItem, c: PcbCtx): boolean => (i.type === "PAD" || i.type === "PCB_VIA") && !(c.board.routing?.zones ?? []).some((z) => z.teardrop);
-  const td = (c: PcbCtx): Partial<NonNullable<BoardState["routing"]>["teardrop_settings"]> => c.board.routing?.teardrop_settings ?? {};
-  /** Does Board Setup put teardrops on this anchor: the vias, the plated through-hole pads, the SMD pads. */
-  const tdTargeted = (i: PcbItem, c: PcbCtx): boolean => {
-    const s = td(c);
-    if (!s.enabled) return false;
-    if (i.via) return !!s.target_vias;
-    return i.pad?.th ? !!s.target_pth_pads : !!s.target_smd_pads;
+  const supportsTeardrops = (i: PcbItem): boolean => i.type === "PAD" || i.type === "PCB_VIA";
+  const tdOf = (i: PcbItem, c: PcbCtx): TeardropParams => (i.via ? viaTeardrops(c.board, i.via) : padTeardrops(c.board, i.pad!));
+  const tdRow = <K extends keyof TeardropParams>(name: string, kind: "bool" | "double" | "int", key: K, available: (i: PcbItem) => boolean = supportsTeardrops): void => {
+    add(
+      {
+        owner: "BOARD_CONNECTED_ITEM",
+        name,
+        kind,
+        ...(kind === "int" ? { display: "size" as const } : {}),
+        get: (i, c) => tdOf(i, c)[key] as unknown as PropValue,
+        available,
+        set: (i, v, c) => {
+          const now = tdOf(i, c);
+          const value = (kind === "bool" ? v === true || v === "true" : Number(v)) as TeardropParams[K];
+          if (now[key] === value) return [];
+          return [{ op: "set_teardrop_params", ids: [i.id], params: { ...now, [key]: value } }];
+        },
+      },
+      TEARDROPS
+    );
   };
-  const tdRow = (name: string, kind: "bool" | "double" | "int", get: (i: PcbItem, c: PcbCtx) => PropValue, available = supportsTeardrops): void => {
-    add({ owner: "BOARD_CONNECTED_ITEM", name, kind, ...(kind === "int" ? { display: "size" as const } : {}), get, available, readOnlyReason: TD_REASON }, TEARDROPS);
-  };
-  tdRow("Enable Teardrops", "bool", tdTargeted);
-  tdRow("Best Length Ratio", "double", (_i, c) => td(c).best_length_ratio ?? 0.5);
-  tdRow("Max Length", "int", (_i, c) => td(c).max_len_nm ?? 1_000_000);
-  tdRow("Best Width Ratio", "double", (_i, c) => td(c).best_width_ratio ?? 1);
-  tdRow("Max Width", "int", (_i, c) => td(c).max_width_nm ?? 2_000_000);
-  // The studio's teardrops have straight edges and never span two tracks (PARITY-pcb §15).
-  tdRow("Curved Teardrops", "bool", () => false);
-  tdRow("Prefer Zone Connections", "bool", () => true, (i, c) => i.type === "PAD" && supportsTeardrops(i, c));
-  tdRow("Allow Teardrops To Span Two Tracks", "bool", () => false);
-  tdRow("Max Width Ratio", "double", (_i, c) => td(c).width_to_size_filter_ratio ?? 0.9);
+  tdRow("Enable Teardrops", "bool", "enabled");
+  tdRow("Best Length Ratio", "double", "best_length_ratio");
+  tdRow("Max Length", "int", "max_length");
+  tdRow("Best Width Ratio", "double", "best_width_ratio");
+  tdRow("Max Width", "int", "max_width");
+  tdRow("Curved Teardrops", "bool", "curved_edges");
+  tdRow("Prefer Zone Connections", "bool", "prefer_zone_connections", (i) => i.type === "PAD");
+  tdRow("Allow Teardrops To Span Two Tracks", "bool", "allow_two_segments");
+  tdRow("Max Width Ratio", "double", "filter_ratio");
 
   // ------------------------------------------------------------------------------------------------------------------ FOOTPRINT
   pm.inheritsAfter("FOOTPRINT", "BOARD_ITEM");
@@ -909,10 +920,17 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     PAD
   );
   add({ owner: "PAD", name: "Pad Number", kind: "string", get: (i) => i.pad!.num, available: isCopperPad, readOnlyReason: "No verb renumbers one pad on the board (the schematic's pins are matched by number): renumber in the Footprint Editor." }, PAD);
-  // `SetPinFunction`, `SetPinType`: the schematic's pin, as Update PCB from Schematic sets them (`updateComponentPadConnections`) and the board file is written with.
-  const FROM_PIN = "Set from the schematic's pin (Update PCB from Schematic), as the board file is written; not edited on the board.";
-  add({ owner: "PAD", name: "Pin Name", kind: "string", get: (i) => i.pad!.pin_function ?? "", readOnlyReason: FROM_PIN }, PAD);
-  add({ owner: "PAD", name: "Pin Type", kind: "string", get: (i) => i.pad!.pin_type ?? "", readOnlyReason: FROM_PIN }, PAD);
+  // `SetPinFunction`, `SetPinType`: the schematic's pin, as Update PCB from Schematic sets them (`updateComponentPadConnections`) and the board file is written with,
+  // until the board sets its own (the pad's edit, `pin_function` / `pin_type`; UI-LEFT P3).
+  add({ owner: "PAD", name: "Pin Name", kind: "string", get: (i) => i.pad!.pin_function ?? "", set: (i, v) => ((i.pad!.pin_function ?? "") === String(v) ? [] : edit(i, { pin_function: String(v) })) }, PAD);
+  add({
+    owner: "PAD",
+    name: "Pin Type",
+    kind: "enum",
+    choices: () => PIN_TYPE_CHOICES,
+    get: (i) => i.pad!.pin_type ?? "",
+    set: (i, v) => ((i.pad!.pin_type ?? "") === String(v) ? [] : edit(i, { pin_type: String(v) })),
+  }, PAD);
   const sizeRow = (name: "Size X" | "Size Y", axis: 0 | 1): void => {
     add(
       {
@@ -1031,15 +1049,18 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     add({ owner: "PAD", name: `${side} Backdrill Size`, kind: "int", display: "size", optional: true, get: () => "", available: () => false, readOnlyReason: NOT_MODELLED }, BACKDRILL);
     add({ owner: "PAD", name: `${side} Backdrill Must-Cut`, kind: "enum", choices: (_i, c) => layerChoicesOf(c, c.copperLayers), get: () => "", available: () => false, readOnlyReason: NOT_MODELLED }, BACKDRILL);
   }
-  // `ENUM_MAP<PAD_PROP>`: the pad's fabrication property. Not modelled (a board file's `(property pad_prop_..)` is kept as written).
+  // `ENUM_MAP<PAD_PROP>`: the pad's fabrication property (`PAD::SetProperty`), the pad's edit `property` (the file's word, `pad_prop_<value>`).
   add(
     {
       owner: "PAD",
       name: "Fabrication Property",
       kind: "enum",
       choices: () => PAD_PROP_CHOICES,
-      get: () => "none",
-      readOnlyReason: "A pad's fabrication property is not modelled (a board file's `(property ..)` is kept as written, unread).",
+      get: (i) => (i.pad!.property ?? "pad_prop_none").replace(/^pad_prop_/, ""),
+      set: (i, v) => {
+        const now = (i.pad!.property ?? "pad_prop_none").replace(/^pad_prop_/, "");
+        return now === String(v) ? [] : edit(i, { property: `pad_prop_${String(v)}` });
+      },
     },
     PAD
   );
@@ -1059,8 +1080,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     PAD
   );
-  add({ owner: "PAD", name: "Pad To Die Length", kind: "int", display: "size", get: () => 0, available: isCopperPad, readOnlyReason: "A pad's pad-to-die length is not modelled (a board file's `(die_length ..)` is kept as written, unread)." }, PAD);
-  add({ owner: "PAD", name: "Pad To Die Delay", kind: "int", display: "time", get: () => 0, available: isCopperPad, readOnlyReason: "A pad's pad-to-die delay is not modelled (a board file's `(die_delay ..)` is kept as written, unread)." }, PAD);
+  // `SetPadToDieLength`, `SetPadToDieDelay` (attoseconds): the pad's edit; 0 is none.
+  add({ owner: "PAD", name: "Pad To Die Length", kind: "int", display: "size", get: (i) => i.pad!.die_length ?? 0, available: isCopperPad, set: (i, v) => ((i.pad!.die_length ?? 0) === Number(v) ? [] : edit(i, { die_length: Math.round(Number(v)) })) }, PAD);
+  add({ owner: "PAD", name: "Pad To Die Delay", kind: "int", display: "time", get: (i) => i.pad!.die_delay ?? 0, available: isCopperPad, set: (i, v) => ((i.pad!.die_delay ?? 0) === Number(v) ? [] : edit(i, { die_delay: Math.round(Number(v)) })) }, PAD);
 
   // "Overrides": the margins are the pad's edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`: a key left out is the library's), the
   // clearance, the zone connection and the thermal relief are the pad's zone overrides (`set_pad_zone_overrides`, every one of them at once, `null` inherited).

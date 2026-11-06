@@ -164,10 +164,12 @@ impl TeardropParams {
         }
     }
 
-    /// What Board Setup's block gives an anchor that has no parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem` copies the block's sizes and enable).
+    /// What Board Setup's block gives an anchor that has no parameters of its own (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem` copies the block's sizes and enable):
+    /// one segment and straight edges, as the studio's teardrops are made.
     pub fn of_settings(s: &crate::ir::TeardropSettings) -> TeardropParams {
         TeardropParams {
             enabled: s.enabled,
+            allow_two_segments: false,
             best_length_ratio: s.best_length_ratio,
             best_width_ratio: s.best_width_ratio,
             max_length: s.max_len_nm,
