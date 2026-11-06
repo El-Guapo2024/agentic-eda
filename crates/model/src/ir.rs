@@ -3264,6 +3264,10 @@ pub struct FootprintExtra {
     /// library's, its orientation the file's, and it is written as it was read. Additive.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub library_frame: bool,
+    /// The footprint's Extruded 3D Body as its board file has it (`FOOTPRINT::GetExtrudedBody`, the typed `(model (type extruded) ..)`: [`crate::extruded_body`]), its layer
+    /// that of the footprint on the top side. `None` for none (`HasExtrudedBody()` false). The 3D Models tab's own setting is [`crate::fp_edit::FootprintEdit::extruded_body`]. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extruded_body: Option<crate::extruded_body::ExtrudedBody>,
     /// The name the footprint had in the file when it had no library link (`(footprint "D5" ..)`: `LIB_ID::GetLibNickname()` empty, which `LIB_ID::Format` writes as the bare
     /// item name). The writer gives a footprint the `eda` library unless the footprint it writes is this one: a board that came from a KiCad file keeps its footprints as
     /// unlinked as it had them, and kicad-cli's library check (`lib_footprint_issues`) has no `eda` library to report as missing. `None` for a footprint that was linked.
@@ -3460,7 +3464,39 @@ pub struct FootprintLibrarySection {
     /// `name` -- see [`crate::embedded_files`]. A footprint with none has no entry. Additive: absent in an older `design.json` reads as "none".
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub embedded: std::collections::BTreeMap<String, crate::embedded_files::EmbeddedFiles>,
+    /// The footprints the Footprint Editor holds that were loaded from the board, each linked to the instance it came from (`FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard`:
+    /// a clone with `SetLink( aFootprint->m_Uuid )`, UI-LEFT F3) -- see [`BoardFootprintCopy`]. Not entries of the library: they are not listed, published or saved
+    /// into a library; [`FootprintLibrarySection::by_name`] finds them by their key so that every verb of the editor edits one. Additive: absent reads as none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub board_copies: Vec<BoardFootprintCopy>,
 }
+
+/// A board footprint the Footprint Editor is editing (`FOOTPRINT_EDIT_FRAME::IsCurrentFPFromBoard`): its `footprint` is keyed by [`BoardFootprintCopy::key_of`] its
+/// reference (a name no library footprint can have: `<` and `>` are not legal in one, `LIB_ID::isLegalChar`), `reference` is the instance it is linked to (KiCad's
+/// `GetLink()`, the board footprint's uuid; a reference here) and `fpid` the footprint's own `Lib:Name` (`GetFPID()`). "Update Footprint on Board" (Save) puts it back
+/// on that instance only (`SaveFootprintToBoard`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoardFootprintCopy {
+    pub reference: String,
+    pub fpid: String,
+    pub footprint: LibraryFootprint,
+}
+
+impl BoardFootprintCopy {
+    /// The key a board copy of the footprint `reference` is edited under.
+    pub fn key_of(reference: &str) -> String {
+        format!("{BOARD_COPY_PREFIX}{reference}")
+    }
+
+    /// The reference a key of [`Self::key_of`] names, if it is one.
+    pub fn reference_of_key(key: &str) -> Option<&str> {
+        key.strip_prefix(BOARD_COPY_PREFIX)
+    }
+}
+
+/// See [`BoardFootprintCopy`].
+pub const BOARD_COPY_PREFIX: &str = "<board>/";
 
 /// KiCad's `FOOTPRINT_ATTR_T` flags (`pcbnew/footprint.h:83-91`:
 /// `FP_THROUGH_HOLE=0x0001, FP_SMD=0x0002, FP_EXCLUDE_FROM_POS_FILES=0x0004,
@@ -3920,6 +3956,14 @@ pub struct LibraryFootprint {
     /// `design.json` reads as "none" (such a footprint kept them as `kicad.tokens`, which the writer still writes back).
     #[serde(default, skip_serializing_if = "crate::fp_items::FootprintItems::is_empty")]
     pub items: crate::fp_items::FootprintItems,
+    /// Footprint Properties' Clearance Overrides, Private Layers, Net Ties and jumper groups ([`crate::fp_settings`], UI-LEFT F4). Additive: absent reads as none (an older
+    /// `design.json` kept them as `kicad.tokens`, which [`crate::fp_settings::FootprintSettings::absorb_kept`] takes in).
+    #[serde(default, skip_serializing_if = "crate::fp_settings::FootprintSettings::is_empty")]
+    pub settings: crate::fp_settings::FootprintSettings,
+    /// The footprint's Extruded 3D Body (`FOOTPRINT::GetExtrudedBody`, the typed `(model (type extruded) ..)` of its `.kicad_mod`: [`crate::extruded_body`]); `None` for none.
+    /// Additive: an older `design.json` kept the typed model among `kicad.tokens`, which the writer still writes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extruded_body: Option<crate::extruded_body::ExtrudedBody>,
 }
 
 impl Default for LibraryFootprint {
@@ -3948,6 +3992,8 @@ impl Default for LibraryFootprint {
             description_field: None,
             kicad: Default::default(),
             items: Default::default(),
+            settings: Default::default(),
+            extruded_body: None,
         }
     }
 }
@@ -3970,18 +4016,32 @@ impl LibraryFootprint {
     /// at their defaults since `crate::footprint::Footprint` has no
     /// concept of any of them yet.
     pub fn from_engine_footprint(fp: &crate::footprint::Footprint) -> Self {
-        // The footprint's silkscreen, fab drawings and texts come across as the editor's graphics and texts (ids are backfilled by the caller).
-        let (graphics, texts) = fp.art.to_library();
-        LibraryFootprint {
+        // The footprint's silkscreen, fab drawings and texts come across as the editor's graphics and texts, with their looks (line styles, hatches, the texts'
+        // bold, italic, justification, keep-upright and hidden flag) kept by the ids they are given (UI-LEFT F5).
+        let mut out = LibraryFootprint {
             name: fp.name.clone(),
             pads: fp.pads.iter().map(LibraryPad::from_engine_pad).collect(),
-            graphics,
-            texts,
             courtyard: fp.courtyard,
             model: fp.model.clone(),
             models3d: fp.models3d.clone(),
             ..Default::default()
-        }
+        };
+        let mut keep = std::mem::take(&mut out.kicad);
+        let (graphics, texts) = fp.art.to_library_kept(&mut keep, |graphics, texts| {
+            out.graphics = std::mem::take(graphics);
+            out.texts = std::mem::take(texts);
+            // ids for the graphics and texts only: the pads keep theirs (empty until the editor assigns them)
+            let pads = std::mem::take(&mut out.pads);
+            out.assign_missing_ids();
+            out.pads = pads;
+            *graphics = out.graphics.clone();
+            *texts = out.texts.clone();
+            (out.graphics.iter().map(|g| g.id().to_string()).collect(), out.texts.iter().map(|t| t.id.clone()).collect())
+        });
+        out.graphics = graphics;
+        out.texts = texts;
+        out.kicad = keep;
+        out
     }
 
     /// The reverse of `from_engine_footprint`/the basis for exporting a
@@ -4000,7 +4060,7 @@ impl LibraryFootprint {
             model: self.models3d.first().map(|m| m.path.clone()).or_else(|| self.model.clone()),
             courtyard_outlines: vec![],
             models3d: self.models3d.clone(),
-            art: crate::fp_art::FpArt::from_library(&self.graphics, &self.texts),
+            art: crate::fp_art::FpArt::from_library_kept(&self.graphics, &self.texts, &self.kicad),
         }
     }
 
@@ -4071,14 +4131,27 @@ impl LibraryFootprint {
 }
 
 impl FootprintLibrarySection {
+    /// The library's footprint `name`, or the board copy keyed `name` ([`BoardFootprintCopy::key_of`]).
     pub fn by_name(&self, name: &str) -> Option<&LibraryFootprint> {
-        self.footprints.iter().find(|f| f.name == name)
+        self.footprints.iter().find(|f| f.name == name).or_else(|| self.board_copy(name).map(|c| &c.footprint))
     }
     pub fn by_name_mut(&mut self, name: &str) -> Option<&mut LibraryFootprint> {
+        if BoardFootprintCopy::reference_of_key(name).is_some() {
+            return self.board_copies.iter_mut().find(|c| c.footprint.name == name).map(|c| &mut c.footprint);
+        }
         self.footprints.iter_mut().find(|f| f.name == name)
     }
+    /// The board copy keyed `key`.
+    pub fn board_copy(&self, key: &str) -> Option<&BoardFootprintCopy> {
+        BoardFootprintCopy::reference_of_key(key)?;
+        self.board_copies.iter().find(|c| c.footprint.name == key)
+    }
+    pub fn board_copy_mut(&mut self, key: &str) -> Option<&mut BoardFootprintCopy> {
+        BoardFootprintCopy::reference_of_key(key)?;
+        self.board_copies.iter_mut().find(|c| c.footprint.name == key)
+    }
     pub fn assign_missing_ids(&mut self) {
-        for fp in &mut self.footprints {
+        for fp in self.footprints.iter_mut().chain(self.board_copies.iter_mut().map(|c| &mut c.footprint)) {
             fp.assign_missing_ids();
         }
     }

@@ -95,8 +95,13 @@
     const page = await openColors();
     t(prefs().querySelector(".dialog-header span").textContent.trim() === "Preferences - Colors", "the dialog's title names the page");
     const tree = [...prefs().querySelectorAll("[role=treeitem]")].map((e) => e.textContent.trim());
-    // each editor has its Display Options page too (UI-LEFT C2, PANEL_GAL_OPTIONS), the board editor's before its Colors as in KiCad's tree
-    t(tree.join("|") === "Mouse and Touchpad|PCB Editor|Display Options|Colors|Schematic Editor|Display Options|Footprint Editor|Display Options|Symbol Editor|Display Options", `the tree (${tree.join("|")})`);
+    // each editor has its Display Options page too (UI-LEFT C2, PANEL_GAL_OPTIONS), the board editor's before its Colors as in KiCad's tree; the Footprint Editor's
+    // Origins & Axes, Editing Options and Graphics Defaults (UI-LEFT F8); then 3D Viewer > General and > Realtime Rendering (UI-LEFT D2, task-u3-3d)
+    t(
+      tree.join("|") ===
+        "Mouse and Touchpad|PCB Editor|Display Options|Colors|Schematic Editor|Display Options|Footprint Editor|Display Options|Origins & Axes|Editing Options|Graphics Defaults|Symbol Editor|Display Options|3D Viewer|General|Realtime Rendering",
+      `the tree (${tree.join("|")})`
+    );
     const opts = [...themeSelect().options].map((o) => o.textContent);
     t(opts.join("|") === "KiCad Classic (read-only)|KiCad Default (read-only)|KiCad Default|---|New Theme...", `the theme list (${opts.join("|")})`);
     t(themeSelect().value === "user", `the editor's theme is "user" (${themeSelect().value})`);

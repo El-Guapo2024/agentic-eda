@@ -46,8 +46,10 @@ export type FpItemCmd =
   | { verb: "mirror"; footprint: string; ids: string[]; pivot: PointXY; direction: FlipDirectionWire }
   | { verb: "delete"; footprint: string; ids: string[] }
   | { verb: "edit_field"; footprint: string; name: string; text: string; layout: FieldLayoutCmd }
-  | { verb: "set_graphic"; footprint: string; id: string; shape: CmdShape }
-  | { verb: "set_text"; footprint: string; id: string; text: CmdText }
+  /** `look`: the shape dialog's Line style and hatched Fill (UI-LEFT F5); left out, the graphic keeps its own. */
+  | { verb: "set_graphic"; footprint: string; id: string; shape: CmdShape; look?: import("./fpEditorTypes").ShapeLook }
+  /** `look`: a footprint text's bold, italic, vertical justification, width, knockout and keep-upright (UI-LEFT F5); left out, the text keeps its own. */
+  | { verb: "set_text"; footprint: string; id: string; text: CmdText; look?: import("./fpEditorTypes").TextLook }
   | { verb: "add"; footprint: string; item: FpItemWire }
   | { verb: "set"; footprint: string; id: string; item: FpItemWire }
   | { verb: "group"; footprint: string; ids: string[] }

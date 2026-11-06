@@ -112,6 +112,14 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.text", "text");
   // Load footprint from current PCB -- FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard: pick a board footprint by reference (`SelectFootprintFromBoard`).
   m.set("pcbnew.ModuleEditor.loadFootprintFromBoard", fpTab(() => (ctx.boardParts.some((p) => p.footprint) ? ctx.fpDispatch({ type: "SET_LOAD_FROM_BOARD_OPEN", open: true }) : fpToast("The board has no footprint to load."))));
+  // Edit Library Footprint (File menu) -- FOOTPRINT_EDITOR_CONTROL::EditLibraryFootprint: with a footprint loaded from the board, its library footprint (`GetFPID()`) is opened
+  // (`LoadFootprintFromLibrary`); with none, nothing (`wxBell()`). On the board the action opens the selected footprint's library footprint (useActionRunner.ts).
+  const boardEditLibFp = m.get("pcbnew.EditorControl.EditLibFpInFpEditor");
+  m.set("pcbnew.EditorControl.EditLibFpInFpEditor", () => {
+    if (ctx.tab !== "footprint") return boardEditLibFp?.();
+    const link = ctx.fpApi.getState().footprint?.board_link;
+    if (link) void ctx.fpApi.openFootprint(link.fpid);
+  });
   // Insert footprint into PCB -- FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard: updates the parts that name the footprint, or inserts it as a part of its own.
   m.set("pcbnew.ModuleEditor.saveFootprintToBoard", fpTab(() => fpLib.saveFootprintToBoard(fpc, ctx.boardParts, ctx.studioDispatch)));
 

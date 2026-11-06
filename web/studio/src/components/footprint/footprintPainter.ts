@@ -12,6 +12,8 @@
 // site for no real sharing of logic, only of a few primitives. Those few
 // (the grid, hairline width compensation, circumcircle-through-3-points
 // for an arc, KiCad's own stroke font) *are* reused, imported directly.
+import { isHiddenText, textLookOf } from "../../kicad-port/fpKeep";
+import type { TextLook } from "../../api/fpEditorTypes";
 import type { ChamferCorners, CmdShape, CmdText, LibraryKeep, LibraryPad, Nm, Shape } from "../../api/types";
 import { dashPieces, isDashStyle } from "../../kicad-port/strokeDash";
 import type { ViewTransform } from "../../kicad-port/view";
@@ -360,11 +362,20 @@ function cmdShapeAsShape(s: CmdShape): Shape {
   }
 }
 
-function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean, sketch = false) {
+function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean, sketch = false, look?: TextLook) {
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
   const angleRad = (-t.angle / 1000) * (Math.PI / 180);
+  // The anchor is where the text box is centred (or its top or bottom edge sits, the kept vertical justification, UI-LEFT F5); the font draws from the baseline,
+  // as the board's field painter places it (painter.ts `drawFields`).
+  const sizeNm = Math.max(t.size_nm, hairlineNm(view, 8));
+  const valign = look?.valign ?? 1;
+  const down = valign > 0 ? 0 : valign < 0 ? 0.72 * sizeNm : 0.36 * sizeNm;
+  const x = look ? t.at.x - down * Math.sin(angleRad) : t.at.x;
+  const y = look ? t.at.y + down * Math.cos(angleRad) : t.at.y;
   // Sketch Text Items (`m_DisplayTextFill` off): the text in line mode, a pixel wide. A `${REFERENCE}` shows as written: the editor's board is a footprint holder (kicad-port/fpItems.ts).
-  drawStrokeText(ctx, t.content, t.at.x, t.at.y, { sizeNm: Math.max(t.size_nm, hairlineNm(view, 8)), thicknessNm: sketch ? hairlineNm(view, 1) : t.stroke_width, justify: t.justify, angleRad, mirror: t.mirror, color });
+  // Bold is drawn with KiCad's bold pen (`GetPenSizeForBold`: a fifth of the width) when it is thicker than the text's own.
+  const pen = look?.bold ? Math.max(t.stroke_width, Math.round((look.width_nm ?? t.size_nm) / 5)) : t.stroke_width;
+  drawStrokeText(ctx, t.content, x, y, { sizeNm, thicknessNm: sketch ? hairlineNm(view, 1) : pen, justify: t.justify, angleRad, mirror: t.mirror, italic: !!look?.italic, color });
 }
 
 /** Rubber-band preview for the graphics tool currently in progress (click-to-add-points, same convention the PCB tab's own `drawInProgress` uses -- including drawing it in the selection color regardless of target layer). */
@@ -511,11 +522,13 @@ export function paintFootprint(
   if (objectOn(visible, "footprint_text")) {
     for (const t of footprint.texts) {
       if (!layerIsVisible(visible, t.layer) || !fpTextShown(visible, t.content)) continue;
+      // a text read hidden is not drawn (`PCB_TEXT::ViewGetLOD`: `!IsVisible()`, UI-LEFT F5)
+      if (isHiddenText(footprint, t.id)) continue;
       const mv = moved(t.id);
       ctx.save();
       ctx.globalAlpha *= contrastAlpha(opts, t.layer) * opacity(t.layer);
       if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-      drawText(ctx, view, t, opts.selection.has(t.id ?? ""), !!opts.sketchText);
+      drawText(ctx, view, t, opts.selection.has(t.id ?? ""), !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined);
       ctx.restore();
     }
   }

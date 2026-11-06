@@ -600,6 +600,11 @@ fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8],
             let r = crate::model3d_tab_api::migrate(dir, target);
             Some(respond(stream, r.status, r.kind, &r.body))
         }
+        // Migrate 3D Models' load-time half (`AutoMigrateByFilename`): the page asks it when it opens the board and sends the step it answers.
+        ("GET", "/api/3dmodel/automigrate") => {
+            let r = crate::model3d_tab_api::auto_migrate(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
         ("GET", "/api/3dmodel/preview") => {
             let r = crate::model3d_tab_api::preview(dir, target);
             Some(respond(stream, r.status, r.kind, &r.body))
@@ -880,6 +885,8 @@ fn handle(
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
+        // The 3D viewer's board body with its holes (`m_boardWithHoles`), polygon arithmetic done here (`crate::board3d_api`).
+        ("GET", "/api/board3d") => respond(stream, "200 OK", "application/json", crate::board3d_api::report(dir).to_string().as_bytes()),
         ("GET", "/api/fill") => {
             let v = crate::fill_api::report(dir, query_value(target, "polys") == "1").unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1315,6 +1322,13 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 p["kind3d"] = models["kind3d"].clone();
                 p["dnp"] = models["dnp"].clone();
                 p["not_in_pos"] = models["not_in_pos"].clone();
+                // its Extruded 3D Body, when it has one (crates/cli/src/extruded_body_api.rs)
+                if !models["extruded_body"].is_null() {
+                    p["extruded_body"] = models["extruded_body"].clone();
+                }
+                if models["models_turned"] == json!(true) {
+                    p["models_turned"] = json!(true);
+                }
             }
             p["pads"] = json!(pads);
             // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
@@ -2674,12 +2688,21 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// (every installed KiCad one) could be fetched back after opening it.
 fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
     let (meta, design, model) = board::load(dir)?;
-    let fp = design
-        .footprint_library
-        .as_ref()
+    let lib = design.footprint_library.as_ref();
+    let mut fp = lib
         .and_then(|l| l.by_name(name))
+        .cloned()
         .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
+    // the settings an older design kept as the file's forms are served as the footprint's own, as the next edit stores them (UI-LEFT F4)
+    let mut tokens = std::mem::take(&mut fp.kicad.tokens);
+    fp.settings.absorb_kept(&mut tokens);
+    fp.kicad.tokens = tokens;
+    let fp = &fp;
     let mut v = serde_json::to_value(fp).map_err(|e| vec![CheckResult::fail("board_bad_design", name, e.to_string())])?;
+    // a footprint loaded from the board: the instance it is linked to and its own name (`FOOTPRINT_EDIT_FRAME::IsCurrentFPFromBoard`, `GetFPID()`, UI-LEFT F3)
+    if let Some(copy) = lib.and_then(|l| l.board_copy(name)) {
+        v["board_link"] = json!({ "reference": copy.reference, "fpid": copy.fpid });
+    }
     // The dimensions, zones, text boxes ... (`eda_model::fp_items`) in the board's display shapes, for the board's painters (`crate::fp_items_json`).
     if !fp.items.is_empty() {
         let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now()));

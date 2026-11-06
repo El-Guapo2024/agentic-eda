@@ -48,6 +48,10 @@ fn read_installed_symbol_in<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Res
 /// that is there and cannot be read is an error that says why, not "no footprint with this name", for which the editor would start a blank footprint.
 pub(crate) fn footprint_any(dir: &Path, name: &str) -> Result<(LibraryFootprint, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
+    // a footprint loaded from the board (UI-LEFT F3) is written under its own name (`GetFPID()`), not the key the editor holds it by
+    if let Some(copy) = design.footprint_library.as_ref().and_then(|l| l.board_copy(name)) {
+        return Ok((LibraryFootprint { name: copy.fpid.clone(), ..copy.footprint.clone() }, true));
+    }
     if let Some(fp) = design.footprint_library.as_ref().and_then(|l| l.by_name(name)) {
         return Ok((fp.clone(), true));
     }

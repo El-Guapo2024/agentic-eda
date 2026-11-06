@@ -167,6 +167,17 @@ interface CameraState {
   quat: Quat;
 }
 
+/** A camera as a saved viewport keeps it ([`TrackballCamera.getView`]). */
+export type CameraView = CameraState;
+
+/** `onUpdateViewportsCb`'s `GetViewMatrix() != viewport->matrix`: whether two cameras are the same view (to a micrometre and a millionth of a turn). */
+export function sameView(a: CameraView, b: CameraView): boolean {
+  const close = (x: number, y: number, tol: number) => Math.abs(x - y) <= tol;
+  const v = (p: Vec3, q: Vec3, tol: number) => close(p.x, q.x, tol) && close(p.y, q.y, tol) && close(p.z, q.z, tol);
+  const dot = Math.abs(a.quat.x * b.quat.x + a.quat.y * b.quat.y + a.quat.z * b.quat.z + a.quat.w * b.quat.w);
+  return v(a.pos, b.pos, 1e-3) && v(a.lookAt, b.lookAt, 1e-3) && v(a.auxDeg, b.auxDeg, 1e-4) && close(a.zoom, b.zoom, 1e-6) && close(dot, 1, 1e-9);
+}
+
 function lerpVec(a: Vec3, b: Vec3, t: number): Vec3 {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
 }
@@ -548,6 +559,27 @@ export class TrackballCamera {
    */
   pivotAt(worldPoint: Vec3): void {
     this.lookAt = { ...worldPoint };
+  }
+
+  /**
+   * A saved viewport's camera (`VIEWPORT3D`: `m_frame->GetCurrentCamera().GetViewMatrix()`): where the camera is, what it looks at, its auxiliary
+   * rotation, zoom and the trackball's rotation -- the state `GetViewMatrix` is made of, kept as that state rather than as the 4x4 matrix (the studio's
+   * camera rebuilds its matrix from it every frame).
+   */
+  getView(): CameraView {
+    return this.snapshot();
+  }
+
+  /** `APPEARANCE_CONTROLS_3D::doApplyViewport`: `CAMERA::SetViewMatrix( aViewport.matrix )` -- the camera put at the saved view at once (no move). */
+  setView(v: CameraView): void {
+    this.moving = false;
+    this.t0 = null;
+    this.t1 = null;
+    this.cameraPosLocal = { ...v.pos };
+    this.lookAt = { ...v.lookAt };
+    this.auxDeg = { ...v.auxDeg };
+    this.zoomValue = Math.min(this.maxZoom, Math.max(this.minZoom, v.zoom));
+    this.trackballQuat = normalizeQuat({ ...v.quat });
   }
 
   // ----------------------------------------------------------------------------------------------------------------------- animation

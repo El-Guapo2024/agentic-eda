@@ -21,6 +21,8 @@ import {
   plotFollowVisibility,
   resetSwatch,
   toggled,
+  withVisibility,
+  isSceneRow,
   shapeLayerOf,
   stackupColorKind,
   toHex,
@@ -278,4 +280,34 @@ test("V6-9: the bounding boxes' tooltip is showBBoxes', and a board layer's row 
   assert.equal(rowLabel(rowOf("silkscreen_top")!, name), "F.Silkscreen");
   assert.equal(rowLabel(rowOf("board")!, name), "Board Body", "not a board layer: the row's own label");
   assert.equal(rowLabel(rowOf("solder_paste")!, name), "Solder Paste", "Map3DLayerToPCBLayer has no paste");
+});
+
+// D3 (task-u3-3d): `s_layerSettings`' display rows -- Values, References, Footprint Text, Off-board Silkscreen, then the 3D Navigator -- with their defaults
+// (`render.show_fp_values` / `show_fp_text` true, `opengl_show_off_board_silk` false, `show_navigator` true), and `OnLayerVisibilityChanged`'s meta-control.
+test("the Values, Footprint Text, Off-board Silkscreen and 3D Navigator rows (s_layerSettings, OnLayerVisibilityChanged)", () => {
+  const ids = ROWS.map((r) => r.id);
+  const at = (id: string) => ids.indexOf(id);
+  assert.ok(at("values") > at("bounding_boxes") && at("values") < at("references") && at("references") < at("footprint_text") && at("footprint_text") < at("off_board_silk") && at("off_board_silk") < at("navigator") && at("navigator") < at("background_top"), ids.join(","));
+  assert.equal(rowOf("footprint_text")!.tooltip, "Show all footprint text");
+  assert.equal(rowOf("off_board_silk")!.tooltip, "Do not clip silk layers to board outline");
+  assert.equal(isVisible({}, "values"), true);
+  assert.equal(isVisible({}, "footprint_text"), true);
+  assert.equal(isVisible({}, "off_board_silk"), false);
+  assert.equal(isVisible({}, "navigator"), true);
+  // FOLLOW_PLOT_SETTINGS: GetPlotValue() and GetPlotFPText() (true), and Plot on All Layers counts as selected.
+  const followed = plotFollowVisibility(["F.Cu"], ["F.SilkS"]);
+  assert.equal(followed.values, true);
+  assert.equal(followed.footprint_text, true);
+  assert.equal(followed.silkscreen_top, true, "plot on all layers");
+  assert.equal(followed.silkscreen_bottom, false);
+  // "Because Footprint Text is a meta-control that also can disable values/references, drag them along"; turning either back on turns it on.
+  const off = withVisibility({}, "footprint_text", false);
+  assert.deepEqual([off.footprint_text, off.references, off.values], [false, false, false]);
+  const back = withVisibility(off, "values", true);
+  assert.deepEqual([back.footprint_text, back.references, back.values], [true, false, true]);
+  assert.deepEqual(toggled({}, "footprint_text"), { footprint_text: false, references: false, values: false });
+  // The navigator and the model rows do not rebuild the board.
+  assert.equal(isSceneRow("navigator"), false);
+  assert.equal(isSceneRow("th_models"), false);
+  assert.equal(isSceneRow("off_board_silk"), true);
 });

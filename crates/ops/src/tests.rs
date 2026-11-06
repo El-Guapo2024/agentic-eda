@@ -33,7 +33,7 @@ fn model(parts: Vec<Part>, nets: &[(&str, &[&str])], rules: Vec<PlacementRule>) 
 }
 
 /// An empty 100x100mm board.
-fn empty_design() -> Design {
+pub(crate) fn empty_design() -> Design {
     Design {
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: eda_model::ir::SCHEMA_VERSION,

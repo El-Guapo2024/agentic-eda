@@ -249,8 +249,9 @@ fn a_footprints_edge_cuts_are_written_inside_the_footprint_and_cut_the_outline()
     assert!((outline.polys.area() / 1e12 - 2000.0).abs() < 0.01, "{}", outline.polys.area() / 1e12);
 }
 
-/// p13-p16 P14-1: KiCad 10's Extruded 3D Body (`(model (type extruded) ..)`, a typed model with no path) is kept as the file wrote it, beside the footprint's
-/// ordinary model, so kicad-cli's STEP, GLB and VRML of our board have the body.
+/// p13-p16 P14-1: KiCad 10's Extruded 3D Body (`(model (type extruded) ..)`, a typed model with no path) survives, beside the footprint's ordinary model, so kicad-cli's
+/// STEP, GLB and VRML of our board have the body. Since UI-LEFT D4 (task-u3-3d) it is the footprint's body (`eda_model::extruded_body`), written back as `format( FOOTPRINT )`
+/// writes it: every form, `(hide no)` included, before the file models.
 #[test]
 fn an_extruded_body_survives_import_and_export() {
     let body = r#"(model (type extruded) (overall_height 1.2) (body_pcb_gap 0.1) (layer auto) (material plastic) (color unspecified) (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))"#;
@@ -268,8 +269,11 @@ fn an_extruded_body_survives_import_and_export() {
     let (design, model, _) = import_kicad_pcb(&text).expect("parses");
     let out = export(&design, &model);
     let fp = blocks(&out, "footprint")[0];
-    assert!(fp.contains(body), "the typed model token for token: {fp}");
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let kicads = "(model (type extruded) (hide no) (overall_height 1.2) (body_pcb_gap 0.1) (layer auto) (material plastic) (color unspecified) (offset (xyz 0 0 0) ) (scale (xyz 1 1 1) ) (rotate (xyz 0 0 0) ) )";
+    assert!(words(fp).contains(kicads), "the body as KiCad writes it: {fp}");
     assert!(fp.contains("R_0603_1608Metric.step"), "and the ordinary model: {fp}");
+    assert!(fp.find("(type extruded)") < fp.find("R_0603_1608Metric.step"), "before it: {fp}");
 
     // A library footprint (`.kicad_mod`) keeps it too.
     let lib = format!(
@@ -279,7 +283,7 @@ fn an_extruded_body_survives_import_and_export() {
     );
     let parsed = eda_kicad::parse_library_footprint(&lib).expect("parses");
     let written = eda_kicad::export_kicad_mod(&parsed.footprint);
-    assert!(written.contains(body), "{written}");
+    assert!(words(&written).contains(kicads), "{written}");
 }
 
 /// p13-p16 F6: a KiCad project's own DRC exclusions (`board.design_settings.drc_exclusions`) are the design's, in each form KiCad wrote them (a record of KiCad 10,

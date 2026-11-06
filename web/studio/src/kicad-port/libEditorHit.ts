@@ -5,6 +5,7 @@
 //
 // Units: the footprint editor's own um; the symbol editor's internal um (+y down) -- a library symbol is in mm, +y up, and is
 // turned with `resolveLibPoint` / `resolvePin` exactly as the painter does.
+import { isHiddenText } from "./fpKeep";
 import type { CmdShape, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibraryFootprint } from "../api/types";
 import { distToSegment, shapeHitDistance } from "../components/canvas/itemHitTest";
 import { libPointToInternalNm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
@@ -64,6 +65,8 @@ export function pickFootprintItem(fp: LibraryFootprint, x: number, y: number, sc
   const tol = pickTolerance(scale);
   for (let i = fp.texts.length - 1; i >= 0; i--) {
     const t = fp.texts[i]!;
+    // a text read hidden is not picked (`PCB_TEXT::ViewGetLOD`, UI-LEFT F5)
+    if (isHiddenText(fp, t.id)) continue;
     if (t.id && Math.hypot(x - t.at.x, y - t.at.y) <= Math.max(tol, t.size_nm / 2)) return { kind: "text", id: t.id };
   }
   for (let i = fp.graphics.length - 1; i >= 0; i--) {

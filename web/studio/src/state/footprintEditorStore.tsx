@@ -17,6 +17,7 @@ import { FIRST_LAST_PAD_NUMBER } from "../kicad-port/padNumbering";
 import { DEFAULT_PAD_MASTER, importPadSettings, settingsOf, type PadSettings } from "../kicad-port/padSettings";
 import { DEFAULT_ENUMERATE_PARAMS, enumerateCommit, type EnumerateParams, type EnumerateState } from "../kicad-port/padEnumeration";
 import { editPadCommand, enterContrast, exitContrast, padEditLayer } from "../kicad-port/padEditMode";
+import { boardCopyKey } from "../api/fpEditorTypes";
 import type { ViewTransform } from "./store";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
@@ -461,6 +462,11 @@ export interface FootprintEditorApi {
   getState: () => FootprintEditorState;
   /** Open (or re-open -- a no-op server-side if already open) a footprint by name and start polling it. */
   openFootprint: (name: string) => Promise<void>;
+  /**
+   * `FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard` (Edit Footprint, Ctrl+E on the board; Load footprint from current PCB): a copy of the board footprint `reference`, linked to it
+   * (`fp_editor open_from_board`, UI-LEFT F3), opened under its key. Save then updates that one footprint on the board.
+   */
+  openFromBoard: (reference: string) => Promise<void>;
   /** `pcbnew.ModuleEditor.newFootprint` (Ctrl+N): a new, empty SMD footprint named `Untitled` (made unique), opened in the editor. */
   newFootprint: () => Promise<void>;
   /**
@@ -469,6 +475,11 @@ export interface FootprintEditorApi {
    * (Escape then reverts the duplicate). With `increment` each pad takes the next free pad number.
    */
   duplicateSelection: (increment: boolean) => Promise<void>;
+  /**
+   * The items `ids` just made, selected and carried by the Move tool until a click drops them (Escape undoes what made them): `doMoveSelection` after a Duplicate, and
+   * the interactive placement of Import Graphics (`DRAWING_TOOL::PlaceImportedGraphics`, UI-LEFT F8).
+   */
+  pickUp: (ids: string[], message?: string) => void;
   /** Commit a finished move (a drag-drop or a Duplicate pick-up) of `refs` by `(dxNm, dyNm)` as ONE undo step -- each ref is looked up, so a mixed selection works. */
   commitMove: (refs: string[], dxNm: number, dyNm: number) => Promise<void>;
   /** Back to "nothing open" -- leaving the tab, or picking a different footprint before this one loaded. */
@@ -515,7 +526,7 @@ export interface FootprintEditorApi {
   deleteItems: (ids: readonly string[]) => Promise<void>;
   setAnchor: (at: PointXY) => Promise<void>;
   /** `EDIT_TOOL::Rotate` (R / Shift+R) of the selection, any kind of item, about its pivot (kicad-port/fpItems.ts), one undo step. `snap` puts a several-item pivot on the grid. */
-  rotateSelection: (quarterTurnsCcw: number, snap?: Snap) => Promise<void>;
+  rotateSelection: (quarterTurnsCcw: number, snap?: Snap, stepDeg?: number) => Promise<void>;
   /** `EDIT_TOOL::Mirror` (`mirrorH` left-right, `mirrorV` top-bottom) of the selection, one undo step. */
   mirrorSelection: (direction: FlipDirectionWire, snap?: Snap) => Promise<void>;
   /** `PCB_GROUP_TOOL::Group` (Ctrl+G) / `GROUP_TOOL::Ungroup` (Ctrl+Shift+G) of the selection; the new group is selected. */
@@ -524,9 +535,9 @@ export interface FootprintEditorApi {
   /** `DIALOG_TEXT_PROPERTIES`' OK on a field (`fp_item edit_field`). */
   editField: (name: string, text: string, layout: import("../api/types").FieldLayoutCmd) => Promise<boolean>;
   /** `DIALOG_TEXT_PROPERTIES`' OK on a text of the footprint, its place included (`fp_item set_text`). */
-  setText: (id: string, text: CmdText) => Promise<boolean>;
-  /** `DIALOG_SHAPE_PROPERTIES`' OK on a graphic (`fp_item set_graphic`). */
-  setGraphic: (id: string, shape: CmdShape) => Promise<boolean>;
+  setText: (id: string, text: CmdText, look?: import("../api/fpEditorTypes").TextLook) => Promise<boolean>;
+  /** `DIALOG_SHAPE_PROPERTIES`' OK on a graphic (`fp_item set_graphic`), with its line style and hatch (UI-LEFT F5). */
+  setGraphic: (id: string, shape: CmdShape, look?: import("../api/fpEditorTypes").ShapeLook) => Promise<boolean>;
   /** Place an item of `eda_model::fp_items`' kinds (`fp_item add`) and answer with its id, or `undefined` when refused. */
   addItem: (item: FpItemWire) => Promise<string | undefined>;
   /** An item of `eda_model::fp_items`' kinds replaced by its dialog (`fp_item set`). */
@@ -607,6 +618,21 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const footprint = await fetchFootprint(name);
       dispatch({ type: "FOOTPRINT_OK", footprint });
     },
+    openFromBoard: async (reference) => {
+      const key = boardCopyKey(reference);
+      const opened = await postCmd({ op: "fp_editor", verb: "open_from_board", reference }, false);
+      if (!opened.ok) {
+        dispatch({ type: "TOAST", message: opened.message, kind: "error" });
+        return;
+      }
+      dispatch({ type: "SET_NAME", name: key });
+      dispatch({ type: "SET_LINKED_PART", ref: reference });
+      try {
+        dispatch({ type: "FOOTPRINT_OK", footprint: await fetchFootprint(key) });
+      } catch (e) {
+        dispatch({ type: "FOOTPRINT_ERR", message: e instanceof Error ? e.message : String(e) });
+      }
+    },
     newFootprint: async () => {
       let existing: string[] = [];
       try {
@@ -653,6 +679,13 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       dispatch({ type: "SET_MOVE_ORIGIN", at });
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
       dispatch({ type: "TOAST", message: `Duplicated ${created.length} item(s)`, kind: "info" });
+    },
+    pickUp: (ids, message) => {
+      dispatch({ type: "SET_SELECTION", refs: ids });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorNm });
+      dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
+      if (message) dispatch({ type: "TOAST", message, kind: "info" });
     },
     commitMove: async (refs, dxNm, dyNm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
@@ -829,10 +862,10 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!name) return;
       await runCmd({ op: "set_footprint_anchor", name, at });
     },
-    rotateSelection: async (quarterTurnsCcw, snap) => {
+    rotateSelection: async (quarterTurnsCcw, snap, stepDeg) => {
       const st = stateRef.current;
       if (!st.name || !st.footprint) return;
-      const cmd = fpRotateCmd(st.footprint, st.name, [...st.selection], quarterTurnsCcw, snap);
+      const cmd = fpRotateCmd(st.footprint, st.name, [...st.selection], quarterTurnsCcw, snap, stepDeg);
       if (cmd) await runCmd(cmd);
     },
     mirrorSelection: async (direction, snap) => {
@@ -867,15 +900,15 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!name) return false;
       return runCmd({ op: "fp_item", verb: "edit_field", footprint: name, name: fieldName, text, layout });
     },
-    setText: async (id, text) => {
+    setText: async (id, text, look) => {
       const name = stateRef.current.name;
       if (!name) return false;
-      return runCmd({ op: "fp_item", verb: "set_text", footprint: name, id, text });
+      return runCmd({ op: "fp_item", verb: "set_text", footprint: name, id, text, ...(look ? { look } : {}) });
     },
-    setGraphic: async (id, shape) => {
+    setGraphic: async (id, shape, look) => {
       const name = stateRef.current.name;
       if (!name) return false;
-      return runCmd({ op: "fp_item", verb: "set_graphic", footprint: name, id, shape });
+      return runCmd({ op: "fp_item", verb: "set_graphic", footprint: name, id, shape, ...(look ? { look } : {}) });
     },
     addItem: async (item) => {
       const st = stateRef.current;

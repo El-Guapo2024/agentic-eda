@@ -3,7 +3,9 @@
 // (fp_toolbars.json, drawn by components/Toolbar.tsx with KiCad's icons); the canvas is always there -- with nothing open it is the empty canvas and its
 // grid, like KiCad's, and a footprint is opened from the tree.
 import { useEffect, useRef, useState } from "react";
-import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
+import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
+import { useStudioState } from "../../state/store";
+import { setFpPrefs } from "../../state/fpPrefs";
 import { ENUM_PREFIX_MAX_LENGTH, enumSpinValue, enumeratePopupText, enumerateStart } from "../../kicad-port/padEnumeration";
 import { inPadEditMode, PAD_EDIT_MODE_MESSAGE, padEditLayer } from "../../kicad-port/padEditMode";
 import { FootprintCanvas } from "./FootprintCanvas";
@@ -20,7 +22,8 @@ import { FpShapeDialog } from "./FpShapeDialog";
 import { FpGroupDialog } from "./FpGroupDialog";
 import { FpBarcodeDialog, FpDimensionDialog, FpRefImageDialog, FpTableDialog, FpTextBoxDialog, FpZoneDialog } from "./FpItemDialogs";
 import { LibraryDialogHost } from "../library/libraryDialogs";
-import { DockColumn } from "../panels/Dock";
+import { DockColumn, DockPanel } from "../panels/Dock";
+import { FootprintPropertiesPane } from "./FootprintPropertiesPane";
 import { Toolbar } from "../Toolbar";
 import { FootprintAppearancePanel } from "./FootprintAppearancePanel";
 
@@ -81,9 +84,18 @@ function RenumberPadsDialog() {
   );
 }
 
+/** `ReloadFootprint`'s message for a footprint loaded from the board: "Editing %s from board.  Saving will update the board only." with the footprint's reference. */
+export const boardLinkMessage = (reference: string): string => `Editing ${reference} from board.  Saving will update the board only.`;
+/** Its link: "Open in library %s", the footprint's library nickname. */
+export const openInLibraryLabel = (fpid: string): string => `Open in library ${fpid.includes(":") ? fpid.slice(0, fpid.indexOf(":")) : ""}`;
+
 export function FootprintEditorView() {
   const state = useFpState();
   const dispatch = useFpDispatch();
+  const api = useFpApi();
+  // the editor's preferences where the drawing tools read them (state/fpPrefs.ts)
+  const prefs = useStudioState().prefs;
+  useEffect(() => setFpPrefs(prefs), [prefs]);
 
   // The editor's own toast (every library action reports through it) goes away by itself, like the studio's (App.tsx's `Toast`).
   useEffect(() => {
@@ -108,6 +120,15 @@ export function FootprintEditorView() {
       <div className="main-toolbar-row">
         <Toolbar id="main" editor="footprint" />
       </div>
+      {state.footprint?.board_link && (
+        // `FOOTPRINT_EDIT_FRAME::ReloadFootprint`'s info bar for a footprint loaded from the board, with its "Open in library %s" link (`PCB_ACTIONS::editLibFpInFpEditor`)
+        <div role="status" data-testid="fp-board-link-banner" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12, display: "flex", gap: 12 }}>
+          <span>{boardLinkMessage(state.footprint.board_link.reference)}</span>
+          <a href="#" data-testid="fp-board-link-open-library" onClick={(e) => (e.preventDefault(), void api.openFootprint(state.footprint!.board_link!.fpid))}>
+            {openInLibraryLabel(state.footprint.board_link.fpid)}
+          </a>
+        </div>
+      )}
       {editing && (
         <div role="status" data-testid="pad-edit-banner" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12 }}>
           {PAD_EDIT_MODE_MESSAGE}
@@ -121,7 +142,17 @@ export function FootprintEditorView() {
       <div className="editor-frame-body">
         {/* FOOTPRINT_TREE_PANE: the project's own footprints and KiCad's installed libraries; folds to a handle (Show Library Tree). */}
         <DockColumn side="left" column="tree" label="Libraries">
-          <FootprintLibraryPanel />
+          {/* the Libraries tree and, beside it in KiCad (`.Left().Layer( 3 )`), the frame's Properties pane (`PCB_PROPERTIES_PANEL`, shown by default; Show Properties toggles it) */}
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+            <div style={{ display: "flex", flex: "1 1 0", minHeight: 120 }}>
+              <FootprintLibraryPanel />
+            </div>
+            <div style={{ flex: "0 1 auto", maxHeight: "55%", overflowY: "auto", width: 236, background: "var(--chrome-bg-raised)", borderRight: "1px solid var(--chrome-border)" }}>
+              <DockPanel id="fpProperties" title="Properties">
+                <FootprintPropertiesPane />
+              </DockPanel>
+            </div>
+          </div>
         </DockColumn>
         <Toolbar id="options" editor="footprint" />
         <div className="editor-canvas-col">

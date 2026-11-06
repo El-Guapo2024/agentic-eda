@@ -1,8 +1,10 @@
 // KiCad's Preferences dialog (`PAGED_DIALOG`, `EDA_BASE_FRAME::ShowPreferences`) with these of its pages: Mouse and Touchpad (below), each editor's Display Options --
 // the Grid Display and Cursor part of it (`PANEL_GAL_OPTIONS`, common/dialogs/panel_gal_options.cpp: Dots / Lines / Small crosses, "Grid thickness:" 0.5 to 10 pixels,
-// "Minimum grid spacing:" 5 to 200 pixels, the three crosshairs and "Always show crosshairs"; each editor keeps its own, state/commonOptions.ts `window`) -- and PCB
-// Editor > Colors (components/PcbColorsPage.tsx, `PANEL_PCBNEW_COLOR_SETTINGS`), with the dialog's "Reset Colors to Defaults" on the Colors page. Not here of Display
-// Options: "Snap to grid:" (Always / When grid shown / Never; the snapping always uses the grid) and the editors' other display settings.
+// "Minimum grid spacing:" 5 to 200 pixels, the three crosshairs and "Always show crosshairs"; each editor keeps its own, state/commonOptions.ts `window`) -- PCB
+// Editor > Colors (components/PcbColorsPage.tsx, `PANEL_PCBNEW_COLOR_SETTINGS`), with the dialog's "Reset Colors to Defaults" on the Colors page, and 3D Viewer >
+// General and > Realtime Rendering (3d-viewer/dialogs/panel_3D_display_options.cpp, panel_3D_opengl_options.cpp: the settings the studio's 3D view honours,
+// kicad-port/viewer3dSettings.ts; the two pages at the end of this file). Not here of Display Options: "Snap to grid:" (Always / When grid shown / Never; the
+// snapping always uses the grid) and the editors' other display settings.
 //
 // Port of PANEL_MOUSE_SETTINGS, the "Mouse and Touchpad" page of KiCad's Preferences dialog
 // (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Step for rotate commands" and
@@ -20,13 +22,28 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizePinStepMils, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
+import { FP_PREFS_TITLES, FP_PREFS_SUBTREE, FpPreferencesPage, fpGraphicsProblem, type FpPrefsExtra, type FpPrefsPage } from "./FpPreferencesPages";
+import { useFpDispatch, useFpState } from "../state/footprintEditorStore";
+import { FACTORY_TEXT_GRAPHICS } from "../kicad-port/layerDefaults";
 import { EDITOR_WINDOWS, getCommonOptions, setWindowOptions, type EditorWindow, type WindowOptions } from "../state/commonOptions";
 import { GRID_MIN_SPACING_RANGE, GRID_THICKNESS_CHOICES, gridMinSpacingValue } from "../kicad-port/grid";
+import { getViewer3DUserSettings, setViewer3DPrefs } from "../state/viewer3dUserSettings";
+import { DEFAULT_VIEWER3D_PREFS, sanitizeViewer3DPrefs, type AntialiasingMode, type Viewer3DPrefs } from "../kicad-port/viewer3dSettings";
 
-/** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`): Mouse and Touchpad, each editor's Display Options, and PCB Editor > Colors. */
-type PrefsPage = "mouse" | "pcb_colors" | `display_${EditorWindow}`;
+/** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`): Mouse and Touchpad, each editor's Display Options, PCB Editor > Colors, 3D Viewer > General
+ *  and > Realtime Rendering. */
+type PrefsPage = "mouse" | "pcb_colors" | `display_${EditorWindow}` | "3d_general" | "3d_opengl" | FpPrefsPage;
 
 const EDITOR_PAGE_LABEL: Record<EditorWindow, string> = { pcb: "PCB Editor", schematic: "Schematic Editor", footprint: "Footprint Editor", symbol: "Symbol Editor" };
+
+/** Each page's title in the dialog's caption. */
+function pageTitle(page: PrefsPage): string {
+  if (page.startsWith("display_")) return "Display Options";
+  if (isFpPage(page)) return FP_PREFS_TITLES[page];
+  return ({ mouse: "Mouse and Touchpad", pcb_colors: "Colors", "3d_general": "General", "3d_opengl": "Realtime Rendering" } as Record<string, string>)[page] ?? page;
+}
+
+const isFpPage = (p: string): p is FpPrefsPage => p.startsWith("fp_");
 
 /** `PAGED_DIALOG` opens on the page it was last closed on (its `g_lastPage` by title). */
 let lastPage: PrefsPage = "mouse";
@@ -53,15 +70,26 @@ export function PreferencesDialog() {
     setPageState(p);
   };
   const colors = usePcbColorsPage(open, page === "pcb_colors");
+  // The Footprint Editor's pages (components/FpPreferencesPages.tsx): its rotation step as typed, and its line mode, which they edit beside the preferences.
+  const fpState = useFpState();
+  const fpDispatch = useFpDispatch();
+  const [fpRotationText, setFpRotationText] = useState(String(state.prefs.fpRotationStepDeg));
+  const [fpExtra, setFpExtraState] = useState<FpPrefsExtra>({ lineMode: fpState.lineMode });
+  const setFpExtra = (patch: Partial<FpPrefsExtra>) => setFpExtraState((e) => ({ ...e, ...patch }));
   // each editor's Display Options as edited so far (`PANEL_GAL_OPTIONS` of its frame); OK keeps them
   const [windows, setWindows] = useState<Record<EditorWindow, WindowOptions>>(getCommonOptions().window);
+  /** The 3D viewer's settings being edited (state/viewer3dUserSettings.ts), taken on OK as the other pages are. */
+  const [draft3d, setDraft3d] = useState<Viewer3DPrefs>(getViewer3DUserSettings().prefs);
 
   useEffect(() => {
     if (open) {
       setDraft(state.prefs);
       setRotationText(String(state.prefs.rotationStepDeg));
+      setFpRotationText(String(state.prefs.fpRotationStepDeg));
+      setFpExtraState({ lineMode: fpState.lineMode });
       setPageState(lastPage);
       setWindows(getCommonOptions().window);
+      setDraft3d(getViewer3DUserSettings().prefs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -73,12 +101,24 @@ export function PreferencesDialog() {
     colors.cancel();
     close();
   };
-  const valid = scrollModSetValid(draft);
+  const graphicsProblem = fpGraphicsProblem(draft.fpTextGraphics);
+  const valid = scrollModSetValid(draft) && !graphicsProblem;
   const submit = () => {
     if (!valid) return;
-    dispatch({ type: "SET_PREFERENCES", prefs: sanitizePreferences({ ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) }) });
+    dispatch({
+      type: "SET_PREFERENCES",
+      prefs: sanitizePreferences({
+        ...draft,
+        rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg),
+        // `m_rotationAngle.GetAngleValue()`: the Footprint Editor's own step
+        fpRotationStepDeg: sanitizeRotationStep(Number(fpRotationText), state.prefs.fpRotationStepDeg),
+      }),
+    });
     for (const e of EDITOR_WINDOWS) setWindowOptions(e, windows[e]);
+    // the line mode is the Footprint Editor's (`m_AngleSnapMode`)
+    if (fpExtra.lineMode !== fpState.lineMode) fpDispatch({ type: "SET_LINE_MODE", mode: fpExtra.lineMode });
     colors.commit();
+    setViewer3DPrefs(sanitizeViewer3DPrefs(draft3d));
     close();
   };
   const set = (patch: Partial<Preferences>) => setDraft((d) => ({ ...d, ...patch }));
@@ -166,7 +206,7 @@ export function PreferencesDialog() {
     <div className="dialog-backdrop" onClick={cancel}>
       <div className="dialog" style={{ width: page === "pcb_colors" ? 600 : 700, maxWidth: "95vw" }} onClick={(e) => e.stopPropagation()} data-testid="preferences-dialog">
         <div className="dialog-header">
-          <span>Preferences - {page === "pcb_colors" ? "Colors" : page.startsWith("display_") ? "Display Options" : "Mouse and Touchpad"}</span>
+          <span>Preferences - {pageTitle(page)}</span>
         </div>
         <div className="dialog-body" style={{ display: "flex", gap: 12 }}>
           {/* The page tree (`PAGED_DIALOG`'s `wxTreebook`): "PCB Editor" is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). */}
@@ -178,13 +218,20 @@ export function PreferencesDialog() {
                   [null, EDITOR_PAGE_LABEL[e], 0],
                   [`display_${e}`, "Display Options", 1],
                   ...(e === "pcb" ? [["pcb_colors", "Colors", 1]] : []),
+                  ...(e === "footprint" ? FP_PREFS_SUBTREE : []),
                 ]),
+                // `book->AddPage( new wxPanel( book ), _( "3D Viewer" ) )` and its pages.
+                [null, "3D Viewer", 0],
+                ["3d_general", "General", 1],
+                ["3d_opengl", "Realtime Rendering", 1],
               ] as [PrefsPage | null, string, number][]
             ).map(([id, label, depth], i) => (
               <div
                 key={`${i}-${label}`}
+                data-testid={id ? `prefs-page-${id}` : undefined}
                 role="treeitem"
                 aria-selected={id !== null && page === id}
+                data-page={id ?? undefined}
                 style={{ padding: "3px 4px", paddingLeft: 4 + depth * 14, cursor: id ? "pointer" : "default", background: id !== null && page === id ? "var(--chrome-accent-bg, rgba(74,163,255,0.2))" : undefined, opacity: id ? 1 : 0.75 }}
                 onClick={() => id && setPage(id)}
               >
@@ -195,6 +242,11 @@ export function PreferencesDialog() {
           <div style={{ flex: 1, minWidth: 0 }}>
             {page === "pcb_colors" && colors.element}
             {page.startsWith("display_") && displayPage(page.slice("display_".length) as EditorWindow)}
+            {page === "3d_general" && <Viewer3DGeneralPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
+            {page === "3d_opengl" && <Viewer3DOpenGLPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
+            {isFpPage(page) && (
+              <FpPreferencesPage page={page} draft={draft} set={set} extra={fpExtra} setExtra={setFpExtra} rotationText={fpRotationText} setRotationText={setFpRotationText} units={state.units} />
+            )}
             {page === "mouse" && (
               <>
               {heading("Pan and Zoom")}
@@ -373,12 +425,95 @@ export function PreferencesDialog() {
               Reset Colors to Defaults
             </button>
           )}
+          {/* `PANEL_FP_EDITOR_GRAPHICS_DEFAULTS::ResetPanel`: KiCad's factory table */}
+          {page === "fp_graphics" && (
+            <button style={{ marginRight: "auto" }} onClick={() => set({ fpTextGraphics: null })} data-testid="fp-prefs-graphics-reset" title={`Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values`}>
+              Reset Graphics Defaults to Defaults
+            </button>
+          )}
           <button onClick={cancel}>Cancel</button>
-          <button className="primary" disabled={!valid} onClick={submit}>
+          <button className="primary" disabled={!valid} onClick={submit} data-testid="preferences-ok">
             OK
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+const heading3d = (text: string) => <div style={{ fontWeight: 600, margin: "10px 0 4px" }}>{text}</div>;
+
+/**
+ * `PANEL_3D_DISPLAY_OPTIONS` (Preferences > 3D Viewer > General): its Camera Options -- "Rotation increment:" (`camera.rotation_increment`, 0 .. 359 deg), "Redraw while
+ * moving" (`camera.animation_enabled`) and "Redraw speed:" (`camera.moving_speed_multiplier`, 1 .. 5). Its Render Options are not offered: the silkscreen is not
+ * clipped at via annuli or at the mask's edges here, plated and bare copper are one colour, and the models keep their own materials; "Show filled areas in zones" is
+ * the Appearance manager's Zones row.
+ */
+function Viewer3DGeneralPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch: Partial<Viewer3DPrefs>) => void }) {
+  return (
+    <div className="dialog-body" style={{ flex: 1 }} data-page-body="3d_general">
+      {heading3d("Camera Options")}
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }} title="Set increment (in degrees) for the Rotate commands.">
+        <span>Rotation increment:</span>
+        <input type="number" aria-label="Rotation increment" min={0} max={359} step={1} value={draft.rotationIncrementDeg} style={{ width: 70 }} onChange={(e) => set({ rotationIncrementDeg: Number(e.target.value) })} />
+        <span>deg</span>
+      </div>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Redraw while moving" checked={draft.animationEnabled} onChange={(e) => set({ animationEnabled: e.target.checked })} />
+        Redraw while moving
+      </label>
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6, opacity: draft.animationEnabled ? 1 : 0.5 }}>
+        <span>Redraw speed:</span>
+        <input type="range" aria-label="Redraw speed" min={1} max={5} step={1} value={draft.movingSpeedMultiplier} disabled={!draft.animationEnabled} onChange={(e) => set({ movingSpeedMultiplier: Number(e.target.value) })} />
+        <span>{draft.movingSpeedMultiplier}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={() => set({ rotationIncrementDeg: DEFAULT_VIEWER3D_PREFS.rotationIncrementDeg, animationEnabled: DEFAULT_VIEWER3D_PREFS.animationEnabled, movingSpeedMultiplier: DEFAULT_VIEWER3D_PREFS.movingSpeedMultiplier })}>Reset to Defaults</button>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>
+        Not offered: the Render Options (clip silkscreen at via annuli and at solder mask edges, bare copper colours, material properties). Show filled areas in zones is the
+        Appearance manager&apos;s Zones row.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * `PANEL_3D_OPENGL_OPTIONS` (Preferences > 3D Viewer > Realtime Rendering): "Show copper and tech layers thickness (slow)" (`render.opengl_copper_thickness`),
+ * "Highlight items on rollover" (`render.opengl_highlight_on_rollover`), "Anti-aliasing:" (`render.opengl_AA_mode`; the browser's multisampling is on or off, so
+ * 2x, 4x and 8x are all on) and "Selection color:" (`render.opengl_selection_color`). "Show model bounding boxes" is the Appearance manager's row of that name; the
+ * While Moving options are not offered (the view does not drop detail while it moves).
+ */
+function Viewer3DOpenGLPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch: Partial<Viewer3DPrefs>) => void }) {
+  return (
+    <div className="dialog-body" style={{ flex: 1 }} data-page-body="3d_opengl">
+      {heading3d("Rendering Options")}
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Show copper and tech layers thickness" checked={draft.copperThickness} onChange={(e) => set({ copperThickness: e.target.checked })} />
+        Show copper and tech layers thickness (slow)
+      </label>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Highlight items on rollover" checked={draft.highlightOnRollover} onChange={(e) => set({ highlightOnRollover: e.target.checked })} />
+        Highlight items on rollover
+      </label>
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span>Anti-aliasing:</span>
+        <select aria-label="Anti-aliasing" value={draft.antialiasing} onChange={(e) => set({ antialiasing: e.target.value as AntialiasingMode })}>
+          <option value="none">Disabled</option>
+          <option value="2x">2x</option>
+          <option value="4x">4x</option>
+          <option value="8x">8x</option>
+        </select>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.75, marginLeft: 4 }}>3D-Viewer must be closed and re-opened to apply this setting</div>
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span>Selection color:</span>
+        <input type="color" aria-label="Selection color" value={draft.selectionColor} onChange={(e) => set({ selectionColor: e.target.value })} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={() => set({ copperThickness: DEFAULT_VIEWER3D_PREFS.copperThickness, highlightOnRollover: DEFAULT_VIEWER3D_PREFS.highlightOnRollover, antialiasing: DEFAULT_VIEWER3D_PREFS.antialiasing, selectionColor: DEFAULT_VIEWER3D_PREFS.selectionColor })}>Reset to Defaults</button>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>Show model bounding boxes is the Appearance manager&apos;s row. Not offered: the While Moving options (the view keeps its detail while it moves).</div>
     </div>
   );
 }

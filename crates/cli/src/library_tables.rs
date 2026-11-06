@@ -82,7 +82,21 @@ impl Env {
         let models = real.get("EDA_KICAD_3DMODELS_DIR").filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| symbols.parent().map_or_else(|| PathBuf::from("3dmodels"), |p| p.join("3dmodels")));
         let documents = home(&real).unwrap_or_default().join("Documents").join("KiCad").join(version.clone().unwrap_or_else(|| format!("{major}.0")));
         let stock = lt::Stock::new(symbols, eda_kicad::default_footprint_library_root(), models, &documents);
-        let configured = config_dir.as_ref().and_then(|d| std::fs::read_to_string(d.join("kicad_common.json")).ok()).map(|t| lt::configured_env_vars(&t)).unwrap_or_default();
+        let common = config_dir.as_ref().and_then(|d| std::fs::read_to_string(d.join("kicad_common.json")).ok());
+        let mut configured = common.as_deref().map(lt::configured_env_vars).unwrap_or_default();
+        // A `kicad_common.json` of schema 2 or older is migrated when KiCad reads it (`JSON_SETTINGS::Migrate`), and `COMMON_SETTINGS::migrateSchema2to3` turns the KiCad 5
+        // 3D search paths of `3d/3Dresolver.cfg` beside it into path variables, before the file's own `environment.vars` are loaded over them (`Load()` after the
+        // migration). KiCad then deletes the `.cfg`; the studio reads KiCad's configuration and never writes it, so it makes the same variables every time it reads them.
+        if let (Some(dir), Some(schema)) = (config_dir.as_ref(), common.as_deref().and_then(lt::settings_schema_version)) {
+            if (0..3).contains(&schema) {
+                if let Ok(cfg) = std::fs::read_to_string(dir.join("3d").join("3Dresolver.cfg")) {
+                    let predefined: Vec<String> = lt::global_env_vars(major, &stock, &BTreeMap::new(), &real).into_iter().map(|v| v.name).collect();
+                    for (name, value) in lt::migrated_3d_search_paths(&lt::read_legacy_3d_resolver_cfg(&cfg, major), &|n| predefined.iter().any(|p| p == n)) {
+                        configured.entry(name).or_insert(value);
+                    }
+                }
+            }
+        }
         Env { major, version, config_dir, stock, configured, real }
     }
 
@@ -1285,6 +1299,13 @@ pub(crate) struct ModelNames {
     /// The variables behind [`ModelNames::folders`], by name, with whether the board's own Configure Paths defines them (and not KiCad's): the roots the 3D model chooser lists
     /// (`DIALOG_SELECT_3DMODEL`'s folder list). A folder two variables name has the first.
     pub(crate) named: Vec<(String, PathBuf, bool)>,
+    /// The 3D resolver's search paths under their bare names, each with the folder it stands for: what a KiCad 5 aliased model name (`ALIAS:file`, `:ALIAS:file`) is
+    /// looked up in ([`crate::model3d_api::search`]). `FILENAME_RESOLVER::createPathList` with `GetKicadPaths`: every one of KiCad's own path variables
+    /// (`PGM_BASE::GetLocalEnvVariables`, what Configure Paths lists, a migrated `3Dresolver.cfg`'s among them: [`Env::from_environment`]) but `KICAD_PTEMPLATES`, a
+    /// `KICAD*_FOOTPRINT_DIR` and one whose value is a URL, and `KICAD<major>_3DMODEL_DIR` when no `KICAD*_3DMODEL_DIR` is one; each expanded as `${NAME}` is
+    /// (`ExpandEnvVarSubstitutions`, the board's own variables first), with its trailing separator taken off, an empty expansion an empty folder. The board's own
+    /// variables are project text variables to KiCad, which the search paths are not made of.
+    pub(crate) aliases: Vec<(String, PathBuf)>,
 }
 
 pub(crate) fn model_names(dir: &Path) -> ModelNames {
@@ -1305,7 +1326,25 @@ pub(crate) fn model_names_with(env: &Env, dir: &Path) -> ModelNames {
             named.push((name, folder, from_board));
         }
     }
-    ModelNames { vars, folders, named }
+    let aliases = resolver_aliases(env, &vars);
+    ModelNames { vars, folders, named, aliases }
+}
+
+/// See [`ModelNames::aliases`].
+fn resolver_aliases(env: &Env, vars: &Vars) -> Vec<(String, PathBuf)> {
+    let matches = |name: &str, suffix: &str| name.starts_with("KICAD") && name.ends_with(suffix) && name.len() >= "KICAD".len() + suffix.len();
+    let mut names: Vec<String> = env.global_vars().into_iter().filter(|v| v.name != "KICAD_PTEMPLATES" && !matches(&v.name, "_FOOTPRINT_DIR") && !v.value.contains("://")).map(|v| v.name).collect();
+    if !names.iter().any(|n| matches(n, "_3DMODEL_DIR")) {
+        names.push(format!("KICAD{}_3DMODEL_DIR", env.major));
+    }
+    names
+        .into_iter()
+        .map(|name| {
+            let value = vars.expand(&format!("${{{name}}}"));
+            let trimmed = if value.len() > 1 { value.trim_end_matches('/') } else { value.as_str() };
+            (name, PathBuf::from(trimmed))
+        })
+        .collect()
 }
 
 impl ModelNames {
@@ -2058,6 +2097,37 @@ pub(crate) mod tests {
         assert!(names.folders.contains(&team) && names.folders.contains(&team.join("kicad")) && names.folders.contains(&team.join("parts")), "{:?}", names.folders);
         assert!(!names.folders.contains(&other), "{:?}", names.folders);
         assert!(names.folders.iter().all(|f| f.is_dir() && f.parent().is_some()), "{:?}", names.folders);
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn the_3d_resolvers_aliases_are_kicads_path_variables_and_a_kicad5_cfg_is_migrated_into_them() {
+        let m = machine("aliases", true);
+        let (team, old) = (m.root.join("team"), m.root.join("old-parts"));
+        for d in [&team, &old, &m.config.join("3d")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let h = |s: &str| format!("\"{}:{s}\"", s.len());
+        let cfg = format!("#V1\n{},{},{}\n{},{},{}\n{},{},{}\n", h("old-parts"), h(&old.display().to_string()), h("KiCad 5's"), h("TEAM_3D"), h("/not/this"), h(""), h("${KISYS3DMOD}"), h("/x"), h(""));
+        std::fs::write(m.config.join("3d").join("3Dresolver.cfg"), &cfg).unwrap();
+        let common = |schema: i64| format!("{{ \"meta\": {{ \"version\": {schema} }}, \"environment\": {{ \"vars\": {{ \"TEAM_3D\": \"{}/\", \"WEB\": \"https://example.com/lib\", \"KICAD10_FOOTPRINT_DIR\": \"/fp\" }} }} }}", team.display());
+        // a settings file of schema 2: KiCad migrates the KiCad 5 search paths into variables; the file's own variable of the same name wins
+        std::fs::write(m.config.join("kicad_common.json"), common(2)).unwrap();
+        let env = m.env();
+        assert_eq!(env.configured.get("OLD_PARTS"), Some(&old.display().to_string()), "`old-parts` sanitized to OLD_PARTS: {:?}", env.configured);
+        assert_eq!(env.configured.get("TEAM_3D"), Some(&format!("{}/", team.display())), "the settings file's own value is loaded over the migrated one");
+        assert!(!env.configured.contains_key("KISYS3DMOD"), "KiCad's own variables are not taken from the file");
+        let names = model_names_with(&env, &m.board);
+        let alias = |n: &str| names.aliases.iter().find(|(a, _)| a == n).map(|(_, p)| p.clone());
+        assert_eq!(alias("OLD_PARTS"), Some(old.clone()));
+        assert_eq!(alias("TEAM_3D"), Some(team.clone()), "the trailing separator is taken off");
+        assert_eq!(alias("KICAD10_3DMODEL_DIR").map(|p| p.display().to_string()), Some(env.stock.models.display().to_string()), "KiCad's library is one");
+        assert_eq!(alias("WEB"), None, "a URL is no search path");
+        assert!(alias("KICAD10_FOOTPRINT_DIR").is_none() && alias("KIPRJMOD").is_none(), "nor are the footprints or the project (which has only its ${{KIPRJMOD}} form)");
+        // a settings file of the current schema: KiCad never reads the .cfg again
+        std::fs::write(m.config.join("kicad_common.json"), common(6)).unwrap();
+        let env = m.env();
+        assert!(!env.configured.contains_key("OLD_PARTS"), "{:?}", env.configured);
         let _ = std::fs::remove_dir_all(&m.root);
     }
 

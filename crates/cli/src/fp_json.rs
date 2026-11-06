@@ -199,6 +199,8 @@ fn stack_layers_json(model: &ConstraintModel, fp: &FootprintInstance, pad: &Pad,
                 "h": placed.size.1,
                 "round": placed.is_round(),
                 "shape": shape_name(view.shape),
+                // The group's size un-turned (the pad's own rotation turns it), for the 3D view's polygon of a rounded rectangle or an oval turned by any angle.
+                "size": [view.size.0, view.size.1],
                 "ratio": view.roundrect_ratio,
                 "outline": outline,
             })

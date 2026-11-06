@@ -5,9 +5,9 @@
 // colours read from the board's physical stackup, the copper finish; the tables `g_SilkColors`, `g_MaskColors`, `g_BoardColors`, `g_FinishColors`) and
 // pcbnew/board_stackup_manager/stackup_predefined_prms.cpp (the colour names Board Setup offers). Pure: no three.js, no React.
 //
-// What the data model has and has not: the board has the copper, silkscreen, mask and paste of `scene.ts`, drawing shapes on any layer, and parts with 3D models;
-// it has no "off-board silkscreen", footprint values or text, so those rows of KiCad's tree are not listed (PARITY-3d.md). A part's DNP and not-in-position-file
-// attributes come with it (`parts[].dnp`, `parts[].not_in_pos`), so the two model rows that gate them are.
+// Every row of KiCad's tree is listed (the Values, Footprint Text and Off-board Silkscreen rows and the 3D Navigator since task-u3-3d); a part's DNP and
+// not-in-position-file attributes come with it (`parts[].dnp`, `parts[].not_in_pos`), so the two model rows that gate them are. The Zones row is the studio's
+// (KiCad has it as a preference, `render.show_zones`).
 
 export interface Rgba {
   r: number;
@@ -189,8 +189,15 @@ export const ROWS: readonly Row[] = [
   row("not_in_pos_models", "Models not in POS File", "Show 3D models even if not found in .pos file", "models", false, true, "P"),
   row("dnp_models", "Models marked DNP", "Show 3D models even if marked 'Do Not Place'", "models", false, false, "D"),
   row("bounding_boxes", "Model Bounding Boxes", "Show 3D model bounding boxes in realtime renderer", "models", false, false), // EDA_3D_ACTIONS::showBBoxes' tooltip
+  // `LAYER_FP_VALUES`, `LAYER_FP_REFERENCES`, `LAYER_FP_TEXT` (`render.show_fp_values`, `show_fp_references`, `show_fp_text`, all true) and `LAYER_3D_OFF_BOARD_SILK`
+  // (`render.opengl_show_off_board_silk`, false: the silkscreen is clipped to the board).
+  row("values", "Values", "Show footprint values", "display", false),
   row("references", "References", "Show footprint references", "display", false),
+  row("footprint_text", "Footprint Text", "Show all footprint text", "display", false),
+  row("off_board_silk", "Off-board Silkscreen", "Do not clip silk layers to board outline", "display", false, false),
   row("zones", "Zones", "Show copper zones (Preferences > 3D Viewer > Display Options: Show zones)", "display", false),
+  // `LAYER_3D_NAVIGATOR` (`render.show_navigator`, true): `EDA_3D_ACTIONS::showNavigator`'s tooltip.
+  row("navigator", "3D Navigator", "Show 3D navigator", "display", false),
   row("background_top", "Background Start", "Background gradient start color", "display", true),
   row("background_bottom", "Background End", "Background gradient end color", "display", true),
 ];
@@ -213,9 +220,28 @@ export function isVisible(layers: Readonly<Record<string, boolean>>, id: string,
   return ROW_BY_ID.get(id)?.visible ?? true;
 }
 
+/**
+ * `layers` with row `id` shown or hidden (`APPEARANCE_CONTROLS_3D::OnLayerVisibilityChanged`): "Because Footprint Text is a meta-control that also can disable
+ * values/references, drag them along here" -- Footprint Text off turns References and Values off; References or Values on turns Footprint Text back on.
+ */
+export function withVisibility(layers: Readonly<Record<string, boolean>>, id: string, shown: boolean): Record<string, boolean> {
+  const next = { ...layers, [id]: shown };
+  if (id === "footprint_text" && !shown) {
+    next.references = false;
+    next.values = false;
+  }
+  if ((id === "references" || id === "values") && shown) next.footprint_text = true;
+  return next;
+}
+
 /** `layers` with the row's visibility flipped (a hotkey, a click on its eye). */
 export function toggled(layers: Readonly<Record<string, boolean>>, id: string, defaults?: Readonly<Record<string, boolean>>): Record<string, boolean> {
-  return { ...layers, [id]: !isVisible(layers, id, defaults) };
+  return withVisibility(layers, id, !isVisible(layers, id, defaults));
+}
+
+/** The rows that change nothing of the board's own scene (the models' rows, the 3D Navigator): rebuilding the board for one of them is wasted work. */
+export function isSceneRow(id: string): boolean {
+  return !MODEL_ROWS.has(id) && id !== "navigator";
 }
 
 /**
@@ -236,8 +262,9 @@ const DEFAULT_PLOT_LAYERS = ["F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "F.Paste"
  * `plotLayers` is the board's selection (`plot_params.layers`); absent, KiCad's default with every copper layer. Differs: KiCad snapshots every row into
  * a custom preset on the first toggle (`OnLayerVisibilityChanged`); here a row the person never touched keeps following the plot settings.
  */
-export function plotFollowVisibility(plotLayers: readonly string[] | undefined | null): Record<string, boolean> {
-  const on = new Set(plotLayers ?? [...DEFAULT_PLOT_LAYERS, "F.Cu", "B.Cu"]);
+export function plotFollowVisibility(plotLayers: readonly string[] | undefined | null, plotOnAllLayers: readonly string[] = []): Record<string, boolean> {
+  // `for( PCB_LAYER_ID commonLayer : plotParams.GetPlotOnAllLayersSequence() ) layers.set( commonLayer );`
+  const on = new Set([...(plotLayers ?? [...DEFAULT_PLOT_LAYERS, "F.Cu", "B.Cu"]), ...plotOnAllLayers]);
   const v: Record<string, boolean> = {
     board: true,
     copper_top: on.has("F.Cu"),
@@ -248,7 +275,10 @@ export function plotFollowVisibility(plotLayers: readonly string[] | undefined |
     soldermask_bottom: on.has("B.Mask"),
     solder_paste: on.has("F.Paste"),
     adhesive: on.has("F.Adhes"),
+    // `GetPlotReference()`, `GetPlotValue()`, `GetPlotFPText()`: true by default (`PCB_PLOT_PARAMS::PCB_PLOT_PARAMS`), and KiCad 10 writes none of them to the board file.
     references: true,
+    values: true,
+    footprint_text: true,
   };
   for (const r of USER_ROWS) v[r.id] = on.has(rowLayer(r.id)!);
   return v;

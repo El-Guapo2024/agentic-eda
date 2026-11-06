@@ -369,3 +369,47 @@ fn the_command_reads_from_the_json_the_studio_sends_for_a_migration() {
     b.apply(&read(serde_json::json!({ "op": "migrate_board_models", "replacements": { OLD: NEW } }))).unwrap();
     assert_eq!(paths(&listed(&b, "U1").unwrap()), [NEW]);
 }
+
+/// The 3D Models tab's Extruded 3D Body box (`SetExtrudedBody`, `PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`): a body set is the footprint's, none clears it, the box's
+/// checks refuse in KiCad's words, a command that changes nothing is refused, and a body that comes to the board file's takes the edit away.
+#[test]
+fn the_extruded_body_box_sets_and_clears_a_footprints_body_in_one_command_and_refuses_in_kicads_words() {
+    use eda_model::extruded_body::{ExtrudedBody, ExtrusionMaterial};
+    let m0 = library_model();
+    let mut b = board(&m0);
+    let body = ExtrudedBody { height: mm(1.2), standoff: mm(0.2), layer: "F.Fab".into(), material: ExtrusionMaterial::Copper, ..Default::default() };
+    let set = |body: Option<ExtrudedBody>| Cmd::SetExtrudedBody { part: "U1".into(), body };
+    assert_eq!(b.design().extruded_body("U1"), None);
+    b.apply(&set(Some(body.clone()))).unwrap();
+    assert_eq!(b.design().extruded_body("U1"), Some(body.clone()));
+    assert_eq!(b.design().extruded_body("U2"), None, "the other footprint is untouched");
+    assert_eq!(refusal(&mut b, set(Some(body.clone()))), "ops_nothing_to_change: the Extruded 3D Body is as it was");
+    assert_eq!(refusal(&mut b, set(Some(ExtrudedBody { height: mm(0.0), ..body.clone() }))), "ops_bad_extruded_body: Component height must be greater than zero.");
+    assert_eq!(refusal(&mut b, set(Some(ExtrudedBody { standoff: mm(1.2), ..body.clone() }))), "ops_bad_extruded_body: Standoff height must be less than the overall height.");
+    // a negative standoff is none (`if( standoff < 0.0 ) standoff = 0.0;`)
+    b.apply(&set(Some(ExtrudedBody { standoff: mm(-1.0), ..body.clone() }))).unwrap();
+    assert_eq!(b.design().extruded_body("U1").unwrap().standoff, mm(0.0));
+    // the box off: `ClearExtrudedBody`, and with no body from the file the edit goes too
+    b.apply(&set(None)).unwrap();
+    assert_eq!(b.design().extruded_body("U1"), None);
+    assert!(b.design().footprint_edit("U1").is_none_or(|e| e.extruded_body.is_none()), "nothing is kept for a footprint as it was read");
+    assert_eq!(refusal(&mut b, set(None)), "ops_nothing_to_change: the Extruded 3D Body is as it was");
+    // a footprint whose board file had a body: none is an edit of its own, and the file's body again takes the edit away
+    let read = ExtrudedBody { height: mm(3.0), ..Default::default() };
+    let mut d = design();
+    d.drawings.get_or_insert_with(Default::default).footprint_extras.push(eda_model::ir::FootprintExtra { id: "U2".into(), extruded_body: Some(read.clone()), ..Default::default() });
+    let mut b2 = Board::new(d, &m0, mm(0.1), mm(0.3));
+    let set2 = |body: Option<ExtrudedBody>| Cmd::SetExtrudedBody { part: "U2".into(), body };
+    b2.apply(&set2(None)).unwrap();
+    assert_eq!(b2.design().extruded_body("U2"), None);
+    assert!(b2.design().footprint_edit("U2").and_then(|e| e.extruded_body.as_ref()).is_some_and(|e| e.body.is_none()), "cleared on the board, kept as an edit");
+    b2.apply(&set2(Some(read.clone()))).unwrap();
+    assert_eq!(b2.design().extruded_body("U2"), Some(read));
+    assert!(b2.design().footprint_edit("U2").is_none_or(|e| e.extruded_body.is_none()), "back to the file's body: no edit");
+    // what the studio sends
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_extruded_body", "part": "U1", "body": { "height": 1500000, "standoff": 100000, "layer": "pad_bbox", "color": [0.5, 0.5, 0.5, 1.0], "offset": [0.5, 0.0, 0.0] } })).unwrap();
+    let Cmd::SetExtrudedBody { body: Some(read_body), .. } = &cmd else { panic!("{cmd:?}") };
+    assert_eq!((read_body.height, read_body.standoff, read_body.layer.as_str(), read_body.color, read_body.offset, read_body.scale), (mm(1.5), mm(0.1), "pad_bbox", Some([0.5, 0.5, 0.5, 1.0]), [0.5, 0.0, 0.0], [1.0; 3]));
+    b.apply(&cmd).unwrap();
+    assert_eq!(serde_json::from_value::<Cmd>(serde_json::json!({ "op": "set_extruded_body", "part": "U1" })).unwrap(), set(None), "no body is the box off");
+}

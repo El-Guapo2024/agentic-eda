@@ -1,5 +1,5 @@
 // The model chooser (`DIALOG_SELECT_3DMODEL`, 3d-viewer/dialogs/dialog_select_3d_model.cpp), opened by the 3D Models tab's folder button (`OnAdd3DModel`): the folders KiCad's
-// resolver searches -- the board's own, the ones its path variables name, KiCad's 3D model library -- as a list to walk through, the model files in each (STEP, VRML), a viewer for the
+// resolver searches -- the board's own, the ones its path variables name, KiCad's 3D model library -- as a list to walk through, the model files in each (STEP, IGES, VRML, X3D), a viewer for the
 // file selected and "Configure Paths...". The answer is the path to write in the footprint: the file shortened to the first folder that holds it (`ShortenPath`), so
 // `${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step`, `${KIPRJMOD}/parts/chip.step`. It comes from the server (`GET /api/3dmodel/browse`, which lists only
 // what `GET /api/3dmodel` may read), so the page never holds a path of the machine it cannot use. A chosen model starts with KiCad's defaults: no offset, scale 1, no rotation.
@@ -7,7 +7,7 @@
 // `mode: "folder"` is the same window as KiCad's folder picker (`wxDirDialog`, "Add 3D Model Search Directory" of Migrate 3D Models): only the folders are listed, a click picks one (a double click
 // opens it) and OK answers the one picked, or the one being listed; there is no viewer.
 import { useEffect, useState } from "react";
-import { browseModels, type ModelEntry, type ModelFilter, type ModelListing } from "../../api/model3dClient";
+import { MODEL_FILTERS, browseModels, type ModelEntry, type ModelFilter, type ModelListing } from "../../api/model3dClient";
 import { plainRow } from "../../kicad-port/fpModels";
 import { ModelPreview3D } from "./ModelPreview3D";
 
@@ -38,14 +38,14 @@ export interface Model3dChooserProps {
   /** What is chosen: a model file (the default) or a folder (`wxDirDialog`). */
   mode?: "file" | "folder";
   title?: string;
-  /** Only the files of one kind are listed and the filter is not offered ("Open External File..." of Migrate 3D Models picks a STEP file). */
+  /** Only the files of one kind are listed and the filter is not offered ("Open External File..." of Migrate 3D Models picks a STEP-family file: `candidates`). */
   only?: ModelFilter;
 }
 
 export function Model3dChooserDialog({ onChoose, onCancel, onConfigurePaths, mode = "file", title, only }: Model3dChooserProps) {
   const folderMode = mode === "folder";
   const [listing, setListing] = useState<ModelListing | null>(null);
-  const [chosenFilter, setFilter] = useState<ModelFilter>(() => (["all", "step", "wrl"].includes(remembered(LAST_FILTER_KEY) ?? "") ? (remembered(LAST_FILTER_KEY) as ModelFilter) : "all"));
+  const [chosenFilter, setFilter] = useState<ModelFilter>(() => (MODEL_FILTERS.some((f) => f.value === remembered(LAST_FILTER_KEY)) ? (remembered(LAST_FILTER_KEY) as ModelFilter) : "all"));
   const filter = only ?? chosenFilter;
   const [selected, setSelected] = useState<ModelEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,10 +126,14 @@ export function Model3dChooserDialog({ onChoose, onCancel, onConfigurePaths, mod
                     remember(LAST_FILTER_KEY, f);
                   }}
                   data-testid="model3d-chooser-filter"
+                  // `KIPLATFORM::UI::EllipsizeChoiceBox`: the long "All supported files (...)" does not widen the dialog
+                  style={{ maxWidth: 240, textOverflow: "ellipsis" }}
                 >
-                  <option value="all">All supported files</option>
-                  <option value="step">STEP (*.step, *.stp)</option>
-                  <option value="wrl">VRML (*.wrl)</option>
+                  {MODEL_FILTERS.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
                 </select>
               )}
             </div>

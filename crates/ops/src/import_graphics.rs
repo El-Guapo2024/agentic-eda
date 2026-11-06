@@ -122,6 +122,19 @@ pub struct BoardItems {
     pub messages: Vec<String>,
 }
 
+/// A text whose vertical justification has no place to be kept (a library footprint's text, which has no `TextExtra`): its anchor moved half a height along the
+/// text's own up, so a text centred on it stands where the justified one stood (what the board's importer did before it kept the justification).
+pub(crate) fn centre_vertically(t: &mut Text, valign: eda_model::ir::TextVAlign) {
+    let shift = match valign {
+        eda_model::ir::TextVAlign::Bottom => t.size_nm.as_f64() / 2.0,
+        eda_model::ir::TextVAlign::Top => -t.size_nm.as_f64() / 2.0,
+        eda_model::ir::TextVAlign::Center => return,
+    };
+    let a = (t.angle as f64 / 1000.0).to_radians();
+    let up = (-a.sin(), -a.cos());
+    t.at = Point { x: t.at.x + Nm::kiround(up.0 * shift), y: t.at.y + Nm::kiround(up.1 * shift) };
+}
+
 /// `EDA_TEXT::SetTextSize` / `SetTextWidth` / `SetTextHeight`: a size in the editor's unit as `int( value )` makes it (truncated), held to 1 micrometre .. 250 mm
 /// (`TEXT_MIN_SIZE_MM`, `TEXT_MAX_SIZE_MM`).
 fn text_size(v: f64) -> Nm {
