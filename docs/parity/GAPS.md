@@ -523,6 +523,18 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Chooser's "Show 3D viewer in own window", Change Symbols' browse buttons over every library of the tables (the new id's definition kept with the change), a folder
   library's broken file reported in KiCad 25ec2335's words (chooser, tree, status bar, the row's status; `symbol_library_load_errors`), and the placing of a lib_id the
   design already holds decided (the design's copy, KiCad's answer until the library changes; `PARITY-common.md` section 14). `e2e/lib-choosers.check.js` (7 scenarios).
+- Done (2026-11-06, `task-u5-shared`, UI-LEFT A2, `PARITY-sch.md` section 67, `PARITY-common.md` section 18): **Rescue Symbols** (`SYMBOL_LIB_TABLE_RESCUER`: the
+  candidates -- a symbol only in the cache, one whose pins conflict with its library's, or whose name a library id cannot hold --, the Project Rescue Helper with
+  KiCad's words, instances and both symbols drawn, `<project>-rescue.kicad_sym` beside the board and its `${KIPRJMOD}` row, the relink as one undoable
+  `Cmd::RescueSymbols`; the cache is the board folder's `<project>-cache.lib` through kicad-cli's conversion, else the design's own copy, a **Differs**);
+  **Remap Legacy Library Symbols** (`DIALOG_SYMBOL_REMAP`: only for a schematic none of whose symbols names a library; the backup into `rescue-backup/`, the
+  project table made again with Legacy rows from the project file's legacy library list, each bare name given its library; KiCad QA `legacy_power4` remapped
+  and read by kicad-cli); **Select Columns** in the two choosers and the two library editors' trees (the header's menu, `EDA_REORDERABLE_LIST_DIALOG`, a symbol
+  library's every field and Keywords as columns, the choice kept per tree in the browser). `e2e/rescue-symbols.check.js` 5/5. **Left**: the legacy rescuer
+  (`LEGACY_RESCUER`, a legacy `.lib` rescue library: no legacy writer) and a KiCad 5 `.sch` cannot be brought in, so Remap runs only on a design whose symbols
+  already name bare ids; the legacy list stays in the project file; Remote Symbols (KiCad 25ec2335's `PANEL_REMOTE_SYMBOL`: a provider's web page, OAuth and
+  HTTPS downloads -- no provider is reachable, its reason in `ui-parity-missing.json`); the server's search of the installed libraries does not take the shown
+  columns as search words; the "-- Already Placed --" and project items show no field columns.
 - Missing: Add Library by drop (a browser drop has no path), pasting table text into the grid, Add Library's "global table" choice; a row's options are not passed to kicad-cli's
   conversion; Database and HTTP libraries (listed, not read); a system-environment variable is read only in Configure Paths; the chooser places a symbol in its normal body
   style (Cycle Body Style changes it afterwards, item 12); power symbols are placed by `P`, whose chooser is this one filtered to them (2026-11-05, `task-u1-schplace`,
