@@ -214,6 +214,7 @@ select.re-field {
   display: flex;
   justify-content: flex-end;
   margin-top: 6px;
+}
 /* The Conditions heading with `m_syntaxHelp` at its right, and KiCad's text editor (RuleTextEditor.tsx) for the Custom rule. */
 .re-cond-head {
   display: flex;

@@ -342,6 +342,7 @@
 }
 .bs-cc-menu button:hover:not(:disabled) {
   background: var(--chrome-hover);
+}
 /* Custom Rules (CustomRulesPage.tsx): the "DRC Rules" title with the "Syntax help" hyperlink at its right, KiCad's editor, the
    "Cancel Changes?" question, and the error links of the report. */
 .bs-rules-head {
