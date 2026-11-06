@@ -206,6 +206,9 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     router.settings = settings_of(&req);
     router.entered_group = entered_group(&req);
     router.use_connected_track_width = auto_track_width(&req);
+    // `UseNetClassTrack()`: no width chosen; `TrackWidthIsExplicit()`: `!m_UseConnectedTrackWidth` (the override is cleared at the start), UI-LEFT R5
+    router.use_net_class_track = req.get("width").and_then(Value::as_i64).is_none();
+    router.width_explicit = !router.use_connected_track_width;
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     // `ImportSizes`: the width of the track the start item is (or is joined to) first, whatever width was chosen (`m_UseConnectedTrackWidth &&
@@ -243,7 +246,11 @@ pub fn mv(cell: &RouteCell, body: &[u8]) -> Value {
     if req.get("flip_posture").and_then(Value::as_bool).unwrap_or(false) {
         router.flip_posture();
     }
-    // a width chosen while routing, raised to the board's minimum (R6-R2): the reply's `width_source` says which
+    // a width chosen while routing, raised to the board's minimum (R6-R2): the reply's `width_source` says which. `use_net_class`: the choice is the
+    // width list's first entry (`UseNetClassTrack()`, UI-LEFT R5)
+    if req.get("width").and_then(Value::as_i64).is_some() {
+        router.use_net_class_track = req.get("use_net_class").and_then(Value::as_bool).unwrap_or(false);
+    }
     let width_source = req.get("width").and_then(Value::as_i64).and_then(|w| router.set_width(Nm::new(w))).map(|(_, source)| source);
     let at = point_of(&req);
     let mut reply = router.preview(at).map(|p| preview_json(router, &p)).unwrap_or_else(|| err("not routing"));
@@ -261,8 +268,11 @@ pub fn fix(cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     match router.fix(at) {
         Some(FixOutcome::Fixed { real_end }) => {
+            // `performRouting`'s click: `switchLayerOnViaPlacement()` (-> `updateSizesAfterRouterEvent( *newLayer, .. )`) after a via, else
+            // `updateSizesAfterRouterEvent( m_router->GetCurrentLayer(), m_endSnapPoint )` (UI-LEFT R5)
+            let sizes = router.current_layer().and_then(|l| router.update_sizes_after_router_event(l, at)).map(|s| event_sizes_json(&s));
             let preview = router.preview(at).map(|p| preview_json(router, &p)).unwrap_or_else(|| json!({}));
-            json!({ "ok": true, "blocked": false, "real_end": real_end, "preview": preview })
+            json!({ "ok": true, "blocked": false, "real_end": real_end, "preview": preview, "sizes": sizes })
         }
         Some(FixOutcome::Blocked) => json!({ "ok": true, "blocked": true, "message": "still colliding; not fixed" }),
         None => err("not routing"),
@@ -287,7 +297,38 @@ pub fn layer(cell: &RouteCell, body: &[u8]) -> Value {
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
     let Some(layer) = req.get("layer").and_then(Value::as_str).and_then(|n| router.layer_index(n)) else { return err("not a copper layer of the board") };
-    json!({ "ok": true, "switched": router.switch_layer(layer) })
+    let switched = router.switch_layer(layer);
+    // `if( !aForceVia && m_router->SwitchLayer( .. ) ) { updateEndItem( aEvent ); updateSizesAfterRouterEvent( targetLayer, m_endSnapPoint ); .. }` --
+    // the point is the cursor's when the request has one (UI-LEFT R5)
+    let sizes = switched.then(|| router.update_sizes_after_router_event(layer, point_of(&req))).flatten().map(|s| event_sizes_json(&s));
+    json!({ "ok": true, "switched": switched, "sizes": sizes })
+}
+
+/// `POST /api/route/ratsnest_anchor`: `{x, y}` -- `ROUTER::GetNearestRatnestAnchor` for the route or pair in progress with its head at `(x, y)`: `{ ok,
+/// found, at, layers }` (the anchor and the names of its first and last layers). Place Through Via's implicit target is the first of them
+/// (`handleLayerSwitch`: `otherEndLayers.Start()`), the studio's `planViaCommand` (UI-LEFT R5).
+pub fn ratsnest_anchor(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing") };
+    match router.ratsnest_anchor(point_of(&req)) {
+        Some((at, layers)) => json!({ "ok": true, "found": true, "at": [at.x, at.y], "layers": [router.layer_name(layers.start()), router.layer_name(layers.end())] }),
+        None => json!({ "ok": true, "found": false }),
+    }
+}
+
+/// [`eda_pns::router::EventSizes`] as the studio's message panel reads it (`kicad-port/routerSizes.ts` `RouteSizesInfo`): the clearance and its
+/// source, and the width (and a pair's gap) with theirs when they were asked again; `width_applied` when the head took the width.
+fn event_sizes_json(s: &eda_pns::router::EventSizes) -> Value {
+    json!({
+        "clearance": s.clearance,
+        "clearance_source": s.clearance_source,
+        "width": s.width.as_ref().map(|w| w.0).or(s.diff_pair_width.as_ref().map(|w| w.0)),
+        "width_source": s.width.as_ref().map(|w| w.1.clone()).or(s.diff_pair_width.as_ref().map(|w| w.1.clone())),
+        "width_applied": s.width_applied,
+        "gap": s.diff_pair_gap.as_ref().map(|g| g.0),
+        "gap_source": s.diff_pair_gap.as_ref().map(|g| g.1.clone()),
+    })
 }
 
 /// `POST /api/route/via`: `{enabled, diameter?, drill?, to_layer?, via_type?, span?}` -- without a size, the net class's (`handleLayerSwitch`) --
@@ -749,6 +790,7 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     router.settings = settings_of(&req);
     router.entered_group = entered_group(&req);
     router.use_connected_track_width = auto_track_width(&req);
+    router.width_explicit = !router.use_connected_track_width;
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     // `prepareInteractive`: `ImportSizes` (the user's dimensions, when sent) and `UpdateSizes` before `StartRouting`, whose checks judge them (r5 R5-4)
@@ -788,7 +830,11 @@ pub fn dp_dims(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
-    if router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64).map(Nm::new), req.get("gap").and_then(Value::as_i64).map(Nm::new), req.get("via_gap").and_then(Value::as_i64).map(Nm::new)) {
+    let (width, gap, via_gap) = (req.get("width").and_then(Value::as_i64).map(Nm::new), req.get("gap").and_then(Value::as_i64).map(Nm::new), req.get("via_gap").and_then(Value::as_i64).map(Nm::new));
+    if router.set_diff_pair_sizes(width, gap, via_gap) {
+        // `UseNetClassDiffPair()` from now on: false for a pre-defined pair or custom dimensions, true for the list's first entry (`use_net_class`), which
+        // `updateSizesAfterRouterEvent` reads (UI-LEFT R5)
+        router.user_diff_pair = if req.get("use_net_class").and_then(Value::as_bool).unwrap_or(false) { None } else { eda_pns::dp_placer::UserDpSizes::of(width, gap, via_gap) };
         json!({ "ok": true })
     } else {
         err("not routing a diff pair")
@@ -807,8 +853,11 @@ pub fn dp_move(cell: &RouteCell, body: &[u8]) -> Value {
     router.diff_pair_preview(at).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| err("not routing a diff pair"))
 }
 
-/// `POST /api/route/dp_via`: `{enabled, diameter?, drill?, to_layer?}` -- `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a
+/// `POST /api/route/dp_via`: `{enabled, diameter?, drill?, to_layer?, via_type?}` -- `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a
 /// pair of vias a `viaGap()` apart, and a fix places them and goes on from them on `to_layer`. No preview here; the next `dp_move` has it.
+/// `via_type` (`through`, `blind`, `buried`, `micro`) is the router tool's via commands in the pair tool (`handleLayerSwitch`, the same in both modes:
+/// `sizes.SetViaType( viaType )`, UI-LEFT R2); a blind, buried or micro pair sent no size takes the rules' for a dummy via of that type and layers
+/// (`bds.UseNetClassVia() || viaType == VIATYPE::MICROVIA`), as `via`'s; a through pair sent none keeps the size the pair started with.
 pub fn dp_via(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
@@ -818,7 +867,23 @@ pub fn dp_via(cell: &RouteCell, body: &[u8]) -> Value {
     }
     let enabled = req.get("enabled").and_then(Value::as_bool).unwrap_or(true);
     let to_layer = req.get("to_layer").and_then(Value::as_str).and_then(|n| router.layer_index(n));
-    router.toggle_diff_pair_via(enabled, req.get("diameter").and_then(Value::as_i64).map(Nm::new), req.get("drill").and_then(Value::as_i64).map(Nm::new), to_layer);
+    let kind = match req.get("via_type").and_then(Value::as_str) {
+        None | Some("through") => ViaKind::Through,
+        Some(word) => match ViaKind::from_file_word(word) {
+            Some(kind) => kind,
+            None => return err(format!("unknown via type {word:?}")),
+        },
+    };
+    let (mut diameter, mut drill) = (req.get("diameter").and_then(Value::as_i64).map(Nm::new), req.get("drill").and_then(Value::as_i64).map(Nm::new));
+    if kind != ViaKind::Through && enabled && (diameter.is_none() || drill.is_none()) {
+        // `DIFF_PAIR_PLACER::makeVia`: the vias span the sizes' layer pair, `( currentLayer, targetLayer )`
+        let span = router.diff_pair_current_layer().map(|l| (l, to_layer.unwrap_or(l)));
+        if let Some((d, h)) = router.net_class_via_size(kind, span, to_layer) {
+            diameter = diameter.or(Some(d));
+            drill = drill.or(Some(h));
+        }
+    }
+    router.toggle_diff_pair_via_typed(enabled, diameter, drill, to_layer, kind);
     json!({ "ok": true })
 }
 
@@ -830,8 +895,10 @@ pub fn dp_fix(cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     match router.fix_diff_pair(at) {
         Some(FixOutcome::Fixed { real_end }) => {
+            // as a track's fix: `updateSizesAfterRouterEvent` on the layer the pair goes on on (UI-LEFT R5)
+            let sizes = (!real_end).then(|| router.current_layer().and_then(|l| router.update_sizes_after_router_event(l, at))).flatten().map(|s| event_sizes_json(&s));
             let preview = router.diff_pair_preview(at).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| json!({}));
-            json!({ "ok": true, "blocked": false, "real_end": real_end, "preview": preview })
+            json!({ "ok": true, "blocked": false, "real_end": real_end, "preview": preview, "sizes": sizes })
         }
         Some(FixOutcome::Blocked) => json!({ "ok": true, "blocked": true, "message": "still colliding; not fixed" }),
         None => err("not routing a diff pair"),
@@ -844,6 +911,36 @@ pub fn dp_undo_segment(cell: &RouteCell) -> Value {
     let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
     let popped = router.undo_diff_pair_segment();
     json!({ "ok": true, "popped": popped })
+}
+
+/// `POST /api/route/dp_attempt_finish`: `{x, y}` -- AttemptFinish (`F`) while a pair is routed: `routerAttemptFinish` -> `ROUTER::Finish`, which takes the
+/// placer's first trace, the pair's P line (`Router::attempt_finish_diff_pair`). The pair is moved to the nearest unconnected anchor of the P net and, when
+/// it reaches the coupled pair there, finished and committed (`finished`, one undo step); otherwise the pair goes on, with what the fix at the anchor placed
+/// kept, and the reply carries where its end is (`warp`, where KiCad warps the cursor: `WarpMouseCursor( m_router->Placer()->CurrentEnd() )`) and the
+/// preview there. Nothing is ever finished at the cursor (UI-LEFT R2).
+pub fn dp_attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let at = point_of(&req);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    if !router.is_routing_diff_pair() {
+        return err("not routing a diff pair");
+    }
+    match router.attempt_finish_diff_pair(at) {
+        Ok(commit) => {
+            let (append_undo, group) = (router.append_undo, router.entered_group.clone());
+            *guard = None;
+            drop(guard);
+            match commit_route(dir, commit, append_undo, group) {
+                Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
+                Err(e) => err(e),
+            }
+        }
+        Err(end) => {
+            let preview = router.diff_pair_preview(end).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| json!({}));
+            json!({ "ok": true, "finished": false, "warp": [end.x, end.y], "preview": preview })
+        }
+    }
 }
 
 /// `POST /api/route/dp_finish`: `{x, y}`.
@@ -1560,6 +1657,69 @@ mod tests {
         let on_layer = |layer: &str| routing.tracks.iter().filter(|t| t.layer == layer).count();
         assert_eq!((on_layer("F.Cu"), on_layer("B.Cu")), (2, 2), "two lines on each layer: {:?}", routing.tracks);
         assert_eq!(vias_of(&dir).len(), 4, "the two it started from and the two it placed: {:?}", vias_of(&dir));
+    }
+
+    /// UI-LEFT R2: `F` on a pair is `ROUTER::Finish` with the P line as the trace -- the pair is taken to the coupled pair at the nearest unconnected
+    /// anchor of the P net and finished there, one undo step; it is never finished at the cursor. With nothing left to connect to, the pair goes on as
+    /// it was, nothing committed.
+    #[test]
+    fn f_on_a_pair_finishes_it_on_the_coupled_pair_at_the_nearest_anchor_not_at_the_cursor() {
+        let dir = scratch("dp_attempt_finish");
+        setup_board(&dir, vec![], vec![via_at("dp", "USB_DP", mm(3.0), mm(5.0)), via_at("dn", "USB_DN", mm(3.0), mm(6.0)), via_at("dp2", "USB_DP", mm(15.0), mm(5.0)), via_at("dn2", "USB_DN", mm(15.0), mm(6.0))]);
+        let cell: RouteCell = Mutex::new(None);
+        let started = dp_start(&dir, &cell, &body(json!({ "x": 3_000_000, "y": 6_000_000, "layer": "F.Cu", "settings": { "mode": "walkaround" } })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        let at = body(json!({ "x": 8_000_000, "y": 5_500_000 }));
+        assert_eq!(dp_move(&cell, &at)["colliding"], json!(false));
+        let finished = dp_attempt_finish(&dir, &cell, &at);
+        assert_eq!((finished["ok"].clone(), finished["finished"].clone()), (json!(true), json!(true)), "{finished}");
+        assert!(cell.lock().unwrap().is_none(), "the session is over");
+        let tracks = tracks_of(&dir);
+        for (net, x, y) in [("USB_DP", mm(15.0), mm(5.0)), ("USB_DN", mm(15.0), mm(6.0))] {
+            assert!(tracks.iter().any(|(n, pts)| n == net && pts.last() == Some(&p(x, y))), "{net} ends on its far via: {tracks:?}");
+        }
+        let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));
+        assert!(undone.is_ok(), "{undone:?}");
+        assert!(tracks_of(&dir).is_empty(), "one undo step");
+
+        // nothing to finish on: the pair goes on, nothing is committed, and the reply says where its end is
+        let dir = scratch("dp_attempt_finish_nothing");
+        pair_board(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        assert_eq!(dp_start(&dir, &cell, &body(json!({ "x": 3_000_000, "y": 6_000_000, "layer": "F.Cu" })))["ok"], json!(true));
+        let at = body(json!({ "x": 9_000_000, "y": 5_500_000 }));
+        dp_move(&cell, &at);
+        let refused = dp_attempt_finish(&dir, &cell, &at);
+        assert_eq!((refused["ok"].clone(), refused["finished"].clone()), (json!(true), json!(false)), "{refused}");
+        assert_eq!(refused["warp"], json!([9_000_000, 5_500_000]), "{refused}");
+        assert!(cell.lock().unwrap().as_ref().is_some_and(|r| r.is_routing_diff_pair()), "the pair goes on");
+        assert!(tracks_of(&dir).is_empty(), "nothing committed at the cursor");
+    }
+
+    /// UI-LEFT R2: the router's via commands in the pair tool (`handleLayerSwitch`, `DIFF_PAIR_PLACER::makeVia`'s `m_sizes.ViaType()`): a pair of
+    /// microvias armed with no size takes the class's microvia size (`bds.UseNetClassVia() || viaType == VIATYPE::MICROVIA`), spans the sizes' layer
+    /// pair and commits as microvias, the pair going on on the other layer.
+    #[test]
+    fn a_pair_of_microvias_is_committed_with_its_type_layers_and_the_class_size() {
+        let dir = scratch("dp_micro");
+        setup_board_on(&dir, vec![], vec![via_at("dp", "USB_DP", mm(3.0), mm(5.0)), via_at("dn", "USB_DN", mm(3.0), mm(6.0))], &["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+        let cell: RouteCell = Mutex::new(None);
+        assert_eq!(dp_start(&dir, &cell, &body(json!({ "x": 3_000_000, "y": 6_000_000, "layer": "F.Cu", "settings": { "mode": "walkaround" } })))["ok"], json!(true));
+        assert_eq!(dp_via(&cell, &body(json!({ "enabled": true, "to_layer": "In1.Cu", "via_type": "micro" })))["ok"], json!(true));
+        assert_eq!(dp_via(&cell, &body(json!({ "enabled": true, "via_type": "tented" })))["ok"], json!(false), "the board's words only");
+        let at = body(json!({ "x": 9_000_000, "y": 5_500_000 }));
+        let moved = dp_move(&cell, &at);
+        assert_eq!(moved["colliding"], json!(false), "{moved}");
+        let fixed = dp_fix(&cell, &at);
+        assert_eq!(fixed["preview"]["layer"], json!("In1.Cu"), "{fixed}");
+        dp_move(&cell, &body(json!({ "x": 14_000_000, "y": 5_500_000 })));
+        let done = dp_finish(&dir, &cell, &body(json!({ "x": 14_000_000, "y": 5_500_000 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let kind = |id: &str| design.drawings.as_ref().and_then(|d| d.via_extra(id)).map(|e| e.kind).unwrap_or_default();
+        let placed: Vec<_> = design.routing.as_ref().unwrap().vias.iter().filter(|v| v.id != "dp" && v.id != "dn").map(|v| (v.from_layer.as_str(), v.to_layer.as_str(), v.diameter, v.drill, kind(&v.id))).collect();
+        assert_eq!(placed, vec![("F.Cu", "In1.Cu", mm(0.3), mm(0.1), ViaKind::Micro); 2], "{:?}", design.routing.as_ref().unwrap().vias);
+        assert!(design.routing.as_ref().unwrap().tracks.iter().any(|t| t.layer == "In1.Cu"), "on on In1.Cu");
     }
 
     /// `ROUTER::ContinueFromEnd` restarts the placer of the same mode: Route From Other End on a pair commits the fixed leg of both nets and starts a

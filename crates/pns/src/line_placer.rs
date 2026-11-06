@@ -224,6 +224,9 @@ pub struct LinePlacer {
     /// (`SOLID`) and its layers, `Some(None)` for a track -- and `m_chainedPlacement` (a fix that did not end in a via: the route goes on from that segment).
     start_layers: Option<Option<LayerRange>>,
     chained: bool,
+    /// `m_startItem->Kind() == ITEM::SEGMENT_T`: the route started on a track segment (not an arc), so a size change before anything is placed
+    /// leaves its width alone (`UpdateSizes`).
+    pub start_on_segment: bool,
 }
 
 impl LinePlacer {
@@ -236,13 +239,19 @@ impl LinePlacer {
         // `m_startItem = aStartItem`: what `SetLayer` may switch from -- a via or a pad on the layer asked, or nothing
         let start_layers = start_item.and_then(|id| node.get(id)).map(|it| matches!(it, crate::item::Item::Via(_) | crate::item::Item::Solid(_)).then(|| it.layers()));
         let direction = Direction45::N;
+        let start_on_segment = start_item.and_then(|id| node.get(id)).is_some_and(|it| matches!(it, crate::item::Item::Segment(_)));
         // `LINE_PLACER::Start`: `m_mouseTrailTracer.Clear(); AddTrailPoint( aP ); SetTolerance( m_head.Width() ); SetDefaultDirections( m_initial_direction, UNDEFINED )`
         let mut trail = MouseTrailTracer::new();
         trail.clear();
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
+    }
+
+    /// `LINE_PLACER::HasPlacedAnything`: `m_placementCorrect || m_fixedTail.StageCount() > 1`.
+    pub fn has_placed_anything(&self) -> bool {
+        self.placement_correct || self.stages.len() > 1
     }
 
     pub fn fixed_start(&self) -> Point {
