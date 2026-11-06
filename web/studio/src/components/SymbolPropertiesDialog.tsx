@@ -305,7 +305,9 @@ export function SymbolPropertiesDialog() {
     shown[name] === undefined ? (
       <span />
     ) : (
-      <input type="checkbox" title={`Show the ${name} field on the sheet`} aria-label={`Show ${name}`} checked={shown[name]} onChange={(e) => setShown({ ...shown, [name]: e.target.checked })} />
+      <label title={`Show the ${name} field on the sheet`}>
+        <input type="checkbox" aria-label={`Show ${name}`} checked={shown[name]} onChange={(e) => setShown({ ...shown, [name]: e.target.checked })} />
+      </label>
     );
   /** The look cells of the field `name` (Show Name .. Color); empty cells for a field that has no place on the sheet (added here, or a sheet read from a file). */
   const lookCells = (name: string) => {
@@ -473,7 +475,9 @@ export function SymbolPropertiesDialog() {
                             </div>
                           </td>
                           <td>
-                            <input type="checkbox" title={`Show the ${r.name} field on the sheet`} aria-label={`Show ${r.name}`} checked={r.shown} onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, shown: e.target.checked } : o)))} />
+                            <label title={`Show the ${r.name} field on the sheet`}>
+                              <input type="checkbox" aria-label={`Show ${r.name}`} checked={r.shown} onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, shown: e.target.checked } : o)))} />
+                            </label>
                           </td>
                           {r.isNew ? <td colSpan={8} style={{ opacity: 0.6 }} title="A field added here takes its looks once it is on the symbol (OK)" /> : lookCells(r.name)}
                         </tr>
