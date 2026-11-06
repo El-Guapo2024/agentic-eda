@@ -1,7 +1,7 @@
 // The Net Classes list (`APPEARANCE_CONTROLS::rebuildNets`, the `appendNetclass` rows): the Default class first -- without a colour of its own ("Default netclass
 // can't have an override color") -- then the others by name, each with a colour, an eye that shows or hides the ratsnest of every net the class owns, and its name.
-// The right-click menu sets, copies from the schematic and clears the class colour, highlights its nets, selects or unselects their tracks and vias, and shows all
-// classes or hides all the others.
+// The right-click menu sets, copies from the schematic (Use Color from Schematic: the class's colour of Schematic Setup > Net Classes) and clears the class
+// colour, highlights its nets, selects or unselects their tracks and vias, and shows all classes or hides all the others.
 import { useState } from "react";
 import { useAppearanceView } from "./useAppearanceView";
 import { useNetActions } from "./netActions";
@@ -9,6 +9,7 @@ import { ColorDialog, Eye, Swatch } from "./shared";
 import { NetDisplayOptions } from "./NetDisplayOptions";
 import { ContextMenu, type MenuEntry } from "../../canvas/ContextMenu";
 import { classRows, netclassMenu, netsOfClass } from "../../../kicad-port/appearanceNets";
+import { specifiedColor } from "../../../kicad-port/appearance";
 
 export function NetClassesTab() {
   const { state, dispatch, nets, op } = useAppearanceView();
@@ -16,8 +17,13 @@ export function NetClassesTab() {
   const [menu, setMenu] = useState<{ x: number; y: number; name: string; isDefault: boolean } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const rows = classRows(nets, state.appearance.netclassColors, state.appearance.hiddenNetclasses);
+  // `nc->GetSchematicColor()`: the class's wire colour of Schematic Setup > Net Classes (the project's one `NET_SETTINGS`); none, or `COLOR4D::UNSPECIFIED`, dims the entry
+  const schematicColor = (name: string): string | null => {
+    const css = state.board?.board_rules?.net_class_schematic?.[name]?.color ?? null;
+    return specifiedColor(css) ? css : null;
+  };
   const entries = (name: string, isDefault: boolean): MenuEntry[] =>
-    netclassMenu(name, isDefault).map((m) => ({
+    netclassMenu(name, isDefault, schematicColor(name)).map((m) => ({
       label: m.label,
       separator: m.action === "separator",
       disabled: m.disabled,
@@ -30,6 +36,12 @@ export function NetClassesTab() {
           case "clear_color":
             op({ op: "netclass_color", name, color: null });
             break;
+          case "use_schematic_color": {
+            // ID_USE_SCHEMATIC_NET_COLOR: `SetPcbColor( nc->GetSchematicColor() )`
+            const css = schematicColor(name);
+            if (css) op({ op: "netclass_color", name, color: css });
+            break;
+          }
           case "highlight":
             highlight(mine);
             break;
