@@ -222,3 +222,12 @@ test("UI-LEFT P14: four mandatory rows, and a repeated field name taken as KiCad
     { name: "MPN", text: "B", layout: 4 },
   ]);
 });
+
+test("UI-LEFT P14: a user row named like a mandatory field is refused (the studio cannot hold a second Reference beside the Reference)", async () => {
+  const { mandatoryNameProblem } = await import("./fpFields");
+  assert.equal(mandatoryNameProblem("Reference", 0), null, "the Reference row itself");
+  assert.equal(mandatoryNameProblem("Description", 3), null);
+  assert.equal(mandatoryNameProblem("Reference", 4), '"Reference" is the name of a mandatory field.');
+  assert.equal(mandatoryNameProblem(" Datasheet ", 5), '"Datasheet" is the name of a mandatory field.');
+  assert.equal(mandatoryNameProblem("MPN", 4), null);
+});

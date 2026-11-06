@@ -112,9 +112,12 @@
     if (via) {
       await scenario("via", [via.id], "Front tenting", "yes", async () => (await viaOf(via.id)).props?.front_tenting ?? null, true);
       await scenario("via", [via.id], "Backdrill Mode", "bottom", async () => (await viaOf(via.id)).props?.backdrill?.start ?? null, "B.Cu");
-      // a read-only row of the via says why
+      // The Teardrops rows are the via's own parameters, writeable (`BOARD_CONNECTED_ITEM_DESC`: `supportsTeardrops` is their only AvailableFunc, false only on a
+      // legacy-teardrop board; no WriteableFunc): the checkbox turned over gives the via its own parameters (`set_teardrop_params`, UI-LEFT P3), undo takes them away.
       await select([via.id]);
-      t("via: a teardrop row is read-only and says why", row("Enable Teardrops")?.dataset.note?.includes("Board Setup") || !row("Enable Teardrops"), row("Enable Teardrops")?.dataset.note ?? "no row (the board has teardrops)");
+      const tdOn = input("Enable Teardrops")?.checked;
+      if (tdOn === undefined) t("via: Enable Teardrops is a writeable row", false, row("Enable Teardrops") ? `read-only: ${row("Enable Teardrops").dataset.note ?? ""}` : "no row");
+      else await scenario("via", [via.id], "Enable Teardrops", !tdOn, async () => (await viaOf(via.id)).teardrops?.enabled ?? null, !tdOn);
     } else t("via", false, "the board has no via");
     if (track) await scenario("track", [track.id], "Soldermask", true, async () => !!(await trackOf(track.id)).mask, true);
     else t("track", false, "the board has no track on outer copper");

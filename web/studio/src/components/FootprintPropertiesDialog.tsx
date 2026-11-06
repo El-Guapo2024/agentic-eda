@@ -29,7 +29,7 @@
 // body, jumper pad groups. A Datasheet or Description edited here is the footprint's, not carried to the symbol.
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
-import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
+import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, mandatoryNameProblem, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
 import { footprintZoneForm, padNumbers, padZoneForm, zoneCmds, type FootprintZoneForm, type PadZoneForm } from "../kicad-port/padZone";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { useActionRunner } from "../actions/useActionRunner";
@@ -153,8 +153,10 @@ export function FootprintPropertiesDialog() {
       const r = rows[i]!;
       const message = checkFieldRow(r.name, { size: r.layout.size, thickness: r.layout.thickness }, len);
       if (message) return setError(`${r.name || `Field ${i + 1}`}: ${message}`);
+      const reserved = mandatoryNameProblem(r.name, i);
+      if (reserved) return setError(reserved);
     }
-    // A repeated name (a mandatory one too) as KiCad's reader takes it: the later row's text and look on the first row of the name.
+    // A repeated user field name as KiCad's reader takes it: the later row's text and look on the first row of the name.
     const merged = mergeDuplicateFields(rows);
     const [ref0, val0, ...users] = merged;
     const original = (name: string): FieldInfo | undefined => infos.get(name);
