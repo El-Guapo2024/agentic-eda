@@ -725,7 +725,9 @@ impl Board<'_> {
         // The zone-connection edits of the copies, each under the reference its footprint ends up with.
         let mut zone_edits: Vec<FootprintZoneOverrides> = Vec::new();
         for f in &copies.footprints {
-            let at = self.snap_point(f.at.x, f.at.y);
+            // Where the paste puts it, exactly: the copies keep their places relative to each other and to the tracks pasted with them (`PCB_CONTROL::Paste`
+            // moves every item by one offset; nothing is rounded to a placement step).
+            let at = f.at;
             if f.reuse_unplaced && self.model.part(&f.reference).is_some() && self.pose_of(&f.reference).is_none() && !replaced.iter().any(|r| r.id == f.reference) {
                 let pose = FootprintInstance { id: f.reference.clone(), at, rot: f.rot, side: f.side, label: f.label };
                 new_edits.extend(own_edit(f, &f.reference, &pose));
