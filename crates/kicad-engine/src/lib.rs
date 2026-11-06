@@ -474,6 +474,8 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
     if let Some(board_dir) = work.file_name().filter(|n| *n == ".kicad").and(work.parent()) {
         if let Ok(mut pro) = serde_json::from_str::<Value>(&pro_text) {
             let derived = eda_kicad::library_table::derive_project(board_dir, work, &mut pro).map_err(|e| fail("kicad_engine_write", &work.display().to_string(), e))?;
+            // and its footprint association files (CvPcb's `cvpcb.equivalence_files`), kept beside the board (`eda_model::cvpcb_equ::CVPCB_FILE`)
+            let derived = eda_model::cvpcb_equ::derive_into_project(board_dir, &mut pro) || derived;
             if derived {
                 pro_text = format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default());
             }

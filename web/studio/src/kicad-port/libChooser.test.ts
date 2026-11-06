@@ -65,8 +65,35 @@ test("a word may carry wildcards and nothing else is special", () => {
   assert.equal(score("soic*qfn", t), 0);
   assert.equal(score("p1*soic", t), 0, "the pieces must come in order");
   assert.equal(score("soic*3.9x4.9mm_p1.27mm", t), 1 + 2 * 8);
-  assert.equal(score("/soic/", t), 0, "a regular expression is searched as the text it is");
-  assert.equal(score("voltage>3.3", [["a voltage>3.3 b", 1]]), 1 + 1);
+  assert.equal(score("voltage>3.3", [["a voltage>3.3 b", 1]]), 1 + 1, "a relational word is found as its text too");
+});
+
+test("a word written /re/ or ^re$ is a regular expression found anywhere in a term", () => {
+  const t: [string, number][] = [["R_0603_1608Metric", 8], ["Resistor_SMD", 4], ["Resistor_SMD:R_0603_1608Metric", 16]];
+  // `^r_0603` (the word is lowered first) starts only the name: twice the name's weight
+  assert.equal(score("/^R_0603/", t), 1 + 2 * 8);
+  assert.equal(score("/^r_0603", t), 1 + 2 * 8, "the closing slash may be left off");
+  assert.equal(score("/0603/", t), 1 + 8 + 16, "found inside the name and inside Lib:Name");
+  assert.equal(score("^r_0603.*$", t), 1 + 2 * 8, "^...$ is a regular expression as it is");
+  assert.equal(score("/^r_0805/", t), 0);
+  assert.equal(score("/(/", t), 0, "a pattern that does not compile is no matcher, and its text is nowhere");
+  assert.equal(score("/smd$/", t), 1 + 4, "the end of a term");
+  assert.equal(score("/r_0[68]0[35]/", t), 1 + 2 * 8 + 16, "classes");
+});
+
+test("a relational word key<op>value[unit] matches a key=value of the term's words", () => {
+  const r: [string, number][] = [["resistance=4.7k 1% 0603", 1]];
+  assert.equal(score("resistance<10k", r), 1 + 2 * 1, "4.7k is below 10k, at the start of the term");
+  assert.equal(score("resistance<10k", [["resistance=22k", 1]]), 0, "22k is not");
+  assert.equal(score("resistance>=4700", r), 1 + 2, "a unit scales the value: 4.7k is 4700");
+  assert.equal(score("resistance=4.7k", r), 1 + 2);
+  assert.equal(score("resistance>4.7k", r), 0);
+  assert.equal(score("voltage>3.3", [["vin voltage=5v", 1]]), 1 + 1, "a unit not in the table leaves the value as it is; found past the first word");
+  assert.equal(score("voltage>", [["voltage:1", 4]]), 1 + 2 * 4, "no value yet matches any value (`ANY`)");
+  assert.equal(score("current<1", [["voltage=0.5", 1]]), 0, "another key");
+  assert.equal(score("size>=1ki", [["size=1024", 1]]), 1 + 2, "ki is 1024");
+  assert.equal(score("c=100n", [["c=100n", 4]]), 1 + 8 * 4, "the whole term is still 8 times");
+  assert.equal(score("voltage>3.3v", [["voltage=5", 1]]), 0, "a unit not in the table makes the word no relational one");
 });
 
 test("full wildcards anchor at both ends", () => {

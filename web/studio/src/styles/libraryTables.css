@@ -374,3 +374,35 @@
   padding: 6px 10px;
   background: var(--chrome-bg);
 }
+
+/* Edit Options... (`DIALOG_PLUGIN_OPTIONS`): the grid on the left, the format's choices with their help on the right */
+.lt-options {
+  width: min(760px, 94vw);
+}
+.lt-options-body {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+.lt-options-grid {
+  flex: 1.3 1 0;
+  min-width: 0;
+  margin: 0;
+}
+.lt-options-choices {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lt-options-choices select {
+  width: 100%;
+}
+.lt-options-help {
+  font-size: 12px;
+  min-height: 60px;
+  border: 1px solid var(--chrome-border);
+  padding: 6px;
+}

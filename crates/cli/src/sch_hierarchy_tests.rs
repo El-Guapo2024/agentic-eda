@@ -62,6 +62,7 @@ fn import_cmd(source: &str, as_sheet: bool, keep: bool) -> Cmd {
         as_group: false,
         group_name: String::new(),
         block: String::new(),
+        block_fields: vec![],
     }
 }
 

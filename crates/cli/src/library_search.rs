@@ -20,8 +20,9 @@
 //! The scoring is `EDA_COMBINED_MATCHER::ScoreTerms` and `LIB_TREE_NODE_ITEM::UpdateScore` (`common/eda_pattern_match.cpp`,
 //! `common/lib_tree_model.cpp`): the query is split on blanks, every word must score against the item's terms (an exact term is
 //! worth 8 times its weight, a match at the start of a term 2 times, a match anywhere once), and an item's score is 1 plus the sum.
-//! A word may carry `*` and `?` wildcards. KiCad's other two matchers -- the regular expression (`/pattern/`) and the relational
-//! one (`voltage>3.3`) -- are not ported; such a word is searched as the plain text it is.
+//! A word is matched by the four matchers `EDA_COMBINED_MATCHER` builds in `CTX_LIBITEM`, each only when the word suits it ([`Matcher`]): a regular
+//! expression (`/pattern/`, or `^...$`, on `eda_model::wx_regex`), the `*` / `?` wildcard form, the relational one (`voltage>3.3`, `resistance<10k`)
+//! and the plain text.
 
 use crate::library_index::{legal_library_name, libraries_in, modified, Kind, LibSource};
 use eda_kicad::{FootprintSummary, SymbolSummary};
@@ -56,8 +57,13 @@ pub(crate) fn term(text: &str, weight: u32) -> Term {
     Term { text, weight }
 }
 
-/// One word of the query (`EDA_COMBINED_MATCHER` in `CTX_LIBITEM`): the lower-case word, and when it has `*` / `?` the wildcard form
-/// `EDA_PATTERN_MATCH_WILDCARD` compiles it to -- found anywhere in a term, not anchored (`*` any run, `?` any one character).
+/// One word of the query (`EDA_COMBINED_MATCHER` in `CTX_LIBITEM`, common/eda_pattern_match.cpp): the lower-case word (`UpdateSearchString` lowers every
+/// word before it builds the matcher) and the matchers whose `SetPattern` took it, in KiCad's order -- `EDA_PATTERN_MATCH_REGEX`, `EDA_PATTERN_MATCH_WILDCARD`,
+/// `EDA_PATTERN_MATCH_RELATIONAL`, `EDA_PATTERN_MATCH_SUBSTR` ("If any of the above matchers couldn't be created because the pattern syntax does not match,
+/// the substring will try its best", and it always takes the word). [`Matcher::find`] is `EDA_COMBINED_MATCHER::Find`: the earliest place any of them finds.
+///
+/// The wildcard matcher compiles every word to a regular expression (each regex character escaped, `?` as `.`, `*` as `.*`), so for a word with neither
+/// it finds what the substring finds, where the substring does: it is kept here only for a word that has one, as the leftmost match of its pieces.
 #[derive(Debug, Clone)]
 pub(crate) struct Matcher {
     pattern: String,
@@ -65,6 +71,154 @@ pub(crate) struct Matcher {
     segments: Vec<Vec<Option<char>>>,
     /// Starts with `*`: the regex `.*x` matches from the first character on.
     leading_star: bool,
+    /// `EDA_PATTERN_MATCH_REGEX`: a word written `/re/` (the closing `/` may be left off: "Requiring a '/' on the end means they get no feedback while
+    /// they type") or `^re$`, compiled as `wxRegEx::Compile( .., wxRE_ADVANCED )` is -- `Flavor::NetClass` -- and found anywhere in a term. `None` when the
+    /// word is not written as one, or does not compile.
+    regex: Option<eda_model::wx_regex::Regex>,
+    /// `EDA_PATTERN_MATCH_RELATIONAL`: a word `key<op>value[unit]`.
+    relational: Option<Relational>,
+}
+
+/// `EDA_PATTERN_MATCH_RELATIONAL`'s relations; `Any` is a word whose value is not typed yet (`voltage>`: "Matching on empty values keeps the match list
+/// from going empty when the user types the relational operator character").
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Relation {
+    Lt,
+    Le,
+    Eq,
+    Ge,
+    Gt,
+    Any,
+}
+
+/// `EDA_PATTERN_MATCH_RELATIONAL`: the key, the relation and the value (its unit's multiplier applied).
+#[derive(Debug, Clone)]
+struct Relational {
+    key: String,
+    relation: Relation,
+    value: f64,
+}
+
+/// `EDA_PATTERN_MATCH_RELATIONAL::m_units`, by the lower-case unit.
+fn unit_multiplier(unit: &str) -> Option<f64> {
+    Some(match unit {
+        "p" => 1e-12,
+        "n" => 1e-9,
+        "u" => 1e-6,
+        "m" => 1e-3,
+        "" => 1.,
+        "k" => 1e3,
+        "meg" => 1e6,
+        "g" => 1e9,
+        "t" => 1e12,
+        "ki" => 1024.,
+        "mi" => 1_048_576.,
+        "gi" => 1_073_741_824.,
+        "ti" => 1_099_511_627_776.,
+        _ => return None,
+    })
+}
+
+/// `wxString::ToCDouble`: the whole text a number (the value's characters are `[-+]?[\d.]+` already).
+fn to_c_double(text: &str) -> Option<f64> {
+    text.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+fn relational_regexes() -> &'static (eda_model::wx_regex::Regex, eda_model::wx_regex::Regex) {
+    use eda_model::wx_regex::{Flavor, Regex};
+    static R: OnceLock<(Regex, Regex)> = OnceLock::new();
+    R.get_or_init(|| {
+        (
+            Regex::compile(r"^(\w+)(<|<=|=|>=|>)([-+]?[\d.]*)(\w*)$", false, Flavor::NetClass).expect("SetPattern's regex compiles"),
+            Regex::compile(r"(\w+)[=:]([-+]?[\d.]+)(\w*)", false, Flavor::NetClass).expect("FindOne's regex compiles"),
+        )
+    })
+}
+
+/// The text of group `g` of a match over `chars`.
+fn group_text(chars: &[char], caps: &eda_model::wx_regex::Captures, g: usize) -> String {
+    caps.group(g).map(|(a, b)| chars[a..b].iter().collect()).unwrap_or_default()
+}
+
+impl Relational {
+    /// `EDA_PATTERN_MATCH_RELATIONAL::SetPattern`: `^(\w+)(<|<=|=|>=|>)([-+]?[\d.]*)(\w*)$`, the key lowered, an empty value matching any, a value that is
+    /// no number or a unit not in the table refusing the word.
+    fn new(word: &str) -> Option<Relational> {
+        let chars: Vec<char> = word.chars().collect();
+        let caps = relational_regexes().0.find_at(&chars, 0)?;
+        let (key, rel, val, unit) = (group_text(&chars, &caps, 1), group_text(&chars, &caps, 2), group_text(&chars, &caps, 3), group_text(&chars, &caps, 4));
+        let mut relation = match rel.as_str() {
+            "<" => Relation::Lt,
+            "<=" => Relation::Le,
+            "=" => Relation::Eq,
+            ">=" => Relation::Ge,
+            ">" => Relation::Gt,
+            _ => return None,
+        };
+        let mut value = 0.0;
+        if val.is_empty() {
+            relation = Relation::Any;
+        } else {
+            value = to_c_double(&val)?;
+        }
+        value *= unit_multiplier(&unit.to_lowercase())?;
+        Some(Relational { key: key.to_lowercase(), relation, value })
+    }
+
+    /// `EDA_PATTERN_MATCH_RELATIONAL::FindOne`: the first `key=value[unit]` (or `key:value`) of one token, its key this one's, its value (scaled by its
+    /// unit when the unit is known) in the relation. Where it starts in the token.
+    fn find_one(&self, token: &str) -> Option<usize> {
+        // `[=:]` must be there for the regex to match: the regex is only run on a token that has one
+        if !token.contains(['=', ':']) {
+            return None;
+        }
+        let chars: Vec<char> = token.chars().collect();
+        let caps = relational_regexes().1.find_at(&chars, 0)?;
+        let start = caps.group(0)?.0;
+        if group_text(&chars, &caps, 1).to_lowercase() != self.key {
+            return None;
+        }
+        let mut parsed = to_c_double(&group_text(&chars, &caps, 2))?;
+        if let Some(m) = unit_multiplier(&group_text(&chars, &caps, 3).to_lowercase()) {
+            parsed *= m;
+        }
+        let hit = match self.relation {
+            Relation::Lt => parsed < self.value,
+            Relation::Le => parsed <= self.value,
+            Relation::Eq => parsed == self.value,
+            Relation::Ge => parsed >= self.value,
+            Relation::Gt => parsed > self.value,
+            Relation::Any => true,
+        };
+        hit.then_some(start)
+    }
+
+    /// `EDA_PATTERN_MATCH_RELATIONAL::Find`: the text split on blanks (`wxTOKEN_STRTOK`), the first token that has a match; its place in the text.
+    fn find(&self, text: &str) -> Option<usize> {
+        let mut offset = 0usize;
+        for token in text.split([' ', '\t', '\r', '\n']) {
+            if !token.is_empty() {
+                if let Some(at) = self.find_one(token) {
+                    return Some(offset + at);
+                }
+            }
+            offset += token.chars().count() + 1;
+        }
+        None
+    }
+}
+
+/// `EDA_PATTERN_MATCH_REGEX::SetPattern`: a word written `^...$` is a regular expression as it is, one that starts with `/` is what follows it (less a
+/// closing `/`); anything else is no regular expression ("For now regular expressions must be explicit"). `None` too when it does not compile.
+fn explicit_regex(word: &str) -> Option<eda_model::wx_regex::Regex> {
+    let pattern = if word.starts_with('^') && word.ends_with('$') {
+        word
+    } else if let Some(rest) = word.strip_prefix('/') {
+        rest.strip_suffix('/').unwrap_or(rest)
+    } else {
+        return None;
+    };
+    eda_model::wx_regex::Regex::compile(pattern, false, eda_model::wx_regex::Flavor::NetClass)
 }
 
 impl Matcher {
@@ -73,7 +227,9 @@ impl Matcher {
         let wild = pattern.contains(['*', '?']);
         let segments = if wild { pattern.split('*').filter(|s| !s.is_empty()).map(|s| s.chars().map(|c| (c != '?').then_some(c)).collect()).collect() } else { Vec::new() };
         let leading_star = wild && pattern.starts_with('*');
-        Matcher { pattern, segments, leading_star }
+        let regex = explicit_regex(&pattern);
+        let relational = Relational::new(&pattern);
+        Matcher { pattern, segments, leading_star, regex, relational }
     }
 
     fn wild(&self) -> bool {
@@ -83,15 +239,14 @@ impl Matcher {
     /// Where the word first matches in `text` (a position that is 0 only when it matches from the first character), if it does.
     /// `EDA_COMBINED_MATCHER::Find`: the earliest position over its matchers.
     fn find(&self, text: &str) -> Option<usize> {
+        let regex = self.regex.as_ref().and_then(|re| {
+            let chars: Vec<char> = text.chars().collect();
+            re.find_at(&chars, 0).and_then(|caps| caps.group(0)).map(|(start, _)| start)
+        });
+        let wild = if self.wild() { self.find_wild(text) } else { None };
+        let relational = self.relational.as_ref().and_then(|r| r.find(text));
         let plain = text.find(&self.pattern);
-        if !self.wild() {
-            return plain;
-        }
-        let wild = self.find_wild(text);
-        match (plain, wild) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [regex, wild, relational, plain].into_iter().flatten().min()
     }
 
     /// The leftmost match of the wildcard form: its pieces in order, each at its earliest place after the one before (a fixed-length
@@ -111,7 +266,8 @@ impl Matcher {
         Some(if self.leading_star { 0 } else { first.unwrap_or(0) })
     }
 
-    /// `EDA_COMBINED_MATCHER::ScoreTerms`.
+    /// `EDA_COMBINED_MATCHER::ScoreTerms`: a term that is the whole word (as typed, `GetPattern() == term.Text`) is worth 8 times its weight, one a matcher
+    /// finds at its start 2 times, anywhere else once.
     pub(crate) fn score(&self, terms: &[Term]) -> u32 {
         let mut score = 0;
         for t in terms {
@@ -253,6 +409,8 @@ impl Filter {
 /// One symbol library, indexed: its symbols (sorted by name, naturally), and the terms each is searched by.
 pub(crate) struct SymbolLib {
     stamp: Option<SystemTime>,
+    /// The library loaded with errors (a file of a folder library that does not read): KiCad's message, `eda_kicad::symbol_library_load_errors`.
+    pub(crate) load_error: Option<String>,
     pub(crate) summaries: Vec<SymbolSummary>,
     terms: Vec<Vec<Term>>,
     by_name: HashMap<String, usize>,
@@ -332,14 +490,14 @@ pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Ar
             return Ok(hit.clone());
         }
     }
-    let text = eda_kicad::read_symbol_library_text(&path)?;
+    let (text, load_error) = eda_kicad::read_symbol_library(&path)?;
     let mut summaries = eda_kicad::scan_symbols(&text);
     eda_kicad::inherit_symbol_summaries(&mut summaries);
     summaries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
     summaries.dedup_by(|b, a| a.name == b.name);
     let terms = summaries.iter().map(|s| symbol_terms(lib, s)).collect();
     let by_name = summaries.iter().enumerate().map(|(i, s)| (s.name.clone(), i)).collect();
-    let built = Arc::new(SymbolLib { stamp, summaries, terms, by_name });
+    let built = Arc::new(SymbolLib { stamp, load_error, summaries, terms, by_name });
     lock(symbol_cache()).insert(path, built.clone());
     Ok(built)
 }
@@ -494,7 +652,14 @@ fn footprint_item(name: &str, f: &FootprintSummary, score: Option<u32>) -> Value
 pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter) -> Value {
     let mut v = match kind {
         Kind::Symbol => match symbol_lib(src, lib) {
-            Ok(idx) => json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() }),
+            Ok(idx) => {
+                let mut v = json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() });
+                // read with errors: the symbols that read are listed, and KiCad's message goes with them (`LIB_STATUS::error`)
+                if let Some(e) = &idx.load_error {
+                    v["load_error"] = json!(e);
+                }
+                v
+            }
             Err(e) => return json!({ "error": e }),
         },
         Kind::Footprint => match footprint_lib(src, lib) {
@@ -651,7 +816,84 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
     if filter.only_power {
         answer["power_libraries"] = json!(power_libraries);
     }
+    // The libraries read so far that loaded with errors (`LIBRARY_MANAGER_ADAPTER::GetLibraryLoadErrors`): the chooser says so, as KiCad's status bar does.
+    let load_errors: Vec<Value> = libs
+        .iter()
+        .zip(&sym_libs)
+        .filter_map(|(info, idx)| idx.as_ref()?.load_error.as_ref().map(|e| json!({ "lib": info.name, "error": e })))
+        .collect();
+    if !load_errors.is_empty() {
+        answer["load_errors"] = json!(load_errors);
+    }
     answer
+}
+
+/// `GET /api/library/load_errors?kind=symbol`: every symbol library of the tables that loads with errors, with KiCad's message (`GetLibraryLoadErrors`, which the
+/// frames put in the status bar's warnings after the libraries load: `statusBar->AddWarningMessages( "load", .. )`). A library is read for this once until it
+/// changes (`eda_kicad::symbol_library_load_errors`), and the index's reads answer it too. Footprint libraries: none (a `.pretty` file that does not read is
+/// listed by its name, as KiCad lists it).
+pub(crate) fn load_errors_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
+    if kind != Kind::Symbol {
+        return json!({ "kind": "footprint", "errors": [] });
+    }
+    let errors: Vec<Value> = libraries_in(kind, src)
+        .iter()
+        .filter_map(|info| {
+            let path = symbol_path(src, &info.name).ok()?;
+            eda_kicad::symbol_library_load_errors(&path).map(|e| json!({ "lib": info.name, "path": path.display().to_string(), "error": e }))
+        })
+        .collect();
+    json!({ "kind": "symbol", "errors": errors })
+}
+
+pub(crate) fn load_errors(dir: &Path, kind: Kind) -> Value {
+    load_errors_in(kind, &*crate::library_tables::libs(dir, kind))
+}
+
+/// The most entries the Symbol Chooser's footprint selector lists (`FOOTPRINT_SELECT_WIDGET( .., int aMaxItems = 400 )`).
+pub(crate) const SELECT_LIMIT: usize = 400;
+
+/// `GET /api/library/fp_select?pins=&fp_filters=&zero=`: the footprints the Symbol Chooser's footprint selector lists for the selected symbol
+/// (`PANEL_SYMBOL_CHOOSER::populateFootprintSelector` -> `FOOTPRINT_SELECT_WIDGET::UpdateList` -> pcbnew's `filterFootprints`, `KIFACE_FILTER_FOOTPRINTS`): every
+/// footprint of every library with exactly the symbol's pin count of numbered pads (`GetUniquePadCount( DO_NOT_INCLUDE_NPTH )`) and a name one of its
+/// footprint filters matches whole (`EDA_PATTERN_MATCH_WILDCARD_ANCHORED`, `Lib:Name` for a filter with a colon), as `Lib:Name`, at most `limit`. With
+/// `zero` (`m_zero_filter`: the symbol has no footprint filters) and nothing to filter by (no pins either) the list is empty -- the selector then offers the
+/// default footprint alone. The libraries in the trees' order, each one's footprints by name. `filterFootprints` waits for every library to load
+/// (`BlockUntilLoaded`); here the answer says `"status": "indexing"` until the index thread has read them, with the footprints of those read, and the page
+/// asks again.
+pub(crate) fn footprint_select_in<S: LibSource + ?Sized>(src: &S, filter: &Filter, zero_filters: bool, limit: usize) -> Value {
+    let has_filters = filter.pins.is_some() || !filter.fp_filters.is_empty();
+    if zero_filters && !has_filters {
+        return json!({ "status": "ready", "footprints": [] });
+    }
+    let finished = ensure_background_index(Kind::Footprint, src);
+    let libs = libraries_in(Kind::Footprint, src);
+    let done = finished.load(AtomicOrdering::Acquire) || libs.is_empty();
+    let mut out: Vec<String> = Vec::new();
+    let (mut indexed, mut skipped) = (0usize, false);
+    'libs: for info in libs.iter() {
+        let Some(idx) = cached_footprint_lib(src, &info.name).or_else(|| done.then(|| footprint_lib(src, &info.name).ok()).flatten()) else {
+            // not read yet (once the thread is done, a library that cannot be read is no library)
+            skipped |= !done;
+            continue;
+        };
+        indexed += 1;
+        for (n, f) in idx.names.iter().zip(&idx.infos) {
+            if filter.footprint_passes(&info.name, n, f.numbered_pads) {
+                out.push(format!("{}:{n}", info.name));
+                if out.len() >= limit {
+                    break 'libs;
+                }
+            }
+        }
+    }
+    // every library up to the last one listed read (by the thread, or by an earlier request): the list is the one the finished index makes
+    let ready = done || !skipped;
+    json!({ "status": if ready { "ready" } else { "indexing" }, "indexed": indexed, "total": libs.len(), "footprints": out })
+}
+
+pub(crate) fn footprint_select(dir: &Path, filter: &Filter, zero_filters: bool) -> Value {
+    footprint_select_in(&*crate::library_tables::libs(dir, Kind::Footprint), filter, zero_filters, SELECT_LIMIT)
 }
 
 pub(crate) fn search(dir: &Path, kind: Kind, query: &str, filter: &Filter, limit: usize) -> Value {
@@ -827,9 +1069,44 @@ mod tests {
         assert_eq!(matcher_score("soic*qfn", &terms), 0);
         assert_eq!(matcher_score("p1*soic", &terms), 0, "the pieces must come in order");
         assert_eq!(matcher_score("soic*3.9x4.9mm_p1.27mm", &terms), 1 + 2 * 8);
-        // `/regex/` and `a>3` are not ported: they are searched as the text they are
-        assert_eq!(matcher_score("/soic/", &terms), 0);
-        assert_eq!(matcher_score("voltage>3.3", &[("a voltage>3.3 b", 1)]), 1 + 1);
+        assert_eq!(matcher_score("voltage>3.3", &[("a voltage>3.3 b", 1)]), 1 + 1, "a relational word is found as its text too");
+    }
+
+    /// `EDA_PATTERN_MATCH_REGEX` (the same cases as `libChooser.test.ts`).
+    #[test]
+    fn a_word_written_slash_re_slash_or_caret_re_dollar_is_a_regular_expression_found_anywhere_in_a_term() {
+        let t = [("R_0603_1608Metric", 8), ("Resistor_SMD", 4), ("Resistor_SMD:R_0603_1608Metric", 16)];
+        assert_eq!(matcher_score("/^R_0603/", &t), 1 + 2 * 8, "the word is lowered first; ^ starts only the name");
+        assert_eq!(matcher_score("/^r_0603", &t), 1 + 2 * 8, "the closing slash may be left off");
+        assert_eq!(matcher_score("/0603/", &t), 1 + 8 + 16, "found inside the name and inside Lib:Name");
+        assert_eq!(matcher_score("^r_0603.*$", &t), 1 + 2 * 8, "^...$ is a regular expression as it is");
+        assert_eq!(matcher_score("/^r_0805/", &t), 0);
+        assert_eq!(matcher_score("/(/", &t), 0, "a pattern that does not compile is no matcher, and its text is nowhere");
+        assert_eq!(matcher_score("/smd$/", &t), 1 + 4, "the end of a term");
+        assert_eq!(matcher_score("/r_0[68]0[35]/", &t), 1 + 2 * 8 + 16, "classes");
+    }
+
+    /// `EDA_PATTERN_MATCH_RELATIONAL` (the same cases as `libChooser.test.ts`).
+    #[test]
+    fn a_relational_word_matches_a_key_value_of_the_terms_words() {
+        let r = [("resistance=4.7k 1% 0603", 1)];
+        assert_eq!(matcher_score("resistance<10k", &r), 1 + 2, "4.7k is below 10k, at the start of the term");
+        assert_eq!(matcher_score("resistance<10k", &[("resistance=22k", 1)]), 0, "22k is not");
+        assert_eq!(matcher_score("resistance>=4700", &r), 1 + 2, "a unit scales the value: 4.7k is 4700");
+        assert_eq!(matcher_score("resistance=4.7k", &r), 1 + 2);
+        assert_eq!(matcher_score("resistance>4.7k", &r), 0);
+        assert_eq!(matcher_score("voltage>3.3", &[("vin voltage=5v", 1)]), 1 + 1, "a unit not in the table leaves the value as it is; found past the first word");
+        assert_eq!(matcher_score("voltage>", &[("voltage:1", 4)]), 1 + 2 * 4, "no value yet matches any value (ANY)");
+        assert_eq!(matcher_score("current<1", &[("voltage=0.5", 1)]), 0, "another key");
+        assert_eq!(matcher_score("size>=1ki", &[("size=1024", 1)]), 1 + 2, "ki is 1024");
+        assert_eq!(matcher_score("c=100n", &[("c=100n", 4)]), 1 + 8 * 4, "the whole term is still 8 times");
+        assert_eq!(matcher_score("voltage>3.3v", &[("voltage=5", 1)]), 0, "a unit not in the table makes the word no relational one");
+        // SetPattern's parse: the relation, the value and the unit
+        let rel = Relational::new("resistance<=10k").unwrap();
+        assert_eq!((rel.key.as_str(), rel.relation, rel.value), ("resistance", Relation::Le, 10_000.0));
+        assert_eq!(Relational::new("v>").map(|r| r.relation), Some(Relation::Any));
+        assert!(Relational::new("v>1.2.3").is_none() && Relational::new("v>x").is_none() && Relational::new("lm358").is_none());
+        assert_eq!(Relational::new("f>=2meg").map(|r| r.value), Some(2e6));
     }
 
     #[test]
@@ -1127,6 +1404,60 @@ mod tests {
         let e = entries_in(Kind::Footprint, &root, "Package_SO", &Filter::default());
         assert_eq!((e["entries"][0]["name"].clone(), e["entries"][0]["pads"].clone()), (json!("SOIC-8_3.9x4.9mm_P1.27mm"), json!(8)));
         assert_eq!(e["entries"][1]["pads"], 16);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `FOOTPRINT_SELECT_WIDGET::UpdateList` -> pcbnew's `filterFootprints`: the symbol's pin count and footprint filters, every library, `Lib:Name`, capped;
+    /// nothing at all for a symbol with no filters and no pins (`zero_filters`).
+    #[test]
+    fn the_footprint_selector_lists_the_footprints_of_the_symbols_pins_and_filters() {
+        let root = footprint_root("fpselect");
+        index_all(Kind::Footprint, &root);
+        let list = |pins: &str, filters: &str, zero: bool, limit: usize| -> Vec<String> {
+            let v = footprint_select_in(&root, &Filter::parse(pins, filters, ""), zero, limit);
+            assert_eq!(v["status"], "ready", "{v}");
+            v["footprints"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(list("8", "SOIC*3.9x4.9mm* DIP*W7.62mm*", false, 400), ["Package_DIP:DIP-8_W7.62mm", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"], "the libraries in the trees' order");
+        assert_eq!(list("8", "", true, 400), ["Package_DIP:DIP-8_W7.62mm", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"], "no filters: the pin count alone");
+        assert_eq!(list("16", "", true, 400), ["Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"]);
+        assert!(list("", "", true, 400).is_empty(), "no filters and no pins: nothing (`m_zero_filter`)");
+        assert_eq!(list("", "", false, 400).len(), 4, "zero_filters off: everything");
+        assert_eq!(list("", "soic*", false, 400), ["Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"], "a filter alone; anchored, case folded; names in natural order");
+        assert_eq!(list("", "package_dip:*", false, 400), ["Package_DIP:DIP-8_W7.62mm"], "a filter with a colon is matched against Lib:Name");
+        assert_eq!(list("8", "", true, 1).len(), 1, "at most the limit");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// KiCad 25ec2335's `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`: a folder library with a file that does not read is listed with what reads, and its load error goes
+    /// with the entries, the search's answer and the load-errors list (`GetLibraryLoadErrors`).
+    #[test]
+    fn a_folder_library_with_a_broken_file_lists_what_reads_and_says_it_loaded_with_errors() {
+        let root = temp_root("symdir-broken");
+        let dir = root.join("Amplifier_Operational.kicad_symdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        for sym in eda_kicad::scan_symbols(AMPS) {
+            std::fs::write(dir.join(format!("{}.kicad_sym", sym.name)), format!("(kicad_symbol_lib (version 20251024)\n{}\n)\n", eda_kicad::symbol_text(AMPS, &sym))).unwrap();
+        }
+        std::fs::write(dir.join("Zbroken.kicad_sym"), "(kicad_symbol_lib (version 20251024)\n\t(symbol \"Z\" (pin").unwrap();
+        std::fs::write(root.join("Device.kicad_sym"), DEVICE).unwrap();
+        let e = entries_in(Kind::Symbol, &root, "Amplifier_Operational", &Filter::default());
+        assert_eq!(e["entries"].as_array().unwrap().len(), 3, "the good files are read: {e}");
+        let message = e["load_error"].as_str().expect("the entries say the library loaded with errors");
+        assert!(message.starts_with(&format!("Unable to read file '{}'\nExpecting ')'", dir.join("Zbroken.kicad_sym").display())), "{message}");
+        assert!(message.ends_with("The library cannot be saved until these errors are fixed manually."));
+        assert!(entries_in(Kind::Symbol, &root, "Device", &Filter::default()).get("load_error").is_none(), "a library that reads has none");
+        index_all(Kind::Symbol, &root);
+        let found = search_in(Kind::Symbol, &root, "lm358", &Filter::default(), 50);
+        assert_eq!(found["load_errors"], json!([{ "lib": "Amplifier_Operational", "error": message }]), "{found}");
+        let all = load_errors_in(Kind::Symbol, &root);
+        assert_eq!(all["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(all["errors"][0]["lib"], "Amplifier_Operational");
+        // the file fixed: the next read has no error
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::remove_file(dir.join("Zbroken.kicad_sym")).unwrap();
+        assert!(entries_in(Kind::Symbol, &root, "Amplifier_Operational", &Filter::default()).get("load_error").is_none());
+        assert!(load_errors_in(Kind::Symbol, &root)["errors"].as_array().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 

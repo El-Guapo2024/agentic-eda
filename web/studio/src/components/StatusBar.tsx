@@ -14,6 +14,7 @@ import { useSymState } from "../state/symbolEditorStore";
 import type { LengthUnit } from "../state/units";
 import { formatLength, formatXY, toPolar } from "../state/units";
 import { isStale, statusNotes } from "../kicad-port/checkRevision";
+import { LibraryLoadWarnings } from "./LibraryLoadWarnings";
 
 export function StatusBar() {
   const state = useStudioState();
@@ -97,6 +98,7 @@ export function StatusBar() {
           {note}
         </span>
       ))}
+      <LibraryLoadWarnings />
       <span className="spacer" />
       <label className="toggle" title="Refuse a move/edit that adds gate failures (not a KiCad feature)">
         <input type="checkbox" checked={state.strict} onChange={(e) => dispatch({ type: "SET_STRICT", strict: e.target.checked })} />

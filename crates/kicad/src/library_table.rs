@@ -88,14 +88,42 @@ pub const NESTED_TYPE: &str = "Table";
 /// The version `LIBRARY_TABLE::Format` writes.
 pub const TABLE_VERSION: i64 = 7;
 
-/// The library formats KiCad names in a row's type, symbol side (`SCH_IO_MGR::ShowType`), footprint side (the `PCB_IO_MGR` plugin names) and design block side
-/// (`DESIGN_BLOCK_IO_MGR::ShowType`: KiCad's folders and a chained table). The studio reads [`KICAD_TYPE`] and chains [`NESTED_TYPE`]; the others are listed, kept in
-/// the file and flagged as unread.
+/// The library formats KiCad names in a row's type, symbol side (`SCH_IO_MGR::ShowType`), footprint side (the names `PCB_IO_MGR`'s plugins register with,
+/// pcbnew/pcb_io/pcb_io_mgr.cpp, in `PCB_FILE_T` order) and design block side (`DESIGN_BLOCK_IO_MGR::ShowType`: KiCad's folders and a chained table). A row of another
+/// type is "Unknown library type". The studio reads [`KICAD_TYPE`], chains [`NESTED_TYPE`] and reads the formats of [`convertible`] through kicad-cli.
 pub fn known_types(kind: TableKind) -> &'static [&'static str] {
     match kind {
         TableKind::Symbol => &["KiCad", "Legacy", "Altium", "CADSTAR Schematic Archive", "Database", "EAGLE", "EasyEDA (JLCEDA) Std", "EasyEDA (JLCEDA) Pro", "gEDA / Lepton EDA", "LTspice", "HTTP", "PADS Logic", "Table"],
-        TableKind::Footprint => &["KiCad", "Legacy", "Allegro", "Altium Circuit Maker", "Altium Circuit Studio", "Altium Designer", "CADSTAR PCB Archive", "Eagle", "EasyEDA / JLCEDA Std", "EasyEDA / JLCEDA Pro", "Fabmaster", "GPCB", "P-Cad", "SolidWorks PCB", "IPC-2581", "ODB++", "PADS", "Sprint Layout", "Table"],
+        TableKind::Footprint => &[
+            "KiCad", "Legacy", "Allegro", "Altium Circuit Maker", "Altium Circuit Studio", "Altium Designer", "CADSTAR PCB Archive", "Eagle", "EasyEDA / JLCEDA Std", "EasyEDA / JLCEDA Pro", "Fabmaster",
+            "gEDA / Lepton EDA", "P-Cad", "Solidworks PCB", "IPC-2581", "ODB++", "PADS", "Sprint Layout", "Table",
+        ],
         TableKind::DesignBlock => &["KiCad", "Table"],
+    }
+}
+
+/// The formats the grid's Library Format column offers (`m_pluginChoices`). Symbols: every `SCH_FILE_T` with a plugin, and `Table` (`PANEL_SYM_LIB_TABLE`'s
+/// constructor). Footprints: the plugins whose `GetLibraryDesc()` is not empty (`PANEL_FP_LIB_TABLE::populatePluginList`: Allegro, Fabmaster, P-Cad, Solidworks PCB,
+/// IPC-2581 and ODB++ describe no library), and `Table`.
+pub fn offered_types(kind: TableKind) -> &'static [&'static str] {
+    match kind {
+        TableKind::Footprint => &[
+            "KiCad", "Legacy", "Altium Circuit Maker", "Altium Circuit Studio", "Altium Designer", "CADSTAR PCB Archive", "Eagle", "EasyEDA / JLCEDA Std", "EasyEDA / JLCEDA Pro", "gEDA / Lepton EDA", "PADS",
+            "Sprint Layout", "Table",
+        ],
+        _ => known_types(kind),
+    }
+}
+
+/// The formats other than KiCad's that the studio reads, through kicad-cli's `sym upgrade` / `fp upgrade` (`SCH_IO_MGR::ConvertLibrary`, `PCB_IO_MGR::ConvertLibrary`):
+/// the plugins that enumerate a library file -- `EnumerateSymbolLib` is implemented by the Legacy, Altium, CADSTAR, Eagle, EasyEDA, EasyEDA Pro and PADS Logic
+/// schematic plugins (the Database and HTTP ones need a connection, and gEDA and LTspice have none); `FootprintEnumerate` by the Legacy, Altium Designer, CADSTAR, Eagle,
+/// EasyEDA, EasyEDA Pro, gEDA and Sprint Layout board plugins. Migrate Libraries converts the same ones.
+pub fn convertible(kind: TableKind, lib_type: &str) -> bool {
+    match kind {
+        TableKind::Symbol => ["Legacy", "Altium", "CADSTAR Schematic Archive", "EAGLE", "EasyEDA (JLCEDA) Std", "EasyEDA (JLCEDA) Pro", "PADS Logic"].contains(&lib_type),
+        TableKind::Footprint => ["Legacy", "Altium Designer", "CADSTAR PCB Archive", "Eagle", "EasyEDA / JLCEDA Std", "EasyEDA / JLCEDA Pro", "gEDA / Lepton EDA", "Sprint Layout"].contains(&lib_type),
+        TableKind::DesignBlock => false,
     }
 }
 
@@ -861,8 +889,12 @@ pub fn check_row(kind: TableKind, row: &Row, path: &Path) -> Option<String> {
     if !known_types(kind).contains(&row.lib_type.as_str()) {
         return Some(format!("Unknown library type {} ", row.lib_type));
     }
+    if convertible(kind, &row.lib_type) {
+        // read through kicad-cli's conversion (the server's `library_convert`); here only whether the file (a gEDA library: the folder) is there
+        return (!path.exists()).then(|| format!("Library '{}' not found.", path.display()));
+    }
     if row.lib_type != KICAD_TYPE {
-        return Some(format!("The studio reads KiCad-format libraries only; a '{}' library is not read here.", row.lib_type));
+        return Some(format!("The studio reads KiCad-format libraries and the formats kicad-cli converts; a '{}' library is not read here.", row.lib_type));
     }
     match kind {
         // `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`'s `isLibraryPathValid`: a `.kicad_sym` file that exists, or a folder library (KiCad 10's `.kicad_symdir`,
@@ -1565,7 +1597,12 @@ mod tests {
         assert_eq!(check_row(TableKind::Symbol, &sym("KiCad"), &root.join("folder")), None, "a folder is a folder library (KiCad 10), read as its files");
         assert!(check_row(TableKind::Footprint, &sym("KiCad"), &root.join("a.kicad_sym")).is_some(), "a footprint library is a folder");
         assert_eq!(check_row(TableKind::Symbol, &sym("Bogus"), &root).unwrap(), "Unknown library type Bogus ");
-        assert!(check_row(TableKind::Symbol, &sym("Legacy"), &root).unwrap().contains("KiCad-format libraries only"));
+        // a format kicad-cli converts is read through it: here only whether the file is there
+        assert_eq!(check_row(TableKind::Symbol, &sym("Legacy"), &root.join("a.kicad_sym")), None);
+        assert!(check_row(TableKind::Symbol, &sym("Legacy"), &root.join("old.lib")).unwrap().ends_with("old.lib' not found."));
+        assert_eq!(check_row(TableKind::Footprint, &sym("gEDA / Lepton EDA"), &root.join("folder")), None, "a gEDA library is a folder");
+        assert!(check_row(TableKind::Symbol, &sym("Database"), &root).unwrap().contains("is not read here"), "a database library needs its connection");
+        assert!(check_row(TableKind::Footprint, &sym("IPC-2581"), &root).unwrap().contains("is not read here"));
         assert!(check_row(TableKind::Symbol, &sym("Table"), &root.join("none")).unwrap().starts_with("Nested table 'u' not found"));
         assert_eq!(check_row(TableKind::Symbol, &sym("Table"), &root.join("a.kicad_sym")), None);
         let _ = std::fs::remove_dir_all(&root);

@@ -11,6 +11,8 @@
 //!     all of it back.
 //!   * `AddPowerSymbol { lib_id }` (Place Power's chooser) keeps the power symbol's definition first, the same way.
 //!   * `SetSymbolLibIds { changes }` (Edit Symbol Library Links) keeps the definition of every installed symbol it links to first, the same way.
+//!   * `sch_edit change_symbol { lib_id }` (Change Symbols, `DIALOG_CHANGE_SYMBOLS::processSymbol` with the `LIB_SYMBOL` `GetLibSymbol( newId )` reads from the
+//!     library -- one the Symbol Chooser found in any library of the tables) keeps the new symbol's definition first, the same way.
 //!   * `PlaceFootprint { footprint }` carries the footprint's pads, graphics and courtyard as `definition`.
 //!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`), and a symbol's Footprint field that is edited
 //!     (`EditSymbolFields`, the Symbol Fields Table's `SetSymbolFields`) is followed by the board in the same step: the exchange of the part's footprint is
@@ -34,6 +36,7 @@ fn places_from_libraries(cmd: &Cmd) -> bool {
         Cmd::Batch { cmds } => cmds.iter().any(places_from_libraries),
         Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => places_from_libraries(cmd),
         Cmd::AddSymbol { .. } | Cmd::AddPowerSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } | Cmd::ExchangeFootprints { .. } => true,
+        Cmd::SchEdit(eda_ops::sch_edit::SchCmd::ChangeSymbol { .. }) => true,
         Cmd::EditSymbolFields { footprint: Some(f), .. } => !f.trim().is_empty(),
         Cmd::SetSymbolFields { edits, .. } => edits.iter().any(|e| e.field == "Footprint"),
         _ => false,
@@ -158,6 +161,14 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
                 embeds.push(cmd.clone());
                 Cmd::Batch { cmds: embeds }
             })
+        }
+        // Change Symbols to a symbol of a library the design does not use yet: its definition first (a second change to it in the same batch finds it there).
+        Cmd::SchEdit(eda_ops::sch_edit::SchCmd::ChangeSymbol { lib_id, .. }) => {
+            if !lacks_definition(lib_id.trim(), design, model) {
+                return None;
+            }
+            let (definition, _) = crate::library_search::installed_symbol(symbols, lib_id.trim())?;
+            Some(Cmd::Batch { cmds: vec![Cmd::EmbedLibSymbol { symbol: definition }, cmd.clone()] })
         }
         Cmd::ExchangeFootprints { references, footprint, options, library } => {
             // the library copy of each footprint it needs: the one the parts change to, or the one each is on
@@ -417,6 +428,30 @@ mod tests {
         assert!(rewrite(&known, &design(), &with_c, &root, &root).is_none());
         let nowhere = Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "Nope:Nothing".into())], update_fields: false };
         assert!(rewrite(&nowhere, &design(), &model, &root, &root).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Change Symbols to a symbol of a library the design does not use (the browse button's Symbol Chooser over every library): `processSymbol` takes the
+    /// `LIB_SYMBOL` from the library, so its definition goes in first; one the design has, or no library has, is left to the verb.
+    #[test]
+    fn changing_a_symbol_to_an_installed_one_keeps_its_definition_first() {
+        use eda_ops::sch_edit::SchCmd;
+        let root = root_with_lm358("change");
+        let model = ConstraintModel::default();
+        let change = Cmd::sch(SchCmd::ChangeSymbol { id: "R1".into(), lib_id: "Amplifier_Operational:LM358".into() });
+        let Some(Cmd::Batch { cmds }) = rewrite(&change, &design(), &model, &root, &root) else { panic!("not rewritten") };
+        assert_eq!(cmds.len(), 2);
+        assert!(matches!(&cmds[0], Cmd::EmbedLibSymbol { symbol } if symbol.lib_id == "Amplifier_Operational:LM358" && symbol.unit_count == 3));
+        assert_eq!(cmds[1], change);
+        // in a batch of changes (the dialog's Apply), each is rewritten; the second embed of the same symbol is a no-op in the verb
+        let batch = Cmd::Batch { cmds: vec![change.clone(), Cmd::sch(SchCmd::ChangeSymbol { id: "R2".into(), lib_id: "Amplifier_Operational:LM358".into() })] };
+        let Some(Cmd::Batch { cmds }) = rewrite(&batch, &design(), &model, &root, &root) else { panic!() };
+        assert!(cmds.iter().all(|c| matches!(c, Cmd::Batch { .. })));
+        assert!(rewrite(&Cmd::sch(SchCmd::ChangeSymbol { id: "R1".into(), lib_id: "Nope:Nothing".into() }), &design(), &model, &root, &root).is_none());
+        let mut d = design();
+        d.symbol_library = Some(Default::default());
+        d.symbol_library.as_mut().unwrap().symbols.push(eda_model::ir::LibrarySymbol::new_empty("Amplifier_Operational:LM358"));
+        assert!(rewrite(&change, &d, &model, &root, &root).is_none(), "the design's copy stands");
         let _ = std::fs::remove_dir_all(&root);
     }
 

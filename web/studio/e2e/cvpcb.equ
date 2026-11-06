@@ -1,0 +1,6 @@
+# Footprint association file for e2e/cvpcb.check.js: CvPcb's .equ format, 'symbol value' 'Library:Footprint' per line (KiCad 25ec2335 cvpcb/auto_associate.cpp).
+'330'    'Resistor_SMD:R_0805_2012Metric'
+'LED'    'LED_SMD:LED_0603_1608Metric'
+'LED'    'LED_THT:LED_D5.0mm'
+'100nF'  'Capacitor_SMD:C_0402_1005Metric'
+'MCU'    'Nowhere:Nothing'

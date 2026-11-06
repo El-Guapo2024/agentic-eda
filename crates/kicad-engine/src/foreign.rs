@@ -446,3 +446,56 @@ pub fn maps_layers(source_format: &str) -> bool {
     let f = source_format.to_ascii_lowercase();
     ["altium", "eagle", "pads", "cadstar", "allegro", "solidworks"].iter().any(|n| f.contains(n))
 }
+
+// ------------------------------------------------------------------------------------------------ libraries
+
+/// Which kind of library [`convert_library`] converts: kicad-cli's `sym upgrade` or `fp upgrade`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LibraryKind {
+    Symbol,
+    Footprint,
+}
+
+impl LibraryKind {
+    /// The kicad-cli command group: `sym` or `fp`.
+    pub fn scope(self) -> &'static str {
+        match self {
+            LibraryKind::Symbol => "sym",
+            LibraryKind::Footprint => "fp",
+        }
+    }
+}
+
+/// A library of another format (or KiCad's legacy one) converted to KiCad's: `kicad-cli sym upgrade INPUT -o OUTPUT` (a `.kicad_sym` file) or `kicad-cli fp upgrade
+/// INPUT -o OUTPUT` (a `.pretty` folder). That is `EESCHEMA_JOBS_HANDLER::JobSymUpgrade` / `PCBNEW_JOBS_HANDLER::JobExportFpUpgrade`, which for a library that is not
+/// KiCad's calls `SCH_IO_MGR::ConvertLibrary` / `PCB_IO_MGR::ConvertLibrary` -- the very functions the library tables' Migrate Libraries calls
+/// (`PANEL_SYM_LIB_TABLE::onConvertLegacyLibraries`, `PANEL_FP_LIB_TABLE::onMigrateLibraries`): every symbol or footprint the plugin enumerates (`EnumerateSymbolLib`,
+/// `FootprintEnumerate`), loaded and saved by KiCad's own writer. The plugin is the one the file's contents say (`GuessPluginTypeFromLibPath`), not a row's type.
+///
+/// kicad-cli refuses an output that exists ("Output path must not conflict with existing path"), so `output` must not exist; the caller converts into a fresh path and
+/// moves the result. The row's options are not passed (kicad-cli has no flag for them; `ConvertLibrary` takes them as `aOldFileProps`): a CADSTAR library that needs its
+/// `csa` option is converted without it. Returns kicad-cli's own words on failure ("Unrecognized library type", "Unable to convert library").
+pub fn convert_library(kind: LibraryKind, input: &Path, output: &Path) -> Result<(), Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let what = format!("{} upgrade", kind.scope());
+    if !input.exists() {
+        return Err(fail("kicad_cli_library_input", &input.display().to_string(), format!("Library '{}' not found.", input.display())));
+    }
+    if output.exists() {
+        return Err(fail("kicad_cli_library_output", &output.display().to_string(), "Output path must not conflict with existing path"));
+    }
+    let mut cmd = cli_command(&cli, None);
+    cmd.arg(kind.scope()).arg("upgrade").arg("-o").arg(output).arg(input);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let made = match kind {
+        LibraryKind::Symbol => output.is_file(),
+        LibraryKind::Footprint => output.is_dir(),
+    };
+    if out.status.success() && made {
+        return Ok(());
+    }
+    let printed = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let said: Vec<&str> = printed.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("Loading ")).collect();
+    let said = if said.is_empty() { "kicad-cli wrote nothing".to_string() } else { said.join(" ") };
+    Err(fail("kicad_cli_library_convert", &input.display().to_string(), format!("kicad-cli {what} could not convert {}: {said}", input.display())))
+}

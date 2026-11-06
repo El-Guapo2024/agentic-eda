@@ -23,7 +23,13 @@
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
 # simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
-# copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
+# copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
+# configuration folder of its own, empty (`EDA_KICAD_CONFIG_DIR`): a check that writes the global library tables or KiCad's path variables never touches the
+# machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
+# `gps.lbr` (an Eagle library), for Migrate Libraries and the libraries kicad-cli converts (needs $KICAD_SRC_DIR); `fixtures=broken-symdir` a folder symbol library
+# `Broken.kicad_symdir` with a good file and a cut-off one (a library KiCad 10 loads with errors); `fixtures=cvpcb` e2e/cvpcb.equ as `cvpcb-check.equ` (a footprint
+# association file for cvpcb.check.js). Several are joined by commas. `fixtures=cvpcb` puts
+# web/studio/e2e/cvpcb.equ (a footprint association file) in the board's folder as `cvpcb-check.equ`, for cvpcb.check.js.
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
 # (or $EDA_KICAD_CLI), ngspice for the simulator check.
@@ -204,7 +210,30 @@ run_one() { # run_one <check> <port>: prints the check's line; its logs are in $
     if ! ensure_board "$kind"; then printf 'FAIL %-22s board %s could not be made: %s\n' "$c" "$kind" "$scratch/boards/$kind.log"; return 1; fi
     if ! uidir="$(ensure_ui "$ui")"; then printf 'FAIL %-22s ui %s could not be made\n' "$c" "$ui"; return 1; fi
     cp -r "$scratch/boards/$kind" "$r/board"
-    "$eda" board serve -C "$r/board" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
+    local served=()
+    if [ "$(meta "$c" kicad_config default)" = fresh ]; then mkdir -p "$r/kicad-config"; served+=("EDA_KICAD_CONFIG_DIR=$r/kicad-config" "EDA_LIBRARY_CACHE=$r/library-cache"); fi
+    local fx
+    for fx in $(meta "$c" fixtures none | tr ',' ' '); do
+        case "$fx" in
+            library-formats)
+                local q="${KICAD_SRC_DIR:-$HOME/src/kicad-src-8303b2ad}/qa/data"
+                cp "$q/eeschema/netlists/legacy_power4/symbols.lib" "$r/board/legacy.lib" && cp "$q/pcbnew/plugins/eagle/lbr/SparkFun-GPS.lbr" "$r/board/gps.lbr" \
+                    || { printf 'FAIL %-22s the library fixtures are not in %s (set KICAD_SRC_DIR)\n' "$c" "$q"; return 1; } ;;
+            broken-symdir)
+                # a folder symbol library with one good file and one cut off: KiCad 10 loads it "with errors"
+                mkdir -p "$r/board/Broken.kicad_symdir"
+                printf '(kicad_symbol_lib (version 20241209) (generator "eda")\n  (symbol "GoodPart" (property "Reference" "U" (at 0 0 0)) (property "Value" "GoodPart" (at 0 0 0)))\n)\n' > "$r/board/Broken.kicad_symdir/GoodPart.kicad_sym"
+                printf '(kicad_symbol_lib (version 20241209) (generator "eda")\n  (symbol "BadPart" (property "Reference" "U" (at 0 0 0)\n' > "$r/board/Broken.kicad_symdir/BadPart.kicad_sym" ;;
+            cvpcb)
+                # a footprint association file for cvpcb.check.js
+                cp "$e2e/cvpcb.equ" "$r/board/cvpcb-check.equ" || { printf 'FAIL %-22s %s is missing\n' "$c" "$e2e/cvpcb.equ"; return 1; } ;;
+            none) ;;
+        esac
+    done
+    if [ "$(meta "$c" fixtures none)" = cvpcb ]; then
+        cp "$e2e/cvpcb.equ" "$r/board/cvpcb-check.equ" || { printf 'FAIL %-22s %s is missing\n' "$c" "$e2e/cvpcb.equ"; return 1; }
+    fi
+    env "${served[@]}" "$eda" board serve -C "$r/board" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
     pid=$!
     url=""
     for _ in $(seq 1 100); do
@@ -261,5 +290,6 @@ failedn=$(( total - passed ))
 echo
 echo "run-all-checks: $passed passed, $failedn failed of $total in $(( SECONDS - start ))s (logs: $scratch/runs)"
 grep '^FAIL' "$scratch/results" 2>/dev/null | sed 's/^/  /'
-if [ "$failedn" -eq 0 ] && [ "$keep" = 0 ]; then rm -rf "$scratch"; fi
+# the libraries kicad-cli converted are kept read only (`library_convert`): writable again first, or rm cannot empty their folders
+if [ "$failedn" -eq 0 ] && [ "$keep" = 0 ]; then chmod -R u+w "$scratch" 2>/dev/null; rm -rf "$scratch"; fi
 [ "$failedn" -eq 0 ]

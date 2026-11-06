@@ -2157,6 +2157,8 @@ export type Cmd =
       group_name?: string;
       /** The design block (`Lib:Name`) the file is the schematic of (Place Design Block). */
       block?: string;
+      /** The block's default fields, `[name, value]` in its order: a sheet drawn from the block starts with them, hidden (`DrawSheet`). */
+      block_fields?: [string, string][];
     }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }

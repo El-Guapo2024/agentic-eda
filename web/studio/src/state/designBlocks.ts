@@ -8,7 +8,7 @@
 // as the page.
 import { useSyncExternalStore } from "react";
 import { fetchBlocks, type BlocksReply } from "../api/designBlockClient";
-import type { PlaceOptions } from "../kicad-port/designBlocks";
+import { FLOATING_DEFAULT, type FloatRect, type PaneDock, type PlaceOptions } from "../kicad-port/designBlocks";
 
 export type { PlaceOptions };
 
@@ -30,6 +30,12 @@ export interface DesignBlocksUi {
   version: number;
   /** The pane is shown, per editor (`aui.design_blocks_show`, off to begin with). */
   shown: Record<BlockEditor, boolean>;
+  /** Where the pane is, per editor: docked on the right (the default, `Right()`), on the left, or floating (`kicad-port/designBlocks.ts`, `PaneDock`). */
+  dock: Record<BlockEditor, PaneDock>;
+  /** The side the pane was docked on last: a floating pane docks back there. */
+  lastDocked: Record<BlockEditor, "left" | "right">;
+  /** The floating window, per editor (`FloatingPosition`, `FloatingSize` to begin with; where it was moved and sized to after). */
+  floating: Record<BlockEditor, FloatRect>;
   /** The libraries and their blocks as the server last listed them; null before the first answer. */
   reply: BlocksReply | null;
   loading: boolean;
@@ -50,7 +56,16 @@ interface Saved {
   history?: string[];
   pinned?: string[];
   shown?: Partial<Record<BlockEditor, boolean>>;
+  dock?: Partial<Record<BlockEditor, PaneDock>>;
+  lastDocked?: Partial<Record<BlockEditor, "left" | "right">>;
+  floating?: Partial<Record<BlockEditor, FloatRect>>;
 }
+
+const dockOf = (d: unknown): PaneDock => (d === "left" || d === "float" ? d : "right");
+const rectOf = (r: unknown): FloatRect => {
+  const o = r as Partial<FloatRect> | undefined;
+  return o && [o.x, o.y, o.w, o.h].every((n) => typeof n === "number" && Number.isFinite(n)) ? { x: o.x!, y: o.y!, w: o.w!, h: o.h! } : { ...FLOATING_DEFAULT };
+};
 
 function load(): DesignBlocksUi {
   let saved: Saved = {};
@@ -69,6 +84,9 @@ function load(): DesignBlocksUi {
     search: "",
     version: 0,
     shown: { schematic: saved.shown?.schematic === true, pcb: saved.shown?.pcb === true },
+    dock: { schematic: dockOf(saved.dock?.schematic), pcb: dockOf(saved.dock?.pcb) },
+    lastDocked: { schematic: saved.lastDocked?.schematic === "left" ? "left" : "right", pcb: saved.lastDocked?.pcb === "left" ? "left" : "right" },
+    floating: { schematic: rectOf(saved.floating?.schematic), pcb: rectOf(saved.floating?.pcb) },
     reply: null,
     loading: false,
     error: null,
@@ -80,7 +98,7 @@ const listeners = new Set<() => void>();
 
 function save(): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ options: current.options, history: [...current.history], pinned: [...current.pinned], shown: current.shown } satisfies Saved));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ options: current.options, history: [...current.history], pinned: [...current.pinned], shown: current.shown, dock: current.dock, lastDocked: current.lastDocked, floating: current.floating } satisfies Saved));
   } catch {
     // ignore: it is a convenience
   }
@@ -185,4 +203,18 @@ export function setDesignBlockLibraryPinned(lib: string, pin: boolean): void {
   if (pin) pinned.add(lib);
   else pinned.delete(lib);
   set({ pinned }, true);
+}
+
+/** The pane is docked on a side or floats (the caption's buttons, a double click on the caption: `wxAuiManager`'s float and dock). */
+export function setDesignBlockPaneDock(editor: BlockEditor, dock: PaneDock): void {
+  if (current.dock[editor] === dock) return;
+  const lastDocked = dock === "float" ? current.lastDocked : { ...current.lastDocked, [editor]: dock };
+  set({ dock: { ...current.dock, [editor]: dock }, lastDocked }, true);
+}
+
+/** Where the floating pane was moved or sized to. */
+export function setDesignBlockFloatRect(editor: BlockEditor, rect: FloatRect): void {
+  const was = current.floating[editor];
+  if (was.x === rect.x && was.y === rect.y && was.w === rect.w && was.h === rect.h) return;
+  set({ floating: { ...current.floating, [editor]: rect } }, true);
 }

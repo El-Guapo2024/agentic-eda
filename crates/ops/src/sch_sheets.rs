@@ -640,7 +640,12 @@ impl<'a> Board<'a> {
             let placement = SheetInstance { id: String::new(), name: name.to_string(), file: OWN.to_string(), at, size, pins: vec![], page: String::new() };
             let numbering = if keep_annotations { Numbering::Paste(PasteMode::Keep) } else { Numbering::Annotate { order, options: options.clone() } };
             let hint = (!file.is_empty()).then_some(file);
-            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols, fields: None }, (Nm::ZERO, Nm::ZERO), name, hint, &numbering)?;
+            // `DrawSheet` with `isDrawSheetFromDesignBlock`: "Copy default fields into the sheet" -- each of the block's fields a `FIELD_T::USER` field of the new
+            // sheet, `SetVisible( false )` (8303b2ad eeschema/tools/sch_drawing_tools.cpp). A plain file's sheet starts with none.
+            let fields = (!how.block.is_empty() && !how.block_fields.is_empty()).then(|| {
+                how.block_fields.iter().map(|(name, value)| eda_model::sch_extras::LabelField { name: name.clone(), text: value.clone(), visible: false, italic: false }).collect::<Vec<_>>()
+            });
+            self.add_sheet_tree(Incoming { placement, screens: &screens, lib_symbols: &content.lib_symbols, fields }, (Nm::ZERO, Nm::ZERO), name, hint, &numbering)?;
             // `DrawSheet`: `if( isDrawSheetFromDesignBlock && place_as_group )` the sheet alone goes in a group named and linked as the block
             if !how.block.is_empty() {
                 let new_sheet = self.schematic_mut()?.sheets.last().map(|s| s.id.clone());

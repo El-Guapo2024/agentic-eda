@@ -820,6 +820,19 @@ fn handle(
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        // The Symbol Chooser's footprint selector (`FOOTPRINT_SELECT_WIDGET`, pcbnew's `filterFootprints`): the footprints of the symbol's pin count and filters.
+        ("GET", "/api/library/fp_select") => {
+            let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), "");
+            respond(stream, "200 OK", "application/json", crate::library_search::footprint_select(dir, &filter, query_value(target, "zero") == "1").to_string().as_bytes())
+        }
+        // The symbol libraries that load with errors (`GetLibraryLoadErrors`, KiCad's status bar warnings).
+        ("GET", "/api/library/load_errors") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => crate::library_search::load_errors(dir, kind),
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
         ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
         // Save, Save Library As and Revert of the library editors into the libraries of the tables (`crate::library_save_api`): which libraries can be written,
         // which symbols differ from their file, what the file holds, and the two writes.
@@ -836,6 +849,9 @@ fn handle(
         ("POST", "/api/library_tables/check") => respond(stream, "200 OK", "application/json", crate::library_tables::check_rows(dir, &body).to_string().as_bytes()),
         ("GET", "/api/library_tables/normalize") => respond(stream, "200 OK", "application/json", crate::library_tables::normalize(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("POST", "/api/library_tables/add") => respond(stream, "200 OK", "application/json", crate::library_tables::add_library(dir, &body).to_string().as_bytes()),
+        // Reset Libraries (the global table written anew) and Migrate Libraries (kicad-cli converts a library of another format into the KiCad one beside it)
+        ("POST", "/api/library_tables/reset") => respond(stream, "200 OK", "application/json", crate::library_tables::reset_global(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library_tables/migrate") => respond(stream, "200 OK", "application/json", crate::library_tables::migrate_rows(dir, &body).to_string().as_bytes()),
         ("POST", "/api/path_variables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_variables(dir, &body).to_string().as_bytes()),
         ("GET", "/api/fs/list") => respond(stream, "200 OK", "application/json", crate::library_tables::browse(dir, &query_value(target, "path"), &query_value(target, "what")).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
@@ -886,6 +902,13 @@ fn handle(
         // The microwave tools' Complex Shape dialog: the scales and the point count of a shape description file (the shape itself is `Cmd::Microwave` with the file's text).
         ("POST", "/api/microwave/shape") => respond(stream, "200 OK", "application/json", crate::microwave_api::read_shape(&body).to_string().as_bytes()),
         ("POST", "/api/microwave/inductor") => respond(stream, "200 OK", "application/json", crate::microwave_api::check_inductor(&body).to_string().as_bytes()),
+        // Assign Footprints (CvPcb, `crate::cvpcb_api`): the footprint the preview pane draws, the project's footprint association files (Manage Footprint Association
+        // Files...) and Automatically Assign Footprints, which answers what to assign (the dialog applies it with its other assignments, one undo step).
+        ("GET", "/api/cvpcb/footprint") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::footprint(dir, &query_value(target, "id")).to_string().as_bytes()),
+        ("GET", "/api/cvpcb/equ_browse") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_browse(dir, &query_value(target, "path")).to_string().as_bytes()),
+        ("GET", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_files(dir).to_string().as_bytes()),
+        ("POST", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::set_equ_files(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/cvpcb/auto_associate") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::auto_associate(dir, &body).to_string().as_bytes()),
         // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
         // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).
         ("GET", "/api/design_blocks") => respond(stream, "200 OK", "application/json", crate::design_block_api::list(dir).to_string().as_bytes()),

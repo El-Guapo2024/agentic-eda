@@ -2,6 +2,7 @@
 // person expands it, and every library's names only when the tree's search box needs them. KiCad.app's footprint libraries (155) and symbol libraries
 // (223, 220 MB) are far too large to ship whole, so each answer is asked once per page load and kept (the server keeps its own cache too): a collapsed
 // library costs nothing, an expanded one costs one small request, and expanding it again -- or leaving the tab and coming back -- costs none.
+import { clearLoadError, reportLoadErrors } from "../state/libraryLoadErrors";
 import { ApiError } from "./client";
 
 export type LibraryKind = "footprint" | "symbol";
@@ -79,9 +80,14 @@ export function fetchInstalledLibraries(kind: LibraryKind): Promise<InstalledLib
 /** The bare item names of one installed library (`Lib` -> `["R", "C", ...]`; the tree key is `Lib:Name`). */
 export function fetchInstalledItems(kind: LibraryKind, lib: string): Promise<string[]> {
   return once(itemLists, `${kind}/${lib}`, async () => {
-    const names = (await get<{ names: string[]; error?: string }>(`/api/library/items?kind=${kind}&lib=${encodeURIComponent(lib)}`)).names;
-    knownItems.set(`${kind}/${lib}`, names);
-    return names;
+    const r = await get<{ names: string[]; load_error?: string; error?: string }>(`/api/library/items?kind=${kind}&lib=${encodeURIComponent(lib)}`);
+    // a folder library with a file that did not read: its names are listed, and the status bar warns (`GetLibraryLoadErrors`)
+    if (kind === "symbol") {
+      if (r.load_error) reportLoadErrors([{ lib, error: r.load_error }]);
+      else clearLoadError(lib);
+    }
+    knownItems.set(`${kind}/${lib}`, r.names);
+    return r.names;
   });
 }
 

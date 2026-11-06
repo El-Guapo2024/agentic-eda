@@ -105,3 +105,16 @@ test("the tool's hint says a design block is being placed", () => {
   assert.match(importToolHint({ path: "/lib/LDO.kicad_block/LDO.kicad_sch", asSheet: false, block: "Power:LDO" }), /^Place Design Block \(Power:LDO\): click where the items go/);
   assert.match(importToolHint({ path: "/lib/LDO.kicad_block/LDO.kicad_sch", asSheet: true, block: "Power:LDO" }), /click one corner of the sheet/);
 });
+
+test("a sheet drawn from a design block carries the block's default fields; contents and plain files do not (DrawSheet)", () => {
+  const blockFields = [{ name: "Rail", value: "3V3" }, { name: "Owner", value: "Power team" }];
+  const plan = { path: "/lib/LDO.kicad_block/LDO.kicad_sch", keepAnnotations: false, asGroup: true, block: "Power:LDO", blockFields };
+  const sheet = importSheetCmd(plan, { name: "LDO", file: "LDO.kicad_sch", at: [0, 0], size: [1, 1] }, importNumbering(defaultAnnotateSettings())) as unknown as Record<string, unknown>;
+  assert.deepEqual(sheet.block_fields, [["Rail", "3V3"], ["Owner", "Power team"]]);
+  const contents = importContentsCmd(plan, [0, 0], importNumbering(defaultAnnotateSettings())) as unknown as Record<string, unknown>;
+  assert.equal(contents.block_fields, undefined, "placeSheetContents has no sheet");
+  const plain = importSheetCmd({ path: "/x/ldo.kicad_sch", keepAnnotations: false, blockFields }, { name: "LDO", file: "ldo.kicad_sch", at: [0, 0], size: [1, 1] }, importNumbering(defaultAnnotateSettings())) as unknown as Record<string, unknown>;
+  assert.equal(plain.block_fields, undefined, "a plain file's sheet starts with no fields");
+  const none = importSheetCmd({ ...plan, blockFields: [] }, { name: "LDO", file: "LDO.kicad_sch", at: [0, 0], size: [1, 1] }, importNumbering(defaultAnnotateSettings())) as unknown as Record<string, unknown>;
+  assert.equal(none.block_fields, undefined);
+});

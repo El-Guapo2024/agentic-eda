@@ -91,3 +91,29 @@
   color: var(--chrome-text-dim);
   font-size: 11px;
 }
+/* The pane floating as a window of its own (`FloatingSize( 800, 600 )` at `FloatingPosition( 50, 200 )`): over the editor, under the dialogs, moved by its caption and sized by
+   its corner (components/designBlocks/DesignBlocksDock.tsx). */
+.dock.db-dock.db-floating {
+  z-index: 900;
+  border: 1px solid var(--chrome-border);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  resize: both;
+  overflow: hidden;
+  min-width: 240px;
+  min-height: 60px;
+}
+.dock.db-dock.db-floating > .dock-panel-caption {
+  cursor: move;
+  user-select: none;
+}
+.dock.db-dock .db-dock-move {
+  margin-left: 2px;
+}
+/* docked on the left: the pane sits outside the left column (components in App.tsx), with its border on the canvas side */
+.properties-col.db-left-host {
+  display: flex;
+  min-height: 0;
+}
+.properties-col.db-left-host > .dock.db-dock {
+  border-right: 1px solid var(--chrome-border);
+}

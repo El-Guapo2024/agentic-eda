@@ -86,7 +86,7 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
     const problem = placeProblem(c.block, "schematic", c.id);
     if (problem || !c.block?.schematic_path) return toast(problem ?? "Design block has no schematic to place.", "error");
     const options = getDesignBlocksUi().options;
-    ctx.dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: { ...schematicPlacement(c.block.schematic_path, c.id, options), asSheet: forceSheet || options.asSheet, suffix: 1 } });
+    ctx.dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: { ...schematicPlacement(c.block.schematic_path, c.id, options, c.block.fields), asSheet: forceSheet || options.asSheet, suffix: 1 } });
   };
 
   /**
