@@ -551,7 +551,8 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
                     None => return bad(format!("Library '{lib}' not found.")),
                 }
             };
-            let mut add = json!({ "kind": "footprint", "path": typed, "create": true });
+            // an existing folder is asked about and replaced on Overwrite (`createNewLibrary`, `crate::library_tables::add_library_with`)
+            let mut add = json!({ "kind": "footprint", "path": typed, "create": true, "overwrite": req.get("overwrite").and_then(Value::as_bool) == Some(true) });
             for key in ["nickname", "descr"] {
                 if !text(&req, key).is_empty() {
                     add[key] = json!(text(&req, key));

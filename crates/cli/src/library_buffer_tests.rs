@@ -229,3 +229,21 @@ fn a_new_footprint_in_a_library_takes_the_attributes_of_its_last_footprint() {
     assert!(dir.join("libs").join("Fp.pretty").join("Untitled.kicad_mod").is_file());
     assert!(strings(&modified(&dir, "footprint")["items"]).is_empty(), "made and saved: not modified");
 }
+
+#[test]
+fn save_library_as_onto_a_footprint_library_that_is_there_asks_and_overwrite_replaces_it() {
+    let (dir, pretty) = board_with_footprints("libbuf_fp_save_as");
+    let other = dir.join("libs").join("Old.pretty");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("Stale.kicad_mod"), CHIP.replace("\"Chip\"", "\"Stale\"")).unwrap();
+    // `createNewLibrary`: "Library %s already exists." with Overwrite
+    let asked = crate::library_save_api::save_library_as(&dir, br#"{"kind":"footprint","lib":"Fp","path":"${KIPRJMOD}/libs/Old"}"#);
+    assert_eq!((asked["error"].clone(), asked["confirm"].clone()), (Value::from(format!("Library {} already exists.", other.display())), Value::from("Overwrite")), "{asked}");
+    assert!(other.join("Stale.kicad_mod").is_file(), "nothing changed before the answer");
+    let done = crate::library_save_api::save_library_as(&dir, br#"{"kind":"footprint","lib":"Fp","path":"${KIPRJMOD}/libs/Old","overwrite":true}"#);
+    assert_eq!(done["ok"], true, "{done}");
+    let mut files: Vec<String> = std::fs::read_dir(&other).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    files.sort();
+    assert_eq!(files, ["Chip.kicad_mod", "Other.kicad_mod"], "the old folder's footprints went (`DeleteLibrary`), the library's are copied in");
+    assert!(pretty.join("Chip.kicad_mod").is_file());
+}

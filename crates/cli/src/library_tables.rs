@@ -969,11 +969,17 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
                 return bad(format!("The folder '{}' does not exist.", parent.display()));
             }
         }
-        if path.exists() && kind == TableKind::DesignBlock {
-            // `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary`: an existing folder is refused when it is not writable ("Library %s is read only.") and otherwise
-            // asked about (a KIDIALOG "Library %s already exists." with OK labelled "Overwrite"); Overwrite is `pi->DeleteLibrary( libPath )` then `CreateLibrary`.
-            // `DeleteLibrary`'s own refusals ("Library folder '%s' has unexpected files.") stand, so a folder with anything but blocks in it is never removed.
-            if !eda_kicad::design_block::is_writable(&path) {
+        if path.exists() && matches!(kind, TableKind::DesignBlock | TableKind::Footprint) {
+            // `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary`, and `PCB_BASE_EDIT_FRAME::createNewLibrary` for a footprint library (New Library, Save Library As;
+            // UI-LEFT-2 LL6): an existing folder is refused when it is not writable ("Library %s is read only.") and otherwise asked about (a KIDIALOG "Library
+            // %s already exists." with OK labelled "Overwrite"); Overwrite is `pi->DeleteLibrary( libPath )` then `CreateLibrary`. `DeleteLibrary`'s own refusals
+            // ("Library folder '%s' has unexpected files.", "Unexpected file '%s' found in library path '%s'.") stand, so a folder with anything but blocks, or
+            // footprints, in it is never removed.
+            let writable = match kind {
+                TableKind::Footprint => eda_kicad::library_save::is_footprint_library_writable(&path),
+                _ => eda_kicad::design_block::is_writable(&path),
+            };
+            if !writable {
                 return bad(format!("Library {} is read only.", path.display()));
             }
             if req.get("overwrite").and_then(Value::as_bool) != Some(true) {
@@ -981,7 +987,11 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
                 v["confirm"] = json!("Overwrite");
                 return v;
             }
-            if let Err(e) = eda_kicad::design_block::delete_library(&path) {
+            let deleted = match kind {
+                TableKind::Footprint => eda_kicad::library_save::delete_footprint_library(&path).map(|_| ()),
+                _ => eda_kicad::design_block::delete_library(&path).map(|_| ()),
+            };
+            if let Err(e) = deleted {
                 return bad(e);
             }
         }

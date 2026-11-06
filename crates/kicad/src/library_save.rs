@@ -461,6 +461,30 @@ pub fn delete_footprints(pretty: &Path, names: &[&str]) -> Result<Vec<PathBuf>, 
     Ok(files)
 }
 
+/// `PCB_IO_KICAD_SEXPR::DeleteLibrary`: the `.pretty` folder `pretty` and its footprint files go, which `CreateNewLibrary` does before it makes the library
+/// again when the person chose Overwrite for a folder that is there ("Library %s already exists.", UI-LEFT-2 LL6). A folder that cannot be written, one with a
+/// folder in it or a file that is not a footprint is refused with KiCad's words, and nothing is removed. `Ok(false)`: no folder there.
+pub fn delete_footprint_library(pretty: &Path) -> Result<bool, String> {
+    if !pretty.is_dir() {
+        return Ok(false);
+    }
+    if !crate::design_block::may_write(pretty) {
+        return Err(format!("Insufficient permissions to delete folder '{}'.", pretty.display()));
+    }
+    let entries: Vec<PathBuf> = std::fs::read_dir(pretty).map_err(|e| format!("{}: {e}", pretty.display()))?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    if entries.iter().any(|p| p.is_dir()) {
+        return Err(format!("Library folder '{}' has unexpected sub-folders.", pretty.display()));
+    }
+    if let Some(odd) = entries.iter().find(|p| p.extension().and_then(|x| x.to_str()) != Some("kicad_mod")) {
+        return Err(format!("Unexpected file '{}' found in library path '{}'.", odd.display(), pretty.display()));
+    }
+    for f in &entries {
+        let _ = std::fs::remove_file(f);
+    }
+    std::fs::remove_dir(pretty).map_err(|_| format!("Footprint library '{}' cannot be deleted.", pretty.display()))?;
+    Ok(true)
+}
+
 /// The footprint files of a `.pretty` folder (`FP_CACHE::Load` reads `*.kicad_mod`), sorted by name; hidden files left out.
 fn footprint_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
@@ -726,6 +750,14 @@ mod tests {
         assert_eq!(delete_footprints(&pretty, &["Mine:R_0603", "Mine:Gone"]).unwrap(), [pretty.join("R_0603.kicad_mod")]);
         assert!(!pretty.join("R_0603.kicad_mod").exists());
         assert_eq!(delete_footprints(&pretty, &["Mine:R_0603"]).unwrap(), Vec::<PathBuf>::new(), "a name with no file is passed over");
+        // `DeleteLibrary`: a folder with anything but footprints in it is not removed
+        std::fs::write(pretty.join("notes.txt"), "mine").unwrap();
+        assert_eq!(delete_footprint_library(&pretty).unwrap_err(), format!("Unexpected file '{}' found in library path '{}'.", pretty.join("notes.txt").display(), pretty.display()));
+        std::fs::remove_file(pretty.join("notes.txt")).unwrap();
+        save_footprint(&pretty, &fp, &EmbeddedFiles::default()).unwrap();
+        assert_eq!(delete_footprint_library(&pretty), Ok(true));
+        assert!(!pretty.exists());
+        assert_eq!(delete_footprint_library(&pretty), Ok(false));
     }
 
     #[test]
