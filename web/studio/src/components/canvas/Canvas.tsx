@@ -970,7 +970,7 @@ export function Canvas() {
         // `InlineDrag`: `hasMouseMoved && ( IsMouseUp( BUT_LEFT ) || IsClick( BUT_LEFT ) )` -- a component or multi-track drag ignores a click before any move
         const draw = state.drawState;
         if (draw?.kind === "drag" && (draw.dragKind === "component" || draw.dragKind === "multi") && !draw.moved) return;
-        if (state.drawState?.kind === "drag") void finishInlineDrag(sx, sy, dispatch, api, snapMods(e).ctrl);
+        if (state.drawState?.kind === "drag") void finishInlineDrag(sx, sy, dispatch, api, snapMods(e).ctrl, state.drawState);
         else dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;
       }

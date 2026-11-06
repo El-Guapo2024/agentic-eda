@@ -54,7 +54,7 @@ import { planSwap } from "../kicad-port/pcbSwap";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../components/canvas/diffPairRouting";
-import { findDraggableAt, startGroupDrag, startInlineDrag, type DraggableHit } from "../components/canvas/dragging";
+import { endInlineDrag, findDraggableAt, startGroupDrag, startInlineDrag, type DraggableHit, type InlineDragContext } from "../components/canvas/dragging";
 import { findGroupDragTarget } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
@@ -121,7 +121,7 @@ import { registerSimActions } from "./simActions";
 import { simChecked, simEnabled, useSimUi } from "../state/simulator";
 import { registerDesignBlockActions } from "./designBlockActions";
 import { designBlockChecked, useDesignBlocksUi } from "../state/designBlocks";
-import { flipLocalX } from "../kicad-port/boardControl";
+import { flipLocalX, highlightedNets } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
 import { registerPcbMenuActions } from "./pcbMenuActions";
 import { registerAppearanceActions } from "./appearanceActions";
@@ -435,7 +435,11 @@ export function useActionRunner() {
       const k: RouterEditKey | null = routerEditKey(state.tab, state.drawState, key);
       if (k === "undoSegment") m.get("pcbnew.InteractiveRouter.UndoLastSegment")?.();
       else if (k === "customSize") m.get("pcbnew.InteractiveRouter.CustomTrackViaSize")?.();
-      else if (k === "cancel") m.get("common.Interactive.cancel")?.();
+      else if (k === "cancel") {
+        m.get("common.Interactive.cancel")?.();
+        // `InlineDrag`: "treat an undo as an escape" leaves the loop without `hasMultidragCancelled`, so the selection is not put back
+        if (key === "undo" && state.drawState?.kind === "drag" && state.drawState.restoreSelection) dispatch({ type: "SET_SELECTION", refs: [], raw: true });
+      }
       // Delete under a drag: the drag ends (another tool's `Activate()`), then the key is the editor's (`SetPassEvent` to `EDIT_TOOL::Remove`)
       else if (k === "cancelThenPass") {
         m.get("common.Interactive.cancel")?.();
@@ -592,6 +596,8 @@ export function useActionRunner() {
       const cursor = state.cursorNm;
       if (!board || !cursor || state.drawState) return;
       const fromRouterTool = state.activeTool === "route" || state.activeTool === "diffpair";
+      // what `InlineDrag` clears and puts back (the selection), and what `highlightNets` starts from
+      const highlighted = highlightedNets(state.netHighlight, state.bcx.netHighlightMore);
       if (fromRouterTool) {
         const toleranceNm = Math.max(150_000, 6 / state.view.scale);
         const hit = findDraggableAt(board, new Set(), cursor.x, cursor.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
@@ -600,7 +606,7 @@ export function useActionRunner() {
           return;
         }
         // the router tool's own drag asks "Drag Anyway" of a locked item
-        void startInlineDrag(cursor.x, cursor.y, hit, board, state.routerSettings, dispatch, freeAngle, true);
+        void startInlineDrag(cursor.x, cursor.y, hit, board, state.routerSettings, dispatch, freeAngle, true, { selection: [], highlighted });
         return;
       }
       const hover = state.selection.size === 0;
@@ -609,12 +615,14 @@ export function useActionRunner() {
           dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
           return;
         }
+        // `InlineDrag`: "selection gets cleared in the next action, we need a copy" -- the selection `RequestSelection` left (the hover one included)
+        const context: InlineDragContext = { selection: ids, highlighted };
         // `CanInlineDrag`: a selection of footprints (or the footprint under the cursor) is `COMPONENT_DRAGGER`, one of several tracks `MULTI_DRAGGER`
         // (kicad-port/dragTool.ts `findGroupDragTarget`)
         const lone = hover && ids.length === 1 ? ids[0]! : null;
         const group = findGroupDragTarget(board, lone ? [] : ids, lone, freeAngle);
         if (group.target) {
-          void startGroupDrag(cursor.x, cursor.y, group.target, board, state.routerSettings, state.activeLayer ?? board.layers[0] ?? "F.Cu", dispatch);
+          void startGroupDrag(cursor.x, cursor.y, group.target, board, state.routerSettings, state.activeLayer ?? board.layers[0] ?? "F.Cu", dispatch, context);
           return;
         }
         if (group.lockedOut) {
@@ -628,7 +636,7 @@ export function useActionRunner() {
         if (!track && !via) return;
         const hit: DraggableHit = track ? { kind: "track", id: track.id, layer: track.layer, selected: true } : { kind: "via", id: via!.id, layer: state.activeLayer ?? board.layers[0] ?? "F.Cu", selected: true };
         // the selection tool's drag (`EDIT_TOOL::Drag`) only warns of a locked item
-        void startInlineDrag(cursor.x, cursor.y, hit, board, state.routerSettings, dispatch, freeAngle, false);
+        void startInlineDrag(cursor.x, cursor.y, hit, board, state.routerSettings, dispatch, freeAngle, false, context);
       }, "drag");
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
@@ -1021,6 +1029,8 @@ export function useActionRunner() {
       // kinds (`POST /api/route/cancel` drops whatever's active on the
       // shared `Router`), so route/drag/diff-pair all share this one branch.
       if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch, api);
+      // `InlineDrag` cancelled: the highlight as it was, and the selection it cleared (`restoreSelection( selection )`) -- after the ESCAPE below
+      const cancelledDrag = state.drawState?.kind === "drag" ? state.drawState : null;
       // `PlaceTuningPattern`: Escape drops the pattern being placed (or the edit of one) and the tool goes on; with none started it leaves the tool (the ESCAPE below).
       if (state.activeTool === "tune" && cancelTune(state, dispatch)) return;
       // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.
@@ -1030,6 +1040,7 @@ export function useActionRunner() {
       // Pin Helpers > Wire: the stubs were handed to the Drag tool, and cancelling it reverts the commit (`commit.Revert()`)
       if (state.tab === "schematic" && state.activeTool === "drag") void api.revertCarriedPlacement();
       dispatch({ type: "ESCAPE" });
+      endInlineDrag(cancelledDrag, { cancelled: true }, dispatch);
     });
 
     m.set(
