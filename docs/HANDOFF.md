@@ -4,6 +4,13 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 
 ## Start here (2026-11-07): the UI list is done, apart from what needs the user
 
+- **Later on 2026-11-07, the user's decisions:**
+  - Strict mode stays on by default (P7 closed).
+  - Import Netlist is built and merged (`task-u7-netlist`, PARITY-pcb §92: the netlist's word is kept in `DrawingsSection::imported_netlist` over reloads).
+  - The other A1 features stay out.
+  - ngspice is set up on the box (below).
+- **Main 9e5dbaaa:** `tools/check.sh full` gave Rust 4792 passed, 3 failed (the box's), 25 ignored; web 3337. import-netlist, files-in, board-edit, fp-assign, review, drc-review, net-inspector, pcb-items and simulator pass 9/9. The studio was restarted on it.
+
 - **`docs/parity/UI-LEFT.md`: 113 of 124 entries are done**, in batches u1 to u6, about 35 branches, all merged and pushed.
   - Each entry says what is left inside it.
   - The 11 not done:
