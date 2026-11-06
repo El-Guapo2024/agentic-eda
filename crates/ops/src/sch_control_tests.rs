@@ -76,6 +76,27 @@ fn a_sheet_page_is_set_on_the_placement_wherever_it_is_and_validated() {
     assert!(b.design().schematic.as_ref().unwrap().sheets[0].page.is_empty(), "empty puts the sheet back to its place in the hierarchy");
 }
 
+/// UI-LEFT S21: Edit Sheet Page Number with the root in view (`SCH_EDIT_TOOL::EditPageNumber`: "The root sheet and root screen are effectively the same thing")
+/// numbers the root's own page: the walk, the derived file's `(sheet_instances (path "/" (page ..)))` and the reader all have it.
+#[test]
+fn the_root_s_page_number_can_be_changed_and_goes_through_the_file() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(mm(10.0), mm(10.0)), size: (mm(30.0), mm(20.0)) }).unwrap();
+    let root_page = |b: &Board<'_>| eda_model::sheet_list::walk(b.design())[0].effective_page();
+    assert_eq!(root_page(&b), "1");
+    b.apply(&Cmd::SetSheetPage { sheet: String::new(), page: "A1".into(), path: Some(vec![]) }).unwrap();
+    assert_eq!(root_page(&b), "A1");
+    assert_eq!(b.apply(&Cmd::SetSheetPage { sheet: String::new(), page: "A1".into(), path: Some(vec![]) }).unwrap_err()[0].check, "ops_page_unchanged");
+    assert_eq!(b.apply(&Cmd::SetSheetPage { sheet: String::new(), page: "A 1".into(), path: Some(vec![]) }).unwrap_err()[0].check, "ops_bad_page");
+    let text = eda_kicad::export_kicad_sch(b.design(), &m, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    assert!(text.contains("(path \"/\" (page \"A1\"))"), "the root's page is written");
+    let (back, _, _) = eda_kicad::import_kicad_sch(&text).unwrap();
+    assert_eq!(back.schematic.as_ref().unwrap().extras.root_page, "A1", "and read back");
+    b.apply(&Cmd::SetSheetPage { sheet: String::new(), page: "1".into(), path: Some(vec![]) }).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().extras.root_page.is_empty(), "1 is the root's page when none is stored");
+}
+
 #[test]
 fn a_drawn_sheet_gets_the_next_free_page_and_one_drawn_to_its_left_does_not_take_it() {
     // `SCH_DRAWING_TOOLS::DrawSheet`: `GetNextPageNumber`; the sheets are walked by place (`SCH_SCREEN::GetSheets`), so a sheet drawn to the

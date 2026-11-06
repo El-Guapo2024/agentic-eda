@@ -69,7 +69,27 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     // the root's own symbols' paths of its legacy `(symbol_instances ..)`: `/<symbol uuid>` (r5 D5-H1)
     let legacy = sexpr::parse(text).ok().and_then(|t| t.as_list().map(|root| legacy_instances_where(root, |sheets| sheets.is_empty()))).unwrap_or_default();
-    import_screen(text, opts, None, &legacy)
+    let (mut design, model, notes) = import_screen(text, opts, None, &legacy)?;
+    // the root's own page (`(sheet_instances (path "/" (page ..)))`, UI-LEFT S21), as the tree import reads it
+    if let Some(root) = design.schematic.as_mut() {
+        root.extras.root_page = root_page_of(text);
+    }
+    Ok((design, model, notes))
+}
+
+/// The page a file's `(sheet_instances (path "/" (page ..)))` gives the root (`SCH_SHEET_PATH::SetPageNumber` on the root path; UI-LEFT S21), empty when it is
+/// 1 or not given (the page the walk gives the root anyway).
+fn root_page_of(text: &str) -> String {
+    let Ok(tree) = sexpr::parse(text) else { return String::new() };
+    let Some(root) = tree.as_list() else { return String::new() };
+    let Some(instances) = sexpr::find(root, "sheet_instances") else { return String::new() };
+    for path in sexpr::find_all(instances, "path") {
+        if sexpr::txt(path, 1).is_some_and(|p| p.split('/').all(|c| c.is_empty())) {
+            let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map_or_else(|| "#".to_string(), kicad_page);
+            return if page == "1" || page == "#" { String::new() } else { page };
+        }
+    }
+    String::new()
 }
 
 /// One `(path ..)` of a KiCad 6 / early-7 root's `(symbol_instances ..)`, as `SCH_IO_KICAD_SEXPR_PARSER::parseSchSymbolInstances` reads it into a
@@ -1291,8 +1311,16 @@ fn legacy_sheet_instances(root_text: &str, design: &mut Design) {
         if ids.first() == Some(&root_uuid) {
             ids.remove(0);
         }
-        let Some((sheet_id, parent)) = ids.split_last() else { continue };
         let page = sexpr::find(path, "page").and_then(|p| sexpr::txt(p, 1)).map_or_else(|| "#".to_string(), kicad_page);
+        let Some((sheet_id, parent)) = ids.split_last() else {
+            // `(path "/" (page ..))`: the root's own page (`SCH_SHEET_PATH::SetPageNumber` on the root, UI-LEFT S21); 1 is what the walk gives it anyway
+            if page != "1" && page != "#" {
+                if let Some(root) = design.schematic.as_mut() {
+                    root.extras.root_page = page;
+                }
+            }
+            continue;
+        };
         if page == "1" {
             continue;
         }

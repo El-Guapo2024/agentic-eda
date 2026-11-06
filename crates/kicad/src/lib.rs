@@ -824,7 +824,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     // ---- sheet instances (required by KiCad 9 for a valid project-less sheet) ----
     writeln!(out, "\t(sheet_instances").unwrap();
-    writeln!(out, "\t\t(path \"/\" (page \"1\"))").unwrap();
+    // the root's page: the one Edit Sheet Page Number gave it, else 1 (`SchExtras::root_page`, UI-LEFT S21)
+    let is_root = ctx.instance_sheet_paths.iter().all(Vec::is_empty);
+    let root_page = if !is_root || sch.extras.root_page.is_empty() { "1" } else { sch.extras.root_page.as_str() };
+    writeln!(out, "\t\t(path \"/\" (page {}))", sexpr_str(root_page)).unwrap();
     writeln!(out, "\t)").unwrap();
     // The files embedded in the schematic belong to it, not to a sheet: they are in the root sheet's file only, which is the one whose extras hold them
     // (`SCH_IO_KICAD_SEXPR::Format`: the schematic's first top-level sheet).
