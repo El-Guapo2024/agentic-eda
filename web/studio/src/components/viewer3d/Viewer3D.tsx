@@ -31,7 +31,9 @@ import { useStudioDispatch, useStudioState } from "../../state/store";
 import { TrackballCamera, FOV_DEG, KEY_ZOOM_FACTOR, ROTATION_STEP_DEG, type ViewPreset as FacePreset } from "../../kicad-port/camera3d";
 import { resolve3DAction, ROTATE_SIGN, type Action3D } from "../../kicad-port/actions3d";
 import { isMac } from "../../platform";
-import { buildBoardGroup, buildBackgroundTexture, countByName, disposeObject3D, boardOutlineBounds } from "./scene";
+import { buildBoardGroup, buildBackgroundTexture, countByName, disposeObject3D, boardOutlineBounds, type Board3d } from "./scene";
+import { copperColorKey, layerColor } from "../canvas/layers";
+import { parseColor } from "../../kicad-port/appearance3d";
 import { MODEL_ROWS, ROWS, isVisible, plotFollowVisibility, toggled } from "../../kicad-port/appearance3d";
 import { useViewerColors } from "./useViewerColors";
 import { ModelCache } from "./modelCache";
@@ -643,14 +645,36 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const sceneRows = ROWS.filter((r) => !MODEL_ROWS.has(r.id)).map((r) => (isVisible(layers, r.id, followed) ? "1" : "0")).join("");
   // The colour of every row: the theme's, the board's stackup when "Use board stackup colors" is on, the swatches (kicad-port/appearance3d.ts, BOARD_ADAPTER::GetLayerColors).
   const resolved = useViewerColors();
+  // `GET /api/board3d`: the body with its through and non-plated holes (`m_boardWithHoles`), polygon arithmetic the server does; asked again when the board changes.
+  const [board3d, setBoard3d] = useState<Board3d | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/board3d", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v: (Board3d & { error?: string }) | null) => {
+        if (!cancelled && v && !v.error && Array.isArray(v.body)) setBoard3d(v);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [state.version]);
+  // The inner copper layers (`Is3dLayerEnabled`'s default branch): drawn as the PCB editor shows each, in its colour there with "Use PCB editor copper colors" (`setLayerMaterial`).
+  const innerLayers = (board?.layers ?? []).filter((l) => /^In\d+\.Cu$/.test(l));
+  const innerKey = innerLayers.map((l) => (state.layerVisible[copperColorKey(l)] !== false ? "1" : "0")).join("") + (state.viewer3d.useEditorCopperColors ? "e" : "");
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
 
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
+    const useEditor = state.viewer3d.useEditorCopperColors;
+    const innerCopper = {
+      visible: (layer: string) => state.layerVisible[copperColorKey(layer)] !== false,
+      color: (layer: string) => (useEditor ? (parseColor(layerColor(copperColorKey(layer))) ?? undefined) : undefined),
+    };
     // The parts are not in this group: partModels draws them (the real models, a box until they are in).
-    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row, followed), colors: resolved, zoneFills: zoneFill?.zones }) : new THREE.Group();
+    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row, followed), colors: resolved, zoneFills: zoneFill?.zones, board3d, innerCopper }) : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
     syncActiveGroupRef.current();
@@ -671,7 +695,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) three.camera3d.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board, sceneRows, resolved, zoneFill]);
+  }, [board, sceneRows, resolved, zoneFill, board3d, innerKey]);
 
   // The parts: the through-hole, SMD and virtual rows and the bounding boxes only touch their models.
   const thtShown = isVisible(layers, "th_models");

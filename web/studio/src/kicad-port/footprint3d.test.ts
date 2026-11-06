@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FieldInfo, Pad, Part } from "../api/types";
-import { fieldsDrawn3d, padPaste3d } from "./footprint3d";
+import { fieldsDrawn3d, padHasCopper, padPaste3d, padPasteMargin3d } from "./footprint3d";
 
 const field = (name: string, over: Partial<FieldInfo> = {}): FieldInfo => ({
   id: `R1:${name}`,
@@ -67,4 +67,16 @@ test("solder paste follows the pad's paste layer and margin (addPads, PAD::GetSo
   assert.equal(padPaste3d(pad({ layers: ["F.Cu", "F.Mask"] }), part([]), undefined), null);
   assert.deepEqual(padPaste3d(pad({ layers: ["F.Cu", "F.Paste", "F.Mask"] }), part([]), undefined), { w: 1_000_000, h: 600_000 });
   assert.equal(padPaste3d(pad({ th: true, kind: "through_hole" }), part([]), undefined), null);
+});
+
+// V7-1 (round 7): `PAD::GetSolderPasteMargin`: "Pads defined only on mask layers (and perhaps on other tech layers) use the shape defined by the pad settings only" --
+// a pad on no copper layer gets no margin, the footprint's and the board's included.
+test("a pad on the paste layer only gets no paste margin (PAD::GetSolderPasteMargin)", () => {
+  const board = { paste_margin_nm: -50_000, paste_margin_ratio: 0 };
+  assert.deepEqual(padPasteMargin3d(pad({ layers: ["F.Paste"] }), part([], { paste_margin: -80_000 }), board), [0, 0]);
+  assert.deepEqual(padPaste3d(pad({ layers: ["F.Paste"] }), part([]), board), { w: 1_000_000, h: 600_000 }, "drawn the pad's size");
+  // With copper it is grown as before; `*.Cu` counts.
+  assert.deepEqual(padPasteMargin3d(pad({ layers: ["F.Cu", "F.Paste"] }), part([]), board), [-50_000, -50_000]);
+  assert.equal(padHasCopper({ layers: ["*.Cu", "*.Mask"] }), true);
+  assert.equal(padHasCopper({ layers: ["F.Paste", "F.Mask"] }), false);
 });

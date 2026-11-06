@@ -860,6 +860,8 @@ fn handle(
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
+        // The 3D viewer's board body with its holes (`m_boardWithHoles`), polygon arithmetic done here (`crate::board3d_api`).
+        ("GET", "/api/board3d") => respond(stream, "200 OK", "application/json", crate::board3d_api::report(dir).to_string().as_bytes()),
         ("GET", "/api/fill") => {
             let v = crate::fill_api::report(dir, query_value(target, "polys") == "1").unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())

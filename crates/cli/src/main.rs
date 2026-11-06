@@ -22,6 +22,7 @@ mod net_names;
 mod board_control_api;
 mod board_output_api;
 mod body_api;
+mod board3d_api;
 mod model3d_api;
 mod microwave_api;
 mod specctra_api;
