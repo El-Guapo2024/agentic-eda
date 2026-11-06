@@ -14,15 +14,14 @@
 // What is exact here: the size grouping (including `std::map<VECTOR2I>`'s
 // squared-length key), the per-size row/column arrangement (`optimalCountPerLine`
 // and the cell offsets), the reference ordering (`compareFootprintsbyRef`), the
-// 0.01 mm packing grid, the half-gap block inflation and the final placement of
-// the arrangement's top-left on the target. What is not: the step that packs the
-// *blocks* of different sizes against each other uses `rectpack2D`'s
-// `find_best_packing` in KiCad (a third-party header the pinned source snapshot
-// does not carry); here a shelf packer finds the smallest square bin that holds
-// the blocks, with the same "start at sqrt(total area), grow by 1.2" outer loop.
-// With one block size (the common case) there is nothing to pack and the result
-// is exactly KiCad's. A footprint's box is its courtyard (the model has no
-// separate bounding box without text).
+// 0.01 mm packing grid, the half-gap block inflation, the packing of the *blocks*
+// of different sizes against each other -- `spreadRectangles` and rectpack2D's
+// `find_best_packing` (kicad-port/rectpack2d.ts, UI-LEFT P19; it replaced a shelf
+// packer of the studio's own, kept below as INACTIVE) -- and the final placement
+// of the arrangement's top-left on the target. A footprint's box is
+// `footprintBBox`'s (the model has no separate bounding box without text).
+
+import { spreadRectangles, type RectXYWHF } from "./rectpack2d";
 
 export type Box = readonly [number, number, number, number];
 
@@ -67,6 +66,8 @@ export function compareByRef(a: string, b: string): number {
 }
 
 const trunc = Math.trunc;
+/** `INT_MAX / 2`. */
+const INT_MAX_HALF = Math.trunc(2147483647 / 2);
 
 /** `optimalCountPerLine` for `count` footprints of cell size `size` (the two ratio/remainder heuristics of `SpreadFootprints`). */
 export function optimalCountPerLine(count: number, size: readonly [number, number]): number {
@@ -138,7 +139,11 @@ function arrangeBlock(items: readonly PackItem[], size: readonly [number, number
   return { items: placed, box: box! };
 }
 
-/** Shelf packing of `rects` (units of the packing grid) into a `side` x `side` bin; null when they do not fit. */
+/**
+ * INACTIVE (UI-LEFT P19, replaced by kicad-port/rectpack2d.ts's port of rectpack2D, which `packFootprints` calls): the studio's own stand-in for
+ * `find_best_packing`, a shelf packer of `rects` (units of the packing grid) into a `side` x `side` bin; null when they do not fit. Kept, as replaced ports
+ * are, with its unit tests; nothing calls it.
+ */
 function shelfPack(rects: readonly { w: number; h: number }[], side: number): { x: number; y: number }[] | null {
   const order = rects.map((_, i) => i).sort((a, b) => rects[b]!.h - rects[a]!.h || rects[b]!.w - rects[a]!.w || a - b);
   const out: { x: number; y: number }[] = new Array(rects.length);
@@ -161,7 +166,10 @@ function shelfPack(rects: readonly { w: number; h: number }[], side: number): { 
   return out;
 }
 
-/** `spreadRectangles`: the smallest square bin (from `sqrt(total area)` up, growing by 1.2 like the C++ loop) that holds every rect; positions in grid units. */
+/**
+ * INACTIVE (UI-LEFT P19, replaced by `spreadRectangles` of kicad-port/rectpack2d.ts): the studio's stand-in for `spreadRectangles`, the smallest square bin
+ * (from `sqrt(total area)` up, growing by 1.2 like the C++ loop) that holds every rect, packed by the shelf packer; positions in grid units.
+ */
 export function packRects(rects: readonly { w: number; h: number }[], areaSide: number): { x: number; y: number }[] {
   if (rects.length === 0) return [];
   const minSide = Math.max(1, ...rects.map((r) => Math.max(r.w, r.h)));
@@ -282,17 +290,24 @@ export function packFootprints(items: readonly PackItem[], componentGap = COMPON
 
   const blocks = ordered.map((g) => arrangeBlock(g.items, g.size, componentGap));
 
-  // Pack the blocks (0.01 mm grid): `areaSide = sqrt( blocksArea )`.
-  const rects = blocks.map((b) => ({ w: trunc((b.box[2] - b.box[0]) / PACK_SCALE_NM), h: trunc((b.box[3] - b.box[1]) / PACK_SCALE_NM) }));
-  const blocksArea = blocks.reduce((s, b) => s + (b.box[2] - b.box[0]) * (b.box[3] - b.box[1]), 0);
-  const areaSide = trunc(Math.sqrt(blocksArea) / PACK_SCALE_NM);
-  const spots = packRects(rects, areaSide);
+  // Pack the blocks (0.01 mm grid): `vecSubRects.emplace_back( 0, 0, block_bbox.GetWidth() / scale, block_bbox.GetHeight() / scale, false )`,
+  // `int areaSide = std::sqrt( blocksArea ); spreadRectangles( vecSubRects, areaSide, areaSide );` -- the area summed as the `long long` it is, then converted
+  // to the double `std::sqrt` takes and truncated back to an int.
+  const rects: RectXYWHF[] = blocks.map((b) => ({ x: 0, y: 0, w: trunc((b.box[2] - b.box[0]) / PACK_SCALE_NM), h: trunc((b.box[3] - b.box[1]) / PACK_SCALE_NM), flipped: false }));
+  const blocksArea = blocks.reduce((s, b) => s + BigInt(b.box[2] - b.box[0]) * BigInt(b.box[3] - b.box[1]), 0n);
+  const areaSide = trunc(Math.sqrt(Number(blocksArea)));
+  spreadRectangles(rects, areaSide, areaSide, PACK_SCALE_NM);
 
   // Each footprint moves by `target_pos - block_bbox.GetPosition()`; the sheet box is the union of the moved footprint boxes.
   const finalBoxes: { ref: string; box: [number, number, number, number] }[] = [];
   blocks.forEach((b, bi) => {
-    const dx = spots[bi]!.x * PACK_SCALE_NM - b.box[0];
-    const dy = spots[bi]!.y * PACK_SCALE_NM - b.box[1];
+    let tx = rects[bi]!.x * PACK_SCALE_NM;
+    let ty = rects[bi]!.y * PACK_SCALE_NM;
+    // "Avoid too large coordinates: Overlapping components are better than out of screen components"
+    if (tx + rects[bi]!.w * PACK_SCALE_NM > INT_MAX_HALF) tx -= INT_MAX_HALF;
+    if (ty + rects[bi]!.h * PACK_SCALE_NM > INT_MAX_HALF) ty -= INT_MAX_HALF;
+    const dx = tx - b.box[0];
+    const dy = ty - b.box[1];
     for (const p of b.items) finalBoxes.push({ ref: p.ref, box: [p.box[0] + dx, p.box[1] + dy, p.box[2] + dx, p.box[3] + dy] });
   });
   const sheetX0 = Math.min(...finalBoxes.map((f) => f.box[0]));
