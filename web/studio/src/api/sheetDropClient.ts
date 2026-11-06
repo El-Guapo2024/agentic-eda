@@ -13,8 +13,10 @@ export interface DroppedSheets {
   files?: string[];
   /** The sheets whose files were not dropped, with the file that places each (the check `LoadSheetFromFile` makes of a file read without its sheets). */
   missing?: Array<{ file: string; placed_by: string }>;
-  /** Files of the drop the imported one does not place: not imported. */
+  /** Files of the drop the first one does not place. */
   left_out?: string[];
+  /** Every dropped file on the server, in the drop's order: Import Sheet runs for each in turn (`DoWithAcceptedFiles`, UI-LEFT S17). */
+  paths?: string[];
 }
 
 export async function putDroppedSheets(files: Array<{ name: string; text: string }>): Promise<DroppedSheets> {

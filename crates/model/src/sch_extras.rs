@@ -64,6 +64,11 @@ pub struct SchExtras {
     /// `writes_nothing`, not in `is_empty`: it says how the hierarchy reads, it draws nothing.)
     #[serde(default, skip_serializing_if = "is_false")]
     pub virtual_root: bool,
+    /// The root sheet's own page number (`SCH_SHEET_PATH::SetPageNumber` on the root path, the root file's `(sheet_instances (path "/" (page ..)))`), as Edit Sheet
+    /// Page Number sets it with the root in view (`SCH_EDIT_TOOL::EditPageNumber`: "The root sheet and root screen are effectively the same thing"). Empty: the
+    /// page the walk gives it, 1. Kept on the root only. Additive (UI-LEFT S21). (Counts in `writes_nothing`, not in `is_empty`.)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub root_page: String,
     /// A label's own fields beyond a global label's Sheet References (`SCH_LABEL_BASE::m_fields`, `(property ..)` in the file), by label id, in order: its net class
     /// (`Netclass`, which puts the label's net in that class: `CONNECTION_GRAPH` `checkNetclassDrivers`) and any field the user added. A label with no entry has none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -744,6 +749,7 @@ impl SchExtras {
             && self.field_name_templates.is_empty()
             && self.variants.is_empty()
             && !self.virtual_root
+            && self.root_page.is_empty()
     }
 
     /// The net class a label's fields give its net (`SCH_LABEL_BASE`'s `Netclass` field; the first that is not empty), if any.

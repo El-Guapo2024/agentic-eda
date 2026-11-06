@@ -26,6 +26,9 @@ import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
 import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schShapeTools";
+import { arcToggleClockwise } from "../kicad-port/arcGeom";
+import { setSchArcEditMode } from "../kicad-port/schArcEdit";
+import { ARC_EDIT_MODE_LABEL, type ArcEditMode } from "../kicad-port/pcbPointEdit";
 import type { BreakMode } from "../kicad-port/schBreak";
 import { nextUnitToPlace, unitCountOf } from "../kicad-port/schUnits";
 import { addCorner, canAddCorner, canRemoveCorner, removeCorner } from "../kicad-port/schPolyCorners";
@@ -197,7 +200,23 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
       })
     );
   }
-  if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
+  if (draw?.poly || draw?.arc) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
+  // `SCH_POINT_EDITOR::changeArcEditMode`: Ctrl+Space (`cycleArcEditMode`) and the three `pointEditorArcKeep*` actions set `m_Drawing.arc_edit_mode`, the mode the
+  // arc point editor drags in (kicad-port/schArcEdit.ts; UI-LEFT S13)
+  const arcMode = (mode: ArcEditMode | "cycle") => () => {
+    const next = setSchArcEditMode(mode);
+    ctx.dispatch({ type: "TOAST", message: `Arc editing: ${ARC_EDIT_MODE_LABEL[next]}`, kind: "info" });
+  };
+  m.set("common.Interactive.cycleArcEditMode", arcMode("cycle"));
+  m.set("pcbnew.PointEditor.arcKeepCenter", arcMode("keep_center_adjust_angle_radius"));
+  m.set("pcbnew.PointEditor.arcKeepEndpoint", arcMode("keep_endpoints_or_start_direction"));
+  m.set("pcbnew.PointEditor.arcKeepRadius", arcMode("keep_center_ends_adjust_angle"));
+  // `/` (`ACTIONS::arcPosture`, KiCad 25ec2335's common action; 8303b2ad names it `pcbnew.InteractiveDrawing.arcPosture`): while an arc is being drawn,
+  // `ARC_DRAW_BEHAVIOR::ToggleClockwise` -- the other way round, and locked so (UI-LEFT S13)
+  if (draw?.arc) {
+    const arc = draw.arc;
+    m.set("pcbnew.InteractiveDrawing.arcPosture", () => ctx.dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcToggleClockwise(arc) } }));
+  }
 
   registerSchSheetPinActions(registry, ctx);
   registerSchGroupActions(registry, ctx);

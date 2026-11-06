@@ -1041,6 +1041,27 @@ fn points_box(pts: &[Point]) -> Option<(Point, Point)> {
 }
 
 /// `GetPosition` of a drawn graphic.
+/// `EDA_SHAPE::getCenter()` of an arc kept as three points: `CalcArcCenter( start, mid, end )` (`libs/kimath/src/trigo.cpp`) rounded to the grid of IUs (the
+/// circle through the three points; a whole circle's centre is half way to its middle point; three points in a line, or within KiCad's 10 IU box, give
+/// their centroid).
+pub(crate) fn arc_center_of(start: Point, mid: Point, end: Point) -> Point {
+    let (sx, sy, mx, my, ex, ey) = (start.x.as_f64(), start.y.as_f64(), mid.x.as_f64(), mid.y.as_f64(), end.x.as_f64(), end.y.as_f64());
+    let centroid = Point { x: Nm::kiround((sx + mx + ex) / 3.0), y: Nm::kiround((sy + my + ey) / 3.0) };
+    if sx.max(mx).max(ex) - sx.min(mx).min(ex) < 5.0 * 100.0 && sy.max(my).max(ey) - sy.min(my).min(ey) < 5.0 * 100.0 {
+        return centroid;
+    }
+    if start == end {
+        return Point { x: Nm::kiround((sx + mx) / 2.0), y: Nm::kiround((sy + my) / 2.0) };
+    }
+    let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
+    if d == 0.0 {
+        return centroid;
+    }
+    let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
+    let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
+    Point { x: Nm::kiround(ux), y: Nm::kiround(uy) }
+}
+
 pub(crate) fn graphic_position(g: &SchGraphic) -> Point {
     match &g.shape {
         SchGraphicKind::Rectangle { start, .. } | SchGraphicKind::Arc { start, .. } | SchGraphicKind::Bezier { start, .. } | SchGraphicKind::TextBox { start, .. } => *start,

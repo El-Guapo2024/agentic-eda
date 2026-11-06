@@ -8,7 +8,8 @@
 //                         (`calcEdit` edit state 1: radius = chord / sqrt 2); the point editor adjusts it afterwards
 //   Bezier curve          click the start, the end, control point 1, control point 2 (edit states 1..3)
 //
-// There is no 3-click arc here: that is the board editor's `ARC_GEOM_MANAGER` (kicad-port/arcGeom.ts), not this tool.
+// The schematic's Draw Arc no longer runs the arc rule here: since UI-LEFT S13 it is KiCad 25ec2335's three clicks (`ARC_GEOM_MANAGER`, kicad-port/arcGeom.ts,
+// components/schematic/schShapeTools.ts). The two-click arc stays for what still reads it (8303b2ad's `DrawShape`).
 import type { SchGraphicShape } from "../api/schEditTypes";
 
 export type P = readonly [number, number];

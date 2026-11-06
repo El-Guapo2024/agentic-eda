@@ -30,15 +30,50 @@ export function defaultAnnotateSettings(): AnnotateSettings {
   return { scope: "all", recursive: true, reset: false, regroupUnits: false, sort: "x", algo: "first_free", start: "0" };
 }
 
-/** The settings the dialog last held, kept between openings as KiCad keeps them (`~DIALOG_ANNOTATE` writes them back): Annotate reopens with them, and Import Sheet numbers a new sheet's symbols the way they say. */
-let remembered: AnnotateSettings = defaultAnnotateSettings();
+/**
+ * The settings the dialog last held, kept between openings as KiCad keeps them (`~DIALOG_ANNOTATE` writes them back): Annotate reopens with them, and placing,
+ * pasting and Import Sheet number symbols the way they say. Two homes, as in KiCad (UI-LEFT S14): the scope, "Recurse into subsheets", keep / reset and "Regroup
+ * symbol units" are the user's (`EESCHEMA_SETTINGS::m_AnnotatePanel`, eeschema.json: this browser's storage here); the order, the numbering and the start number are
+ * the project's (`SCHEMATIC_SETTINGS::m_Annotate*`: Schematic Setup > Annotation), read from the schematic as it loads ([`adoptProjectAnnotation`]) and stored back by
+ * the dialog's close (`set_annotation_settings`).
+ */
+const PANEL_KEY = "eda.sch.annotatePanel";
+
+function loadPanel(): AnnotateSettings {
+  const base = defaultAnnotateSettings();
+  try {
+    const raw = globalThis.localStorage?.getItem(PANEL_KEY);
+    if (!raw) return base;
+    const v = JSON.parse(raw) as Partial<AnnotateSettings>;
+    const scope = v.scope === "all" || v.scope === "current_sheet" || v.scope === "selection" ? v.scope : base.scope;
+    return { ...base, scope, recursive: v.recursive ?? base.recursive, reset: v.reset ?? base.reset, regroupUnits: v.regroupUnits ?? base.regroupUnits };
+  } catch {
+    return base;
+  }
+}
+
+let remembered: AnnotateSettings | null = null;
 
 export function rememberedAnnotateSettings(): AnnotateSettings {
+  if (!remembered) remembered = loadPanel();
   return remembered;
 }
 
 export function rememberAnnotateSettings(settings: AnnotateSettings): void {
   remembered = settings;
+  try {
+    globalThis.localStorage?.setItem(PANEL_KEY, JSON.stringify({ scope: settings.scope, recursive: settings.recursive, reset: settings.reset, regroupUnits: settings.regroupUnits }));
+  } catch {
+    // no storage: the panel's choices last the session
+  }
+}
+
+/** The project's order, numbering and start number (`SCHEMATIC_SETTINGS::m_AnnotateSortOrder` / `m_AnnotateMethod` / `m_AnnotateStartNum`; null is KiCad's defaults). */
+export function adoptProjectAnnotation(a: { sort_order: number; method: number; start_num: number } | null | undefined): void {
+  const s = rememberedAnnotateSettings();
+  const sort = a?.sort_order === 1 ? "y" : "x";
+  const algo = a?.method === 1 ? "sheet_x100" : a?.method === 2 ? "sheet_x1000" : "first_free";
+  remembered = { ...s, sort, algo, start: String(a?.start_num ?? 0) };
 }
 
 /**

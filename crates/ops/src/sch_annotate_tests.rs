@@ -298,12 +298,19 @@ fn power_symbols_are_numbered_with_the_schematic_and_a_leading_zero() {
     let mut d = design();
     let power = |id: &str| eda_model::ir::PowerSymbol { id: id.into(), lib_id: "power:GND".into(), at: p(Nm::ZERO, mm(0.09)), rot: 0, net: "GND".into(), pin: String::new() };
     d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().power_symbols.push(power("#PWR01"));
-    d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap().power_symbols.push(power("#PWR01"));
+    let bsheet = d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap();
+    bsheet.power_symbols.push(power("#PWR01"));
+    // b's own flags and its Value placed by hand (r4 D4-L2) go with the number it is given
+    bsheet.extras.power_props.insert("#PWR01".into(), eda_model::sch_extras::PowerProps { dnp: true, ..Default::default() });
+    bsheet.field_layout.insert("#PWR01".into(), vec![eda_model::ir::FieldPlacement { dy: mm(3.81), ..eda_model::ir::FieldPlacement::at_origin("Value") }]);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&annotate(true, AnnotateOrder::YThenX, None, all(Algo::FirstFree, 0))).unwrap();
     let sch = b.design().sheet_contents.as_ref().unwrap();
     let ids: Vec<&str> = ["a.kicad_sch", "b.kicad_sch"].iter().map(|f| sch[*f].power_symbols[0].id.as_str()).collect();
     assert_eq!(ids, vec!["#PWR01", "#PWR02"], "no two share an id any more, and the sheet in page order numbers first");
+    let b_after = &sch["b.kicad_sch"];
+    assert!(b_after.extras.power_props.get("#PWR02").is_some_and(|p| p.dnp) && !b_after.extras.power_props.contains_key("#PWR01"), "{:?}", b_after.extras.power_props);
+    assert!(b_after.field_layout.contains_key("#PWR02") && !b_after.field_layout.contains_key("#PWR01"));
 }
 
 #[test]
@@ -350,4 +357,50 @@ fn a_renamed_symbol_keeps_its_unit_on_each_path_and_a_deleted_one_leaves_none() 
     b.apply(&on("sa", Cmd::DeleteSymbol { id: "R9".into(), unit: None })).unwrap();
     let a = &b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"];
     assert_eq!(a.extras.path_units.keys().cloned().collect::<Vec<_>>(), vec!["R7".to_string()]);
+}
+
+/// r2 D-A1 (UI-LEFT S14): `PlaceSymbol`'s `annotate()` over every reference of the hierarchy: a resistor takes the first free R number (R1 on B, R5 and R9 on A:
+/// R2), the sheet number method counts from the sheet's page; a second unit of a two-unit part joins a part of the same symbol and value whose unit is free
+/// (`areUnitsAvailable`), on any sheet, and a part of another value or one with the unit taken is passed over.
+#[test]
+fn a_placed_symbol_takes_the_first_free_number_and_a_unit_joins_a_part_that_has_it_free() {
+    let m = ConstraintModel::default();
+    let mut d = design();
+    d.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![dual()], ..Default::default() });
+    d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap().symbols.push(symbol("U1", "Test:Dual", "TL072", 1, p(Nm::ZERO, mm(40.0))));
+    d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap().symbols.push(symbol("U2", "Test:Dual", "TL082", 1, p(Nm::ZERO, mm(50.0))));
+    let b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let first_free = AnnotateOptions { algo: Algo::FirstFree, ..Default::default() };
+    assert_eq!(b.placement_reference("", "R", "Device:R", "10k", 1, 1, &first_free).unwrap(), "R2");
+    assert_eq!(b.placement_reference("sa", "R", "Device:R", "10k", 1, 1, &AnnotateOptions { algo: Algo::SheetX100, ..Default::default() }).unwrap(), "R201", "page 2 counts from 201");
+    // unit B of a TL072 joins U1 (on sheet B, placed from the root), unit A of one takes the first free number past U1 and U2
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL072", 2, 2, &first_free).unwrap(), "U1");
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL072", 1, 2, &first_free).unwrap(), "U3");
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL999", 2, 2, &first_free).unwrap(), "U3", "another value is another part");
+    assert_eq!(b.placement_reference("", "U", "Test:Dual", "TL072", 2, 2, &AnnotateOptions { algo: Algo::FirstFree, start_number: 10, ..Default::default() }).unwrap(), "U11");
+}
+
+/// UI-LEFT S14: a placeholder the importer gave a symbol it could not tell apart (`R?1`, `R?2`: two parts cannot both be `R?` in the design) is `R?` where KiCad shows
+/// and reads it -- the Reference field drawn on the sheet and the derived file's Reference and `(instances .. (reference ..))` -- until Annotate numbers it.
+#[test]
+fn a_placeholder_reference_is_written_and_drawn_as_the_unannotated_r_question_mark() {
+    use eda_model::{Part, Pin, PinKind};
+    let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: None, symbol: Some("Device:R".into()), datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, edge: None };
+    let m = ConstraintModel { parts: vec![part("R?1"), part("R?2")], ..Default::default() };
+    let mut d = design();
+    let root = d.schematic.as_mut().unwrap();
+    root.symbols = vec![symbol("R?1", "Device:R", "10k", 1, p(mm(10.16), mm(10.16))), symbol("R?2", "Device:R", "1k", 1, p(mm(30.48), mm(10.16)))];
+    let text = eda_kicad::export_kicad_sch(&d, &m, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    assert_eq!(text.matches("(reference \"R?\")").count(), 2, "both are R? in the file");
+    assert!(!text.contains("R?1") && !text.contains("R?2"), "no placeholder number reaches KiCad");
+    let specs = eda_engine::fields::symbol_specs(&root_symbol(&d, "R?1"), None, "");
+    assert_eq!(specs[0].text, "R?", "the Reference field shows R?");
+    // annotated, it is a reference like any other
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&annotate(false, AnnotateOrder::XThenY, None, all(Algo::FirstFree, 0))).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().symbols.iter().all(|s| !eda_model::annotate::is_unannotated(&s.id)));
+}
+
+fn root_symbol(d: &Design, id: &str) -> SymbolInstance {
+    d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == id).unwrap().clone()
 }

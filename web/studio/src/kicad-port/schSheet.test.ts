@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultSheetFile, MIN_SHEET_HEIGHT_NM, MIN_SHEET_WIDTH_NM, sheetSize, uniqueSheetName } from "./schSheet";
+import { defaultSheetFile, linkQuestion, MIN_SHEET_HEIGHT_NM, MIN_SHEET_WIDTH_NM, sheetFileWithExtension, sheetSize, uniqueSheetName } from "./schSheet";
 
 const GRID = 1_270_000; // 50 mil
 
@@ -32,4 +32,12 @@ test("defaultSheetFile makes a file name from the sheet name", () => {
   assert.equal(defaultSheetFile("Power Supply"), "power_supply.kicad_sch");
   assert.equal(defaultSheetFile("  USB-C / PD  "), "usb_c_pd.kicad_sch");
   assert.equal(defaultSheetFile("???"), "untitled.kicad_sch");
+});
+
+test("ChangeSheetFile's question: only for a file the hierarchy already shows, the extension added as EnsureFileExtension adds it", () => {
+  const hierarchy = [{ file: "board.kicad_sch" }, { file: "untitled.kicad_sch" }];
+  assert.equal(linkQuestion("untitled.kicad_sch", hierarchy), "'untitled.kicad_sch' already exists.\n\nLink 'untitled.kicad_sch' to this file?");
+  assert.equal(linkQuestion("untitled", hierarchy), "'untitled.kicad_sch' already exists.\n\nLink 'untitled.kicad_sch' to this file?");
+  assert.equal(linkQuestion("power.kicad_sch", hierarchy), null);
+  assert.equal(sheetFileWithExtension(" power "), "power.kicad_sch");
 });

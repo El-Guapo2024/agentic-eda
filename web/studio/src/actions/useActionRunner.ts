@@ -1435,6 +1435,11 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveDrawingLineWireBus.switchPosture",
       schematicOnly(() => {
+        // the same key turns an arc being drawn the other way (`arcPosture`, UI-LEFT S13): this action comes first in the hotkey table
+        if (state.drawState?.kind === "sch_shape" && state.drawState.arc) {
+          dispatch({ type: "SET_DRAW_STATE", draw: { ...state.drawState, arc: arcToggleClockwise(state.drawState.arc) } });
+          return;
+        }
         if (state.drawState?.kind !== "wire") return;
         dispatch({ type: "TOGGLE_SCH_POSTURE" });
       })
@@ -2377,17 +2382,29 @@ export function useActionRunner() {
             dispatch({ type: "TOAST", message: "Bus has no members", kind: "info" });
             return;
           }
-          dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: { bus: bus.net, entryAt: bus.at, members: bus.members } });
+          const tree = sch.wires.find((w) => w.id === bus.id)?.member_tree;
+          dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: { bus: bus.net, entryAt: bus.at, members: bus.members, ...(tree ? { tree } : {}) } });
         })
       );
 
       // Alt+S (swap) -- SCH_EDIT_TOOL::Swap: positions (and, for two instances of one library symbol, orientations) of the selected items are exchanged
-      // pairwise in selection order -- a Batch of `swap_sch_items`, one undo step.
+      // pairwise in selection order -- a Batch of `swap_sch_items`, one undo step. The kinds are `SwappableItems`: symbols, labels, texts, sheet pins, sheets,
+      // shapes, rule areas, text boxes, directive labels and images (the graphics), junctions and no-connects; a bus entry is not one of them.
       m.set(
         "eeschema.InteractiveEdit.swap",
         schematicOnly(() => {
           if (!sch) return;
-          const swappable = (id: string) => Boolean(api.symbolById(id) || sch.labels.some((l) => l.id === id) || sch.texts.some((t) => t.id === id) || sch.power_symbols.some((p) => p.id === id) || sch.sheets.some((s) => s.pins.some((p) => p.id === id)));
+          const swappable = (id: string) =>
+            Boolean(
+              api.symbolById(id) ||
+                sch.labels.some((l) => l.id === id) ||
+                sch.texts.some((t) => t.id === id) ||
+                sch.power_symbols.some((p) => p.id === id) ||
+                sch.sheets.some((s) => s.id === id || s.pins.some((p) => p.id === id)) ||
+                (sch.graphics ?? []).some((g) => g.id === id) ||
+                (sch.junctions ?? []).some((j) => j.id === id) ||
+                sch.no_connects.some((n) => n.id === id)
+            );
           const ids = [...state.selection].filter(swappable);
           if (ids.length < 2) return;
           void api.cmdBatch(ids.slice(0, -1).map((a, i) => ({ op: "swap_sch_items" as const, a, b: ids[i + 1]! })));

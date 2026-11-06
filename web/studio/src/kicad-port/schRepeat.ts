@@ -22,11 +22,11 @@ export const REPEAT_OFFSET_NM: readonly [number, number] = [0, 2_540_000];
 type Repeatable =
   | Extract<Cmd, { op: "add_label" | "add_sch_text" | "add_power_symbol" | "add_no_connect" | "add_bus_entry" | "add_wire" | "add_sch_line" | "add_symbol" }>
   // a label or text put down with its dialog's properties (spin, size, "Auto", justification): the same placement, repeated with them
-  | Extract<Cmd, { op: "sch_edit"; verb: "place_label" | "place_text" }>;
+  | Extract<Cmd, { op: "sch_edit"; verb: "place_label" | "place_text" | "add_wire_as" }>;
 
 const REPEATABLE_OPS = new Set(["add_label", "add_sch_text", "add_power_symbol", "add_no_connect", "add_bus_entry", "add_wire", "add_sch_line", "add_symbol"]);
 
-const isRepeatable = (c: Cmd): c is Repeatable => REPEATABLE_OPS.has(c.op) || (c.op === "sch_edit" && (c.verb === "place_label" || c.verb === "place_text"));
+const isRepeatable = (c: Cmd): c is Repeatable => REPEATABLE_OPS.has(c.op) || (c.op === "sch_edit" && (c.verb === "place_label" || c.verb === "place_text" || c.verb === "add_wire_as"));
 
 /** What a just-run command contributes to "the last placed item(s)": the command itself, or every part of a batch of placements. Null when it is not a placement (the old repeat source stays). */
 export function repeatSource(cmd: Cmd): Cmd[] | null {
@@ -54,7 +54,8 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
     switch (c.op) {
       case "sch_edit":
         // the dialog's properties come along; a label's text steps on
-        out.push(c.verb === "place_label" ? { ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) } : { ...c, at: shift(c.at) });
+        if (c.verb === "add_wire_as") out.push({ ...c, pts: c.pts.map(shift) });
+        else out.push(c.verb === "place_label" ? { ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) } : { ...c, at: shift(c.at) });
         break;
       case "add_label":
         out.push({ ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) });
@@ -66,6 +67,10 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
         out.push({ ...c, at: shift(c.at) });
         break;
       case "add_wire":
+        // `RepeatDrawItem` runs `TrimOverLappingWires`, `AddJunctionsIfNeeded` and the commit's `CleanUp`, not `finishSegments`' `TrimWire`: a repeated wire
+        // across a two-pin part is not cut between its pins (r3 C3-L1)
+        out.push({ op: "sch_edit", verb: "add_wire_as", pts: c.pts.map(shift), bus: c.bus ?? false, by: "repeat" });
+        break;
       case "add_sch_line":
         out.push({ ...c, pts: c.pts.map(shift) });
         break;
