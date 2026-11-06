@@ -1,7 +1,7 @@
 // What the 3D Models tab of the Footprint Properties dialogs asks the server besides the models themselves (`GET /api/3dmodel`, components/viewer3d/modelCache.ts):
 // the status of each row's file name, the model chooser's folders and files, and the footprint to show beside the models (crates/cli/src/model3d_tab_api.rs).
 import type { ModelCheck } from "../kicad-port/fpModels";
-import type { Migration } from "../kicad-port/migrate3d";
+import type { AutoMigration, Migration } from "../kicad-port/migrate3d";
 import type { Part } from "./types";
 
 /** `POST /api/3dmodel/check`: the status of each name, in order (`validateModelExists`). An answer that does not come leaves the cells empty: a status is a hint, not a gate. */
@@ -82,6 +82,16 @@ export async function fetchPreviewPart(of: PreviewOf): Promise<Part | null> {
  * `GET /api/3dmodel/migrate`: the VRML models the board's footprints name that no search finds, each with the STEP files that could stand for it (ranked), and how many files the folders
  * held (`scanMissing`, `buildCatalog`, `rankCandidatesFor`). `dirs` are the folders added by hand ("Add Search Directory..."), in the form the chooser gives. Throws with the server's reason.
  */
+/** `GET /api/3dmodel/automigrate`: what Migrate 3D Models does on its own when the board opens -- the step to send and the count for the load notice. The folders added by hand go with it
+ *  (`m_Extra3DSearchDirs`, which `STEP_CATALOG::Build` searches too). */
+export async function fetchAutoMigration(dirs: readonly string[]): Promise<AutoMigration> {
+  const q = dirs.length > 0 ? `?dirs=${encodeURIComponent(dirs.join("|"))}` : "";
+  const r = await fetch(`/api/3dmodel/automigrate${q}`, { cache: "no-store" });
+  const j = (await r.json().catch(() => ({}))) as Partial<AutoMigration> & { error?: string };
+  if (!r.ok || j.error) throw new Error(j.error ?? `HTTP ${r.status}`);
+  return { replacements: j.replacements ?? {}, cmd: j.cmd ?? null, unresolved: j.unresolved ?? 0, missing: j.missing ?? 0 };
+}
+
 export async function fetchMigration(dirs: readonly string[]): Promise<Migration> {
   const q = dirs.length > 0 ? `?dirs=${encodeURIComponent(dirs.join("|"))}` : "";
   const r = await fetch(`/api/3dmodel/migrate${q}`, { cache: "no-store" });

@@ -14,6 +14,8 @@
 //!     (`collectMissingModels`), each with the footprints that use it, the first one's placement of it, and the STEP-family files of the folders the resolver searches that could stand
 //!     for it, ranked (`rankCandidatesFor`, [`eda_model::model_subst`]), as the paths to write in the footprint. `dirs` are the folders the person added (`m_Extra3DSearchDirs`), `|`
 //!     between them, each held to what `GET /api/3dmodel` may read. The verb that replaces is `Cmd::MigrateBoardModels`.
+//!   - **`GET /api/3dmodel/automigrate?dirs=..`**: what Migrate 3D Models does on its own when a board opens (`AutoMigrateByFilename`, `CountUnresolvedWrlReferences`): the
+//!     references to replace, the command that replaces them and how many stay unmatched ([`auto_migrate`]).
 //!   - **`GET /api/3dmodel/preview?part=U1`** (a footprint on the board) **or `?footprint=Lib:Name`** (a library footprint): the footprint as the preview panel shows it
 //!     (`PANEL_PREVIEW_3D_MODEL`: "the footprint is shown like in Fp editor: rot 0, not flipped") -- its pads, graphics and texts in its own frame on the top side, in the
 //!     shape `/api/state` sends a placed part, so the page draws it with the 3D view's own board builder.
@@ -249,38 +251,40 @@ pub fn migrate(dir: &Path, target: &str) -> Reply {
     migrate_in(dir, target, &board_roots(dir, &names), &listing_roots(dir, &names), &|v| names.get(v))
 }
 
-/// [`migrate`] with the folders it may read, the ones it lists and the variables given (the tests').
-pub(crate) fn migrate_in(dir: &Path, target: &str, allowed: &Roots, listing: &[Root], env: &dyn Fn(&str) -> Option<String>) -> Reply {
-    let (_, design, model) = match crate::board::load(dir) {
-        Ok(loaded) => loaded,
-        Err(e) => return reply("404 Not Found", json!({ "error": crate::board::reasons(&e) })),
-    };
-    // the folders added by hand: only ones this route may read
+/// The folders a request added by hand (`dirs`, `|` between them: `m_Extra3DSearchDirs`), each made canonical; a folder this route may not read, or that is not there, is the
+/// reply that says so.
+fn extra_dirs(target: &str, allowed: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Result<Vec<PathBuf>, Reply> {
     let mut extra: Vec<PathBuf> = Vec::new();
     for asked in query_value(target, "dirs").unwrap_or_default().split('|').filter(|d| !d.is_empty()) {
         let expanded = expand(&asked.replace('\\', "/"), allowed, env);
         let given = PathBuf::from(&expanded);
         let found = if given.is_absolute() { given } else { allowed.project.join(given) };
         let Ok(canonical) = found.canonicalize() else {
-            return reply("404 Not Found", json!({ "error": format!("no folder is named {asked}") }));
+            return Err(reply("404 Not Found", json!({ "error": format!("no folder is named {asked}") })));
         };
         let inside = [&allowed.models, &allowed.project].into_iter().chain(&allowed.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
         if !canonical.is_dir() || !inside {
-            return reply("403 Forbidden", json!({ "error": format!("{asked} is outside KiCad's 3D model directory, the board's directory and the folders its path variables name") }));
+            return Err(reply("403 Forbidden", json!({ "error": format!("{asked} is outside KiCad's 3D model directory, the board's directory and the folders its path variables name") })));
         }
         extra.push(canonical);
     }
+    Ok(extra)
+}
 
-    // the missing references: a .wrl or .wrz the footprints on the board name that no search finds, each with the first footprint's placement of it
-    struct Missing {
-        footprints: Vec<String>,
-        model: eda_model::footprint::Model3d,
-    }
+/// A `.wrl` or `.wrz` reference of the board's footprints that no search finds: the footprints that have it and the first one's placement of it.
+struct Missing {
+    footprints: Vec<String>,
+    model: eda_model::footprint::Model3d,
+}
+
+/// The missing references of the footprints on the board, by name (`DIALOG_MIGRATE_3D_MODELS::collectMissingModels`, and the scan `AutoMigrateByFilename` and
+/// `CountUnresolvedWrlReferences` make: each footprint's models, a name that `IsWrlExtension` and that `ResolvePath` does not find).
+fn missing_models(design: &eda_model::ir::Design, model: &ConstraintModel, allowed: &Roots, env: &dyn Fn(&str) -> Option<String>) -> std::collections::BTreeMap<String, Missing> {
     let mut missing: std::collections::BTreeMap<String, Missing> = std::collections::BTreeMap::new();
     for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
         let Some(part) = model.part(&fp.id) else { continue };
         let Some(footprint) = model.footprint_of(part) else { continue };
-        for m in eda_kicad::part_models(&model, part, &footprint).map(|p| p.models).unwrap_or_default() {
+        for m in eda_kicad::part_models(model, part, &footprint).map(|p| p.models).unwrap_or_default() {
             if m.path.is_empty() || !model_subst::is_wrl(&m.path) || finds_file(&m.path, allowed, env) {
                 continue;
             }
@@ -290,6 +294,22 @@ pub(crate) fn migrate_in(dir: &Path, target: &str, allowed: &Roots, listing: &[R
             }
         }
     }
+    missing
+}
+
+/// [`migrate`] with the folders it may read, the ones it lists and the variables given (the tests').
+pub(crate) fn migrate_in(dir: &Path, target: &str, allowed: &Roots, listing: &[Root], env: &dyn Fn(&str) -> Option<String>) -> Reply {
+    let (_, design, model) = match crate::board::load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return reply("404 Not Found", json!({ "error": crate::board::reasons(&e) })),
+    };
+    // the folders added by hand: only ones this route may read
+    let extra = match extra_dirs(target, allowed, env) {
+        Ok(extra) => extra,
+        Err(refused) => return refused,
+    };
+    // the missing references: a .wrl or .wrz the footprints on the board name that no search finds, each with the first footprint's placement of it
+    let missing = missing_models(&design, &model, allowed, env);
     let catalog = if missing.is_empty() { Vec::new() } else { catalog_of(dir, listing, &extra) };
     let missing_json: Vec<Value> = missing
         .iter()
@@ -304,6 +324,43 @@ pub(crate) fn migrate_in(dir: &Path, target: &str, allowed: &Roots, listing: &[R
         })
         .collect();
     reply("200 OK", json!({ "missing": missing_json, "scanned": catalog.len(), "dirs": extra.iter().map(|d| shorten(d, listing)).collect::<Vec<_>>() }))
+}
+
+/// `GET /api/3dmodel/automigrate?dirs=..` for the board in `dir`: what Migrate 3D Models does on its own when a board opens (`PCB_EDIT_FRAME::OnBoardLoaded`, "Migrate
+/// obsolete WRL 3D model references to current STEP models. Only runs in the GUI"), for the page to do when it opens the board:
+/// `{"replacements": {old: new}, "cmd": <migrate_board_models> | null, "unresolved": N, "missing": M}`.
+///
+///   - `replacements` are `DIALOG_MIGRATE_3D_MODELS::AutoMigrateByFilename`'s: each missing reference ([`missing_models`]) the catalog of the folders the resolver searches
+///     ([`catalog_of`]: `STEP_CATALOG::Build`'s `gatherScanDirs` -- the search paths, the board's `3dshapes`, the folders added by hand) has a file of the same normalised stem
+///     for, that file (`STEP_CATALOG::FindMatchFor`: the one in a folder of the reference's folder's name, else the first), as the path to write (`ShortenPath`: the
+///     catalog's paths are written that way already). "Silently replace references whose filename uniquely identifies a STEP sibling."
+///   - `cmd` is the one undo step that makes them (`BOARD_COMMIT::Push( _( "Auto-migrate 3D model references" ) )`, which marks the board modified): the page sends it, so the
+///     step is the person's like every edit; `null` when nothing is to be replaced ("if( replacements.empty() ) return 0;": no step at all).
+///   - `unresolved` is `CountUnresolvedWrlReferences` once the step is made: the missing references no file stands for, which the info bar counts.
+///
+/// Differs from KiCad: kicad-cli and the agent's CLI never migrate on load (KiCad's "CLI and scripting load paths must not mutate board state on load"), and neither
+/// does the studio's server -- only the page, which is the GUI, asks for this.
+pub fn auto_migrate(dir: &Path, target: &str) -> Reply {
+    let names = model_names(dir);
+    auto_migrate_in(dir, target, &board_roots(dir, &names), &listing_roots(dir, &names), &|v| names.get(v))
+}
+
+/// [`auto_migrate`] with the folders it may read, the ones it lists and the variables given (the tests').
+pub(crate) fn auto_migrate_in(dir: &Path, target: &str, allowed: &Roots, listing: &[Root], env: &dyn Fn(&str) -> Option<String>) -> Reply {
+    let (_, design, model) = match crate::board::load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return reply("404 Not Found", json!({ "error": crate::board::reasons(&e) })),
+    };
+    let extra = match extra_dirs(target, allowed, env) {
+        Ok(extra) => extra,
+        Err(refused) => return refused,
+    };
+    let missing = missing_models(&design, &model, allowed, env);
+    // `if( !catalogBuilt ) { catalog.Build( .. ) }`: only once a reference is missing
+    let catalog = if missing.is_empty() { Vec::new() } else { catalog_of(dir, listing, &extra) };
+    let replacements: std::collections::BTreeMap<String, String> = missing.keys().filter_map(|name| model_subst::find_match(name, &catalog).map(|m| (name.clone(), m.path.clone()))).collect();
+    let cmd = (!replacements.is_empty()).then(|| json!({ "op": "migrate_board_models", "replacements": replacements }));
+    reply("200 OK", json!({ "replacements": replacements, "cmd": cmd, "unresolved": missing.len() - replacements.len(), "missing": missing.len() }))
 }
 
 // ------------------------------------------------------------------------------------------------------------ the preview

@@ -600,6 +600,11 @@ fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8],
             let r = crate::model3d_tab_api::migrate(dir, target);
             Some(respond(stream, r.status, r.kind, &r.body))
         }
+        // Migrate 3D Models' load-time half (`AutoMigrateByFilename`): the page asks it when it opens the board and sends the step it answers.
+        ("GET", "/api/3dmodel/automigrate") => {
+            let r = crate::model3d_tab_api::auto_migrate(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
         ("GET", "/api/3dmodel/preview") => {
             let r = crate::model3d_tab_api::preview(dir, target);
             Some(respond(stream, r.status, r.kind, &r.body))
