@@ -258,6 +258,65 @@ pub enum SchCmd {
     /// "Exclude From Position Files" of symbols (`SCH_SYMBOL::SetExcludedFromPosFilesProp`, `(in_pos_files no)`): every placed unit of each listed reference on the
     /// sheet in view (`SchExtras::excluded_from_pos_files`, by the placement's key).
     SetExcludeFromPosFiles { ids: Vec<String>, exclude: bool },
+    /// The alternate function of pins of the placed symbol `id` (`unit`: which placed unit, as `MoveSymbol` takes it): the Pin Function submenu of a pin
+    /// (`SCH_EDIT_FRAME::SetAltPinFunction`, "Set Pin Function") and the Pin Functions table of Symbol Properties (`DIALOG_SYMBOL_PROPERTIES::
+    /// TransferDataFromWindow`). `alternates` maps a pin number to the function it takes: an empty name or the pin's own name is no alternate
+    /// (`SCH_PIN::SetAlt`), any other must be one of the library pin's (`ops_unknown_alternate` otherwise). With `other_units` every placed unit of the
+    /// reference on the sheet takes the same (`SCH_SYMBOL::SyncOtherUnits`: "alternate pin assignments in sync in multi-unit parts"). The pin is then
+    /// drawn, typed and named by the alternate (`SCH_PIN::GetShownName` / `GetType` / `GetShape`), and the netlist says so (`SchExtras::pin_alternates`).
+    SetPinAlternates {
+        id: String,
+        #[serde(default)]
+        unit: Option<u32>,
+        alternates: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        other_units: bool,
+    },
+    /// The unit a placed symbol draws (`SCH_EDIT_FRAME::SelectUnit`: the Symbol Unit submenu, Symbol Properties' Unit): `id` / `unit` name the placed unit,
+    /// `new_unit` the one it becomes (clamped to the symbol's units). What the sheet keeps for the placement (its fields' places and looks, its body style,
+    /// its pins' swaps and alternates, "Exclude from position files") goes with it, and fields Autoplace Fields placed are placed again. When that unit is
+    /// already placed on the sheet, `swap` gives that symbol the unit this one had ("Swap '%s' and '%s'"); without it the command is refused (KiCad's
+    /// "Duplicate" makes two placements of one unit, which the model does not hold). Refused for a symbol of one unit and for its own unit.
+    SetSymbolUnit {
+        id: String,
+        #[serde(default)]
+        unit: Option<u32>,
+        new_unit: u32,
+        #[serde(default)]
+        swap: bool,
+    },
+    /// The Font and Color columns of Symbol Properties' fields grid (`FIELDS_GRID_TABLE::SetValue`: `FDC_FONT`, `FDC_COLOR`) for the fields `ids`
+    /// (`fld:<owner key>:<name>`): `font` "Default Font" (or empty) is the schematic's default font, "KiCad Font" the stroke font, anything else an outline
+    /// font's family; a `color` with every channel 0 is the layer's colour. A value left out is unchanged. Kept in `SchExtras::field_looks`.
+    SetFieldLooks {
+        ids: Vec<String>,
+        #[serde(default)]
+        font: Option<String>,
+        #[serde(default)]
+        color: Option<SchColor>,
+    },
+    /// Symbol Properties of a power symbol (`DIALOG_SYMBOL_PROPERTIES`, the same dialog as any symbol's): its Footprint and Datasheet, the five flags of the
+    /// Attributes box and its user-defined fields (`fields`, the whole list in order: each a name -- not empty, none of the four standard ones, once whatever the
+    /// case -- its text and whether it is shown), kept in `SchExtras::power_props`. A value left out is unchanged. Its Reference and Value are `edit_field`'s.
+    SetPowerProps {
+        id: String,
+        #[serde(default)]
+        footprint: Option<String>,
+        #[serde(default)]
+        datasheet: Option<String>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
+        #[serde(default)]
+        exclude_from_bom: Option<bool>,
+        #[serde(default)]
+        exclude_from_board: Option<bool>,
+        #[serde(default)]
+        dnp: Option<bool>,
+        #[serde(default)]
+        exclude_from_pos_files: Option<bool>,
+        #[serde(default)]
+        fields: Option<Vec<eda_model::sch_extras::LabelField>>,
+    },
     /// "Start X", "Start Y", "End X", "End Y" of a wire, a bus or a graphic line (`SCH_LINE::SetStartX` ..): its first and/or last point goes there, and the sheet
     /// is cleaned up as a commit cleans it (`SCHEMATIC::CleanUp`: wires merged and split, junctions where they are needed).
     SetLineEnds {
@@ -324,6 +383,8 @@ impl SchCmd {
             SchCmd::AddUserField { id, .. } | SchCmd::RemoveUserField { id, .. } => vec![id.as_str()],
             SchCmd::PinHelper { pins, .. } => pins.iter().map(String::as_str).collect(),
             SchCmd::SetStroke { ids, .. } | SchCmd::SetTextAttrs { ids, .. } | SchCmd::SetExcludeFromPosFiles { ids, .. } => ids.iter().map(String::as_str).collect(),
+            SchCmd::SetPinAlternates { id, .. } | SchCmd::SetSymbolUnit { id, .. } | SchCmd::SetPowerProps { id, .. } => vec![id.as_str()],
+            SchCmd::SetFieldLooks { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::SetLineEnds { id, .. } => vec![id.as_str()],
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
@@ -365,6 +426,10 @@ impl SchCmd {
             SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
             SchCmd::SetTextAttrs { ids, .. } => format!("schematic text-attrs {}", ids.join(" ")),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => format!("schematic pos-files {} {}", if *exclude { "exclude" } else { "include" }, ids.join(" ")),
+            SchCmd::SetPinAlternates { id, alternates, .. } => format!("schematic pin-function {id} {}", alternates.iter().map(|(n, a)| format!("{n}={a}")).collect::<Vec<_>>().join(" ")),
+            SchCmd::SetSymbolUnit { id, new_unit, swap, .. } => format!("schematic unit {id} {new_unit}{}", if *swap { " --swap" } else { "" }),
+            SchCmd::SetFieldLooks { ids, .. } => format!("schematic field-looks {}", ids.join(" ")),
+            SchCmd::SetPowerProps { id, .. } => format!("schematic power-props {id}"),
             SchCmd::SetLineEnds { id, .. } => format!("schematic line-ends {id}"),
             SchCmd::SwapPins { pins } => format!("schematic swap-pins {}", pins.join(" ")),
             SchCmd::SwapPinLabels { pins } => format!("schematic swap-pin-labels {}", pins.join(" ")),
@@ -392,6 +457,10 @@ impl SchCmd {
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SetTextAttrs { .. } => "schematic-text",
             SchCmd::SetExcludeFromPosFiles { .. } => "schematic-attributes",
+            SchCmd::SetPinAlternates { .. } => "schematic-pins",
+            SchCmd::SetSymbolUnit { .. } => "schematic-symbol",
+            SchCmd::SetFieldLooks { .. } => "schematic-fields",
+            SchCmd::SetPowerProps { .. } => "schematic-symbol",
             SchCmd::SetLineEnds { .. } => "schematic-wire",
             SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } | SchCmd::PinHelper { .. } => "schematic-pins",
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
@@ -403,6 +472,8 @@ impl SchCmd {
     pub fn edits_connectivity(&self) -> bool {
         match self {
             SchCmd::SetStroke { .. } | SchCmd::SetTextAttrs { .. } | SchCmd::SetExcludeFromPosFiles { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
+            // a field's font and colour are its look; a power symbol's footprint, datasheet, flags and user fields name no net
+            SchCmd::SetFieldLooks { .. } | SchCmd::SetPowerProps { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
@@ -481,6 +552,22 @@ impl<'a> Board<'a> {
             SchCmd::SetTextAttrs { ids, bold, italic, color, href } => self.set_sch_text_attrs(ids, *bold, *italic, *color, href.as_deref()),
             SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
+            SchCmd::SetPinAlternates { id, unit, alternates, other_units } => self.set_pin_alternates(id, *unit, alternates, *other_units),
+            SchCmd::SetSymbolUnit { id, unit, new_unit, swap } => self.set_symbol_unit(id, *unit, *new_unit, *swap),
+            SchCmd::SetFieldLooks { ids, font, color } => self.set_field_looks(ids, font.as_deref(), *color),
+            SchCmd::SetPowerProps { id, footprint, datasheet, exclude_from_sim, exclude_from_bom, exclude_from_board, dnp, exclude_from_pos_files, fields } => self.set_power_props(
+                id,
+                &crate::sch_symbol_props::PowerPropsEdit {
+                    footprint: footprint.clone(),
+                    datasheet: datasheet.clone(),
+                    exclude_from_sim: *exclude_from_sim,
+                    exclude_from_bom: *exclude_from_bom,
+                    exclude_from_board: *exclude_from_board,
+                    dnp: *dnp,
+                    exclude_from_pos_files: *exclude_from_pos_files,
+                    fields: fields.clone(),
+                },
+            ),
             SchCmd::SwapPins { pins } => self.swap_pins(pins),
             SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins),
             SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids),

@@ -5856,6 +5856,9 @@ impl<'a> Board<'a> {
         if sch.power_symbols.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_power_symbol", id, "no power symbol with this id")]);
         }
+        // what its Symbol Properties set goes with it (a new power symbol may take the id again)
+        sch.extras.power_props.remove(id);
+        sch.extras.field_looks.remove(id);
         Ok(())
     }
 
@@ -7137,6 +7140,9 @@ mod sch_drag;
 mod sch_props;
 mod sch_scene;
 mod sch_fields;
+mod sch_symbol_props;
+#[cfg(test)]
+mod sch_symbol_props_tests;
 #[cfg(test)]
 mod sch_move_tests;
 #[cfg(test)]
