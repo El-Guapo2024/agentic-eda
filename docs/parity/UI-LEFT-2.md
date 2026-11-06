@@ -60,6 +60,7 @@ Sources: UI-LEFT's "Left:" notes; PARITY-pcb §66-§92, PARITY-sch §53-§69 and
 - **RR5** Length tuner: a lone pattern previews rigidly when moved and its slide starts on segments only; a pair pattern draws as two capsules; no message-panel lines; a lone pattern's Duplicate isn't refused. M · behaviour-differs · pns Stage 23, Known gaps; R3
 - **RR6** Diff pairs: a start on a castellated edge pad is refused; two walk attempts where KiCad makes four; no "DP Max Uncoupled-length" row; custom dimensions are applied after the gap check. S · behaviour-differs · pns Stages 17, 18, 24, Known gaps; R9
 - **RR7** Edge cases: the grab's free-pad and no-net cases; Highlight collisions checks segments alone; a click's via is never pushed; no walkaround cluster timeout; a footprint drag moves all padstack solids; tracks routed in an entered group stay out of it; a shoved chain takes the lowest-id track's mask. M · behaviour-differs · pns Stages 22-24, Known gaps; R4, R7-R9; GAPS 17
+- **RR10** A corner drag at a joint with a locked track moves the locked track too (found by task-v1-select; KiCad's dragger leaves a locked segment fixed, check `DRAGGER::dragCornerFree` / `ITEM::IsLocked`). S · behaviour-differs · pns Stage 25
 - **RR8** From two arc ends a cursor steeply off the chord fits no head (seen, not compared with KiCad). S · needs-verify · pns Stage 23; R2
 - **RR9** Kept: a chain with a width change shoves as one line per width; studio extras (a judged arc drag, mid-arc starts, Backspace in pairs). S · kept-by-design · R11; GAPS 7
 ## Footprint editor (FF)
