@@ -131,6 +131,8 @@ pub mod graphics_import;
 pub mod svg_import;
 // Specctra DSN export and SES import (`pcbnew/specctra_import_export`): an exporter and importer of our own, for outside autorouters.
 pub mod specctra;
+/// Import Netlist's readers (`KICAD_NETLIST_READER`, `LEGACY_NETLIST_READER`).
+pub mod netlist_reader;
 
 const STUB_MM: f64 = 1.27;
 
