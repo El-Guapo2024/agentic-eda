@@ -103,6 +103,10 @@ pub enum TableCmd {
     MergeCells { id: String, cells: Vec<(usize, usize)> },
     /// Unmerge Cells.
     UnmergeCells { id: String, cells: Vec<(usize, usize)> },
+    /// Paste with table cells selected and a table on the clipboard (`PCB_CONTROL::Paste`, `SCH_EDITOR_CONTROL::Paste`: `pasteCellsIntoSelection`, "Paste Cells"):
+    /// the clipboard's first table, from `text` (KiCad's clipboard text of the editor), put into the selected cells `ids` (the editor's selection, every item id of it).
+    /// See `crate::table_paste_cells`.
+    PasteCells { ids: Vec<String>, text: String },
 }
 
 impl TableCmd {
@@ -119,6 +123,7 @@ impl TableCmd {
             | TableCmd::DeleteColumns { id, .. }
             | TableCmd::MergeCells { id, .. }
             | TableCmd::UnmergeCells { id, .. } => vec![id.as_str()],
+            TableCmd::PasteCells { ids, .. } => ids.iter().find_map(|i| eda_model::table::parse_cell_item_id(i).map(|(t, _, _)| t)).map_or_else(|| vec!["table"], |t| vec![t]),
         }
     }
 
@@ -138,6 +143,7 @@ impl TableCmd {
             TableCmd::DeleteColumns { id, cols } => format!("table delete-columns {id} {}", cols.iter().map(|c| (c + 1).to_string()).collect::<Vec<_>>().join(",")),
             TableCmd::MergeCells { id, cells } => format!("table merge {id} ({} cell(s))", cells.len()),
             TableCmd::UnmergeCells { id, cells } => format!("table unmerge {id} ({} cell(s))", cells.len()),
+            TableCmd::PasteCells { ids, .. } => format!("table paste-cells ({} cell(s))", ids.len()),
         }
     }
 }
@@ -284,6 +290,7 @@ impl Board<'_> {
                     Err(fail("ops_bad_table", id, "the cells cannot be merged"))
                 }
             }
+            TableCmd::PasteCells { ids, text } => self.paste_cells_in(scope, ids, text),
             TableCmd::UnmergeCells { id, cells } => {
                 let t = self.table_mut_in(scope, id)?;
                 if !cells.iter().any(|&(r, c)| t.cell(r, c).is_some_and(|x| x.col_span > 1 || x.row_span > 1)) {
@@ -307,7 +314,7 @@ impl Board<'_> {
         }
     }
 
-    fn table_mut_in(&mut self, scope: Scope, id: &str) -> Result<&mut Table, Vec<CheckResult>> {
+    pub(crate) fn table_mut_in(&mut self, scope: Scope, id: &str) -> Result<&mut Table, Vec<CheckResult>> {
         let tables = match scope {
             Scope::Board => &mut self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_table", id, "the board has no tables"))?.tables,
             Scope::Sheet => &mut self.schematic_mut()?.extras.tables,

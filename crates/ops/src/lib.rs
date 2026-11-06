@@ -109,6 +109,8 @@ pub mod drill_chart;
 mod pcb_props;
 mod pcb_table_builders;
 mod pcb_tables;
+mod table_paste_cells;
+mod sch_cross_refs;
 pub use pcb_tables::TableCmd;
 mod pcb_transform;
 mod tuning;
@@ -7233,6 +7235,8 @@ mod sch_clipboard_tests;
 mod pcb_tables_tests;
 #[cfg(test)]
 mod sch_tables_tests;
+#[cfg(test)]
+mod table_clipboard_tests;
 
 pub mod board_control;
 pub mod page_settings;

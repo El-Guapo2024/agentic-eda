@@ -576,6 +576,19 @@ impl Board<'_> {
             image_ix.push(copies.images.len());
             copies.images.push(c);
         }
+        // A table on a layer the board does not have stays off it (`pruneItemLayers`); a pasted one gets uuids of its own.
+        let mut table_ix: Vec<Option<usize>> = Vec::new();
+        for t in &clip.tables {
+            if !copper_ok(&t.layer) {
+                table_ix.push(None);
+                continue;
+            }
+            let mut c = t.clone();
+            super::pcb_tables::forget_uuids(&mut c);
+            c.translate(at.x, at.y);
+            table_ix.push(Some(copies.tables.len()));
+            copies.tables.push(c);
+        }
         let mut fp_ix: Vec<usize> = Vec::new();
         for f in &clip.footprints {
             fp_ix.push(copies.footprints.len());
@@ -613,6 +626,7 @@ impl Board<'_> {
                     ClipRef::Barcode(i) => barcode_ix.get(i).copied().map(Member::Barcode),
                     ClipRef::TextBox(i) => box_ix.get(i).copied().map(Member::TextBox),
                     ClipRef::Image(i) => image_ix.get(i).copied().map(Member::Image),
+                    ClipRef::Table(i) => table_ix.get(i).copied().flatten().map(Member::Table),
                     // An inner group is listed before the group that holds it: it is already a copy.
                     ClipRef::Group(i) => (i < copies.groups.len()).then_some(Member::Group(i)),
                 })

@@ -126,6 +126,49 @@ fn convert(token: &str, paths: &BTreeMap<String, String>) -> Option<String> {
     })
 }
 
+/// The other way, on what the importer read (`SCHEMATIC::ConvertKIIDsToRefs`, which KiCad's dialogs run when they show a text): a cross-reference the file
+/// stores by a symbol's path names the symbol by its reference, which is how the studio keeps it, resolves it and edits it. `item_ids` is the importer's file
+/// uuid -> item id (a symbol's id is its reference); the texts, text boxes and table cells of every screen are read so. A path whose last uuid is no symbol stays
+/// as it is (a symbol of a sheet not read yet: the tree reader runs this again once every sheet is in).
+pub(crate) fn kiids_to_refs_in(design: &mut eda_model::ir::Design, item_ids: &BTreeMap<String, String>) {
+    use eda_model::cross_refs::kiids_to_refs;
+    use eda_model::sch_extras::SchGraphicKind;
+    let screens = || design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values()));
+    let symbols: std::collections::BTreeSet<String> = screens().flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect();
+    if symbols.is_empty() {
+        return;
+    }
+    let of = |u: &str| item_ids.get(u).filter(|id| symbols.contains(*id)).cloned();
+    let fix = |text: &mut String| {
+        if let Some(n) = kiids_to_refs(text, &of) {
+            *text = n;
+        }
+    };
+    let fix_screen = |sch: &mut eda_model::ir::SchematicSection| {
+        for t in sch.extras.tables.iter_mut() {
+            for c in t.cells.iter_mut() {
+                fix(&mut c.text);
+            }
+        }
+        for t in sch.texts.iter_mut() {
+            fix(&mut t.content);
+        }
+        for g in sch.extras.graphics.iter_mut() {
+            if let SchGraphicKind::TextBox { text, .. } = &mut g.shape {
+                fix(text);
+            }
+        }
+    };
+    if let Some(s) = design.schematic.as_mut() {
+        fix_screen(s);
+    }
+    if let Some(c) = design.sheet_contents.as_mut() {
+        for s in c.values_mut() {
+            fix_screen(s);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

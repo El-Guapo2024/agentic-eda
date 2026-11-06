@@ -34,6 +34,8 @@ impl Board<'_> {
             return;
         }
         let new_of = |id: &str| renamed_id(id, &map);
+        // the sheets' cross-references to the symbols follow them (`ConvertRefsToKIIDs`: KiCad's stored path names the symbol, whatever its reference)
+        self.follow_cross_references(&map);
 
         // The intent's own parts among them, before anything moves: a part the board made (a copy, a footprint placed from a library) is renamed in place.
         let board_made: BTreeSet<String> = self.design.drawings.as_ref().map(|d| d.board_parts.iter().map(|b| b.reference.clone()).collect()).unwrap_or_default();
