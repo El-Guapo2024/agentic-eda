@@ -56,6 +56,8 @@ export interface PropertyDef<I extends PropItem = PropItem, C = unknown, K = unk
   hidden?: boolean;
   /** `SetIsHiddenFromDesignEditors`. */
   hiddenFromDesignEditors?: boolean;
+  /** `SetIsHiddenFromLibraryEditors`: not listed in the Footprint and Symbol Editors' panels. */
+  hiddenFromLibraryEditors?: boolean;
   /** The getter. */
   get: (item: I, ctx: C) => PropValue;
   /** The setter: the commands that make `item` have `value`; empty when it already has it. Absent: the row is read-only. */

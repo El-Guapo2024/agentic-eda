@@ -102,8 +102,17 @@ export function extractValueAndWritability<I extends PropItem, C, K>(pm: Propert
   return { value: different ? null : value, writable, choices, ...(note ? { note } : {}) };
 }
 
+/** Which frame the panel is in (`PROPERTIES_PANEL::rebuildProperties`: `isLibraryEditor` -- the Footprint or Symbol Editor -- leaves out what is hidden from the
+ *  library editors and shows what is hidden from the design editors; a design editor the other way round). */
+export interface GridFrame {
+  libraryEditor?: boolean;
+}
+
+/** Whether the frame's panel leaves the property out (`IsHiddenFromLibraryEditors` / `IsHiddenFromDesignEditors`). */
+const hiddenIn = (p: { hiddenFromDesignEditors?: boolean; hiddenFromLibraryEditors?: boolean }, frame: GridFrame): boolean => (frame.libraryEditor ? !!p.hiddenFromLibraryEditors : !!p.hiddenFromDesignEditors);
+
 /** `PROPERTIES_PANEL::rebuildProperties` for a selection, in selection order. */
-export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>, items: readonly I[], ctx: C, friendlyName: (item: I) => string): GridModel {
+export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>, items: readonly I[], ctx: C, friendlyName: (item: I) => string, frame: GridFrame = {}): GridModel {
   const front = items[0];
   if (!front) return { caption: "No objects selected", count: 0, groups: [] };
   const caption = items.length === 1 ? friendlyName(front) : `${items.length} objects selected`;
@@ -134,7 +143,7 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
   const byGroup = new Map<string, Array<{ row: GridRow; at: number }>>();
   for (const name of common) {
     const property = pm.getProperty(firstType, name, firstItem, ctx);
-    if (!property || property.hidden || property.hiddenFromDesignEditors) continue;
+    if (!property || property.hidden || hiddenIn(property, frame)) continue;
     const got = extractValueAndWritability(pm, items, name, ctx);
     if (!got) continue;
     const row: GridRow = {
@@ -168,9 +177,9 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
  * (`SetIsHiddenFromPropertiesManager`, `SetIsHiddenFromDesignEditors`), the groups in the class's order and the rows in display order -- what
  * `rebuildProperties` would list for an item that has them all. The tests compare it with a table of KiCad's own registrations.
  */
-export function registeredRows<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>, type: string): string[] {
+export function registeredRows<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>, type: string, frame: GridFrame = {}): string[] {
   const order = pm.getDisplayOrder(type);
-  const props = pm.getProperties(type).filter((p) => !p.hidden && !p.hiddenFromDesignEditors);
+  const props = pm.getProperties(type).filter((p) => !p.hidden && !hiddenIn(p, frame));
   const out: string[] = [];
   for (const group of pm.getGroupDisplayOrder(type)) {
     const rows = props.filter((p) => (p.group ?? "") === group).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));

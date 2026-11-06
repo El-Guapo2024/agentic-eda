@@ -16,6 +16,7 @@ import { extraItems } from "./pcbExtraItems";
 import { padIds } from "./pcbItems";
 import { groupLeaves } from "./groupTree";
 import { customPadBox } from "./padShape";
+import { bezierPolyline, SYMBOL_BEZIER_MAX_ERROR_NM } from "./bezierPoly";
 
 /** `[minX, minY, maxX, maxY]`. */
 export type Box = readonly [number, number, number, number];
@@ -178,6 +179,12 @@ export function footprintItemBoxes(fp: LibraryFootprint): ItemBoxes {
 
 const mmToNm = ([x, y]: [number, number]): [number, number] => libPointToInternalNm([x, y]);
 
+/** A library bezier's curve, as the polyline `RebuildBezierToSegmentsPointsList( ARC_LOW_DEF )` makes of it, in the editor's internal space (nm, y down). */
+export function libBezierPointsNm(g: Extract<LibrarySymbolGraphic, { kind: "bezier" }>): [number, number][] {
+  const p = (q: { x: number; y: number }) => mmToNm([q.x, q.y]);
+  return bezierPolyline(p(g.start), p(g.c1), p(g.c2), p(g.end), SYMBOL_BEZIER_MAX_ERROR_NM);
+}
+
 /** A symbol graphic's box in the editor's internal space (nm, y down), whatever its unit and body style. */
 export function symbolGraphicBox(g: LibrarySymbolGraphic): Box | null {
   return graphicBox(g);
@@ -204,6 +211,9 @@ function graphicBox(g: LibrarySymbolGraphic): Box | null {
     }
     case "text_box":
       return boxOfPoints([mmToNm([g.start.x, g.start.y]), mmToNm([g.end.x, g.end.y])]);
+    // `EDA_SHAPE::getBoundingBox` of a bezier: "the bounding box of the curve (not control!) points"
+    case "bezier":
+      return boxOfPoints(libBezierPointsNm(g));
   }
 }
 

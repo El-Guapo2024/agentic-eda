@@ -240,7 +240,7 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   }
   // Place > Rectangle / Circle / Arc of the Symbol Editor's menu are the schematic's `drawRectangle` / `drawCircle` / `drawArc` actions: on the
   // Symbol tab they arm this editor's own shape tool (the same action, the same tool in KiCad -- `SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape`).
-  const armShapeOnSymbolTab = (name: string, tool: "draw_rect" | "draw_circle" | "draw_arc") => {
+  const armShapeOnSymbolTab = (name: string, tool: "draw_rect" | "draw_circle" | "draw_arc" | "draw_bezier") => {
     const schematic = m.get(name);
     m.set(name, () => {
       if (ctx.tab !== "symbol") return schematic?.();
@@ -252,6 +252,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawRectangle", "draw_rect");
   armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawCircle", "draw_circle");
   armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawArc", "draw_arc");
+  // Draw Bezier Curve (`SCH_ACTIONS::drawBezier` -> `DrawShape( SHAPE_T::BEZIER )`, kicad-port/symBezier.ts)
+  armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawBezier", "draw_bezier");
 
   // Push Pin Length / Name Size / Number Size -- SYMBOL_EDITOR_PIN_TOOL::PushPinProperties: from the one selected pin to every other pin.
   const pushPin = (field: "length" | "name_size" | "number_size") =>

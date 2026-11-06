@@ -687,15 +687,17 @@
     await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
     t(__eda.state().tool === "pin", `the pin tool is armed: ${__eda.state().tool}`);
     const tip = [3_100_000, -700_000];
-    // The pin tool asks in Pin Properties before it places (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`): every click below is OK'd.
-    const okPin = async () => {
+    // The pin tool asks in Pin Properties before it places (`SYMBOL_EDITOR_PIN_TOOL::CreatePin`): every click below is OK'd, and the pin then follows the cursor until
+    // the click that places it (`TwoClickPlace`), made here at the same point with the same keys -- the carried pin snaps as the tool's click does.
+    const okPin = async (x, y, mods = {}) => {
       await until(() => tid("pin-props-ok"), 4000);
       tid("pin-props-ok")?.click();
       await sleep(500);
+      await clickAt(x, y, mods, false);
     };
     // grid off (Ctrl): the end of the other pin
     await clickAt(tip[0] + d, tip[1] + d, { ctrl: true }, false);
-    await okPin();
+    await okPin(tip[0] + d, tip[1] + d, { ctrl: true });
     let pins = (await symbol(id)).pins;
     t(pins.length === 2 && pins.filter((p) => p.at.x === 3.1 && p.at.y === 0.7).length === 2, `with the grid off the new pin ends where the other does: ${JSON.stringify(pins.map((p) => [p.number, p.at.x, p.at.y]))}`);
     t(__eda.state().snap?.anchored === true, `the snap report: ${JSON.stringify(__eda.state().snap)}`);
@@ -703,7 +705,7 @@
     // the grid on: the grid decides (a pin end is within the range, but so is a grid point)
     await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
     await clickAt(tip[0] + d, tip[1] + d, {}, false);
-    await okPin();
+    await okPin(tip[0] + d, tip[1] + d, {});
     pins = (await symbol(id)).pins;
     const gridPin = pins.find((p) => p.number !== "9");
     t(!!gridPin && onGrid(gridPin.at.x, 1.27) && onGrid(gridPin.at.y, 1.27), `with the grid on the new pin is on the grid: ${JSON.stringify(gridPin?.at)}`);
@@ -711,7 +713,7 @@
     // Shift: no anchors, the grid
     await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
     await clickAt(tip[0] + d, tip[1] + d, { shift: true }, false);
-    await okPin();
+    await okPin(tip[0] + d, tip[1] + d, { shift: true });
     pins = (await symbol(id)).pins;
     const shiftPin = pins.find((p) => p.number !== "9");
     t(!!shiftPin && onGrid(shiftPin.at.x, 1.27) && onGrid(shiftPin.at.y, 1.27), `with Shift too: ${JSON.stringify(shiftPin?.at)}`);
@@ -719,7 +721,7 @@
     // both off: the pointer
     await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
     await clickAt(tip[0] + d, tip[1] + d, { ctrl: true, shift: true }, false);
-    await okPin();
+    await okPin(tip[0] + d, tip[1] + d, { ctrl: true, shift: true });
     pins = (await symbol(id)).pins;
     const freePin = pins.find((p) => p.number !== "9");
     t(!!freePin && near(freePin.at.x * 1e6, tip[0] + d, 3000) && near(-freePin.at.y * 1e6, tip[1] + d, 3000), `with both off the pin is where the pointer was: ${JSON.stringify(freePin?.at)}`);

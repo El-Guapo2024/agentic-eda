@@ -207,3 +207,46 @@ fn a_new_symbols_reference_and_value_are_at_the_origin() {
     assert!(text.contains("(property \"Reference\" \"U\" (at 0 0 0)") || text.contains("(property \"Reference\" \"\" (at 0 0 0)"), "{text}");
     assert!(text.contains("(property \"Value\" \"S\" (at 0 0 0)"), "{text}");
 }
+
+/// UI-LEFT Y4: Text Properties of a plain text (`DIALOG_TEXT_PROPERTIES` of a `SCH_TEXT` in the symbol editor) is the whole text as the dialog leaves it -- its text, size,
+/// angle, bold, italic, justification, units and body styles -- through `replace_symbol_graphic`, one undo step. A text whose looks an older reader kept beside it (the
+/// kept style) has them moved into it first, so the dialog's are the ones the file gets.
+#[test]
+fn a_plain_text_is_replaced_with_its_looks_and_a_kept_style_gives_way_to_the_edit() {
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:S".into() }).unwrap();
+    let text = |h_align: FieldHAlign, bold: bool| LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 0, text: "A".into(), at: SPoint { x: 1.27, y: 0.0 }, angle_deg: 0.0, size_mm: 1.27, bold, italic: false, h_align, v_align: FieldVAlign::Center };
+    b.apply(&Cmd::AddSymbolGraphic { lib_id: "Lib:S".into(), graphic: text(FieldHAlign::Center, false) }).unwrap();
+    let id = graphics(&b)[0].id().to_string();
+    // as a design written on 2026-10-23 holds a left, bold text with a pen: in the kept style
+    {
+        let sym = b.design.symbol_library.as_mut().unwrap().by_lib_id_mut("Lib:S").unwrap();
+        sym.kicad.text_styles.insert(id.clone(), eda_model::lib_keep::KeptTextStyle { thickness_mm: Some(0.3), bold: true, justify: vec!["left".into()], ..Default::default() });
+    }
+    // the dialog shows it as served (left and bold) and the user makes it right-justified and not bold
+    let mut edited = text(FieldHAlign::Right, false);
+    edited.set_id(id.clone());
+    b.apply(&Cmd::ReplaceSymbolGraphic { lib_id: "Lib:S".into(), id: id.clone(), graphic: edited.clone() }).unwrap();
+    assert_eq!(graphics(&b)[0], edited);
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Lib:S").unwrap();
+    let kept = sym.kicad.text_styles.get(&id).expect("the pen stays");
+    assert_eq!((kept.thickness_mm, kept.bold, kept.justify.len()), (Some(0.3), false, 0), "what the dialog edits is no longer kept: {kept:?}");
+}
+
+/// UI-LEFT Y2: a bezier of the symbol is a graphic like any shape: added, moved by all four points, given a width and fill by Shape Properties.
+#[test]
+fn a_bezier_is_added_moved_and_given_its_width_and_fill() {
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:S".into() }).unwrap();
+    let p = |x: f64, y: f64| SPoint { x, y };
+    b.apply(&Cmd::AddSymbolGraphic { lib_id: "Lib:S".into(), graphic: LibrarySymbolGraphic::Bezier { id: String::new(), unit: 0, body_style: 1, start: p(0.0, 0.0), c1: p(1.27, 2.54), c2: p(2.54, 2.54), end: p(3.81, 0.0), stroke_mm: 0.0, fill: LibraryFill::None } }).unwrap();
+    let id = graphics(&b)[0].id().to_string();
+    b.apply(&Cmd::MoveSymbolGraphic { lib_id: "Lib:S".into(), id: id.clone(), dx_mm: 1.27, dy_mm: -1.27 }).unwrap();
+    b.apply(&Cmd::EditSymbolGraphic { lib_id: "Lib:S".into(), id, stroke_mm: 0.254, fill: LibraryFill::Background, unit: None, body_style: None }).unwrap();
+    let LibrarySymbolGraphic::Bezier { start, c1, c2, end, stroke_mm, fill, .. } = &graphics(&b)[0] else { panic!("{:?}", graphics(&b)) };
+    let near = |a: SPoint, b: SPoint| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9;
+    assert!(near(*start, p(1.27, -1.27)) && near(*c1, p(2.54, 1.27)) && near(*c2, p(3.81, 1.27)) && near(*end, p(5.08, -1.27)));
+    assert_eq!((*stroke_mm, *fill), (0.254, LibraryFill::Background));
+}

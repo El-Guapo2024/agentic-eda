@@ -142,7 +142,7 @@ there (or, for Group / Ungroup on the schematic, leaves enabled and inert), with
 | Group Properties, Add / Remove Items, New Group Member | Schematic | the schematic has no groups (`GAPS.md` item 17); Group / Ungroup are registered for the board only and do nothing there |
 | Group, Ungroup | Footprint Editor | `editor_toolbar_support.json`: a library footprint has no groups |
 | Grid Origin, Reset Grid Origin | Schematic, Symbol Editor | a grid origin is the board's and the Footprint Editor's; KiCad's schematic and symbol editors have none either |
-| Show Properties | Footprint and Symbol editors | `editor_toolbar_support.json`: no Properties pane yet (the Pad, Footprint, Symbol and Pin Properties dialogs are there) |
+| Show Properties | Footprint Editor | `editor_toolbar_support.json`: no Properties pane yet (the Pad and Footprint Properties dialogs are there). The Symbol Editor's pane is there since 2026-11-05 (`PARITY-symedit.md`, "Rotate, Mirror, beziers, the Properties pane and the carried items") |
 | Show Datasheet | Board | KiCad offers it in the schematic, the Symbol Editor and the Footprint Editor only |
 
 ## 13. The scripted test hook
