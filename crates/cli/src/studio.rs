@@ -710,6 +710,8 @@ fn handle(
         ("POST", "/api/sch/fields_table") => respond(stream, "200 OK", "application/json", sch_api::fields_table(dir, &body).to_string().as_bytes()),
         // Move, Drag, Rotate and Mirror previews: the commands applied in memory, the moved geometry back (`crate::sch_move_api`).
         ("POST", "/api/sch/move_preview") => respond(stream, "200 OK", "application/json", sch_move_api::move_preview(dir, &body).to_string().as_bytes()),
+        // A dimension being drawn or reshaped, its geometry and text worked out (`crate::dimension_api`, UI-LEFT P13).
+        ("POST", "/api/dimension/preview") => respond(stream, "200 OK", "application/json", crate::dimension_api::preview(&body).to_string().as_bytes()),
         // The item a placing tool carries before the click that places it (a label, a text, a directive label, a power symbol): its command tried on a copy (`crate::sch_place_api`).
         ("POST", "/api/sch/place_preview") => respond(stream, "200 OK", "application/json", crate::sch_place_api::place_preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),

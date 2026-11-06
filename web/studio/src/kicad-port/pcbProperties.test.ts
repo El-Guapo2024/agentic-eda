@@ -301,6 +301,19 @@ test("a shape shows the geometry its kind has", () => {
   assert.deepEqual(names(b, ["shp_seg"])[0], ["Basic Properties", ["Locked", "Layer"]]);
 });
 
+test("a leader's Text Frame is its text_frame (UI-LEFT P13): None takes the frame away, the same choice again changes nothing", () => {
+  const b = board();
+  assert.equal(rowOf(b, ["dim_lead"], "Text Frame")!.writable, true);
+  assert.equal(rowOf(b, ["dim_lead"], "Text Frame")!.value, "none");
+  const [c] = edit(b, ["dim_lead"], "Text Frame", "circle");
+  assert.ok(c && c.op === "edit_dimension" && c.dimension.text_frame === "circle", JSON.stringify(c));
+  assert.deepEqual(edit(b, ["dim_lead"], "Text Frame", "none"), []);
+  const lead = b.drawings!.dimensions!.find((d) => d.id === "dim_lead")!;
+  lead.text_frame = "rectangle";
+  const [none] = edit(b, ["dim_lead"], "Text Frame", "none");
+  assert.ok(none && none.op === "edit_dimension" && none.dimension.text_frame === undefined, JSON.stringify(none));
+});
+
 test("dimensions: the kinds share the text and layer rows and each adds its own", () => {
   const b = board();
   const rows = (id: string) => Object.fromEntries(names(b, [id]));

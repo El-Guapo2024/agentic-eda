@@ -26,6 +26,7 @@ import type { LengthUnit } from "../../state/units";
 import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
+import { dimensionEditPoints } from "../../kicad-port/dimensionDraw";
 import { DEFAULT_DASH_RATIOS, dashPieces, isDashStyle, strokeArc, strokeSegment, type DashPiece, type DashRatios, type DashSpec } from "../../kicad-port/strokeDash";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
@@ -151,6 +152,8 @@ export interface PaintOptions {
   shapePointPreview: { id: string; shape: Shape } | null;
   /** The board's Dashed lines ratios (`boardDashRatios`) a dashed graphic is cut with; KiCad's 12 and 3 when absent. */
   dashRatios?: DashRatios;
+  /** The dimension the Draw Dimension tool is drawing (`id` null) or the point editor is reshaping (`POST /api/dimension/preview`), drawn in place of the committed one. */
+  dimensionPreview?: { id: string | null; dim: Dimension } | null;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
   drcSelected: number | null;
   /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`): drawn in a frame with its name, and everything outside it dimmed. */
@@ -1099,8 +1102,12 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
  * for the canvas as `drawTexts` negates a text's: a vertical dimension reads bottom to top (round 3 A-4).
  */
 export function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
-  const dimensions = board.drawings?.dimensions ?? [];
-  for (const d of dimensions as Dimension[]) {
+  // The tool's or the point editor's preview (`DRAWING_TOOL::DrawDimension`'s `preview`, `PCB_POINT_EDITOR`'s live item) in place of the dimension it is.
+  // A dimension the tool is drawing has no id yet and is drawn by `drawInProgress`.
+  const preview = opts.dimensionPreview;
+  const committed = (board.drawings?.dimensions ?? []) as Dimension[];
+  const dimensions = preview?.id ? committed.map((d) => (d.id === preview.id ? { ...preview.dim, id: d.id } : d)) : committed;
+  for (const d of dimensions) {
     if (!layerIsVisible(opts.layerVisible, d.layer)) continue;
     const selected = opts.selection.has(d.id);
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(d.layer));
@@ -1113,6 +1120,11 @@ export function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransfor
     for (const [[ax, ay], [bx, by]] of d.lines) {
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
+    }
+    // A leader's circle frame (`DIM_TEXT_BORDER::CIRCLE`: a `SHAPE_CIRCLE` of the dimension, stroked at its line width).
+    for (const [[cx, cy], r] of d.circles ?? []) {
+      ctx.moveTo(cx + r, cy);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
     }
     ctx.stroke();
     ctx.restore();
@@ -1386,6 +1398,12 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   if (draw.kind === "sheet" || draw.kind === "sch_shape") return;
 
   // `DRAWING_TOOL::DrawTable`: the grid the cursor sizes from the first corner.
+  // `DrawDimension`'s preview: the dimension as the server works it out for the step the tool is at (`POST /api/dimension/preview`), in its layer's colour.
+  if (draw.kind === "dimension" && draw.dim) {
+    const p = opts.dimensionPreview;
+    if (p && !p.id) drawDimensions(ctx, view, { ...board, drawings: { ...board.drawings!, dimensions: [p.dim] } } as BoardState, { ...opts, dimensionPreview: null, selection: new Set() });
+    return;
+  }
   if (draw.kind === "table") {
     drawTablePreview(ctx, view, board, draw.origin, opts);
     return;
@@ -1641,6 +1659,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // source only activating the point editor over the selection tool).
   if (opts.activeTool === "select") drawZoneHandles(ctx, view, board, opts);
   if (opts.activeTool === "select") drawShapeHandles(ctx, view, board, opts);
+  if (opts.activeTool === "select") drawDimensionHandles(ctx, view, board, opts);
   // Task item 5: a selected group's own bounding box, same tier as the
   // zone corner handles above (a selection-mode indicator, not board
   // content).
@@ -1722,6 +1741,27 @@ function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, 
  * pcb_point_editor.cpp's handles for a single selected graphic shape (kicad-port/pcbPointEdit.ts): a square at each point, a smaller
  * diamond at the middle of a polygon's or rectangle's edges; unlocked shapes only. Follows the drag preview while one is live.
  */
+/** `PCB_POINT_EDITOR`'s handles of a single selected dimension that is not locked (kicad-port/dimensionDraw.ts `dimensionEditPoints`), at the dimension the drag has. */
+function drawDimensionHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  if (opts.selection.size !== 1) return;
+  const id = [...opts.selection][0]!;
+  if ((board.locked ?? []).includes(id)) return;
+  const d = opts.dimensionPreview?.id === id ? { ...opts.dimensionPreview.dim, id } : (board.drawings?.dimensions as Dimension[] | undefined)?.find((x) => x.id === id);
+  if (!d) return;
+  const r = hairlineNm(view, 4);
+  ctx.save();
+  ctx.fillStyle = layerColor("selection");
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.lineWidth = hairlineNm(view, 1);
+  for (const p of dimensionEditPoints(d)) {
+    ctx.beginPath();
+    ctx.rect(p.pos[0] - r, p.pos[1] - r, r * 2, r * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawShapeHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   if (opts.selection.size !== 1) return;
   const id = [...opts.selection][0]!;

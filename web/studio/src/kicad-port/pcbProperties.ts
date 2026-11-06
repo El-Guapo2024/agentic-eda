@@ -2271,7 +2271,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   dimensionOverrides("PCB_DIM_RADIAL");
 
   alignedBases("PCB_DIM_LEADER");
-  // "Text Frame" (`ENUM_MAP<DIM_TEXT_BORDER>`: None, Rectangle, Circle) has no place in this model: a leader's text is drawn without one.
+  // "Text Frame" (`ENUM_MAP<DIM_TEXT_BORDER>`: None, Rectangle, Circle; `PCB_DIM_LEADER::ChangeTextBorder`): the leader's `text_frame`, drawn round its text (UI-LEFT P13).
   add(
     {
       owner: "PCB_DIM_LEADER",
@@ -2282,8 +2282,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         { label: "Rectangle", value: "rectangle" },
         { label: "Circle", value: "circle" },
       ],
-      get: () => "none",
-      readOnlyReason: "A leader's text frame is not modelled: the text is drawn without one.",
+      get: (i) => i.dim!.text_frame ?? "none",
+      set: (i, v) => {
+        const frame = String(v) as "none" | "rectangle" | "circle";
+        if (!["none", "rectangle", "circle"].includes(frame) || frame === (i.dim!.text_frame ?? "none")) return [];
+        return [dimCmd(i.dim!, { text_frame: frame === "none" ? undefined : frame })];
+      },
     },
     DIMENSION
   );
