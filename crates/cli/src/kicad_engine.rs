@@ -222,6 +222,12 @@ pub fn export_sch_into(dir: &Path, kind: &str, args: &[String], out_dir: &Path) 
 pub fn export_sch_bom(dir: &Path, preset: &Value, fmt: &Value, output: Option<&Path>, extra: &[String]) -> Result<Value, Vec<CheckResult>> {
     let (design, model) = load_with_schematic(dir)?;
     eda_kicad_engine::export_sch_bom_with(&design, &model, &work(dir), dir, &project_name(dir), preset, fmt, output.map(|o| dir.join(o)).as_deref(), extra)
+/// [`export_sch_into`] of a schematic changed for the one run (`design` and `model` as [`load_with_schematic`] gives them): the plot of the
+/// current page renumbers the other sheets that share its page number ([`crate::sch_output_api::alone_on_its_page`]).
+pub fn export_sch_design_into(dir: &Path, design: &Design, model: &ConstraintModel, kind: &str, args: &[String], out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    eda_kicad_engine::export_sch_into(design, model, &work(dir), dir, &project_name(dir), kind, args, out_dir)
+}
+
 }
 
 /// `kicad-cli sym export svg [args...]` on `kicad_sym` (a library file's text): `{ ok, engine, files }`, one SVG per unit.

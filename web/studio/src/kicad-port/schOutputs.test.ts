@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSchNetlistRequest, buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, SCH_COLOR_THEMES, SCH_NETLIST_FORMATS, SCH_PLOT_FORMATS, schPlotEnables, summarizeOutputs } from "./schOutputs";
+import { buildSchNetlistRequest, buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, SCH_COLOR_THEMES, SCH_NETLIST_FORMATS, SCH_PLOT_FORMATS, schPlotEnables, summarizeOutputs, withWarnings } from "./schOutputs";
 
 // X9 (r2-editors-exports): the dialog's own initial state, not SCH_PLOT_OPTS' constructor.
 test("the plot dialog starts as KiCad's: PDF, colour, KiCad Default (getColorSettings with no selection), drawing sheet, no background colour, the PDF options on", () => {
@@ -70,3 +70,10 @@ test("summarizeOutputs", () => {
   assert.equal(summarizeOutputs(["export/a.svg"]), "Wrote export/a.svg");
   assert.equal(summarizeOutputs(["export/a.svg", "export/a-b.svg"]), "Wrote 2 files");
 });
+
+test("withWarnings: kicad-cli's warnings come before the dialog's report", () => {
+  assert.equal(withWarnings({}, "Done."), "Done.");
+  assert.equal(withWarnings({ warnings: ["Color theme 'x' not found, will use theme from PCB Editor."] }, "Plotted to 'a.gbr'.\nDone."), "Color theme 'x' not found, will use theme from PCB Editor.\nPlotted to 'a.gbr'.\nDone.");
+  assert.equal(withWarnings({ warnings: ["W"] }, ""), "W");
+});
+

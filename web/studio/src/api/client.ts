@@ -383,6 +383,8 @@ export interface FabReply {
   /** What kicad-cli printed on a run that worked: its warnings and progress lines (`run_export`). */
   log?: string;
   /** The design revision the export was made from (the /api/version stamp), like every kicad-cli reply. */
+  /** The lines of `log` that report no file the run wrote: kicad-cli's warnings and notes (`eda_kicad_engine::warnings_of`), for the dialogs' Messages. */
+  warnings?: string[];
   revision?: string;
 }
 

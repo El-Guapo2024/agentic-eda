@@ -1778,12 +1778,33 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
 fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
     if kind.is_empty() || !kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(fail("kicad_cli_export", kind, "unknown export kind"));
+    let warnings = warnings_of(&log, &files, root);
+    if !warnings.is_empty() {
+        reply["warnings"] = json!(warnings);
+    }
     }
     Ok(())
 }
 
 /// `kicad-cli pcb export <kind> [args...]` on `design`, into
 /// `<root>/export/kicad/<kind>/`. `name` is the project's name: the derived
+/// What kicad-cli said on a run that succeeded beyond its report of the files it wrote: the warnings and notes of the job's reporter (`CLI_REPORTER`
+/// prints every severity but an error to stdout, with no prefix: `common/reporter.cpp`), such as `PCB_PLOTTER::Plot`'s "Color theme '%s' not found, will
+/// use theme from PCB Editor." or a `JS_WARNING` job's message, which KiCad's dialogs show in their Messages panel (`WX_HTML_REPORT_PANEL`) with the
+/// report. A line is the report of a file when it names one of `files` (relative to `root`; kicad-cli names them by their full path: "Plotted to
+/// '%s'.", "Created file '%s'", "Wrote position data to '%s'.") or is one of the jobs' closing lines ("Done.", `JobExportIpcD356`'s "Successfully
+/// created IPC-D-356 file"); every other line is kept, in kicad-cli's order (UI-LEFT X5, r5 X5-1).
+pub fn warnings_of(log: &str, files: &[String], root: &Path) -> Vec<String> {
+    let paths: Vec<String> = files.iter().map(|f| root.join(f).to_string_lossy().into_owned()).chain(files.iter().cloned()).collect();
+    log.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| !matches!(*l, "Done." | "Successfully created IPC-D-356 file"))
+        .filter(|l| !paths.iter().any(|p| l.contains(p.as_str())))
+        .map(str::to_string)
+        .collect()
+}
+
 /// board is written under it, so kicad-cli names its files after it
 /// (`<name>-F_Cu.gtl`, `<name>.pos`). `args` are passed through (e.g. `--layers
 /// F.Cu,B.Cu`, `--format csv`). Returns `{ ok, engine, files }`, files
@@ -1917,6 +1938,10 @@ pub fn export_pcb_placement_into(design: &Design, model: &ConstraintModel, work:
 /// `args` with `--side` set to `side` (`PLACE_FILE_EXPORTER`'s one side per run).
 fn args_with_side(args: &[String], side: &str) -> Vec<String> {
     let mut out = args.to_vec();
+    let warnings = warnings_of(&log, &files, root);
+    if !warnings.is_empty() {
+        reply["warnings"] = json!(warnings);
+    }
     match out.iter().position(|a| a == "--side") {
         Some(i) if i + 1 < out.len() => out[i + 1] = side.to_string(),
         Some(_) => out.push(side.to_string()),
@@ -2155,6 +2180,18 @@ mod tests {
         assert_eq!(texts[0], "(version 1)");
         assert!(texts[1].starts_with("(rule \"a ) b\"") && texts[1].ends_with("0.2mm)))"));
         assert!(texts[2].starts_with("(rule two"));
+    #[test]
+    fn a_runs_warnings_are_the_lines_that_report_no_file_it_wrote() {
+        let root = Path::new("/b");
+        let files = vec!["export/kicad/gerbers/b-F_Cu.gbr".to_string(), "export/kicad/gerbers/b-job.gbrjob".to_string()];
+        let log = "Color theme 'mine' not found, will use theme from PCB Editor.\n\nPlotted to '/b/export/kicad/gerbers/b-F_Cu.gbr'.\nDone.";
+        assert_eq!(warnings_of(log, &files, root), ["Color theme 'mine' not found, will use theme from PCB Editor."]);
+        // a relative board folder: kicad-cli still names the file by its full path, which ends with the reply's
+        let drill = vec!["export/kicad/drill/b-PTH.drl".to_string()];
+        assert!(warnings_of("Created file '/home/u/b/export/kicad/drill/b-PTH.drl'\nDone.", &drill, Path::new("b")).is_empty());
+        assert!(warnings_of("Successfully created IPC-D-356 file", &[], root).is_empty());
+    }
+
         for bad in ["(version 1", "(version 1))", "(rule \"open string)", ""] {
             assert!(top_level_forms(bad).is_none() || bad.is_empty(), "{bad:?}");
         }

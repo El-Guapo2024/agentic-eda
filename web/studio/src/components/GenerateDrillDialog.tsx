@@ -11,6 +11,7 @@
 // writes `<board>-drl.rpt` in the same folder (POST /api/fab/drill_report), KiCad's save dialog's default name.
 import { useEffect, useState } from "react";
 import { postFabDrill, postFabDrillReport } from "../api/client";
+import { withWarnings } from "../kicad-port/schOutputs";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DEFAULT_DRILL_FORM, drillEnables, drillFormAtOpening, drillPrecision, drillRequest, drillSettingsCommand, MAP_FORMATS, ZEROS, type DrillForm } from "../kicad-port/drillDialog";
 
@@ -52,7 +53,7 @@ export function GenerateDrillDialog() {
       const cmd = drillSettingsCommand(form, state.board?.plot_params);
       if (cmd && !(await api.cmd(cmd))) return;
       const reply = report ? await postFabDrillReport(drillRequest(form)) : await postFabDrill(drillRequest(form));
-      setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Done." : "Failed."), files: reply.files ?? [] });
+      setResult({ ok: reply.ok, message: reply.ok ? withWarnings(reply, reply.message ?? "Done.") : (reply.message ?? "Failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
     }
