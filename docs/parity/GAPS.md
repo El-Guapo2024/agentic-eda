@@ -626,7 +626,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   board's lists give now (`GetCurrentTrackWidth`, `GetCurrentViaSize`), a microvia its class's.
 - Missing (round 7): ~~each via's and pad's own teardrop parameters~~ (done 2026-11-06, below), teardrops on custom pads and on a padstack's other
   layers; the Text dialog's Italic; Swap of the other kinds above; R7-4 (a knockout text's box in the via check).
-- Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 77, UI-LEFT P3, P15): **each via's and pad's own teardrop parameters** read (`parseTEARDROP_PARAMETERS`), written,
+- Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 78, UI-LEFT P3, P15): **each via's and pad's own teardrop parameters** read (`parseTEARDROP_PARAMETERS`), written,
   edited (Track & Via and Pad Properties' Teardrops parts, the Properties panel's rows, `set_teardrop_params`) and honoured by the generator (an anchor with its own
   parameters is governed by them, as 25ec2335's `UpdateTeardrops`; one without is Board Setup's), kicad-cli's own outlines point for point on anchors whose parameters
   differ; Track & Via Properties' protection features, backdrill, post-machining and padstack; **a footprint's own texts are items** (picked, moved, turned, flipped,
@@ -668,7 +668,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   mask; a rectangle's corner radius; a board text's italic, bold, vertical justification, width, knockout and automatic pen; a pad's orientation, copper layers and overrides; a footprint's reference
   and (from a board file) paste margins; a schematic text's bold, italic, colour, hyperlink and justification; a label's size, bold, italic, colour and horizontal justification; wire ends; body style;
   Exclude From Position Files; the field rows; the Sheetfile as its own text (B3-M1). Five board verbs and three schematic ones were added (`pcb_props.rs`, `sch_props.rs`).
-- Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 77): every teardrop row of a pad and a via, a pad's Pin Name, Pin Type, Fabrication Property and Pad To Die
+- Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 78): every teardrop row of a pad and a via, a pad's Pin Name, Pin Type, Fabrication Property and Pad To Die
   Length and Delay, and a footprint's paste margins for any footprint are edited.
 - Left (read-only with the reason as the row's tooltip): fonts; a pad's number, post-machining and backdrill; a dimension's italic, bold, mirror and justification (a shape's Line Style and a leader's Text Frame are edited since 2026-11-06, UI-LEFT P5, P13); a symbol's pin display (one library symbol per lib_id), a sheet's border, background and attributes; a text box's margins, fill, colour and hyperlink; an image's transform offset.
   The grid is not in the Footprint Editor; a footprint's position lands on the placement grid like every pose.
@@ -805,7 +805,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   frame, the fingerprint, the cache file). In the slow tier, `crates/kicad-engine/tests/refill_zones.rs` (`EDA_SLOW_TESTS=1`): kicad-cli's fill of the derived board equals its fill of the original, board by board and layer by layer, to 0.00 to 0.002% of the area
   on `issue5990` (mask-only NPTH holes), `issue14008` (a net tie), `issue6260` (a non-copper zone) and `issue5750` (the uuid tie), and on `issue6284`, `issue12609`, `issue2568`, `hatch_thermal_connectivity`,
   `zone_filler`, `issue7086`; the DRC runs on the board written with those fills. `web/studio/e2e/zones.check.js`: 8 scenarios through `window.__eda` on a served board, kicad-cli running for real.
-- **A zone's force-flash** (2026-11-06, `task-u5-pcbfp`, `PARITY-pcb.md` section 77, UI-LEFT P3): the layers kicad-cli's fill forces a pad or via that removes its unconnected layers to
+- **A zone's force-flash** (2026-11-06, `task-u5-pcbfp`, `PARITY-pcb.md` section 78, UI-LEFT P3): the layers kicad-cli's fill forces a pad or via that removes its unconnected layers to
   flash on (`ZLO_FORCE_FLASHED`, `(zone_layer_connections ..)`) are read back with the fill (`KicadFills::forced`), taken by the studio's flashed layers and written into the derived
   board; slow proof `crates/kicad-engine/tests/force_flash_fill.rs` (with a Solid zone and a pad's own FULL connection honoured by the fill). Each via's and pad's own teardrop
   parameters are read and honoured (item 8).
@@ -1073,7 +1073,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   footprint saved from the editor loses them~~ (UI-LEFT F5, `task-u3-fpedit2`: kept by item id in `LibraryFootprintKeep`, edited in the dialogs and the Properties pane, written and read back, and carried
   between the library footprint and the board's `fp_art` both ways: `FpArt::to_library_kept` / `from_library_kept`); no verb edits a footprint's graphics on the board (the footprint editor does); the title block's variables in a footprint text; the mask-only pads (`FootprintExtra::graphics`
   with a pad number) are not written back; a library footprint's pads on the silkscreen are not read and Pad Properties has no field for a pad's technical layers; the Value and user fields are not in the 3D view.
-- UI-LEFT P15 (2026-11-06, `task-u5-pcbfp`, `PARITY-pcb.md` section 77): a hatched graphic is drawn with its hatch lines (`footprint_art_hatching`), the title block's and the
+- UI-LEFT P15 (2026-11-06, `task-u5-pcbfp`, `PARITY-pcb.md` section 78): a hatched graphic is drawn with its hatch lines (`footprint_art_hatching`), the title block's and the
   board's variables are resolved in a footprint's texts, and those texts are items of the board (picked, moved, turned, flipped, edited in Text Properties, deleted, in the
   instance's own copy of its footprint). A footprint's graphics stay picked as the footprint, as KiCad's board editor has them.
 - UI-LEFT F2 (2026-11-05, `task-u1-fpedit`): in the Footprint Editor a library footprint's zones, dimensions, text boxes, points, images, barcodes, tables and groups are items it draws and edits (`LibraryFootprint::items`, `PARITY-fpedit.md` section 20); a
@@ -1109,7 +1109,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   of the one footprint the editor's copy came from (`fp_exchange::exchange_one`, `ExchangeOptions::replace()`, a per-instance `FootprintAssignment`), one undo step of the board; the other footprints of the name
   and the library stay as they were. It carries the footprint's clearance, mask margin, zone connection, net ties, attributes, fields and each pad's overrides and margins; **left:** the footprint's own paste
   margins, private layers and jumper groups (the board model has no place for them), and still a library pad's layer set, die length and fabrication property (above).
-- Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 77, UI-LEFT P14, P21): Change and Update Footprint match the pads as `ExchangeFootprint` does
+- Done 2026-11-06 (`task-u5-pcbfp`, `PARITY-pcb.md` section 78, UI-LEFT P14, P21): Change and Update Footprint match the pads as `ExchangeFootprint` does
   (`matchItemsBySimilarity<PAD>`: by number, then by place and shape; a renumbered pad takes the old pad's net, pin name and type, a pad nothing matches has none),
   Update PCB from Schematic's exchange keeping them by number; Compare with Library tests the attribute flags against the library file's own, the solder mask bridges
   and the net-tie groups; Footprint Properties' Reference and Value are edited on the board and carried to the symbol on whichever sheet it is (a board-only footprint
