@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PIN_GLYPH } from "../../kicad-port/libraryTreeState";
 import { availableColumns, cellText, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
-import { closeSelectColumns, openSelectColumns, setLibTreeColumns, useLibTreeColumns, useSelectColumnsOpen } from "../../state/libTreeColumns";
+import { setLibTreeColumns, useLibTreeColumns } from "../../state/libTreeColumns";
 import { SelectColumnsDialog } from "../library/SelectColumnsDialog";
 import type { ChooserRow } from "../../kicad-port/libChooser";
 import { unitLetter } from "../../kicad-port/unitLetter";
@@ -33,7 +33,8 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const treeId = kind === "symbol" ? "symbol_chooser" : "footprint_chooser";
   const shown = useLibTreeColumns(treeId);
-  const choosing = useSelectColumnsOpen(treeId);
+  // the dialog is this tree's own (a chooser is opened from its header's menu only; KiCad's action has no handler of its own there)
+  const [choosing, setChoosing] = useState(false);
   const columns = useMemo(() => treeColumns(shown), [shown]);
   const extra = columns.slice(1);
   // `addColumnIfNecessary` for each library loaded: the fields of its items
@@ -55,7 +56,7 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
         data-chooser-header
         onContextMenu={(e) => {
           e.preventDefault();
-          setMenu({ x: e.clientX, y: e.clientY, entries: [{ label: SELECT_COLUMNS_LABEL, hint: SELECT_COLUMNS_ACTION, onSelect: () => openSelectColumns(treeId) }] });
+          setMenu({ x: e.clientX, y: e.clientY, entries: [{ label: SELECT_COLUMNS_LABEL, hint: SELECT_COLUMNS_ACTION, onSelect: () => setChoosing(true) }] });
         }}
       >
         {columns.map((c) => (
@@ -151,7 +152,7 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
         );
       })}
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} onClose={() => setMenu(null)} />}
-      {choosing && <SelectColumnsDialog available={available} shown={shown} onOk={(c) => setLibTreeColumns(treeId, c)} onClose={closeSelectColumns} />}
+      {choosing && <SelectColumnsDialog available={available} shown={shown} onOk={(c) => setLibTreeColumns(treeId, c)} onClose={() => setChoosing(false)} />}
     </div>
   );
 }
