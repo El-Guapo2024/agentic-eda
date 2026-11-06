@@ -1456,10 +1456,15 @@ fn project_net_classes(project_json: &str, for_schematic: bool) -> Vec<NetClass>
         if name == "Default" {
             continue; // the board-default fields already cover this; see the doc comment above
         }
-        let nets: Vec<String> = patterns
+        // `netclass_patterns`' loader: "Expand bus patterns so individual bus member nets can be matched" (`ForEachBusMember` -> `addSinglePatternAssignment`,
+        // an exact repeat once): `D[0..7]` is the eight patterns `D0` .. `D7` of the class.
+        let listed: Vec<String> = patterns
             .iter()
             .filter(|p| p.get("netclass").and_then(|v| v.as_str()) == Some(name))
             .filter_map(|p| p.get("pattern").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        let nets: Vec<String> = eda_model::bus_pattern::expand_patterns(&listed)
+            .into_iter()
             .chain(assigned.iter().filter(|(class, _)| class == name).map(|(_, pattern)| pattern.clone()))
             .collect();
         if nets.is_empty() && !for_schematic {
@@ -3712,6 +3717,18 @@ mod tests {
         merge_project_net_classes(&mut model, project);
         assert_eq!(model.board.matching_classes("Net-(R1-Pad2)").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS1", "ONLYALABEL"]);
         assert_eq!(model.board.clearance, mm(0.2));
+    }
+
+    /// `netclass_patterns`' loader expands a bus pattern into its members (`ForEachBusMember` -> `addSinglePatternAssignment`, an exact repeat once).
+    #[test]
+    fn a_bus_pattern_of_the_project_is_read_as_its_members() {
+        let project = r#"{"net_settings": {
+            "classes": [{"name": "Default", "clearance": 0.2}, {"name": "BUS", "priority": 0}],
+            "netclass_patterns": [{"netclass": "BUS", "pattern": "D[0..2]"}, {"netclass": "BUS", "pattern": "D1"}, {"netclass": "BUS", "pattern": "{SDA SCL}"}]
+        }}"#;
+        let classes = parse_project_net_classes(project);
+        assert_eq!(classes[0].nets, ["D0", "D1", "D2", "SDA", "SCL"]);
+        assert!(classes[0].matches("D2") && !classes[0].matches("D."), "D[0..2] is no character class");
     }
 
     #[test]

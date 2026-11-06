@@ -7,6 +7,7 @@ pub mod barcode;
 pub mod bezier;
 pub mod board;
 pub mod board_text;
+pub mod bus_pattern;
 pub mod component_classes;
 pub mod embedded_files;
 mod drc_checks;

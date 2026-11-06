@@ -100,6 +100,20 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
     assert_eq!(b.apply(&Cmd::SetNetClasses { settings: dup }).unwrap_err()[0].check, "ops_bad_netclasses");
 }
 
+/// A bus pattern is stored as its members (`SetNetclassPatternAssignment` -> `ForEachBusMember`): `D[0..3]` is `D0` .. `D3`, `{SDA SCL}` is `SDA` and
+/// `SCL`, a repeat once; a pattern that is no bus is itself.
+#[test]
+fn a_bus_pattern_is_stored_as_its_members() {
+    let base = model();
+    let mut b = Board::new(design(), &base, mm(0.1), mm(0.3));
+    let settings = NetClassSettings { default: class("Default", &[], Nm::ZERO), classes: vec![class("bus", &["D[0..3]", "D2", "{SDA SCL}", "USB_D[PM]"], mm(0.3))], schematic: Default::default() };
+    b.apply(&Cmd::SetNetClasses { settings }).unwrap();
+    let m = effective(&b, &base);
+    assert_eq!(m.board.net_classes[0].nets, vec!["D0", "D1", "D2", "D3", "SDA", "SCL", "USB_D[PM]"]);
+    assert_eq!(m.board.clearance_of("D3"), mm(0.3));
+    assert_eq!(m.board.clearance_of("SCL"), mm(0.3));
+}
+
 #[test]
 fn mask_paste_text_defaults_and_severities_apply() {
     let base = model();

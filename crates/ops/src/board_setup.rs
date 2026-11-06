@@ -31,10 +31,15 @@ fn first(check: &str, problems: Vec<(&'static str, String)>) -> Done {
     }
 }
 
-/// `Cmd::SetNetClasses`.
+/// `Cmd::SetNetClasses`. Each class's patterns are kept as `NET_SETTINGS::SetNetclassPatternAssignment` keeps them: a bus pattern (`D[0..7]`, `{SDA SCL}`)
+/// is its members, one pattern each, an exact repeat once (`eda_model::bus_pattern::expand_patterns`).
 pub(crate) fn set_net_classes(design: &mut Design, settings: &NetClassSettings) -> Done {
     rules::validate_net_classes(settings).map_err(|c| vec![c])?;
-    overlay(design).net_classes = Some(settings.clone());
+    let mut settings = settings.clone();
+    for c in &mut settings.classes {
+        c.nets = eda_model::bus_pattern::expand_patterns(&c.nets);
+    }
+    overlay(design).net_classes = Some(settings);
     Ok(())
 }
 

@@ -15,7 +15,7 @@
 //
 // Not ported: KiCad's regular-expression mode for net class patterns (a pattern here is `*` and `?` wildcards, anchored, as
 // crates/model/src/lib.rs `glob_match` reads it; the alternation `a|b` and the grouped `prefix(a|b)` KiCad proposes are expanded into one pattern per
-// alternative, which matches the same nets), bus-notation patterns (`ForEachBusMember`), and the composite net class KiCad builds
+// alternative, which matches the same nets), and the composite net class KiCad builds
 // for a net several classes claim (here the first class whose pattern matches owns the net).
 //
 // The default stackup is also computed by the backend (`eda_model::rules::default_stackup`); both are held to the same cases in
@@ -24,6 +24,7 @@
 import type { Cmd, Constraints, DiffPairPreset, LayerClassDefaults, NetClass, NetClassSchematic, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Nm, ViaPreset } from "../api/types";
 import { strNumCmp } from "./sheetPages";
 import { globMatch, patternMatches } from "./netPattern";
+import { expandPatterns } from "./busPattern";
 import { validateViaParameters } from "./routerVia";
 
 export { globMatch };
@@ -101,9 +102,12 @@ export function netClassSettingsOf(rules: { default_class?: NetClass; track_widt
   return { default: def, classes: rules.net_classes, schematic: rules.net_class_schematic ?? {} };
 }
 
-/** The classes with their patterns taken from the assignment table. A row naming no class, or with nothing in its pattern, is dropped. */
+/**
+ * The classes with their patterns taken from the assignment table. A row naming no class, or with nothing in its pattern, is dropped. A bus pattern is its members
+ * (`SetNetclassPatternAssignment` -> `ForEachBusMember`: `D[0..7]` is `D0` .. `D7`), an exact repeat once (`addSinglePatternAssignment`), as KiCad stores them.
+ */
 export function applyAssignments(classes: readonly NetClass[], rows: readonly AssignmentRow[]): NetClass[] {
-  return classes.map((c) => ({ ...c, nets: rows.filter((r) => r.netclass === c.name).map((r) => r.pattern.trim()).filter((p) => p !== "") }));
+  return classes.map((c) => ({ ...c, nets: expandPatterns(rows.filter((r) => r.netclass === c.name).map((r) => r.pattern.trim()).filter((p) => p !== "")) }));
 }
 
 /** The nets, among `nets`, that `pattern` assigns -- the "Nets matching" list (`EDA_COMBINED_MATCHER( pattern, CTX_NETCLASS )`: a wildcard pattern or a regular expression, the whole name). */
