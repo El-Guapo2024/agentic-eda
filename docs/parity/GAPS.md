@@ -1930,7 +1930,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 **Done 2026-11-06 on `task-v1-text` (UI-LEFT-2 PP1, CC1; `PARITY-pcb.md` section 94, `PARITY-sch.md` section 70, PARITY-symedit "Texts in their faces").** Hit: every text. Blocks: no.
 - Done: one layout of KiCad's (`web/studio/src/kicad-port/kicadText.ts`: `getLinePositions`, `GetTextAsGlyphs` of both fonts, the markup, `GetTextBox`, the pens, the knockout box)
   that every painter and the footprint texts' hit test read: board texts, footprint fields and texts, dimensions' labels, table cells, text boxes, the Footprint Editor's texts,
-  the sheet's fields, texts, labels and text boxes, the Symbol Editor's texts, fields and text boxes. kicad-cli's plot of 24 texts is the layout's (the slow
+  the sheet's fields, texts, labels and text boxes, the Symbol Editor's texts, fields and text boxes. kicad-cli's plot of 28 texts is the layout's (the slow
   `kicadTextProof.test.ts`). An outline face is the file the server's fontconfig matches as `FONTCONFIG::FindFont` does (`GET /api/fonts/match`, `/api/fonts/file`), loaded with
   `FontFace`, measured by the canvas, its metrics and glyph boxes read from the file; a fake italic is slanted glyph by glyph. A knockout text or field is drawn (its box is
   what is drawn, grown by `GetKnockoutTextMargin`). The Font rows of a board text, a field, a text box, the Footprint Editor's texts and fields and the Symbol Editor's texts and

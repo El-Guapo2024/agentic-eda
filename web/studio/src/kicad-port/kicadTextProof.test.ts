@@ -1,6 +1,7 @@
-// The slow proof of the text layout (UI-LEFT-2 PP1, CC1; `EDA_SLOW_TESTS=1`): a board of `gr_text`s in the stroke font and in DejaVu Sans, in several justifications,
+// The slow proof of the text layout (UI-LEFT-2 PP1, CC1; `EDA_SLOW_TESTS=1`): a board of 28 `gr_text`s in the stroke font and in DejaVu Sans, in several justifications,
 // turned, mirrored, italic, bold, wider than high, on several lines and with markup, plotted by kicad-cli (`pcb export svg`), against `kicad-port/kicadText.ts`:
 //   - the stroke font: every pen stroke kicad-cli plots (`<g class="stroked-text">`'s `<path d="M .. L ..">`) is one of the layout's, within 0.15 um (the SVG's 4 decimals);
+//   - every line's `StringBoundaryLimits` width (`GetTextBox`'s) is the `textLength` kicad-cli gives a stroke line's hidden `<text>` (`GRTextWidth`);
 //   - an outline face: the box of the glyphs' polygons kicad-cli fills is the layout's ink box, within 0.003 of the size (FreeType hints the outlines' heights to whole
 //     pixels at 358 to the em). The face is read here from the file fontconfig matches (`fc-match`, as the server's `GET /api/fonts/file`) by kicad-port/sfnt.ts, as the
 //     canvas reads it; `hmtx`'s advances stand in for the browser's `measureText` (no kerning pair is in the texts).
@@ -9,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { layoutKicadText, layoutSegments, runInk, worldToFrame, type KicadTextSpec, type OutlineFace, type KicadFont } from "./kicadText";
+import { layoutKicadText, layoutSegments, runInk, stringBoundaryLimits, worldToFrame, type KicadTextSpec, type OutlineFace, type KicadFont } from "./kicadText";
 import { readSfnt, sfntInk } from "./sfnt";
 
 const SLOW = process.env.EDA_SLOW_TESTS === "1";
@@ -109,12 +110,26 @@ test("kicad-cli's plot of stroke and outline texts is the layout's (slow: EDA_SL
       (fills.get(k) ?? fills.set(k, []).get(k)!).push([x * MM, y * MM]);
     }
   }
+  // the hidden `<text>` of each line of a stroke text (`SVG_PLOTTER::Text`): its `textLength` is `GRTextWidth`, `KiROUND( StringBoundaryLimits( .. ).x )` -- the box
+  // `INTER_CHAR` short of the cursor and 1.5 pens each side
+  const lengths = new Map<number, { text: string; length: number }[]>();
+  for (const m of svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"\s*(?:transform="[^"]*"\s*)?textLength="([\d.]+)"[^>]*>([^<]*)<\/text>/g)) {
+    const k = cellOf(Number(m[1]), Number(m[2]));
+    (lengths.get(k) ?? lengths.set(k, []).get(k)!).push({ text: m[4]!.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"'), length: Number(m[3]) });
+  }
   let compared = 0;
   CASES.forEach((c, i) => {
     const spec: KicadTextSpec = { text: c.text, pos: [c.at[0] * MM, c.at[1] * MM], size: [c.size[0] * MM, c.size[1] * MM], pen: Math.round(c.pen * MM), halign: c.h, valign: c.v, angleDeg: c.angle ?? 0, mirror: c.mirror, italic: c.italic, bold: c.bold };
     const font: KicadFont = c.face ? { kind: "outline", face: matchFace(c.face, !!c.bold, !!c.italic) } : { kind: "stroke" };
     const l = layoutKicadText(spec, font);
     const label = `case ${i} ${JSON.stringify(c)}`;
+    // (an outline text is plotted as its glyphs' polygons only: no hidden `<text>`)
+    const plottedLines = lengths.get(i) ?? [];
+    assert.equal(plottedLines.length, font.kind === "stroke" ? c.text.split("\n").length : 0, `${label}: kicad-cli's lines ${JSON.stringify(plottedLines)}`);
+    for (const pl of plottedLines) {
+      const w = stringBoundaryLimits(pl.text, font, spec.size, spec.pen, !!c.italic)[0] / MM;
+      assert.ok(Math.abs(w - pl.length) <= 0.00015, `${label}: the box of ${JSON.stringify(pl.text)} is ${w.toFixed(4)} mm wide, kicad-cli's textLength ${pl.length}`);
+    }
     if (font.kind === "stroke") {
       const want = (strokes.get(i) ?? []).map((s) => s.map((v) => Math.round(v * 1e4)));
       const got = layoutSegments(l).map((s) => s.map((v) => Math.round((v / MM) * 1e4)));
