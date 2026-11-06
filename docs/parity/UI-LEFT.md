@@ -234,11 +234,10 @@ Notes:
   - A sheet's attributes are its own on every path and variant and are not given to its symbols in the studio's own tables; a sheet with no style of its own is drawn unfilled (written with the old pale fill).
   - The rows read "name file · page N" (A7-L3); a local net on a screen shown twice lights its first path's row only.
   - M. PARITY-sch §30, §40, §50, §52, §60; r2 B-L1, r6 C6-L2, r7 A7-L3.
-- **S9 [BD] A shared screen (a sheet placed twice).**
-  - Annotate numbers only that screen's references.
-  - Every path shares one power reference.
-  - A unit edit changes every path.
-  - The DNP, library-link and Update Symbol tools act on the sheet in view.
+- **S9 [BD] A shared screen (a sheet placed twice).** **done (task-u5-shared)**: Annotate numbers every sheet path's references, each by its page, "Current sheet only" the path in view; a power symbol has a reference per path (read, written, placed, annotated); a unit edit is the path in view's and the studio draws each path's unit; Do not Populate / Exclude collect the units of the path's reference with KiCad's new state; Change / Update Symbols and Edit Symbol Library Links work over the hierarchy by each path's reference (PARITY-sch §63). Left:
+  - A variant's flags on a shared screen are per reference, not per path (`SCH_SYMBOL_INSTANCE::m_Variants`).
+  - A footprint placed for a reference that a reset hands to another path keeps the old reference (the board keys a part by reference).
+  - (was: Annotate numbered only the screen's own references; one power reference on every path; a unit edit changed every path; the DNP, library-link and Update Symbol tools acted on the sheet in view.)
   - M. GAPS 4; r2 B-M4, r3 D3-M5, r4 D4-M1, r5 D5-M2.
 - **S10 [KO] One library symbol per lib_id (a model limit).**
   - Ctrl+E edits the shared entry, so every placement changes.

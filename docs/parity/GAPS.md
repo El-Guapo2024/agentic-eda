@@ -455,11 +455,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Duplicate and Import Sheet, and go with a deleted sheet; a sheet with a missing file keeps its page, a file that places itself is not followed; a sheet's pages are
   this project's only, without whitespace, an empty one `#`. Left: the Properties panel shows and edits a sheet's key, not its text.
 - Left: a symbol's and a sheet's instance paths are written in walk order,
-  not sorted by `KIID_PATH` as KiCad writes them (cosmetic); Annotate numbers the screen's own references only, not the other paths' (which count as taken,
-  so it hands none out twice);
+  not sorted by `KIID_PATH` as KiCad writes them (cosmetic); ~~Annotate numbers the screen's own references only, not the other paths'~~ (done
+  2026-11-06, section 63);
   ~~Find does not match a sheet's name, file or pins~~ (done 2026-11-06, section 60); Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
   of the drop, one file is imported at a time (the others of the drop that the first does not place are said to be left out; KiCad runs Import Sheet for each in turn) and Choose Schematic opens on the file, where KiCad, given a file, has no chooser and has the sheet or its contents in the hand at once;
-  the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps
+  ~~the attribute, library-link and Update / Change Symbol tools act on the sheet in view~~ (done 2026-11-06, section 63); a footprint already placed keeps
   the reference it had when Annotate or Rename changes the schematic's.
 - Done 2026-11-06 (`task-u3-schtext`, UI-LEFT S8, `PARITY-sch.md` section 60): the Hierarchy Navigator's right-click menu (Edit Page Number, Rename in place,
   New / Delete Top-Level Sheet with KiCad's prompts, Expand / Collapse All) and its net highlight (`UpdateNetHighlight`); a KiCad 10 project's top-level sheets
@@ -474,6 +474,15 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   of the same symbol and value that has it free (r2 D-A1, done); `R?` shown and written for a placeholder; the Annotate dialog's numbering kept in the project.
   **Left**: a screen shown twice (UI-LEFT S9); an unplaced screen is linked without the question; the bus-to-bus entry needs nothing (legacy `.sch` only, which
   the box's kicad-cli cannot import).
+- Done 2026-11-06 (`task-u5-shared`, UI-LEFT S9, `PARITY-sch.md` section 63): **a screen shown twice is edited per sheet path**. Annotate numbers a
+  reference per symbol and path (`SCH_SHEET_LIST::GetSymbols`, `SCH_REFERENCE::Annotate`'s `SetRef( &m_sheetPath, .. )`), each path by its page, the current
+  sheet being the path in view (`Board::focus_path`); a power symbol has a reference per path (`SchExtras::power_path_refs`: read, written, numbered when
+  placed or pasted and by Annotate), so kicad-cli's netlist no longer warns of annotation errors; a unit edit is the path's own (`SetUnitSelection(
+  &GetCurrentSheet(), .. )`) and the studio draws the path's unit; Do not Populate / Exclude collect the units of the path's reference on every path with
+  KiCad's `new_state` (r5 D5-M2 done); Change / Update Symbols match over the hierarchy by each path's reference; Edit Symbol Library Links lists and relinks
+  the hierarchy. The earlier "Left" items "Annotate numbers the screen's own references only" and "the attribute, library-link and Update / Change Symbol
+  tools act on the sheet in view" are done. **Left**: a variant's flags on a shared screen are kept per reference, not per path; a footprint placed for a
+  reference a reset gives to another path keeps that reference; the per-path units of screens copied whole (`add_sheet_tree`).
 - Port from: `eeschema/sch_sheet_path.cpp`, `sch_screen.cpp`, `connection_graph.cpp`, `tools/sch_navigate_tool.cpp`,
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
