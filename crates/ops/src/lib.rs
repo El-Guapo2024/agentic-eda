@@ -2250,8 +2250,9 @@ pub enum Cmd {
     /// commas or spaces). See [`library_editors::edit_units_and_connections`]. A root symbol's only.
     EditSymbolUnitsAndConnections {
         lib_id: String,
+        /// By unit number, as text (a JSON object's keys; `serde_json`'s `Value` will not read them as numbers here).
         #[serde(default)]
-        unit_names: std::collections::BTreeMap<u32, String>,
+        unit_names: std::collections::BTreeMap<String, String>,
         #[serde(default)]
         demorgan: bool,
         #[serde(default)]
@@ -3721,8 +3722,9 @@ impl<'a> Board<'a> {
                 footprint_filters.clone(),
             ),
             Cmd::EditSymbolUnitsAndConnections { lib_id, unit_names, demorgan, body_style_names, duplicate_pin_numbers_are_jumpers, jumper_rows } => {
+                let names: std::collections::BTreeMap<u32, String> = unit_names.iter().filter_map(|(u, n)| Some((u.parse::<u32>().ok()?, n.clone()))).collect();
                 let sym = self.library_symbol_mut(lib_id)?;
-                library_editors::edit_units_and_connections(sym, unit_names, *demorgan, body_style_names, *duplicate_pin_numbers_are_jumpers, jumper_rows)
+                library_editors::edit_units_and_connections(sym, &names, *demorgan, body_style_names, *duplicate_pin_numbers_are_jumpers, jumper_rows)
             }
             Cmd::UpdateSymbolOnBoard { lib_id } => self.update_symbol_on_board(lib_id),
 

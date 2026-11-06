@@ -179,7 +179,7 @@ fn the_unit_names_of_dropped_units_go_with_them() {
 fn units_and_connections(lib_id: &str, names: &[(u32, &str)], demorgan: bool, styles: &[&str], jumpers_dup: bool, rows: &[&str]) -> Cmd {
     Cmd::EditSymbolUnitsAndConnections {
         lib_id: lib_id.into(),
-        unit_names: names.iter().map(|(u, n)| (*u, n.to_string())).collect(),
+        unit_names: names.iter().map(|(u, n)| (u.to_string(), n.to_string())).collect(),
         demorgan,
         body_style_names: styles.iter().map(|s| s.to_string()).collect(),
         duplicate_pin_numbers_are_jumpers: jumpers_dup,
@@ -256,6 +256,13 @@ fn unit_names_and_jumper_groups_are_the_grids_rows() {
     // the written library says it as KiCad does
     let text = eda_kicad::export_kicad_sym(sym(&b, "Lib:J"));
     assert!(text.contains("(duplicate_pin_numbers_are_jumpers yes)") && text.contains(r#"(jumper_pin_groups ("1" "3") ("2" "4"))"#) && text.contains(r#"(unit_name "Gate")"#), "{text}");
+}
+
+#[test]
+fn the_verb_reads_from_the_studios_json() {
+    let c: Cmd = serde_json::from_value(serde_json::json!({ "op": "edit_symbol_units_and_connections", "lib_id": "Lib:J", "unit_names": { "1": "Gate" }, "demorgan": false, "body_style_names": ["A", "B"], "duplicate_pin_numbers_are_jumpers": true, "jumper_rows": ["1 2"] })).unwrap();
+    let Cmd::EditSymbolUnitsAndConnections { unit_names, .. } = &c else { panic!("{c:?}") };
+    assert_eq!(unit_names.get("1").map(String::as_str), Some("Gate"));
 }
 
 #[test]
