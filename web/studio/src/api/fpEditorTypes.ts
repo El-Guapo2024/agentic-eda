@@ -26,7 +26,9 @@ export interface BoardLink {
 export type FpEditorCmd =
   | { verb: "open_from_board"; reference: string }
   | { verb: "save_to_board"; footprint: string }
-  | { verb: "set_settings"; footprint: string; settings: FootprintSettings };
+  | { verb: "set_settings"; footprint: string; settings: FootprintSettings }
+  /** File > Import > Graphics... into the footprint (`crate::ImportGraphics` without its `op`). */
+  | { verb: "import_graphics"; footprint: string; import: Omit<import("./types").ImportGraphicsCmd, "op"> };
 
 /** `fp_items::ShapeLook`: a graphic's line style (`solid`, `default`, `dash`, `dot`, `dash_dot`, `dash_dot_dot`) and hatched fill. */
 export interface ShapeLook {

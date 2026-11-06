@@ -30,7 +30,9 @@ export function StatusBar() {
   // wrong the longer you stay away from it. "–" is honest; a stale
   // number that used to be true isn't.
   const onPcb = state.tab === "pcb";
-  const cursor = onPcb ? state.cursorNm : lib ? lib.cursorNm : null;
+  const raw = onPcb ? state.cursorNm : lib ? lib.cursorNm : null;
+  // The Footprint Editor's Origins & Axes (`m_DisplayInvertXAxis` / `m_DisplayInvertYAxis`, Preferences > Footprint Editor, UI-LEFT F8): "Increases left" / "Increases up".
+  const cursor = raw && state.tab === "footprint" ? { x: state.prefs.fpInvertXAxis ? -raw.x : raw.x, y: state.prefs.fpInvertYAxis ? -raw.y : raw.y } : raw;
   // Polar coordinates are the board editor's and the Footprint Editor's (`PCB_BASE_FRAME::m_polarCoords`); eeschema has none.
   const polar = state.polar && state.tab !== "symbol" && state.tab !== "schematic";
   // pcb_base_frame.cpp UpdateStatusBar: dx/dy/dist is always relative to

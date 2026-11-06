@@ -4,6 +4,8 @@
 // grid, like KiCad's, and a footprint is opened from the tree.
 import { useEffect, useRef, useState } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
+import { useStudioState } from "../../state/store";
+import { setFpPrefs } from "../../state/fpPrefs";
 import { ENUM_PREFIX_MAX_LENGTH, enumSpinValue, enumeratePopupText, enumerateStart } from "../../kicad-port/padEnumeration";
 import { inPadEditMode, PAD_EDIT_MODE_MESSAGE, padEditLayer } from "../../kicad-port/padEditMode";
 import { FootprintCanvas } from "./FootprintCanvas";
@@ -90,6 +92,9 @@ export function FootprintEditorView() {
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
+  // the editor's preferences where the drawing tools read them (state/fpPrefs.ts)
+  const prefs = useStudioState().prefs;
+  useEffect(() => setFpPrefs(prefs), [prefs]);
 
   // The editor's own toast (every library action reports through it) goes away by itself, like the studio's (App.tsx's `Toast`).
   useEffect(() => {

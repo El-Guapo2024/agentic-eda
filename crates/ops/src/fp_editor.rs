@@ -44,13 +44,17 @@ pub enum FpEditorCmd {
     /// group that names a pad the footprint has not, a negative clearance (`m_netClearance.Validate( 0, INT_MAX )`) and a private layer that is no user layer. Sent with
     /// `edit_footprint_properties` in one batch, the dialog's one undo step.
     SetSettings { footprint: String, settings: FootprintSettings },
+    /// `DRAWING_TOOL::PlaceImportedGraphics` in the Footprint Editor (File > Import > Graphics..., `pcbnew.InteractiveDrawing.placeImportedGraphics`, UI-LEFT F8): a DXF or
+    /// SVG file as the footprint's lines, arcs, circles, polygons, curves and texts on `import.layer` -- `GRAPHICS_IMPORTER_PCBNEW` with the footprint as the items' parent,
+    /// the board's own importer ([`crate::import_graphics`]) -- with "Fix discontinuities" and "Group imported items" (a group of the footprint's). One undo step.
+    ImportGraphics { footprint: String, import: crate::ImportGraphics },
 }
 
 impl FpEditorCmd {
     /// The open and the settings are the Footprint Editor's, the save the board's.
     pub fn domain(&self) -> Domain {
         match self {
-            FpEditorCmd::OpenFromBoard { .. } | FpEditorCmd::SetSettings { .. } => Domain::FootprintEditor,
+            FpEditorCmd::OpenFromBoard { .. } | FpEditorCmd::SetSettings { .. } | FpEditorCmd::ImportGraphics { .. } => Domain::FootprintEditor,
             FpEditorCmd::SaveToBoard { .. } => Domain::Pcb,
         }
     }
@@ -59,7 +63,7 @@ impl FpEditorCmd {
     pub fn subject(&self) -> &str {
         match self {
             FpEditorCmd::OpenFromBoard { reference } => reference,
-            FpEditorCmd::SaveToBoard { footprint } | FpEditorCmd::SetSettings { footprint, .. } => footprint,
+            FpEditorCmd::SaveToBoard { footprint } | FpEditorCmd::SetSettings { footprint, .. } | FpEditorCmd::ImportGraphics { footprint, .. } => footprint,
         }
     }
 
@@ -68,6 +72,7 @@ impl FpEditorCmd {
             FpEditorCmd::OpenFromBoard { reference } => format!("footprint editor: open {reference} from the board"),
             FpEditorCmd::SaveToBoard { footprint } => format!("update footprint {} on the board", BoardFootprintCopy::reference_of_key(footprint).unwrap_or(footprint)),
             FpEditorCmd::SetSettings { footprint, .. } => format!("footprint {footprint:?}: clearance overrides, private layers, net ties"),
+            FpEditorCmd::ImportGraphics { footprint, import } => format!("footprint {footprint:?}: import graphics on {}", import.layer),
         }
     }
 }
@@ -128,7 +133,52 @@ impl Board<'_> {
             FpEditorCmd::OpenFromBoard { reference } => self.open_footprint_from_board(reference),
             FpEditorCmd::SaveToBoard { footprint } => self.save_footprint_to_board(footprint),
             FpEditorCmd::SetSettings { footprint, settings } => self.set_footprint_settings(footprint, settings),
+            FpEditorCmd::ImportGraphics { footprint, import } => self.import_footprint_graphics(footprint, import),
         }
+    }
+
+    /// See [`FpEditorCmd::ImportGraphics`]: the board's `import_graphics` with the footprint for the board (`GRAPHICS_IMPORTER_PCBNEW::m_parent`).
+    fn import_footprint_graphics(&mut self, name: &str, req: &crate::ImportGraphics) -> Result<(), Vec<CheckResult>> {
+        if req.layer.is_empty() {
+            return Err(fail("ops_bad_import", "import graphics", "Please select a valid layer."));
+        }
+        if !(req.scale.is_finite() && req.scale != 0.0) {
+            return Err(fail("ops_bad_import", "import graphics", "the import scale must be a number other than zero"));
+        }
+        self.library_footprint_mut(name)?;
+        let imported = req.read().map_err(|e| fail("ops_bad_import", "import graphics", e))?;
+        let mut mapper = req.mapper();
+        let mut items = crate::graphics_board_items(&imported, &mut mapper, &req.layer);
+        if items.shapes.is_empty() && items.texts.is_empty() {
+            let mut why = String::from("No graphic items found in file.");
+            for m in items.messages.iter().chain(imported.messages.iter()) {
+                why.push(' ');
+                why.push_str(m);
+            }
+            return Err(fail("ops_empty_import", "import graphics", why));
+        }
+        if let Some(tol) = req.fix_tolerance_nm {
+            crate::fix_shapes::connect_board_shapes(&mut items.shapes, tol.max(eda_model::ir::Nm::ZERO));
+        }
+        let fp = self.library_footprint_mut(name)?;
+        let before: std::collections::BTreeSet<String> = fp.graphics.iter().map(|g| g.id().to_string()).chain(fp.texts.iter().map(|t| t.id.clone())).collect();
+        for mut s in items.shapes {
+            s.set_id(String::new());
+            fp.graphics.push(s);
+        }
+        for mut t in items.texts {
+            t.id.clear();
+            fp.texts.push(t);
+        }
+        fp.assign_missing_ids();
+        if req.group {
+            // "Group imported items": `PCB_GROUP` of the footprint over every item made (`GROUP_TOOL`'s group of one item is no group: KiCad still makes it)
+            let made: Vec<String> = fp.graphics.iter().map(|g| g.id().to_string()).chain(fp.texts.iter().map(|t| t.id.clone())).filter(|id| !before.contains(id)).collect();
+            if made.len() >= 2 {
+                eda_model::groups::GroupHost::make_group(fp, &made).map_err(|r| fail(r.check, &r.subject, r.why))?;
+            }
+        }
+        Ok(())
     }
 
     /// See [`FpEditorCmd::SetSettings`].

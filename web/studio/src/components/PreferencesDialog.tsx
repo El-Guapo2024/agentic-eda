@@ -17,9 +17,13 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizePinStepMils, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
+import { FP_PREFS_TITLES, FP_PREFS_TREE, FpPreferencesPage, fpGraphicsProblem, type FpPrefsExtra, type FpPrefsPage } from "./FpPreferencesPages";
+import { getCommonOptions, setCommonOptions } from "../state/commonOptions";
+import { useFpDispatch, useFpState } from "../state/footprintEditorStore";
+import { FACTORY_TEXT_GRAPHICS } from "../kicad-port/layerDefaults";
 
 /** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`): Mouse and Touchpad, and PCB Editor > Colors. */
-type PrefsPage = "mouse" | "pcb_colors";
+type PrefsPage = "mouse" | "pcb_colors" | FpPrefsPage;
 
 /** `PAGED_DIALOG` opens on the page it was last closed on (its `g_lastPage` by title). */
 let lastPage: PrefsPage = "mouse";
@@ -46,11 +50,20 @@ export function PreferencesDialog() {
     setPageState(p);
   };
   const colors = usePcbColorsPage(open, page === "pcb_colors");
+  // The Footprint Editor's pages (components/FpPreferencesPages.tsx): its rotation step as typed, and what they edit beside the preferences.
+  const fpState = useFpState();
+  const fpDispatch = useFpDispatch();
+  const [fpRotationText, setFpRotationText] = useState(String(state.prefs.fpRotationStepDeg));
+  const [fpExtra, setFpExtraState] = useState<FpPrefsExtra>({ cursor: getCommonOptions(), lineMode: fpState.lineMode });
+  const setFpExtra = (patch: Partial<FpPrefsExtra>) => setFpExtraState((e) => ({ ...e, ...patch }));
+  const isFpPage = (p: PrefsPage): p is FpPrefsPage => p.startsWith("fp_");
 
   useEffect(() => {
     if (open) {
       setDraft(state.prefs);
       setRotationText(String(state.prefs.rotationStepDeg));
+      setFpRotationText(String(state.prefs.fpRotationStepDeg));
+      setFpExtraState({ cursor: { crossHairMode: getCommonOptions().crossHairMode, alwaysShowCursor: getCommonOptions().alwaysShowCursor }, lineMode: fpState.lineMode });
       setPageState(lastPage);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,10 +76,23 @@ export function PreferencesDialog() {
     colors.cancel();
     close();
   };
-  const valid = scrollModSetValid(draft);
+  const graphicsProblem = fpGraphicsProblem(draft.fpTextGraphics);
+  const valid = scrollModSetValid(draft) && !graphicsProblem;
   const submit = () => {
     if (!valid) return;
-    dispatch({ type: "SET_PREFERENCES", prefs: sanitizePreferences({ ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) }) });
+    dispatch({
+      type: "SET_PREFERENCES",
+      prefs: sanitizePreferences({
+        ...draft,
+        rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg),
+        // `m_rotationAngle.GetAngleValue()`: the Footprint Editor's own step
+        fpRotationStepDeg: sanitizeRotationStep(Number(fpRotationText), state.prefs.fpRotationStepDeg),
+      }),
+    });
+    // the cursor is every canvas's one setting; the line mode is the Footprint Editor's (`m_AngleSnapMode`)
+    setCommonOptions(fpExtra.cursor);
+    dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: fpExtra.cursor.crossHairMode === "full" });
+    if (fpExtra.lineMode !== fpState.lineMode) fpDispatch({ type: "SET_LINE_MODE", mode: fpExtra.lineMode });
     colors.commit();
     close();
   };
@@ -97,7 +123,7 @@ export function PreferencesDialog() {
     <div className="dialog-backdrop" onClick={cancel}>
       <div className="dialog" style={{ width: page === "pcb_colors" ? 600 : 700, maxWidth: "95vw" }} onClick={(e) => e.stopPropagation()} data-testid="preferences-dialog">
         <div className="dialog-header">
-          <span>Preferences - {page === "pcb_colors" ? "Colors" : "Mouse and Touchpad"}</span>
+          <span>Preferences - {isFpPage(page) ? FP_PREFS_TITLES[page] : page === "pcb_colors" ? "Colors" : "Mouse and Touchpad"}</span>
         </div>
         <div className="dialog-body" style={{ display: "flex", gap: 12 }}>
           {/* The page tree (`PAGED_DIALOG`'s `wxTreebook`): "PCB Editor" is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). */}
@@ -105,12 +131,14 @@ export function PreferencesDialog() {
             {(
               [
                 ["mouse", "Mouse and Touchpad", 0],
+                ...FP_PREFS_TREE,
                 [null, "PCB Editor", 0],
                 ["pcb_colors", "Colors", 1],
-              ] as const
+              ] as ReadonlyArray<readonly [PrefsPage | null, string, number]>
             ).map(([id, label, depth]) => (
               <div
-                key={label}
+                key={`${id ?? "parent"}-${label}`}
+                data-testid={id ? `prefs-page-${id}` : undefined}
                 role="treeitem"
                 aria-selected={id !== null && page === id}
                 style={{ padding: "3px 4px", paddingLeft: 4 + depth * 14, cursor: id ? "pointer" : "default", background: id !== null && page === id ? "var(--chrome-accent-bg, rgba(74,163,255,0.2))" : undefined, opacity: id ? 1 : 0.75 }}
@@ -122,6 +150,9 @@ export function PreferencesDialog() {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             {page === "pcb_colors" && colors.element}
+            {isFpPage(page) && (
+              <FpPreferencesPage page={page} draft={draft} set={set} extra={fpExtra} setExtra={setFpExtra} rotationText={fpRotationText} setRotationText={setFpRotationText} units={state.units} />
+            )}
             {page === "mouse" && (
               <>
               {heading("Pan and Zoom")}
@@ -276,8 +307,14 @@ export function PreferencesDialog() {
               Reset Colors to Defaults
             </button>
           )}
+          {/* `PANEL_FP_EDITOR_GRAPHICS_DEFAULTS::ResetPanel`: KiCad's factory table */}
+          {page === "fp_graphics" && (
+            <button style={{ marginRight: "auto" }} onClick={() => set({ fpTextGraphics: null })} data-testid="fp-prefs-graphics-reset" title={`Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values`}>
+              Reset Graphics Defaults to Defaults
+            </button>
+          )}
           <button onClick={cancel}>Cancel</button>
-          <button className="primary" disabled={!valid} onClick={submit}>
+          <button className="primary" disabled={!valid} onClick={submit} data-testid="preferences-ok">
             OK
           </button>
         </div>

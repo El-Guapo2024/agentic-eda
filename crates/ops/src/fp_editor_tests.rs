@@ -276,3 +276,42 @@ fn shape_and_text_dialogs_set_the_looks_kept_by_id() {
     let fp = lib(&b);
     assert!(!fp.kicad.stroke_types.contains_key(g.id()) && !fp.kicad.hatches.contains_key(g.id()));
 }
+
+/// UI-LEFT F8: Import Graphics into the footprint -- the board's importer with the footprint for the items' parent: the shapes on the layer the dialog names, grouped when
+/// asked, one undo step; a file with nothing in it is refused with KiCad's words.
+#[test]
+fn import_graphics_puts_the_files_shapes_in_the_footprint_on_the_layer_and_groups_them() {
+    use crate::{GraphicsFormat, ImportGraphics};
+    let fixture = |name: &str| std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let m = ConstraintModel::default();
+    let mut b = Board::new(crate::tests::empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::PutLibraryFootprint { footprint: eda_model::ir::LibraryFootprint::new_empty("Lib:Logo"), overwrite: false }).unwrap();
+    let import = ImportGraphics {
+        format: GraphicsFormat::Svg,
+        text: fixture("board_outline_rect.svg"),
+        layer: "F.SilkS".into(),
+        dxf_units: String::new(),
+        scale: 1.0,
+        offset_x_nm: Nm::ZERO,
+        offset_y_nm: Nm::ZERO,
+        line_width_nm: mm(0.2),
+        group: true,
+        fix_tolerance_nm: None,
+        replace_outline: false,
+    };
+    let cmd = Cmd::FpEditor(FpEditorCmd::ImportGraphics { footprint: "Lib:Logo".into(), import: import.clone() });
+    assert_eq!(cmd.domain(), Domain::FootprintEditor);
+    b.apply(&cmd).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Lib:Logo").unwrap();
+    assert!(!fp.graphics.is_empty() && fp.graphics.iter().all(|g| g.layer() == "F.SilkS" && !g.id().is_empty()), "{:?}", fp.graphics);
+    let made = fp.graphics.len() + fp.texts.len();
+    if made >= 2 {
+        assert_eq!(fp.items.groups.len(), 1, "the imported items are a group of the footprint");
+        assert_eq!(fp.items.groups[0].member_ids.len(), made);
+    }
+    // the board is not touched
+    assert!(b.design().drawings.as_ref().is_none_or(|d| d.shapes.is_empty()));
+    let empty = ImportGraphics { text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10mm\" height=\"10mm\"></svg>".into(), ..import };
+    let e = b.apply(&Cmd::FpEditor(FpEditorCmd::ImportGraphics { footprint: "Lib:Logo".into(), import: empty })).unwrap_err();
+    assert!(e[0].hint.as_deref().unwrap_or("").starts_with("No graphic items found in file."), "{e:?}");
+}

@@ -24,6 +24,7 @@ import type { MagneticOption, PcbMagnetic } from "./snapAnchors";
 import type { FlipDirection } from "./pcbTransform";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
 import { isMac } from "../platform";
+import type { TextGraphicsDefaults } from "../api/types";
 
 /** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
 export function defaultZoomSpeed(isMacPlatform: boolean): number {
@@ -70,6 +71,22 @@ export interface Preferences {
   symRepeatPinStepMils: number;
   /** `m_Repeat.label_delta` ("Label increment:", -10 .. 10): what Repeat Pin adds to the pin's number and name. Default 1. */
   symRepeatLabelDelta: number;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_RotationAngle` (Preferences > Footprint Editor > Editing Options, "Step for rotate commands", UI-LEFT F8): the Footprint Editor's own
+   *  step, the degrees one R or Shift+R turns by there. Default 90. */
+  fpRotationStepDeg: number;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_MagneticItems.pads` / `.graphics` ("Magnetic points": Snap to pads, Snap to graphics). Both on by default (`CAPTURE_ALWAYS`, true). */
+  fpMagneticPads: boolean;
+  fpMagneticGraphics: boolean;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_ArcEditMode` ("Arc editing mode:"): 0 keep the centre and adjust the radius, 1 keep the endpoints or the start's direction, 2 keep the centre and
+   *  radius and adjust the endpoints. Default 0. */
+  fpArcEditMode: number;
+  /** `m_DisplayInvertXAxis` / `m_DisplayInvertYAxis` (Preferences > Footprint Editor > Origins & Axes: "X Axis Increases left", "Y Axis Increases up"): how the
+   *  Footprint Editor shows coordinates. Both off by default. */
+  fpInvertXAxis: boolean;
+  fpInvertYAxis: boolean;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings` (Preferences > Footprint Editor > Graphics Defaults: the line width and the text of each layer class); `null` is KiCad's
+   *  factory table (`FACTORY_TEXT_GRAPHICS`). */
+  fpTextGraphics: TextGraphicsDefaults | null;
 }
 
 /** `PANEL_SYM_EDITING_OPTIONS::TransferDataFromWindow`: "Force pin_step to a grid multiple" of 25 mils (`MIN_GRID`), `KiROUND( pin_step / MIN_GRID ) * MIN_GRID`. */
@@ -114,6 +131,13 @@ export const DEFAULT_PREFERENCES: Preferences = {
   allowUnconstrainedPinSwaps: false,
   symRepeatPinStepMils: 100,
   symRepeatLabelDelta: 1,
+  fpRotationStepDeg: 90,
+  fpMagneticPads: true,
+  fpMagneticGraphics: true,
+  fpArcEditMode: 0,
+  fpInvertXAxis: false,
+  fpInvertYAxis: false,
+  fpTextGraphics: null,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH">;
@@ -216,6 +240,13 @@ export function sanitizePreferences(raw: unknown): Preferences {
     allowUnconstrainedPinSwaps: bool(o.allowUnconstrainedPinSwaps, d.allowUnconstrainedPinSwaps),
     symRepeatPinStepMils: sanitizePinStepMils(o.symRepeatPinStepMils, d.symRepeatPinStepMils),
     symRepeatLabelDelta: clampInt(o.symRepeatLabelDelta, -10, 10, d.symRepeatLabelDelta),
+    fpRotationStepDeg: sanitizeRotationStep(o.fpRotationStepDeg, d.fpRotationStepDeg),
+    fpMagneticPads: bool(o.fpMagneticPads, d.fpMagneticPads),
+    fpMagneticGraphics: bool(o.fpMagneticGraphics, d.fpMagneticGraphics),
+    fpArcEditMode: clampInt(o.fpArcEditMode, 0, 2, d.fpArcEditMode),
+    fpInvertXAxis: bool(o.fpInvertXAxis, d.fpInvertXAxis),
+    fpInvertYAxis: bool(o.fpInvertYAxis, d.fpInvertYAxis),
+    fpTextGraphics: o.fpTextGraphics && typeof o.fpTextGraphics === "object" ? (o.fpTextGraphics as TextGraphicsDefaults) : d.fpTextGraphics,
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

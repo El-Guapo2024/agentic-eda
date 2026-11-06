@@ -2302,7 +2302,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SchMove(c) => c.kind(),
         Cmd::PcbItem(c) => c.kind(),
         Cmd::FpItem(_) => "footprint",
-        Cmd::FpEditor(eda_ops::fp_editor::FpEditorCmd::OpenFromBoard { .. } | eda_ops::fp_editor::FpEditorCmd::SetSettings { .. }) => "footprint",
+        Cmd::FpEditor(eda_ops::fp_editor::FpEditorCmd::OpenFromBoard { .. } | eda_ops::fp_editor::FpEditorCmd::SetSettings { .. } | eda_ops::fp_editor::FpEditorCmd::ImportGraphics { .. }) => "footprint",
         Cmd::FpEditor(eda_ops::fp_editor::FpEditorCmd::SaveToBoard { .. }) => "update-footprint",
         Cmd::Embedded(c) => c.kind(),
         Cmd::Microwave(c) => c.kind(),

@@ -9,6 +9,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
+import { useFpApi, useFpState } from "../state/footprintEditorStore";
+import { fetchFootprint } from "../api/client";
+import { FP_EDITOR_LAYERS } from "../kicad-port/fpDrawDefaults";
 import { fetchLibrarySymbol } from "../api/client";
 import { closeImportGraphics, openImportGraphics, useImportGraphicsDialog, type PickedFile } from "../state/importDialogs";
 import { DialogShell } from "./pcbDialogKit";
@@ -23,17 +26,25 @@ let lastSchValues: SchImportValues | null = null;
 export function ImportGraphicsDialog() {
   const dialog = useImportGraphicsDialog();
   if (!dialog) return null;
-  if (dialog.editor === "pcb") return <PcbImportGraphics file={dialog.file} />;
+  if (dialog.editor === "pcb" || dialog.editor === "footprint") return <PcbImportGraphics editor={dialog.editor} file={dialog.file} />;
   if (dialog.editor === "schematic" || dialog.editor === "symbol") return <SchImportGraphics editor={dialog.editor} file={dialog.file} />;
   return null;
 }
 
-function PcbImportGraphics({ file }: { file: PickedFile | null }) {
+/**
+ * `DIALOG_IMPORT_GRAPHICS` on the board, and in the Footprint Editor (`DRAWING_TOOL::PlaceImportedGraphics` with the footprint the items' parent, UI-LEFT F8): there the layers are the
+ * editor's, the items are the footprint's (`fp_editor import_graphics`, one undo step of the editor), and the interactive placement carries them on the editor's canvas.
+ */
+function PcbImportGraphics({ file, editor }: { file: PickedFile | null; editor: "pcb" | "footprint" }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
+  const fpState = useFpState();
+  const fpApi = useFpApi();
+  const inFootprint = editor === "footprint";
+  const activeLayer = inFootprint ? fpState.activeLayer : state.activeLayer;
   const units = state.units;
-  const [values, setValues] = useState<ImportValues>(() => lastValues ?? { ...defaultImportValues(units), layer: state.activeLayer ?? "Dwgs.User" });
+  const [values, setValues] = useState<ImportValues>(() => lastValues ?? { ...defaultImportValues(units), layer: activeLayer ?? "Dwgs.User" });
   const [info, setInfo] = useState<GraphicsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -57,8 +68,8 @@ function PcbImportGraphics({ file }: { file: PickedFile | null }) {
       .catch((e) => request.current === mine && setInfo({ ok: false, message: e instanceof Error ? e.message : String(e) }));
   }, [file, format, isDxf, values.dxfUnits, scale]);
 
-  const layers = importLayers(state.board?.layers ?? ["F.Cu", "B.Cu"]);
-  const polygonOutline = !!state.board && !state.board.outline_is_shapes;
+  const layers = inFootprint ? [...FP_EDITOR_LAYERS] : importLayers(state.board?.layers ?? ["F.Cu", "B.Cu"]);
+  const polygonOutline = !inFootprint && !!state.board && !state.board.outline_is_shapes;
   const onEdge = values.setLayer && values.layer === "Edge.Cuts";
 
   const accept = (f: PickedFile | null) => {
@@ -68,7 +79,7 @@ function PcbImportGraphics({ file }: { file: PickedFile | null }) {
       setError("There is no plugin to handle this file type.");
       return;
     }
-    openImportGraphics("pcb", f);
+    openImportGraphics(editor, f);
   };
   const browse = async () => {
     try {
@@ -92,7 +103,7 @@ function PcbImportGraphics({ file }: { file: PickedFile | null }) {
       setError("There is no plugin to handle this file type.");
       return;
     }
-    const built = buildImportCmd({ format, text: file.text, values, units, activeLayer: state.activeLayer, info, polygonOutline });
+    const built = buildImportCmd({ format, text: file.text, values, units, activeLayer, info, polygonOutline });
     if (!built.ok) {
       setError(built.error);
       return;
@@ -103,6 +114,28 @@ function PcbImportGraphics({ file }: { file: PickedFile | null }) {
     }
     setBusy(true);
     lastValues = values;
+    if (inFootprint) {
+      // the footprint's items: put with the picture's top-left at the footprint's origin, then carried to where a click drops them (Escape undoes the import)
+      const name = fpApi.getState().name;
+      const before = fpApi.getState().footprint;
+      if (!name || !before) {
+        setBusy(false);
+        setError("Open a footprint first.");
+        return;
+      }
+      const { op: _op, ...importArgs } = built.build(built.interactive ? { x: 0, y: 0 } : null);
+      const had = new Set([...before.graphics.map((g) => g.id), ...before.texts.map((t) => t.id)]);
+      const ok = await fpApi.cmd({ op: "fp_editor", verb: "import_graphics", footprint: name, import: importArgs });
+      setBusy(false);
+      if (!ok) return;
+      const after = await fetchFootprint(name);
+      const made = [...after.graphics.map((g) => g.id), ...after.texts.map((t) => t.id)].filter((id): id is string => !!id && !had.has(id));
+      if (built.interactive && made.length > 0) fpApi.pickUp(made);
+      const warnings = (info?.messages ?? []).map((m) => m.text);
+      if (warnings.length > 0) dispatch({ type: "TOAST", message: `Items in the imported file could not be handled properly. ${warnings.join(" ")}`, kind: "info" });
+      closeImportGraphics();
+      return;
+    }
     const placed = await api.placeNewItems((at) => built.build(at), built.interactive);
     setBusy(false);
     if (!placed) return; // the refusal is on screen as a toast

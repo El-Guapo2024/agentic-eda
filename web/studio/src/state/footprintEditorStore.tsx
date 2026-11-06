@@ -475,6 +475,11 @@ export interface FootprintEditorApi {
    * (Escape then reverts the duplicate). With `increment` each pad takes the next free pad number.
    */
   duplicateSelection: (increment: boolean) => Promise<void>;
+  /**
+   * The items `ids` just made, selected and carried by the Move tool until a click drops them (Escape undoes what made them): `doMoveSelection` after a Duplicate, and
+   * the interactive placement of Import Graphics (`DRAWING_TOOL::PlaceImportedGraphics`, UI-LEFT F8).
+   */
+  pickUp: (ids: string[], message?: string) => void;
   /** Commit a finished move (a drag-drop or a Duplicate pick-up) of `refs` by `(dxNm, dyNm)` as ONE undo step -- each ref is looked up, so a mixed selection works. */
   commitMove: (refs: string[], dxNm: number, dyNm: number) => Promise<void>;
   /** Back to "nothing open" -- leaving the tab, or picking a different footprint before this one loaded. */
@@ -521,7 +526,7 @@ export interface FootprintEditorApi {
   deleteItems: (ids: readonly string[]) => Promise<void>;
   setAnchor: (at: PointXY) => Promise<void>;
   /** `EDIT_TOOL::Rotate` (R / Shift+R) of the selection, any kind of item, about its pivot (kicad-port/fpItems.ts), one undo step. `snap` puts a several-item pivot on the grid. */
-  rotateSelection: (quarterTurnsCcw: number, snap?: Snap) => Promise<void>;
+  rotateSelection: (quarterTurnsCcw: number, snap?: Snap, stepDeg?: number) => Promise<void>;
   /** `EDIT_TOOL::Mirror` (`mirrorH` left-right, `mirrorV` top-bottom) of the selection, one undo step. */
   mirrorSelection: (direction: FlipDirectionWire, snap?: Snap) => Promise<void>;
   /** `PCB_GROUP_TOOL::Group` (Ctrl+G) / `GROUP_TOOL::Ungroup` (Ctrl+Shift+G) of the selection; the new group is selected. */
@@ -674,6 +679,13 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       dispatch({ type: "SET_MOVE_ORIGIN", at });
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
       dispatch({ type: "TOAST", message: `Duplicated ${created.length} item(s)`, kind: "info" });
+    },
+    pickUp: (ids, message) => {
+      dispatch({ type: "SET_SELECTION", refs: ids });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorNm });
+      dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
+      if (message) dispatch({ type: "TOAST", message, kind: "info" });
     },
     commitMove: async (refs, dxNm, dyNm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
@@ -850,10 +862,10 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!name) return;
       await runCmd({ op: "set_footprint_anchor", name, at });
     },
-    rotateSelection: async (quarterTurnsCcw, snap) => {
+    rotateSelection: async (quarterTurnsCcw, snap, stepDeg) => {
       const st = stateRef.current;
       if (!st.name || !st.footprint) return;
-      const cmd = fpRotateCmd(st.footprint, st.name, [...st.selection], quarterTurnsCcw, snap);
+      const cmd = fpRotateCmd(st.footprint, st.name, [...st.selection], quarterTurnsCcw, snap, stepDeg);
       if (cmd) await runCmd(cmd);
     },
     mirrorSelection: async (direction, snap) => {
