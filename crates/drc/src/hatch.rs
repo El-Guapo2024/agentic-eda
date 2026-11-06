@@ -223,6 +223,16 @@ fn text_hull(spec: &TextSpec, margin: Nm) -> Option<(LineChain, [i64; 4])> {
 /// The knockout of a free board text.
 fn text_knockout(design: &Design, text: &Text, margin: Nm) -> Option<(LineChain, [i64; 4])> {
     let extra = design.drawings.as_ref().and_then(|d| d.text_extra(&text.id));
+    text_knockout_with(text, extra, margin)
+}
+
+/// `PCB_TEXT::TransformShapeToPolygon( aBuffer, layer, 0, .., ERROR_OUTSIDE )` of a free board text with its settings: `buildBoundingHull` of its strokes, no margin. The
+/// polygon `A.enclosedByArea( .. )` subtracts an area from (the multichannel tool, `eda_ops`' `multichannel_poly.rs`); `None` for a text with no ink.
+pub fn text_shape(text: &Text, extra: Option<&eda_model::board_text::TextExtra>) -> Option<LineChain> {
+    text_knockout_with(text, extra, Nm::ZERO).map(|(hull, _)| hull)
+}
+
+fn text_knockout_with(text: &Text, extra: Option<&eda_model::board_text::TextExtra>, margin: Nm) -> Option<(LineChain, [i64; 4])> {
     let spec = TextSpec {
         text: &text.content,
         pos: text.at,
