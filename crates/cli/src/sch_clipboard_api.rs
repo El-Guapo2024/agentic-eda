@@ -397,4 +397,59 @@ mod tests {
         assert_eq!(d.schematic.as_ref().unwrap().symbols.len(), 3, "the root is untouched");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The fields of the placed symbol `key` where the sheet draws them: `(name, anchor, visible, vertical)`.
+    fn page_fields(sch: &eda_model::ir::SchematicSection, model: &ConstraintModel, key: &str) -> Vec<(String, (i64, i64), bool, bool)> {
+        let ctx = eda_engine::fields_edit::OwnerCtx::new(sch, model, key).unwrap_or_else(|| panic!("{key} has fields"));
+        ctx.page_fields(sch).into_iter().map(|f| (f.name.clone(), (f.at.0.round() as i64, f.at.1.round() as i64), f.visible, f.vertical)).collect()
+    }
+
+    /// UI-LEFT-2 SS8: Copy and Paste carry every field where and as it was (`saveSymbol` writes each `SCH_FIELD`'s own `(at ..)`, look and visibility; `Paste` keeps
+    /// them): a Value moved by hand, a user field shown and placed, its looks; the pasted symbol is not autoplaced again, and one whose fields were autoplaced is.
+    #[test]
+    fn a_pasted_symbol_keeps_its_fields_where_and_as_they_were() {
+        let dir = scratch("field_places");
+        setup(&dir);
+        let step_json = |v: Value| board::step(&dir, serde_json::from_value::<Cmd>(v).expect("a command"), false, "test").unwrap();
+        // R1: its Value moved by hand, turned up the sheet; a user field MPN added, shown, placed and set bold
+        let (_, d, model) = board::load(&dir).unwrap();
+        let value = page_fields(d.schematic.as_ref().unwrap(), &model, "R1").into_iter().find(|f| f.0 == "Value").unwrap();
+        step_json(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R1:Value", "at": { "x": value.1 .0 + 5_080_000, "y": value.1 .1 + 2_540_000 }, "vertical": true }));
+        step_json(json!({ "op": "sch_edit", "verb": "add_user_field", "id": "R1", "name": "MPN", "text": "RC0603FR-0710KL" }));
+        step_json(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R1:MPN", "visible": true, "at": { "x": value.1 .0 - 7_620_000, "y": value.1 .1 + 10_160_000 }, "bold": true }));
+        let (_, d, model) = board::load(&dir).unwrap();
+        let sch = d.schematic.as_ref().unwrap();
+        assert!(!sch.extras.fields_autoplaced.contains_key("R1"), "a field moved by hand takes the symbol out of the autoplaced ones");
+        let before = page_fields(sch, &model, "R1");
+        let c1_before = page_fields(sch, &model, "C1");
+
+        let copy = post(copy, &dir, json!({ "ids": ["R1", "C1"] }));
+        assert_eq!(copy["ok"], true, "{copy}");
+        let text = copy["text"].as_str().unwrap();
+        let r1 = &text[text.find("(lib_id \"Device:R\")").unwrap()..];
+        let r1 = &r1[..r1.find("(instances").unwrap()];
+        assert!(!r1.contains("(fields_autoplaced yes)"), "R1's fields were placed by hand: {r1}");
+        assert!(r1.contains("(property \"MPN\" \"RC0603FR-0710KL\"") && !r1[r1.find("\"MPN\"").unwrap()..].split("(property").next().unwrap().contains("hide"), "MPN is shown: {r1}");
+        let parsed = post(parse, &dir, json!({ "text": text, "mode": "unique" }));
+        assert_eq!(parsed["ok"], true, "{parsed}");
+        let (dx, dy) = (mm(50.8), mm(25.4));
+        let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"].clone(), "dx": dx, "dy": dy, "mode": "unique" })).unwrap();
+        board::step(&dir, cmd, false, "test").unwrap();
+        let (_, d, model) = board::load(&dir).unwrap();
+        let sch = d.schematic.as_ref().unwrap();
+        let new_r = sch.symbols.iter().find(|s| s.lib_id == "Device:R" && s.id != "R1").expect("the pasted resistor").id.clone();
+        let new_c = sch.symbols.iter().find(|s| s.lib_id == "Device:C" && s.id != "C1").expect("the pasted capacitor").id.clone();
+        let moved = |f: &Vec<(String, (i64, i64), bool, bool)>| f.iter().map(|(n, (x, y), v, vert)| (n.clone(), (x + dx.get(), y + dy.get()), *v, *vert)).collect::<Vec<_>>();
+        let close = |a: &Vec<(String, (i64, i64), bool, bool)>, b: &Vec<(String, (i64, i64), bool, bool)>| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| p.0 == q.0 && p.2 == q.2 && p.3 == q.3 && (p.1 .0 - q.1 .0).abs() <= 100 && (p.1 .1 - q.1 .1).abs() <= 100);
+        // (the copy has the library's Description too, hidden, as every `SCH_SYMBOL` has the mandatory field: the clipboard carries it)
+        let after: Vec<_> = page_fields(sch, &model, &new_r).into_iter().filter(|f| f.0 != "Description" || f.2).collect();
+        assert!(close(&after, &moved(&before)), "every field of the copy is where R1's is, moved by the paste:\n{after:?}\n{:?}", moved(&before));
+        assert!(!sch.extras.fields_autoplaced.contains_key(&new_r), "the copy is not autoplaced again");
+        let mpn = sch.field_layout[&new_r].iter().find(|p| p.name == "MPN").expect("MPN's place");
+        assert!(mpn.visible && mpn.bold, "shown and bold as it was");
+        let c_after: Vec<_> = page_fields(sch, &model, &new_c).into_iter().filter(|f| f.0 != "Description" || f.2).collect();
+        assert!(close(&c_after, &moved(&c1_before)), "C1's autoplaced fields too:\n{c_after:?}\n{:?}", moved(&c1_before));
+        assert!(sch.extras.fields_autoplaced.contains_key(&new_c), "and C1's copy stays autoplaced");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

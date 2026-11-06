@@ -777,6 +777,19 @@ pub(crate) fn fold_first_path_references(design: &mut eda_model::ir::Design) {
 /// of its box (what the `.kicad_sch` writer bakes the symbol against): each symbol is moved there, so that its pins stay where the file has them, and the
 /// screen is in the design's frame after. `engine_of` is the engine's symbol of each `lib_id` the screen names (`LibMerge::engine_of`), by the name the
 /// screen gives it. A screen already in the design's frame is left alone.
+/// The stored places of a symbol's fields after its `at` moved by `(-ox, -oy)` with nothing else changed, so each field stays where it is on the sheet: a
+/// place is an offset from `at` taken through the symbol's turn and mirror (`eda_engine::fields::page_field`, `kicad_turn`), so it grows by the move taken
+/// back through them (`unbake`; the bake is linear).
+pub(crate) fn shift_field_places(places: &mut [eda_model::ir::FieldPlacement], s: &eda_model::ir::SymbolInstance, ox: Nm, oy: Nm) {
+    let (rot, mirrored) = eda_engine::symgeom::kicad_turn(s.rot, s.mirrored, s.mirror_y);
+    let (dx, dy) = eda_engine::symgeom::unbake(rot, mirrored, 0.0, ox.as_f64(), oy.as_f64());
+    let (dx, dy) = (Nm::kiround(dx), Nm::kiround(dy));
+    for p in places.iter_mut() {
+        p.dx += dx;
+        p.dy += dy;
+    }
+}
+
 pub(crate) fn place_by_box_corner(sec: &mut SchematicSection, engine_of: &BTreeMap<String, eda_model::LibSymbol>) {
     if !sec.imported_from_kicad {
         return;
@@ -792,6 +805,11 @@ pub(crate) fn place_by_box_corner(sec: &mut SchematicSection, engine_of: &BTreeM
         let was = s.at;
         s.at = Point { x: s.at.x - ox, y: s.at.y - oy };
         moved.push(((was, s.unit), s.at));
+        // its fields stay where they are on the sheet: a stored place is measured from `at` through the symbol's turn and mirror
+        // (`eda_engine::fields::page_field`), so it takes the move back through them
+        if let Some(places) = sec.field_layout.get_mut(&eda_model::ir::field_key(&s.id, s.unit)) {
+            shift_field_places(places, s, ox, oy);
+        }
     }
     // The references each sheet path gives the symbols (`SymbolPathOverride`, which names its symbol by where it is and its unit) go with them: KiCad keeps
     // them on the symbol itself (`SCH_SYMBOL::m_instances`, `GetRef( &aSheet )`).

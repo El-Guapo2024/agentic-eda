@@ -10,8 +10,9 @@
 //! ([`crate::import_kicad_sch`]) on the fragment wrapped in a file header, so a symbol, a wire or a label means here on paste exactly what it
 //! means in a file; the library symbols come through the Symbol Editor's reader, which keeps hidden pins and fills.
 //!
-//! What the schematic IR does not hold is not written and not read: a field's position and size, a wire's stroke. The
-//! fields of a copied symbol are put beside it and marked `(fields_autoplaced yes)`, so KiCad lays them out when the pasted symbol is moved.
+//! The fields of a copied symbol and power symbol are written where the sheet draws them, with their looks and visibility (`saveSymbol`: every `SCH_FIELD`'s own
+//! `(at ..)` and `(effects ..)`), and `(fields_autoplaced yes)` only for an item whose fields Autoplace Fields placed; the reader keeps every field's place, so a paste
+//! puts them where they were (UI-LEFT-2 SS8). A symbol with no part to place its fields by has them beside it, autoplaced.
 
 use crate::sexpr;
 use crate::{duid_plain, fmt_mm_f, sch_mm, note_item_uuid, sexpr_str};
@@ -349,6 +350,18 @@ fn sheet_box_mm(c: &CopiedSymbol<'_>) -> (f64, f64, f64, f64) {
     (min(|p| p.0), min(|p| p.1), max(|p| p.0), max(|p| p.1))
 }
 
+/// The fields of a placed symbol where the sheet draws them (`eda_engine::fields::symbol_fields`: the places the sheet keeps, else Autoplace Fields'), the user
+/// fields among them, as the `.kicad_sch` writer has them.
+fn placed_fields(input: &CopyInput<'_>, sym: &SymbolInstance, part: &eda_model::Part) -> Vec<eda_engine::fields::PageField> {
+    let mut s = sym.clone();
+    if s.lib_id.is_empty() {
+        s.lib_id = format!("eda:{}", s.id);
+    }
+    let resolved = input.model.real_symbol_of_instance(input.section, &s, part);
+    let geom = eda_engine::symgeom::SymbolGeom::of_in(input.section, &s, part, resolved.as_ref());
+    eda_engine::fields::symbol_fields(input.section, &s, Some(part), resolved.as_ref(), &geom)
+}
+
 /// The symbol form (`SCH_IO_KICAD_SEXPR::saveSymbol` with `aForClipboard`).
 fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, lib_name: Option<&str>) {
     let sym = c.sym;
@@ -376,26 +389,56 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, l
     // the symbol's own "Exclude from position files" (`FormatBool( "in_pos_files", !GetExcludedFromPosFiles() )`, r4 B4-M2)
     let _ = writeln!(out, "\t\t(in_pos_files {})", yes(!input.section.extras.excluded_from_pos_files.contains(&eda_model::ir::field_key(&sym.id, sym.unit))));
     let _ = writeln!(out, "\t\t(dnp {})", yes(sym.dnp));
-    let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
+    // the fields where the sheet draws them (`saveSymbol` writes every `SCH_FIELD` with its own `(at ..)`, look and visibility), so a paste keeps them where and as they
+    // were; `(fields_autoplaced yes)` only for a symbol whose fields Autoplace Fields put where they are (`GetFieldsAutoplaced()`), which a sheet keeping no places for
+    // them has too (they are placed live)
+    let key = eda_model::ir::field_key(&sym.id, sym.unit);
+    let placed = (!input.section.imported_from_kicad).then(|| part.map(|p| placed_fields(input, sym, p))).flatten();
+    if placed.is_none() || input.section.extras.fields_autoplaced.contains_key(&key) || !input.section.field_layout.contains_key(&key) {
+        let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
+    }
     let uuid = duid_plain(&format!("clipboard:symbol:{}:{}", sym.id, sym.unit));
     note_item_uuid(&sym.id, &uuid);
     let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
 
-    let (min_x, min_y, max_x, max_y) = sheet_box_mm(c);
-    let cx = (min_x + max_x) / 2.0;
     let value = if !sym.value.is_empty() { sym.value.clone() } else { part.and_then(|p| p.value.clone()).unwrap_or_else(|| sym.id.clone()) };
     let footprint = if !sym.footprint.is_empty() { sym.footprint.clone() } else { part.and_then(|p| p.footprint.clone()).unwrap_or_default() };
     let datasheet = if !sym.datasheet.is_empty() { sym.datasheet.clone() } else { c.engine.datasheet.clone() };
-    property(out, "Reference", &reference, (cx, min_y - 1.27), false);
-    property(out, "Value", &value, (cx, max_y + 1.27), false);
-    property(out, "Footprint", &footprint, (ox, oy), true);
-    property(out, "Datasheet", &datasheet, (ox, oy), true);
-    if !c.engine.description.is_empty() {
-        property(out, "Description", &c.engine.description, (ox, oy), true);
-    }
-    if let Some(fields) = input.section.user_fields.get(&sym.id) {
-        for (name, text) in fields {
-            property(out, name, text, (ox, oy), true);
+    match placed {
+        Some(mut fields) => {
+            // the texts the symbol is copied with: the reference of the path the copy is made on, the instance's own value and links, else the part's
+            for f in fields.iter_mut() {
+                match f.name.as_str() {
+                    "Reference" => f.text = reference.clone(),
+                    "Value" => f.text = value.clone(),
+                    "Footprint" => f.text = footprint.clone(),
+                    "Datasheet" => f.text = datasheet.clone(),
+                    _ => {}
+                }
+            }
+            for f in &fields {
+                crate::write_page_field_of(out, input.section, &key, f);
+            }
+            if !c.engine.description.is_empty() && !fields.iter().any(|f| f.name.eq_ignore_ascii_case("Description")) {
+                property(out, "Description", &c.engine.description, (ox, oy), true);
+            }
+        }
+        None => {
+            // a symbol with no part, or a sheet read from a KiCad file and kept in its frame: beside the symbol, laid out by KiCad when it is moved
+            let (min_x, min_y, max_x, max_y) = sheet_box_mm(c);
+            let cx = (min_x + max_x) / 2.0;
+            property(out, "Reference", &reference, (cx, min_y - 1.27), false);
+            property(out, "Value", &value, (cx, max_y + 1.27), false);
+            property(out, "Footprint", &footprint, (ox, oy), true);
+            property(out, "Datasheet", &datasheet, (ox, oy), true);
+            if !c.engine.description.is_empty() {
+                property(out, "Description", &c.engine.description, (ox, oy), true);
+            }
+            if let Some(fields) = input.section.user_fields.get(&sym.id) {
+                for (name, text) in fields {
+                    property(out, name, text, (ox, oy), true);
+                }
+            }
         }
     }
     let mut seen: Vec<&str> = Vec::new();
@@ -429,20 +472,36 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let _ = writeln!(out, "\t\t(at {} {} {})", fmt_mm_f(ox), fmt_mm_f(oy), fmt_mm_f(angle));
     let _ = writeln!(out, "\t\t(unit 1)");
     let _ = writeln!(out, "\t\t(body_style 1)");
-    let _ = writeln!(out, "\t\t(exclude_from_sim no)");
-    // KiCad's power library symbols are `(in_bom yes)` (r2 D-C7); a power symbol is kept out of the BOM by its `#` reference
-    let _ = writeln!(out, "\t\t(in_bom yes)");
-    let _ = writeln!(out, "\t\t(on_board yes)");
-    let _ = writeln!(out, "\t\t(in_pos_files yes)");
-    let _ = writeln!(out, "\t\t(dnp no)");
-    let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
+    // its flags as its Symbol Properties set them (`SchExtras::power_props`); KiCad's power library symbols are `(in_bom yes)` (r2 D-C7), a power symbol is kept
+    // out of the BOM by its `#` reference
+    let sch = input.section;
+    let props = sch.extras.power_props.get(&p.id).cloned().unwrap_or_default();
+    let yes = |b: bool| if b { "yes" } else { "no" };
+    let _ = writeln!(out, "\t\t(exclude_from_sim {})", yes(props.exclude_from_sim));
+    let _ = writeln!(out, "\t\t(in_bom {})", yes(!props.exclude_from_bom));
+    let _ = writeln!(out, "\t\t(on_board {})", yes(!props.exclude_from_board));
+    let _ = writeln!(out, "\t\t(in_pos_files {})", yes(!props.exclude_from_pos_files));
+    let _ = writeln!(out, "\t\t(dnp {})", yes(props.dnp));
+    // `(fields_autoplaced yes)` only where Autoplace Fields put them (`GetFieldsAutoplaced()`): a power symbol keeps a place for its Reference and Value only
+    // once they were placed by hand (`field_layout` under its id; r4 D4-L2)
+    if sch.extras.fields_autoplaced.contains_key(&p.id) || !sch.field_layout.contains_key(&p.id) {
+        let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
+    }
     let uuid = duid_plain(&format!("clipboard:power:{}", p.id));
     note_item_uuid(&p.id, &uuid);
     let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
-    property(out, "Reference", &p.id, (ox, oy), true);
-    property(out, "Value", &p.net, (ox, oy - 2.54), false);
-    property(out, "Footprint", "", (ox, oy), true);
-    property(out, "Datasheet", "", (ox, oy), true);
+    // its Reference and Value where the sheet draws them, as the `.kicad_sch` writer has them (from its pin, through its turn)
+    for (place, text) in eda_engine::fields::power_placements(sch, p) {
+        let (dx, dy) = eda_engine::symgeom::bake(p.rot, false, 0.0, place.dx.as_f64(), place.dy.as_f64());
+        let look = crate::FieldLook::of(&place).with_font_look(sch, &p.id, &place.name);
+        crate::write_field_text(out, &place.name, &text, (p.at.x.as_f64() + dx, p.at.y.as_f64() + dy), place.angle == 90_000, eda_engine::fields::to_hj(place.h), eda_engine::fields::to_vj(place.v), !place.visible, &look);
+    }
+    // its Footprint, Datasheet and user fields (`SchExtras::power_props`), at its origin
+    property(out, "Footprint", &props.footprint, (ox, oy), true);
+    property(out, "Datasheet", &props.datasheet, (ox, oy), true);
+    for f in &props.fields {
+        property(out, &f.name, &f.text, (ox, oy), !f.visible);
+    }
     let _ = writeln!(out, "\t\t(pin \"1\" (uuid \"{}\"))", duid_plain(&format!("clipboard:power-pin:{}", p.id)));
     let _ = writeln!(out, "\t\t(instances");
     let _ = writeln!(out, "\t\t\t(project {}", sexpr_str(input.project));

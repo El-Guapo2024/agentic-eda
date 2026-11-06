@@ -1218,7 +1218,7 @@ fn justify_tokens(h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::
 /// How a field's text is set in the file beyond what it says and where it is: the size, bold, italic (`(font (size) (bold yes) (italic yes))`), whether the
 /// name is shown and whether Autoplace Fields may move it (`(show_name yes)`, `(do_not_autoplace yes)`).
 #[derive(Debug, Clone, PartialEq)]
-struct FieldLook {
+pub(crate) struct FieldLook {
     size_nm: f64,
     bold: bool,
     italic: bool,
@@ -1232,7 +1232,7 @@ struct FieldLook {
 impl FieldLook {
     const DEFAULT: FieldLook = FieldLook { size_nm: 1_270_000.0, bold: false, italic: false, show_name: false, do_not_autoplace: false, face: None, color: None };
 
-    fn of(p: &FieldPlacement) -> FieldLook {
+    pub(crate) fn of(p: &FieldPlacement) -> FieldLook {
         FieldLook { size_nm: p.text_size_nm().as_f64(), bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace, ..FieldLook::DEFAULT }
     }
 
@@ -1241,7 +1241,7 @@ impl FieldLook {
     }
 
     /// With the font face and colour the item keyed `key` keeps for its field `name` (`SchExtras::field_looks`).
-    fn with_font_look(mut self, sch: &eda_model::ir::SchematicSection, key: &str, name: &str) -> FieldLook {
+    pub(crate) fn with_font_look(mut self, sch: &eda_model::ir::SchematicSection, key: &str, name: &str) -> FieldLook {
         if let Some(l) = sch.extras.field_look(key, name) {
             self.face = l.font.clone();
             self.color = l.color;
@@ -1261,7 +1261,7 @@ impl FieldLook {
 /// One `(property ...)` of a symbol, a power symbol or a sheet: the text, its anchor (nanometres) and angle, how it is justified, and
 /// whether it is hidden.
 #[allow(clippy::too_many_arguments)]
-fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), vertical: bool, h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::VJustify, hide: bool, look: &FieldLook) {
+pub(crate) fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), vertical: bool, h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::VJustify, hide: bool, look: &FieldLook) {
     let hide = if hide { " (hide yes)" } else { "" };
     let flags = format!("{}{}", if look.show_name { " (show_name yes)" } else { "" }, if look.do_not_autoplace { " (do_not_autoplace yes)" } else { "" });
     writeln!(
@@ -1326,7 +1326,7 @@ fn write_symbol_variants(out: &mut String, sch: &eda_model::ir::SchematicSection
 
 /// One field of a symbol, power symbol or sheet, where it is on the sheet, with the font face and colour the item keyed `key` keeps for it
 /// (`SchExtras::field_looks`).
-fn write_page_field_of(out: &mut String, sch: &eda_model::ir::SchematicSection, key: &str, f: &eda_engine::fields::PageField) {
+pub(crate) fn write_page_field_of(out: &mut String, sch: &eda_model::ir::SchematicSection, key: &str, f: &eda_engine::fields::PageField) {
     write_field_text(out, &f.name, &f.text, f.at, f.vertical, f.h, f.v, !f.visible, &FieldLook::of_page(f).with_font_look(sch, key, &f.name));
 }
 

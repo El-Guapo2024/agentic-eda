@@ -190,20 +190,28 @@ impl<'a> Board<'a> {
 
         // ---- the items ----
         let mut new_symbols: Vec<SymbolInstance> = Vec::new();
+        // the places of each pasted symbol's fields (`SCH_FIELD`'s own `(at ..)` on the clipboard, which `Paste` keeps: the fields come in where they were,
+        // and only a symbol whose fields were autoplaced has `(fields_autoplaced yes)`), in the frame of the `at` it gets here
+        let mut new_places: Vec<(String, Vec<eda_model::ir::FieldPlacement>)> = Vec::new();
         for (s, reference) in src.symbols.iter().zip(symbol_refs) {
             let target = lib_name.get(&s.lib_id).cloned().unwrap_or_else(|| s.lib_id.clone());
             // Where the sheet wants `at`: KiCad's origin, or (a sheet this project drew) the corner of the symbol's box.
             let origin = Point { x: s.at.x + dx, y: s.at.y + dy };
-            let at = match engine_of.get(&s.lib_id) {
+            let (at, (ox, oy)) = match engine_of.get(&s.lib_id) {
                 Some(engine) if !imported => {
                     // the box of the body style the symbol was copied in
                     let drawn = if src.body_style_of(s) > 1 && engine.has_alternate_body() { engine.in_style(src.body_style_of(s)).into_owned() } else { engine.clone() };
                     let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
                     let (ox, oy) = place_offset_nm(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
-                    Point { x: origin.x - ox, y: origin.y - oy }
+                    (Point { x: origin.x - ox, y: origin.y - oy }, (ox, oy))
                 }
-                _ => origin,
+                _ => (origin, (Nm::ZERO, Nm::ZERO)),
             };
+            if let Some(places) = src.field_layout.get(&eda_model::ir::field_key(&s.id, s.unit)) {
+                let mut places = places.clone();
+                crate::sch_sheets::shift_field_places(&mut places, s, ox, oy);
+                new_places.push((eda_model::ir::field_key(reference, s.unit), places));
+            }
             new_symbols.push(SymbolInstance { id: reference.clone(), at, lib_id: target, ..s.clone() });
         }
         let mut new_powers: Vec<PowerSymbol> = Vec::new();
@@ -294,6 +302,13 @@ impl<'a> Board<'a> {
             if let Some(looks) = src.extras.field_looks.get(&p.id) {
                 sch.extras.field_looks.insert(new.clone(), looks.clone());
             }
+            // and its Reference and Value where they were placed by hand (`field_layout` under its id: from its pin, which the paste moves with it)
+            if let Some(places) = src.field_layout.get(&p.id) {
+                sch.field_layout.insert(new.clone(), places.clone());
+            }
+            if let Some(&algo) = src.extras.fields_autoplaced.get(&p.id) {
+                sch.extras.fields_autoplaced.insert(new.clone(), algo);
+            }
         }
         for (k, old) in wire_olds.iter().enumerate() {
             if let Some(w) = sch.wires.get(first_wire + k) {
@@ -342,6 +357,15 @@ impl<'a> Board<'a> {
                 if let Some(new) = sch.junctions.iter().find(|n| n.at == at) {
                     remap.insert(j.id.clone(), new.id.clone());
                 }
+            }
+        }
+        // ... and its fields where they were, autoplaced again later only when they were autoplaced (`SCH_ITEM::GetFieldsAutoplaced`)
+        for (key, places) in new_places {
+            sch.field_layout.insert(key, places);
+        }
+        for (s, new) in src.symbols.iter().zip(symbol_refs) {
+            if let Some(&algo) = src.extras.fields_autoplaced.get(&eda_model::ir::field_key(&s.id, s.unit)) {
+                sch.extras.fields_autoplaced.insert(eda_model::ir::field_key(new, s.unit), algo);
             }
         }
         // a pasted symbol keeps the body style it was copied in (`SCH_SYMBOL::GetBodyStyle`)
