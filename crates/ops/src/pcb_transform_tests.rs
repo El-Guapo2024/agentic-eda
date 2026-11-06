@@ -682,3 +682,41 @@ fn flip_takes_a_front_user_layer_to_its_back_pair() {
     b.apply(&Cmd::FlipItems { ids: ids(&["txt_a"]), pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight }).unwrap();
     assert!(!drawings(&b).texts[0].mirror);
 }
+
+/// UI-LEFT P24 (r2 C4's left): `FOOTPRINT::Flip` hands the flip to its items, so a footprint's line on a user layer typed front goes to that layer's back
+/// pair, and a text there goes over and is mirrored (`BOARD::FlipLayer`, `PCB_TEXT::Flip`'s `IsSideSpecific`); the part gets its own copy of the
+/// definition, the other part on the same footprint keeps the shared one. Flipped back, the line is on the front layer again.
+#[test]
+fn flip_takes_a_footprints_drawings_on_a_typed_user_layer_to_the_pair() {
+    use eda_model::fp_art::{FpShape, FpText};
+    use eda_model::layers::LayerType;
+    let mut m = model(&["F.Cu", "B.Cu"]);
+    let ls = &mut m.board.layer_setup;
+    ls.types.insert("User.1".into(), LayerType::Front);
+    ls.types.insert("User.2".into(), LayerType::Back);
+    ls.names.insert("User.1".into(), "F.Notes".into());
+    ls.names.insert("User.2".into(), "B.Notes".into());
+    let fp = &mut m.footprints[0];
+    fp.art.shapes.push(FpShape::new(Shape::Segment { id: String::new(), layer: "User.1".into(), stroke_width: mm(0.1), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(mm(1.0), Nm::ZERO) }));
+    fp.art.shapes.push(FpShape::new(Shape::Segment { id: String::new(), layer: "Dwgs.User".into(), stroke_width: mm(0.1), filled: false, start: p(Nm::ZERO, Nm::ZERO), end: p(mm(1.0), Nm::ZERO) }));
+    fp.art.texts.push(FpText::new("note", p(Nm::ZERO, mm(1.0)), "User.1"));
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight }).unwrap();
+    let own = b.design().footprint_assignment("U1").and_then(|a| a.definition.clone()).expect("U1 has its own copy");
+    assert_eq!(own.art.shapes.iter().map(|s| s.shape.layer().to_string()).collect::<Vec<_>>(), vec!["User.2".to_string(), "Dwgs.User".to_string()]);
+    assert_eq!((own.art.texts[0].layout.layer.as_str(), own.art.texts[0].layout.mirror), ("User.2", true));
+    assert!(b.design().footprint_assignment("U2").is_none(), "U2, on the same footprint, keeps the shared one");
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight }).unwrap();
+    let own = b.design().footprint_assignment("U1").and_then(|a| a.definition.clone()).unwrap();
+    assert_eq!(own.art.shapes[0].shape.layer(), "User.1");
+    assert_eq!((own.art.texts[0].layout.layer.as_str(), own.art.texts[0].layout.mirror), ("User.1", false));
+    // with no typed pair on the board nothing is copied
+    let m2 = {
+        let mut m2 = m.clone();
+        m2.board.layer_setup.types.clear();
+        m2
+    };
+    let mut b = Board::new(design(), &m2, mm(0.1), mm(0.3));
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight }).unwrap();
+    assert!(b.design().footprint_assignment("U1").is_none());
+}
