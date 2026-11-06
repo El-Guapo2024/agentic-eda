@@ -81,7 +81,7 @@ exists rather than letting you rediscover it.
 | KiCad file | Port | Status |
 |---|---|---|
 | `pns_walkaround.{h,cpp}` | `src/walkaround.rs` | `Walker` is the faithful `WALKAROUND`: a whole `AssembleCluster` hugged per step, `WP_CW`/`WP_CCW`/`WP_SHORTEST` (with the check-back against the clusters already hugged), `SetItemMask`, `RestrictToCluster`, the length-expansion cut-off and the per-cluster iteration limit. `walk_base` is `LINE_PLACER::rhWalkBase` on it (Walk around mode and the solids-only pre-pass of the shove). Not ported: `m_PNSProcessClusterTimeout` (the wall-clock bound; the iteration limit is the only one). |
-| `pns_line_placer.{h,cpp}`, `pns_mouse_trail_tracer.{h,cpp}` | `src/line_placer.rs`, `src/mouse_trail.rs` | See `line_placer.rs`'s own doc comment for the detailed list. Posture is KiCad's since P5d (2026-10-20): `mouse_trail.rs` is `MOUSE_TRAIL_TRACER` (`AddTrailPoint`, `GetPosture`: the areas of the straight-first and the diagonal-first traces against the trail with its locks and the correction against the last segment, `FlipPosture`, tolerance, `SetMouseDisabled`), and `LinePlacer` builds the head's elbow from it (`buildInitialLine`: `GetPosture( aP )`; `Move` adds the cursor to the trail afterwards; `FixRoute`, a via and `UnfixRoute` restart it; `/` flips from the shown head's first direction; a posture forced by hand leaves Smart Pads off). The setting is "Use mouse path to set track posture" (`RoutingSettings.auto_posture`, default on); off, the posture is the explicit direction state and `/`. It is checked against KiCad's own tracer and `DIRECTION_45` compiled over `libs/kimath` (`oracle/build.sh`, `tests/mouse_trail_oracle.rs`: 100 000 random walks of the cursor, with flips, restarts and the mouse switched off, agree to the nanometre and the octant; 60 of them baked into the always-on test). Not ported: `reduceTail`, `handlePullback`, `handleSelfIntersections`, `mergeHead`, `optimizeTailHeadTransition` (the stateless request model). |
+| `pns_line_placer.{h,cpp}`, `pns_mouse_trail_tracer.{h,cpp}` | `src/line_placer.rs`, `src/mouse_trail.rs` | See `line_placer.rs`'s own doc comment for the detailed list. Posture is KiCad's since P5d (2026-10-20): `mouse_trail.rs` is `MOUSE_TRAIL_TRACER` (`AddTrailPoint`, `GetPosture`: the areas of the straight-first and the diagonal-first traces against the trail with its locks and the correction against the last segment, `FlipPosture`, tolerance, `SetMouseDisabled`), and `LinePlacer` builds the head's elbow from it (`buildInitialLine`: `GetPosture( aP )`; `Move` adds the cursor to the trail afterwards; `FixRoute`, a via and `UnfixRoute` restart it; `/` flips from the shown head's first direction; a posture forced by hand leaves Smart Pads off). The setting is "Use mouse path to set track posture" (`RoutingSettings.auto_posture`, default on); off, the posture is the explicit direction state and `/`. It is checked against KiCad's own tracer and `DIRECTION_45` compiled over `libs/kimath` (`oracle/build.sh`, `tests/mouse_trail_oracle.rs`: 100 000 random walks of the cursor, with flips, restarts and the mouse switched off, agree to the nanometre and the octant; 60 of them baked into the always-on test). `reduceTail`, `handlePullback`, `handleSelfIntersections`, `mergeHead` and `optimizeTailHeadTransition` are ported since Stage 24 (the leg's tail, kept between moves). |
 
 **Status (2026-10-08):** `walkaround::Walker` is the faithful `WALKAROUND`
 (`pns_walkaround.cpp`): policies `WP_CW`/`WP_CCW`/`WP_SHORTEST` (with the
@@ -1157,7 +1157,8 @@ The findings of `findings/round3/r3-route-rules.md` (R3-1 .. R3-11), each re-rea
   in the tie: `IsInNetTie`), a text box's border (`PCB_TEXTBOX` as a `PCB_SHAPE`), a dimension's lines and text (`syncDimension`), a barcode's turned
   box (`syncBarcode`), a table's box grown by half its widest rule (`syncTextItem` of a `PCB_TABLE`), and a footprint's copper texts (`syncTextItem`,
   GAPS 7's old "Left"). The last four are `Solid::OBSTACLE_SOURCE` / texts: not routable, of no net. **Differs:** a dimension's and a barcode's text
-  is the box of its glyphs; a barcode's printed text is left out; a rounded rectangle on copper is its square corners. Tests:
+  is the box of its glyphs; a barcode's printed text is left out; a rounded rectangle on copper is its square corners (Stage 24: the dimension's box is
+  KiCad's too; the barcode's text and the rounded corners are in). Tests:
   `copper_graphics_are_solids_on_their_layer`, `a_footprints_copper_shape_is_of_its_footprint`, `a_copper_polygon_is_an_obstacle` (the route keeps
   the clearance), `a_copper_shape_with_a_net_is_an_obstacle_to_other_nets_and_an_end_for_its_own` (a GND route ends on the GND polygon's centre;
   kicad-cli: nothing), `kicads_boards_with_copper_graphics_have_them_in_the_router_world` (the 20 boards of `qa/data/pcbnew` with copper graphics).
@@ -1507,6 +1508,72 @@ UI-LEFT R2, R3, R5, R7 (and R4, which is `crates/freeroute`'s), each re-read aga
 - Browser: `web/studio/e2e/router-u3.check.js` (7/7: the pair from arc ends with blind vias and F, V's target, V before a route, Autoroute's layer, the toolbar boxes);
   `diff-pairs.check.js` 11/11 and `router-leftovers.check.js` 17/17 still pass.
 
+## Stage 24 -- the head's shape and the obstacle edge cases (branch `task-u5-pcblows`, 2026-11-06)
+
+UI-LEFT R6 and R9, each re-read against KiCad 8303b2ad (`pns_line_placer.cpp`: `routeStep`, `reduceTail`, `handleSelfIntersections`,
+`handlePullback`, `mergeHead`, `optimizeTailHeadTransition`, `splitHeadTail`, `rhWalkBase`, `rhShoveOnly`, `rhMarkObstacles`, `FixRoute`, `SetLayer`,
+`UnfixRoute`; `pns_shove.cpp::pushOrShoveVia`; `pns_item.cpp::ITEM::collideSimple`; `pns_node.cpp::Branch`, `AddEdgeExclusion`,
+`QueryEdgeExclusions`; `pns_kicad_iface.cpp`: `SyncWorld`, `syncGraphicalItem`, `syncDimension`, `syncBarcode`, `QueryConstraint`'s
+`evaluateLineSegments`; `pns_optimizer.cpp::fanoutCleanup`; `pcb_barcode.cpp::GetBoundingHull`, `ComputeTextPoly`; `pcb_text.cpp::TransformShapeToPolygon`;
+`eda_shape.cpp::makeEffectiveShapes`; `libs/kimath` `SEG::Contains`, `SEG::Collinear`, `SHAPE_LINE_CHAIN::Find`, `Intersect`, `NearestPoint`).
+
+**R6, the head's shape.**
+- *The tail* (`line_placer.rs`, `TailState`, `LinePlacer::build_head`): in Walk around and Shove (`ROUTING_SETTINGS::FollowMouse()`, off in
+  Highlight collisions) the leg is a settled tail and a head routed on from the tail's end, kept between `Move`s, and `routeStep` is ported step by
+  step: `reduceTail` (the earliest tail segment whose `MITERED_45` straight-first run to the cursor leaves in its own direction and is clear of the
+  world; the walk back stops at the first that collides), `routeHead` from the tail's end in `m_direction` (the mouse posture only with no tail;
+  `GetPosture` is asked either way), the walk and the shove of the whole leg (`initTrack = m_tail + l1`, simplified) cut back into head and tail by
+  `splitHeadTail`, only the head optimized, `handleSelfIntersections` (KiCad 8303b2ad's `SHAPE_LINE_CHAIN::Intersect` of the two chains, the
+  crossing nearest the tail's start), `handlePullback` (a right or acute turn takes the tail's last point back), the extra iterations after either,
+  and at the end `optimizeTailHeadTransition` -- `FANOUT_CLEANUP` of the trace (a fan-out from a pad or via shorter than ten widths, ending on a pad,
+  a via or the head's via, made the direct trace in the router's corner mode, not with a posture forced by `/`; `optimizer::fanout_cleanup_trace`),
+  else `MERGE_SEGMENTS` of the tail's last three segments with the head's first two -- or else `mergeHead` (a head of three segments or more with no
+  acute, reversed or undefined corner goes into the tail). A failed `routeHead` restores the tail and head (a zero-length tail at the start when
+  there was none). `FixRoute` (`setInitialDirection( d_last )`, the stage's `m_direction`), a via, `SetLayer` and `UnfixRoute` (`m_direction =
+  st.pts[0].direction`, `m_initial_direction` kept) reset it. A repeated `Move` to the same cursor starts from the state before the last one, as the
+  tracer does. **Differs:** a head with an arc (the rounded corner modes) never goes into the tail -- KiCad's merges handle arcs; the second
+  `optimizer.Optimize( &tmpHead )` of each winding inside `rhWalkBase` is not run with a tail (with none it is the same line again). Tests:
+  `the_tail_is_merged_pulled_back_cut_and_split_as_kicads`, `reduce_tail_takes_the_tail_back_to_the_earliest_segment_that_reaches_the_cursor`,
+  `a_short_fan_out_from_a_pad_is_straightened`, `a_walked_head_becomes_the_tail_and_a_click_fixes_the_trace`.
+- *The hull snap in Highlight collisions* (`rhMarkObstacles`): a head that collides ends on the hull of the first obstacle it meets
+  (`NearestObstacle( &m_head )`, the pending via counted; `HullCache( obs, GetClearance( obs, &m_head, false ), m_head.Width() )`) when the cursor is
+  within half the width of it (`hull.NearestPoint( aP )`, `hull.BBox().NearestPoint( aP )` in the 90-degree modes). A head that collides with
+  nothing has no obstacle and does not snap. **Differs:** a pad's or via's hole that reaches past its copper is walked as the hole's hull
+  (`Node::obstacle_hull`), where KiCad's nearest obstacle may be the `HOLE` item. Test: `highlight_collisions_snaps_the_head_onto_the_hull_of_the_first_obstacle`.
+- *A click's via* (`springback.rs`): `FixRoute` adds it to `m_lastNode` as an ordinary via (`Clone( pl.Via() )`), not locked -- a frame's world has
+  it unlocked under a tag of its own (`fixed_via_tag`). A later leg's shove that pushes another net's track onto it meets it at a leg's locked
+  joint and stops (`pushOrShoveVia`: `if( jt->IsLocked() ) return SH_INCOMPLETE`), so the head falls back to the walk; it used to walk the track
+  round a locked via (`SH_TRY_WALK`). One a shove does move is committed where it went (`World::placed_vias`, `LinePlacer::placed_vias`). In this
+  port every via a click places is at a leg's end, a locked joint, so it is never pushed; KiCad pushes one only where a leg had no successful shove.
+  Tests: `a_later_legs_shove_stops_at_an_earlier_clicks_via`, `a_clicks_via_is_an_ordinary_via_of_the_frame_and_follows_a_shove`.
+
+**R9, obstacles and rules.**
+- *Castellated pads*: `SyncWorld` adds the hole of a pad `(property pad_prop_castellated)` as an edge exclusion of the world (`Node::add_edge_exclusion`,
+  read from the footprint's kept pad tokens as the drill chart reads them); `collideSimple`'s `checkCastellation` (an item on Edge.Cuts, not Margin, or a
+  non-plated slot's hole) finds no collision with the edge where the collision point is in one. As in KiCad the list is the world's own (`NODE::Branch`
+  copies none), so it counts only for queries of the world itself (`QueryOpts::root_world`): `isStartingPointRoutable`'s start check, which no longer
+  refuses a start on a castellated pad on the board edge. Every placer and dragger works in a branch in KiCad, so the head still keeps the edge
+  clearance there. **Not here:** the pair start's check (`dp_placer`). Test: `a_route_may_start_on_a_castellated_pad_on_the_board_edge`.
+- *A footprint's Margin graphics* (R3-6's leftover): its art on Margin, placed, is a board edge as the board's are. Test: `a_footprints_margin_graphic_is_an_edge`.
+- *Text hulls*: a dimension's text was already KiCad's -- `syncDimension` calls `aDimension->PCB_TEXT::TransformShapeToPolygon`, which is
+  `buildBoundingHull`, the box of the glyphs (Stage 16 said "each glyph outline": wrong). A barcode's printed text is a box of its own under the symbol
+  (`GetBoundingHull`'s `m_textPoly`: `ComputeTextPoly`'s text at the barcode's height, `GetPenSizeForNormal`, 1 mm below the symbol, turned by the
+  barcode's angle). **Differs:** KiCad adds an outline for a hidden text too, the box of an empty polygon at the board's origin turned about the barcode;
+  it is left out. A rounded board rectangle on copper is its rounded outline (`makeEffectiveShapes`' `ROUNDRECT`: the polygon of its corners at 5 um,
+  the error added to the stroke as for a curve), its anchors the corners. Test: `a_barcodes_printed_text_is_an_obstacle_and_a_rounded_rectangle_has_round_corners`.
+- *Track-geometry rules* (`QueryConstraint`'s `evaluateLineSegments`): with a rule that looks at shapes, a line of the router (`Side::Line`) of several
+  segments is asked segment by segment, each a dummy track of the line's own width, and the smallest clearance taken (`pickSmallerConstraint`); two
+  such lines pair by pair within twice the wider width (`linesBBoxOverlap`). Used for the head's nearest obstacle, the walk's hulls and collision tests,
+  `path_collides`, `line_colliding` and the shove's line clearances; without such a rule a line is one dummy from its first point to its last, as
+  before. **Differs:** the line placer's own per-segment checks in Highlight collisions still ask each segment alone. Test:
+  `a_line_is_asked_segment_by_segment_by_a_rule_on_shapes`.
+- *1-2 nm tolerances*: every node query takes `collideSimple`'s `clearance - 1` ("the hulls are built to exactly the clearance distance"; the
+  shove's own tests had it, Stage 12); `line_walk`'s `SEG::Contains` is `SquaredDistance <= 3`, `SEG::Collinear` allows `|qa x + qb y + qc| <= 1`,
+  `SHAPE_LINE_CHAIN::Find` with a threshold compares the rounded `EuclideanNorm`. `board_edge.rs`'s exact boundary moves by the 1 nm. Tests:
+  `the_nanometre_tolerances_are_kicads`, `copper_keeps_the_boards_edge_clearance_from_the_outline_not_its_net_classs`.
+- Gates: `qa_regressions` 13 passed (walk-with-teardrops 19/19, backspace1 2/2, simple-shove-1 28/28, issue22749 11/11,
+  walk_drag_seg_against_board_edge 3/3 exact), `dp_boards` 5 passed, `cargo test -p eda-pns` all passed (351 unit tests).
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -1543,8 +1610,8 @@ UI-LEFT R2, R3, R5, R7 (and R4, which is `crates/freeroute`'s), each re-read aga
   effective shape (an arc's chords at KiCad's 0.005 mm, a circle's or a rectangle's ring, a curve's
   flattening), as `syncGraphicalItem` does with `MakeEffectiveShapes()`; a cutout's rim keeps the
   clearance like the outer edge (`tests/board_edge.rs`,
-  `an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge`). Not modelled: castellated pads'
-  edge exclusions. A walk around an edge in a
+  `an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge`). Castellated pads'
+  edge exclusions: Stage 24. A walk around an edge in a
   shove may not grow past 2 x `WalkaroundHugLengthThreshold` of the line's own
   length (KiCad has no bound; with no room left the shortest clear walk is the long
   way round the whole outline).
@@ -1553,8 +1620,8 @@ UI-LEFT R2, R3, R5, R7 (and R4, which is `crates/freeroute`'s), each re-read aga
   "Optimize entire track being dragged").
 - ~~Arcs as router items~~ **Ported 2026-10-20** (Stage 9 step 1). ~~Rounded corners~~ **Ported 2026-10-23**
   (Stage 10 step 2: `CORNER_MODE`, `SwitchRounding*`). Not ported: `m_orthoMode` (`SetOrthoMode`, which
-  forces `MITERED_45` in `buildInitialLine`; nothing here sets it), and the 90-degree hull box of
-  `rhMarkObstacles` (the mark-obstacles hull snap is not ported at all).
+  forces `MITERED_45` in `buildInitialLine`; nothing here sets it), and ~~the 90-degree hull box of
+  `rhMarkObstacles` (the mark-obstacles hull snap is not ported at all)~~ (ported, Stage 24).
 - ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
   second lead KiCad tries (`m_last_p_end`) is not kept.
 - ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). ~~Springback~~
@@ -1563,4 +1630,4 @@ UI-LEFT R2, R3, R5, R7 (and R4, which is `crates/freeroute`'s), each re-read aga
   the walkaround cluster timeout, the pad-to-die length and delay, time-domain rules as the tuner's
   target, the rounding of corners, the merged outline of a pair's pattern, a pattern moved, turned
   or flipped, the tuner's world branched at every move, two walk attempts of a pair where KiCad makes
-  four, and the tracer's `reduceTail` / `handlePullback` family.
+  four, and ~~the tracer's `reduceTail` / `handlePullback` family~~ (ported, Stage 24).
