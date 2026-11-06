@@ -107,6 +107,15 @@ impl PcbShown {
         pcb_text_shown(raw, layer, None, &self.board)
     }
 
+    /// `GetShownText` of an item of the footprint `part` on `layer` (`PCB_TEXTBOX::GetShownText`, a barcode's text: `${LAYER}` is the item's layer, then
+    /// `FOOTPRINT::ResolveTextVar`, then the board); a free text's when the board has no such footprint placed.
+    pub(crate) fn footprint_text_shown(&self, part: &str, raw: &str, layer: &str) -> String {
+        if !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {
+            return raw.to_string();
+        }
+        pcb_text_shown(raw, layer, self.by_part.get(part).map(|&i| &self.board.footprints[i]), &self.board)
+    }
+
     /// A board text's JSON (`content`, `layer`, ...) with `shown` added when its shown text is not its stored one.
     pub(crate) fn text_json(&self, mut text: Value) -> Value {
         let raw = text["content"].as_str().unwrap_or("").to_string();
