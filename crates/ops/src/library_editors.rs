@@ -222,19 +222,102 @@ pub fn set_unit_count(sym: &mut LibrarySymbol, count: u32) {
 ///
 /// 8303b2ad calls `SetHasDeMorganBodyStyles` first, so its `SetBodyStyleCount` finds the count already changed and returns at once, copying and
 /// erasing nothing; 25ec2335 swapped the two calls. This follows 25ec2335 (the question is asked in both).
+///
+/// A symbol of custom body styles stays as it is when it is told "not De Morgan" (it is not one), and becomes a De Morgan one when told so (see
+/// [`set_body_styles`]).
 pub fn set_alternate_body_style(sym: &mut LibrarySymbol, demorgan: bool) {
     if sym.has_alternate_body_style == demorgan {
         return;
     }
-    if demorgan {
-        let copies: Vec<LibrarySymbolPin> = sym.pins.iter().filter(|p| p.body_style == 1).map(|p| LibrarySymbolPin { id: String::new(), body_style: 2, ..p.clone() }).collect();
-        sym.pins.extend(copies);
-        sym.assign_missing_ids();
+    set_body_styles(sym, demorgan, &[]);
+}
+
+/// The Body Styles group of Symbol Properties' Units & Body Styles tab, KiCad 25ec2335 `DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`: "Single body style"
+/// (`SetBodyStyleCount( 1, false, false )`), "'Standard' and 'Alternate' De Morgan body styles" (`SetBodyStyleCount( 2, false, true )`) or "Custom body styles:" with
+/// the grid's non-empty names (`SetBodyStyleCount( names.size(), true, true )`), then `SetHasDeMorganBodyStyles` and `SetBodyStyleNames`. `LIB_SYMBOL::
+/// SetBodyStyleCount` (25ec2335) populates each new body style `prevCount + 1 ..= aCount` from the standard one -- a copy of every pin of body style 1, and of every
+/// other item too when the draw items are duplicated -- and then erases every item of a body style above the count (`PruneBodyStyleDrawItems`), the items kept as
+/// the file wrote them included.
+///
+/// 8303b2ad's `SetBodyStyleCount` copies into body style 2 only, and erases every item above body style 1 whenever the count drops, so going from two custom
+/// styles to three duplicates the standard items into style 2 a second time; 25ec2335 fixed both, and this follows it. Custom styles with fewer than two names are
+/// refused ("Custom body styles must have at least 2 entries", 25ec2335 `Validate`).
+pub fn set_body_styles(sym: &mut LibrarySymbol, demorgan: bool, names: &[String]) {
+    let names: Vec<String> = if demorgan { Vec::new() } else { names.iter().filter(|n| !n.is_empty()).cloned().collect() };
+    let count = if demorgan { 2 } else { (names.len() as u32).max(1) };
+    let (dup_draw, dup_pins) = if demorgan {
+        (false, true)
+    } else if count > 1 {
+        (true, true)
     } else {
-        sym.pins.retain(|p| p.body_style <= 1);
-        sym.graphics.retain(|g| g.body_style() <= 1);
+        (false, false)
+    };
+    let prev = sym.body_style_count();
+    if prev < count && (dup_draw || dup_pins) {
+        let mut pins = Vec::new();
+        let mut graphics = Vec::new();
+        for style in prev + 1..=count {
+            if dup_pins {
+                pins.extend(sym.pins.iter().filter(|p| p.body_style == 1).map(|p| LibrarySymbolPin { id: String::new(), body_style: style, ..p.clone() }));
+            }
+            if dup_draw {
+                graphics.extend(sym.graphics.iter().filter(|g| g.body_style() == 1).map(|g| {
+                    let mut copy = g.clone();
+                    copy.set_id(String::new());
+                    copy.set_body_style(style);
+                    copy
+                }));
+                let kept: Vec<_> = sym.kicad.items.iter().filter(|k| k.body_style == 1).map(|k| eda_model::lib_keep::KeptSymbolItem { body_style: style, ..k.clone() }).collect();
+                sym.kicad.items.extend(kept);
+            }
+        }
+        sym.pins.extend(pins);
+        sym.graphics.extend(graphics);
+        sym.assign_missing_ids();
     }
+    // `PruneBodyStyleDrawItems( aCount )`
+    sym.pins.retain(|p| p.body_style <= count);
+    sym.graphics.retain(|g| g.body_style() <= count);
+    sym.kicad.items.retain(|k| k.body_style <= count);
     sym.has_alternate_body_style = demorgan;
+    sym.body_style_names = if count > 1 { names } else { Vec::new() };
+}
+
+/// The rest of the Units & Body Styles tab and the Pin Connections tab (KiCad 25ec2335 `DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`), for a root symbol:
+/// - the unit display names, `GetUnitDisplayNames().clear()` and then each non-empty row of the grid (one row per unit, so a unit past the count has none);
+/// - the body styles, [`set_body_styles`];
+/// - "All pins with duplicate numbers are jumpers" (`SetDuplicatePinNumbersAreJumpers`);
+/// - the explicit jumper pin groups: each row of the grid cut at commas, spaces, tabs and line ends (`wxStringTokenizer( .., ", \t\r\n", wxTOKEN_STRTOK )`), every
+///   number a pin of the symbol ("Pin '%s' in jumper pin group %d does not exist in this symbol."), each group a `std::set` (sorted, no repeats) and an empty row no
+///   group (`JUMPER_GROUP::Make` returns none for it; 8303b2ad kept an empty one). A pin's stacked numbers (`[1-4]`, KiCad 25ec2335's `GetStackedPinNumbers`) are not
+///   spread: this writer's files are from before the stacked notation.
+pub fn edit_units_and_connections(sym: &mut LibrarySymbol, unit_names: &std::collections::BTreeMap<u32, String>, demorgan: bool, body_style_names: &[String], duplicate_pin_numbers_are_jumpers: bool, jumper_rows: &[String]) -> Result<(), Vec<CheckResult>> {
+    if sym.extends.is_some() {
+        return Err(vec![CheckResult::fail("ops_bad_symbol", &sym.lib_id, "a derived symbol's units, body styles and pins are its parent's")]);
+    }
+    if !demorgan && body_style_names.iter().filter(|n| !n.is_empty()).count() == 1 {
+        return Err(vec![CheckResult::fail("ops_bad_symbol", &sym.lib_id, "Custom body styles must have at least 2 entries")]);
+    }
+    let numbers: std::collections::BTreeSet<&str> = sym.pins.iter().map(|p| p.number.as_str()).collect();
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    for (ii, row) in jumper_rows.iter().enumerate() {
+        let mut group: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for token in row.split([',', ' ', '\t', '\r', '\n']).filter(|t| !t.is_empty()) {
+            if !numbers.contains(token) {
+                return Err(vec![CheckResult::fail("ops_bad_symbol", &sym.lib_id, format!("Pin '{token}' in jumper pin group {} does not exist in this symbol.", ii + 1))]);
+            }
+            group.insert(token.to_string());
+        }
+        if !group.is_empty() {
+            groups.push(group.into_iter().collect());
+        }
+    }
+    let units = sym.unit_count.max(1);
+    sym.kicad.unit_names = unit_names.iter().filter(|(u, n)| (1..=units).contains(*u) && !n.is_empty()).map(|(u, n)| (*u, n.clone())).collect();
+    set_body_styles(sym, demorgan, body_style_names);
+    sym.kicad.duplicate_pin_numbers_are_jumpers = duplicate_pin_numbers_are_jumpers;
+    sym.kicad.jumper_pin_groups = groups;
+    Ok(())
 }
 
 /// The Pin Table's Unit and Body Style cells (`dialog_lib_edit_pin_table.cpp`, `GRID_CELL_COMBOBOX`): "All" (0) or one of the symbol's units, and
@@ -246,9 +329,15 @@ pub(crate) fn check_pin_unit_and_style(sym: &LibrarySymbol, pin: &LibrarySymbolP
     if pin.unit > units {
         return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("the symbol has {units} unit(s): a pin's unit is 0 (all units) or one of them, not {}", pin.unit))]);
     }
-    let styles = if sym.has_alternate_body_style { 2 } else { 1 };
+    let styles = sym.body_style_count();
     if pin.body_style > styles {
-        let what = if styles == 1 { "the symbol has one body style: a pin's body style is 0 (all) or 1" } else { "a pin's body style is 0 (all), 1 (Standard) or 2 (Alternate)" };
+        let what = if styles == 1 {
+            "the symbol has one body style: a pin's body style is 0 (all) or 1".to_string()
+        } else if sym.has_alternate_body_style {
+            "a pin's body style is 0 (all), 1 (Standard) or 2 (Alternate)".to_string()
+        } else {
+            format!("a pin's body style is 0 (all) or one of the symbol's {styles}")
+        };
         return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("{what}, not {}", pin.body_style))]);
     }
     Ok(())

@@ -693,6 +693,7 @@ fn text_box_at(text: &str, start: (f64, f64), end: (f64, f64)) -> LibrarySymbolG
         margin_mm: 0.0,
         stroke_mm: 0.254,
         fill: eda_model::ir::LibraryFill::None,
+        private: false, font: None, text_color: None, stroke_color: None, fill_color: None,
     }
 }
 

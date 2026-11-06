@@ -37,6 +37,7 @@ fn text_box() -> LibrarySymbolGraphic {
         margin_mm: 0.0,
         stroke_mm: 0.254,
         fill: LibraryFill::None,
+        private: false, font: None, text_color: None, stroke_color: None, fill_color: None,
     }
 }
 
@@ -216,7 +217,7 @@ fn a_plain_text_is_replaced_with_its_looks_and_a_kept_style_gives_way_to_the_edi
     let m = ConstraintModel::default();
     let mut b = board(&m);
     b.apply(&Cmd::NewSymbol { lib_id: "Lib:S".into() }).unwrap();
-    let text = |h_align: FieldHAlign, bold: bool| LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 0, text: "A".into(), at: SPoint { x: 1.27, y: 0.0 }, angle_deg: 0.0, size_mm: 1.27, bold, italic: false, h_align, v_align: FieldVAlign::Center };
+    let text = |h_align: FieldHAlign, bold: bool| LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 0, text: "A".into(), at: SPoint { x: 1.27, y: 0.0 }, angle_deg: 0.0, size_mm: 1.27, bold, italic: false, h_align, v_align: FieldVAlign::Center, private: false, font: None, text_color: None };
     b.apply(&Cmd::AddSymbolGraphic { lib_id: "Lib:S".into(), graphic: text(FieldHAlign::Center, false) }).unwrap();
     let id = graphics(&b)[0].id().to_string();
     // as a design written on 2026-10-23 holds a left, bold text with a pen: in the kept style

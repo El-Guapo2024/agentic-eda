@@ -174,3 +174,97 @@ fn the_unit_names_of_dropped_units_go_with_them() {
     b.apply(&props("Lib:Q", 2, false)).unwrap();
     assert_eq!(sym(&b, "Lib:Q").kicad.unit_names.keys().copied().collect::<Vec<_>>(), [1]);
 }
+
+/// UI-LEFT Y4: Symbol Properties' Units & Body Styles and Pin Connections tabs (KiCad 25ec2335 `DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`).
+fn units_and_connections(lib_id: &str, names: &[(u32, &str)], demorgan: bool, styles: &[&str], jumpers_dup: bool, rows: &[&str]) -> Cmd {
+    Cmd::EditSymbolUnitsAndConnections {
+        lib_id: lib_id.into(),
+        unit_names: names.iter().map(|(u, n)| (*u, n.to_string())).collect(),
+        demorgan,
+        body_style_names: styles.iter().map(|s| s.to_string()).collect(),
+        duplicate_pin_numbers_are_jumpers: jumpers_dup,
+        jumper_rows: rows.iter().map(|r| r.to_string()).collect(),
+    }
+}
+
+fn styles_of(b: &Board<'_>, lib_id: &str) -> (Vec<u32>, Vec<u32>) {
+    let s = sym(b, lib_id);
+    let mut p: Vec<u32> = s.pins.iter().map(|p| p.body_style).collect();
+    let mut g: Vec<u32> = s.graphics.iter().map(|g| g.body_style()).collect();
+    p.sort();
+    g.sort();
+    (p, g)
+}
+
+#[test]
+fn custom_body_styles_are_populated_from_the_standard_one_and_pruned_as_25ec2335_does() {
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:B".into() }).unwrap();
+    add_pin(&mut b, "Lib:B", pin("1", 1, 1));
+    add_pin(&mut b, "Lib:B", pin("2", 1, 0));
+    b.apply(&Cmd::AddSymbolGraphic { lib_id: "Lib:B".into(), graphic: rect(1, 1) }).unwrap();
+    // single -> three custom styles: `SetBodyStyleCount( 3, true, true )` copies every style-1 item into styles 2 and 3
+    b.apply(&units_and_connections("Lib:B", &[], false, &["Front", "Side", "Top"], false, &[])).unwrap();
+    assert_eq!(styles_of(&b, "Lib:B"), (vec![0, 1, 2, 3], vec![1, 2, 3]));
+    let s = sym(&b, "Lib:B");
+    assert_eq!(s.body_style_names, ["Front", "Side", "Top"]);
+    assert!(!s.has_alternate_body_style);
+    assert_eq!((s.body_style_count(), s.body_style_description(2).as_str(), s.body_style_description(4).as_str()), (3, "Side", "?"));
+    // three -> two: `PruneBodyStyleDrawItems( 2 )`, nothing copied a second time into style 2 (8303b2ad's did)
+    b.apply(&units_and_connections("Lib:B", &[], false, &["Front", "", "Side"], false, &[])).unwrap();
+    assert_eq!(styles_of(&b, "Lib:B"), (vec![0, 1, 2], vec![1, 2]), "the empty row is no style");
+    assert_eq!(sym(&b, "Lib:B").body_style_names, ["Front", "Side"]);
+    // two custom -> De Morgan: the count stays 2, nothing copied or erased
+    b.apply(&units_and_connections("Lib:B", &[], true, &[], false, &[])).unwrap();
+    assert_eq!(styles_of(&b, "Lib:B"), (vec![0, 1, 2], vec![1, 2]));
+    assert!(sym(&b, "Lib:B").has_alternate_body_style && sym(&b, "Lib:B").body_style_names.is_empty());
+    assert_eq!(sym(&b, "Lib:B").body_style_description(1), "Standard");
+    // a "not De Morgan" from Symbol Properties' own verb leaves custom styles alone, and single erases them
+    b.apply(&units_and_connections("Lib:B", &[], false, &["A", "B"], false, &[])).unwrap();
+    b.apply(&props("Lib:B", 1, false)).unwrap();
+    assert_eq!(sym(&b, "Lib:B").body_style_names, ["A", "B"]);
+    b.apply(&units_and_connections("Lib:B", &[], false, &[], false, &[])).unwrap();
+    assert_eq!(styles_of(&b, "Lib:B"), (vec![0, 1], vec![1]));
+    assert!(!sym(&b, "Lib:B").is_multi_body_style());
+    // "Custom body styles must have at least 2 entries"
+    let e = b.apply(&units_and_connections("Lib:B", &[], false, &["Only"], false, &[])).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Custom body styles must have at least 2 entries"));
+    // a pin of body style 3 is one the symbol has once it has three
+    b.apply(&units_and_connections("Lib:B", &[], false, &["A", "B", "C"], false, &[])).unwrap();
+    add_pin(&mut b, "Lib:B", pin("9", 1, 3));
+    assert!(b.apply(&Cmd::AddSymbolPin { lib_id: "Lib:B".into(), pin: pin("9", 1, 4) }).is_err());
+}
+
+#[test]
+fn unit_names_and_jumper_groups_are_the_grids_rows() {
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:J".into() }).unwrap();
+    b.apply(&props("Lib:J", 2, false)).unwrap();
+    for n in ["1", "2", "3", "4"] {
+        add_pin(&mut b, "Lib:J", pin(n, 1, 1));
+    }
+    b.apply(&units_and_connections("Lib:J", &[(1, "Gate"), (2, ""), (3, "Gone")], false, &[], true, &["3, 1", "", "4\t2 2"])).unwrap();
+    let s = sym(&b, "Lib:J");
+    assert_eq!(s.kicad.unit_names.iter().map(|(u, n)| (*u, n.as_str())).collect::<Vec<_>>(), [(1, "Gate")], "an empty row and a unit past the count have no name");
+    assert!(s.kicad.duplicate_pin_numbers_are_jumpers);
+    assert_eq!(s.kicad.jumper_pin_groups, vec![vec!["1".to_string(), "3".to_string()], vec!["2".to_string(), "4".to_string()]], "sorted sets; an empty row is no group (`JUMPER_GROUP::Make`)");
+    let e = b.apply(&units_and_connections("Lib:J", &[], false, &[], false, &["1 2", "1, 9"])).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Pin '9' in jumper pin group 2 does not exist in this symbol."));
+    assert_eq!(sym(&b, "Lib:J").kicad.jumper_pin_groups.len(), 2, "a refused edit changes nothing");
+    // the written library says it as KiCad does
+    let text = eda_kicad::export_kicad_sym(sym(&b, "Lib:J"));
+    assert!(text.contains("(duplicate_pin_numbers_are_jumpers yes)") && text.contains(r#"(jumper_pin_groups ("1" "3") ("2" "4"))"#) && text.contains(r#"(unit_name "Gate")"#), "{text}");
+}
+
+#[test]
+fn a_derived_symbols_units_and_pins_are_its_parents() {
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    let mut child = LibrarySymbol::new_empty("Lib:Child");
+    child.extends = Some("Lib:Parent".into());
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:Parent".into() }).unwrap();
+    b.apply(&Cmd::PutLibrarySymbol { symbol: child, overwrite: false }).unwrap();
+    assert!(b.apply(&units_and_connections("Lib:Child", &[(1, "A")], false, &[], false, &[])).is_err());
+}
