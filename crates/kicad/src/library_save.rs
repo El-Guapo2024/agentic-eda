@@ -485,6 +485,39 @@ pub fn delete_footprint_library(pretty: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+/// The footprints of the `.pretty` folder `pretty` that the footprint reader refuses, and why (UI-LEFT-2 LL6): `FP_CACHE::Load` ("Queue I/O errors so only
+/// files that fail to parse don't get loaded"): such a file's footprint is not in the library, and the library reports "Unable to read file '%s'" and the
+/// reason, one entry per file. Each file is read with this crate's reader (`parse_library_footprint`), so the reason is this reader's. Kept against the
+/// folder's latest time; read for one library at a time (the tree opening it), never for the search index. The answer is the names left out (by file name,
+/// as `FP_CACHE` names them) and the entries.
+pub fn footprint_library_refusals(pretty: &Path) -> (Vec<String>, Vec<String>) {
+    type Refusals = std::sync::Mutex<HashMap<PathBuf, (Option<std::time::SystemTime>, (Vec<String>, Vec<String>))>>;
+    static CACHE: std::sync::OnceLock<Refusals> = std::sync::OnceLock::new();
+    let files = footprint_files(pretty);
+    let stamp = files.iter().filter_map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok()).chain(std::fs::metadata(pretty).and_then(|m| m.modified()).ok()).max();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((s, hit)) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(pretty) {
+        if *s == stamp {
+            return hit.clone();
+        }
+    }
+    let mut names = Vec::new();
+    let mut messages = Vec::new();
+    for file in files {
+        let refused = match std::fs::read_to_string(&file) {
+            Ok(text) => crate::parse_library_footprint(&text).err(),
+            Err(e) => Some(e.to_string()),
+        };
+        if let Some(why) = refused {
+            names.push(file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+            messages.push(format!("Unable to read file '{}'\n{why}", file.display()));
+        }
+    }
+    let out = (names, messages);
+    cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(pretty.to_path_buf(), (stamp, out.clone()));
+    out
+}
+
 /// The footprint files of a `.pretty` folder (`FP_CACHE::Load` reads `*.kicad_mod`), sorted by name; hidden files left out.
 fn footprint_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
@@ -737,6 +770,21 @@ mod tests {
         let mut left: Vec<String> = crate::scan_symbols(&text).into_iter().map(|s| s.name).collect();
         left.sort();
         assert_eq!(left, ["C", "Zeta"]);
+    }
+
+    #[test]
+    fn a_footprint_file_the_reader_refuses_is_left_out_with_why() {
+        let dir = temp_dir("refused-fp");
+        let pretty = dir.join("Mine.pretty");
+        std::fs::create_dir(&pretty).unwrap();
+        let mut fp = LibraryFootprint::new_empty("Mine:Good");
+        fp.assign_missing_ids();
+        save_footprint(&pretty, &fp, &EmbeddedFiles::default()).unwrap();
+        std::fs::write(pretty.join("Bad.kicad_mod"), "(module_that_is_no_footprint)\n").unwrap();
+        let (names, messages) = footprint_library_refusals(&pretty);
+        assert_eq!(names, ["Bad"]);
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].starts_with(&format!("Unable to read file '{}'\n", pretty.join("Bad.kicad_mod").display())), "{}", messages[0]);
     }
 
     #[test]

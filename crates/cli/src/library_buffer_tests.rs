@@ -247,3 +247,14 @@ fn save_library_as_onto_a_footprint_library_that_is_there_asks_and_overwrite_rep
     assert_eq!(files, ["Chip.kicad_mod", "Other.kicad_mod"], "the old folder's footprints went (`DeleteLibrary`), the library's are copied in");
     assert!(pretty.join("Chip.kicad_mod").is_file());
 }
+
+#[test]
+fn a_footprint_file_the_reader_refuses_is_not_listed_and_its_library_says_why() {
+    let (dir, pretty) = board_with_footprints("libbuf_fp_refused");
+    std::fs::write(pretty.join("Broken.kicad_mod"), "(module_that_is_no_footprint)\n").unwrap();
+    // `FP_CACHE::Load`: "Queue I/O errors so only files that fail to parse don't get loaded"
+    let v = crate::library_index::items(&dir, Kind::Footprint, "Fp");
+    assert_eq!(strings(&v["names"]), ["Chip", "Other"], "{v}");
+    let why = v["load_error"].as_str().unwrap_or_default();
+    assert!(why.starts_with(&format!("Unable to read file '{}'\n", pretty.join("Broken.kicad_mod").display())), "{why}");
+}
