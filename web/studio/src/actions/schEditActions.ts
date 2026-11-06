@@ -222,7 +222,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   // -- the schematic editor's setting, Preferences > Schematic Editor > Editing Options' "Arc editing mode:" (`Preferences.schArcEditMode`, UI-LEFT-2 FF7)
   const arcMode = (mode: ArcEditMode | "cycle") => () => {
     const next = mode === "cycle" ? incrementArcEditMode(ctx.state.prefs.schArcEditMode) : mode;
-    ctx.dispatch({ type: "SET_PREFERENCES", prefs: { ...ctx.state.prefs, schArcEditMode: next } });
+    ctx.dispatch({ type: "PATCH_PREFERENCES", patch: { schArcEditMode: next } });
     ctx.dispatch({ type: "TOAST", message: `Arc editing: ${ARC_EDIT_MODE_LABEL[next]}`, kind: "info" });
   };
   m.set("common.Interactive.cycleArcEditMode", arcMode("cycle"));

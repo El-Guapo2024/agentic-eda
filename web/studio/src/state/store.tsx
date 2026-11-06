@@ -1185,6 +1185,8 @@ export type Action =
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SET_PREFERENCES"; prefs: Preferences }
+  /** Some preferences changed, the rest as they are when the action runs (a Preferences page's OK after the dialog's own, the arc mode actions). */
+  | { type: "PATCH_PREFERENCES"; patch: Partial<Preferences> }
   | { type: "SET_PREFERENCES_DIALOG_OPEN"; open: boolean }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
   /** `SCH_EDIT_FRAME::SetCurrentVariant` / `PCB_EDIT_FRAME::SetCurrentVariant`: "" (or a name the design does not have) is the default. */
@@ -1611,6 +1613,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, prefs: { ...state.prefs, autoPan: !state.prefs.autoPan } };
     case "SET_PREFERENCES":
       return { ...state, prefs: action.prefs };
+    case "PATCH_PREFERENCES":
+      return { ...state, prefs: { ...state.prefs, ...action.patch } };
     case "SET_PREFERENCES_DIALOG_OPEN":
       return { ...state, preferencesDialogOpen: action.open };
     case "SCHEMATIC_OK": {

@@ -72,7 +72,8 @@ export function fpUsedLayers(fp: FpLayerSource | null | undefined): string[] {
 
 /**
  * The Layers tab's rows (`rebuildLayers` on the editor's board, `updateEnabledLayers`): the copper layers front to back, then the technical and user-mask layers in
- * `non_cu_seq`'s order, then the user layers -- the first `userLayerCount` and every other one `used` names -- by number.
+ * `non_cu_seq`'s order, then the user layers -- the first `userLayerCount` (Preferences > Footprint Editor > User Layer Names' "User layers:") and every other one
+ * `used` names (an item's layer, or a layer that has a name there: `UpdateUserInterface`) -- by number.
  */
 export function fpPanelLayers(used: Iterable<string> = [], userLayerCount = FP_USER_LAYER_COUNT): string[] {
   const users = new Set<number>();
@@ -85,11 +86,13 @@ export function fpPanelLayers(used: Iterable<string> = [], userLayerCount = FP_U
 }
 
 /**
- * A row's name: a copper layer's `board->GetLayerName` (the editor's board names only In1.Cu, "Inner layers"), any other layer's `GetStandardLayerName`
- * ("F.Silkscreen", "User.Drawings" ...; the studio keeps no footprint editor user layer names, `m_UserLayerNames`).
+ * A row's name: a copper layer's `board->GetLayerName` (the editor's board names only In1.Cu, "Inner layers"), a user layer the Footprint Editor names
+ * (`m_UserLayerNames[ canonicalName ]`, Preferences > Footprint Editor > User Layer Names, UI-LEFT-2 FF7), any other layer's `GetStandardLayerName` ("F.Silkscreen",
+ * "User.Drawings" ...).
  */
-export function fpLayerLabel(name: string): string {
+export function fpLayerLabel(name: string, userLayerNames: Readonly<Record<string, string>> = {}): string {
   if (name === "In1.Cu") return FP_INNER_LAYERS_LABEL;
+  if (userLayerNames[name]) return userLayerNames[name]!;
   return isCopperLayerName(name) ? name : standardLayerName(name);
 }
 

@@ -29,6 +29,7 @@ import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pic
 import { isMac } from "../platform";
 import type { TextGraphicsDefaults } from "../api/types";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
+import { DEFAULT_USER_LAYER_COUNT, sanitizeFpTextItems, sanitizeUserLayerNames, type FpTextItem } from "./fpFieldDefaults";
 
 /** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
 export function defaultZoomSpeed(isMacPlatform: boolean): number {
@@ -100,6 +101,14 @@ export interface Preferences {
   /** `FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings` (Preferences > Footprint Editor > Graphics Defaults: the line width and the text of each layer class); `null` is KiCad's
    *  factory table (`FACTORY_TEXT_GRAPHICS`). */
   fpTextGraphics: TextGraphicsDefaults | null;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings.m_DefaultFPTextItems` (Preferences > Footprint Editor > Footprint Defaults, `design_settings.default_footprint_text_items`):
+   *  the Reference's and Value's text, visibility and layer and the other texts a new footprint gets (kicad-port/fpFieldDefaults.ts); `null` is KiCad's own list. */
+  fpDefaultTextItems: FpTextItem[] | null;
+  /** `m_DesignSettings.GetUserDefinedLayerCount()` ("User layers:" of Preferences > Footprint Editor > User Layer Names, `design_settings.user_layer_count`), 0 .. 9.
+   *  Default 4. */
+  fpUserLayerCount: number;
+  /** `m_DesignSettings.m_UserLayerNames` (`design_settings.default_footprint_layer_names`): a user layer's name in the Footprint Editor, by its canonical name. */
+  fpUserLayerNames: Record<string, string>;
   /** `PCBNEW_SETTINGS::m_ArcEditMode` ("Arc editing mode:", Preferences > PCB Editor > Editing Options; `cycleArcEditMode` sets it too): how the point editor drags an arc. */
   pcbArcEditMode: ArcEditMode;
   /** `EESCHEMA_SETTINGS::m_Drawing.arc_edit_mode` ("Arc editing mode:", Preferences > Schematic Editor > Editing Options). */
@@ -181,6 +190,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fpInvertXAxis: false,
   fpInvertYAxis: false,
   fpTextGraphics: null,
+  fpDefaultTextItems: null,
+  fpUserLayerCount: DEFAULT_USER_LAYER_COUNT,
+  fpUserLayerNames: {},
   pcbArcEditMode: DEFAULT_ARC_EDIT_MODE,
   schArcEditMode: DEFAULT_ARC_EDIT_MODE,
   escClearsNetHighlight: true,
@@ -311,6 +323,9 @@ export function sanitizePreferences(raw: unknown): Preferences {
     fpInvertXAxis: bool(o.fpInvertXAxis, d.fpInvertXAxis),
     fpInvertYAxis: bool(o.fpInvertYAxis, d.fpInvertYAxis),
     fpTextGraphics: o.fpTextGraphics && typeof o.fpTextGraphics === "object" ? (o.fpTextGraphics as TextGraphicsDefaults) : d.fpTextGraphics,
+    fpDefaultTextItems: sanitizeFpTextItems(o.fpDefaultTextItems),
+    fpUserLayerCount: clampInt(o.fpUserLayerCount, 0, 9, d.fpUserLayerCount),
+    fpUserLayerNames: sanitizeUserLayerNames(o.fpUserLayerNames),
     pcbArcEditMode: arcEditMode(o.pcbArcEditMode, d.pcbArcEditMode),
     schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
     escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),
