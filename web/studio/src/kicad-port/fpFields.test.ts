@@ -203,3 +203,22 @@ test("a custom pad's checks: its copper's box for the paste, its basic shapes fo
   assert.deepEqual(padCheck({ ...custom, maskMargin: null, size: [100_000, 100_000], customBox: [2_000_000, 2_000_000], pasteMargin: -500_000 }, fmt).warnings, []);
   assert.deepEqual(padCheck({ ...custom, size: [0, 0] }, fmt).errors, [], "a custom pad has no positive-size check");
 });
+
+test("UI-LEFT P14: four mandatory rows, and a repeated field name taken as KiCad's reader takes it (the later's text and look on the first of the name)", async () => {
+  const { MANDATORY_FIELDS, MANDATORY_ROW_COUNT, mergeDuplicateFields, newFieldName } = await import("./fpFields");
+  assert.deepEqual([...MANDATORY_FIELDS], ["Reference", "Value", "Datasheet", "Description"]);
+  assert.equal(MANDATORY_ROW_COUNT, 4);
+  assert.equal(newFieldName([], 4), "Field4", "GetUserFieldName( m_fields->size() ) after the four mandatory rows");
+  const rows = [
+    { name: "Reference", text: "R1", layout: 1 },
+    { name: "Value", text: "10k", layout: 2 },
+    { name: "MPN", text: "A", layout: 3 },
+    { name: "MPN ", text: "B", layout: 4 },
+    { name: "Value", text: "22k", layout: 5 },
+  ];
+  assert.deepEqual(mergeDuplicateFields(rows), [
+    { name: "Reference", text: "R1", layout: 1 },
+    { name: "Value", text: "22k", layout: 5 },
+    { name: "MPN", text: "B", layout: 4 },
+  ]);
+});

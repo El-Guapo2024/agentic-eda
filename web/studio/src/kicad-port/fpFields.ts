@@ -84,7 +84,7 @@ export function localAngleOf(part: Pick<Part, "side" | "rot">, abs: number): num
 }
 
 /** The user fields as the verb takes them, in order. */
-export const userFieldsOf = (part: Part): UserFieldCmd[] => fieldsOf(part).filter((f) => f.name !== REFERENCE && f.name !== VALUE).map((f) => ({ name: f.name, text: f.text, layout: layoutOf(f) }));
+export const userFieldsOf = (part: Part): UserFieldCmd[] => fieldsOf(part).filter((f) => f.name !== REFERENCE && f.name !== VALUE && !((f.name === "Datasheet" || f.name === "Description") && !f.custom)).map((f) => ({ name: f.name, text: f.text, layout: layoutOf(f) }));
 
 /** The attributes as the verb takes them. */
 export function attrsOf(part: Part): FootprintAttrsCmd {
@@ -176,6 +176,27 @@ export function checkFieldRow(name: string, layout: Pick<FieldLayoutCmd, "size" 
 }
 
 /** `GetUserFieldName( ordinal )`: the name a field starts with when it is added (`Field4`, `Field5` ...). */
+/** `PCB_FIELD::IsMandatory`: Reference, Value, Datasheet and Description, the first four rows of Footprint Properties' grid (`GetMandatoryRowCount`). */
+export const MANDATORY_FIELDS = [REFERENCE, VALUE, "Datasheet", "Description"] as const;
+export const MANDATORY_ROW_COUNT = MANDATORY_FIELDS.length;
+
+/**
+ * Two fields of one name, as KiCad treats them: `DIALOG_FOOTPRINT_PROPERTIES::Validate` refuses neither a repeated name nor a mandatory one, the board file is
+ * written with both, and `parseFOOTPRINT_unchecked` reads the later `(property ..)` into the field the name already has (`HasField( pName )`: `SetText`, then
+ * `parsePCB_TEXT_effects`). The studio's fields are keyed by name, so the rows are taken the way that read takes them: a later row's text and look land on the
+ * first row of its name (a mandatory field's too), and the later row goes.
+ */
+export function mergeDuplicateFields<T extends { name: string; text: string; layout: unknown }>(rows: readonly T[]): T[] {
+  const out: T[] = [];
+  for (const r of rows) {
+    const name = r.name.trim();
+    const i = out.findIndex((o) => o.name.trim() === name);
+    if (i < 0) out.push(r);
+    else out[i] = { ...out[i]!, text: r.text, layout: r.layout };
+  }
+  return out;
+}
+
 export function newFieldName(existing: readonly string[], ordinal: number): string {
   let n = ordinal;
   for (;;) {

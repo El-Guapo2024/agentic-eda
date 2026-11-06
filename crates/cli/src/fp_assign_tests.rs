@@ -502,3 +502,47 @@ fn inserting_the_editors_footprint_adds_a_part_of_its_own_with_the_edited_pads_a
     redo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert!(load(&dir).unwrap().2.part(&reference).is_some());
 }
+
+/// UI-LEFT P14: Footprint Properties' Reference and Value on the board. A footprint with a symbol is renamed with its symbol and takes the symbol's new value, as
+/// Update Schematic from PCB would carry them back (`BACK_ANNOTATE`'s references and values); a footprint no symbol is for is renamed and revalued on the board
+/// alone. The grid's four mandatory rows (Reference, Value, Datasheet, Description) are in the state, the Datasheet the symbol's until the footprint has its own.
+#[test]
+fn footprint_properties_reference_and_value_reach_the_schematic_and_a_board_only_footprint_keeps_them_its_own() {
+    let dir = board_with_schematic("fp_props_reference_value");
+    let (_, _, model) = load(&dir).unwrap();
+    let first = model.parts[0].reference.clone();
+    // the footprint's own Value text (`FOOTPRINT::SetValue`: the Value field's text, `FieldLayout::text`), the symbol's value with it, then the rename (the
+    // dialog's order: every command before the rename names the footprint as it was)
+    let mut value_layout = eda_model::fp_edit::effective_value(&load(&dir).unwrap().1, load(&dir).unwrap().1.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == first).unwrap());
+    value_layout.text = Some("4k7".into());
+    let own = Cmd::EditBoardFootprint { part: first.clone(), reference: None, value: Some(value_layout), fields: None, attrs: None };
+    let value = on_its_sheet(&dir, &first, Cmd::EditSymbolFields { id: first.clone(), value: Some("4k7".into()), footprint: None, datasheet: None });
+    let rename = on_its_sheet(&dir, &first, Cmd::RenameSymbol { id: first.clone(), new_id: "R77".into() });
+    step(&dir, Cmd::Batch { cmds: vec![own, value, rename] }, false, "test").unwrap_or_else(|e| panic!("{}", super::reasons(&e)));
+    let (_, design, model) = load(&dir).unwrap();
+    assert!(model.part("R77").is_some(), "the board's part is the renamed symbol's");
+    assert!(design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter()).any(|s| s.id == "R77" && s.value == "4k7"), "the schematic's symbol has the value");
+    assert_consistent(&dir);
+    // the four mandatory rows
+    let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+    let state = crate::studio::state(&dir, &job, crate::text_vars_json::clock_of("/api/state")).unwrap();
+    let part = state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == "R77").unwrap();
+    let names: Vec<&str> = part["fields"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert_eq!(&names[..4], ["Reference", "Value", "Datasheet", "Description"]);
+    assert_eq!(part["fields"][2]["visible"], false, "the Datasheet is hidden, as Update PCB from Schematic adds it");
+    assert_eq!(part["fields"][1]["text"], "4k7", "the footprint's Value shows the new value");
+
+    // a footprint placed from the editor's library: no symbol is for it
+    let mut chip = eda_kicad::parse_library_footprint(CHIP).unwrap().footprint;
+    chip.name = "Mine:Chip".into();
+    step(&dir, Cmd::PutLibraryFootprint { footprint: chip.clone(), overwrite: false }, false, "test").unwrap();
+    let place = Cmd::PlaceFootprint { footprint: "Mine:Chip".into(), at: eda_model::ir::Point { x: mm(10.0), y: mm(15.0) }, reference: String::new(), value: String::new(), definition: Some(chip) };
+    step(&dir, place, false, "test").unwrap();
+    let reference = load(&dir).unwrap().2.parts.iter().find(|p| p.footprint.as_deref() == Some("Mine:Chip")).unwrap().reference.clone();
+    step(&dir, Cmd::Batch { cmds: vec![Cmd::EditSymbolFields { id: reference.clone(), value: Some("CHIPV".into()), footprint: None, datasheet: None }, Cmd::RenameSymbol { id: reference.clone(), new_id: "X9".into() }] }, false, "test")
+        .unwrap_or_else(|e| panic!("{}", super::reasons(&e)));
+    let (_, design, model) = load(&dir).unwrap();
+    assert!(model.part("X9").is_some_and(|p| p.value.as_deref() == Some("CHIPV")), "{:?}", model.part("X9"));
+    assert!(design.drawings.as_ref().unwrap().board_parts.iter().any(|b| b.reference == "X9" && b.value.as_deref() == Some("CHIPV")));
+    assert_eq!(step(&dir, Cmd::RenameSymbol { id: "X9".into(), new_id: "R77".into() }, false, "test").unwrap_err()[0].check, "ops_duplicate_symbol", "a reference a symbol has is taken");
+}

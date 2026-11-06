@@ -174,3 +174,93 @@ fn our_teardrops_are_kicad_clis_own() {
     assert_eq!(ours, kicad);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT P3: each via's and pad's own teardrop parameters. KiCad 25ec2335's `UpdateTeardrops` builds an anchor's teardrops from its own `TEARDROP_PARAMETERS`
+/// (`via->GetTeardropParams()`, `pad->GetTeardropParams()`), and so does ours (`eda_model::teardrop_params`, read from the file's `(teardrops ..)`), with Board
+/// Setup's block off: an anchor whose own are off gets none, one whose own are on gets teardrops as long and wide as its own ratios and limits say, and a
+/// track at or past its own filter ratio gets none.
+#[test]
+fn each_anchors_own_teardrop_parameters_give_kicad_clis_teardrops() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let params = |enabled: bool, len_ratio: f64, max_len: f64, width_ratio: f64, max_width: f64, filter: f64| {
+        format!("(teardrops (best_length_ratio {len_ratio}) (max_length {max_len}) (best_width_ratio {width_ratio}) (max_width {max_width}) (curved_edges no) (filter_ratio {filter}) (enabled {}) (allow_two_segments no) (prefer_zone_connections yes))", if enabled { "yes" } else { "no" })
+    };
+    // (x, y, diameter, track width, the via's parameters, teardrops expected)
+    let vias: Vec<(f64, f64, f64, f64, String, usize)> = vec![
+        (100.0, 100.0, 0.8, 0.2, params(true, 0.5, 1.0, 1.0, 2.0, 0.9), 1),
+        (110.0, 100.0, 0.8, 0.2, params(false, 0.5, 1.0, 1.0, 2.0, 0.9), 0),
+        (120.0, 100.0, 0.8, 0.2, params(true, 1.0, 3.0, 1.0, 2.0, 0.9), 1),
+        (130.0, 100.0, 1.0, 0.25, params(true, 0.6, 0.4, 0.8, 0.6, 0.9), 1),
+        (140.0, 100.0, 0.8, 0.3, params(true, 0.5, 1.0, 1.0, 2.0, 0.3), 0),
+        (150.0, 100.0, 0.8, 0.2, params(true, 0.5, 1.0, 1.0, 0.0, 0.9), 1),
+    ];
+    // (x, y, the pad's shape and size, track width, its parameters, teardrops expected)
+    let pads: Vec<(f64, f64, &str, f64, String, usize)> = vec![
+        (100.0, 120.0, "rect (size 1.5 1)", 0.25, params(true, 0.5, 1.0, 1.0, 2.0, 0.9), 1),
+        (110.0, 120.0, "rect (size 1.5 1)", 0.25, params(false, 0.5, 1.0, 1.0, 2.0, 0.9), 0),
+        (120.0, 120.0, "roundrect (size 1.2 0.9) (roundrect_rratio 0.25)", 0.2, params(true, 0.9, 2.0, 0.9, 1.2, 0.9), 1),
+        (130.0, 120.0, "circle (size 1 1)", 0.2, params(true, 0.4, 0.5, 0.7, 0.8, 0.9), 1),
+    ];
+    let mut s = String::from(
+        "(kicad_pcb (version 20241229) (generator \"pcbnew\") (generator_version \"9.0\")\n  (general (thickness 1.6))\n  (paper \"A4\")\n  (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (1 \"F.Mask\" user) (3 \"B.Mask\" user) (13 \"F.Paste\" user) (15 \"B.Paste\" user) (25 \"Edge.Cuts\" user))\n  (setup (pad_to_mask_clearance 0))\n  (net 0 \"\")\n  (net 1 \"N1\")\n  (gr_rect (start 85 85) (end 200 175) (stroke (width 0.1) (type solid)) (fill no) (layer \"Edge.Cuts\") (uuid \"00000000-0000-0000-0000-000000000001\"))\n",
+    );
+    let mut uuid = 0x2000;
+    let mut next = || {
+        uuid += 1;
+        format!("00000000-0000-0000-0000-{uuid:012x}")
+    };
+    for (x, y, d, w, p, _) in &vias {
+        s += &format!("  (via (at {x} {y}) (size {d}) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 1) {p} (uuid \"{}\"))\n", next());
+        s += &format!("  (segment (start {x} {y}) (end {} {y}) (width {w}) (layer \"F.Cu\") (net 1) (uuid \"{}\"))\n", x + 5.0, next());
+    }
+    for (i, (x, y, shape, w, p, _)) in pads.iter().enumerate() {
+        let (shape_word, rest) = shape.split_once(' ').unwrap();
+        s += &format!("  (footprint \"T:Q{i}\" (layer \"F.Cu\") (uuid \"{}\") (at {x} {y})\n", next());
+        s += &format!("    (property \"Reference\" \"Q{i}\" (at 0 -3 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n", next());
+        s += &format!("    (pad \"1\" smd {shape_word} (at 0 0) {rest} (layers \"F.Cu\" \"F.Mask\" \"F.Paste\") (net 1 \"N1\") {p} (uuid \"{}\"))\n  )\n", next());
+        s += &format!("  (segment (start {x} {y}) (end {} {}) (width {w}) (layer \"F.Cu\") (net 1) (uuid \"{}\"))\n", x + 4.0, y + 1.5, next());
+    }
+    s += ")\n";
+
+    let dir = std::env::temp_dir().join(format!("eda_teardrops_own_kicad_cli_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pcb = dir.join("td.kicad_pcb");
+    std::fs::write(&pcb, &s).unwrap();
+    let out = Command::new(&cli).args(["pcb", "drc", "--refill-zones", "--save-board", "-o"]).arg(dir.join("drc.rpt")).arg(&pcb).output().unwrap();
+    assert!(out.status.success() || dir.join("drc.rpt").exists(), "kicad-cli: {}", String::from_utf8_lossy(&out.stderr));
+
+    let (mut design, model, _notes) = import_kicad_pcb(&std::fs::read_to_string(&pcb).unwrap()).unwrap();
+    let rt = design.routing.as_mut().unwrap();
+    let mut kicad: Vec<_> = rt.zones.iter().filter(|z| z.teardrop).map(|z| (z.layer.clone(), z.outline.clone())).collect();
+    rt.zones.retain(|z| !z.teardrop);
+    let expected = vias.iter().map(|v| v.5).sum::<usize>() + pads.iter().map(|p| p.5).sum::<usize>();
+    assert_eq!(kicad.len(), expected, "kicad-cli made the teardrops each anchor's own parameters ask for");
+
+    // Board Setup's block off: every anchor here is governed by its own parameters.
+    let mut ours: Vec<_> = generate_teardrops(&design, &model, &TeardropSettings::default()).into_iter().map(|z| (z.layer, z.outline)).collect();
+    let key = |o: &(String, Vec<eda_model::ir::Point>)| (o.1[0].x.get(), o.1[0].y.get());
+    kicad.sort_by_key(key);
+    ours.sort_by_key(key);
+    let show = |o: &(String, Vec<eda_model::ir::Point>)| format!("{} {:?}", o.0, o.1.iter().map(|p| (p.x.get(), p.y.get())).collect::<Vec<_>>());
+    if kicad != ours {
+        eprintln!("kicad {:#?}\nours  {:#?}", kicad.iter().map(show).collect::<Vec<_>>(), ours.iter().map(show).collect::<Vec<_>>());
+    }
+    assert_eq!(ours, kicad);
+    // And our writer gives kicad-cli each anchor's own parameters back: the board written from the import, read again, has the same teardrops of ours.
+    let written = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-06", title: "td" }).unwrap();
+    for (_, _, _, _, p, _) in &vias {
+        assert!(written.contains(p.as_str()), "a via's own parameters are written back: {p}");
+    }
+    let (again, again_model, _) = import_kicad_pcb(&written).unwrap();
+    let mut ours_again: Vec<_> = generate_teardrops(&again, &again_model, &TeardropSettings::default()).into_iter().map(|z| (z.layer, z.outline)).collect();
+    ours_again.sort_by_key(key);
+    assert_eq!(ours_again, ours, "the parameters survive our writer and reader");
+    let _ = std::fs::remove_dir_all(&dir);
+}

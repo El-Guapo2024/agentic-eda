@@ -80,7 +80,7 @@ impl PcbShown {
                 // the link the board file gives it (`footprint_lib_id`; a name with no library is bare)
                 let lib_id = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).unwrap_or_else(|| footprint.name.clone());
                 let (nickname, item) = lib_id.split_once(':').unwrap_or(("", lib_id.as_str()));
-                let fields: Vec<PcbField> = crate::fp_json::fields_json(design, part, fp, &footprint).iter().map(field_of).collect();
+                let fields: Vec<PcbField> = crate::fp_json::fields_json(design, model, part, fp, &footprint).iter().map(field_of).collect();
                 // `PAD::GetPinFunction`: what Update PCB from Schematic gives the pad (`(pinfunction ..)`, the netlist's pin name), as the board file has it
                 let link = model.symbol_links.get(&part.reference);
                 let pads = footprint
@@ -150,6 +150,23 @@ impl PcbShown {
             if shown != raw {
                 f["shown"] = json!(shown);
             }
+        }
+    }
+
+    /// The shown text of each of a footprint's own texts (`p["texts"]`, ids `REF~t<k>`) as `PCB_TEXT::GetShownText` gives it: `${LAYER}` the text's own layer,
+    /// then the footprint's variables, then the board's -- the title block's (`${TITLE}`, `${REVISION}`, `${COMMENT1}` ..), the project's, `${FILENAME}` (UI-LEFT
+    /// P15; `fp_art_json::add_art` resolved only the footprint's own).
+    pub(crate) fn annotate_art_texts(&self, part: &str, footprint: &eda_model::Footprint, texts: &mut Value) {
+        let (Some(&i), Some(list)) = (self.by_part.get(part), texts.as_array_mut()) else { return };
+        let fp = &self.board.footprints[i];
+        for t in list {
+            let Some(k) = t["id"].as_str().and_then(|id| id.rsplit_once("~t")).and_then(|(_, k)| k.parse::<usize>().ok()) else { continue };
+            let Some(raw) = footprint.art.texts.get(k).map(|a| a.text.as_str()) else { continue };
+            if !eda_model::text_vars::has_text_vars(raw) {
+                continue;
+            }
+            let layer = t["layer"].as_str().unwrap_or("").to_string();
+            t["text"] = json!(fp.shown(&self.board, raw, &layer, 0));
         }
     }
 

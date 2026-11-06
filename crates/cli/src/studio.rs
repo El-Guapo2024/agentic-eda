@@ -1232,7 +1232,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
-    let flashed = eda_connectivity::flashed_layers(&design, &model);
+    // With the layers the last fill forced them to flash on (`ZLO_FORCE_FLASHED`, kicad-cli's, kept in the fill cache).
+    let forced = eda_kicad::zone_fills::load(dir).map(|f| f.forced).unwrap_or_default();
+    let flashed = eda_connectivity::flashed_layers_with_forced(&design, &model, &forced);
     let block_of: std::collections::HashMap<String, String> = view["parts"]
         .as_array()
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())
@@ -1281,6 +1283,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                             // The pad's own layers, for the 3D viewer's paste (r6 V6-5).
                             if let (Some(f), Some(obj)) = (footprint.as_ref(), v.as_object_mut()) {
                                 obj.insert("layers".into(), json!(crate::fp_json::pad_file_layers(&design, fp, f, pad)));
+                                // Its own teardrop parameters, fabrication property, pad-to-die length and delay, pin name and type (UI-LEFT P3).
+                                crate::fp_json::add_pad_facts(obj, &design, fp, f, pad, *nth);
                             }
                             v
                         }
@@ -1290,7 +1294,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 .collect();
             if let Some(footprint) = &footprint {
                 // The footprint's fields as laid out on the board, and its attributes.
-                p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
+                p["fields"] = json!(crate::fp_json::fields_json(&design, &model, part, fp, footprint));
                 tv.annotate_fields(&part.reference, &mut p["fields"]);
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
                 // A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`), for Swap Gate Nets' menu: absent for fewer than two.
@@ -1300,6 +1304,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 }
                 // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
                 crate::fp_art_json::add_art(&mut p, part, fp, footprint);
+                // the board's variables in its texts (the title block's ..), and the lines of its hatched graphics (UI-LEFT P15)
+                tv.annotate_art_texts(&part.reference, footprint, &mut p["texts"]);
+                crate::fp_art_json::add_hatch_lines(&mut p, &design, &model, fp, footprint);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
@@ -1374,6 +1381,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 if let Some(r) = facts.paste_margin_ratio {
                     p["paste_margin_ratio"] = json!(r);
                 }
+            } else if let Some(e) = design.footprint_edit(&part.reference) {
+                // a footprint placed from the intent: the paste margins Footprint Properties gave it (`FootprintEdit::solder_paste_margin`, `..ratio`; UI-LEFT P14)
+                if let Some(m) = e.solder_paste_margin {
+                    p["paste_margin"] = json!(m);
+                }
+                if let Some(r) = e.solder_paste_ratio {
+                    p["paste_margin_ratio"] = json!(r);
+                }
             }
         }
         parts.push(p);
@@ -1417,6 +1432,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     "flashed": flashed.vias.get(&v.id),
                     // The tenting, covering, plugging, capping, filling, backdrill and post-machining the via's tokens say (`eda_model::via_extra::ViaProps`); absent for none.
                     "props": extra.map(|e| e.props()).filter(|p| *p != eda_model::via_extra::ViaProps::default()),
+                    // Its own teardrop parameters (`PCB_VIA::GetTeardropParams`, `eda_model::teardrop_params`); absent when Board Setup's block serves it.
+                    "teardrops": extra.and_then(|e| e.teardrops()),
                 })
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({

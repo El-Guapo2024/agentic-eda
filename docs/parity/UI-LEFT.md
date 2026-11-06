@@ -18,7 +18,7 @@ Notes:
 
 **Top 12, all areas:**
 1. X1: the Plot dialog is Gerber only -- **done (task-u1-plot)**
-2. P1: teardrops -- **done (task-u1-pcb)**; per-pad parameters left
+2. P1: teardrops -- **done (task-u1-pcb)**; per-pad parameters **done (task-u5-pcbfp)**
 3. S1: placing labels, power symbols and text -- **done (task-u1-schplace)**
 4. R1: dragging a footprint with its tracks -- **done (task-u1-drag)**
 5. L1: saving into table libraries
@@ -33,19 +33,18 @@ Notes:
 ## PCB editor
 
 - **P1 [BD] Teardrops.** **done (task-u1-pcb)**: SMD pads of every shape but a custom one, tracks ending off centre in a via or pad or crossing one (R7-1), each polyline segment its own track; 39 kicad-cli outlines point for point (PARITY-pcb §66). Left:
-  - Each via's and pad's own teardrop parameters are not read (the file's tokens are kept, unread); Board Setup's one block serves every anchor. Custom pads get none.
+  - ~~Each via's and pad's own teardrop parameters are not read~~ **done (task-u5-pcbfp)**: read, written, edited (Track & Via and Pad Properties, the Properties panel) and honoured by the generator, kicad-cli's outlines point for point (PARITY-pcb §78). Custom pads get none.
   - One segment, straight edges, no track-to-track; no fit to other nets' clearance, no mask teardrops.
   - Not kept current as you edit: you re-run Add All Teardrops.
   - L. GAPS 8/13/35; PARITY-pcb §15, §62 D6-1, §66; r7 R7-1.
 - **P2 [BD] Properties panel.** **done (task-u1-props)**: every class lists KiCad's registered rows in KiCad's groups and order (a test replays the C++); via tenting, covering, plugging, capping, filling, backdrill, post-machining, layers and type, track and shape solder mask, corner radius, text italic, bold, vertical justification, width apart from height, knockout and automatic pen, a pad's orientation, copper layers and overrides, a footprint's reference and (board-file) paste margins are edited; Component Type, which KiCad's panel lacks, is gone (PARITY-pcb §67). Left, read-only with the reason as the tooltip:
-  - Fonts, every teardrop row (P1's per-item parameters), a pad's number, pin name and type, post-machining, backdrill, fabrication property and pad-to-die, a dimension's label style (a shape's line style and a leader's text frame are edited since task-u2-lines, P5, P13).
-  - A footprint placed from the intent has no paste margin of its own; text colour is masked on board text, as in KiCad.
+  - Fonts, a pad's number, post-machining and backdrill, a dimension's label style (a shape's line style and a leader's text frame are edited since task-u2-lines, P5, P13; the teardrop rows, a pad's pin name and type, fabrication property and pad-to-die since task-u5-pcbfp, P3).
+  - Text colour is masked on board text, as in KiCad (a footprint placed from the intent has its own paste margins since task-u5-pcbfp, P14).
   - M. GAPS 10; PARITY-pcb §23, §67.
-- **P3 [FM] Track & Via and Pad Properties.**
-  - No via protection (IPC-4761 tenting, covering, plugging, filling), backdrill or post-machining.
-  - No pad fabrication property, pin function or pad-to-die length.
-  - A custom padstack's per-layer thermal and clearance can't be edited, and neither can via padstacks. A zone's force-flash is kept but not applied.
-  - M. PARITY-pcb §10, §26, §43, §44, §56; r2 A5.
+- **P3 [FM] Track & Via and Pad Properties.** **done (task-u5-pcbfp)**: Track & Via Properties' Padstack mode and Edit layer, Protection features (the IPC-4761 presets), Backdrill with its sizes and must-cut layers, Hole Post-machining and the via's own teardrops; Pad Properties' Fabrication property, pad-to-die length and delay and the pad's own teardrops; the panel's Pin Name and Pin Type; each via's and pad's own teardrop parameters honoured (kicad-cli proof); a zone's force-flash (`ZLO_FORCE_FLASHED`) read from kicad-cli's fill, applied to the flashed layers and written back (kicad-cli proof, with a Solid zone and a pad's FULL connection); a custom padstack's per-layer thermal and clearance kept and written, the dialog editing the front's as KiCad's does (PARITY-pcb §78). Left:
+  - A via's padstack diameters are drawn, routed and checked at the front's (kicad-cli reads them all).
+  - Curved and two-segment teardrops are kept, not built (P1).
+  - M. PARITY-pcb §78.
 - **P4 [BD] Board text.** **done (task-u1-pcb)** for Bold: the Text dialog has KiCad's Bold, and a new copper text box is bold as `InferBold` makes it (R7-3; PARITY-pcb §66). Left:
   - The Text dialog has no Italic.
   - A text is centred on its anchor whatever its vertical justification.
@@ -97,16 +96,13 @@ Notes:
   - A manual text's left or right justification is not flipped past the crossbar's middle (the IR's dimension text is always centred); no font, bold, italic or mirror.
   - A rounded-rectangle frame (`DIM_TEXT_BORDER::ROUNDRECT`, not offered by 8303b2ad's dialog) is kept but drawn as none, as 8303b2ad does.
   - M. PARITY-pcb §18, §69; GAPS 28/35.
-- **P14 [BD] Footprint Properties on the board.**
-  - Reference and Value can't be edited, because they come from the schematic.
-  - It shows 2 mandatory field rows, not 4 (unsure).
-  - Paste overrides are read-only, and duplicate field names are refused (r2 C8, kept).
-  - M. PARITY-pcb §10, §26, §56; fpedit §16.
-- **P15 [BD] Footprint graphics on the board.**
-  - They can't be selected or edited one by one.
-  - Title-block variables in footprint text aren't resolved.
-  - A hatched graphic is drawn as an outline.
-  - M. GAPS 25; PARITY-pcb §28, §39.
+- **P14 [BD] Footprint Properties on the board.** **done (task-u5-pcbfp)**: the four mandatory rows (Reference, Value, Datasheet, Description); Reference and Value edited and carried to the symbol on whichever sheet it is (a board-only footprint renamed and revalued on the board); a repeated field name taken as KiCad's reader takes it; the footprint's paste clearance for any footprint (PARITY-pcb §78). Left:
+  - A Datasheet or Description edited here is the footprint's own, not carried to the symbol; a user field named like a mandatory one is still refused.
+  - The footprint's own mask margin and "Allow bridged solder mask apertures" are not edited here.
+  - M. PARITY-pcb §78.
+- **P15 [BD] Footprint graphics on the board.** **done (task-u5-pcbfp)**: a footprint's own texts are items of the board (picked, moved, turned, flipped, edited in Text Properties and deleted, in the instance's own copy); the title block's and the board's variables resolved in them; a hatched graphic drawn with its hatch lines (PARITY-pcb §78). Left:
+  - A footprint's own graphics are picked as the footprint, as in KiCad's board editor ("Most footprint children can only be selected in the footprint editor"); the global edit and the Footprint Editor edit them.
+  - M. PARITY-pcb §78.
 - **P16 [BD] Tables, on the board and the sheet.**
   - No paste of tables or cells, and no drag-select of cells.
   - Flip is a plain mirror.
@@ -134,12 +130,10 @@ Notes:
   - Its sheets come from the inferred modules (R7-D5). The boards it writes have no sheet name, so KiCad's own Repeat Layout finds empty sheets.
   - Save Selection as a block drops groups (P18-3).
   - M. GAPS 24/32; PARITY-pcb §36, §40.
-- **P21 [BD] Footprint exchange and swaps.**
-  - Change and Update Footprint match pads by number only.
-  - Compare with Library misses attribute flags and net ties.
-  - Library pad layers aren't carried.
-  - Update Schematic from PCB doesn't carry a pin or gate swap back to the schematic.
-  - M. GAPS 26; PARITY-pcb §30, §45, §61.
+- **P21 [BD] Footprint exchange and swaps.** **done in part (task-u5-pcbfp)**: Change and Update Footprint match the pads as `ExchangeFootprint` does (by number, then by place and shape; a renumbered pad takes the old pad's net, pin name and type), Update PCB from Schematic's exchange keeping them by number; Compare with Library tests the attribute flags against the library's own, the solder mask bridges and the net ties (PARITY-pcb §78). Left:
+  - Library pad layers, die lengths and properties aren't carried onto a footprint placed or updated from the library.
+  - Update Schematic from PCB doesn't carry a pin or gate swap back to the schematic (25ec2335's `applyPinSwaps`, `PlanBackannotateUnitSwaps`).
+  - M. GAPS 26; PARITY-pcb §30, §45, §61, §77.
 - **P22 [BD] Selection.**
   - The Selection Filter has no "Only…" menu and isn't saved.
   - The clarification menu has no numbered hotkeys.
@@ -445,15 +439,15 @@ Notes:
   - ~~No `@{}` math functions, VCSHASH or PIN_NAME(n).~~
   - ~~Not expanded in schematic text boxes or power-symbol fields.~~
   - S. GAPS 3; PARITY-sch §19b.
-- **B6 [BD] Inspection.** **done (task-u5-dialogs)** (PARITY-pcb §78): the geometry functions on the board's shapes, courtyards and areas; fromTo on the board's copper paths (FROM_TO_CACHE), in Find by Properties and the rules; A.Net is the net code; microvias; the tuning profiles' implicit rules; the rules text's `${VAR}`. Left: zones in the from-to paths; a lone pin's net in the codes.
+- **B6 [BD] Inspection.** **done (task-u5-dialogs)** (PARITY-pcb §79): the geometry functions on the board's shapes, courtyards and areas; fromTo on the board's copper paths (FROM_TO_CACHE), in Find by Properties and the rules; A.Net is the net code; microvias; the tuning profiles' implicit rules; the rules text's `${VAR}`. Left: zones in the from-to paths; a lone pin's net in the codes.
   - ~~In Find by Properties, intersectsCourtyard/Area, enclosedByArea and fromTo always return false, A.Net is the name, and there are no microvias.~~
   - ~~Clearance and Constraints Resolution lack tuning-profile rules and `${VAR}`.~~
   - M. GAPS 29; PARITY-pcb §32, §32c.
-- **B7 [BD] Exclusions.** **done in part (task-u5-dialogs)** (PARITY-pcb §79, PARITY-sch §65): a DRC clearance, short or crossing between two tracks or vias reaches kicad-cli at KiCad's contact point (kicad-cli proof); `copper_sliver` and `starved_thermal` on each copper layer; the five similar-name and local/global-name ERC checks (one sheet); a pin-to-pin Ignore on an error is remembered (D3-M2). Left, DRC: pads, zones, arcs, holes, the edge, courtyard and silk overlaps. Left, ERC: `endpoint_off_grid`, `unconnected_wire_endpoint`, `four_way_junction`, `label_multiple_wires`, `no_connect_connected`, `hier_label_mismatch`, `bus_definition_conflict`, `duplicate_pins`, `field_name_whitespace`, `generic-*`, `unresolved_variable`, the name checks over several sheets; kicad-cli and Save... still report the pin-to-pin errors the studio ignores.
+- **B7 [BD] Exclusions.** **done in part (task-u5-dialogs)** (PARITY-pcb §80, PARITY-sch §65): a DRC clearance, short or crossing between two tracks or vias reaches kicad-cli at KiCad's contact point (kicad-cli proof); `copper_sliver` and `starved_thermal` on each copper layer; the five similar-name and local/global-name ERC checks (one sheet); a pin-to-pin Ignore on an error is remembered (D3-M2). Left, DRC: pads, zones, arcs, holes, the edge, courtyard and silk overlaps. Left, ERC: `endpoint_off_grid`, `unconnected_wire_endpoint`, `four_way_junction`, `label_multiple_wires`, `no_connect_connected`, `hier_label_mismatch`, `bus_definition_conflict`, `duplicate_pins`, `field_name_whitespace`, `generic-*`, `unresolved_variable`, the name checks over several sheets; kicad-cli and Save... still report the pin-to-pin errors the studio ignores.
   - ~~Some DRC exclusions~~ (in part), and the ERC exclusions of about 15 check types (in part), stay in the studio.
   - ~~A pin-to-pin Ignore isn't remembered (D3-M2).~~
   - M. GAPS 11; PARITY-sch §28.
-- **B8 [FM] DRC dialog.** **done (task-u5-dialogs)** (PARITY-pcb §79): Report All Errors for Each Track (`--all-track-errors`), Cross-probe Selected Items and Center on Cross-probe behind the options button; the Show boxes start with Errors and Warnings and are kept between openings. Left: the ERC dialog's own options menu and Show boxes; Refill and Parity are not kept between openings.
+- **B8 [FM] DRC dialog.** **done (task-u5-dialogs)** (PARITY-pcb §80): Report All Errors for Each Track (`--all-track-errors`), Cross-probe Selected Items and Center on Cross-probe behind the options button; the Show boxes start with Errors and Warnings and are kept between openings. Left: the ERC dialog's own options menu and Show boxes; Refill and Parity are not kept between openings.
   - ~~No "Report all errors for each track" and no cross-probe options.~~
   - ~~The Show boxes start ticked (R6-D9).~~
   - S. PARITY-pcb §9a.

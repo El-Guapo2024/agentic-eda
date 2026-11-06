@@ -11,6 +11,7 @@ import { extraDeleteCmd, extraItems } from "./pcbExtraItems";
 import { cellById } from "./tables";
 import { editFieldCmd, fieldById } from "./fpFields";
 import { pointInRings } from "./pcbModify";
+import { fpTextById } from "./pcbItems";
 
 /** The tuning patterns (`PCB_GENERATOR`s) among `ids`: deleting one puts the track back as it was before it was tuned, which the tuner's API does (`/api/tune/remove`), not a verb. */
 export function tuningPatternIds(board: BoardState | null | undefined, ids: readonly string[]): string[] {
@@ -91,6 +92,16 @@ export function boardDeleteCmds(
     if (!f || wanted.has(f.part.ref)) continue;
     if (f.field.visible) cmds.push(editFieldCmd(f.part, f.field, { visible: false }));
     else alreadyHidden++;
+  }
+  // `case PCB_TEXT_T:` a footprint's own text is removed from its footprint (`commit.Remove( board_item )`; UI-LEFT P15), in the instance's own copy -- the highest
+  // index first, as each removal renumbers the texts after it. (One of a footprint that is itself deleted goes with it.)
+  const fpTexts = [...wanted]
+    .map((id) => ({ id, at: id.lastIndexOf("~t") }))
+    .filter(({ id, at }) => at > 0 && fpTextById(board, id) && !wanted.has(id.slice(0, at)))
+    .sort((a, b) => a.id.slice(0, a.at).localeCompare(b.id.slice(0, b.at)) || Number(b.id.slice(b.at + 2)) - Number(a.id.slice(a.at + 2)));
+  for (const { id } of fpTexts) {
+    cmds.push({ op: "edit_board_footprint_text", id, delete: true });
+    deleted++;
   }
   for (const id of wanted) {
     const known = tables.has(id) || tracks.has(id) || vias.has(id) || zones.has(id) || shapes.has(id) || texts.has(id) || dimensions.has(id) || extras.has(id) || placed.has(id);
