@@ -69,3 +69,55 @@ test("the via rows: type, layer pair and annular rings as one set_via_layers ove
   assert.equal(viaLayerDepth("blind", "F.Cu", "In1.Cu", ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]), 1);
   assert.equal(viaLayerDepth("through", null, null, ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]), 3);
 });
+
+test("UI-LEFT P3: the via's protection, backdrill, post-machining and padstack as one set_via_props per via, its teardrops as set_teardrop_params", () => {
+  const vb = {
+    ...board,
+    routing: {
+      ...board.routing!,
+      teardrop_settings: { enabled: false, target_vias: true, target_pth_pads: true, target_smd_pads: true, best_length_ratio: 0.5, best_width_ratio: 1, max_len_nm: 1_000_000, max_width_nm: 2_000_000, width_to_size_filter_ratio: 0.9 },
+      vias: [
+        { id: "V1", net: "A", x: 5, y: 6, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu", props: { front_tenting: true, back_tenting: false, front_covering: false, back_covering: false, front_plugging: false, back_plugging: false, filling: false, capping: false } },
+        { id: "V2", net: "A", x: 9, y: 6, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu", props: { tertiary_drill: { size: 400_000, start: "B.Cu", end: "In2.Cu" } } },
+      ],
+    },
+  } as unknown as BoardState;
+  const before = trackViaForm(vb, ["V1", "V2"]);
+  assert.deepEqual([before.protection, before.backdrill, before.backdrillBackLayer, before.topPost, before.padstackMode], [null, null, null, "none", "normal"], "what differs is indeterminate");
+  assert.equal(trackViaForm(vb, ["V1"]).protection, "ia");
+  assert.equal(trackViaForm(vb, ["V2"]).backdrill, "bottom", "a tertiary drill is the bottom backdrill");
+  // Type IV-b, a top backdrill to In1.Cu, a countersink on the front, and teardrops on
+  const form = { ...before, protection: "ivb" as const, backdrill: "top" as const, backdrillFrontSize: 450_000, backdrillFrontLayer: "In1.Cu", topPost: "countersink" as const, topPostSize: 900_000, topPostSize2: 90, teardrops: { ...before.teardrops, enabled: true } };
+  const out = trackViaCmds(vb, before, form, String);
+  assert.ok("cmds" in out);
+  const props = out.cmds.filter((c) => c.op === "set_via_props");
+  assert.equal(props.length, 2);
+  assert.deepEqual(props[0], {
+    op: "set_via_props",
+    id: "V1",
+    props: {
+      front_tenting: true,
+      back_tenting: true,
+      front_covering: false,
+      back_covering: false,
+      front_plugging: true,
+      back_plugging: true,
+      filling: false,
+      capping: false,
+      backdrill: { size: 450_000, start: "F.Cu", end: "In1.Cu" },
+      front_post_machining: { mode: "countersink", size: 900_000, angle_ddeg: 900, depth: 0 },
+    },
+  });
+  const v2 = props[1] as unknown as { props: Record<string, unknown> };
+  assert.equal(v2.props.tertiary_drill, undefined, "Top makes the tertiary drill go");
+  assert.deepEqual(out.cmds.filter((c) => c.op === "set_teardrop_params"), [{ op: "set_teardrop_params", ids: ["V1", "V2"], params: { enabled: true, allow_two_segments: true, prefer_zone_connections: true, best_length_ratio: 0.5, max_length: 1_000_000, best_width_ratio: 1, max_width: 2_000_000, curved_edges: false, filter_ratio: 0.9 } }]);
+  // nothing changed sends nothing
+  const none = trackViaCmds(vb, before, before, String);
+  assert.ok("cmds" in none && none.cmds.length === 0);
+  // a front/inner/back padstack: the inner layers' diameter of its own
+  const one = trackViaForm(vb, ["V1"]);
+  const fib = trackViaCmds(vb, one, { ...one, padstackMode: "front_inner_back", layerSizes: { Inner: 500_000 } }, String);
+  assert.ok("cmds" in fib);
+  const sp = fib.cmds.find((c) => c.op === "set_via_props") as { props: { padstack?: unknown } };
+  assert.deepEqual(sp.props.padstack, { mode: "front_inner_back", sizes: { Inner: 500_000 } });
+});

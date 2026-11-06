@@ -85,6 +85,13 @@ export interface Pad {
   /** `PAD::GetPinFunction`, `GetPinType`: the schematic pin's name and electrical type, as the board file is written with them (`(pinfunction ..)`, `(pintype ..)`); absent for none. */
   pin_function?: string | null;
   pin_type?: string | null;
+  /** Its own teardrop parameters (`PAD::GetTeardropParams`): the edit's, else the board file's; absent when Board Setup's block serves it. */
+  teardrops?: TeardropParams | null;
+  /** `PAD::GetProperty` as the file writes it (`pad_prop_heatsink` ..); absent for none. */
+  property?: string | null;
+  /** `PAD::GetPadToDieLength`, nm, and `GetPadToDieDelay`, attoseconds; absent for 0. */
+  die_length?: Nm | null;
+  die_delay?: number | null;
 }
 
 /** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
@@ -433,6 +440,27 @@ export interface ViaProps {
   tertiary_drill?: ViaDrillProps;
   front_post_machining?: PostMachiningProps;
   back_post_machining?: PostMachiningProps;
+  /** The padstack when it is not a normal one (`PADSTACK::SetMode`): the diameter of the inner and back layers, or of each copper layer past `F.Cu`; absent for one diameter. */
+  padstack?: ViaPadstack;
+}
+
+/** `eda_model::via_extra::ViaPadstack`: a via's `(padstack (mode ..) (layer .. (size ..)) ..)`; `sizes` by layer (`Inner` for a front/inner/back stack's inner layers). */
+export interface ViaPadstack {
+  mode: "front_inner_back" | "custom";
+  sizes: Record<string, Nm>;
+}
+
+/** `eda_model::teardrop_params::TeardropParams` (`TEARDROP_PARAMETERS`): a via's or pad's own teardrop parameters; `prefer_zone_connections` is `!m_TdOnPadsInZones`. */
+export interface TeardropParams {
+  enabled: boolean;
+  allow_two_segments: boolean;
+  prefer_zone_connections: boolean;
+  best_length_ratio: number;
+  max_length: Nm;
+  best_width_ratio: number;
+  max_width: Nm;
+  curved_edges: boolean;
+  filter_ratio: number;
 }
 
 export interface Via {
@@ -453,6 +481,8 @@ export interface Via {
   flashed?: string[] | null;
   /** What its tokens say of the tenting, covering, plugging, capping, filling, backdrill and post-machining; absent for none. */
   props?: ViaProps | null;
+  /** Its own teardrop parameters (`PCB_VIA::GetTeardropParams`); absent when Board Setup's block serves it. */
+  teardrops?: TeardropParams | null;
 }
 
 /** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
@@ -1785,6 +1815,18 @@ export interface PadEditCmd {
   custom?: PadCustom;
   /** The padstack, replaced whole (`PAD::SetPadstack`): the shapes of the other copper layers and the unconnected-layer mode. */
   stack?: PadStack;
+  /** The pad's own teardrop parameters (`PAD::GetTeardropParams`). */
+  teardrops?: TeardropParams;
+  /** `PAD::SetProperty`: the file's word (`pad_prop_bga`, ..., `pad_prop_none` for none). */
+  property?: string;
+  /** `PAD::SetPadToDieLength`, nm (0 for none). */
+  die_length?: Nm;
+  /** `PAD::SetPadToDieDelay`, attoseconds (0 for none). */
+  die_delay?: number;
+  /** `PAD::SetPinFunction` (the Properties panel's Pin Name); "" for none. */
+  pin_function?: string;
+  /** `PAD::SetPinType` (Pin Type); "" for none. */
+  pin_type?: string;
 }
 
 /**
@@ -2119,6 +2161,8 @@ export type Cmd =
   | { op: "set_corner_radius"; ids: string[]; radius: Nm }
   /** A via's tenting, covering, plugging, capping, filling, backdrill and post-machining, whole (`set_via_props`). */
   | { op: "set_via_props"; id: string; props: ViaProps }
+  /** Vias' and pads' own teardrop parameters (`GetTeardropParams() = ..`); `null` gives them back to Board Setup's block. */
+  | { op: "set_teardrop_params"; ids: string[]; params: TeardropParams | null }
   /** A footprint's own paste margins (`set_footprint_paste_margin`); null is the board's. */
   | { op: "set_footprint_paste_margin"; part: string; margin: Nm | null; ratio: number | null }
   /**
