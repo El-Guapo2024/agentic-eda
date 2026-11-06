@@ -21,6 +21,7 @@ import type { Dispatch } from "react";
 import type { Cmd, PointXY } from "../api/types";
 import type { Action, StudioApi } from "../state/store";
 import { picker } from "./pcbPicker";
+import { gridFrameAngleAt } from "../kicad-port/gridFrame";
 
 /** Where the tool stands: off, the chooser open, waiting for the click that opens it, a footprint carried, or an unplaced part armed for its click. */
 export type PlaceFootprintStage = "idle" | "choosing" | "waiting" | "carrying" | "armed";
@@ -85,7 +86,8 @@ export function placeFootprintChosen(c: PlaceFootprintCtx, pick: { kind: "footpr
     c.dispatch({ type: "SET_ARMED", ref: pick.ref });
     return;
   }
-  carry((at) => ({ op: "place_footprint", footprint: pick.name, at }), chooserAt);
+  // `fp->SetOrientation( ANGLE_0 ); ... prevFrameAngle = ANGLE_0; applyPlacementFrameOrientation();`: a footprint fresh from the library has no frame turn yet.
+  carry((at) => ({ op: "place_footprint", footprint: pick.name, at }), chooserAt, 0);
 }
 
 /** The armed part was put down (or Escape took the arming back): the tool waits for the next click. */
@@ -101,17 +103,21 @@ export function placeFootprintFromEditor(c: PlaceFootprintCtx, build: (at: Point
   if (placingFootprint()) return false;
   if (stage === "waiting") picker.cancel();
   ctx = c;
-  carry(build, null);
+  // "A footprint handed over from another command may already carry the frame rotation of the grid it sits in; count that as applied, like a move pick-up":
+  // `SaveFootprintToBoard` hands it over at (0, 0), so the frame at the origin is what it carries.
+  const grids = c.api.getState().board?.drawings?.grid_items ?? [];
+  carry(build, null, grids.length ? gridFrameAngleAt(grids, [0, 0], "placement") : 0);
   return true;
 }
 
-function carry(build: (at: PointXY) => Cmd, at: PointXY | null): void {
+/** `frameDeg`: `PlaceFootprint`'s `prevFrameAngle` for the footprint carried (kicad-port/gridFrame.ts): the carry turns it to a placement grid's frame from that. */
+function carry(build: (at: PointXY) => Cmd, at: PointXY | null, frameDeg: number): void {
   const c = ctx;
   if (!c) return;
   stage = "carrying";
   void c.api
     // made but nothing new to carry: what it made stands, and the tool goes on
-    .placeNewItems(build, true, placed, { at: at ?? undefined, afterCancel: waitForClick, afterSettle: settled, afterNothing: placed })
+    .placeNewItems(build, true, placed, { at: at ?? undefined, frameDeg, afterCancel: waitForClick, afterSettle: settled, afterNothing: placed })
     .then((ok) => {
       // refused: no footprint to carry, the tool waits for the next click
       if (!ok && stage === "carrying") waitForClick();

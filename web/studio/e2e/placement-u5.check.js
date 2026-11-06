@@ -10,6 +10,8 @@
 //      selected); R and F act on it before the click; the click puts it down where the pointer is, on the grid, turned and flipped, one undo step, nothing
 //      selected; the tool then waits, and the next click opens the chooser again; a chooser cancelled leaves the tool waiting; Escape with a footprint carried
 //      takes it away and the tool goes on; Escape with none ends the tool.
+//   1b Place Footprint into a KiCad 10 placement grid: a footprint fresh from the library turns to the grid's frame where it is made (`prevFrameAngle = ANGLE_0`), and
+//      is unturned again when carried out of it.
 //   2  The microwave tools (`doInteractiveItemPlacement( .., IPO_REPEAT | IPO_ROTATE | IPO_FLIP )`): a gap made at the first click rides the cursor; R and F turn
 //      and flip it; the second click puts it down there, one undo step; the tool waits for the next until Escape.
 //   3  A footprint's position is the editor's point: a footprint placed at a point off the 0.1 mm step stays there (the server no longer rounds it).
@@ -175,6 +177,46 @@
       t(!!(await until(() => S().placeFootprint === "waiting", 4000)), `the tool goes on (${S().placeFootprint})`);
       await escape();
       t(S().placeFootprint === "idle", "a second Escape ends it");
+    });
+
+    await scenario("Place Footprint into a placement grid (KiCad 25ec2335): a footprint fresh from the library turns to the grid's frame where it is made, and is unturned when carried out", async (t) => {
+      // `PlaceFootprint`'s `applyPlacementFrameOrientation` with `prevFrameAngle = ANGLE_0` for a footprint fresh from the library (a move's pick-up counts the frame there as applied).
+      const g = FREE[2]; // inside the outline, with room round it (Strict refuses a drop past the edge)
+      const n = ((await board()).drawings?.grid_items ?? []).length;
+      await cmd({ op: "pcb_item", verb: "add_grid_item", grid_item: { kind: "cartesian", at: { x: Math.round(g[0] * 1e6), y: Math.round(g[1] * 1e6) }, extent: { x: 8_000_000, y: 8_000_000 }, spacing: { x: 500_000, y: 500_000 }, angle: 30, phi_extent_deg: 360, phi_spacing_deg: 10, priority: 1, tick_interval: 0, affects: { cursor: true, routing: true, placement: true } } });
+      const grid = await until(async () => ((await board()).drawings?.grid_items ?? []).length === n + 1 && ((await board()).drawings?.grid_items ?? []).at(-1), 8000);
+      if (!t(!!grid && grid.angle === 30, "a placement grid turned 30 degrees")) return;
+      const placeAt = async (to) => {
+        const before = await tps();
+        await hover(g[0] + 0.4, g[1] + 0.4);
+        await E.run("pcbnew.EditorControl.placeFootprint");
+        await sleep(400);
+        const err = await choose("TestPoint_Pad_D1.0mm", TP);
+        if (err) return { err };
+        if (!(await until(() => S().placeFootprint === "carrying" && S().tool === "move", 15000))) return { err: `not carried (${S().placeFootprint}, ${S().tool})` };
+        await hover(g[0] + 0.5, g[1] + 0.5);
+        await hover(to[0], to[1]);
+        await click(to[0], to[1], 1500);
+        const ref = (await tps()).find((r) => !before.includes(r));
+        const p = ref ? (await board()).parts.find((q) => q.ref === ref) : null;
+        return { ref, p };
+      };
+      // KiCad's orientation (counter-clockwise; `rot` is the studio's clockwise angle)
+      const norm = (r) => ((((r ?? 0) % 360) + 540) % 360) - 180;
+      const inside = await placeAt([g[0] + 1.2, g[1] + 1.2]);
+      if (t(!inside.err && !!inside.p && Math.abs(inside.p.at[0] / 1e6 - (g[0] + 1.2)) < 1 && Math.abs(inside.p.at[1] / 1e6 - (g[1] + 1.2)) < 1, inside.err ?? `put down in the grid where the pointer is (${inside.p?.at})`)) {
+        t(Math.abs(norm(inside.p.orientation) - 30) < 0.01, `made inside the grid, it turns to the grid's 30 degrees at once (${inside.p.orientation})`);
+        await undo();
+      }
+      await escape();
+      const outside = await placeAt(FREE[3]);
+      if (t(!outside.err && !!outside.p, outside.err ?? `placed outside the grid (${outside.p?.at})`)) {
+        t(Math.abs(norm(outside.p.orientation)) < 0.01 && Math.abs(outside.p.at[0] / 1e6 - FREE[3][0]) < 1, `made inside, carried out of the grid, it is unturned again (${outside.p.orientation} at ${outside.p.at})`);
+        await undo();
+      }
+      await escape();
+      await cmd({ op: "pcb_item", verb: "delete_grid_item", id: grid.id });
+      t(((await board()).drawings?.grid_items ?? []).length === n, "the grid item is gone again");
     });
 
     await scenario("Draw Microwave Gaps: the gap rides the cursor from the first click; R and F turn and flip it; the second click puts it down there, one undo step", async (t) => {

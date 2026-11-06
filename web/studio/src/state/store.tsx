@@ -811,6 +811,11 @@ export interface StudioState {
   cursorNm: { x: number; y: number } | null;
   moveOriginNm: { x: number; y: number } | null;
   /**
+   * The placement-grid frame a carried footprint starts with (`PlaceFootprint`'s `prevFrameAngle`: 0 for one fresh from the library), so the carry turns it to the frame
+   * it is in from the first motion (kicad-port/gridFrame.ts `carryFrameTurn`). Null for a pick-up (Move, Duplicate, Paste): the frame at the pick-up point counts as applied.
+   */
+  moveFrameStartDeg?: number | null;
+  /**
    * Which points of a wire a click picked (`SCH_SELECTION_TOOL::selectPoint`: a click near a wire's end picks that end only, so `G` or a drag
    * stretches it; anywhere else the segment's two ends). Only meaningful while the selection is exactly that wire (`pickedVertices`).
    */
@@ -1166,7 +1171,7 @@ export type Action =
   | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" }
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
-  | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
+  | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null; frameDeg?: number }
   | { type: "SET_SCH_WIRE_PICK"; pick: { id: string; vertices: number[] } | null }
   | { type: "SET_SCH_PICKED_ENDS"; ends: Record<string, number[]> | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
@@ -1585,7 +1590,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_CURSOR":
       return { ...state, cursorNm: action.at };
     case "SET_MOVE_ORIGIN":
-      return { ...state, moveOriginNm: action.at };
+      return { ...state, moveOriginNm: action.at, moveFrameStartDeg: action.frameDeg ?? null };
     case "SET_SCH_WIRE_PICK":
       return { ...state, schWirePick: action.pick };
     case "SET_SCH_PICKED_ENDS":
@@ -1950,6 +1955,8 @@ export interface PlaceNewItemsOptions {
   afterSettle?: () => void;
   /** The command went through but added nothing to carry: what it did stands (as a step of its own). */
   afterNothing?: () => void;
+  /** The placement-grid frame the new footprint already has (`PlaceFootprint`'s `prevFrameAngle`); left out, the frame where it is picked up counts as applied (a move's pick-up). */
+  frameDeg?: number;
 }
 
 const StudioStateContext = createContext<StudioState | null>(null);
@@ -2780,7 +2787,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         afterCancelRef.current = opts?.afterCancel ?? null;
         afterSettleRef.current = opts?.afterSettle ?? null;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-        dispatch({ type: "SET_MOVE_ORIGIN", at });
+        dispatch({ type: "SET_MOVE_ORIGIN", at, frameDeg: opts?.frameDeg });
       }
       return true;
     },

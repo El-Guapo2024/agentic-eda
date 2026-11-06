@@ -1511,7 +1511,8 @@ export function Canvas() {
       // The grab point (`BestDragOrigin`): what R turns the carried items about, before the move (kicad-port/pcbCarry.ts `carryPress`).
       const { rotateQuarterTurns, flipped, perRefOffsetNm, ops } = state.movePreview ?? {};
       // KiCad 10's placement grids: a footprint carried into one turns to its frame (`applyMoveFrameOrientation`, kicad-port/gridFrame.ts).
-      const frame = packing ? null : carryFrameTurn(board, refs, ops ?? [], sx - ox, sy - oy, [ox, oy], state.movePreview?.frameDeg, state.prefs.rotationStepDeg);
+      // (A footprint fresh from Place Footprint starts from its own frame, `moveFrameStartDeg` = 0: `prevFrameAngle = ANGLE_0`.)
+      const frame = packing ? null : carryFrameTurn(board, refs, ops ?? [], sx - ox, sy - oy, [ox, oy], state.movePreview?.frameDeg ?? state.moveFrameStartDeg ?? undefined, state.prefs.rotationStepDeg);
       const turned = frame && frame.ops.length !== (ops?.length ?? 0) ? frame.ops : ops;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxNm: sx - ox, dyNm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetNm, ops: turned, frameDeg: frame?.frameDeg, grabNm: [ox, oy], pivotNm: held?.pivotNm ?? start?.pivotNm, flipPivotNm: held?.flipPivotNm ?? start?.flipPivotNm } });
       return;

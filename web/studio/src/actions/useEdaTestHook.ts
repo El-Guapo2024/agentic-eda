@@ -97,7 +97,8 @@ export interface HookState {
   /** The board's Place Footprint tool (actions/placeFootprintTool.ts): idle, choosing, waiting for a click, carrying, armed. */
   placeFootprint: string;
   /** What the board's Move tool carries: the items, how far, the R presses and whether F flipped them; null when nothing is carried. */
-  moving: { refs: string[]; dx: number; dy: number; turns: number; flipped: boolean } | null;
+  /** `frameDeg`: the placement-grid frame the carry stands at (kicad-port/gridFrame.ts), null before its first motion; `ops`: the presses and frame turns it holds. */
+  moving: { refs: string[]; dx: number; dy: number; turns: number; flipped: boolean; frameDeg: number | null; ops: number } | null;
   /** The items the clarification menu's row under the pointer brightens. */
   menuHighlight: string[];
 }
@@ -279,7 +280,7 @@ function build(latest: { current: Latest }): EdaTestHook {
           return c ? { tool: c.tool, ...describeCarried(c.item), queue: c.queue.length, keep: c.keep, drawn: c.preview != null } : null;
         })(),
         placeFootprint: placeFootprintStage(),
-        moving: studio.movePreview ? { refs: [...studio.movePreview.refs], dx: studio.movePreview.dxNm, dy: studio.movePreview.dyNm, turns: studio.movePreview.rotateQuarterTurns ?? 0, flipped: !!studio.movePreview.flipped } : null,
+        moving: studio.movePreview ? { refs: [...studio.movePreview.refs], dx: studio.movePreview.dxNm, dy: studio.movePreview.dyNm, turns: studio.movePreview.rotateQuarterTurns ?? 0, flipped: !!studio.movePreview.flipped, frameDeg: studio.movePreview.frameDeg ?? null, ops: studio.movePreview.ops?.length ?? 0 } : null,
         menuHighlight: [...(getCommonTool().menuHighlight ?? [])],
       };
     },
