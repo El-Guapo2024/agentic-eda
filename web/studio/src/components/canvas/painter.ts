@@ -180,6 +180,9 @@ export interface PaintOptions {
   zoneCornerPreview: { zoneId: string; outline: [Nm, Nm][]; /** The zone's holes as the drag has them (a hole's corner can be the one dragged). */ holes?: [Nm, Nm][][] } | null;
   /** The same for a graphic shape's handle drag (kicad-port/pcbPointEdit.ts): the shape as it would be once dropped, drawn instead of the committed one. */
   shapePointPreview: { id: string; shape: Shape } | null;
+  /** `RULER_ITEM( .., invertXAxis, invertYAxis )` of the Measure tool and Interactive Offset: Origins & Axes' axis directions (`m_DisplayInvertXAxis` /
+   *  `m_DisplayInvertYAxis`), which flip the signs of the x and y the ruler shows (UI-LEFT-2 PP9). */
+  rulerFlip?: { x: boolean; y: boolean };
   /** The board's Dashed lines ratios (`boardDashRatios`) a dashed graphic is cut with; KiCad's 12 and 3 when absent. */
   dashRatios?: DashRatios;
   /** The dimension the Draw Dimension tool is drawing (`id` null) or the point editor is reshaping (`POST /api/dimension/preview`), drawn in place of the committed one. */
@@ -1568,7 +1571,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   if (draw.kind === "measure") {
     const end = frozen ? pts[1]! : rubberEnd;
     // Interactive Offset's ruler (`arrow`): the anchor colour, no ticks, an arrowhead (`POSITION_RELATIVE_TOOL::InteractiveOffset`)
-    if (end) paintRuler(ctx, rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true }, measureStrokeText), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"), "pcb");
+    if (end) paintRuler(ctx, rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true, flipX: opts.rulerFlip?.x, flipY: opts.rulerFlip?.y }, measureStrokeText), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"), "pcb");
     return;
   }
   strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);

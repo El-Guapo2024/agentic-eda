@@ -5,12 +5,12 @@
 //   Symbol Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
 //   Schematic Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
 //   Footprint Editor > Display Options, Grids, Origins & Axes, Editing Options, Colors, Toolbars, Footprint Defaults, Graphics Defaults, User Layer Names;
-//   PCB Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
+//   PCB Editor > Display Options, Grids, Origins & Axes (components/PcbOriginsAxesPage.tsx), Editing Options, Colors, Toolbars;
 //   3D Viewer > General, Toolbars, Realtime Renderer;
 //   Maintenance (`PANEL_MAINTENANCE`).
 //
 // An editor's name is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). KiCad's other pages are not here: SpaceMouse, Version
-// Control, Packages and Updates, Plugins, the Schematic Editor's Field Name Templates, Data Sources and Simulator, the PCB Editor's Origins & Axes, the 3D
+// Control, Packages and Updates, Plugins, the Schematic Editor's Field Name Templates, Data Sources and Simulator, the 3D
 // Viewer's Raytracing Renderer, and the Gerber Viewer's and Drawing Sheet Editor's pages (no such editors).
 //
 // Each editor's Display Options is the Grid Display and Cursor part of `PANEL_GAL_OPTIONS` (common/dialogs/panel_gal_options.cpp: Dots / Lines / Small crosses,
@@ -34,6 +34,7 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 import { assignScrollModifier, DEFAULT_PREFERENCES, MOUSE_SCROLL_DEFAULTS, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
+import { PCB_AXES_FIELDS, PcbOriginsAxesPage } from "./PcbOriginsAxesPage";
 import { FP_PREFS_TITLES, FpPreferencesPage, fpGraphicsProblem, type FpPrefsExtra, type FpPrefsPage } from "./FpPreferencesPages";
 import { useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { FACTORY_TEXT_GRAPHICS } from "../kicad-port/layerDefaults";
@@ -73,6 +74,7 @@ type PrefsPage =
   | "fp_defaults"
   | "fp_layer_names"
   | "pcb_grids"
+  | "pcb_axes"
   | "pcb_edit"
   | "pcb_colors"
   | "pcb_toolbars"
@@ -111,6 +113,7 @@ const TREE: ReadonlyArray<[PrefsPage | null, string, number]> = [
   [null, "PCB Editor", 0],
   ["display_pcb", "Display Options", 1],
   ["pcb_grids", "Grids", 1],
+  ["pcb_axes", "Origins & Axes", 1],
   ["pcb_edit", "Editing Options", 1],
   ["pcb_colors", "Colors", 1],
   ["pcb_toolbars", "Toolbars", 1],
@@ -311,6 +314,9 @@ export function PreferencesDialog() {
         tooltip: RESET_TOOLTIP,
       };
     if (page === "sym_edit") return { run: () => set(defaultsOf(SYM_EDIT_FIELDS)), tooltip: RESET_TOOLTIP };
+    // `PANEL_PCBNEW_DISPLAY_ORIGIN::ResetPanel`: the settings of a fresh `PCBNEW_SETTINGS` / `FOOTPRINT_EDITOR_SETTINGS` (the page, X right, Y down)
+    if (page === "pcb_axes") return { run: () => set(defaultsOf(PCB_AXES_FIELDS)), tooltip: RESET_TOOLTIP };
+    if (page === "fp_axes") return { run: () => set(defaultsOf(["fpInvertXAxis", "fpInvertYAxis"])), tooltip: RESET_TOOLTIP };
     if (page.startsWith("display_")) {
       const e = page.slice("display_".length) as EditorWindow;
       // `PANEL_GAL_OPTIONS::ResetPanel( defaults )`: the Grid Display and the Cursor of a fresh settings file
@@ -543,6 +549,7 @@ export function PreferencesDialog() {
             {handles[page]?.element}
             {page.startsWith("display_") && displayPage(page.slice("display_".length) as EditorWindow)}
             {gridsEditor && <GridsPageBody key={gridsEditor} editor={gridsEditor} page={grids.pages[gridsEditor]} setPage={(next) => grids.setPage(gridsEditor, next)} />}
+            {page === "pcb_axes" && <PcbOriginsAxesPage draft={draft} set={set} />}
             {page === "pcb_edit" && <PcbEditingOptionsPage draft={draft} set={set} extra={editingExtra} setExtra={setEditingExtra} rotationText={rotationText} setRotationText={setRotationText} />}
             {page === "sch_edit" && <SchEditingOptionsPage draft={draft} set={set} extra={editingExtra} setExtra={setEditingExtra} rotationText={rotationText} setRotationText={setRotationText} />}
             {page === "sym_edit" && <SymEditingOptionsPage draft={draft} set={set} fallbackPinStep={state.prefs.symRepeatPinStepMils} />}

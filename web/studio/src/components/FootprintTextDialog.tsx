@@ -13,6 +13,8 @@ import { nmFrom, nmTo } from "../state/units";
 import { NumberInput } from "./NumberInput";
 import { FontSelect, useFontFamilies } from "./TextLookControls";
 import { KICAD_FONT } from "../kicad-port/textLooks";
+import { useOriginTransforms } from "../state/originTransforms";
+import { fromDisplay, toDisplay, type CoordType } from "../kicad-port/originTransforms";
 
 export function FootprintTextDialog() {
   const id = useFpTextDialog();
@@ -24,6 +26,9 @@ export function FootprintTextDialog() {
   const [l, setL] = useState<FieldLayoutCmd | null>(null);
   const [error, setError] = useState<string | null>(null);
   const families = useFontFamilies();
+  // A footprint's text: `m_posX` / `m_posY` are `REL_X_COORD` / `REL_Y_COORD` (`m_item->GetParentFootprint()`), so Origins & Axes' axis directions turn the
+  // offset and its origin does not (UI-LEFT-2 PP9).
+  const xf = useOriginTransforms();
   useEffect(() => {
     if (!hit) return;
     const t = hit.text;
@@ -34,11 +39,11 @@ export function FootprintTextDialog() {
   }, [id]);
   if (!id || !hit || !l) return null;
   const layers = boardLayerList(state.board?.layers ?? [], state.board?.board_rules?.layer_setup);
-  const len = (label: string, v: number, set: (nm: number) => void) => (
+  const len = (label: string, v: number, set: (nm: number) => void, type: CoordType = "not") => (
     <>
       <span>{label}</span>
       <span>
-        <NumberInput label={label} value={v} scale={(x) => nmTo(x, units)} unscale={(x) => Math.round(nmFrom(x, units))} onChange={(x) => x != null && set(x)} /> {units}
+        <NumberInput label={label} value={v} scale={(x) => nmTo(toDisplay(xf, x, type), units)} unscale={(x) => Math.round(fromDisplay(xf, nmFrom(x, units), type))} onChange={(x) => x != null && set(x)} /> {units}
       </span>
     </>
   );
@@ -72,8 +77,8 @@ export function FootprintTextDialog() {
             {len("Width:", l.size[0], (w) => setL({ ...l, size: [w, l.size[1]] }))}
             {len("Height:", l.size[1], (h) => setL({ ...l, size: [l.size[0], h] }))}
             {len("Thickness:", l.thickness ?? 0, (t) => setL({ ...l, thickness: t }))}
-            {len("Position X:", l.at.x, (x) => setL({ ...l, at: { ...l.at, x } }))}
-            {len("Position Y:", l.at.y, (y) => setL({ ...l, at: { ...l.at, y } }))}
+            {len("Position X:", l.at.x, (x) => setL({ ...l, at: { ...l.at, x } }), "rel_x")}
+            {len("Position Y:", l.at.y, (y) => setL({ ...l, at: { ...l.at, y } }), "rel_y")}
             <span>Orientation:</span>
             <span>
               <NumberInput label="Orientation" value={(l.angle ?? 0) / 1000} onChange={(v) => v != null && setL({ ...l, angle: Math.round(v * 1000) })} /> deg

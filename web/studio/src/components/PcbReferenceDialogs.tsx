@@ -10,35 +10,42 @@ import { polarTranslation, toPolarDeg } from "../kicad-port/pcbEditActions";
 import type { Vec } from "../kicad-port/pcbReference";
 import { useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
+import { useOriginTransforms } from "../state/originTransforms";
+import { fromDisplay, toDisplay } from "../kicad-port/originTransforms";
 import { DialogShell } from "./pcbDialogKit";
 
 export function OffsetItemDialog({ offset, onResult }: { offset: Vec; onResult: (offset: Vec | null) => void }) {
   const units = useStudioState().units;
+  // The fields are `REL_X_COORD` / `REL_Y_COORD` (DIALOG_OFFSET_ITEM's `m_xOffset.SetCoordType`): Origins & Axes' axis directions turn what they show and take
+  // (UI-LEFT-2 PP9); the polar angle field shows minus the angle whatever Y does, which `toPolarDeg` / `polarTranslation` are.
+  const xf = useOriginTransforms();
   // A length as the field shows it: the display units, to the resolution that still names one micrometre.
-  const disp = (um: number) => Number(nmTo(um, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5));
+  const len = (um: number) => Number(nmTo(um, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5));
+  const disp = (um: number, axis: "rel_x" | "rel_y" = "rel_x") => len(toDisplay(xf, um, axis));
+  const read = (shown: number, axis: "rel_x" | "rel_y") => fromDisplay(xf, nmFrom(shown, units), axis);
   const [polar, setPolar] = useState(false);
   const [a, setA] = useState(disp(offset.x)); // Offset X, or the distance (display units)
-  const [b, setB] = useState(disp(offset.y)); // Offset Y, or the angle (degrees)
+  const [b, setB] = useState(disp(offset.y, "rel_y")); // Offset Y, or the angle (degrees)
 
   const original = toPolarDeg(offset.x, offset.y);
 
   // OnPolarChanged: carry the entered values over to the other coordinate system.
   const switchPolar = (next: boolean) => {
     if (next) {
-      const p = toPolarDeg(nmFrom(a, units), nmFrom(b, units));
+      const p = toPolarDeg(read(a, "rel_x"), read(b, "rel_y"));
       setA(disp(p.r));
       setB(Number(p.deg.toFixed(4)));
     } else {
-      const t = polarTranslation(nmFrom(a, units), b);
+      const t = polarTranslation(read(a, "rel_x"), b);
       setA(disp(t.x));
-      setB(disp(t.y));
+      setB(disp(t.y, "rel_y"));
     }
     setPolar(next);
   };
 
   // OnClear: back to the measured value of that field.
   const resetA = () => setA(polar ? disp(original.r) : disp(offset.x));
-  const resetB = () => setB(polar ? Number(original.deg.toFixed(4)) : disp(offset.y));
+  const resetB = () => setB(polar ? Number(original.deg.toFixed(4)) : disp(offset.y, "rel_y"));
 
   const close = (result: Vec | null) => {
     closeSweepDialog();
@@ -46,7 +53,7 @@ export function OffsetItemDialog({ offset, onResult }: { offset: Vec; onResult: 
   };
   // TransferDataFromWindow
   const submit = () => {
-    const entered = polar ? polarTranslation(nmFrom(a, units), b) : { x: Math.round(nmFrom(a, units)), y: Math.round(nmFrom(b, units)) };
+    const entered = polar ? polarTranslation(read(a, "rel_x"), b) : { x: Math.round(read(a, "rel_x")), y: Math.round(read(b, "rel_y")) };
     close(entered);
   };
 

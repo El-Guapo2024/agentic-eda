@@ -17,6 +17,8 @@ import { pcbContext } from "../kicad-port/pcbProperties";
 import { defaultPitchNm, layoutOf, modeOf, MODE_CHOICES, movedStitch, PATTERN_CHOICES, stitchPosition, stitchPreview, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "../kicad-port/viaStitch";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
+import { useOriginTransforms } from "../state/originTransforms";
+import { fromDisplay, toDisplay, type CoordType, type OriginTransforms } from "../kicad-port/originTransforms";
 import { layerColor as layerColorOf } from "./canvas/layers";
 import { DrillChartPropertiesDialog, DrillGroupsDialog } from "./DrillChartDialogs";
 import { ViaTemplateDialog } from "./ViaTemplateDialog";
@@ -41,14 +43,26 @@ type Fields = Record<string, string>;
 
 const fmt = (um: number, units: LengthUnit): string => String(Number(nmTo(um, units).toFixed(units === "mm" ? 4 : 2)));
 
+/**
+ * Each length field's coord type (KiCad 25ec2335 `DIALOG_GRID_ITEM_PROPERTIES`, `AddXYPointToSizer`): the points `ABS_X_COORD` / `ABS_Y_COORD`, the sizes
+ * (`aRelative`) `REL_X_COORD` / `REL_Y_COORD`, the radius `NOT_A_COORD` -- put through the board editor's Origins & Axes (UI-LEFT-2 PP9).
+ */
+const FIELD_COORD: Record<string, CoordType> = {
+  "corners.sx": "abs_x", "corners.sy": "abs_y", "corners.ex": "abs_x", "corners.ey": "abs_y",
+  "cornerSize.x": "abs_x", "cornerSize.y": "abs_y", "cornerSize.w": "rel_x", "cornerSize.h": "rel_y",
+  "centreSize.x": "abs_x", "centreSize.y": "abs_y", "centreSize.w": "rel_x", "centreSize.h": "rel_y",
+  "polar.x": "abs_x", "polar.y": "abs_y",
+};
+
 /** `updateCorners`, `updateCornerSize`, `updateCenterSize`, `updatePolar`: every page's fields from the working copy (`page` left alone when given: the one being typed in). */
-function fieldsOf(g: BoardGridItem, units: LengthUnit, keep: Fields = {}, page: Page | null = null): Fields {
+function fieldsOf(g: BoardGridItem, units: LengthUnit, xf: OriginTransforms, keep: Fields = {}, page: Page | null = null): Fields {
   const c = gridDialogCorners(g);
+  const f = (k: string, nm: number) => fmt(toDisplay(xf, nm, FIELD_COORD[k] ?? "not"), units);
   const all: Record<Page, Fields> = {
-    corners: { "corners.sx": fmt(c.start[0], units), "corners.sy": fmt(c.start[1], units), "corners.ex": fmt(c.end[0], units), "corners.ey": fmt(c.end[1], units) },
-    cornerSize: { "cornerSize.x": fmt(c.start[0], units), "cornerSize.y": fmt(c.start[1], units), "cornerSize.w": fmt(c.size[0], units), "cornerSize.h": fmt(c.size[1], units) },
-    centreSize: { "centreSize.x": fmt(g.x, units), "centreSize.y": fmt(g.y, units), "centreSize.w": fmt(c.size[0], units), "centreSize.h": fmt(c.size[1], units) },
-    polar: { "polar.x": fmt(g.x, units), "polar.y": fmt(g.y, units), "polar.r": fmt(g.extent[0], units), "polar.phi": String(g.phi_extent) },
+    corners: { "corners.sx": f("corners.sx", c.start[0]), "corners.sy": f("corners.sy", c.start[1]), "corners.ex": f("corners.ex", c.end[0]), "corners.ey": f("corners.ey", c.end[1]) },
+    cornerSize: { "cornerSize.x": f("cornerSize.x", c.start[0]), "cornerSize.y": f("cornerSize.y", c.start[1]), "cornerSize.w": f("cornerSize.w", c.size[0]), "cornerSize.h": f("cornerSize.h", c.size[1]) },
+    centreSize: { "centreSize.x": f("centreSize.x", g.x), "centreSize.y": f("centreSize.y", g.y), "centreSize.w": f("centreSize.w", c.size[0]), "centreSize.h": f("centreSize.h", c.size[1]) },
+    polar: { "polar.x": f("polar.x", g.x), "polar.y": f("polar.y", g.y), "polar.r": fmt(g.extent[0], units), "polar.phi": String(g.phi_extent) },
   };
   const out: Fields = {};
   for (const p of Object.keys(all) as Page[]) Object.assign(out, p === page ? Object.fromEntries(Object.keys(all[p]).map((k) => [k, keep[k] ?? all[p][k]!])) : all[p]);
@@ -56,9 +70,9 @@ function fieldsOf(g: BoardGridItem, units: LengthUnit, keep: Fields = {}, page: 
 }
 
 /** The working copy from the fields of `page` (`onCornersChange`, `onCornerSizeChange`, `onCenterSizeChange`, `onPolarChange`), or null while one of them is not a number. */
-function fromPage(g: BoardGridItem, page: Page, f: Fields, units: LengthUnit): BoardGridItem | null {
+function fromPage(g: BoardGridItem, page: Page, f: Fields, units: LengthUnit, xf: OriginTransforms): BoardGridItem | null {
   const n = (k: string) => Number(f[k]);
-  const u = (k: string) => Math.round(nmFrom(n(k), units));
+  const u = (k: string) => Math.round(fromDisplay(xf, nmFrom(n(k), units), FIELD_COORD[k] ?? "not"));
   const keys = Object.keys(f).filter((k) => k.startsWith(`${page}.`));
   if (keys.some((k) => !Number.isFinite(n(k)) || f[k]!.trim() === "")) return null;
   switch (page) {
@@ -105,6 +119,7 @@ function GridItemDialog() {
   const dispatch = useStudioDispatch();
   const { gridItem: req } = useKicad10Dialogs();
   const units = state.units;
+  const xf = useOriginTransforms();
   const item = req ? state.board?.drawings?.grid_items?.find((g) => g.id === req.id) : undefined;
   const [form, setForm] = useState<Form | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,7 +132,7 @@ function GridItemDialog() {
     const [sx, sy] = spacingOf(item, units);
     setForm({
       work: item,
-      fields: fieldsOf(item, units),
+      fields: fieldsOf(item, units, xf),
       page: item.kind === "polar" ? "polar" : "centreSize",
       angle: String(item.angle),
       spacingX: sx,
@@ -140,8 +155,8 @@ function GridItemDialog() {
     setForm((f) => {
       if (!f) return f;
       const fields = { ...f.fields, [key]: text };
-      const work = fromPage(f.work, page, fields, units);
-      return work ? { ...f, work, fields: fieldsOf(work, units, fields, page) } : { ...f, fields };
+      const work = fromPage(f.work, page, fields, units, xf);
+      return work ? { ...f, work, fields: fieldsOf(work, units, xf, fields, page) } : { ...f, fields };
     });
   };
   /** The orientation typed: the corner fields are world coordinates on the turned outline, so they follow it. */
@@ -151,7 +166,7 @@ function GridItemDialog() {
       const deg = Number(text);
       if (!Number.isFinite(deg) || text.trim() === "") return { ...f, angle: text };
       const work = { ...f.work, angle: deg };
-      return { ...f, angle: text, work, fields: fieldsOf(work, units) };
+      return { ...f, angle: text, work, fields: fieldsOf(work, units, xf) };
     });
   };
   /** `onGridType`: the spacing fields kept under their old meaning, then relabelled for the new type. */
@@ -161,7 +176,7 @@ function GridItemDialog() {
       const saved = savedSpacing(f.work, f.spacingX, f.spacingY, units);
       const work = { ...saved, kind };
       const [sx, sy] = spacingOf(work, units);
-      return { ...f, work, spacingX: sx, spacingY: sy, page: kind === "polar" ? "polar" : "centreSize", fields: fieldsOf(work, units) };
+      return { ...f, work, spacingX: sx, spacingY: sy, page: kind === "polar" ? "polar" : "centreSize", fields: fieldsOf(work, units, xf) };
     });
   };
 

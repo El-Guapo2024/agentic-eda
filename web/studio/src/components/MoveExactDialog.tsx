@@ -18,21 +18,17 @@
 // around local coordinates origin" and "Rotate around drill/place origin". The dialog keeps what was entered the last time it was opened
 // for that kind of selection (DIALOG_SHIM's saved state, keyed by `m_hash_key`: the title, "|with_selection" for several items).
 //
-// Rotation sign: source negates the dialog's own angle before calling
-// Rotate() whenever the display's Y axis is not inverted (the default) --
-// dialog_move_exact.cpp's `if (!m_Display.m_DisplayInvertYAxis) rotation
-// = -rotation;`. That's the same bridge this app's own status bar
-// (state/units.ts's `toPolar`) already builds for its polar-coordinate
-// display: positive = counter-clockwise on screen, the ordinary CAD
-// convention, even though the raw rotation matrix underneath
-// (crates/model/src/footprint.rs `to_board`, and this Cmd's own
-// `rotate_point_about`) is clockwise-positive in this app's Y-down board
-// coordinates. This dialog negates the same way, so typing +90 here
-// turns a part the same visual direction +90 would in the status bar's
-// polar readout.
+// Rotation sign: `EDIT_TOOL::MoveExact` copies the dialog's angle (`EDA_ANGLE angle = rotation;`) before its `if( !m_DisplayInvertYAxis ) rotation =
+// -rotation;`, and turns every item by the copy, so the Y axis of Origins & Axes changes nothing (8303b2ad and 25ec2335 alike): a positive angle is
+// counter-clockwise on the screen (`BOARD_ITEM::Rotate`, `RotatePoint`), whatever way Y grows. The backend's `rotate_items` turns clockwise for a positive
+// angle, so the plan negates it.
+//
+// Origins & Axes (UI-LEFT-2 PP9): Move X and Move Y are `REL_X_COORD` / `REL_Y_COORD` (`m_moveX.SetCoordType`), so an axis that grows the other way negates what
+// is typed; in polar mode the distance is still `REL_X_COORD` and the angle field reads minus the angle typed whatever Y does (`UNIT_BINDER::GetAngleValue`,
+// kicad-port/originTransforms.ts `angleFieldValue`): 90 moves up the screen.
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { nmFrom } from "../state/units";
+import { coordValue, useOriginTransforms } from "../state/originTransforms";
 import { editableSelection, planMoveExact } from "../kicad-port/pcbTransform";
 
 type Anchor = "item" | "center" | "origin" | "aux";
@@ -66,6 +62,7 @@ export function MoveExactDialog() {
   const [angleDeg, setAngleDeg] = useState(0); // move direction (polar mode), CCW-positive, 0 = east
   const [rotate, setRotate] = useState(0); // rotation, CCW-positive degrees
   const [anchor, setAnchor] = useState<Anchor>("item");
+  const xf = useOriginTransforms();
 
   const key: "single" | "with_selection" = items.length > 1 ? "with_selection" : "single";
   // EDIT_TOOL::MoveExact: `selection.Size() > 1 ? ROTATE_AROUND_SEL_CENTER : ROTATE_AROUND_ITEM_ANCHOR`, then the two origins.
@@ -95,9 +92,10 @@ export function MoveExactDialog() {
 
   const close = () => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: false });
 
-  const dxNm = polar ? nmFrom(distance, state.units) * Math.cos((angleDeg * Math.PI) / 180) : nmFrom(moveX, state.units);
-  // Polar input uses the same CCW-positive/Y-down bridge as toPolar's own inverse.
-  const dyNm = polar ? -nmFrom(distance, state.units) * Math.sin((angleDeg * Math.PI) / 180) : nmFrom(moveY, state.units);
+  // `GetTranslationInIU`: `r = m_moveX.GetDoubleValue()`, `q = m_moveY.GetAngleValue()` (minus the angle typed), `( r cos q, r sin q )`; or the two fields read back.
+  const r = coordValue(xf, distance, "rel_x", state.units);
+  const dxNm = polar ? r * Math.cos((angleDeg * Math.PI) / 180) : coordValue(xf, moveX, "rel_x", state.units);
+  const dyNm = polar ? -r * Math.sin((angleDeg * Math.PI) / 180) : coordValue(xf, moveY, "rel_y", state.units);
 
   const submit = async () => {
     // One move_items and the turn(s) as one batch (kicad-port/pcbTransform.ts `planMoveExact`); the dialog's angle is counter-clockwise, the backend's clockwise.
@@ -126,19 +124,19 @@ export function MoveExactDialog() {
             {polar ? (
               <>
                 <span>Distance:</span>
-                <input autoFocus type="number" value={distance} onChange={(e) => setDistance(Number(e.target.value))} />
+                <input autoFocus type="number" aria-label="Distance" value={distance} onChange={(e) => setDistance(Number(e.target.value))} />
                 <button onClick={() => clear(setDistance)}>0</button>
                 <span>Angle:</span>
-                <input type="number" step={1} value={angleDeg} onChange={(e) => setAngleDeg(Number(e.target.value))} />
+                <input type="number" step={1} aria-label="Angle" value={angleDeg} onChange={(e) => setAngleDeg(Number(e.target.value))} />
                 <button onClick={() => clear(setAngleDeg)}>0</button>
               </>
             ) : (
               <>
                 <span>Move X:</span>
-                <input autoFocus type="number" value={moveX} onChange={(e) => setMoveX(Number(e.target.value))} />
+                <input autoFocus type="number" aria-label="Move X" value={moveX} onChange={(e) => setMoveX(Number(e.target.value))} />
                 <button onClick={() => clear(setMoveX)}>0</button>
                 <span>Move Y:</span>
-                <input type="number" value={moveY} onChange={(e) => setMoveY(Number(e.target.value))} />
+                <input type="number" aria-label="Move Y" value={moveY} onChange={(e) => setMoveY(Number(e.target.value))} />
                 <button onClick={() => clear(setMoveY)}>0</button>
               </>
             )}

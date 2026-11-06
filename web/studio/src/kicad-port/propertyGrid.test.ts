@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PropertyManager, type Choice, type PropItem, type PropertyDef } from "./propertyManager";
 import { buildGrid, editText, extractValueAndWritability, formatValue, parseValue, planEdit, positiveInt, positiveRatio, rangeInt } from "./propertyGrid";
+import { pcbOriginTransforms } from "./originTransforms";
 
 interface Item extends PropItem {
   id: string;
@@ -179,6 +180,23 @@ test("a length typed without a unit is in the display unit; a unit suffix wins",
   const bad = parseValue(size, "abc", "mm");
   assert.equal(bad.ok, false);
   assert.match(!bad.ok ? bad.error : "", /is not a length/);
+});
+
+test("a PT_COORD row goes through the frame's origin transforms (PGPROPERTY_COORD, UNIT_BINDER::SetCoordType); a size or a row without a coord type does not", () => {
+  // the drill/place origin at (10, 20) mm, X increasing left
+  const xf = pcbOriginTransforms("aux", true, false, { x: 10_000_000, y: 20_000_000 }, null);
+  const absX = { kind: "int", display: "coord", choices: null, coordType: "abs_x" } as const;
+  const absY = { kind: "int", display: "coord", choices: null, coordType: "abs_y" } as const;
+  const relY = { kind: "int", display: "coord", choices: null, coordType: "rel_y" } as const;
+  assert.equal(formatValue(absX, 12_500_000, "mm", xf), "-2.5 mm");
+  assert.equal(formatValue(absY, 25_000_000, "mm", xf), "5 mm");
+  assert.equal(editText(absX, 12_500_000, "mm", xf), "-2.5");
+  assert.deepEqual(parseValue(absX, "-2.5", "mm", xf), { ok: true, value: 12_500_000 });
+  assert.deepEqual(parseValue(absY, "5", "mm", xf), { ok: true, value: 25_000_000 });
+  assert.equal(formatValue(relY, 3_000_000, "mm", pcbOriginTransforms("page", false, true, null, null)), "-3 mm", "a relative row: only the axis");
+  assert.equal(formatValue(size, 12_500_000, "mm", xf), "12.5 mm", "PT_SIZE: NOT_A_COORD");
+  assert.equal(formatValue({ kind: "int", display: "coord", choices: null }, 12_500_000, "mm", xf), "12.5 mm", "a PT_COORD without a coord type (a barcode's sizes)");
+  assert.equal(formatValue(absX, 12_500_000, "mm"), "12.5 mm", "no transforms: the base class's");
 });
 
 test("angles take a degree sign, whole numbers must be whole, a string is taken as typed", () => {

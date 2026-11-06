@@ -16,6 +16,8 @@ import { ImageEditorPanel } from "./ImageEditorPanel";
 import { PcbBarcodeDialog } from "./BarcodeDialog";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { measureStrokeText } from "./text/strokeFont";
+import { IDENTITY_TRANSFORMS, pcbTransformsOf } from "../state/originTransforms";
+import { fromDisplay, toDisplay, type CoordType, type OriginTransforms } from "../kicad-port/originTransforms";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const H_ALIGNS: TextBoxHAlign[] = ["left", "center", "right"];
@@ -351,8 +353,13 @@ interface RefImageForm {
   height: string;
 }
 
-function refImageFormOf(i: BoardRefImage, locked: boolean): RefImageForm {
-  return { x: mm(i.x), y: mm(i.y), layer: i.layer, locked, scale: scaleText(i.scale_ppm), width: mm(i.w), height: mm(i.h) };
+/**
+ * The four length fields are `ABS_X_COORD` / `ABS_Y_COORD` in KiCad (`m_posX`, `m_posY`, and -- as KiCad 8303b2ad and 25ec2335 set them -- `m_width` and `m_height`
+ * too), so the board editor's Origins & Axes (UI-LEFT-2 PP9) turns all four: the width and the height show less the origin's X and Y, as KiCad's do, and are read
+ * back the same way, so the scale they set is right.
+ */
+function refImageFormOf(i: BoardRefImage, locked: boolean, xf: OriginTransforms): RefImageForm {
+  return { x: mm(toDisplay(xf, i.x, "abs_x")), y: mm(toDisplay(xf, i.y, "abs_y")), layer: i.layer, locked, scale: scaleText(i.scale_ppm), width: mm(toDisplay(xf, i.w, "abs_x")), height: mm(toDisplay(xf, i.h, "abs_y")) };
 }
 
 /**
@@ -369,6 +376,8 @@ export interface RefImageHost {
   previewUrl: string;
   /** The image's lock; null where the editor keeps none (no Locked row). */
   locked: boolean | null;
+  /** The frame's origin transforms (the board editor's Origins & Axes); absent: none. */
+  xf?: OriginTransforms;
   layers: string[];
   layerName: (layer: string) => string;
   /** OK: the position, the layer, the scale, the greyscale pixels (null: unchanged) and the lock, one undo step; null when taken, else why not. */
@@ -392,6 +401,7 @@ export function PcbRefImageDialog() {
     locked: (board.locked ?? []).includes(image.id),
     layers: boardLayerList(board.layers ?? [], board.board_rules?.layer_setup),
     layerName: (l) => layerDisplayName(board.board_rules?.layer_setup, l),
+    xf: pcbTransformsOf(state.prefs, board),
     submit: async ({ layer, at, scalePpm, grey, locked }) => {
       const cmds: Cmd[] = [];
       if (at.x !== image.x || at.y !== image.y || layer !== image.layer || scalePpm !== image.scale_ppm) {
@@ -409,13 +419,17 @@ export function PcbRefImageDialog() {
 
 export function RefImagePropertiesForm({ host }: { host: RefImageHost }) {
   const image = host.image;
+  const xf = host.xf ?? IDENTITY_TRANSFORMS;
+  /** `ChangeDoubleValue` of a field of `type`, and `GetDoubleValue` back (mm text <-> nm). */
+  const shownMm = (nm: number, type: CoordType) => mm(toDisplay(xf, nm, type));
+  const takenNm = (text: string, type: CoordType) => Math.round(fromDisplay(xf, um(text), type));
   const [form, setForm] = useState<RefImageForm | null>(null);
   const [grey, setGrey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setForm(refImageFormOf(image, host.locked ?? false));
+    setForm(refImageFormOf(image, host.locked ?? false, xf));
     setGrey(null);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -435,19 +449,20 @@ export function RefImagePropertiesForm({ host }: { host: RefImageHost }) {
       if (!f) return f;
       if (!(ppm > 0)) return { ...f, scale: text };
       const [w, h] = sizeAt(ppm);
-      return { ...f, scale: text, width: mm(w), height: mm(h) };
+      return { ...f, scale: text, width: shownMm(w, "abs_x"), height: shownMm(h, "abs_y") };
     });
     setError(null);
   };
   /** The width or the height was typed: the scale follows, and the other side (`onWidthChanged`, `onHeightChanged`). */
   const onSide = (side: "width" | "height", text: string) => {
-    const want = um(text);
+    // `m_width.GetDoubleValue()`: what was typed, back through the field's transform
+    const want = takenNm(text, side === "width" ? "abs_x" : "abs_y");
     setForm((f) => {
       if (!f) return f;
-      if (!(want > 0)) return { ...f, [side]: text };
+      if (!(want > 0) || text.trim() === "" || !Number.isFinite(Number(text))) return { ...f, [side]: text };
       const ppm = side === "width" ? scaleForWidthNm(image.px, image.ppi, want) : scaleForHeightNm(image.px, image.ppi, want);
       const [w, h] = sizeAt(ppm);
-      return { ...f, scale: scaleText(ppm), width: side === "width" ? text : mm(w), height: side === "height" ? text : mm(h) };
+      return { ...f, scale: scaleText(ppm), width: side === "width" ? text : shownMm(w, "abs_x"), height: side === "height" ? text : shownMm(h, "abs_y") };
     });
     setError(null);
   };
@@ -463,7 +478,7 @@ export function RefImagePropertiesForm({ host }: { host: RefImageHost }) {
   };
 
   const ok = async () => {
-    const [x, y] = [um(form.x), um(form.y)];
+    const [x, y] = [takenNm(form.x, "abs_x"), takenNm(form.y, "abs_y")];
     if (!Number.isFinite(x) || !Number.isFinite(y)) return setError("The position must be numbers.");
     const scalePpm = scalePpmOf(form.scale);
     const check = checkImageScale(image.px, scalePpm);

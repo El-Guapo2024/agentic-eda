@@ -11,6 +11,7 @@ import type { PropValue } from "../../kicad-port/propertyManager";
 import type { Rule } from "../../api/types";
 import { DockPanel } from "./Dock";
 import { PropertyGrid } from "./PropertyGrid";
+import { useOriginTransforms } from "../../state/originTransforms";
 
 /**
  * KiCad picks up an unplaced footprint through the Add Footprint tool's
@@ -102,6 +103,8 @@ function PropertiesBody() {
   const board = state.board;
   const ids = useMemo(() => [...state.selection], [state.selection]);
   const model = useMemo(() => (board ? pcbGrid(board, ids, state.units) : null), [board, ids, state.units]);
+  // `PCB_BASE_FRAME::GetOriginTransforms()`: the coordinate rows (`PT_COORD` with a coord type) count from Origins & Axes' origin (UI-LEFT-2 PP9).
+  const xf = useOriginTransforms();
 
   if (!board || !model || model.count === 0) {
     return (
@@ -128,7 +131,7 @@ function PropertiesBody() {
 
   return (
     <>
-      <PropertyGrid model={model} units={state.units} onCommit={commit} selectionKey={ids.join("\n")} />
+      <PropertyGrid model={model} units={state.units} xf={xf} onCommit={commit} selectionKey={ids.join("\n")} />
       {rules.length > 0 && (
         <div className="panel-section">
           <h3>Placement rules</h3>

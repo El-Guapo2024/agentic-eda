@@ -14,6 +14,7 @@ import type { ArrayGeometry, Cmd, LibraryPad, PadNumbering, Nm } from "../api/ty
 import { nmTo, type LengthUnit } from "../state/units";
 import { axisOf, providedNumbers, resolveNumbering, type AxisSpec, type NumberedArray, type NumberingType } from "./arrayAxis";
 import { parseValue } from "./propertyGrid";
+import { fromDisplay, toDisplay, type CoordType, type OriginTransforms } from "./originTransforms";
 
 export type ArrayTab = "grid" | "circular";
 
@@ -178,18 +179,29 @@ export function lengthEntry(um: number, units: LengthUnit): string {
   return trimmed(nmTo(um, units), units === "mm" ? 4 : units === "mil" ? 2 : 5);
 }
 
+/**
+ * The dialog's coordinate entries (`DIALOG_CREATE_ARRAY`'s `SetCoordType`): the spacings and offsets are `REL_X_COORD` / `REL_Y_COORD`, the circular centre
+ * `ABS_X_COORD` / `ABS_Y_COORD`, put through the board editor's origin transforms (Origins & Axes, UI-LEFT-2 PP9) when the caller gives them.
+ */
+const ENTRY_COORD = { dx: "rel_x", dy: "rel_y", offsetX: "rel_x", offsetY: "rel_y", centerX: "abs_x", centerY: "abs_y" } as const satisfies Record<string, CoordType>;
+
+/** A coordinate as its entry shows it: through `xf` (absent: none), then `lengthEntry`. */
+export function coordEntry(nm: number, units: LengthUnit, type: CoordType, xf?: OriginTransforms): string {
+  return lengthEntry(xf ? toDisplay(xf, nm, type) : nm, units);
+}
+
 /** `RestoreConfigToControls`: the options as the entries show them. With "Full circle" on the angle entry shows the division (`calculateCircularArrayProperties`). */
-export function entriesOf(o: ArrayOptions, units: LengthUnit): ArrayEntries {
+export function entriesOf(o: ArrayOptions, units: LengthUnit, xf?: OriginTransforms): ArrayEntries {
   return {
     nx: String(o.nx),
     ny: String(o.ny),
-    dx: lengthEntry(o.dx, units),
-    dy: lengthEntry(o.dy, units),
-    offsetX: lengthEntry(o.offsetX, units),
-    offsetY: lengthEntry(o.offsetY, units),
+    dx: coordEntry(o.dx, units, ENTRY_COORD.dx, xf),
+    dy: coordEntry(o.dy, units, ENTRY_COORD.dy, xf),
+    offsetX: coordEntry(o.offsetX, units, ENTRY_COORD.offsetX, xf),
+    offsetY: coordEntry(o.offsetY, units, ENTRY_COORD.offsetY, xf),
     stagger: String(o.stagger),
-    centerX: lengthEntry(o.centerX, units),
-    centerY: lengthEntry(o.centerY, units),
+    centerX: coordEntry(o.centerX, units, ENTRY_COORD.centerX, xf),
+    centerY: coordEntry(o.centerY, units, ENTRY_COORD.centerY, xf),
     count: String(o.count),
     angle: trimmed(effectiveAngleDeg(o), 4),
     offsetAngle: trimmed(o.offsetAngleDeg, 4),
@@ -203,7 +215,7 @@ export type ArrayParse = { ok: true; options: ArrayOptions } | { ok: false; erro
  * the tab that is not shown). A count or the stagger must be a whole number (`validateLongEntry`: "Bad numeric value for horizontal count: x"); a length takes a unit
  * suffix and means the display units without one; an angle may end with a degree sign. All the complaints are returned together, one to a line.
  */
-export function optionsFromEntries(base: ArrayOptions, e: ArrayEntries, units: LengthUnit): ArrayParse {
+export function optionsFromEntries(base: ArrayOptions, e: ArrayEntries, units: LengthUnit, xf?: OriginTransforms): ArrayParse {
   const errors: string[] = [];
   const quiet: string[] = [];
   const shown = (tab: ArrayTab): string[] => (base.tab === tab ? errors : quiet);
@@ -212,9 +224,10 @@ export function optionsFromEntries(base: ArrayOptions, e: ArrayEntries, units: L
     into.push(`Bad numeric value for ${what}: ${text}`);
     return keep;
   };
-  const length = (into: string[], text: string, what: string, keep: number): number => {
+  const length = (into: string[], text: string, what: string, keep: number, type: CoordType): number => {
     const p = parseValue({ kind: "int", display: "size" }, text, units);
-    if (p.ok && typeof p.value === "number") return p.value;
+    // `UNIT_BINDER::GetValue`: `FromDisplay( displayValue, m_coordType )`
+    if (p.ok && typeof p.value === "number") return xf ? Math.round(fromDisplay(xf, p.value, type)) : p.value;
     into.push(`Bad numeric value for ${what}: ${text}`);
     return keep;
   };
@@ -230,13 +243,13 @@ export function optionsFromEntries(base: ArrayOptions, e: ArrayEntries, units: L
     ...base,
     nx: long(g, e.nx, "horizontal count", base.nx),
     ny: long(g, e.ny, "vertical count", base.ny),
-    dx: length(g, e.dx, "horizontal spacing", base.dx),
-    dy: length(g, e.dy, "vertical spacing", base.dy),
-    offsetX: length(g, e.offsetX, "horizontal offset", base.offsetX),
-    offsetY: length(g, e.offsetY, "vertical offset", base.offsetY),
+    dx: length(g, e.dx, "horizontal spacing", base.dx, ENTRY_COORD.dx),
+    dy: length(g, e.dy, "vertical spacing", base.dy, ENTRY_COORD.dy),
+    offsetX: length(g, e.offsetX, "horizontal offset", base.offsetX, ENTRY_COORD.offsetX),
+    offsetY: length(g, e.offsetY, "vertical offset", base.offsetY, ENTRY_COORD.offsetY),
     stagger: long(g, e.stagger, "stagger", base.stagger),
-    centerX: length(c, e.centerX, "center pos X", base.centerX),
-    centerY: length(c, e.centerY, "center pos Y", base.centerY),
+    centerX: length(c, e.centerX, "center pos X", base.centerX, ENTRY_COORD.centerX),
+    centerY: length(c, e.centerY, "center pos Y", base.centerY, ENTRY_COORD.centerY),
     count: long(c, e.count, "point count", base.count),
     angleDeg: base.fullCircle ? base.angleDeg : degrees(c, e.angle, "angle between items", base.angleDeg),
     offsetAngleDeg: degrees(c, e.offsetAngle, "first item angle", base.offsetAngleDeg),

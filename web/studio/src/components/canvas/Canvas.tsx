@@ -497,6 +497,7 @@ export function Canvas() {
       sketchVias: state.sketchVias,
       sketchGraphics: state.bcx.sketchGraphics,
       sketchText: state.bcx.sketchText,
+      rulerFlip: { x: state.prefs.pcbInvertXAxis, y: state.prefs.pcbInvertYAxis },
       showPadNumbers: state.bcx.showPadNumbers,
       auxOrigin: board.aux_origin ?? null,
       gridOrigin: board.grid_origin ?? null,
@@ -535,7 +536,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

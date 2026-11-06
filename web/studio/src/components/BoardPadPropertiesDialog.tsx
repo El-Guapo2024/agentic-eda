@@ -39,6 +39,8 @@ import { FAB_PROPERTY_CHOICES, AS_PER_PS, padFabForm, padFabPatch, type PadFabFo
 import { applyTeardropForm, padTeardrops, teardropForm, teardropFormChanged, type TeardropForm } from "../kicad-port/teardropParams";
 import { TeardropFields } from "./TeardropFields";
 import { NumberInput } from "./NumberInput";
+import { useOriginTransforms } from "../state/originTransforms";
+import { toDisplay } from "../kicad-port/originTransforms";
 
 type Kind = "smd" | "through_hole" | "non_plated_hole";
 
@@ -82,6 +84,8 @@ export function BoardPadPropertiesDialog() {
   const hit = id && state.board ? padById(state.board, id) : null;
   const [form, setForm] = useState<Form | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // `m_posX` / `m_posY` are `ABS_X_COORD` / `ABS_Y_COORD`: the pad's place counted from Origins & Axes' origin (UI-LEFT-2 PP9)
+  const xf = useOriginTransforms();
   const [busy, setBusy] = useState(false);
 
   // Fill the form when the dialog opens on a pad -- not on every poll.
@@ -258,7 +262,7 @@ export function BoardPadPropertiesDialog() {
               ))}
             </select>
             <span>Position</span>
-            <span style={{ fontSize: 11 }}>{`${fmt(pad.px ?? pad.x)}, ${fmt(pad.py ?? pad.y)}`} (on the board)</span>
+            <span style={{ fontSize: 11 }} data-testid="pad-position">{`${fmt(toDisplay(xf, pad.px ?? pad.x, "abs_x"))}, ${fmt(toDisplay(xf, pad.py ?? pad.y, "abs_y"))}`} (on the board)</span>
             {stackShown && (
               <PadStackRows
                 state={form.stack}

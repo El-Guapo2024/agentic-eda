@@ -7,11 +7,15 @@
 import { useStudioState } from "../state/store";
 import { formatLength, formatXY } from "../state/units";
 import { routerMessagePanel } from "../kicad-port/routerSizes";
+import { useOriginTransforms } from "../state/originTransforms";
+import { toDisplayAbs } from "../kicad-port/originTransforms";
 
 export function MessagePanel() {
   const state = useStudioState();
   const board = state.board;
   const selectedRefs = [...state.selection];
+  // the studio's own "At" field, counted from Origins & Axes' origin as every board coordinate is (`ToDisplayAbs`, UI-LEFT-2 PP9)
+  const xf = useOriginTransforms();
 
   if (!board) return <div className="message-panel" />;
 
@@ -58,7 +62,10 @@ export function MessagePanel() {
           {p.placed && p.at && (
             <span className="kv">
               <b>At</b>
-              {formatXY(p.at[0], p.at[1], state.units)}
+              {(() => {
+                const d = toDisplayAbs(xf, { x: p.at[0], y: p.at[1] });
+                return formatXY(d.x, d.y, state.units);
+              })()}
             </span>
           )}
           {p.placed && p.rot !== undefined && (

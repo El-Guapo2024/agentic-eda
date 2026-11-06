@@ -592,8 +592,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     }
     return moveCmd([i.id], dx, dy);
   };
-  add({ owner: "BOARD_ITEM", name: POSITION_X, kind: "int", display: "coord", get: (i) => position(i)[0], set: setPosition(0) });
-  add({ owner: "BOARD_ITEM", name: POSITION_Y, kind: "int", display: "coord", get: (i) => position(i)[1], set: setPosition(1) });
+  // `PT_COORD` with `ABS_X_COORD` / `ABS_Y_COORD` (board_item.cpp): shown from the Origins & Axes origin
+  add({ owner: "BOARD_ITEM", name: POSITION_X, kind: "int", display: "coord", coordType: "abs_x", get: (i) => position(i)[0], set: setPosition(0) });
+  add({ owner: "BOARD_ITEM", name: POSITION_Y, kind: "int", display: "coord", coordType: "abs_y", get: (i) => position(i)[1], set: setPosition(1) });
   // The layer of a text or a dimension: any layer (`BOARD_ITEM`'s Layer takes every enabled layer; the classes with a layer of their own replace it).
   add({
     owner: "BOARD_ITEM",
@@ -1306,6 +1307,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     if (v.type === "blind") return "Blind";
     if (v.type === "buried") return "Buried";
     const first = c.copperLayers[0];
+      coordType: axis === 0 ? "abs_x" : "abs_y",
     const last = c.copperLayers[c.copperLayers.length - 1];
     const outer = (l: string): boolean => l === first || l === last;
     if ((v.from === first && v.to === last) || (v.from === last && v.to === first)) return "Through";
@@ -1438,8 +1440,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   // ------------------------------------------------------------------------------------------------------------------------- ZONE
   pm.inheritsAfter("ZONE", "BOARD_CONNECTED_ITEM");
   // "Mask layer and position properties; they aren't useful in current form": replaced by hidden ones.
-  pm.replaceProperty("BOARD_ITEM", POSITION_X, { owner: "ZONE", name: POSITION_X, kind: "int", display: "coord", hidden: true, get: () => 0 });
-  pm.replaceProperty("BOARD_ITEM", POSITION_Y, { owner: "ZONE", name: POSITION_Y, kind: "int", display: "coord", hidden: true, get: () => 0 });
+  pm.replaceProperty("BOARD_ITEM", POSITION_X, { owner: "ZONE", name: POSITION_X, kind: "int", display: "coord", coordType: "abs_x", hidden: true, get: () => 0 });
+  pm.replaceProperty("BOARD_ITEM", POSITION_Y, { owner: "ZONE", name: POSITION_Y, kind: "int", display: "coord", coordType: "abs_y", hidden: true, get: () => 0 });
   // "Layer property is hidden because it only holds a single layer and zones actually use a layer set"
   pm.replaceProperty("BOARD_CONNECTED_ITEM", "Layer", { owner: "ZONE", name: "Layer", kind: "enum", hidden: true, get: (i) => i.zone!.layer });
   const isCopperZone = (i: PcbItem): boolean => !!i.zone && !i.zone.is_rule_area && isCopper(i.zone.layer);
@@ -1992,6 +1994,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       },
     },
     SHAPE
+        coordType: axis === 0 ? "abs_x" : "abs_y",
   );
 
   add({ owner: "EDA_SHAPE", name: "Fill Color", kind: "color", get: () => "", available: (i) => kindOf(i) === "polygon" || kindOf(i) === "rect" || kindOf(i) === "circle" }, SHAPE);

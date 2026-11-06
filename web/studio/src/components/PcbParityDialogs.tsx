@@ -21,6 +21,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
+import { coordField, coordValue, useOriginTransforms } from "../state/originTransforms";
 import { movableItem, polarTranslation, positionRelativeSelectionAnchor, relativeMoveVector, toPolarDeg, type MovableKind } from "../kicad-port/pcbEditActions";
 import { editableSelection, isLocked } from "../kicad-port/pcbTransform";
 import { itemKind, padById } from "../kicad-port/pcbItems";
@@ -250,6 +251,14 @@ function PositionRelativeDialog() {
     }
   };
 
+  // The offset fields are `REL_X_COORD` / `REL_Y_COORD` (`m_xOffset.SetCoordType`): typed and shown through Origins & Axes' axis directions (UI-LEFT-2 PP9). In
+  // polar mode the distance stays `REL_X_COORD` (negated with X increasing left, as KiCad shows it) and the angle field shows minus the angle whatever Y does
+  // (`UNIT_BINDER::SetAngleValue`, kicad-port/originTransforms.ts `angleFieldText`), which `toPolarDeg` / `polarTranslation` already are.
+  const xf = useOriginTransforms();
+  const relX = (shown: number) => coordValue(xf, shown, "rel_x", units);
+  const relY = (shown: number) => coordValue(xf, shown, "rel_y", units);
+  const showX = (nm: number) => coordField(xf, nm, "rel_x", units);
+  const showY = (nm: number) => coordField(xf, nm, "rel_y", units);
   // DIALOG_POSITION_RELATIVE::OnClear / OnPolarChanged: "Reset to the current X offset from the reference position."
   const currentOffset = () => {
     const ref = referenceAnchor();
@@ -257,22 +266,22 @@ function PositionRelativeDialog() {
   };
   const clearA = () => {
     const o = currentOffset();
-    setA(polar ? nmTo(toPolarDeg(o.x, o.y).r, units) : nmTo(o.x, units));
+    setA(polar ? showX(toPolarDeg(o.x, o.y).r) : showX(o.x));
   };
   const clearB = () => {
     const o = currentOffset();
-    setB(polar ? toPolarDeg(o.x, o.y).deg : nmTo(o.y, units));
+    setB(polar ? toPolarDeg(o.x, o.y).deg : showY(o.y));
   };
   const switchPolar = (nextPolar: boolean) => {
-    // Convert the entered values across, as OnPolarChanged does.
+    // Convert the entered values across, as OnPolarChanged does: `GetDoubleValue()` (the fields read back through the transforms), converted, `SetDoubleValue`.
     if (nextPolar) {
-      const p = toPolarDeg(nmFrom(a, units), nmFrom(b, units));
-      setA(nmTo(p.r, units));
+      const p = toPolarDeg(relX(a), relY(b));
+      setA(showX(p.r));
       setB(p.deg);
     } else {
-      const t = polarTranslation(nmFrom(a, units), b);
-      setA(nmTo(t.x, units));
-      setB(nmTo(t.y, units));
+      const t = polarTranslation(relX(a), b);
+      setA(showX(t.x));
+      setB(showY(t.y));
     }
     setPolar(nextPolar);
   };
@@ -299,7 +308,7 @@ function PositionRelativeDialog() {
 
   const submit = async () => {
     // getTranslationInIU
-    const translation = polar ? polarTranslation(nmFrom(a, units), b) : { x: Math.round(nmFrom(a, units)), y: Math.round(nmFrom(b, units)) };
+    const translation = polar ? polarTranslation(relX(a), b) : { x: Math.round(relX(a)), y: Math.round(relY(b)) };
     const v = relativeMoveVector(referenceAnchor(), translation, selectionAnchor);
     close();
     if (v.x === 0 && v.y === 0) return;
@@ -351,12 +360,12 @@ function PositionRelativeDialog() {
           </label>
           <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr auto" }}>
             <span>{polar ? "Distance:" : "Offset X:"}</span>
-            <input autoFocus type="number" step="any" value={a} onChange={(e) => setA(Number(e.target.value))} onKeyDown={(e) => e.key === "Enter" && void submit()} />
+            <input autoFocus type="number" step="any" aria-label={polar ? "Distance" : "Offset X"} value={a} onChange={(e) => setA(Number(e.target.value))} onKeyDown={(e) => e.key === "Enter" && void submit()} />
             <button style={clearBtn} title={polar ? "Reset to the current distance from the reference position." : "Reset to the current X offset from the reference position."} onClick={clearA}>
               Clear
             </button>
             <span>{polar ? "Angle:" : "Offset Y:"}</span>
-            <input type="number" step="any" value={b} onChange={(e) => setB(Number(e.target.value))} onKeyDown={(e) => e.key === "Enter" && void submit()} />
+            <input type="number" step="any" aria-label={polar ? "Angle" : "Offset Y"} value={b} onChange={(e) => setB(Number(e.target.value))} onKeyDown={(e) => e.key === "Enter" && void submit()} />
             <button style={clearBtn} title={polar ? "Reset to the current angle from the reference position." : "Reset to the current Y offset from the reference position."} onClick={clearB}>
               Clear
             </button>

@@ -36,6 +36,8 @@ import {
   type VrmlOptions,
 } from "../api/boardControl";
 import type { FabReply } from "../api/client";
+import { useOriginTransforms } from "../state/originTransforms";
+import { fromDisplay, toDisplay } from "../kicad-port/originTransforms";
 
 const TITLES: Record<BoardExportKind, string> = {
   "3d": "Export STEP/GLB/BREP/XAO/PLY/STL",
@@ -195,6 +197,11 @@ function ThreeDForm({ o, set, selectedRefs }: { o: ThreeDOptions; set: (patch: P
 }
 
 function VrmlForm({ o, set }: { o: VrmlOptions; set: (patch: Partial<VrmlOptions>) => void }) {
+  // `m_xOrigin` / `m_yOrigin` are `ABS_X_COORD` / `ABS_Y_COORD`: the user-defined origin is typed from Origins & Axes' origin, each axis either way, and handed
+  // to the exporter in board millimetres (`GetXRefMM`: `IUTomm( m_xOrigin.GetIntValue() )`; UI-LEFT-2 PP9).
+  const xf = useOriginTransforms();
+  const shownMm = (mm: number, t: "abs_x" | "abs_y") => Number((toDisplay(xf, Math.round(mm * 1e6), t) / 1e6).toFixed(6));
+  const boardMm = (shown: number, t: "abs_x" | "abs_y") => Math.round(fromDisplay(xf, Math.round(shown * 1e6), t)) / 1e6;
   return (
     <>
       <div className="kv-grid" style={grid}>
@@ -213,8 +220,8 @@ function VrmlForm({ o, set }: { o: VrmlOptions; set: (patch: Partial<VrmlOptions
       <Check label="User defined origin" checked={o.user_origin} onChange={(v) => set({ user_origin: v })} />
       {o.user_origin && (
         <div style={{ marginLeft: 18, marginBottom: 6 }}>
-          X <input type="number" step="any" value={o.origin_x} onChange={(e) => set({ origin_x: Number(e.target.value) })} style={{ width: 80 }} /> Y{" "}
-          <input type="number" step="any" value={o.origin_y} onChange={(e) => set({ origin_y: Number(e.target.value) })} style={{ width: 80 }} /> mm
+          X <input type="number" step="any" aria-label="VRML origin X" value={shownMm(o.origin_x, "abs_x")} onChange={(e) => set({ origin_x: boardMm(Number(e.target.value), "abs_x") })} style={{ width: 80 }} /> Y{" "}
+          <input type="number" step="any" aria-label="VRML origin Y" value={shownMm(o.origin_y, "abs_y")} onChange={(e) => set({ origin_y: boardMm(Number(e.target.value), "abs_y") })} style={{ width: 80 }} /> mm
         </div>
       )}
       <Check label="Ignore 'Do not populate' components" checked={o.no_dnp} onChange={(v) => set({ no_dnp: v })} />

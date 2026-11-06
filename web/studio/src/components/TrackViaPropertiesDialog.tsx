@@ -30,6 +30,8 @@ import { postTrackViaPreview } from "../api/client";
 import { askConfirm } from "./library/libraryDialogs";
 import { useStudioApi } from "../state/store";
 import { formatLength, nmFrom, nmTo, type LengthUnit } from "../state/units";
+import { useOriginTransforms } from "../state/originTransforms";
+import { fromDisplay, toDisplay, type CoordType } from "../kicad-port/originTransforms";
 
 type LengthKey = "startX" | "startY" | "endX" | "endY" | "width" | "viaX" | "viaY" | "diameter" | "drill";
 
@@ -38,15 +40,18 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
   const before = useMemo(() => trackViaForm(board, ids), [board, ids]);
   const [form, setForm] = useState<TrackViaForm>(before);
   const [error, setError] = useState<string | null>(null);
-  // the fields as typed, in display units ("" is indeterminate)
-  const shown = (v: Nm | null) => (v == null ? "" : String(Number(nmTo(v, units).toFixed(6))));
+  // the fields as typed, in display units ("" is indeterminate); Start X/Y, End X/Y and the via's X/Y are `ABS_X_COORD` / `ABS_Y_COORD`
+  // (`m_trackStartX.SetCoordType` ...): counted from Origins & Axes' origin, each axis either way (UI-LEFT-2 PP9)
+  const xf = useOriginTransforms();
+  const coordOf: Partial<Record<LengthKey, CoordType>> = { startX: "abs_x", endX: "abs_x", viaX: "abs_x", startY: "abs_y", endY: "abs_y", viaY: "abs_y" };
+  const shownAs = (v: Nm | null, key: LengthKey) => (v == null ? "" : String(Number(nmTo(toDisplay(xf, v, coordOf[key] ?? "not"), units).toFixed(6))));
   const [texts, setTexts] = useState<Record<LengthKey, string>>(() => ({ startX: "", startY: "", endX: "", endY: "", width: "", viaX: "", viaY: "", diameter: "", drill: "" }));
   const opened = useRef(false);
   useEffect(() => {
     if (opened.current) return;
     opened.current = true;
     setForm(before);
-    setTexts({ startX: shown(before.startX), startY: shown(before.startY), endX: shown(before.endX), endY: shown(before.endY), width: shown(before.width), viaX: shown(before.viaX), viaY: shown(before.viaY), diameter: shown(before.diameter), drill: shown(before.drill) });
+    setTexts({ startX: shownAs(before.startX, "startX"), startY: shownAs(before.startY, "startY"), endX: shownAs(before.endX, "endX"), endY: shownAs(before.endY, "endY"), width: shownAs(before.width, "width"), viaX: shownAs(before.viaX, "viaX"), viaY: shownAs(before.viaY, "viaY"), diameter: shownAs(before.diameter, "diameter"), drill: shownAs(before.drill, "drill") });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const nets = pcbContext(board, units).nets;
@@ -66,7 +71,7 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
             const t = e.target.value;
             setTexts((x) => ({ ...x, [key]: t }));
             const n = Number(t);
-            setForm((f) => ({ ...f, [key]: t.trim() === "" || !Number.isFinite(n) ? null : Math.round(nmFrom(n, units)) }));
+            setForm((f) => ({ ...f, [key]: t.trim() === "" || !Number.isFinite(n) ? null : Math.round(fromDisplay(xf, nmFrom(n, units), coordOf[key] ?? "not")) }));
           }}
           style={{ width: 100 }}
         />{" "}
