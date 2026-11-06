@@ -21,7 +21,7 @@
 # and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
-# examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), multichannel and
+# examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
 # simulator and sim-model (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR).
 #
@@ -118,6 +118,11 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
                 && "$eda" board place J3 --at 11.5,3 -C "$d" && "$eda" board place J2 --at 6,20 -C "$d" && "$eda" board place J1 --at 7.5,11 -C "$d" \
                 && "$eda" board place R1 --at 3,16 -C "$d" && "$eda" board place R2 --at 17,18 -C "$d" \
                 && "$eda" board track add --net GND --layer F.Cu --width 0.2 --pts "4.4,7 4.4,12" -C "$d" ;;
+        cutout-board) # autoroute-cutout.check.js: through_hole_headers placed so SDA and SCL run across a window cut out of the board
+            "$eda" board new "$repo/examples/through_hole_headers.yaml" -o "$d" \
+                && "$eda" board place J3 --at 11.5,3 -C "$d" && "$eda" board place J2 --at 7,20 -C "$d" && "$eda" board place J1 --at 17,20 -C "$d" \
+                && "$eda" board place R1 --at 20,8 -C "$d" && "$eda" board place R2 --at 20,14 -C "$d" \
+                && "$eda" board shape add --kind rect --layer Edge.Cuts --pts "4,8 11,15" --width 0.05 -C "$d" ;;
         tune-board) # length-tuning.check.js (the nets under KiCad's names: the hierarchical labels of the LED sheet)
             perl -pe 's/\bPA2\b/USB_DP/g; s/\bPA3\b/USB_DN/g' "$yaml_mcu" > "$t/tune_board.yaml" \
                 && "$eda" board new "$t/tune_board.yaml" -o "$d" \
