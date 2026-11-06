@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Part } from "../api/types";
-import { bodyCmds, bodyDraftOf, bodyDraftProblem, bodyOfDraft, EXTRUSION_MATERIALS, EXTRUSION_SOURCES, extrusionDefaultColor, withMaterial, boardModelsCmds, cleanPath, libraryModels, rowOfCmd, rowsOfLibrary, evaluateExpression, evaluateField, formatOffset, isNumberText, formatRotation, formatScale, modelCmd, movedRows, opacityOf, plainRow, readNumber, readOffset, readRotation, rotationFromString, rowsOf, sameRows, showRotation, sliderOf, statusIcon, stepOffset, stepRotation, stepScale } from "./fpModels";
+import { bodyCmds, bodyDraftOf, bodyDraftProblem, bodyOfDraft, EXTRUSION_MATERIALS, EXTRUSION_SOURCES, extrusionDefaultColor, tabRows, withMaterial, boardModelsCmds, cleanPath, libraryModels, rowOfCmd, rowsOfLibrary, evaluateExpression, evaluateField, formatOffset, isNumberText, formatRotation, formatScale, modelCmd, movedRows, opacityOf, plainRow, readNumber, readOffset, readRotation, rotationFromString, rowsOf, sameRows, showRotation, sliderOf, statusIcon, stepOffset, stepRotation, stepScale } from "./fpModels";
 
 const part = (models: Part["models"]): Part => ({ ref: "U1", value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: null, models }) as Part;
 const entry = (name: string, over: Record<string, unknown> = {}) => ({ name, offset: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number], rotate: [0, 0, 0] as [number, number, number], opacity: 1, show: true, ...over });
@@ -144,6 +144,20 @@ test("the Footprint Editor's OK sends the whole list, without the blank rows, an
   assert.equal(sent.models3d[1]!.opacity, 0.5);
   assert.deepEqual(libraryModels([]), { model: null, models3d: [] });
   assert.deepEqual(libraryModels([plainRow("  ")]), { model: null, models3d: [] });
+});
+
+test("a back footprint held half a turn from its file shows the file's numbers, and OK sends them back as held: the file written stays KiCad's", () => {
+  const held = entry("a.step", { offset: [-1, -2, 0.5], rotate: [10, 0, -150] });
+  // as read before 2026-10-25: the file had offset (1, 2, 0.5) and rotate (10, 0, 30)
+  const old = { ...part([held]), side: "bottom", models_turned: true } as Part;
+  assert.deepEqual(tabRows(old), [{ path: "a.step", offset: [1, 2, 0.5], scale: [1, 1, 1], rotate: [10, 0, 30], opacity: 1, show: true }], "the numbers KiCad's tab shows");
+  assert.deepEqual(boardModelsCmds(old, tabRows(old)), [], "untouched, nothing is sent");
+  const edited = tabRows(old).map((r) => ({ ...r, offset: [1, 3, 0.5] as [number, number, number] }));
+  assert.deepEqual(boardModelsCmds(old, edited), [{ op: "set_board_models", part: "U1", models: [{ path: "a.step", offset: [-1, -3, 0.5], scale: [1, 1, 1], rotate: [10, 0, -150], opacity: 1, show: true }] }], "sent as the studio holds it");
+  // a footprint held in the file's frame (every one read since, and every one made or flipped here) shows its numbers as they are
+  const now = { ...part([held]), side: "bottom" } as Part;
+  assert.deepEqual(tabRows(now), rowsOf([held]));
+  assert.deepEqual(boardModelsCmds(now, tabRows(now)), []);
 });
 
 test("the Extruded 3D Body box starts as TransferDataToWindow fills it and OK sends the body only when it changed", () => {

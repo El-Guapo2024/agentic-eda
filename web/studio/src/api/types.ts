@@ -339,6 +339,9 @@ export interface Part {
   from_board_file?: boolean;
   /** The footprint's Extruded 3D Body (`EXTRUDED_3D_BODY`, crates/cli/src/extruded_body_api.rs `body_json`); absent when it has none. */
   extruded_body?: ExtrudedBodyInfo;
+  /** A back footprint whose `models` are held half a turn from its board file's numbers (read by a reader of before 2026-10-25): the 3D Models tab shows them turned back
+   *  (kicad-port/fpModels.ts `tabRows`). Absent = false. */
+  models_turned?: boolean;
 }
 
 /** A body as `set_extruded_body` sends it (eda_model::extruded_body::ExtrudedBody; what is left out is KiCad's default). */

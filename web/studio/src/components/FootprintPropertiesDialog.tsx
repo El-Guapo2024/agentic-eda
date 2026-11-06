@@ -30,7 +30,7 @@ import { useActionRunner } from "../actions/useActionRunner";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, nmFrom, nmTo } from "../state/units";
-import { bodyCmds, bodyDraftOf, bodyDraftProblem, boardModelsCmds, rowsOf, type BodyDraft, type ModelRow } from "../kicad-port/fpModels";
+import { bodyCmds, bodyDraftOf, bodyDraftProblem, boardModelsCmds, tabRows, type BodyDraft, type ModelRow } from "../kicad-port/fpModels";
 import { fpOrientation } from "../kicad-port/pcbProperties";
 import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
@@ -101,7 +101,8 @@ export function FootprintPropertiesDialog() {
     setFpZone(footprintZoneForm(part));
     setPadNum(padNumbers(part)[0] ?? "");
     setPadZones({});
-    setModels(rowsOf(part.models));
+    // the numbers the file has (`kicad-port/fpModels.ts` `tabRows`)
+    setModels(tabRows(part));
     setBody(bodyDraftOf(part));
     setTab("general");
     setError(null);

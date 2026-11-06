@@ -11,6 +11,7 @@
 // as positive-is-CW, but we use positive-is-CCW in the GUI": `xrot->ChangeValue( formatRotationValue( -modelInfo.m_Rotation.x ) )`), so `showRotation` and `readRotation`
 // carry the sign. The offset is shown in the units of the editor (`formatOffsetValue`: millimetres, inches or mils), stored in millimetres.
 import type { Cmd, ExtrudedBodyCmd, Model3dCmd, Part } from "../api/types";
+import { flippedFrame } from "./model3d";
 import type { LengthUnit } from "../state/units";
 
 export type Vec3 = [number, number, number];
@@ -74,13 +75,32 @@ export function sameRows(a: readonly ModelRow[], b: readonly ModelRow[]): boolea
   return a.length === b.length && a.every((r, i) => JSON.stringify(r) === JSON.stringify(b[i]));
 }
 
+/** A row turned half a turn about z (`Model3d::flipped_frame`, kicad-port/model3d.ts `flippedFrame`): its own inverse. */
+function turnedRow(r: ModelRow): ModelRow {
+  const t = flippedFrame(r);
+  return { ...r, offset: t.offset, rotate: t.rotate };
+}
+
+/**
+ * The rows the board's tab shows for `part` (`ReloadModelsFromFootprint`: `m_footprint->Models()`, the numbers its board file has -- `FOOTPRINT::Flip` does not touch them).
+ * The studio holds them so too, but for a back footprint read in its file's frame by a reader of before 2026-10-25 (`Part.models_turned`), which holds them half a turn from the
+ * file's: those are turned back here, and turned again by what OK sends ([`boardModelsCmds`]), so the file written is the same.
+ */
+export function tabRows(part: Pick<Part, "models" | "models_turned">): ModelRow[] {
+  const rows = rowsOf(part.models);
+  return part.models_turned ? rows.map(turnedRow) : rows;
+}
+
 /**
  * What the dialog's OK sends for the models: nothing when the list is the one the footprint has, else `set_board_models` with the whole list -- a row with no file name is left
- * out (KiCad keeps it in the grid, and does not write a model with no name: `if( !bs3D->m_Filename.IsEmpty() )`).
+ * out (KiCad keeps it in the grid, and does not write a model with no name: `if( !bs3D->m_Filename.IsEmpty() )`). `rows` are the tab's ([`tabRows`]); the command carries the
+ * list as the studio holds it.
  */
 export function boardModelsCmds(part: Part, rows: readonly ModelRow[]): Cmd[] {
   const kept = rows.filter((r) => r.path.trim() !== "").map((r) => ({ ...r, path: cleanPath(r.path) }));
-  return sameRows(kept, rowsOf(part.models)) ? [] : [{ op: "set_board_models", part: part.ref, models: kept.map(modelCmd) }];
+  if (sameRows(kept, tabRows(part))) return [];
+  const held = part.models_turned ? kept.map(turnedRow) : kept;
+  return [{ op: "set_board_models", part: part.ref, models: held.map(modelCmd) }];
 }
 
 // ------------------------------------------------------------------------------------------------------------- the Extruded 3D Body box

@@ -742,7 +742,8 @@ fn model_json(m: &eda_model::footprint::Model3d) -> Value {
 /// The 3D models of `part` for `/api/state`: `{ "models": [{ name, offset, scale, rotate, opacity, show }], "kind3d": "smd" | "tht" | "virtual", "dnp", "not_in_pos",
 /// "extruded_body"? }`, `None` when it has neither a model nor an Extruded 3D Body. `footprint` is what the model resolved the part's footprint to. The placement is the
 /// footprint file's, in the studio's frame for a top-side footprint (`Model3d::flipped_frame`); the 3D view turns it with a bottom-side part. `extruded_body` is
-/// [`crate::extruded_body_api::body_json`], present only for a part that has one (a part with a body and no model has `models: []`).
+/// [`crate::extruded_body_api::body_json`], present only for a part that has one (a part with a body and no model has `models: []`). `models_turned` is set for a back
+/// footprint whose models are held half a turn from its file's numbers (see the body).
 ///
 /// The kind and the two flags are the board footprint's own attributes (`Design::effective_attrs`: Footprint Properties' edit, else what the board file is written
 /// with), which `BOARD_ADAPTER::IsFootprintShown` reads: `FP_SMD` an SMD model, `FP_THROUGH_HOLE` a through-hole one, neither a virtual one; `FP_DNP` and
@@ -765,6 +766,12 @@ pub fn part_json(design: &eda_model::ir::Design, model: &ConstraintModel, part: 
     let mut v = json!({ "models": models, "kind3d": kind, "dnp": attrs.dnp, "not_in_pos": attrs.exclude_from_pos_files });
     if let Some(body) = body {
         v["extruded_body"] = body;
+    }
+    // A back footprint read in its file's frame (by a reader of before `FootprintExtra::library_frame`, which the writer still writes as it was read) holds its models
+    // half a turn from the file's numbers (`Model3d::flipped_frame`), which are the ones KiCad's 3D Models tab shows: the tab turns them (kicad-port/fpModels.ts `tabRows`).
+    let held_turned = design.placement.as_ref().and_then(|p| p.footprints.iter().find(|f| f.id == part.reference)).is_some_and(|fp| fp.side == eda_model::ir::Side::Bottom && !eda_drc::board::written_half_turned(design, fp));
+    if held_turned {
+        v["models_turned"] = json!(true);
     }
     Some(v)
 }
@@ -1196,6 +1203,49 @@ mod tests {
         assert_eq!((m["scale"].clone(), m["opacity"].clone(), m["show"].clone()), (json!([1.0, 1.0, 1.0]), json!(1.0), json!(true)));
         let none = Part { package: Some("NO-SUCH-PACKAGE".into()), footprint: Some("NO-SUCH-PACKAGE".into()), ..part.clone() };
         assert!(model.footprint_of(&none).is_none(), "no footprint, no models");
+    }
+
+    /// A back footprint's models in the 3D Models tab (`ReloadModelsFromFootprint`: the file's numbers, which `FOOTPRINT::Flip` does not touch): a footprint read now holds the
+    /// file's numbers and is sent as they are; one read in the file's frame before 2026-10-25 (`FootprintExtra::library_frame` false) holds them half a turn away, is sent with
+    /// `models_turned` so the tab turns them back, and the board file written has the file's numbers either way.
+    #[test]
+    fn a_back_footprints_models_are_sent_so_that_the_tab_shows_the_files_numbers_and_the_file_stays_kicads() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Lib:Part" (layer "B.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "B.SilkS"))
+    (pad "1" smd rect (at -1 0) (size 0.8 0.8) (layers "B.Cu"))
+    (pad "2" smd rect (at 1 0) (size 0.8 0.8) (layers "B.Cu"))
+    (model "${KICAD10_3DMODEL_DIR}/X.3dshapes/X.step" (offset (xyz 1 2 0.5)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 30)))
+  )
+  (gr_rect (start 0 0) (end 20 20) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
+)"#;
+        let (mut design, mut model, _) = eda_kicad::import_kicad_pcb(board).unwrap();
+        let part = model.part("U1").unwrap().clone();
+        let fp = model.footprint_of(&part).unwrap();
+        let file = eda_model::footprint::Model3d { offset: [1.0, 2.0, 0.5], rotate: [0.0, 0.0, 30.0], ..eda_model::footprint::Model3d::identity("${KICAD10_3DMODEL_DIR}/X.3dshapes/X.step") };
+        let v = part_json(&design, &model, &part, &fp).unwrap();
+        assert_eq!((v["models"][0]["offset"].clone(), v["models"][0]["rotate"].clone(), v["models_turned"].clone()), (json!([1.0, 2.0, 0.5]), json!([0.0, 0.0, 30.0]), Value::Null), "read now: the file's numbers as they are");
+        let written = |design: &eda_model::ir::Design, model: &ConstraintModel| -> String {
+            let out = eda_kicad::export_kicad_pcb(design, model, &eda_kicad::ExportMeta { date: "2026-11-06", title: "t" }).unwrap();
+            let words: String = out.split_whitespace().collect::<Vec<_>>().join(" ");
+            let at = words.find("(model \"${KICAD10_3DMODEL_DIR}").unwrap();
+            words[at..].chars().take(160).collect()
+        };
+        assert!(written(&design, &model).contains("(offset (xyz 1 2 0.5) ) (scale (xyz 1 1 1) ) (rotate (xyz 0 0 30"), "{}", written(&design, &model));
+        // the same board as a reader of before `library_frame` held it: the footprint in the file's frame, its model half a turn from the file's
+        design.drawings.as_mut().unwrap().footprint_extras.iter_mut().find(|e| e.id == "U1").unwrap().library_frame = false;
+        let name = fp.name.clone();
+        model.footprints.iter_mut().find(|f| f.name == name).unwrap().models3d = vec![file.flipped_frame()];
+        let fp = model.footprint_of(&part).unwrap();
+        let v = part_json(&design, &model, &part, &fp).unwrap();
+        assert_eq!(v["models_turned"], json!(true));
+        assert_eq!((v["models"][0]["offset"].clone(), v["models"][0]["rotate"].clone()), (json!([-1.0, -2.0, 0.5]), json!([0.0, 0.0, -150.0])), "held half a turn away: the tab turns them back to (1, 2, 0.5) and 30");
+        assert!(written(&design, &model).contains("(offset (xyz 1 2 0.5) ) (scale (xyz 1 1 1) ) (rotate (xyz 0 0 30"), "the file is KiCad's still: {}", written(&design, &model));
     }
 
     /// The real thing, with KiCad.app installed (a kicad-cli round trip: the slow tier): a STEP of the installed library becomes VRML in KiCad's units.

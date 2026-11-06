@@ -1293,6 +1293,9 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 if !models["extruded_body"].is_null() {
                     p["extruded_body"] = models["extruded_body"].clone();
                 }
+                if models["models_turned"] == json!(true) {
+                    p["models_turned"] = json!(true);
+                }
             }
             p["pads"] = json!(pads);
             // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
