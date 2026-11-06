@@ -469,6 +469,11 @@ pub enum Cmd {
         outline: Vec<Point>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         holes: Option<Vec<Vec<Point>>>,
+        /// The edit keeps the zone's fill as it was, out of date until the next fill (`ZONE::SetNeedRefill( true )`): the point editor's Add, Remove and
+        /// Chamfer Corner and Simplify Shapes (`PCB_POINT_EDITOR::addCorner` / `removeCorner` / `chamferCorner`, `EDIT_TOOL::SimplifyPolygons`). Without it the
+        /// fill is emptied, as a corner dragged (`ZONE_POINT_EDIT_BEHAVIOR::UpdateItem`: `m_zone.UnFill()`) or moved to a typed place does. UI-LEFT P29.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_fill: bool,
     },
     /// `dialog_copper_zones.cpp`'s "OK": replace a zone's net/layer and
     /// every `ZONE_SETTINGS` field at once -- KiCad has no concept of
@@ -3147,7 +3152,11 @@ impl<'a> Board<'a> {
         let shared_before = self.shared_screens_before();
         let pages_before = (self.design.schematic.is_some() && (matches!(cmd.domain(), Domain::Schematic) || matches!(cmd, Cmd::Batch { .. }))).then(|| eda_model::sheet_list::walk(&self.design));
         // (a board brought in whole has zones of its own, not edits of these: their fills are the file's, filed as they are)
-        let zones_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { self.zones_before() };
+        let mut zones_before = if matches!(cmd, Cmd::ReplaceBoard { .. }) { None } else { self.zones_before() };
+        // an outline edit that keeps the fill (`SetNeedRefill( true )`, not `UnFill()`) is no emptying edit of that zone
+        if let (Some(before), Some(id)) = (zones_before.as_mut(), cmd.zone_kept_filled()) {
+            before.remove(id);
+        }
         self.apply_cmd(cmd)?;
         // an edit that emptied a zone's fill (or flipped it) is counted on the zone, so the unfill sticks (R7-Z1, `zone_unfill.rs`)
         self.tidy_zone_fills(zones_before);
@@ -3277,7 +3286,7 @@ impl<'a> Board<'a> {
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
-            Cmd::SetZoneOutline { id, outline, holes } => self.set_zone_outline(id, outline, holes.as_deref()),
+            Cmd::SetZoneOutline { id, outline, holes, .. } => self.set_zone_outline(id, outline, holes.as_deref()),
             Cmd::EditZone {
                 id,
                 net,

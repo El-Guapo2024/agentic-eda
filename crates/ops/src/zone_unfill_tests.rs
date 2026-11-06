@@ -124,6 +124,26 @@ fn a_layer_change_and_back_leaves_the_zone_unfilled_and_undo_gives_the_fill_back
     assert!(fills.current(zone(&undone, &id)).is_some_and(|e| !e.unfilled), "the undo copy holds the fill");
 }
 
+/// UI-LEFT P29: Add, Remove and Chamfer Corner and Simplify Shapes keep the zone's fill as it was, out of date (`PCB_POINT_EDITOR::addCorner` /
+/// `removeCorner` / `chamferCorner`: `zone->SetNeedRefill( true )`, no `UnFill()`; `EDIT_TOOL::SimplifyPolygons` neither) -- `keep_fill`; a corner dragged
+/// after that empties it, as before.
+#[test]
+fn a_corner_added_keeps_the_fill_until_a_corner_is_dragged() {
+    let m = model();
+    let (mut b, id) = board_with_pour(&m);
+    let fills = filled(zone(&b, &id));
+    let mut five = square(10.0, 10.0, 20.0, 20.0);
+    five.insert(1, Point { x: mm(15.0), y: mm(10.0) });
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: five.clone(), holes: None, keep_fill: true }).unwrap();
+    assert_eq!(zone(&b, &id).fill_epoch, 0, "no emptying edit is counted");
+    let stale = fills.current(zone(&b, &id)).expect("the old copper stays, out of date");
+    assert_eq!(stale.layers["F.Cu"][0].pts[0], [10_100_000, 10_100_000], "as it was made");
+    let mut dragged = five;
+    dragged[1] = Point { x: mm(15.0), y: mm(8.0) };
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: dragged, holes: None, keep_fill: false }).unwrap();
+    assert!(fills.current(zone(&b, &id)).is_none(), "a drag unfills (`m_zone.UnFill()`)");
+}
+
 /// R7-Z1: a corner dragged away and back (the point editor's `m_zone.UnFill()` on each drag): no fill.
 #[test]
 fn a_corner_dragged_away_and_back_leaves_the_zone_unfilled() {
@@ -132,9 +152,9 @@ fn a_corner_dragged_away_and_back_leaves_the_zone_unfilled() {
     let fills = filled(zone(&b, &id));
     let mut away = square(10.0, 10.0, 20.0, 20.0);
     away[2] = Point { x: mm(25.0), y: mm(22.0) };
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: away, holes: None }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: away, holes: None, keep_fill: false }).unwrap();
     assert!(fills.current(zone(&b, &id)).is_none());
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: square(10.0, 10.0, 20.0, 20.0), holes: None }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: square(10.0, 10.0, 20.0, 20.0), holes: None, keep_fill: false }).unwrap();
     assert!(fills.current(zone(&b, &id)).is_none(), "the zone has its old outline again, not its old fill");
     // A move is no unfill: `ZONE::Move` moves the fill with the zone.
     let (mut b, id) = board_with_pour(&m);

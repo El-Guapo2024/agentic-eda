@@ -335,7 +335,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
               // `zone->Outline()->SimplifyOutlines( .. )`: the outline and every hole; the holes go with the outline when the zone has some
               const holes = (z.holes ?? []).filter((h) => h.length >= 3);
               const next = simplifyZoneContours(z.outline, holes, toleranceNm);
-              if (next) cmds.push(zoneOutlineCmd(id, [next.outline, ...next.holes], holes.length > 0));
+              // `SimplifyPolygons`: `poly->SimplifyOutlines( .. ); zone->HatchBorder();` -- no `UnFill()`, the fill as it was (UI-LEFT P29)
+              if (next) cmds.push(zoneOutlineCmd(id, [next.outline, ...next.holes], holes.length > 0, true));
             }
           }
           void applyEdit(cmds, removed, cmds.length === 0 ? "Nothing to simplify within that tolerance." : null);

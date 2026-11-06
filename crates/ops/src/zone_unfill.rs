@@ -14,6 +14,17 @@ use eda_kicad::zone_fills::{fill_after_edit, FillAfterEdit};
 use eda_model::ir::Zone;
 use std::collections::HashMap;
 
+impl crate::Cmd {
+    /// The zone whose outline this command reshapes keeping its fill (`Cmd::SetZoneOutline`'s `keep_fill`: `ZONE::SetNeedRefill( true )`), if any: the edit is
+    /// left out of [`Board::tidy_zone_fills`]' count, so the fill made before stays the zone's, out of date (`KicadFills::current`).
+    pub(crate) fn zone_kept_filled(&self) -> Option<&str> {
+        match self {
+            crate::Cmd::SetZoneOutline { id, keep_fill: true, .. } => Some(id.as_str()),
+            _ => None,
+        }
+    }
+}
+
 impl Board<'_> {
     /// The zones before a command, for [`Board::tidy_zone_fills`]; `None` when the board has none.
     pub(crate) fn zones_before(&self) -> Option<HashMap<String, Zone>> {

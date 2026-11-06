@@ -573,7 +573,10 @@ export function Canvas() {
       // route's or a pair's end only its current layer's (`updateEndItem`: `layer = m_router->GetCurrentLayer()`, -1 while placing a via)
       const routing = draw?.kind === "route" || draw?.kind === "diffpair" ? draw : null;
       const layer = routing ? (routing.placingVia ? { top: routing.layer } : { top: routing.layer, only: true }) : draw?.kind === "drag" ? undefined : { top: state.activeLayer ?? board?.layers[0] ?? "F.Cu" };
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip, layer });
+      // `updateEndItem`: `pickSingleItem( mousePos, net, .. )` for the router's current nets -- a route's, and a single-track or via drag's (`DRAGGER`'s
+      // `CurrentNets()`, the dragged line's net: UI-LEFT P29); a drag of no net goes on the wire grid (`snapToItem( nullptr, mousePos )`; no item is on "\u0001")
+      const net = draw?.kind === "route" ? draw.net : draw?.kind === "drag" ? (draw.net || "\u0001") : null;
+      const p = snap.routePoint([wx, wy], mods, { net, isEnd: started, skip, layer });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};

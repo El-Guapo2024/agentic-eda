@@ -912,15 +912,15 @@ fn set_zone_outline_replaces_the_outline_only() {
     b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.priority = 5)).unwrap();
 
     let new_outline = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO }, Point { x: mm(20.0), y: mm(20.0) }, Point { x: Nm::ZERO, y: mm(20.0) }];
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone(), holes: None }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone(), holes: None, keep_fill: false }).unwrap();
     let z = &b.design().routing.as_ref().unwrap().zones[0];
     assert_eq!(z.id, id, "id is stable across an outline edit");
     assert_eq!(z.outline, new_outline);
     assert_eq!(z.priority, 5, "SetZoneOutline must not touch any other setting");
 
-    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }], holes: None }).unwrap_err();
+    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(1) }], holes: None, keep_fill: false }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
-    assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline, holes: None }).unwrap_err()[0].check, "ops_unknown_zone");
+    assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline, holes: None, keep_fill: false }).unwrap_err()[0].check, "ops_unknown_zone");
 }
 
 /// A mirror sends the zone's holes with its outline (`ZONE::Mirror`: the whole polygon set); a corner edit sends none and keeps them.
@@ -932,12 +932,12 @@ fn set_zone_outline_with_holes_replaces_them_and_without_keeps_them() {
     b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)) }).unwrap();
     let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
     let hole = sq(mm(2.0), mm(2.0), mm(4.0), mm(4.0));
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), holes: Some(vec![hole.clone()]) }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), holes: Some(vec![hole.clone()]), keep_fill: false }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole.clone()]);
-    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(12.0), mm(10.0)), holes: None }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: sq(Nm::ZERO, Nm::ZERO, mm(12.0), mm(10.0)), holes: None, keep_fill: false }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![hole], "a corner edit leaves the holes");
     let mirrored = sq(mm(-4.0), mm(2.0), mm(-2.0), mm(4.0));
-    b.apply(&Cmd::SetZoneOutline { id, outline: sq(mm(-12.0), Nm::ZERO, Nm::ZERO, mm(10.0)), holes: Some(vec![mirrored.clone()]) }).unwrap();
+    b.apply(&Cmd::SetZoneOutline { id, outline: sq(mm(-12.0), Nm::ZERO, Nm::ZERO, mm(10.0)), holes: Some(vec![mirrored.clone()]), keep_fill: false }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().zones[0].holes, vec![mirrored]);
 }
 
