@@ -170,3 +170,13 @@ test("UI-LEFT C1: the left button's drag, the pan on movement with a key and the
   const s = toViewControlSettings({ ...DEFAULT_PREFERENCES, dragLeft: "drag_selected", motionPanModifier: "ctrl", dragMiddle: "zoom", dragRight: "none" });
   assert.deepEqual([s.dragLeft, s.motionPanModifier, s.dragMiddle, s.dragRight], ["drag_selected", "ctrl", "zoom", "none"]);
 });
+
+test("the board editor's Origins & Axes: the page origin and both axes as KiCad's defaults; a stored origin by name or by PCB_DISPLAY_ORIGIN's number", () => {
+  assert.equal(DEFAULT_PREFERENCES.pcbDisplayOrigin, "page");
+  assert.equal(DEFAULT_PREFERENCES.pcbInvertXAxis, false);
+  assert.equal(DEFAULT_PREFERENCES.pcbInvertYAxis, false);
+  const p = sanitizePreferences({ pcbDisplayOrigin: "grid", pcbInvertXAxis: true, pcbInvertYAxis: "yes" });
+  assert.deepEqual([p.pcbDisplayOrigin, p.pcbInvertXAxis, p.pcbInvertYAxis], ["grid", true, false]);
+  assert.equal(sanitizePreferences({ pcbDisplayOrigin: 1 }).pcbDisplayOrigin, "aux");
+  assert.equal(sanitizePreferences({ pcbDisplayOrigin: "somewhere" }).pcbDisplayOrigin, "page");
+});

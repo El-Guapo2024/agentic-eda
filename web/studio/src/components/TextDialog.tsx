@@ -23,6 +23,9 @@ import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 // The Font choice (`m_fontCtrl`: "KiCad Font" and the server's families, `SetFontSelection( m_item->GetFont() )`, :322; OK's `SetFont( GetFontSelection( bold, italic ) )`,
 // :535) is the text's face: a new text's in its extra, an edit's through `edit_text_style` in the same undo step (UI-LEFT-2 CC1). A face the list lacks shows
 // "<not found>" and is kept (`HaveFontSelection`).
+// Italic is the dialog's Italic button (`m_italic`, :173): it starts as the text is (`m_italic->Check( m_item->IsItalic() )`, :348) -- a new text as its layer's class
+// gives it (`textAttrs.m_Italic = bds.GetTextItalic( layer )`) -- and OK sets it (`SetItalicFlag( m_italic->IsChecked() )`, :571; the face asked for with it, :537):
+// a new or carried text's in its extra, an edit's through `edit_text_style` in the same undo step (UI-LEFT-2 PP11).
 
 export function TextDialog() {
   const state = useStudioState();
@@ -41,6 +44,7 @@ export function TextDialog() {
   const [justify, setJustify] = useState<TextJustify>("left");
   const [mirror, setMirror] = useState(false);
   const [bold, setBold] = useState(false);
+  const [italic, setItalic] = useState(false);
   const [angle, setAngle] = useState(0);
   const [face, setFace] = useState(KICAD_FONT);
   const families = useFontFamilies();
@@ -60,6 +64,7 @@ export function TextDialog() {
       setJustify(editing.justify);
       setMirror(editing.mirror);
       setBold(editing.bold ?? false);
+      setItalic(editing.italic ?? false);
       setAngle(editing.angle);
       setFace(editing.face || KICAD_FONT);
     } else if (dialog.mode === "carried" && carried) {
@@ -72,6 +77,7 @@ export function TextDialog() {
       setJustify(t.justify);
       setMirror(t.mirror);
       setBold(!!(carried.extra as { bold?: boolean }).bold);
+      setItalic(!!(carried.extra as { italic?: boolean }).italic);
       setAngle(t.angle);
       setFace((carried.extra as { face?: string }).face || KICAD_FONT);
     } else if (dialog.mode === "add") {
@@ -85,6 +91,7 @@ export function TextDialog() {
       setJustify(style.justify);
       setMirror(style.mirror);
       setBold(style.bold);
+      setItalic(style.italic);
       setAngle(0);
       setFace(KICAD_FONT);
     }
@@ -106,18 +113,22 @@ export function TextDialog() {
       // italic and the bottom justification `textAttrs` gave it (round 5 B5-2), and the bold `InferBold` gave it (round 6 A6-3). (The dialog has no position field, so it never "modified the location".)
       const style = newTextStyle(defaults, layer);
       // A size typed in the dialog is square (the dialog has one size field); the class's own size keeps the class's width.
-      const extra = { id: "", ...(size === style.sizeNm && style.widthNm !== size ? { width_nm: style.widthNm } : {}), ...(bold ? { bold: true } : {}), ...(style.italic ? { italic: true } : {}), valign: style.valign, ...faceExtra };
+      const extra = { id: "", ...(size === style.sizeNm && style.widthNm !== size ? { width_nm: style.widthNm } : {}), ...(bold ? { bold: true } : {}), ...(italic ? { italic: true } : {}), valign: style.valign, ...faceExtra };
       dispatch({ type: "SET_DRAW_STATE", draw: { kind: "text", text: { content, at: { x: dialog.at[0], y: dialog.at[1] }, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror }, extra } });
     } else if (dialog.mode === "carried") {
       if (!carried) return close();
       // The text in the hand takes the dialog's values and stays carried; a size typed in is square (the class's own width goes with the size it was for).
-      const { bold: _bold, face: _face, width_nm, ...rest } = carried.extra as typeof carried.extra & { bold?: boolean; face?: string };
-      const extra = { ...rest, ...(width_nm !== undefined && size === carried.text.size_nm ? { width_nm } : {}), ...(bold ? { bold: true } : {}), ...faceExtra };
+      const { bold: _bold, italic: _italic, face: _face, width_nm, ...rest } = carried.extra as typeof carried.extra & { bold?: boolean; italic?: boolean; face?: string };
+      const extra = { ...rest, ...(width_nm !== undefined && size === carried.text.size_nm ? { width_nm } : {}), ...(bold ? { bold: true } : {}), ...(italic ? { italic: true } : {}), ...faceExtra };
       dispatch({ type: "SET_DRAW_STATE", draw: { kind: "text", text: { ...carried.text, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror }, extra } });
     } else {
       const edit: Cmd = { op: "edit_text", id: dialog.id, content, angle, layer, size_nm: size, stroke_width: strokeWidth, justify, mirror, bold };
       const faceNow = editing?.face || KICAD_FONT;
-      const restyle: Cmd[] = face !== faceNow ? [{ op: "edit_text_style", id: dialog.id, face: face === KICAD_FONT ? "" : face }] : [];
+      const italicNow = !!editing?.italic;
+      const restyle: Cmd[] =
+        face !== faceNow || italic !== italicNow
+          ? [{ op: "edit_text_style", id: dialog.id, ...(face !== faceNow ? { face: face === KICAD_FONT ? "" : face } : {}), ...(italic !== italicNow ? { italic } : {}) }]
+          : [];
       api.cmd(restyle.length ? { op: "batch", cmds: [edit, ...restyle] } : edit);
     }
     close();
@@ -143,6 +154,7 @@ export function TextDialog() {
                   setSize(style.sizeNm);
                   setStrokeWidth(style.strokeWidthNm);
                   setBold(style.bold);
+                  setItalic(style.italic);
                   setMirror(style.mirror);
                 }
               }}
@@ -184,6 +196,8 @@ export function TextDialog() {
                 setStrokeWidth(boldTogglePenNm(e.target.checked, size, size));
               }}
             />
+            <span>Italic</span>
+            <input type="checkbox" checked={italic} data-testid="text-italic" style={{ justifySelf: "start" }} onChange={(e) => ((styled.current = true), setItalic(e.target.checked))} />
             <span>Orientation</span>
             <input type="number" step={90} value={angle / 1000} onChange={(e) => setAngle(Number(e.target.value) * 1000)} />
             <span>Justify</span>

@@ -398,6 +398,8 @@ impl Board<'_> {
                 if transform_rounded_shape(s, x, copper, radius, max_error) && radius > Nm::ZERO {
                     dr.board_items.set_corner_radius(s.id(), Nm::ZERO);
                 }
+                // a polygon's holes go with its outline (`SHAPE_POLY_SET::Move` / `Rotate` / `Mirror` of `m_poly`, UI-LEFT-2 PP10)
+                dr.board_items.map_holes(s.id(), |p| x.point(p));
             }
             for t in dr.texts.iter_mut().filter(|t| targets.texts.contains(&t.id)) {
                 transform_text(t, x, copper);
@@ -578,14 +580,23 @@ pub(crate) fn transform_via(v: &mut Via, x: Xform, copper: usize, outer: &(Optio
 
 /// `ZONE::Move`/`::Rotate`/`::Flip` (`Mirror` of the outline, then the layer flips). The fill is derived from the
 /// outline every time it is wanted, so there is nothing else to carry.
+/// A polygon's holes ([`eda_model::pcb_items::ShapeStyle::holes`]) moved, turned, flipped or mirrored with it (UI-LEFT-2 PP10).
+pub(crate) fn transform_holes(style: &mut eda_model::pcb_items::ShapeStyle, x: Xform) {
+    for p in style.holes.iter_mut().flatten() {
+        *p = x.point(*p);
+    }
+}
+
 pub(crate) fn transform_zone(z: &mut Zone, x: Xform, copper: usize) {
     // The holes go with the outline (`m_Poly->Move`/`Rotate`/`Mirror` move the whole polygon set).
     for p in z.outline.iter_mut().chain(z.holes.iter_mut().flatten()) {
         *p = x.point(*p);
     }
     if x.is_flip() {
-        // `ZONE::Flip`: every layer of the zone's set goes to the other side.
+        // `ZONE::Flip`: every layer of the zone's set goes to the other side -- and so do its fills, which a zone on both sides tells from a mirror only by
+        // this count (`Zone::flip_parity`, UI-LEFT-2 PP10).
         z.map_layers(|l| flip_layer(l, copper));
+        z.flip_parity = !z.flip_parity;
     }
 }
 
@@ -720,6 +731,7 @@ pub(crate) fn transform_dimension(d: &mut Dimension, x: Xform, copper: usize) {
                 }
                 DimensionKind::Radial { .. } | DimensionKind::Leader | DimensionKind::Center => {}
             }
+            d.flip_text_mirror();
             d.layer = flip_layer(&d.layer, copper);
         }
     }

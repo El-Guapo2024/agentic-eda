@@ -39,11 +39,15 @@ import { FAB_PROPERTY_CHOICES, AS_PER_PS, padFabForm, padFabPatch, type PadFabFo
 import { applyTeardropForm, padTeardrops, teardropForm, teardropFormChanged, type TeardropForm } from "../kicad-port/teardropParams";
 import { TeardropFields } from "./TeardropFields";
 import { NumberInput } from "./NumberInput";
+import { useOriginTransforms } from "../state/originTransforms";
+import { toDisplay } from "../kicad-port/originTransforms";
 
 type Kind = "smd" | "through_hole" | "non_plated_hole";
 
 interface Form {
   kind: Kind;
+  /** `PAD_ATTRIB::CONN` ("Edge Connector"): an SMD pad (`kind` "smd") with the connector flag (`PadEdit::connector`, UI-LEFT-2 PP8). */
+  connector: boolean;
   /** The shape and what goes with it: the choice, the size, the corner ratio, a trapezoid's delta, the chamfer, a custom pad's knockout and basic shapes. */
   s: PadShapeForm;
   ox: number;
@@ -67,9 +71,11 @@ interface Form {
   tdBefore: TeardropForm;
 }
 
-const KINDS: { value: Kind; label: string }[] = [
+// `m_padType`'s choices in `PAD_TYPE_NAMES` order: Through-hole, SMD, Edge Connector, NPTH (the "SMD Aperture" is a pad with no copper: not offered here).
+const KINDS: { value: Kind | "conn"; label: string }[] = [
   { value: "through_hole", label: "Through-hole" },
   { value: "smd", label: "SMD" },
+  { value: "conn", label: "Edge Connector" },
   { value: "non_plated_hole", label: "NPTH, mechanical" },
 ];
 
@@ -78,6 +84,8 @@ export function BoardPadPropertiesDialog() {
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const units = state.units;
+  // `m_posX` / `m_posY` are `ABS_X_COORD` / `ABS_Y_COORD`: the pad's place counted from Origins & Axes' origin (UI-LEFT-2 PP9)
+  const xf = useOriginTransforms();
   const id = state.boardPadPropertiesId;
   const hit = id && state.board ? padById(state.board, id) : null;
   const [form, setForm] = useState<Form | null>(null);
@@ -93,6 +101,7 @@ export function BoardPadPropertiesDialog() {
     const [ox, oy] = [pad.offset?.[0] ?? 0, pad.offset?.[1] ?? 0];
     setForm({
       kind: pad.kind ?? (pad.th ? "through_hole" : "smd"),
+      connector: pad.connector === true,
       s,
       ox,
       oy,
@@ -177,6 +186,8 @@ export function BoardPadPropertiesDialog() {
     const was = { kind: pad.kind ?? (pad.th ? "through_hole" : "smd") };
     const patch: Partial<PadEditCmd> = { ...shapePatch(s, { ...pad, size: pad.size ?? [pad.w, pad.h] }) };
     if (form.kind !== was.kind) patch.kind = form.kind;
+    // `PAD::SetAttribute( PAD_ATTRIB::CONN )`, or back to a plain SMD pad
+    if (form.connector !== (pad.connector === true)) patch.connector = form.connector;
     if (hasHole) {
       if (form.hole === "round" && (pad.slot || pad.drill !== form.drill)) patch.drill = form.drill;
       if (form.hole === "oblong" && (!pad.slot || pad.slot[0] !== form.slotW || pad.slot[1] !== form.slotH)) patch.drill_slot = [form.slotW, form.slotH];
@@ -250,7 +261,14 @@ export function BoardPadPropertiesDialog() {
             <span>Net</span>
             <span>{pad.net ?? "–"}</span>
             <span>Pad type</span>
-            <select value={form.kind} onChange={(e) => set("kind", e.target.value as Kind)} data-testid="pad-kind">
+            <select
+              value={form.kind === "smd" && form.connector ? "conn" : form.kind}
+              onChange={(e) => {
+                const v = e.target.value;
+                setForm((f) => (f ? { ...f, kind: v === "conn" ? "smd" : (v as Kind), connector: v === "conn" } : f));
+              }}
+              data-testid="pad-kind"
+            >
               {KINDS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
@@ -258,7 +276,7 @@ export function BoardPadPropertiesDialog() {
               ))}
             </select>
             <span>Position</span>
-            <span style={{ fontSize: 11 }}>{`${fmt(pad.px ?? pad.x)}, ${fmt(pad.py ?? pad.y)}`} (on the board)</span>
+            <span style={{ fontSize: 11 }} data-testid="pad-position">{`${fmt(toDisplay(xf, pad.px ?? pad.x, "abs_x"))}, ${fmt(toDisplay(xf, pad.py ?? pad.y, "abs_y"))}`} (on the board)</span>
             {stackShown && (
               <PadStackRows
                 state={form.stack}

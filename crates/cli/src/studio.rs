@@ -1020,6 +1020,10 @@ fn handle(
                             if !info.is_empty() {
                                 reply["info"] = json!(info.join("\n"));
                             }
+                            // `ShowInfoBarError( .., DRC_VIOLATION )` of a command that still worked (Draw Via with Allow DRC violations), as `drc_violation`
+                            if let Some(v) = eda_ops::notice::take_drc_violation() {
+                                reply["drc_violation"] = json!(v);
+                            }
                             if let Some(report) = imports_netlist.then(eda_ops::netlist_update::take_report).flatten() {
                                 reply["report"] = crate::netlist_api::report_json(&report);
                             }
@@ -1333,6 +1337,11 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // different builtin.
             "footprint": part.footprint.clone().or_else(|| part.package.clone()),
         });
+        // The link the board file gives the footprint (`GetFPID().Format()`, the Search panel's Library Link; UI-LEFT-2 PP13): the name the writer puts in
+        // `(footprint "..")` -- `footprint_lib_id`, the footprint's own name for none -- without the importer's slot.
+        if let Some(link) = Some(eda_model::footprint::footprint_lib_id(part)).filter(|n| !n.is_empty()).or_else(|| resolved.as_ref().map(|f| f.name.clone())) {
+            p["lib_link"] = json!(eda_model::footprint::without_import_slot(&link, &model.footprints));
+        }
         if let Some(fp) = fp {
             let footprint = model.footprint_of(part);
             let engine_pads = footprint.as_ref().map(crate::fp_json::pads_in_studio_order).unwrap_or_default();
@@ -1625,6 +1634,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         });
         // The text boxes, reference images and points (`eda_model::pcb_items`).
         crate::pcb_items_json::extend(&mut drawings, &design, &model, d, &tv);
+        // `GetDefaultZoneSettings()`: what a new zone's dialog opens on (`createNewZone`), the zone Zone Properties was last OK'd on (UI-LEFT-2 PP10); absent: KiCad's own.
+        if let Some(z) = &d.zone_defaults {
+            drawings["zone_defaults"] = serde_json::to_value(z).unwrap_or(serde_json::Value::Null);
+        }
         drawings
     });
     let mut state = json!({
@@ -1725,10 +1738,24 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
     state["variants"] = json!(design_variants_json(&design));
+    // `BOARD::GetNetInfo()`, which the Search panel's Nets tab goes through (UI-LEFT-2 PP13): every net of the board by name, one no item is on too -- the model's
+    // nets (an added net, a design block's) and any a track, via or zone names -- sorted as the writer numbers them, the unconnected net left out
+    state["nets"] = json!(board_net_names(&design, &model));
     // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`): the name kept, the file's text the board's sheet is drawn from and why it could not
     // be read; null is KiCad's default sheet
     state["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()));
     Ok(state)
+}
+
+/// The board's nets by name (`BOARD::GetNetInfo()` without the unconnected net), as `net_inspector_api::rows` counts them: the model's and any a track, via or
+/// zone (not a rule area) names.
+pub(crate) fn board_net_names(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<String> {
+    let mut nets: std::collections::BTreeSet<String> = model.nets.iter().map(|n| n.name.clone()).collect();
+    if let Some(rt) = &design.routing {
+        nets.extend(rt.tracks.iter().map(|t| t.net.clone()).chain(rt.vias.iter().map(|v| v.net.clone())).chain(rt.zones.iter().filter(|z| !z.is_rule_area).map(|z| z.net.clone())));
+    }
+    nets.remove("");
+    nets.into_iter().collect()
 }
 
 /// One `Shape` as JSON: every variant carries `id`/`kind`/`layer`/
@@ -1850,7 +1877,7 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
 
     let geom = eda_connectivity::dimension::compute_dimension_geometry(d);
 
-    json!({
+    let mut out = json!({
         "id": d.id,
         "layer": d.layer,
         "kind": kind,
@@ -1896,7 +1923,24 @@ pub(crate) fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "computed_text_angle": geom.text_angle,
         "measured_value_nm": geom.measured_value_nm,
         "text": geom.text,
-    })
+    });
+    // The label's other looks (`Dimension::text_effects`, UI-LEFT-2 PP11): the width (`GetTextWidth`), the face (null: the stroke font), bold, italic, the
+    // mirror as drawn (`text_mirrored`; `text_effects` says whether it is the label's own), the horizontal justification and keep-upright; and the overlay
+    // itself, which a whole-dimension edit sends back. (Apart: one `json!` of them all is past the macro's recursion limit.)
+    let looks = json!({
+        "text_width_nm": d.text_width_nm(),
+        "face": d.text_effects.face,
+        "bold": d.text_effects.bold,
+        "italic": d.text_effects.italic,
+        "mirrored": d.text_mirrored(),
+        "h_justify": d.text_effects.h_justify,
+        "keep_upright": d.text_effects.keep_upright,
+        "text_effects": d.text_effects,
+    });
+    if let (Some(o), Value::Object(l)) = (out.as_object_mut(), looks) {
+        o.extend(l);
+    }
+    out
 }
 
 fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {

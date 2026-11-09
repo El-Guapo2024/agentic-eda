@@ -286,7 +286,7 @@ impl Springback {
         if head.pts.windows(2).any(|w| w[0] != w[1] && hit(&Shape::Stadium { a: w[0], b: w[1], r: head.width / 2 }, layers)) {
             return true;
         }
-        head.via.is_some_and(|v| hit(&Shape::Circle { c: v.pos, r: v.diameter / 2 }, v.layers))
+        head.via.is_some_and(|v| v.diameter_runs(v.layers).into_iter().any(|(range, d)| hit(&Shape::Circle { c: v.pos, r: d / 2 }, range)))
     }
 
     /// `SHOVE::reduceSpringback( aHeadSet )`: pop the frames, newest first, whose world none of the heads collides with -- never a locked
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn a_clicks_via_is_an_ordinary_via_of_the_frame_and_follows_a_shove() {
         let n = base();
-        let v = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: mm(5.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
+        let v = Via { net: net_of("A"), layers: crate::layer::LayerRange::new(0, 1), pos: Point { x: mm(5.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         let mut w = World::default().with_fixed(None, Some(v.clone()));
         let in_frame = |w: &World| w.apply(&n).iter().find_map(|(_, it)| match it { Item::Via(x) => Some(x.clone()), _ => None }).unwrap();
         let f = in_frame(&w);

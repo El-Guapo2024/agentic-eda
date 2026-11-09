@@ -5,7 +5,8 @@
 //     Constrain actions to H, V, 45 degrees (`m_AngleSnapMode`: checked is DEG45, unchecked DIRECT -- so OK, once the page was shown, makes a board in 90 degree mode
 //     45, as KiCad's `TransferDataFromWindow` does), Step for rotate commands, Arc editing mode, Flip board items, the Magnetic Points, Show ratsnest with curved lines (the View
 //     menu's toggle), Ratsnest line thickness, <ESC> clears net highlighting, Show courtyard collisions when moving/dragging. Greyed: Track mouse-drag mode,
-//     Allow free pads, Ctrl+click's Highlight net, Always show selected ratsnest, Show page limits, Automatically refill zones.
+//     Allow free pads, Ctrl+click's Highlight net, Always show selected ratsnest, Show page limits. Automatically refill zones is live (UI-LEFT-2 PP10: kicad-cli fills,
+//     kicad-port/autoRefill.ts).
 //   * Schematic Editor > Editing Options (`PANEL_EESCHEMA_EDITING_OPTIONS`, eeschema/dialogs/panel_eeschema_editing_options.cpp and _base): Line drawing mode,
 //     Arc editing mode, <ESC> clears net highlighting, Allow unconstrained pin swaps, Repeated Items (Horizontal pitch, Vertical pitch, Label increment: what
 //     Repeat Last Item moves and counts by), Show footprint previews in Symbol Chooser. Greyed: Mouse drag performs Drag (G), Automatically start wires on
@@ -207,7 +208,7 @@ export function PcbEditingOptionsPage({ draft, set, extra, setExtra, rotationTex
         {check("<ESC> clears net highlighting", draft.escClearsNetHighlight, (v) => set({ escClearsNetHighlight: v }), "pref-pcb-esc-clears-highlight")}
         {offCheck("Show page limits", true, "Not ported: the board editor does not draw the page limits. KiCad: Draw an outline to show the sheet size.")}
         {check("Show courtyard collisions when moving/dragging", draft.showCourtyardCollisions, (v) => set({ showCourtyardCollisions: v }), "pref-courtyard-collisions")}
-        {offCheck("Automatically refill zones", false, "Not offered here: zones are filled by kicad-cli when asked (Edit > Fill All Zones). KiCad: If checked, zones will be re-filled after each edit operation")}
+        {check("Automatically refill zones", draft.autoRefillZones, (v) => set({ autoRefillZones: v }), "pref-auto-refill-zones", "If checked, zones will be re-filled after each edit operation")}
       </div>
     </div>
   );

@@ -215,9 +215,13 @@ pub struct DrcVia {
     pub net: Option<String>,
     pub at: Point,
     pub drill: Nm,
+    /// The front's diameter (`PADSTACK::Size( F_Cu )`, the IR via's own).
     pub diameter: Nm,
     pub from_layer: String,
     pub to_layer: String,
+    /// The via's padstack when it is not a normal one (`(padstack (mode ..) ..)`, `eda_model::via_extra::ViaPadstack`): a diameter of its own on the
+    /// inner and back layers, or on each copper layer (`PCB_VIA::GetWidth( aLayer )`). `None` is one diameter everywhere.
+    pub padstack: Option<eda_model::via_extra::ViaPadstack>,
 }
 
 pub struct DrcFootprint {
@@ -680,11 +684,14 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             }
         }
         let tenting: HashMap<(Nm, Nm, &str), &eda_model::ir::ViaTenting> = design.drawings.as_ref().map(|d| d.via_tenting.iter().map(|t| ((t.at.x, t.at.y, t.net.as_str()), t)).collect()).unwrap_or_default();
+        // the vias whose padstack is not a normal one (`ViaExtra::padstack`), by id
+        let padstacks: HashMap<&str, eda_model::via_extra::ViaPadstack> = design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter_map(|e| e.padstack().map(|p| (e.id.as_str(), p))).collect();
         for v in &rt.vias {
             let t = tenting.get(&(v.at.x, v.at.y, v.net.as_str()));
             mask.vias.push(DrcViaMask { tent_front: t.and_then(|t| t.front), tent_back: t.and_then(|t| t.back) });
             let net = if v.net.is_empty() { None } else { Some(v.net.clone()) };
-            vias.push(DrcVia { id: v.id.clone(), net, at: v.at, drill: v.drill, diameter: v.diameter, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone() });
+            let padstack = padstacks.get(v.id.as_str()).cloned();
+            vias.push(DrcVia { id: v.id.clone(), net, at: v.at, drill: v.drill, diameter: v.diameter, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone(), padstack });
         }
     }
 
@@ -778,11 +785,25 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
 }
 
 impl DrcVia {
-    /// Copper shape at `layer` -- a via is a plain circle on every layer it
-    /// spans; `from_layer`/`to_layer` in our model are always the two outer
-    /// layers (no blind/buried vias), so it flashes on all board layers.
+    /// `PCB_VIA::GetEffectiveShape( UNDEFINED_LAYER )`: the circle of the widest of its layers' diameters (`ForEachUniqueLayer`, `std::max( width, GetWidth( layer ) )`);
+    /// a normal padstack's one diameter. [`Self::shape_on`] is a layer's own.
     pub fn shape(&self) -> Shape {
-        Shape::Circle { c: self.at, r: self.diameter / 2 }
+        Shape::Circle { c: self.at, r: self.max_diameter() / 2 }
+    }
+
+    /// `PCB_VIA::GetWidth( aLayer )` (`PADSTACK::Size( aLayer ).x`): the layer's own diameter in a padstack that is not a normal one, else the via's.
+    pub fn width_on(&self, layer: &str) -> Nm {
+        self.padstack.as_ref().map_or(self.diameter, |p| p.size_on(layer, self.diameter))
+    }
+
+    /// The widest diameter of the via's layers (the front's and every one its padstack names).
+    pub fn max_diameter(&self) -> Nm {
+        self.padstack.as_ref().map_or(self.diameter, |p| p.sizes.values().copied().fold(self.diameter, Nm::max))
+    }
+
+    /// The copper of the via on `layer` as `PCB_VIA::GetEffectiveShape( aLayer )` gives it where the via flashes there: the circle of that layer's diameter.
+    pub fn shape_on(&self, layer: &str) -> Shape {
+        Shape::Circle { c: self.at, r: self.width_on(layer) / 2 }
     }
     pub fn hole(&self) -> Shape {
         Shape::Circle { c: self.at, r: self.drill / 2 }

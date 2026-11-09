@@ -148,6 +148,50 @@ pub fn text_box_iu(text: &str, size_iu: i64, thickness_iu: i64, h: HJustify, v: 
     (x0, y0, x0 + w, y0 + height)
 }
 
+/// `ITALIC_TILT` (`include/font/font.h`): an italic glyph leans 1/8 of its height.
+pub const ITALIC_TILT: f64 = 1.0 / 8.0;
+
+/// What [`text_box_styled_iu`] needs of a text besides its string and pen: `GetTextSize()` (width, height), the justification, `IsMirrored()` and `IsItalic()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextBoxStyle {
+    pub width_iu: i64,
+    pub height_iu: i64,
+    pub h: HJustify,
+    pub v: VJustify,
+    pub mirrored: bool,
+    pub italic: bool,
+}
+
+/// [`text_box_iu`] for a text whose glyphs are not square, mirrored or italic: `EDA_TEXT::GetTextBox` (common/eda_text.cpp at 8303b2ad) of one
+/// stroke-font line at the origin. The advance is the width's (`STROKE_FONT::GetTextAsGlyphs` scales each glyph by `glyphSize.x`, `INTER_CHAR` of it
+/// short), the height the height's (`aBBox->SetEnd( .., cursor.y - glyphSize.y )`), both grown by 1.5 pens (`StringBoundaryLimits`); the box is placed
+/// by the justification with `italicOffset = KiROUND( fontSize.y * ITALIC_TILT )` off its width, a mirrored left-justified text and a right-justified one
+/// that is not mirrored reaching left of the anchor, a mirrored right-justified one right of it.
+pub fn text_box_styled_iu(text: &str, thickness_iu: i64, s: TextBoxStyle) -> (i64, i64, i64, i64) {
+    let k = kiround(thickness_iu as f64 * 1.5);
+    let w = text_advance_iu(text, s.width_iu) + 2 * k;
+    let ext_h = s.height_iu + 2 * k;
+    let fudge = kiround(ext_h as f64 * 0.17);
+    let mut height = ext_h + fudge;
+    if strip_markup(text).1 {
+        height += ext_h / 6;
+    }
+    let italic_offset = if s.italic { kiround(s.height_iu as f64 * ITALIC_TILT) } else { 0 };
+    let x0 = match s.h {
+        HJustify::Left if s.mirrored => -(w - italic_offset),
+        HJustify::Left => 0,
+        HJustify::Center => -((w - italic_offset) / 2),
+        HJustify::Right if !s.mirrored => -(w - italic_offset),
+        HJustify::Right => 0,
+    };
+    let y0 = match s.v {
+        VJustify::Top => -fudge,
+        VJustify::Center => -(height / 2),
+        VJustify::Bottom => -height + fudge,
+    };
+    (x0, y0, x0 + w, y0 + height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +215,25 @@ mod tests {
         assert_eq!(y0, -(20_433 / 2));
         // 'R' is a full em, '1' 20/21 of one, the last gap is dropped (0.2 em), and the pen reaches 2382 further on each side
         assert_eq!(x1, 12_700 + 12_095 - 2_540 + 2 * 2_382);
+    }
+
+    /// `EDA_TEXT::GetTextBox`'s placement: the advance is the width's, the height the height's, an italic's lean off the width, a mirrored left and an unmirrored
+    /// right text reaching left of the anchor.
+    #[test]
+    fn a_styled_box_takes_the_width_the_justification_the_mirror_and_the_lean() {
+        let square = |h, mirrored, italic| text_box_styled_iu("R1", 2_382, TextBoxStyle { width_iu: 12_700, height_iu: 12_700, h, v: VJustify::Center, mirrored, italic });
+        assert_eq!(square(HJustify::Center, false, false), text_box_iu("R1", 12_700, 2_382, HJustify::Center, VJustify::Center), "a square upright label is text_box_iu's");
+        let (x0, _, x1, _) = square(HJustify::Left, false, false);
+        assert_eq!(x0, 0);
+        let w = x1 - x0;
+        assert_eq!(square(HJustify::Left, true, false).0, -w, "a mirrored left text reaches left");
+        assert_eq!(square(HJustify::Right, false, false).0, -w);
+        assert_eq!(square(HJustify::Right, true, false).0, 0, "a mirrored right text reaches right");
+        let lean = kiround(12_700.0 * ITALIC_TILT);
+        assert_eq!(square(HJustify::Center, false, true).0, -((w - lean) / 2), "an italic's lean is off the width");
+        let wide = text_box_styled_iu("R1", 2_382, TextBoxStyle { width_iu: 25_400, height_iu: 12_700, h: HJustify::Left, v: VJustify::Center, mirrored: false, italic: false });
+        assert_eq!(wide.2 - wide.0, text_advance_iu("R1", 25_400) + 2 * 3_573, "the advance is the width's");
+        assert_eq!(wide.3 - wide.1, square(HJustify::Left, false, false).3 - square(HJustify::Left, false, false).1, "the height is the height's");
     }
 
     #[test]

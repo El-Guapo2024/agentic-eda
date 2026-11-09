@@ -189,6 +189,39 @@ fn a_zone_flipped_twice_keeps_its_copper_and_is_not_filled() {
     assert!(zone_text.contains("(filled_polygon"), "the copper is written: {zone_text}");
 }
 
+/// A zone on both sides (UI-LEFT-2 PP10): `ZONE::Flip` keeps its layer set, so `SetLayerSet` unfills nothing, and `SetFilledPolysList( FlipLayer( oldLayer ), .. )` puts
+/// each side's fill on the other side; a mirror leaves each fill on its own layer. A second flip puts them back.
+#[test]
+fn a_zone_on_both_sides_flipped_stays_filled_with_its_fills_on_the_other_sides_layers() {
+    let m = model();
+    let (mut b, id) = board_with_pour(&m);
+    b.apply(&edit_layers(&zone(&b, &id).clone(), &["F.Cu", "B.Cu"])).unwrap();
+    // The front's fill is not the back's: tell them apart.
+    let z = zone(&b, &id).clone();
+    let front = KicadRing { island: false, pts: vec![[10_100_000, 10_100_000], [19_900_000, 10_100_000], [19_900_000, 19_900_000], [10_100_000, 19_900_000]] };
+    let back = KicadRing { island: false, pts: vec![[10_100_000, 10_100_000], [15_000_000, 10_100_000], [15_000_000, 19_900_000], [10_100_000, 19_900_000]] };
+    let entry = ZoneEntry { layers: BTreeMap::from([("F.Cu".to_string(), vec![front]), ("B.Cu".to_string(), vec![back])]), ..ZoneEntry::of(&z) };
+    let fills = KicadFills::new("kicad-cli test".into(), String::new(), 0, BTreeMap::from([(z.id.clone(), entry)]));
+    let flip = Cmd::FlipItems { ids: vec![id.clone()], pivot: Point { x: mm(50.0), y: Nm::ZERO }, direction: FlipDirection::LeftRight };
+    b.apply(&flip).unwrap();
+    let z1 = zone(&b, &id).clone();
+    assert_eq!((z1.flip_epoch, z1.fill_epoch, z1.flip_parity), (0, z.fill_epoch, true), "the set is the same: nothing unfilled, the flip counted");
+    let once = fills.current(&z1).expect("the fills go with the flip");
+    assert!(!once.unfilled, "a zone on both sides stays filled");
+    // The back's narrow fill, mirrored about x = 50 mm, is now the front's: 85 .. 89.9 mm.
+    let xs = |l: &str| once.layers[l][0].pts.iter().map(|p| p[0]).collect::<Vec<_>>();
+    assert!(xs("F.Cu").iter().all(|&x| x >= 85_000_000), "{:?}", xs("F.Cu"));
+    assert!(xs("B.Cu").iter().any(|&x| x <= 80_100_000), "{:?}", xs("B.Cu"));
+    // A mirror (the same outline as the flip's, `flip_parity` as it was) leaves each on its layer.
+    let mirrored_zone = Zone { flip_parity: false, ..z1.clone() };
+    let mirrored = fills.current(&mirrored_zone).expect("the fills go with the mirror");
+    assert!(mirrored.layers["B.Cu"][0].pts.iter().all(|p| p[0] >= 85_000_000), "the back's fill stays the back's");
+    // Flipped back: the fills are where they were filled.
+    b.apply(&flip).unwrap();
+    let twice = fills.current(zone(&b, &id)).unwrap();
+    assert!(!twice.unfilled && twice.layers["B.Cu"][0].pts.iter().any(|p| p[0] == 15_000_000));
+}
+
 /// Zone Properties' "Outline display", "Outline hatch pitch" and "Hatch offset overrides" (`PANEL_ZONE_PROPERTIES::AcceptOptions`): set by `Cmd::EditZone`, kept
 /// by a command that leaves them out, the pitch held to 0.1..2 mm and the offsets to the zone's copper layers.
 #[test]

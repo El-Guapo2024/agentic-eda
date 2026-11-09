@@ -61,3 +61,21 @@ fn a_deleted_net_leaves_its_pads_and_copper_on_no_net_and_add_net_makes_one_of_n
     assert!(super::reasons(&e).contains("Net name 'SPARE' is already in use."));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The Search panel's Nets tab goes through every net of the board (`NETS_SEARCH_HANDLER::Search`: `board->GetNetInfo()`), so the state names a net no item is on
+/// (Add Net's) with the others, the unconnected net left out; each footprint's Library Link is the link the board file gives it (`GetFPID().Format()`).
+#[test]
+fn the_state_names_every_net_of_the_board_and_each_footprints_library_link() {
+    let dir = routed("net_inspector_state_nets_dir");
+    step(&dir, Cmd::AddNet { name: "SPARE".into() }, true, "test").unwrap();
+    let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+    let state = crate::studio::state(&dir, &job, crate::text_vars_json::clock_of("/api/state")).unwrap();
+    let nets: Vec<&str> = state["nets"].as_array().unwrap().iter().filter_map(|n| n.as_str()).collect();
+    assert_eq!(nets, ["GND", "SPARE", "VCC"], "the board's nets by name, the one with no item too");
+    let u1 = state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == "U1").unwrap();
+    assert_eq!(u1["lib_link"], "2PAD", "a footprint named with no library is linked by its bare name, as the board file writes it");
+    let (_, design, model) = load(&dir).unwrap();
+    let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    assert!(pcb.contains("(footprint \"2PAD\""), "the same link the derived board gives it");
+    let _ = std::fs::remove_dir_all(&dir);
+}

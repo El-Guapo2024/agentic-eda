@@ -1541,6 +1541,8 @@ pub(crate) fn write_footprint(
             *n
         };
         let pad_extra = pad_text(extra.edit.and_then(|e| e.pad(&pad.number, nth)));
+        // An edit's Pad Type over the file's: "Edge connector" (`PAD::SetAttribute( PAD_ATTRIB::CONN )`) or a plain SMD pad again (`PadEdit::connector`).
+        let connector = extra.edit.and_then(|e| e.pad(&pad.number, nth)).and_then(|e| e.connector).unwrap_or(connector);
         // Our local frame is the part seen from the top; a bottom-side
         // part's x is mirrored before it is rotated (footprint::to_board,
         // which the placer, router and gates all go through). KiCad
@@ -2006,6 +2008,31 @@ pub(crate) fn cu_item_layer_words(layer: &str, has_mask: bool, margin: Option<Nm
     format!("(layers {} {}){margin}", sexpr_str(layer), sexpr_str(mask_layer))
 }
 
+/// A polygon's outline with its holes bridged in (`SHAPE_POLY_SET::Fracture`): the outline as it is when it has none.
+pub(crate) fn polygon_ring_with_holes(outline: &[eda_model::ir::Point], holes: &[Vec<eda_model::ir::Point>]) -> Vec<eda_model::ir::Point> {
+    let holes: Vec<&Vec<eda_model::ir::Point>> = holes.iter().filter(|h| h.len() >= 3).collect();
+    if holes.is_empty() || outline.len() < 3 {
+        return outline.to_vec();
+    }
+    use eda_clipper2::Point64;
+    let p64 = |c: &[eda_model::ir::Point]| c.iter().map(|p| Point64::new(p.x.get(), p.y.get())).collect::<Vec<Point64>>();
+    let ring = p64(outline);
+    let ccw = eda_clipper2::area(&ring) > 0.0;
+    let mut poly = vec![ring];
+    for h in holes {
+        let mut hole = p64(h);
+        // a hole runs against its outline (`SHAPE_POLY_SET`'s convention, which the fracture bridges by)
+        if (eda_clipper2::area(&hole) > 0.0) == ccw {
+            hole.reverse();
+        }
+        poly.push(hole);
+    }
+    let mut set = eda_shape_poly_set::ShapePolySet::new();
+    set.add_polygon(poly);
+    set.fracture(false);
+    set.polys.first().and_then(|p| p.first()).map(|r| r.iter().map(|p| eda_model::ir::Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect()).unwrap_or_else(|| outline.to_vec())
+}
+
 pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: Option<&eda_model::pcb_items::ShapeStyle>, net: usize) -> String {
     let sw = |w: Nm| mm(w.max(Nm::ZERO));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
@@ -2060,7 +2087,10 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool, style: 
         }
         Shape::Polygon { stroke_width, filled, pts, .. } => {
             write!(out, "\t(gr_poly (pts").unwrap();
-            for p in pts {
+            // A polygon with holes (`ShapeStyle::holes`, UI-LEFT-2 PP10): KiCad writes `poly.Outline( 0 )` alone and loses them; here they are bridged into the one ring
+            // (`SHAPE_POLY_SET::Fracture`), so kicad-cli's DRC and plots see the copper the studio draws.
+            let ring = polygon_ring_with_holes(pts, style.map_or(&[][..], |st| st.holes.as_slice()));
+            for p in &ring {
                 write!(out, " (xy {} {})", mm(p.x), mm(p.y)).unwrap();
             }
             writeln!(out, ") (stroke (width {}) (type {ty})) (fill {}){lock} {layer} (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
@@ -3220,6 +3250,7 @@ mod tests {
             arrow_direction: ArrowDirection::Inward,
             text_pos: None,
             text_frame: Default::default(),
+            text_effects: Default::default(),
             text_thickness_nm: Some(Nm::from_mm(0.18)),
         };
         let mut dims = vec![

@@ -66,20 +66,31 @@ export function fieldSpec(f: FieldInfo): FacedSpec {
   };
 }
 
-/** A dimension's label (`PCB_DIMENSION_BASE`, a `PCB_TEXT`): at its text position and angle, centred both ways, square, its own pen (15 % of its size unless it says). */
-export function dimensionTextSpec(d: Pick<Dimension, "text" | "text_at" | "computed_text_angle" | "text_size_nm" | "text_thickness_nm">): FacedSpec {
-  const size: [number, number] = [d.text_size_nm, d.text_size_nm];
+/**
+ * A dimension's label (`PCB_DIMENSION_BASE`, a `PCB_TEXT`; `PCB_PAINTER::draw( const PCB_DIMENSION_BASE* )`): at its text position and angle, centred vertically, with
+ * its own width and height, pen (15 % of its height unless it says), horizontal justification, mirror, bold, italic and face (UI-LEFT-2 PP11: before, it was square,
+ * centred and in the stroke font whatever the file said). A backend without them gives a square, centred label in the stroke font.
+ */
+export function dimensionTextSpec(
+  d: Pick<Dimension, "text" | "text_at" | "computed_text_angle" | "text_size_nm" | "text_thickness_nm"> &
+    Partial<Pick<Dimension, "text_width_nm" | "face" | "bold" | "italic" | "mirrored" | "h_justify">>,
+): FacedSpec {
+  const size: [number, number] = [d.text_width_nm ?? d.text_size_nm, d.text_size_nm];
+  const bold = !!d.bold;
   return {
     spec: {
       text: d.text,
       pos: [d.text_at[0], d.text_at[1]],
       size,
-      pen: effectiveTextPenWidth(d.text_thickness_nm ?? Math.round(d.text_size_nm * 0.15), size, false),
-      halign: "center",
+      pen: effectiveTextPenWidth(d.text_thickness_nm ?? Math.round(d.text_size_nm * 0.15), size, bold),
+      halign: d.h_justify ?? "center",
       valign: "center",
       angleDeg: d.computed_text_angle / 1000,
+      mirror: !!d.mirrored,
+      italic: !!d.italic,
+      bold,
     },
-    face: null,
+    face: d.face ?? null,
   };
 }
 

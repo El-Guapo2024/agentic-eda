@@ -8,6 +8,20 @@ use std::cell::RefCell;
 
 thread_local! {
     static NOTICES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static DRC_VIOLATION: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Note the error KiCad shows in the info bar as a DRC violation (`ShowInfoBarError( .., WX_INFOBAR::MESSAGE_TYPE::DRC_VIOLATION )`) while the command still
+/// did its work: Draw Via's "Via location violates DRC." with the router's Allow DRC violations on. The studio's `/api/cmd` reply carries it as
+/// `drc_violation`; a reply without it after a via is placed dismisses a standing one (`infobar->Dismiss()` of a `DRC_VIOLATION` bar).
+pub fn note_drc_violation(message: impl Into<String>) {
+    let message = message.into();
+    DRC_VIOLATION.with(|n| *n.borrow_mut() = Some(message));
+}
+
+/// The DRC violation noted since [`clear`], and forget it.
+pub fn take_drc_violation() -> Option<String> {
+    DRC_VIOLATION.with(|n| n.borrow_mut().take())
 }
 
 /// Note a message for the command running on this thread; the same message twice is said once.
@@ -24,6 +38,7 @@ pub fn note(message: impl Into<String>) {
 /// Forget what an earlier command noted.
 pub fn clear() {
     NOTICES.with(|n| n.borrow_mut().clear());
+    DRC_VIOLATION.with(|n| *n.borrow_mut() = None);
 }
 
 /// The messages noted since [`clear`], in order, and forget them.

@@ -123,7 +123,9 @@ fn replace_shape_refuses_a_degenerate_or_unknown_shape() {
     let poly = Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO)] };
     assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: poly }).unwrap_err()[0].check, "ops_bad_shape");
     let circle = Shape::Circle { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, center: p(um(5.0), um(5.0)), end: p(um(5.0), um(5.0)) };
-    assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: circle }).unwrap_err()[0].check, "ops_bad_shape");
+    // A circle of radius 0 is the Properties panel's (`SetRadius( 0 )`, UI-LEFT-2 PP8): taken, then put back below.
+    b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: circle }).unwrap();
+    b.apply(&Cmd::ReplaceShape { id: "shp_seg".into(), shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: p(Nm::ZERO, mm(80.0)), end: p(mm(10.0), mm(80.0)) } }).unwrap();
     assert_eq!(b.apply(&Cmd::ReplaceShape { id: "shp_nope".into(), shape: seg("F.SilkS", mm(0.15)) }).unwrap_err()[0].check, "ops_unknown_shape");
     assert_eq!(drawings(&b).shapes[0].points(), vec![p(Nm::ZERO, mm(80.0)), p(mm(10.0), mm(80.0))], "refusals change nothing");
 }

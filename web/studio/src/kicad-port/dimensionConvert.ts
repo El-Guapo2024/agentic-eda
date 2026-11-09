@@ -111,5 +111,7 @@ export function toCmdDimension(dim: Dimension): CmdDimension {
     // A radial's or a leader's text place, or one placed by hand, and a leader's frame survive an edit that does not mention them (they were dropped).
     ...(dim.text_pos ? { text_pos: { x: dim.text_pos[0], y: dim.text_pos[1] } } : {}),
     ...(dim.text_frame && dim.text_frame !== "none" ? { text_frame: dim.text_frame } : {}),
+    // The label's own looks (UI-LEFT-2 PP11) survive an edit that does not mention them.
+    ...(dim.text_effects && Object.keys(dim.text_effects).length ? { text_effects: { ...dim.text_effects } } : {}),
   };
 }

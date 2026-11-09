@@ -123,6 +123,8 @@ pub use pcb_tables::TableCmd;
 mod pcb_transform;
 mod tuning;
 mod zone_overrides;
+mod pad_renumber;
+mod poly_holes;
 pub mod zone_priority;
 pub mod autoplace;
 mod zone_unfill;
@@ -1258,6 +1260,10 @@ pub enum Cmd {
     SetItemNet { ids: Vec<String>, net: String },
     /// "Name" of a zone (`ZONE::SetZoneName`).
     SetZoneName { id: String, name: String },
+    /// `BOARD_DESIGN_SETTINGS::SetDefaultZoneSettings` (Zone Properties' OK on a zone, `PCB_EDIT_FRAME::Edit_Zone_Params`, UI-LEFT-2 PP10): the board's default zone
+    /// settings become `zone`'s (`ZONE_SETTINGS << *aZone`, the net taken away: `m_Netcode = NETINFO_LIST::ORPHANED`), what the next new zone's dialog opens on.
+    /// Its outline, holes, id and fill counts are not kept. Batched with the dialog's `edit_zone`: one undo step.
+    SetZoneDefaults { zone: Box<eda_model::ir::Zone> },
     /// A shape's new geometry (and whatever else of it changed), in place: the id and the lock stay. The panel's "Start X", "Radius",
     /// "Width" and the like (`EDA_SHAPE` setters) send the whole shape.
     ReplaceShape { id: String, shape: Shape },
@@ -1351,6 +1357,9 @@ pub enum Cmd {
     /// share it) gets `edit` as its changes -- shape, size, hole, offset, corner radius, clearance and solder mask and paste margins. An
     /// edit that changes nothing puts the pad back as the library has it.
     EditBoardPad { part: String, edit: eda_model::fp_edit::PadEdit },
+    /// The Properties panel's "Pad Number" (`PAD::SetNumber`, [`pad_renumber`]): the pad `pad` (`REF.NUM`, `REF.NUM#k`) is numbered `number`, keeping its net,
+    /// its edits and its zone overrides. One undo step.
+    SetPadNumber { pad: String, number: String },
     /// The 3D Models tab of Footprint Properties (`PANEL_FP_PROPERTIES_3D_MODEL`, [`fp_models`]): the footprint `part`'s whole list of `(model ...)` entries becomes `models`, in
     /// order -- the dialog's OK, and what Migrate 3D Models sends. An empty list is a footprint with no model. A list that comes to what the library gives takes the edit away.
     /// Refused for a file name that is empty or illegal (`FILENAME_RESOLVER::ValidateFileName`) and for numbers the preview panel does not take; one undo step.
@@ -2688,6 +2697,8 @@ impl Cmd {
             Cmd::SwapPadNets { .. } | Cmd::SwapGateNets { .. } => true,
             // a pad's net is its pin's place in `design.nets`
             Cmd::TrackViaNets { .. } => true,
+            // a renamed pad's new pin takes its net in `design.nets`
+            Cmd::SetPadNumber { .. } => true,
             // Replace All renames a reference when it is asked to look at them
             Cmd::ReplaceText { search, .. } => search.replace_references,
             // Field Properties of a Reference field renames the symbol
@@ -2761,10 +2772,12 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
+            Cmd::SetZoneDefaults { .. } => vec!["zone_defaults"],
             Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditBoardFootprintText { id, .. } => vec![id.as_str()],
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
+            Cmd::SetPadNumber { pad, .. } => vec![pad.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
             Cmd::SetExtrudedBody { part, .. } => vec![part.as_str()],
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
@@ -3530,6 +3543,7 @@ impl<'a> Board<'a> {
             Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
             Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
+            Cmd::SetPadNumber { pad, number } => self.set_pad_number(pad, number),
             Cmd::MigrateBoardModels { replacements } => self.migrate_board_models(replacements),
             Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
             Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
@@ -3542,6 +3556,19 @@ impl<'a> Board<'a> {
             Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
+            Cmd::SetZoneDefaults { zone } => {
+                // `ZONE_SETTINGS << *aZone`: the settings, the layers and the name; the net restored to none (`m_Netcode = NETINFO_LIST::ORPHANED`)
+                let mut d = (**zone).clone();
+                d.id.clear();
+                d.uuid.clear();
+                d.net.clear();
+                d.outline.clear();
+                d.holes.clear();
+                (d.fill_epoch, d.flip_epoch, d.flip_parity) = (0, 0, false);
+                d.parent_footprint = None;
+                self.drawings_mut().zone_defaults = Some(d);
+                Ok(())
+            }
             Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),
             Cmd::EditTextStyle { id, width_nm, valign, bold, italic, knockout, auto_thickness, face } => self.edit_text_style(
                 id,
@@ -4889,7 +4916,11 @@ impl<'a> Board<'a> {
         if ids.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_lock", "set_locked", "no items given")]);
         }
-        let known = self.lockable_ids();
+        let mut known = self.lockable_ids();
+        // A footprint's field has a lock of its own (`BOARD_ITEM::m_isLocked` of a `PCB_FIELD`, the Properties panel's Locked row; UI-LEFT-2 PP8). KiCad writes
+        // no `(locked ..)` for a field (`format( const PCB_TEXT* )` only for a text that is no field), and neither does the writer: it is the design's.
+        let fields: Vec<String> = ids.iter().chain(self.design.drawings.as_ref().map(|d| &d.locked_ids).into_iter().flatten()).filter(|id| self.resolve_field(id).is_some()).cloned().collect();
+        known.extend(fields);
         for id in ids {
             if !known.contains(id) {
                 return Err(vec![CheckResult::fail("ops_unknown_item", id, "no placed part, track, via, zone, shape, text, dimension or group with this id")]);
@@ -5124,9 +5155,15 @@ impl<'a> Board<'a> {
         }
         self.layer_is_on(shape.layer(), "shape")?;
         shape.set_id(String::new()); // ids are ours to assign, never the caller's
+        // A polygon given as a fractured ring (a zone with holes made a polygon: `CreatePolys`' `SetPolyShape( poly )`, UI-LEFT-2 PP10) is its outline and holes.
+        let holes = crate::poly_holes::split_holes(&mut shape);
         let dr = self.drawings_mut();
         dr.shapes.push(shape);
         dr.assign_missing_ids();
+        if !holes.is_empty() {
+            let id = dr.shapes.last().map(|s| s.id().to_string()).unwrap_or_default();
+            dr.board_items.set_holes(&id, holes);
+        }
         Ok(())
     }
 
@@ -5145,6 +5182,8 @@ impl<'a> Board<'a> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
         let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
         s.translate(dx, dy);
+        // a polygon's holes with it (UI-LEFT-2 PP10)
+        dr.board_items.map_holes(id, |p| Point { x: p.x + dx, y: p.y + dy });
         Ok(())
     }
 
@@ -5152,8 +5191,9 @@ impl<'a> Board<'a> {
         if layer.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "a shape needs a layer")]);
         }
-        if stroke_width <= Nm::ZERO {
-            return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width must be positive")]);
+        // A width of 0 is taken (`EDA_SHAPE_DESC`'s "Line Width" has no validator; a filled shape is often drawn so: UI-LEFT-2 PP8); below 0 is not.
+        if stroke_width < Nm::ZERO {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width cannot be negative")]);
         }
         self.layer_is_on(layer, id)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
@@ -7614,6 +7654,10 @@ mod fp_edit_tests;
 mod fp_models_tests;
 #[cfg(test)]
 mod pcb_props_tests;
+#[cfg(test)]
+mod pp8_props_tests;
+#[cfg(test)]
+mod pp10_zone_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
 #[cfg(test)]

@@ -199,18 +199,35 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
     text
 }
 
-/// The pen of the dimension's text (`GetEffectiveTextPenWidth`): its own thickness, or 15 % of the size, which the writer writes for one that has none.
+/// The pen of the dimension's text (`GetEffectiveTextPenWidth`): its own thickness, or 15 % of the size, which the writer writes for one that has none,
+/// clamped to a quarter of the smaller of its width and height (`ClampTextPenSize( penWidth, GetTextSize() )`, not strict).
 fn text_pen(dim: &Dimension) -> Nm {
-    dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15))
+    let pen = dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15));
+    let size = dim.text_size_nm.abs().min(dim.text_width_nm().abs());
+    // `std::min( aPenSize, KiROUND( (double) aSize * 0.25 ) )`
+    pen.min(Nm::kiround(size.as_f64() * 0.25))
 }
 
 /// The four corners of the text's box as the dimension's `updateGeometry` collides its lines with it: `GetTextBox( nullptr ).Inflate( grow_x, grow_y )`
-/// (the box of the centred text at `text_at`, `EDA_TEXT::GetTextBox`, in the stroke font's metrics), as `polyBox` is built (origin, (origin.x, end.y),
-/// end, (end.x, origin.y)) and turned about its centre by the text angle (`polyBox.Rotate( GetTextAngle(), textBox.GetCenter() )`, counter-clockwise on
-/// the screen). Also the box's centre and width, which a leader's circle frame is made from.
+/// (the box of the text at `text_at`, `EDA_TEXT::GetTextBox`, in the stroke font's metrics: its width and height, horizontal justification, mirror and
+/// italic lean, UI-LEFT-2 PP11), as `polyBox` is built (origin, (origin.x, end.y), end, (end.x, origin.y)) and turned about its centre by the text angle
+/// (`polyBox.Rotate( GetTextAngle(), textBox.GetCenter() )`, counter-clockwise on the screen). Also the box's centre and width, which a leader's circle
+/// frame is made from.
 fn text_poly(dim: &Dimension, text: &str, text_at: Point, angle: Millideg, grow_x: Nm, grow_y: Nm) -> ([Point; 4], Point, Nm) {
-    use eda_model::kicad_font::{text_box_iu, HJustify, VJustify};
-    let (x0, y0, x1, y1) = text_box_iu(text, dim.text_size_nm.get(), text_pen(dim).get(), HJustify::Center, VJustify::Center);
+    use eda_model::kicad_font::{text_box_styled_iu, HJustify, TextBoxStyle, VJustify};
+    let style = TextBoxStyle {
+        width_iu: dim.text_width_nm().get(),
+        height_iu: dim.text_size_nm.get(),
+        h: match dim.text_effects.h_justify {
+            eda_model::ir::TextJustify::Left => HJustify::Left,
+            eda_model::ir::TextJustify::Center => HJustify::Center,
+            eda_model::ir::TextJustify::Right => HJustify::Right,
+        },
+        v: VJustify::Center,
+        mirrored: dim.text_mirrored(),
+        italic: dim.text_effects.italic,
+    };
+    let (x0, y0, x1, y1) = text_box_styled_iu(text, text_pen(dim).get(), style);
     let (x0, y0) = (text_at.x + Nm::new(x0) - grow_x, text_at.y + Nm::new(y0) - grow_y);
     let (x1, y1) = (text_at.x + Nm::new(x1) + grow_x, text_at.y + Nm::new(y1) + grow_y);
     let centre = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
@@ -396,7 +413,7 @@ fn aligned(dim: &Dimension, height: Nm) -> DimensionGeometry {
 
     let mut lines = vec![(ext1_start, ext1_end), (ext2_start, ext2_end)];
     // `GetTextBox( nullptr ).Inflate( GetTextWidth() / 2, - GetEffectiveTextPenWidth() )`
-    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, -text_pen(dim));
+    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_width_nm() / 2, -text_pen(dim));
     lines.extend(knock_out(&poly, crossbar_start, crossbar_end));
 
     let dim_angle = angle_of(dimension);
@@ -461,8 +478,9 @@ fn orthogonal(dim: &Dimension, height: Nm, horizontal: bool) -> DimensionGeometr
 
     let text = format_value(dim, measured_value_nm);
     let mut lines = vec![(ext1_start, ext1_end), (ext2_start, ext2_end)];
-    // `PCB_DIM_ORTHOGONAL::updateGeometry`: the same box as an aligned dimension's.
-    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, -text_pen(dim));
+    // `PCB_DIM_ORTHOGONAL::updateGeometry`: `GetTextBox( nullptr ).Inflate( GetTextWidth() / 2, GetEffectiveTextPenWidth() )` -- grown by the pen, where an
+    // aligned dimension's box shrinks by it (this was the aligned one's before UI-LEFT-2 PP11).
+    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_width_nm() / 2, text_pen(dim));
     lines.extend(knock_out(&poly, crossbar_start, crossbar_end));
 
     let crossbar_angle = angle_of(sub(crossbar_end, crossbar_start));
@@ -515,7 +533,7 @@ fn radial(dim: &Dimension, leader_length: Nm) -> DimensionGeometry {
 
     let text = format_value(dim, measured_value_nm);
     // `GetTextBox( nullptr ).Inflate( GetTextWidth() / 2, GetEffectiveTextPenWidth() )`; the arrow's line and the line to the text knocked out by it.
-    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, text_pen(dim));
+    let (poly, _, _) = text_poly(dim, &text, text_at, text_angle, dim.text_width_nm() / 2, text_pen(dim));
     lines.extend(knock_out(&poly, dim.end, knee));
     lines.extend(knock_out(&poly, knee, text_at));
 
@@ -545,7 +563,7 @@ fn leader(dim: &Dimension) -> DimensionGeometry {
     let text_angle = (dim.text_angle as i64).rem_euclid(360_000) as Millideg;
 
     let pen = text_pen(dim);
-    let (poly, centre, box_width) = text_poly(dim, &text, text_at, text_angle, dim.text_size_nm / 2, pen * 2);
+    let (poly, centre, box_width) = text_poly(dim, &text, text_at, text_angle, dim.text_width_nm() / 2, pen * 2);
     let radius = box_width.as_f64() / 2.0 - pen.as_f64() / 2.0;
     let (arrow_seg_end, text_seg_end) = if dim.text_frame == DimensionTextBorder::Circle {
         (seg_circle_intersection(centre, radius, dim.start, dim.end), seg_circle_intersection(centre, radius, dim.end, text_at))
@@ -648,8 +666,42 @@ mod tests {
             arrow_direction: ArrowDirection::Outward,
             text_pos: None,
             text_frame: Default::default(),
+            text_effects: Default::default(),
             text_thickness_nm: None,
         }
+    }
+
+    /// The width of the gap an inline label cuts in a horizontal crossbar at y = `y`.
+    fn crossbar_gap(g: &DimensionGeometry) -> Nm {
+        let mut xs: Vec<Nm> = g.lines.iter().filter(|(a, b)| a.y == b.y).flat_map(|(a, b)| [a.x, b.x]).collect();
+        xs.sort();
+        xs[2] - xs[1]
+    }
+
+    /// `PCB_DIM_ORTHOGONAL::updateGeometry` grows the label's box by the pen (`Inflate( GetTextWidth() / 2, GetEffectiveTextPenWidth() )`) where
+    /// `PCB_DIM_ALIGNED::updateGeometry` shrinks it (`- GetEffectiveTextPenWidth()`): the same inline label cuts the same horizontal crossbar the same width
+    /// (the height of the box is across it), and a label twice as wide a gap one advance wider (UI-LEFT-2 PP11).
+    #[test]
+    fn an_inline_label_cuts_its_own_box_out_of_the_crossbar() {
+        let (a, b) = (Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO });
+        let mut aligned = base_dim(DimensionKind::Aligned { height: mm(3.0) }, a, b);
+        aligned.text_position = DimensionTextPosition::Inline;
+        let mut ortho = base_dim(DimensionKind::Orthogonal { height: mm(3.0), horizontal: true }, a, b);
+        ortho.text_position = DimensionTextPosition::Inline;
+        let (ga, go) = (compute_dimension_geometry(&aligned), compute_dimension_geometry(&ortho));
+        assert_eq!(crossbar_gap(&ga), crossbar_gap(&go), "the box's height is across the crossbar");
+        let mut wide = aligned.clone();
+        wide.text_effects.width_nm = Some(mm(2.0));
+        let gw = compute_dimension_geometry(&wide);
+        // "20": '2' and '0' advance 20/21 em each, less the 0.2 em gap after the last: (40/21 - 0.2) mm more, and the inflate's half width 0.5 mm more each side
+        let more = Nm::kiround((40.0 / 21.0 - 0.2) * 1e6) + mm(1.0);
+        assert!((crossbar_gap(&gw) - crossbar_gap(&ga) - more).abs() <= Nm::new(2), "{:?} {:?} {:?}", crossbar_gap(&gw), crossbar_gap(&ga), more);
+        // a pen thicker than a quarter of the size is clamped (`ClampTextPenSize`)
+        let mut thick = aligned.clone();
+        thick.text_thickness_nm = Some(mm(0.5));
+        let mut quarter = aligned.clone();
+        quarter.text_thickness_nm = Some(mm(0.25));
+        assert_eq!(compute_dimension_geometry(&thick).lines, compute_dimension_geometry(&quarter).lines);
     }
 
     #[test]

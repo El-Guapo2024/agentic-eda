@@ -22,6 +22,8 @@ export interface Choice {
 /** The widget family of the property (`TypeHash`): a string, an integer, a real number, a check box, an enumeration, a net, a colour. */
 export type PropKind = "string" | "int" | "double" | "bool" | "enum" | "net" | "color";
 
+import type { CoordType } from "./originTransforms";
+
 /** `PROPERTY_DISPLAY`. An angle is always degrees here (`PT_DECIDEGREE` is a scale of the same thing). */
 export type PropDisplay = "default" | "size" | "area" | "coord" | "degree" | "ratio" | "time";
 
@@ -40,6 +42,9 @@ export interface PropertyDef<I extends PropItem = PropItem, C = unknown, K = unk
   base?: string;
   kind: PropKind;
   display?: PropDisplay;
+  /** `PROPERTY_BASE::CoordType()` (`ORIGIN_TRANSFORMS::COORD_TYPES_T`, `NOT_A_COORD` when absent): a `PT_COORD` row's value is shown and typed through the frame's
+   *  origin transforms (`PGPROPERTY_COORD` -> `PGPROPERTY_DISTANCE::DistanceToString`, `PG_UNIT_EDITOR`'s `SetCoordType`; kicad-port/originTransforms.ts). */
+  coordType?: CoordType;
   /** A `PROPERTY<Owner, std::optional<T>>`: an empty cell is no value (`std::nullopt`), the getter's "" and the setter's "". */
   optional?: boolean;
   /** The group the grid puts the row under; "" is "Basic Properties". Set by `addProperty`. */

@@ -740,7 +740,7 @@ fn a_via_keeps_the_hole_to_hole_distance_from_a_via_of_its_own_net() {
     let (mut design, model) = board(&[], &[("SIG", &[])]);
     design.routing.as_mut().unwrap().vias.push(eda_model::ir::Via { id: "v1".into(), net: "SIG".into(), at: p(10.0, 10.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
     let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
-    let via = |x: f64| eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(x, 10.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
+    let via = |x: f64| eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(x, 10.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
     let hits = |x: f64| node.via_colliding(&via(x), &model.board, &[], eda_pns::node::QueryOpts::default()).len();
     assert_eq!(hits(10.5), 1, "holes 0.2 mm apart");
     assert_eq!(hits(10.56), 0, "holes 0.26 mm apart");
@@ -782,7 +782,7 @@ fn the_plain_answer_is_the_engines_on_kicads_boards() {
         let sample: Vec<&eda_pns::item::Item> = items.iter().step_by(step).copied().collect();
         // and heads of every net of the sample, a track on each layer and a via
         let nets: Vec<eda_pns::item::Net> = sample.iter().map(|it| it.net().clone()).collect();
-        let vias: Vec<eda_pns::item::Via> = nets.iter().map(|n| eda_pns::item::Via { net: n.clone(), layers: layers.all(), pos: p(1.0, 1.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }).collect();
+        let vias: Vec<eda_pns::item::Via> = nets.iter().map(|n| eda_pns::item::Via { net: n.clone(), layers: layers.all(), pos: p(1.0, 1.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }).collect();
         let mut sides: Vec<eda_pns::node::Side> = sample.iter().map(|it| eda_pns::node::Side::Item(it)).collect();
         for it in &sample {
             if let eda_pns::item::Item::Solid(s) = it {
@@ -872,7 +872,7 @@ fn a_rule_on_a_vias_layer_reads_the_layer_asked_about() {
     let j1 = p(10.0, 10.0);
     let (design, mut model) = board(&[("J1", "TH1", j1)], &[("GND", &["J1.1"]), ("SIG", &[])]);
     let via = |node: &eda_pns::node::Node, layers: &eda_pns::layer::LayerMap, rules: &eda_model::BoardRules| {
-        let v = eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(11.6, 10.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false };
+        let v = eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(11.6, 10.0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         node.via_colliding(&v, rules, &[], eda_pns::node::QueryOpts::default()).len()
     };
     // the via's copper is 0.5 mm from the pad's: clear at the class's 0.2 mm
@@ -1017,7 +1017,7 @@ fn an_unflashed_head_via_collides_by_its_hole_only() {
     let (design, model) = unflashed_via_board(0.45, true);
     let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
     let own = node.iter().find(|(_, it)| matches!(it, eda_pns::item::Item::Via(v) if v.source_via.as_deref() == Some("v1"))).map(|(id, _)| id).unwrap();
-    let head = |x: f64, y: f64, source: Option<&str>| eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(x, y), diameter: mm(0.6), drill: mm(0.3), source_via: source.map(str::to_string), locked: false, is_virtual: false };
+    let head = |x: f64, y: f64, source: Option<&str>| eda_pns::item::Via { net: eda_pns::item::net_of("SIG"), layers: layers.all(), pos: p(x, y), diameter: mm(0.6), drill: mm(0.3), source_via: source.map(str::to_string), locked: false, layer_diameters: Vec::new(), is_virtual: false };
     let hits = |v: &eda_pns::item::Via| node.via_colliding(v, &model.board, &[own], eda_pns::node::QueryOpts::default()).len();
     assert_eq!(hits(&head(15.0, 10.0, Some("v1"))), 0, "0.45 mm from the track's edge: the hole's 0.4 mm is kept");
     assert_eq!(hits(&head(15.0, 9.93, Some("v1"))), 1, "0.38 mm: the hole is too near");

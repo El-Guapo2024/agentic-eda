@@ -97,8 +97,31 @@ export interface FpDimDraw {
 }
 
 /**
+ * What `DrawDimension` gives a dimension from its layer, at SET_ORIGIN and again at a `layerChanged`: `SetTextSize( bds.GetTextSize( layer ) )` (the width too, in the
+ * label's `text_effects`), `SetTextThickness( bds.GetTextThickness( layer ) )`, `SetItalic( bds.GetTextItalic( layer ) )` and `SetLineThickness( bds.GetLineThickness(
+ * layer ) )`. The mirror is left as it is (`SetMirrored( IsBackLayer( layer ) )` comes at SET_ORIGIN only), as are the label's other looks (UI-LEFT-2 PP11).
+ */
+export function fpDimensionOnLayer(dim: CmdDimension, layer: string, editor: DimensionEditorStyle = FP_DIMENSION_STYLE): CmdDimension {
+  const style = textStyleOf(editor.textDefaults, layer);
+  // the mirror the dimension shows now, kept through the change of layer (`text_effects.mirrored` absent follows the layer's side)
+  const mirrored = dim.text_effects?.mirrored ?? isBackLayer(dim.layer);
+  const fx = { ...(dim.text_effects ?? {}) };
+  delete fx.width_nm;
+  delete fx.italic;
+  delete fx.mirrored;
+  if (style.widthNm !== style.heightNm) fx.width_nm = style.widthNm;
+  if (style.italic) fx.italic = true;
+  if (mirrored !== isBackLayer(layer)) fx.mirrored = mirrored;
+  const out: CmdDimension = { ...dim, layer, text_size_nm: style.heightNm, text_thickness_nm: style.thicknessNm, stroke_width: lineThicknessNm(editor.textDefaults, layer) };
+  if (Object.keys(fx).length) out.text_effects = fx;
+  else delete out.text_effects;
+  return out;
+}
+
+/**
  * `DrawDimension`'s SET_ORIGIN click: the dimension of the tool's kind on `layer`, its start and end at the cursor. The text and the line take the layer's defaults
- * (`SetTextSize( bds.GetTextSize( layer ) )`, `SetTextThickness`, `SetLineThickness`), the arrows and the extension offset the editor's; the aligned, orthogonal and
+ * (`SetTextSize( bds.GetTextSize( layer ) )`, `SetTextThickness`, `SetItalic( bds.GetTextItalic( layer ) )`, `SetLineThickness`; the label mirrored on a back layer,
+ * `SetMirrored( m_board->IsBackLayer( layer ) )`, which a dimension with no mirror of its own is), the arrows and the extension offset the editor's; the aligned, orthogonal and
  * radial kinds take the editor's units and text settings (`setMeasurementAttributes`), the centre mark and the leader keep their constructors' (a leader's text is set by its
  * dialog: `m_overrideTextEnabled = true`, no suffix, not aligned; a centre mark has no text).
  */
@@ -143,7 +166,8 @@ export function fpNewDimension(kind: FpDimKind, layer: string, at: P, editor: Di
   };
   // `PCB_DIM_LEADER`: `dimension->SetTextPos( cursorPos )`
   if (kind === "leader") dim.text_pos = xy(at);
-  return dim;
+  // the layer's glyph width and italic (UI-LEFT-2 PP11)
+  return fpDimensionOnLayer(dim, layer, editor);
 }
 
 /** `PCB_DIM_RADIAL::GetKnee`: the end pushed out along the radius by the leader length (`radial.Resize( m_leaderLength )`). */
@@ -207,6 +231,21 @@ export function fpDimensionMotion(draw: FpDimDraw, cursor: P, constrained: boole
     dim.kind.height = vert ? c.x - dim.start.x : c.y - dim.start.y;
   }
   return { ...draw, dim };
+}
+
+/**
+ * `DrawDimension`'s `grid.SetUseGrid( false )` at SET_HEIGHT for any dimension but an orthogonal one whose start and end are on no common axis ("Not cardinal. Grid
+ * snapping doesn't make sense for height."): the height of a slanted aligned dimension follows the cursor (or an anchor) off the grid. The orthogonal dimension's height
+ * is along an axis and stays on it.
+ */
+export function fpDimensionHeightOffGrid(draw: FpDimDraw | null | undefined): boolean {
+  if (!draw || draw.step !== "height" || draw.dim.kind.kind === "orthogonal") return false;
+  return draw.dim.start.x !== draw.dim.end.x && draw.dim.start.y !== draw.dim.end.y;
+}
+
+/** `incWidth` / `decWidth` while a dimension is being drawn: `m_stroke` stepped by `WIDTH_STEP` (the step refused at the last one) becomes its line thickness (`SetLineThickness( m_stroke.GetWidth() )`). */
+export function fpDimensionWithLineWidth(draw: FpDimDraw, widthNm: number): FpDimDraw {
+  return { ...draw, dim: { ...draw.dim, stroke_width: widthNm } };
 }
 
 /**

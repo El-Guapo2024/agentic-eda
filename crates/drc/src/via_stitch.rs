@@ -722,7 +722,8 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             if !same_net(&via.net) {
                 margin = margin.max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
             }
-            shape_to_polygon(&mut obstacles, &via.shape(), margin);
+            // `aOther->TransformShapeToPolygon( obstacles, layer, .. )`: the via's copper on this layer (`PCB_VIA::GetWidth( layer )`)
+            shape_to_polygon(&mut obstacles, &via.shape_on(layer), margin);
         }
         // A footprint's own graphics and texts on copper (`PCB_SHAPE`, `PCB_TEXT` of no net), and the board's texts on copper: `TransformShapeToPolygon` of each, a text's
         // bounding hull (`PCB_TEXT::buildBoundingHull`) grown by the margin.
@@ -872,9 +873,10 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
             // "arbitrary copper layer for clearance evaluation"
             let margin = via_size / 2 + eval(CType::Clearance, &item, Some(&first)) + safety;
             let mut env = ShapePolySet::default();
-            shape_to_polygon(&mut env, &via.shape(), margin);
+            // `TransformShapeToPolygon( .., F_Cu, .. )`: the via's copper on that layer
+            shape_to_polygon(&mut env, &via.shape_on(&first), margin);
             envelope.boolean_add(&env);
-            shape_to_polygon(&mut guarded, &via.shape(), Nm::ZERO);
+            shape_to_polygon(&mut guarded, &via.shape_on(&first), Nm::ZERO);
         }
         envelope.simplify();
         guarded.simplify();

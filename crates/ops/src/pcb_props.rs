@@ -57,8 +57,9 @@ impl Board<'_> {
         Ok(())
     }
 
-    /// `Cmd::SetItemNet`: `BOARD_CONNECTED_ITEM::SetNetCode` on tracks, vias and zones. The net must exist in the model; only a zone may be given
-    /// no net at all ("" -- a rule area has none), as `add_zone` allows.
+    /// `Cmd::SetItemNet`: `BOARD_CONNECTED_ITEM::SetNetCode` on tracks, vias, zones and the shapes on copper (a `PCB_SHAPE` is a `BOARD_CONNECTED_ITEM`; its net
+    /// is kept in its style, `ShapeStyle::net`, and written as its `(net ..)`: UI-LEFT-2 PP8). The net must exist in the model; a zone or a shape may be given no
+    /// net at all ("" -- a rule area has none, and a drawn copper shape starts with none), as `add_zone` allows.
     pub(crate) fn set_item_net(&mut self, ids: &[String], net: &str) -> Result<(), Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(fail("ops_bad_net", "set_item_net", "no items given"));
@@ -74,24 +75,33 @@ impl Board<'_> {
             ),
             None => Default::default(),
         };
+        // `BOARD_CONNECTED_ITEM_DESC`'s Net is available on a shape only on copper (`PCB_SHAPE_DESC`'s `isCopper`).
+        let copper_shapes: BTreeSet<String> = self.design.drawings.as_ref().map_or_else(BTreeSet::new, |d| d.shapes.iter().filter(|s| eda_model::layers::is_copper_layer_name(s.layer())).map(|s| s.id().to_string()).collect());
         for id in ids {
-            if !tracks.contains(id.as_str()) && !vias.contains(id.as_str()) && !zones.contains(id.as_str()) {
-                return Err(fail("ops_unknown_item", id, "no track, via or zone with this id"));
+            let shape = copper_shapes.contains(id);
+            if !tracks.contains(id.as_str()) && !vias.contains(id.as_str()) && !zones.contains(id.as_str()) && !shape {
+                return Err(fail("ops_unknown_item", id, "no track, via, zone or copper shape with this id"));
             }
-            if net.is_empty() && !zones.contains(id.as_str()) {
+            if net.is_empty() && !zones.contains(id.as_str()) && !shape {
                 return Err(fail("ops_bad_net", id, "a track or a via needs a net"));
             }
         }
         let wanted: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        let rt = self.design.routing.as_mut().expect("the ids were found in the routing");
-        for t in rt.tracks.iter_mut().filter(|t| wanted.contains(t.id.as_str())) {
-            t.net = net.to_string();
+        if let Some(rt) = self.design.routing.as_mut() {
+            for t in rt.tracks.iter_mut().filter(|t| wanted.contains(t.id.as_str())) {
+                t.net = net.to_string();
+            }
+            for v in rt.vias.iter_mut().filter(|v| wanted.contains(v.id.as_str())) {
+                v.net = net.to_string();
+            }
+            for z in rt.zones.iter_mut().filter(|z| wanted.contains(z.id.as_str())) {
+                z.net = net.to_string();
+            }
         }
-        for v in rt.vias.iter_mut().filter(|v| wanted.contains(v.id.as_str())) {
-            v.net = net.to_string();
-        }
-        for z in rt.zones.iter_mut().filter(|z| wanted.contains(z.id.as_str())) {
-            z.net = net.to_string();
+        if let Some(dr) = self.design.drawings.as_mut() {
+            for id in ids.iter().filter(|id| copper_shapes.contains(*id)) {
+                dr.board_items.set_net(id, (!net.is_empty()).then(|| net.to_string()));
+            }
         }
         self.sort_routing();
         Ok(())
@@ -106,7 +116,8 @@ impl Board<'_> {
     }
 
     /// `Cmd::ReplaceShape`: the drawn shape `id` becomes `shape`, in place -- its id, its place in the drawing order and its lock stay.
-    /// Refused for what `add_shape` refuses (no layer, a polygon under three points) and for a width below zero or a circle without a radius.
+    /// Refused for what `add_shape` refuses (no layer, a polygon under three points) and for a width below zero. A circle of radius 0 is taken, as `SetRadius( 0 )`
+    /// is from the Properties panel (`EDA_SHAPE_DESC`'s "Radius" has no validator; UI-LEFT-2 PP8).
     pub(crate) fn replace_shape(&mut self, id: &str, mut shape: Shape) -> Result<(), Vec<CheckResult>> {
         if shape.layer().is_empty() {
             return Err(fail("ops_bad_shape", id, "a shape needs a layer"));
@@ -116,14 +127,19 @@ impl Board<'_> {
         }
         match &shape {
             Shape::Polygon { pts, .. } if pts.len() < 3 => return Err(fail("ops_bad_shape", id, "a polygon needs at least three points")),
-            Shape::Circle { center, end, .. } if center == end => return Err(fail("ops_bad_shape", id, "a circle needs a radius")),
             _ => {}
         }
+        // a polygon given as a fractured ring is its outline and holes (UI-LEFT-2 PP10): the geometry whole, so a polygon's holes are the ones given
+        let holes = crate::poly_holes::split_holes(&mut shape);
+        let polygon = matches!(shape, Shape::Polygon { .. });
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_shape", id, "the board has no drawings yet"))?;
         let slot = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| fail("ops_unknown_shape", id, "no shape with this id"))?;
         shape.set_id(id.to_string());
         let solid = shape.is_filled();
         *slot = shape;
+        if polygon || !holes.is_empty() {
+            dr.board_items.set_holes(id, holes);
+        }
         // A solid fill takes the place of a hatch.
         if solid {
             dr.board_items.set_hatch(id, None);

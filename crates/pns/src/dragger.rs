@@ -113,6 +113,8 @@ pub struct Dragger {
     pub via_pos: Point,
     pub via_diameter: Nm,
     pub via_drill: Nm,
+    /// `Via` only: the via's own diameters past the front's ([`crate::item::Via::layer_diameters`], a padstack that is not a normal one), carried with it.
+    pub via_layer_diameters: Vec<(i32, Nm)>,
     /// `Via` only: the layers the via spans.
     pub via_layers: LayerRange,
     pub source_via: Option<String>,
@@ -288,7 +290,7 @@ impl Dragger {
                 let index = line.segment_ids.iter().position(|&id| id == item_id).ok_or(CANT)?.min(line.segment_count().saturating_sub(1));
                 let run = line.arc_runs().into_iter().find(|r| index >= r.first && index < r.last).ok_or(CANT)?;
                 let drag = crate::arc_drag::ArcDrag::new(&line, run)?.ok_or("The arc has no corner to round: its tangents do not meet.")?;
-                Ok(Dragger { kind: DragKind::Arc, net: line.net.clone(), layer: line.layer, width: line.width, original: line.clone(), grabbed_index: run.first, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, source_via: None, via_virtual: false, via_layers: LayerRange::single(line.layer), free_angle, arc: Some(drag), start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) })
+                Ok(Dragger { kind: DragKind::Arc, net: line.net.clone(), layer: line.layer, width: line.width, original: line.clone(), grabbed_index: run.first, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, source_via: None, via_virtual: false, via_layer_diameters: Vec::new(), via_layers: LayerRange::single(line.layer), free_angle, arc: Some(drag), start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) })
             }
             _ => Self::start_plain(node, at, item_id, free_angle).ok_or_else(|| CANT.to_string()),
         }
@@ -297,7 +299,7 @@ impl Dragger {
     fn start_plain(node: &Node, at: Point, item_id: ItemId, free_angle: bool) -> Option<Dragger> {
         let item = node.get(item_id)?;
         match item {
-            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: Nm::ZERO, original: Line::new(v.net.clone(), v.layers.start(), Nm::ZERO), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layers: v.layers, source_via: v.source_via.clone(), via_virtual: v.is_virtual, free_angle, arc: None, start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) }),
+            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: Nm::ZERO, original: Line::new(v.net.clone(), v.layers.start(), Nm::ZERO), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, via_layer_diameters: v.layer_diameters.clone(), via_layers: v.layers, source_via: v.source_via.clone(), via_virtual: v.is_virtual, free_angle, arc: None, start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) }),
             Item::Segment(seg) => {
                 // `DRAGGER::Start`: "VVIA* vvia = checkVirtualVia( aP, seg ); if( vvia ) return startDragVia( vvia );"
                 if let Some(vvia) = check_virtual_via(node, at, seg) {
@@ -327,7 +329,7 @@ impl Dragger {
                 } else {
                     kind = DragKind::Segment;
                 }
-                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_layers: LayerRange::single(layer_of_line), source_via: None, via_virtual: false, free_angle, arc: None, start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) })
+                Some(Dragger { kind, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index: index, via_id: None, via_pos: Point { x: Nm::ZERO, y: Nm::ZERO }, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_layer_diameters: Vec::new(), via_layers: LayerRange::single(layer_of_line), source_via: None, via_virtual: false, free_angle, arc: None, start_point: at, state: DragState::default(), shove: RefCell::new(DragShove::default()) })
             }
             _ => None,
         }
@@ -406,9 +408,9 @@ impl Dragger {
         let exclude = self.exclude();
         if self.kind == DragKind::Via {
             let fanout = self.via_candidate(node, self.via_pos, to);
-            let shape = Shape::Circle { c: to, r: self.via_diameter / 2 };
-            // a virtual via collides with nothing: only its tracks can
-            let mut colliding = !self.via_virtual && node.first_colliding(&shape, &self.net, self.via_layers, rules, &exclude).is_some();
+            // a virtual via collides with nothing: only its tracks can; a padstack via asks each run of its layers with that run's diameter (`INDEX::Query( aItem )`)
+            let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, layer_diameters: self.via_layer_diameters.clone(), is_virtual: self.via_virtual };
+            let mut colliding = !self.via_virtual && via.diameter_runs(self.via_layers).into_iter().any(|(range, d)| node.first_colliding(&Shape::Circle { c: to, r: d / 2 }, &self.net, range, rules, &exclude).is_some());
             for l in &fanout {
                 colliding |= l.segs().any(|(a, b)| {
                     let shape = Shape::Stadium { a, b, r: l.width.max(Nm::new(1)) / 2 };
@@ -675,7 +677,7 @@ impl Dragger {
     fn drag_via_shove(&self, shove: &mut DragShove, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         // `reduceSpringback`'s head set is the via as the current node has it (`FindViaByHandle( theVia )`), not where the cursor is
         let from = shove.via_pos(self.via_pos);
-        let head_via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: from, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: self.via_virtual };
+        let head_via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: from, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, layer_diameters: self.via_layer_diameters.clone(), is_virtual: self.via_virtual };
         let head = HeadSet { pts: &[], net: &self.net, layer: self.layer, width: self.via_diameter, via: Some(&head_via) };
         let (parent, area) = shove.reduce(node, &head, rules);
         // the via may have sprung back to a frame below's place (`reduceSpringback` restores the handle)
@@ -753,7 +755,7 @@ impl Dragger {
     #[allow(clippy::too_many_arguments)]
     fn drag_via_walkaround(&self, world: &Node, frame: &Node, moved: Option<&World>, via_pos: Point, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
-        let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, is_virtual: false };
+        let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false, layer_diameters: self.via_layer_diameters.clone(), is_virtual: false };
         let lead = (via_pos.x - to.x, via_pos.y - to.y);
         let Some(force) = shove::via_pushout_force(frame, rules, &via, lead, crate::node::kind_mask::ANY, settings.via_force_prop_iteration_limit, &exclude) else {
             // can't force-propagate the via? bummer...
@@ -1010,7 +1012,7 @@ mod tests {
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(1_000_000, 0), b: p(2_000_000, 0), width: mm(0.4), source_track: None, locked: false }));
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(2_000_000, 0), b: p(3_000_000, 0), width: mm(0.4), source_track: None, locked: true }));
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(3_000_000, 0), b: p(4_000_000, 0), width: mm(0.4), source_track: None, locked: false }));
-        node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(4_000_000, 0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(4_000_000, 0), diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         node.fixup_virtual_vias();
         assert_eq!(count(&node, p(1_000_000, 0)), 1, "where the width changes");
         assert_eq!(count(&node, p(0, 0)), 0, "a free end");
@@ -1300,7 +1302,7 @@ mod tests {
     fn dragging_a_via_drags_its_connected_track_with_it() {
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(1.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.0), y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let mut dragger = Dragger::start(&node, Point { x: mm(1.0), y: Nm::ZERO }, via_id).expect("must start a via drag");
@@ -1326,7 +1328,7 @@ mod tests {
     fn via_across_a_gnd_track() -> (Node, Dragger) {
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: mm(-3.0), y: Nm::ZERO }, b: Point { x: Nm::ZERO, y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(4.0), y: mm(-3.0) }, b: Point { x: mm(4.0), y: mm(3.0) }, width: mm(0.2), source_track: Some(("trkB".into(), 0)), locked: false }));
         let dragger = Dragger::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, via_id).expect("a via drag");
         assert_eq!(dragger.kind, DragKind::Via);
@@ -1339,7 +1341,7 @@ mod tests {
     fn mark_obstacles_via_drag_keeps_its_tracks_at_45_degrees() {
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: Nm::ZERO, y: Nm::ZERO }, b: Point { x: mm(5.0), y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         let to = Point { x: mm(2.0), y: mm(1.3) };
@@ -1377,7 +1379,7 @@ mod tests {
         assert_eq!(removed, vec!["trkA", "trkB"]);
         // and the board it leaves is clean: nothing the router's own collision test calls a violation
         let mut after = Node::new();
-        after.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: to, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, is_virtual: false }));
+        after.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: to, diameter: mm(0.6), drill: mm(0.3), source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         for l in &commit.tracks {
             after.add_line(l, None, false);
         }
@@ -1407,7 +1409,7 @@ mod tests {
         use crate::item::Solid;
         let mut node = Node::new();
         node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: mm(-3.0), y: Nm::ZERO }, b: Point { x: Nm::ZERO, y: Nm::ZERO }, width: mm(0.2), source_track: Some(("trkA".into(), 0)), locked: false }));
-        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, is_virtual: false }));
+        let via_id = node.add(Item::Via(Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaA".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(4.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let rules = rules();
         let onto_the_pad = Point { x: mm(4.0), y: mm(0.3) };
@@ -1565,7 +1567,7 @@ mod tests {
         use crate::item::Solid;
         let mut node = Node::new();
         let ids = add_track(&mut node, "SIG", "t", &[p(0, 0), p(4_000_000, 0), p(4_000_000, 5_000_000)]);
-        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 800_000), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaM".into()), locked: false, is_virtual: false }));
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 800_000), diameter: mm(0.6), drill: mm(0.3), source_via: Some("viaM".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         // a pad above the line's path: the head is walked around it there, so it still collides with the frame's world
         node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(2_000_000, 3_600_000), shape: Shape::Circle { c: p(2_000_000, 3_600_000), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
         let rules = rules();

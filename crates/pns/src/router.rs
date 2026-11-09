@@ -1236,7 +1236,7 @@ impl Router {
         }
         for v in &commit.vias {
             let layers = LayerRange::new(self.layer_index(&v.from_layer).unwrap_or(0), self.layer_index(&v.to_layer).unwrap_or(0));
-            w.add(Item::Via(crate::item::Via { net: net_of(&v.net), layers, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false, is_virtual: false }));
+            w.add(Item::Via(crate::item::Via { net: net_of(&v.net), layers, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         }
         let mut new_ids: Vec<Vec<ItemId>> = Vec::with_capacity(commit.tracks.len());
         for (i, t) in commit.tracks.iter().enumerate() {
@@ -1369,7 +1369,7 @@ impl Router {
             .world
             .iter()
             .filter_map(|(id, it)| match it {
-                Item::Via(v) if !v.is_virtual && v.layers.overlaps(&LayerRange::single(layer)) && crate::seg_ops::length(at, v.pos) <= v.diameter / 2 => Some((crate::seg_ops::length(at, v.pos), id)),
+                Item::Via(v) if !v.is_virtual && v.layers.overlaps(&LayerRange::single(layer)) && crate::seg_ops::length(at, v.pos) <= v.diameter_on(layer) / 2 => Some((crate::seg_ops::length(at, v.pos), id)),
                 _ => None,
             })
             .min()

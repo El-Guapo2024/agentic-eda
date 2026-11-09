@@ -1801,6 +1801,11 @@ pub struct Zone {
     /// written), even after a second flip brings it back (R7-Z1). Bumped by `eda_ops`; never sent to the studio.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub flip_epoch: u32,
+    /// Whether the zone has been flipped an odd number of times since it was made (`ZONE::Flip`), so that a zone on both sides -- whose layer set a flip leaves as
+    /// it was -- has its fills on the other side's layers (`SetFilledPolysList( GetBoard()->FlipLayer( oldLayer ), shape )`) and stays filled (`SetLayerSet` of
+    /// the same set unfills nothing), where a mirror leaves each fill on its layer (UI-LEFT-2 PP10). Toggled by `eda_ops`' flip; never sent to the studio. Additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip_parity: bool,
     /// `ZONE::GetCornerSmoothingType()`.
     #[serde(default, skip_serializing_if = "ZoneSmoothing::is_none")]
     pub smoothing: ZoneSmoothing,
@@ -1920,6 +1925,7 @@ impl Default for Zone {
             hatch_offsets: std::collections::BTreeMap::new(),
             fill_epoch: 0,
             flip_epoch: 0,
+            flip_parity: false,
             smoothing: ZoneSmoothing::default(),
             corner_radius: Nm::ZERO,
             placement: Default::default(),
@@ -2477,12 +2483,80 @@ pub struct Dimension {
     /// `(text_frame N)`. The other kinds have none, and only a leader writes the token.
     #[serde(default, skip_serializing_if = "DimensionTextBorder::is_none")]
     pub text_frame: DimensionTextBorder,
+    /// The rest of the label's `EDA_TEXT` attributes (UI-LEFT-2 PP11): its width apart from its height, face, bold, italic, mirror, horizontal
+    /// justification and keep-upright, as `PCB_DIMENSION_BASE` (a `PCB_TEXT`) holds them. Additive: absent in an older `design.json` and for a
+    /// dimension that has none of them (a square, centred stroke-font label mirrored as its layer's side says) -- a branch's `Dimension { .. }`
+    /// literal takes `text_effects: Default::default()`.
+    #[serde(default, skip_serializing_if = "DimensionTextEffects::is_default")]
+    pub text_effects: DimensionTextEffects,
 }
 
 impl Dimension {
     pub(crate) fn id_seed(&self) -> String {
         format!("{:?}|{},{}|{},{}", self.kind, self.start.x, self.start.y, self.end.x, self.end.y)
     }
+
+    /// `GetTextWidth()`: the label's own width, else its height (a square label).
+    pub fn text_width_nm(&self) -> Nm {
+        self.text_effects.width_nm.unwrap_or(self.text_size_nm)
+    }
+
+    /// `IsMirrored()`: the label's own mirror, else what `DRAWING_TOOL::DrawDimension` gives a new one (`SetMirrored( m_board->IsBackLayer( layer ) )`),
+    /// which is what the writer always wrote before the flag was kept.
+    pub fn text_mirrored(&self) -> bool {
+        self.text_effects.mirrored.unwrap_or_else(|| self.layer.starts_with("B."))
+    }
+
+    /// `PCB_DIMENSION_BASE::Mirror`'s `if( IsSideSpecific() ) SetMirrored( !IsMirrored() )`, called by a flip before the layer changes: a label with a mirror
+    /// of its own on a front or back layer turns it over. One without follows its layer's side, which the flip changes along with it.
+    pub fn flip_text_mirror(&mut self) {
+        let side_specific = self.layer.starts_with("F.") || self.layer.starts_with("B.");
+        if let (Some(m), true) = (&mut self.text_effects.mirrored, side_specific) {
+            *m = !*m;
+        }
+    }
+}
+
+/// A dimension label's `EDA_TEXT` attributes past its height and pen ([`Dimension::text_size_nm`], [`Dimension::text_thickness_nm`]), each at the
+/// value a dimension without it has. `PCB_IO_KICAD_SEXPR::format( const PCB_DIMENSION_BASE* )` writes them in the label's `(gr_text .. (effects (font
+/// (face ..) (size H W) (thickness ..) (bold yes) (italic yes)) (justify left|right mirror)))` (`EDA_TEXT::Format`), and `parseDIMENSION`'s `T_gr_text`
+/// reads them back (`parsePCB_TEXT`); Dimension Properties (`DIALOG_DIMENSION_PROPERTIES::updateDimensionFromDialog`) and the Properties panel
+/// (`PCB_TEXT_DESC` / `EDA_TEXT_DESC`, inherited by `DIMENSION_DESC`) set them.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DimensionTextEffects {
+    /// `GetTextWidth()`, nm, when it is not the height (`(size H W)`'s second number).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::units::de")]
+    pub width_nm: Option<Nm>,
+    /// `(face "..")`: the outline font the label is set in; none is KiCad's stroke font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    /// `IsMirrored()` (`(justify .. mirror)`); `None` is what the layer's side gives (a back layer's label is mirrored), see [`Dimension::text_mirrored`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrored: Option<bool>,
+    /// `GetHorizJustify()` (`(justify left|right)`); centred when absent, as `PCB_DIMENSION_BASE`'s constructor leaves it.
+    #[serde(default, skip_serializing_if = "is_centre_justify")]
+    pub h_justify: TextJustify,
+    /// `IsKeepUpright()`. KiCad keeps it only in memory for a dimension: `format( const PCB_TEXT* )` writes `(unlocked ..)` for a footprint's text and
+    /// formats a dimension's label with no parent footprint, and `PCB_TEXT::GetDrawRotation` turns only a footprint text upright; the label's angle is
+    /// `updateText`'s. Kept here, never written, never drawn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_upright: bool,
+}
+
+impl DimensionTextEffects {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+fn is_centre_justify(j: &TextJustify) -> bool {
+    *j == TextJustify::Center
 }
 
 /// `PCB_DIMENSION_BASE`'s five concrete subclasses, as a tag instead of
@@ -2709,6 +2783,11 @@ pub struct DrawingsSection {
     /// older `design.json` reads as "no edits".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zone_overrides: Vec<FootprintZoneOverrides>,
+    /// The board's default zone settings (`BOARD_DESIGN_SETTINGS::GetDefaultZoneSettings`), what a new zone's dialog opens on (`ZONE_CREATE_HELPER::createNewZone`):
+    /// the settings of the zone Zone Properties was last OK'd on (`PCB_EDIT_FRAME::Edit_Zone_Params`' `SetDefaultZoneSettings( zoneInfo )`, `ZONE_SETTINGS <<
+    /// *aZone` with no net), as a zone with no outline, net or id. `None` is `ZONE_SETTINGS`' own. UI-LEFT-2 PP10. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_defaults: Option<Zone>,
     /// Explicit per-via tenting overrides (`(via ... (tenting ..))`), looked
     /// up by position+net; a via with no entry follows the board setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

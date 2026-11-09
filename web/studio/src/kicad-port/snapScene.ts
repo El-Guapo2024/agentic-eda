@@ -15,6 +15,7 @@ import { outlineContains } from "./padOutline";
 import { footprintBox } from "./footprintBox";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { hatchDistance } from "./shapeFill";
+import { viaMaxDiameter } from "./viaPadstack";
 
 export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text" | "point" | "grid";
 
@@ -341,8 +342,9 @@ export function buildScene(board: SceneBoard): SnapScene {
       owner: v.id,
       type: "via",
       layers: copper,
-      bbox: box(v.x - v.d / 2, v.y - v.d / 2, v.x + v.d / 2, v.y + v.d / 2),
-      hit: (p) => dist(p, [v.x, v.y]) <= v.d / 2,
+      // `PCB_VIA::HitTest` and its box: the widest of its layers' diameters (UI-LEFT-2 PP12)
+      bbox: box(v.x - viaMaxDiameter(v) / 2, v.y - viaMaxDiameter(v) / 2, v.x + viaMaxDiameter(v) / 2, v.y + viaMaxDiameter(v) / 2),
+      hit: (p) => dist(p, [v.x, v.y]) <= viaMaxDiameter(v) / 2,
       at: [v.x, v.y],
       d: v.d,
     });

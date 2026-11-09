@@ -137,7 +137,8 @@ fn clip_line(pts: &[Point], center: Point, inside: &dyn Fn(Point) -> bool, forwa
 fn optimise_trace_in(chain: &mut ShapeLineChain, item: &Item, layer: i32, via: bool) {
     let (center_nm, shape, layers) = match item {
         Item::Solid(s) => (s.pos, s.shape.clone(), s.layers),
-        Item::Via(v) => (v.pos, Shape::Circle { c: v.pos, r: v.diameter / 2 }, v.layers),
+        // `aVia->GetEffectiveShape( aLayer, FLASHING::ALWAYS_FLASHED )`: the line's layer's diameter
+        Item::Via(v) => (v.pos, Shape::Circle { c: v.pos, r: v.diameter_on(layer) / 2 }, v.layers),
         Item::Segment(_) | Item::Arc(_) => return,
     };
     if !layers.overlaps_layer(layer) || chain.point_count() < 2 {
@@ -182,16 +183,26 @@ pub(crate) fn line_chain_nm(line: &Line) -> ShapeLineChain {
 /// `TOPOLOGY::findLinesFromVia`: the lines of the via's net that have an end inside the via, other than the ones already `visited`.
 fn lines_from_via(world: &Node, via_id: ItemId, visited: &HashSet<ItemId>) -> Vec<Line> {
     let Some(Item::Via(via)) = world.get(via_id) else { return Vec::new() };
-    let shape = Shape::Circle { c: via.pos, r: via.diameter / 2 };
     let mut assembled: HashSet<ItemId> = HashSet::new();
     let mut out = Vec::new();
-    for id in world.overlapping(&shape, via.layers, &[via_id]) {
+    // `QueryColliding( aVia, .. )`: each run of the via's layers with its own diameter
+    let mut met: Vec<ItemId> = Vec::new();
+    for (range, d) in via.diameter_runs(via.layers) {
+        for id in world.overlapping(&Shape::Circle { c: via.pos, r: d / 2 }, range, &[via_id]) {
+            if !met.contains(&id) {
+                met.push(id);
+            }
+        }
+    }
+    for id in met {
         let Some(item) = world.get(id) else { continue };
         let Some((a, b)) = item.track_ends() else { continue };
         if !same_net(item.net(), &via.net) || visited.contains(&id) || assembled.contains(&id) {
             continue;
         }
         // "Make sure at least one anchor is inside the via pad"
+        // the via's copper on the line's layer
+        let shape = Shape::Circle { c: via.pos, r: via.diameter_on(item.layers().start()) / 2 };
         if !contains(&shape, a) && !contains(&shape, b) {
             continue;
         }
@@ -509,7 +520,7 @@ mod tests {
         let mut w = Node::new();
         w.add(pad("S", p(0, 0)));
         let a = w.add(seg("S", 0, p(0, 0), p(10_000_000, 0)));
-        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000_000, 0), diameter: mm(0.6), drill: mm(0.3), source_via: Some("via".into()), locked: false, is_virtual: false }));
+        w.add(Item::Via(Via { net: net_of("S"), layers: LayerRange::new(0, 1), pos: p(10_000_000, 0), diameter: mm(0.6), drill: mm(0.3), source_via: Some("via".into()), locked: false, layer_diameters: Vec::new(), is_virtual: false }));
         w.add(seg("S", 1, p(10_000_000, 0), p(10_000_000, 8_000_000)));
         w.add(pad_on("S", p(10_000_000, 8_000_000), LayerRange::new(0, 1)));
         let path = assemble_tuning_path(&w, a).expect("a path");

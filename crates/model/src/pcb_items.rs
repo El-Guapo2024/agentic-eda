@@ -360,6 +360,12 @@ pub struct ShapeStyle {
     /// so a shape without an entry is solid. The same enumeration a footprint's graphic has ([`crate::fp_art::FpShape::style`]). Additive (UI-LEFT P5).
     #[serde(default, skip_serializing_if = "is_solid")]
     pub line_style: crate::fp_art::LineStyle,
+    /// The holes of a polygon (`EDA_SHAPE::GetPolyShape()`'s holes: a zone with holes made a polygon by Create Polygon from Selection keeps them,
+    /// `CONVERT_TOOL::CreatePolys`' `graphic->SetPolyShape( poly )`): `Shape::Polygon::pts` is the outline, these the contours cut out of it. KiCad's file has the
+    /// outline alone (`format( const PCB_SHAPE* )`: `poly.Outline( 0 )`); the writer gives the holes as a fractured ring so kicad-cli sees the copper drawn. UI-LEFT-2 PP10.
+    /// Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<crate::ir::Point>>,
 }
 
 fn is_zero(v: &crate::ir::Nm) -> bool {
@@ -372,12 +378,12 @@ fn is_solid(s: &crate::fp_art::LineStyle) -> bool {
 impl ShapeStyle {
     /// The style of `id` that says nothing.
     pub fn empty(id: &str) -> ShapeStyle {
-        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: Nm::ZERO, solder_mask: false, solder_mask_margin: None, line_style: crate::fp_art::LineStyle::Solid }
+        ShapeStyle { id: id.to_string(), hatch: None, endings: Default::default(), net: None, corner_radius: Nm::ZERO, solder_mask: false, solder_mask_margin: None, line_style: crate::fp_art::LineStyle::Solid, holes: Vec::new() }
     }
 
     /// Says nothing beyond the shape itself: not kept.
     pub fn is_empty(&self) -> bool {
-        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == Nm::ZERO && !self.solder_mask && self.line_style == crate::fp_art::LineStyle::Solid
+        self.hatch.is_none() && self.endings.is_none() && self.net.is_none() && self.corner_radius == Nm::ZERO && !self.solder_mask && self.line_style == crate::fp_art::LineStyle::Solid && self.holes.is_empty()
     }
 }
 
@@ -517,6 +523,24 @@ impl BoardItems {
     /// Put the shape `shape_id` on the net `net` (`None`: on no net).
     pub fn set_net(&mut self, shape_id: &str, net: Option<String>) {
         self.edit_style(shape_id, |st| st.net = net);
+    }
+
+    /// The holes of the polygon `shape_id` ([`ShapeStyle::holes`]); none for any other shape.
+    pub fn holes_of(&self, shape_id: &str) -> &[Vec<crate::ir::Point>] {
+        self.shape_styles.iter().find(|st| st.id == shape_id).map_or(&[], |st| st.holes.as_slice())
+    }
+
+    pub fn set_holes(&mut self, shape_id: &str, holes: Vec<Vec<crate::ir::Point>>) {
+        self.edit_style(shape_id, |st| st.holes = holes);
+    }
+
+    /// The holes of `shape_id` moved by `f` (a move, turn, flip or mirror of the polygon: they go with its outline).
+    pub fn map_holes(&mut self, shape_id: &str, f: impl Fn(crate::ir::Point) -> crate::ir::Point) {
+        if let Some(st) = self.shape_styles.iter_mut().find(|st| st.id == shape_id) {
+            for p in st.holes.iter_mut().flatten() {
+                *p = f(*p);
+            }
+        }
     }
 
     /// Change the style of `shape_id` by `edit`, making the entry when it has none and dropping one that ends up saying nothing.

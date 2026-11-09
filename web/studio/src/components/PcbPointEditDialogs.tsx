@@ -1,9 +1,10 @@
 // The point editor's dialogs (actions/pcbPointEditSweep.ts):
 //
-//   PointEntryDialog     WX_PT_ENTRY_DIALOG ("Move Corner to Location" / "Move Midpoint to Location"): X and Y.
+//   PointEntryDialog     WX_PT_ENTRY_DIALOG ("Move Corner to Location" / "Move Midpoint to Location"): X and Y, `ABS_X_COORD` / `ABS_Y_COORD` -- counted from
+//                        Origins & Axes' origin, each axis either way (UI-LEFT-2 PP9).
 //   VertexEditorPane     PCB_VERTEX_EDITOR_PANE ("Edit Vertices", pcbnew/widgets/vertex_editor_pane.cpp): a floating table of the
 //                        selected polygon's or zone's vertices (a zone's holes' too, `CIterateWithHoles`); each edited cell is its own undo step ("Edit Vertex"), and the
-//                        table follows the selection.
+//                        table follows the selection. Its cells are `formatCoord( .., ABS_X_COORD / ABS_Y_COORD )` and `parseCoord`: through the origin transforms too.
 import { useMemo, useState } from "react";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 import { applyCommands } from "../actions/pcbSweepKit";
@@ -11,10 +12,12 @@ import { shapeToCmd } from "../kicad-port/pcbPointEdit";
 import { flatVertices, moveContourCorner, zoneContours, zoneOutlineCmd } from "../kicad-port/zonePointEditor";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DialogShell, LengthRow, lengthText, parseLength, useLengthField } from "./pcbDialogKit";
+import { useOriginTransforms } from "../state/originTransforms";
+import { fromDisplay, toDisplay } from "../kicad-port/originTransforms";
 
 export function PointEntryDialog({ title, x, y, onOk }: { title: string; x: number; y: number; onOk: (x: number, y: number) => void }) {
-  const fx = useLengthField(x);
-  const fy = useLengthField(y);
+  const fx = useLengthField(x, "abs_x");
+  const fy = useLengthField(y, "abs_y");
   const px = fx.parse();
   const py = fy.parse();
   const ok = px !== null && py !== null;
@@ -65,6 +68,7 @@ export function VertexEditorPane() {
   const dispatch = useStudioDispatch();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const item = useMemo(() => vertexItemOf(state.board, state.selection), [state.board, state.selection]);
+  const xf = useOriginTransforms();
   if (!state.pcbx.vertexEditorOpen || state.tab !== "pcb") return null;
   const units = state.units;
   const close = () => dispatch({ type: "PCBX", patch: { vertexEditorOpen: false } });
@@ -77,7 +81,9 @@ export function VertexEditorPane() {
       return rest;
     });
     if (!item) return;
-    const value = parseLength(text, units);
+    const typed = parseLength(text, units);
+    // `PCB_VERTEX_EDITOR_PANE::parseCoord`: `GetOriginTransforms().FromDisplay( displayValue, aCoordType )`
+    const value = typed === null ? null : Math.round(fromDisplay(xf, typed, axis === 0 ? "abs_x" : "abs_y"));
     if (value === null || value === item.ring[i]![axis]) return;
     const ring = item.ring.map((p) => [p[0], p[1]] as [number, number]);
     ring[i]![axis] = value;
@@ -94,7 +100,7 @@ export function VertexEditorPane() {
 
   const cell = (i: number, axis: 0 | 1) => {
     const key = `${item!.id}:${i}:${axis}`;
-    const shown = drafts[key] ?? lengthText(item!.ring[i]![axis], units);
+    const shown = drafts[key] ?? lengthText(toDisplay(xf, item!.ring[i]![axis], axis === 0 ? "abs_x" : "abs_y"), units);
     return (
       <input
         style={{ width: "100%", boxSizing: "border-box" }}

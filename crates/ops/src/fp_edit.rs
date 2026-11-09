@@ -188,20 +188,25 @@ impl Board<'_> {
         let Some(_index) = pad_index(&lib, &edit.number, nth) else {
             return Err(fail("ops_unknown_pad", &pad_ref, format!("{part} has no pad {}{}", edit.number, if nth > 1 { format!(" (#{nth})") } else { String::new() })));
         };
+        // A size or a hole of 0 is taken, as the Properties panel takes it (`PAD_DESC`: "Size X" has no validator, "Hole Size X" `PositiveIntValidator`, which
+        // refuses below 0 only); Pad Properties refuses 0 itself (`padValuesOK`, `kicad-port/fpFields.ts::padCheck`). UI-LEFT-2 PP8.
         if let Some((w, h)) = edit.size {
-            if w <= Nm::ZERO || h <= Nm::ZERO {
-                return Err(fail("ops_bad_pad", &pad_ref, "Pad size must be greater than zero."));
+            if w < Nm::ZERO || h < Nm::ZERO {
+                return Err(fail("ops_bad_pad", &pad_ref, "Pad size must not be negative."));
             }
         }
         if let Some(d) = edit.drill {
-            if d <= Nm::ZERO {
-                return Err(fail("ops_bad_pad", &pad_ref, "Hole size must be greater than zero."));
+            if d < Nm::ZERO {
+                return Err(fail("ops_bad_pad", &pad_ref, "Hole size must not be negative."));
             }
         }
         if let Some((w, h)) = edit.drill_slot {
-            if w <= Nm::ZERO || h <= Nm::ZERO {
-                return Err(fail("ops_bad_pad", &pad_ref, "Hole size must be greater than zero."));
+            if w < Nm::ZERO || h < Nm::ZERO {
+                return Err(fail("ops_bad_pad", &pad_ref, "Hole size must not be negative."));
             }
+        }
+        if edit.connector == Some(true) && edit.kind.is_some_and(|k| k != eda_model::PadKind::Smd) {
+            return Err(fail("ops_bad_pad", &pad_ref, "An edge connector pad is a surface pad: it has no hole."));
         }
         if edit.drill.is_some() && edit.drill_slot.is_some() {
             return Err(fail("ops_bad_pad", &pad_ref, "A pad has a round hole or an oblong one, not both."));
@@ -255,9 +260,9 @@ impl Board<'_> {
         if !edit.is_empty() {
             all.push(edit.clone());
         }
-        let was: BTreeSet<String> = lib.validate_pad_values().into_iter().filter_map(|c| c.hint).collect();
+        let was: BTreeSet<String> = lib.validate_pad_values_zero_size_ok().into_iter().filter_map(|c| c.hint).collect();
         let trial = patched_footprint(&lib, &all);
-        if let Some(new) = trial.validate_pad_values().into_iter().filter(|c| c.hint.as_ref().is_some_and(|h| !was.contains(h))).find(|c| c.location.as_deref().is_some_and(|l| l.ends_with(&format!("pad {}", edit.number)))) {
+        if let Some(new) = trial.validate_pad_values_zero_size_ok().into_iter().filter(|c| c.hint.as_ref().is_some_and(|h| !was.contains(h))).find(|c| c.location.as_deref().is_some_and(|l| l.ends_with(&format!("pad {}", edit.number)))) {
             return Err(fail("ops_bad_pad", &pad_ref, new.hint.unwrap_or_default()));
         }
         // `PAD::doCheckPad`: "(custom pad shape must resolve to a single polygon)" -- the anchor and the basic shapes make one piece of copper.

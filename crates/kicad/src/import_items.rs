@@ -423,6 +423,28 @@ pub(crate) fn read_dimension(d: &[Sexpr]) -> Option<Dimension> {
     } else {
         None
     };
+    // The label's other `EDA_TEXT` attributes (`parsePCB_TEXT` into the dimension, UI-LEFT-2 PP11): `(size H W)`'s width, the face, bold, italic and
+    // `(justify left|right .. mirror)`. A mirror that is the layer side's (`DrawDimension`'s `SetMirrored( IsBackLayer( layer ) )`, what a label without its
+    // own was written as) is kept as none, so a board read and written again says the same.
+    let text_effects = text
+        .map(|t| {
+            let l = crate::fp_fields::parse_layout(t, eda_model::ir::Side::Top, 0);
+            let width = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 2)).map(crate::mm_to_nm);
+            eda_model::ir::DimensionTextEffects {
+                width_nm: width.filter(|w| *w != text_size_nm),
+                face: l.face,
+                bold: l.bold,
+                italic: l.italic,
+                mirrored: (l.mirror != layer.starts_with("B.")).then_some(l.mirror),
+                h_justify: match l.halign {
+                    -1 => eda_model::ir::TextJustify::Left,
+                    1 => eda_model::ir::TextJustify::Right,
+                    _ => eda_model::ir::TextJustify::Center,
+                },
+                keep_upright: false,
+            }
+        })
+        .unwrap_or_default();
 
     Some(Dimension {
         id: String::new(),
@@ -449,5 +471,6 @@ pub(crate) fn read_dimension(d: &[Sexpr]) -> Option<Dimension> {
         text_thickness_nm,
         text_pos,
         text_frame,
+        text_effects,
     })
 }

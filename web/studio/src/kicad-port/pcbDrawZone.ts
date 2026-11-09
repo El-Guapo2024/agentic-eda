@@ -12,7 +12,7 @@
 //
 // A click on the first corner closes the outline; in the 45- and 90-degree line modes a click locks in the leader's bend and its end (two corners).
 import { addPoint, finalOutline, newPointClosesOutline, setCursorPosition, type LeaderMode, type PolyGeom, type Pt } from "./polygonGeom";
-import type { BoardState, RuleAreaFields, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, Cmd, RuleAreaFields, Zone, ZoneDefaults, ZoneSettingsFields } from "../api/types";
 import type { ZoneDrawMode } from "./pcbParityState";
 import { padById } from "./pcbItems";
 import { zoneIsOnCopper } from "./zoneLayers";
@@ -127,10 +127,53 @@ export function newZoneInitial(
   board: BoardState,
   opts: { layer: string; ruleArea: boolean; highlighted: readonly string[]; selection: readonly string[]; defaults: ZoneSettingsFields & RuleAreaFields }
 ): NewZoneSettings {
-  const settings: ZoneSettingsFields & RuleAreaFields = { ...opts.defaults, ...(opts.ruleArea ? ZONE_SETTINGS_KEEPOUTS : {}), is_rule_area: opts.ruleArea };
+  const sticky = board.drawings?.zone_defaults;
+  // `GetDefaultZoneSettings()` (UI-LEFT-2 PP10): the last OK'd zone's settings over `ZONE_SETTINGS`' own; a rule area's keep-outs are those of the last rule area
+  // (a copper zone here holds none of its own, where KiCad's carries `ZONE_SETTINGS()`' tracks, vias and pads)
+  const own = stickySettings(sticky);
+  const keepouts = sticky?.is_rule_area ? {} : ZONE_SETTINGS_KEEPOUTS;
+  const settings: ZoneSettingsFields & RuleAreaFields = { ...opts.defaults, ...own, ...(opts.ruleArea ? keepouts : {}), is_rule_area: opts.ruleArea };
   if (isCopperLayerName(opts.layer)) settings.priority = uniqueZonePriority(board.routing?.zones ?? []);
-  // A rule area takes no net (`ExportSetting`: `if( !m_isRuleArea ) aTarget.SetNetCode( m_Netcode )`).
-  return { net: opts.ruleArea ? "" : newZoneNet(board, opts.highlighted, opts.selection), layers: [opts.layer], name: "", locked: false, settings };
+  // A rule area takes no net (`ExportSetting`: `if( !m_isRuleArea ) aTarget.SetNetCode( m_Netcode )`); the name is the defaults' (`m_Name`).
+  return { net: opts.ruleArea ? "" : newZoneNet(board, opts.highlighted, opts.selection), layers: [opts.layer], name: opts.ruleArea ? "" : (sticky?.name ?? ""), locked: false, settings };
+}
+
+/** The keys of `ZONE_SETTINGS` a zone's dialog edits that the defaults carry over (`createNewZone` resets the layers and their properties, the net and the rule area flag). */
+const STICKY_KEYS = [
+  "clearance", "min_thickness", "thermal_gap", "thermal_spoke_width", "pad_connection", "priority", "island_removal_mode", "min_island_area", "fill_mode", "hatch_thickness",
+  "hatch_gap", "hatch_orientation_mdeg", "hatch_smoothing_level", "hatch_smoothing_value", "hatch_hole_min_area", "hatch_border_algorithm", "smoothing", "corner_radius",
+  "border_style", "border_hatch_pitch", "keepout_tracks", "keepout_vias", "keepout_pads", "keepout_copper_pour", "keepout_footprints",
+] as const;
+
+/** What of the board's default zone settings a new zone takes (`GetDefaultZoneSettings()` less the layers, layer properties, net and rule-area flag). */
+export function stickySettings(d: ZoneDefaults | undefined): Partial<ZoneSettingsFields & RuleAreaFields> {
+  const out: Record<string, unknown> = {};
+  if (!d) return out;
+  for (const k of STICKY_KEYS) if (d[k] !== undefined && d[k] !== null) out[k] = d[k];
+  return out as Partial<ZoneSettingsFields & RuleAreaFields>;
+}
+
+/**
+ * `PCB_EDIT_FRAME::Edit_Zone_Params`' `SetDefaultZoneSettings( zoneInfo )` after Zone Properties' OK (on a zone of the board, or Properties during a draw): the
+ * zone's settings, layers and name (`ZONE_SETTINGS << *aZone`), the net restored to none (`m_Netcode = NETINFO_LIST::ORPHANED`). 8303b2ad; 25ec2335 moved the
+ * defaults to Board Setup's Zones page.
+ */
+export function zoneDefaultsCmd(form: Partial<ZoneSettingsFields & RuleAreaFields>, layers: readonly string[], name: string): Cmd {
+  const zone: Record<string, unknown> = { net: "", layer: layers[0] ?? "F.Cu", outline: [] };
+  for (const k of STICKY_KEYS) if (form[k] !== undefined && form[k] !== null) zone[k] = form[k];
+  zone.is_rule_area = !!form.is_rule_area;
+  if (layers.length > 1) zone.layers = [...layers];
+  if (name) zone.name = name;
+  return { op: "set_zone_defaults", zone: zone as ZoneDefaults & { net: string; layer: string; outline: [] } };
+}
+
+/**
+ * `ZONE_CREATE_HELPER::createZoneFromExisting( *m_params.m_sourceZone )`: the zone Add Zone Cutout and Add Similar Zone draw, which Properties (E) during the draw
+ * opens (`OnEditItemRequest( zoneTool.GetZone() )`, UI-LEFT-2 PP10): the source's settings (`ZONE_SETTINGS << aSrcZone`), layers, net and name.
+ */
+export function zoneFromExisting(source: Zone, locked: boolean): NewZoneSettings {
+  const settings = { ...source } as unknown as ZoneSettingsFields & RuleAreaFields;
+  return { net: source.is_rule_area ? "" : source.net, layers: source.layers && source.layers.length > 0 ? [...source.layers] : [source.layer], name: source.name ?? "", locked, settings };
 }
 
 /**
@@ -156,7 +199,8 @@ export function zoneFirstCorner(mode: ZoneDrawMode | null): "ask" | "draw" {
  */
 export type ZoneCommit =
   | { kind: "cutout"; sourceId: string }
-  | { kind: "similar"; sourceId: string }
+  /** `zone`: the settings Properties (E) gave the zone being drawn (UI-LEFT-2 PP10), over the source's. */
+  | { kind: "similar"; sourceId: string; zone?: NewZoneSettings }
   | { kind: "stitch" }
   | { kind: "add"; zone: NewZoneSettings }
   | { kind: "ask" }
@@ -164,7 +208,7 @@ export type ZoneCommit =
 
 export function zoneCommitPlan(mode: ZoneDrawMode | null, sourceExists: boolean, settings: NewZoneSettings | undefined): ZoneCommit {
   if (mode?.mode === "cutout") return sourceExists ? { kind: "cutout", sourceId: mode.sourceId } : { kind: "none" };
-  if (mode?.mode === "similar") return sourceExists ? { kind: "similar", sourceId: mode.sourceId } : { kind: "none" };
+  if (mode?.mode === "similar") return sourceExists ? { kind: "similar", sourceId: mode.sourceId, ...(settings ? { zone: settings } : {}) } : { kind: "none" };
   if (mode?.mode === "stitch") return { kind: "stitch" };
   return settings ? { kind: "add", zone: settings } : { kind: "ask" };
 }

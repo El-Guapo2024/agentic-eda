@@ -56,6 +56,9 @@ export interface PointOpts {
   skip?: ReadonlySet<string>;
   /** `SetSkipPoint` / `ClearSkipPoint`: the point a line started from, which it must not snap back to. `null` clears it; left out keeps what was set. */
   skipPoint?: Pt | null;
+  /** `grid.SetUseGrid( false )` whatever the grid snapping says: `DrawDimension`'s height of a slanted aligned dimension ("Not cardinal. Grid snapping doesn't
+   *  make sense for height."). The anchors still snap. */
+  noGrid?: boolean;
 }
 
 const NO_SKIP: ReadonlySet<string> = new Set();
@@ -142,7 +145,7 @@ export class PcbSnap {
   point(tool: string, world: Pt, mods: SnapMods, opts: PointOpts = {}): Pt {
     if (!this.view) return world;
     const h = this.helperFor(tool);
-    h.setUseGrid(getGridSnapping() && !mods.ctrl);
+    h.setUseGrid(!opts.noGrid && getGridSnapping() && !mods.ctrl);
     h.setSnap(!mods.shift);
     if (opts.skipPoint === null) h.clearSkipPoint();
     else if (opts.skipPoint) h.setSkipPoint(opts.skipPoint);

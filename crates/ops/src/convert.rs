@@ -431,21 +431,23 @@ pub fn polys_from_items(design: &Design, ids: &[String], strategy: ConvertStrate
         // `case PCB_ZONE_T: poly.Append( *zone->Outline() )`: the zone's outline with its holes, each wound against the outline as a hole of a
         // `SHAPE_POLY_SET` is (a file's zone may have its holes either way round; the fracture below bridges a hole only so).
         let outline_ccw = eda_clipper2::area(&ring) > 0.0;
-        let holes: Vec<Vec<Point64>> = match item {
-            Item::Zone(z) => z
-                .holes
-                .iter()
-                .filter(|h| h.len() >= 3)
-                .map(|h| {
-                    let mut hole: Vec<Point64> = h.iter().map(|p| pt64(*p)).collect();
-                    if (eda_clipper2::area(&hole) > 0.0) == outline_ccw {
-                        hole.reverse();
-                    }
-                    hole
-                })
-                .collect(),
-            _ => Vec::new(),
+        // a polygon's holes too (`PCB_SHAPE`'s `GetPolyShape()`, `ShapeStyle::holes`: a polygon that was a zone with holes, UI-LEFT-2 PP10)
+        let src_holes: &[Vec<Point>] = match item {
+            Item::Zone(z) => z.holes.as_slice(),
+            Item::Shape(Shape::Polygon { .. }) => design.drawings.as_ref().map_or(&[][..], |d| d.board_items.holes_of(id)),
+            _ => &[],
         };
+        let holes: Vec<Vec<Point64>> = src_holes
+            .iter()
+            .filter(|h| h.len() >= 3)
+            .map(|h| {
+                let mut hole: Vec<Point64> = h.iter().map(|p| pt64(*p)).collect();
+                if (eda_clipper2::area(&hole) > 0.0) == outline_ccw {
+                    hole.reverse();
+                }
+                hole
+            })
+            .collect();
         if strategy == ConvertStrategy::BoundingHull {
             // `TransformShapeToPolygon( ..., ignoreLineWidth = false )`: the shape with its line (a filled one grown by half the width, an outline one as a ring).
             let zone = matches!(item, Item::Zone(_));

@@ -12,6 +12,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import type { Choice, PropDisplay, PropItem, PropKind, PropValue, PropertyManager } from "./propertyManager";
+import { fromDisplay, toDisplay, type CoordType, type OriginTransforms } from "./originTransforms";
 
 /** One row. `value` is null when the items of the selection differ (`SetUnspecifiedValueAppearance( "<...>" )`). */
 export interface GridRow {
@@ -25,6 +26,8 @@ export interface GridRow {
   choices: readonly Choice[] | null;
   /** A `std::optional` property: an empty cell is no value. */
   optional?: boolean;
+  /** `PROPERTY_BASE::CoordType()` of a `PT_COORD` row (absent: `NOT_A_COORD`): the cell shows and takes the value through the frame's origin transforms. */
+  coordType?: CoordType;
   /** Not KiCad's: why the row is read-only here where KiCad's is not (`PropertyDef.readOnlyReason` of the first item that gives one), shown as its tooltip. */
   note?: string;
 }
@@ -154,6 +157,7 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
       writable: got.writable,
       choices: got.choices,
       ...(property.optional ? { optional: true } : {}),
+      ...(property.coordType && property.coordType !== "not" ? { coordType: property.coordType } : {}),
       ...(got.note ? { note: got.note } : {}),
     };
     const group = property.group ?? "";
@@ -222,8 +226,16 @@ export function lengthNumber(um: number, units: LengthUnit): string {
   return trimmed(nmTo(um, units), DECIMALS[units]);
 }
 
+/**
+ * `PGPROPERTY_COORD` / `PGPROPERTY_DISTANCE::DistanceToString` (`transforms.ToDisplay( distanceIU, m_coordType )`) and `PG_UNIT_EDITOR`'s `UNIT_BINDER::SetCoordType`:
+ * a `PT_COORD` row's value as the frame's origin transforms show it (`xf` absent: the base class's, nothing changes). Only a coordinate row is turned.
+ */
+function shownCoord(row: { display: PropDisplay; coordType?: CoordType }, value: number, xf: OriginTransforms | undefined): number {
+  return xf && row.display === "coord" && row.coordType ? toDisplay(xf, value, row.coordType) : value;
+}
+
 /** The text of a cell for a value: lengths and areas with their unit (`StringFromValue( v, true )`), angles with the degree sign, a choice by its label. */
-export function formatValue(row: Pick<GridRow, "kind" | "display" | "choices">, value: PropValue, units: LengthUnit): string {
+export function formatValue(row: Pick<GridRow, "kind" | "display" | "choices" | "coordType">, value: PropValue, units: LengthUnit, xf?: OriginTransforms): string {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (row.choices && (row.kind === "enum" || row.kind === "net")) {
     const hit = row.choices.find((c) => c.value === value);
@@ -233,7 +245,7 @@ export function formatValue(row: Pick<GridRow, "kind" | "display" | "choices">, 
   switch (row.display) {
     case "size":
     case "coord":
-      return `${lengthNumber(value, units)} ${units}`;
+      return `${lengthNumber(shownCoord(row, value, xf), units)} ${units}`;
     case "area": {
       // um^2 as mm^2 (`EDA_UNIT_UTILS::UI::StringFromValue` with `EDA_DATA_TYPE::AREA`), whatever the display unit.
       return `${trimmed(value / 1e12, 4)} mm²`;
@@ -248,12 +260,12 @@ export function formatValue(row: Pick<GridRow, "kind" | "display" | "choices">, 
 }
 
 /** A cell as the text a user starts editing: the same, without the unit (typing "1.5" means the display unit). */
-export function editText(row: Pick<GridRow, "kind" | "display" | "choices">, value: PropValue, units: LengthUnit): string {
+export function editText(row: Pick<GridRow, "kind" | "display" | "choices" | "coordType">, value: PropValue, units: LengthUnit, xf?: OriginTransforms): string {
   if (typeof value === "string" || typeof value === "boolean") return String(value);
   switch (row.display) {
     case "size":
     case "coord":
-      return lengthNumber(value, units);
+      return lengthNumber(shownCoord(row, value, xf), units);
     case "area":
       return trimmed(value / 1e12, 4);
     case "degree":
@@ -271,7 +283,7 @@ const NUMBER = "[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?";
  * What the text typed into a cell means. A length takes a unit suffix (`mm`, `mil`, `in`, `"`) and means the display unit without one; an angle may end with a degree sign;
  * an integer must be whole. A string is taken as typed.
  */
-export function parseValue(row: Pick<GridRow, "kind" | "display" | "optional">, text: string, units: LengthUnit): Parsed {
+export function parseValue(row: Pick<GridRow, "kind" | "display" | "optional" | "coordType">, text: string, units: LengthUnit, xf?: OriginTransforms): Parsed {
   if (row.kind === "string") return { ok: true, value: text };
   const t = text.trim().replace(",", ".");
   // `PGPROPERTY_SIZE` of a `std::optional`: an empty cell is no value
@@ -285,7 +297,9 @@ export function parseValue(row: Pick<GridRow, "kind" | "display" | "optional">, 
       const m = new RegExp(`^(${NUMBER})\\s*(mm|mil|in|")?$`, "i").exec(t);
       if (!m) return bad("a length");
       const unit: LengthUnit = m[2] ? (m[2] === '"' ? "in" : (m[2].toLowerCase() as LengthUnit)) : units;
-      return { ok: true, value: Math.round(nmFrom(parseFloat(m[1]!), unit)) };
+      const typed = nmFrom(parseFloat(m[1]!), unit);
+      // `UNIT_BINDER::GetValue`: `m_originTransforms.FromDisplay( displayValue, m_coordType )`
+      return { ok: true, value: Math.round(xf && row.display === "coord" && row.coordType ? fromDisplay(xf, typed, row.coordType) : typed) };
     }
     case "area": {
       const m = new RegExp(`^(${NUMBER})\\s*(?:mm²|mm2)?$`, "i").exec(t);

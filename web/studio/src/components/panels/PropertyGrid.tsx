@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { editText, formatValue, parseValue, type GridModel, type GridRow } from "../../kicad-port/propertyGrid";
 import type { PropValue } from "../../kicad-port/propertyManager";
 import type { LengthUnit } from "../../state/units";
+import type { OriginTransforms } from "../../kicad-port/originTransforms";
 
 /** What a cell shows when the items of the selection differ (`SetUnspecifiedValueAppearance( wxPGCell( "<...>" ) )`). */
 export const UNSPECIFIED = "<...>";
@@ -34,13 +35,15 @@ function unitSuffix(row: Pick<GridRow, "kind" | "display">, units: LengthUnit): 
 export interface PropertyGridProps {
   model: GridModel;
   units: LengthUnit;
+  /** The frame's origin transforms (`GetOriginTransforms()`), which the `PT_COORD` rows are shown and typed through; absent: none (the base class's). */
+  xf?: OriginTransforms;
   /** Applies an edit of the property `name` to the selection; resolves to the message of a refusal, or null when it was applied. */
   onCommit: (name: string, value: PropValue) => Promise<string | null>;
   /** Changes whenever the selection does, so a message about the old selection goes. */
   selectionKey: string;
 }
 
-export function PropertyGrid({ model, units, onCommit, selectionKey }: PropertyGridProps) {
+export function PropertyGrid({ model, units, xf, onCommit, selectionKey }: PropertyGridProps) {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => setError(null), [selectionKey]);
 
@@ -60,7 +63,7 @@ export function PropertyGrid({ model, units, onCommit, selectionKey }: PropertyG
         <div key={g.name} className="prop-group" data-group={g.caption}>
           <div className="prop-group-caption">{g.caption}</div>
           {g.rows.map((r) => (
-            <PropertyRow key={r.name} row={r} units={units} commit={commit} fail={setError} />
+            <PropertyRow key={r.name} row={r} units={units} xf={xf} commit={commit} fail={setError} />
           ))}
         </div>
       ))}
@@ -71,6 +74,7 @@ export function PropertyGrid({ model, units, onCommit, selectionKey }: PropertyG
 interface RowProps {
   row: GridRow;
   units: LengthUnit;
+  xf?: OriginTransforms;
   commit: (name: string, value: PropValue) => Promise<void>;
   fail: (message: string) => void;
 }
@@ -88,23 +92,23 @@ function focusNext(from: HTMLElement): void {
   }
 }
 
-function PropertyRow({ row, units, commit, fail }: RowProps) {
+function PropertyRow({ row, units, xf, commit, fail }: RowProps) {
   const mixed = row.value === null;
   return (
     // A row the studio cannot edit where KiCad can says why in its tooltip (`GridRow.note`).
     <div className={`prop-row${row.writable ? "" : " readonly"}`} data-prop={row.name} data-note={row.note} title={row.note ? `${row.name}: ${row.note}` : row.name}>
       <span className="prop-label">{row.name}</span>
-      <div className="prop-value">{row.writable ? <Editor row={row} units={units} commit={commit} fail={fail} /> : <ReadOnly row={row} units={units} mixed={mixed} />}</div>
+      <div className="prop-value">{row.writable ? <Editor row={row} units={units} xf={xf} commit={commit} fail={fail} /> : <ReadOnly row={row} units={units} xf={xf} mixed={mixed} />}</div>
     </div>
   );
 }
 
-function ReadOnly({ row, units, mixed }: { row: GridRow; units: LengthUnit; mixed: boolean }) {
+function ReadOnly({ row, units, xf, mixed }: { row: GridRow; units: LengthUnit; xf?: OriginTransforms; mixed: boolean }) {
   if (mixed) return <span className="prop-ro">{UNSPECIFIED}</span>;
   const value = row.value as PropValue;
   if (row.kind === "bool") return <input type="checkbox" checked={value === true} disabled readOnly aria-label={row.name} />;
   if (row.kind === "color") return value === "" ? <span className="prop-ro">default</span> : <span className="prop-swatch" style={{ background: String(value) }} title={String(value)} />;
-  const text = formatValue(row, value, units);
+  const text = formatValue(row, value, units, xf);
   return (
     <span className="prop-ro" title={row.note ? `${text} (${row.note})` : text}>
       {text}
@@ -112,7 +116,7 @@ function ReadOnly({ row, units, mixed }: { row: GridRow; units: LengthUnit; mixe
   );
 }
 
-function Editor({ row, units, commit, fail }: RowProps) {
+function Editor({ row, units, xf, commit, fail }: RowProps) {
   switch (row.kind) {
     case "bool":
       return <BoolEditor row={row} commit={commit} />;
@@ -122,7 +126,7 @@ function Editor({ row, units, commit, fail }: RowProps) {
     case "color":
       return <ColorEditor row={row} commit={commit} />;
     default:
-      return <TextEditor row={row} units={units} commit={commit} fail={fail} />;
+      return <TextEditor row={row} units={units} xf={xf} commit={commit} fail={fail} />;
   }
 }
 
@@ -228,9 +232,9 @@ function ColorEditor({ row, commit }: Pick<RowProps, "row" | "commit">) {
   );
 }
 
-function TextEditor({ row, units, commit, fail }: RowProps) {
+function TextEditor({ row, units, xf, commit, fail }: RowProps) {
   const mixed = row.value === null;
-  const initial = mixed ? "" : editText(row, row.value as PropValue, units);
+  const initial = mixed ? "" : editText(row, row.value as PropValue, units, xf);
   const [draft, setDraft] = useState(initial);
   // After an edit the draft is whatever the board says: the new value when it was applied, the old one when it was refused. `settled` re-runs the sync.
   const [settled, setSettled] = useState(0);
@@ -250,7 +254,7 @@ function TextEditor({ row, units, commit, fail }: RowProps) {
       return;
     }
     if (sent.current === draft || draft === initial || (mixed && draft.trim() === "")) return;
-    const parsed = parseValue(row, draft, units);
+    const parsed = parseValue(row, draft, units, xf);
     if (!parsed.ok) {
       fail(`${row.name}: ${parsed.error}`);
       setSettled((n) => n + 1);

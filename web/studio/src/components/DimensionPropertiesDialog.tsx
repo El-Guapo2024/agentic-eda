@@ -13,17 +13,26 @@
 // Not ported: changing a dimension's kind after creation (source has no
 // such control either -- each kind is a different drawing tool); the interactive centre-point/
 // -item picker buttons (plain numeric X/Y fields instead, same convention
-// every other dialog in this app already uses); the text's justification,
-// bold, italic, mirror and font (the IR has no field for them).
+// every other dialog in this app already uses).
+//
+// The "Dimension Text" box's Font, Width, Height, Thickness and its row of Bold, Italic, the three alignments and Mirrored (UI-LEFT-2 PP11) are the
+// label's own looks (`Dimension::text_effects`, kicad-port/dimensionLabel.ts): `TransferDataToWindow` shows them, the Bold button sets the thickness to the
+// bold or normal pen (`onBoldToggle`), a thickness typed in sets Bold (`onThickness`), the stroke font shows the thickness and an outline face hides it
+// (`onFontSelected`), and OK writes them (`updateDimensionFromDialog`).
 //
 // The form is one for both editors (`DIALOG_DIMENSION_PROPERTIES` is opened by the board editor's and the footprint editor's `OnEditItemRequest`): the board's dialog is
 // `DimensionPropertiesDialog` below, the Footprint Editor's components/footprint/FpItemDialogs.tsx, each a host of `DimensionPropertiesForm`.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DIM_PRECISION_CHOICES, toCmdDimension } from "../kicad-port/dimensionConvert";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
-import type { ArrowDirection, CmdDimension, CmdDimensionKind, Dimension, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
+import type { ArrowDirection, CmdDimension, CmdDimensionKind, Dimension, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TextJustify } from "../api/types";
+import { boldToggled, fontPicked, labelLooksOf, thicknessTyped, withLabelLooks, type DimensionLabelLooks } from "../kicad-port/dimensionLabel";
+import { KICAD_FONT } from "../kicad-port/textLooks";
+import { FontSelect, useFontFamilies } from "./TextLookControls";
+import { fetchDimensionPreview } from "../api/dimensionPreview";
+import { coordField, coordValue, useOriginTransforms } from "../state/originTransforms";
 
 /** What the form needs from the editor it is open in. */
 export interface DimensionHost {
@@ -45,6 +54,7 @@ export function DimensionPropertiesDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
+  if (state.pcbx.dimensionDrawDialog) return <DimensionDrawDialog />;
   const id = state.dimensionEditId;
   const dim = id ? api.dimensionById(id) : undefined;
   if (!id || !dim) return null;
@@ -58,6 +68,52 @@ export function DimensionPropertiesDialog() {
     submit: (cmd) => api.cmd({ op: "edit_dimension", id, dimension: cmd }),
     remove: () => api.cmd({ op: "delete_dimension", id }),
     close: () => dispatch({ type: "SET_DIMENSION_EDIT_ID", id: null }),
+  };
+  return <DimensionPropertiesForm host={host} />;
+}
+
+/**
+ * E while Draw Dimension has a dimension going (`DRAWING_TOOL::DrawDimension`: `frame()->OnEditItemRequest( dimension ); dimension->Update(); ...; break;`): the dialog on the
+ * dimension being drawn, as the preview shows it. The `break` leaves the tool's event loop once the dialog is closed, OK or Cancel, and the code after the loop deletes a
+ * dimension that was not finished (`if( step != SET_ORIGIN ) delete dimension`): nothing is added, and the tool is done (25ec2335's `SCOPED_TOOL_PUSHER` pops it; 8303b2ad
+ * leaves it on the stack, inactive). No undo step is made (KiCad's dialog pushes an "Edit Dimension Properties" commit for an item the board does not hold).
+ */
+function DimensionDrawDialog() {
+  const state = useStudioState();
+  const dispatch = useStudioDispatch();
+  const draw = state.drawState?.kind === "dimension" ? state.drawState.dim : null;
+  const [dim, setDim] = useState<Dimension | null>(null);
+  useEffect(() => {
+    if (draw) void fetchDimensionPreview(draw.dim).then((d) => setDim(d));
+    // the dimension as it was when E was pressed
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const end = () => {
+    dispatch({ type: "PCBX", patch: { dimensionDrawDialog: false } });
+    dispatch({ type: "SET_DRAW_STATE", draw: null });
+    dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+  };
+  // the dimension went (Escape): the dialog has nothing to show
+  useEffect(() => {
+    if (!draw) dispatch({ type: "PCBX", patch: { dimensionDrawDialog: false } });
+  }, [draw, dispatch]);
+  if (!draw || !dim) return null;
+  const layerSetup = state.board?.board_rules?.layer_setup;
+  const host: DimensionHost = {
+    dim,
+    base: () => draw.dim,
+    units: state.units,
+    layers: boardLayerList(state.board?.layers ?? [], layerSetup),
+    layerName: (l) => layerDisplayName(layerSetup, l),
+    submit: async () => {
+      end();
+      return false;
+    },
+    remove: async () => {
+      end();
+      return false;
+    },
+    close: end,
   };
   return <DimensionPropertiesForm host={host} />;
 }
@@ -83,14 +139,18 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
   const [precision, setPrecision] = useState(4);
   const [suppressZeros, setSuppressZeros] = useState(true);
   const [textPosition, setTextPosition] = useState<DimensionTextPosition>("outside");
-  // `m_textPosX` / `m_textPosY`: the text's place, editable in the Manual position mode only (`allowPositioning`).
+  // `m_textPosX` / `m_textPosY`: the text's place, editable in the Manual position mode only (`allowPositioning`); `ABS_X_COORD` / `ABS_Y_COORD`, so counted
+  // from Origins & Axes' origin, each axis either way (UI-LEFT-2 PP9).
   const [textPosX, setTextPosX] = useState(0);
   const [textPosY, setTextPosY] = useState(0);
+  const xf = useOriginTransforms();
   // A leader's "Text frame:" (`m_cbTextFrame`: None, Rectangle, Circle; `DIM_TEXT_BORDER`).
   const [textFrame, setTextFrame] = useState<DimensionTextBorder>("none");
   const [keepAligned, setKeepAligned] = useState(true);
   const [textAngle, setTextAngle] = useState(0);
-  const [textSize, setTextSize] = useState(0);
+  // The label's own looks in the dialog's units (Width, Height, Thickness) and the rest as they are (kicad-port/dimensionLabel.ts).
+  const [looks, setLooks] = useState<DimensionLabelLooks>(() => labelLooksOf(dim));
+  const families = useFontFamilies();
   const [strokeWidth, setStrokeWidth] = useState(0);
   const [arrowLength, setArrowLength] = useState(0);
   const [extensionOffset, setExtensionOffset] = useState(0);
@@ -120,12 +180,12 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
     setPrecision(dim.precision);
     setSuppressZeros(dim.suppress_trailing_zeros);
     setTextPosition(dim.text_position);
-    setTextPosX(nmTo(dim.text_at[0], unit));
-    setTextPosY(nmTo(dim.text_at[1], unit));
+    setTextPosX(coordField(xf, dim.text_at[0], "abs_x", unit));
+    setTextPosY(coordField(xf, dim.text_at[1], "abs_y", unit));
     setTextFrame(dim.text_frame ?? "none");
     setKeepAligned(dim.keep_text_aligned);
     setTextAngle(dim.text_angle / 1000);
-    setTextSize(nmTo(dim.text_size_nm, unit));
+    setLooks(labelLooksOf(dim));
     setStrokeWidth(nmTo(dim.stroke_width, unit));
     setArrowLength(nmTo(dim.arrow_length, unit));
     setExtensionOffset(nmTo(dim.extension_offset, unit));
@@ -164,7 +224,7 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
       cmd.suppress_trailing_zeros = suppressZeros;
       cmd.text_position = textPosition;
       // `if( tpm == DIM_TEXT_POSITION::MANUAL ) aTarget->SetTextPos( pos )`: the place is the dialog's only in the manual mode.
-      if (textPosition === "manual" && dim.kind !== "leader") cmd.text_pos = { x: Math.round(nmFrom(textPosX, unit)), y: Math.round(nmFrom(textPosY, unit)) };
+      if (textPosition === "manual" && dim.kind !== "leader") cmd.text_pos = { x: Math.round(coordValue(xf, textPosX, "abs_x", unit)), y: Math.round(coordValue(xf, textPosY, "abs_y", unit)) };
       // `leader->SetTextBorder( static_cast<DIM_TEXT_BORDER>( m_cbTextFrame->GetSelection() ) )`
       if (dim.kind === "leader") {
         if (textFrame === "none") delete cmd.text_frame;
@@ -172,7 +232,9 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
       }
       cmd.keep_text_aligned = keepAligned;
       cmd.text_angle = Math.round(textAngle * 1000);
-      cmd.text_size_nm = Math.round(nmFrom(textSize, unit));
+      // `SetTextWidth`, `SetTextHeight`, `SetTextThickness`, `SetFont` (a face the list lacks is kept: `HaveFontSelection`), `SetBold`, `SetItalic`,
+      // `SetHorizJustify`, `SetMirrored`; keep-upright (no row here) rides through
+      Object.assign(cmd, withLabelLooks({ ...cmd, layer }, looks));
       cmd.stroke_width = Math.round(nmFrom(strokeWidth, unit));
       cmd.arrow_length = Math.round(nmFrom(arrowLength, unit));
       cmd.extension_offset = Math.round(nmFrom(extensionOffset, unit));
@@ -330,8 +392,47 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
                 <span />
                 <span>Text angle (&deg;, clockwise)</span>
                 <input type="number" step="any" value={textAngle} disabled={keepAligned} onChange={(e) => setTextAngle(Number(e.target.value))} />
-                <span>Text size ({unit})</span>
-                <input type="number" step="any" value={textSize} onChange={(e) => setTextSize(Number(e.target.value))} />
+              </div>
+              <div style={{ fontWeight: 600, fontSize: 11, marginTop: 10, marginBottom: 4 }}>Dimension Text</div>
+              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr", rowGap: 6 }}>
+                <span>Font:</span>
+                <FontSelect
+                  families={families}
+                  current={looks.face}
+                  value={looks.face ?? KICAD_FONT}
+                  withDefault={false}
+                  onChange={(f) => setLooks((l) => fontPicked(l, f === KICAD_FONT ? null : f))}
+                />
+                <span title="Text width">Width: ({unit})</span>
+                <input type="number" step="any" title="Text width" data-testid="dim-text-width" value={nmTo(looks.widthNm, unit)} onChange={(e) => setLooks((l) => ({ ...l, widthNm: Math.round(nmFrom(Number(e.target.value), unit)) }))} />
+                <span title="Text height">Height: ({unit})</span>
+                <input type="number" step="any" title="Text height" data-testid="dim-text-height" value={nmTo(looks.heightNm, unit)} onChange={(e) => setLooks((l) => ({ ...l, heightNm: Math.round(nmFrom(Number(e.target.value), unit)) }))} />
+                {/* `onFontSelected`: `m_textThickness.Show( IsStroke )` -- an outline face's weight is its own */}
+                {!looks.face && (
+                  <>
+                    <span title="Text thickness">Thickness: ({unit})</span>
+                    <input type="number" step="any" title="Text thickness" data-testid="dim-text-thickness" value={nmTo(looks.thicknessNm, unit)} onChange={(e) => setLooks((l) => thicknessTyped(l, Math.round(nmFrom(Number(e.target.value), unit))))} />
+                  </>
+                )}
+                <span />
+                <span style={{ display: "flex", gap: 4, alignItems: "center" }} data-testid="dim-text-style">
+                  <TextToggle label="Bold" glyph={<b>B</b>} checked={looks.bold} testId="dim-bold" onChange={(b) => setLooks((l) => boldToggled(l, b))} />
+                  <TextToggle label="Italic" glyph={<i>I</i>} checked={looks.italic} testId="dim-italic" onChange={(i) => setLooks((l) => ({ ...l, italic: i }))} />
+                  <span style={{ width: 8 }} />
+                  {(["left", "center", "right"] as TextJustify[]).map((j) => (
+                    <TextToggle
+                      key={j}
+                      label={j === "left" ? "Align left" : j === "center" ? "Align horizontal center" : "Align right"}
+                      glyph={j === "left" ? "\u21E4" : j === "center" ? "\u2194" : "\u21E5"}
+                      checked={looks.hJustify === j}
+                      testId={`dim-align-${j}`}
+                      // `onAlignButton`: the three are radio buttons
+                      onChange={() => setLooks((l) => ({ ...l, hJustify: j }))}
+                    />
+                  ))}
+                  <span style={{ width: 8 }} />
+                  <TextToggle label="Mirrored" glyph={"\u21C4"} checked={looks.mirrored} testId="dim-mirrored" onChange={(m) => setLooks((l) => ({ ...l, mirrored: m }))} />
+                </span>
               </div>
             </>
           )}
@@ -380,5 +481,22 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** One of the "Dimension Text" box's bitmap toggle buttons (`BITMAP_BUTTON::SetIsCheckButton` / `SetIsRadioButton`): pressed while `checked`. */
+function TextToggle({ label, glyph, checked, onChange, testId }: { label: string; glyph: ReactNode; checked: boolean; onChange: (v: boolean) => void; testId: string }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={checked}
+      data-testid={testId}
+      onClick={() => onChange(!checked)}
+      style={{ minWidth: 26, padding: "1px 4px", fontWeight: checked ? 700 : 400, background: checked ? "var(--accent-bg, #3a5f8f)" : undefined, color: checked ? "#fff" : undefined }}
+    >
+      {glyph}
+    </button>
   );
 }

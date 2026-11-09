@@ -12,6 +12,7 @@ import type { Dispatch } from "react";
 import { inlineDragBegin, inlineDragEnd, type DragDrawState, type GroupDragTarget, type InlineDragContext } from "../../kicad-port/dragTool";
 import { pickSelectionCandidates, type SelectionFilter } from "./selectionCandidates";
 import { askConfirm } from "../library/libraryDialogs";
+import { viaMaxDiameter } from "../../kicad-port/viaPadstack";
 
 export interface DraggableHit {
   kind: "track" | "via";
@@ -152,7 +153,8 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
     net: track?.net ?? via?.net ?? null,
     layer: track?.layer ?? hit.layer,
     width: track?.width ?? 0,
-    viaDiameter: via?.d,
+    // the dragged via's preview at its widest diameter (`ROUTER_PREVIEW_ITEM`: `largestDiameter` over its unique layers)
+    viaDiameter: via ? viaMaxDiameter(via) : undefined,
     virtualVia: preview.virtual_via ?? false,
     lineTracks: preview.line_tracks ?? [],
     pts: preview.pts,

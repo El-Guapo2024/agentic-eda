@@ -704,7 +704,7 @@ impl LinePlacer {
 
     /// `makeVia( pos )`: a via of the pending size on the layers from the current one to the one the route goes on to (or the span [`Self::via_span`] names).
     fn make_via(&self, pos: Point) -> crate::item::Via {
-        crate::item::Via { net: self.net.clone(), layers: self.via_layers(self.via_to_layer.unwrap_or(self.current_layer)), pos, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false }
+        crate::item::Via { net: self.net.clone(), layers: self.via_layers(self.via_to_layer.unwrap_or(self.current_layer)), pos, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false }
     }
 
     /// Via placement for the pending via at the head's end (`LINE_PLACER::buildInitialLine`'s via part): put it at `at` and,
@@ -727,7 +727,7 @@ impl LinePlacer {
         if settings.mode == Mode::MarkObstacles {
             return at;
         }
-        let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, is_virtual: false };
+        let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         let start = self.fixed_start();
         let lead = (at.x - start.x, at.y - start.y);
         match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {

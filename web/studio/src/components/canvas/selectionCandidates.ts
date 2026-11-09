@@ -25,6 +25,7 @@ import { objectOn } from "../../kicad-port/appearance";
 import { isAnyFill } from "../../kicad-port/shapeFill";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { zonePickLayer } from "../../kicad-port/zoneLayers";
+import { zoneFillHit } from "../../kicad-port/zonePickFill";
 import { extraHitDistance, extraItems, type ExtraKind } from "../../kicad-port/pcbExtraItems";
 import { gridArea } from "../../kicad-port/gridItem";
 import { stitchArea } from "../../kicad-port/viaStitch";
@@ -35,6 +36,7 @@ import { fieldStrokes, textBoxDistance, textHitSlop } from "../../kicad-port/tex
 import { ARC_LOW_DEF_NM } from "../../kicad-port/coverage";
 import { boardTextAsField, strokeRings, strokesBoxRing, textCoverageArea } from "../../kicad-port/textCoverage";
 import { padCopperRings, padCoverageArea, padHitDistance as padShapeDistance, type PadLike } from "../../kicad-port/padHit";
+import { viaMaxDiameter } from "../../kicad-port/viaPadstack";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field" | "fptext" | "table" | "tablecell" | ExtraKind;
 
@@ -396,7 +398,8 @@ export function collectSelectionCandidates(
     consider("track", t.id, d, Math.max(t.width * t.width, 1), t.layer);
   }
   for (const v of board.routing?.vias ?? []) {
-    const d = Math.hypot(xNm - v.x, yNm - v.y) - v.d / 2;
+    // `PCB_VIA::HitTest`: within any of its layers' diameters (`ForEachUniqueLayer`), the widest
+    const d = Math.hypot(xNm - v.x, yNm - v.y) - viaMaxDiameter(v) / 2;
     // pcb_selection_tool.cpp: vias are artificially shrunk to their
     // drill radius squared (not pi*r^2) so they never out-rank a short
     // track segment passing under them.
@@ -408,7 +411,9 @@ export function collectSelectionCandidates(
     // `PCB_COLLECTOR::Inspect`: a zone is hit on a side of its outline or of one of its holes (`HitTestForCorner( accuracy * 2 ) || HitTestForEdge( accuracy )`,
     // every contour), or inside its area -- inside the outline and in none of its holes (`zoneContainsPoint`, standing in for `HitTestFilledArea`, which
     // reads the fill; a rule area's is `m_Poly->Contains`). A click deep in a hole is outside the zone: its slop is the distance to the hole's side.
-    const inside = zoneContainsPoint(z, xNm, yNm);
+    // UI-LEFT-2 PP10: a pour is hit inside where it is filled on a visible layer (`HitTestFilledArea`), and only when fills are shown filled -- an unfilled pour by
+    // its outline alone; a rule area anywhere inside (kicad-port/zonePickFill.ts). Before the fills are known, its inside.
+    const inside = z.is_rule_area ? zoneContainsPoint(z, xNm, yNm) : (zoneFillHit(z, xNm, yNm, layerVisible) ?? zoneContainsPoint(z, xNm, yNm));
     const edgeDist = zoneEdgeDistance(z, xNm, yNm);
     // Zone borders are deliberately treated as "small" (source: "Zone
     // borders are very specific, so make them small") so clicking right
@@ -608,7 +613,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("track", t.id, [x0 - half, y0 - half, x1 + half, y1 + half], t.layer);
   }
   for (const v of board.routing?.vias ?? []) {
-    const r = v.d / 2;
+    const r = viaMaxDiameter(v) / 2;
     consider("via", v.id, [v.x - r, v.y - r, v.x + r, v.y + r], null);
   }
   for (const z of board.routing?.zones ?? []) {
@@ -754,7 +759,7 @@ export function footprintCoverageRatio(board: BoardState, ref: string, pool: rea
       }
       case "via": {
         const v = board.routing?.vias.find((x) => x.id === c.id);
-        if (v) covered.push(circleRing(v.x, v.y, v.d / 2));
+        if (v) covered.push(circleRing(v.x, v.y, viaMaxDiameter(v) / 2));
         break;
       }
       case "textbox":

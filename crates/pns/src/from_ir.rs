@@ -131,7 +131,9 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
 
     for v in &drc_board.vias {
         let layer_range = layers.range_of(&v.from_layer, &v.to_layer);
-        node.add(Item::Via(Via { net: v.net.as_deref().map(&mut net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: locked.contains(v.id.as_str()), is_virtual: false }));
+        // `syncVia`: a padstack that is not a normal one gives the via each unique layer's diameter (`via->SetDiameter( layer, aVia->GetWidth( layer ) )`)
+        let layer_diameters = via_layer_diameters(v, layer_range, &layers);
+        node.add(Item::Via(Via { net: v.net.as_deref().map(&mut net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: locked.contains(v.id.as_str()), layer_diameters, is_virtual: false }));
     }
 
     add_board_outline(&mut node, &drc_board, &layers);
@@ -145,6 +147,15 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
     node.fixup_virtual_vias();
 
     (node, layers)
+}
+
+/// `PNS_KICAD_IFACE_BASE::syncVia`'s diameters of a board via whose padstack is front/inner/back or custom: each layer of its span whose diameter
+/// (`PCB_VIA::GetWidth( layer )`) is not the front's, by router layer. Empty for a normal stack.
+pub fn via_layer_diameters(v: &eda_drc::board::DrcVia, span: crate::layer::LayerRange, layers: &LayerMap) -> Vec<(i32, eda_model::units::Nm)> {
+    if v.padstack.is_none() {
+        return Vec::new();
+    }
+    span.iter().map(|i| (i, v.width_on(layers.name_of(i)))).filter(|&(_, d)| d != v.diameter).collect()
 }
 
 /// The ids of the tracks, arcs and vias the router treats as locked (`ITEM::IsLocked`, `MK_LOCKED`: `PNS_KICAD_IFACE_BASE::syncTrack`, `syncArc`, `syncVia`): the
@@ -692,6 +703,27 @@ mod tests {
     /// segments is asked segment by segment -- each a dummy track of the line's width -- and the smallest clearance is the line's. Here a rule gives
     /// 0.05 mm to a track that crosses the rule area Z, which only the line's second segment does: the whole line has 0.05 mm. (It was asked by its
     /// first segment, 0.2 mm.) Without a rule on shapes the line is one dummy from its first point to its last.
+    /// UI-LEFT-2 PP12: `syncVia` gives a via whose padstack is front/inner/back each inner layer's diameter (`SetDiameter( layer, GetWidth( layer ) )`).
+    #[test]
+    fn a_vias_padstack_gives_the_router_each_layers_diameter() {
+        use eda_model::via_extra::{ViaExtra, ViaPadstack};
+        let (mut design, mut model) = two_pad_board();
+        model.board.layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"].iter().map(|s| s.to_string()).collect();
+        design.routing.as_mut().unwrap().vias.push(eda_model::ir::Via { id: "v1".into(), net: "N1".into(), at: Point { x: mm(5.0), y: Nm::ZERO }, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        let mut extra = ViaExtra { id: "v1".into(), ..Default::default() };
+        let stack = ViaPadstack { mode: eda_model::padstack::PadStackMode::FrontInnerBack, sizes: [("Inner".to_string(), mm(1.0)), ("B.Cu".to_string(), mm(0.8))].into_iter().collect() };
+        extra.set_padstack(Some(&stack), mm(0.6), &model.board.layers);
+        design.drawings = Some(eda_model::ir::DrawingsSection { via_extras: vec![extra], ..Default::default() });
+        let (node, _) = build_node(&design, &model);
+        let via = node.iter().find_map(|(_, it)| match it {
+            Item::Via(v) => Some(v.clone()),
+            _ => None,
+        });
+        let via = via.expect("the via is in the world");
+        assert_eq!(via.layer_diameters, vec![(1, mm(1.0)), (2, mm(1.0)), (3, mm(0.8))]);
+        assert_eq!((via.diameter_on(0), via.diameter_on(2), via.diameter_on(3)), (mm(0.6), mm(1.0), mm(0.8)));
+    }
+
     #[test]
     fn a_line_is_asked_segment_by_segment_by_a_rule_on_shapes() {
         use crate::rule_resolver::Side;
@@ -1015,6 +1047,7 @@ mod tests {
             text_position: DimensionTextPosition::Outside, keep_text_aligned: false, text_angle: 0, text_size_nm: mm(1.0), stroke_width: mm(0.1), arrow_length: mm(1.0),
             extension_offset: mm(0.5), extension_height: mm(0.5), arrow_direction: ArrowDirection::Outward, text_thickness_nm: None, text_pos: Some(pt(35.0, 15.0)),
             text_frame: frame,
+            text_effects: Default::default(),
         };
         let (c, r) = eda_connectivity::dimension::compute_dimension_geometry(&leader(DimensionTextBorder::Circle)).circles[0];
         // a short track across the top of the circle, well above the text

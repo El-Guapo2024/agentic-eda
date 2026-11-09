@@ -308,8 +308,9 @@ function registerDrillMap(pm: PM, add: Add): void {
   const GROUP = "Drill Map Properties";
   const own = (i: PcbItem): BoardDrillMap => i.drillMap!;
   const edit = (i: PcbItem, next: BoardDrillMap): Cmd[] => (JSON.stringify(next) === JSON.stringify(own(i)) ? [] : [{ op: "pcb_item", verb: "edit_drill_map", id: own(i).id, map: next }]);
-  add({ owner: "PCB_DRILL_MAP", name: "Offset X", kind: "int", display: "size", get: (i) => own(i).offset.x, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, x: Math.round(num(v)) } }) }, GROUP);
-  add({ owner: "PCB_DRILL_MAP", name: "Offset Y", kind: "int", display: "size", get: (i) => own(i).offset.y, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, y: Math.round(num(v)) } }) }, GROUP);
+  // `PT_COORD` with `REL_X_COORD` / `REL_Y_COORD` (KiCad 25ec2335): "Relative, not absolute" -- only the axis directions of Origins & Axes turn them
+  add({ owner: "PCB_DRILL_MAP", name: "Offset X", kind: "int", display: "coord", coordType: "rel_x", get: (i) => own(i).offset.x, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, x: Math.round(num(v)) } }) }, GROUP);
+  add({ owner: "PCB_DRILL_MAP", name: "Offset Y", kind: "int", display: "coord", coordType: "rel_y", get: (i) => own(i).offset.y, set: (i, v) => edit(i, { ...own(i), offset: { ...own(i).offset, y: Math.round(num(v)) } }) }, GROUP);
   add({ owner: "PCB_DRILL_MAP", name: "Symbol Size", kind: "int", display: "size", get: (i) => own(i).size_nm, set: (i, v) => edit(i, { ...own(i), size_nm: Math.max(1, Math.round(num(v))) }) }, GROUP);
   const spans = (c: PcbCtx) => c.board.drawings?.drill_spans ?? [];
   add(

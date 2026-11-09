@@ -36,6 +36,7 @@ import { useActionRunner } from "../actions/useActionRunner";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, nmFrom, nmTo } from "../state/units";
+import { coordField, coordValue, useOriginTransforms } from "../state/originTransforms";
 import { bodyCmds, bodyDraftOf, bodyDraftProblem, boardModelsCmds, tabRows, type BodyDraft, type ModelRow } from "../kicad-port/fpModels";
 import { fpOrientation } from "../kicad-port/pcbProperties";
 import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
@@ -63,6 +64,7 @@ export function FootprintPropertiesDialog() {
   const open = state.footprintPropertiesOpen;
   const board = state.board;
   const units = state.units;
+  const xf = useOriginTransforms();
 
   // The footprint the selection stands for: the footprint itself, or the one a selected pad or field belongs to (`GetParentFootprint`).
   const first = [...state.selection][0];
@@ -147,6 +149,10 @@ export function FootprintPropertiesDialog() {
   /** A length cell: the value in the current unit, written back in um. */
   const lengthCell = (um: number, onChange: (um: number) => void, width = 62) => (
     <input type="number" step="any" value={Number(nmTo(um, units).toFixed(4))} onChange={(e) => onChange(Math.round(nmFrom(num(e.target.value, nmTo(um, units)), units)))} style={{ width }} />
+  );
+  // Position X / Y are `ABS_X_COORD` / `ABS_Y_COORD` (`m_posX.SetCoordType`): counted from Origins & Axes' origin, each axis either way (UI-LEFT-2 PP9).
+  const coordCell = (um: number, onChange: (um: number) => void, type: "abs_x" | "abs_y", aria: string) => (
+    <input type="number" step="any" aria-label={aria} value={Number(coordField(xf, um, type, units).toFixed(4))} onChange={(e) => onChange(Math.round(coordValue(xf, num(e.target.value, coordField(xf, um, type, units)), type, units)))} style={{ width: 90 }} />
   );
 
   // A bottom-side footprint's frame is the top-side one mirrored: the dialog shows the offset as the file stores it, x un-mirrored (`GetFPRelativePosition`).
@@ -414,9 +420,9 @@ export function FootprintPropertiesDialog() {
               <p style={{ margin: "0 0 4px", fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)" }}>Placement</p>
               <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr" }}>
                 <span>Position X</span>
-                {lengthCell(x, setX, 90)}
+                {coordCell(x, setX, "abs_x", "Position X")}
                 <span>Position Y</span>
-                {lengthCell(y, setY, 90)}
+                {coordCell(y, setY, "abs_y", "Position Y")}
                 <span>Orientation</span>
                 <span>
                   <input type="number" step="any" value={Number(orientation.toFixed(3))} onChange={(e) => setOrientation(num(e.target.value, orientation))} style={{ width: 90 }} data-testid="fp-orientation" />°

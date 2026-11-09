@@ -13,6 +13,7 @@ import type { BoardText, Shape } from "../../api/types";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { hatchDistance } from "../../kicad-port/shapeFill";
 import { endingInks, hasEndings } from "../../kicad-port/lineEnding";
+import { insidePolygonWithHoles } from "../../kicad-port/polyHoles";
 
 /** `EDA_SHAPE::getMaxError()` for the board (`BOARD_DESIGN_SETTINGS::m_MaxError`, 0.005 mm): the flattening tolerance a Bezier is drawn/hit-tested at. */
 export const BEZIER_MAX_ERROR_NM = 5;
@@ -156,8 +157,10 @@ function bodyHitDistance(s: Shape, px: number, py: number): number {
       return Math.min(Math.abs(d - r), hatchDistance(s, px, py));
     }
     case "polygon": {
-      if (s.filled && pointInPolygon(px, py, s.pts)) return 0;
-      return Math.min(distToPolyline(px, py, [...s.pts, s.pts[0]!]), hatchDistance(s, px, py));
+      // a polygon's holes are outside it, their sides edges of it (UI-LEFT-2 PP10)
+      if (s.filled && insidePolygonWithHoles(px, py, s.pts, s.holes)) return 0;
+      const holeEdge = Math.min(Infinity, ...(s.holes ?? []).filter((h) => h.length > 1).map((h) => distToPolyline(px, py, [...h, h[0]!])));
+      return Math.min(distToPolyline(px, py, [...s.pts, s.pts[0]!]), holeEdge, hatchDistance(s, px, py));
     }
     case "arc":
       // No stroked-arc distance here (would need the same circumcircle

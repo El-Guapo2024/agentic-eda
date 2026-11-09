@@ -5,6 +5,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useStudioState } from "../state/store";
 import { nmFrom, nmTo } from "../state/units";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
+import { useOriginTransforms } from "../state/originTransforms";
+import { fromDisplay, toDisplay, type CoordType } from "../kicad-port/originTransforms";
 
 /** Escape closes the dialog (`closeSweepDialog` unless a dialog handles its own stack). The key is the dialog's: it must not go on to the canvas' own Escape (cancel the tool, then clear the selection).
  *  `null` while the dialog is closed: a dialog that stays mounted (the Generators Manager) listens only while it is open, or it would take every Escape in the studio. */
@@ -35,11 +37,18 @@ export function parseLength(text: string, units: "mm" | "mil" | "in"): number | 
   return Math.round(nmFrom(parseFloat(m[1]!), unit));
 }
 
-/** A length field in the display units, parsed with a unit suffix allowed ("1.5", "0.2mm", "10mil"). */
-export function useLengthField(valueNm: number) {
+/**
+ * A length field in the display units, parsed with a unit suffix allowed ("1.5", "0.2mm", "10mil"). A board coordinate field gives its `coordType`
+ * (`UNIT_BINDER::SetCoordType`): it shows and takes the value through the board editor's origin transforms (Origins & Axes, UI-LEFT-2 PP9).
+ */
+export function useLengthField(valueNm: number, coordType: CoordType = "not") {
   const units = useStudioState().units;
-  const [text, setText] = useState(() => lengthText(valueNm, units));
-  const parse = (): number | null => parseLength(text, units);
+  const xf = useOriginTransforms();
+  const [text, setText] = useState(() => lengthText(toDisplay(xf, valueNm, coordType), units));
+  const parse = (): number | null => {
+    const v = parseLength(text, units);
+    return v === null ? null : Math.round(fromDisplay(xf, v, coordType));
+  };
   return { text, setText, parse, units };
 }
 

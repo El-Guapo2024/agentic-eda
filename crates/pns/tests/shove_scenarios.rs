@@ -43,7 +43,7 @@ fn pad(net: &str, name: &str, c: Point, r: Nm) -> Item {
 }
 
 fn via(net: &str, id: &str, c: Point) -> Item {
-    Item::Via(Via { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, diameter: mm(0.6), drill: mm(0.3), source_via: Some(id.into()), locked: false, is_virtual: false })
+    Item::Via(Via { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, diameter: mm(0.6), drill: mm(0.3), source_via: Some(id.into()), locked: false, layer_diameters: Vec::new(), is_virtual: false })
 }
 
 /// Every pair of items the router's own collision test calls a violation.

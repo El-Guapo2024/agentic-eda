@@ -139,6 +139,24 @@ fn specified_values_reach_a_dimension_and_leave_what_is_not_given() {
     assert_eq!(dim(&b, "dim_a").stroke_width, mm(0.25));
 }
 
+/// `processItem` on a dimension (a `PCB_TEXT`, so an `EDA_TEXT`): the text width apart from the height, bold (`SetBold`: the bold pen of the smaller size in the
+/// stroke font), italic and the font reach its label (`Dimension::text_effects`, UI-LEFT-2 PP11); a size given once more makes the label square again.
+#[test]
+fn specified_values_give_a_dimensions_label_its_width_bold_italic_and_font() {
+    let m = model_with_defaults();
+    let mut b = board(&m);
+    let rows = TextRows { width: Some(mm(2.0)), height: Some(mm(1.5)), bold: Some(true), italic: Some(true), font: Some("DejaVu Sans".into()), ..Default::default() };
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], dimension_ids: ids(&["dim_a"]), layer_defaults: false, layer: None, line_width: None, text_size: None, text_thickness: None, footprint: Default::default(), rows }).unwrap();
+    let d = dim(&b, "dim_a");
+    assert_eq!((d.text_size_nm, d.text_width_nm(), d.text_effects.width_nm), (mm(1.5), mm(2.0), Some(mm(2.0))));
+    assert_eq!((d.text_effects.bold, d.text_effects.italic, d.text_effects.face.as_deref()), (true, true, Some("DejaVu Sans")));
+    assert_eq!(d.text_thickness_nm, Some(mm(0.3)), "SetBold: the bold pen of the smaller size, a fifth of 1.5 mm");
+    let rows = TextRows { width: Some(mm(1.5)), italic: Some(false), font: Some(super::pcb_global_edit::KICAD_FONT.into()), ..Default::default() };
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], dimension_ids: ids(&["dim_a"]), layer_defaults: false, layer: None, line_width: None, text_size: None, text_thickness: None, footprint: Default::default(), rows }).unwrap();
+    let d = dim(&b, "dim_a");
+    assert_eq!((d.text_effects.width_nm, d.text_effects.italic, d.text_effects.face.clone(), d.text_effects.bold), (None, false, None, true));
+}
+
 #[test]
 fn layer_defaults_ignore_the_specified_values_as_the_radio_buttons_do() {
     let m = model_with_defaults();

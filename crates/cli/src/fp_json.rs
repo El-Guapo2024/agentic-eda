@@ -221,6 +221,17 @@ pub(crate) fn add_pad_facts(obj: &mut serde_json::Map<String, Value>, design: &D
     if let Some(t) = pin_type {
         obj.insert("pin_type".into(), if t.is_empty() { Value::Null } else { json!(t) });
     }
+    // `PAD_ATTRIB::CONN` ("Edge connector"): the edit's Pad Type, else the board file's or the library's `connect` -- an SMD pad only, as the writer writes it.
+    let connector = edit.and_then(|e| e.connector).unwrap_or_else(|| info.is_some_and(|i| i.connector)) && pad.kind == eda_model::PadKind::Smd;
+    if connector {
+        obj.insert("connector".into(), json!(true));
+    }
+    // KiCad 10's backdrill and post-machining of the pad (`PADSTACK::SecondaryDrill` .., the Properties panel's "Backdrill Properties" and "Post-machining
+    // Properties"): the edit's, else what the board file's tokens say.
+    let drill = edit.and_then(|e| e.drill_props.clone()).unwrap_or_else(|| eda_model::via_extra::PadDrillProps::from_tokens(tokens));
+    if !drill.is_none() {
+        obj.insert("drill_props".into(), json!(drill));
+    }
 }
 
 /// The copper shapes of a padstack pad on `fp`, each with the board's layers it is on: `{ layers, x, y, w, h, round, shape, ratio, outline }`, the keys of a pad's own

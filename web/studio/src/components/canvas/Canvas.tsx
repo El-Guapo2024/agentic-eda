@@ -90,7 +90,7 @@ import { buildPcbMenu } from "./pcbMenuBuilder";
 import type { MenuNode } from "../../kicad/types";
 import { findNearestContourCorner, flatVertices, moveContourCorner, zoneContours, zoneOutlineCmd } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
-import { fpDimensionClick, fpDimensionMotion } from "../../kicad-port/fpDrawTools";
+import { fpDimensionClick, fpDimensionHeightOffGrid, fpDimensionMotion, fpDimensionOnLayer } from "../../kicad-port/fpDrawTools";
 import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPointId } from "../../kicad-port/dimensionDraw";
 import { toCmdDimension } from "../../kicad-port/dimensionConvert";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
@@ -108,6 +108,7 @@ import { drcMarkerAt, drcMenuContext, runMarkerMenu, selectMarkerDrc, showDrcInD
 import { askExclusionComment } from "../../state/checkerView";
 import { useImageVersion } from "./imageCache";
 import "../../styles/canvas.css";
+import { setZonePickFills } from "../../kicad-port/zonePickFill";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
 function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
@@ -245,6 +246,8 @@ export function Canvas() {
   const dragRef = useRef<DragState | null>(null);
   /** Ctrl (Cmd on a Mac) at the last pointer move: `drawShape`'s modifier for the rubber band (kicad-port/pcbShapeSnap.ts). */
   const drawCtrlRef = useRef(false);
+  // Draw Via's preview: where the via the next click places would land (`SnapItem` after the grid, round 6 C6-7), set by the mouse's motion
+  const viaGhostRef = useRef<readonly [number, number] | null>(null);
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag (kicad-port/dragThreshold.ts). Made at every press, read by the move, the up and the long press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
@@ -256,6 +259,8 @@ export function Canvas() {
   // drawn in place of the committed one. Only the latest request's reply is kept.
   const [dimPreview, setDimPreview] = useState<{ id: string | null; dim: Dimension } | null>(null);
   const dimPreviewSeq = useRef(0);
+  // The fills a click inside a pour can hit, and whether they are shown filled (`HitTestFilledArea`, `SetIgnoreZoneFills`: kicad-port/zonePickFill.ts, UI-LEFT-2 PP10).
+  useEffect(() => setZonePickFills(state.zoneFill, state.zoneDisplayMode), [state.zoneFill, state.zoneDisplayMode]);
   // Escape, a tool change or a commit that drops the dimension being drawn drops its preview (`preview.Clear()`).
   useEffect(() => {
     if (state.drawState?.kind !== "dimension" && dragRef.current?.kind !== "dimPoint") {
@@ -263,7 +268,25 @@ export function Canvas() {
       setDimPreview(null);
     }
   }, [state.drawState]);
+  // The dimension being drawn changed elsewhere -- the width keys, a change of layer, its dialog (UI-LEFT-2 PP11) -- : its preview follows (`m_view->Update( &preview )`).
+  const dimPreviewAsked = useRef("");
+  useEffect(() => {
+    const d = state.drawState?.kind === "dimension" ? state.drawState.dim?.dim : null;
+    if (d && JSON.stringify(d) !== dimPreviewAsked.current) requestDimPreview(d, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.drawState]);
+  // `DrawDimension`'s `layerChanged`: the dimension being drawn goes to the new active layer with that layer's text size, thickness, italic and line thickness, its
+  // mirror left as it is (kicad-port/fpDrawTools.ts `fpDimensionOnLayer`).
+  useEffect(() => {
+    const draw = state.drawState?.kind === "dimension" ? state.drawState : null;
+    if (!draw?.dim || state.activeTool !== "dimension") return;
+    const layer = activeLayerName(state.activeLayer, "Dwgs.User");
+    if (draw.dim.dim.layer === layer) return;
+    dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, dim: { ...draw.dim, dim: fpDimensionOnLayer(draw.dim.dim, layer, boardDimensionStyle(state.board)) } } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.activeLayer]);
   const requestDimPreview = (cmd: CmdDimension, id: string | null) => {
+    if (id === null) dimPreviewAsked.current = JSON.stringify(cmd);
     const seq = ++dimPreviewSeq.current;
     void fetchDimensionPreview(cmd).then((dim) => {
       if (seq === dimPreviewSeq.current) setDimPreview(dim ? { id, dim } : null);
@@ -477,6 +500,7 @@ export function Canvas() {
       // The Draw Via ghost: the size the next via gets (`GetCurrentViaSize`, round 6 C6-2).
       currentViaPreset: state.board ? currentViaSize(state.board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia) : state.currentViaPreset,
       units: state.units,
+      rulerFlip: { x: state.prefs.pcbInvertXAxis, y: state.prefs.pcbInvertYAxis },
       zoneCornerPreview,
       shapePointPreview,
       dimensionPreview: dimPreview,
@@ -503,6 +527,7 @@ export function Canvas() {
       drawState: state.drawState,
       cursorNm: state.cursorNm,
       snappedCursor: PLACING_TOOLS.has(state.activeTool) ? snap.lastPoint() : null,
+      viaGhostAt: state.activeTool === "via" ? viaGhostRef.current : null,
       // Import Graphics' placement (state/importPreview.ts): its items held by their reference point at the picker's snapped cursor
       importPreview: importPreviewAt(importPreview, picker.session() ? (snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null)) : null),
       activeTool: state.activeTool,
@@ -535,7 +560,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -606,6 +631,8 @@ export function Canvas() {
       case "dimension":
         opts.layers = "all";
         opts.category = "graphics";
+        // the height of a slanted aligned dimension is off the grid (`grid.SetUseGrid( false )`, UI-LEFT-2 PP11)
+        opts.noGrid = fpDimensionHeightOffGrid(draw?.kind === "dimension" ? draw.dim : null);
         break;
       case "picker":
       case "measure":
@@ -620,6 +647,33 @@ export function Canvas() {
     opts.skipPoint = draw?.kind === "shape" && draw.pts.length > 0 ? draw.pts[0]! : null;
     const p = snap.point(tool, [wx, wy], mods, opts);
     return [p[0], p[1]];
+  };
+
+  /**
+   * `VIA_PLACER`'s view of the board (kicad-port/viaPlacer.ts) for the via the next click places: pcbnew.EditorControl.viaSizeInc/Dec's current pick
+   * (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed -- `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked on
+   * every via, from the board's list by index (round 6 C6-2) -- the magnetic settings, Shift, the zone fills, the visible layers. The click and the preview
+   * (`doInteractiveItemPlacement`'s motion: `SnapItem` on the item at the grid point) read the same.
+   */
+  const viaPlacerFor = (b: NonNullable<typeof board>, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+    const viaPreset = currentViaSize(b, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia);
+    const copper = (b.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
+    const mods = snapMods(e);
+    const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
+    const placer: ViaPlacerInput = {
+      board: b,
+      diameter: viaPreset.diameter,
+      // `bds.m_CurrentViaType` is always THROUGH: the via spans the board.
+      layers: copper,
+      magnetic: { tracks: magnetic.tracks, pads: magnetic.pads, graphics: magnetic.graphics },
+      snap: !mods.shift,
+      alignToSegment: (p, a, q) => snap.alignToSegment("via", p, a, q, mods),
+      fills: (state.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => ({ net: z.net, layer: z.layer, fragments: z.fragments })),
+      activeLayer: state.activeLayer ?? "F.Cu",
+      highContrast: state.highContrast,
+      isLayerVisible: (l) => layerIsVisible(state.layerVisible, l),
+    };
+    return { placer, viaPreset, copper };
   };
 
   /** Place Footprint's carry (`StudioState.moveGridCarry`, kicad-port/placeCarry.ts): the anchor of the one footprint carried, which the grid point under the cursor moves; null for any other move. */
@@ -738,7 +792,10 @@ export function Canvas() {
         if (plan.kind === "cutout" && source) {
           void api.cmd({ op: "zone_cutout", id: source.id, cutout: outline.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
         } else if (plan.kind === "similar" && source) {
-          void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
+          // the source's settings, or what Properties (E) gave the zone being drawn (UI-LEFT-2 PP10)
+          const z = plan.zone;
+          if (z) void api.addZone(z.net, z.layers[0] ?? source.layer, outline, z.settings, { layers: z.layers, name: z.name, locked: z.locked }).then(selectNew);
+          else void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
         } else if (plan.kind === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
           // `defaultViaSize` / `defaultViaDrill`: `GetCurrentViaSize()` / `GetCurrentViaDrill()`, the via size chosen in the toolbar (kicad-port/routerVia.ts `currentViaSize`).
@@ -855,25 +912,7 @@ export function Canvas() {
       // `DRAWING_TOOL::DrawVia` (kicad-port/viaPlacer.ts): the via snaps onto the track, pad or graphic under the cursor, takes its net (or the zone fill's,
       // asking when there are several, or none: a free via), and the backend refuses it where it breaks a clearance and splits the track it is on (round 5 B5-1).
       if (state.activeTool === "via") {
-        // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
-        // `GetCurrentViaSize()` / `GetCurrentViaDrill()` asked on every via, from the board's list by index (round 6 C6-2).
-        const viaPreset = currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia);
-        const copper = (board.layers ?? ["F.Cu", "B.Cu"]).filter((l) => l.endsWith(".Cu"));
-        const mods = snapMods(e);
-        const magnetic = toPcbMagnetic(state.prefs, state.magneticAllLayers);
-        const placer: ViaPlacerInput = {
-          board,
-          diameter: viaPreset.diameter,
-          // `bds.m_CurrentViaType` is always THROUGH: the via spans the board.
-          layers: copper,
-          magnetic: { tracks: magnetic.tracks, pads: magnetic.pads, graphics: magnetic.graphics },
-          snap: !mods.shift,
-          alignToSegment: (p, a, b) => snap.alignToSegment("via", p, a, b, mods),
-          fills: (state.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => ({ net: z.net, layer: z.layer, fragments: z.fragments })),
-          activeLayer: state.activeLayer ?? "F.Cu",
-          highContrast: state.highContrast,
-          isLayerVisible: (l) => layerIsVisible(state.layerVisible, l),
-        };
+        const { placer, viaPreset, copper } = viaPlacerFor(board, e);
         const at = snapViaPosition(placer, [wx, wy], [sx, sy]);
         const place = (net: string, track: string | null) =>
           void api.cmd({
@@ -1406,6 +1445,8 @@ export function Canvas() {
     // geometry are the helper's state after this call (and the click that follows takes the same point).
     const tracking = picker.session() != null ? "picker" : state.activeTool;
     const snapped: [number, number] | null = board && !dragRef.current && !moveMode && PLACING_TOOLS.has(tracking) ? toolPoint(tracking, wx, wy, e) : null;
+    // Draw Via's preview follows the cursor as `doInteractiveItemPlacement` moves it: the grid point, then `m_placer->SnapItem( newItem )` (round 6 C6-7)
+    viaGhostRef.current = board && tracking === "via" && snapped ? snapViaPosition(viaPlacerFor(board, e).placer, [wx, wy], snapped) : null;
 
     // `DrawDimension`'s motion: the end, then an aligned or orthogonal dimension's height, follows the snapped cursor; the preview is the dimension as drawn.
     if (board && state.activeTool === "dimension" && state.drawState?.kind === "dimension" && state.drawState.dim && snapped) {

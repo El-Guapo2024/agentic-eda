@@ -92,6 +92,10 @@ export interface Pad {
   /** `PAD::GetPadToDieLength`, nm, and `GetPadToDieDelay`, attoseconds; absent for 0. */
   die_length?: Nm | null;
   die_delay?: number | null;
+  /** An edge connector pad (`PAD_ATTRIB::CONN`, the file's `connect`): an SMD pad; absent for any other. */
+  connector?: boolean;
+  /** Its backdrill and post-machining (KiCad 10), the edit's else the board file's; absent for none. */
+  drill_props?: PadDrillProps | null;
 }
 
 /** `eda_model::padstack::PadStackMode` (`PADSTACK::MODE`). */
@@ -301,6 +305,9 @@ export interface Part {
    * no resolvable footprint at all.
    */
   footprint: string | null;
+  /** The footprint's link as the board file writes it (`GetFPID().Format()`, the Library Link the Search panel shows): `Lib:Name`, the installed KiCad footprint a
+   *  built-in package stands for, a name with no library bare (`eda_model::footprint::footprint_lib_id`). Absent from an older backend. */
+  lib_link?: string;
   /** Floorplan block this part belongs to, if any. */
   block: string | null;
   placed: boolean;
@@ -763,7 +770,8 @@ export type Shape =
   | (ShapeCommon & { kind: "arc"; start: [Nm, Nm]; mid: [Nm, Nm]; end: [Nm, Nm] })
   | (ShapeCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm]; /** `EDA_SHAPE::GetCornerRadius()`, absent for a sharp rectangle. */ corner_radius?: Nm })
   | (ShapeCommon & { kind: "circle"; center: [Nm, Nm]; end: [Nm, Nm] })
-  | (ShapeCommon & { kind: "polygon"; pts: [Nm, Nm][] })
+  /** `holes`: the contours cut out of the polygon (`ShapeStyle::holes`: a zone with holes made a polygon, UI-LEFT-2 PP10); absent for none. */
+  | (ShapeCommon & { kind: "polygon"; pts: [Nm, Nm][]; holes?: [Nm, Nm][][] })
   /** `PCB_SHAPE` BEZIER: a cubic from `start` to `end` with control points `c1`/`c2` (KiCad's `gr_curve` order). The canvas flattens it with kicad-port/bezierPoly.ts (`BEZIER_POLY::GetPoly`). */
   | (ShapeCommon & { kind: "bezier"; start: [Nm, Nm]; c1: [Nm, Nm]; c2: [Nm, Nm]; end: [Nm, Nm] });
 
@@ -824,7 +832,12 @@ export interface Drawings {
   barcodes?: BoardBarcode[];
   /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
   tables?: BoardTable[];
+  /** `GetDefaultZoneSettings()`: the settings of the zone Zone Properties was last OK'd on, what a new zone's dialog opens on (UI-LEFT-2 PP10); absent: KiCad's own. */
+  zone_defaults?: ZoneDefaults;
 }
+
+/** The board's default zone settings (`ZONE_SETTINGS`, `DrawingsSection::zone_defaults`): a zone's settings, layers and name with no outline or net. */
+export type ZoneDefaults = Partial<ZoneSettingsFields & RuleAreaFields> & { layer?: string; layers?: string[]; name?: string };
 
 /** `STROKE_PARAMS` of a table's border or separators: a width of -1 is "not drawn", `default` is drawn solid. */
 export interface TableStrokeInfo {
@@ -918,6 +931,18 @@ export type DimensionUnitsFormat = "no_suffix" | "bare_suffix" | "paren_suffix";
 export type DimensionTextPosition = "outside" | "inline" | "manual";
 /** `DIM_TEXT_BORDER`: a leader's frame round its text. */
 export type DimensionTextBorder = "none" | "rectangle" | "circle" | "round_rect";
+
+/** `crates/model/src/ir.rs` `DimensionTextEffects`: a dimension label's `EDA_TEXT` attributes past its height and pen (UI-LEFT-2 PP11); each absent field is the
+ *  default (the width the height, the stroke font, not bold or italic, mirrored as the layer's side says, centred, not kept upright). */
+export interface DimensionTextEffects {
+  width_nm?: Nm;
+  face?: string;
+  bold?: boolean;
+  italic?: boolean;
+  mirrored?: boolean;
+  h_justify?: TextJustify;
+  keep_upright?: boolean;
+}
 export type ArrowDirection = "inward" | "outward";
 
 /**
@@ -977,6 +1002,16 @@ export interface Dimension {
   text_pos?: [Nm, Nm] | null;
   /** A leader's frame (`DIM_TEXT_BORDER`). */
   text_frame?: DimensionTextBorder;
+  /** The label's other looks (UI-LEFT-2 PP11; absent from an older backend): its width (`GetTextWidth`), face (null: the stroke font), bold, italic, mirror as
+   *  drawn (`IsMirrored`), horizontal justification and keep-upright; `text_effects` is the overlay itself, which an edit of the whole dimension sends back. */
+  text_width_nm?: Nm;
+  face?: string | null;
+  bold?: boolean;
+  italic?: boolean;
+  mirrored?: boolean;
+  h_justify?: TextJustify;
+  keep_upright?: boolean;
+  text_effects?: DimensionTextEffects;
   /** An aligned or orthogonal dimension's crossbar ends (`GetCrossbarStart`, `GetCrossbarEnd`), the point editor's handles; null for the other kinds. */
   crossbar?: [[Nm, Nm], [Nm, Nm]] | null;
   /** A radial dimension's knee (`PCB_DIM_RADIAL::GetKnee`); null for the other kinds. */
@@ -1031,6 +1066,8 @@ export interface CmdDimension {
   text_pos?: PointXY;
   /** A leader's `DIM_TEXT_BORDER` (`(text_frame N)`); absent = none. */
   text_frame?: DimensionTextBorder;
+  /** `Dimension::text_effects`: the label's own looks; absent = a square, centred stroke-font label mirrored as its layer's side says. */
+  text_effects?: DimensionTextEffects;
 }
 
 // ------------------------------------------------------- Footprint Editor
@@ -1266,6 +1303,9 @@ export interface BoardState {
   title_block?: TitleBlock | null;
   /** The board's drawing sheet file (Page Settings' "Drawing sheet:", `pcbnew.page_layout_descr_file`); null/absent is KiCad's default sheet. */
   drawing_sheet?: DrawingSheetFile | null;
+  /** Every net of the board by name (`BOARD::GetNetInfo()`): the design's, one no item is on too (an added net, a design block's), and any a track, via or zone
+   *  names; sorted, the unconnected net left out. Absent from an older backend. */
+  nets?: string[];
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
@@ -1860,7 +1900,14 @@ export interface PadEditCmd {
   pin_function?: string;
   /** `PAD::SetPinType` (Pin Type); "" for none. */
   pin_type?: string;
+  /** `PAD::SetAttribute( PAD_ATTRIB::CONN )` (Pad Type "Edge connector") on an SMD pad; false makes it a plain SMD pad again. */
+  connector?: boolean;
+  /** The pad's backdrill and post-machining (KiCad 10's `PADSTACK::SecondaryDrill` ..), replaced whole (`eda_model::via_extra::PadDrillProps`). */
+  drill_props?: PadDrillProps;
 }
+
+/** A pad's backdrill and post-machining: the four of a via's `ViaProps` a pad has (`eda_model::via_extra::PadDrillProps`). */
+export type PadDrillProps = Pick<ViaProps, "backdrill" | "tertiary_drill" | "front_post_machining" | "back_post_machining">;
 
 /**
  * File > Import > Graphics... (`DRAWING_TOOL::PlaceImportedGraphics`): a DXF or SVG file (its `text`) as the board's own lines, arcs, circles, polygons, curves and text on `layer`,
@@ -2211,6 +2258,10 @@ export type Cmd =
   | { op: "edit_board_footprint"; part: string; reference?: FieldLayoutCmd; value?: FieldLayoutCmd; fields?: UserFieldCmd[]; attrs?: FootprintAttrsCmd }
   | { op: "edit_board_field"; part: string; name: string; layout?: FieldLayoutCmd; text?: string }
   | { op: "edit_board_pad"; part: string; edit: PadEditCmd }
+  /** The Properties panel's "Pad Number" (`PAD::SetNumber`): the pad `pad` (`REF.NUM[#k]`) renamed, keeping its net (crates/ops/src/pad_renumber.rs). */
+  | { op: "set_pad_number"; pad: string; number: string }
+  /** `SetDefaultZoneSettings` (Zone Properties' OK, `Edit_Zone_Params`): the board's default zone settings become `zone`'s (a zone record with no outline or net). */
+  | { op: "set_zone_defaults"; zone: ZoneDefaults & { net: string; layer: string; outline: [] } }
   /**
    * The 3D Models tab of Footprint Properties (crates/ops/src/fp_models.rs): `set_board_models` makes the footprint's whole list the one given (the dialog's OK; an empty list is a
    * footprint with no model); the others are the tab's Add, Remove and cell edits and the order of the rows, one at a time, by 0-based position (`edit_board_model` leaves a key
@@ -2486,6 +2537,9 @@ export interface CmdReply {
   message: string;
   /** What KiCad tells the user once the command worked (`ShowInfoBarMsg`, a tool's `wxLogMessage` lines: `eda_ops::notice`), one message a line. */
   info?: string;
+  /** The error KiCad shows as a DRC-violation info bar while the command still worked (`ShowInfoBarError( .., DRC_VIOLATION )`: Draw Via's "Via location
+   * violates DRC." with Allow DRC violations on, `eda_ops::notice::note_drc_violation`). */
+  drc_violation?: string;
   /** The history tag of the step the command made (`pcb`, `schematic`, `both`, ...): which editor's content it modified. */
   domain?: string;
 }

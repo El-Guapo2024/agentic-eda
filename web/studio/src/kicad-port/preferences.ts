@@ -18,6 +18,8 @@
 //     Preferences > Editing Options), which decide what the drawing and move tools snap to (kicad-port/snapAnchors.ts);
 //   * the board editor's "Step for rotate commands" (`PCBNEW_SETTINGS::m_RotationAngle`, `editing.rotation_angle`) and "Flip board items" (`m_FlipDirection`,
 //     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts);
+//   * the board editor's Origins & Axes (`PCBNEW_SETTINGS::m_Display.m_DisplayOrigin`, `m_DisplayInvertXAxis`, `m_DisplayInvertYAxis`): where X and Y are counted
+//     from and which way they grow, wherever the board editor shows or takes a coordinate (kicad-port/originTransforms.ts);
 //   * the schematic editor's "Allow unconstrained pin swaps" (`EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps`), without which Swap Pins is not offered;
 //   * the symbol editor's Repeated Items, "Pitch of repeated pins" and "Label increment" (`SYMBOL_EDITOR_SETTINGS::m_Repeat`), which Repeat Pin (Insert) reads.
 // Not offered: "Center and warp cursor on zoom" (`input.center_on_zoom`): it warps the real pointer to the middle of the canvas (`CenterOnCursor`), which a web page
@@ -30,6 +32,7 @@ import { isMac } from "../platform";
 import type { TextGraphicsDefaults } from "../api/types";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 import { DEFAULT_USER_LAYER_COUNT, sanitizeFpTextItems, sanitizeUserLayerNames, type FpTextItem } from "./fpFieldDefaults";
+import { sanitizeDisplayOrigin, type DisplayOrigin } from "./originTransforms";
 
 /** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
 export function defaultZoomSpeed(isMacPlatform: boolean): number {
@@ -98,6 +101,12 @@ export interface Preferences {
    *  Footprint Editor shows coordinates. Both off by default. */
   fpInvertXAxis: boolean;
   fpInvertYAxis: boolean;
+  /** `PCBNEW_SETTINGS::m_Display.m_DisplayOrigin` (Preferences > PCB Editor > Origins & Axes, "Display Origin": Page origin, Drill/place file origin, Grid origin;
+   *  `pcb_display.origin_mode`): where the board editor's X and Y are counted from (kicad-port/originTransforms.ts). Default the page (`PCB_ORIGIN_PAGE`). */
+  pcbDisplayOrigin: DisplayOrigin;
+  /** `m_Display.m_DisplayInvertXAxis` / `m_DisplayInvertYAxis` ("X Axis: Increases left", "Y Axis: Increases up"; `pcb_display.origin_invert_x_axis` / `_y_axis`). Both off by default. */
+  pcbInvertXAxis: boolean;
+  pcbInvertYAxis: boolean;
   /** `FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings` (Preferences > Footprint Editor > Graphics Defaults: the line width and the text of each layer class); `null` is KiCad's
    *  factory table (`FACTORY_TEXT_GRAPHICS`). */
   fpTextGraphics: TextGraphicsDefaults | null;
@@ -117,6 +126,9 @@ export interface Preferences {
   escClearsNetHighlight: boolean;
   /** `PCBNEW_SETTINGS::m_ShowCourtyardCollisions` ("Show courtyard collisions when moving/dragging", `editing.show_courtyard_collisions`). Default on. */
   showCourtyardCollisions: boolean;
+  /** `PCBNEW_SETTINGS::m_AutoRefillZones` ("Automatically refill zones", `editing.auto_fill_zones`): after each edit the zones it damaged and the unfilled ones are filled
+   *  (`BOARD_COMMIT::Push` -> `zoneFillDirty`; kicad-port/autoRefill.ts). Default off (UI-LEFT-2 PP10). */
+  autoRefillZones: boolean;
   /** `PCB_DISPLAY_OPTIONS::m_RatsnestThickness` ("Ratsnest line thickness:", `pcb_display.ratsnest_thickness`), pixels, 0.5 .. 10 by 0.5. Default 0.5. */
   ratsnestThicknessPx: number;
   /** `EESCHEMA_SETTINGS::m_Input.esc_clears_net_highlight` ("<ESC> clears net highlighting" of the Schematic Editor). Default on. */
@@ -189,6 +201,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fpArcEditMode: 0,
   fpInvertXAxis: false,
   fpInvertYAxis: false,
+  pcbDisplayOrigin: "page",
+  pcbInvertXAxis: false,
+  pcbInvertYAxis: false,
   fpTextGraphics: null,
   fpDefaultTextItems: null,
   fpUserLayerCount: DEFAULT_USER_LAYER_COUNT,
@@ -197,6 +212,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schArcEditMode: DEFAULT_ARC_EDIT_MODE,
   escClearsNetHighlight: true,
   showCourtyardCollisions: true,
+  autoRefillZones: false,
   ratsnestThicknessPx: 0.5,
   schEscClearsNetHighlight: true,
   schRepeatOffsetXMils: 0,
@@ -322,6 +338,9 @@ export function sanitizePreferences(raw: unknown): Preferences {
     fpArcEditMode: clampInt(o.fpArcEditMode, 0, 2, d.fpArcEditMode),
     fpInvertXAxis: bool(o.fpInvertXAxis, d.fpInvertXAxis),
     fpInvertYAxis: bool(o.fpInvertYAxis, d.fpInvertYAxis),
+    pcbDisplayOrigin: sanitizeDisplayOrigin(o.pcbDisplayOrigin),
+    pcbInvertXAxis: bool(o.pcbInvertXAxis, d.pcbInvertXAxis),
+    pcbInvertYAxis: bool(o.pcbInvertYAxis, d.pcbInvertYAxis),
     fpTextGraphics: o.fpTextGraphics && typeof o.fpTextGraphics === "object" ? (o.fpTextGraphics as TextGraphicsDefaults) : d.fpTextGraphics,
     fpDefaultTextItems: sanitizeFpTextItems(o.fpDefaultTextItems),
     fpUserLayerCount: clampInt(o.fpUserLayerCount, 0, 9, d.fpUserLayerCount),
@@ -330,6 +349,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
     escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),
     showCourtyardCollisions: bool(o.showCourtyardCollisions, d.showCourtyardCollisions),
+    autoRefillZones: bool(o.autoRefillZones, d.autoRefillZones),
     ratsnestThicknessPx: sanitizeRatsnestThickness(o.ratsnestThicknessPx, d.ratsnestThicknessPx),
     schEscClearsNetHighlight: bool(o.schEscClearsNetHighlight, d.schEscClearsNetHighlight),
     schRepeatOffsetXMils: finiteInt(o.schRepeatOffsetXMils, d.schRepeatOffsetXMils),

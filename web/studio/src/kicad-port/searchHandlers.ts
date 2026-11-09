@@ -18,8 +18,9 @@
 // rows are sorted by the tab's sort column (`SEARCH_PANE_TAB::Search` -> `SEARCH_PANE_LISTVIEW::Sort`; none chosen is the first column, ascending): the cells by
 // `StrNumCmp( .., true )` (`PCB_SEARCH_HANDLER::Sort`), the drills by `DRILL_LINE_ITEM::COMPARE` on their values.
 //
-// Different from KiCad: the coordinates are shown from the page origin with the Y axis down (`MessageTextFromCoord` with `PCB_ORIGIN_TRANSFORMS` at their
-// defaults; the studio has no display-origin setting); the nets are listed by name, the unconnected net first (KiCad's are in net-code order).
+// The X and Y cells are `MessageTextFromCoord( .., ABS_X_COORD / ABS_Y_COORD )`: from the origin Preferences > PCB Editor > Origins & Axes chooses, each axis
+// either way (`SearchContext.xf`, kicad-port/originTransforms.ts; absent: the page origin, Y down).
+// The nets are listed by name, the unconnected net first: KiCad's net-code order for the board the studio writes (it numbers the nets by name).
 //
 // Pure: no store, no DOM. Unit-tested in searchHandlers.test.ts.
 import type { BoardState, Part, Pad } from "../api/types";
@@ -29,6 +30,7 @@ import { unescapeString } from "./schNetName";
 import { strNumCmp } from "./schSheetPins";
 import { padIds } from "./pcbItems";
 import { zoneLayers } from "./zoneLayers";
+import { toDisplay, type CoordType, type OriginTransforms } from "./originTransforms";
 
 export type SearchTabId = "footprints" | "zones" | "nets" | "ratsnest" | "text" | "groups" | "drills";
 
@@ -152,6 +154,8 @@ export interface SearchContext {
   groupCentre?: ReadonlyMap<string, readonly [number, number]>;
   /** `NETINFO_ITEM::GetNetClass()->GetName()`. */
   netClassName?: (net: string) => string;
+  /** The board editor's origin transforms (`m_frame->GetOriginTransforms()`, Origins & Axes), which the X and Y cells go through; absent: none. */
+  xf?: OriginTransforms;
 }
 
 /** A hole kind of the Drills tab (`DRILL_LINE_ITEM`): its sizes, shape, plating, whether it is a pad's, its copper layers, and how many there are. */
@@ -180,12 +184,21 @@ export interface SearchRow {
   drill?: DrillEntry;
 }
 
-const coord = (v: number, units: MessageUnits) => messageTextFromValue(v, units);
+/** `PCB_BASE_FRAME::MessageTextFromCoord( aValue, aCoordType )`: `MessageTextFromValue( m_originTransforms.ToDisplay( aValue, aCoordType ) )`. */
+const coord = (v: number, c: SearchContext, type: CoordType) => messageTextFromValue(c.xf ? toDisplay(c.xf, v, type) : v, c.units);
 
 /** `PCB_FIELD::Matches`: a field that is not visible only with "Search Hidden Fields"; its text unescaped. */
 function fieldsOf(p: Part): { text: string; visible: boolean }[] {
   if (p.fields && p.fields.length > 0) return p.fields.map((f) => ({ text: f.text, visible: f.visible }));
   return [{ text: p.ref, visible: true }, ...(p.value !== null ? [{ text: p.value, visible: true }] : [])];
+}
+
+/**
+ * `GetFPID().Format()` (the Library Link cell) and `GetFPIDAsString()` (what Search Metadata matches): the `Lib:Name` the board file gives the footprint (`lib_link`:
+ * a built-in package's installed KiCad footprint, a name with no library bare); from a backend that does not send it, the part's footprint name.
+ */
+function libraryLink(p: Part): string {
+  return p.lib_link ?? p.footprint ?? "";
 }
 
 function footprintRows(board: BoardState, query: string, c: SearchContext): SearchRow[] {
@@ -194,12 +207,12 @@ function footprintRows(board: BoardState, query: string, c: SearchContext): Sear
     if (!p.placed || !p.at) continue; // `board->Footprints()`: only what is on the board
     let found = query === "";
     // `FOOTPRINT::Matches`: the library link, description and keywords, with "Search Metadata"
-    if (!found && c.settings.searchMetadata) found = [p.footprint ?? "", p.lib_description ?? "", p.keywords ?? ""].some((t) => permissiveMatches(t, query));
+    if (!found && c.settings.searchMetadata) found = [libraryLink(p), p.lib_description ?? "", p.keywords ?? ""].some((t) => permissiveMatches(t, query));
     if (!found) found = fieldsOf(p).some((f) => (f.visible || c.settings.searchHiddenFields) && permissiveMatches(unescapeString(f.text), query));
     if (!found) continue;
     rows.push({
       id: p.ref,
-      cells: [p.ref, unescapeString(p.value ?? ""), p.side === "bottom" ? "B.Cu" : "F.Cu", coord(p.at[0], c.units), coord(p.at[1], c.units), p.footprint ?? "", p.lib_description ?? ""],
+      cells: [p.ref, unescapeString(p.value ?? ""), p.side === "bottom" ? "B.Cu" : "F.Cu", coord(p.at[0], c, "abs_x"), coord(p.at[1], c, "abs_y"), libraryLink(p), p.lib_description ?? ""],
       select: [p.ref],
     });
   }
@@ -230,7 +243,7 @@ function zoneRows(board: BoardState, query: string, c: SearchContext): SearchRow
     const area = z.is_rule_area ? polygonArea(z.outline, z.holes) : (c.filledArea?.get(z.id) ?? 0);
     rows.push({
       id: z.id,
-      cells: [z.name ?? "", unescapeString(z.net), layers.join(","), String(z.priority), coord(first[0], c.units), coord(first[1], c.units), messageTextFromValue(area, c.units, true, "area")],
+      cells: [z.name ?? "", unescapeString(z.net), layers.join(","), String(z.priority), coord(first[0], c, "abs_x"), coord(first[1], c, "abs_y"), messageTextFromValue(area, c.units, true, "area")],
       select: [z.id],
     });
   }
@@ -274,7 +287,7 @@ function textRows(board: BoardState, query: string, c: SearchContext): SearchRow
     // `PCB_TEXT::Matches` / `PCB_TEXTBOX::Matches`: `UnescapeString( GetText() )`; a dimension is a `PCB_TEXT`
     const shown = unescapeString(text);
     if (query !== "" && !permissiveMatches(shown, query)) return;
-    rows.push({ id, cells: [type, shown, layer, coord(x, c.units), coord(y, c.units)], select: [id] });
+    rows.push({ id, cells: [type, shown, layer, coord(x, c, "abs_x"), coord(y, c, "abs_y")], select: [id] });
   };
   for (const t of d.texts) add(t.id, "Text", t.content, t.layer, t.x, t.y);
   for (const t of d.text_boxes ?? []) add(t.id, "Textbox", t.text, t.layer, t.start[0], t.start[1]);
@@ -289,7 +302,7 @@ function groupRows(board: BoardState, query: string, c: SearchContext): SearchRo
     if (g.generator) continue; // "Skip generators, they are for internal use, not user-facing grouping"
     if (query !== "" && !permissiveMatches(unescapeString(g.name), query)) continue;
     const at = c.groupCentre?.get(g.id) ?? [0, 0];
-    rows.push({ id: g.id, cells: ["Group", g.name, coord(at[0], c.units), coord(at[1], c.units)], select: [g.id] });
+    rows.push({ id: g.id, cells: ["Group", g.name, coord(at[0], c, "abs_x"), coord(at[1], c, "abs_y")], select: [g.id] });
   }
   return rows;
 }
@@ -439,9 +452,60 @@ export function clickSearchColumn(sort: { col: number | null; ascending: boolean
   return sort.col === col ? { col, ascending: !sort.ascending } : { col, ascending: true };
 }
 
-/** `CopySelectionToClipboard`: the selected rows' cells, tab-separated, a line each. */
-export function searchRowsText(rows: readonly SearchRow[]): string {
-  return rows.map((r) => r.cells.join("\t") + "\n").join("");
+/**
+ * `CopySelectionToClipboard`: the selected rows' cells, tab-separated, a line each, in the columns' own order (`GetItemText( row, col )`, whatever order they are
+ * shown in), leaving out a column dragged to no width (`if( GetColumnWidth( col ) <= 0 ) continue;`). `widths` are the columns' widths; none: every column.
+ */
+export function searchRowsText(rows: readonly SearchRow[], widths?: readonly number[]): string {
+  return rows.map((r) => r.cells.filter((_, i) => !widths || (widths[i] ?? 1) > 0).join("\t") + "\n").join("");
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------ the columns on screen
+
+/**
+ * The columns of a tab in the order they are shown: `order` (model column indexes) when the person has dragged a heading to another place -- a `wxListView` in
+ * report mode lets the native list's headers be dragged (wxMSW's `LVS_EX_HEADERDRAGDROP`) and keeps the model's indexes, so the sort and Copy still go by the
+ * model's column -- else the handler's own order. A stale or partial `order` falls back to the handler's.
+ */
+export function searchColumnOrder(count: number, order?: readonly number[]): number[] {
+  const natural = Array.from({ length: count }, (_, i) => i);
+  if (!order || order.length !== count || new Set(order).size !== count || order.some((i) => !(i >= 0 && i < count))) return natural;
+  return [...order];
+}
+
+/** A heading dragged to another place: model column `col` put before the column now shown at display position `to` (the end for `to` past the last). */
+export function moveSearchColumn(count: number, order: readonly number[] | undefined, col: number, to: number): number[] {
+  const out = searchColumnOrder(count, order);
+  const from = out.indexOf(col);
+  if (from < 0) return out;
+  const at = Math.max(0, Math.min(out.length, to));
+  if (at === from || at === from + 1) return out;
+  out.splice(from, 1);
+  out.splice(at > from ? at - 1 : at, 0, col);
+  return out;
+}
+
+/**
+ * `RefreshColumnNames`' widths: `GetClientSize().GetWidth() / 10` times each column's proportion. The studio lays the proportions out over the list's width as they
+ * are (`listWidth` px; the columns of a tab whose proportions add up to more than ten then run past the list, which scrolls sideways, as KiCad's do).
+ */
+export function searchColumnWidths(tab: SearchTabId, listWidth: number): number[] {
+  const unit = Math.floor(Math.max(0, listWidth) / 10);
+  return (SEARCH_TABS.find((t) => t.id === tab)?.columns ?? []).map((c) => unit * c.proportion);
+}
+
+/** The list's own margins round a cell's text (the report-mode list's `wxLIST_AUTOSIZE`: the text and a little room either side). */
+const SEARCH_CELL_MARGINS = 12;
+
+/**
+ * A double click on a heading's edge: the native list sizes the column to its widest text (`LVSCW_AUTOSIZE` on Windows), here the heading's too so it is never
+ * cut. `measure` is the text's width in the list's font.
+ */
+export function autosizeSearchColumn(tab: SearchTabId, col: number, rows: readonly SearchRow[], measure: (text: string) => number): number {
+  const heading = SEARCH_TABS.find((t) => t.id === tab)?.columns[col]?.name ?? "";
+  let max = measure(heading) + SEARCH_CELL_MARGINS + 12; // the sort arrow's room on the heading
+  for (const r of rows) max = Math.max(max, measure(r.cells[col] ?? "") + SEARCH_CELL_MARGINS);
+  return Math.ceil(max);
 }
 
 /** `NETINFO_ITEM::GetNetClass()->GetName()` from the classes a net is in (`NET_SETTINGS::GetEffectiveNetClass`): the Default class for none, the class for one that sets every parameter, else the composite "Effective for net: %s". */

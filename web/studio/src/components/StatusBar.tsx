@@ -17,6 +17,8 @@ import { formatLength, formatXY, toPolar } from "../state/units";
 import { isStale, statusNotes } from "../kicad-port/checkRevision";
 import { LibraryLoadWarnings } from "./LibraryLoadWarnings";
 import { useLibraryStatusText } from "../state/libraryStatus";
+import { statusBarCoords } from "../kicad-port/originTransforms";
+import { useOriginTransforms } from "../state/originTransforms";
 
 export function StatusBar() {
   const state = useStudioState();
@@ -47,6 +49,11 @@ export function StatusBar() {
   const origin = onPcb ? state.localOriginNm : null;
   const dx = cursor && origin ? cursor.x - origin.x : null;
   const dy = cursor && origin ? cursor.y - origin.y : null;
+  // The board editor's Origins & Axes (Preferences > PCB Editor, UI-LEFT-2 PP9): `PCB_BASE_FRAME::UpdateStatusBar` -- field 2 is always the cursor's X and Y through
+  // `ToDisplayAbsX` / `ToDisplayAbsY` (from the page, the drill/place file origin or the grid origin, each axis either way), field 3 dx and dy from the local origin
+  // through `ToDisplayRelX` / `ToDisplayRelY` and their `hypot`, or with polar coordinates on "r %s  theta %.3f" of the cursor from the local origin, untransformed.
+  const xf = useOriginTransforms();
+  const pcbStatus = onPcb && cursor && origin ? statusBarCoords(xf, cursor, origin, polar) : null;
   // Schematic has its own independent pan/zoom (SchematicView.tsx's
   // state.schematicView) -- showing the PCB view's scale while looking
   // at the schematic would report a number that has nothing to do with
@@ -74,9 +81,13 @@ export function StatusBar() {
   return (
     <div className="status-bar">
       <span className="field">Z {zoomScale > 0 ? (zoomScale * 25_400).toFixed(2) : "–"}</span>
-      <span className="field">{cursor ? (polar ? `r ${toPolar(cursor.x, cursor.y, state.units).r}  θ ${toPolar(cursor.x, cursor.y, state.units).theta}` : formatXY(cursor.x, cursor.y, state.units)) : "–"}</span>
+      <span className="field">{pcbStatus ? formatXY(pcbStatus.x, pcbStatus.y, state.units) : cursor ? (polar ? `r ${toPolar(cursor.x, cursor.y, state.units).r}  θ ${toPolar(cursor.x, cursor.y, state.units).theta}` : formatXY(cursor.x, cursor.y, state.units)) : "–"}</span>
       <span className="field">
-        {dx !== null && dy !== null
+        {pcbStatus
+          ? pcbStatus.polar
+            ? `r ${formatLength(pcbStatus.polar.r, state.units)}  theta ${pcbStatus.polar.theta.toFixed(3)}`
+            : `dx ${formatLength(pcbStatus.dx, state.units)}  dy ${formatLength(pcbStatus.dy, state.units)}  dist ${formatLength(pcbStatus.dist, state.units)}`
+          : dx !== null && dy !== null
           ? polar
             ? `Δr ${toPolar(dx, dy, state.units).r}  Δθ ${toPolar(dx, dy, state.units).theta}`
             : `dx ${formatLength(dx, state.units)}  dy ${formatLength(dy, state.units)}  dist ${formatLength(Math.hypot(dx, dy), state.units)}`

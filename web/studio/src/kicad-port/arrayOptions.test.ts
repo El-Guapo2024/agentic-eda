@@ -7,6 +7,7 @@ import {
   arrayGeometry,
   arrayOrigin,
   checkArrayOptions,
+  coordEntry,
   effectiveAngleDeg,
   entriesOf,
   fpArrayCmd,
@@ -20,6 +21,7 @@ import {
   type ArrayOptions,
 } from "./arrayOptions";
 import type { LibraryPad } from "../api/types";
+import { pcbOriginTransforms } from "./originTransforms";
 
 const grid = (over: Partial<ArrayOptions> = {}): ArrayOptions => ({ ...DEFAULT_ARRAY_OPTIONS, tab: "grid", ...over });
 const circular = (over: Partial<ArrayOptions> = {}): ArrayOptions => ({ ...DEFAULT_ARRAY_OPTIONS, tab: "circular", ...over });
@@ -262,4 +264,17 @@ test("the preview tells the numbers the pads will take: the first free ones skip
   assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1 }), withHole, new Set(["a", "h", "c"]), 10), ["1", "2", "3", "4"]);
   assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1, arrange: true }), pads, new Set(["a"]), 10), [], "arranging numbers nothing");
   assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1, pads: { ...DEFAULT_PAD_NUMBERING, renumber: false } }), pads, new Set(["a"]), 10), []);
+});
+
+test("the spacings and offsets are REL_*_COORD and the circular centre ABS_*_COORD: shown and read through the board's origin transforms", () => {
+  // the drill/place origin at (10, 20) mm, both axes the other way
+  const xf = pcbOriginTransforms("aux", true, true, { x: 10_000_000, y: 20_000_000 }, null);
+  const o = { ...circular({ centerX: 12_000_000, centerY: 23_000_000 }), dx: 2_540_000, offsetY: 1_000_000 };
+  const e = entriesOf(o, "mm", xf);
+  assert.deepEqual([e.dx, e.offsetY, e.centerX, e.centerY], ["-2.54", "-1", "-2", "-3"]);
+  const back = optionsFromEntries(o, e, "mm", xf);
+  assert.ok(back.ok);
+  if (back.ok) assert.deepEqual([back.options.dx, back.options.offsetY, back.options.centerX, back.options.centerY], [2_540_000, 1_000_000, 12_000_000, 23_000_000]);
+  assert.equal(coordEntry(12_000_000, "mm", "abs_x", xf), "-2");
+  assert.equal(entriesOf(o, "mm").centerX, "12", "no transforms (the Footprint Editor's dialog)");
 });

@@ -129,7 +129,9 @@ fn a_pad_edit_that_cannot_be_a_pad_is_refused() {
         f(&mut e);
         Cmd::EditBoardPad { part: "U1".into(), edit: e }
     };
-    assert!(refusal(&mut b, pad(&|e| e.size = Some((Nm::ZERO, mm(0.5))))).contains("greater than zero"));
+    // A size below 0 is refused; 0 is the Properties panel's to set (`PAD_DESC`'s "Size X" has no validator; UI-LEFT-2 PP8), tested below.
+    assert!(refusal(&mut b, pad(&|e| e.size = Some((Nm::new(-1), mm(0.5))))).contains("negative"));
+    assert!(refusal(&mut b, pad(&|e| { e.kind = Some(PadKind::ThroughHole); e.drill = Some(mm(0.3)); e.connector = Some(true); })).contains("edge connector"));
     assert!(refusal(&mut b, pad(&|e| e.roundrect_ratio = Some(0.8))).contains("corner radius"));
     assert!(refusal(&mut b, pad(&|e| e.solder_paste_margin_ratio = Some(-0.9))).contains("paste"));
     assert!(refusal(&mut b, pad(&|e| {

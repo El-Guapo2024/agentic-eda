@@ -50,6 +50,7 @@ import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
 import { cancelEditPattern, cancelTune, finishEditPattern, removeTuningPatterns, startEditPattern, stepTune, updateEditPattern } from "../components/canvas/tuneRouting";
 import { tuneRegenerate } from "../api/tuneClient";
 import { STROKE_TOOLS, steppedDrawStroke, strokeStepKept } from "../kicad-port/layerDefaults";
+import { fpDimensionWithLineWidth } from "../kicad-port/fpDrawTools";
 import { planSwap } from "../kicad-port/pcbSwap";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
@@ -133,6 +134,7 @@ import { toggledUnits } from "../kicad-port/unitToggle";
 import { picker } from "./pcbPicker";
 import { useCliExporters } from "../state/cliExporters";
 import { cliExporterReason } from "../kicad-port/cliExporters";
+import { zoneFromExisting } from "../kicad-port/pcbDrawZone";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -1059,10 +1061,25 @@ export function useActionRunner() {
         // `SetPassEvent`: `TOOL_MANAGER::dispatchInternal` stops there) -- E does nothing while a footprint is carried (UI-LEFT-2 PP4)
         if (placingFootprint()) return;
         // `DrawZone`: `started && evt->IsAction( &PCB_ACTIONS::properties )` -> `OnEditItemRequest( zoneTool.GetZone() )`: the settings of the zone being drawn
-        // (kicad-port/pcbDrawZone.ts); a cutout or a similar zone has none of its own here.
+        // (kicad-port/pcbDrawZone.ts).
         const zoneDraw = state.drawState;
         if (state.activeTool === "zone" && zoneDraw?.kind === "zone" && zoneDraw.settings && zoneDraw.pts.length > 0) {
           dispatch({ type: "PCBX", patch: { zoneCreate: { at: null, initial: zoneDraw.settings } } });
+          return;
+        }
+        // ... and for Add Zone Cutout and Add Similar Zone, the zone made from the source (`createZoneFromExisting`, UI-LEFT-2 PP10): its OK is the similar zone's
+        // settings (a cutout takes only the outline: `performZoneCutout`)
+        const fromMode = state.pcbx.zoneDrawMode;
+        const fromSource = fromMode && (fromMode.mode === "cutout" || fromMode.mode === "similar") ? state.board?.routing?.zones.find((z) => z.id === fromMode.sourceId) : undefined;
+        if (state.activeTool === "zone" && zoneDraw?.kind === "zone" && zoneDraw.pts.length > 0 && fromSource) {
+          dispatch({ type: "PCBX", patch: { zoneCreate: { at: null, initial: zoneFromExisting(fromSource, (state.board?.locked ?? []).includes(fromSource.id)) } } });
+          return;
+        }
+        // `DrawDimension`: `dimension && evt->IsAction( &PCB_ACTIONS::properties )` at SET_END or SET_HEIGHT -> `OnEditItemRequest( dimension )`, then `break`: the
+        // loop is left once the dialog closes, so the dimension being drawn is dropped (`if( step != SET_ORIGIN ) delete dimension`) and the tool ends
+        // (components/DimensionPropertiesDialog.tsx `DimensionDrawDialog`, UI-LEFT-2 PP11). Before the first click there is no dimension: E goes on to the selection.
+        if (state.activeTool === "dimension" && zoneDraw?.kind === "dimension" && zoneDraw.dim) {
+          dispatch({ type: "PCBX", patch: { dimensionDrawDialog: true } });
           return;
         }
         // `PlaceText`: `text && evt->IsAction( &PCB_ACTIONS::properties )` -> `OnEditItemRequest( text )`: Text Properties of the text being carried, which stays carried (r6 A6-6).
@@ -1922,6 +1939,8 @@ export function useActionRunner() {
       const copperLayers = board?.layers ?? [];
       const routing = state.drawState?.kind === "route";
       const shapeToolActive = state.activeTool === "draw_segment" || state.activeTool === "draw_arc" || state.activeTool === "draw_bezier" || state.activeTool === "draw_rect" || state.activeTool === "draw_circle" || state.activeTool === "draw_polygon";
+      // `DrawDimension` is a `DRAWING_TOOL` loop too: Ctrl++ / Ctrl+- are its `incWidth` / `decWidth` (`AS_CONTEXT`, over the global `changeTrackLayerNext`), UI-LEFT-2 PP11.
+      const dimensionToolActive = state.activeTool === "dimension";
 
       // ---- toggleLock / lock / unlock -- board_editor_control.cpp BOARD_EDITOR_CONTROL::modifyLockSelected
       const modifyLock = (mode: "toggle" | "on" | "off") =>
@@ -2052,7 +2071,7 @@ export function useActionRunner() {
 
       // ---- changeTrackLayerNext/Prev (Ctrl++ / Ctrl+-) -- edit_tool.cpp EDIT_TOOL::ChangeTrackLayer: step the active layer (layerNext/layerPrev), then move every selected track onto it.
       // Not while routing, and not while a graphic tool is armed (there Ctrl++/Ctrl+- are incWidth/decWidth).
-      if (!routing && !shapeToolActive) {
+      if (!routing && !shapeToolActive && !dimensionToolActive) {
         const changeTrackLayer = (dir: 1 | -1) =>
           pcbOnly(() => {
             const next = stepCopperLayer(copperLayers, state.layerVisible, state.activeLayer, dir);
@@ -2187,6 +2206,19 @@ export function useActionRunner() {
         };
         m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => stepWidth(1)));
         m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => stepWidth(-1)));
+      }
+      if (dimensionToolActive) {
+        // `DrawDimension`: `evt->IsAction( &PCB_ACTIONS::incWidth ) && step != SET_ORIGIN` -> `m_stroke.SetWidth( m_stroke.GetWidth() + WIDTH_STEP );
+        // dimension->SetLineThickness( m_stroke.GetWidth() )` (decWidth refused at the last step); before the first click it does nothing.
+        const stepDimWidth = (dir: 1 | -1) => {
+          const draw = state.drawState?.kind === "dimension" ? state.drawState : null;
+          if (!draw?.dim) return;
+          const step = steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, dir);
+          dispatch({ type: "PCBX", patch: { drawStrokeStep: step } });
+          dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, dim: fpDimensionWithLineWidth(draw.dim, step.um) } });
+        };
+        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => stepDimWidth(1)));
+        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => stepDimWidth(-1)));
       }
 
       // ---- lineModeNext (Shift+Space) and the explicit modes -- pcb_viewer_tools.cpp PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT.

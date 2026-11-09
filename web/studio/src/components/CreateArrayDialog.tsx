@@ -27,7 +27,7 @@ import {
   arrayCmd,
   arrayOrigin,
   entriesOf,
-  lengthEntry,
+  coordEntry,
   optionsFromEntries,
   previewPoints,
   rememberedOptions,
@@ -40,6 +40,7 @@ import { itemBounds, itemKind, itemPosition } from "../kicad-port/pcbItems";
 import type { BoardState } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import type { LengthUnit } from "../state/units";
+import { useOriginTransforms } from "../state/originTransforms";
 
 /** `s_arrayOptions`: what the last Create Array that went through held (the board's and the Footprint Editor's dialogs share it, as KiCad's one class does). */
 let remembered: ArrayOptions = DEFAULT_ARRAY_OPTIONS;
@@ -190,7 +191,11 @@ export function CreateArrayForm({ host }: { host: ArrayHost }) {
   const origin = host.origin;
 
   const [flags, setFlags] = useState<ArrayOptions>(() => remembered);
-  const [entries, setEntries] = useState<ArrayEntries>(() => entriesOf({ ...remembered, centerX: origin?.[0] ?? remembered.centerX, centerY: origin?.[1] ?? remembered.centerY }, units));
+  // The spacings and offsets are `REL_*_COORD`, the centre `ABS_*_COORD`: shown and read through the board editor's Origins & Axes (UI-LEFT-2 PP9); the
+  // Footprint Editor's dialog as before (its frame's transforms are not modelled).
+  const boardXf = useOriginTransforms();
+  const xf = host.footprintEditor ? undefined : boardXf;
+  const [entries, setEntries] = useState<ArrayEntries>(() => entriesOf({ ...remembered, centerX: origin?.[0] ?? remembered.centerX, centerY: origin?.[1] ?? remembered.centerY }, units, xf));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -231,7 +236,7 @@ export function CreateArrayForm({ host }: { host: ArrayHost }) {
     setPicking(false);
     return result;
   };
-  const setCentre = (x: number, y: number) => setEntries((e) => ({ ...e, centerX: lengthEntry(Math.round(x), units), centerY: lengthEntry(Math.round(y), units) }));
+  const setCentre = (x: number, y: number) => setEntries((e) => ({ ...e, centerX: coordEntry(Math.round(x), units, "abs_x", xf), centerY: coordEntry(Math.round(y), units, "abs_y", xf) }));
   /** `UpdatePickedItem`: the centre becomes the item's position. */
   const selectCentreItem = async () => {
     const id = await runPick(() => pickItem("Select center item..."));
@@ -247,7 +252,7 @@ export function CreateArrayForm({ host }: { host: ArrayHost }) {
   if (picking) return null;
 
   const close = dispatchClose;
-  const parsed = optionsFromEntries(flags, entries, units);
+  const parsed = optionsFromEntries(flags, entries, units, xf);
   const points = parsed.ok && origin ? previewPoints(parsed.options, origin) : [];
   const circular = flags.tab === "circular";
   const fpe = host.footprintEditor;
@@ -264,7 +269,7 @@ export function CreateArrayForm({ host }: { host: ArrayHost }) {
   const padNumbers = fpe && parsed.ok ? (host.padNumbers?.(parsed.options) ?? []) : [];
 
   const submit = async () => {
-    const r = optionsFromEntries(flags, entries, units);
+    const r = optionsFromEntries(flags, entries, units, xf);
     if (!r.ok) return setError(r.error);
     if (host.itemCount === 0) return setError("Select at least one item first.");
     setError(null);

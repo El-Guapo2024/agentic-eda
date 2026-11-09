@@ -392,14 +392,27 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
     }
     writeln!(out, ")").unwrap();
     if !center {
-        // The dimension's text goes last "to be sure the text options are known when reading the file"; always `gr_text`.
-        // Text on a back layer is read from below, so it is written mirrored.
-        let mirror = if d.layer.starts_with("B.") { " (justify mirror)" } else { "" };
-        let size = mm(d.text_size_nm);
-        let thickness = mm(d.text_thickness_nm.unwrap_or_else(|| Nm::kiround(d.text_size_nm.as_f64() * 0.15)));
+        // The dimension's text goes last "to be sure the text options are known when reading the file"; always `gr_text` (`format( const PCB_TEXT* )` with
+        // no parent footprint, so no `(unlocked ..)`: a dimension's keep-upright is never written). Its `EDA_TEXT::Format`: the face, `(size H W)`, the pen,
+        // bold, italic, and `(justify left|right mirror)` (UI-LEFT-2 PP11: the label's own looks, `Dimension::text_effects`; a label without its own mirror is
+        // mirrored on a back layer, as it always was written).
+        let fx = &d.text_effects;
+        let mut l = eda_model::fp_edit::FieldLayout::new(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, &d.layer);
+        l.size = (d.text_width_nm(), d.text_size_nm);
+        l.thickness = d.text_thickness_nm.unwrap_or_else(|| Nm::kiround(d.text_size_nm.as_f64() * 0.15));
+        l.halign = match fx.h_justify {
+            eda_model::ir::TextJustify::Left => -1,
+            eda_model::ir::TextJustify::Center => 0,
+            eda_model::ir::TextJustify::Right => 1,
+        };
+        l.valign = 0;
+        l.mirror = d.text_mirrored();
+        l.bold = fx.bold;
+        l.italic = fx.italic;
+        let effects = crate::fp_fields::effects_with(&l, fx.face.as_deref(), 0);
         writeln!(
             out,
-            "\t\t(gr_text {} (at {} {} {}) (layer {}) (uuid \"{}\")\n\t\t\t(effects (font (size {size} {size}) (thickness {thickness})){mirror})\n\t\t)",
+            "\t\t(gr_text {} (at {} {} {}) (layer {}) (uuid \"{}\")\n\t\t\t{effects}\n\t\t)",
             sexpr_str(a.text),
             mm(a.text_at.0),
             mm(a.text_at.1),
