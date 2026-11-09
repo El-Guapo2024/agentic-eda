@@ -65,6 +65,10 @@ pub struct FilledShape {
     /// filled (`ZONE::Flip`'s `SetLayerSet` clears `m_isFilled`; R7-Z1).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub flip_epoch: u32,
+    /// `Zone::flip_parity` when the zone was filled: a zone on both sides flipped since (an odd number of times) has its fills on the other side's layers,
+    /// which its unchanged layer set alone does not say (UI-LEFT-2 PP10).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip_parity: bool,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -79,6 +83,7 @@ impl FilledShape {
             layers: zone.layer_set().into_iter().map(str::to_string).collect(),
             fill_epoch: zone.fill_epoch,
             flip_epoch: zone.flip_epoch,
+            flip_parity: zone.flip_parity,
         }
     }
 }
@@ -139,8 +144,8 @@ impl KicadFills {
     /// - the fill, not filled (`unfilled`), after a flip to the other side's layers since (`Zone::flip_epoch`), a second flip back included: `ZONE::Flip`'s
     ///   `SetLayerSet( flipped )` clears `m_isFilled` and `SetFilledPolysList` puts the mirrored copper back.
     ///
-    /// Differs: a zone on both outer layers flipped keeps its layer set, and is taken as mirrored (each fill stays on its layer), as the before and after alone cannot
-    /// tell the two apart.
+    /// A zone on both sides flipped keeps its layer set; it is told from a mirrored one by `Zone::flip_parity` (UI-LEFT-2 PP10): its fills go to the other side's
+    /// layers and it stays filled, as `ZONE::Flip`'s `SetLayerSet` of the same set unfills nothing.
     pub fn current(&self, zone: &Zone) -> Option<Cow<'_, ZoneEntry>> {
         let entry = self.zones.get(&zone.id)?;
         if fill_is_of(entry, zone) {
@@ -171,8 +176,10 @@ impl KicadFills {
             })
             .collect();
         // `ZONE::Flip` of a one-sided zone: `SetLayerSet( flipped )` sees another set and unfills (`m_isFilled = false`), then `SetFilledPolysList` puts the
-        // mirrored fill back without setting the flag -- the copper is there, `IsFilled()` is false (R6-Z3)
-        let unfilled = entry.unfilled || !layer_of.is_empty() || flipped_since;
+        // mirrored fill back without setting the flag -- the copper is there, `IsFilled()` is false (R6-Z3). A zone on both sides keeps its set, so it stays
+        // filled, its fills each on the other side's layer (UI-LEFT-2 PP10).
+        let set_changed = !same_set(&was.layers, &zone.layer_set());
+        let unfilled = entry.unfilled || (set_changed && !layer_of.is_empty()) || flipped_since;
         Some(Cow::Owned(ZoneEntry { sig: entry.sig.clone(), layers, unfilled, shape: entry.shape.clone() }))
     }
 
@@ -357,7 +364,8 @@ pub fn fill_after_edit(before: &Zone, after: &Zone) -> FillAfterEdit {
     }
     match follow(&FilledShape::of(before), after) {
         None => FillAfterEdit::Emptied,
-        Some((_, layer_of)) if !layer_of.is_empty() => FillAfterEdit::Flipped,
+        // (a zone on both sides flipped keeps its set: `SetLayerSet` of the same set clears nothing, UI-LEFT-2 PP10)
+        Some((_, layer_of)) if !layer_of.is_empty() && !same_set(&before.layer_set(), &after.layer_set()) => FillAfterEdit::Flipped,
         Some(_) => FillAfterEdit::Kept,
     }
 }
@@ -395,7 +403,8 @@ fn follow(was: &FilledShape, zone: &Zone) -> Option<(Option<Motion>, HashMap<Str
         })
         .then_some(motion)
     })?;
-    if was.layers == now_layers {
+    // A zone on both sides keeps its set through a flip: `Zone::flip_parity` says it was flipped (its fills then go to the other side), not mirrored.
+    if same_set(&was.layers, &now_layers) && (was.flip_parity == zone.flip_parity || !motion.mirrors()) {
         return Some((Some(motion), HashMap::new()));
     }
     // `ZONE::Flip`: a mirror, and every layer to the other side (`FlipLayer`): the copper stack reversed, a front technical layer to its back one.
@@ -417,6 +426,15 @@ fn follow(was: &FilledShape, zone: &Zone) -> Option<(Option<Motion>, HashMap<Str
     mapped.sort();
     now.sort();
     (mapped == now).then_some((Some(motion), map))
+}
+
+/// The same layers, whatever their order (a flip of a zone on both sides gives its set back in the other order).
+fn same_set<A: AsRef<str>, B: AsRef<str>>(a: &[A], b: &[B]) -> bool {
+    let mut a: Vec<&str> = a.iter().map(AsRef::as_ref).collect();
+    let mut b: Vec<&str> = b.iter().map(AsRef::as_ref).collect();
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
 }
 
 fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {

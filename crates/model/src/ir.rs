@@ -1801,6 +1801,11 @@ pub struct Zone {
     /// written), even after a second flip brings it back (R7-Z1). Bumped by `eda_ops`; never sent to the studio.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub flip_epoch: u32,
+    /// Whether the zone has been flipped an odd number of times since it was made (`ZONE::Flip`), so that a zone on both sides -- whose layer set a flip leaves as
+    /// it was -- has its fills on the other side's layers (`SetFilledPolysList( GetBoard()->FlipLayer( oldLayer ), shape )`) and stays filled (`SetLayerSet` of
+    /// the same set unfills nothing), where a mirror leaves each fill on its layer (UI-LEFT-2 PP10). Toggled by `eda_ops`' flip; never sent to the studio. Additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip_parity: bool,
     /// `ZONE::GetCornerSmoothingType()`.
     #[serde(default, skip_serializing_if = "ZoneSmoothing::is_none")]
     pub smoothing: ZoneSmoothing,
@@ -1920,6 +1925,7 @@ impl Default for Zone {
             hatch_offsets: std::collections::BTreeMap::new(),
             fill_epoch: 0,
             flip_epoch: 0,
+            flip_parity: false,
             smoothing: ZoneSmoothing::default(),
             corner_radius: Nm::ZERO,
             placement: Default::default(),
@@ -2777,6 +2783,11 @@ pub struct DrawingsSection {
     /// older `design.json` reads as "no edits".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zone_overrides: Vec<FootprintZoneOverrides>,
+    /// The board's default zone settings (`BOARD_DESIGN_SETTINGS::GetDefaultZoneSettings`), what a new zone's dialog opens on (`ZONE_CREATE_HELPER::createNewZone`):
+    /// the settings of the zone Zone Properties was last OK'd on (`PCB_EDIT_FRAME::Edit_Zone_Params`' `SetDefaultZoneSettings( zoneInfo )`, `ZONE_SETTINGS <<
+    /// *aZone` with no net), as a zone with no outline, net or id. `None` is `ZONE_SETTINGS`' own. UI-LEFT-2 PP10. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_defaults: Option<Zone>,
     /// Explicit per-via tenting overrides (`(via ... (tenting ..))`), looked
     /// up by position+net; a via with no entry follows the board setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

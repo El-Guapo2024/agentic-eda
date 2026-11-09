@@ -1619,6 +1619,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         });
         // The text boxes, reference images and points (`eda_model::pcb_items`).
         crate::pcb_items_json::extend(&mut drawings, &design, &model, d, &tv);
+        // `GetDefaultZoneSettings()`: what a new zone's dialog opens on (`createNewZone`), the zone Zone Properties was last OK'd on (UI-LEFT-2 PP10); absent: KiCad's own.
+        if let Some(z) = &d.zone_defaults {
+            drawings["zone_defaults"] = serde_json::to_value(z).unwrap_or(serde_json::Value::Null);
+        }
         drawings
     });
     let mut state = json!({

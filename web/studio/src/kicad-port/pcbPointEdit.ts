@@ -12,6 +12,7 @@
 import type { CmdShape, Shape } from "../api/types";
 import { arcCenter, arcReversed, computeChamferPoints, eq, fromIU, kiRound, norm, resize, rotatePoint, segIntersect, segNearestPoint, toIU, vadd, vsub, angleOf, type Arc, type V } from "./pcbGeom";
 import { relativeIndex } from "./zonePointEditor";
+import { bridgeHoles } from "./polyHoles";
 
 type P = [number, number];
 
@@ -621,7 +622,8 @@ export function shapeToCmd(s: Shape): CmdShape {
     case "circle":
       return { ...common, kind: "circle", center: cp(s.center), end: cp(s.end) };
     case "polygon":
-      return { ...common, kind: "polygon", pts: s.pts.map(cp) };
+      // a polygon with holes goes as one ring with them bridged in, which the backend takes apart again (UI-LEFT-2 PP10)
+      return { ...common, kind: "polygon", pts: (s.holes && s.holes.length > 0 ? bridgeHoles(s.pts, s.holes) : s.pts).map(cp) };
     case "bezier":
       return { ...common, kind: "bezier", start: cp(s.start), c1: cp(s.c1), c2: cp(s.c2), end: cp(s.end) };
   }

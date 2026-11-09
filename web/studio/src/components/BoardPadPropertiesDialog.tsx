@@ -84,12 +84,12 @@ export function BoardPadPropertiesDialog() {
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const units = state.units;
+  // `m_posX` / `m_posY` are `ABS_X_COORD` / `ABS_Y_COORD`: the pad's place counted from Origins & Axes' origin (UI-LEFT-2 PP9)
+  const xf = useOriginTransforms();
   const id = state.boardPadPropertiesId;
   const hit = id && state.board ? padById(state.board, id) : null;
   const [form, setForm] = useState<Form | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // `m_posX` / `m_posY` are `ABS_X_COORD` / `ABS_Y_COORD`: the pad's place counted from Origins & Axes' origin (UI-LEFT-2 PP9)
-  const xf = useOriginTransforms();
   const [busy, setBusy] = useState(false);
 
   // Fill the form when the dialog opens on a pad -- not on every poll.

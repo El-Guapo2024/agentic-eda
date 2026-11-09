@@ -134,6 +134,7 @@ import { toggledUnits } from "../kicad-port/unitToggle";
 import { picker } from "./pcbPicker";
 import { useCliExporters } from "../state/cliExporters";
 import { cliExporterReason } from "../kicad-port/cliExporters";
+import { zoneFromExisting } from "../kicad-port/pcbDrawZone";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -1060,10 +1061,18 @@ export function useActionRunner() {
         // `SetPassEvent`: `TOOL_MANAGER::dispatchInternal` stops there) -- E does nothing while a footprint is carried (UI-LEFT-2 PP4)
         if (placingFootprint()) return;
         // `DrawZone`: `started && evt->IsAction( &PCB_ACTIONS::properties )` -> `OnEditItemRequest( zoneTool.GetZone() )`: the settings of the zone being drawn
-        // (kicad-port/pcbDrawZone.ts); a cutout or a similar zone has none of its own here.
+        // (kicad-port/pcbDrawZone.ts).
         const zoneDraw = state.drawState;
         if (state.activeTool === "zone" && zoneDraw?.kind === "zone" && zoneDraw.settings && zoneDraw.pts.length > 0) {
           dispatch({ type: "PCBX", patch: { zoneCreate: { at: null, initial: zoneDraw.settings } } });
+          return;
+        }
+        // ... and for Add Zone Cutout and Add Similar Zone, the zone made from the source (`createZoneFromExisting`, UI-LEFT-2 PP10): its OK is the similar zone's
+        // settings (a cutout takes only the outline: `performZoneCutout`)
+        const fromMode = state.pcbx.zoneDrawMode;
+        const fromSource = fromMode && (fromMode.mode === "cutout" || fromMode.mode === "similar") ? state.board?.routing?.zones.find((z) => z.id === fromMode.sourceId) : undefined;
+        if (state.activeTool === "zone" && zoneDraw?.kind === "zone" && zoneDraw.pts.length > 0 && fromSource) {
+          dispatch({ type: "PCBX", patch: { zoneCreate: { at: null, initial: zoneFromExisting(fromSource, (state.board?.locked ?? []).includes(fromSource.id)) } } });
           return;
         }
         // `DrawDimension`: `dimension && evt->IsAction( &PCB_ACTIONS::properties )` at SET_END or SET_HEIGHT -> `OnEditItemRequest( dimension )`, then `break`: the

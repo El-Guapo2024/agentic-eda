@@ -1309,6 +1309,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       name,
       kind: "int",
       display: "coord",
+      coordType: axis === 0 ? "abs_x" : "abs_y",
       get: (i) => end(i.track!, which)[axis],
       set: (i, v) => {
         const at = end(i.track!, which);
@@ -1419,7 +1420,6 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     if (v.type === "blind") return "Blind";
     if (v.type === "buried") return "Buried";
     const first = c.copperLayers[0];
-      coordType: axis === 0 ? "abs_x" : "abs_y",
     const last = c.copperLayers[c.copperLayers.length - 1];
     const outer = (l: string): boolean => l === first || l === last;
     if ((v.from === first && v.to === last) || (v.from === last && v.to === first)) return "Through";
@@ -1996,6 +1996,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         name,
         kind: "int",
         display: "coord",
+        coordType: axis === 0 ? "abs_x" : "abs_y",
         get: (i) => shapePoint(i.shape!, which)[axis],
         available,
         set: (i, v) => {
@@ -2122,7 +2123,6 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       },
     },
     SHAPE
-        coordType: axis === 0 ? "abs_x" : "abs_y",
   );
 
   add({ owner: "EDA_SHAPE", name: "Fill Color", kind: "color", get: () => "", available: (i) => kindOf(i) === "polygon" || kindOf(i) === "rect" || kindOf(i) === "circle" }, SHAPE);

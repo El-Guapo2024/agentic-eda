@@ -126,6 +126,9 @@ export interface Preferences {
   escClearsNetHighlight: boolean;
   /** `PCBNEW_SETTINGS::m_ShowCourtyardCollisions` ("Show courtyard collisions when moving/dragging", `editing.show_courtyard_collisions`). Default on. */
   showCourtyardCollisions: boolean;
+  /** `PCBNEW_SETTINGS::m_AutoRefillZones` ("Automatically refill zones", `editing.auto_fill_zones`): after each edit the zones it damaged and the unfilled ones are filled
+   *  (`BOARD_COMMIT::Push` -> `zoneFillDirty`; kicad-port/autoRefill.ts). Default off (UI-LEFT-2 PP10). */
+  autoRefillZones: boolean;
   /** `PCB_DISPLAY_OPTIONS::m_RatsnestThickness` ("Ratsnest line thickness:", `pcb_display.ratsnest_thickness`), pixels, 0.5 .. 10 by 0.5. Default 0.5. */
   ratsnestThicknessPx: number;
   /** `EESCHEMA_SETTINGS::m_Input.esc_clears_net_highlight` ("<ESC> clears net highlighting" of the Schematic Editor). Default on. */
@@ -209,6 +212,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schArcEditMode: DEFAULT_ARC_EDIT_MODE,
   escClearsNetHighlight: true,
   showCourtyardCollisions: true,
+  autoRefillZones: false,
   ratsnestThicknessPx: 0.5,
   schEscClearsNetHighlight: true,
   schRepeatOffsetXMils: 0,
@@ -345,6 +349,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
     escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),
     showCourtyardCollisions: bool(o.showCourtyardCollisions, d.showCourtyardCollisions),
+    autoRefillZones: bool(o.autoRefillZones, d.autoRefillZones),
     ratsnestThicknessPx: sanitizeRatsnestThickness(o.ratsnestThicknessPx, d.ratsnestThicknessPx),
     schEscClearsNetHighlight: bool(o.schEscClearsNetHighlight, d.schEscClearsNetHighlight),
     schRepeatOffsetXMils: finiteInt(o.schRepeatOffsetXMils, d.schRepeatOffsetXMils),

@@ -129,11 +129,17 @@ impl Board<'_> {
             Shape::Polygon { pts, .. } if pts.len() < 3 => return Err(fail("ops_bad_shape", id, "a polygon needs at least three points")),
             _ => {}
         }
+        // a polygon given as a fractured ring is its outline and holes (UI-LEFT-2 PP10): the geometry whole, so a polygon's holes are the ones given
+        let holes = crate::poly_holes::split_holes(&mut shape);
+        let polygon = matches!(shape, Shape::Polygon { .. });
         let dr = self.design.drawings.as_mut().ok_or_else(|| fail("ops_unknown_shape", id, "the board has no drawings yet"))?;
         let slot = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| fail("ops_unknown_shape", id, "no shape with this id"))?;
         shape.set_id(id.to_string());
         let solid = shape.is_filled();
         *slot = shape;
+        if polygon || !holes.is_empty() {
+            dr.board_items.set_holes(id, holes);
+        }
         // A solid fill takes the place of a hatch.
         if solid {
             dr.board_items.set_hatch(id, None);

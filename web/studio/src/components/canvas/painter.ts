@@ -180,13 +180,13 @@ export interface PaintOptions {
   viaGhostAt?: readonly [number, number] | null;
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
   units: LengthUnit;
+  /** `RULER_ITEM( .., invertXAxis, invertYAxis )` of the Measure tool and Interactive Offset: Origins & Axes' axis directions (`m_DisplayInvertXAxis` /
+   *  `m_DisplayInvertYAxis`), which flip the signs of the x and y the ruler shows (UI-LEFT-2 PP9). */
+  rulerFlip?: { x: boolean; y: boolean };
   /** pcb_point_editor.cpp's zone corner-drag preview (Canvas.tsx's own local state, only set while a drag is live) -- lets drawZoneHandles show the corner actually moving, not the last-committed outline, while the drag is in progress. */
   zoneCornerPreview: { zoneId: string; outline: [Nm, Nm][]; /** The zone's holes as the drag has them (a hole's corner can be the one dragged). */ holes?: [Nm, Nm][][] } | null;
   /** The same for a graphic shape's handle drag (kicad-port/pcbPointEdit.ts): the shape as it would be once dropped, drawn instead of the committed one. */
   shapePointPreview: { id: string; shape: Shape } | null;
-  /** `RULER_ITEM( .., invertXAxis, invertYAxis )` of the Measure tool and Interactive Offset: Origins & Axes' axis directions (`m_DisplayInvertXAxis` /
-   *  `m_DisplayInvertYAxis`), which flip the signs of the x and y the ruler shows (UI-LEFT-2 PP9). */
-  rulerFlip?: { x: boolean; y: boolean };
   /** The board's Dashed lines ratios (`boardDashRatios`) a dashed graphic is cut with; KiCad's 12 and 3 when absent. */
   dashRatios?: DashRatios;
   /** The dimension the Draw Dimension tool is drawing (`id` null) or the point editor is reshaping (`POST /api/dimension/preview`), drawn in place of the committed one. */
@@ -982,7 +982,7 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
     if (s.filled && !sketch && (s.kind === "rect" || s.kind === "circle" || s.kind === "polygon")) {
       ctx.beginPath();
       traceClosedShape(ctx, s);
-      ctx.fill();
+      ctx.fill(s.kind === "polygon" && s.holes?.length ? "evenodd" : "nonzero");
     }
     strokeDashPieces(ctx, dashPieces(s, dash, BEZIER_MAX_ERROR_NM));
     drawHatchLines(ctx, s);
@@ -1012,6 +1012,11 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
     case "polygon":
       s.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.closePath();
+      // its holes, each a contour of its own (UI-LEFT-2 PP10), cut out of the fill below
+      for (const h of s.holes ?? []) {
+        h.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        ctx.closePath();
+      }
       break;
     case "bezier": {
       // `EDA_SHAPE::RebuildBezierToSegmentsPointsList( m_MaxError )`: the curve as KiCad's own flattened polyline (an open curve is never filled).
@@ -1040,7 +1045,7 @@ export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketc
       return;
     }
   }
-  if (s.filled && !sketch) ctx.fill();
+  if (s.filled && !sketch) ctx.fill(s.kind === "polygon" && s.holes?.length ? "evenodd" : "nonzero");
   ctx.stroke();
   drawHatchLines(ctx, s);
 }
@@ -1058,6 +1063,10 @@ function traceClosedShape(ctx: CanvasRenderingContext2D, s: Extract<Shape, { kin
   } else {
     s.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.closePath();
+    for (const h of s.holes ?? []) {
+      h.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+    }
   }
 }
 

@@ -770,7 +770,8 @@ export type Shape =
   | (ShapeCommon & { kind: "arc"; start: [Nm, Nm]; mid: [Nm, Nm]; end: [Nm, Nm] })
   | (ShapeCommon & { kind: "rect"; start: [Nm, Nm]; end: [Nm, Nm]; /** `EDA_SHAPE::GetCornerRadius()`, absent for a sharp rectangle. */ corner_radius?: Nm })
   | (ShapeCommon & { kind: "circle"; center: [Nm, Nm]; end: [Nm, Nm] })
-  | (ShapeCommon & { kind: "polygon"; pts: [Nm, Nm][] })
+  /** `holes`: the contours cut out of the polygon (`ShapeStyle::holes`: a zone with holes made a polygon, UI-LEFT-2 PP10); absent for none. */
+  | (ShapeCommon & { kind: "polygon"; pts: [Nm, Nm][]; holes?: [Nm, Nm][][] })
   /** `PCB_SHAPE` BEZIER: a cubic from `start` to `end` with control points `c1`/`c2` (KiCad's `gr_curve` order). The canvas flattens it with kicad-port/bezierPoly.ts (`BEZIER_POLY::GetPoly`). */
   | (ShapeCommon & { kind: "bezier"; start: [Nm, Nm]; c1: [Nm, Nm]; c2: [Nm, Nm]; end: [Nm, Nm] });
 
@@ -831,7 +832,12 @@ export interface Drawings {
   barcodes?: BoardBarcode[];
   /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
   tables?: BoardTable[];
+  /** `GetDefaultZoneSettings()`: the settings of the zone Zone Properties was last OK'd on, what a new zone's dialog opens on (UI-LEFT-2 PP10); absent: KiCad's own. */
+  zone_defaults?: ZoneDefaults;
 }
+
+/** The board's default zone settings (`ZONE_SETTINGS`, `DrawingsSection::zone_defaults`): a zone's settings, layers and name with no outline or net. */
+export type ZoneDefaults = Partial<ZoneSettingsFields & RuleAreaFields> & { layer?: string; layers?: string[]; name?: string };
 
 /** `STROKE_PARAMS` of a table's border or separators: a width of -1 is "not drawn", `default` is drawn solid. */
 export interface TableStrokeInfo {
@@ -2252,6 +2258,8 @@ export type Cmd =
   | { op: "edit_board_pad"; part: string; edit: PadEditCmd }
   /** The Properties panel's "Pad Number" (`PAD::SetNumber`): the pad `pad` (`REF.NUM[#k]`) renamed, keeping its net (crates/ops/src/pad_renumber.rs). */
   | { op: "set_pad_number"; pad: string; number: string }
+  /** `SetDefaultZoneSettings` (Zone Properties' OK, `Edit_Zone_Params`): the board's default zone settings become `zone`'s (a zone record with no outline or net). */
+  | { op: "set_zone_defaults"; zone: ZoneDefaults & { net: string; layer: string; outline: [] } }
   /**
    * The 3D Models tab of Footprint Properties (crates/ops/src/fp_models.rs): `set_board_models` makes the footprint's whole list the one given (the dialog's OK; an empty list is a
    * footprint with no model); the others are the tab's Add, Remove and cell edits and the order of the rows, one at a time, by 0-based position (`edit_board_model` leaves a key

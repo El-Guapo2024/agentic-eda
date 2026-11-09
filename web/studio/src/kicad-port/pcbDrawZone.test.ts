@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { leaderModeOf, newZoneInitial, newZoneNet, uniqueZonePriority, zoneClick, zoneCommitPlan, zoneFinish, zoneFirstCorner, zoneLeader, zoneLoop } from "./pcbDrawZone";
+import { leaderModeOf, newZoneInitial, newZoneNet, stickySettings, uniqueZonePriority, zoneClick, zoneCommitPlan, zoneDefaultsCmd, zoneFinish, zoneFirstCorner, zoneFromExisting, zoneLeader, zoneLoop } from "./pcbDrawZone";
 import type { BoardState } from "../api/types";
 
 test("a click on the first corner closes the zone or polygon (NewPointClosesOutline, round 4 C-4)", () => {
@@ -103,4 +103,32 @@ test("commitZone: the drawn zone takes the dialog's settings; a cutout or simila
   assert.deepEqual(zoneCommitPlan({ mode: "similar", sourceId: "z0" }, true, undefined), { kind: "similar", sourceId: "z0" });
   assert.deepEqual(zoneCommitPlan({ mode: "cutout", sourceId: "gone" }, false, undefined), { kind: "none" });
   assert.deepEqual(zoneCommitPlan({ mode: "stitch", sourceId: "" }, false, undefined), { kind: "stitch" });
+});
+
+// ------------------------------------------------------------------------------------------------ UI-LEFT-2 PP10
+
+test("PP10: the settings are sticky -- a new zone opens on the last OK'd zone's (GetDefaultZoneSettings), its layer, net and priority its own", () => {
+  const sticky = { ...board, drawings: { zone_defaults: { clearance: 1_000_000, min_thickness: 300_000, fill_mode: "HatchPattern", name: "Pour", priority: 7, layers: ["F.Cu", "B.Cu"], is_rule_area: false } } } as unknown as BoardState;
+  const z = newZoneInitial(sticky, { layer: "B.Cu", ruleArea: false, highlighted: [], selection: [], defaults });
+  assert.deepEqual([z.settings.clearance, z.settings.min_thickness, z.settings.fill_mode, z.name, z.layers, z.settings.priority], [1_000_000, 300_000, "HatchPattern", "Pour", ["B.Cu"], 2]);
+  // A rule area: no net, no name, and `ZONE_SETTINGS()`' keep-outs, the last zone OK'd being a pour (a pour here holds none of its own)
+  const ra = newZoneInitial(sticky, { layer: "F.Cu", ruleArea: true, highlighted: [], selection: [], defaults });
+  assert.deepEqual([ra.name, ra.net, ra.settings.keepout_tracks, ra.settings.keepout_copper_pour], ["", "", true, false]);
+  // Zone Properties' OK: the settings, the layers and the name, no net, no outline
+  const cmd = zoneDefaultsCmd({ ...defaults, clearance: 400_000 }, ["F.Cu", "In1.Cu"], "GND pour");
+  assert.ok(cmd.op === "set_zone_defaults");
+  if (cmd.op === "set_zone_defaults") {
+    assert.deepEqual([cmd.zone.net, cmd.zone.layer, cmd.zone.outline, cmd.zone.layers, cmd.zone.name, cmd.zone.clearance], ["", "F.Cu", [], ["F.Cu", "In1.Cu"], "GND pour", 400_000]);
+    assert.equal("id" in cmd.zone, false);
+  }
+  assert.deepEqual(stickySettings(undefined), {});
+});
+
+test("PP10: Properties (E) while drawing a cutout or similar zone opens the zone made from the source; OK's settings make the similar zone", () => {
+  const src = { ...zone("z0", 4), name: "Old", layers: ["F.Cu", "B.Cu"], clearance: 750_000 } as never;
+  const z = zoneFromExisting(src, true);
+  assert.deepEqual([z.net, z.layers, z.name, z.locked, z.settings.clearance, z.settings.priority], ["GND", ["F.Cu", "B.Cu"], "Old", true, 750_000, 4]);
+  const edited = { ...z, settings: { ...z.settings, clearance: 900_000 } };
+  assert.deepEqual(zoneCommitPlan({ mode: "similar", sourceId: "z0" }, true, edited), { kind: "similar", sourceId: "z0", zone: edited });
+  assert.deepEqual(zoneCommitPlan({ mode: "cutout", sourceId: "z0" }, true, edited), { kind: "cutout", sourceId: "z0" }, "a cutout takes only the outline");
 });

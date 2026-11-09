@@ -493,7 +493,14 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
     for s in &picked.shapes {
         let mut moved = (*s).clone();
         moved.translate(dx, dy);
-        let uuid = write_shape(&mut out, &moved, false, design.drawings.as_ref().and_then(|d| d.board_items.style_of(s.id())), 0);
+        // a polygon's holes move with it (UI-LEFT-2 PP10)
+        let mut style = design.drawings.as_ref().and_then(|d| d.board_items.style_of(s.id())).cloned();
+        if let Some(st) = style.as_mut() {
+            for p in st.holes.iter_mut().flatten() {
+                *p = eda_model::ir::Point { x: p.x + dx, y: p.y + dy };
+            }
+        }
+        let uuid = write_shape(&mut out, &moved, false, style.as_ref(), 0);
         // `write_shape` seeds its uuid by the shape's own id, which is what a group's members name.
         written.entry(s.id().to_string()).or_default().push(uuid);
     }

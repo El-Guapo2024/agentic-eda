@@ -142,7 +142,8 @@ export function sourceRings(board: BoardState, id: string): P[][] | null {
   const s = board.drawings?.shapes.find((sh) => sh.id === id);
   if (s) {
     if (s.kind === "rect") return [[pt(s.start), [s.end[0], s.start[1]], pt(s.end), [s.start[0], s.end[1]]]];
-    if (s.kind === "polygon") return s.pts.length >= 3 ? [s.pts.map(pt)] : null;
+    // a polygon's holes are rings too (`processPolySet` over `GetPolyShape()`, UI-LEFT-2 PP10)
+    if (s.kind === "polygon") return s.pts.length >= 3 ? [s.pts, ...(s.holes ?? []).filter((h) => h.length >= 3)].map((ring) => ring.map(pt)) : null;
     return null;
   }
   const z = board.routing?.zones.find((zz) => zz.id === id);

@@ -193,6 +193,10 @@ fn endings_json(json: &mut Value, shape: &eda_model::ir::Shape, items: &eda_mode
     if let Some(net) = &st.net {
         json["net"] = json!(net);
     }
+    // A polygon's holes (`ShapeStyle::holes`, UI-LEFT-2 PP10): drawn, hit-tested and sent back (bridged into the outline) with the shape.
+    if !st.holes.is_empty() {
+        json["holes"] = json!(st.holes.iter().map(|h| h.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()).collect::<Vec<_>>());
+    }
     // A stroke that is not solid (`STROKE_PARAMS::GetLineStyle`: dash, dot, dash_dot, dash_dot_dot), drawn as `STROKE_PARAMS::Stroke` cuts it; the word a footprint's graphic
     // has (`crate::fp_art_json`). A `default` or `solid` stroke has none (UI-LEFT P5).
     if !st.line_style.is_solid() {

@@ -124,6 +124,7 @@ mod pcb_transform;
 mod tuning;
 mod zone_overrides;
 mod pad_renumber;
+mod poly_holes;
 pub mod zone_priority;
 pub mod autoplace;
 mod zone_unfill;
@@ -1259,6 +1260,10 @@ pub enum Cmd {
     SetItemNet { ids: Vec<String>, net: String },
     /// "Name" of a zone (`ZONE::SetZoneName`).
     SetZoneName { id: String, name: String },
+    /// `BOARD_DESIGN_SETTINGS::SetDefaultZoneSettings` (Zone Properties' OK on a zone, `PCB_EDIT_FRAME::Edit_Zone_Params`, UI-LEFT-2 PP10): the board's default zone
+    /// settings become `zone`'s (`ZONE_SETTINGS << *aZone`, the net taken away: `m_Netcode = NETINFO_LIST::ORPHANED`), what the next new zone's dialog opens on.
+    /// Its outline, holes, id and fill counts are not kept. Batched with the dialog's `edit_zone`: one undo step.
+    SetZoneDefaults { zone: Box<eda_model::ir::Zone> },
     /// A shape's new geometry (and whatever else of it changed), in place: the id and the lock stay. The panel's "Start X", "Radius",
     /// "Width" and the like (`EDA_SHAPE` setters) send the whole shape.
     ReplaceShape { id: String, shape: Shape },
@@ -2748,6 +2753,7 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
+            Cmd::SetZoneDefaults { .. } => vec!["zone_defaults"],
             Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditBoardFootprintText { id, .. } => vec![id.as_str()],
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
@@ -3525,6 +3531,19 @@ impl<'a> Board<'a> {
             Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
+            Cmd::SetZoneDefaults { zone } => {
+                // `ZONE_SETTINGS << *aZone`: the settings, the layers and the name; the net restored to none (`m_Netcode = NETINFO_LIST::ORPHANED`)
+                let mut d = (**zone).clone();
+                d.id.clear();
+                d.uuid.clear();
+                d.net.clear();
+                d.outline.clear();
+                d.holes.clear();
+                (d.fill_epoch, d.flip_epoch, d.flip_parity) = (0, 0, false);
+                d.parent_footprint = None;
+                self.drawings_mut().zone_defaults = Some(d);
+                Ok(())
+            }
             Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),
             Cmd::EditTextStyle { id, width_nm, valign, bold, italic, knockout, auto_thickness, face } => self.edit_text_style(
                 id,
@@ -5109,9 +5128,15 @@ impl<'a> Board<'a> {
         }
         self.layer_is_on(shape.layer(), "shape")?;
         shape.set_id(String::new()); // ids are ours to assign, never the caller's
+        // A polygon given as a fractured ring (a zone with holes made a polygon: `CreatePolys`' `SetPolyShape( poly )`, UI-LEFT-2 PP10) is its outline and holes.
+        let holes = crate::poly_holes::split_holes(&mut shape);
         let dr = self.drawings_mut();
         dr.shapes.push(shape);
         dr.assign_missing_ids();
+        if !holes.is_empty() {
+            let id = dr.shapes.last().map(|s| s.id().to_string()).unwrap_or_default();
+            dr.board_items.set_holes(&id, holes);
+        }
         Ok(())
     }
 
@@ -5130,6 +5155,8 @@ impl<'a> Board<'a> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
         let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
         s.translate(dx, dy);
+        // a polygon's holes with it (UI-LEFT-2 PP10)
+        dr.board_items.map_holes(id, |p| Point { x: p.x + dx, y: p.y + dy });
         Ok(())
     }
 
@@ -7589,6 +7616,8 @@ mod fp_models_tests;
 mod pcb_props_tests;
 #[cfg(test)]
 mod pp8_props_tests;
+#[cfg(test)]
+mod pp10_zone_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
 #[cfg(test)]

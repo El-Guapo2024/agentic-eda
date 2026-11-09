@@ -901,6 +901,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`kicad-port/zoneHatch.ts`). The Zone Manager's Update Displayed Zones fills the staged copies with kicad-cli (`POST /api/fill/preview`, nothing kept) for its preview. Left: a zone's settings are
   not sticky (`Edit_Zone_Params`' `SetDefaultZoneSettings`; Board Setup has no Zones page); Properties during a cutout or similar-zone draw; a pour is picked by its inside, not by its fill
   (`HitTestFilledArea`).
+- Done 2026-11-09 (`task-v3-pcbmisc`, UI-LEFT-2 PP10, `PARITY-pcb` section 103): sticky zone settings (`Drawings::zone_defaults`), Properties while drawing a cutout or similar zone, a pour picked by its fill, Automatically refill zones, a two-sided zone's fills on a flip (`Zone::flip_parity`), a polygon's holes (`ShapeStyle::holes`).
 
 ### 14. Snap, grid and the click-versus-drag rule
 **Closed 2026-10-09 for the board, the schematic and the click rule (`358606b`); the footprint and symbol editors snap to other items' anchors since 2026-10-14 (P17, `task-lib-editors`, not merged).** Hit: every drag. Blocks: no.

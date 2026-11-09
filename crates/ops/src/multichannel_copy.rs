@@ -155,6 +155,10 @@ impl Item {
                         st.corner_radius = eda_model::ir::Nm::ZERO;
                     }
                 }
+                // a polygon's holes with it (UI-LEFT-2 PP10)
+                if let Some(st) = style.as_mut() {
+                    t::transform_holes(st, x);
+                }
             }
             Item::Text(v, _) => t::transform_text(v, x, copper),
             Item::Dimension(v) => t::transform_dimension(v, x, copper),

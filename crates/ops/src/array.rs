@@ -525,6 +525,10 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
                     st.corner_radius = Nm::ZERO;
                 }
             }
+            // a polygon's holes with it (UI-LEFT-2 PP10)
+            if let Some(Some(st)) = block.shape_style.get_mut(i) {
+                super::pcb_transform::transform_holes(st, x);
+            }
         }
         Member::Text(i) => transform_text(&mut block.texts[i], x, copper),
         Member::Dimension(i) => transform_dimension(&mut block.dimensions[i], x, copper),

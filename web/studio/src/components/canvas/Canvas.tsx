@@ -108,6 +108,7 @@ import { drcMarkerAt, drcMenuContext, runMarkerMenu, selectMarkerDrc, showDrcInD
 import { askExclusionComment } from "../../state/checkerView";
 import { useImageVersion } from "./imageCache";
 import "../../styles/canvas.css";
+import { setZonePickFills } from "../../kicad-port/zonePickFill";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
 function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
@@ -258,6 +259,8 @@ export function Canvas() {
   // drawn in place of the committed one. Only the latest request's reply is kept.
   const [dimPreview, setDimPreview] = useState<{ id: string | null; dim: Dimension } | null>(null);
   const dimPreviewSeq = useRef(0);
+  // The fills a click inside a pour can hit, and whether they are shown filled (`HitTestFilledArea`, `SetIgnoreZoneFills`: kicad-port/zonePickFill.ts, UI-LEFT-2 PP10).
+  useEffect(() => setZonePickFills(state.zoneFill, state.zoneDisplayMode), [state.zoneFill, state.zoneDisplayMode]);
   // Escape, a tool change or a commit that drops the dimension being drawn drops its preview (`preview.Clear()`).
   useEffect(() => {
     if (state.drawState?.kind !== "dimension" && dragRef.current?.kind !== "dimPoint") {
@@ -497,6 +500,7 @@ export function Canvas() {
       // The Draw Via ghost: the size the next via gets (`GetCurrentViaSize`, round 6 C6-2).
       currentViaPreset: state.board ? currentViaSize(state.board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia) : state.currentViaPreset,
       units: state.units,
+      rulerFlip: { x: state.prefs.pcbInvertXAxis, y: state.prefs.pcbInvertYAxis },
       zoneCornerPreview,
       shapePointPreview,
       dimensionPreview: dimPreview,
@@ -517,7 +521,6 @@ export function Canvas() {
       sketchVias: state.sketchVias,
       sketchGraphics: state.bcx.sketchGraphics,
       sketchText: state.bcx.sketchText,
-      rulerFlip: { x: state.prefs.pcbInvertXAxis, y: state.prefs.pcbInvertYAxis },
       showPadNumbers: state.bcx.showPadNumbers,
       auxOrigin: board.aux_origin ?? null,
       gridOrigin: board.grid_origin ?? null,
@@ -789,7 +792,10 @@ export function Canvas() {
         if (plan.kind === "cutout" && source) {
           void api.cmd({ op: "zone_cutout", id: source.id, cutout: outline.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
         } else if (plan.kind === "similar" && source) {
-          void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
+          // the source's settings, or what Properties (E) gave the zone being drawn (UI-LEFT-2 PP10)
+          const z = plan.zone;
+          if (z) void api.addZone(z.net, z.layers[0] ?? source.layer, outline, z.settings, { layers: z.layers, name: z.name, locked: z.locked }).then(selectNew);
+          else void api.addZone(source.net, source.layer, outline, zoneSettingsOf(source), { layers: [...zoneLayers(source)] }).then(selectNew);
         } else if (plan.kind === "stitch") {
           // KiCad 10's `ZONE_MODE::STITCH` (zone_create_helper.cpp): a via stitching with the outline, its defaults filled in (`InitializeDefaults`), and its properties dialog before any via is made.
           // `defaultViaSize` / `defaultViaDrill`: `GetCurrentViaSize()` / `GetCurrentViaDrill()`, the via size chosen in the toolbar (kicad-port/routerVia.ts `currentViaSize`).

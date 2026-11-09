@@ -74,6 +74,7 @@ import type { SheetImportPlan } from "../kicad-port/schImportSheet";
 import type { PinPlacement } from "../components/schematic/schPinTool";
 import type { AlignEdge } from "../kicad-port/alignDistribute";
 import { withBoardImagePixels, withSheetImagePixels } from "../actions/imagePixels";
+import { zonesToRefill } from "../kicad-port/autoRefill";
 
 /** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
 const isRouterDraw = (d: { kind: string } | null | undefined): boolean => d?.kind === "route" || d?.kind === "diffpair" || d?.kind === "drag";
@@ -1962,7 +1963,8 @@ export interface StudioApi {
    * B ("Fill All Zones"), or Fill Selected Zones with `ids`: kicad-cli's filler runs (seconds; `state.zoneFillRunning` meanwhile, the board stays editable) and its fills
    * are kept beside the design; then they are read (`state.zoneFill`). A run already in flight is not doubled.
    */
-  fillZones: (ids?: string[]) => Promise<void>;
+  /** `quiet`: no "filled N zones" note (the automatic refill after an edit, UI-LEFT-2 PP10). */
+  fillZones: (ids?: string[], quiet?: boolean) => Promise<void>;
   /** Ctrl+B ("Unfill All Zones"), or Unfill Selected Zones with `ids`: the fills are taken away, the zones are outlines until the next fill. */
   unfillZones: (ids?: string[]) => Promise<void>;
   /** The fills as the server holds them, read again now. */
@@ -2117,14 +2119,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   // Fill All Zones (B) and the selected-zones forms: kicad-cli's filler runs on the server (seconds, the board stays editable), then the fills it kept are read.
   const fillZones = useCallback(
-    async (ids?: string[]) => {
+    async (ids?: string[], quiet = false) => {
       if (stateRef.current.zoneFillRunning) return;
       dispatch({ type: "ZONE_FILL_RUNNING", running: true });
       try {
         const reply = await postFillKicad(ids);
         if (!reply.ok) {
           dispatch({ type: "TOAST", message: `Zones not filled: ${reply.message ?? "kicad-cli could not fill them"}`, kind: "error" });
-        } else if ((reply.zones ?? 0) > 0) {
+        } else if ((reply.zones ?? 0) > 0 && !quiet) {
           dispatch({ type: "TOAST", message: `${reply.engine ?? "kicad-cli"} filled ${reply.zones} zone${reply.zones === 1 ? "" : "s"} in ${(reply.seconds ?? 0).toFixed(1)} s`, kind: "info" });
         }
       } catch {
@@ -2273,6 +2275,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
       // With a group entered on the board, what a command adds joins it (`BOARD_COMMIT::Push`: `Cmd::InGroup`).
       const st = stateRef.current;
+      // the board as it was, for "Automatically refill zones" (`BOARD_COMMIT::Push`'s `propagateDamage`, kicad-port/autoRefill.ts; UI-LEFT-2 PP10)
+      const boardBefore = st.tab === "pcb" && st.prefs.autoRefillZones ? st.board : null;
       // (On the schematic the same holds for the group of the sheet: `SCH_COMMIT::Push` adds what a command made to `enteredGroup`.)
       const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
@@ -2289,12 +2293,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (source) dispatch({ type: "SET_SCH_REPEAT", cmds: source });
       }
       await refresh();
+      // `zoneFillDirty` after the commit: the zones it damaged and the ones not filled, filled by kicad-cli in the background (no undo step of its own)
+      const boardAfter = stateRef.current.board;
+      if (reply.ok && boardBefore && boardAfter && boardAfter !== boardBefore) {
+        const filled = new Set((stateRef.current.zoneFill?.zones ?? []).filter((z) => z.filled).map((z) => z.id));
+        const zones = zonesToRefill(boardBefore, boardAfter, filled);
+        if (zones.length > 0) void fillZones(zones, true);
+      }
       // The schematic tab draws `state.schematic`, which the version poll refetches up to a poll later: an edit made there (the Properties grid shows what the board
       // answered) wants the new sheet at once.
       if (stateRef.current.tab === "schematic") await refreshSchematic();
       return reply.ok;
     },
-    [refresh, refreshSchematic]
+    [refresh, refreshSchematic, fillZones]
   );
 
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */

@@ -25,6 +25,7 @@ import { objectOn } from "../../kicad-port/appearance";
 import { isAnyFill } from "../../kicad-port/shapeFill";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { zonePickLayer } from "../../kicad-port/zoneLayers";
+import { zoneFillHit } from "../../kicad-port/zonePickFill";
 import { extraHitDistance, extraItems, type ExtraKind } from "../../kicad-port/pcbExtraItems";
 import { gridArea } from "../../kicad-port/gridItem";
 import { stitchArea } from "../../kicad-port/viaStitch";
@@ -410,7 +411,9 @@ export function collectSelectionCandidates(
     // `PCB_COLLECTOR::Inspect`: a zone is hit on a side of its outline or of one of its holes (`HitTestForCorner( accuracy * 2 ) || HitTestForEdge( accuracy )`,
     // every contour), or inside its area -- inside the outline and in none of its holes (`zoneContainsPoint`, standing in for `HitTestFilledArea`, which
     // reads the fill; a rule area's is `m_Poly->Contains`). A click deep in a hole is outside the zone: its slop is the distance to the hole's side.
-    const inside = zoneContainsPoint(z, xNm, yNm);
+    // UI-LEFT-2 PP10: a pour is hit inside where it is filled on a visible layer (`HitTestFilledArea`), and only when fills are shown filled -- an unfilled pour by
+    // its outline alone; a rule area anywhere inside (kicad-port/zonePickFill.ts). Before the fills are known, its inside.
+    const inside = z.is_rule_area ? zoneContainsPoint(z, xNm, yNm) : (zoneFillHit(z, xNm, yNm, layerVisible) ?? zoneContainsPoint(z, xNm, yNm));
     const edgeDist = zoneEdgeDistance(z, xNm, yNm);
     // Zone borders are deliberately treated as "small" (source: "Zone
     // borders are very specific, so make them small") so clicking right
