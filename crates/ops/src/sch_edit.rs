@@ -191,6 +191,35 @@ pub enum SchCmd {
         name_shown: Option<bool>,
         #[serde(default)]
         allow_autoplace: Option<bool>,
+        /// Symbol Properties' X Position and Y Position (`FIELDS_GRID_TABLE`'s `FDC_POSX`, `FDC_POSY`): the anchor in the item's own unturned frame, from its origin.
+        #[serde(default)]
+        local_at: Option<Point>,
+        /// Symbol Properties' Orientation (`FDC_ORIENTATION`): the text's angle before the item turns it (vertical or horizontal).
+        #[serde(default)]
+        local_vertical: Option<bool>,
+        /// The edit is Symbol Properties' (`DIALOG_SYMBOL_PROPERTIES`), not Field Properties': the item's fields stay autoplaced and are placed again, if at all,
+        /// by the [`SchCmd::AutoplaceFieldsKept`] that ends the dialog's step.
+        #[serde(default)]
+        keep_autoplaced: bool,
+    },
+    /// What `SCH_EDIT_TOOL::Properties` does after Symbol Properties' OK: the items `keys` names (a placed unit's key `<reference>[#<unit>]`, a power symbol's id)
+    /// whose fields Autoplace Fields put where they are have them placed again in the way they were (`AutoplaceFields( screen, GetFieldsAutoplaced() )`); the
+    /// others keep theirs. Placing nothing is no error (the dialog's batch is the step).
+    AutoplaceFieldsKept { keys: Vec<String> },
+    /// Symbol Properties' Move Up / Move Down (`DIALOG_SYMBOL_PROPERTIES::OnMoveUp` / `OnMoveDown`): the user-defined fields of the placed unit `key` take the
+    /// order of `names` (the mandatory fields stay first), which they are listed, autoplaced and written in. Refused when nothing moves.
+    ReorderFields { key: String, names: Vec<String> },
+    /// Symbol Properties' Angle and Mirror (`DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow`: `SetOrientation( SYM_ORIENT_0 / 90 / 270 / 180 )`, then
+    /// `SetOrientation( SYM_MIRROR_X / SYM_MIRROR_Y )`): the placed symbol `id` (`unit`, as `MoveSymbol` takes it) or the power symbol `id` takes the
+    /// orientation `angle` (degrees counter-clockwise: 0, 90, 180, 270) mirrored about `mirror` ("x": "Around X axis", "y": "Around Y axis", none: "Not
+    /// mirrored"), whatever it had. A power symbol folds a mirror into a turn (it has no mirror flag here). Refused when it has that orientation.
+    SetSymbolOrientation {
+        id: String,
+        #[serde(default)]
+        unit: Option<u32>,
+        angle: u32,
+        #[serde(default)]
+        mirror: Option<String>,
     },
     /// Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`): the fields of each listed symbol, power symbol or sheet (or of the item a listed field belongs to)
     /// are placed by the manual routine (`AUTOPLACE_MANUAL`: beside the symbol, on a side that has no pins, clear of what is drawn around it) and stay
@@ -366,6 +395,10 @@ pub enum SchCmd {
         #[serde(default)]
         fields: Option<Vec<eda_model::sch_extras::LabelField>>,
     },
+    /// "Transform Offset X/Y" of an image (`SCH_BITMAP::SetTransformOriginOffsetX` / `Y`): the point it is scaled about, from its centre
+    /// (`SchExtras::image_offsets`; `REFERENCE_IMAGE::scaleBy`). The studio's Scale, Width and Height rows send the centre and the offset `scaleBy` leaves with the new
+    /// scale in the same step.
+    SetImageOffset { id: String, offset: Point },
     /// "Start X", "Start Y", "End X", "End Y" of a wire, a bus or a graphic line (`SCH_LINE::SetStartX` ..): its first and/or last point goes there, and the sheet
     /// is cleaned up as a commit cleans it (`SCHEMATIC::CleanUp`: wires merged and split, junctions where they are needed).
     SetLineEnds {
@@ -425,12 +458,17 @@ pub enum SchCmd {
         bus: bool,
         by: WireOrigin,
     },
-    /// Change / Update Symbols' reset options (`DIALOG_CHANGE_SYMBOLS::processSymbol`, UI-LEFT S16): on every placed unit of the references `ids`, each field the
-    /// library symbol has (`Reference`, `Value`, `Footprint`, `Datasheet` and its user fields) takes the library field's visibility ("Update field visibilities",
-    /// `SetVisible( libField->IsVisible() )`), its size, bold, italic, Show Name and Allow Autoplace ("Update field sizes and styles": `SetAttributes( *libField )`,
-    /// `SetNameShown`, `SetCanAutoplace`), and its place ("Update field positions"). The library symbol is the project's definition of the symbol's library id (what a
-    /// placement embeds). **Differs**: a field's place is reset by Autoplace Fields (KiCad: the library's place, then autoplaced when the symbol's fields are),
-    /// and its justification is left. Refused when nothing changes.
+    /// Change / Update Symbols' reset options (`DIALOG_CHANGE_SYMBOLS::processSymbols`, UI-LEFT S16, UI-LEFT-2 SS14): on every placed unit of the references `ids`,
+    /// each field the library symbol has (`Reference`, `Value`, `Footprint`, `Datasheet` and its user fields) takes the library field's visibility ("Update field
+    /// visibilities", `SetVisible( libField->IsVisible() )`), its size, angle, justification, bold, italic, Show Name and Allow Autoplace ("Update field sizes and
+    /// styles": `SetAttributes( *libField )` with the field's visibility and place kept, `SetNameShown`, `SetCanAutoplace`), and its place ("Update field positions":
+    /// `field.SetTextPos( symbol->GetPosition() + libField->GetTextPos() )`, the library's place in the symbol's own frame), and then, when the symbol's fields were
+    /// autoplaced, Autoplace Fields in the way they were (`if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL ) symbol->AutoplaceFields(
+    /// screen, fieldsAutoplaced )`). The library symbol is the project's definition of the symbol's library id (what a placement embeds). Refused when nothing
+    /// changes, unless `allow_unchanged` (the dialog sends the reset in the change's own step, `processSymbols`' one commit, where a symbol already as the library
+    /// has it is no refusal). **Differs**: a symbol whose library symbol the project keeps no copy of (one the installed libraries draw: the studio's model
+    /// keeps no field layout of those), or with no library symbol at all (a generic box), has its fields placed by Autoplace Fields, and its styles and
+    /// visibility are a new symbol's defaults.
     ResetSymbolFields {
         ids: Vec<String>,
         #[serde(default)]
@@ -439,7 +477,13 @@ pub enum SchCmd {
         effects: bool,
         #[serde(default)]
         positions: bool,
+        #[serde(default)]
+        allow_unchanged: bool,
     },
+    /// Edit Text & Graphics Properties (`SCH_EDIT_TOOL::GlobalEdit` -> `DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS::TransferDataFromWindow`, UI-LEFT-2 SS14): what the
+    /// dialog's Scope, Filter Items and Set To boxes say, applied to every sheet of the hierarchy in one undo step (`crate::sch_global_edit`). Refused when
+    /// nothing changes.
+    GlobalEditTextGraphics { spec: crate::sch_global_edit::GlobalEditSpec },
     /// Do not Populate / Exclude from Bill of Materials / Board / Simulation as a toggle (`SCH_EDIT_TOOL::SetAttribute` with the default variant): the
     /// symbols `ids` of the sheet in view and, for an annotated one, every unit of the reference the sheet path in view gives it, on every sheet path
     /// (`CollectOtherUnits( GetRef( &currentSheet ), .. )` over `Hierarchy()`), go to one state, set when any of them lacks it, else cleared (`new_state`,
@@ -472,12 +516,15 @@ impl SchCmd {
             SchCmd::PlaceLabel { net, .. } => vec![net.as_str()],
             SchCmd::PlaceText { content, .. } => vec![content.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
+            SchCmd::AutoplaceFieldsKept { keys } => keys.iter().map(String::as_str).collect(),
+            SchCmd::ReorderFields { key, .. } => vec![key.as_str()],
+            SchCmd::SetSymbolOrientation { id, .. } => vec![id.as_str()],
             SchCmd::AddUserField { id, .. } | SchCmd::RemoveUserField { id, .. } => vec![id.as_str()],
             SchCmd::PinHelper { pins, .. } => pins.iter().map(String::as_str).collect(),
             SchCmd::SetStroke { ids, .. } | SchCmd::SetTextAttrs { ids, .. } | SchCmd::SetExcludeFromPosFiles { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::SetPinAlternates { id, .. } | SchCmd::SetSymbolUnit { id, .. } | SchCmd::SetPowerProps { id, .. } => vec![id.as_str()],
             SchCmd::SetFieldLooks { ids, .. } => ids.iter().map(String::as_str).collect(),
-            SchCmd::SetLineEnds { id, .. } => vec![id.as_str()],
+            SchCmd::SetLineEnds { id, .. } | SchCmd::SetImageOffset { id, .. } => vec![id.as_str()],
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
@@ -487,6 +534,7 @@ impl SchCmd {
             SchCmd::LinkDesignBlock { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddWireAs { .. } => vec!["wire"],
             SchCmd::ResetSymbolFields { ids, .. } | SchCmd::ToggleSymbolAttribute { ids, .. } => ids.iter().map(String::as_str).collect(),
+            SchCmd::GlobalEditTextGraphics { .. } => vec!["edit_text_graphics"],
         }
     }
 
@@ -513,6 +561,9 @@ impl SchCmd {
             SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
             SchCmd::EditField { id, .. } => format!("schematic edit-field {id}"),
             SchCmd::AutoplaceFields { ids } => format!("schematic autoplace-fields {}", ids.join(" ")),
+            SchCmd::AutoplaceFieldsKept { keys } => format!("schematic autoplace-fields-kept {}", keys.join(" ")),
+            SchCmd::ReorderFields { key, names } => format!("schematic field-order {key} {}", names.join(",")),
+            SchCmd::SetSymbolOrientation { id, angle, mirror, .. } => format!("schematic orientation {id} {angle}{}", mirror.as_deref().map(|m| format!(" --mirror {m}")).unwrap_or_default()),
             SchCmd::PinHelper { what, pins, .. } => format!("schematic pin-helper {} {}", serde_json::to_value(what).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(), pins.join(" ")),
             SchCmd::AddUserField { id, name, .. } => format!("schematic field-add {id} {name:?}"),
             SchCmd::RemoveUserField { id, name } => format!("schematic field-remove {id} {name:?}"),
@@ -530,6 +581,7 @@ impl SchCmd {
             SchCmd::SetFieldLooks { ids, .. } => format!("schematic field-looks {}", ids.join(" ")),
             SchCmd::SetPowerProps { id, .. } => format!("schematic power-props {id}"),
             SchCmd::SetLineEnds { id, .. } => format!("schematic line-ends {id}"),
+            SchCmd::SetImageOffset { id, offset } => format!("schematic image-offset {id} {:.4},{:.4}", eda_model::units::to_mm(offset.x), eda_model::units::to_mm(offset.y)),
             SchCmd::SwapPins { pins } => format!("schematic swap-pins {}", pins.join(" ")),
             SchCmd::SwapPinLabels { pins } => format!("schematic swap-pin-labels {}", pins.join(" ")),
             SchCmd::SwapUnitLabels { ids } => format!("schematic swap-unit-labels {}", ids.join(" ")),
@@ -549,6 +601,7 @@ impl SchCmd {
                 }
             ),
             SchCmd::ResetSymbolFields { ids, .. } => format!("schematic reset-fields {}", ids.join(" ")),
+            SchCmd::GlobalEditTextGraphics { .. } => "schematic edit-text-and-graphics".to_string(),
             SchCmd::ToggleSymbolAttribute { ids, attribute } => format!("schematic attrs {} --toggle {attribute}", ids.join(",")),
         }
     }
@@ -557,12 +610,14 @@ impl SchCmd {
     pub fn kind(&self) -> &'static str {
         match self {
             SchCmd::SetLocked { .. } => "schematic-lock",
-            SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } | SchCmd::SetImageData { .. } => "schematic-graphic",
+            SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } | SchCmd::SetImageData { .. } | SchCmd::SetImageOffset { .. } => "schematic-graphic",
             SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
             SchCmd::PlaceLabel { .. } => "schematic-label",
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
+            SchCmd::AutoplaceFieldsKept { .. } | SchCmd::ReorderFields { .. } => "schematic-fields",
+            SchCmd::SetSymbolOrientation { .. } => "schematic-symbol",
             SchCmd::EditSheet { .. } | SchCmd::SetSheetProps { .. } | SchCmd::SetSheetFields { .. } | SchCmd::AddTopLevelSheet { .. } | SchCmd::DeleteTopLevelSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SetTextAttrs { .. } => "schematic-text",
@@ -576,6 +631,7 @@ impl SchCmd {
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
             SchCmd::AddWireAs { .. } => "schematic-wire",
             SchCmd::ResetSymbolFields { .. } => "schematic-fields",
+            SchCmd::GlobalEditTextGraphics { .. } => "schematic-text",
             SchCmd::ToggleSymbolAttribute { .. } => "schematic-attrs",
         }
     }
@@ -587,11 +643,15 @@ impl SchCmd {
             SchCmd::SetStroke { .. } | SchCmd::SetTextAttrs { .. } | SchCmd::SetExcludeFromPosFiles { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
             // a field's font and colour are its look; a power symbol's footprint, datasheet, flags and user fields name no net
             SchCmd::SetFieldLooks { .. } | SchCmd::SetPowerProps { .. } | SchCmd::ResetSymbolFields { .. } => false,
+            // the fields' places and order are layout
+            SchCmd::AutoplaceFieldsKept { .. } | SchCmd::ReorderFields { .. } => false,
+            // looks: sizes, fonts, colours, strokes, a label's spin (the clean-up its commit runs merges what a stroke makes alike, and joins nothing new)
+            SchCmd::GlobalEditTextGraphics { .. } => false,
             // a sheet's style and attributes name no net; its user fields are text variables of what it shows (`SCH_SHEET::ResolveTextVar`), which a label's
             // `${..}` may read, so they are read from the drawing again
             SchCmd::SetSheetProps { .. } => false,
-            // an image's pixels
-            SchCmd::SetImageData { .. } => false,
+            // an image's pixels and the point it is scaled about
+            SchCmd::SetImageData { .. } | SchCmd::SetImageOffset { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
@@ -649,7 +709,7 @@ impl<'a> Board<'a> {
                 self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate }).and_then(|_| self.commit_clean_up())
             }
             SchCmd::PlaceText { content, at, angle, size_nm, h, v } => self.place_text(content, *at, *angle, *size_nm, *h, *v),
-            SchCmd::EditField { id, text, at, vertical, h, v, size_nm, bold, italic, visible, name_shown, allow_autoplace } => self.edit_sch_field(
+            SchCmd::EditField { id, text, at, vertical, h, v, size_nm, bold, italic, visible, name_shown, allow_autoplace, local_at, local_vertical, keep_autoplaced } => self.edit_sch_field(
                 id,
                 &crate::sch_fields::FieldEdit {
                     text: text.clone(),
@@ -663,9 +723,16 @@ impl<'a> Board<'a> {
                     visible: *visible,
                     name_shown: *name_shown,
                     allow_autoplace: *allow_autoplace,
+                    local_at: *local_at,
+                    local_vertical: *local_vertical,
+                    keep_autoplaced: *keep_autoplaced,
                 },
             ),
             SchCmd::AutoplaceFields { ids } => self.autoplace_sch_fields(ids),
+            SchCmd::AutoplaceFieldsKept { keys } => self.autoplace_fields_kept(keys),
+            SchCmd::ReorderFields { key, names } => self.reorder_sch_fields(key, names),
+            // a symbol's pins turn with it: the commit's clean-up (`SCH_COMMIT::pushSchEdit`), as a turn's
+            SchCmd::SetSymbolOrientation { id, unit, angle, mirror } => self.set_symbol_orientation(id, *unit, *angle, mirror.as_deref()).and_then(|_| self.commit_clean_up()),
             SchCmd::PinHelper { what, pins, grid } => self.pin_helper(*what, pins, *grid),
             SchCmd::AddUserField { id, name, text } => self.add_user_field(id, name, text),
             SchCmd::RemoveUserField { id, name } => self.remove_user_field(id, name),
@@ -694,6 +761,7 @@ impl<'a> Board<'a> {
             }
             SchCmd::SetTextAttrs { ids, bold, italic, color, href, font, exclude_from_sim } => self.set_sch_text_attrs(ids, &crate::sch_props::TextAttrsEdit { bold: *bold, italic: *italic, color: *color, href: href.clone(), font: font.clone(), exclude_from_sim: *exclude_from_sim }),
             SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
+            SchCmd::SetImageOffset { id, offset } => self.set_image_offset(id, *offset),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
             SchCmd::SetPinAlternates { id, unit, alternates, other_units } => self.set_pin_alternates(id, *unit, alternates, *other_units).and_then(|_| self.commit_clean_up()),
             SchCmd::SetSymbolUnit { id, unit, new_unit, swap } => self.set_symbol_unit(id, *unit, *new_unit, *swap).and_then(|_| self.commit_clean_up()),
@@ -721,16 +789,19 @@ impl<'a> Board<'a> {
             SchCmd::EditGroup { id, name, member_ids, design_block } => self.sch_edit_group(id, name, member_ids, design_block.as_deref()),
             SchCmd::LinkDesignBlock { ids, block } => self.sch_link_design_block(ids, block),
             SchCmd::AddWireAs { pts, bus, .. } => self.add_wire_finished(pts.clone(), *bus, false),
-            SchCmd::ResetSymbolFields { ids, visibility, effects, positions } => self.reset_symbol_fields(ids, *visibility, *effects, *positions),
+            SchCmd::ResetSymbolFields { ids, visibility, effects, positions, allow_unchanged } => self.reset_symbol_fields(ids, *visibility, *effects, *positions, *allow_unchanged),
+            SchCmd::GlobalEditTextGraphics { spec } => self.global_edit_text_graphics(spec),
             SchCmd::ToggleSymbolAttribute { ids, attribute } => self.toggle_symbol_attribute(ids, attribute),
         }
     }
 
-    /// [`SchCmd::ResetSymbolFields`].
-    fn reset_symbol_fields(&mut self, ids: &[String], visibility: bool, effects: bool, positions: bool) -> Result<(), Vec<CheckResult>> {
+    /// [`SchCmd::ResetSymbolFields`]: `DIALOG_CHANGE_SYMBOLS::processSymbols`' reset of the fields, on each placed unit's placements (`field_layout`).
+    fn reset_symbol_fields(&mut self, ids: &[String], visibility: bool, effects: bool, positions: bool, allow_unchanged: bool) -> Result<(), Vec<CheckResult>> {
+        use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
         if !visibility && !effects && !positions {
             return Err(vec![CheckResult::fail("ops_nothing_to_reset", "fields", "no reset option is chosen")]);
         }
+        let model = self.model;
         let sch = self.schematic()?;
         let mut units: Vec<(String, String, u32)> = Vec::new(); // (reference, lib id, unit)
         for id in ids {
@@ -740,45 +811,80 @@ impl<'a> Board<'a> {
             }
             units.extend(placed.iter().map(|s| (s.id.clone(), s.lib_id.clone(), s.unit)));
         }
-        let user_names: std::collections::BTreeMap<String, Vec<String>> = ids.iter().map(|id| (id.clone(), sch.user_fields.get(id).map(|m| m.keys().cloned().collect()).unwrap_or_default())).collect();
         let mut changed = false;
-        let mut outcome = |r: Result<(), Vec<CheckResult>>| -> Result<(), Vec<CheckResult>> {
-            match r {
-                Ok(()) => {
-                    changed = true;
-                    Ok(())
-                }
-                // a field already as the library has it, or one the sheet keeps no place for
-                Err(e) if e.iter().all(|c| matches!(c.check.as_str(), "ops_field_unchanged" | "ops_fields_unchanged")) => Ok(()),
-                Err(e) => Err(e),
-            }
-        };
         for (reference, lib_id, unit) in &units {
-            let lib = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).cloned().unwrap_or_else(|| eda_model::ir::LibrarySymbol { lib_id: lib_id.clone(), ..Default::default() });
+            let held = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).cloned();
+            let has_copy = held.is_some();
+            let lib = held.unwrap_or_else(|| eda_model::ir::LibrarySymbol { lib_id: lib_id.clone(), ..Default::default() });
             let key = eda_model::ir::field_key(reference, *unit);
-            let mut names: Vec<String> = ["Reference", "Value", "Footprint", "Datasheet"].iter().map(|s| s.to_string()).collect();
-            names.extend(user_names.get(reference).into_iter().flatten().filter(|n| lib.field(n).is_some()).cloned());
-            for name in names {
-                let lf = lib.field(&name).unwrap_or_else(|| lib.default_field(&name));
-                let edit = crate::sch_fields::FieldEdit {
-                    visible: visibility.then_some(!lf.hidden),
-                    size_nm: effects.then(|| eda_model::units::mm(lf.size_mm)),
-                    bold: effects.then_some(lf.bold),
-                    italic: effects.then_some(lf.italic),
-                    name_shown: effects.then_some(lf.show_name),
-                    allow_autoplace: effects.then_some(!lf.do_not_autoplace),
-                    ..Default::default()
-                };
-                if edit.visible.is_none() && edit.size_nm.is_none() {
-                    continue;
+            let sch = self.schematic()?;
+            // a sheet read from a KiCad file keeps no places for its symbols' fields: nothing to reset there
+            let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(sch, model, &key) else { continue };
+            // where the library's own frame is in the symbol's: the corner of its box the sheet places it by (`eda_engine::placed::corner_symbol`), when the
+            // project keeps the library symbol's fields (its copy: what a placement embeds, what Change Symbols puts in) and its drawing speaks for it
+            let corner = ctx.symbol().filter(|_| has_copy).and_then(|sym| {
+                let part = model.part(&sym.id)?;
+                let resolved = model.real_symbol_of_instance(sch, sym, part)?;
+                let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&resolved, sym.unit);
+                Some((x0, y1))
+            });
+            let before = ctx.current(sch);
+            let mut now = before.clone();
+            for (i, spec) in ctx.specs.iter().enumerate() {
+                // `doUpdate`: the mandatory fields always, a user field the library symbol has (`libField = GetLibSymbolRef()->GetField( field.GetName() )`)
+                let Some(lf) = lib.field(&spec.name).or_else(|| ["Reference", "Value", "Footprint", "Datasheet"].contains(&spec.name.as_str()).then(|| lib.default_field(&spec.name))) else { continue };
+                let p = &mut now[i];
+                if visibility {
+                    p.visible = !lf.hidden;
                 }
-                outcome(self.edit_sch_field(&eda_engine::fields_edit::field_id(&key, &name), &edit))?;
+                if effects {
+                    // `SetAttributes( *libField )` -- size, angle, justification, bold, italic -- "Careful: the visible bit and position are also set by
+                    // SetAttributes()": they are put back; then `SetNameShown`, `SetCanAutoplace`
+                    let size = eda_model::units::mm(lf.size_mm);
+                    p.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
+                    p.angle = if eda_model::kicad_geom::keep_upright_is_vertical(lf.angle_deg) { 90_000 } else { 0 };
+                    p.h = match lf.h_align {
+                        FieldHAlign::Left => TextJustify::Left,
+                        FieldHAlign::Center => TextJustify::Center,
+                        FieldHAlign::Right => TextJustify::Right,
+                    };
+                    p.v = match lf.v_align {
+                        FieldVAlign::Top => TextVAlign::Top,
+                        FieldVAlign::Center => TextVAlign::Center,
+                        FieldVAlign::Bottom => TextVAlign::Bottom,
+                    };
+                    p.bold = lf.bold;
+                    p.italic = lf.italic;
+                    p.name_shown = lf.show_name;
+                    p.no_autoplace = lf.do_not_autoplace;
+                }
+                if let (true, Some((x0, y1))) = (positions, corner) {
+                    // `SetTextPos( symbol->GetPosition() + libField->GetTextPos() )`: the library's place (mm, +y up, from its origin) in the frame of the box
+                    // corner the symbol sits by (+y down)
+                    p.dx = eda_model::units::mm(lf.at.x - x0);
+                    p.dy = eda_model::units::mm(y1 - lf.at.y);
+                }
             }
-            if positions {
-                outcome(self.autoplace_sch_fields(&[key.clone()]))?;
+            let algo = sch.extras.fields_autoplaced.get(&key).copied();
+            let sch = self.schematic_mut()?;
+            if now != before {
+                sch.field_layout.insert(key.clone(), now);
+                changed = true;
+            }
+            // `if( resetPositions ) { .. if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL ) symbol->AutoplaceFields( screen, .. ) }`;
+            // a symbol with no library frame has its fields placed by Autoplace Fields whatever they were
+            if positions && (algo.is_some() || corner.is_none()) {
+                let snapshot = sch.clone();
+                if let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(&snapshot, model, &key) {
+                    let placed = ctx.autoplace(&snapshot, model, algo.unwrap_or_default());
+                    if snapshot.field_layout.get(&key) != Some(&placed) {
+                        sch.field_layout.insert(key.clone(), placed);
+                        changed = true;
+                    }
+                }
             }
         }
-        if !changed {
+        if !changed && !allow_unchanged {
             return Err(vec![CheckResult::fail("ops_field_unchanged", ids.first().map(String::as_str).unwrap_or("fields"), "the fields are already as the library symbol has them")]);
         }
         Ok(())

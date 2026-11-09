@@ -1,6 +1,7 @@
 // UI-LEFT S11 (PARITY-sch §60): the Symbol Fields Table's scope (`OnScope`: Entire Project, Current Sheet Only, Current Sheet and Down, Selection), its view
-// presets (`onBomPresetChanged`: Save preset... into the project's `schematic.bom_presets`, a built-in name refused, Delete preset...; the box shows the
-// preset the view is), a field name template as a hidden column (`LoadFieldNames`) and "Save changes?" on a close with staged edits.
+// presets (`onBomPresetChanged`: Save preset... kept by the dialog and written to the project's `schematic.bom_presets` when it closes -- UI-LEFT-2 SS13,
+// `savePresetsToSchematic` --, a built-in name refused, Delete preset...; the box shows the preset the view is), a field name template as a hidden column
+// (`LoadFieldNames`) and "Save changes?" on a close with staged edits.
 //
 // Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir>`),
 // with the schematic tab open, on a COPY of a board: every scenario undoes what it did (and the run undoes what one left behind).
@@ -109,7 +110,7 @@
   const snapshot = async () => {
     const ft = await table({});
     const setup = await json("/api/sch/setup").catch(() => ({}));
-    return JSON.stringify({ presets: (ft.user_presets ?? []).map((p) => p.name), templates: setup.field_name_templates ?? null, rows: ft.rows?.length });
+    return JSON.stringify({ presets: (ft.user_presets ?? []).map((p) => p.name), view: ft.bom_settings ?? null, templates: setup.field_name_templates ?? null, rows: ft.rows?.length });
   };
   const restore = async (baseline) => {
     for (let i = 0; i < 16; i++) {
@@ -171,7 +172,7 @@
       await closeDialogs();
     });
 
-    await scenario("Save preset... keeps the view in the project; a built-in name is refused; Delete preset... takes it out (onBomPresetChanged)", async (t) => {
+    await scenario("Save preset... keeps the view in the dialog and the project when it closes; a built-in name is refused; Delete preset... takes it out (onBomPresetChanged, savePresetsToSchematic)", async (t) => {
       const dlg = await openTable();
       if (!dlg) return t(false, "the table opens");
       const box = aria("Preset", dlg);
@@ -188,8 +189,7 @@
       setValue(save.querySelector("input"), "E2E View");
       buttonText(save, "OK").click();
       await sleep(1800);
-      const ft = await table({});
-      t((ft.user_presets ?? []).some((p) => p.name === "E2E View"), "the project keeps it (schematic.bom_presets)");
+      t(!((await table({})).user_presets ?? []).some((p) => p.name === "E2E View"), "the dialog keeps it, the project does not have it yet (KiCad writes the presets when the dialog closes)");
       t(aria("Preset", dlg).value === "E2E View", `the box shows it (${aria("Preset", dlg).value})`);
       setValue(aria("Preset", dlg), "Save preset...");
       const again = await until(() => dialogTitled(/^Save BOM Preset/));
@@ -203,8 +203,21 @@
       const del = await until(() => dialogTitled(/^Delete Preset/));
       t(!!del && /Select preset:/.test(del.innerText), "Delete preset... lists the project's presets");
       if (del) buttonText(del, "OK").click();
-      await sleep(1500);
-      t(!((await table({})).user_presets ?? []).some((p) => p.name === "E2E View"), "and takes the one picked out");
+      await sleep(800);
+      t(![...aria("Preset", dlg).options].some((o) => o.value === "E2E View"), "and takes the one picked out of the box");
+      // saved again, then the dialog closed: the project has it, and the view the table closed on
+      setValue(aria("Preset", dlg), "Save preset...");
+      const third = await until(() => dialogTitled(/^Save BOM Preset/));
+      setValue(third.querySelector("input"), "E2E View");
+      buttonText(third, "OK").click();
+      await sleep(600);
+      buttonText(dlg, "Close").click();
+      await sleep(1800);
+      const ft = await table({});
+      t((ft.user_presets ?? []).some((p) => p.name === "E2E View"), "the close writes it to the project (schematic.bom_presets)");
+      t(ft.bom_settings && ft.bom_settings.group_symbols === false, "and the view it closed on (schematic.bom_settings: Group symbols off)");
+      const reopened = await openTable();
+      t(reopened && aria("Preset", reopened).value === "E2E View", `the table opens on that view (${reopened && aria("Preset", reopened).value})`);
       await closeDialogs();
     });
 

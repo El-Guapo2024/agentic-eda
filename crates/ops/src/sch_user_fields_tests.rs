@@ -110,6 +110,9 @@ fn edit(id: &str, f: impl FnOnce(&mut Edit)) -> Cmd {
         visible: e.visible,
         name_shown: e.name_shown,
         allow_autoplace: e.allow_autoplace,
+        local_at: None,
+        local_vertical: None,
+        keep_autoplaced: false,
     })
 }
 

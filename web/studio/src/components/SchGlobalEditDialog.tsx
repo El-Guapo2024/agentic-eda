@@ -1,154 +1,230 @@
-// Edit Text & Graphics Properties (`DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`): properties to set on the symbols' fields, the wires, buses and their labels and
-// junctions, global and hierarchical labels, sheet pins and the texts and graphics of the sheet, or on the selected ones only; a property left "unchanged" stays as
-// it is. The rules are kicad-port/schGlobalEdit.ts. Lengths are in mm, as the studio's units show them.
-import { useState } from "react";
-import type { SchFill, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
-import { emptyEdit, planGlobalEdit, type GlobalEditSpec } from "../kicad-port/schGlobalEdit";
+// Edit Text and Graphics Properties (`SCH_EDIT_TOOL::GlobalEdit` -> `DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`, eeschema/dialogs/dialog_global_edit_text_and_graphics.cpp
+// and its _base.cpp at 8303b2ad): the Scope box (what kinds of item), Filter Items (by field name, by the parent's reference designator, library id and type, by
+// net, the selection) and Set To (font, text colour, size, bold, italic, a label's orientation, a field's alignment, visibility and shown name, line width,
+// colour and style, fill colour, junction size and colour; each "-- leave unchanged --" until set). OK sends one verb, `global_edit_text_graphics`, which
+// reaches every sheet of the hierarchy as KiCad's `TransferDataFromWindow` does, one undo step (crates/ops/src/sch_global_edit.rs; the rules of the boxes are
+// kicad-port/schGlobalEdit.ts). Lengths are in mm, as the studio's units show them. The four filter texts are kept for the session (`g_*Filter`).
+import { useEffect, useState } from "react";
+import { fetchFontFamilies } from "../api/client";
+import type { SchToolDialog } from "../api/schEditTypes";
+import { globalEditCmd, H_ALIGN_CHOICES, initialForm, LEAVE_UNCHANGED, LINE_STYLE_CHOICES, nextTri, ORIENTATION_CHOICES, rememberedFilters, SCOPE_BOXES, TYPE_FILTER_CHOICES, V_ALIGN_CHOICES, type GlobalEditForm, type Tri } from "../kicad-port/schGlobalEdit";
+import { fontChoices } from "../kicad-port/symbolPropsDialog";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { SchDialogShell } from "./SchDialogShell";
 
-const KEEP = "";
+/** A three-state box: undetermined (leave unchanged), checked, unchecked. */
+function TriBox({ label, value, onChange, note }: { label: string; value: Tri; onChange: (t: Tri) => void; note?: string }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <input
+        type="checkbox"
+        aria-label={label}
+        checked={value === true}
+        ref={(el) => {
+          if (el) el.indeterminate = value === null;
+        }}
+        onChange={() => onChange(nextTri(value))}
+      />
+      {label}
+      {note && <span style={{ fontSize: 10, fontStyle: "italic", color: "var(--chrome-text-dim)" }}>{note}</span>}
+    </label>
+  );
+}
 
-/** A number field that is empty when the property is to stay as it is. */
-const parseNum = (s: string): number | null => (s.trim() === "" || !Number.isFinite(Number(s)) ? null : Math.max(0, Math.round(Number(s) * 1e6)));
-const parseTri = (s: string): boolean | null => (s === "yes" ? true : s === "no" ? false : null);
+/** A colour swatch with the box that says it is set (`m_setTextColor` + `m_textColorSwatch`); an empty colour is `COLOR4D::UNSPECIFIED`. */
+function ColorRow({ label, set, color, onSet, onColor }: { label: string; set: boolean; color: string; onSet: (b: boolean) => void; onColor: (c: string) => void }) {
+  return (
+    <>
+      <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <input type="checkbox" aria-label={label} checked={set} onChange={(e) => onSet(e.target.checked)} />
+        {label}
+      </label>
+      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <input type="color" aria-label={`${label} swatch`} value={color || "#000000"} style={{ width: 32, padding: 0, opacity: color ? 1 : 0.35 }} onChange={(e) => (onColor(e.target.value), onSet(true))} />
+        {color && (
+          <button type="button" title="Unspecified (the layer's colour)" aria-label={`${label} unspecified`} onClick={() => onColor("")}>
+            ×
+          </button>
+        )}
+      </span>
+    </>
+  );
+}
+
+const NOTE = { fontSize: 10, fontStyle: "italic", color: "var(--chrome-text-dim)" } as const;
 
 export function GlobalEditDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "edit_text_graphics" }> }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  const [selectedOnly, setSelectedOnly] = useState(dialog.selected.length > 0);
-  const [kinds, setKinds] = useState(emptyEdit().kinds);
-  const [textSize, setTextSize] = useState("");
-  const [bold, setBold] = useState(KEEP);
-  const [italic, setItalic] = useState(KEEP);
-  const [hAlign, setHAlign] = useState(KEEP);
-  const [vAlign, setVAlign] = useState(KEEP);
-  const [lineWidth, setLineWidth] = useState("");
-  const [lineStyle, setLineStyle] = useState(KEEP);
-  const [fill, setFill] = useState(KEEP);
-  const [fieldNameFilter, setFieldNameFilter] = useState("");
-  const [orientation, setOrientation] = useState(KEEP);
-  const [visible, setVisible] = useState(KEEP);
-  const [showFieldNames, setShowFieldNames] = useState(KEEP);
-  const [junctionSize, setJunctionSize] = useState("");
-  const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
-
-  const spec = (): GlobalEditSpec => ({
-    selectedOnly,
-    kinds,
-    textSize: parseNum(textSize),
-    bold: parseTri(bold),
-    italic: parseTri(italic),
-    hAlign: (hAlign || null) as SchHAlign | null,
-    vAlign: (vAlign || null) as SchVAlign | null,
-    lineWidth: parseNum(lineWidth),
-    lineStyle: (lineStyle || null) as SchLineStyle | null,
-    fill: (fill || null) as SchFill | null,
-    fieldNameFilter,
-    orientation: (orientation || null) as GlobalEditSpec["orientation"],
-    visible: parseTri(visible),
-    showFieldNames: parseTri(showFieldNames),
-    junctionSize: parseNum(junctionSize),
-  });
-  const apply = () => {
-    if (!state.schematic) return;
-    const cmds = planGlobalEdit(state.schematic, new Set(dialog.selected), spec());
-    if (cmds.length === 0) dispatch({ type: "TOAST", message: "Nothing to change.", kind: "info" });
-    else void api.cmdBatch(cmds);
-    close();
+  const [f, setF] = useState<GlobalEditForm>(() => initialForm(state.tab === "schematic" ? state.netHighlight : null));
+  const [error, setError] = useState<string | null>(null);
+  const [families, setFamilies] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    fetchFontFamilies()
+      .then((fams) => live && setFamilies(fams))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  const set = (patch: Partial<GlobalEditForm>) => setF((x) => ({ ...x, ...patch }));
+  // `~DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`: the filter texts are kept for the next time, whichever button closed it
+  const keepFilters = () => Object.assign(rememberedFilters, { fieldName: f.fieldName, reference: f.reference, symbol: f.symbol, net: f.net });
+  const close = () => {
+    keepFilters();
+    dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  };
+  const apply = async () => {
+    const r = globalEditCmd(f, dialog.selected);
+    if ("error" in r) return setError(r.error);
+    keepFilters();
+    dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+    await api.cmd(r.cmd);
   };
 
-  const tri = (value: string, set: (v: string) => void) => (
-    <select value={value} onChange={(e) => set(e.target.value)}>
-      <option value={KEEP}>(unchanged)</option>
-      <option value="yes">Yes</option>
-      <option value="no">No</option>
-    </select>
+  const box = { border: "1px solid var(--chrome-border)", margin: "0 0 8px", padding: "6px 8px" } as const;
+  // a filter's text ticks its box (`OnReferenceFilterText`, `OnSymbolFilterText`, `OnFieldNameFilterText`, `OnNetFilterText`)
+  const filterRow = (label: string, opt: keyof GlobalEditForm, text: keyof GlobalEditForm) => (
+    <>
+      <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <input type="checkbox" aria-label={label} checked={f[opt] as boolean} onChange={(e) => set({ [opt]: e.target.checked } as Partial<GlobalEditForm>)} />
+        {label}
+      </label>
+      <input aria-label={`${label} text`} value={f[text] as string} onChange={(e) => set({ [text]: e.target.value, [opt]: true } as Partial<GlobalEditForm>)} />
+    </>
   );
-  const kindBox = (key: keyof typeof kinds, label: string) => (
-    <label style={{ display: "block" }}>
-      <input type="checkbox" checked={kinds[key] !== false} onChange={(e) => setKinds({ ...kinds, [key]: e.target.checked })} /> {label}
-    </label>
-  );
+  const leave = <option value="">{LEAVE_UNCHANGED}</option>;
 
   return (
-    <SchDialogShell title="Edit Text and Graphics Properties" width={440} onCancel={close} onOk={apply} okLabel="OK">
-      <fieldset style={{ border: "1px solid var(--chrome-border)", margin: "0 0 8px", padding: "6px 8px" }}>
-        <legend>Items</legend>
-        <label style={{ display: "block", marginBottom: 4 }}>
-          <input type="checkbox" checked={selectedOnly} disabled={dialog.selected.length === 0} onChange={(e) => setSelectedOnly(e.target.checked)} /> Edit selected items only
-        </label>
-        {kindBox("references", "Symbol references")}
-        {kindBox("values", "Symbol values")}
-        {kindBox("otherFields", "Other symbol fields")}
-        <input style={{ marginLeft: 20, width: "60%" }} placeholder="Field name filter" value={fieldNameFilter} onChange={(e) => setFieldNameFilter(e.target.value)} />
-        {kindBox("wires", "Wires & wire labels")}
-        {kindBox("buses", "Buses & bus labels")}
-        {kindBox("globalLabels", "Global labels")}
-        {kindBox("hierLabels", "Hierarchical labels")}
-        {kindBox("sheetPins", "Sheet pins")}
-        {kindBox("texts", "Text items")}
-        {kindBox("textBoxes", "Text boxes")}
-        {kindBox("shapes", "Graphic shapes")}
-        {kindBox("ruleAreas", "Rule areas")}
-        {kindBox("lines", "Graphic lines")}
-      </fieldset>
-      <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr" }}>
-        <span>Text size (mm)</span>
-        <input type="number" min={0} step={0.05} placeholder="(unchanged)" value={textSize} onChange={(e) => setTextSize(e.target.value)} />
-        <span>Bold</span>
-        {tri(bold, setBold)}
-        <span>Italic</span>
-        {tri(italic, setItalic)}
-        <span>Horizontal alignment</span>
-        <select value={hAlign} onChange={(e) => setHAlign(e.target.value)}>
-          <option value={KEEP}>(unchanged)</option>
-          <option value="left">Left</option>
-          <option value="center">Center</option>
-          <option value="right">Right</option>
-        </select>
-        <span>Vertical alignment</span>
-        <select value={vAlign} onChange={(e) => setVAlign(e.target.value)}>
-          <option value={KEEP}>(unchanged)</option>
-          <option value="top">Top</option>
-          <option value="center">Center</option>
-          <option value="bottom">Bottom</option>
-        </select>
-        <span>Orientation</span>
-        <select value={orientation} onChange={(e) => setOrientation(e.target.value)}>
-          <option value={KEEP}>(unchanged)</option>
-          <option value="right">Right</option>
-          <option value="up">Up</option>
-          <option value="left">Left</option>
-          <option value="bottom">Down</option>
-        </select>
-        <span>Visible</span>
-        {tri(visible, setVisible)}
-        <span>Show field name</span>
-        {tri(showFieldNames, setShowFieldNames)}
-        <span>Junction size (mm)</span>
-        <input type="number" min={0} step={0.1} placeholder="(unchanged)" value={junctionSize} onChange={(e) => setJunctionSize(e.target.value)} />
-        <span>Line width (mm)</span>
-        <input type="number" min={0} step={0.01} placeholder="(unchanged)" value={lineWidth} onChange={(e) => setLineWidth(e.target.value)} />
-        <span>Line style</span>
-        <select value={lineStyle} onChange={(e) => setLineStyle(e.target.value)}>
-          <option value={KEEP}>(unchanged)</option>
-          <option value="default">Default</option>
-          <option value="solid">Solid</option>
-          <option value="dash">Dashed</option>
-          <option value="dot">Dotted</option>
-          <option value="dash_dot">Dash-dot</option>
-          <option value="dash_dot_dot">Dash-dot-dot</option>
-        </select>
-        <span>Fill</span>
-        <select value={fill} onChange={(e) => setFill(e.target.value)}>
-          <option value={KEEP}>(unchanged)</option>
-          <option value="none">None</option>
-          <option value="outline">Outline color</option>
-          <option value="background">Background color</option>
-        </select>
+    <div className="dialog-backdrop" onClick={close}>
+      <div className="dialog" style={{ width: 760, maxWidth: "96vw" }} onClick={(e) => e.stopPropagation()} data-testid="sch-global-edit">
+        <div className="dialog-header">
+          <span>Edit Text and Graphics Properties</span>
+        </div>
+        <div className="dialog-body">
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <fieldset style={{ ...box, minWidth: 230 }} data-testid="global-edit-scope">
+              <legend>Scope</legend>
+              {SCOPE_BOXES.map(([key, label], i) => (
+                <label key={key} style={{ display: "block", marginTop: i === 3 || i === 8 || i === 12 ? 8 : 0 }}>
+                  <input type="checkbox" aria-label={label} checked={f.scope[key]} onChange={(e) => set({ scope: { ...f.scope, [key]: e.target.checked } })} /> {label}
+                </label>
+              ))}
+            </fieldset>
+            <fieldset style={{ ...box, flex: 1, minWidth: 320 }} data-testid="global-edit-filters">
+              <legend>Filter Items</legend>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 8px", alignItems: "center" }}>
+                {filterRow("By field name:", "fieldNameOpt", "fieldName")}
+                {filterRow("By parent reference designator:", "referenceOpt", "reference")}
+                {filterRow("By parent symbol library id:", "symbolOpt", "symbol")}
+                <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <input type="checkbox" aria-label="By parent symbol type:" checked={f.typeOpt} onChange={(e) => set({ typeOpt: e.target.checked })} />
+                  By parent symbol type:
+                </label>
+                <select aria-label="Parent symbol type" value={f.type} onChange={(e) => set({ type: e.target.value as GlobalEditForm["type"] })}>
+                  {TYPE_FILTER_CHOICES.map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+                {filterRow("By net:", "netOpt", "net")}
+                <label style={{ display: "flex", alignItems: "center", gap: 4, gridColumn: "1 / span 2", marginTop: 6 }}>
+                  <input type="checkbox" aria-label="Selected items only" checked={f.selectedOnly} onChange={(e) => set({ selectedOnly: e.target.checked })} />
+                  Selected items only
+                </label>
+              </div>
+            </fieldset>
+          </div>
+          <fieldset style={box} data-testid="global-edit-set-to">
+            <legend>Set To</legend>
+            <datalist id="global-edit-fonts">
+              {fontChoices(families).map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto 1fr", gap: "4px 10px", alignItems: "center" }}>
+              <span>Font:</span>
+              <input aria-label="Font" list="global-edit-fonts" placeholder={LEAVE_UNCHANGED} value={f.font} onChange={(e) => set({ font: e.target.value })} />
+              <ColorRow label="Text color:" set={f.setTextColor} color={f.textColor} onSet={(b) => set({ setTextColor: b })} onColor={(c) => set({ textColor: c })} />
+              <span>Text size (mm):</span>
+              <input aria-label="Text size" placeholder={LEAVE_UNCHANGED} value={f.textSize} onChange={(e) => set({ textSize: e.target.value })} />
+              <TriBox label="Bold" value={f.bold} onChange={(t) => set({ bold: t })} />
+              <TriBox label="Italic" value={f.italic} onChange={(t) => set({ italic: t })} />
+              <span>Orientation:</span>
+              <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <select aria-label="Orientation" value={f.orientation} onChange={(e) => set({ orientation: Number(e.target.value) })}>
+                  {ORIENTATION_CHOICES.map((o, i) => (
+                    <option key={o} value={i}>
+                      {o}
+                    </option>
+                  ))}
+                  <option value={-1}>{LEAVE_UNCHANGED}</option>
+                </select>
+                <span style={NOTE}>(labels only)</span>
+              </span>
+              <TriBox label="Visible" value={f.visible} onChange={(t) => set({ visible: t })} note="(fields only)" />
+              <span />
+              <span>H Align:</span>
+              <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <select aria-label="H Align" value={f.hAlign} onChange={(e) => set({ hAlign: e.target.value as GlobalEditForm["hAlign"] })}>
+                  {H_ALIGN_CHOICES.map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                  {leave}
+                </select>
+                <span style={NOTE}>(fields only)</span>
+              </span>
+              <TriBox label="Show field name" value={f.showFieldNames} onChange={(t) => set({ showFieldNames: t })} note="(fields only)" />
+              <span />
+              <span>V Align:</span>
+              <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <select aria-label="V Align" value={f.vAlign} onChange={(e) => set({ vAlign: e.target.value as GlobalEditForm["vAlign"] })}>
+                  {V_ALIGN_CHOICES.map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                  {leave}
+                </select>
+                <span style={NOTE}>(fields only)</span>
+              </span>
+              <span />
+              <span />
+              <span>Line width (mm):</span>
+              <input aria-label="Line width" placeholder={LEAVE_UNCHANGED} value={f.lineWidth} onChange={(e) => set({ lineWidth: e.target.value })} />
+              <ColorRow label="Line color:" set={f.setLineColor} color={f.lineColor} onSet={(b) => set({ setLineColor: b })} onColor={(c) => set({ lineColor: c })} />
+              <span>Line style:</span>
+              <select aria-label="Line style" value={f.lineStyle} onChange={(e) => set({ lineStyle: e.target.value as GlobalEditForm["lineStyle"] })}>
+                {LINE_STYLE_CHOICES.map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+                {leave}
+              </select>
+              <ColorRow label="Fill color:" set={f.setFillColor} color={f.fillColor} onSet={(b) => set({ setFillColor: b })} onColor={(c) => set({ fillColor: c })} />
+              <span>Junction size (mm):</span>
+              <input aria-label="Junction size" placeholder={LEAVE_UNCHANGED} value={f.junctionSize} onChange={(e) => set({ junctionSize: e.target.value })} />
+              <ColorRow label="Junction color:" set={f.setJunctionColor} color={f.junctionColor} onSet={(b) => set({ setJunctionColor: b })} onColor={(c) => set({ junctionColor: c })} />
+            </div>
+          </fieldset>
+          {error && (
+            <p style={{ color: "var(--chrome-danger)", fontSize: 11, margin: 0 }} data-testid="global-edit-error">
+              {error}
+            </p>
+          )}
+        </div>
+        <div className="dialog-footer">
+          <button onClick={close}>Cancel</button>
+          <button className="primary" onClick={() => void apply()}>
+            OK
+          </button>
+        </div>
       </div>
-    </SchDialogShell>
+    </div>
   );
 }

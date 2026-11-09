@@ -10,7 +10,7 @@ import { hatchLines } from "../../kicad-port/schHatch";
 import { imageFor } from "../canvas/imageCache";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { schPolyIsClosed, schPolyStrokePoints } from "../../kicad-port/schPolyline";
-import { defaultTextBoxMargin } from "../../kicad-port/schTextBox";
+import { textBoxMargins } from "../../kicad-port/schTextBox";
 import { layerColor } from "../canvas/layers";
 import { overrideSchItemColors } from "../../state/colorThemeStore";
 import { paintKicadText } from "../text/kicadTextPaint";
@@ -148,11 +148,10 @@ export function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, co
   const s = g.shape;
   if (s.type !== "text_box") return;
   const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
-  const m = s.margin_nm && s.margin_nm > 0 ? s.margin_nm : defaultTextBoxMargin(s.size_nm, widthNm);
   const look = {
     start: [s.start.x, s.start.y] as const,
     end: [s.end.x, s.end.y] as const,
-    margins: [m, m, m, m] as const,
+    margins: textBoxMargins(s, widthNm),
     text: shownText ?? s.text,
     angleDeg: (s.angle ?? 0) / 1000,
     size_nm: s.size_nm,
@@ -185,7 +184,9 @@ export function paintGraphics(
     const color = strokeColor(g, selected);
     ctx.save();
     if (g.shape.type === "directive") {
-      drawDirective(ctx, view, g, color, defaultPen);
+      // `SCH_PAINTER::getRenderColor` of a label: its own text colour wins over its layer's (`GetTextColor() != UNSPECIFIED`), unless item colours are overridden
+      const own = textAttrs?.[g.id]?.color;
+      drawDirective(ctx, view, g, !selected && own && own.a > 0 && !overrideSchItemColors() ? rgba(own) : color, defaultPen);
       ctx.restore();
       continue;
     }

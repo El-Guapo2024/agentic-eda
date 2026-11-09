@@ -3049,6 +3049,10 @@ export interface SchField {
   name_shown?: boolean;
   /** `SCH_FIELD::CanAutoplace`: false leaves the field where it is when its item's fields are autoplaced. */
   allow_autoplace?: boolean;
+  /** Its anchor in its item's own unturned frame, nanometres from the item's origin: Symbol Properties' X and Y Position (`FDC_POSX`, `FDC_POSY`). */
+  local?: [Nm, Nm];
+  /** Its text's angle before the item turns it is vertical: Symbol Properties' Orientation (`FDC_ORIENTATION`). */
+  local_vertical?: boolean;
   /** `EDA_TEXT::GetFont` (`SchExtras::field_looks`): absent is the default font; "KiCad Font" the stroke font; anything else an outline font's family. */
   font?: string | null;
   /** `EDA_TEXT::GetTextColor`: absent is the layer's colour. */
@@ -3427,6 +3431,9 @@ export interface Schematic {
   graphics?: SchGraphic[];
   /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
   graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
+  /** An image's transform origin offset by its graphic's id (`REFERENCE_IMAGE::m_transformOriginOffset`, `SchExtras::image_offsets`): the point Scale scales it about, from its
+   *  centre; absent: its centre. */
+  image_offsets?: Record<string, PointXY>;
   /** A text box's shown text by its graphic's id, where `${..}` or `@{..}` in it changes it (`SCH_TEXTBOX::GetShownText`); the box's `text` stays the stored one. */
   graphic_shown?: Record<string, string>;
   /** The tables of this sheet (`SCH_TABLE`, `crates/cli/src/table_json.rs` `sch_table_json`): the board's `BoardTable` shape with an empty layer. Absent from a backend built before sheet tables. */
@@ -4072,6 +4079,9 @@ export interface FieldsTableReply {
   user_presets?: Array<{ name: string; spec: FieldsTableSpec }>;
   user_fields: string[];
   rows: FieldsTableRow[];
+  /** The project's export format presets (`schematic.bom_fmt_presets`) and the format the dialog opens on (`bom_fmt_settings`), UI-LEFT-2 SS13. */
+  fmt_presets?: BomFmt[];
+  fmt_settings?: BomFmt | null;
 }
 
 /** `BOM_FMT_PRESET`. */

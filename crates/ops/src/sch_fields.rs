@@ -185,6 +185,19 @@ impl<'m> Scene<'m> {
     }
 }
 
+/// A power symbol's user-defined fields are shown and italic as `SchExtras::power_props` keeps them ([`eda_engine::fields::power_placements`]): what a stored
+/// placement of one says is written there too, so Field Properties' Show and Italic, and Symbol Properties', are one state.
+pub(crate) fn sync_power_user_fields(sch: &mut SchematicSection, key: &str) {
+    let Some(stored) = sch.field_layout.get(key) else { return };
+    let Some(props) = sch.extras.power_props.get_mut(key) else { return };
+    for f in props.fields.iter_mut() {
+        if let Some(p) = stored.iter().find(|p| p.name == f.name) {
+            f.visible = p.visible;
+            f.italic = p.italic;
+        }
+    }
+}
+
 /// A field of a symbol, power symbol or sheet, picked by its page-frame justification: what Field Properties asks and answers in.
 pub(crate) fn hjustify(h: TextJustify) -> HJustify {
     match h {
@@ -219,6 +232,16 @@ pub(crate) struct FieldEdit {
     pub visible: Option<bool>,
     pub name_shown: Option<bool>,
     pub allow_autoplace: Option<bool>,
+    /// Symbol Properties' X Position and Y Position (`FIELDS_GRID_TABLE::SetValue( FDC_POSX / FDC_POSY )`: `SetTextPos` of the field offset from the symbol,
+    /// `field.Offset( -m_symbol->GetPosition() )`): the anchor in the item's own unturned frame, from its origin.
+    pub local_at: Option<Point>,
+    /// Symbol Properties' Orientation (`FDC_ORIENTATION`: `SetTextAngle( ANGLE_VERTICAL )` or `ANGLE_HORIZONTAL`): the text's angle before the item turns it;
+    /// the justification it keeps is its own (the H and V Align cells are the effective ones, `h` and `v`).
+    pub local_vertical: Option<bool>,
+    /// Symbol Properties' edits, not Field Properties': the item's fields stay autoplaced and are not placed again here (`DIALOG_SYMBOL_PROPERTIES::
+    /// TransferDataFromWindow` copies each field and leaves `GetFieldsAutoplaced()`; `SCH_EDIT_TOOL::Properties` runs `AutoplaceFields( screen,
+    /// fieldsAutoplaced )` after OK, [`SchCmd::AutoplaceFieldsKept`](crate::sch_edit::SchCmd::AutoplaceFieldsKept)).
+    pub keep_autoplaced: bool,
 }
 
 /// `TEXT_MIN_SIZE_MM` / `TEXT_MAX_SIZE_MM`: "Don't allow text to disappear; it can be difficult to correct if you can't select it".
@@ -265,12 +288,22 @@ impl<'a> Board<'a> {
         let ctx = OwnerCtx::new(sch, model, &key_now).ok_or_else(|| fail("ops_unknown_item", id, "the item has gone"))?;
         let mut placements = ctx.current(sch);
         let old = placements[index].clone();
-        let now = ctx.page(&old, &ctx.specs[index].text);
+        // Symbol Properties' place columns first, in the item's own frame (`SetTextPos`, `SetTextAngle`: the field keeps its own justification); then
+        // what reads on the sheet (Field Properties' place, and the H and V Align cells, which are the effective justification)
+        let mut base = old.clone();
+        if let Some(l) = edit.local_at {
+            (base.dx, base.dy) = (l.x, l.y);
+        }
+        if let Some(lv) = edit.local_vertical {
+            base.angle = if lv { 90_000 } else { 0 };
+        }
+        let now = ctx.page(&base, &ctx.specs[index].text);
         let anchor = edit.at.map(|p| (p.x.as_f64(), p.y.as_f64())).unwrap_or(now.at);
         let vertical = edit.vertical.unwrap_or(now.vertical);
         let h = edit.h.map(hjustify).unwrap_or(now.h);
         let v = edit.v.map(vjustify).unwrap_or(now.v);
-        let mut p = ctx.placed_at(&old, anchor, vertical, h, v);
+        let paged = edit.at.is_some() || edit.vertical.is_some() || edit.h.is_some() || edit.v.is_some();
+        let mut p = if paged { ctx.placed_at(&base, anchor, vertical, h, v) } else { base.clone() };
         if let Some(s) = edit.size_nm {
             p.size_nm = if s == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { s };
         }
@@ -287,7 +320,11 @@ impl<'a> Board<'a> {
         }
         placements[index] = p;
         sch.field_layout.insert(key_now.clone(), placements);
-        if moved {
+        // a power symbol's user field is shown and italic as the power symbol keeps it (`SchExtras::power_props`)
+        sync_power_user_fields(sch, &key_now);
+        if edit.keep_autoplaced {
+            // Symbol Properties: the item's fields are placed again, if at all, after OK (`AutoplaceFieldsKept`)
+        } else if moved {
             sch.extras.fields_autoplaced.remove(&key_now);
         } else if let Some(&algo) = sch.extras.fields_autoplaced.get(&key_now) {
             // `editFieldText`: an item whose fields were autoplaced has them placed again, for the new text, size or visibility
@@ -406,6 +443,15 @@ impl<'a> Board<'a> {
                 }
                 Ok(ctx.key.clone())
             }
+            // a user-defined field of a power symbol (`SchExtras::power_props`): any text, as a symbol's (UI-LEFT-2 SS7)
+            (OwnerKind::Power, other) if other != "Reference" => {
+                let sch = self.schematic_mut()?;
+                let Some(f) = sch.extras.power_props.get_mut(&ctx.key).and_then(|p| p.fields.iter_mut().find(|f| f.name == other)) else {
+                    return Err(fail("ops_unknown_item", &ctx.key, format!("the power symbol has no field '{other}'")));
+                };
+                f.text = text.to_string();
+                Ok(ctx.key.clone())
+            }
             (OwnerKind::Power, _) => Err(fail("ops_field_text_fixed", &ctx.key, "the reference of a power symbol is not edited")),
             (OwnerKind::Sheet, "Sheetname") => {
                 self.edit_sch_sheet(&ctx.key, Some(text), None)?;
@@ -522,6 +568,56 @@ impl<'a> Board<'a> {
         if !changed {
             return Err(fail("ops_fields_unchanged", &ids[0], "the fields are already where Autoplace Fields puts them"));
         }
+        Ok(())
+    }
+
+    /// [`SchCmd::AutoplaceFieldsKept`](crate::sch_edit::SchCmd::AutoplaceFieldsKept): what `SCH_EDIT_TOOL::Properties` does after Symbol Properties' OK
+    /// ("`AUTOPLACE_ALGO fieldsAutoplaced = symbol->GetFieldsAutoplaced(); if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL )
+    /// symbol->AutoplaceFields( m_frame->GetScreen(), fieldsAutoplaced )`"): the fields of each item `keys` names (a placed unit's key, a power symbol's id) whose
+    /// fields Autoplace Fields put where they are are placed again, in the way they were; an item whose fields were placed by hand keeps them. Nothing to place
+    /// is no error: the dialog's step is the rest of its batch.
+    pub(crate) fn autoplace_fields_kept(&mut self, keys: &[String]) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
+        let sch = self.schematic_mut()?;
+        for key in keys {
+            let Some(&algo) = sch.extras.fields_autoplaced.get(key) else { continue };
+            let snapshot = sch.clone();
+            let Some(ctx) = OwnerCtx::new(&snapshot, model, key) else { continue };
+            if snapshot.extras.is_locked(&owner_id(&ctx)) {
+                continue;
+            }
+            sch.field_layout.insert(key.clone(), ctx.autoplace(&snapshot, model, algo));
+            sync_power_user_fields(sch, key);
+        }
+        Ok(())
+    }
+
+    /// [`SchCmd::ReorderFields`](crate::sch_edit::SchCmd::ReorderFields): Symbol Properties' Move Up / Move Down (`DIALOG_SYMBOL_PROPERTIES::OnMoveUp` /
+    /// `OnMoveDown`: "row > m_fields->GetMandatoryRowCount()", a user field never goes above the mandatory ones; OK gives the fields their order,
+    /// `SetOrdinal( ordinal++ )`). The user fields of the placed unit `key` take the order `names` gives them (a name the unit does not have is passed over; a
+    /// field `names` leaves out keeps its place after them); the order is the order of the unit's stored placements, which the fields are listed, autoplaced,
+    /// written and read back in ([`eda_engine::fields::symbol_specs_in`]). Refused when the order is the one it has.
+    pub(crate) fn reorder_sch_fields(&mut self, key: &str, names: &[String]) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
+        let sch = self.schematic_mut()?;
+        let Some(ctx) = OwnerCtx::new(sch, model, key) else {
+            return Err(fail("ops_unknown_item", key, "no placed symbol with this key on the sheet"));
+        };
+        if ctx.kind != OwnerKind::Symbol {
+            return Err(fail("ops_unknown_item", key, "only a placed symbol's user fields are reordered here (a power symbol's are Symbol Properties' list)"));
+        }
+        if sch.extras.is_locked(&owner_id(&ctx)) {
+            return Err(fail("ops_locked", key, "the symbol is locked"));
+        }
+        let placements = ctx.current(sch);
+        let (mandatory, user): (Vec<FieldPlacement>, Vec<FieldPlacement>) = placements.into_iter().partition(|p| eda_engine::fields::is_standard_field(&p.name));
+        let rank = |p: &FieldPlacement| names.iter().position(|n| *n == p.name).unwrap_or(usize::MAX);
+        let mut ordered = user.clone();
+        ordered.sort_by_key(rank);
+        if ordered.iter().map(|p| &p.name).eq(user.iter().map(|p| &p.name)) {
+            return Err(fail("ops_nothing_to_change", key, "the fields are already in this order"));
+        }
+        sch.field_layout.insert(key.to_string(), mandatory.into_iter().chain(ordered).collect());
         Ok(())
     }
 }

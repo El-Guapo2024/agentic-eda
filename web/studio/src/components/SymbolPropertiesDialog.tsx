@@ -23,9 +23,18 @@
 //
 // U, V and F open Field Properties on the one field (`SCH_EDIT_TOOL::EditField` -> `editFieldText`, components/SchFieldDialog.tsx), not this dialog.
 //
-// **Differs**: the Angle and Mirror choices, Show pin numbers / Show pin names (one library symbol per lib_id: S10), the grid's Orientation, X and Y Position,
-// Allow Autoplacement and Private columns, Move Up / Move Down, and Embedded Files are not here; a field added here takes its looks after OK; a unit already placed
-// on the sheet is refused (KiCad makes a second placement of it).
+// The grid's columns are `FIELDS_GRID_TABLE`'s of a schematic frame (kicad-port/symbolFieldsGrid.ts): Name .. Bold shown when the dialog opens, Text Size, Orientation,
+// X Position, Y Position, Font, Color and Allow Autoplacement shown or hidden by the column labels' right-click menu (`GRID_TRICKS::onGridLabelRightClick`); the
+// buttons under it are Add Field, Move Up, Move Down and Delete (on the selected row, `OnMoveUp`, `OnMoveDown`, `OnDeleteField`). The General box has the Angle and
+// Mirror choices (`m_orientationCtrl`, `m_mirrorCtrl`: `set_symbol_orientation`). The dialog's field edits leave an autoplaced symbol's fields autoplaced
+// (`keep_autoplaced`), and its step ends as `SCH_EDIT_TOOL::Properties` does after OK: `AutoplaceFields( screen, fieldsAutoplaced )` (`autoplace_fields_kept`), so
+// a field typed to another place on an autoplaced symbol goes back unless its Allow Autoplacement is off, as in KiCad. The Embedded Files tab is the library
+// symbol's (`SCH_SYMBOL::GetEmbeddedFiles` is its `LIB_SYMBOL`'s), `PANEL_EMBEDDED_FILES` on the project's copy.
+//
+// **Differs**: Show pin numbers / Show pin names (one library symbol per lib_id: S10) are not here; the Private column is the Symbol Editor's (`getColumnCount`); a
+// field added here takes its looks after OK; a unit already placed on the sheet is refused (KiCad makes a second placement of it); Description is a user row (the
+// model keeps it so), so four rows are mandatory, not five; the Embedded Files tab applies as its own step on the library symbol (the Symbol Editor's undo), and
+// only for a symbol in the project library; Angle and Mirror are not offered for the symbol in the hand (R, X and Y turn it).
 import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
 import { editCarried } from "../actions/schPlaceActions";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +48,12 @@ import { setSymbolVariantCmd, symbolInVariant, symbolPropertiesTitle, variantFla
 import { expandStackedPinNotation } from "../kicad-port/stackedPins";
 import { assignAlt, fieldLookCmds, fieldLookError, fontChoices, lookOf, pinAlternatesCmd, pinCell, PIN_COLUMN_LABELS, PIN_TABLE_DISABLED_TIP, pinRows, sortPinRows, unitChangeError, unitChoices, type FieldLook, type PinColumn, type PinRow } from "../kicad-port/symbolPropsDialog";
 import { drawnUnit } from "../kicad-port/schUnits";
+import { ANGLE_CHOICES, autoplaceKeptCmd, canMoveDown, canMoveUp, columnMenu, DEFAULT_SHOWN_COLUMNS, FIELD_COLUMNS, fieldOrderCmd, MANDATORY_ROWS, MIRROR_CHOICES, moveRow, orientationChoice, orientationCmd, shownColumns, toggleColumn, type FieldColumn } from "../kicad-port/symbolFieldsGrid";
+import { ContextMenu } from "./canvas/ContextMenu";
+import { lookCellOf } from "./fieldGridCells";
+import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
+import { applyCmd as embeddedApplyCmd, EMPTY_DRAFT, type EmbeddedDraft } from "../kicad-port/embeddedFiles";
+import type { EmbeddedListing } from "../api/embeddedTypes";
 import { setSymbolUnitCmd } from "../kicad-port/schSymbolMenus";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { useSymApi } from "../state/symbolEditorStore";
@@ -102,7 +117,16 @@ export function SymbolPropertiesDialog() {
   const [pins, setPins] = useState<PinRow[]>([]);
   const [wasPins, setWasPins] = useState<PinRow[]>([]);
   const [pinSort, setPinSort] = useState<{ col: PinColumn; asc: boolean }>({ col: "number", asc: true });
-  const [tab, setTab] = useState<"general" | "pins">("general");
+  const [tab, setTab] = useState<"general" | "pins" | "embedded">("general");
+  /** The grid's shown columns (`ShowHideColumns( "0 1 2 3 4 5 6 7" )` at each open) and the column labels' menu. */
+  const [shownCols, setShownCols] = useState<Set<FieldColumn>>(() => shownColumns(DEFAULT_SHOWN_COLUMNS));
+  const [columnsMenu, setColumnsMenu] = useState<{ x: number; y: number } | null>(null);
+  /** The grid's selected row (`wxGridSelectRows`): `main:<name>` or `user:<key>`, what Move Up, Move Down and Delete act on. */
+  const [selectedRow, setSelectedRow] = useState<string | null>(null);
+  /** The General box's Angle and Mirror (`m_orientationCtrl`, `m_mirrorCtrl`). */
+  const [orient, setOrient] = useState<{ angle: number; mirror: "x" | "y" | null }>({ angle: 0, mirror: null });
+  /** The Embedded Files tab's copy of the library symbol's list (`PANEL_EMBEDDED_FILES::m_localFiles`). */
+  const [embedded, setEmbedded] = useState<{ draft: EmbeddedDraft; listing: EmbeddedListing | null }>({ draft: EMPTY_DRAFT, listing: null });
   const [families, setFamilies] = useState<string[]>([]);
   const nextKey = useRef(0);
   // The Footprint field's browse button: the Footprint Chooser, narrowed by this symbol's pin count and its library symbol's footprint filters.
@@ -165,8 +189,14 @@ export function SymbolPropertiesDialog() {
     setWasPins(rows);
     setPinSort({ col: "number", asc: true });
     setTab("general");
+    setShownCols(shownColumns(DEFAULT_SHOWN_COLUMNS));
+    setColumnsMenu(null);
+    setSelectedRow(null);
+    setOrient(orientationChoice(symbol.rot, symbol.mirror));
+    setEmbedded({ draft: EMPTY_DRAFT, listing: null });
     // "Add in any template fieldnames not yet defined" (`TransferDataToWindow`, Schematic Setup > Field Name Templates): a row for each template the symbol lacks, shown as
-    // the template's Visible box says; OK adds it, empty, as KiCad's OK does. Not on a sheet whose fields have no places yet (it could not show one).
+    // the template's Visible box says; OK adds it, empty, as KiCad's OK does -- on a sheet read from a KiCad file too, whose fields are items since it is taken into the
+    // design's frame (UI-LEFT-2 SS6). Not on a section still in KiCad's frame (a design.json from before 2026-10-25), whose fields have no places to show one.
     if ((symbol.fields?.length ?? 0) > 0) {
       const has = new Set([...MAIN_FIELDS, ...own.map((r) => r.name)]);
       void fetchSchSetup()
@@ -259,16 +289,25 @@ export function SymbolPropertiesDialog() {
       if (Object.keys(attrs).length > 0) cmds.push({ op: "set_symbol_attrs", ids: [symbol.id], ...attrs });
       if (pos !== undefined) cmds.push({ op: "sch_edit", verb: "set_exclude_from_pos_files", ids: [symbol.id], exclude: pos });
     }
+    // the grid's edits are Symbol Properties' (`keep_autoplaced`): the step ends with `AutoplaceFields( screen, fieldsAutoplaced )` below
+    const fieldCmdsFrom = cmds.length;
     const wanted: Record<string, boolean> = { ...shown };
     for (const r of kept) wanted[r.name.trim()] = r.shown;
-    cmds.push(...fieldVisibilityCmds(owner, [...(symbol.fields ?? []), ...added.map((r) => ({ name: r.name.trim(), visible: false }))], wanted));
-    // the look columns of the fields the symbol keeps (a field removed here takes its look with it)
+    cmds.push(...fieldVisibilityCmds(owner, [...(symbol.fields ?? []), ...added.map((r) => ({ name: r.name.trim(), visible: false }))], wanted).map((c) => ({ ...c, keep_autoplaced: true }) as Cmd));
+    // the look and place columns of the fields the symbol keeps (a field removed here takes its look with it)
     const removed = new Set(userRows.filter((r) => r.removed).map((r) => r.name));
     for (const f of symbol.fields ?? []) {
       const now = looks[f.name];
       const before = wasLooks[f.name];
-      if (f.id && now && before && !removed.has(f.name)) cmds.push(...fieldLookCmds(f.id, before, now));
+      if (f.id && now && before && !removed.has(f.name)) cmds.push(...fieldLookCmds(f.id, before, now, true));
     }
+    // Move Up / Move Down: the user fields in the grid's order (`SetOrdinal( ordinal++ )`)
+    const order = fieldOrderCmd(owner, userFieldsOf(symbol.fields).map((f) => f.name), kept.map((r) => r.name.trim()));
+    if (order) cmds.push(order);
+    // Angle and Mirror (`SetOrientation`); the symbol in the hand is turned with R, X and Y
+    const turn = open.carried ? null : orientationCmd(symbol.id, symbol.unit, orientationChoice(symbol.rot, symbol.mirror), orient);
+    if (turn) cmds.push(turn);
+    const placeAgain = cmds.length > fieldCmdsFrom || cmds.some((c) => c.op === "edit_symbol_fields");
     if (sch && bodyStyle !== (symbol.body_style || 1)) {
       const change = setBodyStyleCmd(sch, [symbol.id], bodyStyle);
       if (change) cmds.push(change);
@@ -277,6 +316,9 @@ export function SymbolPropertiesDialog() {
     const alts = pinAlternatesCmd(symbol.id, symbol.unit, wasPins, pins);
     if (alts) cmds.push(alts);
     // `SetUnitSelection( .., unit_selection ); SetUnit( unit_selection )`, after everything named by the placement's key
+    // `SCH_EDIT_TOOL::Properties` after OK: an autoplaced symbol's fields placed again, in the way they were (after the body style, which moves the pins; before the
+    // unit and the reference, which the placement's key names)
+    if (placeAgain || cmds.length > fieldCmdsFrom) cmds.push(autoplaceKeptCmd(owner));
     if (unit !== drawnUnit(symbol)) cmds.push(setSymbolUnitCmd(symbol.id, symbol.unit, unit, false));
     if (renamed) cmds.push({ op: "rename_symbol", id: symbol.id, new_id: trimmedRef });
     // the symbol in the hand takes the changes (actions/schPlaceActions.ts `editCarried`)
@@ -284,6 +326,12 @@ export function SymbolPropertiesDialog() {
     if (cmds.length > 0 && !(await api.cmdBatch(cmds))) {
       // the server says why (a reference another sheet has, a field of a sheet read from a KiCad file) in a toast
       setError(renamed ? `The changes were not applied ("${trimmedRef}" may be used by another symbol).` : "The changes were not applied.");
+      return false;
+    }
+    // the Embedded Files tab (`m_embeddedFiles->TransferDataFromWindow()`): the library symbol's list, its own step on the project's copy of it
+    const files = symbol.lib_id ? embeddedApplyCmd({ kind: "library_symbol", lib_id: symbol.lib_id }, embedded.listing, embedded.draft) : null;
+    if (files && !(await api.cmd(files))) {
+      setError("The embedded files were not applied.");
       return false;
     }
     return true;
@@ -308,7 +356,8 @@ export function SymbolPropertiesDialog() {
 
   const bodyStyles = sch ? bodyStyleCount(sch, symbol) : 1;
   const units = sch ? unitChoices(sch, symbol) : [];
-  // a sheet read from a KiCad file has no places for its fields yet: the server lists none, and a field added there could not be shown
+  // a section still in KiCad's frame (`imported_from_kicad`, a design.json from before 2026-10-25) has no places for its fields: the server lists none, and a field
+  // added there could not be shown
   const hasPlaces = (symbol.fields?.length ?? 0) > 0;
   const fonts = fontChoices(families);
   /** The "Show" check of a main field's row; nothing for a field the server did not send. */
@@ -320,52 +369,14 @@ export function SymbolPropertiesDialog() {
         <input type="checkbox" aria-label={`Show ${name}`} checked={shown[name]} onChange={(e) => setShown({ ...shown, [name]: e.target.checked })} />
       </label>
     );
-  /** The look cells of the field `name` (Show Name .. Color); empty cells for a field that has no place on the sheet (added here, or a sheet read from a file). */
-  const lookCells = (name: string) => {
+  /**
+   * The look and place cell of the column `col` for the field `name` (`FIELDS_GRID_TABLE::GetValue` / `SetValue`: Show Name .. Allow Autoplacement, components/
+   * fieldGridCells.tsx); empty for a field that has no place on the sheet yet (added here, or a sheet read from a file).
+   */
+  const lookCell = (name: string, col: FieldColumn): React.ReactNode => {
     const l = looks[name];
-    if (!l) return <td colSpan={8} />;
-    const set = (patch: Partial<FieldLook>) => setLooks((all) => ({ ...all, [name]: { ...l, ...patch } }));
-    return (
-      <>
-        <td>
-          <input type="checkbox" aria-label={`${name} show name`} checked={l.nameShown} onChange={(e) => set({ nameShown: e.target.checked })} />
-        </td>
-        <td>
-          <select aria-label={`${name} h align`} value={l.h} onChange={(e) => set({ h: e.target.value as FieldLook["h"] })}>
-            <option value="left">Left</option>
-            <option value="center">Center</option>
-            <option value="right">Right</option>
-          </select>
-        </td>
-        <td>
-          <select aria-label={`${name} v align`} value={l.v} onChange={(e) => set({ v: e.target.value as FieldLook["v"] })}>
-            <option value="top">Top</option>
-            <option value="center">Center</option>
-            <option value="bottom">Bottom</option>
-          </select>
-        </td>
-        <td>
-          <input type="checkbox" aria-label={`${name} italic`} checked={l.italic} onChange={(e) => set({ italic: e.target.checked })} />
-        </td>
-        <td>
-          <input type="checkbox" aria-label={`${name} bold`} checked={l.bold} onChange={(e) => set({ bold: e.target.checked })} />
-        </td>
-        <td>
-          <input aria-label={`${name} text size`} style={{ width: 52 }} type="number" step="0.01" min={0.01} value={l.sizeMm} onChange={(e) => set({ sizeMm: Number(e.target.value) })} />
-        </td>
-        <td>
-          <input aria-label={`${name} font`} style={{ width: 110 }} list="symbol-props-fonts" value={l.font} onChange={(e) => set({ font: e.target.value })} />
-        </td>
-        <td style={{ whiteSpace: "nowrap" }}>
-          <input aria-label={`${name} color`} type="color" value={l.color || "#000000"} onChange={(e) => set({ color: e.target.value })} style={{ width: 28, padding: 0, opacity: l.color ? 1 : 0.35 }} />
-          {l.color && (
-            <button type="button" title="The layer's colour (unspecified)" aria-label={`${name} color clear`} onClick={() => set({ color: "" })}>
-              ×
-            </button>
-          )}
-        </td>
-      </>
-    );
+    if (!l) return null;
+    return lookCellOf(name, col, l, (patch) => setLooks((all) => ({ ...all, [name]: { ...all[name]!, ...patch } })), "symbol-props-fonts");
   };
   const textInput = (ref: React.RefObject<HTMLInputElement | null>, label: string, v: string, onChange: (s: string) => void, disabled = false, title?: string) => (
     <input
@@ -382,6 +393,43 @@ export function SymbolPropertiesDialog() {
     />
   );
   const multiBody = bodyStyles > 1;
+  // ---- the Fields grid: its shown columns, its rows in order (the mandatory ones, then the user fields), the selected row
+  const gridCols = FIELD_COLUMNS.filter((c) => shownCols.has(c.key));
+  const visibleUserRows = userRows.filter((r) => !r.removed);
+  const rowIds = [...MAIN_FIELDS.map((n) => `main:${n}`), ...visibleUserRows.map((r) => `user:${r.key}`)];
+  const selectedIndex = selectedRow ? rowIds.indexOf(selectedRow) : -1;
+  /** One row of the grid: the cells `own` gives (Name, Value, Show), the look and place cells of the field `lookName` for the others (none for a field added here). */
+  const gridRow = (rowId: string, lookName: string | null, own: Partial<Record<FieldColumn, React.ReactNode>>, emptyTitle?: string) => (
+    <tr
+      key={rowId}
+      data-row={rowId}
+      aria-selected={selectedRow === rowId}
+      onMouseDown={() => setSelectedRow(rowId)}
+      style={selectedRow === rowId ? { background: "var(--chrome-selection, rgba(74, 144, 226, 0.18))" } : undefined}
+    >
+      {gridCols.map((c) => (
+        <td key={c.key} style={c.key === "value" ? { minWidth: 160 } : undefined} title={own[c.key] === undefined && emptyTitle ? emptyTitle : undefined}>
+          {own[c.key] !== undefined ? own[c.key] : lookName ? lookCell(lookName, c.key) : null}
+        </td>
+      ))}
+    </tr>
+  );
+  /** `OnMoveUp` / `OnMoveDown` on the selected row: a user field swaps with its neighbour, the mandatory rows stay first. */
+  const moveSelected = (up: boolean) => {
+    if (selectedIndex < MANDATORY_ROWS) return;
+    const i = selectedIndex - MANDATORY_ROWS;
+    const moved = moveRow(visibleUserRows, i, up);
+    setUserRows([...moved, ...userRows.filter((r) => r.removed)]);
+  };
+  /** `OnDeleteField` on the selected row: "The first %d fields are mandatory." for one of them. */
+  const deleteSelected = () => {
+    if (selectedIndex < 0) return;
+    if (selectedIndex < MANDATORY_ROWS) return setError(`The first ${MANDATORY_ROWS} fields are mandatory.`);
+    const r = visibleUserRows[selectedIndex - MANDATORY_ROWS];
+    if (!r) return;
+    setUserRows((rows) => rows.map((o) => (o === r ? { ...o, removed: true } : o)));
+    setSelectedRow(null);
+  };
   const sortedPins = sortPinRows(pins, pinSort.col, pinSort.asc);
 
   return (
@@ -406,7 +454,16 @@ export function SymbolPropertiesDialog() {
             >
               Pin Functions
             </button>
+            {/* `PANEL_EMBEDDED_FILES` on `m_symbol->GetEmbeddedFiles()`, the library symbol's */}
+            {symbol.lib_id && (
+              <button role="tab" aria-selected={tab === "embedded"} className={tab === "embedded" ? "primary" : undefined} onClick={() => setTab("embedded")} data-testid="symbol-tab-embedded">
+                Embedded Files
+              </button>
+            )}
           </div>
+          {tab === "embedded" && symbol.lib_id && (
+            <EmbeddedFilesPanel owner={{ kind: "library_symbol", lib_id: symbol.lib_id }} run={api.cmd} version={state.version} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
+          )}
           {tab === "general" && (
             <>
               <fieldset style={{ overflowX: "auto" }}>
@@ -417,59 +474,53 @@ export function SymbolPropertiesDialog() {
                   ))}
                 </datalist>
                 <table className="symbol-fields-grid" style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }} data-testid="symbol-fields-grid">
-                  <thead>
+                  <thead
+                    // `GRID_TRICKS::onGridLabelRightClick`: a check item per column
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setColumnsMenu({ x: e.clientX, y: e.clientY });
+                    }}
+                    title="Right-click to show or hide columns"
+                  >
                     <tr>
-                      {["Name", "Value", "Show", "Show Name", "H Align", "V Align", "Italic", "Bold", "Text Size", "Font", "Color"].map((h) => (
-                        <th key={h} style={{ textAlign: "left", fontWeight: 600, padding: "2px 4px", whiteSpace: "nowrap" }}>
-                          {h === "Text Size" ? "Text Size (mm)" : h}
+                      {gridCols.map((c) => (
+                        <th key={c.key} data-col={c.key} style={{ textAlign: "left", fontWeight: 600, padding: "2px 4px", whiteSpace: "nowrap" }}>
+                          {c.label}
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td>Reference</td>
-                      <td style={{ minWidth: 160 }}>{textInput(refInput, "Reference", reference, setReference, variant !== "", variant !== "" ? "The reference is the same in every design variant: set it in the default variant." : undefined)}</td>
-                      <td>{showBox("Reference")}</td>
-                      {lookCells("Reference")}
-                    </tr>
-                    <tr>
-                      <td>Value</td>
-                      <td>{textInput(valueInput, "Value", value, setValue)}</td>
-                      <td>{showBox("Value")}</td>
-                      {lookCells("Value")}
-                    </tr>
-                    <tr>
-                      <td>Footprint</td>
-                      <td>
+                    {gridRow("main:Reference", "Reference", {
+                      name: "Reference",
+                      value: textInput(refInput, "Reference", reference, setReference, variant !== "", variant !== "" ? "The reference is the same in every design variant: set it in the default variant." : undefined),
+                      shown: showBox("Reference"),
+                    })}
+                    {gridRow("main:Value", "Value", { name: "Value", value: textInput(valueInput, "Value", value, setValue), shown: showBox("Value") })}
+                    {gridRow("main:Footprint", "Footprint", {
+                      name: "Footprint",
+                      value: (
                         <div style={{ display: "flex", gap: 4 }}>
                           {textInput(footprintInput, "Footprint", footprint, setFootprint)}
                           <button onClick={() => setChoosingFootprint(true)} title="Choose a footprint from KiCad's libraries (Footprint Chooser)" data-browse-footprint>
                             Browse…
                           </button>
                         </div>
-                      </td>
-                      <td>{showBox("Footprint")}</td>
-                      {lookCells("Footprint")}
-                    </tr>
-                    <tr>
-                      <td>Datasheet</td>
-                      <td>{textInput(datasheetInput, "Datasheet", datasheet, setDatasheet)}</td>
-                      <td>{showBox("Datasheet")}</td>
-                      {lookCells("Datasheet")}
-                    </tr>
-                    {userRows
-                      .filter((r) => !r.removed)
-                      .map((r) => (
-                        <tr key={r.key}>
-                          <td>
-                            {r.isNew ? (
-                              <input aria-label="New field name" value={r.name} onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, name: e.target.value } : o)))} style={{ width: 110 }} />
-                            ) : (
-                              <span title="A user-defined field">{r.name}</span>
-                            )}
-                          </td>
-                          <td>
+                      ),
+                      shown: showBox("Footprint"),
+                    })}
+                    {gridRow("main:Datasheet", "Datasheet", { name: "Datasheet", value: textInput(datasheetInput, "Datasheet", datasheet, setDatasheet), shown: showBox("Datasheet") })}
+                    {visibleUserRows.map((r) =>
+                      gridRow(
+                        `user:${r.key}`,
+                        r.isNew ? null : r.name,
+                        {
+                          name: r.isNew ? (
+                            <input aria-label="New field name" value={r.name} onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, name: e.target.value } : o)))} style={{ width: 110 }} />
+                          ) : (
+                            <span title="A user-defined field">{r.name}</span>
+                          ),
+                          value: (
                             <div style={{ display: "flex", gap: 4 }}>
                               <input
                                 aria-label={`${r.name} value`}
@@ -484,19 +535,28 @@ export function SymbolPropertiesDialog() {
                                 ×
                               </button>
                             </div>
-                          </td>
-                          <td>
+                          ),
+                          shown: (
                             <label title={`Show the ${r.name} field on the sheet`}>
                               <input type="checkbox" aria-label={`Show ${r.name}`} checked={r.shown} onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, shown: e.target.checked } : o)))} />
                             </label>
-                          </td>
-                          {r.isNew ? <td colSpan={8} style={{ opacity: 0.6 }} title="A field added here takes its looks once it is on the symbol (OK)" /> : lookCells(r.name)}
-                        </tr>
-                      ))}
+                          ),
+                        },
+                        r.isNew ? "A field added here takes its looks once it is on the symbol (OK)" : undefined
+                      )
+                    )}
                   </tbody>
                 </table>
-                {hasPlaces && (
-                  <p style={{ margin: "6px 0 0" }}>
+                {columnsMenu && (
+                  <ContextMenu
+                    x={columnsMenu.x}
+                    y={columnsMenu.y}
+                    entries={columnMenu(shownCols).map((c) => ({ label: `${c.checked ? "\u2713" : "\u2003"} ${c.label}`, checked: c.checked, onSelect: () => setShownCols((cols) => toggleColumn(cols, c.key)) }))}
+                    onClose={() => setColumnsMenu(null)}
+                  />
+                )}
+                <p style={{ margin: "6px 0 0", display: "flex", gap: 4 }}>
+                  {hasPlaces && (
                     <button
                       type="button"
                       title="Add field"
@@ -509,8 +569,18 @@ export function SymbolPropertiesDialog() {
                     >
                       Add Field
                     </button>
-                  </p>
-                )}
+                  )}
+                  <button type="button" title="Move up" aria-label="Move up" disabled={selectedIndex < 0 || !canMoveUp(selectedIndex)} onClick={() => moveSelected(true)} data-testid="symbol-field-up">
+                    ▲
+                  </button>
+                  <button type="button" title="Move down" aria-label="Move down" disabled={selectedIndex < 0 || !canMoveDown(selectedIndex, MANDATORY_ROWS + visibleUserRows.length)} onClick={() => moveSelected(false)} data-testid="symbol-field-down">
+                    ▼
+                  </button>
+                  <span style={{ flex: 1 }} />
+                  <button type="button" title="Delete field" aria-label="Delete field" disabled={selectedIndex < 0} onClick={deleteSelected} data-testid="symbol-field-delete">
+                    Delete
+                  </button>
+                </p>
               </fieldset>
               <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
                 <fieldset style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 8px", alignItems: "center", minWidth: 220 }} data-testid="symbol-general">
@@ -533,6 +603,37 @@ export function SymbolPropertiesDialog() {
                       <option key={n} value={n}>
                         {/* `LIB_SYMBOL::GetBodyStyleDescription`: a De Morgan pair is Standard and Alternate */}
                         {!multiBody ? "" : n === 1 ? "Standard" : n === 2 ? "Alternate" : `Style ${n}`}
+                      </option>
+                    ))}
+                  </select>
+                  {/* `m_orientationCtrl` / `m_mirrorCtrl`: `SetOrientation( SYM_ORIENT_.. )`, then `SetOrientation( SYM_MIRROR_.. )` */}
+                  <span style={{ opacity: open.carried ? 0.5 : 1 }}>Angle:</span>
+                  <select
+                    aria-label="Angle"
+                    value={orient.angle}
+                    disabled={!!open.carried}
+                    title={open.carried ? "Turn the symbol in the hand with R, X and Y." : undefined}
+                    onChange={(e) => setOrient({ ...orient, angle: Number(e.target.value) })}
+                    data-testid="symbol-angle"
+                  >
+                    {ANGLE_CHOICES.map((a) => (
+                      <option key={a.angle} value={a.angle}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ opacity: open.carried ? 0.5 : 1 }}>Mirror:</span>
+                  <select
+                    aria-label="Mirror"
+                    value={orient.mirror ?? ""}
+                    disabled={!!open.carried}
+                    title={open.carried ? "Turn the symbol in the hand with R, X and Y." : undefined}
+                    onChange={(e) => setOrient({ ...orient, mirror: (e.target.value || null) as "x" | "y" | null })}
+                    data-testid="symbol-mirror"
+                  >
+                    {MIRROR_CHOICES.map((m) => (
+                      <option key={m.label} value={m.mirror ?? ""}>
+                        {m.label}
                       </option>
                     ))}
                   </select>

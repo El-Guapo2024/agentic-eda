@@ -150,7 +150,7 @@ export function unitChangeError(sch: Schematic, s: SchematicSymbol, newUnit: num
 
 // ---------------------------------------------------------------------------------------------------------------------------- Fields
 
-/** The look of one field as the grid edits it (`FIELDS_GRID_TABLE`'s `FDC_SHOW_NAME` .. `FDC_COLOR`). */
+/** The look and place of one field as the grid edits it (`FIELDS_GRID_TABLE`'s `FDC_SHOW_NAME` .. `FDC_ALLOW_AUTOPLACE`). */
 export interface FieldLook {
   nameShown: boolean;
   h: SchField["h"];
@@ -163,6 +163,14 @@ export interface FieldLook {
   font: string;
   /** `FDC_COLOR`: `#rrggbb`, or "" for the layer's colour. */
   color: string;
+  /** `FDC_ORIENTATION`: the text's angle before the item turns it (`GetTextAngle().IsHorizontal()`: "Horizontal" / "Vertical"). Absent from a field the server sent no
+   *  place in its own frame for. */
+  vertical?: boolean;
+  /** `FDC_POSX` / `FDC_POSY`: the anchor offset from the item's origin in its unturned frame (`GetTextPos()` after `field.Offset( -m_symbol->GetPosition() )`), mm. */
+  xMm?: number;
+  yMm?: number;
+  /** `FDC_ALLOW_AUTOPLACE`: `SCH_FIELD::CanAutoplace`. */
+  allowAutoplace?: boolean;
 }
 
 /** `DEFAULT_FONT_NAME` and `KICAD_FONT_NAME`: the Font column's first two choices, before the machine's families (`fonts.Sort(); fonts.Insert( .., 0 )`). */
@@ -196,6 +204,8 @@ export function lookOf(f: SchField): FieldLook {
     sizeMm: (f.size_nm && f.size_nm > 0 ? f.size_nm : 1_270_000) / 1e6,
     font: f.font || DEFAULT_FONT_NAME,
     color: colorCell(f.color),
+    ...(f.local ? { xMm: f.local[0] / 1e6, yMm: f.local[1] / 1e6, vertical: !!f.local_vertical } : {}),
+    allowAutoplace: f.allow_autoplace ?? true,
   };
 }
 
@@ -203,8 +213,12 @@ export function lookOf(f: SchField): FieldLook {
 export const FIELD_TEXT_SIZE_MIN_MM = 0.01;
 export const FIELD_TEXT_SIZE_MAX_MM = 1000;
 
-/** The commands a field's look changes are: `edit_field` with what changed of its place-free looks, and `set_field_looks` for its font and colour. */
-export function fieldLookCmds(id: string, was: FieldLook, now: FieldLook): Cmd[] {
+/**
+ * The commands a field's look and place changes are: `edit_field` with what changed of its looks, its place in the item's own frame (X / Y Position, Orientation) and
+ * Allow Autoplacement, and `set_field_looks` for its font and colour. With `keepAutoplaced` the `edit_field` is Symbol Properties' (`keep_autoplaced`): the item's
+ * fields stay autoplaced, and the dialog's `autoplace_fields_kept` places them again after OK, as `SCH_EDIT_TOOL::Properties` does.
+ */
+export function fieldLookCmds(id: string, was: FieldLook, now: FieldLook, keepAutoplaced = false): Cmd[] {
   const out: Cmd[] = [];
   const edit: Record<string, unknown> = {};
   if (now.nameShown !== was.nameShown) edit.name_shown = now.nameShown;
@@ -213,7 +227,11 @@ export function fieldLookCmds(id: string, was: FieldLook, now: FieldLook): Cmd[]
   if (now.italic !== was.italic) edit.italic = now.italic;
   if (now.bold !== was.bold) edit.bold = now.bold;
   if (Math.abs(now.sizeMm - was.sizeMm) > 1e-9) edit.size_nm = Math.round(now.sizeMm * 1e6);
-  if (Object.keys(edit).length > 0) out.push({ op: "sch_edit", verb: "edit_field", id, ...edit } as Cmd);
+  if (now.vertical !== undefined && now.vertical !== was.vertical) edit.local_vertical = now.vertical;
+  const moved = (a?: number, b?: number) => a !== undefined && b !== undefined && Math.round(a * 1e6) !== Math.round(b * 1e6);
+  if (moved(now.xMm, was.xMm) || moved(now.yMm, was.yMm)) edit.local_at = { x: Math.round((now.xMm ?? 0) * 1e6), y: Math.round((now.yMm ?? 0) * 1e6) };
+  if (now.allowAutoplace !== undefined && now.allowAutoplace !== was.allowAutoplace) edit.allow_autoplace = now.allowAutoplace;
+  if (Object.keys(edit).length > 0) out.push({ op: "sch_edit", verb: "edit_field", id, ...edit, ...(keepAutoplaced ? { keep_autoplaced: true } : {}) } as Cmd);
   const fontChanged = now.font !== was.font;
   const colorChanged = now.color !== was.color;
   if (fontChanged || colorChanged) {

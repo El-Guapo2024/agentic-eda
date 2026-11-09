@@ -1,8 +1,8 @@
 // Change Symbols / Update Symbols -- `DIALOG_CHANGE_SYMBOLS` (eeschema/dialogs/dialog_change_symbols.cpp at 8303b2ad): which symbols a request
 // matches (`isMatch`), which of them can take the new library symbol (`processSymbols`' checks), and what the change does to their reference and value.
 //
-// KiCad's dialog also resets field visibilities, sizes, positions and attributes; the studio keeps none of those per symbol, so only the field
-// text options (Reference, Value) and the library link are ported.
+// The reset options (field visibilities, sizes and styles, positions) are `reset_symbol_fields` in the change's own step ([`resetCmd`], [`changeStep`]): KiCad's
+// `processSymbols` makes the change and the resets in one `SCH_COMMIT` (UI-LEFT-2 SS14; before, the reset was a second undo step after the change).
 import type { Cmd } from "../api/types";
 
 export type ChangeMode = "change" | "update";
@@ -156,6 +156,9 @@ export interface ChangeOptions {
 
 export interface ChangePlan {
   cmds: Cmd[];
+  /** The references `processSymbols` went on to (every one not refused: "symbol not found", "too few units"), as they are named after the change: what the
+   *  reset options reset. */
+  processed: string[];
   /** The message panel: one line per symbol, the failures marked `***`. */
   report: string[];
   changed: number;
@@ -165,6 +168,7 @@ export interface ChangePlan {
 export function planChange(refs: readonly string[], symbols: readonly SymbolRow[], lib: LibInfo, opts: ChangeOptions): ChangePlan {
   const cmds: Cmd[] = [];
   const report: string[] = [];
+  const processed: string[] = [];
   let changed = 0;
   const shown = opts.shown ?? ((r: string) => r);
   for (const ref of refs) {
@@ -180,6 +184,7 @@ export function planChange(refs: readonly string[], symbols: readonly SymbolRow[
     }
     if (units.every((u) => u.lib_id === opts.newLibId) && !opts.updateReference && !opts.updateValue) {
       report.push(`${shown(ref)}: already ${opts.newLibId}`);
+      processed.push(ref);
       continue;
     }
     const steps: Cmd[] = [];
@@ -192,11 +197,53 @@ export function planChange(refs: readonly string[], symbols: readonly SymbolRow[
     if (newRef !== ref) steps.push({ op: "rename_symbol", id: ref, new_id: newRef });
     if (steps.length === 0) {
       report.push(`${shown(ref)}: nothing to change`);
+      processed.push(ref);
       continue;
     }
     cmds.push(...steps);
+    processed.push(newRef);
     changed++;
     report.push(`${newRef}: ${was} -> ${opts.newLibId}${newRef !== ref ? ` (was ${ref})` : ""}`);
   }
-  return { cmds, report, changed };
+  return { cmds, report, processed, changed };
+}
+
+/** The reset options of the dialog (`m_resetFieldVisibilities`, `m_resetFieldEffects`, `m_resetFieldPositions`). */
+export interface ResetOptions {
+  visibility: boolean;
+  effects: boolean;
+  positions: boolean;
+}
+
+/** `reset_symbol_fields` on `refs` for the options ticked, or null when none is (or there is no symbol). `inStep`: sent with the change in its step, where a symbol
+ *  already as the library has it is no refusal (`allow_unchanged`). */
+export function resetCmd(refs: readonly string[], o: ResetOptions, inStep: boolean): Cmd | null {
+  if (refs.length === 0 || (!o.visibility && !o.effects && !o.positions)) return null;
+  return { op: "sch_edit", verb: "reset_symbol_fields", ids: [...refs], visibility: o.visibility, effects: o.effects, positions: o.positions, ...(inStep ? { allow_unchanged: true } : {}) } as unknown as Cmd;
+}
+
+/** One screen's part of the step: its commands (the change, then the reset of what it processed) addressed to the sheet path that shows it. */
+export interface ScreenStep {
+  sheet: string;
+  cmds: Cmd[];
+  processed: readonly string[];
+}
+
+/**
+ * The one command of a Change / Update (`processSymbols`' one `SCH_COMMIT`, "Change Symbols" / "Update Symbols"): every screen's change commands and the resets
+ * of the symbols it processed, each under `on_sheet`, in one batch from the root. With no change command at all, the resets alone (refused when they change
+ * nothing). Null when there is nothing to send.
+ */
+export function changeStep(screens: readonly ScreenStep[], o: ResetOptions, lead: readonly Cmd[] = []): Cmd | null {
+  const onSheet = (sheet: string, cmd: Cmd): Cmd => ({ op: "on_sheet", sheet, cmd }) as unknown as Cmd;
+  const changes = lead.length + screens.reduce((n, s) => n + s.cmds.length, 0);
+  const cmds: Cmd[] = [...lead];
+  for (const s of screens) {
+    cmds.push(...s.cmds.map((c) => onSheet(s.sheet, c)));
+    const reset = resetCmd(s.processed, o, changes > 0);
+    if (reset) cmds.push(onSheet(s.sheet, reset));
+  }
+  if (cmds.length === 0) return null;
+  // one undo step from the root, so each `on_sheet` inside names its path from the root (an `on_sheet` inside another is relative to it)
+  return onSheet("", { op: "batch", cmds } as unknown as Cmd);
 }

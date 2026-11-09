@@ -98,3 +98,28 @@ test("Change Symbols over the hierarchy: a match on any sheet path (`GetRef( aIn
   const missing = planChange(["R1"], rows.slice(1, 2), { found: false, unitCount: 1, prefix: "", value: "" }, { newLibId: "X:Y", updateReference: false, updateValue: false, resetEmpty: false, shown: (r) => referencesOf(rows, "ch.kicad_sch", r) });
   assert.deepEqual(missing.report, ["R1 R5: X:Y *** symbol not found ***"]);
 });
+
+// UI-LEFT-2 SS14: the change and the resets are one step (`processSymbols`' one commit)
+import { changeStep, resetCmd } from "./schChangeSymbols";
+
+test("the resets of the symbols a change processed go in the change's own batch, allowed to change nothing there", () => {
+  const symbols: SymbolRow[] = [{ id: "R1", lib_id: "Device:R", unit: 1, value: "10k" }];
+  const plan = planChange(["R1"], symbols, { found: true, unitCount: 1, prefix: "C", value: "C" }, { newLibId: "Device:C", updateReference: true, updateValue: false, resetEmpty: false });
+  assert.deepEqual(plan.processed, ["C1"], "named as the change leaves it");
+  const step = changeStep([{ sheet: "sa", cmds: plan.cmds, processed: plan.processed }], { visibility: false, effects: false, positions: true }) as unknown as { op: string; sheet: string; cmd: { op: string; cmds: Array<{ op: string; sheet: string; cmd: Record<string, unknown> }> } };
+  assert.equal(step.op, "on_sheet");
+  assert.equal(step.sheet, "");
+  const inner = step.cmd.cmds;
+  assert.deepEqual(inner.map((c) => c.cmd.verb ?? c.cmd.op), ["change_symbol", "rename_symbol", "reset_symbol_fields"]);
+  assert.deepEqual([inner[2]!.sheet, inner[2]!.cmd.ids, inner[2]!.cmd.allow_unchanged], ["sa", ["C1"], true]);
+});
+
+test("no reset option: no reset; nothing to send: null; the resets alone are refused when they change nothing", () => {
+  assert.equal(resetCmd(["R1"], { visibility: false, effects: false, positions: false }, true), null);
+  assert.equal(changeStep([{ sheet: "", cmds: [], processed: ["R1"] }], { visibility: false, effects: false, positions: false }), null);
+  const alone = changeStep([{ sheet: "", cmds: [], processed: ["R1"] }], { visibility: true, effects: false, positions: false }) as unknown as { cmd: { cmds: Array<{ cmd: Record<string, unknown> }> } };
+  assert.equal(alone.cmd.cmds[0]!.cmd.allow_unchanged, undefined);
+  const update = changeStep([{ sheet: "", cmds: [], processed: ["R1"] }], { visibility: true, effects: false, positions: false }, [{ op: "sch_edit", verb: "update_library_symbols", lib_ids: ["Device:R"] } as never]) as unknown as { cmd: { cmds: Array<Record<string, unknown>> } };
+  assert.equal(update.cmd.cmds.length, 2);
+  assert.equal((update.cmd.cmds[1]!.cmd as Record<string, unknown>).allow_unchanged, true);
+});

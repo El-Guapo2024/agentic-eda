@@ -120,14 +120,14 @@ test("a symbol: where it is and how it is turned, its fields, and its attributes
   const s = sheet();
   assert.deepEqual(names(s, ["R1"]), [
     ["Basic Properties", ["Locked", "Position X", "Position Y", "Orientation", "Mirror X", "Mirror Y"]],
-    ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords", "Datasheet", "Footprint"]],
+    ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords", "Datasheet", "Description", "Footprint"]],
     ["Attributes", ["Exclude From Simulation", "Exclude From Bill of Materials", "Exclude From Board", "Exclude From Position Files", "Do not Populate"]],
     ["Pin Display", ["Show Pin Number", "Show Pin Name", "Pin Name Position Offset"]],
   ]);
   // A field of the symbol is a row of its own (`SCH_PROPERTIES_PANEL::rebuildProperties`): a user field, when the symbol has one.
   const u1 = s.symbols[1]!;
   u1.fields = ["Reference", "Value", "Footprint", "Datasheet", "MPN"].map((name) => ({ name, text: name === "MPN" ? "STM32F103" : "", at: [0, 0], vertical: false, h: "left", v: "center", visible: false, id: `fld:U1:${name}`, owner: "U1" }));
-  assert.deepEqual(names(s, ["U1"])[1], ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords", "Datasheet", "Footprint", "MPN"]], "an MPN, when the part has one");
+  assert.deepEqual(names(s, ["U1"])[1], ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords", "Datasheet", "Description", "Footprint", "MPN"]], "an MPN, when the part has one");
   assert.equal(rowOf(s, ["U1"], "MPN")!.value, "STM32F103");
   assert.deepEqual(edit(s, ["U1"], "MPN", "STM32F105"), [{ op: "sch_edit", verb: "edit_field", id: "fld:U1:MPN", text: "STM32F105" }]);
   // Two symbols, one with the field: the row is there, and setting it adds the field to the other (`AddField`).
@@ -204,14 +204,14 @@ test("a sheet, and the shapes a sheet is drawn with", () => {
   assert.deepEqual(shape("shp_poly"), ["Shape", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]);
 });
 
-test("a text box has its margins and text rows before its shape rows, and no corner radius; its fill is read-only", () => {
+test("a text box has its margins and text rows before its shape rows, and no corner radius; its fill is a shape's", () => {
   assert.deepEqual(names(sheet(), ["shp_box"]), [
     ["Basic Properties", ["Locked"]],
     ["Margins", ["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"]],
     ["Text Properties", ["Text", "Font", "Auto Thickness", "Italic", "Bold", "Mirrored", "Horizontal Justification", "Vertical Justification", "Color", "Hyperlink", "Text Size"]],
     ["Shape Properties", ["Start X", "Start Y", "End X", "End Y", "Width", "Height", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]],
   ]);
-  assert.equal(rowOf(sheet(), ["shp_box"], "Fill")!.writable, false);
+  assert.equal(rowOf(sheet(), ["shp_box"], "Fill")!.writable, true, "`fillAvailable` gives a schematic text box the row, edited as a shape's");
 });
 
 test("a rule area has its attributes and the polygon's look, unfilled (this editor draws it as an outline)", () => {
@@ -255,9 +255,9 @@ test("values: a symbol's orientation and mirror, a wire's stroke, a junction's l
   assert.equal(rowOf(s, ["txt_a"], "Text Size")!.value, 1270);
   assert.equal(rowOf(s, ["shp_circle"], "Radius")!.value, 3_000);
   assert.equal(rowOf(s, ["shp_rect"], "Width")!.value, 10_000);
-  assert.equal(rowOf(s, ["shp_rect"], "Fill")!.value, "color");
+  assert.equal(rowOf(s, ["shp_rect"], "Fill")!.value, "solid", "`GetFillModeProp`: a fill with a colour is Solid");
   assert.equal(rowOf(s, ["shp_rect"], "Fill Color")!.writable, true);
-  assert.equal(rowOf(s, ["shp_circle"], "Fill Color")!.writable, false, "a colour counts only for a fill with a colour");
+  assert.equal(rowOf(s, ["shp_circle"], "Fill Color")!.writable, false, "`isFillColorEditable`: a colour counts only for a solid fill");
   const angle = rowOf(s, ["shp_arc"], "Angle")!;
   assert.ok(typeof angle.value === "number" && angle.value > 0 && angle.value < 180);
 });
@@ -492,7 +492,8 @@ test("a free text's and a label's font rows: bold, italic, colour and hyperlink 
   const faced = { ...s, graphic_text_attrs: { shp_box: { font: "DejaVu Sans" } } } as Schematic;
   assert.equal(rowOf(faced, ["shp_box"], "Font")!.value, "DejaVu Sans");
   assert.deepEqual(edit(faced, ["shp_box"], "Font", "Default Font"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["shp_box"], font: "" }]);
-  assert.equal(rowOf(s, ["shp_dir"], "Font")!.writable, false);
+  // a directive label's face too: it is an `SCH_TEXT` (`EDA_TEXT_DESC`'s Font is not masked), kept in its `text_attrs`
+  assert.deepEqual(edit(s, ["shp_dir"], "Font", "DejaVu Sans"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["shp_dir"], font: "DejaVu Sans" }]);
   // A label: its size and look are Label Properties', its colour its text attributes.
   assert.equal(rowOf(s, ["lbl_a"], "Text Size")!.value, 1_270_000, "50 mil when it has none of its own");
   assert.deepEqual(edit(s, ["lbl_a"], "Text Size", 2_000_000), [{ op: "sch_edit", verb: "edit_label", id: "lbl_a", size_nm: 2_000_000 }]);
@@ -546,4 +547,92 @@ test("in a design variant the attribute and field rows read and set the variant'
   assert.deepEqual(plan("Value", "22k"), [], "the variant has it already");
   // the default variant keeps the base verbs
   assert.deepEqual(edit(base, ["R1"], "Do not Populate", true), [{ op: "set_symbol_attrs", ids: ["R1"], dnp: true }]);
+});
+
+// ------------------------------------------------------------------------------------------------------------- UI-LEFT-2 SS11: the rows made editable
+
+test("Fill offers KiCad's UI_FILL_MODE (None, Solid and the hatches): Solid on a shape of the sheet is a fill with its colour, a solid fill shows as Solid", async () => {
+  const { UI_FILL_CHOICES, fillOfUiMode, uiFillMode } = await import("./schItemProperties");
+  // `EDA_SHAPE_DESC`'s `hatchModeEnum`, in its order
+  assert.deepEqual(UI_FILL_CHOICES.map((c) => c.label), ["None", "Solid", "Hatch", "Reverse Hatch", "Cross-hatch"]);
+  assert.deepEqual(["none", "outline", "background", "color", "hatch", "reverse_hatch", "cross_hatch"].map((f) => uiFillMode(f as never)), ["none", "solid", "solid", "solid", "hatch", "reverse_hatch", "cross_hatch"]);
+  // `SetFillModeProp( SOLID )` -> `SCH_SHAPE::SetFilled( true )`: `FILLED_WITH_COLOR` for a shape with no parent symbol; a solid fill already there is kept
+  assert.equal(fillOfUiMode("solid", "none"), "color");
+  assert.equal(fillOfUiMode("solid", "background"), "background");
+  const s = sheet();
+  const fill = (id: string, v: string) => edit(s, [id], "Fill", v).map((c) => (c as { graphic?: SchGraphic }).graphic?.fill);
+  assert.deepEqual(fill("shp_circle", "solid"), ["color"]);
+  assert.deepEqual(fill("shp_circle", "cross_hatch"), ["cross_hatch"]);
+  assert.deepEqual(fill("shp_rect", "solid"), [], "a fill with a colour is Solid already");
+  assert.deepEqual(fill("shp_rect", "none"), ["none"]);
+  assert.deepEqual(fill("shp_box", "hatch"), ["hatch"], "a text box's fill too");
+  const hatched = { ...s, graphics: s.graphics!.map((g) => (g.id === "shp_rect" ? { ...g, fill: "hatch" as const } : g)) } as Schematic;
+  assert.equal(rowOf(hatched, ["shp_rect"], "Fill Color")!.writable, false, "`isFillColorEditable` is `IsSolidFill` on the sheet");
+});
+
+test("a text box's margins, one per side (SetMarginLeft ..), its colour and hyperlink", () => {
+  const s = sheet();
+  // no margin of its own: `GetLegacyTextMargin` (half the default stroke and 0.75 of the text) on every side
+  const legacy = Math.round(0 / 2) + Math.round(1270 * 0.75);
+  assert.deepEqual(["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"].map((n) => rowOf(s, ["shp_box"], n)!.value), [legacy, legacy, legacy, legacy]);
+  assert.ok(["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"].every((n) => rowOf(s, ["shp_box"], n)!.writable));
+  const [cmd] = edit(s, ["shp_box"], "Margin Top", 2_000);
+  assert.equal((cmd as { verb: string }).verb, "edit_graphic");
+  assert.deepEqual(((cmd as { graphic: SchGraphic }).graphic.shape as { margins_nm?: number[] }).margins_nm, [legacy, 2_000, legacy, legacy], "the other sides keep theirs");
+  const four = { ...s, graphics: s.graphics!.map((g) => (g.id === "shp_box" ? { ...g, shape: { ...g.shape, margins_nm: [1, 2, 3, 4] } } : g)) } as Schematic;
+  assert.deepEqual(["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"].map((n) => rowOf(four, ["shp_box"], n)!.value), [1, 2, 3, 4]);
+  assert.deepEqual(edit(four, ["shp_box"], "Margin Right", 3), [], "no change, no step");
+  // its font colour and link are its `text_attrs` (`set_text_attrs`)
+  assert.deepEqual(edit(s, ["shp_box"], "Color", "#00ff00"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["shp_box"], color: { r: 0, g: 255, b: 0, a: 255 } }]);
+  assert.deepEqual(edit(s, ["shp_box"], "Hyperlink", "#2"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["shp_box"], href: "#2" }]);
+  const linked = { ...s, graphic_text_attrs: { shp_box: { href: "#2", color: { r: 0, g: 255, b: 0, a: 255 } } } } as Schematic;
+  assert.equal(rowOf(linked, ["shp_box"], "Hyperlink")!.value, "#2");
+  assert.equal(rowOf(linked, ["shp_box"], "Color")!.value, "#00ff00");
+});
+
+test("a directive label's font, colour and text size", () => {
+  const s = sheet();
+  assert.equal(rowOf(s, ["shp_dir"], "Text Size")!.value, 1_270_000, "50 mil when it has none of its own");
+  const [cmd] = edit(s, ["shp_dir"], "Text Size", 2_000_000);
+  assert.equal(((cmd as { graphic: SchGraphic }).graphic.shape as { text_size_nm?: number }).text_size_nm, 2_000_000);
+  assert.deepEqual(edit(s, ["shp_dir"], "Color", "#ff00ff"), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["shp_dir"], color: { r: 255, g: 0, b: 255, a: 255 } }]);
+  assert.equal(rowOf(s, ["shp_dir"], "Hyperlink"), undefined, "masked (`SCH_LABEL_BASE_DESC`)");
+});
+
+test("an image's transform offset (SetTransformOriginOffsetX/Y) and Scale about it (REFERENCE_IMAGE::scaleBy)", () => {
+  const img = graphic("img_a", { type: "image", at: { x: 100_000, y: 50_000 }, scale_ppm: 1_000_000, px: [100, 50], ppi: 300 });
+  const s = { ...sheet(), graphics: [img] } as Schematic;
+  assert.equal(rowOf(s, ["img_a"], "Transform Offset X")!.value, 0);
+  assert.equal(rowOf(s, ["img_a"], "Transform Offset X")!.writable, true);
+  assert.deepEqual(edit(s, ["img_a"], "Transform Offset Y", 4_000), [{ op: "sch_edit", verb: "set_image_offset", id: "img_a", offset: { x: 0, y: 4_000 } }]);
+  // no offset: scaled about its centre
+  assert.deepEqual(edit(s, ["img_a"], "Scale", 2), [{ op: "sch_edit", verb: "edit_graphic", id: "img_a", graphic: { shape: { type: "image", at: { x: 100_000, y: 50_000 }, scale_ppm: 2_000_000 } } }]);
+  // an offset: the origin stays, the centre moves away from it and the offset doubles with the scale
+  const off = { ...s, image_offsets: { img_a: { x: 10_000, y: -6_000 } } } as Schematic;
+  assert.equal(rowOf(off, ["img_a"], "Transform Offset X")!.value, 10_000);
+  assert.deepEqual(edit(off, ["img_a"], "Scale", 2), [
+    { op: "sch_edit", verb: "edit_graphic", id: "img_a", graphic: { shape: { type: "image", at: { x: 90_000, y: 56_000 }, scale_ppm: 2_000_000 } } },
+    { op: "sch_edit", verb: "set_image_offset", id: "img_a", offset: { x: 20_000, y: -12_000 } },
+  ]);
+});
+
+test("a line's Length (SCH_LINE::SetLength): the end goes along the line; a line of several segments shows its length", async () => {
+  const { lineEndForLength } = await import("./schItemProperties");
+  assert.deepEqual(lineEndForLength([0, 0], [3_000, 4_000], 10_000), [6_000, 8_000]);
+  assert.deepEqual(lineEndForLength([0, 0], [3_000, 4_000], -5), [0, 0], "a negative length is none");
+  assert.deepEqual(lineEndForLength([5, 5], [5, 5], 2_000), [2_005, 5], "a line of no length runs right");
+  const s = sheet();
+  assert.equal(rowOf(s, ["sln_a"], "Length")!.value, 9_000);
+  assert.deepEqual(edit(s, ["sln_a"], "Length", 4_500), [{ op: "sch_edit", verb: "set_line_ends", id: "sln_a", end: { x: 4_500, y: 9_000 } }]);
+  assert.equal(rowOf(s, ["wire_a"], "Length")!.writable, false, "two segments: two SCH_LINEs in KiCad");
+  assert.equal(rowOf(s, ["wire_bus"], "Length")!.writable, false, "locked");
+});
+
+test("the Description row (FIELD_T::DESCRIPTION, every symbol's): \"\" until set, then the symbol's own field", () => {
+  const s = sheet();
+  assert.equal(rowOf(s, ["U1"], "Description")!.value, "");
+  assert.deepEqual(edit(s, ["U1"], "Description", "A microcontroller"), [{ op: "sch_edit", verb: "add_user_field", id: "U1", name: "Description", text: "A microcontroller" }]);
+  s.symbols[1]!.fields = ["Reference", "Value", "Footprint", "Datasheet", "Description"].map((name) => ({ name, text: name === "Description" ? "MCU" : "", at: [0, 0], vertical: false, h: "left", v: "center", visible: false, id: `fld:U1:${name}`, owner: "U1" }));
+  assert.equal(rowOf(s, ["U1"], "Description")!.value, "MCU");
+  assert.deepEqual(edit(s, ["U1"], "Description", "Arm MCU"), [{ op: "sch_edit", verb: "edit_field", id: "fld:U1:Description", text: "Arm MCU" }]);
 });

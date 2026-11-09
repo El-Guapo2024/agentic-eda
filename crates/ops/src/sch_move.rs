@@ -1049,7 +1049,7 @@ fn mirror_item(scene: &mut Scene, it: Item, c: Point, vertical: bool, grid: Nm) 
 }
 
 /// Matrix product `a(b(p))`.
-fn mul(a: Matrix, b: Matrix) -> Matrix {
+pub(crate) fn mul(a: Matrix, b: Matrix) -> Matrix {
     Matrix { x1: a.x1 * b.x1 + a.y1 * b.x2, y1: a.x1 * b.y1 + a.y1 * b.y2, x2: a.x2 * b.x1 + a.y2 * b.x2, y2: a.x2 * b.y1 + a.y2 * b.y2 }
 }
 

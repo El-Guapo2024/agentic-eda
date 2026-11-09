@@ -92,7 +92,9 @@ impl OwnerCtx {
         }
         if let Some(p) = sch.power_symbols.iter().find(|p| p.id == key) {
             let flag = p.lib_id == "power:PWR_FLAG";
-            let specs = vec![FieldSpec::new("Reference", p.id.clone(), false), FieldSpec::new("Value", p.net.clone(), !flag)];
+            let mut specs = vec![FieldSpec::new("Reference", p.id.clone(), false), FieldSpec::new("Value", p.net.clone(), !flag)];
+            // and its user-defined fields (`SchExtras::power_props`), items of the sheet like a symbol's (UI-LEFT-2 SS7)
+            specs.extend(fields::power_user_specs(sch, p));
             return Some(OwnerCtx { kind: OwnerKind::Power, key: key.to_string(), at: p.at, rot: p.rot, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: Some(p.clone()), sheet: None, label: None });
         }
         if let Some(s) = sch.sheets.iter().find(|s| s.id == key) {
@@ -200,12 +202,17 @@ impl OwnerCtx {
             }
             OwnerKind::Power => {
                 let ps = self.power.as_ref().expect("a power symbol");
-                let home = fields::power_value_placement(ps, &ps.lib_id);
+                // the Value and the user fields stacked as `AUTOPLACER` stacks every shown field; with no user field, the Value alone
+                let styled = fields::specs_styled(self.specs.clone(), Some(&current));
+                let movable: Vec<FieldSpec> = styled.iter().filter(|s| s.name != "Reference").cloned().collect();
+                let home: Vec<FieldPlacement> = if movable.len() <= 1 { vec![fields::power_value_placement(ps, &ps.lib_id)] } else { fields::power_autoplaced(ps, &movable) };
+                let home_of = |name: &str| movable.iter().position(|s| s.name == name).and_then(|i| home.get(i)).cloned();
                 self.specs
                     .iter()
                     .zip(current.iter())
                     .map(|(sp, now)| {
-                        let mut p = if sp.name == "Value" { home.clone() } else { FieldPlacement { visible: false, ..FieldPlacement::at_origin(&sp.name) } };
+                        let mut p = if sp.name == "Reference" { FieldPlacement { visible: false, ..FieldPlacement::at_origin(&sp.name) } } else { home_of(&sp.name).unwrap_or_else(|| FieldPlacement::at_origin(&sp.name)) };
+                        p.name = sp.name.clone();
                         p.visible = now.visible;
                         p.size_nm = now.size_nm;
                         p.bold = now.bold;

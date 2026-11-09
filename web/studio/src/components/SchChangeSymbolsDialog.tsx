@@ -12,7 +12,7 @@ import { fetchSymbolPlacements } from "../api/schControlClient";
 import { fetchSymbolDetails } from "../api/libraryChooserClient";
 import type { SchToolDialog } from "../api/schEditTypes";
 import type { Cmd, SymbolLibraryEntry } from "../api/types";
-import { matchOverHierarchy, planChange, referencesOf, type LibInfo, type MatchBy, type SymbolRow } from "../kicad-port/schChangeSymbols";
+import { changeStep, matchOverHierarchy, planChange, referencesOf, resetCmd, type LibInfo, type MatchBy, type SymbolRow } from "../kicad-port/schChangeSymbols";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { SymbolPickerDialog } from "./SymbolChooserDialog";
@@ -61,15 +61,8 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
   }, []);
 
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
-  /** The references after the change's renames (a Reference updated to the new prefix). */
-  const renamedRefs = (refs: readonly string[], cmds: readonly Cmd[]) => refs.map((r) => (cmds.find((c) => c.op === "rename_symbol" && c.id === r) as { new_id?: string } | undefined)?.new_id ?? r);
-  /** The reset options (`processSymbol`: visibility, sizes and styles, positions): one `reset_symbol_fields` after the change; true when it changed something. */
-  /** A verb addressed to the sheet path that shows the symbols' screen (not the sheet in view: the match is over the whole hierarchy). */
-  const onSheet = (sheet: string, cmd: Cmd): Cmd => ({ op: "on_sheet", sheet, cmd }) as unknown as Cmd;
-  const resetFields = async (sheet: string, refs: readonly string[]): Promise<boolean> => {
-    if (refs.length === 0 || (!resetVisibility && !resetEffects && !resetPositions)) return false;
-    return api.cmd(onSheet(sheet, { op: "sch_edit", verb: "reset_symbol_fields", ids: [...refs], visibility: resetVisibility, effects: resetEffects, positions: resetPositions } as unknown as Cmd));
-  };
+  /** The reset options (`processSymbols`: visibility, sizes and styles, positions), sent in the change's own step (`changeStep`). */
+  const resets = { visibility: resetVisibility, effects: resetEffects, positions: resetPositions };
   const verb = change ? "Change" : "Update";
 
   const run = async () => {
@@ -91,18 +84,21 @@ export function ChangeSymbolsDialog({ dialog }: { dialog: Extract<SchToolDialog,
           return { g, plan: planChange(g.refs, screenRows, lib, { newLibId: id, updateReference, updateValue, resetEmpty, shown: (ref) => referencesOf(rows, g.file, ref) || ref }) };
         });
         const report = plans.flatMap((p) => p.plan.report);
-        const cmds = plans.flatMap((p) => p.plan.cmds.map((c) => onSheet(p.g.sheet, c)));
-        // one undo step from the root, so each `on_sheet` inside names its path from the root (an `on_sheet` inside another is relative to it)
-        if (cmds.length > 0 && !(await api.cmd(onSheet("", { op: "batch", cmds } as unknown as Cmd)))) return setReport([...report, "*** The change was refused; nothing was changed ***"]);
-        for (const p of plans) await resetFields(p.g.sheet, renamedRefs(p.g.refs, p.plan.cmds));
+        // the change and the resets of the symbols it processed: one step (`processSymbols`' one commit, "Change Symbols")
+        const step = changeStep(plans.map((p) => ({ sheet: p.g.sheet, cmds: p.plan.cmds, processed: p.plan.processed })), resets);
+        if (step && !(await api.cmd(step))) return setReport([...report, "*** The change was refused; nothing was changed ***"]);
         return setReport(report);
       }
-      // Update: the project's edited library symbols take over for every library id among the matched symbols.
+      // Update: the project's edited library symbols take over for every library id among the matched symbols, and the resets, in one step ("Update Symbols")
       const libIds = [...new Set(groups.flatMap((g) => g.refs.flatMap((r) => rows.filter((s) => (s.file ?? "") === g.file && s.id === r && s.lib_id).map((s) => s.lib_id as string))))];
-      const ok = await api.cmd({ op: "sch_edit", verb: "update_library_symbols", lib_ids: libIds });
-      let reset = false;
-      for (const g of groups) reset = (await resetFields(g.sheet, g.refs)) || reset;
-      setReport(ok || reset ? [...(ok ? libIds.map((id) => `${id}: updated from the project library`) : []), ...(reset ? ["Fields reset from the library symbol"] : [])] : ["*** No edited library symbol of these symbols is waiting to be updated from ***"]);
+      const screens = groups.map((g) => ({ sheet: g.sheet, cmds: [] as Cmd[], processed: g.refs }));
+      const update = { op: "sch_edit", verb: "update_library_symbols", lib_ids: libIds } as unknown as Cmd;
+      const both = changeStep(screens, resets, [update]);
+      if (both && (await api.cmd(both))) return setReport([...libIds.map((id) => `${id}: updated from the project library`), ...(resetCmd(["x"], resets, true) ? ["Fields reset from the library symbol"] : [])]);
+      // no edited library symbol waiting: the resets alone, if any
+      const alone = changeStep(screens, resets);
+      const reset = alone ? await api.cmd(alone) : false;
+      setReport(reset ? ["Fields reset from the library symbol"] : ["*** No edited library symbol of these symbols is waiting to be updated from ***"]);
     } finally {
       setBusy(false);
     }

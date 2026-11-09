@@ -149,6 +149,37 @@ fn import_sheet_contents_goes_on_the_root_and_keep_annotations_numbers_only_what
     assert!(units.len() >= 30 + 6);
 }
 
+/// UI-LEFT-2 SS6: a schematic brought in from a KiCad file is taken into the design's frame (`sch_sheets::place_by_box_corner`), so its symbols' fields are items
+/// of the sheet like any other's: the state lists each with its id (what U, V and F open Field Properties on, `SCH_EDIT_TOOL::EditField`) and its place in the
+/// symbol's own frame (Symbol Properties' X / Y Position), and Field Properties edits them. The fallback to Symbol Properties stays for a section still in KiCad's frame
+/// (`imported_from_kicad`, a design.json from before 2026-10-25).
+#[test]
+fn a_kicad_files_symbols_have_their_fields_as_items_after_it_is_brought_in() {
+    let dir = mcu30_board("import_fields_items");
+    write_ldo_file(&dir, "ldo_stage.kicad_sch");
+    let before: std::collections::BTreeSet<String> = load(&dir).unwrap().1.schematic.as_ref().unwrap().symbols.iter().map(|s| s.id.clone()).collect();
+    step(&dir, import_cmd("ldo_stage.kicad_sch", false, false), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let sch = design.schematic.as_ref().unwrap();
+    assert!(!sch.imported_from_kicad, "the screen is in the design's frame");
+    let brought: Vec<&eda_model::ir::SymbolInstance> = sch.symbols.iter().filter(|s| !before.contains(&s.id)).collect();
+    assert!(brought.len() >= 5, "{brought:?}");
+    for s in &brought {
+        let key = eda_model::ir::field_key(&s.id, s.unit);
+        let fields = crate::studio::owner_fields_json(sch, &model, &key);
+        let value = fields.iter().find(|f| f["name"] == "Value").unwrap_or_else(|| panic!("{key} has no Value item: {fields:?}"));
+        assert_eq!(value["id"], format!("fld:{key}:Value"));
+        assert!(value["local"].is_array() && value["local_vertical"].is_boolean(), "{value}");
+    }
+    // Field Properties on one of them (V): its place, one step
+    let key = eda_model::ir::field_key(&brought[0].id, brought[0].unit);
+    let edit = serde_json::json!({ "op": "sch_edit", "verb": "edit_field", "id": format!("fld:{key}:Value"), "bold": true });
+    step(&dir, serde_json::from_value(edit).unwrap(), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let fields = crate::studio::owner_fields_json(design.schematic.as_ref().unwrap(), &model, &key);
+    assert_eq!(fields.iter().find(|f| f["name"] == "Value").unwrap()["bold"], true);
+}
+
 /// UI-LEFT S17: Import Sheet's contents ride the cursor before the click (`placeSheetContents` starts a move of what it read): the place preview reads the file into the
 /// command as the commit does and answers the items the import would add, nothing written; a file that is not there is refused.
 #[test]

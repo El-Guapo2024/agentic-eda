@@ -50,6 +50,8 @@ export type SchGraphicShape =
       v_align?: SchVAlign;
       /** Border-to-text gap; 0/absent means KiCad's default (`SCH_TEXTBOX::GetLegacyTextMargin`). */
       margin_nm?: Nm;
+      /** The four margins (left, top, right, bottom: `SCH_TEXTBOX::m_marginLeft` ..), when they are not one; they win over `margin_nm` (`(margins l t r b)`). */
+      margins_nm?: [Nm, Nm, Nm, Nm];
     }
   | { type: "rule_area"; pts: PointXY[]; exclude_from_sim?: boolean; exclude_from_bom?: boolean; exclude_from_board?: boolean; dnp?: boolean }
   | {
@@ -61,6 +63,8 @@ export type SchGraphicShape =
       pin_length_nm: Nm;
       netclass?: string;
       component_class?: string;
+      /** Its text size (`SCH_TEXT::SetSchTextSize`, `(effects (font (size ..)))`); 0/absent: 50 mil. */
+      text_size_nm?: Nm;
     }
   | {
       /** `SCH_BITMAP`: an image on the sheet (crates/model/src/sch_extras.rs `SchGraphicKind::Image`). */
@@ -184,9 +188,21 @@ export type SchEditCmd =
       visible?: boolean;
       name_shown?: boolean;
       allow_autoplace?: boolean;
+      /** Symbol Properties' X / Y Position (`FDC_POSX`, `FDC_POSY`): the anchor in the item's own unturned frame, from its origin. */
+      local_at?: PointXY;
+      /** Symbol Properties' Orientation (`FDC_ORIENTATION`): the text's angle before the item turns it. */
+      local_vertical?: boolean;
+      /** Symbol Properties' edit, not Field Properties': the item's fields stay autoplaced until the step's `autoplace_fields_kept`. */
+      keep_autoplaced?: boolean;
     }
   /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on these symbols, power symbols, sheets, or the item each listed field belongs to. */
   | { verb: "autoplace_fields"; ids: string[] }
+  /** After Symbol Properties' OK (`SCH_EDIT_TOOL::Properties`): the items `keys` names whose fields are autoplaced have them placed again, in the way they were. */
+  | { verb: "autoplace_fields_kept"; keys: string[] }
+  /** Symbol Properties' Move Up / Move Down: the user fields of the placed unit `key` (`<reference>[#<unit>]`) in the order `names` gives. */
+  | { verb: "reorder_fields"; key: string; names: string[] }
+  /** Symbol Properties' Angle and Mirror (`SetOrientation`): the symbol (`unit`) or power symbol `id` takes the orientation `angle` (0, 90, 180, 270) mirrored about `mirror`. */
+  | { verb: "set_symbol_orientation"; id: string; unit?: number; angle: number; mirror?: "x" | "y" }
   /**
    * Pin Helpers (`PIN_TRICKS_MENU`): a wire stub, a no-connect or a local, hierarchical or global label on each pin (`pin:<reference>:<number>`) and sheet pin of `pins` (anything else is passed
    * over; none is refused). A stub is one step of `grid`, the wire grid (nm, 0 is 50 mil); a label says the pin's name and reads away from it. One undo step.
@@ -208,6 +224,8 @@ export type SchEditCmd =
   | { verb: "add_top_level_sheet"; name: string }
   | { verb: "delete_top_level_sheet"; id: string }
   | { verb: "set_text_attrs"; ids: string[]; bold?: boolean; italic?: boolean; color?: SchColor; href?: string; font?: string; exclude_from_sim?: boolean }
+  /** "Transform Offset X/Y" of an image (`SCH_BITMAP::SetTransformOriginOffsetX/Y`): the point it is scaled about, from its centre (`SchExtras::image_offsets`). */
+  | { verb: "set_image_offset"; id: string; offset: PointXY }
   /** "Start X" .. "End Y" of a wire, a bus or a graphic line: its first and/or last point. */
   | { verb: "set_line_ends"; id: string; start?: PointXY; end?: PointXY }
   /** "Exclude From Position Files" of symbols (every placed unit of each reference on the sheet in view). */

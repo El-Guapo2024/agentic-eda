@@ -471,7 +471,7 @@ fn the_text_dialogs_font_link_and_simulation_exclusion_are_kept_and_default_font
     s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
     s.extras.graphics.push(eda_model::sch_extras::SchGraphic {
         id: "shp_tb".into(),
-        shape: eda_model::sch_extras::SchGraphicKind::TextBox { start: p(Nm::ZERO, mm(10.0)), end: p(mm(20.0), mm(15.0)), text: "box".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: Nm::ZERO },
+        shape: eda_model::sch_extras::SchGraphicKind::TextBox { start: p(Nm::ZERO, mm(10.0)), end: p(mm(20.0), mm(15.0)), text: "box".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: Nm::ZERO, margins_nm: None },
         width_nm: Nm::ZERO,
         line_style: Default::default(),
         color: None,
@@ -549,7 +549,7 @@ fn a_labels_field_moved_by_hand_stays_and_takes_the_label_out_of_autoplace() {
 fn field_properties_of_a_labels_field_edits_its_text_and_place_and_keeps_the_sheet_references_text() {
     let (m, d) = board(with_label_field());
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let field = |id: &str, text: Option<&str>, at: Option<Point>, visible: Option<bool>| SchCmd::EditField { id: id.into(), text: text.map(str::to_string), at, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None };
+    let field = |id: &str, text: Option<&str>, at: Option<Point>, visible: Option<bool>| SchCmd::EditField { id: id.into(), text: text.map(str::to_string), at, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false };
     ok(&mut b, field("fld:lbl_g:Netclass", Some("LV"), None, None));
     assert_eq!(sch_of(&b).extras.label_fields["lbl_g"][0].text, "LV");
     assert!(!eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"), "a new text alone keeps the fields autoplaced");
@@ -669,4 +669,45 @@ fn a_pasted_label_keeps_its_hand_placed_fields_and_looks_and_a_pasted_text_its_l
     assert_eq!(sch.extras.text_attrs[&l.id].font.as_deref(), Some("KiCad Font"));
     let t = sch.texts.iter().find(|t| t.content == "copied").expect("the pasted text");
     assert!(sch.extras.text_attrs[&t.id].bold && sch.extras.text_attrs[&t.id].href.as_deref() == Some("#1"));
+}
+
+// ------------------------------------------------------------------- UI-LEFT-2 SS11: the Properties panel's rows that were read-only
+
+#[test]
+fn a_directive_label_takes_a_font_and_a_colour_and_nothing_else_of_set_text_attrs() {
+    use eda_model::sch_extras::{DirectiveShape, SchGraphic, SchGraphicKind};
+    let mut s = text_sheet();
+    let mut flag = SchGraphic::new(SchGraphicKind::Directive { at: p(mm(10.0), mm(10.0)), orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "HV".into(), component_class: String::new(), text_size_nm: Nm::ZERO });
+    flag.id = "dirl_a".into();
+    s.extras.graphics.push(flag);
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    // `EDA_TEXT_DESC`'s Font and Color are not masked for an `SCH_DIRECTIVE_LABEL`
+    ok(&mut b, text_attrs_cmd(&["dirl_a"], Some("KiCad Font"), None, None, Some(red())));
+    let a = &sch_of(&b).extras.text_attrs["dirl_a"];
+    assert_eq!((a.font.as_deref(), a.color), (Some("KiCad Font"), Some(red())));
+    // its italic, bold and link are (`SCH_DIRECTIVE_LABEL_DESC`, `SCH_LABEL_BASE_DESC`)
+    assert_eq!(err(&mut b, text_attrs_cmd(&["dirl_a"], None, Some("#1"), None, None)), "ops_bad_text");
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["dirl_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text");
+}
+
+#[test]
+fn set_image_offset_keeps_the_point_an_image_is_scaled_about_and_is_one_undo_step() {
+    use eda_model::sch_extras::{SchGraphic, SchGraphicKind};
+    let mut s = text_sheet();
+    let mut img = SchGraphic::new(SchGraphicKind::Image { at: p(mm(50.0), mm(50.0)), scale_ppm: 1_000_000, data: eda_model::image_info::base64_encode(&eda_model::image_info::solid_png(4, 4, [1, 2, 3], 254)) });
+    img.id = "img_a".into();
+    s.extras.graphics.push(img);
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let set = |x: Nm, y: Nm| SchCmd::SetImageOffset { id: "img_a".into(), offset: p(x, y) };
+    ok(&mut b, set(mm(1.0), mm(-2.0)));
+    assert_eq!(sch_of(&b).extras.image_offsets["img_a"], p(mm(1.0), mm(-2.0)));
+    assert_eq!(err(&mut b, set(mm(1.0), mm(-2.0))), "ops_nothing_to_change");
+    assert_eq!(err(&mut b, SchCmd::SetImageOffset { id: "txt_a".into(), offset: p(Nm::ZERO, Nm::ZERO) }), "ops_unknown_item");
+    // its centre again: no entry
+    ok(&mut b, set(Nm::ZERO, Nm::ZERO));
+    assert!(sch_of(&b).extras.image_offsets.is_empty());
+    b.apply(&Cmd::SchEdit(SchCmd::SetLocked { ids: ids(&["img_a"]), locked: true })).unwrap();
+    assert_eq!(err(&mut b, set(mm(1.0), Nm::ZERO)), "ops_locked");
 }
