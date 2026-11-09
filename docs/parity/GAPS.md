@@ -163,7 +163,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `DeleteJunction` (B5-L1); a wire finishes on any label or sheet pin anchor (B5-M1, r3 C3-M3 and r4 C4-L3 corrected); Find and Replace (selection only,
   Replace's target, escaped label text, label fields, body texts, reference chains, emptying a label, the end and wrap, KiCad's boxes: C5-M1, M2, M4, L1-L7);
   the Symbol Fields Table per sheet path, `R01`, empty edits, the preview's variables (C5-M3, L8, L9 in part); DNP / Exclude across sheets (D5-M2, server side)
-  and Increment Annotations over all sheets (D5-M3). **Left**: the Fields Table's Description column and ~~Save / Discard / Cancel close question~~ (done 2026-11-06) (C5-L9), ~~the
+  and Increment Annotations over all sheets (D5-M3). **Left**: ~~the Fields Table's Description column~~ (done 2026-11-07, `PARITY-sch.md` section 77) and ~~Save / Discard / Cancel close question~~ (done 2026-11-06) (C5-L9), ~~the
   Find dialog's Regular Expression box~~ (done 2026-11-06, section 60), the studio's DNP state from the sheet in view (D5-M2).
 - Round 6 (2026-10-28, `task-r6-schematic`, `PARITY-sch.md` section 50): a unit's display name (`unit_name`) is kept in the schematic's cache and names the
   unit in net names, `${UNIT}` and the drawn reference (B6-H1, QA `issue21980`); the library symbol's user fields are in the cache (`${LOCATION}`, QA
@@ -230,15 +230,24 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   the preset the view is), the field name templates as hidden columns, the project's saved view on open, "Save changes?" on a close (C5-L9's close question
   done); Find / Replace's Regular Expression (`eda_model::wx_regex`, the one engine of the port for `wxRegEx`, shared with the net class patterns), and the search over sheets' names,
   files and fields, sheet pins, power symbols' values, text boxes and directive labels' fields, with Replace where KiCad replaces. **Left**: library metadata
-  (no box in KiCad's dialog either), groups and ERC markers in Find; a preset saved at once (KiCad at the close), the closing view not kept as `bom_settings`;
-  with no saved view the user fields are shown; the Fields Table's Description column, BOM Name editing, grid menus, Group By refusals.
+  (no box in KiCad's dialog either), groups and ERC markers in Find; ~~a preset saved at once (KiCad at the close), the closing view not kept as `bom_settings`~~;
+  with no saved view the user fields are shown; ~~the Fields Table's Description column, BOM Name editing, grid menus, Group By refusals~~ (done 2026-11-07 below).
+- Done 2026-11-07 (`task-v3-schdlg`, UI-LEFT-2 SS13, SS14; `PARITY-sch.md` section 77): the Symbol Fields Table's Description column (the fifth mandatory field,
+  the library's description until the symbol has its own), the BOM Name labels, Include and Group By with the Quantity and Item Number refusals, the grid's
+  right-button menus (Select Footprint..., Show Datasheet, Cut / Copy / Paste / Delete / Select All, a header's show / hide), the export's format presets with
+  Save / Delete, the presets kept until the close, which writes them with the view and format it closes on (`savePresetsToSchematic`, one `set_bom_view` step);
+  Edit Text & Graphics as one verb over every sheet (`global_edit_text_graphics`: the reference, library id, type and net filters, font, text colour, a field's
+  alignment, line and fill colours, sheet titles, sheet fields, borders, label fields); Change / Update Symbols' resets in the change's own step, a field reset
+  to the library's place. **Left**: a range selection in the Fields Table's grid; a sheet pin's font and colour; a label's alignment (its spin) and a directive
+  label's size, bold and italic in Edit Text & Graphics; the net of a screen shown twice is one name for every path; a reset of a symbol whose library symbol the
+  project keeps no copy of is Autoplace's.
 - Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S13, S16, S18, S19, S20, S22; `PARITY-sch.md` section 62): Draw Arc's three clicks (KiCad 25ec2335) and the arc
   point editor; Edit Text & Graphics over fields, labels, wires, buses, junctions and sheet pins; Change / Update Symbols' field resets; Break and Repeat without
   `TrimWire` (r3 C3-L1, done), the clean-up after Swap and the Properties verbs (C3-M1, done), C3-L3; the no-connect toggle; Alt+S over every swappable kind;
   Unfold from Bus's submenus and label ghost (r6's leftover done); Find by a field's own visibility; Autoplace with swapped pins (the "Missing" line's item, done);
   `${U1.1:FIELD}` in the project's notation both ways (r7's letter-form leftover, done) and `@{..}`'s full grammar. **Left**: which of two equal default net names
-  takes `_1` (the derived uuids are seeded with the net name); Copy / Paste of a user field's shown state and place; Edit Text & Graphics over the whole
-  hierarchy, colours and fonts; ~~the other arc draw modes and the other shapes' point editor~~ (done below).
+  takes `_1` (the derived uuids are seeded with the net name); Copy / Paste of a user field's shown state and place; ~~Edit Text & Graphics over the whole
+  hierarchy, colours and fonts~~ (done 2026-11-07, `PARITY-sch.md` section 77); ~~the other arc draw modes and the other shapes' point editor~~ (done below).
 - Done 2026-11-07 (`task-v1-handles`, UI-LEFT-2 SS3, YY1, FF1, FF2; `PARITY-sch.md` section 70, PARITY-symedit "The point editor of every shape", `PARITY-fpedit.md` section 23):
   the point editor of every drawn shape (rectangles, circles, arcs, beziers, polygons, text boxes, rule areas) in the schematic and the Symbol Editor, with "Keep pins
   attached when dragging edges"; Draw Arc's five KiCad 10 modes with the Arc palette and tangent seeds; the Footprint Editor's Copy / Cut / Paste through KiCad's
@@ -810,7 +819,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   label's spin; only the normal and the De Morgan body style are modelled.
 - Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S16, S19, S20; `PARITY-sch.md` section 62): Autoplace Fields reads the swapped pin places (done); an imported
   power symbol keeps its hand-placed Reference and Value and its flags (r4 D4-L2, done); Change / Update Symbols reset a symbol's field visibility, sizes and
-  styles and places; Reorganize keeps the groups (a label's spin after it stays the layout's: its wires are new). **Left**: ~~Copy / Paste keep a user field's text
+  styles and places (the library's places, in the change's own step since 2026-11-07, `PARITY-sch.md` section 77); Reorganize keeps the groups (a label's spin after it stays the layout's: its wires are new). **Left**: ~~Copy / Paste keep a user field's text
   only~~ (every field's place, look and visibility since 2026-11-07, UI-LEFT-2 SS8, `PARITY-sch.md` section 76); a mirrored power symbol's fields are read unmirrored.
 - Done 2026-11-07 (`task-v3-schdlg`, UI-LEFT-2 SS6, SS7, `PARITY-sch.md` section 75): Symbol Properties' grid has `FIELDS_GRID_TABLE`'s Orientation, X / Y
   Position and Allow Autoplacement columns (the place in the symbol's own frame, `edit_field`'s `local_at` / `local_vertical`), the column chooser, Move Up /

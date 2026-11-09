@@ -413,7 +413,7 @@ fn change_symbols_resets_the_fields_visibility_size_and_style_and_place_from_the
     let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
     let value = field_id(&field_key("R1", 1), "Value");
     b.apply(&edit(&value, |e| e.size_nm = Some(mm(1.5)))).unwrap();
-    let reset = |visibility: bool, effects: bool, positions: bool| Cmd::sch(SchCmd::ResetSymbolFields { ids: ids(&["R1"]), visibility, effects, positions });
+    let reset = |visibility: bool, effects: bool, positions: bool| Cmd::sch(SchCmd::ResetSymbolFields { ids: ids(&["R1"]), visibility, effects, positions, allow_unchanged: false });
     b.apply(&reset(false, true, false)).unwrap();
     let f = field_named(b.design().schematic.as_ref().unwrap(), "Value");
     assert_eq!((f.size_nm, f.bold, f.visible), (2_000_000.0, true, true), "sizes and styles, not the visibility");
