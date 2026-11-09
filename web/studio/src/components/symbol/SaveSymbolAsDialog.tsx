@@ -101,7 +101,7 @@ export function SaveSymbolAsDialog() {
       const puts = savePlan({ chain: ctx.chain, flat: ctx.flat, newLibId, flatten, strategy, taken: ctx.taken });
       if (await performSaveAs({ api, dispatch }, req, puts, ctx.taken)) {
         // the copy is in the library's buffer (the tree marks the library " *"); Save writes the library's file
-        if (isTableLibrary(lib)) dispatch({ type: "TOAST", message: `${typed} is in ${lib}, not saved yet: Save (Ctrl+S) writes the library.`, kind: "info" });
+        // (`saveSymbolCopyAs` says nothing: the copy is in the library's buffer, marked " *" in the tree, until Save writes it; UI-LEFT-2 LL6)
         close();
       }
     } finally {

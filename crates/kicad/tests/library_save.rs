@@ -9,7 +9,7 @@
 //! The installed libraries are found as the studio finds them (`KICAD_PATH`, `eda_kicad::default_symbol_library_root`); without them a test says so and
 //! passes.
 
-use eda_kicad::library_save::{copy_footprint_library, save_footprint, save_symbol_library_as, save_symbols, SymbolSave};
+use eda_kicad::library_save::{copy_footprint_library, delete_footprints, save_footprint, save_symbol_library_as, save_symbols, save_symbols_deleting, SymbolSave};
 use eda_model::embedded_files::EmbeddedFiles;
 use eda_model::ir::{LibraryFootprint, LibrarySymbol};
 use std::path::{Path, PathBuf};
@@ -271,5 +271,87 @@ fn footprints_saved_into_a_pretty_folder_read_back_and_kicad_cli_loads_it() {
         plot_footprint(&cli, &lib, name, &dir.join("svg"));
         plot_footprint(&cli, &copy, name, &dir.join("svg-copy"));
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The symbols kicad-cli finds in `library` (a file or a folder): `sym export svg` of the whole library plots each, "Plotting symbol '%s' unit %d".
+fn kicad_cli_symbols(cli: &Path, library: &Path, out: &Path) -> Vec<String> {
+    let _ = std::fs::remove_dir_all(out);
+    std::fs::create_dir_all(out).unwrap();
+    let run = Command::new(cli).args(["sym", "export", "svg", "-o"]).arg(out).arg(library).output().expect("runs kicad-cli");
+    let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    assert!(run.status.success(), "kicad-cli sym export svg of {}: {said}", library.display());
+    let mut names: Vec<String> = said.lines().filter_map(|l| l.strip_prefix("Plotting symbol '")).filter_map(|l| l.split_once("' unit").map(|(n, _)| n.to_string())).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The footprints kicad-cli finds in a `.pretty` folder: `fp export svg` of the whole library plots each, "Plotting footprint '%s' to '%s'".
+fn kicad_cli_footprints(cli: &Path, library: &Path, out: &Path) -> Vec<String> {
+    let _ = std::fs::remove_dir_all(out);
+    std::fs::create_dir_all(out).unwrap();
+    let run = Command::new(cli).args(["fp", "export", "svg", "--layers", "F.Cu", "-o"]).arg(out).arg(library).output().expect("runs kicad-cli");
+    let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    assert!(run.status.success(), "kicad-cli fp export svg of {}: {said}", library.display());
+    let mut names: Vec<String> = said.lines().filter_map(|l| l.strip_prefix("Plotting footprint '")).filter_map(|l| l.split_once('\'').map(|(n, _)| n.to_string())).collect();
+    names.sort();
+    names
+}
+
+/// UI-LEFT-2 LL1: Delete and Rename reach the library when it is saved -- a symbol deleted (with the symbol derived from it) and one renamed in a file library
+/// and in a folder library (whose deleted symbol's file is removed and renamed symbol's file renamed, KiCad 25ec2335), a footprint deleted and one renamed in a
+/// `.pretty` folder -- and kicad-cli loads each library with exactly the items left.
+#[test]
+fn deleted_and_renamed_items_leave_their_library_and_kicad_cli_loads_what_is_left() {
+    let (Some(device), Some(installed)) = (installed_device(), installed_pretty("Resistor_SMD")) else { return };
+    let dir = scratch("delete-rename");
+    let pick = dir.join("pick.kicad_symdir");
+    std::fs::create_dir(&pick).unwrap();
+    for f in ["R", "C", "C_Feedthrough", "Filter_EMI_C"] {
+        std::fs::copy(device.join(format!("{f}.kicad_sym")), pick.join(format!("{f}.kicad_sym"))).unwrap();
+    }
+    let original = eda_kicad::read_symbol_library_text(&pick).unwrap();
+    // a file library: C_Feedthrough deleted takes Filter_EMI_C (derived from it) with it; C renamed Cap (the old name deleted, the symbol written anew)
+    let file = dir.join("Mine.kicad_sym");
+    std::fs::write(&file, &original).unwrap();
+    let mut cap = symbol_of(&original, "Mine", "C");
+    cap.lib_id = "Mine:Cap".into();
+    save_symbols_deleting(&file, &[SymbolSave { symbol: &cap, embedded: None }], &["C_Feedthrough", "C"]).unwrap();
+    let saved = std::fs::read_to_string(&file).unwrap();
+    let mut names: Vec<String> = eda_kicad::scan_symbols(&saved).into_iter().map(|s| s.name).collect();
+    names.sort();
+    assert_eq!(names, ["Cap", "R"]);
+    assert_eq!(form_of(&saved, "R"), form_of(&original, "R"), "a symbol neither deleted nor renamed keeps its text");
+    // the folder library: the same, file by file
+    let folder = dir.join("Folder.kicad_symdir");
+    std::fs::create_dir(&folder).unwrap();
+    for e in std::fs::read_dir(&pick).unwrap().filter_map(|e| e.ok()) {
+        std::fs::copy(e.path(), folder.join(e.file_name())).unwrap();
+    }
+    let w = save_symbols_deleting(&folder, &[SymbolSave { symbol: &cap, embedded: None }], &["C_Feedthrough", "C"]).unwrap();
+    assert_eq!(w.removed, [folder.join("C.kicad_sym"), folder.join("C_Feedthrough.kicad_sym"), folder.join("Filter_EMI_C.kicad_sym")]);
+    let mut files: Vec<String> = std::fs::read_dir(&folder).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    files.sort();
+    assert_eq!(files, ["Cap.kicad_sym", "R.kicad_sym"]);
+    // a .pretty folder: R_0805 deleted, R_0603 renamed (saved under the new name, the old file deleted, as `SaveFootprint` does after a rename)
+    let pretty = dir.join("Mine.pretty");
+    std::fs::create_dir(&pretty).unwrap();
+    for f in ["R_0603_1608Metric", "R_0805_2012Metric", "R_1206_3216Metric"] {
+        std::fs::copy(installed.join(format!("{f}.kicad_mod")), pretty.join(format!("{f}.kicad_mod"))).unwrap();
+    }
+    let mut renamed = eda_kicad::parse_library_footprint(&std::fs::read_to_string(pretty.join("R_0603_1608Metric.kicad_mod")).unwrap()).unwrap().footprint;
+    renamed.name = "Mine:R_Small".into();
+    renamed.assign_missing_ids();
+    assert_eq!(delete_footprints(&pretty, &["Mine:R_0805_2012Metric", "Mine:R_0603_1608Metric"]).unwrap().len(), 2);
+    save_footprint(&pretty, &renamed, &EmbeddedFiles::default()).unwrap();
+
+    if !slow_tests_on() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else { return eprintln!("skipped: no kicad-cli") };
+    assert_eq!(kicad_cli_symbols(&cli, &file, &dir.join("svg-file")), ["Cap", "R"]);
+    assert_eq!(kicad_cli_symbols(&cli, &folder, &dir.join("svg-folder")), ["Cap", "R"]);
+    assert_eq!(kicad_cli_footprints(&cli, &pretty, &dir.join("svg-pretty")), ["R_1206_3216Metric", "R_Small"]);
     let _ = std::fs::remove_dir_all(&dir);
 }

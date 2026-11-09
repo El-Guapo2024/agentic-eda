@@ -20,8 +20,11 @@
 //!   * the editor opens a derived symbol of a library as the flat symbol it stands for (`eda_kicad::parse_symbol`); saved back, it is written derived from
 //!     its parent again when that loses nothing (its drawing, units and flags are still the parent's: what KiCad lets one edit of a derived symbol, its
 //!     fields), else flat;
-//!   * Delete and Rename of a library's symbol stay in the design: the file keeps the old symbol (KiCad's buffer remembers the deletion, `GetDeletedBuffers`);
-//!   * the file is not watched: a library changed on disk while its symbol is open is not offered for reloading (`SYMBOL_EDIT_FRAME`'s file watcher).
+//!
+//! Delete and Rename of a library's item mark it in the design (`SymbolLibrarySection::deleted`, `FootprintLibrarySection::deleted`; KiCad's
+//! `LIB_BUFFER::m_deleted` and a renamed buffer's original name), and Save takes the marked items out of the library's file or folder (UI-LEFT-2 LL1,
+//! `crate::library_buffer`). A modified item is one edited since it was opened, saved or reverted (`crate::library_buffer::is_dirty`, KiCad's flag), or whose
+//! copy is not what the file holds.
 
 use crate::board;
 use crate::library_index::Kind;
@@ -29,6 +32,7 @@ use crate::library_tables::{self, Env, LibEntry};
 use eda_kicad::library_save::{self as ls, SymbolSave};
 use eda_kicad::SymbolSummary;
 use eda_model::ir::{Design, LibraryFootprint, LibrarySymbol, SymbolLibrarySection};
+use eda_ops::Cmd;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -60,7 +64,7 @@ fn lib_entry(dir: &Path, kind: Kind, lib: &str) -> Option<LibEntry> {
 /// are modified every few seconds).
 type SavedText = (Option<SystemTime>, Arc<String>, Arc<Vec<SymbolSummary>>);
 
-fn saved_library(path: &Path) -> Option<(Arc<String>, Arc<Vec<SymbolSummary>>)> {
+pub(crate) fn saved_library(path: &Path) -> Option<(Arc<String>, Arc<Vec<SymbolSummary>>)> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, SavedText>>> = OnceLock::new();
     let stamp = eda_kicad::symbol_library_modified(path);
     stamp?;
@@ -77,7 +81,7 @@ fn saved_library(path: &Path) -> Option<(Arc<String>, Arc<Vec<SymbolSummary>>)> 
 }
 
 /// The library file's symbol `lib_id` (`Lib:Name`) as the editor opens it (`parse_symbol`: a derived one flat), or none when the file has no such symbol.
-fn saved_symbol(path: &Path, lib_id: &str) -> Option<LibrarySymbol> {
+pub(crate) fn saved_symbol(path: &Path, lib_id: &str) -> Option<LibrarySymbol> {
     let (text, summaries) = saved_library(path)?;
     let mut sym = eda_kicad::parse_symbol(&text, &summaries, split(lib_id).1)?;
     sym.lib_id = lib_id.to_string();
@@ -98,6 +102,37 @@ fn saved_footprint(path: &Path, name: &str) -> Option<LibraryFootprint> {
     fp.name = name.to_string();
     fp.assign_missing_ids();
     Some(fp)
+}
+
+/// [`saved_footprint`] of the library the board's tables nickname `Lib` (`FootprintExists`, `LoadFootprint`).
+pub(crate) fn saved_footprint_of(dir: &Path, name: &str) -> Option<LibraryFootprint> {
+    saved_footprint(&lib_entry(dir, Kind::Footprint, split(name).0)?.path, name)
+}
+
+/// Whether the design's symbol `sym` is what its library's file holds (opening a symbol copies the file's in: not a modification).
+pub(crate) fn symbol_matches_file(dir: &Path, sym: &LibrarySymbol, section: Option<&SymbolLibrarySection>) -> bool {
+    let Some(entry) = lib_entry(dir, Kind::Symbol, split(&sym.lib_id).0) else { return false };
+    let ours = section.and_then(|l| flat_entry(l, &sym.lib_id)).unwrap_or_else(|| sym.clone());
+    saved_symbol(&entry.path, &sym.lib_id).is_some_and(|saved| symbol_text(&saved) == symbol_text(&ours))
+}
+
+/// Whether the design's copy `id` is modified (see the module doc), from the library sections alone (the watcher asks every second; the model is not built).
+pub(crate) fn item_modified(dir: &Path, kind: Kind, id: &str, symbols: Option<&SymbolLibrarySection>, footprints: Option<&eda_model::ir::FootprintLibrarySection>) -> bool {
+    if crate::library_buffer::is_dirty(dir, kind, id) {
+        return true;
+    }
+    match kind {
+        Kind::Symbol => {
+            let (Some(entry), Some(ours)) = (lib_entry(dir, kind, split(id).0), symbols.and_then(|l| flat_entry(l, id))) else { return false };
+            saved_symbol(&entry.path, id).is_none_or(|saved| symbol_text(&saved) != symbol_text(&ours))
+        }
+        Kind::Footprint => footprints.and_then(|l| l.by_name(id)).is_some_and(|fp| !footprint_matches_file(dir, fp)),
+    }
+}
+
+/// Whether the design's footprint `fp` is what its library's folder holds.
+pub(crate) fn footprint_matches_file(dir: &Path, fp: &LibraryFootprint) -> bool {
+    saved_footprint_of(dir, &fp.name).is_some_and(|saved| footprint_text(&saved) == footprint_text(fp))
 }
 
 /// What a symbol is compared by: this writer's text of it, under its bare name (ids and the `published` flag are not in a file).
@@ -129,18 +164,45 @@ fn buffered_symbols<'a>(design: &'a Design, lib: &str) -> Vec<&'a LibrarySymbol>
     design.symbol_library.as_ref().map(|l| l.symbols.iter().filter(|s| of(&s.lib_id) == lib).collect()).unwrap_or_default()
 }
 
-/// `SYMBOL_LIBRARY_MANAGER::IsSymbolModified` for the design's symbols of library `lib` at `path`: the ones whose text differs from the file's symbol, or
-/// that the file lacks (see the module doc).
-fn modified_symbols(design: &Design, path: &Path, lib: &str) -> Vec<String> {
+/// The design's symbols of library `lib` at `path` whose text differs from the file's symbol, or that the file lacks: what Save writes.
+fn differing_symbols(design: &Design, path: &Path, lib: &str) -> Vec<String> {
     let Some(section) = design.symbol_library.as_ref() else { return Vec::new() };
     buffered_symbols(design, lib)
         .into_iter()
         .filter(|s| match (flat_entry(section, &s.lib_id), saved_symbol(path, &s.lib_id)) {
-            (Some(ours), Some(saved)) => symbol_text(&ours) != symbol_text(&saved),
+            // a derived symbol whose parent is another than the file's (its parent was renamed: KiCad links it by pointer, and `SaveLibrary` writes every buffer)
+            (Some(ours), Some(saved)) => symbol_text(&ours) != symbol_text(&saved) || s.extends.as_deref().is_some_and(|p| saved_parent(path, split(&s.lib_id).1).as_deref() != Some(split(p).1)),
             _ => true,
         })
         .map(|s| s.lib_id.clone())
         .collect()
+}
+
+/// `SYMBOL_LIBRARY_MANAGER::IsSymbolModified` for the design's symbols of library `lib` at `path` (see the module doc): edited since they were opened, saved or
+/// reverted, or not what the file holds.
+fn modified_symbols(dir: &Path, design: &Design, path: &Path, lib: &str) -> Vec<String> {
+    let differing = differing_symbols(design, path, lib);
+    buffered_symbols(design, lib)
+        .into_iter()
+        .map(|s| s.lib_id.clone())
+        .filter(|id| differing.contains(id) || crate::library_buffer::is_dirty(dir, Kind::Symbol, id))
+        .collect()
+}
+
+/// The marks of library `lib` (`deleted`) that its file still holds: what its next Save takes out (`GetDeletedBuffers`), as bare names. A mark the file no
+/// longer holds (saved already, or gone from the file) is passed over.
+fn live_symbol_marks(design: &Design, path: &Path, lib: &str) -> Vec<String> {
+    let marks: Vec<&String> = design.symbol_library.iter().flat_map(|l| l.deleted.iter()).filter(|id| split(id).0 == lib).collect();
+    if marks.is_empty() {
+        return Vec::new();
+    }
+    let Some((_, summaries)) = saved_library(path) else { return Vec::new() };
+    marks.into_iter().map(|id| split(id).1.to_string()).filter(|n| summaries.iter().any(|s| &s.name == n)).collect()
+}
+
+/// The footprint marks of library `lib` whose file is still in its folder (`Lib:Name`).
+fn live_footprint_marks(design: &Design, path: &Path, lib: &str) -> Vec<String> {
+    design.footprint_library.iter().flat_map(|l| l.deleted.iter()).filter(|id| split(id).0 == lib && path.join(ls::footprint_file_name(split(id).1)).is_file()).cloned().collect()
 }
 
 /// The modified symbol `lib_id` as Save writes it: as it is when it is derived in the design or is new to the file; when the file had it derived from a
@@ -153,6 +215,10 @@ fn as_saved(section: &SymbolLibrarySection, path: &Path, lib_id: &str) -> Option
     let (lib, name) = split(lib_id);
     let Some(parent) = saved_parent(path, name) else { return Some(sym) };
     let parent_id = format!("{lib}:{parent}");
+    // a parent this Save takes out of the library (Delete, Rename) is not there to derive from: the symbol is written flat
+    if section.deleted.contains(&parent_id) {
+        return Some(sym);
+    }
     // the parent as it will be after the save: the design's when the design has it, else the file's
     let parent_flat = flat_entry(section, &parent_id).or_else(|| saved_symbol(path, &parent_id))?;
     let mut candidate = sym.clone();
@@ -167,10 +233,10 @@ fn as_saved(section: &SymbolLibrarySection, path: &Path, lib_id: &str) -> Option
     }
 }
 
-/// What Save writes of library `lib` at `path`: each modified symbol (see [`as_saved`]).
+/// What Save writes of library `lib` at `path`: each symbol that differs from the file (see [`as_saved`]).
 fn symbols_to_save(design: &Design, path: &Path, lib: &str) -> Vec<LibrarySymbol> {
     let Some(section) = design.symbol_library.as_ref() else { return Vec::new() };
-    modified_symbols(design, path, lib).iter().filter_map(|id| as_saved(section, path, id)).collect()
+    differing_symbols(design, path, lib).iter().filter_map(|id| as_saved(section, path, id)).collect()
 }
 
 fn saves<'a>(design: &'a Design, symbols: &'a [LibrarySymbol]) -> Vec<SymbolSave<'a>> {
@@ -221,12 +287,17 @@ pub(crate) fn modified(dir: &Path, kind: &str) -> Value {
     };
     let libs = library_tables::libs(dir, kind);
     let mut items: Vec<String> = Vec::new();
+    // the libraries whose next Save takes a deleted or renamed item out of their file (`LIB_BUFFER::IsModified` counts `m_deleted` too: `GetHash`)
+    let mut marked: BTreeSet<String> = BTreeSet::new();
     match kind {
         Kind::Symbol => {
-            let names: BTreeSet<&str> = design.symbol_library.iter().flat_map(|l| l.symbols.iter().map(|s| split(&s.lib_id).0)).collect();
+            let names: BTreeSet<&str> = design.symbol_library.iter().flat_map(|l| l.symbols.iter().map(|s| split(&s.lib_id).0).chain(l.deleted.iter().map(|d| split(d).0))).collect();
             for lib in names {
                 if let Some(e) = (lib != PROJECT_LIBRARY).then(|| libs.find(lib)).flatten() {
-                    items.extend(modified_symbols(&design, &e.path, lib));
+                    items.extend(modified_symbols(dir, &design, &e.path, lib));
+                    if !live_symbol_marks(&design, &e.path, lib).is_empty() {
+                        marked.insert(lib.to_string());
+                    }
                 }
             }
         }
@@ -234,15 +305,23 @@ pub(crate) fn modified(dir: &Path, kind: &str) -> Value {
             for fp in design.footprint_library.iter().flat_map(|l| l.footprints.iter()) {
                 let (lib, _) = split(&fp.name);
                 if let Some(e) = (!lib.is_empty() && lib != PROJECT_LIBRARY).then(|| libs.find(lib)).flatten() {
-                    if saved_footprint(&e.path, &fp.name).is_none_or(|saved| footprint_text(&saved) != footprint_text(fp)) {
+                    if crate::library_buffer::is_dirty(dir, Kind::Footprint, &fp.name) || saved_footprint(&e.path, &fp.name).is_none_or(|saved| footprint_text(&saved) != footprint_text(fp)) {
                         items.push(fp.name.clone());
+                    }
+                }
+            }
+            for id in design.footprint_library.iter().flat_map(|l| l.deleted.iter()) {
+                if let Some(e) = libs.find(split(id).0) {
+                    if e.path.join(ls::footprint_file_name(split(id).1)).is_file() {
+                        marked.insert(split(id).0.to_string());
                     }
                 }
             }
         }
     }
     items.sort();
-    let libraries: BTreeSet<&str> = items.iter().map(|i| split(i).0).collect();
+    let mut libraries: BTreeSet<String> = items.iter().map(|i| split(i).0.to_string()).collect();
+    libraries.extend(marked);
     json!({ "items": items, "libraries": libraries })
 }
 
@@ -279,12 +358,16 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
 }
 
 /// `POST /api/library/save` -- Save in the two library editors.
-///  * `{kind: "symbol", lib}`: `SYMBOL_EDIT_FRAME::saveLibrary( lib, false )`: the modified symbols of the library into its file. A library that cannot be
-///    written answers `{error: "Symbol library '%s' is not writable.", detail: "You must save to a different location.", read_only: true}` (the question
-///    `Save` asks before it offers Save Library As); a library the tables do not have, "No library specified.".
-///  * `{kind: "footprint", id: "Lib:Name"}`: `FOOTPRINT_EDIT_FRAME::SaveFootprint` -> `SaveFootprintInLibrary`: the footprint into its library's folder.
+///  * `{kind: "symbol", lib}`: `SYMBOL_EDIT_FRAME::saveLibrary( lib, false )`: the modified symbols of the library into its file, and the ones Delete and
+///    Rename took out of it taken out (`SaveLibrary`'s deleted buffers, `SaveBuffer`'s original name; UI-LEFT-2 LL1). A library that cannot be written answers
+///    `{error: "Symbol library '%s' is not writable.", detail: "You must save to a different location.", read_only: true}` (the question `Save` asks before
+///    it offers Save Library As); a library the tables do not have, "No library specified.".
+///  * `{kind: "footprint", id: "Lib:Name"}`: `FOOTPRINT_EDIT_FRAME::SaveFootprint` -> `SaveFootprintInLibrary`: the footprint into its library's folder, after
+///    the footprints of that library that Delete or Rename took out of it are deleted (`if( nameChanged ) DeleteFootprintFromLibrary( oldFPID, false )`).
+///    `{kind: "footprint", lib}` deletes those alone: `DeleteFootprintFromLibrary` and the rename of a footprint that is not loaded, which write at once.
 ///
-/// `{ok, path, written: [files], message}` or `{error, detail?}`.
+/// `{ok, path, written: [files], removed: [files], saved: [ids], deleted: [ids], message}` or `{error, detail?}`. What was written is no longer modified
+/// (`crate::library_buffer::clear`), and the watcher knows the files are the studio's own (`crate::library_watch::note_written`).
 pub(crate) fn save(dir: &Path, body: &[u8]) -> Value {
     let req = match parse_body(body) {
         Ok(r) => r,
@@ -305,31 +388,66 @@ pub(crate) fn save(dir: &Path, body: &[u8]) -> Value {
                 return json!({ "error": format!("Symbol library '{lib}' is not writable."), "detail": "You must save to a different location.", "read_only": true });
             }
             let symbols = symbols_to_save(&design, &entry.path, lib);
+            let deleted = live_symbol_marks(&design, &entry.path, lib);
             let path = entry.path.display().to_string();
-            let written = if symbols.is_empty() {
-                Vec::new()
+            let write = if symbols.is_empty() && deleted.is_empty() {
+                ls::LibraryWrite::default()
             } else {
                 // "Copy .kicad_symb file to .bak."
                 if let Err(e) = ls::backup_file(&entry.path) {
                     return bad(e);
                 }
-                match ls::save_symbols(&entry.path, &saves(&design, &symbols)) {
-                    Ok(w) => w.written,
+                let gone: Vec<&str> = deleted.iter().map(String::as_str).collect();
+                match ls::save_symbols_deleting(&entry.path, &saves(&design, &symbols), &gone) {
+                    Ok(w) => w,
                     Err(e) => return json!({ "error": format!("Failed to save changes to symbol library file '{path}'."), "detail": e }),
                 }
             };
-            json!({ "ok": true, "path": path, "written": written, "saved": symbols.iter().map(|s| &s.lib_id).collect::<Vec<_>>(), "message": format!("Symbol library file '{path}' saved.") })
+            crate::library_watch::note_written(Kind::Symbol, &entry.path);
+            // every symbol of the library is saved now: none is modified (`SaveLibrary` saves every buffer, `ClearDeletedBuffer`)
+            let ids: Vec<String> = buffered_symbols(&design, lib).iter().map(|s| s.lib_id.clone()).collect();
+            crate::library_buffer::clear(dir, Kind::Symbol, &ids, true);
+            let deleted: Vec<String> = deleted.iter().map(|n| format!("{lib}:{n}")).collect();
+            json!({ "ok": true, "path": path, "written": write.written, "removed": write.removed, "saved": symbols.iter().map(|s| &s.lib_id).collect::<Vec<_>>(), "deleted": deleted, "message": format!("Symbol library file '{path}' saved.") })
         }
         "footprint" => {
             let id = text(&req, "id");
-            let (lib, item) = split(id);
+            let lib = if id.is_empty() { text(&req, "lib") } else { split(id).0 };
+            let item = split(id).1;
             let Some(entry) = lib_entry(dir, Kind::Footprint, lib) else { return bad(format!("Library '{lib}' not found.")) };
-            let Some(fp) = design.footprint_library.as_ref().and_then(|l| l.by_name(id)) else { return bad(format!("Footprint '{id}' is not open in the Footprint Editor.")) };
-            let embedded = design.footprint_library.as_ref().and_then(|l| l.embedded.get(id)).cloned().unwrap_or_default();
-            match ls::save_footprint(&entry.path, fp, &embedded) {
-                Ok(file) => json!({ "ok": true, "path": file.display().to_string(), "written": [file], "message": format!("Footprint '{item}' saved in '{lib}'.") }),
-                Err(e) => bad(e),
+            let fp = if id.is_empty() {
+                None
+            } else {
+                match design.footprint_library.as_ref().and_then(|l| l.by_name(id)) {
+                    Some(fp) => Some(fp),
+                    None => return bad(format!("Footprint '{id}' is not open in the Footprint Editor.")),
+                }
+            };
+            // the old names first (`SaveFootprint`: `DeleteFootprintFromLibrary( oldFPID, false )` before `SaveFootprintInLibrary`)
+            let marks = live_footprint_marks(&design, &entry.path, lib);
+            let gone: Vec<&str> = marks.iter().map(String::as_str).collect();
+            let removed = match ls::delete_footprints(&entry.path, &gone) {
+                Ok(r) => r,
+                Err(e) => return bad(e),
+            };
+            let mut out = json!({ "ok": true, "path": entry.path.display().to_string(), "written": [], "removed": removed, "deleted": marks, "message": "" });
+            if let Some(fp) = fp {
+                let embedded = design.footprint_library.as_ref().and_then(|l| l.embedded.get(id)).cloned().unwrap_or_default();
+                match ls::save_footprint(&entry.path, fp, &embedded) {
+                    Ok(file) => {
+                        out["path"] = json!(file.display().to_string());
+                        out["written"] = json!([file]);
+                        out["message"] = json!(format!("Footprint '{item}' saved in '{lib}'."));
+                        crate::library_buffer::clear(dir, Kind::Footprint, &[id.to_string()], true);
+                    }
+                    Err(e) => return bad(e),
+                }
+            } else if let [one] = marks.as_slice() {
+                // `DeleteFootprintFromLibrary`'s status text
+                out["message"] = json!(format!("Footprint '{}' deleted from library '{lib}'", split(one).1));
             }
+            crate::library_watch::note_written(Kind::Footprint, &entry.path);
+            out
         }
         other => bad(format!("kind is footprint or symbol, not {other:?}")),
     }
@@ -411,7 +529,9 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
             if let Err(e) = ls::backup_file(&dst) {
                 return bad(e);
             }
-            if let Err(e) = ls::save_symbol_library_as(src.as_deref(), &dst, &saves(&design, &symbols)) {
+            let deleted = src.as_deref().map(|p| live_symbol_marks(&design, p, lib)).unwrap_or_default();
+            let gone: Vec<&str> = deleted.iter().map(String::as_str).collect();
+            if let Err(e) = ls::save_symbol_library_as_deleting(src.as_deref(), &dst, &saves(&design, &symbols), &gone) {
                 return json!({ "error": format!("Failed to save changes to symbol library file '{shown}'."), "detail": e });
             }
             if replace == Some(PROJECT_LIBRARY) {
@@ -431,7 +551,8 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
                     None => return bad(format!("Library '{lib}' not found.")),
                 }
             };
-            let mut add = json!({ "kind": "footprint", "path": typed, "create": true });
+            // an existing folder is asked about and replaced on Overwrite (`createNewLibrary`, `crate::library_tables::add_library_with`)
+            let mut add = json!({ "kind": "footprint", "path": typed, "create": true, "overwrite": req.get("overwrite").and_then(Value::as_bool) == Some(true) });
             for key in ["nickname", "descr"] {
                 if !text(&req, key).is_empty() {
                     add[key] = json!(text(&req, key));
@@ -468,6 +589,96 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
         }
         other => bad(format!("kind is footprint or symbol, not {other:?}")),
     }
+}
+
+/// `POST /api/library/revert` -- Revert in the two library editors, and the reload of a library changed on disk (UI-LEFT-2 LL3), as one undoable step
+/// (`Cmd::ForgetLibrarySymbols` / `ForgetLibraryFootprints` and the file's items put back, one batch):
+///  * `{kind: "symbol", id}`: `SYMBOL_EDIT_FRAME::Revert` -> `SYMBOL_LIBRARY_MANAGER::RevertSymbol`: the symbol goes back to what the library's file holds
+///    (`GetOriginal`), and one the file never had to the symbol as it was made (`crate::library_buffer::original`; KiCad's buffer of a new symbol keeps it);
+///  * `{kind: "symbol", lib}`: `RevertLibrary`, and `UpdateLibraryBuffer` (the reload): every copy of the library goes back to the file's, the ones the file
+///    never had go, and what Delete and Rename took out of it is back (`m_libs.erase( it )`: the buffer and its deleted list);
+///  * `{kind: "footprint", id}`: `RevertFootprint`, and `OnFpChangeDebounceTimer`'s reload (`LoadFootprint` -> `ReloadFootprint`): the footprint back to its file.
+///
+/// What was reverted is no longer modified. `{ok, reverted: [ids], gone: [ids], message}` (`gone`: copies the file never had, which left the design), `{nothing:
+/// true, message}` when there is no saved version to go back to, or `{error}`.
+pub(crate) fn revert(dir: &Path, body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let (_, design, _) = match board::load(dir) {
+        Ok(l) => l,
+        Err(e) => return bad(board::reasons(&e)),
+    };
+    let id = text(&req, "id");
+    let (cmds, reverted, gone, kind): (Vec<Cmd>, Vec<String>, Vec<String>, Kind) = match text(&req, "kind") {
+        "symbol" => {
+            let lib = if id.is_empty() { text(&req, "lib") } else { split(id).0 };
+            let Some(entry) = lib_entry(dir, Kind::Symbol, lib) else { return bad(format!("Symbol library '{lib}' not found.")) };
+            if id.is_empty() {
+                let mut ids: Vec<String> = buffered_symbols(&design, lib).iter().map(|s| s.lib_id.clone()).collect();
+                ids.extend(design.symbol_library.iter().flat_map(|l| l.deleted.iter()).filter(|d| split(d).0 == lib).cloned());
+                let mut puts = Vec::new();
+                let mut gone = Vec::new();
+                for i in &ids {
+                    match saved_symbol(&entry.path, i) {
+                        Some(sym) if buffered_symbols(&design, lib).iter().any(|s| &s.lib_id == i) => puts.push(Cmd::PutLibrarySymbol { symbol: sym, overwrite: true }),
+                        Some(_) => {}
+                        None => gone.push(i.clone()),
+                    }
+                }
+                let mut cmds = vec![Cmd::ForgetLibrarySymbols { lib_ids: ids.clone() }];
+                cmds.extend(puts);
+                (cmds, ids, gone, Kind::Symbol)
+            } else {
+                let back = match saved_symbol(&entry.path, id).or_else(|| crate::library_buffer::original(dir, id)) {
+                    Some(sym) => sym,
+                    None => return json!({ "nothing": true, "message": format!("'{}' was never saved to {lib}: there is no saved version to revert to.", split(id).1) }),
+                };
+                (vec![Cmd::ForgetLibrarySymbols { lib_ids: vec![id.to_string()] }, Cmd::PutLibrarySymbol { symbol: back, overwrite: true }], vec![id.to_string()], Vec::new(), Kind::Symbol)
+            }
+        }
+        "footprint" => {
+            let Some(back) = saved_footprint_of(dir, id) else {
+                return json!({ "nothing": true, "message": format!("'{}' was never saved to {}: there is no saved version to revert to.", split(id).1, split(id).0) });
+            };
+            (vec![Cmd::ForgetLibraryFootprints { names: vec![id.to_string()] }, Cmd::PutLibraryFootprint { footprint: back, overwrite: true }], vec![id.to_string()], Vec::new(), Kind::Footprint)
+        }
+        other => return bad(format!("kind is footprint or symbol, not {other:?}")),
+    };
+    match board::step(dir, Cmd::Batch { cmds }, false, "ui") {
+        Ok(summary) => {
+            crate::library_buffer::clear(dir, kind, &reverted, false);
+            json!({ "ok": true, "reverted": reverted, "gone": gone, "message": summary })
+        }
+        Err(e) => bad(board::reasons(&e)),
+    }
+}
+
+/// `GET /api/library/derived?id=Lib:Name` -- `LIB_SYMBOL_LIBRARY_MANAGER::GetDerivedSymbolNames` over the library's buffer: the bare names of the symbols that
+/// derive from the symbol, at any depth, in the design's copies and in the library's file (less what Delete took out), for Delete's question ("Deleting a
+/// base symbol will delete all symbols derived from it."). `{"names": [..]}`.
+pub(crate) fn derived(dir: &Path, id: &str) -> Value {
+    let (_, design, _) = match board::load(dir) {
+        Ok(l) => l,
+        Err(e) => return bad(board::reasons(&e)),
+    };
+    let (lib, name) = split(id);
+    let section = design.symbol_library.as_ref();
+    let mut names: Vec<String> = section.map(|l| l.derived_names(id)).unwrap_or_default().iter().map(|d| split(d).1.to_string()).collect();
+    if let Some(entry) = lib_entry(dir, Kind::Symbol, lib) {
+        if let Some((_, summaries)) = saved_library(&entry.path) {
+            for child in crate::library_buffer::file_children(&summaries, name) {
+                let child_id = format!("{lib}:{child}");
+                // (a copy of it the design holds flat goes too: the Delete's rewrite takes every child the file has, `crate::library_buffer`)
+                let marked = section.is_some_and(|l| l.deleted.contains(&child_id));
+                if !marked && !names.contains(&child) {
+                    names.push(child);
+                }
+            }
+        }
+    }
+    json!({ "names": names })
 }
 
 #[cfg(test)]

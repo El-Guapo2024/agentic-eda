@@ -3,7 +3,7 @@
 // actions after a verb) refreshes every mounted list at once instead of waiting for the next tick -- plus KiCad's INSTALLED libraries:
 // the library names the moment the tree mounts, one library's item names when it is opened (`load`), every library's names only when the
 // search box needs them (`ensureSearchIndex`). Everything installed is read from the server once and kept (api/libraryIndexClient.ts).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEditorNames } from "../../api/types";
 import { fetchFootprintLibraryNames, fetchSymbolEditorNames } from "../../api/client";
 import { fetchModified } from "../../api/librarySaveClient";
@@ -46,6 +46,7 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
   const [items, setItems] = useState<TreeItem[]>([]);
   const [derived, setDerived] = useState<Readonly<Record<string, string>>>(NO_DERIVED);
   const [modified, setModified] = useState<ReadonlySet<string>>(NONE_MODIFIED);
+  const [deleted, setDeleted] = useState<ReadonlySet<string>>(NONE_MODIFIED);
   const [installed, setInstalled] = useState<InstalledLib[]>(() => knownInstalledLibraries(kind) ?? []);
   const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly string[]>>(() => knownInstalledItems(kind));
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
@@ -68,6 +69,9 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
       const r = kind === "footprint" ? await fetchFootprintLibraryNames() : await fetchSymbolEditorNames();
       const project = new Set(r.project ?? []);
       setItems(r.names.map((name) => ({ name, project: project.has(name) })));
+      // what Delete and Rename took out of a library: not listed, though the file still holds it until the library is saved (KiCad lists the buffer)
+      const gone = r.deleted ?? [];
+      setDeleted((prev) => (prev.size === gone.length && gone.every((n) => prev.has(n)) ? prev : new Set(gone)));
       const d: Readonly<Record<string, string>> | undefined = kind === "symbol" ? (r as SymbolEditorNames).derived : undefined;
       // keep the same object while nothing changed, so the tree menu is not rebuilt on every poll
       setDerived((prev) => (JSON.stringify(prev) === JSON.stringify(d ?? NO_DERIVED) ? prev : d ?? NO_DERIVED));
@@ -164,5 +168,15 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
       });
   }, [kind]);
 
-  return { items, derived, modified, refresh, installed, loaded, loading, load, searchIndex, ensureSearchIndex };
+  // the installed items less what Delete and Rename took out of their library (`deleted`)
+  const shown = useMemo(() => withoutDeleted(loaded, deleted), [loaded, deleted]);
+  return { items, derived, modified, refresh, installed, loaded: shown, loading, load, searchIndex, ensureSearchIndex };
+}
+
+/** The item names of each library less the ones `deleted` names (`Lib:Name`); the same map when nothing is deleted. */
+export function withoutDeleted(loaded: ReadonlyMap<string, readonly string[]>, deleted: ReadonlySet<string>): ReadonlyMap<string, readonly string[]> {
+  if (deleted.size === 0) return loaded;
+  const out = new Map<string, readonly string[]>();
+  for (const [lib, names] of loaded) out.set(lib, names.some((n) => deleted.has(`${lib}:${n}`)) ? names.filter((n) => !deleted.has(`${lib}:${n}`)) : names);
+  return out;
 }

@@ -3552,6 +3552,12 @@ pub struct FootprintLibrarySection {
     /// into a library; [`FootprintLibrarySection::by_name`] finds them by their key so that every verb of the editor edits one. Additive: absent reads as none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub board_copies: Vec<BoardFootprintCopy>,
+    /// The footprints of the libraries of the library tables (`Lib:Name`, never the project library's) that the Footprint Editor deleted or renamed away, whose
+    /// file the next Save of their library takes out of the `.pretty` folder (UI-LEFT-2 LL1): `FOOTPRINT_EDIT_FRAME::DeleteFootprintFromLibrary`, and the
+    /// footprint `SaveFootprint` deletes when the name it was loaded under changed (`m_footprintNameWhenLoaded`). A name the library holds again (a copy in
+    /// `footprints`) is not here. Sorted. Additive: absent reads as none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deleted: Vec<String>,
 }
 
 /// A board footprint the Footprint Editor is editing (`FOOTPRINT_EDIT_FRAME::IsCurrentFPFromBoard`): its `footprint` is keyed by [`BoardFootprintCopy::key_of`] its
@@ -4264,6 +4270,12 @@ pub struct SymbolLibrarySection {
     /// entry. Additive: absent in an older `design.json` reads as "none".
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub embedded: std::collections::BTreeMap<String, crate::embedded_files::EmbeddedFiles>,
+    /// The symbols of the libraries of the library tables (`Lib:Name`, never the project library's) that the Symbol Editor deleted or renamed away, which the
+    /// next Save of their library takes out of its file or folder (UI-LEFT-2 LL1): KiCad's `LIB_BUFFER::m_deleted` (`GetDeletedBuffers`, by the original
+    /// name, `SYMBOL_LIBRARY_MANAGER::SaveLibrary`) and a renamed buffer's original name (`LIB_BUFFER::SaveBuffer`: "Delete the original symbol if the symbol
+    /// name has been changed"). A name the library holds again (a copy in `symbols`) is not here. Sorted. Additive: absent reads as none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deleted: Vec<String>,
 }
 
 impl SymbolLibrarySection {

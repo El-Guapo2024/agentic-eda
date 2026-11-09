@@ -4,7 +4,9 @@
 // its grid, like KiCad's, and a symbol is opened from the tree. The studio's own "Update Symbol on Board" and "Show Pin Numbers" are in the menus
 // (kicad/menuExtras.ts).
 import { useEffect } from "react";
-import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
+import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
+import { useStudioState } from "../../state/store";
+import { useLibraryWatch } from "../../state/libraryWatch";
 import { SymbolEditorCanvas } from "./SymbolEditorCanvas";
 import { PinPropertiesDialog } from "./PinPropertiesDialog";
 import { SymbolShapePropertiesDialog } from "./SymbolShapePropertiesDialog";
@@ -29,6 +31,15 @@ import { Toolbar } from "../Toolbar";
 export function SymbolEditorView() {
   const state = useSymState();
   const dispatch = useSymDispatch();
+  const api = useSymApi();
+  // `setSymWatcher( &libId )`: the open symbol's library file is watched while the editor is shown, and offered for reloading when it changes (UI-LEFT-2 LL3)
+  useLibraryWatch(
+    "symbol",
+    state.libId,
+    useStudioState().tab === "symbol",
+    async (gone) => (gone ? api.closeSymbol() : api.refresh()),
+    (message, kind = "info") => dispatch({ type: "TOAST", message, kind })
+  );
 
   // The editor's own toast (every library action reports through it) goes away by itself, like the studio's (App.tsx's `Toast`).
   useEffect(() => {

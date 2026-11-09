@@ -1631,6 +1631,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
     // ... and the Symbol Editor opening a library's symbol the design has no copy of: the library's symbol goes in with the open.
     let with_opened_symbol = crate::library_place::with_opened_symbol(dir, cmd, &design)?;
     let cmd = with_opened_symbol.as_ref().unwrap_or(cmd);
+    // ... and Delete, Rename and New Footprint of a library's item with what the library holds (`crate::library_buffer`, UI-LEFT-2 LL1, LL2).
+    let with_library_items = crate::library_buffer::with_library_items(dir, cmd, &design)?;
+    let cmd = with_library_items.as_ref().unwrap_or(cmd);
     let tag = snapshot_tag(cmd);
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
@@ -2185,6 +2188,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteLibraryFootprint { name } => format!("footprint delete {name:?}"),
         Cmd::PutLibraryFootprint { footprint, overwrite } => format!("footprint put {:?}{}", footprint.name, if *overwrite { " --overwrite" } else { "" }),
         Cmd::RenameLibraryFootprint { name, new_name, overwrite } => format!("footprint rename {name:?} {new_name:?}{}", if *overwrite { " --overwrite" } else { "" }),
+        Cmd::ForgetLibraryFootprints { names } => format!("footprint revert {}", names.join(" ")),
         Cmd::RepairFootprint { name } => format!("footprint repair {name:?}"),
         Cmd::EditFootprintProperties { name, description, .. } => format!("footprint properties {name:?} --description {description:?}"),
         Cmd::SetFootprintAnchor { name, at } => format!("footprint anchor {name:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -2216,6 +2220,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteLibrarySymbol { lib_id } => format!("symbol delete {lib_id:?}"),
         Cmd::PutLibrarySymbol { symbol, overwrite } => format!("symbol put {:?}{}", symbol.lib_id, if *overwrite { " --overwrite" } else { "" }),
         Cmd::RenameLibrarySymbol { lib_id, new_lib_id, overwrite } => format!("symbol rename {lib_id:?} {new_lib_id:?}{}", if *overwrite { " --overwrite" } else { "" }),
+        Cmd::ForgetLibrarySymbols { lib_ids } => format!("symbol revert {}", lib_ids.join(" ")),
         Cmd::SetSymbolAnchor { lib_id, at } => format!("symbol anchor {lib_id:?} --at {:.2},{:.2}", at.x, at.y),
         Cmd::EditSymbolProperties { lib_id, description, .. } => format!("symbol properties {lib_id:?} --description {description:?}"),
         Cmd::EditSymbolUnitsAndConnections { lib_id, demorgan, body_style_names, .. } => format!("symbol units {lib_id:?} --demorgan {demorgan} --body-styles {body_style_names:?}"),
@@ -2408,7 +2413,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SchMove(c) => c.kind(),
         Cmd::PcbItem(c) => c.kind(),
         Cmd::FpItem(_) => "footprint",
-        Cmd::FpEditor(eda_ops::fp_editor::FpEditorCmd::OpenFromBoard { .. } | eda_ops::fp_editor::FpEditorCmd::SetSettings { .. } | eda_ops::fp_editor::FpEditorCmd::ImportGraphics { .. }) => "footprint",
+        Cmd::FpEditor(eda_ops::fp_editor::FpEditorCmd::OpenFromBoard { .. } | eda_ops::fp_editor::FpEditorCmd::SetSettings { .. } | eda_ops::fp_editor::FpEditorCmd::ImportGraphics { .. } | eda_ops::fp_editor::FpEditorCmd::SetAttributes { .. }) => "footprint",
         Cmd::FpEditor(eda_ops::fp_editor::FpEditorCmd::SaveToBoard { .. }) => "update-footprint",
         Cmd::Embedded(c) => c.kind(),
         Cmd::Microwave(c) => c.kind(),
@@ -2443,14 +2448,14 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetSymbolLibIds { .. } => "schematic-lib-ids",
         Cmd::RescueSymbols { .. } => "schematic-rescue-symbols",
 
-        Cmd::OpenFootprintForEdit { .. } | Cmd::NewFootprint { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::PutLibraryFootprint { .. } | Cmd::RenameLibraryFootprint { .. } | Cmd::RepairFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
+        Cmd::OpenFootprintForEdit { .. } | Cmd::NewFootprint { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::PutLibraryFootprint { .. } | Cmd::RenameLibraryFootprint { .. } | Cmd::ForgetLibraryFootprints { .. } | Cmd::RepairFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::SetPadNumbers { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
         Cmd::CreateFootprintArray { .. } => "footprint-array",
         Cmd::ExplodePad { .. } | Cmd::RecombinePad { .. } => "pad-edit",
 
-        Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::EditSymbolUnitsAndConnections { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
+        Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::ForgetLibrarySymbols { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::EditSymbolUnitsAndConnections { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
         Cmd::DeriveSymbol { .. } | Cmd::FlattenSymbol { .. } | Cmd::UpdateSymbolFields { .. } | Cmd::SetSymbolParent { .. } | Cmd::EditLibrarySymbolFields { .. } => "symbol-derive",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
         Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } | Cmd::ReplaceSymbolGraphic { .. } => "symbol-shape",

@@ -94,6 +94,24 @@ pub fn split_lib_name(name: &str) -> (&str, &str) {
     }
 }
 
+/// The nickname of the studio's own project library (`eda:Name`): part of the design, with no file of its own.
+pub const PROJECT_LIBRARY: &str = "eda";
+
+/// Whether `id` (`Lib:Name`) is an item of a library of the library tables: a nickname that is not the project library's. Only such an item has a file, out
+/// of which a Delete or a Rename takes it when its library is saved (UI-LEFT-2 LL1; KiCad's library buffer, `LIB_BUFFER::m_deleted`).
+pub fn is_table_library_item(id: &str) -> bool {
+    matches!(id.split_once(':'), Some((lib, item)) if !lib.is_empty() && lib != PROJECT_LIBRARY && !item.is_empty())
+}
+
+/// `ids` put into a sorted mark list, each once.
+fn add_marks<'s>(marks: &mut Vec<String>, ids: impl IntoIterator<Item = &'s str>) {
+    for id in ids {
+        if let Err(at) = marks.binary_search_by(|m| m.as_str().cmp(id)) {
+            marks.insert(at, id.to_string());
+        }
+    }
+}
+
 /// `PAD::CanHaveNumber`: every pad but a non-plated hole (and an aperture pad, which the library pad
 /// does not model) takes a number.
 pub fn pad_can_have_number(pad: &LibraryPad) -> bool {
@@ -485,6 +503,10 @@ impl<'a> Board<'a> {
         let lib = self.footprint_library_mut();
         lib.footprints.retain(|f| f.name != new_name);
         lib.by_name_mut(name).expect("checked above").name = new_name.to_string();
+        // the old name leaves its library's folder at the next Save (`SaveFootprint`: `if( nameChanged ) DeleteFootprintFromLibrary( oldFPID, false )`)
+        if is_table_library_item(name) {
+            add_marks(&mut lib.deleted, [name]);
+        }
         // the files it embeds go with it, and the ones the footprint it replaced had are gone
         if let Some(l) = self.design.footprint_library.as_mut() {
             l.embedded.remove(new_name);
@@ -591,12 +613,66 @@ impl<'a> Board<'a> {
         let lib = self.symbol_library_mut();
         lib.symbols.retain(|s| s.lib_id != new_lib_id && Some(&s.lib_id) != clash.as_ref());
         lib.by_lib_id_mut(lib_id).expect("checked above").lib_id = new_lib_id.to_string();
+        // the old name leaves the library's file at the next Save (`LIB_BUFFER::SaveBuffer`: "Delete the original symbol if the symbol name has been
+        // changed"), and so does the symbol an overwrite replaced in another case (`RemoveSymbol( newName )`)
+        let gone = std::iter::once(lib_id).chain(clash.as_deref().filter(|c| *c != new_lib_id)).filter(|id| is_table_library_item(id)).collect::<Vec<_>>();
+        add_marks(&mut lib.deleted, gone);
         if let Some(l) = self.design.symbol_library.as_mut() {
             l.embedded.remove(new_lib_id);
         }
         self.move_library_symbol_embedded(lib_id, new_lib_id);
         // the symbols derived from it follow (KiCad links by pointer, this project by name), and a Value that was its name
         self.follow_symbol_rename(lib_id, new_lib_id);
+        Ok(())
+    }
+
+    /// The marks of what Delete and Rename took out of a library (`deleted`, UI-LEFT-2 LL1) for `ids` of table libraries: the library's file loses them at the
+    /// next Save. A symbol's are KiCad's `LIB_BUFFER::DeleteBuffer` (`m_deleted.emplace_back`).
+    pub(crate) fn mark_library_symbols_deleted<'s>(&mut self, ids: impl IntoIterator<Item = &'s str>) {
+        let ids: Vec<&str> = ids.into_iter().filter(|id| is_table_library_item(id)).collect();
+        if !ids.is_empty() {
+            add_marks(&mut self.symbol_library_mut().deleted, ids);
+        }
+    }
+
+    /// The footprint sibling of [`Self::mark_library_symbols_deleted`]: `DeleteFootprintFromLibrary`, whose file Save removes.
+    pub(crate) fn mark_library_footprints_deleted<'s>(&mut self, ids: impl IntoIterator<Item = &'s str>) {
+        let ids: Vec<&str> = ids.into_iter().filter(|id| is_table_library_item(id)).collect();
+        if !ids.is_empty() {
+            add_marks(&mut self.footprint_library_mut().deleted, ids);
+        }
+    }
+
+    /// After every command: a name the design holds a copy of again (a Put, a New, an Open, a Rename onto it, an undo) is no longer one Save takes out of its
+    /// library -- the copy is what Save writes there (`LIB_BUFFER::CreateBuffer` of a name that was deleted).
+    pub(crate) fn tidy_library_marks(&mut self) {
+        if let Some(l) = self.design.symbol_library.as_mut().filter(|l| !l.deleted.is_empty()) {
+            let held: std::collections::BTreeSet<&str> = l.symbols.iter().map(|s| s.lib_id.as_str()).collect();
+            l.deleted.retain(|id| !held.contains(id.as_str()));
+        }
+        if let Some(l) = self.design.footprint_library.as_mut().filter(|l| !l.deleted.is_empty()) {
+            let held: std::collections::BTreeSet<&str> = l.footprints.iter().map(|f| f.name.as_str()).collect();
+            l.deleted.retain(|id| !held.contains(id.as_str()));
+        }
+    }
+
+    /// See [`Cmd::ForgetLibrarySymbols`](crate::Cmd::ForgetLibrarySymbols): `SYMBOL_LIBRARY_MANAGER::RevertLibrary` / `UpdateLibraryBuffer` (`m_libs.erase`).
+    pub(crate) fn forget_library_symbols(&mut self, lib_ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        let Some(lib) = self.design.symbol_library.as_mut() else { return Ok(()) };
+        let gone: std::collections::BTreeSet<&str> = lib_ids.iter().map(String::as_str).collect();
+        lib.symbols.retain(|s| !gone.contains(s.lib_id.as_str()));
+        lib.embedded.retain(|k, _| !gone.contains(k.as_str()));
+        lib.deleted.retain(|id| !gone.contains(id.as_str()));
+        Ok(())
+    }
+
+    /// See [`Cmd::ForgetLibraryFootprints`](crate::Cmd::ForgetLibraryFootprints).
+    pub(crate) fn forget_library_footprints(&mut self, names: &[String]) -> Result<(), Vec<CheckResult>> {
+        let Some(lib) = self.design.footprint_library.as_mut() else { return Ok(()) };
+        let gone: std::collections::BTreeSet<&str> = names.iter().map(String::as_str).collect();
+        lib.footprints.retain(|f| !gone.contains(f.name.as_str()));
+        lib.embedded.retain(|k, _| !gone.contains(k.as_str()));
+        lib.deleted.retain(|id| !gone.contains(id.as_str()));
         Ok(())
     }
 

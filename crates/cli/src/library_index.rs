@@ -370,6 +370,17 @@ pub fn items(dir: &Path, kind: Kind, lib: &str) -> Value {
                     v["load_error"] = json!(e);
                 }
             }
+            // `FP_CACHE::Load`: a footprint file the reader refuses is not in the library, and the library says why ("Unable to read file '%s'", UI-LEFT-2 LL6;
+            // the tree opening one library only: the search index keeps the scan's names)
+            if kind == Kind::Footprint {
+                if let Ok(p) = libs.lib_path(kind, lib) {
+                    let (refused, messages) = eda_kicad::library_save::footprint_library_refusals(&p);
+                    if !refused.is_empty() {
+                        v["names"] = json!(names.iter().filter(|n| !refused.contains(n)).collect::<Vec<_>>());
+                        v["load_error"] = json!(messages.join("\n\n"));
+                    }
+                }
+            }
             v
         }
         Err(e) => json!({ "error": e }),

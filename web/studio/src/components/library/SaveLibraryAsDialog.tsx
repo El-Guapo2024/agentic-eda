@@ -63,7 +63,9 @@ function Body({ req }: { req: SaveLibraryAsUi }) {
         answer = await saveLibraryAs({ ...request, overwrite: true });
       }
       if (answer.ok) {
-        dispatch({ type: "TOAST", message: answer.message, kind: "info" });
+        // "Footprint library '%s' saved as '%s'." is `DisplayInfoMessage`; the Symbol Editor's `saveLibrary` formats "Symbol library file '%s' saved." and shows
+        // nothing (UI-LEFT-2 LL6)
+        if (!symbol) dispatch({ type: "TOAST", message: answer.message, kind: "info" });
         // `SyncLibraries( true )` / `FocusOnLibID`: the new library is listed and selected in the tree
         setLibraryOpen(req.kind, answer.nickname, true);
         selectLibraries(req.kind, [answer.nickname]);

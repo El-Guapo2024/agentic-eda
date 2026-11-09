@@ -81,11 +81,10 @@ export function fetchInstalledLibraries(kind: LibraryKind): Promise<InstalledLib
 export function fetchInstalledItems(kind: LibraryKind, lib: string): Promise<string[]> {
   return once(itemLists, `${kind}/${lib}`, async () => {
     const r = await get<{ names: string[]; load_error?: string; error?: string }>(`/api/library/items?kind=${kind}&lib=${encodeURIComponent(lib)}`);
-    // a folder library with a file that did not read: its names are listed, and the status bar warns (`GetLibraryLoadErrors`)
-    if (kind === "symbol") {
-      if (r.load_error) reportLoadErrors([{ lib, error: r.load_error }]);
-      else clearLoadError(lib);
-    }
+    // a folder library with a file that did not read: its names are listed, and the status bar warns (`GetLibraryLoadErrors`); a footprint library's file the
+    // reader refuses is left out and said the same way (`FP_CACHE::Load`, UI-LEFT-2 LL6)
+    if (r.load_error) reportLoadErrors([{ lib, error: r.load_error }]);
+    else clearLoadError(lib);
     knownItems.set(`${kind}/${lib}`, r.names);
     return r.names;
   });

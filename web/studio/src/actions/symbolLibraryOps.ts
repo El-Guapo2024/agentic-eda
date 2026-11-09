@@ -12,10 +12,11 @@ import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../api/client";
 import { fetchAnySymbol, fetchSymbolKicadSymText, parseSymbolText, pickTextFile, readClipboardText, saveCanvasPng, saveTextFile, writeClipboardText } from "../api/libraryClient";
 import { ensureUniqueLibId, escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolLibIdError, symbolNameInUse, symbolNameInUseAs } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
-import { symbolTarget } from "../kicad-port/librarySave";
+import { deleteBaseMessage, deleteModifiedQuestion, isTableLibrary, libraryOfId, notWritableMessage, symbolLibraryNotFound, symbolTarget } from "../kicad-port/librarySave";
+import { fetchDerivedNames, fetchLibraryItemsNow, fetchModified, fetchWritableLibraries } from "../api/librarySaveClient";
 import { getLibraryTree } from "../state/libraryTree";
 import { clipboardTextForSymbols, looksLikeSymbolText } from "../kicad-port/symClipboard";
-import { bareName, descendantsOf, treeConditions } from "../kicad-port/symFields";
+import { treeConditions } from "../kicad-port/symFields";
 import { duplicateLanding, planImport, planPaste } from "../kicad-port/symImportPlan";
 import type { ConflictStrategy } from "../kicad-port/symSaveAsPlan";
 import { askChoice, askConfirm, askText } from "../components/library/libraryDialogs";
@@ -163,47 +164,72 @@ export async function duplicateSymbol(c: SymCtx): Promise<void> {
   }
 }
 
-/** `SYMBOL_EDIT_FRAME::DeleteSymbolFromLibrary`: every selected symbol is removed from the library; the open one leaves the canvas. */
+/**
+ * `SYMBOL_EDITOR_CONTROL::CutCopyDelete`'s Delete -> `SYMBOL_EDIT_FRAME::DeleteSymbolFromLibrary`: every selected symbol leaves its library's buffer (`RemoveSymbol`),
+ * with the symbols derived from it, and the library's next Save takes them out of its file (UI-LEFT-2 LL1: the server marks them, `crate::library_buffer`).
+ * A library the tables lack is "Symbol library '%s' not found.", one that cannot be written "Symbol library '%s' is not writable." (the info bar; nothing is
+ * deleted when no selected library can be written); a modified symbol asks first, and a base symbol lists what goes with it. The open symbol leaves the canvas
+ * when it, or a symbol it derives from, is deleted (`GetParentChain( *GetCurSymbol() )`).
+ */
 export async function deleteSymbols(c: SymCtx): Promise<void> {
   const ids = targetIds(c);
   if (ids.length === 0) return info(c, "No symbol selected.");
   try {
-    const { project, derived } = await names();
-    const inProject = ids.filter((id) => project.has(id));
-    const refused = ids.filter((id) => !project.has(id));
-    if (refused.length > 0) fail(c, new Error(`${refused.join(", ")} ${refused.length === 1 ? "is" : "are"} not in the project library (defined by a library file or the built-in table), so there is nothing to delete.`));
-    // "Deleting a base symbol will delete all symbols derived from it": asked for each base symbol, and the Cancel button leaves that one alone
+    const [writable, { items: modifiedItems }] = await Promise.all([fetchWritableLibraries("symbol"), fetchModified("symbol")]);
+    const rows = new Map(writable.map((l) => [l.name, l.writable]));
+    let msg = "";
+    let hasWritableLibs = false;
+    for (const id of ids) {
+      const lib = libraryOfId(id);
+      if (lib !== PROJECT_LIBRARY && !rows.has(lib)) msg = symbolLibraryNotFound(lib);
+      else if (rows.get(lib) === false) msg = `${notWritableMessage(lib)}`;
+      else hasWritableLibs = true;
+    }
+    if (msg) fail(c, new Error(msg));
+    if (!hasWritableLibs) return;
     const deletable: string[] = [];
-    for (const id of inProject) {
-      const kids = descendantsOf(derived, id);
-      if (kids.length > 0) {
-        const message = `Deleting a base symbol will delete all symbols derived from it.\n\n${bareName(id)} (base)\n${kids.map(bareName).join("\n")}\n`;
-        if (!(await askConfirm({ title: "Warning", message, okLabel: "Delete All Listed Symbols", cancelLabel: "Cancel" }))) continue;
-      }
+    const chains = new Map<string, string[]>();
+    for (const id of ids) {
+      const { lib, item } = splitLibName(id);
+      if (lib !== "" && lib !== PROJECT_LIBRARY && !rows.has(lib)) continue;
+      if (modifiedItems.includes(id) && !(await askConfirm({ title: "Confirmation", message: deleteModifiedQuestion(item), okLabel: "Yes", cancelLabel: "No" }))) continue;
+      // `GetDerivedSymbolNames`: the library buffer's symbols derived from it, the design's and the file's
+      const derivedNames = await fetchDerivedNames(id);
+      if (derivedNames.length > 0 && !(await askConfirm({ title: "Warning", message: deleteBaseMessage(item, derivedNames), okLabel: "Delete All Listed Symbols", cancelLabel: "Cancel" }))) continue;
       deletable.push(id);
+      chains.set(id, [id, ...derivedNames.map((n) => joinLibName(lib, n))]);
     }
     if (deletable.length === 0) return;
     // a symbol that goes with its base symbol is not deleted a second time
-    const alone = deletable.filter((id) => !deletable.some((other) => other !== id && descendantsOf(derived, other).includes(id)));
+    const alone = deletable.filter((id) => !deletable.some((other) => other !== id && chains.get(other)!.includes(id)));
     const open = c.api.getState().libId;
     const cmds: Cmd[] = alone.map((lib_id): Cmd => ({ op: "delete_library_symbol", lib_id }));
     if (!(await runBatch(c, cmds))) return;
-    // the symbol on the canvas leaves it when it, or a symbol it derives from, was deleted (`GetParentChain( *GetCurSymbol() )` holds the deleted id)
-    if (open && alone.some((id) => id === open || descendantsOf(derived, id).includes(open))) c.api.closeSymbol();
+    if (open && alone.some((id) => chains.get(id)!.includes(open))) c.api.closeSymbol();
     select(c, []);
   } catch (e) {
     fail(c, e);
   }
 }
 
-/** `SYMBOL_EDITOR_CONTROL::RenameSymbol`: ask for a new name (an existing one is replaced only after an "Overwrite" confirmation). */
+/**
+ * `SYMBOL_EDITOR_CONTROL::RenameSymbol`: "Change Symbol Name"; a name the library already has (`SymbolNameInUse`: the design's copies and the library's file, in
+ * any case) is replaced only after "Symbol '%s' already exists in library '%s'." with Overwrite. A symbol of a library of the tables is renamed in its buffer
+ * (the server copies the library's symbol in when the design has none), and the library's next Save writes it under the new name and takes the old one out
+ * of the file (UI-LEFT-2 LL1).
+ */
 export async function renameSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
   if (!id) return info(c, "Select a symbol in the library tree first.");
   try {
-    const { all, project } = await names();
-    if (!project.has(id)) return fail(c, new Error(`${id} is not in the project library (it comes from a library file or the built-in table); save a copy of it under a new name instead.`));
+    const r = await fetchSymbolEditorNames();
+    const all = r.names;
+    const project = new Set(r.project ?? []);
     const { lib, item } = splitLibName(id);
+    const tableLib = isTableLibrary(lib);
+    // `if( !libMgr.LibraryExists( libName ) ) return 0;`: a symbol only the board's model or the built-in table defines has no library
+    if (!tableLib && !project.has(id)) return fail(c, new Error(`${id} is not in the project library (it comes from a library file or the built-in table); save a copy of it under a new name instead.`));
+    if (tableLib && !(await fetchWritableLibraries("symbol")).some((l) => l.name === lib)) return;
     const entered = await askText({
       title: "Change Symbol Name",
       label: "New name:",
@@ -216,9 +242,12 @@ export async function renameSymbol(c: SymCtx): Promise<void> {
     const typed = entered.trim();
     const newId = joinLibName(lib, escapeLibIdName(typed));
     if (newId === id) return;
+    // the library's buffer: the design's copies, and the file's symbols less what Delete and Rename took out
+    const deleted = new Set(r.deleted ?? []);
+    const inFile = tableLib ? (await fetchLibraryItemsNow("symbol", lib)).map((n) => joinLibName(lib, n)).filter((n) => !deleted.has(n)) : [];
     let overwrite = false;
     // `SymbolNameInUse`: any case; the symbol's own name in another case is not a clash
-    if (symbolNameInUseAs(newId, all.filter((n) => n !== id))) {
+    if (symbolNameInUseAs(newId, [...all, ...inFile].filter((n) => n !== id))) {
       if (!(await askConfirm({ title: "Confirmation", message: `Symbol '${typed}' already exists in library '${lib || PROJECT_LIBRARY}'.`, okLabel: "Overwrite" }))) return;
       overwrite = true;
     }

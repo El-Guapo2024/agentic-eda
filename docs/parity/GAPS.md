@@ -521,9 +521,20 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   file, `EscapeString( name, CTX_FILENAME ).kicad_sym` for a new one) or the `.pretty` folder the table names (`crates/kicad/src/library_save.rs`, the symbols not saved kept as the file has them;
   `crates/cli/src/library_save_api.rs`); Save All, Revert, Save As and Save Copy As into any table library (every library listed, a read-only one refused with KiCad's words, the name tested against
   the library's file in any case, New Library... makes a real library), New Symbol into the target library, Save Library As in both editors (a new file or folder and its table row), the tree's
-  ` *` on what is not saved. kicad-cli loads and plots what was saved (`crates/kicad/tests/library_save.rs`, slow tier); `e2e/library-save.check.js` 6/6. Left: Delete and Rename of a library's
-  item stay in the design (the file keeps the old one), New Footprint is the project library's, Save Library As offers no "Do not update library tables" or global table entry, the library file is
-  not watched, and a symbol kept from a newer file is written under this writer's `(version 20250324)`.
+  ` *` on what is not saved. kicad-cli loads and plots what was saved (`crates/kicad/tests/library_save.rs`, slow tier); `e2e/library-save.check.js` 6/6. Left: Save Library As offers no
+  "Do not update library tables" or global table entry, and a symbol kept from a newer file is written under this writer's `(version 20250324)` (Delete, Rename, New Footprint and the watch:
+  the next bullet).
+- Done (2026-11-07, `task-v2-libs`, UI-LEFT-2 LL1, LL2, LL3, LL6, `PARITY-common.md` section 16, `PARITY-fpedit.md` section 19): **Delete and Rename reach the library's file** -- the design
+  keeps KiCad's deleted list (`SymbolLibrarySection::deleted`, `FootprintLibrarySection::deleted`), the server's rewrite of the verbs takes a symbol's derived symbols with it and starts a rename
+  from the library's item (`crates/cli/src/library_buffer.rs`), and Save takes them out of a `.kicad_sym` file, a `.kicad_symdir` folder (a file left with no symbol removed, a renamed one's
+  file renamed: KiCad 25ec2335) or a `.pretty` folder (a footprint's file deleted at once, as `DeleteFootprintFromLibrary` does); **New Footprint** goes into the selected library with its last
+  footprint's attributes and is saved at once; the **read-only info bar**; **the file watch**: a library changed on disk reloads the open item that is not modified and asks KiCad's question
+  for one that is (`crates/cli/src/library_watch.rs`, polled modification times); **KiCad's modified flag** kept per item by the server (an edit undone stays modified), **Revert** as one
+  server step (a never-saved symbol back to how it was made), footprint New Library / Save Library As onto an existing folder asks Overwrite, Save As into a read-only library fails after the
+  dialog as KiCad's does, and the save toasts KiCad does not show are gone (status bar text where KiCad sets it). Tests: unit tests of the writers and the routes, a slow kicad-cli proof that
+  libraries after delete and rename load with the items left, `e2e/library-buffer.check.js` 7/7. Left: the modified flag and the originals live as long as the server; a renamed symbol
+  reverts under its new name; a footprint file this reader refuses is left out of its library with KiCad's "Unable to read file '%s'" (`FP_CACHE::Load`), but what only KiCad's stricter
+  parser refuses (a symbol in a well-formed file, a footprint file) is still listed.
 - Done (2026-11-06, `task-u4-libs`, UI-LEFT L2, `PARITY-common.md` section 14): **Manage Libraries as KiCad's**: every tab edited (the Global tab writes the global table into
   KiCad's configuration folder, a chained table's tab its own file; `TransferDataFromWindow`), Reset Libraries (`CreateGlobalTable`: one row naming the installed table, at
   once), Migrate Libraries (kicad-cli's `sym upgrade` / `fp upgrade`, which is `ConvertLibrary`, into the `.kicad_sym` / `.pretty` beside the old library, with KiCad's

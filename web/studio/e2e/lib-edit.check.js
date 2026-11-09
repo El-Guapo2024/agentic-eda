@@ -179,7 +179,7 @@
       const item = FP.includes(":") ? FP.slice(FP.indexOf(":") + 1) : FP;
       t(!!ask && new RegExp(`Delete footprint '${item}' from library '`).test(ask.innerText), `it asks "Delete footprint '${item}' from library ...?" (${ask?.innerText.replace(/\n/g, " / ").slice(0, 120)})`);
       if (!ask) { await r; return; }
-      buttonText(ask, "Delete")?.click();
+      buttonText(ask, "Yes")?.click(); // `IsOK`: Confirmation, Yes / No
       await r;
       await sleep(800);
       t(!(await fpNames()).includes(FP), "the footprint is gone from the library");

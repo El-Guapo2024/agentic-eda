@@ -120,7 +120,8 @@
     // Save (Ctrl+S) with the symbol selected in the tree: the library's file
     await selectItem(id);
     const r = await run("common.Control.save");
-    t(r.ok && /Symbol library file '.*\.kicad_sym' saved\./.test(r.toast?.message ?? r.toast ?? ""), `Save: ${JSON.stringify(r).slice(0, 200)}`);
+    // `saveLibrary` formats "Symbol library file '%s' saved." and shows nothing (UI-LEFT-2 LL6)
+    t(r.ok && !/saved/.test(JSON.stringify(r.toast ?? "")), `Save, with no message: ${JSON.stringify(r).slice(0, 200)}`);
     const file = await savedSymbol(id);
     t(file && file.pins.length === 2 && file.description === "Saved by the browser check", `the file holds the edited symbol: ${file && file.pins.length} pins, "${file && file.description}"`);
     t((await modified("symbol")).items.length === 0, "nothing is modified after the save");
@@ -178,8 +179,8 @@
     t(q && q.textContent.includes("Revert 'LsR2' to last version saved?") && q.textContent.includes("Your current changes will be permanently lost."), `the question: "${q?.textContent}"`);
     button(q, "Revert")?.click();
     t(await until(async () => (await symbol(id)).description === "Saved by the browser check", 5000), "the description is the file's again");
-    // forget the design's copies, open from the tree: the symbol comes from the library's file
-    for (const lib_id of [`${SYM_A}:LsR`, id]) await cmd({ op: "delete_library_symbol", lib_id });
+    // forget the design's copies (Revert's verb: the library keeps them), open from the tree: the symbol comes from the library's file
+    await cmd({ op: "forget_library_symbols", lib_ids: [`${SYM_A}:LsR`, id] });
     await until(async () => !(await json("/api/symbol_editor/names")).project.includes(id), 4000);
     const r = await itemRow(id);
     t(r, "the tree lists it from the library's file");
@@ -208,11 +209,12 @@
   await scenario("footprint: New Library, Save As into it writes the footprint's file, an edit is saved and reverted", async (t) => {
     await clickTab("Footprint");
     if (!(await newLibrary(t, "New Footprint Library", FP_A))) return;
+    // New Footprint goes into the library the tree has selected (New Library selected it), saved at once (UI-LEFT-2 LL2)
     await run("pcbnew.ModuleEditor.newFootprint");
-    // the footprint the editor has open (a new one is the project library's)
     const names = (await json("/api/footprint_library")).project;
-    const fresh = names.filter((n) => /^Untitled/.test(n)).sort().pop();
-    if (!t(fresh, `New Footprint made ${fresh}`)) return;
+    const fresh = await until(async () => (await json("/api/footprint_library")).project.filter((n) => n.startsWith(`${FP_A}:Untitled`)).sort().pop(), 6000);
+    if (!t(fresh, `New Footprint made ${fresh} in ${FP_A} (${JSON.stringify(names.filter((n) => /Untitled/.test(n)))})`)) return;
+    t(await until(async () => savedFootprint(fresh), 6000), "and wrote it into the library's folder at once");
     await selectItem(fresh);
     await run("common.Control.saveAs");
     const d = await until(() => dialog("Save Footprint As"), 3000);
@@ -234,7 +236,7 @@
     t(await until(() => treeRow(id)?.textContent.trim() === "LsFp1 *", 5000), `the tree marks it: "${treeRow(id)?.textContent.trim()}"`);
     await selectItem(id);
     const r = await run("common.Control.save");
-    t(r.ok && /saved in/.test(r.toast?.message ?? r.toast ?? ""), `Save: ${JSON.stringify(r.toast ?? r.error)}`);
+    t(r.ok, `Save: ${JSON.stringify(r.toast ?? r.error)}`);
     t((await savedFootprint(id))?.description === "Saved by the browser check", "the file has the edit");
     // Revert: an edit not saved goes back to the file's
     const again = await footprint(id);
@@ -271,7 +273,7 @@
     t(await until(() => dialog("Save Footprint As")?.textContent.includes(`Footprint LsFp1 already exists in ${FP_B}.`), 4000), "Footprint %s already exists in %s.");
     await closeDialogs();
     // forget the design's copy, open from the tree: it comes from the file
-    await cmd({ op: "delete_library_footprint", name: copy });
+    await cmd({ op: "forget_library_footprints", names: [copy] });
     await until(async () => !(await json("/api/footprint_library")).project.includes(copy), 4000);
     const r = await itemRow(copy);
     t(r, "the tree lists it from the library's folder");

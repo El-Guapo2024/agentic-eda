@@ -183,3 +183,63 @@ export function symbolSaveAsCheck(lib: string, typed: string, rows: readonly Pic
   if (rows.find((r) => r.name === lib)?.writable === false) return { error: readOnlySaveAsMessage(lib, name) };
   return { name, libId };
 }
+
+// ------------------------------------------------------------------------------------------------ Delete, Rename, New Footprint (UI-LEFT-2 LL1, LL2)
+
+/** `SYMBOL_EDITOR_CONTROL::CutCopyDelete` on a library the tables lack (`ShowInfoBarError`). */
+export function symbolLibraryNotFound(lib: string): string {
+  return `Symbol library '${lib}' not found.`;
+}
+
+/** `SYMBOL_EDIT_FRAME::DeleteSymbolFromLibrary` of a modified symbol (`IsOK`, Confirmation, Yes / No). */
+export function deleteModifiedQuestion(name: string): string {
+  return `The symbol '${name}' has been modified.\nDo you want to remove it from the library?`;
+}
+
+/** `DeleteSymbolFromLibrary` of a base symbol: "Deleting a base symbol will delete all symbols derived from it.\n\n", the base " (base)" and each derived symbol a line. */
+export function deleteBaseMessage(base: string, derived: readonly string[]): string {
+  return `Deleting a base symbol will delete all symbols derived from it.\n\n${base} (base)\n${derived.map((d) => `${d}\n`).join("")}`;
+}
+
+/** `FOOTPRINT_EDIT_FRAME::DeleteFootprintFromLibrary`'s question (`IsOK`). */
+export function deleteFootprintQuestion(name: string, lib: string): string {
+  return `Delete footprint '${name}' from library '${lib}'?`;
+}
+
+/** Its status text once the footprint is deleted (`SetStatusText`). */
+export function footprintDeletedStatus(name: string, lib: string): string {
+  return `Footprint '${name}' deleted from library '${lib}'`;
+}
+
+/** `DeleteFootprintFromLibrary` of a library that cannot be written (`ShowInfoBarError`), and `FootprintSave`'s refusal (with the folder's path). */
+export function footprintLibraryReadOnly(lib: string): string {
+  return `Library '${lib}' is read only.`;
+}
+
+/** `FOOTPRINT_EDITOR_CONTROL::tryToSaveFootprintInLibrary` on a library that cannot be written (`ShowInfoBarWarning`): the footprint is in no library. */
+export function newFootprintReadOnlyWarning(lib: string): string {
+  return `The footprint could not be added to the selected library ('${lib}'). This library is read-only.`;
+}
+
+/** `FOOTPRINT_EDIT_FRAME::AddFootprintToBoard`'s info bar for a footprint of a library that cannot be written, and its link. */
+export function readOnlyFootprintBanner(lib: string): string {
+  return `Editing footprint from read-only library ${lib}.`;
+}
+export const SAVE_AS_EDITABLE_COPY = "Save as editable copy";
+
+/** `PCB_BASE_FRAME::CreateNewFootprint`'s name made unique in the library (`FootprintExists( aLibName, aFootprintName )`): `Untitled`, `Untitled_1`, ... */
+export function uniqueNewFootprintName(taken: (name: string) => boolean, base = "Untitled"): string {
+  let name = base;
+  for (let idx = 1; taken(name); idx++) name = `${base}_${idx}`;
+  return name;
+}
+
+/**
+ * `FOOTPRINT_EDIT_FRAME::GetTargetFPID()` for New Footprint: the library of the tree's selected footprint, else of its selected library row, else of the loaded
+ * footprint; "" when there is none (KiCad's footprint "will need to be saved manually to assign to a library": here, the project library's).
+ */
+export function newFootprintLibrary(treeSelection: string | null, selectedLibs: readonly string[], loaded: string | null): string {
+  if (treeSelection) return splitLibName(treeSelection).lib;
+  if (selectedLibs.length > 0) return selectedLibs[0]!;
+  return loaded ? splitLibName(loaded).lib : "";
+}

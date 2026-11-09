@@ -866,6 +866,10 @@ fn handle(
         ("GET", "/api/library/saved") => respond(stream, "200 OK", "application/json", crate::library_save_api::saved(dir, &query_value(target, "kind"), &query_value(target, "id"), &query_value(target, "lib")).to_string().as_bytes()),
         ("POST", "/api/library/save") => respond(stream, "200 OK", "application/json", crate::library_save_api::save(dir, &body).to_string().as_bytes()),
         ("POST", "/api/library/save_as") => respond(stream, "200 OK", "application/json", crate::library_save_api::save_library_as(dir, &body).to_string().as_bytes()),
+        // UI-LEFT-2 LL1, LL3, LL6: Revert and a reload as one undoable step, the derived symbols Delete takes, the watch on the open item's library
+        ("POST", "/api/library/revert") => respond(stream, "200 OK", "application/json", crate::library_save_api::revert(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/library/derived") => respond(stream, "200 OK", "application/json", crate::library_save_api::derived(dir, &query_value(target, "id")).to_string().as_bytes()),
+        ("GET", "/api/library/watch") => respond(stream, "200 OK", "application/json", crate::library_watch::watch(dir, &query_value(target, "kind"), &query_value(target, "id")).to_string().as_bytes()),
         // The library tables (`crate::library_tables`): KiCad's global ones, read only, and the board's own `sym-lib-table` / `fp-lib-table`, which the Manage Symbol Libraries
         // and Manage Footprint Libraries dialogs edit; New Library and Add Existing Library; the board's path variables (Configure Paths); and the folder listing the browse
         // buttons use in place of a native file dialog.
@@ -1000,8 +1004,11 @@ fn handle(
                     // Import Netlist's report (`eda_ops::netlist_update::take_report`), as `report`
                     let imports_netlist = matches!(cmd, eda_ops::Cmd::ImportNetlist(_));
                     let _ = eda_ops::netlist_update::take_report();
+                    // the library editors' items this step modifies (`crate::library_buffer::note_step`, KiCad's flag per buffer)
+                    let libraries_before = crate::library_buffer::before_step(dir, Some(domain));
                     match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                         Ok(summary) => {
+                            crate::library_buffer::note_step(dir, libraries_before);
                             if let Some((before, cmd)) = &copied {
                                 crate::fill_api::carry_copied_fills(dir, before, cmd);
                             }
@@ -1063,8 +1070,12 @@ fn handle(
             if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
                 return respond(stream, "200 OK", "application/json", refused.to_string().as_bytes());
             }
+            let libraries_before = crate::library_buffer::before_step(dir, scope.map(crate::library_buffer::scope_tag));
             let reply = match board::undo(dir, "ui", scope) {
-                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Ok(summary) => {
+                    crate::library_buffer::note_step(dir, libraries_before);
+                    json!({ "ok": true, "message": summary })
+                }
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
@@ -1074,8 +1085,12 @@ fn handle(
             if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
                 return respond(stream, "200 OK", "application/json", refused.to_string().as_bytes());
             }
+            let libraries_before = crate::library_buffer::before_step(dir, scope.map(crate::library_buffer::scope_tag));
             let reply = match board::redo(dir, "ui", scope) {
-                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Ok(summary) => {
+                    crate::library_buffer::note_step(dir, libraries_before);
+                    json!({ "ok": true, "message": summary })
+                }
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
@@ -2879,12 +2894,16 @@ fn footprint_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     // `project`: the names that are entries of the project library itself (editable in place, what the library tree's
     // Delete / Rename / Cut act on); the rest come from the intent, a loaded `.kicad_mod` or the builtin table.
     let mut project: Vec<String> = Vec::new();
+    // `deleted`: the library footprints Delete and Rename took out, which the tree no longer lists (UI-LEFT-2 LL1; `FootprintLibrarySection::deleted`)
+    let mut deleted: Vec<String> = Vec::new();
     if let Some(lib) = &design.footprint_library {
         names.extend(lib.footprints.iter().map(|f| f.name.clone()));
         project = lib.footprints.iter().map(|f| f.name.clone()).collect();
         project.sort();
+        deleted = lib.deleted.clone();
+        names.retain(|n| !deleted.contains(n));
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project, "deleted": deleted }))
 }
 
 /// `GET /api/footprint/export?name=<name>` -- a derived, standalone
@@ -2990,6 +3009,8 @@ pub(crate) fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckRes
     let mut project: Vec<String> = Vec::new();
     // `derived`: each derived symbol of the project library with its parent -- the library tree offers Flatten and the related fields table for them
     let mut derived = serde_json::Map::new();
+    // `deleted`: the library symbols Delete and Rename took out, which the tree no longer lists (UI-LEFT-2 LL1; `SymbolLibrarySection::deleted`)
+    let mut deleted: Vec<String> = Vec::new();
     if let Some(lib) = &design.symbol_library {
         names.extend(lib.symbols.iter().map(|s| s.lib_id.clone()));
         project = lib.symbols.iter().map(|s| s.lib_id.clone()).collect();
@@ -2997,8 +3018,10 @@ pub(crate) fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckRes
         for s in lib.symbols.iter().filter(|s| s.extends.is_some()) {
             derived.insert(s.lib_id.clone(), json!(s.extends));
         }
+        deleted = lib.deleted.clone();
+        names.retain(|n| !deleted.contains(n));
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project, "derived": derived }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project, "derived": derived, "deleted": deleted }))
 }
 
 /// `GET /api/symbol/export?lib_id=<id>` -- the derived, standalone

@@ -15,6 +15,9 @@ import { duplicateIdCount, repairMessage } from "../kicad-port/fpRepair";
 import { pastedFootprint } from "../kicad-port/fpLibFields";
 import { ensureUniqueLibId, footprintNameError, joinLibName, pastedFootprintName, PROJECT_LIBRARY, splitLibName } from "../kicad-port/libraryNames";
 import { askConfirm, askText } from "../components/library/libraryDialogs";
+import { fetchLibraryItemsNow, fetchWritableLibraries, saveToLibrary } from "../api/librarySaveClient";
+import { deleteFootprintQuestion, footprintDeletedStatus, footprintLibraryReadOnly, isTableLibrary } from "../kicad-port/librarySave";
+import { setLibraryStatusText } from "../state/libraryStatus";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
 import type { Action as StudioAction, StudioApi } from "../state/store";
@@ -114,8 +117,10 @@ export async function duplicateFootprint(c: FpCtx): Promise<void> {
 }
 
 /**
- * `FOOTPRINT_EDITOR_CONTROL::DeleteFootprint` -> `DeleteFootprintFromLibrary( fpid, true )`: after "Delete footprint '%s' from library '%s'?" the
- * footprint is removed from the library, and if it was the loaded one the canvas is emptied.
+ * `FOOTPRINT_EDITOR_CONTROL::DeleteFootprint` -> `DeleteFootprintFromLibrary( fpid, true )`: a library that cannot be written is "Library '%s' is read only." (the
+ * info bar); after "Delete footprint '%s' from library '%s'?" the footprint is removed from the library -- for a library of the tables, its file deleted from the
+ * `.pretty` folder at once, as KiCad's `FootprintDelete` does (UI-LEFT-2 LL1: the design's mark, then the library's save of it) -- the status bar says
+ * "Footprint '%s' deleted from library '%s'", and if it was the loaded one the canvas is emptied (`Clear_Pcb`).
  */
 export async function deleteFootprint(c: FpCtx): Promise<void> {
   const name = targetName(c);
@@ -123,37 +128,67 @@ export async function deleteFootprint(c: FpCtx): Promise<void> {
   try {
     const { project } = await names();
     const { lib, item } = splitLibName(name);
-    if (!project.has(name)) return fail(c, new Error(`${name} is not in the project library (the intent, a .kicad_mod file or the built-in table defines it), so there is nothing to delete.`));
-    if (!(await askConfirm({ title: "Delete Footprint", message: `Delete footprint '${item}' from library '${lib || PROJECT_LIBRARY}'?`, okLabel: "Delete" }))) return;
+    const tableLib = isTableLibrary(lib);
+    if (!tableLib && !project.has(name)) return fail(c, new Error(`${name} is not in the project library (the intent, a .kicad_mod file or the built-in table defines it), so there is nothing to delete.`));
+    if (tableLib) {
+      const row = (await fetchWritableLibraries("footprint")).find((l) => l.name === lib);
+      if (!row) return; // `GetFullURI` found no library: `return false`
+      if (!row.writable) return fail(c, new Error(footprintLibraryReadOnly(lib)));
+    }
+    if (!(await askConfirm({ title: "Confirmation", message: deleteFootprintQuestion(item, lib || PROJECT_LIBRARY), okLabel: "Yes", cancelLabel: "No" }))) return;
     const wasOpen = c.api.getState().name === name;
     if (!(await runBatch(c, [{ op: "delete_library_footprint", name }]))) return;
+    if (tableLib) {
+      const r = await saveToLibrary({ kind: "footprint", lib });
+      if (!r.ok) return fail(c, new Error(r.error));
+    }
     if (wasOpen) c.api.closeFootprint();
     select(c, null);
-    info(c, `Footprint '${item}' deleted from library '${lib || PROJECT_LIBRARY}'`);
+    setLibraryStatusText(footprintDeletedStatus(item, lib || PROJECT_LIBRARY));
   } catch (e) {
     fail(c, e);
   }
 }
 
-/** `FOOTPRINT_EDITOR_CONTROL::RenameFootprint`: "Change Footprint Name"; a name that is taken is replaced only after an "Overwrite" confirmation. */
+/**
+ * `FOOTPRINT_EDITOR_CONTROL::RenameFootprint`: "Change Footprint Name" ("Footprint must have a name."); a name the library has (`FootprintExists`: the design's
+ * copy or the library's file) is replaced only after "Footprint '%s' already exists in library '%s'." with Overwrite. The loaded footprint only changes its
+ * name (`SetFPID`, and a Value that was the name): its Save writes it under the new name and deletes the old file (`SaveFootprint`'s `nameChanged`); any other
+ * footprint of a library of the tables is saved under the new name and its old file deleted at once (`SaveFootprintInLibrary`, `DeleteFootprint`). UI-LEFT-2 LL1.
+ */
 export async function renameFootprint(c: FpCtx): Promise<void> {
   const name = targetName(c);
   if (!name) return info(c, "Select a footprint in the library tree first.");
   try {
-    const { all, project } = await names();
-    if (!project.has(name)) return fail(c, new Error(`${name} is not in the project library (the intent, a .kicad_mod file or the built-in table defines it); duplicate it under a new name instead.`));
+    const r = await fetchFootprintLibraryNames();
+    const project = new Set(r.project ?? []);
     const { lib, item } = splitLibName(name);
-    const entered = await askText({ title: "Change Footprint Name", label: "New name:", initial: item, okLabel: "Rename", validate: (v) => footprintNameError(joinLibName(lib, v)) });
+    const tableLib = isTableLibrary(lib);
+    if (!tableLib && !project.has(name)) return fail(c, new Error(`${name} is not in the project library (the intent, a .kicad_mod file or the built-in table defines it); duplicate it under a new name instead.`));
+    const entered = await askText({
+      title: "Change Footprint Name",
+      label: "New name:",
+      initial: item,
+      okLabel: "Rename",
+      validate: (v) => (v === "" ? "Footprint must have a name." : footprintNameError(joinLibName(lib, v))),
+    });
     if (entered === null) return;
     const newName = joinLibName(lib, entered);
     if (newName === name) return;
+    const deleted = new Set(r.deleted ?? []);
+    const inFile = tableLib ? (await fetchLibraryItemsNow("footprint", lib)).map((n) => joinLibName(lib, n)).filter((n) => !deleted.has(n)) : [];
     let overwrite = false;
-    if (all.includes(newName)) {
+    if (r.names.includes(newName) || inFile.includes(newName)) {
       if (!(await askConfirm({ title: "Confirmation", message: `Footprint '${entered}' already exists in library '${lib || PROJECT_LIBRARY}'.`, okLabel: "Overwrite" }))) return;
       overwrite = true;
     }
     const wasOpen = c.api.getState().name === name;
     if (!(await runBatch(c, [{ op: "rename_library_footprint", name, new_name: newName, overwrite }]))) return;
+    if (tableLib && !wasOpen) {
+      // a footprint that is not loaded: `SaveFootprintInLibrary` under the new name, then `DeleteFootprint( libraryName, oldName )`
+      const saved = await saveToLibrary({ kind: "footprint", id: newName });
+      if (!saved.ok) fail(c, new Error(`Error renaming footprint\n${saved.error}`));
+    }
     if (wasOpen) await c.api.openFootprint(newName);
     select(c, newName);
   } catch (e) {

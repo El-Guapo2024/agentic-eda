@@ -6,11 +6,12 @@
 // `FOOTPRINT_EDITOR_CONTROL::Save`, `SaveAs`, `Revert` and `FOOTPRINT_EDIT_FRAME::SaveFootprint`, `RevertFootprint` (pcbnew/tools/footprint_editor_control.cpp,
 // pcbnew/footprint_libraries_utils.cpp), commit 8303b2ad.
 import { updateLinkedFootprint } from "./footprintLibraryOps";
-import type { Cmd } from "../api/types";
-import { fetchModified, fetchSavedFootprint, fetchSavedLibrary, fetchSavedSymbol, fetchWritableLibraries, saveToLibrary } from "../api/librarySaveClient";
+import { fetchModified, fetchWritableLibraries, revertInLibrary, saveToLibrary } from "../api/librarySaveClient";
+import { librariesChanged } from "../api/libraryTablesClient";
+import { setLibraryStatusText } from "../state/libraryStatus";
 import { askConfirm } from "../components/library/libraryDialogs";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
-import { footprintSaveTarget, isTableLibrary, libraryOfId, MUST_SAVE_ELSEWHERE, notWritableMessage, revertCommands, revertFootprintCommand, REVERT_DETAIL, revertQuestion, saveAllPlan, symbolSaveLibrary, symbolTarget } from "../kicad-port/librarySave";
+import { footprintSaveTarget, isTableLibrary, libraryOfId, MUST_SAVE_ELSEWHERE, notWritableMessage, REVERT_DETAIL, revertQuestion, saveAllPlan, symbolSaveLibrary, symbolTarget } from "../kicad-port/librarySave";
 import { splitLibName } from "../kicad-port/libraryNames";
 import { getDockLayout } from "../state/dockLayoutStore";
 import type { FootprintEditorApi } from "../state/footprintEditorStore";
@@ -20,16 +21,9 @@ import type { SymbolEditorApi } from "../state/symbolEditorStore";
 
 type Toast = (message: string, kind?: "info" | "error") => void;
 
-/** The project library's items are the design's own: every edit is stored as it is made. */
+/** The project library's items are the design's own: every edit is stored as it is made (said in the status bar, where KiCad says what a save did). */
 const SYMBOL_SAVED_IN_DESIGN = "Symbol saved: every edit of the project library is stored in the design as you make it (File > Export writes a .kicad_sym).";
 const FOOTPRINT_SAVED_IN_DESIGN = "Footprint saved: every edit of the project library is stored in the design as you make it (File > Export writes a .kicad_mod).";
-
-async function run(cmd: (c: Cmd) => Promise<boolean>, cmds: Cmd[]): Promise<boolean> {
-  if (cmds.length === 0) return true;
-  const ok = await cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
-  notifyLibraryChanged();
-  return ok;
-}
 
 /**
  * `saveLibrary( lib, false )`, and for a library that cannot be written the question `Save` asks ("Symbol library '%s' is not writable.", "You must save to a different
@@ -38,7 +32,7 @@ async function run(cmd: (c: Cmd) => Promise<boolean>, cmds: Cmd[]): Promise<bool
 async function saveSymbolLibraryNamed(lib: string, toast: Toast, askReadOnly = true): Promise<boolean> {
   const r = await saveToLibrary({ kind: "symbol", lib });
   if (r.ok) {
-    toast(r.message);
+    // `saveLibrary` formats "Symbol library file '%s' saved." and shows nothing: the tree's ` *` going is the word (UI-LEFT-2 LL6)
     notifyLibraryChanged();
     return true;
   }
@@ -55,7 +49,7 @@ export async function saveSymbol(api: SymbolEditorApi, toast: Toast): Promise<vo
   const st = api.getState();
   const lib = symbolSaveLibrary(!getDockLayout().treeCollapsed, getLibraryTree("symbol").selectedLibs, st.treeSelection, st.libId);
   if (lib === null) return; // `saveCurrentSymbol` with no symbol: nothing to save
-  if (!isTableLibrary(lib)) return toast(SYMBOL_SAVED_IN_DESIGN);
+  if (!isTableLibrary(lib)) return setLibraryStatusText(SYMBOL_SAVED_IN_DESIGN);
   await saveSymbolLibraryNamed(lib, toast);
 }
 
@@ -63,7 +57,7 @@ export async function saveSymbol(api: SymbolEditorApi, toast: Toast): Promise<vo
 export async function saveAllSymbols(toast: Toast): Promise<void> {
   const [{ libraries }, writable] = await Promise.all([fetchModified("symbol"), fetchWritableLibraries("symbol")]);
   const plan = saveAllPlan(libraries, new Map(writable.map((l) => [l.name, l.writable])));
-  if (plan.save.length === 0 && plan.readOnly.length === 0) return toast("Every library is saved: the project library's edits are stored in the design as you make them.");
+  if (plan.save.length === 0 && plan.readOnly.length === 0) return; // `saveAllLibraries` with nothing modified: nothing to say
   for (const lib of plan.save) await saveSymbolLibraryNamed(lib, toast, false);
   if (plan.askAboutReadOnly) {
     const lib = plan.readOnly[0]!;
@@ -83,7 +77,9 @@ export function saveSymbolLibraryAs(api: SymbolEditorApi, toast: Toast): void {
 
 /**
  * `SYMBOL_EDIT_FRAME::Revert( true )`: the tree's target symbol, or library, goes back to what the library's file holds after `ConfirmRevertDialog`. Only a modified
- * symbol is reverted (the action's `symbolModifiedCondition`); a library reverts every symbol of it the design holds, and drops the ones its file never had.
+ * symbol is reverted (the action's `symbolModifiedCondition`). The server makes it one undoable step (`POST /api/library/revert`): a symbol the file never had goes
+ * back to the symbol as it was made (`RevertSymbol`: the buffer's `m_original`), a library drops the symbols its file never had and gets back what Delete and
+ * Rename took out (`RevertLibrary`: the buffer and its deleted list).
  */
 export async function revertSymbol(api: SymbolEditorApi, toast: Toast): Promise<void> {
   const st = api.getState();
@@ -91,23 +87,17 @@ export async function revertSymbol(api: SymbolEditorApi, toast: Toast): Promise<
   if (t.kind === "none") return;
   const lib = t.kind === "library" ? t.lib : libraryOfId(t.id);
   if (!isTableLibrary(lib)) return toast("The project library has no saved file to revert to: Undo steps back through its edits.");
-  const { items } = await fetchModified("symbol");
-  const touched = t.kind === "library" ? items.filter((i) => libraryOfId(i) === lib) : items.filter((i) => i === t.id);
-  if (touched.length === 0) return toast(`${t.kind === "library" ? lib : splitLibName(t.id).item} has no changes to revert.`);
+  const { items, libraries } = await fetchModified("symbol");
+  const touched = t.kind === "library" ? libraries.includes(lib) : items.includes(t.id);
+  if (!touched) return toast(`${t.kind === "library" ? lib : splitLibName(t.id).item} has no changes to revert.`);
   const name = t.kind === "library" ? lib : splitLibName(t.id).item;
   if (!(await askConfirm({ title: "Revert", message: `${revertQuestion(name)}\n\n${REVERT_DETAIL}`, okLabel: "Revert", cancelLabel: "Cancel" }))) return;
-  let saved: Record<string, import("../api/types").LibrarySymbol | null>;
-  if (t.kind === "library") {
-    saved = await fetchSavedLibrary(lib);
-  } else {
-    const one = await fetchSavedSymbol(t.id);
-    if (!one) return toast(`'${name}' was never saved to ${lib}: there is no saved version to revert to.`);
-    saved = { [t.id]: one };
-  }
+  const r = await revertInLibrary(t.kind === "library" ? { kind: "symbol", lib } : { kind: "symbol", id: t.id });
+  notifyLibraryChanged();
+  if (!r.ok) return toast(r.nothing ? r.message : r.error, r.nothing ? "info" : "error");
+  // the open symbol is shown again as it was saved, or leaves the canvas when the library never had it (`reload_currentSymbol`)
   const open = st.libId;
-  if (!(await run(api.cmd, revertCommands(saved, t.kind === "library")))) return;
-  // the open symbol is shown again as it was saved, or leaves the canvas when it was never saved (`reload_currentSymbol`)
-  if (open && open in saved && saved[open] === null) api.closeSymbol();
+  if (open && r.gone.includes(open)) api.closeSymbol();
   else await api.refresh();
 }
 
@@ -126,24 +116,36 @@ export async function saveFootprint(api: FootprintEditorApi, toast: Toast): Prom
   if (!id) return;
   // `if( padTool->InPadEditMode() ) m_toolManager->RunAction( PCB_ACTIONS::recombinePad )`: a pad being edited as shapes is a pad again first
   if (st.footprint?.pad_edit) await api.editPadShapes();
-  if (!isTableLibrary(libraryOfId(id))) return toast(FOOTPRINT_SAVED_IN_DESIGN);
+  if (!isTableLibrary(libraryOfId(id))) return setLibraryStatusText(FOOTPRINT_SAVED_IN_DESIGN);
+  // `SaveFootprint`: the old file of a renamed footprint deleted, then `SaveFootprintInLibrary` (which says nothing: UI-LEFT-2 LL6)
   const r = await saveToLibrary({ kind: "footprint", id });
-  if (r.ok) {
-    toast(r.message);
-    notifyLibraryChanged();
-  } else {
-    toast(r.error, "error");
-  }
+  if (r.ok) notifyLibraryChanged();
+  else toast(r.error, "error");
 }
 
-/** `FOOTPRINT_EDIT_FRAME::RevertFootprint`: a modified footprint (`IsContentModified`) goes back to its library's file after `ConfirmRevertDialog`. */
+/** `FOOTPRINT_EDIT_FRAME::RevertFootprint`: a modified footprint (`IsContentModified`) goes back to its library's file after `ConfirmRevertDialog`, one undoable step. */
 export async function revertFootprint(api: FootprintEditorApi, toast: Toast): Promise<void> {
   const id = api.getState().name;
   if (!id) return;
   if (!isTableLibrary(libraryOfId(id))) return toast("The project library has no saved file to revert to: Undo steps back through its edits.");
   if (!(await fetchModified("footprint")).items.includes(id)) return toast(`${splitLibName(id).item} has no changes to revert.`);
   if (!(await askConfirm({ title: "Revert", message: `${revertQuestion(splitLibName(id).item)}\n\n${REVERT_DETAIL}`, okLabel: "Revert", cancelLabel: "Cancel" }))) return;
-  const saved = await fetchSavedFootprint(id);
-  if (!saved) return toast(`'${splitLibName(id).item}' was never saved to ${libraryOfId(id)}: there is no saved version to revert to.`);
-  if (await run(api.cmd, [revertFootprintCommand(id, saved)])) await api.refresh();
+  const r = await revertInLibrary({ kind: "footprint", id });
+  notifyLibraryChanged();
+  if (!r.ok) return toast(r.nothing ? r.message : r.error, r.nothing ? "info" : "error");
+  await api.refresh();
+}
+
+/**
+ * The reload of a library changed on disk (UI-LEFT-2 LL3; state/libraryWatch.ts): the Symbol Editor's `MAIL_REFRESH_SYMBOL` -> `UpdateLibraryBuffer( libName )`
+ * (the whole library's buffer read again, the open symbol shown as the file has it now, or the canvas emptied when the file no longer has it), the Footprint
+ * Editor's `LoadFootprint` -> `ReloadFootprint`. One undoable step, as Revert.
+ */
+export async function reloadFromLibrary(kind: "symbol" | "footprint", id: string, done: (gone: boolean) => Promise<void>, toast: Toast): Promise<void> {
+  const r = await revertInLibrary(kind === "symbol" ? { kind, lib: libraryOfId(id) } : { kind, id });
+  // the file changed: what the trees list of it is read again
+  librariesChanged();
+  notifyLibraryChanged();
+  if (r.ok) return done(r.gone.includes(id));
+  if (!r.nothing) toast(r.error, "error"); // `DisplayError( this, ioe.What() )`
 }
