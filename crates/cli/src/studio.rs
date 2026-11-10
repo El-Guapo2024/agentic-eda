@@ -1477,6 +1477,22 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                     p["paste_margin_ratio"] = json!(r);
                 }
             }
+            // Footprint Properties' "Solder mask expansion:" and "Allow bridged solder mask apertures between pads" (UI-LEFT-2 PP18): the record's
+            // (`GetLocalSolderMaskMargin`, `AllowSolderMaskBridges`), absent when none / off.
+            if let Some(e) = record {
+                if let Some(m) = e.solder_mask_margin {
+                    p["mask_margin"] = json!(m);
+                }
+                if e.allow_soldermask_bridges {
+                    p["allow_soldermask_bridges"] = json!(true);
+                }
+            }
+            // The schematic symbol's Datasheet and Description, which Footprint Properties carries an edit of the footprint's to (Update Schematic from PCB's
+            // "Other fields", UI-LEFT-2 PP18); absent when no symbol is for the footprint.
+            let symbol_field = |name: &str| eda_ops::fields_table::symbol_field_text(&design, &model, &part.reference, name);
+            if let (Some(datasheet), Some(description)) = (symbol_field("Datasheet"), symbol_field("Description")) {
+                p["symbol_fields"] = json!({ "Datasheet": datasheet, "Description": description });
+            }
         }
         parts.push(p);
     }

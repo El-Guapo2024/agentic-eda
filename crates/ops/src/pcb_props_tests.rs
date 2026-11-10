@@ -293,6 +293,33 @@ fn set_footprint_paste_margin_edits_a_board_files_footprint_tokens_and_a_footpri
     assert!(b.design().footprint_edit("U2").is_none(), "nothing left of the edit");
 }
 
+#[test]
+fn set_footprint_solder_mask_sets_the_records_expansion_and_bridging_and_makes_a_bare_record_for_a_footprint_without_one() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    d.drawings.as_mut().unwrap().footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), solder_mask_margin: Some(um(50.0)), source_name: "Lib:U1".into(), ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    // a negative expansion is taken (`Validate` checks only the pad clearance)
+    b.apply(&Cmd::SetFootprintSolderMask { part: "U1".into(), margin: Some(um(-20.0)), allow_bridges: true }).unwrap();
+    let e = drawings(&b).footprint_extras.iter().find(|e| e.id == "U1").unwrap();
+    assert_eq!((e.solder_mask_margin, e.allow_soldermask_bridges, e.source_name.as_str()), (Some(um(-20.0)), true, "Lib:U1"), "the rest of the record stays");
+    assert_eq!(b.apply(&Cmd::SetFootprintSolderMask { part: "U1".into(), margin: Some(um(-20.0)), allow_bridges: true }).unwrap_err()[0].check, "ops_nothing_to_change");
+    b.apply(&Cmd::SetFootprintSolderMask { part: "U1".into(), margin: None, allow_bridges: false }).unwrap();
+    let e = drawings(&b).footprint_extras.iter().find(|e| e.id == "U1").unwrap();
+    assert_eq!((e.solder_mask_margin, e.allow_soldermask_bridges), (None, false), "blank is the board's");
+    // a footprint placed from the intent has no record: it gets the bare one a footprint made here gets
+    assert!(!drawings(&b).footprint_extras.iter().any(|e| e.id == "U2"));
+    assert_eq!(b.apply(&Cmd::SetFootprintSolderMask { part: "U2".into(), margin: None, allow_bridges: false }).unwrap_err()[0].check, "ops_nothing_to_change", "nothing to change makes no record");
+    assert!(!drawings(&b).footprint_extras.iter().any(|e| e.id == "U2"));
+    b.apply(&Cmd::SetFootprintSolderMask { part: "U2".into(), margin: Some(um(30.0)), allow_bridges: false }).unwrap();
+    let e = drawings(&b).footprint_extras.iter().find(|e| e.id == "U2").unwrap();
+    assert_eq!(e, &eda_model::ir::FootprintExtra { id: "U2".into(), library_frame: true, solder_mask_margin: Some(um(30.0)), ..Default::default() });
+    assert!(b.apply(&Cmd::SetFootprintSolderMask { part: "U9".into(), margin: None, allow_bridges: true }).is_err(), "no such footprint");
+    // the verb as the studio sends it
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_footprint_solder_mask", "part": "U2", "margin": null, "allow_bridges": true })).unwrap();
+    assert_eq!(cmd, Cmd::SetFootprintSolderMask { part: "U2".into(), margin: None, allow_bridges: true });
+}
+
 /// `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)` read back the way `eda_kicad::footprint_file_facts` reads them (millimetres to nanometres).
 fn eda_kicad_facts(tokens: &[String]) -> (Option<Nm>, Option<f64>) {
     let num = |name: &str| tokens.iter().find_map(|t| t.strip_prefix(&format!("({name} ")).and_then(|r| r.strip_suffix(')')).and_then(|v| v.parse::<f64>().ok()));

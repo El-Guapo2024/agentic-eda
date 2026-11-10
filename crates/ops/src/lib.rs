@@ -1335,6 +1335,15 @@ pub enum Cmd {
         #[serde(default)]
         ratio: Option<f64>,
     },
+    /// Footprint Properties' "Solder mask expansion:" and "Allow bridged solder mask apertures between pads" (`FOOTPRINT::SetLocalSolderMaskMargin`,
+    /// `SetAllowSolderMaskBridges`; UI-LEFT-2 PP18); `margin` `None` is the board's.
+    SetFootprintSolderMask {
+        part: String,
+        #[serde(default)]
+        margin: Option<Nm>,
+        #[serde(default)]
+        allow_bridges: bool,
+    },
 
     // ------------------------------------------- footprints as editable objects (see [`fp_edit`])
     /// `DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow`: what is given replaces what the footprint `part` has -- the Reference
@@ -2786,6 +2795,7 @@ impl Cmd {
             Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditBoardFootprintText { id, .. } => vec![id.as_str()],
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
+            Cmd::SetFootprintSolderMask { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetPadNumber { pad, .. } => vec![pad.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
@@ -3592,6 +3602,7 @@ impl<'a> Board<'a> {
             Cmd::SetTeardropParams { ids, params } => self.set_teardrop_params(ids, params.as_ref()),
             Cmd::EditBoardFootprintText { id, text, layout, delete } => self.edit_board_footprint_text(id, text.as_deref(), layout.as_ref(), *delete),
             Cmd::SetFootprintPasteMargin { part, margin, ratio } => self.set_footprint_paste_margin(part, *margin, *ratio),
+            Cmd::SetFootprintSolderMask { part, margin, allow_bridges } => self.set_footprint_solder_mask(part, *margin, *allow_bridges),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
                 // One commit: the verbs' clean-up runs once, at the end (`SCH_EDIT_TOOL::DoDelete` deletes every item, then the junctions, then
