@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Cmd } from "../api/types";
-import { repeatCmds, repeatSource, REPEAT_OFFSET_NM } from "./schRepeat";
+import { repeatCmds, repeatReferences, repeatSource, REPEAT_OFFSET_NM } from "./schRepeat";
 
 const ctx = { cursor: [50_800_000, 25_400_000] as [number, number], nextReference: (id: string) => id.replace(/\d+$/, (n) => String(Number(n) + 1)) };
 
@@ -86,4 +86,27 @@ test("repeatCmds: Preferences' Repeated Items -- the horizontal and vertical pit
   assert.deepEqual(out, [{ op: "add_label", net: "D5", at: { x: 1_000_000 + 1_270_000, y: 2_000_000 - 2_540_000 }, kind: { scope: "local" } }]);
   const down = repeatCmds([{ op: "add_label", net: "D9", at: { x: 0, y: 0 }, kind: { scope: "local" } }], { ...ctx, labelIncrement: -2 });
   assert.equal((down[0] as { net: string }).net, "D7");
+});
+
+test("repeatReferences: a repeated symbol takes the server's reference (the hierarchy's numbering), the page's guess when there is none or two would share one", async () => {
+  const source: Cmd[] = [
+    { op: "add_symbol", id: "R3", lib_id: "Device:R", at: { x: 0, y: 0 }, rot_millideg: 0, value: "10k", footprint: "", unit: 1 },
+    { op: "add_symbol", id: "R4", lib_id: "Device:R", at: { x: 0, y: 0 }, rot_millideg: 0, value: "10k", footprint: "", unit: 1 },
+    { op: "add_symbol", id: "U1", lib_id: "Amp:Dual", at: { x: 0, y: 0 }, rot_millideg: 0, value: "TL072", footprint: "", unit: 2 },
+  ];
+  const asked: string[] = [];
+  const refs = await repeatReferences(
+    source,
+    async (q) => {
+      asked.push(`${q.prefix}:${q.lib_id}:${q.value}:${q.unit}`);
+      return q.prefix === "U" ? null : "R12";
+    },
+    (id, taken) => `${id}-guess-${taken.length}`,
+    (id) => id.replace(/\d+$/, "")
+  );
+  assert.deepEqual(asked, ["R:Device:R:10k:1", "R:Device:R:10k:1", "U:Amp:Dual:TL072:2"]);
+  assert.deepEqual([...refs], [["R3", "R12"], ["R4", "R4-guess-1"], ["U1", "U1-guess-2"]]);
+  // and repeatCmds names each copy by it
+  const out = repeatCmds(source.slice(0, 1), { ...ctx, nextReference: (id) => refs.get(id) ?? id });
+  assert.equal((out[0] as { id: string }).id, "R12");
 });

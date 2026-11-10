@@ -23,7 +23,8 @@ import { labelNameFromWire } from "../kicad-port/schLabelName";
 import { lastPlaced } from "../kicad-port/schLastPlaced";
 import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 import { fetchPlacementReference } from "../api/hierarchyClient";
-import { afterPlaced, applyCarriedCmds, armedKey, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, renameInCmd, rotateCarried, scopeOfTool, settledSymbol, type CarriedItem, type CarriedSymbol, type CarryTool } from "../kicad-port/schPlaceTool";
+import { fetchSymbolPlacements } from "../api/schControlClient";
+import { afterPlaced, applyCarriedCmds, armedKey, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, renameInCmd, rotateCarried, scopeOfTool, settledSymbol, type CarriedItem, type CarriedSymbol, type CarryTool, unitOccupied, unitsByReference } from "../kicad-port/schPlaceTool";
 import { needsServerDrawing } from "../kicad-port/schCarryPreview";
 import { bodyStyleCount } from "../kicad-port/schBodyStyle";
 import { editFieldTarget } from "../kicad-port/schFieldEdit";
@@ -193,6 +194,21 @@ export function carrySymbol(ctx: Pick<PlaceContext, "api">, pick: SymbolToCarry,
   };
   carryItem(ctx, "sch_place_symbol", item, at, [], keep, pick.lib ?? null);
   if (!pick.ref) refineCarriedReference(ctx, item);
+  if (item.placeAllUnits && item.unitCount > 1) void refreshHierarchyUnits();
+}
+
+/**
+ * The units of every reference placed over the hierarchy (`GET /api/sch/symbols`), which "Place all units" steps past (`unitOccupied`: `schematic.Contains`, every
+ * sheet, UI-LEFT-2 SS17). Asked when such a symbol starts riding and after each one placed; until the answer the sheet in view's symbols decide.
+ */
+let hierarchyUnits: Map<string, Set<number>> = new Map();
+
+async function refreshHierarchyUnits(): Promise<void> {
+  try {
+    hierarchyUnits = unitsByReference(await fetchSymbolPlacements());
+  } catch {
+    // the sheet in view's symbols still decide
+  }
 }
 
 /** The second click (or the tool's hotkey): the carried item goes on the sheet at `at`, and the tool holds what comes next. */
@@ -209,9 +225,11 @@ export function placeCarried(ctx: Pick<PlaceContext, "api"> & Partial<Pick<Place
   const next = afterPlaced(
     carry,
     placed.kind === "symbol"
-      ? { occupied: (u) => u === placed.unit || sch.symbols.some((x) => x.id === placed.ref && x.unit === u), nextRef: () => newSymbolRef(ctx, placed.prefix, [placed.ref]) }
+      ? { occupied: (u) => unitOccupied(placed.ref, u, placed, sch.symbols, hierarchyUnits), nextRef: () => newSymbolRef(ctx, placed.prefix, [placed.ref]) }
       : undefined
   );
+  // the hierarchy's units once this one is in, for the next click of "Place all units"
+  if (placed.kind === "symbol" && placed.placeAllUnits) void committed.then(() => refreshHierarchyUnits());
   if (next) {
     // the next one rides, selected in its place (`addSymbol` / `prepItemForPlacement`: `ClearSelection(); AddItemToSel( item )`)
     ctx.dispatch?.({ type: "SET_SELECTION", refs: [] });

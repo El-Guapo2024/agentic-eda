@@ -97,3 +97,38 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
 export function repeatMoves(source: readonly Cmd[]): boolean {
   return source.some((c) => c.op === "add_symbol" || c.op === "add_power_symbol");
 }
+
+/** What `RepeatDrawItem`'s `AnnotateSymbols` numbers a repeated symbol by: the source's prefix, library symbol, value and unit (the clone keeps them). */
+export interface RepeatReferenceQuery {
+  sourceId: string;
+  prefix: string;
+  lib_id: string;
+  value: string;
+  unit: number;
+}
+
+/**
+ * The references the repeated symbols take (UI-LEFT-2 SS17): `RepeatDrawItem` clears the clone's annotation and runs `AnnotateSymbols( ANNOTATE_SELECTION, ..,
+ * SYMBOL_FILTER_NON_POWER )` with the project's order, method and start number -- over every reference of the hierarchy, with the project's reference tracker, a
+ * unit joining a part of the same symbol and value that has it free. That is the server's `annotate()` (`POST /api/sch/next_reference`, `ask`); the page's
+ * guess (`guess`, the sheet in view and the board's parts) stands in when the server cannot answer, or when two copies of one press would take one reference
+ * (`Annotate` numbers the selection's new symbols one after another). Keyed by the source symbol's id.
+ */
+export async function repeatReferences(
+  source: readonly Cmd[],
+  ask: (q: RepeatReferenceQuery) => Promise<string | null>,
+  guess: (sourceId: string, taken: readonly string[]) => string,
+  prefixOf: (id: string) => string
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const taken: string[] = [];
+  for (const c of source) {
+    if (c.op !== "add_symbol") continue;
+    const unit = c.unit ?? 1;
+    let reference = await ask({ sourceId: c.id, prefix: prefixOf(c.id), lib_id: c.lib_id, value: c.value, unit });
+    if (!reference || taken.includes(reference)) reference = guess(c.id, taken);
+    out.set(c.id, reference);
+    taken.push(reference);
+  }
+  return out;
+}
