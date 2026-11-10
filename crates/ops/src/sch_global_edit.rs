@@ -631,6 +631,16 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                     if let Some(i) = spec.italic {
                         f.italic = i;
                     }
+                    // `processItem`: `SetTextSize`, `SetBold` on the `EDA_TEXT`, `SetNameShown` on the `SCH_FIELD` (the field's own since UI-LEFT-2 SS12)
+                    if let Some(size) = spec.text_size_nm {
+                        f.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
+                    }
+                    if let Some(b) = spec.bold {
+                        f.bold = b;
+                    }
+                    if let Some(n) = spec.show_field_names {
+                        f.name_shown = n;
+                    }
                     changed |= *f != before;
                 }
                 changed |= edit_field_look(sch, label, name, spec);

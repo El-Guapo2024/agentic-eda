@@ -21,7 +21,7 @@ fn model() -> ConstraintModel {
 }
 
 fn field(name: &str, text: &str, visible: bool, italic: bool) -> LabelField {
-    LabelField { name: name.into(), text: text.into(), visible, italic }
+    LabelField { name: name.into(), text: text.into(), visible, italic, ..Default::default() }
 }
 
 /// (label kind, spin, fields) of each label the test draws.
@@ -32,6 +32,8 @@ fn cases() -> Vec<(LabelKind, LabelSpin, Vec<LabelField>)> {
         (LabelKind::Global { shape: LabelShape::Input }, LabelSpin::Left, vec![field("Netclass", "Power", true, true)]),
         (LabelKind::Global { shape: LabelShape::Output }, LabelSpin::Bottom, vec![]),
         (LabelKind::Hierarchical { shape: LabelShape::Bidirectional }, LabelSpin::Right, vec![field("Netclass", "Signal", true, true)]),
+        // a field's own size, bold and shown name (UI-LEFT-2 SS12): `(effects (font (size 2 2) (bold yes)))`, `(show_name yes)`
+        (LabelKind::Local, LabelSpin::Right, vec![LabelField { size_nm: mm(2.0), bold: true, name_shown: true, ..field("Netclass", "Power", true, false) }, LabelField { bold: true, ..field("Note", "x", true, true) }]),
     ]
 }
 
@@ -74,6 +76,10 @@ fn a_labels_fields_come_back_from_the_file_our_writer_wrote() {
     // the net class field of a label that runs right is under its text, left-justified (`AutoplaceFields`: half the label's height, then half the field's)
     let line = text.lines().find(|l| l.contains("(property \"Netclass\" \"Power\"")).unwrap();
     assert!(line.contains("(at 200 21.27 0)") && line.contains("(italic yes)") && line.contains("(justify left)"), "{line}");
+    // the field with a size, bold and its name shown: `saveField`'s `(show_name yes)` after `(at ..)`, `EDA_TEXT::Format`'s size and bold; it is stacked by
+    // its own height (`accumulated + field.GetTextHeight() / 2`: 0.635 + 1 under the label at y = 121.6)
+    let line = text.lines().find(|l| l.contains("(property \"Netclass\" \"Power\"") && l.contains("show_name")).unwrap();
+    assert!(line.contains("(at 200 123.235 0) (show_name yes)") && line.contains("(font (size 2 2) (bold yes))"), "{line}");
 }
 
 #[test]

@@ -340,13 +340,14 @@ impl<'a> Board<'a> {
     /// the label's (`SchExtras::label_fields`); a global label's Sheet References keeps its text (`${INTERSHEET_REFS}`) and is shown as Schematic Setup says
     /// ("Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting"). A new place, orientation or justification
     /// takes the label's fields out of the autoplaced ones (`UpdateField`: `parent->SetFieldsAutoplaced( AUTOPLACE_NONE )`): every field keeps the place it
-    /// has, this one the new one (`eda_engine::label_fields`). **Differs**: the text size and bold are not kept for a label's field (`LabelField` has
-    /// neither; the dialog does not offer them), and its font face and colour are Field Properties' Font and Color (`set_field_looks`).
+    /// has, this one the new one (`eda_engine::label_fields`). Its text size, bold and "Show field name" are the field's own (`UpdateField`: `SetTextSize`,
+    /// `SetBold`, `SetNameShown`; UI-LEFT-2 SS12), and its font face and colour are Field Properties' Font and Color (`set_field_looks`). **Differs**: a global
+    /// label's Sheet References keeps the default size, regular, without its name (the studio makes that field up from Schematic Setup and stores nothing of it).
     fn edit_label_field(&mut self, ctx: &OwnerCtx, index: usize, id: &str, edit: &FieldEdit) -> Result<(), Vec<CheckResult>> {
         let name = ctx.specs[index].name.clone();
         let isr = name == eda_model::sch_extras::INTERSHEET_REFS_FIELD && ctx.label().is_some_and(|l| matches!(l.kind, eda_model::ir::LabelKind::Global { .. }));
-        if edit.size_nm.is_some_and(|s| s != eda_model::ir::DEFAULT_FIELD_SIZE_NM) || edit.bold == Some(true) || edit.name_shown == Some(true) {
-            return Err(fail("ops_bad_field", id, "a label's field keeps the default size, regular, without its name"));
+        if isr && (edit.size_nm.is_some_and(|s| s != eda_model::ir::DEFAULT_FIELD_SIZE_NM) || edit.bold == Some(true) || edit.name_shown == Some(true)) {
+            return Err(fail("ops_bad_field", id, "a global label's Sheet References keep the default size, regular, without their name"));
         }
         let sch = self.schematic_mut()?;
         let label_id = ctx.key.clone();
@@ -371,6 +372,19 @@ impl<'a> Board<'a> {
             if let Some(i) = edit.italic {
                 text_changed |= f.italic != i;
                 f.italic = i;
+            }
+            if let Some(size) = edit.size_nm {
+                let size = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
+                text_changed |= f.size_nm != size;
+                f.size_nm = size;
+            }
+            if let Some(b) = edit.bold {
+                text_changed |= f.bold != b;
+                f.bold = b;
+            }
+            if let Some(n) = edit.name_shown {
+                text_changed |= f.name_shown != n;
+                f.name_shown = n;
             }
         } else {
             return Err(fail("ops_unknown_item", id, format!("the label has no field '{name}'")));

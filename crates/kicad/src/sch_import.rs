@@ -374,7 +374,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 exclude_from_board,
                 dnp,
                 exclude_from_pos_files,
-                fields: user_fields_of(item).into_iter().map(|f| eda_model::sch_extras::LabelField { name: f.name, text: f.text, visible: !f.hidden, italic: false }).collect(),
+                fields: user_fields_of(item).into_iter().map(|f| eda_model::sch_extras::LabelField { name: f.name, text: f.text, visible: !f.hidden, italic: false, ..Default::default() }).collect(),
             };
             if !props.is_default() {
                 power_props_read.push((reference.clone(), props));

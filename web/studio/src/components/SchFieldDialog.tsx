@@ -8,8 +8,9 @@
 // Properties, as KiCad's dialog disables it too.
 //
 // A label's field (UI-LEFT S6: its net class, a global label's Sheet References, any other) opens here too: moved, turned or justified by hand it stays where it was
-// put (the label's fields are no longer autoplaced). **Differs**: its size, bold and shown name are not offered (`LabelField` keeps none of them); the Sheet
-// References keep their text and Schematic Setup's visibility.
+// put (the label's fields are no longer autoplaced). Its text size, bold and "Show field name" are its own (`LabelField`, UI-LEFT-2 SS12). **Differs**: the
+// Sheet References keep their text and Schematic Setup's visibility, the default size, regular, without their name (the studio stores nothing of that field), and
+// a label's field has no "Allow autoplacement" (the label's fields are placed together).
 import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
 import { editCarried } from "../actions/schPlaceActions";
 import { useState } from "react";
@@ -83,8 +84,8 @@ function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: Sc
       v,
       italic,
       ...(isr ? {} : { visible }),
-      // a label's field keeps no size, bold, shown name or autoplace flag of its own
-      ...(label ? {} : { sizeNm: sizeNm!, bold, nameShown, allowAutoplace }),
+      // a label's field has its own size, bold and shown name, but no autoplace flag; the Sheet References keep none of them
+      ...(isr ? {} : label ? { sizeNm: sizeNm!, bold, nameShown } : { sizeNm: sizeNm!, bold, nameShown, allowAutoplace }),
     };
     const nextFont = chosenFont(font);
     const fontChanged = nextFont !== undefined && nextFont !== (field.font ?? "");
@@ -110,7 +111,7 @@ function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: Sc
         <input value={x} onChange={(e) => setX(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={xNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
         <span>Position Y (mm)</span>
         <input value={y} onChange={(e) => setY(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={yNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
-        {!label && (
+        {!isr && (
           <>
             <span>Text size (mm)</span>
             <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
@@ -127,7 +128,7 @@ function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: Sc
         </select>
         <span>Style</span>
         <span style={{ display: "flex", gap: 14 }}>
-          {!label && (
+          {!isr && (
             <label>
               <input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
             </label>
@@ -157,11 +158,13 @@ function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: Sc
           <label title={isr ? "Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting" : undefined}>
             <input type="checkbox" checked={visible} disabled={isr} onChange={(e) => setVisible(e.target.checked)} /> Visible
           </label>
+          {!isr && (
+            <label>
+              <input type="checkbox" checked={nameShown} onChange={(e) => setNameShown(e.target.checked)} /> Show field name
+            </label>
+          )}
           {!label && (
             <>
-              <label>
-                <input type="checkbox" checked={nameShown} onChange={(e) => setNameShown(e.target.checked)} /> Show field name
-              </label>
               <label>
                 <input type="checkbox" checked={allowAutoplace} onChange={(e) => setAllowAutoplace(e.target.checked)} /> Allow autoplacement
               </label>

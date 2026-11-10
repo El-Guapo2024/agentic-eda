@@ -203,19 +203,28 @@ test("a power symbol's dialog sends the new Value and the Show checks that chang
 });
 
 test("Label Properties' grid of a label's own fields: OnAddField's name and look, the net class stored as Netclass, sent only when it changed", () => {
-  // OnAddField: a net class first, "Field" once the label has a field that is not one; the look of the last row, else shown and italic
-  assert.deepEqual(newLabelField([], null), { name: "Netclass", text: "", visible: true, italic: true });
-  assert.deepEqual(newLabelField([], false), { name: "Netclass", text: "", visible: false, italic: false }, "after a global label's Sheet References");
+  // OnAddField: a net class first, "Field" once the label has a field that is not one; the look of the last row (its size, bold, italic, `SetAttributes`), else
+  // shown and italic; a new field's name is not shown
+  const plain = { size_nm: 1_270_000, bold: false, name_shown: false };
+  assert.deepEqual(newLabelField([], null), { name: "Netclass", text: "", visible: true, italic: true, ...plain });
+  assert.deepEqual(newLabelField([], false), { name: "Netclass", text: "", visible: false, italic: false, ...plain }, "after a global label's Sheet References");
   assert.deepEqual(newLabelField([{ name: "Netclass", text: "Power", visible: true, italic: true }], null).name, "Netclass");
-  assert.deepEqual(newLabelField([{ name: "Note", text: "x", visible: false, italic: false }], null), { name: "Field", text: "", visible: false, italic: false });
+  assert.deepEqual(newLabelField([{ name: "Note", text: "x", visible: false, italic: false, size_nm: 2_000_000, bold: true, name_shown: true }], null), { name: "Field", text: "", visible: false, italic: false, size_nm: 2_000_000, bold: true, name_shown: false });
   assert.equal(labelFieldDisplayName("Netclass"), "Net Class");
   assert.equal(labelFieldDisplayName("Intersheetrefs"), "Sheet References");
   const isr = { name: "Intersheetrefs", text: "${INTERSHEET_REFS}", shown: "[2]", visible: true, italic: false, intersheet_refs: true, at: [0, 0] as [number, number], vertical: false, h: "left" as const, size_nm: 1_270_000 };
   const nc = { ...isr, name: "Netclass", text: "Power", shown: "Power", italic: true, intersheet_refs: false };
   const global = { id: "lbl_g", net: "G", scope: "global" as const, shape: "input" as const, fields: [isr, nc] };
-  assert.deepEqual(ownLabelFields(global), [{ name: "Netclass", text: "Power", visible: true, italic: true }], "the Sheet References are not the label's own");
-  // the grid shows "Net Class": the same rows are no change, an edited one is sent stored as Netclass
+  assert.deepEqual(ownLabelFields(global), [{ name: "Netclass", text: "Power", visible: true, italic: true, ...plain }], "the Sheet References are not the label's own");
+  // the grid shows "Net Class": the same rows are no change (a row with no size is the default one), an edited one is sent stored as Netclass
   const shown = [{ name: "Net Class", text: "Power", visible: true, italic: true }];
   assert.equal(labelEditCmd(global, "right", { text: "G", shape: "input", spin: "right", fields: shown }), null);
   assert.deepEqual(labelEditCmd(global, "right", { text: "G", shape: "input", spin: "right", fields: [{ ...shown[0]!, text: "HV" }] }), { op: "sch_edit", verb: "edit_label", id: "lbl_g", fields: [{ name: "Netclass", text: "HV", visible: true, italic: true }] });
+  // the Text Size, Bold and Show Name columns (UI-LEFT-2 SS12) are changes of their own
+  for (const change of [{ size_nm: 2_540_000 }, { bold: true }, { name_shown: true }]) {
+    assert.deepEqual(labelEditCmd(global, "right", { text: "G", shape: "input", spin: "right", fields: [{ ...shown[0]!, ...change }] }), { op: "sch_edit", verb: "edit_label", id: "lbl_g", fields: [{ name: "Netclass", text: "Power", visible: true, italic: true, ...change }] });
+  }
+  // a label field's own size, bold and shown name read back from the server's fields
+  const looked = { ...global, fields: [{ ...nc, size_nm: 2_540_000, bold: true, name_shown: true }] };
+  assert.deepEqual(ownLabelFields(looked), [{ name: "Netclass", text: "Power", visible: true, italic: true, size_nm: 2_540_000, bold: true, name_shown: true }]);
 });

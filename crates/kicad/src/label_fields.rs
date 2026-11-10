@@ -22,14 +22,19 @@ pub fn label_fields_placed(sch: &SchematicSection, l: &NetLabel, show_intersheet
     eda_engine::label_fields::placed(sch, l, show_intersheet_refs)
 }
 
-/// `saveField` for each field of the label: `(property "name" "text" (at x y angle) (effects (font [(face ..)] (size 1.27 1.27) [(italic yes)] [(color ..)])
-/// (justify left|right [top|bottom]) [(hide yes)]))`, with the font face and colour Field Properties set (`SchExtras::field_looks` under the label's id).
+/// `saveField` for each field of the label: `(property "name" "text" (at x y angle) [(show_name yes)] (effects (font [(face ..)] (size h w) [(bold yes)]
+/// [(italic yes)] [(color ..)]) (justify left|right [top|bottom]) [(hide yes)]))`, with the font face and colour Field Properties set (`SchExtras::field_looks`
+/// under the label's id) and the field's own size, bold and shown name (`KICAD_FORMAT::FormatBool( m_out, "show_name", aField->IsNameShown() )`,
+/// `EDA_TEXT::Format`).
 pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bool) {
     for f in label_fields_placed(sch, l, show_intersheet_refs) {
         let look = sch.extras.field_look(&l.id, &f.name);
         let face = look.and_then(|k| k.font.as_deref()).map(|n| format!("(face {}) ", crate::sexpr_str(n))).unwrap_or_default();
         let color = look.and_then(|k| k.color).map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, crate::sch_extras_io::alpha_str(c.a))).unwrap_or_default();
         let italic = if f.italic { " (italic yes)" } else { "" };
+        let bold = if f.bold { " (bold yes)" } else { "" };
+        let size = crate::mm(if f.size_nm > eda_model::units::Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM });
+        let show_name = if f.name_shown { " (show_name yes)" } else { "" };
         let mut j = String::new();
         match f.h {
             HJustify::Left => j.push_str(" left"),
@@ -45,7 +50,7 @@ pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &N
         let hide = if f.visible { "" } else { " (hide yes)" };
         let _ = writeln!(
             out,
-            "\t\t(property {} {} (at {} {} {}) (effects (font {face}(size 1.27 1.27){italic}{color}){justify}{hide}))",
+            "\t\t(property {} {} (at {} {} {}){show_name} (effects (font {face}(size {size} {size}){bold}{italic}{color}){justify}{hide}))",
             crate::sexpr_str(&f.name),
             crate::sexpr_str(&f.text),
             crate::mm(f.at.x),
@@ -125,7 +130,10 @@ pub(crate) fn read_label_fields(item: &[Sexpr], global: bool) -> Vec<LabelField>
         let effects = sexpr::find(p, "effects");
         let hidden = crate::sch_extras_io::parse_bool(p, "hide").unwrap_or(false) || effects.is_some_and(|e| crate::sch_extras_io::parse_bool(e, "hide").unwrap_or(false) || e.iter().skip(1).any(|c| c.text() == Some("hide")));
         let look = crate::sch_extras_io::read_effects(p);
-        out.push(LabelField { name: name.to_string(), text, visible: !hidden, italic: look.italic });
+        // `parseEDA_TEXT`'s size and bold, `parseSchField`'s `(show_name)`; the default size is kept as none
+        let size_nm = if look.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { eda_model::units::Nm::ZERO } else { look.size_nm };
+        let name_shown = crate::sch_extras_io::parse_bool(p, "show_name").unwrap_or(false) || p.iter().skip(1).any(|c| c.text() == Some("show_name"));
+        out.push(LabelField { name: name.to_string(), text, visible: !hidden, italic: look.italic, size_nm, bold: look.bold, name_shown });
     }
     out
 }

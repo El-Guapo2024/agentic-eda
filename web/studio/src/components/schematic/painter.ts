@@ -1166,7 +1166,8 @@ function paintSchematicSheet(ctx: CanvasRenderingContext2D, view: ViewTransform,
       const picked = f.id !== undefined && opts.selection.has(f.id);
       const layer = !f.visible ? layerColor("LAYER_HIDDEN") : f.intersheet_refs ? layerColor("LAYER_GLOBLABEL") : f.name === "Netclass" ? layerColor("LAYER_NETCLASS_REFS") : layerColor("LAYER_FIELDS");
       const color = picked ? layerColor("LAYER_SELECTION_SHADOWS") : f.visible && f.color && f.color.a > 0 && !overrideSchItemColors() ? rgba(f.color) : layer;
-      drawField(ctx, f.shown, f, color);
+      // `SCH_FIELD::GetShownText`: `Name: value` when the field's name is shown
+      drawField(ctx, shownText({ name: f.name, text: f.shown, name_shown: f.name_shown }), f, color);
     }
   }
 

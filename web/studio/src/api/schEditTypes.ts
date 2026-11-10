@@ -325,10 +325,14 @@ export interface SchMovePatch {
   net_collision?: SchNetCollision;
 }
 
-/** One row of Label Properties' grid of a label's own fields (`SchExtras::label_fields`): the name (`Netclass` for the net class), the text, Show and italics. */
+/** One row of Label Properties' grid of a label's own fields (`SchExtras::label_fields`): the name (`Netclass` for the net class), the text, Show, Show Name, Italic,
+ *  Bold and Text Size (`FIELDS_GRID_TABLE`'s `FDC_SHOWN`, `FDC_SHOW_NAME`, `FDC_ITALIC`, `FDC_BOLD`, `FDC_TEXT_SIZE`); absent is 50 mil, regular, the value alone. */
 export interface LabelFieldEdit {
   name: string;
   text: string;
   visible: boolean;
   italic: boolean;
+  size_nm?: number;
+  bold?: boolean;
+  name_shown?: boolean;
 }

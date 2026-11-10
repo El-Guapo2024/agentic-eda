@@ -10,7 +10,7 @@
 import { useState, type ReactNode } from "react";
 import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
 import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
-import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, newLabelField, ownLabelFields, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
+import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, LABEL_FIELD_SIZE_NM, newLabelField, ownLabelFields, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { inferSpin } from "./schematic/labelShape";
@@ -96,27 +96,42 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const [color, setColor] = useState(label.color ?? null);
   // the grid of the label's own fields (`m_grid` over `m_fields`), a global label's Sheet References above them
   const [fields, setFields] = useState<LabelFieldEdit[]>(() => ownLabelFields(label).map((f) => ({ ...f, name: labelFieldDisplayName(f.name) })));
+  // each row's Text Size as typed (mm); a row whose size does not read keeps the dialog from closing (`FIELDS_GRID_TABLE`'s size validator)
+  const [fieldSizes, setFieldSizes] = useState<string[]>(() => fields.map((f) => nmToMm(f.size_nm ?? LABEL_FIELD_SIZE_NM)));
+  const fieldSizeNm = (i: number): number | null => {
+    const nm = mmToNm(fieldSizes[i] ?? "");
+    return nm !== null && nm >= 10_000 && nm <= 1_000_000_000 ? nm : null;
+  };
+  const fieldSizesOk = fields.every((_, i) => fieldSizeNm(i) !== null);
   const isr = (label.fields ?? []).find((f) => f.intersheet_refs) ?? null;
   const setField = (i: number, change: Partial<LabelFieldEdit>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
-  const addField = () => setFields((fs) => [...fs, (() => { const f = newLabelField(fs.map((x) => ({ ...x, name: x.name === "Net Class" ? "Netclass" : x.name })), isr ? isr.visible : null); return { ...f, name: labelFieldDisplayName(f.name) }; })()]);
+  const addField = () => {
+    const f = newLabelField(fields.map((x, i) => ({ ...x, name: x.name === "Net Class" ? "Netclass" : x.name, size_nm: fieldSizeNm(i) ?? x.size_nm })), isr ? isr.visible : null);
+    setFields((fs) => [...fs, { ...f, name: labelFieldDisplayName(f.name) }]);
+    setFieldSizes((ss) => [...ss, nmToMm(f.size_nm ?? LABEL_FIELD_SIZE_NM)]);
+  };
+  const deleteField = (i: number) => {
+    setFields((fs) => fs.filter((_, k) => k !== i));
+    setFieldSizes((ss) => ss.filter((_, k) => k !== i));
+  };
   const title = label.scope === "global" ? "Global Label Properties" : label.scope === "hierarchical" ? "Hierarchical Label Properties" : "Label Properties";
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
   const sizeOk = sizeNm !== null && sizeNm >= 10_000 && sizeNm <= 1_000_000_000;
   // "Label can not be empty." (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`)
-  const canOk = text.trim().length > 0 && sizeOk;
+  const canOk = text.trim().length > 0 && sizeOk && fieldSizesOk;
   // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
   const autoSpin = auto ? labelOrientationForPoint(orientationSceneOf(sch), label.at, turn) : null;
   const submit = () =>
     canOk &&
     void send(
       oneStep([
-        labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields }),
+        labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields: fields.map((f, i) => ({ ...f, size_nm: fieldSizeNm(i) ?? f.size_nm })) }),
         textAttrsCmd(label.id, { font: label.font, color: label.color }, { font: chosenFont(font), color }, false),
       ])
     );
   return (
-    <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title={title} width={520} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
         <span>Label</span>
         <input autoFocus aria-label="Label" list={existing.length > 0 ? "label-props-existing" : undefined} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
@@ -177,7 +192,10 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
             <th style={{ textAlign: "left" }}>Name</th>
             <th style={{ textAlign: "left" }}>Value</th>
             <th>Show</th>
+            <th>Show Name</th>
             <th>Italic</th>
+            <th>Bold</th>
+            <th>Text Size</th>
             <th />
           </tr>
         </thead>
@@ -189,6 +207,9 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
               <td style={{ textAlign: "center" }}>
                 <input type="checkbox" checked={isr.visible} disabled aria-label="Show Sheet References" />
               </td>
+              <td />
+              <td />
+              <td />
               <td />
               <td />
             </tr>
@@ -205,10 +226,25 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
                 <input type="checkbox" aria-label={`Field ${i + 1} shown`} checked={f.visible} onChange={(e) => setField(i, { visible: e.target.checked })} />
               </td>
               <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Field ${i + 1} show name`} checked={!!f.name_shown} onChange={(e) => setField(i, { name_shown: e.target.checked })} />
+              </td>
+              <td style={{ textAlign: "center" }}>
                 <input type="checkbox" aria-label={`Field ${i + 1} italic`} checked={f.italic} onChange={(e) => setField(i, { italic: e.target.checked })} />
               </td>
+              <td style={{ textAlign: "center" }}>
+                <input type="checkbox" aria-label={`Field ${i + 1} bold`} checked={!!f.bold} onChange={(e) => setField(i, { bold: e.target.checked })} />
+              </td>
               <td>
-                <button type="button" aria-label={`Delete field ${i + 1}`} title="Delete field" onClick={() => setFields((fs) => fs.filter((_, k) => k !== i))}>
+                <input
+                  aria-label={`Field ${i + 1} text size`}
+                  value={fieldSizes[i] ?? ""}
+                  onChange={(e) => setFieldSizes((ss) => ss.map((v, k) => (k === i ? e.target.value : v)))}
+                  style={{ width: 52, ...(fieldSizeNm(i) === null ? { outline: "1px solid var(--error, #d33)" } : {}) }}
+                  title="mm, 0.01 to 1000"
+                />
+              </td>
+              <td>
+                <button type="button" aria-label={`Delete field ${i + 1}`} title="Delete field" onClick={() => deleteField(i)}>
                   ✕
                 </button>
               </td>
