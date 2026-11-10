@@ -123,12 +123,27 @@ pub struct SchExtras {
     /// read per placement. Read from a file and written back (`saveSheet`: `for( SCH_FIELD& field : aSheet->GetFields() ) saveField( &field )`). Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheet_fields: BTreeMap<String, Vec<LabelField>>,
+    /// Where a sheet's user field is drawn (`SCH_FIELD`'s position, `GetTextAngle`, `GetHorizJustify`, `GetVertJustify`: Sheet Properties' X Position, Y Position,
+    /// Orientation, H Align and V Align columns, `FIELDS_GRID_TABLE`), by the sheet's id, then by the field's name ([`SchExtras::sheet_fields`]). A field with no
+    /// entry is where `DIALOG_SHEET_PROPERTIES::OnAddField` puts a new one: at the sheet's corner (its offset 0, `Offset( m_sheet->GetPosition() )`), centred,
+    /// horizontal. Its font and colour are [`SchExtras::field_looks`] under the sheet's id. Read from a file and written back (`saveField`). Additive (UI-LEFT-2 SS15).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheet_field_places: BTreeMap<String, BTreeMap<String, SheetFieldPlace>>,
     /// A hierarchical sheet's style and attributes (`SCH_SHEET::m_borderWidth`, `m_borderColor`, `m_backgroundColor`, `m_excludedFromSim`, `m_excludedFromBOM`,
     /// `m_excludedFromBoard`, `m_DNP`: Sheet Properties' Style and Attributes, `dialog_sheet_properties.cpp`), by the sheet's id. A sheet with no entry is written
     /// as the studio always wrote one ([`SheetProps::legacy`]: a 6 mil border, a pale yellow fill, no attribute); an entry equal to that is never kept. Read from
     /// a KiCad file (`parseSheet`: `(stroke ..)`, `(fill ..)`, `exclude_from_sim`, `in_bom`, `on_board`, `dnp`) and written back (`saveSheet`). Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheet_props: BTreeMap<String, SheetProps>,
+    /// A hierarchical sheet's records of the design variants (`SCH_SHEET_INSTANCE::m_Variants`, a `SCH_SHEET_VARIANT` of `sch_sheet_path.h`), by the sheet's id, then by
+    /// the variant's name: its Do not populate, Exclude from simulation, Exclude from bill of materials and Exclude from board in that variant, which Sheet
+    /// Properties sets while the variant is the current one (`SetDNP( .., &instance, variantName )`) and which reach every symbol inside the sheet
+    /// (`SCH_SHEET_PATH::GetDNP( variant )`). Written in each `(path ..)` of the sheet's `(instances ..)` as `(variant (name ..) (dnp ..) (exclude_from_sim ..)
+    /// (in_bom ..))` (`saveSheet`) and read back. **Differs**: a record is the sheet's on every sheet path its screen is shown on (KiCad's is one path's), as a
+    /// symbol's is ([`crate::variants`]); a variant's field texts of the sheet are not kept. A record with no differential from the sheet's own flags is not kept
+    /// (`HasDifferentials`: `saveSheet` writes none). Additive (UI-LEFT-2 SS15).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheet_variants: BTreeMap<String, BTreeMap<String, SheetVariant>>,
     /// The page number of a sheet drawn on this screen, per sheet path, where the screen is shown on several paths and the paths' pages differ
     /// (`SCH_SHEET::m_instances`: one `SCH_SHEET_INSTANCE`, with its own `m_PageNumber`, per sheet path the sheet is on): by the sheet's
     /// `SheetInstance::id`, then by the path of the screen the sheet is drawn on (the placement ids from the root down, joined with `/`) -> the page.
@@ -522,6 +537,33 @@ pub struct SheetProps {
     pub dnp: bool,
 }
 
+/// See [`SchExtras::sheet_variants`]: `SCH_SHEET_VARIANT`'s flags (`VARIANT::m_DNP`, `m_ExcludedFromSim`, `m_ExcludedFromBOM`, `m_ExcludedFromBoard`), every one set, as
+/// `SCH_SHEET_VARIANT::InitializeAttributes` snapshots the sheet's own when the record is made.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetVariant {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dnp: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_sim: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_bom: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude_from_board: bool,
+}
+
+impl SheetVariant {
+    /// `SCH_SHEET_VARIANT::InitializeAttributes`: the sheet's own flags.
+    pub fn initialized(base: &SheetProps) -> SheetVariant {
+        SheetVariant { dnp: base.dnp, exclude_from_sim: base.exclude_from_sim, exclude_from_bom: base.exclude_from_bom, exclude_from_board: base.exclude_from_board }
+    }
+
+    /// `SCH_SHEET_VARIANT::HasDifferentials` (the field texts aside): DNP, simulation or BOM differ from the sheet's own (Exclude from board is not counted).
+    pub fn has_differentials(&self, base: &SheetProps) -> bool {
+        self.dnp != base.dnp || self.exclude_from_bom != base.exclude_from_bom || self.exclude_from_sim != base.exclude_from_sim
+    }
+}
+
 impl SheetProps {
     /// What the writer has always given a sheet: `(stroke (width 0.1524) (type solid))` (`DEFAULT_LINE_WIDTH_MILS`, 6 mil) and `(fill (color 255 255 194 1))`,
     /// no attribute set.
@@ -558,6 +600,35 @@ impl SchExtras {
             self.sheet_props.insert(id.to_string(), props);
         }
         self.sheet_props.get(id).cloned() != before
+    }
+}
+
+/// See [`SchExtras::sheet_field_places`]: a sheet user field's offset from the sheet's corner, its angle (0 or 90 degrees) and its justification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetFieldPlace {
+    #[serde(default, skip_serializing_if = "is_zero_nm", deserialize_with = "crate::units::de")]
+    pub dx: Nm,
+    #[serde(default, skip_serializing_if = "is_zero_nm", deserialize_with = "crate::units::de")]
+    pub dy: Nm,
+    #[serde(default, skip_serializing_if = "is_zero_angle")]
+    pub angle: Millideg,
+    #[serde(default, skip_serializing_if = "is_center")]
+    pub h: TextJustify,
+    #[serde(default, skip_serializing_if = "is_vcenter")]
+    pub v: TextVAlign,
+}
+
+fn is_center(h: &TextJustify) -> bool {
+    *h == TextJustify::Center
+}
+fn is_vcenter(v: &TextVAlign) -> bool {
+    *v == TextVAlign::Center
+}
+
+impl SheetFieldPlace {
+    pub fn is_default(&self) -> bool {
+        *self == SheetFieldPlace::default()
     }
 }
 
@@ -625,8 +696,8 @@ impl TextAttrs {
 ///
 /// Its text size, bold and shown name (UI-LEFT-2 SS12) are the `SCH_FIELD`'s own (`EDA_TEXT::GetTextSize`, `IsBold`, `SCH_FIELD::IsNameShown`): Label Properties'
 /// grid and Field Properties set them, `AutoplaceFields` stacks the fields by their heights, and the file has them as `(effects (font (size ..) bold))` and
-/// `(show_name yes)`. Additive: absent is KiCad's new field, 50 mil, regular, its value alone. A sheet's user field (`SchExtras::sheet_fields`) keeps none of
-/// the three yet (Sheet Properties' grid does not offer them).
+/// `(show_name yes)`. Additive: absent is KiCad's new field, 50 mil, regular, its value alone. A sheet's user field (`SchExtras::sheet_fields`) keeps the three
+/// too (Sheet Properties' grid, UI-LEFT-2 SS15), its place in `SchExtras::sheet_field_places`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LabelField {
@@ -942,7 +1013,9 @@ impl SchExtras {
             && self.label_fields.is_empty()
             && self.sheet_pin_looks.is_empty()
             && self.sheet_fields.is_empty()
+            && self.sheet_field_places.is_empty()
             && self.sheet_props.is_empty()
+            && self.sheet_variants.is_empty()
             && self.sheet_pages.is_empty()
             && self.path_units.is_empty()
             && self.power_path_refs.is_empty()

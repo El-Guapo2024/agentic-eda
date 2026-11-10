@@ -169,12 +169,15 @@ pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return err(e),
     };
+    // the filters ask each symbol's sheet path too (`ref.GetSheetPath().GetDNP( m_currentVariant )`, UI-LEFT-2 SS15)
+    let mut filtered = eda_model::variants::resolve_section(&base, &variant);
+    fields_table::with_sheet_flags(&mut filtered, &design, &variant);
     let table = if variant.is_empty() {
-        fields_table::build_table_over(&staged, &base, &model, &spec)
+        fields_table::build_table_over(&staged, &filtered, &model, &spec)
     } else {
         // the variant's values, its filters (`ResolveDNP( sheet, m_currentVariant )`) and the cells it differs in from the symbols' own
         let shown = eda_model::variants::resolve_section(&staged, &variant);
-        let mut t = fields_table::build_table_over(&shown, &eda_model::variants::resolve_section(&base, &variant), &model, &spec);
+        let mut t = fields_table::build_table_over(&shown, &filtered, &model, &spec);
         fields_table::mark_variant_overrides(&mut t.rows, &shown, &staged, &model, &spec);
         t
     };
@@ -242,7 +245,9 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return err(e),
     };
-    let text = fields_table::export_bom_over(&eda_model::variants::resolve_section(&staged, &variant), &eda_model::variants::resolve_section(&base, &variant), &model, &spec, &fmt);
+    let mut filtered = eda_model::variants::resolve_section(&base, &variant);
+    fields_table::with_sheet_flags(&mut filtered, &design, &variant);
+    let text = fields_table::export_bom_over(&eda_model::variants::resolve_section(&staged, &variant), &filtered, &model, &spec, &fmt);
     let preview = req.get("preview").and_then(Value::as_bool).unwrap_or(false);
     let Some(path) = req.get("path").and_then(Value::as_str) else {
         let stem = PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();

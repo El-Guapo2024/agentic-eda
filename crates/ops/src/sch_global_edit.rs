@@ -11,7 +11,7 @@
 //! colour and style, a shape's fill colour, a junction's size and colour. Every edit lands on the screen's item, so a screen shown on two paths is edited
 //! once (its items are KiCad's same objects on both paths).
 //!
-//! **Differs** (each said where it is done): a sheet pin keeps its font and colour (the model keeps none); a label's justification is its spin, so H and V
+//! **Differs** (each said where it is done): a label's justification is its spin, so H and V
 //! Align set a field's, a text's and a text box's only (KiCad's `processItem` sets any `EDA_TEXT`'s, which turns a label's spin); a directive label takes
 //! the font and the colour only (its size, bold and italic are not modelled); a global label's Sheet References field keeps its visibility (it follows
 //! Schematic Setup); the user fields of a power symbol keep their looks (they are not placed: `PowerProps`); the net of an item on a screen shown twice is
@@ -558,7 +558,11 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                 }
             }
             Target::SheetPin(id) => {
-                // its `EDA_TEXT`'s size, bold and italic (`SchExtras::sheet_pin_looks`); **differs**: no font or colour is kept for a sheet pin
+                // its `EDA_TEXT`'s size, bold and italic (`SchExtras::sheet_pin_looks`), and its font and colour (`SchExtras::text_attrs`, UI-LEFT-2 SS15)
+                if edit_text_attrs(sch, id, spec, false) {
+                    changed = true;
+                    connectable = true;
+                }
                 let before: LabelLook = sch.extras.sheet_pin_looks.get(id).copied().unwrap_or_default();
                 let mut l = before;
                 if let Some(s) = spec.text_size_nm {

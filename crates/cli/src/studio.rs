@@ -2476,13 +2476,32 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(sh) = &shown {
                 sh.annotate_sheet_fields(&mut fields);
             }
+            let mut drawn = eda_engine::fields::sheet_user_fields(&sch, s).iter().map(|f| page_field_json_in(&sch, &s.id, f)).collect::<Vec<_>>();
+            if let Some(sh) = &shown {
+                sh.annotate_sheet_fields(&mut drawn);
+            }
+            for v in drawn.iter_mut() {
+                if let Some(o) = v.as_object_mut() {
+                    o.remove("id");
+                }
+            }
             json!({
                 "id": s.id, "name": s.name, "file": s.file, "page": shown_page(s),
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 // Sheet Properties' Style and Attributes (`SchExtras::sheet_props`; absent: the look the writer has always given a sheet) and the user fields
                 "props": sch.extras.sheet_props.get(&s.id),
+                // its records of the design variants (`SchExtras::sheet_variants`), which the studio lays over the sheet's attributes while one is current
+                "variants": sch.extras.sheet_variants.get(&s.id),
                 "user_fields": sch.extras.sheet_fields.get(&s.id),
+                // each user field's place, angle, justification, font and colour (Sheet Properties' grid; UI-LEFT-2 SS15), and the user fields as they are drawn
+                // (no id: they are not items of their own on the canvas)
+                "user_field_looks": sch.extras.sheet_fields.get(&s.id).into_iter().flatten().map(|f| {
+                    let p = sch.extras.sheet_field_places.get(&s.id).and_then(|m| m.get(&f.name)).copied().unwrap_or_default();
+                    let look = sch.extras.field_look(&s.id, &f.name);
+                    (f.name.clone(), json!({ "dx": p.dx, "dy": p.dy, "angle": p.angle, "h": p.h, "v": p.v, "font": look.and_then(|l| l.font.clone()), "color": look.and_then(|l| l.color) }))
+                }).collect::<serde_json::Map<String, Value>>(),
+                "user_fields_drawn": drawn,
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
                 "pins": s.pins.iter().map(|p| {
@@ -2496,6 +2515,15 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                         }
                         if look.italic {
                             pin["italic"] = json!(true);
+                        }
+                    }
+                    // its font face and colour (`SchExtras::text_attrs`, Sheet Pin Properties' Font and Color; UI-LEFT-2 SS15)
+                    if let Some(a) = sch.extras.text_attrs.get(&p.id) {
+                        if let Some(f) = &a.font {
+                            pin["font"] = json!(f);
+                        }
+                        if let Some(c) = a.color {
+                            pin["color"] = json!(c);
                         }
                     }
                     pin

@@ -20,6 +20,12 @@ import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
 import { chosenFont, DEFAULT_FONT, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
 import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
 import { useExistingLabels } from "./LabelDialog";
+import { sheetFlags } from "../kicad-port/designVariants";
+import { newSheetFieldRow, sheetFieldCmds, sheetFieldError, sheetFieldRow, SHEET_FIELD_COLUMNS, type SheetFieldRow } from "../kicad-port/sheetFieldLooks";
+import { columnMenu, DEFAULT_SHOWN_COLUMNS, shownColumns, toggleColumn, type FieldColumn } from "../kicad-port/symbolFieldsGrid";
+import { fontChoices } from "../kicad-port/symbolPropsDialog";
+import { lookCellOf } from "./fieldGridCells";
+import { ContextMenu } from "./canvas/ContextMenu";
 
 const LABEL_SHAPES: Array<{ value: LabelShape; label: string }> = [
   { value: "input", label: "Input" },
@@ -364,7 +370,6 @@ export function SheetPropertiesDialog({ id }: { id: string }) {
 /** The look the writer has always given a sheet with no style of its own (`SheetProps::legacy`): a 6 mil border, a pale yellow fill. */
 const LEGACY_SHEET = { border_width_nm: 152_400, border_color: null as SchColor | null, fill_color: { r: 255, g: 255, b: 194, a: 255 } as SchColor | null };
 
-type SheetUserField = { name: string; text: string; visible: boolean; italic: boolean };
 
 /**
  * Sheet Properties (`DIALOG_SHEET_PROPERTIES`): the name, file and page, the user fields (`SCH_FIELD`s of `FIELD_T::SHEET_USER`: Add Field gives `Field<N>`,
@@ -373,17 +378,26 @@ type SheetUserField = { name: string; text: string; visible: boolean; italic: bo
  */
 function SheetForm({ sheet }: { sheet: Sheet }) {
   const here = useStudioState().currentSheetPath;
+  // the Attributes as the current design variant has them (`m_cbDNP->SetValue( m_sheet->GetDNP( &instance, variantName ) )` ...; UI-LEFT-2 SS15)
+  const variant = useStudioState().schVariant;
+  const flags = sheetFlags(sheet, variant);
   const close = useClose();
   const send = useSend(close);
   const [name, setName] = useState(sheet.name);
   const [file, setFile] = useState(sheet.file);
   const [page, setPage] = useState(sheet.page ?? "");
   const own = sheet.props ?? null;
-  const [fields, setFields] = useState<SheetUserField[]>(() => (sheet.user_fields ?? []).map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true, italic: !!f.italic })));
-  const [excludeFromSim, setExcludeFromSim] = useState(!!own?.exclude_from_sim);
-  const [excludeFromBom, setExcludeFromBom] = useState(!!own?.exclude_from_bom);
+  // the user fields' rows (`FIELDS_GRID_TABLE`): the texts and every look (UI-LEFT-2 SS15)
+  const [fields, setFields] = useState<SheetFieldRow[]>(() => (sheet.user_fields ?? []).map((f) => sheetFieldRow(f, sheet.user_field_looks?.[f.name])));
+  // `m_grid->ShowHideColumns( "0 1 2 3 4 5 6 7" )`; a right-click on the column labels shows or hides the others
+  const [shownCols, setShownCols] = useState<Set<FieldColumn>>(() => shownColumns(DEFAULT_SHOWN_COLUMNS));
+  const [columnsMenu, setColumnsMenu] = useState<{ x: number; y: number } | null>(null);
+  const fontList = fontChoices(useFontFamilies());
+  const [excludeFromSim, setExcludeFromSim] = useState(flags.exclude_from_sim);
+  const [excludeFromBom, setExcludeFromBom] = useState(flags.exclude_from_bom);
+  // `GetExcludedFromBoard()` and `SetExcludedFromBoard( value )`: the sheet's own, in every variant
   const [excludeFromBoard, setExcludeFromBoard] = useState(!!own?.exclude_from_board);
-  const [dnp, setDnp] = useState(!!own?.dnp);
+  const [dnp, setDnp] = useState(flags.dnp);
   const [border, setBorder] = useState(nmToMm(own ? (own.border_width_nm ?? 0) : LEGACY_SHEET.border_width_nm));
   const [borderColor, setBorderColor] = useState<SchColor | null>(own ? (own.border_color ?? null) : LEGACY_SHEET.border_color);
   const [fillColor, setFillColor] = useState<SchColor | null>(own ? (own.fill_color ?? null) : LEGACY_SHEET.fill_color);
@@ -393,7 +407,7 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
   const pageOk = /^[\p{L}\p{N}]*$/u.test(page.trim());
   const borderNm = mmToNm(border);
   const canOk = name.trim().length > 0 && fileOk && pageOk && borderNm !== null && borderNm >= 0;
-  const setField = (i: number, change: Partial<SheetUserField>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
+  const setField = (i: number, change: Partial<SheetFieldRow>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
   const move = (i: number, by: -1 | 1) =>
     setFields((fs) => {
       const j = i + by;
@@ -409,23 +423,31 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
     const names = fields.filter((f) => f.name.trim() !== "").map((f) => f.name.trim());
     const dup = names.find((n, i) => names.indexOf(n) !== i || ["sheetname", "sheetfile"].includes(n.toLowerCase()));
     if (dup) return setProblem(`Field name '${dup}' already in use.`);
-    const was = (sheet.user_fields ?? []).map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true, italic: !!f.italic }));
-    const kept = fields.filter((f) => f.name.trim() !== "" || f.text !== "");
-    const fieldsCmd = JSON.stringify(kept) === JSON.stringify(was) ? null : ({ op: "sch_edit", verb: "set_sheet_fields", id: sheet.id, fields: kept } as unknown as Cmd);
+    const sizeProblem = sheetFieldError(fields);
+    if (sizeProblem) return setProblem(sizeProblem);
+    const fieldCmds = sheetFieldCmds(sheet.id, fields, sheet.user_fields ?? [], sheet.user_field_looks ?? {});
     const was2 = own ?? LEGACY_SHEET;
     const props: Record<string, unknown> = {};
     const sameColor = (a: SchColor | null | undefined, b: SchColor | null | undefined) => JSON.stringify(a && a.a > 0 ? a : null) === JSON.stringify(b && b.a > 0 ? b : null);
     if (borderNm !== (was2.border_width_nm ?? 0)) props.border_width_nm = borderNm;
     if (!sameColor(borderColor, was2.border_color)) props.border_color = borderColor ?? UNSPECIFIED_COLOR;
     if (!sameColor(fillColor, was2.fill_color)) props.fill_color = fillColor ?? UNSPECIFIED_COLOR;
-    if (excludeFromSim !== !!own?.exclude_from_sim) props.exclude_from_sim = excludeFromSim;
-    if (excludeFromBom !== !!own?.exclude_from_bom) props.exclude_from_bom = excludeFromBom;
+    // `SetExcludedFromSim( .., &instance, variantName )`, `SetExcludedFromBOM`, `SetDNP`: the variant's record while one is current (`set_sheet_variant`)
+    const inVariant: Record<string, unknown> = {};
+    const flag = (key: "exclude_from_sim" | "exclude_from_bom" | "dnp", value: boolean) => {
+      if (value === flags[key]) return;
+      if (variant) inVariant[key] = value;
+      else props[key] = value;
+    };
+    flag("exclude_from_sim", excludeFromSim);
+    flag("exclude_from_bom", excludeFromBom);
+    flag("dnp", dnp);
     if (excludeFromBoard !== !!own?.exclude_from_board) props.exclude_from_board = excludeFromBoard;
-    if (dnp !== !!own?.dnp) props.dnp = dnp;
     const propsCmd = Object.keys(props).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_props", id: sheet.id, ...props } as unknown as Cmd) : null;
+    const variantCmd = Object.keys(inVariant).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_variant", id: sheet.id, variant, ...inVariant } as unknown as Cmd) : null;
     const edit = sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]);
     const editCmds: Cmd[] = edit ? ((edit as { op: string; cmds?: Cmd[] }).op === "batch" ? ((edit as { cmds: Cmd[] }).cmds ?? []) : [edit]) : [];
-    void send(oneStep([propsCmd, fieldsCmd, ...editCmds]));
+    void send(oneStep([propsCmd, variantCmd, ...fieldCmds, ...editCmds]));
   };
   return (
     <SchDialogShell title="Sheet Properties" width={560} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
@@ -435,53 +457,79 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
         <span>Sheet file name</span>
         <input value={file} onChange={(e) => setFile(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} title="A file the project has is shown; a new name moves this sheet's content to it (or copies it when another sheet shows the old file)" />
       </Grid>
-      <table className="label-fields" aria-label="Sheet fields" style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ textAlign: "left" }}>Name</th>
-            <th style={{ textAlign: "left" }}>Value</th>
-            <th>Show</th>
-            <th>Italic</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {fields.map((f, i) => (
-            <tr key={i}>
-              <td>
-                <input aria-label={`Sheet field ${i + 1} name`} value={f.name} onChange={(e) => setField(i, { name: e.target.value })} style={{ width: 110 }} />
-              </td>
-              <td>
-                <input aria-label={`Sheet field ${i + 1} value`} value={f.text} onChange={(e) => setField(i, { text: e.target.value })} />
-              </td>
-              <td style={{ textAlign: "center" }}>
-                <input type="checkbox" aria-label={`Sheet field ${i + 1} shown`} checked={f.visible} onChange={(e) => setField(i, { visible: e.target.checked })} />
-              </td>
-              <td style={{ textAlign: "center" }}>
-                <input type="checkbox" aria-label={`Sheet field ${i + 1} italic`} checked={f.italic} onChange={(e) => setField(i, { italic: e.target.checked })} />
-              </td>
-              <td style={{ whiteSpace: "nowrap" }}>
-                <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
-                  ↑
-                </button>
-                <button type="button" title="Move down" disabled={i === fields.length - 1} onClick={() => move(i, 1)}>
-                  ↓
-                </button>
-                <button type="button" aria-label={`Delete sheet field ${i + 1}`} title="Delete field" onClick={() => setFields((fs) => fs.filter((_, k) => k !== i))}>
-                  ✕
-                </button>
-              </td>
+      <datalist id="sheet-props-fonts">
+        {fontList.map((f) => (
+          <option key={f} value={f} />
+        ))}
+      </datalist>
+      <div style={{ overflowX: "auto", marginTop: 8 }}>
+        <table className="label-fields" aria-label="Sheet fields" style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead
+            // `GRID_TRICKS::onGridLabelRightClick`: a check item per column
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setColumnsMenu({ x: e.clientX, y: e.clientY });
+            }}
+            title="Right-click to show or hide columns"
+          >
+            <tr>
+              {SHEET_FIELD_COLUMNS.filter((c) => shownCols.has(c.key)).map((c) => (
+                <th key={c.key} data-col={c.key} style={{ textAlign: c.key === "name" || c.key === "value" ? "left" : "center", whiteSpace: "nowrap" }}>
+                  {c.label}
+                </th>
+              ))}
+              <th />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {fields.map((f, i) => (
+              <tr key={i}>
+                {SHEET_FIELD_COLUMNS.filter((c) => shownCols.has(c.key)).map((c) => (
+                  <td key={c.key} style={c.key === "name" || c.key === "value" ? undefined : { textAlign: "center" }}>
+                    {c.key === "name" ? (
+                      <input aria-label={`Sheet field ${i + 1} name`} value={f.name} onChange={(e) => setField(i, { name: e.target.value })} style={{ width: 110 }} />
+                    ) : c.key === "value" ? (
+                      <input aria-label={`Sheet field ${i + 1} value`} value={f.text} onChange={(e) => setField(i, { text: e.target.value })} />
+                    ) : c.key === "shown" ? (
+                      <input type="checkbox" aria-label={`Sheet field ${i + 1} shown`} checked={f.visible} onChange={(e) => setField(i, { visible: e.target.checked })} />
+                    ) : (
+                      lookCellOf(`Sheet field ${i + 1}`, c.key, f.look, (patch) => setField(i, { look: { ...f.look, ...patch } }), "sheet-props-fonts")
+                    )}
+                  </td>
+                ))}
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+                    ↑
+                  </button>
+                  <button type="button" title="Move down" disabled={i === fields.length - 1} onClick={() => move(i, 1)}>
+                    ↓
+                  </button>
+                  <button type="button" aria-label={`Delete sheet field ${i + 1}`} title="Delete field" onClick={() => setFields((fs) => fs.filter((_, k) => k !== i))}>
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {columnsMenu && (
+        <ContextMenu
+          x={columnsMenu.x}
+          y={columnsMenu.y}
+          entries={columnMenu(shownCols)
+            .filter((c) => c.key !== "allow_autoplace")
+            .map((c) => ({ label: `${c.checked ? "\u2713" : "\u2003"} ${c.label}`, checked: c.checked, onSelect: () => setShownCols((cols) => toggleColumn(cols, c.key)) }))}
+          onClose={() => setColumnsMenu(null)}
+        />
+      )}
       <button
         type="button"
         aria-label="Add field"
         title="Add field"
         style={{ marginTop: 4 }}
         // `OnAddField`: `GetUserFieldName( m_fields->size() )` over the two mandatory rows and the user ones, hidden
-        onClick={() => setFields((fs) => [...fs, { name: `Field${fs.length + 2}`, text: "", visible: false, italic: false }])}
+        onClick={() => setFields((fs) => [...fs, newSheetFieldRow(fs, !!sheet.fields?.find((f) => f.name === "Sheetname")?.vertical)])}
       >
         + Add Field
       </button>

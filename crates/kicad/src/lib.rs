@@ -897,9 +897,10 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
     for f in eda_engine::fields::sheet_fields(sch, s) {
         write_page_field_of(out, sch, &s.id, &f);
     }
-    // the sheet's user fields (`saveSheet` saves every field), at the sheet's corner (r2 B-L1: where they were is not kept)
-    for f in sch.extras.sheet_fields.get(&s.id).into_iter().flatten() {
-        write_property(out, &f.name, &f.text, s.at.x.mm(), s.at.y.mm(), !f.visible);
+    // the sheet's user fields (`saveSheet` saves every field, `saveField`): where Sheet Properties put them, with their size, bold, italic, shown name, font and
+    // colour (UI-LEFT-2 SS15; a field never placed is at the sheet's corner, as `OnAddField` makes one)
+    for f in eda_engine::fields::sheet_user_fields(sch, s) {
+        write_page_field_of(out, sch, &s.id, &f);
     }
     for p in &s.pins {
         let px = sch_mm(p.at.x);
@@ -921,15 +922,34 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
         // the pin's text reads into the sheet: left-justified from a pin on the left edge, right-justified from one on the right
         let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
-        // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`)
+        // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`), and its font face and colour (`SchExtras::text_attrs`,
+        // `EDA_TEXT::Format`: `(face ..)` first, `(color ..)` last; UI-LEFT-2 SS15)
         let look = sch.extras.sheet_pin_looks.get(&p.id).copied().unwrap_or_default();
-        let font = FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
+        let attrs = sch.extras.text_attrs.get(&p.id);
+        let font = FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, face: attrs.and_then(|a| a.font.clone()), color: attrs.and_then(|a| a.color), ..FieldLook::DEFAULT }.font();
         writeln!(out, "\t\t\t(effects {font} (justify {justify})))").unwrap();
     }
     writeln!(out, "\t\t(instances").unwrap();
     writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
+    // each path's records of the design variants (`saveSheet`: `(variant (name ..) (dnp ..) (exclude_from_sim ..) (in_bom ..))`, a flag written only where it differs
+    // from the sheet's own, a record with no differential not at all: `HasDifferentials`). The studio's record is the sheet's on every path (UI-LEFT-2 SS15).
+    let mut variants = String::new();
+    for (name, v) in sch.extras.sheet_variants.get(&s.id).into_iter().flatten().filter(|(_, v)| v.has_differentials(&props)) {
+        let yn = |b: bool| if b { "yes" } else { "no" };
+        write!(variants, " (variant (name {})", sexpr_str(name)).unwrap();
+        if v.dnp != props.dnp {
+            write!(variants, " (dnp {})", yn(v.dnp)).unwrap();
+        }
+        if v.exclude_from_sim != props.exclude_from_sim {
+            write!(variants, " (exclude_from_sim {})", yn(v.exclude_from_sim)).unwrap();
+        }
+        if v.exclude_from_bom != props.exclude_from_bom {
+            write!(variants, " (in_bom {})", variant_in_bom_word(v.exclude_from_bom, SCH_FILE_VERSION)).unwrap();
+        }
+        variants.push(')');
+    }
     for (instance_path, page) in instances {
-        writeln!(out, "\t\t\t\t(path \"{instance_path}\" (page {}))", sexpr_str(page)).unwrap();
+        writeln!(out, "\t\t\t\t(path \"{instance_path}\" (page {}){variants})", sexpr_str(page)).unwrap();
     }
     writeln!(out, "\t\t\t)").unwrap();
     writeln!(out, "\t\t)").unwrap();

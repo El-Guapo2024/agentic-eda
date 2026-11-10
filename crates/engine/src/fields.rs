@@ -877,6 +877,24 @@ pub fn sheet_fields_on(sch: &SchematicSection, sheet: &SheetInstance, placing_ke
         .collect()
 }
 
+/// A sheet's user fields on the page (`SCH_SHEET::GetFields()` past Sheetname and Sheetfile), in their order: each where Sheet Properties put it
+/// (`SchExtras::sheet_field_places`: the offset from the sheet's corner, the angle, the justification; none is a new field's place, the corner, centred,
+/// horizontal) with its own size, bold, italic, shown name and visibility (`SchExtras::sheet_fields`). UI-LEFT-2 SS15.
+pub fn sheet_user_fields(sch: &SchematicSection, sheet: &SheetInstance) -> Vec<PageField> {
+    let places = sch.extras.sheet_field_places.get(&sheet.id);
+    sch.extras
+        .sheet_fields
+        .get(&sheet.id)
+        .into_iter()
+        .flatten()
+        .map(|f| {
+            let at = places.and_then(|p| p.get(&f.name)).copied().unwrap_or_default();
+            let p = FieldPlacement { dx: at.dx, dy: at.dy, angle: at.angle, h: at.h, v: at.v, visible: f.visible, size_nm: f.size_nm, bold: f.bold, italic: f.italic, name_shown: f.name_shown, ..FieldPlacement::at_origin(&f.name) };
+            page_field(sheet.at, 0, false, 0.0, &p, &f.text)
+        })
+        .collect()
+}
+
 /// How much of `a` lies inside `b` (square nanometres), the edges trimmed by a hair so boxes that only touch are not counted.
 fn overlap_area(a: crate::hier::kit::Rect, b: crate::hier::kit::Rect) -> i128 {
     const HAIR: Nm = Nm::new(30_000);

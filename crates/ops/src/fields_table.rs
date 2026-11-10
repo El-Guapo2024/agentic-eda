@@ -570,6 +570,29 @@ pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> 
     Some(sch)
 }
 
+/// `base` (a [`project_view`], resolved in `variant`) with the flags of the sheets each symbol is inside: the table's "Exclude DNP" and "Include excluded from
+/// BOM" filters ask the symbol and its sheet path (`RebuildRows`: `ref.GetSymbol()->ResolveDNP( &ref.GetSheetPath(), m_currentVariant ) ||
+/// ref.GetSheetPath().GetDNP( m_currentVariant )`, the same for `GetExcludedFromBOM`; UI-LEFT-2 SS15). Only the filters read `base`: the DNP and Exclude from BOM
+/// cells stay the symbol's own (`GetSymbolDNP`).
+pub fn with_sheet_flags(base: &mut SchematicSection, design: &eda_model::ir::Design, variant: &str) {
+    use eda_model::sheet_list;
+    for e in sheet_list::walk(design).into_iter().skip(1) {
+        let f = eda_model::variants::sheet_path_flags(design, &e.path, variant);
+        if !f.dnp && !f.exclude_from_bom {
+            continue;
+        }
+        let Some(screen) = sheet_list::screen_of(design, &e.path) else { continue };
+        for sym in &screen.symbols {
+            let reference = sheet_list::reference_under(screen, sym, &e.path);
+            let unit = sheet_list::unit_under(screen, sym, &e.path);
+            for b in base.symbols.iter_mut().filter(|b| b.id == reference && b.unit == unit) {
+                b.dnp |= f.dnp;
+                b.exclude_from_bom |= f.exclude_from_bom;
+            }
+        }
+    }
+}
+
 /// The placed symbols a later sheet path shows under a reference other than the symbol's id: `(reference, screen, symbol, unit)`, in the hierarchy's order.
 fn path_rows(design: &eda_model::ir::Design) -> Vec<(String, &SchematicSection, &SymbolInstance, u32)> {
     use eda_model::sheet_list;

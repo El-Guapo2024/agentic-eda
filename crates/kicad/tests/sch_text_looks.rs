@@ -186,3 +186,75 @@ fn kicad_keeps_a_sheets_border_fill_and_attributes() {
     assert_eq!(sheet_back(&kicads), sheet_back(&ours), "what KiCad kept of the sheet's style, attributes and fields");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A sheet user field's place, angle, justification, size, bold, shown name, font and colour, and a sheet pin's font and colour (UI-LEFT-2 SS15): `saveField` and
+/// `EDA_TEXT::Format` in the sheet, read back by `parseSchField` and `parseEDA_TEXT`.
+fn with_sheet_looks() -> (eda_model::ir::Design, ConstraintModel) {
+    let (mut design, model) = with_sheet();
+    let id = "a1b2c3d4-0000-4000-8000-000000000001";
+    let sch = design.schematic.as_mut().unwrap();
+    sch.extras.sheet_fields.insert(id.into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: true, italic: true, size_nm: mm(2.0), bold: true, name_shown: true }]);
+    sch.extras.sheet_field_places.entry(id.into()).or_default().insert("Rev".into(), eda_model::sch_extras::SheetFieldPlace { dx: mm(5.08), dy: mm(25.4), angle: 90_000, h: eda_model::ir::TextJustify::Left, v: eda_model::ir::TextVAlign::Bottom });
+    sch.extras.set_field_look(id, "Rev", eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()) });
+    let s = sch.sheets.iter_mut().find(|s| s.id == id).unwrap();
+    s.pins.push(eda_model::ir::SheetPin { id: "a1b2c3d4-0000-4000-8000-0000000000a1".into(), name: "VIN".into(), shape: LabelShape::Input, at: Point { x: mm(250.0), y: mm(25.08) } });
+    sch.extras.text_attrs.insert("a1b2c3d4-0000-4000-8000-0000000000a1".into(), TextAttrs { color: Some(blue()), font: Some("KiCad Font".into()), ..Default::default() });
+    (design, model)
+}
+
+type SheetLooksBack = (Vec<LabelField>, Option<eda_model::sch_extras::SheetFieldPlace>, Option<eda_model::sch_extras::FieldFontLook>, Option<TextAttrs>);
+
+fn sheet_looks_back(text: &str) -> SheetLooksBack {
+    let (design, _, _) = import_kicad_sch(text).expect("the file reads");
+    let sch = design.schematic.unwrap();
+    let s = sch.sheets.iter().find(|s| s.name == "Power").expect("the sheet");
+    let pin = s.pins.first().map(|p| p.id.clone()).unwrap_or_default();
+    (
+        sch.extras.sheet_fields.get(&s.id).cloned().unwrap_or_default(),
+        sch.extras.sheet_field_places.get(&s.id).and_then(|m| m.get("Rev")).copied(),
+        sch.extras.field_look(&s.id, "Rev").cloned(),
+        sch.extras.text_attrs.get(&pin).cloned(),
+    )
+}
+
+#[test]
+fn a_sheet_fields_looks_and_a_sheet_pins_font_and_colour_come_back_from_our_file() {
+    let (design, model) = with_sheet_looks();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &META, "looks.kicad_sch").expect("the tree exports");
+    let root = &files.iter().find(|(n, _)| n == "looks.kicad_sch").unwrap().1;
+    assert!(root.contains("(property \"Rev\" \"B\" (at 255.08 45.4 90) (show_name yes)"), "{root}");
+    assert!(root.contains("(effects (font (face \"KiCad Font\") (size 1.27 1.27) (color 0 0 255 1)) (justify left))"), "the pin's font and colour: {root}");
+    let (fields, place, look, pin) = sheet_looks_back(root);
+    assert_eq!(fields, design.schematic.as_ref().unwrap().extras.sheet_fields.values().next().cloned().unwrap());
+    assert_eq!(place.map(|p| (p.dx, p.dy, p.angle, p.h, p.v)), Some((mm(5.08), mm(25.4), 90_000, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Bottom)));
+    assert_eq!(look, Some(eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()) }));
+    assert_eq!(pin.map(|a| (a.font, a.color)), Some((Some("KiCad Font".into()), Some(blue()))));
+}
+
+#[test]
+fn kicad_keeps_a_sheet_fields_looks_and_a_sheet_pins_font_and_colour() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let cli = std::env::var_os("EDA_KICAD_CLI").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("kicad-cli"));
+    if Command::new(&cli).arg("version").output().is_err() {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    }
+    let (design, model) = with_sheet_looks();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &META, "looks.kicad_sch").expect("the tree exports");
+    let dir = std::env::temp_dir().join(format!("eda_sheet_field_looks_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, text) in &files {
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+    let path = dir.join("looks.kicad_sch");
+    let ours = std::fs::read_to_string(&path).unwrap();
+    let up = Command::new(&cli).args(["sch", "upgrade", "--force"]).arg(&path).output().expect("run kicad-cli");
+    assert!(up.status.success(), "kicad-cli sch upgrade: {}{}", String::from_utf8_lossy(&up.stdout), String::from_utf8_lossy(&up.stderr));
+    let kicads = std::fs::read_to_string(&path).unwrap();
+    assert_ne!(kicads, ours, "KiCad wrote the file itself");
+    assert_eq!(sheet_looks_back(&kicads), sheet_looks_back(&ours), "what KiCad kept of the sheet field's looks and the pin's font and colour");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -3,9 +3,13 @@
 //
 // The name is a combo of the hierarchical labels the sheet's own file has (`TransferDataToWindow`: every `SCH_HIER_LABEL_T` of the sheet's screen), and choosing one takes that
 // label's shape (`onComboBox`); the shape is one of the five a hierarchical label has; the text's size, bold and italic are set as a label's are (the size between 0.01 and 1000 mm).
-// OK sends one `edit_sheet_pin` -- one undo step, nothing when nothing changed. Not here because the drawing model has no place for them: the pin's font face and colour.
+// The Font choice and the text Color swatch (`m_fontCtrl`, `m_textColorSwatch`, with `SetDefaultColor( COLOR4D::UNSPECIFIED )`) are `set_text_attrs` (UI-LEFT-2 SS15).
+// OK sends `edit_sheet_pin` and `set_text_attrs` as one step -- one undo step, nothing when nothing changed.
 import { useEffect, useState } from "react";
-import type { LabelShape } from "../api/types";
+import type { Cmd, LabelShape } from "../api/types";
+import type { SchColor } from "../api/schEditTypes";
+import { chosenFont, DEFAULT_FONT, oneStep, textAttrsCmd } from "../kicad-port/textLooks";
+import { ColorSwatch, FontSelect, useFontFamilies } from "./TextLookControls";
 import { mmToNm, nmToMm } from "../kicad-port/schProperties";
 import { sheetPinEditCmd, SHEET_PIN_DEFAULT_SIZE_NM, SHEET_PIN_SHAPES } from "../kicad-port/schSheetPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -21,7 +25,7 @@ export function SheetPinPropertiesDialog({ id }: { id: string }) {
   return <Form key={id} sheetId={sheet.id} pin={pin} />;
 }
 
-function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: string; shape: LabelShape; size_nm?: number; bold?: boolean; italic?: boolean } }) {
+function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: string; shape: LabelShape; size_nm?: number; bold?: boolean; italic?: boolean; font?: string | null; color?: SchColor | null } }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
@@ -30,6 +34,10 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
   const [size, setSize] = useState(nmToMm(pin.size_nm && pin.size_nm > 0 ? pin.size_nm : SHEET_PIN_DEFAULT_SIZE_NM));
   const [bold, setBold] = useState(!!pin.bold);
   const [italic, setItalic] = useState(!!pin.italic);
+  // `m_fontCtrl->SetFontSelection( m_sheetPin->GetFont() )`, `m_textColorSwatch->SetSwatchColor( m_sheetPin->GetTextColor() )`
+  const families = useFontFamilies();
+  const [font, setFont] = useState(pin.font || DEFAULT_FONT);
+  const [color, setColor] = useState<SchColor | null>(pin.color ?? null);
   const [labels, setLabels] = useState<HierLabel[]>([]);
   // the labels of the sheet's own file, read from its page
   useEffect(() => {
@@ -53,7 +61,8 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
   };
   const submit = async () => {
     if (!canOk) return;
-    const cmd = sheetPinEditCmd(pin, { name, shape, sizeNm: sizeNm ?? undefined, bold, italic });
+    // `if( m_fontCtrl->HaveFontSelection() ) SetFont( .. )`, then `SetTextColor( m_textColorSwatch->GetSwatchColor() )`
+    const cmd = oneStep([sheetPinEditCmd(pin, { name, shape, sizeNm: sizeNm ?? undefined, bold, italic }) as Cmd | null, textAttrsCmd(pin.id, { font: pin.font, color: pin.color }, { font: chosenFont(font), color }, false)]);
     if (!cmd || (await api.cmd(cmd))) close();
   };
   return (
@@ -68,6 +77,8 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
             ))}
           </datalist>
         </span>
+        <span>Font:</span>
+        <FontSelect families={families} current={pin.font} value={font} onChange={setFont} />
         <span>Text size (mm)</span>
         <input data-testid="sheet-pin-size" value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void submit()} title="0.01 to 1000 mm" style={sizeOk ? { width: 80 } : { width: 80, outline: "1px solid var(--error, #d33)" }} />
         <span>Style</span>
@@ -79,6 +90,8 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
             <input type="checkbox" data-testid="sheet-pin-italic" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
           </label>
         </span>
+        <span>Color:</span>
+        <ColorSwatch label="Text color" color={color} onChange={setColor} />
         <span>Shape</span>
         <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {SHEET_PIN_SHAPES.map((s) => (
