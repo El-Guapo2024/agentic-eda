@@ -211,3 +211,27 @@ fn a_cross_reference_in_a_sheet_cell_follows_its_symbol_through_a_rename() {
     assert_eq!(t.texts(), vec![vec!["${R5:VALUE}", "${R2:VALUE} and ${R10:VALUE}"]]);
     assert_eq!(sch.texts[0].content, "see ${R5:VALUE}", "a text follows too");
 }
+
+/// UI-LEFT-2 SS18: the label dialog, Field Properties, the sheet dialog and the symbol dialog store a cross-reference by path too
+/// (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`, `DIALOG_FIELD_PROPERTIES::UpdateField`, `DIALOG_SHEET_PROPERTIES`, `DIALOG_SYMBOL_PROPERTIES`'s
+/// `ConvertRefsToKIIDs`), so a label's text and the fields of a label, a sheet and a symbol follow a rename as a text does.
+#[test]
+fn a_cross_reference_in_a_label_or_a_field_follows_its_symbol_through_a_rename() {
+    let m = ConstraintModel::default();
+    let mut design = sch_design();
+    let sym = |id: &str, x: f64| SymbolInstance { id: id.into(), at: p(mm(x), mm(10.16)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sch = design.schematic.as_mut().unwrap();
+    sch.symbols = vec![sym("R1", 10.16), sym("R2", 30.48)];
+    sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N_${R1:VALUE}".into(), at: p(mm(50.8), mm(50.8)), kind: Default::default() });
+    let field = |text: &str| eda_model::sch_extras::LabelField { name: "Note".into(), text: text.into(), ..Default::default() };
+    sch.extras.label_fields.insert("lbl_a".into(), vec![field("${R1:VALUE}")]);
+    sch.extras.sheet_fields.insert("sheet_x".into(), vec![field("of ${R1:VALUE}")]);
+    sch.user_fields.entry("R2".into()).or_default().insert("Pair".into(), "${R1:REFERENCE}".into());
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::RenameSymbol { id: "R1".into(), new_id: "R5".into() }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.labels.iter().find(|l| l.id == "lbl_a").map(|l| l.net.as_str()), Some("N_${R5:VALUE}"));
+    assert_eq!(sch.extras.label_fields["lbl_a"][0].text, "${R5:VALUE}");
+    assert_eq!(sch.extras.sheet_fields["sheet_x"][0].text, "of ${R5:VALUE}");
+    assert_eq!(sch.user_fields["R2"]["Pair"], "${R5:REFERENCE}");
+}

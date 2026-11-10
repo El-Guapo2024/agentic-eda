@@ -155,6 +155,41 @@ pub fn kiids_to_refs(text: &str, reference_of: &dyn Fn(&str) -> Option<String>) 
     changed.then_some(out)
 }
 
+/// Every text of one screen that a KiCad dialog stores through `ConvertRefsToKIIDs`, so that a cross-reference typed into it names the symbol and not its
+/// designator: a text (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`), a text box (the same dialog), a table cell (`DIALOG_TABLE_PROPERTIES`,
+/// `DIALOG_TABLECELL_PROPERTIES` in 25ec2335), a label's text (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`: "convert any text variable cross-references to
+/// their UUIDs"), and a field of a label, of a sheet or of a symbol (`DIALOG_FIELD_PROPERTIES::UpdateField`, `DIALOG_SHEET_PROPERTIES` and
+/// `DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow` over the user fields). `f` is called on each, in that order. **Differs**: a symbol's Value, Footprint and
+/// Datasheet (which the symbol dialog converts too) are left out: the studio keeps them with the part, not as the screen's text.
+pub fn for_each_cross_reference_text(sch: &mut crate::ir::SchematicSection, mut f: impl FnMut(&mut String)) {
+    for t in sch.extras.tables.iter_mut() {
+        for c in t.cells.iter_mut() {
+            f(&mut c.text);
+        }
+    }
+    for t in sch.texts.iter_mut() {
+        f(&mut t.content);
+    }
+    for g in sch.extras.graphics.iter_mut() {
+        if let crate::sch_extras::SchGraphicKind::TextBox { text, .. } = &mut g.shape {
+            f(text);
+        }
+    }
+    for l in sch.labels.iter_mut() {
+        f(&mut l.net);
+    }
+    for fields in sch.extras.label_fields.values_mut().chain(sch.extras.sheet_fields.values_mut()) {
+        for field in fields.iter_mut() {
+            f(&mut field.text);
+        }
+    }
+    for fields in sch.user_fields.values_mut() {
+        for text in fields.values_mut() {
+            f(text);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
