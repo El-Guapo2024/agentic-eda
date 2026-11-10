@@ -657,7 +657,7 @@ export function describeCarried(item: CarriedItem): Record<string, unknown> {
     case "text":
       return { kind: "text", text: item.content, vertical: item.vertical, h: item.h, v: item.v };
     case "power":
-      return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg, edits: item.edits?.length ?? 0 };
+      return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg, edits: item.edits?.length ?? 0, powerKind: item.powerKind ?? null };
     case "symbol":
       return { kind: "symbol", libId: item.libId, ref: item.ref, unit: item.unit, turns: [...item.turns], placeAllUnits: item.placeAllUnits, oneOnly: item.oneOnly, value: item.value, footprint: item.footprint, bodyStyle: item.bodyStyle ?? 1, attrs: { ...item.attrs }, edits: item.edits?.length ?? 0 };
   }
