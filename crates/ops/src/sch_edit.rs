@@ -484,6 +484,9 @@ pub enum SchCmd {
     /// dialog's Scope, Filter Items and Set To boxes say, applied to every sheet of the hierarchy in one undo step (`crate::sch_global_edit`). Refused when
     /// nothing changes.
     GlobalEditTextGraphics { spec: crate::sch_global_edit::GlobalEditSpec },
+    /// Preferences' "Power Symbols:" (`new_power_symbols`) on the power symbol of `lib_id` Place Power just placed on the sheet in view: `local` true is Local,
+    /// false is Global (Default sends nothing). Sent after `add_power_symbol` in the placing click's batch (`crate::sch_power_kind`, UI-LEFT-2 SS12).
+    SetNewPowerKind { lib_id: String, local: bool },
     /// Do not Populate / Exclude from Bill of Materials / Board / Simulation as a toggle (`SCH_EDIT_TOOL::SetAttribute` with the default variant): the
     /// symbols `ids` of the sheet in view and, for an annotated one, every unit of the reference the sheet path in view gives it, on every sheet path
     /// (`CollectOtherUnits( GetRef( &currentSheet ), .. )` over `Hierarchy()`), go to one state, set when any of them lacks it, else cleared (`new_state`,
@@ -535,6 +538,7 @@ impl SchCmd {
             SchCmd::AddWireAs { .. } => vec!["wire"],
             SchCmd::ResetSymbolFields { ids, .. } | SchCmd::ToggleSymbolAttribute { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::GlobalEditTextGraphics { .. } => vec!["edit_text_graphics"],
+            SchCmd::SetNewPowerKind { lib_id, .. } => vec![lib_id.as_str()],
         }
     }
 
@@ -602,6 +606,7 @@ impl SchCmd {
             ),
             SchCmd::ResetSymbolFields { ids, .. } => format!("schematic reset-fields {}", ids.join(" ")),
             SchCmd::GlobalEditTextGraphics { .. } => "schematic edit-text-and-graphics".to_string(),
+            SchCmd::SetNewPowerKind { lib_id, local } => format!("schematic power-kind {lib_id} --{}", if *local { "local" } else { "global" }),
             SchCmd::ToggleSymbolAttribute { ids, attribute } => format!("schematic attrs {} --toggle {attribute}", ids.join(",")),
         }
     }
@@ -632,6 +637,7 @@ impl SchCmd {
             SchCmd::AddWireAs { .. } => "schematic-wire",
             SchCmd::ResetSymbolFields { .. } => "schematic-fields",
             SchCmd::GlobalEditTextGraphics { .. } => "schematic-text",
+            SchCmd::SetNewPowerKind { .. } => "schematic-power",
             SchCmd::ToggleSymbolAttribute { .. } => "schematic-attrs",
         }
     }
@@ -791,6 +797,7 @@ impl<'a> Board<'a> {
             SchCmd::AddWireAs { pts, bus, .. } => self.add_wire_finished(pts.clone(), *bus, false),
             SchCmd::ResetSymbolFields { ids, visibility, effects, positions, allow_unchanged } => self.reset_symbol_fields(ids, *visibility, *effects, *positions, *allow_unchanged),
             SchCmd::GlobalEditTextGraphics { spec } => self.global_edit_text_graphics(spec),
+            SchCmd::SetNewPowerKind { lib_id, local } => self.set_new_power_kind(lib_id, *local),
             SchCmd::ToggleSymbolAttribute { ids, attribute } => self.toggle_symbol_attribute(ids, attribute),
         }
     }

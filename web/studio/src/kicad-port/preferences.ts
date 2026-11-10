@@ -141,6 +141,9 @@ export interface Preferences {
   schRepeatLabelIncrement: number;
   /** `EESCHEMA_SETTINGS::m_Appearance.footprint_preview` ("Show footprint previews in Symbol Chooser"). Default on. */
   schFootprintPreview: boolean;
+  /** `EESCHEMA_SETTINGS::m_Drawing.new_power_symbols` ("Power Symbols:" of Defaults for New Objects): `POWER_SYMBOLS::DEFAULT` (0, follow the symbol's
+   *  library), `GLOBAL` (1) or `LOCAL` (2) -- what Place Power converts a new power symbol to (`SCH_DRAWING_TOOLS::PlaceSymbol`). Default 0. */
+  schNewPowerSymbols: 0 | 1 | 2;
 }
 
 /** The ratsnest thickness as `m_ratsnestThickness` (a `wxSpinCtrlDouble` of 0.5 .. 10 by 0.5) can hold it; anything else is the default 0.5. */
@@ -219,6 +222,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schRepeatOffsetYMils: 100,
   schRepeatLabelIncrement: 1,
   schFootprintPreview: true,
+  schNewPowerSymbols: 0,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH" | "horizontalPan">;
@@ -356,6 +360,8 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schRepeatOffsetYMils: finiteInt(o.schRepeatOffsetYMils, d.schRepeatOffsetYMils),
     schRepeatLabelIncrement: clampInt(o.schRepeatLabelIncrement, -100000, 100000, d.schRepeatLabelIncrement),
     schFootprintPreview: bool(o.schFootprintPreview, d.schFootprintPreview),
+    // `PARAM_ENUM<POWER_SYMBOLS>( .., POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::LOCAL )`: out of range is the default
+    schNewPowerSymbols: o.schNewPowerSymbols === 1 || o.schNewPowerSymbols === 2 ? o.schNewPowerSymbols : d.schNewPowerSymbols,
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

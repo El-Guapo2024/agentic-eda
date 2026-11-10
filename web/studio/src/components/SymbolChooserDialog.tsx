@@ -44,6 +44,7 @@ import { recentItems, rememberChosen } from "../state/chooserRecent";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { carryItem, carrySymbol } from "../actions/schPlaceActions";
 import { libSymbolOfLibrary } from "../kicad-port/schCarryPreview";
+import { newPowerKind } from "../kicad-port/schPlaceTool";
 import { pendingChooserAt } from "../state/schCarryStore";
 import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
 import { FootprintPreview, SymbolPreview } from "./chooser/ChooserPreview";
@@ -90,7 +91,8 @@ export function SymbolPickerDialog(props: SymbolPick) {
 }
 
 function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, number]; pick?: SymbolPick }) {
-  const showFootprints = useStudioState().prefs.schFootprintPreview;
+  const prefs = useStudioState().prefs;
+  const showFootprints = prefs.schFootprintPreview;
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const close = () => (pick ? pick.onCancel() : dispatch(power ? { type: "SET_SCH_POWER_PENDING", pending: null } : { type: "SET_SYMBOL_CHOOSER_OPEN", open: false }));
@@ -240,7 +242,9 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
       if (power) {
         // `new SCH_SYMBOL( *libSymbol, ... )`: the power symbol rides the cursor; the net it names is its Value (`SCH_PIN::GetDefaultNetName` of a power pin)
         close();
-        carryItem({ api }, "sch_power", { kind: "power", libId: c.item.id, net: details?.value || c.item.value || c.item.name, rotMillideg: 0 }, at ?? [0, 0], [], keep, drawn);
+        // Preferences' "Power Symbols:" (`new_power_symbols`): Global or Local converts the new power symbol (`SetGlobalPower` / `SetLocalPower`), Default keeps its library's kind
+        const powerKind = newPowerKind(prefs.schNewPowerSymbols);
+        carryItem({ api }, "sch_power", { kind: "power", libId: c.item.id, net: details?.value || c.item.value || c.item.name, rotMillideg: 0, ...(powerKind ? { powerKind } : {}) }, at ?? [0, 0], [], keep, drawn);
         return;
       }
       close();
@@ -263,7 +267,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, allUnits, at, pick]
+    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, allUnits, at, pick, prefs.schNewPowerSymbols]
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {

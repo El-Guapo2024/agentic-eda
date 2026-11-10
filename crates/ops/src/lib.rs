@@ -7729,6 +7729,7 @@ mod sch_scene;
 mod sch_fields;
 mod sch_symbol_props;
 pub mod sch_global_edit;
+mod sch_power_kind;
 #[cfg(test)]
 mod sch_global_edit_tests;
 #[cfg(test)]
