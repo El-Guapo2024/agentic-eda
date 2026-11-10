@@ -232,6 +232,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   files and fields, sheet pins, power symbols' values, text boxes and directive labels' fields, with Replace where KiCad replaces. **Left**: library metadata
   (no box in KiCad's dialog either), groups and ERC markers in Find; ~~a preset saved at once (KiCad at the close), the closing view not kept as `bom_settings`~~;
   with no saved view the user fields are shown; ~~the Fields Table's Description column, BOM Name editing, grid menus, Group By refusals~~ (done 2026-11-07 below).
+- Done 2026-11-10 (`task-v4-ss17-annot`, UI-LEFT-2 SS17; `PARITY-sch.md` section 78): "Allow reference reuse" applied through KiCad's `REFDES_TRACKER`
+  (`eda_model::annotate::RefDesTracker`; the project's `used_designators` read and written in 25ec2335's form, `SchExtras::used_designators`): Annotate, the placement
+  reference, paste and Import Sheet skip a number given before when reuse is off, and record what they give; Repeat (Insert) numbers a symbol by the server's
+  `annotate()` over the hierarchy; "Place all units" steps past a unit placed on any sheet; Symbol Properties' pin alternates synced to the reference's units on
+  every sheet (`SyncOtherUnits`); a reset that hands a reference to another path moves the footprints with the placements (verified, test). **Left**: which of
+  two equal net names takes `_1` (KiCad: the island's smallest item KIID, `conn_publish.cpp::AssignNames` / `NODE_LESS`; the derived wire uuids are seeded with
+  the net name, so matching needs the writer's uuids reworked); a pin number used twice is one pin in `design.nets` (a model change: the net list keys a pin by
+  reference and number); the tracker is undone with the command (KiCad's is not).
 - Done 2026-11-07 (`task-v3-schdlg`, UI-LEFT-2 SS13, SS14; `PARITY-sch.md` section 77): the Symbol Fields Table's Description column (the fifth mandatory field,
   the library's description until the symbol has its own), the BOM Name labels, Include and Group By with the Quantity and Item Number refusals, the grid's
   right-button menus (Select Footprint..., Show Datasheet, Cut / Copy / Paste / Delete / Select All, a header's show / hide), the export's format presets with
@@ -791,7 +799,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   is one undoable verb; the settings are the project's (`schematic` and `net_settings` of the `.kicad_pro`, read from an imported one and written to the derived one); the sheet draws the junction
   dots, the class's wire width, colour and line style, the default line width and the dash ratios; kicad-cli reads the bus aliases from the project and the classes the page defines (slow tests).
   Left: Import Settings from Another Project (Board Setup has none either); hop-overs are not drawn; the text sizes, label ratios, pin symbol size and overbar ratio are kicad-cli's (the studio's
-  own drawing keeps its sizes); "Allow reference reuse" is stored but the studio's numbering has no designator tracker; the URL column has no URL editor behind it; the studio saves no BOM presets
+  own drawing keeps its sizes); ~~"Allow reference reuse" is stored but the studio's numbering has no designator tracker~~ (applied 2026-11-10, UI-LEFT-2 SS17, `PARITY-sch.md` section 78); the URL column has no URL editor behind it; the studio saves no BOM presets
   of its own; the net class table lists Default first, as Board Setup's page does (KiCad lists it last).
 - Done 2026-10-27 (`task-r3-sch-files`; `PARITY-sch.md` section 45, round-3 slice D): the ERC check table is KiCad 25ec2335's (the box's kicad-cli: 55 checks, nine of them new,
   so a project's severities for them come in and Setup takes them); a project's pin map keeps its good cells; the library, footprint, netclass, sheet-name and unit-footprint
