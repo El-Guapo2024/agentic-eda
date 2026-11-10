@@ -2616,7 +2616,7 @@ pub fn run(
 
     match verb {
         "new" => {
-            let intent = rest.get(1).ok_or_else(|| fail("board_usage", "new", "usage: eda board new <intent.yaml> -o <dir>"))?;
+            let intent = rest.get(1).ok_or_else(|| fail("board_usage", "new", "usage: eda board new <intent.yaml> -o <dir> [--origin x,y]"))?;
             let out = flag(rest, "-o").map(PathBuf::from).ok_or_else(|| fail("board_usage", "new", "eda board new needs -o <dir>"))?;
             let mut model: ConstraintModel = serde_yaml::from_str(
                 &std::fs::read_to_string(intent).map_err(|e| fail("board_no_intent", intent, e.to_string()))?,
@@ -2625,7 +2625,33 @@ pub fn run(
             crate::resolve_footprint_libraries(&mut model);
             crate::resolve_symbol_libraries(&mut model);
             std::fs::create_dir_all(&out).map_err(|e| fail("board_mkdir", &out.display().to_string(), e.to_string()))?;
-            let design = seed_outline(&model)?;
+            let mut design = seed_outline(&model)?;
+            // Where the outline goes on the page (UI-LEFT-2 CC4). KiCad shows the drawing sheet on a new board and puts what first
+            // comes onto it in the middle of the page (`eda_model::board::on_page`); `--origin x,y` (mm) puts the outline's
+            // top-left corner there instead, for scripts written against fixed coordinates (`--origin 0,0`: the page's corner).
+            let origin = match flag(rest, "--origin") {
+                Some(at) => {
+                    let (x, y) = at.split_once(',').ok_or_else(|| fail("board_usage", "--origin", "--origin takes x,y in millimetres"))?;
+                    let mm = |s: &str| -> Result<Nm, Vec<CheckResult>> {
+                        s.trim().parse::<f64>().map(eda_model::units::from_mm).map_err(|_| fail("board_usage", "--origin", "x and y must be numbers, in millimetres"))
+                    };
+                    Some((mm(x)?, mm(y)?))
+                }
+                None => None,
+            };
+            if let Some(p) = design.placement.as_mut() {
+                p.outline = match origin {
+                    Some((x, y)) => {
+                        let (x0, y0) = (p.outline.iter().map(|q| q.x).min().unwrap_or_default(), p.outline.iter().map(|q| q.y).min().unwrap_or_default());
+                        p.outline.iter().map(|q| Point { x: q.x - x0 + x, y: q.y - y0 + y }).collect()
+                    }
+                    None => {
+                        let page = design.drawings.as_ref().and_then(|d| d.page.clone()).unwrap_or_default();
+                        let (w, h) = page.size_nm().map_err(|e| fail("board_page", "page", e))?;
+                        eda_model::board::on_page(&p.outline, w, h)
+                    }
+                };
+            }
             let abs = std::fs::canonicalize(intent).unwrap_or_else(|_| PathBuf::from(intent));
             let meta = Meta {
                 intent: abs.display().to_string(),

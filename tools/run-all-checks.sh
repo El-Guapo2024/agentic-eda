@@ -18,7 +18,8 @@
 #
 #   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign|import-files]
 #
-# and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
+# and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-new (the same where `eda board new` puts a new board,
+# in the middle of its page; every other kind is made with `--origin 0,0`, the page's corner, which the checks' coordinates were written for), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
@@ -97,15 +98,17 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
     mkdir -p "$t"
     case "$kind" in
         mcu30)
+            "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 ;;
+        mcu30-new) # a new board where `eda board new` puts it, in the middle of its page (UI-LEFT-2 CC4; new-board-page.check.js)
             "$eda" board new "$yaml_mcu" -o "$d" ;;
         mcu30-few) # three footprints placed, the rest not (board-setup-pages.check.js: `eda board place U1 --at 17.5,17.5` and a few more)
-            "$eda" board new "$yaml_mcu" -o "$d" && "$eda" board place U1 --at 17.5,17.5 -C "$d" \
+            "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 && "$eda" board place U1 --at 17.5,17.5 -C "$d" \
                 && "$eda" board place R1 --at 8,8 -C "$d" && "$eda" board place R2 --at 8,12 -C "$d" ;;
         mcu30-placed)
-            "$eda" place "$yaml_mcu" -o "$t/placed" && "$eda" board new "$yaml_mcu" -o "$d" && cp "$t/placed/design.json" "$d/" ;;
+            "$eda" place "$yaml_mcu" -o "$t/placed" && "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 && cp "$t/placed/design.json" "$d/" ;;
         mcu30-routed)
             "$eda" place "$yaml_mcu" -o "$t/placed" && "$eda" route "$yaml_mcu" --design "$t/placed/design.json" -o "$t/routed" \
-                && "$eda" board new "$yaml_mcu" -o "$d" && cp "$t/routed/design.json" "$d/" ;;
+                && "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 && cp "$t/routed/design.json" "$d/" ;;
         mcu30-zones)
             ensure_board mcu30-routed && cp -r "$scratch/boards/mcu30-routed" "$d" \
                 && "$eda" board zone add --net GND --layer F.Cu --pts "2.9,5 28.3,5 28.3,29.2 2.9,29.2" -C "$d" \
@@ -114,28 +117,28 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
             local q="${KICAD_SRC_DIR:-$HOME/src/kicad-src-8303b2ad}/qa/data/eeschema"
             [ -f "$q/issue10926_1_subsheet_1.kicad_sch" ] && [ -f "$q/issue10926_1_subsheet_1_1.kicad_sch" ] \
                 || { echo "no $q/issue10926_1_subsheet_1*.kicad_sch (set KICAD_SRC_DIR to a KiCad source)"; return 1; }
-            "$eda" board new "$yaml_mcu" -o "$d" && mkdir -p "$d/fixtures" \
+            "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 && mkdir -p "$d/fixtures" \
                 && cp "$q/issue10926_1_subsheet_1.kicad_sch" "$q/issue10926_1_subsheet_1_1.kicad_sch" "$d/fixtures/" ;;
         opamp-routed)
-            "$eda" pipeline "$repo/examples/opamp_filter.yaml" -o "$t/p" && "$eda" board new "$repo/examples/opamp_filter.yaml" -o "$d" \
+            "$eda" pipeline "$repo/examples/opamp_filter.yaml" -o "$t/p" && "$eda" board new "$repo/examples/opamp_filter.yaml" -o "$d" --origin 0,0 \
                 && cp "$t/p/design.json" "$d/" ;;
         usb-pair) # diff-pairs.check.js
             sed -e 's/SDA/USB_DP/' -e 's/SCL/USB_DN/' "$repo/examples/through_hole_headers.yaml" > "$t/usb_pair.yaml" \
-                && "$eda" board new "$t/usb_pair.yaml" -o "$d" \
+                && "$eda" board new "$t/usb_pair.yaml" -o "$d" --origin 0,0 \
                 && "$eda" board place J3 --at 11.5,3 -C "$d" && "$eda" board place J2 --at 6,20 -C "$d" && "$eda" board place J1 --at 7.5,11 -C "$d" \
                 && "$eda" board place R1 --at 3,16 -C "$d" && "$eda" board place R2 --at 17,18 -C "$d" \
                 && "$eda" board track add --net GND --layer F.Cu --width 0.2 --pts "4.4,7 4.4,12" -C "$d" ;;
         cutout-board) # autoroute-cutout.check.js: through_hole_headers placed so SDA and SCL run across a window cut out of the board
-            "$eda" board new "$repo/examples/through_hole_headers.yaml" -o "$d" \
+            "$eda" board new "$repo/examples/through_hole_headers.yaml" -o "$d" --origin 0,0 \
                 && "$eda" board place J3 --at 11.5,3 -C "$d" && "$eda" board place J2 --at 7,20 -C "$d" && "$eda" board place J1 --at 17,20 -C "$d" \
                 && "$eda" board place R1 --at 20,8 -C "$d" && "$eda" board place R2 --at 20,14 -C "$d" \
                 && "$eda" board shape add --kind rect --layer Edge.Cuts --pts "4,8 11,15" --width 0.05 -C "$d" ;;
         tuner-arcs) # tuner-arcs.check.js: tune-board's nets on an empty board, with the pair of concentric arcs tuner-arcs.board.mjs adds
             perl -pe 's/\bPA2\b/USB_DP/g; s/\bPA3\b/USB_DN/g' "$yaml_mcu" > "$t/tuner_arcs.yaml" \
-                && "$eda" board new "$t/tuner_arcs.yaml" -o "$d" && node "$e2e/tuner-arcs.board.mjs" "$d" ;;
+                && "$eda" board new "$t/tuner_arcs.yaml" -o "$d" --origin 0,0 && node "$e2e/tuner-arcs.board.mjs" "$d" ;;
         tune-board) # length-tuning.check.js (the nets under KiCad's names: the hierarchical labels of the LED sheet)
             perl -pe 's/\bPA2\b/USB_DP/g; s/\bPA3\b/USB_DN/g' "$yaml_mcu" > "$t/tune_board.yaml" \
-                && "$eda" board new "$t/tune_board.yaml" -o "$d" \
+                && "$eda" board new "$t/tune_board.yaml" -o "$d" --origin 0,0 \
                 && "$eda" board track add --net "/LED channels (D1–D8)/PA0" --layer F.Cu --width 0.2 --pts "4,5 30,5" -C "$d" \
                 && "$eda" board track add --net "/LED channels (D1–D8)/PA1" --layer F.Cu --width 0.2 --pts "4,8 30,8" -C "$d" \
                 && "$eda" board track add --net "/LED channels (D1–D8)/USB_DP" --layer F.Cu --width 0.2 --pts "4,20 30,20" -C "$d" \
@@ -143,7 +146,7 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
         kicad10-stitch) # kicad10-items.check.js: KiCad 25ec2335's qa/data/pcbnew/stitch_fp_rulearea.kicad_pcb brought in with `replace_board` (which keeps its zone fills)
             local f="${KICAD10_SRC_DIR:-$HOME/src/kicad-src-25ec2335}/qa/data/pcbnew/stitch_fp_rulearea.kicad_pcb" sp
             [ -f "$f" ] || { echo "no $f (set KICAD10_SRC_DIR to a KiCad 10 source)"; return 1; }
-            "$eda" board new "$yaml_mcu" -o "$d" || return 1
+            "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 || return 1
             # the board is brought in through the studio's own verb: a server on this worker's port (free until its check is served), one POST, stopped
             "$eda" board serve -C "$d" --port "$port" --ui "$repo/web/studio/dist" > "$t/serve.log" 2>&1 &
             sp=$!
@@ -159,7 +162,7 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
             # Edge.Cuts rectangle round its two footprints, brought in with `replace_board`
             local f="${KICAD_SRC_DIR:-$HOME/src/kicad-src-8303b2ad}/qa/data/pcbnew/padstacks_normal.kicad_pcb" sp
             [ -f "$f" ] || { echo "no $f (set KICAD_SRC_DIR to a KiCad source)"; return 1; }
-            "$eda" board new "$yaml_mcu" -o "$d" || return 1
+            "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 || return 1
             "$eda" board serve -C "$d" --port "$port" --ui "$repo/web/studio/dist" > "$t/serve.log" 2>&1 &
             sp=$!
             local url=""
@@ -174,17 +177,17 @@ print(json.dumps({"cmd": {"op": "replace_board", "text": t[:-1] + edge + ")\n"},
             echo "replace_board: $reply" | cut -c1-300
             grep -q '"ok":true' <<< "$reply" ;;
         ldo) # lines-dims.check.js: a 26 mm square board with nothing placed, room to draw in
-            "$eda" board new "$repo/examples/ldo.yaml" -o "$d" ;;
+            "$eda" board new "$repo/examples/ldo.yaml" -o "$d" --origin 0,0 ;;
         board-io) # board-io.check.js: a hand-written KiCad board read by the importer
             "$eda" import-kicad "$e2e/board-io.kicad_pcb" -o "$d" ;;
         multichannel)
-            "$eda" board new "$e2e/multichannel-board.yaml" -o "$d" ;;
+            "$eda" board new "$e2e/multichannel-board.yaml" -o "$d" --origin 0,0 ;;
         simulator)
-            "$eda" board new "$e2e/simulator-board.yaml" -o "$d" ;;
+            "$eda" board new "$e2e/simulator-board.yaml" -o "$d" --origin 0,0 ;;
         sim-left) # sim-left-u5.check.js (UI-LEFT M3): a source with an S-parameter port, a potentiometer, a tuned R
-            "$eda" board new "$e2e/sim-left-board.yaml" -o "$d" ;;
+            "$eda" board new "$e2e/sim-left-board.yaml" -o "$d" --origin 0,0 ;;
         sim-model) # sim-model.check.js: the built-in models, and an IBIS file in the board folder
-            "$eda" board new "$e2e/sim-model-board.yaml" -o "$d" && mkdir -p "$d/models" && cp "$e2e/sim-model-io.ibs" "$d/models/io.ibs" && cp "$e2e/sim-model-diode.lib" "$d/models/diode.lib" ;;
+            "$eda" board new "$e2e/sim-model-board.yaml" -o "$d" --origin 0,0 && mkdir -p "$d/models" && cp "$e2e/sim-model-io.ibs" "$d/models/io.ibs" && cp "$e2e/sim-model-diode.lib" "$d/models/diode.lib" ;;
         *) echo "unknown board kind $kind"; return 1 ;;
     esac
 }

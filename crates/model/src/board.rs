@@ -231,6 +231,41 @@ pub fn square_for_parts(model: &ConstraintModel, density: f64) -> Option<Vec<Poi
     Some(vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: side, y: Nm::ZERO }, Point { x: side, y: side }, Point { x: Nm::ZERO, y: side }])
 }
 
+/// The page's margin inside which KiCad's default drawing sheet draws its frame, nm: `DS_DATA_MODEL::DS_DATA_MODEL`'s
+/// `m_leftMargin` .. `m_bottomMargin` = 10 mm, as `common/drawing_sheet/drawing_sheet_default_description.cpp`'s
+/// `(setup .. (left_margin 10)(right_margin 10)(top_margin 10)(bottom_margin 10))` says.
+pub const DRAWING_SHEET_MARGIN_NM: Nm = Nm::new(10 * NM_PER_MM);
+
+/// Where a new board's outline goes on its page, so the drawing sheet KiCad shows on a new board does not cross it.
+///
+/// KiCad shows the sheet from the start (`pcbnew/pcbnew_settings.cpp`: `m_ShowPageLimits( true )`; `GAL_SET::DefaultVisible` has
+/// `LAYER_DRAWINGSHEET` on), and the first footprints that come onto an empty board land in the middle of the page
+/// (`pcbnew/netlist_reader/board_netlist_updater.cpp::BOARD_NETLIST_UPDATER::estimateFootprintInsertionPosition`: "Position new
+/// components in the center of the page when the board is empty", `pageSize / 2`). The studio's placer builds the board's outline
+/// first, so the outline is what is put there: its box centred on the page of `page_w` x `page_h`, its corner on a whole
+/// millimetre. An outline that already lies inside the sheet's frame (`DRAWING_SHEET_MARGIN_NM` from every edge of the page) is
+/// where its intent put it and is returned unchanged; so is one with no extent.
+///
+/// Only a board being made calls this (`eda board new`): an existing board's coordinates are its own and never move.
+pub fn on_page(outline: &[Point], page_w: Nm, page_h: Nm) -> Vec<Point> {
+    let (Some(x0), Some(y0), Some(x1), Some(y1)) = (
+        outline.iter().map(|p| p.x).min(),
+        outline.iter().map(|p| p.y).min(),
+        outline.iter().map(|p| p.x).max(),
+        outline.iter().map(|p| p.y).max(),
+    ) else {
+        return outline.to_vec();
+    };
+    let m = DRAWING_SHEET_MARGIN_NM;
+    if x0 >= m && y0 >= m && x1 <= page_w - m && y1 <= page_h - m {
+        return outline.to_vec();
+    }
+    let mm = |v: i64| (v as f64 / NM_PER_MM as f64).round() as i64 * NM_PER_MM;
+    let dx = mm((page_w.get() - (x1 - x0).get()) / 2) - x0.get();
+    let dy = mm((page_h.get() - (y1 - y0).get()) / 2) - y0.get();
+    outline.iter().map(|p| Point { x: p.x + Nm::new(dx), y: p.y + Nm::new(dy) }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +328,33 @@ mod tests {
     #[test]
     fn nothing_to_size_from_is_none() {
         assert_eq!(square_for_parts(&ConstraintModel::default(), 0.25), None);
+    }
+    #[test]
+    fn a_new_board_lands_in_the_middle_of_its_page() {
+        // A4 landscape, 297 x 210 mm; a 30 x 20 mm board at the page's corner, where the frame crosses it.
+        let (w, h) = (Nm::new(297 * NM_PER_MM), Nm::new(210 * NM_PER_MM));
+        let mm = |x: i64, y: i64| Point { x: Nm::new(x * NM_PER_MM), y: Nm::new(y * NM_PER_MM) };
+        let o = on_page(&[mm(0, 0), mm(30, 0), mm(30, 20), mm(0, 20)], w, h);
+        // estimateFootprintInsertionPosition's page centre (148.5, 105) is the box's centre, the corner rounded to a whole mm
+        assert_eq!(o, vec![mm(134, 95), mm(164, 95), mm(164, 115), mm(134, 115)]);
+        // an odd size: the corner stays on a whole millimetre
+        let o = on_page(&[mm(0, 0), mm(31, 0), mm(31, 21), mm(0, 21)], w, h);
+        assert_eq!(o[0], Point { x: Nm::new(133 * NM_PER_MM), y: Nm::new(95 * NM_PER_MM) });
+        // a board bigger than the page is still centred
+        let o = on_page(&[mm(0, 0), mm(400, 0), mm(400, 300), mm(0, 300)], w, h);
+        assert_eq!(o[0], Point { x: Nm::new(-52 * NM_PER_MM), y: Nm::new(-45 * NM_PER_MM) });
+    }
+
+    #[test]
+    fn an_outline_inside_the_frame_stays_where_its_intent_put_it() {
+        let (w, h) = (Nm::new(297 * NM_PER_MM), Nm::new(210 * NM_PER_MM));
+        let mm = |x: i64, y: i64| Point { x: Nm::new(x * NM_PER_MM), y: Nm::new(y * NM_PER_MM) };
+        let inside = vec![mm(50, 40), mm(90, 40), mm(90, 80), mm(50, 80)];
+        assert_eq!(on_page(&inside, w, h), inside);
+        // touching the margin is inside; one millimetre into it is not
+        let edge = vec![mm(10, 10), mm(287, 10), mm(287, 200), mm(10, 200)];
+        assert_eq!(on_page(&edge, w, h), edge);
+        assert_ne!(on_page(&[mm(9, 10), mm(40, 10), mm(40, 40), mm(9, 40)], w, h)[0], mm(9, 10));
+        assert!(on_page(&[], w, h).is_empty());
     }
 }
