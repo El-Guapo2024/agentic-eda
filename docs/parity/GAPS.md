@@ -261,6 +261,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   attached when dragging edges"; Draw Arc's five KiCad 10 modes with the Arc palette and tangent seeds; the Footprint Editor's Copy / Cut / Paste through KiCad's
   clipboard footprint and Duplicate / Create Array of every kind with its looks. **Left**: the sheet's, image's, table cell's and graphic line's point editors; the
   Symbol Editor's Draw Arc modes; Paste Special and Copy as Text in the Footprint Editor.
+- Done 2026-11-10 (`task-v6-ss15-sheets`, UI-LEFT-2 SS15; `PARITY-sch.md` section 83): Sheet Properties' fields grid gives a sheet's user field every look
+  (H / V Align, Bold, Text Size, Orientation, X / Y Position, Font, Color; `set_sheet_field_looks`), drawn on the canvas and written; Sheet Pin Properties and Edit
+  Text & Graphics set a sheet pin's font and colour.
 - Done 2026-11-10 (`task-v5-ss18-edits`, UI-LEFT-2 SS18; `PARITY-sch.md` section 81): Unfold from Bus's diff-pair submenus (`BUS_UNFOLD_MENU::update`'s `diff_busses`,
   `PrintBusForUI` labels) and R / Shift+R on the member's label while unfolding, kept for the next unfold (R otherwise in the wire tool is the bell); R / Shift+R / X / Y on
   Import Sheet's riding contents (`Cmd::ImportSheet::turns`, one step); Align takes a selected group whole, snapped by its centre (`sch_move` `align` with a group id);
@@ -511,6 +514,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   the hierarchy. The earlier "Left" items "Annotate numbers the screen's own references only" and "the attribute, library-link and Update / Change Symbol
   tools act on the sheet in view" are done. **Left**: a variant's flags on a shared screen are kept per reference, not per path; a footprint placed for a
   reference a reset gives to another path keeps that reference; the per-path units of screens copied whole (`add_sheet_tree`).
+- Done 2026-11-10 (`task-v6-ss15-sheets`, UI-LEFT-2 SS15; `PARITY-sch.md` section 83): a sheet's Do not populate, Exclude from simulation and Exclude from BOM per
+  design variant (`SchExtras::sheet_variants`, `set_sheet_variant`, written in the sheet's instances, kicad-cli's BOM follows) and on the symbols inside it
+  (`SCH_SHEET_PATH::GetDNP`: the Fields Table's filters, a footprint's derived DNP and BOM flags, `${DNP}` and kin); a new sheet on a screen the project keeps
+  but no sheet places asks "Link '%s' to this file?" (the earlier "Left" item); Sync Sheet Pins is shown again after Add label(s). **Left**: a sheet excluded from
+  the board keeps its symbols' footprints on the board; a sheet's variant record is the sheet's on every path; New Top-Level Sheet on a single root is kept
+  disabled (the studio's one root screen).
 - Port from: `eeschema/sch_sheet_path.cpp`, `sch_screen.cpp`, `connection_graph.cpp`, `tools/sch_navigate_tool.cpp`,
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
