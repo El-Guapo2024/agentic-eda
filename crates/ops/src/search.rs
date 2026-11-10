@@ -22,10 +22,10 @@
 //!    `searchNetNames`, on their net name; pins only with `searchAllPins`
 //!    (name/number) or `searchNetNames`, and are never replaceable.
 //!
-//! Scope limits (see `web/studio/PARITY-sch.md`): the regex and permissive
-//! match modes are not ported (the eeschema dialog only exposes whole-word /
-//! regex checkboxes; regex needs a regex engine this workspace does not
-//! carry); our IR has no per-field visibility, so KiCad's template defaults
+//! Scope limits (see `web/studio/PARITY-sch.md`): the permissive match mode is
+//! the Search pane's, in the browser (`kicad-port/edaPatternMatch.ts`); the
+//! regular expressions are `eda_model::wx_regex` (PCRE2's, as wxWidgets 3.2
+//! compiles them, UI-LEFT-2 SS10); our IR has no per-field visibility, so KiCad's template defaults
 //! apply (a field is shown as the sheet keeps it, `field_layout`, else Reference/Value visible; Footprint, Datasheet and user fields
 //! hidden); no per-field position, so every field of a symbol sits at the
 //! symbol's own position. A label's text and a field's text are matched
@@ -171,8 +171,14 @@ pub fn matches_text(text: &str, data: &SearchData) -> bool {
         return false;
     }
     if data.mode == MatchMode::Regex {
-        // `regex.Compile( searchText, matchCase ? 0 : wxRE_ICASE )`, then `regex.Matches( text )`; a pattern that does not compile matches nothing
-        return Regex::compile(&data.find, !data.match_case, Flavor::Find).is_some_and(|re| re.is_match(text));
+        // `regex.Compile( searchText, matchCase ? 0 : wxRE_ICASE )`, then `regex.Matches( text )`; a pattern that does not compile matches nothing. Not
+        // case-sensitive, both were upper-cased first (`text.MakeUpper(); searchText.MakeUpper();` comes before the mode is looked at), so `\d` reads as `\D`,
+        // `\w` as `\W`, `\b` as `\B`, `[:alpha:]` does not compile and `\t` neither, as in KiCad (UI-LEFT-2 SS10). Replace compiles the pattern as typed.
+        if data.match_case {
+            return Regex::compile(&data.find, false, Flavor::Find).is_some_and(|re| re.is_match(text));
+        }
+        let (pattern, upper_text): (String, String) = (upper(&data.find).into_iter().collect(), upper(text).into_iter().collect());
+        return Regex::compile(&pattern, true, Flavor::Find).is_some_and(|re| re.is_match(&upper_text));
     }
     let (t, s): (Vec<char>, Vec<char>) = if data.match_case { (text.chars().collect(), data.find.chars().collect()) } else { (upper(text), upper(&data.find)) };
     match data.mode {
@@ -261,6 +267,20 @@ pub enum ItemKind {
     TextBox,
     /// A directive label's field (`SCH_DIRECTIVE_LABEL` is an `SCH_LABEL_BASE`: its `Netclass` and `Component Class`): `id` is the graphic's id.
     DirectiveField,
+    /// A group (`SCH_GROUP::Matches`: its name, unescaped; never replaced, `IsReplaceable` is `EDA_ITEM`'s false): `id` is the group's id (UI-LEFT-2 SS10).
+    Group,
+    /// An ERC marker (`SCH_MARKER::Matches`: `m_rcItem->GetErrorMessage( true )`; never replaced): `id` is the key the caller gave it (the markers are the
+    /// browser's, the last ERC report's, [`FindMarker`]).
+    Marker,
+}
+
+/// An ERC marker of the sheet searched, as the caller has it (the studio keeps the last ERC report in the browser): its key, its message
+/// (`RC_ITEM::GetErrorMessage`) and where it is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindMarker {
+    pub key: String,
+    pub text: String,
+    pub at: Point,
 }
 
 /// One match: what to select / pan to, and a stable key (`kind:id:name`)
@@ -293,6 +313,8 @@ pub fn hit_key(kind: ItemKind, id: &str, name: &str) -> String {
         ItemKind::SheetPin => "sheet_pin",
         ItemKind::TextBox => "text_box",
         ItemKind::DirectiveField => "directive_field",
+        ItemKind::Group => "group",
+        ItemKind::Marker => "marker",
     };
     format!("{k}:{id}:{name}")
 }
@@ -354,6 +376,11 @@ fn net_of_pin<'a>(model: &'a ConstraintModel, pin_ref: &str) -> Option<&'a str> 
 /// (ascending x, then y; stable for ties). Reverse the result for Find
 /// Previous.
 pub fn find_items(sch: &SchematicSection, model: &ConstraintModel, data: &SearchData) -> Vec<Hit> {
+    find_items_with(sch, model, data, &[])
+}
+
+/// [`find_items`] with the sheet's ERC markers among the items (`nextMatch` walks `aScreen->Items()`, the markers included, UI-LEFT-2 SS10).
+pub fn find_items_with(sch: &SchematicSection, model: &ConstraintModel, data: &SearchData, markers: &[FindMarker]) -> Vec<Hit> {
     let mut hits: Vec<Hit> = Vec::new();
     if data.find.is_empty() {
         return hits;
@@ -429,11 +456,14 @@ pub fn find_items(sch: &SchematicSection, model: &ConstraintModel, data: &Search
     }
     // A power symbol is an `SCH_SYMBOL` (`addItem`: the symbol, then its fields): its Value is the net it asserts and shown, its Reference (`#PWR..`) hidden.
     for ps in &sch.power_symbols {
-        if matches_text(&unescape_string(&ps.net), data) {
+        let value = matches_text(&unescape_string(&ps.net), data);
+        if value {
             hits.push(Hit { kind: ItemKind::PowerField, id: ps.id.clone(), name: "Value".into(), at: ps.at, text: ps.net.clone() });
         }
-        // **Differs**: its Reference is found, not replaced (the power symbol is keyed by it here)
-        if data.search_hidden_fields && !data.search_and_replace && matches_text(&ps.id, data) {
+        // `SCH_FIELD::Matches` of its Reference (hidden unless the sheet shows it): not while replacing unless `replaceReferences`; it matches when the
+        // symbol does (`SCH_SYMBOL::Matches`: its Value) or its reference does. `SCH_FIELD::Replace` then sets it (UI-LEFT-2 SS10).
+        let shown = sch.field_layout.get(&eda_model::ir::field_key(&ps.id, 1)).and_then(|places| places.iter().find(|p| p.name == "Reference")).is_some_and(|p| p.visible);
+        if (shown || data.search_hidden_fields) && !(data.search_and_replace && !data.replace_references) && (value || matches_text(&ps.id, data)) {
             hits.push(Hit { kind: ItemKind::PowerField, id: ps.id.clone(), name: "Reference".into(), at: ps.at, text: ps.id.clone() });
         }
     }
@@ -474,8 +504,78 @@ pub fn find_items(sch: &SchematicSection, model: &ConstraintModel, data: &Search
             _ => {}
         }
     }
+    // `SCH_GROUP::Matches( UnescapeString( GetName() ) )`; `EDA_ITEM::Matches` refuses an item that is not replaceable while replacing
+    if !data.search_and_replace {
+        for g in &sch.extras.groups {
+            let name = unescape_string(&g.name);
+            if matches_text(&name, data) {
+                let at = group_centre(sch, &g.id).unwrap_or(Point { x: eda_model::units::Nm::ZERO, y: eda_model::units::Nm::ZERO });
+                hits.push(Hit { kind: ItemKind::Group, id: g.id.clone(), name: String::new(), at, text: g.name.clone() });
+            }
+        }
+        // `SCH_MARKER::Matches`: `SCH_ITEM::Matches( m_rcItem->GetErrorMessage( true ), aSearchData )`
+        for m in markers {
+            if matches_text(&m.text, data) {
+                hits.push(Hit { kind: ItemKind::Marker, id: m.key.clone(), name: String::new(), at: m.at, text: m.text.clone() });
+            }
+        }
+    }
     hits.sort_by(|a, b| (a.at.x, a.at.y).cmp(&(b.at.x, b.at.y)));
     hits
+}
+
+/// The points of the item `id` of the sheet (a symbol's or power symbol's, a label's or text's anchor, a wire's or line's points, a sheet's corners, a drawn
+/// shape's defining points), and of every member of a group `id`.
+fn item_points(sch: &SchematicSection, id: &str, depth: usize, out: &mut Vec<Point>) {
+    use eda_model::sch_extras::SchGraphicKind as K;
+    if depth > 32 {
+        return;
+    }
+    let add = |out: &mut Vec<Point>, p: Point| out.push(p);
+    let plus = |a: Point, b: Point| Point { x: a.x + b.x, y: a.y + b.y };
+    sch.symbols.iter().filter(|s| s.id == id).for_each(|s| add(out, s.at));
+    sch.power_symbols.iter().filter(|p| p.id == id).for_each(|p| add(out, p.at));
+    sch.labels.iter().filter(|l| l.id == id).for_each(|l| add(out, l.at));
+    sch.texts.iter().filter(|t| t.id == id).for_each(|t| add(out, t.at));
+    sch.wires.iter().filter(|w| w.id == id).for_each(|w| out.extend(w.pts.iter().copied()));
+    sch.lines.iter().filter(|l| l.id == id).for_each(|l| out.extend(l.pts.iter().copied()));
+    sch.junctions.iter().filter(|j| j.id == id).for_each(|j| add(out, j.at));
+    sch.no_connects.iter().filter(|n| n.id == id).for_each(|n| add(out, n.at));
+    sch.bus_entries.iter().filter(|b| b.id == id).for_each(|b| {
+        add(out, b.at);
+        add(out, plus(b.at, b.size));
+    });
+    sch.sheets.iter().filter(|s| s.id == id).for_each(|s| {
+        add(out, s.at);
+        add(out, Point { x: s.at.x + s.size.0, y: s.at.y + s.size.1 });
+    });
+    for g in sch.extras.graphics.iter().filter(|g| g.id == id) {
+        match &g.shape {
+            K::Rectangle { start, end, .. } | K::TextBox { start, end, .. } => out.extend([*start, *end]),
+            K::Circle { center, radius_nm } => out.extend([Point { x: center.x - *radius_nm, y: center.y - *radius_nm }, Point { x: center.x + *radius_nm, y: center.y + *radius_nm }]),
+            K::Arc { start, mid, end } => out.extend([*start, *mid, *end]),
+            K::Bezier { start, c1, c2, end } => out.extend([*start, *c1, *c2, *end]),
+            K::Polygon { pts } | K::RuleArea { pts, .. } => out.extend(pts.iter().copied()),
+            K::Directive { at, .. } | K::Image { at, .. } => add(out, *at),
+            #[allow(unreachable_patterns)]
+            _ => {}
+        }
+    }
+    for g in sch.extras.groups.iter().filter(|g| g.id == id) {
+        for m in &g.member_ids {
+            item_points(sch, m, depth + 1, out);
+        }
+    }
+}
+
+/// `SCH_GROUP::GetPosition`: the centre of the group's box (`GetBoundingBox().Centre()`). **Differs**: the box here is that of its members' points (anchors,
+/// ends and corners), not of their drawn extents.
+pub fn group_centre(sch: &SchematicSection, id: &str) -> Option<Point> {
+    let mut pts = Vec::new();
+    item_points(sch, id, 0, &mut pts);
+    let (x0, x1) = (pts.iter().map(|p| p.x).min()?, pts.iter().map(|p| p.x).max()?);
+    let (y0, y1) = (pts.iter().map(|p| p.y).min()?, pts.iter().map(|p| p.y).max()?);
+    Some(Point { x: eda_model::units::Nm::new((x0.get() + x1.get()) / 2), y: eda_model::units::Nm::new((y0.get() + y1.get()) / 2) })
 }
 
 /// `Replace` of the items [`find_items`] reaches beyond the symbols, labels and texts (`SCH_FIELD::Replace`, `EDA_TEXT::Replace`): a power symbol's Value (its
@@ -511,6 +611,41 @@ pub fn replace_other(sch: &mut SchematicSection, hit: &Hit, data: &SearchData) -
             }
         }
         _ => false,
+    }
+}
+
+/// Rename power symbols of the screen (old -> new, all at once): the power symbol, what the sheet keeps under its reference (where its fields are drawn,
+/// `crate::sch_fields::rename_symbol_keys`, its groups), its own fields and flags (`SchExtras::power_props`), the references of its other sheet paths
+/// (`SchExtras::power_path_refs`), its lock, and a pin of it a wire or flag names. The caller has checked that the new references are free.
+pub(crate) fn rename_power_symbols(sch: &mut SchematicSection, renames: &[(String, String)]) {
+    // through temporary names, so that two references may swap
+    let temp: Vec<(String, String, String)> = renames.iter().enumerate().map(|(i, (old, new))| (old.clone(), format!("\u{1}ss10-{i}"), new.clone())).collect();
+    for step in [0, 1] {
+        for (old, tmp, new) in &temp {
+            let (from, to) = if step == 0 { (old, tmp) } else { (tmp, new) };
+            for ps in sch.power_symbols.iter_mut().filter(|p| &p.id == from) {
+                ps.id = to.clone();
+            }
+            crate::sch_fields::rename_symbol_keys(sch, from, to);
+            if let Some(v) = sch.extras.power_props.remove(from) {
+                sch.extras.power_props.insert(to.clone(), v);
+            }
+            if let Some(v) = sch.extras.power_path_refs.remove(from) {
+                sch.extras.power_path_refs.insert(to.clone(), v);
+            }
+            if sch.extras.is_locked(from) {
+                sch.extras.set_locked(from, false);
+                sch.extras.set_locked(to, true);
+            }
+            let (old_prefix, new_prefix) = (format!("{from}."), format!("{to}."));
+            let swap = |p: &mut String| {
+                if let Some(rest) = p.strip_prefix(&old_prefix) {
+                    *p = format!("{new_prefix}{rest}");
+                }
+            };
+            sch.wires.iter_mut().flat_map(|w| w.pins.iter_mut()).for_each(swap);
+            sch.no_connects.iter_mut().for_each(|n| swap(&mut n.pin));
+        }
     }
 }
 
@@ -710,5 +845,60 @@ mod tests {
         assert_eq!(sch.sheets[0].pins[0].name, "VIN_IN");
         assert_eq!(sch.power_symbols[0].net, "VIN");
         assert!(matches!(&sch.extras.graphics[0].shape, eda_model::sch_extras::SchGraphicKind::TextBox { text, .. } if text == "VIN rated 20 V"));
+    }
+
+    /// UI-LEFT-2 SS10: Find's "not case-sensitive" upper-cases the pattern and the text before the expression compiles (`EDA_ITEM::Matches`), so `\d` is
+    /// `\D` and `[:alpha:]` none; with Match case it is read as typed. Replace compiles the pattern as typed in both (`EDA_ITEM::Replace`).
+    #[test]
+    fn a_regular_expression_is_upper_cased_when_the_case_is_ignored() {
+        let re = |find: &str, case: bool| SearchData { find: find.into(), match_case: case, mode: MatchMode::Regex, ..Default::default() };
+        assert!(!matches_text("12", &re("\\d", false)), "\\D in KiCad: no non-digit in 12");
+        assert!(matches_text("R12", &re("\\d", false)), "\\D finds the R");
+        assert!(matches_text("12", &re("\\d", true)));
+        assert!(!matches_text("ab", &re("[[:alpha:]]", false)) && matches_text("ab", &re("[[:alpha:]]", true)));
+        assert!(matches_text("a b", &re("[[:blank:]]", true)));
+        assert!(!matches_text("R1", &re("\\bR1\\b", false)) && matches_text("R1", &re("\\bR1\\b", true)));
+        let rep = SearchData { replace: "#".into(), ..re("\\d", false) };
+        assert_eq!(replace_text("R12", &rep).as_deref(), Some("R##"), "Replace reads \\d as typed");
+    }
+
+    /// UI-LEFT-2 SS10: groups (`SCH_GROUP::Matches`, the name) and the sheet's ERC markers (`SCH_MARKER::Matches`, the message) are found, at the group's
+    /// centre and the marker's place, and never while replacing.
+    #[test]
+    fn groups_and_erc_markers_are_found_not_replaced() {
+        let mut sch = SchematicSection { labels: vec![label("l1", "A", 10.0), label("l2", "B", 30.0)], ..Default::default() };
+        sch.extras.groups.push(eda_model::ir::Group { id: "grp_1".into(), name: "Power{slash}In".into(), member_ids: vec!["l1".into(), "l2".into()], design_block: String::new() });
+        let m = ConstraintModel::default();
+        let markers = vec![FindMarker { key: "erc:0".into(), text: "Pin not connected".into(), at: Point { x: mm(5.0), y: mm(0.0) } }];
+        let hits = find_items_with(&sch, &m, &d("power/in"), &markers);
+        assert_eq!(hits.iter().map(Hit::key).collect::<Vec<_>>(), vec!["group:grp_1:"]);
+        assert_eq!(hits[0].at, Point { x: mm(20.0), y: mm(0.0) }, "the centre of its members");
+        let hits = find_items_with(&sch, &m, &d("connected"), &markers);
+        assert_eq!(hits.iter().map(Hit::key).collect::<Vec<_>>(), vec!["marker:erc:0:"]);
+        let replacing = SearchData { search_and_replace: true, ..d("p") };
+        assert!(find_items_with(&sch, &m, &replacing, &markers).iter().all(|h| !matches!(h.kind, ItemKind::Group | ItemKind::Marker)));
+    }
+
+    /// UI-LEFT-2 SS10: a power symbol's Reference is hidden (found with "Search hidden fields"), matches when its Value does (`SCH_FIELD::Matches` asks the
+    /// symbol), and is a Replace target with "Also search in reference designators" only.
+    #[test]
+    fn a_power_symbols_reference_is_found_and_replaced_with_the_references() {
+        use eda_model::ir::PowerSymbol;
+        let at = Point { x: mm(1.0), y: mm(0.0) };
+        let mut sch = SchematicSection { power_symbols: vec![PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at, rot: 0, net: "GND".into(), pin: String::new() }], ..Default::default() };
+        let m = ConstraintModel::default();
+        let names = |sch: &SchematicSection, data: &SearchData| find_items(sch, &m, data).iter().map(|h| h.name.clone()).collect::<Vec<_>>();
+        assert!(names(&sch, &d("PWR")).is_empty(), "hidden");
+        let all = |find: &str| SearchData { search_hidden_fields: true, ..d(find) };
+        assert_eq!(names(&sch, &all("PWR")), vec!["Reference"]);
+        assert_eq!(names(&sch, &all("GND")), vec!["Value", "Reference"], "the symbol matches: its Reference does");
+        let replacing = SearchData { replace: "#PWR9".into(), search_and_replace: true, ..all("#PWR01") };
+        assert!(names(&sch, &replacing).is_empty(), "not without replaceReferences");
+        let replacing = SearchData { replace_references: true, ..replacing };
+        assert_eq!(names(&sch, &replacing), vec!["Reference"]);
+        sch.extras.power_props.insert("#PWR01".into(), Default::default());
+        rename_power_symbols(&mut sch, &[("#PWR01".into(), "#PWR9".into())]);
+        assert_eq!(sch.power_symbols[0].id, "#PWR9");
+        assert!(sch.extras.power_props.contains_key("#PWR9") && !sch.extras.power_props.contains_key("#PWR01"));
     }
 }

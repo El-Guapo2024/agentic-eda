@@ -45,9 +45,8 @@
 // Severity), which go to kicad-cli in the derived project. "Ignored Tests" lists the
 // report's `ignored_checks`.
 import { useEffect, useMemo, useState } from "react";
-import type { ErcViolation } from "../api/types";
 import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
-import { allShown, countKinds, ercKey, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
+import { allShown, countKinds, ercKey, ercMessage, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
 import { setErcView, useCheckerView, type ErcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { askExclusionComment } from "../state/checkerView";
@@ -55,13 +54,6 @@ import { saveReport, deleteAllMarkersErc, deleteMarkerErc, ercMenuContext, ercSe
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { RcList, type RcRow } from "./RcList";
 
-/** The finding's own line: kicad-cli's description, without the item list `hint` appends to it ("Pin not connected: Symbol U1 Pin 2 [...]"). */
-function ercMessage(v: ErcViolation): string {
-  const descs = (v.items ?? []).map((i) => i.description).filter((d) => d !== "");
-  const tail = descs.length > 0 ? `: ${descs.join("; ")}` : "";
-  const hint = v.hint ?? "";
-  return tail !== "" && hint.endsWith(tail) ? hint.slice(0, -tail.length) : hint || v.check.replace(/_/g, " ");
-}
 
 export function ErcDialog() {
   const state = useStudioState();

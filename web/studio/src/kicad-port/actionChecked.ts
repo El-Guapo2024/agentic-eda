@@ -113,7 +113,8 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
     case "pcbnew.Control.showNetInspector":
       return c.tab === "pcb" ? c.dock.shown.netInspector : undefined;
     case "common.Interactive.search":
-      return c.tab === "pcb" ? c.dock.shown.search : undefined;
+      // `SCH_EDIT_FRAME::setupUIConditions`' CHECK( searchPaneCond ) too: each frame's own pane (UI-LEFT-2 SS10)
+      return c.tab === "pcb" ? c.dock.shown.search : c.tab === "schematic" ? c.dock.shown.schSearch : undefined;
     case "common.Control.showLibraryTree":
       return c.tab === "footprint" || c.tab === "symbol" ? !c.dock.treeCollapsed : undefined;
     case "eeschema.SymbolLibraryControl.showElectricalTypes":

@@ -6517,11 +6517,21 @@ impl<'a> Board<'a> {
         let hits: Vec<search::Hit> = hits.into_iter().filter(|h| items.is_none_or(|keys| keys.iter().any(|k| *k == h.key()))).collect();
 
         let mut renames: Vec<(String, String)> = Vec::new();
+        let mut power_renames: Vec<(String, String)> = Vec::new();
         let mut replaced = 0usize;
         {
             let sch = self.schematic_mut()?;
             for h in &hits {
                 match h.kind {
+                    // a power symbol's Reference: `SCH_FIELD::Replace` sets it (`SetRef`) with "Also search in reference designators" on (UI-LEFT-2 SS10)
+                    search::ItemKind::PowerField if h.name == "Reference" => {
+                        if let Some(new) = search::replace_text(&h.id, &data) {
+                            power_renames.push((h.id.clone(), new));
+                            replaced += 1;
+                        }
+                    }
+                    // `SCH_GROUP` and `SCH_MARKER` are never replaced (`EDA_ITEM::IsReplaceable`), and never reached while replacing
+                    search::ItemKind::Group | search::ItemKind::Marker => {}
                     search::ItemKind::Field if h.name == "Reference" => {
                         if let Some(new) = search::replace_text(&h.id, &data) {
                             renames.push((h.id.clone(), new));
@@ -6584,8 +6594,39 @@ impl<'a> Board<'a> {
                 }
             }
         }
+        self.apply_power_renames(&power_renames)?;
         let focus = self.focus.clone();
         Ok((replaced, renames.into_iter().map(|(old, new)| (focus.clone(), old, new)).collect()))
+    }
+
+    /// A Replace's new power symbol references on the screen the verbs act on, all at once (a chain `#PWR01 -> #PWR010, #PWR010 -> ..` is no clash). The design
+    /// keys a power symbol by its reference, so a reference that would be empty or another item's on any sheet at the end refuses the Replace (KiCad would
+    /// keep two items of one reference until annotation).
+    fn apply_power_renames(&mut self, renames: &[(String, String)]) -> Result<(), Vec<CheckResult>> {
+        let renames: Vec<(String, String)> = renames.iter().filter(|(old, new)| old != new).cloned().collect();
+        if renames.is_empty() {
+            return Ok(());
+        }
+        let moving: BTreeSet<&str> = renames.iter().map(|(old, _)| old.as_str()).collect();
+        for (old, new) in &renames {
+            if new.trim().is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_symbol", old, "a power symbol needs a reference")]);
+            }
+            if renames.iter().any(|(o, n)| n == new && o != old) {
+                return Err(vec![CheckResult::fail("ops_duplicate_symbol", new, "two power symbols would have this reference")]);
+            }
+            let mut screens: Vec<(Option<&String>, &eda_model::ir::SchematicSection)> = self.design.schematic.iter().map(|s| (None, s)).collect();
+            screens.extend(self.design.sheet_contents.iter().flatten().map(|(file, s)| (Some(file), s)));
+            for (file, sch) in screens {
+                let same = file == self.focus.as_ref();
+                let taken = sch.symbols.iter().any(|x| &x.id == new) || sch.power_symbols.iter().any(|p| &p.id == new && !(same && moving.contains(p.id.as_str())));
+                if taken {
+                    return Err(vec![CheckResult::fail("ops_duplicate_symbol", new, "a symbol with this reference is already in the schematic")]);
+                }
+            }
+        }
+        search::rename_power_symbols(self.schematic_mut()?, &renames);
+        Ok(())
     }
 
     /// The Reference replacements of a Replace / Replace All, applied together once every match is replaced: `SCH_FIELD::Replace` sets each reference

@@ -26,6 +26,7 @@ import { useActionRunner } from "../actions/useActionRunner";
 import { setFindHighlights } from "../state/commonTool";
 import { findNextMatch } from "./schematic/findNavigation";
 import { updateFind } from "./schematic/findReplaceOps";
+import { focusSchSearchPane, toggleSchSearchPane } from "../state/schSearchPane";
 
 export function FindReplaceDialog() {
   const state = useStudioState();
@@ -150,7 +151,23 @@ export function FindReplaceDialog() {
               Backward
             </label>
           </div>
-          <div style={{ marginTop: 10, minHeight: 16, fontSize: 11, color: "var(--chrome-text-dim)" }}>{state.schFind.status}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginTop: 10 }}>
+            <div style={{ minHeight: 16, fontSize: 11, color: "var(--chrome-text-dim)" }}>{state.schFind.status}</div>
+            {/* `DIALOG_SCH_FIND::onShowSearchPanel`: `ACTIONS::showSearch` (a toggle), the dialog closed, then `FocusSearch`; the label carries the hotkey (UI-LEFT-2 SS10) */}
+            <a
+              href="#"
+              data-testid="sch-find-search-panel"
+              style={{ fontSize: 11, whiteSpace: "nowrap" }}
+              onClick={(e) => {
+                e.preventDefault();
+                toggleSchSearchPane();
+                close();
+                focusSchSearchPane();
+              }}
+            >
+              Show search panel (Ctrl+G)
+            </a>
+          </div>
         </div>
         <div className="dialog-footer">
           <button onClick={close}>Close</button>

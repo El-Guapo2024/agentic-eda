@@ -9,6 +9,7 @@ import type { Action, StudioApi } from "../../state/store";
 import { currentMatch, matchId, scopeFromSelection, searchesAllSheets } from "../../kicad-port/schFind";
 import { samePath } from "../../kicad-port/sheetPages";
 import { findNextMatch } from "./findNavigation";
+import { ercFindMarkers } from "../../kicad-port/schFindMarkers";
 import { setFindHighlights } from "../../state/commonTool";
 
 /**
@@ -74,6 +75,6 @@ export async function updateFind(api: StudioApi): Promise<void> {
   }
   // `searchAndReplace` is never set by KiCad's dialog (only read from and written to the config, default false), so the replace dialog
   // brightens References and pins as Find does
-  const reply = await fetchSchFind({ ...search, search_and_replace: false }, scopeFromSelection(state.selection, selectedOnly), state.currentSheetPath);
+  const reply = await fetchSchFind({ ...search, search_and_replace: false }, scopeFromSelection(state.selection, selectedOnly), state.currentSheetPath, false, ercFindMarkers(state.erc?.violations, state.schematic));
   setFindHighlights(reply.ok ? [...new Set(reply.matches.map((m) => m.id))] : []);
 }

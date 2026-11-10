@@ -4191,6 +4191,13 @@ export interface SchSearchData {
   search_and_replace: boolean;
 }
 
+/** An ERC marker of the sheet in view, as Find walks it with the sheet's items (`SCH_MARKER::Matches`: its message): `erc:<index>` into the last report (UI-LEFT-2 SS10). */
+export interface FindMarker {
+  key: string;
+  text: string;
+  at: [number, number];
+}
+
 export interface FindMatch {
   /** `kind:id:name` -- stable key `replace_text.items` is restricted by. */
   key: string;
@@ -4203,8 +4210,8 @@ export interface FindMatch {
   page?: string;
   /** The sheet's place in the page order: matches come sorted by it. */
   sheet_rank?: number;
-  kind: "field" | "label" | "text" | "pin" | "label_field" | "power_field" | "sheet_field" | "sheet_pin" | "text_box" | "directive_field";
-  /** Symbol reference / label id / text id that owns the match. */
+  kind: "field" | "label" | "text" | "pin" | "label_field" | "power_field" | "sheet_field" | "sheet_pin" | "text_box" | "directive_field" | "group" | "marker";
+  /** Symbol reference / label id / text id that owns the match (a group's id; an ERC marker's `erc:<index>` into the last report, UI-LEFT-2 SS10). */
   id: string;
   /** Field name or pin number (empty for labels/text). */
   name: string;

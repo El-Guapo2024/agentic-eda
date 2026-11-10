@@ -15,12 +15,21 @@
 //! than its length times the text's -- a pattern made to make a backtracking matcher blow up (`(a+)+$`) does not -- and a program of more than 4000
 //! instructions or groups nested deeper than 64 does not compile.
 //!
-//! **Differs**, knowingly, from wxRegEx (POSIX): a match is the *leftmost-first* one (alternatives tried left to right, a greedy repeat taking as many as it
-//! can before the rest is tried, as Perl and PCRE do), where POSIX takes the *leftmost-longest*. Whether a text matches, and where the first match starts, are
-//! the same either way; what can differ is the span of a match when alternatives of different lengths match at one start -- `a|ab` on `ab` is `a` here and
-//! `ab` in POSIX -- which shows only in Replace's span with alternations (a net class pattern only asks whether a match starts at the name's first character,
-//! `EDA_COMBINED_MATCHER::StartsWith`). A search that is not case-sensitive folds the case of the text and the pattern alike (KiCad upper-cases both before
-//! compiling with `wxRE_ICASE`, which turns `\d` into `\D`).
+//! What wxRegEx is (UI-LEFT-2 SS10): wxWidgets 3.2 compiles every pattern with PCRE2 (`src/common/regex.cpp` of 3.2.4, the version on this box, linked to
+//! `libpcre2-32`; the old Henry Spencer library is gone since 3.1.6): `wx_regcomp` gives `PCRE2_UTF | PCRE2_ALT_BSUX | PCRE2_DOTALL`, plus `PCRE2_CASELESS`
+//! for `wxRE_ICASE`, and `wxRE_EXTENDED` (KiCad's Find, flags `0` or `wxRE_ICASE`) changes nothing in the pattern, while `wxRE_ADVANCED` (the net class
+//! patterns) only turns Tcl's `\m \M \y \Y` into PCRE's. So a match is PCRE's *leftmost-first* one, as this machine's (alternatives tried left to right, a
+//! greedy repeat taking as many as it can before the rest is tried: `a|ab` on `ab` is `a`, which `libpcre2-32` answers too), not POSIX's leftmost-longest.
+//! [`Flavor::Find`] reads the rest the way PCRE2 does without `PCRE2_UCP`: `\d \w \s`, the POSIX classes and a word's edge are ASCII's (`é` is no `\w`, as
+//! in KiCad), the classes `[:blank:]` `[:cntrl:]` `[:print:]` `[:graph:]` `[:word:]` `[:ascii:]` are read, `\h \H \v \V` (horizontal and vertical space) and
+//! `\N` (anything but a line feed), `\a \e \f \r` and `PCRE2_ALT_BSUX`'s `\xhh` (two hex digits, else the letter `x`), `\uhhhh` (four, else `u`) and `\U`
+//! (the letter `U`), `\A`, `\z` and `\Z`; `$` (and `\Z`) also holds before a line feed that ends the text. A class name in capitals (`[:ALPHA:]`) and a letter
+//! PCRE2 does not know escaped (`\T`, `\q`) do not compile, as `pcre2_compile` refuses them. Find's "not case-sensitive" upper-cases the pattern before it
+//! compiles (`EDA_ITEM::Matches`, `eda_ops::search`), so these rules are what make `\d` read as `\D` there.
+//!
+//! **Differs**: PCRE2's back references, look-arounds, named groups, inline options, `\Q..\E`, `\p{..}`, `\X`, `\R`, `\K`, `\G`, `\c`, `\o{..}`
+//! and atomic or possessive forms do not compile here (no Find of KiCad's needs them; a pattern with one matches nothing); the net class flavour keeps the
+//! syntax it had (Unicode classes, no new escapes), what the INACTIVE engine of `crate::net_pattern` is tested against.
 
 /// The most instructions a pattern may compile to (the position marks of its groups not counted): counted repeats are copied, so `(a{100}){100}` would be ten
 /// thousand. Over this, the pattern does not compile.
@@ -44,6 +53,8 @@ enum Node {
     Class { items: Vec<ClassItem>, negate: bool },
     Bol,
     Eol,
+    /// `\\z`: the text's very end (where `$` also holds before a final line feed).
+    EndOnly,
     WordBoundary(bool),
     Group(Box<Node>, usize),
     Seq(Vec<Node>),
@@ -58,6 +69,9 @@ enum ClassItem {
     Word(bool),
     Space(bool),
     Posix(PosixClass),
+    /// PCRE2's `\h` / `\H` (horizontal white space) and `\v` / `\V` (vertical), Find's only.
+    HSpace(bool),
+    VSpace(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,23 +84,40 @@ enum PosixClass {
     Space,
     Punct,
     Xdigit,
+    /// PCRE2's other classes (SS10): `[:blank:]` (space, tab), `[:cntrl:]`, `[:print:]`, `[:graph:]`, `[:word:]` (`\w`), `[:ascii:]`.
+    Blank,
+    Cntrl,
+    Print,
+    Graph,
+    Word,
+    Ascii,
 }
 
-fn item_matches(i: &ClassItem, c: char) -> bool {
+/// Whether `c` is in the class item `i`. `ascii`: the classes PCRE2 reads without `PCRE2_UCP` ([`Flavor::Find`]: ASCII's letters, digits and space only);
+/// else the Unicode ones the net class flavour has always used.
+fn item_matches(i: &ClassItem, c: char, ascii: bool) -> bool {
     match *i {
         ClassItem::Range(a, b) => a <= c && c <= b,
         ClassItem::Digit(yes) => c.is_ascii_digit() == yes,
-        ClassItem::Word(yes) => is_word(c) == yes,
-        ClassItem::Space(yes) => c.is_whitespace() == yes,
+        ClassItem::Word(yes) => word_char(c, ascii) == yes,
+        ClassItem::Space(yes) => space_char(c, ascii) == yes,
+        ClassItem::HSpace(yes) => matches!(c, '\t' | ' ' | '\u{a0}' | '\u{1680}' | '\u{180e}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}') == yes,
+        ClassItem::VSpace(yes) => matches!(c, '\n' | '\u{b}' | '\u{c}' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}') == yes,
         ClassItem::Posix(p) => match p {
-            PosixClass::Alpha => c.is_alphabetic(),
+            PosixClass::Alpha => if ascii { c.is_ascii_alphabetic() } else { c.is_alphabetic() },
             PosixClass::Digit => c.is_ascii_digit(),
-            PosixClass::Alnum => c.is_alphanumeric(),
-            PosixClass::Upper => c.is_uppercase(),
-            PosixClass::Lower => c.is_lowercase(),
-            PosixClass::Space => c.is_whitespace(),
+            PosixClass::Alnum => if ascii { c.is_ascii_alphanumeric() } else { c.is_alphanumeric() },
+            PosixClass::Upper => if ascii { c.is_ascii_uppercase() } else { c.is_uppercase() },
+            PosixClass::Lower => if ascii { c.is_ascii_lowercase() } else { c.is_lowercase() },
+            PosixClass::Space => space_char(c, ascii),
             PosixClass::Punct => c.is_ascii_punctuation(),
             PosixClass::Xdigit => c.is_ascii_hexdigit(),
+            PosixClass::Blank => c == ' ' || c == '\t',
+            PosixClass::Cntrl => (c as u32) < 0x20 || c == '\u{7f}',
+            PosixClass::Print => (' '..='~').contains(&c),
+            PosixClass::Graph => ('!'..='~').contains(&c),
+            PosixClass::Word => word_char(c, ascii),
+            PosixClass::Ascii => c.is_ascii(),
         },
     }
 }
@@ -95,8 +126,26 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-fn class_matches(items: &[ClassItem], negate: bool, c: char, icase: bool) -> bool {
-    let test = |c: char| items.iter().any(|i| item_matches(i, c));
+/// `\w`: ASCII's letters, digits and `_` for PCRE2 (`ascii`), any letter or digit otherwise.
+fn word_char(c: char, ascii: bool) -> bool {
+    if ascii {
+        c.is_ascii_alphanumeric() || c == '_'
+    } else {
+        is_word(c)
+    }
+}
+
+/// `\s`: PCRE2's space, tab, line feed, vertical tab, form feed and carriage return (`ascii`), any white space otherwise.
+fn space_char(c: char, ascii: bool) -> bool {
+    if ascii {
+        matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r')
+    } else {
+        c.is_whitespace()
+    }
+}
+
+fn class_matches(items: &[ClassItem], negate: bool, c: char, icase: bool, ascii: bool) -> bool {
+    let test = |c: char| items.iter().any(|i| item_matches(i, c, ascii));
     let hit = test(c) || (icase && (c.to_lowercase().any(test) || c.to_uppercase().any(test)));
     hit != negate
 }
@@ -214,18 +263,51 @@ impl Parser {
             '\\' => {
                 let e = self.peek()?;
                 self.pos += 1;
+                if self.flavor == Flavor::Find {
+                    return self.pcre_escape(e);
+                }
                 match e {
                     'd' | 'D' | 'w' | 'W' | 's' | 'S' => Some(Node::Class { items: vec![shorthand(e)], negate: false }),
                     'n' => Some(Node::Char('\n')),
                     't' => Some(Node::Char('\t')),
-                    'b' if self.flavor == Flavor::Find => Some(Node::WordBoundary(true)),
-                    'B' if self.flavor == Flavor::Find => Some(Node::WordBoundary(false)),
                     c if c.is_ascii_digit() || c == 'b' || c == 'B' || c == 'A' || c == 'Z' || c == '<' || c == '>' || c == 'y' || c == 'm' || c == 'M' => None, // back references, word boundaries
                     c if c.is_ascii_alphabetic() => None,
                     c => Some(Node::Char(c)),
                 }
             }
             c => Some(Node::Char(c)),
+        }
+    }
+
+    /// `n` hex digits at the parse position, read as one character (`PCRE2_ALT_BSUX`'s `\\xhh` and `\\uhhhh`); `None`, the position kept, when they are not there.
+    fn hex_char(&mut self, n: usize) -> Option<char> {
+        let digits: String = self.chars.get(self.pos..self.pos + n)?.iter().collect();
+        if digits.len() != n || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let c = char::from_u32(u32::from_str_radix(&digits, 16).ok()?)?;
+        self.pos += n;
+        Some(c)
+    }
+
+    /// One escaped character outside a class as PCRE2 reads it ([`Flavor::Find`], see the module doc); `None` for an escape that does not compile.
+    fn pcre_escape(&mut self, e: char) -> Option<Node> {
+        let class = |item: ClassItem| Some(Node::Class { items: vec![item], negate: false });
+        match e {
+            'd' | 'D' | 'w' | 'W' | 's' | 'S' => class(shorthand(e)),
+            'h' | 'H' => class(ClassItem::HSpace(e == 'h')),
+            'v' | 'V' => class(ClassItem::VSpace(e == 'v')),
+            // `\N`: any character but a line feed
+            'N' => Some(Node::Class { items: vec![ClassItem::Range('\n', '\n')], negate: true }),
+            'b' => Some(Node::WordBoundary(true)),
+            'B' => Some(Node::WordBoundary(false)),
+            'A' => Some(Node::Bol),
+            'Z' => Some(Node::Eol),
+            'z' => Some(Node::EndOnly),
+            'x' => Some(Node::Char(self.hex_char(2).unwrap_or('x'))),
+            'u' => Some(Node::Char(self.hex_char(4).unwrap_or('u'))),
+            'U' => Some(Node::Char('U')),
+            c => simple_escape(c).map(Node::Char),
         }
     }
 
@@ -254,6 +336,12 @@ impl Parser {
                         "space" => PosixClass::Space,
                         "punct" => PosixClass::Punct,
                         "xdigit" => PosixClass::Xdigit,
+                        "blank" if self.flavor == Flavor::Find => PosixClass::Blank,
+                        "cntrl" if self.flavor == Flavor::Find => PosixClass::Cntrl,
+                        "print" if self.flavor == Flavor::Find => PosixClass::Print,
+                        "graph" if self.flavor == Flavor::Find => PosixClass::Graph,
+                        "word" if self.flavor == Flavor::Find => PosixClass::Word,
+                        "ascii" if self.flavor == Flavor::Find => PosixClass::Ascii,
                         _ => return None,
                     };
                     items.push(ClassItem::Posix(p));
@@ -267,8 +355,18 @@ impl Parser {
                             items.push(shorthand(e));
                             continue;
                         }
+                        'h' | 'H' | 'v' | 'V' if self.flavor == Flavor::Find => {
+                            items.push(if e.eq_ignore_ascii_case(&'h') { ClassItem::HSpace(e == 'h') } else { ClassItem::VSpace(e == 'v') });
+                            continue;
+                        }
                         'n' => '\n',
                         't' => '\t',
+                        // in a class PCRE2's `\b` is a backspace
+                        'b' if self.flavor == Flavor::Find => '\u{8}',
+                        'x' if self.flavor == Flavor::Find => self.hex_char(2).unwrap_or('x'),
+                        'u' if self.flavor == Flavor::Find => self.hex_char(4).unwrap_or('u'),
+                        'U' if self.flavor == Flavor::Find => 'U',
+                        e if self.flavor == Flavor::Find && simple_escape(e).is_some() => simple_escape(e)?,
                         e if e.is_ascii_alphanumeric() => return None,
                         e => e,
                     }
@@ -296,6 +394,20 @@ impl Parser {
     }
 }
 
+/// The escapes PCRE2 reads as one character: `\\a \\e \\f \\n \\r \\t`, and a character that is no letter or digit for itself; `None` for any other letter or digit.
+fn simple_escape(c: char) -> Option<char> {
+    match c {
+        'a' => Some('\u{7}'),
+        'e' => Some('\u{1b}'),
+        'f' => Some('\u{c}'),
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        c if c.is_ascii_alphanumeric() => None,
+        c => Some(c),
+    }
+}
+
 fn shorthand(c: char) -> ClassItem {
     match c {
         'd' => ClassItem::Digit(true),
@@ -319,6 +431,7 @@ enum Inst {
     Jmp(usize),
     Bol,
     Eol,
+    EndOnly,
     WordBoundary(bool),
     /// The text position at this point is kept in capture slot `n` (a group's start is `2 * g`, its end `2 * g + 1`).
     Save(usize),
@@ -333,6 +446,8 @@ pub struct Regex {
     /// The groups numbered for `\N` (group 0 is the whole match).
     groups: usize,
     icase: bool,
+    /// The classes are PCRE2's ASCII ones ([`Flavor::Find`]).
+    ascii: bool,
     /// The instructions counted against [`MAX_PROGRAM`].
     counted: usize,
 }
@@ -358,7 +473,7 @@ impl Regex {
         if p.pos != p.chars.len() {
             return None; // an unmatched `)`
         }
-        let mut r = Regex { program: Vec::new(), classes: Vec::new(), groups: p.groups, icase, counted: 0 };
+        let mut r = Regex { program: Vec::new(), classes: Vec::new(), groups: p.groups, icase, ascii: flavor == Flavor::Find, counted: 0 };
         r.push(Inst::Save(0))?;
         r.emit(&ast)?;
         r.push(Inst::Save(1))?;
@@ -395,6 +510,9 @@ impl Regex {
             }
             Node::Eol => {
                 self.push(Inst::Eol)?;
+            }
+            Node::EndOnly => {
+                self.push(Inst::EndOnly)?;
             }
             Node::WordBoundary(yes) => {
                 self.push(Inst::WordBoundary(*yes))?;
@@ -511,7 +629,7 @@ impl Regex {
             let advance = match &self.program[t.pc] {
                 Inst::Char(x) => same_char(*x, c, self.icase),
                 Inst::Any => true,
-                Inst::Class(k) => class_matches(&self.classes[*k].0, self.classes[*k].1, c, self.icase),
+                Inst::Class(k) => class_matches(&self.classes[*k].0, self.classes[*k].1, c, self.icase, self.ascii),
                 _ => false,
             };
             if advance {
@@ -539,14 +657,20 @@ impl Regex {
                     self.add(list, Thread { pc: t.pc + 1, slots: t.slots }, pos, chars, seen, keep);
                 }
             }
+            // PCRE2's `$` (no `PCRE2_DOLLAR_ENDONLY`, no `PCRE2_MULTILINE`): the end, or before a line feed that ends the text
             Inst::Eol => {
+                if pos == chars.len() || (pos + 1 == chars.len() && chars[pos] == '\n') {
+                    self.add(list, Thread { pc: t.pc + 1, slots: t.slots }, pos, chars, seen, keep);
+                }
+            }
+            Inst::EndOnly => {
                 if pos == chars.len() {
                     self.add(list, Thread { pc: t.pc + 1, slots: t.slots }, pos, chars, seen, keep);
                 }
             }
             Inst::WordBoundary(want) => {
-                let before = pos > 0 && is_word(chars[pos - 1]);
-                let after = pos < chars.len() && is_word(chars[pos]);
+                let before = pos > 0 && word_char(chars[pos - 1], self.ascii);
+                let after = pos < chars.len() && word_char(chars[pos], self.ascii);
                 if (before != after) == *want {
                     self.add(list, Thread { pc: t.pc + 1, slots: t.slots }, pos, chars, seen, keep);
                 }
@@ -674,8 +798,9 @@ mod tests {
         assert_eq!(find("<.+>").replace_all("<a><b>", "x").as_deref(), Some("x"), "greedy");
         assert_eq!(find("<.+?>").replace_all("<a><b>", "x").as_deref(), Some("xx"), "lazy");
         assert_eq!(find("(?:A|B)(\\d)").replace_all("B7", "\\1").as_deref(), Some("7"), "a (?: ) group is not numbered");
-        // the Differs of the module doc: leftmost-first takes the first alternative that matches, POSIX the longest
+        // leftmost-first, as PCRE2 (wxWidgets 3.2's engine) takes the first alternative that matches: `libpcre2-32` gives `a|ab` on `ab` the span 0..1
         assert_eq!(find("a|ab").replace_all("ab", "x").as_deref(), Some("xb"));
+        assert_eq!(find("(a|ab)(c|bcd)").find_at(&"abcd".chars().collect::<Vec<_>>(), 0).and_then(|c| c.group(0)), Some((0, 4)));
     }
 
     #[test]
@@ -686,5 +811,35 @@ mod tests {
         assert!(!find("(a+)+$").is_match(&long));
         assert!(!find("(a|aa)+b").is_match(&long));
         assert!(Regex::compile("((((a{200}){200}){200}){200})", false, Flavor::Find).is_none());
+    }
+
+    /// UI-LEFT-2 SS10: what `pcre2_compile` / `pcre2_match` (32-bit, `PCRE2_UTF | PCRE2_ALT_BSUX | PCRE2_DOTALL`, wxWidgets 3.2.4's `wx_regcomp`) answer on this
+    /// box, each asked of the system's `libpcre2-32` before it was written down here.
+    #[test]
+    fn the_syntax_is_pcre2s_as_wx_regex_compiles_it() {
+        let ok = |p: &str, t: &str| find(p).is_match(t);
+        // the four POSIX classes that did not compile, and PCRE2's two others
+        assert!(ok("[[:blank:]]", "a b") && !ok("[[:blank:]]", "ab"));
+        assert!(ok("[[:cntrl:]]", "a\tb") && !ok("[[:cntrl:]]", "ab"));
+        assert!(ok("^[[:print:]]+$", "x y") && !ok("[[:print:]]", "\t"));
+        assert!(ok("^[[:graph:]]$", "x") && !ok("[[:graph:]]", " "));
+        assert!(ok("[[:word:]]", "_") && ok("[[:ascii:]]", "x") && !ok("[[:ascii:]]", "é"));
+        // a class name in capitals is none (what Find's upper-casing makes of `[:alpha:]`)
+        assert!(Regex::compile("[[:ALPHA:]]", true, Flavor::Find).is_none());
+        // ASCII classes, no `PCRE2_UCP`
+        assert!(!ok("\\w", "é") && !ok("[[:alpha:]]", "é") && ok("\\W", "é"));
+        // the escapes
+        assert!(ok("\\x41", "A") && ok("\\u0041", "A") && ok("\\U", "U") && ok("\\xg", "xg") && ok("\\h", " ") && !ok("\\h", "\n") && ok("\\v", "\n"));
+        assert!(ok("a\\N", "ab") && !ok("a\\N", "a\n") && ok("\\Ax", "x") && ok("x\\z", "x") && !ok("x\\z", "x\n") && ok("x\\Z", "x\n") && ok("x$", "x\n"));
+        assert!(ok("[\\x41-\\x43]", "B") && ok("[\\h]", "\t"));
+        for bad in ["\\T", "\\q"] {
+            assert!(Regex::compile(bad, false, Flavor::Find).is_none(), "{bad:?}");
+        }
+        // **Differs** (the module doc): PCRE2 compiles these, this machine does not
+        for unread in ["\\X41", "\\Q.\\E", "(?i)a", "(?=a)"] {
+            assert!(Regex::compile(unread, false, Flavor::Find).is_none(), "{unread:?}");
+        }
+        // the net class flavour keeps its own syntax
+        assert!(Regex::compile("[[:blank:]]", false, Flavor::NetClass).is_none() && Regex::compile("\\w", false, Flavor::NetClass).unwrap().is_match("é"));
     }
 }

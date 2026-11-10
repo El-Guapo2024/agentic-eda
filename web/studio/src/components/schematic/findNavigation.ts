@@ -24,6 +24,7 @@ import { fitTransform } from "../canvas/view";
 import { WRAP_CURSOR, endReachedMessage, findStartCursor, pickMatch, scopeFromSelection, searchesAllSheets } from "../../kicad-port/schFind";
 import { samePath } from "../../kicad-port/sheetPages";
 import type { Action, StudioApi } from "../../state/store";
+import { ercFindMarkers, ercMarkerIndex } from "../../kicad-port/schFindMarkers";
 
 /**
  * Go to the sheet of a match and select + pan to it (the `FindNext` success path). With "Search the current selection only" the selection is
@@ -32,8 +33,15 @@ import type { Action, StudioApi } from "../../state/store";
 export async function visitMatch(api: StudioApi, dispatch: Dispatch<Action>, match: FindMatch, select = true): Promise<void> {
   // `editFrame->GetToolManager()->RunAction<SCH_SHEET_PATH*>( SCH_ACTIONS::changeSheet, &sheet )`
   if (match.sheet && !samePath(match.sheet, api.getState().currentSheetPath)) await api.navigateToSheet(match.sheet);
-  if (select) dispatch({ type: "SET_SELECTION", refs: [match.id] });
-  dispatch({ type: "SET_HOT", refs: [match.id] });
+  // an ERC marker is selected as the ERC dialog selects one (its marker brightened on the canvas); a group by its id, as a click on it does
+  const marker = match.kind === "marker" ? ercMarkerIndex(match.id) : null;
+  if (marker !== null) {
+    if (select) dispatch({ type: "SET_SELECTION", refs: [] });
+    dispatch({ type: "SET_ERC_SELECTED", index: marker });
+  } else {
+    if (select) dispatch({ type: "SET_SELECTION", refs: [match.id] });
+    dispatch({ type: "SET_HOT", refs: [match.id] });
+  }
   const container = document.querySelector(".pcb-canvas-container");
   const rect = container?.getBoundingClientRect();
   if (rect && rect.width >= 50 && rect.height >= 50) {
@@ -69,7 +77,9 @@ export async function findNextMatch(api: StudioApi, dispatch: Dispatch<Action>, 
     return null;
   }
   // `nextMatch`: with "Search the current selection only", the items of the selection (`for( EDA_ITEM* item : m_selectionTool->GetSelection() )`)
-  const reply = await fetchSchFind({ ...search, search_and_replace: false }, scopeFromSelection(state.selection, selectedOnly), state.currentSheetPath, allSheets);
+  // the sheet's ERC markers are items Find walks too (`SCH_MARKER::Matches`, UI-LEFT-2 SS10)
+  const markers = ercFindMarkers(state.erc?.violations, state.schematic);
+  const reply = await fetchSchFind({ ...search, search_and_replace: false }, scopeFromSelection(state.selection, selectedOnly), state.currentSheetPath, allSheets, markers);
   if (!reply.ok) {
     dispatch({ type: "SET_SCH_FIND", find: { status: reply.message ?? "Find failed." } });
     return null;

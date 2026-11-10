@@ -7,7 +7,7 @@
 import { noteContentModified } from "../state/contentModified";
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RouterEventSizes, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindMarker, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RouterEventSizes, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
@@ -898,8 +898,8 @@ export function exportBom(spec: FieldsTableSpec, fmt: BomFmt, changes: StagedFie
 }
 
 /** POST /api/sch/find: ordered matches (ascending x, y -- `nextMatch` order) on the sheet in view (`sheet`, root to here: Replace edits that sheet), or with `allSheets` on every sheet in page order. `scope` = owner ids for "search only selected objects". */
-export function fetchSchFind(search: SchSearchData, scope?: string[], sheet: readonly string[] = [], allSheets = false): Promise<FindReply> {
-  return postJson("/api/sch/find", { search, scope, sheet: sheet.join("/"), all_sheets: allSheets });
+export function fetchSchFind(search: SchSearchData, scope?: string[], sheet: readonly string[] = [], allSheets = false, markers?: readonly FindMarker[]): Promise<FindReply> {
+  return postJson("/api/sch/find", { search, scope, sheet: sheet.join("/"), all_sheets: allSheets, markers });
 }
 
 export async function fetchErcPinMap(): Promise<ErcPinMapReply> {

@@ -97,6 +97,7 @@ import { unfilledZoneWarning, ZONE_FILL_WARNING_MS } from "../kicad-port/checkRe
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { toggleSearchPane } from "../state/searchPane";
+import { toggleSchSearchPane } from "../state/schSearchPane";
 import { netAtClick, registerSchControlActions, schControlChecked } from "./schControlActions";
 import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
@@ -1329,8 +1330,12 @@ export function useActionRunner() {
     // Next / Previous Grid, the grid presets and the fast grids work on the editor's grid list (state/gridSettings.ts): actions/commonGridListActions.ts.
 
     // ACTIONS::showSearch ("Search", Ctrl+G) and PCB_ACTIONS::showNetInspector: `PCB_EDIT_FRAME::ToggleSearch` / `ToggleNetInspector` show or hide the board
-    // editor's bottom panes (components/panels/BottomDock.tsx); a shown Search pane takes the focus (`FocusSearch`). The schematic has no Search pane here.
-    m.set("common.Interactive.search", pcbOnly(() => toggleSearchPane()));
+    // editor's bottom panes (components/panels/BottomDock.tsx); a shown Search pane takes the focus (`FocusSearch`). On the schematic it is
+    // `SCH_EDIT_FRAME::ToggleSearch`, the schematic's own pane (components/panels/SchSearchPanel.tsx, UI-LEFT-2 SS10).
+    m.set("common.Interactive.search", () => {
+      if (state.tab === "pcb") toggleSearchPane();
+      else if (state.tab === "schematic") toggleSchSearchPane();
+    });
     m.set("pcbnew.Control.showNetInspector", pcbOnly(() => toggleDockPane("netInspector")));
 
     // common.Interactive.selectAll/unselectAll: every placed footprint
