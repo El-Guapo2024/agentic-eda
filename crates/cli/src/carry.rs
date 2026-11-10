@@ -26,7 +26,7 @@
 //!
 //! A pending step survives a restart of the server the same way: it is on disk, and the next command settles it.
 
-use super::{clear_dir, fail, history_root, lock, log_activity, push_snapshot_tagged, redo_dir, save, undo_dir};
+use super::{clear_dir, design_path, fail, history_root, keep_outside_history, lock, log_activity, outside_history_of, push_snapshot_tagged, redo_dir, save, undo_dir};
 use eda_model::CheckResult;
 use std::path::{Path, PathBuf};
 
@@ -141,9 +141,19 @@ pub(crate) fn commit(dir: &Path, strict: Option<bool>) -> Result<String, Vec<Che
 /// A drop the gates refused (`board::step_carrying`, a strict drop that makes the board worse; [`commit`]): the carry ends with nothing left behind -- the
 /// design from before the command that began it comes back, as [`cancel`] brings it, with no undo entry and no redo entry. Called with the lock held.
 pub(super) fn refuse_locked(dir: &Path, before: &eda_model::ir::Design, why: &[CheckResult]) {
-    let _ = save(dir, before);
+    let _ = save(dir, &revert_to(dir, before.clone()));
     drop_pending(dir);
     log_activity(dir, "ui", "cancel carried placement", true, &format!("the drop was refused, so nothing of the carried placement is left: {}", super::reasons(why)));
+}
+
+/// `commit.Revert()`: `before` as it comes back, with what no commit holds kept from the design as it is (`board::keep_outside_history`) -- a Paste that
+/// numbered and was then cancelled leaves its numbers in the reference-designator tracker, as KiCad 25ec2335's `SCH_EDITOR_CONTROL::Paste` (the tracker is the
+/// project's, `annotatedSymbols[path].SetRefDesTracker( schematicSettings.m_refDesTracker )`, and the revert restores items only). PARITY-sch §82.
+fn revert_to(dir: &Path, before: eda_model::ir::Design) -> eda_model::ir::Design {
+    match std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok()) {
+        Some(now) => keep_outside_history(outside_history_of(&now), before),
+        None => before,
+    }
 }
 
 /// [`refuse_locked`] for the step held open, if one is.
@@ -164,7 +174,7 @@ pub(crate) fn cancel(dir: &Path, by: &str) -> Result<String, Vec<CheckResult>> {
     let Some(p) = read_pending(dir) else {
         return Err(fail("board_no_carry", "carry", "nothing is being carried"));
     };
-    save(dir, &p.design)?;
+    save(dir, &revert_to(dir, p.design))?;
     drop_pending(dir);
     let msg = "cancel: the carried items are gone".to_string();
     log_activity(dir, by, "cancel carried placement", true, &msg);
