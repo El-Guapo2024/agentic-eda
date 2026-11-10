@@ -239,7 +239,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   every sheet (`SyncOtherUnits`); a reset that hands a reference to another path moves the footprints with the placements (verified, test). **Left**: which of
   two equal net names takes `_1` (KiCad: the island's smallest item KIID, `conn_publish.cpp::AssignNames` / `NODE_LESS`; the derived wire uuids are seeded with
   the net name, so matching needs the writer's uuids reworked); a pin number used twice is one pin in `design.nets` (a model change: the net list keys a pin by
-  reference and number); the tracker is undone with the command (KiCad's is not).
+  reference and number); ~~the tracker is undone with the command (KiCad's is not)~~ (done 2026-11-10, `task-v6-kicad-sch`, `PARITY-sch.md` section 82: it is kept
+  through Undo, Redo and a cancelled carry, as KiCad's project tracker).
 - Done 2026-11-07 (`task-v3-schdlg`, UI-LEFT-2 SS13, SS14; `PARITY-sch.md` section 77): the Symbol Fields Table's Description column (the fifth mandatory field,
   the library's description until the symbol has its own), the BOM Name labels, Include and Group By with the Quantity and Item Number refusals, the grid's
   right-button menus (Select Footprint..., Show Datasheet, Cut / Copy / Paste / Delete / Select All, a header's show / hide), the export's format presets with
@@ -857,8 +858,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   power symbols' nets like that kind (global or local) and the bus aliases as `{alias}` (`GET /api/sch/existing_labels`); a label's field keeps its text size,
   bold and shown name (`LabelField::size_nm`, `bold`, `name_shown`); Preferences' "Power Symbols:" (Default / Global / Local) converts the power symbol Place
   Power places (`sch_edit set_new_power_kind`, in the click's step); the symbol libraries are indexed in the background as `board serve` starts (KiCad 25ec2335
-  `PreloadLibraries`). Left: a sheet keeps one kind per power symbol id, so a conversion is refused where the sheet has that symbol in the other kind (KiCad
-  keeps a renamed cache entry); the converted library symbol's keywords and description are not rewritten; a global label's Sheet References keep the default
+  `PreloadLibraries`). Left: ~~a sheet keeps one kind per power symbol id, so a conversion is refused where the sheet has that symbol in the other kind (KiCad
+  keeps a renamed cache entry)~~ (done 2026-11-10, `task-v6-kicad-sch`, `PARITY-sch.md` section 82: the other kind is drawn from a renamed cache entry, `+5V_1`,
+  `SchExtras::power_lib_names`, written with `(lib_name ..)` and read back); the converted library symbol's keywords and description are not rewritten; a global label's Sheet References keep the default
   size, regular, without their name; a label's field has no H / V Align columns in Label Properties' grid (Field Properties has them).
 - Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S16, S19, S20; `PARITY-sch.md` section 62): Autoplace Fields reads the swapped pin places (done); an imported
   power symbol keeps its hand-placed Reference and Value and its flags (r4 D4-L2, done); Change / Update Symbols reset a symbol's field visibility, sizes and
