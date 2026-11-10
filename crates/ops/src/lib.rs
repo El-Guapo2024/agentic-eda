@@ -1596,6 +1596,10 @@ pub enum Cmd {
         /// with (`SCH_DRAWING_TOOLS::DrawSheet`: each a `FIELD_T::USER` field, `SetVisible( false )`). Ignored for the contents (`placeSheetContents` has no sheet).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         block_fields: Vec<(String, String)>,
+        /// The contents only: R, Shift+R, X and Y pressed while they rode the cursor (`placeSheetContents` hands them to `SCH_ACTIONS::move`, whose loop passes the
+        /// turns to `SCH_EDIT_TOOL::Rotate` / `Mirror`), in order, done about `at` as a held selection's are (a lone group on itself) -- in the import's step (UI-LEFT-2 SS18).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        turns: Vec<sch_move::Turn>,
     },
     /// Alt+S (`eeschema.InteractiveEdit.swap`, `SCH_EDIT_TOOL::Swap`): exchange the positions of two schematic
     /// items -- symbols (placed or power), labels and free texts, found by id -- and, for two symbols of the
@@ -3658,8 +3662,8 @@ impl<'a> Board<'a> {
             Cmd::AddSchLine { pts, width_nm } => self.add_sch_line(pts.clone(), *width_nm),
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
-            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block, block_fields } => match content {
-                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options, &design_blocks::Placement { source, as_group: *as_group, group_name, block, block_fields }),
+            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options, as_group, group_name, block, block_fields, turns } => match content {
+                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options, &design_blocks::Placement { source, as_group: *as_group, group_name, block, block_fields }, turns),
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),

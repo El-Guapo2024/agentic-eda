@@ -416,6 +416,7 @@ fn a_selection_of_the_sheet_saved_as_a_block_is_grouped_and_linked_and_placed_ag
         group_name: String::new(),
         block: "Power:Trio".into(),
         block_fields: vec![],
+        turns: vec![],
     };
     step(&dir, cmd, false, "test").unwrap();
     let (_, after, model) = load(&dir).unwrap();
@@ -486,6 +487,7 @@ fn a_block_placed_as_a_sheet_is_a_sheet_of_its_own_in_a_linked_group() {
         block: "Power:Trio".into(),
         // the block's default fields (its `.json`): `DrawSheet` copies each into the sheet as a hidden user field
         block_fields: vec![("Rail".into(), "3V3".into()), ("Owner".into(), "Power team".into())],
+        turns: vec![],
     };
     step(&dir, cmd, false, "test").unwrap();
     let (_, after, model) = load(&dir).unwrap();
@@ -633,6 +635,7 @@ fn a_block_made_from_one_of_kicads_own_templates_places_with_its_parts_and_nets(
         group_name: String::new(),
         block: "Power:Nano".into(),
         block_fields: vec![],
+        turns: vec![],
     };
     step(&dir, cmd, false, "test").unwrap();
     let (_, after, model) = load(&dir).unwrap();
