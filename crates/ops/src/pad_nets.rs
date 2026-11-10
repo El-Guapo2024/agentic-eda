@@ -3,7 +3,8 @@
 //!
 //! A pad's net, here, is its pin's place in the net list that is in force (`design.nets`, else the intent's: the one netlist the board, the exports and the checks
 //! read), so a swap moves pins between nets. The copper that is connected to a pad follows it, as in KiCad: every track, via and pad of the cluster the pad is in
-//! (`CONNECTIVITY_DATA::GetConnectedItems( pad, 0 )`, zones left out) that is on the net the pad had takes the net the pad gets (`eda_connectivity::pad_clusters`).
+//! (KiCad 25ec2335 `CONNECTIVITY_DATA::GetConnectedItems( pad, EXCLUDE_ZONES )`: zones are left out of the search, so a pad that only a zone fill joins to
+//! the swapped one keeps its net, UI-LEFT-2 PP17; 8303b2ad's `GetConnectedItems( pad, 0 )` walked through the fills) that is on the net the pad had takes the net the pad gets (`eda_connectivity::pad_clusters`).
 //! The pads of that copper that were not asked for are KiCad's `PromptConnectedPadDecision`: "N unselected pad(s) are connected to these nets. How do you want to
 //! proceed?" -- "Ignore Unselected Pads" leaves their nets, "Swap All Connected Pads" moves them too. The decision is the verb's `connected_pads`; left out, a swap that
 //! has such pads is refused with `ops_swap_unselected_pads` (the pads in its `detail`: `{ "pads": ["R2.1", ..] }`) so that the studio can ask, and a swap that has none just happens.
@@ -14,8 +15,8 @@
 //!   units of the selected pads in selection order, or one unit and the name of the unit to swap it with (the context menu's "Swap with B"). The units need as many pins
 //!   as each other, and every pad of them must exist.
 //!
-//! The board then disagrees with the schematic, as it does in KiCad, until Update Schematic from PCB carries the swap back: kicad-cli's `--schematic-parity` reports
-//! the pads (`net_conflict`). One undo step each (`BOARD_COMMIT::Push( "Swap Pad Nets" )`, `"Swap Gate Nets"`).
+//! The board then disagrees with the schematic, as it does in KiCad, until Update Schematic from PCB carries the swap back (`crate::back_annotate`: the units, the
+//! pins or the labels): kicad-cli's `--schematic-parity` reports the pads (`net_conflict`) until then. One undo step each (`BOARD_COMMIT::Push( "Swap Pad Nets" )`, `"Swap Gate Nets"`).
 
 use super::Board;
 use eda_connectivity::PadCluster;

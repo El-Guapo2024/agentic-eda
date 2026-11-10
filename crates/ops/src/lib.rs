@@ -68,6 +68,8 @@ mod via_layers;
 pub mod via_place;
 pub use via_layers::ViaLayerEdit;
 mod pad_nets;
+/// Update Schematic from PCB's nets: unit swaps, pin swaps and labels (`BACK_ANNOTATE::applyChangelist`).
+pub mod back_annotate;
 mod net_edit;
 mod fp_lib_fields;
 pub mod fp_items;

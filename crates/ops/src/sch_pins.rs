@@ -68,7 +68,7 @@ fn dedup_check(pins: &[PinRef], ids: &[String]) -> Result<(), Vec<CheckResult>> 
 
 /// The connected points and wires of the connection that includes `start` (`CONNECTION_SUBGRAPH`, on this sheet): wires join where one ends on the other
 /// (a T included), a junction dot joins the wires that pass through it, and whatever sits on a wire or at one of its points is on the connection.
-fn connection_of(scene: &Scene, start: Point) -> (BTreeSet<usize>, BTreeSet<Point>) {
+pub(crate) fn connection_of(scene: &Scene, start: Point) -> (BTreeSet<usize>, BTreeSet<Point>) {
     let mut pts: BTreeSet<Point> = BTreeSet::from([start]);
     let mut segs: BTreeSet<usize> = BTreeSet::new();
     loop {

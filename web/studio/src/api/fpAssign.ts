@@ -1,7 +1,7 @@
 // The HTTP side of the footprint assignment tools (crates/cli/src/fp_assign_api.rs): what Update PCB from Schematic lists, and, as the tools land, the exchange, update,
 // compare and reannotate dialogs' reports.
 
-import type { ReannotateOptions, Shape } from "./types";
+import type { Cmd, ReannotateOptions, Shape } from "./types";
 
 /** One footprint whose symbol names another footprint than the board has (`GET /api/update_pcb`). */
 export interface UpdatePcbChange {
@@ -129,4 +129,32 @@ export async function postReannotatePlan(options: ReannotateOptions, selection: 
   const j = (await r.json()) as { ok?: boolean; plan?: ReannotatePlan; message?: string };
   if (!j.ok || !j.plan) throw new Error(j.message ?? "The reannotation could not be planned.");
   return j.plan;
+}
+
+/** The dialog's options that Update Schematic from PCB's nets read (`POST /api/back_annotate`, crates/ops/src/back_annotate.rs `BackAnnotateOptions`). */
+export interface BackAnnotateOptions {
+  /** "Net names" (`m_processNetNames`). */
+  net_names: boolean;
+  /** "Prefer symbol unit swaps over label swaps" (`m_preferUnitSwaps`). */
+  prefer_unit_swaps: boolean;
+  /** "Prefer symbol pin swaps over label swaps" (`m_preferPinSwaps`). */
+  prefer_pin_swaps: boolean;
+  /** Preferences > Editing Options > "Allow unconstrained pin swaps" (`m_Input.allow_unconstrained_pin_swaps`). */
+  allow_pin_swaps: boolean;
+}
+
+export interface BackAnnotateReport {
+  ok: boolean;
+  message?: string;
+  /** `BACK_ANNOTATE`'s report lines, KiCad's words. */
+  lines: { severity: "info" | "action" | "warning" | "error"; text: string }[];
+  /** The verbs that do it, each on its sheet, for the dialog's batch. */
+  cmds: Cmd[];
+}
+
+/** `POST /api/back_annotate`: the dry run of Update Schematic from PCB's unit swaps, pin swaps and labels, and the verbs that apply them. */
+export async function postBackAnnotate(opts: BackAnnotateOptions): Promise<BackAnnotateReport> {
+  const r = await fetch("/api/back_annotate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts) });
+  const j = (await r.json()) as Partial<BackAnnotateReport>;
+  return { ok: j.ok ?? false, message: j.message, lines: j.lines ?? [], cmds: j.cmds ?? [] };
 }

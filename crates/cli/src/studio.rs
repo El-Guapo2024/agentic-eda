@@ -1244,6 +1244,8 @@ fn handle(
         ("POST", "/api/repair_board") => respond(stream, "200 OK", "application/json", crate::board_control_api::repair_board(dir).to_string().as_bytes()),
         // The footprint assignment tools (`crate::fp_assign_api`)
         ("GET", "/api/update_pcb") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::update_pcb(dir).to_string().as_bytes()),
+        // Update Schematic from PCB's nets (`crate::back_annotate_api`): the unit swaps, pin swaps and labels, and the verbs that do them
+        ("POST", "/api/back_annotate") => respond(stream, "200 OK", "application/json", crate::back_annotate_api::back_annotate(dir, &body).to_string().as_bytes()),
         ("POST", "/api/exchange_plan") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::exchange_plan(dir, &body).to_string().as_bytes()),
         ("POST", "/api/reannotate_plan") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::reannotate_plan(dir, &body).to_string().as_bytes()),
         ("GET", "/api/footprint_diff") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::footprint_diff(dir, &query_value(target, "ref")).to_string().as_bytes()),

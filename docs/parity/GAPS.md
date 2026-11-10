@@ -1302,6 +1302,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   placed footprint's no-paste pad, die length, property, dimension, table and keepout (slow `fp_library_record_kicad_cli`). **Left:** a library footprint's groups are not carried; a
   pad with no copper is written while the footprint is on the side it was read for (a library's flipped to the back loses its stencil openings in the file); the published overlay of
   Update Footprint on Board (the Footprint Editor's) still has a pad with no copper as a pad of its kind; Update Schematic from PCB's pin and gate swaps (above).
+- Done 2026-11-10 (`task-v6-pp17-backannot`, `PARITY-pcb.md` section 108, UI-LEFT-2 PP17): Update Schematic from PCB carries Swap Pad Nets and Swap Gate Nets back, as KiCad 25ec2335's
+  `BACK_ANNOTATE::applyChangelist` (`crates/ops/src/back_annotate.rs`, `POST /api/back_annotate`): units traded (`PlanBackannotateUnitSwaps`, `SetSymbolUnit` with swap), pins traded with
+  "Allow unconstrained pin swaps" on (`applyPinSwaps`, Swap Pins; else KiCad's "Would swap ..." line), the driving label or sheet pin renamed or a label put on the pin
+  (`processNetNameChange`), with the dialog's three net options; the verbs go in the dialog's one batch. kicad-cli's `--schematic-parity` reports the swapped pads after
+  the swap and nothing after the update (slow tier). A pad only a zone fill joins to a swapped one keeps its net: KiCad 25ec2335's `GetConnectedItems( pad, EXCLUDE_ZONES )`
+  (8303b2ad's walked the fills), which the studio already did. Left: the net list follows the schematic, so a renamed label's other pins change net on the board too (KiCad's
+  board keeps them until F8); units of one footprint on different sheets are not swapped; Swap Pad Nets' copper shapes, conflict check and lock check (25ec2335).
 - Port from: `pcbnew/dialogs/dialog_exchange_footprints.cpp`, `pcbnew/pcb_edit_frame.cpp` (`ExchangeFootprint`), `pcbnew/netlist_reader/board_netlist_updater.cpp` (`replaceFootprint`,
   `updateFootprintParameters`, `updateComponentPadConnections`), `pcbnew/tools/global_edit_tool.cpp` (`ExchangeFootprints`), `pcbnew/tools/board_reannotate_tool.cpp`,
   `pcbnew/dialogs/dialog_board_reannotate.cpp`, `pcbnew/footprint.cpp` and `pcbnew/drc/drc_test_provider_library_parity.cpp` (`FootprintNeedsUpdate`), `pcbnew/tools/board_inspection_tool.cpp` (`DiffFootprint`),
