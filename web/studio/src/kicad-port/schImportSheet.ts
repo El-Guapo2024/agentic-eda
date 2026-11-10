@@ -12,6 +12,7 @@
 // (`schSettings.m_AnnotateSortOrder` / `m_AnnotateMethod` / `m_AnnotateStartNum`, which `ImportSheet` reads). The file is read, and its sheets, library
 // symbols and checks are the server's (crates/cli/src/sheet_import.rs, crates/ops/src/sch_sheets.rs).
 import type { Cmd } from "../api/types";
+import type { SchTurn } from "../api/schEditTypes";
 import type { AnnotateOptions, SheetFileCheck } from "../api/hierarchyTypes";
 import { startNumber, type AnnotateSettings } from "./schAnnotate";
 import { groupNameFor, parseBlockId } from "./designBlocks";
@@ -34,6 +35,8 @@ export interface SheetImportPlan {
   blockFields?: { name: string; value: string }[];
   /** The number the next group's name ends with while "Place repeated copies" is on (KiCad's `suffix`, from 1). */
   suffix?: number;
+  /** The contents only: R, Shift+R, X and Y pressed while they ride the cursor, in order (`placeSheetContents` hands them to the move tool; UI-LEFT-2 SS18). */
+  turns?: SchTurn[];
 }
 
 /** The chooser's checkboxes as they start. KiCad stores `place_as_sheet` off; the studio starts with the sheet, which is what a file added to a project is for (the brief of
@@ -130,7 +133,7 @@ export function importSheetCmd(
 }
 
 /** `import_sheet` as contents (`placeSheetContents`): the file's items on the sheet in view, carried to `at`. */
-export function importContentsCmd(plan: Pick<SheetImportPlan, "path" | "keepAnnotations"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix">>, at: [number, number], numbering: ReturnType<typeof importNumbering>): Cmd {
+export function importContentsCmd(plan: Pick<SheetImportPlan, "path" | "keepAnnotations"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix" | "turns">>, at: [number, number], numbering: ReturnType<typeof importNumbering>): Cmd {
   return {
     op: "import_sheet",
     source: plan.path.trim(),
@@ -140,6 +143,8 @@ export function importContentsCmd(plan: Pick<SheetImportPlan, "path" | "keepAnno
     order: numbering.order,
     options: numbering.options,
     ...groupFields(plan, false),
+    // the turns made while the contents rode, done about `at` in the import's step (`SCH_ACTIONS::move`'s Rotate / Mirror)
+    ...(plan.turns && plan.turns.length > 0 ? { turns: [...plan.turns] } : {}),
   };
 }
 
@@ -168,4 +173,11 @@ export function importToolHint(plan: Pick<SheetImportPlan, "path" | "asSheet" | 
   return plan.asSheet
     ? `Import Sheet (${file}): click one corner of the sheet, then the opposite one, then name it. Esc to cancel`
     : `Import Sheet Contents (${file}): click where the items go. Esc to cancel`;
+}
+
+/** R, Shift+R, X or Y while a file's contents ride the cursor (`placeSheetContents` runs `SCH_ACTIONS::move`, whose loop hands them to `SCH_EDIT_TOOL::Rotate` /
+ *  `Mirror` on the carried items): the plan with the turn added; null when the tool holds a sheet (its two clicks) or nothing. */
+export function turnCarriedContents<P extends Pick<SheetImportPlan, "asSheet" | "turns">>(plan: P | null, turn: SchTurn): P | null {
+  if (!plan || plan.asSheet) return null;
+  return { ...plan, turns: [...(plan.turns ?? []), turn] };
 }

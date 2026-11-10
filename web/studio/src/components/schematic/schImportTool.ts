@@ -37,7 +37,8 @@ export function importSheetClick(state: Pick<StudioState, "schSheetImport" | "dr
       if (!ok) return;
       if (!plan.repeated) dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: null });
       // the next repeated copy's group ends with the next number (`suffix++`)
-      else dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: { ...plan, suffix: (plan.suffix ?? 1) + 1 } });
+      // (and the next copy comes in unturned: a new `placeSheetContents`, a new move)
+      else dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: { ...plan, suffix: (plan.suffix ?? 1) + 1, turns: undefined } });
     });
     return;
   }

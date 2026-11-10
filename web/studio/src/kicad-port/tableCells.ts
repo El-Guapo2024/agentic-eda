@@ -84,6 +84,38 @@ export function cellsBetween(table: BoardTable, start: Pt, end: Pt, before: read
 }
 
 /**
+ * A sheet's Shift+click on a cell while cells are selected (`SCH_SELECTION_TOOL::Main`'s single-click branch at 8303b2ad, `m_previous_first_cell`; UI-LEFT-2 SS18):
+ * when the first item of the selection is a cell and the click picks one cell, the cell the range starts from is kept (`m_previous_first_cell`: the selection's first
+ * cell when there is none yet or one item is selected); then, when every selected item is a cell of the clicked cell's table, the selection becomes the cells of the
+ * start cell's table that the rectangle between the two cells' centres touches (`SelectCellsBetween` after the selection is cleared: none was selected before, so
+ * only those). Otherwise the selection stays as it is. Null when the click is no such click (the usual Shift+click applies).
+ *
+ * `previousFirst` is the start cell kept from the last such click (null for none, or for one that is gone).
+ */
+export function shiftClickCells(tables: readonly BoardTable[], selection: readonly string[], clicked: string, previousFirst: string | null): { refs: string[]; previousFirst: string } | null {
+  const cellOf = (id: string): { table: BoardTable; cell: BoardTableCell } | null => {
+    const p = parseCellItemId(id);
+    const table = p ? tables.find((t) => t.id === p.table && t.id !== id) : undefined;
+    const cell = table?.cells.find((c) => c.id === id);
+    return table && cell ? { table, cell } : null;
+  };
+  const first = selection.length > 0 ? cellOf(selection[0]!) : null;
+  const hit = cellOf(clicked);
+  if (!first || !hit) return null;
+  const startId = previousFirst == null || selection.length === 1 || !cellOf(previousFirst) ? selection[0]! : previousFirst;
+  // `selection->GetParent() != clickedCell->GetParent()`
+  const allSameTable = selection.every((id) => cellOf(id)?.table.id === hit.table.id);
+  if (!allSameTable) return { refs: [...selection], previousFirst: startId };
+  const start = cellOf(startId)!;
+  const centre = (c: BoardTableCell): Pt => {
+    const b = cellBox(c);
+    return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+  };
+  const refs = cellsBetween(start.table, centre(start.cell), centre(hit.cell), [], { additive: true, subtractive: false, exclusiveOr: false });
+  return { refs, previousFirst: startId };
+}
+
+/**
  * Whether a KiCad clipboard text holds a table among its top-level items -- what Paste looks for before pasting into selected cells: `clipBoard->Drawings()` of a
  * board's `(kicad_pcb ..)` (`depth` 1; a table inside a footprint is not one) or the items of a sheet's fragment (`tempScreen->Items()`, `depth` 0). Strings are
  * skipped, so a `(table` inside a text is no table.

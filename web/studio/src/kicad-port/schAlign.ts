@@ -14,6 +14,12 @@ export interface SchAlignItem {
   /** `[minX, minY, maxX, maxY]`, sheet µm: what the studio draws and picks the item by. */
   box: readonly [number, number, number, number];
   locked: boolean;
+  /**
+   * A selected group (UI-LEFT-2 SS18: `GetSelections` takes the `SCH_GROUP` as one item, its box `SCH_GROUP::GetBoundingBox`, the members' grown by 10 mil): the
+   * connection grid its offset is snapped to by its centre (`adjustDeltaForGrid`: `GetPosition()` is the box's centre, snapped when `GetItemGrid( group )` is
+   * `GRID_CONNECTABLE`), or absent when it is not snapped. A plain item's offset the server snaps (`sch_move`'s `align`).
+   */
+  groupGridNm?: number;
 }
 
 export interface SchAlignMove {
@@ -62,6 +68,18 @@ export function alignMoves(items: readonly SchAlignItem[], kind: SchAlignKind, c
   const horizontal = kind === "left" || kind === "right" || kind === "centerX";
   return movable.map((i) => {
     const d = to - edge(i, kind);
-    return { id: i.id, dx: horizontal ? d : 0, dy: horizontal ? 0 : d };
+    const move = { id: i.id, dx: horizontal ? d : 0, dy: horizontal ? 0 : d };
+    return i.groupGridNm ? snapGroupMove(i, move, i.groupGridNm) : move;
   });
+}
+
+/**
+ * `adjustDeltaForGrid` for a group: `snappedPos = grid.AlignGrid( GetPosition() + aDelta )`, the delta `snappedPos - GetPosition()` -- both axes, so a group whose centre
+ * is off the grid comes onto it across the line too. Zero stays zero (`if( aDelta == VECTOR2I( 0, 0 ) ) return aDelta`).
+ */
+function snapGroupMove(item: SchAlignItem, move: SchAlignMove, grid: number): SchAlignMove {
+  if (move.dx === 0 && move.dy === 0) return move;
+  const [cx, cy] = centre(item.box);
+  const snap = (v: number) => Math.round(v / grid) * grid;
+  return { id: move.id, dx: snap(cx + move.dx) - cx, dy: snap(cy + move.dy) - cy };
 }

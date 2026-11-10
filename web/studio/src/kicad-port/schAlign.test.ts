@@ -31,3 +31,13 @@ test("a locked item is the target and never moves", () => {
   assert.deepEqual(alignMoves([locked, item("L2", [0, 0, 5, 5], true)], "left", null), [], "nothing can move");
   assert.deepEqual(alignMoves([A], "left", null), [], "a lone item has nothing to align to");
 });
+
+test("a group is one item, its offset snapped by its centre to the connection grid on both axes (UI-LEFT-2 SS18)", () => {
+  // the group's box [1000, 0, 3100, 1300] (centre 2050, 650); the item to its left at 0. Align Left moves the group by -1000, its centre to 1050, which
+  // the grid of 100 takes to 1100 (and 650 to 700: off the grid across the line too)
+  const left = item("A", [0, 2000, 100, 2100], false);
+  const group = { ...item("grp", [1000, 0, 3100, 1300], false), groupGridNm: 100 };
+  assert.deepEqual(alignMoves([left, group], "left", null), [{ id: "A", dx: 0, dy: 0 }, { id: "grp", dx: -950, dy: 50 }]);
+  // a group not on the connection grid (graphics alone) is moved as measured
+  assert.deepEqual(alignMoves([left, item("grp", [1000, 0, 3100, 1300], false)], "left", null)[1], { id: "grp", dx: -1000, dy: 0 });
+});

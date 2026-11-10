@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fixtureTable as table } from "./tableFixture";
-import { cellsBetween, cellUnder, clipboardHasTable, hasTableCells, onlyCells, shiftTable } from "./tableCells";
+import { cellsBetween, cellUnder, clipboardHasTable, hasTableCells, onlyCells, shiftClickCells, shiftTable } from "./tableCells";
 import { cellColorEditOf, cellDialogValues, fillSwatchOf } from "./tables";
 import { previewIds, shiftPreview, withPaste, type SchPastePreview } from "./schClipboard";
 
@@ -78,4 +78,21 @@ test("the sheet dialog's colours: a swatch per field, mixed values left alone, t
   assert.equal(fillSwatchOf(t.cells[2]!), null);
   assert.deepEqual(cellColorEditOf(cellDialogValues([t.cells[2]!])), { text_color: { r: 0, g: 0, b: 0, a: 0 }, fill: "none" });
   assert.deepEqual(cellColorEditOf({ textColor: "mixed", fillColor: { r: 1, g: 2, b: 3, a: 255 } }), { fill: "color", fill_color: { r: 1, g: 2, b: 3, a: 255 } });
+});
+
+test("Shift+click on a second cell selects the cells between it and the first, as the sheet's selection tool does (UI-LEFT-2 SS18)", () => {
+  const t = table(3, 3);
+  // one cell selected, Shift+click two down and right: the block between their centres, in the table's order; the start is kept
+  const a = shiftClickCells([t], ["tbl_a:0:0"], "tbl_a:2:1", null);
+  assert.deepEqual(a, { refs: ["tbl_a:0:0", "tbl_a:0:1", "tbl_a:1:0", "tbl_a:1:1", "tbl_a:2:0", "tbl_a:2:1"], previousFirst: "tbl_a:0:0" });
+  // a second Shift+click starts from the same cell (`m_previous_first_cell`), not from the first of the new selection
+  assert.deepEqual(shiftClickCells([t], a!.refs, "tbl_a:0:2", a!.previousFirst)?.refs, ["tbl_a:0:0", "tbl_a:0:1", "tbl_a:0:2"]);
+  // up and to the left works the same
+  assert.deepEqual(shiftClickCells([t], ["tbl_a:2:2"], "tbl_a:1:1", null)?.refs, ["tbl_a:1:1", "tbl_a:1:2", "tbl_a:2:1", "tbl_a:2:2"]);
+  // another item among the selection: nothing changes
+  assert.deepEqual(shiftClickCells([t], ["tbl_a:0:0", "U1"], "tbl_a:1:1", null)?.refs, ["tbl_a:0:0", "U1"]);
+  // the first item no cell, or the click on no cell: not this click
+  assert.equal(shiftClickCells([t], ["U1", "tbl_a:0:0"], "tbl_a:1:1", null), null);
+  assert.equal(shiftClickCells([t], ["tbl_a:0:0"], "U1", null), null);
+  assert.equal(shiftClickCells([t], [], "tbl_a:0:0", null), null);
 });

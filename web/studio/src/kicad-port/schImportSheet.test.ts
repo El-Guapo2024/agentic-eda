@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SheetFileCheck } from "../api/hierarchyTypes";
 import { defaultAnnotateSettings } from "./schAnnotate";
-import { defaultImportOptions, describeCheck, fileOfPath, groupFields, importContentsCmd, importNumbering, importSheetCmd, importToolHint, looksLikeSchematic, sheetFileOfFile, sheetNameOfFile, stemOfFile } from "./schImportSheet";
+import { defaultImportOptions, describeCheck, fileOfPath, groupFields, importContentsCmd, importNumbering, importSheetCmd, importToolHint, looksLikeSchematic, sheetFileOfFile, sheetNameOfFile, stemOfFile, turnCarriedContents } from "./schImportSheet";
 
 const check = (patch: Partial<SheetFileCheck> = {}): SheetFileCheck => ({ ok: true, path: "ldo.kicad_sch", stem: "ldo", sheets: [], symbols: 3, references: ["U1", "C1", "C2"], libraries: ["Device"], findings: [], blocked: false, dest_file: "ldo.kicad_sch", ...patch });
 
@@ -117,4 +117,16 @@ test("a sheet drawn from a design block carries the block's default fields; cont
   assert.equal(plain.block_fields, undefined, "a plain file's sheet starts with no fields");
   const none = importSheetCmd({ ...plan, blockFields: [] }, { name: "LDO", file: "LDO.kicad_sch", at: [0, 0], size: [1, 1] }, importNumbering(defaultAnnotateSettings())) as unknown as Record<string, unknown>;
   assert.equal(none.block_fields, undefined);
+});
+
+test("R, Shift+R, X and Y while a file's contents ride are kept in order and sent with the click; a sheet in the hand takes none", () => {
+  const plan = { path: "amp.kicad_sch", ...defaultImportOptions(), asSheet: false };
+  const once = turnCarriedContents(plan, "rot_ccw");
+  const twice = turnCarriedContents(once, "mirror_h");
+  assert.deepEqual(twice?.turns, ["rot_ccw", "mirror_h"]);
+  const cmd = importContentsCmd(twice!, [1000, 2000], importNumbering(defaultAnnotateSettings())) as { turns?: string[] };
+  assert.deepEqual(cmd.turns, ["rot_ccw", "mirror_h"]);
+  assert.equal((importContentsCmd(plan, [0, 0], importNumbering(defaultAnnotateSettings())) as { turns?: string[] }).turns, undefined, "none: not sent");
+  assert.equal(turnCarriedContents({ ...plan, asSheet: true }, "rot_ccw"), null);
+  assert.equal(turnCarriedContents(null, "rot_ccw"), null);
 });

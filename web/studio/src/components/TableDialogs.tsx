@@ -14,7 +14,8 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { closeTableCellDialog, closeTableDialog, openTableDialog, useTableDialogs } from "../state/tableDialogs";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { lineThicknessNm } from "../kicad-port/layerDefaults";
-import { ColorSwatch } from "./TextLookControls";
+import { ColorSwatch, useFontFamilies } from "./TextLookControls";
+import { chosenFont, fontChoices } from "../kicad-port/textLooks";
 import { autoPenFor, cellById, cellColorEditOf, cellDialogValues, cellEditOf, gridColumn, isSelectableCell, schCellAddress, TABLE_LINE_STYLES, tableById, tableDialogValues, tablePatchOf, tablesOf, widthAfterToggle, type CellColor, type CellDialogValues, type TableDialogValues } from "../kicad-port/tables";
 import type { TableCellAddr, TableCmdWire, TableLineStyleName } from "../api/tableTypes";
 import type { BoardTable } from "../api/types";
@@ -389,7 +390,11 @@ export function TableCellPropertiesDialog() {
           />
           <div className="kv-grid" style={GRID}>
             <span>Font</span>
-            <input type="text" data-testid="cell-face" value={v.face ?? ""} placeholder={v.face === null ? "<...>" : "Default Font"} onChange={(e) => set({ face: e.target.value })} />
+            {sch ? (
+              <CellFontSelect face={v.face} onChange={(face) => set({ face })} />
+            ) : (
+              <input type="text" data-testid="cell-face" value={v.face ?? ""} placeholder={v.face === null ? "<...>" : "Default Font"} onChange={(e) => set({ face: e.target.value })} />
+            )}
             {sch ? (
               // `DIALOG_TABLECELL_PROPERTIES` of a sheet has one size for the glyphs, and no thickness
               <>
@@ -508,4 +513,25 @@ export function TableDialogs() {
 export function cellOf(board: Parameters<typeof cellById>[0], id: string): TableCellAddr | null {
   const f = cellById(board, id);
   return f ? [f.cell.row, f.cell.col] : null;
+}
+
+/**
+ * A sheet cell dialog's Font choice (eeschema `DIALOG_TABLECELL_PROPERTIES::m_fontCtrl`, a `FONT_CHOICE`; UI-LEFT-2 SS18): "Default Font" and "KiCad Font", then the machine's families; the first
+ * cell's font selected (`SetFontSelection( cell->GetFont() )`), none while the cells differ (`SetSelection( -1 )`, `face` null), which OK leaves alone
+ * (`if( m_fontCtrl->HaveFontSelection() ) cell->SetFont( .. )`), as it leaves a font the machine lacks.
+ */
+function CellFontSelect({ face, onChange }: { face: string | null; onChange: (face: string | null) => void }) {
+  const families = useFontFamilies();
+  const { choices, selected } = fontChoices(families, face ?? "", true);
+  const value = face === null ? "" : selected;
+  return (
+    <select data-testid="cell-face" aria-label="Font" value={value} onChange={(e) => onChange(e.target.value === "" ? null : (chosenFont(e.target.value) ?? face))}>
+      {face === null && <option value="">{""}</option>}
+      {choices.map((c) => (
+        <option key={c} value={c}>
+          {c}
+        </option>
+      ))}
+    </select>
+  );
 }
