@@ -321,7 +321,7 @@ impl Board<'_> {
         }
     }
 
-    fn store_layout(&mut self, reference: &str, name: &str, layout: FieldLayout) {
+    pub(crate) fn store_layout(&mut self, reference: &str, name: &str, layout: FieldLayout) {
         let slot = self.edit_slot(reference);
         match name {
             REFERENCE => slot.reference = Some(layout),

@@ -71,6 +71,14 @@ pub enum FpItemCmd {
     /// fields, texts, text boxes, zones, pads, groups, points) mirror across the axis through `pivot`, on the layer they are on. The others (a dimension, an image, a barcode,
     /// a table) are left as they are, as KiCad leaves them -- unless they are members of a group, which mirrors every member (`PCB_GROUP::Mirror`).
     Mirror { footprint: String, ids: Vec<String>, pivot: Point, direction: FlipDirection },
+    /// `EDIT_TOOL::Swap` (Alt+S) in the footprint editor, `ids` in selection order: each pair trades positions, two pads their copper's places
+    /// (`PAD::SwapShapePositions`), two items of one type their layers ([`crate::pcb_swap`]). `centres` holds each group's `GetPosition()` (its box's centre).
+    Swap {
+        footprint: String,
+        ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        centres: std::collections::BTreeMap<String, Point>,
+    },
     /// `EDIT_TOOL::DeleteItems`: pads, graphics, texts and the items of [`eda_model::fp_items`] go; a group goes with every item below it; a field is hidden (`case PCB_FIELD_T:
     /// field->SetVisible( false )`), never removed.
     Delete { footprint: String, ids: Vec<String> },
@@ -173,6 +181,7 @@ impl FpItemCmd {
             FpItemCmd::Move { footprint, .. }
             | FpItemCmd::Rotate { footprint, .. }
             | FpItemCmd::Mirror { footprint, .. }
+            | FpItemCmd::Swap { footprint, .. }
             | FpItemCmd::Delete { footprint, .. }
             | FpItemCmd::EditField { footprint, .. }
             | FpItemCmd::SetGraphic { footprint, .. }
@@ -193,6 +202,7 @@ impl FpItemCmd {
             FpItemCmd::Move { ids, .. } => format!("move {} item(s)", ids.len()),
             FpItemCmd::Rotate { ids, .. } => format!("rotate {} item(s)", ids.len()),
             FpItemCmd::Mirror { ids, .. } => format!("mirror {} item(s)", ids.len()),
+            FpItemCmd::Swap { ids, .. } => format!("swap {} item(s)", ids.len()),
             FpItemCmd::Delete { ids, .. } => format!("delete {} item(s)", ids.len()),
             FpItemCmd::EditField { name, .. } => format!("edit field {name:?}"),
             FpItemCmd::SetGraphic { id, .. } => format!("edit graphic {id}"),
@@ -230,7 +240,7 @@ pub fn field_name(id: &str) -> Option<&str> {
 
 /// The layout of the field `name` of `fp`, made KiCad's default first when the footprint has none of its own (the Reference, the Value, a user field placed nowhere
 /// yet), so it can be moved or turned. `None` for a field the footprint does not have.
-fn field_layout_mut<'a>(fp: &'a mut LibraryFootprint, name: &str) -> Option<&'a mut FieldLayout> {
+pub(crate) fn field_layout_mut<'a>(fp: &'a mut LibraryFootprint, name: &str) -> Option<&'a mut FieldLayout> {
     use eda_model::fp_edit::{default_library_reference_layout, default_library_value_layout, new_library_field_layout};
     match name {
         "Reference" => {
@@ -368,7 +378,7 @@ fn mirror_text_box(t: &mut TextBox, pivot: Point, dir: FlipDirection) {
 }
 
 /// The ids of every item of `fp`, fields included (`field:<name>` for each field it has), groups too.
-fn live_ids(fp: &LibraryFootprint) -> BTreeSet<String> {
+pub(crate) fn live_ids(fp: &LibraryFootprint) -> BTreeSet<String> {
     let mut ids: BTreeSet<String> = fp.pads.iter().map(|p| p.id.clone()).chain(fp.graphics.iter().map(|g| g.id().to_string())).chain(fp.texts.iter().map(|t| t.id.clone())).collect();
     ids.extend(fp.items.ids().map(String::from));
     for name in ["Reference", "Value"] {
@@ -519,6 +529,7 @@ impl Board<'_> {
                 Ok(())
             }
             FpItemCmd::Mirror { ids, pivot, direction, .. } => mirror(fp, ids, *pivot, *direction),
+            FpItemCmd::Swap { ids, centres, .. } => crate::pcb_swap::swap(&mut crate::pcb_swap::FpSwap(fp), ids, centres),
             FpItemCmd::Delete { ids, .. } => delete(fp, ids),
             FpItemCmd::EditField { name, text, layout, .. } => edit_field(fp, name, text, layout),
             FpItemCmd::SetGraphic { id, shape, look, .. } => {

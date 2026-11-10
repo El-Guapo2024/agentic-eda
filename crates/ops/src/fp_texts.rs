@@ -37,7 +37,7 @@ impl Board<'_> {
     }
 
     /// `f` on the instance's own copy of footprint `reference` (the footprint it is on now, before its pad edits): one assignment with the copy as its definition.
-    fn with_own_copy(&mut self, reference: &str, f: impl FnOnce(&mut eda_model::Footprint, &FootprintInstance) -> Result<(), Vec<CheckResult>>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn with_own_copy(&mut self, reference: &str, f: impl FnOnce(&mut eda_model::Footprint, &FootprintInstance) -> Result<(), Vec<CheckResult>>) -> Result<(), Vec<CheckResult>> {
         let pose = self.require_placed(reference)?;
         let part = self.model.part(reference).ok_or_else(|| fail("ops_unknown_part", reference, "no part with this reference exists in the model"))?;
         let before = self.unedited_footprint(part).ok_or_else(|| fail("ops_no_footprint", reference, "this part has no footprint geometry to edit"))?;
