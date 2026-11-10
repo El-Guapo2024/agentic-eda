@@ -7,13 +7,17 @@
 // "Set to layer default values:" over the layer-class grid of Board Setup > Text & Graphics > Defaults (`StyleFromSettings`). "Apply and Close" is one
 // `Cmd::EditTextAndGraphics`, one undo step (`commit.Push( _( "Edit Text and Graphics" ) )`); crates/ops/src/pcb_global_edit.rs does the change.
 //
-// Different from KiCad: "Footprint dimensions" has nothing to pick (a footprint's dimensions are kept as the text of their forms); a value box takes a number in
-// the editor's units rather than an expression; the font list is the server machine's families (`GET /api/fonts`).
-import { useEffect, useState } from "react";
+// A value box is a `UNIT_BINDER` with its `NUMERIC_EVALUATOR` (kicad-port/numericEvaluator.ts, UI-LEFT-2 PP23): "0.1+0.05", "10mil", "w=0.2; w*2" are worked out
+// in the editor's units when the box loses the focus (`onKillFocus`, the box then shows the result; the focus back shows the text as typed, `onSetFocus`) and
+// when the dialog reads it (`GetValue`).
+//
+// Different from KiCad: the font list is the server machine's families (`GET /api/fonts`).
+import { useEffect, useRef, useState } from "react";
 import { fetchFontFamilies } from "../api/client";
 import type { Cmd } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { nmFrom, nmTo, type LengthUnit } from "../state/units";
+import { nmTo, type LengthUnit } from "../state/units";
+import { evaluatedBoxText, lengthBoxValue, NumericEvaluator } from "../kicad-port/numericEvaluator";
 import {
   actionChangesSomething,
   autoThickness,
@@ -46,13 +50,35 @@ const ROW = { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } a
 /** A length as a value box shows it: the number in the editor's units, without a conversion's noise. */
 const shown = (nm: number, unit: LengthUnit): string => String(Number(nmTo(nm, unit).toFixed(4)));
 
-/** A `UNIT_BINDER` box that can say "-- leave unchanged --": empty is that, anything else a length in the editor's units. */
+/**
+ * A `UNIT_BINDER` box that can say "-- leave unchanged --": empty is that, anything else a length or an expression in the editor's units. Its evaluator keeps the
+ * variables it was given (`m_eval`); losing the focus shows the result (`onKillFocus`), taking it again the text as typed (`onSetFocus`: `m_eval.OriginalText()`).
+ */
 function LengthBox({ label, value, unit, disabled, onChange, placeholder }: { label: string; value: string; unit: LengthUnit; disabled?: boolean; onChange: (v: string) => void; placeholder?: string }) {
+  const evaluator = useRef<NumericEvaluator | null>(null);
+  evaluator.current ??= new NumericEvaluator(unit);
+  const ev = evaluator.current;
   return (
     <>
       <span style={{ opacity: disabled ? 0.5 : 1 }}>{label}</span>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-        <input type="text" value={value} placeholder={placeholder ?? LEAVE_UNCHANGED} disabled={disabled} onChange={(e) => onChange(e.target.value)} style={{ width: 130 }} aria-label={label.replace(/:$/, "")} />
+        <input
+          type="text"
+          value={value}
+          placeholder={placeholder ?? LEAVE_UNCHANGED}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => {
+            const old = ev.originalText();
+            if (old !== "" && old !== value) onChange(old);
+          }}
+          onBlur={() => {
+            const shownText = evaluatedBoxText(value, unit, ev);
+            if (shownText !== value) onChange(shownText);
+          }}
+          style={{ width: 130 }}
+          aria-label={label.replace(/:$/, "")}
+        />
         <span style={{ opacity: disabled ? 0.5 : 1 }}>{unit}</span>
       </span>
     </>
@@ -122,7 +148,8 @@ export function GlobalEditTextAndGraphicsDialog() {
   const layers = textGraphicsLayers(state.board);
   const filter = box ?? initialTextGraphicsFilter(state.board, state.activeLayer, remembered);
   const setFilter = (patch: Partial<TextGraphicsFilter>) => setBox({ ...filter, ...patch });
-  const length = (t: string): number | null => (t.trim() === "" || !Number.isFinite(Number(t)) ? null : Math.round(nmFrom(Number(t), unit)));
+  // `UNIT_BINDER::GetValue`: the box's text worked out, else read as it is
+  const length = (t: string): number | null => lengthBoxValue(t, unit);
   const action: TextGraphicsAction = { ...rows, lineWidth: length(lineText), textWidth: length(widthText), textHeight: length(heightText), textThickness: length(thicknessText) };
   const setRow = (patch: Partial<Rows>) => setRows({ ...rows, ...patch });
 
@@ -193,7 +220,7 @@ export function GlobalEditTextAndGraphicsDialog() {
             <span />
             {scopeBox("footprintTexts", "Footprint text items", "Footprint text items not associated with a field")}
             <span />
-            {scopeBox("footprintDimensions", "Footprint dimensions", undefined, "A footprint's dimensions are kept as the text of their forms here, so there are none to edit")}
+            {scopeBox("footprintDimensions", "Footprint dimensions")}
           </div>
 
           <div style={GROUP_TITLE}>Filter Items</div>
@@ -320,8 +347,9 @@ export function GlobalEditTextAndGraphicsDialog() {
             </div>
           )}
           <div style={{ fontSize: 11, opacity: 0.7, marginTop: 10 }} data-testid="global-edit-text-graphics-count">
-            {match.fieldIds.length} field(s), {match.fpTextIds.length} footprint text(s), {match.fpShapeIds.length} footprint graphic(s), {match.shapeIds.length} graphic item(s), {match.textIds.length} text(s) and{" "}
-            {match.dimensionIds.length} dimension(s) match the current scope and filters.
+            {match.fieldIds.length} field(s), {match.fpTextIds.length + match.fpItemTextIds.length} footprint text(s), {match.fpShapeIds.length + match.fpItemShapeIds.length} footprint graphic(s),{" "}
+            {match.fpDimensionIds.length} footprint dimension(s), {match.shapeIds.length} graphic item(s), {match.textIds.length} text(s) and {match.dimensionIds.length} dimension(s) match the current
+            scope and filters.
           </div>
         </div>
         <div className="dialog-footer">

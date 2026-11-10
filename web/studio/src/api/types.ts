@@ -347,6 +347,10 @@ export interface Part {
   graphics?: FpGraphic[];
   /** The footprint's own texts (`${REFERENCE}` on the fab layer ...), board space (absent when it has none). */
   texts?: FpTextInfo[];
+  /** The footprint's texts the canvas is not sent (hidden, or showing nothing): their ids, board layers and roles, for the global edit (UI-LEFT-2 PP23). */
+  hidden_texts?: Array<{ id: string; layer: string; role?: "reference" | "value" }>;
+  /** The footprint's courtyard graphics (`REF~c<k>`, crates/ops `courtyard_graphics`), for the global edit's "Footprint graphic items" (UI-LEFT-2 PP23). */
+  courtyard_graphics?: Array<{ id: string; layer: string }>;
   /**
    * The footprint's text boxes, reference images, points and barcodes (`FootprintExtra::items`, UI-LEFT P17) and its dimensions and tables (UI-LEFT PP14), board space, each in the
    * JSON of the board's own item of its kind and with the id `<ref>~<item id>` (crates/cli/src/fp_board_items_json.rs); absent when it has none.

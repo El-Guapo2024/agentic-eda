@@ -11,9 +11,10 @@
 //     visitItem                selected items only (the item, else its footprint, else a group above that, selected) -> by layer (`GetLayer()`) -> by parent
 //                              reference designator and by parent footprint library link (`WildCompareString`, case-blind, on an item that has a parent footprint)
 //
-// A footprint's own texts are the ones the board draws (`Part.texts`: a hidden one is not sent, so it is not reached), its graphics `Part.graphics` (ids
-// `REF~g<k>`, the k-th of that list). The footprints' dimensions, text boxes, tables and barcodes are kept as the text of their forms (GAPS.md item 25), so
-// "Footprint dimensions" has nothing to pick here.
+// A footprint's own texts are the ones the board draws (`Part.texts`) and the ones it does not (`Part.hidden_texts`: hidden, or showing nothing), its graphics
+// `Part.graphics` (ids `REF~g<k>`, the k-th of that list) and its courtyard graphics (`Part.courtyard_graphics`, `REF~c<k>`); its text boxes, table cells,
+// barcodes and dimensions are its items (`Part.items`, ids `REF~tbx_..` ..): "Footprint text items" takes the text boxes and the cells, "Footprint graphic
+// items" the barcodes, "Footprint dimensions" the dimensions (UI-LEFT-2 PP23).
 //
 // Pure: no store, no DOM. Unit-tested in globalEditTextGraphics.test.ts.
 import type { BoardState, GlobalEditTextRows, Part, TextGraphicsDefaults } from "../api/types";
@@ -80,8 +81,14 @@ export interface TextGraphicsMatch {
   fieldIds: string[];
   /** A footprint's own texts, `REF~t<k>`. */
   fpTextIds: string[];
-  /** A footprint's graphics, `REF~g<k>`. */
+  /** A footprint's graphics, `REF~g<k>`, and its courtyard graphics, `REF~c<k>`. */
   fpShapeIds: string[];
+  /** A footprint's text boxes and table cells (`REF~tbx_..`, `REF~tbl_..:<row>:<col>`): sent with the board's texts. */
+  fpItemTextIds: string[];
+  /** A footprint's barcodes (`REF~bar_..`): sent with the board's graphic items. */
+  fpItemShapeIds: string[];
+  /** A footprint's dimensions (`REF~dim_..`): sent with the board's dimensions. */
+  fpDimensionIds: string[];
 }
 
 /** The id of the k-th of a footprint's graphics (`Part.graphics`), as `Cmd::EditTextAndGraphics` names it (crates/ops/src/pcb_global_edit.rs `fp_shape_id`). */
@@ -96,7 +103,14 @@ export function textGraphicsLayers(board: BoardState | null): string[] {
   const out = [...(board?.layers ?? []), ...enabledOptionalLayers(board?.board_rules?.layer_setup)];
   const known = new Set(out);
   const dr = board?.drawings;
-  const fp = placedParts(board).flatMap((p) => [...(p.fields ?? []).map((f) => f.layer), ...(p.texts ?? []).map((t) => t.layer), ...(p.graphics ?? []).map((g) => g.layer)]);
+  const fp = placedParts(board).flatMap((p) => [
+    ...(p.fields ?? []).map((f) => f.layer),
+    ...(p.texts ?? []).map((t) => t.layer),
+    ...(p.hidden_texts ?? []).map((t) => t.layer),
+    ...(p.graphics ?? []).map((g) => g.layer),
+    ...(p.courtyard_graphics ?? []).map((g) => g.layer),
+    ...(p.items?.dimensions ?? []).map((d) => d.layer),
+  ]);
   for (const layer of [...(dr?.shapes ?? []).map((s) => s.layer), ...(dr?.texts ?? []).map((t) => t.layer), ...(dr?.dimensions ?? []).map((d) => d.layer), ...fp]) {
     if (layer && !known.has(layer)) {
       known.add(layer);
@@ -125,16 +139,17 @@ export function initialTextGraphicsFilter(board: BoardState | null, activeLayer:
 
 /** The ids of the items the dialog would change: the footprints' (in board order, each footprint's fields, then its texts, then its graphics), then the board's. */
 export function matchingTextAndGraphics(board: BoardState | null, scope: TextGraphicsScope, filter: TextGraphicsFilter, selection: ReadonlySet<string>): TextGraphicsMatch {
-  const out: TextGraphicsMatch = { shapeIds: [], textIds: [], dimensionIds: [], fieldIds: [], fpTextIds: [], fpShapeIds: [] };
+  const out: TextGraphicsMatch = { shapeIds: [], textIds: [], dimensionIds: [], fieldIds: [], fpTextIds: [], fpShapeIds: [], fpItemTextIds: [], fpItemShapeIds: [], fpDimensionIds: [] };
   if (!board) return out;
   const dr = board.drawings;
   const groups = dr?.groups ?? [];
   // `aItem->IsSelected()`, or a group above it is
   const isSelected = (id: string) => selection.has(id) || ancestors(groups, id).some((g) => selection.has(g.id));
   // `visitItem`'s filters; `parent` is the item's footprint (`GetParentFootprint()`), absent for a board item
-  const passes = (id: string, layer: string, parent?: Part): boolean => {
+  // `ownSelection`: an item whose parent is not the footprint (a table cell) is selected only as itself
+  const passes = (id: string, layer: string, parent?: Part, ownSelection = false): boolean => {
     // the item, else its footprint, else a group above that (`candidate = candidate->GetParent()`, then `GetParentGroup()`)
-    if (filter.selectedOnly && !selection.has(id) && !(parent ? isSelected(parent.ref) : isSelected(id))) return false;
+    if (filter.selectedOnly && !selection.has(id) && (ownSelection || !(parent ? isSelected(parent.ref) : isSelected(id)))) return false;
     if (filter.layerOn && filter.layer !== "" && layer !== filter.layer) return false;
     if (parent && filter.referenceOn && filter.reference !== "" && !wildCompare(filter.reference, parent.ref, false)) return false;
     if (parent && filter.footprintOn && filter.footprint !== "" && !wildCompare(filter.footprint, parent.footprint ?? "", false)) return false;
@@ -158,16 +173,29 @@ export function matchingTextAndGraphics(board: BoardState | null, scope: TextGra
       else if (scope.values && f.text === "${VALUE}") visitField(f.id, f.layer);
     }
     // Go through all other footprint items
-    for (const t of part.texts ?? []) {
+    for (const t of [...(part.texts ?? []), ...(part.hidden_texts ?? [])]) {
       const wanted = scope.footprintTexts || (scope.references && t.role === "reference") || (scope.values && t.role === "value");
       if (wanted && passes(t.id, t.layer, part)) out.fpTextIds.push(t.id);
+    }
+    const items = part.items;
+    if (scope.footprintTexts) {
+      for (const t of items?.text_boxes ?? []) if (passes(t.id, t.layer, part)) out.fpItemTextIds.push(t.id);
+      // a cell's parent is its table, not the footprint: it is selected only as itself
+      for (const tb of items?.tables ?? [])
+        for (const c of tb.cells) {
+          const id = cellItemId(tb.id, c.row, c.col);
+          if (passes(id, tb.layer, part, true)) out.fpItemTextIds.push(id);
+        }
     }
     if (scope.footprintGraphics) {
       (part.graphics ?? []).forEach((g, k) => {
         const id = fpShapeId(part.ref, k);
         if (passes(id, g.layer, part)) out.fpShapeIds.push(id);
       });
+      for (const g of part.courtyard_graphics ?? []) if (passes(g.id, g.layer, part)) out.fpShapeIds.push(g.id);
+      for (const b of items?.barcodes ?? []) if (passes(b.id, b.layer, part)) out.fpItemShapeIds.push(b.id);
     }
+    if (scope.footprintDimensions) for (const d of items?.dimensions ?? []) if (passes(d.id, d.layer, part)) out.fpDimensionIds.push(d.id);
   }
 
   // Go through the PCB text & graphic items
@@ -192,7 +220,7 @@ export function matchingTextAndGraphics(board: BoardState | null, scope: TextGra
 
 /** How many items a match names. */
 export function matchCount(m: TextGraphicsMatch): number {
-  return m.shapeIds.length + m.textIds.length + m.dimensionIds.length + m.fieldIds.length + m.fpTextIds.length + m.fpShapeIds.length;
+  return m.shapeIds.length + m.textIds.length + m.dimensionIds.length + m.fieldIds.length + m.fpTextIds.length + m.fpShapeIds.length + m.fpItemTextIds.length + m.fpItemShapeIds.length + m.fpDimensionIds.length;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------- the Action box
@@ -303,7 +331,8 @@ export function actionChangesSomething(a: TextGraphicsAction): boolean {
 /** The command for the dialog's "Apply and Close": the match, and either "Set to layer default values:" or the rows of "Set to specified values:". */
 export function textAndGraphicsCmd(m: TextGraphicsMatch, layerDefaults: boolean, a: TextGraphicsAction) {
   const footprint = { field_ids: m.fieldIds, text_ids: m.fpTextIds, shape_ids: m.fpShapeIds };
-  const base = { op: "edit_text_and_graphics" as const, shape_ids: m.shapeIds, text_ids: m.textIds, dimension_ids: m.dimensionIds, footprint };
+  // a footprint's own text boxes, cells, barcodes and dimensions go with the board's items of their kinds, by their board ids
+  const base = { op: "edit_text_and_graphics" as const, shape_ids: [...m.fpItemShapeIds, ...m.shapeIds], text_ids: [...m.fpItemTextIds, ...m.textIds], dimension_ids: [...m.fpDimensionIds, ...m.dimensionIds], footprint };
   if (layerDefaults) return { ...base, layer_defaults: true };
   const rows: GlobalEditTextRows = {};
   if (a.textWidth != null) rows.width = a.textWidth;

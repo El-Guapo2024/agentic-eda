@@ -528,3 +528,99 @@ fn a_footprints_own_text_is_moved_turned_edited_and_deleted_on_its_own() {
     b.apply(&Cmd::MoveItems { ids: ids(&["U1", "U1~t0"]), dx: mm(5.0), dy: Nm::ZERO }).unwrap();
     assert_eq!(own_footprint(&b, "U1").unwrap().art.texts[0].layout, t0, "in the footprint's frame, the text is where it was");
 }
+
+// ------------------------------------------------------------------------------------------------ UI-LEFT-2 PP23: hidden texts, courtyards, the footprints' items
+
+/// `fp->GraphicalItems()` holds a hidden text as it holds a shown one: "Footprint text items" reaches it (the studio sends its id, `REF~t<k>`).
+#[test]
+fn a_footprints_hidden_text_is_reached_as_a_shown_one() {
+    let mut m = model_with_art();
+    let mut hidden = FpText::new("${REFERENCE}", p(Nm::ZERO, mm(1.0)), "F.Fab");
+    hidden.layout.visible = false;
+    m.footprints[0].art.texts.push(hidden);
+    let mut b = board(&m);
+    b.apply(&fp_cmd(FootprintItems { text_ids: ids(&["U1~t2"]), ..Default::default() }, TextRows { height: Some(mm(1.7)), ..Default::default() }, None, None, None)).unwrap();
+    let own = own_footprint(&b, "U1").unwrap();
+    assert_eq!((own.art.texts[2].layout.size.1, own.art.texts[2].layout.visible), (mm(1.7), false), "edited, and still hidden");
+}
+
+/// A library footprint's courtyard graphics (`FpArt::courtyard`) are `PCB_SHAPE`s of the footprint: "Footprint graphic items" sets their width and layer, and
+/// "Set to layer default values" gives them the courtyard class's line thickness.
+#[test]
+fn a_library_footprints_courtyard_graphics_take_the_graphic_rows() {
+    let mut m = model_with_art();
+    m.footprints[0].art.courtyard.push(FpShape::new(Shape::Rect { id: String::new(), layer: "F.CrtYd".into(), stroke_width: mm(0.05), filled: false, start: p(mm(-3.0), mm(-2.0)), end: p(mm(3.0), mm(2.0)) }));
+    let mut b = board(&m);
+    let part = m.part("U1").unwrap().clone();
+    let at = pose(&b, "U1");
+    assert_eq!(super::courtyard_graphics(b.design(), &m, &part, &at, &m.footprints[0]), vec![("U1~c0".to_string(), "F.CrtYd".to_string())]);
+    b.apply(&fp_cmd(FootprintItems { shape_ids: ids(&["U1~c0"]), ..Default::default() }, TextRows::default(), None, Some(mm(0.07)), None)).unwrap();
+    assert_eq!(own_footprint(&b, "U1").unwrap().art.courtyard[0].shape.stroke_width(), mm(0.07));
+    let defaults = Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], dimension_ids: vec![], layer_defaults: true, layer: None, line_width: None, text_size: None, text_thickness: None, footprint: FootprintItems { shape_ids: ids(&["U1~c0"]), ..Default::default() }, rows: TextRows::default() };
+    b.apply(&defaults).unwrap();
+    assert_eq!(own_footprint(&b, "U1").unwrap().art.courtyard[0].shape.stroke_width(), mm(0.045), "the courtyard class");
+}
+
+/// The courtyard items of the board file (`FootprintExtra::courtyard_items`) are edited in their text while the footprint is written with them.
+#[test]
+fn a_board_files_courtyard_items_are_edited_in_their_text() {
+    let m = model_with_art();
+    let mut d = design();
+    let part = m.part("U1").unwrap().clone();
+    let written = eda_model::fp_items_place::written_name(&m, &part);
+    let item = r#"(fp_rect (start -3 -2) (end 3 2) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd") (uuid "c1"))"#;
+    let dr = d.drawings.as_mut().unwrap();
+    dr.footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), source_name: written.clone(), courtyard_items: vec![item.into()], ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let at = pose(&b, "U1");
+    assert_eq!(super::courtyard_graphics(b.design(), &m, &part, &at, &m.footprints[0]), vec![("U1~c0".to_string(), "F.CrtYd".to_string())]);
+    b.apply(&fp_cmd(FootprintItems { shape_ids: ids(&["U1~c0"]), ..Default::default() }, TextRows::default(), Some("B.CrtYd"), Some(mm(0.1)), None)).unwrap();
+    let extra = drawings(&b).footprint_extras.iter().find(|x| x.id == "U1").unwrap();
+    assert_eq!(extra.courtyard_items[0], r#"(fp_rect (start -3 -2) (end 3 2) (stroke (width 0.1) (type solid)) (fill none) (layer "B.CrtYd") (uuid "c1"))"#);
+    assert!(own_footprint(&b, "U1").is_none(), "the footprint is left the library's");
+}
+
+/// A footprint's own dimensions, text boxes and barcodes (`FootprintExtra::items`, named by their board ids) take the rows a board item of their kind takes; a
+/// dimension's label also "Keep upright", and on a footprint on the back a layer asked for is kept as for the top side.
+#[test]
+fn a_footprints_own_dimensions_and_text_boxes_take_the_rows() {
+    use eda_model::pcb_items::TextBox;
+    let m = model_with_defaults();
+    let mut d = design();
+    d.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U1").unwrap().side = Side::Bottom;
+    let dr = d.drawings.as_mut().unwrap();
+    let mut dim = dr.dimensions[0].clone();
+    dim.layer = "F.Fab".into();
+    let mut tb = TextBox::new("F.SilkS", p(Nm::ZERO, Nm::ZERO), p(mm(4.0), mm(2.0)), mm(1.0), mm(0.1));
+    tb.id = "tbx_1".into();
+    let mut items = eda_model::fp_items::FootprintItems::default();
+    items.dimensions.push(dim);
+    items.text_boxes.push(tb);
+    dr.footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), items, ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let cmd = Cmd::EditTextAndGraphics {
+        shape_ids: vec![],
+        text_ids: ids(&["U1~tbx_1"]),
+        dimension_ids: ids(&["U1~dim_a"]),
+        layer_defaults: false,
+        layer: Some("B.Fab".into()),
+        line_width: Some(mm(0.2)),
+        text_size: None,
+        text_thickness: None,
+        footprint: Default::default(),
+        rows: TextRows { height: Some(mm(1.3)), keep_upright: Some(false), ..Default::default() },
+    };
+    b.apply(&cmd).unwrap();
+    let items = &drawings(&b).footprint_extras.iter().find(|x| x.id == "U1").unwrap().items;
+    let dim = &items.dimensions[0];
+    assert_eq!((dim.layer.as_str(), dim.stroke_width, dim.text_size_nm, dim.text_effects.keep_upright), ("F.Fab", mm(0.2), mm(1.3), false), "B.Fab on the back is F.Fab in the footprint's frame");
+    let tb = &items.text_boxes[0];
+    assert_eq!((tb.layer.as_str(), tb.size_nm, tb.stroke_width_nm), ("F.Fab", mm(1.3), mm(0.2)));
+    assert_eq!(drawings(&b).dimensions[0].stroke_width, design().drawings.unwrap().dimensions[0].stroke_width, "the board's dim_a is another item");
+
+    // layer defaults: the class of the layer on the board (B.Fab: fab), keep upright from it for a footprint's dimension
+    b.apply(&defaults_cmd(&[], &["U1~tbx_1"], &["U1~dim_a"])).unwrap();
+    let items = &drawings(&b).footprint_extras.iter().find(|x| x.id == "U1").unwrap().items;
+    assert_eq!((items.dimensions[0].stroke_width, items.dimensions[0].text_size_nm, items.dimensions[0].text_effects.keep_upright), (mm(0.09), mm(0.9), m.board.text_graphics.fab.upright));
+    assert_eq!(items.text_boxes[0].size_nm, mm(0.9));
+}

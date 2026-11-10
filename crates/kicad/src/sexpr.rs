@@ -52,6 +52,11 @@ pub(crate) fn set_text(atom: &mut Sexpr, text: &str) {
     }
 }
 
+/// A new atom the file would quote (a string: a layer name, a text), for a reader that writes a token into the tree.
+pub(crate) fn quoted_atom(text: &str) -> Sexpr {
+    Sexpr::Atom(format!("{QUOTED}{text}"))
+}
+
 /// Parse the whole document: exactly one top-level list, e.g.
 /// `(kicad_pcb ...)`. Returns the offset of the failure (byte index) in the
 /// error string so a caller can turn it into a line number if it wants one.

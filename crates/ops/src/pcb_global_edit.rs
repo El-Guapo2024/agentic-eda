@@ -28,7 +28,13 @@
 //! * a footprint's own text (`REF~t<k>`) and graphic (`REF~g<k>`) are the k-th of its art (`Footprint::art`'s `texts` and `shapes`), which a library footprint
 //!   shares with every instance: the edit gives the instance its own copy of the footprint, as Change Footprint does
 //!   (`FootprintAssignment::definition`, the name unchanged), with the pad edits still laid over it. Art keeps its layers as for a top-side footprint, so a
-//!   layer set on a bottom-side footprint's item is turned over first (`layer_on_side`).
+//!   layer set on a bottom-side footprint's item is turned over first (`layer_on_side`). A hidden text is reached as a shown one is (`REF~t<k>` names every
+//!   text of the art);
+//! * a courtyard graphic (`REF~c<k>`, [`courtyard_graphics`]) is the k-th of the board file's courtyard items while the footprint is written with them
+//!   (`FootprintExtra::courtyard_items`: its layer and width set in the text), else the k-th of the library footprint's (`FpArt::courtyard`, in the instance's copy);
+//! * a text box, a table cell, a barcode or a dimension of the footprint (`U1~tbx_..`, `U1~tbl_..:<row>:<col>`, `U1~bar_..`, `U1~dim_..`) is the footprint's own
+//!   ([`eda_model::ir::FootprintExtra::items`]), with the rows a board item of its kind takes; a dimension's label also takes "Keep upright" (`if( parentFP )`).
+//!   "Center on footprint" leaves them: `SetTextPos` on a text box or on a dimension that places its text itself is undone by the item's own layout.
 //!
 //! `processItem`'s rows for them: a text's width and height, its thickness or "auto" (`SetAutoThickness`: a field's and a footprint text's thickness 0),
 //! bold, italic, the font (`m_fontCtrl`: "KiCad Font" is the stroke font, no face; any other is the face), keep upright and "Center on footprint" (only for an
@@ -50,7 +56,10 @@ use super::Board;
 use eda_model::fp_art::layer_on_side;
 use eda_model::fp_assign::FootprintAssignment;
 use eda_model::fp_edit::{self, FieldLayout, REFERENCE, VALUE};
-use eda_model::ir::{FootprintInstance, Nm, Point};
+use eda_model::barcode::Barcode;
+use eda_model::ir::{Dimension, FootprintInstance, Nm, Point, Side};
+use eda_model::pcb_items::TextBox;
+use eda_model::table::Table;
 use eda_model::padstack::UnconnectedLayers;
 use eda_model::pcb_items::auto_pen_nm;
 use eda_model::rules::TextGraphicsDefaults;
@@ -96,7 +105,7 @@ pub struct FootprintItems {
     /// A footprint's own texts, `REF~t<k>` ([`fp_text_id`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_ids: Vec<String>,
-    /// A footprint's graphics, `REF~g<k>` ([`fp_shape_id`]).
+    /// A footprint's graphics, `REF~g<k>` ([`fp_shape_id`]), and its courtyard graphics, `REF~c<k>` ([`fp_courtyard_id`], [`courtyard_graphics`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shape_ids: Vec<String>,
 }
@@ -117,7 +126,32 @@ pub fn fp_shape_id(reference: &str, k: usize) -> String {
     format!("{reference}~g{k}")
 }
 
-/// `REF~t<k>` / `REF~g<k>` as the reference and k, for the kind `tag` (`'t'` or `'g'`).
+/// The id of the k-th of a footprint's courtyard graphics on the board (see [`courtyard_graphics`]).
+pub fn fp_courtyard_id(reference: &str, k: usize) -> String {
+    format!("{reference}~c{k}")
+}
+
+/// Whether the courtyard graphics the board file had (`FootprintExtra::courtyard_items`) are the ones the footprint is written with: while the part is on the
+/// footprint they were read from and on the side they were read for (as `eda_kicad`'s writer decides, `own_courtyard`).
+fn file_courtyard_applies(extra: &eda_model::ir::FootprintExtra, written_name: &str, side: Side) -> bool {
+    !extra.courtyard_items.is_empty() && extra.source_name == written_name && extra.courtyard_bottom == (side == Side::Bottom)
+}
+
+/// A footprint's courtyard graphics on the board, `(id, layer)` (`REF~c<k>`): `fp->GraphicalItems()`'s shapes on `F.CrtYd` / `B.CrtYd`, which "Footprint graphic
+/// items" reaches as it reaches the others (UI-LEFT-2 PP23). They are the courtyard items of the board file while they are what the footprint is written with
+/// (`FootprintExtra::courtyard_items`), else the library footprint's (`FpArt::courtyard`); none for a courtyard the board makes up from the pads or the
+/// library's outlines (the writer's box and polygons, which hold no line width of their own).
+pub fn courtyard_graphics(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, part: &eda_model::Part, pose: &FootprintInstance, footprint: &eda_model::Footprint) -> Vec<(String, String)> {
+    let written = eda_model::fp_items_place::written_name(model, part);
+    if let Some(extra) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|x| x.id == part.reference)) {
+        if file_courtyard_applies(extra, &written, pose.side) {
+            return extra.courtyard_items.iter().enumerate().filter_map(|(k, item)| Some((fp_courtyard_id(&part.reference, k), eda_kicad::courtyard_items::courtyard_item_layer(item)?))).collect();
+        }
+    }
+    footprint.art.courtyard.iter().enumerate().map(|(k, s)| (fp_courtyard_id(&part.reference, k), layer_on_side(s.layer(), pose.side))).collect()
+}
+
+/// `REF~t<k>` / `REF~g<k>` / `REF~c<k>` as the reference and k, for the kind `tag` (`'t'`, `'g'` or `'c'`).
 fn parse_fp_item_id(id: &str, tag: char) -> Option<(&str, usize)> {
     let (reference, rest) = id.rsplit_once('~')?;
     let k = rest.strip_prefix(tag)?.parse().ok()?;
@@ -234,6 +268,194 @@ fn refuse(check: &str, message: &str) -> Result<(), Vec<CheckResult>> {
     Err(vec![CheckResult::fail(check, "edit_text_and_graphics", message)])
 }
 
+/// `processItem` on a text box, a table's cells, a barcode or a dimension: of the board (`side` the top, `in_footprint` false) or of a footprint, whose items
+/// keep the layers of the top side (`side` the footprint's: a layer asked for is turned over to it, and a layer's class is that of the layer on the board).
+struct ItemRows<'a> {
+    e: &'a GlobalTextEdit<'a>,
+    defaults: TextGraphicsDefaults,
+    dim_style: eda_model::ir::DimensionSettings,
+    face: Option<Option<String>>,
+    side: Side,
+    /// `GetParentFootprint()`: "Keep upright" and `StyleFromSettings`' keep upright reach a footprint's text only.
+    in_footprint: bool,
+}
+
+impl ItemRows<'_> {
+    /// The layer an item kept as `stored` is on, on the board.
+    fn board_layer(&self, stored: &str) -> String {
+        layer_on_side(stored, self.side)
+    }
+
+    /// The layer the Layer row asks for, as the item keeps it.
+    fn stored_layer(&self) -> Option<String> {
+        self.e.layer.map(|l| layer_on_side(l, self.side))
+    }
+
+    /// A text box is a text and a shape (`PCB_TEXTBOX` is an `EDA_TEXT` and a `PCB_SHAPE`): its glyphs, its pen and its border width.
+    fn text_box(&self, t: &mut TextBox) {
+        let (e, defaults) = (self.e, &self.defaults);
+        if e.layer_defaults {
+            // `PCB_TEXTBOX::StyleFromSettings`: `PCB_SHAPE::StyleFromSettings`, then the text
+            let layer = self.board_layer(&t.layer);
+            t.stroke_width_nm = line_thickness(defaults, &layer);
+            (t.size_nm, t.width_nm) = text_height_width(defaults, &layer);
+            t.thickness_nm = text_thickness(defaults, &layer);
+            t.italic = defaults.text_italic_upright(&layer).0;
+            return;
+        }
+        if let Some(l) = self.stored_layer() {
+            t.layer = l;
+        }
+        let width = e.width().unwrap_or(t.width_nm.unwrap_or(t.size_nm));
+        if let Some(h) = e.height() {
+            t.size_nm = h;
+        }
+        t.width_nm = (width != t.size_nm).then_some(width);
+        if e.rows.auto_thickness {
+            t.thickness_nm = Nm::ZERO;
+        } else if let Some(th) = e.text_thickness {
+            t.thickness_nm = th;
+        }
+        if let Some(b) = e.rows.bold {
+            t.bold = b;
+        }
+        if let Some(i) = e.rows.italic {
+            t.italic = i;
+        }
+        if let Some(f) = &self.face {
+            t.face = f.clone();
+        }
+        if let Some(w) = e.line_width {
+            t.stroke_width_nm = w;
+        }
+    }
+
+    /// A table's cells (`RunOnChildren`, `PCB_TABLECELL_T`) that `wanted( row, col )` names: a `PCB_TEXTBOX` each, on the table's layer. A cell has no layer and
+    /// no border of its own here (the table's grid draws it), so only its text changes.
+    fn table_cells(&self, table: &mut Table, wanted: impl Fn(usize, usize) -> bool) {
+        let (e, defaults) = (self.e, &self.defaults);
+        let layer = self.board_layer(&table.layer);
+        let cols = table.col_widths.len().max(1);
+        for (i, cell) in table.cells.iter_mut().enumerate() {
+            if !wanted(i / cols, i % cols) {
+                continue;
+            }
+            if e.layer_defaults {
+                // `PCB_TEXTBOX::StyleFromSettings` (a cell is one): the class's (width, height), thickness and italic.
+                (cell.style.width_nm, cell.style.height_nm) = defaults.text_size_nm(&layer);
+                cell.style.thickness_nm = text_thickness(defaults, &layer);
+                cell.style.italic = defaults.text_italic_upright(&layer).0;
+                continue;
+            }
+            if let Some(w) = e.width() {
+                cell.style.width_nm = w;
+            }
+            if let Some(h) = e.height() {
+                cell.style.height_nm = h;
+            }
+            if e.rows.auto_thickness {
+                cell.style.thickness_nm = Nm::ZERO;
+            } else if let Some(th) = e.text_thickness {
+                cell.style.thickness_nm = th;
+            }
+            if let Some(b) = e.rows.bold {
+                cell.style.bold = b;
+            }
+            if let Some(i) = e.rows.italic {
+                cell.style.italic = i;
+            }
+            if let Some(f) = &self.face {
+                cell.style.face = f.clone();
+            }
+        }
+    }
+
+    /// `PCB_BARCODE_T` with the graphics: its layer and its text's size (`SetTextSize( m_textHeight )`, else the width; `PCB_BARCODE::StyleFromSettings`: the
+    /// layer's text height).
+    fn barcode(&self, b: &mut Barcode) {
+        let e = self.e;
+        if e.layer_defaults {
+            b.text_height_nm = text_size(&self.defaults, &self.board_layer(&b.layer));
+            return;
+        }
+        if let Some(l) = self.stored_layer() {
+            b.layer = l;
+        }
+        if let Some(s) = e.height().or(e.width()) {
+            b.text_height_nm = s;
+        }
+    }
+
+    fn dimension(&self, d: &mut Dimension) {
+        let (e, defaults, dim_style) = (self.e, &self.defaults, &self.dim_style);
+        if e.layer_defaults {
+            // `PCB_DIMENSION_BASE::StyleFromSettings`: `PCB_TEXT::StyleFromSettings` (the size, width and height, the pen and italic; keep upright for a
+            // footprint's), then the line thickness and the board's dimension settings.
+            let layer = self.board_layer(&d.layer);
+            let (h, w) = text_height_width(defaults, &layer);
+            d.text_size_nm = h;
+            d.text_effects.width_nm = w;
+            d.text_thickness_nm = Some(text_thickness(defaults, &layer));
+            let (italic, upright) = defaults.text_italic_upright(&layer);
+            d.text_effects.italic = italic;
+            if self.in_footprint {
+                d.text_effects.keep_upright = upright;
+            }
+            d.stroke_width = line_thickness(defaults, &layer);
+            d.units = dim_style.units;
+            d.units_format = dim_style.units_format;
+            d.precision = dim_style.precision;
+            d.suppress_trailing_zeros = dim_style.suppress_trailing_zeros;
+            d.text_position = dim_style.text_position;
+            d.keep_text_aligned = dim_style.keep_text_aligned;
+            return;
+        }
+        if let Some(l) = self.stored_layer() {
+            d.layer = l;
+        }
+        if let Some(w) = e.line_width {
+            d.stroke_width = w;
+        }
+        // The label's own width and height (UI-LEFT-2 PP11): `SetTextSize( VECTOR2I( width, GetTextSize().y ) )`, then the height.
+        let (mut w, mut h) = (d.text_width_nm(), d.text_size_nm);
+        if let Some(x) = e.width() {
+            w = x;
+        }
+        if let Some(y) = e.height() {
+            h = y;
+        }
+        d.text_size_nm = h;
+        d.text_effects.width_nm = (w != h).then_some(w);
+        if e.rows.auto_thickness {
+            // no automatic pen for a dimension's label here: the pen it would have (`GetPenSizeForNormal` / `GetPenSizeForBold` of the width)
+            d.text_thickness_nm = Some(auto_pen_nm(w, d.text_effects.bold));
+        } else if let Some(th) = e.text_thickness {
+            d.text_thickness_nm = Some(th);
+        }
+        // "Must be after SetTextSize()": `EDA_TEXT::SetBold` -- in the stroke font the pen goes to the bold or the normal one of the smaller size (KiCad gives
+        // back a pen it kept aside; the model keeps none) -- and `SetItalic`; then the font, asked for with them.
+        if let Some(b) = e.rows.bold {
+            if b != d.text_effects.bold && d.text_effects.face.is_none() {
+                let size = w.min(h);
+                d.text_thickness_nm = Some(Nm::kiround(size.as_f64() / if b { 5.0 } else { 8.0 }));
+            }
+            d.text_effects.bold = b;
+        }
+        if let Some(i) = e.rows.italic {
+            d.text_effects.italic = i;
+        }
+        if let Some(face) = &self.face {
+            d.text_effects.face = face.clone();
+        }
+        // `if( parentFP ) text->SetKeepUpright( .. )`
+        if self.in_footprint {
+            if let Some(u) = e.rows.keep_upright {
+                d.text_effects.keep_upright = u;
+            }
+        }
+    }
+}
+
 impl Board<'_> {
     /// `Cmd::EditTextAndGraphics`. Unknown ids among the lists are tolerated (they match nothing), the same convention `CommitRoute` set for a list the
     /// caller computed; refused when every list is empty (nothing named at all, almost certainly a caller bug) or an explicit value is out of range.
@@ -258,14 +480,14 @@ impl Board<'_> {
             }
         }
         self.edit_footprint_items(e);
+        self.edit_footprint_board_items(e);
 
         let shapes: BTreeSet<&str> = e.shape_ids.iter().map(String::as_str).collect();
         let texts: BTreeSet<&str> = e.text_ids.iter().map(String::as_str).collect();
         let dims: BTreeSet<&str> = e.dimension_ids.iter().map(String::as_str).collect();
         let defaults = self.model.board.text_graphics;
         let Some(dr) = self.design.drawings.as_mut() else { return Ok(()) };
-        let dim_style = dr.dimension_settings;
-        let face = e.rows.face();
+        let rows = ItemRows { e, defaults, dim_style: dr.dimension_settings, face: e.rows.face(), side: Side::Top, in_footprint: false };
 
         for s in dr.shapes.iter_mut().filter(|s| shapes.contains(s.id())) {
             if e.layer_defaults {
@@ -283,6 +505,7 @@ impl Board<'_> {
         // A board text: `Text` holds the layer, the height and the pen; what else the rows set is its `TextExtra` (the glyph width when it is not the height,
         // bold, italic, the face, the automatic pen). Each text's extra is worked out whole and put back (or dropped when it says nothing).
         let ids: Vec<String> = dr.texts.iter().filter(|t| texts.contains(t.id.as_str())).map(|t| t.id.clone()).collect();
+        let face = &rows.face;
         for id in ids {
             let mut extra = dr.text_extra(&id).cloned().unwrap_or(eda_model::board_text::TextExtra { id: id.clone(), ..Default::default() });
             let Some(t) = dr.texts.iter_mut().find(|t| t.id == id) else { continue };
@@ -310,7 +533,7 @@ impl Board<'_> {
                 if let Some(i) = e.rows.italic {
                     extra.italic = i;
                 }
-                if let Some(f) = &face {
+                if let Some(f) = face {
                     extra.face = f.clone();
                 }
                 if e.rows.auto_thickness {
@@ -331,151 +554,63 @@ impl Board<'_> {
                 (None, true) => {}
             }
         }
-        // A text box is a text and a shape (`PCB_TEXTBOX` is an `EDA_TEXT` and a `PCB_SHAPE`): its glyphs, its pen and its border width.
         for t in dr.board_items.text_boxes.iter_mut().filter(|t| texts.contains(t.id.as_str())) {
-            if e.layer_defaults {
-                // `PCB_TEXTBOX::StyleFromSettings`: `PCB_SHAPE::StyleFromSettings`, then the text
-                t.stroke_width_nm = line_thickness(&defaults, &t.layer);
-                (t.size_nm, t.width_nm) = text_height_width(&defaults, &t.layer);
-                t.thickness_nm = text_thickness(&defaults, &t.layer);
-                t.italic = defaults.text_italic_upright(&t.layer).0;
-                continue;
-            }
-            if let Some(l) = e.layer {
-                t.layer = l.to_string();
-            }
-            let width = e.width().unwrap_or(t.width_nm.unwrap_or(t.size_nm));
-            if let Some(h) = e.height() {
-                t.size_nm = h;
-            }
-            t.width_nm = (width != t.size_nm).then_some(width);
-            if e.rows.auto_thickness {
-                t.thickness_nm = Nm::ZERO;
-            } else if let Some(th) = e.text_thickness {
-                t.thickness_nm = th;
-            }
-            if let Some(b) = e.rows.bold {
-                t.bold = b;
-            }
-            if let Some(i) = e.rows.italic {
-                t.italic = i;
-            }
-            if let Some(f) = &face {
-                t.face = f.clone();
-            }
-            if let Some(w) = e.line_width {
-                t.stroke_width_nm = w;
-            }
+            rows.text_box(t);
         }
-        // A table's cells (`RunOnChildren`, `PCB_TABLECELL_T`), named `<table>:<row>:<col>`: a `PCB_TEXTBOX` each, on the table's layer. A cell has no layer and no
-        // border of its own here (the table's grid draws it), so only its text changes.
         for table in dr.tables.iter_mut() {
-            let layer = table.layer.clone();
-            let cols = table.col_widths.len().max(1);
-            for (i, cell) in table.cells.iter_mut().enumerate() {
-                if !texts.contains(eda_model::table::cell_item_id(&table.id, i / cols, i % cols).as_str()) {
-                    continue;
-                }
-                if e.layer_defaults {
-                    // `PCB_TEXTBOX::StyleFromSettings` (a cell is one): the class's (width, height), thickness and italic.
-                    (cell.style.width_nm, cell.style.height_nm) = defaults.text_size_nm(&layer);
-                    cell.style.thickness_nm = text_thickness(&defaults, &layer);
-                    cell.style.italic = defaults.text_italic_upright(&layer).0;
-                    continue;
-                }
-                if let Some(w) = e.width() {
-                    cell.style.width_nm = w;
-                }
-                if let Some(h) = e.height() {
-                    cell.style.height_nm = h;
-                }
-                if e.rows.auto_thickness {
-                    cell.style.thickness_nm = Nm::ZERO;
-                } else if let Some(th) = e.text_thickness {
-                    cell.style.thickness_nm = th;
-                }
-                if let Some(b) = e.rows.bold {
-                    cell.style.bold = b;
-                }
-                if let Some(i) = e.rows.italic {
-                    cell.style.italic = i;
-                }
-                if let Some(f) = &face {
-                    cell.style.face = f.clone();
-                }
-            }
+            let id = table.id.clone();
+            rows.table_cells(table, |r, c| texts.contains(eda_model::table::cell_item_id(&id, r, c).as_str()));
         }
-        // `PCB_BARCODE_T` with the graphics: its layer and its text's size (`SetTextSize( m_textHeight )`, else the width; `PCB_BARCODE::StyleFromSettings`: the
-        // layer's text height).
         for b in dr.barcodes.iter_mut().filter(|b| shapes.contains(b.id.as_str())) {
-            if e.layer_defaults {
-                b.text_height_nm = text_size(&defaults, &b.layer);
-                continue;
-            }
-            if let Some(l) = e.layer {
-                b.layer = l.to_string();
-            }
-            if let Some(s) = e.height().or(e.width()) {
-                b.text_height_nm = s;
-            }
+            rows.barcode(b);
         }
         for d in dr.dimensions.iter_mut().filter(|d| dims.contains(d.id.as_str())) {
-            if e.layer_defaults {
-                // `PCB_TEXT::StyleFromSettings` (the size, width and height, the pen and italic; keep upright only for a footprint's), then
-                // `PCB_DIMENSION_BASE::StyleFromSettings`.
-                let (h, w) = text_height_width(&defaults, &d.layer);
-                d.text_size_nm = h;
-                d.text_effects.width_nm = w;
-                d.text_thickness_nm = Some(text_thickness(&defaults, &d.layer));
-                d.text_effects.italic = defaults.text_italic_upright(&d.layer).0;
-                d.stroke_width = line_thickness(&defaults, &d.layer);
-                d.units = dim_style.units;
-                d.units_format = dim_style.units_format;
-                d.precision = dim_style.precision;
-                d.suppress_trailing_zeros = dim_style.suppress_trailing_zeros;
-                d.text_position = dim_style.text_position;
-                d.keep_text_aligned = dim_style.keep_text_aligned;
-                continue;
-            }
-            if let Some(l) = e.layer {
-                d.layer = l.to_string();
-            }
-            if let Some(w) = e.line_width {
-                d.stroke_width = w;
-            }
-            // The label's own width and height (UI-LEFT-2 PP11): `SetTextSize( VECTOR2I( width, GetTextSize().y ) )`, then the height.
-            let (mut w, mut h) = (d.text_width_nm(), d.text_size_nm);
-            if let Some(x) = e.width() {
-                w = x;
-            }
-            if let Some(y) = e.height() {
-                h = y;
-            }
-            d.text_size_nm = h;
-            d.text_effects.width_nm = (w != h).then_some(w);
-            if e.rows.auto_thickness {
-                // no automatic pen for a dimension's label here: the pen it would have (`GetPenSizeForNormal` / `GetPenSizeForBold` of the width)
-                d.text_thickness_nm = Some(auto_pen_nm(w, d.text_effects.bold));
-            } else if let Some(th) = e.text_thickness {
-                d.text_thickness_nm = Some(th);
-            }
-            // "Must be after SetTextSize()": `EDA_TEXT::SetBold` -- in the stroke font the pen goes to the bold or the normal one of the smaller size (KiCad gives
-            // back a pen it kept aside; the model keeps none) -- and `SetItalic`; then the font, asked for with them.
-            if let Some(b) = e.rows.bold {
-                if b != d.text_effects.bold && d.text_effects.face.is_none() {
-                    let size = w.min(h);
-                    d.text_thickness_nm = Some(Nm::kiround(size.as_f64() / if b { 5.0 } else { 8.0 }));
-                }
-                d.text_effects.bold = b;
-            }
-            if let Some(i) = e.rows.italic {
-                d.text_effects.italic = i;
-            }
-            if let Some(face) = e.rows.face() {
-                d.text_effects.face = face;
-            }
+            rows.dimension(d);
         }
         Ok(())
+    }
+
+    /// The footprints' own text boxes, table cells, barcodes and dimensions among the ids (`U1~tbx_..`, `U1~tbl_..:<row>:<col>`, `U1~bar_..`, `U1~dim_..`:
+    /// [`eda_model::fp_items_place::board_id`]): `fp->GraphicalItems()`'s `PCB_TEXTBOX_T` and `PCB_TABLE_T` children with Footprint text items, `PCB_BARCODE_T`
+    /// with Footprint graphic items and `BaseType( itemType ) == PCB_DIMENSION_T` with Footprint dimensions (UI-LEFT-2 PP23). Each footprint owns them
+    /// ([`eda_model::ir::FootprintExtra::items`], in the frame of its pads, the layers those of the top side): `processItem`'s rows change them there, a layer
+    /// asked for on a footprint on the back turned over first.
+    fn edit_footprint_board_items(&mut self, e: &GlobalTextEdit<'_>) {
+        let mut by_footprint: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for id in e.shape_ids.iter().chain(e.text_ids.iter()).chain(e.dimension_ids.iter()) {
+            if let Some((reference, item)) = eda_model::fp_items_place::parse_board_id(id) {
+                by_footprint.entry(reference.to_string()).or_default().insert(item.to_string());
+            }
+        }
+        if by_footprint.is_empty() {
+            return;
+        }
+        let defaults = self.model.board.text_graphics;
+        let dim_style = self.design.drawings.as_ref().map(|d| d.dimension_settings).unwrap_or_default();
+        for (reference, wanted) in by_footprint {
+            let Some(pose) = self.pose_of(&reference).cloned() else { continue };
+            let Some(part) = self.model.part(&reference) else { continue };
+            let written = eda_model::fp_items_place::written_name(self.model, part);
+            let Some(extra) = self.design.drawings.as_mut().and_then(|d| d.footprint_extras.iter_mut().find(|x| x.id == reference)) else { continue };
+            if !extra.items_are_for(&written) {
+                continue;
+            }
+            let rows = ItemRows { e, defaults, dim_style, face: e.rows.face(), side: pose.side, in_footprint: true };
+            let items = &mut extra.items;
+            for t in items.text_boxes.iter_mut().filter(|t| wanted.contains(&t.id)) {
+                rows.text_box(t);
+            }
+            for table in items.tables.iter_mut() {
+                let id = table.id.clone();
+                rows.table_cells(table, |r, c| wanted.contains(&eda_model::table::cell_item_id(&id, r, c)));
+            }
+            for b in items.barcodes.iter_mut().filter(|b| wanted.contains(&b.id)) {
+                rows.barcode(b);
+            }
+            for d in items.dimensions.iter_mut().filter(|d| wanted.contains(&d.id)) {
+                rows.dimension(d);
+            }
+        }
     }
 
     /// The footprints' part of `Cmd::EditTextAndGraphics` (see the module doc): the fields' layouts in their footprint's edit, the texts and graphics of
@@ -552,16 +687,38 @@ impl Board<'_> {
         }
 
         // ---- the art: the texts and graphics of each footprint named, in its own copy
-        let mut by_footprint: BTreeMap<&str, (BTreeSet<usize>, BTreeSet<usize>)> = BTreeMap::new();
+        let mut by_footprint: BTreeMap<&str, (BTreeSet<usize>, BTreeSet<usize>, BTreeSet<usize>)> = BTreeMap::new();
         for (r, k) in items.text_ids.iter().filter_map(|id| parse_fp_item_id(id, 't')) {
             by_footprint.entry(r).or_default().0.insert(k);
         }
         for (r, k) in items.shape_ids.iter().filter_map(|id| parse_fp_item_id(id, 'g')) {
             by_footprint.entry(r).or_default().1.insert(k);
         }
-        for (reference, (text_ks, shape_ks)) in by_footprint {
+        for (r, k) in items.shape_ids.iter().filter_map(|id| parse_fp_item_id(id, 'c')) {
+            by_footprint.entry(r).or_default().2.insert(k);
+        }
+        for (reference, (text_ks, shape_ks, mut courtyard_ks)) in by_footprint {
             let Some(pose) = self.pose_of(reference).cloned() else { continue };
             let Some(part) = self.model.part(reference) else { continue };
+            // The courtyard items of the board file: their text, in the footprint's record (a layer and a width; they are on the board's layers already).
+            if !courtyard_ks.is_empty() {
+                let written = eda_model::fp_items_place::written_name(self.model, part);
+                let extra = self.design.drawings.as_mut().and_then(|d| d.footprint_extras.iter_mut().find(|x| x.id == reference));
+                if let Some(extra) = extra.filter(|x| file_courtyard_applies(x, &written, pose.side)) {
+                    for k in std::mem::take(&mut courtyard_ks) {
+                        let Some(item) = extra.courtyard_items.get_mut(k) else { continue };
+                        let (layer, width) = if e.layer_defaults {
+                            // `PCB_SHAPE::StyleFromSettings`: the stroke of the layer class of the layer it is on
+                            (None, eda_kicad::courtyard_items::courtyard_item_layer(item).map(|l| line_thickness(&defaults, &l)))
+                        } else {
+                            (e.layer, e.line_width)
+                        };
+                        if let Some(text) = eda_kicad::courtyard_items::restyle_courtyard_item(item, layer, width) {
+                            *item = text;
+                        }
+                    }
+                }
+            }
             let Some(before) = self.unedited_footprint(part) else { continue };
             let name = self.design.footprint_assignment(reference).map(|a| a.footprint.clone()).unwrap_or_else(|| crate::fp_exchange::footprint_name_of(part));
             let center = if e.rows.center_on_footprint && !e.layer_defaults && !text_ks.is_empty() { center_of(self, reference, &pose) } else { None };
@@ -585,8 +742,10 @@ impl Board<'_> {
                     t.layout.set_from_board(&pose, c, angle);
                 }
             }
-            for k in shape_ks {
-                let Some(s) = fp.art.shapes.get_mut(k) else { continue };
+            // `shapes` then the library footprint's courtyard graphics (`art.courtyard`), the same rows on each
+            let shapes_then_courtyard: Vec<(bool, usize)> = shape_ks.into_iter().map(|k| (false, k)).chain(courtyard_ks.into_iter().map(|k| (true, k))).collect();
+            for (courtyard, k) in shapes_then_courtyard {
+                let Some(s) = (if courtyard { fp.art.courtyard.get_mut(k) } else { fp.art.shapes.get_mut(k) }) else { continue };
                 if e.layer_defaults {
                     // `PCB_SHAPE::StyleFromSettings`: the stroke of the layer class of the layer it is on, on the board.
                     s.shape.set_stroke_width(line_thickness(&defaults, &layer_on_side(s.layer(), pose.side)));

@@ -129,6 +129,7 @@ pub mod zone_fills;
 pub mod appearance;
 // Import Graphics (`common/import_gfx`): the readers of DXF files and the shapes they hand the importers of the editors.
 pub mod dxf_import;
+pub mod courtyard_items;
 pub mod graphics_import;
 pub mod svg_import;
 // Specctra DSN export and SES import (`pcbnew/specctra_import_export`): an exporter and importer of our own, for outside autorouters.

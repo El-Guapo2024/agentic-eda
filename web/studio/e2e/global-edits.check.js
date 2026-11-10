@@ -60,8 +60,9 @@
   /** Click a three-state box until it says `want` (undetermined -> unchecked -> checked -> undetermined). */
   const setTri = async (a, want) => { for (let i = 0; i < 3 && tri(a) !== want; i++) { byAria(a).click(); await sleep(80); } };
   const tgCounts = () => {
-    const m = /(\d+) field\(s\), (\d+) footprint text\(s\), (\d+) footprint graphic\(s\), (\d+) graphic item\(s\), (\d+) text\(s\) and (\d+) dimension\(s\)/.exec(document.querySelector('[data-testid="global-edit-text-graphics-count"]')?.textContent ?? "");
-    return m ? m.slice(1).map(Number) : null;
+    // (the footprint dimensions' count, UI-LEFT-2 PP23, is left out: the six of before)
+    const m = /(\d+) field\(s\), (\d+) footprint text\(s\), (\d+) footprint graphic\(s\),(?: (\d+) footprint dimension\(s\),)? (\d+) graphic item\(s\), (\d+) text\(s\) and (\d+) dimension\(s\)/.exec(document.querySelector('[data-testid="global-edit-text-graphics-count"]')?.textContent ?? "");
+    return m ? [m[1], m[2], m[3], m[5], m[6], m[7]].map(Number) : null;
   };
   const tvCounts = () => { const m = /(\d+) track\(s\) and (\d+) via\(s\)/.exec([...dlg().querySelectorAll("div")].map((d) => d.textContent).find((x) => /match the current scope/.test(x) && x.length < 140) ?? ""); return m ? [Number(m[1]), Number(m[2])] : null; };
   const field = (p, name) => p?.fields?.find((f) => f.name === name);
