@@ -19,6 +19,7 @@ import { textLie } from "../kicad-port/schTextItem";
 import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
 import { chosenFont, DEFAULT_FONT, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
 import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
+import { useExistingLabels } from "./LabelDialog";
 
 const LABEL_SHAPES: Array<{ value: LabelShape; label: string }> = [
   { value: "input", label: "Input" },
@@ -79,6 +80,8 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const close = useClose();
   const send = useSend(close);
   const [text, setText] = useState(label.net);
+  // the Label combo box's list (`m_existingLabelArray`): every screen's labels of the kind, the power nets like them, the bus aliases
+  const existing = useExistingLabels(label.scope, label.id);
   const [shape, setShape] = useState<LabelShape>(label.shape ?? "input");
   const [turn, setTurn] = useState<LabelSpinName>(spin);
   // the "Auto" check of a global or hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`; a plain label does not have it)
@@ -116,7 +119,14 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
     <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
         <span>Label</span>
-        <input autoFocus value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        <input autoFocus aria-label="Label" list={existing.length > 0 ? "label-props-existing" : undefined} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        {existing.length > 0 && (
+          <datalist id="label-props-existing">
+            {existing.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+        )}
         {label.scope !== "local" && (
           <>
             <span>Shape</span>

@@ -77,6 +77,7 @@ mod sch_export_api;
 mod sch_hierarchy_api;
 mod sch_move_api;
 mod sch_place_api;
+mod sch_label_api;
 mod fonts_api;
 mod fab_cmd;
 #[cfg(test)]
