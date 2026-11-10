@@ -57,7 +57,7 @@ export interface Preferences {
   /** `input.drag_middle` / `input.drag_right` (`MOUSE_DRAG_ACTION`): what dragging with that button does. Default pan for both. */
   dragMiddle: DragAction;
   dragRight: DragAction;
-  /** `input.mouse_left` ("Left button drag:"): what a left drag does in the selection tools (`leftDragOutcome`). The studio's default is `DEFAULT_LEFT_DRAG`. */
+  /** `input.mouse_left` ("Left button drag:"): what a left drag does in the selection tools (`leftDragOutcome`). Default `DEFAULT_LEFT_DRAG`, KiCad's DRAG_SELECTED. */
   dragLeft: LeftDragAction;
   /** `input.motion_pan_modifier` ("Pan on mouse movement with key:"), default none. */
   motionPanModifier: MotionPanModifier;
@@ -290,6 +290,15 @@ export function zoomControllerFor(p: Preferences, isMacPlatform: boolean): ZoomC
 
 export const PREFERENCES_STORAGE_KEY = "eda-studio.preferences.v1";
 
+/**
+ * The version of what `savePreferences` writes (`schemaVersion`), as KiCad's settings files carry theirs (`JSON_SETTINGS::m_schemaVersion`, migrated by
+ * `registerMigration`). 2 (2026-11-10, UI-LEFT-2 CC3): the default of "Left button drag:" became KiCad's DRAG_SELECTED. The studio stores its whole preferences
+ * on every start, so before 2 a stored `dragLeft: "drag_any"` is the old default as often as a choice; it is read as the new default, the way
+ * `COMMON_SETTINGS::migrateSchema1to2` rewrites `input.mouse_left` from what an older file said. "Draw selection rectangle" and "Drag selected objects", which
+ * only a person could have chosen, are kept, and so is anything saved from version 2 on.
+ */
+export const PREFERENCES_SCHEMA_VERSION = 2;
+
 const MODIFIERS: readonly ScrollModifier[] = ["none", "ctrl", "shift", "alt"];
 const isModifier = (v: unknown): v is ScrollModifier => typeof v === "string" && (MODIFIERS as readonly string[]).includes(v);
 const dragAction = (v: unknown, fallback: DragAction): DragAction => (v === "pan" || v === "zoom" || v === "none" ? v : fallback);
@@ -366,6 +375,15 @@ export function sanitizePreferences(raw: unknown): Preferences {
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }
 
+/** What was stored by an older studio, brought to `PREFERENCES_SCHEMA_VERSION` (see there): before 2, `dragLeft: "drag_any"` is the old default. */
+export function migratePreferences(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const o = raw as Record<string, unknown>;
+  const version = typeof o.schemaVersion === "number" ? o.schemaVersion : 1;
+  if (version < 2 && o.dragLeft === "drag_any") return { ...o, dragLeft: DEFAULT_LEFT_DRAG };
+  return raw;
+}
+
 /** The slice of `Storage` used, so tests can pass a plain object. */
 export interface PreferencesStorage {
   getItem(key: string): string | null;
@@ -376,7 +394,7 @@ export interface PreferencesStorage {
 export function loadPreferences(storage: PreferencesStorage | null | undefined): Preferences {
   try {
     const text = storage?.getItem(PREFERENCES_STORAGE_KEY);
-    return text ? sanitizePreferences(JSON.parse(text)) : DEFAULT_PREFERENCES;
+    return text ? sanitizePreferences(migratePreferences(JSON.parse(text))) : DEFAULT_PREFERENCES;
   } catch {
     return DEFAULT_PREFERENCES;
   }
@@ -384,7 +402,7 @@ export function loadPreferences(storage: PreferencesStorage | null | undefined):
 
 export function savePreferences(storage: PreferencesStorage | null | undefined, prefs: Preferences): void {
   try {
-    storage?.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(prefs));
+    storage?.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify({ ...prefs, schemaVersion: PREFERENCES_SCHEMA_VERSION }));
   } catch {
     /* storage unavailable: the preferences still apply for this session */
   }

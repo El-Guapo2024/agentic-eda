@@ -195,6 +195,7 @@
       t(!!field && field.id === `fld:${label.id}:Netclass`, `the net class field is an item (${field?.id})`);
       if (!field) return;
       await frame([label.id]);
+      await select([field.id]); // Drag selected objects, KiCad's default (UI-LEFT-2 CC3)
       await dragFrom(field.at[0], field.at[1], 5_080_000, 2_540_000);
       label = (await sch("")).labels.find((l) => l.id === label.id);
       const moved = label.fields.find((f) => f.name === "Netclass");

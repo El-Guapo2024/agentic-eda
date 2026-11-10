@@ -44,7 +44,7 @@ export interface ViewControlSettings {
   /** input.drag_middle / drag_right, default PAN for both. */
   dragMiddle: DragAction;
   dragRight: DragAction;
-  /** input.mouse_left: what a left drag does in the selection tools (`leftDragOutcome`). The studio's default differs from KiCad's, see `DEFAULT_LEFT_DRAG`. */
+  /** input.mouse_left: what a left drag does in the selection tools (`leftDragOutcome`), default `DEFAULT_LEFT_DRAG` (KiCad's DRAG_SELECTED). */
   dragLeft: LeftDragAction;
   /** input.motion_pan_modifier, default none. */
   motionPanModifier: MotionPanModifier;
@@ -64,7 +64,7 @@ export const DEFAULT_VIEW_CONTROL_SETTINGS: ViewControlSettings = {
   autoPanAcceleration: 5.0,
   dragMiddle: "pan",
   dragRight: "pan",
-  dragLeft: "drag_any",
+  dragLeft: "drag_selected",
   motionPanModifier: "none",
   scrollModifierZoom: "none",
   scrollModifierPanH: "ctrl",
@@ -234,12 +234,14 @@ export function motionPan(view: ViewTransform, modifier: MotionPanModifier, keys
 // ---------------------------------------------------------------- the left button
 
 /**
- * The studio's default for "Left button drag:". KiCad's is `DRAG_SELECTED` (`common_settings.cpp`: `PARAM_ENUM( "input.mouse_left", ..., DRAG_SELECTED, ... )`), where a
- * drag that starts on an item not selected draws a selection rectangle. **Differs**: the studio keeps `DRAG_ANY`, the way its canvases have always behaved (an item is
- * picked up by dragging it) and the value KiCad's own migration gives settings that did not ask to prefer selection (`COMMON_SETTINGS::migrateSchema1to2`); the
- * preference offers all three.
+ * The default of "Left button drag:", KiCad's: `DRAG_SELECTED` (`common/settings/common_settings.cpp::COMMON_SETTINGS`:
+ * `PARAM_ENUM( "input.mouse_left", &m_Input.drag_left, MOUSE_DRAG_ACTION::DRAG_SELECTED, ... )`), the one setting every editor's selection tool reads
+ * (`TOOLS_HOLDER::CommonSettingsChanged`), so the board, the schematic and both library editors start with it. A drag that starts on an item while nothing is
+ * selected draws the selection rectangle (`PCB_SELECTION_TOOL::Main` / `SCH_SELECTION_TOOL::Main`: `m_selection.Empty() && dragAction != DRAG_ANY`); a drag from a
+ * selected item moves the selection. A value the person chose and saved is kept (`sanitizePreferences`); only the default changed (until 2026-11-10 the studio's
+ * was `DRAG_ANY`, the value KiCad's `migrateSchema1to2` gives an old configuration).
  */
-export const DEFAULT_LEFT_DRAG: LeftDragAction = "drag_any";
+export const DEFAULT_LEFT_DRAG: LeftDragAction = "drag_selected";
 
 /** What the selection tool knows when a left press becomes a drag (`evt->IsDrag( BUT_LEFT )`). */
 export interface LeftDragContext {

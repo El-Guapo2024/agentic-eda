@@ -103,7 +103,7 @@ impl Studio {
         };
         let board = root.join("board");
         let intent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/two_pin_nets.yaml");
-        eda(&["board", "new", intent.to_str().unwrap(), "-o", board.to_str().unwrap()]);
+        eda(&["board", "new", intent.to_str().unwrap(), "-o", board.to_str().unwrap(), "--origin", "0,0"]);
         for (part, at) in [("R1", "3,3"), ("R2", "6,3"), ("C1", "4.5,6")] {
             eda(&["board", "place", part, "--at", at, "-C", board.to_str().unwrap()]);
         }

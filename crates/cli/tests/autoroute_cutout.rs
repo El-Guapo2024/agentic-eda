@@ -32,7 +32,7 @@ fn placed_board(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("eda_autoroute_cutout_{}_{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let yaml = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/through_hole_headers.yaml");
-    let out = Command::new(env!("CARGO_BIN_EXE_eda")).args(["board", "new"]).arg(&yaml).arg("-o").arg(&dir).output().expect("run eda");
+    let out = Command::new(env!("CARGO_BIN_EXE_eda")).args(["board", "new"]).arg(&yaml).arg("-o").arg(&dir).args(["--origin", "0,0"]).output().expect("run eda");
     assert!(out.status.success(), "eda board new: {}", String::from_utf8_lossy(&out.stderr));
     for (part, at) in [("J3", "11.5,3"), ("J2", "7,20"), ("J1", "17,20"), ("R1", "20,8"), ("R2", "20,14")] {
         eda(&dir, &["place", part, "--at", at]);

@@ -193,7 +193,7 @@ test("leftDragOutcome follows PCB_SELECTION_TOOL::Main / SCH_SELECTION_TOOL::Mai
   // a modifier always draws the area (`hasModifier()`)
   for (const a of ["select", "drag_selected", "drag_any"] as const) assert.equal(leftDragOutcome(a, c({ modifier: true, selectionEmpty: false, inSelection: true })), "area");
   assert.equal(DEFAULT_VIEW_CONTROL_SETTINGS.dragLeft, DEFAULT_LEFT_DRAG);
-  assert.equal(DEFAULT_LEFT_DRAG, "drag_any", "the studio's default (KiCad's is drag_selected; see DEFAULT_LEFT_DRAG)");
+  assert.equal(DEFAULT_LEFT_DRAG, "drag_selected", "KiCad's default (common_settings.cpp: input.mouse_left DRAG_SELECTED)");
 });
 
 test("a pinch zooms as onMagnify does, about the pointer and whatever the scroll settings say", () => {

@@ -200,8 +200,8 @@
     });
 
     await scenario("A drag of the footprint carries its items", async (t) => {
-      await E.run("common.InteractiveSelection.clear");
-      await sleep(200);
+      // selected first: KiCad's default "Left button drag" is Drag selected objects (UI-LEFT-2 CC3)
+      await select(["FPK1"]);
       await drag(toScreen, [home[0] - 2, home[1]], [home[0] + 3, home[1] + 2]);
       const p = await fpk();
       t(near(p.at[0], mm(home[0] + 5), 300_000) && near(p.items.images[0].x - p.at[0], mm(-6)) && near(p.items.text_boxes[0].start[0] - p.at[0], mm(1)), `the items keep their place on the footprint (${p.at}, image ${p.items.images[0].x})`);
