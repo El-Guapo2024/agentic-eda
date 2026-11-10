@@ -364,14 +364,22 @@ pub trait GroupHost {
         Ok(())
     }
 
-    /// `GROUP_TOOL::RemoveFromGroup`: each id leaves the group it is in (a no-op for one that is in none), free of every group above it too.
+    /// `GROUP_TOOL::RemoveFromGroup`: each id leaves the group it is in (a no-op for one that is in none), free of every group above it too. Each group it took
+    /// a member from that is left with fewer than two dissolves (`if( group->GetItems().size() < 2 )`: its last member freed, the group removed) -- a group
+    /// linked to a design block too, as 8303b2ad and 25ec2335 both have it (UI-LEFT-2 SS18; [`prune_affected_groups`]' exception for a linked group is
+    /// the multichannel tool's, not this verb's). Then the empty groups go ([`drop_empty_groups`]).
     fn remove_members(&mut self, ids: &[String]) {
         let groups = self.group_list_mut();
         let affected = groups_holding(groups, ids);
         for g in groups.iter_mut() {
             g.member_ids.retain(|m| !ids.contains(m));
         }
-        prune_affected_groups(groups, &affected);
+        let doomed: Vec<String> = groups.iter().filter(|g| affected.contains(&g.id) && g.member_ids.len() < 2).map(|g| g.id.clone()).collect();
+        groups.retain(|g| !doomed.contains(&g.id));
+        for g in groups.iter_mut() {
+            g.member_ids.retain(|m| !doomed.contains(m));
+        }
+        drop_empty_groups(groups);
     }
 
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`: rename the group and make its members exactly `member_ids`, each pulled out of the group it
@@ -603,6 +611,21 @@ mod tests {
         e.dissolve_groups(&[top]);
         assert_eq!(e.groups.len(), 1);
         assert!(e.parent_group(&b).is_none());
+    }
+
+    /// UI-LEFT-2 SS18: Remove Items dissolves a group it leaves with fewer than two whether it is linked to a design block or not
+    /// (`GROUP_TOOL::RemoveFromGroup`, 8303b2ad and 25ec2335); a group it did not touch keeps its one member.
+    #[test]
+    fn remove_items_dissolves_a_linked_group_left_with_one_and_leaves_the_others() {
+        let mut e = SchExtras::default();
+        e.make_group(&strs(&["R1", "R2"])).unwrap();
+        let linked = e.groups[0].id.clone();
+        e.groups[0].design_block = "Power:Buck".into();
+        e.groups.push(g_named("single", &["C1"]));
+        e.remove_members(&strs(&["R1"]));
+        assert!(!e.is_group(&linked), "{:?}", e.groups);
+        assert!(e.parent_group("R2").is_none());
+        assert!(e.is_group("single"), "a group of one the verb did not touch stays");
     }
 
     #[test]

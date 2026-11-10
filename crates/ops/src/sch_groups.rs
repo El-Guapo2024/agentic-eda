@@ -23,8 +23,8 @@
 //!
 //! `SCH_COMMIT::Push` takes an item that is removed out of its group (`group->RemoveItem( schItem )`). The delete verbs do not know about groups, so
 //! [`Board::apply`](super::Board::apply) compares the ids of the sheet before and after a command and [`Board::tidy_sch_groups`] drops from every group the members that
-//! were there and are not now. Like the board's groups, a group left with fewer than two members dissolves (KiCad keeps a group of one until it is ungrouped and
-//! does not write an empty one; one rule for both editors is the simpler one to work with).
+//! were there and are not now. A group left with one member stays, as KiCad keeps it until it is ungrouped or Remove Items takes the member out; one left with
+//! none goes (KiCad does not write an empty one).
 
 use super::{Board, Cmd, Domain};
 use crate::pcb_groups::refused;
