@@ -681,8 +681,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   a board graphic polygon is unfilled on Edge.Cuts and the courtyards at the layer's width; a new copper text is bold (`InferBold`); teardrops follow 25ec2335 only (the chord filter, Max width 0, the
   arc's polyline and centre: 14 kicad-cli cases point for point); Draw Via ignores hidden layers, takes the board's via list entry and judges copper text by its own shape (and a knockout's hull);
   Create Zone / Rule Area from Selection is one dialog; the line mode is kept between sessions; `eda board via place`; messages KiCad does not have are gone.
-- Missing (round 6): Swap of arc tracks, dimensions, groups, tables, text boxes, barcodes and points, and of two footprints' orientation and side inside a mixed selection, and of two pads as pads
-  (`PAD::SwapShapePositions`); ~~the Select Net menu's order by net code~~ (done, `task-u6-last`); the via ghost at `SnapItem`'s point (C6-7); "Via location violates DRC." with Allow DRC violations on (C6-6); a PTH pad's
+- Missing (round 6): ~~Swap of arc tracks, dimensions, groups, tables, text boxes, barcodes and points, and of two footprints' orientation and side inside a mixed selection, and of two pads as pads
+  (`PAD::SwapShapePositions`)~~ (done 2026-11-10, `task-v4-pp15-swap`, below); ~~the Select Net menu's order by net code~~ (done, `task-u6-last`); the via ghost at `SnapItem`'s point (C6-7); "Via location violates DRC." with Allow DRC violations on (C6-6); a PTH pad's
   unflashed layer and text boxes, tables, dimensions and barcodes on copper in the via's DRC check (C6-4, C6-5); ~~R / F / E on a carried text (A6-6)~~ (done, `task-u6-last`); a rounded rectangle's corners through
   `TransformRoundChamferedRectToPolygon` (D6-3); the 100 nm chaining's direction (D6-4) and the outline fix's view of a removed duplicate (D6-5), both KiCad quirks; ~~teardrops fitted to other nets'
   clearance (25ec2335's `computeFittedTeardropPolygon`) and the solder-mask teardrops~~ (done 2026-11-07, `task-v2-teardrops`, below); the text dialog's Bold control.
@@ -692,7 +692,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`ZONE::SetPosition` is a no-op); a copper text box is bold at the defaults (`InferBold`); the Text dialog has Bold; Change Track Width / Via Size and the microwave tools take the sizes the
   board's lists give now (`GetCurrentTrackWidth`, `GetCurrentViaSize`), a microvia its class's.
 - Missing (round 7): ~~each via's and pad's own teardrop parameters~~ (done 2026-11-06, below), ~~teardrops on custom pads and on a padstack's other
-  layers~~ (done 2026-11-07, below); the Text dialog's Italic; Swap of the other kinds above; ~~R7-4 (a knockout text's box in the via check)~~ (done, below).
+  layers~~ (done 2026-11-07, below); the Text dialog's Italic; ~~Swap of the other kinds above~~ (done, `task-v4-pp15-swap`); ~~R7-4 (a knockout text's box in the via check)~~ (done, below).
+- Done 2026-11-10 (`task-v4-pp15-swap`, PARITY-pcb section 104, UI-LEFT-2 PP15): Swap (Alt+S) of every kind as `EDIT_TOOL::Swap` does it, one `swap_items` per swap: an arc's and a
+  dimension's start alone, a group by its box's centre, tables, text boxes, barcodes, points and images, two items of one type trading layers, two footprints' side and orientation in any selection; two
+  pads in the Footprint Editor by `PAD::SwapShapePositions`. Left: tuning patterns, via stitchings, table cells and grid items are not swapped; no Allow free pads setting.
 - Done 2026-11-07 (`task-v3-pcbmisc`, PARITY-pcb section 101, UI-LEFT-2 PP12): a via's per-layer padstack diameters drawn, routed and checked; Draw Via's
   preview at `SnapItem`'s point (C6-7); an allowed violating via placed with "Via location violates DRC." said (C6-6); an unflashed plated pad's hole at the
   copper clearance (C6-4); copper tables, dimensions and barcodes in the via check (C6-5; a text box is skipped, as KiCad skips it); R7-4. Left: the
