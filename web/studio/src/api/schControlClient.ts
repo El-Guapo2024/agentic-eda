@@ -34,6 +34,15 @@ export async function fetchHierarchyTree(net?: string | null): Promise<{ sheets:
   return { sheets: j.sheets, virtualRoot: !!j.virtual_root };
 }
 
+/**
+ * The files of every screen the project keeps (`GET /api/sch/hierarchy`'s `screens`: `design.sheet_contents`' keys), placed or not -- what a new sheet's
+ * file is checked against beside the hierarchy (`ChangeSheetFile`'s `wxFileExists`, kicad-port/schSheet.ts `linkQuestion`).
+ */
+export async function fetchHierarchyFiles(): Promise<{ sheets: HierarchyEntry[]; screens: string[] }> {
+  const j = await getJson<{ ok: boolean; sheets: HierarchyEntry[]; screens?: string[] }>("/api/sch/hierarchy");
+  return { sheets: j.sheets, screens: j.screens ?? [] };
+}
+
 /** Every sheet that has content, depth first, the root first (`SCH_SHEET_LIST::BuildSheetList`); `kicad-port/sheetPages.ts` sorts it by page. */
 export async function fetchHierarchy(): Promise<HierarchyEntry[]> {
   const j = await getJson<{ ok: boolean; sheets: HierarchyEntry[] }>("/api/sch/hierarchy");

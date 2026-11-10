@@ -111,7 +111,8 @@ export type SchToolDialog =
   /** Cleanup Sheet Pins asking before it deletes the unreferenced pins of a sheet (`IsOK`). */
   | { kind: "cleanup_pins"; sheetId: string; sheetName: string; pins: Array<{ id: string; name: string }> }
   /** The Sync Sheet Pins dialog (`DIALOG_SYNC_SHEET_PINS`) for these sheets, `first` the one whose page opens. */
-  | { kind: "sync_pins"; sheetIds: string[]; first?: string }
+  /** `path`: the sheet path the sheets are on, when it is not the one in view (the dialog shown again after Add Labels went into a sheet). */
+  | { kind: "sync_pins"; sheetIds: string[]; first?: string; path?: string[] }
   /** Change Symbols / Update Symbols (`DIALOG_CHANGE_SYMBOLS`), `selected` the references selected when it opened. */
   | { kind: "change_symbols"; mode: "change" | "update"; selected: string[] }
   /** Edit Text & Graphics Properties (`DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`), `selected` the ids selected when it opened. */

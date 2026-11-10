@@ -52,6 +52,9 @@ const subscribe = (l: () => void) => {
 
 export const getSchCarry = (): SchCarry | null => current;
 
+/** Be told of every change of what the tool holds (the Sync Sheet Pins dialog shows itself again once its labels are placed or dropped). Returns the unsubscribe. */
+export const subscribeSchCarry = subscribe;
+
 export function setSchCarry(next: SchCarry | null): void {
   current = next;
   emit();
