@@ -633,6 +633,9 @@ pub(crate) fn rename_power_symbols(sch: &mut SchematicSection, renames: &[(Strin
             if let Some(v) = sch.extras.power_path_refs.remove(from) {
                 sch.extras.power_path_refs.insert(to.clone(), v);
             }
+            if let Some(v) = sch.extras.power_lib_names.remove(from) {
+                sch.extras.power_lib_names.insert(to.clone(), v);
+            }
             if sch.extras.is_locked(from) {
                 sch.extras.set_locked(from, false);
                 sch.extras.set_locked(to, true);

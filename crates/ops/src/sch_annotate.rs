@@ -768,6 +768,7 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     let mut path_units = Vec::new();
     let mut pos_excluded = Vec::new();
     let mut power_props = Vec::new();
+    let mut power_lib_names = Vec::new();
     let mut power_refs = Vec::new();
     for r in renames {
         let (old_key, new_key) = (field_key(&r.old, r.unit), field_key(&r.new, r.unit));
@@ -807,10 +808,15 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
             if let Some(v) = sch.extras.power_path_refs.remove(&r.old) {
                 power_refs.push((r.new.clone(), v));
             }
+            // and the renamed cache entry it is drawn from (PARITY-sch §82)
+            if let Some(v) = sch.extras.power_lib_names.remove(&r.old) {
+                power_lib_names.push((r.new.clone(), v));
+            }
         }
     }
     sch.extras.power_props.extend(power_props);
     sch.extras.power_path_refs.extend(power_refs);
+    sch.extras.power_lib_names.extend(power_lib_names);
     sch.field_layout.extend(layout);
     sch.extras.fields_autoplaced.extend(autoplaced);
     sch.extras.body_styles.extend(styles);

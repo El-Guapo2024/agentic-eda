@@ -169,6 +169,14 @@ pub struct SchExtras {
     /// [`Self::local_power`]). Additive.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub global_power: std::collections::BTreeSet<String>,
+    /// The power symbols of this screen drawn from a renamed entry of its library-symbol cache, by power symbol id (PARITY-sch §82): KiCad's
+    /// `SCH_SCREEN::Append` keeps one cache entry per name (`m_libSymbols`, written as the file's `lib_symbols`), and a symbol placed whose library
+    /// symbol differs from the entry its library id names -- Place Power's "Power Symbols:" preference made it the other kind (`SetLocalPower` /
+    /// `SetGlobalPower`), or the entry was made so -- is given an entry of its own, `<name>_<n>` (`+5V_1`), linked by its `(lib_name ..)`
+    /// (`SetSchSymbolLibraryName`). The id's own entry keeps the kind [`Self::power_is_local`] says; this one keeps its own. Written as the entry
+    /// and the `(lib_name ..)`; dropped with its symbol and renamed with it. Read through [`Self::power_symbol_is_local`]. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub power_lib_names: BTreeMap<String, PowerLibName>,
     /// The symbols marked "Exclude from position files" (`SCH_SYMBOL::GetExcludedFromPosFiles`, `(in_pos_files no)`), by `field_key` (r2 B-L2): read and
     /// written back, so the board's position files leave them out as KiCad's do. Additive.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
@@ -561,6 +569,15 @@ impl SchExtras {
     }
 }
 
+/// See [`SchExtras::power_lib_names`]: the renamed cache entry a power symbol is drawn from, and whether that entry is a local power symbol (`(power local)`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PowerLibName {
+    /// The entry's name (`+5V_1`): the library symbol's name, `_`, the first number no entry of the screen has (`SCH_SCREEN::Append`).
+    pub name: String,
+    pub local: bool,
+}
+
 /// See [`SchExtras::power_props`]. A user field's place is the power symbol's anchor (not kept, as a sheet's user fields are not: r2 B-L1).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -927,6 +944,15 @@ impl SchExtras {
         }
         self.local_power.contains(lib_id) || library.unwrap_or(false)
     }
+
+    /// Whether the power symbol `id` (of `lib_id`) is a local one: the kind of the renamed cache entry it is drawn from ([`Self::power_lib_names`]), else
+    /// the kind of its library id's entry ([`Self::power_is_local`]).
+    pub fn power_symbol_is_local(&self, id: &str, lib_id: &str, library: Option<bool>) -> bool {
+        match self.power_lib_names.get(id) {
+            Some(entry) => entry.local,
+            None => self.power_is_local(lib_id, library),
+        }
+    }
 }
 
 impl SchExtras {
@@ -948,6 +974,7 @@ impl SchExtras {
             && self.power_path_refs.is_empty()
             && self.local_power.is_empty()
             && self.global_power.is_empty()
+            && self.power_lib_names.is_empty()
             && self.excluded_from_pos_files.is_empty()
             && self.symbol_variants.is_empty()
             && self.fields_autoplaced.is_empty()

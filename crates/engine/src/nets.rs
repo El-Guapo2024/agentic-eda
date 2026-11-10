@@ -528,7 +528,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             let name = naming.power_value.map(|f| f(&screen.path, &ps.net)).unwrap_or_else(|| ps.net.clone());
             let g = &mut groups[at[&ps.at]];
             // a local power symbol (`LOCAL_POWER_PIN`): a `SCOPE::SHEET` name edge only, its net named with the sheet's path (r2 D-E1's note, QA issue22938)
-            if sch.extras.power_is_local(&ps.lib_id, naming.local_power.and_then(|f| f(&ps.lib_id))) {
+            if sch.extras.power_symbol_is_local(&ps.id, &ps.lib_id, naming.local_power.and_then(|f| f(&ps.lib_id))) {
                 g.drivers.push(Driver::new(LOCAL_POWER_PIN, name.clone(), depth[si], &spath[si]));
                 g.local_names.push(name);
                 continue;

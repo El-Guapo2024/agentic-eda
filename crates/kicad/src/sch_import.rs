@@ -268,6 +268,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut power_props_read: Vec<(String, eda_model::sch_extras::PowerProps)> = Vec::new();
     // (power symbol id, sheet path, reference) of a power symbol whose sheet path names it otherwise than its Reference (UI-LEFT S9)
     let mut power_path_reads: Vec<(String, String, String)> = Vec::new();
+    // the power symbols drawn from a renamed cache entry, `(reference, lib_id, lib_name)` (`SchExtras::power_lib_names`, PARITY-sch §82)
+    let mut power_lib_reads: Vec<(String, String, String)> = Vec::new();
     // each power symbol's `(uuid ..)`, parallel to `power_symbols`
     let mut power_uuid: Vec<Option<String>> = Vec::new();
     // where a power symbol's Reference and Value are when the file has them placed by hand (no `(fields_autoplaced ..)`), by id (`field_layout`, r4 D4-L2)
@@ -403,6 +405,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 if o.reference != reference {
                     power_path_reads.push((reference.clone(), o.sheet_path.join("/"), o.reference));
                 }
+            }
+            if let Some(name) = sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).filter(|name| *name != lib_id) {
+                power_lib_reads.push((reference.clone(), lib_id.to_string(), name.to_string()));
             }
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
             power_uuid.push(uuid_of(item));
@@ -933,6 +938,16 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             .map(|l| sexpr::find_all(l, "symbol").filter(|s| sexpr::find(s, "power").and_then(|p| sexpr::txt(p, 1)) == Some("local")).filter_map(|s| sexpr::txt(s, 1).map(String::from)).collect())
             .unwrap_or_default();
         sch.extras.local_power = sch.power_symbols.iter().filter(|p| local_libs.contains(&p.lib_id)).map(|p| p.lib_id.clone()).collect();
+        // A power symbol drawn from a renamed entry (`(lib_name "+5V_1")`, `SCH_SCREEN::Append`'s `newName`) of the other kind than its library id's entry, or
+        // with no entry of its id's own: it keeps the entry, its name and its kind (`SchExtras::power_lib_names`, PARITY-sch §82). One of the same kind as
+        // its id's entry is drawn from that one (see `cache_aliases` above).
+        let cached: BTreeSet<&str> = sexpr::find(root, "lib_symbols").map(|l| sexpr::find_all(l, "symbol").filter_map(|s| sexpr::txt(s, 1)).collect()).unwrap_or_default();
+        for (id, lib_id, name) in power_lib_reads {
+            let local = local_libs.contains(&name);
+            if cached.contains(name.as_str()) && (!cached.contains(lib_id.as_str()) || local != local_libs.contains(&lib_id)) {
+                sch.extras.power_lib_names.insert(id, eda_model::sch_extras::PowerLibName { name, local });
+            }
+        }
         for (at, own, path, unit) in path_units {
             if let Some(sym) = sch.symbols.iter().find(|s| s.at == at && s.unit == own) {
                 sch.extras.path_units.entry(eda_model::ir::field_key(&sym.id, sym.unit)).or_default().insert(path.join("/"), unit);

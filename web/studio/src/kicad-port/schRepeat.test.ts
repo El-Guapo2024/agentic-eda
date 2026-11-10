@@ -110,3 +110,11 @@ test("repeatReferences: a repeated symbol takes the server's reference (the hier
   const out = repeatCmds(source.slice(0, 1), { ...ctx, nextReference: (id) => refs.get(id) ?? id });
   assert.equal((out[0] as { id: string }).id, "R12");
 });
+
+test("repeat: Place Power's click with the preference's kind repeats with that kind (PARITY-sch §82)", () => {
+  const add: Cmd = { op: "add_power_symbol", lib_id: "power:+5V", at: { x: 0, y: 0 }, rot_millideg: 0, net: "+5V", pin: "" };
+  const kind = { op: "sch_edit", verb: "set_new_power_kind", lib_id: "power:+5V", local: true } as unknown as Cmd;
+  const source = repeatSource({ op: "batch", cmds: [add, kind] });
+  assert.deepEqual(source, [add, kind]);
+  assert.deepEqual(repeatCmds(source!, ctx), [{ ...add, at: { x: ctx.cursor[0], y: ctx.cursor[1] } }, kind]);
+});

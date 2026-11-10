@@ -1302,13 +1302,20 @@ fn outside_history(cmd: &Cmd) -> bool {
 const BOM_VIEW_KEYS: [&str; 4] = ["bom_presets", "bom_settings", "bom_fmt_presets", "bom_fmt_settings"];
 
 /// What [`outside_history`] commands store: the plot settings, Export IPC-2581's BOM columns, the board's default zone settings
-/// (`PCB_EDIT_FRAME::Edit_Zone_Params`' `SetDefaultZoneSettings`, no commit) and the Symbol Fields Table's presets and view.
-type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>, Option<eda_model::ir::Zone>, [Option<serde_json::Value>; 4]);
+/// (`PCB_EDIT_FRAME::Edit_Zone_Params`' `SetDefaultZoneSettings`, no commit) and the Symbol Fields Table's presets and view -- plus the
+/// project's reference-designator tracker (`SchExtras::used_designators`, PARITY-sch §82), which no command of its own sets: the commands
+/// that number (placing a symbol, Annotate, Paste) are undo steps, but what they teach the tracker is not. KiCad 25ec2335 keeps it in the
+/// project (`SCHEMATIC_SETTINGS::m_refDesTracker`, a `shared_ptr<REFDES_TRACKER>` that `SCH_REFERENCE_LIST::SetRefDesTracker` hands to the
+/// numbering, `sch_drawing_tools.cpp` / `annotate.cpp` / `sch_editor_control.cpp::Paste`), outside every `SCH_COMMIT`, and nothing but
+/// `REFDES_TRACKER::Clear` / `Deserialize` takes a number back out, so Undo, Redo and a cancelled carry (`commit.Revert()`) all leave it as
+/// it is: a number given and then undone stays given, and with "Allow reference reuse" off the next placement skips it.
+type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>, Option<eda_model::ir::Zone>, [Option<serde_json::Value>; 4], std::collections::BTreeSet<String>);
 
 fn outside_history_of(design: &eda_model::ir::Design) -> OutsideHistory {
     let (plot, ipc, zone) = design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone(), d.zone_defaults.clone())).unwrap_or_default();
     let project = design.schematic.as_ref().and_then(|s| s.extras.project_schematic.as_ref());
-    (plot, ipc, zone, BOM_VIEW_KEYS.map(|k| project.and_then(|p| p.get(k)).cloned()))
+    let used = design.schematic.as_ref().map(|s| s.extras.used_designators.clone()).unwrap_or_default();
+    (plot, ipc, zone, BOM_VIEW_KEYS.map(|k| project.and_then(|p| p.get(k)).cloned()), used)
 }
 
 /// What [`outside_history`] commands store (in the design before an undo or a redo), carried into the design it restores. A whole-design
@@ -1318,7 +1325,12 @@ fn keep_outside_history(kept: OutsideHistory, mut restored: eda_model::ir::Desig
     if kept == now {
         return restored;
     }
-    let (plot, ipc, zone, bom) = kept;
+    let (plot, ipc, zone, bom, used) = kept;
+    if used != now.4 {
+        if let Some(sch) = restored.schematic.as_mut() {
+            sch.extras.used_designators = used;
+        }
+    }
     if (&plot, &ipc, &zone) != (&now.0, &now.1, &now.2) {
         let d = restored.drawings.get_or_insert_with(Default::default);
         (d.plot_params, d.ipc2581_bom, d.zone_defaults) = (plot, ipc, zone);
@@ -4139,6 +4151,51 @@ pub(crate) mod tests {
         assert_eq!(zone(&dir), kept, "the defaults stay");
         assert_eq!(view(&dir), Some(shown.clone()), "and the table's view");
         assert!(undo(&dir, "test", Some(Domain::Pcb)).is_err(), "and there was no step of their own");
+    }
+
+    /// PARITY-sch §82: the reference-designator tracker is the project's (KiCad 25ec2335 `SCHEMATIC_SETTINGS::m_refDesTracker`), outside every commit. A
+    /// placement that numbered is undone, but its number stays given: redo puts the symbol back, and with "Allow reference reuse" off the next placement
+    /// skips the undone number. A cancelled carried placement (`commit.Revert()`) leaves the tracker as it is too.
+    #[test]
+    fn the_reference_tracker_is_not_undone() {
+        let dir = scratch("refdes_tracker_undo");
+        setup_schematic(&dir);
+        let opts = eda_ops::AnnotateOptions { algo: eda_model::annotate::Algo::FirstFree, ..Default::default() };
+        let used = |dir: &Path| load(dir).unwrap().1.schematic.unwrap().extras.used_designators.into_iter().collect::<Vec<_>>();
+        let placed = |dir: &Path, id: &str| load(dir).unwrap().1.schematic.unwrap().symbols.iter().any(|s| s.id == id);
+        let next = |dir: &Path| {
+            let (meta, design, model) = load(dir).unwrap();
+            Board::new(design, &model, meta.snap_nm, meta.spacing_nm).placement_reference("", "R", "TEST:R", "10k", 1, 1, &opts).unwrap()
+        };
+        let place = |id: &str, x: f64| Cmd::AddSymbol { annotate: Some(opts.clone()), id: id.into(), lib_id: "TEST:R".into(), at: Point { x: mm(x), y: mm(30.0) }, rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 };
+        assert_eq!(next(&dir), "R3");
+        step(&dir, place("R3", 30.0), false, "test").unwrap();
+        assert_eq!(used(&dir), vec!["R3"]);
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert!(!placed(&dir, "R3"), "the undo takes the symbol back");
+        assert_eq!(used(&dir), vec!["R3"], "but not its number");
+        assert_eq!(next(&dir), "R3", "reuse on (KiCad's default): R3 may be given again");
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert!(placed(&dir, "R3"));
+        assert_eq!(used(&dir), vec!["R3"]);
+        undo(&dir, "test", None).unwrap();
+        assert_eq!(used(&dir), vec!["R3"], "an unscoped undo (the CLI's) keeps it too");
+        let off = Cmd::SetAnnotationSettings { settings: eda_model::sch_setup::AnnotationSettings { reuse_designators: false, ..Default::default() }, subpart_first_id: 'A' as u32, subpart_id_separator: 0 };
+        step(&dir, off, false, "test").unwrap();
+        assert_eq!(next(&dir), "R4", "reuse off: the undone R3 was given, so R4");
+        step(&dir, place("R4", 40.0), false, "test").unwrap();
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(used(&dir), vec!["R3", "R4"], "undoing past the setting and both placements still leaves both numbers");
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert!(placed(&dir, "R4"));
+        // a carried placement that numbered and was cancelled
+        step_carrying(&dir, place("R5", 50.0), Strictness::Off, "test", Some(carry::Carry::Begin)).unwrap();
+        carry::cancel(&dir, "test").unwrap();
+        assert!(!placed(&dir, "R5"), "`commit.Revert()`: the symbol is gone");
+        assert_eq!(used(&dir), vec!["R3", "R4", "R5"], "its number stays given");
+        assert_eq!(next(&dir), "R6");
     }
 
     /// Round 4's X4-3: the Plot and Generate Drill Files dialogs store their choices as KiCad's do (`DIALOG_PLOT::applyPlotSettings`,
