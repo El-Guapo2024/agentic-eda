@@ -323,8 +323,8 @@
       t((await snapshot()) === base, "ONE undo puts the board back (fields, attributes and pose)");
     });
 
-    // ----- user fields: added, renamed, deleted, and a bad name refused
-    await scenario("Footprint Properties: a user field is added, renamed and deleted (each OK is one undo step); a reserved name is refused", async (t) => {
+    // ----- user fields: added, renamed, deleted, and a user row named like a mandatory field taken as KiCad's reader takes it
+    await scenario("Footprint Properties: a user field is added, renamed and deleted (each OK is one undo step); a user row named like a mandatory field lands on that field", async (t) => {
       const props = "pcbnew.InteractiveEdit.properties";
       const rowsNow = () => [...(tid("footprint-fields-grid")?.querySelectorAll('[data-testid^="field-row-"]') ?? [])];
       const textsOf = (r) => [...r.querySelectorAll("input")].filter((i) => i.type === "text");
@@ -345,11 +345,18 @@
       await select([refA]); await open(props);
       await click("add-field");
       texts = textsOf(rowsNow().at(-1));
-      setValue(texts[0], "Reference");
+      // A user row named like a mandatory field is accepted (KiCad 8303b2ad `DIALOG_FOOTPRINT_PROPERTIES::Validate` checks only for an empty name) and lands on that
+      // field, as KiCad's reader puts it there (`parseFOOTPRINT_unchecked`: `HasField( pName )` -> `GetField( pName )->SetText( pValue )`; UI-LEFT-2 PP18).
+      const descBefore = (await partOf(refA)).fields.find((f) => f.name === "Description")?.text;
+      setValue(texts[0], "Description"); setValue(texts[1], "From a user row");
       const before = await lastAct();
-      await click("footprint-properties-ok"); await sleep(300);
-      t(/two fields called|mandatory field|reserved|unique|already|duplicate/i.test(tid("footprint-properties-error")?.textContent ?? ""), `a reserved name is refused: ${JSON.stringify(tid("footprint-properties-error")?.textContent)}`);
-      t(JSON.stringify(await lastAct()) === JSON.stringify(before), "nothing was sent");
+      await click("footprint-properties-ok"); await sleep(1000);
+      t(!tid("footprint-properties-error") && !tid("footprint-properties"), `a user row named Description is accepted: ${JSON.stringify(tid("footprint-properties-error")?.textContent)}`);
+      t(JSON.stringify(await lastAct()) !== JSON.stringify(before), "the OK was sent");
+      const desc = (await partOf(refA)).fields.filter((f) => f.name === "Description");
+      t(desc.length === 1 && desc[0].text === "From a user row" && descBefore !== "From a user row", `it lands on the Description, one field: ${JSON.stringify(desc.map((f) => f.text))} (was ${JSON.stringify(descBefore)})`);
+      await undo();
+      t((await partOf(refA)).fields.find((f) => f.name === "Description")?.text === descBefore && !!(await fieldOf(refA, "Beta")), "one undo takes it back, Beta stays");
       await closeDialogs();
       await select([refA]); await open(props);
       const beta = rowsNow().find((r) => textsOf(r)[0]?.value === "Beta");
