@@ -109,7 +109,7 @@
       t(["Bold", "Italic", "Keep upright", "Visible  (fields only)"].every((a) => tri(a) === "undetermined"), "the three-state rows start undetermined (leave unchanged)");
       t(byAria("Text height").value === "" && byAria("Text height").placeholder === "-- leave unchanged --", "the value boxes start on -- leave unchanged --");
       byAria("Reference designators").click(); await sleep(120);
-      t(tgCounts()[0] === placed.length && tgCounts()[1] === placed.filter((p) => (p.texts ?? []).some((x) => x.role === "reference")).length, `Reference designators: every footprint's Reference and its \${REFERENCE} text (${tgCounts()})`);
+      t(tgCounts()[0] === placed.length && tgCounts()[1] === placed.reduce((n, p) => n + [...(p.texts ?? []), ...(p.hidden_texts ?? [])].filter((x) => x.role === "reference").length, 0), `Reference designators: every footprint's Reference and its \${REFERENCE} texts, a hidden one too (UI-LEFT-2 PP23) (${tgCounts()})`);
       setValue(byAria("Reference filter"), "r*"); await sleep(150);
       t(byAria("By parent reference designator").checked, "typing in the filter ticks its box (OnReferenceFilterText)");
       t(tgCounts()[0] === rParts.length, `By parent reference designator r* (case-blind wildcards): ${tgCounts()[0]} of ${rParts.length} R fields`);
@@ -146,8 +146,9 @@
     await scenario("Edit Text & Graphics: Footprint graphic items on F.SilkS of the footprints linked to 0402, Line thickness; one undo step", async (t) => {
       await openTextAndGraphics();
       byAria("Footprint graphic items").click(); await sleep(100);
-      const all = placed.reduce((n, p) => n + (p.graphics ?? []).length, 0);
-      t(tgCounts()[2] === all, `Footprint graphic items: every footprint's graphics (${tgCounts()[2]} of ${all})`);
+      // `fp->GraphicalItems()`'s `PCB_SHAPE_T || PCB_BARCODE_T`: the courtyard's shapes and the barcodes too (UI-LEFT-2 PP23, PARITY-pcb section 107)
+      const all = placed.reduce((n, p) => n + (p.graphics ?? []).length + (p.courtyard_graphics ?? []).length + (p.items?.barcodes ?? []).length, 0);
+      t(tgCounts()[2] === all, `Footprint graphic items: every footprint's graphics, courtyards and barcodes (${tgCounts()[2]} of ${all})`);
       byAria("Filter by layer").click(); setValue(byAria("Layer filter"), "F.SilkS"); await sleep(120);
       const silk = placed.reduce((n, p) => n + (p.graphics ?? []).filter((g) => g.layer === "F.SilkS").length, 0);
       t(tgCounts()[2] === silk, `By layer F.SilkS: ${tgCounts()[2]} of ${silk}`);
@@ -174,7 +175,7 @@
       await openTextAndGraphics();
       byAria("Values").click(); byAria("Footprint text items").click(); await sleep(100);
       byAria("Selected items only").click(); await sleep(120);
-      t(tgCounts()[0] === 1 && tgCounts()[1] === dPart.texts.length, `Selected items only: the selected footprint's Value and its own texts, through the footprint (${tgCounts()})`);
+      t(tgCounts()[0] === 1 && tgCounts()[1] === dPart.texts.length + (dPart.hidden_texts ?? []).length + (dPart.items?.text_boxes ?? []).length + (dPart.items?.tables ?? []).reduce((n, tb) => n + tb.cells.length, 0), `Selected items only: the selected footprint's Value and its own texts, through the footprint (${tgCounts()})`);
       byAria("Center on footprint").click();
       await setTri("Italic", "checked");
       await apply();
