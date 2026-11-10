@@ -607,7 +607,8 @@
       const d0 = await dr();
       const dlg = () => document.querySelector(".dialog");
       const byAria = (a) => dlg().querySelector(`[aria-label="${a}"]`);
-      const summary = () => [...dlg().querySelectorAll("div")].map((d) => d.textContent).find((x) => /match the current scope/.test(x) && x.length < 160);
+      // the dialog's count line (it names the footprint dimensions too since UI-LEFT-2 PP23, so it is longer than a length bound would take)
+      const summary = () => dlg().querySelector('[data-testid="global-edit-text-graphics-count"]')?.textContent;
       const counts = () => { const m = /(\d+) graphic item\(s\), (\d+) text\(s\) and (\d+) dimension\(s\)/.exec(summary() ?? ""); return m ? m.slice(1).map(Number) : null; };
       const r = await __eda.run("pcbnew.GlobalEdit.editTextAndGraphics"); await sleep(600);
       t(r.dialog === "Edit Text & Graphics Properties", `the action opens the dialog (${r.dialog})`);
