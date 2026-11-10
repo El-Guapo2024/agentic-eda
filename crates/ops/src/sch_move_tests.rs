@@ -1239,3 +1239,20 @@ fn align_moves_items_rigidly_like_kicad() {
     assert_eq!(after.symbols[0].at, p(mm(25.4), mm(25.4)));
     assert_eq!(wire_pts(&after), vec![vec![p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]], "the wire is left where it was");
 }
+
+/// UI-LEFT-2 SS18: a selected group is one item to Align (`SCH_ALIGN_TOOL::GetSelections` boxes the `SCH_GROUP`), moved whole by its offset (`SCH_GROUP::Move`):
+/// every member by the same amount, the offset as the studio snapped it by the group's centre; a locked group stays.
+#[test]
+fn align_moves_a_group_whole_by_its_offset() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(mm(20.32), mm(25.4))));
+    s.symbols.push(sym("R2", p(mm(30.48), mm(27.94))));
+    s.symbols.push(sym("R3", p(mm(60.96), mm(50.8))));
+    s.extras.groups.push(eda_model::ir::Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["R1", "R2"]), design_block: String::new() });
+    let after = run_on(s.clone(), SchMoveCmd::Align { moves: vec![AlignMove { id: "grp_a".into(), dx: mm(2.54), dy: mm(12.7) }, AlignMove { id: "R3".into(), dx: Nm::ZERO, dy: Nm::ZERO }], grid: Nm::ZERO });
+    let at = |id: &str| after.symbols.iter().find(|x| x.id == id).unwrap().at;
+    assert_eq!((at("R1"), at("R2"), at("R3")), (p(mm(22.86), mm(38.1)), p(mm(33.02), mm(40.64)), p(mm(60.96), mm(50.8))));
+    assert_eq!(after.extras.groups[0].member_ids, ids(&["R1", "R2"]), "still one group");
+    s.extras.locked.push("grp_a".into());
+    assert_eq!(run_err(s, SchMoveCmd::Align { moves: vec![AlignMove { id: "grp_a".into(), dx: mm(2.54), dy: Nm::ZERO }], grid: Nm::ZERO }), "ops_nothing_to_move", "a locked group does not move");
+}

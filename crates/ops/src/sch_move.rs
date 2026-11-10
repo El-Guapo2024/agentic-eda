@@ -33,7 +33,9 @@ fn d_true() -> bool {
     true
 }
 
-/// One item's offset for [`SchMoveCmd::Align`].
+/// One item's offset for [`SchMoveCmd::Align`]. `id` may name a group: `SCH_ALIGN_TOOL::GetSelections` takes a selected `SCH_GROUP` as one item (its box), and
+/// `moveItem` moves it whole (`SCH_GROUP::Move`: every member, a line by both ends). The studio snaps a group's offset by the group's centre itself
+/// (`adjustDeltaForGrid` with `GetItemGrid( group )`, its members' coarsest grid), so it is applied as it comes (UI-LEFT-2 SS18).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AlignMove {
     pub id: String,
@@ -1357,6 +1359,23 @@ fn align(scene: &mut Scene, moves: &[AlignMove], grid: Nm) -> Result<(), Vec<Che
     let mut moved: Vec<Item> = Vec::new();
     let mut any = false;
     for m in moves {
+        // a group: everything below it, moved as it is by the group's offset (`SCH_GROUP::Move`); locked when the group is (`SCH_ITEM::IsLocked`)
+        if scene.sch.extras.is_group(&m.id) {
+            let items: Vec<Item> = scene.sch.extras.group_leaves(&m.id).iter().flat_map(|leaf| find_items(scene, leaf)).collect();
+            moved.extend(items.iter().copied());
+            let delta = Point { x: m.dx, y: m.dy };
+            if scene.sch.extras.is_locked(&m.id) || delta == (Point { x: Nm::ZERO, y: Nm::ZERO }) {
+                continue;
+            }
+            for it in items {
+                any = true;
+                if let Item::Seg(i) = it {
+                    scene.segs[i].flags |= F_START | F_END;
+                }
+                scene.move_item(it, delta);
+            }
+            continue;
+        }
         let items = find_items(scene, &m.id);
         if items.is_empty() {
             return Err(fail("ops_unknown_item", &m.id, "no item with this id on the sheet"));
