@@ -24,6 +24,8 @@
 //!   over the via's tokens ([`eda_model::via_extra::ViaProps`]);
 //! * `FOOTPRINT::SetLocalSolderPasteMargin` / `SetLocalSolderPasteMarginRatio`: [`Cmd::SetFootprintPasteMargin`](crate::Cmd::SetFootprintPasteMargin), over
 //!   the footprint's tokens of a board read from a file.
+//! * `FOOTPRINT::SetLocalSolderMaskMargin` / `SetAllowSolderMaskBridges` (Footprint Properties' "Solder mask expansion:" and "Allow bridged solder mask apertures
+//!   between pads", UI-LEFT-2 PP18): [`Cmd::SetFootprintSolderMask`](crate::Cmd::SetFootprintSolderMask), over the footprint's record.
 
 use eda_model::units::Nm;
 use super::Board;
@@ -435,6 +437,29 @@ impl Board<'_> {
         if e.tokens == before {
             return Err(fail("ops_nothing_to_change", part, "the footprint already has these paste margins"));
         }
+        Ok(())
+    }
+
+    /// `Cmd::SetFootprintSolderMask` (UI-LEFT-2 PP18): Footprint Properties' "Solder mask expansion:" and "Allow bridged solder mask apertures between pads"
+    /// (`DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow`: `m_solderMask.IsNull() ? SetLocalSolderMaskMargin( {} ) : SetLocalSolderMaskMargin( value )`, then
+    /// `SetAllowSolderMaskBridges( m_allowSolderMaskBridges->GetValue() )`). KiCad's `Validate` checks neither (only the pad clearance, `m_netClearance.Validate( 0,
+    /// INT_MAX )`), so a negative expansion is taken. Both live on the footprint's record (`FootprintExtra::solder_mask_margin`, `allow_soldermask_bridges`), which the
+    /// writer writes as `(solder_mask_margin ..)` and `(attr .. allow_soldermask_bridges)` and the solder-mask check reads; a footprint with no record (one placed
+    /// from the intent) gets the bare record a footprint made here gets ([`Board::mark_zones_at`]: in the library's frame, nothing of a file kept).
+    pub(crate) fn set_footprint_solder_mask(&mut self, part: &str, margin: Option<Nm>, allow_bridges: bool) -> Result<(), Vec<CheckResult>> {
+        self.require_placed(part)?;
+        let now = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part)).map(|e| (e.solder_mask_margin, e.allow_soldermask_bridges)).unwrap_or_default();
+        if now == (margin, allow_bridges) {
+            return Err(fail("ops_nothing_to_change", part, "the footprint already has this solder mask expansion and bridging"));
+        }
+        let dr = self.drawings_mut();
+        if !dr.footprint_extras.iter().any(|e| e.id == part) {
+            dr.footprint_extras.push(eda_model::ir::FootprintExtra { id: part.to_string(), library_frame: true, ..Default::default() });
+            dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+        let e = dr.footprint_extras.iter_mut().find(|e| e.id == part).expect("the record was just made");
+        e.solder_mask_margin = margin;
+        e.allow_soldermask_bridges = allow_bridges;
         Ok(())
     }
 }

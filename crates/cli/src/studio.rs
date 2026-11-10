@@ -1318,6 +1318,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     // The footprint libraries the parts' bodies are looked up in (the board's library tables), read when the first part needs them.
     let body_libs = crate::body_api::Libs::of_board(dir);
     let mut parts = Vec::new();
+    let derived_sch: std::cell::OnceCell<Option<eda_model::ir::Design>> = std::cell::OnceCell::new();
     for part in &model.parts {
         let fp = pl.and_then(|pl| pl.footprints.iter().find(|f| f.id == part.reference));
         let resolved = model.footprint_of(part);
@@ -1476,6 +1477,24 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 if let Some(r) = e.solder_paste_ratio {
                     p["paste_margin_ratio"] = json!(r);
                 }
+            }
+            // Footprint Properties' "Solder mask expansion:" and "Allow bridged solder mask apertures between pads" (UI-LEFT-2 PP18): the record's
+            // (`GetLocalSolderMaskMargin`, `AllowSolderMaskBridges`), absent when none / off.
+            if let Some(e) = record {
+                if let Some(m) = e.solder_mask_margin {
+                    p["mask_margin"] = json!(m);
+                }
+                if e.allow_soldermask_bridges {
+                    p["allow_soldermask_bridges"] = json!(true);
+                }
+            }
+            // The schematic symbol's Datasheet and Description, which Footprint Properties carries an edit of the footprint's to (Update Schematic from PCB's
+            // "Other fields", UI-LEFT-2 PP18); absent when no symbol is for the footprint.
+            // (a board with no stored schematic shows, and its first schematic edit stores, the one derived from its intent: `board::derived_schematic`, worked out once)
+            let shown = if design.schematic.is_some() { Some(&design) } else { derived_sch.get_or_init(|| board::derived_schematic(&design, &model).ok()).as_ref() };
+            let symbol_field = |name: &str| shown.and_then(|d| eda_ops::fields_table::symbol_field_text(d, &model, &part.reference, name));
+            if let (Some(datasheet), Some(description)) = (symbol_field("Datasheet"), symbol_field("Description")) {
+                p["symbol_fields"] = json!({ "Datasheet": datasheet, "Description": description });
             }
         }
         parts.push(p);

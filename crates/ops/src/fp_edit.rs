@@ -108,7 +108,10 @@ impl Board<'_> {
                 if name != f.name {
                     return Err(fail("ops_bad_field", part, format!("The field name {:?} starts or ends with a space.", f.name)));
                 }
-                if name == REFERENCE || name == VALUE || name == "Datasheet" || name == "Description" || name == "Footprint" {
+                // The Datasheet and the Description are mandatory fields the footprint holds a copy of its own once edited (UI-LEFT P14, `FootprintEdit::fields`, as
+                // Update Footprint on Board leaves them there); Footprint Properties sends them in the list (UI-LEFT-2 PP18: were refused here, so the dialog's edit
+                // of either never landed). The Reference and the Value have their own layouts.
+                if name == REFERENCE || name == VALUE || name == "Footprint" {
                     return Err(fail("ops_bad_field", part, format!("{name:?} is the name of a mandatory field.")));
                 }
                 if name.contains(':') && name.starts_with(':') {

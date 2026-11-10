@@ -1259,6 +1259,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   and the net-tie groups; Footprint Properties' Reference and Value are edited on the board and carried to the symbol on whichever sheet it is (a board-only footprint
   renamed and revalued on the board alone). Left: a library pad's layer set, die length and property carried onto a footprint placed or updated from the library;
   Update Schematic from PCB's pin and gate swaps (25ec2335 `applyPinSwaps`, `PlanBackannotateUnitSwaps`).
+- Done 2026-11-10 (`task-v5-pp18-fpprops`, `PARITY-pcb.md` section 106, UI-LEFT-2 PP18): Footprint Properties' Datasheet and Description reach the footprint (`edit_board_footprint`
+  refused the two names) and the symbol, as Update Schematic from PCB's "Other fields" would (`set_symbol_fields`, only the fields the dialog changed, none for a footprint with no
+  symbol or Not in schematic, none over a symbol field with a variable); the footprint's own solder mask expansion and "Allow bridged solder mask apertures between pads"
+  (`set_footprint_solder_mask`, on the footprint's record; kicad-cli keeps both); a user row named like a mandatory field is taken as `parseFOOTPRINT_unchecked`'s `HasField` takes it;
+  a batch of board and sheet edits is one undo of both editors. Left: user fields are not carried to the symbol; jumper pad groups not shown.
 - Done 2026-11-06 (`task-u6-fpkeep`, `PARITY-pcb.md` section 89, UI-LEFT P30): what the exchange keeps of the board's record of the footprint is KiCad's -- always the uuid, the sheet, the footprint filters and the
   classes; the paste margins with "Update/reset clearance overrides" off; the Extruded 3D Body and the model files with "Update/reset 3D models" off; the board file's Datasheet and Description fields with
   "Update/reset text content" off -- and the footprint's text boxes, images, points and barcodes are the library footprint's (the command carries them, `library_items`). A built-in package's Update Footprint from

@@ -25,11 +25,15 @@
 // the board alone), the Datasheet and Description the footprint's own once edited; a repeated field name taken as KiCad's reader takes it
 // (`mergeDuplicateFields`); the footprint's Solder paste absolute and relative clearance (`set_footprint_paste_margin`, any footprint).
 //
-// Not ported: the footprint's own mask margin and "Allow bridged solder mask apertures" (the board-file footprint's are kept, not edited here), the extruded 3D
-// body, jumper pad groups. A Datasheet or Description edited here is the footprint's, not carried to the symbol.
+// UI-LEFT-2 PP18 (task-v5-pp18-fpprops): a Datasheet or Description edited here is the footprint's and is carried to the symbol, as Update Schematic from PCB's "Other
+// fields" would (`kicad-port/fpFields.ts` `backAnnotateEdits`: `set_symbol_fields`, before the rename); the footprint's own "Solder mask expansion:" and "Allow
+// bridged solder mask apertures between pads" (`set_footprint_solder_mask`, any footprint); a user row named like a mandatory field is taken as KiCad's reader takes
+// it (its text and look on that field: `mergeDuplicateFields`), no longer refused.
+//
+// Not ported: jumper pad groups (shown by KiCad, not edited), the user fields carried to the symbol (Update Schematic from PCB's "Other fields" adds and deletes them).
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
-import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, mandatoryNameProblem, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
+import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, backAnnotateEdits, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
 import { footprintZoneForm, padNumbers, padZoneForm, zoneCmds, type FootprintZoneForm, type PadZoneForm } from "../kicad-port/padZone";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { useActionRunner } from "../actions/useActionRunner";
@@ -88,6 +92,8 @@ export function FootprintPropertiesDialog() {
   const [fpZone, setFpZone] = useState<FootprintZoneForm>({ connection: null, clearance: null });
   // "Solder paste absolute clearance" and "relative clearance" (`m_solderPaste`, `MARGIN_OFFSET_BINDER`): null is the board's
   const [paste, setPaste] = useState<{ margin: number | null; ratio: number | null }>({ margin: null, ratio: null });
+  // "Solder mask expansion:" (`m_solderMask`, null is the board's) and "Allow bridged solder mask apertures between pads" (`m_allowSolderMaskBridges`)
+  const [mask, setMask] = useState<{ margin: number | null; bridges: boolean }>({ margin: null, bridges: false });
   const [padNum, setPadNum] = useState("");
   const [padZones, setPadZones] = useState<Record<string, PadZoneForm>>({});
   // The 3D Models tab: a copy of the footprint's list, which OK sends when it differs.
@@ -114,6 +120,7 @@ export function FootprintPropertiesDialog() {
     setSelected(Math.max(0, asked ? fieldsOf(part).findIndex((f) => f.name === asked.name) : 0));
     setFpZone(footprintZoneForm(part));
     setPaste({ margin: part.paste_margin ?? null, ratio: part.paste_margin_ratio ?? null });
+    setMask({ margin: part.mask_margin ?? null, bridges: !!part.allow_soldermask_bridges });
     setPadNum(padNumbers(part)[0] ?? "");
     setPadZones({});
     // the numbers the file has (`kicad-port/fpModels.ts` `tabRows`)
@@ -164,10 +171,8 @@ export function FootprintPropertiesDialog() {
       const r = rows[i]!;
       const message = checkFieldRow(r.name, { size: r.layout.size, thickness: r.layout.thickness }, len);
       if (message) return setError(`${r.name || `Field ${i + 1}`}: ${message}`);
-      const reserved = mandatoryNameProblem(r.name, i);
-      if (reserved) return setError(reserved);
     }
-    // A repeated user field name as KiCad's reader takes it: the later row's text and look on the first row of the name.
+    // A repeated field name as KiCad's reader takes it: the later row's text and look on the first row of the name, a mandatory one's too.
     const merged = mergeDuplicateFields(rows);
     const [ref0, val0, ...users] = merged;
     const original = (name: string): FieldInfo | undefined => infos.get(name);
@@ -223,9 +228,14 @@ export function FootprintPropertiesDialog() {
     if (embeddedCmd) cmds.push(embeddedCmd);
     // The footprint's own paste margins (`SetLocalSolderPasteMargin`, `SetLocalSolderPasteMarginRatio`).
     if (paste.margin !== (part.paste_margin ?? null) || paste.ratio !== (part.paste_margin_ratio ?? null)) cmds.push({ op: "set_footprint_paste_margin", part: part.ref, margin: paste.margin, ratio: paste.ratio });
+    // The footprint's own mask expansion and bridging (`SetLocalSolderMaskMargin`, `SetAllowSolderMaskBridges`).
+    if (mask.margin !== (part.mask_margin ?? null) || mask.bridges !== !!part.allow_soldermask_bridges) cmds.push({ op: "set_footprint_solder_mask", part: part.ref, margin: mask.margin, allow_bridges: mask.bridges });
     // The Reference and Value texts, carried to the schematic's symbol as Update Schematic from PCB would (`BACK_ANNOTATE::applyChangelist`: the value, then the
     // reference); the rename last, as every command before it names the footprint by its old reference.
     if (val0 && valueChanged) cmds.push({ op: "edit_symbol_fields", id: part.ref, value: val0.text });
+    // The Datasheet and the Description the dialog changed, carried to the symbol as Update Schematic from PCB's "Other fields" would (UI-LEFT-2 PP18).
+    const symbolEdits = backAnnotateEdits(part, attrs.board_only, new Map([...infos].map(([n, f]) => [n, f.text])), merged);
+    if (symbolEdits.length > 0) cmds.push({ op: "set_symbol_fields", edits: symbolEdits });
     if (ref0 && ref0.text.trim() !== part.ref) cmds.push({ op: "rename_symbol", id: part.ref, new_id: ref0.text.trim() });
     if (cmds.length === 0) return close();
     setBusy(true);
@@ -479,6 +489,12 @@ export function FootprintPropertiesDialog() {
                   </select>
                   <span>Clearance</span>
                   <OverrideInput testid="fp-zone-clearance" valueNm={fpZone.clearance} units={units} onChange={(v) => setFpZone((f) => ({ ...f, clearance: v }))} />
+                  {/* the Clearance Overrides' "Solder mask expansion:" (empty for the board's) and "Allow bridged solder mask apertures between pads" */}
+                  <span title={"This is the local clearance between pads and the solder mask for this footprint.\nThis value can be superseded by a pad local value.\nIf 0, the global value is used."}>Solder mask expansion</span>
+                  <OverrideInput testid="fp-mask-margin" valueNm={mask.margin} units={units} onChange={(v) => setMask((m) => ({ ...m, margin: v }))} />
+                  <label style={{ gridColumn: "1 / span 2" }}>
+                    <input type="checkbox" checked={mask.bridges} onChange={(e) => setMask((m) => ({ ...m, bridges: e.target.checked }))} data-testid="fp-mask-bridges" /> Allow bridged solder mask apertures between pads
+                  </label>
                   {/* the Clearance Overrides' solder paste: "Solder paste absolute clearance:" and "Solder paste relative clearance:" (%), empty for the board's */}
                   <span title="This is the local clearance between this footprint's pads and the solder paste. This value can be superseded by local pad values.">Solder paste absolute clearance</span>
                   <OverrideInput testid="fp-paste-margin" valueNm={paste.margin} units={units} onChange={(v) => setPaste((p) => ({ ...p, margin: v }))} />

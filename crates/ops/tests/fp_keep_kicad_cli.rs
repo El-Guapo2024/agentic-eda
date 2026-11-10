@@ -372,3 +372,38 @@ fn kicad_cli_keeps_the_footprints_items_after_each_operation() {
     assert_eq!(again.barcodes[0].text, "OTHER");
     assert_eq!(texts(&back, &bm).iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["NOTE"]);
 }
+
+/// UI-LEFT-2 PP18: Footprint Properties' "Solder mask expansion:" and "Allow bridged solder mask apertures between pads" (`SetLocalSolderMaskMargin`,
+/// `SetAllowSolderMaskBridges`), on a footprint its board file gave a record and on one the board made (no record: it gets the bare one, in the library's frame), are
+/// written as `(solder_mask_margin ..)` and `(attr .. allow_soldermask_bridges)`, read back by our reader, and (slow tier) kept by kicad-cli's rewrite.
+#[test]
+fn footprint_solder_mask_expansion_and_bridging_are_written_and_kept_by_kicad_cli() {
+    let (design, intent, _) = import_kicad_pcb(&board_text()).expect("import");
+    let mut made_here = design.clone();
+    made_here.drawings.as_mut().unwrap().footprint_extras.clear();
+    made_here.placement.as_mut().unwrap().footprints[0].side = Side::Bottom;
+    let pads = |t: &str| u1(t).lines().filter(|l| l.trim_start().starts_with("(pad ")).map(|l| l.split("(uuid").next().unwrap().to_string()).collect::<Vec<_>>();
+    for (name, start) in [("file", &design), ("made_here", &made_here)] {
+        let pads_before = pads(&write(start, &intent));
+        let (d, m) = apply(start, &intent, &[Cmd::SetFootprintSolderMask { part: "U1".into(), margin: Some(mm(-0.02)), allow_bridges: true }]);
+        let e = record(&d);
+        assert_eq!((e.solder_mask_margin, e.allow_soldermask_bridges), (Some(mm(-0.02)), true), "{name}");
+        if name == "made_here" {
+            assert!(!e.holds_file_form() && e.library_frame, "the bare record of a footprint made here: {e:?}");
+        }
+        let text = write(&d, &m);
+        assert_eq!(pads(&text), pads_before, "{name}: the record moves no pad");
+        let u = u1(&text);
+        assert!(u.contains("(solder_mask_margin -0.02)") && u.contains("allow_soldermask_bridges)"), "{name}:\n{u}");
+        let (back, _, _) = import_kicad_pcb(&text).expect("read back");
+        assert_eq!((record(&back).solder_mask_margin, record(&back).allow_soldermask_bridges), (Some(mm(-0.02)), true), "{name}: read back");
+        if let Some(cli) = cli() {
+            let (theirs, back, _) = through_kicad_cli(&cli, &format!("mask_{name}"), &d, &m);
+            assert_eq!((record(&back).solder_mask_margin, record(&back).allow_soldermask_bridges), (Some(mm(-0.02)), true), "{name}: kicad-cli kept them:\n{}", u1(&theirs));
+        }
+        // and taken away again: the board's expansion, no bridging
+        let (d, m) = apply(&d, &m, &[Cmd::SetFootprintSolderMask { part: "U1".into(), margin: None, allow_bridges: false }]);
+        let u = u1(&write(&d, &m));
+        assert!(!u.contains("(solder_mask_margin") && !u.contains("allow_soldermask_bridges"), "{name}:\n{u}");
+    }
+}

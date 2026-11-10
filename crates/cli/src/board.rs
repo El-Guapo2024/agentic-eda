@@ -2061,6 +2061,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetTeardropParams { ids, .. } => format!("teardrop params {}", ids.join(" ")),
         Cmd::EditBoardFootprintText { id, delete, .. } => format!("footprint text {id}{}", if *delete { " delete" } else { "" }),
         Cmd::SetFootprintPasteMargin { part, .. } => format!("footprint paste-margin {part}"),
+        Cmd::SetFootprintSolderMask { part, .. } => format!("footprint solder-mask {part}"),
         Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => {
             let mut what: Vec<&str> = Vec::new();
             if reference.is_some() {
@@ -2420,7 +2421,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetViaProps { .. } => "via",
         Cmd::SetTeardropParams { .. } => "teardrops",
         Cmd::EditBoardFootprintText { .. } => "footprint-text",
-        Cmd::SetFootprintPasteMargin { .. } => "footprint",
+        Cmd::SetFootprintPasteMargin { .. } | Cmd::SetFootprintSolderMask { .. } => "footprint",
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
         Cmd::EditBoardField { .. } => "field-edit",
         Cmd::EditBoardPad { .. } => "pad-edit",

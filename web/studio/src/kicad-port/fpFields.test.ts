@@ -223,11 +223,40 @@ test("UI-LEFT P14: four mandatory rows, and a repeated field name taken as KiCad
   ]);
 });
 
-test("UI-LEFT P14: a user row named like a mandatory field is refused (the studio cannot hold a second Reference beside the Reference)", async () => {
-  const { mandatoryNameProblem } = await import("./fpFields");
-  assert.equal(mandatoryNameProblem("Reference", 0), null, "the Reference row itself");
-  assert.equal(mandatoryNameProblem("Description", 3), null);
-  assert.equal(mandatoryNameProblem("Reference", 4), '"Reference" is the name of a mandatory field.');
-  assert.equal(mandatoryNameProblem(" Datasheet ", 5), '"Datasheet" is the name of a mandatory field.');
-  assert.equal(mandatoryNameProblem("MPN", 4), null);
+test("UI-LEFT-2 PP18: a user row named like a mandatory field gives its text and look to that field, as KiCad's reader does (HasField( pName ))", async () => {
+  const { mergeDuplicateFields } = await import("./fpFields");
+  const rows = [
+    { name: "Reference", text: "R1", layout: 1 },
+    { name: "Value", text: "10k", layout: 2 },
+    { name: "Datasheet", text: "a.pdf", layout: 3 },
+    { name: "Description", text: "", layout: 4 },
+    { name: " Datasheet ", text: "b.pdf", layout: 5 },
+    { name: "Reference", text: "R9", layout: 6 },
+  ];
+  assert.deepEqual(mergeDuplicateFields(rows), [
+    { name: "Reference", text: "R9", layout: 6 },
+    { name: "Value", text: "10k", layout: 2 },
+    { name: "Datasheet", text: "b.pdf", layout: 5 },
+    { name: "Description", text: "", layout: 4 },
+  ]);
+});
+
+test("UI-LEFT-2 PP18: a Datasheet or Description edited in Footprint Properties reaches the symbol as Update Schematic from PCB's Other fields would", async () => {
+  const { backAnnotateEdits } = await import("./fpFields");
+  const part = { ref: "R1", symbol_fields: { Datasheet: "~", Description: "Resistor" } };
+  const before = new Map([["Datasheet", "~"], ["Description", "Resistor"]]);
+  const rows = (ds: string, de: string) => [{ name: "Reference", text: "R1" }, { name: "Value", text: "10k" }, { name: "Datasheet", text: ds }, { name: "Description", text: de }, { name: "MPN", text: "X" }];
+  assert.deepEqual(backAnnotateEdits(part, false, before, rows("r.pdf", "Resistor")), [{ id: "R1", field: "Datasheet", value: "r.pdf" }]);
+  assert.deepEqual(backAnnotateEdits(part, false, before, rows("r.pdf", "Thin film")), [
+    { id: "R1", field: "Datasheet", value: "r.pdf" },
+    { id: "R1", field: "Description", value: "Thin film" },
+  ]);
+  assert.deepEqual(backAnnotateEdits(part, false, before, rows("~", "Resistor")), [], "nothing changed, nothing carried");
+  // a footprint whose own Datasheet differs from the symbol's, not edited: the symbol is not rewritten unasked
+  assert.deepEqual(backAnnotateEdits(part, false, new Map([["Datasheet", "file.pdf"], ["Description", "Resistor"]]), rows("file.pdf", "Resistor")), []);
+  // edited back to what the symbol has: nothing to change there
+  assert.deepEqual(backAnnotateEdits(part, false, new Map([["Datasheet", "file.pdf"], ["Description", "Resistor"]]), rows("~", "Resistor")), []);
+  assert.deepEqual(backAnnotateEdits({ ref: "R1" }, false, before, rows("r.pdf", "x")), [], "no symbol is for the footprint");
+  assert.deepEqual(backAnnotateEdits(part, true, before, rows("r.pdf", "x")), [], "Not in schematic: left out of the board's netlist");
+  assert.deepEqual(backAnnotateEdits({ ref: "R1", symbol_fields: { Datasheet: "${DS}", Description: "Resistor" } }, false, before, rows("r.pdf", "Resistor")), [], "HasTextVars");
 });

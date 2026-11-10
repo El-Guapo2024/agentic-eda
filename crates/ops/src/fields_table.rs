@@ -526,6 +526,13 @@ fn field_value(sch: &SchematicSection, model: &ConstraintModel, sym: &SymbolInst
     }
 }
 
+/// The text of the field `field` of the symbol `id` as the table holds it ([`field_value`]), on whichever sheet screen the symbol is; `None` when no symbol has
+/// that reference. Footprint Properties on the board reads the Datasheet and the Description through it (UI-LEFT-2 PP18): what Update Schematic from PCB's
+/// "Other fields" compares a footprint's field against (`BACK_ANNOTATE::applyChangelist`).
+pub fn symbol_field_text(design: &eda_model::ir::Design, model: &ConstraintModel, id: &str, field: &str) -> Option<String> {
+    design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).find_map(|sch| sch.symbols.iter().find(|s| s.id == id).map(|s| field_value(sch, model, s, field)))
+}
+
 /// The symbols of the whole design as one section, for the table to read: the root sheet's, then every other sheet screen's, then one more row for
 /// each symbol of a screen shown on a later sheet path under a reference of its own. KiCad's dialog lists a reference per sheet path
 /// (`Hierarchy().GetSymbols( m_symbolsList, .. )`, where `SCH_SHEET_PATH::AppendSymbol` makes one `SCH_REFERENCE( aSymbol, *this )` for each path,
