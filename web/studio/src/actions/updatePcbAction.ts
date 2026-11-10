@@ -21,6 +21,8 @@ export async function openUpdateDialog(api: StudioApi, dispatch: Dispatch<Action
       direction,
       initial: report.changes,
       parts,
+      // Update Schematic from PCB's pin swaps read the schematic preference (`m_Input.allow_unconstrained_pin_swaps`)
+      allowPinSwaps: api.getState().prefs.allowUnconstrainedPinSwaps,
       // the server says why in a toast (the Strict switch refuses a change that adds a gate failure)
       apply: async (cmds) => ((await api.cmdBatch(cmds)) ? null : (api.getState().toast?.message ?? "The update was refused.")),
     }),
