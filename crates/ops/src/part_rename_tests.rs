@@ -213,4 +213,10 @@ fn a_rename_is_a_step_of_both_editors() {
     assert!(Cmd::Batch { cmds: vec![Cmd::AddJunction { at: p(Nm::ZERO, Nm::ZERO) }, rename] }.spans_both_editors());
     assert!(!Cmd::MoveSymbol { id: "U1".into(), x: Nm::ZERO, y: Nm::ZERO, unit: None }.spans_both_editors());
     assert!(!Cmd::EditSymbolFields { id: "U1".into(), value: Some("1k".into()), footprint: None, datasheet: None }.spans_both_editors());
+    // UI-LEFT-2 PP18: Footprint Properties' OK, a board edit and a symbol edit in one batch, is one step of both; a batch of one editor's edits is not
+    let fields = Cmd::SetSymbolFields { edits: vec![fields_table::FieldEdit { id: "U1".into(), field: "Datasheet".into(), value: "u1.pdf".into() }], add_fields: vec![], rename_fields: vec![], remove_fields: vec![] };
+    let mask = Cmd::SetFootprintSolderMask { part: "U1".into(), margin: None, allow_bridges: true };
+    assert!(Cmd::Batch { cmds: vec![mask.clone(), fields.clone()] }.spans_both_editors());
+    assert!(!Cmd::Batch { cmds: vec![mask.clone(), mask] }.spans_both_editors());
+    assert!(!Cmd::Batch { cmds: vec![fields.clone(), fields] }.spans_both_editors());
 }

@@ -78,6 +78,21 @@ fn a_field_the_dialog_would_refuse_is_refused_with_its_message() {
     assert!(edit_of(&b, "U1").is_none(), "a refused edit leaves the board as it was");
 }
 
+/// UI-LEFT-2 PP18: Footprint Properties' Datasheet and Description, the footprint's own copies of two mandatory fields, are taken in the list (they were refused, so
+/// the dialog's edit of either never landed); the Reference, the Value and the Footprint are not.
+#[test]
+fn the_datasheet_and_the_description_are_the_footprints_own_fields() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let field = |name: &str, text: &str| UserField { name: name.into(), text: text.into(), layout: layout(Nm::ZERO, Nm::ZERO, "F.Fab") };
+    b.apply(&set_fields("U1", None, None, Some(vec![field("Datasheet", "https://example.com/u1.pdf"), field("Description", "Regulator"), field("MPN", "X1")]), None)).unwrap();
+    let names: Vec<(&str, &str)> = edit_of(&b, "U1").unwrap().fields.iter().map(|f| (f.name.as_str(), f.text.as_str())).collect();
+    assert_eq!(names, [("Datasheet", "https://example.com/u1.pdf"), ("Description", "Regulator"), ("MPN", "X1")]);
+    for name in ["Reference", "Value", "Footprint"] {
+        assert!(refusal(&mut b, set_fields("U1", None, None, Some(vec![field(name, "x")]), None)).contains("mandatory"), "{name}");
+    }
+}
+
 #[test]
 fn dnp_and_exclude_from_bom_reach_the_symbol_and_a_symbol_edit_reaches_the_footprint() {
     let m = model(&["F.Cu", "B.Cu"]);

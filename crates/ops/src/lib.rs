@@ -2695,7 +2695,9 @@ impl Cmd {
     /// (`crates/cli/src/board.rs`, the `both` tag), where an edit of one editor is undone from that editor's tab alone (`Cmd::domain`).
     pub fn spans_both_editors(&self) -> bool {
         match self {
-            Cmd::Batch { cmds } => cmds.iter().any(Cmd::spans_both_editors),
+            // A batch with a board edit and a sheet edit is one step of both (Footprint Properties' OK: the footprint's fields, then the symbol's Value, Datasheet
+            // and Description, UI-LEFT-2 PP18): one Ctrl+Z on the board takes the symbol's half back too, as KiCad's dialog commit is one.
+            Cmd::Batch { cmds } => cmds.iter().any(Cmd::spans_both_editors) || (cmds.iter().any(|c| c.domain() == Domain::Pcb) && cmds.iter().any(|c| c.domain() == Domain::Schematic)),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.spans_both_editors(),
             Cmd::RenameSymbol { .. } | Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => true,
             // the project's net classes: Board Setup and Schematic Setup edit the one table (the board's sizes, the sheet's wires), so either tab takes it back
