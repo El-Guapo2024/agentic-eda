@@ -4,7 +4,7 @@
 //!
 //! * The settings the studio has a setting of its own for go into the design's root extras: the unit notation (`subpart_id_separator`, `subpart_first_id`), the
 //!   inter-sheet references (`drawing.intersheets_ref_*`), the simulator's settings (`ngspice`), Schematic Setup's Formatting (the rest of `drawing.*`:
-//!   [`formatting`]), Annotation (`annotation.*`, `annotate_start_num`, `reuse_designators`: [`annotation`]) and Field Name Templates (`drawing.field_names`:
+//!   [`formatting`]), Annotation (`annotation.*`, `annotate_start_num`, `reuse_designators`: [`annotation`]; `used_designators`, the tracker's memory) and Field Name Templates (`drawing.field_names`:
 //!   [`field_names`]). The connection grid is read by `eda import-kicad` itself.
 //! * The rest is kept as KiCad wrote it ([`kept`], `SchExtras::project_schematic`), and the derived project starts its `schematic` object from it, so kicad-cli
 //!   reads the formatting, annotation, BOM, netlist and simulator keys of the project as KiCad saved them.
@@ -53,6 +53,7 @@ const LEFT_OUT: &[&str] = &[
     "annotation.sort_order",
     "annotation.method",
     "reuse_designators",
+    "used_designators",
 ];
 
 /// The project's `schematic` object without the keys the studio holds or that name files of the original folder (see the module doc). `None` when the
@@ -187,6 +188,8 @@ pub fn apply(extras: &mut SchExtras, project_json: &str) {
     }
     extras.formatting = formatting(schematic);
     extras.annotation = annotation(schematic);
+    // `PARAM_LAMBDA<std::string>( "used_designators" )`'s loader: `REFDES_TRACKER::Deserialize`, which leaves the tracker empty on what it refuses
+    extras.used_designators = schematic.get("used_designators").and_then(Value::as_str).and_then(eda_model::annotate::RefDesTracker::deserialize).unwrap_or_default();
     extras.field_name_templates = field_names(schematic);
     extras.variants = variants(schematic);
     extras.project_schematic = kept(schematic);
@@ -321,6 +324,22 @@ mod tests {
         let mut old = SchExtras::default();
         apply(&mut old, r#"{ "schematic": { "drawing": { "text_offset_ratio": 0.25, "label_size_ratio": 0.375 }, "meta": { "version": 0 } } }"#);
         assert_eq!(old.formatting.map(|f| f.label_size_ratio), Some(0.25), "registerMigration( 0, 1 )");
+    }
+
+    /// `PARAM_LAMBDA<std::string>( "used_designators" )`: read through `REFDES_TRACKER::Deserialize` into the root's extras (not kept as the project's own
+    /// key), and written back by the derived project through `Serialize`.
+    #[test]
+    fn used_designators_are_the_trackers_both_ways() {
+        let mut e = SchExtras::default();
+        apply(&mut e, r##"{ "schematic": { "used_designators": "#PWR1-2,C3,R1-3,R7", "reuse_designators": false } }"##);
+        assert_eq!(e.used_designators.iter().cloned().collect::<Vec<_>>(), vec!["#PWR1", "#PWR2", "C3", "R1", "R2", "R3", "R7"]);
+        assert!(e.project_schematic.as_ref().is_none_or(|k| !k.contains_key("used_designators")));
+        let mut out = serde_json::json!({});
+        crate::pcb::write_schematic_setup(&mut out, &e);
+        assert_eq!(out["used_designators"], "#PWR1-2,C3,R1-3,R7");
+        let mut bad = SchExtras::default();
+        apply(&mut bad, r#"{ "schematic": { "used_designators": "R0" } }"#);
+        assert!(bad.used_designators.is_empty(), "a refused list leaves the tracker empty");
     }
 
     /// `PARAM<int>( "subpart_id_separator", .., 0, 0, 126 )` and `( "subpart_first_id", .., 'A', '1', 'z' )`: a value out of range is the default.

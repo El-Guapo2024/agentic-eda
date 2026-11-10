@@ -291,6 +291,11 @@ pub struct SchExtras {
     /// hold it. Additive. (Counts in `writes_nothing`.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotation: Option<crate::sch_setup::AnnotationSettings>,
+    /// The references the numbering gave out (`REFDES_TRACKER::m_allRefDes`, the project's `used_designators`, read and written as KiCad 25ec2335's
+    /// `Deserialize` / `Serialize`): with "Allow reference reuse" off ([`Self::annotation`]) Annotate, placing and pasting skip a number given before (UI-LEFT-2
+    /// SS17). Empty: none. Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub used_designators: std::collections::BTreeSet<String>,
     /// Schematic Setup > General > Field Name Templates (`SCHEMATIC_SETTINGS::m_TemplateFieldNames`, the project's `drawing.field_names`), in order. Empty: none.
     /// Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -798,6 +803,7 @@ impl SchExtras {
         self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none() && self.subpart_id_separator.is_none() && self.subpart_first_id.is_none() && self.project_schematic.is_none()
             && self.formatting.is_none()
             && self.annotation.is_none()
+            && self.used_designators.is_empty()
             && self.field_name_templates.is_empty()
             && self.variants.is_empty()
             && !self.virtual_root

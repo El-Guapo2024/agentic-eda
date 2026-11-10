@@ -992,6 +992,10 @@ pub fn write_schematic_setup(schematic: &mut serde_json::Value, extras: &eda_mod
         schematic["annotate_start_num"] = serde_json::json!(a.start_num);
         schematic["reuse_designators"] = serde_json::json!(a.reuse_designators);
     }
+    // `PARAM_LAMBDA<std::string>( "used_designators" )`: `REFDES_TRACKER::Serialize` (KiCad 25ec2335's form)
+    if !extras.used_designators.is_empty() {
+        schematic["used_designators"] = serde_json::json!(eda_model::annotate::RefDesTracker::serialize(&extras.used_designators));
+    }
     if !extras.field_name_templates.is_empty() {
         schematic["drawing"]["field_names"] = serde_json::json!(extras.field_name_templates.iter().map(|t| serde_json::json!({ "name": t.name, "visible": t.visible, "url": t.url })).collect::<Vec<_>>());
     }

@@ -404,3 +404,37 @@ fn a_placeholder_reference_is_written_and_drawn_as_the_unannotated_r_question_ma
 fn root_symbol(d: &Design, id: &str) -> SymbolInstance {
     d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == id).unwrap().clone()
 }
+
+/// UI-LEFT-2 SS17: Schematic Setup's "Allow reference reuse" applied (`REFDES_TRACKER::GetNextRefDesForUnits`): a symbol placed by the tool is recorded in the
+/// project's `used_designators`; once deleted, its number is given again with reuse on and skipped with reuse off, by placing and by Annotate. The project
+/// keeps the tracker across commands and writes it as KiCad does.
+#[test]
+fn allow_reference_reuse_off_skips_a_number_given_before() {
+    use eda_model::sch_setup::AnnotationSettings;
+    let m = ConstraintModel::default();
+    let mut d = design();
+    d.schematic.as_mut().unwrap().symbols.clear();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let first_free = AnnotateOptions { algo: Algo::FirstFree, ..Default::default() };
+    // R1 (sheet B), R5, R9 (sheet A): the tool places R2 and R3, the tracker records them; R2 is deleted
+    for id in ["R2", "R3"] {
+        let reference = b.placement_reference("", "R", "Device:R", "10k", 1, 1, &first_free).unwrap();
+        assert_eq!(reference, id);
+        b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: p(mm(10.0), mm(if id == "R2" { 10.0 } else { 20.0 })), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1, annotate: Some(first_free.clone()) }).unwrap();
+    }
+    let used: Vec<String> = b.design().schematic.as_ref().unwrap().extras.used_designators.iter().cloned().collect();
+    assert_eq!(used, vec!["R2", "R3"], "a hand-numbered or loaded reference is not the tracker's (`CacheExistingAnnotation` has no caller)");
+    b.apply(&Cmd::DeleteSymbol { id: "R2".into(), unit: None }).unwrap();
+    // reuse on (KiCad's default): R2 again
+    assert_eq!(b.placement_reference("", "R", "Device:R", "10k", 1, 1, &first_free).unwrap(), "R2");
+    // reuse off: R2 was given, so R4
+    b.apply(&Cmd::SetAnnotationSettings { settings: AnnotationSettings { reuse_designators: false, ..Default::default() }, subpart_first_id: 'A' as u32, subpart_id_separator: 0 }).unwrap();
+    assert_eq!(b.placement_reference("", "R", "Device:R", "10k", 1, 1, &first_free).unwrap(), "R4");
+    // Annotate numbers sheet A's R? past R2 and R3 too, and the tracker learns it
+    b.apply(&on("sa", annotate(false, AnnotateOrder::XThenY, None, AnnotateOptions { scope: Some(AnnotateScope::CurrentSheet), ..Default::default() }))).unwrap();
+    assert_eq!(at(b.design(), "a.kicad_sch", mm(0.05)).id, "R4");
+    let used = &b.design().schematic.as_ref().unwrap().extras.used_designators;
+    assert!(used.contains("R4"));
+    // the derived project carries it as KiCad's tracker writes it
+    assert_eq!(eda_model::annotate::RefDesTracker::serialize(used), "R2-4");
+}

@@ -241,3 +241,24 @@ fn a_reference_edited_on_the_second_placement_is_that_placements() {
     assert_eq!(refs_on(b.design(), &["sa"]), ["R2", "R21"]);
     assert_eq!(refs_on(b.design(), &["sb"]), ["R14", "R9"]);
 }
+
+/// UI-LEFT-2 SS17 (§68's left item): a reset that gives one path's old reference to another path moves the footprints with the placements (KiCad keys a
+/// footprint by the symbol's KIID path, so each placement keeps its own): pages swapped, the second placement takes R1 R2 and the first R3 R4, and the
+/// footprint that stood for the first placement's R1 is R3 afterwards.
+#[test]
+fn a_reset_that_hands_a_reference_to_another_path_moves_the_footprints_with_their_placements() {
+    let m = ConstraintModel::default();
+    let mut d = channels();
+    let root = d.schematic.as_mut().unwrap();
+    root.sheets[0].page = "3".into();
+    root.sheets[1].page = "2".into();
+    let fp = |id: &str, x: f64| eda_model::ir::FootprintInstance { id: id.into(), at: p(mm(x), Nm::ZERO), rot: 0, side: eda_model::ir::Side::Top, label: Default::default() };
+    d.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![fp("R1", 1.0), fp("R2", 2.0), fp("R3", 3.0), fp("R4", 4.0)], modules: vec![] });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&annotate(true, AnnotateScope::All, Algo::FirstFree)).unwrap();
+    assert_eq!(refs_on(b.design(), &["sb"]), ["R1", "R2"]);
+    assert_eq!(refs_on(b.design(), &["sa"]), ["R3", "R4"]);
+    let at = |b: &Board, id: &str| b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == id).map(|f| f.at.x);
+    assert_eq!(at(&b, "R3"), Some(mm(1.0)), "the first placement's R1 footprint is its R3 now");
+    assert_eq!(at(&b, "R1"), Some(mm(3.0)), "the second placement's R3 footprint is its R1 now");
+}

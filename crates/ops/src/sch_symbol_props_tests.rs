@@ -139,6 +139,25 @@ fn symbol_properties_keeps_the_alternates_of_every_placed_unit_in_sync() {
     assert_eq!(sch(&b).extras.pin_alternates.get(&field_key("U1", 1)), Some(&alts(&[("1", "USART1_TX"), ("3", "ADC0")])));
 }
 
+/// UI-LEFT-2 SS17: `SyncOtherUnits` walks the hierarchy (`for( SCH_SHEET_PATH& sheet : Schematic()->Hierarchy() ) CollectOtherUnits( ref, .. )`): unit B of U1
+/// placed on a sheet takes the alternates set in unit A's dialog on the root, in the one command; the Pin Function submenu still sets its one unit.
+#[test]
+fn symbol_properties_syncs_the_alternates_of_a_unit_on_another_sheet() {
+    let m = model();
+    let mut b = board(&m, &[1]);
+    b.design.schematic.as_mut().unwrap().sheets.push(eda_model::ir::SheetInstance { id: "s1".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: mm(190.5), y: mm(12.7) }, size: (mm(25.4), mm(12.7)), pins: Vec::new(), page: String::new() });
+    let mut other = instance(1, 50.8);
+    other.id = "U9".into();
+    b.design.sheet_contents = Some(BTreeMap::from([("sub.kicad_sch".to_string(), SchematicSection { symbols: vec![instance(2, 50.8), other], ..Default::default() })]));
+    let sub = |b: &Board| b.design().sheet_contents.as_ref().unwrap()["sub.kicad_sch"].extras.pin_alternates.clone();
+    b.apply(&set_alts(Some(1), &[("1", "USART1_TX")], false)).unwrap();
+    assert!(sub(&b).is_empty(), "the Pin Function submenu sets the one unit");
+    b.apply(&set_alts(Some(1), &[("1", "TIM2_CH1"), ("3", "ADC0")], true)).unwrap();
+    assert_eq!(sub(&b).get(&field_key("U1", 2)), Some(&alts(&[("1", "TIM2_CH1"), ("3", "ADC0")])), "unit B on the sheet");
+    assert!(!sub(&b).contains_key(&field_key("U9", 1)), "another reference is not synced");
+    assert_eq!(sch(&b).extras.pin_alternates.get(&field_key("U1", 1)), Some(&alts(&[("1", "TIM2_CH1"), ("3", "ADC0")])));
+}
+
 #[test]
 fn a_locked_symbol_keeps_its_pin_functions() {
     let m = model();

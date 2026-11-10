@@ -17,9 +17,10 @@
 //! Nothing here knows a schematic. The caller (`eda_ops`) builds the entries from the sheets in scope, hands the sort key of each
 //! one in (`key`, a handle of its own, must be unique) and writes the numbers back with [`Entry::reference`].
 //!
-//! Not ported: the reference designator tracker's memory of numbers used before ("reuse designators" is on, KiCad's default, so a
-//! number a deleted symbol gave up is free again), and the duplicate time-stamp repair (`ReplaceDuplicateTimeStamps`): the symbols
-//! here have no UUIDs.
+//! * [`RefDesTracker`] is `REFDES_TRACKER`'s memory of the references it gave out (the project's `used_designators`): with "Allow reference
+//!   reuse" off a number it gave once is not given again, even when no symbol holds it now (UI-LEFT-2 SS17).
+//!
+//! Not ported: the duplicate time-stamp repair (`ReplaceDuplicateTimeStamps`): the symbols here have no UUIDs.
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -366,13 +367,167 @@ fn units_available(r: &Entry, holders: &[&Entry], required: &[u32]) -> bool {
     required.iter().all(|unit| holders.iter().all(|h| h.lib_name == r.lib_name && h.value == r.value && h.unit != *unit))
 }
 
+/// `REFDES_TRACKER` (`eeschema/refdes_tracker.cpp`): every reference the numbering gave out, kept in the project (`used_designators`), and Schematic Setup's
+/// "Allow reference reuse" (`m_reuseRefDes`, `reuse_designators`, on by default).
+///
+/// The tracker only learns a reference when the numbering hands it out (`GetNextRefDesForUnits`' `insertNumber` / `m_allRefDes.insert`) or the project file names
+/// it (`Deserialize`): `SCHEMATIC::CacheExistingAnnotation`, which would add the references present at load, has no caller in 8303b2ad or 25ec2335. With reuse on
+/// it records and never refuses; with reuse off a number it holds is skipped while no symbol holds it (a number that symbols hold is theirs to share, as before).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefDesTracker {
+    /// `m_allRefDes`: the full references (`R12`, `#PWR3`).
+    pub used: BTreeSet<String>,
+    /// `m_reuseRefDes`.
+    pub reuse: bool,
+}
+
+impl Default for RefDesTracker {
+    /// `REFDES_TRACKER::REFDES_TRACKER`: nothing used, reuse on.
+    fn default() -> Self {
+        RefDesTracker { used: BTreeSet::new(), reuse: true }
+    }
+}
+
+impl RefDesTracker {
+    /// A tracker over the references `used` with reuse `reuse`.
+    pub fn new(used: &BTreeSet<String>, reuse: bool) -> RefDesTracker {
+        RefDesTracker { used: used.clone(), reuse }
+    }
+
+    /// KiCad 25ec2335 `REFDES_TRACKER::parseRefDes`: the trailing run of digits is the number, the rest the prefix (`#PWR` kept); no digits, or digits only, is
+    /// all prefix with number 0.
+    fn parse(refdes: &str) -> (&str, i64) {
+        let pos = refdes.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+        if pos == 0 || pos == refdes.len() {
+            return (refdes, 0);
+        }
+        match refdes[pos..].parse::<i64>() {
+            Ok(n) => (&refdes[..pos], n),
+            Err(_) => (refdes, 0),
+        }
+    }
+
+    /// KiCad 25ec2335 `REFDES_TRACKER::Serialize`, the project's `used_designators`: per prefix (sorted), its numbers as runs (`R1-3`, `R7`), then the bare
+    /// prefix when it was used without a number; `\`, `,` and `-` of a prefix escaped (`escapeForSerialization`); joined by commas.
+    pub fn serialize(used: &BTreeSet<String>) -> String {
+        let mut by_prefix: std::collections::BTreeMap<&str, (BTreeSet<i64>, bool)> = std::collections::BTreeMap::new();
+        for r in used {
+            let (prefix, n) = Self::parse(r);
+            let e = by_prefix.entry(prefix).or_default();
+            if n > 0 {
+                e.0.insert(n);
+            } else {
+                e.1 = true;
+            }
+        }
+        let escape = |p: &str| p.chars().fold(String::new(), |mut s, c| {
+            if matches!(c, '\\' | ',' | '-') {
+                s.push('\\');
+            }
+            s.push(c);
+            s
+        });
+        let mut parts: Vec<String> = Vec::new();
+        for (prefix, (numbers, bare)) in by_prefix {
+            let p = escape(prefix);
+            let numbers: Vec<i64> = numbers.into_iter().collect();
+            let mut i = 0;
+            while i < numbers.len() {
+                let start = numbers[i];
+                let mut end = start;
+                while i + 1 < numbers.len() && numbers[i + 1] == end + 1 {
+                    i += 1;
+                    end = numbers[i];
+                }
+                parts.push(if start == end { format!("{p}{start}") } else { format!("{p}{start}-{end}") });
+                i += 1;
+            }
+            if bare {
+                parts.push(p);
+            }
+        }
+        parts.join(",")
+    }
+
+    /// KiCad 25ec2335 `REFDES_TRACKER::Deserialize`: the parts between unescaped commas, each unescaped, read as `<prefix><start>-<end>` (`^(.*\D)(\d+)-(\d+)$`),
+    /// `<prefix><n>` or a bare prefix. `None` for what KiCad refuses (a number that is not positive), which leaves the tracker empty.
+    pub fn deserialize(data: &str) -> Option<BTreeSet<String>> {
+        let mut out = BTreeSet::new();
+        // `splitString`: a backslash keeps the next character (and stays, for `unescapeFromSerialization`)
+        let mut parts: Vec<String> = Vec::new();
+        let (mut current, mut escaped) = (String::new(), false);
+        for c in data.chars() {
+            if escaped {
+                current.push(c);
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+                current.push(c);
+            } else if c == ',' {
+                parts.push(std::mem::take(&mut current));
+            } else {
+                current.push(c);
+            }
+        }
+        if !current.is_empty() {
+            parts.push(current);
+        }
+        let positive = |t: &str| t.parse::<i64>().ok().filter(|n| *n > 0 && *n <= i64::from(i32::MAX));
+        for part in parts {
+            // `unescapeFromSerialization` (the patterns run on the unescaped text, as KiCad's do)
+            let mut text = String::new();
+            let mut esc = false;
+            for c in part.chars() {
+                if esc {
+                    text.push(c);
+                    esc = false;
+                } else if c == '\\' {
+                    esc = true;
+                } else {
+                    text.push(c);
+                }
+            }
+            let digits_from = |s: &str| s.len() - s.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+            // `(.*\D)(\d+)-(\d+)`: the last `-` with digits on both sides and a non-digit before them
+            let range = text.rfind('-').and_then(|dash| {
+                let (head, end) = (&text[..dash], &text[dash + 1..]);
+                let k = digits_from(head);
+                (k > 0 && k < head.len() && !end.is_empty() && end.chars().all(|c| c.is_ascii_digit())).then(|| (&head[..head.len() - k], &head[head.len() - k..], end))
+            });
+            if let Some((prefix, start, end)) = range {
+                let (start, end) = (positive(start)?, positive(end)?);
+                for i in start..=end {
+                    out.insert(format!("{prefix}{i}"));
+                }
+                continue;
+            }
+            let k = digits_from(&text);
+            if k > 0 && k < text.len() {
+                let n = positive(&text[text.len() - k..])?;
+                out.insert(format!("{}{n}", &text[..text.len() - k]));
+            } else if !text.is_empty() {
+                out.insert(text);
+            }
+        }
+        Some(out)
+    }
+}
+
 /// `SCH_REFERENCE_LIST::FindFirstUnusedReference` + `REFDES_TRACKER::GetNextRefDesForUnits`: the first number from `min` up that no
-/// annotated reference of `r`'s prefix holds -- or that holds only references that leave every one of `required` units free.
-fn first_unused(list: &[Entry], r: &Entry, min: i64, required: &[u32]) -> i64 {
+/// annotated reference of `r`'s prefix holds -- or that holds only references that leave every one of `required` units free. A number nobody holds is
+/// skipped when the tracker gave it before and reuse is off; the one taken is recorded (`insertNumber`, `m_allRefDes.insert`), a number shared with its
+/// holders is not ("Don't insert into tracker since reference is already in use").
+fn first_unused(list: &[Entry], r: &Entry, min: i64, required: &[u32], tracker: &mut RefDesTracker) -> i64 {
     let mut candidate = min;
     loop {
         let holders: Vec<&Entry> = list.iter().filter(|e| !e.is_new && e.compare_prefix(r) == Ordering::Equal && e.num == candidate).collect();
-        if holders.is_empty() || (!required.is_empty() && units_available(r, &holders, required)) {
+        if holders.is_empty() {
+            let full = format!("{}{candidate}", r.text);
+            if tracker.reuse || !tracker.used.contains(&full) {
+                tracker.used.insert(full);
+                return candidate;
+            }
+        } else if !required.is_empty() && units_available(r, &holders, required) {
             return candidate;
         }
         candidate += 1;
@@ -383,9 +538,9 @@ fn first_unused(list: &[Entry], r: &Entry, min: i64, required: &[u32]) -> i64 {
 /// first from `min` up that `list` (split) does not hold -- for a unit of a part of several units, one whose holders are all the same library symbol and value
 /// and leave that unit free (`Annotate`'s `units = { ref_unit.GetUnit() }` for a new multi-unit reference, `areUnitsAvailable`), so a unit joins an existing
 /// part that has it free (r2 D-A1).
-pub fn placement_number(list: &[Entry], new: &Entry, min: i64) -> i64 {
+pub fn placement_number(list: &[Entry], new: &Entry, min: i64, tracker: &mut RefDesTracker) -> i64 {
     let required: Vec<u32> = if new.unit_count > 1 { vec![new.unit] } else { Vec::new() };
-    first_unused(list, new, min, &required)
+    first_unused(list, new, min, &required, tracker)
 }
 
 /// `buildFullReference`: reference, number and unit, the key of the "already allocated" set.
@@ -416,13 +571,14 @@ fn units_matching(group: &[Entry], r: &Entry) -> Vec<u32> {
 /// * `additional` are the references outside the list that must not be given again (`aAdditionalRefs`).
 /// * `start` is the number to count after (the dialog's "Use first free number after"); the sheet number algorithms count from the
 ///   sheet's number times 100 or 1000 instead.
-pub fn annotate_by_options(list: &mut Vec<Entry>, sort: SortOrder, algo: Algo, start: i64, locked: &[Vec<Entry>], additional: &[Entry]) {
+/// * `tracker` is the project's `REFDES_TRACKER` (`SetRefDesTracker`): what it gave before, and whether that may be given again; it learns the numbers given.
+pub fn annotate_by_options(list: &mut Vec<Entry>, sort: SortOrder, algo: Algo, start: i64, locked: &[Vec<Entry>], additional: &[Entry], tracker: &mut RefDesTracker) {
     list.sort_by(|a, b| sort_cmp(sort, a, b));
-    annotate(list, algo.uses_sheet_number(), algo.step(), start, locked, additional);
+    annotate(list, algo.uses_sheet_number(), algo.step(), start, locked, additional, tracker);
 }
 
 /// `SCH_REFERENCE_LIST::Annotate`.
-fn annotate(list: &mut Vec<Entry>, use_sheet_num: bool, sheet_step: i64, start: i64, locked: &[Vec<Entry>], additional: &[Entry]) {
+fn annotate(list: &mut Vec<Entry>, use_sheet_num: bool, sheet_step: i64, start: i64, locked: &[Vec<Entry>], additional: &[Entry], tracker: &mut RefDesTracker) {
     if list.is_empty() {
         return;
     }
@@ -471,7 +627,7 @@ fn annotate(list: &mut Vec<Entry>, use_sheet_num: bool, sheet_step: i64, start: 
         // one part per package: the trivial case
         if unit_ref.unit_count <= 1 {
             if unit_ref.is_new {
-                let n = first_unused(list, &unit_ref, min_ref_id, &[]);
+                let n = first_unused(list, &unit_ref, min_ref_id, &[], tracker);
                 let e = &mut list[ii];
                 e.num = n;
                 e.num_str = e.format_number(n);
@@ -485,7 +641,7 @@ fn annotate(list: &mut Vec<Entry>, use_sheet_num: bool, sheet_step: i64, start: 
         if let Some(group) = locked_group {
             let units = units_matching(group, &unit_ref);
             if unit_ref.is_new {
-                let n = first_unused(list, &unit_ref, min_ref_id, &units);
+                let n = first_unused(list, &unit_ref, min_ref_id, &units, tracker);
                 let e = &mut list[ii];
                 e.num = n;
                 e.num_str = e.format_number(n);
@@ -524,7 +680,7 @@ fn annotate(list: &mut Vec<Entry>, use_sheet_num: bool, sheet_step: i64, start: 
         } else if unit_ref.is_new {
             // a unit of a multi-unit symbol that was not annotated: nothing says which part it belongs to, so it takes the first number
             // that has its unit free; the other units are numbered by the passes that follow
-            let n = first_unused(list, &unit_ref, min_ref_id, &[unit_ref.unit]);
+            let n = first_unused(list, &unit_ref, min_ref_id, &[unit_ref.unit], tracker);
             let e = &mut list[ii];
             e.num = n;
             e.num_str = e.format_number(n);
@@ -663,7 +819,7 @@ mod tests {
     fn run(list: Vec<Entry>, sort: SortOrder, algo: Algo, start: i64, locked: &[Vec<Entry>], extra: &[Entry]) -> Vec<(usize, String)> {
         let mut list = list;
         split_all(&mut list);
-        annotate_by_options(&mut list, sort, algo, start, locked, extra);
+        annotate_by_options(&mut list, sort, algo, start, locked, extra, &mut RefDesTracker::default());
         let mut out: Vec<(usize, String)> = list.iter().map(|e| (e.key, e.reference())).collect();
         out.sort();
         out
@@ -739,12 +895,56 @@ mod tests {
         assert_eq!(out, vec![(0, "R3".to_string())]);
     }
 
+    /// `REFDES_TRACKER::GetNextRefDesForUnits`: with "Allow reference reuse" off a number the tracker gave before is skipped while nobody holds it; with it
+    /// on it is given again. Either way the number given is recorded.
+    #[test]
+    fn reuse_off_skips_a_number_given_before_and_the_tracker_learns_what_it_gives() {
+        let used: BTreeSet<String> = ["R1", "R2", "R3"].into_iter().map(String::from).collect();
+        // R2 was deleted: R1 and R3 remain
+        let mut held = vec![e(10, "R1", (Nm::ZERO, Nm::ZERO)), e(11, "R3", (Nm::ZERO, Nm::ZERO))];
+        split_all(&mut held);
+        let mut new = e(0, "R?", (Nm::ZERO, Nm::ZERO));
+        new.split();
+        let mut on = RefDesTracker::new(&used, true);
+        assert_eq!(placement_number(&held, &new, 1, &mut on), 2);
+        let mut off = RefDesTracker::new(&used, false);
+        assert_eq!(placement_number(&held, &new, 1, &mut off), 4);
+        assert!(off.used.contains("R4"));
+        // and Annotate's numbering: two new ones past every number given
+        let mut list = vec![e(0, "R?", (Nm::ZERO, Nm::ZERO)), e(1, "R?", (Nm::new(10), Nm::ZERO))];
+        split_all(&mut list);
+        let mut off = RefDesTracker::new(&used, false);
+        annotate_by_options(&mut list, SortOrder::ByX, Algo::FirstFree, 0, &[], &held, &mut off);
+        assert_eq!(list.iter().map(Entry::reference).collect::<Vec<_>>(), vec!["R4", "R5"]);
+        // a unit joining a part whose number is held is not refused by the tracker
+        let mut u = vec![unit_entry(10, "U1", 1, 2, "LM358", (Nm::ZERO, Nm::ZERO))];
+        split_all(&mut u);
+        let mut b = unit_entry(0, "U?", 2, 2, "LM358", (Nm::ZERO, Nm::ZERO));
+        b.split();
+        let mut off = RefDesTracker::new(&["U1".to_string()].into_iter().collect(), false);
+        assert_eq!(placement_number(&u, &b, 1, &mut off), 1);
+    }
+
+    /// KiCad 25ec2335 `REFDES_TRACKER::Serialize` / `Deserialize`: runs per prefix, prefixes sorted, `#PWR` kept, a bare prefix, escapes.
+    #[test]
+    fn used_designators_read_and_write_as_kicads_tracker() {
+        let used: BTreeSet<String> = ["R1", "R2", "R3", "R7", "#PWR01", "#PWR2", "C10", "X", "A-B4"].into_iter().map(String::from).collect();
+        let text = RefDesTracker::serialize(&used);
+        assert_eq!(text, "#PWR1-2,A\\-B4,C10,R1-3,R7,X");
+        let back = RefDesTracker::deserialize(&text).unwrap();
+        let want: BTreeSet<String> = ["R1", "R2", "R3", "R7", "#PWR1", "#PWR2", "C10", "X", "A-B4"].into_iter().map(String::from).collect();
+        assert_eq!(back, want);
+        assert_eq!(RefDesTracker::deserialize(""), Some(BTreeSet::new()));
+        assert_eq!(RefDesTracker::deserialize("R0"), None);
+        assert_eq!(RefDesTracker::deserialize("U1U2,R3-5").unwrap().into_iter().collect::<Vec<_>>(), vec!["R3", "R4", "R5", "U1U2"]);
+    }
+
     #[test]
     fn reset_renumbers_by_position_and_lets_go_of_the_old_numbers() {
         let mut list = vec![e(0, "R7", (Nm::new(30), Nm::ZERO)), e(1, "R3", (Nm::new(10), Nm::ZERO)), e(2, "R9", (Nm::new(20), Nm::ZERO))];
         split_all(&mut list);
         remove_annotation(&mut list);
-        annotate_by_options(&mut list, SortOrder::ByX, Algo::FirstFree, 0, &[], &[]);
+        annotate_by_options(&mut list, SortOrder::ByX, Algo::FirstFree, 0, &[], &[], &mut RefDesTracker::default());
         let mut out: Vec<(usize, String)> = list.iter().map(|x| (x.key, x.reference())).collect();
         out.sort();
         assert_eq!(out, vec![(0, "R3".to_string()), (1, "R1".to_string()), (2, "R2".to_string())]);
@@ -760,7 +960,7 @@ mod tests {
         let mut work = list.clone();
         split_all(&mut work);
         remove_annotation(&mut work);
-        annotate_by_options(&mut work, SortOrder::ByY, Algo::FirstFree, 0, &[locked_group_u1, locked_group_u5], &[]);
+        annotate_by_options(&mut work, SortOrder::ByY, Algo::FirstFree, 0, &[locked_group_u1, locked_group_u5], &[], &mut RefDesTracker::default());
         let mut out: Vec<(usize, String)> = work.iter().map(|x| (x.key, x.reference())).collect();
         out.sort();
         // the first group (by position) takes U1, the second U2; both units of a group share the number

@@ -491,6 +491,26 @@ export function placeSymbolCmd(item: CarriedSymbol, at: readonly [number, number
   return cmds.length === 1 ? add : { op: "batch", cmds };
 }
 
+/**
+ * `PlaceSymbol`'s `unitOccupied` for an annotated reference: `schematic.Contains( candidate )` -- is unit `unit` of `reference` placed anywhere in the hierarchy
+ * (`Hierarchy().GetSymbols( .., SYMBOL_FILTER_ALL )`, `GetFullRef( true )`, UI-LEFT-2 SS17)? The one just placed (`placed`), the sheet in view's symbols (`here`,
+ * current at once) and the hierarchy's references and units as the server last listed them (`hierarchy`: reference -> units, `GET /api/sch/symbols`).
+ */
+export function unitOccupied(reference: string, unit: number, placed: { ref: string; unit: number }, here: readonly { id: string; unit: number }[], hierarchy: ReadonlyMap<string, ReadonlySet<number>>): boolean {
+  return (placed.ref === reference && placed.unit === unit) || here.some((x) => x.id === reference && x.unit === unit) || (hierarchy.get(reference)?.has(unit) ?? false);
+}
+
+/** The hierarchy's placed units by reference (`GET /api/sch/symbols`: each sheet path's reference and the unit that path draws), for [`unitOccupied`]. */
+export function unitsByReference(rows: readonly { reference: string; path_unit: number }[]): Map<string, Set<number>> {
+  const out = new Map<string, Set<number>>();
+  for (const r of rows) {
+    const units = out.get(r.reference) ?? new Set<number>();
+    units.add(r.path_unit);
+    out.set(r.reference, units);
+  }
+  return out;
+}
+
 /** What the units of a reference are, for the next symbol of "Place all units" (`unitOccupied`): is the unit placed? */
 export interface NextSymbolContext {
   occupied: (unit: number) => boolean;

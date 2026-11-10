@@ -28,6 +28,8 @@ import {
   type CarriedSymbol,
   type Carry,
   nextSymbolAfter,
+  unitOccupied,
+  unitsByReference,
   placeSymbolCmd,
   applyCarriedCmds,
   renameInCmd,
@@ -393,4 +395,22 @@ test("a dialog's OK on the carried symbol changes what it is made with and keeps
 test("renameInCmd follows a reference through ids, unit keys, field and pin ids, and leaves other names alone", () => {
   const c = { op: "batch", cmds: [{ op: "x", id: "U3", ids: ["U3#2", "fld:U3:Value", "fld:U3#2:Value", "pin:U3:4", "U30", "fld:U30:Value"] }] } as unknown as Cmd;
   assert.deepEqual(renameInCmd(c, "U3", "U7"), { op: "batch", cmds: [{ op: "x", id: "U7", ids: ["U7#2", "fld:U7:Value", "fld:U7#2:Value", "pin:U7:4", "U30", "fld:U30:Value"] }] });
+});
+
+test("Place all units: a unit placed on another sheet is occupied (`schematic.Contains` over the hierarchy, UI-LEFT-2 SS17)", () => {
+  const hierarchy = unitsByReference([
+    { reference: "U3", path_unit: 2 },
+    { reference: "U3", path_unit: 1 },
+    { reference: "U7", path_unit: 1 },
+  ]);
+  assert.deepEqual([...(hierarchy.get("U3") ?? [])].sort(), [1, 2]);
+  const placed = { ref: "U3", unit: 1 };
+  const here = [{ id: "U3", unit: 1 }];
+  assert.equal(unitOccupied("U3", 1, placed, here, hierarchy), true, "the one just placed");
+  assert.equal(unitOccupied("U3", 2, placed, here, new Map()), false, "the sheet in view alone does not have unit B");
+  assert.equal(unitOccupied("U3", 2, placed, here, hierarchy), true, "unit B is on another sheet");
+  assert.equal(unitOccupied("U3", 3, placed, here, hierarchy), false);
+  // through the tool's rule: after A on this sheet, with B on another, C rides
+  const ctx = { occupied: (u: number) => unitOccupied("U3", u, placed, here, hierarchy), nextRef: () => "U4" };
+  assert.deepEqual(nextSymbolAfter(symbol({ placeAllUnits: true, unit: 1 }), false, ctx), symbol({ placeAllUnits: true, unit: 3 }));
 });

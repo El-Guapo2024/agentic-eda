@@ -78,7 +78,9 @@ import { bezierRemoveLastPoint } from "../kicad-port/bezierGeom";
 import { planPack } from "../kicad-port/packFootprints";
 import { netNavigatorItems, stepNetItem, type NavSchematic } from "../kicad-port/netNavigator";
 import { navSchematic } from "../components/schControl/NetNavigatorPanel";
-import { repeatCmds, repeatMoves } from "../kicad-port/schRepeat";
+import { repeatCmds, repeatMoves, repeatReferences } from "../kicad-port/schRepeat";
+import { fetchPlacementReference } from "../api/hierarchyClient";
+import { unitCountOf } from "../kicad-port/schUnits";
 import { nextReference, placementMinRef } from "../kicad-port/nextReference";
 import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 import { refDesPrefix } from "../kicad-port/packFootprints";
@@ -2558,15 +2560,27 @@ export function useActionRunner() {
         "eeschema.InteractiveEdit.repeatDrawItem",
         schematicOnly(() => {
           if (!sch || state.schRepeat.length === 0) return;
-          const nextRef = (id: string) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref), placementMinRef(rememberedAnnotateSettings().algo, startNumber(rememberedAnnotateSettings().start), sch.page_number ?? 1));
+          const source = state.schRepeat;
+          const annotateSettings = rememberedAnnotateSettings();
+          const guess = (id: string, taken: readonly string[] = []) => nextReference(sch.symbols, refDesPrefix(id), [...(state.board?.parts.map((p) => p.ref) ?? []), ...taken], placementMinRef(annotateSettings.algo, startNumber(annotateSettings.start), sch.page_number ?? 1));
           // a symbol or power symbol goes to the cursor and rides it with the Move tool until a click drops it (`RunSynchronousAction( SCH_ACTIONS::move )`)
-          if (repeatMoves(state.schRepeat)) {
-            void api.placeNewSchItems((at) => {
-              const cmds = repeatCmds(state.schRepeat, { offsetNm: [state.prefs.schRepeatOffsetXMils * 25_400, state.prefs.schRepeatOffsetYMils * 25_400], labelIncrement: state.prefs.schRepeatLabelIncrement, cursor: [at.x, at.y], nextReference: nextRef });
-              return cmds.length === 1 ? cmds[0]! : { op: "batch", cmds };
-            }, true);
+          if (repeatMoves(source)) {
+            // a repeated symbol is numbered as `AnnotateSymbols` numbers it over the hierarchy: the server's answer, asked first (UI-LEFT-2 SS17)
+            const sheet = state.currentSheetPath;
+            void repeatReferences(
+              source,
+              (q) => fetchPlacementReference({ sheet, prefix: q.prefix, lib_id: q.lib_id, value: q.value, unit: q.unit, unit_count: unitCountOf(sch.lib_symbols[q.lib_id]), options: { algo: annotateSettings.algo, start_number: startNumber(annotateSettings.start) } }),
+              guess,
+              refDesPrefix
+            ).then((refs) =>
+              api.placeNewSchItems((at) => {
+                const cmds = repeatCmds(source, { offsetNm: [state.prefs.schRepeatOffsetXMils * 25_400, state.prefs.schRepeatOffsetYMils * 25_400], labelIncrement: state.prefs.schRepeatLabelIncrement, cursor: [at.x, at.y], nextReference: (id) => refs.get(id) ?? guess(id) });
+                return cmds.length === 1 ? cmds[0]! : { op: "batch", cmds };
+              }, true)
+            );
             return;
           }
+          const nextRef = (id: string) => guess(id);
           const cmds = repeatCmds(state.schRepeat, { offsetNm: [state.prefs.schRepeatOffsetXMils * 25_400, state.prefs.schRepeatOffsetYMils * 25_400], labelIncrement: state.prefs.schRepeatLabelIncrement, cursor: cursorSnapped(), nextReference: nextRef });
           if (cmds.length > 0) void api.cmdBatch(cmds);
         })

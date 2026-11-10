@@ -3701,7 +3701,19 @@ impl<'a> Board<'a> {
                 let pts = self.schematic().ok().and_then(|s| s.power_symbols.iter().position(|p| p.id == *id)).map(|i| self.deleted_item_points(sch_scene::Item::Power(i))).unwrap_or_default();
                 self.delete_power_symbol(id).and_then(|_| self.drop_junctions_left_at(pts)).and_then(|_| self.commit_clean_up())
             }
-            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, .. } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()),
+            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit, annotate } => {
+                // `PlaceSymbol`'s `annotate()` numbered it through the project's tracker, which keeps a number it gave (`GetNextRefDesForUnits`' insert; a unit
+                // joining a reference already held is not inserted): the tool's placement is the one that says `annotate` (UI-LEFT-2 SS17)
+                let new_number = annotate.is_some() && !eda_model::annotate::is_unannotated(id) && !self.symbol_references().contains(id);
+                self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit).and_then(|_| self.commit_clean_up()).map(|r| {
+                    if new_number {
+                        let mut tracker = self.refdes_tracker();
+                        tracker.used.insert(id.clone());
+                        self.keep_refdes_tracker(tracker);
+                    }
+                    r
+                })
+            }
             Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
             // Symbol Properties' OK is a commit of a symbol, which is connectable: the commit cleans the sheet up (`LOCAL_CLEANUP`, r3 C3-M1); a board-side edit runs on
             // the symbol's own screen (UI-LEFT P14)
