@@ -62,6 +62,9 @@ mod fp_assign_tests;
 #[path = "pad_nets_tests.rs"]
 mod pad_nets_tests;
 #[cfg(test)]
+#[path = "back_annotate_api_tests.rs"]
+mod back_annotate_api_tests;
+#[cfg(test)]
 #[path = "net_edit_tests.rs"]
 mod net_edit_tests;
 #[cfg(test)]
