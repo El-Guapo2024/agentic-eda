@@ -54,11 +54,35 @@ impl<'a> Board<'a> {
             }
             wanted.push((number.clone(), Some(alt.clone())));
         }
-        let sch = self.schematic_mut()?;
-        // the placed unit named, and with `other_units` every other placed unit of the reference on the sheet (`SyncOtherUnits`)
-        let keys: Vec<String> = if other_units { sch.symbols.iter().filter(|s| s.id == sym.id).map(|s| field_key(&s.id, s.unit)).collect() } else { vec![field_key(&sym.id, sym.unit)] };
-        let before = sch.extras.pin_alternates.clone();
-        for key in keys {
+        // the placed unit named, and with `other_units` every other placed unit of the reference (`SyncOtherUnits`): on the sheet, and on every sheet path of
+        // the hierarchy the units the path's reference gives the same reference and library symbol (`for( SCH_SHEET_PATH& sheet : Schematic()->Hierarchy() )
+        // CollectOtherUnits( ref, m_unit, m_lib_id, sheet, .. )`, UI-LEFT-2 SS17), once a reference is annotated (`IsAnnotated( &aSourceSheet )`)
+        let here = self.focus.clone().unwrap_or_default();
+        let mut targets: Vec<(String, String)> = Vec::new();
+        {
+            let sch = self.schematic()?;
+            if other_units {
+                targets.extend(sch.symbols.iter().filter(|s| s.id == sym.id).map(|s| (here.clone(), field_key(&s.id, s.unit))));
+                let reference = eda_model::sheet_list::reference_under(sch, &sym, &self.focus_sheet_path());
+                if !eda_model::annotate::is_unannotated(&reference) {
+                    for e in eda_model::sheet_list::walk(&self.design) {
+                        let Some(other) = eda_model::sheet_list::screen_of(&self.design, &e.path) else { continue };
+                        for s in other.symbols.iter().filter(|s| s.lib_id == sym.lib_id && eda_model::sheet_list::reference_under(other, s, &e.path) == reference) {
+                            let t = (e.file.clone(), field_key(&s.id, s.unit));
+                            if !targets.contains(&t) {
+                                targets.push(t);
+                            }
+                        }
+                    }
+                }
+            } else {
+                targets.push((here.clone(), field_key(&sym.id, sym.unit)));
+            }
+        }
+        let mut changed = false;
+        for (file, key) in targets {
+            let Some(sch) = eda_model::sheet_list::screen_of_file_mut(&mut self.design, &file) else { continue };
+            let before = sch.extras.pin_alternates.get(&key).cloned();
             let map = sch.extras.pin_alternates.entry(key.clone()).or_default();
             for (number, alt) in &wanted {
                 match alt {
@@ -73,8 +97,9 @@ impl<'a> Board<'a> {
             if map.is_empty() {
                 sch.extras.pin_alternates.remove(&key);
             }
+            changed |= sch.extras.pin_alternates.get(&key) != before.as_ref();
         }
-        if sch.extras.pin_alternates == before {
+        if !changed {
             return Err(fail("ops_nothing_to_change", id, "the pins already have these functions"));
         }
         Ok(())
