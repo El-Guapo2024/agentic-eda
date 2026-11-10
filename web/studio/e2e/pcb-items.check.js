@@ -880,6 +880,7 @@
       await sleep(700);
       t((await myPoints())[0].layer === "B.SilkS", `F puts it on the back layer (${(await myPoints())[0].layer})`);
       await undo();
+      await select([p.id]); // Drag selected objects, KiCad's default (UI-LEFT-2 CC3)
       await drag(toScreen, [p.x / 1e6 + 2.5, p.y / 1e6 + 2.5], [p.x / 1e6 + 4.5, p.y / 1e6 + 4.5]);
       const moved = (await myPoints())[0];
       t(near(moved.x - p.x, 2_000_000, 700_000) && near(moved.y - p.y, 2_000_000, 700_000), `a drag carries it (${moved.x - p.x}, ${moved.y - p.y})`);
@@ -1264,8 +1265,8 @@
       await E.run("common.Control.zoomFitSelection");
       await sleep(800);
       toScreen = (await screenOf(false)) ?? toScreen;
-      await E.run("common.InteractiveSelection.clear");
-      await sleep(400);
+      await select([code.id]); // Drag selected objects, KiCad's default (UI-LEFT-2 CC3)
+      await sleep(150);
       const [cx, cy] = [code.x / 1e6, code.y / 1e6];
       await drag(toScreen, [cx + 3, cy + 3], [cx + 5, cy + 4]);
       const moved = (await myBarcodes())[0];

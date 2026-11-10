@@ -132,6 +132,9 @@
     const px0 = bodyPoint(st0, target, 1 / state().view.scale);
     /** Press on the part, wait `dwell` ms, move by (dx, dy) px in one event, report whether the move tool started; Escape, then release: nothing may be committed. */
     const trial = async (dx, dy, dwell = 0, back = false) => {
+      // the part selected first: KiCad's default "Left button drag" is Drag selected objects (UI-LEFT-2 CC3), so a drag from it moves it
+      await run("common.InteractiveSelection.selectItems", [target.ref]);
+      await sleep(150);
       const [x0, y0] = w2c(px0[0], px0[1]);
       fire("pointermove", x0, y0, { buttons: 0 });
       await sleep(40);

@@ -216,7 +216,7 @@
     await drag(at(), 60, 40, 0);
     t(await moved(), "and selected, a drag from it moves it");
     await restore();
-    await setDrags("drag_any", null, null);
+    await setDrags("drag_selected", null, null); // KiCad's default (UI-LEFT-2 CC3), what the check found
     await clear();
   });
 

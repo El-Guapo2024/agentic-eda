@@ -133,7 +133,8 @@
     await scenario("a pad dragged moves; R turns it; Del deletes it; one undo step each", async (t) => {
       const p2 = ((await footprint(FP)).pads ?? []).find((p) => p.number === "2");
       if (!t(!!p2, "pad 2 is there")) return;
-      await select([]);
+      // selected first: KiCad's default "Left button drag" is Drag selected objects (UI-LEFT-2 CC3)
+      await select([p2.id]);
       await dragFromTo([p2.at.x, p2.at.y], [p2.at.x + 1_500_000, p2.at.y + 2_500_000]);
       let p = ((await footprint(FP)).pads ?? []).find((q) => q.number === "2");
       t(p.at.x === p2.at.x + 1_500_000 && p.at.y === p2.at.y + 2_500_000, `the drag moved it by (1.5, 2.5) mm: (${p2.at.x}, ${p2.at.y}) -> (${p.at.x}, ${p.at.y})`);
@@ -403,7 +404,9 @@
       t(((await symbol(SYM)).graphics ?? []).length === g0, "one undo takes it away");
       const pin = ((await symbol(SYM)).pins ?? []).slice().sort((a, b) => a.at.y - b.at.y)[0];
       const n = pin.number;
-      await select([]);
+      // selected first (Drag selected objects, UI-LEFT-2 CC3)
+      await select([pin.id ?? `pin:${n}`]);
+      if (__eda.state().selection.length === 0) await clickAt(pin.at.x * 1e6, -pin.at.y * 1e6);
       await dragFromTo([pin.at.x * 1e6, -pin.at.y * 1e6], [pin.at.x * 1e6 - 2_540_000, -pin.at.y * 1e6]);
       let p = ((await symbol(SYM)).pins ?? []).find((q) => q.number === n);
       t(Math.abs(p.at.x - (pin.at.x - 2.54)) < 1e-6 && Math.abs(p.at.y - pin.at.y) < 1e-6, `the drag moved it 2.54 mm left (${pin.at.x} -> ${p.at.x})`);

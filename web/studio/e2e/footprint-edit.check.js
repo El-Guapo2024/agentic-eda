@@ -201,6 +201,10 @@
       if (!to) return t(false, "no mapping");
       const [px, py] = to(...onText(f0));
       fire("pointermove", px, py, { buttons: 0 }); await sleep(120);
+      // a click selects it first: KiCad's default "Left button drag" is Drag selected objects (UI-LEFT-2 CC3)
+      fire("pointerdown", px, py, { buttons: 1 }); await sleep(60);
+      fire("pointerup", px, py); await sleep(600);
+      t(__eda.state().selection[0]?.id === `${refA}:Reference`, `a click picks the field (${JSON.stringify(__eda.state().selection)})`);
       fire("pointerdown", px, py, { buttons: 1 }); await sleep(100);
       fire("pointermove", px + 40, py + 20, { buttons: 1 }); await sleep(150);
       fire("pointermove", px + 80, py + 40, { buttons: 1 }); await sleep(150);

@@ -657,9 +657,11 @@
     t(graphics.length === 3 && !toPad, `a line on the silk layer does not snap to a pad on the copper one: ${JSON.stringify(graphics.map((g) => g.start))}`);
     await undoFp();
     // a drag: the second silk line, picked up at its start, dropped near the end of the first
-    await select([]);
     const second = graphics.find((g) => g.start.x === 1_130_000);
-    await dragFromTo([1_130_000, 3_330_000], [4_310_000 + d, 710_000 + d]);
+    // selected first: KiCad's default "Left button drag" is Drag selected objects (UI-LEFT-2 CC3); pressed a little way along it, off the start's
+    // edit point (a press on a selected line's handle drags that end alone), so the move's anchor is still the start, the nearest one
+    await select([second.id]);
+    await dragFromTo([1_130_000 + 200_000, 3_330_000], [4_310_000 + d + 200_000, 710_000 + d]);
     const moved = (await footprint(name)).graphics.find((g) => g.id === second.id);
     t(!!moved && moved.start.x === 4_310_000 && moved.start.y === 710_000, `the dropped line has its start on the other's end: ${JSON.stringify(moved?.start)} (it was (1130, 3330))`);
     t(!!moved && moved.end.x - moved.start.x === 1_000_000 && moved.end.y === moved.start.y, "and the same length");

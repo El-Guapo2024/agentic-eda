@@ -206,7 +206,8 @@
 
     // ----- move by dragging
     await scenario("move: dragging a footprint moves it by the pointer's distance, one undo step; redo moves it again", async (t) => {
-      await select([]);
+      // selected first: KiCad's default "Left button drag" is Drag selected objects (UI-LEFT-2 CC3)
+      await select([B]);
       const p0 = await partOf(B);
       const [px, py] = to(...bodyPoint(await state(), p0, mmPerPx * 1e6));
       await drag(px, py, px + 60, py + 30);
