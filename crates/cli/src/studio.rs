@@ -97,6 +97,8 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
             None => "ui: embedded studio.html".to_string(),
         }
     );
+    // KiCad 25ec2335 `IFACE::PreloadLibraries`: the symbol libraries load in the background as the project opens (`crate::library_search`)
+    crate::library_search::preload_symbol_libraries(dir);
     let job: Job = Arc::new(Mutex::new("idle".into()));
     let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
     // The kicad-cli export a GLB needs can take minutes on a many-part
