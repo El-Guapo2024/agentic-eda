@@ -138,7 +138,11 @@ export function FootprintLibraryPropertiesDialog() {
     if (!(await api.cmd({ op: "batch", cmds }))) return;
     close();
     // the editor follows the footprint to its new name (no step of its own: the open is the batch's rename)
-    if (itemName !== item && !fp.board_link) dispatch({ type: "SET_NAME", name: newName });
+    if (itemName !== item && !fp.board_link) {
+      dispatch({ type: "SET_NAME", name: newName });
+      // the tree's selection goes with the renamed footprint: left on the old name, `GetTargetFPID` would name a footprint that is no longer the one shown
+      if (api.getState().treeSelection === fp.name) dispatch({ type: "SET_TREE_SELECTION", name: newName });
+    }
   };
 
   const tabList: [TabId, string][] = [

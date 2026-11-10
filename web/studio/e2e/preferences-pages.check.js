@@ -54,7 +54,7 @@
     await open();
     t(title() === "Preferences - Common", `title "${title()}"`);
     const labels = [...dlg().querySelectorAll('[role="treeitem"]')].map((e) => e.textContent.trim());
-    const want = ["Common", "Mouse and Touchpad", "Hotkeys", "Symbol Editor", "Display Options", "Grids", "Editing Options", "Colors", "Toolbars", "Schematic Editor", "Display Options", "Grids", "Editing Options", "Colors", "Toolbars", "Footprint Editor", "Display Options", "Grids", "Origins & Axes", "Editing Options", "Colors", "Toolbars", "Footprint Defaults", "Graphics Defaults", "User Layer Names", "PCB Editor", "Display Options", "Grids", "Editing Options", "Colors", "Toolbars", "3D Viewer", "General", "Toolbars", "Realtime Renderer", "Maintenance"];
+    const want = ["Common", "Mouse and Touchpad", "Hotkeys", "Symbol Editor", "Display Options", "Grids", "Editing Options", "Colors", "Toolbars", "Schematic Editor", "Display Options", "Grids", "Editing Options", "Colors", "Toolbars", "Footprint Editor", "Display Options", "Grids", "Origins & Axes", "Editing Options", "Colors", "Toolbars", "Footprint Defaults", "Graphics Defaults", "User Layer Names", "PCB Editor", "Display Options", "Grids", "Origins & Axes", "Editing Options", "Colors", "Toolbars", "3D Viewer", "General", "Toolbars", "Realtime Renderer", "Maintenance"];
     t(JSON.stringify(labels) === JSON.stringify(want), `tree: ${labels.join(" | ")}`);
     const greyed = [...dlg().querySelectorAll('[data-not-offered="true"]')];
     t(greyed.length >= 10 && greyed.every((g) => (g.getAttribute("title") ?? "").length > 20), `${greyed.length} greyed rows, each with its reason`);

@@ -92,7 +92,7 @@
     t(names.length >= 10 && props.length >= 8 && sorted(props), `${props.length} property rows in the alphabetical order of their names (${props.join(", ")})`);
     t(fields.includes("Value") && fields.includes("Datasheet") && fields.includes("Description") && !fields.includes("Reference") && sorted(fields), `then the field rows, in their order (${fields.join(", ")})`);
     t(names.includes("Type") && rowValue("Type") === "Footprint", `Type is a row, though the Properties panel hides it: ${rowValue("Type")}`);
-    t(rowValue("Library Link") === c1.footprint, `Library Link is ${rowValue("Library Link")}`);
+    t(rowValue("Library Link") === (c1.lib_link ?? c1.footprint), `Library Link is ${rowValue("Library Link")}`);
     t(rowValue("Value") === (c1.value ?? ""), `Value is ${rowValue("Value")}`);
     t(/mm$/.test(rowValue("Position X") ?? ""), `a coordinate has its unit: ${rowValue("Position X")}`);
     t(![...document.querySelectorAll('select[aria-label^="Match "]')].some((s) => s.value !== "ignored"), "every Match starts Ignored");
@@ -164,7 +164,7 @@
     await pressFbp("Create from Selection Tab", 300);
     const q = dialog("fbp-query")?.value ?? "";
     // a field row is written `A.getField('Value')` (`DIALOG_FIND_BY_PROPERTIES`: a row with no property)
-    t(q === `A.Library_Link == '${c1.footprint}' && A.getField('Value') == '${c1.value}'`, `the query: ${q}`);
+    t(q === `A.Library_Link == '${c1.lib_link ?? c1.footprint}' && A.getField('Value') == '${c1.value}'`, `the query: ${q}`);
     await pressFbp("Select Matching");
     t(JSON.stringify(selection().sort()) === JSON.stringify([...expected].sort()), `the query selects the same ${expected.length}: ${selection().length}`);
     t(text("fbp-query-status") === `${expected.length} items matched`, `the line: ${text("fbp-query-status")}`);

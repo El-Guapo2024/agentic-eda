@@ -50,7 +50,7 @@
 // column cannot be grouped by."); the mandatory Description is a column (not shown at first, `LoadFieldNames`), and so is the generated "#"; the grid's right-button
 // menus (`FIELDS_EDITOR_GRID_TRICKS`: "Select Footprint...", "Show Datasheet", Cut, Copy, Paste, Delete, Select All; a column header's: show or hide each column;
 // the field list's header: its own columns); the export's format presets with Save preset... / Delete preset... (`onBomFmtPresetChanged`). The presets are kept
-// in the dialog and written when it closes, with the view and the format it closes on (`savePresetsToSchematic`), one `set_bom_view` step.
+// in the dialog and written when it closes, with the view and the format it closes on (`savePresetsToSchematic`), one `set_bom_view`, no undo step (`OnModify()`, no commit).
 //
 // Not ported (PARITY-sch.md): the variant symbol overrides (Set / Clear Variant Symbol).
 import { useEffect, useRef, useState } from "react";

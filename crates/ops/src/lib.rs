@@ -1707,7 +1707,7 @@ pub enum Cmd {
     /// ("Default presets cannot be modified.\nPlease use a different name."). What the dialog sends when it closes (`~DIALOG_SYMBOL_FIELDS_TABLE` ->
     /// `savePresetsToSchematic`, UI-LEFT-2 SS13): `presets`, the project's whole list of view presets as the dialog kept them, `fmt_presets` the export format
     /// presets' (`m_BomFmtPresets`, `schematic.bom_fmt_presets`) and `fmt_view` the format it closes on (`m_BomFmtSettings`, `bom_fmt_settings`), with `view`.
-    /// One undo step; refused when nothing changes. See `sch_setup::set_bom_view`.
+    /// No undo step (`OnModify()`, no commit; `board.rs`' `outside_history`); refused when nothing changes. See `sch_setup::set_bom_view`.
     SetBomView {
         #[serde(default)]
         save: Option<serde_json::Value>,

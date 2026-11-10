@@ -107,10 +107,24 @@
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const table = (body = {}) => json("/api/sch/fields_table", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   /** What the scenarios touch: the project's presets and templates, the root's symbols' fields. */
+  // the rows are counted under the view the project had when the run began: a view a scenario saves is kept (no undo step), and would regroup them
+  let fixedSpec = null;
   const snapshot = async () => {
-    const ft = await table({});
+    const ft = await table(fixedSpec ? { spec: fixedSpec } : {});
     const setup = await json("/api/sch/setup").catch(() => ({}));
-    return JSON.stringify({ presets: (ft.user_presets ?? []).map((p) => p.name), view: ft.bom_settings ?? null, templates: setup.field_name_templates ?? null, rows: ft.rows?.length });
+    return JSON.stringify({ templates: setup.field_name_templates ?? null, rows: ft.rows?.length });
+  };
+  // The table's presets, view and formats are kept outside the undo history (`savePresetsToSchematic`: `OnModify()`, no commit), so a scenario's are put back by a
+  // `set_bom_view`, not by Undo; a view the project never had stays as the scenario left it.
+  const viewOf = async () => { const ft = await table({}); return { presets: ft.user_preset_json ?? [], view: ft.bom_settings ?? null, fmts: ft.fmt_presets ?? [], fmt: ft.fmt_settings ?? null }; };
+  const putBackView = async (was) => {
+    const now = await viewOf();
+    const cmd = { op: "set_bom_view" };
+    if (!same(now.presets, was.presets)) cmd.presets = was.presets;
+    if (was.view && !same(now.view, was.view)) cmd.view = was.view;
+    if (!same(now.fmts, was.fmts)) cmd.fmt_presets = was.fmts;
+    if (was.fmt && !same(now.fmt, was.fmt)) cmd.fmt_view = was.fmt;
+    if (Object.keys(cmd).length > 1) await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd, strict: false }) }).then((r) => r.json());
   };
   const restore = async (baseline) => {
     for (let i = 0; i < 16; i++) {
@@ -124,9 +138,11 @@
     const t = (cond, msg) => { entry.notes.push(`${cond ? "ok" : "FAIL"}: ${msg}`); if (!cond) entry.ok = false; };
     try {
       const baseline = await snapshot();
+      const viewWas = await viewOf();
       try { await fn(t); } catch (e) { entry.notes.push(`FAIL: threw ${(e && e.message) || e}`); entry.ok = false; }
       try { await closeDialogs(); await __eda.run("common.InteractiveSelection.clear"); if (__eda.state().tool !== "select") await escape(); await leave(); } catch { /* ignore */ }
       const left = await restore(baseline);
+      await putBackView(viewWas);
       if (left < 0) { entry.notes.push("FAIL: the schematic could not be put back"); entry.ok = false; } else if (left > 0) { entry.notes.push(`note: ${left} edit(s) the scenario left behind were undone`); }
     } catch (e) { entry.notes.push(`FAIL: threw ${(e && e.message) || e}`); entry.ok = false; }
     results.push(entry);
@@ -150,6 +166,7 @@
     await fit();
     const root0 = await sch("");
 
+    fixedSpec = (await table({})).spec ?? null;
     await scenario("The scope: Entire Project, Current Sheet Only, Current Sheet and Down (OnScope, RebuildRows)", async (t) => {
       const sheet = root0.sheets.find((s) => s) ?? null;
       if (!sheet) return t(false, "a sheet");

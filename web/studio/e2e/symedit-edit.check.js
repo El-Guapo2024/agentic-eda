@@ -357,7 +357,7 @@
     await (await itemRow(ID))?.click();
     await sleep(300);
     const r = await run("common.Control.save");
-    t(r.ok && /Symbol library file '.*\.kicad_sym' saved\./.test(r.toast?.message ?? r.toast ?? ""), `Save: ${JSON.stringify(r).slice(0, 200)}`);
+    t(r.ok && !r.toast, `Save says nothing (\`saveLibrary\` formats its message and shows none, UI-LEFT-2 LL6): ${JSON.stringify(r).slice(0, 200)}`);
     const saved = (await json(`/api/library/saved?kind=symbol&id=${encodeURIComponent(ID)}`)).symbol;
     t(saved && saved.graphics.some((g) => g.kind === "bezier") && saved.pins.some((p) => p.number === "42") && saved.graphics.some((g) => g.kind === "text" && g.text === "TX"), `the file holds the bezier, the pin 42 and the text TX: ${saved && saved.graphics.map((g) => g.kind).join(",")}`);
     const row = (await json("/api/library_tables")).tables.symbol.project.rows.find((x) => x.nickname === LIB);

@@ -67,9 +67,23 @@
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const table = (body = {}) => json("/api/sch/fields_table", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   /** What the scenarios touch: the project's presets, view and formats, the symbols' fields. */
+  // the rows are counted under the view the project had when the run began: a view a scenario saves is kept (no undo step), and would regroup them
+  let fixedSpec = null;
   const snapshot = async () => {
-    const ft = await table({});
-    return JSON.stringify({ presets: (ft.user_presets ?? []).map((p) => p.name), view: ft.bom_settings ?? null, fmts: ft.fmt_presets ?? [], fmt: ft.fmt_settings ?? null, rows: ft.rows?.map((r) => r.cells) });
+    const ft = await table(fixedSpec ? { spec: fixedSpec } : {});
+    return JSON.stringify({ rows: ft.rows?.map((r) => r.cells) });
+  };
+  // The table's presets, view and formats are kept outside the undo history (`savePresetsToSchematic`: `OnModify()`, no commit), so a scenario's are put back by a
+  // `set_bom_view`, not by Undo; a view the project never had stays as the scenario left it.
+  const viewOf = async () => { const ft = await table({}); return { presets: ft.user_preset_json ?? [], view: ft.bom_settings ?? null, fmts: ft.fmt_presets ?? [], fmt: ft.fmt_settings ?? null }; };
+  const putBackView = async (was) => {
+    const now = await viewOf();
+    const cmd = { op: "set_bom_view" };
+    if (!same(now.presets, was.presets)) cmd.presets = was.presets;
+    if (was.view && !same(now.view, was.view)) cmd.view = was.view;
+    if (!same(now.fmts, was.fmts)) cmd.fmt_presets = was.fmts;
+    if (was.fmt && !same(now.fmt, was.fmt)) cmd.fmt_view = was.fmt;
+    if (Object.keys(cmd).length > 1) await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd, strict: false }) }).then((r) => r.json());
   };
   const restore = async (baseline) => {
     for (let i = 0; i < 12; i++) {
@@ -83,9 +97,11 @@
     const t = (cond, msg) => { entry.notes.push(`${cond ? "ok" : "FAIL"}: ${msg}`); if (!cond) entry.ok = false; };
     try {
       const baseline = await snapshot();
+      const viewWas = await viewOf();
       try { await fn(t); } catch (e) { entry.notes.push(`FAIL: threw ${(e && e.message) || e}`); entry.ok = false; }
       try { await closeDialogs(); } catch { /* ignore */ }
       const left = await restore(baseline);
+      await putBackView(viewWas);
       if (left < 0) { entry.notes.push("FAIL: the project could not be put back"); entry.ok = false; } else if (left > 0) { entry.notes.push(`note: ${left} edit(s) the scenario left behind were undone`); }
     } catch (e) { entry.notes.push(`FAIL: threw ${(e && e.message) || e}`); entry.ok = false; }
     results.push(entry);
@@ -114,6 +130,7 @@
     await sleep(300);
     if (__eda.state().tab !== "schematic") { [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Schematic")?.click(); await sleep(900); }
 
+    fixedSpec = (await table({})).spec ?? null;
     await scenario("The Description column (LoadFieldNames' fifth mandatory field), the BOM Name naming the column, and the view kept when the dialog closes", async (t) => {
       const dlg = await openTable();
       if (!dlg) return t(false, "the table opens");
@@ -160,6 +177,9 @@
     await scenario("The grid's right-button menus: Select Footprint..., Show Datasheet, Copy and Paste of a cell, a header's show / hide (FIELDS_EDITOR_GRID_TRICKS)", async (t) => {
       const dlg = await openTable();
       if (!dlg) return t(false, "the table opens");
+      // KiCad's own view (a view an earlier scenario saved is kept: no undo step)
+      const preset = aria("Preset", dlg);
+      if (preset && preset.value !== "Default Editing") { setValue(preset, "Default Editing"); await sleep(1200); }
       const fp = dlg.querySelector('input[aria-label^="Footprint of "]');
       let menu = await contextMenu(fp);
       t(same(menuLabels(menu), ["Select Footprint...", "Cut", "Copy", "Paste", "Delete", "Select All"]), `a Footprint cell: ${menuLabels(menu)}`);

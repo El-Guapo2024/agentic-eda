@@ -1290,22 +1290,53 @@ pub(crate) fn judge_against(dir: &Path, baseline: eda_model::ir::Design) -> Resu
 /// through an undo or a redo of the edits around it ([`keep_outside_history`]), as KiCad's undo, which restores items, never touches the
 /// board's plot settings. (Round 4's X4-3: it used to be a step, so Ctrl+Z after a plot took back the dialog's checklist.)
 fn outside_history(cmd: &Cmd) -> bool {
-    matches!(cmd, Cmd::SetPlotSettings { .. } | Cmd::SetIpc2581Bom { .. })
+    match cmd {
+        // the studio sends a schematic command on the sheet in view, and a dialog's close may come as a batch of its own
+        Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => outside_history(cmd),
+        Cmd::Batch { cmds } => !cmds.is_empty() && cmds.iter().all(outside_history),
+        _ => matches!(cmd, Cmd::SetPlotSettings { .. } | Cmd::SetIpc2581Bom { .. } | Cmd::SetZoneDefaults { .. } | Cmd::SetBomView { .. }),
+    }
 }
 
-/// What [`outside_history`] commands store: the plot settings and Export IPC-2581's BOM columns.
-type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>);
+/// The project's `schematic` keys [`Cmd::SetBomView`] writes (`DIALOG_SYMBOL_FIELDS_TABLE::savePresetsToSchematic`: the settings and `OnModify()`, no commit).
+const BOM_VIEW_KEYS: [&str; 4] = ["bom_presets", "bom_settings", "bom_fmt_presets", "bom_fmt_settings"];
+
+/// What [`outside_history`] commands store: the plot settings, Export IPC-2581's BOM columns, the board's default zone settings
+/// (`PCB_EDIT_FRAME::Edit_Zone_Params`' `SetDefaultZoneSettings`, no commit) and the Symbol Fields Table's presets and view.
+type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>, Option<eda_model::ir::Zone>, [Option<serde_json::Value>; 4]);
 
 fn outside_history_of(design: &eda_model::ir::Design) -> OutsideHistory {
-    design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone())).unwrap_or_default()
+    let (plot, ipc, zone) = design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone(), d.zone_defaults.clone())).unwrap_or_default();
+    let project = design.schematic.as_ref().and_then(|s| s.extras.project_schematic.as_ref());
+    (plot, ipc, zone, BOM_VIEW_KEYS.map(|k| project.and_then(|p| p.get(k)).cloned()))
 }
 
 /// What [`outside_history`] commands store (in the design before an undo or a redo), carried into the design it restores. A whole-design
 /// (`file`) step is an outside edit of `design.json` and restores them with the rest.
 fn keep_outside_history(kept: OutsideHistory, mut restored: eda_model::ir::Design) -> eda_model::ir::Design {
-    if kept != outside_history_of(&restored) {
+    let now = outside_history_of(&restored);
+    if kept == now {
+        return restored;
+    }
+    let (plot, ipc, zone, bom) = kept;
+    if (&plot, &ipc, &zone) != (&now.0, &now.1, &now.2) {
         let d = restored.drawings.get_or_insert_with(Default::default);
-        (d.plot_params, d.ipc2581_bom) = kept;
+        (d.plot_params, d.ipc2581_bom, d.zone_defaults) = (plot, ipc, zone);
+    }
+    if bom != now.3 {
+        if let Some(sch) = restored.schematic.as_mut() {
+            let project = sch.extras.project_schematic.get_or_insert_with(Default::default);
+            for (key, value) in BOM_VIEW_KEYS.into_iter().zip(bom) {
+                match value {
+                    Some(v) => {
+                        project.insert(key.into(), v);
+                    }
+                    None => {
+                        project.remove(key);
+                    }
+                }
+            }
+        }
     }
     restored
 }
@@ -4080,6 +4111,32 @@ pub(crate) mod tests {
         assert!(undo(&dir, "test", Some(Domain::Schematic)).is_err(), "and the carry left no undo entry");
         redo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert_eq!(counts(&dir), (before.0 + 5, before.1 + 4), "the earlier redo is still there");
+    }
+
+    /// `SetDefaultZoneSettings` and `savePresetsToSchematic` are `OnModify()` with no commit: the zone defaults and the Symbol Fields Table's view are kept
+    /// through an undo of the edit before them and are no step of their own.
+    #[test]
+    fn the_zone_defaults_and_the_fields_tables_view_are_no_undo_step_and_survive_undo() {
+        let dir = scratch("zone_bom_undo");
+        setup_both(&dir);
+        let r1 = |dir: &Path| load(dir).unwrap().1.placement.unwrap().footprints[0].at;
+        let zone = |dir: &Path| load(dir).unwrap().1.drawings.and_then(|d| d.zone_defaults).map(|z| z.clearance);
+        let view = |dir: &Path| load(dir).unwrap().1.schematic.and_then(|s| s.extras.project_schematic).and_then(|p| p.get("bom_settings").cloned());
+        let was = r1(&dir);
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: mm(12.0), y: mm(10.0) }, false, "test").unwrap();
+        let defaults: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_zone_defaults", "zone": { "net": "", "layer": "F.Cu", "outline": [], "clearance": 200000 } })).unwrap();
+        step(&dir, defaults, false, "test").unwrap();
+        let shown = serde_json::json!({ "name": "", "fields_ordered": [] });
+        let close: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_bom_view", "view": shown })).unwrap();
+        // as the studio sends it: on the sheet in view
+        step(&dir, Cmd::OnSheet { sheet: String::new(), cmd: Box::new(close) }, false, "test").unwrap();
+        let kept = zone(&dir);
+        assert!(kept.is_some());
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(r1(&dir), was, "the undo takes back the move, the last edit");
+        assert_eq!(zone(&dir), kept, "the defaults stay");
+        assert_eq!(view(&dir), Some(shown.clone()), "and the table's view");
+        assert!(undo(&dir, "test", Some(Domain::Pcb)).is_err(), "and there was no step of their own");
     }
 
     /// Round 4's X4-3: the Plot and Generate Drill Files dialogs store their choices as KiCad's do (`DIALOG_PLOT::applyPlotSettings`,
