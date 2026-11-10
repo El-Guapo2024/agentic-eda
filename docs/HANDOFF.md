@@ -2,6 +2,21 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
+## Start here (2026-11-10): round 2 landed through batch v4; batch v5 in flight
+
+- **Main 21d30106** holds everything of 2026-11-07 plus `task-v2-libs`, `task-v3-schdlg`, `task-v3-pcbmisc` (merged and fixed at 8a6e5642) and batch v4: `task-v4-pp8-props` (PP8, PARITY-pcb §104), `task-v4-pp15-swap` (PP15, §105), `task-v4-ss12-labels` (SS12, PARITY-sch §78), `task-v4-ss17-annot` (SS17 partly, §79). Gates below.
+- **In flight (2026-11-10):** batch v5 in worktrees `~/work/agentic-eda-v5-*`: PP18 (PARITY-pcb §106), PP23 (§107), SS10 (PARITY-sch §80), SS18 (§81); section numbers were given out in advance so the merges do not clash.
+- **Decisions waiting on the user:**
+  - `board serve` now reads the symbol libraries in the background on every start, as KiCad's `PreloadLibraries` (SS12); no opt-out yet.
+  - The reference tracker (`used_designators`, SS17) is part of the design, so Undo takes a recorded number back (KiCad's is not undone), and placing or annotating writes it to design.json and the .kicad_pro.
+  - Place Power as the other kind of a power symbol the sheet already has is refused (KiCad adds a renamed `+5V_1` cache entry).
+- **Lessons of this round:**
+  - Do NOT set `KICAD_PATH` for the browser checks: with it `fp-models` fails (its Migrate 3D Models scenario sees other models).
+  - Settings that are not undo steps (`Cmd::SetZoneDefaults`, `Cmd::SetBomView`) must be listed in `board.rs::outside_history`, which also looks inside `OnSheet`, `InGroup` and an all-outside `Batch`; otherwise undo wipes them.
+  - `tools/check.sh full` deletes its logs; run cargo and npm directly with logs when you need the failures.
+  - `zones` can fail under `run-all-checks -j 3` and pass alone; the `sim_api` RC/op-amp test raced its neighbour over the one-simulation slot (fixed in `task-v5-lead`: the tests take turns).
+  - Run the full suite in a separate worktree (`~/work/agentic-eda-gate`), never in main's checkout, whose `target/release` and `web/studio/dist` feed the live studio.
+
 ## Start here (2026-11-07, late): round 2 in progress, pushed in a hurry (credits running out)
 
 - **Main 826222cc includes round 2's merged batches.** In `docs/parity/UI-LEFT-2.md`:
@@ -335,6 +350,9 @@ Import Netlist was kept out by the user's decision of 2026-10-21 until the user 
 - **The user's boards in `work/`** are the user's own and not needed for development. The real ones are on the Mac; the box's `work/mcu30` is a near-empty scratch, backed up in `~/backups/` before the nanometre work. Don't undo or reorganize them without asking. After `task-nanometres` merges, they are migrated on first load, one way.
 
 ## Gates of the last main
+
+- **`21d30106`** (the AWS box, 2026-11-10, batch v4 merged): web typecheck ok, 3576 unit tests; release build 0 warnings; Rust (`EDA_SLOW_TESTS=1`, release, workspace) 4939 passed, 3 failed, 25 ignored: this box's `corpus_runs_every_seed` and `kicad_cli_plots_each_layer_of_the_qa_boards_padstacks_...`, and `sim_api`'s RC/op-amp test (the race above; 3/3 alone); `tools/run-all-checks.sh -j 3` 143 passed, 0 failed of 143 in 2720 s.
+- **`8a6e5642`** (2026-11-10, v2-libs, v3-schdlg, v3-pcbmisc merged and fixed): web 3573; Rust 4917 passed, the same 3 failed; browser 139/139.
 
 - **`fdc90313`** (the AWS box, 2026-11-06, batch u1 merged): `tools/check.sh full` gave Rust 4339 passed, 3 failed (this box's), 25 ignored; web 2894; build ok. Each branch ran its own browser checks; the full `run-all-checks` was not run.
 
