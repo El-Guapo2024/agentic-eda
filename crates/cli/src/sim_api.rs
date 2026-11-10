@@ -411,7 +411,11 @@ mod tests {
         true
     }
 
+    /// One simulation at a time in this process ([`slot`]), so the tests that simulate take turns here: run in parallel, one would get
+    /// "Another simulation is already running." from the other's run.
     fn run(dir: &Path, req: Value) -> Value {
+        static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _turn = TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let r = run_blocking(dir, req.to_string().as_bytes());
         assert_eq!(r["ok"], true, "{}", serde_json::to_string_pretty(&r).unwrap());
         r
