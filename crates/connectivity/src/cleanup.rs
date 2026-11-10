@@ -699,8 +699,11 @@ fn has_different_width_attached(seg: &Track, tracks: &[Track], prot: &Protected)
 /// skipped (`IS_DELETED`). A merge is `mergeCollinearSegments`: the first segment is modified in place (`*aSeg1 = dummy_seg`: it keeps its id,
 /// so its mask opening, its group and its lock stay; the pads it ends on are both segments'), the second goes.
 ///
-/// Differs: the two segments must be of one net; KiCad's candidates are whatever connectivity joins to the segment, and a track can change net there
-/// (`CN_ITEM( track, true )`), so two touching collinear tracks of two nets would merge before "Delete tracks connecting different nets" sees the short.
+/// The two segments need not be of one net (UI-LEFT-2 PP23): the candidates are whatever connectivity joins to the segment (`citem->ConnectedItems()`), and
+/// `CN_VISITOR::operator()` (`pcbnew/connectivity/connectivity_algo.cpp`) joins two items of different nets unless neither can change net
+/// (`!aCandidate->CanChangeNet() && !m_item->CanChangeNet()`), which a track always can (`CN_LIST::Add( PCB_TRACK* )`: `new CN_ITEM( track, true )`). So two
+/// touching collinear tracks of two nets merge, the merged track keeping the first one's net (`*aSeg1 = dummy_seg`), before "Delete tracks connecting different
+/// nets" -- which `CleanupBoard` runs after `cleanup` -- sees the short.
 #[allow(clippy::too_many_arguments)]
 fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], copper: &ZoneCopper, stack: &[String], prot: &Protected, changes: &mut Vec<CleanupChange>) -> bool {
     let mut changed_any = false;
@@ -713,7 +716,7 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
                 continue;
             }
             for cand in &tracks[i + 1..] {
-                if prot.track(&cand.id) || cand.pts.len() != 2 || cand.arc().is_some() || cand.width != seg.width || cand.net != seg.net || cand.layer != seg.layer || !segments_touch(seg, cand) {
+                if prot.track(&cand.id) || cand.pts.len() != 2 || cand.arc().is_some() || cand.width != seg.width || cand.layer != seg.layer || !segments_touch(seg, cand) {
                     continue;
                 }
                 if approx_collinear((seg.pts[0], seg.pts[1]), (cand.pts[0], cand.pts[1])) && test_merge(seg, cand, tracks, vias, pads, zones, copper, stack).is_some() {
@@ -1086,6 +1089,22 @@ mod tests {
         rt.tracks.push(Track { id: "t3".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![mid, off], arc_mid_offset: None });
         let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { merge_segments: true, ..Default::default() });
         assert!(report.changes.iter().all(|c| !matches!(c.kind, CleanupKind::MergedTracks)), "{:?}", report.changes.iter().map(|c| c.kind).collect::<Vec<_>>());
+    }
+
+    /// `CN_VISITOR` joins two tracks of different nets (`CN_ITEM( track, true )`), so `mergeSegments` merges them: the first one's net and id stay (UI-LEFT-2 PP23).
+    #[test]
+    fn collinear_tracks_of_two_nets_merge_into_the_first_ones_net() {
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let mid = Point { x: (a.x + b.x) / 2, y: a.y };
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(trk("t1", "N1", mm(0.2), vec![a, mid]));
+        rt.tracks.push(trk("t2", "N2", mm(0.2), vec![mid, b]));
+        let report = compute_cleanup(&design, &model, &ZoneCopper::default(), CleanupOptions { merge_segments: true, ..Default::default() });
+        let merged: Vec<_> = report.changes.iter().filter(|c| matches!(c.kind, CleanupKind::MergedTracks)).collect();
+        assert_eq!(merged.len(), 1, "{:?}", report.changes);
+        let t = merged[0].add_track.as_ref().unwrap();
+        assert_eq!((t.id.as_str(), t.net.as_str(), t.pts.clone()), ("t1", "N1", vec![a, b]));
     }
 
     #[test]

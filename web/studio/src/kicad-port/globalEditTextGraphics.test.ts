@@ -55,7 +55,7 @@ const ALL = BOARD_ONLY;
 const OFF: Omit<TextGraphicsFilter, "layerOn" | "layer" | "selectedOnly"> = { referenceOn: false, reference: "", footprintOn: false, footprint: "" };
 const FILTER: TextGraphicsFilter = { layerOn: false, layer: "F.SilkS", selectedOnly: false, ...OFF };
 const flat = (r: TextGraphicsMatch) => [...r.fieldIds, ...r.fpTextIds, ...r.fpShapeIds, ...r.shapeIds, ...r.textIds, ...r.dimensionIds];
-const none = (): TextGraphicsMatch => ({ shapeIds: [], textIds: [], dimensionIds: [], fieldIds: [], fpTextIds: [], fpShapeIds: [] });
+const none = (): TextGraphicsMatch => ({ shapeIds: [], textIds: [], dimensionIds: [], fieldIds: [], fpTextIds: [], fpShapeIds: [], fpItemTextIds: [], fpItemShapeIds: [], fpDimensionIds: [] });
 
 test("the layer list is the copper, the technical layers, and any other layer an item is on", () => {
   const layers = textGraphicsLayers(board());
@@ -171,7 +171,43 @@ test("each footprint scope box picks its items, footprint by footprint, before t
   assert.equal(matchCount(m), 15);
   assert.deepEqual(matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, values: true }, FILTER, new Set()).fieldIds, ["R1:Value", "R2:Value"]);
   assert.deepEqual(matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintGraphics: true }, FILTER, new Set()).fpShapeIds, ["R1~g0", "R1~g1", "R2~g0"]);
-  assert.equal(matchCount(matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintDimensions: true }, FILTER, new Set())), 0, "the footprints' dimensions are not items here");
+  assert.equal(matchCount(matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintDimensions: true }, FILTER, new Set())), 0, "these footprints have no dimensions");
+});
+
+/** R1 with a hidden text, a courtyard graphic, a text box, a table, a barcode and a dimension of its own (UI-LEFT-2 PP23). */
+function boardWithFootprintItems(): BoardState {
+  const b = boardWithFootprints();
+  const r1 = (b.parts as unknown as Record<string, unknown>[])[0]!;
+  r1.hidden_texts = [{ id: "R1~t2", layer: "F.Fab", role: "reference" }];
+  r1.courtyard_graphics = [{ id: "R1~c0", layer: "F.CrtYd" }];
+  r1.items = {
+    text_boxes: [{ id: "R1~tbx_1", layer: "F.SilkS" }],
+    tables: [{ id: "R1~tbl_1", layer: "F.Fab", cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }] }],
+    barcodes: [{ id: "R1~bar_1", layer: "F.SilkS" }],
+    dimensions: [{ id: "R1~dim_1", layer: "F.Fab" }],
+  };
+  return b;
+}
+
+test("the footprints' hidden texts, courtyard graphics and own items are in their scopes, and go in the command by their kinds", () => {
+  const b = boardWithFootprintItems();
+  const texts = matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintTexts: true }, FILTER, new Set());
+  assert.deepEqual(texts.fpTextIds, ["R1~t0", "R1~t1", "R1~t2", "R2~t0"], "a hidden text too");
+  assert.deepEqual(texts.fpItemTextIds, ["R1~tbx_1", "R1~tbl_1:0:0", "R1~tbl_1:0:1"]);
+  assert.deepEqual(matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, references: true }, FILTER, new Set()).fpTextIds, ["R1~t0", "R1~t2"], "a hidden ${REFERENCE} text goes with Reference designators");
+  const graphics = matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintGraphics: true }, FILTER, new Set());
+  assert.deepEqual(graphics.fpShapeIds, ["R1~g0", "R1~g1", "R1~c0", "R2~g0"], "the courtyard's graphics");
+  assert.deepEqual(graphics.fpItemShapeIds, ["R1~bar_1"]);
+  const dims = matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintDimensions: true }, FILTER, new Set());
+  assert.deepEqual(dims.fpDimensionIds, ["R1~dim_1"]);
+  // filters: the layer, the parent, selected only (a cell as itself; the others through their footprint)
+  assert.deepEqual(matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintGraphics: true }, { ...FILTER, layerOn: true, layer: "F.CrtYd" }, new Set()).fpShapeIds, ["R1~c0"]);
+  assert.equal(matchCount(matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintDimensions: true }, { ...FILTER, referenceOn: true, reference: "R2" }, new Set())), 0);
+  const selR1 = matchingTextAndGraphics(b, { ...NOTHING_IN_TEXT_SCOPE, footprintTexts: true, footprintDimensions: true }, { ...FILTER, selectedOnly: true }, new Set(["R1"]));
+  assert.deepEqual([selR1.fpItemTextIds, selR1.fpDimensionIds], [["R1~tbx_1"], ["R1~dim_1"]]);
+  const cmd = textAndGraphicsCmd({ ...none(), fpItemTextIds: ["R1~tbx_1"], fpItemShapeIds: ["R1~bar_1"], fpDimensionIds: ["R1~dim_1"], fpShapeIds: ["R1~c0"], textIds: ["t1"] }, true, UNCHANGED_ACTION);
+  assert.deepEqual([cmd.shape_ids, cmd.text_ids, cmd.dimension_ids, cmd.footprint.shape_ids], [["R1~bar_1"], ["R1~tbx_1", "t1"], ["R1~dim_1"], ["R1~c0"]]);
+  assert.ok(textGraphicsLayers(b).includes("F.CrtYd"));
 });
 
 test("without Other footprint fields or Footprint text items, a ${REFERENCE} or ${VALUE} one goes with its Reference or Value box", () => {

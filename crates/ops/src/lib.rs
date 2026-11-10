@@ -94,7 +94,7 @@ mod outline;
 mod part_rename;
 mod reannotate;
 mod pcb_global_edit;
-pub use pcb_global_edit::{fp_shape_id, fp_text_id, FootprintItems, Ipc4761Preset, TextRows};
+pub use pcb_global_edit::{courtyard_graphics, fp_courtyard_id, fp_shape_id, fp_text_id, FootprintItems, Ipc4761Preset, TextRows};
 mod pcb_groups;
 mod sch_groups;
 mod pcb_paste;
@@ -936,7 +936,8 @@ pub enum Cmd {
     /// board items here, see PARITY-pcb.md section 2. `shape_ids`/`text_ids`/`dimension_ids` are already filtered by the caller (scope, layer,
     /// "selected only" are UI concepts, same split `EditTracksAndVias` uses). "Set to specified values:" is the fields below, each `None` leaving
     /// that property alone (source's `INDETERMINATE_ACTION`); `layer_defaults` is "Set to layer default values:" (`StyleFromSettings`, the
-    /// Board Setup > Text & Graphics defaults), which ignores the fields below. See `pcb_global_edit.rs`.
+    /// Board Setup > Text & Graphics defaults), which ignores the fields below. See `pcb_global_edit.rs`. A footprint's own text boxes and table cells
+    /// (`text_ids`), barcodes (`shape_ids`) and dimensions (`dimension_ids`) are named by their board ids (`U1~tbx_..`, UI-LEFT-2 PP23).
     EditTextAndGraphics {
         #[serde(default)]
         shape_ids: Vec<String>,

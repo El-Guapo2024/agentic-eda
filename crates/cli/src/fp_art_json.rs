@@ -105,6 +105,35 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
                 })
                 .collect(),
         );
+        // The texts the canvas is not sent (hidden, or with nothing to show) are still the footprint's `GraphicalItems()`: Edit Text & Graphics Properties'
+        // "Footprint text items" reaches them (UI-LEFT-2 PP23). Their ids and board layers, and the role of a `${REFERENCE}` / `${VALUE}` one.
+        let unshown: Vec<Value> = art
+            .texts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let placed = t.placed(fp, &vars);
+                (!t.layout.visible || placed.text.is_empty()).then(|| {
+                    let mut v = json!({ "id": format!("{}~t{i}", part.reference), "layer": placed.layer });
+                    if t.text == "${REFERENCE}" || t.text == "${VALUE}" {
+                        v["role"] = json!(if t.text == "${REFERENCE}" { "reference" } else { "value" });
+                    }
+                    v
+                })
+            })
+            .collect();
+        if !unshown.is_empty() {
+            p["hidden_texts"] = Value::Array(unshown);
+        }
+    }
+}
+
+/// Put the footprint's courtyard graphics into the part's JSON `p` (`courtyard_graphics: [{ id, layer }]`, [`eda_ops::courtyard_graphics`]): the canvas draws the
+/// courtyard as a box, but Edit Text & Graphics Properties' "Footprint graphic items" reaches each of them (UI-LEFT-2 PP23). Absent when there are none.
+pub(crate) fn add_courtyard_graphics(p: &mut Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, part: &Part, fp: &FootprintInstance, footprint: &Footprint) {
+    let list = eda_ops::courtyard_graphics(design, model, part, fp, footprint);
+    if !list.is_empty() {
+        p["courtyard_graphics"] = Value::Array(list.into_iter().map(|(id, layer)| json!({ "id": id, "layer": layer })).collect());
     }
 }
 
@@ -215,5 +244,7 @@ mod tests {
         let texts = v["texts"].as_array().unwrap();
         assert_eq!(texts.len(), 1, "{texts:?}");
         assert_ne!(texts[0]["text"], "hidden");
+        // ... but its id and board layer are, for the global edit's "Footprint text items" (UI-LEFT-2 PP23)
+        assert_eq!(v["hidden_texts"], json!([{ "id": "U1~t1", "layer": "F.Fab" }]));
     }
 }
