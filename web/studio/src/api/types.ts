@@ -368,6 +368,13 @@ export interface Part {
   paste_margin_ratio?: number;
   /** The footprint was read from a board file, whose tokens of it are kept (the footprint's paste margins are set there). */
   from_board_file?: boolean;
+  /** The footprint's own `(solder_mask_margin ..)` (nm, `GetLocalSolderMaskMargin`) and `(attr .. allow_soldermask_bridges)` (`AllowSolderMaskBridges`); absent when none / off
+   *  (UI-LEFT-2 PP18). */
+  mask_margin?: Nm;
+  allow_soldermask_bridges?: boolean;
+  /** The schematic symbol's Datasheet and Description, which Footprint Properties carries an edit of the footprint's to (Update Schematic from PCB's "Other fields",
+   *  UI-LEFT-2 PP18); absent when no symbol is for the footprint. */
+  symbol_fields?: { Datasheet: string; Description: string };
   /** The footprint's Extruded 3D Body (`EXTRUDED_3D_BODY`, crates/cli/src/extruded_body_api.rs `body_json`); absent when it has none. */
   extruded_body?: ExtrudedBodyInfo;
   /** A back footprint whose `models` are held half a turn from its board file's numbers (read by a reader of before 2026-10-25): the 3D Models tab shows them turned back
@@ -2251,6 +2258,8 @@ export type Cmd =
   | { op: "edit_board_footprint_text"; id: string; text?: string; layout?: FieldLayoutCmd; delete?: boolean }
   /** A footprint's own paste margins (`set_footprint_paste_margin`); null is the board's. */
   | { op: "set_footprint_paste_margin"; part: string; margin: Nm | null; ratio: number | null }
+  /** Footprint Properties' "Solder mask expansion:" and "Allow bridged solder mask apertures between pads" (`set_footprint_solder_mask`); `margin` null is the board's. */
+  | { op: "set_footprint_solder_mask"; part: string; margin: Nm | null; allow_bridges: boolean }
   /**
    * The Footprint Properties and Pad Properties dialogs' OK, and the Properties panel's footprint, field and pad rows (crates/ops/src/fp_edit.rs): what is given
    * replaces what the footprint has -- the Reference layout, the Value layout, the whole list of user fields, the attributes (type, board only, exclude from

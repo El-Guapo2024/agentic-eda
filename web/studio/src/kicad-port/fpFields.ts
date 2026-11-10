@@ -9,7 +9,7 @@
 // selected, moved, turned and flipped by the same verbs as any other item.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
+import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, SymbolFieldEdit, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
 import { objectOn } from "./appearance";
 import { isBackLayer, textStyleOf } from "./layerDefaults";
 
@@ -175,27 +175,18 @@ export function checkFieldRow(name: string, layout: Pick<FieldLayoutCmd, "size" 
   return null;
 }
 
-/** `GetUserFieldName( ordinal )`: the name a field starts with when it is added (`Field4`, `Field5` ...). */
 /** `PCB_FIELD::IsMandatory`: Reference, Value, Datasheet and Description, the first four rows of Footprint Properties' grid (`GetMandatoryRowCount`). */
 export const MANDATORY_FIELDS = [REFERENCE, VALUE, "Datasheet", "Description"] as const;
 export const MANDATORY_ROW_COUNT = MANDATORY_FIELDS.length;
 
 /**
- * A user row named like a mandatory field (Reference, Value, Datasheet, Description), or null. Not KiCad's: `DIALOG_FOOTPRINT_PROPERTIES::Validate` checks
- * only for an empty name, and its footprint holds a USER field called "Reference" beside the Reference until the board is read again, when
- * `parseFOOTPRINT_unchecked`'s `HasField( pName )` puts its text on the Reference itself. The studio keys a footprint's fields by name, so it cannot hold the
- * two, and taking the row as that read does would rename (or revalue) the part with the user row's text: the row is refused instead.
- */
-export function mandatoryNameProblem(name: string, index: number): string | null {
-  const n = name.trim();
-  return index >= MANDATORY_ROW_COUNT && (MANDATORY_FIELDS as readonly string[]).includes(n) ? `"${n}" is the name of a mandatory field.` : null;
-}
-
-/**
- * Two user fields of one name, as KiCad treats them: `DIALOG_FOOTPRINT_PROPERTIES::Validate` refuses no repeated name, the board file is written with both, and
- * `parseFOOTPRINT_unchecked` reads the later `(property ..)` into the field the name already has (`HasField( pName )`: `SetText`, then
+ * Two fields of one name, as KiCad treats them: `DIALOG_FOOTPRINT_PROPERTIES::Validate` refuses no repeated name (it checks only for an empty one), the board file is
+ * written with both, and `parseFOOTPRINT_unchecked` reads the later `(property ..)` into the field the name already has (`HasField( pName )`: `SetText`, then
  * `parsePCB_TEXT_effects`). The studio's fields are keyed by name, so the rows are taken the way that read takes them: a later row's text and look land on the
- * first row of its name, and the later row goes (a user row named like a mandatory field is refused before: `mandatoryNameProblem`).
+ * first row of its name, and the later row goes. That holds for a user row named like a mandatory field too (UI-LEFT-2 PP18): `FOOTPRINT::GetField( name )`
+ * compares `PCB_FIELD::GetName()`, the canonical name of a mandatory field, so a user row called "Datasheet" gives its text and look to the Datasheet, and one
+ * called "Reference" or "Value" renames or revalues the footprint (and, as the dialog carries those, its symbol). KiCad's own footprint holds the two fields
+ * side by side until the board is read again; the studio keeps the design as that read leaves it.
  */
 export function mergeDuplicateFields<T extends { name: string; text: string; layout: unknown }>(rows: readonly T[]): T[] {
   const out: T[] = [];
@@ -208,6 +199,36 @@ export function mergeDuplicateFields<T extends { name: string; text: string; lay
   return out;
 }
 
+/** The two mandatory fields Update Schematic from PCB's "Other fields" carries to the symbol (Reference and Value are `BACK_ANNOTATE`'s own options). */
+export const BACK_ANNOTATED_FIELDS = ["Datasheet", "Description"] as const;
+
+/**
+ * The edits of the schematic symbol a Datasheet or Description edited in Footprint Properties makes (UI-LEFT-2 PP18), as `set_symbol_fields` takes them.
+ *
+ * KiCad's dialog sets the footprint's field (`TransferDataFromWindow`), and Update Schematic from PCB carries it to the symbol: the board's netlist sends every
+ * field of the footprint (`PCB_EDIT_FRAME::KiwayMailIn`'s `MAIL_PCB_GET_NETLIST`: `fields[field->GetCanonicalName()] = field->GetText()`, board-only footprints
+ * left out), and `BACK_ANNOTATE::applyChangelist` with "Other fields" (on by default, `m_cbUpdateOtherFields`) skips the Reference and the Value, then sets a
+ * symbol field that `!HasTextVars()` and whose shown text differs: "Change %s field '%s' value to '%s'.". The studio carries the Reference and the Value at OK, as
+ * that update would, and so carries these two the same way -- only the ones the dialog changed (`before`), so that OK on a footprint whose file gave it a Datasheet of
+ * its own does not rewrite the symbol unasked. Nothing for a footprint no symbol is for (`symbol_fields` absent: "Footprint '%s' has no assigned symbol.") or one
+ * marked Not in schematic (`boardOnly`, the new attributes).
+ */
+export function backAnnotateEdits(part: Pick<Part, "ref" | "symbol_fields">, boardOnly: boolean, before: ReadonlyMap<string, string>, after: readonly { name: string; text: string }[]): SymbolFieldEdit[] {
+  const symbol = part.symbol_fields;
+  if (!symbol || boardOnly) return [];
+  const out: SymbolFieldEdit[] = [];
+  for (const name of BACK_ANNOTATED_FIELDS) {
+    const row = after.find((r) => r.name.trim() === name);
+    if (!row || row.text === before.get(name)) continue;
+    const now = symbol[name];
+    // `symField->HasTextVars()`: a field that names a variable is left alone
+    if (now.includes("${") || now === row.text) continue;
+    out.push({ id: part.ref, field: name, value: row.text });
+  }
+  return out;
+}
+
+/** `GetUserFieldName( ordinal )`: the name a field starts with when it is added (`Field4`, `Field5` ...). */
 export function newFieldName(existing: readonly string[], ordinal: number): string {
   let n = ordinal;
   for (;;) {
