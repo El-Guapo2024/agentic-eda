@@ -6,6 +6,7 @@ import {
   DEFAULT_PREFERENCES,
   loadPreferences,
   MOUSE_SCROLL_DEFAULTS,
+  PREFERENCES_SCHEMA_VERSION,
   PREFERENCES_STORAGE_KEY,
   sanitizePreferences,
   sanitizeRotationStep,
@@ -179,4 +180,26 @@ test("the board editor's Origins & Axes: the page origin and both axes as KiCad'
   assert.deepEqual([p.pcbDisplayOrigin, p.pcbInvertXAxis, p.pcbInvertYAxis], ["grid", true, false]);
   assert.equal(sanitizePreferences({ pcbDisplayOrigin: 1 }).pcbDisplayOrigin, "aux");
   assert.equal(sanitizePreferences({ pcbDisplayOrigin: "somewhere" }).pcbDisplayOrigin, "page");
+});
+
+test("UI-LEFT-2 CC3: Left button drag starts as KiCad's DRAG_SELECTED in every editor; a saved choice is kept", () => {
+  // common_settings.cpp: PARAM_ENUM( "input.mouse_left", &m_Input.drag_left, MOUSE_DRAG_ACTION::DRAG_SELECTED, ... )
+  assert.equal(DEFAULT_PREFERENCES.dragLeft, "drag_selected");
+  assert.equal(sanitizePreferences({}).dragLeft, "drag_selected", "nothing stored: KiCad's default");
+  assert.equal(toViewControlSettings(DEFAULT_PREFERENCES).dragLeft, "drag_selected", "what the four canvases read");
+  for (const chosen of ["select", "drag_selected", "drag_any"] as const) {
+    const store: Record<string, string> = {};
+    const storage = { getItem: (k: string) => store[k] ?? null, setItem: (k: string, val: string) => void (store[k] = val) };
+    savePreferences(storage, { ...DEFAULT_PREFERENCES, dragLeft: chosen });
+    assert.equal(loadPreferences(storage).dragLeft, chosen, `a person's ${chosen} survives the new default`);
+  }
+  // stored before the default changed (no schemaVersion): the old default drag_any reads as the new one, a real choice stays
+  const old = (v: string) => { const store: Record<string, string> = { [PREFERENCES_STORAGE_KEY]: JSON.stringify({ dragLeft: v, dragMiddle: "zoom" }) }; return loadPreferences({ getItem: (k) => store[k] ?? null, setItem: () => {} }); };
+  assert.equal(old("drag_any").dragLeft, "drag_selected", "the old default, saved on start, migrated");
+  assert.equal(old("drag_any").dragMiddle, "zoom", "the rest of an old file kept");
+  assert.equal(old("select").dragLeft, "select");
+  assert.equal(old("drag_selected").dragLeft, "drag_selected");
+  const v2: Record<string, string> = { [PREFERENCES_STORAGE_KEY]: JSON.stringify({ dragLeft: "drag_any", schemaVersion: PREFERENCES_SCHEMA_VERSION }) };
+  assert.equal(loadPreferences({ getItem: (k) => v2[k] ?? null, setItem: () => {} }).dragLeft, "drag_any", "saved from version 2 on: a choice");
+  assert.equal(sanitizePreferences({ dragLeft: "drag_any" }).dragLeft, "drag_any", "the Preferences dialog's own copy (no version) is taken as it is");
 });
