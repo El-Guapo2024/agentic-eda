@@ -280,6 +280,27 @@ fn replace_all_in_references_renames_through_a_chain() {
     assert_eq!(refs, vec![("R10".to_string(), mm(10.0)), ("R100".to_string(), mm(50.0))], "R1 became R10 and R10 became R100");
 }
 
+/// UI-LEFT-2 SS10: Replace sets a power symbol's Reference (`SCH_FIELD::Replace`'s `SetRef`) with "Also search in reference designators", one undo step; a
+/// reference another symbol has refuses it, as the design keys a power symbol by its reference.
+#[test]
+fn replace_renames_a_power_symbols_reference() {
+    let m = ConstraintModel::default();
+    let mut d = empty_design();
+    let power = |id: &str, x: f64| eda_model::ir::PowerSymbol { id: id.into(), lib_id: "power:GND".into(), at: p(mm(x), mm(10.0)), rot: 0, net: "GND".into(), pin: String::new() };
+    d.schematic = Some(eda_model::ir::SchematicSection { power_symbols: vec![power("#PWR01", 10.0), power("#PWR02", 20.0)], ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let ids = |b: &Board<'_>| b.design().schematic.as_ref().unwrap().power_symbols.iter().map(|p| p.id.clone()).collect::<Vec<_>>();
+    let search = crate::search::SearchData { find: "#PWR01".into(), replace: "#PWR02".into(), search_hidden_fields: true, replace_references: true, ..Default::default() };
+    assert_eq!(b.apply(&Cmd::ReplaceText { search: search.clone(), items: None, all_sheets: false }).unwrap_err()[0].check, "ops_duplicate_symbol");
+    assert_eq!(ids(&b), vec!["#PWR01", "#PWR02"]);
+    let search = crate::search::SearchData { replace: "#PWR10".into(), ..search };
+    b.apply(&Cmd::ReplaceText { search: search.clone(), items: None, all_sheets: false }).unwrap();
+    assert_eq!(ids(&b), vec!["#PWR10", "#PWR02"]);
+    // without "Also search in reference designators" there is nothing to replace
+    let search = crate::search::SearchData { find: "#PWR02".into(), replace_references: false, ..search };
+    assert_eq!(b.apply(&Cmd::ReplaceText { search, items: None, all_sheets: false }).unwrap_err()[0].check, "ops_nothing_to_replace");
+}
+
 #[test]
 fn replace_can_empty_a_label() {
     // r5 C5-L6: `EDA_TEXT::Replace` sets the empty text; ERC reports `empty_label_name`.

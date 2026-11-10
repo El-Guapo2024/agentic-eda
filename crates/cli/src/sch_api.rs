@@ -267,7 +267,7 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
     json!({ "ok": true, "file": rel.to_string_lossy(), "text": text })
 }
 
-/// `POST /api/sch/find`: `{search: SearchData, scope?: [ids], sheet?: "id/id/...", all_sheets?: bool}` ->
+/// `POST /api/sch/find`: `{search: SearchData, scope?: [ids], sheet?: "id/id/...", all_sheets?: bool, markers?: [{key, text, at}]}` ->
 /// `{ok, current_rank, matches: [{key, uid, kind, id, name, at: [x, y], text, sheet, sheet_name, page, sheet_rank}]}` in
 /// `nextMatch` order (ascending x, y). `scope` (the dialog's "Search only
 /// selected objects") keeps only matches whose owning id is listed. `sheet`
@@ -293,6 +293,20 @@ pub fn find(dir: &Path, body: &[u8]) -> Value {
     let sheet_text = req.get("sheet").and_then(Value::as_str).unwrap_or("");
     let all_sheets = req.get("all_sheets").and_then(Value::as_bool).unwrap_or(false) && scope.is_none();
     let in_view: Vec<String> = sheet_text.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    // the ERC markers of the sheet in view, as the browser has them (`markers: [{key, text, at: [x, y]}]`, nm): `nextMatch` walks them with the sheet's items
+    let markers: Vec<search::FindMarker> = req
+        .get("markers")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| {
+                    let at = m.get("at")?.as_array()?;
+                    let coord = |v: &Value| v.as_f64().map(|f| eda_model::units::Nm::new(f.round() as i64));
+                    Some(search::FindMarker { key: m.get("key")?.as_str()?.to_string(), text: m.get("text")?.as_str()?.to_string(), at: eda_model::ir::Point { x: coord(at.first()?)?, y: coord(at.get(1)?)? } })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let walk = eda_model::sheet_list::walk(&design);
     let sorted = eda_model::sheet_list::sort_by_page_numbers(&walk);
     let rank_of = |path: &[String]| sorted.iter().position(|e| e.path == path).unwrap_or(0);
@@ -306,14 +320,15 @@ pub fn find(dir: &Path, body: &[u8]) -> Value {
     if all_sheets {
         for (rank, entry) in sorted.iter().enumerate() {
             let Some(sch) = eda_model::sheet_list::screen_of(&design, &entry.path) else { continue };
-            matches.extend(search::find_items(sch, &model, &search).iter().map(|h| hit_json(h, entry, rank)));
+            let here: &[search::FindMarker] = if entry.path == in_view { &markers } else { &[] };
+            matches.extend(search::find_items_with(sch, &model, &search, here).iter().map(|h| hit_json(h, entry, rank)));
         }
     } else {
         let (sch, _) = crate::studio::resolve_sheet(&design, sheet_text);
         let rank = rank_of(&in_view);
         let entry = sorted.get(rank).cloned().unwrap_or_else(|| eda_model::sheet_list::SheetEntry { path: in_view.clone(), name: String::new(), file: String::new(), page: String::new(), virtual_page: 1 });
         matches.extend(
-            search::find_items(&sch, &model, &search)
+            search::find_items_with(&sch, &model, &search, &markers)
                 .iter()
                 .filter(|h| scope.as_ref().is_none_or(|s| s.contains(&h.id)))
                 .map(|h| hit_json(h, &entry, rank)),
