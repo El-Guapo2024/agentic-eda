@@ -830,6 +830,8 @@ export function FootprintCanvas() {
       act("pcbnew.InteractiveEdit.rotateCw", "Rotate Clockwise (Shift+R)", refs.length === 0),
       act("pcbnew.InteractiveEdit.mirrorHoriontally", "Mirror Horizontally", !fp || !fpCanMirror(fp, refs)),
       act("pcbnew.InteractiveEdit.mirrorVertically", "Mirror Vertically", !fp || !fpCanMirror(fp, refs)),
+      // `EDIT_TOOL::Init`: `menu.AddItem( PCB_ACTIONS::swap, SELECTION_CONDITIONS::MoreThan( 1 ) )`
+      act("pcbnew.InteractiveEdit.swap", "Swap (Alt+S)", refs.length < 2),
       act("pcbnew.InteractiveEdit.properties", "Properties... (E)", refs.length > 1),
       // `PCB_GROUP_TOOL`'s Grouping menu: Group (two or more items), Ungroup (a group among them)
       act("common.Interactive.group", "Group Items", refs.length < 2),

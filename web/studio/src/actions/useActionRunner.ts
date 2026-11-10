@@ -2057,15 +2057,15 @@ export function useActionRunner() {
         })
       );
 
-      // ---- swap (Alt+S) -- edit_tool_move_fct.cpp EDIT_TOOL::Swap: footprints, vias, graphics, texts and zones, locked items left out, in selection order;
-      // one undo step (kicad-port/pcbSwap.ts; round 6 E6-2, E6-3).
+      // ---- swap (Alt+S) -- edit_tool_move_fct.cpp EDIT_TOOL::Swap: every kind of item (arcs, dimensions, groups, tables, text boxes, barcodes, points too),
+      // locked items left out with 25ec2335's warning, in selection order; one `swap_items`, one undo step (kicad-port/pcbSwap.ts; round 6 E6-2, E6-3; UI-LEFT-2 PP15).
       m.set(
         "pcbnew.InteractiveEdit.swap",
         pcbOnly(() => {
           if (!board) return;
-          const cmds = planSwap(board, [...state.selection]);
-          if (!cmds) return;
-          void (cmds.length === 1 ? api.cmd(cmds[0]!) : api.cmdBatch(cmds));
+          const { cmd, lockedOut } = planSwap(board, [...state.selection], state.enteredGroupId);
+          if (lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+          if (cmd) void api.cmd(cmd);
         })
       );
 

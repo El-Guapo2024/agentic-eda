@@ -1,114 +1,114 @@
-// The board's Swap (Alt+S): `EDIT_TOOL::Swap` (pcbnew/tools/edit_tool_move_fct.cpp at 8303b2ad), planned as the `/api/cmd` verbs of one undo step.
+// Swap (Alt+S): `EDIT_TOOL::Swap` (pcbnew/tools/edit_tool_move_fct.cpp at 8303b2ad; 25ec2335 adds `ReportFilteredLockedItems`), the tool half -- which items, in
+// which order -- for the board and the Footprint Editor. The item half (each class's `GetPosition` / `SetPosition`, the layer swap of two items of one type, two
+// footprints' sides and orientations, two pads' `SwapShapePositions`) is the backend's: one `swap_items` (board) or `fp_item swap` (Footprint Editor), one undo
+// step (crates/ops/src/pcb_swap.rs).
 //
-// - The selection as `RequestSelection` filters it: a pad stands for its footprint (`FilterCollectorForFreePads`), a straight track is left out
-//   (`if( item->Type() == PCB_TRACE_T ) aCollector.Remove( item )`), and so is a locked item -- its own lock, a locked group's above it, or a group with a
-//   locked member (`FilterCollectorForLockedItems`; round 6 E6-3). Fewer than two left: nothing to do.
-// - Then, in selection order, `for( i = 0; i < n - 1; i++ ) swap( sorted[i], sorted[i + 1] )`: the positions (`GetPosition` / `SetPosition`), and for two
-//   items of the same type the layers ("We can also do a layer swap safely for two objects of the same type, except groups"). Two footprints also swap
-//   their orientation and side; a selection of footprints only is `swap_chain`, which does that (round 6 E6-2 for every other kind).
+// The board's selection as `RequestSelection` filters it for Swap:
+//   FilterCollectorForMarkers           a DRC marker is no item here (no `itemKind`)
+//   FilterCollectorForHierarchy         an item of a group stands for the outermost group holding it inside the entered one (`TopLevelGroup`); a footprint's
+//                                       field or text stands for its footprint's group when the footprint is in one, and is dropped when its footprint is selected
+//   FilterCollectorForFreePads          a pad stands for its footprint (the studio has no "Allow free pads")
+//   PCB_TRACE_T removed                 a straight track is left out; an arc (`PCB_ARC_T`) is swapped
+//   FilterCollectorForLockedItems       a locked item, an item in a locked group, a group with a locked member is left out (the caller says so: 25ec2335's
+//                                       `ReportFilteredLockedItems`)
+// then the items in selection order (`GetItemsSortedBySelectionOrder`; a JS Set keeps insertion order). Fewer than two left: nothing to do.
 //
-// - A zone (round 7 R7-2): `ZONE::SetPosition` is a no-op (zone.h:116, `void SetPosition( const VECTOR2I& aPos ) override {}`), so a zone never moves, while
-//   the item it is paired with still moves to the zone's `GetPosition`, its first corner. Two zones are "two objects of the same type", so their layers swap
-//   through `ZONE::GetLayer` (zone.cpp:501: the layer of a set of exactly one, else `UNDEFINED_LAYER`) and `ZONE::SetLayer` (zone.cpp:550, `SetLayerSet(
-//   LSET( { aLayer } ) )`). LSET's list constructor skips a negative layer (common/lset.cpp:44) and `SetLayerSet` returns on an empty set (zone.cpp:556), so
-//   a zone on several layers given a single-layer zone's layer becomes a zone on that layer alone, and the single-layer zone keeps its own.
+// Left out here, which the backend does not swap: a table cell (KiCad would move the cell's box out of its table), a tuning pattern and a via stitching
+// (`PCB_GENERATOR::SetPosition` sets their origin alone), KiCad 10's grid items and drill maps.
 //
-// Not swapped here (left out of the selection): arc tracks, dimensions, groups, tables, text boxes, barcodes and points, whose `SetPosition` this model
-// has no verb for (an arc's moves only its start, a dimension's only its start, a group's is its box's centre). Two footprints in a selection that has other
-// kinds too swap their positions but not their orientation or side. Two pads are not swapped as pads (`PAD::SwapShapePositions`): a pad is its footprint.
-import type { BoardState, Cmd } from "../api/types";
-import { shapePosition } from "./pcbConvert";
-import { itemKind, padParent } from "./pcbItems";
+// A group's `GetPosition()` is the centre of its bounding box (`PCB_GROUP::GetPosition`, `GetBoundingBox().Centre()`), which `itemBounds` / `fpItemBounds` work out;
+// it goes with the command (`centres`).
+import type { BoardState, Cmd, PointXY } from "../api/types";
+import { parseFieldId } from "./fpFields";
+import { fpItemBounds, fpItemKind, fpSelectionTarget, type Fp } from "./fpItems";
+import { topLevelGroup } from "./groupTree";
+import { itemBounds, itemKind, padParent } from "./pcbItems";
 import { isLocked } from "./pcbTransform";
-import { zoneEditCmd } from "./zoneCmd";
-import { zoneLayers } from "./zoneLayers";
 
-type Kind = "part" | "via" | "shape" | "text" | "zone";
+const centreOf = (b: readonly [number, number, number, number] | null): PointXY | null => (b ? { x: Math.round((b[0] + b[2]) / 2), y: Math.round((b[1] + b[3]) / 2) } : null);
 
-interface SwapItem {
-  id: string;
-  kind: Kind;
-  pos: readonly [number, number];
-  /** `GetLayer()`, for the kinds whose layers swap; null for the others, and for a zone on several layers (`UNDEFINED_LAYER`). */
-  layer: string | null;
-}
-
-function swapItem(board: BoardState, id: string): SwapItem | null {
-  const kind = itemKind(board, id);
-  switch (kind) {
-    case "part": {
-      const p = board.parts.find((x) => x.ref === id && x.placed && x.at);
-      return p?.at ? { id, kind, pos: [p.at[0], p.at[1]], layer: null } : null;
-    }
-    case "via": {
-      const v = board.routing?.vias.find((x) => x.id === id);
-      return v ? { id, kind, pos: [v.x, v.y], layer: null } : null;
-    }
-    case "shape": {
-      const s = board.drawings?.shapes.find((x) => x.id === id);
-      return s ? { id, kind, pos: shapePosition(s), layer: s.layer } : null;
-    }
-    case "text": {
-      const t = board.drawings?.texts.find((x) => x.id === id);
-      return t ? { id, kind, pos: [t.x, t.y], layer: t.layer } : null;
-    }
-    case "zone": {
-      // `ZONE::GetPosition`: its first corner. `ZONE::GetLayer`: the layer of a zone on one, else `UNDEFINED_LAYER`.
-      const z = board.routing?.zones.find((x) => x.id === id);
-      const c = z?.outline[0];
-      const layers = z ? zoneLayers(z) : [];
-      return c ? { id, kind, pos: [c[0], c[1]], layer: layers.length === 1 ? layers[0]! : null } : null;
-    }
-    default:
-      return null;
+/** The footprint a field (`REF:Name`) or a footprint's own text (`REF~t<k>`) belongs to, else null. */
+function footprintOfChild(id: string, kind: string | null): string | null {
+  if (kind === "field") return parseFieldId(id)?.ref ?? null;
+  if (kind === "fptext") {
+    const t = id.lastIndexOf("~t");
+    return t > 0 ? id.slice(0, t) : null;
   }
+  return null;
 }
 
-/** What Swap does to `selection` (in selection order): `swap_chain` for footprints only, else the moves and layer changes, or null when fewer than two items are left. */
-export function planSwap(board: BoardState, selection: readonly string[]): Cmd[] | null {
+/** What `EDIT_TOOL::Swap` works on, of the board selection `selection` (in selection order), and whether a lock left something out. */
+export function swapSelection(board: BoardState, selection: readonly string[], enteredGroup: string | null = null): { ids: string[]; lockedOut: boolean } {
+  const groups = board.drawings?.groups ?? [];
+  const selectedParts = new Set(selection.filter((id) => itemKind(board, id) === "part"));
+  const out: string[] = [];
+  let lockedOut = false;
+  for (const raw of selection) {
+    let kind = itemKind(board, raw);
+    if (kind == null) continue;
+    let id = raw;
+    // `FilterCollectorForHierarchy`: a footprint's child starts from its footprint (`if( !m_isFootprintEditor && fp ) start = fp`), and goes when it is selected
+    // ("Remove children of selected items")
+    const parent = footprintOfChild(raw, kind);
+    if (parent && selectedParts.has(parent)) continue;
+    const top = topLevelGroup(groups, parent ?? raw, enteredGroup);
+    if (top && top !== raw) {
+      id = top;
+      kind = "group";
+    }
+    // `FilterCollectorForFreePads`: a pad is edited through its footprint (and so through the footprint's group)
+    if (kind === "pad") {
+      const fp = padParent(board, raw);
+      if (!fp) continue;
+      const fpTop = topLevelGroup(groups, fp, enteredGroup);
+      id = fpTop ?? fp;
+      kind = fpTop ? "group" : "part";
+    }
+    // `if( item->Type() == PCB_TRACE_T ) aCollector.Remove( item )`: an arc stays
+    if (kind === "track" && !board.routing?.tracks.find((t) => t.id === id)?.arc_mid) continue;
+    if (kind === "tablecell" || kind === "via_stitch" || kind === "grid" || kind === "drill_map") continue;
+    if (kind === "group" && board.drawings?.tuning_patterns?.some((p) => p.id === id)) continue;
+    if (out.includes(id)) continue;
+    if (isLocked(board, id)) {
+      lockedOut = true;
+      continue;
+    }
+    out.push(id);
+  }
+  return { ids: out, lockedOut };
+}
+
+/** Swap of the board selection: one `swap_items`, or none when fewer than two items are left (`if( selection.Size() < 2 ) return 0;`). */
+export function planSwap(board: BoardState, selection: readonly string[], enteredGroup: string | null = null): { cmd: Cmd | null; lockedOut: boolean } {
+  const { ids, lockedOut } = swapSelection(board, selection, enteredGroup);
+  if (ids.length < 2) return { cmd: null, lockedOut };
+  const centres: Record<string, PointXY> = {};
+  for (const id of ids) {
+    if (itemKind(board, id) !== "group") continue;
+    const c = centreOf(itemBounds(board, id));
+    if (c) centres[id] = c;
+  }
+  return { cmd: { op: "swap_items", ids, ...(Object.keys(centres).length ? { centres } : {}) }, lockedOut };
+}
+
+/**
+ * Swap in the Footprint Editor (KiCad's runs the same `EDIT_TOOL::Swap` with `m_isFootprintEditor`): a pad stays a pad, so two pads swap their copper's places; an
+ * item of a group stands for its outermost group (no group is entered in this editor); nothing is locked out (`FilterCollectorForLockedItems` only works in the board
+ * editor). One `fp_item swap`, or null with fewer than two items.
+ */
+export function fpSwapCmd(fp: Fp, footprint: string, selection: readonly string[]): Cmd | null {
   const ids: string[] = [];
   for (const raw of selection) {
-    const id = padParent(board, raw) ?? raw;
+    if (fpItemKind(fp, raw) == null) continue;
+    const id = fpSelectionTarget(fp, raw);
     if (!ids.includes(id)) ids.push(id);
   }
-  const items = ids.filter((id) => !isLocked(board, id)).map((id) => swapItem(board, id)).filter((x): x is SwapItem => x !== null);
-  if (items.length < 2) return null;
-  if (items.every((x) => x.kind === "part")) return [{ op: "swap_chain", parts: items.map((x) => x.id) }];
-  const pos = items.map((x) => x.pos);
-  const layer = items.map((x) => x.layer);
-  for (let i = 0; i < items.length - 1; i++) {
-    const [a, b] = [items[i]!, items[i + 1]!];
-    // `a->SetPosition( bPos ); b->SetPosition( aPos );` of the positions as the previous pair left them; `ZONE::SetPosition` does nothing.
-    const [aPos, bPos] = [pos[i]!, pos[i + 1]!];
-    if (a.kind !== "zone") pos[i] = bPos;
-    if (b.kind !== "zone") pos[i + 1] = aPos;
-    if (a.kind !== b.kind || a.kind === "part") continue;
-    const [aLayer, bLayer] = [layer[i] ?? null, layer[i + 1] ?? null];
-    if (a.kind === "zone") {
-      // `SetLayer( UNDEFINED_LAYER )` leaves a zone as it is (an empty `LSET`).
-      if (bLayer != null) layer[i] = bLayer;
-      if (aLayer != null) layer[i + 1] = aLayer;
-    } else {
-      [layer[i], layer[i + 1]] = [bLayer, aLayer];
-    }
+  if (ids.length < 2) return null;
+  const centres: Record<string, PointXY> = {};
+  for (const id of ids) {
+    if (fpItemKind(fp, id) !== "group") continue;
+    const c = centreOf(fpItemBounds(fp, id));
+    if (c) centres[id] = c;
   }
-  const cmds: Cmd[] = [];
-  items.forEach((x, i) => {
-    const [dx, dy] = [Math.round(pos[i]![0] - x.pos[0]), Math.round(pos[i]![1] - x.pos[1])];
-    if (dx !== 0 || dy !== 0) cmds.push({ op: "move_items", ids: [x.id], dx, dy });
-    const to = layer[i];
-    if (to == null || to === x.layer) return;
-    if (x.kind === "shape") {
-      const s = board.drawings!.shapes.find((q) => q.id === x.id)!;
-      cmds.push({ op: "edit_shape", id: x.id, layer: to, stroke_width: s.stroke_width, filled: s.filled });
-    } else if (x.kind === "text") {
-      const t = board.drawings!.texts.find((q) => q.id === x.id)!;
-      cmds.push({ op: "edit_text", id: x.id, content: t.content, angle: t.angle, layer: to, size_nm: t.size, stroke_width: t.stroke_width, justify: t.justify, mirror: t.mirror });
-    } else if (x.kind === "zone") {
-      // `SetLayerSet( LSET( { aLayer } ) )`: the zone is on that one layer now, every other setting as it was.
-      const z = board.routing!.zones.find((q) => q.id === x.id)!;
-      cmds.push(zoneEditCmd(z, { layer: to, layers: [to] }));
-    }
-  });
-  return cmds.length > 0 ? cmds : null;
+  return { op: "fp_item", verb: "swap", footprint, ids, ...(Object.keys(centres).length ? { centres } : {}) };
 }
