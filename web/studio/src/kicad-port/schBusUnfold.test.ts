@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nearestPointOnSegment, placeUnfoldLabel, unfoldEntrySize } from "./schBusUnfold";
+import { nearestPointOnSegment, placeUnfoldLabel, setUnfoldLabelSpin, unfoldEntrySize, unfoldLabelSpin, unfoldRotate } from "./schBusUnfold";
 
 test("the entry roots at the bus point nearest the grid-snapped cursor, which is on the grid for a horizontal bus", () => {
   // a horizontal bus along y = 2540 from x = 60960 to 68580; the raw cursor is off-grid, the snapped one (50 mil = 1270) is not
@@ -32,4 +32,15 @@ test("r6 C6-M2: the_entry_leans_toward_the_cursor_and_the_label_takes_the_first_
   assert.deepEqual(unfoldEntrySize(origin, [110_000_000, 60_000_000], [-2_540_000, -2_540_000]), [2_540_000, 2_540_000]);
   const first = placeUnfoldLabel(origin, [2_540_000, 2_540_000], [90_000_000, 40_000_000]);
   assert.deepEqual(first, { size: [-2_540_000, -2_540_000], start: [97_460_000, 47_460_000], labelAt: [90_000_000, 40_000_000] });
+});
+
+test("R while unfolding turns the member's label a quarter and the next unfold starts with that spin; R otherwise is the bell", () => {
+  setUnfoldLabelSpin("right");
+  // `SCH_LABEL_BASE::Rotate90( clockwise )`: R is rotateCCW, right -> up; Shift+R is rotateCW, right -> bottom
+  assert.equal(unfoldRotate({ spin: "right" }, true), "up");
+  assert.equal(unfoldLabelSpin(), "up", "busUnfoldPersistentSettings.label_spin_style follows");
+  assert.equal(unfoldRotate({}, false), "bottom", "no spin yet is SPIN_STYLE::RIGHT");
+  assert.equal(unfoldRotate(null, true), null, "not unfolding: wxBell()");
+  assert.equal(unfoldLabelSpin(), "bottom");
+  setUnfoldLabelSpin("right");
 });

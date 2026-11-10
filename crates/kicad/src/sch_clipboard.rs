@@ -211,7 +211,9 @@ fn join_bends(section: &mut SchematicSection) {
             // a segment that took no part in a wire (a point) is no member any more; the other items are what they were
             g.member_ids = g.member_ids.iter().filter(|m| !old_ids.contains(*m) || now.contains_key(*m)).map(|m| now.get(m).unwrap_or(m).clone()).filter(|m| seen.insert(m.clone())).collect();
         }
-        eda_model::groups::prune_groups(&mut section.extras.groups);
+        // a group left with one member stays (KiCad's paste reads each `(group ..)` as it is: `SCH_IO_KICAD_SEXPR_PARSER::parseGroup` dissolves nothing; UI-LEFT-2
+        // SS18), only one left with none goes
+        eda_model::groups::drop_empty_groups(&mut section.extras.groups);
     }
 }
 
@@ -989,6 +991,15 @@ mod tests {
         assert!(f.lib_symbols[0].pin_numbers_hidden && !f.lib_symbols[0].pin_names_hidden);
         assert_eq!(f.section.user_fields.get("R1").and_then(|m| m.get("MPN")).map(String::as_str), Some("RC0603FR-0710KL"), "custom fields come across");
         assert!(f.section.imported_from_kicad && f.notes.is_empty(), "{:?}", f.notes);
+    }
+
+    /// UI-LEFT-2 SS18: a `(group ..)` of one member is read and kept, as `resolveGroups` keeps it (nothing in KiCad's reader dissolves a group by its size).
+    #[test]
+    fn a_group_of_one_in_a_fragment_is_kept() {
+        let text = format!("{KICAD_FRAGMENT}(group \"one\" (uuid \"6a2e1b0c-5a3a-4a41-9d7e-0d5e5c2e0010\") (members \"6a2e1b0c-5a3a-4a41-9d7e-0d5e5c2e0001\"))\n");
+        let f = parse_clipboard(&text).expect("parses");
+        assert_eq!(f.section.extras.groups.len(), 1, "{:?}", f.section.extras.groups);
+        assert_eq!(f.section.extras.groups[0].member_ids, vec!["R1".to_string()]);
     }
 
     #[test]

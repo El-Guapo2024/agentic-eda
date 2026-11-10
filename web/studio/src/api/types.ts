@@ -2355,6 +2355,8 @@ export type Cmd =
       block?: string;
       /** The block's default fields, `[name, value]` in its order: a sheet drawn from the block starts with them, hidden (`DrawSheet`). */
       block_fields?: [string, string][];
+      /** The contents only: R, Shift+R, X and Y pressed while they rode the cursor, done about `at` in the import's step (UI-LEFT-2 SS18). */
+      turns?: import("./schEditTypes").SchTurn[];
     }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }

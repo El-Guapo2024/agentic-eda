@@ -91,7 +91,7 @@ import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } from "./schematic/schShapeTools";
 import { drawSchTablePreview } from "./schematic/schTablePaint";
 import { schDrawTableGrid } from "../kicad-port/tables";
-import { cellsBetween, cellUnder } from "../kicad-port/tableCells";
+import { cellsBetween, cellUnder, shiftClickCells } from "../kicad-port/tableCells";
 import { openDrawnTableDialog } from "../state/tableDialogs";
 import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
 import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
@@ -242,6 +242,8 @@ export function SchematicView() {
   const pendingClickRef = useRef<string | null>(null);
   /** A press on an item whose drag draws the selection area ("Left button drag:", `leftDragOutcome`): what the press does as a click when it is released without a drag. */
   const areaClickRef = useRef<(() => void) | null>(null);
+  /** `SCH_SELECTION_TOOL::m_previous_first_cell`: the cell a Shift+click range of cells starts from (UI-LEFT-2 SS18). */
+  const previousFirstCellRef = useRef<string | null>(null);
   /** `m_metaPanStart` of "Pan on mouse movement with key:" (null while the key is up). */
   const motionPanRef = useRef<{ x: number; y: number } | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -532,12 +534,17 @@ export function SchematicView() {
         ctx.moveTo(unfold.entryAt[0], unfold.entryAt[1]);
         ctx.lineTo(unfold.entryAt[0] + size[0], unfold.entryAt[1] + size[1]);
         ctx.stroke();
-        // the member's label rides the cursor until the first click puts it down (`m_busUnfold.label->SetPosition( cursorPos )`, its preview; UI-LEFT S19, r6):
-        // a local label's text on its baseline, reading right from the anchor (`SPIN_STYLE::RIGHT`)
-        if (!unfold.labelAt && state.cursorNm) {
-          const [lx, ly] = snapToGrid(state.cursorNm.x, state.cursorNm.y);
+        // the member's label rides the cursor until the first click puts it down (`m_busUnfold.label->SetPosition( cursorPos )`, its preview; UI-LEFT S19, r6),
+        // then stays where it was put: a local label's text on its baseline, running from the anchor the way its spin says (R and Shift+R turn it, UI-LEFT-2 SS18)
+        const labelAt = unfold.labelAt ?? (state.cursorNm ? snapToGrid(state.cursorNm.x, state.cursorNm.y) : null);
+        if (labelAt) {
+          const [lx, ly] = labelAt;
           const sizeNm = 1_270_000;
-          drawStrokeText(ctx, unfold.net, lx + Math.round(sizeNm * 0.15), ly - Math.round(sizeNm * 0.15), { sizeNm, justify: "left", color: layerColor("LAYER_LOCLABEL"), thicknessNm: Math.round(sizeNm / 8) });
+          const o = Math.round(sizeNm * 0.15);
+          const spin = unfold.spin ?? "right";
+          const vertical = spin === "up" || spin === "bottom";
+          const [dx, dy] = spin === "right" ? [o, -o] : spin === "left" ? [-o, -o] : spin === "up" ? [-o, -o] : [-o, o];
+          drawStrokeText(ctx, unfold.net, lx + dx, ly + dy, { sizeNm, justify: spin === "right" || spin === "up" ? "left" : "right", angleRad: vertical ? -Math.PI / 2 : 0, color: layerColor("LAYER_LOCLABEL"), thicknessNm: Math.round(sizeNm / 8) });
         }
       }
     }
@@ -642,7 +649,8 @@ export function SchematicView() {
     void api.cmdBatch([
       { op: "add_bus_entry", at: { x: unfold.entryAt[0], y: unfold.entryAt[1] }, size: { x: unfold.size[0], y: unfold.size[1] } },
       wire,
-      { op: "add_label", net: unfold.net, at, kind: { scope: "local" } },
+      // the label with the spin R gave it while unfolding (`m_busUnfold.label`, `SetSpinStyle`; UI-LEFT-2 SS18)
+      { op: "sch_edit", verb: "place_label", net: unfold.net, at, kind: { scope: "local" }, spin: unfold.spin ?? "right" } as Cmd,
     ]);
     // `UnfoldBus` goes on drawing wires (`doDrawSegments( aEvent, commit, LAYER_WIRE, false )`): the wire tool stays armed
     dispatch({ type: "SET_BUS_UNFOLD", unfold: null });
@@ -955,6 +963,15 @@ export function SchematicView() {
           const inOne = one != null && wx >= one.bbox[0] && wx <= one.bbox[2] && wy >= one.bbox[1] && wy <= one.bbox[3];
           if (under && !inOne && (!holder || holder.id === state.schEnteredGroupId)) {
             areaClickRef.current = () => {
+              // Shift+click on a second cell: the cells between it and the first (`m_previous_first_cell`, kicad-port/tableCells.ts `shiftClickCells`; UI-LEFT-2 SS18)
+              const range = picked && modifiers.additive ? shiftClickCells(tables, [...state.selection], picked, previousFirstCellRef.current) : null;
+              if (range) {
+                previousFirstCellRef.current = range.previousFirst;
+                dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
+                dispatch({ type: "SET_SELECTION", refs: range.refs, raw: true });
+                dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
+                return;
+              }
               if (picked) {
                 dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
                 dispatch({ type: "SET_SELECTION", refs: hasModifier(modifiers) ? applySingleClickModifier(state.selection, picked, modifiers) : [picked] });

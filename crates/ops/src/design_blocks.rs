@@ -53,16 +53,18 @@ impl Placement<'_> {
 }
 
 impl Board<'_> {
-    /// Put `ids` -- what an import put at the top of the sheet in view -- in a group named and linked as `placement` says. A group needs two items, unless it is a design
-    /// block's (a block placed as a sheet puts the sheet alone in its group; `prune_groups` keeps it). Nothing is done when the placement is not Place as group.
-    pub(crate) fn group_placed(&mut self, ids: &[String], placement: &Placement<'_>) -> Result<(), Vec<CheckResult>> {
-        if !placement.as_group || ids.is_empty() || (ids.len() < 2 && placement.block.is_empty()) {
-            return Ok(());
+    /// Put `ids` -- what an import put at the top of the sheet in view -- in a group named and linked as `placement` says. One item is grouped too: `placeSheetContents`
+    /// adds every new item in no group to the new group whatever their number, and `DrawSheet` puts a block's sheet alone in its group (UI-LEFT-2 SS18). Nothing is done
+    /// when the placement is not Place as group.
+    /// Returns the new group's id.
+    pub(crate) fn group_placed(&mut self, ids: &[String], placement: &Placement<'_>) -> Result<Option<String>, Vec<CheckResult>> {
+        if !placement.as_group || ids.is_empty() {
+            return Ok(None);
         }
         let sch = self.schematic_mut()?;
         sch.extras.groups.push(Group { id: String::new(), name: placement.name(), member_ids: ids.to_vec(), design_block: placement.block.to_string() });
         sch.extras.assign_group_ids();
-        Ok(())
+        Ok(sch.extras.groups.last().map(|g| g.id.clone()))
     }
 
     /// `Cmd::PlaceDesignBlock`: see the module doc. The file's text is the clipboard form (`eda_kicad::parse_pcb_clipboard` reads a board file as it reads a copy).

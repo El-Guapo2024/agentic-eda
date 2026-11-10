@@ -62,11 +62,15 @@ import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAt
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
 import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
+import { unfoldRotate } from "../kicad-port/schBusUnfold";
+import { turnCarriedContents } from "../kicad-port/schImportSheet";
 import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
 import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
-import { selectionGridNm } from "../components/schematic/schSnap";
+import { connectableGridNm, groupAlignGridNm, selectionGridNm } from "../components/schematic/schSnap";
+import { groupLeaves, isGroup, parentGroup } from "../kicad-port/groupTree";
+import { groupBounds } from "../components/schematic/schGroupBounds";
 import { symbolBounds } from "../components/schematic/painter";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
@@ -1393,6 +1397,20 @@ export function useActionRunner() {
     const schItems = () => withoutLocked(requestSelection(), schLocked());
     const schTurn = (turn: SchTurn) =>
       schematicOnly(() => {
+        // the wire tool's own R / Shift+R (`doDrawSegments`): while unfolding a bus they turn the member's label; while drawing otherwise, nothing (`wxBell()`) (UI-LEFT-2 SS18)
+        if (state.drawState?.kind === "wire" && (turn === "rot_ccw" || turn === "rot_cw")) {
+          const spin = unfoldRotate(state.busUnfold, turn === "rot_ccw");
+          if (spin && state.busUnfold) dispatch({ type: "SET_BUS_UNFOLD", unfold: { ...state.busUnfold, spin } });
+          return;
+        }
+        // Import Sheet's contents in the hand: they are the move tool's selection in KiCad, so the turn is theirs (UI-LEFT-2 SS18)
+        if (state.activeTool === "sch_import_sheet") {
+          const plan = turnCarriedContents(state.schSheetImport, turn);
+          if (plan) {
+            dispatch({ type: "SET_SCH_SHEET_IMPORT", plan });
+            return;
+          }
+        }
         if (tryHeldTurn(turn)) return;
         void api.transformSchItems(schItems(), turn, pickedVertices(state));
       });
@@ -1653,16 +1671,32 @@ export function useActionRunner() {
     const alignItems = (kind: SchAlignKind) =>
       schematicOnly(() => {
         if (!sch) return;
-        const picked = new Set(requestSelection());
-        const locked = new Set(sch.locked ?? []);
+        const selected = requestSelection();
+        const picked = new Set(selected);
+        const lockedIds = new Set(sch.locked ?? []);
+        const groups = sch.groups ?? [];
+        // `SCH_ITEM::IsLocked`: its own lock, or its group's (which asks its own group in turn)
+        const locked = (id: string): boolean => {
+          for (let at: string | undefined = id; at; at = parentGroup(groups, at)?.id) if (lockedIds.has(at)) return true;
+          return false;
+        };
         const items: SchAlignItem[] = allItems(sch)
           .filter((r) => picked.has(r.id))
           .flatMap((r) => {
             const b = itemBounds(sch, r);
-            return b ? [{ id: r.id, box: [b.minX, b.minY, b.maxX, b.maxY] as const, locked: locked.has(r.id) }] : [];
+            return b ? [{ id: r.id, box: [b.minX, b.minY, b.maxX, b.maxY] as const, locked: locked(r.id) }] : [];
           });
+        // a selected group is one item, its box the members' grown by 10 mil (`SCH_GROUP::GetBoundingBox`), moved whole (UI-LEFT-2 SS18)
+        for (const id of selected) {
+          if (!isGroup(groups, id)) continue;
+          const b = groupBounds(sch, id);
+          const grid = groupAlignGridNm(groupLeaves(groups, id));
+          if (b) items.push({ id, box: [b.minX, b.minY, b.maxX, b.maxY], locked: locked(id), ...(grid ? { groupGridNm: grid } : {}) });
+        }
         const moves = alignMoves(items, kind, state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null).filter((mv) => mv.dx !== 0 || mv.dy !== 0);
-        if (moves.length > 0) void api.cmd({ op: "sch_move", verb: "align", moves });
+        // the items' offsets are snapped by the server to the connection grid (`adjustDeltaForGrid`), the one the canvas uses
+        const grid = connectableGridNm();
+        if (moves.length > 0) void api.cmd({ op: "sch_move", verb: "align", moves, ...(grid ? { grid } : {}) });
       });
     m.set("eeschema.Align.alignLeft", alignItems("left"));
     m.set("eeschema.Align.alignRight", alignItems("right"));

@@ -7,6 +7,8 @@
 // roots at the segment point nearest the SNAPPED cursor, not nearest the raw one (which would leave an off-grid entry
 // and a wire that ERC flags as off-grid).
 
+import { rotateSpin } from "./schPlaceTool";
+
 /** `SEG::NearestPoint`: the point of segment a-b closest to q, rounded to whole micrometres (the schematic's unit). */
 export function nearestPointOnSegment(a: readonly [number, number], b: readonly [number, number], q: readonly [number, number]): [number, number] {
   const dx = b[0] - a[0];
@@ -39,4 +41,27 @@ export function unfoldEntrySize(origin: readonly [number, number], cursor: reado
 export function placeUnfoldLabel(entryAt: readonly [number, number], size: readonly [number, number], click: readonly [number, number]): { size: [number, number]; start: [number, number]; labelAt: [number, number] } {
   const s = unfoldEntrySize(entryAt, click, size);
   return { size: s, start: [entryAt[0] + s[0], entryAt[1] + s[1]], labelAt: [click[0], click[1]] };
+}
+
+/**
+ * `BUS_UNFOLD_PERSISTENT_SETTINGS::label_spin_style` (`static ... busUnfoldPersistentSettings = { SPIN_STYLE::RIGHT }`): the spin the member's label takes when an
+ * unfold starts (`m_busUnfold.label->SetSpinStyle( busUnfoldPersistentSettings.label_spin_style )`), which R and Shift+R while unfolding set
+ * (`busUnfoldPersistentSettings.label_spin_style = m_busUnfold.label->GetSpinStyle()`) -- kept for the session, across unfolds (UI-LEFT-2 SS18).
+ */
+export type UnfoldSpin = "right" | "up" | "left" | "bottom";
+let persistentSpin: UnfoldSpin = "right";
+export const unfoldLabelSpin = (): UnfoldSpin => persistentSpin;
+export const setUnfoldLabelSpin = (s: UnfoldSpin): void => {
+  persistentSpin = s;
+};
+
+/**
+ * R / Shift+R in the wire tool (`doDrawSegments`' `rotateCW` / `rotateCCW` branch): while unfolding, the member's label turns a quarter (`Rotate90( clockwise )`: R is
+ * `rotateCCW`) and the spin is kept for the next unfold; otherwise nothing turns (`wxBell()`). Returns the label's new spin, or null for the bell.
+ */
+export function unfoldRotate(unfolding: { spin?: UnfoldSpin } | null, ccw: boolean): UnfoldSpin | null {
+  if (!unfolding) return null;
+  const next = rotateSpin(unfolding.spin ?? "right", ccw);
+  persistentSpin = next;
+  return next;
 }

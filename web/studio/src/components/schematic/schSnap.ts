@@ -6,7 +6,7 @@
 import type { Schematic } from "../../api/types";
 import { SchGridHelper, type SchSnapItem } from "../../kicad-port/schGridHelper";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
-import { gridEnvY, gridSizeFor, selectionGridSize, type GridCategory, type GridOverrides, type SchItemKind } from "../../kicad-port/gridOverrides";
+import { gridEnvY, gridSizeFor, schItemGrid, selectionGrid, selectionGridSize, type GridCategory, type GridOverrides, type SchItemKind } from "../../kicad-port/gridOverrides";
 import type { GridEnv, SnapOverlay } from "../../kicad-port/gridHelperBase";
 import { box, type Pt } from "../../kicad-port/snapGeom";
 import { fieldBox, fieldItems, isShownField } from "../../kicad-port/schFieldEdit";
@@ -179,6 +179,26 @@ export function selectionGridNm(ids: readonly string[], view: SchSnapView | null
   const sch = view.sch;
   const size = selectionGridSize(ids.map((id) => kindOfSelected(sch, id)), view.gridNm, view.grids, view.overrides);
   return size > 0 ? size : undefined;
+}
+
+/** The connection grid's size (`GetGridSize( GRID_CONNECTABLE )`) of `view`, or of the view the canvas last showed; `undefined` with neither. */
+export function connectableGridNm(view: SchSnapView | null = lastView): number | undefined {
+  if (!view?.sch) return undefined;
+  const size = gridSizeFor("connectable", view.gridNm, view.grids, view.overrides);
+  return size > 0 ? size : undefined;
+}
+
+/**
+ * `SCH_ALIGN_TOOL::adjustDeltaForGrid` for a group (UI-LEFT-2 SS18): `EE_GRID_HELPER::GetItemGrid( SCH_GROUP )` is its members' grid -- the first member's, unless another's is
+ * strictly coarser (nested groups the same way, so the leaves in order) -- and only `GRID_CONNECTABLE` snaps. The connection grid's size when the group's grid is that,
+ * else `undefined` (its offset is not snapped).
+ */
+export function groupAlignGridNm(leafIds: readonly string[], view: SchSnapView | null = lastView): number | undefined {
+  if (!view?.sch || leafIds.length === 0) return undefined;
+  const sch = view.sch;
+  const sizeOf = (c: GridCategory) => gridSizeFor(c, view.gridNm, view.grids, view.overrides);
+  const category = selectionGrid(leafIds.map((id) => schItemGrid(kindOfSelected(sch, id))), sizeOf);
+  return category === "connectable" ? connectableGridNm(view) : undefined;
 }
 
 export class SchSnap {

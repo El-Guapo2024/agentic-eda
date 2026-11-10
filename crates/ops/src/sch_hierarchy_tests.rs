@@ -351,6 +351,7 @@ fn import(content: Option<SheetFile>, as_sheet: bool, keep: bool) -> Cmd {
         group_name: String::new(),
         block: String::new(),
         block_fields: vec![],
+        turns: vec![],
     }
 }
 
@@ -783,4 +784,51 @@ fn a_symbol_placed_on_a_shared_screen_numbers_each_path_by_its_page() {
     b.apply(&Cmd::OnSheet { sheet: "sp".into(), cmd: Box::new(add) }).unwrap();
     assert!(refs_on(b.design(), &["sp"]).contains(&"R201".to_string()));
     assert!(refs_on(b.design(), &["sp2"]).contains(&"R301".to_string()), "{:?}", refs_on(b.design(), &["sp2"]));
+}
+
+/// UI-LEFT-2 SS18: R pressed while Import Sheet's contents ride the cursor (`placeSheetContents` runs `SCH_ACTIONS::move` on them, which passes R to
+/// `SCH_EDIT_TOOL::Rotate`): the contents are turned about the point they were held at, in the import's own step.
+#[test]
+fn import_sheet_contents_turned_while_they_ride_land_turned_about_the_cursor() {
+    let m = ConstraintModel::default();
+    let at = pt(mm(20.0), mm(20.0));
+    let place = |turns: Vec<crate::sch_move::Turn>| {
+        let mut c = import(Some(a_file()), false, false);
+        if let Cmd::ImportSheet { turns: t, .. } = &mut c {
+            *t = turns;
+        }
+        let mut b = Board::new(power_design(), &m, mm(0.1), mm(0.3));
+        b.apply(&on("sp", c)).unwrap();
+        let sec = b.design().sheet_contents.as_ref().unwrap()["power.kicad_sch"].clone();
+        sec.symbols.iter().filter(|s| ["C2", "R4", "R5"].contains(&s.id.as_str())).map(|s| (s.id.clone(), s.at, s.rot)).collect::<Vec<_>>()
+    };
+    let flat = place(vec![]);
+    let turned = place(vec![crate::sch_move::Turn::RotCcw]);
+    assert_eq!(flat.len(), 3);
+    for ((id, a, r0), (id2, b, r1)) in flat.iter().zip(&turned) {
+        assert_eq!(id, id2);
+        assert_eq!((*r1 - *r0).rem_euclid(360_000), 90_000, "{id} turned a quarter");
+        // a quarter turn about the point the contents were held at (`at` is the corner of the symbol's box here, which turns with the body: within 0.05 mm)
+        let want = (at.x + (a.y - at.y), at.y - (a.x - at.x));
+        assert!((b.x - want.0).as_f64().abs() < mm(0.05).as_f64() && (b.y - want.1).as_f64().abs() < mm(0.05).as_f64(), "{id}: {a:?} -> {b:?}, want {want:?}");
+    }
+}
+
+/// UI-LEFT-2 SS18: `placeSheetContents` puts every new item in no group into the new group, however many: a file of one item is a group of one.
+#[test]
+fn import_sheet_contents_of_one_item_placed_as_a_group_are_a_group_of_one() {
+    let m = ConstraintModel::default();
+    let r = symbol("R1", "Device:R", "4k7", 1, pt(mm(0.01), Nm::ZERO));
+    let mut root = section(vec![r], vec![]);
+    root.imported_from_kicad = true;
+    let file = SheetFile { root, lib_symbols: lib(&["Device:R"]), notes: vec![], ..Default::default() };
+    let mut c = import(Some(file), false, false);
+    if let Cmd::ImportSheet { as_group, .. } = &mut c {
+        *as_group = true;
+    }
+    let mut b = Board::new(power_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&on("sp", c)).unwrap();
+    let groups = groups_of(b.design(), "power.kicad_sch");
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].member_ids.len(), 1);
 }
