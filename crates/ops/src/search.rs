@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn a_labels_shown_field_is_found() {
         let mut sch = SchematicSection { labels: vec![label("l1", "VBUS", 1.0)], ..Default::default() };
-        sch.extras.label_fields.insert("l1".into(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: false }, LabelField { name: "Note".into(), text: "HVX".into(), visible: false, italic: false }]);
+        sch.extras.label_fields.insert("l1".into(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: false, ..Default::default() }, LabelField { name: "Note".into(), text: "HVX".into(), visible: false, italic: false, ..Default::default() }]);
         let m = ConstraintModel::default();
         let hits = find_items(&sch, &m, &d("HV"));
         assert_eq!(hits.iter().map(|h| (h.kind, h.name.as_str())).collect::<Vec<_>>(), vec![(ItemKind::LabelField, "Netclass")], "the hidden field only with searchAllFields");

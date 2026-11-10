@@ -832,10 +832,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (Field Properties with Font and Color) on the canvas, and a field placed by hand takes the label out of the autoplaced ones (`field_layout` under the label's
   id, no `(fields_autoplaced yes)`, read back from a KiCad file that has no such token), turning and mirroring with the label until Autoplace Fields.
 - Missing: ~~a label's field moved by hand is placed by `AutoplaceFields` again~~ (done 2026-11-06); a field added to a label placed by hand goes where
-  Autoplace Fields would put it; a label's field keeps no size, bold or shown name; ~~an outline font is drawn with the stroke font~~ (drawn in its face since 2026-11-06, item 40); the net class of a label on a bus is not
+  Autoplace Fields would put it; ~~a label's field keeps no size, bold or shown name~~ (done 2026-11-10, `task-v4-ss12-labels`, UI-LEFT-2 SS12, `PARITY-sch.md` section 78: Label Properties' grid, Field Properties and Edit Text & Graphics set them, written and read back; a global label's Sheet References keep the default look); ~~an outline font is drawn with the stroke font~~ (drawn in its face since 2026-11-06, item 40); the net class of a label on a bus is not
   given to the bus's members; the
   ~~fields of a symbol read from a KiCad file are not items~~ (they are since a KiCad file is taken into the design's frame, 2026-10-25, checked 2026-11-07, `PARITY-sch.md` section 75; ~~their Reference, Value, Footprint and Datasheet are autoplaced again~~: every field keeps the place the file gives it since 2026-11-07, section 76; a sheet still kept in KiCad's frame, `imported_from_kicad`, has none); `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
+- Done 2026-11-10 (`task-v4-ss12-labels`, UI-LEFT-2 SS12, `PARITY-sch.md` section 78): Label Properties' Label list is every sheet's labels of the kind, the
+  power symbols' nets like that kind (global or local) and the bus aliases as `{alias}` (`GET /api/sch/existing_labels`); a label's field keeps its text size,
+  bold and shown name (`LabelField::size_nm`, `bold`, `name_shown`); Preferences' "Power Symbols:" (Default / Global / Local) converts the power symbol Place
+  Power places (`sch_edit set_new_power_kind`, in the click's step); the symbol libraries are indexed in the background as `board serve` starts (KiCad 25ec2335
+  `PreloadLibraries`). Left: a sheet keeps one kind per power symbol id, so a conversion is refused where the sheet has that symbol in the other kind (KiCad
+  keeps a renamed cache entry); the converted library symbol's keywords and description are not rewritten; a global label's Sheet References keep the default
+  size, regular, without their name; a label's field has no H / V Align columns in Label Properties' grid (Field Properties has them).
 - Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S16, S19, S20; `PARITY-sch.md` section 62): Autoplace Fields reads the swapped pin places (done); an imported
   power symbol keeps its hand-placed Reference and Value and its flags (r4 D4-L2, done); Change / Update Symbols reset a symbol's field visibility, sizes and
   styles and places (the library's places, in the change's own step since 2026-11-07, `PARITY-sch.md` section 77); Reorganize keeps the groups (a label's spin after it stays the layout's: its wires are new). **Left**: ~~Copy / Paste keep a user field's text

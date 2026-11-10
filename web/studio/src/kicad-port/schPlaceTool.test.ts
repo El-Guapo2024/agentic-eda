@@ -12,6 +12,7 @@ import {
   mirrorCarried,
   mirrorPole,
   mirrorSpin,
+  newPowerKind,
   placeCmd,
   poleOfSpin,
   previewCmd,
@@ -132,6 +133,14 @@ test("the placing click sends the label, text, directive and power verbs the dia
   });
   const annotate = { algo: "first_free" as const, start_number: 0 };
   assert.deepEqual(placeCmd(power({ rotMillideg: 90_000 }), [9, 10], { annotate }), { op: "add_power_symbol", lib_id: "power:GND", at: { x: 9, y: 10 }, rot_millideg: 90_000, net: "GND", pin: "", annotate });
+});
+
+test("Preferences' Power Symbols (new_power_symbols): Global or Local converts the placed power symbol in the click's step, Default sends nothing more", () => {
+  assert.deepEqual([newPowerKind(0), newPowerKind(1), newPowerKind(2)], [undefined, "global", "local"]);
+  const add = { op: "add_power_symbol", lib_id: "power:GND", at: { x: 9, y: 10 }, rot_millideg: 0, net: "GND", pin: "" };
+  assert.deepEqual(placeCmd(power({ powerKind: "local" }), [9, 10]), { op: "batch", cmds: [add, { op: "sch_edit", verb: "set_new_power_kind", lib_id: "power:GND", local: true }] });
+  assert.deepEqual(placeCmd(power({ powerKind: "global" }), [9, 10]), { op: "batch", cmds: [add, { op: "sch_edit", verb: "set_new_power_kind", lib_id: "power:GND", local: false }] });
+  assert.deepEqual(placeCmd(power(), [9, 10]), add);
 });
 
 test("the preview is the same command off the sheet, without the click's AutoRotateItem", () => {

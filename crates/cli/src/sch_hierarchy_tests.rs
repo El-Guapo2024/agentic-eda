@@ -740,7 +740,7 @@ pub(crate) fn edit_label_fields(id: &str, fields: Vec<eda_model::sch_extras::Lab
 }
 
 pub(crate) fn netclass(text: &str) -> eda_model::sch_extras::LabelField {
-    eda_model::sch_extras::LabelField { name: "Netclass".into(), text: text.into(), visible: true, italic: true }
+    eda_model::sch_extras::LabelField { name: "Netclass".into(), text: text.into(), visible: true, italic: true, ..Default::default() }
 }
 
 /// A label's net class field (`Netclass`, Label Properties' grid: one `edit_label` with `fields`, one undo step) is in the file kicad-cli reads: its ERC reports a class

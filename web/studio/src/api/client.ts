@@ -916,6 +916,14 @@ export async function fetchSchFormatting(): Promise<SchFormattingReply> {
   return getJson<SchFormattingReply>("/api/sch/formatting");
 }
 
+/** Label Properties' Label combo box (`DIALOG_LABEL_PROPERTIES::TransferDataToWindow`, `GET /api/sch/existing_labels`): the labels of the same kind on every
+ *  screen, the power symbols' nets like them (global or local) and the bus aliases as `{alias}`, each once, sorted. Empty for a hierarchical label. */
+export async function fetchExistingLabels(kind: "local" | "global" | "hierarchical"): Promise<string[]> {
+  if (kind === "hierarchical") return [];
+  const r = await getJson<{ ok: boolean; labels?: string[] }>(`/api/sch/existing_labels?kind=${kind}`);
+  return r.labels ?? [];
+}
+
 /** The font families the server's machine has (`GET /api/fonts`, `fc-list`): Symbol Properties' Font column lists them after "Default Font" and "KiCad Font". */
 export async function fetchFontFamilies(): Promise<string[]> {
   const r = await getJson<{ ok: boolean; families?: string[] }>("/api/fonts");

@@ -47,7 +47,7 @@ export interface FieldItem {
 
 /**
  * Every field of the sheet, in drawing order: the sheets', the power symbols', the symbols', the labels'. A label's field (a global label's Sheet References, its net
- * class, any other) reads as a field of the label: its text the one it draws (the Sheet References' pages), its size the default (`LabelField` keeps none).
+ * class, any other) reads as a field of the label: its text the one it draws (the Sheet References' pages), its size, bold and shown name its own (`LabelField`).
  */
 export function fieldItems(sch: FieldSheet): FieldItem[] {
   const out: FieldItem[] = [];
@@ -63,7 +63,7 @@ export function fieldItems(sch: FieldSheet): FieldItem[] {
   for (const l of sch.labels ?? []) {
     for (const f of l.fields ?? []) {
       const id = f.id ?? fieldId(l.id, f.name);
-      const field: SchField & { id: string } = { name: f.name, text: f.shown, at: f.at, vertical: f.vertical, h: f.h, v: f.v ?? "center", visible: f.visible, id, owner: l.id, size_nm: f.size_nm, italic: f.italic, font: f.font, color: f.color };
+      const field: SchField & { id: string } = { name: f.name, text: f.shown, at: f.at, vertical: f.vertical, h: f.h, v: f.v ?? "center", visible: f.visible, id, owner: l.id, size_nm: f.size_nm, bold: !!f.bold, name_shown: !!f.name_shown, italic: f.italic, font: f.font, color: f.color };
       out.push({ id, owner: l.id, ownerKind: "label", field });
     }
   }

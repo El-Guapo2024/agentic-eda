@@ -3329,6 +3329,9 @@ export interface SchLabelField {
   /** Its vertical justification (centre while autoplaced; a field placed by hand keeps its own). */
   v?: "top" | "center" | "bottom";
   size_nm: Nm;
+  /** Its own bold and "Show field name" (`LabelField`: `EDA_TEXT::IsBold`, `SCH_FIELD::IsNameShown`, drawn `Name: value`); absent from an older backend. */
+  bold?: boolean;
+  name_shown?: boolean;
   /** The id the field is picked, moved and edited by (`fld:<label id>:<name>`), and the label's id. */
   id?: string;
   owner?: string;

@@ -55,7 +55,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     sch.extras.text_attrs.insert("lbl_look_l".into(), TextAttrs { color: Some(blue()), font: Some("KiCad Font".into()), ..Default::default() });
     sch.labels.push(NetLabel { id: "lbl_look_g".into(), net: "LOOK_G".into(), at: Point { x: mm(200.0), y: mm(90.0) }, kind: LabelKind::Global { shape: LabelShape::Input } });
     sch.extras.label_spins.insert("lbl_look_g".into(), LabelSpin::Right);
-    sch.extras.label_fields.insert("lbl_look_g".into(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: false }]);
+    sch.extras.label_fields.insert("lbl_look_g".into(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: false, ..Default::default() }]);
     sch.field_layout.insert("lbl_look_g".into(), hand_places());
     (design, model)
 }
@@ -135,7 +135,7 @@ fn with_sheet() -> (eda_model::ir::Design, ConstraintModel) {
         "a1b2c3d4-0000-4000-8000-000000000001".into(),
         eda_model::sch_extras::SheetProps { border_width_nm: mm(0.3), border_color: Some(blue()), fill_color: Some(SchColor { r: 255, g: 0, b: 0, a: 128 }), exclude_from_sim: true, exclude_from_bom: true, exclude_from_board: false, dnp: true },
     );
-    sch.extras.sheet_fields.insert("a1b2c3d4-0000-4000-8000-000000000001".into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: false, italic: false }]);
+    sch.extras.sheet_fields.insert("a1b2c3d4-0000-4000-8000-000000000001".into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: false, italic: false, ..Default::default() }]);
     design.sheet_contents = Some([("power.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
     (design, model)
 }
@@ -156,7 +156,7 @@ fn a_sheets_border_fill_and_attributes_come_back_from_our_file() {
     let want = design.schematic.as_ref().unwrap().extras.sheet_props.values().next().cloned().unwrap();
     let (props, fields) = sheet_back(root);
     assert_eq!(props, want);
-    assert_eq!(fields, vec![LabelField { name: "Rev".into(), text: "B".into(), visible: false, italic: false }]);
+    assert_eq!(fields, vec![LabelField { name: "Rev".into(), text: "B".into(), visible: false, italic: false, ..Default::default() }]);
 }
 
 #[test]

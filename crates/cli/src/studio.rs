@@ -97,6 +97,8 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
             None => "ui: embedded studio.html".to_string(),
         }
     );
+    // KiCad 25ec2335 `IFACE::PreloadLibraries`: the symbol libraries load in the background as the project opens (`crate::library_search`)
+    crate::library_search::preload_symbol_libraries(dir);
     let job: Job = Arc::new(Mutex::new("idle".into()));
     let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
     // The kicad-cli export a GLB needs can take minutes on a many-part
@@ -748,6 +750,8 @@ fn handle(
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
         ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
         // Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages (`sch_api::setup`).
+        // Label Properties' Label combo box: the labels of the same kind on every screen, the power nets like them, the bus aliases (`crate::sch_label_api`).
+        ("GET", "/api/sch/existing_labels") => respond(stream, "200 OK", "application/json", crate::sch_label_api::existing_labels_route(dir, &query_value(target, "kind")).to_string().as_bytes()),
         ("GET", "/api/sch/setup") => respond(stream, "200 OK", "application/json", sch_api::setup(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
@@ -2332,7 +2336,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     // the id the studio selects, moves and edits the field by (`fld:<label id>:<name>`, `eda_engine::fields_edit`), and the font and colour
                     // Field Properties set (`SchExtras::field_looks` under the label's id)
                     let look = sch.extras.field_look(&l.id, &f.name);
-                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": 1_270_000, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
+                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": if f.size_nm > Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }, "bold": f.bold, "name_shown": f.name_shown, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)

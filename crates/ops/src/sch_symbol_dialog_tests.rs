@@ -61,7 +61,7 @@ fn sheet() -> SchematicSection {
     sch.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(mm(101.6), mm(50.8)), rot: 0, net: "GND".into(), pin: String::new() });
     sch.extras.power_props.insert(
         "#PWR01".into(),
-        PowerProps { fields: vec![LabelField { name: "Rating".into(), text: "1A".into(), visible: true, italic: false }, LabelField { name: "Spare".into(), text: "x".into(), visible: false, italic: false }], ..Default::default() },
+        PowerProps { fields: vec![LabelField { name: "Rating".into(), text: "1A".into(), visible: true, italic: false, ..Default::default() }, LabelField { name: "Spare".into(), text: "x".into(), visible: false, italic: false, ..Default::default() }], ..Default::default() },
     );
     sch
 }

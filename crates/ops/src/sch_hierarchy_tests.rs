@@ -690,7 +690,7 @@ fn a_placed_power_symbol_is_numbered_across_sheets_like_kicad() {
 }
 
 fn param(text: &str) -> Vec<eda_model::sch_extras::LabelField> {
-    vec![eda_model::sch_extras::LabelField { name: "param".into(), text: text.into(), visible: true, italic: false }]
+    vec![eda_model::sch_extras::LabelField { name: "param".into(), text: text.into(), visible: true, italic: false, ..Default::default() }]
 }
 
 /// r3 B3-M2: a sheet's user fields are its own (`SCH_SHEET::m_fields`) and travel with any copy of it: a pasted Power keeps its `param`, and so does the Filter

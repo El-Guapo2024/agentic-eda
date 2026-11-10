@@ -31,6 +31,10 @@ pub struct PlacedLabelField {
     pub text: String,
     pub visible: bool,
     pub italic: bool,
+    /// Its text size (0 is the default, 50 mil), bold and shown name (`LabelField`'s own).
+    pub size_nm: Nm,
+    pub bold: bool,
+    pub name_shown: bool,
     /// The global label's Sheet References.
     pub intersheet_refs: bool,
     pub at: Point,
@@ -71,7 +75,7 @@ fn fields_of(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bool) -
     let own = sch.extras.label_fields.get(&l.id).map(Vec::as_slice).unwrap_or(&[]);
     let mut fields: Vec<(LabelField, bool)> = Vec::new();
     if global {
-        fields.push((LabelField { name: INTERSHEET_REFS_FIELD.into(), text: "${INTERSHEET_REFS}".into(), visible: show_intersheet_refs, italic: false }, true));
+        fields.push((LabelField { name: INTERSHEET_REFS_FIELD.into(), text: "${INTERSHEET_REFS}".into(), visible: show_intersheet_refs, ..Default::default() }, true));
     }
     fields.extend(own.iter().cloned().map(|f| (f, false)));
     fields
@@ -108,7 +112,8 @@ pub fn autoplaced(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bo
         }
     };
     let body_len = body.w().max(body.h());
-    let sizes: Vec<(bool, f64)> = fields.iter().map(|(_, isr)| (*isr, FIELD_SIZE_NM)).collect();
+    // each field's own height (`field.GetTextHeight()`) stacks it under the one before
+    let sizes: Vec<(bool, f64)> = fields.iter().map(|(f, isr)| (*isr, if f.size_nm > Nm::ZERO { f.size_nm.as_f64() } else { FIELD_SIZE_NM })).collect();
     let places = kicad_geom::autoplace_label_fields(&fx, global, body_len, spin, at, &sizes);
     fields
         .into_iter()
@@ -118,6 +123,9 @@ pub fn autoplaced(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bo
             text: f.text,
             visible: f.visible,
             italic: f.italic,
+            size_nm: f.size_nm,
+            bold: f.bold,
+            name_shown: f.name_shown,
             intersheet_refs: isr,
             at: Point { x: Nm::kiround(p.at.0), y: Nm::kiround(p.at.1) },
             vertical: p.vertical,
@@ -170,10 +178,10 @@ pub fn placement_of(l: &NetLabel, f: &PlacedLabelField) -> FieldPlacement {
             VJustify::Bottom => TextVAlign::Bottom,
         },
         visible: f.visible,
-        size_nm: Nm::ZERO,
-        bold: false,
+        size_nm: f.size_nm,
+        bold: f.bold,
         italic: f.italic,
-        name_shown: false,
+        name_shown: f.name_shown,
         no_autoplace: false,
     }
 }
@@ -256,7 +264,7 @@ mod tests {
 
     fn section_with(l: NetLabel) -> SchematicSection {
         let mut sch = SchematicSection { labels: vec![l.clone()], ..Default::default() };
-        sch.extras.label_fields.insert(l.id.clone(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true }]);
+        sch.extras.label_fields.insert(l.id.clone(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true, ..Default::default() }]);
         sch.extras.label_spins.insert(l.id, LabelSpin::Right);
         sch
     }

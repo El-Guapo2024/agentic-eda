@@ -149,7 +149,7 @@ const ROW_KEY: Record<ScrollRow, "scrollModifierZoom" | "scrollModifierPanH" | "
 /** The fields of `Preferences` each page owns, for its `ResetPanel`. */
 const MOUSE_FIELDS: ReadonlyArray<keyof Preferences> = ["scrollModifierZoom", "scrollModifierPanH", "scrollModifierPanV", "reverseScrollZoom", "reverseScrollPanH", "autoPan", "autoPanAcceleration", "dragMiddle", "dragRight", "dragLeft", "motionPanModifier", "horizontalPan", "zoomAcceleration", "zoomSpeedAuto", "zoomSpeed"];
 const PCB_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["rotationStepDeg", "pcbArcEditMode", "flipDirection", "magneticPads", "magneticTracks", "magneticGraphics", "ratsnestThicknessPx", "escClearsNetHighlight", "showCourtyardCollisions"];
-const SCH_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["schArcEditMode", "schEscClearsNetHighlight", "allowUnconstrainedPinSwaps", "schRepeatOffsetXMils", "schRepeatOffsetYMils", "schRepeatLabelIncrement", "schFootprintPreview"];
+const SCH_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["schArcEditMode", "schEscClearsNetHighlight", "allowUnconstrainedPinSwaps", "schRepeatOffsetXMils", "schRepeatOffsetYMils", "schRepeatLabelIncrement", "schFootprintPreview", "schNewPowerSymbols"];
 const SYM_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["symRepeatPinStepMils", "symRepeatLabelDelta", "symDragPinsWithEdges"];
 
 function defaultsOf(fields: ReadonlyArray<keyof Preferences>): Partial<Preferences> {

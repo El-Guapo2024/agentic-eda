@@ -375,7 +375,7 @@ fn fields_cmd(id: &str, fields: Vec<eda_model::sch_extras::LabelField>) -> SchCm
 }
 
 fn fld(name: &str, text: &str) -> eda_model::sch_extras::LabelField {
-    eda_model::sch_extras::LabelField { name: name.into(), text: text.into(), visible: true, italic: true }
+    eda_model::sch_extras::LabelField { name: name.into(), text: text.into(), visible: true, italic: true, ..Default::default() }
 }
 
 /// Label Properties' grid of the label's own fields (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`): the net class is stored as `Netclass` ("Net Class" is how
@@ -513,7 +513,7 @@ fn with_label_field() -> SchematicSection {
     let mut s = SchematicSection::default();
     s.labels.push(NetLabel { id: "lbl_g".into(), net: "SIG".into(), at: p(mm(10.16), mm(10.16)), kind: LabelKind::Global { shape: LabelShape::Input } });
     s.extras.label_spins.insert("lbl_g".into(), LabelSpin::Right);
-    s.extras.label_fields.insert("lbl_g".into(), vec![eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true }]);
+    s.extras.label_fields.insert("lbl_g".into(), vec![eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true, ..Default::default() }]);
     s
 }
 
@@ -564,6 +564,39 @@ fn field_properties_of_a_labels_field_edits_its_text_and_place_and_keeps_the_she
     assert_eq!(err(&mut b, field("fld:lbl_g:Netclass", None, Some(p(mm(30.48), mm(30.48))), None)), "ops_field_unchanged");
 }
 
+/// UI-LEFT-2 SS12: a label's field keeps its own text size, bold and shown name (`DIALOG_FIELD_PROPERTIES::UpdateField`: `SetTextSize`, `SetBold`,
+/// `SetNameShown`; Label Properties' grid: `FDC_TEXT_SIZE`, `FDC_BOLD`, `FDC_SHOW_NAME`; Edit Text & Graphics' `processItem`), and the autoplaced field is
+/// stacked by its own height.
+#[test]
+fn a_labels_field_keeps_its_size_bold_and_shown_name() {
+    let (m, d) = board(with_label_field());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let before = placed_field(&b, "Netclass");
+    let looks = |id: &str, size: Option<Nm>, bold: Option<bool>, name_shown: Option<bool>| SchCmd::EditField { id: id.into(), text: None, at: None, vertical: None, h: None, v: None, size_nm: size, bold, italic: None, visible: None, name_shown, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false };
+    ok(&mut b, looks("fld:lbl_g:Netclass", Some(mm(2.54)), Some(true), Some(true)));
+    let f = &sch_of(&b).extras.label_fields["lbl_g"][0];
+    assert_eq!((f.size_nm, f.bold, f.name_shown), (mm(2.54), true, true));
+    // still autoplaced, and under the label by its own height: `accumulated + field.GetTextHeight() / 2`
+    assert!(!eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"));
+    let after = placed_field(&b, "Netclass");
+    assert_eq!((after.at.y - before.at.y, after.size_nm, after.bold, after.name_shown), (mm(2.54) / 2 - mm(1.27) / 2, mm(2.54), true, true));
+    // back to 50 mil is the default kept as none; the same again changes nothing
+    ok(&mut b, looks("fld:lbl_g:Netclass", Some(mm(1.27)), None, None));
+    assert_eq!(sch_of(&b).extras.label_fields["lbl_g"][0].size_nm, Nm::ZERO);
+    assert_eq!(err(&mut b, looks("fld:lbl_g:Netclass", Some(mm(1.27)), Some(true), Some(true))), "ops_field_unchanged");
+    // the Sheet References keep the default look (the studio stores nothing of that field)
+    assert_eq!(err(&mut b, looks("fld:lbl_g:Intersheetrefs", None, Some(true), None)), "ops_bad_field");
+    // Label Properties' grid: the row's Text Size, Bold and Show Name
+    let row = eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true, size_nm: mm(1.778), bold: false, name_shown: true };
+    ok(&mut b, SchCmd::EditLabel { id: "lbl_g".into(), text: None, shape: None, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(vec![row.clone()]) });
+    assert_eq!(sch_of(&b).extras.label_fields["lbl_g"], vec![row]);
+    // Edit Text & Graphics on the label fields: size, bold and Show Field Names
+    let spec = crate::sch_global_edit::GlobalEditSpec { label_fields: true, text_size_nm: Some(mm(2.0)), bold: Some(true), show_field_names: Some(false), ..Default::default() };
+    ok(&mut b, SchCmd::GlobalEditTextGraphics { spec });
+    let f = &sch_of(&b).extras.label_fields["lbl_g"][0];
+    assert_eq!((f.size_nm, f.bold, f.name_shown), (mm(2.0), true, false));
+}
+
 #[test]
 fn a_label_turned_or_mirrored_turns_its_hand_placed_fields_about_its_anchor() {
     let (m, d) = board(with_label_field());
@@ -611,7 +644,7 @@ fn sheet_properties_keep_the_border_the_fill_and_the_attributes_and_the_legacy_l
 fn sheet_fields_are_named_once_and_an_empty_row_goes() {
     let m = ConstraintModel::default();
     let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
-    let f = |name: &str, text: &str| eda_model::sch_extras::LabelField { name: name.into(), text: text.into(), visible: false, italic: false };
+    let f = |name: &str, text: &str| eda_model::sch_extras::LabelField { name: name.into(), text: text.into(), visible: false, italic: false, ..Default::default() };
     ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Field2", "x"), f("", ""), f(" Rev ", "B")] });
     assert_eq!(sch_of(&b).extras.sheet_fields["sheet_a"], vec![f("Field2", "x"), f("Rev", "B")], "the empty row is dropped, a name trimmed");
     assert_eq!(b.apply(&Cmd::SchEdit(SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("", "y")] })).unwrap_err()[0].hint.as_deref().unwrap_or_default(), "Fields must have a name.");

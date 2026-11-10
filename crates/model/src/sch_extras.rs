@@ -617,6 +617,11 @@ impl TextAttrs {
 /// is set in italics. It is placed where `SCH_LABEL_BASE::AutoplaceFields` puts it, under the label's text, while the label's fields are autoplaced
 /// (`m_fieldsAutoplaced`); once one of them was moved by hand (`SetFieldsAutoplaced( AUTOPLACE_NONE )`), every field of the label keeps the place
 /// `SchematicSection::field_layout` has for it under the label's id (`eda_engine::label_fields`).
+///
+/// Its text size, bold and shown name (UI-LEFT-2 SS12) are the `SCH_FIELD`'s own (`EDA_TEXT::GetTextSize`, `IsBold`, `SCH_FIELD::IsNameShown`): Label Properties'
+/// grid and Field Properties set them, `AutoplaceFields` stacks the fields by their heights, and the file has them as `(effects (font (size ..) bold))` and
+/// `(show_name yes)`. Additive: absent is KiCad's new field, 50 mil, regular, its value alone. A sheet's user field (`SchExtras::sheet_fields`) keeps none of
+/// the three yet (Sheet Properties' grid does not offer them).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LabelField {
@@ -627,6 +632,32 @@ pub struct LabelField {
     pub visible: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub italic: bool,
+    /// The text's size (height and width), nanometres; 0 is the default, 50 mil ([`crate::ir::DEFAULT_FIELD_SIZE_NM`]).
+    #[serde(default, skip_serializing_if = "is_zero_nm", deserialize_with = "crate::units::de")]
+    pub size_nm: Nm,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bold: bool,
+    /// `SCH_FIELD::IsNameShown` (`(show_name yes)`): drawn as `Name: value`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub name_shown: bool,
+}
+
+impl Default for LabelField {
+    /// A new field as `SCH_FIELD`'s constructor makes one: shown, 50 mil, regular, its value alone.
+    fn default() -> Self {
+        LabelField { name: String::new(), text: String::new(), visible: true, italic: false, size_nm: Nm::ZERO, bold: false, name_shown: false }
+    }
+}
+
+impl LabelField {
+    /// The size the field's text is set in, nanometres.
+    pub fn text_size_nm(&self) -> Nm {
+        if self.size_nm > Nm::ZERO {
+            self.size_nm
+        } else {
+            crate::ir::DEFAULT_FIELD_SIZE_NM
+        }
+    }
 }
 
 /// Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS`): `m_IntersheetRefsShow` ("Show inter-sheet references", off by default),

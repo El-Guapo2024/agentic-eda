@@ -4,8 +4,8 @@
 // (`createNewLabel` returns false).
 //
 // The dialog is `DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it on a new label (`aNew`): the text, starting empty, with the labels of the same
-// kind on the sheet to pick from (KiCad's combo box: the labels of every screen, a global label's also the global power symbols' nets; here the
-// sheet in view's), the shape of a global or hierarchical label, which way the text runs, its size and style, and the "Auto" check of a global or
+// kind to pick from (KiCad's combo box: the labels of every screen, the power symbols' nets of the label's kind and the bus aliases,
+// `useExistingLabels`), the shape of a global or hierarchical label, which way the text runs, its size and style, and the "Auto" check of a global or
 // hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`), which has the label take the spin of what it is placed on
 // (`SCH_EDIT_FRAME::AutoRotateItem`; kicad-port/schAutoRotate.ts shows the spin it will give). "Multiple label input" takes one label per line
 // (`m_cbMultiLine`, new labels only): the first rides the cursor and each click brings the next (`itemsToPlace`). What was last chosen is the next
@@ -25,6 +25,7 @@ import { carryItem, changeCarried } from "../actions/schPlaceActions";
 import { getSchCarry, setSchCarry, useSchCarry } from "../state/schCarryStore";
 import { inferSpin } from "./schematic/labelShape";
 import type { LabelShape } from "../api/types";
+import { fetchExistingLabels } from "../api/client";
 
 const SHAPES: LabelShape[] = ["input", "output", "bidirectional", "tri_state", "passive"];
 
@@ -44,6 +45,28 @@ const TITLE: Record<"local" | "global" | "hierarchical", string> = {
 /** A label's size the IR keeps as none (50 mil, KiCad's `DEFAULT_TEXT_SIZE`); a new label starts at Schematic Setup's `m_DefaultTextSize` (`createNewLabel`:
  *  `labelItem->SetTextSize( VECTOR2I( settings.m_DefaultTextSize, settings.m_DefaultTextSize ) )`). */
 const DEFAULT_SIZE_NM = 1_270_000;
+
+/**
+ * The names Label Properties' Label combo box offers (`m_existingLabelArray`, `DIALOG_LABEL_PROPERTIES::TransferDataToWindow`): the labels of the same kind
+ * on every screen of the schematic, for a global label the nets of the power symbols like a global label, for a local label those like a local label,
+ * and the project's bus aliases as `{alias}` (`GET /api/sch/existing_labels`, `crates/cli/src/sch_label_api.rs`). None for a hierarchical label or while
+ * no dialog is open (`kind` null); asked again whenever `opening` changes.
+ */
+export function useExistingLabels(kind: "local" | "global" | "hierarchical" | null, opening: string): string[] {
+  const [names, setNames] = useState<string[]>([]);
+  useEffect(() => {
+    setNames([]);
+    if (!kind || kind === "hierarchical") return;
+    let live = true;
+    fetchExistingLabels(kind)
+      .then((n) => live && setNames(n))
+      .catch(() => live && setNames([]));
+    return () => {
+      live = false;
+    };
+  }, [kind, opening]);
+  return names;
+}
 
 /** The label in the hand whose Properties are open, if they are. */
 function carriedBeingEdited(): CarriedLabel | null {
@@ -94,13 +117,8 @@ export function LabelDialog() {
     [pending, sch, plainSpin]
   );
   const autoOn = supportsAuto && auto;
-  // The labels of the same kind to pick from (`m_existingLabelArray`), and the nets of the power symbols for a global label.
-  const existing = useMemo(() => {
-    if (!pending || !sch || pending.scope === "hierarchical") return [];
-    const names = new Set(sch.labels.filter((l) => l.scope === pending.scope).map((l) => l.net));
-    if (pending.scope === "global") for (const p of sch.power_symbols) names.add(p.net);
-    return [...names].sort();
-  }, [pending, sch]);
+  // The labels of the same kind to pick from (`m_existingLabelArray`), read again on every opening
+  const existing = useExistingLabels(pending?.scope ?? null, `${pending?.at[0]},${pending?.at[1]}`);
 
   if (!pending) return null;
   const close = () => {

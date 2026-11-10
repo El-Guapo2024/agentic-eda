@@ -101,6 +101,14 @@ export interface CarriedPower {
   /** What its Properties (E) and Field Properties (U, V) did to it while it rode: their commands, by the id the server numbers it with (`edits` of a carried
    *  symbol, below), run after it is made in the same step. */
   edits?: Cmd[];
+  /** The kind Preferences' "Power Symbols:" gave it when it was chosen (`new_power_symbols` GLOBAL / LOCAL, `PlaceSymbol` converting the `LIB_SYMBOL`
+   *  before the instance is made); absent is Default, the library's kind. */
+  powerKind?: "global" | "local";
+}
+
+/** `PlaceSymbol`'s conversion of a new power symbol (`cfg->m_Drawing.new_power_symbols`): the kind Preferences' "Power Symbols:" choice asks for, or none for Default. */
+export function newPowerKind(pref: 0 | 1 | 2): CarriedPower["powerKind"] {
+  return pref === 1 ? "global" : pref === 2 ? "local" : undefined;
 }
 
 /** A quarter turn or a mirror of a carried symbol, applied after it is made as the placed symbol's own R / Shift+R / X / Y are (`SCH_EDIT_TOOL::Rotate` /
@@ -262,12 +270,13 @@ export function placeCmd(item: CarriedItem, at: readonly [number, number], o: Pl
       return { op: "sch_edit", verb: "place_text", content: item.content, at: xy(at), angle: item.vertical ? 90_000 : 0, size_nm: item.sizeNm, h: item.h, v: item.v };
     case "power": {
       const add: Cmd = { op: "add_power_symbol", lib_id: item.libId, at: xy(at), rot_millideg: item.rotMillideg, net: item.net, pin: "", ...(o.annotate ? { annotate: o.annotate } : {}) };
+      // the preference's kind, given to the symbol just made in the same step (`set_new_power_kind`: Global or Local; Default sends nothing)
+      const kind: Cmd[] = item.powerKind ? [{ op: "sch_edit", verb: "set_new_power_kind", lib_id: item.libId, local: item.powerKind === "local" } as unknown as Cmd] : [];
       // what its dialogs did while it rode, by the id it is numbered with (the server numbers it the same at the preview's point and at the click's)
       const edits = item.edits ?? [];
       const id = o.powerId;
-      if (edits.length === 0 || !id) return add;
-      const from = powerIdOfEdits(edits);
-      return { op: "batch", cmds: [add, ...edits.map((c) => (from ? renameInCmd(c, from, id) : c))] };
+      const after = edits.length === 0 || !id ? [] : (() => { const from = powerIdOfEdits(edits); return edits.map((c) => (from ? renameInCmd(c, from, id) : c)); })();
+      return kind.length === 0 && after.length === 0 ? add : { op: "batch", cmds: [add, ...kind, ...after] };
     }
     case "symbol":
       return placeSymbolCmd(item, at, o);
@@ -648,7 +657,7 @@ export function describeCarried(item: CarriedItem): Record<string, unknown> {
     case "text":
       return { kind: "text", text: item.content, vertical: item.vertical, h: item.h, v: item.v };
     case "power":
-      return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg, edits: item.edits?.length ?? 0 };
+      return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg, edits: item.edits?.length ?? 0, powerKind: item.powerKind ?? null };
     case "symbol":
       return { kind: "symbol", libId: item.libId, ref: item.ref, unit: item.unit, turns: [...item.turns], placeAllUnits: item.placeAllUnits, oneOnly: item.oneOnly, value: item.value, footprint: item.footprint, bodyStyle: item.bodyStyle ?? 1, attrs: { ...item.attrs }, edits: item.edits?.length ?? 0 };
   }

@@ -595,6 +595,19 @@ fn ensure_background_index<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Arc<At
     done
 }
 
+/// The symbol libraries read in the background as the board is opened, so the first Place Power or Place Symbol finds them indexed rather than waiting for
+/// every library ("Searching... n of 222", UI-LEFT-2 SS12). KiCad 25ec2335 `eeschema/eeschema.cpp::IFACE::PreloadLibraries`: when a project is opened the
+/// symbol library adapter starts loading every library on a background job ("Loading Symbol Libraries", `adapter->AsyncLoad()`), and the chooser later shows
+/// what is loaded. The same thread the first search would start ([`ensure_background_index`]), started by `board serve`; the table is read on that thread
+/// too, so serving starts at once.
+pub(crate) fn preload_symbol_libraries(dir: &Path) {
+    let dir = dir.to_path_buf();
+    let _ = std::thread::Builder::new().name("library-preload".into()).spawn(move || {
+        let libs = crate::library_tables::libs(&dir, Kind::Symbol);
+        ensure_background_index(Kind::Symbol, &*libs);
+    });
+}
+
 // ------------------------------------------------------------------------------------------------ library descriptions
 
 type Descriptions = Mutex<HashMap<PathBuf, (Option<SystemTime>, Arc<HashMap<String, String>>)>>;

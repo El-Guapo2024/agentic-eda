@@ -77,6 +77,10 @@ pub(crate) fn label_fields_after(id: &str, fields: &[eda_model::sch_extras::Labe
         if f.name == "Net Class" {
             f.name = NETCLASS_FIELD.to_string();
         }
+        // the grid's Text Size of 50 mil is the default a field is kept with (`LabelField::size_nm` 0)
+        if f.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM {
+            f.size_nm = eda_model::units::Nm::ZERO;
+        }
         f
     }).collect();
     for i in (0..out.len()).rev() {

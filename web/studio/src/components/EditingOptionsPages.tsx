@@ -10,7 +10,7 @@
 //   * Schematic Editor > Editing Options (`PANEL_EESCHEMA_EDITING_OPTIONS`, eeschema/dialogs/panel_eeschema_editing_options.cpp and _base): Line drawing mode,
 //     Arc editing mode, <ESC> clears net highlighting, Allow unconstrained pin swaps, Repeated Items (Horizontal pitch, Vertical pitch, Label increment: what
 //     Repeat Last Item moves and counts by), Show footprint previews in Symbol Chooser. Greyed: Mouse drag performs Drag (G), Automatically start wires on
-//     unconnected pins, Automatically annotate symbols, the new sheets' colours, Power Symbols, Symbol Field Automatic Placement, Never show Rescue Symbols tool.
+//     unconnected pins, Automatically annotate symbols, the new sheets' colours, Power Symbols (`new_power_symbols`, ported), Symbol Field Automatic Placement, Never show Rescue Symbols tool.
 //   * Symbol Editor > Editing Options (`PANEL_SYM_EDITING_OPTIONS`, eeschema/dialogs/panel_sym_editing_options.cpp and _base): Repeated Items (Pitch of repeated
 //     pins, forced to 25 mils on leaving the field, `onKillFocusPinPitch`; Label increment) and Keep pins attached when dragging edges. Greyed: Defaults for New
 //     Objects.
@@ -249,14 +249,20 @@ export function SchEditingOptionsPage({ draft, set, extra, setExtra }: PageProps
           <span style={{ width: 120, marginLeft: 12 }}>Sheet background:</span>
           <span style={{ width: 28, height: 14, border: "1px solid var(--chrome-border)" }} />
         </NotOffered>
-        <NotOffered reason="Not ported: a new power symbol keeps its library's kind (Default).">
+        <div className="filter-row">
           <span style={{ width: 120 }}>Power Symbols:</span>
-          <select disabled value="0" aria-label="Power Symbols:">
+          <select
+            aria-label="Power Symbols:"
+            data-testid="pref-sch-power-symbols"
+            value={String(draft.schNewPowerSymbols)}
+            onChange={(e) => set({ schNewPowerSymbols: Number(e.target.value) as 0 | 1 | 2 })}
+            title={"Select the assigned type of new power symbol.\nDefault will follow the symbol definition.\nGlobal will convert new power symbols to global power symbols.\nLocal will convert new power symbols to a local power symbols."}
+          >
             <option value="0">Default</option>
             <option value="1">Global</option>
             <option value="2">Local</option>
           </select>
-        </NotOffered>
+        </div>
         {heading("Left Click Mouse Commands")}
         <LeftClickCommands />
       </div>

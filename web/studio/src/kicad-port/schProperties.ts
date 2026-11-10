@@ -140,7 +140,7 @@ export function sameColor(a: SchColor | null | undefined, b: SchColor | null | u
 
 /** The label's own fields as Label Properties' grid starts with them: every field but a global label's Sheet References (`SCH_LABEL_BASE::m_fields` past the mandatory one). */
 export function ownLabelFields(label: Partial<Pick<SchematicLabel, "fields">>): LabelFieldEdit[] {
-  return (label.fields ?? []).filter((f) => !f.intersheet_refs).map((f) => ({ name: f.name, text: f.text, visible: f.visible, italic: f.italic }));
+  return (label.fields ?? []).filter((f) => !f.intersheet_refs).map((f) => ({ name: f.name, text: f.text, visible: f.visible, italic: f.italic, size_nm: f.size_nm && f.size_nm > 0 ? f.size_nm : LABEL_FIELD_SIZE_NM, bold: !!f.bold, name_shown: !!f.name_shown }));
 }
 
 /** How a label's field is named in the grid (`SCH_LABEL_BASE::GetDefaultFieldName`): "Net Class" for `Netclass`, "Sheet References" for `Intersheetrefs`. */
@@ -148,20 +148,26 @@ export function labelFieldDisplayName(name: string): string {
   return name === "Netclass" ? "Net Class" : name === "Intersheetrefs" ? "Sheet References" : name;
 }
 
+/** A label field's text size until one is set (`SCH_FIELD`'s default, 50 mil). */
+export const LABEL_FIELD_SIZE_NM = 1_270_000;
+
 /**
  * `DIALOG_LABEL_PROPERTIES::OnAddField`: the new row is a net class unless the label has a field (other than the Sheet References) that is not one, then "Field"; it takes
- * the look of the last row (`SetAttributes`, `SetVisible`), else shown and italic. `isrVisible` is a global label's Sheet References row (the last row when there is no other).
+ * the look of the last row (`SetAttributes`: its size, bold and italic; `SetVisible`), else shown and italic. `isrVisible` is a global label's Sheet References row (the last
+ * row when there is no other). A new field's name is not shown (`SetAttributes` copies the `EDA_TEXT`'s looks, not `SCH_FIELD::m_showName`).
  */
 export function newLabelField(fields: readonly LabelFieldEdit[], isrVisible: boolean | null): LabelFieldEdit {
   const name = fields.every((f) => f.name === "Netclass") ? "Netclass" : "Field";
   const last = fields[fields.length - 1];
-  if (last) return { name, text: "", visible: last.visible, italic: last.italic };
-  if (isrVisible !== null) return { name, text: "", visible: isrVisible, italic: false };
-  return { name, text: "", visible: true, italic: true };
+  const plain = { size_nm: LABEL_FIELD_SIZE_NM, bold: false, name_shown: false };
+  if (last) return { name, text: "", visible: last.visible, italic: last.italic, size_nm: last.size_nm ?? LABEL_FIELD_SIZE_NM, bold: !!last.bold, name_shown: false };
+  if (isrVisible !== null) return { name, text: "", visible: isrVisible, italic: false, ...plain };
+  return { name, text: "", visible: true, italic: true, ...plain };
 }
 
 function sameFields(a: readonly LabelFieldEdit[], b: readonly LabelFieldEdit[]): boolean {
-  return a.length === b.length && a.every((f, i) => f.name === b[i]!.name && f.text === b[i]!.text && f.visible === b[i]!.visible && f.italic === b[i]!.italic);
+  const size = (f: LabelFieldEdit) => (f.size_nm && f.size_nm > 0 ? f.size_nm : LABEL_FIELD_SIZE_NM);
+  return a.length === b.length && a.every((f, i) => f.name === b[i]!.name && f.text === b[i]!.text && f.visible === b[i]!.visible && f.italic === b[i]!.italic && size(f) === size(b[i]!) && !!f.bold === !!b[i]!.bold && !!f.name_shown === !!b[i]!.name_shown);
 }
 
 /** Label Properties: only the fields that differ from the label as it is (`spin` is the label's current spin, stored or read off its wire). */
