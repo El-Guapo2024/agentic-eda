@@ -298,3 +298,23 @@ fn footprint_editor_items_swap_places_and_layers_as_on_the_board() {
     b.apply(&fp_swap(&b, &["field:Value", "txt_g"])).unwrap();
     assert_eq!(t(&b, "txt_g").layer, "F.SilkS");
 }
+
+#[test]
+fn two_zones_swap_layers_and_a_zone_on_several_layers_is_undefined_layer() {
+    let m = four_layer_model();
+    let mut b = board_with(&m, |d| {
+        let rt = d.routing.as_mut().unwrap();
+        rt.zones.push(zone("zone_b", "B.Cu", &[(mm(20.0), mm(60.0)), (mm(30.0), mm(60.0)), (mm(30.0), mm(70.0))]));
+        let mut multi = zone("zone_m", "F.Cu", &[(mm(40.0), mm(60.0)), (mm(50.0), mm(60.0)), (mm(50.0), mm(70.0))]);
+        multi.set_layer_set(&["F.Cu", "In1.Cu"]);
+        rt.zones.push(multi);
+    });
+    let z = |b: &Board<'_>, i: &str| routing(b).zones.iter().find(|z| z.id == i).unwrap().clone();
+    // two single-layer zones trade layers; neither moves (`ZONE::SetPosition` is a no-op)
+    swap(&mut b, &["zone_a", "zone_b"]).unwrap();
+    assert_eq!((z(&b, "zone_a").layer_set(), z(&b, "zone_b").layer_set()), (vec!["B.Cu"], vec!["F.Cu"]));
+    assert_eq!(z(&b, "zone_b").outline[0], p(mm(20.0), mm(60.0)));
+    // a zone on several layers is `UNDEFINED_LAYER`: it takes the other's one layer, and the other keeps its own (`SetLayer( UNDEFINED_LAYER )` changes nothing)
+    swap(&mut b, &["zone_m", "zone_b"]).unwrap();
+    assert_eq!((z(&b, "zone_m").layer_set(), z(&b, "zone_b").layer_set()), (vec!["F.Cu"], vec!["F.Cu"]));
+}
