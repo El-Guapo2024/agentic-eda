@@ -21,8 +21,9 @@
 //!   twice is an edit to every path of it (as a field edit is, `eda_ops::fields_table::path_aliases`).
 //! - A flag of a record may be `None`: the symbol's own flag. Every record this code makes or reads has all five set, as KiCad's `InitializeAttributes`
 //!   snapshot does, so `None` is only ever a hand-written or an agent's record.
-//! - No variant symbol (`SCH_SYMBOL_VARIANT::m_SymbolOverride`, Set Variant Symbol...) and no per-variant pin-to-pad map (`m_PinMapOverride`); a sheet's
-//!   own variants (`SCH_SHEET_VARIANT`) are not read, as the design keeps no sheet flags.
+//! - No variant symbol (`SCH_SYMBOL_VARIANT::m_SymbolOverride`, Set Variant Symbol...) and no per-variant pin-to-pad map (`m_PinMapOverride`). A sheet's own
+//!   variants (`SCH_SHEET_VARIANT`) are its flags only ([`crate::sch_extras::SchExtras::sheet_variants`], [`sheet_flags`], [`sheet_path_flags`]; UI-LEFT-2 SS15),
+//!   not its field texts.
 
 use crate::ir::{field_key, SchematicSection, SymbolInstance};
 use serde::{Deserialize, Serialize};
@@ -217,12 +218,16 @@ pub fn set_field(sch: &mut SchematicSection, id: &str, variant: &str, field: &st
     changed
 }
 
-/// `SCH_SCREEN::DeleteVariant` (`SCH_SYMBOL::DeleteVariant` on every instance): every record of `variant` on the section goes.
+/// `SCH_SCREEN::DeleteVariant` (`SCH_SYMBOL::DeleteVariant` on every instance, and the sheets' `SCH_SHEET::DeleteVariant`): every record of `variant` on the section goes.
 pub fn delete_records(sch: &mut SchematicSection, variant: &str) {
     for records in sch.extras.symbol_variants.values_mut() {
         records.remove(variant);
     }
     sch.extras.symbol_variants.retain(|_, r| !r.is_empty());
+    for records in sch.extras.sheet_variants.values_mut() {
+        records.remove(variant);
+    }
+    sch.extras.sheet_variants.retain(|_, r| !r.is_empty());
 }
 
 /// `SCH_SCREEN::RenameVariant` (`SCH_SYMBOL::RenameVariant`): every record of `old` is a record of `new`.
@@ -231,6 +236,11 @@ pub fn rename_records(sch: &mut SchematicSection, old: &str, new: &str) {
         return;
     }
     for records in sch.extras.symbol_variants.values_mut() {
+        if let Some(r) = records.remove(old) {
+            records.insert(new.to_string(), r);
+        }
+    }
+    for records in sch.extras.sheet_variants.values_mut() {
         if let Some(r) = records.remove(old) {
             records.insert(new.to_string(), r);
         }
@@ -245,6 +255,73 @@ pub fn copy_records(sch: &mut SchematicSection, source: &str, new: &str) {
             records.entry(new.to_string()).or_insert(r);
         }
     }
+    for records in sch.extras.sheet_variants.values_mut() {
+        if let Some(r) = records.get(source).copied() {
+            records.entry(new.to_string()).or_insert(r);
+        }
+    }
+}
+
+/// `SCH_SHEET::GetDNP( &instance, variant )`, `GetExcludedFromSim`, `GetExcludedFromBOM`, `GetExcludedFromBoard`: the flags of the sheet `id` of the section, in
+/// `variant` when it has a record of it (`instance.m_Variants.contains( aVariantName )`), else its own (`m_DNP`, ...); the default variant (`""`) is its own.
+pub fn sheet_flags(sch: &SchematicSection, id: &str, variant: &str) -> crate::sch_extras::SheetVariant {
+    let base = sch.extras.sheet_props_of(id);
+    if !variant.is_empty() {
+        if let Some(r) = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)) {
+            return *r;
+        }
+    }
+    crate::sch_extras::SheetVariant::initialized(&base)
+}
+
+/// `SCH_SHEET::SetDNP( value, &instance, variant )` and its kin for one flag: a record made for the variant starts as the sheet's own flags
+/// (`variant.InitializeAttributes( *this )`); a record left with no differential is not kept. Returns whether anything changed.
+pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag: Flag, value: bool) -> bool {
+    let base = sch.extras.sheet_props_of(id);
+    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).copied();
+    let mut rec = before.unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
+    match flag {
+        Flag::Dnp => rec.dnp = value,
+        Flag::ExcludeFromSim => rec.exclude_from_sim = value,
+        Flag::ExcludeFromBom => rec.exclude_from_bom = value,
+        Flag::ExcludeFromBoard => rec.exclude_from_board = value,
+        Flag::ExcludeFromPosFiles => return false,
+    }
+    let after = rec.has_differentials(&base).then_some(rec);
+    if after == before {
+        return false;
+    }
+    match after {
+        Some(r) => {
+            sch.extras.sheet_variants.entry(id.to_string()).or_default().insert(variant.to_string(), r);
+        }
+        None => {
+            if let Some(m) = sch.extras.sheet_variants.get_mut(id) {
+                m.remove(variant);
+                if m.is_empty() {
+                    sch.extras.sheet_variants.remove(id);
+                }
+            }
+        }
+    }
+    true
+}
+
+/// `SCH_SHEET_PATH::GetDNP( aVariantName )`, `GetExcludedFromSim`, `GetExcludedFromBOM`, `GetExcludedFromBoard` (8303b2ad `sch_sheet_path.cpp`): a flag is set for
+/// a sheet path when any sheet of it has it set, in `variant` (each sheet asked on the path above it: `sheet->GetDNP( &copy, aVariantName )`), the default variant
+/// being each sheet's own. `path` is the model's path of placement ids from the root; the root itself has no flags. The four flags in a `SymbolFlags` (no
+/// position-files flag: a sheet has none).
+pub fn sheet_path_flags(design: &crate::ir::Design, path: &[String], variant: &str) -> SymbolFlags {
+    let mut out = SymbolFlags::default();
+    for k in 1..=path.len() {
+        let Some(screen) = crate::sheet_list::screen_of(design, &path[..k - 1]) else { continue };
+        let f = sheet_flags(screen, &path[k - 1], variant);
+        out.dnp |= f.dnp;
+        out.exclude_from_sim |= f.exclude_from_sim;
+        out.exclude_from_bom |= f.exclude_from_bom;
+        out.exclude_from_board |= f.exclude_from_board;
+    }
+    out
 }
 
 /// A reference renamed: its records follow it (the variants live in the symbol's instances, so they go wherever the symbol goes).
@@ -285,6 +362,7 @@ pub fn names(design: &crate::ir::Design) -> Vec<String> {
     let mut out: std::collections::BTreeSet<String> = design.schematic.iter().flat_map(|s| s.extras.variants.keys().cloned()).collect();
     for sch in sections(design) {
         out.extend(sch.extras.symbol_variants.values().flat_map(|r| r.keys().cloned()));
+        out.extend(sch.extras.sheet_variants.values().flat_map(|r| r.keys().cloned()));
     }
     out.into_iter().collect()
 }

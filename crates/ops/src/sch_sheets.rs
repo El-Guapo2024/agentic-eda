@@ -545,15 +545,39 @@ impl<'a> Board<'a> {
                     sch.extras.sheet_props.insert(id, props);
                 }
             }
-            // the pins come with the sheet whole (`SCH_SHEET_PIN` is an `EDA_TEXT`): their text's size, bold and italic too
+            // the places of its user fields and the font and colour of its fields come with it too (`SCH_SHEET::m_fields`, UI-LEFT-2 SS15)
+            let places = fragment.section.extras.sheet_field_places.get(&sh.id).cloned();
+            let looks = fragment.section.extras.field_looks.get(&sh.id).cloned();
+            // and its records of the design variants (`SCH_SHEET_INSTANCE::m_Variants`)
+            let records = fragment.section.extras.sheet_variants.get(&sh.id).cloned();
+            if places.is_some() || looks.is_some() || records.is_some() {
+                let sch = self.schematic_mut()?;
+                sch.assign_missing_ids();
+                if let Some(id) = sch.sheets.iter().rev().find(|s| s.name == name).map(|s| s.id.clone()) {
+                    if let Some(p) = places {
+                        sch.extras.sheet_field_places.insert(id.clone(), p);
+                    }
+                    if let Some(r) = records {
+                        sch.extras.sheet_variants.insert(id.clone(), r);
+                    }
+                    if let Some(l) = looks {
+                        sch.extras.field_looks.insert(id, l);
+                    }
+                }
+            }
+            // the pins come with the sheet whole (`SCH_SHEET_PIN` is an `EDA_TEXT`): their text's size, bold and italic too, and its font face and colour
             let looks: Vec<Option<eda_model::sch_extras::LabelLook>> = sh.pins.iter().map(|p| fragment.section.extras.sheet_pin_looks.get(&p.id).copied()).collect();
-            if looks.iter().any(Option::is_some) {
+            let attrs: Vec<Option<eda_model::sch_extras::TextAttrs>> = sh.pins.iter().map(|p| fragment.section.extras.text_attrs.get(&p.id).cloned()).collect();
+            if looks.iter().any(Option::is_some) || attrs.iter().any(Option::is_some) {
                 let sch = self.schematic_mut()?;
                 sch.assign_missing_ids();
                 let new_pins: Vec<String> = sch.sheets.iter().rev().find(|s| s.name == name).map(|s| s.pins.iter().map(|p| p.id.clone()).collect()).unwrap_or_default();
-                for (id, look) in new_pins.into_iter().zip(looks) {
+                for ((id, look), attrs) in new_pins.into_iter().zip(looks).zip(attrs) {
                     if let Some(look) = look {
-                        sch.extras.sheet_pin_looks.insert(id, look);
+                        sch.extras.sheet_pin_looks.insert(id.clone(), look);
+                    }
+                    if let Some(a) = attrs {
+                        sch.extras.text_attrs.insert(id, a);
                     }
                 }
             }

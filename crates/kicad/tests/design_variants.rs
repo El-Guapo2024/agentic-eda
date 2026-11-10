@@ -164,3 +164,59 @@ fn a_variant_left_out_of_the_bom_is_left_out_of_kicad_clis() {
     assert!(has_r2(&bom(Some("Variant 1"))), "and in Variant 1's");
     assert!(!has_r2(&bom(Some("Variant2"))), "Variant2 leaves it out");
 }
+
+/// A sheet's own Do not populate and its record of a variant (`SCH_SHEET_INSTANCE::m_Variants`, UI-LEFT-2 SS15): written in the sheet's `(instances ..)`, read back,
+/// and the symbols inside it are left out of kicad-cli's BOM with `--exclude-dnp` in that variant only (`ref.GetSheetPath().GetDNP( variantName )`).
+#[test]
+fn a_sheets_variant_record_comes_back_and_kicad_clis_bom_leaves_its_symbols_out() {
+    let Some(qa) = qa_project() else {
+        eprintln!("skipped: needs KiCad 25ec2335's QA data (KICAD10_QA_DATA)");
+        return;
+    };
+    let (mut design, model) = read(&qa, "variants");
+    let sheet_id = design.schematic.as_ref().unwrap().sheets.first().expect("the QA project has a sheet").id.clone();
+    let inside: Vec<String> = {
+        let path = vec![sheet_id.clone()];
+        let screen = eda_model::sheet_list::screen_of(&design, &path).expect("its screen");
+        screen.symbols.iter().filter(|s| !s.id.starts_with('#')).map(|s| eda_model::sheet_list::reference_under(screen, s, &path)).collect()
+    };
+    assert!(!inside.is_empty(), "the sheet holds symbols");
+    assert!(eda_model::variants::set_sheet_flag(design.schematic.as_mut().unwrap(), &sheet_id, "Variant2", eda_model::variants::Flag::Dnp, true));
+    let dir = work_dir("sheet_variant");
+    write(&design, &model, &dir, "variants");
+    let text = std::fs::read_to_string(dir.join("variants.kicad_sch")).unwrap();
+    assert!(text.contains("(variant (name \"Variant2\") (dnp yes))"), "the sheet's record in its instance path");
+    let (again, _) = read(&dir, "variants");
+    let back = &again.schematic.as_ref().unwrap().extras.sheet_variants;
+    assert_eq!(back.values().next().and_then(|m| m.get("Variant2")).map(|r| r.dnp), Some(true), "read back: {back:?}");
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let bom = |variant: Option<&str>| {
+        let out = dir.join(format!("{}.csv", variant.unwrap_or("default")));
+        let mut cmd = Command::new(&cli);
+        cmd.args(["sch", "export", "bom"]);
+        if let Some(v) = variant {
+            cmd.args(["--variant", v]);
+        }
+        let run = cmd.args(["--exclude-dnp", "--group-by", "", "--fields", "Reference,Value", "-o"]).arg(&out).arg(dir.join("variants.kicad_sch")).output().unwrap();
+        assert!(run.status.success(), "kicad-cli: {}", String::from_utf8_lossy(&run.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let has = |t: &str, r: &str| t.lines().any(|l| l.split(',').next().is_some_and(|c| c.trim_matches('"').split(' ').any(|x| x == r)));
+    let first = &inside[0];
+    assert!(has(&bom(None), first), "{first} is in the default variant's BOM");
+    assert!(has(&bom(Some("Variant 1")), first), "and in Variant 1's");
+    assert!(!has(&bom(Some("Variant2")), first), "Variant2's DNP of its sheet leaves it out:\n{}", bom(Some("Variant2")));
+    // the sheet's own Do not populate: every variant without a record of its own
+    let sch = design.schematic.as_mut().unwrap();
+    let mut props = sch.extras.sheet_props_of(&sheet_id);
+    props.dnp = true;
+    sch.extras.set_sheet_props(&sheet_id, props);
+    write(&design, &model, &dir, "variants");
+    assert!(!has(&bom(None), first), "the sheet's own DNP leaves it out of the default BOM");
+}

@@ -299,7 +299,7 @@ pub enum SchCmd {
     /// Sheet Properties' Style and Attributes (`DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`: `SetBorderWidth`, `SetBorderColor`, `SetBackgroundColor`,
     /// `SetExcludedFromSim`, `SetExcludedFromBOM`, `SetExcludedFromBoard`, `SetDNP`) and the Properties panel's rows of a sheet (`SCH_SHEET_DESC`), kept in
     /// `SchExtras::sheet_props`. A value left out is unchanged; a colour with every channel 0 is `COLOR4D::UNSPECIFIED`; a width of 0 is the default line width.
-    /// Refused when nothing changes. **Differs**: the attributes are the sheet's own on every path (KiCad keeps the sheet's flags per variant).
+    /// Refused when nothing changes. These are the sheet's own flags (the default variant); a design variant's are `SetSheetVariant`'s.
     SetSheetProps {
         id: String,
         #[serde(default)]
@@ -317,11 +317,34 @@ pub enum SchCmd {
         #[serde(default)]
         dnp: Option<bool>,
     },
+    /// Sheet Properties' Attributes and the Properties panel's rows of a sheet while a design variant is the current one (`DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`:
+    /// `SetExcludedFromSim( .., &instance, variantName )`, `SetExcludedFromBOM`, `SetDNP`; `SCH_SHEET::SetDNPProp`): the sheet's record of `variant`
+    /// (`SchExtras::sheet_variants`; made from the sheet's own flags, `InitializeAttributes`), each flag given set; a record left with no differential is not
+    /// kept. Exclude from board is the dialog's on the sheet itself (`SetExcludedFromBoard( m_cbExcludeFromBoard->GetValue() )`), but is taken here for the
+    /// panel. An empty or unknown variant is refused; refused when nothing changes (UI-LEFT-2 SS15).
+    SetSheetVariant {
+        id: String,
+        variant: String,
+        #[serde(default)]
+        dnp: Option<bool>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
+        #[serde(default)]
+        exclude_from_bom: Option<bool>,
+        #[serde(default)]
+        exclude_from_board: Option<bool>,
+    },
     /// Sheet Properties' fields grid past Sheetname and Sheetfile (`SCH_FIELD`s of `FIELD_T::SHEET_USER`: Add Field, Delete, the Name, Value, Show and Italic
     /// cells): the sheet's user fields in their new order (`SchExtras::sheet_fields`). `TransferDataFromWindow`'s rules: a field with neither name nor text is
     /// dropped, one with a text and no name is refused ("Fields must have a name." -- `Validate`), a name used twice is refused ("Field name '%s' already in
     /// use."), and Sheetname / Sheetfile are the mandatory fields. Refused when nothing changes.
     SetSheetFields { id: String, fields: Vec<eda_model::sch_extras::LabelField> },
+    /// Sheet Properties' fields grid's looks of the sheet's user fields (`FIELDS_GRID_TABLE`'s H Align, V Align, Orientation, X Position and Y Position --
+    /// the place `SchExtras::sheet_field_places` keeps --, Font and Color -- `SchExtras::field_looks` under the sheet's id; the Show Name, Italic, Bold and Text
+    /// Size cells are `set_sheet_fields`' own), each named field set whole: its offset from the sheet's corner (`m_field.Offset( m_sheet->GetPosition() )`), its
+    /// angle (0 or 90 degrees), its justification, its font ("" or "Default Font" is the default one) and its colour (every channel 0 is `COLOR4D::UNSPECIFIED`).
+    /// A field the sheet does not have is refused; refused when nothing changes. Sent after `set_sheet_fields` in the dialog's one step (UI-LEFT-2 SS15).
+    SetSheetFieldLooks { id: String, fields: Vec<crate::sch_props::SheetFieldLookEdit> },
     /// The Hierarchy Navigator's New Top-Level Sheet (`HIERARCHY_PANE::onRightClick`, `NEW_TOP_LEVEL_SHEET`; `SCHEMATIC::AddTopLevelSheet`): a new sheet named
     /// `name` with an empty screen of its own, its file the name with spaces as underscores, in lower case, `.kicad_sch` after it, its page the lowest whole
     /// number no sheet has (`PageNumberExists`). Only for a root that is KiCad 10's virtual root (`SchExtras::virtual_root`), whose sheets are the top-level
@@ -513,7 +536,7 @@ impl SchCmd {
             SchCmd::UpdateLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
             SchCmd::SetBodyStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::SetImageData { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
-            SchCmd::SetSheetProps { id, .. } | SchCmd::SetSheetFields { id, .. } | SchCmd::DeleteTopLevelSheet { id } => vec![id.as_str()],
+            SchCmd::SetSheetProps { id, .. } | SchCmd::SetSheetFields { id, .. } | SchCmd::SetSheetFieldLooks { id, .. } | SchCmd::SetSheetVariant { id, .. } | SchCmd::DeleteTopLevelSheet { id } => vec![id.as_str()],
             SchCmd::AddTopLevelSheet { name } => vec![name.as_str()],
             SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } | SchCmd::EditField { id, .. } => vec![id.as_str()],
             SchCmd::PlaceLabel { net, .. } => vec![net.as_str()],
@@ -577,6 +600,8 @@ impl SchCmd {
             SchCmd::AddTopLevelSheet { name } => format!("schematic top-level-sheet add {name:?}"),
             SchCmd::DeleteTopLevelSheet { id } => format!("schematic top-level-sheet delete {id}"),
             SchCmd::SetSheetFields { id, fields } => format!("schematic sheet-fields {id} {}", fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(",")),
+            SchCmd::SetSheetVariant { id, variant, .. } => format!("schematic sheet-variant {variant:?} {id}"),
+            SchCmd::SetSheetFieldLooks { id, fields } => format!("schematic sheet-field-looks {id} {}", fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(",")),
             SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
             SchCmd::SetTextAttrs { ids, .. } => format!("schematic text-attrs {}", ids.join(" ")),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => format!("schematic pos-files {} {}", if *exclude { "exclude" } else { "include" }, ids.join(" ")),
@@ -623,7 +648,7 @@ impl SchCmd {
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
             SchCmd::AutoplaceFieldsKept { .. } | SchCmd::ReorderFields { .. } => "schematic-fields",
             SchCmd::SetSymbolOrientation { .. } => "schematic-symbol",
-            SchCmd::EditSheet { .. } | SchCmd::SetSheetProps { .. } | SchCmd::SetSheetFields { .. } | SchCmd::AddTopLevelSheet { .. } | SchCmd::DeleteTopLevelSheet { .. } => "schematic-sheet",
+            SchCmd::EditSheet { .. } | SchCmd::SetSheetProps { .. } | SchCmd::SetSheetFields { .. } | SchCmd::SetSheetFieldLooks { .. } | SchCmd::SetSheetVariant { .. } | SchCmd::AddTopLevelSheet { .. } | SchCmd::DeleteTopLevelSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SetTextAttrs { .. } => "schematic-text",
             SchCmd::SetExcludeFromPosFiles { .. } => "schematic-attributes",
@@ -656,6 +681,10 @@ impl SchCmd {
             // a sheet's style and attributes name no net; its user fields are text variables of what it shows (`SCH_SHEET::ResolveTextVar`), which a label's
             // `${..}` may read, so they are read from the drawing again
             SchCmd::SetSheetProps { .. } => false,
+            // the places and looks of a sheet's user fields are layout
+            SchCmd::SetSheetFieldLooks { .. } => false,
+            // a sheet's flags in a variant name no net
+            SchCmd::SetSheetVariant { .. } => false,
             // an image's pixels and the point it is scaled about
             SchCmd::SetImageData { .. } | SchCmd::SetImageOffset { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
@@ -750,6 +779,12 @@ impl<'a> Board<'a> {
                 &crate::sch_props::SheetPropsEdit { border_width_nm: *border_width_nm, border_color: *border_color, fill_color: *fill_color, exclude_from_sim: *exclude_from_sim, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, dnp: *dnp },
             ),
             SchCmd::SetSheetFields { id, fields } => self.set_sheet_fields(id, fields),
+            SchCmd::SetSheetFieldLooks { id, fields } => self.set_sheet_field_looks(id, fields),
+            SchCmd::SetSheetVariant { id, variant, dnp, exclude_from_sim, exclude_from_bom, exclude_from_board } => self.set_sheet_variant(
+                id,
+                variant,
+                &crate::sch_variants::VariantFlags { dnp: *dnp, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, exclude_from_sim: *exclude_from_sim, exclude_from_pos_files: None },
+            ),
             SchCmd::AddTopLevelSheet { name } => self.add_top_level_sheet(name),
             SchCmd::DeleteTopLevelSheet { id } => {
                 let sch = self.schematic()?;
@@ -1144,9 +1179,12 @@ fn delete_sheet(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckRes
     sch.extras.set_locked(id, false);
     for pin in pins {
         sch.extras.sheet_pin_looks.remove(&pin);
+        sch.extras.text_attrs.remove(&pin);
     }
     // the sheet's own fields and pages go with it (`SCH_SHEET::m_fields`, `m_instances`): a sheet drawn later under the same id must not take them (r3 B3-L3)
     sch.extras.sheet_fields.remove(id);
+    sch.extras.sheet_field_places.remove(id);
+    sch.extras.sheet_variants.remove(id);
     sch.extras.sheet_pages.remove(id);
     Ok(())
 }
@@ -1188,6 +1226,7 @@ fn delete_sheet_pin(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<Chec
     let (s, i) = find_sheet_pin(sch, id)?;
     s.pins.remove(i);
     sch.extras.sheet_pin_looks.remove(id);
+    sch.extras.text_attrs.remove(id);
     Ok(())
 }
 

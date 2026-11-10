@@ -301,10 +301,22 @@ impl SchShown {
             screens.extend(c.values());
         }
         let subpart = eda_model::annotate::SubpartIds::of_design(design);
+        // the sheet in view's symbols take its sheet path's flags too (`SCH_SYMBOL::ResolveTextVar`: `${DNP}` is `aPath->GetDNP( variant ) || ResolveDNP( aPath,
+        // variant )`, and the same for `${EXCLUDE_FROM_BOM}`, `${EXCLUDE_FROM_BOARD}`, `${EXCLUDE_FROM_SIM}`; UI-LEFT-2 SS15)
+        let in_view = eda_model::sheet_list::screen_of(design, &ids);
+        let path_flags = eda_model::variants::sheet_path_flags(design, &ids, "");
         for sch in screens {
+            let here = in_view.is_some_and(|v| std::ptr::eq(v, sch));
             for sym in &sch.symbols {
                 by_key.insert(eda_model::ir::field_key(&sym.id, sym.unit), symbols.len());
-                symbols.push(symbol_of(sch, model, sym, &subpart));
+                let mut s = symbol_of(sch, model, sym, &subpart);
+                if here {
+                    s.dnp |= path_flags.dnp;
+                    s.exclude_from_bom |= path_flags.exclude_from_bom;
+                    s.exclude_from_board |= path_flags.exclude_from_board;
+                    s.exclude_from_sim |= path_flags.exclude_from_sim;
+                }
+                symbols.push(s);
             }
         }
         let sheet_path = std::iter::once("/".to_string()).chain(breadcrumb.iter().map(|(_, n)| format!("{n}/"))).collect::<String>();

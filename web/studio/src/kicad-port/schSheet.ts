@@ -57,12 +57,14 @@ export function sheetFileWithExtension(file: string): string {
 }
 
 /**
- * `SCH_EDIT_FRAME::ChangeSheetFile` for a new sheet (8303b2ad eeschema/sheet.cpp): when the hierarchy already shows the file (`SearchHierarchy`), the
- * question it asks before linking the new sheet to that screen -- "'%s' already exists.\n\nLink '%s' to this file?" (the studio has no absolute path to
- * show: both are the file's name); null when the file is new (the sheet gets an empty page of its own).
+ * `SCH_EDIT_FRAME::ChangeSheetFile` for a new sheet (8303b2ad eeschema/sheet.cpp): when the hierarchy already shows the file (`SearchHierarchy`) or the project
+ * keeps a screen of that file no sheet places (`loadFromFile = wxFileExists( newAbsoluteFilename )`: the studio's project keeps a deleted sheet's screen in
+ * `design.sheet_contents` as a file stays on disk beside a KiCad project; `screens` lists them, UI-LEFT-2 SS15), the question it asks before linking the new sheet
+ * to that screen -- "'%s' already exists.\n\nLink '%s' to this file?" (the studio has no absolute path to show: both are the file's name); null when the file
+ * is new (the sheet gets an empty page of its own).
  */
-export function linkQuestion(file: string, hierarchy: ReadonlyArray<{ file: string }>): string | null {
+export function linkQuestion(file: string, hierarchy: ReadonlyArray<{ file: string }>, screens: readonly string[] = []): string | null {
   const f = sheetFileWithExtension(file);
-  if (!hierarchy.some((s) => s.file === f)) return null;
+  if (!hierarchy.some((s) => s.file === f) && !screens.includes(f)) return null;
   return `'${f}' already exists.\n\nLink '${f}' to this file?`;
 }

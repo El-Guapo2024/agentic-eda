@@ -20,6 +20,10 @@ use std::path::Path;
 /// `?net=` of the request, the net Highlight Net lit), each sheet says whether its screen has that net (`HIERARCHY_PANE::UpdateNetHighlight`:
 /// `ConnectionGraph()->GetAllSubgraphs( net )`'s sheets): a wire, a label or a power symbol of it. **Differs**: a screen shown on several paths keeps one name
 /// per wire (its first path's), so the other paths' rows of a local net are not lit.
+///
+/// `screens` are the files of every screen the project keeps (`design.sheet_contents`' keys), placed or not: a file a deleted sheet showed stays in the
+/// project, as a file on disk stays beside a KiCad project, and `SCH_EDIT_FRAME::ChangeSheetFile` asks before a new sheet is linked to it
+/// (`loadFromFile = wxFileExists( newAbsoluteFilename )`, UI-LEFT-2 SS15).
 pub fn hierarchy(dir: &Path, net: &str) -> Value {
     match kicad_engine::load_with_schematic(dir) {
         Ok((design, _)) => {
@@ -30,6 +34,7 @@ pub fn hierarchy(dir: &Path, net: &str) -> Value {
             json!({
                 "ok": true,
                 "virtual_root": design.schematic.as_ref().is_some_and(|s| s.extras.virtual_root),
+                "screens": design.sheet_contents.as_ref().map(|c| c.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
                 "sheets": eda_model::sheet_list::walk(&design).into_iter().map(|h| {
                     let page = h.effective_page();
                     let mut v = json!({ "path": h.path, "name": h.name, "file": h.file, "page": page });

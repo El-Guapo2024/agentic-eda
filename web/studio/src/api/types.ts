@@ -3438,6 +3438,9 @@ export interface SheetPin {
   size_nm?: Nm;
   bold?: boolean;
   italic?: boolean;
+  /** Its font face (`EDA_TEXT::GetFont`; absent: the default font) and colour (absent: `LAYER_SHEETLABEL`), `SchExtras::text_attrs` (UI-LEFT-2 SS15). */
+  font?: string | null;
+  color?: import("./schEditTypes").SchColor | null;
 }
 
 /** One child sheet placed directly on the schematic view currently being shown -- `GET /api/schematic`'s own `sheets` field, not the whole project's tree (see `sheet_path` for how deep the current view already is). */
@@ -3455,8 +3458,24 @@ export interface Sheet {
   fields_autoplaced?: FieldsAutoplaced;
   /** Sheet Properties' Style and Attributes (`SchExtras::sheet_props`); absent: the look the studio has always written, a 6 mil border and a pale yellow fill, no attribute. */
   props?: SheetProps | null;
+  /** Its records of the design variants (`SchExtras::sheet_variants`, `SCH_SHEET_VARIANT`), by variant name: the four attributes in that variant (UI-LEFT-2 SS15). */
+  variants?: Record<string, SheetVariantFlags> | null;
+  /** The attributes in the current variant, laid on by kicad-port/designVariants.ts `withVariant` when the sheet has a record of it (the painter's DNP cross). */
+  variant_flags?: SheetVariantFlags;
   /** The sheet's user fields (`SchExtras::sheet_fields`: `SCH_FIELD`s past Sheetname and Sheetfile), in order. */
-  user_fields?: Array<{ name: string; text: string; visible?: boolean; italic?: boolean }> | null;
+  user_fields?: Array<{ name: string; text: string; visible?: boolean; italic?: boolean; size_nm?: Nm; bold?: boolean; name_shown?: boolean }> | null;
+  /** Each user field's place from the sheet's corner, angle, justification, font and colour, by name (Sheet Properties' grid; UI-LEFT-2 SS15). */
+  user_field_looks?: Record<string, import("../kicad-port/sheetFieldLooks").SheetUserFieldLookJson>;
+  /** The user fields as they are drawn on the sheet (no id: not items of their own on the canvas). */
+  user_fields_drawn?: SchField[];
+}
+
+/** See `Sheet::variants`. */
+export interface SheetVariantFlags {
+  dnp?: boolean;
+  exclude_from_sim?: boolean;
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
 }
 
 /** See `Sheet::props`: the border's width (0: the default line width) and colour, the background colour (absent: KiCad's UNSPECIFIED), the four attributes. */

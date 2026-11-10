@@ -744,3 +744,85 @@ fn set_image_offset_keeps_the_point_an_image_is_scaled_about_and_is_one_undo_ste
     b.apply(&Cmd::SchEdit(SchCmd::SetLocked { ids: ids(&["img_a"]), locked: true })).unwrap();
     assert_eq!(err(&mut b, set(mm(1.0), Nm::ZERO)), "ops_locked");
 }
+
+// ------------------------------------------------------------------- UI-LEFT-2 SS15: the sheet fields' looks, a sheet pin's font and colour, the sheets' variants
+
+fn sym_at(id: &str) -> eda_model::ir::SymbolInstance {
+    eda_model::ir::SymbolInstance { id: id.into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+}
+
+#[test]
+fn a_sheet_user_fields_place_font_and_colour_are_kept_and_go_with_the_field() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    let f = |name: &str| eda_model::sch_extras::LabelField { name: name.into(), text: "x".into(), size_nm: mm(2.54), bold: true, name_shown: true, ..Default::default() };
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Rev")] });
+    let look = |name: &str, dx: Nm| crate::sch_props::SheetFieldLookEdit { name: name.into(), dx, dy: mm(-1.27), angle: 90_000, h: eda_model::ir::TextJustify::Left, v: eda_model::ir::TextVAlign::Top, font: Some("KiCad Font".into()), color: Some(red()) };
+    ok(&mut b, SchCmd::SetSheetFieldLooks { id: "sheet_a".into(), fields: vec![look("Rev", mm(2.54))] });
+    let place = sch_of(&b).extras.sheet_field_places["sheet_a"]["Rev"];
+    assert_eq!((place.dx, place.dy, place.angle, place.h, place.v), (mm(2.54), mm(-1.27), 90_000, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Top));
+    assert_eq!(sch_of(&b).extras.field_look("sheet_a", "Rev").map(|l| (l.font.clone(), l.color)), Some((Some("KiCad Font".to_string()), Some(red()))));
+    // the field on the page: at the sheet's corner plus its offset, vertical, its size and bold its own
+    let drawn = eda_engine::fields::sheet_user_fields(sch_of(&b), &sch_of(&b).sheets[0]);
+    assert_eq!((drawn[0].at, drawn[0].vertical, drawn[0].size_nm, drawn[0].bold, drawn[0].name_shown), ((mm(2.54).as_f64(), mm(-1.27).as_f64()), true, mm(2.54).as_f64(), true, true));
+    assert_eq!(err(&mut b, SchCmd::SetSheetFieldLooks { id: "sheet_a".into(), fields: vec![look("Rev", mm(2.54))] }), "ops_nothing_to_change");
+    assert_eq!(err(&mut b, SchCmd::SetSheetFieldLooks { id: "sheet_a".into(), fields: vec![look("Nope", mm(2.54))] }), "ops_unknown_field");
+    // a field renamed or deleted leaves no place or look behind
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![f("Revision")] });
+    assert!(sch_of(&b).extras.sheet_field_places.is_empty());
+    assert!(sch_of(&b).extras.field_look("sheet_a", "Rev").is_none());
+}
+
+#[test]
+fn a_sheet_pins_font_and_colour_are_set_text_attrs_and_go_with_the_pin() {
+    let mut root = SchematicSection::default();
+    let mut s = sheet("sheet_a", "A", "a.kicad_sch");
+    s.pins.push(eda_model::ir::SheetPin { id: "spin_a".into(), name: "IN".into(), shape: LabelShape::Input, at: p(Nm::ZERO, mm(2.54)) });
+    root.sheets.push(s);
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(root), &m, mm(0.1), mm(0.3));
+    ok(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: None, italic: None, color: Some(red()), href: None, font: Some("KiCad Font".into()), exclude_from_sim: None });
+    let a = &sch_of(&b).extras.text_attrs["spin_a"];
+    assert_eq!((a.color, a.font.as_deref()), (Some(red()), Some("KiCad Font")));
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text", "a pin's bold is Sheet Pin Properties' edit_sheet_pin");
+    ok(&mut b, SchCmd::DeleteSheetPin { id: "spin_a".into() });
+    assert!(sch_of(&b).extras.text_attrs.is_empty());
+}
+
+#[test]
+fn a_sheets_attributes_in_a_variant_are_its_record_and_reach_the_symbols_inside() {
+    let mut d = hierarchy();
+    d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().symbols.push(sym_at("R1"));
+    let m = ConstraintModel::default();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddDesignVariant { name: "Lite".into(), description: String::new() }).unwrap();
+    let set = |variant: &str, dnp: Option<bool>| SchCmd::SetSheetVariant { id: "sheet_a".into(), variant: variant.into(), dnp, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None };
+    ok(&mut b, set("Lite", Some(true)));
+    let sch = sch_of(&b);
+    assert!(eda_model::variants::sheet_flags(sch, "sheet_a", "Lite").dnp, "SetDNP( true, &instance, \"Lite\" )");
+    assert!(!eda_model::variants::sheet_flags(sch, "sheet_a", "").dnp, "the sheet's own flag is not the variant's");
+    // the symbols inside: their sheet path's flags (`SCH_SHEET_PATH::GetDNP( variant )`)
+    let path = vec!["sheet_a".to_string()];
+    assert!(eda_model::variants::sheet_path_flags(b.design(), &path, "Lite").dnp);
+    assert!(!eda_model::variants::sheet_path_flags(b.design(), &path, "").dnp);
+    assert_eq!(b.design().symbol_bom_flags("R1"), (false, false), "the board's footprint follows the default variant");
+    assert_eq!(err(&mut b, set("Lite", Some(true))), "ops_nothing_to_change");
+    assert_eq!(err(&mut b, set("", Some(true))), "ops_no_variant");
+    assert_eq!(err(&mut b, set("Nope", Some(true))), "ops_unknown_variant");
+    // a record that no longer differs is not kept; renaming and removing the variant take the sheet's records along
+    ok(&mut b, set("Lite", Some(false)));
+    assert!(sch_of(&b).extras.sheet_variants.is_empty());
+    ok(&mut b, set("Lite", Some(true)));
+    b.apply(&Cmd::RenameDesignVariant { name: "Lite".into(), new_name: "Pro".into() }).unwrap();
+    assert!(sch_of(&b).extras.sheet_variants["sheet_a"].contains_key("Pro"));
+    b.apply(&Cmd::RemoveDesignVariant { name: "Pro".into() }).unwrap();
+    assert!(sch_of(&b).extras.sheet_variants.is_empty());
+    // the sheet's own Do not populate and Exclude from BOM reach the footprint of a symbol inside it (`sheet.GetDNP()` in the netlist)
+    ok(&mut b, SchCmd::SetSheetProps { id: "sheet_a".into(), border_width_nm: None, border_color: None, fill_color: None, exclude_from_sim: None, exclude_from_bom: Some(true), exclude_from_board: None, dnp: Some(true) });
+    assert_eq!(b.design().symbol_bom_flags("R1"), (true, true));
+    // and the Fields Table's filters
+    let mut base = crate::fields_table::project_view(b.design()).unwrap();
+    crate::fields_table::with_sheet_flags(&mut base, b.design(), "");
+    let r1 = base.symbols.iter().find(|s| s.id == "R1").unwrap();
+    assert!(r1.dnp && r1.exclude_from_bom);
+}

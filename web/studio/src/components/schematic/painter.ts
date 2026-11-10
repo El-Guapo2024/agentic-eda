@@ -857,7 +857,8 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   ctx.strokeRect(x, y, w, h);
   ctx.restore();
   // "Do not populate": two diagonals over the sheet's box (`LAYER_DNP_MARKER`, 3 x `DEFAULT_LINE_WIDTH_MILS`)
-  if (props?.dnp) {
+  // (in the current variant: `aSheet->GetDNP( sheetPath, variant )`, UI-LEFT-2 SS15)
+  if (s.variant_flags ? s.variant_flags.dnp : props?.dnp) {
     ctx.save();
     ctx.strokeStyle = layerColor("LAYER_DNP_MARKER");
     ctx.lineCap = "round";
@@ -872,6 +873,9 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   }
 
   const nameSizeNm = 1_270_000;
+  // the sheet's user fields where Sheet Properties put them, as `SCH_PAINTER::draw( SCH_SHEET )` draws every field (UI-LEFT-2 SS15)
+  // (`SCH_FIELD::GetDefaultLayer`: a `FIELD_T::SHEET_USER` is on `LAYER_SHEETFIELDS`)
+  if (s.user_fields_drawn?.length) drawSchFields(ctx, s.user_fields_drawn, "", layerColor("LAYER_SHEETFIELDS"));
   if (s.fields?.length) {
     drawSchFields(ctx, s.fields);
   } else {
@@ -886,7 +890,8 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   ctx.lineWidth = Math.max(159_000, hair);
   for (const p of s.pins) {
     // a selected pin (`SCH_SHEET_PIN_T`) is drawn in the selection colour
-    const pinColor = p.id && selection.has(p.id) ? layerColor("LAYER_SELECTION_SHADOWS") : sheetLabelColor;
+    // (its own text colour, `GetTextColor`, unless "Override individual item colors"; UI-LEFT-2 SS15)
+    const pinColor = p.id && selection.has(p.id) ? layerColor("LAYER_SELECTION_SHADOWS") : p.color && p.color.a > 0 && !overrideSchItemColors() ? rgba(p.color) : sheetLabelColor;
     ctx.strokeStyle = pinColor;
     const [px, py] = p.at;
     const edge = px <= x ? "left" : px >= x + w ? "right" : py <= y ? "top" : "bottom";
@@ -900,7 +905,7 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
     // being Formatting's ratio of the size), along the sheet on the left and right borders and up it on the top and bottom ones (`SetSide`'s spin), centred on the flag; its size, bold
     // and italic are Sheet Pin Properties'
     const spec = schLabelDrawSpec({ net: p.name, at: [px, py], scope: "hierarchical", shape: p.shape, size_nm: sizeNm, bold: p.bold, italic: p.italic }, spin, paintedPen);
-    paintKicadText(ctx, spec, null, { color: pinColor, record: p.id ? { tag: "sch", id: p.id } : undefined });
+    paintKicadText(ctx, spec, p.font ?? null, { color: pinColor, record: p.id ? { tag: "sch", id: p.id } : undefined });
   }
   ctx.restore();
 }

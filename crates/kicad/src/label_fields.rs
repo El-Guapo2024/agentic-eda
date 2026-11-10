@@ -113,6 +113,44 @@ pub(crate) fn read_label_field_places(item: &[Sexpr], global: bool, label_at: Po
     (!out.is_empty()).then_some(out)
 }
 
+/// Where each of a sheet's user fields `names` is (`parseSchField`: `(at x y angle)`, `(effects .. (justify ..))`), as its offset from the sheet's corner `sheet_at`
+/// (`SchExtras::sheet_field_places`); a field at the corner, horizontal and centred keeps no entry (UI-LEFT-2 SS15). Read whether or not the sheet's fields are
+/// autoplaced: Autoplace Fields places Sheetname and Sheetfile only (`SCH_SHEET::AutoplaceFields`).
+pub(crate) fn read_sheet_user_field_places(item: &[Sexpr], sheet_at: Point, names: &[&str]) -> std::collections::BTreeMap<String, eda_model::sch_extras::SheetFieldPlace> {
+    let mut out = std::collections::BTreeMap::new();
+    for p in sexpr::find_all(item, "property") {
+        let Some(name) = sexpr::txt(p, 1) else { continue };
+        if !names.contains(&name) {
+            continue;
+        }
+        let Some(at) = sexpr::find(p, "at") else { continue };
+        let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
+        let angle = sexpr::num(at, 3).unwrap_or(0.0);
+        let look = crate::sch_extras_io::read_effects(p);
+        let has = |w: &str| look.justify.iter().any(|j| j == w);
+        let h = if has("left") {
+            TextJustify::Left
+        } else if has("right") {
+            TextJustify::Right
+        } else {
+            TextJustify::Center
+        };
+        let v = if has("top") {
+            TextVAlign::Top
+        } else if has("bottom") {
+            TextVAlign::Bottom
+        } else {
+            TextVAlign::Center
+        };
+        let (x, y) = (crate::import::sch_mm_to_nm(x), crate::import::sch_mm_to_nm(y));
+        let place = eda_model::sch_extras::SheetFieldPlace { dx: x - sheet_at.x, dy: y - sheet_at.y, angle: if eda_model::kicad_geom::keep_upright_is_vertical(angle) { 90_000 } else { 0 }, h, v };
+        if !place.is_default() {
+            out.insert(name.to_string(), place);
+        }
+    }
+    out
+}
+
 /// `parseSchText`'s `(property ..)`s of a label: its own fields, in order (`parseSchField`). A global label's Sheet References is not one of them: it is the label's
 /// mandatory field, shown as Schematic Setup says -- `parseSchField` knows it by its canonical name without regard to case, or by the name KiCad 6 wrote
 /// ("Intersheet References"), and only on a global label (on another label a field of that name is a field like any other). A field's place is not kept (see

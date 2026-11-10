@@ -556,7 +556,9 @@ impl Design {
     }
 
     /// The `DNP` and `Exclude from BOM` flags of the schematic symbol(s) of `id`: where the board's footprint takes them from
-    /// until they are edited on the footprint.
+    /// until they are edited on the footprint. A symbol inside a sheet marked Do not populate or Exclude from bill of materials has them too, on the sheet path
+    /// that sheet is on: the netlist Update PCB reads says so (`NETLIST_EXPORTER_XML::addSymbolFields`: `symbol->ResolveDNP( &sheet ) || sheet.GetDNP()`,
+    /// `ResolveExcludedFromBOM( &sheet ) || sheet.GetExcludedFromBOM()`, `SCH_SHEET_PATH::GetDNP`: any sheet of the path; UI-LEFT-2 SS15).
     pub fn symbol_bom_flags(&self, id: &str) -> (bool, bool) {
         let mut dnp = false;
         let mut no_bom = false;
@@ -565,6 +567,18 @@ impl Design {
         for sym in root.chain(sheets).filter(|s| s.id == id) {
             dnp |= sym.dnp;
             no_bom |= sym.exclude_from_bom;
+        }
+        // the sheets' flags, by the sheet paths the reference is on (only walked when a sheet has one of them)
+        let flagged = self.schematic.iter().chain(self.sheet_contents.iter().flat_map(|c| c.values())).any(|s| s.extras.sheet_props.values().any(|p| p.dnp || p.exclude_from_bom));
+        if flagged && !(dnp && no_bom) {
+            for e in crate::sheet_list::walk(self) {
+                let Some(screen) = crate::sheet_list::screen_of(self, &e.path) else { continue };
+                if screen.symbols.iter().any(|s| crate::sheet_list::reference_under(screen, s, &e.path) == id) {
+                    let f = crate::variants::sheet_path_flags(self, &e.path, "");
+                    dnp |= f.dnp;
+                    no_bom |= f.exclude_from_bom;
+                }
+            }
         }
         (dnp, no_bom)
     }

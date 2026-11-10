@@ -124,6 +124,31 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// Sheet Properties' Attributes in the current variant: see [`SchCmd::SetSheetVariant`](crate::sch_edit::SchCmd::SetSheetVariant).
+    pub(crate) fn set_sheet_variant(&mut self, id: &str, variant: &str, flags: &VariantFlags) -> Result<(), Vec<CheckResult>> {
+        if variant.is_empty() {
+            return Err(fail("ops_no_variant", "variant", "the default variant is the sheet itself: set_sheet_props"));
+        }
+        let variant = self.existing_variant(variant)?;
+        let sch = self.schematic_mut()?;
+        if !sch.sheets.iter().any(|s| s.id == id) {
+            return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the sheet is locked"));
+        }
+        let mut changed = false;
+        for (flag, value) in flags.each() {
+            if let Some(v) = value {
+                changed |= variants::set_sheet_flag(sch, id, &variant, flag, v);
+            }
+        }
+        if !changed {
+            return Err(fail("ops_nothing_to_change", id, "the sheet already has these attributes in this variant"));
+        }
+        Ok(())
+    }
+
     /// The current variant's edit of the symbols `ids` (`SCH_SYMBOL::SetDNP` / `SetExcludedFromBOM` / `SetExcludedFromBoard` / `SetExcludedFromSim` /
     /// `SetExcludedFromPosFiles` and `SetFieldText` with the variant): each flag given and each field text given, on the record of `variant` of every reference,
     /// as `eda_model::variants::set_flag` and `set_field` keep it. The references are looked for on every sheet (the Fields Table covers the design; a later sheet

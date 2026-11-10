@@ -6,7 +6,7 @@
 // `eeschema/sch_sheet_path.h`) and the list of variants with their descriptions in the project file (`SCHEMATIC_SETTINGS::m_VariantDescriptions`,
 // `schematic.variants`). The default variant has no name of its own: "< Default >" is only a placeholder for the UI controls
 // (`common/string_utils.cpp` `defaultVariantName`, not translated), and an empty name means the default everywhere else.
-import type { DesignVariantInfo, Schematic, SchematicSymbol, SymbolVariantInfo } from "../api/types";
+import type { DesignVariantInfo, Schematic, SchematicSymbol, Sheet, SymbolVariantInfo } from "../api/types";
 import { strNumCmp } from "./sheetPages";
 
 /** `GetDefaultVariantName()`: the placeholder the variant controls list first (`wxT( "< Default >" )`, never translated). */
@@ -195,8 +195,24 @@ export function symbolInVariant(sym: SchematicSymbol, variant: string): Schemati
  * the variant). The same object for the default variant, so a memo keyed on it does not change.
  */
 export function withVariant(sch: Schematic, variant: string): Schematic {
-  if (variant === "" || !sch.symbols.some((s) => s.variants?.[variant])) return sch;
-  return { ...sch, symbols: sch.symbols.map((s) => symbolInVariant(s, variant)) };
+  const symbols = variant !== "" && sch.symbols.some((s) => s.variants?.[variant]);
+  const sheets = variant !== "" && (sch.sheets ?? []).some((s) => s.variants?.[variant]);
+  if (!symbols && !sheets) return sch;
+  return { ...sch, ...(symbols ? { symbols: sch.symbols.map((s) => symbolInVariant(s, variant)) } : {}), ...(sheets ? { sheets: sch.sheets.map((s) => sheetInVariant(s, variant)) } : {}) };
+}
+
+/** A sheet's four attributes in `variant` (`SCH_SHEET::GetDNP( &instance, variant )` ...): its record of the variant, else its own (UI-LEFT-2 SS15). */
+export function sheetFlags(sheet: Pick<Sheet, "props" | "variants">, variant: string): { dnp: boolean; exclude_from_sim: boolean; exclude_from_bom: boolean; exclude_from_board: boolean } {
+  const rec = variant !== "" ? sheet.variants?.[variant] : undefined;
+  const own = sheet.props ?? {};
+  const src = rec ?? own;
+  return { dnp: !!src.dnp, exclude_from_sim: !!src.exclude_from_sim, exclude_from_bom: !!src.exclude_from_bom, exclude_from_board: !!src.exclude_from_board };
+}
+
+/** The sheet as `variant` shows it: `variant_flags`, its attributes in the variant (the DNP cross the painter draws, `aSheet->GetDNP( sheetPath, variant )`); its style its own. */
+export function sheetInVariant(sheet: Sheet, variant: string): Sheet {
+  if (variant === "" || !sheet.variants?.[variant]) return sheet;
+  return { ...sheet, variant_flags: sheetFlags(sheet, variant) };
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- the edits

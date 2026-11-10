@@ -41,3 +41,9 @@ test("ChangeSheetFile's question: only for a file the hierarchy already shows, t
   assert.equal(linkQuestion("power.kicad_sch", hierarchy), null);
   assert.equal(sheetFileWithExtension(" power "), "power.kicad_sch");
 });
+
+test("ChangeSheetFile's question: also for a screen the project keeps that no sheet places (wxFileExists, UI-LEFT-2 SS15)", () => {
+  const hierarchy = [{ file: "" }];
+  assert.equal(linkQuestion("orphan", hierarchy, ["orphan.kicad_sch"]), "'orphan.kicad_sch' already exists.\n\nLink 'orphan.kicad_sch' to this file?");
+  assert.equal(linkQuestion("fresh", hierarchy, ["orphan.kicad_sch"]), null);
+});

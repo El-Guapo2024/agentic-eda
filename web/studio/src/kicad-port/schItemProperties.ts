@@ -27,7 +27,7 @@ import { registerSchTableProperties, schTableItemOf } from "./schTableProperties
 import { textBoxMargins } from "./schTextBox";
 import { drawnUnit, unitCountOf } from "./schUnits";
 import { letterSubReference } from "./unitLetter";
-import { setSymbolVariantCmd, type VariantFlagKey } from "./designVariants";
+import { setSymbolVariantCmd, sheetFlags, type VariantFlagKey } from "./designVariants";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -985,8 +985,10 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         owner: "SCH_SHEET",
         name,
         kind: "bool",
-        get: (i) => !!(i.sheet!.props as Record<string, unknown> | null | undefined)?.[key],
-        set: (i, v) => (!!(i.sheet!.props as Record<string, unknown> | null | undefined)?.[key] === Boolean(v) ? [] : [sheetCmd(i, { [key]: Boolean(v) })]),
+        // in the current variant (`SCH_SHEET::GetDNPProp`: `GetDNP( &CurrentSheet(), GetCurrentVariant() )`; `SetDNPProp` sets the variant's record, UI-LEFT-2 SS15)
+        get: (i, c) => sheetFlags(i.sheet!, c.variant ?? "")[key],
+        set: (i, v, c) =>
+          sheetFlags(i.sheet!, c.variant ?? "")[key] === Boolean(v) ? [] : c.variant ? [{ op: "sch_edit", verb: "set_sheet_variant", id: i.id, variant: c.variant, [key]: Boolean(v) } as unknown as Cmd] : [sheetCmd(i, { [key]: Boolean(v) })],
       },
       ATTRIBUTES
     );

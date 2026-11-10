@@ -782,11 +782,16 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut sheet_locked: Vec<bool> = Vec::new();
     // how each sheet pin's text is set, by the pin's id (`SchExtras::sheet_pin_looks`)
     let mut sheet_pin_looks: Vec<(String, eda_model::sch_extras::LabelLook)> = Vec::new();
+    // ... and its font face and colour (`SchExtras::text_attrs` under the pin's id, `parseEDA_TEXT`'s `T_face` and `T_color`; UI-LEFT-2 SS15)
+    let mut sheet_pin_attrs: Vec<(String, eda_model::sch_extras::TextAttrs)> = Vec::new();
     // the pages of a sheet on the paths after its first (`SchExtras::sheet_pages`)
     let mut sheet_pages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
     let mut sheet_user_fields: Vec<(String, Vec<eda_model::sch_extras::LabelField>)> = Vec::new();
+    let mut sheet_field_places_read: Vec<(String, BTreeMap<String, eda_model::sch_extras::SheetFieldPlace>)> = Vec::new();
+    let mut sheet_field_looks_read: Vec<(String, BTreeMap<String, eda_model::sch_extras::FieldFontLook>)> = Vec::new();
     // each sheet's style and attributes (`SchExtras::sheet_props`), by its id
     let mut sheet_props_read: Vec<(String, eda_model::sch_extras::SheetProps)> = Vec::new();
+    let mut sheet_variants_read: Vec<(String, BTreeMap<String, eda_model::sch_extras::SheetVariant>)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         // `parseSheet`: `(stroke ..)` sets the border's width and colour, `(fill ..)` the background colour, `in_bom` / `on_board` the inverted exclusions
@@ -802,6 +807,11 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             props.exclude_from_bom = !crate::sch_extras_io::parse_bool(s, "in_bom").unwrap_or(true);
             props.exclude_from_board = !crate::sch_extras_io::parse_bool(s, "on_board").unwrap_or(true);
             props.dnp = crate::sch_extras_io::parse_bool(s, "dnp").unwrap_or(false);
+            // its records of the design variants (`parseSheet`'s `T_instances` > `T_path` > `T_variant`, UI-LEFT-2 SS15)
+            let records = sheet_variants_of(s, &props, file_version);
+            if !records.is_empty() {
+                sheet_variants_read.push((id.clone(), records));
+            }
             if props != eda_model::sch_extras::SheetProps::legacy() {
                 sheet_props_read.push((id.clone(), props));
             }
@@ -810,10 +820,20 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         let file = sheet_property_text(s, "Sheetfile").unwrap_or_default();
         // the sheet's user fields (r2 B-L1): every property but the two mandatory ones
         let user: Vec<eda_model::sch_extras::LabelField> = crate::label_fields::read_label_fields(s, false).into_iter().filter(|f| !is_sheet_field(&f.name, "Sheetname") && !is_sheet_field(&f.name, "Sheetfile")).collect();
+        let at = sexpr::find(s, "at").and_then(point_mm).unwrap_or(SPoint::new(0.0, 0.0));
         if !user.is_empty() && !id.is_empty() {
+            // where each user field is (`parseSchField`'s `(at x y angle)` and `(justify ..)`), from the sheet's corner (UI-LEFT-2 SS15)
+            let places = crate::label_fields::read_sheet_user_field_places(s, mm_point_to_um(at), &user.iter().map(|f| f.name.as_str()).collect::<Vec<_>>());
+            if !places.is_empty() {
+                sheet_field_places_read.push((id.clone(), places));
+            }
             sheet_user_fields.push((id.clone(), user));
         }
-        let at = sexpr::find(s, "at").and_then(point_mm).unwrap_or(SPoint::new(0.0, 0.0));
+        // the font and colour of each of its fields (`(face ..)`, `(color ..)`; `SchExtras::field_looks` under the sheet's id)
+        let looks = field_font_looks(s);
+        if !looks.is_empty() && !id.is_empty() {
+            sheet_field_looks_read.push((id.clone(), looks));
+        }
         let size = sexpr::find(s, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))).unwrap_or((0.0, 0.0));
         let pins = sexpr::find_all(s, "pin")
             .filter_map(|p| {
@@ -826,6 +846,11 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 let look = eda_model::sch_extras::LabelLook { size_nm: if effects.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { effects.size_nm }, bold: effects.bold, italic: effects.italic, auto_rotate: false };
                 if !id.is_empty() && !look.is_default() {
                     sheet_pin_looks.push((id.clone(), look));
+                }
+                let attrs = crate::sch_extras_io::read_text_attrs(p);
+                let attrs = eda_model::sch_extras::TextAttrs { color: attrs.color, font: attrs.font, ..Default::default() };
+                if !id.is_empty() && !attrs.is_default() {
+                    sheet_pin_attrs.push((id.clone(), attrs));
                 }
                 Some(eda_model::ir::SheetPin { id, name, shape, at: mm_point_to_um(at) })
             })
@@ -932,6 +957,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         }
         sch.field_layout.extend(power_field_places);
         sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
+        sch.extras.text_attrs.extend(sheet_pin_attrs);
         sch.extras.sheet_pages.extend(sheet_pages);
         // the local power symbols of the file's library cache (`(power local)`, `parseSymbol`'s `T_power`)
         let local_libs: BTreeSet<String> = sexpr::find(root, "lib_symbols")
@@ -954,6 +980,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             }
         }
         sch.extras.sheet_fields.extend(sheet_user_fields);
+        sch.extras.sheet_field_places.extend(sheet_field_places_read);
+        sch.extras.sheet_variants.extend(sheet_variants_read);
+        sch.extras.field_looks.extend(sheet_field_looks_read);
         sch.extras.sheet_props.extend(sheet_props_read);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
@@ -1657,6 +1686,40 @@ fn property_text(item: &[Sexpr], name: &str) -> Option<String> {
 /// (`SymbolPathOverride::sheet_path`): `/<root>/<a>/<b>` -> `[a, b]`. A path
 /// of the root alone (a symbol on the root sheet, whose reference is its
 /// own) or with no components at all is skipped.
+/// A sheet's records of the design variants (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_PARSER::parseSheet`, `T_instances` > `T_path` > `T_variant`): each
+/// `(variant (name ..) ..)` starts as the sheet's own flags (`InitializeAttributes`) and takes `dnp`, `exclude_from_sim`, `in_bom` (the exclusion itself before
+/// 20260306, negated from it on) and `on_board` (negated). The first path's record of a name is kept (the design keeps one per sheet); one with no differential
+/// is not kept. Its field texts are not read (UI-LEFT-2 SS15).
+fn sheet_variants_of(item: &[Sexpr], base: &eda_model::sch_extras::SheetProps, version: f64) -> BTreeMap<String, eda_model::sch_extras::SheetVariant> {
+    let mut out = BTreeMap::new();
+    let Some(instances) = sexpr::find(item, "instances") else { return out };
+    let yes = |v: &[Sexpr], name: &str| sexpr::find(v, name).and_then(|n| sexpr::txt(n, 1)).map(|t| t == "yes" || t == "true");
+    for project in sexpr::find_all(instances, "project") {
+        for path in sexpr::find_all(project, "path") {
+            for v in sexpr::find_all(path, "variant") {
+                let Some(name) = sexpr::find(v, "name").and_then(|n| sexpr::txt(n, 1)) else { continue };
+                let mut rec = eda_model::sch_extras::SheetVariant::initialized(base);
+                if let Some(b) = yes(v, "dnp") {
+                    rec.dnp = b;
+                }
+                if let Some(b) = yes(v, "exclude_from_sim") {
+                    rec.exclude_from_sim = b;
+                }
+                if let Some(b) = yes(v, "in_bom") {
+                    rec.exclude_from_bom = if version >= 20260306.0 { !b } else { b };
+                }
+                if let Some(b) = yes(v, "on_board") {
+                    rec.exclude_from_board = !b;
+                }
+                if rec.has_differentials(base) {
+                    out.entry(name.to_string()).or_insert(rec);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// A placed symbol's records of the design variants (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`, `T_instances` > `T_path` > `T_variant`):
 /// each `(variant (name ..) ..)` of each path starts as the symbol's own flags (`variant.InitializeAttributes( *symbol )`) and takes the flags and field
 /// texts it says -- `dnp` and `exclude_from_sim` as they are, `on_board` and `in_pos_files` negated, `in_bom` as the exclusion itself in a file before

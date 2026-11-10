@@ -31,6 +31,28 @@ fn specified(c: SchColor) -> Option<SchColor> {
     (c != SchColor { r: 0, g: 0, b: 0, a: 0 }).then_some(c)
 }
 
+/// One user field's looks in [`SchCmd::SetSheetFieldLooks`](crate::sch_edit::SchCmd::SetSheetFieldLooks): its place from the sheet's corner, angle and justification,
+/// its font and colour.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetFieldLookEdit {
+    pub name: String,
+    #[serde(default, deserialize_with = "eda_model::units::de")]
+    pub dx: Nm,
+    #[serde(default, deserialize_with = "eda_model::units::de")]
+    pub dy: Nm,
+    #[serde(default)]
+    pub angle: eda_model::ir::Millideg,
+    #[serde(default)]
+    pub h: eda_model::ir::TextJustify,
+    #[serde(default)]
+    pub v: eda_model::ir::TextVAlign,
+    #[serde(default)]
+    pub font: Option<String>,
+    #[serde(default)]
+    pub color: Option<SchColor>,
+}
+
 /// A sheet's file as `EnsureFileExtension( name, KiCadSchematicFileExtension )` makes it: a bare file name (no folders, as `Cmd::AddSheet` requires)
 /// ending in `.kicad_sch`.
 fn sheet_file_name(file: &str) -> Result<String, Vec<CheckResult>> {
@@ -372,8 +394,14 @@ impl<'a> Board<'a> {
             let text_box = sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, eda_model::sch_extras::SchGraphicKind::TextBox { .. }));
             // a directive label is an `SCH_TEXT` too: its "Font" and "Color" rows (`EDA_TEXT_DESC`; its bold, italic and link are masked, `SCH_DIRECTIVE_LABEL_DESC`)
             let directive = sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, eda_model::sch_extras::SchGraphicKind::Directive { .. }));
-            if !text && !label && !text_box && !directive {
-                return Err(fail("ops_unknown_item", id, "no free text, text box or label with this id"));
+            // a sheet pin is an `EDA_TEXT` too: Sheet Pin Properties' Font and Color (`m_fontCtrl`, `m_textColorSwatch`; its size, bold and italic are
+            // `edit_sheet_pin`'s, UI-LEFT-2 SS15)
+            let sheet_pin = sch.sheets.iter().any(|s| s.pins.iter().any(|p| &p.id == id));
+            if !text && !label && !text_box && !directive && !sheet_pin {
+                return Err(fail("ops_unknown_item", id, "no free text, text box, label or sheet pin with this id"));
+            }
+            if sheet_pin && (edit.bold.is_some() || edit.italic.is_some() || edit.href.is_some() || edit.exclude_from_sim.is_some()) {
+                return Err(fail("ops_bad_text", id, "a sheet pin's bold and italic are set in Sheet Pin Properties, and a sheet pin has no hyperlink or simulation exclusion"));
             }
             if directive && (edit.bold.is_some() || edit.italic.is_some() || edit.href.is_some() || edit.exclude_from_sim.is_some()) {
                 return Err(fail("ops_bad_text", id, "a directive label has no bold, italic, hyperlink or simulation exclusion of its own"));
@@ -521,6 +549,45 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// Sheet Properties' looks of the user fields: see [`SchCmd::SetSheetFieldLooks`](crate::sch_edit::SchCmd::SetSheetFieldLooks).
+    pub(crate) fn set_sheet_field_looks(&mut self, id: &str, fields: &[SheetFieldLookEdit]) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if !sch.sheets.iter().any(|s| s.id == id) {
+            return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the sheet is locked"));
+        }
+        let names: Vec<String> = sch.extras.sheet_fields.get(id).into_iter().flatten().map(|f| f.name.clone()).collect();
+        let mut changed = false;
+        for f in fields {
+            if !names.contains(&f.name) {
+                return Err(fail("ops_unknown_field", &f.name, "the sheet has no user field of this name"));
+            }
+            // `FIELDS_GRID_TABLE::SetValue( FDC_ORIENTATION )`: "Horizontal" or "Vertical"
+            let place = eda_model::sch_extras::SheetFieldPlace { dx: f.dx, dy: f.dy, angle: if f.angle.rem_euclid(180_000) == 90_000 { 90_000 } else { 0 }, h: f.h, v: f.v };
+            let places = sch.extras.sheet_field_places.entry(id.to_string()).or_default();
+            let before = places.get(&f.name).copied().unwrap_or_default();
+            if place != before {
+                changed = true;
+                if place.is_default() {
+                    places.remove(&f.name);
+                } else {
+                    places.insert(f.name.clone(), place);
+                }
+            }
+            if places.is_empty() {
+                sch.extras.sheet_field_places.remove(id);
+            }
+            let look = eda_model::sch_extras::FieldFontLook { font: f.font.as_deref().and_then(crate::sch_symbol_props::font_of), color: f.color.and_then(specified) };
+            changed |= sch.extras.set_field_look(id, &f.name, look);
+        }
+        if !changed {
+            return Err(fail("ops_nothing_to_change", id, "the sheet's fields already look so"));
+        }
+        Ok(())
+    }
+
     /// Sheet Properties' user fields: see [`SchCmd::SetSheetFields`](crate::sch_edit::SchCmd::SetSheetFields).
     pub(crate) fn set_sheet_fields(&mut self, id: &str, fields: &[eda_model::sch_extras::LabelField]) -> Result<(), Vec<CheckResult>> {
         let sch = self.schematic_mut()?;
@@ -548,6 +615,17 @@ impl<'a> Board<'a> {
         let before = sch.extras.sheet_fields.get(id).cloned().unwrap_or_default();
         if kept == before {
             return Err(fail("ops_nothing_to_change", id, "the sheet already has these fields"));
+        }
+        // a field gone (deleted, or renamed: its new name's looks come with `set_sheet_field_looks`) leaves no place or look behind
+        if let Some(places) = sch.extras.sheet_field_places.get_mut(id) {
+            places.retain(|name, _| kept.iter().any(|k| &k.name == name));
+            if places.is_empty() {
+                sch.extras.sheet_field_places.remove(id);
+            }
+        }
+        let gone: Vec<String> = sch.extras.field_looks.get(id).into_iter().flat_map(|l| l.keys()).filter(|n| *n != "Sheetname" && *n != "Sheetfile" && !kept.iter().any(|k| &k.name == *n)).cloned().collect();
+        for name in gone {
+            sch.extras.set_field_look(id, &name, eda_model::sch_extras::FieldFontLook::default());
         }
         if kept.is_empty() {
             sch.extras.sheet_fields.remove(id);

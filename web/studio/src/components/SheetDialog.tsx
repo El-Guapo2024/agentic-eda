@@ -3,7 +3,7 @@
 // `EditSheetProperties` -- the name and the file of the new sheet, "Untitled Sheet" / "untitled.kicad_sch"
 // as every new sheet starts (`DrawSheet`: `SetText( wxT( "Untitled Sheet" ) )`, `wxT( "untitled" ) + ext`; the file does not follow the name, and a name another
 // sheet has is allowed: ERC reports it, UI-LEFT S21). Confirming commits `add_sheet` (a new empty screen for a new file); a file a sheet of the hierarchy
-// already shows is linked only after `ChangeSheetFile`'s question, "'%s' already exists.\n\nLink '%s' to this file?" (Cancel keeps the dialog open);
+// already shows, or a screen the project keeps that no sheet places (a deleted sheet's), is linked only after `ChangeSheetFile`'s question, "'%s' already exists.\n\nLink '%s' to this file?" (Cancel keeps the dialog open);
 // cancelling leaves nothing behind, like `cleanup()` in the C++.
 //
 // Same "draw first, small dialog last" shape LabelDialog/TextDialog use (PARITY-sch.md).
@@ -15,7 +15,7 @@ import { fetchSheetFileCheck } from "../api/hierarchyClient";
 import type { SheetFileCheck } from "../api/hierarchyTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { DEFAULT_SHEET_FILE, DEFAULT_SHEET_NAME, linkQuestion } from "../kicad-port/schSheet";
-import { fetchHierarchy } from "../api/schControlClient";
+import { fetchHierarchyFiles } from "../api/schControlClient";
 import { askConfirm } from "./library/libraryDialogs";
 import { rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { describeCheck, importNumbering, importSheetCmd, sheetFileOfFile, sheetNameOfFile } from "../kicad-port/schImportSheet";
@@ -63,8 +63,10 @@ export function SheetDialog() {
   const submit = async () => {
     if (!valid) return;
     if (!source) {
-      // `ChangeSheetFile` for a new sheet: a file the hierarchy already shows (`SearchHierarchy`) is linked only if the user says so
-      const question = linkQuestion(file, await fetchHierarchy().catch(() => []));
+      // `ChangeSheetFile` for a new sheet: a file the hierarchy already shows (`SearchHierarchy`), or a screen the project keeps that no sheet places
+      // (`wxFileExists`), is linked only if the user says so
+      const known = await fetchHierarchyFiles().catch(() => ({ sheets: [], screens: [] as string[] }));
+      const question = linkQuestion(file, known.sheets, known.screens);
       if (question && !(await askConfirm({ title: "Confirmation", message: question, okLabel: "OK", cancelLabel: "Cancel" }))) return;
     }
     close();
