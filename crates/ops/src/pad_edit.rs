@@ -107,7 +107,7 @@ impl PadFrame {
     }
 }
 
-fn rotate(p: Point, angle_mdeg: i64) -> Point {
+pub(crate) fn rotate(p: Point, angle_mdeg: i64) -> Point {
     let (s, c) = (angle_mdeg as f64 / 1000.0).to_radians().sin_cos();
     Point { x: Nm::kiround(p.x.as_f64() * c - p.y.as_f64() * s), y: Nm::kiround(p.x.as_f64() * s + p.y.as_f64() * c) }
 }

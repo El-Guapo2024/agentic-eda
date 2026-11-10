@@ -133,6 +133,8 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // Mirror Horizontally / Vertically (`EDIT_TOOL::Mirror`, no default hotkey): the mirrorable items of the selection about the modification point, on their own layers.
     m.set("pcbnew.InteractiveEdit.mirrorHoriontally", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("left_right", gridSnap));
     m.set("pcbnew.InteractiveEdit.mirrorVertically", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("top_bottom", gridSnap));
+    // Swap (Alt+S, `EDIT_TOOL::Swap`): the selection in selection order, two pads trading their copper's places (`PAD::SwapShapePositions`), one undo step (UI-LEFT-2 PP15).
+    m.set("pcbnew.InteractiveEdit.swap", () => ctx.fpApi.getState().selection.size > 1 && void ctx.fpApi.swapSelection());
     // Show Properties (`ACTIONS::showProperties`, `FOOTPRINT_EDITOR_CONTROL::ToggleProperties`): the frame's `PCB_PROPERTIES_PANEL` beside the Libraries tree (UI-LEFT Y3).
     m.set("common.Control.showProperties", () => toggleDockPane("fpProperties"));
     // Copy / Cut / Paste (`EDIT_TOOL::copyToClipboard` / `cutToClipboard`, `PCB_CONTROL::Paste` in the footprint editor, UI-LEFT-2 FF1): KiCad's clipboard footprint text

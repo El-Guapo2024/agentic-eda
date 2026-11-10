@@ -171,8 +171,8 @@ test("Mirror, Draw Bezier Curve and Increment are the Symbol tab's too (UI-LEFT 
   }
 });
 
-test("Mirror, the line modes, the display modes and the Appearance manager run on the Footprint tab too (UI-LEFT F2), not on the schematic", () => {
-  for (const name of ["pcbnew.InteractiveEdit.mirrorHoriontally", "pcbnew.InteractiveEdit.mirrorVertically", "pcbnew.EditorControl.lineMode45", "pcbnew.Control.padDisplayMode", "pcbnew.Control.textOutlines", "pcbnew.Control.showLayersManager"]) {
+test("Mirror, Swap, the line modes, the display modes and the Appearance manager run on the Footprint tab too (UI-LEFT F2, UI-LEFT-2 PP15), not on the schematic", () => {
+  for (const name of ["pcbnew.InteractiveEdit.mirrorHoriontally", "pcbnew.InteractiveEdit.mirrorVertically", "pcbnew.InteractiveEdit.swap", "pcbnew.EditorControl.lineMode45", "pcbnew.Control.padDisplayMode", "pcbnew.Control.textOutlines", "pcbnew.Control.showLayersManager"]) {
     assert.equal(isActionEnabledForTab(name, "footprint", true), true, name);
     assert.equal(isActionEnabledForTab(name, "pcb", true), true, name);
     assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);

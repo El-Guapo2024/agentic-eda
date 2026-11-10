@@ -2115,6 +2115,8 @@ export type Cmd =
   | { op: "set_locked"; ids: string[]; locked: boolean }
   /** `EDIT_TOOL::Swap` -- cyclic pose shift across `parts` in selection order (position, rotation, side). */
   | { op: "swap_chain"; parts: string[] }
+  /** `EDIT_TOOL::Swap` (Alt+S) of any items in selection order (crates/ops/src/pcb_swap.rs, kicad-port/pcbSwap.ts); `centres`: each group's `GetPosition()`, the centre of its box. */
+  | { op: "swap_items"; ids: string[]; centres?: Record<string, PointXY> }
   /** `ZONE_CREATE_HELPER::performZoneCutout` -- subtract a closed polygon from one zone's outline. */
   | { op: "zone_cutout"; id: string; cutout: PointXY[] }
   /** `pcbnew.EditorControl.zoneMerge` -- the zones among `ids` (selection order) that touch the first one, merged into it. */

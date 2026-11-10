@@ -44,6 +44,8 @@ export type FpItemCmd =
   /** Clockwise-positive on the screen, as `rotate_items`. */
   | { verb: "rotate"; footprint: string; ids: string[]; pivot: PointXY; angle_millideg: number }
   | { verb: "mirror"; footprint: string; ids: string[]; pivot: PointXY; direction: FlipDirectionWire }
+  /** `EDIT_TOOL::Swap` (Alt+S), `ids` in selection order; `centres`: each group's `GetPosition()`, the centre of its box. */
+  | { verb: "swap"; footprint: string; ids: string[]; centres?: Record<string, PointXY> }
   | { verb: "delete"; footprint: string; ids: string[] }
   | { verb: "edit_field"; footprint: string; name: string; text: string; layout: FieldLayoutCmd }
   /** `look`: the shape dialog's Line style and hatched Fill (UI-LEFT F5); left out, the graphic keeps its own. */

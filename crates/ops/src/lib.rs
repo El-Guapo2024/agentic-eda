@@ -121,6 +121,7 @@ mod table_paste_cells;
 mod sch_cross_refs;
 pub use pcb_tables::TableCmd;
 mod pcb_transform;
+mod pcb_swap;
 mod tuning;
 mod zone_overrides;
 mod pad_renumber;
@@ -778,6 +779,15 @@ pub enum Cmd {
     /// second's pose, ..., the last on the first's. Two parts is a plain
     /// pose swap. One Cmd so the whole chain is one undo step.
     SwapChain { parts: Vec<String> },
+    /// `EDIT_TOOL::Swap` (`Alt+S`) of any items, in selection order: each pair `(ids[i], ids[i + 1])` trades positions as each item's
+    /// `GetPosition` / `SetPosition` has it, two footprints their side and orientation too, two items of one type their layers -- see
+    /// [`pcb_swap`]. `centres` holds each group's `GetPosition()` (the centre of its bounding box, which the studio's painter works out).
+    /// Which items (pads for their footprints, a group for its members, no straight track, nothing locked) is the caller's. One undo step.
+    SwapItems {
+        ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        centres: BTreeMap<String, Point>,
+    },
     /// `EDIT_TOOL::BooleanPolygons` (Merge / Subtract / Intersect Polygons,
     /// `item_modification_routine.cpp`): `ids` are rectangles, circles and
     /// polygons in the order the routine takes them (the first is the base
@@ -2827,6 +2837,7 @@ impl Cmd {
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
+            Cmd::SwapItems { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::BooleanShapes { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
@@ -3017,7 +3028,7 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
             Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
             Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::MirrorItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
-            Cmd::SwapChain { .. } | Cmd::MoveExact { .. } => false,
+            Cmd::SwapChain { .. } | Cmd::SwapItems { .. } | Cmd::MoveExact { .. } => false,
             // the autoplacer moves footprints as the edit tools do: what was routed to them stays where it is
             Cmd::Autoplace(_) => false,
             Cmd::PlaceAt { part, .. } => board.pose_of(part).is_some(),
@@ -3407,6 +3418,7 @@ impl<'a> Board<'a> {
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
+            Cmd::SwapItems { ids, centres } => self.swap_items(ids, centres),
             Cmd::BooleanShapes { operation, ids } => pcb_edit::boolean_shapes(self.drawings_mut(), *operation, ids),
             Cmd::ZoneCutout { id, cutout } => self.zone_cutout(id, cutout),
             Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
@@ -7620,6 +7632,8 @@ mod sch_variants_tests;
 mod board_setup_tests;
 #[cfg(test)]
 mod pcb_transform_tests;
+#[cfg(test)]
+mod pcb_swap_tests;
 #[cfg(test)]
 mod array_tests;
 #[cfg(test)]

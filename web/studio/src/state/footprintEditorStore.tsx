@@ -30,6 +30,7 @@ import type { BezierGeom } from "../kicad-port/bezierGeom";
 import type { AngleSnapMode } from "../kicad-port/pcbParityState";
 import type { FlipDirectionWire, FpItemWire } from "../api/fpItemTypes";
 import { fpAllIds, fpGroupCmd, fpLeaves, fpMirrorCmd, fpMoveCmd, fpRotateCmd, fpUngroupCmd, type Snap } from "../kicad-port/fpItems";
+import { fpSwapCmd } from "../kicad-port/pcbSwap";
 import type { FpDimDraw, FpDimKind, FpDrawnTable } from "../kicad-port/fpDrawTools";
 import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
 import type { CmdZone } from "../api/types";
@@ -560,6 +561,8 @@ export interface FootprintEditorApi {
   rotateSelection: (quarterTurnsCcw: number, snap?: Snap, stepDeg?: number) => Promise<void>;
   /** `EDIT_TOOL::Mirror` (`mirrorH` left-right, `mirrorV` top-bottom) of the selection, one undo step. */
   mirrorSelection: (direction: FlipDirectionWire, snap?: Snap) => Promise<void>;
+  /** `EDIT_TOOL::Swap` (Alt+S) of the selection in selection order: two pads trade their copper's places, other items their positions and, of one type, layers (kicad-port/pcbSwap.ts), one undo step. */
+  swapSelection: () => Promise<void>;
   /** `PCB_GROUP_TOOL::Group` (Ctrl+G) / `GROUP_TOOL::Ungroup` (Ctrl+Shift+G) of the selection; the new group is selected. */
   groupSelection: () => Promise<void>;
   ungroupSelection: () => Promise<void>;
@@ -1037,6 +1040,12 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const st = stateRef.current;
       if (!st.name || !st.footprint) return;
       const cmd = fpMirrorCmd(st.footprint, st.name, [...st.selection], direction, snap);
+      if (cmd) await runCmd(cmd);
+    },
+    swapSelection: async () => {
+      const st = stateRef.current;
+      if (!st.name || !st.footprint) return;
+      const cmd = fpSwapCmd(st.footprint, st.name, [...st.selection]);
       if (cmd) await runCmd(cmd);
     },
     groupSelection: async () => {

@@ -58,6 +58,8 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   // Mirror Horizontally / Vertically (`EDIT_TOOL::Mirror`, both frames' top toolbar) -- UI-LEFT F2.
   "pcbnew.InteractiveEdit.mirrorHoriontally",
   "pcbnew.InteractiveEdit.mirrorVertically",
+  // Swap (Alt+S, `EDIT_TOOL::Swap`): two pads in the footprint editor trade their copper's places (UI-LEFT-2 PP15).
+  "pcbnew.InteractiveEdit.swap",
   // The line modes (`PCB_ACTIONS::lineModeFree` / `lineMode90` / `lineMode45`): the board's `PCB_CONTROL`, the footprint editor's `FOOTPRINT_EDITOR_CONTROL::ChangeLineMode`.
   "pcbnew.EditorControl.lineModeFree",
   "pcbnew.EditorControl.lineModeOrthonal",
