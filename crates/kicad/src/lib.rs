@@ -311,7 +311,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     // ---- resolve every distinct lib_id used, once, into a `lib_symbols`-block entry ----
     let mut lib_ids: Vec<String> = symbols.iter().map(|s| sym_lib_id(s)).collect();
-    lib_ids.extend(power_symbols.iter().map(|p| p.lib_id.clone()));
+    // a power symbol drawn from a renamed entry (`SchExtras::power_lib_names`, PARITY-sch §82) needs no entry of its library id's own: `SCH_SCREEN::Remove`
+    // drops an entry no symbol names
+    lib_ids.extend(power_symbols.iter().filter(|p| !sch.extras.power_lib_names.contains_key(&p.id)).map(|p| p.lib_id.clone()));
     lib_ids.sort();
     lib_ids.dedup();
 
@@ -354,6 +356,13 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     // The symbols whose pins Swap Pins moved keep a copy of their own in the cache (`lib_name`), one per placed symbol, named `<symbol>_<n>`.
     let mut cache_names: BTreeMap<(String, u32), String> = BTreeMap::new();
     let mut cache_counts: BTreeMap<String, u32> = BTreeMap::new();
+    // the power symbols' renamed entries are the design's (`SchExtras::power_lib_names`): the copies made here are numbered after them
+    for entry in sch.extras.power_lib_names.values() {
+        if let Some((bare, n)) = entry.name.rsplit_once('_').and_then(|(b, n)| Some((b.to_string(), n.parse::<u32>().ok()?))) {
+            let c = cache_counts.entry(bare).or_insert(0);
+            *c = (*c).max(n);
+        }
+    }
     for sym in &symbols {
         if sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)).is_none() {
             continue;
@@ -445,6 +454,19 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             let local = sch.extras.power_is_local(lib_id, model.symbols.iter().find(|s| s.lib_id == *lib_id).map(|lib| lib.power && lib.connectivity.power_local));
             write_power_lib_symbol(&mut out, lib_id, &resolved, local);
         }
+    }
+    // The power symbols' renamed entries (`SchExtras::power_lib_names`): `SCH_SCREEN::Append`'s `newLibSymbol`, the library symbol of the other kind named
+    // `<name>_<n>` (`SetName( newName )`, so its units are `<name>_<n>_0_1` ..; its Value stays the library's), written under that name
+    // (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( libSymbol, *m_out, libItemName )`). PARITY-sch §82.
+    let mut power_entries: BTreeMap<&str, (&str, bool)> = BTreeMap::new();
+    for ps in &power_symbols {
+        if let Some(entry) = sch.extras.power_lib_names.get(&ps.id) {
+            power_entries.entry(entry.name.as_str()).or_insert((ps.lib_id.as_str(), entry.local));
+        }
+    }
+    for (name, (lib_id, local)) in power_entries {
+        let resolved = model.symbol_of(lib_id).unwrap_or_else(|| eda_model::symbol::builtin(lib_id).expect("power lib_id always resolves"));
+        write_power_lib_symbol_named(&mut out, name, lib_id.rsplit(':').next().unwrap_or(lib_id), name, &resolved, local);
     }
     let mut written_copies: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for sym in &symbols {
@@ -569,7 +591,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let uuid = duid_for(&format!("pwr:{}", ps.id), &ps.id);
         // `rot` is KiCad's angle (counter-clockwise on the sheet), as the reader reads it, the editor (`Matrix::of`) turns it and the painter draws it
         let angle = (ps.rot / 1000) % 360;
-        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} {angle}) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
+        // drawn from a renamed cache entry: `(lib_name ..)` (`!UseLibIdLookup()`, `saveSymbol`), PARITY-sch §82
+        let lib_name = sch.extras.power_lib_names.get(&ps.id).map(|e| format!("(lib_name {}) ", sexpr_str(&e.name))).unwrap_or_default();
+        writeln!(out, "\t(symbol {lib_name}(lib_id {}) (at {x} {y} {angle}) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
         // the library's flags, which KiCad copies to a placed symbol (`power:` symbols are in the BOM and on the board; their netlist and BOM leave them out as power
         // symbols), r2 B-L4; as its Symbol Properties set them (`SchExtras::power_props`)
         let props = sch.extras.power_props.get(&ps.id).cloned().unwrap_or_default();
@@ -1747,26 +1771,31 @@ fn pin_alternates_str(resolved: Option<&eda_model::LibSymbol>, number: &str) -> 
 /// per `lib_id`, regardless of how many instances place it.
 /// `local`: a local power symbol (`SchExtras::local_power`), `(power local)`.
 fn write_power_lib_symbol(out: &mut String, lib_id: &str, resolved: &eda_model::LibSymbol, local: bool) {
-    writeln!(out, "\t\t(symbol {}", sexpr_str(lib_id)).unwrap();
+    // the library symbol's own name, the part of `lib_id` after its library nickname, whichever library it is (`power:`, or a project's own
+    // `complex_hierarchy_schlib:`): a unit named after the whole `lib_id` is a name/prefix mismatch and KiCad refuses the file
+    let value = lib_id.rsplit(':').next().unwrap_or(lib_id);
+    write_power_lib_symbol_named(out, lib_id, value, value, resolved, local);
+}
+
+/// [`write_power_lib_symbol`] under the cache name `name`, with the Value `value` and the units `<unit_name>_0_1`, `<unit_name>_1_1`.
+fn write_power_lib_symbol_named(out: &mut String, name: &str, value: &str, unit_name: &str, resolved: &eda_model::LibSymbol, local: bool) {
+    writeln!(out, "\t\t(symbol {}", sexpr_str(name)).unwrap();
     writeln!(out, "\t\t\t{}", if local { "(power local)" } else { "(power)" }).unwrap();
     writeln!(out, "\t\t\t(pin_numbers (hide yes))").unwrap();
     writeln!(out, "\t\t\t(pin_names (offset 0) (hide yes))").unwrap();
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
-    // the library symbol's own name, the part of `lib_id` after its library nickname, whichever library it is (`power:`, or a project's own
-    // `complex_hierarchy_schlib:`): a unit named after the whole `lib_id` is a name/prefix mismatch and KiCad refuses the file
-    let value = lib_id.rsplit(':').next().unwrap_or(lib_id);
     write_property(out, "Reference", "#PWR", 0.0, -2.0, true);
     write_property(out, "Value", value, 0.0, 2.0, false);
     write_property(out, "Footprint", "", 0.0, 0.0, true);
     write_property(out, "Datasheet", &resolved.datasheet, 0.0, 0.0, true);
 
-    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{value}_0_1"))).unwrap();
+    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{unit_name}_0_1"))).unwrap();
     for g in &resolved.graphics {
         write_symbol_graphic(out, g);
     }
     writeln!(out, "\t\t\t)").unwrap();
 
-    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{value}_1_1"))).unwrap();
+    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{unit_name}_1_1"))).unwrap();
     for pin in &resolved.pins {
         writeln!(
             out,

@@ -6343,6 +6343,8 @@ impl<'a> Board<'a> {
         let sch = self.schematic_mut_or_create();
         sch.power_symbols.push(PowerSymbol { id, lib_id: lib_id.into(), at, rot, net: net.into(), pin: pin.into() });
         let last = sch.power_symbols.len() - 1;
+        // `AddToScreen`: the screen's library-symbol cache (`SCH_SCREEN::Append`), of the library's kind (PARITY-sch §82)
+        self.cache_placed_power_symbol(last);
         self.settle_placed(sch_scene::Item::Power(last));
         Ok(())
     }
@@ -6373,6 +6375,8 @@ impl<'a> Board<'a> {
         }
         // what its Symbol Properties set goes with it (a new power symbol may take the id again)
         sch.extras.power_props.remove(id);
+        // and the renamed cache entry it was drawn from (`SCH_SCREEN::Remove` drops an entry no symbol names; PARITY-sch §82)
+        sch.extras.power_lib_names.remove(id);
         sch.extras.field_looks.remove(id);
         Ok(())
     }
@@ -7423,6 +7427,11 @@ impl<'a> Board<'a> {
         for sch in self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
             sch.extras.local_power.remove(lib_id);
             sch.extras.global_power.remove(lib_id);
+            // and no symbol of it a renamed entry (`DIALOG_CHANGE_SYMBOLS::processSymbols`' `SetSchSymbolLibraryName( wxEmptyString )`, PARITY-sch §82)
+            let ids: Vec<String> = sch.power_symbols.iter().filter(|p| p.lib_id == lib_id).map(|p| p.id.clone()).collect();
+            for id in ids {
+                sch.extras.power_lib_names.remove(&id);
+            }
         }
         Ok(())
     }

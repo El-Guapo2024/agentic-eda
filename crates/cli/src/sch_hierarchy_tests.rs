@@ -1857,8 +1857,13 @@ fn r4_case(case: &str) -> (PathBuf, PathBuf, std::collections::BTreeMap<String, 
 
 /// [`r4_case`] of the fixtures folder `round` (`r4_connectivity`, `r5_connectivity`).
 fn round_case(round: &str, case: &str) -> (PathBuf, PathBuf, std::collections::BTreeMap<String, Vec<String>>) {
+    round_case_in(round, case, &format!("{round}_{case}"))
+}
+
+/// [`round_case`] in the scratch folder `name` (two tests of one case running at once each need their own).
+fn round_case_in(round: &str, case: &str, name: &str) -> (PathBuf, PathBuf, std::collections::BTreeMap<String, Vec<String>>) {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(round).join(case);
-    let work = scratch(&format!("{round}_{case}"));
+    let work = scratch(name);
     for e in std::fs::read_dir(&src).unwrap().flatten() {
         std::fs::copy(e.path(), work.join(e.file_name())).unwrap();
     }
@@ -1966,6 +1971,51 @@ fn a_placed_local_power_symbol_is_a_net_of_its_sheet() {
         .iter()
         .filter(|(_, text)| text.contains("lp:+48V"))
         .for_each(|(file, text)| assert!(text.contains("(power local)") && !text.contains("\t\t\t(power)\n"), "{file}"));
+}
+
+/// PARITY-sch §82 (`SCH_DRAWING_TOOLS::PlaceSymbol`'s `SetGlobalPower()`, `SCH_SCREEN::Append`): Place Power with "Power Symbols: Global" puts a global
+/// `lp:+48V` on the sheet that has a local one; the sheet's cache gets a renamed entry `+48V_1`, `(power)`, and the new symbol names it with `(lib_name ..)`.
+/// R3 pin 2 is then on the global `+48V`, and so is R3 pin 1: the sheet's local `+48V` and the global one are one name on that sheet (KiCad's ERC warns of it,
+/// `same_local_global_power`); R1 pin 1 stays on the root's `/+48V`. kicad-cli reads the derived files the same way (slow), and the derived files read back keep
+/// the entry. One click, one undo step.
+#[test]
+fn the_other_kind_of_a_power_symbol_is_a_renamed_cache_entry_kicad_cli_reads() {
+    let (dir, _root, _) = round_case_in("r4_connectivity", "p1", "r4_connectivity_p1_renamed_power");
+    let (_, design, _) = load(&dir).unwrap();
+    let sheet_id = design.schematic.as_ref().unwrap().sheets[0].id.clone();
+    let add = Cmd::AddPowerSymbol { lib_id: "lp:+48V".into(), at: Point { x: mm(50.8), y: mm(54.61) }, rot_millideg: 180_000, net: "+48V".into(), pin: String::new(), annotate: None };
+    let global = Cmd::SchEdit(eda_ops::sch_edit::SchCmd::SetNewPowerKind { lib_id: "lp:+48V".into(), local: false });
+    step(&dir, Cmd::OnSheet { sheet: sheet_id, cmd: Box::new(Cmd::Batch { cmds: vec![add, global] }) }, false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let net_of = |pin: &str| design.nets.iter().flatten().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone());
+    assert_eq!(net_of("R3.2").as_deref(), Some("+48V"), "{:?}", design.nets);
+    assert_eq!(net_of("R3.1").as_deref(), Some("+48V"));
+    assert_eq!(net_of("R1.1").as_deref(), Some("/+48V"));
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-28", title: "t" }, "board.kicad_sch").unwrap();
+    let (_, sub) = files.iter().find(|(_, text)| text.contains("(lib_name \"+48V_1\")")).expect("the sheet's file has the renamed entry");
+    assert!(sub.contains("(symbol \"+48V_1\"\n\t\t\t(power)\n") && sub.contains("(symbol \"+48V_1_1_1\""), "{sub}");
+    assert!(sub.contains("(symbol \"lp:+48V\"\n\t\t\t(power local)\n"), "the id's entry stays local");
+    assert!(sub.contains("(symbol (lib_name \"+48V_1\") (lib_id \"lp:+48V\")"), "{sub}");
+    // the derived files, read back, keep the entry
+    let back = scratch("p1_power_renamed_back");
+    for (file, text) in &files {
+        std::fs::write(back.join(file), text).unwrap();
+    }
+    let again = back.join("board");
+    crate::import_kicad::run(&[back.join("board.kicad_sch").display().to_string(), "-o".into(), again.display().to_string()]).unwrap();
+    let (_, read, _) = load(&again).unwrap();
+    let screens: Vec<_> = read.sheet_contents.iter().flat_map(|c| c.values()).collect();
+    assert!(screens.iter().any(|s| s.extras.power_lib_names.values().any(|e| e.name == "+48V_1" && !e.local)), "read back: {:?}", screens.iter().map(|s| &s.extras.power_lib_names).collect::<Vec<_>>());
+    let read_net = |pin: &str| read.nets.iter().flatten().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone());
+    assert_eq!(read_net("R3.2").as_deref(), Some("+48V"));
+    assert_eq!(read_net("R1.1").as_deref(), Some("/+48V"));
+    if kicad_cli_ready() {
+        assert_eq!(kicad_net_groups(&dir), our_net_groups(&dir), "kicad-cli reads the derived files as the studio traces them");
+        assert_eq!(kicad_cli_net_groups(&back.join("board.kicad_sch")), our_net_groups(&dir));
+    }
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.sheet_contents.iter().flat_map(|c| c.values()).all(|s| s.extras.power_lib_names.is_empty() && s.power_symbols.len() == 1), "one undo takes the click back");
 }
 
 /// r4 C4-M2 (`SCH_EDITOR_CONTROL::HighlightNet`: `conn->Name()`, a label's own connection): a local label put on a pin end with no wire gives the studio

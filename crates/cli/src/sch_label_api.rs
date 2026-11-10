@@ -60,7 +60,7 @@ pub(crate) fn existing_labels(design: &Design, model: &ConstraintModel, ty: Labe
                 continue;
             }
             let lib_local = model.symbol_of(&ps.lib_id).map(|lib| lib.power && lib.connectivity.power_local);
-            let local = sch.extras.power_is_local(&ps.lib_id, lib_local);
+            let local = sch.extras.power_symbol_is_local(&ps.id, &ps.lib_id, lib_local);
             if local == (ty == LabelType::Local) {
                 names.insert(ps.net.clone());
             }

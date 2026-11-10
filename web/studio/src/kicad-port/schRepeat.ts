@@ -28,7 +28,11 @@ type Repeatable =
 
 const REPEATABLE_OPS = new Set(["add_label", "add_sch_text", "add_power_symbol", "add_no_connect", "add_bus_entry", "add_wire", "add_sch_line", "add_symbol"]);
 
-const isRepeatable = (c: Cmd): c is Repeatable => REPEATABLE_OPS.has(c.op) || (c.op === "sch_edit" && (c.verb === "place_label" || c.verb === "place_text" || c.verb === "add_wire_as"));
+/** Place Power's kind for the symbol it just placed (`set_new_power_kind`, not in the typed verbs): the copy `RepeatDrawItem` makes keeps its source's library
+ *  symbol, so the repeat converts it the same way (and `SCH_SCREEN::Append` gives it the same cache entry, PARITY-sch §82). */
+const isPowerKind = (c: Cmd): boolean => c.op === "sch_edit" && (c as { verb?: string }).verb === "set_new_power_kind";
+
+const isRepeatable = (c: Cmd): c is Repeatable => REPEATABLE_OPS.has(c.op) || isPowerKind(c) || (c.op === "sch_edit" && (c.verb === "place_label" || c.verb === "place_text" || c.verb === "add_wire_as"));
 
 /** What a just-run command contributes to "the last placed item(s)": the command itself, or every part of a batch of placements. Null when it is not a placement (the old repeat source stays). */
 export function repeatSource(cmd: Cmd): Cmd[] | null {
@@ -62,7 +66,8 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
     switch (c.op) {
       case "sch_edit":
         // the dialog's properties come along; a label's text steps on
-        if (c.verb === "add_wire_as") out.push({ ...c, pts: c.pts.map(shift) });
+        if (isPowerKind(c)) out.push(c);
+        else if (c.verb === "add_wire_as") out.push({ ...c, pts: c.pts.map(shift) });
         else out.push(c.verb === "place_label" ? { ...c, net: incrementLabelText(c.net, inc), at: shift(c.at) } : { ...c, at: shift(c.at) });
         break;
       case "add_label":
