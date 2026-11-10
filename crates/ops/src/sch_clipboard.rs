@@ -12,7 +12,7 @@
 
 use super::Board;
 use eda_model::ir::{LibrarySymbol, NetLabel, NoConnect, Point, PowerSymbol, SchLine, SchematicSection, SchematicText, SymbolInstance, Nm, Wire};
-use eda_model::sch_clipboard::{annotate_paste, place_offset_nm, translate_graphic, PastedRef, PasteMode, SchFragment, UsedRef};
+use eda_model::sch_clipboard::{annotate_paste_tracked, place_offset_nm, translate_graphic, PastedRef, PasteMode, SchFragment, UsedRef};
 use eda_model::symbol::{is_synthetic_lib_id, LibSymbol};
 use eda_model::CheckResult;
 use std::collections::BTreeMap;
@@ -180,7 +180,10 @@ impl<'a> Board<'a> {
             None => 1,
             Some(file) => eda_model::sheet_list::walk(&self.design).iter().find(|e| e.file == file).map_or(1, eda_model::sheet_list::SheetEntry::page_number_as_int),
         };
-        let numbered = annotate_paste(&used, &pasted, mode, numbering, sheet_number);
+        // the project's `REFDES_TRACKER` ("Allow reference reuse"), which keeps the numbers given (UI-LEFT-2 SS17)
+        let mut tracker = self.refdes_tracker();
+        let numbered = annotate_paste_tracked(&used, &pasted, mode, numbering, sheet_number, &mut tracker);
+        self.keep_refdes_tracker(tracker);
         let (symbol_refs, power_refs) = numbered.split_at(src.symbols.len());
         for (r, p) in symbol_refs.iter().zip(&src.symbols) {
             if used.iter().any(|u| u.reference == *r && u.unit == p.unit) {

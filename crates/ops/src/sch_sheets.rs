@@ -475,7 +475,7 @@ impl<'a> Board<'a> {
     fn annotate_new_screens(&mut self, files: &[String], order: AnnotateOrder, options: &AnnotateOptions) {
         let scopes: Vec<ScreenScope> = files.iter().map(|f| ScreenScope { file: f.clone(), path: None, symbols: Take::All, power: false }).collect();
         let opts = AnnotateOptions { scope: Some(AnnotateScope::Selection), ..options.clone() };
-        let (_, renames, _) = self.annotate_plan_in(&scopes, true, order, &opts);
+        let (_, renames, _) = self.annotate_plan_in_recorded(&scopes, true, order, &opts);
         self.annotate_apply(&renames, false);
         // the power symbols: against every power symbol that is not on the new screens
         let mut used: Vec<UsedRef> = Vec::new();
@@ -714,7 +714,7 @@ impl<'a> Board<'a> {
             let new_refs: Vec<String> = units_here(self).difference(&before).map(|(id, _)| id.clone()).collect::<BTreeSet<_>>().into_iter().collect();
             if !new_refs.is_empty() {
                 let opts = AnnotateOptions { scope: Some(AnnotateScope::Selection), ..options.clone() };
-                let (_, renames, _) = self.annotate_plan(true, order, Some(&new_refs), &opts);
+                let (_, renames, _) = self.annotate_plan_recorded(true, order, Some(&new_refs), &opts);
                 self.annotate_apply(&renames, false);
             }
         }

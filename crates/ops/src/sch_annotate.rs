@@ -309,6 +309,42 @@ impl<'a> Board<'a> {
 
     /// [`Self::annotate_plan`] over the screens `scopes` name.
     pub(crate) fn annotate_plan_in(&self, scopes: &[ScreenScope], reset: bool, order: AnnotateOrder, opts: &AnnotateOptions) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
+        self.annotate_plan_tracked(scopes, reset, order, opts, &mut self.refdes_tracker())
+    }
+
+    /// The project's `REFDES_TRACKER` (`SCHEMATIC_SETTINGS::m_refDesTracker`): the references the numbering gave out (the root's
+    /// `SchExtras::used_designators`) and Schematic Setup's "Allow reference reuse" (`reuse_designators`, on when the project says nothing).
+    pub(crate) fn refdes_tracker(&self) -> annotate::RefDesTracker {
+        match self.design.schematic.as_ref() {
+            Some(root) => annotate::RefDesTracker::new(&root.extras.used_designators, root.extras.annotation.as_ref().is_none_or(|a| a.reuse_designators)),
+            None => annotate::RefDesTracker::default(),
+        }
+    }
+
+    /// Keep what the tracker learned in the project (`used_designators`), as the commit that numbered does.
+    pub(crate) fn keep_refdes_tracker(&mut self, tracker: annotate::RefDesTracker) {
+        if let Some(root) = self.design.schematic.as_mut() {
+            root.extras.used_designators = tracker.used;
+        }
+    }
+
+    /// [`Self::annotate_plan`] for a command that numbers: the tracker learns the numbers given (`GetNextRefDesForUnits`' insert) and the project keeps them.
+    pub(crate) fn annotate_plan_recorded(&mut self, reset: bool, order: AnnotateOrder, ids: Option<&[String]>, opts: &AnnotateOptions) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
+        let scope = opts.scope.unwrap_or(if ids.is_some() { AnnotateScope::Selection } else { AnnotateScope::CurrentSheet });
+        let scopes = self.annotate_scopes(scope, ids, opts);
+        self.annotate_plan_in_recorded(&scopes, reset, order, opts)
+    }
+
+    /// [`Self::annotate_plan_in`] for a command that numbers (see [`Self::annotate_plan_recorded`]).
+    pub(crate) fn annotate_plan_in_recorded(&mut self, scopes: &[ScreenScope], reset: bool, order: AnnotateOrder, opts: &AnnotateOptions) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
+        let mut tracker = self.refdes_tracker();
+        let plan = self.annotate_plan_tracked(scopes, reset, order, opts, &mut tracker);
+        self.keep_refdes_tracker(tracker);
+        plan
+    }
+
+    /// [`Self::annotate_plan_in`] with the tracker `tracker` (`references.SetRefDesTracker( Schematic().Settings().m_refDesTracker )`).
+    fn annotate_plan_tracked(&self, scopes: &[ScreenScope], reset: bool, order: AnnotateOrder, opts: &AnnotateOptions, tracker: &mut annotate::RefDesTracker) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
         let (slots, mut list, others) = self.annotation_entries(scopes);
         let sort = match order {
             AnnotateOrder::YThenX => SortOrder::ByY,
@@ -333,7 +369,7 @@ impl<'a> Board<'a> {
         if reset {
             annotate::remove_annotation(&mut list);
         }
-        annotate::annotate_by_options(&mut list, sort, opts.algo, opts.start_number, &locked, &others);
+        annotate::annotate_by_options(&mut list, sort, opts.algo, opts.start_number, &locked, &others, tracker);
 
         let mut renames: Vec<Rename> = Vec::new();
         let mut messages: Vec<AnnotateMessage> = Vec::new();
@@ -603,7 +639,7 @@ impl<'a> Board<'a> {
     /// `Cmd::Annotate`: see the module doc.
     pub(crate) fn annotate(&mut self, reset: bool, order: AnnotateOrder, ids: Option<&[String]>, opts: &AnnotateOptions) -> Result<(), Vec<CheckResult>> {
         self.schematic()?;
-        let (_, renames, _) = self.annotate_plan(reset, order, ids, opts);
+        let (_, renames, _) = self.annotate_plan_recorded(reset, order, ids, opts);
         self.annotate_apply(&renames, true);
         Ok(())
     }
@@ -629,7 +665,8 @@ impl<'a> Board<'a> {
             eda_model::annotate::Algo::SheetX100 => sheet_num * 100 + 1,
             eda_model::annotate::Algo::SheetX1000 => sheet_num * 1000 + 1,
         };
-        Ok(format!("{prefix}{}", eda_model::annotate::placement_number(&list, &new, min)))
+        // the project's tracker: with "Allow reference reuse" off a number given before is skipped (the number is learned when `add_symbol` places it)
+        Ok(format!("{prefix}{}", eda_model::annotate::placement_number(&list, &new, min, &mut self.refdes_tracker())))
     }
 
     /// What an annotation would do to the sheet `sheet` is in view of (a `/`-joined placement path, the root when empty), without doing it: the

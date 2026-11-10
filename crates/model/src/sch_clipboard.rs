@@ -201,11 +201,19 @@ fn units_available(lib_id: &str, value: &str, holders: &[&Numbered], required: &
 
 /// `SCH_REFERENCE_LIST::FindFirstUnusedReference` + `REFDES_TRACKER::GetNextRefDesForUnits`: the first number from `min` that no symbol of the
 /// same prefix holds -- or that holds only symbols with the same library symbol and value, none of them with a unit in `required_units`.
-fn first_unused(prefix: &str, lib_id: &str, value: &str, min: u32, required_units: &[u32], taken: &[Numbered]) -> u32 {
+/// A number nobody holds is skipped when the project's tracker gave it before and "Allow reference reuse" is off, and the tracker learns the one taken
+/// (`insertNumber`; UI-LEFT-2 SS17).
+fn first_unused(prefix: &str, lib_id: &str, value: &str, min: u32, required_units: &[u32], taken: &[Numbered], tracker: &mut crate::annotate::RefDesTracker) -> u32 {
     let mut candidate = min;
     loop {
         let holders: Vec<&Numbered> = taken.iter().filter(|t| same_prefix(&t.prefix, prefix) && t.number == candidate).collect();
-        if holders.is_empty() || (!required_units.is_empty() && units_available(lib_id, value, &holders, required_units)) {
+        if holders.is_empty() {
+            let full = format!("{prefix}{candidate}");
+            if tracker.reuse || !tracker.used.contains(&full) {
+                tracker.used.insert(full);
+                return candidate;
+            }
+        } else if !required_units.is_empty() && units_available(lib_id, value, &holders, required_units) {
             return candidate;
         }
         candidate += 1;
@@ -238,6 +246,12 @@ fn format_reference(prefix: &str, number: u32, power: bool) -> String {
 /// sheet's number times 100 or 1000 plus one in both, and never at a symbol's own number (`AnnotateByOptions`: `aStartAtCurrent = false; // Not
 /// implemented for sheet # * 100`).
 pub fn annotate_paste(used: &[UsedRef], pasted: &[PastedRef], mode: PasteMode, numbering: PasteNumbering, sheet_number: i64) -> Vec<String> {
+    annotate_paste_tracked(used, pasted, mode, numbering, sheet_number, &mut crate::annotate::RefDesTracker::default())
+}
+
+/// [`annotate_paste`] with the project's `REFDES_TRACKER` (`annotatedSymbols[path].SetRefDesTracker( schematicSettings.m_refDesTracker )` in
+/// `SCH_EDITOR_CONTROL::Paste`), which learns the numbers given.
+pub fn annotate_paste_tracked(used: &[UsedRef], pasted: &[PastedRef], mode: PasteMode, numbering: PasteNumbering, sheet_number: i64, tracker: &mut crate::annotate::RefDesTracker) -> Vec<String> {
     let mut taken: Vec<Numbered> = used
         .iter()
         .filter_map(|u| {
@@ -321,7 +335,7 @@ pub fn annotate_paste(used: &[UsedRef], pasted: &[PastedRef], mode: PasteMode, n
         } else {
             Vec::new()
         };
-        let n = first_unused(&prefix, &p.lib_id, &p.value, min_ref, &units, &taken);
+        let n = first_unused(&prefix, &p.lib_id, &p.value, min_ref, &units, &taken, tracker);
         for &j in &group {
             if out[j].is_some() {
                 continue;
