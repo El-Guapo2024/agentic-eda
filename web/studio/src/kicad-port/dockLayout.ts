@@ -22,11 +22,16 @@
 /** `symProperties` is the Symbol Editor's own Properties pane (symbol_edit_frame.cpp: `defaultPropertiesPaneInfo`, below the Libraries tree on the left, shown by
  *  default -- `SYMBOL_EDITOR_SETTINGS::m_AuiPanels.show_properties`); KiCad keeps its shown state per frame, so it is not the schematic's pane. `netInspector` and
  *  `search` are the board editor's bottom panes. `fpProperties` is the Footprint Editor's (footprint_edit_frame.cpp: `PCB_PROPERTIES_PANEL`, `.Left().Layer( 3 )` beside
- *  the Libraries tree, shown by default -- `FOOTPRINT_EDITOR_SETTINGS::m_AuiPanels.show_properties`; UI-LEFT Y3), in the same column as the Symbol Editor's. */
-export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter" | "symProperties" | "fpProperties" | "netInspector" | "search";
+ *  the Libraries tree, shown by default -- `FOOTPRINT_EDITOR_SETTINGS::m_AuiPanels.show_properties`; UI-LEFT Y3), in the same column as the Symbol Editor's.
+ *  `schSearch` is the schematic frame's Search pane (sch_edit_frame.cpp: `SCH_SEARCH_PANE`, `.Bottom()`, hidden to begin with -- `m_show_search = false`; UI-LEFT-2
+ *  SS10): KiCad keeps its shown state per frame, so it is not the board editor's `search`. */
+export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter" | "symProperties" | "fpProperties" | "netInspector" | "search" | "schSearch";
 
 /** The board editor's panes docked under the canvas (`.Bottom()`), in the order they are added (`m_netInspectorPanel`, then `m_searchPane`). */
 export const PCB_BOTTOM_PANES: readonly DockPaneId[] = ["netInspector", "search"];
+
+/** The panes under the canvas, of any frame: showing one leaves the side columns as they are. */
+const BOTTOM_PANES: readonly DockPaneId[] = [...PCB_BOTTOM_PANES, "schSearch"];
 
 /** `wxAuiPaneInfo::Position()` of each pane of the schematic frame's left column (lower = higher up); the order panes are drawn in. */
 export const SCH_LEFT_COLUMN_ORDER: readonly DockPaneId[] = ["netNavigator", "hierarchy", "properties", "selectionFilter"];
@@ -63,8 +68,8 @@ export function defaultDockLayout(windowWidth: number): DockLayout {
     // `show_schematic_hierarchy` and `show_properties` default true; the Appearance manager is shown by default in pcbnew too.
     // `show_net_nav_panel` defaults false. Whether the Net Navigator is OPEN is the schematic control store's (`netNavigatorOpen`, which its action and its check
     // mark read), passed in below; this flag is not read for it.
-    shown: { netNavigator: false, hierarchy: true, properties: true, selectionFilter: true, symProperties: true, fpProperties: true, netInspector: false, search: false },
-    folded: { netNavigator: false, hierarchy: false, properties: false, selectionFilter: false, symProperties: false, fpProperties: false, netInspector: false, search: false },
+    shown: { netNavigator: false, hierarchy: true, properties: true, selectionFilter: true, symProperties: true, fpProperties: true, netInspector: false, search: false, schSearch: false },
+    folded: { netNavigator: false, hierarchy: false, properties: false, selectionFilter: false, symProperties: false, fpProperties: false, netInspector: false, search: false, schSearch: false },
   };
 }
 
@@ -94,7 +99,7 @@ export function togglePane(layout: DockLayout, id: DockPaneId, windowWidth = Inf
   if (show) {
     next.folded = { ...layout.folded, [id]: false };
     // the bottom panes are no column's: showing one leaves the side columns as they are
-    if (PCB_BOTTOM_PANES.includes(id)) return next;
+    if (BOTTOM_PANES.includes(id)) return next;
     // every other frame pane here is docked in the left column; the Symbol Editor's Properties sits in its Libraries column
     return setColumnCollapsed(next, id === "symProperties" || id === "fpProperties" ? "tree" : "left", false, windowWidth);
   }

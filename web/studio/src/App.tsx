@@ -41,6 +41,7 @@ import { FileDropHost } from "./components/FileDropHost";
 import { BoardPadPropertiesDialog } from "./components/BoardPadPropertiesDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { BottomDock, PcbFloatingPanes, PcbPaneDockArea } from "./components/panels/BottomDock";
+import { SchSearchDock } from "./components/panels/SchSearchPanel";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { FootprintTextDialog } from "./components/FootprintTextDialog";
@@ -250,6 +251,12 @@ function StudioFrame() {
         {state.tab === "pcb" && (
           <div className="bottom-dock-row">
             <BottomDock />
+          </div>
+        )}
+        {/* the schematic's Search pane (`SCH_SEARCH_PANE`, `.Bottom()`; UI-LEFT-2 SS10) */}
+        {state.tab === "schematic" && (
+          <div className="bottom-dock-row">
+            <SchSearchDock />
           </div>
         )}
         {state.tab === "pcb" && (

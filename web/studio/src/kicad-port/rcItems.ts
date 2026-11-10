@@ -619,3 +619,12 @@ export function patchErcSeverity(report: ErcReport, check: string, severity: Rul
   const rest = (report.ignored_checks ?? []).filter((c) => c.key !== check);
   return { ...report, violations, counts, ignored_checks: ignoring ? [...rest, { key: check, description }] : rest };
 }
+
+/** The finding's own line (`RC_ITEM::GetErrorMessage`): kicad-cli's description, without the item list `hint` appends to it ("Pin not connected: Symbol U1 Pin 2
+ *  [...]"). What the ERC dialog lists and what Find matches a marker by (`SCH_MARKER::Matches`, UI-LEFT-2 SS10). */
+export function ercMessage(v: Pick<ErcViolation, "check" | "hint" | "items">): string {
+  const descs = (v.items ?? []).map((i) => i.description).filter((d) => d !== "");
+  const tail = descs.length > 0 ? `: ${descs.join("; ")}` : "";
+  const hint = v.hint ?? "";
+  return tail !== "" && hint.endsWith(tail) ? hint.slice(0, -tail.length) : hint || v.check.replace(/_/g, " ");
+}
