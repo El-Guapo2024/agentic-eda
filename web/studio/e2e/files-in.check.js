@@ -125,6 +125,7 @@
   let applied = 0;
   let appliedSch = 0;
   let appliedSym = 0;
+  let madeSymbol = null; // New Symbol is not a step to undo (`LoadSymbol` clears the history of a new tab): deleted at the end
   const firstTab = E.state().tab;
   try {
     // A pane that is not on screen never fits the board to its canvas (no animation frames run): do it, so the pointer has a view to work in.
@@ -142,8 +143,8 @@
       for (let i = 0; i < 2 && !find(); i++) { bar?.click(); await sleep(250); } // a click toggles: a menu left open is closed by the first
       return find();
     };
-    const entry = await fromMenu("File", "Import Graphics");
-    check("File > Import has Import Graphics... and it is enabled", !!entry && entry.getAttribute("aria-disabled") === "false", entry?.outerHTML?.slice(0, 120));
+    const entry = await fromMenu("File", "Graphics...");
+    check("File > Import has Graphics... and it is enabled", !!entry && entry.getAttribute("aria-disabled") === "false", entry?.outerHTML?.slice(0, 120));
     entry?.click();
     await sleep(300);
     check("clicking the menu entry opens Import Graphics", dialogs().includes("Import Graphics"), JSON.stringify(dialogs()));
@@ -454,8 +455,11 @@
     await sleep(800);
     check("a .kicad_mod dropped on the Footprint Editor is imported into the library", d.prevented && (await fpNames()).some((n) => n.endsWith("DropTest")) && !fpBefore.some((n) => n.endsWith("DropTest")), JSON.stringify([d, (await fpNames()).filter((n) => /DropTest/.test(n))]));
     check("and it is the selected, opened footprint of the editor", [...document.querySelectorAll('[aria-selected="true"]')].some((e) => e.textContent.trim() === "DropTest"));
-    for (let i = 0; i < 4 && (await fpNames()).some((n) => n.endsWith("DropTest")); i++) await undoDomain("footprint_editor");
-    check("one undo of the Footprint Editor takes the import away", !(await fpNames()).some((n) => n.endsWith("DropTest")));
+    // KiCad's ImportFootprint clears the undo list (`ClearUndoRedoList`, footprint_editor_control.cpp): undo leaves the import, so it is deleted
+    await undoDomain("footprint_editor");
+    check("undo of the Footprint Editor leaves the import (ImportFootprint clears the history)", (await fpNames()).some((n) => n.endsWith("DropTest")));
+    for (const n of (await fpNames()).filter((n) => n.endsWith("DropTest"))) await post("/api/cmd", { strict: false, cmd: { op: "delete_library_footprint", name: n } });
+    check("and deleting it takes it away", !(await fpNames()).some((n) => n.endsWith("DropTest")));
     d = await dropFiles([{ name: "x.dxf", text: boardDxf }]);
     check("a DXF dropped on the Footprint Editor is not taken (its frame accepts footprints only)", dialogs().length === 0 && /x\.dxf is not a file this editor opens \(it takes \.kicad_mod\)\./.test(lastToast()), lastToast());
 
@@ -493,8 +497,8 @@
     check("Import Graphics and its drop are wired on the Schematic tab", schActs["eeschema.EditorControl.importGraphics"]?.enabled && schActs["eeschema.EditorControl.ddImportGraphics"]?.enabled, JSON.stringify([schActs["eeschema.EditorControl.importGraphics"], schActs["eeschema.EditorControl.ddImportGraphics"]]));
     const s0 = await sch();
     const sBase = { lines: s0.lines.length, graphics: s0.graphics.length, texts: s0.texts.length, lineIds: new Set(s0.lines.map((l) => l.id)), graphicIds: new Set(s0.graphics.map((g) => g.id)) };
-    const sEntry = await fromMenu("File", "Import Graphics");
-    check("the schematic's File > Import has Import Graphics... and it is enabled", !!sEntry && sEntry.getAttribute("aria-disabled") === "false", sEntry?.outerHTML?.slice(0, 120));
+    const sEntry = await fromMenu("File", "Graphics...");
+    check("the schematic's File > Import has Graphics... and it is enabled", !!sEntry && sEntry.getAttribute("aria-disabled") === "false", sEntry?.outerHTML?.slice(0, 120));
     sEntry?.click();
     await sleep(400);
     check("it opens the schematic's dialog: interactive placement, the scale, the DXF width and units, and no layer, group or discontinuities", dialogs().includes("Import Graphics") && field("Interactive placement")?.checked && !!field("Import scale") && !!field("Default line width") && !!field("Default units") && !field("Layer") && !field("Group imported items") && !field("Fix discontinuities"));
@@ -626,15 +630,15 @@
     setNative(document.querySelector('[data-testid="new-symbol"] [aria-label="Symbol name"]'), `P20Import${Date.now() % 100000}`);
     document.querySelector('[data-testid="new-symbol-ok"]')?.click();
     await sleep(800);
-    appliedSym++;
     const libId = (await get("/api/symbol_editor/names")).names.find((n) => !names0.includes(n));
+    madeSymbol = libId ?? null;
     check("a new symbol is open to import into", !!libId, JSON.stringify((await get("/api/symbol_editor/names")).names));
     const symbol = () => get(`/api/symbol?lib_id=${encodeURIComponent(libId)}`);
     const sym0 = await symbol();
     const symBase = new Set((sym0.graphics ?? []).map((g) => g.id));
     const symNew = (s) => (s.graphics ?? []).filter((g) => !symBase.has(g.id));
-    const mEntry = await fromMenu("File", "Import Graphics");
-    check("the Symbol Editor's File > Import has Import Graphics... and it is enabled", !!mEntry && mEntry.getAttribute("aria-disabled") === "false", mEntry?.outerHTML?.slice(0, 120));
+    const mEntry = await fromMenu("File", "Graphics...");
+    check("the Symbol Editor's File > Import has Graphics... and it is enabled", !!mEntry && mEntry.getAttribute("aria-disabled") === "false", mEntry?.outerHTML?.slice(0, 120));
     mEntry?.click();
     await sleep(400);
     check("it opens the same dialog", dialogs().includes("Import Graphics") && !!field("Interactive placement"));
@@ -672,9 +676,12 @@
     check("interactive placement: the drawing's origin is at the cursor's grid point (a multiple of 1.27 mm), and the items are selected", sg.length === 8 && Math.abs(jx0 / 1.27 - Math.round(jx0 / 1.27)) < 1e-6 && E.state().selection.length === 8, JSON.stringify([sg.length, jx0, E.state().selection.length]));
     await undoDomain("symbol_editor");
     appliedSym--;
+    // KiCad's New Symbol ends in `LoadSymbol`, whose new tab starts with no history (`ClearUndoRedoList`): undo leaves the symbol, Delete takes it away
     await undoDomain("symbol_editor");
-    appliedSym--;
-    check("and with the new symbol taken back too, nothing is left of this", !(await get("/api/symbol_editor/names")).names.includes(libId));
+    check("undo leaves the new symbol (its tab starts with no history)", (await get("/api/symbol_editor/names")).names.includes(libId));
+    await post("/api/cmd", { strict: false, cmd: { op: "delete_library_symbol", lib_id: libId } });
+    madeSymbol = null;
+    check("and with the new symbol deleted, nothing is left of this", !(await get("/api/symbol_editor/names")).names.includes(libId));
     await clickTab(firstTab === "schematic" ? "Schematic" : firstTab === "symbol" ? "Symbol" : "PCB");
   } catch (e) {
     check("the check ran to the end", false, e && e.stack ? e.stack : e);
@@ -686,6 +693,7 @@
     { const box = [...document.querySelectorAll("label")].find((l) => l.textContent.trim() === "strict")?.querySelector("input"); if (box && !box.checked) box.click(); }
     for (let i = 0; i < appliedSch; i++) await post("/api/undo", { domain: "schematic" });
     for (let i = 0; i < appliedSym; i++) await post("/api/undo", { domain: "symbol_editor" });
+    if (madeSymbol) await post("/api/cmd", { strict: false, cmd: { op: "delete_library_symbol", lib_id: madeSymbol } });
     if (E.state().tab !== firstTab) { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === (firstTab === "schematic" ? "Schematic" : firstTab === "symbol" ? "Symbol" : "PCB"))?.click(); await sleep(800); }
     // The refusals this check provokes on purpose raise an error toast each; anything else is an error.
     const meant = [/There is no plugin to handle this file type\./, /No graphic items found in file\./, /Only KiCad boards \(\.kicad_pcb files\) can be appended\./, /Error loading board\./, /refused because --strict/];

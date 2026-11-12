@@ -125,6 +125,9 @@
     made = ((await json("/api/footprint_library")).project ?? []).find((n) => !libraryBefore.includes(n)) ?? null;
     t(!!made, `a new footprint is open: ${made}`);
     await run("common.Control.zoomFitScreen");
+    // Zoom to Fit frames the new footprint's texts by their boxes (FF10), which leaves y -4 mm above the canvas: two steps out bring the line's place in
+    await run("common.Control.zoomOutCenter");
+    await run("common.Control.zoomOutCenter");
     await sleep(300);
     const fg = window.__edaGrid?.footprint;
     t(fg?.axes === true && fg?.marks?.axis === 2, `the Footprint Editor draws its two axes (${JSON.stringify(fg)})`);
@@ -177,7 +180,7 @@
     t(prefsStored().pcbArcEditMode === "keep_center_adjust_angle_radius", "back to Keep Arc Center");
   });
 
-  await scenario("Footprint Defaults reach New Footprint, one undo step; User Layer Names name a row of the Appearance panel", async (t) => {
+  await scenario("Footprint Defaults reach New Footprint, which starts the editor's history (undo leaves it); User Layer Names name a row of the Appearance panel", async (t) => {
     await clickTab("Footprint");
     await prefs("fp_defaults", async () => {
       await type(tid("fp-defaults-field-0-text"), "U**");
@@ -195,7 +198,8 @@
     t(f && f.reference?.text === "U**" && JSON.stringify((f.texts ?? []).map((x) => x.content)) === JSON.stringify(["${REFERENCE}", "rev A"]), `the new footprint: Reference ${f?.reference?.text}, texts ${JSON.stringify((f?.texts ?? []).map((x) => [x.content, x.at?.y]))}`);
     await run("common.Interactive.undo");
     await sleep(900);
-    t(!((await json("/api/footprint_library")).project ?? []).includes(name), "one undo takes the new footprint away");
+    // KiCad's NewFootprint clears the undo list (`Clear_Pcb` -> `ClearUndoRedoList`, footprint_editor_control.cpp): making it is not a step to undo
+    t(((await json("/api/footprint_library")).project ?? []).includes(name), "undo leaves the new footprint (New Footprint clears the editor's history)");
     await prefs("fp_layer_names", async () => {
       document.querySelector('button[aria-label="Add Layer Name"]')?.click();
       await sleep(120);

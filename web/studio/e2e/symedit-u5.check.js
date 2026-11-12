@@ -2,7 +2,8 @@
 // by name with a grouped row's renumbering, and the columns menu (`DIALOG_LIB_EDIT_PIN_TABLE`); Pin Properties with KiCad's words, no Delete Pin and no clamps
 // (r7 E7-S4); a power symbol's Exclude boxes enabled when Symbol Properties opens (E7-S9); Find, Find and Replace, Replace and Replace All over the open symbol
 // (`SCH_FIND_REPLACE_TOOL` in a `SYMBOL_EDIT_FRAME`); Duplicate opening the copy at the unit being edited (E7-S21); a derived symbol in italics in the tree
-// (`SetItalic( !m_IsRoot )`); the Symbol Checker's toolbar button live; and Export Symbol as SVG asking kicad-cli for the editor's theme and the hidden items.
+// (`SetItalic( !m_IsRoot )`); the Symbol Checker's toolbar button live; and Export Symbol as SVG asking kicad-cli for the editor's theme and the hidden pins (not
+// --include-hidden-fields, which only widens kicad-cli's box: SCH_FIELD::Plot never plots a hidden field, XX3).
 //
 // Run it in the page of a served board (a COPY: `eda board new examples/ldo.yaml -o <dir>`, then `eda board serve -C <dir> --port N --ui web/studio/dist`), e.g.
 // `node web/studio/e2e/run-check.mjs http://localhost:N/ web/studio/e2e/symedit-u5.check.js 8`. It makes a library of its own (`U5<time>Lib`) in the project's table.
@@ -264,7 +265,7 @@
   });
 
   // ------------------------------------------------------------------------------------------------------------------------ X11: Export Symbol as SVG
-  await scenario("Export Symbol as SVG asks kicad-cli for the editor's theme and the hidden pins and fields (SVGPlotSymbol's render settings)", async (t) => {
+  await scenario("Export Symbol as SVG asks kicad-cli for the editor's theme and the hidden pins, not the hidden fields (SVGPlotSymbol's render settings and box)", async (t) => {
     const sent = [];
     const real = window.fetch;
     window.fetch = (url, init) => { if (String(url).includes("/api/sym/svg")) sent.push(JSON.parse(init?.body ?? "{}")); return real(url, init); };
@@ -276,7 +277,7 @@
       window.fetch = real;
     }
     const b = sent[0] ?? {};
-    t(b.theme === "_builtin_default" && b.include_hidden_pins === true && b.include_hidden_fields === true, `the request: ${JSON.stringify(b)}`);
+    t(b.theme === "_builtin_default" && b.include_hidden_pins === true && !b.include_hidden_fields, `the request: ${JSON.stringify(b)}`);
   }, [/kicad-cli/i]);
 
   check.ok = results.every((r) => r.ok);

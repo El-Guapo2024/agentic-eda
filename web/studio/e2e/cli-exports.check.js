@@ -80,7 +80,7 @@
   if (!caps.unavailable?.idf) {
     await scenario("IDFv3... and GenCAD... are offered under File > Export", async (t) => {
       for (const id of [IDF, GENCAD]) t(action(id)?.enabled === true, `${id}: ${JSON.stringify(action(id))}`);
-      for (const label of ["Export IDFv3...", "Export GenCAD..."]) {
+      for (const label of ["IDFv3...", "GenCAD..."]) {
         const m = await menuEntry(label);
         t(m && !m.disabled, `the menu entry ${label}: ${JSON.stringify(m)}`);
       }
@@ -135,14 +135,14 @@
       const why = caps.unavailable.idf;
       const a = action(IDF);
       t(a && a.enabled === false && a.reason === why, `the test hook: ${JSON.stringify(a)}`);
-      const m = await menuEntry("Export IDFv3...");
+      const m = await menuEntry("IDFv3...");
       t(m && m.disabled && m.title === why, `the menu entry: ${JSON.stringify(m)}`);
       const r = await E.run(IDF);
       t(r.ok === false && r.error === why, `running it is refused: ${JSON.stringify(r)}`);
       t(!dialog(), "no dialog opened");
       if (!caps.unavailable.gencad) {
         t(action(GENCAD)?.enabled === true, `GenCAD: ${JSON.stringify(action(GENCAD))}`);
-        const g = await menuEntry("Export GenCAD...");
+        const g = await menuEntry("GenCAD...");
         t(g && !g.disabled, `the GenCAD entry: ${JSON.stringify(g)}`);
       }
     });

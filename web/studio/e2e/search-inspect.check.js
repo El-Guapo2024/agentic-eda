@@ -475,8 +475,7 @@
       t(__eda.state().tab === "footprint", "the Footprint Editor tab");
       const acts = __eda.actions({ all: true });
       t(acts.some((a) => a.id === "pcbnew.ModuleEditor.checkFootprint" && a.enabled), "Inspect > Footprint Checker is a handled action");
-      await __eda.run("pcbnew.ModuleEditor.newFootprint");
-      steps++;
+      await __eda.run("pcbnew.ModuleEditor.newFootprint"); // not a step to undo (NewFootprint clears the history)
       await sleep(900);
       const name = (await library()).find((n) => !before.includes(n));
       t(!!name, `a new footprint to check: ${name}`);
@@ -552,11 +551,13 @@
       t(rows().length === 0 && badge("errors") === "-" && badge("warnings") === "-", `Delete All Markers: the badges say '-' again (${badge("errors")}, ${badge("warnings")})`);
     } finally {
       await closeDialogs();
-      for (let i = 0; i < steps + 1; i++) { await __eda.run("common.Interactive.undo"); await sleep(600); }
+      for (let i = 0; i < steps; i++) { await __eda.run("common.Interactive.undo"); await sleep(600); }
       await clickTab("PCB");
     }
+    // KiCad's NewFootprint clears the undo list (`Clear_Pcb` -> `ClearUndoRedoList`): the undos take the pads away, not the footprint, so it is deleted
+    for (const n of await library()) if (!before.includes(n)) await (await fetch("/api/cmd", { method: "POST", body: JSON.stringify({ strict: false, cmd: { op: "delete_library_footprint", name: n } }) })).json();
     const after = await library();
-    t(after.length === before.length || after.every((n) => before.includes(n)), `the undos take the new footprint away: ${after.join()}`);
+    t(after.length === before.length || after.every((n) => before.includes(n)), `the new footprint is deleted again: ${after.join()}`);
   });
 
   await scenario("the board is as it was and nothing broke", async (t) => {
