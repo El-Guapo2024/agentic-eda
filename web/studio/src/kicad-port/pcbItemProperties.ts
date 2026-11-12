@@ -61,6 +61,17 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
       return ppm <= 0 || ppm === own(i).scale_ppm ? [] : imageCmd(own(i), { scale_ppm: ppm });
     },
   });
+  // "Transform Offset X/Y" (`SetTransformOriginOffsetX` / `Y`, between Scale and Width as `PCB_REFERENCE_IMAGE_DESC` registers them): the point the image is scaled
+  // about, from its centre. The board's image keeps none (the schematic's does, `SchExtras::image_offsets`), so the rows read 0 -- its centre -- and are read-only.
+  (["X", "Y"] as const).forEach((axis) =>
+    row({
+      name: `Transform Offset ${axis}`,
+      kind: "int",
+      display: "size",
+      get: () => 0,
+      readOnlyReason: "The board's reference image keeps no transform offset here: it is scaled about its centre.",
+    })
+  );
   // `SetWidth` / `SetHeight`: `scaleBy( width / current width )`.
   const side = (name: "Width" | "Height"): void =>
     row({
@@ -82,23 +93,16 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
 }
 
 /** The cmd that puts point `p` on `layer`, at `at`, at `size`. */
-function pointCmd(p: BoardPoint, patch: { layer?: string; size?: number }): Cmd[] {
+export function pointCmd(p: BoardPoint, patch: { layer?: string; size?: number }): Cmd[] {
   return [{ op: "pcb_item", verb: "edit_point", id: p.id, layer: patch.layer ?? p.layer, at: { x: p.x, y: p.y }, size_nm: patch.size ?? p.size }];
 }
 
 /** Register `PCB_POINT` and its properties (`PCB_POINT_DESC`, pcbnew/pcb_point.cpp): the ones of a board item and a Size. The lock is not the point's: the file form has none. */
-function registerPoint(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+function registerPoint(pm: PM, add: Add): void {
   pm.registerType("PCB_POINT");
   pm.inheritsAfter("PCB_POINT", "BOARD_ITEM");
   const own = (i: PcbItem): BoardPoint => i.point!;
-  pm.replaceProperty("BOARD_ITEM", "Layer", {
-    owner: "PCB_POINT",
-    name: "Layer",
-    kind: "enum",
-    choices: (_i, c) => layerChoices(c),
-    get: (i) => own(i).layer,
-    set: (i, v) => (own(i).layer === String(v) ? [] : pointCmd(own(i), { layer: String(v) })),
-  });
+  // `PCB_POINT_DESC` keeps `BOARD_ITEM`'s Layer (no `ReplaceProperty`), so its row stays before Locked: the board item's Layer reads and sets a point's (`pointCmd`).
   pm.overrideWriteability("PCB_POINT", "BOARD_ITEM", "Locked", () => false);
   add({
     owner: "PCB_POINT",
@@ -115,7 +119,7 @@ function registerPoint(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]):
 }
 
 /** The cmd that replaces barcode `b` with `b` changed by `patch`: every field of it goes, its id, lock and groups stay (`edit_barcode`). */
-function barcodeCmd(b: BoardBarcode, patch: Partial<BoardBarcode>): Cmd[] {
+export function barcodeCmd(b: BoardBarcode, patch: Partial<BoardBarcode>): Cmd[] {
   const next: BoardBarcode = { ...b, ...patch };
   // `PCB_BARCODE::SetErrorCorrection`: a Micro QR code has no High.
   next.ecc = clampEcc(next.kind, next.ecc);
@@ -124,18 +128,11 @@ function barcodeCmd(b: BoardBarcode, patch: Partial<BoardBarcode>): Cmd[] {
 
 /** Register `PCB_BARCODE` and its properties (`PCB_BARCODE_DESC`, pcbnew/pcb_barcode.cpp): the rows of a board item and, under "Barcode Properties", the text, its size and whether it is shown, the size and
  * turn of the symbol, the kind, the error correction of the QR kinds (Micro QR has no High) and the knockout with its margins. */
-function registerBarcode(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
+function registerBarcode(pm: PM, add: Add): void {
   pm.registerType("PCB_BARCODE");
   pm.inheritsAfter("PCB_BARCODE", "BOARD_ITEM");
   const own = (i: PcbItem): BoardBarcode => i.barcode!;
-  pm.replaceProperty("BOARD_ITEM", "Layer", {
-    owner: "PCB_BARCODE",
-    name: "Layer",
-    kind: "enum",
-    choices: (_i, c) => layerChoices(c),
-    get: (i) => own(i).layer,
-    set: (i, v) => (own(i).layer === String(v) ? [] : barcodeCmd(own(i), { layer: String(v) })),
-  });
+  // `PCB_BARCODE_DESC` keeps `BOARD_ITEM`'s Layer too (no `ReplaceProperty`): the board item's row reads and sets a barcode's (`barcodeCmd`).
   const GROUP = "Barcode Properties";
   const row = (def: Omit<PropertyDef<PcbItem, PcbCtx, Cmd>, "owner">): void => add({ owner: "PCB_BARCODE", ...def } as PropertyDef<PcbItem, PcbCtx, Cmd>, GROUP);
   const size = (name: string, get: (b: BoardBarcode) => number, key: keyof BoardBarcode): void =>
@@ -332,7 +329,7 @@ function registerDrillMap(pm: PM, add: Add): void {
  * KiCad 10's `PCB_GENERATED_TABLE` and `PCB_DRILL_CHART` rows of a table that is a drill chart: Units and Decimal Places ("Table Generator"), Show Totals ("Drill Chart Properties").
  * Each edit is one `set_drill_chart`, which builds the chart again from the board.
  */
-function registerDrillChart(add: Add): void {
+export function registerDrillChart(add: Add): void {
   const chartOf = (i: PcbItem, c: PcbCtx): BoardDrillChart | undefined => (i.type === "PCB_TABLE" ? c.board.drawings?.drill_charts?.find((x) => x.table_id === i.id) : undefined);
   const isChart = (i: PcbItem, c?: PcbCtx): boolean => !!c && !!chartOf(i, c);
   const edit = (i: PcbItem, c: PcbCtx, patch: { units?: TableUnits; precision?: number; show_totals?: boolean }): Cmd[] => {
@@ -348,6 +345,9 @@ function registerDrillChart(add: Add): void {
     { label: "Mils", value: "mils" },
     { label: "Inches", value: "inch" },
   ];
+  // KiCad's drill chart is a class below the generated table, below the table: its own group comes first, then the generator's, then the table's
+  // (`GetGroupDisplayOrder`). The studio's one PCB_TABLE class gets that order by introducing these groups before the table's (`registerTableProperties` runs after this).
+  add({ owner: "PCB_TABLE", name: "Show Totals", kind: "bool", available: (i, c) => isChart(i, c), get: (i, c) => chartOf(i, c)?.show_totals ?? true, set: (i, v, c) => edit(i, c, { show_totals: Boolean(v) }) }, "Drill Chart Properties");
   add(
     { owner: "PCB_TABLE", name: "Units", kind: "enum", choices: () => UNITS, available: (i, c) => isChart(i, c), get: (i, c) => chartOf(i, c)?.units ?? "mm", set: (i, v, c) => edit(i, c, { units: String(v) as TableUnits }) },
     "Table Generator"
@@ -364,19 +364,23 @@ function registerDrillChart(add: Add): void {
     },
     "Table Generator"
   );
-  add({ owner: "PCB_TABLE", name: "Show Totals", kind: "bool", available: (i, c) => isChart(i, c), get: (i, c) => chartOf(i, c)?.show_totals ?? true, set: (i, v, c) => edit(i, c, { show_totals: Boolean(v) }) }, "Drill Chart Properties");
 }
 
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
   registerGridItem(pm, add);
   registerViaStitch(pm, add);
   registerDrillMap(pm, add);
-  registerDrillChart(add);
   registerReferenceImage(pm, add, layerChoices);
-  registerPoint(pm, add, layerChoices);
-  registerBarcode(pm, add, layerChoices);
+  registerPoint(pm, add);
+  registerBarcode(pm, add);
   pm.registerType("PCB_TEXTBOX");
   pm.inheritsAfter("PCB_TEXTBOX", "BOARD_ITEM");
+  // KiCad's text box is a PCB_SHAPE, so a BOARD_CONNECTED_ITEM: its Net row (no availability of its own; PCB_SHAPE's `isCopper` override is not inherited) comes
+  // before the Layer. The studio's text box has no net, so the row reads none and is read-only.
+  add(
+    { owner: "PCB_TEXTBOX", name: "Net", kind: "net", choices: () => [{ label: "<no net>", value: "" }], get: () => "", readOnlyReason: "A text box carries no net in the studio's model." },
+    ""
+  );
   // A text box is on any layer (`BOARD_ITEM`'s row would read the layer off a text or a dimension).
   pm.replaceProperty("BOARD_ITEM", "Layer", {
     owner: "PCB_TEXTBOX",
@@ -390,6 +394,23 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
   const TEXT = "Text Properties";
   const own = (i: PcbItem): BoardTextBox => i.textBox!;
   const row = (def: Omit<PropertyDef<PcbItem, PcbCtx, Cmd>, "owner">, group: string): void => add({ owner: "PCB_TEXTBOX", ...def } as PropertyDef<PcbItem, PcbCtx, Cmd>, group);
+  // EDA_TEXT's Orientation is in the basic group (`EDA_TEXT_DESC` adds it with no group).
+  // `PCB_TEXTBOX::SetTextAngle`: the box turns about its position.
+  row(
+    {
+      name: "Orientation",
+      kind: "double",
+      display: "degree",
+      get: (i) => own(i).angle / 1000,
+      set: (i, v) => {
+        const angle = Math.round(norm360(num(v)) * 1000);
+        const b = own(i);
+        return b.angle === angle ? [] : boxCmd(withTextAngle(b, angle), {});
+      },
+    },
+    ""
+  );
+
 
   row(
     {
@@ -410,6 +431,20 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
         const next = String(v).trim();
         const face = next === "" || next.startsWith("KiCad Font") ? null : next;
         return (own(i).face ?? null) === face ? [] : boxCmd(own(i), { face });
+      },
+    },
+    TEXT
+  );
+  // "Auto Thickness" (`EDA_TEXT::SetAutoThickness`): on, the pen is `GetPenSizeForNormal` / `ForBold` of the smaller size; off, the pen stays as it was.
+  row(
+    {
+      name: "Auto Thickness",
+      kind: "bool",
+      get: (i) => !!own(i).thickness_auto,
+      set: (i, v) => {
+        const b = own(i);
+        if (!!b.thickness_auto === Boolean(v)) return [];
+        return boxCmd(b, Boolean(v) ? { thickness: autoPenNm(Math.min(b.size, b.width), b.bold), thickness_auto: true } : { thickness_auto: false });
       },
     },
     TEXT
@@ -451,7 +486,8 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
   flag("Italic", "italic");
   flag("Bold", "bold");
   flag("Mirrored", "mirror");
-  flag("Knockout", "knockout");
+  // "Visible" (`EDA_TEXT_DESC`, available on a field only: `isField`).
+  row({ name: "Visible", kind: "bool", get: () => true, available: () => false }, TEXT);
   const glyph = (name: "Width" | "Height"): void =>
     row(
       {
@@ -501,21 +537,8 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
     },
     TEXT
   );
-  // `PCB_TEXTBOX::SetTextAngle`: the box turns about its position.
-  row(
-    {
-      name: "Orientation",
-      kind: "double",
-      display: "degree",
-      get: (i) => own(i).angle / 1000,
-      set: (i, v) => {
-        const angle = Math.round(norm360(num(v)) * 1000);
-        const b = own(i);
-        return b.angle === angle ? [] : boxCmd(withTextAngle(b, angle), {});
-      },
-    },
-    TEXT
-  );
+  // "Knockout" (`PCB_TEXTBOX_DESC`'s own, after the EDA_TEXT rows it takes after).
+  flag("Knockout", "knockout");
 
   const BORDER = "Border Properties";
   row({ name: "Border", kind: "bool", get: (i) => own(i).border, set: (i, v) => (own(i).border === Boolean(v) ? [] : boxCmd(own(i), { border: Boolean(v) })) }, BORDER);
@@ -568,4 +591,11 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
       MARGINS
     )
   );
+  // What a text box takes after PCB_SHAPE, BOARD_CONNECTED_ITEM and EDA_SHAPE and does not mask, all unavailable on one: the pad primitive rows (pad edit mode
+  // only), the teardrops (`supportsTeardrops`: a pad or a via), and the shape rows a rectangle has not (`isCircle`, the arc's Angle, `isOpenShape`'s line
+  // endings, and Fill and Fill Color, which `fillAvailable` refuses a PCB_TEXTBOX_T outright).
+  const absent = (group: string, ...names: string[]): void => names.forEach((name) => row({ name, kind: "string", get: () => "", available: () => false }, group));
+  absent("Pad Primitives", "Number Box", "Thermal Spoke Template");
+  absent("Teardrops", "Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Prefer Zone Connections", "Allow Teardrops To Span Two Tracks", "Max Width Ratio");
+  absent("Shape Properties", "Center X", "Center Y", "Radius", "Angle", "Fill", "Start Shape", "Start Length", "Start Width", "Start Stroke Width", "End Shape", "End Length", "End Width", "End Stroke Width", "Fill Color");
 }

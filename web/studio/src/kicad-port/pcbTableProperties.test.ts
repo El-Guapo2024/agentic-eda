@@ -95,12 +95,14 @@ test("a table is moved and locked by the board item's rows, with the generic ver
   assert.deepEqual(edit(b, ["tbl_a"], "Locked", true), [{ op: "set_locked", ids: ["tbl_a"], locked: true }]);
 });
 
-test("a cell: text, font, thickness, bold, justification, margins and the table's column and row; no position, layer, lock or net", () => {
+test("a cell: text, font, thickness, bold, justification, knockout, margins and the table's column and row; a read-only lock; no position, layer or net", () => {
   const b = board(fixtureTable(2, 3));
   const groups = names(b, ["tbl_a:1:1"]);
   const all = groups.flatMap(([, rows]) => rows);
-  for (const gone of ["Position X", "Position Y", "Layer", "Locked", "Net", "Start X", "Orientation"]) assert.ok(!all.includes(gone), gone);
-  assert.deepEqual(groups.find(([c]) => c === "Text Properties")![1], ["Text", "Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Vertical Justification"]);
+  for (const gone of ["Position X", "Position Y", "Layer", "Net", "Start X", "Orientation"]) assert.ok(!all.includes(gone), gone);
+  // `PCB_TABLECELL_DESC` leaves BOARD_ITEM's Locked on (read-only here) and PCB_TEXTBOX's Knockout
+  assert.equal(rowOf(b, ["tbl_a:1:1"], "Locked")!.writable, false);
+  assert.deepEqual(groups.find(([c]) => c === "Text Properties")![1], ["Text", "Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Knockout"]);
   assert.deepEqual(groups.find(([c]) => c === "Margins")![1], ["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"]);
   assert.deepEqual(groups.find(([c]) => c === "Table")![1], ["Column Width", "Row Height"]);
   assert.equal(rowOf(b, ["tbl_a:1:1"], "Text")!.value, "r1c1");

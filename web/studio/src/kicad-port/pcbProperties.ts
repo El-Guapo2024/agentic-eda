@@ -29,7 +29,7 @@ import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooLarge, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import type { BoardBarcode, BoardDrillMap, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
-import { registerExtraItemProperties } from "./pcbItemProperties";
+import { barcodeCmd, pointCmd, registerDrillChart, registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
 import { registerTableProperties, tableItemOf, tableItemsOf } from "./pcbTableProperties";
@@ -603,9 +603,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     name: "Layer",
     kind: "enum",
     choices: (_i, c) => layerChoicesOf(c, c.allLayers),
-    get: (i) => i.text?.layer ?? i.dim?.layer ?? i.field?.layer ?? i.table?.layer ?? "",
+    get: (i) => i.text?.layer ?? i.dim?.layer ?? i.field?.layer ?? i.table?.layer ?? i.point?.layer ?? i.barcode?.layer ?? "",
     set: (i, v) => {
       const layer = String(v);
+      // a point's and a barcode's (`PCB_POINT_DESC` and `PCB_BARCODE_DESC` keep this row: kicad-port/pcbItemProperties.ts)
+      if (i.point) return i.point.layer === layer ? [] : pointCmd(i.point, { layer });
+      if (i.barcode) return i.barcode.layer === layer ? [] : barcodeCmd(i.barcode, { layer });
       if (i.table) return i.table.layer === layer ? [] : [{ op: "table", verb: "set", id: i.table.id, layer }];
       if (i.text) return i.text.layer === layer ? [] : [textCmd(i.text, { layer })];
       if (i.dim) return i.dim.layer === layer ? [] : [dimCmd(i.dim, { layer })];
@@ -1973,6 +1976,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   // KiCad's field has a lock of its own (`BOARD_ITEM::SetLocked`); here it is locked with its footprint.
 
   // ------------------------------------------------------------------------------------------------------------------ PCB_TABLE, PCB_TABLECELL
+  registerDrillChart(add);
   registerTableProperties(pm, { add });
 
   // ---------------------------------------------------------------------------------------------------------- EDA_SHAPE, PCB_SHAPE

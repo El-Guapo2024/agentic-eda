@@ -580,6 +580,32 @@ mod tests {
         assert!(placed_pads(&ConstraintModel { footprints: vec![Footprint { name: "C".into(), pads: vec![pad(PadShape::Rect, (Nm::new(600_000), Nm::new(600_000)))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() }], ..model.clone() }, &part, &at(0, Side::Top)).unwrap()[0].pieces.is_empty());
     }
 
+    /// UI-LEFT-2 PP26: a pad's offset (`PAD::SetOffset`) puts its copper off its position (`PAD::ShapePos`): the placed pad's copper box is where the
+    /// copper is, turned and mirrored with the footprint, while `size` stays a box about the position that holds it whichever way it points.
+    #[test]
+    fn a_placed_pads_copper_box_follows_its_offset() {
+        use crate::footprint::{placed_pads, Footprint};
+        use crate::ir::{LabelSide, Side};
+        use crate::{ConstraintModel, Part, Pin, PinKind};
+        // A 1 x 1 mm pad whose copper sits 1 mm to the right of its hole.
+        let mut p = pad(PadShape::Rect, (Nm::new(1_000_000), Nm::new(1_000_000)));
+        p.ext.offset = Some((Nm::new(1_000_000), Nm::ZERO));
+        let footprint = Footprint { name: "O".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("O".into()), footprint: Some("O".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_nm: None, symbol: None, datasheet: None, edge: None };
+        let model = ConstraintModel { parts: vec![part.clone()], footprints: vec![footprint], ..Default::default() };
+        let at = |rot, side| FootprintInstance { id: "J1".into(), at: Point { x: Nm::new(10_000_000), y: Nm::new(5_000_000) }, rot, side, label: LabelSide::Above };
+        let mm = |v: f64| Nm::new((v * 1e6) as i64);
+        let placed = &placed_pads(&model, &part, &at(0, Side::Top)).unwrap()[0];
+        assert_eq!(placed.size, (mm(3.0), mm(1.0)), "the box about the position holds the copper on either side");
+        assert_eq!(placed.copper_bounds(), (mm(10.5), mm(4.5), mm(11.5), mm(5.5)));
+        // turned a quarter, the offset points down the screen; on the back it is mirrored to the left
+        assert_eq!(placed_pads(&model, &part, &at(90_000, Side::Top)).unwrap()[0].copper_bounds(), (mm(9.5), mm(5.5), mm(10.5), mm(6.5)));
+        assert_eq!(placed_pads(&model, &part, &at(0, Side::Bottom)).unwrap()[0].copper_bounds(), (mm(8.5), mm(4.5), mm(9.5), mm(5.5)));
+        // a pad without one is its size about its position
+        let plain = ConstraintModel { footprints: vec![Footprint { name: "O".into(), pads: vec![pad(PadShape::Rect, (mm(1.0), mm(1.0)))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() }], ..model.clone() };
+        assert_eq!(placed_pads(&plain, &part, &at(0, Side::Top)).unwrap()[0].copper_bounds(), (mm(9.5), mm(4.5), mm(10.5), mm(5.5)));
+    }
+
     #[test]
     fn the_footprints_pad_box_holds_a_custom_pads_shapes() {
         use crate::footprint::Footprint;

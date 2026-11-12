@@ -4025,11 +4025,11 @@ impl<'a> Board<'a> {
         let clearance = self.model.board.tuning.copper_edge_clearance();
         let Some(p) = self.model.part(part) else { return true };
         let Some(pads) = placed_pads(self.model, p, fp) else { return true };
+        // The copper where it is (`PlacedPad::copper_bounds`): a pad's offset moves it off the hole, as KiCad's edge clearance measures the pad's
+        // effective shape (`PAD::GetEffectiveShape`, at `ShapePos()`), not the box of its size about its position.
         pads.iter().all(|pad| {
-            pad.center.x - pad.size.0 / 2 - bb.0 >= clearance
-                && pad.center.y - pad.size.1 / 2 - bb.1 >= clearance
-                && bb.2 - (pad.center.x + pad.size.0 / 2) >= clearance
-                && bb.3 - (pad.center.y + pad.size.1 / 2) >= clearance
+            let (x0, y0, x1, y1) = pad.copper_bounds();
+            x0 - bb.0 >= clearance && y0 - bb.1 >= clearance && bb.2 - x1 >= clearance && bb.3 - y1 >= clearance
         })
     }
 
