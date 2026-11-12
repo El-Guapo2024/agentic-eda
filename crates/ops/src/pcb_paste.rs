@@ -3,8 +3,8 @@
 //! Ports `EDIT_TOOL::Duplicate` (`pcbnew/tools/edit_tool.cpp`: `BOARD_ITEM::Duplicate` for a footprint, text, shape,
 //! track, via, zone or dimension, `PCB_GROUP::DeepDuplicate` for a group, a duplicate joining its original's group) and
 //! `PCB_CONTROL::Paste` (`pcbnew/tools/pcb_control.cpp`) with `PCB_CONTROL::placeBoardItems`: nets are mapped by name onto the
-//! board's own (`BOARD::MapNets`), copper on a layer the board does not have is dropped (`pruneItemLayers`), pasted items
-//! are never locked, and a footprint whose reference is taken gets the next free number
+//! board's own (`BOARD::MapNets`), copper on a layer the board does not have is dropped (`pruneItemLayers`), a pasted item is
+//! locked only when the text locks it (a copy never does: `CLIPBOARD_IO::SaveSelection` unlocks; a board file appended does), and a footprint whose reference is taken gets the next free number
 //! (`BOARD_REANNOTATE_TOOL::ReannotateDuplicates`). What is pasted is [`eda_kicad::parse_pcb_clipboard`]'s reading of KiCad's
 //! clipboard text.
 //!
@@ -121,7 +121,7 @@ pub(crate) struct Copies {
     pub(crate) groups: Vec<GroupCopy>,
     /// A copy of a member of a group that is not itself copied joins that group (`addToParentGroup`).
     pub(crate) join: Vec<(Member, String)>,
-    /// The copies of locked items (`BOARD_ITEM::Duplicate` is a `Clone()`: the lock comes along). Only Duplicate fills it.
+    /// The copies of locked items (`BOARD_ITEM::Duplicate` is a `Clone()`: the lock comes along), and of the items a pasted or appended text locks.
     pub(crate) locked: Vec<Member>,
     /// Each copy [`Board::collect_copies`] made, with the id of what it is a copy of.
     pub(crate) sources: Vec<(Member, String)>,
@@ -639,6 +639,25 @@ impl Board<'_> {
                 .collect();
             copies.groups.push(GroupCopy { name: g.name.clone(), members, design_block: g.design_block.clone() });
         }
+        // A locked item of the text is a locked copy (`CLIPBOARD_IO::Parse` keeps `(locked yes)`; Append Board's file keeps its locks).
+        copies.locked = clip
+            .locked
+            .iter()
+            .filter_map(|r| match *r {
+                ClipRef::Track(i) => track_ix.get(i).copied().flatten().map(Member::Track),
+                ClipRef::Via(i) => via_ix.get(i).copied().flatten().map(Member::Via),
+                ClipRef::Zone(i) => zone_ix.get(i).copied().flatten().map(Member::Zone),
+                ClipRef::Shape(i) => shape_ix.get(i).copied().map(Member::Shape),
+                ClipRef::Text(i) => text_ix.get(i).copied().map(Member::Text),
+                ClipRef::Dimension(i) => dim_ix.get(i).copied().map(Member::Dimension),
+                ClipRef::Footprint(i) => fp_ix.get(i).copied().map(Member::Footprint),
+                ClipRef::Barcode(i) => barcode_ix.get(i).copied().map(Member::Barcode),
+                ClipRef::TextBox(i) => box_ix.get(i).copied().map(Member::TextBox),
+                ClipRef::Image(i) => image_ix.get(i).copied().map(Member::Image),
+                ClipRef::Table(i) => table_ix.get(i).copied().flatten().map(Member::Table),
+                ClipRef::Group(i) => (i < copies.groups.len()).then_some(Member::Group(i)),
+            })
+            .collect();
         copies
     }
 

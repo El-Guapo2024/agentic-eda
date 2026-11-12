@@ -59,6 +59,7 @@ mod sexpr;
 /// A layer of a board file taken out with what is on it: a source layer left unmatched in the import's layer dialog (`DIALOG_MAP_LAYERS`).
 mod drop_layer;
 pub use drop_layer::drop_board_layer;
+pub mod append_layers;
 mod page;
 pub use page::drawing_sheet_in;
 mod import;

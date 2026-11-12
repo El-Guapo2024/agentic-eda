@@ -6,6 +6,9 @@
 //     dialog opens with the guesses matched (the state of KiCad's after "Auto-Match Layers") and OK sends the layers that were moved, and the layers left unmatched, which are
 //     left out as KiCad's `UNDEFINED_LAYER` leaves them. Cancel abandons the import: KiCad's dialog has no way out but OK (it asks again while a required layer is unmatched).
 //
+//     Append Board opens it too when the file's layers do not fit the board (KiCad 25ec2335 `remapAppendedLayers`, `mode: "append"`): every layer unmatched at first, the
+//     KiCad layers the rows permit, the whole map sent.
+//
 //   "Import Issues" -- the report of what the importers said (the errors and warnings; the DIALOG_HTML_REPORTER KiCad opens when "Show import issues" is on).
 //
 // The state is in state/foreignImport.ts; the pure logic (the lists, the buttons, what is sent) in kicad-port/foreignImport.ts, unit-tested there.
@@ -18,6 +21,7 @@ import {
   chooserCells,
   REQUIRED_LAYERS_MESSAGE,
   addMappings,
+  appendLayerAnswer,
   autoMatch,
   initialMapping,
   isRequiredLayer,
@@ -26,6 +30,7 @@ import {
   kicadLayerList,
   layerMapRequest,
   removeMappings,
+  unmatchedMapping,
   unmatchedRequired,
   wrapRequired,
   type SourceLayer,
@@ -142,8 +147,9 @@ function Row({ label, selected, onClick, onDoubleClick, testId, dim }: { label: 
 function LayerMapping({ dialog }: { dialog: LayerMapDialog }) {
   const layers: SourceLayer[] = dialog.layers;
   const required = useMemo(() => new Set(layers.filter(isRequiredLayer).map((l) => l.source)), [layers]);
-  const kicadLayers = useMemo(() => kicadLayerList(layers), [layers]);
-  const [state, setState] = useState(() => initialMapping(layers));
+  const append = dialog.mode === "append";
+  const kicadLayers = useMemo(() => kicadLayerList(layers, dialog.format, dialog.permitted), [layers, dialog.format, dialog.permitted]);
+  const [state, setState] = useState(() => (append ? unmatchedMapping(layers) : initialMapping(layers)));
   const [pickedUnmatched, setPickedUnmatched] = useState<string[]>([]);
   const [pickedMatched, setPickedMatched] = useState<string[]>([]);
   const [pickedKicad, setPickedKicad] = useState<string>(kicadLayers[0] ?? "F.Cu");
@@ -164,8 +170,13 @@ function LayerMapping({ dialog }: { dialog: LayerMapDialog }) {
     setMessage(null);
   };
 
-  const kept = keptGuesses(state);
+  const kept = append ? [] : keptGuesses(state);
   const ok = () => {
+    if (append) {
+      setImportKeepKiCadLayerNames(keepNames);
+      answerLayerMapping({ map: appendLayerAnswer(state), drop: [], keepNames });
+      return;
+    }
     // `RunModal`: while a required layer is unmatched the dialog is asked again.
     if (unmatchedRequired(state, layers).length > 0) {
       setMessage(REQUIRED_LAYERS_MESSAGE);
@@ -182,7 +193,7 @@ function LayerMapping({ dialog }: { dialog: LayerMapDialog }) {
     <DialogShell title="Edit Mapping of Imported Layers" width={700} onCancel={cancel} onOk={ok}>
       <div data-testid="map-layers" style={{ fontSize: 12 }}>
         <div style={{ marginBottom: 6, color: "var(--chrome-text-dim)" }}>
-          {dialog.name} ({dialog.format}). A layer marked * is copper: it must be matched.
+          {append ? `${dialog.name}: its layers do not all fit this board. A layer left unmatched stays on its own layer.` : `${dialog.name} (${dialog.format}). A layer marked * is copper: it must be matched.`}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
           <fieldset style={{ flex: 3, margin: 0, padding: "4px 8px 8px" }}>

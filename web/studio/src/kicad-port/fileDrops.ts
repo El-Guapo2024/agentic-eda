@@ -48,11 +48,20 @@ export function acceptedExtensions(tab: string): string[] {
  */
 const TAKES_EVERY: ReadonlySet<string> = new Set(["eeschema.EditorControl.ddAppendFile"]);
 
+export interface DropRun {
+  name: string;
+  action: string;
+  /** Every file of the drop the action takes, `name` first, for an action that takes them all. */
+  names?: string[];
+}
+
 export interface DropPlan {
-  /** The file to open and the action to run it with: the first accepted file the studio can open. `names` is every file of the drop the action takes, the first included, for an action that takes them all. */
-  open: { name: string; action: string; names?: string[] } | null;
-  /** Accepted files after the first (KiCad runs each in turn; here one at a time, as an open dialog or a carried placement would meet the next). */
-  extra: string[];
+  /**
+   * The accepted files the studio can open, in the drop's order, each with the action it runs (`DoWithAcceptedFiles`: `RunAction( *m_acceptedExts.at( ext ), &fn )` for each
+   * file in turn). KiCad's frame runs the next file's action once the one before returns; the studio runs it once the one before is done with the frame (its dialog closed,
+   * its carried placement dropped or cancelled), as `FileDropHost` waits. The schematics of a drop are one run (`names`): Import Sheet places each of them in turn itself.
+   */
+  runs: DropRun[];
   /** Files the frame accepts that this studio cannot open by a drop (no handler), with the action's id. */
   unavailable: Array<{ name: string; action: string }>;
   /** Files of an extension the frame does not accept: ignored. */
@@ -61,29 +70,28 @@ export interface DropPlan {
 
 /** Sorts a drop's files by what the frame does with them. `isEnabled` says whether the studio handles an action on this tab. */
 export function planDrop(tab: string, names: readonly string[], isEnabled: (action: string) => boolean): DropPlan {
-  const plan: DropPlan = { open: null, extra: [], unavailable: [], ignored: [] };
+  const plan: DropPlan = { runs: [], unavailable: [], ignored: [] };
   for (const name of names) {
     const action = dropActionFor(tab, name);
     if (!action) plan.ignored.push(name);
     else if (!isEnabled(action)) plan.unavailable.push({ name, action });
-    else if (!plan.open) plan.open = TAKES_EVERY.has(action) ? { name, action, names: [name] } : { name, action };
-    else if (plan.open.names && plan.open.action === action) plan.open.names.push(name);
-    else plan.extra.push(name);
+    else if (TAKES_EVERY.has(action)) {
+      const together = plan.runs.find((r) => r.action === action && r.names);
+      if (together) together.names!.push(name);
+      else plan.runs.push({ name, action, names: [name] });
+    } else plan.runs.push({ name, action });
   }
   return plan;
 }
 
-/** What is said about a drop that was not wholly opened, or null when there is nothing to say. */
+/** What is said about a drop of which nothing could be opened, or null when there is nothing to say (KiCad says nothing of a file its frame does not accept; the studio names it when nothing else of the drop is opened). */
 export function dropMessage(tab: string, plan: DropPlan): string | null {
+  if (plan.runs.length > 0) return null;
   const parts: string[] = [];
-  if (!plan.open) {
-    if (plan.unavailable.length > 0) parts.push(`${plan.unavailable.map((u) => u.name).join(", ")} cannot be opened by a drop in the studio.`);
-    if (plan.ignored.length > 0) {
-      const ext = acceptedExtensions(tab);
-      parts.push(`${plan.ignored.join(", ")} ${plan.ignored.length === 1 ? "is not a file" : "are not files"} this editor opens${ext.length > 0 ? ` (it takes ${ext.map((e) => `.${e}`).join(", ")})` : ""}.`);
-    }
-    return parts.length > 0 ? parts.join(" ") : null;
+  if (plan.unavailable.length > 0) parts.push(`${plan.unavailable.map((u) => u.name).join(", ")} cannot be opened by a drop in the studio.`);
+  if (plan.ignored.length > 0) {
+    const ext = acceptedExtensions(tab);
+    parts.push(`${plan.ignored.join(", ")} ${plan.ignored.length === 1 ? "is not a file" : "are not files"} this editor opens${ext.length > 0 ? ` (it takes ${ext.map((e) => `.${e}`).join(", ")})` : ""}.`);
   }
-  if (plan.extra.length > 0) parts.push(`Only ${plan.open.name} was opened; ${plan.extra.join(", ")} ${plan.extra.length === 1 ? "was" : "were"} skipped (drop one file at a time).`);
   return parts.length > 0 ? parts.join(" ") : null;
 }
