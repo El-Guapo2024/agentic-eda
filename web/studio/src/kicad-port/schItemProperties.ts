@@ -530,17 +530,22 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       return !i.symbol || !Number.isFinite(unit) || unit === drawnUnit(i.symbol) ? [] : [{ op: "sch_edit", verb: "set_symbol_unit", id: i.symbol.id, unit: i.symbol.unit ?? 1, new_unit: unit }];
     },
   });
-  // "Body Style" (`SetBodyStyleProp`, `multiBodyStyle`): "Standard" and "Alternate" for a De Morgan symbol (`GetBodyStyleDescription`), `set_body_style`.
-  const BODY_STYLES = ["Standard", "Alternate"];
+  // "Body Style" (`SetBodyStyleProp`, `multiBodyStyle`): one choice per style, `GetBodyStyleDescription( ii, false )` -- "Standard" and "Alternate" for a De Morgan
+  // symbol, the names of KiCad 25ec2335's custom styles -- and `set_body_style` with the first style of the chosen name.
+  const bodyStylesOf = (i: SchItem, c: SchCtx): string[] => {
+    const lib = libOf(i, c);
+    const count = lib?.body_style_count ?? 1;
+    return Array.from({ length: count }, (_, k) => lib?.body_style_names?.[k] ?? (k === 0 ? "Standard" : k === 1 ? "Alternate" : ""));
+  };
   add({
     owner: "SCH_SYMBOL",
     name: "Body Style",
     kind: "enum",
-    choices: () => BODY_STYLES.map((label) => ({ label, value: label })),
-    get: (i) => BODY_STYLES[(i.symbol?.body_style ?? 1) - 1] ?? "Standard",
+    choices: (i, c) => bodyStylesOf(i, c).map((label) => ({ label, value: label })),
+    get: (i, c) => bodyStylesOf(i, c)[(i.symbol?.body_style ?? 1) - 1] ?? "",
     available: (i, c) => isReal(i) && (libOf(i, c)?.body_style_count ?? 1) > 1,
-    set: (i, v) => {
-      const style = BODY_STYLES.indexOf(String(v)) + 1;
+    set: (i, v, c) => {
+      const style = bodyStylesOf(i, c).indexOf(String(v)) + 1;
       return style < 1 || style === (i.symbol!.body_style ?? 1) ? [] : [{ op: "sch_edit", verb: "set_body_style", ids: [i.symbol!.id], style }];
     },
   });

@@ -271,10 +271,23 @@ fn failed(status: &'static str, error: &str) -> Answer {
     Answer { status, body: json!({ "status": "failed", "error": error }).to_string() }
 }
 
-/// `GET /api/barcode_shape?id=..`: the shape of the barcode of the board `id` names, `pending` (202) while kicad-cli plots it.
+/// `GET /api/barcode_shape?id=..`: the shape of the barcode of the board `id` names, `pending` (202) while kicad-cli plots it. With `fp=<name>`, the barcode `id` of the
+/// library footprint the Footprint Editor has open under that name (UI-LEFT-2 FF6), its text resolved as that editor's board resolves it: the board's variables, none of the
+/// footprint's (`BOARD_USE::FPHOLDER`, `FOOTPRINT::ResolveTextVar` returns false).
 pub(crate) fn shape_route(dir: &Path, target: &str) -> Answer {
     let id = crate::image_api::query_value(target, "id");
     let Ok((_, design, model)) = crate::board::load(dir) else { return failed("404 Not Found", "the board could not be read") };
+    let fp = crate::image_api::query_value(target, "fp");
+    if !fp.is_empty() {
+        let Some(b) = design.footprint_library.as_ref().and_then(|l| l.by_name(&fp)).and_then(|f| f.items.barcodes.iter().find(|b| b.id == id)).cloned() else {
+            return failed("404 Not Found", "no barcode with this id in the footprint");
+        };
+        return match shown_text(dir, &b, target, None) {
+            Ok(text) if text.is_empty() => Answer { status: "200 OK", body: json!({ "status": "ready", "paths": [] }).to_string() },
+            Ok(text) => answer(&lookup(&b, &text)),
+            Err(e) => failed("404 Not Found", &e),
+        };
+    }
     // a board's barcode, or a footprint's (`U1~bar_..`, UI-LEFT P17: on the board, the footprint's variables resolved)
     let found = design.drawings.as_ref().and_then(|d| d.barcodes.iter().find(|b| b.id == id)).cloned().map(|b| (b, None)).or_else(|| crate::fp_board_items_json::placed_barcode(&design, &model, &id).map(|(b, r)| (b, Some(r))));
     let Some((b, owner)) = found else { return failed("404 Not Found", "no barcode with this id") };

@@ -3,7 +3,7 @@
 //! The state (`GET /api/state`, `GET /api/schematic`) does not carry the pixels: an image is described there by its place, its scale, its size in pixels, its definition and a
 //! `hash` of the file, and the browser fetches the file itself once per hash:
 //!
-//!   - `GET /api/pcb_image?id=<id>&h=<hash>`: the file of the board's reference image `id`;
+//!   - `GET /api/pcb_image?id=<id>&h=<hash>[&fp=<name>]`: the file of the board's reference image `id` (of the library footprint `name` the Footprint Editor has open);
 //!   - `GET /api/sch_image?id=<id>&h=<hash>[&sheet=<id>/<id>/..]`: the file of the image `id` on the sheet (the root when `sheet` is empty).
 //!
 //! The answer is the PNG, JPEG, GIF or BMP file the design embeds, with its own media type; the browser decodes and draws it.
@@ -77,10 +77,16 @@ fn file_reply(data: &str) -> Reply {
     }
 }
 
-/// `GET /api/pcb_image`.
+/// `GET /api/pcb_image`; with `fp=<name>`, the image `id` of the library footprint the Footprint Editor has open under that name (UI-LEFT-2 FF6: `PCB_PAINTER` draws
+/// a footprint's `PCB_REFERENCE_IMAGE` in that editor as on the board).
 pub(crate) fn pcb_image(dir: &Path, target: &str) -> Reply {
     let id = query_value(target, "id");
+    let fp = query_value(target, "fp");
     match crate::board::load(dir) {
+        Ok((_, design, _)) if !fp.is_empty() => match design.footprint_library.as_ref().and_then(|l| l.by_name(&fp)).and_then(|f| f.items.images.iter().find(|i| i.id == id)) {
+            Some(img) => file_reply(&img.data),
+            None => not_found("no reference image with this id in the footprint"),
+        },
         Ok((_, design, model)) => match design.drawings.as_ref().and_then(|d| d.board_items.images.iter().find(|i| i.id == id)) {
             Some(img) => file_reply(&img.data),
             // an image of a footprint (`U1~img_..`, UI-LEFT P17)

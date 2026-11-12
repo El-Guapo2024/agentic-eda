@@ -344,6 +344,37 @@ struct ItemsRead {
     images: Vec<Option<String>>,
     barcodes: Vec<Option<String>>,
     tables: Vec<Option<String>>,
+    /// The items that are `(locked yes)`, by kind and place in their list (UI-LEFT-2 FF6): `LibraryFootprintKeep::locked` once they have their ids.
+    locked: Vec<(&'static str, usize)>,
+    /// What a zone's form says beyond [`eda_model::ir::Zone`] (its fill, thieving, per-layer settings, arcs), by its place in the list.
+    zone_extras: Vec<(usize, ZoneExtras)>,
+}
+
+/// What a footprint's zone keeps beside it (`LibraryFootprintKeep::zone_fills`, `zone_thieving`, `zone_layer_props`, `zone_arcs`).
+struct ZoneExtras {
+    fill: Option<eda_model::lib_keep::KeptZoneFill>,
+    thieving: Option<String>,
+    layer_props: Option<String>,
+    arc_rings: Option<Vec<String>>,
+}
+
+/// A zone's `(filled_polygon (layer ..) [(island yes)] (pts ..))`s and its `(fill yes ..)` flag (`parseZONE`'s `T_filled_polygon`, `SetIsFilled`), in the footprint's
+/// frame; `None` when it stores none.
+fn zone_fill_of(child: &[Sexpr], zone: &eda_model::ir::Zone) -> Option<eda_model::lib_keep::KeptZoneFill> {
+    let mut layers: std::collections::BTreeMap<String, Vec<(bool, Vec<[i64; 2]>)>> = std::collections::BTreeMap::new();
+    for fp in sexpr::find_all(child, "filled_polygon") {
+        let layer = sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or(zone.layer.as_str()).to_string();
+        let island = sexpr::find(fp, "island").is_some_and(|i| sexpr::txt(i, 1).is_none_or(|v| v == "yes"));
+        let pts: Vec<[i64; 2]> = sexpr::find(fp, "pts")
+            .map(|p| sexpr::find_all(p, "xy").filter_map(|xy| Some([crate::mm_to_nm(sexpr::num(xy, 1)?).get(), crate::mm_to_nm(sexpr::num(xy, 2)?).get()])).collect())
+            .unwrap_or_default();
+        layers.entry(layer).or_default().push((island, pts));
+    }
+    if layers.is_empty() {
+        return None;
+    }
+    let filled = sexpr::find(child, "fill").is_some_and(|f| f.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "yes")));
+    Some(eda_model::lib_keep::KeptZoneFill { sig: crate::zone_fills::zone_signature(zone), unfilled: !filled, layers, outline: zone.outline.clone(), holes: zone.holes.clone(), zone_layers: zone.layer_set().into_iter().map(str::to_string).collect() })
 }
 
 impl ItemsRead {
@@ -352,19 +383,35 @@ impl ItemsRead {
     /// `parsePCB_REFERENCE_IMAGE`, `parsePCB_BARCODE`, `parsePCB_TABLE`), in the footprint's frame, which a library footprint's file is written in. `version` is the
     /// footprint file's (`m_requiredVersion`). False when the form says what the item cannot hold, and the caller keeps it as the file wrote it:
     /// - the board's reader gives none (`parseDIMENSION`'s pre-6.0 form, a zone with no outline, a table whose cells are off its grid, an image that is no image),
-    /// - a lock (`(locked yes)`): a library footprint has nowhere to keep one,
-    /// - a zone's fill (`(filled_polygon ..)`), its teardrop, copper thieving, a per-layer setting the reader cannot take apart or the arcs of its outline, which a
-    ///   board keeps beside the zone (`DrawingsSection::zone_thieving` ..) and a footprint has no place for. The hatch pitch and the layers' hatch offsets
-    ///   (`(property (layer ..) (hatch_position ..))`) are the zone's own (`Zone::border_hatch_pitch`, `Zone::hatch_offsets`).
+    /// - a zone's teardrop or `(filled_segments ..)` (a board's, and a file before 6.0's).
+    /// A lock (`(locked yes)`) is kept by the item's id (`LibraryFootprintKeep::locked`), and a zone's fill (`(filled_polygon ..)`), copper thieving, per-layer settings
+    /// and the arcs of its outline beside it (`LibraryFootprintKeep::zone_fills` ..), as the board keeps them (UI-LEFT-2 FF6). The hatch pitch and the layers' hatch
+    /// offsets (`(property (layer ..) (hatch_position ..))`) are the zone's own (`Zone::border_hatch_pitch`, `Zone::hatch_offsets`).
     ///
     /// A zone of a library footprint has no net (whatever `(net ..)` says: a footprint's copper zone takes the net of its pad once placed, which this editor does
     /// not model), and its uuid is kept with the others' (`LibraryFootprintKeep::uuids`), not in `Zone::uuid`; a table's too, its cells keeping theirs.
     fn read(&mut self, child: &[Sexpr], tag: &str, version: i64, items: &mut eda_model::fp_items::FootprintItems) -> bool {
-        // `parsePCB_POINT` has no `locked` (the board's reader, `pcb_point`, reads none either)
-        if tag != "point" && crate::import_items::is_locked(child) {
-            return false;
-        }
+        // `parsePCB_POINT` has no `locked` (the board's reader, `pcb_point`, reads none either); a lock is kept by the item's id (`LibraryFootprintKeep::locked`)
+        let locked = tag != "point" && crate::import_items::is_locked(child);
         let uuid = uuid_of(child);
+        let kind: &'static str = match tag {
+            "dimension" => "dimension",
+            "zone" => "zone",
+            "fp_text_box" | "gr_text_box" => "text_box",
+            "image" => "image",
+            "barcode" => "barcode",
+            "table" => "table",
+            _ => "point",
+        };
+        let place = match kind {
+            "dimension" => self.dimensions.len(),
+            "zone" => self.zones.len(),
+            "text_box" => self.text_boxes.len(),
+            "image" => self.images.len(),
+            "barcode" => self.barcodes.len(),
+            "table" => self.tables.len(),
+            _ => self.points.len(),
+        };
         match tag {
             "dimension" => {
                 let Some(d) = crate::import_items::read_dimension(child) else { return false };
@@ -372,12 +419,18 @@ impl ItemsRead {
                 self.dimensions.push(uuid);
             }
             "zone" => {
-                let unheld = ["filled_polygon", "filled_segments"].iter().any(|t| sexpr::find(child, t).is_some()) || sexpr::find(child, "attr").and_then(|a| sexpr::find(a, "teardrop")).is_some();
+                // a teardrop (`(attr (teardrop ..))`) is the board's; a footprint's file has none
+                let unheld = sexpr::find(child, "filled_segments").is_some() || sexpr::find(child, "attr").and_then(|a| sexpr::find(a, "teardrop")).is_some();
                 let Some(read) = crate::import::read_zone(child, &Default::default(), &crate::padstack_io::library_copper_layers()) else { return false };
-                if unheld || read.thieving.is_some() || read.arc_rings.is_some() || read.layer_props.is_some() {
+                if unheld {
                     return false;
                 }
-                items.zones.push(eda_model::ir::Zone { net: String::new(), uuid: String::new(), ..read.zone });
+                let zone = eda_model::ir::Zone { net: String::new(), uuid: String::new(), ..read.zone };
+                let extras = ZoneExtras { fill: zone_fill_of(child, &zone), thieving: read.thieving, layer_props: read.layer_props, arc_rings: read.arc_rings };
+                if extras.fill.is_some() || extras.thieving.is_some() || extras.layer_props.is_some() || extras.arc_rings.is_some() {
+                    self.zone_extras.push((self.zones.len(), extras));
+                }
+                items.zones.push(zone);
                 self.zones.push(uuid);
             }
             "fp_text_box" | "gr_text_box" => {
@@ -407,12 +460,45 @@ impl ItemsRead {
             }
             _ => return false,
         }
+        if locked {
+            self.locked.push((kind, place));
+        }
         true
     }
 
-    /// Once the items have their ids: each one's uuid into `fp.kicad.uuids`.
+    /// Once the items have their ids: each one's uuid into `fp.kicad.uuids`, its lock into `fp.kicad.locked`, a zone's fill, thieving, per-layer settings and arcs
+    /// into theirs.
     fn keep_uuids(self, fp: &mut LibraryFootprint) {
         let it = &fp.items;
+        for &(kind, i) in &self.locked {
+            let id = match kind {
+                "dimension" => it.dimensions.get(i).map(|x| x.id.clone()),
+                "zone" => it.zones.get(i).map(|x| x.id.clone()),
+                "text_box" => it.text_boxes.get(i).map(|x| x.id.clone()),
+                "image" => it.images.get(i).map(|x| x.id.clone()),
+                "barcode" => it.barcodes.get(i).map(|x| x.id.clone()),
+                "table" => it.tables.get(i).map(|x| x.id.clone()),
+                _ => None,
+            };
+            if let Some(id) = id {
+                fp.kicad.locked.insert(id);
+            }
+        }
+        for (i, extras) in self.zone_extras {
+            let Some(z) = it.zones.get(i) else { continue };
+            if let Some(f) = extras.fill {
+                fp.kicad.zone_fills.insert(z.id.clone(), f);
+            }
+            if let Some(t) = extras.thieving {
+                fp.kicad.zone_thieving.insert(z.id.clone(), t);
+            }
+            if let Some(p) = extras.layer_props {
+                fp.kicad.zone_layer_props.insert(z.id.clone(), p);
+            }
+            if let Some(rings) = extras.arc_rings {
+                fp.kicad.zone_arcs.push(eda_model::ir::ZoneArcs { id: z.id.clone(), rings, shape: eda_model::ir::ZoneArcs::shape_of(z) });
+            }
+        }
         let ids = (it.dimensions.iter().map(|d| d.id.clone()).zip(self.dimensions))
             .chain(it.zones.iter().map(|z| z.id.clone()).zip(self.zones))
             .chain(it.text_boxes.iter().map(|t| t.id.clone()).zip(self.text_boxes))
@@ -430,12 +516,13 @@ impl ItemsRead {
 /// (`footprint->RunOnChildren( .., NO_RECURSE )`), and a uuid that names none is dropped. The groups are made with [`crate::import_items::build_groups_with_uuids`],
 /// the board's: an inner group before the group that holds it, each group's id from its members'; each keeps its uuid in `fp.kicad.uuids`.
 ///
-/// A group that is locked (a library footprint has nowhere to keep the lock), or that names a form kept as the file wrote it (`kept`: the uuids of
-/// `fp.kicad.tokens`; a group holding such a group too), is kept as the file wrote it, as before `FootprintItems`: its members are named by uuid there, and every
+/// A locked group keeps its lock by its id (`LibraryFootprintKeep::locked`). A group that names a form kept as the file wrote it (`kept`: the uuids of
+/// `fp.kicad.tokens`; a group holding such a group too) is kept as the file wrote it, as before `FootprintItems`: its members are named by uuid there, and every
 /// item keeps its uuid, so the group still holds them.
 fn resolve_groups(fp: &mut LibraryFootprint, raw: Vec<(crate::import_items::RawGroup, String)>, mut kept: std::collections::HashSet<String>) {
-    let mut as_text: Vec<bool> = raw.iter().map(|(g, _)| g.locked).collect();
-    kept.extend(raw.iter().filter(|(g, _)| g.locked).filter_map(|(g, _)| g.uuid.clone()));
+    let mut as_text: Vec<bool> = vec![false; raw.len()];
+    // a locked group keeps its lock by its id (`LibraryFootprintKeep::locked`, UI-LEFT-2 FF6), as a graphic does
+    let locked_uuids: std::collections::HashSet<String> = raw.iter().filter(|(g, _)| g.locked).filter_map(|(g, _)| g.uuid.clone()).collect();
     loop {
         let mut more = false;
         for (i, (g, _)) in raw.iter().enumerate() {
@@ -465,6 +552,9 @@ fn resolve_groups(fp: &mut LibraryFootprint, raw: Vec<(crate::import_items::RawG
     let (built, _, uuids) = crate::import_items::build_groups_with_uuids(&by_uuid, &groups, names);
     for (g, uuid) in built.iter().zip(uuids) {
         if let Some(u) = uuid.filter(|u| !u.is_empty()) {
+            if locked_uuids.contains(&u) {
+                fp.kicad.locked.insert(g.id.clone());
+            }
             fp.kicad.uuids.insert(g.id.clone(), u);
         }
     }

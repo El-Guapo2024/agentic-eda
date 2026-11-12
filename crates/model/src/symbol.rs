@@ -192,6 +192,11 @@ impl AlternateBody {
     pub fn new(graphics: Vec<SymbolGraphic>, pins: Vec<LibPin>) -> Self {
         AlternateBody { style: 2, graphics, pins }
     }
+
+    /// The body of style `style` with these items (a third or later custom body style, [`LibConnectivity::extra_bodies`]).
+    pub fn of_style(style: u32, graphics: Vec<SymbolGraphic>, pins: Vec<LibPin>) -> Self {
+        AlternateBody { style, graphics, pins }
+    }
 }
 
 /// A library symbol: everything `lib_symbols` embeds for one `lib_id`.
@@ -319,6 +324,17 @@ pub struct LibConnectivity {
     /// LIB_SYMBOL& .. )`: every field of the library symbol), unless Symbol Properties gave it its own (`SchExtras::field_looks`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub field_looks: std::collections::BTreeMap<String, crate::lib_keep::KeptFieldLooks>,
+    /// The bodies of a symbol of more than two custom body styles beyond [`LibSymbol::alternate`] (KiCad 25ec2335's `LIB_SYMBOL::GetBodyStyleCount` is the number of
+    /// `GetBodyStyleNames`, and a placed symbol draws any of them, `SCH_SYMBOL::SetBodyStyle`): style 3 and on, each tagged with its style. Every body but the one the
+    /// symbol's own `graphics` and `pins` are is tagged with its style, here or in `alternate`, so the style a symbol is drawn in is the one no body is tagged with
+    /// ([`LibSymbol::drawn_style`]): a symbol [`LibSymbol::in_style`] has put in style 3 keeps its normal body here, tagged 1. Kept here, as [`Self::pin_alternates`]
+    /// is, so the symbol's literals stay as they are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_bodies: Vec<AlternateBody>,
+    /// The names of a symbol's custom body styles (`(body_styles "Front" "Side" ..)`, `LIB_SYMBOL::GetBodyStyleNames`), empty for a single body style and for De Morgan
+    /// ([`LibSymbol::body_style_description`]); the schematic's cache writes them back (`SaveSymbol`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_style_names: Vec<String>,
 }
 
 /// See [`LibConnectivity::shape_looks`].
@@ -421,60 +437,79 @@ impl LibSymbol {
         self.alternate.is_some()
     }
 
-    /// `LIB_SYMBOL::GetBodyStyleCount`: 2 for a symbol with an alternate body style, else 1.
+    /// `LIB_SYMBOL::GetBodyStyleCount`: 1, 2 for a symbol with an alternate body style, and one more for each further custom body style (KiCad 25ec2335).
     pub fn body_style_count(&self) -> u32 {
-        if self.alternate.is_some() {
-            2
-        } else {
-            1
+        1 + self.alternate.is_some() as u32 + self.connectivity.extra_bodies.len() as u32
+    }
+
+    /// `LIB_SYMBOL::GetBodyStyleDescription( aBodyStyle, false )` (KiCad 25ec2335): a custom style's name, "Standard" / "Alternate" for De Morgan, else empty.
+    pub fn body_style_description(&self, style: u32) -> String {
+        if !self.connectivity.body_style_names.is_empty() {
+            return self.connectivity.body_style_names.get(style.saturating_sub(1) as usize).cloned().unwrap_or_default();
+        }
+        match (self.alternate.is_some(), style) {
+            (true, 1) => "Standard".into(),
+            (true, 2) => "Alternate".into(),
+            _ => String::new(),
         }
     }
 
-    /// The body style this symbol's own `graphics` and `pins` are of: 1, unless [`in_style`](Self::in_style) has put it in style 2.
+    /// The bodies of other styles than the one this symbol's `graphics` and `pins` are of: [`Self::alternate`] and [`LibConnectivity::extra_bodies`].
+    pub fn other_bodies(&self) -> impl Iterator<Item = &AlternateBody> {
+        self.alternate.as_deref().into_iter().chain(self.connectivity.extra_bodies.iter())
+    }
+
+    /// The body style this symbol's own `graphics` and `pins` are of: the one no other body is tagged with (1, unless [`in_style`](Self::in_style) has put it in another).
     pub fn drawn_style(&self) -> u32 {
-        match &self.alternate {
-            Some(a) if a.style == 1 => 2,
-            _ => 1,
-        }
+        let tagged: std::collections::BTreeSet<u32> = self.other_bodies().map(|b| b.style).collect();
+        (1..=self.body_style_count()).find(|s| !tagged.contains(s)).unwrap_or(1)
     }
 
-    /// Both bodies, by style: the `(graphics, pins)` of the normal one (style 1) and, for a symbol that has two, of the alternate one (style 2).
+    /// The `(graphics, pins)` of body style `style`, `None` for a style the symbol does not have.
+    #[allow(clippy::type_complexity)]
+    pub fn body_of(&self, style: u32) -> Option<(&[SymbolGraphic], &[LibPin])> {
+        if style == self.drawn_style() {
+            return Some((&self.graphics, &self.pins));
+        }
+        self.other_bodies().find(|b| b.style == style).map(|b| (b.graphics.as_slice(), b.pins.as_slice()))
+    }
+
+    /// Both bodies of a De Morgan symbol, by style: the `(graphics, pins)` of the normal one (style 1) and, for a symbol that has two or more, of the second one.
     #[allow(clippy::type_complexity)]
     pub fn bodies(&self) -> ((&[SymbolGraphic], &[LibPin]), Option<(&[SymbolGraphic], &[LibPin])>) {
-        match &self.alternate {
-            None => ((&self.graphics, &self.pins), None),
-            Some(a) if a.style == 1 => ((&a.graphics, &a.pins), Some((&self.graphics, &self.pins))),
-            Some(a) => ((&self.graphics, &self.pins), Some((&a.graphics, &a.pins))),
-        }
+        let normal = self.body_of(1).unwrap_or((&self.graphics, &self.pins));
+        (normal, if self.body_style_count() >= 2 { self.body_of(2) } else { None })
     }
 
-    /// The symbol as a placed one in body style `style` draws it: style 2 of a symbol that has an alternate body has that body's `graphics` and `pins` in place of the
-    /// normal one's, and keeps the normal body as its `alternate`, so what depends on the box of the symbol as a whole (`real_symbol_bbox`: the corner a derived sheet
-    /// places it by) is the same in either style. Any other style (a symbol with one body style draws it whatever style it is placed in) is the symbol drawn in style 1.
-    /// Putting a symbol in the style it is in already changes nothing.
+    /// Every body, by style, from 1.
+    #[allow(clippy::type_complexity)]
+    pub fn all_bodies(&self) -> Vec<(u32, &[SymbolGraphic], &[LibPin])> {
+        (1..=self.body_style_count()).filter_map(|s| self.body_of(s).map(|(g, p)| (s, g, p))).collect()
+    }
+
+    /// The symbol as a placed one in body style `style` draws it (`SCH_SYMBOL::SetBodyStyle`, KiCad 25ec2335: any of `GetBodyStyleCount()` styles): that body's `graphics` and
+    /// `pins` in place of the normal one's, every other body kept, tagged with its style ([`Self::alternate`], [`LibConnectivity::extra_bodies`]), so what depends on the box
+    /// of the symbol as a whole (`real_symbol_bbox`: the corner a derived sheet places it by) is the same in every style. A style the symbol does not have (a symbol with one
+    /// body style draws it whatever style it is placed in) is style 1. Putting a symbol in the style it is in already changes nothing.
     pub fn in_style(&self, style: u32) -> std::borrow::Cow<'_, LibSymbol> {
-        let want = if style == 2 { 2 } else { 1 };
-        match &self.alternate {
-            // one `LIB_SYMBOL` for every body style: its jumper groups, power kind and pin alternates hold in either (`conn_facts.cpp` reads
-            // `JumperPinGroups()` whatever the style, r5 A5-M2)
-            Some(alt) if self.drawn_style() != want => std::borrow::Cow::Owned(LibSymbol { connectivity: self.connectivity.clone(),
-                lib_id: self.lib_id.clone(),
-                graphics: alt.graphics.clone(),
-                pins: alt.pins.clone(),
-                power: self.power,
-                in_bom: self.in_bom,
-                on_board: self.on_board,
-                datasheet: self.datasheet.clone(),
-                description: self.description.clone(),
-                reference_prefix: self.reference_prefix.clone(),
-                unit_count: self.unit_count,
-                pin_names_hidden: self.pin_names_hidden,
-                pin_numbers_hidden: self.pin_numbers_hidden,
-                pin_name_offset_mm: self.pin_name_offset_mm,
-                alternate: Some(Box::new(AlternateBody { style: self.drawn_style(), graphics: self.graphics.clone(), pins: self.pins.clone() })),
-            }),
-            _ => std::borrow::Cow::Borrowed(self),
+        let count = self.body_style_count();
+        let want = if (1..=count).contains(&style) { style } else { 1 };
+        if count < 2 || self.drawn_style() == want {
+            return std::borrow::Cow::Borrowed(self);
         }
+        let body = |s: u32| self.body_of(s).map(|(g, p)| (g.to_vec(), p.to_vec())).unwrap_or_default();
+        let (graphics, pins) = body(want);
+        // style 2's body is the alternate, unless the symbol is drawn in style 2: then the alternate is the normal body; the same for each further style
+        let tagged = |s: u32| {
+            let (g, p) = if s == want { body(1) } else { body(s) };
+            AlternateBody { style: if s == want { 1 } else { s }, graphics: g, pins: p }
+        };
+        let alternate = Some(Box::new(tagged(2)));
+        let mut connectivity = self.connectivity.clone();
+        connectivity.extra_bodies = (3..=count).map(tagged).collect();
+        // one `LIB_SYMBOL` for every body style: its jumper groups, power kind and pin alternates hold in either (`conn_facts.cpp` reads
+        // `JumperPinGroups()` whatever the style, r5 A5-M2)
+        std::borrow::Cow::Owned(LibSymbol { lib_id: self.lib_id.clone(), graphics, pins, alternate, connectivity, ..self.clone() })
     }
 }
 

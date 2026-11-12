@@ -194,6 +194,40 @@ pub struct LibraryFootprintKeep {
     /// 25ec2335), by the graphic's id (UI-LEFT-2 FF3: the Properties pane's Start Shape .. End Stroke Width rows). Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub endings: BTreeMap<String, crate::line_ending::LineEndings>,
+    /// A zone's `(filled_polygon ..)`s as the file stored them (UI-LEFT-2 FF6: KiCad's Footprint Editor runs no zone filler, and draws and writes the fill a footprint
+    /// zone brought, `ZONE::m_FilledPolysList`, from a board by Ctrl+E or the file), by the zone's id. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub zone_fills: BTreeMap<String, KeptZoneFill>,
+    /// A copper thieving zone's `(thieving ..)` settings, by the zone's id, as the board keeps them (`DrawingsSection::zone_thieving`). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub zone_thieving: BTreeMap<String, String>,
+    /// A zone's per-layer `(property ..)` forms the reader cannot take apart, by the zone's id (`DrawingsSection::zone_layer_props`). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub zone_layer_props: BTreeMap<String, String>,
+    /// The rings of a zone outline drawn with arcs, as the file wrote them (`DrawingsSection::zone_arcs`, the id inside), written while the zone keeps the outline read.
+    /// Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_arcs: Vec<crate::ir::ZoneArcs>,
+}
+
+/// The fill a footprint's zone brought (`LibraryFootprintKeep::zone_fills`): its rings on each layer, in nanometres in the footprint's frame, whether the file said the
+/// zone is filled (`(fill yes ..)`, `ZONE::IsFilled`), and the zone's outline, holes and layers it was made for, which a fill follows when the zone is moved, turned or
+/// mirrored (`ZONE::Move` / `Rotate` / `Mirror` move `m_FilledPolysList`) and loses when it is reshaped (the point editor's `UnFill()`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeptZoneFill {
+    /// The fingerprint of the zone the fill was read with (`eda_kicad::zone_fills::zone_signature`).
+    #[serde(default)]
+    pub sig: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unfilled: bool,
+    /// Layer -> its rings, each `(island, points)`.
+    #[serde(default)]
+    pub layers: BTreeMap<String, Vec<(bool, Vec<[i64; 2]>)>>,
+    pub outline: Vec<crate::ir::Point>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<Vec<crate::ir::Point>>,
+    pub zone_layers: Vec<String>,
 }
 
 impl LibraryFootprintKeep {
@@ -227,6 +261,20 @@ impl LibraryFootprintKeep {
                 set.insert(to.to_string());
             }
         }
+        self.copy_zone_keep(from, to);
+    }
+
+    /// A copied zone's fill (`ZONE::InitDataFromSrcInCopyCtor` copies `m_FilledPolysList`; it follows the copy where it is put), thieving and per-layer settings.
+    fn copy_zone_keep(&mut self, from: &str, to: &str) {
+        if let Some(f) = self.zone_fills.get(from).cloned() {
+            self.zone_fills.insert(to.to_string(), f);
+        }
+        if let Some(t) = self.zone_thieving.get(from).cloned() {
+            self.zone_thieving.insert(to.to_string(), t);
+        }
+        if let Some(p) = self.zone_layer_props.get(from).cloned() {
+            self.zone_layer_props.insert(to.to_string(), p);
+        }
     }
 
     /// What `other` keeps by the id `from` (another footprint's: the clipboard's, or the one copied to it), kept here by the id `to` -- a pasted or copied item looks
@@ -250,6 +298,15 @@ impl LibraryFootprintKeep {
                 dst.insert(to.to_string());
             }
         }
+        if let Some(f) = other.zone_fills.get(from) {
+            self.zone_fills.insert(to.to_string(), f.clone());
+        }
+        if let Some(t) = other.zone_thieving.get(from) {
+            self.zone_thieving.insert(to.to_string(), t.clone());
+        }
+        if let Some(p) = other.zone_layer_props.get(from) {
+            self.zone_layer_props.insert(to.to_string(), p.clone());
+        }
     }
 
     /// Forget what is kept by the id `id` (the item is gone).
@@ -261,6 +318,10 @@ impl LibraryFootprintKeep {
         for set in [&mut self.unlocked_texts, &mut self.locked, &mut self.hidden_texts] {
             set.remove(id);
         }
+        self.zone_fills.remove(id);
+        self.zone_thieving.remove(id);
+        self.zone_layer_props.remove(id);
+        self.zone_arcs.retain(|a| a.id != id);
     }
 }
 

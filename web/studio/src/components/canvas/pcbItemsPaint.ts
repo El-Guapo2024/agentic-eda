@@ -79,9 +79,9 @@ function colourAlpha(layer: string): number {
  * `PCB_PAINTER::draw( const PCB_REFERENCE_IMAGE* )`: the bitmap at its place and size, at the alpha of its layer's colour times the Images opacity of the Appearance panel;
  * a selected image has a box drawn round it in the anchor colour and is shown opaque ("Keep reference images opaque when selected").
  */
-function paintRefImage(ctx: CanvasRenderingContext2D, view: ViewTransform, i: BoardRefImage, alpha: number, selected: boolean): void {
+export function paintRefImage(ctx: CanvasRenderingContext2D, view: ViewTransform, i: BoardRefImage, alpha: number, selected: boolean, url = pcbImageUrl(i.id, i.hash)): void {
   const [x0, y0] = refImageBounds(i);
-  const el = imageFor(pcbImageUrl(i.id, i.hash));
+  const el = imageFor(url);
   ctx.save();
   if (el) {
     ctx.globalAlpha *= selected ? 1 : alpha;

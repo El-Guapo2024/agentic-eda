@@ -167,9 +167,9 @@ pub fn real_symbol_bbox(sym: &eda_model::symbol::LibSymbol, unit: u32) -> (f64, 
     let on_unit = |u: u32| u == 0 || u == unit;
     // A symbol with two body styles has one box, that of both bodies together: the corner a derived sheet places it by does not depend on the style it is in
     // (`LibSymbol::in_style` keeps the other body for this), so its pins stay where they are, relative to the library's origin, when the style changes.
-    let other_body = sym.alternate.as_deref();
-    let all_graphics = || sym.graphics.iter().chain(other_body.into_iter().flat_map(|a| a.graphics.iter()));
-    let all_pins = || sym.pins.iter().chain(other_body.into_iter().flat_map(|a| a.pins.iter()));
+    // (every body of a symbol of custom body styles, KiCad 25ec2335: `LibSymbol::other_bodies`)
+    let all_graphics = || sym.graphics.iter().chain(sym.other_bodies().flat_map(|a| a.graphics.iter()));
+    let all_pins = || sym.pins.iter().chain(sym.other_bodies().flat_map(|a| a.pins.iter()));
     let (mut gx0, mut gy0, mut gx1, mut gy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut feed = |x: f64, y: f64| {
         gx0 = gx0.min(x);

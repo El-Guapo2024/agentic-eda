@@ -14,9 +14,9 @@
 //! Where this differs from KiCad:
 //!   * the symbols of a library that are not being saved are kept as the file has them, character for character, where KiCad parses every symbol and
 //!     formats it again: this port's reader does not hold every token of every symbol, and a library saved here must not lose what it does not read. The
-//!     library's header is this writer's (`(version 20250324)`, generator `eda`), so a symbol kept from a newer file is read under that version: KiCad's
+//!     library's header is this writer's (`(version 20251024)`, generator `eda`), so a symbol kept from another file is read under that version: KiCad's
 //!     reader gates only behaviours on it (`~` as an empty text before 20250318, the DeMorgan body style told from the drawing before 20250827, which
-//!     comes to the same for a symbol whose `_N_2` units exist), not tokens;
+//!     a form of an older file is given as `(body_styles demorgan)`, as KiCad's save writes it: `declare_legacy_body_styles`), not tokens;
 //!   * a folder library writes only the files whose symbols changed, where `Save` writes every file of the folder again;
 //!   * a library that does not read as a whole (a symbol cut off, a parenthesis missing) is refused with KiCad's message for a library loaded with
 //!     errors ("Cannot save library '%s' because it had a parse error during loading.") -- this reader finds the errors with an s-expression parse of the
@@ -150,20 +150,51 @@ fn extends_of(form: &str) -> Option<String> {
     crate::scan_symbols(&format!("(kicad_symbol_lib {form})")).into_iter().next().and_then(|s| s.extends)
 }
 
-/// The symbol forms of one `.kicad_sym` text, in file order, or `None` when the text does not read as a library (see the module doc).
+/// The symbol forms of one `.kicad_sym` text, in file order, or `None` when the text does not read as a library (see the module doc). A form of a file from
+/// before 20250827 is given the declaration of its body styles KiCad would write after reading it (see [`declare_legacy_body_styles`]).
 fn read_blocks(text: &str) -> Option<Vec<Block>> {
-    crate::sexpr::parse(text).ok()?;
+    let tree = crate::sexpr::parse(text).ok()?;
+    let version = tree.as_list().and_then(|l| crate::sexpr::find(l, "version")).and_then(|v| crate::sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let forms = library_forms(text)?;
     Some(
         forms
             .symbols
             .into_iter()
             .map(|(name, span)| {
-                let form = text[span].to_string();
+                let mut form = text[span].to_string();
+                if version < 20250827 {
+                    form = declare_legacy_body_styles(&form);
+                }
                 Block { parent: extends_of(&form), name, text: form }
             })
             .collect(),
     )
+}
+
+/// A symbol form of a file from before 20250827 as KiCad reads and writes it again: `parseLibSymbol` infers De Morgan from the drawings ("Before V10 we didn't store
+/// the number of body styles in a symbol", `HasLegacyAlternateBodyStyle`: a `_<unit>_2` or later sub-symbol) and `SaveSymbol` then declares it, `(body_styles
+/// demorgan)` after the name. A form kept as it is under this writer's header (20251024) without the declaration would read as one body style, its alternate pruned.
+pub(crate) fn declare_legacy_body_styles(form: &str) -> String {
+    let Ok(tree) = crate::sexpr::parse(form) else { return form.to_string() };
+    let Some(node) = tree.as_list() else { return form.to_string() };
+    if crate::sexpr::find(node, "body_styles").is_some() {
+        return form.to_string();
+    }
+    let legacy_alt = crate::sexpr::find_all(node, "symbol").filter_map(|sub| crate::sexpr::txt(sub, 1)).any(|n| crate::symbol_lib::unit_and_style_of_subname(n).1 >= 2);
+    if !legacy_alt {
+        return form.to_string();
+    }
+    // after `(symbol "Name"`: the name's closing quote (a `\"` inside it escaped)
+    let Some(open) = form.find('"') else { return form.to_string() };
+    let bytes = form.as_bytes();
+    let mut i = open + 1;
+    while i < bytes.len() && bytes[i] != b'"' {
+        i += if bytes[i] == b'\\' { 2 } else { 1 };
+    }
+    if i >= bytes.len() {
+        return form.to_string();
+    }
+    format!("{} (body_styles demorgan){}", &form[..=i], &form[i + 1..])
 }
 
 /// A symbol as `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` writes it into a library, under its bare name: a derived symbol as `(symbol "Name" (extends
@@ -580,6 +611,22 @@ pub fn copy_footprint_library(src: &Path, dst: &Path) -> Result<Vec<String>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A symbol kept from a file before 20250827 is given the declaration KiCad's save writes for the De Morgan pair it infers (`HasLegacyAlternateBodyStyle`), as
+    /// this writer's header (20251024) has the declaration count (UI-LEFT-2 YY3); a symbol with one style, or one that declares its styles, is left as it is.
+    #[test]
+    fn an_older_files_de_morgan_symbol_is_declared_when_kept() {
+        let old = r#"(symbol "74LS00" (pin_names (offset 1.016)) (symbol "74LS00_1_1" (pin input line (at 0 0 0) (length 1) (name "A") (number "1"))) (symbol "74LS00_1_2" (pin input line (at 0 0 0) (length 1) (name "A") (number "1"))))"#;
+        assert!(declare_legacy_body_styles(old).starts_with(r#"(symbol "74LS00" (body_styles demorgan) (pin_names"#));
+        let single = r#"(symbol "R" (symbol "R_0_1" (rectangle (start 0 0) (end 1 1))))"#;
+        assert_eq!(declare_legacy_body_styles(single), single);
+        let declared = r#"(symbol "G" (body_styles "A" "B") (symbol "G_1_2"))"#;
+        assert_eq!(declare_legacy_body_styles(declared), declared);
+        let blocks = read_blocks(&format!("(kicad_symbol_lib (version 20241209)\n\t{old}\n)")).unwrap();
+        assert!(blocks[0].text.contains("(body_styles demorgan)"));
+        let newer = read_blocks(&format!("(kicad_symbol_lib (version 20251024)\n\t{old}\n)")).unwrap();
+        assert!(!newer[0].text.contains("(body_styles"), "a file of the declaration's time says what it means");
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("eda-library-save-{tag}-{}", std::process::id()));

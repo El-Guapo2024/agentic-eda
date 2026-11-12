@@ -317,7 +317,7 @@ fn flag(item: &[Sexpr], key: &str) -> bool {
 }
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseDIMENSION`, for the format KiCad 6 and later write
-/// (`(type ..)`); the older `(feature1 ..)`/`(crossbar ..)` form is skipped. The dimension's
+/// (`(type ..)`) and the older `(width ..)` / `(feature1 ..)` / `(crossbar ..)` form, which KiCad reads as an aligned dimension (UI-LEFT-2 FF6). The dimension's
 /// measured value and text are not read: both are recomputed from the feature points and the
 /// format settings (`dim->Update()` in KiCad, `compute_dimension_geometry` here).
 pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimension> {
@@ -331,11 +331,14 @@ pub(crate) fn import_dimensions(root: &[Sexpr], refs: &mut Refs) -> Vec<Dimensio
     out
 }
 
-/// One `(dimension ..)` as [`import_dimensions`] reads it (`parseDIMENSION`); `None` for the pre-6.0 form (no `(type ..)`), a dimension with no two feature
-/// points or a type KiCad does not know. A footprint's own dimension is read by the same code (`parseFOOTPRINT_unchecked`'s `case T_dimension`), in the
+/// One `(dimension ..)` as [`import_dimensions`] reads it (`parseDIMENSION`); the pre-6.0 form (no `(type ..)`) as [`read_legacy_dimension`]; `None` for a
+/// dimension with no two feature points or a type KiCad does not know. A footprint's own dimension is read by the same code (`parseFOOTPRINT_unchecked`'s `case T_dimension`), in the
 /// footprint's frame.
 pub(crate) fn read_dimension(d: &[Sexpr]) -> Option<Dimension> {
     let defaults = DimensionSettings::default();
+    if sexpr::find(d, "type").is_none() && sexpr::find(d, "width").is_some() {
+        return read_legacy_dimension(d);
+    }
     let ty = sexpr::find(d, "type").and_then(|t| sexpr::txt(t, 1))?;
     let pts = sexpr::find(d, "pts")?;
     let mut points = sexpr::find_all(pts, "xy").filter_map(xy);
@@ -472,5 +475,68 @@ pub(crate) fn read_dimension(d: &[Sexpr]) -> Option<Dimension> {
         text_pos,
         text_frame,
         text_effects,
+    })
+}
+
+/// `parseDIMENSION`'s "Old format" (a file before 6.0: `(dimension <value> (width W) (layer ..) (gr_text ..) (feature1 (pts ..)) (feature2 (pts ..)) (crossbar (pts ..))
+/// (arrow1a ..) ..)`), KiCad 8303b2ad: a `PCB_DIM_ALIGNED` with the constructor's settings (`PCB_DIMENSION_BASE::PCB_DIMENSION_BASE`: bare suffix, outward arrows, four
+/// decimals, arrows 50 mils long, no extension offset, the text outside and kept aligned; `PCB_DIM_ALIGNED`'s extension height `m_arrowLength * sin( 27.5 deg )`), its line
+/// thickness the `(width ..)`, its start the first point of `feature1` and its end the first of `feature2` ("We only care about the origin"), its height from the crossbar
+/// (`UpdateHeight( point2, point1 )`, "backwards intentionally"), its units read off its text (`FetchUnitsFromString`: "mm", "mils" / "thou", "in" / `"`; none found is
+/// automatic, another unit the inch mode `GetUnitsMode` falls back to); the arrows are no longer saved and are skipped. `dim->Update()` recomputes the rest.
+pub(crate) fn read_legacy_dimension(d: &[Sexpr]) -> Option<Dimension> {
+    let first_point = |key: &str| sexpr::find(d, key).and_then(|f| sexpr::find(f, "pts")).and_then(|p| sexpr::find_all(p, "xy").filter_map(xy).next());
+    let start = first_point("feature1").unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+    let end = first_point("feature2").unwrap_or(Point { x: Nm::ZERO, y: Nm::ZERO });
+    // `PCB_DIM_ALIGNED::UpdateHeight( aCrossbarStart = point2, aCrossbarEnd = point1 )`: `height = point2 - start`, `crossBar = point1 - point2`, negative when
+    // `height.Cross( crossBar ) > 0`
+    let mut height = Nm::ZERO;
+    if let Some(pts) = sexpr::find(d, "crossbar").and_then(|c| sexpr::find(c, "pts")) {
+        let mut ps = sexpr::find_all(pts, "xy").filter_map(xy);
+        if let (Some(p1), Some(p2)) = (ps.next(), ps.next()) {
+            let (hx, hy) = ((p2.x - start.x).get() as f64, (p2.y - start.y).get() as f64);
+            let (cx, cy) = ((p1.x - p2.x).get() as f64, (p1.y - p2.y).get() as f64);
+            let norm = hx.hypot(hy);
+            height = Nm::new((if hx * cy - hy * cx > 0.0 { -norm } else { norm }).round() as i64);
+        }
+    }
+    let shown = sexpr::find(d, "gr_text").and_then(|t| sexpr::txt(t, 1)).unwrap_or("");
+    // `FetchUnitsFromString`: the digits, signs, points and commas, then the unit's first two letters
+    let rest = shown.trim().trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | '+')).trim_start();
+    let unit: String = rest.chars().take(2).collect::<String>().to_lowercase();
+    let units = match unit.as_str() {
+        "mm" => DimensionUnits::Mm,
+        "mi" | "th" => DimensionUnits::Mil,
+        "in" | "\"" => DimensionUnits::Inch,
+        "um" | "\u{b5}m" | "\u{3bc}m" | "cm" | "de" | "ra" | "fs" | "ps" => DimensionUnits::Inch,
+        _ => DimensionUnits::Automatic,
+    };
+    // the modern reader on the same form with a type, for the text's size, pen, angle and looks and the layer
+    let mut modern: Vec<Sexpr> = d.to_vec();
+    modern.push(Sexpr::List(vec![Sexpr::Atom("type".into()), Sexpr::Atom("aligned".into())]));
+    modern.push(Sexpr::List(vec![Sexpr::Atom("pts".into()), Sexpr::List(vec![Sexpr::Atom("xy".into()), Sexpr::Atom(crate::zone_fills::fmt_nm(start.x.get())), Sexpr::Atom(crate::zone_fills::fmt_nm(start.y.get()))]), Sexpr::List(vec![Sexpr::Atom("xy".into()), Sexpr::Atom(crate::zone_fills::fmt_nm(end.x.get())), Sexpr::Atom(crate::zone_fills::fmt_nm(end.y.get()))])]));
+    let base = read_dimension(&modern)?;
+    let arrow_length = Nm::new(1_270_000); // `pcbIUScale.MilsToIU( 50 )`
+    Some(Dimension {
+        layer: sexpr::find(d, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Dwgs.User").to_string(),
+        kind: DimensionKind::Aligned { height },
+        start,
+        end,
+        prefix: String::new(),
+        suffix: String::new(),
+        override_text: None,
+        units,
+        units_format: DimensionUnitsFormat::BareSuffix,
+        precision: 4,
+        suppress_trailing_zeros: false,
+        text_position: DimensionTextPosition::Outside,
+        keep_text_aligned: true,
+        stroke_width: um_of(d, "width").unwrap_or(base.stroke_width),
+        arrow_length,
+        extension_offset: Nm::ZERO,
+        extension_height: Nm::new((arrow_length.get() as f64 * 27.5f64.to_radians().sin()) as i64),
+        arrow_direction: ArrowDirection::Outward,
+        text_pos: None,
+        ..base
     })
 }

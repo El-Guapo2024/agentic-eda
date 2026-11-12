@@ -17,7 +17,9 @@
 // is already in use." and "Custom body styles must have at least 2 entries", `OnBodyStyle`'s refusal of several body styles on a symbol with alternate pin functions, and
 // `TransferDataFromWindow`'s order -- the names, the body styles (`SetBodyStyleCount` first), the jumper groups ("Pin '%s' in jumper pin group %d does not exist in this
 // symbol.") -- in `edit_symbol_units_and_connections`, after `edit_symbol_properties` in the same step. A derived symbol's are its parent's: hidden, as the lower panel is.
-// Not ported: embedded files, and KiCad 25ec2335's Pin Map tab (named pin-to-pad maps, a file format newer than this writer's).
+// The Embedded Files tab (`PANEL_EMBEDDED_FILES` on `m_libEntry->GetEmbeddedFiles()`, UI-LEFT-2 YY3) is a section of the panel: the library symbol's list, sent with OK
+// in the same step before a rename (which takes the list along, `rename_library_symbol`). Not ported: KiCad 25ec2335's Pin Map tab (named pin-to-pad maps, file
+// version 20260629, which a KiCad 10 file -- this writer's 20251024 -- cannot hold: 25ec2335's own KiCad 10 writer drops them).
 //
 // Named `LibrarySymbolPropertiesDialog` (not `SymbolPropertiesDialog`, already taken by the top-level placed-instance Reference/Value/Footprint/Datasheet dialog) -- same naming
 // split `components/footprint/FootprintPropertiesDialog.tsx`'s own `FootprintLibraryPropertiesDialog` already establishes for the Footprint Editor.
@@ -37,6 +39,9 @@ import { SymbolFieldsGrid } from "./SymbolFieldsGrid";
 import { bodyStyleChoiceRefusal, bodyStyleCountOf, bodyStyleModeOf, jumperRowsOf, resizeUnitNameRows, unitNameRowsOf, unitsAndBodyStylesProblem, type BodyStyleMode } from "../../kicad-port/symBodyStyles";
 import { letterSubReference } from "../../kicad-port/unitLetter";
 import { PinNumbers } from "../../kicad-port/pinNumbersSummary";
+import { EmbeddedFilesPanel } from "../EmbeddedFilesPanel";
+import { applyCmd as embeddedApplyCmd, EMPTY_DRAFT, type EmbeddedDraft } from "../../kicad-port/embeddedFiles";
+import type { EmbeddedListing } from "../../api/embeddedTypes";
 
 /** `PIN_NUMBERS::GetSummary` of some pin numbers. */
 function pinSummary(numbers: string[]): string {
@@ -147,6 +152,8 @@ export function LibrarySymbolPropertiesDialog() {
   /** The Pin Connections tab: `m_cbDuplicatePinsAreJumpers` and `m_jumperGroupsGrid`. */
   const [dupJumpers, setDupJumpers] = useState(false);
   const [jumperRows, setJumperRows] = useState<string[]>([]);
+  /** The Embedded Files tab's copy of the symbol's list (`PANEL_EMBEDDED_FILES::m_localFiles`), which OK sends. */
+  const [embedded, setEmbedded] = useState<{ draft: EmbeddedDraft; listing: EmbeddedListing | null }>({ draft: EMPTY_DRAFT, listing: null });
 
   useEffect(() => {
     if (!subject || !state.propertiesOpen) return;
@@ -252,6 +259,9 @@ export function LibrarySymbolPropertiesDialog() {
     const power_local = form.power && !!form.power_local;
     const props: SymbolPropertiesFields = { ...form, pin_name_offset_mm, units_locked, power_local, reference_prefix: text("Reference"), description: text("Description"), datasheet: text("Datasheet"), footprint_filters };
     const cmds: Cmd[] = [];
+    // `m_embeddedFiles->TransferDataFromWindow()`, on the symbol's list under the name it has before the rename (which carries it)
+    const filesCmd = embeddedApplyCmd({ kind: "library_symbol", lib_id: subject.lib_id }, embedded.listing, embedded.draft);
+    if (filesCmd) cmds.push(filesCmd);
     // `UNDO_REDO::LIB_RENAME`: the rename comes first, so the fields the grid says (the Value among them) are set on the renamed symbol as typed
     if (renamed) cmds.push({ op: "rename_library_symbol", lib_id: subject.lib_id, new_lib_id: target, overwrite: false });
     if (derived && parent !== subject.extends) cmds.push({ op: "set_symbol_parent", lib_id: target, parent });
@@ -443,6 +453,10 @@ export function LibrarySymbolPropertiesDialog() {
               </fieldset>
             </div>
           )}
+          <fieldset style={{ marginTop: 10 }} data-testid="props-embedded-files">
+            <legend>Embedded Files</legend>
+            <EmbeddedFilesPanel owner={{ kind: "library_symbol", lib_id: subject.lib_id }} run={api.cmd} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
+          </fieldset>
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>
             <span>Footprint filters</span>
             <input value={filtersText} onChange={(e) => setFiltersText(e.target.value)} placeholder="SOIC* TSSOP*" style={{ width: 300 }} data-testid="props-filters" />

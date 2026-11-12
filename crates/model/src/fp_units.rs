@@ -71,8 +71,8 @@ pub fn expand_stacked_pin_notation(pin: &str) -> (Vec<String>, bool) {
 pub fn unit_pin_info(symbol: &LibSymbol) -> Vec<FootprintUnit> {
     let unit_count = symbol.unit_count.max(1);
     let mut all: Vec<&crate::symbol::LibPin> = symbol.pins.iter().collect();
-    if let Some(alternate) = &symbol.alternate {
-        all.extend(alternate.pins.iter());
+    for body in symbol.other_bodies() {
+        all.extend(body.pins.iter());
     }
     (1..=unit_count)
         .map(|unit| {

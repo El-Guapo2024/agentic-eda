@@ -2,6 +2,7 @@
 // footprint holds beyond its pads, graphics, texts and fields (`crates/model/src/fp_items.rs`: dimensions, zones, text boxes, points, images, barcodes, tables,
 // groups). `GET /api/footprint` sends them twice: as the IR has them (`items`, what the verbs take back) and in the board's display shapes (`display`, what the
 // board's painters draw: `crates/cli/src/fp_items_json.rs`).
+import type { FillZone } from "./types";
 import type { CmdDimension, CmdShape, CmdText, CmdZone, Dimension, FieldLayoutCmd, Group, Nm, PointXY, Zone } from "./types";
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox, CmdBarcode, CmdPoint, CmdRefImage, CmdTextBox } from "./pcbItemTypes";
 import type { BoardTable } from "./types";
@@ -31,6 +32,8 @@ export interface FootprintItemsDisplay {
   points: BoardPoint[];
   barcodes: BoardBarcode[];
   tables: BoardTable[];
+  /** The fills the zones brought (`LibraryFootprintKeep::zone_fills`, as they hold for each zone now): one per zone and layer, in `GET /api/fill`'s shape. */
+  zone_fills?: FillZone[];
 }
 
 /** `fp_items::FpItem`: one item of the kinds `eda_model::fp_items` adds, as `add` and `set` carry it. */

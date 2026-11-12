@@ -506,7 +506,7 @@ export function paintFootprint(
   view: ViewTransform,
   widthPx: number,
   heightPx: number,
-  footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[]; fieldsToDraw?: FieldInfo[]; display?: FootprintItemsDisplay; kicad?: LibraryKeep } | null,
+  footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[]; fieldsToDraw?: FieldInfo[]; display?: FootprintItemsDisplay; kicad?: LibraryKeep; name?: string } | null,
   opts: FpPaintOptions
 ) {
   // the Footprint Editor's axes are always on (`m_axesEnabled = true`), drawn whether the grid is shown or not, in `LAYER_GRID_AXES`
@@ -536,6 +536,7 @@ export function paintFootprint(
     sketchText: !!opts.sketchText,
     sketchGraphics: !!opts.sketchGraphics,
     movePreview: opts.movePreview,
+    footprint: footprint.name,
   };
 
   // The zones, tables, dimensions, text boxes, points, barcodes and images of the footprint (kicad-port/fpItems.ts), under the graphics.

@@ -271,31 +271,52 @@ fn an_older_footprint_that_kept_its_items_as_text_still_writes_them() {
     assert_eq!(back.items.groups[0].member_ids, want);
 }
 
-/// What a library footprint's items cannot hold stays the text the file wrote: a locked item (a library footprint has no lock for its items), a dimension of the
-/// pre-6.0 form, a zone with its fill or with the arcs of its outline; and a group that names one of them, or a locked group, stays text too, naming its members by
-/// their uuids, which every item keeps.
+/// UI-LEFT-2 FF6: what the items once could not hold is held now, as KiCad's Footprint Editor holds it -- a locked dimension and a locked group keep their locks
+/// (`LibraryFootprintKeep::locked`, written `(locked yes)`), a zone keeps the fill it brought (`zone_fills`, written with `(fill yes ..)` and its `(filled_polygon ..)`), a
+/// zone drawn with arcs keeps its arcs (`zone_arcs`), and a pre-6.0 dimension is read as KiCad reads it, an aligned one (`parseDIMENSION`'s "Old format"); the groups
+/// naming them are groups. Read back, everything is the same.
 #[test]
-fn a_form_the_items_cannot_hold_and_a_group_naming_one_stay_as_the_file_wrote_them() {
+fn locks_fills_arcs_and_old_dimensions_are_held_and_written_back() {
     let extra = r#"	(dimension (type aligned) (locked yes) (layer "F.Fab") (uuid "d9000000-0000-4000-8000-000000000001") (pts (xy 0 0) (xy 5 0)) (height 1) (format (prefix "") (suffix "") (units 2) (units_format 1) (precision 2)) (style (thickness 0.1) (arrow_length 1.27) (text_position_mode 0) (arrow_direction outward) (extension_height 0.58642) (extension_offset 0.5)) (gr_text "5.00 mm" (at 2.5 -1 0) (layer "F.Fab") (uuid "d9000000-0000-4000-8000-000000000001") (effects (font (size 1 1) (thickness 0.15)))))
 	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000002") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) (filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 1 0) (xy 1 1))))
 	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000003") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 0 0) (arc (start 1 0) (mid 1.5 0.5) (end 1 1)))))
+	(dimension 12.7 (width 0.15) (layer "F.Fab") (gr_text "12,70 mm" (at 6.35 -3.2) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15)))) (feature1 (pts (xy 12.7 0) (xy 12.7 -2.5))) (feature2 (pts (xy 0 0) (xy 0 -2.5))) (crossbar (pts (xy 0 -2) (xy 12.7 -2))) (arrow1a (pts (xy 12.7 -2) (xy 11.6 -1.4))) (arrow1b (pts (xy 12.7 -2) (xy 11.6 -2.6))) (arrow2a (pts (xy 0 -2) (xy 1.1 -1.4))) (arrow2b (pts (xy 0 -2) (xy 1.1 -2.6))))
 	(group "holds a locked item" (uuid "d9000000-0000-4000-8000-000000000004") (members "d9000000-0000-4000-8000-000000000001" "f0000000-0000-4000-8000-000000000002"))
 	(group "holds that group" (uuid "d9000000-0000-4000-8000-000000000005") (members "d9000000-0000-4000-8000-000000000004"))
 	(group "locked" (locked yes) (uuid "d9000000-0000-4000-8000-000000000006") (members "e0000000-0000-4000-8000-000000000001"))
 	(embedded_fonts no)"#;
     let text = fixture().replace("\t(embedded_fonts no)", extra);
     let fp = read(&text);
-    let tags: Vec<&str> = fp.kicad.tokens.iter().map(|t| t.split([' ', '\n']).next().unwrap()).collect();
-    assert_eq!(tags, ["(dimension", "(zone", "(zone", "(group", "(group", "(group"], "{:?}", fp.kicad.tokens);
-    assert_eq!((fp.items.dimensions.len(), fp.items.zones.len(), fp.items.groups.len()), (5, 1, 2), "the others are items");
+    assert!(fp.kicad.tokens.iter().all(|t| !t.starts_with("(dimension") && !t.starts_with("(zone") && !t.starts_with("(group")), "{:?}", fp.kicad.tokens);
+    assert_eq!((fp.items.dimensions.len(), fp.items.zones.len(), fp.items.groups.len()), (7, 3, 5), "every form is an item");
+    let locked_dim = fp.items.dimensions.iter().find(|d| fp.kicad.uuids.get(&d.id).map(String::as_str) == Some("d9000000-0000-4000-8000-000000000001")).expect("the locked dimension");
+    assert!(fp.kicad.locked.contains(&locked_dim.id));
+    let locked_group = fp.items.groups.iter().find(|g| g.name == "locked").expect("the locked group");
+    assert!(fp.kicad.locked.contains(&locked_group.id));
+    // the old dimension: aligned, 12.7 mm long, its height from the crossbar, KiCad's constructor settings
+    let old = fp.items.dimensions.iter().find(|d| d.stroke_width == eda_model::units::Nm::new(150_000) && d.start.x == eda_model::units::mm(12.7)).expect("the pre-6.0 dimension");
+    assert_eq!(old.end.x, eda_model::units::Nm::ZERO);
+    assert!(matches!(old.kind, eda_model::ir::DimensionKind::Aligned { height } if height.abs() == eda_model::units::mm(2.0)), "{:?}", old.kind);
+    assert_eq!((old.units, old.precision, old.keep_text_aligned), (eda_model::ir::DimensionUnits::Mm, 4, true));
+    let filled = fp.items.zones.iter().find(|z| fp.kicad.uuids.get(&z.id).map(String::as_str) == Some("d9000000-0000-4000-8000-000000000002")).unwrap();
+    assert!(fp.kicad.zone_fills.get(&filled.id).is_some_and(|f| !f.unfilled && f.layers["F.Cu"].len() == 1));
+    assert_eq!(fp.kicad.zone_arcs.len(), 1, "the zone drawn with an arc keeps it");
     let written = export_kicad_mod(&fp);
-    for t in &fp.kicad.tokens {
-        assert!(written.contains(t.as_str()), "{t}: {written}");
+    for needle in ["(filled_polygon", "(arc (start 1 0) (mid 1.5 0.5) (end 1 1))", "(group \"locked\""] {
+        assert!(written.contains(needle), "{needle}: {written}");
     }
-    // the point, a member of the locked group (text) and of g2 (an item): both name it by its uuid
-    assert_eq!(written.matches("\"e0000000-0000-4000-8000-000000000001\"").count(), 3, "{written}");
+    assert!(written.matches("(locked yes)").count() >= 2, "{written}");
+    assert!(written.contains("(fill yes"), "{written}");
+    // read back: the same items (in the writer's order, `cmp_drawings`' for the dimensions and the groups' inner-first)
     let back = read(&written);
-    assert_eq!((back.items, back.kicad.tokens), (fp.items.clone(), fp.kicad.tokens.clone()));
+    let sorted = |it: &eda_model::fp_items::FootprintItems| {
+        let mut it = it.clone();
+        it.dimensions.sort_by(|a, b| a.id.cmp(&b.id));
+        it.groups.sort_by(|a, b| a.id.cmp(&b.id));
+        it
+    };
+    assert_eq!(sorted(&back.items), sorted(&fp.items));
+    assert_eq!((&back.kicad.locked, &back.kicad.zone_fills, &back.kicad.zone_arcs), (&fp.kicad.locked, &fp.kicad.zone_fills, &fp.kicad.zone_arcs));
 }
 
 /// KiCad's own library footprints with these items -- the keepouts of a connector, the dimensions and the leaders of a logo, the text boxes of a module, the group

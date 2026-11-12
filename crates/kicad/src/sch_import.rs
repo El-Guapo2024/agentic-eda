@@ -473,7 +473,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         }
     }
 
-    // `(body_style 2)` of the symbols placed in the alternate body style of a library symbol that has one, by `field_key` (`SchExtras::body_styles`)
+    // `(body_style N)` of the symbols placed in a body style other than the normal one of a library symbol that has it (De Morgan, or KiCad 25ec2335's custom styles), by `field_key` (`SchExtras::body_styles`)
     let mut body_style_entries: Vec<(String, u32)> = Vec::new();
     // the symbols whose fields the file says Autoplace Fields put where they are, by `field_key` (`SchExtras::fields_autoplaced`)
     let mut autoplaced_entries: Vec<String> = Vec::new();
@@ -558,8 +558,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         });
         for &i in idxs {
             let r = &raw[i];
-            if r.body_style > 1 && lib_table.get(r.lib_id.as_str()).is_some_and(|l| l.has_alternate_body()) {
-                body_style_entries.push((eda_model::ir::field_key(&reference, r.unit), r.body_style.min(2)));
+            if let Some(count) = lib_table.get(r.lib_id.as_str()).map(|l| l.body_style_count()).filter(|&c| r.body_style > 1 && c > 1) {
+                body_style_entries.push((eda_model::ir::field_key(&reference, r.unit), r.body_style.min(count)));
             }
             if !r.alternates.is_empty() {
                 pin_alternate_entries.push((eda_model::ir::field_key(&reference, r.unit), r.alternates.clone()));

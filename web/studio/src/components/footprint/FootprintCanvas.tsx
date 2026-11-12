@@ -67,6 +67,8 @@ import "../../styles/canvas.css";
 import { planAddToGroup, planRemoveFromGroup } from "../../kicad-port/groupEdit";
 import { hairlineNm } from "../../kicad-port/view";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
+import { useBarcodeVersion } from "../canvas/barcodeCache";
+import { useImageVersion } from "../canvas/imageCache";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
   draw_segment: "segment",
@@ -339,6 +341,9 @@ export function FootprintCanvas() {
 
   // Render loop, in the Footprint Editor's own colour theme (Preferences > Footprint Editor > Colors), redrawn when it changes.
   const themeStamp = useColorThemeStamp();
+  // a footprint's barcode shape or image pixels arrived (UI-LEFT-2 FF6): repaint
+  const barcodeStamp = useBarcodeVersion();
+  const imageStamp = useImageVersion();
   useEffect(() => paintingIn("footprint", () => {
     const canvas = canvasRef.current;
     if (!canvas || containerSize.width === 0) return;
@@ -367,7 +372,7 @@ export function FootprintCanvas() {
     if (shown && carriedAt && state.carriedText) shown = { ...shown, texts: [...shown.texts, { ...state.carriedText, id: undefined, at: { x: carriedAt[0], y: carriedAt[1] } }] };
     // The fields (`PCB_FIELD`s) and the dimensions, zones, text boxes ... of the footprint (kicad-port/fpItems.ts), drawn by the board's painters.
     if (shown && pointPreview) shown = { ...shown, graphics: shown.graphics.map((g) => (g.id === pointPreview.id ? pointPreview : g)) };
-    const painted = shown && fp ? { ...shown, fieldsToDraw: fpFields(fp), display: fp.display } : shown;
+    const painted = shown && fp ? { ...shown, fieldsToDraw: fpFields(fp), display: fp.display, name: fp.name } : shown;
     // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer -- and the line mode's constraint (`drawShape`, `DrawZone`)
     const rubber = placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm;
     const draw = state.drawState;
@@ -417,7 +422,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, themeStamp, dimPreview, state.enteredGroupId]);
+  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, themeStamp, dimPreview, state.enteredGroupId, barcodeStamp, imageStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

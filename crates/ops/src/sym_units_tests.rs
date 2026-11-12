@@ -256,6 +256,12 @@ fn unit_names_and_jumper_groups_are_the_grids_rows() {
     // the written library says it as KiCad does
     let text = eda_kicad::export_kicad_sym(sym(&b, "Lib:J"));
     assert!(text.contains("(duplicate_pin_numbers_are_jumpers yes)") && text.contains(r#"(jumper_pin_groups ("1" "3") ("2" "4"))"#) && text.contains(r#"(unit_name "Gate")"#), "{text}");
+    // UI-LEFT-2 YY3: a number a pin's stacked notation stands for is a pin number of the symbol (`LIB_SYMBOL::HasPinNumber`: `GetStackedPinNumbers()`), KiCad 25ec2335
+    add_pin(&mut b, "Lib:J", pin("[5-7]", 1, 1));
+    b.apply(&units_and_connections("Lib:J", &[], false, &[], false, &["6, 1", "[5-7] 2"])).unwrap();
+    assert_eq!(sym(&b, "Lib:J").kicad.jumper_pin_groups, vec![vec!["1".to_string(), "6".to_string()], vec!["2".to_string(), "[5-7]".to_string()]]);
+    let e = b.apply(&units_and_connections("Lib:J", &[], false, &[], false, &["8"])).unwrap_err();
+    assert_eq!(e[0].hint.as_deref(), Some("Pin '8' in jumper pin group 1 does not exist in this symbol."));
 }
 
 #[test]

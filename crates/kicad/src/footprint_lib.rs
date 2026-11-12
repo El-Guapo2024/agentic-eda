@@ -683,20 +683,26 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
     }
 
     // The zones (`Zones()`), after the pads: a rule area or a zone of the footprint, with no net (`format( const ZONE* )` writes one only for a copper zone of a
-    // net), on the layers of its set (a library footprint has no board to take the enabled ones from), never filled. A zone with no area is not written, as the
+    // net), on the layers of its set (a library footprint has no board to take the enabled ones from), with the fill it brought (no zone filler runs in the
+    // Footprint Editor). A zone with no area is not written, as the
     // board's writer does not write one.
     for z in items.zones.iter().filter(|z| z.outline.len() >= 3) {
         let uuid = uuid_of("fpzone", &z.id);
+        // what the zone keeps beside it (UI-LEFT-2 FF6): the fill it brought while it is the zone's (`kept_fill_current`), its thieving, per-layer settings and arcs
+        let fill = if z.is_rule_area { None } else { fp.kicad.zone_fills.get(&z.id).and_then(|k| crate::zone_fills::kept_fill_current(k, z)) };
+        let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> =
+            fill.as_ref().map(|e| z.layer_set().into_iter().map(|l| (l.to_string(), e.layers.get(l).cloned().unwrap_or_default())).collect()).unwrap_or_default();
+        let arc_rings = fp.kicad.zone_arcs.iter().find(|a| a.id == z.id).filter(|a| a.shape == eda_model::ir::ZoneArcs::shape_of(z)).map(|a| a.rings.as_slice());
         let args = crate::pcb_items::ZoneArgs {
             net: 0,
             locked: fp.kicad.locked.contains(&z.id),
             uuid: &uuid,
-            fills: &[],
-            filled: false,
+            fills: &layer_fills,
+            filled: fill.as_ref().is_some_and(|e| !e.unfilled),
             enabled_layers: None,
-            thieving: None,
-            arc_rings: None,
-            layer_props: None,
+            thieving: fp.kicad.zone_thieving.get(&z.id).map(String::as_str),
+            arc_rings,
+            layer_props: fp.kicad.zone_layer_props.get(&z.id).map(String::as_str),
         };
         crate::pcb_items::write_zone(&mut out, z, &args);
         written.entry(z.id.clone()).or_default().push(uuid);
@@ -710,7 +716,7 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
 
     // The groups (`Groups()`) last, their members by the uuids just written; a group none of whose members was written is not (`if( memberIds.empty() ) return;`).
     let groups: Vec<&eda_model::ir::Group> = items.groups.iter().collect();
-    crate::pcb_items::write_groups(&mut out, &groups, &written, &|g| uuid_of("fpgroup", &g.id), &|_| false);
+    crate::pcb_items::write_groups(&mut out, &groups, &written, &|g| uuid_of("fpgroup", &g.id), &|id| fp.kicad.locked.contains(id));
 
     // The embedded files, before the models as KiCad writes them.
     crate::embedded::write_owner(&mut out, embedded, 1, false);

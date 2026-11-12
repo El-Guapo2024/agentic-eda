@@ -5254,34 +5254,32 @@ impl LibrarySymbol {
         // A symbol with an alternate body: what both bodies draw alike (an item equal in the two) is shared (`body_style` 0, KiCad's `Name_<unit>_0`
         // sub-block), the rest belongs to its own style -- the reverse of what `to_engine_symbol` does.
         let (mut graphics, mut pins): (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>) = (Vec::new(), Vec::new());
-        let (normal, alternate) = sym.bodies();
-        match alternate {
-            None => {
-                graphics.extend(normal.0.iter().map(LibrarySymbolGraphic::from_engine_graphic));
-                pins.extend(normal.1.iter().map(LibrarySymbolPin::from_engine_pin));
-            }
-            Some(alt) => {
-                for (list, other, style) in [(normal.0, alt.0, 1u32), (alt.0, normal.0, 2u32)] {
-                    for g in list {
-                        let shared = other.contains(g);
-                        if shared && style == 2 {
-                            continue;
-                        }
-                        let mut item = LibrarySymbolGraphic::from_engine_graphic(g);
-                        item.set_body_style(if shared { 0 } else { style });
-                        graphics.push(item);
+        // (every body of a symbol of custom body styles alike, KiCad 25ec2335: an item every body draws is shared)
+        let bodies = sym.all_bodies();
+        if bodies.len() < 2 {
+            graphics.extend(sym.graphics.iter().map(LibrarySymbolGraphic::from_engine_graphic));
+            pins.extend(sym.pins.iter().map(LibrarySymbolPin::from_engine_pin));
+        } else {
+            for &(style, list, _) in &bodies {
+                for g in list {
+                    let shared = bodies.iter().all(|(_, other, _)| other.contains(g));
+                    if shared && style != 1 {
+                        continue;
                     }
+                    let mut item = LibrarySymbolGraphic::from_engine_graphic(g);
+                    item.set_body_style(if shared { 0 } else { style });
+                    graphics.push(item);
                 }
-                for (list, other, style) in [(normal.1, alt.1, 1u32), (alt.1, normal.1, 2u32)] {
-                    for p in list {
-                        let shared = other.contains(p);
-                        if shared && style == 2 {
-                            continue;
-                        }
-                        let mut item = LibrarySymbolPin::from_engine_pin(p);
-                        item.body_style = if shared { 0 } else { style };
-                        pins.push(item);
+            }
+            for &(style, _, list) in &bodies {
+                for p in list {
+                    let shared = bodies.iter().all(|(_, _, other)| other.contains(p));
+                    if shared && style != 1 {
+                        continue;
                     }
+                    let mut item = LibrarySymbolPin::from_engine_pin(p);
+                    item.body_style = if shared { 0 } else { style };
+                    pins.push(item);
                 }
             }
         }
@@ -5304,7 +5302,8 @@ impl LibrarySymbol {
             pin_numbers_hidden: sym.pin_numbers_hidden,
             pin_name_offset_mm: sym.pin_name_offset_mm,
             unit_count: sym.unit_count.max(1),
-            has_alternate_body_style: sym.alternate.is_some(),
+            has_alternate_body_style: sym.alternate.is_some() && sym.connectivity.body_style_names.is_empty(),
+            body_style_names: sym.connectivity.body_style_names.clone(),
             graphics,
             pins,
             ..Default::default()
@@ -5318,8 +5317,8 @@ impl LibrarySymbol {
     /// The normal body style is the items of `body_style` 0 (shared) and 1; a symbol that declares an alternate one (`has_alternate_body_style`)
     /// also gets [`crate::symbol::LibSymbol::alternate`], the shared items and those of `body_style` 2, which is what a placed symbol in body style 2
     /// draws and is written with (`LIB_SYMBOL::GetBodyStyleCount`). A symbol that declares none keeps no alternate even if a stray item is of
-    /// `body_style` 2: KiCad would not show it either. A symbol of custom body styles (`body_style_names`) has its second style as the alternate; the
-    /// engine has no third one.
+    /// `body_style` 2: KiCad would not show it either. A symbol of custom body styles (`body_style_names`) has its second style as the alternate and each
+    /// further one in [`crate::symbol::LibConnectivity::extra_bodies`] (KiCad 25ec2335: a placed symbol draws any of its `GetBodyStyleCount()` styles), with its names.
     /// A shape marked "Private to Symbol Editor" (`SCH_ITEM::IsPrivate`, kept in [`crate::lib_keep::LibrarySymbolKeep::graphic_looks`]): a placed symbol does not draw it
     /// (`SCH_PAINTER::draw( SCH_SHAPE )` returns `if( aShape->IsPrivate() && !m_schSettings.m_IsSymbolEditor )`). A text's and a text box's own flag is
     /// [`LibrarySymbolGraphic::is_private`].
@@ -5350,6 +5349,20 @@ impl LibrarySymbol {
             pin_name_offset_mm: self.pin_name_offset_mm,
             alternate,
             connectivity: crate::symbol::LibConnectivity {
+                extra_bodies: if self.is_multi_body_style() {
+                    (3..=self.body_style_count())
+                        .map(|style| {
+                            crate::symbol::AlternateBody::of_style(
+                                style,
+                                self.graphics.iter().filter(|g| (g.body_style() == 0 || g.body_style() == style) && !self.is_private_shape(g)).flat_map(|g| g.to_engine_graphics()).collect(),
+                                self.pins.iter().filter(|p| p.body_style == 0 || p.body_style == style).map(|p| p.to_engine_pin()).collect(),
+                            )
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                body_style_names: if self.has_alternate_body_style { Vec::new() } else { self.body_style_names.clone() },
                 power_local: self.power && self.power_local,
                 duplicate_pin_numbers_are_jumpers: self.kicad.duplicate_pin_numbers_are_jumpers,
                 jumper_pin_groups: self.kicad.jumper_pin_groups.clone(),
@@ -5365,7 +5378,7 @@ impl LibrarySymbol {
                 text_boxes: self
                     .graphics
                     .iter()
-                    .filter(|g| matches!(g, LibrarySymbolGraphic::TextBox { .. }) && !g.is_private() && (g.body_style() <= 1 || (self.is_multi_body_style() && g.body_style() == 2)))
+                    .filter(|g| matches!(g, LibrarySymbolGraphic::TextBox { .. }) && !g.is_private() && (g.body_style() <= 1 || (self.is_multi_body_style() && g.body_style() <= self.body_style_count())))
                     .map(|g| {
                         let mut g = g.clone();
                         g.set_id(String::new());

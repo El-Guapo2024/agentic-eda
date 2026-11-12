@@ -158,15 +158,15 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
     if let Some(sym) = resolved {
         let (x0, _y0, _x1, y1) = real_symbol_bbox(sym, unit);
         let (dx, dy) = (-x0, -y1);
-        let alternate = sym.alternate.as_ref().map(|alt| {
-            Box::new(AlternateBody {
-                style: alt.style,
-                graphics: alt.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
-                pins: alt.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
-            })
-        });
-        // the text boxes (`LibConnectivity::text_boxes`, beside the rectangles of their borders) move with the rest
+        let shift_body = |alt: &AlternateBody| AlternateBody {
+            style: alt.style,
+            graphics: alt.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
+            pins: alt.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
+        };
+        let alternate = sym.alternate.as_deref().map(|alt| Box::new(shift_body(alt)));
+        // the text boxes (`LibConnectivity::text_boxes`, beside the rectangles of their borders) and the further custom body styles move with the rest
         let mut connectivity = sym.connectivity.clone();
+        connectivity.extra_bodies = sym.connectivity.extra_bodies.iter().map(shift_body).collect();
         for t in &mut connectivity.text_boxes {
             t.translate(dx, dy);
         }
