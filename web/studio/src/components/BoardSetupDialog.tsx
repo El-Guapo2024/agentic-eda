@@ -432,8 +432,8 @@ export function BoardSetupDialog() {
           <section className="bs-page" hidden={page !== "teardrops"} aria-label="Teardrops">
             <h3 className="bs-title">Teardrops</h3>
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
-                `pcbnew/teardrop/*` (task item 4; UI-LEFT-2 PP6, PP7). Vias and pads of every shape, as KiCad's "Round pads only" is off by default; one set of settings for every via
-                and pad, and the track-to-track block. Teardrops are kept current as the board is edited and fitted to other nets' clearance (see `eda_connectivity::teardrop`'s own doc).
+                `pcbnew/teardrop/*` (task item 4; UI-LEFT-2 PP6, PP7). Vias and pads of every shape, as KiCad's "Round pads only" is off by default; the round block serves vias and round
+                pads, the rectangular block every other pad, and the track-to-track block. Teardrops are kept current as the board is edited and fitted to other nets' clearance (see `eda_connectivity::teardrop`'s own doc).
               </p>
               <label className="filter-row" style={{ display: "block" }}>
                 <input type="checkbox" checked={td.enabled} onChange={(e) => setTdField("enabled", e.target.checked)} /> Enable teardrops
@@ -450,7 +450,7 @@ export function BoardSetupDialog() {
                 <input type="checkbox" checked={td.target_smd_pads} onChange={(e) => setTdField("target_smd_pads", e.target.checked)} /> SMD pads
               </label>
 
-              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Shape</p>
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Default Properties for Round Shapes</p>
               <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
                 <span>Best length ratio (of anchor size)</span>
                 <input type="number" step="0.05" min={0} max={1} value={td.best_length_ratio} onChange={(e) => setTdField("best_length_ratio", Number(e.target.value))} style={{ width: 90 }} />
@@ -504,6 +504,61 @@ export function BoardSetupDialog() {
               <label className="filter-row" style={{ display: "block" }} title="Do not create teardrops on tracks connected to pads that are also connected to a copper zone.">
                 <input type="checkbox" checked={td.prefer_zone_connections ?? true} onChange={(e) => setTdField("prefer_zone_connections", e.target.checked)} /> Prefer zone connection
               </label>
+
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Default Properties for Rectangular Shapes</p>
+              {(() => {
+                // `TARGET_RECT` (`PANEL_SETUP_TEARDROPS::TransferDataFromWindow`'s second block; UI-LEFT-2 BB8): the pads that are not uniformly round. Until it is
+                // edited it shows the round block's sizes, which is what such a pad got before the block was its own.
+                const r = td.rect_shape ?? { ...DEFAULT_TEARDROP_PARAMS, best_length_ratio: td.best_length_ratio, best_width_ratio: td.best_width_ratio, max_length: td.max_len_nm, max_width: td.max_width_nm, filter_ratio: td.width_to_size_filter_ratio, curved_edges: td.curved_edges ?? false, allow_two_segments: td.allow_two_segments ?? true, prefer_zone_connections: td.prefer_zone_connections ?? true };
+                const setR = (patch: Partial<typeof r>) => setTdField("rect_shape", { ...r, ...patch });
+                const lenField = (label: string, value: number, set: (nm: number) => void) => (
+                  <span>
+                    <input
+                      type="number"
+                      step="any"
+                      aria-label={label}
+                      value={nmTo(value, units)}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isFinite(n)) set(Math.round(nmFrom(n, units)));
+                      }}
+                      style={{ width: 90 }}
+                    />{" "}
+                    {units}
+                  </span>
+                );
+                return (
+                  <>
+                    <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
+                      <span>Best length (L):</span>
+                      <span>
+                        <input type="number" aria-label="Rectangular best length" step="1" min={0} value={Math.round(r.best_length_ratio * 100)} onChange={(e) => setR({ best_length_ratio: Number(e.target.value) / 100 })} style={{ width: 90 }} /> %(w)
+                      </span>
+                      <span>Maximum length (L):</span>
+                      {lenField("Rectangular maximum length", r.max_length, (nm) => setR({ max_length: nm }))}
+                      <span>Best width (W):</span>
+                      <span>
+                        <input type="number" aria-label="Rectangular best width" step="1" min={0} value={Math.round(r.best_width_ratio * 100)} onChange={(e) => setR({ best_width_ratio: Number(e.target.value) / 100 })} style={{ width: 90 }} /> %(w)
+                      </span>
+                      <span>Maximum width (W):</span>
+                      {lenField("Rectangular maximum width", r.max_width, (nm) => setR({ max_width: nm }))}
+                      <span title={"Max pad/via size to track width ratio to create a teardrop.\n100 always creates a teardrop."}>Track width limit:</span>
+                      <span title="Tracks which are similar in size to the pad do not need teardrops.">
+                        <input type="number" aria-label="Rectangular track width limit" step="1" min={0} max={100} value={Math.round(r.filter_ratio * 100)} onChange={(e) => setR({ filter_ratio: Number(e.target.value) / 100 })} style={{ width: 90 }} /> %(w)
+                      </span>
+                    </div>
+                    <label className="filter-row" style={{ display: "block" }} title="Do not create teardrops on tracks connected to pads that are also connected to a copper zone.">
+                      <input type="checkbox" checked={r.prefer_zone_connections} onChange={(e) => setR({ prefer_zone_connections: e.target.checked })} /> Prefer zone connection
+                    </label>
+                    <label className="filter-row" style={{ display: "block" }} title="Allows a teardrop to extend over the first 2 connected track segments if the first track segment is too short to accommodate the best length.">
+                      <input type="checkbox" checked={r.allow_two_segments} onChange={(e) => setR({ allow_two_segments: e.target.checked })} /> Allow teardrop to span track segments
+                    </label>
+                    <label className="filter-row" style={{ display: "block" }}>
+                      <input type="checkbox" aria-label="Rectangular curved edges" checked={r.curved_edges} onChange={(e) => setR({ curved_edges: e.target.checked })} /> Curved edges
+                    </label>
+                  </>
+                );
+              })()}
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Properties for Track-to-Track Teardrops</p>
               {(() => {

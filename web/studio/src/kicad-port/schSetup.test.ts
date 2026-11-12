@@ -121,7 +121,8 @@ test("Net Classes: the Eeschema columns' line styles, colours and checks", () =>
   assert.equal(hexFromCss("rgba(0, 128, 255, 0.500)"), "#0080ff");
   assert.equal(hexFromCss(null), null);
   assert.deepEqual(defaultClassSchematic(undefined), { wire_width: 152_400, bus_width: 304_800, color: null, line_style: 0 });
-  assert.equal(schematicColumnsIssue({ wire_width: 0 }, false), "Wire thickness must be larger than zero.");
+  assert.equal(schematicColumnsIssue({ wire_width: 0 }, false), null, "KiCad takes a 0 as typed");
+  assert.equal(schematicColumnsIssue({ wire_width: -1 }, false), "Wire thickness cannot be negative.");
   assert.equal(schematicColumnsIssue({}, false), null, "a class other than Default may leave them unset");
   assert.deepEqual(schematicToSend({ Wide: { wire_width: 508_000, color: null }, Gone: { wire_width: 1 }, Empty: {} }, ["Wide", "Empty"]), { Wide: { wire_width: 508_000 } });
 });

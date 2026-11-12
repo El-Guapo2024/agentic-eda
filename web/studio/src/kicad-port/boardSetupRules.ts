@@ -162,7 +162,7 @@ const SIZE_LABELS: Record<(typeof SIZE_FIELDS)[number], string> = {
 
 /**
  * The Net Classes page's checks (`validateNetclassName`, `validateNetclassClearance`, and the backend's size checks): a name for every class and no
- * two alike (case ignored), no negative size and no zero one but a clearance or a gap, a clearance no larger than `MAXIMUM_CLEARANCE`, a via
+ * two alike (case ignored), no negative size (a 0 is taken as typed, as `Validate` takes it: UI-LEFT-2 BB8), a clearance no larger than `MAXIMUM_CLEARANCE`, a via
  * hole smaller than its via, and no empty pattern. A size that is not a number (`NaN`: text the field could not read) is a mistake too.
  */
 export function validateNetClasses(defaultClass: NetClass, classes: readonly NetClass[], rows: readonly AssignmentRow[] = []): NetClassIssue[] {
@@ -179,7 +179,6 @@ export function validateNetClasses(defaultClass: NetClass, classes: readonly Net
       if (v === undefined) continue;
       if (!Number.isFinite(v)) issues.push({ row, field: f, message: `${SIZE_LABELS[f]} is not a number.` });
       else if (v < 0) issues.push({ row, field: f, message: `${SIZE_LABELS[f]} cannot be negative.` });
-      else if (v === 0 && f !== "clearance" && f !== "diff_pair_gap") issues.push({ row, field: f, message: `${SIZE_LABELS[f]} must be larger than zero.` });
       else if (f === "clearance" && v > MAXIMUM_CLEARANCE_NM) issues.push({ row, field: f, message: "Clearance was too large. The most is 500 mm." });
     }
     if (!Number.isInteger(c.priority)) issues.push({ row, field: "priority", message: "Priority must be a whole number." });

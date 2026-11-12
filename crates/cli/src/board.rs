@@ -4469,7 +4469,7 @@ pub(crate) mod tests {
         assert_eq!(count(&dir, "track_width"), 0);
 
         // Violation Severity: the clearance check turned off reports nothing, whatever the rules.
-        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(mm(0.3)), ..defaults.default.clone() }, classes: vec![], schematic: Default::default() };
+        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(mm(0.3)), ..defaults.default.clone() }, classes: vec![], schematic: Default::default(), pcb_colors: None };
         step(&dir, Cmd::SetNetClasses { settings: tight }, false, "ui").unwrap();
         assert!(count(&dir, "clearance") >= 1);
         step(&dir, Cmd::SetRuleSeverities { severities: [("clearance".to_string(), "ignore".to_string())].into() }, false, "ui").unwrap();
@@ -4528,6 +4528,39 @@ pub(crate) mod tests {
         assert!(board_text(&dir).contains("(net_class \"power\""));
         let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
         assert!(project.get("net_settings").is_none());
+
+        // The colour as a cell of the Net Classes table (`pcb_colors`, UI-LEFT-2 BB8): the design's, in the project as before, and one undo takes it back.
+        let (_, _, model) = load(&dir).unwrap();
+        let mut settings = eda_model::rules::net_class_settings_of(&model.board);
+        settings.pcb_colors = Some([("power".to_string(), "rgb(0, 128, 255)".to_string())].into());
+        step(&dir, Cmd::SetNetClasses { settings }, false, "ui").unwrap();
+        assert_eq!(count(&dir, "clearance"), plain);
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        let power = project["net_settings"]["classes"].as_array().unwrap().iter().find(|c| c["name"] == "power").cloned().expect("power");
+        assert_eq!(power["pcb_color"], "rgb(0, 128, 255)", "the design's colour reaches the project");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir, "clearance"), plain);
+        assert!(board_text(&dir).contains("(net_class \"power\""), "one undo takes the colour back");
+    }
+
+    /// The PCB Color column is part of the table (`NETCLASS::SetPcbColor` in `PANEL_SETUP_NETCLASSES::TransferDataFromWindow`): `set_net_classes` with
+    /// `pcb_colors` holds it in the design, and one undo takes it back with the rest of the page (UI-LEFT-2 BB8).
+    #[test]
+    fn a_net_class_pcb_colour_is_in_the_tables_undo_step() {
+        let dir = scratch("class_colour_undo");
+        setup(&dir);
+        let (_, _, model) = load(&dir).unwrap();
+        let defaults = eda_model::rules::net_class_settings_of(&model.board);
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(mm(0.2)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power.clone()], ..defaults.clone() } }, false, "ui").unwrap();
+        assert_eq!(load(&dir).unwrap().2.board.net_class_pcb_colors, None, "a page sent without colours leaves appearance.json's in force");
+        let colored = eda_model::rules::NetClassSettings { classes: vec![power], pcb_colors: Some([("power".to_string(), "rgb(1, 2, 3)".to_string()), ("Default".to_string(), "rgb(9, 9, 9)".to_string())].into()), ..defaults };
+        step(&dir, Cmd::SetNetClasses { settings: colored }, false, "ui").unwrap();
+        let colors = load(&dir).unwrap().2.board.net_class_pcb_colors.expect("the design holds the colours");
+        assert_eq!(colors.get("power").map(String::as_str), Some("rgb(1, 2, 3)"));
+        assert!(!colors.contains_key("Default"), "the Default class has no colour of its own");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().2.board.net_class_pcb_colors, None, "one undo takes the colour back");
     }
 
     #[test]

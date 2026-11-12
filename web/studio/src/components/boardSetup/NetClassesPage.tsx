@@ -1,5 +1,5 @@
-// Board Setup > Design Rules > Net Classes -- port of common/dialogs/panel_setup_netclasses.cpp: the table of classes (the Default class first, then
-// the others, each size left blank to inherit the Default's) and the table of Netclass Assignments (a net-name pattern and the class that owns
+// Board Setup > Design Rules > Net Classes -- port of common/dialogs/panel_setup_netclasses.cpp: the table of classes (the others by priority, then
+// the Default class in the last row as `loadNetclasses` puts it; a new class is a blank row at the top, each size left blank to inherit the Default's) and the table of Netclass Assignments (a net-name pattern and the class that owns
 // the nets it matches), with the list of nets the selected pattern matches. Apply sends the whole page (`set_net_classes`); the rules the
 // router, DRC and the derived `.kicad_pro` use follow, and Undo takes the edit back.
 //
@@ -13,19 +13,20 @@
 // `UpdateDelayProfileNames`) and "PCB Color" (`GRID_PCB_COLOR`: the class's colour on the board; transparent is none, "Set color to transparent to use layer
 // default color."; "Import colors from schematic" copies each class's schematic colour, `OnImportColorsClick`); the Default row has no colour. The profile is
 // the project's (`tuning_profiles.class_profiles`) and goes with the page's Apply in the same undo step (`batch` of `set_net_classes` and
-// `set_tuning_profiles`); the colour is the one the Appearance panel's Net Classes tab edits (`NETCLASS::GetPcbColor`, kept in `appearance.json` with the
-// person's view settings, outside the undo history), written when Apply succeeds.
+// `set_tuning_profiles`); the colour is the one the Appearance panel's Net Classes tab edits (`NETCLASS::GetPcbColor`), a cell of the table sent with the rest
+// (`pcb_colors`), so it is in the same undo step (UI-LEFT-2 BB8).
 //
 // Schematic Setup > Project > Net Classes is the same panel (`PANEL_SETUP_NETCLASSES( .., aIsEEschema = true )`) over the same table: `editor="sch"` shows the
 // Eeschema columns instead of the board's (`ShowHideColumns( "0 11 12 13 14" )`: Wire Thickness, Bus Thickness, Color, Line Style), the Default row's colour and
 // line style read-only (`loadNetclasses`) and its widths required (`GRID_CELL_MARK_AS_NULLABLE( false )`). Either page sends the whole table, the columns it does
 // not show as it found them, so the two dialogs edit one set as KiCad's edit the project's one `NET_SETTINGS`; Undo from either tab takes it back.
 import { useEffect, useMemo, useState } from "react";
-import { useStudioDispatch, useStudioState } from "../../state/store";
+import { useStudioState } from "../../state/store";
 import { LINE_STYLE_NAMES, SCH_COLOR_HELP, cssFromHex, defaultClassSchematic, hexFromCss, lineStyleOfRow, lineStyleRow, schematicColumnsIssue, schematicOf, schematicToSend } from "../../kicad-port/schSetup";
 import { applyAssignments, assignmentRows, boardNetNames, classOfNet, classesOfNet, effectiveClassName, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
 import { hasRegexSyntax, isRegex } from "../../kicad-port/netPattern";
-import { carryRenamedClass, netclassColorUpdates } from "../../kicad-port/appearanceNets";
+import { carryRenamedClass } from "../../kicad-port/appearanceNets";
+import { classColorsInForce } from "../../kicad-port/appearance";
 import type { Cmd, NetClass, NetClassSchematic } from "../../api/types";
 import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
@@ -55,21 +56,15 @@ const COLUMNS: ReadonlyArray<{ field: SizeField; label: string; title: string; r
   { field: "diff_pair_gap", label: "DP Gap", title: "Differential pair gap", required: false },
 ];
 
-/** A name for a new class that no class has yet ("Netclass 1", "Netclass 2", ...). */
-function newClassName(taken: readonly string[]): string {
-  const used = new Set(taken.map((n) => n.trim().toLowerCase()));
-  for (let i = 1; ; i++) if (!used.has(`netclass ${i}`)) return `Netclass ${i}`;
-}
 
 export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & { editor?: "pcb" | "sch" }) {
   const sch = editor === "sch";
   const state = useStudioState();
-  const dispatch = useStudioDispatch();
   const board = state.board;
   const rules = board?.board_rules;
   const units = state.units;
   const nets = useMemo(() => (board ? boardNetNames(board) : []), [board]);
-  const storedColors = state.appearance.netclassColors;
+  const storedColors = classColorsInForce(state.appearance, board);
 
   const source = useMemo<Draft | undefined>(() => {
     if (!rules) return undefined;
@@ -130,13 +125,20 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
       const name = row === 0 ? "Default" : d.classes[row - 1]!.name;
       return { ...d, schematic: { ...d.schematic, [name]: { ...(d.schematic[name] ?? {}), ...patch } } };
     });
+  // `OnAddNetclassClick`: `InsertRows()` puts a blank row at the top of the grid and the name cell takes the focus (UI-LEFT-2 BB8)
   const addClass = () => {
     if (!draft) return;
-    page.edit((d) => ({ ...d, classes: [...d.classes, { name: newClassName([d.def.name, ...d.classes.map((c) => c.name)]), nets: [], priority: 0 }] }));
-    setSelClass(draft.classes.length + 1);
+    page.edit((d) => ({ ...d, classes: [{ name: "", nets: [], priority: 0 }, ...d.classes] }));
+    setSelClass(1);
+    setTimeout(() => (document.querySelector('input[aria-label="Netclass 1 name"]') as HTMLInputElement | null)?.focus(), 0);
   };
+  // `OnRemoveNetclassClick`: the Default row (the grid's last) stays, with KiCad's message
   const removeClass = () => {
-    if (!draft || selClass === 0) return;
+    if (!draft) return;
+    if (selClass === 0) {
+      apply.setMessage({ text: "The default net class is required.", bad: true });
+      return;
+    }
     const gone = draft.classes[selClass - 1]!.name;
     page.edit((d) => {
       const schematic = { ...d.schematic };
@@ -197,15 +199,12 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
     const classProfiles = Object.fromEntries(names.filter((n) => (profiles[n] ?? "") !== "").map((n) => [n, profiles[n]!]));
     const stored = rules?.tuning_profiles;
     const sameProfiles = JSON.stringify(Object.entries(classProfiles).sort()) === JSON.stringify(Object.entries(stored?.class_profiles ?? {}).sort());
-    const setClasses: Cmd = { op: "set_net_classes", settings: { default: { ...draft.def, name: "Default", nets: [] }, classes, schematic } };
+    // the PCB colour (`if( !nc->IsDefault() ) .. if( newPcbColor != COLOR4D::UNSPECIFIED ) nc->SetPcbColor( newPcbColor )`): a cell of the table, in its undo step
+    const byTrimmedColors = Object.fromEntries(Object.entries(draft.colors).map(([k, v]) => [k.trim(), v] as const));
+    const pcbColors = Object.fromEntries(names.slice(1).filter((n) => byTrimmedColors[n]).map((n) => [n, byTrimmedColors[n]!]));
+    const setClasses: Cmd = { op: "set_net_classes", settings: { default: { ...draft.def, name: "Default", nets: [] }, classes, schematic, pcb_colors: pcbColors } };
     const cmd: Cmd = sameProfiles ? setClasses : { op: "batch", cmds: [setClasses, { op: "set_tuning_profiles", settings: { profiles: stored?.profiles ?? [], ...(Object.keys(classProfiles).length > 0 ? { class_profiles: classProfiles } : {}) } }] };
-    // the PCB colour (`if( !nc->IsDefault() ) .. if( newPcbColor != COLOR4D::UNSPECIFIED ) nc->SetPcbColor( newPcbColor )`): the Appearance panel's, written once Apply succeeds
-    const colors = byTrimmed(draft.colors);
-    void apply.run(cmd, () => {
-      page.markClean();
-      // a renamed class's colour under its new name, the old name's dropped (netclassColorUpdates)
-      for (const u of netclassColorUpdates(storedColors, colors, names.slice(1))) dispatch({ type: "APPEARANCE", op: { op: "netclass_color", name: u.name, color: u.color } });
-    });
+    void apply.run(cmd, page.markClean);
   };
 
   // `OnImportColorsClick`: each class the project has takes its schematic colour as its PCB colour (an unspecified one is transparent).
@@ -269,7 +268,8 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
                 </tr>
               </thead>
               <tbody>
-                {[draft.def, ...draft.classes].map((c, row) => (
+                {/* `loadNetclasses`: the classes by priority, then the Default class in the last row (UI-LEFT-2 BB8) */}
+                {[...draft.classes.map((c, i) => [c, i + 1] as const), [draft.def, 0] as const].map(([c, row]) => (
                   <tr key={row} className={selClass === row ? "bs-sel" : undefined} onClick={() => setSelClass(row)}>
                     <td>
                       {row === 0 ? (
@@ -340,7 +340,7 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
           )}
           <div className="bs-toolbar">
             <button onClick={addClass}>Add Netclass</button>
-            <button onClick={removeClass} disabled={selClass === 0}>
+            <button onClick={removeClass}>
               Remove Netclass
             </button>
             <button onClick={() => moveClass(-1)} disabled={selClass <= 1}>

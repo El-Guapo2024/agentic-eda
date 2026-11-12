@@ -189,7 +189,7 @@ test("the Net Classes page is refused for what KiCad's panel refuses", () => {
   assert.deepEqual(names.map((i) => [i.row, i.field, i.message]), [[2, "name", "Netclass must have a name."], [3, "name", "Netclass name already in use."], [4, "name", "Netclass name already in use."]]);
 
   const sizes = validateNetClasses(def, [cls("x", [], { track_width: 0, clearance: 0, via_diameter: -1, diff_pair_gap: 0, via_drill: Number.NaN, microvia_diameter: 0 })]);
-  assert.deepEqual(sizes.map((i) => i.field), ["track_width", "via_diameter", "via_drill", "microvia_diameter"], "a zero clearance and a zero gap are fine; a number the field could not read is not");
+  assert.deepEqual(sizes.map((i) => i.field), ["via_diameter", "via_drill"], "a 0 is taken as typed, as KiCad takes it; a negative size or a number the field could not read is not");
 
   assert.equal(validateNetClasses(def, [cls("big", [], { clearance: MAXIMUM_CLEARANCE_NM + 1 })])[0]!.field, "clearance");
   assert.deepEqual(validateNetClasses(def, [cls("big", [], { clearance: MAXIMUM_CLEARANCE_NM })]), []);

@@ -1155,7 +1155,7 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
                 })
             };
             let block = eda_model::teardrop_params::TeardropParams::of_settings(td);
-            let params = vec![entry("td_round_shape", &block), entry("td_rect_shape", &block), entry("td_track_end", &td.track_end)];
+            let params = vec![entry("td_round_shape", &block), entry("td_rect_shape", &td.rect_params()), entry("td_track_end", &td.track_end)];
             project["board"]["design_settings"]["teardrop_parameters"] = serde_json::Value::Array(params);
             project["board"]["design_settings"]["teardrop_options"] = serde_json::json!([{
                 "td_onvia": td.target_vias,

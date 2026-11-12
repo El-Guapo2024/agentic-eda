@@ -11,7 +11,7 @@ import { layerColor } from "./layers";
 import { drawStrokeText } from "../text/strokeFont";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
-import { DEFAULT_OPACITY, copperColor, netPalette, objectOn, ratsnestColor, type AppearanceState, type NetColorMode, type ObjectId, type Opacity, type OpacityKey, type Rgba } from "../../kicad-port/appearance";
+import { DEFAULT_OPACITY, classColorsInForce, copperColor, netPalette, objectOn, ratsnestColor, type AppearanceState, type NetColorMode, type ObjectId, type Opacity, type OpacityKey, type Rgba } from "../../kicad-port/appearance";
 import type { NetsContext } from "../../kicad-port/appearanceNets";
 import { splitCarried } from "../../kicad-port/pcbCarry";
 import { courtyardConflicts, movedBox, type Box, type MovePreview } from "../../kicad-port/courtyardConflicts";
@@ -48,7 +48,7 @@ export function buildPaintAppearance(a: AppearanceState, nets: NetsContext, boar
     opacity: a.opacity,
     contrastHidden: a.contrastHidden,
     netColorMode: a.netColorMode,
-    palette: netPalette(a, nets.nets, nets.classOf),
+    palette: netPalette({ netColors: a.netColors, netclassColors: classColorsInForce(a, board) }, nets.nets, nets.classOf),
     lockedMargin: silk * 4,
     sheet: board
       ? { widthNm: paper[0], heightNm: paper[1], paper: board.page?.paper ?? "A4", title: tb?.title ?? "", date: tb?.date ?? "", rev: tb?.rev ?? "", company: tb?.company ?? "", comments: tb?.comments ?? [], file: `${board.name}.kicad_pcb`, text: board.drawing_sheet?.text ?? null }

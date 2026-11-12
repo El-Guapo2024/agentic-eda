@@ -20,7 +20,7 @@
 // actions/useEdaTestHook.ts.
 import { isActionEnabledForTab } from "./actionTabGate";
 import { padIds } from "./pcbItems";
-import { DEFAULT_OPACITY, type Opacity } from "./appearance";
+import { DEFAULT_OPACITY, classColorsInForce, type Opacity } from "./appearance";
 
 // ------------------------------------------------------------------------------------------------------------------------------------ errors
 
@@ -412,6 +412,8 @@ export interface AppearanceSource {
   showRatsnest: boolean;
   gridVisible: boolean;
   bcx: { ratsnestMode: string; hiddenRatsnestNets: string[]; boardFlipped: boolean };
+  /** The board, for the class colours it holds (`classColorsInForce`). */
+  board?: { board_rules?: { net_class_pcb_colors?: Record<string, string> | null } } | null;
 }
 
 export function appearanceSummary(s: AppearanceSource): AppearanceSummary {
@@ -426,7 +428,7 @@ export function appearanceSummary(s: AppearanceSource): AppearanceSummary {
     netColorMode: s.appearance.netColorMode,
     ratsnest: !s.showRatsnest ? "none" : s.bcx.ratsnestMode === "visible" ? "visible" : "all",
     netColors: { ...s.appearance.netColors },
-    netclassColors: { ...s.appearance.netclassColors },
+    netclassColors: { ...classColorsInForce(s.appearance, s.board) },
     hiddenNets: [...s.bcx.hiddenRatsnestNets].sort(),
     hiddenNetclasses: [...s.appearance.hiddenNetclasses].sort(),
     preset: s.appearance.activePreset,

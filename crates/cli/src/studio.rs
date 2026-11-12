@@ -1771,6 +1771,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     // Schematic Setup > Net Classes' columns of the board's classes (wire and bus widths, colour, line style), by class name -- set apart, the `json!` above being
     // at the macro's recursion limit
     state["board_rules"]["net_class_schematic"] = json!(model.board.net_class_schematic);
+    // the PCB Color column, once the design holds it (null: the Appearance panel's `appearance.json` colours are in force)
+    state["board_rules"]["net_class_pcb_colors"] = json!(model.board.net_class_pcb_colors);
     // Design Rules > Component Classes (`COMPONENT_CLASS_SETTINGS`): "Assign component class per sheet" and the custom assignments, as the board is judged by them now
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too

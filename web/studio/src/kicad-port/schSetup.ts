@@ -292,7 +292,7 @@ export function schematicOf(table: Readonly<Record<string, NetClassSchematic>> |
   return table?.[name] ?? {};
 }
 
-/** The columns' checks: a width that is set must be larger than zero (`GRID_CELL_MARK_AS_NULLABLE`: the Default row may not be blank). Null when fine. */
+/** The columns' checks: a width that is set may not be negative -- a 0 is taken as typed, as KiCad's grid takes it (UI-LEFT-2 BB8) -- and the Default row may not be blank (`GRID_CELL_MARK_AS_NULLABLE`). Null when fine. */
 export function schematicColumnsIssue(look: NetClassSchematic, isDefault: boolean): string | null {
   for (const [what, v] of [
     ["Wire thickness", look.wire_width],
@@ -303,7 +303,7 @@ export function schematicColumnsIssue(look: NetClassSchematic, isDefault: boolea
       continue;
     }
     if (!Number.isFinite(v)) return `${what} is not a number.`;
-    if (v <= 0) return `${what} must be larger than zero.`;
+    if (v < 0) return `${what} cannot be negative.`;
   }
   return null;
 }

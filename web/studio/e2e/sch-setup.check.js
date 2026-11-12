@@ -300,7 +300,8 @@
     const magentaBefore = count(MAGENTA);
     button(page, "Add Netclass")?.click();
     await sleep(300);
-    const name = [...page.querySelectorAll("table.bs-grid")[0].querySelectorAll("input.bs-name")].pop();
+    // (a new class is the grid's first row: `InsertRows()`)
+    const name = page.querySelectorAll("table.bs-grid")[0].querySelector("input.bs-name");
     setValue(name, "Signal");
     await sleep(200);
     setValue(page.querySelector('input[aria-label="Signal Color"]'), "#ff00ff");

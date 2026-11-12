@@ -116,7 +116,8 @@
     t(heads.join("|").startsWith("Name|Clearance|Track Width|Via Size|Via Hole|uVia Size|uVia Hole|DP Width|DP Gap|Tuning Profile|PCB Color"), `KiCad's columns in its order (${heads.join("|")})`);
     t(!!button(p, "Import colors from schematic") && p.textContent.includes("Set color to transparent to use layer default color."), "Import colors from schematic and the help text");
     await press(p, "Add Netclass");
-    const name = [...p.querySelectorAll('input[aria-label^="Netclass "][aria-label$=" name"]')].pop();
+    // (a new class is the grid's first row: `InsertRows()`)
+    const name = p.querySelector('input[aria-label^="Netclass "][aria-label$=" name"]');
     await setValue(name, "busy");
     await press(p, "Add Assignment");
     const pattern = [...p.querySelectorAll('input[aria-label^="Pattern "]')].pop();
@@ -132,7 +133,7 @@
     await sleep(500);
     const shown = [...p.querySelectorAll('input[aria-label^="Pattern "]')].map((i) => i.value).filter((v) => /^D\d$/.test(v));
     t(shown.join(",") === "D0,D1,D2,D3", `the page shows a row a member (${shown})`);
-    t(/rgb\(255, 128, 0\)/.test(__eda.state().appearance.netclassColors?.busy ?? ""), `the PCB colour is the Appearance panel's (${JSON.stringify(__eda.state().appearance.netclassColors)})`);
+    t(/rgb\(255, 128, 0\)/.test(__eda.state().board?.board_rules?.net_class_pcb_colors?.busy ?? ""), `the PCB colour is a cell of the table, in the design (${JSON.stringify(__eda.state().board?.board_rules?.net_class_pcb_colors)})`);
     await closeBoardSetup();
   });
 

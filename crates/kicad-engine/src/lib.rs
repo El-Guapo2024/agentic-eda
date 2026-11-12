@@ -575,7 +575,11 @@ fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem
     let (pcb, map) = export_kicad_pcb_mapped_with(design, model, &ExportMeta { date: &date, title: stem }, fills)?;
     // A net class with a colour (Appearance > Net Classes) can only reach KiCad in the project file, and KiCad reads the project's classes only when the board has
     // none of its own: so then the classes move there whole, and kicad-cli judges the board by the same numbers (`eda_kicad::appearance::split_net_classes`).
-    let class_colors = studio_appearance(work).map(|a| eda_kicad::appearance::class_colors(&a)).unwrap_or_default();
+    // The design's own colours win once Board Setup or the Appearance panel has set them there (`BoardRules::net_class_pcb_colors`, UI-LEFT-2 BB8).
+    let class_colors = match &model.board.net_class_pcb_colors {
+        Some(colors) => colors.clone(),
+        None => studio_appearance(work).map(|a| eda_kicad::appearance::class_colors(&a)).unwrap_or_default(),
+    };
     let split = if class_colors.is_empty() { None } else { eda_kicad::appearance::split_net_classes(&pcb, &class_colors) };
     let path = work.join(format!("{stem}.kicad_pcb"));
     write_file(&path, split.as_ref().map_or(pcb.as_str(), |s| s.pcb.as_str()))?;

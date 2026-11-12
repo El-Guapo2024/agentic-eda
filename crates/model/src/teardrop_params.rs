@@ -165,6 +165,8 @@ impl TeardropParams {
             allow_two_segments: self.allow_two_segments,
             prefer_zone_connections: self.prefer_zone_connections,
             track_end: TeardropParams::default(),
+            // (a non-round anchor these govern takes them too)
+            rect_shape: Some(*self),
         }
     }
 

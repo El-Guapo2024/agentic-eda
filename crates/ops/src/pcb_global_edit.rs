@@ -68,6 +68,41 @@ use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// `PCB_TEXTBOX::StyleFromSettings`: `PCB_SHAPE::StyleFromSettings` (the border's width), then the text's (size, width, pen, italic) of `layer`'s class --
+/// "Set to layer default" and Board Setup > Formatting's "Apply board defaults to footprint text" (`FOOTPRINT::ApplyDefaultSettings`).
+pub(crate) fn style_text_box(t: &mut TextBox, defaults: &eda_model::rules::TextGraphicsDefaults, layer: &str) {
+    t.stroke_width_nm = line_thickness(defaults, layer);
+    (t.size_nm, t.width_nm) = text_height_width(defaults, layer);
+    t.thickness_nm = text_thickness(defaults, layer);
+    t.italic = defaults.text_italic_upright(layer).0;
+}
+
+/// `PCB_BARCODE::StyleFromSettings`: the text height of `layer`'s class (`SetTextSize( settings.GetTextSize( GetLayer() ).y )`).
+pub(crate) fn style_barcode(b: &mut Barcode, defaults: &eda_model::rules::TextGraphicsDefaults, layer: &str) {
+    b.text_height_nm = text_size(defaults, layer);
+}
+
+/// `PCB_DIMENSION_BASE::StyleFromSettings`: `PCB_TEXT::StyleFromSettings` (the size, width and height, the pen and italic; keep upright for a footprint's), then
+/// the line thickness of `layer`'s class and the board's dimension settings (`m_DimensionUnitsMode` .. `m_DimensionKeepTextAligned`).
+pub(crate) fn style_dimension(d: &mut Dimension, defaults: &eda_model::rules::TextGraphicsDefaults, dim_style: &eda_model::ir::DimensionSettings, layer: &str, in_footprint: bool) {
+    let (h, w) = text_height_width(defaults, layer);
+    d.text_size_nm = h;
+    d.text_effects.width_nm = w;
+    d.text_thickness_nm = Some(text_thickness(defaults, layer));
+    let (italic, upright) = defaults.text_italic_upright(layer);
+    d.text_effects.italic = italic;
+    if in_footprint {
+        d.text_effects.keep_upright = upright;
+    }
+    d.stroke_width = line_thickness(defaults, layer);
+    d.units = dim_style.units;
+    d.units_format = dim_style.units_format;
+    d.precision = dim_style.precision;
+    d.suppress_trailing_zeros = dim_style.suppress_trailing_zeros;
+    d.text_position = dim_style.text_position;
+    d.keep_text_aligned = dim_style.keep_text_aligned;
+}
+
 #[cfg(test)]
 pub use eda_model::rules::{layer_class, LayerClass};
 
@@ -295,12 +330,7 @@ impl ItemRows<'_> {
     fn text_box(&self, t: &mut TextBox) {
         let (e, defaults) = (self.e, &self.defaults);
         if e.layer_defaults {
-            // `PCB_TEXTBOX::StyleFromSettings`: `PCB_SHAPE::StyleFromSettings`, then the text
-            let layer = self.board_layer(&t.layer);
-            t.stroke_width_nm = line_thickness(defaults, &layer);
-            (t.size_nm, t.width_nm) = text_height_width(defaults, &layer);
-            t.thickness_nm = text_thickness(defaults, &layer);
-            t.italic = defaults.text_italic_upright(&layer).0;
+            style_text_box(t, defaults, &self.board_layer(&t.layer));
             return;
         }
         if let Some(l) = self.stored_layer() {
@@ -375,7 +405,7 @@ impl ItemRows<'_> {
     fn barcode(&self, b: &mut Barcode) {
         let e = self.e;
         if e.layer_defaults {
-            b.text_height_nm = text_size(&self.defaults, &self.board_layer(&b.layer));
+            style_barcode(b, &self.defaults, &self.board_layer(&b.layer));
             return;
         }
         if let Some(l) = self.stored_layer() {
@@ -389,25 +419,7 @@ impl ItemRows<'_> {
     fn dimension(&self, d: &mut Dimension) {
         let (e, defaults, dim_style) = (self.e, &self.defaults, &self.dim_style);
         if e.layer_defaults {
-            // `PCB_DIMENSION_BASE::StyleFromSettings`: `PCB_TEXT::StyleFromSettings` (the size, width and height, the pen and italic; keep upright for a
-            // footprint's), then the line thickness and the board's dimension settings.
-            let layer = self.board_layer(&d.layer);
-            let (h, w) = text_height_width(defaults, &layer);
-            d.text_size_nm = h;
-            d.text_effects.width_nm = w;
-            d.text_thickness_nm = Some(text_thickness(defaults, &layer));
-            let (italic, upright) = defaults.text_italic_upright(&layer);
-            d.text_effects.italic = italic;
-            if self.in_footprint {
-                d.text_effects.keep_upright = upright;
-            }
-            d.stroke_width = line_thickness(defaults, &layer);
-            d.units = dim_style.units;
-            d.units_format = dim_style.units_format;
-            d.precision = dim_style.precision;
-            d.suppress_trailing_zeros = dim_style.suppress_trailing_zeros;
-            d.text_position = dim_style.text_position;
-            d.keep_text_aligned = dim_style.keep_text_aligned;
+            style_dimension(d, defaults, dim_style, &self.board_layer(&d.layer), self.in_footprint);
             return;
         }
         if let Some(l) = self.stored_layer() {

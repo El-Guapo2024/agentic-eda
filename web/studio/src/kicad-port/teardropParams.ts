@@ -44,12 +44,22 @@ export function viaTeardrops(board: BoardState, via: { teardrops?: TeardropParam
   return via.teardrops ?? paramsOfSettings(s, s?.target_vias ?? true);
 }
 
-/** The parameters in effect on a pad: its own, else Board Setup's (`target_pth_pads` for a plated hole, `target_smd_pads` for the rest). */
-export function padTeardrops(board: BoardState, pad: { teardrops?: TeardropParams | null; kind?: string; th?: boolean }): TeardropParams {
+/** `TEARDROP_MANAGER::IsRound` of a pad's shape: a circle, or an oval as wide as it is high. */
+export function padShapeIsRound(pad: { shape?: string; size?: readonly [Nm, Nm] }): boolean {
+  return pad.shape === undefined || pad.shape === "circle" || (pad.shape === "oval" && !!pad.size && pad.size[0] === pad.size[1]);
+}
+
+/**
+ * The parameters in effect on a pad: its own, else Board Setup's (`target_pth_pads` for a plated hole, `target_smd_pads` for the rest) -- the round block for a round
+ * pad, the rectangular one (`rect_shape`, else the round block's sizes) for any other (`processItem`: `IsUniformlyRound( aItem ) ? TARGET_ROUND : TARGET_RECT`; UI-LEFT-2 BB8).
+ */
+export function padTeardrops(board: BoardState, pad: { teardrops?: TeardropParams | null; kind?: string; th?: boolean; shape?: string; size?: readonly [Nm, Nm] }): TeardropParams {
   const s = board.routing?.teardrop_settings;
   const pth = (pad.kind ?? (pad.th ? "through_hole" : "smd")) === "through_hole";
   const targeted = pth ? (s?.target_pth_pads ?? true) : (s?.target_smd_pads ?? true);
-  return pad.teardrops ?? paramsOfSettings(s, targeted);
+  if (pad.teardrops) return pad.teardrops;
+  if (!padShapeIsRound(pad) && s?.rect_shape) return { ...s.rect_shape, enabled: !!s.enabled && targeted };
+  return paramsOfSettings(s, targeted);
 }
 
 /** The Teardrops part of a dialog: each field the items share, or null where they differ (`INDETERMINATE_STATE`); the ratios as percentages, as the dialogs show them. */

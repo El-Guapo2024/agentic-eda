@@ -548,7 +548,9 @@
       await press(p, "Add Netclass");
       await press(p, "Add Netclass");
       const names = [...p.querySelectorAll('input[aria-label$=" name"]')].filter((i) => /^Netclass \d+ name$/.test(i.getAttribute("aria-label")));
-      check("Add Netclass adds a class named like KiCad's", names.length === 2 && names[0].value === "Netclass 1" && names[1].value === "Netclass 2", names.map((i) => i.value).join());
+      // `OnAddNetclassClick`: `InsertRows()` -- a blank row at the top, its name cell focused; the Default class stays in the last row (`loadNetclasses`)
+      const lastRow = [...p.querySelectorAll("table.bs-grid")][0].querySelector("tbody tr:last-child");
+      check("Add Netclass puts a blank row at the top, as KiCad's does, and Default stays last", names.length === 2 && names[0].value === "" && names[1].value === "" && document.activeElement === names[0] && /Default/.test(lastRow?.textContent ?? ""), `${names.map((i) => JSON.stringify(i.value)).join()} last row: ${lastRow?.textContent}`);
       await setText(names[0], "pins");
       await setText(names[1], "leds");
       await setText(p.querySelector('input[aria-label="pins Clearance"]'), "0.3mm");
@@ -587,7 +589,7 @@
       check("Apply stores the classes in the order of the table with their patterns as typed", savedClasses === "Saved." && stored.map((c) => c.name).join() === "pins,leds" && JSON.stringify(stored[0].nets) === JSON.stringify([".*/PA[0-3]"]) && JSON.stringify(stored[1].nets) === JSON.stringify(["*/LED?", ".*/PA(1|7)"]) && stored[0].clearance === 300_000 && stored[1].clearance === 100_000, JSON.stringify(stored));
       step("moving a class");
       const rows = [...p.querySelectorAll("table.bs-grid")][0].querySelectorAll("tbody tr");
-      rows[1].click();
+      rows[0].click();
       await sleep(150);
       await press(p, "Down");
       const movedApply = await apply(p);

@@ -1243,6 +1243,21 @@ pub struct TeardropSettings {
     /// block's `m_Enabled` and `m_TargetTrack2Track` both (UI-LEFT-2 PP7). Additive: absent reads as `TEARDROP_PARAMETERS()`, off.
     #[serde(default, skip_serializing_if = "crate::teardrop_params::TeardropParams::is_default")]
     pub track_end: crate::teardrop_params::TeardropParams,
+    /// `TARGET_RECT`'s block (Board Setup's "Default Properties for Rectangular Shapes"): what a pad that is not uniformly round gets
+    /// (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`: `IsUniformlyRound( aItem ) ? TARGET_ROUND : TARGET_RECT`; UI-LEFT-2 BB8). Its `enabled` is not its own: the
+    /// round block's `enabled` (the studio's stand-in for Edit Teardrops' "Add teardrops") turns both on. `None` (a design from before the block was read): the
+    /// round block's sizes, as this port served every pad then. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect_shape: Option<crate::teardrop_params::TeardropParams>,
+}
+
+impl TeardropSettings {
+    /// The `TARGET_RECT` block in force ([`Self::rect_shape`], else the round block's), with the round block's enable.
+    pub fn rect_params(&self) -> crate::teardrop_params::TeardropParams {
+        let mut p = self.rect_shape.unwrap_or_else(|| crate::teardrop_params::TeardropParams::of_settings(self));
+        p.enabled = self.enabled;
+        p
+    }
 }
 
 fn is_true(v: &bool) -> bool {
@@ -1287,6 +1302,7 @@ impl Default for TeardropSettings {
             allow_two_segments: true,
             prefer_zone_connections: true,
             track_end: crate::teardrop_params::TeardropParams::default(),
+            rect_shape: None,
         }
     }
 }

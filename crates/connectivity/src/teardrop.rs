@@ -265,10 +265,12 @@ fn pad_bounding_radius(lp: &Pad, groups: &[(Vec<String>, Geo)], center: Point64)
 
 /// The parameters an anchor is built with: its own (`GetTeardropParams()`, which alone govern it, as in `UpdateTeardrops`), else Board Setup's block when the block is
 /// on and targets the anchor's kind (`DIALOG_GLOBAL_EDIT_TEARDROPS`, which writes the block into every targeted item). `None`: the anchor gets no teardrop.
-fn anchor_params(own: Option<TeardropParams>, board: &TeardropSettings, targeted: bool) -> Option<TeardropParams> {
+/// The block is `TARGET_ROUND`'s for a via and a uniformly round pad, `TARGET_RECT`'s for any other pad (`processItem`: `TEARDROP_MANAGER::IsUniformlyRound`;
+/// UI-LEFT-2 BB8).
+fn anchor_params(own: Option<TeardropParams>, board: &TeardropSettings, targeted: bool, uniformly_round: bool) -> Option<TeardropParams> {
     match own {
         Some(p) => p.enabled.then_some(p),
-        None => (board.enabled && targeted).then(|| TeardropParams::of_settings(board)),
+        None => (board.enabled && targeted).then(|| if uniformly_round { TeardropParams::of_settings(board) } else { board.rect_params() }),
     }
 }
 
@@ -294,7 +296,7 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
             }
             let extra = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id));
             let own = extra.and_then(|e| e.teardrops());
-            let params = anchor_params(own, settings, settings.target_vias);
+            let params = anchor_params(own, settings, settings.target_vias, true);
             // `via->GetWidth( aLayer )`: the padstack's diameter on the layer (`PADSTACK::Size( aLayer )`), the via's own on a normal stack.
             let padstack = extra.and_then(|e| e.props().padstack);
             let mut groups: Vec<(Vec<String>, Geo)> = Vec::new();
@@ -328,7 +330,6 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
                 // `DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow`: PTH pads by "PTH pads", SMD and edge connector pads by "SMD pads".
                 let targeted = if lp.kind == PadKind::ThroughHole { settings.target_pth_pads } else { settings.target_smd_pads };
                 let own = design.pad_teardrops(&fp.id, pad_idx, footprint.pads.len(), &lp.number, nth);
-                let params = anchor_params(own, settings, targeted);
                 let net = net_of_pin.get(&format!("{}.{}", fp.id, lp.number)).cloned().unwrap_or_default();
                 if net.is_empty() {
                     continue;
@@ -356,6 +357,8 @@ fn collect_anchors(design: &Design, model: &ConstraintModel, settings: &Teardrop
                 if groups.is_empty() {
                     continue;
                 }
+                // `TEARDROP_MANAGER::IsUniformlyRound`: round on every layer of its padstack (`ForEachUniqueLayer`, `IsRound`)
+                let params = anchor_params(own, settings, targeted, groups.iter().all(|(_, g)| g.round));
                 let bounding_radius = pad_bounding_radius(lp, &groups, center);
                 anchors.push(Anchor { key: AnchorKey::Pad(fp.id.clone(), pad_idx), center, net, kind: AnchorKind::Pad { bounding_radius }, groups, params });
             }
@@ -2584,6 +2587,27 @@ mod tests {
         // "SMD pads" off: none.
         let off = TeardropSettings { enabled: true, target_smd_pads: false, ..Default::default() };
         assert!(generate_teardrops(&design, &model, &off).is_empty());
+    }
+
+    /// Board Setup's "Default Properties for Rectangular Shapes" (`TARGET_RECT`, UI-LEFT-2 BB8) serve a pad that is not uniformly round, the round block a via
+    /// (`DIALOG_GLOBAL_EDIT_TEARDROPS::processItem`: `IsUniformlyRound`): a shorter rect block shortens the rectangle's teardrop and leaves the via's alone.
+    #[test]
+    fn the_rectangular_block_serves_a_rectangular_pad_and_the_round_block_a_via() {
+        let (mut design, model) = smd_pad_model(PadShape::Rect, (1.5, 1.0), None);
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(track(vec![at(100.0, 145.0), at(105.0, 145.0)], 0.25));
+        rt.vias.push(via(120.0, 145.0, 0.8));
+        rt.tracks.push(track(vec![at(120.0, 145.0), at(125.0, 145.0)], 0.2));
+        let reach = |zs: &[Zone], x0: i64| zs.iter().filter(|z| z.outline.iter().any(|p| (p.x.get() - x0).abs() < 2_000_000)).flat_map(|z| z.outline.iter().map(|p| p.x.get())).max().unwrap();
+        let plain = generate_teardrops(&design, &model, &enabled_settings());
+        assert_eq!(plain.len(), 2, "{plain:?}");
+        let short = eda_model::teardrop_params::TeardropParams { best_length_ratio: 0.2, ..eda_model::teardrop_params::TeardropParams::of_settings(&enabled_settings()) };
+        let settings = TeardropSettings { rect_shape: Some(short), ..enabled_settings() };
+        let rect = generate_teardrops(&design, &model, &settings);
+        assert_eq!(rect.len(), 2, "{rect:?}");
+        assert!(reach(&rect, 100_000_000) < reach(&plain, 100_000_000), "the pad's teardrop is shorter");
+        assert_eq!(reach(&rect, 120_000_000), reach(&plain, 120_000_000), "the via's is the round block's");
+        assert_eq!(settings.rect_params().enabled, true, "the round block's enable turns the rect block on");
     }
 
     /// A track crossing a rounded rectangle's centre gets one teardrop on each side (`buildCrossingStub`), as kicad-cli makes them.

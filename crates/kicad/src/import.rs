@@ -923,7 +923,7 @@ pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
 /// `board_design_settings.cpp:526-660`): the target kinds from `teardrop_options` (`td_onvia`, `td_onpthpad`, `td_onsmdpad`) and the round target's sizes
 /// from `teardrop_parameters` (`td_target_name` `td_round_shape`: `td_maxlen` and `td_maxheight` in millimetres, `td_length_ratio`, `td_height_ratio` and
 /// `td_width_to_size_filter_ratio`, and its curved edges, two segments and zone preference: `td_curve_segcount` above 0, `td_allow_use_two_tracks`,
-/// `td_on_pad_in_zone`). This port collapses KiCad's round and rectangle blocks into one (PARITY-pcb §15), so the `td_rect_shape` entry is not read; the
+/// `td_on_pad_in_zone`). The `td_rect_shape` entry is the rectangular-shape block (`TeardropSettings::rect_shape`, UI-LEFT-2 BB8); the
 /// `td_track_end` entry is the track-to-track block (`TeardropSettings::track_end`, its `td_enabled`; KiCad 25ec2335 `UpdateTeardrops` reads
 /// `GetParameters( TARGET_TRACK )->m_Enabled`). An array entry that is empty, not an object or (for the parameters) names no target is skipped, as
 /// KiCad's loader skips it; a key the entry does not have keeps what the design had. Absent `board.design_settings` or text that is not JSON is a no-op.
@@ -956,33 +956,19 @@ pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
         // `GetTeardropTargetTypeFromCanonicalName`: the round target's block feeds this port's collapsed one, the track end's the track-to-track block.
         match entry.get("td_target_name").and_then(|v| v.as_str()) {
             Some("td_round_shape") => {}
+            // `TARGET_RECT` (UI-LEFT-2 BB8): its own block, from `TEARDROP_PARAMETERS()` where the entry is silent
+            Some("td_rect_shape") => {
+                let mut p = t.rect_shape.unwrap_or_default();
+                read_td_block(entry, &mut p);
+                if let Some(v) = flag(entry, "td_on_pad_in_zone") {
+                    p.prefer_zone_connections = !v;
+                }
+                t.rect_shape = Some(p);
+                read = true;
+                continue;
+            }
             Some("td_track_end") => {
-                let p = &mut t.track_end;
-                if let Some(v) = flag(entry, "td_enabled") {
-                    p.enabled = v;
-                }
-                if let Some(v) = num("td_maxlen") {
-                    p.max_length = mm_to_nm(v);
-                }
-                if let Some(v) = num("td_maxheight") {
-                    p.max_width = mm_to_nm(v);
-                }
-                if let Some(v) = num("td_length_ratio") {
-                    p.best_length_ratio = v;
-                }
-                if let Some(v) = num("td_height_ratio") {
-                    p.best_width_ratio = v;
-                }
-                if let Some(v) = num("td_width_to_size_filter_ratio") {
-                    p.filter_ratio = v;
-                }
-                // `if( entry["td_curve_segcount"].get<int>() > 0 ) td_prm->m_CurvedEdges = true;`
-                if num("td_curve_segcount").is_some_and(|n| n > 0.0) {
-                    p.curved_edges = true;
-                }
-                if let Some(v) = flag(entry, "td_allow_use_two_tracks") {
-                    p.allow_two_segments = v;
-                }
+                read_td_block(entry, &mut t.track_end);
                 read = true;
                 continue;
             }
@@ -1023,6 +1009,38 @@ pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
     }
     if read {
         design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }).teardrop_settings = t;
+    }
+}
+
+/// One `teardrop_parameters` entry read into a block (`BOARD_DESIGN_SETTINGS`' `teardrop_parameters` loader): `td_enabled`, the lengths in millimetres, the
+/// ratios, curved edges when `td_curve_segcount` is above 0, two segments. A key the entry lacks keeps what the block had.
+fn read_td_block(entry: &serde_json::Value, p: &mut eda_model::teardrop_params::TeardropParams) {
+    let num = |key: &str| entry.get(key).and_then(|v| v.as_f64());
+    let flag = |key: &str| entry.get(key).and_then(|v| v.as_bool());
+    if let Some(v) = flag("td_enabled") {
+        p.enabled = v;
+    }
+    if let Some(v) = num("td_maxlen") {
+        p.max_length = mm_to_nm(v);
+    }
+    if let Some(v) = num("td_maxheight") {
+        p.max_width = mm_to_nm(v);
+    }
+    if let Some(v) = num("td_length_ratio") {
+        p.best_length_ratio = v;
+    }
+    if let Some(v) = num("td_height_ratio") {
+        p.best_width_ratio = v;
+    }
+    if let Some(v) = num("td_width_to_size_filter_ratio") {
+        p.filter_ratio = v;
+    }
+    // `if( entry["td_curve_segcount"].get<int>() > 0 ) td_prm->m_CurvedEdges = true;`
+    if num("td_curve_segcount").is_some_and(|n| n > 0.0) {
+        p.curved_edges = true;
+    }
+    if let Some(v) = flag("td_allow_use_two_tracks") {
+        p.allow_two_segments = v;
     }
 }
 
