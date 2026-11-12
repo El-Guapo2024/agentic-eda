@@ -495,9 +495,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // each placed unit is a symbol of its own with a uuid of its own (`SCH_SYMBOL::m_Uuid`): `ResolveItem` finds unit B of a cross-reference by it
         let uuid = duid_for(&format!("sym:{}", eda_model::ir::field_key(&sym.id, sym.unit)), &sym.id);
         // The body style the symbol is placed in: `(convert N)` (the token of a file before KiCad 10, which reads it as `body_style`, `SCH_SYMBOL::SetBodyStyle`),
-        // written only for a symbol in the alternate ("De Morgan") style of a library symbol that has one, as the default is the normal style.
+        // written only for a symbol in a style other than the normal one of a library symbol that has it (the De Morgan alternate, or any of KiCad 25ec2335's
+        // custom body styles), as the default is the normal style.
         let real_symbol = model.real_symbol_of(&lib_id, part);
-        let body_style = if real_symbol.as_ref().is_some_and(|s| s.has_alternate_body()) { sch.body_style_of(sym).min(2) } else { 1 };
+        let body_style = real_symbol.as_ref().map_or(1, |s| sch.body_style_of(sym).min(s.body_style_count()));
         let convert = if body_style > 1 { format!(" (convert {body_style})") } else { String::new() };
         let lib_name = cache_names.get(&(sym.id.clone(), sym.unit)).map(|n| format!(" (lib_name {})", sexpr_str(n))).unwrap_or_default();
         writeln!(out, "\t(symbol{lib_name} (lib_id {}) (at {x} {y} 0) (unit {}){convert}", sexpr_str(&lib_id), sym.unit).unwrap();
@@ -1532,6 +1533,15 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
     // file at all. Confirmed empirically against real `kicad-cli sch erc`.
     let bare_name = cache_name.rsplit(':').next().unwrap_or(cache_name);
     writeln!(out, "\t\t(symbol {}", sexpr_str(cache_name)).unwrap();
+    // `(body_styles demorgan)` / `(body_styles "Front" "Side" ..)` (`SaveSymbol`: `IsMultiBodyStyle()`): a cache entry declares its styles as a library does, so a reader
+    // that takes the declaration (KiCad 25ec2335's, and 8303b2ad's from 20250827) keeps the custom names and their number
+    if let Some(r) = resolved.as_ref().filter(|r| r.body_style_count() > 1) {
+        if r.connectivity.body_style_names.is_empty() {
+            writeln!(out, "\t\t\t(body_styles demorgan)").unwrap();
+        } else {
+            writeln!(out, "\t\t\t(body_styles {})", r.connectivity.body_style_names.iter().map(|n| sexpr_str(n)).collect::<Vec<_>>().join(" ")).unwrap();
+        }
+    }
     // how this symbol draws its pins' texts (`(pin_numbers (hide yes))`, `(pin_names (offset x) (hide yes))`): without them KiCad shows
     // every number, and names inside the body at its own 0.508 mm
     if let Some(r) = &resolved {
@@ -1576,8 +1586,8 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
     // Each style is baked through the instances' own transform exactly like the other. The box they hang from is that of both bodies together
     // (`real_symbol_bbox`), so a symbol placed in style 2 sits by the same corner as in style 1 and its pins stay where the library puts them, as
     // `eda_engine::placed::corner_symbol` has it.
-    let styles: &[u32] = if resolved.as_ref().is_some_and(|r| r.has_alternate_body()) { &[1, 2] } else { &[1] };
-    for &style in styles {
+    // (every custom body style of a symbol that has more, KiCad 25ec2335 `SaveSymbol`: `GetBodyStyleCount()` styles)
+    for style in 1..=resolved.as_ref().map_or(1, |r| r.body_style_count()) {
         let in_style = resolved.as_ref().map(|r| r.in_style(style).into_owned());
         write_body_style_blocks(out, &bare_name, style, in_style.as_ref(), instances, part, default_baker, unit_count, swaps, corner_unit);
     }

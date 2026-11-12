@@ -43,10 +43,23 @@ fn gate() -> LibSymbol {
     }
 }
 
+/// The gate with three custom body styles (KiCad 25ec2335's `(body_styles "Front" "Side" "Top")`, UI-LEFT-2 YY3): the third body wider still, its second input one more
+/// grid cell down.
+fn gate3() -> LibSymbol {
+    let mut g = gate();
+    g.connectivity.body_style_names = vec!["Front".into(), "Side".into(), "Top".into()];
+    g.connectivity.extra_bodies = vec![AlternateBody::of_style(3, vec![body(5.08)], vec![pin("1", "A", "input", -7.62, 2.54, 0.0), pin("2", "B", "input", -7.62, -5.08, 0.0), pin("3", "Y", "output", 7.62, 0.0, 180.0)])];
+    g
+}
+
 fn model() -> ConstraintModel {
+    model_of(gate())
+}
+
+fn model_of(symbol: LibSymbol) -> ConstraintModel {
     let pins = ["1", "2", "3"].map(|n| Pin { number: n.into(), name: None, kind: PinKind::Signal }).to_vec();
     let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("GATE".into()), package: None, footprint: Some("Foo:Bar".into()), symbol: Some("test:GATE".into()), datasheet: None, pins, body_nm: None, edge: None };
-    ConstraintModel { parts: vec![part], symbols: vec![gate()], ..Default::default() }
+    ConstraintModel { parts: vec![part], symbols: vec![symbol], ..Default::default() }
 }
 
 /// The gate placed in `style`, a wire from each of its pins in that style out to a label: `NET_A`, `NET_B`, `NET_Y`. With `wires_of`, the wires meet the pins of that
@@ -83,6 +96,25 @@ fn the_file_has_both_bodies_and_the_style_of_the_symbol() {
         assert_eq!(sch.body_style_of(&sch.symbols[0]), style);
         assert!(back_model.symbols[0].alternate.is_some(), "the symbol keeps both bodies");
     }
+}
+
+#[test]
+fn a_symbol_of_three_custom_body_styles_is_placed_in_its_third() {
+    let m = model_of(gate3());
+    assert_eq!(m.symbols[0].body_style_count(), 3);
+    let drawn = m.symbols[0].in_style(3);
+    assert_eq!(drawn.pins[1].at.y, -5.08, "style 3 draws the third body's pins");
+    assert_eq!((drawn.drawn_style(), drawn.body_style_count()), (3, 3));
+    assert_eq!(drawn.body_of(1).unwrap().1[1].at.y, 0.0, "and keeps the normal body");
+    let text = export_kicad_sch(&sheet(&m, 3, 3), &m, &META).expect("the sheet exports");
+    assert!(text.contains("(convert 3)"), "{text}");
+    assert!(text.contains("(body_styles \"Front\" \"Side\" \"Top\")"), "the cache declares the styles");
+    assert!(text.contains("\"GATE_1_3\""), "and has the third body");
+    let (back, back_model, _) = import_kicad_sch(&text).expect("the file reads");
+    let sch = back.schematic.unwrap();
+    assert_eq!(sch.body_style_of(&sch.symbols[0]), 3);
+    assert_eq!(back_model.symbols[0].body_style_count(), 3, "the symbol keeps its three bodies");
+    assert_eq!(back_model.symbols[0].connectivity.body_style_names, ["Front", "Side", "Top"]);
 }
 
 fn find_kicad_cli() -> Option<PathBuf> {
@@ -151,6 +183,19 @@ fn kicad_reaches_the_pins_of_the_body_style_the_symbol_is_in() {
         assert!(pins(&nets, "NET_B").is_empty(), "style {style} with the wires of style {wires_of}: {nets:?}");
         assert_eq!(pins(&nets, "NET_A"), vec!["1".to_string()], "the pin both bodies share is reached either way");
     }
+
+    // a symbol of three custom styles placed in its third: kicad-cli reaches the third body's pins (UI-LEFT-2 YY3)
+    let m3 = model_of(gate3());
+    let text = export_kicad_sch(&sheet(&m3, 3, 3), &m3, &META).expect("the sheet exports");
+    let path3 = dir.join("third.kicad_sch");
+    std::fs::write(&path3, text).unwrap();
+    let nets = kicad_nets(&cli, &path3, &dir.join("third.net"));
+    assert_eq!((pins(&nets, "NET_A"), pins(&nets, "NET_B"), pins(&nets, "NET_Y")), (vec!["1".to_string()], vec!["2".to_string()], vec!["3".to_string()]), "style 3: {nets:?}");
+    let up = Command::new(&cli).args(["sch", "upgrade", "--force"]).arg(&path3).output().expect("run kicad-cli");
+    assert!(up.status.success(), "kicad-cli sch upgrade: {}{}", String::from_utf8_lossy(&up.stdout), String::from_utf8_lossy(&up.stderr));
+    let kicads = std::fs::read_to_string(&path3).unwrap();
+    assert!(kicads.contains("(body_style 3)"), "KiCad reads the instance as being in body style 3: {kicads}");
+    assert!(kicads.contains("(body_styles \"Front\" \"Side\" \"Top\")"), "and the symbol's three custom styles");
 
     // what KiCad's own writer says of the symbol: its body style and that it has two
     let path = dir.join("met_2.kicad_sch");

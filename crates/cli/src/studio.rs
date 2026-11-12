@@ -2915,8 +2915,8 @@ pub(crate) fn fields_autoplaced_json(sch: &eda_model::ir::SchematicSection, key:
 /// Each graphic and pin carries two spellings: the engine symbol's own (`stroke_mm`, `filled`, `radius_mm`, `text`) and the names the studio's painter and its
 /// `LibSymbol` type read (`stroke_width`, `fill`, `radius`, `content`, `body_style`, and a pin's `hidden`). Without the second a symbol from a library was
 /// drawn with no body and no pins: the painter keeps an item only when its `body_style` is 0 or the placed one's. A symbol with one body style has every item
-/// shared (`body_style` 0); one with an alternate ("De Morgan") body style has the items both bodies draw alike shared and the others of body style 1 (the
-/// normal body) or 2 (the alternate one), which is what `resolveLibSymbol` picks from by the style a placed symbol is in. No pin is hidden, and the engine symbol
+/// shared (`body_style` 0); one with several body styles (De Morgan, or KiCad 25ec2335's custom ones) has the items every body draws alike shared and the others of their
+/// body style (1 the normal body), which is what `resolveLibSymbol` picks from by the style a placed symbol is in. No pin is hidden, and the engine symbol
 /// keeps only whether a shape is filled, not how: a filled rectangle is the body colour (what library ICs use), any other filled shape the outline colour.
 fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     let pt = |p: eda_model::symbol::SPoint| json!([p.x, p.y]);
@@ -2940,19 +2940,31 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         }
         j
     };
-    let (normal, alt) = s.bodies();
-    let mut graphics: Vec<Value> = normal.0.iter().map(|g| graphic(g, if alt.is_none_or(|a| a.0.contains(g)) { 0 } else { 1 })).collect();
-    let mut pins: Vec<Value> = normal.1.iter().map(|p| pin(p, if alt.is_none_or(|a| a.1.contains(p)) { 0 } else { 1 })).collect();
-    if let Some(a) = alt {
-        graphics.extend(a.0.iter().filter(|g| !normal.0.contains(g)).map(|g| graphic(g, 2)));
-        pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
+    // every body by style (De Morgan's two, or KiCad 25ec2335's custom styles): an item every body draws is shared (0), the rest of their own style
+    let bodies = s.all_bodies();
+    let multi = bodies.len() > 1;
+    let mut graphics: Vec<Value> = Vec::new();
+    let mut pins: Vec<Value> = Vec::new();
+    for &(style, gs, ps) in &bodies {
+        for g in gs {
+            let shared = bodies.iter().all(|(_, other, _)| other.contains(g));
+            if !shared || style == 1 {
+                graphics.push(graphic(g, if shared { 0 } else { style }));
+            }
+        }
+        for p in ps {
+            let shared = bodies.iter().all(|(_, _, other)| other.contains(p));
+            if !shared || style == 1 {
+                pins.push(pin(p, if shared { 0 } else { style }));
+            }
+        }
     }
     // the text in each library text box (`SCH_PAINTER::draw( SCH_TEXTBOX )` of the placed symbol's temp copy, `eda_model::sym_textbox`): its border and fill are the
     // rectangle above. `index` is the box's place in `LibConnectivity::text_boxes`, by which a placed symbol's `text_box_shown` gives its shown text; `margin_mm`
     // the margin it has (`GetLegacyTextMargin` when it says none)
     for (i, t) in s.connectivity.text_boxes.iter().enumerate() {
         if let eda_model::ir::LibrarySymbolGraphic::TextBox { unit, body_style, text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, text_color, .. } = t {
-            let style = if alt.is_none() { 0 } else { *body_style };
+            let style = if !multi { 0 } else { *body_style };
             let mut j = json!({ "kind": "text_box", "index": i, "unit": unit, "body_style": style, "text": text, "start": pt(*start), "end": pt(*end), "angle_deg": angle_deg, "size_mm": size_mm, "bold": bold, "italic": italic, "h_align": h_align, "v_align": v_align, "margin_mm": eda_model::ir::text_box_margin_mm(*size_mm, *margin_mm) });
             if let Some(c) = text_color {
                 j["text_color"] = json!(c);
@@ -2961,7 +2973,7 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         }
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "body_style_names": (1..=s.body_style_count()).map(|n| s.body_style_description(n)).filter(|_| s.body_style_count() > 1).collect::<Vec<_>>(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document

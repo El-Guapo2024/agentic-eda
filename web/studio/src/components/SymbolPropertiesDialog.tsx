@@ -355,6 +355,7 @@ export function SymbolPropertiesDialog() {
   });
 
   const bodyStyles = sch ? bodyStyleCount(sch, symbol) : 1;
+  const bodyStyleNames = (symbol.lib_id && sch?.lib_symbols[symbol.lib_id]?.body_style_names) || [];
   const units = sch ? unitChoices(sch, symbol) : [];
   // a section still in KiCad's frame (`imported_from_kicad`, a design.json from before 2026-10-25) has no places for its fields: the server lists none, and a field
   // added there could not be shown
@@ -601,8 +602,8 @@ export function SymbolPropertiesDialog() {
                   <select aria-label="Body style" value={bodyStyle} disabled={!multiBody} onChange={(e) => setBodyStyle(Number(e.target.value))} data-testid="symbol-body-style">
                     {Array.from({ length: Math.max(1, bodyStyles) }, (_, i) => i + 1).map((n) => (
                       <option key={n} value={n}>
-                        {/* `LIB_SYMBOL::GetBodyStyleDescription`: a De Morgan pair is Standard and Alternate */}
-                        {!multiBody ? "" : n === 1 ? "Standard" : n === 2 ? "Alternate" : `Style ${n}`}
+                        {/* `TransferDataToWindow`'s `m_bodyStyleChoice` (KiCad 25ec2335): Standard and Alternate for a De Morgan pair, else the custom names ("???" past them) */}
+                        {!multiBody ? "" : bodyStyleNames[n - 1] ?? (n === 1 ? "Standard" : n === 2 ? "Alternate" : "???")}
                       </option>
                     ))}
                   </select>

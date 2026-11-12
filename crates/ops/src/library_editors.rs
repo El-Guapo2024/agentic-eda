@@ -307,8 +307,9 @@ pub fn set_body_styles(sym: &mut LibrarySymbol, demorgan: bool, names: &[String]
 /// - "All pins with duplicate numbers are jumpers" (`SetDuplicatePinNumbersAreJumpers`);
 /// - the explicit jumper pin groups: each row of the grid cut at commas, spaces, tabs and line ends (`wxStringTokenizer( .., ", \t\r\n", wxTOKEN_STRTOK )`), every
 ///   number a pin of the symbol ("Pin '%s' in jumper pin group %d does not exist in this symbol."), each group a `std::set` (sorted, no repeats) and an empty row no
-///   group (`JUMPER_GROUP::Make` returns none for it; 8303b2ad kept an empty one). A pin's stacked numbers (`[1-4]`, KiCad 25ec2335's `GetStackedPinNumbers`) are not
-///   spread: this writer's files are from before the stacked notation.
+///   group (`JUMPER_GROUP::Make` returns none for it; 8303b2ad kept an empty one). A number is a pin's (`LIB_SYMBOL::HasPinNumber`: `GetPin( aNumber )`) or one
+///   a pin's stacked notation stands for (`[1-4]`, `[1,3,5]`: `GetStackedPinNumbers()` of every pin), as KiCad 25ec2335 has it; the writer's version (20251024)
+///   is after the notation (20250901), so the connectivity joins them as KiCad's does.
 pub fn edit_units_and_connections(sym: &mut LibrarySymbol, unit_names: &std::collections::BTreeMap<u32, String>, demorgan: bool, body_style_names: &[String], duplicate_pin_numbers_are_jumpers: bool, jumper_rows: &[String]) -> Result<(), Vec<CheckResult>> {
     if sym.extends.is_some() {
         return Err(vec![CheckResult::fail("ops_bad_symbol", &sym.lib_id, "a derived symbol's units, body styles and pins are its parent's")]);
@@ -316,7 +317,8 @@ pub fn edit_units_and_connections(sym: &mut LibrarySymbol, unit_names: &std::col
     if !demorgan && body_style_names.iter().filter(|n| !n.is_empty()).count() == 1 {
         return Err(vec![CheckResult::fail("ops_bad_symbol", &sym.lib_id, "Custom body styles must have at least 2 entries")]);
     }
-    let numbers: std::collections::BTreeSet<&str> = sym.pins.iter().map(|p| p.number.as_str()).collect();
+    let mut numbers: std::collections::BTreeSet<String> = sym.pins.iter().map(|p| p.number.clone()).collect();
+    numbers.extend(sym.pins.iter().flat_map(|p| eda_model::fp_units::expand_stacked_pin_notation(&p.number).0));
     let mut groups: Vec<Vec<String>> = Vec::new();
     for (ii, row) in jumper_rows.iter().enumerate() {
         let mut group: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

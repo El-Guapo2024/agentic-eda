@@ -250,7 +250,8 @@ impl<'a> Planner<'a> {
     /// `SCH_SYMBOL::GetPin( number )`: a pin of that number in any unit of the symbol (its electrical type), `None` for none.
     fn lib_pin_type(&self, item: &Item, number: &str) -> Option<String> {
         let lib = self.lib_of(item)?;
-        lib.pins.iter().chain(lib.alternate.iter().flat_map(|a| a.pins.iter())).find(|p| p.number == number).map(|p| if p.hidden && p.electrical_type == "power_in" { "power_in_hidden".to_string() } else { p.electrical_type.clone() })
+        let found = lib.pins.iter().chain(lib.other_bodies().flat_map(|a| a.pins.iter())).find(|p| p.number == number).map(|p| if p.hidden && p.electrical_type == "power_in" { "power_in_hidden".to_string() } else { p.electrical_type.clone() });
+        found
     }
 
     /// The unit-swap pass of `applyChangelist` for the units `items` of one footprint; answers the items it swapped.

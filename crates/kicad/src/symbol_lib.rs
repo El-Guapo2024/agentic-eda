@@ -216,7 +216,7 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
     let root = *chain.last().expect("a chain has this symbol");
     let nearest = chain.get(1).copied().unwrap_or(item);
 
-    let Bodies { graphics, pins, unit_count, alternate } = graphics_and_pins(root);
+    let Bodies { graphics, pins, unit_count, alternate, extra_bodies, body_style_names } = graphics_and_pins(root);
     let power = root.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power")));
 
     // a mandatory field's text: the nearest symbol that gives it one (an empty text is not an override)
@@ -255,7 +255,7 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
         pin_numbers_hidden: pin_numbers.map(hidden).unwrap_or(false),
         pin_name_offset_mm: pin_names.and_then(|p| sexpr::find(p, "offset")).and_then(|o| sexpr::num(o, 1)).unwrap_or(eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM),
         alternate,
-        connectivity: connectivity_of(root),
+        connectivity: eda_model::symbol::LibConnectivity { extra_bodies, body_style_names, ..connectivity_of(root) },
     }
 }
 
@@ -292,11 +292,11 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
         .collect();
     // `ki_keywords` and `ki_fp_filters` (`parseProperty`: the keywords and the footprint filters, not fields), which the cache writes back (r7 H3)
     let ki = |name: &str| sexpr::find_all(node, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
-    // the text boxes of the unit and body style sub-symbols (`parseSymbolTextBox`, of the sub-symbol's unit and style; one of a body style above 2 is not drawn, as
+    // the text boxes of the unit and body style sub-symbols (`parseSymbolTextBox`, of the sub-symbol's unit and style; one of a body style above the count is not drawn, as
     // `graphics_and_pins` has it, and one private to the Symbol Editor is not drawn on a sheet), which a placed symbol writes its text in and the cache writes back
     let text_boxes = sexpr::find_all(node, "symbol")
         .filter_map(|sub| Some((sub, unit_and_style_of_subname(sexpr::txt(sub, 1)?))))
-        .filter(|(_, (_, style))| *style <= 2)
+        .filter(|(_, (_, style))| *style <= declared_body_styles(node).map_or(2, |n| if n.is_empty() { 2 } else { n.len() as u32 }))
         .flat_map(|(sub, (unit, style))| sexpr::find_all(sub, "text_box").filter_map(move |t| crate::symbol_import::text_box(t, unit, style)))
         .filter(|t| !t.is_private())
         .collect();
@@ -310,55 +310,79 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
         jumper_pin_groups,
         pin_alternates,
         text_boxes,
+        ..Default::default()
     }
 }
 
-/// What one symbol's raw node draws: the normal body style (the `Name_<unit>_0` sub-blocks every style shares and the `Name_<unit>_1` ones), the alternate
-/// ("De Morgan") one when the symbol has `Name_<unit>_2` sub-blocks (`LIB_SYMBOL::HasLegacyAlternateBodyStyle`: any drawing of a body style above 1), and the
+/// What one symbol's raw node draws: the normal body style (the `Name_<unit>_0` sub-blocks every style shares and the `Name_<unit>_1` ones), the second one
+/// (the "De Morgan" alternate, or a symbol's second custom style) and every further custom one (KiCad 25ec2335's `GetBodyStyleCount()` styles), and the
 /// highest unit index seen.
 struct Bodies {
     graphics: Vec<SymbolGraphic>,
     pins: Vec<LibPin>,
     unit_count: u32,
     alternate: Option<Box<AlternateBody>>,
+    extra_bodies: Vec<AlternateBody>,
+    body_style_names: Vec<String>,
+}
+
+/// `(body_styles demorgan)` / `(body_styles "Front" "Side" ..)` of a symbol's node (`SCH_IO_KICAD_SEXPR_PARSER::parseBodyStyles`): `Some(names)`, empty for De Morgan;
+/// `None` when the symbol declares none.
+fn declared_body_styles(item: &[Sexpr]) -> Option<Vec<String>> {
+    let node = sexpr::find(item, "body_styles")?;
+    if node.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "demorgan")) {
+        return Some(Vec::new());
+    }
+    Some(node.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect())
 }
 
 /// Every graphic/pin across every unit/body-style sub-block of one symbol's own raw
 /// node (`(symbol "Name_0_1" ...)`, `(symbol "Name_1_1" ...)`, `(symbol "Name_1_2" ...)`, ...), split by body style the way KiCad reads them
 /// (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbol`: the second number of the sub-symbol's name is the body style of every item inside it, 0 for all of them),
-/// plus the highest unit index seen. A sub-block of a body style above 2 (a symbol with named body styles) is not drawn: only the normal style and the
-/// De Morgan pair are modelled.
+/// plus the highest unit index seen. The number of body styles is the declared one (`(body_styles ..)`: 2 for De Morgan, one per custom name), else -- a
+/// file from before the declaration (KiCad 25ec2335 `parseLibSymbol`: "only infer De Morgan when nothing was declared") -- 2 when a sub-block is of a style
+/// above 1 (`HasLegacyAlternateBodyStyle`); a sub-block of a style above the count is not drawn (`PruneBodyStyleDrawItems( GetBodyStyleCount() )`).
 fn graphics_and_pins(item: &[Sexpr]) -> Bodies {
-    let mut normal = (Vec::new(), Vec::new());
-    let mut alt = (Vec::new(), Vec::new());
-    let mut has_alt = false;
+    let declared = declared_body_styles(item);
+    let mut by_style: std::collections::BTreeMap<u32, (Vec<SymbolGraphic>, Vec<LibPin>)> = std::collections::BTreeMap::new();
+    let mut shared = (Vec::new(), Vec::new());
+    let mut legacy_alt = false;
     let mut max_unit = 1u32;
     for sub in sexpr::find_all(item, "symbol") {
         let Some(sub_name) = sexpr::txt(sub, 1) else { continue };
         let (unit, style) = unit_and_style_of_subname(sub_name);
         max_unit = max_unit.max(unit);
         let block = sub_symbol_items(sub, unit);
-        match style {
-            0 => {
-                // drawn in every body style
-                normal.0.extend(block.0.iter().cloned());
-                normal.1.extend(block.1.iter().cloned());
-                alt.0.extend(block.0);
-                alt.1.extend(block.1);
-            }
-            2 => {
-                has_alt = true;
-                alt.0.extend(block.0);
-                alt.1.extend(block.1);
-            }
-            1 => {
-                normal.0.extend(block.0);
-                normal.1.extend(block.1);
-            }
-            _ => {}
-        }
+        legacy_alt |= style >= 2;
+        let slot = if style == 0 { &mut shared } else { by_style.entry(style).or_default() };
+        slot.0.extend(block.0);
+        slot.1.extend(block.1);
     }
-    Bodies { graphics: normal.0, pins: normal.1, unit_count: max_unit, alternate: has_alt.then(|| Box::new(AlternateBody::new(alt.0, alt.1))) }
+    let count: u32 = match &declared {
+        Some(names) if names.is_empty() => 2,
+        Some(names) => (names.len() as u32).max(1),
+        None if legacy_alt => 2,
+        None => 1,
+    };
+    // each body: the items every style draws (`_0`), then its own
+    let mut body = |style: u32| {
+        let own = by_style.remove(&style).unwrap_or_default();
+        let mut g = shared.0.clone();
+        g.extend(own.0);
+        let mut p = shared.1.clone();
+        p.extend(own.1);
+        (g, p)
+    };
+    let normal = body(1);
+    let alternate = (count >= 2).then(|| {
+        let (g, p) = body(2);
+        Box::new(AlternateBody::new(g, p))
+    });
+    let extra_bodies = (3..=count).map(|s| {
+        let (g, p) = body(s);
+        AlternateBody::of_style(s, g, p)
+    }).collect();
+    Bodies { graphics: normal.0, pins: normal.1, unit_count: max_unit, alternate, extra_bodies, body_style_names: declared.unwrap_or_default() }
 }
 
 /// The graphics and pins of one `(symbol "Name_<unit>_<style>" ...)` sub-block, all of unit `unit`. A shape, text or text box private to the Symbol Editor
@@ -428,7 +452,7 @@ fn sub_symbol_items(sub: &[Sexpr], unit: u32) -> (Vec<SymbolGraphic>, Vec<LibPin
 /// `"R_0_1"` -> unit 0, body style 1; `"R_1_2"` -> unit 1, body style 2; a name with no trailing
 /// `_<unit>_<style>` pair (should not happen in a real library, but this
 /// reader is tolerant, not a validator) defaults to unit 1, body style 1.
-fn unit_and_style_of_subname(sub_name: &str) -> (u32, u32) {
+pub(crate) fn unit_and_style_of_subname(sub_name: &str) -> (u32, u32) {
     let mut parts = sub_name.rsplitn(3, '_');
     let style = parts.next().and_then(|s| s.parse().ok());
     let unit = parts.next().and_then(|u| u.parse().ok());
@@ -610,8 +634,12 @@ pub fn export_kicad_sym_library(syms: &[&eda_model::ir::LibrarySymbol]) -> Strin
     export_kicad_sym_library_with(syms, &std::collections::BTreeMap::new())
 }
 
-/// The `(version ..)` of a library this writer makes.
-pub const LIBRARY_VERSION: i64 = 20250324;
+/// The `(version ..)` of a library this writer makes: 20251024, KiCad 10's (`SCH_WRITER_V10::SYMBOL_LIB_VERSION`, what KiCad 25ec2335 stamps on a library it saves for
+/// KiCad 10, `SaveSymbolLibraryForTarget`, and KiCad 8303b2ad's own `SEXPR_SYMBOL_LIB_FILE_VERSION`). This writer writes KiCad 10's form (no ellipse, no pin maps, no
+/// line-ending shapes, a bold text's thickness the drawn width), which 25ec2335's newer versions (20261015) would read otherwise, and a version of 20250827 or later is
+/// what makes a reader take `(body_styles ..)` as declared: before it KiCad 8303b2ad told De Morgan from the `_N_2` sub-symbols whatever the form said, so a symbol of
+/// three custom styles read as De Morgan (UI-LEFT-2 YY3).
+pub const LIBRARY_VERSION: i64 = 20251024;
 
 /// [`export_kicad_sym_library`] for symbols that embed files (`embedded`, by `lib_id`): each symbol's `(embedded_fonts ..)` and `(embedded_files ..)` with the data
 /// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`, where `aIncludeData` is true for a library).
@@ -625,8 +653,8 @@ pub fn export_kicad_sym_library_with(syms: &[&eda_model::ir::LibrarySymbol], emb
     out
 }
 
-/// The first line of a library this writer makes (`formatLibraryHeader`), with its line break. 20250324 (jumper pin groups): a version where `~` is a text of
-/// its own (from 20250318; an empty text is `""`) and where the body styles are still told from the sub-symbols (before 20250827 `(body_styles ..)` was not needed).
+/// The first line of a library this writer makes (`formatLibraryHeader`), with its line break: [`LIBRARY_VERSION`], a version where `~` is a text of its own (from
+/// 20250318; an empty text is `""`) and where the body styles are the declared ones (from 20250827, `parseLibSymbol`).
 pub(crate) fn library_header() -> String {
     format!("(kicad_symbol_lib (version {LIBRARY_VERSION}) (generator \"eda\") (generator_version \"1.0\")\n")
 }
@@ -683,9 +711,8 @@ pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::Lib
     if sym.power {
         writeln!(out, "\t\t(power {})", if sym.power_local { "local" } else { "global" }).unwrap();
     }
-    // `(body_styles demorgan)` / `(body_styles "Name" ..)` of a symbol of several body styles (`IsMultiBodyStyle`, `HasDeMorganBodyStyles`, `GetBodyStyleNames`). This
-    // file's version is before 20250827, where KiCad 8303b2ad tells De Morgan from the `_N_2` sub-symbols whatever the form says; KiCad 25ec2335's reader
-    // (`!symbol->IsMultiBodyStyle()`) keeps the custom names, as the box's kicad-cli does.
+    // `(body_styles demorgan)` / `(body_styles "Name" ..)` of a symbol of several body styles (`IsMultiBodyStyle`, `HasDeMorganBodyStyles`, `GetBodyStyleNames`), which
+    // a reader of this file's version (20251024) takes as declared: KiCad 8303b2ad and 25ec2335 both keep the custom names and their number.
     if sym.is_multi_body_style() {
         if sym.has_alternate_body_style {
             writeln!(out, "\t\t(body_styles demorgan)").unwrap();
@@ -1092,6 +1119,33 @@ mod tests {
         assert!(nand.in_style(1).graphics.iter().any(|g| matches!(g, SymbolGraphic::Rectangle { .. })));
         // a symbol with one body has no alternate
         assert!(parse_symbol_library(MINI_LIB).unwrap().get("R").unwrap().alternate.is_none());
+    }
+
+    /// KiCad 25ec2335's custom body styles (UI-LEFT-2 YY3): a symbol of three declared styles has every body (`GetBodyStyleCount()` 3), a style above the declared
+    /// count is pruned (`PruneBodyStyleDrawItems`), and the library this writer makes says 20251024, where KiCad 8303b2ad takes the declaration as it is.
+    #[test]
+    fn three_custom_body_styles_read_as_three_bodies() {
+        let lib = r#"(kicad_symbol_lib (version 20251024) (symbol "G" (body_styles "Front" "Side" "Top")
+            (symbol "G_0_0" (rectangle (start -1 -1) (end 1 1) (stroke (width 0) (type default)) (fill (type none))))
+            (symbol "G_1_1" (pin input line (at -3 0 0) (length 2) (name "A") (number "1")))
+            (symbol "G_1_2" (pin input line (at -3 1 0) (length 2) (name "A") (number "1")))
+            (symbol "G_1_3" (pin input line (at -3 2 0) (length 2) (name "A") (number "1")))
+            (symbol "G_1_4" (pin input line (at -3 3 0) (length 2) (name "A") (number "1")))))"#;
+        let g = parse_symbol_library(lib).unwrap().remove("G").unwrap();
+        assert_eq!(g.body_style_count(), 3, "the fourth sub-symbol is past the declared count");
+        assert_eq!(g.connectivity.body_style_names, ["Front", "Side", "Top"]);
+        for (style, y) in [(1, 0.0), (2, 1.0), (3, 2.0)] {
+            let (graphics, pins) = g.body_of(style).unwrap();
+            assert_eq!((graphics.len(), pins[0].at.y), (1, y), "style {style}: the shared rectangle and its own pin");
+            assert_eq!(g.in_style(style).pins[0].at.y, y);
+        }
+        assert_eq!(g.body_style_description(3), "Top");
+        assert!(library_header().starts_with("(kicad_symbol_lib (version 20251024)"));
+        // the design library's symbol back to the engine's: the same three bodies
+        let back = eda_model::ir::LibrarySymbol::from_engine_symbol(&g);
+        assert_eq!((back.body_style_names.len(), back.has_alternate_body_style), (3, false));
+        let again = back.to_engine_symbol();
+        assert_eq!((again.body_style_count(), again.in_style(3).pins[0].at.y), (3, 2.0));
     }
 
     /// The real library, when KiCad is installed: 74xx's gates have a De Morgan body, and the normal one is no longer drawn doubled with it.

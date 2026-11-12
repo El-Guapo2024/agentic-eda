@@ -252,7 +252,7 @@ pub struct CopyOutput {
 fn swapped_copy(base: &LibrarySymbol, unit: u32, swaps: &BTreeMap<String, String>) -> LibrarySymbol {
     let mut copy = base.clone();
     let here = |p: &eda_model::ir::LibrarySymbolPin, style: u32| p.body_style == style && (p.unit == 0 || p.unit == unit);
-    for style in [1, 2] {
+    for style in 1..=base.body_style_count() {
         let items: Vec<(String, (eda_model::symbol::SPoint, f64, f64))> = copy.pins.iter().filter(|p| here(p, style)).map(|p| (p.number.clone(), (p.at, p.angle_deg, p.length_mm))).collect();
         for (number, (at, angle, length)) in eda_model::sch_extras::permute_pins(items, swaps) {
             if let Some(p) = copy.pins.iter_mut().find(|p| here(p, style) && p.number == number) {
@@ -273,14 +273,14 @@ struct CopiedSymbol<'a> {
     origin: Point,
     /// The library symbol with both its body styles (the clipboard's `(lib_symbols ...)` names both).
     engine: LibSymbol,
-    /// The body style the symbol is placed in (`SCH_SYMBOL::GetBodyStyle`): 1, or 2 for the alternate "De Morgan" one of a symbol that has it.
+    /// The body style the symbol is placed in (`SCH_SYMBOL::GetBodyStyle`): 1, or another of the styles the symbol has (De Morgan's 2, KiCad 25ec2335's custom ones).
     style: u32,
 }
 
 impl CopiedSymbol<'_> {
     /// The library symbol as the placed symbol draws it (its box, its pins).
     fn drawn(&self) -> LibSymbol {
-        if self.style > 1 && self.engine.has_alternate_body() {
+        if self.style > 1 && self.engine.body_style_count() > 1 {
             self.engine.in_style(self.style).into_owned()
         } else {
             self.engine.clone()
@@ -309,7 +309,7 @@ fn copied_symbol<'a>(input: &CopyInput<'_>, sym: &'a SymbolInstance) -> Option<C
     };
     match real {
         Some(engine) => {
-            let style = if engine.has_alternate_body() { input.section.body_style_of(sym).min(2) } else { 1 };
+            let style = input.section.body_style_of(sym).min(engine.body_style_count());
             let origin = if input.section.imported_from_kicad {
                 sym.at
             } else {
