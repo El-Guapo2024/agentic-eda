@@ -275,7 +275,7 @@ export function LibrarySymbolPropertiesDialog() {
     try {
       const ok = await api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
       notifyLibraryChanged();
-      if (ok && renamed) await api.openSymbol(target);
+      if (ok && renamed) await api.openSymbol(target, undefined, { keepHistory: true }); // `UNDO_REDO::LIB_RENAME` is an undo step: the reopening keeps the history
       // `RebuildSymbolUnitAndBodyStyleLists`: a unit or body style the symbol no longer has goes back to the first
       if (ok && !derived && state.activeUnit > form.unit_count) dispatch({ type: "SET_ACTIVE_UNIT", unit: 1 });
       if (ok && !derived && state.activeBodyStyle > bodyStyleCountOf(bodyMode, bodyNames)) dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: 1 });
