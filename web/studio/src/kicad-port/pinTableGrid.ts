@@ -213,7 +213,8 @@ function inSelection(pin: LibrarySymbolPin, selected: readonly LibrarySymbolPin[
  * row's pins by number (`SortPins`), the rows by the sort column (`SortRows`). The rows hold the pins' keys.
  *
  * The filters as KiCad has them: a unit filter keeps the pins of that unit and those common to every unit (`GetUnit() == 0`), so its first choice, "ALL"
- * (index 0), keeps only the common ones; a body style filter keeps the pins of exactly that style (index 0, "ALL": only the common ones).
+ * (index 0), keeps only the common ones; a body style filter keeps the pins of that style and those common to every body style (KiCad 25ec2335 `RebuildRows`:
+ * `pin->GetBodyStyle() == ALL_BODY_STYLES || pin->GetBodyStyle() == m_bodyStyleFilter`; 8303b2ad kept that style only), so its "ALL" keeps the common ones.
  *
  * `selected` is Group Selected Pins (`OnGroupSelected`: `RebuildRows( m_pins, false, true )`): the keys of the pins of the selected rows (`getSelectedArea`,
  * flagged `CANDIDATE`) make the first row -- empty when none of them passes the filters -- and every other pin a row of its own; the rows are not sorted then.
@@ -224,7 +225,7 @@ export function rebuildRows(pins: readonly TablePin[], groupByName: boolean, fil
   for (const tp of pins) {
     const p = tp.pin;
     const byUnit = filters.unit === -1 || p.unit === 0 || p.unit === filters.unit;
-    const byStyle = filters.bodyStyle === -1 || p.body_style === filters.bodyStyle;
+    const byStyle = filters.bodyStyle === -1 || p.body_style === 0 || p.body_style === filters.bodyStyle;
     const bySelection = filters.selection === null || inSelection(p, filters.selection);
     if (!(byUnit && byStyle && bySelection)) continue;
     let at = -1;

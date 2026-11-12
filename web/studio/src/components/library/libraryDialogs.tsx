@@ -39,7 +39,15 @@ type Request = { id: number } & (
   | { kind: "prompt"; options: PromptOptions; resolve: (v: string | null) => void }
   | { kind: "confirm"; options: ConfirmOptions; resolve: (v: boolean) => void }
   | { kind: "choice"; options: ChoiceOptions; resolve: (v: "ok" | "alt" | null) => void }
+  | { kind: "message"; options: MessageOptions; resolve: () => void }
 );
+
+/** A message box with only OK (`DisplayError`, `DisplayErrorMessage`'s extended message under it, `wxMessageBox`). */
+export interface MessageOptions {
+  title: string;
+  message: string;
+  extra?: string;
+}
 
 let nextId = 1;
 let sink: ((r: Request) => void) | null = null;
@@ -70,6 +78,19 @@ export function askChoice(options: ChoiceOptions): Promise<"ok" | "alt" | null> 
   });
 }
 
+/**
+ * `DisplayError( parent, text )` / `DisplayErrorMessage( parent, text, extra )`: an "Error" box with the text, the extra information under it, and OK (UI-LEFT-2 YY6:
+ * the dialogs' refusals in KiCad's message box rather than a line of the dialog). `title` "Message" is a plain `wxMessageBox( text )`. With no host mounted it
+ * resolves at once.
+ */
+export function showError(message: string, extra?: string, title = "Error"): Promise<void> {
+  return new Promise((resolve) => {
+    (globalThis as { __edaLastMessageBox?: MessageOptions }).__edaLastMessageBox = { title, message, extra };
+    if (!sink) return resolve();
+    sink({ id: nextId++, kind: "message", options: { title, message, extra }, resolve });
+  });
+}
+
 export function LibraryDialogHost() {
   const [queue, setQueue] = useState<Request[]>([]);
   const queueRef = useRef<Request[]>([]);
@@ -84,6 +105,7 @@ export function LibraryDialogHost() {
       // A host that goes away answers its unanswered questions "no" (an action must never wait forever on a dialog nobody can see).
       for (const r of queueRef.current) {
         if (r.kind === "prompt" || r.kind === "choice") r.resolve(null);
+        else if (r.kind === "message") r.resolve();
         else r.resolve(false);
       }
       queueRef.current = [];
@@ -102,6 +124,18 @@ export function LibraryDialogHost() {
         options={top.options}
         onDone={(v) => {
           top.resolve(v);
+          finish();
+        }}
+      />
+    );
+  }
+  if (top.kind === "message") {
+    return (
+      <MessageDialog
+        key={top.id}
+        options={top.options}
+        onDone={() => {
+          top.resolve();
           finish();
         }}
       />
@@ -243,6 +277,34 @@ function ChoiceDialog({ options, onDone }: { options: ChoiceOptions; onDone: (v:
           </button>
           <button className="primary" autoFocus onClick={() => onDone("ok")} data-testid="choice-ok">
             {options.okLabel ?? "OK"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageDialog({ options, onDone }: { options: MessageOptions; onDone: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.key === "Enter") onDone();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onDone]);
+  return (
+    <div className="dialog-backdrop" style={{ zIndex: 2000 }} onClick={onDone}>
+      <div className="dialog" style={{ width: 420 }} onClick={(e) => e.stopPropagation()} role="alertdialog" aria-label={options.title} data-testid="message-box">
+        <div className="dialog-header">
+          <span>{options.title}</span>
+        </div>
+        <div className="dialog-body" style={{ whiteSpace: "pre-wrap" }}>
+          <span data-testid="message-box-text">{options.message}</span>
+          {options.extra && <p style={{ margin: "8px 0 0", color: "var(--chrome-text-dim)" }}>{options.extra}</p>}
+        </div>
+        <div className="dialog-footer">
+          <button className="primary" autoFocus onClick={onDone} data-testid="message-box-ok">
+            OK
           </button>
         </div>
       </div>

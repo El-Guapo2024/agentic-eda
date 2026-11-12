@@ -166,3 +166,16 @@ export function findStringFromSelection(selection: readonly string[], sym: Libra
 export function editorFields(sym: LibrarySymbol): FieldRow[] {
   return allFields(sym);
 }
+
+/** `DIALOG_SCH_FIND::OnFind` / `OnReplace` on a combo's list: the text moved to the top (inserted when it is not there, `FindString( .., true )`: case counts). */
+export function pushHistory(list: readonly string[], text: string): string[] {
+  const at = list.indexOf(text);
+  if (at === 0) return [...list];
+  const rest = at < 0 ? [...list] : list.filter((_, i) => i !== at);
+  return [text, ...rest];
+}
+
+/** `SetFindEntries` / `SetReplaceEntries`: the list the dialog opens with, ten at most (`while( GetCount() > 10 ) .. Delete( 9 )`). */
+export function capHistory(list: readonly string[]): string[] {
+  return list.slice(0, 10);
+}

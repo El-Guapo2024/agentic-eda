@@ -5,15 +5,23 @@
 // run the editor's actions (actions/symFindOps.ts); the walk and its rules are kicad-port/symFind.ts.
 //
 // `updateFlags`: Whole words only wins over Regular Expression (the Regular Expression box keeps its tick under it). Enter in either text is Find
-// (`OnSearchForEnter`, `OnReplaceWithEnter`). Not ported: the find and replace histories of the combo boxes, and the brightening of every match while the dialog
-// is open (`UpdateFind`: the Symbol Editor's canvas has no highlight of its own); the match found is selected and shown.
-import { useSymApi, useSymDispatch } from "../../state/symbolEditorStore";
-import { closeSymFind, setSymSelectedOnly, symFindNext, symReplaceAll, symReplaceAndFindNext, updateSymSearch, useSymFind } from "../../actions/symFindOps";
+// (`OnSearchForEnter`, `OnReplaceWithEnter`). The combo boxes list the find and replace histories (`SetFindEntries`, `SetReplaceEntries`; a browser datalist), and
+// every match is brightened while the dialog is open (`UpdateFind`, actions/symFindOps.ts `refreshSymFindHighlights`; UI-LEFT-2 YY6); the match found is selected and shown.
+import { useEffect } from "react";
+import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
+import { closeSymFind, refreshSymFindHighlights, setSymSelectedOnly, symFindNext, symReplaceAll, symReplaceAndFindNext, updateSymSearch, useSymFind } from "../../actions/symFindOps";
 
 export function SymbolFindDialog() {
   const f = useSymFind();
   const api = useSymApi();
   const dispatch = useSymDispatch();
+  const st = useSymState();
+  // `UpdateFind` on `updateFind` (the dialog's changes) and on `SelectedItemsModified` (an edit of the symbol); the selection matters with "selection only"
+  const symKey = st.symbol ? JSON.stringify([st.symbol.pins, st.symbol.graphics, st.symbol.fields]) : "";
+  const selKey = f.selectedOnly ? [...st.selection].join(",") : "";
+  useEffect(() => {
+    void refreshSymFindHighlights(api);
+  }, [api, f.open, f.search, f.selectedOnly, symKey, selKey]);
   if (!f.open) return null;
   const replaceMode = f.open === "replace";
   const s = f.search;
@@ -46,6 +54,7 @@ export function SymbolFindDialog() {
               autoFocus
               title="Text with optional wildcards"
               data-testid="sym-find-text"
+              list="sym-find-history"
               value={s.find}
               onChange={(e) => updateSymSearch({ find: e.target.value })}
               onKeyDown={(e) => {
@@ -57,6 +66,7 @@ export function SymbolFindDialog() {
                 <span>Replace with:</span>
                 <input
                   data-testid="sym-replace-text"
+                  list="sym-replace-history"
                   value={s.replace}
                   onChange={(e) => updateSymSearch({ replace: e.target.value })}
                   onKeyDown={(e) => {
@@ -66,6 +76,16 @@ export function SymbolFindDialog() {
               </>
             )}
           </div>
+          <datalist id="sym-find-history" data-testid="sym-find-history">
+            {f.findHistory.map((h) => (
+              <option key={h} value={h} />
+            ))}
+          </datalist>
+          <datalist id="sym-replace-history">
+            {f.replaceHistory.map((h) => (
+              <option key={h} value={h} />
+            ))}
+          </datalist>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 11 }}>
             <label className="toggle">
               <input type="checkbox" checked={s.match_case} onChange={(e) => updateSymSearch({ match_case: e.target.checked })} />

@@ -72,9 +72,9 @@ test("rows: Count then Number by PIN_NUMBERS::Compare, Group by name, the filter
   const units = [tp("u1", { unit: 1 }), tp("u2", { unit: 2, number: "2" }), tp("u0", { unit: 0, number: "3" })];
   assert.deepEqual(rebuildRows(units, false, { ...NO_FILTERS, unit: 2 }, COL.PIN_COUNT, true, ctx(2)).flat(), ["u2", "u0"]);
   assert.deepEqual(rebuildRows(units, false, { ...NO_FILTERS, unit: 0 }, COL.PIN_COUNT, true, ctx(2)).flat(), ["u0"]);
-  // a body style filter keeps exactly that style
-  const styles = [tp("s1", { body_style: 1 }), tp("s0", { body_style: 0, number: "2" })];
-  assert.deepEqual(rebuildRows(styles, false, { ...NO_FILTERS, bodyStyle: 1 }, COL.PIN_COUNT, true, ctx(1, true)).flat(), ["s1"]);
+  // a body style filter keeps that style and the pins common to every body style (KiCad 25ec2335)
+  const styles = [tp("s1", { body_style: 1 }), tp("s0", { body_style: 0, number: "2" }), tp("s2", { body_style: 2, number: "3" })];
+  assert.deepEqual(rebuildRows(styles, false, { ...NO_FILTERS, bodyStyle: 1 }, COL.PIN_COUNT, true, ctx(1, true)).flat(), ["s1", "s0"]);
   // the selection filter: a copy whose number, name, unit and body style a selected pin has
   assert.deepEqual(rebuildRows(pins, false, { ...NO_FILTERS, selection: [pin({ number: "2", name: "VCC" })] }, COL.PIN_COUNT, true, ctx()).flat(), ["b"]);
 });
