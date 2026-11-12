@@ -382,3 +382,94 @@ fn pad_clearance_reaches_kicad_cli(shape: eda_model::PadShape, ratio: Option<f64
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-2 BB1 (slow tier): a clearance or a short between two pads of two footprints is placed where KiCad's collision of their compounds puts it:
+/// two rectangles (`Collide( SHAPE_RECT, SHAPE_RECT )`: their outlines as line chains), two turned rectangles and two chamfered ones (two `SHAPE_SIMPLE`s),
+/// pads whose copper is off their hole (`ShapePos`) and custom pads (the anchor and a polygon primitive) -- so each exclusion reaches kicad-cli.
+#[test]
+fn a_pad_to_pad_clearance_reaches_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    let poly = |pts: &[(f64, f64)]| -> eda_model::footprint::PadPrimitive {
+        serde_json::from_value(serde_json::json!({ "shape": { "kind": "polygon", "layer": "F.Cu", "stroke_width": 0, "filled": true,
+            "pts": pts.iter().map(|&(x, y)| serde_json::json!({ "x": mm(x).get(), "y": mm(y).get() })).collect::<Vec<_>>() } })).unwrap()
+    };
+    let variants: Vec<(&str, f64, Box<dyn Fn(&mut eda_model::Pad)>)> = vec![
+        ("rect", 7.9, Box::new(|_p: &mut eda_model::Pad| {})),
+        ("turned", 8.05, Box::new(|p: &mut eda_model::Pad| p.rot = 30_000)),
+        ("chamfered", 7.9, Box::new(|p: &mut eda_model::Pad| {
+            p.shape = eda_model::PadShape::ChamferedRect;
+            p.ext.chamfer_ratio = Some(0.25);
+            p.ext.chamfer_corners = eda_model::ir::ChamferCorners { top_left: true, top_right: true, bottom_left: true, bottom_right: true };
+        })),
+        ("offset", 7.9, Box::new(|p: &mut eda_model::Pad| {
+            p.kind = eda_model::PadKind::ThroughHole;
+            p.drill = Some(mm(0.3));
+            p.ext.offset = Some((mm(0.1), Nm::ZERO));
+        })),
+        ("custom", 7.9, Box::new(move |p: &mut eda_model::Pad| {
+            p.shape = eda_model::PadShape::Custom;
+            p.size = (mm(0.4), mm(0.4));
+            p.ext.custom = Some(eda_model::footprint::PadCustom { anchor: eda_model::footprint::PadAnchor::Rect, primitives: vec![poly(&[(-0.4, -0.3), (0.4, -0.4), (0.4, 0.4), (-0.4, 0.3)])], ..Default::default() });
+        })),
+    ];
+    for (name, u2_x, edit) in variants {
+        let dir = scratch(&format!("review_drc_pad_pairs_{name}"));
+        setup(&dir);
+        let intent = dir.join("intent.yaml");
+        let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        for pad in &mut model.footprints[0].pads {
+            edit(pad);
+        }
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        // U2 moved next to U1: U2.1 (GND) a little more than a pad's width right of U1.2 (VCC)
+        let (_, mut design, _) = super::load(&dir).unwrap();
+        design.placement.as_mut().unwrap().footprints[1].at.x = mm(u2_x);
+        save(&dir, &design).unwrap();
+        let every = eda_kicad_engine::DrcOptions { all_track_errors: true, ..Default::default() };
+        let all = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+        let pads = |v: &Value| v["items"].as_array().unwrap().len() == 2 && v["items"].as_array().unwrap().iter().all(|i| i["description"].as_str().unwrap_or("").to_lowercase().contains("pad "));
+        let rows: Vec<Value> = ["clearance", "shorting_items"].iter().flat_map(|k| drc_rows(&all, k)).filter(pads).collect();
+        assert!(!rows.is_empty(), "{name}: two pads too near: {all:#}");
+        step(&dir, Cmd::AddDrcExclusions { exclusions: rows.iter().map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+        let after = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+        let waived: Vec<Value> = ["clearance", "shorting_items"].iter().flat_map(|k| drc_rows(&after, k)).filter(pads).filter(|v| v["excluded"] == true).collect();
+        assert_eq!(waived.len(), rows.len(), "{name}: {after:#}");
+        for v in &waived {
+            assert_eq!(v["kicad_matched"], true, "{name}: kicad-cli matched the exclusion at the point the studio computed: {v:#}");
+        }
+        eprintln!("{name}: {} pad-to-pad exclusion(s) matched", waived.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// UI-LEFT-2 BB1 (slow tier): `starved_thermal` -- U1.1 (GND) in a GND zone with its spokes blocked by VCC tracks above and below it and by U1.2 on its
+/// right, so one spoke is left of the two a zone wants. Its marker is at the pad (`pad->GetPosition()`) on the zone's layer, which the studio writes per
+/// copper layer (`PCB_MARKER::ToProto` stores the layer of this check), and kicad-cli matches it after the refill.
+#[test]
+fn a_starved_thermal_exclusion_reaches_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    let dir = scratch("review_drc_starved");
+    setup(&dir);
+    let pt = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(6.0, 5.0), pt(6.0, 4.15), pt(2.0, 4.15)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(6.0, 5.0), pt(6.0, 5.85), pt(2.0, 5.85)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(1.0, 1.0), pt(10.0, 1.0), pt(10.0, 9.0), pt(1.0, 9.0)] }, false, "test").unwrap();
+    let refill = eda_kicad_engine::DrcOptions { refill_zones: true, all_track_errors: true, ..Default::default() };
+    let all = crate::kicad_engine::drc_with_options(&dir, refill).expect("kicad-cli ran");
+    let starved = drc_rows(&all, "starved_thermal");
+    let kinds: Vec<&str> = all["violations"].as_array().unwrap().iter().filter_map(|v| v["type"].as_str()).collect();
+    if starved.is_empty() {
+        eprintln!("no starved thermal on this layout; kinds: {kinds:?}");
+    }
+    assert!(!starved.is_empty(), "a starved thermal: {kinds:?}");
+    step(&dir, Cmd::AddDrcExclusions { exclusions: starved.iter().map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+    let after = crate::kicad_engine::drc_with_options(&dir, refill).expect("kicad-cli ran");
+    let waived: Vec<Value> = drc_rows(&after, "starved_thermal").into_iter().filter(|v| v["excluded"] == true).collect();
+    assert_eq!(waived.len(), starved.len(), "{after:#}");
+    assert!(waived.iter().all(|v| v["kicad_matched"] == true), "{after:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

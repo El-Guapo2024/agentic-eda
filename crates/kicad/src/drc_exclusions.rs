@@ -277,8 +277,107 @@ fn collide_single(a: &Copper, b: &Copper) -> Option<(i64, [i64; 2])> {
             Some(((actual - width / 2).max(0), at))
         }
         (Simple { pts }, Circle { centre, radius }) | (Circle { centre, radius }, Simple { pts }) => circle_chain(*centre, *radius, pts),
+        // `Collide( const SHAPE_RECT&, const SHAPE_RECT& )` with an output asked: the two `Outline()`s as line chains
+        (Rect { p0, w, h }, Rect { p0: q0, w: w2, h: h2 }) => Some(chain_chain(&rect_outline(*p0, *w, *h), &rect_outline(*q0, *w2, *h2))),
+        // `Collide( const SHAPE_RECT&, const SHAPE_LINE_CHAIN_BASE& )` (`CollCase< SHAPE_RECT, SHAPE_LINE_CHAIN_BASE >( aB, aA )` the other way round)
+        (Rect { p0, w, h }, Simple { pts }) | (Simple { pts }, Rect { p0, w, h }) => Some(rect_chain(*p0, *w, *h, pts)),
+        (Simple { pts }, Simple { pts: other }) => Some(chain_chain(pts, other)),
         _ => None,
     }
+}
+
+/// `SHAPE_RECT::Outline()` of a rectangle with no radius (`TransformToPolygon`): `p0`, `(x + w, y)`, `(x + w, y + h)`, `(x, y + h)`, closed.
+fn rect_outline(p0: [i64; 2], w: i64, h: i64) -> Vec<[i64; 2]> {
+    vec![p0, [p0[0] + w, p0[1]], [p0[0] + w, p0[1] + h], [p0[0], p0[1] + h]]
+}
+
+/// `SEG::Collide( aSeg, clearance, &dist )`'s `dist`: 0 when they cross or touch, else the integer root of the least end-to-segment square.
+fn seg_dist(a: [[i64; 2]; 2], b: [[i64; 2]; 2]) -> i64 {
+    if a[0] == a[1] {
+        return isqrt_floor(seg_sq_distance_point(b, a[0]));
+    }
+    if b[0] == b[1] {
+        return isqrt_floor(seg_sq_distance_point(a, b[0]));
+    }
+    if seg_intersect(a, b).is_some() {
+        return 0;
+    }
+    let m = [seg_sq_distance_point(a, b[0]), seg_sq_distance_point(a, b[1]), seg_sq_distance_point(b, a[0]), seg_sq_distance_point(b, a[1])].into_iter().min().unwrap_or(0);
+    isqrt_floor(m)
+}
+
+/// `isqrt`: the floor of the root.
+fn isqrt_floor(v: i128) -> i64 {
+    let mut r = (v as f64).sqrt() as i128;
+    while r * r > v {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= v {
+        r += 1;
+    }
+    r as i64
+}
+
+fn sides(pts: &[[i64; 2]]) -> Vec<[[i64; 2]; 2]> {
+    (0..pts.len()).map(|i| [pts[i], pts[(i + 1) % pts.len()]]).collect()
+}
+
+/// `Collide( const SHAPE_LINE_CHAIN_BASE&, const SHAPE_LINE_CHAIN_BASE& )` of two closed chains, with an output asked: `aA`'s first point inside `aB`
+/// is the place, else `aB`'s first point inside `aA`; else each chain's segments sorted by their start (`seg_sort`: x, then y) and every pair tried, the
+/// least `dist` winning (`a_seg.NearestPoint( b_seg )`), the first of equals, the inner loop left at 0 (the segment index is used only past 32 x 64
+/// segments, and keeps this order: "Candidate IDs restore the legacy order").
+fn chain_chain(a: &[[i64; 2]], b: &[[i64; 2]]) -> (i64, [i64; 2]) {
+    if let Some(&p) = a.first() {
+        if point_inside(b, p) {
+            return (0, p);
+        }
+    }
+    if let Some(&p) = b.first() {
+        if point_inside(a, p) {
+            return (0, p);
+        }
+    }
+    let sort = |mut v: Vec<[[i64; 2]; 2]>| {
+        v.sort_by(|x, y| (x[0][0], x[0][1]).cmp(&(y[0][0], y[0][1])));
+        v
+    };
+    let (sa, sb) = (sort(sides(a)), sort(sides(b)));
+    let mut closest = i64::MAX;
+    let mut nearest = a.first().copied().unwrap_or([0, 0]);
+    for x in &sa {
+        for y in &sb {
+            let d = seg_dist(*x, *y);
+            if d < closest {
+                nearest = seg_nearest_to_seg(*x, *y);
+                closest = d;
+            }
+            if closest == 0 {
+                break;
+            }
+        }
+    }
+    (closest, nearest)
+}
+
+/// `Collide( const SHAPE_RECT&, const SHAPE_LINE_CHAIN_BASE& )` with no radius: the rectangle's centre inside the chain is the place, else each of the
+/// chain's segments against the rectangle (`SHAPE_RECT::Collide( SEG )`), the least winning, the first of equals.
+fn rect_chain(p0: [i64; 2], w: i64, h: i64, pts: &[[i64; 2]]) -> (i64, [i64; 2]) {
+    let centre = [p0[0] + w / 2, p0[1] + h / 2];
+    if point_inside(pts, centre) {
+        return (0, centre);
+    }
+    let mut best = (i64::MAX, centre);
+    for s in sides(pts) {
+        if let Some((d, at)) = rect_segment(p0, w, h, s, 0) {
+            if d < best.0 {
+                best = (d, at);
+                if d == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    best
 }
 
 fn sq(v: [i64; 2]) -> i128 {
@@ -648,10 +747,31 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
                             }
                         }
                     }
-                    if has_offset {
-                        continue;
-                    }
-                    if let Some(shape) = pad_compound(txt(pad, 3).unwrap_or(""), pos, size, angle, ratio, delta) {
+                    // `ShapePos`: the position plus the drill's offset turned by the pad's orientation
+                    let shape_pos = if has_offset {
+                        let o = rotate_point(find(pad, "drill").and_then(|d| find(d, "offset")).and_then(xy).unwrap_or([0, 0]), angle);
+                        [pos[0] + o[0], pos[1] + o[1]]
+                    } else {
+                        pos
+                    };
+                    let chamfer = find(pad, "chamfer").map(|c| {
+                        let bit = |name: &str| match name {
+                            "top_left" => 1,
+                            "top_right" => 2,
+                            "bottom_left" => 4,
+                            "bottom_right" => 8,
+                            _ => 0,
+                        };
+                        let corners = c.iter().skip(1).filter_map(|a| a.text()).map(bit).fold(0, |a, b| a | b);
+                        let ratio = find(pad, "chamfer_ratio").and_then(|r| txt(r, 1)).and_then(|r| r.parse::<f64>().ok()).unwrap_or(0.2);
+                        (ratio, corners)
+                    });
+                    let shape = match (txt(pad, 3).unwrap_or(""), chamfer) {
+                        ("roundrect" | "rect", Some((cratio, corners))) if corners != 0 => chamfered_compound(shape_pos, size, angle, ratio, cratio, corners),
+                        ("custom", _) => custom_compound(pad, shape_pos, size, angle, &nm),
+                        (kind, _) => pad_compound(kind, shape_pos, size, angle, ratio, delta),
+                    };
+                    if let Some(shape) = shape {
                         out.insert(u, shape);
                     }
                 }
@@ -660,6 +780,110 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
         }
     }
     shapes
+}
+
+/// A chamfered rectangle pad (`PAD_SHAPE::CHAMFERED_RECT`): `TransformRoundChamferedRectToPolygon`'s corner list -- the four corners, each chamfered one
+/// replaced by its two cut points `KiROUND( ratio * shorter side )` along the sides, consecutive duplicates dropped when two chamfers meet -- turned and
+/// moved, one `SHAPE_SIMPLE`. `None` when a corner that is not chamfered is rounded (its arc is approximated to the board's error, not ported).
+pub fn chamfered_compound(pos: [i64; 2], size: [i64; 2], angle: f64, rratio: f64, chamfer_ratio: f64, corners_mask: u32) -> Option<Copper> {
+    let radius = (size[0].min(size[1]) as f64 * rratio).round() as i64;
+    let half = [size[0] / 2, size[1] / 2];
+    let mut corners: Vec<([i64; 2], i64)> = vec![([-half[0], -half[1]], radius), ([half[0], -half[1]], radius), ([half[0], half[1]], radius), ([-half[0], half[1]], radius)];
+    let shorter = size[0].min(size[1]);
+    let chamfer = ((chamfer_ratio * shorter as f64).round() as i64).max(0);
+    let ids = [1u32, 2, 8, 4]; // top left, top right, bottom right, bottom left
+    let sign = [0i64, 1, -1, 0, 0, -1, 1, 0];
+    let mut pos_i = 0usize;
+    for cc in 0..4usize {
+        if corners_mask & ids[cc] == 0 {
+            pos_i += 1;
+            continue;
+        }
+        corners[pos_i].1 = 0;
+        if chamfer == 0 {
+            pos_i += 1;
+            continue;
+        }
+        let c = corners[pos_i];
+        corners.insert(pos_i + 1, c);
+        let k = |i: i64| sign[(i.rem_euclid(8)) as usize];
+        corners[pos_i].0[0] += k(2 * cc as i64) * chamfer;
+        corners[pos_i].0[1] += k(2 * cc as i64 - 2) * chamfer;
+        corners[pos_i + 1].0[0] += k(2 * cc as i64 + 1) * chamfer;
+        corners[pos_i + 1].0[1] += k(2 * cc as i64 - 1) * chamfer;
+        pos_i += 2;
+    }
+    if corners.iter().any(|(_, r)| *r > 0) {
+        return None;
+    }
+    let mut pts: Vec<[i64; 2]> = corners.into_iter().map(|(p, _)| p).collect();
+    if corners_mask.count_ones() > 1 && 2 * chamfer >= shorter {
+        // `CornerListRemoveDuplicates`
+        pts.dedup();
+        while pts.len() > 1 && pts.first() == pts.last() {
+            pts.pop();
+        }
+    }
+    let pts = pts.into_iter().map(|p| {
+        let t = rotate_point(p, angle);
+        [t[0] + pos[0], t[1] + pos[1]]
+    });
+    Some(Copper::Compound(vec![Copper::Simple { pts: pts.collect() }]))
+}
+
+/// A custom pad (`PAD_SHAPE::CUSTOM`): its anchor -- a circle or a rectangle of the pad's size (`(options (anchor ..))`) -- and each primitive's
+/// `MakeEffectiveShapes` (a filled polygon's `SHAPE_SIMPLE` and, with a width, its sides; a line's segment; a filled rectangle's `SHAPE_SIMPLE` and sides;
+/// a filled circle of no width), turned by the pad's orientation and moved to its `ShapePos`. `None` for a primitive this port does not build (an arc, a
+/// circle with a stroke, a curve).
+fn custom_compound(pad: &[crate::sexpr::Sexpr], pos: [i64; 2], size: [i64; 2], angle: f64, nm: &dyn Fn(Option<&str>) -> Option<i64>) -> Option<Copper> {
+    use crate::sexpr::{find, find_all, tag, txt};
+    let anchor = find(pad, "options").and_then(|o| find(o, "anchor")).and_then(|a| txt(a, 1)).unwrap_or("rect");
+    let Copper::Compound(mut parts) = pad_compound(if anchor == "circle" { "circle" } else { "rect" }, pos, size, angle, 0.0, [0, 0])? else { return None };
+    let place = |p: [i64; 2]| {
+        let t = rotate_point(p, angle);
+        [t[0] + pos[0], t[1] + pos[1]]
+    };
+    let xy = |l: &[crate::sexpr::Sexpr]| -> Option<[i64; 2]> { Some([nm(txt(l, 1))?, nm(txt(l, 2))?]) };
+    let Some(prims) = find(pad, "primitives") else { return Some(Copper::Compound(parts)) };
+    for prim in prims.iter().skip(1) {
+        let Some(l) = prim.as_list() else { continue };
+        let width = find(l, "width").or_else(|| find(l, "stroke").and_then(|st| find(st, "width"))).and_then(|w| nm(txt(w, 1))).unwrap_or(0);
+        let filled = find(l, "fill").and_then(|f| txt(f, 1)).is_some_and(|f| f == "yes" || f == "solid");
+        let outline = |pts: Vec<[i64; 2]>, parts: &mut Vec<Copper>| {
+            let pts: Vec<[i64; 2]> = pts.into_iter().map(place).collect();
+            if filled {
+                parts.push(Copper::Simple { pts: pts.clone() });
+            }
+            if width > 0 || !filled {
+                for s in sides(&pts) {
+                    parts.push(Copper::Segment { a: s[0], b: s[1], width });
+                }
+            }
+        };
+        match tag(l) {
+            Some("gr_poly") => {
+                let pts: Vec<[i64; 2]> = find(l, "pts").map(|ps| find_all(ps, "xy").filter_map(xy).collect()).unwrap_or_default();
+                if pts.len() < 2 || find(l, "pts").is_some_and(|ps| find(ps, "arc").is_some()) {
+                    return None;
+                }
+                outline(pts, &mut parts);
+            }
+            Some("gr_rect") => {
+                let (a, b) = (find(l, "start").and_then(xy)?, find(l, "end").and_then(xy)?);
+                outline(vec![a, [b[0], a[1]], b, [a[0], b[1]]], &mut parts);
+            }
+            Some("gr_line") => {
+                let (a, b) = (find(l, "start").and_then(xy)?, find(l, "end").and_then(xy)?);
+                parts.push(Copper::Segment { a: place(a), b: place(b), width });
+            }
+            Some("gr_circle") if filled && width == 0 => {
+                let (c, e) = (find(l, "center").and_then(xy)?, find(l, "end").and_then(xy)?);
+                parts.push(Copper::Circle { centre: place(c), radius: rounded_hypot(e[0] - c[0], e[1] - c[1]) });
+            }
+            _ => return None,
+        }
+    }
+    Some(Copper::Compound(parts))
 }
 
 /// `PAD::buildEffectiveShape` of a pad of `shape` at `pos` (its `ShapePos`), `size`, turned `angle` degrees: `None` for a shape this port does not build.
@@ -1028,9 +1252,17 @@ mod tests {
         assert_eq!(collide(&circle, &Copper::Circle { centre: [1_000_001, 0], radius: 300_000 }).map(|r| r.1), Some([500_001, 0]));
         // a track through a circle's centre: where the circle crosses it (`m_circle.Intersect( aSeg )[0]`)
         assert_eq!(collide(&circle, &Copper::Segment { a: [-1_000_000, 0], b: [1_000_000, 0], width: 100_000 }).map(|r| r.1), Some([400_000, 0]));
-        // two polygons are not placed
+        // two polygons (`Collide( SHAPE_LINE_CHAIN_BASE, SHAPE_LINE_CHAIN_BASE )`): the first one's first point inside the other is the place
         let turned = pad_compound("rect", [0, 0], [800_000, 400_000], 30.0, 0.0, [0, 0]).unwrap();
-        assert_eq!(collide(&turned, &turned), None);
+        assert_eq!(collide(&turned, &turned), Some((0, [-346_410, 200_000])));
+        // two rectangles apart: the outlines' sides sorted by their start, the least distance, `a_seg.NearestPoint( b_seg )`
+        let a = Copper::Rect { p0: [0, 0], w: 100, h: 100 };
+        let b = Copper::Rect { p0: [150, 20], w: 100, h: 100 };
+        assert_eq!(collide(&a, &b), Some((50, [100, 20])));
+        // a chamfered square with its top left corner cut: five corners, turned and moved
+        let ch = chamfered_compound([1000, 1000], [400, 400], 0.0, 0.0, 0.25, 1).unwrap();
+        assert_eq!(ch, Copper::Compound(vec![Copper::Simple { pts: vec![[800, 900], [900, 800], [1200, 800], [1200, 1200], [800, 1200]] }]));
+        assert_eq!(chamfered_compound([0, 0], [400, 400], 0.0, 0.25, 0.25, 1), None, "a rounded corner beside the chamfer is not built");
     }
 
     #[test]
