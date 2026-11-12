@@ -1,7 +1,8 @@
 // Port of `DIALOG_PUSH_PAD_PROPERTIES` (pcbnew/dialogs/dialog_push_pad_properties.cpp), opened by `pcbnew.PadTool.PushPadSettings`
 // (`PAD_TOOL::pushPadSettings`): the one selected pad's settings go to the other pads of the footprint, each filter keeping a pad
 // whose shape / layers / orientation / type differs from the source out of it. All four filters start on. In the footprint editor the
-// dialog has the single button "Change Pads on Current Footprint" (the "identical footprints" one is a board-editor thing).
+// dialog has the single button "Change Pads on Current Footprint" (the "identical footprints" one is a board-editor thing). Title "Push Pad
+// Properties" (dialog_push_pad_properties_base.h), the four check boxes in the "Options" box, all four reset to on each time (the base sets them).
 import { useEffect, useState } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 
@@ -28,7 +29,7 @@ export function PushPadPropertiesDialog() {
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 420 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Push Pad Properties">
         <div className="dialog-header">
-          <span>Push Pad Properties to Other Pads</span>
+          <span>Push Pad Properties</span>
         </div>
         <div className="dialog-body">
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "0 0 8px" }}>Options</p>

@@ -29,7 +29,7 @@ import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, isCrossingSelection, type ClickModifiers } from "../../kicad-port/selection";
 import { nextPadNumber } from "../../kicad-port/padNumbering";
 import { padCanHaveNumber } from "../../kicad-port/fpEditActions";
-import { padEditMenu, padToolsBlocked } from "../../kicad-port/padEditMode";
+import { padEditMenu } from "../../kicad-port/padEditMode";
 import { newPadFromMaster, settingsOf } from "../../kicad-port/padSettings";
 import { enumerateHit, enumerateShownNumber, padsUnderSweep, sweepPoints } from "../../kicad-port/padEnumeration";
 import { padContains } from "../../kicad-port/libEditorHit";
@@ -899,13 +899,16 @@ export function FootprintCanvas() {
       act("pcbnew.Array.createArray", "Create Array... (Ctrl+T)", refs.length === 0),
       { label: "Pad Properties...", onSelect: () => dispatch({ type: "SET_PAD_PROPERTIES_ID", id: padRefs[0]! }), disabled: padRefs.length !== 1 },
       // `PAD_TOOL::Init`: the pad edit entries of the selection menu -- Finish Pad Edit while a pad is edited, Edit Pad as Graphic Shapes for one selected pad.
-      act("pcbnew.ModuleEditor.padTable", "Pad Table...", padToolsBlocked(fp)),
-      act("pcbnew.PadTool.enumeratePads", "Renumber Pads...", (fp?.pads.length ?? 0) === 0 || padToolsBlocked(fp)),
+      // `ShowAlways` rows; Pad Table is enabled by `haveFootprintCond` (`setupUIConditions`), Renumber Pads has no condition (its handler refuses a footprint
+      // without pads, or one with a pad being edited, silently).
+      act("pcbnew.ModuleEditor.padTable", "Pad Table...", !fp),
+      act("pcbnew.PadTool.enumeratePads", "Renumber Pads..."),
       ...(padEditMenu(fp, new Set(refs)).recombine ? [act("pcbnew.PadTool.recombinePad", "Finish Pad Edit (Ctrl+E)")] : []),
       ...(padEditMenu(fp, new Set(refs)).explode ? [act("pcbnew.PadTool.explodePad", "Edit Pad as Graphic Shapes (Ctrl+E)")] : []),
-      act("pcbnew.PadTool.CopyPadSettings", "Copy Pad Properties to Default", padRefs.length !== 1),
-      act("pcbnew.PadTool.ApplyPadSettings", "Paste Default Pad Properties to Selected", padRefs.length === 0),
-      act("pcbnew.PadTool.PushPadSettings", "Push Pad Properties to Other Pads...", padRefs.length !== 1),
+      // `PAD_TOOL::Init`: Copy / Push shown for `Count( 1 ) && OnlyTypes( { PCB_PAD_T } )`, Paste for `HasType( PCB_PAD_T )` (a CONDITIONAL_MENU hides the rows).
+      ...(refs.length === 1 && padRefs.length === 1 ? [act("pcbnew.PadTool.CopyPadSettings", "Copy Pad Properties to Default")] : []),
+      ...(padRefs.length > 0 ? [act("pcbnew.PadTool.ApplyPadSettings", "Paste Default Pad Properties to Selected")] : []),
+      ...(refs.length === 1 && padRefs.length === 1 ? [act("pcbnew.PadTool.PushPadSettings", "Push Pad Properties to Other Pads...")] : []),
       { label: "Delete (Del)", onSelect: () => void api.deleteItems(refs), disabled: refs.length === 0 },
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });

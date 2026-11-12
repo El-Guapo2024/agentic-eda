@@ -8,13 +8,13 @@
 // copy). Copy, Export, Duplicate read any footprint; Delete and Rename need a project-library entry.
 import type { Dispatch } from "react";
 import type { Cmd } from "../api/types";
-import { fetchFootprintLibraryNames, fetchState, postCmd } from "../api/client";
+import { downloadFootprintKicadMod, fetchFootprintLibraryNames, fetchState, postCmd } from "../api/client";
 import { fetchAnyFootprint, parseFootprintText, pickTextFile } from "../api/libraryClient";
 import { addedPart, insertedMessage, outlineCentre } from "../kicad-port/fpInsert";
 import { duplicateIdCount, repairMessage } from "../kicad-port/fpRepair";
 import { pastedFootprint, storableFootprint } from "../kicad-port/fpLibFields";
 import { ensureUniqueLibId, footprintNameError, joinLibName, pastedFootprintName, PROJECT_LIBRARY, splitLibName } from "../kicad-port/libraryNames";
-import { askConfirm, askText } from "../components/library/libraryDialogs";
+import { askConfirm, askText, showError } from "../components/library/libraryDialogs";
 import { fetchLibraryItemsNow, fetchWritableLibraries, saveToLibrary } from "../api/librarySaveClient";
 import { deleteFootprintQuestion, footprintDeletedStatus, footprintLibraryReadOnly, isTableLibrary } from "../kicad-port/librarySave";
 import { setLibraryStatusText } from "../state/libraryStatus";
@@ -66,16 +66,17 @@ export async function editFootprint(c: FpCtx): Promise<void> {
 
 /**
  * `FOOTPRINT_EDITOR_CONTROL::CutCopyFootprint`: the selected footprint is kept as `m_copiedFootprint` (a copy of the loaded one when it is the
- * loaded one), and a cut then runs `DeleteFootprint`.
+ * loaded one), and a cut then runs `DeleteFootprint`. Silent, as KiCad is; with no footprint to read the clipboard is emptied
+ * (`m_copiedFootprint.reset( LoadFootprint( fpID ) )` with a null footprint).
  */
 export async function copyFootprint(c: FpCtx, cut: boolean): Promise<void> {
   const name = targetName(c);
-  if (!name) return info(c, "Select a footprint in the library tree first.");
+  if (!name) return c.dispatch({ type: "SET_COPIED_FOOTPRINT", footprint: null });
   try {
     const { footprint } = await fetchAnyFootprint(name);
     c.dispatch({ type: "SET_COPIED_FOOTPRINT", footprint });
-    info(c, `${name} ${cut ? "cut" : "copied"}`);
   } catch (e) {
+    c.dispatch({ type: "SET_COPIED_FOOTPRINT", footprint: null });
     return fail(c, e);
   }
   if (cut) await deleteFootprint(c);
@@ -87,7 +88,7 @@ export async function copyFootprint(c: FpCtx, cut: boolean): Promise<void> {
  */
 export async function pasteFootprint(c: FpCtx): Promise<void> {
   const copied = c.api.getState().copiedFootprint;
-  if (!copied) return info(c, "Nothing was copied.");
+  if (!copied) return; // `if( m_copiedFootprint && ... )`: nothing, silently
   try {
     const { all } = await names();
     const lib = splitLibName(targetName(c) ?? "").lib;
@@ -100,15 +101,20 @@ export async function pasteFootprint(c: FpCtx): Promise<void> {
   }
 }
 
-/** `FOOTPRINT_EDITOR_CONTROL::DuplicateFootprint` -> `FOOTPRINT_EDIT_FRAME::DuplicateFootprint`: a copy under `name_1`, `name_2`, ..., loaded. */
+/**
+ * `FOOTPRINT_EDITOR_CONTROL::DuplicateFootprint` -> `FOOTPRINT_EDIT_FRAME::DuplicateFootprint`: a copy under `name_1`, `name_2`, ..., loaded; a Value
+ * that was the old name becomes the new one (`if( aFootprint->GetValue() == footprintName ) aFootprint->SetValue( newName )`). No footprint: nothing.
+ */
 export async function duplicateFootprint(c: FpCtx): Promise<void> {
   const name = targetName(c);
-  if (!name) return info(c, "Select a footprint in the library tree first.");
+  if (!name) return;
   try {
     const { footprint } = await fetchAnyFootprint(name);
     const { all } = await names();
     const copyName = ensureUniqueLibId(name, all);
-    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...storableFootprint(footprint), name: copyName, published: false } }]))) return;
+    const oldItem = splitLibName(name).item;
+    const value = footprint.value?.text === oldItem ? { ...footprint.value, text: splitLibName(copyName).item } : footprint.value;
+    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...storableFootprint({ ...footprint, value }), name: copyName, published: false } }]))) return;
     await c.api.openFootprint(copyName);
     select(c, copyName);
   } catch (e) {
@@ -234,14 +240,36 @@ export async function footprintProperties(c: FpCtx): Promise<void> {
   }
 }
 
-/** `FOOTPRINT_EDITOR_CONTROL::RepairFootprint`: duplicate ids are replaced; the answer is "%d potential problems repaired." or "No footprint problems found.". */
+/**
+ * `FOOTPRINT_EDITOR_CONTROL::RepairFootprint`: duplicate ids are replaced; the answer is `DisplayInfoMessage` ("Information", OK): "%d potential problems
+ * repaired." with "%d duplicate IDs replaced." as the extended message, or "No footprint problems found.". Enabled with a footprint loaded only
+ * (`haveFootprintCond`), so with none it does nothing.
+ */
 export async function repairFootprint(c: FpCtx): Promise<void> {
   const st = c.api.getState();
-  if (!st.name || !st.footprint) return info(c, "Open a footprint first.");
+  if (!st.name || !st.footprint) return;
   const duplicates = duplicateIdCount(st.footprint);
   const msg = repairMessage(duplicates);
   if (duplicates > 0 && !(await c.api.cmd({ op: "repair_footprint", name: st.name }))) return;
-  info(c, msg.details ? `${msg.title} ${msg.details}` : msg.title);
+  await showError(msg.title, msg.details || undefined, "Information");
+}
+
+/**
+ * `FOOTPRINT_EDITOR_CONTROL::ExportFootprint` -> `FOOTPRINT_EDIT_FRAME::ExportFootprint`: the loaded footprint (`GetFirstFootprint()`; none: nothing, the action
+ * being disabled by `haveFootprintCond`) is written as `<name>.kicad_mod`, then "Footprint exported to file '%s'." (`DisplayInfoMessage`); a failure is
+ * `DisplayError` with the reason. The browser saves the file as a download (it has no save dialog that gives a path), so the message names the file.
+ */
+export async function exportFootprint(c: FpCtx): Promise<void> {
+  const st = c.api.getState();
+  if (!st.name || !st.footprint) return;
+  // `FOOTPRINT_EDIT_FRAME::SaveFootprint`'s rule: a pad being edited as shapes is recombined first, so the file holds the pad.
+  if (st.footprint.pad_edit && !(await c.api.cmd({ op: "recombine_pad", footprint: st.name }))) return;
+  try {
+    await downloadFootprintKicadMod(st.name);
+  } catch (e) {
+    return showError(e instanceof Error ? e.message : String(e));
+  }
+  await showError(`Footprint exported to file '${splitLibName(st.name).item}.kicad_mod'.`, undefined, "Information");
 }
 
 /**
