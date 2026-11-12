@@ -516,6 +516,20 @@ mod tests {
         assert_eq!(inches.cell(4, 3).unwrap().text, "0.00137795 in");
     }
 
+    /// UI-LEFT-2 PP22: a dielectric of two sublayers is two rows, "Dielectric 1 (1/2)" and "(2/2)", the second with its own material, thickness, colour, epsilon R
+    /// and loss tangent (`Build_Board_Stackup_Table`'s `for( sublayer_id .. GetSublayersCount() )`).
+    #[test]
+    fn a_dielectric_of_two_sublayers_is_two_rows() {
+        let mut stackup = default_stackup(2, mm(1.6));
+        let core = stackup.layers.iter_mut().find(|l| item_type(l) == ItemType::Dielectric).unwrap();
+        core.sublayers.push(eda_model::StackupSublayer { material: Some("PTFE".into()), thickness_mm: Some(0.1), epsilon_r: Some(2.1), loss_tangent: Some(0.0009), color: Some("Green".into()), ..Default::default() });
+        let t = stackup_table("F.SilkS", &stackup, Units::Mm);
+        assert_eq!(t.row_count(), 1 + stackup.layers.len() + 1);
+        let row = |r: usize| (0..7).map(|c| t.cell(r, c).unwrap().text.clone()).collect::<Vec<_>>();
+        assert_eq!(row(5)[0], "Dielectric 1 (1/2)");
+        assert_eq!(row(6), ["Dielectric 1 (2/2)", "Core", "PTFE", "0.1 mm", "Green", "2.1", "0.0009"]);
+    }
+
     #[test]
     fn a_layer_with_no_type_is_what_its_name_says() {
         let mut stackup = default_stackup(2, mm(1.6));
