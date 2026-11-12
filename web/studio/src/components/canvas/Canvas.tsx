@@ -66,7 +66,7 @@ import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup, se
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
-import { finishEditPattern, fixTune, hoverTune, moveTune, startTune, TuneHandleDrag } from "./tuneRouting";
+import { finishEditPattern, fixTune, hoverTune, isPatternSliding, moveTune, startTune, TuneHandleDrag } from "./tuneRouting";
 import { handleAt } from "../../kicad-port/tuneTool";
 import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
@@ -293,6 +293,8 @@ export function Canvas() {
     });
   };
   const moveMode = state.activeTool === "move";
+  // `doMoveSelection` of a lone tuning pattern: `genUpdateEdit` at every motion, `genCancelEdit` when the move ends without a drop (UI-LEFT-2 RR5)
+  useEffect(() => api.slideLonePattern(moveMode ? state.movePreview : null), [moveMode, state.movePreview, api]);
   /** The items the clarification menu's row under the pointer stands for (state/commonTool.ts), drawn brightened. */
   const menuHighlight = useMenuHighlight();
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -515,7 +517,8 @@ export function Canvas() {
       gridDisplay,
       // a component drag (`COMPONENT_DRAGGER`) draws its footprints where the drag has them, as a move would (`InlineDrag`'s preview of the footprint's
       // graphics, pads and fields, moved by `offset`; the dynamic ratsnest and the courtyard conflicts follow)
-      movePreview: state.movePreview ?? componentDragPreview(state.drawState),
+      // a lone tuning pattern slid live is drawn as the tuner has it (the draw state), not carried rigidly
+      movePreview: isPatternSliding(state.movePreview?.refs.length === 1 ? state.movePreview.refs[0] : undefined) ? null : (state.movePreview ?? componentDragPreview(state.drawState)),
       sketchPads: state.sketchPads,
       sketchTracks: state.sketchTracks,
       sketchVias: state.sketchVias,

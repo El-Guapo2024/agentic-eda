@@ -264,7 +264,8 @@
     t(pattern.handles.length === 4 && hx === pattern.end.x && hy === pattern.end.y, `the end point is where the pattern ends: ${JSON.stringify(pattern.handles)}`);
     const n = replies.length;
     await drag([hx, hy], [hx - 4_000_000, hy]);
-    const calls = replies.slice(n).map((r) => r.name);
+    // (the message panel of the selected pattern asks `/api/tune/pattern` when the board changes: not the edit's)
+    const calls = replies.slice(n).map((r) => r.name).filter((c) => c !== "pattern");
     t(calls[0] === "edit_start" && calls.filter((c) => c === "edit_move").length >= 2 && calls[calls.length - 1] === "fix", `the press starts an edit, the moves update it, the release puts it on the board: ${calls.join(" ")}`);
     st = await state();
     const p = patternsOf(st)[0];

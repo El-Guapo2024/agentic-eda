@@ -179,6 +179,103 @@ export class TuneHandleDrag {
 }
 
 /**
+ * A tuning pattern moved on its own, live (UI-LEFT-2 RR5): `EDIT_TOOL::doMoveSelection` of a lone generator calls `genStartEdit` when the move starts, then at
+ * every motion `item->Move( movement )` (the pattern's start and end, `PCB_TUNING_PATTERN::Move` in an edit) and `genUpdateEdit` (`resetToBaseline` puts them
+ * back on the track and the pattern is tuned there: edit point 4 of `/api/tune/edit_move`), and `genFinishEdit` at the drop (`genCancelEdit` on Esc). So the
+ * pattern slides along its track as the cursor moves, as the edit points' drags show it.
+ */
+export class PatternSlide {
+  readonly ready: Promise<boolean>;
+  private latest: { dx: number; dy: number } | null = null;
+  private idle: Promise<void> = Promise.resolve();
+  private sent = false;
+
+  constructor(
+    private readonly dispatch: Dispatch<Action>,
+    readonly pattern: TuningPattern
+  ) {
+    this.ready = tuneEditStart(pattern.id, { move_from: { x: pattern.origin.x, y: pattern.origin.y } }).then((r) => {
+      if (!r.ok) dispatch({ type: "TOAST", message: r.message ?? "The tuning pattern could not be moved.", kind: "error" });
+      return r.ok;
+    });
+  }
+
+  private last: { dx: number; dy: number } | null = null;
+
+  /** The cursor has carried the pattern `(dx, dy)` from where the move started (the same place again sends nothing). */
+  move(dx: number, dy: number): void {
+    if (this.last && this.last.dx === dx && this.last.dy === dy) return;
+    this.last = { dx, dy };
+    this.latest = { dx, dy };
+    this.idle = this.idle.then(() => this.pump());
+  }
+
+  private async pump(): Promise<void> {
+    if (!(await this.ready)) return;
+    while (this.latest) {
+      const { dx, dy } = this.latest;
+      this.latest = null;
+      if (dx === 0 && dy === 0 && !this.sent) continue;
+      this.sent = true;
+      await updateEditPattern(this.dispatch, 4, this.pattern.origin.x + dx, this.pattern.origin.y + dy);
+    }
+  }
+
+  /** The drop at `(dx, dy)`: `genFinishEdit`, or nothing changed when it never moved. Resolves to whether the pattern changed. */
+  async finish(api: Pick<StudioApi, "refresh">, dx: number, dy: number): Promise<boolean> {
+    this.move(dx, dy);
+    this.idle = this.idle.then(() => this.pump());
+    await this.idle;
+    if (!(await this.ready)) return false;
+    if (!this.sent) {
+      cancelEditPattern(this.dispatch);
+      return false;
+    }
+    return finishEditPattern(this.dispatch, api);
+  }
+
+  /** `genCancelEdit`: the move was given up. */
+  cancel(): void {
+    this.latest = null;
+    void this.idle.then(async () => {
+      if (await this.ready) cancelEditPattern(this.dispatch);
+    });
+  }
+}
+
+let activeSlide: PatternSlide | null = null;
+
+/** The live slide of `pattern`, started when the move picks it up. */
+export function patternSlideFor(dispatch: Dispatch<Action>, pattern: TuningPattern): PatternSlide {
+  if (!activeSlide || activeSlide.pattern.id !== pattern.id) {
+    activeSlide?.cancel();
+    activeSlide = new PatternSlide(dispatch, pattern);
+  }
+  return activeSlide;
+}
+
+/** The drop takes the live slide of pattern `id`, if there is one (it is no longer the active one). */
+export function takePatternSlide(id: string): PatternSlide | null {
+  if (activeSlide && activeSlide.pattern.id === id) {
+    const s = activeSlide;
+    activeSlide = null;
+    return s;
+  }
+  return null;
+}
+
+/** The move ended without a drop (Esc, another tool): the live slide is cancelled. */
+export function dropPatternSlide(): void {
+  activeSlide?.cancel();
+  activeSlide = null;
+}
+
+/** Whether pattern `id` is being slid live (the move preview then does not draw it carried rigidly). */
+export function isPatternSliding(id: string | undefined): boolean {
+  return id != null && activeSlide?.pattern.id === id;
+}
+
+/**
  * A tuning pattern moved on its own (`EDIT_TOOL::doMoveSelection` of a lone generator): `genStartEdit`, the pattern's start and end moved by `(dx, dy)` and put
  * back on its track (`PCB_TUNING_PATTERN::Move` in an edit, then `genUpdateEdit`'s `resetToBaseline`: edit point 4 of `/api/tune/edit_move`), `genFinishEdit` -- so
  * it slides along the track and is tuned again there, one undo step. Resolves to whether it was changed.
