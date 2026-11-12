@@ -151,3 +151,29 @@ fn a_full_placement_still_places_every_part_the_same_way_each_time() {
     assert_eq!(a.canonical_bytes().unwrap(), b.canonical_bytes().unwrap());
     assert_eq!(a.placement.unwrap().footprints.len(), 7);
 }
+
+#[test]
+fn the_parts_keep_out_of_what_the_board_box_has_that_is_not_board_and_an_abort_places_nothing() {
+    // UI-LEFT-2 PP20: a cutout across the middle of a 40 x 30 mm board (10..30 x 8..22 mm) is an obstacle, so no part placed lands in it.
+    let m = model();
+    let d = design(vec![fp("U1", 6.0, 6.0, 0, Side::Top)], 40.0, 30.0);
+    let cutout = (mm(10.0), mm(8.0), mm(30.0), mm(22.0));
+    let movable = set(&["R1", "R2", "R3", "R4", "R5", "R6"]);
+    let placed = eda_place::place_partial_watched(&d, &m, &PlaceOptions::default(), &movable, &[cutout], None).expect("places around the cutout");
+    assert_eq!(placed.len(), 6);
+    for f in &placed {
+        let inside = f.at.x > cutout.0 && f.at.x < cutout.2 && f.at.y > cutout.1 && f.at.y < cutout.3;
+        assert!(!inside, "{} at {:?} is in the cutout", f.id, f.at);
+    }
+    // `KeepRefreshing( false )` false: the run stops and nothing comes back (`AR_ABORT_PLACEMENT`)
+    let watch = eda_place::PlaceWatch::new();
+    watch.start();
+    watch.cancel();
+    let err = eda_place::place_partial_watched(&d, &m, &PlaceOptions::default(), &movable, &[cutout], Some(&watch)).unwrap_err();
+    assert_eq!(err[0].check, eda_place::PLACE_CANCELLED);
+    // a run that is not aborted reports its progress to the end
+    let watch = eda_place::PlaceWatch::new();
+    watch.start();
+    eda_place::place_partial_watched(&d, &m, &PlaceOptions::default(), &movable, &[cutout], Some(&watch)).expect("places");
+    assert_eq!(watch.progress(), 1000);
+}

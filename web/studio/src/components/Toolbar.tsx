@@ -20,6 +20,7 @@ import { FootprintToolbarControl, GridSelect, SymbolToolbarControl } from "./too
 import { PcbVariantSelector, SchVariantSelector } from "./toolbar/VariantSelector";
 import { KICAD10_ACTIONS, KICAD10_ICONS } from "../kicad/kicad10Actions";
 import { resolvedToolbar, useToolbarSettings } from "../state/toolbarSettings";
+import { setOverrideLocks, useOverrideLocks, type OverrideLocksFrame } from "../state/overrideLocks";
 import type { RenderToolbarItem } from "../kicad-port/toolbarCustomization";
 
 // No source-verified "100% = this many px/mm" reference for KiCad's own
@@ -124,8 +125,11 @@ function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "con
 
   if (item.control === "trackWidth" || item.control === "viaDiameter") return <SizeSelectBox control={item.control} label={item.label ?? item.control} />;
 
-  // overrideLocks and anything else this script didn't specifically
-  // handle: shown, but inert -- this app has no per-item lock concept.
+  // `ACTION_TOOLBAR_CONTROLS::overrideLocks`: `new wxCheckBox( aToolbar, ID_ON_OVERRIDE_LOCKS, _( "Override locks" ) )` (eda_draw_frame.cpp), read by
+  // `GetOverrideLocks()` -- Place > Auto-Place Footprints places a locked footprint with it checked (UI-LEFT-2 PP20).
+  if (item.control === "overrideLocks") return <OverrideLocksBox frame="pcb" />;
+
+  // anything else this script didn't specifically handle: shown, but inert.
   return (
     <div className="toolbar-control" title={`${item.label ?? item.control} (not ported yet)`} style={{ opacity: 0.5 }}>
       <span className="icon-placeholder" aria-hidden />
@@ -172,6 +176,17 @@ function SizeSelectBox({ control, label }: { control: "trackWidth" | "viaDiamete
         ))}
       </select>
     </div>
+  );
+}
+
+/** The "Override locks" check box of a frame's top toolbar (state/overrideLocks.ts). */
+function OverrideLocksBox({ frame }: { frame: OverrideLocksFrame }) {
+  const on = useOverrideLocks(frame);
+  return (
+    <label className="toolbar-control" title="Allow moving of locked items with the mouse" data-control="overrideLocks">
+      <input type="checkbox" checked={on} onChange={(e) => setOverrideLocks(frame, e.target.checked)} />
+      <span>Override locks</span>
+    </label>
   );
 }
 
