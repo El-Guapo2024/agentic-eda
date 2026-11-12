@@ -58,7 +58,8 @@ const BUCKET_TO_KICAD_KEY: Record<string, string> = {
   drc_warning: "LAYER_DRC_WARNING",
 };
 
-// Back-to-front paint order for this app's buckets (see painter.ts).
+// Back-to-front order of this app's buckets. The board painter no longer uses it: it draws in KiCad's layer order (kicad-port/galLayerOrder.ts,
+// UI-LEFT-2 PP3); the buckets remain the colour keys.
 export const BUCKET_ORDER = [
   "background",
   "b_cu",
