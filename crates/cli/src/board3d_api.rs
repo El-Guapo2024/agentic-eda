@@ -22,7 +22,7 @@ use eda_model::footprint::{to_board, PadKind};
 use eda_model::ir::{Design, FootprintInstance, Nm, Point};
 use eda_model::ConstraintModel;
 use eda_shape_poly_set::basic_shapes::{circle_polygon, oval_polygon, ErrorLoc};
-use eda_shape_poly_set::{LineChain, ShapePolySet};
+use eda_shape_poly_set::{CornerStrategy, LineChain, ShapePolySet};
 use eda_clipper2::Point64;
 use serde_json::{json, Value};
 
@@ -136,6 +136,56 @@ pub fn board3d_json(design: &Design, model: &ConstraintModel) -> Value {
     json!({ "body": polys_json(&board_body(design, model)), "plating": HOLE_PLATING_THICKNESS.get() })
 }
 
+/// One contour of a request (`[[x, y], ..]`, nm), closed.
+fn chain_of(v: &Value) -> Option<LineChain> {
+    let pts = v.as_array()?;
+    let chain: LineChain = pts.iter().filter_map(|p| Some(Point64::new(p.get(0)?.as_f64()?.round() as i64, p.get(1)?.as_f64()?.round() as i64))).collect();
+    (chain.len() >= 3).then_some(chain)
+}
+
+/// `[{ "outer": [[x, y], ..], "holes": [[[x, y], ..], ..] }, ..]` as a `SHAPE_POLY_SET`, unioned (`Simplify`).
+fn polys_of(v: &Value) -> ShapePolySet {
+    let mut set = ShapePolySet::new();
+    for p in v.as_array().map(Vec::as_slice).unwrap_or_default() {
+        let Some(outer) = p.get("outer").and_then(chain_of) else { continue };
+        let i = set.add_outline(outer);
+        for h in p.get("holes").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() {
+            if let Some(h) = chain_of(h) {
+                set.add_hole(h, Some(i));
+            }
+        }
+    }
+    set.simplify();
+    set
+}
+
+/// `POST /api/board3d/polys`: the polygon arithmetic the 3D view's layers need and the page cannot do (`BOARD_ADAPTER::createPadWithMargin`'s `poly.Inflate( clearance.x,
+/// CORNER_STRATEGY::ROUND_ALL_CORNERS, aPad->GetMaxError() )` of a custom pad's paste and mask; `addShape`'s `polyList.Inflate( margin, cornerStr, .. )` of a filled shape's
+/// mask opening; `PCB_TEXT::TransformTextToPolySet`'s knockout, `finalPoly.BooleanSubtract( textShape )`; `RENDER_3D_OPENGL::bgWorker`'s `board_poly_with_holes.BooleanSubtract(
+/// GetFrontCounterborePolys() )` ..). The body is `{ "jobs": [{ "key", "a": polys, "inflate"?: nm, "acute"?: bool, "b"?: polys }] }`; each job is `a` unioned, inflated by
+/// `inflate` (`ROUND_ALL_CORNERS`, or `ALLOW_ACUTE_CORNERS` with `acute`) at the board's error, less `b` unioned. The answer is `{ "results": { key: polys } }`.
+pub fn polys_report(body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let mut results = serde_json::Map::new();
+    for job in req.get("jobs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() {
+        let Some(key) = job.get("key").and_then(Value::as_str) else { continue };
+        let mut a = polys_of(job.get("a").unwrap_or(&Value::Null));
+        let inflate = job.get("inflate").and_then(Value::as_f64).map(|v| v.round() as i64).unwrap_or(0);
+        if inflate != 0 {
+            let strategy = if job.get("acute").and_then(Value::as_bool) == Some(true) { CornerStrategy::AllowAcuteCorners } else { CornerStrategy::RoundAllCorners };
+            a.inflate(inflate, strategy, MAX_ERROR as i32, true);
+        }
+        if let Some(b) = job.get("b") {
+            let b = polys_of(b);
+            if !b.is_empty() {
+                a.boolean_subtract(&b);
+            }
+        }
+        results.insert(key.to_string(), polys_json(&a));
+    }
+    json!({ "results": results })
+}
+
 /// The answer for the board in `dir`.
 pub fn report(dir: &std::path::Path) -> Value {
     match crate::board::load(dir) {
@@ -223,5 +273,20 @@ mod tests {
         let json = board3d_json(&d, &model);
         assert_eq!(json["body"][0]["holes"].as_array().map(Vec::len), Some(1));
         assert_eq!(json["plating"].as_i64(), Some(20_000));
+    }
+
+    #[test]
+    fn a_job_inflates_with_round_corners_and_subtracts() {
+        // A 1 mm square grown by 0.1 mm with round corners: 1.2 x 1.2 less the four corners' squares plus their quarter circles.
+        let sq = json!([{ "outer": [[0, 0], [1_000_000, 0], [1_000_000, 1_000_000], [0, 1_000_000]], "holes": [] }]);
+        let hole = json!([{ "outer": [[400_000, 400_000], [600_000, 400_000], [600_000, 600_000], [400_000, 600_000]] }]);
+        let body = json!({ "jobs": [{ "key": "k", "a": sq, "inflate": 100_000 }, { "key": "cut", "a": sq, "b": hole }] }).to_string();
+        let out = polys_report(body.as_bytes());
+        let poly = &out["results"]["k"][0]["outer"];
+        let pts: Vec<(f64, f64)> = poly.as_array().unwrap().iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+        let area = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum::<f64>().abs() / 2.0;
+        let expect = 1.0e12 + 4.0 * 1.0e11 + std::f64::consts::PI * 1.0e10;
+        assert!((area - expect).abs() < expect * 0.002, "{area} vs {expect}");
+        assert_eq!(out["results"]["cut"][0]["holes"].as_array().map(Vec::len), Some(1), "the square less the hole has it as a hole");
     }
 }

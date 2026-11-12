@@ -590,6 +590,8 @@ fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8],
                 .map_err(|e| e.to_string())
         })()),
         ("POST", "/api/3dmodel/prepare") => Some(respond(stream, "200 OK", "application/json", crate::model3d_api::prepare(dir, body, &crate::model3d_api::store(lane)).to_string().as_bytes())),
+        // The 3D viewer's polygon arithmetic (`crate::board3d_api::polys_report`): inflates and subtractions the page cannot do.
+        ("POST", "/api/board3d/polys") => Some(respond(stream, "200 OK", "application/json", crate::board3d_api::polys_report(body).to_string().as_bytes())),
         ("POST", "/api/3dmodel/check") => {
             let r = crate::model3d_tab_api::check(dir, body);
             Some(respond(stream, r.status, r.kind, &r.body))
