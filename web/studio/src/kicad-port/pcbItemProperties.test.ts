@@ -58,11 +58,12 @@ test("a text box is a PCB_TEXTBOX, named Text Box", () => {
   assert.equal(pcbFriendlyName(item), "Text Box");
 });
 
-test("a text box has the rows of PCB_TEXTBOX_DESC: position, lock and layer, then Text Properties, Border Properties and Margins", () => {
+test("a text box has the rows of PCB_TEXTBOX_DESC: position, lock, net (none), layer and orientation, then Text Properties, Border Properties and Margins", () => {
   const groups = names(board(), ["tbx_a"]);
+  // the pad primitive, teardrop and shape rows it takes after are unavailable on a text box (`fillAvailable`, `supportsTeardrops`, `isCircle` ..)
   assert.deepEqual(groups.map((g) => g[0]), ["Basic Properties", "Text Properties", "Border Properties", "Margins"]);
-  assert.deepEqual(groups[0]![1], ["Position X", "Position Y", "Locked", "Layer"]);
-  assert.deepEqual(groups[1]![1], ["Text", "Font", "Thickness", "Italic", "Bold", "Mirrored", "Knockout", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Orientation"]);
+  assert.deepEqual(groups[0]![1], ["Position X", "Position Y", "Locked", "Net", "Layer", "Orientation"]);
+  assert.deepEqual(groups[1]![1], ["Text", "Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Knockout"]);
   assert.deepEqual(groups[2]![1], ["Border", "Border Style", "Border Width"]);
   assert.deepEqual(groups[3]![1], ["Margin Left", "Margin Top", "Margin Right", "Margin Bottom"]);
 });
@@ -132,7 +133,7 @@ test("a reference image is a PCB_REFERENCE_IMAGE with the rows of PCB_REFERENCE_
   const groups = names(withImage(), ["img_a"]);
   assert.deepEqual(groups.map((g) => g[0]), ["Basic Properties", "Image Properties"]);
   assert.deepEqual(groups[0]![1], ["Position X", "Position Y", "Locked", "Associated Layer"]);
-  assert.deepEqual(groups[1]![1], ["Scale", "Width", "Height"]);
+  assert.deepEqual(groups[1]![1], ["Scale", "Transform Offset X", "Transform Offset Y", "Width", "Height"]);
 });
 
 test("the scale, the size and the layer of an image are one edit_ref_image that keeps its centre; a size is a scale about the centre", () => {
@@ -160,7 +161,7 @@ test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, la
   assert.equal(pcbFriendlyName(item), "Point");
   const grid = pcbGrid(b, ["pnt_a"], "mm");
   const rows = grid.groups.flatMap((g) => g.rows);
-  assert.deepEqual(rows.map((r) => r.name), ["Position X", "Position Y", "Locked", "Layer", "Size"]);
+  assert.deepEqual(rows.map((r) => r.name), ["Position X", "Position Y", "Layer", "Locked", "Size"]);
   assert.equal(rows.find((r) => r.name === "Locked")?.writable, false, "the file form of a point has no lock");
   const sentPoint = (cmds: Cmd[]) => {
     assert.equal(cmds.length, 1);
@@ -185,7 +186,7 @@ test("a barcode is a PCB_BARCODE with the rows of PCB_BARCODE_DESC; Error Correc
   assert.equal(item.type, "PCB_BARCODE");
   assert.equal(pcbFriendlyName(item), "Barcode");
   const rows = (): string[] => pcbGrid(b, ["bar_a"], "mm").groups.flatMap((g) => g.rows).map((r) => r.name);
-  assert.deepEqual(rows(), ["Position X", "Position Y", "Locked", "Layer", "Text", "Show Text", "Text Size", "Width", "Height", "Orientation", "Barcode Type", "Error Correction", "Knockout"]);
+  assert.deepEqual(rows(), ["Position X", "Position Y", "Layer", "Locked", "Text", "Show Text", "Text Size", "Width", "Height", "Orientation", "Barcode Type", "Error Correction", "Knockout"]);
   const sentBarcode = (cmds: Cmd[]) => {
     assert.equal(cmds.length, 1);
     const c = cmds[0]! as Extract<Cmd, { op: "pcb_item" }>;

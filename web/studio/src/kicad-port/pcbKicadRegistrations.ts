@@ -12,7 +12,7 @@ import { PropertyManager, type PropItem } from "./propertyManager";
 export type Decl =
   | { inherits: [string, string] }
   | { add: [owner: string, name: string, group?: string]; hidden?: boolean; library?: boolean }
-  | { replace: [base: string, old: string, owner: string, name: string, group?: string] }
+  | { replace: [base: string, old: string, owner: string, name: string, group?: string]; hidden?: boolean }
   | { mask: [derived: string, base: string, name: string] };
 
 const TEXT = "Text Properties";
@@ -112,6 +112,64 @@ export const KICAD_PCB_REGISTRATIONS: Decl[] = [
   ...inherits("PCB_GROUP", "BOARD_ITEM", "EDA_GROUP"),
   ...mask("PCB_GROUP", "BOARD_ITEM", "Position X", "Position Y", "Layer"),
   ...add("EDA_GROUP", "Group Properties", "Name"),
+  // pcbnew/zone.cpp ZONE_DESC (the position and the layer replaced by hidden ones: "they aren't useful in current form")
+  ...inherits("ZONE", "BOARD_CONNECTED_ITEM"),
+  { replace: ["BOARD_ITEM", "Position X", "ZONE", "Position X"], hidden: true },
+  { replace: ["BOARD_ITEM", "Position Y", "ZONE", "Position Y"], hidden: true },
+  { replace: ["BOARD_CONNECTED_ITEM", "Layer", "ZONE", "Layer"], hidden: true },
+  ...add("ZONE", "", "Priority", "Name"),
+  ...add("ZONE", "Keepout", "Keep Out Tracks", "Keep Out Vias", "Keep Out Pads", "Keep Out Zone Fills", "Keep Out Footprints"),
+  ...add("ZONE", "Placement", "Enable", "Source Type", "Source Name"),
+  ...add("ZONE", "Fill Style", "Fill Mode", "Hatch Orientation", "Hatch Width", "Hatch Gap", "Hatch Minimum Hole Ratio", "Smoothing Effort", "Smoothing Amount", "Remove Islands", "Minimum Island Area"),
+  ...add("ZONE", "Electrical", "Clearance", "Minimum Width", "Pad Connections", "Thermal Relief Gap", "Thermal Relief Spoke Width"),
+  // pcbnew/pcb_textbox.cpp PCB_TEXTBOX_DESC ("Filled" is not a property of EDA_SHAPE's -- its is "Fill" -- so that mask masks nothing, as in KiCad)
+  ...inherits("PCB_TEXTBOX", "PCB_SHAPE", "EDA_SHAPE", "EDA_TEXT"),
+  ...mask("PCB_TEXTBOX", "EDA_SHAPE", "Shape", "Start X", "Start Y", "End X", "End Y", "Width", "Height", "Line Width", "Line Style", "Filled", "Line Color", "Corner Radius"),
+  ...mask("PCB_TEXTBOX", "EDA_TEXT", "Color"),
+  ...mask("PCB_TEXTBOX", "PCB_SHAPE", "Soldermask", "Soldermask Margin Override"),
+  ...add("PCB_TEXTBOX", TEXT, "Knockout"),
+  ...add("PCB_TEXTBOX", "Border Properties", "Border", "Border Style", "Border Width"),
+  ...add("PCB_TEXTBOX", "Margins", "Margin Left", "Margin Top", "Margin Right", "Margin Bottom"),
+  // 8303b2ad masks "Hyperlink" on PCB_TEXT here (`Mask( TYPE_HASH( PCB_TEXT ), ..)`, which leaves the text box's row); KiCad 25ec2335 masks it on PCB_TEXTBOX
+  ...mask("PCB_TEXTBOX", "EDA_TEXT", "Hyperlink"),
+  // pcbnew/pcb_table.cpp PCB_TABLE_DESC; KiCad 25ec2335 pcb_generated_table.cpp PCB_GENERATED_TABLE_DESC and pcb_drill_chart.cpp PCB_DRILL_CHART_DESC
+  ...inherits("PCB_TABLE", "BOARD_ITEM", "BOARD_ITEM_CONTAINER"),
+  ...add("PCB_TABLE", "", "Start X", "Start Y"),
+  ...add("PCB_TABLE", "Table Properties", "External Border", "Header Border", "Border Width", "Border Style", "Border Color", "Row Separators", "Cell Separators", "Separators Width", "Separators Style", "Separators Color"),
+  ...inherits("PCB_GENERATED_TABLE", "PCB_TABLE"),
+  ...add("PCB_GENERATED_TABLE", "Table Generator", "Units", "Decimal Places"),
+  ...inherits("PCB_DRILL_CHART", "PCB_GENERATED_TABLE"),
+  ...add("PCB_DRILL_CHART", "Drill Chart Properties", "Show Totals"),
+  // pcbnew/pcb_tablecell.cpp PCB_TABLECELL_DESC
+  ...inherits("PCB_TABLECELL", "BOARD_ITEM", "BOARD_CONNECTED_ITEM", "PCB_TEXTBOX", "PCB_SHAPE", "EDA_SHAPE", "EDA_TEXT"),
+  ...mask("PCB_TABLECELL", "BOARD_ITEM", "Position X", "Position Y"),
+  ...mask("PCB_TABLECELL", "PCB_SHAPE", "Layer", "Soldermask", "Soldermask Margin Override"),
+  ...mask("PCB_TABLECELL", "EDA_SHAPE", "Corner Radius"),
+  ...mask("PCB_TABLECELL", "BOARD_CONNECTED_ITEM", "Net"),
+  ...mask("PCB_TABLECELL", "PCB_TEXTBOX", "Border", "Border Style", "Border Width"),
+  ...mask("PCB_TABLECELL", "EDA_SHAPE", "Start X", "Start Y", "End X", "End Y", "Shape", "Width", "Height", "Line Width", "Line Style", "Line Color"),
+  ...mask("PCB_TABLECELL", "EDA_TEXT", "Orientation", "Hyperlink", "Color"),
+  ...add("PCB_TABLECELL", "Table", "Column Width", "Row Height"),
+  // pcbnew/pcb_reference_image.cpp PCB_REFERENCE_IMAGE_DESC
+  ...inherits("PCB_REFERENCE_IMAGE", "BOARD_ITEM"),
+  { replace: ["BOARD_ITEM", "Layer", "PCB_REFERENCE_IMAGE", "Associated Layer"] },
+  ...add("PCB_REFERENCE_IMAGE", "Image Properties", "Scale", "Transform Offset X", "Transform Offset Y", "Width", "Height"),
+  // pcbnew/pcb_point.cpp PCB_POINT_DESC, pcbnew/pcb_barcode.cpp PCB_BARCODE_DESC (the same at KiCad 25ec2335)
+  ...inherits("PCB_POINT", "BOARD_ITEM"),
+  ...add("PCB_POINT", "", "Size"),
+  ...inherits("PCB_BARCODE", "BOARD_ITEM"),
+  ...add("PCB_BARCODE", "Barcode Properties", "Text", "Show Text", "Text Size", "Width", "Height", "Orientation", "Barcode Type", "Error Correction", "Knockout", "Margin X", "Margin Y"),
+  // KiCad 25ec2335: pcbnew/pcb_grid_item.cpp PCB_GRID_ITEM_DESC (its Layer made unavailable, `OverrideAvailability`), pcbnew/pcb_drill_map.cpp PCB_DRILL_MAP_DESC,
+  // pcbnew/generators/pcb_via_stitch.cpp PCB_VIA_STITCH_DESC (its `InheritsAfter( PCB_GENERATOR )` adds nothing: `PCB_GENERATOR_DESC` is compiled only with GENERATOR_ORDER)
+  ...inherits("PCB_GRID_ITEM", "BOARD_ITEM"),
+  ...add("PCB_GRID_ITEM", "", "Grid Type", "Orientation", "Extent X", "Extent Y", "Spacing X", "Spacing Y", "Radius Extent", "Radius Spacing", "Phi Extent", "Phi Spacing", "Priority", "Tick Interval", "Affects Cursor Snap", "Affects Routing", "Affects Placement"),
+  ...inherits("PCB_DRILL_MAP", "BOARD_ITEM"),
+  ...add("PCB_DRILL_MAP", "Drill Map Properties", "Offset X", "Offset Y", "Symbol Size"),
+  ...mask("PCB_DRILL_MAP", "BOARD_ITEM", "Position X", "Position Y"),
+  ...add("PCB_DRILL_MAP", "Drill Map Properties", "Hole Span", "Outline Slots", "Guide Cross"),
+  ...inherits("PCB_VIA_STITCH", "BOARD_ITEM"),
+  ...add("PCB_VIA_STITCH", "", "Size", "Drill", "Pitch", "Layout", "Mode", "Seed", "Net", "Guarded Net"),
+  ...mask("PCB_VIA_STITCH", "BOARD_ITEM", "Layer"),
 ];
 
 /** The table replayed through the manager. */
@@ -122,7 +180,7 @@ export function kicadPcbRegistry(): PropertyManager<PropItem, unknown, unknown> 
     else if ("mask" in d) pm.mask(d.mask[0], d.mask[1], d.mask[2]);
     else if ("replace" in d) {
       const [base, old, owner, name, group] = d.replace;
-      pm.replaceProperty(base, old, { owner, name, kind: "string", get: () => "" }, group ?? "");
+      pm.replaceProperty(base, old, { owner, name, kind: "string", get: () => "", ...(d.hidden ? { hidden: true } : {}) }, group ?? "");
     } else {
       const [owner, name, group] = d.add;
       pm.addProperty({ owner, name, kind: "string", get: () => "", ...(d.hidden ? { hidden: true } : {}), ...(d.library ? { hiddenFromLibraryEditors: true } : {}) }, group ?? "");

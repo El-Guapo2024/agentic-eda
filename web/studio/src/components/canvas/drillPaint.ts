@@ -25,7 +25,8 @@ function strokeParts(ctx: CanvasRenderingContext2D, cx: number, cy: number, part
   ctx.stroke();
 }
 
-export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, layerVisible: Readonly<Record<string, boolean>>, selection: ReadonlySet<string>): void {
+/** `onLayer`: only the charts and maps on that layer (the board painter draws them in their layer's pass, UI-LEFT-2 PP3). */
+export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, layerVisible: Readonly<Record<string, boolean>>, selection: ReadonlySet<string>, onLayer?: string): void {
   const dr = board.drawings;
   if (!dr) return;
   const profile = dr.drill_profile ?? DEFAULT_PROFILE;
@@ -36,7 +37,7 @@ export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // The charts' shape marks.
   for (const chart of dr.drill_charts ?? []) {
     const table = (dr.tables ?? []).find((t) => t.id === chart.table_id);
-    if (!table || !layerIsVisible(layerVisible, table.layer)) continue;
+    if (!table || !layerIsVisible(layerVisible, table.layer) || (onLayer !== undefined && table.layer !== onLayer)) continue;
     ctx.strokeStyle = selection.has(table.id) ? layerColor("selection") : layerColor(realLayerKey(table.layer));
     ctx.lineWidth = width;
     for (const s of chartSymbols(chart, table, profile)) strokeParts(ctx, s.x, s.y, buildMarker(s.x, s.y, s.r, s.shape));
@@ -44,7 +45,7 @@ export function drawDrillItems(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // The maps.
   const rings = outlineRings(board);
   for (const map of dr.drill_maps ?? []) {
-    if (!layerIsVisible(layerVisible, map.layer)) continue;
+    if (!layerIsVisible(layerVisible, map.layer) || (onLayer !== undefined && map.layer !== onLayer)) continue;
     const color = selection.has(map.id) ? layerColor("selection") : layerColor(realLayerKey(map.layer));
     ctx.strokeStyle = color;
     ctx.fillStyle = color;

@@ -187,9 +187,45 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
   // --------------------------------------------------------------------------------------------------------------------- PCB_TABLECELL
   pm.registerType("PCB_TABLECELL");
   pm.inheritsAfter("PCB_TABLECELL", "BOARD_ITEM");
-  // `PCB_TABLECELL_DESC`'s masks: a cell has no position, layer or lock of its own (the table's are), no net, and none of the shape's rows. (KiCad leaves "Locked" on
-  // the panel; a cell's lock is its table's, and no verb locks a cell, so the row is not offered.)
-  for (const name of ["Position X", "Position Y", "Layer", "Locked"]) pm.mask("PCB_TABLECELL", "BOARD_ITEM", name);
+  // `PCB_TABLECELL_DESC`'s masks: a cell has no position or layer of its own (the table's are), no net, and none of the shape's rows. KiCad leaves "Locked" on the
+  // panel (`BOARD_ITEM`'s, not masked); no verb locks a cell here, so the row shows the cell unlocked and is read-only.
+  for (const name of ["Position X", "Position Y", "Layer"]) pm.mask("PCB_TABLECELL", "BOARD_ITEM", name);
+  pm.overrideWriteability("PCB_TABLECELL", "BOARD_ITEM", "Locked", () => false, "A cell is locked with its table here: no verb locks one cell.");
+  // What the cell takes after and KiCad does not mask, unavailable on a cell: the teardrops (`supportsTeardrops`: a pad or a via), the pad primitive rows (pad edit
+  // mode only), and the shape rows a rectangle has not (`isCircle`, the arc's Angle, `isOpenShape`'s line endings, and Fill and Fill Color, which `fillAvailable`
+  // refuses a PCB_TABLECELL_T outright).
+  const absent = (group: string, ...names: string[]): void => names.forEach((name) => add({ owner: "PCB_TABLECELL", name, kind: "string", get: () => "", available: () => false }, group));
+
+  // The cell's own group first (`GetGroupDisplayOrder`: the class's groups, then its bases'), then BOARD_CONNECTED_ITEM's, PCB_TEXTBOX's, PCB_SHAPE's and EDA_SHAPE's.
+  // `PCB_TABLECELL_DESC`'s "Table": the width of the cell's column and the height of its row.
+  const TABLE_GROUP = "Table";
+  add(
+    {
+      owner: "PCB_TABLECELL",
+      name: "Column Width",
+      kind: "int",
+      display: "size",
+      get: (i) => i.table!.col_widths[i.cell!.col]!,
+      available: isCell,
+      validate: (v) => (num(v) <= 0 ? "The column width must be positive." : null),
+      set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_nm: Math.round(num(v)) })]),
+    },
+    TABLE_GROUP
+  );
+  add(
+    {
+      owner: "PCB_TABLECELL",
+      name: "Row Height",
+      kind: "int",
+      display: "size",
+      get: (i) => i.table!.row_heights[i.cell!.row]!,
+      available: isCell,
+      validate: (v) => (num(v) <= 0 ? "The row height must be positive." : null),
+      set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_nm: Math.round(num(v)) })]),
+    },
+    TABLE_GROUP
+  );
+  absent("Teardrops", "Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Prefer Zone Connections", "Allow Teardrops To Span Two Tracks", "Max Width Ratio");
 
   const TEXT = "Text Properties";
   add(
@@ -265,6 +301,8 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
   textFlag("Bold", "bold");
   // A cell's text is mirrored when its table is on a back layer; no verb sets it on its own, so the row only shows it.
   add({ owner: "PCB_TABLECELL", name: "Mirrored", kind: "bool", get: (i) => i.cell!.mirror, available: isCell }, TEXT);
+  // "Visible" (`EDA_TEXT_DESC`, available on a field only: `isField`).
+  add({ owner: "PCB_TABLECELL", name: "Visible", kind: "bool", get: () => true, available: () => false }, TEXT);
   const textSize = (name: "Width" | "Height", key: "size_w" | "size_h", edit: "width_nm" | "height_nm"): void => {
     add(
       {
@@ -315,6 +353,9 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
     TEXT
   );
 
+  // `PCB_TEXTBOX_DESC`'s Knockout, after EDA_TEXT's rows: the cell model has no knockout (a table's cells are never knocked out here).
+  add({ owner: "PCB_TABLECELL", name: "Knockout", kind: "bool", get: () => false, available: isCell, readOnlyReason: "A table cell is never knocked out in the studio's model." }, TEXT);
+
   // `PCB_TEXTBOX_DESC`'s "Margins": the four inner margins of the cell.
   const MARGINS = "Margins";
   (["Left", "Top", "Right", "Bottom"] as const).forEach((side, k) => {
@@ -337,33 +378,6 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       MARGINS
     );
   });
-
-  // `PCB_TABLECELL_DESC`'s "Table": the width of the cell's column and the height of its row.
-  const TABLE_GROUP = "Table";
-  add(
-    {
-      owner: "PCB_TABLECELL",
-      name: "Column Width",
-      kind: "int",
-      display: "size",
-      get: (i) => i.table!.col_widths[i.cell!.col]!,
-      available: isCell,
-      validate: (v) => (num(v) <= 0 ? "The column width must be positive." : null),
-      set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_nm: Math.round(num(v)) })]),
-    },
-    TABLE_GROUP
-  );
-  add(
-    {
-      owner: "PCB_TABLECELL",
-      name: "Row Height",
-      kind: "int",
-      display: "size",
-      get: (i) => i.table!.row_heights[i.cell!.row]!,
-      available: isCell,
-      validate: (v) => (num(v) <= 0 ? "The row height must be positive." : null),
-      set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_nm: Math.round(num(v)) })]),
-    },
-    TABLE_GROUP
-  );
+  absent("Pad Primitives", "Number Box", "Thermal Spoke Template");
+  absent("Shape Properties", "Center X", "Center Y", "Radius", "Angle", "Fill", "Start Shape", "Start Length", "Start Width", "Start Stroke Width", "End Shape", "End Length", "End Width", "End Stroke Width", "Fill Color");
 }

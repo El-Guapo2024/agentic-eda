@@ -3621,3 +3621,28 @@ fn deleting_a_ts_stem_merges_the_halves_whatever_their_strokes() {
     assert_eq!(sch.wires.len(), 1, "{:?}", sch.wires);
     assert!(sch.wires[0].pts.contains(&p(mm(10.16), mm(40.64))) && sch.wires[0].pts.contains(&p(mm(30.48), mm(40.64))));
 }
+
+/// UI-LEFT-2 PP26: the pad copper kept off the board edge is the copper where it is, a pad's offset (`PAD::ShapePos`) applied -- as KiCad's edge clearance
+/// measures `PAD::GetEffectiveShape` -- not the box of its size about its position (which holds the copper whichever way the offset points).
+#[test]
+fn the_edge_band_reads_a_pads_offset() {
+    use eda_model::footprint::{Footprint, Pad, PadKind, PadShape, PadShapeExt};
+    let mut pad = Pad { number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.0), mm(1.0)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: PadShapeExt::default() };
+    pad.ext.offset = Some((mm(1.0), Nm::ZERO));
+    let fp = Footprint { name: "O".into(), pads: vec![pad], courtyard: Some((mm(0.2), mm(0.2))), courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+    let mut j1 = part("J1", "O");
+    j1.footprint = Some("O".into());
+    j1.pins.truncate(1);
+    let mut m = model(vec![j1], &[], vec![]);
+    m.footprints = vec![fp];
+    let clearance = m.board.tuning.copper_edge_clearance();
+    let place = |rot: Millideg| {
+        let mut b = board(&m);
+        // the hole 1 mm in from the band: the copper, 1 mm to its right, is 1.5 mm clear of it; turned half way it reaches 0.5 mm into it
+        let at = Point { x: clearance + mm(1.0), y: mm(50.0) };
+        b.design.placement.as_mut().unwrap().footprints.push(FootprintInstance { id: "J1".into(), at, rot, side: Side::Top, label: LabelSide::Above });
+        b.parts_in_edge_band()
+    };
+    assert_eq!(place(0), 0, "the copper points away from the edge");
+    assert_eq!(place(180_000), 1, "the copper points at the edge");
+}

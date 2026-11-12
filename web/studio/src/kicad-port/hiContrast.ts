@@ -19,8 +19,8 @@ const inactive = (hiddenMode: boolean, hide = false): ContrastLook => (hide || h
 
 /**
  * A pad's copper on `copperLayer` (`PAD_COPPER_LAYER_FOR( layer )`, which `GetColor` maps back to the copper layer): active when that layer is the primary one
- * (`m_highContrastLayers.count( aLayer )`). A surface-mount pad's copper is its side's; a through-hole pad is drawn once in the studio, so it is active when it
- * flashes on the primary copper layer (`FlashLayer( primary )`, `flashesOnPrimary`) -- the primary layer's copper is the one KiCad brings to the top.
+ * (`m_highContrastLayers.count( aLayer )`). The board painter draws a pad on each copper layer it flashes on (UI-LEFT-2 PP3) and asks with `th: false`; `th`
+ * asks of a through-hole pad drawn once (the Footprint Editor's painter): active when it flashes on the primary copper layer.
  */
 export function padContrast(primary: string, pad: { th: boolean; copperLayer: string; flashesOnPrimary: boolean }, hiddenMode: boolean): ContrastLook {
   if (pad.th) return isCopper(primary) && pad.flashesOnPrimary ? "active" : inactive(hiddenMode);
@@ -28,11 +28,21 @@ export function padContrast(primary: string, pad: { th: boolean; copperLayer: st
 }
 
 /**
- * A pad's hole wall and hole (`LAYER_PAD_HOLEWALLS`, `LAYER_PAD_PLATEDHOLES`, `LAYER_NON_PLATEDHOLES`): "Pad holes are active is any physical layer is active"
- * (`LSET::PhysicalLayersMask().test( primary )`).
+ * A pad's hole wall and hole (`LAYER_PAD_HOLEWALLS`, `LAYER_PAD_PLATEDHOLES`, `LAYER_NON_PLATEDHOLES`): active when the layers made high contrast hold them --
+ * `SetHighContrastLayer` adds them with a copper layer primary only -- and a physical layer is primary ("Pad holes are active is any physical layer is active",
+ * `LSET::PhysicalLayersMask().test( primary )`): with a copper layer primary. (A technical layer primary leaves only itself high contrast, so a hole is dimmed.)
  */
 export function padHoleContrast(primary: string, hiddenMode: boolean): ContrastLook {
-  return isPhysicalLayer(primary) ? "active" : inactive(hiddenMode);
+  return isCopper(primary) && isPhysicalLayer(primary) ? "active" : inactive(hiddenMode);
+}
+
+/**
+ * A via's copper on copper layer `layer` (`VIA_COPPER_LAYER_FOR( layer )`, which `GetColor` maps back to the copper layer): active when that layer is the
+ * primary one (`m_highContrastLayers.count( aLayer )`). (`PCB_VIA::ViewGetLayers` puts a via on its copper layers, its holes and its net names; the via-type
+ * layers `LAYER_VIA_THROUGH` .. are not among them, so `GetColor`'s cases of those do not apply to it.)
+ */
+export function viaCopperContrast(primary: string, layer: string, hiddenMode: boolean): ContrastLook {
+  return layer === primary ? "active" : inactive(hiddenMode);
 }
 
 /** The via `GetColor` is asked about, as the board state has it. */
@@ -56,36 +66,11 @@ function viaSpans(via: ViaLike, layer: string, copper: readonly string[]): boole
 }
 
 /**
- * A via's ring (`LAYER_VIA_THROUGH`, `LAYER_VIA_BLIND`, `LAYER_VIA_BURIED`, `LAYER_VIA_MICROVIA`):
- * - a through via is active when the primary layer is copper and it flashes there; on a copper layer it does not flash on it is not drawn at all
- *   (`if( !via->FlashLayer( primary ) ) { isActive = false; if( IsCopperLayer( primary ) ) hide = true; }`), and with a technical layer primary it is dimmed;
- * - a blind, buried or micro via is active when it crosses the primary copper layer, and not drawn at all when it does not ("Target graphic is active if the
- *   via crosses the primary layer": `if( via->GetLayerSet().test( primary ) == 0 ) { isActive = false; hide = true; }`) -- its layer list is in the high
- *   contrast set only with a copper layer primary.
+ * A via's hole and hole wall (`LAYER_VIA_HOLES`, `LAYER_VIA_HOLEWALLS`): high contrast only with a copper layer primary (`SetHighContrastLayer`), and then a
+ * through via's is active ("A through via's hole is active if any physical layer is active"), a blind, buried or micro via's when it crosses the primary layer.
  */
-export function viaContrast(primary: string, via: ViaLike, copper: readonly string[], hiddenMode: boolean): ContrastLook {
-  if (via.type) return isCopper(primary) && viaSpans(via, primary, copper) ? "active" : "hide";
+export function viaHoleContrast(primary: string, via: ViaLike, copper: readonly string[], hiddenMode: boolean): ContrastLook {
   if (!isCopper(primary)) return inactive(hiddenMode);
-  const flashes = via.flashed ? via.flashed.includes(primary) : true;
-  return flashes ? "active" : "hide";
-}
-
-/** The board painter's copper buckets (components/canvas/layers.ts `BUCKET_ORDER`), back to front; every inner layer is drawn in `in2_cu`'s. */
-export const COPPER_BUCKETS: readonly string[] = ["b_cu", "in2_cu", "in1_cu", "f_cu"];
-
-/**
- * The painter's bucket order with the active copper layer's bucket moved over the other copper ones: `PCB_DRAW_PANEL_GAL::SetTopLayer`, which
- * `PCB_EDIT_FRAME::SetActiveLayer` calls through `SetHighContrastLayer` whatever the contrast mode (`m_view->SetTopLayer( aLayer )`, the layer's zones, pads and
- * vias with it). Unchanged for a technical layer or none.
- */
-export function activeCopperOnTop(order: readonly string[], activeLayer: string | null | undefined): string[] {
-  if (!activeLayer || !isCopper(activeLayer)) return [...order];
-  const key = activeLayer === "F.Cu" ? "f_cu" : activeLayer === "B.Cu" ? "b_cu" : "in2_cu";
-  const at = order.indexOf(key);
-  const last = order.reduce((acc, k, i) => (COPPER_BUCKETS.includes(k) ? i : acc), -1);
-  if (at < 0 || at >= last) return [...order];
-  const out = [...order];
-  out.splice(at, 1);
-  out.splice(last, 0, key);
-  return out;
+  if (via.type) return viaSpans(via, primary, copper) ? "active" : inactive(hiddenMode);
+  return "active";
 }

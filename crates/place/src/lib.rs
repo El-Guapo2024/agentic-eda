@@ -150,7 +150,57 @@ struct Item {
     /// A footprint on the back placed by [`place_partial`]: `pads` are mirrored (x to -x, as `to_board` mirrors a bottom-side part), so the geometry at a
     /// top-side pose is the part's on the back, and the instance written keeps `Side::Bottom`. Always false for [`place`].
     bottom: bool,
+    /// A piece of the board's bounding box that is not board -- a cutout, or the box's corner outside an outline that is not a rectangle -- as an
+    /// obstacle at this centre ([`place_partial_watched`]'s `blocked`): frozen, with no pads, no label and no spacing of its own.
+    obstacle: Option<(Nm, Nm)>,
 }
+
+/// Watches a run of [`place_partial_watched`] from another thread: how far it is (`progress`, per mille) and a request to stop (`cancel`), the
+/// studio's counterpart of the `WX_PROGRESS_REPORTER` with `PR_CAN_ABORT` that `AUTOPLACE_TOOL::autoplace` gives `AR_AUTOPLACER` (its
+/// `KeepRefreshing( false )` returning false ends the placement, `AR_ABORT_PLACEMENT`).
+#[derive(Debug, Default)]
+pub struct PlaceWatch {
+    cancel: std::sync::atomic::AtomicBool,
+    progress: std::sync::atomic::AtomicU32,
+    running: std::sync::atomic::AtomicBool,
+}
+
+impl PlaceWatch {
+    pub const fn new() -> Self {
+        PlaceWatch { cancel: std::sync::atomic::AtomicBool::new(false), progress: std::sync::atomic::AtomicU32::new(0), running: std::sync::atomic::AtomicBool::new(false) }
+    }
+    /// A new run starts: not cancelled, nothing done, running.
+    pub fn start(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.cancel.store(false, SeqCst);
+        self.progress.store(0, SeqCst);
+        self.running.store(true, SeqCst);
+    }
+    /// The run is over (placed, refused or cancelled).
+    pub fn finish(&self) {
+        self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// Abort: the run stops at its next look and returns [`PLACE_CANCELLED`].
+    pub fn cancel(&self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    pub fn running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// How far the run is, 0 to 1000.
+    pub fn progress(&self) -> u32 {
+        self.progress.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn report(&self, per_mille: u32) {
+        self.progress.fetch_max(per_mille.min(1000), std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The check code of a run [`PlaceWatch::cancel`] stopped.
+pub const PLACE_CANCELLED: &str = "place_cancelled";
 
 /// Indices of pads with an in-line neighbour within `pitch_max` on both
 /// sides (same row or same column).
@@ -332,9 +382,15 @@ struct Problem<'a> {
     /// The items the placer may move, in index order: every item for [`place`], the parts asked for in [`place_partial`] (the others are
     /// `Item::frozen`). The annealer, the polish and the rule repair pick from this list only.
     movable: Vec<usize>,
+    /// [`place_partial_watched`]'s watcher: the annealer reports its progress to it and stops when it is cancelled.
+    watch: Option<&'a PlaceWatch>,
 }
 
 impl Problem<'_> {
+    /// Has the run been aborted ([`PlaceWatch::cancel`])?
+    fn cancelled(&self) -> bool {
+        self.watch.is_some_and(PlaceWatch::cancelled)
+    }
     /// Courtyard (spacing-inflated) plus the refdes label box above it: the
     /// rectangle two parts must not share. Proximity gaps and outline
     /// containment still use the bare courtyard, as the gates do.
@@ -384,6 +440,9 @@ impl Problem<'_> {
 
     fn keepout_uncached(&self, i: usize, pose: Pose) -> (Nm, Nm, Nm, Nm) {
         let bare = courtyard(&self.items[i], pose);
+        if self.items[i].obstacle.is_some() {
+            return bare;
+        }
         let mut c = bare;
         let side = self.label_side(i, pose);
         let lane = if self.items[i].pads.len() <= 8 { self.escape_lane_small } else { self.escape_lane };
@@ -672,6 +731,10 @@ impl Problem<'_> {
         }
         let (mut x0, mut y0, mut x1, mut y1) = (Nm::MAX, Nm::MAX, Nm::MIN, Nm::MIN);
         for (i, it) in self.items.iter().enumerate() {
+            // a cutout is no part: the board's use is the parts'
+            if it.obstacle.is_some() {
+                continue;
+            }
             let r = courtyard(it, poses[i]);
             x0 = x0.min(r.0);
             y0 = y0.min(r.1);
@@ -862,6 +925,8 @@ struct Keep<'k> {
     movable: &'k BTreeSet<String>,
     fixed: HashMap<String, FootprintInstance>,
     bottom: BTreeSet<String>,
+    /// The rectangles of the board's box that are not board ([`place_partial_watched`]'s `blocked`), each an obstacle item.
+    blocked: &'k [(Nm, Nm, Nm, Nm)],
 }
 
 /// A footprint that stays where it is, as an item at a pose of rotation 0 on its position: the box of its courtyard turned as the board has it, its pads
@@ -879,7 +944,7 @@ fn frozen_item(part: &eda_model::Part, fp: &eda_model::footprint::Footprint, at:
         .collect();
     pads.sort_by(|a, b| a.0.cmp(&b.0));
     let boxed = boxed_pads(&pads, mm(1.3));
-    Item { id: part.reference.clone(), connector: false, half: (w / 2 + spacing, h / 2 + spacing), pads, pad_inset: Nm::ZERO, boxed, frozen: true, bottom: false }
+    Item { id: part.reference.clone(), connector: false, half: (w / 2 + spacing, h / 2 + spacing), pads, pad_inset: Nm::ZERO, boxed, frozen: true, bottom: false, obstacle: None }
 }
 
 fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<Problem<'a>, Vec<CheckResult>> {
@@ -911,7 +976,7 @@ fn build_problem_with<'a>(model: &'a ConstraintModel, opts: &PlaceOptions, keep:
                 let half = (hw + opts.spacing, hh + opts.spacing);
                 let pad_inset = fp.pads.iter().map(|p| (half.0 - p.at.0.abs() - p.size.0 / 2).min(half.1 - p.at.1.abs() - p.size.1 / 2)).min().unwrap_or(Nm::ZERO);
                 let boxed = boxed_pads(&pads, mm(1.3));
-                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed, frozen: false, bottom });
+                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed, frozen: false, bottom, obstacle: None });
             }
             // A footprint that stays and that the model has no geometry for is no obstacle it can know of.
             None if fixed.is_some() => {}
@@ -927,6 +992,13 @@ fn build_problem_with<'a>(model: &'a ConstraintModel, opts: &PlaceOptions, keep:
     }
     if items.is_empty() {
         return Err(vec![CheckResult::fail("place_precondition", "model", "no parts to place")]);
+    }
+    // What of the board's box is not board: each rectangle an obstacle the parts keep their copper-to-edge clearance from.
+    let edge = model.board.tuning.copper_edge_clearance();
+    for (k, r) in keep.map(|k| k.blocked).unwrap_or(&[]).iter().enumerate() {
+        let half = ((r.2 - r.0) / 2 + edge, (r.3 - r.1) / 2 + edge);
+        let centre = ((r.0 + r.2) / 2, (r.1 + r.3) / 2);
+        items.push(Item { id: format!("Edge.Cuts#{k}"), connector: false, half, pads: Vec::new(), pad_inset: Nm::ZERO, boxed: Vec::new(), frozen: true, bottom: false, obstacle: Some(centre) });
     }
     let index: HashMap<String, usize> = items.iter().enumerate().map(|(i, it)| (it.id.clone(), i)).collect();
 
@@ -1074,7 +1146,7 @@ fn build_problem_with<'a>(model: &'a ConstraintModel, opts: &PlaceOptions, keep:
     }
     let region: Vec<Option<(Nm, Nm, Nm, Nm)>> = items.iter().map(|it| opts.floorplan.as_ref().and_then(|f| f.region_of(&it.id))).collect();
     let movable = (0..items.len()).filter(|&i| !items[i].frozen).collect();
-    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, copper_edge: model.board.tuning.copper_edge_clearance(), outline, auto_outline, spacing: opts.spacing, font, model, bin_nm, congest_capacity, congest_nets, movable })
+    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, copper_edge: model.board.tuning.copper_edge_clearance(), outline, auto_outline, spacing: opts.spacing, font, model, bin_nm, congest_capacity, congest_nets, movable, watch: None })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -1230,6 +1302,15 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
 
     for step in 0..total_moves {
         let frac = step as f64 / total_moves.max(1) as f64;
+        // `KeepRefreshing( false )` every so often: the progress shown, and an abort ends the run (the caller returns it as cancelled)
+        if step % 1024 == 0 {
+            if let Some(w) = pb.watch {
+                if w.cancelled() {
+                    break;
+                }
+                w.report((frac * 900.0) as u32);
+            }
+        }
         let temp = t0 * (t_end / t0).powf(frac);
         let reach = (span * (1.0 - frac) * 0.5).max(opts.snap.as_f64() * 2.0);
 
@@ -2064,6 +2145,24 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
 /// them. A placement the legaliser cannot make overlap-free and inside the outline is refused with its offenders (`place_legalize`, `place_outside`,
 /// `place_overlap`), as [`place`] refuses one -- two footprints that stay are not offenders, whatever they overlap.
 pub fn place_partial(design: &Design, model: &ConstraintModel, opts: &PlaceOptions, movable: &BTreeSet<String>) -> Result<Vec<FootprintInstance>, Vec<CheckResult>> {
+    place_partial_watched(design, model, opts, movable, &[], None)
+}
+
+/// [`place_partial`] on a board whose box is not all board, watched from another thread.
+///
+/// `blocked` are the rectangles of the outline's bounding box that are not board: the cutouts and the corners outside an outline that is not a rectangle
+/// (the caller decomposes the board's outlines with their holes, `BOARD::GetBoardPolygonOutlines`); each is an obstacle no part may overlap, kept the
+/// copper-to-edge clearance from, so a part is not put in a hole of the board. `watch` gets the progress and may abort the run: it then returns
+/// [`PLACE_CANCELLED`] and nothing is placed (`AR_ABORT_PLACEMENT`, `commit.Revert()`).
+pub fn place_partial_watched(
+    design: &Design,
+    model: &ConstraintModel,
+    opts: &PlaceOptions,
+    movable: &BTreeSet<String>,
+    blocked: &[(Nm, Nm, Nm, Nm)],
+    watch: Option<&PlaceWatch>,
+) -> Result<Vec<FootprintInstance>, Vec<CheckResult>> {
+    let cancelled = || vec![CheckResult::fail(PLACE_CANCELLED, "autoplace", "the placement was aborted")];
     let placement = design.placement.as_ref();
     let outline = opts
         .outline
@@ -2080,9 +2179,11 @@ pub fn place_partial(design: &Design, model: &ConstraintModel, opts: &PlaceOptio
         movable,
         fixed: on_board(false).into_iter().map(|f| (f.id.clone(), f.clone())).collect(),
         bottom: on_board(true).into_iter().filter(|f| f.side == Side::Bottom).map(|f| f.id.clone()).collect(),
+        blocked,
     };
     let opts = PlaceOptions { outline: Some(outline), floorplan: None, ..opts.clone() };
     let mut pb = build_problem_with(model, &opts, Some(&keep))?;
+    pb.watch = watch;
     if pb.movable.is_empty() {
         return Ok(Vec::new());
     }
@@ -2092,9 +2193,12 @@ pub fn place_partial(design: &Design, model: &ConstraintModel, opts: &PlaceOptio
         .iter()
         .enumerate()
         .filter(|(_, it)| it.frozen)
-        .map(|(i, it)| {
-            let f = &keep.fixed[&it.id];
-            (i, Pose { x: f.at.x, y: f.at.y, rot: 0, label: f.label })
+        .map(|(i, it)| match it.obstacle {
+            Some((x, y)) => (i, Pose { x, y, rot: 0, label: LabelSide::Above }),
+            None => {
+                let f = &keep.fixed[&it.id];
+                (i, Pose { x: f.at.x, y: f.at.y, rot: 0, label: f.label })
+            }
         })
         .collect();
     let start = |pb: &Problem| -> Vec<Pose> {
@@ -2107,9 +2211,12 @@ pub fn place_partial(design: &Design, model: &ConstraintModel, opts: &PlaceOptio
     let reseeded = |retry: u64| PlaceOptions { seed: opts.seed.wrapping_add(retry.wrapping_mul(0x9E37_79B9)), ..opts.clone() };
     let mut poses = start(&pb);
     anneal(&pb, &mut poses, &opts);
+    if pb.cancelled() {
+        return Err(cancelled());
+    }
     let mut clean = legalize(&pb, &mut poses, opts.snap);
     for retry in 1..=3u64 {
-        if clean {
+        if clean || pb.cancelled() {
             break;
         }
         poses = start(&pb);
@@ -2120,13 +2227,19 @@ pub fn place_partial(design: &Design, model: &ConstraintModel, opts: &PlaceOptio
         pb.inner = pb.bbox;
         clean = legalize(&pb, &mut poses, opts.snap);
         for retry in 4..=6u64 {
-            if clean {
+            if clean || pb.cancelled() {
                 break;
             }
             poses = start(&pb);
             anneal(&pb, &mut poses, &reseeded(retry));
             clean = legalize(&pb, &mut poses, opts.snap);
         }
+    }
+    if pb.cancelled() {
+        return Err(cancelled());
+    }
+    if let Some(w) = watch {
+        w.report(900);
     }
     if clean {
         polish(&pb, &mut poses, opts.snap);
@@ -2135,6 +2248,12 @@ pub fn place_partial(design: &Design, model: &ConstraintModel, opts: &PlaceOptio
             repair_rules(&pb, &mut poses, opts.snap, false);
             clean = legalize(&pb, &mut poses, opts.snap);
         }
+    }
+    if pb.cancelled() {
+        return Err(cancelled());
+    }
+    if let Some(w) = watch {
+        w.report(1000);
     }
     if !clean {
         let mut fails = vec![CheckResult::fail("place_legalize", "design", "could not place the footprints without overlapping the others or leaving the board; make room or place fewer")];

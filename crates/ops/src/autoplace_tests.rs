@@ -164,3 +164,62 @@ fn the_verb_on_the_wire_and_in_the_log() {
     assert!(off.always_judged() && !off.clears_routing_in(&board(&model())), "always judged, never clears the routing");
     assert_eq!(serde_json::to_value(&off).unwrap(), serde_json::json!({"op": "autoplace", "offboard": true}));
 }
+
+/// UI-LEFT-2 PP20: what of the outline's box is not board, as the rectangles the placer keeps the parts off -- none for a rectangle, the hole for a
+/// board with a cutout, the corner an L-shaped board leaves -- and the rectangles never leave a point off the board uncovered.
+#[test]
+fn off_board_rects_cover_the_cutouts_and_the_corners_outside_the_outline() {
+    let mmi = |v: f64| (v * 1e6) as i64;
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![(mmi(x0), mmi(y0)), (mmi(x1), mmi(y0)), (mmi(x1), mmi(y1)), (mmi(x0), mmi(y1))];
+    let bbox = (Nm::ZERO, Nm::ZERO, mm(100.0), mm(100.0));
+    assert!(off_board_rects(&[rect(0.0, 0.0, 100.0, 100.0)], bbox).is_empty(), "a rectangle board is all board");
+    let covered = |rs: &[(Nm, Nm, Nm, Nm)], x: f64, y: f64| rs.iter().any(|r| r.0 <= mm(x) && mm(x) <= r.2 && r.1 <= mm(y) && mm(y) <= r.3);
+    // a square cutout 30..60 x 40..70
+    let rs = off_board_rects(&[rect(0.0, 0.0, 100.0, 100.0), rect(30.0, 40.0, 60.0, 70.0)], bbox);
+    assert!(covered(&rs, 45.0, 55.0) && covered(&rs, 31.0, 41.0) && covered(&rs, 59.0, 69.0));
+    assert!(!covered(&rs, 20.0, 55.0) && !covered(&rs, 45.0, 30.0) && !covered(&rs, 70.0, 80.0));
+    // an L: the top right quarter is not board
+    let l = vec![(0, 0), (mmi(50.0), 0), (mmi(50.0), mmi(50.0)), (mmi(100.0), mmi(50.0)), (mmi(100.0), mmi(100.0)), (0, mmi(100.0))];
+    let rs = off_board_rects(&[l], bbox);
+    assert!(covered(&rs, 75.0, 25.0) && !covered(&rs, 25.0, 25.0) && !covered(&rs, 75.0, 75.0));
+    // a round cutout: every point inside the circle is covered (the strips round outward), points well outside are not
+    let circle: Vec<(i64, i64)> = (0..64).map(|k| {
+        let a = k as f64 * std::f64::consts::TAU / 64.0;
+        (mmi(50.0 + 10.0 * a.cos()), mmi(50.0 + 10.0 * a.sin()))
+    }).collect();
+    let rs = off_board_rects(&[rect(0.0, 0.0, 100.0, 100.0), circle], bbox);
+    assert!(rs.len() <= 64, "{} rectangles", rs.len());
+    for k in 0..36 {
+        let a = k as f64 * std::f64::consts::TAU / 36.0;
+        assert!(covered(&rs, 50.0 + 9.5 * a.cos(), 50.0 + 9.5 * a.sin()), "a point in the hole at {k}");
+    }
+    assert!(!covered(&rs, 50.0, 30.0) && !covered(&rs, 20.0, 50.0));
+}
+
+/// UI-LEFT-2 PP20: Auto-Place keeps the parts out of a cutout of the board (`AR_AUTOPLACER` works on `GetBoardPolygonOutlines`, the holes included); it
+/// worked from the outline's box, so a part could land in the hole.
+#[test]
+fn autoplace_keeps_the_parts_out_of_a_board_cutout() {
+    let m = model();
+    let mut d = crate::tests::empty_design();
+    d.drawings = Some(eda_model::ir::DrawingsSection {
+        shapes: vec![
+            eda_model::ir::Shape::Rect { id: "shp_edge".into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: at(0.0, 0.0), end: at(60.0, 40.0) },
+            // a cutout over most of the middle: 10..50 x 8..32 mm
+            eda_model::ir::Shape::Rect { id: "shp_hole".into(), layer: "Edge.Cuts".into(), stroke_width: mm(0.1), filled: false, start: at(10.0, 8.0), end: at(50.0, 32.0) },
+        ],
+        outline_is_shapes: true,
+        ..Default::default()
+    });
+    eda_drc::outline::refresh_outline_summary(&mut d, None);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::Autoplace(AutoplaceCmd { offboard: true, ..Default::default() })).unwrap();
+    let placed = poses(&b);
+    assert_eq!(placed.len(), 6, "{placed:?}");
+    for (r, (p, _, _)) in &placed {
+        let inside = p.x > mm(10.0) && p.x < mm(50.0) && p.y > mm(8.0) && p.y < mm(32.0);
+        assert!(!inside, "{r} at {p:?} is in the cutout");
+    }
+    assert!(!AUTOPLACE_WATCH.running(), "the run is over");
+    assert_eq!(AUTOPLACE_WATCH.progress(), 1000);
+}

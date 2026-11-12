@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EDGE_CUTS_DIM_FACTOR, HI_CONTRAST_FACTOR, hiContrastDim, highlightDarken, mix, parseColor, ratsnestCurveControl, ratsnestLineColor } from "./color4d";
-import { activeCopperOnTop, padContrast, padHoleContrast, viaContrast } from "./hiContrast";
+import { padContrast, padHoleContrast, viaCopperContrast, viaHoleContrast } from "./hiContrast";
 
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} vs ${b}`);
 
@@ -66,26 +66,19 @@ test("High Contrast Mode: a pad is active on its copper layer, a through-hole pa
   assert.equal(padContrast("In1.Cu", { th: true, copperLayer: "F.Cu", flashesOnPrimary: true }, false), "active");
   assert.equal(padContrast("In1.Cu", { th: true, copperLayer: "F.Cu", flashesOnPrimary: false }, false), "dim");
   assert.equal(padContrast("F.SilkS", { th: true, copperLayer: "F.Cu", flashesOnPrimary: false }, false), "dim");
-  assert.equal(padHoleContrast("F.SilkS", false), "active", "a hole is active on any physical layer");
-  assert.equal(padHoleContrast("F.Fab", false), "dim");
+  // `LAYER_PAD_PLATEDHOLES` is high contrast with a copper layer primary only: a technical layer primary dims the holes
+  assert.equal(padHoleContrast("In1.Cu", false), "active");
+  assert.equal(padHoleContrast("F.SilkS", false), "dim");
+  assert.equal(padHoleContrast("F.Fab", true), "hide");
 });
 
-test("High Contrast Mode: a through via is hidden on a copper layer it does not flash on, a blind via off its span", () => {
+test("High Contrast Mode: a via's copper is active on the primary layer only, its hole with a copper layer primary (a blind via's on its span)", () => {
   const copper = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
-  assert.equal(viaContrast("In1.Cu", { from: "F.Cu", to: "B.Cu" }, copper, false), "active");
-  assert.equal(viaContrast("In1.Cu", { from: "F.Cu", to: "B.Cu", flashed: ["F.Cu", "B.Cu"] }, copper, false), "hide");
-  assert.equal(viaContrast("F.SilkS", { from: "F.Cu", to: "B.Cu" }, copper, false), "dim");
-  assert.equal(viaContrast("F.SilkS", { from: "F.Cu", to: "B.Cu" }, copper, true), "hide");
-  assert.equal(viaContrast("In1.Cu", { type: "blind", from: "F.Cu", to: "In1.Cu" }, copper, false), "active");
-  assert.equal(viaContrast("B.Cu", { type: "blind", from: "F.Cu", to: "In1.Cu" }, copper, false), "hide");
-  assert.equal(viaContrast("F.SilkS", { type: "micro", from: "F.Cu", to: "In1.Cu" }, copper, false), "hide");
-});
-
-test("SetTopLayer: the active copper layer's bucket is drawn over the other copper ones, the rest of the order kept", () => {
-  const order = ["background", "b_cu", "in2_cu", "in1_cu", "f_cu", "b_mask", "f_silks", "ratsnest"];
-  assert.deepEqual(activeCopperOnTop(order, "F.Cu"), order);
-  assert.deepEqual(activeCopperOnTop(order, "B.Cu"), ["background", "in2_cu", "in1_cu", "f_cu", "b_cu", "b_mask", "f_silks", "ratsnest"]);
-  assert.deepEqual(activeCopperOnTop(order, "In3.Cu"), ["background", "b_cu", "in1_cu", "f_cu", "in2_cu", "b_mask", "f_silks", "ratsnest"]);
-  assert.deepEqual(activeCopperOnTop(order, "f_silks"), order);
-  assert.deepEqual(activeCopperOnTop(order, null), order);
+  assert.equal(viaCopperContrast("In1.Cu", "In1.Cu", false), "active");
+  assert.equal(viaCopperContrast("In1.Cu", "F.Cu", false), "dim");
+  assert.equal(viaCopperContrast("F.SilkS", "F.Cu", true), "hide");
+  assert.equal(viaHoleContrast("In2.Cu", { from: "F.Cu", to: "B.Cu" }, copper, false), "active");
+  assert.equal(viaHoleContrast("F.SilkS", { from: "F.Cu", to: "B.Cu" }, copper, false), "dim");
+  assert.equal(viaHoleContrast("In1.Cu", { type: "blind", from: "F.Cu", to: "In1.Cu" }, copper, false), "active");
+  assert.equal(viaHoleContrast("B.Cu", { type: "blind", from: "F.Cu", to: "In1.Cu" }, copper, false), "dim");
 });

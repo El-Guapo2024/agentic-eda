@@ -28,6 +28,7 @@ import { HotkeysDialog } from "./components/HotkeysDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
 import { CommonOverlay } from "./components/CommonOverlay";
+import { ProgressReporterDialog } from "./components/ProgressReporterDialog";
 import { CommonToolHost } from "./components/CommonToolHost";
 import { CommonDialogs } from "./components/CommonDialogs";
 import { DesignBlockDialogs } from "./components/designBlocks/DesignBlockDialogs";
@@ -244,6 +245,8 @@ function StudioFrame() {
           {!is3d && <CommonOverlay />}
           {!is3d && <CommonToolHost />}
           <Toast />
+          {/* `WX_PROGRESS_REPORTER`'s window of a long job (Auto-Place Footprints) */}
+          <ProgressReporterDialog />
           {/* Migrate 3D Models when the board opens (`PCB_EDIT_FRAME::OnBoardLoaded`) and its load notice */}
           <AutoMigrate3dModels />
         </div>

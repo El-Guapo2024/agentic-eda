@@ -43,6 +43,17 @@ pub struct PlacedPad {
 }
 
 impl PlacedPad {
+    /// The board-space box `(x0, y0, x1, y1)` of the pad's copper: its pieces' where it has them (a pad whose copper is off its position --
+    /// `PAD::ShapePos` = the position plus the turned offset, `PAD::GetEffectiveShape` -- a trapezoid, a chamfered or custom pad), else the box of
+    /// `size` about `center`. `size` is symmetric about the position (it must hold the copper whichever way the offset points), so for a pad with an
+    /// offset this box is the copper's and `size` overstates it on the side away from the offset.
+    pub fn copper_bounds(&self) -> (Nm, Nm, Nm, Nm) {
+        match crate::pad_geom::pieces_bbox(&self.pieces) {
+            Some((x0, y0, x1, y1)) => (Nm::new(x0.floor() as i64), Nm::new(y0.floor() as i64), Nm::new(x1.ceil() as i64), Nm::new(y1.ceil() as i64)),
+            None => (self.center.x - self.size.0 / 2, self.center.y - self.size.1 / 2, self.center.x + self.size.0 / 2, self.center.y + self.size.1 / 2),
+        }
+    }
+
     /// Round pads (circle/oval) have no copper in the corners of their
     /// bounding box; treat them as an ellipse for containment.
     pub fn is_round(&self) -> bool {

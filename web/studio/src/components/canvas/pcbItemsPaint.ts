@@ -24,7 +24,7 @@ import { dashPattern } from "../schematic/schGraphicsPainter";
 import { on, opacityOf } from "./appearancePaint";
 import { imageFor } from "./imageCache";
 import { layerColor } from "./layers";
-import { refImageLayerAlpha, withAlpha, withBoardLayer, withLayer, type PaintOptions } from "./painter";
+import { inPass, refImageLayerAlpha, withAlpha, withBoardLayer, withLayer, type PaintOptions } from "./painter";
 import { hairlineNm } from "./view";
 import type { ViewTransform } from "../../state/store";
 
@@ -116,11 +116,13 @@ export function drawRefImages(ctx: CanvasRenderingContext2D, view: ViewTransform
   const opacity = opacityOf(opts.appearance, "images");
   if (opacity <= 0) return;
   for (const i of images) {
-    if (!layerIsVisible(opts.layerVisible, i.layer)) continue;
+    // in the image pass of its layer (`BITMAP_LAYER_FOR`, UI-LEFT-2 PP3)
+    if (!layerIsVisible(opts.layerVisible, i.layer) || !inPass(opts, layerStateKey(i.layer), "bitmap")) continue;
     const dim = refImageLayerAlpha(opts, layerStateKey(i.layer));
     withAlpha(ctx, dim, () => paintRefImage(ctx, view, i, colourAlpha(i.layer) * opacity, opts.selection.has(i.id)));
   }
   for (const { image: i, part } of ofFootprints) {
+    if (!inPass(opts, layerStateKey(i.layer), "bitmap")) continue;
     const dim = refImageLayerAlpha(opts, layerStateKey(i.layer));
     // a footprint in a preview that is not the carry (Pack and Move's block: painter.ts `drawFootprint` moves it by the preview's offset) takes its image along
     const preview = opts.movePreview && opts.movePreview.kind !== "pcb" && opts.movePreview.refs.includes(part.ref) ? opts.movePreview : null;
@@ -147,6 +149,7 @@ export function drawPoints(ctx: CanvasRenderingContext2D, view: ViewTransform, b
 export function drawPoint(ctx: CanvasRenderingContext2D, view: ViewTransform, p: BoardPoint, selected: boolean, opts: PaintOptions): void {
   if (!on(opts.layerVisible, "ly_points") || !layerIsVisible(opts.layerVisible, p.layer)) return;
   const half = p.size / 2;
+  // in the point pass of its layer (`POINT_LAYER_FOR`)
   withLayer(ctx, opts, layerStateKey(p.layer), 1, () => {
     ctx.save();
     ctx.lineWidth = hairlineNm(view, selected ? 2 : 1);
@@ -163,7 +166,7 @@ export function drawPoint(ctx: CanvasRenderingContext2D, view: ViewTransform, p:
     ctx.arc(p.x, p.y, half / 2, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
-  });
+  }, false, "point");
 }
 
 /** Every item of the kinds this module draws that the board has, and the rubber band of the tool in progress. */
@@ -171,6 +174,8 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
   drawTextBoxes(ctx, view, board, opts);
   drawBarcodes(ctx, view, board, opts);
   drawPoints(ctx, view, board, opts);
+  // the tool's rubber band is the overlay's (`LAYER_GP_OVERLAY`), drawn once outside the layer passes
+  if (opts.galPass) return;
   const cursor = opts.snappedCursor ?? (opts.cursorNm ? ([opts.cursorNm.x, opts.cursorNm.y] as const) : null);
   // The image in the hand follows the cursor, centred on it, at the alpha it will have.
   if (toolPreview?.kind === "image" && cursor && !opts.movePreview) {

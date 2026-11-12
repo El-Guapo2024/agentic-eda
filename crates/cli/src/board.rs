@@ -298,7 +298,8 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
 
 /// `model.instance_footprints` for every footprint whose pad edits change the geometry the engine knows (shape, size, hole, type,
 /// rotation, corner radius) or whose list of 3D models was set: the library footprint with the edits laid on ([`eda_model::fp_edit::edited_footprint`]).
-/// [`load`] calls it after the parts are all there; what the engine has no field for (a pad's offset and margins) stays in the design for the writer. A list of 3D
+/// [`load`] calls it after the parts are all there; a pad's offset is the engine pad's (`PadShapeExt::offset`: the placed copper, the derived courtyard and the
+/// checks read it), and what the engine has no field for (a pad's mask and paste margins) stays in the design for the writer. A list of 3D
 /// models that was set also puts the reference in `model.edited_models`, so that an empty list is read as no model and not as no list.
 pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     model.instance_footprints.clear();

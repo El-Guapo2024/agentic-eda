@@ -141,6 +141,19 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
                         }
                         return;
                     }
+                    // Auto-Place's progress window (UI-LEFT-2 PP20, `WX_PROGRESS_REPORTER` with `PR_CAN_ABORT`): the autoplacer's `/api/cmd` holds the loop while
+                    // it runs, so its progress and its Abort are answered here, on the connection's own thread (`eda_ops::autoplace::AUTOPLACE_WATCH`).
+                    if head[..n].starts_with(b"GET /api/autoplace/progress") || head[..n].starts_with(b"POST /api/autoplace/abort") {
+                        if read_request(&stream).is_ok() {
+                            let watch = &eda_ops::autoplace::AUTOPLACE_WATCH;
+                            if head[..n].starts_with(b"POST") {
+                                watch.cancel();
+                            }
+                            let body = serde_json::json!({ "running": watch.running(), "progress": watch.progress(), "cancelled": watch.cancelled() });
+                            let _ = respond(&mut stream, "200 OK", "application/json", body.to_string().as_bytes());
+                        }
+                        return;
+                    }
                     let _ = ready.send(stream);
                 });
             }
