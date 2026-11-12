@@ -886,10 +886,6 @@ export interface StudioState {
   drcError: string | null;
   /** The board revision (the `version` stamp) the current `drc` report was computed on -- the server's own (`drc.revision`); when it differs from `version`, the board has moved on and the report is out of date (kicad-port/checkRevision.ts). */
   drcVersion: string | null;
-  /** "Refill all zones before performing DRC": kicad-cli's filler runs first, on a copy of the board, and the DRC then judges the board with that fill (the courtyard checks stay). Off by default. */
-  drcRefillZones: boolean;
-  /** "Test for parity between PCB and schematic" (`--schematic-parity`): the next run also compares the board with the schematic (the Schematic Parity tab). */
-  drcParity: boolean;
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
   /** Same, for the dialog's Lint tab (`lint.pcb.violations`). */
@@ -1089,8 +1085,6 @@ const initialState: StudioState = {
   drcRunning: false,
   drcError: null,
   drcVersion: null,
-  drcRefillZones: true, // `dialog_drc_base.cpp`: `m_cbRefillZones->SetValue(true);` -- never read from the settings (R6-D6)
-  drcParity: false,
   drcSelected: null,
   drcLintSelected: null,
   ercDialogOpen: false,
@@ -1205,8 +1199,6 @@ export type Action =
   | { type: "DRC_ERR"; message: string }
   /** `BOARD::DeleteMARKERs` (Global Deletions > Delete Markers): the last report and its markers go. */
   | { type: "DRC_CLEAR" }
-  | { type: "SET_DRC_REFILL"; refill: boolean }
-  | { type: "SET_DRC_PARITY"; parity: boolean }
   /** Waive or restore DRC violations in the report on screen without running kicad-cli again (the exclusion itself is a persisted `Cmd`); `version` as for `ERC_MARK_EXCLUDED`. */
   | { type: "DRC_PATCH_EXCLUDED"; keys: ReadonlyArray<{ check: string; items: string[] }>; excluded: boolean; comment: string; version: string | null; /** One marker from its row: it keeps its place in the list (`ValueChanged`, r2 D-E3). */ hold?: boolean }
   /** The DRC dialog's provider refilters (`RC_TREE_MODEL::Update`, e.g. a Show box changed): every row is sorted afresh (r2 D-E3). */
@@ -1650,10 +1642,6 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drcRunning: false, drcError: action.message };
     case "DRC_CLEAR":
       return { ...state, drc: null, drcVersion: null, drcSelected: null };
-    case "SET_DRC_REFILL":
-      return { ...state, drcRefillZones: action.refill };
-    case "SET_DRC_PARITY":
-      return { ...state, drcParity: action.parity };
     case "DRC_PATCH_EXCLUDED":
       if (!state.drc) return state;
       return { ...state, drc: patchDrcExcluded(state.drc, action.keys, action.excluded, action.comment, action.hold === true), drcVersion: action.version };
@@ -2087,8 +2075,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     const askedAt = stateRef.current.version;
     dispatch({ type: "DRC_RUNNING" });
     try {
-      // the dialog's options menu: "Report All Errors for Each Track" (`DRC_TOOL::RunTests( .., m_report_all_track_errors, .. )`)
-      const drc = await fetchDrc(stateRef.current.drcRefillZones, stateRef.current.drcParity, getCheckerView().drc.options.reportAllTrackErrors);
+      // the dialog's Refill and Parity boxes (kept, state/checkerView.ts) and its options menu: "Report All Errors for Each Track" (`DRC_TOOL::RunTests( .., m_report_all_track_errors, .. )`)
+      const drc = await fetchDrc(getCheckerView().drc.run.refillZones, getCheckerView().drc.run.parity, getCheckerView().drc.options.reportAllTrackErrors);
       dispatch({ type: "DRC_OK", drc, version: revisionOf(drc, askedAt) });
     } catch (e) {
       dispatch({ type: "DRC_ERR", message: e instanceof Error ? e.message : String(e) });

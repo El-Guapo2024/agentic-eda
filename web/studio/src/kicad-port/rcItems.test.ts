@@ -4,6 +4,10 @@ import assert from "node:assert/strict";
 import type { DrcReport, DrcViolation, ErcReport, ErcViolation } from "../api/types";
 import {
   DRC_MENU_DEFAULTS,
+  DRC_RUN_START,
+  ERC_MENU_DEFAULTS,
+  ERC_SHOW_START,
+  savedErcControls,
   DRC_SHOW_START,
   SHOW_ALL,
   allShown,
@@ -76,14 +80,33 @@ test("the DRC dialog's Show boxes start as its base has them and its options men
   assert.equal(isListed("exclusion", DRC_SHOW_START), false);
   // PCBNEW_SETTINGS: drc_dialog.report_all_track_errors false, crossprobe true, scroll_on_crossprobe true
   assert.deepEqual(DRC_MENU_DEFAULTS, { reportAllTrackErrors: false, crossprobe: true, scrollOnCrossprobe: true });
-  assert.deepEqual(savedDrcControls(null), { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS });
+  assert.deepEqual(savedDrcControls(null), { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS, run: DRC_RUN_START });
+  // dialog_drc_base.cpp: m_cbRefillZones->SetValue(true); m_cbTestFootprints unchecked
+  assert.deepEqual(DRC_RUN_START, { refillZones: true, parity: false });
   // DIALOG_SHIM::LoadControlState: what was left last time, each value on its own
   const kept = savedDrcControls(JSON.stringify({ filter: { errors: true, warnings: false, exclusions: true, all: true }, options: { reportAllTrackErrors: true, crossprobe: false } }));
   assert.deepEqual(kept.filter, { errors: true, warnings: false, exclusions: true, all: true });
   assert.deepEqual(kept.options, { reportAllTrackErrors: true, crossprobe: false, scrollOnCrossprobe: true });
+  assert.deepEqual(kept.run, DRC_RUN_START, "no run boxes kept: as they start");
+  // KiCad 25ec2335 SaveControlState keeps every check box of the dialog, the Refill and Parity boxes too
+  assert.deepEqual(savedDrcControls(JSON.stringify({ run: { refillZones: false, parity: true } })).run, { refillZones: false, parity: true });
+  assert.deepEqual(savedDrcControls(JSON.stringify({ run: { refillZones: "no" } })).run, DRC_RUN_START);
   // something else in the slot is the start state
-  assert.deepEqual(savedDrcControls("not json"), { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS });
+  assert.deepEqual(savedDrcControls("not json"), { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS, run: DRC_RUN_START });
   assert.deepEqual(savedDrcControls(JSON.stringify({ filter: { exclusions: "yes" } })).filter, DRC_SHOW_START);
+});
+
+test("the ERC dialog's Show boxes start unticked as its base has them and its options menu as eeschema's settings do, then as they were left", () => {
+  // dialog_erc_base.fbp: no `checked` property set on m_showAll, m_showErrors, m_showWarnings, m_showExclusions
+  assert.deepEqual(ERC_SHOW_START, { errors: false, warnings: false, exclusions: false, all: false });
+  assert.equal(isListed("error", ERC_SHOW_START), false);
+  // EESCHEMA_SETTINGS: ERC.crossprobe true, ERC.scroll_on_crossprobe true, ERC.show_all_errors false
+  assert.deepEqual(ERC_MENU_DEFAULTS, { crossprobe: true, scrollOnCrossprobe: true, showAllErrors: false });
+  assert.deepEqual(savedErcControls(null), { filter: ERC_SHOW_START, options: ERC_MENU_DEFAULTS });
+  const kept = savedErcControls(JSON.stringify({ filter: { errors: true, warnings: true }, options: { scrollOnCrossprobe: false, showAllErrors: true } }));
+  assert.deepEqual(kept.filter, { errors: true, warnings: true, exclusions: false, all: false });
+  assert.deepEqual(kept.options, { crossprobe: true, scrollOnCrossprobe: false, showAllErrors: true });
+  assert.deepEqual(savedErcControls("{"), { filter: ERC_SHOW_START, options: ERC_MENU_DEFAULTS });
 });
 
 test("the counts are of every marker, whatever the Show boxes say, and the exclusions are their own", () => {

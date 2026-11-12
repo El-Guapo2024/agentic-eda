@@ -81,10 +81,11 @@ pub(crate) fn clear_drc_exclusions(design: &mut Design) -> Done {
 ///
 /// The pin-to-pin error's slot (`erc_checks::PIN_TO_PIN_ERROR_SLOT`, which no project names) comes in the same table from the ERC dialog's Ignore on a
 /// pin-to-pin error (`DIALOG_ERC::OnERCItemRClick`: `SetSeverity( ERCE_PIN_TO_PIN_ERROR, IGNORE )` and the warning's too), and is kept beside the table
-/// (`SchExtras::pin_to_pin_errors_ignored`), not in it. A table without it keeps what was there, as Schematic Setup's page leaves the error's slot alone
-/// (`PANEL_SETUP_SEVERITIES` lists `GetItemsWithSeverities`, which ends before `pinTableError`). **Differs**: KiCad forgets it when the project is
-/// reopened, and keeps it when the warning is set back from the Ignored Tests list; the studio has no session to end, so it holds while `pin_to_pin`
-/// is ignored and goes when the table sets `pin_to_pin` back (r3 D3-M2).
+/// (`SchExtras::pin_to_pin_errors_ignored`), not in it. A table without it keeps what was there, as Schematic Setup's page and the Ignored Tests list leave
+/// the error's slot alone (`PANEL_SETUP_SEVERITIES` lists `GetItemsWithSeverities`, which ends before `pinTableError`; KiCad 25ec2335
+/// `ERC_SETTINGS::GetSeverity` reads each pin-to-pin slot on its own): setting `pin_to_pin` back, or resetting the table to KiCad's defaults, keeps the
+/// errors ignored. A table that names the slot at another severity takes the ignore away. **Differs**: KiCad forgets it when the project is reopened (no
+/// project key holds it); the studio keeps every setting in `design.json` (one undoable verb per edit), so it holds until a table sets the slot back.
 pub(crate) fn set_erc_severities(design: &mut Design, severities: &BTreeMap<String, String>) -> Done {
     for (key, severity) in severities {
         if !erc_checks::is_erc_check(key) && key != erc_checks::PIN_TO_PIN_ERROR_SLOT {
@@ -97,8 +98,7 @@ pub(crate) fn set_erc_severities(design: &mut Design, severities: &BTreeMap<Stri
     let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
     let mut table = severities.clone();
     let error_slot = table.remove(erc_checks::PIN_TO_PIN_ERROR_SLOT);
-    let warning_ignored = table.get("pin_to_pin").map(String::as_str) == Some("ignore");
-    sch.extras.pin_to_pin_errors_ignored = warning_ignored && error_slot.map_or(sch.extras.pin_to_pin_errors_ignored, |s| s == "ignore");
+    sch.extras.pin_to_pin_errors_ignored = error_slot.map_or(sch.extras.pin_to_pin_errors_ignored, |s| s == "ignore");
     sch.extras.erc_severities = table;
     Ok(())
 }

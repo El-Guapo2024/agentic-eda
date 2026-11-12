@@ -329,3 +329,178 @@ fn a_track_clearance_and_a_crossing_reach_kicad_cli_and_all_track_errors_reports
     assert_eq!((kicad_cli_drc_lists(&dir, &excluded, "clearance"), kicad_cli_drc_lists(&dir, &excluded, "tracks_crossing")), (1, 1), "one excluded marker each");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-2 BB1 (slow tier): a clearance between a track and a pad, and between a via and a pad, is placed where KiCad's collision of the track's
+/// segment or the via's circle with the pad's compound puts it (`eda_kicad::drc_exclusions::board_copper`, `collide`: `Collide( const SHAPE_RECT&,
+/// const SHAPE_SEGMENT& )`, `Collide( const SHAPE_RECT&, const SHAPE_CIRCLE& )`), so an exclusion of either reaches kicad-cli.
+#[test]
+fn a_pad_clearance_reaches_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    // the pads as a rectangle (`SHAPE_RECT`), a rounded rectangle (the inset rectangle and four side segments), a circle and an oval
+    for (shape, ratio, size) in [(eda_model::PadShape::Rect, None, (0.8, 0.8)), (eda_model::PadShape::RoundRect, Some(0.25), (0.8, 0.8)), (eda_model::PadShape::Circle, None, (0.8, 0.8)), (eda_model::PadShape::Oval, None, (0.8, 1.2))] {
+        pad_clearance_reaches_kicad_cli(shape, ratio, size);
+    }
+}
+
+fn pad_clearance_reaches_kicad_cli(shape: eda_model::PadShape, ratio: Option<f64>, size: (f64, f64)) {
+    let dir = scratch(&format!("review_drc_pads_{shape:?}"));
+    setup(&dir);
+    let intent = dir.join("intent.yaml");
+    let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    for pad in &mut model.footprints[0].pads {
+        pad.shape = shape;
+        pad.roundrect_ratio = ratio;
+        pad.size = (mm(size.0), mm(size.1));
+    }
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    let pt = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
+    // U1.2 (VCC) is a 0.8 mm square at (6, 5). A GND track from U2.1 (14, 5) stops 0.15 mm from its right side; a GND track from U1.1 (4, 5) runs
+    // below it to a GND via whose copper comes 0.15 mm from its bottom side.
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(14.0, 5.0), pt(6.65, 5.0)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(4.0, 5.0), pt(4.0, 7.0), pt(7.5, 7.0), pt(7.5, 5.85), pt(6.0, 5.85)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddVia { net: "GND".into(), x: mm(6.0), y: mm(5.85), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+    // A VCC track from U2.2 (16, 5) passing 0.05 mm under the via (its copper and its hole: `clearance` and `hole_clearance`), and a GND track from U2.1
+    // ending 0.2 mm from the board's bottom edge (`copper_edge_clearance`).
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(16.0, 5.0), pt(16.0, 6.3), pt(5.0, 6.3)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(14.0, 5.0), pt(14.0, 19.7)] }, false, "test").unwrap();
+    let every = eda_kicad_engine::DrcOptions { all_track_errors: true, ..Default::default() };
+    let all = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    let pad_rows: Vec<Value> = drc_rows(&all, "clearance").into_iter().filter(|v| v["items"].as_array().unwrap().iter().any(|i| i["description"].as_str().unwrap_or("").starts_with("Pad"))).collect();
+    assert!(pad_rows.len() >= 2, "{shape:?}: a track and a via too near the pad: {all:#}");
+    let holes = drc_rows(&all, "hole_clearance");
+    let edges = drc_rows(&all, "copper_edge_clearance");
+    assert!(!holes.is_empty() && !edges.is_empty(), "{shape:?}: a hole clearance and an edge clearance: {all:#}");
+    let rows: Vec<Value> = pad_rows.iter().chain(&holes).chain(&edges).cloned().collect();
+    step(&dir, Cmd::AddDrcExclusions { exclusions: rows.iter().map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+    let after = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    let waived: Vec<Value> = ["clearance", "hole_clearance", "copper_edge_clearance"].iter().flat_map(|k| drc_rows(&after, k)).filter(|v| v["excluded"] == true).collect();
+    assert_eq!(waived.len(), rows.len(), "{shape:?}: {after:#}");
+    for v in &waived {
+        assert_eq!(v["kicad_matched"], true, "{shape:?}: kicad-cli matched the exclusion at the point the studio computed: {v:#}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// UI-LEFT-2 BB1 (slow tier): a clearance or a short between two pads of two footprints is placed where KiCad's collision of their compounds puts it:
+/// two rectangles (`Collide( SHAPE_RECT, SHAPE_RECT )`: their outlines as line chains), two turned rectangles and two chamfered ones (two `SHAPE_SIMPLE`s),
+/// pads whose copper is off their hole (`ShapePos`) and custom pads (the anchor and a polygon primitive) -- so each exclusion reaches kicad-cli.
+#[test]
+fn a_pad_to_pad_clearance_reaches_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    let poly = |pts: &[(f64, f64)]| -> eda_model::footprint::PadPrimitive {
+        serde_json::from_value(serde_json::json!({ "shape": { "kind": "polygon", "layer": "F.Cu", "stroke_width": 0, "filled": true,
+            "pts": pts.iter().map(|&(x, y)| serde_json::json!({ "x": mm(x).get(), "y": mm(y).get() })).collect::<Vec<_>>() } })).unwrap()
+    };
+    let variants: Vec<(&str, f64, Box<dyn Fn(&mut eda_model::Pad)>)> = vec![
+        ("rect", 7.9, Box::new(|_p: &mut eda_model::Pad| {})),
+        ("turned", 8.05, Box::new(|p: &mut eda_model::Pad| p.rot = 30_000)),
+        ("chamfered", 7.9, Box::new(|p: &mut eda_model::Pad| {
+            p.shape = eda_model::PadShape::ChamferedRect;
+            p.ext.chamfer_ratio = Some(0.25);
+            p.ext.chamfer_corners = eda_model::ir::ChamferCorners { top_left: true, top_right: true, bottom_left: true, bottom_right: true };
+        })),
+        ("offset", 7.9, Box::new(|p: &mut eda_model::Pad| {
+            p.kind = eda_model::PadKind::ThroughHole;
+            p.drill = Some(mm(0.3));
+            p.ext.offset = Some((mm(0.1), Nm::ZERO));
+        })),
+        ("custom", 7.9, Box::new(move |p: &mut eda_model::Pad| {
+            p.shape = eda_model::PadShape::Custom;
+            p.size = (mm(0.4), mm(0.4));
+            p.ext.custom = Some(eda_model::footprint::PadCustom { anchor: eda_model::footprint::PadAnchor::Rect, primitives: vec![poly(&[(-0.4, -0.3), (0.4, -0.4), (0.4, 0.4), (-0.4, 0.3)])], ..Default::default() });
+        })),
+    ];
+    for (name, u2_x, edit) in variants {
+        let dir = scratch(&format!("review_drc_pad_pairs_{name}"));
+        setup(&dir);
+        let intent = dir.join("intent.yaml");
+        let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        for pad in &mut model.footprints[0].pads {
+            edit(pad);
+        }
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        // U2 moved next to U1: U2.1 (GND) a little more than a pad's width right of U1.2 (VCC)
+        let (_, mut design, _) = super::load(&dir).unwrap();
+        design.placement.as_mut().unwrap().footprints[1].at.x = mm(u2_x);
+        save(&dir, &design).unwrap();
+        let every = eda_kicad_engine::DrcOptions { all_track_errors: true, ..Default::default() };
+        let all = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+        let pads = |v: &Value| v["items"].as_array().unwrap().len() == 2 && v["items"].as_array().unwrap().iter().all(|i| i["description"].as_str().unwrap_or("").to_lowercase().contains("pad "));
+        let rows: Vec<Value> = ["clearance", "shorting_items"].iter().flat_map(|k| drc_rows(&all, k)).filter(pads).collect();
+        assert!(!rows.is_empty(), "{name}: two pads too near: {all:#}");
+        step(&dir, Cmd::AddDrcExclusions { exclusions: rows.iter().map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+        let after = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+        let waived: Vec<Value> = ["clearance", "shorting_items"].iter().flat_map(|k| drc_rows(&after, k)).filter(pads).filter(|v| v["excluded"] == true).collect();
+        assert_eq!(waived.len(), rows.len(), "{name}: {after:#}");
+        for v in &waived {
+            assert_eq!(v["kicad_matched"], true, "{name}: kicad-cli matched the exclusion at the point the studio computed: {v:#}");
+        }
+        eprintln!("{name}: {} pad-to-pad exclusion(s) matched", waived.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// UI-LEFT-2 BB1 (slow tier): `starved_thermal` -- U1.1 (GND) in a GND zone with its spokes blocked by VCC tracks above and below it and by U1.2 on its
+/// right, so one spoke is left of the two a zone wants. Its marker is at the pad (`pad->GetPosition()`) on the zone's layer, which the studio writes per
+/// copper layer (`PCB_MARKER::ToProto` stores the layer of this check), and kicad-cli matches it after the refill.
+#[test]
+fn a_starved_thermal_exclusion_reaches_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    let dir = scratch("review_drc_starved");
+    setup(&dir);
+    let pt = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(6.0, 5.0), pt(6.0, 4.15), pt(2.0, 4.15)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(6.0, 5.0), pt(6.0, 5.85), pt(2.0, 5.85)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![pt(1.0, 1.0), pt(10.0, 1.0), pt(10.0, 9.0), pt(1.0, 9.0)] }, false, "test").unwrap();
+    let refill = eda_kicad_engine::DrcOptions { refill_zones: true, all_track_errors: true, ..Default::default() };
+    let all = crate::kicad_engine::drc_with_options(&dir, refill).expect("kicad-cli ran");
+    let starved = drc_rows(&all, "starved_thermal");
+    let kinds: Vec<&str> = all["violations"].as_array().unwrap().iter().filter_map(|v| v["type"].as_str()).collect();
+    if starved.is_empty() {
+        eprintln!("no starved thermal on this layout; kinds: {kinds:?}");
+    }
+    assert!(!starved.is_empty(), "a starved thermal: {kinds:?}");
+    step(&dir, Cmd::AddDrcExclusions { exclusions: starved.iter().map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+    let after = crate::kicad_engine::drc_with_options(&dir, refill).expect("kicad-cli ran");
+    let waived: Vec<Value> = drc_rows(&after, "starved_thermal").into_iter().filter(|v| v["excluded"] == true).collect();
+    assert_eq!(waived.len(), starved.len(), "{after:#}");
+    assert!(waived.iter().all(|v| v["kicad_matched"] == true), "{after:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// UI-LEFT-2 BB2 (slow tier): a wire's `endpoint_off_grid` and `unconnected_wire_endpoint` are at one of its ends, which the report does not say: the off-grid
+/// one is the start when it is off the grid, else the end (`OffGridEndpoints`); two dangling ends of one wire are its ends in position order, and a lone one
+/// is found by a probe run of kicad-cli. Every exclusion of either is matched by kicad-cli, and no excluded marker of its own is made.
+#[test]
+fn a_wire_ends_erc_exclusions_reach_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    let dir = board_with_schematic("review_erc_wire_ends");
+    let p = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
+    for pts in [vec![p(25.4, 203.2), p(30.48, 203.2)], vec![p(50.8, 203.2), p(55.88, 203.2)], vec![p(55.88, 203.2), p(55.88, 208.28)], vec![p(76.835, 203.2), p(81.28, 203.2)], vec![p(91.44, 203.2), p(96.52 + 0.3, 203.2)]] {
+        step(&dir, Cmd::AddWire { pts, bus: false }, false, "test").unwrap();
+    }
+    let first = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let kinds = ["unconnected_wire_endpoint", "endpoint_off_grid"];
+    let rows: Vec<Value> = first["violations"].as_array().unwrap().iter().filter(|v| kinds.contains(&v["check"].as_str().unwrap_or(""))).cloned().collect();
+    eprintln!("{}", rows.iter().map(|v| format!("{} {} {}", v["check"], v["location"], v["marker"]["at_nm"])).collect::<Vec<_>>().join("\n"));
+    assert!(rows.iter().filter(|v| v["check"] == "unconnected_wire_endpoint").count() >= 5 && rows.iter().any(|v| v["check"] == "endpoint_off_grid"), "{first:#}");
+    assert!(rows.iter().all(|v| !v["marker"].is_null()), "every one is placed: {rows:#?}");
+    let n = listed(&first);
+    for v in &rows {
+        step(&dir, add(v["check"].as_str().unwrap(), v["location"].as_str().unwrap(), "", Some(marker_of(v))), false, "ui").unwrap();
+    }
+    let after = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let brief = |r: &Value| -> Vec<String> { let mut v: Vec<String> = r["violations"].as_array().unwrap().iter().map(|v| format!("{} {} {} {}", v["check"], v["location"], v["severity"], v["marker"]["at_nm"])).collect(); v.sort(); v };
+    assert_eq!(listed(&after), n, "kicad-cli made no excluded marker of an unmatched record: {:#?} -> {:#?}", brief(&first), brief(&after));
+    let waived: Vec<&Value> = after["violations"].as_array().unwrap().iter().filter(|v| kinds.contains(&v["check"].as_str().unwrap_or(""))).collect();
+    let bad: Vec<String> = waived.iter().filter(|v| !(v["severity"] == "excluded" && v["kicad_matched"] == true)).map(|v| format!("{} {} {} {} {}", v["check"], v["location"], v["severity"], v["kicad_matched"], v["marker"])).collect();
+    assert!(bad.is_empty(), "{bad:#?}");
+}

@@ -9,8 +9,11 @@
 //! as KiCad's `count >= 2` drops it -- and holds the items of the first path the breadth-first search finds (`uniquePathBetweenNodes`, whose search skips a
 //! node any queued path holds). The paths of a pair of wildcards are worked out the first time they are asked for and kept.
 //!
-//! Differs: zones are not connectivity items here (the rule board has no zone fill to connect through), so a path through a zone is not found; a pad's
-//! shape is its front one on every layer.
+//! The zones are items too when their fill is known (KiCad 25ec2335 `uniquePathBetweenNodes` walks `ConnectedItems()`, which hold the `CN_ZONE_LAYER`s; the
+//! endpoints' island is the zones' too, `EXCLUDE_ZONES` leaving them out of the answer only): each outline of a zone's fill on a layer is one item, joined
+//! to an item on that layer whose shape meets it (`checkZoneItemConnection`'s `Collide`) and is not wholly in one of its holes, unless both are of two nets.
+//!
+//! Differs: a pad's shape is its front one on every layer; two zones are not joined to each other (`checkZoneZoneConnection`).
 
 use crate::pcbexpr::wild_compare;
 use crate::rtree::DrcRTree;
@@ -64,7 +67,45 @@ fn bbox_of(it: &RuleItem) -> (Nm, Nm, Nm, Nm) {
 impl FromToCache {
     /// `FROM_TO_CACHE::Rebuild`: the items, their connections and the endpoints.
     pub fn new(rb: &RuleBoard) -> FromToCache {
-        let items = rb.copper_items();
+        Self::new_with(rb, None)
+    }
+
+    /// [`FromToCache::new`] with the zones' fills (`eda_kicad::zone_fills`'s copper): each outline of a fill is an item of its zone.
+    pub fn new_with(rb: &RuleBoard, zones: Option<&crate::zone_copper::ZoneCopper>) -> FromToCache {
+        let mut items = rb.copper_items();
+        let copper_count = items.len();
+        // each zone fill outline, with its holes
+        let mut holes: Vec<Vec<Vec<eda_model::ir::Point>>> = vec![Vec::new(); items.len()];
+        if let (Some(zc), Some(rt)) = (zones, rb.design_routing()) {
+            for z in &rt.zones {
+                let mut layers: Vec<(&str, &eda_shape_poly_set::ShapePolySet)> = zc.layers_of(&z.id).collect();
+                layers.sort_by(|a, b| a.0.cmp(b.0));
+                for (layer, fill) in layers {
+                    for poly in &fill.polys {
+                        let pts = |c: &eda_shape_poly_set::LineChain| -> Vec<eda_model::ir::Point> { c.iter().map(|p| eda_model::ir::Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect() };
+                        let Some(outline) = poly.first() else { continue };
+                        if outline.len() < 3 {
+                            continue;
+                        }
+                        let mut it = RuleItem::new(z.id.clone(), Class::Zone);
+                        it.net = z.net.clone();
+                        it.layers = vec![layer.to_string()];
+                        it.shapes = vec![crate::kimath::Shape::Polygon { pts: pts(outline) }];
+                        items.push((z.id.clone(), Rc::new(it)));
+                        holes.push(poly.iter().skip(1).map(pts).collect());
+                    }
+                }
+            }
+        }
+        let in_a_hole = |hs: &[Vec<eda_model::ir::Point>], it: &RuleItem| {
+            hs.iter().any(|h| {
+                let poly = crate::kimath::Shape::Polygon { pts: h.clone() };
+                it.shapes.iter().all(|s| {
+                    let (x0, y0, x1, y1) = s.bbox(Nm::ZERO);
+                    [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].iter().all(|&(x, y)| poly.collides(&crate::kimath::Shape::Circle { c: eda_model::ir::Point { x, y }, r: Nm::ZERO }, Nm::ZERO).is_some()) && poly.gap_to(s) == 0.0 && !poly.boundary_segs().iter().any(|b| s.collides(&crate::kimath::Shape::Stadium { a: b.a, b: b.b, r: Nm::ZERO }, Nm::ZERO).is_some())
+                })
+            })
+        };
         let ids: Vec<String> = items.iter().map(|(id, _)| id.clone()).collect();
         let own_ids: Vec<String> = items.iter().map(|(_, it)| it.id.clone()).collect();
         let mut tree = DrcRTree::new(Nm::new(1_000_000));
@@ -78,8 +119,16 @@ impl FromToCache {
                     continue;
                 }
                 let b = &items[j].1;
-                // "Don't connect items in different nets that can't be changed"
-                if a.class == Class::Pad && b.class == Class::Pad && a.net != b.net {
+                // "Don't connect items in different nets that can't be changed" (a pad and a zone, `CN_ITEM::CanChangeNet` false, as two pads)
+                let fixed = |c: Class| c == Class::Pad || c == Class::Zone;
+                if fixed(a.class) && fixed(b.class) && a.net != b.net {
+                    continue;
+                }
+                // two zones are not joined here; a zone and an item wholly in one of its holes are not joined
+                if i >= copper_count && j >= copper_count {
+                    continue;
+                }
+                if (j >= copper_count && in_a_hole(&holes[j], a)) || (i >= copper_count && in_a_hole(&holes[i], b)) {
                     continue;
                 }
                 if layers_meet(a, b) && shapes_collide(a, b) {
@@ -198,6 +247,11 @@ impl FromToCache {
 
 /// The `Env::from_to` of a board: [`FromToCache::is_on_path`] over its copper (the cache is made here; its paths when first asked for).
 pub fn of_board(rb: &RuleBoard) -> Rc<dyn Fn(&str, &str, &str) -> bool> {
-    let cache = Rc::new(FromToCache::new(rb));
+    of_board_with(rb, None)
+}
+
+/// [`of_board`] with the zones' fills, so a path through a zone is found.
+pub fn of_board_with(rb: &RuleBoard, zones: Option<&crate::zone_copper::ZoneCopper>) -> Rc<dyn Fn(&str, &str, &str) -> bool> {
+    let cache = Rc::new(FromToCache::new_with(rb, zones));
     Rc::new(move |id: &str, from: &str, to: &str| cache.is_on_path(id, from, to))
 }

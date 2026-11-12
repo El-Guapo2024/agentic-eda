@@ -1004,6 +1004,8 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         let px = sch_mm(p.at.x);
         let py = sch_mm(p.at.y);
         let pin_uuid = sheet_pin_uuid(s, p);
+        // the pin's id in the studio's report (an ERC finding on it, `hier_label_mismatch`, is keyed by it): its own, else the sheet's and its name
+        note_uuid(&pin_uuid, &if p.id.is_empty() { format!("{}:{}", s.id, p.name) } else { p.id.clone() });
         // The angle is the side of the sheet the pin sits on (`SCH_SHEET_PIN::SetSide`: 0 right, 90 top, 180 left, 270 bottom):
         // KiCad moves the pin onto that edge when it reads the file, so a pin on the left written as 0 would jump to the right.
         let angle = if p.at.x <= s.at.x {

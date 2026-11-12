@@ -2625,4 +2625,45 @@ fn slow_a_directive_labels_and_a_rule_areas_net_class_is_read_by_kicad_cli_as_ou
         return;
     }
     directive_and_rule_area_classes(true);
+// ---------------------------------------------------------------------------------------- ERC exclusions across sheets
+
+/// UI-LEFT-2 BB2 (slow): on a design of two sheets, an exclusion of each finding whose marker the studio writes -- the name checks between the root and the child
+/// (`similar_labels`: the root's `d0` and the child's `D0`), the child's own findings, the sheet pin's -- reaches kicad-cli: it reports each one excluded
+/// (`kicad_matched`) and makes no excluded marker of its own beside them, the aux item's sheet being the sheet its screen is placed on
+/// (`erc_exclusions::item_sheets`).
+#[test]
+fn slow_erc_exclusions_on_two_sheets_reach_kicad_cli() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let (dir, sheet_id, _) = bus_board("slow_erc_two_sheets", "d[0..1]");
+    // a global label on each sheet whose names differ only in case: `similar_labels` between the two sheets
+    let global = |net: &str| Cmd::AddLabel { net: net.into(), at: Point { x: mm(50.8), y: mm(101.6) }, kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } };
+    step(&dir, global("SIG"), false, "test").unwrap();
+    step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(global("sig")) }, false, "test").unwrap();
+    let first = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let all: Vec<serde_json::Value> = first["violations"].as_array().unwrap().clone();
+    assert!(all.iter().filter(|v| v["check"] == "hier_label_mismatch").all(|v| v["location"].as_str().is_some_and(|l| !l.is_empty())), "a sheet pin's finding has an id to key its exclusion on");
+    let known: Vec<&serde_json::Value> = all.iter().filter(|v| !v["marker"].is_null() && v["location"].as_str().is_some_and(|l| !l.is_empty())).collect();
+    let unknown: Vec<String> = all.iter().filter(|v| v["marker"].is_null()).map(|v| v["check"].as_str().unwrap_or("?").to_string()).collect();
+    println!("known markers: {:?}\nunknown: {unknown:?}", known.iter().map(|v| (v["check"].as_str().unwrap_or(""), v["sheet"].as_str().unwrap_or(""))).collect::<Vec<_>>());
+    assert!(known.iter().any(|v| v["check"] == "similar_labels"), "the name check across the sheets has its marker: {first:#}");
+    let two_sheets = known.iter().any(|v| {
+        let m = &v["marker"];
+        m["aux_sheet"].as_array().is_some_and(|a| !a.is_empty()) && m["aux_sheet"] != m["main_sheet"]
+    });
+    assert!(two_sheets, "a marker names an aux item on the other sheet: {first:#}");
+    for v in &known {
+        let marker: eda_model::ir::ErcMarker = serde_json::from_value(v["marker"].clone()).unwrap();
+        let cmd = Cmd::AddErcExclusion { check: v["check"].as_str().unwrap().into(), location: v["location"].as_str().unwrap().into(), comment: "across".into(), marker: Some(marker) };
+        step(&dir, cmd, false, "ui").unwrap();
+    }
+    let after = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let rows = after["violations"].as_array().unwrap();
+    assert_eq!(rows.len(), all.len(), "kicad-cli made no excluded marker of an unmatched record: {after:#}");
+    let waived: Vec<&serde_json::Value> = rows.iter().filter(|v| v["severity"] == "excluded").collect();
+    assert_eq!(waived.len(), known.len(), "{after:#}");
+    for v in waived {
+        assert_eq!(v["kicad_matched"], true, "kicad-cli matched it itself: {v:#}");
+    }
 }

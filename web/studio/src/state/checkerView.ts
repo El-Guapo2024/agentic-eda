@@ -8,9 +8,11 @@
 // (`m_Notebook->SetSelection( 0 )`). The DRC dialog's Show boxes start as `dialog_drc_base.fbp` has them -- Errors and Warnings ticked, Exclusions and
 // All not (R6-D9) -- and are kept from one opening to the next, and across sessions, as `DIALOG_SHIM::SaveControlState` keeps every control of a dialog
 // in the common settings; the options menu's three entries (`DIALOG_DRC::OnMenu`) are the user's `PCBNEW_SETTINGS::m_DRCDialog`. The studio has no
-// settings file, so both are this browser's (localStorage, a per-viewer convenience). The ERC dialog's boxes stay as they were (all shown).
+// settings file, so both are this browser's (localStorage, a per-viewer convenience). The DRC dialog's two run options (Refill, Parity) are kept with its
+// boxes, as KiCad 25ec2335's `SaveControlState` keeps every check box of the dialog. The ERC dialog's Show boxes start as `dialog_erc_base.fbp` has them --
+// none ticked -- and are kept the same way, and its options menu (`DIALOG_ERC::OnMenu`) is the user's `EESCHEMA_SETTINGS::m_ERCDialog`.
 import { useSyncExternalStore } from "react";
-import { DRC_MENU_DEFAULTS, DRC_SHOW_START, SHOW_ALL, savedDrcControls, type DrcMenuOptions, type RcFilter } from "../kicad-port/rcItems";
+import { DRC_MENU_DEFAULTS, DRC_RUN_START, DRC_SHOW_START, ERC_MENU_DEFAULTS, ERC_SHOW_START, savedDrcControls, savedErcControls, type DrcMenuOptions, type DrcRunControls, type ErcMenuOptions, type RcFilter } from "../kicad-port/rcItems";
 import type { RuleSeverity } from "../api/types";
 
 /** `m_Notebook`'s pages in DIALOG_DRC (`dialog_drc_base.fbp`), plus the Lint page this app adds. */
@@ -31,6 +33,8 @@ export interface CheckerView {
     paritySelected: number | null;
     /** The options menu (the gear button). */
     options: DrcMenuOptions;
+    /** "Refill all zones before performing DRC" and "Test for parity between PCB and schematic". */
+    run: DrcRunControls;
   };
   erc: {
     tab: ErcTab;
@@ -39,34 +43,41 @@ export interface CheckerView {
     severities: Record<string, RuleSeverity> | null;
     /** The page Schematic Setup opens on (a marker menu's "Edit violation severities..." / "Edit pin-to-pin conflict map..." / "Edit connection grid spacing..."); null = the first. */
     setupPage: SchSetupPage | null;
+    /** The options menu (the gear button). */
+    options: ErcMenuOptions;
   };
 }
 
 export const DEFAULT_CHECKER_VIEW: CheckerView = {
-  drc: { tab: "violations", filter: DRC_SHOW_START, unconnectedSelected: null, paritySelected: null, options: DRC_MENU_DEFAULTS },
-  erc: { tab: "erc", filter: SHOW_ALL, severities: null, setupPage: null },
+  drc: { tab: "violations", filter: DRC_SHOW_START, unconnectedSelected: null, paritySelected: null, options: DRC_MENU_DEFAULTS, run: DRC_RUN_START },
+  erc: { tab: "erc", filter: ERC_SHOW_START, severities: null, setupPage: null, options: ERC_MENU_DEFAULTS },
 };
 
-/** Where the DRC dialog's kept controls live in this browser. */
+/** Where the DRC and ERC dialogs' kept controls live in this browser. */
 const DRC_STORAGE_KEY = "eda.drcDialog";
+const ERC_STORAGE_KEY = "eda.ercDialog";
 
-function loadDrcControls(): { filter: RcFilter; options: DrcMenuOptions } {
+function loadSaved(key: string): string | null {
   try {
-    return savedDrcControls(typeof localStorage === "undefined" ? null : localStorage.getItem(DRC_STORAGE_KEY));
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
   } catch {
-    return savedDrcControls(null);
+    return null;
   }
 }
 
-function storeDrcControls(drc: CheckerView["drc"]): void {
+function store(key: string, value: unknown): void {
   try {
-    if (typeof localStorage !== "undefined") localStorage.setItem(DRC_STORAGE_KEY, JSON.stringify({ filter: drc.filter, options: drc.options }));
+    if (typeof localStorage !== "undefined") localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // a private window or blocked storage: the controls last for this page only
   }
 }
 
-let view: CheckerView = { ...DEFAULT_CHECKER_VIEW, drc: { ...DEFAULT_CHECKER_VIEW.drc, ...loadDrcControls() } };
+let view: CheckerView = {
+  ...DEFAULT_CHECKER_VIEW,
+  drc: { ...DEFAULT_CHECKER_VIEW.drc, ...savedDrcControls(loadSaved(DRC_STORAGE_KEY)) },
+  erc: { ...DEFAULT_CHECKER_VIEW.erc, ...savedErcControls(loadSaved(ERC_STORAGE_KEY)) },
+};
 const listeners = new Set<() => void>();
 
 function publish(next: CheckerView): void {
@@ -80,7 +91,7 @@ export function getCheckerView(): CheckerView {
 
 export function setDrcView(patch: Partial<CheckerView["drc"]>): void {
   publish({ ...view, drc: { ...view.drc, ...patch } });
-  if (patch.filter || patch.options) storeDrcControls(view.drc);
+  if (patch.filter || patch.options || patch.run) store(DRC_STORAGE_KEY, { filter: view.drc.filter, options: view.drc.options, run: view.drc.run });
 }
 
 /** One entry of the DRC dialog's options menu toggled (`DIALOG_DRC::OnMenu`), kept for the next session (`PCBNEW_SETTINGS::m_DRCDialog`). */
@@ -88,8 +99,19 @@ export function setDrcOptions(patch: Partial<DrcMenuOptions>): void {
   setDrcView({ options: { ...view.drc.options, ...patch } });
 }
 
+/** The DRC dialog's Refill or Parity box changed, kept for the next opening and session (`SaveControlState`). */
+export function setDrcRun(patch: Partial<DrcRunControls>): void {
+  setDrcView({ run: { ...view.drc.run, ...patch } });
+}
+
 export function setErcView(patch: Partial<CheckerView["erc"]>): void {
   publish({ ...view, erc: { ...view.erc, ...patch } });
+  if (patch.filter || patch.options) store(ERC_STORAGE_KEY, { filter: view.erc.filter, options: view.erc.options });
+}
+
+/** One entry of the ERC dialog's options menu toggled (`DIALOG_ERC::OnMenu`), kept for the next session (`EESCHEMA_SETTINGS::m_ERCDialog`). */
+export function setErcOptions(patch: Partial<ErcMenuOptions>): void {
+  setErcView({ options: { ...view.erc.options, ...patch } });
 }
 
 /** Back to the start-of-session view (tests). */

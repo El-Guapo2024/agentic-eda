@@ -840,8 +840,10 @@ impl Violation {
     }
 
     /// Also try the positions the design itself gives for the items: the ends and the middle of a track segment, where a trace's marker
-    /// sits (`DRC_TEST_PROVIDER_TRACK_WIDTH` reports `(start + end) / 2`). The report gives a track at its start only.
-    fn add_design_anchors(&mut self, design: &Design) {
+    /// sits (`DRC_TEST_PROVIDER_TRACK_WIDTH` reports `(start + end) / 2`). The report gives a track at its start only. And where a marker between
+    /// two items of the derived board sits: `board` is their shapes by uuid as kicad-cli read them (`eda_kicad::drc_exclusions::board_shapes`:
+    /// tracks, vias, pads, holes, the board edges).
+    fn add_anchors(&mut self, design: &Design, board: &eda_kicad::drc_exclusions::BoardShapes) {
         let ids: Vec<String> = self.items.iter().filter_map(|i| i.id.clone()).collect();
         for id in &ids {
             self.markers_nm.extend(track_anchors(design, id));
@@ -849,6 +851,12 @@ impl Violation {
         // Two tracks or vias: the marker is where KiCad's collision of the two shapes puts it (`eda_kicad::drc_exclusions::contact_point`).
         if let [Some(main), Some(aux)] = [self.items.first(), self.items.get(1)].map(|i| i.and_then(|i| i.id.as_deref()).and_then(|id| copper_of(design, id))) {
             if let Some([x, y]) = eda_kicad::drc_exclusions::contact_point(&self.kind, main, aux) {
+                self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
+            }
+        }
+        // The same on the derived board's shapes, a pad's, a hole's and the board edge's included (`eda_kicad::drc_exclusions::marker_at`).
+        if let (Some(main), Some(aux)) = (self.items.first(), self.items.get(1)) {
+            if let Some([x, y]) = eda_kicad::drc_exclusions::marker_at(&self.kind, &main.uuid, &aux.uuid, board) {
                 self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
             }
         }
@@ -1094,10 +1102,11 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
     cmd.arg("-o").arg(&report).arg(&pcb);
     let (raw, said) = run_report_with_output(cmd, &report, "drc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
+    let board = std::fs::read_to_string(&pcb).map(|t| eda_kicad::drc_exclusions::board_shapes(&t)).unwrap_or_default();
     let read = |key: &str| -> Vec<Violation> {
         let mut list: Vec<Violation> = raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default();
         for v in &mut list {
-            v.add_design_anchors(design);
+            v.add_anchors(design, &board);
         }
         list
     };
@@ -1202,7 +1211,8 @@ impl ErcReport {
     /// (`SetSheetSpecificPath`): the two placements of a screen two sheets show name the same items, and the excluded one is not a copy of the
     /// other. (Not by the sheet the report lists it under: kicad-cli lists the stray marker of a check that belongs to no sheet under another one.)
     fn listed(&self) -> Vec<&Violation> {
-        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>(), v.marker.as_ref().map(|m| m.sheet.clone()).unwrap_or_default());
+        // (and by the marker's place: a wire's two dangling ends are two markers of one item)
+        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>(), v.marker.as_ref().map(|m| m.sheet.clone()).unwrap_or_default(), v.marker.as_ref().map(|m| m.at_nm));
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for v in &self.violations {
@@ -1229,14 +1239,23 @@ impl ErcReport {
     /// report lists it under.
     pub fn to_json(&self, exclusions: &[ErcExclusion]) -> Value {
         let mut counts = BTreeMap::<String, usize>::new();
-        let violations: Vec<Value> = self
-            .listed()
+        let listed = self.listed();
+        // An exclusion whose marker is a finding's own is that finding's; one that is no finding's (the item moved since) waives the finding of its check and
+        // location in the studio's report, as it always did -- but not a second marker of that item (a wire's other dangling end) that another exclusion is.
+        let exact = |e: &ErcExclusion, v: &Violation| e.marker.is_some() && v.marker.is_some() && eda_kicad::erc_exclusions::same_marker(e.marker.as_ref(), v.marker.as_ref());
+        let consumed: Vec<bool> = exclusions.iter().map(|e| listed.iter().any(|v| v.kind == e.check && exact(e, v))).collect();
+        let violations: Vec<Value> = listed
             .into_iter()
             .map(|v| {
                 let location = v.items.iter().find_map(|i| i.id.clone()).unwrap_or_default();
                 // `(check, location)`, and the sheet of the marker where both know one: a screen two sheets show has one id per item, and KiCad's marker of
                 // each placement keeps its own sheet path (`SetSheetSpecificPath`), so the exclusion of one placement leaves the other's finding alone.
-                let studio = if location.is_empty() { None } else { exclusions.iter().find(|e| e.check == v.kind && e.location == location && eda_kicad::erc_exclusions::same_sheet(e.marker.as_ref(), v.marker.as_ref())) };
+                let studio = if location.is_empty() {
+                    None
+                } else {
+                    let mine = |e: &&ErcExclusion| e.check == v.kind && e.location == location;
+                    exclusions.iter().filter(mine).find(|e| exact(e, v)).or_else(|| exclusions.iter().zip(&consumed).filter(|(e, used)| !**used && mine(e)).map(|(e, _)| e).find(|e| eda_kicad::erc_exclusions::same_sheet(e.marker.as_ref(), v.marker.as_ref())))
+                };
                 let by_kicad = v.excluded || v.severity == "exclusion";
                 let excluded = by_kicad || studio.is_some();
                 if !excluded {
@@ -1278,14 +1297,119 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     let raw = run_report(cmd, &report, "erc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
     let sheet_count = raw["sheets"].as_array().map_or(0, Vec::len);
+    // where each item of the derived tree is, for a marker that names a sheet the report does not give (`erc_exclusions::marker_with`)
+    let placed = if sheet_count > 1 {
+        let root = sch.file_name().and_then(|n| n.to_str()).unwrap_or("board.kicad_sch").to_string();
+        eda_kicad::erc_exclusions::item_sheets(&root, &|name| std::fs::read_to_string(work.join(name)).ok())
+    } else {
+        HashMap::new()
+    };
+    let item_sheets = |uuid: &str| placed.get(uuid).cloned().unwrap_or_default();
+    // a wire's finding is at one of its ends, which the report does not say (it gives the wire's start): the wires of the tree, and the connection grid
+    let root_name = sch.file_name().and_then(|n| n.to_str()).unwrap_or("board.kicad_sch").to_string();
+    let (wires, bus_entries) = eda_kicad::erc_exclusions::wire_segments(&root_name, &|name| std::fs::read_to_string(work.join(name)).ok());
+    let grid_nm = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils).unwrap_or(50) as i64 * 25_400;
     let mut violations = Vec::new();
+    // (sheet, wire uuid) -> the indexes of its `unconnected_wire_endpoint` findings, for the ends they are at
+    let mut dangling: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    let mut items_of: Vec<Vec<eda_kicad::erc_exclusions::MarkerItem>> = Vec::new();
     for sheet in raw["sheets"].as_array().into_iter().flatten() {
         let path = sheet["uuid_path"].as_str().unwrap_or("");
         for v in sheet["violations"].as_array().into_iter().flatten() {
             let mut violation = Violation::from_json(v, &map, units_mm);
             violation.sheet = path.to_string();
-            violation.marker = eda_kicad::erc_exclusions::marker(&violation.kind, &violation.severity, &Violation::marker_items(v, units_mm), path, sheet_count);
+            let mut items = Violation::marker_items(v, units_mm);
+            let wire_end = items.first().and_then(|i| wires.get(&i.uuid)).copied();
+            let on_entry = items.first().is_some_and(|i| bus_entries.contains(&i.uuid));
+            violation.marker = match violation.kind.as_str() {
+                // `OffGridEndpoints`: a wire's off-grid end; a bus entry's ports are not placed here
+                "endpoint_off_grid" if on_entry => None,
+                "endpoint_off_grid" => {
+                    if let (Some(ends), Some(first)) = (wire_end, items.first_mut()) {
+                        let at = eda_kicad::erc_exclusions::off_grid_end(ends, grid_nm);
+                        (first.x_nm, first.y_nm) = (Nm::new(at[0]), Nm::new(at[1]));
+                    }
+                    eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &items, path, sheet_count, &item_sheets)
+                }
+                "unconnected_wire_endpoint" => {
+                    if wire_end.is_some() {
+                        dangling.entry((path.to_string(), items[0].uuid.clone())).or_default().push(violations.len());
+                    }
+                    None
+                }
+                _ => eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &items, path, sheet_count, &item_sheets),
+            };
+            items_of.push(items);
             violations.push(violation);
+        }
+    }
+    // `DanglingWireEndpoints`: a finding per dangling end. Two of one wire are its two ends, in the report's order (`visitMarkers` sorts a sheet's markers by
+    // position); one is either end, which only kicad-cli knows: a probe run with the start written for each such wire says which (a real finding the record
+    // matches is excluded; one it does not is still reported).
+    let place = |index: usize, at: [i64; 2], violations: &mut Vec<Violation>| {
+        let mut items = items_of[index].clone();
+        (items[0].x_nm, items[0].y_nm) = (Nm::new(at[0]), Nm::new(at[1]));
+        let v = &violations[index];
+        violations[index].marker = eda_kicad::erc_exclusions::marker_with(&v.kind, &v.severity, &items, &v.sheet, sheet_count, &item_sheets);
+    };
+    let mut lone: Vec<(usize, [[i64; 2]; 2])> = Vec::new();
+    for ((_, uuid), rows) in &dangling {
+        let mut ends = wires[uuid];
+        ends.sort();
+        match rows.as_slice() {
+            [a, b] => {
+                place(*a, ends[0], &mut violations);
+                place(*b, ends[1], &mut violations);
+            }
+            // an excluded one is the exclusion's own marker (the project's record matched it)
+            [one] if violations[*one].excluded => {
+                let mine = design.schematic.iter().flat_map(|s| s.erc_exclusions.iter()).filter_map(|e| e.marker.as_ref()).find(|m| m.error_type == "ERCET_UNCONNECTED_WIRE_ENDPOINT" && m.items == [uuid.clone()]);
+                violations[*one].marker = mine.cloned();
+            }
+            [one] => lone.push((*one, wires[uuid])),
+            _ => {}
+        }
+    }
+    if !lone.is_empty() {
+        for (index, ends) in &lone {
+            place(*index, ends[0], &mut violations);
+        }
+        let probe: Vec<Value> = lone.iter().filter_map(|(i, _)| violations[*i].marker.as_ref()).map(|m| eda_kicad::erc_exclusions::entry(m, "")).collect();
+        let pro = sch.with_extension("kicad_pro");
+        if let Ok(original) = std::fs::read_to_string(&pro) {
+            if let Ok(mut project) = serde_json::from_str::<Value>(&original) {
+                let list = &mut project["erc"]["erc_exclusions"];
+                if !list.is_array() {
+                    *list = json!([]);
+                }
+                list.as_array_mut().map(|a| a.extend(probe));
+                let probed = write_file(&pro, &serde_json::to_string_pretty(&project).unwrap_or_default()).ok().and_then(|_| {
+                    let out = work.join("erc-probe.json");
+                    let mut cmd = cli_command(&cli, Some(&pro));
+                    cmd.args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&out).arg(&sch);
+                    run_report(cmd, &out, "erc").ok()
+                });
+                let _ = write_file(&pro, &original);
+                if let Some(report) = probed {
+                    let still: std::collections::HashSet<String> = report["sheets"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|s| s["violations"].as_array().into_iter().flatten())
+                        .filter(|v| v["type"] == "unconnected_wire_endpoint" && v["excluded"] != true)
+                        .filter_map(|v| v["items"][0]["uuid"].as_str().map(String::from))
+                        .collect();
+                    for (index, ends) in &lone {
+                        if still.contains(&items_of[*index][0].uuid) {
+                            place(*index, ends[1], &mut violations);
+                        }
+                    }
+                } else {
+                    for (index, _) in &lone {
+                        violations[*index].marker = None;
+                    }
+                }
+            }
         }
     }
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
@@ -1378,7 +1502,78 @@ pub fn erc_report(design: &Design, model: &ConstraintModel, work: &Path, opts: &
     let out = work.join(format!("erc-report.{}", opts.extension()));
     let mut cmd = cli_command(&cli, Some(&sch.with_extension("kicad_pro")));
     cmd.args(["sch", "erc"]).args(opts.args()).arg("-o").arg(&out).arg(&sch);
-    Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text: run_saved_report(cmd, &out, "erc")? })
+    let mut text = run_saved_report(cmd, &out, "erc")?;
+    if design.schematic.as_ref().is_some_and(|s| s.extras.pin_to_pin_errors_ignored) {
+        text = if opts.json { drop_pin_to_pin_errors_json(&text) } else { drop_pin_to_pin_errors_text(&text) };
+    }
+    Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text })
+}
+
+/// A saved ERC report (`ERC_REPORT::WriteJsonReport`) without its pin-to-pin errors, for a schematic whose errors' slot is ignored
+/// (`SchExtras::pin_to_pin_errors_ignored`): KiCad's dialog writes the markers it holds, and Ignore deleted every marker of the error's code
+/// (`DIALOG_ERC::OnERCItemRClick`: `ScreenList.DeleteMarkers( MARKER_ERC, ERCE_PIN_TO_PIN_ERROR )`, excluded ones too), while kicad-cli reads only the
+/// warning's slot from the project. Written back as `std::setw( 4 )` writes it (4 spaces, keys in order, as `nlohmann::json`'s map keeps them).
+pub fn drop_pin_to_pin_errors_json(text: &str) -> String {
+    let Ok(mut report) = serde_json::from_str::<Value>(text) else { return text.to_string() };
+    let Some(sheets) = report.get_mut("sheets").and_then(Value::as_array_mut) else { return text.to_string() };
+    for sheet in sheets {
+        if let Some(vs) = sheet.get_mut("violations").and_then(Value::as_array_mut) {
+            vs.retain(|v| !(v["type"] == "pin_to_pin" && v["severity"] == "error"));
+        }
+    }
+    let Ok(pretty) = serde_json::to_string_pretty(&report) else { return text.to_string() };
+    // two spaces a level as serde_json writes them, four as KiCad does (a string's own line breaks are escaped, so every leading space is indentation)
+    let mut out = String::with_capacity(pretty.len() * 2);
+    for line in pretty.lines() {
+        let body = line.trim_start_matches(' ');
+        out.push_str(&" ".repeat((line.len() - body.len()) * 2));
+        out.push_str(body);
+        out.push('\n');
+    }
+    out
+}
+
+/// The text report's form of [`drop_pin_to_pin_errors_json`] (`ERC_REPORT::GetTextReport`): each marker is a `[<key>]: <message>` line and its indented lines
+/// (`RC_ITEM::ShowReport`: the rule and the severity, `error` or `error (excluded)`, then the items and the comment); a pin-to-pin error's block goes and the
+/// closing ` ** ERC messages: %d  Errors %d  Warnings %d` counts it no more (it counted as an error, excluded or not: `settings.GetSeverity( code )`).
+pub fn drop_pin_to_pin_errors_text(text: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(text.len());
+    let mut dropped = 0usize;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let mut end = i + 1;
+        if line.starts_with('[') {
+            while end < lines.len() && lines[end].starts_with("    ") {
+                end += 1;
+            }
+            let severity = lines.get(i + 1).map(|l| l.trim_end()).unwrap_or("");
+            if line.starts_with("[pin_to_pin]:") && (severity.ends_with("; error") || severity.ends_with("; error (excluded)")) {
+                dropped += 1;
+                i = end;
+                continue;
+            }
+        }
+        if dropped > 0 && line.starts_with(" ** ERC messages:") {
+            out.push_str(&recount(line, dropped));
+        } else {
+            for l in &lines[i..end] {
+                out.push_str(l);
+            }
+        }
+        i = end;
+    }
+    out
+}
+
+/// ` ** ERC messages: <total>  Errors <errors>  Warnings <warnings>` with `dropped` errors fewer.
+fn recount(line: &str, dropped: usize) -> String {
+    let nums: Vec<usize> = line.split(|c: char| !c.is_ascii_digit()).filter(|t| !t.is_empty()).filter_map(|t| t.parse().ok()).collect();
+    match nums.as_slice() {
+        [total, errors, warnings] => format!(" ** ERC messages: {}  Errors {}  Warnings {}\n", total.saturating_sub(dropped), errors.saturating_sub(dropped), warnings),
+        _ => line.to_string(),
+    }
 }
 
 /// The DRC report file of a dialog's "Save..." (`DRC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli pcb drc` on the derived board, with the dialog's own
@@ -2330,7 +2525,7 @@ mod tests {
         assert!(track_anchors(&design, "R1.1").is_empty() && track_anchors(&design, "t8").is_empty());
 
         let mut v = Violation { kind: "track_width".into(), items: vec![Item { description: "Track".into(), pos: pt(1_000_000, 2_000_000), id: Some("t7".into()), uuid: "u".into() }], markers_nm: vec![pt(1_000_000, 2_000_000)], ..Default::default() };
-        v.add_design_anchors(&design);
+        v.add_anchors(&design, &Default::default());
         assert_eq!(v.markers_nm, vec![pt(1_000_000, 2_000_000), pt(2_000_500, 2_000_000), pt(3_001_000, 2_000_000)], "the start (the report's) is listed once");
     }
 
@@ -2641,6 +2836,30 @@ fi"#;
             json!({ "error_type": "ERCET_PIN_NOT_CONNECTED", "at_nm": [115_570_000, 110_490_000], "items": ["693a38f5-591c-4c06-9786-e8973d13af99"], "sheet": ["r"], "main_sheet": ["r"] })
         );
         assert_eq!(j["violations"][0]["sheet"], "/r");
+    }
+
+    /// UI-LEFT-2 BB2: with the pin-to-pin errors ignored, Save... writes what KiCad's dialog holds -- no pin-to-pin error, excluded or not, and the counts
+    /// without them -- while the warnings and every other marker stay as kicad-cli wrote them.
+    #[test]
+    fn a_saved_erc_report_leaves_out_the_ignored_pin_to_pin_errors() {
+        let text = "ERC report (2026-11-12T10:00:00+0000, Encoding UTF8)\nReport includes: Errors, Warnings, Exclusions\n\n***** Sheet /\n\
+[pin_to_pin]: Output pin connected to Output pin\n    ; error\n    @(10.0000 mm, 20.0000 mm): Symbol U1 Pin 1\n    @(30.0000 mm, 20.0000 mm): Symbol U2 Pin 1\n\
+[pin_to_pin]: Input pin connected to Unspecified pin\n    ; warning\n    @(10.0000 mm, 25.0000 mm): Symbol U1 Pin 2\n\
+[pin_to_pin]: Output pin connected to Power output pin\n    ; error (excluded)\n    @(1.0000 mm, 2.0000 mm): Symbol U3 Pin 1\n    on purpose\n\
+[pin_not_connected]: Pin not connected\n    ; error\n    @(5.0000 mm, 5.0000 mm): Symbol U4 Pin 3\n\
+\n ** ERC messages: 4  Errors 3  Warnings 1\n\n ** Ignored checks:\n    - None\n";
+        let kept = drop_pin_to_pin_errors_text(text);
+        assert!(!kept.contains("Output pin connected to Output pin") && !kept.contains("Power output pin") && !kept.contains("on purpose"), "{kept}");
+        assert!(kept.contains("[pin_to_pin]: Input pin connected to Unspecified pin\n    ; warning\n"), "the warning stays: {kept}");
+        assert!(kept.contains("[pin_not_connected]: Pin not connected\n    ; error\n    @(5.0000 mm, 5.0000 mm): Symbol U4 Pin 3\n"));
+        assert!(kept.contains("\n ** ERC messages: 2  Errors 1  Warnings 1\n"), "{kept}");
+        assert!(kept.starts_with("ERC report (") && kept.ends_with(" ** Ignored checks:\n    - None\n"));
+        assert_eq!(drop_pin_to_pin_errors_text("no markers\n ** ERC messages: 0  Errors 0  Warnings 0\n"), "no markers\n ** ERC messages: 0  Errors 0  Warnings 0\n", "nothing dropped, nothing changed");
+
+        let json = "{\n    \"sheets\": [\n        {\n            \"path\": \"/\",\n            \"violations\": [\n                {\n                    \"severity\": \"error\",\n                    \"type\": \"pin_to_pin\"\n                },\n                {\n                    \"severity\": \"warning\",\n                    \"type\": \"pin_to_pin\"\n                }\n            ]\n        }\n    ]\n}\n";
+        let kept: Value = serde_json::from_str(&drop_pin_to_pin_errors_json(json)).unwrap();
+        assert_eq!(kept["sheets"][0]["violations"], json!([{ "severity": "warning", "type": "pin_to_pin" }]));
+        assert!(drop_pin_to_pin_errors_json(json).contains("\n            \"violations\": [\n"), "four spaces a level, as KiCad writes it");
     }
 
     #[test]

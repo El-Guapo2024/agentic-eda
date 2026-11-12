@@ -225,6 +225,56 @@ export function tabIndent(text: string, anchor: number, caret: number): TextEdit
   return anchorPosOnLine === 0 ? { text: out, caret: ls(lineCurrentPos), anchor: ls(lineOfAnchor) } : { text: out, caret: ls(lineCurrentPos), anchor: ls(lineOfAnchor + 1) };
 }
 
+/**
+ * Backspace with `SetBackSpaceUnIndents( true )` (`panel_setup_rules_base.cpp`): Scintilla's `Editor::DelCharBack` -- with no selection, a caret
+ * inside the line's leading blanks and not at its first column takes the line back to the indentation step below (`indentation % IndentSize()`,
+ * a whole step when it is on one) and stands at the end of the new blanks. `null` where Backspace deletes a character as it always does.
+ */
+export function backspaceUnindent(text: string, anchor: number, caret: number): TextEdit | null {
+  if (anchor !== caret) return null;
+  const starts = lineStarts(text);
+  const line = lineOf(starts, caret);
+  if (lineStart(text, starts, line) === caret) return null;
+  const col = columnOf(text, starts, caret);
+  const ind = indentation(text, starts, line);
+  if (!(col <= ind.columns && col > 0)) return null;
+  let change = ind.columns % INDENT;
+  if (change === 0) change = INDENT;
+  const r = setLineIndentation(text, line, ind.columns - change);
+  return { text: r.text, anchor: r.pos, caret: r.pos };
+}
+
+/**
+ * The indentation guides of `SetIndentationGuides( true )` (`SC_IV_REAL`): in each line's leading blanks, the character that starts at each
+ * multiple of the indent size after column 0, by position; `true` for one at the highlighted guide's column (`SetHighlightGuide( GetColumn(
+ * bracePos1 ) )` while the caret is at a matched brace, `onScintillaUpdateUI`; 0 for none).
+ */
+export function indentGuides(text: string, highlightColumn: number): Map<number, boolean> {
+  const out = new Map<number, boolean>();
+  let col = 0;
+  let inLead = true;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n") {
+      col = 0;
+      inLead = true;
+      continue;
+    }
+    if (inLead && (c === " " || c === "\t")) {
+      if (col > 0 && col % INDENT === 0) out.set(i, highlightColumn > 0 && col === highlightColumn);
+      col = c === "\t" ? (Math.floor(col / TAB_WIDTH) + 1) * TAB_WIDTH : col + 1;
+      continue;
+    }
+    inLead = false;
+  }
+  return out;
+}
+
+/** `GetColumn( pos )` of a position in `text`. */
+export function columnAt(text: string, pos: number): number {
+  return columnOf(text, lineStarts(text), pos);
+}
+
 /** `ConvertSmartQuotesAndDashes`: ‘ ’ to ', “ ” to ", – — to - (what a keyboard's smart punctuation types). */
 export function convertSmartQuotesAndDashes(text: string): string {
   return text.replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-");

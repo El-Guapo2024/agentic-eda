@@ -179,7 +179,7 @@ export function selectDrc(ctx: CheckerCtx, tab: DrcTab, index: number, showPcb =
  * What a click on an ERC row does to the canvas, whichever list the row is in: select the symbol the finding names and frame the point its `location`
  * resolves to (`ercMarkerPosition`). A location it cannot resolve (an item the schematic no longer has) leaves the view where it is.
  */
-export function frameErc(ctx: CheckerCtx, v: Pick<ErcViolation, "location"> | undefined, showSchematic = false): void {
+export function frameErc(ctx: CheckerCtx, v: Pick<ErcViolation, "location"> | undefined, showSchematic = false, scroll = true): void {
   const { api, dispatch } = ctx;
   const resolved = v ? ercMarkerPosition(v.location, api.getState().schematic) : null;
   if (resolved) {
@@ -188,7 +188,7 @@ export function frameErc(ctx: CheckerCtx, v: Pick<ErcViolation, "location"> | un
       dispatch({ type: "SET_HOT", refs: resolved.refs });
     }
     const rect = canvasRect();
-    if (rect && rect.width >= 50 && rect.height >= 50) {
+    if (scroll && rect && rect.width >= 50 && rect.height >= 50) {
       const [x, y] = resolved.at;
       dispatch({ type: "SET_SCHEMATIC_VIEW", view: fitTransform({ minX: x - FRAME_PAD_NM, minY: y - FRAME_PAD_NM, maxX: x + FRAME_PAD_NM, maxY: y + FRAME_PAD_NM }, rect.width, rect.height, 60) });
     }
@@ -196,10 +196,16 @@ export function frameErc(ctx: CheckerCtx, v: Pick<ErcViolation, "location"> | un
   if (showSchematic) dispatch({ type: "SET_TAB", tab: "schematic" });
 }
 
-/** `DIALOG_ERC::OnERCItemSelected`: select the row, and its finding on the canvas ([`frameErc`]). */
+/**
+ * `DIALOG_ERC::OnERCItemSelected`: select the row, and its finding on the canvas ([`frameErc`]) as the options menu says: nothing more with "Cross-probe
+ * Selected Items" off (`if( !m_crossprobe ) { aEvent.Skip(); return; }`), the item selected but the view left where it is with "Center on Cross-probe" off
+ * (`FocusOnItem( item, m_scroll_on_crossprobe )`).
+ */
 export function selectErc(ctx: CheckerCtx, index: number, showSchematic = false): void {
   ctx.dispatch({ type: "SET_ERC_SELECTED", index });
-  frameErc(ctx, ctx.api.getState().erc?.violations[index], showSchematic);
+  const { crossprobe, scrollOnCrossprobe } = getCheckerView().erc.options;
+  if (!crossprobe) return;
+  frameErc(ctx, ctx.api.getState().erc?.violations[index], showSchematic, scrollOnCrossprobe);
 }
 
 /**
@@ -477,8 +483,8 @@ export async function saveReport(ctx: CheckerCtx, domain: "erc" | "drc", format:
   const filter = getCheckerView()[domain].filter;
   const request: SavedReportRequest = { format, errors: filter.errors, warnings: filter.warnings, exclusions: filter.exclusions, units: state.units };
   if (domain === "drc") {
-    request.refill_zones = state.drcRefillZones;
-    request.schematic_parity = state.drcParity;
+    request.refill_zones = getCheckerView().drc.run.refillZones;
+    request.schematic_parity = getCheckerView().drc.run.parity;
     request.all_track_errors = getCheckerView().drc.options.reportAllTrackErrors;
   }
   try {

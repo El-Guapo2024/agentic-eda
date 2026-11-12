@@ -285,6 +285,9 @@
       const dlg = dialogNamed("Electrical Rules Checker");
       t(!!dlg, `the action opens the Electrical Rules Checker (${r.dialog})`);
       if (!dlg) return;
+      // the Show boxes start unticked, as dialog_erc_base.fbp has them (UI-LEFT-2 BB5): All lists everything
+      const all = dlg.querySelector(".rc-show input");
+      if (all && !all.checked) all.click();
       buttonText(dlg, "Run ERC")?.click();
       const rep = await until(() => ercReplies.find((x) => Array.isArray(x?.violations)), 90000);
       if (!t(!!rep, "the run came back")) return;

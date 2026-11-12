@@ -8,5 +8,7 @@ description = "Geometry core (shapes, collision, clearance rules, rule expressio
 serde = { workspace = true }
 serde_json = { workspace = true }
 eda-model = { path = "../model" }
+# The nets KiCad's netlist gives a lone pin (`eda_engine::nets::unconnected_pad_nets`), which the board file numbers with the others (`A.Net`).
+eda-engine = { path = "../engine" }
 eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }

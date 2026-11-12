@@ -436,6 +436,8 @@
 
     const ran = await eda.run("eeschema.InspectionTool.runERC");
     check("Run ERC opens the Electrical Rules Checker", ran.ok && /Electrical Rules Checker/.test(ran.dialog ?? ""), ran.dialog);
+    // The ERC dialog's Show boxes start unticked, as dialog_erc_base.fbp has them (UI-LEFT-2 BB5): All lists everything for what follows.
+    { const all = [...document.querySelectorAll(".dialog")].find((d) => d.innerText.startsWith("Electrical Rules Checker"))?.querySelector(".rc-show input"); if (all && !all.checked) { all.click(); await sleep(200); } }
     const loaded = await until(() => rows().length >= 3 && !busy(), 60000);
     check("the Violations page lists the findings", !!loaded, `${rows().length} rows`);
     if (!loaded) return;

@@ -2108,3 +2108,40 @@ mod tests {
         expect(&out, &[("GND", &["a.1", "b.1"]), ("Net-(c-Pad1)", &["c.1", "d.1"])]);
     }
 }
+
+/// The nets the derived board gives the pads the model has on no net: "REF.PIN" -> `unconnected-(..)` (a pin the schematic has alone, its own net in
+/// KiCad's netlist, which Update PCB from Schematic puts on the pad: `BOARD_NETLIST_UPDATER::updateComponentPadConnections`). Every other pad on no net
+/// -- an NPTH, a pad no pin names, a footprint read from a KiCad file -- is KiCad's net 0 there. The board writer (`eda_kicad`) numbers these with the
+/// model's nets, and so does the rule board (`A.Net`).
+pub fn unconnected_pad_nets(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> BTreeMap<String, String> {
+    let footprints: Vec<&eda_model::ir::FootprintInstance> = design.placement.iter().flat_map(|pl| pl.footprints.iter()).collect();
+    unconnected_pin_nets(design, model, &footprints)
+}
+
+/// "REF.PIN" -> `unconnected-(..)` for every pin of one of `footprints` (made here, not read from a KiCad file) that is on no net of `model`.
+pub fn unconnected_pin_nets(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, footprints: &[&eda_model::ir::FootprintInstance]) -> BTreeMap<String, String> {
+    let parts: BTreeMap<&str, &eda_model::Part> = model.parts.iter().map(|p| (p.reference.as_str(), p)).collect();
+    let on_a_net: BTreeSet<&str> = model.nets.iter().flat_map(|n| n.pins.iter().map(String::as_str)).collect();
+    let read_from_a_file: BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.footprint_extras.iter().map(|e| e.id.as_str())).collect();
+    let mut out = BTreeMap::new();
+    for fp in footprints {
+        let Some(part) = parts.get(fp.id.as_str()) else { continue };
+        if read_from_a_file.contains(fp.id.as_str()) {
+            continue;
+        }
+        let link = model.symbol_links.get(&fp.id);
+        for pin in &part.pins {
+            let key = format!("{}.{}", fp.id, pin.number);
+            // (a pin no symbol draws -- of a unit no symbol places -- is in no netlist, and its pad on no net)
+            if link.is_some_and(|l| !l.pins.contains_key(&pin.number)) {
+                continue;
+            }
+            if !on_a_net.contains(key.as_str()) {
+                let with_unit = model.symbol_links.get(&fp.id).and_then(|l| l.units.get(&pin.number)).map(String::as_str);
+                let name = unconnected_net_name(&key, pin.name.as_deref(), with_unit);
+                out.insert(key, name);
+            }
+        }
+    }
+    out
+}

@@ -22,6 +22,7 @@ import {
   type PanelType,
   type RuleEntry,
   type RuleFields,
+  dropInOrder,
 } from "./ruleEditor";
 
 const fields = (): RuleFields => ({
@@ -205,4 +206,13 @@ test("lengths show and read as the unit binder's mm", () => {
   assert.equal(readMm("0,2"), 0.2);
   assert.equal(readMm("abc"), 0);
   assert.equal(unsavedChangesMessage(["a", "b"]), "The following rules have unsaved changes:\n\n  • a\n  • b\n\nDo you want to save your changes?");
+});
+
+test("a tree item dragged among its siblings goes first, last or just before the target (onRuleTreeItemLeftUp)", () => {
+  assert.deepEqual(dropInOrder([1, 2, 3, 4], 3, 1), [3, 1, 2, 4], "onto the first: prepended");
+  assert.deepEqual(dropInOrder([1, 2, 3, 4], 1, 4), [2, 3, 4, 1], "onto the last: appended");
+  assert.deepEqual(dropInOrder([1, 2, 3, 4], 4, 2), [1, 4, 2, 3], "else before the target");
+  assert.deepEqual(dropInOrder([1, 2, 3, 4], 1, 2), [1, 2, 3, 4], "dropped on the one after it: inserted after itself, it stays");
+  assert.deepEqual(dropInOrder([1, 2, 3, 4], 1, 3), [2, 1, 3, 4], "else just before the target");
+  assert.deepEqual(dropInOrder([1, 2, 3], 2, 9), [1, 2, 3], "a target of another parent changes nothing");
 });

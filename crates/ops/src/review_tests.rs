@@ -144,10 +144,11 @@ fn erc_severities_are_stored_as_sent_and_replace_the_whole_table() {
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore")]) }).unwrap();
 }
 
-/// r3 D3-M2: Ignore on a pin-to-pin error comes as the table with `pin_to_pin` and the error's slot ignored; the slot is kept beside the table (no project
-/// names it), held through a table that leaves it out while `pin_to_pin` stays ignored (Schematic Setup's page), and gone when `pin_to_pin` is set back.
+/// r3 D3-M2, UI-LEFT-2 BB2: Ignore on a pin-to-pin error comes as the table with `pin_to_pin` and the error's slot ignored; the slot is kept beside the table (no
+/// project names it) and on its own, as KiCad 25ec2335's `ERC_SETTINGS::GetSeverity` reads it: a table that leaves it out (Schematic Setup's page, a reset to
+/// the defaults, the Ignored Tests list setting `pin_to_pin` back) keeps it, and only a table naming the slot at another severity takes it away.
 #[test]
-fn ignoring_the_pin_to_pin_errors_is_remembered_while_the_pin_to_pin_warning_is_ignored() {
+fn ignoring_the_pin_to_pin_errors_is_remembered_until_the_errors_slot_is_set_back() {
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let sev = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
@@ -159,14 +160,19 @@ fn ignoring_the_pin_to_pin_errors_is_remembered_while_the_pin_to_pin_warning_is_
     // Another check's severity changed, the table sent again without the slot: still ignored.
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore"), ("wire_dangling", "ignore")]) }).unwrap();
     assert!(errors_ignored(&b));
-    // Ignore on a warning names no slot: the errors were not ignored and are not now.
+    // `pin_to_pin` set back, or the whole table reset to KiCad's defaults: the error's slot is its own and stays ignored.
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "warning")]) }).unwrap();
-    assert!(!errors_ignored(&b), "pin_to_pin set back takes the errors back too");
+    assert!(errors_ignored(&b), "the warning set back leaves the errors' ignore");
+    b.apply(&Cmd::SetErcSeverities { severities: sev(&[]) }).unwrap();
+    assert!(errors_ignored(&b), "a severity reset keeps the Ignore");
+    // The slot named at another severity takes it away; Ignore on a warning names no slot and leaves the errors.
+    b.apply(&Cmd::SetErcSeverities { severities: sev(&[(eda_model::erc_checks::PIN_TO_PIN_ERROR_SLOT, "error")]) }).unwrap();
+    assert!(!errors_ignored(&b));
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore")]) }).unwrap();
     assert!(!errors_ignored(&b));
-    // The slot with no ignored warning means nothing.
+    // The slot alone ignores the errors, the warnings still reported.
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[(eda_model::erc_checks::PIN_TO_PIN_ERROR_SLOT, "ignore")]) }).unwrap();
-    assert!(!errors_ignored(&b));
+    assert!(errors_ignored(&b));
     assert!(b.apply(&Cmd::SetErcSeverities { severities: sev(&[(eda_model::erc_checks::PIN_TO_PIN_ERROR_SLOT, "loud")]) }).is_err());
 }
 

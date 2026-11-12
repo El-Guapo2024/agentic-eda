@@ -61,7 +61,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // The pads of a pin the schematic has on no net of its own (a pin alone, a pin on a no-connect flag): KiCad's netlist gives each a net of its own
     // (`unconnected-(U1-NC1-Pad12)`, `SCH_PIN::GetDefaultNetName( .., aForceNoConnect = true )`), which Update PCB from Schematic puts on the pad
     // (`BOARD_NETLIST_UPDATER::updateComponentPadConnections`). A footprint read from a KiCad file keeps the pads the file gave no net.
-    let unconnected = unconnected_pin_nets(design, model, &footprints, &parts_by_ref);
+    let unconnected = eda_engine::nets::unconnected_pin_nets(design, model, &footprints);
     let from_schematic = FromSchematic { unconnected: unconnected.clone(), root_sheetfile: format!("{}.kicad_sch", meta.title), forced: fills.map(|f| f.forced.clone()).unwrap_or_default() };
     // Net name -> number, sorted by name, 1-indexed (0 is the unconnected net).
     let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).chain(unconnected.values().map(String::as_str)).collect();
@@ -1203,7 +1203,7 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
 /// What the footprints of a board made here take from the schematic written beside it, beyond the model's nets.
 #[derive(Default)]
 pub(crate) struct FromSchematic {
-    /// "REF.PIN" -> `unconnected-(..)`, the net of a pin the schematic has alone ([`unconnected_pin_nets`]).
+    /// "REF.PIN" -> `unconnected-(..)`, the net of a pin the schematic has alone (`eda_engine::nets::unconnected_pin_nets`).
     pub unconnected: BTreeMap<String, String>,
     /// The root sheet's file (`<title>.kicad_sch`): the `(sheetfile ..)` of a footprint whose symbol is on the root.
     pub root_sheetfile: String,
@@ -1221,39 +1221,9 @@ pub(crate) fn with_forced_layers(tokens: &mut [String], layers: Option<&Vec<Stri
     }
 }
 
-/// The nets the derived board gives the pads the model has on no net: "REF.PIN" -> `unconnected-(..)` (a pin the schematic has alone, its own net in
-/// KiCad's netlist). Every other pad on no net -- an NPTH, a pad no pin names, a footprint read from a KiCad file -- is KiCad's net 0 there.
+/// The nets the derived board gives the pads the model has on no net: "REF.PIN" -> `unconnected-(..)` (`eda_engine::nets::unconnected_pad_nets`).
 pub fn unconnected_pad_nets(design: &Design, model: &ConstraintModel) -> BTreeMap<String, String> {
-    let parts: BTreeMap<&str, &Part> = model.parts.iter().map(|p| (p.reference.as_str(), p)).collect();
-    let footprints: Vec<&FootprintInstance> = design.placement.iter().flat_map(|pl| pl.footprints.iter()).collect();
-    unconnected_pin_nets(design, model, &footprints, &parts)
-}
-
-/// "REF.PIN" -> `unconnected-(..)` for every pin of a footprint made here that is on no net of `model` (see `export_kicad_pcb_with`).
-fn unconnected_pin_nets(design: &Design, model: &ConstraintModel, footprints: &[&FootprintInstance], parts: &BTreeMap<&str, &Part>) -> BTreeMap<String, String> {
-    let on_a_net: std::collections::BTreeSet<&str> = model.nets.iter().flat_map(|n| n.pins.iter().map(String::as_str)).collect();
-    let read_from_a_file: std::collections::BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.footprint_extras.iter().map(|e| e.id.as_str())).collect();
-    let mut out = BTreeMap::new();
-    for fp in footprints {
-        let Some(part) = parts.get(fp.id.as_str()) else { continue };
-        if read_from_a_file.contains(fp.id.as_str()) {
-            continue;
-        }
-        let link = model.symbol_links.get(&fp.id);
-        for pin in &part.pins {
-            let key = format!("{}.{}", fp.id, pin.number);
-            // (a pin no symbol draws -- of a unit no symbol places -- is in no netlist, and its pad on no net)
-            if link.is_some_and(|l| !l.pins.contains_key(&pin.number)) {
-                continue;
-            }
-            if !on_a_net.contains(key.as_str()) {
-                let with_unit = model.symbol_links.get(&fp.id).and_then(|l| l.units.get(&pin.number)).map(String::as_str);
-                let name = eda_engine::nets::unconnected_net_name(&key, pin.name.as_deref(), with_unit);
-                out.insert(key, name);
-            }
-        }
-    }
-    out
+    eda_engine::nets::unconnected_pad_nets(design, model)
 }
 
 /// `footprint` turned half a turn in its own frame: its pads, its art and its courtyard. With the footprint's orientation turned half a turn back it is the same

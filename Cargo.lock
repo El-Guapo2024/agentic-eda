@@ -572,6 +572,7 @@ name = "eda-drc"
 version = "0.1.0"
 dependencies = [
  "eda-clipper2",
+ "eda-engine",
  "eda-model",
  "eda-shape-poly-set",
  "serde",

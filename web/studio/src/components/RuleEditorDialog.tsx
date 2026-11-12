@@ -34,6 +34,7 @@ import {
   buildCondition,
   buildTree,
   childrenOf,
+  dropInOrder,
   duplicateBaseName,
   filterTree,
   groupRows,
@@ -180,6 +181,15 @@ export function RuleEditorDialog() {
   /** The tree's drag (`m_draggedItem`) and the item it is over (`m_dropTargetItem`, highlighted). */
   const [dragId, setDragId] = useState<number | null>(null);
   const [dropId, setDropId] = useState<number | null>(null);
+  // the order a category or constraint node was dragged into, by parent (the tree's own, as KiCad's `wxTreeCtrl`: the rules file does not change)
+  const [order, setOrder] = useState<Map<number, number[]>>(new Map());
+  const kidsOf = (parent: number) => {
+    const kids = childrenOf(tree, parent);
+    const want = order.get(parent);
+    if (!want) return kids;
+    const rank = (id: number) => (want.includes(id) ? want.indexOf(id) : want.length);
+    return [...kids].sort((a, b) => rank(a.id) - rank(b.id));
+  };
   /** After a reload, the rule to select again: its panel, name and which of that name. */
   const reselect = useRef<{ panel: PanelType; name: string } | null>(null);
 
@@ -281,15 +291,22 @@ export function RuleEditorDialog() {
   };
 
   // `onRuleTreeItemLeftUp`: a saved rule dropped on another saved rule of the same node takes its place there (first, last, or just before it).
-  const canDrag = (n: TreeNode) => n.type === "rule" && !n.draft && n.entry !== undefined;
+  // A category or a constraint node moves among its siblings too (`onRuleTreeItemMouseMotion` highlights any item of the dragged one's parent): the tree's
+  // order only, as KiCad's drag moves the tree item.
+  const canDrag = (n: TreeNode) => (n.type === "rule" && !n.draft && n.entry !== undefined) || n.type === "category" || n.type === "constraint";
   const canDrop = (n: TreeNode) => {
     const d = nodeById(dragId);
-    return !!d && d.id !== n.id && canDrag(n) && n.parent === d.parent;
+    return !!d && d.id !== n.id && canDrag(n) && n.parent === d.parent && (d.type === "rule") === (n.type === "rule");
   };
   const dropRule = async (target: TreeNode) => {
     const d = nodeById(dragId);
     setDragId(null);
     setDropId(null);
+    if (d && canDrop(target) && d.type !== "rule" && d.parent !== null) {
+      const parent = d.parent;
+      setOrder((m) => new Map(m).set(parent, dropInOrder(kidsOf(parent).map((k) => k.id), d.id, target.id)));
+      return;
+    }
     if (!d || !canDrop(target) || d.entry === undefined || target.entry === undefined) return;
     setBusy(true);
     try {
@@ -481,7 +498,7 @@ export function RuleEditorDialog() {
 
   const renderNode = (n: TreeNode, depth: number): ReactNode => {
     if (visible && !visible.has(n.id)) return null;
-    const kids = childrenOf(tree, n.id);
+    const kids = kidsOf(n.id);
     const isOpen = expanded.has(n.id) || !!visible;
     const text = n.draft || starred.has(n.id) ? `${n.name} *` : n.name;
     return (
@@ -551,7 +568,7 @@ export function RuleEditorDialog() {
           <div className="re-tree-pane">
             <input className="re-filter" type="search" placeholder="Type filter text" value={filter} data-testid="re-filter" onChange={(e) => setFilter(e.target.value)} />
             <ul className="re-tree" data-testid="re-tree">
-              {root && childrenOf(tree, root.id).map((n) => renderNode(n, 0))}
+              {root && kidsOf(root.id).map((n) => renderNode(n, 0))}
             </ul>
             <div className="re-tree-buttons">
               <button title="New Rule" data-testid="re-add" disabled={!canAdd || busy} onClick={() => sel && addRule(sel)}>
