@@ -1182,7 +1182,7 @@ export function SchematicView() {
         // `AddStandardSubMenus`: the Zoom submenu over the eeschema zoom list, the Grid submenu over the Schematic Editor's grids
         const other = state.units === "mm" ? "mil" : "mm";
         const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other)) };
-        const nodes = schContextMenu(summarizeSelection(sch, ids, [wx, wy], POINT_SIZE_PX / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer }), std);
+        const nodes = schContextMenu(summarizeSelection(sch, ids, [wx, wy], POINT_SIZE_PX / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer, variant: state.schVariant }), std);
         // KiCad 25ec2335's `EE_GRAPHIC_TOOL` menu while Draw Arc is armed (`inDrawingArc`, order 200): the five modes as check items, then Cycle Arc Drawing Mode
         const arcModes: MenuNode[] =
           state.activeTool === "sch_arc"

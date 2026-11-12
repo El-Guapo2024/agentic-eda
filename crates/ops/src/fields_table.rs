@@ -542,17 +542,25 @@ pub fn symbol_field_text(design: &eda_model::ir::Design, model: &ConstraintModel
 /// for it, and two units of one reference are one row anyway).
 pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> {
     let mut sch = design.schematic.clone()?;
-    for screen in design.sheet_contents.iter().flat_map(|c| c.values()) {
+    let paths_of = eda_model::sheet_list::paths_of_screens(design);
+    for (file, screen) in design.sheet_contents.iter().flat_map(|c| c.iter()) {
         sch.symbols.extend(screen.symbols.iter().cloned());
         for (reference, fields) in &screen.user_fields {
             sch.user_fields.entry(reference.clone()).or_default().extend(fields.clone());
         }
-        // and their records of the design variants, so the table can show a variant
-        for (reference, records) in &screen.extras.symbol_variants {
-            sch.extras.symbol_variants.entry(reference.clone()).or_default().extend(records.clone());
+        // and their records of the design variants, so the table can show a variant: those of the path the symbol's own reference is on
+        let paths = paths_of.get(file).map(Vec::as_slice).unwrap_or(&[]);
+        for sym in &screen.symbols {
+            let own = eda_model::sheet_list::own_path(screen, sym, paths).map(Vec::as_slice).unwrap_or(&[]);
+            if let Some(records) = eda_model::variants::records_on(screen, &sym.id, own) {
+                let into = sch.extras.symbol_variants.entry(sym.id.clone()).or_default();
+                for (name, rec) in records {
+                    into.entry(name.clone()).or_insert_with(|| rec.clone());
+                }
+            }
         }
     }
-    for (alias, screen, sym, unit) in path_rows(design) {
+    for (alias, screen, sym, unit, path) in path_rows(design) {
         if sch.symbols.iter().any(|s| s.id == alias && s.unit == unit) {
             continue;
         }
@@ -563,7 +571,8 @@ pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> 
         if let Some(fields) = screen.user_fields.get(&sym.id) {
             sch.user_fields.entry(alias.clone()).or_default().extend(fields.clone());
         }
-        if let Some(records) = screen.extras.symbol_variants.get(&sym.id) {
+        // the records of that path's instance (`eda_model::variants::records_on`)
+        if let Some(records) = eda_model::variants::records_on(screen, &sym.id, &path) {
             sch.extras.symbol_variants.entry(alias).or_default().extend(records.clone());
         }
     }
@@ -593,8 +602,26 @@ pub fn with_sheet_flags(base: &mut SchematicSection, design: &eda_model::ir::Des
     }
 }
 
+/// The sheet path each reference [`project_view`] lists for a later sheet path stands for: alias -> (the id of the screen's symbol, the path). A variant's
+/// record is the instance's, one per path (`SCH_SYMBOL_INSTANCE::m_Variants`), so a variant edit on such a row is that path's (UI-LEFT-2 SS16).
+pub fn path_alias_paths(design: &eda_model::ir::Design) -> BTreeMap<String, (String, Vec<String>)> {
+    use eda_model::sheet_list;
+    let ids: std::collections::BTreeSet<&str> = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter().map(|x| x.id.as_str())).collect();
+    let mut out = BTreeMap::new();
+    for entry in sheet_list::walk(design).into_iter().skip(1) {
+        let Some(screen) = sheet_list::screen_of(design, &entry.path) else { continue };
+        for sym in &screen.symbols {
+            let reference = sheet_list::reference_under(screen, sym, &entry.path);
+            if reference != sym.id && !ids.contains(reference.as_str()) {
+                out.entry(reference).or_insert_with(|| (sym.id.clone(), entry.path.clone()));
+            }
+        }
+    }
+    out
+}
+
 /// The placed symbols a later sheet path shows under a reference other than the symbol's id: `(reference, screen, symbol, unit)`, in the hierarchy's order.
-fn path_rows(design: &eda_model::ir::Design) -> Vec<(String, &SchematicSection, &SymbolInstance, u32)> {
+fn path_rows(design: &eda_model::ir::Design) -> Vec<(String, &SchematicSection, &SymbolInstance, u32, Vec<String>)> {
     use eda_model::sheet_list;
     let mut out = Vec::new();
     for entry in sheet_list::walk(design).into_iter().skip(1) {
@@ -602,7 +629,7 @@ fn path_rows(design: &eda_model::ir::Design) -> Vec<(String, &SchematicSection, 
         for sym in &screen.symbols {
             let reference = sheet_list::reference_under(screen, sym, &entry.path);
             if reference != sym.id {
-                out.push((reference, screen, sym, sheet_list::unit_under(screen, sym, &entry.path)));
+                out.push((reference, screen, sym, sheet_list::unit_under(screen, sym, &entry.path), entry.path.clone()));
             }
         }
     }
@@ -613,7 +640,7 @@ fn path_rows(design: &eda_model::ir::Design) -> Vec<(String, &SchematicSection, 
 /// path's row it is edited on.
 pub fn path_aliases(design: &eda_model::ir::Design) -> BTreeMap<String, String> {
     let ids: std::collections::BTreeSet<&str> = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter().map(|x| x.id.as_str())).collect();
-    path_rows(design).into_iter().filter(|(alias, ..)| !ids.contains(alias.as_str())).map(|(alias, _, sym, _)| (alias, sym.id.clone())).collect()
+    path_rows(design).into_iter().filter(|(alias, ..)| !ids.contains(alias.as_str())).map(|(alias, _, sym, ..)| (alias, sym.id.clone())).collect()
 }
 
 /// `changes` for the table over [`project_view`]: an edit to a symbol goes to every row that shows it (the symbol's own and its later paths'), as a

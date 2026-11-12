@@ -20,7 +20,7 @@ import { revisionOf } from "../kicad-port/checkRevision";
 import { getCheckerView } from "./checkerView";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, setRequestVariants, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -2050,6 +2050,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SCHEMATIC_ERR", message: e instanceof Error ? e.message : String(e) });
     }
   }, []);
+
+  // The editors' current design variants are the server's to resolve the texts in (`?variant=`, UI-LEFT-2 SS16 / PP16): a change fetches the editor's document
+  // again (`SCHEMATIC::SetCurrentVariant` / `BOARD::SetCurrentVariant`, then a redraw).
+  const variantsAsked = useRef({ sch: "", pcb: "" });
+  useEffect(() => {
+    setRequestVariants(state.schVariant, state.pcbVariant);
+    const was = variantsAsked.current;
+    variantsAsked.current = { sch: state.schVariant, pcb: state.pcbVariant };
+    if (was.sch !== state.schVariant && state.schematic) void refreshSchematic();
+    if (was.pcb !== state.pcbVariant && state.board) void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.schVariant, state.pcbVariant]);
 
   const refreshRatsnest = useCallback(async () => {
     try {

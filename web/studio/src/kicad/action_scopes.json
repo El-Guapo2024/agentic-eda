@@ -317,6 +317,8 @@
     "eeschema.InteractiveEdit.breakWire": "AS_GLOBAL",
     "eeschema.InteractiveEdit.changeSymbol": "AS_GLOBAL",
     "eeschema.InteractiveEdit.changeSymbols": "AS_GLOBAL",
+    "eeschema.InteractiveEdit.clearVariantSymbol": "AS_GLOBAL",
+    "eeschema.InteractiveEdit.setVariantSymbol": "AS_GLOBAL",
     "eeschema.InteractiveEdit.cleanupSheetPins": "AS_GLOBAL",
     "eeschema.InteractiveEdit.convertStackedPins": "AS_GLOBAL",
     "eeschema.InteractiveEdit.editFootprint": "AS_GLOBAL",

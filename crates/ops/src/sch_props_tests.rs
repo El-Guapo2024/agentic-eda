@@ -796,7 +796,7 @@ fn a_sheets_attributes_in_a_variant_are_its_record_and_reach_the_symbols_inside(
     let m = ConstraintModel::default();
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&Cmd::AddDesignVariant { name: "Lite".into(), description: String::new() }).unwrap();
-    let set = |variant: &str, dnp: Option<bool>| SchCmd::SetSheetVariant { id: "sheet_a".into(), variant: variant.into(), dnp, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None };
+    let set = |variant: &str, dnp: Option<bool>| SchCmd::SetSheetVariant { id: "sheet_a".into(), variant: variant.into(), dnp, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None, fields: None };
     ok(&mut b, set("Lite", Some(true)));
     let sch = sch_of(&b);
     assert!(eda_model::variants::sheet_flags(sch, "sheet_a", "Lite").dnp, "SetDNP( true, &instance, \"Lite\" )");
@@ -825,4 +825,30 @@ fn a_sheets_attributes_in_a_variant_are_its_record_and_reach_the_symbols_inside(
     crate::fields_table::with_sheet_flags(&mut base, b.design(), "");
     let r1 = base.symbols.iter().find(|s| s.id == "R1").unwrap();
     assert!(r1.dnp && r1.exclude_from_bom);
+}
+
+/// KiCad 25ec2335 `SCH_SHEET::SetFieldText( .., &instance, variantName )` (UI-LEFT-2 SS16): a sheet's user field has a text of its own in a variant; the same text as the
+/// field's own takes it away, and a field the sheet does not have is refused.
+#[test]
+fn a_sheets_user_field_has_a_text_of_its_own_in_a_variant() {
+    let mut d = hierarchy();
+    let field: eda_model::sch_extras::LabelField = serde_json::from_value(serde_json::json!({ "name": "Channel", "text": "A" })).unwrap();
+    d.schematic.as_mut().unwrap().extras.sheet_fields.insert("sheet_a".into(), vec![field]);
+    let m = ConstraintModel::default();
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddDesignVariant { name: "Lite".into(), description: String::new() }).unwrap();
+    let set = |fields: &[(&str, &str)]| SchCmd::SetSheetVariant {
+        id: "sheet_a".into(),
+        variant: "Lite".into(),
+        dnp: None,
+        exclude_from_sim: None,
+        exclude_from_bom: None,
+        exclude_from_board: None,
+        fields: Some(fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
+    };
+    ok(&mut b, set(&[("Channel", "A-lite")]));
+    assert_eq!(eda_model::variants::sheet_flags(sch_of(&b), "sheet_a", "Lite").fields.get("Channel").map(String::as_str), Some("A-lite"));
+    assert_eq!(err(&mut b, set(&[("Nope", "x")])), "ops_unknown_item");
+    ok(&mut b, set(&[("Channel", "A")]));
+    assert!(sch_of(&b).extras.sheet_variants.is_empty(), "the field's own text: no record left");
 }

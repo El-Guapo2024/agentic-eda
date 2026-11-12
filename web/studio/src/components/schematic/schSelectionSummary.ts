@@ -10,8 +10,11 @@ import { canMerge, canUnmerge } from "../../kicad-port/tables";
 import { pinFunctionMenu, pinFunctionsOf, symbolUnitMenu } from "../../kicad-port/schSymbolMenus";
 
 /** `cursor` (nm) and `tolNm` (the point editor's handle size at this zoom, `EDIT_POINT::POINT_SIZE`) decide the corner entries, which depend on where the pointer is. */
-export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolNm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean; /** The placed unit of the one selected symbol the menu is for (the one under the pointer). */ unit?: number } = {}): SchSelectionSummary {
+export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolNm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean; /** The placed unit of the one selected symbol the menu is for (the one under the pointer). */ unit?: number; /** The current design variant ("" the default). */ variant?: string } = {}): SchSelectionSummary {
   const s = emptySummary();
+  // KiCad 25ec2335 `variantActiveCondition` and `symbolHasVariantSymbol` (the record of the path in view, which the state carries)
+  s.variantActive = (opts.variant ?? "") !== "";
+  s.hasVariantSymbol = s.variantActive && ids.length === 1 && sch.symbols.some((x) => x.id === ids[0] && !!x.variants?.[opts.variant!]?.symbol_override);
   s.allowPinSwaps = opts.allowPinSwaps ?? false;
   s.inGroup = opts.inGroup ?? false;
   s.group = groupMenuFlags(sch, ids);

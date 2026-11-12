@@ -360,6 +360,9 @@ export interface Part {
   fields?: FieldInfo[];
   /** The attributes in effect: the edit's, else derived from the pads and the schematic symbol. */
   attrs?: FootprintAttrsInfo;
+  /** The footprint in the board's current design variant (`GET /api/state?variant=`; UI-LEFT-2 PP16): `GetDNPForVariant`, `GetExcludedFromBOMForVariant`,
+   *  `GetExcludedFromPosFilesForVariant`, `GetExcludedFromSimForVariant` and each field's text (`GetFieldValueForVariant`). Absent in the default variant. */
+  variant?: { dnp: boolean; exclude_from_bom: boolean; exclude_from_pos_files: boolean; exclude_from_sim: boolean; fields: Record<string, string>; /** The fields its symbol has, which a variant may give a text. */ symbol_fields?: string[] };
   /** The zone-connection facts this placed footprint and its pads carry (`crates/cli/src/studio.rs`); absent when there are none. */
   zone?: PartZoneFacts;
   /** `FOOTPRINT::GetLibDescription` and `GetKeywords`: the board file's `(descr ..)` and `(tags ..)` of the footprint; absent when it has none. */
@@ -1282,6 +1285,8 @@ export interface BoardState {
   /** The board's variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, the `(variants ..)` the derived board carries): the design's, which the
    * schematic keeps. Absent from a backend that sends them only with the schematic (`Schematic.variants`). */
   variants?: DesignVariantInfo[];
+  /** The variant the server resolved the board's texts and fields in (`GET /api/state?variant=`, UI-LEFT-2 PP16), "" the default. */
+  shown_variant?: string;
   outline: [Nm, Nm][] | null;
   /** The outline the way KiCad builds it from Edge.Cuts (`BOARD::GetBoardPolygonOutlines`): every outline with its cutouts, where `outline` is one polygon. Absent from an older backend. See `kicad-port/pcbOutline.ts` `boardOutlinePolygons`. */
   outline_polys?: { outer: [Nm, Nm][]; holes: [Nm, Nm][][] }[];
@@ -2429,6 +2434,9 @@ export type Cmd =
       exclude_from_pos_files?: boolean | null;
       fields?: Record<string, string> | null;
     }
+  /** KiCad 25ec2335 Set Variant Symbol... / Clear Variant Symbol (`SCH_EDIT_TOOL::SetVariantSymbol`, `ClearVariantSymbol`): the symbol `id` drawn as `lib_id` in `variant` on the
+   *  sheet path in view, or as its own again without `lib_id`; refused with KiCad's message when the symbol is not pin-compatible (UI-LEFT-2 SS16). */
+  | { op: "set_variant_symbol"; variant: string; id: string; lib_id?: string | null }
   /** `eeschema.EditorControl.editPageNumber`: the page number of the sheet placement `sheet` (its id); letters and digits, empty for "by place in the hierarchy".
    *  `path` (the sheet path, root down, ending in `sheet`): that path's page only, as KiCad keeps one per path of a sheet on a screen shown twice. */
   | { op: "set_sheet_page"; sheet: string; page: string; path?: string[] }
@@ -3204,6 +3212,12 @@ export interface SymbolVariantInfo {
   exclude_from_sim?: boolean;
   exclude_from_pos_files?: boolean;
   fields?: Record<string, string>;
+  /** The variant's own symbol (`m_SymbolOverride`, Set Variant Symbol...): a library id the symbol is drawn as in this variant (UI-LEFT-2 SS16). */
+  symbol_override?: string;
+  /** The design draws it (`GetVariantLibSymbol`: the library has it and it is pin-compatible): `lib_symbols` holds it. */
+  symbol_resolved?: boolean;
+  /** The texts the variant symbol gives the fields the record has no text of its own for (`GetFieldText`'s `altSymbol` fallback). */
+  symbol_fields?: Record<string, string>;
 }
 
 /** A design variant of the schematic (KiCad 25ec2335 `SCHEMATIC_SETTINGS::m_VariantDescriptions`, the project file's `schematic.variants`). */
@@ -3490,6 +3504,8 @@ export interface SheetVariantFlags {
   exclude_from_sim?: boolean;
   exclude_from_bom?: boolean;
   exclude_from_board?: boolean;
+  /** The texts the variant gives the sheet's user fields, by name (`VARIANT::m_Fields`; UI-LEFT-2 SS16). */
+  fields?: Record<string, string>;
 }
 
 /** See `Sheet::props`: the border's width (0: the default line width) and colour, the background colour (absent: KiCad's UNSPECIFIED), the four attributes. */
@@ -3572,6 +3588,8 @@ export interface Schematic {
   annotation?: AnnotationSettings | null;
   /** The design's variants (KiCad 25ec2335 `SCHEMATIC::GetVariantNames`, with the project file's descriptions), in name order; the same list on every sheet. Absent: none. */
   variants?: DesignVariantInfo[];
+  /** The variant the server resolved the texts in (`GET /api/schematic?variant=`): the `shown` of every field is that variant's ("" the default). */
+  shown_variant?: string;
   /** Schematic Setup > Formatting as the sheet is drawn by it (the sizes as KiCad reads them back); absent from an older backend. */
   setup?: SchematicSetupLook;
 }

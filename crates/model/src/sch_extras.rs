@@ -205,6 +205,15 @@ pub struct SchExtras {
     /// `(instances ..)`): by reference, then by variant name. A reference with none has no entry. See [`crate::variants`]. Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub symbol_variants: BTreeMap<String, BTreeMap<String, crate::variants::SymbolVariant>>,
+    /// The records a symbol of this screen has on one sheet path, where the screen is shown on several paths and that path's records are not the
+    /// reference's own [`Self::symbol_variants`] (KiCad 25ec2335 keeps them per instance, `SCH_SYMBOL_INSTANCE::m_Variants`, one instance per sheet path:
+    /// a channel sheet placed twice can fit 10k on one channel and 4k7 on the other in one variant): by reference, then by the sheet path (the placement ids
+    /// from the root down, joined with `/`) -> the path's whole set of records, by variant name (an empty set: the path has none). Read through
+    /// `crate::variants::records_on`; read from each `(path ..)` of a file's `(instances ..)` and written back per path; a variant edit made on a path of a
+    /// screen shown twice sets that path's (`SCH_SYMBOL::SetDNP( .., &GetCurrentSheet(), variant )`). A path's set equal to the reference's is not kept.
+    /// Additive (UI-LEFT-2 SS16).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub path_symbol_variants: BTreeMap<String, BTreeMap<String, BTreeMap<String, crate::variants::SymbolVariant>>>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -547,7 +556,7 @@ pub struct SheetProps {
 
 /// See [`SchExtras::sheet_variants`]: `SCH_SHEET_VARIANT`'s flags (`VARIANT::m_DNP`, `m_ExcludedFromSim`, `m_ExcludedFromBOM`, `m_ExcludedFromBoard`), every one set, as
 /// `SCH_SHEET_VARIANT::InitializeAttributes` snapshots the sheet's own when the record is made.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetVariant {
     #[serde(default, skip_serializing_if = "is_false")]
@@ -558,17 +567,22 @@ pub struct SheetVariant {
     pub exclude_from_bom: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub exclude_from_board: bool,
+    /// The texts the variant gives the sheet's user fields (`VARIANT::m_Fields`, by field name; KiCad 25ec2335 `SCH_SHEET::SetFieldText( .., aVariantName )`:
+    /// never the sheet's name or file), written as `(field (name ..) (value ..))` in the record (`saveSheet`) and read back (UI-LEFT-2 SS16).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
 
 impl SheetVariant {
     /// `SCH_SHEET_VARIANT::InitializeAttributes`: the sheet's own flags.
     pub fn initialized(base: &SheetProps) -> SheetVariant {
-        SheetVariant { dnp: base.dnp, exclude_from_sim: base.exclude_from_sim, exclude_from_bom: base.exclude_from_bom, exclude_from_board: base.exclude_from_board }
+        SheetVariant { dnp: base.dnp, exclude_from_sim: base.exclude_from_sim, exclude_from_bom: base.exclude_from_bom, exclude_from_board: base.exclude_from_board, fields: BTreeMap::new() }
     }
 
-    /// `SCH_SHEET_VARIANT::HasDifferentials` (the field texts aside): DNP, simulation or BOM differ from the sheet's own (Exclude from board is not counted).
+    /// `SCH_SHEET_VARIANT::HasDifferentials`: DNP, simulation or BOM differ from the sheet's own (Exclude from board is not counted), or a field has a text of the
+    /// variant's (`!m_Fields.empty()`).
     pub fn has_differentials(&self, base: &SheetProps) -> bool {
-        self.dnp != base.dnp || self.exclude_from_bom != base.exclude_from_bom || self.exclude_from_sim != base.exclude_from_sim
+        self.dnp != base.dnp || self.exclude_from_bom != base.exclude_from_bom || self.exclude_from_sim != base.exclude_from_sim || !self.fields.is_empty()
     }
 }
 
@@ -1050,6 +1064,7 @@ impl SchExtras {
             && self.power_lib_names.is_empty()
             && self.excluded_from_pos_files.is_empty()
             && self.symbol_variants.is_empty()
+            && self.path_symbol_variants.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()

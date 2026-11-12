@@ -1986,6 +1986,15 @@ pub enum Cmd {
         #[serde(default)]
         fields: Option<BTreeMap<String, String>>,
     },
+    /// `eeschema.InteractiveEdit.setVariantSymbol` / `clearVariantSymbol` (KiCad 25ec2335 `SCH_EDIT_TOOL::SetVariantSymbol`, `ClearVariantSymbol`): the
+    /// symbol `id` is drawn as the library symbol `lib_id` in `variant` on the sheet path in view (`SetVariantSymbolOverride`), or, with no `lib_id`, as
+    /// its own again (`ClearVariantSymbolOverride`). The library symbol must be pin-compatible with the symbol's own (`ValidateVariantSymbolCompatibility`).
+    SetVariantSymbol {
+        variant: String,
+        id: String,
+        #[serde(default)]
+        lib_id: Option<String>,
+    },
     /// `eeschema.EditorControl.editPageNumber` (`SCH_EDIT_TOOL::EditPageNumber`): the page number of the placement `sheet` (a
     /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy. With `path` (the whole sheet
     /// path, the placement ids from the root down to `sheet`), the page of that sheet path only (`SCH_SHEET_PATH::SetPageNumber`), as KiCad
@@ -2596,6 +2605,7 @@ impl Cmd {
             | Cmd::RenameDesignVariant { .. }
             | Cmd::CopyDesignVariant { .. }
             | Cmd::SetSymbolVariant { .. }
+            | Cmd::SetVariantSymbol { .. }
             | Cmd::SetSheetPage { .. }
             | Cmd::SetSchItemText { .. }
             | Cmd::SetSymbolLibIds { .. }
@@ -2951,6 +2961,7 @@ impl Cmd {
             Cmd::Annotate { .. } => vec!["annotate"],
             Cmd::SetSymbolAttrs { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetSymbolVariant { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetVariantSymbol { id, .. } => vec![id.as_str()],
             Cmd::SetSheetPage { sheet, .. } => vec![sheet.as_str()],
             Cmd::SetSchItemText { id, .. } => vec![id.as_str()],
             Cmd::SetSymbolLibIds { .. } => vec!["symbol_lib_ids"],
@@ -3776,6 +3787,7 @@ impl<'a> Board<'a> {
                 let flags = sch_variants::VariantFlags { dnp: *dnp, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, exclude_from_sim: *exclude_from_sim, exclude_from_pos_files: *exclude_from_pos_files };
                 self.set_symbol_variant(variant, ids, &flags, fields.as_ref().unwrap_or(&BTreeMap::new()))
             }
+            Cmd::SetVariantSymbol { variant, id, lib_id } => self.set_variant_symbol(variant, id, lib_id.as_deref().map(str::trim)),
             Cmd::SetSheetPage { sheet, page, path } => self.set_sheet_page(sheet, page, path.as_deref()),
             Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),

@@ -11,7 +11,7 @@ use eda_model::ir::{LabelKind, LabelShape, Millideg, Point, SchematicSection, Sh
 use eda_model::sch_extras::{LabelSpin, SchColor, SchGraphic, SchGraphicKind, SchLineStyle};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One schematic edit verb -- see the module doc.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -333,6 +333,10 @@ pub enum SchCmd {
         exclude_from_bom: Option<bool>,
         #[serde(default)]
         exclude_from_board: Option<bool>,
+        /// The texts of the sheet's user fields in the variant (KiCad 25ec2335 `SCH_SHEET::SetFieldText( .., &instance, variantName )`; a text equal to the
+        /// field's own takes the variant's away; UI-LEFT-2 SS16).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fields: Option<BTreeMap<String, String>>,
     },
     /// Sheet Properties' fields grid past Sheetname and Sheetfile (`SCH_FIELD`s of `FIELD_T::SHEET_USER`: Add Field, Delete, the Name, Value, Show and Italic
     /// cells): the sheet's user fields in their new order (`SchExtras::sheet_fields`). `TransferDataFromWindow`'s rules: a field with neither name nor text is
@@ -780,10 +784,11 @@ impl<'a> Board<'a> {
             ),
             SchCmd::SetSheetFields { id, fields } => self.set_sheet_fields(id, fields),
             SchCmd::SetSheetFieldLooks { id, fields } => self.set_sheet_field_looks(id, fields),
-            SchCmd::SetSheetVariant { id, variant, dnp, exclude_from_sim, exclude_from_bom, exclude_from_board } => self.set_sheet_variant(
+            SchCmd::SetSheetVariant { id, variant, dnp, exclude_from_sim, exclude_from_bom, exclude_from_board, fields } => self.set_sheet_variant(
                 id,
                 variant,
                 &crate::sch_variants::VariantFlags { dnp: *dnp, exclude_from_bom: *exclude_from_bom, exclude_from_board: *exclude_from_board, exclude_from_sim: *exclude_from_sim, exclude_from_pos_files: None },
+                fields.as_ref().unwrap_or(&BTreeMap::new()),
             ),
             SchCmd::AddTopLevelSheet { name } => self.add_top_level_sheet(name),
             SchCmd::DeleteTopLevelSheet { id } => {

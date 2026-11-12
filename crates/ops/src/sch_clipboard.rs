@@ -384,6 +384,16 @@ impl<'a> Board<'a> {
                 sch.extras.excluded_from_pos_files.insert(eda_model::ir::field_key(new, s.unit));
             }
         }
+        // ... and its records of the design variants (`updatePastedSymbol`: the clipboard's instance is copied whole, `m_Variants` with it, KiCad 25ec2335;
+        // UI-LEFT-2 SS16), the records of the reference it had, under the one it has now
+        for (s, new) in src.symbols.iter().zip(symbol_refs) {
+            if let Some(records) = src.extras.symbol_variants.get(&s.id) {
+                let into = sch.extras.symbol_variants.entry(new.clone()).or_default();
+                for (name, rec) in records {
+                    into.entry(name.clone()).or_insert_with(|| rec.clone());
+                }
+            }
+        }
         // a pasted symbol keeps the places Swap Pins gave its pins (`SchExtras::pin_swaps`; the clipboard names the symbol's own copy of its library symbol, `lib_name`)
         for (s, new) in src.symbols.iter().zip(symbol_refs) {
             if let Some(swaps) = src.extras.pin_swaps_of(&eda_model::ir::field_key(&s.id, s.unit)) {

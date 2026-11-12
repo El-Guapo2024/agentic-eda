@@ -51,6 +51,12 @@ pub struct SymbolVariant {
     pub exclude_from_pos_files: Option<bool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fields: BTreeMap<String, String>,
+    /// The variant's own symbol (KiCad 25ec2335 `SCH_SYMBOL_VARIANT::m_SymbolOverride`, Set Variant Symbol...): the library id of another library symbol,
+    /// pin-compatible with the symbol's own ([`crate::variant_symbol::validate_compatibility`]), that the symbol is drawn as and takes its empty-override
+    /// field texts from while the variant is current (`SCH_SYMBOL::GetVariantLibSymbol`, `GetEffectiveLibSymbol`). Written as `(symbol_override "<lib id>")`
+    /// in the record (`saveSymbol`) and read back (`parseSymbolOverride`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_override: Option<String>,
 }
 
 /// The five flags of `VARIANT` (`m_DNP`, `m_ExcludedFromBOM`, `m_ExcludedFromBoard`, `m_ExcludedFromSim`, `m_ExcludedFromPosFiles`).
@@ -112,6 +118,7 @@ impl SymbolVariant {
             exclude_from_sim: Some(base.exclude_from_sim),
             exclude_from_pos_files: Some(base.exclude_from_pos_files),
             fields: BTreeMap::new(),
+            symbol_override: None,
         }
     }
 
@@ -141,26 +148,49 @@ impl SymbolVariant {
         SymbolFlags { dnp: r(Flag::Dnp), exclude_from_bom: r(Flag::ExcludeFromBom), exclude_from_board: r(Flag::ExcludeFromBoard), exclude_from_sim: r(Flag::ExcludeFromSim), exclude_from_pos_files: r(Flag::ExcludeFromPosFiles) }
     }
 
-    /// `SCH_SYMBOL_VARIANT::HasDifferentials`: a flag other than the symbol's, or a field text. A record without any "resolves identically to no variant at
-    /// all", and the writer leaves it out (`saveSymbol`: "writing it only keeps deleted variants alive across sessions").
+    /// `SCH_SYMBOL_VARIANT::HasDifferentials`: a flag other than the symbol's, a field text or a variant symbol (`m_SymbolOverride.has_value()`). A record
+    /// without any "resolves identically to no variant at all", and the writer leaves it out (`saveSymbol`: "writing it only keeps deleted variants alive
+    /// across sessions").
     pub fn has_differentials(&self, base: SymbolFlags) -> bool {
-        self.flags(base) != base || !self.fields.is_empty()
+        self.flags(base) != base || !self.fields.is_empty() || self.symbol_override.is_some()
     }
 }
 
-/// The record `variant` of reference `id` on `sch`, if it has one.
+/// The records of every variant reference `id` has on the sheet at `path` (`SCH_SYMBOL_INSTANCE::m_Variants` of the instance of that path): the path's own
+/// set ([`crate::sch_extras::SchExtras::path_symbol_variants`]) where the screen is shown on several paths and that path's records differ, else the
+/// reference's ([`crate::sch_extras::SchExtras::symbol_variants`]). The root (`[]`) and a screen shown once have the reference's.
+pub fn records_on<'a>(sch: &'a SchematicSection, id: &str, path: &[String]) -> Option<&'a BTreeMap<String, SymbolVariant>> {
+    if !path.is_empty() {
+        if let Some(m) = sch.extras.path_symbol_variants.get(id).and_then(|p| p.get(&path.join("/"))) {
+            return Some(m);
+        }
+    }
+    sch.extras.symbol_variants.get(id)
+}
+
+/// The record `variant` of reference `id` on `sch`, if it has one (the reference's own records: see [`record_on`] for a sheet path's).
 pub fn record<'a>(sch: &'a SchematicSection, id: &str, variant: &str) -> Option<&'a SymbolVariant> {
     sch.extras.symbol_variants.get(id)?.get(variant)
+}
+
+/// The record `variant` of reference `id` on the sheet at `path` (`SCH_SYMBOL::GetVariant( aPath, aVariantName )`), if it has one.
+pub fn record_on<'a>(sch: &'a SchematicSection, id: &str, path: &[String], variant: &str) -> Option<&'a SymbolVariant> {
+    records_on(sch, id, path)?.get(variant)
 }
 
 /// The flags of `sym` in `variant` (`SCH_SYMBOL::GetDNP`, `GetExcludedFromBOM`, `GetExcludedFromBoard`, `GetExcludedFromSim`, `GetExcludedFromPosFiles` with
 /// the variant): the symbol's own for the default variant (`""`) or a variant it has no record of.
 pub fn resolved_flags(sch: &SchematicSection, sym: &SymbolInstance, variant: &str) -> SymbolFlags {
+    resolved_flags_on(sch, sym, &[], variant)
+}
+
+/// [`resolved_flags`] on the sheet at `path` (`SCH_SYMBOL::GetDNP( aInstance, aVariantName )`: the instance of that path's record).
+pub fn resolved_flags_on(sch: &SchematicSection, sym: &SymbolInstance, path: &[String], variant: &str) -> SymbolFlags {
     let base = SymbolFlags::of(sch, sym);
     if variant.is_empty() {
         return base;
     }
-    record(sch, &sym.id, variant).map_or(base, |r| r.flags(base))
+    record_on(sch, &sym.id, path, variant).map_or(base, |r| r.flags(base))
 }
 
 /// A field's text in `variant` (`SCH_SYMBOL::GetFieldText( aField, .., aPath, aVariantName )`): the record's text of it, else `own` (the symbol's text).
@@ -172,13 +202,50 @@ pub fn field_text<'a>(sch: &'a SchematicSection, id: &str, variant: &str, field:
     record(sch, id, variant).and_then(|r| r.fields.get(field)).map_or(own, String::as_str)
 }
 
+/// Edit the records reference `id` has on the sheet at `path` with `f` (given the records and the symbol's own flags; it returns whether anything changed).
+/// `path` `None` (or the root's `[]`) edits the reference's own records, which every sheet path without a set of its own reads; a path of a screen shown on
+/// several paths edits that path's alone (`SCH_SYMBOL::getInstance( aPath )`): its set is made from the records it reads now, edited, and dropped again
+/// when it is the reference's ([`crate::sch_extras::SchExtras::path_symbol_variants`]).
+fn edit_records(sch: &mut SchematicSection, id: &str, path: Option<&[String]>, f: impl FnOnce(&mut BTreeMap<String, SymbolVariant>, SymbolFlags) -> bool) -> bool {
+    let Some(sym) = sch.symbols.iter().find(|s| s.id == id) else { return false };
+    let base = SymbolFlags::of(sch, sym);
+    let changed = match path.filter(|p| !p.is_empty()) {
+        Some(p) => {
+            let key = p.join("/");
+            let mut set = records_on(sch, id, p).cloned().unwrap_or_default();
+            let changed = f(&mut set, base);
+            sch.extras.path_symbol_variants.entry(id.to_string()).or_default().insert(key, set);
+            changed
+        }
+        None => f(sch.extras.symbol_variants.entry(id.to_string()).or_default(), base),
+    };
+    tidy_records(sch, id);
+    changed
+}
+
+/// Drop the empty set of records of `id` and every path's set that is the reference's own.
+fn tidy_records(sch: &mut SchematicSection, id: &str) {
+    if sch.extras.symbol_variants.get(id).is_some_and(BTreeMap::is_empty) {
+        sch.extras.symbol_variants.remove(id);
+    }
+    let own = sch.extras.symbol_variants.get(id).cloned().unwrap_or_default();
+    if let Some(paths) = sch.extras.path_symbol_variants.get_mut(id) {
+        paths.retain(|_, set| *set != own);
+        if paths.is_empty() {
+            sch.extras.path_symbol_variants.remove(id);
+        }
+    }
+}
+
 /// `SCH_SYMBOL::setVariantAttribute` for reference `id`: with no record of `variant`, a value equal to the symbol's own changes nothing and another one makes
 /// the record (`InitializeAttributes`, then the flag); with a record, the record's flag is set. Returns whether anything changed.
 pub fn set_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag: Flag, value: bool) -> bool {
-    let Some(sym) = sch.symbols.iter().find(|s| s.id == id) else { return false };
-    let base = SymbolFlags::of(sch, sym);
-    let records = sch.extras.symbol_variants.entry(id.to_string()).or_default();
-    let changed = match records.get_mut(variant) {
+    set_flag_on(sch, id, None, variant, flag, value)
+}
+
+/// [`set_flag`] on the sheet at `path` (see [`edit_records`]).
+pub fn set_flag_on(sch: &mut SchematicSection, id: &str, path: Option<&[String]>, variant: &str, flag: Flag, value: bool) -> bool {
+    edit_records(sch, id, path, |records, base| match records.get_mut(variant) {
         Some(rec) => std::mem::replace(rec.flag_mut(flag), Some(value)) != Some(value),
         None if value == base.get(flag) => false,
         None => {
@@ -187,21 +254,20 @@ pub fn set_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag: Flag,
             records.insert(variant.to_string(), rec);
             true
         }
-    };
-    if sch.extras.symbol_variants.get(id).is_some_and(BTreeMap::is_empty) {
-        sch.extras.symbol_variants.remove(id);
-    }
-    changed
+    })
 }
 
 /// `SCH_SYMBOL::SetFieldText( aField, aFieldName, aFieldText, aPath, aVariantName )` for reference `id`: a text equal to the symbol's own (`own`) takes the
 /// record's text of the field away; another one is the record's text of it, the record made first (`InitializeAttributes`) when there is none. Returns
 /// whether anything changed.
 pub fn set_field(sch: &mut SchematicSection, id: &str, variant: &str, field: &str, text: &str, own: &str) -> bool {
-    let Some(sym) = sch.symbols.iter().find(|s| s.id == id) else { return false };
-    let base = SymbolFlags::of(sch, sym);
-    let records = sch.extras.symbol_variants.entry(id.to_string()).or_default();
-    let changed = match records.get_mut(variant) {
+    set_field_on(sch, id, None, variant, field, text, own)
+}
+
+/// [`set_field`] on the sheet at `path` (see [`edit_records`]). `own` is the text the variant shows without a text of its own: the symbol's, or the
+/// variant symbol's non-empty one (`SetFieldText`: "Diff against the value the variant resolves to without an explicit override").
+pub fn set_field_on(sch: &mut SchematicSection, id: &str, path: Option<&[String]>, variant: &str, field: &str, text: &str, own: &str) -> bool {
+    edit_records(sch, id, path, |records, base| match records.get_mut(variant) {
         Some(rec) if text != own => rec.fields.insert(field.to_string(), text.to_string()).as_deref() != Some(text),
         Some(rec) => rec.fields.remove(field).is_some(),
         None if text == own => false,
@@ -211,19 +277,45 @@ pub fn set_field(sch: &mut SchematicSection, id: &str, variant: &str, field: &st
             records.insert(variant.to_string(), rec);
             true
         }
-    };
-    if sch.extras.symbol_variants.get(id).is_some_and(BTreeMap::is_empty) {
-        sch.extras.symbol_variants.remove(id);
+    })
+}
+
+/// `SCH_SYMBOL::SetVariantSymbolOverride( aPath, aVariantName, aLibId )` (`lib_id` `Some`) and `ClearVariantSymbolOverride` (`None`) for reference `id` on the
+/// sheet at `path`: setting makes the record when there is none (`InitializeAttributes`); clearing a record with no variant symbol changes nothing. Returns
+/// whether anything changed.
+pub fn set_symbol_override_on(sch: &mut SchematicSection, id: &str, path: Option<&[String]>, variant: &str, lib_id: Option<&str>) -> bool {
+    edit_records(sch, id, path, |records, base| match (records.get_mut(variant), lib_id) {
+        (Some(rec), Some(l)) => rec.symbol_override.replace(l.to_string()).as_deref() != Some(l),
+        (Some(rec), None) => rec.symbol_override.take().is_some(),
+        (None, Some(l)) => {
+            let mut rec = SymbolVariant::initialized(base);
+            rec.symbol_override = Some(l.to_string());
+            records.insert(variant.to_string(), rec);
+            true
+        }
+        (None, None) => false,
+    })
+}
+
+/// Every set of records of the section: the references' own and each sheet path's.
+fn record_sets_mut(sch: &mut SchematicSection) -> impl Iterator<Item = &mut BTreeMap<String, SymbolVariant>> {
+    sch.extras.symbol_variants.values_mut().chain(sch.extras.path_symbol_variants.values_mut().flat_map(|p| p.values_mut()))
+}
+
+/// [`tidy_records`] for every reference of the section.
+fn tidy_all(sch: &mut SchematicSection) {
+    let ids: Vec<String> = sch.extras.symbol_variants.keys().chain(sch.extras.path_symbol_variants.keys()).cloned().collect();
+    for id in ids {
+        tidy_records(sch, &id);
     }
-    changed
 }
 
 /// `SCH_SCREEN::DeleteVariant` (`SCH_SYMBOL::DeleteVariant` on every instance, and the sheets' `SCH_SHEET::DeleteVariant`): every record of `variant` on the section goes.
 pub fn delete_records(sch: &mut SchematicSection, variant: &str) {
-    for records in sch.extras.symbol_variants.values_mut() {
+    for records in record_sets_mut(sch) {
         records.remove(variant);
     }
-    sch.extras.symbol_variants.retain(|_, r| !r.is_empty());
+    tidy_all(sch);
     for records in sch.extras.sheet_variants.values_mut() {
         records.remove(variant);
     }
@@ -235,7 +327,7 @@ pub fn rename_records(sch: &mut SchematicSection, old: &str, new: &str) {
     if old == new {
         return;
     }
-    for records in sch.extras.symbol_variants.values_mut() {
+    for records in record_sets_mut(sch) {
         if let Some(r) = records.remove(old) {
             records.insert(new.to_string(), r);
         }
@@ -250,13 +342,13 @@ pub fn rename_records(sch: &mut SchematicSection, old: &str, new: &str) {
 /// `SCH_SCREEN::CopyVariant` (`SCH_SYMBOL::CopyVariant`): every record of `source` is also one of `new` (a record `new` has already stays, as
 /// `m_Variants.insert` keeps it).
 pub fn copy_records(sch: &mut SchematicSection, source: &str, new: &str) {
-    for records in sch.extras.symbol_variants.values_mut() {
+    for records in record_sets_mut(sch) {
         if let Some(r) = records.get(source).cloned() {
             records.entry(new.to_string()).or_insert(r);
         }
     }
     for records in sch.extras.sheet_variants.values_mut() {
-        if let Some(r) = records.get(source).copied() {
+        if let Some(r) = records.get(source).cloned() {
             records.entry(new.to_string()).or_insert(r);
         }
     }
@@ -268,7 +360,7 @@ pub fn sheet_flags(sch: &SchematicSection, id: &str, variant: &str) -> crate::sc
     let base = sch.extras.sheet_props_of(id);
     if !variant.is_empty() {
         if let Some(r) = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)) {
-            return *r;
+            return r.clone();
         }
     }
     crate::sch_extras::SheetVariant::initialized(&base)
@@ -278,8 +370,8 @@ pub fn sheet_flags(sch: &SchematicSection, id: &str, variant: &str) -> crate::sc
 /// (`variant.InitializeAttributes( *this )`); a record left with no differential is not kept. Returns whether anything changed.
 pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag: Flag, value: bool) -> bool {
     let base = sch.extras.sheet_props_of(id);
-    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).copied();
-    let mut rec = before.unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
+    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).cloned();
+    let mut rec = before.clone().unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
     match flag {
         Flag::Dnp => rec.dnp = value,
         Flag::ExcludeFromSim => rec.exclude_from_sim = value,
@@ -287,7 +379,13 @@ pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag:
         Flag::ExcludeFromBoard => rec.exclude_from_board = value,
         Flag::ExcludeFromPosFiles => return false,
     }
-    let after = rec.has_differentials(&base).then_some(rec);
+    store_sheet_record(sch, id, variant, &base, before, rec)
+}
+
+/// Keep `rec` as the sheet `id`'s record of `variant` where it has a differential (a record without one is not kept), `before` being the record it had.
+/// Returns whether anything changed.
+fn store_sheet_record(sch: &mut SchematicSection, id: &str, variant: &str, base: &crate::sch_extras::SheetProps, before: Option<crate::sch_extras::SheetVariant>, rec: crate::sch_extras::SheetVariant) -> bool {
+    let after = rec.has_differentials(base).then_some(rec);
     if after == before {
         return false;
     }
@@ -305,6 +403,21 @@ pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag:
         }
     }
     true
+}
+
+/// `SCH_SHEET::SetFieldText( aField, aFieldName, aFieldText, aPath, aVariantName )` for a user field of the sheet `id` (KiCad 25ec2335): a text equal to the
+/// field's own (`own`) takes the record's text of it away; another is the record's text of it, the record made first from the sheet's own flags
+/// (`InitializeAttributes`) when there is none. Returns whether anything changed.
+pub fn set_sheet_field(sch: &mut SchematicSection, id: &str, variant: &str, field: &str, text: &str, own: &str) -> bool {
+    let base = sch.extras.sheet_props_of(id);
+    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).cloned();
+    let mut rec = before.clone().unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
+    if text == own {
+        rec.fields.remove(field);
+    } else {
+        rec.fields.insert(field.to_string(), text.to_string());
+    }
+    store_sheet_record(sch, id, variant, &base, before, rec)
 }
 
 /// `SCH_SHEET_PATH::GetDNP( aVariantName )`, `GetExcludedFromSim`, `GetExcludedFromBOM`, `GetExcludedFromBoard` (8303b2ad `sch_sheet_path.cpp`): a flag is set for
@@ -332,12 +445,17 @@ pub fn rename_reference(sch: &mut SchematicSection, old: &str, new: &str) {
     if let Some(r) = sch.extras.symbol_variants.remove(old) {
         sch.extras.symbol_variants.insert(new.to_string(), r);
     }
+    if let Some(r) = sch.extras.path_symbol_variants.remove(old) {
+        sch.extras.path_symbol_variants.insert(new.to_string(), r);
+    }
 }
 
 /// A user field removed from a symbol (`SCH_SYMBOL::RemoveField`: "This will remove it from all variants"), or renamed (the variants' text of it is
 /// under the new name): `new` `None` removes it.
 pub fn rename_field(sch: &mut SchematicSection, id: Option<&str>, old: &str, new: Option<&str>) {
-    for (reference, records) in sch.extras.symbol_variants.iter_mut() {
+    let own = sch.extras.symbol_variants.iter_mut().map(|(r, m)| (r.as_str(), m));
+    let paths = sch.extras.path_symbol_variants.iter_mut().flat_map(|(r, p)| p.values_mut().map(move |m| (r.as_str(), m)));
+    for (reference, records) in own.chain(paths) {
         if id.is_some_and(|i| i != reference) {
             continue;
         }
@@ -351,6 +469,19 @@ pub fn rename_field(sch: &mut SchematicSection, id: Option<&str>, old: &str, new
     }
 }
 
+/// The symbol a reference names, the section it is on and the sheet path of that instance (the netlist's component for the reference): a later path's
+/// reference of a screen shown twice is its screen's symbol on that path (`crate::sheet_list::reference_under`); a symbol's own id is the first path its id
+/// is the reference on. `None` for a reference no symbol has.
+pub fn instance_of<'a>(design: &'a crate::ir::Design, reference: &str) -> Option<(&'a SchematicSection, &'a SymbolInstance, Vec<String>)> {
+    for e in crate::sheet_list::walk(design) {
+        let Some(sch) = crate::sheet_list::screen_of(design, &e.path) else { continue };
+        if let Some(sym) = sch.symbols.iter().find(|s| crate::sheet_list::reference_under(sch, s, &e.path) == reference) {
+            return Some((sch, sym, e.path));
+        }
+    }
+    sections(design).find_map(|sch| sch.symbols.iter().find(|s| s.id == reference).map(|s| (sch, s, Vec::new())))
+}
+
 /// Every section of the design: the root's and each sheet screen's.
 fn sections(design: &crate::ir::Design) -> impl Iterator<Item = &SchematicSection> {
     design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values()))
@@ -362,6 +493,7 @@ pub fn names(design: &crate::ir::Design) -> Vec<String> {
     let mut out: std::collections::BTreeSet<String> = design.schematic.iter().flat_map(|s| s.extras.variants.keys().cloned()).collect();
     for sch in sections(design) {
         out.extend(sch.extras.symbol_variants.values().flat_map(|r| r.keys().cloned()));
+        out.extend(sch.extras.path_symbol_variants.values().flat_map(|p| p.values()).flat_map(|r| r.keys().cloned()));
         out.extend(sch.extras.sheet_variants.values().flat_map(|r| r.keys().cloned()));
     }
     out.into_iter().collect()
@@ -439,8 +571,13 @@ pub fn resolve_section(sch: &SchematicSection, variant: &str) -> SchematicSectio
 /// The records of every reference on `sch`, as the file writes one symbol's `(variant ..)` blocks: each `(name, record)` with differentials against the
 /// symbol's own flags, by name (`std::map<wxString, SCH_SYMBOL_VARIANT>`).
 pub fn written_records<'a>(sch: &'a SchematicSection, sym: &SymbolInstance) -> Vec<(&'a str, &'a SymbolVariant)> {
+    written_records_on(sch, sym, &[])
+}
+
+/// [`written_records`] of the instance on the sheet at `path` (each `(path ..)` of the symbol's `(instances ..)` writes its own instance's records).
+pub fn written_records_on<'a>(sch: &'a SchematicSection, sym: &SymbolInstance, path: &[String]) -> Vec<(&'a str, &'a SymbolVariant)> {
     let base = SymbolFlags::of(sch, sym);
-    sch.extras.symbol_variants.get(&sym.id).into_iter().flatten().filter(|(_, r)| r.has_differentials(base)).map(|(n, r)| (n.as_str(), r)).collect()
+    records_on(sch, &sym.id, path).into_iter().flatten().filter(|(_, r)| r.has_differentials(base)).map(|(n, r)| (n.as_str(), r)).collect()
 }
 
 #[cfg(test)]
@@ -513,6 +650,31 @@ mod tests {
         delete_records(&mut s, "V2");
         delete_records(&mut s, "V3");
         assert!(s.extras.symbol_variants.is_empty());
+    }
+
+    /// KiCad keeps a record per instance (`SCH_SYMBOL_INSTANCE::m_Variants`): on a screen shown on two paths, an edit made on one path is that path's alone, and
+    /// a path whose records come back to the reference's own keeps no set of its own (UI-LEFT-2 SS16).
+    #[test]
+    fn a_record_made_on_one_sheet_path_is_that_paths_alone() {
+        let mut s = sheet();
+        let (a, b) = (vec!["sa".to_string()], vec!["sb".to_string()]);
+        assert!(set_field_on(&mut s, "R1", Some(&b), "V1", "Value", "4k7", "10k"));
+        assert_eq!(record_on(&s, "R1", &b, "V1").unwrap().fields["Value"], "4k7");
+        assert!(record_on(&s, "R1", &a, "V1").is_none(), "the other path reads the reference's records, which have none");
+        assert!(set_flag_on(&mut s, "R1", Some(&a), "V1", Flag::Dnp, true));
+        assert!(resolved_flags_on(&s, &s.symbols[0], &a, "V1").dnp);
+        assert!(!resolved_flags_on(&s, &s.symbols[0], &b, "V1").dnp);
+        assert!(set_symbol_override_on(&mut s, "R1", Some(&b), "V1", Some("Device:R_Small")));
+        assert_eq!(record_on(&s, "R1", &b, "V1").unwrap().symbol_override.as_deref(), Some("Device:R_Small"));
+        assert!(written_records_on(&s, &s.symbols[0], &b).len() == 1 && written_records_on(&s, &s.symbols[0], &a).len() == 1);
+        // the path's set back to what the reference has: no set of its own
+        assert!(set_symbol_override_on(&mut s, "R1", Some(&b), "V1", None));
+        assert!(set_field_on(&mut s, "R1", Some(&b), "V1", "Value", "10k", "10k"));
+        assert!(set_flag_on(&mut s, "R1", Some(&b), "V1", Flag::Dnp, true));
+        rename_records(&mut s, "V1", "V2");
+        assert!(record_on(&s, "R1", &b, "V2").is_some());
+        delete_records(&mut s, "V2");
+        assert!(s.extras.symbol_variants.is_empty() && s.extras.path_symbol_variants.is_empty());
     }
 
     #[test]

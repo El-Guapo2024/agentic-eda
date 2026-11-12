@@ -78,7 +78,7 @@ export function extractValueAndWritability<I extends PropItem, C, K>(pm: Propert
   let note: string | undefined;
   let first = true;
   for (const item of items) {
-    const property = pm.getProperty(item.type, name, item, ctx);
+    const property = pm.getProperty(item.type, name, item, ctx, true);
     if (!property) return null;
     if (!pm.isAvailableFor(item.type, property, item, ctx)) return null;
     if (property.hidden) return null;
@@ -128,7 +128,8 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
 
   // `commonProps`: the properties of the first class by name, then thinned to those every other class has too.
   const names: string[] = [];
-  for (const p of pm.getProperties(firstType)) if (!names.includes(p.name)) names.push(p.name);
+  // the panel lists an item's dynamic properties too (`PROPERTY_MANAGER::GetProperties( aObject )`)
+  for (const p of pm.getProperties(firstType, true)) if (!names.includes(p.name)) names.push(p.name);
   const groupOrder = [...pm.getGroupDisplayOrder(firstType)];
   const known = new Set(groupOrder);
   let common = names;
@@ -139,13 +140,13 @@ export function buildGrid<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>
         known.add(g);
       }
     }
-    common = common.filter((n) => pm.getProperty(type, n) !== undefined);
+    common = common.filter((n) => pm.getProperty(type, n, undefined, undefined, true) !== undefined);
   }
 
   const order = pm.getDisplayOrder(firstType);
   const byGroup = new Map<string, Array<{ row: GridRow; at: number }>>();
   for (const name of common) {
-    const property = pm.getProperty(firstType, name, firstItem, ctx);
+    const property = pm.getProperty(firstType, name, firstItem, ctx, true);
     if (!property || property.hidden || hiddenIn(property, frame)) continue;
     const got = extractValueAndWritability(pm, items, name, ctx);
     if (!got) continue;
@@ -203,7 +204,7 @@ export function planEdit<I extends PropItem, C, K>(pm: PropertyManager<I, C, K>,
   if (items.length === 0) return { ok: false, error: "Nothing is selected." };
   const cmds: K[] = [];
   for (const item of items) {
-    const property = pm.getProperty(item.type, name, item, ctx);
+    const property = pm.getProperty(item.type, name, item, ctx, true);
     if (!property || !pm.isWriteableFor(item.type, property, item, ctx) || !property.set) continue;
     const refusal = property.validate?.(value, item, ctx);
     if (refusal) return { ok: false, error: `${property.name}: ${refusal}` };

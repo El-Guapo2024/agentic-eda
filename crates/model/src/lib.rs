@@ -71,6 +71,7 @@ pub mod text_eval;
 pub mod topo_match;
 pub mod units;
 pub mod variants;
+pub mod variant_symbol;
 pub mod track_mask;
 pub mod via_extra;
 pub mod via_stitch;

@@ -69,6 +69,10 @@ export interface SchSelectionSummary {
   canRemoveCorner: boolean;
   /** The one selected item is an arc the point editor is on (`arcIsEdited`). */
   arcEdited?: boolean;
+  /** A design variant is current (KiCad 25ec2335 `variantActiveCondition`): Change Symbol(s) leave the menu, Set Variant Symbol... joins it. */
+  variantActive?: boolean;
+  /** `symbolHasVariantSymbol`: the one selected symbol has a variant symbol in the current variant, on the sheet path in view. */
+  hasVariantSymbol?: boolean;
 }
 
 export function emptySummary(): SchSelectionSummary {
@@ -213,7 +217,11 @@ export function schContextMenu(s: SchSelectionSummary, std?: StandardSubmenus): 
   if (single && s.symbols === 1) {
     add({ type: "submenu", label: "Edit Main Fields", items: [item("eeschema.InteractiveEdit.editReference"), item("eeschema.InteractiveEdit.editValue"), item("eeschema.InteractiveEdit.editFootprint")] });
   }
-  add(singleSymbolOrPower && item("eeschema.InteractiveEdit.changeSymbol"), singleSymbolOrPower && item("eeschema.InteractiveEdit.updateSymbol"), multipleSymbolsOrPower && item("eeschema.InteractiveEdit.changeSymbols"), multipleSymbolsOrPower && item("eeschema.InteractiveEdit.updateSymbols"));
+  // KiCad 25ec2335: Change Symbol(s) need the default variant (`noVariantActiveCondition`); Set Variant Symbol... is for one symbol while a variant is current,
+  // Clear Variant Symbol for one that has a variant symbol there (`symbolHasVariantSymbol`)
+  const variant = !!s.variantActive;
+  add(singleSymbolOrPower && !variant && item("eeschema.InteractiveEdit.changeSymbol"), singleSymbolOrPower && item("eeschema.InteractiveEdit.updateSymbol"), multipleSymbolsOrPower && !variant && item("eeschema.InteractiveEdit.changeSymbols"), multipleSymbolsOrPower && item("eeschema.InteractiveEdit.updateSymbols"));
+  add(singleSymbolOrPower && variant && item("eeschema.InteractiveEdit.setVariantSymbol"), single && variant && !!s.hasVariantSymbol && item("eeschema.InteractiveEdit.clearVariantSymbol"));
 
   const changeTo = changeToEntries(s);
   if (changeTo.length > 0) add({ type: "submenu", label: "Change To", items: changeTo.map(item) });

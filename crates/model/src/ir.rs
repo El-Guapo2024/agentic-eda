@@ -5357,6 +5357,8 @@ impl LibrarySymbol {
                 unit_names: self.kicad.unit_names.clone(),
                 user_fields: self.fields.iter().filter(|f| !crate::sym_fields::is_mandatory_field(&f.name) && !f.name.starts_with("ki_")).map(|f| (f.name.clone(), f.text.clone())).collect(),
                 keywords: self.keywords.clone(),
+                value: self.fields.iter().find(|f| f.name == "Value").map(|f| f.text.clone()).unwrap_or_default(),
+                footprint: self.fields.iter().find(|f| f.name == "Footprint").map(|f| f.text.clone()).unwrap_or_default(),
                 fp_filters: self.footprint_filters.iter().map(|f| f.replace(' ', "{space}")).collect::<Vec<_>>().join(" "),
                 // the text boxes a placed symbol draws (not one private to the Symbol Editor), of the body styles its graphics are taken from, without the editor's
                 // ids: the engine symbol of a library's symbol and of the same one opened in the editor have the same boxes

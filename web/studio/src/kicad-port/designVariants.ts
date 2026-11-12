@@ -151,30 +151,47 @@ export function ownFieldText(sym: Pick<SchematicSymbol, "fields" | "value" | "fo
   return "";
 }
 
-/** `SCH_SYMBOL::GetFieldText( field, sheet, variant )`: the Reference is never a variant's; any other field shows the variant's text where it has one, else its own. */
+/**
+ * `SCH_SYMBOL::GetFieldText( field, sheet, variant )`: the Reference is never a variant's; any other field shows the variant's text where it has one, else the text its
+ * variant symbol gives it (`GetVariantLibSymbol`: one the design draws, `symbol_fields`), else its own.
+ */
 export function variantFieldText(sym: Pick<SchematicSymbol, "fields" | "value" | "footprint" | "datasheet" | "id" | "variants">, name: string, variant: string): string {
   if (name !== "Reference") {
-    const over = variantRecord(sym, variant)?.fields?.[name];
+    const rec = variantRecord(sym, variant);
+    const over = rec?.fields?.[name] ?? (rec?.symbol_resolved ? rec.symbol_fields?.[name] : undefined);
     if (over !== undefined) return over;
   }
   return ownFieldText(sym, name);
 }
 
+/** The texts a variant gives the symbol's fields: its record's, and its variant symbol's where the record has none (`GetFieldText`'s order). */
+function variantTexts(rec: SymbolVariantInfo): Record<string, string> {
+  return { ...(rec.symbol_resolved ? (rec.symbol_fields ?? {}) : {}), ...(rec.fields ?? {}) };
+}
+
+/** `SCH_SYMBOL::GetEffectiveLibSymbol`: the library id the symbol is drawn from in `variant` -- its variant symbol's, when the design draws one (KiCad 25ec2335). */
+export function variantLibId(sym: Pick<SchematicSymbol, "lib_id" | "variants">, variant: string): string | null {
+  const rec = variantRecord(sym, variant);
+  return rec?.symbol_override && rec.symbol_resolved ? rec.symbol_override : sym.lib_id;
+}
+
 /** The symbol as it shows in `variant`: its flags, its Value / Footprint / Datasheet and its fields' texts (a field the variant overrides loses its own `shown`). */
-export function symbolInVariant(sym: SchematicSymbol, variant: string): SchematicSymbol {
+export function symbolInVariant(sym: SchematicSymbol, variant: string, serverResolved = false): SchematicSymbol {
   const rec = variantRecord(sym, variant);
   if (!rec) return sym;
   const flags = variantFlags(sym, variant);
-  const over = rec.fields ?? {};
+  const over = variantTexts(rec);
   const has = (name: string): boolean => Object.prototype.hasOwnProperty.call(over, name);
+  // `serverResolved`: the server resolved the texts in this variant (`shown_variant`), so a field's `shown` is the variant text's, expanded; otherwise it is
+  // the symbol's own text's and goes
   const fields = sym.fields?.map((f) => {
     if (f.name === "Reference" || !has(f.name)) return f;
     const out = { ...f, text: over[f.name]! };
-    delete out.shown;
+    if (!serverResolved) delete out.shown;
     return out;
   });
   let shown = sym.shown;
-  if (shown && (has("Value") || has("Footprint"))) {
+  if (shown && !serverResolved && (has("Value") || has("Footprint"))) {
     shown = { ...shown };
     if (has("Value")) delete shown.value;
     if (has("Footprint")) delete shown.footprint;
@@ -182,6 +199,7 @@ export function symbolInVariant(sym: SchematicSymbol, variant: string): Schemati
   return {
     ...sym,
     ...flags,
+    lib_id: variantLibId(sym, variant),
     value: has("Value") ? over.Value! : sym.value,
     footprint: has("Footprint") ? over.Footprint! : sym.footprint,
     datasheet: has("Datasheet") ? over.Datasheet! : sym.datasheet,
@@ -198,7 +216,8 @@ export function withVariant(sch: Schematic, variant: string): Schematic {
   const symbols = variant !== "" && sch.symbols.some((s) => s.variants?.[variant]);
   const sheets = variant !== "" && (sch.sheets ?? []).some((s) => s.variants?.[variant]);
   if (!symbols && !sheets) return sch;
-  return { ...sch, ...(symbols ? { symbols: sch.symbols.map((s) => symbolInVariant(s, variant)) } : {}), ...(sheets ? { sheets: sch.sheets.map((s) => sheetInVariant(s, variant)) } : {}) };
+  const serverResolved = (sch.shown_variant ?? "") === variant;
+  return { ...sch, ...(symbols ? { symbols: sch.symbols.map((s) => symbolInVariant(s, variant, serverResolved)) } : {}), ...(sheets ? { sheets: sch.sheets.map((s) => sheetInVariant(s, variant)) } : {}) };
 }
 
 /** A sheet's four attributes in `variant` (`SCH_SHEET::GetDNP( &instance, variant )` ...): its record of the variant, else its own (UI-LEFT-2 SS15). */
@@ -211,8 +230,23 @@ export function sheetFlags(sheet: Pick<Sheet, "props" | "variants">, variant: st
 
 /** The sheet as `variant` shows it: `variant_flags`, its attributes in the variant (the DNP cross the painter draws, `aSheet->GetDNP( sheetPath, variant )`); its style its own. */
 export function sheetInVariant(sheet: Sheet, variant: string): Sheet {
-  if (variant === "" || !sheet.variants?.[variant]) return sheet;
-  return { ...sheet, variant_flags: sheetFlags(sheet, variant) };
+  const rec = variant !== "" ? sheet.variants?.[variant] : undefined;
+  if (!rec) return sheet;
+  // and its user fields' texts in the variant (`SCH_SHEET::GetFieldText( .., aPath, aVariantName )`, UI-LEFT-2 SS16)
+  const texts = rec.fields ?? {};
+  const has = (name: string): boolean => Object.prototype.hasOwnProperty.call(texts, name);
+  const out: Sheet = { ...sheet, variant_flags: sheetFlags(sheet, variant) };
+  if (Object.keys(texts).length > 0) {
+    if (sheet.user_fields) out.user_fields = sheet.user_fields.map((f) => (has(f.name) ? { ...f, text: texts[f.name]! } : f));
+    if (sheet.user_fields_drawn)
+      out.user_fields_drawn = sheet.user_fields_drawn.map((f) => {
+        if (!has(f.name)) return f;
+        const g = { ...f, text: texts[f.name]! };
+        delete g.shown;
+        return g;
+      });
+  }
+  return out;
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- the edits
