@@ -1370,6 +1370,13 @@ mod tests {
         let original = net_mm(&dir, "/SIG");
         let arc_len = 3.0 * std::f64::consts::FRAC_PI_2;
         assert!((original - (7.0 + arc_len + 5.0)).abs() < 0.01, "the arc is measured as an arc: {original}");
+        // `pickSegment` takes an arc (`SEGMENT_T | ARC_T`, UI-LEFT-2 RR5): where a moved pattern's start lands on the arc, the tuner starts there
+        let (_, d, m) = board::load(&dir).unwrap();
+        let scene = Scene::of(d, m);
+        let picked = tune_edit::segment_near(&scene, arc_mid, "F.Cu", &[]).and_then(|id| scene.world.get(id).cloned());
+        assert!(matches!(picked, Some(eda_pns::item::Item::Arc(_))), "the arc under the point: {picked:?}");
+        let near = tune_edit::segment_near(&scene, p(mm(8.0), mm(9.6)), "F.Cu", &[]).and_then(|id| scene.world.get(id).cloned());
+        assert!(matches!(near, Some(eda_pns::item::Item::Segment(_))), "the straight within the slop: {near:?}");
 
         // hovering the arc picks it (its track), the pattern would start at the end of it the cursor is nearer to
         let hov = hover(&dir, &body(json!({ "x": arc_mid.x, "y": arc_mid.y, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
