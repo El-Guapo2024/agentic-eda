@@ -24,7 +24,7 @@
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
 # outline, through replace_board; $KICAD_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
-# simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
+# simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed), ldo-j1 (ldo where `eda board new` puts it, J1 placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
 # configuration folder of its own, empty (`EDA_KICAD_CONFIG_DIR`): a check that writes the global library tables or KiCad's path variables never touches the
 # machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
@@ -178,6 +178,16 @@ print(json.dumps({"cmd": {"op": "replace_board", "text": t[:-1] + edge + ")\n"},
             grep -q '"ok":true' <<< "$reply" ;;
         ldo) # lines-dims.check.js: a 26 mm square board with nothing placed, room to draw in
             "$eda" board new "$repo/examples/ldo.yaml" -o "$d" --origin 0,0 ;;
+        ldo-j1) # viewer3d-prefs.check.js: examples/ldo.yaml where `eda board new` puts it (the middle of its page), J1 placed at 145, 105 mm (`place_at`)
+            local sp url="" reply
+            "$eda" board new "$repo/examples/ldo.yaml" -o "$d" || return 1
+            "$eda" board serve -C "$d" --port "$port" --ui "$repo/web/studio/dist" > "$t/serve.log" 2>&1 &
+            sp=$!
+            for _ in $(seq 1 100); do url="$(grep -oE 'http://[0-9.]+:[0-9]+/' "$t/serve.log" | head -1)"; [ -n "$url" ] && break; sleep 0.2; done
+            reply="$(curl -s -H 'Content-Type: application/json' -d '{"cmd":{"op":"place_at","part":"J1","x":145000000,"y":105000000},"strict":false}' "${url}api/cmd")"
+            kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+            echo "place_at J1: $reply" | cut -c1-300
+            grep -q '"ok":true' <<< "$reply" ;;
         board-io) # board-io.check.js: a hand-written KiCad board read by the importer
             "$eda" import-kicad "$e2e/board-io.kicad_pcb" -o "$d" ;;
         multichannel)
