@@ -593,6 +593,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   already name bare ids; the legacy list stays in the project file; Remote Symbols (KiCad 25ec2335's `PANEL_REMOTE_SYMBOL`: a provider's web page, OAuth and
   HTTPS downloads -- no provider is reachable, its reason in `ui-parity-missing.json`); the server's search of the installed libraries does not take the shown
   columns as search words; the "-- Already Placed --" and project items show no field columns.
+- Done 2026-11-12 (`task-v9-libs`, UI-LEFT-2 LL4, LL5, LL7, `PARITY-common.md` section 24): the server's search takes the shown columns, the Already Placed and project
+  rows carry their fields, column widths are kept, the choosers' regular expressions are wxWidgets 3.2's PCRE2 (`Flavor::Advanced`, `kicad-port/wxRegex.ts`), KiCad
+  25ec2335's chooser "Body style:"; pasting table text into the grid; the global-table choice of New / Add Library, Save Library As (all four of the hook's) and a new
+  design block library; Save Library As Packed / Unpacked; a CADSTAR row's `csa` / `fplib` options reach the conversion and Migrate; HTTP libraries read from their
+  REST server (`crates/cli/src/http_lib.rs`). Left: Database libraries (ODBC, a dependency not taken); an HTTP library's categories are not libraries of their own
+  in the trees. The bullet below is kept for its other entries.
 - Missing: Add Library by drop (a browser drop has no path), pasting table text into the grid, Add Library's "global table" choice; a row's options are not passed to kicad-cli's
   conversion; Database and HTTP libraries (listed, not read); a system-environment variable is read only in Configure Paths; the chooser places a symbol in its normal body
   style (Cycle Body Style changes it afterwards, item 12); power symbols are placed by `P`, whose chooser is this one filtered to them (2026-11-05, `task-u1-schplace`,
