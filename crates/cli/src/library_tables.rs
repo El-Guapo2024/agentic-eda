@@ -291,15 +291,31 @@ pub(crate) struct LibSet {
 
 impl LibSet {
     pub(crate) fn from_libs(kind: Kind, libs: Vec<lt::Lib>) -> LibSet {
-        let mut entries: Vec<LibEntry> = libs
+        let is_http = |l: &lt::Lib| kind == Kind::Symbol && l.lib_type == lt::HTTP_TYPE;
+        let (http, files): (Vec<lt::Lib>, Vec<lt::Lib>) = libs.into_iter().filter(|l| l.is_available()).partition(|l| is_http(l));
+        let mut entries: Vec<LibEntry> = files
             .into_iter()
-            .filter(|l| l.is_available())
             .filter_map(|l| {
                 // a library of another format is read as the KiCad copy kicad-cli makes of it (`library_convert`); one that does not convert is not a library
-                let path = if lt::convertible(kind.table_kind(), &l.lib_type) { crate::library_convert::readable(kind.table_kind(), &l.path).ok()? } else { l.path };
+                let path = if lt::convertible(kind.table_kind(), &l.lib_type) { crate::library_convert::readable_row(kind.table_kind(), &l.path, &l.lib_type, &l.options).ok()? } else { l.path };
                 Some(LibEntry { name: l.nickname, path, description: l.description, scope: l.scope, hidden: l.hidden })
             })
             .collect();
+        // an HTTP library (`crate::http_lib`, UI-LEFT-2 LL5) is read from its server into a library file; its parts' symbols come from the other libraries
+        if !http.is_empty() {
+            let others = LibSet::sorted(kind, entries.clone());
+            let base = |id: &str| crate::library_search::read_installed_symbol(&others, id).ok().flatten().map(|(s, _)| s);
+            for l in http {
+                if let Ok(path) = crate::http_lib::readable(&l.nickname, &l.path, &base) {
+                    entries.push(LibEntry { name: l.nickname, path, description: l.description, scope: l.scope, hidden: l.hidden });
+                }
+            }
+        }
+        LibSet::sorted(kind, entries)
+    }
+
+    /// The set of `entries`, sorted as the trees list them, with its fingerprint.
+    fn sorted(kind: Kind, mut entries: Vec<LibEntry>) -> LibSet {
         entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
         let by_name = entries.iter().enumerate().map(|(i, e)| (e.name.clone(), i)).collect();
         // The set is another set when a library came or went, moved, or changed on disk. A folder symbol library (`.kicad_symdir`) counts by the folder's
@@ -414,6 +430,25 @@ fn rows_in(req: &Value) -> Result<Vec<lt::Row>, Value> {
         .collect())
 }
 
+/// `POST /api/library_tables/parse` `{kind, text}`: `LIB_TABLE_GRID_TRICKS::paste_text`'s s-expression branch (UI-LEFT-2 LL5) -- text pasted into the grid that
+/// holds the table's preamble (`(sym_lib_table`, `(fp_lib_table`, `(design_block_lib_table`) is read as a table (`LIBRARY_TABLE tempTable( true, cb_text, .. )`),
+/// and its rows go into the grid; text that does not read is KiCad's error (`ErrorDescription`). `{rows}` in the grid's form, or `{error}`.
+pub(crate) fn parse_rows(body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let kind = match kind_in(&req) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    match Table::parse(&text(&req, "text")) {
+        Ok(t) if t.kind == kind => json!({ "rows": t.rows.iter().map(|r| json!({ "nickname": r.nickname, "uri": r.uri, "type": r.lib_type, "options": r.options, "descr": r.description, "enabled": !r.disabled, "visible": !r.hidden })).collect::<Vec<_>>() }),
+        Ok(t) => bad(format!("Library table has type {} but expected {}.", t.kind.keyword(), kind.keyword())),
+        Err(e) => bad(e.message),
+    }
+}
+
 /// `GuessPluginTypeFromLibPath`: a table file is a nested table; KiCad's own formats are told by their extension, and a symbol library also by being a
 /// folder of `.kicad_sym` files (`SCH_IO_KICAD_SEXPR::CanReadLibrary`, KiCad 10's `.kicad_symdir`).
 fn guess_type(kind: TableKind, path: &Path) -> Option<&'static str> {
@@ -426,6 +461,7 @@ fn guess_type(kind: TableKind, path: &Path) -> Option<&'static str> {
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match kind {
+        TableKind::Symbol if ext == "kicad_httplib" => Some(lt::HTTP_TYPE),
         TableKind::Symbol => (ext == eda_kicad::SYMBOL_LIB_FILE_EXT || (path.is_dir() && eda_kicad::can_read_symbol_library(path))).then_some(lt::KICAD_TYPE),
         TableKind::Footprint => (ext == "pretty").then_some(lt::KICAD_TYPE),
         // `DESIGN_BLOCK_IO_MGR::GuessPluginTypeFromLibPath` asks `CanReadLibrary`, which looks for a file with the extension *inside* the folder and so never finds
@@ -442,6 +478,7 @@ fn row_json(kind: TableKind, row: &lt::Row, loaded: Option<&LoadedRow>, vars: &V
         // errors (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`: a folder library's file that does not read) says so, as the row's `LIB_STATUS::error`
         _ => lt::check_row(kind, row, &path)
             .or_else(|| lt::convertible(kind, &row.lib_type).then(|| crate::library_convert::status(kind, &path)).flatten())
+            .or_else(|| (kind == TableKind::Symbol && row.lib_type == lt::HTTP_TYPE).then(|| crate::http_lib::status(&path)).flatten())
             .or_else(|| (kind == TableKind::Symbol && row.lib_type == lt::KICAD_TYPE).then(|| eda_kicad::symbol_library_load_errors(&path)).flatten()),
     };
     let status = if error.is_some() { "error" } else if row.is_table() { "table" } else { "ok" };
@@ -623,6 +660,43 @@ fn project_table(dir: &Path, kind: TableKind) -> Result<Table, String> {
     Table::parse(&text).map_err(|e| format!("The project's {} cannot be read ({}): {}", kind.file_name(), path.display(), e.message))
 }
 
+/// KiCad's global table of `kind` to add a row to (`LIBRARY_MANAGER::Table( type, GLOBAL )`; UI-LEFT-2 LL5): its path in KiCad's configuration folder and the
+/// table the file holds -- or, when KiCad has not written one yet, the table its first run writes (`CreateGlobalTable`: one row chaining the installed table,
+/// what Reset Libraries writes), so the stock libraries stay. `Err` when this machine has no configuration folder or the file does not parse.
+pub(crate) fn global_table_for_edit(env: &Env, kind: TableKind) -> Result<(PathBuf, Table), String> {
+    let Some(path) = global_table_path(env, kind) else {
+        return Err("There is no KiCad configuration folder on this machine, so there is no global library table to add to (run KiCad once, or set KICAD_CONFIG_HOME).".to_string());
+    };
+    if path.is_file() {
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let table = Table::parse(&text).map_err(|e| format!("The global {} cannot be read ({}): {}", kind.file_name(), path.display(), e.message))?;
+        return Ok((path, table));
+    }
+    let mut table = Table::new(kind);
+    if kind != TableKind::DesignBlock || stock_table(env, kind).is_file() {
+        table.rows = vec![lt::Row { nickname: "KiCad".into(), uri: stock_table(env, kind).display().to_string(), lib_type: lt::NESTED_TYPE.into(), description: "KiCad Default Libraries".into(), ..Default::default() }];
+    }
+    Ok((path, table))
+}
+
+/// Write KiCad's global table (made from [`global_table_for_edit`]), its folder made if need be.
+fn write_global_table(path: &Path, table: &Table) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    lt::write_table(path, table).map_err(|e| format!("Error saving global library table:\n\n{e}"))
+}
+
+/// `NormalizePath( path, &Pgm().GetLocalEnvVariables(), aScope == PROJECT ? &Prj() : nullptr )`: a global row is written with KiCad's variables only.
+fn normalized_for(env: &Env, vars: &Vars, dir: &Path, path: &Path, global: bool) -> String {
+    if global {
+        let kicad: Vec<(String, String)> = env.global_vars().into_iter().map(|v| (v.name, v.value)).collect();
+        lt::normalize_path(path, &kicad, None)
+    } else {
+        lt::normalize_path(path, &normalize_vars(env, vars, dir), Some(dir))
+    }
+}
+
 /// `POST /api/library_tables` `{kind, rows}`: the Project tab's OK. The rows go through KiCad's `VerifyTable` (a row with no path is dropped, a nickname must be
 /// there and legal, no two alike) and the project's table is written; the answer is the view again, or `{error, row, column}` for the row that was refused.
 pub(crate) fn set_table(dir: &Path, body: &[u8]) -> Value {
@@ -769,10 +843,10 @@ pub(crate) fn reset_global_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
 /// go and whether that exists, so the dialog can ask KiCad's question first ("File '%s' already exists. Do you want overwrite this file?" / "Folder '%s' already
 /// exists. Do you want overwrite any existing footprints?", Yes / No / Cancel). `{results: [{row, error?, uri?, type?, options?, dest, exists}]}`.
 pub(crate) fn migrate_rows(dir: &Path, body: &[u8]) -> Value {
-    migrate_rows_with(&Env::discover(), dir, body, &|kind, from, to| crate::library_convert::migrate(kind, from, to))
+    migrate_rows_with(&Env::discover(), dir, body, &|kind, from, to, row: &lt::Row| crate::library_convert::migrate_row(kind, from, to, &row.lib_type, &row.options))
 }
 
-pub(crate) fn migrate_rows_with(env: &Env, dir: &Path, body: &[u8], migrate: &dyn Fn(TableKind, &Path, &Path) -> Result<(), String>) -> Value {
+pub(crate) fn migrate_rows_with(env: &Env, dir: &Path, body: &[u8], migrate: &dyn Fn(TableKind, &Path, &Path, &lt::Row) -> Result<(), String>) -> Value {
     let req = match parse_body(body) {
         Ok(r) => r,
         Err(e) => return e,
@@ -816,7 +890,8 @@ pub(crate) fn migrate_rows_with(env: &Env, dir: &Path, body: &[u8], migrate: &dy
             if let Err(e) = refuse_inside_kicads_configuration(env, &dest) {
                 return json!({ "row": i, "error": e });
             }
-            match migrate(kind, &source, &dest) {
+            // the row's options go with it (`ConvertLibrary( &props, .. )`, `LIBRARY_TABLE::ParseOptions`; UI-LEFT-2 LL5)
+            match migrate(kind, &source, &dest, r) {
                 Ok(()) => json!({
                     "row": i, "dest": dest.display().to_string(), "exists": exists,
                     "uri": lt::normalize_path(&dest, &norm_vars, Some(dir)), "type": lt::KICAD_TYPE,
@@ -858,7 +933,7 @@ pub(crate) fn check_rows_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
             }
             // a library of another format: KiCad's check loads it with its plugin (`CheckTableRow`), so here kicad-cli converts it, and a failure is its status
             if error.is_none() && lt::convertible(kind, &r.lib_type) && !r.uri.trim().is_empty() {
-                error = crate::library_convert::readable(kind, &path).err();
+                error = crate::library_convert::readable_row(kind, &path, &r.lib_type, &r.options).err();
             }
             json!({ "error": error.unwrap_or_default(), "path": path.display().to_string(), "guess": guess_type(kind, &path) })
         })
@@ -900,13 +975,17 @@ pub(crate) fn add_library(dir: &Path, body: &[u8]) -> Value {
 }
 
 pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
-    if let Err(e) = refuse_kicads_configuration(env, dir) {
-        return bad(e);
-    }
     let req = match parse_body(body) {
         Ok(r) => r,
         Err(e) => return e,
     };
+    // `FILEDLG_HOOK_NEW_LIBRARY`'s "Add new library to global library table" (UI-LEFT-2 LL5): the row goes into KiCad's global table instead of the board's
+    let global = req.get("global").and_then(Value::as_bool) == Some(true);
+    if !global {
+        if let Err(e) = refuse_kicads_configuration(env, dir) {
+            return bad(e);
+        }
+    }
     let kind = match kind_in(&req) {
         Ok(k) => k,
         Err(e) => return e,
@@ -946,9 +1025,16 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     if let Some(message) = reserved_nickname(&nickname) {
         return bad(message);
     }
-    let mut table = match project_table(dir, kind) {
-        Ok(t) => t,
-        Err(e) => return bad(e),
+    let (table_path, mut table) = if global {
+        match global_table_for_edit(env, kind) {
+            Ok(t) => t,
+            Err(e) => return bad(e),
+        }
+    } else {
+        match project_table(dir, kind) {
+            Ok(t) => (project_table_path(dir, kind), t),
+            Err(e) => return bad(e),
+        }
     };
     let loaded = load_with(env.clone(), dir, kind);
     if !nested && (table.has_row(&nickname) || loaded.libs().iter().any(|l| l.nickname == nickname && l.is_available())) {
@@ -1024,32 +1110,42 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
             return bad("Choose a .kicad_sym file, or a folder of .kicad_sym files.");
         }
     }
-    let uri = lt::normalize_path(&path, &normalize_vars(env, &vars, dir), Some(dir));
+    let uri = normalized_for(env, &vars, dir, &path, global);
     table.rows.push(lt::Row { nickname: nickname.clone(), uri: uri.clone(), lib_type: lib_type.to_string(), description: text(&req, "descr"), ..Default::default() });
-    if let Err(e) = lt::write_table(&project_table_path(dir, kind), &table) {
+    let written = if global { write_global_table(&table_path, &table) } else { lt::write_table(&table_path, &table) };
+    if let Err(e) = written {
         return bad(e);
     }
     let mut v = view_with(env, dir);
     v["ok"] = json!(true);
-    v["added"] = json!({ "kind": kind.name(), "nickname": nickname, "uri": uri, "path": path.display().to_string(), "created": created });
+    v["added"] = json!({ "kind": kind.name(), "nickname": nickname, "uri": uri, "path": path.display().to_string(), "created": created, "scope": if global { "global" } else { "project" } });
     v
 }
 
-/// A library the library editors' Save Library As wrote (`crate::library_save_api`), put in the board's table: `SYMBOL_EDIT_FRAME::addLibTableEntry( aLibFile,
-/// PROJECT )` (the nickname is the file's name, and a nickname a library already has takes `%s%d` from 1 until it is free), or with `replace` the row of
-/// that nickname pointed at the new path (`replaceLibTableEntry`: its type set to `KiCad`). A row of KiCad's global table is KiCad's and is not rewritten here.
-/// The path is written as a table writes one (`NormalizePath`). The answer is the nickname and the path as written.
-pub(crate) fn put_library_row(dir: &Path, kind: TableKind, path: &Path, replace: Option<&str>) -> Result<(String, String), String> {
+/// A library the library editors' Save Library As wrote (`crate::library_save_api`), put in a table: `SYMBOL_EDIT_FRAME::addLibTableEntry( aLibFile, aScope )` --
+/// the board's table, or KiCad's global one with `global` ("Add new global library table entry"; UI-LEFT-2 LL5) -- the nickname being the file's name (a
+/// nickname a library already has takes `%s%d` from 1 until it is free), or with `replace` the row of that nickname pointed at the new path
+/// (`replaceLibTableEntry`, in whichever table has it: its type set to `KiCad`). The path is written as a table writes one (`NormalizePath`). The answer is the
+/// nickname and the path as written.
+pub(crate) fn put_library_row(dir: &Path, kind: TableKind, path: &Path, replace: Option<&str>, global: bool) -> Result<(String, String), String> {
     let env = Env::discover();
-    refuse_kicads_configuration(&env, dir)?;
     refuse_inside_kicads_configuration(&env, path)?;
     let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
-    let uri = lt::normalize_path(path, &normalize_vars(&env, &vars, dir), Some(dir));
-    let mut table = project_table(dir, kind)?;
+    // `replaceLibTableEntry`: the project's row of that nickname, else the global one's
+    let in_project = replace.is_some_and(|nick| project_table(dir, kind).is_ok_and(|t| t.has_row(nick)));
+    let use_global = match replace {
+        Some(_) => !in_project,
+        None => global,
+    };
+    if !use_global {
+        refuse_kicads_configuration(&env, dir)?;
+    }
+    let (table_path, mut table) = if use_global { global_table_for_edit(&env, kind)? } else { (project_table_path(dir, kind), project_table(dir, kind)?) };
+    let uri = normalized_for(&env, &vars, dir, path, use_global);
     let nickname = match replace {
         Some(nick) => {
             let Some(row) = table.rows.iter_mut().find(|r| r.nickname == nick) else {
-                return Err(format!("The library '{nick}' is a row of KiCad's global table, which Save Library As does not update here: add the new library to the project's table, or change the global row in Manage Libraries."));
+                return Err(format!("Library '{nick}' not found in the library tables."));
             };
             row.uri = uri.clone();
             row.lib_type = lt::KICAD_TYPE.to_string();
@@ -1068,7 +1164,11 @@ pub(crate) fn put_library_row(dir: &Path, kind: TableKind, path: &Path, replace:
             nickname
         }
     };
-    lt::write_table(&project_table_path(dir, kind), &table)?;
+    if use_global {
+        write_global_table(&table_path, &table)?;
+    } else {
+        lt::write_table(&table_path, &table)?;
+    }
     Ok((nickname, uri))
 }
 
@@ -1296,6 +1396,8 @@ pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Val
         } else {
             match what {
                 "symbol" => name.ends_with(".kicad_sym"),
+                // an HTTP library's settings file (`SCH_IO_HTTP_LIB::GetLibraryDesc`, UI-LEFT-2 LL5)
+                "http" => name.ends_with(".kicad_httplib"),
                 // Page Settings' drawing sheet file (`FILEEXT::DrawingSheetFileWildcard`)
                 "drawing_sheet" => name.to_ascii_lowercase().ends_with(".kicad_wks"),
                 "table" => lt::TableKind::ALL.iter().any(|k| name == k.file_name()),
@@ -1717,6 +1819,31 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&none.root);
     }
 
+    /// `FILEDLG_HOOK_NEW_LIBRARY`'s "Add new library to global library table" (UI-LEFT-2 LL5): the row goes into KiCad's global table, written with KiCad's
+    /// variables only; with no global table yet it starts from the one KiCad's first run writes, so the stock libraries stay.
+    #[test]
+    fn new_library_into_the_global_table_writes_kicads_table_and_keeps_its_rows() {
+        let m = machine("newlib-global", true);
+        let env = m.env();
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "libs/Mine", "global": true })));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["added"]["scope"], "global");
+        let global = std::fs::read_to_string(m.config.join("sym-lib-table")).unwrap();
+        assert!(global.contains("(name \"KiCad\")") && global.contains("(name \"Mine\")"), "{global}");
+        assert!(!global.contains("KIPRJMOD"), "a global row is not written against the project: {global}");
+        assert!(!m.board.join("sym-lib-table").exists(), "the project's table is not touched");
+        assert!(m.set(Kind::Symbol).find("Mine").is_some());
+        // no global table yet: KiCad's first-run table, then the row
+        let fresh = machine("newlib-global-fresh", false);
+        let r = add_library_with(&fresh.env(), &fresh.board, &req(json!({ "kind": "footprint", "create": true, "path": "libs/Pads", "global": true })));
+        assert_eq!(r["ok"], true, "{r}");
+        let t = std::fs::read_to_string(fresh.config.join("fp-lib-table")).unwrap();
+        assert!(t.contains("(name \"KiCad\") (type \"Table\")") && t.contains("(name \"Pads\")"), "{t}");
+        assert!(fresh.set(Kind::Footprint).find("Package_SO").is_some(), "the stock libraries are still read through the chained table");
+        let _ = std::fs::remove_dir_all(&m.root);
+        let _ = std::fs::remove_dir_all(&fresh.root);
+    }
+
     #[test]
     fn new_library_makes_an_empty_file_or_folder_and_a_row_in_the_project_table() {
         let m = machine("newlib", true);
@@ -2007,7 +2134,7 @@ pub(crate) mod tests {
         std::fs::write(m.board.join("taken.lib"), "EESchema-LIBRARY Version 2.4").unwrap();
         std::fs::write(m.board.join("taken.kicad_sym"), "(kicad_symbol_lib)").unwrap();
         let converted = std::cell::RefCell::new(Vec::new());
-        let fake = |kind: TableKind, from: &Path, to: &Path| -> Result<(), String> {
+        let fake = |kind: TableKind, from: &Path, to: &Path, _row: &lt::Row| -> Result<(), String> {
             converted.borrow_mut().push((kind, from.to_path_buf(), to.to_path_buf()));
             std::fs::write(to, "(kicad_symbol_lib (version 20241209))").map_err(|e| e.to_string())
         };

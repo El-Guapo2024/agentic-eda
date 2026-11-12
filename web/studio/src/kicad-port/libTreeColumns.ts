@@ -57,6 +57,41 @@ export function cellText(item: { description?: string; fields?: Readonly<Record<
   return v.replace(/\n/g, " ");
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------- the widths
+
+/** `LIB_TREE_MODEL_ADAPTER`'s constructor: "Default column widths" (`m_colWidths`), Item 300 and Description 600; any other column starts at its header's width. */
+export const DEFAULT_COLUMN_WIDTHS: Readonly<Record<string, number>> = { [ITEM]: 300, [DESCRIPTION]: 600 };
+
+/** `doAddColumn`'s `headerMinWidth`: the header's text with "MMM" after it ("The extent of the text doesn't take into account the space on either side"), at the
+ * tree's 12px font (about 7px a character), and the column's least width (`SetMinWidth`). */
+export function headerMinWidth(header: string): number {
+  return Math.ceil((header.length + 3) * 7);
+}
+
+/** A column's width: the one kept (`loadColumnConfig` reads `column_widths`), else the default, never under its header's (`doAddColumn`). */
+export function columnWidth(header: string, kept: Readonly<Record<string, number>>): number {
+  const w = kept[header] ?? DEFAULT_COLUMN_WIDTHS[header] ?? 0;
+  return Math.max(Math.round(w), headerMinWidth(header));
+}
+
+/**
+ * The grid of a tree's columns (`FinishTreeInitialization`): every column at its width, the last one at least its width and else the tree's remaining width
+ * (`std::max( m_colWidths[header], remainingWidth )`).
+ */
+export function columnsTemplate(columns: readonly string[], kept: Readonly<Record<string, number>>): string {
+  return columns.map((c, i) => (i === columns.length - 1 ? `minmax(${columnWidth(c, kept)}px, 1fr)` : `${columnWidth(c, kept)}px`)).join(" ");
+}
+
+/** The least width the columns take side by side. */
+export function columnsWidth(columns: readonly string[], kept: Readonly<Record<string, number>>): number {
+  return columns.reduce((sum, c) => sum + columnWidth(c, kept), 0);
+}
+
+/** `SaveSettings`' `column_widths`: the widths kept with one column's new width (dragged in the header; never under its header's). */
+export function withColumnWidth(kept: Readonly<Record<string, number>>, header: string, width: number): Record<string, number> {
+  return { ...kept, [header]: Math.max(Math.round(width), headerMinWidth(header)) };
+}
+
 /** `LIB_TREE_NODE::RebuildSearchTerms`: the values of the shown extra columns are search words of their own, weighted 4. */
 export function shownColumnTerms(item: { fields?: Readonly<Record<string, string>> }, shown: readonly string[]): Array<{ text: string; score: number }> {
   return Object.entries(item.fields ?? {})

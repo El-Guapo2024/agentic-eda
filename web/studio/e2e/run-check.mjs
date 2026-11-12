@@ -21,11 +21,11 @@ const global = (src.match(/window\.(__\w+Check)\s*=/) || [])[1] ?? null;
 const { open } = await import(resolve(dirname(file), "browser.mjs"));
 const { b, p, errors, shot } = await open();
 // A check that needs a library file changed on disk by something else than the studio (UI-LEFT-2 LL3: a library edited outside is offered for reloading) asks
-// the runner: `window.__runCheckWriteFile(path, text)` writes a `.kicad_sym` or `.kicad_mod` file under the system's temporary folder (where the checks' boards
+// the runner: `window.__runCheckWriteFile(path, text)` writes a `.kicad_sym`, `.kicad_mod` or legacy `.lib` file under the system's temporary folder (where the checks' boards
 // are served from), and nothing else.
 await p.exposeFunction("__runCheckWriteFile", (path, text) => {
   const full = resolve(String(path));
-  if (!/\.(kicad_sym|kicad_mod)$/.test(full) || !(full.startsWith(resolve(tmpdir()) + "/") || full.startsWith("/tmp/"))) return `refused: ${full}`;
+  if (!/\.(kicad_sym|kicad_mod|lib)$/.test(full) || !(full.startsWith(resolve(tmpdir()) + "/") || full.startsWith("/tmp/"))) return `refused: ${full}`;
   writeFileSync(full, String(text));
   return "ok";
 });

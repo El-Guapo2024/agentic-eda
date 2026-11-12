@@ -163,6 +163,8 @@ export interface SymbolToCarry {
   footprint?: string;
   unit?: number;
   unitCount?: number;
+  /** The body style chosen (KiCad 25ec2335's chooser "Body style:", `PICKED_SYMBOL::BodyStyle`); 1 when none. */
+  bodyStyle?: number;
   rotDeg?: number;
   mirror?: "x" | "y" | null;
   placeAllUnits?: boolean;
@@ -191,6 +193,7 @@ export function carrySymbol(ctx: Pick<PlaceContext, "api">, pick: SymbolToCarry,
     turns: [],
     placeAllUnits: pick.placeAllUnits ?? false,
     oneOnly: pick.oneOnly ?? false,
+    ...(pick.bodyStyle && pick.bodyStyle > 1 ? { bodyStyle: pick.bodyStyle } : {}),
   };
   carryItem(ctx, "sch_place_symbol", item, at, [], keep, pick.lib ?? null);
   if (!pick.ref) refineCarriedReference(ctx, item);

@@ -83,6 +83,7 @@
     if (!t(d, `${title} opens`)) return false;
     await until(() => d.querySelector("#lt-folder")?.value, 4000);
     await type(d.querySelector("#lt-name"), name);
+    document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
     button(d, "Create").click();
     return !!t(await until(() => !dialog(title), 6000), `${title}: ${name} made and put in the project's table`);
   };
@@ -197,6 +198,11 @@
     await until(() => d.querySelector("#sla-folder")?.value, 4000);
     t(d.querySelector("#sla-name").value === `${SYM_A}.kicad_sym`, `the file is named after the library: ${d.querySelector("#sla-name").value}`);
     await type(d.querySelector("#sla-name"), `${SYM_A}Copy.kicad_sym`);
+    // the hook's four choices, "Do not update library tables" first and chosen (UI-LEFT-2 LL5); this check adds the project row
+    const choices = [...d.querySelectorAll("[data-save-library-table] input")].map((i) => `${i.value}${i.checked ? "*" : ""}`);
+    t(choices.join(",") === "none*,replace,global,project", `the table choices: ${choices.join(", ")}`);
+    d.querySelector('[data-save-library-table] input[value="project"]')?.click();
+    await sleep(100);
     button(d, "Save").click();
     t(await until(() => !dialog(`Save Library '${SYM_A}' As...`), 6000), "saved");
     const row = (await tables()).tables.symbol.project.rows.find((r) => r.nickname === `${SYM_A}Copy`);

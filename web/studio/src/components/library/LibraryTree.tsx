@@ -16,8 +16,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchEntries } from "../../api/libraryChooserClient";
 import type { ChooserItem } from "../../kicad-port/libChooser";
-import { availableColumns, cellText, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
-import { closeSelectColumns, openSelectColumns, setLibTreeColumns, useLibTreeColumns, useSelectColumnsOpen } from "../../state/libTreeColumns";
+import { availableColumns, cellText, columnsTemplate, columnsWidth, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
+import { closeSelectColumns, openSelectColumns, setLibTreeColumns, useLibTreeColumnWidths, useLibTreeColumns, useSelectColumnsOpen } from "../../state/libTreeColumns";
+import { ColumnResizer } from "./ColumnResizer";
 import { SelectColumnsDialog } from "./SelectColumnsDialog";
 import { splitLibName } from "../../kicad-port/libraryNames";
 import { buildTreeGroups, defaultGroupOpen, needsLoading, type InstalledLib, type TreeGroup, type TreeItem } from "../../kicad-port/libraryTreeModel";
@@ -105,7 +106,11 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
   }, [openKey, extra.length, kind]); // eslint-disable-line react-hooks/exhaustive-deps
   const detailOf = useMemo(() => new Map([...details.values()].flat().map((d) => [d.id, d])), [details]);
   const available = useMemo(() => availableColumns([...details.values()].map(extraFieldsOf)), [details]);
-  const grid = { display: "grid", gridTemplateColumns: ["minmax(110px, 1fr)", ...extra.map(() => "minmax(80px, 1fr)")].join(" "), columnGap: 6 } as const;
+  // each column at its kept width (`column_widths`, dragged in the header; Item 300 and Description 600 at first), the last one filling the rest
+  // (`FinishTreeInitialization`); the tree scrolls sideways when they are wider than the pane, as KiCad's does (UI-LEFT-2 LL4)
+  const widths = useLibTreeColumnWidths(treeId);
+  const tableWidth = columnsWidth(columns, widths) + 32;
+  const grid = { display: "grid", gridTemplateColumns: columnsTemplate(columns, widths) } as const;
 
   // An open group of an installed library gets its items (the groups KiCad has libraries for open by default only when the editor already lists names in them).
   useEffect(() => {
@@ -215,9 +220,10 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
           {"⋯"}
         </button>
       </div>
+      <div style={{ overflowX: "auto", overflowY: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }} data-library-tree-columns={kind}>
       <div
         data-library-tree-header={kind}
-        style={{ ...grid, padding: "2px 8px 2px 24px", fontSize: 11, fontWeight: 600, color: "var(--chrome-text-dim)", borderBottom: "1px solid var(--chrome-border)" }}
+        style={{ ...grid, minWidth: tableWidth, boxSizing: "border-box", padding: "2px 8px 2px 24px", fontSize: 11, fontWeight: 600, color: "var(--chrome-text-dim)", borderBottom: "1px solid var(--chrome-border)" }}
         onContextMenu={(e) => {
           // `LIB_TREE::onHeaderContextMenu`
           e.preventDefault();
@@ -226,12 +232,13 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
         }}
       >
         {columns.map((c) => (
-          <span key={c} data-column={c} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span key={c} data-column={c} style={{ position: "relative", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {c}
+            <ColumnResizer tree={treeId} header={c} />
           </span>
         ))}
       </div>
-      <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: 8 }}>
+      <div style={{ overflowY: "auto", overflowX: "hidden", flex: 1, minHeight: 0, paddingBottom: 8, minWidth: tableWidth }}>
         {q && searchIndex === "loading" && <div style={{ padding: "2px 10px 6px", color: "var(--chrome-text-dim)", fontSize: 11 }}>Searching every installed library…</div>}
         {groups.length === 0 && <div style={{ padding: "8px 10px", color: "var(--chrome-text-dim)", fontSize: 12 }}>{nothing ? "Nothing in the library yet." : "No match."}</div>}
         {groups.map((g) => {
@@ -282,6 +289,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
                       onContextMenu={(e) => onContextMenu(e, it.name)}
                       style={{
                         ...grid,
+                        boxSizing: "border-box",
                         padding: "2px 8px 2px 24px",
                         fontSize: 12,
                         cursor: "pointer",
@@ -314,6 +322,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
           );
         })}
         {truncated && <div style={{ padding: "6px 10px", color: "var(--chrome-text-dim)", fontSize: 11 }}>Showing the first matches only -- type more to narrow the search.</div>}
+      </div>
       </div>
       {ctx && <ContextMenu x={ctx.x} y={ctx.y} entries={ctx.entries} onClose={() => setCtx(null)} />}
       {choosing && <SelectColumnsDialog available={available} shown={shown} onOk={(c) => setLibTreeColumns(treeId, c)} onClose={closeSelectColumns} />}

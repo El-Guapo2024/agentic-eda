@@ -14,6 +14,9 @@ export interface Kicad10Action {
 export const KICAD10_ACTIONS: readonly Kicad10Action[] = [
   ...(Object.keys(ARC_MODE_ACTIONS) as ArcDrawMode[]).map((m) => ({ name: ARC_MODE_ACTIONS[m].action, label: ARC_MODE_ACTIONS[m].label, tooltip: ARC_MODE_ACTIONS[m].tooltip, icon: ARC_MODE_ACTIONS[m].icon })),
   { name: CYCLE_ARC_DRAW_MODE, label: "Cycle Arc Drawing Mode", tooltip: "Switch to the next method of drawing arcs", icon: null },
+  // eeschema/tools/sch_actions.cpp `saveLibraryAsPacked` / `saveLibraryAsUnpacked` (UI-LEFT-2 LL5)
+  { name: "eeschema.SymbolLibraryControl.saveLibraryAsPacked", label: "Save Library As Packed...", tooltip: "Save the current unpacked library to a new packed library file", icon: null },
+  { name: "eeschema.SymbolLibraryControl.saveLibraryAsUnpacked", label: "Save Library As Unpacked...", tooltip: "Save the current packed library to a new unpacked library folder", icon: null },
 ];
 
 /** The icons of those actions, by name: the file in public/icons/{light,dark}. */

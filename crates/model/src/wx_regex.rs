@@ -44,6 +44,88 @@ pub enum Flavor {
     NetClass,
     /// Find / Replace's Regular Expression: `\b` and `\B` are a word's edge and not one.
     Find,
+    /// The library choosers' `EDA_PATTERN_MATCH_REGEX` (common/eda_pattern_match.cpp, `wxRE_ADVANCED`; UI-LEFT-2 LL4): what wxWidgets 3.2's `wxRegExImpl::Compile`
+    /// hands PCRE2 for that flag -- [`Flavor::Find`]'s syntax, after `ConvertMetasyntax` (a leading `***:` director dropped, `***=` making the rest a literal, a
+    /// leading embedded-options group `(?..)`) and `ConvertWordBoundaries` (Tcl's `\m` `\M` `\y` `\Y` as PCRE's `[[:<:]]` `[[:>:]]` `\b` `\B`), so `[[:<:]]` and
+    /// `[[:>:]]` (a word's start and end) are read too. See [`advanced_metasyntax`] for the options read.
+    Advanced,
+}
+
+/// `ConvertMetasyntax` and `ConvertWordBoundaries` of wxWidgets 3.2.4 (`src/common/regex.cpp`) for `wxRE_ADVANCED`: the pattern PCRE2 compiles and whether it is
+/// caseless. A leading `***:` is dropped; `***=` makes the rest a literal (wxWidgets turns it into `\Q`: here every character that is no letter or digit is
+/// escaped); a leading `(?opts)` of lower-case letters sets `i` (caseless) and `c` (case-sensitive), `s` (`PCRE2_DOTALL`, already on), `e` (extended syntax:
+/// no word-boundary conversion) and `q` (the rest a literal). **Differs**: the other letters (`b` basic syntax, `m` `n` `p` `w` newline handling, `x` `t`
+/// extended spacing, and any letter PCRE2 would take) make the pattern not compile here.
+pub fn advanced_metasyntax(pattern: &str, icase: bool) -> Option<(String, bool)> {
+    let literal = |rest: &str| -> String {
+        let mut out = String::new();
+        for c in rest.chars() {
+            if !c.is_alphanumeric() {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    };
+    let mut expr = pattern.to_string();
+    let mut icase = icase;
+    let mut advanced = true;
+    if expr.chars().count() > 3 && expr.starts_with("***") {
+        match expr[3..].chars().next() {
+            Some(':') => expr = expr[4..].to_string(),
+            Some('=') => return Some((literal(&expr[4..]), icase)),
+            _ => {}
+        }
+    }
+    if expr.starts_with("(?") {
+        let body: String = expr[2..].chars().take_while(|c| c.is_ascii_lowercase()).collect();
+        let after = 2 + body.len();
+        if expr[after..].starts_with(')') {
+            let mut quoted = false;
+            for c in body.chars() {
+                match c {
+                    'i' => icase = true,
+                    'c' => icase = false,
+                    's' => {}
+                    'e' => advanced = false,
+                    'q' => quoted = true,
+                    _ => return None,
+                }
+            }
+            let rest = expr[after + 1..].to_string();
+            if quoted {
+                return Some((literal(&rest), icase));
+            }
+            expr = rest;
+        }
+    }
+    if !advanced {
+        return Some((expr, icase));
+    }
+    // `ConvertWordBoundaries`: an escaped pair is read as a pair, so `\\y` stays a backslash and a `y`
+    let mut out = String::new();
+    let mut it = expr.chars();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            None => {
+                out.push('\\');
+                break;
+            }
+            Some('m') => out.push_str("[[:<:]]"),
+            Some('M') => out.push_str("[[:>:]]"),
+            Some('y') => out.push_str("\\b"),
+            Some('Y') => out.push_str("\\B"),
+            Some(e) => {
+                out.push('\\');
+                out.push(e);
+            }
+        }
+    }
+    Some((out, icase))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +138,8 @@ enum Node {
     /// `\\z`: the text's very end (where `$` also holds before a final line feed).
     EndOnly,
     WordBoundary(bool),
+    /// PCRE2's `[[:<:]]` (true) and `[[:>:]]` (false): a word starts, or ends, here ([`Flavor::Advanced`]).
+    WordEdge(bool),
     Group(Box<Node>, usize),
     Seq(Vec<Node>),
     Alt(Vec<Node>),
@@ -152,6 +236,13 @@ fn class_matches(items: &[ClassItem], negate: bool, c: char, icase: bool, ascii:
 
 fn same_char(a: char, b: char, icase: bool) -> bool {
     a == b || (icase && a.to_lowercase().eq(b.to_lowercase()))
+}
+
+impl Flavor {
+    /// The flavours that read PCRE2's syntax (see the module doc).
+    fn pcre(self) -> bool {
+        matches!(self, Flavor::Find | Flavor::Advanced)
+    }
 }
 
 struct Parser {
@@ -259,11 +350,19 @@ impl Parser {
             '.' => Some(Node::Any),
             '^' => Some(Node::Bol),
             '$' => Some(Node::Eol),
+            '[' if self.flavor == Flavor::Advanced && self.chars[self.pos..].starts_with(&['[', ':', '<', ':', ']', ']']) => {
+                self.pos += 6;
+                Some(Node::WordEdge(true))
+            }
+            '[' if self.flavor == Flavor::Advanced && self.chars[self.pos..].starts_with(&['[', ':', '>', ':', ']', ']']) => {
+                self.pos += 6;
+                Some(Node::WordEdge(false))
+            }
             '[' => self.class(),
             '\\' => {
                 let e = self.peek()?;
                 self.pos += 1;
-                if self.flavor == Flavor::Find {
+                if self.flavor.pcre() {
                     return self.pcre_escape(e);
                 }
                 match e {
@@ -336,12 +435,12 @@ impl Parser {
                         "space" => PosixClass::Space,
                         "punct" => PosixClass::Punct,
                         "xdigit" => PosixClass::Xdigit,
-                        "blank" if self.flavor == Flavor::Find => PosixClass::Blank,
-                        "cntrl" if self.flavor == Flavor::Find => PosixClass::Cntrl,
-                        "print" if self.flavor == Flavor::Find => PosixClass::Print,
-                        "graph" if self.flavor == Flavor::Find => PosixClass::Graph,
-                        "word" if self.flavor == Flavor::Find => PosixClass::Word,
-                        "ascii" if self.flavor == Flavor::Find => PosixClass::Ascii,
+                        "blank" if self.flavor.pcre() => PosixClass::Blank,
+                        "cntrl" if self.flavor.pcre() => PosixClass::Cntrl,
+                        "print" if self.flavor.pcre() => PosixClass::Print,
+                        "graph" if self.flavor.pcre() => PosixClass::Graph,
+                        "word" if self.flavor.pcre() => PosixClass::Word,
+                        "ascii" if self.flavor.pcre() => PosixClass::Ascii,
                         _ => return None,
                     };
                     items.push(ClassItem::Posix(p));
@@ -355,18 +454,18 @@ impl Parser {
                             items.push(shorthand(e));
                             continue;
                         }
-                        'h' | 'H' | 'v' | 'V' if self.flavor == Flavor::Find => {
+                        'h' | 'H' | 'v' | 'V' if self.flavor.pcre() => {
                             items.push(if e.eq_ignore_ascii_case(&'h') { ClassItem::HSpace(e == 'h') } else { ClassItem::VSpace(e == 'v') });
                             continue;
                         }
                         'n' => '\n',
                         't' => '\t',
                         // in a class PCRE2's `\b` is a backspace
-                        'b' if self.flavor == Flavor::Find => '\u{8}',
-                        'x' if self.flavor == Flavor::Find => self.hex_char(2).unwrap_or('x'),
-                        'u' if self.flavor == Flavor::Find => self.hex_char(4).unwrap_or('u'),
-                        'U' if self.flavor == Flavor::Find => 'U',
-                        e if self.flavor == Flavor::Find && simple_escape(e).is_some() => simple_escape(e)?,
+                        'b' if self.flavor.pcre() => '\u{8}',
+                        'x' if self.flavor.pcre() => self.hex_char(2).unwrap_or('x'),
+                        'u' if self.flavor.pcre() => self.hex_char(4).unwrap_or('u'),
+                        'U' if self.flavor.pcre() => 'U',
+                        e if self.flavor.pcre() && simple_escape(e).is_some() => simple_escape(e)?,
                         e if e.is_ascii_alphanumeric() => return None,
                         e => e,
                     }
@@ -433,6 +532,7 @@ enum Inst {
     Eol,
     EndOnly,
     WordBoundary(bool),
+    WordEdge(bool),
     /// The text position at this point is kept in capture slot `n` (a group's start is `2 * g`, its end `2 * g + 1`).
     Save(usize),
     Match,
@@ -468,12 +568,13 @@ impl Captures {
 impl Regex {
     /// `wxRegEx::Compile( pattern, icase ? wxRE_ICASE : .. )` for `flavor`; `None` when the pattern does not compile (see the module doc).
     pub fn compile(pattern: &str, icase: bool, flavor: Flavor) -> Option<Regex> {
-        let mut p = Parser { chars: pattern.chars().collect(), pos: 0, depth: 0, groups: 0, flavor };
+        let (converted, icase) = if flavor == Flavor::Advanced { advanced_metasyntax(pattern, icase)? } else { (pattern.to_string(), icase) };
+        let mut p = Parser { chars: converted.chars().collect(), pos: 0, depth: 0, groups: 0, flavor };
         let ast = p.alt()?;
         if p.pos != p.chars.len() {
             return None; // an unmatched `)`
         }
-        let mut r = Regex { program: Vec::new(), classes: Vec::new(), groups: p.groups, icase, ascii: flavor == Flavor::Find, counted: 0 };
+        let mut r = Regex { program: Vec::new(), classes: Vec::new(), groups: p.groups, icase, ascii: flavor.pcre(), counted: 0 };
         r.push(Inst::Save(0))?;
         r.emit(&ast)?;
         r.push(Inst::Save(1))?;
@@ -516,6 +617,9 @@ impl Regex {
             }
             Node::WordBoundary(yes) => {
                 self.push(Inst::WordBoundary(*yes))?;
+            }
+            Node::WordEdge(start) => {
+                self.push(Inst::WordEdge(*start))?;
             }
             Node::Group(inner, g) => {
                 self.push(Inst::Save(2 * g))?;
@@ -672,6 +776,14 @@ impl Regex {
                 let before = pos > 0 && word_char(chars[pos - 1], self.ascii);
                 let after = pos < chars.len() && word_char(chars[pos], self.ascii);
                 if (before != after) == *want {
+                    self.add(list, Thread { pc: t.pc + 1, slots: t.slots }, pos, chars, seen, keep);
+                }
+            }
+            // `[[:<:]]`: a word character follows and none precedes; `[[:>:]]`: the other way round
+            Inst::WordEdge(start) => {
+                let before = pos > 0 && word_char(chars[pos - 1], self.ascii);
+                let after = pos < chars.len() && word_char(chars[pos], self.ascii);
+                if (after && !before && *start) || (before && !after && !*start) {
                     self.add(list, Thread { pc: t.pc + 1, slots: t.slots }, pos, chars, seen, keep);
                 }
             }
@@ -841,5 +953,37 @@ mod tests {
         }
         // the net class flavour keeps its own syntax
         assert!(Regex::compile("[[:blank:]]", false, Flavor::NetClass).is_none() && Regex::compile("\\w", false, Flavor::NetClass).unwrap().is_match("é"));
+    }
+
+    /// The choosers' `wxRE_ADVANCED` (UI-LEFT-2 LL4): PCRE2's syntax with wxWidgets 3.2's `ConvertMetasyntax` and `ConvertWordBoundaries` in front.
+    #[test]
+    fn the_advanced_flavour_is_pcre2_after_wxwidgets_converts_the_tcl_metasyntax() {
+        let adv = |p: &str| Regex::compile(p, false, Flavor::Advanced);
+        // PCRE2's syntax: ASCII classes, `\b`, `\h`, `[:word:]`
+        assert!(adv(r"\bres").unwrap().is_match("a res"));
+        assert!(!adv(r"\bres").unwrap().is_match("ares"));
+        assert!(!adv(r"\w").unwrap().is_match("é"));
+        assert!(adv(r"[[:word:]]+").unwrap().is_match("x_1"));
+        // Tcl's word boundaries: `\y` `\Y` are `\b` `\B`, `\m` `\M` a word's start and end
+        assert!(adv(r"\yres\y").unwrap().is_match("a res b") && !adv(r"\yres\y").unwrap().is_match("ares"));
+        assert!(adv(r"\Yes").unwrap().is_match("res") && !adv(r"\Yes").unwrap().is_match("es"));
+        let m = adv(r"\mre").unwrap();
+        assert!(m.is_match("x re") && !m.is_match("are"));
+        let e = adv(r"or\M").unwrap();
+        assert!(e.is_match("resistor") && !e.is_match("orb"));
+        assert!(adv("[[:<:]]a").unwrap().is_match("b a") && !adv("[[:<:]]a").unwrap().is_match("ba"));
+        // an escaped backslash is a pair: `\\y` is a backslash and a y
+        assert!(adv(r"\\y").unwrap().is_match(r"a\y"));
+        // the directors and the leading options
+        assert!(adv("***:abc").unwrap().is_match("xabcx"));
+        let lit = adv("***=a.c").unwrap();
+        assert!(lit.is_match("a.c") && !lit.is_match("abc"));
+        assert!(adv("(?i)ABC").unwrap().is_match("xabc"));
+        assert!(!Regex::compile("(?c)abc", true, Flavor::Advanced).unwrap().is_match("ABC"));
+        assert!(adv("(?q)a+").unwrap().is_match("a+") && !adv("(?q)a+").unwrap().is_match("aa"));
+        assert!(adv("(?e)\\y").is_none(), "extended syntax: no conversion, and PCRE2 refuses the letter y escaped");
+        assert!(adv("(?m)a").is_none(), "an option this port does not read");
+        // the net class flavour keeps its own rules
+        assert!(Regex::compile(r"\yres", false, Flavor::NetClass).is_none());
     }
 }

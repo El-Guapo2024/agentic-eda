@@ -77,3 +77,13 @@ export interface AutoAssociateReply {
 export function autoAssociate(components: { ref: string; value: string; footprint: string; lib_id: string }[]): Promise<AutoAssociateReply> {
   return postJson<AutoAssociateReply>("/api/cvpcb/auto_associate", { components });
 }
+
+/** Edit's editor (UI-LEFT-2 LL7): the text of the association file an entry names (`GET /api/cvpcb/equ_text`), `new` for a file not made yet. */
+export function fetchEquText(entry: string): Promise<{ path?: string; text?: string; new?: boolean; error?: string }> {
+  return getJson(`/api/cvpcb/equ_text?entry=${encodeURIComponent(entry)}`);
+}
+
+/** The editor's Save: the file written (`POST /api/cvpcb/equ_text`). */
+export function saveEquText(entry: string, text: string): Promise<{ ok?: boolean; path?: string; error?: string }> {
+  return postJson("/api/cvpcb/equ_text", { entry, text });
+}

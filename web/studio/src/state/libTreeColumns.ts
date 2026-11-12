@@ -3,7 +3,7 @@
 // keeps them in this browser's localStorage (a per-viewer convenience, as the pinned libraries are, `state/libraryTree.ts`). Plain module state with
 // subscribers, read with `useLibTreeColumns`.
 import { useSyncExternalStore } from "react";
-import { loadShownColumns } from "../kicad-port/libTreeColumns";
+import { loadShownColumns, withColumnWidth } from "../kicad-port/libTreeColumns";
 
 /** The four trees with settings of their own. */
 export type LibTreeId = "symbol_chooser" | "footprint_chooser" | "symbol_editor" | "footprint_editor";
@@ -33,6 +33,45 @@ const listeners = new Set<() => void>();
 function subscribe(l: () => void): () => void {
   listeners.add(l);
   return () => listeners.delete(l);
+}
+
+// The column widths of each tree (`lib_tree.column_widths`, keyed by header: `SaveSettings` keeps the width of every column it has made; UI-LEFT-2 LL4),
+// kept in this browser's localStorage beside the columns.
+const WIDTHS_KEY = "eda-studio.lib-tree-column-widths";
+
+function loadWidths(): Record<LibTreeId, Record<string, number>> {
+  let saved: Partial<Record<LibTreeId, unknown>> = {};
+  try {
+    const raw = localStorage.getItem(WIDTHS_KEY);
+    saved = raw ? (JSON.parse(raw) as Partial<Record<LibTreeId, unknown>>) : {};
+  } catch {
+    // no storage: the defaults
+  }
+  const out = {} as Record<LibTreeId, Record<string, number>>;
+  for (const id of IDS) {
+    const v = saved[id];
+    const kept: Record<string, number> = {};
+    if (v && typeof v === "object") for (const [k, w] of Object.entries(v as Record<string, unknown>)) if (typeof w === "number" && Number.isFinite(w) && w > 0) kept[k] = w;
+    out[id] = kept;
+  }
+  return out;
+}
+
+let widths = loadWidths();
+
+export function useLibTreeColumnWidths(id: LibTreeId): Readonly<Record<string, number>> {
+  return useSyncExternalStore(subscribe, () => widths[id], () => widths[id]);
+}
+
+/** A column's header dragged to a new width: kept for the next time the tree is made (`SaveSettings`). */
+export function setLibTreeColumnWidth(id: LibTreeId, header: string, width: number): void {
+  widths = { ...widths, [id]: withColumnWidth(widths[id], header, width) };
+  try {
+    localStorage.setItem(WIDTHS_KEY, JSON.stringify(widths));
+  } catch {
+    // ignore: it is a convenience
+  }
+  for (const l of listeners) l();
 }
 
 export function getLibTreeColumns(id: LibTreeId): readonly string[] {

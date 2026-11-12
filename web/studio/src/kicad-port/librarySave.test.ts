@@ -38,7 +38,7 @@ test("KiCad's words, word for word", () => {
   assert.equal(saveLibraryAsTitle("Mine"), "Save Library 'Mine' As...");
   assert.deepEqual(
     TABLE_OPTIONS.map((o) => o.label),
-    ["Add new project library table entry", "Update existing library table entry"]
+    ["Do not update library tables", "Update existing library table entry", "Add new global library table entry", "Add new project library table entry"]
   );
   assert.equal(modifiedLabel("R", true), "R *");
   assert.equal(modifiedLabel("R", false), "R");

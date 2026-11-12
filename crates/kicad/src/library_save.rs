@@ -417,6 +417,33 @@ pub fn save_symbol_library_as_deleting(src: Option<&Path>, dst: &Path, symbols: 
     Ok(LibraryWrite { written: vec![file], removed: Vec::new() })
 }
 
+/// KiCad 25ec2335's Save Library As Unpacked (`SYMBOL_EDIT_FRAME::saveLibrary( lib, SAVE_LIBRARY_AS::UNPACKED )` -> `SaveLibrary` to a folder path; UI-LEFT-2 LL5):
+/// every symbol of the file library `src` -- the ones of `symbols` in place of their saved forms, `deleted` left out -- written into the folder `dst`, each
+/// into a file of its own (`SCH_IO_KICAD_SEXPR_LIB_CACHE::Save`'s folder branch for symbols with no source file: "New symbol without source file - create
+/// individual file", `EscapeString( name, CTX_FILENAME ).kicad_sym`), a file of that name already there replaced. The folder is made when it is not there.
+pub fn save_symbol_library_unpacked(src: &Path, dst: &Path, symbols: &[SymbolSave], deleted: &[&str]) -> Result<LibraryWrite, String> {
+    let mut blocks = saved_blocks(src)?;
+    let written: Vec<Block> = symbols.iter().map(written_block).collect();
+    let gone = deleted_names(&blocks, deleted, &written);
+    blocks.retain(|b| !gone.contains(&b.name));
+    for w in &written {
+        blocks.retain(|b| b.name != w.name);
+    }
+    blocks.extend(written.iter().cloned());
+    let unique: Vec<&Block> = blocks.iter().enumerate().filter(|(i, b)| blocks.iter().rposition(|o| o.name == b.name) == Some(*i)).map(|(_, b)| b).collect();
+    let by_name: HashMap<&str, &Block> = unique.iter().map(|b| (b.name.as_str(), *b)).collect();
+    check_parents(&by_name, &written)?;
+    let depths = inheritance_depths(&unique);
+    if !dst.is_dir() {
+        std::fs::create_dir_all(dst).map_err(|_| format!("Cannot create symbol library path '{}'.", dst.display()))?;
+    }
+    let mut out = LibraryWrite::default();
+    for b in unique {
+        out.written.push(write_atomically(&dst.join(symbol_file_name(&b.name)), &library_text(&[b], &depths))?);
+    }
+    Ok(out)
+}
+
 // ------------------------------------------------------------------------------------------------ footprints
 
 /// `PCB_IO_KICAD_SEXPR::FootprintSave( aLibraryPath, aFootprint )` into the `.pretty` folder `pretty`: the footprint, named by the bare name of its
@@ -711,6 +738,32 @@ mod tests {
         assert_eq!(crate::scan_symbols(&text).into_iter().map(|s| s.name).collect::<Vec<_>>(), ["Zeta", "Alpha"]);
         assert!(text.contains("\"Reference\" \"Q\""));
         assert_eq!(std::fs::read_to_string(lib.join("Zeta.kicad_sym")).unwrap(), LIB, "the library saved from is untouched");
+    }
+
+    /// KiCad 25ec2335's Save Library As Unpacked (UI-LEFT-2 LL5): a file library into a folder, a file per symbol, the edits in, a deleted one left out.
+    #[test]
+    fn save_library_as_unpacked_writes_a_file_per_symbol_into_the_folder() {
+        let dir = temp_dir("save-unpacked");
+        let lib = dir.join("Mine.kicad_sym");
+        std::fs::write(&lib, LIB).unwrap();
+        let mut edited = symbol("Mine:Zeta");
+        edited.reference_prefix = "Q".into();
+        let dst = dir.join("Mine.kicad_symdir");
+        let w = save_symbol_library_unpacked(&lib, &dst, &[SymbolSave { symbol: &edited, embedded: None }], &[]).unwrap();
+        assert_eq!(w.written.len(), 2, "{:?}", w.written);
+        let zeta = std::fs::read_to_string(dst.join("Zeta.kicad_sym")).unwrap();
+        assert!(zeta.contains("\"Reference\" \"Q\"") && crate::scan_symbols(&zeta).len() == 1, "{zeta}");
+        assert_eq!(crate::scan_symbols(&std::fs::read_to_string(dst.join("Alpha.kicad_sym")).unwrap()).len(), 1);
+        // the folder reads back as the library it was
+        let text = crate::read_symbol_library_text(&dst).unwrap();
+        let mut names: Vec<String> = crate::scan_symbols(&text).into_iter().map(|s| s.name).collect();
+        names.sort();
+        assert_eq!(names, ["Alpha", "Zeta"]);
+        assert_eq!(std::fs::read_to_string(&lib).unwrap(), LIB, "the library saved from is untouched");
+        // a deleted symbol (and what derives from it) is left out
+        let dst2 = dir.join("Less.kicad_symdir");
+        save_symbol_library_unpacked(&lib, &dst2, &[], &["Alpha"]).unwrap();
+        assert!(dst2.join("Zeta.kicad_sym").is_file() && !dst2.join("Alpha.kicad_sym").exists());
     }
 
     #[test]

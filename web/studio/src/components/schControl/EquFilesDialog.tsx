@@ -2,10 +2,11 @@
 // list of footprint association files (`.equ`, `cvpcb.equivalence_files`), which Automatically Assign Footprints reads. "Footprint association files:" with Add, Move up,
 // Move down, Edit and Remove, the "Available path substitutions:" grid (`KIPRJMOD`, the footprint library folder's variable), OK and Cancel. OK saves the list at once,
 // no undo step, as KiCad's `SaveProject` (the board folder's `cvpcb.json`, crates/cli/src/cvpcb_api.rs). Add's file dialog is a browser over the server's folders,
-// starting in the folder of the grid's selected variable (a page cannot see the machine's), and Edit cannot start a text editor from a page: it says so. The rules are
-// kicad-port/cvpcbEqu.ts's.
+// starting in the folder of the grid's selected variable (a page cannot see the machine's). Edit (`OnEditEquFile`) opens each selected file in a text editor:
+// KiCad starts the person's (`Pgm().GetTextEditor()`, `ExecuteFile`), which a page cannot, so the studio's own editor opens the server's file and Save writes it
+// (UI-LEFT-2 LL7). The rules are kicad-port/cvpcbEqu.ts's.
 import { useEffect, useState } from "react";
-import { browseEqu, fetchEquFiles, saveEquFiles, type EquBrowse, type EquFilesView } from "../../api/cvpcbClient";
+import { browseEqu, fetchEquFiles, fetchEquText, saveEquFiles, saveEquText, type EquBrowse, type EquFilesView } from "../../api/cvpcbClient";
 import { addEquFiles, moveEquDown, moveEquUp, removeEqu } from "../../kicad-port/cvpcbEqu";
 import { SchDialogFrame } from "./SchDialogFrame";
 
@@ -18,6 +19,17 @@ export function EquFilesDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const [browse, setBrowse] = useState<EquBrowse | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  /** Edit's editors still to show (one at a time; KiCad starts the editor once per selected file), the first one open. */
+  const [editing, setEditing] = useState<{ entry: string; path: string; text: string; saved: string; error: string | null }[]>([]);
+  const openEditors = async (entries: string[]) => {
+    const opened: typeof editing = [];
+    for (const entry of entries) {
+      const r = await fetchEquText(entry);
+      if (r.error || r.path === undefined) setMessage(r.error ?? `Cannot open ${entry}.`);
+      else opened.push({ entry, path: r.path, text: r.text ?? "", saved: r.text ?? "", error: null });
+    }
+    setEditing(opened);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -122,7 +134,8 @@ export function EquFilesDialog({ onClose, onSaved }: { onClose: () => void; onSa
               title="Edit association file"
               aria-label="Edit association file"
               disabled={selected.length === 0}
-              onClick={() => setMessage(`The studio cannot start a text editor from the page: edit ${selected.map((i) => found(list[i] ?? "")?.path ?? list[i]).join(", ")} outside it.`)}
+              onClick={() => void openEditors(selected.map((i) => list[i] ?? "").filter((e) => e !== ""))}
+              data-equ-edit
             >
               {"✎"}
             </button>
@@ -172,6 +185,42 @@ export function EquFilesDialog({ onClose, onSaved }: { onClose: () => void; onSa
               <button onClick={() => setBrowse(null)}>Cancel</button>
               <button className="primary" disabled={picked.length === 0} onClick={takePicked} data-equ-open>
                 Open
+              </button>
+            </div>
+          </div>
+        )}
+        {editing[0] && (
+          <div data-equ-editor={editing[0].entry} style={{ border: "1px solid var(--chrome-border)", padding: 6, fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={editing[0].path}>
+              {editing[0].path}
+              {editing[0].text !== editing[0].saved ? " *" : ""}
+            </div>
+            <textarea
+              data-equ-editor-text
+              spellCheck={false}
+              value={editing[0].text}
+              onChange={(e) => {
+                const text = e.target.value;
+                setEditing((list) => list.map((x, k) => (k === 0 ? { ...x, text } : x)));
+              }}
+              style={{ fontFamily: "monospace", fontSize: 12, height: 180, resize: "vertical" }}
+            />
+            {editing[0].error && <div role="alert">{editing[0].error}</div>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+              <button onClick={() => setEditing((list) => list.slice(1))} data-equ-editor-close>
+                Close
+              </button>
+              <button
+                className="primary"
+                data-equ-editor-save
+                onClick={async () => {
+                  const cur = editing[0]!;
+                  const r = await saveEquText(cur.entry, cur.text);
+                  setEditing((list) => list.map((x, k) => (k === 0 ? { ...x, saved: r.ok ? cur.text : x.saved, error: r.ok ? null : (r.error ?? "Not saved.") } : x)));
+                  if (r.ok) fetchEquFiles().then((v) => setView(v), () => undefined);
+                }}
+              >
+                Save
               </button>
             </div>
           </div>

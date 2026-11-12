@@ -18,7 +18,7 @@
 //! person keeps: the `.kicad_sym` beside the old file (`newLib.SetExt( "kicad_sym" )`), or the `<name>.pretty` folder beside it (`newLib.AppendDir( newLib.GetName()
 //! + ".pretty" )`) -- the folder the table already names, with a new extension; see [`migrate`].
 
-use eda_kicad::library_table::TableKind;
+use eda_kicad::library_table::{self as lt, TableKind};
 use eda_kicad_engine::foreign::{convert_library, LibraryKind};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -138,9 +138,65 @@ pub(crate) fn readable(kind: TableKind, source: &Path) -> Result<PathBuf, String
     readable_with(kind, source, &cache_dir(), &kicad_cli)
 }
 
+/// [`readable`] of a row of the tables, with the row's format and options (UI-LEFT-2 LL5). KiCad hands a row's options to its plugin (`LIBRARY_TABLE_ROW::
+/// GetProperties`); of the options a library read takes, only the CADSTAR symbol plugin's two exist (`SCH_IO_CADSTAR_ARCHIVE::GetLibraryOptions`; the footprint
+/// plugins' library functions read none -- `PCB_IO::GetLibraryOptions`' six are offered and never read): `csa`, the CADSTAR schematic archive the library
+/// goes with (a relative path against the library's folder), and `fplib`, the nickname of the footprint library its symbols' footprints are in
+/// (`cadstarpcblib` when none). kicad-cli takes no options, so the studio gives them to it the way the plugin would find them: the library is converted from a
+/// folder of its own where it sits beside the named archive under its own name (`<library>.csa`, the first place `ensureLoadedLibrary` looks), and the
+/// converted symbols' footprints are named in `fplib` instead of `cadstarpcblib` (`LIB_ID( m_footprintLibName, .. )`). The options are part of the cached
+/// copy's state.
+pub(crate) fn readable_row(kind: TableKind, source: &Path, lib_type: &str, options: &str) -> Result<PathBuf, String> {
+    let opts = lt::parse_options(options);
+    if kind != TableKind::Symbol || lib_type != CADSTAR_SYMBOL_TYPE || !(opts.contains_key("csa") || opts.contains_key("fplib")) {
+        return readable(kind, source);
+    }
+    let staged = |lk: LibraryKind, from: &Path, to: &Path| cadstar_with_options(lk, from, to, &opts, &kicad_cli);
+    readable_keyed(kind, source, &cache_dir(), &staged, options)
+}
+
+/// `SCH_IO_MGR::SCH_CADSTAR_ARCHIVE`'s table type.
+const CADSTAR_SYMBOL_TYPE: &str = "CADSTAR Schematic Archive";
+
+/// The CADSTAR symbol library at `from` converted into `to` as KiCad's plugin reads it with the row's `csa` and `fplib` options (see [`readable_row`]).
+fn cadstar_with_options(lk: LibraryKind, from: &Path, to: &Path, opts: &std::collections::BTreeMap<String, String>, convert: Convert<'_>) -> Result<(), String> {
+    let mut source = from.to_path_buf();
+    let mut stage: Option<PathBuf> = None;
+    if let Some(csa) = opts.get("csa").filter(|c| !c.is_empty()) {
+        let csa = Path::new(csa);
+        let csa = if csa.is_absolute() { csa.to_path_buf() } else { from.parent().unwrap_or(Path::new(".")).join(csa) };
+        let dir = std::env::temp_dir().join(format!("eda-cadstar-{}-{}", std::process::id(), hash16(&format!("{}{:?}", from.display(), SystemTime::now()))));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let name = from.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        let stem = from.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        std::fs::copy(from, dir.join(&name)).map_err(|e| e.to_string())?;
+        std::fs::copy(&csa, dir.join(format!("{stem}.csa"))).map_err(|_| format!("Cannot find the .csa file corresponding to library '{}'.", from.display()))?;
+        source = dir.join(&name);
+        stage = Some(dir);
+    }
+    let converted = convert(lk, &source, to);
+    if let Some(dir) = stage {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    converted?;
+    if let Some(fplib) = opts.get("fplib").filter(|f| !f.is_empty() && f.as_str() != "cadstarpcblib") {
+        let text = std::fs::read_to_string(to).map_err(|e| e.to_string())?;
+        std::fs::write(to, text.replace("(property \"Footprint\" \"cadstarpcblib:", &format!("(property \"Footprint\" \"{fplib}:"))).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 pub(crate) fn readable_with(kind: TableKind, source: &Path, cache: &Path, convert: Convert<'_>) -> Result<PathBuf, String> {
+    readable_keyed(kind, source, cache, convert, "")
+}
+
+/// [`readable_with`], the copy kept for the source's state and `options` together.
+fn readable_keyed(kind: TableKind, source: &Path, cache: &Path, convert: Convert<'_>, options: &str) -> Result<PathBuf, String> {
     let Some(lk) = library_kind(kind) else { return Err("A design block library is read only in KiCad's format.".to_string()) };
-    let Some(state) = stamp(source) else { return Err(format!("Library '{}' not found.", source.display())) };
+    let Some(mut state) = stamp(source) else { return Err(format!("Library '{}' not found.", source.display())) };
+    if !options.is_empty() {
+        state.push_str(&format!("|options={options}"));
+    }
     let key = (source.to_path_buf(), lk);
     if let Some((s, answer)) = memo().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
         // the same state of the source: the same answer (a copy someone removed from the cache is made again)
@@ -189,7 +245,7 @@ pub(crate) fn status(kind: TableKind, source: &Path) -> Option<String> {
     let lk = library_kind(kind)?;
     let state = stamp(source)?;
     match memo().lock().unwrap_or_else(PoisonError::into_inner).get(&(source.to_path_buf(), lk)) {
-        Some((s, Err(e))) if *s == state => Some(e.clone()),
+        Some((s, Err(e))) if *s == state || s.starts_with(&format!("{state}|options=")) => Some(e.clone()),
         _ => None,
     }
 }
@@ -215,6 +271,16 @@ pub(crate) fn migrated_path(kind: TableKind, source: &Path) -> Option<PathBuf> {
 /// others (`PCB_IO_MGR::ConvertLibrary` saves each footprint into the folder: "Do you want overwrite any existing footprints?").
 pub(crate) fn migrate(kind: TableKind, source: &Path, dest: &Path) -> Result<(), String> {
     migrate_with(kind, source, dest, &kicad_cli)
+}
+
+/// [`migrate`] of a row with its format and options: `SCH_IO_MGR::ConvertLibrary( &props, .. )` hands the row's options to the plugin, which for a CADSTAR
+/// symbol library are read as [`readable_row`] reads them (UI-LEFT-2 LL5).
+pub(crate) fn migrate_row(kind: TableKind, source: &Path, dest: &Path, lib_type: &str, options: &str) -> Result<(), String> {
+    let opts = lt::parse_options(options);
+    if kind == TableKind::Symbol && lib_type == CADSTAR_SYMBOL_TYPE && (opts.contains_key("csa") || opts.contains_key("fplib")) {
+        return migrate_with(kind, source, dest, &|lk, from, to| cadstar_with_options(lk, from, to, &opts, &kicad_cli));
+    }
+    migrate(kind, source, dest)
 }
 
 pub(crate) fn migrate_with(kind: TableKind, source: &Path, dest: &Path, convert: Convert<'_>) -> Result<(), String> {
@@ -397,5 +463,32 @@ mod tests {
         assert!(e.contains("Unable to convert library") || e.contains("Unrecognized"), "{e}");
         remove(&cache);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A CADSTAR row's options reach the conversion (UI-LEFT-2 LL5): `csa` puts the named archive beside the library under the library's name, where the plugin
+    /// looks first, and `fplib` names the converted symbols' footprint library.
+    #[test]
+    fn a_cadstar_rows_csa_and_fplib_options_reach_the_conversion() {
+        let dir = temp("cadstar");
+        std::fs::create_dir_all(dir.join("arch")).unwrap();
+        std::fs::write(dir.join("parts.lib"), "lib").unwrap();
+        std::fs::write(dir.join("arch").join("design.csa"), "the archive").unwrap();
+        let seen = std::cell::RefCell::new(String::new());
+        let fake = |_lk: LibraryKind, from: &Path, to: &Path| -> Result<(), String> {
+            let csa = from.with_extension("csa");
+            *seen.borrow_mut() = std::fs::read_to_string(&csa).unwrap_or_default();
+            std::fs::write(to, "(kicad_symbol_lib (symbol \"R\" (property \"Footprint\" \"cadstarpcblib:R0603\")))").map_err(|e| e.to_string())
+        };
+        let opts = lt::parse_options("csa=arch/design.csa|fplib=MyPcbLib");
+        let out = dir.join("out.kicad_sym");
+        cadstar_with_options(LibraryKind::Symbol, &dir.join("parts.lib"), &out, &opts, &fake).unwrap();
+        assert_eq!(*seen.borrow(), "the archive", "the archive sits beside the library under its name");
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert!(text.contains("\"MyPcbLib:R0603\"") && !text.contains("cadstarpcblib"), "{text}");
+        // no options: as it is
+        cadstar_with_options(LibraryKind::Symbol, &dir.join("parts.lib"), &out, &Default::default(), &fake).unwrap();
+        assert!(std::fs::read_to_string(&out).unwrap().contains("cadstarpcblib:R0603"));
+        assert_eq!(lt::parse_options("a=1|b=x\\|y| c"), [("a".to_string(), "1".to_string()), ("b".to_string(), "x|y".to_string()), ("c".to_string(), String::new())].into());
+        remove(&dir);
     }
 }

@@ -105,15 +105,19 @@ export interface SaveLibraryAsRequest {
   lib: string;
   /** The new file (symbols) or folder (footprints); may hold variables and is relative to the board's folder. */
   path: string;
-  /** Symbols: "Add new project library table entry" or "Update existing library table entry". */
-  table?: "project" | "replace";
+  /** Symbols: the hook's choice -- "Do not update library tables", "Update existing library table entry", "Add new global / project library table entry". */
+  table?: "none" | "replace" | "global" | "project";
+  /** Symbols, KiCad 25ec2335: Save Library As Packed (a folder library into one file) or Unpacked (a file library into a folder). */
+  mode?: "packed" | "unpacked";
+  /** Footprints: the new library's row in KiCad's global table (`FILEDLG_HOOK_NEW_LIBRARY`). */
+  global?: boolean;
   overwrite?: boolean;
   nickname?: string;
   descr?: string;
 }
 
 export type SaveLibraryAsAnswer =
-  | { ok: true; path: string; nickname: string; uri?: string; copied?: string[]; message: string }
+  | { ok: true; path: string; nickname: string | null; uri?: string; copied?: string[]; message: string }
   | { ok?: undefined; error: string; detail?: string; confirm?: string; path?: string; nickname?: string };
 
 export async function saveLibraryAs(req: SaveLibraryAsRequest): Promise<SaveLibraryAsAnswer> {

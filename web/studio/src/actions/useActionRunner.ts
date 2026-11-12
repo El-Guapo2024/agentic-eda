@@ -128,6 +128,7 @@ import { registerBoardControlActions } from "./boardControlActions";
 import { registerImportActions } from "./importActions";
 import { registerSimActions } from "./simActions";
 import { simChecked, simEnabled, useSimUi } from "../state/simulator";
+import { REMAP_SYMBOLS_ACTION, useSchLegacy } from "../state/schLegacy";
 import { registerDesignBlockActions } from "./designBlockActions";
 import { designBlockChecked, useDesignBlocksUi } from "../state/designBlocks";
 import { flipLocalX, highlightedNets } from "../kicad-port/boardControl";
@@ -2644,6 +2645,13 @@ export function useActionRunner() {
       m.set("eeschema.SymbolLibraryControl.saveLibraryAs", () => {
         if (state.tab === "symbol") saveSymbolLibraryAs(symApi, (message, kind = "info") => symDispatch({ type: "TOAST", message, kind }));
       });
+      // KiCad 25ec2335's Save Library As Packed / Unpacked (`SaveLibraryAs( SAVE_LIBRARY_AS::PACKED | UNPACKED )`; UI-LEFT-2 LL5)
+      m.set("eeschema.SymbolLibraryControl.saveLibraryAsPacked", () => {
+        if (state.tab === "symbol") saveSymbolLibraryAs(symApi, (message, kind = "info") => symDispatch({ type: "TOAST", message, kind }), "packed");
+      });
+      m.set("eeschema.SymbolLibraryControl.saveLibraryAsUnpacked", () => {
+        if (state.tab === "symbol") saveSymbolLibraryAs(symApi, (message, kind = "info") => symDispatch({ type: "TOAST", message, kind }), "unpacked");
+      });
     }
 
     // The schematic edit and drawing tools (Lock, Change To, Break, shapes, sheet pins, ...) -- actions/schEditActions.ts. Registered before the library editors'
@@ -2735,9 +2743,11 @@ export function useActionRunner() {
   const cliExporters = useCliExporters();
   // The simulator's own conditions (`SIMULATOR_FRAME::setupUIConditions`), read again when its window changes.
   const simUi = useSimUi();
+  // `remapSymbolsCondition`: Remap Legacy Library Symbols... only on a legacy schematic (state/schLegacy.ts; UI-LEFT-2 LL7).
+  const schLegacy = useSchLegacy(state.tab === "schematic" ? state.schematic : null);
   const isEnabled = useCallback(
-    (name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)) && (simEnabled(name, simUi) ?? true) && cliExporterReason(name, cliExporters) === null,
-    [registry, state.tab, simUi, cliExporters],
+    (name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)) && (simEnabled(name, simUi) ?? true) && cliExporterReason(name, cliExporters) === null && (name !== REMAP_SYMBOLS_ACTION || schLegacy),
+    [registry, state.tab, simUi, cliExporters, schLegacy],
   );
   /** `param` is the event parameter KiCad's parameterised actions carry (`zoomPreset`'s entry, `selectItems`' items, `changeSheet`'s path ...). */
   const run = useCallback((name: string, param?: unknown) => registry.get(name)?.(param), [registry]);

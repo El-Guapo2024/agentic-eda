@@ -320,7 +320,7 @@ fn items_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> Result<Arc
     Ok(names)
 }
 
-/// `GET /api/library/index?kind=footprint|symbol`: `{"available": bool, "libraries": [{"name", "count"?, "description"?, "scope"?}]}` -- the libraries of
+/// `GET /api/library/index?kind=footprint|symbol`: `{"available": bool, "libraries": [{"name", "count"?, "description"?, "scope"?, "unpacked"?}]}` -- the libraries of
 /// the board's library tables (KiCad's own through the global table, the project's through its own), names only, with the description each row gives
 /// (the choosers' Description column) and the table it is in.
 pub fn libraries(dir: &Path, kind: Kind) -> Value {
@@ -341,6 +341,11 @@ fn libraries_json<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
             }
             if let Some(scope) = src.scope_of(kind, &l.name) {
                 v["scope"] = json!(scope);
+            }
+            // KiCad 25ec2335's `isUnpackedLibraryCondition`: a symbol library that is a folder (`.kicad_symdir`) offers Save Library As Packed, a file one Save
+            // Library As Unpacked (UI-LEFT-2 LL5)
+            if kind == Kind::Symbol && src.lib_path(kind, &l.name).is_ok_and(|p| p.is_dir()) {
+                v["unpacked"] = json!(true);
             }
             v
         }).collect::<Vec<_>>(),

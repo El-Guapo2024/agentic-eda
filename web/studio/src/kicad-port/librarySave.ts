@@ -34,10 +34,29 @@ export function saveLibraryAsTitle(lib: string): string {
 /** `FOOTPRINT_EDIT_FRAME::SaveLibraryAs` -> `CreateNewLibrary( _( "Save Footprint Library As" ), .. )`. */
 export const FOOTPRINT_SAVE_LIBRARY_AS_TITLE = "Save Footprint Library As";
 
-/** `SYMBOL_LIBRARY_SAVE_AS_FILEDLG_HOOK`'s radio buttons the studio offers: the global table is KiCad's (never written here), and a file no table names is not written. */
+/** KiCad 25ec2335's Save Library As Packed (an unpacked, folder library into one file) and Unpacked (a packed, file library into a folder): the dialogs' titles. */
+export function saveLibraryAsPackedTitle(lib: string): string {
+  return `Save Library '${lib}' As Packed Library...`;
+}
+export function saveLibraryAsUnpackedTitle(lib: string): string {
+  return `Save Library '${lib}' As Unpacked Library...`;
+}
+
+/**
+ * `SYMBOL_LIBRARY_SAVE_AS_FILEDLG_HOOK`'s radio buttons, in its order (UI-LEFT-2 LL5); the first, "Do not update library tables", is selected when the dialog opens
+ * (`SYMBOL_SAVEAS_TYPE::NORMAL_SAVE_AS`).
+ */
 export const TABLE_OPTIONS = [
-  { value: "project", label: "Add new project library table entry" },
+  { value: "none", label: "Do not update library tables" },
   { value: "replace", label: "Update existing library table entry" },
+  { value: "global", label: "Add new global library table entry" },
+  { value: "project", label: "Add new project library table entry" },
+] as const;
+
+/** `FILEDLG_HOOK_NEW_LIBRARY`'s two radio buttons (New Library, Add Library, a footprint library's Save Library As, a new design block library). */
+export const NEW_LIBRARY_TABLE_OPTIONS = [
+  { value: "global", label: "Add new library to global library table" },
+  { value: "project", label: "Add new library to project library table" },
 ] as const;
 export type TableOption = (typeof TABLE_OPTIONS)[number]["value"];
 

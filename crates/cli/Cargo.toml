@@ -27,3 +27,5 @@ eda-sim = { path = "../sim" }
 eda-engine = { path = "../engine" }
 eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }
+# the HTTP symbol libraries' REST client (`crate::http_lib`); the version and features eda-ops and eda-judge already take, so no new crate
+ureq = { version = "2", features = ["json"] }

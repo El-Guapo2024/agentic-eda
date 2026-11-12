@@ -96,7 +96,11 @@ export interface SearchAnswer {
 }
 
 /** The search over every installed library (`GET /api/library/search`): the best matches, grouped by library, best first. */
-export async function searchInstalled(kind: ChooserKind, query: string, filter?: ChooserFilter, signal?: AbortSignal): Promise<SearchAnswer> {
+/**
+ * The server's search of the installed libraries. `columns`: the tree's shown columns (Select Columns...), whose fields are search terms of weight 4
+ * (`LIB_TREE_NODE::RebuildSearchTerms`; UI-LEFT-2 LL4); left out, the server takes the default, Item and Description.
+ */
+export async function searchInstalled(kind: ChooserKind, query: string, filter?: ChooserFilter, signal?: AbortSignal, columns?: readonly string[]): Promise<SearchAnswer> {
   const r = await get<{
     status: "ready" | "indexing";
     indexed: number;
@@ -107,7 +111,7 @@ export async function searchInstalled(kind: ChooserKind, query: string, filter?:
     power_libraries?: string[];
     load_errors?: { lib: string; error: string }[];
     error?: string;
-  }>(`/api/library/search?kind=${kind}&q=${encodeURIComponent(query)}${filterQuery(filter)}`, signal);
+  }>(`/api/library/search?kind=${kind}&q=${encodeURIComponent(query)}${filterQuery(filter)}${columns && columns.length > 0 ? `&cols=${encodeURIComponent(columns.join("\t"))}` : ""}`, signal);
   if (r.load_errors) reportLoadErrors(r.load_errors);
   return {
     status: r.status,
@@ -249,9 +253,11 @@ export interface ProjectSymbol extends ChooserItem {
 }
 
 export async function fetchProjectSymbols(): Promise<ProjectSymbol[]> {
-  const r = await get<{ entries: { id: string; source: ProjectSymbol["source"]; placed: boolean; description: string; reference: string; units: number; pins: number; power: boolean; keywords: string }[]; error?: string }>("/api/library/project");
+  const r = await get<{ entries: { id: string; source: ProjectSymbol["source"]; placed: boolean; description: string; reference: string; units: number; pins: number; power: boolean; keywords: string; fields?: Record<string, string> }[]; error?: string }>("/api/library/project");
   return r.entries.map((e) => {
     const { lib, name } = splitId(e.id);
-    return { id: e.id, lib, name, description: e.description, keywords: e.keywords, reference: e.reference, units: e.units, pins: e.pins, power: e.power, source: e.source, placed: e.placed };
+    // the chooser fields (`GetChooserFields`): the extra columns of the Already Placed and project rows, and their search words (UI-LEFT-2 LL4)
+    const fields = e.fields ?? undefined;
+    return { id: e.id, lib, name, description: e.description, keywords: e.keywords, reference: e.reference, units: e.units, pins: e.pins, power: e.power, source: e.source, placed: e.placed, ...(fields ? { fields, value: fields.Value, footprint: fields.Footprint } : {}) };
   });
 }

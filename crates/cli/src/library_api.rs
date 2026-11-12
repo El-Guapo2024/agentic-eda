@@ -156,35 +156,53 @@ pub fn project_symbols(dir: &Path) -> Value {
     placed.retain(|id| !eda_model::is_synthetic_lib_id(id));
 
     let mut entries: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
-    let mut put = |id: &str, source: &str, description: &str, reference: &str, units: u32, pins: usize, power: bool, keywords: &str| {
+    let mut put = |id: &str, source: &str, description: &str, reference: &str, units: u32, pins: usize, power: bool, keywords: &str, fields: serde_json::Map<String, Value>| {
         entries.entry(id.to_string()).or_insert_with(|| {
-            json!({ "id": id, "source": source, "placed": placed.contains(id), "description": description, "reference": reference, "units": units.max(1), "pins": pins, "power": power, "keywords": keywords })
+            json!({ "id": id, "source": source, "placed": placed.contains(id), "description": description, "reference": reference, "units": units.max(1), "pins": pins, "power": power, "keywords": keywords, "fields": fields })
         });
+    };
+    // `LIB_SYMBOL::GetChooserFields` (`cacheChooserFields`, UI-LEFT-2 LL4): every field by name and "Keywords" unless a field of that name is the symbol's own --
+    // what the Already Placed and project rows show in the tree's extra columns and are searched by, as the installed libraries' items are
+    let library_fields = |s: &eda_model::ir::LibrarySymbol| {
+        let mut m = serde_json::Map::new();
+        for f in s.all_fields() {
+            m.insert(f.name.clone(), json!(f.text));
+        }
+        m.entry("Keywords".to_string()).or_insert_with(|| json!(s.keywords));
+        m
+    };
+    let model_fields = |s: &eda_model::symbol::LibSymbol| {
+        let mut m = serde_json::Map::new();
+        let name = s.lib_id.rsplit(':').next().unwrap_or(&s.lib_id).to_string();
+        for (k, v) in [("Reference", s.reference_prefix.clone()), ("Value", name), ("Footprint", String::new()), ("Datasheet", s.datasheet.clone()), ("Description", s.description.clone()), ("Keywords", String::new())] {
+            m.insert(k.to_string(), json!(v));
+        }
+        m
     };
     let distinct_pins = |numbers: &mut dyn Iterator<Item = &str>| numbers.collect::<std::collections::BTreeSet<&str>>().len();
     if let Some(lib) = &design.symbol_library {
         for s in &lib.symbols {
-            put(&s.lib_id, "project", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().filter(|p| p.body_style <= 1).map(|p| p.number.as_str())), s.power, &s.keywords);
+            put(&s.lib_id, "project", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().filter(|p| p.body_style <= 1).map(|p| p.number.as_str())), s.power, &s.keywords, library_fields(s));
         }
     }
     for s in &model.symbols {
         if !eda_model::is_synthetic_lib_id(&s.lib_id) {
-            put(&s.lib_id, "design", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+            put(&s.lib_id, "design", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "", model_fields(s));
         }
     }
     for id in &placed {
         if let Some(s) = model.symbol_of(id) {
-            put(id, "design", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+            put(id, "design", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "", model_fields(&s));
         }
     }
     for s in eda_model::symbol::builtin_catalog() {
-        put(&s.lib_id, "builtin", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+        put(&s.lib_id, "builtin", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "", model_fields(&s));
     }
     // Place Power's chooser where KiCad's libraries are not installed: the common rails the built-in symbols draw (`symbol::builtin` has one for any
     // `power:<net>`; these are the names the old Power Symbol dialog offered).
     for id in BUILTIN_POWER {
         if let Some(s) = eda_model::symbol::builtin(id) {
-            put(&s.lib_id, "builtin", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+            put(&s.lib_id, "builtin", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "", model_fields(&s));
         }
     }
     json!({ "entries": entries.into_values().collect::<Vec<_>>() })

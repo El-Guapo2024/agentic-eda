@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { browseFolder, type FolderEntry, type FolderListing } from "../../api/libraryTablesClient";
 
-export type BrowseWhat = "symbol" | "symbol_folder" | "footprint" | "design_block" | "table" | "folder" | "drawing_sheet";
+export type BrowseWhat = "symbol" | "symbol_folder" | "http" | "footprint" | "design_block" | "table" | "folder" | "drawing_sheet";
 
 export interface FolderBrowserProps {
   title: string;
@@ -24,6 +24,7 @@ function join(folder: string, name: string): string {
 
 const HINT: Record<BrowseWhat, string> = {
   symbol: "Choose a .kicad_sym file.",
+  http: "Choose an HTTP library's settings file (*.kicad_httplib).",
   symbol_folder: "Choose a symbol library folder: a .kicad_symdir folder of .kicad_sym files (any folder works; its name without the extension becomes the nickname).",
   footprint: "Choose a footprint library: a .pretty folder (any folder works; its whole name becomes the nickname).",
   design_block: "Choose a design block library: a .kicad_blocks folder (any folder works; its whole name becomes the nickname).",
