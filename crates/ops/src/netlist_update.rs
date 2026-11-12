@@ -39,10 +39,14 @@
 //! * one footprint per reference: a component whose reference is on the board already, unmatched (another path, or a footprint KiCad would keep beside a new
 //!   one because "Replace footprints" is off), gets no second footprint -- "Cannot add %s (a footprint with this reference is on the board)." -- and a
 //!   design variant's own footprint (`expectedFpids` beyond the base) is not added;
-//! * not ported: component classes (`updateComponentClass`), unit metadata (`updateComponentUnits`), design variants (`applyComponentVariants` and the
-//!   board's variant list), jumper pad settings, "Delete tracks shorting multiple nets" (which 8303b2ad's dialog shows and passes to nothing);
+//! * ported since: the component class (`updateComponentClass`, `FootprintExtra::component_classes`), the unit metadata (`updateComponentUnits`,
+//!   `FootprintExtra::units`), the jumper settings (`updateFootprintParameters`' last part, the footprint's tokens);
+//! * not ported: design variants (`applyComponentVariants` and the board's variant list), "Delete tracks shorting multiple nets" (which 8303b2ad's dialog
+//!   shows and passes to nothing);
 //! * a zone's pads are the pads on its net (KiCad: the pads its fill touches, `GetConnectedPads( zone )`);
-//! * the tracks of a net that is removed take the net of the pads they reach on the next load (`net_names::heal_stale_nets`), where KiCad leaves them on no net.
+//! * the tracks of a net that is removed take the net of the pads they reach (`net_names::heal_stale_nets`, at the load that follows the step): KiCad's commit does
+//!   the same (`BOARD_COMMIT::Push` -> `CONNECTIVITY_DATA::RecalculateRatsnest` -> `CN_CONNECTIVITY_ALGO::PropagateNets`: a track of a cluster whose pads are of one
+//!   net takes it, `CanChangeNet`; a cluster with pads of several nets or none is left alone).
 
 use super::Board;
 use eda_kicad::netlist_reader::{self, ComponentNet, Netlist, NetlistComponent};
@@ -173,6 +177,39 @@ pub fn take_report() -> Option<NetlistReport> {
 }
 
 /// `EscapeHTML`: the message panel is HTML.
+/// A board footprint's jumper settings as its tokens say them: `(duplicate_pad_numbers_are_jumpers yes)` and `(jumper_pad_groups ("1" "2") ..)`.
+fn jumper_settings(tokens: &[String]) -> (bool, Vec<BTreeSet<String>>) {
+    let dup = tokens.iter().any(|t| t.starts_with("(duplicate_pad_numbers_are_jumpers") && t.contains("yes"));
+    let mut groups = Vec::new();
+    for t in tokens.iter().filter(|t| t.starts_with("(jumper_pad_groups")) {
+        // each inner `( "a" "b" .. )`: its quoted pad numbers
+        let body = &t["(jumper_pad_groups".len()..];
+        let mut group: Option<BTreeSet<String>> = None;
+        let mut chars = body.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '(' => group = Some(BTreeSet::new()),
+                ')' => groups.extend(group.take()),
+                '"' => {
+                    let mut word = String::new();
+                    while let Some(c) = chars.next() {
+                        match c {
+                            '\\' => word.extend(chars.next()),
+                            '"' => break,
+                            other => word.push(other),
+                        }
+                    }
+                    if let Some(g) = group.as_mut() {
+                        g.insert(word);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (dup, groups)
+}
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
@@ -617,6 +654,8 @@ impl<'c> Updater<'c> {
             self.update_footprint_parameters(b, &fp, c);
             self.update_footprint_group(b, &fp, c, netlist);
             self.update_component_pad_connections(b, &fp, c);
+            self.update_component_class(b, &fp, c);
+            self.update_component_units(b, &fp, c);
         }
         self.update_copper_zone_nets(b, netlist, &zone_pads);
         self.update_groups(b, netlist);
@@ -1027,6 +1066,93 @@ impl<'c> Updater<'c> {
                 }
             }
         }
+        // the jumper settings: "Pads with duplicate numbers are jumpers" and the jumper pad groups, as the symbol has them (a board footprint keeps them among the
+        // tokens of its `FootprintExtra`, as its file wrote them)
+        let tokens = Self::extra_of(b, reference).map(|e| e.tokens.clone()).unwrap_or_default();
+        let (fp_dup, fp_groups) = jumper_settings(&tokens);
+        let mut new_tokens = tokens.clone();
+        if c.duplicate_pads_are_jumpers != fp_dup {
+            let text = match (self.dry, c.duplicate_pads_are_jumpers) {
+                (true, true) => format!("Add {shown} 'duplicate pad numbers are jumpers' attribute."),
+                (true, false) => format!("Remove {shown} 'duplicate pad numbers are jumpers' attribute."),
+                (false, true) => format!("Added {shown} 'duplicate pad numbers are jumpers' attribute."),
+                (false, false) => format!("Removed {shown} 'duplicate pad numbers are jumpers' attribute."),
+            };
+            self.say(Severity::Action, text);
+            new_tokens.retain(|t| !t.starts_with("(duplicate_pad_numbers_are_jumpers"));
+            if c.duplicate_pads_are_jumpers {
+                new_tokens.push("(duplicate_pad_numbers_are_jumpers yes)".to_string());
+            }
+        }
+        if c.jumper_pad_groups != fp_groups {
+            let text = self.tense(format!("Update {shown} jumper pad groups"), format!("Updated {shown} jumper pad groups"));
+            self.say(Severity::Action, text);
+            new_tokens.retain(|t| !t.starts_with("(jumper_pad_groups"));
+            if !c.jumper_pad_groups.is_empty() {
+                let groups: Vec<String> = c.jumper_pad_groups.iter().map(|g| format!("({})", g.iter().map(|p| eda_kicad::sexpr_str(p)).collect::<Vec<_>>().join(" "))).collect();
+                new_tokens.push(format!("(jumper_pad_groups {})", groups.join(" ")));
+            }
+        }
+        if !self.dry && new_tokens != tokens {
+            Self::extra_mut(b, reference).tokens = new_tokens;
+        }
+    }
+
+    /// The footprint's `FootprintExtra` (what its board file said beyond the model), if it has one.
+    fn extra_of<'b>(b: &'b Board<'_>, reference: &str) -> Option<&'b eda_model::ir::FootprintExtra> {
+        b.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference))
+    }
+
+    /// The footprint's `FootprintExtra`, made empty when it has none.
+    fn extra_mut<'b>(b: &'b mut Board<'_>, reference: &str) -> &'b mut eda_model::ir::FootprintExtra {
+        let dr = b.drawings_mut();
+        if !dr.footprint_extras.iter().any(|e| e.id == reference) {
+            dr.footprint_extras.push(eda_model::ir::FootprintExtra { id: reference.to_string(), ..Default::default() });
+        }
+        dr.footprint_extras.iter_mut().find(|e| e.id == reference).expect("just made")
+    }
+
+    /// `BOARD_NETLIST_UPDATER::updateComponentClass`: the footprint's static component class is the component's (`GetEffectiveStaticComponentClass( ..
+    /// GetComponentClassNames() )`: its constituent names sorted, shown joined by commas, `GetFullClassNameForConstituents`).
+    fn update_component_class(&mut self, b: &mut Board<'_>, reference: &str, c: &NetlistComponent) {
+        let cur: Vec<String> = Self::extra_of(b, reference).map(|e| e.component_classes.clone()).unwrap_or_default();
+        let mut cur_sorted = cur.clone();
+        cur_sorted.sort();
+        let new: Vec<String> = c.component_classes.iter().cloned().collect(); // a `BTreeSet`: sorted as `sortClassNames` sorts them
+        let (cur_name, new_name) = (cur_sorted.join(","), new.join(","));
+        if cur_name == new_name {
+            return;
+        }
+        let shown = self.shown(reference).to_string();
+        let text = match (cur_name.is_empty(), new_name.is_empty()) {
+            (true, false) => self.tense(format!("Change {} component class to '{}'.", shown, esc(&new_name)), format!("Changed {} component class to '{}'.", shown, esc(&new_name))),
+            (false, true) => self.tense(format!("Remove {} component class (currently '{}').", shown, esc(&cur_name)), format!("Removed {} component class (was '{}').", shown, esc(&cur_name))),
+            _ => self.tense(
+                format!("Change {} component class from '{}' to '{}'.", shown, esc(&cur_name), esc(&new_name)),
+                format!("Changed {} component class from '{}' to '{}'.", shown, esc(&cur_name), esc(&new_name)),
+            ),
+        };
+        self.say(Severity::Action, text);
+        if !self.dry {
+            Self::extra_mut(b, reference).component_classes = new;
+        }
+    }
+
+    /// `BOARD_NETLIST_UPDATER::updateComponentUnits`: the footprint's gates (`FOOTPRINT::GetUnitInfo`, written as `(units ..)`) are the component's. The dry run says
+    /// so and changes nothing.
+    fn update_component_units(&mut self, b: &mut Board<'_>, reference: &str, c: &NetlistComponent) {
+        let new: Vec<eda_model::fp_units::FootprintUnit> = c.units.iter().map(|u| eda_model::fp_units::FootprintUnit { name: u.name.clone(), pins: u.pins.clone() }).collect();
+        let cur = eda_model::fp_units::unit_info(&b.design, b.model, reference);
+        if cur == new {
+            return;
+        }
+        let shown = self.shown(reference).to_string();
+        if self.dry {
+            self.say(Severity::Action, format!("Update {shown} unit metadata."));
+            return;
+        }
+        Self::extra_mut(b, reference).units = new;
+        self.say(Severity::Action, format!("Updated {shown} unit metadata."));
     }
 
     /// `BOARD_NETLIST_UPDATER::updateFootprintGroup` ("Group footprints based on symbol group"): the footprint leaves a group the component is not in and joins
