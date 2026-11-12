@@ -51,13 +51,19 @@ export const USER_SIGNALS_HELP = `SPICE functions:
 `;
 
 /**
+ * libngspice's current plot before any run, `const` (ngspice's constants): `ngSpice_AllVecs( ngSpice_CurPlot() )` as KiCad's own libngspice
+ * (libngspice-kicad, ngspice 43, on the AWS box, 2026-11-12) lists it, in its order.
+ */
+export const CONST_PLOT_VECTORS = ["0", "planck", "boltz", "echarge", "kelvin", "i", "c", "e", "pi", "FALSE", "no", "TRUE", "yes"] as const;
+
+/**
  * `SIMULATOR_FRAME_UI::SimPlotVectors` (`NGSPICE::AllVectors` of the current plot): the vectors as libngspice names them. The run's raw file names
  * a node's voltage `v(<node>)` and a source's current `i(<source>)`, where libngspice has `<node>` and `<source>#branch`; the other names (`time`,
- * `frequency`, a device current `i(r1:1)` of `.probe alli`, `user0`) are given as the file has them. No run: no vectors (libngspice's `const` plot
- * of constants is not offered).
+ * `frequency`, a device current `i(r1:1)` of `.probe alli`, `user0`) are given as the file has them. No run yet: the `const` plot's constants
+ * ([`CONST_PLOT_VECTORS`]), libngspice's current plot then.
  */
 export function simPlotVectors(plot: RawPlot | undefined): string[] {
-  if (!plot) return [];
+  if (!plot) return [...CONST_PLOT_VECTORS];
   return plot.vectors.map((v) => {
     const m = /^([vi])\((.*)\)$/i.exec(v.name);
     if (!m) return v.name;

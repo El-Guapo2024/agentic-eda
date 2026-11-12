@@ -290,6 +290,8 @@ function build(latest: { current: Latest }): EdaTestHook {
         placeFootprint: placeFootprintStage(),
         moving: studio.movePreview ? { refs: [...studio.movePreview.refs], dx: studio.movePreview.dxNm, dy: studio.movePreview.dyNm, turns: studio.movePreview.rotateQuarterTurns ?? 0, flipped: !!studio.movePreview.flipped, frameDeg: studio.movePreview.frameDeg ?? null, ops: studio.movePreview.ops?.length ?? 0 } : null,
         menuHighlight: [...(getCommonTool().menuHighlight ?? [])],
+        // the item a picker brightens under the pointer (`BrightenItem` of its motion handler: the delete tool's candidate, the probe's pin)
+        pickerHover: getCommonTool().hover,
       };
     },
 

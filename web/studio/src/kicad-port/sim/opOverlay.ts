@@ -7,8 +7,9 @@
 //   eeschema/sch_painter.cpp     SCH_PAINTER::draw( SCH_LINE ) / draw( SCH_PIN ) on LAYER_OP_VOLTAGES / LAYER_OP_CURRENTS, getOperatingPointTextSize
 //
 // The values are those of the last operating-point run (state/simulator.ts `opPoints`, keyed as `SCHEMATIC::SetOperatingPoint` keys them); a net's
-// SPICE name comes from the circuit (`pin_nets`: kicad-cli's XML netlist) through a pin on it, else from its own name. A net drawn on several wires of a
-// sheet in pieces gets one label, on its longest wire (KiCad labels each connected piece, `CONNECTION_SUBGRAPH`). Currents go per symbol (unit).
+// SPICE name comes from the circuit (`pin_nets`: kicad-cli's XML netlist) through a pin on it, else from its own name. Each connected piece of a net on
+// the sheet (`CONNECTION_SUBGRAPH`: wires that meet end to end, an end on another wire, or on one pin) gets its own label, on its longest wire, as KiCad
+// labels each subgraph of `GetNetMap()`. Currents go per symbol (unit).
 import { SpiceValue } from "./spiceValue";
 import { spiceNetName } from "./simNames";
 import type { Circuit } from "./simSignals";
@@ -85,6 +86,38 @@ export function opTextSize(scale: number): number {
 
 const usable = (op: string) => op !== "" && op !== "--" && op !== "?";
 
+/** `p` on the segment a-b (an end of one wire on another). */
+function onSegment(p: [number, number], a: [number, number], b: [number, number]): boolean {
+  const cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+  if (cross !== 0) return false;
+  return p[0] >= Math.min(a[0], b[0]) && p[0] <= Math.max(a[0], b[0]) && p[1] >= Math.min(a[1], b[1]) && p[1] <= Math.max(a[1], b[1]);
+}
+
+/** The connected pieces of each net's wires on the sheet (`CONNECTION_SUBGRAPH`s of `GetNetMap()`): wires of a net joined where an end of one is on the
+ * other, or on a pin they share; buses left out. */
+export function netPieces(wires: readonly OpWire[]): OpWire[][] {
+  const ws = wires.filter((w) => !w.bus && w.pts.length >= 2);
+  const parent = ws.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i]!)));
+  const join = (i: number, j: number) => {
+    const a = find(i);
+    const b = find(j);
+    if (a !== b) parent[b] = a;
+  };
+  const touches = (u: OpWire, v: OpWire) => {
+    const ends = [u.pts[0]!, u.pts[u.pts.length - 1]!];
+    for (const e of ends) for (let k = 0; k + 1 < v.pts.length; k++) if (onSegment(e, v.pts[k]!, v.pts[k + 1]!)) return true;
+    return u.pins.some((p) => v.pins.includes(p));
+  };
+  for (let i = 0; i < ws.length; i++) for (let j = i + 1; j < ws.length; j++) if (ws[i]!.net === ws[j]!.net && (touches(ws[i]!, ws[j]!) || touches(ws[j]!, ws[i]!))) join(i, j);
+  const groups = new Map<number, OpWire[]>();
+  ws.forEach((w, i) => {
+    const r = find(i);
+    groups.set(r, [...(groups.get(r) ?? []), w]);
+  });
+  return [...groups.values()];
+}
+
 /** The labels of the operating point on a sheet. */
 export function opLabels(args: { wires: OpWire[]; pins: OpPin[]; circuit: Circuit | null; points: Map<string, number>; voltages: boolean; currents: boolean; scale: number; formats?: OpFormats }): OpLabel[] {
   const { wires, pins, circuit, points, scale } = args;
@@ -98,18 +131,20 @@ export function opLabels(args: { wires: OpWire[]; pins: OpPin[]; circuit: Circui
     const spiceOf = new Map<string, string>();
     for (const w of wires) for (const p of w.pins) if (!spiceOf.has(w.net) && circuit.pin_nets[p]) spiceOf.set(w.net, circuit.pin_nets[p]!);
     for (const p of pins) if (p.net && !spiceOf.has(p.net) && circuit.pin_nets[`${p.reference}.${p.number}`]) spiceOf.set(p.net, circuit.pin_nets[`${p.reference}.${p.number}`]!);
-    const longest = new Map<string, { len: number; a: [number, number]; b: [number, number] }>();
-    for (const w of wires) {
-      if (w.bus) continue;
-      for (let i = 0; i + 1 < w.pts.length; i++) {
-        const a = w.pts[i]!;
-        const b = w.pts[i + 1]!;
-        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        const cur = longest.get(w.net);
-        if (!cur || len > cur.len) longest.set(w.net, { len, a, b });
+    const longest: { net: string; len: number; a: [number, number]; b: [number, number] }[] = [];
+    for (const piece of netPieces(wires)) {
+      let best: { net: string; len: number; a: [number, number]; b: [number, number] } | null = null;
+      for (const w of piece) {
+        for (let i = 0; i + 1 < w.pts.length; i++) {
+          const a = w.pts[i]!;
+          const b = w.pts[i + 1]!;
+          const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          if (!best || len > best.len) best = { net: w.net, len, a, b };
+        }
       }
+      if (best) longest.push(best);
     }
-    for (const [net, seg] of longest) {
+    for (const { net, ...seg } of longest) {
       // KiCad asks every net of the connection graph by its name (`GetNetMap()`, `GetOperatingPoint( key.Name, .. )`); a pin's SPICE net comes first here, the
       // sheet's net name otherwise (a net that joins only labels).
       const name = spiceOf.get(net) ?? net;

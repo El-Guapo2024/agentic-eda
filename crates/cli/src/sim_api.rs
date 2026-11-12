@@ -586,6 +586,40 @@ mod tests {
         assert_eq!(item("RV2")["tuner"], json!({ "param": "pos", "value": "" }), "{netlist}");
     }
 
+    /// Slow tier (kicad-cli and ngspice 42): UI-LEFT-2 MM4's last look at what §64 had checked against a stand-in. An `.sp` run of two sources
+    /// made ports 1 and 2 (`SIM_MODEL_SOURCE::appendSpParamInfos`) gives the four vectors `rebuildSignalsList` names `S_<a>_<b>`, which ngspice's
+    /// raw file writes as `v(S_1_1)` .. (the studio's `findVector` reads them so); and a potentiometer's tuner reaches the run as
+    /// `SPICE_GENERATOR_R_POT::TunerCommand`'s `altermod @ARV1[position]=<v>`, which batch ngspice takes: the wiper's voltage follows it.
+    #[test]
+    fn s_parameter_vectors_and_a_tuned_potentiometer_run_on_ngspice() {
+        if !slow() {
+            return;
+        }
+        let yaml = "parts:\n  - { reference: V1, value: \"0\", symbol: \"Simulation_SPICE:VDC\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: V2, value: \"0\", symbol: \"Simulation_SPICE:VDC\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: R1, value: 50, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\nnets:\n  - { name: IN, pins: [V1.1, R1.1] }\n  - { name: OUT, pins: [R1.2, V2.1] }\n  - { name: GND, pins: [V1.2, V2.2] }\n";
+        let b = board("sp-run", yaml);
+        let edit = |id: &str, field: &str, value: &str| eda_ops::fields_table::FieldEdit { id: id.into(), field: field.into(), value: value.into() };
+        let edits = vec![edit("V1", "Sim.Params", "dc=0 ac=1 portnum=1 z0=50"), edit("V2", "Sim.Params", "dc=0 ac=1 portnum=2 z0=50")];
+        crate::board::step(&b, eda_ops::Cmd::SetSymbolFields { edits, add_fields: vec![], rename_fields: vec![], remove_fields: vec![] }, false, "test").unwrap();
+        let r = run(&b, json!({ "command": ".sp dec 2 1k 10k", "options": eda_sim::netlist::OPTION_DEFAULT_FLAGS }));
+        let names: Vec<String> = r["plots"][0]["vectors"].as_array().unwrap().iter().filter_map(|v| v["name"].as_str().map(str::to_lowercase)).collect();
+        for s in ["v(s_1_1)", "v(s_1_2)", "v(s_2_1)", "v(s_2_2)"] {
+            assert!(names.contains(&s.to_string()), "{s} in {names:?}");
+        }
+        // 50 ohm in series between two 50 ohm ports: S11 = 1/3, S21 = 2/3
+        let s11 = vector(&r, "v(S_1_1)");
+        let s21 = vector(&r, "v(S_2_1)");
+        assert!((s11[0] - 1.0 / 3.0).abs() < 1e-6 && (s21[0] - 2.0 / 3.0).abs() < 1e-6, "S11 {s11:?} S21 {s21:?}");
+
+        let yaml = "parts:\n  - { reference: V1, value: \"1\", symbol: \"Simulation_SPICE:VDC\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: RV1, value: 10k, symbol: \"Device:R_Potentiometer\", package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }, { number: \"3\", kind: passive }] }\n  - { reference: R1, value: 1Meg, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\nnets:\n  - { name: IN, pins: [V1.1, RV1.1] }\n  - { name: GND, pins: [V1.2, RV1.3, R1.2] }\n  - { name: W, pins: [RV1.2, R1.1] }\n";
+        let b = board("pot-run", yaml);
+        let w = |r: &Value| vector(r, "v(/w)")[0];
+        let untuned = run(&b, json!({ "command": ".op", "options": eda_sim::netlist::OPTION_DEFAULT_FLAGS }));
+        let tuned = run(&b, json!({ "command": ".op", "options": eda_sim::netlist::OPTION_DEFAULT_FLAGS, "tuners": [{ "ref": "RV1", "value": 0.2 }] }));
+        // the wiper at 0.5 and at 0.2 of the track from pin 1 (1 V) to pin 3 (ground), loaded by 1 Meg
+        assert!((w(&untuned) - 0.4988).abs() < 1e-3, "untuned {}", w(&untuned));
+        assert!((w(&tuned) - 0.7987).abs() < 1e-3, "tuned {}", w(&tuned));
+    }
+
     /// The operating-point overlay's formats reach the sheet the studio draws: Schematic Setup > Formatting's significant digits and ranges
     /// (`SCHEMATIC_SETTINGS::m_OPO_*`, which `RefreshOperatingPointDisplay` passes `GetOperatingPoint`) are in `GET /api/schematic`'s `setup`.
     #[test]

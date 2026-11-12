@@ -31,7 +31,9 @@ import {
 import { currentTab } from "../kicad-port/sim/simFrame";
 import { addTuner, probeTrace, setSimFocused, toggleOp } from "../state/simulator";
 import { picker } from "./pcbPicker";
+import { setPickerHover } from "../state/commonTool";
 import { hitPin, pinItems } from "../kicad-port/schPins";
+import { hitSheetPin, sheetPinItems } from "../kicad-port/schSheetPinItems";
 import { probeCursorCss } from "../kicad-port/sim/probeCursors";
 import { pickItem } from "../components/schematic/schPick";
 import { measureStrokeText } from "../components/text/strokeFont";
@@ -98,6 +100,17 @@ function wireAt(sch: Schematic, x: number, y: number, tol: number): Schematic["w
 }
 
 /** The SPICE net a net of the sheet is: through a pin the wire lands on, else any pin on the net (kicad-cli's XML netlist names the pins' nets). */
+/** `connectedTypes` (sch_selection_tool.cpp) other than a pin and a wire: what `GetNode` also finds. */
+function isConnectedNode(sch: Schematic, id: string): boolean {
+  return (
+    sheetPinItems(sch).some((p) => p.id === id) ||
+    sch.labels.some((l) => l.id === id) ||
+    sch.power_symbols.some((p) => p.id === id) ||
+    sch.bus_entries.some((b) => b.id === id) ||
+    (sch.junctions ?? []).some((j) => j.id === id)
+  );
+}
+
 function spiceNetOf(sch: Schematic, wire: Schematic["wires"][number]): string | null {
   const nets = getSimUi().frame.circuit?.pin_nets ?? {};
   for (const p of wire.pins) if (nets[p]) return nets[p]!;
@@ -156,16 +169,18 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
   // SIMULATOR_CONTROL::Probe -> SCH_EDITOR_CONTROL::SimProbe: a pick on the sheet until Escape. A pin is a current (`SPICE_GENERATOR::CurrentNames`, the one
   // of the model pin the symbol pin is when the device has several), a wire or a junction the voltage of its net (`V(<net>)`).
   m.set("eeschema.Simulation.probe", () => {
-    // The motion handler: a pin under the pointer is brightened and gets the current probe, a wire highlights its net (`SetHighlightedConnection`),
-    // anything else is the voltage probe; the finalize handler takes the highlight away.
+    // The motion handler (`collector.Collect( screen, { SCH_ITEM_LOCATE_WIRE_T, SCH_PIN_T, SCH_SHEET_PIN_T }, aPos )`): a pin or a sheet pin under
+    // the pointer is brightened (`BrightenItem`), a pin with the current probe; a wire highlights its net (`SetHighlightedConnection`) and is not
+    // brightened; anything else is the voltage probe. The finalize handler takes the highlight away.
     let highlighted: string | null = null;
     const under = (at: { x: number; y: number }) => {
       const s = api.getState();
       const sch = s.schematic;
-      if (!sch) return { pin: null, wire: null };
+      if (!sch) return { pin: null, sheetPin: null, wire: null };
       const tol = Math.max(5 / (s.schematicView.scale || 1), 254_000);
       const pin = pinItems(sch).find((p) => hitPin(p, [at.x, at.y], tol / 2, measureStrokeText)) ?? null;
-      return { pin, wire: pin ? null : wireAt(sch, at.x, at.y, tol) };
+      const sheetPin = pin ? null : (sheetPinItems(sch).find((p) => hitSheetPin(p, [at.x, at.y], tol / 2, measureStrokeText)) ?? null);
+      return { pin, sheetPin, wire: pin || sheetPin ? null : wireAt(sch, at.x, at.y, tol) };
     };
     picker.start({
       kind: "point",
@@ -173,15 +188,17 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
       cursorCss: probeCursorCss("voltage_probe"),
       cursorAt: (at) => probeCursorCss(under(at).pin ? "current_probe" : "voltage_probe"),
       hover: (at) => {
-        const { pin, wire } = under(at);
+        const { pin, sheetPin, wire } = under(at);
         const net = wire?.net ?? null;
         if (net !== highlighted) {
           highlighted = net;
           dispatch({ type: "SET_NET_HIGHLIGHT", net });
         }
-        return pin?.id ?? null;
+        return pin?.id ?? sheetPin?.id ?? null;
       },
       onFinalize: () => {
+        // `UnbrightenItem( m_pickerItem )`
+        setPickerHover(null);
         if (highlighted !== null) {
           highlighted = null;
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
@@ -204,11 +221,20 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
           return true;
         }
         const wire = wireAt(sch, at.x, at.y, tol);
-        // `if( !item ) return false;`: a click on no node ends the picker (`CLICK_CANCEL`)
-        if (!wire) return false;
-        const net = spiceNetOf(sch, wire);
-        if (net) probeTrace(`V(${net})`, false);
-        return true;
+        if (wire) {
+          const net = spiceNetOf(sch, wire);
+          if (net) probeTrace(`V(${net})`, false);
+          return true;
+        }
+        // `GetNode` collects every connected type: a sheet pin, a label, a power symbol, a bus entry or a junction is a node too, which adds no
+        // trace here but keeps the probe going; `if( !item ) return false;`: a click on no node ends the picker (`CLICK_CANCEL`)
+        const node = pickItem(sch, at.x, at.y, s.schematicView.scale, (id) => isConnectedNode(sch, id));
+        // a junction: the voltage of its connection (`item->IsType( { SCH_JUNCTION_T } )`), the net of a wire through it
+        const junction = (sch.junctions ?? []).find((j) => j.id === node);
+        const through = junction ? wireAt(sch, junction.at[0], junction.at[1], tol) : null;
+        const jnet = through ? spiceNetOf(sch, through) : null;
+        if (jnet) probeTrace(`V(${jnet})`, false);
+        return node !== null;
       },
     });
   });
