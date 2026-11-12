@@ -131,6 +131,8 @@ export function LibrarySymbolPropertiesDialog() {
   const close = () => dispatch({ type: "SET_PROPERTIES_OPEN", open: false });
 
   const [form, setForm] = useState<SymbolPropertiesFields | null>(null);
+  /** The Number of units field's text while it is typed in (`null`: it shows the form's count). */
+  const [unitCountText, setUnitCountText] = useState<string | null>(null);
   const [filtersText, setFiltersText] = useState("");
   const [rows, setRows] = useState<GridRow[]>([]);
   const [parent, setParent] = useState("");
@@ -283,7 +285,7 @@ export function LibrarySymbolPropertiesDialog() {
     try {
       const ok = await api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
       notifyLibraryChanged();
-      if (ok && renamed) await api.openSymbol(target);
+      if (ok && renamed) await api.openSymbol(target, undefined, { keepHistory: true }); // `UNDO_REDO::LIB_RENAME` is an undo step: the reopening keeps the history
       // `RebuildSymbolUnitAndBodyStyleLists`: a unit or body style the symbol no longer has goes back to the first
       if (ok && !derived && state.activeUnit > form.unit_count) dispatch({ type: "SET_ACTIVE_UNIT", unit: 1 });
       if (ok && !derived && state.activeBodyStyle > bodyStyleCountOf(bodyMode, bodyNames)) dispatch({ type: "SET_ACTIVE_BODY_STYLE", style: 1 });
@@ -394,17 +396,22 @@ export function LibrarySymbolPropertiesDialog() {
                 <legend>Symbol Units</legend>
                 <label title="Enter the number of units for a symbol that contains more than one unit">
                   Number of units:{" "}
+                  {/* a `wxSpinCtrl` takes what is typed and keeps it in range when it is left: the text is the field's while it is edited (an empty field
+                      was put back to 1 at once, so selecting "1" and typing "2" made 12 -- UI-LEFT-2 YY8's click-through) */}
                   <input
                     type="number"
                     min={1}
                     max={64}
-                    value={form.unit_count}
+                    value={unitCountText ?? form.unit_count}
                     onChange={(e) => {
-                      const n = Math.max(1, Math.min(64, Math.round(Number(e.target.value) || 1)));
+                      setUnitCountText(e.target.value);
+                      if (e.target.value.trim() === "" || !Number.isFinite(Number(e.target.value))) return;
+                      const n = Math.max(1, Math.min(64, Math.round(Number(e.target.value))));
                       set("unit_count", n);
                       // `OnUnitSpinCtrl` -> `updateUnitCount`: the names grid follows the count
                       setUnitRows((r) => resizeUnitNameRows(r, n));
                     }}
+                    onBlur={() => setUnitCountText(null)}
                     style={{ width: 60 }}
                     data-testid="props-unit-count"
                   />

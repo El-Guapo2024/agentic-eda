@@ -84,6 +84,19 @@ export function enumerateHit(s: EnumerateState, padId: string, currentNumber: st
   return s;
 }
 
+/**
+ * What one hit hands `SetLastPadNumber`: the new number of a pad the hit numbered (`SetLastPadNumber( newNumber )`), the old number of one it gave back
+ * (`SetLastPadNumber( it->second.second )`), `null` for a hit that changed nothing. KiCad sets it as the tool runs, so it stands after Esc reverts the
+ * numbers too -- the pad tool's next pad follows it either way.
+ */
+export function enumerateLastNumber(prev: EnumerateState, next: EnumerateState, padId: string): string | null {
+  const was = prev.assigned.get(padId);
+  const now = next.assigned.get(padId);
+  if (!was && now) return now.number;
+  if (was && !now) return was.oldNumber;
+  return null;
+}
+
 /** The numbers a commit writes: every numbered pad's `[id, number]`, in the order they were numbered. */
 export function enumerateCommit(s: EnumerateState): [string, string][] {
   return [...s.assigned.entries()].map(([id, a]) => [id, a.number]);

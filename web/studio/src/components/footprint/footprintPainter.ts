@@ -21,7 +21,7 @@ import { hairlineNm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
 import { installColourScopes, memoColours, withColourScope } from "../canvas/colourScope";
 import { edgeCutsDimFactor, hiContrastDim, hiContrastFactor } from "../../kicad-port/color4d";
-import { circleThrough, drawGridOrigin, drawShapeGeometry as drawBoardShapeGeometry, normalizeSweep } from "../canvas/painter";
+import { circleThrough, drawGridOrigin, drawPadNumber, drawShapeGeometry as drawBoardShapeGeometry, normalizeSweep } from "../canvas/painter";
 import type { LineEnding } from "../../kicad-port/lineEnding";
 import type { LineEndingIr } from "../../api/fpEditorTypes";
 import { fpEndingsOf } from "../../kicad-port/fpKeep";
@@ -264,10 +264,17 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
   }
   ctx.restore();
 
-  // Pad number, centered, once legible.
-  if (pad.size[0] * view.scale > 22 && pad.size[1] * view.scale > 10) {
-    const fontNm = Math.min(pad.size[0], pad.size[1]) * 0.35;
-    drawStrokeText(ctx, pad.number, pad.at.x, pad.at.y + fontNm * 0.35, { sizeNm: fontNm, justify: "center", thicknessNm: fontNm / 6, color: "rgba(0,0,0,0.75)" });
+  // The pad number as the board's painter draws it (`PCB_PAINTER::draw( PAD*, LAYER_PAD_NETNAMES )`: centred on the pad's box, turned for a tall pad, sized
+  // for three characters, bold, in the pad net names' colour -- white over the copper and over a hole), once legible. It was drawn dark at a third of
+  // the pad, which a through hole hid (UI-LEFT-2 FF10's click-through: the numbers the Renumber Pads loop hands out could not be seen).
+  const turn = (pad.rot / 1000) * (Math.PI / 180);
+  const [w, h] = [Math.abs(pad.size[0] * Math.cos(turn)) + Math.abs(pad.size[1] * Math.sin(turn)), Math.abs(pad.size[0] * Math.sin(turn)) + Math.abs(pad.size[1] * Math.cos(turn))];
+  if (pad.number !== "" && Math.min(w, h) * view.scale > 8) {
+    // the board's painter works in micrometres (its `MAX_FONT_SIZE` is 10_000), this one in nanometres
+    ctx.save();
+    ctx.scale(1000, 1000);
+    drawPadNumber(ctx, { x: pad.at.x / 1000, y: pad.at.y / 1000, w: w / 1000, h: h / 1000, num: pad.number }, false, layerColor("pad_netname"));
+    ctx.restore();
   }
 }
 

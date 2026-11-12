@@ -31,7 +31,7 @@ import { nextPadNumber } from "../../kicad-port/padNumbering";
 import { padCanHaveNumber } from "../../kicad-port/fpEditActions";
 import { padEditMenu } from "../../kicad-port/padEditMode";
 import { newPadFromMaster, settingsOf } from "../../kicad-port/padSettings";
-import { enumerateHit, enumerateShownNumber, padsUnderSweep, sweepPoints } from "../../kicad-port/padEnumeration";
+import { enumerateHit, enumerateLastNumber, enumerateShownNumber, padsUnderSweep, sweepPoints } from "../../kicad-port/padEnumeration";
 import { padContains } from "../../kicad-port/libEditorHit";
 import { padBox } from "../../kicad-port/itemBoxes";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
@@ -320,7 +320,13 @@ export function FootprintCanvas() {
       }
     }
     for (const g of fp.graphics) for (const [x, y] of shapePoints(g)) pts.push([x, y]);
-    for (const t of fp.texts) pts.push([t.at.x, t.at.y]);
+    // a text by its box, not its anchor (`GetDocumentExtents` is the items' bounding boxes): a new footprint's REF** and value sit one above the other at
+    // x 0, and their anchors alone made a box 0 wide -- Zoom to Fit then zoomed in without end (UI-LEFT-2 FF10's click-through)
+    for (const t of fp.texts) {
+      const h = t.size_nm || 1_000_000;
+      const half = (Math.max(1, (t.content ?? "").length) * h * 0.9) / 2;
+      pts.push([t.at.x - half, t.at.y - h / 2], [t.at.x + half, t.at.y + h / 2]);
+    }
     if (pts.length === 0) pts.push([-3_000_000, -3_000_000], [3_000_000, 3_000_000]);
     const bounds = boundsOfPoints(pts);
     if (!bounds) return;
@@ -464,8 +470,14 @@ export function FootprintCanvas() {
       (pad, x, y) => padContains(pad, x, y)
     );
     let next = session;
-    for (const pad of hits) next = enumerateHit(next, pad.id!, pad.number, isClick);
+    let last: string | null = null;
+    for (const pad of hits) {
+      const after = enumerateHit(next, pad.id!, pad.number, isClick);
+      last = enumerateLastNumber(next, after, pad.id!) ?? last; // `SetLastPadNumber`, as the tool runs
+      next = after;
+    }
     if (next !== session) dispatch({ type: "SET_ENUMERATE", state: next });
+    if (last !== null) dispatch({ type: "SET_LAST_PAD_NUMBER", number: last });
   };
 
   const finishDraw = useCallback(() => {

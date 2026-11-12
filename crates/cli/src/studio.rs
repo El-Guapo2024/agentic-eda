@@ -1099,6 +1099,13 @@ fn handle(
             respond(stream, "200 OK", "application/json", a.to_string().as_bytes())
         }
         ("POST", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
+        // a library editor that loads a symbol or footprint clears its history (`ClearUndoRedoList`): `{domain: "symbol_editor" | "footprint_editor"}`
+        ("POST", "/api/undo_clear") => {
+            if let Some(scope) = request_domain(&body) {
+                board::clear_editor_history(dir, scope);
+            }
+            respond(stream, "200 OK", "application/json", json!({ "ok": true }).to_string().as_bytes())
+        }
         ("POST", "/api/undo") => {
             let scope = request_domain(&body);
             if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
@@ -2283,7 +2290,9 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 // same filter `resolveLibSymbol` applies to the `body_style` of each item of `lib_symbols[lib_id]`.
                 "body_style": sch.body_style_of(s),
                 "value": if s.value.is_empty() { part.and_then(|p| p.value.clone()) } else { Some(s.value.clone()) },
-                "footprint": if s.footprint.is_empty() { None } else { Some(s.footprint.clone()) },
+                // the Footprint field the derived `.kicad_sch` writes (`eda_kicad`: the symbol's own, else the part's board link, `footprint_lib_id`), so
+                // Symbol Properties, F and the Fields Table show what KiCad shows for the file (UI-LEFT-2 XX4: the table had it empty, kicad-cli's BOM had it)
+                "footprint": if s.footprint.is_empty() { part.map(eda_model::footprint::footprint_lib_id).filter(|f| !f.is_empty()) } else { Some(s.footprint.clone()) },
                 "datasheet": if s.datasheet.is_empty() { None } else { Some(s.datasheet.clone()) },
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),
@@ -2538,7 +2547,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)));
                 }
             }
-            let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
+            let resolved = model.placed_symbol_of(lib_id);
             let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, model));
             (lib_id.clone(), lib_symbol_json(&value))
         })

@@ -54,15 +54,18 @@
           "items": [
             {
               "type": "item",
-              "action": "eeschema.EditorControl.importNonKicadSchematic"
+              "action": "eeschema.EditorControl.importNonKicadSchematic",
+              "label": "Non-KiCad Schematic..."
             },
             {
               "type": "item",
-              "action": "eeschema.EditorControl.importFPAssignments"
+              "action": "eeschema.EditorControl.importFPAssignments",
+              "label": "Footprint Assignments..."
             },
             {
               "type": "item",
-              "action": "eeschema.EditorControl.importGraphics"
+              "action": "eeschema.EditorControl.importGraphics",
+              "label": "Graphics..."
             }
           ]
         },
@@ -72,15 +75,18 @@
           "items": [
             {
               "type": "item",
-              "action": "eeschema.EditorControl.drawSheetOnClipboard"
+              "action": "eeschema.EditorControl.drawSheetOnClipboard",
+              "label": "Drawing to Clipboard"
             },
             {
               "type": "item",
-              "action": "eeschema.EditorControl.exportNetlist"
+              "action": "eeschema.EditorControl.exportNetlist",
+              "label": "Netlist..."
             },
             {
               "type": "item",
-              "action": "eeschema.EditorControl.exportSymbolsToLibrary"
+              "action": "eeschema.EditorControl.exportSymbolsToLibrary",
+              "label": "Symbols..."
             }
           ]
         },
@@ -239,11 +245,13 @@
             },
             {
               "type": "item",
-              "action": "eeschema.SchDesignBlockControl.showDesignBlockPanel"
+              "action": "eeschema.SchDesignBlockControl.showDesignBlockPanel",
+              "label": "Design Blocks"
             },
             {
               "type": "item",
-              "action": "eeschema.RemoteSymbols.showPanel"
+              "action": "eeschema.RemoteSymbols.showPanel",
+              "label": "Remote Symbols"
             }
           ]
         },

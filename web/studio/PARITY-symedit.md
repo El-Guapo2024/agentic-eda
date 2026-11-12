@@ -446,28 +446,28 @@ The Symbol Editor draws in the schematic editor's theme while Preferences > Symb
 - ~~No live ghost while a pin tool is armed~~ -- since 2026-11-05 the pin and the text follow the cursor after their dialogs, as in KiCad (which shows
   nothing before the first click either).
 
-## Click-through needed (browser unavailable this session)
+## Click-through needed (browser unavailable this session) -- done, see "Round 2, task-v10-verify (YY8)"
 
-1. Open the Symbol tab; "Open from Library" should list builtin names
+1. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 1).** Open the Symbol tab; "Open from Library" should list builtin names
    (Device:R/C/L/D/LED, power:GND/PWR_FLAG) even with no real KiCad
    install. Open "Device:R" -- two pins should render with real
    decoration/text, rectangle body.
-2. Select a placed resistor on the Schematic tab, press Ctrl+Shift+E --
+2. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 2).** Select a placed resistor on the Schematic tab, press Ctrl+Shift+E --
    should switch to the Symbol tab and open its real lib_id.
-3. Pin tool: click to place a few pins; numbers should auto-increment.
+3. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 3).** Pin tool: click to place a few pins; numbers should auto-increment.
    Double-click one to open Pin Properties; change electrical type/
    orientation/length; OK; confirm the canvas updates.
-4. Pin Table: open, inline-edit a cell, confirm it round-trips.
-5. Draw a rectangle/circle/polyline/text on the body; move/delete one.
-6. Symbol Properties: set Unit count to 2, confirm the toolbar's Unit
+4. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 4).** Pin Table: open, inline-edit a cell, confirm it round-trips.
+5. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 5).** Draw a rectangle/circle/polyline/text on the body; move/delete one.
+6. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 6).** Symbol Properties: set Unit count to 2, confirm the toolbar's Unit
    selector grows; switch units and confirm pins/graphics on unit 1 are
    hidden while editing unit 2 (and a pin added with "common to all
    units" checked shows on both).
-7. "Update Symbol on Board" after editing a symbol a placed instance
+7. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 7).** "Update Symbol on Board" after editing a symbol a placed instance
    uses; confirm the schematic canvas picks up the new pins/graphics.
-8. "Export .kicad_sym"; confirm the download opens in a text editor as
+8. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 8).** "Export .kicad_sym"; confirm the download opens in a text editor as
    valid s-expression (or in real KiCad, if available).
-9. Undo/redo on the Symbol tab must never touch the PCB/Schematic tabs'
+9. **Done (task-v10-verify, real input, `e2e/symedit-clickthrough-v10.check.js` scenario 9).** Undo/redo on the Symbol tab must never touch the PCB/Schematic tabs'
    own history, and vice versa (same check GAPS.md #15/#8 already
    established for the other tabs).
 
@@ -527,3 +527,26 @@ UI-LEFT-2 YY3, custom body styles, ported from KiCad 25ec2335 (`eeschema/lib_sym
 Left: KiCad 25ec2335's Pin Map tab (named pin-to-pad maps, file version 20260629) is not ported: a KiCad 10 file (this writer's 20251024) cannot hold them, and 25ec2335's own KiCad 10 writer drops them (`LibCachePinMapsCountedForDrop`); the schematic file's version stays 20250114, where KiCad 8303b2ad infers De Morgan from a cache entry's drawings (25ec2335, kicad-cli, keeps the declared custom styles: the slow test below); the symbol chooser's preview shows the first style.
 
 Tests: `crates/kicad/src/symbol_lib.rs::three_custom_body_styles_read_as_three_bodies` (every body, the pruned fourth, the names, the header, the design library's symbol to the engine's and back), `library_save.rs::an_older_files_de_morgan_symbol_is_declared_when_kept`, `crates/kicad/tests/sch_body_style.rs::a_symbol_of_three_custom_body_styles_is_placed_in_its_third` and, slow, `kicad_reaches_the_pins_of_the_body_style_the_symbol_is_in` (kicad-cli's netlist reaches the third body's pins, and its `sch upgrade` writes `(body_style 3)` and the three names), `crates/ops/src/sym_units_tests.rs::unit_names_and_jumper_groups_are_the_grids_rows` (+ a stacked number); browser `e2e/fpsym-v10.check.js` (the library's 20251024 and declaration, the symbol placed in its third style with every body in `lib_symbols`, Symbol Properties' names, Cycle Body Style, the Symbol Editor's Embedded Files).
+## Round 2, task-v10-verify (YY8)
+
+The nine click-through scenarios above were walked in headless Chromium with the browser's own input (Playwright's mouse and keyboard through
+`e2e/run-check.mjs`'s `__runCheckInput`) and kept as `e2e/symedit-clickthrough-v10.check.js` (9/9, board mcu30). KiCad 8303b2ad unless named: `symbol_editor/symbol_edit_frame.cpp`
+(`SetCurSymbol`, `emptyScreen`), `symbol_editor.cpp` (`LoadSymbol`, `LoadOneLibrarySymbolAux`, `CreateNewSymbol`), `tools/symbol_editor_pin_tool.cpp` (`CreatePin`,
+`RepeatPin`), `tools/symbol_editor_edit_tool.cpp::Properties`, `lib_symbol.cpp::SetUnitCount`, `dialogs/dialog_lib_symbol_properties.cpp`, `tools/symbol_editor_control.cpp`
+(`AddSymbolToSchematic`, `RenameSymbol`), `menubar_symbol_editor.cpp`, `common/tool/action_menu.cpp::Add`, `dialogs/dialog_text_properties.cpp::SetInitialFocus`.
+
+| What | Status | KiCad |
+|---|---|---|
+| 1 open | **identical**: the tree's search and a double click on Device:R open it; both pins are drawn | `EditSymbol`, `LoadSymbol` |
+| 2 Ctrl+Shift+E | **identical**: a placed resistor clicked on the Schematic tab opens its library symbol at its unit | `EditWithSymbolEditor` |
+| 3 pins | **identical**: Ctrl+N asks the name; New Symbol goes into the library of the tree's target; P and a click open Pin Properties first with no number (`CreatePin` leaves it empty: the old "numbers should auto-increment" expectation is not KiCad's), OK puts the pin in the hand and a click places it; Insert repeats it one step down as pin 2 / A2; a double click edits type and length | `CreatePin`, `TwoClickPlace`, `RepeatPin` |
+| 4 Pin Table | **identical**: a Name cell edited inline goes back on OK, one undo | `DIALOG_LIB_EDIT_PIN_TABLE` |
+| 5 drawing | **identical**: a rectangle, a circle, a polyline and a text drawn, the rectangle dragged by its edge, the circle deleted, six undos. **Fixed**: Text Properties opened from the canvas had no focus in its text box (the effect focused it before the form was drawn, and the canvas' mousedown took it after): `SetInitialFocus` | `DIALOG_TEXT_PROPERTIES` |
+| 6 units | **identical**: Number of units 2, the unit selector offers two, unit 2 starts as a copy of unit 1's items (`SetUnitCount( n, true )` duplicates them -- the old "unit-1 pins hidden on unit 2" expectation holds for an item only unit 1 has), a unit-1-only pin is neither drawn nor picked on unit 2, a pin "Common to all units in symbol" is on both. **Fixed**: the Number of units field put an emptied field back to 1 at once, so selecting it and typing 2 made 12 (a `wxSpinCtrl` takes what is typed and keeps it in range when left) | `SetUnitCount`, `DIALOG_LIB_SYMBOL_PROPERTIES` |
+| 7 Update Symbol on Board | **ported**: Add Symbol to Schematic places the open symbol; after a new pin, File > Update Symbol on Board gives the placed instance and the schematic's copy the symbol's pins. **Fixed**: a symbol of the project library (nickname `eda`) placed on the sheet had no pins -- `eda:<name>` was taken for the synthetic box id `eda:<reference>`; a published entry of the library under that id now resolves (`ConstraintModel::placed_symbol_of`, used by the tracer, the schematic's `lib_symbols`, the `.kicad_sch` writer and the move tool). **Kept, by design** (kicad/menuExtras.ts): the studio's library is the design, so a published symbol's placed instances follow its edits and the push is explicit; KiCad saves the library and offers Update Symbols from Library | `AddSymbolToSchematic`; `SCH_SCREEN::UpdateSymbolLinks` |
+| 8 export | **identical**: File > Export > Symbol... saves `<name>.kicad_sym`, a whole `(kicad_symbol_lib ..)` with every unit's pins; kicad-cli loads it (`kicad-cli sym export svg` plots both units). **Fixed**: the menus showed the actions' own names ("Export...", "Export View as PNG...", "Export Symbol as SVG...") where KiCad's menu gives its own label ("Symbol...", "View as PNG...", "Symbol as SVG..."); the menu extractors now read `ACTION_MENU::Add( action, NORMAL, _( "label" ) )`, for the four menu bars (the board's Import / Export, the schematic's, the two library editors') | `menubar_symbol_editor.cpp`, `ACTION_MENU::Add` |
+| 9 undo per tab | **identical**: Ctrl+Z on the Schematic tab undoes the schematic's edit and leaves the symbol; on the Symbol tab it undoes the symbol's | GAPS.md #15 |
+| The tree selects the symbol loaded | **Fixed**: after New Symbol the tree still had Device:R selected, so the toolbar's Symbol Properties (which acts on the tree's target) loaded Device:R; the tree now selects the symbol loaded (`SetCurSymbol`: `SelectLibId`, `Unselect` for none). **Left**: KiCad 8303b2ad's Symbol Properties on a tree selection other than the loaded symbol edits that symbol's properties without loading it (`editSymbolPropertiesFromLibrary`); the studio loads it first | `SetCurSymbol`, `SYMBOL_EDITOR_EDIT_TOOL::Properties` |
+| Loading a symbol clears the editor's history | **Fixed**: opening a symbol and making a new one clear the Symbol Editor's undo and redo (`/api/undo_clear`), as `LoadSymbol` -> `ClearUndoRedoList` does: six undos of six edits went on into the symbol opened before. A rename's reopening keeps the history (`RenameSymbol` only `SetCurSymbol`s) | `LoadSymbol`, `emptyScreen` |
+
+Tests: Rust `board.rs` (+1 `a_library_editor_clears_its_own_history_only`); the cli suite on the published project symbol. Browser: `e2e/symedit-clickthrough-v10.check.js` 9/9.

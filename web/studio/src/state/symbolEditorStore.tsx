@@ -23,7 +23,7 @@
 // take plain mm numbers, matching the wire format directly).
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
-import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postClearEditorHistory, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureSymbolInProject, parseSymbolText, readClipboardText, symbolItemsText } from "../api/libraryClient";
 import { bareSymbolForms } from "../kicad-port/symClipboard";
 import { symbolNotLoaded } from "../kicad-port/libraryEnsure";
@@ -316,13 +316,16 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
   switch (action.type) {
     case "SET_LIB_ID":
       if (action.libId === state.libId) return state;
-      // The view options, the library tree's selection and the clipboard belong to the editor session, not to one symbol.
+      // The view options and the clipboard belong to the editor session, not to one symbol. The tree selects the symbol loaded (`SetCurSymbol`:
+      // `GetLibTree()->SelectLibId( m_symbol->GetLibId() )`, `Unselect()` for none), so what the tree's target names -- Symbol Properties, Save, a new
+      // symbol's library -- is the symbol on the canvas (UI-LEFT-2 YY8's click-through: after New Symbol the toolbar's Symbol Properties opened the symbol
+      // the tree still had selected, Device:R).
       return {
         ...initialState,
         libId: action.libId,
         gridNm: state.gridNm,
         gridVisible: state.gridVisible,
-        treeSelection: state.treeSelection,
+        treeSelection: action.libId ? [action.libId] : [],
         showElectricalTypes: state.showElectricalTypes,
         showPinNumbers: state.showPinNumbers,
         showHiddenPins: state.showHiddenPins,
@@ -501,7 +504,8 @@ export interface SymbolEditorApi {
   getState: () => SymbolEditorState;
   /** Open (or re-open -- a no-op server-side if already open) a symbol by lib_id and start polling it. */
   /** `at`: the unit and body style to show (`SYMBOL_EDIT_FRAME::LoadSymbolFromSchematic`, Ctrl+E on a placed symbol, r7 A7-M2); absent keeps the editor's. */
-  openSymbol: (libId: string, at?: { unit: number; bodyStyle: number }) => Promise<void>;
+  /** `opts.keepHistory`: a reopening that is not a load (Rename's), which keeps the editor's history. */
+  openSymbol: (libId: string, at?: { unit: number; bodyStyle: number }, opts?: { keepHistory?: boolean }) => Promise<void>;
   /** `SYMBOL_EDIT_FRAME::CreateNewSymbol`'s `LIB_SYMBOL_LIBRARY_MANAGER::CreateNewSymbol`: a new, empty symbol in the project library,
    * one undo step (the `new_symbol` verb and its first properties), opened in the editor. Returns whether the verb accepted it (a name
    * the library has is refused; the dialog has already checked, the verb is the authority). */
@@ -677,7 +681,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
 
   const api: SymbolEditorApi = {
     getState: () => stateRef.current,
-    openSymbol: async (libId, at) => {
+    openSymbol: async (libId, at, opts) => {
       // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one; when that fails nothing is opened and the
       // symbol being edited stays (`LoadSymbol`: "Error loading symbol %s from library '%s'.", then `return false`)
       const notLoaded = (why: string) => dispatch({ type: "TOAST", message: symbolNotLoaded(libId, why), kind: "error" });
@@ -695,6 +699,9 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         if (!opened.ok) return notLoaded(opened.message);
       }
       dispatch({ type: "SET_LIB_ID", libId });
+      // `LoadSymbol` -> `ClearUndoRedoList()`: the symbol loaded starts with no history (a rename's own reopening keeps it: KiCad's `RenameSymbol` only
+      // `SetCurSymbol`s the renamed one)
+      if (!opts?.keepHistory) await postClearEditorHistory("symbol_editor");
       const { symbol, own } = await fetchSymbolForEditor(libId);
       dispatch({ type: "SYMBOL_OK", symbol, own });
       // `LoadSymbolFromSchematic`: `m_unit = std::max( 1, aSymbol->GetUnit() ); m_bodyStyle = std::max( 1, aSymbol->GetBodyStyle() );`
@@ -740,6 +747,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         return false;
       }
       dispatch({ type: "SET_LIB_ID", libId });
+      // `CreateNewSymbol` ends in `LoadSymbol`, which clears the history: making the symbol is not a step to undo
+      await postClearEditorHistory("symbol_editor");
       const { symbol, own } = await fetchSymbolForEditor(libId);
       dispatch({ type: "SYMBOL_OK", symbol, own });
       return true;

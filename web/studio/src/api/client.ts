@@ -373,6 +373,11 @@ export async function postUndo(domain: "pcb" | "schematic" | "footprint_editor" 
   return reply;
 }
 
+/** `ClearUndoRedoList` of a library editor that loads a symbol or footprint: its own steps go from the history (`board::clear_editor_history`). */
+export async function postClearEditorHistory(domain: "footprint_editor" | "symbol_editor"): Promise<void> {
+  await fetch("/api/undo_clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) }).catch(() => undefined);
+}
+
 export async function postRedo(domain: "pcb" | "schematic" | "footprint_editor" | "symbol_editor"): Promise<CmdReply> {
   const r = await fetch("/api/redo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   const reply = (await r.json()) as CmdReply;

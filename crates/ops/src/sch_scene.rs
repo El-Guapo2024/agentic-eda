@@ -1116,12 +1116,8 @@ pub(crate) fn placed_lib_symbol(model: &ConstraintModel, sch: &SchematicSection,
             Some(eda_engine::placed::corner_symbol(&effective_id, p, resolved.as_ref(), s.unit))
         }
         _ => {
-            if eda_model::is_synthetic_lib_id(&effective_id) {
-                None
-            } else {
-                // the body style the symbol is placed in, from the library symbol's own origin
-                model.symbol_of(&effective_id).map(|l| if l.has_alternate_body() { l.in_style(sch.body_style_of(s)).into_owned() } else { l })
-            }
+            // the body style the symbol is placed in, from the library symbol's own origin (a synthetic id: only a published project entry, `placed_symbol_of`)
+            model.placed_symbol_of(&effective_id).map(|l| if l.has_alternate_body() { l.in_style(sch.body_style_of(s)).into_owned() } else { l })
         }
     }
 }

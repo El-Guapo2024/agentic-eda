@@ -1573,6 +1573,18 @@ impl ConstraintModel {
         }
         symbol::builtin(lib_id)
     }
+    /// [`Self::symbol_of`] for a placed symbol's `lib_id`. A synthetic id (`eda:<reference>`, the box drawn for a part with no symbol) resolves to
+    /// nothing -- except an entry the model holds under that very id: the project's symbol library is called `eda` too (New Symbol's `eda:Untitled`),
+    /// and a published entry of it is a real symbol (UI-LEFT-2 YY8's click-through: a symbol made in the Symbol Editor and placed had no pins on the sheet).
+    pub fn placed_symbol_of(&self, lib_id: &str) -> Option<LibSymbol> {
+        if lib_id.is_empty() {
+            return None;
+        }
+        if symbol::is_synthetic_lib_id(lib_id) {
+            return self.symbols.iter().find(|s| s.lib_id == lib_id).cloned();
+        }
+        self.symbol_of(lib_id)
+    }
     /// The library id a derivation draws `part` with: what [`resolve_lib_id`] names, unless that is a library symbol the model holds that
     /// does not take all of the part's pins (an `nc` pin the library's symbol has no pin for): drawing it under the library's name would be a
     /// box of our own passing for the library's, so the part gets a generated symbol.
@@ -1631,10 +1643,8 @@ impl ConstraintModel {
             }
             return Some(gensym::generate(part, lib_id));
         }
-        if symbol::is_synthetic_lib_id(lib_id) {
-            return None;
-        }
-        let sym = self.symbol_of(lib_id)?;
+        // a synthetic id is the generic box, unless it names a published entry of the project library (`placed_symbol_of`)
+        let sym = self.placed_symbol_of(lib_id)?;
         if part.pins.iter().all(|p| sym.pin_by_number(&p.number).is_some()) { Some(sym) } else { None }
     }
     /// [`Self::real_symbol_of`], as a placed symbol in body `style` draws it (`SCH_SYMBOL::GetBodyStyle`): style 2 of a library symbol that has an alternate

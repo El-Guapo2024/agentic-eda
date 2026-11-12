@@ -102,6 +102,7 @@ import { getCommonOptions, setWindowOptions, useCommonOptions, windowOptionsOf }
 import { unfilledZoneWarning, ZONE_FILL_WARNING_MS } from "../kicad-port/checkRevision";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { layerPairsOf } from "./pcbRouterSweep";
+import { otherLayerOfPair } from "../kicad-port/layerPairs";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { toggleSearchPane } from "../state/searchPane";
 import { toggleSchSearchPane } from "../state/schSearchPane";
@@ -2140,6 +2141,17 @@ export function useActionRunner() {
         });
       m.set("pcbnew.Control.layerTop", switchLayer("F.Cu"));
       m.set("pcbnew.Control.layerBottom", switchLayer("B.Cu"));
+      // ---- layerToggle (V) -- pcb_control.cpp PCB_CONTROL::LayerToggle, AS_GLOBAL: "if( currentLayer == screen->m_Route_Layer_TOP ) SwitchLayer( m_Route_Layer_BOTTOM )
+      // else SwitchLayer( m_Route_Layer_TOP )" -- the active layer pair's other layer, with or without a selection (UI-LEFT-2 SS20: V did nothing outside the
+      // router). The router's V (`ACT_PlaceThroughVia`, AS_CONTEXT) is actions/routerViaActions.ts's, registered after this, so it wins while a route is drawn.
+      m.set(
+        "pcbnew.Control.layerToggle",
+        pcbOnly(() => {
+          const pair = layerPairsOf(board, state.pcbx.layerPairs).current;
+          const next = otherLayerOfPair(pair, state.activeLayer ?? "F.Cu"); // a frame starts on F.Cu
+          if (copperLayers.includes(next)) dispatch({ type: "SET_ACTIVE_LAYER", layer: next });
+        })
+      );
       m.set("pcbnew.Control.layerInner1", switchLayer("In1.Cu"));
       m.set("pcbnew.Control.layerInner2", switchLayer("In2.Cu"));
       m.set("pcbnew.Control.layerInner3", switchLayer("In3.Cu"));

@@ -68,6 +68,22 @@ pub fn is_attribute(name: &str) -> bool {
     matches!(name, DNP | EXCLUDE_FROM_BOARD | EXCLUDE_FROM_BOM | EXCLUDE_FROM_SIM)
 }
 
+/// KiCad 25ec2335 `FIELDS_TABLE_DATA_MODEL_BASE::getAttributeResolvedValue`: what an export writes for an attribute cell (`GetGroupedValue` with
+/// `resolveVars`): nothing when the flag is off, its words when it is on -- what kicad-cli's BOM file has (8303b2ad wrote the cell's "0" / "1"; UI-LEFT-2 XX4:
+/// the preview said "0" where the file Export wrote said nothing).
+fn attribute_resolved_value(name: &str, on: bool) -> &'static str {
+    if !on {
+        return "";
+    }
+    match name {
+        DNP => "DNP",
+        EXCLUDE_FROM_BOARD => "Excluded from board",
+        EXCLUDE_FROM_BOM => "Excluded from BOM",
+        EXCLUDE_FROM_SIM => "Excluded from simulation",
+        _ => "",
+    }
+}
+
 /// `getAttributeValue`: "1" when the symbol has the attribute, "0" when it has not.
 fn attribute_value(sym: &SymbolInstance, name: &str) -> &'static str {
     let on = match name {
@@ -515,7 +531,14 @@ fn field_value(sch: &SchematicSection, model: &ConstraintModel, sym: &SymbolInst
                 sym.value.clone()
             }
         }
-        FOOTPRINT => sym.footprint.clone(),
+        // the Footprint field the derived `.kicad_sch` has (`eda_kicad`'s writer: the symbol's own, else the part's board link), which kicad-cli's BOM lists
+        FOOTPRINT => {
+            if sym.footprint.is_empty() {
+                model.part(&sym.id).map(eda_model::footprint::footprint_lib_id).unwrap_or_default()
+            } else {
+                sym.footprint.clone()
+            }
+        }
         DATASHEET => sym.datasheet.clone(),
         attr if is_attribute(attr) => attribute_value(sym, attr).to_string(),
         // the symbol's own Description, else what placing it copied from its library symbol (`UpdateFields`)
@@ -815,6 +838,8 @@ fn row_value(m: &Model<'_>, refs: &[SymRef], col: usize, ref_delim: &str, range_
     let mut first: Option<String> = None;
     for s in refs {
         let v = m.store.get(&s.id).and_then(|mm| mm.get(name)).cloned().unwrap_or_default();
+        // the export (`GetExportValue`: `resolveVars`) writes an attribute in words (KiCad 25ec2335 `GetGroupedValue`)
+        let v = if list_mixed && is_attribute(name) { attribute_resolved_value(name, v == "1").to_string() } else { v };
         if list_mixed {
             if !values.contains(&v) {
                 values.push(v);
@@ -1537,12 +1562,17 @@ mod tests {
     fn export_csv_matches_kicad_format() {
         let model = ConstraintModel::default();
         let out = export_bom(&demo(), &model, &TableSpec::grouped_by_value_footprint(), &BomFmt::csv());
-        // KiCad's "Grouped By Value and Footprint" ends with the ${DNP} column, "1" for a part marked Do not populate
+        // KiCad's "Grouped By Value and Footprint" ends with the ${DNP} column, written in words by an export (KiCad 25ec2335 `getAttributeResolvedValue`):
+        // nothing for a part that is populated, "DNP" for one that is not
         let expected = "\"Reference\",\"Value\",\"Datasheet\",\"Footprint\",\"Qty\",\"DNP\"\n\
-                        \"C1\",\"100n\",\"\",\"C_0603\",\"1\",\"0\"\n\
-                        \"R1,R2,R3,R5\",\"10k\",\"\",\"R_0603\",\"4\",\"0\"\n\
-                        \"R4\",\"1k\",\"\",\"R_0603\",\"1\",\"0\"\n";
+                        \"C1\",\"100n\",\"\",\"C_0603\",\"1\",\"\"\n\
+                        \"R1,R2,R3,R5\",\"10k\",\"\",\"R_0603\",\"4\",\"\"\n\
+                        \"R4\",\"1k\",\"\",\"R_0603\",\"1\",\"\"\n";
         assert_eq!(out, expected);
+        let mut dnp = demo();
+        dnp.symbols.iter_mut().find(|x| x.id == "R4").unwrap().dnp = true;
+        let out = export_bom(&dnp, &model, &TableSpec::grouped_by_value_footprint(), &BomFmt::csv());
+        assert!(out.contains("\"R4\",\"1k\",\"\",\"R_0603\",\"1\",\"DNP\"\n"), "{out}");
     }
 
     #[test]
@@ -1553,7 +1583,7 @@ mod tests {
         let out = export_bom(&demo(), &model, &TableSpec::grouped_by_value_footprint(), &fmt);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[0], "Reference\tValue\tDatasheet\tFootprint\tQty\tDNP");
-        assert_eq!(lines[2], "R1-R3,R5\t10k\t\tR_0603\t4\t0");
+        assert_eq!(lines[2], "R1-R3,R5\t10k\t\tR_0603\t4\t");
     }
 
     #[test]

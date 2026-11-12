@@ -29,6 +29,39 @@ await p.exposeFunction("__runCheckWriteFile", (path, text) => {
   writeFileSync(full, String(text));
   return "ok";
 });
+// A check that must be driven by real input (UI-LEFT-2 SS20, FF10, YY8, XX4: the click-throughs) asks the runner: `window.__runCheckInput([op, ...])` plays
+// each op through Playwright's mouse and keyboard (CDP `Input.dispatch*Event`: trusted events, the browser's own hit-testing, focus, click counting and
+// double clicks), in page CSS pixels. Ops: { t: "move", x, y, steps }, { t: "down" | "up", button }, { t: "click" | "dblclick", x, y, button },
+// { t: "wheel", dx, dy }, { t: "press", key } (Playwright's key names: "Control+z", "Shift+R", "Escape"), { t: "keydown" | "keyup", key },
+// { t: "type", text }, { t: "pause", ms }. It answers "ok" or the error's message.
+await p.exposeFunction("__runCheckInput", async (ops) => {
+  try {
+    for (const o of ops || []) {
+      if (o.t === "move") await p.mouse.move(o.x, o.y, { steps: o.steps ?? 1 });
+      else if (o.t === "down") await p.mouse.down({ button: o.button ?? "left" });
+      else if (o.t === "up") await p.mouse.up({ button: o.button ?? "left" });
+      else if (o.t === "click") await p.mouse.click(o.x, o.y, { button: o.button ?? "left", delay: o.delay ?? 30 });
+      else if (o.t === "dblclick") await p.mouse.dblclick(o.x, o.y, { button: o.button ?? "left", delay: o.delay ?? 30 });
+      else if (o.t === "wheel") await p.mouse.wheel(o.dx ?? 0, o.dy ?? 0);
+      else if (o.t === "press") await p.keyboard.press(o.key, { delay: o.delay ?? 20 });
+      else if (o.t === "keydown") await p.keyboard.down(o.key);
+      else if (o.t === "keyup") await p.keyboard.up(o.key);
+      else if (o.t === "type") await p.keyboard.type(String(o.text), { delay: o.delay ?? 10 });
+      else if (o.t === "pause") await new Promise((r) => setTimeout(r, o.ms ?? 50));
+      else return `unknown op ${JSON.stringify(o)}`;
+    }
+    return "ok";
+  } catch (e) {
+    return String((e && e.message) || e);
+  }
+});
+// `window.__runCheckShot(path)`: a screenshot of the page into a .png under the system's temporary folder (to see what a failed step saw).
+await p.exposeFunction("__runCheckShot", async (path) => {
+  const full = resolve(String(path));
+  if (!/\.png$/.test(full) || !(full.startsWith(resolve(tmpdir()) + "/") || full.startsWith("/tmp/"))) return `refused: ${full}`;
+  await shot(full);
+  return "ok";
+});
 await p.goto(url, { waitUntil: "networkidle" });
 await p.waitForFunction(() => !!window.__eda, null, { timeout: 60000 });
 await shot(process.env.RUN_CHECK_SHOT || "/tmp/run-check-start.png"); // a hidden canvas learns its size only after a screenshot
@@ -85,7 +118,7 @@ while (Date.now() < deadline) {
 }
 for (const s of results) {
   console.log(`${s.ok ? "ok  " : "FAIL"} ${s.name}`);
-  for (const n of s.notes || []) if (!n.startsWith("ok")) console.log(`       ${n}`);
+  for (const n of s.notes || []) if (!n.startsWith("ok") || process.env.RUN_CHECK_ALL_NOTES) console.log(`       ${n}`); // every note with RUN_CHECK_ALL_NOTES=1
 }
 if (failure) console.log(`the script threw: ${failure}`);
 const failed = results.filter((s) => !s.ok).map((s) => s.name);

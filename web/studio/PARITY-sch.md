@@ -2347,6 +2347,24 @@ kicad-cli cannot convert a legacy schematic: `sch upgrade` reloads the file with
 | Not ported | the new identifiers are drawn from a hash of the files' paths, not at random (the same file is read the same way twice). An unnamed legacy pin is `~` to KiCad 10 (the legacy reader keeps it, and from file version 20250318 a `~` is no longer empty), so kicad-cli names its nets `Net-(C5-~-Pad1)`; the studio's library reader keeps such a pin unnamed and names them `Net-(C5-Pad1)` | |
 
 Proof: `EDA_SLOW_TESTS=1 cargo test -p eda-cli --bin eda slow_kicad_qa_legacy_schematics_trace_as_kicad_cli_reads_the_sch` imports 14 of KiCad's QA legacy projects with `eda import-kicad x.sch` and traces them as the studio traces a board, beside kicad-cli's netlist of the `.sch` itself (the folder given a `.kicad_pro` with `meta` where it has none, KiCad's own upgraded `.kicad_sch` files left out). The 8 kicad-cli can read have every net kicad-cli has, pin for pin (complex_hierarchy 50 nets, its screen shown twice, references per path; test_global_promotion 1; test_global_promotion_2 5; legacy_power4 2, an alias flattened; pic_programmer 34; flat_hierarchy 34; pspice 12; ecc83-pp 9), every pin's net named as kicad-cli names it but for the unnamed pins' `~` (24, 6, 6, 2, 8 pins), and kicad-cli reads the schematic the studio derives the same way. kicad-cli cannot read the other 6 (`video`, `interf_u`, `carte_test`, `sonde xilinx`: "Duplicate connectivity source identity", the duplicate time stamps its loader does not replace as the editor's `ReplaceDuplicateTimeStamps` does; `electric` and `ecc83-pp_v2`: "Failed to load schematic"; `ecc83-pp_v2` has no cache library); the import reads them and kicad-cli reads their derived schematics (189, 24, 47, 54, 31 symbols), and `ecc83-pp_v2` (no library at all) comes in with its 18 symbols kept unlinked as KiCad's placeholder, and `electric` with 97 (43 of them unlinked). The junction fixup adds 26 dots to `video` and 9 to `pic_programmer` (kicad-cli's loader does not run it; the nets stay kicad-cli's). `slow_the_legacy_rescue_writes_a_library_kicad_cli_reads_and_remap_links_to_it`: pic_programmer (KiCad 4, bare names, the 2007 cache) brought in, Rescue Symbols offers each of its symbols "found only in cache library", writes `intent-rescue.lib`, which kicad-cli's legacy reader reads back with every pin of the cache's (number, name, type, place, orientation and length), and puts it first in the list; Remap Symbols then maps every symbol to `intent-rescue`, kicad-cli reads the derived schematic net for net as it reads the `.sch` and its ERC finds every symbol in the rescue library. The symbols of complex_hierarchy imported from the `.sch` and from the `.kicad_sch` KiCad 5.99 upgraded it to agree in place, angle, mirror, library id, value and footprint. Unit tests: `legacy_sch::tests` (8: the header, the helpers, the orientation, a file read, the tree written and read back, a derived symbol flattened, a T's junction and its broken wire, an unlinked symbol kept), `legacy_lib::tests` (1: a symbol written as `SaveSymbol` writes it), `legacy_import::tests` (2), `legacy_rescue::tests` (2: the case, cache-only, modified and unrescuable candidates; the library written and put first in the list). Browser check: `e2e/legacy-import.check.js` (17/17 on a served copy of `examples/ldo.yaml`, port 8820): complex_hierarchy replaces the schematic in one step, Rescue Symbols lists the cache-only symbols, legacy_power4 opens Remap Symbols, which maps R, GND and the `+3.3V` alias to `symbols`; two Undos take it all back.
+## 91. The click-through with real input: wires to pins, G and M, a plain drag, groups, the same keys per tab, a Y-mirrored pin, a sheet pin and its wire, the Fields Table's Export tab (UI-LEFT-2 SS20, XX4; `task-v10-verify`, 2026-11-12; KiCad 8303b2ad `eeschema/tools/sch_line_wire_bus_tool.cpp::doDrawSegments`, `tools/sch_move_tool.cpp` (`Main`, `setupItemsForDrag`, `getConnectedItems`, `performItemMove`'s `m_specialCaseSheetPins`), `sch_symbol.cpp::SetOrientation`, `sch_edit_frame.cpp::OnModify` / `RecalculateConnections`, `connection_graph.cpp` (the single-pin `unconnected-(` rule), `pcbnew/tools/pcb_control.cpp::LayerToggle`, `dialogs/dialog_symbol_fields_table_base.cpp`, `dialog_symbol_fields_table.cpp::OnExport`; KiCad 25ec2335 `common/dialogs/fields_table_data_model.cpp::getAttributeResolvedValue`)
+
+The "Manual click-through needed" list below was walked in headless Chromium with the browser's own input (Playwright's mouse and keyboard through `e2e/run-check.mjs`'s
+`__runCheckInput`: trusted pointer and key events, real hit-testing, focus and double clicks), and kept as `e2e/sch-clickthrough-v10.check.js` (10/10, board mcu30-placed).
+
+| What | Status | KiCad |
+|---|---|---|
+| W from a pin to a pin (list item 7) | **identical**: a click near a pin starts the wire exactly on it, a click near another pin ends the wire there, the tool stays armed; the two pins share a net; one Ctrl+Z | `doDrawSegments`, `IsTerminalPoint` -> `finishSegments` |
+| G, M and a plain drag (items 9, 10) | **identical**: G drags the wire end on the symbol's pin with it, the other end stays; a press on a symbol and a move past the threshold is the same drag (`m_DragIsMove` off); a click with no move selects and posts nothing; M moves the symbol alone. **Fixed**: after M the moved pin kept the wire's net -- a symbol move was taken for layout and never re-read the drawing; now a symbol moved, turned, mirrored or aligned is traced again and `nets::follow` changes only the nets it touched (KiCad recomputes the connectivity after every commit), so the pin leaves the net and one landing on a wire's end joins it. A drag of symbols stays layout (it keeps every connection by construction; on a stored drawing that does not say everything, 71d1cddc, what a drag carries could rename a net the copper is on) | `SCH_MOVE_TOOL::Main`, `setupItemsForDrag`; `OnModify` -> `RecalculateConnections` |
+| A group (item 10) | **identical**: a click and a Shift+click select two symbols, a drag of one moves both, one undo | `SCH_SELECTION_TOOL::Main` |
+| The same keys, each tab's actions (items 16, 17) | **identical** on the Schematic tab: E Symbol Properties, U / V / F the Reference / Value / Footprint field with its text box focused. On the PCB tab E opens Footprint Properties and F flips the footprint (one undo). **Fixed**: V did nothing outside the router; `pcbnew.Control.layerToggle` (AS_GLOBAL) now switches the active layer between the pair's two (F.Cu first, a frame's starting layer); the router's own V still wins while a route is drawn | `PCB_CONTROL::LayerToggle` |
+| Y, then X, and a wire to a Y-mirrored pin (item 19) | **identical**: Y is `SYM_MIRROR_X` (top to bottom), X then gives the left-right mirror, Ctrl+Z takes it back; a wire snaps exactly onto the mirrored pin where the canvas draws it (the pin's pixels at KiCad's `TRANSFORM`, the snap point and the server's connectivity agree: the wire lists the pin). A pin with only a dangling wire is `unconnected-(..)`, KiCad's single-pin net | `SetOrientation`, `TRANSFORM`; `propagateConnectionsTask` |
+| A sheet pin and its wire dragged together (section 62's C3-L3) | **identical**: the pin slides along its sheet's edge only and the wire's end stays on it, the wire's other end moves by the whole drag | `getConnectedItems`'s `m_specialCaseSheetPins`, `performItemMove` |
+| Fields Table, Export tab (item 23) | **ported**: the CSV / TSV / Semicolons presets change the preview as `BOM_FMT_PRESET` has them (Semicolons quote with `'`), "-" as the range delimiter folds `C1-C12`, a column hidden on the Edit page leaves the preview, Export writes `export/<intent>-bom.csv` and says "Wrote BOM output to '%s'", `../x.csv` is refused. **Fixed**: KiCad's labels ("Field delimiter:", "String delimiter:", "Reference delimiter:", "Range delimiter:" with "Leave blank to disable ranges.", "Output file:", "Preview:"), the page named "Edit", the layout (Format presets under the options, a refresh button over the preview), "No output file specified in Export tab." instead of a disabled button, no engine name after the message; the fields list was a fixed 230 px and its Include / Group By boxes ran under the grid where no click reached them; the preview wrote the attribute columns as "0"/"1" where kicad-cli's file (KiCad 25ec2335) writes "" / "DNP" / "Excluded from BOM"..., and showed an empty Footprint where the derived file has the part's footprint (`/api/schematic` and the table now give the field the file writes). **Kept, by design**: the file is kicad-cli's (`kicad-cli sch export bom`, the export engine), written from the saved design, so unapplied edits are applied first ("Changes have not yet been applied. Apply them and export?" where KiCad asks "Export unsaved data?" and writes the preview); the output file is a path in the board's folder with no Browse button (a browser cannot pick the server's folders) | `dialog_symbol_fields_table_base.cpp`, `OnExport`, `BOM_FMT_PRESET::BuiltInPresets`; 25ec2335 `getAttributeResolvedValue` |
+
+Left: the list items not in this walk (1-6, 8, 11-15, 18, 20-22, 24-26) are covered by the other browser checks of the sections named there (`sch-edit`, `sch-place`, `sch-details`, `sch-fields-table-v3`, `sch-find-regex`, `sch-setup`, `plot-exports`); `sch-clickthrough-v10` re-walks only the ones UI-LEFT-2 SS20 / XX4 name.
+
+Tests: Rust `board.rs` (+1 `a_symbol_moved_off_its_wires_leaves_their_nets_and_a_dragged_one_keeps_them`; `dragging_any_one_symbol_leaves_the_nets_alone_and_a_move_changes_only_its_own` replaces the "every move leaves the nets alone" test, `reorganizing_into_module_sheets...` checks U1's pins leave their wires), `sch_move_tests` (a selection of symbols is connectivity, a drag of them layout), `fields_table` (the export's attribute words). Browser: `e2e/sch-clickthrough-v10.check.js` 10/10.
 
 ## Manual click-through needed
 
@@ -2373,7 +2391,7 @@ click through:
    move only; second undo is a no-op (check the status toast), and the
    PCB edit from step 1 is still there. Switch to the PCB tab and Ctrl+Z
    — *that* reverts the PCB edit. This is the gap #15 regression test.
-7. Press `W`, click near one pin (should snap exactly onto it), click
+7. **Done (task-v10-verify, §91, real input in `e2e/sch-clickthrough-v10.check.js`).** Press `W`, click near one pin (should snap exactly onto it), click
    near another symbol's pin (should auto-finish the wire there);
    confirm `GET /api/schematic` shows one wire whose `net`/`pins` name
    both pins. Then switch to the PCB tab: since `ratsnest_json` and
@@ -2389,7 +2407,7 @@ click through:
    confirm the list is non-empty and matches roughly what `cargo run --
    board erc` / `kicad-cli sch erc` would report; click a row and confirm
    it selects a symbol and switches tabs.
-9. Draw a wire (`W`) from one symbol's pin to another's so they're
+9. **Done (task-v10-verify, §91, real input in `e2e/sch-clickthrough-v10.check.js`).** Draw a wire (`W`) from one symbol's pin to another's so they're
    connected, select the first symbol, press `G`, move the mouse — the
    wire's endpoint at that symbol should visibly track it (rubber-band)
    while the wire's other end (still on the second symbol's pin) stays
@@ -2398,7 +2416,7 @@ click through:
    (still connected, not dangling). Compare against `M` on the same setup
    — the wire should visibly NOT follow, staying dangling where the
    symbol used to be.
-10. Without pressing `M`/`G` first, click directly on a symbol and drag it
+10. **Done (task-v10-verify, §91, real input in `e2e/sch-clickthrough-v10.check.js`).** Without pressing `M`/`G` first, click directly on a symbol and drag it
     (same click, hold, move gesture) — should behave like `G` above
     (rubber-band) by default by just moving the mouse past the first grid
     step; releasing without moving the mouse at all should behave like a
@@ -2448,7 +2466,7 @@ click through:
     real installed library (if one is configured) and confirm the
     chooser's list for that library name shows every symbol the real
     `.kicad_sym` file defines, not just the one part already used.
-16. **The hotkey-dispatch fix, highest priority to confirm**: on the PCB
+16. **Done (task-v10-verify, §91, real input in `e2e/sch-clickthrough-v10.check.js`).** **The hotkey-dispatch fix, highest priority to confirm**: on the PCB
     tab, select a footprint and press `R` -- it must still rotate (this
     was the already-broken-on-main case the fix targeted). Press `M`,
     move it, click to drop -- must still work. Press `E` -- the PCB
@@ -2459,7 +2477,7 @@ click through:
     (rotate/move a symbol, open Symbol Properties, edit value, edit
     footprint) -- not a silent no-op, and not the PCB action leaking
     through.
-17. Select a symbol, press `E` -- Symbol Properties should open with
+17. **Done (task-v10-verify, §91, real input in `e2e/sch-clickthrough-v10.check.js`).** Select a symbol, press `E` -- Symbol Properties should open with
     Reference/Value/Footprint/Datasheet pre-filled from the real symbol.
     Change Value and Footprint, OK -- confirm `GET /api/schematic` shows
     both updated and nothing else changed. Reopen, change Reference to
@@ -2481,7 +2499,7 @@ click through:
     symbol should renumber, everything else on the sheet untouched. Try
     "Clear and re-annotate" with "Sort by X" on the whole sheet and
     confirm the numbering order visibly follows X position instead of Y.
-19. Select a symbol with real `lib_symbols` graphics (not a generic box),
+19. **Done (task-v10-verify, §91, real input in `e2e/sch-clickthrough-v10.check.js`).** Select a symbol with real `lib_symbols` graphics (not a generic box),
     press `X` -- confirm it flips left-right, as before. Press `X` again
     to undo it, then press `Y` -- confirm it flips top-bottom instead
     (not left-right). With `Y` still active, press `X` -- confirm it
@@ -2545,7 +2563,7 @@ click through:
     Del buttons), Apply, and confirm the values moved/vanished. Try to edit
     a Reference or Qty cell (should be read-only). Close with staged edits
     and confirm the "Discard?" prompt.
-23. Same dialog, Export tab: pick CSV, then TSV, then Semicolons and watch
+23. **Done (task-v10-verify, §91, real input in `e2e/sch-clickthrough-v10.check.js`).** Same dialog, Export tab: pick CSV, then TSV, then Semicolons and watch
     the preview change (CSV quotes every field with `"`, references joined
     with `,`; TSV has no quotes). Put `-` in "Ref range delimiter" and
     confirm `R1-R3,R5`. Turn off a column's Show checkbox on the Edit tab

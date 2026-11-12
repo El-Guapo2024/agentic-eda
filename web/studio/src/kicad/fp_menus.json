@@ -3,7 +3,7 @@
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
     "kicadCommitDate": null,
-    "extractedAt": "2026-10-05T01:42:46.668Z",
+    "extractedAt": "2026-11-12T09:30:04.977Z",
     "sourceFiles": [
       "pcbnew/menubar_footprint_editor.cpp",
       "pcbnew/tools/pcb_actions.cpp",
@@ -62,11 +62,13 @@
           "items": [
             {
               "type": "item",
-              "action": "pcbnew.ModuleEditor.importFootprint"
+              "action": "pcbnew.ModuleEditor.importFootprint",
+              "label": "Footprint..."
             },
             {
               "type": "item",
-              "action": "pcbnew.InteractiveDrawing.placeImportedGraphics"
+              "action": "pcbnew.InteractiveDrawing.placeImportedGraphics",
+              "label": "Graphics..."
             }
           ]
         },
@@ -76,7 +78,8 @@
           "items": [
             {
               "type": "item",
-              "action": "pcbnew.ModuleEditor.exportFootprint"
+              "action": "pcbnew.ModuleEditor.exportFootprint",
+              "label": "Footprint..."
             }
           ]
         },

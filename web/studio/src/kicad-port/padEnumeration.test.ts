@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { enumSpinValue, enumerateCommit, enumerateHit, enumerateNextValue, enumerateNumber, enumeratePopupText, enumerateShownNumber, enumerateStart, padsUnderSweep, sweepPoints } from "./padEnumeration";
+import { enumSpinValue, enumerateCommit, enumerateHit, enumerateLastNumber, enumerateNextValue, enumerateNumber, enumeratePopupText, enumerateShownNumber, enumerateStart, padsUnderSweep, sweepPoints } from "./padEnumeration";
 
 const run = (start = 1, step = 1, prefix = "") => enumerateStart({ start, step, prefix });
 
@@ -100,4 +100,14 @@ test("the popup and the dialog's limits are KiCad's (pad_tool.cpp EnumeratePads,
   assert.equal(enumeratePopupText(run()), "Click on pad 1\nPress <esc> to cancel all; double-click to finish");
   // `wxSpinCtrl( .., 0, 999, 1 )`
   assert.deepEqual([enumSpinValue(-3), enumSpinValue(5.6), enumSpinValue(1200), enumSpinValue(Number.NaN)], [0, 6, 999, 0]);
+});
+
+test("SetLastPadNumber follows each hit: the new number of a pad numbered, the old number of one given back, nothing for a drag over a numbered pad", () => {
+  const s0 = run(1, 1, "P");
+  const s1 = enumerateHit(s0, "a", "7", true);
+  assert.equal(enumerateLastNumber(s0, s1, "a"), "P1");
+  const s2 = enumerateHit(s1, "a", "P1", false);
+  assert.equal(enumerateLastNumber(s1, s2, "a"), null, "a drag over a numbered pad changes nothing");
+  const s3 = enumerateHit(s2, "a", "P1", true);
+  assert.equal(enumerateLastNumber(s2, s3, "a"), "7", "a second click gives the pad its old number back, and that is the last number");
 });

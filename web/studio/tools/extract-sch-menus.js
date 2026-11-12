@@ -190,7 +190,7 @@ function walkSpan(span, text, spans, topLevelNames, titles, resolve, unresolved)
   // kept for structural parity with extract-menus.js. Group 5: bare
   // ->Add(var) submenu attachment.
   const itemRe =
-    /->\s*Add\(\s*(SCH_ACTIONS|ACTIONS)::(\w+)|->\s*AppendSeparator\s*\(|->\s*AppendSubMenu\(\s*(\w+)\s*,\s*_\(\s*"((?:[^"\\]|\\.)*)"|->\s*Add\(\s*(\w+)\s*\)/g;
+    /->\s*Add\(\s*(SCH_ACTIONS|ACTIONS)::(\w+)(?:\s*,\s*ACTION_MENU::\w+\s*,\s*_\(\s*"((?:[^"\\]|\\.)*)")?|->\s*AppendSeparator\s*\(|->\s*AppendSubMenu\(\s*(\w+)\s*,\s*_\(\s*"((?:[^"\\]|\\.)*)"|->\s*Add\(\s*(\w+)\s*\)/g;
   const body = text.slice(span.start, span.end);
   const items = [];
   let m;
@@ -203,17 +203,18 @@ function walkSpan(span, text, spans, topLevelNames, titles, resolve, unresolved)
     }
     if (m[2]) {
       const dotted = resolve(`${m[1]}::${m[2]}`) ?? resolve(m[2]);
-      if (dotted) items.push({ type: "item", action: dotted });
+      // the menu's own label, where it gives one (`ACTION_MENU::Add( aAction, aCheckmark, aOverrideLabel )`), over the action's friendly name
+      if (dotted) items.push(m[3] !== undefined ? { type: "item", action: dotted, label: cleanLabel(m[3]) } : { type: "item", action: dotted });
       else unresolved.add(m[2]);
-    } else if (m[3] !== undefined) {
-      const subSpan = spans.get(m[3]);
+    } else if (m[4] !== undefined) {
+      const subSpan = spans.get(m[4]);
       const subItems = subSpan ? walkSpan(subSpan, text, spans, topLevelNames, titles, resolve, unresolved) : [];
-      items.push({ type: "submenu", label: cleanLabel(m[4]), items: subItems });
-    } else if (m[5] !== undefined) {
-      if (!spans.has(m[5])) continue; // a bare ->Add(x) of something that isn't a known ACTION_MENU var -- not a submenu, ignore
-      const subSpan = spans.get(m[5]);
+      items.push({ type: "submenu", label: cleanLabel(m[5]), items: subItems });
+    } else if (m[6] !== undefined) {
+      if (!spans.has(m[6])) continue; // a bare ->Add(x) of something that isn't a known ACTION_MENU var -- not a submenu, ignore
+      const subSpan = spans.get(m[6]);
       const subItems = walkSpan(subSpan, text, spans, topLevelNames, titles, resolve, unresolved);
-      items.push({ type: "submenu", label: titles.get(m[5]) ?? m[5], items: subItems });
+      items.push({ type: "submenu", label: titles.get(m[6]) ?? m[6], items: subItems });
     } else {
       items.push({ type: "separator" });
     }
