@@ -1303,6 +1303,7 @@ fn version(dir: &Path, job: &Job) -> Value {
     json!(version_string(dir, job))
 }
 
+#[cfg(test)]
 pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -> Result<Value, Vec<CheckResult>> {
     state_in(dir, job, clock, "")
 }
@@ -2116,6 +2117,7 @@ pub(crate) fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) ->
 /// fields, empty arrays for a plain single-sheet design). No second cache
 /// next to `schematic_svg`'s -- these boards are small, so deriving again
 /// on a cache miss costs nothing worth guarding.
+#[cfg(test)]
 pub(crate) fn schematic_json(dir: &Path, sheet_path: &str, clock: eda_model::text_vars::Clock) -> Result<Value, Vec<CheckResult>> {
     schematic_json_in(dir, sheet_path, clock, "")
 }
