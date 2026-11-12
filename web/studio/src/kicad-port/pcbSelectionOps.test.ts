@@ -109,6 +109,13 @@ test("unrouteSelected on a footprint removes the connection up to the next pad a
   assert.ok(!r.trackIds.includes("m"));
 });
 
+test("unrouteSelected on a pad removes the copper up to the next pad and keeps the pad selected (`PCB_PAD_T`)", () => {
+  const r = unrouteSelected(board(), ["R1.1"]);
+  assert.deepEqual(r.trackIds.sort(), ["a", "b"]);
+  assert.deepEqual(r.viaIds, ["v"]);
+  assert.deepEqual(r.reselect, ["R1.1"]);
+});
+
 test("unrouteSelected on a track takes its whole run", () => {
   const r = unrouteSelected(board(), ["a"]);
   assert.deepEqual(r.trackIds.sort(), ["a", "b"]);

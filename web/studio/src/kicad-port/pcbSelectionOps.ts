@@ -295,6 +295,10 @@ export function unrouteSelected(board: BoardState, ids: readonly string[]): { tr
     if (kind === "part") {
       reselect.push(id);
       for (const p of pads) if (p.key.startsWith(`${id}.`)) starts.push({ kind: "pad", id: p.key });
+    } else if (kind === "pad") {
+      // a pad is a `BOARD_CONNECTED_ITEM` start of its own, and is reselected afterwards (`PCB_PAD_T`; task-v10-handlers: pads were ignored)
+      reselect.push(id);
+      starts.push({ kind: "pad", id });
     } else if (kind === "track" || kind === "via") {
       starts.push({ kind, id });
     }
