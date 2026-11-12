@@ -108,6 +108,7 @@
     if (!t(d, "New Symbol Library opens")) return;
     await until(() => d.querySelector("#lt-folder")?.value, 4000);
     await type(d.querySelector("#lt-name"), LIB);
+    document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
     button(d, "Create").click();
     t(await until(() => !dialog("New Symbol Library"), 6000), `${LIB} made`);
     t(await selectLibrary(LIB), "the library is in the tree");
