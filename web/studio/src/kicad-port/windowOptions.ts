@@ -27,6 +27,10 @@ export interface WindowOptions {
   gridSnap: GridSnapping;
   /** `grid.axes_enabled` -- default off (the Footprint Editor draws its axes whatever it says: `GetGalDisplayOptions().m_axesEnabled = true`). */
   gridAxes: boolean;
+  /** `RENDER_SETTINGS::GetDrawBoundingBoxes` of the frame's canvas -- default off. Each editor's own painter holds it and KiCad never saves it
+   *  (`render_settings.cpp`: `m_drawBoundingBoxes( false )`, flipped only by `COMMON_TOOLS::ToggleBoundingBoxes`), so `parseWindowOptions` never reads it
+   *  back: every session starts with it off. */
+  drawBoundingBoxes: boolean;
 }
 
 /** `KIGFX::GRID_SNAPPING`: ALWAYS, WITH_GRID, NEVER. */
@@ -41,6 +45,7 @@ export const DEFAULT_WINDOW_OPTIONS: WindowOptions = {
   polarCoords: false,
   gridSnap: "always",
   gridAxes: false,
+  drawBoundingBoxes: false,
 };
 
 const crossHair = (v: unknown, d: CrossHairMode): CrossHairMode => (v === "small" || v === "full" || v === "diag45" ? v : d);
@@ -57,6 +62,8 @@ export function parseWindowOptions(raw: unknown, base: WindowOptions = DEFAULT_W
     polarCoords: typeof j.polarCoords === "boolean" ? j.polarCoords : base.polarCoords,
     gridSnap: j.gridSnap === "always" || j.gridSnap === "with_grid" || j.gridSnap === "never" ? j.gridSnap : base.gridSnap,
     gridAxes: typeof j.gridAxes === "boolean" ? j.gridAxes : base.gridAxes,
+    // not a saved setting (see `WindowOptions::drawBoundingBoxes`)
+    drawBoundingBoxes: false,
   };
 }
 

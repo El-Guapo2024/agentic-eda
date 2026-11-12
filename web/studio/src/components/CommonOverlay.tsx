@@ -104,7 +104,7 @@ export function CommonOverlay() {
     };
 
     // `RENDER_SETTINGS::GetDrawBoundingBoxes`: one outline per item, red when it is selected.
-    if (opts.drawBoundingBoxes) {
+    if (windowOptionsOf(opts, tab).drawBoundingBoxes) {
       const boardSide = tab === "pcb" || tab === "footprint";
       const parts = new Set(studio.board?.parts.map((p) => p.ref) ?? []);
       ctx.lineWidth = boardSide ? 1 : Math.max(1, SCH_BOX_WIDTH_NM * view.scale);
