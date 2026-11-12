@@ -177,6 +177,34 @@ fn a_text_keeps_the_files_size_angle_and_justification_on_the_files_point() {
     assert_eq!(sch(&b).texts.iter().map(|t| t.angle).collect::<Vec<_>>(), [0, 90_000, 0]);
 }
 
+/// `GRAPHICS_IMPORTER_SCH::AddText`'s `SetTextWidth( aWidth * ImportScalingFactor().x )`: a DXF text is `0.9` of its height wide (`DXF_IMPORT_PLUGIN::addText`: "The 0.9
+/// factor gives a better height/width base ratio with our font", times its style's width factor; the TEXT's own group 41 is not read), which the text keeps
+/// (`SchExtras::text_widths`) and the file writes as `(size height width)` and reads back.
+#[test]
+fn a_dxf_texts_glyph_width_is_kept_and_written() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let entities = "0\nTEXT\n8\n0\n10\n10\n20\n5\n30\n0\n40\n2.0\n41\n0.5\n1\nNarrow\n";
+    let mut r = sch_req(GraphicsFormat::Dxf, dxf(entities));
+    r.scale = 2.0;
+    b.apply(&Cmd::ImportSchGraphics(r)).unwrap();
+    let s = sch(&b);
+    let t = s.texts.iter().find(|t| t.content == "Narrow").unwrap();
+    assert_eq!(t.size_nm, mm(4.0), "the height times the scale");
+    assert_eq!(s.extras.text_widths.get(&t.id), Some(&mm(3.6)), "0.9 of the height, times the scale: {:?}", s.extras.text_widths);
+    // the file says it (`EDA_TEXT::Format`: `(size height width)`) and the importer reads it back
+    let file = eda_kicad::export_kicad_sch(b.design(), &m, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    assert!(file.contains("(size 4 3.6)"), "{file}");
+    let (back, _, _) = eda_kicad::import_kicad_sch(&file).unwrap();
+    let back = back.schematic.unwrap();
+    let t = back.texts.iter().find(|t| t.content == "Narrow").unwrap();
+    assert_eq!((t.size_nm, back.extras.text_widths.get(&t.id)), (mm(4.0), Some(&mm(3.6))));
+    // Text Properties' size makes it square again (`SetTextSize( VECTOR2I( size, size ) )`)
+    let id = sch(&b).texts[0].id.clone();
+    b.apply(&Cmd::SchEdit(crate::sch_edit::SchCmd::EditText { id: id.clone(), text: None, size_nm: Some(mm(4.0)), angle: None, h: None, v: None })).unwrap();
+    assert!(sch(&b).extras.text_widths.is_empty());
+}
+
 #[test]
 fn nothing_to_import_and_a_zero_scale_are_refused_and_leave_the_design_alone() {
     let m = model(&["F.Cu", "B.Cu"]);

@@ -240,6 +240,11 @@ pub struct SchExtras {
     /// Read from a KiCad file and written back as `saveText` / `saveTextBox` write them (r7 H4, M5). An item with no entry has KiCad's defaults. Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_attrs: BTreeMap<String, TextAttrs>,
+    /// A free text's glyph width when it is not its height (`EDA_TEXT::GetTextWidth`, the second number of `(size height width)`), by text id: what Import Graphics
+    /// gives a DXF text (`GRAPHICS_IMPORTER_SCH::AddText`'s `SetTextWidth( aWidth * ImportScalingFactor().x )`) and what a KiCad file says. A text with no entry is as wide as
+    /// it is high (`SchematicText::size_nm`); a text whose size is set again (Text Properties) loses the entry. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub text_widths: BTreeMap<String, crate::units::Nm>,
     /// An image's transform origin offset, by the graphic's id (`REFERENCE_IMAGE::m_transformOriginOffset`, the Properties panel's "Transform Offset X/Y"): the point
     /// Scale scales it about, from its centre (`REFERENCE_IMAGE::scaleBy`). KiCad keeps it in the editor and does not write it (`saveBitmap`); here it is kept in the
     /// design, not in the derived file. An image with no entry is scaled about its centre. Additive.
@@ -1056,6 +1061,7 @@ impl SchExtras {
             && self.pin_alternates.is_empty()
             && self.text_justify.is_empty()
             && self.text_attrs.is_empty()
+            && self.text_widths.is_empty()
             && self.image_offsets.is_empty()
             && self.field_looks.is_empty()
             && self.power_props.is_empty()

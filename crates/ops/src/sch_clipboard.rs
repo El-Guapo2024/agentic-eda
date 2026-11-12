@@ -422,11 +422,14 @@ impl<'a> Board<'a> {
                 sch.extras.label_fields.insert(new_id, fields.clone());
             }
         }
-        // a pasted text keeps its justification, and its bold, italic, font, colour, link and exclusion (`SchExtras::text_attrs`)
+        // a pasted text keeps its justification, its glyph width (`SchExtras::text_widths`), and its bold, italic, font, colour, link and exclusion (`SchExtras::text_attrs`)
         for (k, t) in src.texts.iter().enumerate() {
             let Some(new_id) = sch.texts.get(first_text + k).map(|n| n.id.clone()) else { continue };
             if let Some(j) = src.extras.text_justify.get(&t.id) {
                 sch.extras.text_justify.insert(new_id.clone(), *j);
+            }
+            if let Some(w) = src.extras.text_widths.get(&t.id) {
+                sch.extras.text_widths.insert(new_id.clone(), *w);
             }
             if let Some(a) = src.extras.text_attrs.get(&t.id) {
                 sch.extras.text_attrs.insert(new_id, a.clone());

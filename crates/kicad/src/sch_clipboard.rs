@@ -743,7 +743,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         let angle = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90.0 } else { 0.0 };
         // with its look (`SchExtras::text_attrs`: bold, italic, font, colour, link) and exclude from simulation, as `saveText` writes them
         let attrs = sch.extras.text_attrs.get(&t.id).cloned().unwrap_or_default();
-        let effects = crate::sch_extras_io::text_effects_with(t.size_nm, sch.extras.text_justify_of(&t.id), &attrs);
+        let effects = crate::sch_extras_io::free_text_effects(sch, t, &attrs);
         let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim {})\n\t\t(at {x} {y} {})\n\t\t{effects}\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), if attrs.exclude_from_sim { "yes" } else { "no" }, fmt_mm_f(angle));
     }
 

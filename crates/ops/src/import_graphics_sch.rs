@@ -18,6 +18,7 @@
 //! * A schematic text has a position, an angle (along a row or up a column: the nearer of the two) and a size, and is anchored at the left end of its
 //!   baseline: the file's justification is applied to the position (by the text's width and, for a top or middle alignment, its height) and not kept. A
 //!   library symbol's text is anchored at the middle of its baseline, so only the width is applied there. The size is the text's height.
+//!   A sheet's text keeps its glyph width (`SetTextWidth`, `SchExtras::text_widths`); a library symbol's text is as wide as it is high (its graphic has no width).
 //! * A polygon filled with a colour is `Color` in the schematic, with the colour; the library symbol has no such fill and gets the stroke's colour
 //!   ("outline"). A library symbol has no curves either: a Bezier curve of the file is cut into line segments (`ARC_LOW_DEF_MM`, 20 micrometres),
 //!   where KiCad keeps the curve.
@@ -185,6 +186,8 @@ pub struct SchItems {
     pub texts: Vec<SchematicText>,
     /// The justification of a text of `texts` that is not left and bottom (`SchExtras::text_justify`), by its place in `texts`.
     pub text_justify: Vec<(usize, SchTextJustify)>,
+    /// The glyph width of a text of `texts` that is not as wide as it is high (`SetTextWidth`, `SchExtras::text_widths`), by its place in `texts`.
+    pub text_widths: Vec<(usize, Nm)>,
 }
 
 /// `GRAPHICS_IMPORTER_SCH`'s items for `imported`, in nanometres (`mapper.iu_per_mm` is 1e6; the sheet's writer rounds to its 100 nm unit).
@@ -270,12 +273,16 @@ pub fn sch_items(imported: &Imported, mapper: &Mapper) -> SchItems {
                 }
                 out.graphics.push(g);
             }
-            ImportedShape::Text { origin, text, height, orientation_deg, h, v, .. } => {
-                // `GRAPHICS_IMPORTER_SCH::AddText`: the position mapped, the angle as given, the height times the scale (`SetTextHeight( aHeight *
-                // ImportScalingFactor().y )`: truncated to the schematic's unit of 100 nm and held to EDA_TEXT's limits), both justifications kept; a text with nothing in it
-                // is added. The file then keeps the angle upright (`parseSchText`: `KeepUpright`), 0 or 90 degrees with the justification as it is, which is what is made
-                // here. The glyph width (`SetTextWidth`) has no place in the design: a schematic text is as wide as it is high.
+            ImportedShape::Text { origin, text, height, width, orientation_deg, h, v, .. } => {
+                // `GRAPHICS_IMPORTER_SCH::AddText`: the position mapped, the angle as given, the height and the width times the scale (`SetTextWidth( aWidth *
+                // ImportScalingFactor().x )`, `SetTextHeight( aHeight * ImportScalingFactor().y )`: truncated to the schematic's unit of 100 nm and held to EDA_TEXT's
+                // limits), both justifications kept; a text with nothing in it is added. The file then keeps the angle upright (`parseSchText`: `KeepUpright`), 0 or 90
+                // degrees with the justification as it is, which is what is made here. A width that is not the height is the text's `SchExtras::text_widths`.
                 let size_nm = Nm::new((((height * m.scaling_factor()) / 100.0) as i64 * 100).clamp(1_000, 250_000_000));
+                let width_nm = Nm::new((((width * m.scaling_factor()) / 100.0) as i64 * 100).clamp(1_000, 250_000_000));
+                if width_nm != size_nm {
+                    out.text_widths.push((out.texts.len(), width_nm));
+                }
                 let angle: Millideg = if eda_model::kicad_geom::keep_upright_is_vertical(*orientation_deg) { 90_000 } else { 0 };
                 let j = SchTextJustify {
                     h: match h {
@@ -429,6 +436,12 @@ impl Board<'_> {
         for (i, j) in items.text_justify {
             if let Some(id) = sch.texts.get(first_text + i).map(|t| t.id.clone()) {
                 sch.extras.set_text_justify(&id, j);
+            }
+        }
+        // and its glyph width
+        for (i, w) in items.text_widths {
+            if let Some(id) = sch.texts.get(first_text + i).map(|t| t.id.clone()) {
+                sch.extras.text_widths.insert(id, w);
             }
         }
         // A graphic line keeps its width in the line and its style and colour in the stroke table.

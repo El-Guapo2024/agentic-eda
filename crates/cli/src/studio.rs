@@ -2830,6 +2830,8 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
     let vertical = eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0);
     json!({
         "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_nm": t.size_nm, "vertical": vertical,
+        // its glyph width when it is not its height (`SchExtras::text_widths`: an imported DXF text's)
+        "width_nm": sch.extras.text_widths.get(&t.id),
         "h": match j.h { TextJustify::Left => "left", TextJustify::Center => "center", TextJustify::Right => "right" },
         "v": match j.v { TextVAlign::Top => "top", TextVAlign::Center => "center", TextVAlign::Bottom => "bottom" },
         // What the text's `SchExtras::text_attrs` say: bold, italic, its colour (absent: the layer's) and its hyperlink (absent: none).

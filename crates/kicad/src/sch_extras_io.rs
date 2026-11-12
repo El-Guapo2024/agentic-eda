@@ -100,6 +100,16 @@ pub(crate) fn text_effects_with(size_nm: Nm, j: eda_model::sch_extras::SchTextJu
     effects_with(size_nm, attrs.bold, attrs.italic, h, v, attrs.color, attrs.href.as_deref(), attrs.font.as_deref())
 }
 
+/// A free text's `(effects ..)` with its glyph width (`EDA_TEXT::Format`: `(size height width)`) when [`SchExtras::text_widths`](eda_model::sch_extras::SchExtras::text_widths)
+/// has one; otherwise as [`text_effects_with`] writes it.
+pub(crate) fn free_text_effects(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir::SchematicText, attrs: &eda_model::sch_extras::TextAttrs) -> String {
+    let effects = text_effects_with(t.size_nm, sch.extras.text_justify_of(&t.id), attrs);
+    match sch.extras.text_widths.get(&t.id) {
+        Some(w) => effects.replacen(&format!("(size {0} {0})", sch_mm(t.size_nm)), &format!("(size {} {})", sch_mm(t.size_nm), sch_mm(*w)), 1),
+        None => effects,
+    }
+}
+
 /// What a free-standing text's `(effects ...)` and `(at x y angle)` say about how it lies: the text's angle made upright (`KeepUpright`: along the sheet or up
 /// it) and its justification, which a file without `(justify ...)` gives as centre, centre (`parseEDA_TEXT`).
 pub(crate) fn read_text_lie(item: &[Sexpr], look: &EffectsLook) -> (Millideg, eda_model::sch_extras::SchTextJustify) {

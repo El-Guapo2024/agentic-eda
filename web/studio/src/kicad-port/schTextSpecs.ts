@@ -105,12 +105,18 @@ export function deviceTextDrawSpec(text: string, f: SchFieldLook, font: KicadFon
   return { ...own, pos: [x, y], valign: "center", angleDeg: f.vertical ? 90 : 0, pen: schDrawPen(size, bold, defaultPen) };
 }
 
-/** `SCH_PAINTER::draw( SCH_TEXT )` of a free text: at its anchor, with its own justification (`textLie`), a vertical one turned a quarter; lines split at `\n`. */
-export function schTextDrawSpec(t: Pick<SchematicText, "content" | "shown" | "at" | "angle" | "size_nm" | "h" | "v" | "vertical" | "bold" | "italic">, defaultPen = SCH_DEFAULT_PEN_NM): KicadTextSpec {
+/**
+ * `SCH_PAINTER::draw( SCH_TEXT )` of a free text: at its anchor, with its own justification (`textLie`), a vertical one turned a quarter; lines split at `\n`. A text with a glyph
+ * width of its own (an imported DXF text's, `width_nm`) is that wide (`GetTextSize().x`), and its pen is of that width (`GetEffectiveTextPenWidth`: `GetPenSizeForNormal(
+ * GetTextWidth() )`, clamped to the smaller side).
+ */
+export function schTextDrawSpec(t: Pick<SchematicText, "content" | "shown" | "at" | "angle" | "size_nm" | "width_nm" | "h" | "v" | "vertical" | "bold" | "italic">, defaultPen = SCH_DEFAULT_PEN_NM): KicadTextSpec {
   const lie = textLie(t);
   const size = sizeOf(t.size_nm);
+  const width = t.width_nm && t.width_nm > 0 ? t.width_nm : size;
   const bold = !!t.bold;
-  return { text: t.shown ?? t.content, pos: t.at, size: [size, size], pen: schDrawPen(size, bold, defaultPen), halign: lie.h, valign: lie.v, angleDeg: lie.vertical ? 90 : 0, italic: !!t.italic, bold, multiline: true, iu: SCH_IU };
+  const pen = width === size ? schDrawPen(size, bold, defaultPen) : iuRound(effectiveTextPenWidth(0, [width, size], bold, defaultPen));
+  return { text: t.shown ?? t.content, pos: t.at, size: [width, size], pen, halign: lie.h, valign: lie.v, angleDeg: lie.vertical ? 90 : 0, italic: !!t.italic, bold, multiline: true, iu: SCH_IU };
 }
 
 export interface SchLabelLook {
