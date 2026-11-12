@@ -63,8 +63,20 @@
     await input([{ t: "move", x: ax, y: ay, steps: 3 }, { t: "pause", ms: 150 }, { t: "down" }, { t: "pause", ms: 60 }, { t: "move", x: bx, y: by, steps: 14 }, { t: "pause", ms: 250 }, { t: "up" }]);
     await sleep(wait);
   };
-  const clickEl = async (el, wait = 300) => { if (!el) throw new Error("no element to click"); el.scrollIntoView({ block: "nearest" }); const r = el.getBoundingClientRect(); await input([{ t: "click", x: r.left + r.width / 2, y: r.top + r.height / 2 }]); await sleep(wait); };
-  const dblEl = async (el, wait = 900) => { el.scrollIntoView({ block: "nearest" }); const r = el.getBoundingClientRect(); await input([{ t: "dblclick", x: r.left + r.width / 2, y: r.top + r.height / 2 }]); await sleep(wait); };
+  /** The middle of what can be seen of `el`: its box cut by every ancestor that clips its overflow (a library tree row is as wide as its columns, LL4,
+   * wider than the panel that shows it, so the middle of its box can be under the canvas). */
+  const visibleMiddle = (el) => {
+    let { left, top, right, bottom } = el.getBoundingClientRect();
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+      const b = a.getBoundingClientRect();
+      left = Math.max(left, b.left); top = Math.max(top, b.top); right = Math.min(right, b.right); bottom = Math.min(bottom, b.bottom);
+    }
+    return { x: (left + right) / 2, y: (top + bottom) / 2 };
+  };
+  const clickEl = async (el, wait = 300) => { if (!el) throw new Error("no element to click"); el.scrollIntoView({ block: "nearest" }); await input([{ t: "click", ...visibleMiddle(el) }]); await sleep(wait); };
+  const dblEl = async (el, wait = 900) => { el.scrollIntoView({ block: "nearest" }); await input([{ t: "dblclick", ...visibleMiddle(el) }]); await sleep(wait); };
   const typeInto = async (el, text) => { await clickEl(el, 100); await input([{ t: "press", key: "Control+a" }, { t: "press", key: "Delete" }, ...(String(text) === "" ? [] : [{ t: "type", text: String(text) }])]); await sleep(250); };
   /** A <select> by the keyboard: focused, then the arrows to the option (a closed select changes, and fires change, on each). */
   const pick = async (sel, value) => { sel.focus(); const i = [...sel.options].findIndex((o) => o.value === value); const n = i - sel.selectedIndex; if (i >= 0 && n !== 0) await input(Array.from({ length: Math.abs(n) }, () => ({ t: "press", key: n > 0 ? "ArrowDown" : "ArrowUp" }))); await sleep(300); return i >= 0; };
