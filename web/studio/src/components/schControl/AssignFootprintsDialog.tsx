@@ -3,12 +3,17 @@
 // symbol's own footprint filters, its pin count, the library, the words typed). Double-click a footprint, or Assign, to give it to the selected symbols;
 // OK applies every assignment as one undo step (`AssignFootprints`'s single "Assign Footprints" commit).
 //
-// CvPcb's footprint viewer (`CVPCB_ACTIONS::showFootprintViewer`, "View Selected Footprint" -> `DISPLAY_FOOTPRINTS_FRAME`, KiCad 25ec2335) is the pane under the lists:
-// the footprint picked in the footprint list, else the selected symbol's (`InitDisplay`), drawn with the Footprint Editor's painter, titled "Footprint: %s" with "Lib: %s",
+// CvPcb's footprint viewer (`CVPCB_ACTIONS::showFootprintViewer`, "View Selected Footprint" -> `DISPLAY_FOOTPRINTS_FRAME`, KiCad 25ec2335) is a window of its own,
+// closed when CvPcb opens and opened by View Selected Footprint (UI-LEFT-2 LL7): here a window over the page, moved by its caption and closed by its button (a page
+// cannot open a window of the operating system's). It shows the footprint picked in the footprint list, else the selected symbol's (`InitDisplay`), drawn with the
+// Footprint Editor's painter, titled "Footprint: %s" with "Lib: %s",
 // or `GetFootprint`'s message when it cannot be drawn. Automatically Assign Footprints (`CVPCB_ACTIONS::autoAssociate` -> `AutomaticFootprintMatching`) reads the project's
 // footprint association files (Manage Footprint Association Files..., `DIALOG_CONFIG_EQUFILES`: EquFilesDialog.tsx) on the server and stages what it assigns with the
-// dialog's other assignments; its messages are KiCad's ("%lu footprint/symbol equivalences found.", "Equivalence File Load Error", "CvPcb Warning"). Not ported: the
-// CvPcb hotkeys, and the viewer as a window of its own (it is a pane here; KiCad's 3D view of it is the Footprint Chooser's).
+// dialog's other assignments; its messages are KiCad's ("%lu footprint/symbol equivalences found.", "Equivalence File Load Error", "CvPcb Warning"). CvPcb's hotkeys
+// (`CVPCB_ACTIONS`, UI-LEFT-2 LL7): Tab and Shift+Tab move between the libraries, the symbols and the footprints (`ChangeFocus`), Enter assigns the selected footprint
+// to the selected symbols and selects the next symbol without one (`Associate`, `gotoNextNA`), Delete takes the selected symbols' footprints away (`DeleteAssoc`),
+// Ctrl+S applies the assignments to the schematic and stays open (`SaveAssociationsToSchematic`), the arrow keys move in the list that has the focus. Not ported:
+// the viewer's 3D view (the Footprint Chooser has one).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { fetchFootprintLibraryNames } from "../../api/client";
@@ -16,7 +21,7 @@ import { fetchAnyFootprint, fetchAnySymbol } from "../../api/libraryClient";
 import { autoAssociate, fetchCvpcbFootprint, type CvpcbFootprint } from "../../api/cvpcbClient";
 import type { Cmd } from "../../api/types";
 import { filterFootprints, toCandidate, uniquePadCount, uniquePinCount, type FootprintCandidate } from "../../kicad-port/footprintFilter";
-import { autoAssociateInput, viewerCaption, viewerFootprint } from "../../kicad-port/cvpcbEqu";
+import { autoAssociateInput, changeFocus, cvpcbHotkey, nextUnassigned, viewerCaption, viewerFootprint, type CvpcbControl } from "../../kicad-port/cvpcbEqu";
 import { expandStackedPinNotation } from "../../kicad-port/stackedPins";
 import { FootprintChooserDialog } from "../FootprintChooserDialog";
 import { FootprintPreview } from "../chooser/ChooserPreview";
@@ -58,8 +63,13 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
   const [symInfo, setSymInfo] = useState<{ filters: string[]; pins: number } | null>(null);
   // "From KiCad's libraries...": the Footprint Chooser over every installed library, narrowed by the first selected symbol like the list here.
   const [choosing, setChoosing] = useState(false);
-  // "View Selected Footprint": the viewer pane, shown to begin with
-  const [viewer, setViewer] = useState(true);
+  // "View Selected Footprint": the viewer window (`DISPLAY_FOOTPRINTS_FRAME`), not open when CvPcb opens; where it is on the page
+  const [viewer, setViewer] = useState(false);
+  const [viewerAt, setViewerAt] = useState<{ x: number; y: number }>(() => ({ x: Math.max(16, window.innerWidth - 440), y: 80 }));
+  const viewerDrag = useRef<{ dx: number; dy: number } | null>(null);
+  // the list with the keyboard (`GetFocusedControl`)
+  const [focused, setFocused] = useState<CvpcbControl | null>(null);
+  const listRefs = { library: useRef<HTMLDivElement>(null), component: useRef<HTMLDivElement>(null), footprint: useRef<HTMLDivElement>(null) };
   const [shownFp, setShownFp] = useState<{ id: string; reply: CvpcbFootprint | null } | null>(null);
   // Manage Footprint Association Files..., and what the last Automatically Assign Footprints said
   const [equOpen, setEquOpen] = useState(false);
@@ -184,14 +194,70 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
+  /** `SetSelectedComponent`: one symbol selected, as a click selects it (the footprint list and the viewer follow). */
+  const selectSymbol = (ref: string) => {
+    setSelected([ref]);
+    anchor.current = ref;
+    const row = rows.find((r) => r.ref === ref);
+    const fp = row ? current(row) : "";
+    setPicked(fp && shown.some((c) => c.id === fp) ? fp : null);
+    listRefs.component.current?.querySelector(`[data-cvpcb-symbol="${CSS.escape(ref)}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+
+  /** CvPcb's hotkeys (the module doc); the arrow keys move in the list that has the focus. */
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.target as HTMLElement).closest("input, textarea, select")) return;
+    const hk = cvpcbHotkey(e);
+    if (hk === "focusRight" || hk === "focusLeft") {
+      const to = changeFocus(focused, hk === "focusRight" ? "right" : "left");
+      if (!to) return;
+      e.preventDefault();
+      listRefs[to].current?.focus();
+    } else if (hk === "associate") {
+      if (!picked || selected.length === 0) return;
+      e.preventDefault();
+      const after = { ...staged, ...Object.fromEntries(selected.map((r) => [r, picked])) };
+      assign(picked);
+      const next = nextUnassigned(rows, (ref) => after[ref] ?? rows.find((r) => r.ref === ref)?.footprint ?? "", selected);
+      if (next) selectSymbol(next);
+    } else if (hk === "deleteAssoc") {
+      if (selected.length === 0) return;
+      e.preventDefault();
+      assign("");
+    } else if (hk === "save") {
+      e.preventDefault();
+      void submit(false);
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const d = e.key === "ArrowDown" ? 1 : -1;
+      if (focused === "component" && rows.length > 0) {
+        e.preventDefault();
+        const at = rows.findIndex((r) => r.ref === selected[0]);
+        selectSymbol(rows[Math.min(rows.length - 1, Math.max(0, at < 0 ? 0 : at + d))]!.ref);
+      } else if (focused === "footprint" && shown.length > 0) {
+        e.preventDefault();
+        const at = shown.findIndex((c) => c.id === picked);
+        const next = shown[Math.min(shown.length - 1, Math.max(0, at < 0 ? 0 : at + d))]!.id;
+        setPicked(next);
+        listRefs.footprint.current?.querySelector(`[data-cvpcb-fp="${CSS.escape(next)}"]`)?.scrollIntoView({ block: "nearest" });
+      } else if (focused === "library") {
+        e.preventDefault();
+        const all = ["", ...libraries];
+        const at = all.indexOf(library);
+        setLibrary(all[Math.min(all.length - 1, Math.max(0, at + d))]!);
+      }
+    }
+  };
+
   const changes = rows.filter((r) => staged[r.ref] !== undefined && staged[r.ref] !== r.footprint);
 
-  const submit = async () => {
-    if (changes.length === 0) return onClose();
+  /** OK, and Ctrl+S (`SaveAssociationsToSchematic`, which leaves CvPcb open: `close` false): every staged assignment as one undo step. */
+  const submit = async (close = true) => {
+    if (changes.length === 0) return close ? onClose() : undefined;
     const cmds: Cmd[] = changes.map((r) => ({ op: "edit_symbol_fields", id: r.ref, footprint: staged[r.ref]! }));
     if (await api.cmdBatch(cmds)) {
       dispatch({ type: "TOAST", message: `Assigned ${changes.length} footprint${changes.length === 1 ? "" : "s"}.`, kind: "info" });
-      onClose();
+      if (close) onClose();
+      else setStaged({});
     }
   };
 
@@ -201,19 +267,19 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
   return (
     <SchDialogFrame
       title="Assign Footprints"
-      width={viewer ? 1280 : 1000}
+      width={1000}
       // Escape and a click outside close the Manage Footprint Association Files dialog first
       onClose={() => !equOpenRef.current && onClose()}
       footer={
-        <button className="primary" onClick={() => void submit()}>
+        <button className="primary" onClick={() => void submit(true)}>
           {changes.length > 0 ? `Apply ${changes.length} assignment${changes.length === 1 ? "" : "s"}` : "OK"}
         </button>
       }
     >
-      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }} onKeyDown={onKeyDown} data-cvpcb-lists>
         <div style={{ flex: "1.3 1 0", minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Symbols ({rows.length})</div>
-          <div style={listBox}>
+          <div style={{ ...listBox, outline: focused === "component" ? "1px solid var(--chrome-accent, #4a90d9)" : undefined }} tabIndex={0} ref={listRefs.component} onFocus={() => setFocused("component")} data-cvpcb-list="component">
             <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
               <colgroup>
                 <col style={{ width: "18%" }} />
@@ -240,7 +306,7 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
         </div>
         <div style={{ flex: "0.7 1 0", minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Libraries</div>
-          <div style={listBox}>
+          <div style={{ ...listBox, outline: focused === "library" ? "1px solid var(--chrome-accent, #4a90d9)" : undefined }} tabIndex={0} ref={listRefs.library} onFocus={() => setFocused("library")} data-cvpcb-list="library">
             {["", ...libraries].map((l) => (
               <div key={l || "(all)"} style={{ ...cell, cursor: "default", background: library === l ? "var(--chrome-selected-bg)" : undefined, color: library === l ? "var(--chrome-selected-text)" : undefined }} onClick={() => setLibrary(l)}>
                 {l || "All libraries"}
@@ -250,7 +316,7 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
         </div>
         <div style={{ flex: "1.4 1 0", minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Footprints ({shown.length})</div>
-          <div style={listBox}>
+          <div style={{ ...listBox, outline: focused === "footprint" ? "1px solid var(--chrome-accent, #4a90d9)" : undefined }} tabIndex={0} ref={listRefs.footprint} onFocus={() => setFocused("footprint")} data-cvpcb-list="footprint">
             {shown.map((c) => (
               <div key={c.id} data-cvpcb-fp={c.id} title={c.id} style={{ ...cell, cursor: "default", background: picked === c.id ? "var(--chrome-selected-bg)" : undefined, color: picked === c.id ? "var(--chrome-selected-text)" : undefined }} onClick={() => setPicked(c.id)} onDoubleClick={() => assign(c.id)}>
                 {c.id}
@@ -262,23 +328,42 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
             )}
           </div>
         </div>
-        {viewer && (
-          // the footprint viewer (`DISPLAY_FOOTPRINTS_FRAME`): a pane beside the lists here, a window of its own in KiCad
-          <div data-cvpcb-viewer={viewId} style={{ flex: "1.3 1 0", minWidth: 0, display: "flex", flexDirection: "column" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 6, fontWeight: 600, fontSize: 11, marginBottom: 4 }}>
-              <span data-cvpcb-viewer-title style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={caption.title}>
-                {caption.title || "Footprint"}
-              </span>
-              <span data-cvpcb-viewer-status style={{ fontWeight: 400, opacity: 0.8 }}>
-                {caption.status}
-              </span>
-            </div>
-            <div style={{ border: "1px solid var(--chrome-border)" }}>
-              <FootprintPreview footprint={viewed?.footprint ?? null} height={300} status={!viewId ? "No footprint selected" : viewed ? (viewed.error ?? "") : "Loading…"} />
-            </div>
-          </div>
-        )}
       </div>
+      {viewer && (
+        // the footprint viewer (`DISPLAY_FOOTPRINTS_FRAME`): a window of its own, over the page, moved by its caption (`SetTitle( "Footprint: %s" )`)
+        <div
+          data-cvpcb-viewer={viewId}
+          role="dialog"
+          aria-label="Footprint Viewer"
+          style={{ position: "fixed", left: viewerAt.x, top: viewerAt.y, width: 400, zIndex: 1000, background: "var(--chrome-bg)", border: "1px solid var(--chrome-border)", boxShadow: "0 6px 24px rgba(0,0,0,0.35)", display: "flex", flexDirection: "column" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 11, padding: "4px 6px", cursor: "move", userSelect: "none", borderBottom: "1px solid var(--chrome-border)" }}
+            onPointerDown={(e) => {
+              if ((e.target as HTMLElement).closest("button")) return;
+              viewerDrag.current = { dx: e.clientX - viewerAt.x, dy: e.clientY - viewerAt.y };
+              e.currentTarget.setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              const d = viewerDrag.current;
+              if (d) setViewerAt({ x: Math.max(0, Math.min(window.innerWidth - 60, e.clientX - d.dx)), y: Math.max(0, Math.min(window.innerHeight - 30, e.clientY - d.dy)) });
+            }}
+            onPointerUp={() => (viewerDrag.current = null)}
+          >
+            <span data-cvpcb-viewer-title style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={caption.title}>
+              {caption.title || "Footprint"}
+            </span>
+            <span data-cvpcb-viewer-status style={{ fontWeight: 400, opacity: 0.8 }}>
+              {caption.status}
+            </span>
+            <button onClick={() => setViewer(false)} title="Close" data-cvpcb-viewer-close style={{ padding: "0 6px" }}>
+              {"×"}
+            </button>
+          </div>
+          <FootprintPreview footprint={viewed?.footprint ?? null} height={300} status={!viewId ? "No footprint selected" : viewed ? (viewed.error ?? "") : "Loading…"} />
+        </div>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, marginTop: 8, fontSize: 12 }}>
         <label title="Show only the footprints the selected symbol's footprint filters allow">
           <input type="checkbox" checked={bySymbol} onChange={(e) => setBySymbol(e.target.checked)} /> Filter by the symbol's footprint filters
@@ -307,6 +392,9 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
         <label title="View Selected Footprint">
           <input type="checkbox" checked={viewer} onChange={(e) => setViewer(e.target.checked)} data-cvpcb-viewer-toggle /> View Selected Footprint
         </label>
+        <span style={{ opacity: 0.6 }} title="CvPcb's hotkeys">
+          Tab / Shift+Tab: next list · Enter: assign · Delete: remove · Ctrl+S: save to schematic
+        </span>
         {autoSays?.status && (
           <span data-cvpcb-status style={{ opacity: 0.8 }}>
             {autoSays.status}

@@ -763,6 +763,8 @@ fn handle(
         ("POST", "/api/sch/export_symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::export_symbols(dir, &body).to_string().as_bytes()),
         // Rescue Symbols (`crate::rescue_api`): the candidates the rescuer finds, and the rescue library written with the command that relinks the symbols.
         ("GET", "/api/sch/rescue") => respond(stream, "200 OK", "application/json", crate::rescue_api::candidates(dir).to_string().as_bytes()),
+        // `remapSymbolsCondition` (UI-LEFT-2 LL7): whether the schematic is a legacy one, which alone enables Remap Legacy Library Symbols...
+        ("GET", "/api/sch/legacy") => respond(stream, "200 OK", "application/json", crate::rescue_api::legacy(dir).to_string().as_bytes()),
         ("POST", "/api/sch/rescue") => respond(stream, "200 OK", "application/json", crate::rescue_api::rescue(dir, &body).to_string().as_bytes()),
         // Remap Legacy Library Symbols (`DIALOG_SYMBOL_REMAP::OnRemapSymbols`): the backup, the project table made again, the command that names each symbol's library.
         ("POST", "/api/sch/remap") => respond(stream, "200 OK", "application/json", crate::rescue_api::remap(dir).to_string().as_bytes()),
@@ -836,7 +838,7 @@ fn handle(
             let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
                 None => json!({ "error": "kind is footprint or symbol" }),
                 Some(kind) => {
-                    let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power"));
+                    let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power")).with_columns(&query_value(target, "cols"));
                     match path {
                         "/api/library/entries" => crate::library_search::entries(dir, kind, &query_value(target, "lib"), &filter),
                         "/api/library/search" => {
@@ -879,6 +881,7 @@ fn handle(
         // buttons use in place of a native file dialog.
         ("GET", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::view(dir).to_string().as_bytes()),
         ("POST", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_table(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library_tables/parse") => respond(stream, "200 OK", "application/json", crate::library_tables::parse_rows(&body).to_string().as_bytes()),
         ("POST", "/api/library_tables/check") => respond(stream, "200 OK", "application/json", crate::library_tables::check_rows(dir, &body).to_string().as_bytes()),
         ("GET", "/api/library_tables/normalize") => respond(stream, "200 OK", "application/json", crate::library_tables::normalize(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("POST", "/api/library_tables/add") => respond(stream, "200 OK", "application/json", crate::library_tables::add_library(dir, &body).to_string().as_bytes()),
@@ -962,6 +965,8 @@ fn handle(
         ("GET", "/api/cvpcb/equ_browse") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_browse(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("GET", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_files(dir).to_string().as_bytes()),
         ("POST", "/api/cvpcb/equ_files") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::set_equ_files(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/cvpcb/equ_text") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::equ_text(dir, &query_value(target, "entry")).to_string().as_bytes()),
+        ("POST", "/api/cvpcb/equ_text") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::set_equ_text(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cvpcb/auto_associate") => respond(stream, "200 OK", "application/json", crate::cvpcb_api::auto_associate(dir, &body).to_string().as_bytes()),
         // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
         // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).

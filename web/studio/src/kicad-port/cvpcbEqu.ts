@@ -78,3 +78,40 @@ export function removeEqu(list: readonly string[], selected: readonly number[]):
 export function autoAssociateInput(rows: readonly { ref: string; value: string; footprint: string; libId: string }[], staged: Readonly<Record<string, string>>): { ref: string; value: string; footprint: string; lib_id: string }[] {
   return rows.map((r) => ({ ref: r.ref, value: r.value, footprint: staged[r.ref] ?? r.footprint, lib_id: r.libId }));
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------- CvPcb's hotkeys (UI-LEFT-2 LL7)
+
+/** CvPcb's three lists (`CVPCB_MAINFRAME::CONTROL_TYPE`). */
+export type CvpcbControl = "library" | "component" | "footprint";
+
+/**
+ * `CVPCB_CONTROL::ChangeFocus` (KiCad 25ec2335 cvpcb/tools/cvpcb_control.cpp): Tab (`changeFocusRight`) goes library -> component -> footprint -> library,
+ * Shift+Tab (`changeFocusLeft`) the other way; nothing focused stays so.
+ */
+export function changeFocus(current: CvpcbControl | null, dir: "right" | "left"): CvpcbControl | null {
+  if (current === null) return null;
+  const right: Record<CvpcbControl, CvpcbControl> = { library: "component", component: "footprint", footprint: "library" };
+  const left: Record<CvpcbControl, CvpcbControl> = { library: "footprint", component: "library", footprint: "component" };
+  return dir === "right" ? right[current] : left[current];
+}
+
+/**
+ * `CVPCB_CONTROL::ToNA` with `ITEM_NEXT` (`gotoNextNA`, which Assign Footprint posts after assigning): the first symbol without a footprint after the first
+ * selected one; `null` when there is none, or nothing is selected (`newSel = UINT_MAX`), and the selection stays.
+ */
+export function nextUnassigned(rows: readonly { ref: string }[], footprintOf: (ref: string) => string, selected: readonly string[]): string | null {
+  if (selected.length === 0) return null;
+  const firstSel = rows.findIndex((r) => r.ref === selected[0]);
+  for (let i = firstSel + 1; i < rows.length; i++) if (footprintOf(rows[i]!.ref) === "") return rows[i]!.ref;
+  return null;
+}
+
+/** The CvPcb action a key is (`CVPCB_ACTIONS`' default hotkeys): Tab, Shift+Tab, Enter (Assign Footprint), Delete (Delete Footprint Assignment), Ctrl+S (Save to Schematic). */
+export function cvpcbHotkey(e: { key: string; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): "focusRight" | "focusLeft" | "associate" | "deleteAssoc" | "save" | null {
+  const mod = e.ctrlKey || e.metaKey;
+  if (e.key === "Tab" && !mod && !e.altKey) return e.shiftKey ? "focusLeft" : "focusRight";
+  if (e.key === "Enter" && !mod && !e.shiftKey && !e.altKey) return "associate";
+  if (e.key === "Delete" && !mod && !e.shiftKey && !e.altKey) return "deleteAssoc";
+  if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "s") return "save";
+  return null;
+}

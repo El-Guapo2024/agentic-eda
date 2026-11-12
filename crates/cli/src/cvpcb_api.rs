@@ -11,7 +11,7 @@
 //!
 //! **Where a file is found.** `wxExpandEnvVars( equfile )` -- here the project's variables, `KIPRJMOD` and KiCad's (`library_tables::Env::vars`) -- then the
 //! path as it is when absolute or when it names a file, else `SEARCH_STACK::FindValidPath`. KiCad's working folder is the project's, so a relative path is read
-//! against the board's folder here; the search stack (KiCad's share and template folders) is not searched (**differs**).
+//! against the board's folder first, then CvPcb's search stack as `GlobalPathsAppend` builds it (KiCad's share, footprint and template folders; UI-LEFT-2 LL7).
 
 use crate::board;
 use crate::library_index::{legal_library_name, Kind, LibSource};
@@ -25,12 +25,76 @@ fn bad(message: impl Into<String>) -> Value {
 
 /// Where an entry of the list leads: `wxExpandEnvVars`, then the board's folder for a relative path (see the module doc).
 fn resolve(dir: &Path, vars: &eda_kicad::library_table::Vars, entry: &str) -> PathBuf {
+    let env = crate::library_tables::Env::discover();
+    resolve_with(dir, vars, entry, &search_stack(&env))
+}
+
+/// `buildEquivalenceList`'s lookup (KiCad 25ec2335 cvpcb/auto_associate.cpp): `wxExpandEnvVars( equfile )`; an absolute path, or a relative one that names a
+/// file from KiCad's working folder (the project's, here the board's), as it is; else `SEARCH_STACK::FindValidPath` over CvPcb's search stack (`Kiface().
+/// KifaceSearch()`, [`search_stack`]): the first folder of it that has the file. A path found nowhere is the board folder's, which the caller finds missing
+/// ("Equivalence file '%s' could not be found.").
+fn resolve_with(dir: &Path, vars: &eda_kicad::library_table::Vars, entry: &str, stack: &[PathBuf]) -> PathBuf {
     let expanded = PathBuf::from(vars.expand(entry.trim()));
     if expanded.is_absolute() {
-        expanded
-    } else {
-        dir.join(expanded)
+        return expanded;
     }
+    let here = dir.join(&expanded);
+    if here.is_file() {
+        return here;
+    }
+    stack.iter().map(|base| base.join(&expanded)).find(|p| p.is_file()).unwrap_or(here)
+}
+
+/// CvPcb's search stack, `GlobalPathsAppend( &m_bm.m_search, FACE_CVPCB )` (common/systemdirsappend.cpp): for each base `SystemDirsAppend` finds -- `$KICAD`,
+/// the install prefix (`DEFAULT_INSTALL_PATH`, `/usr/local` on Linux), the stock data path (here the folder above the installed libraries), the documents
+/// folder, the program's folder and the one above it (kicad-cli's), and every folder of `PATH` -- the base, `kicad`, `kicad/share`, `share` and `share/kicad`
+/// under it (a base named `bin` taken from its parent), and under each of those `modules`, `footprints`, `3dmodels` and `template`; then `/usr/local/share`.
+/// Only folders that exist are kept, each once (`SEARCH_STACK::AddPaths`).
+fn search_stack(env: &crate::library_tables::Env) -> Vec<PathBuf> {
+    let mut maybe: Vec<PathBuf> = Vec::new();
+    let split = |v: &str| std::env::split_paths(v).collect::<Vec<_>>();
+    if let Some(k) = env.real.get("KICAD") {
+        maybe.extend(split(k));
+    }
+    maybe.push(PathBuf::from("/usr/local"));
+    if let Some(stock) = env.stock.symbols.parent() {
+        maybe.push(stock.to_path_buf());
+    }
+    if let Some(home) = env.real.get("HOME") {
+        maybe.push(PathBuf::from(home).join("Documents"));
+    }
+    if let Some(bin) = eda_kicad_engine::find_cli().as_deref().and_then(Path::parent) {
+        maybe.push(bin.to_path_buf());
+        if let Some(up) = bin.parent() {
+            maybe.push(up.to_path_buf());
+        }
+    }
+    if let Some(path) = env.real.get("PATH") {
+        maybe.extend(split(path));
+    }
+    let mut bases: Vec<PathBuf> = Vec::new();
+    let add = |list: &mut Vec<PathBuf>, p: PathBuf| {
+        if p.is_dir() && !list.contains(&p) {
+            list.push(p);
+        }
+    };
+    for m in maybe {
+        let base = if m.file_name().is_some_and(|n| n == "bin") { m.parent().map(Path::to_path_buf).unwrap_or(m) } else { m };
+        if base.parent().is_none() {
+            continue; // "at least on linux": a base with no folder left
+        }
+        for sub in ["", "kicad", "kicad/share", "share", "share/kicad"] {
+            add(&mut bases, if sub.is_empty() { base.clone() } else { base.join(sub) });
+        }
+    }
+    let mut stack: Vec<PathBuf> = Vec::new();
+    for b in &bases {
+        for sub in ["modules", "footprints", "3dmodels", "template"] {
+            add(&mut stack, b.join(sub));
+        }
+    }
+    add(&mut stack, PathBuf::from("/usr/local/share"));
+    stack
 }
 
 /// The variables the dialog's grid lists (`m_gridEnvVars`): `KIPRJMOD` and the footprint library folder's (`FOOTPRINT_LIBRARY_ADAPTER::GlobalPathEnvVariableName`,
@@ -121,6 +185,49 @@ fn read_files(dir: &Path) -> Vec<EquFile> {
             }
         })
         .collect()
+}
+
+/// The file an entry of the list names, for Edit (`DIALOG_CONFIG_EQUFILES::OnEditEquFile`: `ExecuteFile( editorname, wxExpandEnvVars( entry ) )`): the
+/// entry expanded and found as [`resolve`] finds it. Only an association file (`.equ`) is opened or written, and never one in KiCad's configuration folder.
+fn equ_path(dir: &Path, entry: &str) -> Result<PathBuf, String> {
+    let env = crate::library_tables::Env::discover();
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
+    let path = resolve(dir, &vars, entry);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("equ")) {
+        return Err(format!("'{}' is not a footprint association file (.equ).", path.display()));
+    }
+    crate::library_tables::refuse_inside_kicads_configuration(&env, &path)?;
+    Ok(path)
+}
+
+/// `GET /api/cvpcb/equ_text?entry=`: Edit's text editor (UI-LEFT-2 LL7). KiCad hands the file to the person's text editor (`Pgm().GetTextEditor()`); a page
+/// cannot start one, so the studio's own editor opens it: `{path, text}` (an empty text for a file not made yet), or `{error}`.
+pub(crate) fn equ_text(dir: &Path, entry: &str) -> Value {
+    match equ_path(dir, entry) {
+        Ok(path) => match std::fs::read(&path) {
+            Ok(bytes) => json!({ "path": path.display().to_string(), "text": String::from_utf8_lossy(&bytes) }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({ "path": path.display().to_string(), "text": "", "new": true }),
+            Err(e) => bad(format!("Error opening equivalence file '{}': {e}", path.display())),
+        },
+        Err(e) => bad(e),
+    }
+}
+
+/// `POST /api/cvpcb/equ_text` `{entry, text}`: the editor's Save writes the file (no undo step: it is a file of the person's, as KiCad's text editor saves it).
+pub(crate) fn set_equ_text(dir: &Path, body: &[u8]) -> Value {
+    let req: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return bad(format!("bad request: {e}")),
+    };
+    let entry = req.get("entry").and_then(Value::as_str).unwrap_or("");
+    let text = req.get("text").and_then(Value::as_str).unwrap_or("");
+    match equ_path(dir, entry) {
+        Ok(path) => match std::fs::write(&path, text) {
+            Ok(()) => json!({ "ok": true, "path": path.display().to_string() }),
+            Err(e) => bad(format!("Could not save '{}': {e}", path.display())),
+        },
+        Err(e) => bad(e),
+    }
 }
 
 /// `FOOTPRINT_LIST::GetFootprintInfo( fpid )`: a `Lib:Name` the footprint libraries of the tables have (`<library folder>/Name.kicad_mod`), or one the design's own
@@ -221,6 +328,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// `buildEquivalenceList`: a relative path names the board folder's file when there is one, else the first folder of CvPcb's search stack that has it.
+    #[test]
+    fn a_relative_association_file_is_the_board_folders_else_the_first_search_folders() {
+        let dir = temp("stack");
+        let (board, a, b) = (dir.join("board"), dir.join("share/kicad/template"), dir.join("other/template"));
+        for d in [&board, &a, &b] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(b.join("x.equ"), "").unwrap();
+        std::fs::write(a.join("x.equ"), "").unwrap();
+        let vars = eda_kicad::library_table::Vars::default();
+        let stack = vec![a.clone(), b.clone()];
+        assert_eq!(resolve_with(&board, &vars, "x.equ", &stack), a.join("x.equ"), "the first folder of the stack that has it");
+        std::fs::write(board.join("x.equ"), "").unwrap();
+        assert_eq!(resolve_with(&board, &vars, "x.equ", &stack), board.join("x.equ"), "the working folder's first");
+        assert_eq!(resolve_with(&board, &vars, "none.equ", &stack), board.join("none.equ"), "found nowhere: the board folder's, which is missing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

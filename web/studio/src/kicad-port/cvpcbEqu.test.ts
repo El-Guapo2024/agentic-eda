@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addEquFiles, autoAssociateInput, equEntryFor, moveEquDown, moveEquUp, relativeTo, removeEqu, viewerCaption, viewerFootprint } from "./cvpcbEqu";
+import { addEquFiles, autoAssociateInput, changeFocus, cvpcbHotkey, equEntryFor, moveEquDown, moveEquUp, nextUnassigned, relativeTo, removeEqu, viewerCaption, viewerFootprint } from "./cvpcbEqu";
 
 test("the viewer shows the picked footprint, else the selected symbol's (InitDisplay)", () => {
   assert.equal(viewerFootprint("Resistor_SMD:R_0603_1608Metric", "Old:Fp"), "Resistor_SMD:R_0603_1608Metric");
@@ -46,4 +46,26 @@ test("Automatically Assign Footprints sees the dialog's staged assignments", () 
     { ref: "R1", value: "10k", footprint: "New:Fp", lib_id: "Device:R" },
     { ref: "R2", value: "10k", footprint: "", lib_id: "Device:R" },
   ]);
+});
+
+test("CvPcb's hotkeys: Tab and Shift+Tab move between the lists, Enter assigns and moves to the next unassigned symbol, Delete, Ctrl+S (UI-LEFT-2 LL7)", () => {
+  const k = (key: string, m: Partial<{ shiftKey: boolean; ctrlKey: boolean }> = {}) => cvpcbHotkey({ key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, ...m });
+  assert.equal(k("Tab"), "focusRight");
+  assert.equal(k("Tab", { shiftKey: true }), "focusLeft");
+  assert.equal(k("Enter"), "associate");
+  assert.equal(k("Delete"), "deleteAssoc");
+  assert.equal(k("s", { ctrlKey: true }), "save");
+  assert.equal(k("a"), null);
+  assert.equal(changeFocus("library", "right"), "component");
+  assert.equal(changeFocus("component", "right"), "footprint");
+  assert.equal(changeFocus("footprint", "right"), "library");
+  assert.equal(changeFocus("library", "left"), "footprint");
+  assert.equal(changeFocus("component", "left"), "library");
+  assert.equal(changeFocus(null, "left"), null);
+  const rows = [{ ref: "C1" }, { ref: "R1" }, { ref: "R2" }, { ref: "U1" }];
+  const fp: Record<string, string> = { C1: "", R1: "R:0603", R2: "", U1: "" };
+  assert.equal(nextUnassigned(rows, (r) => fp[r]!, ["R1"]), "R2");
+  assert.equal(nextUnassigned(rows, (r) => fp[r]!, ["R2"]), "U1");
+  assert.equal(nextUnassigned(rows, (r) => fp[r]!, ["U1"]), null, "none after the last: the selection stays");
+  assert.equal(nextUnassigned(rows, (r) => fp[r]!, []), null, "nothing selected: nothing moves (newSel = UINT_MAX)");
 });

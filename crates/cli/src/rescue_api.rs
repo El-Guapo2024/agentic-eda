@@ -16,12 +16,11 @@
 //! The project is the board: its name is the intent's file name (what the studio's state calls the board and the derived project's root sheet is
 //! named after), its folder `${KIPRJMOD}`.
 //!
-//! **Differs**: KiCad's cached symbol is the legacy cache library's only (`PROJECT_SCH::LegacySchLibs`, the project's `<project>-cache.lib`, looked up
-//! by `Lib:Name`, then `Lib-Name`); a KiCad 6 or later schematic's own `lib_symbols` are not consulted, so a project with no cache library has nothing
-//! to rescue there. The studio reads the board folder's cache library the same way (through kicad-cli's conversion of the legacy file,
-//! `crate::library_convert`) and, for a symbol it does not hold, the design's own copy of the symbol (`design.symbol_library`, what a `.kicad_sch`'s
-//! `lib_symbols` are): a symbol whose library is gone, or whose library symbol's pins changed, can be rescued from the copy the schematic keeps. The
-//! studio's own project library (`eda:`) and generated symbols (`gen:`) have no library file and are never candidates.
+//! The cached symbol is the legacy cache library's only, as KiCad's (`PROJECT_SCH::LegacySchLibs`, the project's `<project>-cache.lib`, looked up by `Lib:Name`,
+//! then `Lib-Name`; UI-LEFT-2 LL7): a KiCad 6 or later schematic's own `lib_symbols` (the design's copy, `design.symbol_library`) are not consulted, so a
+//! project with no cache library has nothing to rescue but a name a library identifier cannot hold. The studio reads the cache library through kicad-cli's
+//! conversion of the legacy file (`crate::library_convert`). The studio's own project library (`eda:`) and generated symbols (`gen:`) have no library file
+//! and are never candidates.
 //!
 //! Not ported: the legacy flavour (`LEGACY_RESCUER`: `RESCUE_CASE_CANDIDATE` and `RESCUE_CACHE_CANDIDATE`, for a schematic none of whose symbols names
 //! a library, `SCH_SCREENS::HasNoFullyDefinedLibIds`), which writes a legacy `.lib` rescue library and the project's legacy library list; the studio has
@@ -173,6 +172,15 @@ pub(crate) fn has_no_fully_defined_lib_ids(design: &Design) -> bool {
     !ids.is_empty() && !ids.iter().any(|id| id.split_once(':').is_some_and(|(l, _)| !l.is_empty()))
 }
 
+/// `GET /api/sch/legacy`: `{legacy}`, `SCH_EDIT_FRAME::setupUIConditions`' `remapSymbolsCondition` ("The remapping can only be performed on legacy projects."):
+/// the menu entry Remap Legacy Library Symbols... is enabled only for a schematic none of whose symbols names a library (UI-LEFT-2 LL7).
+pub(crate) fn legacy(dir: &Path) -> Value {
+    match board::load(dir) {
+        Ok((_, design, _)) => json!({ "legacy": has_no_fully_defined_lib_ids(&design) }),
+        Err(e) => json!({ "legacy": false, "error": board::reasons(&e) }),
+    }
+}
+
 /// `SCH_SCREENS( Root )`: the root and every screen some sheet shows.
 fn screens(design: &Design) -> impl Iterator<Item = &eda_model::ir::SchematicSection> {
     let reachable = eda_model::sheet_list::reachable_files(design);
@@ -219,18 +227,10 @@ fn cache_library_symbols(path: &Path) -> BTreeMap<String, LibrarySymbol> {
     section.symbols.iter().filter_map(|s| section.flatten(&s.lib_id).ok().map(|f| (s.lib_id.clone(), f))).collect()
 }
 
-/// The cached symbol of `lib_id`: the cache library's (`findSymbol( symbolName, LegacySchLibs, true )` by `Lib:Name`, then `Lib-Name`), else the design's own
-/// copy (the module doc's **Differs**).
-fn cached(cache: &BTreeMap<String, LibrarySymbol>, design: &Design, lib_id: &str) -> Option<LibrarySymbol> {
+/// The cached symbol of `lib_id`: the cache library's (`findSymbol( symbolName, LegacySchLibs, true )` by `Lib:Name`, then `Lib-Name`), and nothing else.
+fn cached(cache: &BTreeMap<String, LibrarySymbol>, lib_id: &str) -> Option<LibrarySymbol> {
     let (lib, item) = lib_id.split_once(':').unwrap_or(("", lib_id));
-    if let Some(s) = cache.get(lib_id).or_else(|| cache.get(&format!("{lib}-{item}"))) {
-        return Some(s.clone());
-    }
-    let section = design.symbol_library.as_ref()?;
-    section.by_lib_id(lib_id)?;
-    let mut s = section.flatten(lib_id).ok()?;
-    s.lib_id = lib_id.to_string();
-    Some(s)
+    cache.get(lib_id).or_else(|| cache.get(&format!("{lib}-{item}"))).cloned()
 }
 
 /// The library symbol of `lib_id` the board's tables give (`SchGetLibSymbol`; the library reader flattens a derived one, which is its root's pins).
@@ -250,7 +250,7 @@ fn candidates_of(dir: &Path) -> Result<(Vec<Candidate>, Vec<Placed>, String, boo
     let cache = cache_library_path(dir, &project).map(|p| cache_library_symbols(&p)).unwrap_or_default();
     let src = crate::library_tables::libs(dir, crate::library_index::Kind::Symbol);
     let nickname = format!("{project}-rescue");
-    let found = find_rescues(&placed, &nickname, &|id| cached(&cache, &design, id), &|id| library_symbol(&src, id));
+    let found = find_rescues(&placed, &nickname, &|id| cached(&cache, id), &|id| library_symbol(&src, id));
     Ok((found, placed, nickname, false))
 }
 
@@ -675,8 +675,12 @@ mod tests {
 )
 "#;
 
+    /// The project's legacy cache library (`<project>-cache.lib`, KiCad 5's format, mils) with the two symbols as they were when cached, under the
+    /// `Lib-Name` names `findSymbol` looks up second: R with its pins at (0, 150) and (0, -150) mils, (0, 3.81) and (0, -3.81) mm.
+    const CACHE_LIB: &str = "EESchema-LIBRARY Version 2.4\n#encoding utf-8\n#\n# Gone-R\n#\nDEF Gone-R R 0 0 N Y 1 F N\nF0 \"R\" 80 0 50 V V C CNN\nF1 \"Gone-R\" 0 0 50 V V C CNN\nF2 \"\" -70 0 50 V I C CNN\nF3 \"\" 0 0 50 H I C CNN\nDRAW\nS -40 -100 40 100 0 1 10 N\nX ~ 1 0 150 50 D 50 50 1 1 P\nX ~ 2 0 -150 50 U 50 50 1 1 P\nENDDRAW\nENDDEF\n#\n# MyParts-R\n#\nDEF MyParts-R R 0 0 N Y 1 F N\nF0 \"R\" 80 0 50 V V C CNN\nF1 \"MyParts-R\" 0 0 50 V V C CNN\nF2 \"\" -70 0 50 V I C CNN\nF3 \"\" 0 0 50 H I C CNN\nDRAW\nS -40 -100 40 100 0 1 10 N\nX ~ 1 0 150 50 D 50 50 1 1 P\nX ~ 2 0 -150 50 U 50 50 1 1 P\nENDDRAW\nENDDEF\n#\n#End Library\n";
+
     /// A board whose schematic has U1 (`MyParts:R`, a library of the board's table whose R has since moved its pin 2) and U2 (`Gone:R`, a library no
-    /// table names), each with the copy the schematic kept of it.
+    /// table names), each with the copy the schematic kept of it, and the project's legacy cache library with both (KiCad's rescuer reads that only).
     fn rescue_board(dir: &Path) {
         use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
         let part = |r: &str, symbol: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: Some("10k".into()), package: None, footprint: None, symbol: Some(symbol.into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_nm: None, datasheet: None, edge: None };
@@ -700,6 +704,7 @@ mod tests {
         }))
         .unwrap();
         board::save(dir, &design).unwrap();
+        std::fs::write(dir.join("intent-cache.lib"), CACHE_LIB).unwrap();
         let meta = board::Meta { intent: intent.display().to_string(), snap_nm: eda_model::units::mm(0.1), spacing_nm: eda_model::units::mm(0.3) };
         std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
@@ -709,8 +714,17 @@ mod tests {
     /// missing library (`lib_symbol_issues`) is found before, and after the rescue kicad-cli reads both symbols from the rescue library.
     #[test]
     fn rescue_symbols_writes_the_rescue_library_and_relinks_the_symbols_in_one_undo_step() {
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("skipped: the legacy cache library is read through kicad-cli's conversion");
+            return;
+        }
         let dir = tempfile_dir();
         rescue_board(&dir);
+        // without the cache library there is nothing to rescue: the schematic's own copies are not KiCad's cache (UI-LEFT-2 LL7)
+        let cache = std::fs::read(dir.join("intent-cache.lib")).unwrap();
+        std::fs::remove_file(dir.join("intent-cache.lib")).unwrap();
+        assert_eq!(candidates(&dir)["candidates"], json!([]), "no cache library: nothing to rescue");
+        std::fs::write(dir.join("intent-cache.lib"), cache).unwrap();
         let found = candidates(&dir);
         assert_eq!(found["legacy"], false, "{found}");
         assert_eq!(found["library"], "intent-rescue");
