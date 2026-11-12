@@ -17,7 +17,7 @@ import { rotateCarriedPad } from "../kicad-port/fpPadPlacer";
 import { newPadFromMaster } from "../kicad-port/padSettings";
 import { worldToScreen, zoomAbout, type ViewTransform } from "../kicad-port/view";
 import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbol } from "./librarySaveOps";
-import { fpEditTarget, type Snap } from "../kicad-port/fpItems";
+import { fpEditTarget, fpHitTest, fpMirrorCmd, fpSelectionTarget, type Snap } from "../kicad-port/fpItems";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
 import { asPickedImage } from "./imageFiles";
@@ -41,7 +41,7 @@ export interface EditorFrameContext {
   symApi: SymbolEditorApi;
   symDispatch: Dispatch<SymAction>;
   /** The studio's preferences (the Symbol Editor's Repeated Items: `SYMBOL_EDITOR_SETTINGS::m_Repeat`); the defaults when absent. */
-  prefs?: Pick<Preferences, "symRepeatPinStepMils" | "symRepeatLabelDelta" | "fpRotationStepDeg" | "fpArcEditMode">;
+  prefs?: Pick<Preferences, "symRepeatPinStepMils" | "symRepeatLabelDelta" | "fpRotationStepDeg" | "fpArcEditMode" | "fpSelectionFilter">;
   /** Changes some of the studio's preferences (`SET_PREFERENCES` with the rest kept): the Footprint Editor's arc mode actions set `fpArcEditMode`. */
   setPrefs?: (patch: Partial<Preferences>) => void;
 }
@@ -108,6 +108,16 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
   if (fp) {
     // Select (`ACTIONS::selectSetRect`, the first button of the right toolbar's Selection modes group): back to the select tool.
     m.set("common.Interactive.selectSetRect", () => void ctx.fpApi.setTool("select"));
+    // `PCB_SELECTION_TOOL::RequestSelection` with an empty selection: the item the selection tool would pick under the cursor (FootprintCanvas.tsx's `hitTest`: what is
+    // hidden or filtered out by the Selection Filter is not picked; an item of a group gives the outermost group, within the entered one), or null.
+    const hoverItem = (): string | null => {
+      const st = ctx.fpApi.getState();
+      const c = st.cursorNm;
+      if (!st.footprint || !c) return null;
+      const vis = { layerVisible: st.layerVisible, layerOpacity: st.layerOpacity, highContrast: st.highContrast, activeLayer: st.activeLayer, filter: ctx.prefs?.fpSelectionFilter };
+      const hit = fpHitTest(st.footprint, c.x, c.y, Math.max(80_000, 6 / st.view.scale), vis);
+      return hit ? fpSelectionTarget(st.footprint, hit.id, st.enteredGroupId) : null;
+    };
     // `updateModificationPoint`'s grid snap of a several-item pivot (`grid.BestSnapAnchor( refPt, nullptr )`), on the footprint editor's grid.
     const gridSnap: Snap = (p) => {
       // (`grid.SetUseGrid( GetGridSnapping() )`: no grid while the Footprint Editor does not snap to it)
@@ -132,8 +142,19 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     m.set("pcbnew.InteractiveEdit.rotateCcw", rotate(1));
     m.set("pcbnew.InteractiveEdit.rotateCw", rotate(-1));
     // Mirror Horizontally / Vertically (`EDIT_TOOL::Mirror`, no default hotkey): the mirrorable items of the selection about the modification point, on their own layers.
-    m.set("pcbnew.InteractiveEdit.mirrorHoriontally", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("left_right", gridSnap));
-    m.set("pcbnew.InteractiveEdit.mirrorVertically", () => ctx.fpApi.getState().selection.size > 0 && void ctx.fpApi.mirrorSelection("top_bottom", gridSnap));
+    // With nothing selected, `RequestSelection` takes the item under the cursor (a hover selection: the selection tool's pick, its group promoted), mirrors it and
+    // clears the selection after (`if( selection.IsHover() ) selectionClear`); nothing there, nothing done. Locked items are not filtered out here
+    // (`FilterCollectorForLockedItems` acts in the board editor only, `IsType( FRAME_PCB_EDITOR )`).
+    const mirror = (direction: "left_right" | "top_bottom") => () => {
+      const st = ctx.fpApi.getState();
+      if (st.selection.size > 0) return void ctx.fpApi.mirrorSelection(direction, gridSnap);
+      const id = hoverItem();
+      if (!id || !st.name || !st.footprint) return;
+      const cmd = fpMirrorCmd(st.footprint, st.name, [id], direction, gridSnap);
+      if (cmd) void ctx.fpApi.cmd(cmd);
+    };
+    m.set("pcbnew.InteractiveEdit.mirrorHoriontally", mirror("left_right"));
+    m.set("pcbnew.InteractiveEdit.mirrorVertically", mirror("top_bottom"));
     // Swap (Alt+S, `EDIT_TOOL::Swap`): the selection in selection order, two pads trading their copper's places (`PAD::SwapShapePositions`), one undo step (UI-LEFT-2 PP15).
     m.set("pcbnew.InteractiveEdit.swap", () => ctx.fpApi.getState().selection.size > 1 && void ctx.fpApi.swapSelection());
     // Show Properties (`ACTIONS::showProperties`, `FOOTPRINT_EDITOR_CONTROL::ToggleProperties`): the frame's `PCB_PROPERTIES_PANEL` beside the Libraries tree (UI-LEFT Y3).

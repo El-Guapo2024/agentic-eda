@@ -17,17 +17,21 @@ import {
   convertAvailability,
   copiedLineWidth,
   deleteCmd,
-  outsetShapes,
+  outsetItems,
+  outsetPadOf,
   planConvertToLines,
   planConvertToTracks,
   planSegmentToArc,
   resolveConvertSettings,
   type ConvertSettings,
   type OutsetParams,
+  type OutsetSource,
 } from "../kicad-port/pcbConvert";
+import { padById } from "../kicad-port/pcbItems";
 import { ConversionSettingsDialog, CreateTracksDialog, OutsetItemsDialog } from "../components/PcbConvertDialogs";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { openSweepDialog } from "./pcbSweepDialogs";
+import { showError } from "../components/library/libraryDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
 /** Remembered between invocations, like the C++ `m_userSettings` and `static` outset parameters. */
@@ -97,12 +101,16 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
             showCenterline: true,
             showHull: true,
             onOk: (chosen: ConvertSettings) => {
+              // `CONVERT_SETTINGS previousSettings = m_userSettings`: the dialog writes `m_userSettings`, and a failed conversion puts the old ones back.
+              const previous = last.convert;
               last.convert = chosen;
               void (async () => {
                 const resolved = kind === "poly" ? resolveConvertSettings(chosen, layerLineWidthNm(layer, board?.board_rules?.text_graphics)) : chosen;
                 const reply = await convertPolys(ids, resolved.strategy, resolved.gapNm);
                 if (!reply.ok || reply.rings.length === 0) {
-                  if (kind === "poly") toast(`Could not convert selection: ${resolved.strategy === "bounding_hull" ? "Resulting polygon would be empty" : "Objects must form a closed shape"}`, "error");
+                  // `DisplayErrorMessage( m_frame, _( "Could not convert selection" ), msg ); m_userSettings = previousSettings;`
+                  last.convert = previous;
+                  void showError("Could not convert selection", resolved.strategy === "bounding_hull" ? "Resulting polygon would be empty" : "Objects must form a closed shape");
                   return;
                 }
                 const sources = chosen.deleteOriginals ? reply.consumed : [];
@@ -110,7 +118,8 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
                 // COPY_LINEWIDTH takes the stroke of the top-left source item.
                 const width = resolved.strategy === "copy_linewidth" ? (copiedLineWidth(board, ids) ?? resolved.widthNm) : resolved.widthNm;
                 const adds: Cmd[] = reply.rings.map((ring) => ({ op: "add_shape", shape: { kind: "polygon", layer, stroke_width: width, filled: resolved.strategy === "centerline", pts: ring.map(([x, y]) => ({ x, y })) } }));
-                await applyEdit([...adds, ...deleteCmds], sources);
+                // `commit.Add( graphic )` without selecting it; with Delete Originals `m_selectionTool->ClearSelection()` first.
+                await applyEdit([...adds, ...deleteCmds], sources, null, { keep: !chosen.deleteOriginals, selectCreated: false });
               })();
             },
           }),
@@ -127,10 +136,11 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
     "pcbnew.Convert.convertToLines",
     pcbOnly(() => {
       if (!board) return;
+      // The client filter keeps locked items (no `FilterCollectorForLockedItems`).
       const ids = requestFiltered((id) => {
         const s = api.shapeById(id);
         return s ? s.kind === "segment" || s.kind === "arc" || s.kind === "polygon" || s.kind === "rect" : !!api.zoneById(id);
-      });
+      }, true);
       if (ids.length === 0 || !convertAvailability(board, ids).lines) return;
       const layer = destLayer();
       if (!layer) return;
@@ -145,7 +155,8 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
             last.convert = { ...last.convert, deleteOriginals: chosen.deleteOriginals };
             const plan = planConvertToLines(board, ids, layer, DEFAULT_CONVERTED_LINE_WIDTH_NM, chosen.deleteOriginals);
             if (plan.empty) return;
-            void applyEdit(plan.cmds, plan.removed);
+            // `commit.Add` only; Delete Originals clears the selection first.
+            void applyEdit(plan.cmds, plan.removed, null, { keep: !chosen.deleteOriginals, selectCreated: false });
           },
         }),
       });
@@ -161,7 +172,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
       const ids = requestFiltered((id) => {
         const s = api.shapeById(id);
         return s ? s.kind === "segment" || s.kind === "arc" || s.kind === "polygon" || s.kind === "rect" : !!api.zoneById(id);
-      });
+      }, true);
       if (ids.length === 0 || !convertAvailability(board, ids).tracks) return;
       const nets = boardNets(board);
       if (nets.length === 0) {
@@ -169,7 +180,8 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
         return;
       }
       const active = destLayer();
-      const layer = active && board.layers.includes(active) ? active : (last.tracks.layer && board.layers.includes(last.tracks.layer) ? last.tracks.layer : (board.layers[0] ?? "F.Cu"));
+      // `if( !IsCopperLayer( targetLayer ) ) targetLayer = frame->SelectOneLayer( F_Cu, .. )`: the active copper layer, else F.Cu to start the choice from.
+      const layer = active && board.layers.includes(active) ? active : (board.layers[0] ?? "F.Cu");
       openSweepDialog({
         kind: "element",
         element: createElement(CreateTracksDialog, {
@@ -177,12 +189,14 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           copperLayers: board.layers,
           layer,
           net: nets.includes(last.tracks.net) ? last.tracks.net : (nets[0] ?? ""),
-          deleteOriginals: last.tracks.deleteOriginals,
+          // `m_userSettings.m_DeleteOriginals`: the one setting Create Lines and the polygon conversions share.
+          deleteOriginals: last.convert.deleteOriginals,
           onOk: (v: { layer: string; net: string; deleteOriginals: boolean }) => {
             last.tracks = v;
+            last.convert = { ...last.convert, deleteOriginals: v.deleteOriginals };
             const plan = planConvertToTracks(board, ids, v.layer, v.net, DEFAULT_CONVERTED_TRACK_WIDTH_NM, v.deleteOriginals);
             if (plan.empty) return;
-            void applyEdit(plan.cmds, plan.removed);
+            void applyEdit(plan.cmds, plan.removed, null, { keep: !v.deleteOriginals, selectCreated: false });
           },
         }),
       });
@@ -195,25 +209,31 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
     "pcbnew.Convert.convertToArc",
     pcbOnly(() => {
       if (!board) return;
-      const ids = requestFiltered((id) => !!api.shapeById(id) || !!board.routing?.tracks.some((t) => t.id === id));
+      // `IsType( { PCB_SHAPE_T, PCB_TRACE_T, PCB_ARC_T } )`, locked items kept.
+      const ids = requestFiltered((id) => !!api.shapeById(id) || !!board.routing?.tracks.some((t) => t.id === id), true);
       const first = ids[0];
       if (!first) return;
+      // `getStartEndPoints` empty or a shape that is no segment: `return -1`, nothing said.
       const cmds = planSegmentToArc(board, first);
-      if (!cmds) {
-        toast("Create Arc needs a single straight line or track (or an arc track).");
-        return;
-      }
-      void applyEdit(cmds);
+      if (!cmds) return;
+      // `commit.Add( arc ); commit.Push( _( "Create Arc" ) )`: the source stays selected, the arc is not.
+      void applyEdit(cmds, [], null, { selectCreated: false });
     })
   );
 
   // --------------------------------------------------------------------- Outsets
-  // CONVERT_TOOL::OutsetItems: DIALOG_OUTSET_ITEMS, then OUTSET_ROUTINE over the selected graphics; the new items are selected.
+  // CONVERT_TOOL::OutsetItems: DIALOG_OUTSET_ITEMS, then OUTSET_ROUTINE over the selected graphics and pads, as one commit ("Outset Items");
+  // the originals are deselected and the new items selected, and the routine's status message goes to the infobar.
   m.set(
     "pcbnew.Convert.outsetItems",
     pcbOnly(() => {
       if (!board) return;
-      const ids = requestFiltered((id) => !!api.shapeById(id));
+      // `IsType( { PCB_PAD_T, PCB_SHAPE_T } )`, then `FilterCollectorForLockedItems` (a pad is locked with its footprint: `PAD::IsLocked`).
+      const ids = requestFiltered((id) => {
+        if (api.shapeById(id)) return true;
+        const hit = padById(board, id);
+        return !!hit && !(board.locked ?? []).includes(hit.part.ref);
+      });
       if (ids.length === 0) return;
       const layers = [...board.layers, ...STANDARD_LAYERS.map((l) => l.label)];
       const saved: OutsetParams = last.outset ?? { ...DEFAULT_OUTSET_PARAMS, lineWidthNm: lineThicknessNm(board.board_rules?.text_graphics, "Edge.Cuts") };
@@ -226,8 +246,19 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           layerDefaultWidth: (layer: string) => layerLineWidthNm(layer, board?.board_rules?.text_graphics),
           onOk: (params: OutsetParams) => {
             last.outset = params;
-            const shapes = ids.map((id) => api.shapeById(id)).filter((s): s is NonNullable<typeof s> => !!s);
-            const res = outsetShapes(shapes, params);
+            // The selection in its order, pads and shapes alike (`for( EDA_ITEM* item : selection ) outset_routine.ProcessItem( *board_item )`).
+            const sources: OutsetSource[] = [];
+            for (const id of ids) {
+              const shape = api.shapeById(id);
+              if (shape) {
+                sources.push({ kind: "shape", shape });
+                continue;
+              }
+              const hit = padById(board, id);
+              const pad = hit ? outsetPadOf(id, hit.pad, hit.part) : null;
+              if (pad) sources.push({ kind: "pad", pad });
+            }
+            const res = outsetItems(sources, params);
             const cmds: Cmd[] = [...res.add.map((shape): Cmd => ({ op: "add_shape", shape })), ...res.remove.map((id): Cmd => ({ op: "delete_shape", id }))];
             if (cmds.length === 0) {
               if (res.message) toast(res.message);

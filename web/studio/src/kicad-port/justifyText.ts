@@ -4,10 +4,12 @@
 //                                RIGHT )`, locked items filtered out of the request (`FilterCollectorForLockedItems`), one commit (titled
 //                                "Left Justify" / "Center Justify" / "Right Justify"). The same tool runs in the Footprint Editor.
 //
-// The board's own text is `drawings.texts` (a footprint's reference and value are not items of their own here); a footprint's texts in the
+// The board's own text is `drawings.texts` and `drawings.text_boxes` (a footprint's reference and value are not items of their own here, so the
+// `PCB_FIELD_T` case is not ported); a footprint's texts in the
 // Footprint Editor are its `texts`. One batch is one undo step, like the commit. (The Schematic Editor's `SCH_EDIT_TOOL::JustifyText` needs
 // a justification on the schematic's text, which the model does not have yet.)
 import type { BoardState, Cmd, CmdText, TextJustify } from "../api/types";
+import { textBoxToCmd } from "./pcbTextBox";
 
 /**
  * The verbs that justify the board texts among `ids`: only a text whose justification changes needs one, and a locked text is skipped
@@ -26,6 +28,16 @@ export function boardJustifyCmds(board: BoardState, ids: readonly string[], just
     }
     if (t.justify === justify) continue;
     cmds.push({ op: "edit_text", id: t.id, content: t.content, angle: t.angle, layer: t.layer, size_nm: t.size, stroke_width: t.stroke_width, justify, mirror: t.mirror });
+  }
+  // `PCB_TEXTBOX_T`: a text box takes the justification too (task-v10-handlers: the studio left them alone)
+  for (const b of board.drawings?.text_boxes ?? []) {
+    if (!wanted.has(b.id)) continue;
+    if (locked.has(b.id)) {
+      skippedLocked++;
+      continue;
+    }
+    if (b.halign === justify) continue;
+    cmds.push({ op: "pcb_item", verb: "edit_text_box", id: b.id, text_box: textBoxToCmd({ ...b, halign: justify }) });
   }
   return { cmds, skippedLocked };
 }

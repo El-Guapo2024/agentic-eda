@@ -6,6 +6,9 @@
 import type { Cmd, Sheet } from "../api/types";
 import { loadHierLabels, pinExtentOf, sheetAt } from "../components/schematic/schPinTool";
 import { autoplacePins, hasUndefinedPins, pinsToCleanUp, unplacedLabels } from "../kicad-port/schSheetPins";
+import { fetchHierarchyTree } from "../api/schControlClient";
+import { syncSheetPaths } from "../kicad-port/schSyncSheetList";
+import { samePath } from "../kicad-port/sheetPages";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import type { SchEditContext } from "./schEditActions";
 
@@ -31,6 +34,12 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
     return state.cursorNm ? sheetAt(sch, [state.cursorNm.x, state.cursorNm.y], 6 / (state.schematicView.scale || 1)) : undefined;
   };
 
+  /** `dynamic_cast<SCH_SHEET*>( m_selectionTool->GetSelection().Front() )`: the first selected item when it is a sheet. */
+  const frontSheet = (): Sheet | undefined => {
+    const first = state.selection.values().next().value;
+    return sch && first !== undefined ? sch.sheets.find((s) => s.id === first) : undefined;
+  };
+
   // Place Pins from Sheet: arms the tool; with a sheet at hand its labels are read straight away, otherwise the first click picks a sheet.
   m.set(
     "eeschema.InteractiveDrawing.placeSheetPin",
@@ -38,6 +47,8 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
       dispatch({ type: "SET_DRAW_STATE", draw: null });
       if (state.activeTool === "sch_sheet_pin") return void dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       const sheet = targetSheet();
+      // `m_toolMgr->RunAction( ACTIONS::selectionClear )` once the sheet is taken
+      dispatch({ type: "SET_SELECTION", refs: [] });
       if (!sheet) {
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_sheet_pin" });
         dispatch({ type: "SET_DRAW_STATE", draw: { kind: "sch_shape", pin: { sheetId: null, queue: [] } } });
@@ -52,17 +63,23 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
     })
   );
 
-  // Autoplace All Sheet Pins: a pin for every label of the sheet's file that has none, laid out from the sheet's corner (kicad-port/schSheetPins.ts `autoplacePins`), one undo step.
+  // Autoplace All Sheet Pins -- `AutoPlaceAllSheetPins`: the sheet is the selection's first item (`GetSelection().Front()`: no hover; nothing happens when it is
+  // not a sheet); a pin for every label of the sheet's file that has none, laid out from the sheet's corner (kicad-port/schSheetPins.ts `autoplacePins`). The
+  // selection is cleared either way ("No new hierarchical labels found." when there is nothing to place), and each pin is its own commit ("Add Sheet Pin", pushed
+  // inside the loop), so each is its own undo step.
   m.set(
     "eeschema.InteractiveDrawing.autoplaceAllSheetPins",
     rootSheetOnly(() => {
-      const sheet = targetSheet();
+      const sheet = frontSheet();
       if (!sheet) return;
-      void loadHierLabels(state.currentSheetPath, sheet.id).then((labels) => {
+      void loadHierLabels(state.currentSheetPath, sheet.id).then(async (labels) => {
         const placed = autoplacePins({ at: sheet.at, size: sheet.size }, sheet.pins, labels, pinExtentOf);
+        dispatch({ type: "SET_SELECTION", refs: [] });
         if (placed.length === 0) return info(NO_NEW_LABELS);
-        const cmds: Cmd[] = placed.map((p) => ({ op: "sch_edit", verb: "add_sheet_pin", sheet: sheet.id, name: p.label.name, shape: p.label.shape ?? "passive", at: { x: p.at[0], y: p.at[1] } }));
-        void api.cmdBatch(cmds);
+        for (const p of placed) {
+          const ok = await api.cmd({ op: "sch_edit", verb: "add_sheet_pin", sheet: sheet.id, name: p.label.name, shape: p.label.shape ?? "passive", at: { x: p.at[0], y: p.at[1] } } as Cmd);
+          if (!ok) break;
+        }
       });
     })
   );
@@ -87,15 +104,27 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
     "eeschema.InteractiveDrawing.syncSheetPins",
     rootSheetOnly(() => {
       const sheet = targetSheet();
-      if (sheet) dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: [sheet.id], first: sheet.id } });
+      // `current.push_back( sheet )`: the one sheet, on the sheet path in view
+      if (sheet) dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: [sheet.id], first: sheet.id, path: [...state.currentSheetPath] } });
     })
   );
+  // Sync All: every sheet path of the whole hierarchy (kicad-port/schSyncSheetList.ts), each entry a `/`-joined path from the root (`path: []`); the
+  // dialog addresses each sheet's edits to its own sheet path.
   m.set(
     "eeschema.InteractiveDrawing.syncAllSheetsPins",
     rootSheetOnly(() => {
-      if (!sch || sch.sheets.length === 0) return info("No sub schematic found in the current project");
-      const selected = targetSheet();
-      dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: sch.sheets.map((s) => s.id), first: selected?.id } });
+      // "If a sheet is currently selected, pre-select its tab in the dialog": the selection's first item (`GetSelection().Front()`), not the one under the cursor
+      const selected = frontSheet();
+      const here = [...state.currentSheetPath];
+      void fetchHierarchyTree().then(({ sheets, virtualRoot }) => {
+        const paths = syncSheetPaths(sheets, virtualRoot);
+        if (paths.length === 0) return info("No sub schematic found in the current project");
+        // `sheet == aInitialSheet`: the first path that ends in the selected sheet (a screen's sheets are listed under the first path reaching it)
+        const hereFile = sheets.find((e) => samePath(e.path, here))?.file;
+        const fileOf = (p: readonly string[]) => sheets.find((e) => samePath(e.path, p))?.file;
+        const first = selected ? paths.find((p) => p[p.length - 1] === selected.id && fileOf(p.slice(0, -1)) === hereFile) : undefined;
+        dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: paths.map((p) => p.join("/")), first: first?.join("/"), path: [] } });
+      }, (e: unknown) => dispatch({ type: "TOAST", message: String(e instanceof Error ? e.message : e), kind: "error" }));
     })
   );
 }

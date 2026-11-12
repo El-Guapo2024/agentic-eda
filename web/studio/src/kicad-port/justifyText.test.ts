@@ -51,3 +51,15 @@ test("footprint justify edits the footprint's own texts by id", () => {
   const cmds = footprintJustifyCmds("R_0603", texts, ["t1", "t2"], "left");
   assert.deepEqual(cmds, [{ op: "edit_footprint_text", footprint: "R_0603", id: "t1", content: "REF**", angle: 0, layer: "F.SilkS", size_nm: 1000, stroke_width: 150, justify: "left", mirror: false }]);
 });
+
+test("board justify takes the selected text boxes too (`PCB_TEXTBOX_T`), a locked one skipped", () => {
+  const b = board([]);
+  const box = { id: "tb", layer: "F.SilkS", text: "x", start: [0, 0], end: [10, 10], pts: [], angle: 0, margins: [1, 1, 1, 1], border: true, stroke_width: 100, line_style: "solid", stroke_color: null, knockout: false, size: 1000, width: 1000, thickness: 150, thickness_auto: false, halign: "left", valign: "top", mirror: false, bold: false, italic: false, line_spacing_permille: 1000, face: null };
+  (b.drawings as unknown as { text_boxes: unknown[] }).text_boxes = [box, { ...box, id: "tb2" }, { ...box, id: "tb3", halign: "right" }];
+  (b as unknown as { locked: string[] }).locked = ["tb2"];
+  const { cmds, skippedLocked } = boardJustifyCmds(b, ["tb", "tb2", "tb3"], "right");
+  assert.equal(skippedLocked, 1);
+  assert.equal(cmds.length, 1);
+  const c = cmds[0] as unknown as { op: string; verb: string; id: string; text_box: { halign: string; text: string } };
+  assert.deepEqual([c.op, c.verb, c.id, c.text_box.halign, c.text_box.text], ["pcb_item", "edit_text_box", "tb", "right", "x"]);
+});

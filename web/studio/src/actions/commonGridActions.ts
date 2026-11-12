@@ -47,6 +47,8 @@ export function registerGridActions(m: Map<string, ActionHandler>, ctx: CommonAc
   m.set("common.Control.gridSetOrigin", (arg) => {
     const direct = pointOfParameter(arg);
     if (direct) return setOrigin(direct);
+    // `if( m_isFootprintEditor && !getEditFrame<PCB_BASE_EDIT_FRAME>()->GetModel() ) return 0;` (task-v10-handlers: the picker ran with no footprint open)
+    if (tab === "footprint" && !ctx.fpApi.getState().footprint) return;
     picker.start({
       kind: "point",
       prompt: "Grid Origin: click to place it, Esc to cancel",

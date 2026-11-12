@@ -12,6 +12,7 @@ import type { CustomDiffPair } from "../kicad-port/pcbParityState";
 import { skipCurrentRoute } from "../components/canvas/routeQueue";
 import { DiffPairDimensionsDialog, LayerPairDialog } from "../components/PcbRouterDialogs";
 import { openSweepDialog } from "./pcbSweepDialogs";
+import { showError } from "../components/library/libraryDialogs";
 import type { SweepCtx } from "./pcbSweepKit";
 
 /** `m_pairs` of the board as the studio knows them: the stored settings (or the default outer pair), never naming a layer the board lacks. */
@@ -71,7 +72,8 @@ export function registerPcbRouterSweep(m: Map<string, () => void>, ctx: SweepCtx
           copper: board.layers,
           onOk: (next: LayerPairSettings) => {
             dispatch({ type: "PCBX", patch: { layerPairs: next } });
-            if (next.current.a === next.current.b) toast("Warning: top and bottom layers are same.");
+            // `DisplayInfoMessage( frame(), _( "Warning: top and bottom layers are same." ) )`: KiCad's "Information" message box
+            if (next.current.a === next.current.b) void showError("Warning: top and bottom layers are same.", undefined, "Information");
           },
         }),
       });

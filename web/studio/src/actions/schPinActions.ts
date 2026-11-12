@@ -8,7 +8,7 @@ import type { SchEditContext } from "./schEditActions";
 import { PIN_FUNCTION_ACTION, pinFunctionsOf, setPinFunctionCmd } from "../kicad-port/schSymbolMenus";
 
 export function registerSchPinActions(registry: ActionMap, ctx: SchEditContext): void {
-  const { state, api, dispatch } = ctx;
+  const { state, api } = ctx;
   const m = schematicActions(registry, state.tab);
   const sch = state.schematic;
 
@@ -40,15 +40,12 @@ export function registerSchPinActions(registry: ActionMap, ctx: SchEditContext):
   });
 
   // Swap Unit Labels: `GetSameSymbolMultiUnitSelection` -- the selected symbols are units of one reference that has several units placed; each pin of those units needs
-  // exactly one net label (the verb checks it). A reference is one selectable item for all its placed units.
+  // exactly one net label (the verb checks it). A reference is one selectable item for all its placed units. Fewer than two units of one reference: nothing,
+  // and nothing said (`if( selectedUnits.size() < 2 ) return 0`).
   m.set("eeschema.InteractiveEdit.swapUnitLabels", () => {
     if (!sch) return;
     const ids = [...new Set(ctx.requestSelection().filter((id) => sch.symbols.some((s) => s.id === id)))];
-    if (ids.length === 0) return;
-    if (ids.length > 1 || sch.symbols.filter((s) => s.id === ids[0]).length < 2) {
-      dispatch({ type: "TOAST", message: ids.length > 1 ? "Select the units of one multi-unit symbol." : "Only one unit of this symbol is placed.", kind: "info" });
-      return;
-    }
+    if (ids.length !== 1 || sch.symbols.filter((s) => s.id === ids[0]).length < 2) return;
     void api.cmd({ op: "sch_edit", verb: "swap_unit_labels", ids });
   });
 }

@@ -217,8 +217,10 @@ pub fn boolean_shapes(dr: &mut DrawingsSection, op: BooleanOp, ids: &[String]) -
             }
         }
     }
-    if items.len() < 2 {
-        return Err(vec![CheckResult::fail("ops_bad_boolean", op.verb(), "a polygon boolean needs at least two polygons, rectangles or circles")]);
+    // `BooleanPolygons` runs on whatever the filter left, one shape too: `ProcessShape` deletes it and `Finalize` puts it back as a polygon, and the
+    // info bar says "Unable to merge the selected polygons." (no success). Only an empty list has nothing to commit (the studio says it without a command).
+    if items.is_empty() {
+        return Err(vec![CheckResult::fail("ops_bad_boolean", op.verb(), "a polygon boolean needs a polygon, rectangle or circle")]);
     }
 
     let mut outcome = run_routine(op, &items);
@@ -327,6 +329,18 @@ mod tests {
     }
 
     #[test]
+    fn a_single_rect_is_put_back_as_a_polygon_like_kicads_routine_does() {
+        // `ProcessShape` deletes the first shape and `Finalize` adds the working polygon back; no success, so the info bar's refusal is noted
+        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0))]);
+        let all = ids(&dr);
+        boolean_shapes(&mut dr, BooleanOp::Merge, &all).unwrap();
+        assert_eq!(dr.shapes.len(), 1);
+        assert!(matches!(dr.shapes[0], Shape::Polygon { .. }));
+        assert!((area(&dr.shapes[0]) - 100_000_000_000_000.0).abs() < 1e6);
+        assert!(boolean_shapes(&mut dr, BooleanOp::Merge, &[]).is_err());
+    }
+
+    #[test]
     fn intersect_keeps_only_the_overlap() {
         let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(10.0), mm(10.0)), rect("b", mm(6.0), mm(6.0), mm(20.0), mm(20.0))]);
         let all = ids(&dr);
@@ -386,17 +400,18 @@ mod tests {
     }
 
     #[test]
-    fn needs_two_eligible_shapes() {
-        let mut dr = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0))]);
+    fn needs_an_eligible_shape() {
+        // a segment is not eligible: alone it leaves nothing to run the routine on
+        let seg = Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(0.01), y: Nm::ZERO } };
+        let mut dr = section(vec![seg.clone()]);
         let all = ids(&dr);
         assert!(boolean_shapes(&mut dr, BooleanOp::Merge, &all).is_err());
-        // a segment is not eligible
-        let mut dr2 = section(vec![
-            rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0)),
-            Shape::Segment { id: "s".into(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(0.01), y: Nm::ZERO } },
-        ]);
+        // with a rectangle the routine runs on the rectangle alone, and the segment stays
+        let mut dr2 = section(vec![rect("a", Nm::ZERO, Nm::ZERO, mm(1.0), mm(1.0)), seg]);
         let all2 = ids(&dr2);
-        assert!(boolean_shapes(&mut dr2, BooleanOp::Merge, &all2).is_err());
+        boolean_shapes(&mut dr2, BooleanOp::Merge, &all2).unwrap();
+        assert!(dr2.shapes.iter().any(|s| matches!(s, Shape::Segment { .. })));
+        assert!(dr2.shapes.iter().any(|s| matches!(s, Shape::Polygon { .. })));
     }
 
     #[test]

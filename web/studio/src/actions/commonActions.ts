@@ -16,7 +16,7 @@ import type { Action as StudioAction, EditorTab, StudioApi, StudioState } from "
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import { isCanvasTab, type EditorAdapter } from "./editorAdapter";
-import { getCommonOptions, setCommonOptions, setWindowOptions, windowOptionsOf } from "../state/commonOptions";
+import { getCommonOptions, setWindowOptions, windowOptionsOf } from "../state/commonOptions";
 import { crossHairModeForAction } from "../kicad-port/crosshair";
 import { nextContrastMode } from "../kicad-port/appearance";
 import { fpContrastMode } from "../kicad-port/fpAppearance";
@@ -145,8 +145,9 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   // ("Always Show Crosshairs"), the editor's own. Off, the crosshair is drawn only while a tool is running.
   m.set("common.Control.toggleCursor", () => setWindowOptions(tab ?? "pcb", { alwaysShowCursor: !windowOptionsOf(getCommonOptions(), tab ?? "pcb").alwaysShowCursor }));
 
-  // ACTIONS::toggleBoundingBoxes -- COMMON_TOOLS::ToggleBoundingBoxes: `rs->SetDrawBoundingBoxes( !rs->GetDrawBoundingBoxes() )`.
-  m.set("common.Control.toggleBoundingBoxes", () => setCommonOptions({ drawBoundingBoxes: !getCommonOptions().drawBoundingBoxes }));
+  // ACTIONS::toggleBoundingBoxes -- COMMON_TOOLS::ToggleBoundingBoxes: `rs->SetDrawBoundingBoxes( !rs->GetDrawBoundingBoxes() )` on the frame's own
+  // painter, so each editor has its own switch and none is saved (task-v10-handlers: it was one switch for the four editors, kept in local storage).
+  m.set("common.Control.toggleBoundingBoxes", () => setWindowOptions(tab ?? "pcb", { drawBoundingBoxes: !windowOptionsOf(getCommonOptions(), tab ?? "pcb").drawBoundingBoxes }));
 
   // ACTIONS::highContrastMode -- PCB_CONTROL::HighContrastMode: `m_ContrastModeDisplay = NORMAL ? DIMMED : NORMAL`
   // (the inactive layers dimmed or not). The board's high contrast is that switch, and so is the Footprint Editor's own (what is not on its active layer is

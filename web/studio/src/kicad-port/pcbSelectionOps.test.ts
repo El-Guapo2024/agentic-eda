@@ -109,6 +109,13 @@ test("unrouteSelected on a footprint removes the connection up to the next pad a
   assert.ok(!r.trackIds.includes("m"));
 });
 
+test("unrouteSelected on a pad removes the copper up to the next pad and keeps the pad selected (`PCB_PAD_T`)", () => {
+  const r = unrouteSelected(board(), ["R1.1"]);
+  assert.deepEqual(r.trackIds.sort(), ["a", "b"]);
+  assert.deepEqual(r.viaIds, ["v"]);
+  assert.deepEqual(r.reselect, ["R1.1"]);
+});
+
 test("unrouteSelected on a track takes its whole run", () => {
   const r = unrouteSelected(board(), ["a"]);
   assert.deepEqual(r.trackIds.sort(), ["a", "b"]);
@@ -133,4 +140,32 @@ test("Select All Tracks in Net takes the net's copper shapes too, and a pad or a
   assert.deepEqual([...netsOfItems(b, ["R3.1"])], ["M"], "a pad's net");
   assert.deepEqual([...netsOfItems(b, ["cu"])], ["M"], "a copper shape's net");
   assert.deepEqual([...netsOfItems(b, ["s2"])], [], "a silkscreen line has none");
+});
+
+/** `board()` plus a tuning pattern on net N (`p1`, `p2`, and `p3`, its coupled track on net P), entered from track `q`, and an untouched pattern on net M. */
+function tunedBoard(): BoardState {
+  const b = board();
+  const t = (id: string, net: string, x0: number, y0: number, x1: number, y1: number) => ({ id, net, layer: "F.Cu", width: 200, pts: [[x0, y0], [x1, y1]] as [number, number][] });
+  b.routing!.tracks.push(t("q", "N", 0, 20000, 1000, 20000), t("p1", "N", 1000, 20000, 2000, 20000), t("p2", "N", 2000, 20000, 3000, 20000), t("p3", "P", 1000, 21000, 3000, 21000), t("mm", "M", 0, 30000, 1000, 30000));
+  b.drawings!.tuning_patterns = [{ id: "tp", member_ids: ["p1", "p2", "p3"] } as never, { id: "tm", member_ids: ["mm"] } as never];
+  return b;
+}
+
+test("unrouteSelected deletes a tuning pattern the run reaches, with all its tracks (PCB_GENERATOR children), and leaves the others", () => {
+  const r = unrouteSelected(tunedBoard(), ["q"]);
+  assert.deepEqual(r.trackIds.sort(), ["p1", "p2", "p3", "q"]);
+  assert.deepEqual(r.patternIds, ["tp"]);
+});
+
+test("unrouteSelected on a selected tuning pattern deletes it and unroutes from its tracks", () => {
+  const r = unrouteSelected(tunedBoard(), ["tp"]);
+  assert.deepEqual(r.trackIds.sort(), ["p1", "p2", "p3", "q"]);
+  assert.deepEqual(r.patternIds, ["tp"]);
+  assert.deepEqual(r.reselect, []);
+});
+
+test("unrouteSelected away from the patterns deletes none", () => {
+  const r = unrouteSelected(tunedBoard(), ["R1"]);
+  assert.deepEqual(r.trackIds.sort(), ["a", "b"]);
+  assert.deepEqual(r.patternIds, []);
 });

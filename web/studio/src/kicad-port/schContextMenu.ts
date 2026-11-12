@@ -162,8 +162,8 @@ export function schContextMenu(s: SchSelectionSummary, std?: StandardSubmenus): 
   const single = s.total === 1;
   const singleSymbolOrPower = single && s.symbols + s.powerSymbols === 1;
   const multipleSymbolsOrPower = s.total > 1 && s.symbols + s.powerSymbols === s.total;
-  // `connectedTypes` has the pins of sheets (`SCH_SHEET_PIN_T`) too
-  const connectedCount = s.powerSymbols + s.wires + s.buses + s.busEntries + labels + s.directiveLabels + s.junctions + s.sheetPins;
+  // `connectedTypes` has the pins of symbols (`SCH_PIN_T`) and of sheets (`SCH_SHEET_PIN_T`) too
+  const connectedCount = s.powerSymbols + s.pins + s.wires + s.buses + s.busEntries + labels + s.directiveLabels + s.junctions + s.sheetPins;
   const connected = connectedCount > 0 && connectedCount === s.total;
   const linesSelection = s.total > 0 && s.wires + s.buses + s.lines === s.total;
   const sheetSelection = single && s.sheets === 1;
@@ -185,6 +185,8 @@ export function schContextMenu(s: SchSelectionSummary, std?: StandardSubmenus): 
   // `selToolMenu.AddMenu( makePinTricksMenu( m_selectionTool ), S_C::AllPinsOrSheetPins, 1 )`: Pin Helpers (`PIN_TRICKS_MENU`) for a selection of pins and sheet pins
   add(allPinsOrSheetPins(s) && { type: "submenu", label: "Pin Helpers", items: PIN_HELPERS.map((h) => ({ type: "item", action: h.action, label: h.label }) as MenuNode) });
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
+  // `selectOnPCB` at `crossProbingSelection` (MoreThan( 0 ) && HasTypes( { SCH_SYMBOL_T, SCH_PIN_T, SCH_SHEET_T } ), order 150)
+  add(s.symbols + s.powerSymbols + s.pins + s.sheets > 0 && item("eeschema.EditorControl.selectOnPCB"));
   // `GROUP_TOOL::Init`: the Grouping submenu for any selection (`GROUP_CONTEXT_MENU::update` says which of its four entries are on)
   if (s.total > 0) {
     add({
@@ -205,6 +207,15 @@ export function schContextMenu(s: SchSelectionSummary, std?: StandardSubmenus): 
       type: "submenu",
       label: "Transform Selection",
       items: [item("eeschema.InteractiveEdit.rotateCCW"), item("eeschema.InteractiveEdit.rotateCW"), item("eeschema.InteractiveEdit.mirrorV"), item("eeschema.InteractiveEdit.mirrorH")],
+    });
+  }
+  // `makeAttributesMenu()` at `S_C::HasTypes( attribTypes )` (a symbol, a sheet or a rule area among the selection, order 200): Exclude from Simulation, from Bill of
+  // Materials, from Board and Do not Populate, check items (`attribExcludeFromSimCond` ...: the runner's checked state).
+  if (s.symbols + s.powerSymbols + s.sheets + s.ruleAreas > 0) {
+    add({
+      type: "submenu",
+      label: "Attributes",
+      items: [item("eeschema.EditorControl.setExcludeFromSimulation"), item("eeschema.EditorControl.setExcludeFromBOM"), item("eeschema.EditorControl.setExcludeFromBoard"), item("eeschema.EditorControl.setDNP")],
     });
   }
   // `swapSelectionCondition`: OnlyTypes( SwappableItems ) && MoreThan( 1 ).
@@ -236,6 +247,8 @@ export function schContextMenu(s: SchSelectionSummary, std?: StandardSubmenus): 
   const onlyPins = s.pins > 1 && s.pins === s.total;
   add(onlyPins && item("eeschema.InteractiveEdit.swapPinLabels"), s.sameReferenceUnits > 1 && item("eeschema.InteractiveEdit.swapUnitLabels"), onlyPins && s.allowPinSwaps && item("eeschema.InteractiveEdit.swapPins"));
   add(connected && item("eeschema.InteractiveEdit.assignNetclass"), connected && item("eeschema.InteractiveEdit.findNetInInspector"));
+  // `editPageNumber` at `schEditSheetPageNumberCondition`: LessThan( 2 ) && OnlyTypes( { SCH_SHEET_T } ) -- one sheet
+  add(sheetSelection && item("eeschema.EditorControl.editPageNumber"));
   // `SCH_POINT_EDITOR::Init`: Count( 1 ) && addCornerCondition / removeCornerCondition.
   add(single && s.canAddCorner && item("eeschema.PointEditor.addCorner"), single && s.canRemoveCorner && item("eeschema.PointEditor.removeCorner"));
   // `menu.AddItem( ACTIONS::cycleArcEditMode, S_C::Count( 1 ) && arcIsEdited )`

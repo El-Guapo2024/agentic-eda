@@ -9,7 +9,7 @@
 //   selectConnections                     the "with nets" part of Sync Selection
 //
 // Not ported: connectivity through zones (the C++ passes EXCLUDE_ZONES to
-// the flood anyway) and PCB_GENERATOR promotion (no generator items here).
+// the flood anyway). Tuning patterns (`PCB_GENERATOR`s) are `drawings.tuning_patterns`.
 
 import type { BoardState } from "../api/types";
 import { itemKind, padById } from "./pcbItems";
@@ -281,32 +281,109 @@ export function floodPads(parts: readonly UnroutePart[], layers: readonly string
 }
 
 /**
- * `PCB_SELECTION_TOOL::unrouteSelected`: every selected footprint contributes its pads, every selected
- * track/via itself; the tracks and vias connected to them up to the next pad are deleted. The footprints
- * stay selected.
+ * `PCB_SELECTION_TOOL::unrouteSelected`: every selected footprint contributes its pads, every selected pad, track and via itself, and every selected
+ * tuning pattern (`PCB_GENERATOR_T`) is deleted with its tracks as starts; the tracks and vias connected to them up to the next pad are deleted.
+ *
+ * Tuning patterns go too: a pattern whose external ends (a point only one of its tracks on the selected nets ends at) touch the copper being unrouted is
+ * deleted and its tracks join the starts, until no more join (the `expanded` loop over `board()->Generators()`, "so selectAllConnectedTracks can traverse
+ * through meanders"); then so is every pattern that lost a track ("Find generators whose children were removed"). A deleted pattern takes all its tracks
+ * with it (`RunOnChildren( commit.Remove )`): `patternIds` names them, and they are in `trackIds` -- the backend drops a pattern left with no track, so
+ * one `commit_route` is the one commit. The footprints and pads stay selected.
  */
-export function unrouteSelected(board: BoardState, ids: readonly string[]): { trackIds: string[]; viaIds: string[]; reselect: string[] } {
+export function unrouteSelected(board: BoardState, ids: readonly string[]): { trackIds: string[]; viaIds: string[]; reselect: string[]; patternIds: string[] } {
   const layers = board.layers;
   const pads = floodPads(board.parts, layers);
+  const tracks = board.routing?.tracks ?? [];
+  const vias = board.routing?.vias ?? [];
+  const patterns = board.drawings?.tuning_patterns ?? [];
+  const trackById = new Map(tracks.map((t) => [t.id, t]));
   const starts: FloodStart[] = [];
   const reselect: string[] = [];
+  const toDelete = new Set<string>();
+  const padStart = (id: string) => starts.push({ kind: "pad", id });
   for (const id of ids) {
+    const pattern = patterns.find((p) => p.id === id);
+    if (pattern) {
+      // `PCB_GENERATOR_T`: deleted, its tracks unrouted
+      toDelete.add(id);
+      for (const m of pattern.member_ids) if (trackById.has(m)) starts.push({ kind: "track", id: m });
+      continue;
+    }
     const kind = itemKind(board, id);
     if (kind === "part") {
       reselect.push(id);
-      for (const p of pads) if (p.key.startsWith(`${id}.`)) starts.push({ kind: "pad", id: p.key });
+      for (const p of pads) if (p.key.startsWith(`${id}.`)) padStart(p.key);
+    } else if (kind === "pad") {
+      // a pad is a `BOARD_CONNECTED_ITEM` start of its own, and is reselected afterwards (`PCB_PAD_T`; task-v10-handlers: pads were ignored)
+      reselect.push(id);
+      padStart(id);
     } else if (kind === "track" || kind === "via") {
       starts.push({ kind, id });
     }
   }
+
+  // `selectedNets`: the nets of the starts (`GetNetCode() > 0`); `endpointSet`: their tracks' ends, vias' and pads' positions.
+  const key = (x: number, y: number) => `${x},${y}`;
+  const selectedNets = new Set<string>();
+  const endpointSet = new Set<string>();
+  const addTrackEnds = (t: { pts: [number, number][] }) => {
+    const a = t.pts[0];
+    const b = t.pts[t.pts.length - 1];
+    if (a) endpointSet.add(key(a[0], a[1]));
+    if (b) endpointSet.add(key(b[0], b[1]));
+  };
+  for (const st of starts) {
+    if (st.kind === "track") {
+      const t = trackById.get(st.id);
+      if (!t) continue;
+      if (t.net) selectedNets.add(t.net);
+      addTrackEnds(t);
+    } else if (st.kind === "via") {
+      const v = vias.find((x) => x.id === st.id);
+      if (!v) continue;
+      if (v.net) selectedNets.add(v.net);
+      endpointSet.add(key(v.x, v.y));
+    } else {
+      const hit = padById(board, st.id);
+      if (!hit) continue;
+      if (hit.pad.net) selectedNets.add(hit.pad.net);
+      endpointSet.add(key(hit.pad.px ?? hit.pad.x, hit.pad.py ?? hit.pad.y));
+    }
+  }
+  for (let expanded = true; expanded; ) {
+    expanded = false;
+    for (const gen of patterns) {
+      if (toDelete.has(gen.id)) continue;
+      // "this generator's external endpoints (meander entry/exit)"
+      const children = gen.member_ids.map((m) => trackById.get(m)).filter((t): t is NonNullable<typeof t> => !!t && selectedNets.has(t.net));
+      const epCount = new Map<string, number>();
+      for (const t of children) {
+        const a = t.pts[0];
+        const b = t.pts[t.pts.length - 1];
+        for (const p of [a, b]) if (p) epCount.set(key(p[0], p[1]), (epCount.get(key(p[0], p[1])) ?? 0) + 1);
+      }
+      if (![...epCount].some(([pt, count]) => count === 1 && endpointSet.has(pt))) continue;
+      toDelete.add(gen.id);
+      for (const t of children) {
+        starts.push({ kind: "track", id: t.id });
+        addTrackEnds(t);
+        expanded = true;
+      }
+    }
+  }
+
   const flood: FloodBoard = {
-    tracks: (board.routing?.tracks ?? []).map((t) => ({ id: t.id, layer: t.layer, pts: t.pts, arc_mid: t.arc_mid })),
-    vias: (board.routing?.vias ?? []).map((v) => ({ id: v.id, x: v.x, y: v.y, d: v.d, from: v.from, to: v.to })),
+    tracks: tracks.map((t) => ({ id: t.id, layer: t.layer, pts: t.pts, arc_mid: t.arc_mid })),
+    vias: vias.map((v) => ({ id: v.id, x: v.x, y: v.y, d: v.d, from: v.from, to: v.to })),
     pads,
     layers,
   };
   const { trackIds, viaIds } = selectAllConnectedTracks(flood, starts, "pad");
-  return { trackIds: [...trackIds], viaIds: [...viaIds], reselect };
+  const removed = new Set<string>([...trackIds]);
+  // "Find generators whose children were removed" (and the generators `selectAllConnectedTracks` promoted its finds to: the same ones)
+  for (const gen of patterns) if (gen.member_ids.some((m) => removed.has(m))) toDelete.add(gen.id);
+  for (const gen of patterns) if (toDelete.has(gen.id)) for (const m of gen.member_ids) if (trackById.has(m)) removed.add(m);
+  return { trackIds: [...removed], viaIds: [...viaIds], reselect, patternIds: patterns.filter((p) => toDelete.has(p.id)).map((p) => p.id) };
 }
 
 // ------------------------------------------------------ selectConnections

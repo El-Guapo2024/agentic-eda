@@ -67,7 +67,9 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
     schematicOnly(() => {
       if (!sch) return;
       // A table is what is locked, not a cell of it (the file knows only `(locked yes)` of the `(table`): the cells selected stand for their tables.
-      const cmd = lockCmd(mode, promoteCells(requestSelection(), sch.tables), new Set(sch.locked ?? []));
+      // "Don't lock/unlock pins, fields, or sheet pins - they inherit from parent": a selected field (`fld:<owner>:<name>`) is skipped like a sheet pin
+      const ids = promoteCells(requestSelection(), sch.tables).filter((id) => !id.startsWith("fld:") && !id.startsWith("pin:"));
+      const cmd = lockCmd(mode, ids, new Set(sch.locked ?? []));
       if (cmd) void api.cmd({ op: "sch_edit", ...cmd });
     });
   m.set("eeschema.InteractiveEdit.lock", lock("lock"));
@@ -75,11 +77,14 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   m.set("eeschema.InteractiveEdit.toggleLock", lock("toggle"));
 
   // Change To Label / Global Label / Hierarchical Label / Directive Label / Text / Text Box -- SCH_EDIT_TOOL::ChangeTextType (kicad-port/schConvertText.ts):
-  // every selected label, text, text box or directive label that is not already of the target type is replaced by one that is, in one undo step, and the
-  // new items become the selection.
+  // every selected label, text, text box or directive label that is not already of the target type is replaced by one that is, in one undo step ("Change To").
+  // The selection afterwards is KiCad's: `RequestSelection( { SCH_LABEL_LOCATE_ANY_T, SCH_TEXT_T, SCH_TEXTBOX_T } )` drops the other items from it, a replaced
+  // item's successor takes its place (`unselectItem` / `selectItem`), the ones already of the type stay; an item taken from under the cursor (`IsHover`)
+  // leaves nothing selected (`selectionClear`).
   const convert = (target: ConvertTarget) =>
     schematicOnly(() => {
       if (!sch) return;
+      const hover = state.selection.size === 0;
       const sources = convertSources(sch, requestSelection());
       const { cmds, predictedIds } = convertCmds(sources, target, {
         measure: measureStrokeText,
@@ -91,9 +96,13 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
         },
         takenIds: new Set(allItems(sch).map((r) => r.id)),
       });
-      if (cmds.length === 0) return;
+      const kept = sources.filter((s) => convertTargetOf(s) === target).map((s) => s.id);
+      if (cmds.length === 0) {
+        if (!hover && kept.length !== state.selection.size) ctx.dispatch({ type: "SET_SELECTION", refs: kept });
+        return;
+      }
       void api.cmdBatch(cmds).then((ok) => {
-        if (ok) ctx.dispatch({ type: "SET_SELECTION", refs: predictedIds });
+        if (ok) ctx.dispatch({ type: "SET_SELECTION", refs: hover ? [] : [...kept, ...predictedIds] });
       });
     });
   m.set("eeschema.InteractiveEdit.toLabel", convert("label"));
@@ -109,6 +118,8 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
     schematicOnly(() => {
       // On a nested sheet the item lands on that sheet: `api.cmd` addresses every schematic command to the sheet in view (kicad-port/schSheetCmd.ts).
       ctx.dispatch({ type: "SET_DRAW_STATE", draw: null });
+      // `DrawShape` / `DrawTable` / `DrawRuleArea` start with `m_toolMgr->RunAction( ACTIONS::selectionClear )`
+      if (state.activeTool !== tool && state.selection.size > 0) ctx.dispatch({ type: "SET_SELECTION", refs: [] });
       ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
     });
   m.set("eeschema.InteractiveDrawing.drawRectangle", arm("sch_rect"));
@@ -265,6 +276,12 @@ function registerStackedPinActions(m: ActionMap, ctx: SchEditContext): void {
   };
   m.set("eeschema.InteractiveEdit.convertStackedPins", stack(planConvertStackedPins));
   m.set("eeschema.InteractiveEdit.explodeStackedPin", stack(planExplodeStackedPin));
+}
+
+/** The type a conversion source already is (kicad-port/schConvertText.ts's `sourceTarget`): `item->Type() != convertTo` decides what is converted. */
+function convertTargetOf(s: ConvertSource): ConvertTarget {
+  if (s.kind === "label") return s.scope === "local" ? "label" : s.scope === "global" ? "global_label" : "hier_label";
+  return s.kind === "text" ? "text" : s.kind === "text_box" ? "text_box" : "directive_label";
 }
 
 /** The labels, texts, text boxes and directive labels among `ids`, as the conversion's sources (a label's spin is read off its wire, as the painter does). */

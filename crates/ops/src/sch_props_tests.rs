@@ -640,6 +640,64 @@ fn sheet_properties_keep_the_border_the_fill_and_the_attributes_and_the_legacy_l
     assert_eq!(err(&mut b, sheet_props("nope")), "ops_unknown_sheet");
 }
 
+/// `SCH_EDIT_TOOL::SetAttribute` takes the sheets and rule areas of the selection too (`RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )`),
+/// and `new_state` is worked out over all of them: set when any lacks the attribute, cleared when all have it.
+#[test]
+fn the_attribute_toggles_take_sheets_and_rule_areas_with_one_state_for_all() {
+    use eda_model::sch_extras::{SchGraphic, SchGraphicKind};
+    let m = ConstraintModel::default();
+    let mut d = hierarchy();
+    let mut area = SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0))], exclude_from_sim: false, exclude_from_bom: true, exclude_from_board: false, dnp: false });
+    area.id = "rarea_1".into();
+    d.schematic.as_mut().unwrap().extras.graphics.push(area);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let toggle = || SchCmd::ToggleSymbolAttribute { ids: ids(&["sheet_a", "rarea_1"]), attribute: "exclude_from_bom".into() };
+    let bom = |b: &Board| {
+        let s = sch_of(b);
+        let area = match &s.extras.graphics[0].shape {
+            SchGraphicKind::RuleArea { exclude_from_bom, .. } => *exclude_from_bom,
+            _ => unreachable!(),
+        };
+        (s.extras.sheet_props_of("sheet_a").exclude_from_bom, area)
+    };
+    ok(&mut b, toggle());
+    assert_eq!(bom(&b), (true, true), "the sheet lacked it: both set");
+    ok(&mut b, toggle());
+    assert_eq!(bom(&b), (false, false), "both had it: both cleared");
+    assert!(sch_of(&b).extras.sheet_props.is_empty(), "the legacy look keeps no entry");
+}
+
+/// A power symbol is an `SCH_SYMBOL`, so `SetAttribute` takes it with the rest of the selection: its flags are `SchExtras::power_props`' and share the one
+/// `new_state`; a power symbol left with no flag set keeps no entry.
+#[test]
+fn the_attribute_toggles_take_power_symbols() {
+    use eda_model::ir::PowerSymbol;
+    let m = ConstraintModel::default();
+    let mut d = hierarchy();
+    let sch = d.schematic.as_mut().unwrap();
+    sch.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(mm(101.6), mm(50.8)), rot: 0, net: "GND".into(), pin: String::new() });
+    sch.extras.power_props.insert("#PWR01".into(), eda_model::sch_extras::PowerProps { footprint: "fp".into(), ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let toggle = |attr: &str, list: &[&str]| SchCmd::ToggleSymbolAttribute { ids: ids(list), attribute: attr.into() };
+    ok(&mut b, toggle("exclude_from_sim", &["#PWR01"]));
+    assert!(sch_of(&b).extras.power_props["#PWR01"].exclude_from_sim);
+    ok(&mut b, toggle("exclude_from_sim", &["#PWR01"]));
+    assert!(!sch_of(&b).extras.power_props["#PWR01"].exclude_from_sim, "set: cleared again; the footprint stays");
+    // with a sheet that lacks the flag, both are set; then both cleared
+    ok(&mut b, toggle("exclude_from_bom", &["#PWR01", "sheet_a"]));
+    assert!(sch_of(&b).extras.power_props["#PWR01"].exclude_from_bom && sch_of(&b).extras.sheet_props_of("sheet_a").exclude_from_bom);
+    ok(&mut b, toggle("exclude_from_bom", &["#PWR01", "sheet_a"]));
+    assert!(!sch_of(&b).extras.power_props["#PWR01"].exclude_from_bom && !sch_of(&b).extras.sheet_props_of("sheet_a").exclude_from_bom);
+    // a power symbol with nothing of its own keeps no entry
+    let mut d = hierarchy();
+    d.schematic.as_mut().unwrap().power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(mm(101.6), mm(50.8)), rot: 0, net: "GND".into(), pin: String::new() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    ok(&mut b, toggle("exclude_from_board", &["#PWR01"]));
+    assert!(sch_of(&b).extras.power_props["#PWR01"].exclude_from_board);
+    ok(&mut b, toggle("exclude_from_board", &["#PWR01"]));
+    assert!(sch_of(&b).extras.power_props.is_empty());
+}
+
 #[test]
 fn sheet_fields_are_named_once_and_an_empty_row_goes() {
     let m = ConstraintModel::default();

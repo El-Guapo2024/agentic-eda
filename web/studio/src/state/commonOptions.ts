@@ -24,10 +24,6 @@ export type SelectionAreaMode = "rect" | "lasso";
 export interface CommonOptions {
   /** Each editor's own cursor, grid display and polar coordinates. */
   window: Record<EditorWindow, WindowOptions>;
-  /** `RENDER_SETTINGS::GetDrawBoundingBoxes` -- default off. */
-  drawBoundingBoxes: boolean;
-  /** `PCB_SELECTION_TOOL::m_selectionMode` / `SCH_SELECTION_TOOL`'s: which tool a drag on empty space starts. Default rectangle. */
-  selectionMode: SelectionAreaMode;
   /** `COMMON_SETTINGS::m_DoNotShowAgain.zone_fill_warning`: "Don't show again" was clicked on the unfilled-zones warning (`PCB_CONTROL::unfilledZoneCheck`). */
   zoneFillWarningDismissed: boolean;
   /** Preferences > Common's settings the studio honours (kicad-port/commonSettings.ts). */
@@ -36,8 +32,6 @@ export interface CommonOptions {
 
 export const DEFAULT_COMMON_OPTIONS: CommonOptions = {
   window: { pcb: DEFAULT_WINDOW_OPTIONS, schematic: DEFAULT_WINDOW_OPTIONS, footprint: DEFAULT_WINDOW_OPTIONS, symbol: DEFAULT_WINDOW_OPTIONS },
-  drawBoundingBoxes: false,
-  selectionMode: "rect",
   zoneFillWarningDismissed: false,
   common: DEFAULT_COMMON_SETTINGS,
 };
@@ -63,8 +57,6 @@ export function parseCommonOptions(raw: string | null): CommonOptions {
     const w = (j.window && typeof j.window === "object" ? j.window : {}) as Partial<Record<EditorWindow, unknown>>;
     return {
       window: { pcb: parseWindowOptions(w.pcb, legacy), schematic: parseWindowOptions(w.schematic, legacy), footprint: parseWindowOptions(w.footprint, legacy), symbol: parseWindowOptions(w.symbol, legacy) },
-      drawBoundingBoxes: typeof j.drawBoundingBoxes === "boolean" ? j.drawBoundingBoxes : d.drawBoundingBoxes,
-      selectionMode: j.selectionMode === "rect" || j.selectionMode === "lasso" ? j.selectionMode : d.selectionMode,
       zoneFillWarningDismissed: typeof j.zoneFillWarningDismissed === "boolean" ? j.zoneFillWarningDismissed : d.zoneFillWarningDismissed,
       common: sanitizeCommonSettings(j.common),
     };

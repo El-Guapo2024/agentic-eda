@@ -49,12 +49,25 @@ export function breakPreviewSheet(sch: Schematic, brk: BreakState, cursor: P): S
   return { ...sch, wires, lines };
 }
 
-/** Drop the new end at `cursor`: the lines are replaced by their pieces as one undo step, and the tool ends. */
+/**
+ * Drop the new end at `cursor`: the lines are replaced by their pieces as one undo step ("Break Wire" / "Slice Wire"), and the tool ends. The selection is then
+ * KiCad's: `preprocessBreakOrSliceSelection` put the cut line (Break: both pieces; Slice: the piece whose end moves) in the selection, and `doMoveSelection`
+ * keeps it (`RebuildSelection`), so the new pieces that reach the dropped point are selected. (The server names the pieces, so they are looked for in the sheet
+ * the batch leaves; nothing is selected if that sheet is not in yet.)
+ */
 export function commitBreak(brk: BreakState, cursor: P, dispatch: Dispatch<Action>, api: StudioApi): void {
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   const cmds = breakCmds(brk, cursor) as Cmd[];
+  const before = api.getState().schematic;
+  const old = new Set([...(before?.wires ?? []).map((w) => w.id), ...(before?.lines ?? []).map((l) => l.id)]);
+  const delta: P = [cursor[0] - brk.origin[0], cursor[1] - brk.origin[1]];
+  const moved = brk.cuts.map((c): P => [c.at[0] + delta[0], c.at[1] + delta[1]]);
+  const reaches = (pts: readonly (readonly [number, number])[]) => pts.some((p) => moved.some((m) => m[0] === p[0] && m[1] === p[1]));
   void api.cmdBatch(cmds).then((ok) => {
-    if (ok) dispatch({ type: "SET_SELECTION", refs: [] });
+    if (!ok) return;
+    const after = api.getState().schematic;
+    const pieces = [...(after?.wires ?? []), ...(after?.lines ?? [])].filter((x) => !old.has(x.id) && reaches(x.pts)).map((x) => x.id);
+    dispatch({ type: "SET_SELECTION", refs: pieces });
   });
 }

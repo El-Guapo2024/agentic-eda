@@ -37,6 +37,7 @@ import { flashSelectionFilter } from "../kicad-port/filterFlash";
 import { candidateLabel } from "../components/canvas/candidateLabel";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
 import { getGridSnapping, snapPoint } from "../components/canvas/gridHelper";
+import { pcbSelectionGridSize } from "../components/canvas/pcbSnap";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
@@ -90,7 +91,8 @@ import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnota
 import { refDesPrefix } from "../kicad-port/packFootprints";
 import { openUpdateDialog } from "./updatePcbAction";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
-import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { registerLibraryEditorActions, symEnableState } from "./libraryEditorActions";
+import { fpActionEnabled, symActionEnabled } from "../kicad-port/fpSymActionEnabled";
 import { placingFootprint, startPlaceFootprint } from "./placeFootprintTool";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
@@ -1772,7 +1774,11 @@ export function useActionRunner() {
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
         const from = state.cursorNm ?? viewCenter(view, rect.width, rect.height);
-        const to = cursorMove(from, activeGridNm(), dir, fast, flippedView);
+        // `grid->GetGridSize( grid->GetSelectionGrid( m_frame->GetCurrentSelection() ) )`: the selection's grid when grid overrides apply (a footprint on the
+        // connected-items grid, text on the text grid ...), else the current one.
+        const ids = [...state.selection];
+        const selGrid = state.tab === "schematic" ? selectionGridNm(ids) : state.tab === "pcb" ? pcbSelectionGridSize(ids) : null;
+        const to = cursorMove(from, selGrid ?? activeGridNm(), dir, fast, flippedView);
         const nextView = warpViewToInclude(view, rect.width, rect.height, to);
         dispatch({ type: "SET_CURSOR", at: to });
         if (nextView !== view) setActiveView(nextView);
@@ -2541,7 +2547,16 @@ export function useActionRunner() {
 
       // J (placeJunction) / I (drawLines) / S (drawSheet): arm the tool; SchematicView.tsx's onPointerDown owns the click behaviour.
       m.set("eeschema.InteractiveDrawing.placeJunction", toggleSchTool("sch_junction"));
-      m.set("eeschema.InteractiveDrawingLineWireBus.drawLines", toggleSchTool("sch_line"));
+      // SCH_LINE_WIRE_BUS_TOOL::DrawSegments / doDrawSegments: "The tool hotkey is interpreted as a click when drawing" (`isSyntheticClick`); idle in
+      // the tool, its own activation pops it (`PopTool`); otherwise the tool starts with `ACTIONS::selectionClear`.
+      m.set(
+        "eeschema.InteractiveDrawingLineWireBus.drawLines",
+        schematicOnly(() => {
+          if (state.activeTool === "sch_line" && state.drawState) return void m.get("common.Control.cursorClick")?.();
+          if (state.activeTool !== "sch_line") dispatch({ type: "CLEAR_SELECTION" });
+          dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "sch_line" ? "select" : "sch_line" });
+        })
+      );
       m.set("eeschema.InteractiveDrawing.drawSheet", toggleSchTool("sch_sheet"));
 
       // C (unfoldBus) -- SCH_LINE_WIRE_BUS_TOOL::UnfoldBus: with the cursor on a bus, pick one of its member nets (`BUS_UNFOLD_MENU`, a dialog here);
@@ -2746,8 +2761,15 @@ export function useActionRunner() {
   // `remapSymbolsCondition`: Remap Legacy Library Symbols... only on a legacy schematic (state/schLegacy.ts; UI-LEFT-2 LL7).
   const schLegacy = useSchLegacy(state.tab === "schematic" ? state.schematic : null);
   const isEnabled = useCallback(
-    (name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)) && (simEnabled(name, simUi) ?? true) && cliExporterReason(name, cliExporters) === null && (name !== REMAP_SYMBOLS_ACTION || schLegacy),
-    [registry, state.tab, simUi, cliExporters, schLegacy],
+    (name: string) =>
+      isActionEnabledForTab(name, state.tab, registry.has(name)) &&
+      (simEnabled(name, simUi) ?? true) &&
+      cliExporterReason(name, cliExporters) === null &&
+      (name !== REMAP_SYMBOLS_ACTION || schLegacy) &&
+      // the library editors' frame conditions (`FOOTPRINT_EDIT_FRAME` / `SYMBOL_EDIT_FRAME::setupUIConditions`), read from their stores when asked
+      (state.tab === "footprint" ? (fpActionEnabled(name, { footprintLoaded: !!fpApi.getState().footprint }) ?? true) : true) &&
+      (state.tab === "symbol" ? (symActionEnabled(name, symEnableState(symApi.getState())) ?? true) : true),
+    [registry, state.tab, simUi, cliExporters, schLegacy, fpApi, symApi],
   );
   /** `param` is the event parameter KiCad's parameterised actions carry (`zoomPreset`'s entry, `selectItems`' items, `changeSheet`'s path ...). */
   const run = useCallback((name: string, param?: unknown) => registry.get(name)?.(param), [registry]);

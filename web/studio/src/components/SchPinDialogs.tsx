@@ -7,7 +7,8 @@
 // cursor with its pin's text and shape and the tool's last spin, bold, italic and Auto (`TwoClickPlace`'s `GetPlacementTemplate` branch), one click each.
 // When the last one is placed, or the labels in the hand are dropped, the dialog shows itself again (`TwoClickPlace`: `EndPlaceItem`, `CanPlaceMore`,
 // `m_dialogSyncSheetPin->Show( true )`; at the tool's end `EndPlacement()` then `Show( true )`, UI-LEFT-2 SS15), on the sheets it had, which stay on their sheet
-// path while the sheet in view is the one the labels went into: its reads and edits are addressed to that path (`on_sheet`).
+// path while the sheet in view is the one the labels went into: its reads and edits are addressed to that path (`on_sheet`). Sync All Sheet Pins lists the whole
+// hierarchy's sheets (`SyncAllSheetsPins`' sheet paths, kicad-port/schSyncSheetList.ts), each read from and edited on its own sheet path.
 // Differs: Esc drops every label still in the hand at once (KiCad's first Esc drops the one riding, the next click makes the next, the second Esc ends the tool).
 // Not here: renaming or reshaping a label from the dialog.
 import { useEffect, useState } from "react";
@@ -48,36 +49,49 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  // the sheet path the sheets are on: the one in view, or the one the dialog was opened on before Add Labels went into a sheet
-  const path = dialog.path ?? state.currentSheetPath;
-  const inView = samePath(path, state.currentSheetPath);
-  // the sheets of a path not in view, read from the server (again after each edit made here)
-  const [away, setAway] = useState<Sheet[] | null>(null);
-  const [edits, setEdits] = useState(0);
+  // The dialog's sheet paths (`std::list<SCH_SHEET_PATH>`): each entry of `sheetIds` is a sheet's `/`-joined path below `path` -- one id for Sync Selected
+  // Sheet Pins (`path` the sheet path it was opened on, kept while Add Labels has gone into a sheet), the whole hierarchy's paths from the root for Sync All
+  // (`path: []`, kicad-port/schSyncSheetList.ts). Each sheet's reads and edits are addressed to the sheet path it sits on (`PANEL_SYNC_SHEET_PINS::m_path`).
+  const base = dialog.path ?? state.currentSheetPath;
+  const entries = dialog.sheetIds.map((key) => {
+    const full = [...base, ...key.split("/")];
+    return { key, id: full[full.length - 1]!, parent: full.slice(0, -1) };
+  });
+  const parentKeys = [...new Set(entries.map((e) => e.parent.join("/")))];
+  const inView = (parent: readonly string[]) => samePath(parent, state.currentSheetPath);
+  // the sheets of the sheet paths not in view, read from the server (that path again after each edit made here)
+  const [away, setAway] = useState<Record<string, Sheet[]>>({});
+  const [stale, setStale] = useState<{ key: string; n: number } | null>(null);
   useEffect(() => {
-    if (inView) return;
     let live = true;
-    void fetchSchematic(path).then(
-      (s) => live && setAway(s.sheets),
-      () => live && setAway([])
-    );
+    const want = stale ? [stale.key] : parentKeys;
+    for (const k of want) {
+      if (samePath(k ? k.split("/") : [], state.currentSheetPath)) continue;
+      void fetchSchematic(k ? k.split("/") : []).then(
+        (s) => live && setAway((prev) => ({ ...prev, [k]: s.sheets })),
+        () => live && setAway((prev) => ({ ...prev, [k]: [] }))
+      );
+    }
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inView, path.join("/"), edits]);
-  const onPath = inView ? (state.schematic?.sheets ?? []) : (away ?? []);
-  const sheets = dialog.sheetIds.map((id) => onPath.find((s) => s.id === id)).filter((s): s is Sheet => s !== undefined);
-  const [page, setPage] = useState(Math.max(0, dialog.sheetIds.indexOf(dialog.first ?? "")));
+  }, [dialog, state.currentSheetPath.join("/"), stale]);
+  const sheetsOn = (parent: readonly string[]) => (inView(parent) ? (state.schematic?.sheets ?? []) : (away[parent.join("/")] ?? []));
+  const pages = entries.flatMap((e) => {
+    const sheet = sheetsOn(e.parent).find((s) => s.id === e.id);
+    return sheet ? [{ ...e, sheet }] : [];
+  });
+  const [pageKey, setPageKey] = useState(dialog.first ?? dialog.sheetIds[0] ?? "");
   const [labelsBySheet, setLabelsBySheet] = useState<Record<string, HierLabel[]>>({});
 
   // Read each sheet's hierarchical labels once, when the dialog opens.
   useEffect(() => {
     let live = true;
-    for (const id of dialog.sheetIds) {
-      void loadHierLabels(path, id)
-        .then((labels) => live && setLabelsBySheet((prev) => ({ ...prev, [id]: labels })))
-        .catch(() => live && setLabelsBySheet((prev) => ({ ...prev, [id]: [] })));
+    for (const e of entries) {
+      void loadHierLabels(e.parent, e.id)
+        .then((labels) => live && setLabelsBySheet((prev) => ({ ...prev, [e.key]: labels })))
+        .catch(() => live && setLabelsBySheet((prev) => ({ ...prev, [e.key]: [] })));
     }
     return () => {
       live = false;
@@ -85,19 +99,23 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialog]);
 
-  /** An edit of the sheets' pins, addressed to their sheet path when it is not the one in view (`on_sheet`, one step). */
+  const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  // "prefer the explicitly requested sheet, fall back to the first page with unsynced pins, or stay on the first page": KiCad asks each page
+  // `HasUndefinedSheetPing()` before its `UpdateForms()` fills it, so the fallback is always the first page
+  const current = pages.find((p) => p.key === pageKey) ?? pages[0];
+  if (!current) return null;
+  const { sheet, parent } = current;
+
+  /** An edit of the sheet's pins, addressed to its sheet path when that is not the one in view (`on_sheet`, one step). */
   const send = async (cmds: Cmd[]) => {
     if (cmds.length === 0) return;
-    if (inView) return void (await api.cmdBatch(cmds));
+    if (inView(parent)) return void (await api.cmdBatch(cmds));
     const one: Cmd = cmds.length === 1 ? cmds[0]! : ({ op: "batch", cmds } as unknown as Cmd);
-    await api.cmd({ op: "on_sheet", sheet: path.join("/"), cmd: one } as unknown as Cmd);
-    setEdits((n) => n + 1);
+    await api.cmd({ op: "on_sheet", sheet: parent.join("/"), cmd: one } as unknown as Cmd);
+    setStale((prev) => ({ key: parent.join("/"), n: (prev?.n ?? 0) + 1 }));
   };
 
-  const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
-  const sheet = sheets[Math.min(page, sheets.length - 1)];
-  if (!sheet) return null;
-  const labels = labelsBySheet[sheet.id];
+  const labels = labelsBySheet[current.key];
   const rows = labels ? syncRows(sheet.pins, labels) : [];
   const missing = rows.filter((r) => r.kind === "label_only");
   const unreferenced = rows.filter((r) => r.kind === "pin_only");
@@ -112,7 +130,7 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
   const addLabels = async (pins: ReadonlyArray<{ name: string; shape?: LabelShape | null }>) => {
     if (pins.length === 0) return;
     close();
-    const sub = [...path, sheet.id];
+    const sub = [...parent, sheet.id];
     await api.navigateToSheet(sub);
     for (let i = 0; i < 40 && !samePath(api.getState().currentSheetPath, sub); i++) await new Promise((r) => setTimeout(r, 25));
     const last = lastPlaced();
@@ -122,7 +140,7 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
     const c = api.getState().cursorNm;
     carryItem({ api }, "sch_label_hier", items[0]!, c ? [c.x, c.y] : [sheet.at[0], sheet.at[1]], items.slice(1));
     // `EndPlaceItem` / `CanPlaceMore` / `EndPlacement`, then `Show( true )`: the dialog again, on this sheet, once the hand is empty
-    const again: SchToolDialog = { kind: "sync_pins", sheetIds: dialog.sheetIds, first: sheet.id, path: [...path] };
+    const again: SchToolDialog = { kind: "sync_pins", sheetIds: dialog.sheetIds, first: current.key, path: [...base] };
     const stop = subscribeSchCarry(() => {
       if (getSchCarry()) return;
       stop();
@@ -133,11 +151,11 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
 
   return (
     <SchDialogShell title="Synchronize Sheet Pins" width={620} onCancel={close} cancelLabel="Close">
-      {sheets.length > 1 && (
+      {pages.length > 1 && (
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
-          {sheets.map((s, i) => (
-            <button key={s.id} className={i === page ? "primary" : undefined} onClick={() => setPage(i)}>
-              {s.name}
+          {pages.map((p) => (
+            <button key={p.key} className={p.key === current.key ? "primary" : undefined} onClick={() => setPageKey(p.key)}>
+              {p.sheet.name}
             </button>
           ))}
         </div>

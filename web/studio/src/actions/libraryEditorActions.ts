@@ -18,6 +18,12 @@ import { fpArrayIds } from "../kicad-port/fpArray";
 import { padToolsBlocked } from "../kicad-port/padEditMode";
 import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
+import { symActionEnabled, type SymEnableState } from "../kicad-port/fpSymActionEnabled";
+
+/** What `symActionEnabled` reads, from the Symbol Editor's state. */
+export function symEnableState(st: ReturnType<SymbolEditorApi["getState"]>): SymEnableState {
+  return { symbolLoaded: !!st.symbol, derived: !!st.derivedOwn, unitCount: st.symbol?.unit_count ?? 0, unitsLocked: !!st.symbol?.units_locked };
+}
 
 export interface LibraryActionContext {
   tab: string;
@@ -71,7 +77,7 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   });
   // Inspect > Footprint Checker (`FOOTPRINT_EDITOR_CONTROL::CheckFootprint`): kicad-cli's DRC on a scratch board that holds the footprint (actions/footprintCheckerActions.ts).
   m.set("pcbnew.ModuleEditor.checkFootprint", fpTab(() => showFootprintChecker(ctx.fpApi)));
-  m.set("pcbnew.ModuleEditor.exportFootprint", fpTab(() => (ctx.fpApi.getState().name ? ctx.fpApi.exportKicadMod() : fpToast("There is no footprint to export."))));
+  m.set("pcbnew.ModuleEditor.exportFootprint", fpTab(() => fpLib.exportFootprint(fpc)));
   // Footprint Properties... -- Properties (`pcbnew.ModuleEditor.footprintProperties`).
   m.set("pcbnew.ModuleEditor.footprintProperties", fpTab(() => fpLib.footprintProperties(fpc)));
   // Pad Table... -- PAD_TOOL::PadTable (DIALOG_FP_EDIT_PAD_TABLE): refused while there is no footprint (`if( !footprint ) return 0`).
@@ -112,8 +118,9 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.circle", "draw_circle");
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.graphicPolygon", "draw_polygon");
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.text", "text");
-  // Load footprint from current PCB -- FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard: pick a board footprint by reference (`SelectFootprintFromBoard`).
-  m.set("pcbnew.ModuleEditor.loadFootprintFromBoard", fpTab(() => (ctx.boardParts.some((p) => p.footprint) ? ctx.fpDispatch({ type: "SET_LOAD_FROM_BOARD_OPEN", open: true }) : fpToast("The board has no footprint to load."))));
+  // Load footprint from current PCB -- PCB_CONTROL::LoadFpFromBoard -> FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard( nullptr ): pick a board footprint by reference
+  // (`SelectFootprintFromBoard`); a board without footprints is `return false`, silently (`!frame->GetBoard()->GetFirstFootprint()`).
+  m.set("pcbnew.ModuleEditor.loadFootprintFromBoard", fpTab(() => (ctx.boardParts.some((p) => p.footprint) ? ctx.fpDispatch({ type: "SET_LOAD_FROM_BOARD_OPEN", open: true }) : undefined)));
   // Edit Library Footprint (File menu) -- FOOTPRINT_EDITOR_CONTROL::EditLibraryFootprint: with a footprint loaded from the board, its library footprint (`GetFPID()`) is opened
   // (`LoadFootprintFromLibrary`); with none, nothing (`wxBell()`). On the board the action opens the selected footprint's library footprint (useActionRunner.ts).
   const boardEditLibFp = m.get("pcbnew.EditorControl.EditLibFpInFpEditor");
@@ -136,15 +143,13 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   );
   // Default Pad Properties... -- FOOTPRINT_EDITOR_CONTROL::DefaultPadProperties: `ShowPadPropertiesDialog( nullptr )`, the dialog on `m_Pad_Master`.
   m.set("pcbnew.PadTool.defaultPadProperties", fpTab(() => ctx.fpDispatch({ type: "SET_DEFAULT_PAD_OPEN", open: true })));
-  // Copy Pad Properties to Default -- PAD_TOOL::copyPadSettings: "can only copy from a single pad".
+  // Copy Pad Properties to Default -- PAD_TOOL::copyPadSettings: "can only copy from a single pad" (`selection.Size() == 1` and a pad), silently
+  // (KiCad shows no message; the Default Pad Properties dialog shows the result).
   m.set(
     "pcbnew.PadTool.CopyPadSettings",
     fpTab(() => {
       const pads = selectedPads();
-      if (pads.length === 1 && ctx.fpApi.getState().selection.size === 1) {
-        ctx.fpApi.copyPadProperties(pads[0]!);
-        fpToast("Pad properties copied to the default pad");
-      }
+      if (pads.length === 1 && ctx.fpApi.getState().selection.size === 1) ctx.fpApi.copyPadProperties(pads[0]!);
     })
   );
   // Paste Default Pad Properties to Selected -- PAD_TOOL::pastePadProperties: every selected pad.
@@ -221,14 +226,14 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   // Show Hidden Fields / Show Pin Alternate Icons -- SYMBOL_EDITOR_CONTROL::ToggleHiddenFields, TogglePinAltIcons: render-setting toggles.
   m.set("eeschema.SymbolLibraryControl.showHiddenFields", symTab(() => ctx.symDispatch({ type: "TOGGLE_HIDDEN_FIELDS" })));
   m.set("eeschema.EditorControl.togglePinAltIcons", symTab(() => ctx.symDispatch({ type: "TOGGLE_PIN_ALT_ICONS" })));
-  // Synchronized Pins Mode -- ToggleSyncedPinsMode: `m_SyncPinEdit = !m_SyncPinEdit`; enabled for a multi-unit symbol only (`multiUnitModeCond`).
+  // Synchronized Pins Mode -- ToggleSyncedPinsMode: `m_SyncPinEdit = !m_SyncPinEdit`, silently; enabled for a multi-unit symbol whose units are interchangeable only
+  // (`multiUnitModeCond`: `IsMultiUnit() && !UnitsLocked()`).
   m.set(
     "eeschema.SymbolLibraryControl.toggleSyncedPinsMode",
     symTab(() => {
       const st = ctx.symApi.getState();
-      if (!st.symbol || st.symbol.unit_count <= 1) return symToast("Synchronized Pins Mode needs a symbol with more than one unit.");
+      if (!symActionEnabled("eeschema.SymbolLibraryControl.toggleSyncedPinsMode", symEnableState(st))) return;
       ctx.symDispatch({ type: "SET_SYNC_PINS", on: !st.syncPins });
-      symToast(`Synchronized Pins Mode ${st.syncPins ? "off" : "on"}`);
     })
   );
   // Bulk Edit Symbol Fields... / Bulk Edit Related Symbol Fields... -- SYMBOL_EDITOR_CONTROL::ShowLibraryTable (DIALOG_LIB_FIELDS_TABLE, scope library / related symbols).
@@ -265,29 +270,35 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   // Draw Bezier Curve (`SCH_ACTIONS::drawBezier` -> `DrawShape( SHAPE_T::BEZIER )`, kicad-port/symBezier.ts)
   armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawBezier", "draw_bezier");
 
-  // Push Pin Length / Name Size / Number Size -- SYMBOL_EDITOR_PIN_TOOL::PushPinProperties: from the one selected pin to every other pin.
+  // Push Pin Length / Name Size / Number Size -- SYMBOL_EDITOR_PIN_TOOL::PushPinProperties: from the selection's first item, when it is a pin
+  // (`dynamic_cast<SCH_PIN*>( selection.Front() )`; else nothing), to every other pin, one undo step. The menu shows the rows for a single selected pin of an
+  // editable symbol only (`canEdit && singlePinCondition`, SymbolEditorCanvas.tsx).
   const pushPin = (field: "length" | "name_size" | "number_size") =>
     symTab(() => {
       const st = ctx.symApi.getState();
-      const pins = [...st.selection].filter((id) => ctx.symApi.pinById(id));
-      if (pins.length !== 1) return; // `singlePinCondition`
-      void ctx.symApi.pushPinProperty(pins[0]!, field);
+      const front = st.selection.values().next().value;
+      if (front === undefined || !ctx.symApi.pinById(front)) return;
+      void ctx.symApi.pushPinProperty(front, field);
     });
   m.set("eeschema.PinEditing.pushPinLength", pushPin("length"));
   m.set("eeschema.PinEditing.pushPinNameSize", pushPin("name_size"));
   m.set("eeschema.PinEditing.pushPinNumSize", pushPin("number_size"));
 
   // Draw Lines / Draw Polygons / Move Symbol Anchor / Draw Text -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape (SEGMENT / POLY), PlaceAnchor, TwoClickPlace: arm the tool.
-  const armSymTool = (tool: "draw_lines" | "draw_polygon" | "draw_textbox" | "anchor" | "text") =>
-    symTab(() => {
-      const st = ctx.symApi.getState();
-      if (!st.symbol) return symToast("Open a symbol first.");
-      ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: st.activeTool === tool ? "select" : tool });
-    });
-  m.set("eeschema.SymbolDrawing.drawSymbolLines", armSymTool("draw_lines"));
-  m.set("eeschema.SymbolDrawing.drawSymbolPolygon", armSymTool("draw_polygon"));
+  // Each is `EDIT_TOOL( .. )` in `setupUIConditions` (`Enable( isEditableCond )`: a loaded symbol that is not derived), so with none, or a derived one, nothing.
+  const armSymTool = (name: string, tool: "draw_lines" | "draw_polygon" | "draw_textbox" | "anchor" | "text") =>
+    m.set(
+      name,
+      symTab(() => {
+        const st = ctx.symApi.getState();
+        if (!symActionEnabled(name, symEnableState(st))) return;
+        ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: st.activeTool === tool ? "select" : tool });
+      })
+    );
+  armSymTool("eeschema.SymbolDrawing.drawSymbolLines", "draw_lines");
+  armSymTool("eeschema.SymbolDrawing.drawSymbolPolygon", "draw_polygon");
   // Draw Text Box -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawSymbolTextBox (`doDrawShape` without a shape): two clicks, then Text Box Properties.
-  m.set("eeschema.SymbolDrawing.drawSymbolTextBox", armSymTool("draw_textbox"));
-  m.set("eeschema.SymbolDrawing.placeSymbolAnchor", armSymTool("anchor"));
-  m.set("eeschema.SymbolDrawing.placeSymbolText", armSymTool("text"));
+  armSymTool("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
+  armSymTool("eeschema.SymbolDrawing.placeSymbolAnchor", "anchor");
+  armSymTool("eeschema.SymbolDrawing.placeSymbolText", "text");
 }
