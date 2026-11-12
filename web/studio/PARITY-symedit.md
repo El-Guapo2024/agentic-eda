@@ -506,7 +506,8 @@ defaults, delete), `crates/ops/src/import_graphics_sch_tests.rs` (the SVG curve 
 `symFind.test.ts` (+1), `symClipboard.test.ts` (+1), `pinTableGrid.test.ts` (+6), `pinTableImport.test.ts` (5); browser `e2e/symedit-v7.check.js` 7/7, `e2e/pintable-v7.check.js` 5/5,
 and `symedit-edit` 9/9, `symedit-u5` 8/8, `symedit-props-u6` 5/5 (its text box now writes `(type solid)`, as KiCad's OK does), `lib-editors` and `files-in` (refusals read from the message box).
 
-**Left**: a placed symbol does not draw a shape's colours, style, hatch or radius, nor a field's face (the engine's `SymbolGraphic` has none of them), and the schematic's
-`lib_symbols` cache does not write them; a private shape is left out of that cache (KiCad writes it with `private`); a field's looks are kept by its name, so a renamed field
+**Left**: ~~a placed symbol does not draw a shape's colours, style, hatch or radius, nor a field's face (the engine's `SymbolGraphic` has none of them), and the schematic's
+`lib_symbols` cache does not write them; a private shape is left out of that cache (KiCad writes it with `private`)~~ (done, `task-v8-sch`, PARITY-sch section 87:
+`LibConnectivity::shape_looks` and `field_looks` on the engine symbol, drawn by the schematic canvas and written in the cache); a field's looks are kept by its name, so a renamed field
 leaves them behind; the clipboard's images need the browser's clipboard permission (headless checks get the text only); the Text Box tool's next box does not take the last
 one's line style.
