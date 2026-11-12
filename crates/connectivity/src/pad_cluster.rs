@@ -64,7 +64,7 @@ pub fn pad_clusters(design: &Design, model: &ConstraintModel, wanted: &[(String,
                                 out.pads.insert(p.clone());
                             }
                         }
-                        ItemRef::ZoneOutline { .. } => {}
+                        ItemRef::ZoneOutline { .. } | ItemRef::Shape { .. } => {}
                     }
                 }
             }

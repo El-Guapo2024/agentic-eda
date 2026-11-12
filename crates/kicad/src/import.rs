@@ -2325,6 +2325,7 @@ fn import_footprints(
             let kind = if file_version < 20200826 { eda_model::fp_edit::FootprintKind::ThroughHole } else { eda_model::fp_edit::FootprintKind::Unspecified };
             edit.attrs = Some(eda_model::fp_edit::FootprintAttrs { kind, ..Default::default() });
         }
+        let mut own_nets: Vec<Option<String>> = Vec::new();
         for pad in sexpr::find_all(fp, "pad") {
             let Some(p) = parse_pad_geometry_in(pad, side, rot, notes, false, layers) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
@@ -2354,16 +2355,31 @@ fn import_footprints(
             // still counts as a hole for clearance.
             if p.kind != PadKind::NonPlatedHole {
                 let name = pad_net(sexpr::find(pad, "net"), net_names);
+                // each kept pad's net, in the footprint's pad order (`own_nets`): a number on two nets gives its pads their own (`PadMaskInfo::net`)
+                own_nets.push(Some(name.clone()));
                 if !name.is_empty() {
                     pin_nets.push((format!("{reference}.{}", p.number), name));
                 }
                 pins.push(Pin { number: p.number.clone(), name: None, kind: PinKind::Signal });
+            } else {
+                own_nets.push(None);
             }
             if let Some(u) = import_items::item_uuid(pad) {
                 slots.insert(u.clone(), format!("pad:{}#{}", p.number, pads.iter().filter(|q| q.number == p.number).count() + 1));
                 notes.item_ids.entry(u).or_insert_with(|| format!("{reference}.{}", p.number));
             }
             pads.push(p);
+        }
+        // A number whose pads are on different nets (KiCad keeps a net per `PAD`): each of those pads keeps its own (`PadMaskInfo::net`, UI-LEFT-2 PP21).
+        for (i, own) in own_nets.iter().enumerate() {
+            let Some(net) = own else { continue };
+            let number = &pads[i].number;
+            let split = pads.iter().zip(&own_nets).any(|(q, other)| &q.number == number && other.as_ref().is_some_and(|o| o != net));
+            if split {
+                if let Some(info) = extra.pads.get_mut(i) {
+                    info.net = Some(net.clone());
+                }
+            }
         }
 
         // Pad geometry is keyed by lib id and shared across instances (the

@@ -3061,6 +3061,11 @@ pub struct PadMaskInfo {
     /// from a schematic and a rule reads as `A.Pin_Name`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_function: String,
+    /// The pad's own net (`BOARD_CONNECTED_ITEM::GetNetname`) where another pad of its footprint has its number and is on another net: KiCad keeps a net per `PAD`, the
+    /// model one per `REF.NUMBER` (an encoder's two `MP` pads on two `unconnected-..` nets, a test point's two `1` pads). The connectivity and the writer read it
+    /// over the number's net (UI-LEFT-2 PP21); `""` is no net. `None` for every other pad. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net: Option<String>,
     /// An SMD pad whose `(layers ..)` has no paste layer (a fiducial, a test point, a thermal pad covered by its own paste pads): the writer leaves the paste layer out, as the
     /// pad had it, where an SMD pad otherwise gets its side's paste layer (a stencil aperture of its own).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

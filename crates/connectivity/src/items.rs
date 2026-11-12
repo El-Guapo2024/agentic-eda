@@ -52,6 +52,8 @@ pub enum ItemRef {
     TrackSeg { track_id: String, seg_index: usize },
     Via { via_id: String },
     ZoneOutline { zone_id: String },
+    /// A board graphic on a copper layer (`CN_LIST::Add( PCB_SHAPE* )`, UI-LEFT-2 PP21): on its net (`ShapeStyle::net`) or on none.
+    Shape { shape_id: String },
 }
 
 /// The geometry a [`CnItem`] presents for touch-testing (see
@@ -186,6 +188,19 @@ fn sorted_pads(model: &ConstraintModel, part: &Part) -> Vec<eda_model::footprint
     pads
 }
 
+/// The own net of each pad of `part` that has one (`PadMaskInfo::net`), in [`sorted_pads`]' order: the file's pads are the model footprint's, in its order, and a
+/// stable sort by number keeps the pads of one number in it.
+fn own_pad_nets(design: &Design, model: &ConstraintModel, part: &Part, reference: &str) -> Vec<Option<String>> {
+    let Some(fp) = model.footprint_of(part) else { return Vec::new() };
+    let Some(infos) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).map(|e| &e.pads).filter(|p| p.len() == fp.pads.len()) else { return Vec::new() };
+    if infos.iter().all(|i| i.net.is_none()) {
+        return Vec::new();
+    }
+    let mut order: Vec<usize> = (0..fp.pads.len()).collect();
+    order.sort_by(|a, b| fp.pads[*a].number.cmp(&fp.pads[*b].number));
+    order.into_iter().map(|i| infos[i].net.clone()).collect()
+}
+
 /// A pad turned by other than a multiple of 90 degrees (its own rotation and its footprint's) is given its copper as pieces
 /// ([`eda_model::pad_geom::pad_pieces`], `PAD::buildEffectiveShape`), so a touch is measured to the shape KiCad collides
 /// (`PAD::GetEffectiveShape`) and not to the axis-aligned box round it, which [`PlacedPad`] is otherwise (exact only at a multiple of 90 degrees).
@@ -213,8 +228,10 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
             let Some(part) = model.part(&fp.id) else { continue };
             let Some(pads) = placed_pads(model, part, fp) else { continue };
             let sources = sorted_pads(model, part);
+            let own_nets = own_pad_nets(design, model, part, &fp.id);
             for (i, pad) in pads.into_iter().enumerate() {
-                let net = net_of_pin.get(&format!("{}.{}", fp.id, pad.number)).cloned().unwrap_or_default();
+                // the pad's own net where its number is on two (`PadMaskInfo::net`: KiCad keeps a net per `PAD`, UI-LEFT-2 PP21), else its number's
+                let net = own_nets.get(i).cloned().flatten().unwrap_or_else(|| net_of_pin.get(&format!("{}.{}", fp.id, pad.number)).cloned().unwrap_or_default());
                 let (is_pth, opposite) = sources.get(i).map(|p| (p.kind == PadKind::ThroughHole, p.opposite_side)).unwrap_or((false, false));
                 // A padstack: an item for each run of layers that shares a shape, each measured by its own copper (`PADSTACK::ForEachUniqueLayer`).
                 if let Some(source) = sources.get(i).filter(|p| is_pth && p.has_stack()).cloned() {
@@ -366,7 +383,106 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
         }
     }
 
+    // `CN_CONNECTIVITY_ALGO::Build`: every board graphic on a copper layer (`if( shape->IsOnCopperLayer() ) Add( shape )`), a `CN_ITEM( shape, true )` whose
+    // anchors are `GetConnectionPoints()`; collided by its effective shape, which is the item's copper pieces here (`ItemShape::Pad` with `pieces`, the form
+    // every touch test reads a shape of copper in).
+    if let Some(dr) = &design.drawings {
+        let max_error = model.board.max_error_nm.as_f64().max(1.0);
+        for s in &dr.shapes {
+            if !layers.iter().any(|l| l == s.layer()) {
+                continue;
+            }
+            let Some((anchors, pieces, position)) = shape_copper(s, max_error) else { continue };
+            let layer = layer_index(layers, s.layer());
+            let net = dr.board_items.style_of(s.id()).and_then(|st| st.net.clone()).unwrap_or_default();
+            let (x0, y0, x1, y1) = pieces.iter().map(|q| q.bbox()).fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)));
+            let bbox = (Nm::new(x0.floor() as i64), Nm::new(y0.floor() as i64), Nm::new(x1.ceil() as i64), Nm::new(y1.ceil() as i64));
+            let copper = PlacedPad {
+                number: String::new(),
+                // `GetPosition()`, what `getMinDist` measures a graphic from
+                center: position,
+                size: (bbox.2 - bbox.0, bbox.3 - bbox.1),
+                through_hole: false,
+                shape: eda_model::footprint::PadShape::Custom,
+                roundrect_ratio: None,
+                pieces,
+            };
+            items.push(CnItem {
+                item: ItemRef::Shape { shape_id: s.id().to_string() },
+                net,
+                can_change_net: true,
+                layer_lo: layer,
+                layer_hi: layer,
+                anchors,
+                shape: ItemShape::Pad(copper),
+                bbox,
+                connected: Vec::new(),
+                pad_piece_of: None,
+                never_flashed: None,
+            });
+        }
+    }
+
     items
+}
+
+/// A copper graphic's anchors (`PCB_SHAPE::GetConnectionPoints`: the centre of a solid fill, a circle's four quadrant points, an arc's middle, start and end, a
+/// segment's and a curve's ends, a polygon's corners, a rectangle's four corners) and its copper (`GetEffectiveShape`: the stroke of its outline at its width, and the
+/// area of a filled one), `max_error` the arcs' and curves' tessellation, and its position (`EDA_SHAPE::getPosition`: an arc's centre, a polygon's first corner, else
+/// its start, a circle's centre). `None` for a shape with no copper.
+fn shape_copper(s: &eda_model::ir::Shape, max_error: f64) -> Option<(Vec<Point>, Vec<eda_model::pad_geom::PadPiece>, Point)> {
+    use eda_model::ir::Shape;
+    use eda_model::pad_geom::PadPiece;
+    let f = |p: Point| (p.x.as_f64(), p.y.as_f64());
+    let r = s.stroke_width().as_f64() / 2.0;
+    let stroke = |pts: &[Point], closed: bool| -> PadPiece {
+        let mut v: Vec<(f64, f64)> = pts.iter().map(|p| f(*p)).collect();
+        if closed && pts.len() > 1 {
+            v.push(f(pts[0]));
+        }
+        PadPiece::Strokes { pts: v, r }
+    };
+    let centre_of = |pts: &[Point]| {
+        let (x0, y0, x1, y1) = bbox_of(pts);
+        Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+    };
+    let (ring, closed, mut anchors): (Vec<Point>, bool, Vec<Point>) = match s {
+        Shape::Segment { start, end, .. } => (vec![*start, *end], false, vec![*start, *end]),
+        Shape::Arc { start, mid, end, .. } => (eda_model::outline::Arc::through(*start, *mid, *end).polyline(max_error), false, vec![*mid, *start, *end]),
+        Shape::Bezier { start, end, .. } => (s.bezier_points().unwrap_or_else(|| vec![*start, *end]), false, vec![*start, *end]),
+        Shape::Rect { start, end, .. } => {
+            let corners = vec![*start, Point { x: end.x, y: start.y }, *end, Point { x: start.x, y: end.y }];
+            (corners.clone(), true, corners)
+        }
+        Shape::Polygon { pts, .. } => (pts.clone(), true, pts.clone()),
+        Shape::Circle { center, end, .. } => {
+            let radius = eda_model::outline::circle_radius(*center, *end);
+            let quad = |dx: Nm, dy: Nm| Point { x: center.x + dx, y: center.y + dy };
+            (eda_model::outline::Arc::full_circle(*center, radius).polyline(max_error), true, vec![quad(Nm::ZERO, radius), quad(radius, Nm::ZERO), quad(Nm::ZERO, -radius), quad(-radius, Nm::ZERO)])
+        }
+    };
+    if ring.len() < 2 {
+        return None;
+    }
+    let mut pieces = Vec::new();
+    if r > 0.0 {
+        pieces.push(stroke(&ring, closed));
+    }
+    if s.is_filled() && closed && ring.len() >= 3 {
+        pieces.push(PadPiece::Polygon(ring.iter().map(|p| f(*p)).collect()));
+        // "For filled shapes, we may as well use a centroid" (`IsSolidFill()`: `GetCenter()`)
+        anchors = vec![match s {
+            Shape::Circle { center, .. } => *center,
+            _ => centre_of(&ring),
+        }];
+    }
+    let position = match s {
+        Shape::Arc { start, mid, end, .. } => eda_model::outline::Arc::through(*start, *mid, *end).center().map_or(*start, |(x, y)| Point { x: Nm::kiround(x), y: Nm::kiround(y) }),
+        Shape::Polygon { pts, .. } => pts.first().copied().unwrap_or_default(),
+        Shape::Circle { center, .. } => *center,
+        Shape::Segment { start, .. } | Shape::Rect { start, .. } | Shape::Bezier { start, .. } => *start,
+    };
+    (!pieces.is_empty()).then_some((anchors, pieces, position))
 }
 
 #[cfg(test)]

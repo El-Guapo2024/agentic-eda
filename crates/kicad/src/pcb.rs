@@ -1671,7 +1671,9 @@ pub(crate) fn write_footprint(
         }
         // A non-plated hole has no net by definition -- nothing to look up.
         if pad.kind != PadKind::NonPlatedHole {
-            if let Some(net_name) = pin_net(&pad.number) {
+            // the pad's own net, where its number is on two (`PadMaskInfo::net`), over the number's
+            let own = pad_infos.and_then(|p| p.get(pad_idx)).and_then(|i| i.net.as_deref());
+            if let Some(net_name) = own.filter(|n| !n.is_empty()).or_else(|| if own.is_some() { None } else { pin_net(&pad.number) }) {
                 if let Some(&n) = net_num.get(net_name) {
                     write!(out, " (net {n} {})", sexpr_str(net_name)).unwrap();
                 }
@@ -2182,6 +2184,29 @@ mod tests {
         sorted.sort();
         assert_eq!(sorted, vec![30000, 30001, 30002], "{out}");
         assert_eq!(teardrop_priorities(&design.routing.as_ref().unwrap().zones).into_iter().collect::<std::collections::BTreeMap<_, _>>(), [("big", 30001), ("small", 30002)].into_iter().collect());
+    }
+
+    /// UI-LEFT-2 PP21: two pads of one number on different nets (an encoder's two `MP` pads, `issue23469`) keep their own nets (`PadMaskInfo::net`): read so, and
+    /// written so, each with its own; a number whose pads share a net is left to it.
+    #[test]
+    fn pads_of_one_number_on_two_nets_keep_their_own() {
+        let pad = |num: &str, x: f64, net: &str| format!("(pad \"{num}\" thru_hole rect (at {x} 0) (size 1.5 1.5) (drill 0.8) (layers \"*.Cu\" \"*.Mask\") (net \"{net}\"))");
+        let text = format!(
+            "(kicad_pcb (version 20241229) (generator \"pcbnew\") (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user)) (net 0 \"\") (net 1 \"A\") (net 2 \"B\") \
+             (footprint \"enc\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"SW1\" (at 0 0) (layer \"F.SilkS\")) {} {} {} {}))",
+            pad("MP", -5.0, "A"),
+            pad("MP", 5.0, "B"),
+            pad("1", -2.0, "A"),
+            pad("1", 2.0, "A")
+        );
+        let (design, model, _) = crate::import::import_kicad_pcb(&text).unwrap();
+        let e = design.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "SW1").unwrap();
+        let nets: Vec<Option<&str>> = e.pads.iter().map(|p| p.net.as_deref()).collect();
+        assert_eq!(nets, [Some("A"), Some("B"), None, None]);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad_nets: Vec<&str> = out.lines().filter(|l| l.contains("(pad \"MP\"")).filter_map(|l| l.split("(net ").nth(1)).map(|t| t.split(')').next().unwrap()).collect();
+        assert_eq!(pad_nets.len(), 2, "{out}");
+        assert!(pad_nets[0].ends_with("\"A\"") && pad_nets[1].ends_with("\"B\""), "{pad_nets:?}");
     }
 
     /// UI-LEFT-2 PP24: `BOARD::SetLegacyTeardrops` as the parser sets it -- the file's `(general (legacy_teardrops ..))`, a bare token true, or a teardrop zone in a
