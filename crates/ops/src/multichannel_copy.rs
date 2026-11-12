@@ -217,11 +217,19 @@ impl Item {
 pub(crate) struct AreaGeom<'a> {
     pub poly: AreaPoly,
     pub layers: &'a [String],
+    /// The polygons kicad-cli plots of the board's F.Cu barcodes, by id (`RepeatLayout::barcode_shapes`): a barcode's own polygon, where the studio has one.
+    pub barcodes: Option<&'a BTreeMap<String, Vec<Vec<Point>>>>,
 }
 
 impl<'a> AreaGeom<'a> {
     pub(crate) fn new(outline: &[Point], holes: &[Vec<Point>], layers: &'a [String]) -> AreaGeom<'a> {
-        AreaGeom { poly: AreaPoly::new(outline, holes), layers }
+        AreaGeom { poly: AreaPoly::new(outline, holes), layers, barcodes: None }
+    }
+
+    /// The area with the barcodes' plotted polygons to judge them by.
+    pub(crate) fn with_barcodes(mut self, barcodes: &'a BTreeMap<String, Vec<Vec<Point>>>) -> AreaGeom<'a> {
+        self.barcodes = Some(barcodes);
+        self
     }
 }
 
@@ -233,7 +241,12 @@ pub(crate) fn enclosed_items(design: &Design, area: &AreaGeom, copper: &[String]
     let overlaps = |it: &Item| it.layer_set(copper).iter().any(|l| area.layers.contains(l));
     let mut out: Vec<Item> = Vec::new();
     let mut take = |it: Item| {
-        if overlaps(&it) && area.poly.encloses(&it.shape(max_error)) {
+        // a barcode on F.Cu (`PCB_BARCODE::TransformShapeToPolygon` on the context's layer) by its plotted polygon, where the board directory gave one
+        let plotted = match &it {
+            Item::Barcode(b) if b.layer == "F.Cu" => area.barcodes.and_then(|m| m.get(&b.id)).filter(|c| !c.is_empty()).map(|contours| super::multichannel_poly::plotted_shape(contours)),
+            _ => None,
+        };
+        if overlaps(&it) && area.poly.encloses(&plotted.unwrap_or_else(|| it.shape(max_error))) {
             out.push(it);
         }
     };
@@ -302,8 +315,8 @@ pub(crate) struct RefItems {
 
 impl RefItems {
     /// The items a board's reference area encloses, with the locks and groups they carry.
-    pub(crate) fn of_board(design: &Design, area: &RuleArea, copper: &[String], max_error: Nm) -> RefItems {
-        let geom = AreaGeom::new(&area.outline, &area.holes, &area.layers);
+    pub(crate) fn of_board(design: &Design, area: &RuleArea, copper: &[String], max_error: Nm, barcodes: &BTreeMap<String, Vec<Vec<Point>>>) -> RefItems {
+        let geom = AreaGeom::new(&area.outline, &area.holes, &area.layers).with_barcodes(barcodes);
         let items = enclosed_items(design, &geom, copper, Some(&area.zone_id), max_error);
         let mut r = RefItems { items, ..Default::default() };
         if let Some(dr) = &design.drawings {
@@ -343,6 +356,8 @@ pub(crate) struct TargetSide<'a> {
     pub center: Point,
     /// `PLACEMENT_SOURCE_T::GROUP_PLACEMENT`.
     pub group: bool,
+    /// The barcodes' plotted polygons ([`AreaGeom::barcodes`]).
+    pub barcodes: &'a BTreeMap<String, Vec<Vec<Point>>>,
 }
 
 /// What a copy to one target did, for the grouping that follows.
@@ -441,7 +456,7 @@ impl Board<'_> {
         let mut gone: BTreeSet<String> = BTreeSet::new();
         let max_error = self.model.board.max_error_nm;
         if t.zone.is_some() {
-            let geom = AreaGeom::new(t.outline, t.holes, t.layers);
+            let geom = AreaGeom::new(t.outline, t.holes, t.layers).with_barcodes(t.barcodes);
             for it in enclosed_items(orig, &geom, &copper_layers, t.zone, max_error) {
                 let wanted = if it.is_routing() {
                     opts.copy_routing && !(locked_now.contains(it.id()) && !opts.include_locked_items) && !(opts.connected_routing_only && !target_nets.contains(&it.net())) && target_layers.contains(it.layer().as_str())
@@ -789,7 +804,7 @@ impl Board<'_> {
     }
 
     /// `MULTICHANNEL_TOOL::RepeatLayout( aEvent, aRefZone )`: the reference area's layout onto each target that matches.
-    pub(crate) fn repeat_layout(&mut self, reference: &str, targets: &[String], opts: &RepeatOptions) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn repeat_layout(&mut self, reference: &str, targets: &[String], opts: &RepeatOptions, barcodes: &BTreeMap<String, Vec<Vec<Point>>>) -> Result<(), Vec<CheckResult>> {
         if targets.is_empty() {
             return Err(fail("ops_no_targets", reference, "no target rule area was chosen"));
         }
@@ -807,7 +822,7 @@ impl Board<'_> {
             None => None,
         };
         let copper: Vec<String> = self.model.board.layers.clone();
-        let items = RefItems::of_board(&orig, refa, &copper, self.model.board.max_error_nm);
+        let items = RefItems::of_board(&orig, refa, &copper, self.model.board.max_error_nm, barcodes);
         let ref_side = RefSide { fps: &mc.fps, outline: &refa.outline, layers: &refa.layers, center: refa.center, items: &items, design_block: false };
 
         let mut outcomes: Vec<Outcome> = Vec::new();
@@ -824,7 +839,7 @@ impl Board<'_> {
                 first_problem.get_or_insert_with(|| format!("{}: {}", if target.name.is_empty() { &target.zone_id } else { &target.name }, res.message));
                 continue;
             }
-            let tgt_side = TargetSide { zone: Some(&target.zone_id), outline: &target.outline, holes: &target.holes, layers: &target.layers, center: target.center, group: false };
+            let tgt_side = TargetSide { zone: Some(&target.zone_id), outline: &target.outline, holes: &target.holes, layers: &target.layers, center: target.center, group: false, barcodes };
             outcomes.push(self.mc_copy_contents(&orig, &ref_side, &tgt_side, &mc.fps, &res.pairs, opts, anchor));
         }
         if outcomes.is_empty() {
@@ -913,7 +928,8 @@ impl Board<'_> {
         let items = super::multichannel_facts::block_items(&clip);
         // The block's area is all the copper layers (`LSET::AllCuMask()`): only what is on copper comes across.
         let ref_side = RefSide { fps: &block_fps, outline: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, items: &items, design_block: true };
-        let tgt_side = TargetSide { zone: None, outline: &[], holes: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, group: true };
+        let no_barcodes = BTreeMap::new();
+        let tgt_side = TargetSide { zone: None, outline: &[], holes: &[], layers: &copper, center: Point { x: Nm::ZERO, y: Nm::ZERO }, group: true, barcodes: &no_barcodes };
         let opts = RepeatOptions { copy_routing: true, connected_routing_only: false, copy_placement: true, copy_other_items: true, group_items: false, include_locked_items: true, anchor: None };
         // "If no anchor is provided, pick the first matched pair": the group stays where it is.
         let anchor = res.pairs.first().map(|(r, _)| *r);

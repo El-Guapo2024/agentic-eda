@@ -16,8 +16,9 @@
 //! - a reference image has no polygon (`BOARD_ITEM::TransformShapeToPolygon` only logs "doesn't implement"), nor has a point (`PCB_POINT::TransformShapeToPolygon` is empty):
 //!   an empty polygon is never enclosed, so neither is copied by Repeat Layout (a point is not even among the board's drawings: `BOARD::Add` keeps it in `m_points`).
 //!
-//! Where this is not KiCad's polygon to the nanometre: a barcode (KiCad's comes from zint, which this studio has not) is the box of its symbol and of its text below it, grown
-//! by its knockout margin, turned -- the plotted polygon is inside it; a rectangle with rounded corners is its square-cornered rectangle; a text is the box of its strokes
+//! A barcode's polygon is KiCad's own (the modules zint works out), plotted by kicad-cli and handed to Repeat Layout by the board directory (`RepeatLayout::barcode_shapes`,
+//! UI-LEFT-2 PP22); where none was handed over (a command run without kicad-cli), the box of its symbol and of its text below it, grown by its knockout margin, turned -- the
+//! plotted polygon is inside it. Where this is not KiCad's polygon to the nanometre: a rectangle with rounded corners is its square-cornered rectangle; a text is the box of its strokes
 //! (`buildBoundingHull`, which is KiCad's) with the stroke font's glyphs.
 
 use super::multichannel_copy::Item;
@@ -261,6 +262,16 @@ fn text_box_shape(out: &mut ShapePolySet, tb: &eda_model::pcb_items::TextBox, er
     }
 }
 
+/// A barcode's polygon as kicad-cli plots it (`m_cache->poly`: the modules zint makes and the glyphs of its text), its contours in board coordinates: each contour an outline
+/// of the set (a module's hole lies inside the module's outline, so it changes nothing of what the area's subtraction leaves).
+pub(crate) fn plotted_shape(contours: &[Vec<Point>]) -> ShapePolySet {
+    let mut out = ShapePolySet::new();
+    for c in contours.iter().filter(|c| c.len() >= 3) {
+        out.add_outline(c.iter().map(|p| p64(*p)).collect());
+    }
+    out
+}
+
 impl Item {
     /// `item->TransformShapeToPolygon( itemShape, F_Cu, 0, maxError, ERROR_OUTSIDE )`, kind by kind (see the module doc); empty for a kind with no polygon.
     pub(crate) fn shape(&self, max_error: Nm) -> ShapePolySet {
@@ -368,6 +379,38 @@ mod tests {
         assert!(!area.encloses(&Item::Barcode(b.clone()).shape(mm(0.005))), "a barcode off F.Cu has no polygon on the context's layer");
         b.layer = "F.Cu".into();
         assert!(area.encloses(&Item::Barcode(b).shape(mm(0.005))));
+    }
+
+    /// UI-LEFT-2 PP22: a barcode on F.Cu is judged by the polygon kicad-cli plots of it (zint's modules) when the board directory handed one over: a barcode whose box
+    /// sticks out of the area while its modules are inside is enclosed, as in KiCad.
+    #[test]
+    fn a_barcode_is_judged_by_its_plotted_polygon_when_the_board_gave_one() {
+        use crate::multichannel_copy::{enclosed_items, AreaGeom};
+        let b = eda_model::barcode::Barcode {
+            id: "bar".into(),
+            at: p(19.0, 10.0),
+            angle: 0,
+            layer: "F.Cu".into(),
+            width_nm: mm(3.0),
+            height_nm: mm(3.0),
+            text: "AB".into(),
+            text_height_nm: mm(1.0),
+            kind: Default::default(),
+            ecc: Default::default(),
+            show_text: false,
+            knockout: false,
+            margin_x_nm: Nm::ZERO,
+            margin_y_nm: Nm::ZERO,
+        };
+        let mut design: eda_model::ir::Design = serde_json::from_str(r#"{"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]}}"#).unwrap();
+        design.drawings = Some(eda_model::ir::DrawingsSection { barcodes: vec![b], ..Default::default() });
+        let layers = vec!["F.Cu".to_string()];
+        let outline = square(0.0, 0.0, 20.0, 20.0);
+        let by_box = AreaGeom::new(&outline, &[], &layers);
+        assert!(enclosed_items(&design, &by_box, &layers, None, mm(0.005)).is_empty(), "by its box (17.5 .. 20.5 mm) it sticks out");
+        let plotted: std::collections::BTreeMap<String, Vec<Vec<Point>>> = [("bar".to_string(), vec![square(17.8, 8.8, 19.9, 11.2)])].into_iter().collect();
+        let by_poly = AreaGeom::new(&outline, &[], &layers).with_barcodes(&plotted);
+        assert_eq!(enclosed_items(&design, &by_poly, &layers, None, mm(0.005)).len(), 1, "its modules are inside");
     }
 
     #[test]

@@ -107,6 +107,11 @@ pub enum MultichannelCmd {
         targets: Vec<String>,
         #[serde(default)]
         options: RepeatOptions,
+        /// The polygons of the board's barcodes on F.Cu, by barcode id, in board coordinates (`PCB_BARCODE::TransformShapeToPolygon`: `m_cache->poly`, the modules zint
+        /// works out and the text under them): the board directory fills it from kicad-cli's plot of each (`crate::barcode_api` of the CLI), as the studio has no zint.
+        /// A barcode left out is judged by the box of its symbol and its text.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        barcode_shapes: BTreeMap<String, Vec<Vec<Point>>>,
     },
     /// `pcbnew.InteractiveDrawing.applyDesignBlockLayout`: the board layout of the design block `block` -- `text` is its `.kicad_pcb` -- repeated onto the footprints of the group
     /// `group` (which is linked to the block).
@@ -129,7 +134,7 @@ impl MultichannelCmd {
             MultichannelCmd::GenerateRuleAreas { areas, replace_existing, group_items } => {
                 format!("multichannel generate {} area(s){}{}", areas.len(), if *replace_existing { " --replace" } else { "" }, if *group_items { " --group" } else { "" })
             }
-            MultichannelCmd::RepeatLayout { reference, targets, options } => format!(
+            MultichannelCmd::RepeatLayout { reference, targets, options, .. } => format!(
                 "multichannel repeat {reference} -> {}{}{}{}{}",
                 targets.join(","),
                 if options.copy_placement { "" } else { " --no-placement" },
@@ -400,7 +405,7 @@ impl Board<'_> {
     pub(crate) fn apply_multichannel(&mut self, cmd: &MultichannelCmd) -> Result<(), Vec<CheckResult>> {
         match cmd {
             MultichannelCmd::GenerateRuleAreas { areas, replace_existing, group_items } => self.generate_rule_areas(areas, *replace_existing, *group_items),
-            MultichannelCmd::RepeatLayout { reference, targets, options } => self.repeat_layout(reference, targets, options),
+            MultichannelCmd::RepeatLayout { reference, targets, options, barcode_shapes } => self.repeat_layout(reference, targets, options, barcode_shapes),
             MultichannelCmd::ApplyDesignBlockLayout { group, block, text } => self.apply_design_block_layout(group, block, text),
         }
     }

@@ -387,7 +387,7 @@ fn areas_of(b: &Board<'_>, n: usize) -> Vec<String> {
 }
 
 fn repeat(reference: &str, targets: &[String], options: RepeatOptions) -> Cmd {
-    Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: reference.into(), targets: targets.to_vec(), options })
+    Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: reference.into(), targets: targets.to_vec(), options, barcode_shapes: Default::default() })
 }
 
 #[test]
