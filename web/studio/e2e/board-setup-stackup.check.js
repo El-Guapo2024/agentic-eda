@@ -4,8 +4,11 @@
 // `dielectric_constraints`, and the board thickness counts it); Remove Dielectric Layer (KiCad's list, "Layer 'Dielectric 1' sublayer 2/2") takes it away again; a
 // negative epsilon R stops Apply with the "Errors" box in KiCad's words; Adjust Dielectric Thickness asks for the thickness ("Adjust Unlocked Dielectric Layers") and
 // fits the dielectrics to it; two copper layers with a track on In1.Cu ask KiCad's question ("Warning", "Items have been found on removed layers ...", "Show Details"
-// listing "Track [net] on In1.Cu, length ..."), Cancel changes nothing, OK deletes the track with the layers, and one Undo brings both back. Every step is undone at the end
-// and the board is as it was.
+// listing "Track [net] on In1.Cu, length ..."; a click on it selects the track, `SetSelectionCallback`), Cancel changes nothing, OK deletes the track with the layers and
+// clears the board's undo history (`ClearUndoRedoList`), so Undo brings nothing back. Before that, with nothing sent: the "..." beside a material opens KiCad's material
+// dialog ("Dielectric Material Characteristics", "Common materials:") whose PTFE sets the material, epsilon R, loss tangent and colour; a mask's epsilon R shows KiCad's
+// 3.3; the colour boxes have KiCad's lists and the row's icon follows the mask's colour; Export to Clipboard writes `BuildStackupReport`'s text. At the end the board
+// has its two layers, its tracks and its thickness again (its stackup is now stored, and the history before the deletion is gone, as in KiCad).
 // Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then
 // `eda board serve -C <dir> --port N --ui web/studio/dist`) with `PLAYWRIGHT_MODULE=... node web/studio/e2e/run-check.mjs http://localhost:N/
 // web/studio/e2e/board-setup-stackup.check.js`, or pasted into the Browser pane's javascript tool, on a COPY of a board (2 copper layers to start with).
@@ -61,7 +64,6 @@
   const undo = async () => { await closeDialog(); await run("common.Interactive.undo"); await sleep(900); return state(); };
   const J = (v) => JSON.stringify(v ?? null);
   const d1 = (s) => s?.board_rules?.stackup?.layers?.find((l) => l.name === "dielectric 1");
-  const fingerprint = (s) => J({ layers: s.layers, stackup: s.board_rules?.stackup ?? null, thickness: s.board_rules?.board_thickness_nm, tracks: (s.routing?.tracks ?? []).map((t) => [t.layer, t.net, t.pts]) });
 
   let steps = 0; // undo steps made, to take back at the end
   const scenario = async (name, fn) => {
@@ -76,7 +78,6 @@
   if (__eda.state().tab !== "pcb") { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click(); await sleep(900); }
   if (__eda.state().units !== "mm") { await run("common.Control.metricUnits"); await sleep(300); }
   const s0 = await state();
-  const start = fingerprint(s0);
   const net = (s0.parts ?? []).flatMap((p) => p.pads ?? []).find((p) => p.net)?.net ?? (s0.nets ?? [])[0]?.name ?? "GND";
 
   (async () => {
@@ -174,7 +175,46 @@
       t((await fetch("/api/version").then((r) => r.text())) === v0, "nothing was sent");
     });
 
-    await scenario("two copper layers with a track on In1.Cu: KiCad's question; Cancel keeps it, OK deletes it with the layers; one Undo brings both back", async (t) => {
+    await scenario("the material list, the epsilon R KiCad shows, the colour boxes and Export to Clipboard (nothing sent)", async (t) => {
+      const v0 = await fetch("/api/version").then((r) => r.text());
+      const p = await openPage();
+      t(aria(p, "F.Mask epsilon r")?.value === "3.3" && aria(p, "F.Mask loss tangent")?.value === "0", `a mask's epsilon R and loss tangent are numbers, KiCad's defaults (${aria(p, "F.Mask epsilon r")?.value}, ${aria(p, "F.Mask loss tangent")?.value})`);
+      aria(p, "Dielectric 1 material list")?.click();
+      await sleep(300);
+      const mat = popup("Dielectric Material Characteristics");
+      t(!!mat && /Common materials:/.test(mat.textContent) && /Name:/.test(mat.textContent) && /Epsilon R:/.test(mat.textContent) && /Loss Tan:/.test(mat.textContent), "KiCad's material dialog");
+      t(aria(mat, "Material name")?.value === "" && aria(mat, "Material epsilon r")?.value === "1" && aria(mat, "Material loss tangent")?.value === "0", "its boxes start empty, 1 and 0 (TransferDataToWindow)");
+      const names = [...(mat?.querySelectorAll("tr[data-material]") ?? [])].map((r) => r.getAttribute("data-material"));
+      t(J(names.slice(0, 10)) === J(["Not specified", "FR4", "FR408-HR", "Polyimide", "Kapton", "Polyolefin", "Al", "PTFE", "Teflon", "Ceramic"]), `the dielectric list (${J(names)})`);
+      t(J([...(mat?.querySelectorAll("th") ?? [])].map((h) => h.textContent)) === J(["Material", "Epsilon R", "Loss Tan"]), "its columns");
+      mat?.querySelector('tr[data-material="PTFE"]')?.click();
+      await sleep(150);
+      t(aria(mat, "Material name")?.value === "PTFE" && aria(mat, "Material epsilon r")?.value === "2.1" && aria(mat, "Material loss tangent")?.value === "0.0002", "picking PTFE fills the boxes");
+      popupButton(mat, "OK")?.click();
+      await sleep(300);
+      t(aria(p, "Dielectric 1 material")?.value === "PTFE" && aria(p, "Dielectric 1 epsilon r")?.value === "2.1" && aria(p, "Dielectric 1 loss tangent")?.value === "0.0002", "the row takes the material, epsilon R and loss tangent");
+      const dc = aria(p, "Dielectric 1 color");
+      t(dc?.selectedOptions?.[0]?.textContent === "PTFE natural", `and its material's colour (${dc?.selectedOptions?.[0]?.textContent})`);
+      t(J([...(dc?.options ?? [])].map((o) => o.textContent)) === J(["Not specified", "FR4 natural", "PTFE natural", "Polyimide", "Phenolic natural", "Aluminum", "User defined"]), "a dielectric's colours");
+      const mc = aria(p, "F.Mask color");
+      t(J([...(mc?.options ?? [])].map((o) => o.textContent)) === J(["Not specified", "Green", "Red", "Blue", "Purple", "Black", "White", "Yellow", "User defined"]), "a mask's colours");
+      setValue(mc, [...mc.options].find((o) => o.textContent === "Red").value);
+      await sleep(200);
+      const icon = [...p.querySelectorAll("table.bs-grid tbody tr")].find((r) => r.querySelector("td")?.textContent === "F.Mask")?.querySelector("[data-icon-color]");
+      t(icon?.getAttribute("data-icon-color") === "rgb(128, 0, 0)", `the row's icon is the mask's colour (${icon?.getAttribute("data-icon-color")})`);
+      let copied = null;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text) => { copied = text; } } });
+      buttonIn(p, "Export to Clipboard")?.click();
+      await sleep(300);
+      delete navigator.clipboard;
+      t(typeof copied === "string" && /^layer "F\.Silkscreen" type "Top Silk Screen"/.test(copied) && copied.includes('layer "Dielectric 1" type "prepreg"\n  sublayer "1/1" Color "PTFE natural"') && copied.includes('Material "PTFE" EpsilonR 2.1 LossTg 0.0002') && copied.includes('layer "F.Mask" type "Top Solder Mask" Color "Red"') && /\nFinish "[^"]*"/.test(copied), `BuildStackupReport's text (${J((copied ?? "").slice(0, 200))})`);
+      buttonIn(p, "Revert").click();
+      await sleep(200);
+      await closeDialog();
+      t((await fetch("/api/version").then((r) => r.text())) === v0, "nothing was sent");
+    });
+
+    await scenario("two copper layers with a track on In1.Cu: KiCad's question, Show Details selects; Cancel keeps it, OK deletes it with the layers and Undo cannot bring it back", async (t) => {
       const p = await openPage();
       setValue(aria(p, "Copper layers"), 2);
       await sleep(300);
@@ -188,6 +228,11 @@
       await sleep(200);
       const items = [...(warn?.querySelectorAll("ul[aria-label='Items on removed layers'] li") ?? [])].map((li) => li.textContent);
       t(items.includes(`Track [${net}] on In1.Cu, length 5.0000 mm`), `the track is listed as GetItemDescription says it (${J(items)})`);
+      const inner = ((await state()).routing?.tracks ?? []).find((x) => x.layer === "In1.Cu");
+      [...(warn?.querySelectorAll("ul[aria-label='Items on removed layers'] li") ?? [])].find((li) => li.textContent === `Track [${net}] on In1.Cu, length 5.0000 mm`)?.click();
+      await sleep(300);
+      const sel = __eda.state().selection.map((x) => x.id);
+      t(!!inner && J(sel) === J([inner.id]), `a click on it selects the track on the board (SetSelectionCallback: ${J(sel)})`);
       popupButton(warn, "Cancel").click();
       await sleep(500);
       let s = await state();
@@ -197,16 +242,18 @@
       warn = popup("Warning");
       popupButton(warn, "OK").click();
       s = await until(async () => { const x = await state(); return (x.layers ?? []).length === 2 ? x : null; }, 15000);
-      if (t(!!s && !(s.routing?.tracks ?? []).some((x) => x.layer === "In1.Cu"), `OK: two layers and the track is gone (${J(s?.layers)})`)) steps++;
+      t(!!s && !(s.routing?.tracks ?? []).some((x) => x.layer === "In1.Cu"), `OK: two layers and the track is gone (${J(s?.layers)})`);
+      // `ClearUndoRedoList`: every step of the board before it is gone with the deleted track
+      steps = 0;
       const back = await undo();
-      if (t((back.layers ?? []).length === 4 && (back.routing?.tracks ?? []).some((x) => x.layer === "In1.Cu"), `one Undo: four layers and the track are back (${J(back.layers)})`)) steps--;
+      t((back.layers ?? []).length === 2 && !(back.routing?.tracks ?? []).some((x) => x.layer === "In1.Cu"), `Undo brings nothing back: "cannot be undone" (${J(back.layers)})`);
     });
 
-    await scenario("every step undone, the board is as it was, and the page logged no error", async (t) => {
+    await scenario("the board has its layers, tracks and thickness again, and the page logged no error", async (t) => {
       await closeDialog();
-      for (; steps > 0; steps--) await undo();
-      const now = fingerprint(await state());
-      t(now === start, `the board is as it was${now === start ? "" : `: ${start.slice(0, 300)} -> ${now.slice(0, 300)}`}`);
+      const shape = (s) => J({ layers: s.layers, thickness: s.board_rules?.board_thickness_nm, tracks: (s.routing?.tracks ?? []).map((x) => [x.layer, x.net, x.pts]) });
+      const now = shape(await state());
+      t(now === shape(s0), `the board's layers, tracks and thickness are as they were${now === shape(s0) ? "" : `: ${shape(s0).slice(0, 300)} -> ${now.slice(0, 300)}`}`);
       const errs = __eda.errors(errorsFrom);
       t(errs.length === 0, `no errors: ${JSON.stringify(errs.slice(0, 3))}`);
     });

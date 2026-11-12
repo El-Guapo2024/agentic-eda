@@ -19,6 +19,22 @@ import {
   sublayerOf,
   withCopperLayerCount,
   withSublayer,
+  addMaterialsInUse,
+  applySubstrate,
+  buildStackupReport,
+  colorIndex,
+  colorToHexString,
+  defaultUserColor,
+  findSubstrate,
+  flipCopperLayer,
+  iconColorCss,
+  kicadPrms,
+  materialDialogResult,
+  materialDialogStart,
+  newMaterialLists,
+  padHasExplicitLayer,
+  removedLayerItems,
+  withKicadValues,
   type RemovedLayerBoard,
 } from "./physicalStackup";
 
@@ -202,4 +218,135 @@ test("a new copper layer count shares the board's old thickness among the unlock
   assert.equal(stackupTotalThicknessNm(four.stackup), 1_600_000, "the board keeps its 1.6 mm");
   assert.deepEqual(["dielectric 1", "dielectric 2", "dielectric 3"].map((n) => [layer(four.stackup, n).kind, nm(layer(four.stackup, n).thickness_mm!)]), [["prepreg", 100_000], ["core", 1_240_000], ["prepreg", 100_000]]);
   assert.equal(stackupTotalThicknessNm(withCopperLayerCount(four, 2, withCopperLayers).stackup), 1_600_000, "and back");
+});
+
+test("a value the board file leaves out is the type's default, as KiCad shows it (BOARD_STACKUP_ITEM( type ), DIELECTRIC_PRMS())", () => {
+  const s = threeSublayers();
+  const bare = (name: string): StackupLayer => ({ name, material: null, thickness_mm: null });
+  const p = (l: StackupLayer, sub = 0) => [kicadPrms(l, sub).material, kicadPrms(l, sub).epsilonR, kicadPrms(l, sub).lossTangent, kicadPrms(l, sub).color, kicadPrms(l, sub).thicknessNm];
+  assert.deepEqual(p(bare("dielectric 1")), ["FR4", 4.5, 0.02, "Not specified", 0]);
+  assert.deepEqual(p(bare("F.Mask")), ["Not specified", 3.3, 0, "Not specified", 10_000]);
+  assert.deepEqual(p(bare("F.SilkS")), ["Not specified", 1, 0, "Not specified", 0]);
+  assert.deepEqual(p(bare("In1.Cu")), ["", 1, 0, "", 35_000]);
+  assert.deepEqual(p(layer(s, "dielectric 1"), 2), ["", 1, 0, "", 50_000], "a later sublayer: DIELECTRIC_PRMS()");
+  assert.deepEqual(p(layer(s, "dielectric 1"), 1), ["PTFE", 2.1, 0.0002, "", 100_000], "what the file says");
+});
+
+test("Apply writes every value as transferDataFromUIToStackup does", () => {
+  const s: Stackup = {
+    layers: [
+      { name: "F.Mask", material: null, thickness_mm: 0.01, kind: "Top Solder Mask", color: "Light Green" },
+      { name: "dielectric 1", material: null, thickness_mm: 1.5, kind: "core", color: "#11223344", sublayers: [{ thickness_mm: 0.1, color: "Polyimide" }] },
+      { name: "B.Mask", material: "Epoxy", thickness_mm: 0.01, kind: "Bottom Solder Mask", epsilon_r: 3.9, color: "Green" },
+      { name: "F.Cu", material: null, thickness_mm: 0.035, kind: "copper" },
+    ],
+  };
+  const w = withKicadValues(s);
+  assert.deepEqual(w.layers[0], { name: "F.Mask", material: null, thickness_mm: 0.01, kind: "Top Solder Mask", epsilon_r: 3.3, loss_tangent: 0 }, "a name the box has not got is Not specified");
+  assert.deepEqual(w.layers[1], { name: "dielectric 1", material: "FR4", thickness_mm: 1.5, kind: "core", color: "#11223344", epsilon_r: 4.5, loss_tangent: 0.02, sublayers: [{ thickness_mm: 0.1, color: "Polyimide", epsilon_r: 1, loss_tangent: 0 }] });
+  assert.deepEqual(w.layers[2], { ...s.layers[2], loss_tangent: 0 }, "what is there stays");
+  assert.deepEqual(w.layers[3], s.layers[3], "copper has none of them");
+});
+
+test("the material list: KiCad's tables, the materials in use added, the dialog's checks, the material's colour", () => {
+  const lists = newMaterialLists();
+  assert.deepEqual(lists.dielectric.map((m) => m.name), ["Not specified", "FR4", "FR408-HR", "Polyimide", "Kapton", "Polyolefin", "Al", "PTFE", "Teflon", "Ceramic"]);
+  assert.deepEqual(lists.soldermask.map((m) => [m.name, m.epsilonR]), [["Not specified", 3.3], ["Epoxy", 3.3], ["Liquid Ink", 3.3], ["Dry Film", 3.3]]);
+  assert.deepEqual(lists.silkscreen.map((m) => m.name), ["Not specified", "Liquid Photo", "Direct Printing"]);
+  assert.equal(findSubstrate(lists.dielectric, "fr4", 4.5, 0.02), 1, "the name in any case");
+  assert.equal(findSubstrate(lists.dielectric, "FR4", 4.4, 0.02), -1, "and the values exactly");
+
+  const s = threeSublayers();
+  addMaterialsInUse(lists, s);
+  // dielectric 1's PTFE at 2.1 / 0.0002 is in the list; its third sublayer (no material: "Not specified", 1, 0) is not
+  assert.deepEqual(lists.dielectric.slice(10), [{ name: "Not specified", epsilonR: 1, lossTangent: 0 }]);
+  addMaterialsInUse(lists, s);
+  assert.equal(lists.dielectric.length, 11, "added once");
+  assert.equal(lists.soldermask.length, 4, "the masks' Not specified 3.3 / 0 is the list's first");
+  assert.equal(new Set([newMaterialLists().dielectric, newMaterialLists().dielectric]).size, 2, "each panel its own copy");
+
+  assert.deepEqual(materialDialogStart(), { name: "", epsilonR: "1", lossTangent: "0" });
+  assert.deepEqual(materialDialogResult({ name: "X", epsilonR: "abc", lossTangent: "0" }), { error: "Incorrect value for Epsilon R" });
+  assert.deepEqual(materialDialogResult({ name: "X", epsilonR: "3", lossTangent: "-1" }), { error: "Incorrect value for Loss Tangent" });
+  assert.deepEqual(materialDialogResult({ name: "X", epsilonR: "3.5", lossTangent: "0.01" }), { substrate: { name: "X", epsilonR: 3.5, lossTangent: 0.01 } });
+
+  const d1 = s.layers.findIndex((l) => l.name === "dielectric 1");
+  const picked = applySubstrate(s, d1, 2, { name: "Kapton", epsilonR: 3.2, lossTangent: 0.004 });
+  assert.deepEqual(sublayerOf(picked.layers[d1]!, 2), { thickness_mm: 0.05, material: "Kapton", epsilon_r: 3.2, loss_tangent: 0.004, color: "Polyimide" });
+  const colour = (name: string) => sublayerOf(applySubstrate(s, d1, 0, { name, epsilonR: 1, lossTangent: 0 }).layers[d1]!, 0).color;
+  assert.deepEqual(["PTFE", "Teflon", "Al", "FR408-HR", "ptfe"].map(colour), ["PTFE natural", "PTFE natural", "Aluminum", "FR4 natural", "FR4 natural"]);
+  const custom = withLayer(s, "dielectric 1", (l) => ({ ...l, color: "#11223344" }));
+  assert.equal(sublayerOf(applySubstrate(custom, d1, 0, { name: "PTFE", epsilonR: 2.1, lossTangent: 0.0002 }).layers[d1]!, 0).color, "#11223344", "a user defined colour stays");
+  const mask = s.layers.findIndex((l) => l.name === "F.Mask");
+  assert.equal(sublayerOf(applySubstrate(s, mask, 0, { name: "Epoxy", epsilonR: 3.3, lossTangent: 0 }).layers[mask]!, 0).color, undefined, "only a dielectric takes its material's colour");
+  assert.equal(applySubstrate(s, d1, 0, { name: "", epsilonR: 3, lossTangent: 0 }), s, "no substrate specified");
+});
+
+test("the colour box and the row's icon (createColorBox, getColorIconItem)", () => {
+  assert.deepEqual([colorIndex("soldermask", "Green"), colorIndex("soldermask", "#00FF00FF"), colorIndex("soldermask", "Light Green"), colorIndex("dielectric", "Aluminum")], [1, 8, 0, 5]);
+  assert.deepEqual([defaultUserColor("soldermask"), defaultUserColor("silkscreen"), defaultUserColor("dielectric")], ["#808080D4", "#808080FF", "#808080FF"]);
+  assert.deepEqual([colorToHexString("rgb(1, 2, 255)"), colorToHexString("rgba(16, 32, 48, 0.5)"), colorToHexString("#a0b0c0")], ["#0102FFFF", "#10203080", "#A0B0C0FF"]);
+  const l = (name: string, color?: string): StackupLayer => ({ name, material: null, thickness_mm: null, ...(color ? { color } : {}) });
+  assert.deepEqual(
+    [iconColorCss(l("F.Cu"), 0), iconColorCss(l("dielectric 1", "Polyimide"), 0), iconColorCss(l("F.Paste"), 0), iconColorCss(l("F.Mask", "Red"), 0), iconColorCss(l("F.Mask"), 0), iconColorCss(l("B.SilkS", "#10203080"), 0)],
+    ["rgb(220, 180, 30)", "rgb(75, 120, 75)", "rgb(200, 200, 200)", "rgb(128, 0, 0)", "rgb(80, 80, 80)", "rgb(16, 32, 48)"]
+  );
+});
+
+test("Export to Clipboard is BuildStackupReport's text", () => {
+  const two = defaultStackup(2, 1_600_000);
+  const named = (f: string) => ({ "F.SilkS": "F.Silkscreen", "B.SilkS": "B.Silkscreen" })[f] ?? f;
+  assert.equal(
+    buildStackupReport({ stackup: two }, "mm", named),
+    [
+      'layer "F.Silkscreen" type "Top Silk Screen" Color "Not specified" Material "Not specified"',
+      'layer "F.Paste" type "Top Solder Paste"',
+      'layer "F.Mask" type "Top Solder Mask" Color "Not specified" Thickness 0.01 mm Material "Not specified" EpsilonR 3.3 LossTg 0',
+      'layer "F.Cu" type "copper" Thickness 0.035 mm',
+      'layer "Dielectric 1" type "core"',
+      '  sublayer "1/1" Color "Not specified" Thickness 1.51 mm Material "FR4" EpsilonR 4.5 LossTg 0.02',
+      'layer "B.Cu" type "copper" Thickness 0.035 mm',
+      'layer "B.Mask" type "Bottom Solder Mask" Color "Not specified" Thickness 0.01 mm Material "Not specified" EpsilonR 3.3 LossTg 0',
+      'layer "B.Paste" type "Bottom Solder Paste"',
+      'layer "B.Silkscreen" type "Bottom Silk Screen" Color "Not specified" Material "Not specified"',
+      'Finish "Not specified"',
+      "",
+    ].join("\n")
+  );
+  const s = { ...withLayer(threeSublayers(), "dielectric 1", (l) => ({ ...l, thickness_locked: true, color: "FR4 natural" })), copper_finish: "ENIG", dielectric_constraints: true, edge_plating: true, edge_connector: 2 };
+  const lines = buildStackupReport({ stackup: s }, "mil").split("\n");
+  const at = lines.indexOf('layer "Dielectric 1" type "core"');
+  assert.deepEqual(lines.slice(at, at + 4), [
+    'layer "Dielectric 1" type "core"',
+    `  sublayer "1/3" Color "FR4 natural" Thickness ${String(Math.round((nm(layer(s, "dielectric 1").thickness_mm!) / 25_400) * 1e5) / 1e5)} mils Locked Material "FR4" EpsilonR 4.5 LossTg 0.02`,
+    '  sublayer "2/3" Thickness 3.93701 mils Material "PTFE" EpsilonR 2.1 LossTg 0.0002',
+    '  sublayer "3/3" Thickness 1.9685 mils Material "Not specified" EpsilonR 1 LossTg 0',
+  ]);
+  assert.equal(lines.at(-2), 'Finish "ENIG" Option "Impedance Controlled" Option "Plated edges" EdgeConnector "yes,bevelled"');
+});
+
+test("Show Details: each entry the item it selects, and the pads with a shape of their own on a removed layer", () => {
+  assert.deepEqual(["F.Cu", "B.Cu", "In1.Cu", "In2.Cu", "In1.Cu"].map((l, i) => flipCopperLayer(l, i < 4 ? 4 : 2)), ["B.Cu", "F.Cu", "In2.Cu", "In1.Cu", "In1.Cu"]);
+  const custom = { stack: { mode: "custom" as const, layers: { "In1.Cu": { shape: "circle" as const, size: [1, 1] as [number, number] } } } };
+  const fib = { stack: { mode: "front_inner_back" as const, inner: { shape: "circle" as const, size: [1, 1] as [number, number] } } };
+  assert.deepEqual(
+    [padHasExplicitLayer(custom, "top", "In1.Cu", 4), padHasExplicitLayer(custom, "bottom", "In1.Cu", 4), padHasExplicitLayer(custom, "bottom", "In2.Cu", 4), padHasExplicitLayer(fib, "bottom", "In1.Cu", 4), padHasExplicitLayer(fib, "top", "In2.Cu", 4), padHasExplicitLayer({}, "top", "In1.Cu", 4)],
+    [true, false, true, true, false, false],
+    "a custom stack's layers flip with a bottom footprint; a front/inner/back stack's inner shape is INNER_LAYERS, In1.Cu"
+  );
+  const board = {
+    routing: { tracks: [{ id: "t1", net: "GND", layer: "In1.Cu", width: 200_000, pts: [[0, 0], [1_000_000, 0], [1_000_000, 2_000_000]] }], vias: [], zones: [] },
+    drawings: null,
+    parts: [
+      { ref: "U1", placed: true, side: "top", pads: [{ num: "1", ...custom }, { num: "1", ...fib }, { num: "2" }] },
+      { ref: "U2", placed: false, pads: [{ num: "1", ...custom }] },
+    ],
+  } as unknown as RemovedLayerBoard;
+  assert.deepEqual(removedLayerItems(board, 4, 2), [
+    { text: "Track [GND] on In1.Cu, length 1.0000 mm", id: "t1" },
+    { text: "Track [GND] on In1.Cu, length 2.0000 mm", id: "t1" },
+    { text: "Pad 1 of U1 on In1.Cu", id: "U1.1" },
+    { text: "Pad 1 of U1 on In1.Cu", id: "U1.1#2" },
+  ]);
+  assert.deepEqual(removedLayerItems({ ...board, routing: { tracks: [], vias: [], zones: [] } } as unknown as RemovedLayerBoard, 4, 2), [], "pads alone do not make a removed layer with items (HasItemsOnLayer)");
 });

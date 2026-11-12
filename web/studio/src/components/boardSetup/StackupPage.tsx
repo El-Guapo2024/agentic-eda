@@ -6,15 +6,20 @@
 //
 // Fewer copper layers while something is on a layer that goes asks KiCad's question (`PANEL_SETUP_LAYERS::TransferDataFromWindow`: "Warning", "Items have been found
 // on removed layers ...", "Show Details" with each item's description); OK sends `set_stackup` with `delete_items_on_removed_layers`, and the backend deletes them as
-// `BOARD::RemoveAllItemsOnLayer` does, in the same step -- which one Undo brings back here, where KiCad clears its undo list.
+// `BOARD::RemoveAllItemsOnLayer` does, in the same step, and the board directory then clears the board's undo and redo history as KiCad's `ClearUndoRedoList` does
+// (crates/cli/src/board.rs `clear_board_history`), so the question's "cannot be undone" holds. A click on an item of "Show Details" selects it on the board
+// (`SetSelectionCallback`: `selectionClear`, then `selectItem`).
 //
-// Colours: a mask, a silkscreen and a dielectric carry KiCad's colour name (or a typed `#RRGGBB`), which the 3D viewer's "Use board stackup colors" paints the board
-// with (kicad-port/appearance3d.ts). Not ported: the material list ("..." beside a material, `DIALOG_DIELECTRIC_MATERIAL`) and "Export to Clipboard"
-// (`BuildStackupReport`). A different copper layer count rebuilds the table from the default stackup, keeping what the layers that remain say (`withCopperLayers`),
+// Colours: a mask, a silkscreen and a dielectric have KiCad's colour box (`createColorBox`: `GetStandardColors`' names with their swatches, "User defined" last,
+// which opens the colour picker), stored as KiCad's colour name or `#RRGGBBAA`; the 3D viewer's "Use board stackup colors" paints the board with them
+// (kicad-port/appearance3d.ts). Each row starts with its colour icon (`getColorIconItem`). The "..." beside a material opens KiCad's material dialog
+// (`onMaterialChange`, `DIALOG_DIELECTRIC_MATERIAL`); "Export to Clipboard" puts `BuildStackupReport`'s text on the clipboard. Epsilon R and loss tangent always
+// show a number, the type's default where the board file says none, and Apply writes every value as KiCad's `transferDataFromUIToStackup` does
+// (`withKicadValues`). A different copper layer count rebuilds the table from the default stackup, keeping what the layers that remain say (`withCopperLayers`),
 // and shares the board's old thickness among the unlocked dielectrics (`onCopperLayersSelCount`'s `setDefaultLayerWidths( oldBoardWidth )`).
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useStudioState } from "../../state/store";
+import { useStudioDispatch, useStudioState } from "../../state/store";
 import { defaultStackup, mmText, validateStackup, withCopperLayers, withKnownKinds } from "../../kicad-port/boardSetupRules";
 import {
   CORE_PREPREG,
@@ -25,12 +30,38 @@ import {
   addDielectricSublayer,
   adjustDielectricThickness,
   adjustThicknessPrompt,
+  addMaterialsInUse,
+  applySubstrate,
+  buildStackupReport,
   canRemoveDielectric,
+  colorIndex,
+  colorListType,
+  colorToHexString,
+  defaultUserColor,
+  formatPrm,
+  hexColorCss,
+  iconColorCss,
+  kicadPrms,
+  MATERIAL_DIALOG,
+  materialDialogPick,
+  materialDialogResult,
+  materialDialogStart,
+  materialListType,
+  newMaterialLists,
+  NOT_SPECIFIED,
+  prmSpecified,
+  removedLayerItems,
+  standardColorCss,
+  standardColors,
+  toDouble,
+  withKicadValues,
+  type ColorListType,
+  type DielectricSubstrate,
+  type RemovedLayerItem,
   corePrepregOf,
   itemHasEpsilonR,
   itemMaterialEditable,
   itemThicknessEditable,
-  itemsOnRemovedLayers,
   kindOfChoice,
   removeDielectricChoices,
   removeDielectricSublayer,
@@ -45,11 +76,10 @@ import {
 } from "../../kicad-port/physicalStackup";
 import { layerDisplayName } from "../../kicad-port/boardLayers";
 import { parseLength } from "../../kicad-port/importGraphics";
-import { NOT_SPECIFIED, STACKUP_COLOR_NAMES, parseColor, stackupColorKind, toRgbHex } from "../../kicad-port/appearance3d";
 import type { StackupSettings, StackupSublayer } from "../../api/types";
 import { DialogShell } from "../pcbDialogKit";
-import { MessageDialog, NameDialog, Pane, PickDialog } from "../panels/appearance/shared";
-import { Check, FieldRow, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { ColorDialog, MessageDialog, NameDialog, Pane, PickDialog } from "../panels/appearance/shared";
+import { Check, FieldRow, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 const COPPER_COUNTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 2);
 
@@ -58,46 +88,190 @@ const COPPER_FINISHES = ["ENIG", "ENEPIG", "HAL SnPb", "HAL lead-free", "Hard go
 
 const EDGE_CONNECTORS = ["No", "Yes", "Yes, bevelled"];
 
-const USER_DEFINED = "User defined";
+/** A colour swatch (`LAYER_PRESENTATION::DrawColorSwatch`, `m_colorSwatchesSize` 14 x 14). */
+function ColorSwatch({ css }: { css: string }) {
+  return <span aria-hidden style={{ display: "inline-block", width: 14, height: 14, border: "1px solid var(--chrome-border, #888)", background: css, flex: "none" }} />;
+}
 
-/** The colour cell of a stackup row (`PANEL_BOARD_STACKUP`'s colour combo): KiCad's names for the item's kind, "User defined" for a typed `#RRGGBB`. */
-function StackupColor({ kind, value, ariaLabel, onChange }: { kind: "silk" | "mask" | "dielectric"; value: string | null | undefined; ariaLabel: string; onChange: (color: string | undefined) => void }) {
-  const names: readonly string[] = STACKUP_COLOR_NAMES[kind];
-  const custom = typeof value === "string" && value.startsWith("#");
-  const selected = custom ? USER_DEFINED : (value ?? NOT_SPECIFIED);
+/**
+ * The colour box of a stackup row (`createColorBox`, `lazyBuildRowUI`, `onColorSelected`): the names of `GetStandardColors( type )` with "User defined" last (shown as
+ * the `#RRGGBBAA` colour when the layer has one), the selected entry's swatch beside it; "User defined" opens the colour picker (`DIALOG_COLOR_PICKER`, "Reset to
+ * Default" giving `GetDefaultUserColor`) and keeps its colour (`m_UserColor`) even when the picker is cancelled. A colour name the list does not have shows as "Not
+ * specified", as KiCad's box does. A browser's `<option>` cannot hold a picture, so the swatches of the entries that are not selected are not drawn, and the last
+ * entry is not renamed "Custom..." while the list is open (`wxEVT_COMBOBOX_DROPDOWN`).
+ */
+function StackupColor({ type, value, ariaLabel, onChange }: { type: ColorListType; value: string; ariaLabel: string; onChange: (color: string | undefined) => void }) {
+  const list = standardColors(type);
+  const user = list.length - 1;
+  const selected = colorIndex(type, value);
+  const custom = value.startsWith("#");
+  // `m_UserColor`: the layer's own colour when it has one, else `GetDefaultUserColor( type )`
+  const [userColor, setUserColor] = useState(custom ? value : defaultUserColor(type));
+  const [picking, setPicking] = useState(false);
+  const swatch = selected === user ? (hexColorCss(userColor) ?? standardColorCss(type, user)) : standardColorCss(type, selected);
   return (
     <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+      <ColorSwatch css={swatch} />
       <select
         aria-label={ariaLabel}
         value={selected}
         onChange={(e) => {
-          const v = e.target.value;
-          onChange(v === NOT_SPECIFIED ? undefined : v === USER_DEFINED ? (custom ? value! : "#808080") : v);
+          const idx = Number(e.target.value);
+          if (idx === user) {
+            onChange(userColor);
+            setPicking(true);
+          } else onChange(idx === 0 ? undefined : list[idx]!.name);
         }}
       >
-        {names.map((n) => (
-          <option key={n} value={n}>
-            {n}
+        {list.map((c, i) => (
+          <option key={c.name} value={i}>
+            {i === user && custom ? value : c.name}
           </option>
         ))}
-        {!custom && typeof value === "string" && !names.includes(value) && <option value={value}>{value}</option>}
-        <option value={USER_DEFINED}>{USER_DEFINED}</option>
       </select>
-      {custom && <input type="color" aria-label={`${ariaLabel} (user defined)`} value={toRgbHex(parseColor(value!) ?? { r: 0.5, g: 0.5, b: 0.5, a: 1 })} onChange={(e) => onChange(e.target.value)} style={{ width: 22, height: 18, padding: 0 }} />}
+      {picking && (
+        <ColorDialog
+          title="Color Picker"
+          initial={userColor}
+          defaultColor={defaultUserColor(type)}
+          onCancel={() => setPicking(false)}
+          onPick={(css) => {
+            setPicking(false);
+            const hex = css ? colorToHexString(css) : null;
+            if (!hex) return;
+            setUserColor(hex);
+            onChange(hex);
+          }}
+        />
+      )}
     </span>
   );
 }
 
-/** `DIALOG_ITEMS_LIST`: a message, a collapsed "Show Details" pane with the list, OK and Cancel. */
-function ItemsListDialog({ title, message, details, items, onOk, onCancel }: { title: string; message: string; details: string; items: string[]; onOk: () => void; onCancel: () => void }) {
+/** An epsilon R or loss tangent box (a `wxTextCtrl`, `m_numericFieldsSize`): the value as `UIDouble2Str` writes it; the text is read at Apply, a text that is no number
+ * kept as NaN for the "Errors" box (`transferDataFromUIToStackup`). */
+function PrmField({ value, ariaLabel, onChange }: { value: number; ariaLabel: string; onChange: (v: number) => void }) {
+  const [text, setText] = useState(() => formatPrm(value));
+  useEffect(() => {
+    if (!Object.is(toDouble(text) ?? Number.NaN, value)) setText(Number.isNaN(value) ? text : formatPrm(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <input
+      type="text"
+      className={`bs-input${Number.isNaN(value) || value < 0 ? " bs-invalid" : ""}`}
+      style={{ width: 54 }}
+      aria-label={ariaLabel}
+      spellCheck={false}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(toDouble(e.target.value) ?? Number.NaN);
+      }}
+    />
+  );
+}
+
+/**
+ * `DIALOG_DIELECTRIC_MATERIAL` ("Dielectric Material Characteristics"): Name, Epsilon R and Loss Tan boxes, starting empty, "1" and "0"; the "Common materials:" list
+ * with its three columns, whose entry fills the boxes when picked (`onListItemSelected`) and is taken out of the list by Delete (`onListKeyDown`); OK checks the two
+ * numbers ("Incorrect value for Epsilon R", "Incorrect value for Loss Tangent") and gives the substrate.
+ */
+function MaterialDialog({ list, onDelete, onOk, onCancel }: { list: DielectricSubstrate[]; onDelete: (idx: number) => void; onOk: (s: DielectricSubstrate) => void; onCancel: () => void }) {
+  const [fields, setFields] = useState(materialDialogStart);
+  const [sel, setSel] = useState(-1);
+  const [error, setError] = useState<string | null>(null);
+  const pick = (idx: number) => {
+    setSel(idx);
+    if (idx >= 0 && idx < list.length) setFields(materialDialogPick(list[idx]!));
+  };
+  const cell = { padding: "1px 6px", whiteSpace: "nowrap" as const };
+  return createPortal(
+    <div className="bs-items-dialog" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <DialogShell
+        title={MATERIAL_DIALOG.title}
+        width={420}
+        onCancel={onCancel}
+        onOk={() => {
+          const r = materialDialogResult(fields);
+          if ("error" in r) setError(r.error);
+          else onOk(r.substrate);
+        }}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "2px 5px", fontSize: 12 }}>
+          <span>{MATERIAL_DIALOG.name}</span>
+          <span>{MATERIAL_DIALOG.epsilonR}</span>
+          <span>{MATERIAL_DIALOG.lossTangent}</span>
+          <input type="text" aria-label="Material name" style={{ minWidth: 150 }} value={fields.name} onChange={(e) => setFields({ ...fields, name: e.target.value })} />
+          <input type="text" aria-label="Material epsilon r" style={{ width: 70 }} value={fields.epsilonR} onChange={(e) => setFields({ ...fields, epsilonR: e.target.value })} />
+          <input type="text" aria-label="Material loss tangent" style={{ width: 70 }} value={fields.lossTangent} onChange={(e) => setFields({ ...fields, lossTangent: e.target.value })} />
+        </div>
+        <div style={{ fontSize: 12, margin: "8px 0 4px" }}>{MATERIAL_DIALOG.common}</div>
+        <div
+          tabIndex={0}
+          role="listbox"
+          aria-label="Common materials"
+          style={{ maxHeight: 220, overflow: "auto", border: "1px solid var(--chrome-border, #888)", fontSize: 12 }}
+          onKeyDown={(e) => {
+            if (e.key === "Delete" && sel >= 0 && sel < list.length) {
+              onDelete(sel);
+              // "Get the new material information for the next item in the list (or last if the deleted item was the last item)"
+              setSel(sel < list.length - 1 ? sel : sel - 1);
+            } else if (e.key === "ArrowDown") pick(Math.min(list.length - 1, sel + 1));
+            else if (e.key === "ArrowUp") pick(Math.max(0, sel - 1));
+          }}
+        >
+          <table style={{ borderCollapse: "collapse", width: "100%" }}>
+            <thead>
+              <tr>
+                {MATERIAL_DIALOG.columns.map((c) => (
+                  <th key={c} style={{ ...cell, textAlign: "left" }}>
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((m, i) => (
+                <tr key={i} role="option" aria-selected={i === sel} data-material={m.name} onClick={() => pick(i)} style={i === sel ? { background: "var(--chrome-select, #3b6fb6)", color: "#fff" } : undefined}>
+                  <td style={cell}>{m.name}</td>
+                  <td style={cell}>{formatPrm(m.epsilonR)}</td>
+                  <td style={cell}>{formatPrm(m.lossTangent)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </DialogShell>
+      {error && <MessageDialog title="Message" message={error} onOk={() => setError(null)} onCancel={() => setError(null)} />}
+    </div>,
+    document.body
+  );
+}
+
+/** `DIALOG_ITEMS_LIST`: a message, a collapsed "Show Details" pane with the list (one selected at a time, `wxLC_SINGLE_SEL`), OK and Cancel. Picking an entry calls
+ * `onSelect` with its index (`SetSelectionCallback`). */
+function ItemsListDialog({ title, message, details, items, onSelect, onOk, onCancel }: { title: string; message: string; details: string; items: string[]; onSelect: (index: number) => void; onOk: () => void; onCancel: () => void }) {
+  const [sel, setSel] = useState(-1);
   return createPortal(
     <div className="bs-items-dialog" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
       <DialogShell title={title} width={460} onCancel={onCancel} onOk={onOk}>
         <div style={{ fontSize: 12, marginBottom: 8 }}>{message}</div>
         <Pane title={details}>
-          <ul aria-label="Items on removed layers" style={{ margin: 0, paddingLeft: 16, maxHeight: 200, overflow: "auto", fontSize: 12 }}>
+          <ul aria-label="Items on removed layers" style={{ margin: 0, padding: 0, listStyle: "none", maxHeight: 200, overflow: "auto", fontSize: 12 }}>
             {items.map((it, i) => (
-              <li key={i}>{it}</li>
+              <li
+                key={i}
+                role="option"
+                aria-selected={i === sel}
+                style={{ padding: "1px 4px", cursor: "default", ...(i === sel ? { background: "var(--chrome-select, #3b6fb6)", color: "#fff" } : {}) }}
+                onClick={() => {
+                  setSel(i);
+                  onSelect(i);
+                }}
+              >
+                {it}
+              </li>
             ))}
           </ul>
         </Pane>
@@ -122,10 +296,12 @@ type Dialog =
   | { kind: "remove" }
   | { kind: "adjust"; prompt: string; title: string }
   | { kind: "message"; title: string; text: string }
-  | { kind: "removed"; items: string[]; settings: StackupSettings };
+  | { kind: "removed"; items: RemovedLayerItem[]; settings: StackupSettings }
+  | { kind: "material"; layer: number; sub: number };
 
 export function StackupPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
+  const dispatch = useStudioDispatch();
   const board = state.board;
   const rules = board?.board_rules;
   const units = state.units;
@@ -135,8 +311,22 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
     return { copper_layers: boardCopper, stackup: withKnownKinds(rules.stackup ?? defaultStackup(boardCopper, rules.board_thickness_nm ?? 1_600_000)) };
   }, [rules, boardCopper]);
   const page = usePageDraft<StackupSettings>(source);
+  // "Import Settings from Another Board..." (`PANEL_SETUP_BOARD_STACKUP::ImportSettingsFrom`, with the layers: UI-LEFT-2 BB4): the other board's copper count and stackup
+  useSetupImport(
+    "layers",
+    (b) => {
+      const r = b.board_rules;
+      if (!r) return undefined;
+      const n = r.copper_layers ?? r.layer_names?.length ?? b.layers.length;
+      return { copper_layers: n, stackup: withKnownKinds(r.stackup ?? defaultStackup(n, r.board_thickness_nm ?? 1_600_000)) };
+    },
+    page.importDraft,
+  );
   const apply = usePageApply();
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  // `m_delectricMatList`, `m_solderMaskMatList`, `m_silkscreenMatList`: the panel's own lists, added to by each "..." and deleted from in the dialog
+  const materialLists = useRef(newMaterialLists());
+  const [, setListsVersion] = useState(0);
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;
   const layerName = (file: string) => layerDisplayName(rules?.layer_setup, file);
@@ -147,28 +337,51 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
   const setKind = (r: StackupRow, kind: string) => page.edit((d) => ({ ...d, stackup: { ...d.stackup, layers: d.stackup.layers.map((l, i) => (i === r.layer ? { ...l, kind } : l)) } }));
   const setStackup = (patch: Partial<StackupSettings["stackup"]>) => page.edit((d) => ({ ...d, stackup: { ...d.stackup, ...patch } }));
 
-  const send = (settings: StackupSettings, deleteItems: boolean) =>
-    void apply.run(deleteItems ? { op: "set_stackup", settings, delete_items_on_removed_layers: true } : { op: "set_stackup", settings }, page.markClean);
+  // `transferDataFromUIToStackup`: every row's values written as KiCad writes them
+  const send = (settings: StackupSettings, deleteItems: boolean) => {
+    const written = { ...settings, stackup: withKicadValues(settings.stackup) };
+    void apply.run(deleteItems ? { op: "set_stackup", settings: written, delete_items_on_removed_layers: true } : { op: "set_stackup", settings: written }, page.markClean);
+  };
+
+  /** `transferDataFromUIToStackup`'s checks: `wxMessageBox( error_msg, _( "Errors" ) )` and false when a value is wrong. */
+  const entriesOk = (): boolean => {
+    if (!draft) return false;
+    const errors = stackupEntryErrors(draft.stackup);
+    if (errors) setDialog({ kind: "message", title: "Errors", text: errors });
+    return !errors;
+  };
 
   const onApply = () => {
-    if (!draft) return;
-    // `transferDataFromUIToStackup`: `wxMessageBox( error_msg, _( "Errors" ) )`
-    const errors = stackupEntryErrors(draft.stackup);
-    if (errors) {
-      setDialog({ kind: "message", title: "Errors", text: errors });
-      return;
-    }
+    if (!draft || !entriesOk()) return;
     const problem = validateStackup(draft);
     if (problem) {
       apply.setMessage({ text: problem, bad: true });
       return;
     }
-    const items = itemsOnRemovedLayers(board, boardCopper, draft.copper_layers, units, layerName);
+    const items = removedLayerItems(board, boardCopper, draft.copper_layers, units, layerName);
     if (items.length > 0) {
       setDialog({ kind: "removed", items, settings: draft });
       return;
     }
     send(draft, false);
+  };
+
+  /** `onMaterialChange`: the checks, the materials in use added to the lists, then the dialog for the row's kind. */
+  const onMaterial = (r: StackupRow) => {
+    if (!draft || !entriesOk()) return;
+    addMaterialsInUse(materialLists.current, draft.stackup);
+    setDialog({ kind: "material", layer: r.layer, sub: r.sub });
+  };
+
+  /**
+   * `onExportToClipboard`: the checks, then `BuildStackupReport`'s text on the clipboard (`wxTheClipboard->SetData`); KiCad says nothing either way
+   * (`wxLogNull`), and neither does this. `navigator.clipboard.writeText` needs the browser's clipboard permission (a secure page and a user gesture, which the click is);
+   * a refusal is silent, as KiCad's failed `wxTheClipboard->Open()` is.
+   */
+  const onExport = () => {
+    if (!draft || !entriesOk()) return;
+    const report = buildStackupReport(draft, units, layerName);
+    void navigator.clipboard?.writeText(report).catch(() => undefined);
   };
 
   const pickedChoice = (choices: DielectricChoice[], label: string) => choices.find((c) => c.label === label);
@@ -223,10 +436,17 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
                   const id = r.label;
                   const t = sub.thickness_mm;
                   const badThickness = t !== null && t !== undefined && (!Number.isFinite(t) || t < 0);
-                  const colorKind = stackupColorKind(l.kind);
+                  const colorType = colorListType(l.name);
+                  const prms = kicadPrms(l, r.sub);
                   return (
                     <tr key={`${r.layer}:${r.sub}`} data-row={id}>
-                      <td>{r.label}</td>
+                      <td>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          {/* `m_Icon`: `getColorIconItem`, `m_colorIconsSize` 24 x 14, drawn half as high */}
+                          <span aria-hidden data-icon-color={iconColorCss(l, r.sub)} style={{ display: "inline-block", width: 24, height: 7, background: iconColorCss(l, r.sub), flex: "none" }} />
+                          {r.label}
+                        </span>
+                      </td>
                       <td>
                         {r.typeLabel === "choice" ? (
                           <select aria-label={`${id} type`} value={corePrepregOf(l.kind)} onChange={(e) => setKind(r, kindOfChoice(e.target.value))}>
@@ -242,14 +462,18 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
                       </td>
                       <td>
                         {itemMaterialEditable(l.name) && (
-                          <input
-                            type="text"
-                            aria-label={`${id} material`}
-                            placeholder={NOT_SPECIFIED}
-                            value={sub.material ?? ""}
-                            onChange={(e) => editRow(r, { material: e.target.value === "" ? null : e.target.value })}
-                            style={{ width: 110 }}
-                          />
+                          <span style={{ display: "inline-flex", alignItems: "center" }}>
+                            <input
+                              type="text"
+                              aria-label={`${id} material`}
+                              value={sub.material ?? (prmSpecified(prms.material) ? prms.material : NOT_SPECIFIED)}
+                              onChange={(e) => editRow(r, { material: e.target.value })}
+                              style={{ width: 110 }}
+                            />
+                            <button type="button" aria-label={`${id} material list`} title="..." onClick={() => onMaterial(r)} style={{ padding: "0 4px" }}>
+                              ...
+                            </button>
+                          </span>
                         )}
                       </td>
                       <td>
@@ -264,16 +488,12 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
                           <input type="checkbox" aria-label={`${id} thickness locked`} checked={sub.thickness_locked === true} onChange={(e) => editRow(r, { thickness_locked: e.target.checked ? true : undefined })} />
                         )}
                       </td>
-                      <td>{colorKind && <StackupColor kind={colorKind} value={sub.color} ariaLabel={`${id} color`} onChange={(color) => editRow(r, { color })} />}</td>
+                      <td>{colorType && <StackupColor type={colorType} value={prms.color} ariaLabel={`${id} color`} onChange={(color) => editRow(r, { color })} />}</td>
                       <td>
-                        {itemHasEpsilonR(l.name) && (
-                          <NumberField ariaLabel={`${id} epsilon r`} width={54} optional value={sub.epsilon_r ?? undefined} onChange={(v) => editRow(r, { epsilon_r: v })} />
-                        )}
+                        {itemHasEpsilonR(l.name) && <PrmField ariaLabel={`${id} epsilon r`} value={prms.epsilonR} onChange={(v) => editRow(r, { epsilon_r: v })} />}
                       </td>
                       <td>
-                        {itemHasEpsilonR(l.name) && (
-                          <NumberField ariaLabel={`${id} loss tangent`} width={54} optional value={sub.loss_tangent ?? undefined} onChange={(v) => editRow(r, { loss_tangent: v })} />
-                        )}
+                        {itemHasEpsilonR(l.name) && <PrmField ariaLabel={`${id} loss tangent`} value={prms.lossTangent} onChange={(v) => editRow(r, { loss_tangent: v })} />}
                       </td>
                     </tr>
                   );
@@ -293,6 +513,9 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
               }}
             >
               Adjust Dielectric Thickness
+            </button>
+            <button type="button" onClick={onExport}>
+              Export to Clipboard
             </button>
           </div>
 
@@ -363,13 +586,38 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
               }}
             />
           )}
+          {dialog?.kind === "material" &&
+            (() => {
+              const l = draft.stackup.layers[dialog.layer];
+              const type = l ? materialListType(l.name) : null;
+              if (!type) return null;
+              return (
+                <MaterialDialog
+                  list={materialLists.current[type]}
+                  onDelete={(idx) => {
+                    materialLists.current[type].splice(idx, 1);
+                    setListsVersion((v) => v + 1);
+                  }}
+                  onCancel={() => setDialog(null)}
+                  onOk={(substrate) => {
+                    setDialog(null);
+                    page.edit((d) => ({ ...d, stackup: applySubstrate(d.stackup, dialog.layer, dialog.sub, substrate) }));
+                  }}
+                />
+              );
+            })()}
           {dialog?.kind === "message" && <MessageDialog title={dialog.title} message={dialog.text} onOk={() => setDialog(null)} onCancel={() => setDialog(null)} />}
           {dialog?.kind === "removed" && (
             <ItemsListDialog
               title={REMOVED_LAYERS_TITLE}
               message={REMOVED_LAYERS_MESSAGE}
               details={REMOVED_LAYERS_DETAILS}
-              items={dialog.items}
+              items={dialog.items.map((i) => i.text)}
+              onSelect={(index) => {
+                // `SetSelectionCallback`: `ACTIONS::selectionClear`, then `ACTIONS::selectItem` of the item, the item as it is (no group in its place)
+                const item = dialog.items[index];
+                if (item) dispatch({ type: "SET_SELECTION", refs: [item.id], raw: true });
+              }}
               onCancel={() => setDialog(null)}
               onOk={() => {
                 const settings = dialog.settings;

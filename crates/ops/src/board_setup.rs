@@ -129,8 +129,9 @@ pub(crate) fn set_tuning_profiles(design: &mut Design, model: &ConstraintModel, 
 /// layer's name and how many -- unless `delete_items` says to delete them, which is what KiCad does once its question ("Items have been found on removed layers. This
 /// operation will delete all items from removed layers and cannot be undone.", `PANEL_SETUP_LAYERS::TransferDataFromWindow`) is answered OK: every layer that goes is
 /// emptied as `BOARD::RemoveAllItemsOnLayer` empties it ([`remove_all_items_on_layer`]), in the same step as the new stackup. The page asks KiCad's question first and
-/// sends the flag; an agent's call without it cannot delete by accident. Unlike KiCad, which clears its undo list after deleting them (`ClearUndoRedoList`), the step
-/// is one Undo like any other, which brings the items back.
+/// sends the flag; an agent's call without it cannot delete by accident. KiCad then clears the board editor's undo list (`m_frame->ClearUndoRedoList()`, "Undo state
+/// may have copies of pointers deleted above"); the studio's history lives beside `design.json`, so the board directory's step does that once this one has been
+/// applied ([`deletes_items_on_removed_layers`] tells it so; crates/cli/src/board.rs `clear_board_history`).
 pub(crate) fn set_stackup(design: &mut Design, model: &ConstraintModel, settings: &StackupSettings, delete_items: bool) -> Done {
     settings.validate().map_err(|why| vec![CheckResult::fail("ops_bad_stackup", "stackup", why)])?;
     let keep = rules::copper_layer_names(settings.copper_layers as usize);
@@ -152,6 +153,20 @@ pub(crate) fn set_stackup(design: &mut Design, model: &ConstraintModel, settings
     }
     overlay(design).stackup = Some(settings.clone());
     Ok(())
+}
+
+/// Whether `cmd` (a `set_stackup` with `delete_items_on_removed_layers`, alone or in a batch) deletes something from `design` as it stands before it: some copper
+/// layer a board of the new count has not got still has an item on it (`PANEL_SETUP_LAYERS::TransferDataFromWindow`'s `!removedLayers.empty()`, which is when KiCad
+/// runs `RemoveAllItemsOnLayer` and then `ClearUndoRedoList`). A layer the board never had has nothing on it, so every copper name past the new count is asked.
+pub fn deletes_items_on_removed_layers(design: &Design, cmd: &crate::Cmd) -> bool {
+    match cmd {
+        crate::Cmd::SetStackup { settings, delete_items_on_removed_layers: true } => {
+            let keep = rules::copper_layer_names(settings.copper_layers as usize);
+            rules::copper_layer_names(32).iter().filter(|l| !keep.contains(l)).any(|l| copper_layer_items(design, l) > 0)
+        }
+        crate::Cmd::Batch { cmds } => cmds.iter().any(|c| deletes_items_on_removed_layers(design, c)),
+        _ => false,
+    }
 }
 
 /// The type of the board's via `id` (`PCB_VIA::GetViaType`): a through via unless the board says otherwise ([`eda_model::via_extra::ViaExtra::kind`]).

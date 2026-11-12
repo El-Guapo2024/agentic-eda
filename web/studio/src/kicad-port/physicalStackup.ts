@@ -7,9 +7,14 @@
 //
 // A layer's own `material`, `thickness_mm`, `thickness_locked`, `epsilon_r`, `loss_tangent` and `color` are its first sublayer; `sublayers` are the ones after it
 // (crates/model/src/lib.rs `StackupLayer::sublayers`). Dependency-free (types only) so node --test runs it.
-import type { BoardState, Nm, Stackup, StackupLayer, StackupSublayer } from "../api/types";
+//
+// Also here: what an item's parameters are when the board file does not say (`BOARD_STACKUP_ITEM( type )`, `DIELECTRIC_PRMS()`), the material lists
+// (`DIELECTRIC_SUBSTRATE_LIST`, `DIALOG_DIELECTRIC_MATERIAL`, `onMaterialChange`), the colour lists (`GetStandardColors`, `createColorBox`, `getColorIconItem`),
+// the values Apply writes (`transferDataFromUIToStackup`) and Export to Clipboard's text (`BuildStackupReport`).
+import type { BoardState, Nm, Side, Stackup, StackupLayer, StackupSettings, StackupSublayer } from "../api/types";
 import { messageTextFromValue } from "./messageText";
 import { stringFromValue } from "./fpFields";
+import { uiDouble2Str } from "./numericEvaluator";
 
 export const NOT_SPECIFIED = "Not specified";
 
@@ -392,7 +397,24 @@ function zoneLayerDesc(layers: string[], name: (f: string) => string): string {
 }
 
 /** The parts of the board state the question needs. */
-export type RemovedLayerBoard = Pick<BoardState, "routing" | "drawings">;
+export type RemovedLayerBoard = Pick<BoardState, "routing" | "drawings"> & { parts?: BoardState["parts"] };
+
+/** One entry of the question's list: its text (`GetItemDescription( frame, true )`, or "Pad %s of %s on %s") and the id of the item it is, which a click on it
+ * selects (`SetSelectionCallback`). */
+export interface RemovedLayerItem {
+  text: string;
+  id: string;
+}
+
+/** The id a pad is selected under (kicad-port/pcbItems.ts `padIds`, repeated here to keep this file free of the canvas code): `REF.NUM`, `#k` for the k-th of a number. */
+function padIdsOf(part: { ref: string; pads?: readonly { num: string; id?: string }[] }): string[] {
+  const seen = new Map<string, number>();
+  return (part.pads ?? []).map((pad) => {
+    const n = (seen.get(pad.num) ?? 0) + 1;
+    seen.set(pad.num, n);
+    return pad.id ?? (n === 1 ? `${part.ref}.${pad.num}` : `${part.ref}.${pad.num}#${n}`);
+  });
+}
 
 /**
  * Fewer copper layers: `PANEL_SETUP_LAYERS::TransferDataFromWindow`'s list of what is on the layers that go, each as `GetItemDescription( frame, true )` says it.
@@ -400,10 +422,10 @@ export type RemovedLayerBoard = Pick<BoardState, "routing" | "drawings">;
  * a blind or buried via that only passes through) -- in the board's order; for each, the board-level items on it (`PCB_LAYER_COLLECTOR` over `BoardLevelItems`,
  * `IsOnLayer`), so a via is listed for every layer its drill spans, a through via too, and a zone on several layers for each that goes. The order of a layer's
  * items is `BOARD::Visit`'s: the drawings (shapes, texts, text boxes, tables, dimensions, barcodes), the tracks and vias, the points, the zones, the generators.
- * Footprints' pads with a shape of their own on the layer, which KiCad lists too ("Pad %s of %s on %s"), are not: the model has no per-layer pad shapes on inner
- * layers.
+ * Then the pads of the placed footprints that have a shape of their own on the layer (`pad->HasExplicitDefinitionForLayer( layer )`, [`padHasExplicitLayer`]):
+ * "Pad %s of %s on %s". A track of several segments is listed once per segment and selected whole (the studio's track is the polyline).
  */
-export function itemsOnRemovedLayers(board: RemovedLayerBoard | null | undefined, fromLayers: number, toLayers: number, units: Units = "mm", layerName: (file: string) => string = (f) => f): string[] {
+export function removedLayerItems(board: RemovedLayerBoard | null | undefined, fromLayers: number, toLayers: number, units: Units = "mm", layerName: (file: string) => string = (f) => f): RemovedLayerItem[] {
   if (!board || toLayers >= fromLayers) return [];
   const stack = copperNames(fromLayers);
   const keep = new Set(copperNames(toLayers));
@@ -433,24 +455,25 @@ export function itemsOnRemovedLayers(board: RemovedLayerBoard | null | undefined
     (rt?.tracks ?? []).some((x) => x.layer === layer) ||
     (rt?.zones ?? []).some((z) => zoneSet(z).includes(layer)) ||
     (rt?.vias ?? []).some((v) => !!v.type && (v.from === layer || v.to === layer));
-  const out: string[] = [];
+  const out: RemovedLayerItem[] = [];
+  const add = (text: string, id: string) => out.push({ text, id });
   for (const layer of stack.filter((l) => !keep.has(l) && hasItems(l))) {
     const on = layerName(layer);
-    for (const s of dr?.shapes ?? []) if (s.layer === layer) out.push(`${SHAPE_NAMES[s.kind] ?? "Unrecognized"} ${netnameMsg(s.net)} on ${on}`);
-    for (const t of dr?.texts ?? []) if (t.layer === layer) out.push(`PCB text '${t.shown ?? t.content}' on ${on}`);
-    for (const t of dr?.text_boxes ?? []) if (t.layer === layer) out.push(`PCB text box '${t.shown ?? t.text}' on ${on}`);
-    for (const t of dr?.tables ?? []) if (t.layer === layer) out.push(`${t.cols} column table`);
-    for (const d of dr?.dimensions ?? []) if (d.layer === layer) out.push(`Dimension '${d.text}' on ${on}`);
-    for (const b of dr?.barcodes ?? []) if (b.layer === layer) out.push(`Barcode on ${on}`);
+    for (const s of dr?.shapes ?? []) if (s.layer === layer) add(`${SHAPE_NAMES[s.kind] ?? "Unrecognized"} ${netnameMsg(s.net)} on ${on}`, s.id);
+    for (const t of dr?.texts ?? []) if (t.layer === layer) add(`PCB text '${t.shown ?? t.content}' on ${on}`, t.id);
+    for (const t of dr?.text_boxes ?? []) if (t.layer === layer) add(`PCB text box '${t.shown ?? t.text}' on ${on}`, t.id);
+    for (const t of dr?.tables ?? []) if (t.layer === layer) add(`${t.cols} column table`, t.id);
+    for (const d of dr?.dimensions ?? []) if (d.layer === layer) add(`Dimension '${d.text}' on ${on}`, d.id);
+    for (const b of dr?.barcodes ?? []) if (b.layer === layer) add(`Barcode on ${on}`, b.id);
     for (const t of rt?.tracks ?? []) {
       if (t.layer !== layer) continue;
       if (t.arc_mid && t.pts.length >= 2) {
-        out.push(`Track (arc) ${netnameMsg(t.net)} on ${on}, length ${messageTextFromValue(arcLength(t.pts[0]!, t.arc_mid, t.pts[t.pts.length - 1]!), units)}`);
+        add(`Track (arc) ${netnameMsg(t.net)} on ${on}, length ${messageTextFromValue(arcLength(t.pts[0]!, t.arc_mid, t.pts[t.pts.length - 1]!), units)}`, t.id);
         continue;
       }
       for (let i = 0; i + 1 < t.pts.length; i++) {
         const [a, b] = [t.pts[i]!, t.pts[i + 1]!];
-        out.push(`Track ${netnameMsg(t.net)} on ${on}, length ${messageTextFromValue(Math.hypot(b[0] - a[0], b[1] - a[1]), units)}`);
+        add(`Track ${netnameMsg(t.net)} on ${on}, length ${messageTextFromValue(Math.hypot(b[0] - a[0], b[1] - a[1]), units)}`, t.id);
       }
     }
     for (const v of rt?.vias ?? []) {
@@ -458,25 +481,431 @@ export function itemsOnRemovedLayers(board: RemovedLayerBoard | null | undefined
       const word = v.type === "blind" ? "Blind via" : v.type === "buried" ? "Buried via" : v.type === "micro" ? "Micro via" : "Via";
       // `PCB_VIA::LayerMaskDescribe`: the top and the bottom layer of `LayerPair`
       const [top, bottom] = viaSpan(v);
-      out.push(`${word} ${netnameMsg(v.net)} on ${layerName(top)} - ${layerName(bottom)}`);
+      add(`${word} ${netnameMsg(v.net)} on ${layerName(top)} - ${layerName(bottom)}`, v.id);
     }
-    for (const p of dr?.points ?? []) if (p.layer === layer) out.push(`Point on ${on}`);
+    for (const p of dr?.points ?? []) if (p.layer === layer) add(`Point on ${on}`, p.id);
     for (const z of rt?.zones ?? []) {
       const set = zoneSet(z);
       if (!set.includes(layer)) continue;
       const desc = zoneLayerDesc(set, layerName);
       const name = z.name ?? "";
-      if (z.is_rule_area) out.push(name === "" ? `Rule Area ${desc}` : `Rule area '${name}' ${desc}`);
-      else if (z.teardrop) out.push(`Teardrop ${netnameMsg(z.net)} ${desc}`);
-      else out.push(name === "" ? `Zone ${netnameMsg(z.net)} ${desc}, priority ${z.priority}` : `Zone '${name}' ${netnameMsg(z.net)} ${desc}, priority ${z.priority}`);
+      if (z.is_rule_area) add(name === "" ? `Rule Area ${desc}` : `Rule area '${name}' ${desc}`, z.id);
+      else if (z.teardrop) add(`Teardrop ${netnameMsg(z.net)} ${desc}`, z.id);
+      else add(name === "" ? `Zone ${netnameMsg(z.net)} ${desc}, priority ${z.priority}` : `Zone '${name}' ${netnameMsg(z.net)} ${desc}, priority ${z.priority}`, z.id);
     }
     // `PCB_GENERATOR::GetItemDescription`: "Generator"
-    for (const p of dr?.tuning_patterns ?? []) if (p.layer === layer) out.push("Generator");
+    for (const p of dr?.tuning_patterns ?? []) if (p.layer === layer) add("Generator", p.id);
+    // `for( FOOTPRINT* footprint : m_pcb->Footprints() ) for( PAD* pad : footprint->Pads() )`
+    for (const part of board.parts ?? []) {
+      if (!part.placed) continue;
+      const ids = padIdsOf(part);
+      (part.pads ?? []).forEach((pad, i) => {
+        if (padHasExplicitLayer(pad, part.side, layer, fromLayers)) add(`Pad ${pad.num} of ${part.ref} on ${on}`, ids[i]!);
+      });
+    }
   }
   return out;
+}
+
+/** The texts of [`removedLayerItems`]. */
+export function itemsOnRemovedLayers(board: RemovedLayerBoard | null | undefined, fromLayers: number, toLayers: number, units: Units = "mm", layerName: (file: string) => string = (f) => f): string[] {
+  return removedLayerItems(board, fromLayers, toLayers, units, layerName).map((i) => i.text);
 }
 
 /** The text of KiCad's question (`DIALOG_ITEMS_LIST( parent, _( "Warning" ), .., _( "Show Details" ) )`). */
 export const REMOVED_LAYERS_TITLE = "Warning";
 export const REMOVED_LAYERS_MESSAGE = "Items have been found on removed layers. This operation will delete all items from removed layers and cannot be undone.";
 export const REMOVED_LAYERS_DETAILS = "Show Details";
+
+// ------------------------------------------------------------------------------------------------------------------ an item's parameters as KiCad has them
+
+/** `DEFAULT_EPSILON_R_SOLDERMASK`, `DEFAULT_EPSILON_R_SILKSCREEN` (stackup_predefined_prms.h). */
+export const DEFAULT_EPSILON_R_SOLDERMASK = 3.3;
+export const DEFAULT_EPSILON_R_SILKSCREEN = 1.0;
+
+/** One sublayer's parameters as KiCad holds them (`DIELECTRIC_PRMS`): never blank. */
+export interface KicadPrms {
+  material: string;
+  thicknessNm: Nm;
+  thicknessLocked: boolean;
+  epsilonR: number;
+  lossTangent: number;
+  color: string;
+}
+
+/**
+ * Sublayer `sub` of the layer as KiCad has it once the board is read: what the file says, else what `BOARD_STACKUP_ITEM( type )` starts the first sublayer with
+ * (a dielectric FR4, epsilon R 4.5, loss tangent 0.02, colour "Not specified"; a mask "Not specified", 0.01 mm, epsilon R 3.3; a silkscreen "Not specified", epsilon R
+ * 1.0; copper 0.035 mm) or, for a later sublayer, `DIELECTRIC_PRMS()` (no material or colour, thickness 0, epsilon R 1, loss tangent 0). This model leaves out what the
+ * file leaves out, so a blank value here is the type's default, which is what KiCad shows (`lazyBuildRowUI`: `UIDouble2Str( item->GetEpsilonR( sublayerIdx ) )`).
+ */
+export function kicadPrms(l: StackupLayer, sub: number): KicadPrms {
+  const type = stackupItemType(l.name);
+  let d: KicadPrms = { material: "", thicknessNm: 0, thicknessLocked: false, epsilonR: 1.0, lossTangent: 0.0, color: "" };
+  if (sub === 0) {
+    if (type === "copper") d = { ...d, thicknessNm: 35_000 };
+    else if (type === "dielectric") d = { ...d, color: NOT_SPECIFIED, material: "FR4", lossTangent: 0.02, epsilonR: 4.5 };
+    else if (type === "soldermask") d = { ...d, color: NOT_SPECIFIED, material: NOT_SPECIFIED, thicknessNm: 10_000, epsilonR: DEFAULT_EPSILON_R_SOLDERMASK };
+    else if (type === "silkscreen") d = { ...d, color: NOT_SPECIFIED, material: NOT_SPECIFIED, epsilonR: DEFAULT_EPSILON_R_SILKSCREEN };
+  }
+  const s = sublayerOf(l, sub);
+  return {
+    material: s.material ?? d.material,
+    thicknessNm: s.thickness_mm === null || s.thickness_mm === undefined ? d.thicknessNm : Math.round(s.thickness_mm * 1e6),
+    thicknessLocked: s.thickness_locked === true,
+    epsilonR: s.epsilon_r ?? d.epsilonR,
+    lossTangent: s.loss_tangent ?? d.lossTangent,
+    color: s.color ?? d.color,
+  };
+}
+
+/** `BOARD_STACKUP_ITEM::FormatEpsilonR` / `FormatLossTangent`: `UIDouble2Str`, no scientific notation for the usual values. */
+export const formatPrm = uiDouble2Str;
+
+/** `wxString::ToDouble`: the whole text is a number (`strtod` skipping leading blanks), else null. */
+export function toDouble(text: string): number | null {
+  return /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text) ? Number(text.trim()) : null;
+}
+
+// ------------------------------------------------------------------------------------------------------------------ colours
+
+/** A layer kind's colour list (`GetStandardColors`): a silkscreen's and a mask's, a dielectric's; the others have none (`IsColorEditable`). */
+export type ColorListType = "silkscreen" | "soldermask" | "dielectric";
+
+/** `FAB_LAYER_COLOR`: a name and its colour (red, green, blue, 0..255). */
+export interface FabLayerColor {
+  name: string;
+  rgb: readonly [number, number, number];
+}
+
+/** "User defined", the last entry of each colour list (`GetColorUserDefinedListIdx`). */
+export const USER_DEFINED = "User defined";
+
+/** `gbrjobColors` (stackup_predefined_prms.cpp): a solder mask's and a silkscreen's. */
+const GBRJOB_COLORS: readonly FabLayerColor[] = [
+  { name: NOT_SPECIFIED, rgb: [80, 80, 80] },
+  { name: "Green", rgb: [60, 150, 80] },
+  { name: "Red", rgb: [128, 0, 0] },
+  { name: "Blue", rgb: [0, 0, 128] },
+  { name: "Purple", rgb: [80, 0, 80] },
+  { name: "Black", rgb: [20, 20, 20] },
+  { name: "White", rgb: [200, 200, 200] },
+  { name: "Yellow", rgb: [128, 128, 0] },
+  { name: USER_DEFINED, rgb: [128, 128, 128] },
+];
+
+/** `dielectricColors` (their alpha is not used: `FAB_LAYER_COLOR::GetColor` gives a dielectric alpha 1). */
+const DIELECTRIC_COLORS: readonly FabLayerColor[] = [
+  { name: NOT_SPECIFIED, rgb: [80, 80, 80] },
+  { name: "FR4 natural", rgb: [109, 116, 75] },
+  { name: "PTFE natural", rgb: [252, 252, 250] },
+  { name: "Polyimide", rgb: [205, 130, 0] },
+  { name: "Phenolic natural", rgb: [92, 17, 6] },
+  { name: "Aluminum", rgb: [213, 213, 213] },
+  { name: USER_DEFINED, rgb: [128, 128, 128] },
+];
+
+/** The colour list of a layer, or null for one whose colour is not editable (`IsColorEditable`: a dielectric, a solder mask, a silkscreen). */
+export function colorListType(name: string): ColorListType | null {
+  const t = stackupItemType(name);
+  return t === "silkscreen" || t === "soldermask" || t === "dielectric" ? t : null;
+}
+
+/** `GetStandardColors( aType )`. */
+export function standardColors(type: ColorListType): readonly FabLayerColor[] {
+  return type === "dielectric" ? DIELECTRIC_COLORS : GBRJOB_COLORS;
+}
+
+/** `DEFAULT_SOLDERMASK_OPACITY`. */
+const SOLDERMASK_OPACITY = 0.83;
+
+/** `FAB_LAYER_COLOR::GetColor( aItemType )` as CSS: a solder mask's colour at 0.83 opacity, any other opaque. */
+export function standardColorCss(type: ColorListType, idx: number): string {
+  const [r, g, b] = standardColors(type)[idx]!.rgb;
+  return `rgba(${r}, ${g}, ${b}, ${type === "soldermask" ? SOLDERMASK_OPACITY : 1})`;
+}
+
+const hex2 = (n: number) => n.toString(16).toUpperCase().padStart(2, "0");
+
+/** `GetDefaultUserColor( aType ).ToHexString()`: the "User defined" entry's grey, `#808080D4` for a mask (its opacity), `#808080FF` otherwise. */
+export function defaultUserColor(type: ColorListType): string {
+  const [r, g, b] = standardColors(type).at(-1)!.rgb;
+  return `#${hex2(r)}${hex2(g)}${hex2(b)}${hex2(Math.round((type === "soldermask" ? SOLDERMASK_OPACITY : 1) * 255))}`;
+}
+
+/** `lazyBuildRowUI`'s selection of the colour box: "User defined" for a `#...` colour, the entry whose name is the colour's, else 0 ("Not specified"). */
+export function colorIndex(type: ColorListType, color: string): number {
+  const list = standardColors(type);
+  if (color.startsWith("#")) return list.length - 1;
+  const i = list.findIndex((c) => c.name === color);
+  return i < 0 ? 0 : i;
+}
+
+/** A `#RRGGBB[AA]` colour as CSS (`COLOR4D( aColorStr )`), or null. */
+export function hexColorCss(color: string): string | null {
+  const m = /^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$/.exec(color.trim());
+  if (!m) return null;
+  const v = Number.parseInt(m[1]!, 16);
+  const a = m[2] ? Number.parseInt(m[2], 16) / 255 : 1;
+  return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${Math.round(a * 1000) / 1000})`;
+}
+
+/** The colour of the row's swatch icon (`getColorIconItem`, drawn opaque by `drawBitmap`): copper, dielectric and paste a fixed colour each, a mask or a silkscreen the
+ * colour its box has selected (`GetSelectedColor`). */
+export function iconColorCss(l: StackupLayer, sub: number): string {
+  const type = stackupItemType(l.name);
+  if (type === "copper") return "rgb(220, 180, 30)";
+  if (type === "dielectric") return "rgb(75, 120, 75)";
+  if (type === "solderpaste") return "rgb(200, 200, 200)";
+  const color = kicadPrms(l, sub).color;
+  const idx = colorIndex(type, color);
+  if (idx === standardColors(type).length - 1) {
+    const css = hexColorCss(color);
+    return css ? css.replace(/^rgba\((.*), [^,]+\)$/, "rgb($1)") : "rgb(128, 128, 128)";
+  }
+  const [r, g, b] = standardColors(type)[idx]!.rgb;
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+// ------------------------------------------------------------------------------------------------------------------ the material lists
+
+/** `DIELECTRIC_SUBSTRATE`: a material's name, epsilon R and loss tangent. */
+export interface DielectricSubstrate {
+  name: string;
+  epsilonR: number;
+  lossTangent: number;
+}
+
+/** `DIELECTRIC_SUBSTRATE_LIST::DL_MATERIAL_LIST_TYPE`. */
+export type MaterialListType = "dielectric" | "soldermask" | "silkscreen";
+
+/** `substrateMaterial`, `solderMaskMaterial`, `silkscreenMaterial` (dielectric_material.cpp): the lists a new panel starts with. */
+const PREDEFINED_MATERIALS: Record<MaterialListType, readonly DielectricSubstrate[]> = {
+  dielectric: [
+    { name: NOT_SPECIFIED, epsilonR: 0.0, lossTangent: 0.0 },
+    { name: "FR4", epsilonR: 4.5, lossTangent: 0.02 },
+    { name: "FR408-HR", epsilonR: 3.69, lossTangent: 0.0091 },
+    { name: "Polyimide", epsilonR: 3.2, lossTangent: 0.004 },
+    { name: "Kapton", epsilonR: 3.2, lossTangent: 0.004 },
+    { name: "Polyolefin", epsilonR: 1.0, lossTangent: 0.0 },
+    { name: "Al", epsilonR: 8.7, lossTangent: 0.001 },
+    { name: "PTFE", epsilonR: 2.1, lossTangent: 0.0002 },
+    { name: "Teflon", epsilonR: 2.1, lossTangent: 0.0002 },
+    { name: "Ceramic", epsilonR: 1.0, lossTangent: 0.0 },
+  ],
+  soldermask: [
+    { name: NOT_SPECIFIED, epsilonR: DEFAULT_EPSILON_R_SOLDERMASK, lossTangent: 0.0 },
+    { name: "Epoxy", epsilonR: DEFAULT_EPSILON_R_SOLDERMASK, lossTangent: 0.0 },
+    { name: "Liquid Ink", epsilonR: DEFAULT_EPSILON_R_SOLDERMASK, lossTangent: 0.0 },
+    { name: "Dry Film", epsilonR: DEFAULT_EPSILON_R_SOLDERMASK, lossTangent: 0.0 },
+  ],
+  silkscreen: [
+    { name: NOT_SPECIFIED, epsilonR: DEFAULT_EPSILON_R_SILKSCREEN, lossTangent: 0.0 },
+    { name: "Liquid Photo", epsilonR: DEFAULT_EPSILON_R_SILKSCREEN, lossTangent: 0.0 },
+    { name: "Direct Printing", epsilonR: DEFAULT_EPSILON_R_SILKSCREEN, lossTangent: 0.0 },
+  ],
+};
+
+/** The panel's three lists as it starts (`m_delectricMatList`, `m_solderMaskMatList`, `m_silkscreenMatList`): fresh copies, which the panel then adds to and the dialog
+ * deletes from for as long as it is open. */
+export function newMaterialLists(): Record<MaterialListType, DielectricSubstrate[]> {
+  return { dielectric: [...PREDEFINED_MATERIALS.dielectric], soldermask: [...PREDEFINED_MATERIALS.soldermask], silkscreen: [...PREDEFINED_MATERIALS.silkscreen] };
+}
+
+/** The material list of a layer (`onMaterialChange`'s `item_mat_list`), or null for a layer with no material (`IsMaterialEditable`). */
+export function materialListType(name: string): MaterialListType | null {
+  const t = stackupItemType(name);
+  return t === "dielectric" || t === "soldermask" || t === "silkscreen" ? t : null;
+}
+
+/** `DIELECTRIC_SUBSTRATE_LIST::FindSubstrate( aName, aEpsilonR, aLossTg )`: the entry of that name (any case) with exactly those values, else -1. */
+export function findSubstrate(list: readonly DielectricSubstrate[], name: string, epsilonR: number, lossTangent: number): number {
+  return list.findIndex((m) => m.epsilonR === epsilonR && m.lossTangent === lossTangent && m.name.toLowerCase() === name.toLowerCase());
+}
+
+/**
+ * `onMaterialChange` before its dialog: "Ensure m_materialList contains all materials already in use in stackup list and add it is missing" -- every sublayer of
+ * every dielectric, mask and silkscreen, with the material, epsilon R and loss tangent `transferDataFromUIToStackup` has just given it (an unspecified material is
+ * "Not specified"), added to its kind's list when the list has no entry of that name and values. The lists are changed in place, as KiCad's members are.
+ */
+export function addMaterialsInUse(lists: Record<MaterialListType, DielectricSubstrate[]>, s: Stackup): void {
+  for (const l of s.layers) {
+    const type = materialListType(l.name);
+    if (!type) continue;
+    const list = lists[type];
+    for (let sub = 0; sub < sublayerCount(l); sub++) {
+      const p = kicadPrms(l, sub);
+      const material = prmSpecified(p.material) ? p.material : NOT_SPECIFIED;
+      if (findSubstrate(list, material, p.epsilonR, p.lossTangent) < 0) list.push({ name: material, epsilonR: p.epsilonR, lossTangent: p.lossTangent });
+    }
+  }
+}
+
+/** `DIALOG_DIELECTRIC_MATERIAL`'s words. */
+export const MATERIAL_DIALOG = {
+  title: "Dielectric Material Characteristics",
+  name: "Name:",
+  epsilonR: "Epsilon R:",
+  lossTangent: "Loss Tan:",
+  common: "Common materials:",
+  columns: ["Material", "Epsilon R", "Loss Tan"],
+  badEpsilonR: "Incorrect value for Epsilon R",
+  badLossTangent: "Incorrect value for Loss Tangent",
+} as const;
+
+/** `DIALOG_DIELECTRIC_MATERIAL::TransferDataToWindow`: the fields start empty, "1" and "0" (a dummy substrate's `FormatEpsilonR` / `FormatLossTangent`). */
+export function materialDialogStart(): { name: string; epsilonR: string; lossTangent: string } {
+  return { name: "", epsilonR: formatPrm(1.0), lossTangent: formatPrm(0.0) };
+}
+
+/** `onListItemSelected`: the entry's name and values put in the fields. */
+export function materialDialogPick(m: DielectricSubstrate): { name: string; epsilonR: string; lossTangent: string } {
+  return { name: m.name, epsilonR: formatPrm(m.epsilonR), lossTangent: formatPrm(m.lossTangent) };
+}
+
+/** `DIALOG_DIELECTRIC_MATERIAL::TransferDataFromWindow` then `GetSelectedSubstrate`: the substrate, or the message that refuses OK ("Incorrect value for Epsilon R",
+ * then "Incorrect value for Loss Tangent": not a number or negative). */
+export function materialDialogResult(fields: { name: string; epsilonR: string; lossTangent: string }): { substrate: DielectricSubstrate } | { error: string } {
+  const e = toDouble(fields.epsilonR);
+  if (e === null || e < 0) return { error: MATERIAL_DIALOG.badEpsilonR };
+  const t = toDouble(fields.lossTangent);
+  if (t === null || t < 0) return { error: MATERIAL_DIALOG.badLossTangent };
+  return { substrate: { name: fields.name, epsilonR: e, lossTangent: t } };
+}
+
+/**
+ * `onMaterialChange` after its dialog, on sublayer `sub` of layer `layer`: an empty name changes nothing ("No substrate specified"); else the material, epsilon R and
+ * loss tangent are the substrate's, and a dielectric whose colour is not user defined takes the colour of its material -- "PTFE natural" for PTFE or Teflon,
+ * "Polyimide" for Polyimide or Kapton, "Aluminum" for Al, "FR4 natural" for anything else (names compared as written, `IsSameAs`).
+ */
+export function applySubstrate(s: Stackup, layer: number, sub: number, substrate: DielectricSubstrate): Stackup {
+  if (substrate.name === "") return s;
+  return {
+    ...s,
+    layers: s.layers.map((l, i) => {
+      if (i !== layer) return l;
+      const patch: Partial<StackupSublayer> = { material: substrate.name, epsilon_r: substrate.epsilonR, loss_tangent: substrate.lossTangent };
+      if (stackupItemType(l.name) === "dielectric" && !kicadPrms(l, sub).color.startsWith("#")) {
+        const n = substrate.name;
+        patch.color = n === "PTFE" || n === "Teflon" ? "PTFE natural" : n === "Polyimide" || n === "Kapton" ? "Polyimide" : n === "Al" ? "Aluminum" : "FR4 natural";
+      }
+      return withSublayer(l, sub, patch);
+    }),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------------------------ what Apply writes
+
+/**
+ * `transferDataFromUIToStackup`: each row's controls written back to its sublayer. A field always holds a number, so a blank epsilon R or loss tangent (this model's
+ * "not written") is written as the number shown, the type's default; a material shown is written as shown (a dielectric's blank one is "FR4"); the colour is
+ * the box's: a `#...` colour or a name of the list, and a name the list does not have is "Not specified" (left blank here) as the box shows it. The board file then
+ * writes epsilon R and loss tangent wherever a material is specified, as `FormatBoardStackup` does.
+ */
+export function withKicadValues(s: Stackup): Stackup {
+  return {
+    ...s,
+    layers: s.layers.map((l) => {
+      let next = l;
+      for (let sub = 0; sub < sublayerCount(l); sub++) {
+        const p = kicadPrms(l, sub);
+        const own = sublayerOf(l, sub);
+        const patch: Partial<StackupSublayer> = {};
+        if (itemHasEpsilonR(l.name)) {
+          if (own.epsilon_r === null || own.epsilon_r === undefined) patch.epsilon_r = p.epsilonR;
+          if (own.loss_tangent === null || own.loss_tangent === undefined) patch.loss_tangent = p.lossTangent;
+        }
+        if (itemMaterialEditable(l.name) && (own.material === null || own.material === undefined) && prmSpecified(p.material)) patch.material = p.material;
+        const ct = colorListType(l.name);
+        if (ct && typeof own.color === "string" && !own.color.startsWith("#") && colorIndex(ct, own.color) === 0) patch.color = undefined;
+        if (Object.keys(patch).length > 0 || "color" in patch) next = withSublayer(next, sub, patch);
+      }
+      return next;
+    }),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------------------------ Export to Clipboard
+
+/**
+ * `BuildStackupReport( m_stackup, m_frame->GetUserUnits() )`, word for word: a line for each layer (`layer "%s" type "%s"`, a dielectric's `\n  sublayer "1/%d"`
+ * -- always, as `GetSublayersCount()` is never 0 -- its ` Color "%s"`, then for each sublayer ` Thickness %s` [` Locked`], ` Material "%s"`, ` EpsilonR %s`,
+ * ` LossTg %s` as the type has them, a later sublayer starting `\n  sublayer "%d/%d"`), then `Finish "%s"` and the options. The values are the ones Apply would
+ * write (`transferDataFromUIToStackup` runs first); `layerName` is `BOARD::GetLayerName` (`lazyBuildRowUI`'s `SetLayerName`).
+ */
+export function buildStackupReport(settings: Pick<StackupSettings, "stackup">, units: Units, layerName: (file: string) => string = (f) => f): string {
+  const s = withKicadValues(settings.stackup);
+  let report = "";
+  let dielectrics = 0;
+  for (const l of s.layers) {
+    const type = stackupItemType(l.name);
+    const count = sublayerCount(l);
+    const typeName = l.kind ?? "";
+    if (type === "dielectric") report += `layer "${formatDielectricLayerName(++dielectrics)}" type "${typeName}"\n  sublayer "1/${count}"`;
+    else report += `layer "${layerName(l.name)}" type "${typeName}"`;
+    if (colorListType(l.name)) {
+      const c = kicadPrms(l, 0).color;
+      report += ` Color "${c === "" ? NOT_SPECIFIED : c}"`;
+    }
+    for (let idx = 0; idx < count; idx++) {
+      if (idx) report += `\n  sublayer "${idx + 1}/${count}"`;
+      const p = kicadPrms(l, idx);
+      if (itemThicknessEditable(l.name)) {
+        report += ` Thickness ${stringFromValue(p.thicknessNm, units)}`;
+        if (type === "dielectric" && p.thicknessLocked) report += " Locked";
+      }
+      // after `transferDataFromUIToStackup`, an unspecified material is the keyword `NotSpecifiedPrm()`
+      if (itemMaterialEditable(l.name)) report += ` Material "${prmSpecified(p.material) ? p.material : NOT_SPECIFIED}"`;
+      if (itemHasEpsilonR(l.name)) report += ` EpsilonR ${formatPrm(p.epsilonR)}`;
+      if (itemHasEpsilonR(l.name)) report += ` LossTg ${formatPrm(p.lossTangent)}`;
+    }
+    report += "\n";
+  }
+  // `PANEL_SETUP_BOARD_FINISH::TransferDataFromWindow`: "Not specified" is the first entry of the finishes
+  report += `Finish "${s.copper_finish ?? NOT_SPECIFIED}"`;
+  if (s.dielectric_constraints) report += ' Option "Impedance Controlled"';
+  if (s.edge_plating) report += ' Option "Plated edges"';
+  if ((s.edge_connector ?? 0) !== 0) report += ` EdgeConnector "${s.edge_connector === 2 ? "yes,bevelled" : "yes"}"`;
+  report += "\n";
+  return report;
+}
+
+// ------------------------------------------------------------------------------------------------------------------ pads on a removed layer
+
+/** `::FlipLayer( aLayerId, aCopperLayersCount )` of a copper layer (crates/model/src/padstack.rs `flip_copper_layer`): front and back swap, and from four copper layers
+ * the inner ones mirror through the middle of the stack. */
+export function flipCopperLayer(layer: string, copperLayers: number): string {
+  if (layer === "F.Cu") return "B.Cu";
+  if (layer === "B.Cu") return "F.Cu";
+  const m = /^In(\d+)\.Cu$/.exec(layer);
+  if (!m || copperLayers < 4) return layer;
+  const max = copperLayers - 3;
+  return `In${Math.min(Math.max(max - (Number(m[1]) - 1), 0), max) + 1}.Cu`;
+}
+
+/**
+ * `PAD::HasExplicitDefinitionForLayer( layer )` (`PADSTACK::m_copperProps.count( aLayer ) > 0`) for a pad of a footprint on `side`: F.Cu always; a front/inner/back
+ * padstack the layers the file gives it, B.Cu and `PADSTACK::INNER_LAYERS` (In1.Cu) for its inner shape; a custom one each layer it names. The model keeps them as for
+ * a footprint on the top side, so a bottom footprint's are flipped, as `PADSTACK::FlipLayers` flips the keys (`INNER_LAYERS` stays In1.Cu).
+ */
+export function padHasExplicitLayer(pad: Pick<NonNullable<BoardState["parts"][number]["pads"]>[number], "stack">, side: Side | undefined, layer: string, copperLayers: number): boolean {
+  if (layer === "F.Cu") return true;
+  const stack = pad.stack;
+  if (!stack) return false;
+  const flip = (l: string) => (side === "bottom" ? flipCopperLayer(l, copperLayers) : l);
+  if (stack.mode === "front_inner_back") return (layer === "In1.Cu" && !!stack.inner) || (!!stack.back && flip("B.Cu") === layer);
+  if (stack.mode === "custom") return Object.keys(stack.layers ?? {}).some((k) => flip(k) === layer);
+  return false;
+}
+
+/** `COLOR4D::ToHexString` (`#%02X%02X%02X%02X`, each channel `KiROUND( c * 255 )`) of a CSS `rgb(..)` / `rgba(..)` or `#...` colour, or null. */
+export function colorToHexString(css: string): string | null {
+  const s = css.trim();
+  const fn = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(s);
+  if (fn) {
+    const ch = (v: string) => Math.min(255, Math.max(0, Math.round(Number(v))));
+    return `#${hex2(ch(fn[1]!))}${hex2(ch(fn[2]!))}${hex2(ch(fn[3]!))}${hex2(Math.round(Math.min(1, Math.max(0, fn[4] === undefined ? 1 : Number(fn[4]))) * 255))}`;
+  }
+  const m = /^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$/.exec(s);
+  return m ? `#${m[1]!.toUpperCase()}${(m[2] ?? "FF").toUpperCase()}` : null;
+}

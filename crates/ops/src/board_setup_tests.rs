@@ -274,6 +274,12 @@ fn fewer_copper_layers_delete_what_is_on_the_layers_that_go_when_asked_to() {
     assert_eq!((board_setup::copper_layer_items(&d, "In1.Cu"), board_setup::copper_layer_items(&d, "In2.Cu")), (5, 4), "HasItemsOnLayer: a through via is on no layer of its own");
 
     let two = StackupSettings::new(2, mm(1.6));
+    // `!removedLayers.empty()`: what tells the board directory's step to clear the history (`ClearUndoRedoList`)
+    assert!(board_setup::deletes_items_on_removed_layers(&d, &set_stackup(&two, true)));
+    assert!(board_setup::deletes_items_on_removed_layers(&d, &Cmd::Batch { cmds: vec![set_stackup(&two, true)] }), "in a batch too");
+    assert!(!board_setup::deletes_items_on_removed_layers(&d, &set_stackup(&two, false)), "refused without the flag: nothing goes");
+    assert!(!board_setup::deletes_items_on_removed_layers(&d, &set_stackup(&StackupSettings::new(4, mm(1.6)), true)), "no layer goes");
+    assert!(!board_setup::deletes_items_on_removed_layers(&design(), &set_stackup(&two, true)), "nothing on the layers that go");
     let mut b = Board::new(d.clone(), &on_four, mm(0.1), mm(0.3));
     assert!(b.apply(&set_stackup(&two, false)).is_err(), "without the flag nothing is deleted");
     assert_eq!(serde_json::to_value(b.design()).unwrap(), serde_json::to_value(&d).unwrap());

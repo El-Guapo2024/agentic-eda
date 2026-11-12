@@ -1411,11 +1411,16 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
     let judged_strictly = strictness != Strictness::Off;
     let strictness = if carry == Some(carry::Carry::Begin) && !cmd.always_judged() { Strictness::Off } else { strictness };
     let baseline = if carry == Some(carry::Carry::Commit) && strictness != Strictness::Off { carry::pending_design(dir) } else { None };
+    // `PANEL_SETUP_LAYERS::TransferDataFromWindow`: items deleted from removed layers, then `m_frame->ClearUndoRedoList()`
+    let clears_history = before.as_ref().is_some_and(|d| eda_ops::board_setup::deletes_items_on_removed_layers(d, &cmd));
     let r = step_quiet(dir, &cmd, strictness, baseline);
     match &r {
         Ok((summary, tag)) => {
             if let Some(before) = before.filter(|_| !outside_history(&cmd)) {
                 carry::record(dir, carry, &before, tag, by, judged_strictly);
+            }
+            if clears_history {
+                clear_board_history(dir);
             }
             log_activity(dir, by, &line, true, summary)
         }
@@ -1638,6 +1643,33 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<Snapshot> {
 
 fn clear_dir(stack_dir: &Path) {
     let _ = std::fs::remove_dir_all(stack_dir);
+}
+
+/// `PCB_EDIT_FRAME::ClearUndoRedoList()` after Board Setup deleted the items of removed layers (`PANEL_SETUP_LAYERS::TransferDataFromWindow`: "Undo state may have
+/// copies of pointers deleted above"): no step of the board editor is left to undo or redo, so nothing brings the deleted items back and the question's "...cannot be
+/// undone." holds. KiCad's list is the board editor's own; the schematic editor and the library editors keep theirs. Here the history is one pair of stacks with a tag
+/// per step, so the steps that would restore the board go: the board's (`pcb`) and the whole-design ones (`file`, an outside edit of `design.json`). A step that
+/// changed both editors' halves (`both`) keeps its schematic half -- KiCad made that edit as one commit in each frame -- and is kept as a `schematic` step.
+fn clear_board_history(dir: &Path) {
+    for stack in [undo_dir(dir), redo_dir(dir)] {
+        let Ok(entries) = std::fs::read_dir(&stack) else { continue };
+        for path in entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")) {
+            let Some(stem) = path.file_stem().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+            let Some((stamp, tag)) = stem.rsplit_once('.') else { continue };
+            let by = path.with_extension("by");
+            match tag {
+                "schematic" | "footprint_editor" | "symbol_editor" => {}
+                BOTH_TAG => {
+                    let _ = std::fs::rename(&by, stack.join(format!("{stamp}.schematic.by")));
+                    let _ = std::fs::rename(&path, stack.join(format!("{stamp}.schematic.json")));
+                }
+                _ => {
+                    let _ = std::fs::remove_file(&path);
+                    let _ = std::fs::remove_file(&by);
+                }
+            }
+        }
+    }
 }
 
 /// The Schematic scope's undo also follows the symbol library's published entries. Update Symbol(s) (`SchCmd::UpdateLibrarySymbols`) is run from the
@@ -5959,6 +5991,33 @@ pub(crate) mod tests {
         let (_, design, _) = load(&dir).unwrap();
         assert_eq!(sch_at(&design), Point { x: mm(25.0), y: mm(10.0) });
         assert_eq!(pcb_at(&design), Point { x: mm(11.0), y: mm(10.0) });
+    }
+
+    /// Fewer copper layers with the items of the removed layers deleted (`set_stackup` with `delete_items_on_removed_layers`): KiCad clears the board editor's undo
+    /// and redo lists after it (`PANEL_SETUP_LAYERS::TransferDataFromWindow`: `ClearUndoRedoList`), so no Undo brings the items back; the schematic's history
+    /// stays. A stackup change that deletes nothing is one step like any other.
+    #[test]
+    fn deleting_the_items_of_removed_layers_clears_the_boards_undo_history() {
+        let dir = scratch("stackup_clears_history");
+        setup_both(&dir);
+        step_ok(&dir, Cmd::SetStackup { settings: eda_model::rules::StackupSettings::new(4, mm(1.6)), delete_items_on_removed_layers: false });
+        let text = Text { id: String::new(), content: "IN1".into(), at: Point { x: mm(3.0), y: mm(12.0) }, angle: 0, layer: "In1.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), justify: Default::default(), mirror: false };
+        step_ok(&dir, Cmd::AddText { text });
+        step_ok(&dir, Cmd::MoveSymbol { id: "R2".into(), x: mm(25.0), y: mm(10.0), unit: None });
+        step_ok(&dir, Cmd::MoveTo { part: "R1".into(), x: mm(11.0), y: mm(10.0) });
+        // an undone board step waits on the redo stack
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let texts = |dir: &Path| load(dir).unwrap().1.drawings.map_or(0, |d| d.texts.len());
+        assert_eq!(texts(&dir), 1);
+
+        let two = eda_model::rules::StackupSettings::new(2, mm(1.6));
+        step_ok(&dir, Cmd::SetStackup { settings: two, delete_items_on_removed_layers: true });
+        assert_eq!(texts(&dir), 0, "the text on In1.Cu is deleted");
+        assert_eq!(undo(&dir, "test", Some(Domain::Pcb)).unwrap_err()[0].check, "board_no_undo", "no Undo brings the deleted items back");
+        assert!(undo(&dir, "test", Some(Domain::Schematic)).is_ok(), "the schematic's step is still there");
+        assert_eq!(texts(&dir), 0, "and undoing it leaves the board as it is");
+        assert_eq!(redo(&dir, "test", Some(Domain::Pcb)).unwrap_err()[0].check, "board_no_redo");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---------------------------------------------------- footprint editor
