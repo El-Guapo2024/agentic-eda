@@ -1515,23 +1515,35 @@ impl Node {
     /// `TOOL_BASE::pickSingleItem( aWhere, aNet, aLayer, aIgnorePads = false, aAvoidItems )`: what is at `pos` -- first exactly under it, then (with nothing
     /// there) within `slop`, the grab radius (`maxSlopRadius`, the grid; [`crate::settings::RoutingSettings::grab_radius`]) -- ranked as KiCad ranks it:
     /// a routable pad or via on the layer `tl` nearest by its centre (`prioritized[0]`), a track or arc there nearest by its nearer end (`[1]`), then
-    /// the same kinds on any layer (`[2]`, `[3]`); with `net` (`aNet`) only items of that net, and with `layer` (`aLayer >= 0`) only one on that layer is
-    /// returned. **Not ported:** a free pad under the cursor and an item of no net in Highlight collisions (`prioritized[0]` / `[4]`'s special cases), the
-    /// layers' visibility and high contrast (the studio's). UI-LEFT R7, findings p5 F2-11.
-    pub fn pick_single_item(&self, pos: Point, net: Option<&Net>, layer: Option<i32>, tl: i32, slop: Nm, avoid: &[ItemId]) -> Option<ItemId> {
+    /// the same kinds on any layer (`[2]`, `[3]`); with `net` (`aNet`) only items of that net -- but in Highlight collisions (`mark_obstacles`) an item
+    /// of no net on `tl` as a last resort ("Allow unconnected items as last resort in RM_MarkObstacles mode", `prioritized[4]`, the last one found,
+    /// UI-LEFT-2 RR7); with `layer` (`aLayer >= 0`) only one on that layer is returned. **Not ported:** a free pad under the cursor (`IsFreePad`: the
+    /// studio's router has no free pads, a pad of a "free" pin is an item of no net); a route of no net (`net` of `None`) keeps to items of no net,
+    /// where 8303b2ad's tool, whose orphaned net handle has net code 0 (`GetNetCode( aNet ) <= 0`), takes any item -- KiCad's own recorded sessions
+    /// (`qa/data/pcbnew/pns_regressions/simple-shove-1`: no end item at any move of a route of no net) were made before, and replay exact only so;
+    /// the layers' visibility and high contrast (the studio's). UI-LEFT R7, findings p5 F2-11.
+    #[allow(clippy::too_many_arguments)] // pickSingleItem's own, and the router's mode
+    pub fn pick_single_item(&self, pos: Point, net: Option<&Net>, layer: Option<i32>, tl: i32, slop: Nm, avoid: &[ItemId], mark_obstacles: bool) -> Option<ItemId> {
         let sq = |a: Point| (a.x - pos.x).area(a.x - pos.x) + (a.y - pos.y).area(a.y - pos.y);
         for slop in [Nm::ZERO, slop] {
-            let mut prioritized: [Option<(i128, ItemId)>; 4] = [None; 4];
+            let mut prioritized: [Option<(i128, ItemId)>; 5] = [None; 5];
             for id in self.hover_items(pos, slop) {
                 let Some(item) = self.items.get(&id) else { continue };
                 let routable = match item {
                     Item::Solid(s) => s.routable() && !s.edge,
                     _ => true,
                 };
-                if !routable || avoid.contains(&id) || net.is_some_and(|n| !same_net(item.net(), n)) {
+                if !routable || avoid.contains(&id) {
                     continue;
                 }
                 let on_tl = item.layers().overlaps_layer(tl);
+                if net.is_some_and(|n| !same_net(item.net(), n)) {
+                    // `else if ( item->Net() == 0 && m_router->Settings().Mode() == RM_MarkObstacles )`: `if( item->Layers().Overlaps( tl ) ) prioritized[4] = item;`
+                    if mark_obstacles && item.net().is_none() && on_tl {
+                        prioritized[4] = Some((0, id));
+                    }
+                    continue;
+                }
                 let (d, any, here) = match item {
                     Item::Via(v) => (sq(v.pos), 2, 0),
                     Item::Solid(s) => (sq(s.pos), 2, 0),
@@ -1661,6 +1673,22 @@ mod tests {
 
     fn rules() -> BoardRules {
         serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap()
+    }
+
+    /// UI-LEFT-2 RR7, `pickSingleItem`'s last resort: with a net to keep to, an item of no net on the top layer is picked only in Highlight collisions
+    /// (`prioritized[4]`).
+    #[test]
+    fn pick_single_item_takes_an_item_of_no_net_in_highlight_collisions() {
+        let mut n = Node::new();
+        let pad = |net: crate::item::Net, x: f64| Item::Solid(Solid { net, layers: LayerRange::new(0, 1), pos: Point { x: mm(x), y: Nm::ZERO }, shape: eda_drc::kimath::Shape::Circle { c: Point { x: mm(x), y: Nm::ZERO }, r: mm(0.5) }, source: format!("U1.{x}"), edge: false, rule: 0, anchor_points: Vec::new() });
+        let free = n.add(pad(None, 0.0));
+        let gnd = n.add(pad(net_of("GND"), 5.0));
+        let at = |x: f64| Point { x: mm(x), y: Nm::ZERO };
+        let sig = net_of("SIG");
+        assert_eq!(n.pick_single_item(at(0.0), Some(&sig), None, 0, mm(0.5), &[], false), None, "Walk around: SIG's only");
+        assert_eq!(n.pick_single_item(at(0.0), Some(&sig), None, 0, mm(0.5), &[], true), Some(free), "Highlight collisions: the item of no net");
+        assert_eq!(n.pick_single_item(at(5.0), Some(&sig), None, 0, mm(0.5), &[], true), None, "never another net's");
+        assert_eq!(n.pick_single_item(at(5.0), None, None, 0, mm(0.5), &[], false), Some(gnd), "no net to keep to: any");
     }
 
     #[test]

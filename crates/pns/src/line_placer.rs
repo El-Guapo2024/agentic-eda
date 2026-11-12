@@ -844,7 +844,7 @@ impl LinePlacer {
         // with nothing exactly there, what `pickSingleItem( mousePos, net, layer, false, { m_startItem } )` finds within the grab radius -- the grid
         // (`maxSlopRadius`, UI-LEFT R7) -- by its copper, not its anchor; then `snapToItem` (a track's middle only with snap to tracks, `checkSnap`)
         let layer = if self.placing_via { None } else { Some(self.current_layer) };
-        let Some(id) = node.pick_single_item(p, Some(&self.net), layer, self.current_layer, settings.grab_radius, &self.exclude_end) else { return (None, None) };
+        let Some(id) = node.pick_single_item(p, Some(&self.net), layer, self.current_layer, settings.grab_radius, &self.exclude_end, settings.mode == Mode::MarkObstacles) else { return (None, None) };
         match node.snap_to_item(id, p) {
             Some((at, None)) => (Some(at), None),
             Some((at, Some(track))) if settings.snap_to_tracks => (Some(at), Some(track)),

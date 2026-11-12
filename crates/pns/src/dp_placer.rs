@@ -603,7 +603,7 @@ impl DiffPairPlacer {
     fn pick_end_item(&self, settings: &RoutingSettings, at: Point) -> Option<ItemId> {
         let layer = if self.placing_via { None } else { Some(self.current_layer) };
         let own: Vec<ItemId> = self.start_items.iter().chain(self.own_items.iter()).copied().collect();
-        [&self.net_p, &self.net_n].into_iter().find_map(|net| self.world.pick_single_item(at, Some(net), layer, self.current_layer, settings.grab_radius, &own))
+        [&self.net_p, &self.net_n].into_iter().find_map(|net| self.world.pick_single_item(at, Some(net), layer, self.current_layer, settings.grab_radius, &own, settings.mode == crate::settings::Mode::MarkObstacles))
     }
 
     /// `DIFF_PAIR_PLACER::propagateDpHeadForces`: the cursor, pushed off what the circle round the end of the pair (or of its vias) would

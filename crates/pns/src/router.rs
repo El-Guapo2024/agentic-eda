@@ -496,7 +496,7 @@ impl Router {
         }
         // `for( int slopRadius : { 0, maxSlopRadius } )`: with nothing exactly there, what is within the grab radius -- the grid (UI-LEFT R7) -- by its
         // copper, ranked as above, then `snapToItem` (a track in its middle is split there, as `track_pick`'s)
-        let item = self.world.pick_single_item(at, None, None, layer, self.settings.grab_radius, &[])?;
+        let item = self.world.pick_single_item(at, None, None, layer, self.settings.grab_radius, &[], self.settings.mode == crate::settings::Mode::MarkObstacles)?;
         let (pos, split) = self.world.snap_to_item(item, at)?;
         let split = split.filter(|id| self.world.get(*id).and_then(Item::source_track_id).is_some());
         if split.is_none() && self.world.get(item).is_some_and(Item::is_track) && !self.world.get(item).and_then(Item::track_ends).is_some_and(|(a, b)| a == pos || b == pos) {
