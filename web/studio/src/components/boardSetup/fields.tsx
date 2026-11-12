@@ -1,7 +1,7 @@
 // Small pieces the Board Setup pages share: a length field that reads units, the label/control/message row, the page frame with its Apply
 // button, and the draft a page edits until Apply (KiCad's panels edit a copy too and write it on OK).
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { BoardState, Cmd } from "../../api/types";
+import type { BoardState, Cmd, ErcPinMapReply, ErcSeveritiesReply, SchFormattingReply, SchSetupReply } from "../../api/types";
 import { useStudioApi } from "../../state/store";
 import type { LengthUnit } from "../../state/units";
 import { lengthText, parseLength } from "../pcbDialogKit";
@@ -254,6 +254,16 @@ export interface SetupImport {
   seq: number;
   board: BoardState;
   options: ReadonlySet<string>;
+  /** Schematic Setup's import (`POST /api/sch/import_settings`): the other project's pages, in the shapes of the endpoints they load from. */
+  sch?: SchImportParts;
+}
+
+/** What Schematic Setup's pages read of another project (`crates/cli/src/sch_import_settings_api.rs`). */
+export interface SchImportParts {
+  formatting: SchFormattingReply;
+  setup: SchSetupReply;
+  severities: ErcSeveritiesReply;
+  pin_map: ErcPinMapReply;
 }
 
 export const SetupImportContext = createContext<SetupImport | null>(null);
@@ -267,6 +277,19 @@ export function useSetupImport<T>(option: string, derive: (board: BoardState) =>
   useEffect(() => {
     if (!imp || !imp.options.has(option)) return;
     const value = derive(imp.board);
+    if (value !== undefined) put(value);
+    // only a new import (its `seq`) is acted on
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imp?.seq]);
+}
+
+/** [`useSetupImport`] for a Schematic Setup page: `derive` reads the other project's parts (and the import's options, for a page two boxes feed). */
+export function useSchSetupImport<T>(option: string | readonly string[], derive: (sch: SchImportParts, options: ReadonlySet<string>) => T | undefined, put: (value: T) => void) {
+  const imp = useContext(SetupImportContext);
+  useEffect(() => {
+    const wanted = typeof option === "string" ? [option] : option;
+    if (!imp?.sch || !wanted.some((o) => imp.options.has(o))) return;
+    const value = derive(imp.sch, imp.options);
     if (value !== undefined) put(value);
     // only a new import (its `seq`) is acted on
     // eslint-disable-next-line react-hooks/exhaustive-deps

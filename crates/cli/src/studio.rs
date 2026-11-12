@@ -752,6 +752,8 @@ fn handle(
         // Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages (`sch_api::setup`).
         // Label Properties' Label combo box: the labels of the same kind on every screen, the power nets like them, the bus aliases (`crate::sch_label_api`).
         ("GET", "/api/sch/existing_labels") => respond(stream, "200 OK", "application/json", crate::sch_label_api::existing_labels_route(dir, &query_value(target, "kind")).to_string().as_bytes()),
+        // Schematic Setup's "Import Settings from Another Project...": the other project's settings for the pages (nothing here changes)
+        ("POST", "/api/sch/import_settings") => respond(stream, "200 OK", "application/json", crate::sch_import_settings_api::import_settings(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/setup") => respond(stream, "200 OK", "application/json", sch_api::setup(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),

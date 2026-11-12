@@ -1611,7 +1611,7 @@ written to the derived one (`eda_kicad::write_schematic_setup`, `put_class_schem
 | ... Undo | the bus aliases are now the schematic tab's to undo (they were the board's) | `board.rs::restore_domain` |
 | Text Variables | Board Setup's page, one list for both (`set_text_variables` now spans both editors' undo) | `TextVariablesPage.tsx` |
 | ERC: an undefined net class's finding (`undefined_netclass`) has the Fix entry "Edit Netclasses...", which opens Schematic Setup on Net Classes | **identical** (`FixERCErrorMenuText`, `ShowSchematicSetupDialog( _( "Net Classes" ) )`); it was left out before | `rcItems.ts::ercFixEntry`, `checkerOps.ts::runErcEntry` |
-| "Import Settings from Another Project..." | **not ported** (`onAuxiliaryAction` and `DIALOG_SCH_IMPORT_SETTINGS`); Board Setup's is done (PARITY-pcb section 112), see section 86 | |
+| "Import Settings from Another Project..." | **identical** since section 86 | |
 | "Project is missing or read-only. Settings will not be editable." | not needed: the studio's project is always the board's own | |
 
 Tests: `crates/model/src/sch_setup.rs` (the defaults, the junction size, the `PARAM_SCALED` ranges, the unit notations, the colours, the template rows), `crates/kicad/src/project_schematic.rs`
@@ -2239,16 +2239,16 @@ through Ctrl+Z and Ctrl+Y with reuse off; Place Power Local then Global of one r
 
 Tests: Rust `crates/ops/src/sch_props_tests.rs` (+3: a sheet user field's looks set, drawn and dropped with the field; a sheet pin's font and colour, refused bold, gone with the pin; a sheet's record of a variant, its path flags, the footprint's flags and the Fields Table's filters), `crates/kicad/tests/sch_text_looks.rs` (+2, one slow with kicad-cli `sch upgrade`: a user field's looks and a pin's font and colour come back), `crates/kicad/tests/design_variants.rs` (+1, slow with kicad-cli: a sheet's record of a variant comes back and `sch export bom --variant .. --exclude-dnp` leaves its symbols out in that variant only, and in every variant once the sheet's own DNP is set). Web: `kicad-port/sheetFieldLooks.test.ts` (2), `schSheet.test.ts` (+1). Browser: `e2e/sch-sheets-ss15.check.js` (the grid's looks, a pin's font and colour, DNP in a variant, the kept screen's question, Sync Sheet Pins shown again).
 
-## 86. Schematic Setup round v8: a directive label's and a rule area's net class, the Net Classes table as KiCad keeps it (UI-LEFT-2 BB3, BB4, BB8; `task-v8-setup`, 2026-11-12; KiCad 8303b2ad `eeschema/connection_graph.cpp::GetNetclassesForDriver`, `eeschema/sch_rule_area.cpp`, `common/dialogs/panel_setup_netclasses.cpp`; KiCad 25ec2335 `eeschema/dialogs/dialog_schematic_setup.cpp::onAuxiliaryAction`)
+## 86. Schematic Setup round v8: a directive label's and a rule area's net class, the Net Classes table as KiCad keeps it, Import Settings from Another Project (UI-LEFT-2 BB3, BB4, BB8; `task-v8-setup`, 2026-11-12; KiCad 8303b2ad `eeschema/connection_graph.cpp::GetNetclassesForDriver`, `eeschema/sch_rule_area.cpp`, `common/dialogs/panel_setup_netclasses.cpp`; KiCad 25ec2335 `eeschema/dialogs/dialog_schematic_setup.cpp::onAuxiliaryAction`)
 
 | Behaviour | Status | KiCad file:function |
 |---|---|---|
 | A directive label's Netclass and a rule area's | **identical**: the net at the flag's connection point, and the wires, labels and pins of a rule area whose border carries the flag, are in the class (PARITY-pcb section 112); a wire is then drawn in its class's width, colour and style (section 56) | `GetNetclassesForDriver`, `RefreshContainedItemsAndDirectives` |
 | Net Classes: the Default class last, a new row at the top | **identical** (section 56 said "differs": Default first) | `loadNetclasses`, `OnAddNetclassClick` |
 | A 0 wire or bus thickness | **identical**: taken as typed (section 56 said "differs": refused); a negative one is still refused, the studio's guard | `Validate` |
-| "Import Settings from Another Project..." | **not ported**: the Schematic Setup pages fetch their settings from several endpoints of the open project, and the import needs one that reads another project's `.kicad_pro` into all of them (formatting, annotation, field name templates, BOM presets, severities, pin map, net classes, bus aliases, text variables). Board Setup's import is done (PARITY-pcb section 112) | `onAuxiliaryAction`, `DIALOG_SCH_IMPORT_SETTINGS` |
+| "Import Settings from Another Project..." | **identical**: the footer's button opens "Import Settings" with KiCad's boxes in its order (Formatting preferences, Annotation preferences, Field name templates, BOM presets, BOM format presets, Violation severities, Pin conflict map, Net classes, Bus alias definitions, Text variables) and Select All; the `.kicad_pro` is read alone, as KiCad reads it (`POST /api/sch/import_settings`: the importer's `project_schematic::apply`, ERC settings, bus aliases, net classes and text variables), a text that is no project refused with "Error importing settings from project:\nProject file %s could not be loaded."; each ticked page shows the other project's values unapplied until its Apply (`ImportSettingsFrom`), the Pin Conflicts Map too (its draft's Apply is one undo step); nothing changes before. **Differs**: a file is picked, not a path; "Compare symbol with library settings" is not offered, Schematic Setup here having no Symbol Parity page | `onAuxiliaryAction`, `DIALOG_SCH_IMPORT_SETTINGS`, `PANEL_SETUP_*::ImportSettingsFrom` |
 
-Tests: PARITY-pcb section 112's; browser `sch-setup.check.js` (8/8).
+Tests: PARITY-pcb section 112's, `crates/cli/src/sch_import_settings_api.rs`; browser `board-setup-v8.check.js` (6/6, the schematic import), `sch-setup.check.js` (8/8).
 
 ## Manual click-through needed
 

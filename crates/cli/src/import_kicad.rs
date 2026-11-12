@@ -474,19 +474,7 @@ fn project_pin_map(json: &serde_json::Value) -> Option<Vec<Vec<u8>>> {
 fn keep_project_erc_settings(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
     let Ok(pro_text) = std::fs::read_to_string(root.with_extension("kicad_pro")) else { return Ok(()) };
     let Ok(pro) = serde_json::from_str::<serde_json::Value>(&pro_text) else { return Ok(()) };
-    let mut severities = std::collections::BTreeMap::new();
-    if let Some(rules) = pro["erc"]["rule_severities"].as_object() {
-        for (key, value) in rules {
-            // `SeverityFromString`: "warning" and "ignore", anything else an error (`common/widgets/ui_common.cpp`, r4 D4-L3)
-            let Some(value) = value.as_str().map(|v| if ["warning", "ignore"].contains(&v) { v } else { "error" }) else { continue };
-            let library_link = ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues"].contains(&key.as_str());
-            if !library_link && eda_model::erc_checks::default_severity(key).is_some_and(|d| d != value) {
-                severities.insert(key.clone(), value.to_string());
-            }
-        }
-    }
-    let pin_map = project_pin_map(&pro["erc"]["pin_map"]).filter(|m| *m != eda_model::ir::ErcPinMap::default_matrix());
-    let grid = pro["schematic"]["connection_grid_size"].as_f64().map(|g| g.round() as u32).filter(|&g| g != 50 && g > 0);
+    let (severities, pin_map, grid) = project_erc_settings(&pro);
     if severities.is_empty() && pin_map.is_none() && grid.is_none() {
         return Ok(());
     }
@@ -501,6 +489,25 @@ fn keep_project_erc_settings(out: &Path, root: &Path) -> Result<(), Vec<CheckRes
         sch.extras.connection_grid_mils = grid;
     }
     crate::board::save(out, &design)
+}
+
+/// A project's ERC settings as `ERC_SETTINGS` and `SCHEMATIC_SETTINGS` load them: the severities that differ from KiCad's defaults (the library-link checks
+/// left out), the pin map when it is not KiCad's default, the connection grid when it is not 50 mils.
+pub(crate) fn project_erc_settings(pro: &serde_json::Value) -> (std::collections::BTreeMap<String, String>, Option<Vec<Vec<u8>>>, Option<u32>) {
+    let mut severities = std::collections::BTreeMap::new();
+    if let Some(rules) = pro["erc"]["rule_severities"].as_object() {
+        for (key, value) in rules {
+            // `SeverityFromString`: "warning" and "ignore", anything else an error (`common/widgets/ui_common.cpp`, r4 D4-L3)
+            let Some(value) = value.as_str().map(|v| if ["warning", "ignore"].contains(&v) { v } else { "error" }) else { continue };
+            let library_link = ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues"].contains(&key.as_str());
+            if !library_link && eda_model::erc_checks::default_severity(key).is_some_and(|d| d != value) {
+                severities.insert(key.clone(), value.to_string());
+            }
+        }
+    }
+    let pin_map = project_pin_map(&pro["erc"]["pin_map"]).filter(|m| *m != eda_model::ir::ErcPinMap::default_matrix());
+    let grid = pro["schematic"]["connection_grid_size"].as_f64().map(|g| g.round() as u32).filter(|&g| g != 50 && g > 0);
+    (severities, pin_map, grid)
 }
 
 /// The project's own ERC exclusions (`erc.erc_exclusions` of the `.kicad_pro` beside `root`, `ERC_SETTINGS::m_ErcExclusions`), their items and sheets named as the
@@ -554,7 +561,7 @@ fn keep_sim_libraries(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
 }
 
 /// A board with an outline and nothing on it, for a schematic that has no board: the 100 by 80 mm a new project starts with.
-fn empty_board() -> eda_model::ir::Design {
+pub(crate) fn empty_board() -> eda_model::ir::Design {
     use eda_model::ir::{Design, PlacementSection, Point, Provenance};
     let pt = |x, y| Point { x, y };
     Design {

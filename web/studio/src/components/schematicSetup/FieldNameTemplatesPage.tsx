@@ -10,7 +10,7 @@ import { fetchSchSetup } from "../../api/client";
 import type { SchSetupReply, TemplateFieldName } from "../../api/types";
 import { NEW_TEMPLATE_FIELD, WHITESPACE_EXTENDED, WHITESPACE_KEEP, WHITESPACE_REMOVE, firstWhitespaceRow, keptTemplateFields, moveRow } from "../../kicad-port/schSetup";
 import { useStudioState } from "../../state/store";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "../boardSetup/fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSchSetupImport } from "../boardSetup/fields";
 
 export function FieldNameTemplatesPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
@@ -36,6 +36,8 @@ export function FieldNameTemplatesPage({ hidden, onDirty }: PageProps) {
 
   const source = useMemo(() => (info ? info.field_name_templates : undefined), [info]);
   const page = usePageDraft<TemplateFieldName[]>(source);
+  // "Import Settings from Another Project..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSchSetupImport("field_templates", (s) => s.setup.field_name_templates, page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const rows = page.draft;

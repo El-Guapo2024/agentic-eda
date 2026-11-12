@@ -6,6 +6,8 @@
 //   teardrops     the "Default Properties for Rectangular Shapes" block is there and stored as `rect_shape`
 //   import        "Import Settings from Another Board..." refuses a board without its project with KiCad's message; with it, the ticked pages show the other
 //                 board's values, unapplied
+//   sch import    Schematic Setup's Import Settings from Another Project: KiCad's boxes and refusal; Formatting, Bus Alias Definitions, Text Variables and
+//                 the Pin Conflicts Map show the other project's values unapplied; the map's Apply stores it, one undo takes it back
 //   end           every step undone, the rules as they were
 // It answers through `window.__boardSetupV8Check`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
 // run-all-checks: board=mcu30-routed
@@ -149,6 +151,60 @@
     const stored = (await json("/api/state")).board_rules.constraints.min_clearance_nm;
     t(stored === before.board_rules.constraints.min_clearance_nm, "nothing stored on this board");
     await closeBoardSetup();
+  });
+
+  await scenario("Schematic Setup's Import Settings from Another Project...: KiCad's refusal, then the ticked pages take the other project's values unapplied", async (t) => {
+    [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "Schematic")?.click();
+    await sleep(1500);
+    const setup = () => [...document.querySelectorAll(".dialog")].find((d) => d.querySelector(".dialog-header")?.innerText.trim() === "Schematic Setup");
+    await __eda.run("eeschema.EditorControl.schematicSetup");
+    await sleep(800);
+    t(!!setup(), "Schematic Setup is open");
+    const pinBefore = await json("/api/sch/erc_pin_map");
+    await press(setup().querySelector(".dialog-footer"), "Import Settings from Another Project...");
+    const dlg = () => document.querySelector('[role="dialog"][aria-label="Import Settings"]');
+    const pick = async (name, text) => {
+      const input = q(dlg(), 'input[type="file"]');
+      const dt = new DataTransfer();
+      dt.items.add(new File([text], name));
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(150);
+    };
+    const tick = async (label) => { [...dlg().querySelectorAll("label")].find((l) => l.textContent.trim() === label)?.querySelector("input")?.click(); await sleep(80); };
+    const boxes = [...dlg().querySelectorAll("label")].map((l) => l.textContent.trim()).filter((x) => x !== "Import from:");
+    t(boxes.join("|") === "Formatting preferences|Annotation preferences|Field name templates|BOM presets|BOM format presets|Violation severities|Pin conflict map|Net classes|Bus alias definitions|Text variables", `KiCad's boxes in its order (${boxes.join("|")})`);
+    await pick("other.kicad_pro", "this is no project");
+    for (const l of ["Formatting preferences", "Pin conflict map", "Bus alias definitions", "Text variables"]) await tick(l);
+    await press(dlg(), "Import Settings", 1000);
+    const err = dlg()?.querySelector('[role="alert"]')?.textContent ?? "";
+    t(err === "Error importing settings from project:\nProject file other.kicad_pro could not be loaded.", `KiCad's refusal (${JSON.stringify(err)})`);
+    const matrix = pinBefore.matrix.map((r) => [...r]);
+    matrix[0][1] = matrix[1][0] = (matrix[0][1] + 1) % 3;
+    const pro = { schematic: { drawing: { default_text_size: 60.0 }, bus_aliases: { IMPORTED: ["A0", "A1"] } }, erc: { pin_map: matrix }, text_variables: { V8REV: "B" } };
+    await pick("other.kicad_pro", JSON.stringify(pro));
+    await press(dlg(), "Import Settings", 1500);
+    t(!dlg(), "the dialog closes on an import");
+    const page = (title) => setup()?.querySelector(`section.bs-page[aria-label="${title}"]`);
+    const size = page("Formatting")?.querySelector('input[aria-label="Default text size in mils"]')?.value;
+    t(size === "60", `Formatting shows the other project's text size (${size})`);
+    t([...(page("Bus Alias Definitions")?.querySelectorAll("input") ?? [])].some((i) => i.value === "IMPORTED") || !!page("Bus Alias Definitions")?.textContent.includes("IMPORTED"), "Bus Alias Definitions shows the other project's alias");
+    t([...(page("Text Variables")?.querySelectorAll("input") ?? [])].some((i) => i.value === "V8REV"), "Text Variables shows the other project's variable");
+    t(/Changes not applied yet/.test(page("Pin Conflicts Map")?.textContent ?? ""), "the Pin Conflicts Map shows the imported map unapplied");
+    t(JSON.stringify((await json("/api/sch/erc_pin_map")).matrix) === JSON.stringify(pinBefore.matrix), "nothing stored yet");
+    await press(page("Pin Conflicts Map"), "Apply", 1200);
+    const pinAfter = await json("/api/sch/erc_pin_map");
+    t(pinAfter.matrix[0][1] === matrix[0][1] && pinAfter.matrix[1][0] === matrix[1][0], "Apply stores the imported map");
+    await __eda.run("common.Interactive.undo");
+    await sleep(1000);
+    t(JSON.stringify((await json("/api/sch/erc_pin_map")).matrix) === JSON.stringify(pinBefore.matrix), "one undo takes it back");
+    for (let i = 0; i < 3 && setup(); i++) {
+      [...setup().querySelectorAll(".dialog-footer button")].find((b) => ["Close", "Discard and close"].includes(b.textContent.trim()))?.click();
+      await sleep(300);
+    }
+    t(!setup(), "closed, the unapplied pages discarded");
+    [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click();
+    await sleep(1000);
   });
 
   await scenario("every step is undone", async (t) => {

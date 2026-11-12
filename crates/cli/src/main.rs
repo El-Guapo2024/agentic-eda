@@ -85,6 +85,7 @@ mod fab_cmd;
 mod gate_vs_kicad;
 mod foreign_api;
 mod import_settings_api;
+mod sch_import_settings_api;
 mod altium_variants;
 mod import_foreign;
 mod import_kicad;

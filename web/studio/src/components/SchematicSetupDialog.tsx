@@ -40,6 +40,9 @@ import { ErcSeveritiesPage } from "./schematicSetup/ErcSeveritiesPage";
 import { FieldNameTemplatesPage } from "./schematicSetup/FieldNameTemplatesPage";
 import { FormattingPage } from "./schematicSetup/FormattingPage";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
+import { SchImportSettingsDialog } from "./schematicSetup/SchImportSettingsDialog";
+import { SetupImportContext, type SchImportParts, type SetupImport } from "./boardSetup/fields";
+import type { BoardState, Cmd } from "../api/types";
 import "../styles/boardSetup.css";
 
 type Page = SchSetupPage;
@@ -92,6 +95,11 @@ export function SchematicSetupDialog() {
   // The pages that have edits not applied yet, marked in the tree; Close asks first.
   const [unapplied, setUnapplied] = useState<ReadonlySet<Page>>(new Set());
   const [askDiscard, setAskDiscard] = useState(false);
+  // "Import Settings from Another Project..." (`onAuxiliaryAction`, UI-LEFT-2 BB4): the dialog, the last import the pages took, and the pin map it brought, shown
+  // until Apply (`PANEL_SETUP_PINMAP::ImportSettingsFrom`; the page's clicks are each a command, so the imported map is the page's one draft)
+  const [importOpen, setImportOpen] = useState(false);
+  const [setupImport, setSetupImport] = useState<SetupImport | null>(null);
+  const [pinDraft, setPinDraft] = useState<number[][] | null>(null);
   const markers = useMemo(
     () =>
       Object.fromEntries(
@@ -122,6 +130,7 @@ export function SchematicSetupDialog() {
     if (!open) return;
     setUnapplied(new Set());
     setAskDiscard(false);
+    setPinDraft(null);
     // A marker menu names the page it wants; without one the dialog opens on its first page, as KiCad's does.
     const wanted = getCheckerView().erc.setupPage;
     setPage(wanted ?? "formatting");
@@ -145,9 +154,37 @@ export function SchematicSetupDialog() {
   if (!open) return null;
 
   const click = async (row: number, col: number, level: number) => {
-    // `changeErrorLevel`: ( level + 1 ) % 3, mirrored by the backend verb.
+    // `changeErrorLevel`: ( level + 1 ) % 3, mirrored by the backend verb; on an imported map not applied yet, the draft's cell
+    if (pinDraft) {
+      setPinDraft(pinDraft.map((r, i) => r.map((v, j) => ((i === row && j === col) || (i === col && j === row) ? nextLevel(level) : v))));
+      return;
+    }
     await api.cmd({ op: "set_erc_pin_map_cell", a: row, b: col, level: nextLevel(level) });
     await reload();
+  };
+
+  // the imported map's Apply: each cell that differs, one undo step
+  const applyPinDraft = async () => {
+    if (!pinDraft || !map) return;
+    const cmds: Cmd[] = [];
+    pinDraft.forEach((r, i) => r.forEach((v, j) => {
+      if (j >= i && map.matrix[i]?.[j] !== v) cmds.push({ op: "set_erc_pin_map_cell", a: i, b: j, level: v });
+    }));
+    const ok = cmds.length === 0 || (cmds.length === 1 ? await api.cmd(cmds[0]!) : await api.cmdBatch(cmds));
+    if (ok) {
+      setPinDraft(null);
+      markers.pinmap(false);
+      await reload();
+    }
+  };
+
+  const takeImport = (other: BoardState, sch: SchImportParts, options: ReadonlySet<string>) => {
+    setImportOpen(false);
+    setSetupImport((prev) => ({ seq: (prev?.seq ?? 0) + 1, board: other, options, sch }));
+    if (options.has("pinmap")) {
+      setPinDraft(sch.pin_map.matrix.map((r) => [...r]));
+      markers.pinmap(true);
+    }
   };
 
   const reset = async () => {
@@ -155,10 +192,12 @@ export function SchematicSetupDialog() {
     await reload();
   };
 
-  const cells = map ? triangleCells(map.matrix) : [];
-  const hovered = hover && map ? (map.matrix[hover.row]?.[hover.col] ?? 0) : null;
+  const shown = pinDraft ?? map?.matrix ?? null;
+  const cells = shown ? triangleCells(shown) : [];
+  const hovered = hover && shown ? (shown[hover.row]?.[hover.col] ?? 0) : null;
 
   return (
+    <SetupImportContext.Provider value={setupImport}>
     <div className="dialog-backdrop" onClick={close}>
       <div
         className="dialog bs-dialog"
@@ -252,7 +291,18 @@ export function SchematicSetupDialog() {
               {hover && hovered !== null ? `${PIN_TYPE_LABELS[hover.row]} / ${PIN_TYPE_LABELS[hover.col]}: ${levelTooltip(hovered)}` : map?.custom ? "This design uses a customized pin map." : "Using KiCad's default pin map."}
             </div>
             <div className="bs-actions">
-              <button disabled={!map?.custom} title="Restore KiCad's default pin conflict map" onClick={() => void reset()}>
+              {pinDraft && (
+                <>
+                  <button className="primary" onClick={() => void applyPinDraft()}>
+                    Apply
+                  </button>
+                  <button onClick={() => (setPinDraft(null), markers.pinmap(false))}>Revert</button>
+                  <span className="bs-msg" role="status">
+                    Changes not applied yet.
+                  </span>
+                </>
+              )}
+              <button disabled={!map?.custom || !!pinDraft} title="Restore KiCad's default pin conflict map" onClick={() => void reset()}>
                 Reset to Defaults
               </button>
             </div>
@@ -274,12 +324,20 @@ export function SchematicSetupDialog() {
             </>
           )}
           {!askDiscard && (
-            <button className="primary" onClick={close}>
-              Close
-            </button>
+            <>
+              {/* PAGED_DIALOG's auxiliary button (`DIALOG_SCHEMATIC_SETUP`: _( "Import Settings from Another Project..." )) */}
+              <button style={{ marginRight: "auto" }} onClick={() => setImportOpen(true)}>
+                Import Settings from Another Project...
+              </button>
+              <button className="primary" onClick={close}>
+                Close
+              </button>
+            </>
           )}
         </div>
       </div>
+      {importOpen && <SchImportSettingsDialog onCancel={() => setImportOpen(false)} onImported={takeImport} />}
     </div>
+    </SetupImportContext.Provider>
   );
 }

@@ -365,10 +365,14 @@ pub fn find_text(body: &[u8]) -> Value {
 /// carries it to kicad-cli, `eda_kicad::export_kicad_pro_for`) and whether the design
 /// stores its own.
 pub fn erc_pin_map(dir: &Path) -> Value {
-    let (_, design, _) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
+    match board::load(dir) {
+        Ok((_, design, _)) => erc_pin_map_of(&design),
+        Err(e) => err(board::reasons(&e)),
+    }
+}
+
+/// [`erc_pin_map`] of a design (also another project's, for Schematic Setup's Import Settings: `sch_import_settings_api`).
+pub(crate) fn erc_pin_map_of(design: &eda_model::ir::Design) -> Value {
     let matrix: Vec<Vec<u8>> = eda_kicad::custom_erc_pin_map(&design).unwrap_or_else(eda_model::ir::ErcPinMap::default_matrix);
     let custom = design.schematic.as_ref().is_some_and(|s| s.erc_pin_map.is_some());
     json!({ "ok": true, "matrix": matrix, "custom": custom })
@@ -379,10 +383,14 @@ pub fn erc_pin_map(dir: &Path) -> Value {
 /// table says otherwise (`eda_kicad::effective_erc_severities`), which is what kicad-cli's ERC runs with -- and whether the design
 /// stores a table of its own.
 pub fn erc_severities(dir: &Path) -> Value {
-    let (_, design, _) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
+    match board::load(dir) {
+        Ok((_, design, _)) => erc_severities_of(&design),
+        Err(e) => err(board::reasons(&e)),
+    }
+}
+
+/// [`erc_severities`] of a design (also another project's, for Schematic Setup's Import Settings: `sch_import_settings_api`).
+pub(crate) fn erc_severities_of(design: &eda_model::ir::Design) -> Value {
     let custom = design.schematic.as_ref().is_some_and(|s| !s.extras.erc_severities.is_empty());
     json!({ "ok": true, "severities": eda_kicad::effective_erc_severities(&design), "custom": custom })
 }
@@ -391,10 +399,14 @@ pub fn erc_severities(dir: &Path) -> Value {
 /// connection grid (KiCad's default, 50 mils, unless the design says otherwise) and whether the design says so, and the Inter-sheet References. The project file carries
 /// them to kicad-cli.
 pub fn formatting(dir: &Path) -> Value {
-    let (_, design, _) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
+    match board::load(dir) {
+        Ok((_, design, _)) => formatting_of(&design),
+        Err(e) => err(board::reasons(&e)),
+    }
+}
+
+/// [`formatting`] of a design (also another project's, for Schematic Setup's Import Settings: `sch_import_settings_api`).
+pub(crate) fn formatting_of(design: &eda_model::ir::Design) -> Value {
     let own = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils);
     // the page's other settings (`eda_model::sch_setup::SchFormatting`) as stored -- what the page shows, out-of-range sizes included, as KiCad's panel shows them
     let formatting = design.schematic.as_ref().and_then(|s| s.extras.formatting.clone()).unwrap_or_default();
@@ -406,10 +418,14 @@ pub fn formatting(dir: &Path) -> Value {
 /// start number, reference reuse and the unit notation's first id and separator), Field Name Templates, BOM Presets (the names of the project's saved presets)
 /// and Project > Bus Alias Definitions. KiCad's defaults where the design set none.
 pub fn setup(dir: &Path) -> Value {
-    let (_, design, _) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
+    match board::load(dir) {
+        Ok((_, design, _)) => setup_of(&design),
+        Err(e) => err(board::reasons(&e)),
+    }
+}
+
+/// [`setup`] of a design (also another project's, for Schematic Setup's Import Settings: `sch_import_settings_api`).
+pub(crate) fn setup_of(design: &eda_model::ir::Design) -> Value {
     let extras = design.schematic.as_ref().map(|s| s.extras.clone()).unwrap_or_default();
     let names = |key: &str| -> Vec<String> { extras.project_schematic.as_ref().and_then(|p| p.get(key)).and_then(Value::as_array).map(|a| a.iter().filter_map(|p| p.get("name").and_then(Value::as_str)).map(String::from).collect()).unwrap_or_default() };
     json!({

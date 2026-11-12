@@ -985,6 +985,14 @@ export async function postImportSettings(req: { board: string; board_name: strin
 }
 
 /**
+ * POST /api/sch/import_settings (crates/cli/src/sch_import_settings_api.rs): Schematic Setup's "Import Settings from Another Project..." -- the other project's
+ * pages in the shapes their endpoints give, or KiCad's message. Changes nothing.
+ */
+export async function postSchImportSettings(req: { project: string; project_name: string }): Promise<{ ok: boolean; message?: string; board?: import("./types").BoardState } & Partial<import("../components/boardSetup/fields").SchImportParts>> {
+  return postJson("/api/sch/import_settings", req);
+}
+
+/**
  * POST /api/rule_editor/show_matches: "Show Matches" of a rule panel (`{ entry, rule }`, as Save takes it; `DIALOG_DRC_RULE_EDITOR::highlightMatchingItems`):
  * the number of the board's items the panel's rule selects and the ids the studio selects them by, or `error` where KiCad says "Show Matches (error)".
  */

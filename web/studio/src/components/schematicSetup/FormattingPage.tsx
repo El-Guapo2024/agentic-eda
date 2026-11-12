@@ -20,7 +20,7 @@ import { fetchSchFormatting } from "../../api/client";
 import type { Cmd, IntersheetRefs, SchFormatting, SchFormattingReply } from "../../api/types";
 import { DEFAULT_SCH_FORMATTING, HOP_OVER_SIZE_CHOICES, I_RANGES, JUNCTION_SIZE_CHOICES, V_RANGES, connectionGridError, doubleValueFromString, milsText, milsToNm, rangeLabel, rangeStored, ratioText, samePageSettings } from "../../kicad-port/schSetup";
 import { useStudioState } from "../../state/store";
-import { Check, FieldRow, PageFrame, usePageApply, usePageDraft, type PageProps } from "../boardSetup/fields";
+import { Check, FieldRow, PageFrame, usePageApply, usePageDraft, type PageProps, useSchSetupImport } from "../boardSetup/fields";
 
 /** `SCHEMATIC_SETTINGS`' defaults (`DEFAULT_IREF_PREFIX`, `DEFAULT_IREF_SUFFIX`): what an older backend that sends none means. */
 const IREF_DEFAULT: IntersheetRefs = { show: false, own_page: true, short: false, prefix: "[", suffix: "]" };
@@ -117,6 +117,8 @@ export function FormattingPage({ hidden, onDirty }: PageProps) {
 
   const source = useMemo(() => (info ? draftOf(info) : undefined), [info]);
   const page = usePageDraft<Draft>(source);
+  // "Import Settings from Another Project..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSchSetupImport("formatting", (s) => draftOf(s.formatting), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
 

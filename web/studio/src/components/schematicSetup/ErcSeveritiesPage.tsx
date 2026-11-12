@@ -13,7 +13,7 @@ import checks from "../../kicad/erc_checks.json";
 import { severitiesToSend, severityOf, type SeverityItem } from "../../kicad-port/boardSetupRules";
 import { setErcView } from "../../state/checkerView";
 import { useStudioState } from "../../state/store";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "../boardSetup/fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSchSetupImport } from "../boardSetup/fields";
 
 interface CheckItem extends SeverityItem {
   title: string;
@@ -53,6 +53,8 @@ export function ErcSeveritiesPage({ hidden, onDirty }: PageProps) {
   // The page edits every check's severity (the table only names the ones that differ from KiCad's default).
   const source = useMemo<Record<string, RuleSeverity> | undefined>(() => (table ? Object.fromEntries(ITEMS.map((i) => [i.key, severityOf(i, table)])) : undefined), [table]);
   const page = usePageDraft<Record<string, RuleSeverity>>(source);
+  // "Import Settings from Another Project..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSchSetupImport("severities", (s) => Object.fromEntries(ITEMS.map((i) => [i.key, severityOf(i, s.severities.severities)])), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;
