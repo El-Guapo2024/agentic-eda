@@ -174,6 +174,8 @@ export function SymbolFieldsTableDialog() {
 
   const [fmt, setFmt] = useState<BomFmt>(bomFmtPresets()[0] as BomFmt);
   const [outPath, setOutPath] = useState("");
+  /** The Preview's refresh button (`m_bRefreshPreview`, `OnPreviewRefresh`): asks again with nothing changed. */
+  const [previewTick, setPreviewTick] = useState(0);
   const [preview, setPreview] = useState("");
   const [exportMsg, setExportMsg] = useState<string | null>(null);
 
@@ -271,7 +273,7 @@ export function SymbolFieldsTableDialog() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, tab, spec, fmt, changes, state.schematic, variant, variantEdits, scope, state.currentSheetPath]);
+  }, [open, tab, spec, fmt, changes, state.schematic, variant, variantEdits, scope, state.currentSheetPath, previewTick]);
 
   if (!open) return null;
 
@@ -617,8 +619,9 @@ export function SymbolFieldsTableDialog() {
         <div className="dialog-header">
           <span>Symbol Fields Table</span>
           <span style={{ display: "flex", gap: 6 }}>
+            {/* the notebook's pages, `m_nbPages->AddPage( m_panelEdit, _("Edit") )` and `_("Export")` */}
             <button className={tab === "edit" ? "primary" : undefined} onClick={() => setTab("edit")}>
-              Edit Fields
+              Edit
             </button>
             <button className={tab === "export" ? "primary" : undefined} onClick={() => setTab("export")}>
               Export
@@ -631,7 +634,9 @@ export function SymbolFieldsTableDialog() {
 
           {tab === "edit" && spec && (
             <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-              <div style={{ width: 230, flexShrink: 0, fontSize: 11 }}>
+              {/* as wide as its rows (a field name like ${EXCLUDE_FROM_BOARD} and the BOM Name box): at a fixed 230 px the Include and Group By boxes ran
+                  under the grid beside it and could not be clicked (UI-LEFT-2 XX4's click-through) */}
+              <div style={{ flex: "0 0 auto", minWidth: 230, fontSize: 11 }}>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>Fields</div>
                 <table style={{ width: "100%", borderCollapse: "collapse" }} data-testid="fields-table-field-list">
                   <thead>
@@ -803,26 +808,21 @@ export function SymbolFieldsTableDialog() {
             </div>
           )}
 
+          {/* KiCad's Export panel (`dialog_symbol_fields_table_base.cpp`, `gbExport`): the options column -- the four delimiters, Keep tabs, Keep line breaks,
+              a line, "Format presets:" over its choice -- and beside it "Output file:", "Preview:" with its refresh button, and the preview. The output file
+              has no browse button: the file goes into the board's folder on the server (`export_path`), which a browser cannot pick from. */}
           {tab === "export" && spec && (
             <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-              <div style={{ width: 280, flexShrink: 0 }}>
-                <div className="kv-grid" style={{ gridTemplateColumns: "120px 1fr" }}>
-                  <span>Format presets:</span>
-                  <select aria-label="Format preset" value={matchingFmtPreset(fmt, userFmts) ?? PRESET_SEPARATOR} onChange={(e) => onFmtBox(e.target.value)} data-testid="fields-table-fmt-preset">
-                    {fmtPresetChoices(userFmts).map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                  <span>Field delimiter</span>
-                  <input value={fmt.field_delimiter === "\t" ? "\\t" : fmt.field_delimiter} onChange={(e) => setFmt({ ...fmt, field_delimiter: e.target.value === "\\t" ? "\t" : e.target.value })} />
-                  <span>String delimiter</span>
-                  <input value={fmt.string_delimiter} onChange={(e) => setFmt({ ...fmt, string_delimiter: e.target.value })} />
-                  <span>Reference delimiter</span>
-                  <input value={fmt.ref_delimiter} onChange={(e) => setFmt({ ...fmt, ref_delimiter: e.target.value })} />
-                  <span>Ref range delimiter</span>
-                  <input value={fmt.ref_range_delimiter} placeholder="(none: list every reference)" onChange={(e) => setFmt({ ...fmt, ref_range_delimiter: e.target.value })} />
+              <div style={{ width: 260, flexShrink: 0 }}>
+                <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr" }}>
+                  <span>Field delimiter:</span>
+                  <input aria-label="Field delimiter" value={fmt.field_delimiter === "\t" ? "\\t" : fmt.field_delimiter} onChange={(e) => setFmt({ ...fmt, field_delimiter: e.target.value === "\\t" ? "\t" : e.target.value })} />
+                  <span>String delimiter:</span>
+                  <input aria-label="String delimiter" value={fmt.string_delimiter} onChange={(e) => setFmt({ ...fmt, string_delimiter: e.target.value })} />
+                  <span>Reference delimiter:</span>
+                  <input aria-label="Reference delimiter" value={fmt.ref_delimiter} onChange={(e) => setFmt({ ...fmt, ref_delimiter: e.target.value })} />
+                  <span>Range delimiter:</span>
+                  <input aria-label="Range delimiter" value={fmt.ref_range_delimiter} title="Leave blank to disable ranges." onChange={(e) => setFmt({ ...fmt, ref_range_delimiter: e.target.value })} />
                 </div>
                 <label className="toggle" style={{ display: "block", marginTop: 8, fontSize: 11 }}>
                   <input type="checkbox" checked={fmt.keep_tabs} onChange={(e) => setFmt({ ...fmt, keep_tabs: e.target.checked })} />
@@ -832,15 +832,30 @@ export function SymbolFieldsTableDialog() {
                   <input type="checkbox" checked={fmt.keep_line_breaks} onChange={(e) => setFmt({ ...fmt, keep_line_breaks: e.target.checked })} />
                   Keep line breaks
                 </label>
-                <div className="kv-grid" style={{ gridTemplateColumns: "120px 1fr", marginTop: 10 }}>
-                  <span>Output file</span>
-                  <input value={outPath} placeholder="export/bom.csv" title="A file inside this board's export/ folder; kicad-cli writes it from the saved design" onChange={(e) => setOutPath(e.target.value)} />
-                </div>
-                {exportMsg && <div style={{ marginTop: 8, fontSize: 11, color: "var(--chrome-text-dim)" }}>{exportMsg}</div>}
+                <hr style={{ border: 0, borderTop: "1px solid var(--chrome-border)", margin: "10px 0" }} />
+                <div style={{ fontSize: 11, marginBottom: 4 }}>Format presets:</div>
+                <select aria-label="Format preset" style={{ width: "100%" }} value={matchingFmtPreset(fmt, userFmts) ?? PRESET_SEPARATOR} onChange={(e) => onFmtBox(e.target.value)} data-testid="fields-table-fmt-preset">
+                  {fmtPresetChoices(userFmts).map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Preview</div>
-                <textarea readOnly value={preview} spellCheck={false} style={{ width: "100%", boxSizing: "border-box", height: "46vh", fontFamily: "monospace", fontSize: 11, whiteSpace: "pre" }} />
+                <div className="kv-grid" style={{ gridTemplateColumns: "auto 1fr", marginBottom: 8 }}>
+                  <span>Output file:</span>
+                  <input aria-label="Output file" value={outPath} title="A file inside this board's export/ folder; kicad-cli writes it from the saved design" onChange={(e) => setOutPath(e.target.value)} />
+                </div>
+                <div style={{ display: "flex", alignItems: "flex-end", fontSize: 11, marginBottom: 4 }}>
+                  <span>Preview:</span>
+                  <span style={{ flex: 1 }} />
+                  <button aria-label="Refresh preview" title="Refresh preview" style={{ fontSize: 11, padding: "0 6px" }} onClick={() => setPreviewTick((n) => n + 1)}>
+                    ⟳
+                  </button>
+                </div>
+                <textarea readOnly aria-label="Preview" value={preview} spellCheck={false} style={{ width: "100%", boxSizing: "border-box", height: "46vh", fontFamily: "monospace", fontSize: 11, whiteSpace: "pre" }} />
+                {exportMsg && <div style={{ marginTop: 8, fontSize: 11, color: "var(--chrome-text-dim)" }}>{exportMsg}</div>}
               </div>
             </div>
           )}
@@ -850,9 +865,14 @@ export function SymbolFieldsTableDialog() {
           {tab === "export" ? (
             <button
               className="primary"
-              disabled={!spec || outPath.trim() === ""}
+              disabled={!spec}
               onClick={async () => {
                 if (!spec) return;
+                // `OnExport`: "No output file specified in Export tab." (`DisplayError`)
+                if (outPath.trim() === "") {
+                  setExportMsg("No output file specified in Export tab.");
+                  return;
+                }
                 // The file is kicad-cli's (`kicad-cli sch export bom`, run on the saved design): edits that have not been applied would not be in it.
                 if (dirty) {
                   if (!window.confirm("Changes have not yet been applied. Apply them and export?")) return;
@@ -861,7 +881,7 @@ export function SymbolFieldsTableDialog() {
                 setExportMsg("Exporting with kicad-cli...");
                 try {
                   const reply = await postBomFile({ spec, fmt, path: outPath.trim(), ...(variant ? { variant } : {}) });
-                  setExportMsg(reply.ok ? `Wrote BOM output to '${reply.files?.[0] ?? outPath}'${reply.engine ? ` (${reply.engine})` : ""}` : (reply.message ?? "Export failed."));
+                  setExportMsg(reply.ok ? `Wrote BOM output to '${reply.files?.[0] ?? outPath}'` : (reply.message ?? "Export failed.")); // `OnExport`'s `DisplayInfoMessage`
                 } catch (e) {
                   setExportMsg(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
                 }

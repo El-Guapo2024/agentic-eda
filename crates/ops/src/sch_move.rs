@@ -153,18 +153,33 @@ impl SchMoveCmd {
         "schematic-move"
     }
 
-    /// Can this edit change what is connected? Symbols, text and drawn shapes only change place (layout, which never rewrites the net
-    /// list: `Cmd::edits_connectivity`); a wire, label, power symbol, junction, no-connect, bus entry or sheet carries connectivity by
-    /// itself, so moving one is read from the drawing like drawing it was.
+    /// Can this edit change what is connected? Text, tables, images and drawn shapes only change place (layout, which never rewrites the net
+    /// list: `Cmd::edits_connectivity`). A symbol moved (M), turned, mirrored or aligned leaves the wires on its pins where they were, so what its pins
+    /// touch is read from the drawing again -- KiCad derives the nets from the drawing after every commit (`SCH_EDIT_FRAME::OnModify` ->
+    /// `RecalculateConnections`), and `nets::follow` rewrites only the nets the edit touched (UI-LEFT-2 SS20: a symbol moved off its wire with M kept its
+    /// pin on the wire's net). A drag (G) of symbols takes the wires on their pins along, so it keeps every connection by construction and stays layout:
+    /// on a stored drawing that does not say everything (labels on a box edge, not on the pins, 71d1cddc) the items a drag carries could otherwise rename
+    /// a net the PCB's tracks are on. A wire, label, power symbol, junction, no-connect, bus entry or sheet carries connectivity by itself, so moving one
+    /// is read from the drawing like drawing it was.
     pub fn edits_connectivity(&self) -> bool {
-        self.ids().iter().any(|id| !is_layout_id(id))
+        match self {
+            SchMoveCmd::Drag { .. } => self.ids().iter().any(|id| !is_layout_id(id) && !is_symbol_id(id)),
+            _ => self.ids().iter().any(|id| !is_layout_id(id)),
+        }
     }
 }
 
-/// Is `id` the id of an item whose place does not decide what is connected: a symbol reference, a text, a drawn shape or note line?
+/// Is `id` the id of an item whose place does not decide what is connected: a text, a table, an image, a drawn shape or note line? (Not a symbol: its
+/// pins connect where they are.)
 fn is_layout_id(id: &str) -> bool {
+    const LAYOUT: [&str; 6] = ["txt_", "tbl_", "img_", "line_", "rect_", "arc_"];
+    LAYOUT.iter().any(|p| id.starts_with(p))
+}
+
+/// Is `id` a symbol's reference (no item prefix; a power symbol's `#PWR..` carries its net by itself and is not one)?
+fn is_symbol_id(id: &str) -> bool {
     const CONNECTING: [&str; 8] = ["wire_", "lbl_", "nc_", "bent_", "jct_", "sheet", "shpin_", "dirl_"];
-    !id.starts_with('#') && !CONNECTING.iter().any(|p| id.starts_with(p))
+    !id.starts_with('#') && !CONNECTING.iter().any(|p| id.starts_with(p)) && !is_layout_id(id)
 }
 
 impl<'a> Board<'a> {

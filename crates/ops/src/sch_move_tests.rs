@@ -891,9 +891,13 @@ fn dragging_the_label_or_the_branch_keeps_the_nets() {
 }
 
 #[test]
-fn a_selection_of_symbols_only_is_layout_and_the_rest_edits_connectivity() {
-    assert!(!mv(&["R1", "U2"], G, Nm::ZERO).edits_connectivity());
-    assert!(!rotate(&["R1", "txt_a"], true).edits_connectivity());
+fn a_selection_of_text_only_is_layout_and_the_rest_edits_connectivity() {
+    // a symbol's pins connect where they are (KiCad's `RecalculateConnections` after the commit; UI-LEFT-2 SS20)
+    assert!(mv(&["R1", "U2"], G, Nm::ZERO).edits_connectivity());
+    assert!(rotate(&["R1", "txt_a"], true).edits_connectivity());
+    assert!(!rotate(&["txt_a", "tbl_b"], true).edits_connectivity());
+    // a drag takes the wires on the pins along: layout, unless it carries a wire or a label
+    assert!(!drag(&["R1", "U2"], G, Nm::ZERO).edits_connectivity());
     assert!(mv(&["R1", "wire_a"], G, Nm::ZERO).edits_connectivity());
     assert!(drag(&["lbl_a"], G, Nm::ZERO).edits_connectivity());
     assert!(mv(&["#PWR01"], G, Nm::ZERO).edits_connectivity());

@@ -2680,7 +2680,10 @@ impl Cmd {
             // Schematic Setup's sizes, field templates and BOM presets are how the sheet is drawn and listed, not what it connects (a bus alias does connect,
             // and the unit notation names the nets of a symbol's units: those two are traced again).
             Cmd::SetSchFormatting { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBomView { .. } => false,
-            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
+            // A symbol moved, turned or mirrored takes its pins with it: what they touch is read from the drawing again, as KiCad does after every commit
+            // (`RecalculateConnections`; UI-LEFT-2 SS20), and `nets::follow` keeps every net the move did not touch. A drag takes its wires along and stays
+            // layout (`SchMoveCmd::edits_connectivity`).
+            Cmd::DragSymbol { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
             // A table is drawn text and lines: nothing it covers is connected to it.

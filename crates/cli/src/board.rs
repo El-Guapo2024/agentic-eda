@@ -5265,12 +5265,12 @@ pub(crate) mod tests {
         // BOM export: preview, then write; escaping the board dir is refused.
         let p = call(crate::sch_api::bom_export, json!({ "path": "export/bom.csv", "preview": true }));
         // the dialog's own view is KiCad's "Default Editing" (`BOM_PRESET::DefaultEditing`): the attribute columns that decide whether a part is on the BOM and the board sit
-        // after the value, as 1 or 0 (`getAttributeValue`)
+        // after the value; an export writes them in words, nothing for a flag that is off (KiCad 25ec2335 `getAttributeResolvedValue`)
         assert!(p["text"].as_str().unwrap().starts_with("\"Reference\",\"Qty\",\"Value\",\"DNP\",\"Exclude from BOM\",\"Exclude from Board\",\"Footprint\",\"Datasheet\"\n"), "{p}");
         assert!(!dir.join("export/bom.csv").exists(), "preview writes nothing");
         let w = call(crate::sch_api::bom_export, json!({ "path": "export/bom.csv" }));
         assert_eq!(w["ok"], true, "{w}");
-        assert!(std::fs::read_to_string(dir.join("export/bom.csv")).unwrap().contains("\"R1\",\"1\",\"10k\",\"0\",\"0\",\"0\",\"R_0603\""));
+        assert!(std::fs::read_to_string(dir.join("export/bom.csv")).unwrap().contains("\"R1\",\"1\",\"10k\",\"\",\"\",\"\",\"R_0603\""));
         assert_eq!(call(crate::sch_api::bom_export, json!({ "path": "../evil.csv" }))["ok"], false);
 
         // Find: Value fields are visible, Footprint is hidden until asked for.
@@ -6023,11 +6023,12 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Dragging, moving, turning or mirroring any one symbol -- each of the 30 -- leaves the net list alone, through the symbol verbs and through the
-    /// one that moves any item (`SchMove`), on the user's board and on mcu30
-    /// reorganized into module sheets (where the drag takes the wires of the sheet along).
+    /// Dragging any one symbol -- each of the 30 -- leaves the net list alone (the wires go along), through the symbol verb and through the one that moves
+    /// any item (`SchMove`), on the user's board and on mcu30 reorganized into module sheets. Moving, turning or mirroring it takes its pins off the wires they
+    /// were on, as KiCad does (`RecalculateConnections` after the commit; UI-LEFT-2 SS20): only the nets of its own pins change, every other net keeps its
+    /// pins and every routed net that is not one of them stays, and one Undo puts the net list back.
     #[test]
-    fn moving_or_dragging_any_one_symbol_leaves_the_nets_alone() {
+    fn dragging_any_one_symbol_leaves_the_nets_alone_and_a_move_changes_only_its_own() {
         for hierarchical in [false, true] {
             let dir = scratch(if hierarchical { "any_symbol_hier" } else { "any_symbol_flat" });
             setup_mcu30_users_board(&dir);
@@ -6079,24 +6080,45 @@ pub(crate) mod tests {
                 };
                 let verb = |cmd: eda_ops::sch_move::SchMoveCmd| on(Cmd::SchMove(cmd));
                 let one = vec![id.clone()];
+                // (the command, whether it keeps every connection): the drags take the wires along (there, then back); the rest leave them and are undone
                 let commands = [
-                    on(Cmd::DragSymbol { id: id.clone(), x: at.x + dx, y: at.y + dy, attached_wire_endpoints: attached, unit: None }),
-                    on(Cmd::MoveSymbol { id: id.clone(), x: at.x, y: at.y, unit: None }),
-                    on(Cmd::RotateSymbol { id: id.clone(), quarter_turns: 1, unit: None }),
-                    on(Cmd::MirrorSymbol { id: id.clone(), unit: None }),
-                    // the same four through the verb that moves any item: the wires follow the drag, the net list stays
-                    verb(eda_ops::sch_move::SchMoveCmd::Drag { ids: one.clone(), vertices: Default::default(), dx: dx, dy: dy, ortho: true, grid: Nm::ZERO, turns: Vec::new(), about: None }),
-                    verb(eda_ops::sch_move::SchMoveCmd::Move { ids: one.clone(), dx: (-dx), dy: (-dy), turns: Vec::new(), about: None }),
-                    verb(eda_ops::sch_move::SchMoveCmd::Rotate { ids: one.clone(), vertices: Default::default(), ccw: true, about: None, grid: Nm::ZERO }),
-                    verb(eda_ops::sch_move::SchMoveCmd::Mirror { ids: one.clone(), vertices: Default::default(), vertical: false, about: None, grid: Nm::ZERO }),
-                    verb(eda_ops::sch_move::SchMoveCmd::AlignToGrid { ids: one.clone(), grid: Nm::ZERO }),
+                    (on(Cmd::DragSymbol { id: id.clone(), x: at.x + dx, y: at.y + dy, attached_wire_endpoints: attached, unit: None }), true),
+                    (on(Cmd::MoveSymbol { id: id.clone(), x: at.x + dx, y: at.y + dy, unit: None }), false),
+                    (on(Cmd::RotateSymbol { id: id.clone(), quarter_turns: 1, unit: None }), false),
+                    (on(Cmd::MirrorSymbol { id: id.clone(), unit: None }), false),
+                    // the same through the verb that moves any item
+                    (verb(eda_ops::sch_move::SchMoveCmd::Drag { ids: one.clone(), vertices: Default::default(), dx: (-dx), dy: (-dy), ortho: true, grid: Nm::ZERO, turns: Vec::new(), about: None }), true),
+                    (verb(eda_ops::sch_move::SchMoveCmd::Move { ids: one.clone(), dx: dx, dy: dy, turns: Vec::new(), about: None }), false),
+                    (verb(eda_ops::sch_move::SchMoveCmd::Rotate { ids: one.clone(), vertices: Default::default(), ccw: true, about: None, grid: Nm::ZERO }), false),
+                    (verb(eda_ops::sch_move::SchMoveCmd::Mirror { ids: one.clone(), vertices: Default::default(), vertical: false, about: None, grid: Nm::ZERO }), false),
+                    (verb(eda_ops::sch_move::SchMoveCmd::AlignToGrid { ids: one.clone(), grid: Nm::ZERO }), false),
                 ];
-                for cmd in commands {
+                let mine = |p: &String| p.split_once('.').is_some_and(|(r, _)| r == id);
+                for (k, (cmd, keeps)) in commands.into_iter().enumerate() {
                     step(&dir, cmd, true, "ui").unwrap_or_else(|e| panic!("{id}: {}", reasons(&e)));
                     let (_, _, model_after) = load(&dir).unwrap();
-                    assert_eq!(canonical(&model_after.nets), canonical_before, "{id} (hierarchical: {hierarchical}): the net list changed");
-                    for net in &routed {
+                    let after = canonical(&model_after.nets);
+                    if keeps {
+                        assert_eq!(after, canonical_before, "{id} (hierarchical: {hierarchical}): drag #{k} changed the net list");
+                    } else {
+                        // a net none of whose pins is the symbol's is as it was -- or, where a pin of the symbol came down on its wire, joined whole to the
+                        // symbol's net (KiCad joins what touches)
+                        for (name, pins) in canonical_before.iter().filter(|(_, p)| !p.iter().any(mine)) {
+                            let kept = after.iter().any(|(n, p)| n == name && p == pins);
+                            let joined_to_symbol = after.iter().any(|(_, p)| p.iter().any(mine) && pins.iter().all(|x| p.contains(x)));
+                            assert!(kept || joined_to_symbol, "{id} (hierarchical: {hierarchical}): the net {name} {pins:?}, none of whose pins is {id}'s, changed: {after:?}");
+                        }
+                    }
+                    // the copper of a net the move did not touch keeps its name (one it touched or joined is healed by the pads its copper reaches, on load)
+                    let touched = |net: &String| canonical_before.iter().any(|(n, p)| n == net && (p.iter().any(mine) || after.iter().any(|(_, q)| q.iter().any(mine) && p.iter().all(|x| q.contains(x)))));
+                    for net in routed.iter().filter(|net| keeps || !touched(net)) {
                         assert!(model_after.nets.iter().any(|n| &n.name == net), "{id}: the net {net} a track is on is gone");
+                    }
+                    // a drag stays (the next command starts from it, as the drags go there and back); anything else is undone
+                    if !keeps {
+                        undo(&dir, "ui", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{id}: {}", reasons(&e)));
+                        let (_, _, model_undone) = load(&dir).unwrap();
+                        assert_eq!(canonical(&model_undone.nets), canonical_before, "{id} (hierarchical: {hierarchical}): one Undo puts the net list back");
                     }
                 }
             }
@@ -6518,14 +6540,19 @@ pub(crate) mod tests {
         assert_eq!(joined(restored.nets.as_ref().unwrap()), nets_hier);
         assert!(restored.sheet_contents.as_ref().unwrap()[&mcu.file].labels.iter().any(|l| l.net == "PA0"));
 
-        // Moving U1 is layout: it lands on the sheet, and the nets stay as they were (the wires it leaves behind are what ERC is for).
+        // Moving U1 with M lands on the sheet and takes its pins off the wires they were on, as in KiCad (`RecalculateConnections` after the commit; UI-LEFT-2 SS20).
         let u1 = screens[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at;
         let moved = Point { x: u1.x + mm(2.54), y: u1.y };
         step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::MoveSymbol { id: "U1".into(), x: moved.x, y: moved.y, unit: None }) }, false, "test").unwrap();
         let (_, edited, _) = load(&dir).unwrap();
         assert_eq!(edited.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, moved);
         assert_eq!(edited.schematic.as_ref().unwrap().sheets.len(), 3);
-        assert_eq!(joined(edited.nets.as_ref().unwrap()), nets_hier, "moving a symbol leaves the nets alone");
+        // RESET's wire ends where U1.11 was: the pin left it; every net with no pin of U1 is as it was
+        let after = joined(edited.nets.as_ref().unwrap());
+        assert!(after.iter().all(|(_, p)| !p.iter().any(|x| x == "U1.11")), "U1.11 left the RESET wire: {after:?}");
+        for (name, pins) in nets_hier.iter().filter(|(_, p)| !p.iter().any(|x| x.starts_with("U1."))) {
+            assert!(after.iter().any(|(n, p)| n == name && p == pins), "{name} {pins:?} has no pin of U1 and is as it was: {after:?}");
+        }
 
         // Undo takes the move back; then the note; then the reorganization, back to the flat sheet.
         undo(&dir, "test", Some(Domain::Schematic)).unwrap();
@@ -7157,6 +7184,35 @@ pub(crate) mod tests {
         let e = step(&dir, on_sheet(V::SwapPins { pins: ids(&["pin:R1:1"]) }), false, "test").unwrap_err();
         assert!(reasons(&e).contains("at least two pins"), "{}", reasons(&e));
         assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symbol moved with M off the wires on its pins leaves their nets, and one dragged with G keeps them (UI-LEFT-2 SS20: KiCad derives the nets from the
+    /// drawing after every commit, `RecalculateConnections`; the move was taken for layout and the pin stayed on the wire's net). Mirrored, its pins trade places.
+    #[test]
+    fn a_symbol_moved_off_its_wires_leaves_their_nets_and_a_dragged_one_keeps_them() {
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_move_nets");
+        setup_pin_swap_board(&dir);
+        let mate = |model: &ConstraintModel, pin: &str| -> String { model.nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone()).unwrap_or_default() };
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let go = |cmd: M| step(&dir, Cmd::SchMove(cmd), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        // M: the symbol goes 5 mm right, the wires stay; both pins leave their nets
+        go(M::Move { ids: ids(&["R1"]), dx: mm(5.0), dy: Nm::ZERO, turns: Vec::new(), about: None });
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("unconnected-(R1-Pad1)".to_string(), "unconnected-(R1-Pad2)".to_string()), "moved off the wires: {:?}", model.nets);
+        // and back onto them: joined again
+        go(M::Move { ids: ids(&["R1"]), dx: mm(-5.0), dy: Nm::ZERO, turns: Vec::new(), about: None });
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("/A".to_string(), "/B".to_string()), "moved back onto the wires: {:?}", model.nets);
+        // G: the wires' ends go along, the nets stay
+        go(M::Drag { ids: ids(&["R1"]), vertices: Default::default(), dx: mm(5.0), dy: Nm::ZERO, ortho: false, grid: Nm::ZERO, turns: Vec::new(), about: None });
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("/A".to_string(), "/B".to_string()), "dragged: {:?}", model.nets);
+        // mirrored top to bottom about its own place: pin 1 is where pin 2 was, on the wire to B
+        go(M::Mirror { ids: ids(&["R1"]), vertices: Default::default(), vertical: true, about: None, grid: Nm::ZERO });
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("/B".to_string(), "/A".to_string()), "mirrored: {:?}", model.nets);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
