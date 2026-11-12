@@ -68,7 +68,7 @@ pub enum FpItemCmd {
     /// orientation follows: a pad's orientation, a text's, a field's, a text box's, a barcode's and a table's angle, a dimension's text.
     Rotate { footprint: String, ids: Vec<String>, pivot: Point, angle_millideg: i64 },
     /// `EDIT_TOOL::Mirror` (`pcbnew.InteractiveEdit.mirrorHoriontally` / `mirrorVertically`): the mirrorable items among `ids` (`EDIT_TOOL::MirrorableItems`: shapes,
-    /// fields, texts, text boxes, zones, pads, groups, points) mirror across the axis through `pivot`, on the layer they are on. The others (a dimension, an image, a barcode,
+    /// fields, texts, text boxes, zones, pads, groups) mirror across the axis through `pivot`, on the layer they are on; a point stays (it has no `Mirror` of its own). The others (a dimension, an image, a barcode,
     /// a table) are left as they are, as KiCad leaves them -- unless they are members of a group, which mirrors every member (`PCB_GROUP::Mirror`).
     Mirror { footprint: String, ids: Vec<String>, pivot: Point, direction: FlipDirection },
     /// `EDIT_TOOL::Swap` (Alt+S) in the footprint editor, `ids` in selection order: each pair trades positions, two pads their copper's places
@@ -119,6 +119,11 @@ pub enum FpItemCmd {
     Ungroup { footprint: String, ids: Vec<String> },
     /// `DIALOG_GROUP_PROPERTIES`: the group's name.
     SetGroupName { footprint: String, id: String, name: String },
+    /// `GROUP_TOOL::AddToGroup` ("Add Items") in the footprint editor: `ids` join `group_id`, each leaving the group it was in (UI-LEFT-2 FF8). See
+    /// [`eda_model::groups::GroupHost`]'s `add_members`: a group cannot be added to itself or to one below it; a point is not groupable.
+    AddToGroup { footprint: String, group_id: String, ids: Vec<String> },
+    /// `GROUP_TOOL::RemoveFromGroup` ("Remove Items"): each id leaves its group; a group left with fewer than two members dissolves (`remove_members`).
+    RemoveFromGroup { footprint: String, ids: Vec<String> },
     /// `EDIT_TOOL::Duplicate` (Ctrl+D) and Duplicate and Increment (Ctrl+Shift+D) in the footprint editor: a copy of every item `ids` names but a field, where it is,
     /// with its looks, a group with everything below it ([`crate::fp_copy::duplicate`]); with `pad_number` each copied pad that can have a number takes it. The Move
     /// tool then carries the copies (the studio's carry: one undo step with the drop).
@@ -207,6 +212,8 @@ impl FpItemCmd {
             | FpItemCmd::Group { footprint, .. }
             | FpItemCmd::Ungroup { footprint, .. }
             | FpItemCmd::SetGroupName { footprint, .. }
+            | FpItemCmd::AddToGroup { footprint, .. }
+            | FpItemCmd::RemoveFromGroup { footprint, .. }
             | FpItemCmd::Duplicate { footprint, .. }
             | FpItemCmd::Paste { footprint, .. }
             | FpItemCmd::SetPadExtras { footprint, .. } => footprint,
@@ -229,6 +236,8 @@ impl FpItemCmd {
             FpItemCmd::Group { ids, .. } => format!("group {} item(s)", ids.len()),
             FpItemCmd::Ungroup { ids, .. } => format!("ungroup {} group(s)", ids.len()),
             FpItemCmd::SetGroupName { id, name, .. } => format!("name group {id} {name:?}"),
+            FpItemCmd::AddToGroup { group_id, ids, .. } => format!("add {} item(s) to group {group_id}", ids.len()),
+            FpItemCmd::RemoveFromGroup { ids, .. } => format!("remove {} item(s) from their groups", ids.len()),
             FpItemCmd::Duplicate { ids, pad_number, .. } => format!("duplicate {} item(s){}", ids.len(), pad_number.as_ref().map(|n| format!(" as pad {n}")).unwrap_or_default()),
             FpItemCmd::Paste { at, .. } => format!("paste at {:.3},{:.3}", eda_model::units::to_mm(at.x), eda_model::units::to_mm(at.y)),
             FpItemCmd::SetPadExtras { id, .. } => format!("edit pad {id}"),
@@ -701,6 +710,18 @@ impl Board<'_> {
                 g.name = name.clone();
                 Ok(())
             }
+            FpItemCmd::AddToGroup { group_id, ids, .. } => {
+                let live = live_ids(fp);
+                if let Some(bad) = ids.iter().find(|id| !live.contains(*id)) {
+                    return Err(fail("ops_unknown_item", bad, "no item of this footprint has this id"));
+                }
+                let groupable: Vec<String> = ids.iter().filter(|id| !fp.items.points.iter().any(|p| &p.id == *id)).cloned().collect();
+                fp.add_members(group_id, &groupable).map_err(|r| fail(r.check, &r.subject, r.why))
+            }
+            FpItemCmd::RemoveFromGroup { ids, .. } => {
+                fp.remove_members(ids);
+                Ok(())
+            }
             FpItemCmd::Duplicate { ids, pad_number, .. } => {
                 targets(fp, ids)?;
                 super::fp_copy::duplicate(fp, ids, pad_number.as_deref()).map(|_| ())
@@ -755,11 +776,8 @@ fn mirror(fp: &mut LibraryFootprint, ids: &[String], pivot: Point, dir: FlipDire
     for t in it.text_boxes.iter_mut().filter(|t| all.contains(&t.id)) {
         mirror_text_box(t, pivot, dir);
     }
-    // `PCB_POINT` is in `MirrorableItems` but has no `Mirror` of its own (KiCad then reports "virtual BOARD_ITEM::Mirror used, should not occur"): the studio mirrors
-    // its position, which is what the action means.
-    for p in it.points.iter_mut().filter(|p| all.contains(&p.id)) {
-        p.at = mirror_point(p.at, pivot, dir);
-    }
+    // `PCB_POINT` is in `MirrorableItems` but has no `Mirror` of its own (KiCad 8303b2ad and 25ec2335): `BOARD_ITEM::Mirror` reports "virtual BOARD_ITEM::Mirror used,
+    // should not occur" and the point stays where it is (UI-LEFT-2 FF8; the studio's action shows the message).
     // `PCB_DIMENSION_BASE::Mirror` (and the aligned and orthogonal ones' height), for a dimension a mirrored group holds: the board's flip of a dimension without its layer.
     for d in it.dimensions.iter_mut().filter(|d| dimensions_mirror(&d.id)) {
         let layer = d.layer.clone();

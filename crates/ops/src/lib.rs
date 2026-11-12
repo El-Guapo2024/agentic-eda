@@ -6900,10 +6900,36 @@ impl<'a> Board<'a> {
         if self.design.footprint_library.as_ref().and_then(|l| l.by_name(name)).is_some() {
             return Ok(()); // already open -- never resets in-progress edits
         }
-        let mut lib_fp = match self.resolve_named_footprint(name) {
-            Some(fp) => LibraryFootprint::from_engine_footprint(&fp),
+        let resolved = self.resolve_named_footprint(name);
+        let mut lib_fp = match &resolved {
+            Some(fp) => LibraryFootprint::from_engine_footprint(fp),
             None => LibraryFootprint::new_empty(name),
         };
+        // A built-in package stands for the installed KiCad footprint a part on it is given (`0603` on an `R` is `Resistor_SMD:R_0603_1608Metric`), whose file lists
+        // its 3D models: the editor's footprint has that list, fitted onto the built-in pads as the board's 3D view fits it (UI-LEFT-2 FF8; KiCad opens the library
+        // footprint with the models its file has, `FOOTPRINT::Models()`). The part is the first, by reference, on this package; a package that needs one (a two-pad
+        // passive is a resistor, a capacitor, ...) and has none gets no list.
+        if let Some(fp) = resolved.as_ref().filter(|fp| fp.models3d.is_empty() && fp.model.is_none() && !self.model.footprints.iter().any(|f| f.name == fp.name)) {
+            let norm = eda_model::footprint::normalize_name(name);
+            let mut on_it: Vec<&eda_model::Part> = self
+                .model
+                .parts
+                .iter()
+                .filter(|p| [p.footprint.as_deref(), p.package.as_deref()].into_iter().flatten().any(|n| eda_model::footprint::normalize_name(n) == norm))
+                .collect();
+            on_it.sort_by(|a, b| a.reference.cmp(&b.reference));
+            let stand_in;
+            let part = match on_it.first() {
+                Some(p) => *p,
+                None => {
+                    stand_in = eda_model::Part { reference: String::new(), mpn: None, lcsc: None, value: None, package: Some(name.to_string()), footprint: Some(name.to_string()), pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None };
+                    &stand_in
+                }
+            };
+            if let Some(m) = eda_kicad::default_part_models(self.model, part, fp) {
+                lib_fp.models3d = m.models;
+            }
+        }
         // under the name it was opened by: a footprint found by its normalized name (`0603` is the installed `Resistor_SMD:R_0603_1608Metric` a part is on) has another
         lib_fp.name = name.to_string();
         lib_fp.assign_missing_ids();

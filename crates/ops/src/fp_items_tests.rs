@@ -295,3 +295,31 @@ fn set_anchor_moves_the_graphical_items_and_the_zones_not_the_points() {
     assert_eq!(f.items.zones[0].outline[0], p(mm(-1.0), mm(-2.0)));
     assert_eq!(f.items.points[0].at, p(mm(1.0), mm(1.0)), "`m_points` is not in MoveAnchorPosition's lists");
 }
+
+/// `GROUP_TOOL::AddToGroup` and `RemoveFromGroup` in the footprint editor (UI-LEFT-2 FF8): an item joins a group, and a group left with one member dissolves.
+#[test]
+fn add_items_to_a_group_and_remove_them_again() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = with_footprint(&m);
+    b.apply(&item(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Point(PcbPoint::new("F.Fab", p(mm(1.0), mm(1.0)))) })).unwrap();
+    let f = fp(&b).clone();
+    let (p1, line, pt) = (f.pads[0].id.clone(), f.graphics[0].id().to_string(), f.items.points[0].id.clone());
+    b.apply(&Cmd::FpItem(FpItemCmd::Group { footprint: NAME.into(), ids: vec![p1.clone(), "field:Reference".into()] })).unwrap();
+    let g = fp(&b).items.groups[0].id.clone();
+    b.apply(&Cmd::FpItem(FpItemCmd::AddToGroup { footprint: NAME.into(), group_id: g.clone(), ids: vec![line.clone(), pt] })).unwrap();
+    assert_eq!(fp(&b).items.groups[0].member_ids, vec![p1.clone(), "field:Reference".to_string(), line.clone()], "a point is not groupable");
+    b.apply(&Cmd::FpItem(FpItemCmd::RemoveFromGroup { footprint: NAME.into(), ids: vec![line, "field:Reference".into()] })).unwrap();
+    assert!(fp(&b).items.groups.is_empty(), "a group left with one member dissolves");
+}
+
+/// `EDIT_TOOL::Mirror` of a point: `PCB_POINT` has no `Mirror` of its own, so `BOARD_ITEM::Mirror` leaves it where it is (UI-LEFT-2 FF8).
+#[test]
+fn mirror_leaves_a_point_where_it_is() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = with_footprint(&m);
+    b.apply(&item(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Point(PcbPoint::new("F.Fab", p(mm(1.0), mm(1.0)))) })).unwrap();
+    let pt = fp(&b).items.points[0].clone();
+    let line = fp(&b).graphics[0].id().to_string();
+    b.apply(&item(FpItemCmd::Mirror { footprint: NAME.into(), ids: vec![pt.id.clone(), line], pivot: p(Nm::ZERO, Nm::ZERO), direction: FlipDirection::LeftRight })).unwrap();
+    assert_eq!(fp(&b).items.points[0].at, pt.at);
+}

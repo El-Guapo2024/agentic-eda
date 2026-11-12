@@ -3,7 +3,8 @@
 // selected (`m_toolMgr->RunAction<EDA_ITEM*>( ACTIONS::selectItem, .. )`) and the tool stays armed for the next one, as `DRAWING_TOOL`'s loops do (pcbnew/tools/drawing_tool.cpp
 // at KiCad 8303b2ad):
 //   Draw Dimension (5 kinds)  DrawDimension: origin, end (and height for an aligned or orthogonal one); a leader then opens its dialog ("Run the edit immediately to set the leader text")
-//   Draw Rule Area            DrawZone( ZONE_MODE::ADD, rule area): the outline in the line mode (`POLYGON_GEOM_MANAGER`, kicad-port/pcbDrawZone.ts), then Rule Area Properties
+//   Draw Rule Area            DrawZone( ZONE_MODE::ADD, rule area): Rule Area Properties at the first corner (`ZONE_CREATE_HELPER::OnFirstPoint` -> `createNewZone`; Cancel
+//                             drops the click), then the outline in the line mode (`POLYGON_GEOM_MANAGER`, kicad-port/pcbDrawZone.ts), added as it closes (`OnComplete`)
 //   Draw Text Box             DrawRectangle( drawTextBox ): two corners (the same spot twice ends the tool), then Text Box Properties
 //   Place Point               PlacePoint (`IPO_REPEAT | IPO_SINGLE_CLICK`): a point at every click
 //   Draw Table                DrawTable: the first corner, the cursor sizes the grid, the second click opens Table Properties
@@ -11,8 +12,7 @@
 //   Place Reference Image     PlaceReferenceImage: a file chooser, the image follows the cursor by its centre, a click puts it down; the next click asks for another file
 // The dialogs of a tool's new item add it on OK and drop it on Cancel (components/footprint/FpItemDialogs.tsx); a tool's own dialog then waits for the next click.
 //
-// Differs from KiCad: the rule area's dialog comes after its outline, as the board editor's does here (components/ZoneDialog.tsx: KiCad asks for the settings at the first
-// corner, `ZONE_CREATE_HELPER::createNewZone`); an aligned dimension's height step stays on the grid when its line is not cardinal (KiCad turns the grid off there).
+// Differs from KiCad: an aligned dimension's height step stays on the grid when its line is not cardinal (KiCad turns the grid off there).
 import type { Dispatch } from "react";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineNm } from "../../kicad-port/view";
@@ -28,6 +28,8 @@ import { DEFAULT_ZONE_SETTINGS } from "../../state/store";
 import { drawTablePreview } from "../canvas/tablePaint";
 import { layerColor } from "../canvas/layers";
 import type { PaintOptions } from "../canvas/painter";
+import type { Dimension } from "../../api/types";
+import { paintFpDimensionPreview } from "./fpItemsPaint";
 import type { FootprintPointOpts } from "./footprintSnap";
 
 export interface FpToolCtx {
@@ -89,7 +91,12 @@ export function fpItemToolClick(c: FpToolCtx, at: P, ctrl: boolean): void {
     case "rule_area": {
       // `DrawZone` with `POLYGON_GEOM_MANAGER` in the line mode: a click on the first corner closes the outline
       const already = state.drawState?.shapeKind === "polygon" ? state.drawState.pts : [];
-      if (already.length === 0) dispatch({ type: "SET_SELECTION", refs: [] }); // `ZONE_CREATE_HELPER::OnFirstPoint`: `selectionClear`
+      if (already.length === 0) {
+        // `ZONE_CREATE_HELPER::OnFirstPoint`: `createNewZone` asks for the rule area's settings (the footprint editor's default keepouts on the active layer) before
+        // the first corner is taken; OK starts the outline there (components/footprint/FpItemDialogs.tsx), Cancel leaves the tool waiting.
+        dispatch({ type: "SET_PENDING_ITEM", item: { kind: "zone", zone: fpNewRuleArea(layer, [at], DEFAULT_ZONE_SETTINGS), first: at } });
+        return;
+      }
       const mode = leaderModeOf(state.lineMode, ctrl);
       const click = zoneClick(already, at, mode);
       if (click.finish) finishRuleArea(c, zoneFinish(already, at, mode));
@@ -147,10 +154,12 @@ export function fpItemToolClick(c: FpToolCtx, at: P, ctrl: boolean): void {
   }
 }
 
-/** `ZONE_CREATE_HELPER::OnComplete`: the closed outline becomes the new rule area, which Rule Area Properties opens on. */
+/** `ZONE_CREATE_HELPER::OnComplete`: the closed outline becomes the new rule area with the settings asked at its first corner, added and selected; the next one asks again. */
 function finishRuleArea(c: FpToolCtx, outline: [number, number][] | null): void {
   c.dispatch({ type: "SET_DRAW_STATE", draw: null });
-  if (outline && outline.length >= 3) c.dispatch({ type: "SET_PENDING_ITEM", item: { kind: "zone", zone: fpNewRuleArea(c.state.activeLayer, outline, DEFAULT_ZONE_SETTINGS) } });
+  const zone = c.state.itemDraw?.tool === "rule_area" ? c.state.itemDraw.zone : null;
+  c.dispatch({ type: "SET_ITEM_DRAW", draw: null });
+  if (zone && outline && outline.length >= 3) void addAndSelect(c, { zone: { ...zone, outline: outline.map(([x, y]) => ({ x, y })) } });
 }
 
 /** Enter or a double click while a tool of these kinds runs: a rule area's outline is closed; the others take nothing from it (a double click was its clicks). */
@@ -190,10 +199,16 @@ export async function fpChooseImage(c: Pick<FpToolCtx, "dispatch">, given?: Pick
 }
 
 /** The previews these tools draw themselves: a dimension being drawn, the grid of a table being sized, the image the cursor holds. A polygon's and a box's are `drawState`'s. */
-export function paintFpItemToolPreview(ctx: CanvasRenderingContext2D, view: ViewTransform, state: FootprintEditorState, cursor: P | null): void {
+export function paintFpItemToolPreview(ctx: CanvasRenderingContext2D, view: ViewTransform, state: FootprintEditorState, cursor: P | null, dimPreview?: Dimension | null): void {
   const d = state.itemDraw;
   if (!d) return;
+  if (d.tool === "dimension" && dimPreview) {
+    // `DrawDimension`'s preview: the dimension as it will be, its arrows and text worked out by the server (UI-LEFT-2 FF8)
+    paintFpDimensionPreview(ctx, view, dimPreview);
+    return;
+  }
   if (d.tool === "dimension") {
+    // until the server's reply: the dimension's lines
     ctx.save();
     ctx.strokeStyle = layerColor("selection");
     ctx.lineWidth = Math.max(d.draw.dim.stroke_width, hairlineNm(view, 1.5));
@@ -207,7 +222,7 @@ export function paintFpItemToolPreview(ctx: CanvasRenderingContext2D, view: View
     ctx.restore();
     return;
   }
-  if (!cursor) return;
+  if (!cursor || d.tool === "rule_area") return;
   if (d.tool === "table") {
     const opts = { cursorNm: { x: cursor[0], y: cursor[1] }, snappedCursor: cursor, activeLayer: state.activeLayer, gridNm: state.gridNm } as unknown as PaintOptions;
     drawTablePreview(ctx, view, {}, d.origin, opts);

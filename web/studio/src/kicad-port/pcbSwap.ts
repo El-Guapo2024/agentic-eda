@@ -100,7 +100,7 @@ export function fpSwapCmd(fp: Fp, footprint: string, selection: readonly string[
   const ids: string[] = [];
   for (const raw of selection) {
     if (fpItemKind(fp, raw) == null) continue;
-    const id = fpSelectionTarget(fp, raw);
+    const id = fpSelectionTarget(fp, raw) ?? raw;
     if (!ids.includes(id)) ids.push(id);
   }
   if (ids.length < 2) return null;

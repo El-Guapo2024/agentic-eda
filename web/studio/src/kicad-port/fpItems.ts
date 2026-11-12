@@ -389,16 +389,26 @@ export function fpHitTest(fp: Fp, wx: number, wy: number, tol: number, vis?: FpV
   return null;
 }
 
-/** `PCB_SELECTION_TOOL`'s group promotion: a click on an item of a group selects the outermost group that holds it (no group is entered in this editor). */
-export function fpSelectionTarget(fp: Fp, id: string): string {
+/**
+ * `PCB_SELECTION_TOOL::FilterCollectorForHierarchy`: a click on an item of a group selects the outermost group that holds it -- inside the group being worked in
+ * (`m_enteredGroup`, `PCB_GROUP::TopLevelGroup( item, m_enteredGroup, .. )`), the outermost one below it. With a group entered, an item outside it cannot be picked
+ * (`!PCB_GROUP::WithinScope( item, m_enteredGroup, .. )`): null.
+ */
+export function fpSelectionTarget(fp: Fp, id: string, entered: string | null = null): string | null {
   const groups = groupsOf(fp);
   let at = id;
   for (let hops = 0; hops < 64; hops++) {
     const g = parentGroup(groups, at);
-    if (!g) return at;
+    if (!g) return entered ? null : at;
+    if (g.id === entered) return at;
     at = g.id;
   }
-  return at;
+  return entered ? null : at;
+}
+
+/** `PCB_SELECTION_TOOL::EnterGroup`: what entering the group `id` selects -- its members, each as it is (a group inside it too). Empty for an id that names no group. */
+export function fpGroupMembers(fp: Fp, id: string): string[] {
+  return groupsOf(fp).find((g) => g.id === id)?.member_ids.slice() ?? [];
 }
 
 /** The items a selection stands for: each group replaced by the items below it. */

@@ -6,6 +6,7 @@
 // the Footprint or Symbol tab is showing, this overrides them with the frame's own (`registerEditorFrameActions` is called last, with the tab).
 // Every action on those two toolbars that is NOT supported (src/kicad/editor_toolbar_support.json, with the reason for each) is unregistered on the
 // tab, so the toolbar, the menus and the hotkey table never show it live while it would do nothing.
+import { planAddToGroup, planRemoveFromGroup } from "../kicad-port/groupEdit";
 import { openEmbeddedDocument } from "../api/embeddedClient";
 import type { Dispatch } from "react";
 import support from "../kicad/editor_toolbar_support.json";
@@ -164,6 +165,31 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // Group / Ungroup (Ctrl+G / Ctrl+Shift+G, `PCB_GROUP_TOOL::Group` in the footprint editor, `GROUP_TOOL::Ungroup`).
     m.set("common.Interactive.group", () => void ctx.fpApi.groupSelection());
     m.set("common.Interactive.ungroup", () => void ctx.fpApi.ungroupSelection());
+    // `GROUP_TOOL::EnterGroup` / `LeaveGroup` and the Grouping menu's Add Items / Remove Items (`GROUP_TOOL::AddToGroup`, `RemoveFromGroup`) in the footprint editor
+    // (UI-LEFT-2 FF8): entering selects the members (`PCB_SELECTION_TOOL::EnterGroup`), leaving selects the group (`ExitGroup( true )`); Add Items takes the selection's
+    // one group and its ungrouped items (kicad-port/groupEdit.ts, the board's plan), the group alone selected after; each edit one undo step (`fp_item add_to_group` /
+    // `remove_from_group`).
+    const fpGroups = () => ctx.fpApi.getState().footprint?.items?.groups ?? [];
+    m.set("common.Interactive.groupEnter", () => {
+      const st = ctx.fpApi.getState();
+      const refs = [...st.selection];
+      const g = refs.length === 1 ? fpGroups().find((x) => x.id === refs[0]) : undefined;
+      if (g) ctx.fpDispatch({ type: "ENTER_GROUP", id: g.id, members: [...g.member_ids] });
+    });
+    m.set("common.Interactive.groupLeave", () => ctx.fpDispatch({ type: "EXIT_GROUP", selectGroup: true }));
+    m.set("common.Interactive.addToGroup", () => {
+      const st = ctx.fpApi.getState();
+      const plan = planAddToGroup([...st.selection], fpGroups());
+      if (!plan || !st.name) return;
+      void ctx.fpApi.cmd({ op: "fp_item", verb: "add_to_group", footprint: st.name, group_id: plan.groupId, ids: plan.ids }).then((ok) => {
+        if (ok) ctx.fpDispatch({ type: "SET_SELECTION", refs: [plan.groupId] });
+      });
+    });
+    m.set("common.Interactive.removeFromGroup", () => {
+      const st = ctx.fpApi.getState();
+      const ids = planRemoveFromGroup([...st.selection], fpGroups());
+      if (ids.length > 0 && st.name) void ctx.fpApi.cmd({ op: "fp_item", verb: "remove_from_group", footprint: st.name, ids });
+    });
     // Line modes (`FOOTPRINT_EDITOR_CONTROL::ChangeLineMode`): the drawing tools' angle constraint, the editor's own setting.
     m.set("pcbnew.EditorControl.lineModeFree", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "direct" }));
     m.set("pcbnew.EditorControl.lineModeOrthonal", () => ctx.fpDispatch({ type: "SET_LINE_MODE", mode: "90" }));
