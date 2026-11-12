@@ -194,7 +194,7 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     let mut args = plot_args_for(kind, &req, page);
     args.extend(crate::fab_api::variant_args(&req));
     // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`): the plot draws the sheet the editor draws
-    args.extend(crate::drawing_sheet_api::plot_args(dir, crate::drawing_sheet_api::schematic_sheet(dir).as_deref()));
+    args.extend(crate::drawing_sheet_api::plot_args(dir, crate::drawing_sheet_api::document_files(dir, true).as_ref(), crate::drawing_sheet_api::schematic_sheet(dir).as_deref()));
     // The hops the editor draws where wires cross (KiCad 25ec2335 `DIALOG_PLOT_SCHEMATIC::plotSchematic`: `plotOpts.m_plotHopOver =
     // Schematic().Settings().GetHopOverScale() > 0.0`), from Schematic Setup > Formatting's "Hop-over size:"
     match &renumbered {

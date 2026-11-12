@@ -154,10 +154,9 @@ fn a_custom_drawing_sheet_reaches_kicad_clis_board_and_schematic_plots() {
     assert_eq!(pro["pcbnew"]["page_layout_descr_file"].as_str(), Some(whole.as_str()));
     assert_eq!(pro["schematic"]["page_layout_descr_file"].as_str(), Some(whole.as_str()));
 
-    // undo puts the default sheet back, each in its own editor's history
-    assert_eq!(studio.post("/api/undo", json!({ "domain": "schematic" }))["ok"], true);
-    assert_eq!(studio.get("/api/schematic")["drawing_sheet"], Value::Null);
-    assert_eq!(studio.get("/api/state")["drawing_sheet"]["path"], "custom_ds.kicad_wks", "the board's is in the board's history");
-    assert_eq!(studio.post("/api/undo", json!({ "domain": "pcb" }))["ok"], true);
-    assert_eq!(studio.get("/api/state")["drawing_sheet"], Value::Null);
+    // the choice is a project setting (`SavePageSettings` sets `BASE_SCREEN::m_DrawingSheetFileName` outside the commit, CC8): an undo leaves it
+    let _ = studio.post("/api/undo", json!({ "domain": "schematic" }));
+    assert_eq!(studio.get("/api/schematic")["drawing_sheet"]["path"], "custom_ds.kicad_wks");
+    let _ = studio.post("/api/undo", json!({ "domain": "pcb" }));
+    assert_eq!(studio.get("/api/state")["drawing_sheet"]["path"], "custom_ds.kicad_wks");
 }

@@ -3,6 +3,8 @@
 // (`ShowHideColumns( "0 1 2 3 4 5 6 7" )`) and, behind "More columns", the ones KiCad hides: text size, orientation, position and autoplacement. The buttons are the dialog's own:
 // add a field (`OnAddField`: a hidden "Field<n>" the name of which is selected), delete (`OnDeleteField`: "The first 5 fields are mandatory."; an inherited field is reset to
 // its parent's value instead, `EraseRow`), move up and down (`OnMoveUp` / `OnMoveDown`, never into the mandatory rows). The rows' rules live in kicad-port/symFieldsGrid.ts.
+import { DatasheetUrlButton } from "../DatasheetUrlButton";
+import type { EmbeddedOwner } from "../../api/embeddedTypes";
 import { useEffect, useState } from "react";
 import type { FieldHAlign, FieldVAlign } from "../../api/types";
 import { MANDATORY_FIELDS, isMandatoryField } from "../../kicad-port/symFields";
@@ -23,7 +25,7 @@ export interface SymbolFieldsGridProps {
   initialField?: string | null;
 }
 
-export function SymbolFieldsGrid({ rows, onChange, parentName, onError, initialField }: SymbolFieldsGridProps) {
+export function SymbolFieldsGrid({ rows, onChange, parentName, onError, initialField, datasheetStack = [] }: SymbolFieldsGridProps & { datasheetStack?: readonly EmbeddedOwner[] }) {
   const [selected, setSelected] = useState<number | null>(() => {
     const i = initialField ? rows.findIndex((r) => r.name === initialField) : -1;
     return i >= 0 ? i : null;
@@ -132,6 +134,7 @@ export function SymbolFieldsGrid({ rows, onChange, parentName, onError, initialF
                   </td>
                   <td>
                     <input value={r.text} aria-label={`Value of ${r.name}`} data-testid={`field-text-${i}`} style={{ width: 150, ...grey }} onChange={(e) => edit(i, { text: e.target.value })} />
+                    {r.name === "Datasheet" && <DatasheetUrlButton value={r.text} stack={datasheetStack} />}
                   </td>
                   <td style={{ textAlign: "center" }}>
                     <input type="checkbox" checked={!r.hidden} aria-label={`Show ${r.name}`} data-testid={`field-show-${i}`} onChange={(e) => edit(i, { hidden: !e.target.checked })} />

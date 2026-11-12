@@ -31,6 +31,8 @@
 // it (its text and look on that field: `mergeDuplicateFields`), no longer refused.
 //
 // Not ported: jumper pad groups (shown by KiCad, not edited), the user fields carried to the symbol (Update Schematic from PCB's "Other fields" adds and deletes them).
+import { DatasheetUrlButton } from "./DatasheetUrlButton";
+import type { EmbeddedOwner } from "../api/embeddedTypes";
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
 import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, backAnnotateEdits, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
@@ -321,6 +323,8 @@ export function FootprintPropertiesDialog() {
                       </td>
                       <td style={cell}>
                         <input value={r.text} aria-label={`${r.name} text`} onChange={(e) => setRow(i, { text: e.target.value })} style={{ width: 130 }} />
+                        {/* `PCB_FIELDS_GRID_TABLE`'s URL editor with the dialog's stack: the footprint's files, then the board's */}
+                        {r.name === "Datasheet" && <DatasheetUrlButton value={r.text} stack={[{ kind: "footprint", reference: part.ref }, { kind: "board" }] satisfies EmbeddedOwner[]} />}
                       </td>
                       <td style={cell}>
                         <input type="checkbox" checked={r.layout.visible !== false} onChange={(e) => setLayout(i, { visible: e.target.checked })} />

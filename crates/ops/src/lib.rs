@@ -841,7 +841,13 @@ pub enum Cmd {
     SetBoardPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
     /// `common.Control.pageSettings` on the schematic (`SCH_EDITOR_CONTROL::PageSetup`): the same for the schematic -- see
     /// [`page_settings::set_schematic_page`].
-    SetSchematicPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
+    SetSchematicPage {
+        page: eda_model::page::PageSettings,
+        title_block: eda_model::ir::TitleBlock,
+        /// The "Export to other sheets" boxes (`DIALOG_EESCHEMA_PAGE_SETTINGS::onSavePageSettings`) -- see [`page_settings::PageExport`].
+        #[serde(default, skip_serializing_if = "page_settings::PageExport::is_empty")]
+        export: page_settings::PageExport,
+    },
     /// Page Settings' "Drawing sheet:" (`DIALOG_PAGES_SETTINGS::OnWksFileSelection`): the `.kicad_wks` file the board (`schematic` false) or the schematic
     /// draws its frame and title block from, `None` for KiCad's default sheet -- see [`drawing_sheet::set_drawing_sheet`]. Refused when nothing changes.
     SetDrawingSheet {
@@ -849,6 +855,13 @@ pub enum Cmd {
         schematic: bool,
         #[serde(default)]
         path: Option<String>,
+        /// The file dialog's "Embed file" (`FILEDLG_HOOK_EMBED_FILE`, KiCad 25ec2335): the sheet file taken into the document's embedded files
+        /// (`m_embeddedFiles->AddFile( fn, true )`), named `kicad-embed://<name>` -- see [`drawing_sheet::EmbeddedSheet`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        embed: Option<drawing_sheet::EmbeddedSheet>,
+        /// The embedded sheets the dialog's OK removes ("Remove the previously embedded drawing sheet file '%s'?", `m_embeddedSheetsToRemove`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        remove_embedded: Vec<String>,
     },
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
@@ -3476,8 +3489,11 @@ impl<'a> Board<'a> {
             Cmd::SetIpc2581Bom { bom } => board_control::set_ipc2581_bom(&mut self.design, bom),
             Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
-            Cmd::SetDrawingSheet { schematic, path } => drawing_sheet::set_drawing_sheet(&mut self.design, *schematic, path.as_deref()),
-            Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
+            Cmd::SetDrawingSheet { schematic, path, embed, remove_embedded } => drawing_sheet::set_drawing_sheet_with(&mut self.design, *schematic, path.as_deref(), embed.as_ref(), remove_embedded),
+            Cmd::SetSchematicPage { page, title_block, export } => {
+                let focus = self.focus.clone();
+                page_settings::set_schematic_page_on(&mut self.design, focus.as_deref(), page, title_block, export)
+            }
             Cmd::ExportFootprintsToLibrary => self.export_footprints().map(|_| ()),
             Cmd::RepairBoard => {
                 let report = board_control::repair_board(&mut self.design, &self.model.nets);

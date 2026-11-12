@@ -6,7 +6,8 @@
 //     never thinner than a pixel on screen;
 //   - polygons are filled, without an outline (`SetIsStroke( false )`);
 //   - texts in the stroke font, each line where `FONT::getLinePositions` puts it, turned by the text's angle about its position, in its own colour when
-//     the sheet gives one (`DS_RENDER_SETTINGS::GetColor`), with the pen `GetEffectiveTextPenWidth` gives;
+//     the sheet gives one (`DS_RENDER_SETTINGS::GetColor`), with the pen `GetEffectiveTextPenWidth` gives; a text with `(font (face ..))` in that outline
+//     font (`components/text/outlineFonts.ts`, the stroke font until it has loaded), its `@{..}` evaluated by the server (`./dsExpressions.ts`);
 //   - bitmaps centred on their position at their size (`DS_DRAW_ITEM_BITMAP::GetBoundingBox`); KiCad draws them before everything else
 //     (`DS_DRAW_ITEM_LIST::Print`), and so does this.
 //
@@ -19,6 +20,10 @@
 // The browser checks read what was last painted through `window.__edaDrawingSheet` (`{ pcb, sch, sketch }`: the item count and the texts of each).
 import { buildDrawItems, parseDrawingSheet, textLines, effectiveTextPen, type DsDrawItem, type DsMeasure, type DsModel, type DsPageContext, type DsColor } from "../../kicad-port/dsDataModel";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { paintKicadText } from "../text/kicadTextPaint";
+import { isStrokeFace } from "../../kicad-port/kicadText";
+import { fontFor } from "../text/outlineFonts";
+import "./dsExpressions";
 
 /** The stroke font's advance, the width scaling with the text's width. */
 export const strokeMeasure: DsMeasure = (text, sizeX) => measureStrokeText(text, sizeX);
@@ -116,6 +121,11 @@ export function paintDrawItems(ctx: CanvasRenderingContext2D, items: readonly Ds
         const color = item.color ? cssColor(item.color) : o.color;
         const pen = Math.max(effectiveTextPen(item), o.pixelNm);
         const [sx, sy] = item.size;
+        // `(font (face ..))`: the outline face (`DS_DRAW_ITEM_TEXT::GetFont`), drawn by KiCad's outline layout once it has loaded
+        if (!isStrokeFace(item.face) && fontFor(item.face, item.bold, item.italic).kind === "outline") {
+          paintKicadText(ctx, { text: item.text, pos: item.pos, size: item.size, pen, halign: item.hJustify, valign: item.vJustify, angleDeg: item.angleDeg, italic: item.italic, bold: item.bold, multiline: item.multiline }, item.face, { color });
+          break;
+        }
         ctx.save();
         ctx.translate(item.pos[0], item.pos[1]);
         // an EDA_ANGLE turns counter-clockwise on the y-down page

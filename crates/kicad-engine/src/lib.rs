@@ -589,6 +589,9 @@ fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem
 /// `eda_kicad::sheet_file_in_work`): nothing is ever written outside it.
 fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
+    // `SCH_IO_KICAD_SEXPR::Format`: `if( m_schematic->GetAreFontsEmbedded() ) m_schematic->EmbedFonts()` ([`fonts::with_schematic_fonts`]); the writer drops them
+    // otherwise (`ClearEmbeddedFonts`)
+    let design = &*fonts::with_schematic_fonts(design);
     let date = today();
     let root_name = format!("{stem}.kicad_sch");
     let (files, map) = export_kicad_sch_tree_mapped(design, model, &ExportMeta { date: &date, title: stem }, &root_name)?;

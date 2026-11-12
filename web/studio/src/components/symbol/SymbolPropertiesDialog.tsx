@@ -307,7 +307,7 @@ export function LibrarySymbolPropertiesDialog() {
               data-testid="props-symbol-name"
             />
           </div>
-          <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={(m) => (m ? void showError(m) : setError(null))} initialField={state.propertiesField} />
+          <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={(m) => (m ? void showError(m) : setError(null))} initialField={state.propertiesField} datasheetStack={[...(subject.extends ? [{ kind: "library_symbol" as const, lib_id: subject.extends }] : []), { kind: "library_symbol", lib_id: subject.lib_id }]} />
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>
             <span>Keywords:</span>
             <input value={form.keywords} onChange={(e) => set("keywords", e.target.value)} style={{ width: 300 }} data-testid="props-keywords" />

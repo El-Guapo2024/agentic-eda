@@ -159,3 +159,110 @@ export function isoDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+// ------------------------------------------------------------------------------------------------------------- the settings the dialog keeps
+
+/** `EESCHEMA_SETTINGS::m_PageSettings.export_*`: the "Export to other sheets" boxes as the schematic dialog last closed with them (kept in the browser). */
+const EXPORT_KEY = "eda.eeschema.pageSettings.export";
+/** `COMMON_SETTINGS::m_EmbedFileDefaults.drawing_sheet`: the file dialog's "Embed file" for a drawing sheet, on until changed (KiCad 25ec2335). */
+const EMBED_KEY = "eda.common.embedFileDefaults.drawingSheet";
+
+export interface PageExportBoxes {
+  paper: boolean;
+  revision: boolean;
+  date: boolean;
+  title: boolean;
+  company: boolean;
+  comments: boolean[];
+}
+
+const NO_EXPORT: PageExportBoxes = { paper: false, revision: false, date: false, title: false, company: false, comments: Array(COMMENT_COUNT).fill(false) as boolean[] };
+
+function storage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The boxes as they were kept (`EESCHEMA_SETTINGS`' defaults: all off). */
+export function keptPageExport(): PageExportBoxes {
+  try {
+    const v = JSON.parse(storage()?.getItem(EXPORT_KEY) ?? "null") as Partial<PageExportBoxes> | null;
+    if (!v) return NO_EXPORT;
+    const b = (x: unknown) => x === true;
+    return { paper: b(v.paper), revision: b(v.revision), date: b(v.date), title: b(v.title), company: b(v.company), comments: Array.from({ length: COMMENT_COUNT }, (_, i) => b(v.comments?.[i])) };
+  } catch {
+    return NO_EXPORT;
+  }
+}
+
+/** `onTransferDataToWindow`: a box starts as kept, but off for a field that is empty (`m_TextRevision->GetValue().IsEmpty() ? false : cfg->..`); the paper's as kept. */
+export function initialPageExport(kept: PageExportBoxes, tb: TitleBlockFields): PageExportBoxes {
+  const on = (box: boolean, text: string) => (text === "" ? false : box);
+  return { paper: kept.paper, revision: on(kept.revision, tb.rev), date: on(kept.date, tb.date), title: on(kept.title, tb.title), company: on(kept.company, tb.company), comments: kept.comments.map((c, i) => on(c, tb.comments[i] ?? "")) };
+}
+
+/** `~DIALOG_EESCHEMA_PAGE_SETTINGS`: the paper's box is kept, and each other one only when its field is not empty (an empty field's box keeps what was kept). */
+export function keepPageExport(boxes: PageExportBoxes, tb: TitleBlockFields): void {
+  const kept = keptPageExport();
+  const pick = (box: boolean, was: boolean, text: string) => (text === "" ? was : box);
+  const next: PageExportBoxes = {
+    paper: boxes.paper,
+    revision: pick(boxes.revision, kept.revision, tb.rev),
+    date: pick(boxes.date, kept.date, tb.date),
+    title: pick(boxes.title, kept.title, tb.title),
+    company: pick(boxes.company, kept.company, tb.company),
+    comments: boxes.comments.map((c, i) => pick(c, kept.comments[i] ?? false, tb.comments[i] ?? "")),
+  };
+  try {
+    storage()?.setItem(EXPORT_KEY, JSON.stringify(next));
+  } catch {
+    /* refused: the boxes last for the page */
+  }
+}
+
+/** Whether any box is ticked. */
+export function exportsAnything(b: PageExportBoxes): boolean {
+  return b.paper || b.revision || b.date || b.title || b.company || b.comments.some((c) => c);
+}
+
+/** `FILEDLG_HOOK_EMBED_FILE( true, EMBED_FILE_CONTEXT::DRAWING_SHEET )`'s box as last left (`embed_file_defaults.drawing_sheet`, true at first). */
+export function keptEmbedDrawingSheet(): boolean {
+  try {
+    return storage()?.getItem(EMBED_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/** `TransferDataFromCustomControls`: the box's choice kept for the next file dialog. */
+export function keepEmbedDrawingSheet(on: boolean): void {
+  try {
+    storage()?.setItem(EMBED_KEY, on ? "true" : "false");
+  } catch {
+    /* refused */
+  }
+}
+
+/** `FILEEXT::KiCadUriPrefix` + `://`. */
+export const EMBED_URI = "kicad-embed://";
+
+/** `EMBEDDED_FILE::GetLink` of a file embedded under `name` (its file name, `AddFile` keeps no folder). */
+export function embeddedLink(name: string): string {
+  return EMBED_URI + (name.split(/[\\/]/).pop() ?? name);
+}
+
+/** The embedded file a drawing sheet name names (`currentWksFileName.Mid( embeddedPrefix.length() )`), or null. */
+export function embeddedName(path: string): string | null {
+  return path.startsWith(EMBED_URI) ? path.slice(EMBED_URI.length) : null;
+}
+
+/** A text's UTF-8 bytes as base64 (what the `set_drawing_sheet` verb's `embed.data` carries). */
+export function base64OfText(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}

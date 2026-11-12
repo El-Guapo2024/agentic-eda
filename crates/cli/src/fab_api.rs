@@ -526,7 +526,7 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     // "Design variant:" (`DIALOG_PLOT::getSelectedVariant`, `board->SetCurrentVariant( .. )` around the plot)
     args.extend(variant_args(&req));
     // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`), which the plot's sheet is drawn from (`PCBNEW_JOBS_HANDLER`'s `--drawing-sheet` override)
-    args.extend(crate::drawing_sheet_api::plot_args(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref())));
+    args.extend(crate::drawing_sheet_api::plot_args(dir, design.drawings.as_ref().map(|d| &d.embedded), design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref())));
     // DXF with "Plot graphic items using their contours" ticked: the polygon mode alone, the graphic items filled, as the dialog plots it -- which
     // `pcb export dxf --use-contours` cannot say (it sketches the graphic items too), so the job goes through kicad-cli's jobset runner
     let by_job = format == PlotFormat::Dxf && args.iter().any(|a| a == "--use-contours");

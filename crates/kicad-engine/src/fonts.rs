@@ -349,6 +349,127 @@ pub fn board_font_uses(design: &Design) -> Vec<FontUse> {
     out
 }
 
+fn push_use(out: &mut Vec<FontUse>, face: Option<&str>, bold: bool, italic: bool) {
+    if !is_stroke(face) {
+        out.push(FontUse { face: face.unwrap_or_default().to_string(), bold, italic });
+    }
+}
+
+fn sorted(mut out: Vec<FontUse>) -> Vec<FontUse> {
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The fonts `SCHEMATIC::GetFonts` walks (KiCad 8303b2ad and 25ec2335 `eeschema/schematic.cpp`): every item of every screen of the hierarchy that is an
+/// `EDA_TEXT` -- a text, a text box, a label of any kind (`SchExtras::text_attrs`' font, bold and italic) -- with an outline face. A symbol's fields and a
+/// table's cells are children of a screen item, not items of the screen, so they are not walked, as KiCad's loop does not reach them.
+pub fn schematic_font_uses(design: &Design) -> Vec<FontUse> {
+    let mut out = Vec::new();
+    let Some(root) = design.schematic.as_ref() else { return out };
+    let mut screens = vec![root];
+    for file in eda_model::sheet_list::reachable_files(design) {
+        if let Some(s) = eda_model::sheet_list::screen_of_file(design, &file) {
+            if !std::ptr::eq(s, root) {
+                screens.push(s);
+            }
+        }
+    }
+    for screen in screens {
+        let x = &screen.extras;
+        for (id, a) in &x.text_attrs {
+            // a free text's bold and italic are in its attributes, a label's in its look, a text box's in its shape
+            let (bold, italic) = match (x.label_looks.get(id), x.graphics.iter().find(|g| &g.id == id).map(|g| &g.shape)) {
+                (Some(l), _) => (l.bold, l.italic),
+                (None, Some(eda_model::sch_extras::SchGraphicKind::TextBox { bold, italic, .. })) => (*bold, *italic),
+                _ => (a.bold, a.italic),
+            };
+            push_use(&mut out, a.font.as_deref(), bold, italic);
+        }
+    }
+    sorted(out)
+}
+
+/// The fonts `LIB_SYMBOL::GetFonts` walks (KiCad 25ec2335 `eeschema/lib_symbol.cpp`: "Use dynamic_cast to catch SCH_TEXTBOX, SCH_TABLECELL, etc."): each drawn
+/// text and text box of the symbol and each of its fields (`LibrarySymbolKeep::field_looks`) with an outline face. (8303b2ad walked the texts only.)
+pub fn library_symbol_font_uses(sym: &eda_model::ir::LibrarySymbol) -> Vec<FontUse> {
+    use eda_model::ir::LibrarySymbolGraphic as G;
+    let mut out = Vec::new();
+    for g in &sym.graphics {
+        match g {
+            G::Text { font, bold, italic, .. } | G::TextBox { font, bold, italic, .. } => push_use(&mut out, font.as_deref(), *bold, *italic),
+            _ => {}
+        }
+    }
+    for f in sym.all_fields() {
+        if let Some(look) = sym.kicad.field_looks.get(&f.name) {
+            push_use(&mut out, look.font.as_deref(), f.bold, f.italic);
+        }
+    }
+    sorted(out)
+}
+
+/// The fonts `FOOTPRINT::GetFonts` walks (`pcbnew/footprint.cpp`): each graphical item of the footprint that is an `EDA_TEXT` -- its texts (`(font (face ..))`
+/// kept in `LibraryFootprintKeep::text_extras`) -- and each of its fields (Reference, Value and the user fields' `FieldLayout::face`), with an outline face; a
+/// library footprint (the Footprint Editor's).
+pub fn library_footprint_font_uses(fp: &eda_model::ir::LibraryFootprint) -> Vec<FontUse> {
+    let mut out = Vec::new();
+    for t in &fp.texts {
+        if let Some(e) = fp.kicad.text_extra(&t.id) {
+            push_use(&mut out, e.face.as_deref(), e.bold, e.italic);
+        }
+    }
+    for l in fp.reference.iter().chain(fp.value.iter()).chain(fp.fields.iter().filter_map(|f| f.layout.as_ref())) {
+        push_use(&mut out, l.face.as_deref(), l.bold, l.italic);
+    }
+    sorted(out)
+}
+
+/// [`library_footprint_font_uses`] of a footprint on the board: its texts as the board has them (`art`, the footprint the model resolves for the part) and its
+/// fields as the board lays them out (`FootprintEdit`'s Reference, Value and user fields, else the footprint's own).
+pub fn board_footprint_font_uses(design: &Design, art: Option<&eda_model::fp_art::FpArt>, reference: &str) -> Vec<FontUse> {
+    let mut out = Vec::new();
+    for t in art.map(|a| a.texts.as_slice()).unwrap_or_default() {
+        push_use(&mut out, t.face.as_deref(), t.layout.bold, t.layout.italic);
+    }
+    if let Some(e) = design.drawings.as_ref().and_then(|d| d.footprint_edits.iter().find(|e| e.id == reference)) {
+        for l in e.reference.iter().chain(e.value.iter()).chain(e.fields.iter().map(|f| &f.layout)) {
+            push_use(&mut out, l.face.as_deref(), l.bold, l.italic);
+        }
+    }
+    sorted(out)
+}
+
+/// `EmbedFonts` of an owner that embeds fonts (`SCHEMATIC`, `LIB_SYMBOL`, `FOOTPRINT`, as their savers call it: `if( GetAreFontsEmbedded() ) EmbedFonts()`): `list`
+/// with the fonts `uses` asks for added, or `list` as it is when it does not embed fonts (the writer drops them, `ClearEmbeddedFonts`) or has them all.
+pub fn with_fonts<'a>(list: &'a EmbeddedFiles, uses: &[FontUse]) -> Cow<'a, EmbeddedFiles> {
+    if !list.fonts || uses.is_empty() {
+        return Cow::Borrowed(list);
+    }
+    let (fonts, _) = text_fonts(uses);
+    if fonts.iter().all(|f| list.has_file(&f.name)) {
+        return Cow::Borrowed(list);
+    }
+    let mut out = list.clone();
+    embed_fonts(&mut out, &fonts);
+    Cow::Owned(out)
+}
+
+/// `SCH_IO_KICAD_SEXPR::Format`'s first step (`if( m_schematic->GetAreFontsEmbedded() ) m_schematic->EmbedFonts()`): the design whose schematic embeds fonts with the
+/// fonts its texts use ([`schematic_font_uses`]) added to the schematic's list (the root sheet's extras).
+pub fn with_schematic_fonts(design: &Design) -> Cow<'_, Design> {
+    let Some(sch) = design.schematic.as_ref() else { return Cow::Borrowed(design) };
+    if !sch.extras.embedded.fonts {
+        return Cow::Borrowed(design);
+    }
+    let Cow::Owned(list) = with_fonts(&sch.extras.embedded, &schematic_font_uses(design)) else { return Cow::Borrowed(design) };
+    let mut out = design.clone();
+    if let Some(s) = out.schematic.as_mut() {
+        s.extras.embedded = list;
+    }
+    Cow::Owned(out)
+}
+
 /// `BOARD::GetFonts`: the files of the fonts `uses` asks for that may be embedded, one per file (`std::set<OUTLINE_FONT*>` keeps one font per face, bold and italic; two that
 /// are the same file are one file to `AddFile`), and the faces left out with the reason.
 pub fn text_fonts(uses: &[FontUse]) -> (Vec<TextFont>, Vec<(FontUse, String)>) {

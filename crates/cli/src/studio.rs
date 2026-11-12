@@ -731,8 +731,9 @@ fn handle(
             None => respond(stream, "404 Not Found", "text/plain", b"no font file"),
         },
         // Page Settings' drawing sheet file: a picked `.kicad_wks` read for the dialog, where to browse, and a file from the person's computer put in the board's folder
-        ("GET", "/api/drawing_sheet") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::pick(dir, &query_value(target, "path")).to_string().as_bytes()),
+        ("GET", "/api/drawing_sheet") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::pick(dir, crate::drawing_sheet_api::document_files(dir, query_value(target, "owner") == "schematic").as_ref(), &query_value(target, "path")).to_string().as_bytes()),
         ("GET", "/api/drawing_sheet/folders") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::folders(dir).to_string().as_bytes()),
+        ("POST", "/api/text/eval") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::eval_texts(dir, target, &body).to_string().as_bytes()),
         ("POST", "/api/drawing_sheet/upload") => respond(stream, "200 OK", "application/json", crate::drawing_sheet_api::upload(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
@@ -1780,7 +1781,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     state["nets"] = json!(board_net_names(&design, &model));
     // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`): the name kept, the file's text the board's sheet is drawn from and why it could not
     // be read; null is KiCad's default sheet
-    state["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()));
+    state["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.drawings.as_ref().map(|d| &d.embedded), design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()));
     Ok(state)
 }
 
@@ -2108,7 +2109,7 @@ pub(crate) fn schematic_json(dir: &Path, sheet_path: &str, clock: eda_model::tex
     let project = crate::text_vars_json::project(dir, &meta.intent, clock);
     let mut v = schematic_json_with(&design, &model, sheet_path, Some((dir, project)));
     // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`), as the board's is in `GET /api/state`
-    v["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref()));
+    v["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.schematic.as_ref().map(|s| &s.extras.embedded), design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref()));
     Ok(v)
 }
 
@@ -3173,7 +3174,9 @@ fn symbol_library_kicad_sym(dir: &Path) -> Result<String, Vec<CheckResult>> {
     let (_, design, _) = board::load(dir)?;
     let lib = design.symbol_library.as_ref().filter(|l| !l.symbols.is_empty()).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", "symbol_library", "the project symbol library has no symbols yet -- open or create one in the Symbol Editor first")])?;
     let syms: Vec<&eda_model::ir::LibrarySymbol> = lib.symbols.iter().collect();
-    Ok(eda_kicad::export_kicad_sym_library_with(&syms, &lib.embedded))
+    // `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`: `if( aSymbol->GetAreFontsEmbedded() ) aSymbol->EmbedFonts()`
+    let embedded = crate::library_api::symbols_with_fonts(&syms, &lib.embedded);
+    Ok(eda_kicad::export_kicad_sym_library_with(&syms, &embedded))
 }
 
 /// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest

@@ -16,9 +16,9 @@ async function getJson<T>(url: string, body?: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
-/** `GET /api/drawing_sheet?path=`: the sheet a name or path points at. */
-export function pickDrawingSheet(path: string): Promise<PickedSheet> {
-  return getJson<PickedSheet>(`/api/drawing_sheet?path=${encodeURIComponent(path)}`);
+/** `GET /api/drawing_sheet?path=`: the sheet a name or path points at; a `kicad-embed://` name is read from the embedded files of `owner`'s document. */
+export function pickDrawingSheet(path: string, owner: "pcb" | "schematic" = "pcb"): Promise<PickedSheet> {
+  return getJson<PickedSheet>(`/api/drawing_sheet?path=${encodeURIComponent(path)}&owner=${owner === "schematic" ? "schematic" : "board"}`);
 }
 
 /** `GET /api/drawing_sheet/folders`: the board's folder and KiCad's template folder (null when it is not on this machine). */

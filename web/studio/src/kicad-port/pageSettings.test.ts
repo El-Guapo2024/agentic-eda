@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  base64OfText,
+  embeddedLink,
+  embeddedName,
+  exportsAnything,
+  initialPageExport,
+  keepPageExport,
+  keptPageExport,
   COMMENT_COUNT,
   DEFAULT_PAPER,
   MAX_PAGE_SIZE_PCBNEW_NM,
@@ -101,4 +108,29 @@ test("the drawing sheet shows the title block with the project's variables expan
   const withShown = { ...stored, shown: { title: "Board B", date: "", rev: "C", company: "", comments: [] } };
   assert.deepEqual(shownTitleBlock(withShown), { title: "Board B", date: "", rev: "C", company: "", comments: [], shown: undefined });
   assert.equal(withShown.title, "Board ${REV}", "the stored block is not changed");
+});
+
+test("CC8: the export boxes start as kept, off for an empty field, and an empty field's box keeps what was kept", () => {
+  const store = new Map<string, string>();
+  const g = globalThis as { localStorage?: unknown };
+  const had = g.localStorage;
+  g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+  try {
+    assert.equal(exportsAnything(keptPageExport()), false, "`EESCHEMA_SETTINGS`' defaults: all off");
+    const tb = titleBlockFields({ title: "T", rev: "", comments: ["c1"] });
+    keepPageExport({ paper: true, revision: true, date: false, title: true, company: false, comments: [true, true, false, false, false, false, false, false, false] }, tb);
+    const kept = keptPageExport();
+    assert.deepEqual([kept.paper, kept.revision, kept.title, kept.comments[0], kept.comments[1]], [true, false, true, true, false], "an empty field's box keeps the old value");
+    const start = initialPageExport(kept, titleBlockFields({ title: "", comments: ["x"] }));
+    assert.deepEqual([start.paper, start.title, start.comments[0]], [true, false, true], "off for an empty field, the paper as kept");
+  } finally {
+    g.localStorage = had;
+  }
+});
+
+test("CC8: an embedded sheet's link and name, and its text as base64", () => {
+  assert.equal(embeddedLink("/home/x/frame.kicad_wks"), "kicad-embed://frame.kicad_wks");
+  assert.equal(embeddedName("kicad-embed://frame.kicad_wks"), "frame.kicad_wks");
+  assert.equal(embeddedName("frame.kicad_wks"), null);
+  assert.equal(new TextDecoder().decode(Uint8Array.from(atob(base64OfText("é@{1}")), (c) => c.charCodeAt(0))), "é@{1}");
 });

@@ -3,6 +3,8 @@
 // Orientation, Keep Upright, X Offset, Y Offset, Knockout, Mirrored and the justification. The buttons are the dialog's: add a field (`OnAddField`: hidden, at the origin, on the
 // fabrication layer, named `Field<n>`), delete (`OnDeleteField`: "The first 4 fields are mandatory."), move up and down (`OnMoveUp` / `OnMoveDown`, never into the mandatory rows).
 // The rows' rules live in kicad-port/fpLibFields.ts.
+import { DatasheetUrlButton } from "../DatasheetUrlButton";
+import type { EmbeddedOwner } from "../../api/embeddedTypes";
 import { useState } from "react";
 import type { FieldLayoutCmd } from "../../api/types";
 import { MANDATORY_ROWS, moveRow, newFieldLayout, newRowName, type LibFieldRow } from "../../kicad-port/fpLibFields";
@@ -23,7 +25,7 @@ export interface FootprintFieldsGridProps {
 const cell = { padding: "1px 3px" } as const;
 const norm360 = (a: number): number => ((a % 360) + 360) % 360;
 
-export function FootprintFieldsGrid({ rows, onChange, units, layers, layerSetup, onError }: FootprintFieldsGridProps) {
+export function FootprintFieldsGrid({ rows, onChange, units, layers, layerSetup, onError, datasheetStack = [] }: FootprintFieldsGridProps & { datasheetStack?: readonly EmbeddedOwner[] }) {
   const [selected, setSelected] = useState(0);
   const [more, setMore] = useState(false);
   const setRow = (i: number, patch: Partial<LibFieldRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -111,6 +113,7 @@ export function FootprintFieldsGrid({ rows, onChange, units, layers, layerSetup,
                   </td>
                   <td style={cell}>
                     <input value={r.text} aria-label={`Value of ${r.name}`} data-testid={`lib-field-text-${i}`} onChange={(e) => setRow(i, { text: e.target.value })} style={{ width: 130 }} />
+                    {r.name === "Datasheet" && <DatasheetUrlButton value={r.text} stack={datasheetStack} />}
                   </td>
                   <td style={cell}>
                     <input type="checkbox" checked={r.layout.visible !== false} aria-label={`Show ${r.name}`} data-testid={`lib-field-show-${i}`} onChange={(e) => setLayout(i, { visible: e.target.checked })} />

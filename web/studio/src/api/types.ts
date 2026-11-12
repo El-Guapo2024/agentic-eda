@@ -2149,9 +2149,9 @@ export type Cmd =
   /** `common.Control.pageSettings` -- the board's paper and title block, one undo step (`BOARD_EDITOR_CONTROL::PageSettings`). Refused when nothing changes. */
   | { op: "set_board_page"; page: CmdPage; title_block: TitleBlock }
   /** The same for the schematic (`SCH_EDITOR_CONTROL::PageSetup`). */
-  | { op: "set_schematic_page"; page: CmdPage; title_block: TitleBlock }
+  | { op: "set_schematic_page"; page: CmdPage; title_block: TitleBlock; export?: PageExport }
   // Page Settings' "Drawing sheet:" (`DIALOG_PAGES_SETTINGS::OnWksFileSelection`): the board's (`schematic` false) or the schematic's `.kicad_wks`, null for KiCad's default
-  | { op: "set_drawing_sheet"; schematic: boolean; path: string | null }
+  | { op: "set_drawing_sheet"; schematic: boolean; path: string | null; embed?: { name: string; data: string }; remove_embedded?: string[] }
   /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
   | { op: "repair_board" }
   /** `pcbnew.EditorControl.exportFootprints` (`ExportFootprintsToLibrary`): every board footprint, as the board has it, over the project library's entry of its name. */
@@ -3427,6 +3427,17 @@ export interface PageInfo {
   /** A User paper's width and height, nm. */
   user_size_nm: [Nm, Nm] | null;
   size_nm: [Nm, Nm] | null;
+}
+
+/** The schematic Page Settings' "Export to other sheets" boxes (`page_settings::PageExport`, `DIALOG_EESCHEMA_PAGE_SETTINGS`). */
+export interface PageExport {
+  paper: boolean;
+  revision: boolean;
+  date: boolean;
+  title: boolean;
+  company: boolean;
+  /** Comment 1 .. 9. */
+  comments: boolean[];
 }
 
 /** What `set_board_page` / `set_schematic_page` take for the paper: `PageSettings` of the model (no `size_nm`). */

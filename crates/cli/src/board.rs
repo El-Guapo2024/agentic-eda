@@ -1297,7 +1297,9 @@ fn outside_history(cmd: &Cmd) -> bool {
         // the studio sends a schematic command on the sheet in view, and a dialog's close may come as a batch of its own
         Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => outside_history(cmd),
         Cmd::Batch { cmds } => !cmds.is_empty() && cmds.iter().all(outside_history),
-        _ => matches!(cmd, Cmd::SetPlotSettings { .. } | Cmd::SetIpc2581Bom { .. } | Cmd::SetZoneDefaults { .. } | Cmd::SetBomView { .. }),
+        // Page Settings' drawing sheet file is a project setting (`BASE_SCREEN::m_DrawingSheetFileName`, saved in the project's
+        // `page_layout_descr_file` by `SavePageSettings`, outside the commit; CC8)
+        _ => matches!(cmd, Cmd::SetPlotSettings { .. } | Cmd::SetIpc2581Bom { .. } | Cmd::SetZoneDefaults { .. } | Cmd::SetBomView { .. } | Cmd::SetDrawingSheet { .. }),
     }
 }
 
@@ -1312,13 +1314,26 @@ const BOM_VIEW_KEYS: [&str; 4] = ["bom_presets", "bom_settings", "bom_fmt_preset
 /// numbering, `sch_drawing_tools.cpp` / `annotate.cpp` / `sch_editor_control.cpp::Paste`), outside every `SCH_COMMIT`, and nothing but
 /// `REFDES_TRACKER::Clear` / `Deserialize` takes a number back out, so Undo, Redo and a cancelled carry (`commit.Revert()`) all leave it as
 /// it is: a number given and then undone stays given, and with "Allow reference reuse" off the next placement skips it.
-type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>, Option<eda_model::ir::Zone>, [Option<serde_json::Value>; 4], std::collections::BTreeSet<String>);
+/// The last member is the board's and the schematic's drawing sheet file ([`Cmd::SetDrawingSheet`], a project setting in KiCad), each with the embedded file a
+/// `kicad-embed://` name points at (`OnWksFileSelection` embeds it outside the commit too).
+type SheetChoice = (Option<String>, Option<eda_model::embedded_files::EmbeddedFile>);
+type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>, Option<eda_model::ir::Zone>, [Option<serde_json::Value>; 4], std::collections::BTreeSet<String>, [SheetChoice; 2]);
+
+/// A drawing sheet name with the embedded file of `list` it names, if it names one.
+fn sheet_choice(name: Option<&String>, list: Option<&eda_model::embedded_files::EmbeddedFiles>) -> SheetChoice {
+    let file = name.and_then(|n| n.strip_prefix(eda_ops::drawing_sheet::EMBED_PREFIX)).and_then(|n| list.and_then(|l| l.get(n)).cloned());
+    (name.cloned(), file)
+}
 
 fn outside_history_of(design: &eda_model::ir::Design) -> OutsideHistory {
     let (plot, ipc, zone) = design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone(), d.zone_defaults.clone())).unwrap_or_default();
     let project = design.schematic.as_ref().and_then(|s| s.extras.project_schematic.as_ref());
     let used = design.schematic.as_ref().map(|s| s.extras.used_designators.clone()).unwrap_or_default();
-    (plot, ipc, zone, BOM_VIEW_KEYS.map(|k| project.and_then(|p| p.get(k)).cloned()), used)
+    let sheets = [
+        sheet_choice(design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_ref()), design.drawings.as_ref().map(|d| &d.embedded)),
+        sheet_choice(design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_ref()), design.schematic.as_ref().map(|s| &s.extras.embedded)),
+    ];
+    (plot, ipc, zone, BOM_VIEW_KEYS.map(|k| project.and_then(|p| p.get(k)).cloned()), used, sheets)
 }
 
 /// What [`outside_history`] commands store (in the design before an undo or a redo), carried into the design it restores. A whole-design
@@ -1328,7 +1343,21 @@ fn keep_outside_history(kept: OutsideHistory, mut restored: eda_model::ir::Desig
     if kept == now {
         return restored;
     }
-    let (plot, ipc, zone, bom, used) = kept;
+    let (plot, ipc, zone, bom, used, sheets) = kept;
+    let [(board_name, board_file), (sch_name, sch_file)] = sheets;
+    if (&board_name, &board_file) != (&now.5[0].0, &now.5[0].1) {
+        let d = restored.drawings.get_or_insert_with(Default::default);
+        d.drawing_sheet = board_name;
+        if let Some(f) = board_file {
+            d.embedded.put(f);
+        }
+    }
+    if let (true, Some(sch)) = ((&sch_name, &sch_file) != (&now.5[1].0, &now.5[1].1), restored.schematic.as_mut()) {
+        sch.extras.drawing_sheet = sch_name;
+        if let Some(f) = sch_file {
+            sch.extras.embedded.put(f);
+        }
+    }
     if used != now.4 {
         if let Some(sch) = restored.schematic.as_mut() {
             sch.extras.used_designators = used;
@@ -1688,7 +1717,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
     let with_models = crate::embedded_api::with_collected_models(cmd, dir, &design, &model)?;
     let cmd = with_models.as_ref().unwrap_or(cmd);
     // The Embedded Files panel's OK with "Embed fonts" ticked: the files of the fonts the board's texts use are read here, into the command (`crate::embedded_api`).
-    let with_fonts = crate::embedded_api::with_text_fonts(cmd, &design);
+    let with_fonts = crate::embedded_api::with_text_fonts(cmd, &design, &model);
     let cmd = with_fonts.as_ref().unwrap_or(cmd);
     // KiCad 10's via stitching: the vias a `set_via_stitch` leaves out are placed here, from the zone fills (`crate::via_stitch_api`).
     let with_vias = crate::via_stitch_api::with_planned_vias(cmd, dir, &design, &model, meta.snap_nm, meta.spacing_nm);
@@ -2035,9 +2064,15 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetIpc2581Bom { bom } => format!("ipc2581-bom {}", serde_json::to_string(bom).unwrap_or_default()),
         Cmd::SetGridOrigin { at: Some(p) } => format!("grid-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetGridOrigin { at: None } => "grid-origin --reset".to_string(),
-        Cmd::SetDrawingSheet { schematic, path } => format!("{}drawing-sheet {}", if *schematic { "schematic " } else { "" }, path.as_deref().map_or("--default".to_string(), |p| format!("\"{p}\""))),
+        Cmd::SetDrawingSheet { schematic, path, embed, remove_embedded } => format!(
+            "{}drawing-sheet {}{}{}",
+            if *schematic { "schematic " } else { "" },
+            path.as_deref().map_or("--default".to_string(), |p| format!("\"{p}\"")),
+            embed.as_ref().map_or(String::new(), |e| format!(" --embed \"{}\"", e.name)),
+            remove_embedded.iter().map(|n| format!(" --remove-embedded \"{n}\"")).collect::<String>()
+        ),
         Cmd::SetBoardPage { page, title_block } => format!("page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
-        Cmd::SetSchematicPage { page, title_block } => format!("schematic page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
+        Cmd::SetSchematicPage { page, title_block, .. } => format!("schematic page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
         Cmd::RepairBoard => "repair".to_string(),
         Cmd::ExportFootprintsToLibrary => "export footprints".to_string(),
 
@@ -3637,7 +3672,7 @@ pub(crate) mod tests {
         step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k ${REV}".into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
         step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("${R1:Value} twin, ${Footprint} ${FOOTPRINT_NAME}".into()), footprint: None, datasheet: None }, false, "ui").unwrap();
         step(&dir, Cmd::AddSchText { content: "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV}".into(), at: Point { x: mm(15.0), y: mm(5.0) }, angle_millideg: 0, size_nm: mm(1.27) }, false, "ui").unwrap();
-        step(&dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block: eda_model::ir::TitleBlock { title: "Main ${REV}".into(), ..Default::default() } }, false, "ui").unwrap();
+        step(&dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block: eda_model::ir::TitleBlock { title: "Main ${REV}".into(), ..Default::default() }, export: Default::default() }, false, "ui").unwrap();
 
         let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
         let sym = |r: &str| sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == r).unwrap().clone();
@@ -3773,7 +3808,7 @@ pub(crate) mod tests {
         step(dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some(texts[1].into()), footprint: None, datasheet: None }, false, "ui").unwrap();
         step(dir, Cmd::AddSchText { content: texts[2].into(), at: Point { x: mm(15.0), y: mm(30.0) }, angle_millideg: 0, size_nm: mm(1.27) }, false, "ui").unwrap();
         let title_block = eda_model::ir::TitleBlock { title: texts[3].into(), ..Default::default() };
-        step(dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block }, false, "ui").unwrap();
+        step(dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_nm: None }, title_block, export: Default::default() }, false, "ui").unwrap();
     }
 
     /// The same proof on the schematic: kicad-cli's plot of a sheet whose symbols' values, free text and title block name variables is the plot of the sheet
@@ -4258,6 +4293,17 @@ pub(crate) mod tests {
         undo(&dir, "test", None).unwrap();
         assert_eq!(aux(&dir).as_deref(), Some("(useauxorigin yes)"), "an unscoped undo (the CLI's) keeps them too");
         assert!(undo(&dir, "test", Some(Domain::Pcb)).is_err(), "and there was no step of their own");
+
+        // Page Settings' drawing sheet (a project setting, `SavePageSettings`) and the sheet it embedded are no step either (CC8)
+        let data = eda_kicad::embedded::base64_encode(b"(kicad_wks (version 20231118))");
+        let embed = eda_ops::drawing_sheet::EmbeddedSheet { name: "frame.kicad_wks".into(), data };
+        redo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        step(&dir, Cmd::SetDrawingSheet { schematic: false, path: Some("kicad-embed://frame.kicad_wks".into()), embed: Some(embed), remove_embedded: Vec::new() }, false, "test").unwrap();
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(r1(&dir), was, "the undo takes back the move");
+        let d = load(&dir).unwrap().1.drawings.unwrap();
+        assert_eq!(d.drawing_sheet.as_deref(), Some("kicad-embed://frame.kicad_wks"), "the sheet stays through the undo");
+        assert!(d.embedded.get("frame.kicad_wks").is_some(), "and so does the file it names");
 
         // Export IPC-2581's BOM columns, kept in the project by KiCad (`TransferDataFromWindow`), are no step either.
         let bom = eda_model::plot_params::Ipc2581Bom { dist_pn: "LCSC".into(), dist: "LCSC".into(), ..Default::default() };

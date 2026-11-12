@@ -5,6 +5,7 @@
 // (`wxPG_ACTION_NEXT_PROPERTY`), Escape puts the old value back; a refused value shows its message above the grid (`ShowInfoBarError` of `valueChanging`).
 //
 // The model comes from kicad-port/propertyGrid.ts (`buildGrid`); what an edit does is the caller's `onCommit` (it plans the commands and sends them as one batch).
+import { DatasheetUrlButton } from "../DatasheetUrlButton";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { editText, formatValue, parseValue, type GridModel, type GridRow } from "../../kicad-port/propertyGrid";
 import type { PropValue } from "../../kicad-port/propertyManager";
@@ -300,6 +301,8 @@ function TextEditor({ row, units, xf, commit, fail }: RowProps) {
         onKeyDown={onKeyDown}
       />
       {suffix && <span className="prop-unit">{suffix}</span>}
+      {/* `PG_URL_EDITOR` on a Datasheet row: no files stack (`GetAssociatedDocument( m_frame, filename, &m_frame->Prj() )`), so a kicad-embed:// link opens nothing */}
+      {row.name === "Datasheet" && row.kind === "string" && !mixed && <DatasheetUrlButton value={initial} stack={[]} />}
     </>
   );
 }

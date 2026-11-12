@@ -40,7 +40,8 @@ pub fn drawing_sheet_in(board_dir: &std::path::Path, stored: &str) -> String {
     let rest = stored.strip_prefix("${KIPRJMOD}").map(|r| r.trim_start_matches(['/', '\\']));
     match rest {
         Some(r) => crate::library_table::absolute(std::path::Path::new(r), board_dir).display().to_string(),
-        None if stored.starts_with("${") || stored.starts_with("$(") || std::path::Path::new(stored).is_absolute() => stored.to_string(),
+        // an embedded sheet (`kicad-embed://name`) is the document's own file, named as it is
+        None if stored.starts_with("${") || stored.starts_with("$(") || stored.starts_with("kicad-embed://") || std::path::Path::new(stored).is_absolute() => stored.to_string(),
         None => crate::library_table::absolute(std::path::Path::new(stored), board_dir).display().to_string(),
     }
 }

@@ -182,7 +182,7 @@ export function FootprintLibraryPropertiesDialog() {
             <EmbeddedFilesPanel owner={{ kind: "library_footprint", name: fp.name }} run={api.cmd} version={studio.version} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
           )}
           <div style={{ display: tab === "general" ? undefined : "none" }}>
-            <FootprintFieldsGrid rows={rows} onChange={setRows} units={units} layers={layers} layerSetup={layerSetup} onError={setError} />
+            <FootprintFieldsGrid rows={rows} onChange={setRows} units={units} layers={layers} layerSetup={layerSetup} onError={setError} datasheetStack={[{ kind: "library_footprint", name: fp.name }]} />
             {box("Metadata")}
             <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
               <span>Footprint name:</span>

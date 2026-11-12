@@ -274,6 +274,50 @@ fn the_fonts_box_takes_in_the_fonts_the_boards_texts_use() {
     assert!(names_listed(&dir, "/api/embedded?owner=board").is_empty(), "one undo");
 }
 
+/// CC7: the schematic's, a library symbol's and a library footprint's panels take in the fonts their texts use (`SCHEMATIC::GetFonts`, `LIB_SYMBOL::GetFonts`,
+/// `FOOTPRINT::GetFonts`), and their saves embed them when they embed fonts (`SCH_IO_KICAD_SEXPR::Format`, `SaveSymbol`, `FP_CACHE::Save`: `EmbedFonts`).
+#[test]
+fn the_schematic_symbol_and_footprint_panels_take_in_their_texts_fonts_and_their_saves_embed_them() {
+    let dir = scratch("embedded_other_fonts");
+    setup(&dir);
+    if eda_kicad_engine::fonts::find_font("DejaVu Sans", false, false).is_none_or(|f| !f.path.ends_with("DejaVuSans.ttf")) {
+        eprintln!("skipped: fontconfig has no DejaVu Sans here");
+        return;
+    }
+    let (_, mut design, _) = load(&dir).unwrap();
+    // a schematic text in DejaVu Sans, a label in it bold, one in the stroke font
+    let sch = design.schematic.get_or_insert_with(Default::default);
+    let attrs = |font: &str, bold: bool| eda_model::sch_extras::TextAttrs { font: Some(font.into()), bold, ..Default::default() };
+    sch.extras.text_attrs.insert("txt_a".into(), attrs("DejaVu Sans", false));
+    sch.extras.text_attrs.insert("txt_b".into(), attrs("DejaVu Sans", true));
+    sch.extras.text_attrs.insert("txt_c".into(), attrs("KiCad Font", false));
+    // a library symbol whose text is in DejaVu Sans
+    let mut sym = eda_model::ir::LibrarySymbol::new_empty("Lib:Fonted");
+    sym.graphics.push(serde_json::from_value(serde_json::json!({ "kind": "text", "id": "t1", "unit": 0, "body_style": 1, "text": "F", "at": { "x": 0.0, "y": 0.0 }, "angle_deg": 0.0, "size_mm": 1.27, "font": "DejaVu Sans" })).unwrap());
+    let lib = design.symbol_library.get_or_insert_with(Default::default);
+    lib.symbols.push(sym);
+    let mut list = eda_model::embedded_files::EmbeddedFiles::default();
+    list.fonts = true;
+    lib.embedded.insert("Lib:Fonted".into(), list.clone());
+    design.schematic.as_mut().unwrap().extras.embedded = list;
+    crate::board::save(&dir, &design).unwrap();
+
+    let names = |target: &str| -> Vec<String> { json_of(&crate::embedded_api::fonts(&dir, target))["fonts"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect() };
+    assert_eq!(names("/api/embedded/fonts?owner=schematic"), ["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]);
+    assert_eq!(names("/api/embedded/fonts?owner=library_symbol&id=Lib%3AFonted"), ["DejaVuSans.ttf"]);
+    // the saves
+    let (_, design, _) = load(&dir).unwrap();
+    let saved = eda_kicad_engine::fonts::with_schematic_fonts(&design);
+    assert_eq!(saved.schematic.as_ref().unwrap().extras.embedded.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]);
+    let text = crate::library_api::symbol_kicad_sym_any(&dir, "Lib:Fonted").unwrap();
+    assert!(text.contains("(embedded_fonts yes)") && text.contains("DejaVuSans.ttf"), "the symbol's library save embeds its font");
+    // a library that does not embed fonts writes none
+    let mut off = design.clone();
+    off.symbol_library.as_mut().unwrap().embedded.get_mut("Lib:Fonted").unwrap().fonts = false;
+    crate::board::save(&dir, &off).unwrap();
+    assert!(!crate::library_api::symbol_kicad_sym_any(&dir, "Lib:Fonted").unwrap().contains("DejaVuSans.ttf"));
+}
+
 /// `GetAssociatedDocument`'s `kicad-embed://` branch: the first list of the stack that has the file gives it, served with its type; no list, or none that has it, is a 404.
 #[test]
 fn a_datasheet_named_by_kicad_embed_is_served_from_the_first_list_of_the_stack_that_has_it() {
