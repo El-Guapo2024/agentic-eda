@@ -2,7 +2,8 @@
 // kicad-port/sim/simModelBuiltin.ts, simModelDialog.ts, components/simulator/SimModelDialog.tsx), opened from Symbol Properties'
 // "Simulation Model...":
 //   a resistor: inferred from its Value (Built-in, Resistor, Ideal), its value edited in the Parameters grid, "Save parameter 'Resistance (r)' in
-//   Value field" unticked and ticked again, the Code tab, OK writing Value, Sim.Device and Sim.Pins in one undo step;
+//   Value field" unticked and ticked again, the Code tab, OK handing Value, Sim.Device and Sim.Pins (shown) to Symbol Properties, whose OK
+//   writes them in one undo step;
 //   a voltage source: DC made a Sine, its parameters typed (the delay, damping and phase filled with 0 as KiCad's autofill does), the AC group
 //   expanded, the checkbox disabled, the Code tab, OK writing Sim.Type and Sim.Params;
 //   a diode: its parameters in their categories, a model and an instance parameter, the Code tab's .model card, OK writing Sim.Params;
@@ -64,11 +65,28 @@
     await sleep(300);
     return !!dlg();
   };
-  const closeProperties = async () => {
-    click([...document.querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "Cancel"));
-    await sleep(300);
+  /** The Simulation Model dialog's OK: it hands its fields to Symbol Properties (`OnEditSpiceModel`), which still shows. */
+  const simOk = async () => { click($("sim-model-ok")); const t0 = Date.now(); while (dlg() && Date.now() - t0 < 8000) await sleep(200); await sleep(300); return !dlg(); };
+  const propsDialog = () => [...document.querySelectorAll(".dialog")].find((d) => d.querySelector('[data-testid="symbol-sim-model"]')) ?? null;
+  /** Symbol Properties' OK: what applies the fields, one undo step. */
+  const propsOk = async () => {
+    const b = [...(propsDialog()?.querySelectorAll(".dialog-footer button.primary") ?? [])].find((x) => x.textContent.trim() === "OK");
+    click(b);
+    const t0 = Date.now();
+    while (propsDialog() && Date.now() - t0 < 8000) await sleep(200);
+    await sleep(700);
+    return !propsDialog();
   };
-  const ok = async () => { click($("sim-model-ok")); const t0 = Date.now(); while (dlg() && Date.now() - t0 < 8000) await sleep(200); await sleep(500); return !dlg(); };
+  const ok = async () => (await simOk()) && (await propsOk());
+  /** KiCad's error box (`DisplayErrorMessage`): its text, closed with OK. */
+  const messageBox = async () => {
+    const t0 = Date.now();
+    while (!document.querySelector('[data-testid="message-box"]') && Date.now() - t0 < 3000) await sleep(100);
+    const text = document.querySelector('[data-testid="message-box-text"]')?.textContent ?? null;
+    click(document.querySelector('[data-testid="message-box-ok"]'));
+    await sleep(200);
+    return text;
+  };
 
   // ---- the board
   const schematic = await fetch("/api/schematic", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
@@ -105,12 +123,20 @@
     await sleep(200);
     const cells = [...(dlg()?.querySelectorAll('[data-testid="sim-model-pin-grid"] select') ?? [])].map((c) => c.value);
     t(cells.join(" | ") === '1 ("+") | 2 ("-")', `the pin grid: ${cells.join(" | ")}`);
-    t(await ok(), "OK closes the dialog");
+    t(await simOk(), "OK closes the dialog");
+    // `OnEditSpiceModel`: Symbol Properties takes the fields, its own OK applies them (KiCad's one undo step)
+    t(JSON.stringify((await fields("R1")).fields) === "{}", "nothing written before Symbol Properties' OK");
+    const valueBox = [...(propsDialog()?.querySelectorAll("input") ?? [])].find((i) => i.value === "2.2k");
+    t(!!valueBox, "Symbol Properties shows the new Value");
+    const shownBox = (name) => propsDialog()?.querySelector(`input[aria-label="Show ${name}"]`) ?? null;
+    t(shownBox("Sim.Device")?.checked === true && shownBox("Sim.Pins")?.checked === true, "the inference's fields are new rows, shown (SetFieldValue's aIsVisible true)");
+    t(await propsOk(), "Symbol Properties' OK");
     const after = await fields("R1");
     t(after.value === "2.2k" && after.fields["Sim.Device"] === "R" && after.fields["Sim.Pins"] === "1=+ 2=-" && !("Sim.Params" in after.fields), `written: ${after.value} ${JSON.stringify(after.fields)}`);
-    const valueBox = [...document.querySelectorAll(".dialog input")].find((i) => i.value === "2.2k");
-    t(!!valueBox, "Symbol Properties shows the new Value");
-    await closeProperties();
+    const sch = await fetch("/api/schematic", { cache: "no-store" }).then((r) => r.json());
+    const r1 = sch.symbols.find((x) => x.id === "R1");
+    const vis = (n) => r1?.fields?.find((f) => f.name === n)?.visible;
+    t(vis("Sim.Device") === true && vis("Sim.Pins") === true, `on the sheet, visible as KiCad's: ${JSON.stringify(r1?.fields?.map((f) => [f.name, f.visible]))}`);
     await E.run("common.Interactive.undo");
     await sleep(900);
     const undone = await fields("R1");
@@ -141,8 +167,8 @@
     t((await codeTab()) === "V NC--0 NC--1 DC 0.5 SIN( 0.5 2 10k 0 0 0 ) AC 1", `the Code tab: ${$("sim-model-code")?.value}`);
     t(await ok(), "OK");
     const after = await fields("V1");
-    t(after.fields["Sim.Type"] === "SIN" && after.fields["Sim.Params"] === "dc=0.5 ampl=2 f=10k td=0 theta=0 phase=0 ac=1" && after.value === "${SIM.PARAMS}", `written: ${after.value} ${JSON.stringify(after.fields)}`);
-    await closeProperties();
+    // the inferred DC source's Value back as it was (KiCad 25ec2335's `RestoreInferredValue`: a sine's parameters are not saved in the Value)
+    t(after.fields["Sim.Type"] === "SIN" && after.fields["Sim.Params"] === "dc=0.5 ampl=2 f=10k td=0 theta=0 phase=0 ac=1" && after.value === "5", `written: ${after.value} ${JSON.stringify(after.fields)}`);
   });
 
   await scenario("a diode: its parameters by category, a model and an instance parameter, the Code tab's .model card, OK", async (t) => {
@@ -163,7 +189,6 @@
     t(await ok(), "OK");
     const after = await fields("D1");
     t(after.fields["Sim.Params"] === "m=2 is=1e-14 n=1.8" && after.fields["Sim.Device"] === "D" && after.fields["Sim.Pins"] === "1=K 2=A", `written: ${JSON.stringify(after.fields)}`);
-    await closeProperties();
   });
 
   await scenario("kicad-cli's SPICE netlist holds the lines the Code tabs showed", async (t) => {
@@ -188,7 +213,13 @@
     await sleep(300);
     const list = $("sim-model-list");
     t($("sim-model-library")?.checked === true && [...(list?.options ?? [])].map((o) => o.value).join(",") === "D1N4148,DFAST" && list.value === "D1N4148", `the library's models, the first chosen: ${list?.value}`);
-    t(!$("sim-model-param-grid"), "no grid for a library model (GAPS 34)");
+    // the library's .model parameters in the grid (ReadModel), through the base model
+    click(dlg().querySelector('tr[data-category="DC"] td'));
+    click(dlg().querySelector('tr[data-category="Limiting Values"] td'));
+    await sleep(200);
+    t(cell("is")?.value === "2.52n" && cell("n")?.value === "1.752" && cell("rs")?.value === "0.568", `D1N4148's values: is=${cell("is")?.value} n=${cell("n")?.value} rs=${cell("rs")?.value}`);
+    t((await codeTab()).startsWith(".model D1N4148 D\n"), `the Code tab's card under the list's name: ${JSON.stringify($("sim-model-code")?.value.slice(0, 40))}`);
+    await paramsTab();
     setValue(list, "DFAST");
     await sleep(300);
     click($("sim-model-pins-tab"));
@@ -198,7 +229,6 @@
     t(await ok(), "OK");
     const f = (await fields("D1")).fields;
     t(f["Sim.Library"] === "models/diode.lib" && f["Sim.Name"] === "DFAST" && f["Sim.Device"] === "D" && f["Sim.Pins"] === "1=K 2=A" && !("Sim.Params" in f), `written: ${JSON.stringify(f)}`);
-    await closeProperties();
     const nl = (await post("/api/sim/circuit", { command: ".op" })).netlist ?? "";
     t(nl.includes("\nD1 /MID GND DFAST\n") && /\.include ".*diode\.lib"/.test(nl), `kicad-cli includes the library and names its model: ${nl.split("\n").filter((l) => l.startsWith("D1") || l.startsWith(".include")).join(" / ")}`);
   });
@@ -228,7 +258,8 @@
     setValue($("sim-model-waveform"), "Rectangular wave driver");
     await sleep(300);
     t(!!row("ton") && !!row("vcc"), "the driver's parameters (vcc, ton..)");
-    t($("sim-model-info")?.textContent.includes("Unknown simulation model pin 'K'"), `the diode's Sim.Pins do not read for it: KiCad's error (${$("sim-model-info")?.textContent})`);
+    const box = await messageBox();
+    t(box?.includes("Unknown simulation model pin 'K'"), `the diode's Sim.Pins do not read for it: KiCad's error box (${box})`);
     await typeParam("ton", "5n");
     t(await ok(), "OK");
     const after = await fields("D2");
@@ -236,7 +267,6 @@
     t(f["Sim.Library"] === "models/io.ibs" && f["Sim.Name"] === "CHIP" && f["Sim.Ibis.Pin"] === "1" && f["Sim.Ibis.Model"] === "drv", `the library and IBIS fields: ${JSON.stringify(f)}`);
     t(f["Sim.Device"] === "IBIS" && f["Sim.Type"] === "RECTDRIVER" && f["Sim.Params"] === "ton=5n", `the model's: ${JSON.stringify(f)}`);
     t(f["Sim.Pins"] === "1=IN/OUT 2=GND", `the pins kept their rows' model pin indices: ${f["Sim.Pins"]}`);
-    await closeProperties();
   });
 
   await scenario("nothing logged an error", async (t) => {
