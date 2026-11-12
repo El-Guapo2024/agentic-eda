@@ -103,6 +103,8 @@ export function FpZoneDialog() {
   const close = useClose("zone");
   const id = editingId(st, "zone");
   const pending = st.pendingItem?.kind === "zone" ? st.pendingItem.zone : null;
+  const first = st.pendingItem?.kind === "zone" ? (st.pendingItem.first ?? null) : null;
+  const dispatch = useFpDispatch();
   const zone = id ? ((items(st).zones ?? []).find((z) => z.id === id) ?? null) : pending;
   if (!zone) return null;
   const shown = id ? display(st)?.zones.find((z) => z.id === id) : undefined;
@@ -120,9 +122,17 @@ export function FpZoneDialog() {
     layerName,
     units,
     lockable: false,
-    outlinePoints: id ? null : zone.outline.length,
+    outlinePoints: id || first ? null : zone.outline.length,
     placementSources: async () => NO_CHOICES,
     submit: async (r) => {
+      if (first) {
+        // asked at Draw Rule Area's first corner (`createNewZone`): the outline starts there with these settings (components/footprint/fpItemTools.ts)
+        dispatch({ type: "SET_ITEM_DRAW", draw: { tool: "rule_area", zone: fpZoneWithSettings(zone, r.form, r.layers, r.name) } });
+        dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind: "polygon", pts: [first] } });
+        dispatch({ type: "SET_SELECTION", refs: [] }); // `OnFirstPoint`: `selectionClear`
+        close();
+        return;
+      }
       if (await commit(id, { zone: fpZoneWithSettings(zone, r.form, r.layers, r.name) })) close();
     },
     remove: id

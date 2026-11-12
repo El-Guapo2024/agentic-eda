@@ -222,7 +222,7 @@
     t(eyeOn(layerRow("F.SilkS")) && JSON.stringify(await pick(0, SILK_Y)) === JSON.stringify([silk.id]), "its eye on again: the line is picked again");
   });
 
-  await scenario("the Objects rows hide the pads, the Reference and the Value: the canvas draws less there and does not pick them", async (t) => {
+  await scenario("the Objects rows hide the pads, the Reference and the Value: the canvas draws less there; the Reference and the Value are not picked, a pad is", async (t) => {
     const fp = await footprint(name);
     const p = (fp.pads ?? [])[0];
     if (!t(!!p, `the footprint has a pad: ${p?.id}`)) return;
@@ -235,13 +235,18 @@
       ["footprint_values", val, "field:Value"],
     ];
     for (const [id, at, item] of cases) {
-      const before = ink(at.x - 300_000, at.y - 300_000, at.x + 300_000, at.y + 300_000, 0);
+      // a pad's box takes its copper ring (the hole alone is drawn near the background colour, which is the theme's since UI-LEFT-2 FF5)
+      const r = id === "pads" ? 700_000 : 300_000;
+      const before = ink(at.x - r, at.y - r, at.x + r, at.y + r, 0);
       const picked = await pick(at.x, at.y);
       t(JSON.stringify(picked) === JSON.stringify([item]), `${id}: a click at ${at.x},${at.y} picks ${item}: ${picked}`);
       await clickEye(objectRow(id));
-      const after = ink(at.x - 300_000, at.y - 300_000, at.x + 300_000, at.y + 300_000, 0);
+      const after = ink(at.x - r, at.y - r, at.x + r, at.y + r, 0);
       t(!eyeOn(objectRow(id)) && after < before * 0.5, `${id} off: drawn less (${before} -> ${after})`);
-      t(!(await pick(at.x, at.y)).includes(item), `${id} off: ${item} is not picked`);
+      // `Selectable` asks no Pads row of a pad (the element visibility it asks of zones and points is not the rows' in this editor either): a hidden pad is still
+      // picked, as KiCad's is (UI-LEFT-2 FF5); a hidden Reference or Value is not (`LAYER_FP_REFERENCES`, `LAYER_FP_VALUES` are the view's layers)
+      if (id === "pads") t((await pick(at.x, at.y)).includes(item), `${id} off: ${item} is still picked (KiCad's Selectable)`);
+      else t(!(await pick(at.x, at.y)).includes(item), `${id} off: ${item} is not picked`);
       await clickEye(objectRow(id));
       t(eyeOn(objectRow(id)), `${id} on again`);
     }

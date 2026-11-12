@@ -261,8 +261,8 @@ fn shape_and_text_dialogs_set_the_looks_kept_by_id() {
     let lib = |b: &Board| b.design().footprint_library.as_ref().unwrap().by_name("Lib:Looks").unwrap().clone();
     let g = lib(&b).graphics[0].clone();
     let t = lib(&b).texts[0].clone();
-    b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "dash".into(), hatch: Some(eda_model::fp_art::Hatch::Hatch) }) })).unwrap();
-    assert!(b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "wavy".into(), hatch: None }) })).is_err());
+    b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "dash".into(), hatch: Some(eda_model::fp_art::Hatch::Hatch), endings: None }) })).unwrap();
+    assert!(b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "wavy".into(), hatch: None, endings: None }) })).is_err());
     b.apply(&Cmd::FpItem(FpItemCmd::SetText { footprint: "Lib:Looks".into(), id: t.id.clone(), text: t.clone(), look: Some(TextLook { bold: true, italic: true, valign: 1, width_nm: Some(mm(1.5)), knockout: false, keep_upright: false, face: None }) })).unwrap();
     let fp = lib(&b);
     assert_eq!(fp.kicad.stroke_types.get(g.id()).map(String::as_str), Some("dash"));
@@ -274,7 +274,7 @@ fn shape_and_text_dialogs_set_the_looks_kept_by_id() {
     b.apply(&Cmd::FpItem(FpItemCmd::SetText { footprint: "Lib:Looks".into(), id: t.id.clone(), text: Text { content: "y".into(), ..t.clone() }, look: None })).unwrap();
     assert!(lib(&b).kicad.text_extra(&t.id).unwrap().bold);
     // solid and no hatch take them away
-    b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "solid".into(), hatch: None }) })).unwrap();
+    b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Looks".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "solid".into(), hatch: None, endings: None }) })).unwrap();
     let fp = lib(&b);
     assert!(!fp.kicad.stroke_types.contains_key(g.id()) && !fp.kicad.hatches.contains_key(g.id()));
 }
@@ -344,4 +344,45 @@ fn export_footprints_writes_the_instances_fields_and_attributes() {
     assert!(text.contains("(property \"Reference\" \"REF**\"") && text.contains("(property \"Value\" \"10k\"") && text.contains("(property \"MPN\" \"RC0402\""), "{text}");
     // and the board is as it was
     assert_eq!(b.design().footprint_edit("R1").unwrap().fields.len(), 1);
+}
+
+/// The Properties pane's rows of a library pad that its file keeps (UI-LEFT-2 FF3): `set_pad_extras` sets the backdrill and post-machining and the teardrop
+/// parameters among the pad's kept forms, parameters that are `TEARDROP_PARAMETERS()`'s are taken out (`isDefaultTeardropParameters`). A line's endings
+/// are its looks (`set_graphic`'s `look.endings`).
+#[test]
+fn set_pad_extras_and_a_lines_endings_are_kept_with_the_footprint() {
+    use crate::fp_items::{FpItemCmd, ShapeLook};
+    use eda_model::line_ending::{LineEnding, LineEndingStyle, LineEndings};
+    use eda_model::teardrop_params::TeardropParams;
+    use eda_model::via_extra::PadDrillProps;
+    let m = ConstraintModel::default();
+    let mut b = Board::new(crate::tests::empty_design(), &m, mm(0.1), mm(0.3));
+    let mut fp = eda_model::ir::LibraryFootprint::new_empty("Lib:Extras");
+    let mut p = crate::tests::fp_pad("1", Nm::ZERO, Nm::ZERO);
+    p.kind = eda_model::PadKind::ThroughHole;
+    p.drill = Some(mm(1.0));
+    p.layers = vec!["*.Cu".into()];
+    fp.pads.push(p);
+    fp.graphics.push(Shape::Segment { id: "l".into(), layer: "F.SilkS".into(), stroke_width: mm(0.1), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(3.0), y: Nm::ZERO } });
+    b.apply(&Cmd::PutLibraryFootprint { footprint: fp, overwrite: false }).unwrap();
+    let lib = |b: &Board| b.design().footprint_library.as_ref().unwrap().by_name("Lib:Extras").unwrap().clone();
+    let pad_id = lib(&b).pads[0].id.clone();
+    let drills = PadDrillProps::from_tokens(&["(front_post_machining counterbore (size 1.5) (depth 0.3))".to_string()]);
+    assert!(!drills.is_none());
+    let td = TeardropParams { enabled: true, ..Default::default() };
+    b.apply(&Cmd::FpItem(FpItemCmd::SetPadExtras { footprint: "Lib:Extras".into(), id: pad_id.clone(), drill_props: Some(drills.clone()), teardrops: Some(td.clone()) })).unwrap();
+    let tokens = lib(&b).pads[0].kicad.tokens.clone();
+    assert_eq!(PadDrillProps::from_tokens(&tokens), drills);
+    assert_eq!(TeardropParams::from_tokens(&tokens), Some(td));
+    b.apply(&Cmd::FpItem(FpItemCmd::SetPadExtras { footprint: "Lib:Extras".into(), id: pad_id.clone(), drill_props: None, teardrops: Some(TeardropParams::default()) })).unwrap();
+    let tokens = lib(&b).pads[0].kicad.tokens.clone();
+    assert_eq!(TeardropParams::from_tokens(&tokens), None, "default parameters are not written");
+    assert_eq!(PadDrillProps::from_tokens(&tokens), drills, "left out, the drills stay");
+    let g = lib(&b).graphics[0].clone();
+    let ends = LineEndings { start: LineEnding::new(LineEndingStyle::Arrow), end: LineEnding::default() };
+    b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Extras".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "solid".into(), hatch: None, endings: Some(ends) }) })).unwrap();
+    assert_eq!(lib(&b).kicad.endings.get(g.id()), Some(&ends));
+    b.apply(&Cmd::FpItem(FpItemCmd::SetGraphic { footprint: "Lib:Extras".into(), id: g.id().into(), shape: g.clone(), look: Some(ShapeLook { line_style: "solid".into(), hatch: None, endings: None }) })).unwrap();
+    assert_eq!(lib(&b).kicad.endings.get(g.id()), Some(&ends), "a look without endings keeps them");
+    assert!(eda_kicad::export_kicad_mod(&lib(&b)).contains("(start_shape arrow)"));
 }

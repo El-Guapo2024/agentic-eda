@@ -34,6 +34,17 @@ export type FpEditorCmd =
 export interface ShapeLook {
   line_style: string;
   hatch: "hatch" | "reverse_hatch" | "cross_hatch" | null;
+  /** KiCad 10's line endings of an open shape (UI-LEFT-2 FF3); left out, the graphic keeps its own. */
+  endings?: { start?: LineEndingIr; end?: LineEndingIr };
+}
+
+/** `eda_model::line_ending::LineEnding` as the IR serializes it (each field left out when it is the default). */
+export interface LineEndingIr {
+  style?: "none" | "arrow" | "circle" | "square" | "arrow_open";
+  length_nm?: number;
+  width_nm?: number;
+  stroke_width_nm?: number;
+  stroke_style?: string;
 }
 
 /** `fp_items::TextLook`: a footprint text's bold, italic, vertical justification (-1 top, 0 centre, 1 bottom), glyph width, knockout and keep-upright. */

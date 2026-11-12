@@ -1833,7 +1833,7 @@ fn move_exact_rejects_an_empty_part_list() {
 
 // -------------------------------------------------- footprint editor (GAPS.md #8)
 
-fn fp_pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
+pub(crate) fn fp_pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
     LibraryPad {
         id: String::new(),
         number: number.into(),
@@ -1920,6 +1920,19 @@ fn opening_a_builtin_name_materializes_its_real_pads() {
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("0603").unwrap();
     assert_eq!(fp.pads.len(), 2, "0603 is a two-pad passive");
     assert!(fp.pads.iter().all(|p| !p.id.is_empty()));
+    assert!(fp.models3d.is_empty(), "no part is on a 0603 here: a two-pad passive stands for no one KiCad footprint");
+}
+
+/// A built-in package opened in the Footprint Editor has the 3D models of the installed KiCad footprint it stands for (UI-LEFT-2 FF8): `0402` on `C1` is
+/// `Capacitor_SMD:C_0402_1005Metric`, whose file lists its model; KiCad opens a library footprint with its models.
+#[test]
+fn opening_a_builtin_package_gives_it_the_model_list_of_the_footprint_it_stands_for() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "0402".into() }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("0402").unwrap();
+    assert_eq!(fp.models3d.len(), 1, "{:?}", fp.models3d);
+    assert!(fp.models3d[0].path.ends_with("C_0402_1005Metric.step"), "{:?}", fp.models3d);
 }
 
 #[test]

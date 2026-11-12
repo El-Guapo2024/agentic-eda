@@ -2984,6 +2984,20 @@ fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
     if let Some(copy) = lib.and_then(|l| l.board_copy(name)) {
         v["board_link"] = json!({ "reference": copy.reference, "fpid": copy.fpid });
     }
+    // What a pad's kept forms say that the Properties pane shows (UI-LEFT-2 FF3): KiCad 10's backdrill and post-machining (`PadDrillProps`) and its own teardrop
+    // parameters, by pad id; a pad with neither is left out (no post-machining, `TEARDROP_PARAMETERS()`).
+    let extras: serde_json::Map<String, Value> = fp
+        .pads
+        .iter()
+        .filter_map(|p| {
+            let drill = eda_model::via_extra::PadDrillProps::from_tokens(&p.kicad.tokens);
+            let td = eda_model::teardrop_params::TeardropParams::from_tokens(&p.kicad.tokens);
+            (!drill.is_none() || td.is_some()).then(|| (p.id.clone(), json!({ "drill_props": drill, "teardrops": td })))
+        })
+        .collect();
+    if !extras.is_empty() {
+        v["pad_extras"] = Value::Object(extras);
+    }
     // The dimensions, zones, text boxes ... (`eda_model::fp_items`) in the board's display shapes, for the board's painters (`crate::fp_items_json`).
     if !fp.items.is_empty() {
         let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now()));

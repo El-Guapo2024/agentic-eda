@@ -3,7 +3,7 @@
 // The Footprint Editor's shape and text dialogs read and set them (`fp_item set_graphic` / `set_text` with a look), the painter draws them.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { ShapeLook, TextLook } from "../api/fpEditorTypes";
+import type { LineEndingIr, ShapeLook, TextLook } from "../api/fpEditorTypes";
 
 /** The kept record as the server sends it (`LibraryFootprint.kicad`). */
 interface Keep {
@@ -13,6 +13,7 @@ interface Keep {
   unlocked_texts?: string[];
   locked?: string[];
   hidden_texts?: string[];
+  endings?: Record<string, { start?: LineEndingIr; end?: LineEndingIr }>;
 }
 
 type WithKeep = { kicad?: Record<string, unknown> } | null | undefined;
@@ -23,6 +24,11 @@ const keepOf = (fp: WithKeep): Keep => (fp?.kicad ?? {}) as Keep;
 export function shapeLookOf(fp: WithKeep, id: string): ShapeLook {
   const k = keepOf(fp);
   return { line_style: k.stroke_types?.[id] ?? "solid", hatch: k.hatches?.[id] ?? null };
+}
+
+/** KiCad 10's line endings of the graphic (`LibraryFootprintKeep::endings`, UI-LEFT-2 FF3), `{}` when it has none. */
+export function fpEndingsOf(fp: WithKeep, id: string): { start?: LineEndingIr; end?: LineEndingIr } {
+  return keepOf(fp).endings?.[id] ?? {};
 }
 
 /** The text's looks beyond `CmdText`; `size` is its height (`CmdText.size_nm`), the width when it keeps none of its own. */

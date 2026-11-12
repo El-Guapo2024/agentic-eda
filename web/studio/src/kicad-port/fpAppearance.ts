@@ -34,6 +34,7 @@
 //
 // Pure: no store, no DOM. Unit-tested in fpAppearance.test.ts.
 import type { LibraryFootprint } from "../api/types";
+import type { LayerPreset } from "./appearance";
 import { OBJECT_IDS, OBJECT_ROWS, objectKey, objectOn, withObjectVisible, type ContrastMode, type ObjectId, type ObjectRow, type Opacity } from "./appearance";
 import { hideAllButActive, isCopper, layerIsVisible, layerStateKey, menuPreset, TECH_LAYER_NAMES, firstLayer, type LayerGroupOp, type MenuPresetKind, type PresetView } from "./layerPresets";
 import { isCopperLayerName, standardLayerName, userLayerName, userLayerNumber } from "./boardLayers";
@@ -292,8 +293,61 @@ export function fpShapeOpacity(s: { kind: string; filled: boolean; layer: string
   return isCopper(s.layer) ? fpObjectOpacity(layerOpacity, "tracks") : 1;
 }
 
+/**
+ * The Footprint Editor's selection filter (`FOOTPRINT_EDITOR_SETTINGS::m_SelectionFilter`, `editing.selection_filter`; `PCB_SELECTION_FILTER_OPTIONS`): the board panel's
+ * rows (UI-LEFT-2 FF5). Kept with the editor's preferences, as KiCad keeps it in the editor's settings.
+ */
+export interface FpSelectionFilter {
+  lockedItems: boolean;
+  footprints: boolean;
+  text: boolean;
+  tracks: boolean;
+  vias: boolean;
+  pads: boolean;
+  graphics: boolean;
+  zones: boolean;
+  keepouts: boolean;
+  dimensions: boolean;
+  points: boolean;
+  otherItems: boolean;
+}
+
+/** The defaults of `editing.selection_filter` (footprint_editor_settings.cpp): every row on but Locked items. */
+export const DEFAULT_FP_SELECTION_FILTER: FpSelectionFilter = { lockedItems: false, footprints: true, text: true, tracks: true, vias: true, pads: true, graphics: true, zones: true, keepouts: true, dimensions: true, points: true, otherItems: true };
+
+/**
+ * `PCB_SELECTION_TOOL::itemPassesFilter` for an item of the footprint (`kind` as `fpHitTest` names it): its row of the filter (a field, a text, a text box and a table
+ * are Text, an image Graphics, a barcode Other items, a rule area Rule Areas), and, unless Locked items is on, not a locked item -- but a single pad clicked alone
+ * ("allow a single pad to be selected -- there are a lot of operations that require this").
+ */
+export function fpPassesFilter(filter: FpSelectionFilter, kind: string, locked: boolean, ruleArea = false, multiSelect = false): boolean {
+  if (!filter.lockedItems && locked && !(kind === "pad" && !multiSelect)) return false;
+  switch (kind) {
+    case "pad":
+      return filter.pads;
+    case "graphic":
+    case "image":
+      return filter.graphics;
+    case "field":
+    case "text":
+    case "textbox":
+    case "table":
+      return filter.text;
+    case "dimension":
+      return filter.dimensions;
+    case "zone":
+      return ruleArea ? filter.keepouts : filter.zones;
+    case "point":
+      return filter.points;
+    default:
+      return filter.otherItems;
+  }
+}
+
 /** What a click may pick (`fpHitTest`'s optional argument): the Appearance manager's switches, and the active layer when high contrast is on. */
 export interface FpVisibility {
+  /** The selection filter and the items' locks (UI-LEFT-2 FF5); absent, every kind passes. */
+  filter?: FpSelectionFilter;
   layerVisible: Readonly<Record<string, boolean>>;
   layerOpacity?: Readonly<Record<string, number>>;
   /** High contrast (Dim or Hide): only an item on `activeLayer` is picked (`Selectable`: "We do not want to select items that are in the background"). */
@@ -310,11 +364,19 @@ export function fpLayersSelectable(vis: FpVisibility, layers: readonly string[])
   return !offContrast(vis, !!vis.activeLayer && layers.includes(vis.activeLayer));
 }
 
-/** `Selectable( PAD )`: the Pads row on and not at opacity 0, the pad drawn (a layer of it shown), and with high contrast on the active layer. */
-export function fpPadSelectable(vis: FpVisibility, layers: readonly string[]): boolean {
-  if (!objectOn(vis.layerVisible, "pads") || zeroOpacity(vis, "pads")) return false;
-  if (!fpPadShown(layers, vis.layerVisible)) return false;
-  return !offContrast(vis, !!vis.activeLayer && fpPadOnLayer(layers, vis.activeLayer));
+/** `LSET::PhysicalLayersMask()` of the footprint editor's board: the copper and the board technical layers. */
+const PHYSICAL_LAYERS: readonly string[] = [...FP_COPPER_LAYERS, "F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask"];
+
+/**
+ * `Selectable( PAD )` in the footprint editor (pcb_selection_tool.cpp at KiCad 8303b2ad, the same at 25ec2335): not at Pads opacity 0; a pad with a hole while any
+ * physical layer is shown ("A pad's hole is visible on every layer the pad is visible on plus many layers the pad is not visible on"), another while one of its
+ * layers is; with high contrast, on the active layer. The Pads row itself is not asked (UI-LEFT-2 FF5): it hides the view's pad layers only, and `Selectable` asks
+ * no element visibility of a pad -- a pad hidden by the row is still picked, as KiCad's is.
+ */
+export function fpPadSelectable(vis: FpVisibility, layers: readonly string[], hasHole = false): boolean {
+  if (zeroOpacity(vis, "pads")) return false;
+  if (hasHole ? !PHYSICAL_LAYERS.some((l) => layerIsVisible(vis.layerVisible, l)) : !fpPadShown(layers, vis.layerVisible)) return false;
+  return !offContrast(vis, !!vis.activeLayer && (hasHole ? isCopper(vis.activeLayer) || fpPadOnLayer(layers, vis.activeLayer) : fpPadOnLayer(layers, vis.activeLayer)));
 }
 
 /** `Selectable( PCB_FIELD )`. */
@@ -333,15 +395,57 @@ export function fpShapeSelectable(vis: FpVisibility, s: { kind: string; filled: 
   return fpLayersSelectable(vis, [s.layer]);
 }
 
-/** `Selectable( ZONE )`: the Zones row on and not at opacity 0, and a layer of the zone's set shown. */
+/**
+ * `Selectable( ZONE )`: not at Zones opacity 0, and a layer of the zone's set shown. `board()->IsElementVisible( LAYER_ZONES )` is the board's element visibility,
+ * which the footprint editor's Zones row does not set (it hides the view's layer: `onObjectVisibilityChanged`), so a hidden zone is still picked (UI-LEFT-2 FF5).
+ */
 export function fpZoneSelectable(vis: FpVisibility, layers: readonly string[]): boolean {
-  if (!objectOn(vis.layerVisible, "zones") || zeroOpacity(vis, "zones")) return false;
+  if (zeroOpacity(vis, "zones")) return false;
   return fpLayersSelectable(vis, layers);
 }
 
 /** `Selectable` for a text box, an image (the Images row, its opacity), a point (the Points row) or a barcode (kicad-port/pcbExtraItems.ts' kinds), and for a table or a dimension. */
 export function fpItemSelectable(vis: FpVisibility, kind: string, layer: string): boolean {
   if (kind === "image" && (!objectOn(vis.layerVisible, "bitmaps") || zeroOpacity(vis, "bitmaps"))) return false;
-  if (kind === "point" && !objectOn(vis.layerVisible, "ly_points")) return false;
+  // a point: `board()->IsElementVisible( LAYER_POINTS )`, which the Points row does not set in this editor (as for a zone): its layer alone (UI-LEFT-2 FF5)
   return fpLayersSelectable(vis, [layer]);
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------ presets
+
+/**
+ * The Appearance manager's Presets in the Footprint Editor (`APPEARANCE_CONTROLS` with `m_isFpEditor`; the person's presets are `FOOTPRINT_EDITOR_SETTINGS::m_LayerPresets`,
+ * UI-LEFT-2 FF5): the board's list and rules (kicad-port/layerPresets.ts) on the editor's layers and its Objects rows. What is on screen as a `PresetView`: the panel's layers,
+ * the shown ones, the objects of `s_allowedInFpEditor` that are on (the grid the frame's switch), the active layer; the canvas does not flip.
+ */
+export function fpPresetView(universe: readonly string[], s: { layerVisible: Readonly<Record<string, boolean>>; gridVisible: boolean; activeLayer: string }, activePreset = "", lastBuiltinObjects: readonly ObjectId[] | null = null): PresetView {
+  return {
+    universe,
+    visibleLayers: new Set(universe.filter((l) => layerIsVisible(s.layerVisible, l))),
+    objects: FP_EDITOR_OBJECTS.filter((id) => fpObjectChecked(s, id)),
+    activeLayer: s.activeLayer,
+    flipBoard: false,
+    activePreset,
+    lastBuiltinObjects,
+    boardLayers: new Set(universe),
+  };
+}
+
+/** `syncLayerPresetSelection` in this editor: the first preset whose layers and objects (the Footprint Editor's rows of them) are what is on screen, else "". */
+export function fpMatchingPreset(presets: readonly LayerPreset[], v: PresetView): string {
+  const universe = new Set(v.universe);
+  const same = (a: Iterable<string>, b: Iterable<string>) => {
+    const x = new Set(a);
+    const y = [...b];
+    return x.size === y.length && y.every((k) => x.has(k));
+  };
+  const fpObjects = (ids: readonly ObjectId[]) => ids.filter((id) => FP_EDITOR_OBJECTS.includes(id));
+  return presets.find((p) => same(p.layers.filter((l) => universe.has(l)), [...v.visibleLayers]) && same(fpObjects(p.renderLayers), fpObjects(v.objects)))?.name ?? "";
+}
+
+/** A preset applied (`selectPreset`'s view) as the editor's switches: the layers' and the objects' `layerVisible` entries, the grid switch, the active layer. */
+export function fpApplyPresetView(universe: readonly string[], layerVisible: Readonly<Record<string, boolean>>, next: PresetView): { visible: Record<string, boolean>; grid: boolean; activeLayer: string | null } {
+  let visible: Record<string, boolean> = { ...layerVisible, ...fpVisibleLayersPatch(universe, new Set(next.visibleLayers)) };
+  for (const id of FP_EDITOR_OBJECTS) if (id !== "grid") visible = { ...visible, ...fpObjectPatch(visible, id, next.objects.includes(id)) };
+  return { visible, grid: next.objects.includes("grid"), activeLayer: next.activeLayer };
 }

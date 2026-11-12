@@ -488,15 +488,17 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         let solid = fp.kicad.stroke_types.get(g.id()).map(String::as_str).unwrap_or("solid");
         // a hatched fill (`LibraryFootprintKeep::hatches`), else yes / no
         let fp_fill = |filled: bool| fp.kicad.hatches.get(g.id()).map(|h| h.token()).unwrap_or(if filled { "yes" } else { "no" });
+        // KiCad 10's line endings of an open shape after its stroke (`LINE_ENDING::Format`, KiCad 25ec2335; `LibraryFootprintKeep::endings`)
+        let ends = fp.kicad.endings.get(g.id()).map(|e| crate::line_ending_io::words(e, false)).unwrap_or_default();
         match g {
             Shape::Segment { stroke_width, start, end, .. } => writeln!(
                 out,
-                "\t(fp_line (start {} {}) (end {} {}) (stroke (width {}) (type {solid})) {lock}(layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_line (start {} {}) (end {} {}) (stroke (width {}) (type {solid})){ends} {lock}(layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO))
             ),
             Shape::Arc { stroke_width, start, mid, end, .. } => writeln!(
                 out,
-                "\t(fp_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type {solid})) {lock}(layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type {solid})){ends} {lock}(layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(start.x), crate::mm(start.y), crate::mm(mid.x), crate::mm(mid.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO))
             ),
             Shape::Rect { stroke_width, filled, start, end, .. } => writeln!(
@@ -518,7 +520,7 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             }
             Shape::Bezier { stroke_width, start, c1, c2, end, .. } => writeln!(
                 out,
-                "\t(fp_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type {solid})) {lock}(layer {layer}) (uuid \"{uuid}\"))",
+                "\t(fp_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type {solid})){ends} {lock}(layer {layer}) (uuid \"{uuid}\"))",
                 crate::mm(start.x), crate::mm(start.y), crate::mm(c1.x), crate::mm(c1.y), crate::mm(c2.x), crate::mm(c2.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(Nm::ZERO))
             ),
         }

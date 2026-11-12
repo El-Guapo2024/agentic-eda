@@ -83,14 +83,17 @@ export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
 export type FpItemDraw =
   | { tool: "dimension"; draw: FpDimDraw }
   | { tool: "table"; origin: [Nm, Nm] }
-  | { tool: "ref_image"; name: string; data: string; img: HTMLImageElement; w: Nm; h: Nm };
+  | { tool: "ref_image"; name: string; data: string; img: HTMLImageElement; w: Nm; h: Nm }
+  /** Draw Rule Area once Rule Area Properties has been answered at the first corner (`ZONE_CREATE_HELPER::OnFirstPoint` -> `createNewZone`): the new zone's settings. */
+  | { tool: "rule_area"; zone: CmdZone };
 
 /** An item a tool made whose Properties dialog is open on it before it is added: OK adds it (one `fp_item add`), Cancel drops it. */
 export type FpPendingItem =
   | { kind: "textbox"; box: BoardTextBox }
   | { kind: "barcode"; barcode: CmdBarcode }
   | { kind: "table"; drawn: FpDrawnTable }
-  | { kind: "zone"; zone: CmdZone };
+  /** `first`: Draw Rule Area's first corner, where KiCad asks for the settings (`createNewZone`): OK starts the outline there instead of adding the zone. */
+  | { kind: "zone"; zone: CmdZone; first?: [Nm, Nm] };
 
 /** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). `arc`/`bezier`: the construction managers' state, see the PCB tab's `DrawState`. */
 export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Nm, Nm][]; arc?: ArcGeom; bezier?: BezierGeom };
@@ -206,6 +209,14 @@ export interface FootprintEditorState {
   /** `HIGH_CONTRAST_MODE::HIDDEN` (the Appearance manager's Inactive layers "Hide"): with `highContrast`, what is not on the active layer is not drawn at all. */
   contrastHidden: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
+  /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`, UI-LEFT-2 FF8): its own members, and the groups directly in it, are picked one by one, and nothing
+   * outside it is. `null` outside any group. */
+  enteredGroupId: string | null;
+  /** The Appearance manager's Viewports (`APPEARANCE_CONTROLS::m_viewports`): the saved views of this session -- the Footprint Editor keeps none in its settings
+   *  (`FOOTPRINT_EDIT_FRAME::LoadSettings` restores only the layer presets). UI-LEFT-2 FF5. */
+  viewports: import("../kicad-port/appearance").Viewport[];
+  /** `m_lastBuiltinPreset.renderLayers`: the objects that were on when a built-in preset (or none) was last left; null until then. */
+  lastBuiltinObjects: import("../kicad-port/appearance").ObjectId[] | null;
 }
 
 const initialState: FootprintEditorState = {
@@ -259,6 +270,9 @@ const initialState: FootprintEditorState = {
   appearanceShown: true,
   contrastHidden: false,
   toast: null,
+  enteredGroupId: null,
+  viewports: [],
+  lastBuiltinObjects: null,
 };
 
 export type FpAction =
@@ -317,7 +331,13 @@ export type FpAction =
   /** The Appearance manager's Inactive layers (`m_ContrastModeDisplay`): Normal, Dim or Hide. */
   | { type: "SET_CONTRAST_MODE"; mode: "normal" | "dimmed" | "hidden" }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
-  | { type: "TOAST_CLEAR" };
+  | { type: "TOAST_CLEAR" }
+  /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
+  | { type: "ENTER_GROUP"; id: string; members: string[] }
+  /** `PCB_SELECTION_TOOL::ExitGroup( aSelectGroup )`: no group is worked in; the selection is cleared, or is the group that was left. */
+  | { type: "EXIT_GROUP"; selectGroup: boolean }
+  | { type: "SET_VIEWPORTS"; viewports: import("../kicad-port/appearance").Viewport[] }
+  | { type: "SET_LAST_BUILTIN_OBJECTS"; objects: import("../kicad-port/appearance").ObjectId[] | null };
 
 /** The items `after` has that `before` did not, at the top: a new group stands for its members (`placeBoardItems`: "We only need to add the items that aren't inside a
  *  group currently selected"). */
@@ -351,9 +371,14 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
         layerOpacity: state.layerOpacity,
         appearanceShown: state.appearanceShown,
         contrastHidden: state.contrastHidden,
+        viewports: state.viewports,
+        lastBuiltinObjects: state.lastBuiltinObjects,
       };
-    case "FOOTPRINT_OK":
-      return { ...state, footprint: action.footprint, error: null };
+    case "FOOTPRINT_OK": {
+      // a group that is gone (ungrouped, deleted, undone) is no longer the one worked in
+      const entered = state.enteredGroupId && (action.footprint.items?.groups ?? []).some((g) => g.id === state.enteredGroupId) ? state.enteredGroupId : null;
+      return { ...state, footprint: action.footprint, error: null, enteredGroupId: entered };
+    }
     case "FOOTPRINT_ERR":
       return { ...state, error: action.message };
     case "SET_VIEW":
@@ -374,6 +399,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.movePreview != null;
       // `evt->IsCancelInteractive()` in EnumeratePads: `commit.Revert()` -- nothing was sent, so dropping the tool's state is the revert.
       if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null, enumerate: null, carriedPad: null };
+      // `PCB_SELECTION_TOOL::Main`'s `IsCancel()`: a selection is cleared; with none, Escape leaves the group being worked in (`ExitGroup()`)
+      if (state.selection.size === 0 && state.enteredGroupId) return { ...state, enteredGroupId: null };
       return { ...state, selection: new Set() };
     }
     case "SET_ACTIVE_TOOL":
@@ -468,6 +495,15 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, highContrast: action.mode !== "normal", contrastHidden: action.mode === "hidden" };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
+    case "SET_VIEWPORTS":
+      return { ...state, viewports: action.viewports };
+    case "SET_LAST_BUILTIN_OBJECTS":
+      return { ...state, lastBuiltinObjects: action.objects };
+    case "ENTER_GROUP":
+      return { ...state, enteredGroupId: action.id, selection: new Set(action.members) };
+    case "EXIT_GROUP":
+      if (!state.enteredGroupId) return state;
+      return { ...state, selection: new Set(action.selectGroup ? [state.enteredGroupId] : []), enteredGroupId: null };
     case "TOAST_CLEAR":
       return { ...state, toast: null };
     default:
@@ -1040,7 +1076,11 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const st = stateRef.current;
       if (!st.name || !st.footprint) return;
       const cmd = fpMirrorCmd(st.footprint, st.name, [...st.selection], direction, snap);
-      if (cmd) await runCmd(cmd);
+      if (!cmd) return;
+      await runCmd(cmd);
+      // A point has no `Mirror` of its own: `BOARD_ITEM::Mirror` says so (`wxMessageBox( .., GetClass() )`) and the point stays where it is (UI-LEFT-2 FF8).
+      const points = new Set((st.footprint.items?.points ?? []).map((p) => p.id));
+      if ([...st.selection].some((id) => points.has(id))) dispatch({ type: "TOAST", message: "virtual BOARD_ITEM::Mirror used, should not occur", kind: "error" });
     },
     swapSelection: async () => {
       const st = stateRef.current;

@@ -17,12 +17,30 @@ import type { LengthUnit } from "../state/units";
 import { buildGrid, planEdit, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { fieldLayoutOf, fpFieldById, fpFields } from "./fpItems";
-import { shapeLookOf, textFaceOf, textLookOf, isLockedItem, LINE_STYLE_CHOICES, FILL_CHOICES, fillChoiceOf, fillOfChoice } from "./fpKeep";
+import { fpEndingsOf, shapeLookOf, textFaceOf, textLookOf, isLockedItem, LINE_STYLE_CHOICES, FILL_CHOICES, fillChoiceOf, fillOfChoice } from "./fpKeep";
 import { cmdShapeToShape } from "./itemBoxes";
 import { shapeWith } from "./pcbProperties";
 import { FAB_PROPERTY_CHOICES, padToDieOf, withPadFab } from "./padLayers";
 import { PAD_CONNECTION_OPTIONS } from "./padSettings";
 import { FP_EDITOR_LAYERS } from "./fpDrawDefaults";
+import { BACKDRILL_CHOICES, POST_MACHINING_CHOICES, UNCONNECTED_CHOICES } from "./pcbProperties";
+import { DEFAULT_TEARDROP_PARAMS } from "./teardropParams";
+import {
+  backdrillEnd,
+  backdrillMode,
+  backdrillSize,
+  postMachiningKey,
+  postMachiningMode,
+  withBackdrillEnd,
+  withBackdrillMode,
+  withBackdrillSize,
+  withPostMachining,
+  withPostMachiningMode,
+  type BackdrillMode,
+  type PostMachiningMode,
+} from "./viaProps";
+import type { LineEndingIr, ShapeLook } from "../api/fpEditorTypes";
+import type { PadDrillProps, PadKindName, TeardropParams, UnconnectedLayers, ViaProps } from "../api/types";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -109,13 +127,8 @@ const READ_ONLY = {
   autoThickness: "A footprint text keeps its file's automatic pen; it is not switched here.",
   color: "A footprint item keeps no colour.",
   textVisible: "A footprint text's Show is not offered for it (`DIALOG_TEXT_PROPERTIES` hides it); a field's is the field row's.",
-  padTypeShape: "Choose the pad's type, shape and hole in Pad Properties: a choice resets what goes with it (`PadTypeSelected`, `onPadShapeSelection`).",
-  padstack: "Post-machining and backdrilling are a board's; a library pad keeps none.",
-  teardrops: "Teardrops are a board's; a library pad keeps the file's teardrop settings as they are.",
-  copperLayers: "The copper layers of a pad are set in Pad Properties' copper choice.",
   shapeKind: "A shape's kind is not changed here (draw the other kind).",
   corner: "A rectangle of a footprint keeps no corner radius here.",
-  endings: "Line endings are KiCad 10's; a library footprint's lines have none here.",
   primitive: "The proxy items of a custom pad are the pad's (Edit Pad as Graphic Shapes).",
   soldermask: "A graphic's solder mask opening is a board's.",
   footprintOrientation: "A library footprint has no orientation: its items turn.",
@@ -221,6 +234,92 @@ const propertiesWith = (c: FpPropCtx, patch: Partial<Pick<LibraryFootprint, "des
 
 const connectionChoices: Choice[] = PAD_CONNECTION_OPTIONS.map((o) => ({ label: o.label, value: o.value }));
 
+/** What the pad's kept forms say of its backdrill and post-machining (`GET /api/footprint`'s `pad_extras`), `{}` for none. */
+const drillOf = (i: FpPropItem, c: FpPropCtx): ViaProps => (c.fp.pad_extras?.[i.id]?.drill_props ?? {}) as ViaProps;
+/** The pad's own teardrop parameters, `TEARDROP_PARAMETERS()` when its file gave it none (a library pad always has its own: `PAD::m_teardropParams`). */
+const teardropsOf = (i: FpPropItem, c: FpPropCtx): TeardropParams => c.fp.pad_extras?.[i.id]?.teardrops ?? DEFAULT_TEARDROP_PARAMS;
+/** `fp_item set_pad_extras` with the pad's drills set whole, or nothing when they are as they were. */
+const drillCmd = (i: FpPropItem, c: FpPropCtx, next: ViaProps): Cmd[] => {
+  const props: PadDrillProps = { backdrill: next.backdrill, tertiary_drill: next.tertiary_drill, front_post_machining: next.front_post_machining, back_post_machining: next.back_post_machining };
+  for (const k of Object.keys(props) as (keyof PadDrillProps)[]) if (props[k] === undefined || props[k] === null) delete props[k];
+  const was = drillOf(i, c) as PadDrillProps;
+  const now: PadDrillProps = {};
+  for (const k of ["backdrill", "tertiary_drill", "front_post_machining", "back_post_machining"] as const) if (was[k]) (now as Record<string, unknown>)[k] = was[k];
+  return JSON.stringify(props) === JSON.stringify(now) ? [] : [{ op: "fp_item", verb: "set_pad_extras", footprint: c.name, id: i.id, drill_props: props }];
+};
+
+/** `ENUM_MAP<PAD_ATTRIB>` (pad.cpp `PAD_DESC`): PTH, SMD, CONN and NPTH in KiCad's order. */
+const PAD_TYPE_CHOICES: Choice[] = [
+  { label: "Through-hole", value: "through_hole" },
+  { label: "SMD", value: "smd" },
+  { label: "Edge connector", value: "conn" },
+  { label: "NPTH, mechanical", value: "non_plated_hole" },
+];
+/** `ENUM_MAP<PAD_SHAPE>`. */
+const PAD_SHAPE_CHOICES: Choice[] = [
+  { label: "Circle", value: "circle" },
+  { label: "Rectangle", value: "rect" },
+  { label: "Oval", value: "oval" },
+  { label: "Trapezoid", value: "trapezoid" },
+  { label: "Rounded rectangle", value: "round_rect" },
+  { label: "Chamfered rectangle", value: "chamfered_rect" },
+  { label: "Custom", value: "custom" },
+];
+/** `ENUM_MAP<LINE_ENDING_STYLE>`: None, Arrow, Circle, Square, Open Arrow. */
+const ENDING_STYLES: { label: string; value: NonNullable<LineEndingIr["style"]> }[] = [
+  { label: "None", value: "none" },
+  { label: "Arrow", value: "arrow" },
+  { label: "Circle", value: "circle" },
+  { label: "Square", value: "square" },
+  { label: "Open Arrow", value: "arrow_open" },
+];
+
+const padKeep = (p: LibraryPad) => (p.kicad ?? {}) as { connector?: boolean } & Record<string, unknown>;
+/** `PAD::GetAttribute()`: an SMD pad that is an edge connector is `CONN`. */
+const padTypeOf = (p: LibraryPad): string => (p.kind === "smd" && padKeep(p).connector ? "conn" : p.kind);
+
+/**
+ * `PAD::SetAttribute( aAttribute )` (pcbnew/pad.cpp at KiCad 25ec2335): a plated pad is plumped up to every copper layer (`layerMask |= LSET::AllCuMask()`, the
+ * library's `*.Cu`); an SMD or edge connector pad is trimmed to one copper layer (B.Cu when it was on it, else its first) and loses its hole; an NPTH pad loses its
+ * number. Differs: a pad that gets a hole and has none is given half its smaller side to the 0.05 mm (at least 0.1 mm), as the board's row does -- the studio's pad
+ * model refuses a plated or mechanical pad with no hole, where KiCad leaves a 0 drill for DRC to report.
+ */
+export function withPadAttribute(p: LibraryPad, attr: string): LibraryPad {
+  const kind = (attr === "conn" ? "smd" : attr) as PadKindName;
+  const next: LibraryPad = { ...p, kind, kicad: { ...padKeep(p), connector: attr === "conn" } as LibraryPad["kicad"] };
+  if (!(next.kicad as { connector?: boolean }).connector) delete (next.kicad as Record<string, unknown>).connector;
+  const isCu = (l: string) => l.endsWith(".Cu");
+  const copper = p.layers.filter(isCu);
+  if (kind === "through_hole") {
+    next.layers = ["*.Cu", ...p.layers.filter((l) => !isCu(l))];
+  } else if (kind === "smd") {
+    const many = copper.length > 1 || copper.includes("*.Cu");
+    if (many) next.layers = [copper.includes("B.Cu") || copper.includes("*.Cu") ? "B.Cu" : copper[0]!, ...p.layers.filter((l) => !isCu(l))];
+    next.drill = null;
+    next.drill_slot = null;
+  } else {
+    next.number = "";
+  }
+  if (kind !== "smd" && !next.drill && !next.drill_slot) {
+    const shorter = Math.min(p.size[0], p.size[1]);
+    next.drill = Math.max(100_000, Math.round((shorter * 0.5) / 50_000) * 50_000);
+  }
+  return next;
+}
+
+/** `PAD::SetFrontShape`: a pad that becomes roundable takes the IPC rounding (`PAD_UTILS::GetDefaultIpcRoundingRatio`: a quarter of its smaller side, 0.25 mm at most);
+ * a custom pad starts with a rectangle anchor and no basic shapes (`PADSTACK::SHAPE_PROPS`' `anchor_shape( PAD_SHAPE::RECTANGLE )`). */
+export function withPadShape(p: LibraryPad, shape: string): LibraryPad {
+  const roundable = (s: string) => s === "round_rect" || s === "chamfered_rect";
+  const next: LibraryPad = { ...p, shape: shape as LibraryPad["shape"] };
+  if (!roundable(p.shape) && roundable(shape)) {
+    const min = Math.min(p.size[0], p.size[1]);
+    next.roundrect_ratio = min > 0 ? Math.min(250_000, min * 0.25) / min : 0.25;
+  }
+  if (shape === "custom" && !p.custom) next.custom = { anchor: "rect", zone: "outline", primitives: [] };
+  return next;
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------- the registry
 
 function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
@@ -262,9 +361,36 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
   pm.replaceProperty("BOARD_ITEM", "Layer", { owner: "BOARD_CONNECTED_ITEM", name: "Layer", kind: "enum", get: () => "" });
   add({ owner: "BOARD_CONNECTED_ITEM", name: "Net", kind: "net", hiddenFromLibraryEditors: true, get: () => "" });
   for (const n of ["Net Class", "NetClass", "NetName"]) add({ owner: "BOARD_CONNECTED_ITEM", name: n, kind: "string", hidden: true, hiddenFromLibraryEditors: true, get: () => "" });
-  for (const n of ["Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Prefer Zone Connections", "Allow Teardrops To Span Two Tracks", "Max Width Ratio"]) {
-    ro("BOARD_CONNECTED_ITEM", n, "Teardrops", READ_ONLY.teardrops, () => "", { available: (i) => i.type === "PAD" });
-  }
+  // "Teardrops" (`BOARD_CONNECTED_ITEM_DESC`, `supportsTeardrops`: a pad): the pad's own `TEARDROP_PARAMETERS`, which its file keeps (`(teardrops ..)`), each row the one
+  // `SetTeardrop..` (`fp_item set_pad_extras`, UI-LEFT-2 FF3).
+  const tdRow = <K extends keyof TeardropParams>(name: string, kind: "bool" | "double" | "int", key: K): void => {
+    add(
+      {
+        owner: "BOARD_CONNECTED_ITEM",
+        name,
+        kind,
+        ...(kind === "int" ? { display: "size" as const } : {}),
+        available: (i) => i.type === "PAD",
+        get: (i, c) => teardropsOf(i, c)[key] as unknown as PropValue,
+        set: (i, v, c) => {
+          const now = teardropsOf(i, c);
+          const value = (kind === "bool" ? v === true || v === "true" : Number(v)) as TeardropParams[K];
+          if (now[key] === value) return [];
+          return [{ op: "fp_item", verb: "set_pad_extras", footprint: c.name, id: i.id, teardrops: { ...now, [key]: value } }];
+        },
+      },
+      "Teardrops"
+    );
+  };
+  tdRow("Enable Teardrops", "bool", "enabled");
+  tdRow("Best Length Ratio", "double", "best_length_ratio");
+  tdRow("Max Length", "int", "max_length");
+  tdRow("Best Width Ratio", "double", "best_width_ratio");
+  tdRow("Max Width", "int", "max_width");
+  tdRow("Curved Teardrops", "bool", "curved_edges");
+  tdRow("Prefer Zone Connections", "bool", "prefer_zone_connections");
+  tdRow("Allow Teardrops To Span Two Tracks", "bool", "allow_two_segments");
+  tdRow("Max Width Ratio", "double", "filter_ratio");
 
   // ------------------------------------------------------------------------------------------------------------------ FOOTPRINT
   pm.inheritsAfter("FOOTPRINT", "BOARD_ITEM");
@@ -327,8 +453,10 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
   pm.mask("PAD", "BOARD_CONNECTED_ITEM", "Layer");
   pm.mask("PAD", "BOARD_ITEM", "Locked");
   add({ owner: "PAD", name: "Orientation", kind: "double", display: "degree", get: (i) => (i.pad ? -i.pad.rot / 1000 : 0), set: (i, v, c) => padWith(i, c, { rot: (((Math.round(-num(v) * 1000) % 360_000) + 360_000) % 360_000) }) });
-  ro("PAD", "Pad Type", PAD_GROUP, READ_ONLY.padTypeShape, (i) => i.pad?.kind ?? "");
-  ro("PAD", "Pad Shape", PAD_GROUP, READ_ONLY.padTypeShape, (i) => i.pad?.shape ?? "");
+  // `PAD_DESC`'s "Pad Type" (`SetAttribute`) and "Pad Shape" (`SetFrontShape`, a normal padstack only), each the one setter (UI-LEFT-2 FF3).
+  add({ owner: "PAD", name: "Pad Type", kind: "enum", choices: () => PAD_TYPE_CHOICES, get: (i) => padTypeOf(i.pad!), set: (i, v, c) => (padTypeOf(i.pad!) === v ? [] : [padCmd(c, withPadAttribute(i.pad!, String(v)))]) }, PAD_GROUP);
+  const hasNormalPadstack = (i: FpPropItem) => (i.pad?.stack?.mode ?? "normal") === "normal";
+  add({ owner: "PAD", name: "Pad Shape", kind: "enum", choices: () => PAD_SHAPE_CHOICES, available: hasNormalPadstack, get: (i) => i.pad?.shape ?? "", set: (i, v, c) => (i.pad!.shape === v ? [] : [padCmd(c, withPadShape(i.pad!, String(v)))]) }, PAD_GROUP);
   add({ owner: "PAD", name: "Pad Number", kind: "string", get: (i) => i.pad?.number ?? "", set: (i, v, c) => padWith(i, c, { number: String(v) }) }, PAD_GROUP);
   add({ owner: "PAD", name: "Pin Name", kind: "string", hiddenFromLibraryEditors: true, get: () => "" }, PAD_GROUP);
   add({ owner: "PAD", name: "Pin Type", kind: "string", hiddenFromLibraryEditors: true, get: () => "" }, PAD_GROUP);
@@ -366,7 +494,31 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     },
   }, PAD_GROUP);
   const hasHole = (i: FpPropItem) => i.pad?.kind === "through_hole" || i.pad?.kind === "non_plated_hole";
-  ro("PAD", "Hole Shape", PAD_GROUP, READ_ONLY.padTypeShape, (i) => (i.pad?.drill_slot ? "Oblong" : "Round"), { available: hasHole });
+  // "Hole Shape" (`SetDrillShape`: the shape alone, the size kept -- a round hole of X becomes an X by X oblong, an oblong becomes round of its X), writeable on a pad
+  // that can have a hole (`padCanHaveHole`).
+  add(
+    {
+      owner: "PAD",
+      name: "Hole Shape",
+      kind: "enum",
+      choices: () => [
+        { label: "Round", value: "round" },
+        { label: "Oblong", value: "oblong" },
+      ],
+      get: (i) => (i.pad?.drill_slot ? "oblong" : "round"),
+      writeable: hasHole,
+      set: (i, v, c) => {
+        const p = i.pad!;
+        if ((p.drill_slot ? "oblong" : "round") === v) return [];
+        if (v === "oblong") {
+          const d = p.drill ?? 0;
+          return padWith(i, c, { drill: null, drill_slot: [d, d] });
+        }
+        return padWith(i, c, { drill: p.drill_slot ? p.drill_slot[0] : (p.drill ?? 0), drill_slot: null });
+      },
+    },
+    PAD_GROUP
+  );
   const holeRow = (name: "Hole Size X" | "Hole Size Y", axis: 0 | 1) =>
     add(
       {
@@ -392,8 +544,103 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     );
   holeRow("Hole Size X", 0);
   holeRow("Hole Size Y", 1);
-  for (const n of ["Top Post-machining", "Top Post-machining Size", "Top Counterbore Depth", "Top Countersink Angle", "Bottom Post-machining", "Bottom Post-machining Size", "Bottom Counterbore Depth", "Bottom Countersink Angle"]) ro("PAD", n, "Post-machining Properties", READ_ONLY.padstack, () => "", { available: hasHole });
-  for (const n of ["Backdrill Mode", "Bottom Backdrill Size", "Bottom Backdrill Must-Cut", "Top Backdrill Size", "Top Backdrill Must-Cut"]) ro("PAD", n, "Backdrill Properties", READ_ONLY.padstack, () => "", { available: hasHole });
+  // KiCad 10's "Post-machining Properties" and "Backdrill Properties" (`PAD_DESC` at KiCad 25ec2335): the board's rows (kicad-port/pcbProperties.ts, UI-LEFT-2 PP8) on
+  // what the library pad's file keeps (`(backdrill ..)`, `(front_post_machining ..)` ..: `fp_item set_pad_extras`, UI-LEFT-2 FF3).
+  const isRoundHole = (i: FpPropItem) => !i.pad?.drill_slot;
+  const tooSmall = (v: PropValue) => (num(v) < 0 ? "Value must be greater than or equal to 0" : null);
+  for (const [side, front] of [
+    ["Top", true],
+    ["Bottom", false],
+  ] as const) {
+    const mode = (i: FpPropItem, c: FpPropCtx): string => postMachiningMode(drillOf(i, c), front);
+    const pmOf = (i: FpPropItem, c: FpPropCtx) => drillOf(i, c)[postMachiningKey(front)];
+    add(
+      {
+        owner: "PAD",
+        name: `${side} Post-machining`,
+        kind: "enum",
+        choices: () => POST_MACHINING_CHOICES,
+        get: mode,
+        available: isRoundHole,
+        writeable: hasHole,
+        set: (i, v, c) => (mode(i, c) === v ? [] : drillCmd(i, c, withPostMachiningMode(drillOf(i, c), front, String(v) as PostMachiningMode))),
+      },
+      "Post-machining Properties"
+    );
+    const pmRow = (name: string, field: "size" | "depth" | "angle_ddeg", available: (m: string) => boolean): void => {
+      const angle = field === "angle_ddeg";
+      add(
+        {
+          owner: "PAD",
+          name,
+          kind: angle ? "double" : "int",
+          display: angle ? "degree" : "size",
+          get: (i, c) => (angle ? (pmOf(i, c)?.angle_ddeg ?? 0) / 10 : (pmOf(i, c)?.[field] ?? 0)),
+          available: (i, c) => isRoundHole(i) && available(mode(i, c)),
+          writeable: hasHole,
+          validate: tooSmall,
+          set: (i, v, c) => {
+            const n = angle ? Math.round(num(v) * 10) : Math.round(num(v));
+            return (pmOf(i, c)?.[field] ?? 0) === n ? [] : drillCmd(i, c, withPostMachining(drillOf(i, c), front, field, n));
+          },
+        },
+        "Post-machining Properties"
+      );
+    };
+    pmRow(`${side} Post-machining Size`, "size", (m) => m === "counterbore" || m === "countersink");
+    pmRow(`${side} Counterbore Depth`, "depth", (m) => m === "counterbore");
+    pmRow(`${side} Countersink Angle`, "angle_ddeg", (m) => m === "countersink");
+  }
+  add(
+    {
+      owner: "PAD",
+      name: "Backdrill Mode",
+      kind: "enum",
+      choices: () => BACKDRILL_CHOICES,
+      get: (i, c) => backdrillMode(drillOf(i, c)),
+      set: (i, v, c) => (backdrillMode(drillOf(i, c)) === v ? [] : drillCmd(i, c, withBackdrillMode(drillOf(i, c), String(v) as BackdrillMode, i.pad!.drill ?? 0))),
+    },
+    "Backdrill Properties"
+  );
+  const copperChoices = (): Choice[] => FP_EDITOR_LAYERS.filter((l) => l.endsWith(".Cu")).map((l) => ({ label: l, value: l }));
+  for (const [side, top] of [
+    ["Bottom", false],
+    ["Top", true],
+  ] as const) {
+    const drills = (i: FpPropItem, c: FpPropCtx): boolean => {
+      const m = backdrillMode(drillOf(i, c));
+      return isRoundHole(i) && (m === "both" || m === (top ? "top" : "bottom"));
+    };
+    add(
+      {
+        owner: "PAD",
+        name: `${side} Backdrill Size`,
+        kind: "int",
+        display: "size",
+        optional: true,
+        get: (i, c) => backdrillSize(drillOf(i, c), top) ?? "",
+        available: drills,
+        validate: (v) => (v !== "" ? tooSmall(v) : null),
+        set: (i, v, c) => {
+          const next = v === "" ? null : Math.round(num(v));
+          return backdrillSize(drillOf(i, c), top) === next ? [] : drillCmd(i, c, withBackdrillSize(drillOf(i, c), top, next));
+        },
+      },
+      "Backdrill Properties"
+    );
+    add(
+      {
+        owner: "PAD",
+        name: `${side} Backdrill Must-Cut`,
+        kind: "enum",
+        choices: () => copperChoices(),
+        get: (i, c) => backdrillEnd(drillOf(i, c), top),
+        available: drills,
+        set: (i, v, c) => (backdrillEnd(drillOf(i, c), top) === v ? [] : drillCmd(i, c, withBackdrillEnd(drillOf(i, c), top, String(v)))),
+      },
+      "Backdrill Properties"
+    );
+  }
   const keepOf = (i: FpPropItem) => (i.pad?.kicad ?? {}) as { property?: string | null; tokens?: string[]; solder_mask_margin?: number | null; solder_paste_margin?: number | null; solder_paste_margin_ratio?: number | null };
   add(
     {
@@ -410,7 +657,18 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     },
     PAD_GROUP
   );
-  ro("PAD", "Copper Layers", PAD_GROUP, READ_ONLY.copperLayers, (i) => (i.pad?.layers ?? []).filter((l) => l.endsWith(".Cu")).join(", "));
+  // "Copper Layers" (`PAD::SetUnconnectedLayerMode`): the padstack's `unconnected`, through the pad's edit.
+  add(
+    {
+      owner: "PAD",
+      name: "Copper Layers",
+      kind: "enum",
+      choices: () => UNCONNECTED_CHOICES,
+      get: (i) => i.pad?.stack?.unconnected ?? "keep_all",
+      set: (i, v, c) => ((i.pad!.stack?.unconnected ?? "keep_all") === v ? [] : padWith(i, c, { stack: { ...(i.pad!.stack ?? { mode: "normal" }), unconnected: String(v) as UnconnectedLayers } })),
+    },
+    PAD_GROUP
+  );
   add(
     {
       owner: "PAD",
@@ -706,8 +964,55 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     SHAPE
   );
   add({ owner: "EDA_SHAPE", name: "Fill Color", kind: "color", get: () => "", available: closed }, SHAPE);
-  for (const n of ["Start Shape", "Start Length", "Start Width", "Start Stroke Width", "End Shape", "End Length", "End Width", "End Stroke Width"]) {
-    add({ owner: "EDA_SHAPE", name: n, kind: "string", get: () => "", available: (i) => kindOf(i) === "segment" || kindOf(i) === "arc" || kindOf(i) === "bezier", readOnlyReason: READ_ONLY.endings }, SHAPE);
+  // KiCad 10's line endings (`_EDA_SHAPE_DESC` at KiCad 25ec2335, after Fill Color, on an open shape): kept by the graphic's id (`LibraryFootprintKeep::endings`), set
+  // through the graphic's looks (`set_graphic`'s `look.endings`, UI-LEFT-2 FF3); the board's rows (kicad-port/pcbProperties.ts) on them.
+  const isOpen = (i: FpPropItem) => kindOf(i) === "segment" || kindOf(i) === "arc" || kindOf(i) === "bezier";
+  const endingOf = (i: FpPropItem, c: FpPropCtx, side: "start" | "end"): LineEndingIr => fpEndingsOf(c.fp, i.id)[side] ?? {};
+  const endingSet = (i: FpPropItem, c: FpPropCtx, side: "start" | "end", next: LineEndingIr): Cmd[] => {
+    const all = fpEndingsOf(c.fp, i.id);
+    const was = all[side] ?? {};
+    const norm = (e: LineEndingIr) => JSON.stringify([e.style ?? "none", e.length_nm ?? 0, e.width_nm ?? 0, e.stroke_width_nm ?? 0, e.stroke_style ?? ""]);
+    if (norm(was) === norm(next)) return [];
+    const look: ShapeLook = { ...shapeLookOf(c.fp, i.id), endings: { ...all, [side]: next } };
+    return [graphicCmd(c, i.shape!, look)];
+  };
+  for (const [side, cap] of [
+    ["start", "Start"],
+    ["end", "End"],
+  ] as const) {
+    add(
+      {
+        owner: "EDA_SHAPE",
+        name: `${cap} Shape`,
+        kind: "enum",
+        choices: () => ENDING_STYLES.map((e, n) => ({ label: e.label, value: n })),
+        available: isOpen,
+        get: (i, c) => Math.max(0, ENDING_STYLES.findIndex((e) => e.value === (endingOf(i, c, side).style ?? "none"))),
+        set: (i, v, c) => {
+          const style = ENDING_STYLES[Math.round(num(v))]?.value;
+          return style === undefined ? [] : endingSet(i, c, side, { ...endingOf(i, c, side), style });
+        },
+      },
+      SHAPE
+    );
+    for (const [prop, field] of [
+      ["Length", "length_nm"],
+      ["Width", "width_nm"],
+      ["Stroke Width", "stroke_width_nm"],
+    ] as const) {
+      add(
+        {
+          owner: "EDA_SHAPE",
+          name: `${cap} ${prop}`,
+          kind: "int",
+          display: "size",
+          available: isOpen,
+          get: (i, c) => endingOf(i, c, side)[field] ?? 0,
+          set: (i, v, c) => endingSet(i, c, side, { ...endingOf(i, c, side), [field]: Math.max(0, Math.round(num(v))) }),
+        },
+        SHAPE
+      );
+    }
   }
   pm.inheritsAfter("PCB_SHAPE", "BOARD_CONNECTED_ITEM");
   pm.inheritsAfter("PCB_SHAPE", "EDA_SHAPE");

@@ -130,7 +130,7 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
 
     // in step with `fp.graphics`: each graphic's stroke type when it is not `solid`, its hatch and its lock; with `fp.texts`: each text's looks beyond `Text`, whether it
     // keeps upright, is shown and is locked (see `LibraryFootprintKeep`)
-    let mut strokes: Vec<(Option<String>, Option<eda_model::fp_art::Hatch>, bool)> = Vec::new();
+    let mut strokes: Vec<(Option<String>, Option<eda_model::fp_art::Hatch>, bool, eda_model::line_ending::LineEndings)> = Vec::new();
     let mut text_looks: Vec<(eda_model::board_text::TextExtra, bool, bool, bool)> = Vec::new();
     // and each pad's, graphic's and text's uuid
     let (mut pad_uuids, mut graphic_uuids, mut text_uuids): (Vec<Option<String>>, Vec<Option<String>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
@@ -275,7 +275,8 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
         }
         if fp.graphics.len() > drawn {
             let stroke = sexpr::find(child, "stroke").and_then(|st| sexpr::find(st, "type")).and_then(|t| sexpr::txt(t, 1)).filter(|t| *t != "solid").map(str::to_string);
-            strokes.push((stroke, hatch_of(child), crate::import_items::is_locked(child)));
+            // KiCad 10's line endings (`parsePCB_SHAPE`'s `T_start_shape` / `T_end_shape`, KiCad 25ec2335)
+            strokes.push((stroke, hatch_of(child), crate::import_items::is_locked(child), crate::line_ending_io::read(child)));
             graphic_uuids.push(uuid_of(child));
         }
         if fp.texts.len() > written {
@@ -295,7 +296,10 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     fp.kicad.uuids.extend(uuids);
     items.keep_uuids(&mut fp);
     resolve_groups(&mut fp, raw_groups, kept_uuids);
-    for (g, (stroke, hatch, locked)) in fp.graphics.iter().zip(strokes) {
+    for (g, (stroke, hatch, locked, endings)) in fp.graphics.iter().zip(strokes) {
+        if !endings.is_none() {
+            fp.kicad.endings.insert(g.id().to_string(), endings);
+        }
         if let Some(t) = stroke {
             fp.kicad.stroke_types.insert(g.id().to_string(), t);
         }

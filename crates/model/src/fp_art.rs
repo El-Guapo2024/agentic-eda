@@ -514,6 +514,7 @@ impl FpArt {
                 let mut s = FpShape::new(strip_id(g));
                 s.style = keep.stroke_types.get(g.id()).and_then(|t| LineStyle::from_token(t)).unwrap_or(LineStyle::Solid);
                 s.hatch = keep.hatches.get(g.id()).copied();
+                s.endings = keep.endings.get(g.id()).copied().unwrap_or_default();
                 s
             })
             .collect();
@@ -566,6 +567,9 @@ impl FpArt {
             }
             if let Some(h) = s.hatch {
                 keep.hatches.insert(id.clone(), h);
+            }
+            if !s.endings.is_none() {
+                keep.endings.insert(id.clone(), s.endings);
             }
         }
         for (t, id) in self.texts.iter().zip(&text_ids) {

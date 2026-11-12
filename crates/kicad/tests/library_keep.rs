@@ -361,3 +361,30 @@ fn a_shapes_private_flag_colours_hatch_and_radius_a_texts_link_and_a_fields_face
     assert_eq!(back.kicad.graphic_looks, l.kicad.graphic_looks);
     assert_eq!(back.kicad.field_looks, l.kicad.field_looks);
 }
+
+/// KiCad 10's line endings of a footprint's line, arc or curve (`(start_shape ..)`, `(end_shape ..)` after the stroke, KiCad 25ec2335 `parsePCB_SHAPE` and `format(
+/// PCB_SHAPE )`): read into the footprint's kept looks by the graphic's id, written back where KiCad writes them, and a pad's backdrill, post-machining and teardrops
+/// kept among its forms (UI-LEFT-2 FF3).
+#[test]
+fn a_footprint_lines_endings_and_a_pads_drills_and_teardrops_are_read_and_written_back() {
+    const ENDS: &str = r#"(footprint "E" (version 20260818) (generator "pcbnew") (layer "F.Cu")
+  (fp_line (start 0 0) (end 5 0) (stroke (width 0.12) (type solid)) (start_shape arrow (length 1) (width 0.8)) (end_shape circle) (layer "F.SilkS") (uuid "11111111-1111-1111-1111-111111111111"))
+  (fp_rect (start 0 0) (end 1 1) (stroke (width 0.12) (type solid)) (fill no) (layer "F.SilkS") (uuid "22222222-2222-2222-2222-222222222222"))
+  (pad "1" thru_hole circle (at 0 0) (size 2 2) (drill 1) (layers "*.Cu" "*.Mask") (front_post_machining counterbore (size 1.5) (depth 0.3)) (teardrops (best_length_ratio 0.5) (max_length 1) (best_width_ratio 1) (max_width 2) (curved_edges no) (filter_ratio 0.9) (enabled yes) (allow_two_segments yes) (prefer_zone_connections yes)) (uuid "33333333-3333-3333-3333-333333333333"))
+)"#;
+    let fp = parse_library_footprint(ENDS).expect("parses").footprint;
+    let line = fp.graphics.iter().find(|g| matches!(g, eda_model::ir::Shape::Segment { .. })).unwrap();
+    let e = fp.kicad.endings.get(line.id()).expect("the line's endings are kept by its id");
+    assert_eq!(e.start.style, eda_model::line_ending::LineEndingStyle::Arrow);
+    assert_eq!(e.start.length_nm, mm(1.0));
+    assert_eq!(e.end.style, eda_model::line_ending::LineEndingStyle::Circle);
+    assert_eq!(fp.kicad.endings.len(), 1, "a rectangle has none");
+    let text = export_kicad_mod(&fp);
+    assert!(text.contains("(stroke (width 0.12) (type solid)) (start_shape arrow (length 1) (width 0.8)) (end_shape circle) (layer \"F.SilkS\")"), "{text}");
+    let pad = &fp.pads[0];
+    assert!(!eda_model::via_extra::PadDrillProps::from_tokens(&pad.kicad.tokens).is_none());
+    assert!(eda_model::teardrop_params::TeardropParams::from_tokens(&pad.kicad.tokens).is_some_and(|t| t.enabled));
+    let back = parse_library_footprint(&text).expect("parses back").footprint;
+    assert_eq!(back.kicad.endings.values().next(), Some(e));
+    assert_eq!(eda_model::via_extra::PadDrillProps::from_tokens(&back.pads[0].kicad.tokens), eda_model::via_extra::PadDrillProps::from_tokens(&pad.kicad.tokens));
+}

@@ -18,7 +18,7 @@ import { drawTables } from "../canvas/tablePaint";
 import { layerColor } from "../canvas/layers";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { objectOn } from "../../kicad-port/appearance";
-import type { BoardState, Zone } from "../../api/types";
+import type { BoardState, Dimension, Zone } from "../../api/types";
 
 export interface FpItemsPaintOptions {
   selection: Set<string>;
@@ -49,6 +49,8 @@ function boardOptions(o: FpItemsPaintOptions): PaintOptions {
     layerOpacity: o.layerOpacity,
     activeLayer: o.highContrast ? layerStateKey(o.activeLayer) : null,
     highContrast: o.highContrast,
+    // High Contrast Mode as `GetColor` dims: the colour mixed into the background, not a lowered alpha (UI-LEFT-2 FF5)
+    dimByColour: true,
     // the Objects tab's opacities (`PCB_DISPLAY_OPTIONS`, all 1 to begin with in this editor) and the HIDDEN contrast mode, as the board's painters read them
     appearance: { ...PLAIN_APPEARANCE, opacity: fpOpacities(o.layerOpacity), contrastHidden: !!o.contrastHidden },
     gridNm: 0,
@@ -98,6 +100,13 @@ export function paintFpFields(ctx: CanvasRenderingContext2D, view: ViewTransform
   const shown = fields.filter((f) => (f.name === "Reference" ? objectOn(o.layerVisible, "footprint_references") : f.name === "Value" ? objectOn(o.layerVisible, "footprint_values") : true));
   const opts = boardOptions(o);
   inTwoPasses(ctx, shown, o, (subset) => drawFields(ctx, view, subset.map((field) => ({ field })), opts));
+}
+
+/** The dimension Draw Dimension holds, as the server works it out (`POST /api/dimension/preview`): `DrawDimension`'s preview is the dimension itself
+ * (`m_view->AddToPreview( dimension )`), its arrows and text included, in its layer's colour (UI-LEFT-2 FF8). */
+export function paintFpDimensionPreview(ctx: CanvasRenderingContext2D, view: ViewTransform, dim: Dimension): void {
+  const o: FpItemsPaintOptions = { selection: new Set(), layerVisible: {}, layerOpacity: {}, highContrast: false, activeLayer: dim.layer, sketchText: false, sketchGraphics: false, movePreview: null };
+  drawDimensions(ctx, view, { drawings: { shapes: [], texts: [], groups: [], dimensions: [dim], tables: [] } } as unknown as BoardState, boardOptions(o));
 }
 
 /** The dimensions, zones, text boxes, points, barcodes, images and tables of the footprint. */

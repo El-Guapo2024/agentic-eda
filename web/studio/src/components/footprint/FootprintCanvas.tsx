@@ -9,7 +9,7 @@
 import { useGridDisplay } from "../../state/commonOptions";
 import { gridYOf } from "../../kicad-port/gridSettings";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { CmdShape, LibraryPad, PadKind } from "../../api/types";
+import type { CmdShape, Dimension, LibraryPad, PadKind } from "../../api/types";
 import { FP_ITEM_TOOLS, useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/footprintEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
 import { paintFootprint } from "./footprintPainter";
@@ -56,13 +56,17 @@ import { layerColor } from "../canvas/layers";
 import { fpPointAt, fpPointDrag, fpPointEditTarget } from "../../kicad-port/fpPointEdit";
 import { shapeEditPoints, type EditPoint } from "../../kicad-port/pcbPointEdit";
 import type { Shape } from "../../api/types";
-import { fpEditTarget, fpFields, fpHitTest, fpItemKind, fpSelectionTarget, fpCanMirror, type FpEditTarget } from "../../kicad-port/fpItems";
+import { fpEditTarget, fpFields, fpGroupMembers, fpHitTest, fpItemBounds, fpItemKind, fpItemLocked, fpSelectionTarget, fpCanMirror, type FpEditTarget } from "../../kicad-port/fpItems";
+import { fpPassesFilter } from "../../kicad-port/fpAppearance";
 import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import { leaderModeOf, zoneClick, zoneFinish, zoneLeader } from "../../kicad-port/pcbDrawZone";
 import { isGroup } from "../../kicad-port/groupTree";
 import { fpItemToolClick, fpItemToolFinish, fpItemToolMotion, fpItemToolSnap, paintFpItemToolPreview } from "./fpItemTools";
 import { paintingIn, useColorThemeStamp } from "../../state/colorThemeStore";
 import "../../styles/canvas.css";
+import { planAddToGroup, planRemoveFromGroup } from "../../kicad-port/groupEdit";
+import { hairlineNm } from "../../kicad-port/view";
+import { fetchDimensionPreview } from "../../api/dimensionPreview";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
   draw_segment: "segment",
@@ -199,6 +203,23 @@ export function FootprintCanvas() {
   const studioPrefs = useStudioState().prefs;
   /** The graphic as the point editor's drag has it so far (drawn in place of the graphic until the drop commits it). */
   const [pointPreview, setPointPreview] = useState<CmdShape | null>(null);
+  // The dimension Draw Dimension holds as the server works it out (`POST /api/dimension/preview`, as the board's tool asks): the preview is the dimension itself, its
+  // arrows and text included (`DrawDimension`'s `m_view->AddToPreview`, UI-LEFT-2 FF8). Only the latest request's reply is kept; it goes with the tool's dimension.
+  const [dimPreview, setDimPreview] = useState<Dimension | null>(null);
+  const dimPreviewSeq = useRef(0);
+  const dimHeld = state.itemDraw?.tool === "dimension" ? state.itemDraw.draw.dim : null;
+  const dimHeldKey = dimHeld ? JSON.stringify(dimHeld) : "";
+  useEffect(() => {
+    const seq = ++dimPreviewSeq.current;
+    if (!dimHeld) {
+      setDimPreview(null);
+      return;
+    }
+    void fetchDimensionPreview(dimHeld).then((d) => {
+      if (seq === dimPreviewSeq.current) setDimPreview(d);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dimHeldKey]);
   // The middle and right drags, the pan on movement with a key and the auto-pan (`WX_VIEW_CONTROLS`), as the board and the schematic have them.
   const viewCtl = useLibraryViewControls({
     containerRef,
@@ -331,7 +352,8 @@ export function FootprintCanvas() {
     if (!ctx) return;
     ctx.save();
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = "#1a1a1a";
+    // the Footprint Editor's theme's background (`LAYER_PCB_BACKGROUND` of `FOOTPRINT_EDIT_FRAME::GetColorSettings`), which High Contrast Mode mixes into (UI-LEFT-2 FF5)
+    ctx.fillStyle = layerColor("background");
     ctx.fillRect(0, 0, width, height);
     ctx.save();
     ctx.translate(state.view.x, state.view.y);
@@ -370,12 +392,22 @@ export function FootprintCanvas() {
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
     });
+    // The group being worked in (`m_enteredGroupOverlay`, `PCB_PAINTER::draw( const PCB_GROUP* )` of an entered group): its box, solid, in the anchor colour (UI-LEFT-2 FF8)
+    const enteredBox = fp && state.enteredGroupId ? fpItemBounds(fp, state.enteredGroupId) : null;
+    if (enteredBox) {
+      const pad = hairlineNm(state.view, 12);
+      ctx.save();
+      ctx.strokeStyle = layerColor("anchor");
+      ctx.lineWidth = hairlineNm(state.view, 2.5);
+      ctx.strokeRect(enteredBox[0] - pad, enteredBox[1] - pad, enteredBox[2] - enteredBox[0] + 2 * pad, enteredBox[3] - enteredBox[1] + 2 * pad);
+      ctx.restore();
+    }
     // the point editor's edit points of the one selected graphic (`EDIT_POINTS::ViewDraw`), as the board draws a shape's handles
     const editTarget = shown && state.activeTool === "select" ? fpPointEditTarget(shown.graphics, state.selection) : null;
     if (editTarget) paintFpEditPoints(ctx, state.view.scale || 1, editTarget);
     // What the grid helper shows: the snap marker and its icon, the snap lines, the construction geometry.
     // what the dimension, table and reference image tools hold (components/footprint/fpItemTools.ts)
-    paintFpItemToolPreview(ctx, state.view, state, rubber ? [rubber.x, rubber.y] : null);
+    paintFpItemToolPreview(ctx, state.view, state, rubber ? [rubber.x, rubber.y] : null, state.itemDraw?.tool === "dimension" ? dimPreview : null);
     const snapOverlay = snap.overlay();
     if (snapOverlay) {
       const k = state.view.scale || 1;
@@ -385,7 +417,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, themeStamp]);
+  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, themeStamp, dimPreview, state.enteredGroupId]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -400,15 +432,17 @@ export function FootprintCanvas() {
    * click on it selects: the outermost group that holds it (`PCB_SELECTION_TOOL`'s group promotion; this editor enters no group).
    */
   const hitTest = useCallback(
-    (wx: number, wy: number): { kind: string; id: string; item: string } | null => {
+    (wx: number, wy: number, entered?: string | null): { kind: string; id: string; item: string } | null => {
       if (!fp) return null;
       const tol = Math.max(80_000, 6 / state.view.scale);
-      const hit = fpHitTest(fp, wx, wy, tol, { layerVisible: state.layerVisible, layerOpacity: state.layerOpacity, highContrast: state.highContrast, activeLayer: state.activeLayer }); // what is hidden is not picked (`Selectable`)
+      // what is hidden is not picked (`Selectable`), nor what the Selection Filter pane leaves out (`itemPassesFilter`, UI-LEFT-2 FF5)
+      const hit = fpHitTest(fp, wx, wy, tol, { layerVisible: state.layerVisible, layerOpacity: state.layerOpacity, highContrast: state.highContrast, activeLayer: state.activeLayer, filter: studioPrefs.fpSelectionFilter });
       if (!hit) return null;
-      const id = fpSelectionTarget(fp, hit.id);
+      const id = fpSelectionTarget(fp, hit.id, entered === undefined ? state.enteredGroupId : entered);
+      if (id === null) return null; // outside the group being worked in (`WithinScope`)
       return { kind: id === hit.id ? hit.kind : "group", id, item: hit.id };
     },
-    [fp, state.view.scale, state.layerVisible, state.layerOpacity, state.highContrast, state.activeLayer]
+    [fp, state.view.scale, state.layerVisible, state.layerOpacity, state.highContrast, state.activeLayer, state.enteredGroupId, studioPrefs.fpSelectionFilter]
   );
 
   /** One mouse event of the Renumber Pads tool: the numberable pads under the swept path take (or, on a click, give back) their number. */
@@ -604,7 +638,11 @@ export function FootprintCanvas() {
       setPointPreview(null);
       return;
     }
-    const hit = hitTest(wx, wy);
+    // `selectPoint`: "if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) ) ExitGroup();" -- a click outside the group being worked in leaves it
+    const groupBox = fp && state.enteredGroupId ? fpItemBounds(fp, state.enteredGroupId) : null;
+    const leaving = !!state.enteredGroupId && (!groupBox || wx < groupBox[0] || wx > groupBox[2] || wy < groupBox[1] || wy > groupBox[3]);
+    if (leaving) dispatch({ type: "EXIT_GROUP", selectGroup: false });
+    const hit = hitTest(wx, wy, leaving ? null : undefined);
     const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
     // `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` under "Left button drag:" (`leftDragOutcome`): a drag with a modifier, from empty space, or from an item the
@@ -700,7 +738,13 @@ export function FootprintCanvas() {
       }
       // `SelectRectArea` -> `SelectMultiple`: what the rectangle takes (as its direction says), each as the item a click on it would select (a group's member as the group)
       const [wx, wy] = worldAt(e);
-      const hits = fp ? [...new Set(rectSelectionHits(footprintItemBoxes(fp), drag.startWorld, [wx, wy]).map((id) => fpSelectionTarget(fp, id)))] : [];
+      // `SelectMultiple` takes what `itemPassesFilter( item, true )` lets through: the Selection Filter's rows, a locked item (a pad too) only with Locked items on
+      const filter = studioPrefs.fpSelectionFilter;
+      const boxed = fp ? rectSelectionHits(footprintItemBoxes(fp), drag.startWorld, [wx, wy]).filter((id) => {
+        const kind = fpItemKind(fp, id);
+        return !kind || kind === "group" || fpPassesFilter(filter, kind, fpItemLocked(fp, id), kind === "zone" && !!(fp.items?.zones ?? []).find((z) => z.id === id)?.is_rule_area, true);
+      }) : [];
+      const hits = fp ? [...new Set(boxed.map((id) => fpSelectionTarget(fp, id, state.enteredGroupId)).filter((id): id is string => id !== null))] : [];
       if (hits.length > 0 || hasModifier(drag.modifiers)) dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, drag.modifiers) });
       else dispatch({ type: "CLEAR_SELECTION" });
       return;
@@ -743,9 +787,13 @@ export function FootprintCanvas() {
     }
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
-    // `PCB_SELECTION_TOOL`'s double click -> `EDIT_TOOL::Properties` -> `FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: the item's own dialog (a group's Group Properties)
-    // A double click on a group enters it in KiCad (`EnterGroup`), and the next one opens the member's dialog; this editor enters no group, so the member's dialog opens at once.
-    if (hit && fp) openProperties(fpEditTarget(fp, [hit.kind === "group" ? hit.item : hit.id]));
+    // `PCB_SELECTION_TOOL::Main`'s double click: on a group, `EnterGroup` (its members selected, each picked one by one from then on, UI-LEFT-2 FF8); else
+    // `EDIT_TOOL::Properties` -> `FOOTPRINT_EDIT_FRAME::OnEditItemRequest`, the item's own dialog.
+    if (hit && fp && hit.kind === "group") {
+      dispatch({ type: "ENTER_GROUP", id: hit.id, members: fpGroupMembers(fp, hit.id) });
+      return;
+    }
+    if (hit && fp) openProperties(fpEditTarget(fp, [hit.id]));
   };
 
   /** `FOOTPRINT_EDIT_FRAME::OnEditItemRequest`: the dialog of the item (kicad-port/fpItems.ts `fpEditTarget`). */
@@ -825,6 +873,9 @@ export function FootprintCanvas() {
     const act = (name: string, label: string, disabled = false): MenuEntry => ({ label, onSelect: () => run(name), disabled: disabled || !isEnabled(name) });
     const anyGroup = !!fp && refs.some((r) => isGroup(fp.items?.groups ?? [], r));
     const entries: MenuEntry[] = [
+      // `PCB_SELECTION_TOOL::Init`: Enter Group with one group selected (`groupEnterCondition`), Leave Group inside one (`inGroupCondition`)
+      ...(fp && refs.length === 1 && isGroup(fp.items?.groups ?? [], refs[0]!) ? [act("common.Interactive.groupEnter", "Enter Group")] : []),
+      ...(state.enteredGroupId ? [act("common.Interactive.groupLeave", "Leave Group")] : []),
       // `EDIT_TOOL::Init`'s transform submenu: Rotate Counterclockwise / Clockwise, Mirror Horizontally / Vertically (`canMirror`)
       act("pcbnew.InteractiveEdit.rotateCcw", "Rotate Counterclockwise (R)", refs.length === 0),
       act("pcbnew.InteractiveEdit.rotateCw", "Rotate Clockwise (Shift+R)", refs.length === 0),
@@ -836,6 +887,9 @@ export function FootprintCanvas() {
       // `PCB_GROUP_TOOL`'s Grouping menu: Group (two or more items), Ungroup (a group among them)
       act("common.Interactive.group", "Group Items", refs.length < 2),
       act("common.Interactive.ungroup", "Ungroup Items", !anyGroup),
+      // `GROUP_CONTEXT_MENU::update`: Add Items with one group and an ungrouped item, Remove Items with a member
+      act("common.Interactive.addToGroup", "Add Items", !fp || !planAddToGroup(refs, fp.items?.groups ?? [])),
+      act("common.Interactive.removeFromGroup", "Remove Items", !fp || planRemoveFromGroup(refs, fp.items?.groups ?? []).length === 0),
       // `EDIT_TOOL::Init`'s clipboard rows (UI-LEFT-2 FF1)
       act("common.Interactive.cut", "Cut (Ctrl+X)", refs.length === 0),
       act("common.Interactive.copy", "Copy (Ctrl+C)", refs.length === 0),
@@ -861,6 +915,7 @@ export function FootprintCanvas() {
     <div
       ref={containerRef}
       className="pcb-canvas-container"
+      data-fp-canvas=""
       tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

@@ -2,7 +2,7 @@
 // toolbar is armed by its action, draws on a new footprint with real pointer events on the canvas, and commits one `fp_item add` (`GET /api/footprint`'s `items` has the item);
 // a double click on the item opens its Properties dialog (`FOOTPRINT_EDIT_FRAME::OnEditItemRequest`), OK edits it with one `fp_item set`, and one undo takes the edit back:
 //   - Draw Aligned / Orthogonal / Center / Radial Dimension and Leader (`DRAWING_TOOL::DrawDimension`: origin, end, height; a leader's text asked for at once), Dimension Properties;
-//   - Draw Rule Area (`DrawZone`, the outline, then Rule Area Properties: no tracks, vias or pads by default), the rule area editor;
+//   - Draw Rule Area (`DrawZone`: Rule Area Properties at the first corner -- no tracks, vias or pads by default --, then the outline), the rule area editor;
 //   - Draw Text Box (`DrawRectangle( drawTextBox )`, then Text Box Properties), Place Point (`PlacePoint`), Draw Table (`DrawTable`, then Table Properties),
 //     Add Barcode (`DrawBarcode`, then Barcode Properties) and Place Reference Image (`PlaceReferenceImage`, an image given to the action), each with its dialog.
 //
@@ -173,19 +173,21 @@
     }
   });
 
-  await scenario("Draw Rule Area: the outline, then Rule Area Properties (no tracks, vias, pads); its double click opens the rule area editor, one undo step", async (t) => {
+  await scenario("Draw Rule Area: Rule Area Properties at the first corner (no tracks, vias, pads), then the outline; its double click opens the rule area editor, one undo step", async (t) => {
     const a = await arm("pcbnew.InteractiveDrawing.ruleArea", "rule_area");
     t(a.armed, `armed: ${__eda.state().tool}`);
+    // `ZONE_CREATE_HELPER::OnFirstPoint` -> `createNewZone`: the settings are asked at the first click (UI-LEFT-2 FF8)
     await clickAt(-10 * MM, 10 * MM);
+    const dlg = await until(() => tid("zone-dialog"));
+    if (!t(!!dlg && dlg.getAttribute("data-zone-dialog") === "rule-area", `Rule Area Properties opens at the first corner: ${dlg?.getAttribute("data-zone-dialog")}`)) return;
+    t(/Rule Area Properties/.test(dlg.textContent) && !tid("zone-locked"), "titled so, with no Locked box (a footprint's item keeps none)");
+    tid("zone-ok").click();
+    await sleep(400);
+    t((await itemsOf(name, "zones")).length === 0, "nothing is added before the outline closes");
     await clickAt(-4 * MM, 10 * MM);
     await clickAt(-4 * MM, 14 * MM);
     await clickAt(-10 * MM, 14 * MM);
     await key("Enter");
-    const dlg = await until(() => tid("zone-dialog"));
-    if (!t(!!dlg && dlg.getAttribute("data-zone-dialog") === "rule-area", `Rule Area Properties opens on the outline: ${dlg?.getAttribute("data-zone-dialog")}`)) return;
-    t(/Rule Area Properties/.test(dlg.textContent) && !tid("zone-locked"), "titled so, with no Locked box (a footprint's item keeps none)");
-    t((await itemsOf(name, "zones")).length === 0, "nothing is added before OK");
-    tid("zone-ok").click();
     const zones = await until(async () => { const z = await itemsOf(name, "zones"); return z.length > 0 ? z : null; });
     const z = zones?.[0];
     t(z && z.is_rule_area && z.keepout_tracks && z.keepout_vias && z.keepout_pads && !z.keepout_copper_pour && !z.keepout_footprints && z.net === "" && z.outline.length >= 4, `the rule area: ${JSON.stringify(z && [z.is_rule_area, z.keepout_tracks, z.keepout_vias, z.keepout_pads, z.keepout_copper_pour, z.keepout_footprints, z.net, z.layer, z.outline.length])}`);

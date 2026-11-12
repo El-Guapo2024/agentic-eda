@@ -24,6 +24,8 @@
 //   * the symbol editor's Repeated Items, "Pitch of repeated pins" and "Label increment" (`SYMBOL_EDITOR_SETTINGS::m_Repeat`), which Repeat Pin (Insert) reads.
 // Not offered: "Center and warp cursor on zoom" (`input.center_on_zoom`): it warps the real pointer to the middle of the canvas (`CenterOnCursor`), which a web page
 // cannot do -- the browser gives a page no way to move the pointer -- so the wheel always zooms about the pointer, KiCad's other branch.
+import { DEFAULT_FP_SELECTION_FILTER, type FpSelectionFilter } from "./fpAppearance";
+import type { LayerPreset } from "./appearance";
 import { DEFAULT_LEFT_DRAG, DEFAULT_VIEW_CONTROL_SETTINGS, type DragAction, type LeftDragAction, type MotionPanModifier, type ScrollModifier, type ViewControlSettings } from "./viewControls";
 import type { MagneticOption, PcbMagnetic } from "./snapAnchors";
 import type { FlipDirection } from "./pcbTransform";
@@ -118,6 +120,10 @@ export interface Preferences {
   fpUserLayerCount: number;
   /** `m_DesignSettings.m_UserLayerNames` (`design_settings.default_footprint_layer_names`): a user layer's name in the Footprint Editor, by its canonical name. */
   fpUserLayerNames: Record<string, string>;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_SelectionFilter` (`editing.selection_filter`): the Footprint Editor's Selection Filter pane, kept between sessions (UI-LEFT-2 FF5). */
+  fpSelectionFilter: FpSelectionFilter;
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_LayerPresets` (`pcb_display.layer_presets`): the person's own layer presets of the Footprint Editor's Appearance manager (UI-LEFT-2 FF5). */
+  fpLayerPresets: LayerPreset[];
   /** `PCBNEW_SETTINGS::m_ArcEditMode` ("Arc editing mode:", Preferences > PCB Editor > Editing Options; `cycleArcEditMode` sets it too): how the point editor drags an arc. */
   pcbArcEditMode: ArcEditMode;
   /** `EESCHEMA_SETTINGS::m_Drawing.arc_edit_mode` ("Arc editing mode:", Preferences > Schematic Editor > Editing Options). */
@@ -211,6 +217,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fpDefaultTextItems: null,
   fpUserLayerCount: DEFAULT_USER_LAYER_COUNT,
   fpUserLayerNames: {},
+  fpSelectionFilter: DEFAULT_FP_SELECTION_FILTER,
+  fpLayerPresets: [],
   pcbArcEditMode: DEFAULT_ARC_EDIT_MODE,
   schArcEditMode: DEFAULT_ARC_EDIT_MODE,
   escClearsNetHighlight: true,
@@ -358,6 +366,11 @@ export function sanitizePreferences(raw: unknown): Preferences {
     fpDefaultTextItems: sanitizeFpTextItems(o.fpDefaultTextItems),
     fpUserLayerCount: clampInt(o.fpUserLayerCount, 0, 9, d.fpUserLayerCount),
     fpUserLayerNames: sanitizeUserLayerNames(o.fpUserLayerNames),
+    // `SetIfPresent`: each row the stored filter has, over the defaults
+    fpSelectionFilter: Object.fromEntries(Object.entries(DEFAULT_FP_SELECTION_FILTER).map(([k, v]) => [k, bool((o.fpSelectionFilter as Record<string, unknown> | undefined)?.[k], v)])) as unknown as FpSelectionFilter,
+    fpLayerPresets: Array.isArray(o.fpLayerPresets)
+      ? (o.fpLayerPresets as LayerPreset[]).filter((p) => p && typeof p.name === "string" && Array.isArray(p.layers) && Array.isArray(p.renderLayers)).map((p) => ({ ...p, readOnly: false, flipBoard: !!p.flipBoard, activeLayer: typeof p.activeLayer === "string" ? p.activeLayer : null }))
+      : d.fpLayerPresets,
     pcbArcEditMode: arcEditMode(o.pcbArcEditMode, d.pcbArcEditMode),
     schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
     escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),

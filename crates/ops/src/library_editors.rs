@@ -465,6 +465,7 @@ impl<'a> Board<'a> {
             k.unlocked_texts = std::mem::take(&mut k.unlocked_texts).into_iter().map(|id| re(&id)).collect();
             // the hatches, the locks and the hidden texts (UI-LEFT F5)
             k.hatches = std::mem::take(&mut k.hatches).into_iter().map(|(id, h)| (re(&id), h)).collect();
+            k.endings = std::mem::take(&mut k.endings).into_iter().map(|(id, e)| (re(&id), e)).collect();
             k.locked = std::mem::take(&mut k.locked).into_iter().map(|id| re(&id)).collect();
             k.hidden_texts = std::mem::take(&mut k.hidden_texts).into_iter().map(|id| re(&id)).collect();
             for e in &mut k.text_extras {
