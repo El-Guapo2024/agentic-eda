@@ -24,8 +24,8 @@
 //!    from its end, kept from one `Move` to the next ([`TailState`]): `routeStep`'s `reduceTail`, `handleSelfIntersections`, `handlePullback`,
 //!    `optimizeTailHeadTransition` (its `FANOUT_CLEANUP` straightens a short fan-out from a pad) and `mergeHead` are ported
 //!    ([`LinePlacer::build_head`]), and the walk and the shove are of the whole leg, split back into head and tail (`splitHeadTail`). A repeated
-//!    request for the same cursor starts from the state before the last one, as the tracer does. **Differs:** a head with an arc (the rounded
-//!    corner modes) never goes into the tail, so there the head is the leg from its start.
+//!    request for the same cursor starts from the state before the last one, as the tracer does. The tail keeps a rounded corner's arc
+//!    (UI-LEFT-2 RR4); **differs:** a cut inside an arc leaves chords, not KiCad's shorter arc.
 //!
 //! Each fixed "run" is single-layer (`crate::line::Line`); a via placed
 //! mid-route (`switch_layer`) ends the current run and starts a new one on
@@ -57,6 +57,7 @@ fn head_effort(settings: &RoutingSettings, manually_forced: bool) -> u32 {
     merge | if settings.smart_pads && !settings.corner_mode.is_90() && !manually_forced { optimizer::effort::SMART_PADS } else { 0 }
 }
 
+use crate::arcs::ArcPts;
 use crate::direction45::Direction45;
 use crate::mouse_trail::MouseTrailTracer;
 use crate::item::{Item, ItemId, Net};
@@ -285,8 +286,12 @@ impl LinePlacer {
     /// shown is the one of the last `Move` that routed. In Walk around and Shove the head is never shown colliding: it stays at the last position
     /// that worked, and a click fixes that (findings p5 F2-4, F2-5).
     ///
-    /// **Differs:** a head with an arc in it (a rounded corner mode) is never moved into the tail (KiCad's merges handle arcs); so in the rounded
-    /// modes the tail stays empty and the head is the leg from its start, as before this port.
+    /// The tail and head keep their arcs (a rounded corner mode's, [`TailState::arcs`]), and the steps treat them as KiCad's do: `mergeHead` and
+    /// `optimizeTailHeadTransition` count an arc as one shape, `mergeHead` and `handlePullback` take an arc's direction as `DIRECTION_45( const
+    /// SHAPE_ARC& )` does, `handlePullback`'s `RemoveShape( -1 )` takes a whole arc off the tail, and the optimizer leaves a line with an arc alone
+    /// (`hasArcs`), so the tail-head merge and the fan-out cleanup do nothing there (UI-LEFT-2 RR4). **Differs:** where `reduceTail` or
+    /// `handleSelfIntersections` cut the tail inside an arc (`SHAPE_LINE_CHAIN::Remove`'s `splitArc` keeps the part of the arc left as a shorter
+    /// arc), the part left is the arc's chords: the studio's lines hold an arc whole or not at all ([`Line::arcs`]).
     fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> HeadResult {
         let follow_mouse = settings.mode != Mode::MarkObstacles;
         let mut st = self.tail_state.borrow().clone();
@@ -301,6 +306,7 @@ impl LinePlacer {
             go_back = false;
             match self.route_head(node, rules, settings, p, &st) {
                 Some((r, head, tail)) => {
+                    st.learn_arcs(&r.arcs);
                     st.head = head;
                     st.tail = tail;
                     routed = Some(r);
@@ -327,21 +333,19 @@ impl LinePlacer {
             }
             i += 1;
         }
-        let arcs = routed.as_ref().is_some_and(|r| !r.arcs.is_empty());
-        if !fail && follow_mouse && !arcs {
+        if !fail && follow_mouse {
             let world = routed.as_ref().map(|r| r.world.clone()).unwrap_or_default();
             if !self.optimize_tail_head_transition(&mut st, node, rules, settings, &world) {
                 merge_head(&mut st);
             }
         }
+        st.prune_arcs();
         *self.tail_state.borrow_mut() = st.clone();
         match routed.filter(|_| !fail) {
             Some(mut r) => {
-                // `Trace()`: the tail and the head; a head with an arc has no tail (above), and is the line as routed
-                if !st.tail.is_empty() || r.arcs.is_empty() {
-                    r.pts = trace_of(&st);
-                    r.arcs.clear();
-                }
+                // `Trace()`: the tail and the head, with their arcs (a rounded corner merged into the tail stays an arc, UI-LEFT-2 RR4)
+                let trace = trace_line_of(&st);
+                (r.pts, r.arcs) = (trace.pts, trace.arcs);
                 *self.last_good.borrow_mut() = Some(r.clone());
                 r
             }
@@ -423,8 +427,10 @@ impl LinePlacer {
             moved = world.apply(node);
             &moved
         };
-        let trace = Line::from_points(self.net.clone(), self.current_layer, self.width, trace_of(st));
-        if !self.trail.borrow().is_manually_forced() {
+        let traced = trace_line_of(st);
+        let trace = Line { arcs: traced.arcs, ..Line::from_points(self.net.clone(), self.current_layer, self.width, traced.pts) };
+        // `OPTIMIZER::Optimize`'s `hasArcs`: a trace with an arc is not fanout-cleaned (nor merged below)
+        if !self.trail.borrow().is_manually_forced() && trace.arc_count() == 0 {
             if let Some(t) = optimizer::fanout_cleanup_trace(&trace, self.placing_via, world_node, rules, &exclude, settings.corner_mode) {
                 if t.pts.len() < 2 || !t.arcs.is_empty() {
                     return false;
@@ -436,7 +442,7 @@ impl LinePlacer {
             }
         }
         // `tail.ShapeCount() < 3`
-        if st.tail.len() < 4 {
+        if shape_count(&st.tail_line()) < 3 {
             return false;
         }
         // `int threshold = std::min( tail.PointCount(), tailLookbackSegments + 1 )` with `tailLookbackSegments = 3`
@@ -447,7 +453,11 @@ impl LinePlacer {
             let end = 2.min(st.head.len() - 1);
             append_points(&mut opt_line, &st.head[..=end]);
         }
-        let new_head = Line::from_points(self.net.clone(), self.current_layer, self.width, opt_line);
+        let new_head = Line { arcs: arcs_in(&st.arcs, &opt_line), ..Line::from_points(self.net.clone(), self.current_layer, self.width, opt_line) };
+        // `hasArcs`: `MERGE_SEGMENTS` leaves a line with an arc as it is, and `Optimize` says false
+        if new_head.arc_count() > 0 {
+            return false;
+        }
         let merged = optimizer::optimize_constrained(&new_head, world_node, rules, &exclude, optimizer::effort::MERGE_SEGMENTS, &optimizer::Constraints { corner_mode: settings.corner_mode, ..Default::default() });
         // `mergeFull` returns `current_path.SegmentCount() < segs_pre`
         if merged.segment_count() < new_head.segment_count() && merged.pts.len() >= 2 {
@@ -474,6 +484,7 @@ impl LinePlacer {
             let mut r = HeadResult::plain(vec![start], false, node, current);
             if !st.tail.is_empty() {
                 r.pts = st.tail.clone();
+                r.arcs = st.tail_line().arcs;
             }
             return Some((r, Vec::new(), st.tail.clone()));
         }
@@ -497,8 +508,9 @@ impl LinePlacer {
             if st.tail.is_empty() {
                 return l1;
             }
-            let mut full = Line::from_points(self.net.clone(), self.current_layer, self.width, st.tail.clone());
+            let mut full = Line { arcs: st.tail_line().arcs, ..Line::from_points(self.net.clone(), self.current_layer, self.width, st.tail.clone()) };
             append_points(&mut full.pts, &l1.pts);
+            full.arcs.extend(l1.arcs.iter().copied());
             full.simplify();
             full
         };
@@ -512,14 +524,14 @@ impl LinePlacer {
         // (`v.SetPos( walkFull.CLastPoint() ); walkFull.AppendVia( v )`). Without a via, one round.
         let walk_base = |world: &Node, mask: u8| -> Option<Line> {
             if !self.placing_via {
-                return walkaround::walk_base_line(world, rules, &with_tail(raw.clone()), mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode);
+                return walkaround::walk_base_line(world, rules, &with_tail(raw.clone()), &st.tail, mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode);
             }
             let to_layer = self.via_to_layer.unwrap_or(self.current_layer);
             let (mut walk_p, mut walked) = (p, None);
             for _round in 0..2 {
                 let target = self.push_via(world, rules, settings, walk_p, to_layer, mask);
                 let l1 = with_tail(build_l1(target));
-                let w = walkaround::walk_base_line(world, rules, &l1, mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode)?;
+                let w = walkaround::walk_base_line(world, rules, &l1, &st.tail, mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode)?;
                 walk_p = w.last().unwrap_or(target);
                 walked = Some(w);
             }
@@ -532,15 +544,19 @@ impl LinePlacer {
         // `splitHeadTail( newHead, m_tail, aNewHead, aNewTail )`, then `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`: the whole line (a
         // line with no tail is all head, as before there was a tail) and the new head and tail
         let split_and_optimize = |line: Line, world: &Node| -> (Line, Vec<Point>, Vec<Point>) {
-            if st.tail.len() < 2 || line.arc_count() > 0 {
+            if st.tail.len() < 2 {
                 let optimized = optimize(&line, world);
                 let head = optimized.pts.clone();
                 return (optimized, head, Vec::new());
             }
+            // the head and the tail keep the arcs of the line that are still whole in them
             let (head_pts, tail_pts) = split_head_tail(&line.pts, &st.tail);
-            let head = optimize(&Line::from_points(self.net.clone(), self.current_layer, self.width, head_pts), world);
-            let mut full = Line::from_points(self.net.clone(), self.current_layer, self.width, tail_pts.clone());
+            let head = optimize(&Line { arcs: line.arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, head_pts) }, world);
+            let mut full = Line { arcs: line.arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, tail_pts.clone()) };
             append_points(&mut full.pts, &head.pts);
+            full.arcs.extend(head.arcs.iter().copied());
+            let kept = arcs_in(&full.arcs, &full.pts);
+            full.arcs = kept;
             (full, head.pts, tail_pts)
         };
 
@@ -614,18 +630,19 @@ impl LinePlacer {
                     Some(nearest) => build_l1(nearest),
                     None => raw,
                 };
-                let colliding = raw.pts.windows(2).any(|w| {
-                    let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
-                    world_node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
-                });
+                // `m_currentNode->CheckColliding( &current )` of the head as a line (`LINE::Collide`): each segment asks the rules as the whole line
+                // (`Side::Line`, `evaluateLineSegments` with a rule on shapes), not as a segment alone (UI-LEFT-2 RR7)
+                let colliding = walkaround::path_collides(world_node, rules, &self.net, self.current_layer, self.width, &raw.pts, &exclude);
                 // `aNewHead = m_head; aNewTail = m_tail;`
                 let head = raw.pts.clone();
                 let mut r = HeadResult::plain_line(raw, colliding, node, current);
                 if !st.tail.is_empty() {
                     let mut full = st.tail.clone();
                     append_points(&mut full, &head);
+                    let mut arcs = st.tail_line().arcs;
+                    arcs.extend(r.arcs.iter().copied());
+                    r.arcs = arcs_in(&arcs, &full);
                     r.pts = full;
-                    r.arcs.clear();
                 }
                 Some((r, head, st.tail.clone()))
             }
@@ -827,7 +844,7 @@ impl LinePlacer {
         // with nothing exactly there, what `pickSingleItem( mousePos, net, layer, false, { m_startItem } )` finds within the grab radius -- the grid
         // (`maxSlopRadius`, UI-LEFT R7) -- by its copper, not its anchor; then `snapToItem` (a track's middle only with snap to tracks, `checkSnap`)
         let layer = if self.placing_via { None } else { Some(self.current_layer) };
-        let Some(id) = node.pick_single_item(p, Some(&self.net), layer, self.current_layer, settings.grab_radius, &self.exclude_end) else { return (None, None) };
+        let Some(id) = node.pick_single_item(p, Some(&self.net), layer, self.current_layer, settings.grab_radius, &self.exclude_end, settings.mode == Mode::MarkObstacles) else { return (None, None) };
         match node.snap_to_item(id, p) {
             Some((at, None)) => (Some(at), None),
             Some((at, Some(track))) if settings.snap_to_tracks => (Some(at), Some(track)),
@@ -1244,13 +1261,46 @@ impl LinePlacer {
 pub(crate) struct TailState {
     tail: Vec<Point>,
     head: Vec<Point>,
+    /// The arcs of the tail and the head (`SHAPE_LINE_CHAIN::m_arcs` of `m_tail` and `m_head`, a rounded corner mode's corners): found again by
+    /// their points ([`crate::line::arc_runs_in`]) as a [`Line`]'s are, so an arc whose points a step cuts into is chords from then on.
+    arcs: Vec<ArcPts>,
     direction: Direction45,
     initial: Direction45,
 }
 
 impl TailState {
     fn new(initial: Direction45) -> Self {
-        TailState { tail: Vec::new(), head: Vec::new(), direction: initial, initial }
+        TailState { tail: Vec::new(), head: Vec::new(), arcs: Vec::new(), direction: initial, initial }
+    }
+
+    /// The tail as a line of its points and the arcs that are still among them (`m_tail`).
+    fn tail_line(&self) -> Line {
+        chain_of(&self.tail, &self.arcs)
+    }
+
+    /// The head as a line (`m_head`).
+    fn head_line(&self) -> Line {
+        chain_of(&self.head, &self.arcs)
+    }
+
+    /// The arcs of `more` added to the ones the tail and head know.
+    fn learn_arcs(&mut self, more: &[ArcPts]) {
+        for a in more {
+            if !self.arcs.contains(a) {
+                self.arcs.push(*a);
+            }
+        }
+    }
+
+    /// Forget the arcs neither the tail nor the head holds any more.
+    fn prune_arcs(&mut self) {
+        let mut kept = arcs_in(&self.arcs, &self.tail);
+        for a in arcs_in(&self.arcs, &self.head) {
+            if !kept.contains(&a) {
+                kept.push(a);
+            }
+        }
+        self.arcs = kept;
     }
 
     /// `FixRoute`, `SetLayer`, a via: "m_head.Line().Clear(); m_tail.Line().Clear(); .. m_direction = m_initial_direction;".
@@ -1260,14 +1310,51 @@ impl TailState {
 }
 
 /// `LINE_PLACER::Trace()`: the tail and the head, simplified when there are more than two points ("if we have a zero-length seg as the only part
-/// of the trace, we don't want it to be removed at this stage").
-fn trace_of(st: &TailState) -> Vec<Point> {
+/// of the trace, we don't want it to be removed at this stage"), with their arcs.
+fn trace_line_of(st: &TailState) -> Line {
     let mut l = st.tail.clone();
     append_points(&mut l, &st.head);
-    if l.len() > 2 {
-        simplify_points(&mut l);
+    let mut line = chain_of(&l, &st.arcs);
+    if line.pts.len() > 2 {
+        line.simplify();
     }
+    line
+}
+
+/// The arcs of `pool` that `pts` still holds as they were made.
+fn arcs_in(pool: &[ArcPts], pts: &[Point]) -> Vec<ArcPts> {
+    crate::line::arc_runs_in(pool, pts).iter().map(|r| pool[r.arc]).collect()
+}
+
+/// A chain of `pts` with the arcs of `pool` it holds (`SHAPE_LINE_CHAIN` with its arcs; no net, layer or width).
+fn chain_of(pts: &[Point], pool: &[ArcPts]) -> Line {
+    let mut l = Line::from_points(None, 0, Nm::ZERO, pts.to_vec());
+    l.arcs = arcs_in(pool, pts);
     l
+}
+
+/// `SHAPE_LINE_CHAIN::ShapeCount()`: the segments that are not an arc's, and each arc once.
+fn shape_count(line: &Line) -> usize {
+    let runs = line.arc_runs();
+    let arc_segs: usize = runs.iter().map(|r| r.last - r.first).sum();
+    line.segment_count() - arc_segs + runs.len()
+}
+
+/// The arc of `line` point `i` is on (`IsPtOnArc( i )`, `ArcIndex( i )`), its run.
+fn arc_run_at(line: &Line, i: usize) -> Option<crate::line::ArcRun> {
+    line.arc_runs().into_iter().find(|r| i >= r.first && i <= r.last)
+}
+
+/// The arc whose chord segment `i` is (`IsArcSegment( i )`, `ArcIndex( i )`), its run.
+fn arc_run_of_segment(line: &Line, i: usize) -> Option<crate::line::ArcRun> {
+    line.arc_runs().into_iter().find(|r| i >= r.first && i < r.last)
+}
+
+/// `DIRECTION_45( const SHAPE_ARC& aArc )` of an arc of a chain, as KiCad 8303b2ad builds it: `VECTOR2I vec( aArc.GetP1() - aArc.GetP0() );
+/// vec.y = -vec.y;` -- the chord from the arc's start to its end (in the chain's order), its y turned over. Kept as KiCad has it.
+fn arc_direction(line: &Line, run: crate::line::ArcRun) -> Direction45 {
+    let (p0, p1) = (line.pts[run.first], line.pts[run.last]);
+    Direction45::from_vector(p1.x - p0.x, -(p1.y - p0.y))
 }
 
 /// `SHAPE_LINE_CHAIN::Append( chain )`: the points of `more`, the first left out when it repeats the last.
@@ -1296,7 +1383,7 @@ fn find_point(chain: &[Point], p: Point) -> Option<usize> {
 /// where it leaves the old tail -- at the first point of the old tail it no longer has (`l2.CLine().Find( aOldTail.CPoint( i ) ) < 0`), the old
 /// tail's end first split into it when it lies on one of its segments (`PointOnEdge`, `Split`). `(head, tail)`; with an old tail of fewer than two
 /// points the whole line is the head.
-fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>, Vec<Point>) {
+pub(crate) fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>, Vec<Point>) {
     let mut l2 = line.to_vec();
     let n = l2.len();
     if !(n > 1 && old_tail.len() > 1) {
@@ -1420,12 +1507,27 @@ fn handle_pullback(st: &mut TailState) -> bool {
         st.tail.clear();
         return true;
     }
-    let first_head = Direction45::from_seg(st.head[0], st.head[1]);
-    let last_tail = Direction45::from_seg(st.tail[n - 2], st.tail[n - 1]);
+    // `if( !head.IsPtOnArc( 0 ) ) first_head = DIRECTION_45( head.CSegment( 0 ) ); else first_head = DIRECTION_45( head.CArcs()[head.ArcIndex(0)] );`,
+    // and the same of the tail's point `lastSegIdx = tail.PointCount() - 2`
+    let (head, tail) = (st.head_line(), st.tail_line());
+    let last_seg = n - 2;
+    let first_head = arc_run_at(&head, 0).map_or_else(|| Direction45::from_seg(st.head[0], st.head[1]), |r| arc_direction(&head, r));
+    let last_tail = arc_run_at(&tail, last_seg).map_or_else(|| Direction45::from_seg(st.tail[n - 2], st.tail[n - 1]), |r| arc_direction(&tail, r));
     let angle = first_head.angle_to(&last_tail);
     if matches!(angle, crate::direction45::AngleType::Right | crate::direction45::AngleType::Acute) {
-        st.direction = last_tail;
-        st.tail.pop();
+        // `if( !tail.IsArcSegment( lastSegIdx ) ) m_direction = DIRECTION_45( tail.CSegment( lastSegIdx ) ); else m_direction = DIRECTION_45( arc );`
+        st.direction = arc_run_of_segment(&tail, last_seg).map_or_else(|| Direction45::from_seg(st.tail[n - 2], st.tail[n - 1]), |r| arc_direction(&tail, r));
+        // `tail.RemoveShape( -1 )`: the last point, or a whole arc that ends the tail -- from its first point (`Remove( start, end )`: the point
+        // where the segment before it met it goes too, unless an arc ends there)
+        match arc_run_at(&tail, n - 1) {
+            Some(r) => {
+                let shared = r.first > 0 && tail.arc_runs().iter().any(|o| o.last == r.first);
+                st.tail.truncate(if shared { r.first + 1 } else { r.first });
+            }
+            None => {
+                st.tail.pop();
+            }
+        }
         if st.tail.len() < 2 {
             st.direction = st.initial;
         }
@@ -1439,10 +1541,16 @@ fn handle_pullback(st: &mut TailState) -> bool {
 fn merge_head(st: &mut TailState) -> bool {
     use crate::direction45::AngleType;
     let forbidden = |a: AngleType| matches!(a, AngleType::Acute | AngleType::HalfFull | AngleType::Undefined);
-    simplify_points(&mut st.head);
-    simplify_points(&mut st.tail);
-    let n_head = st.head.len().saturating_sub(1);
-    let n_tail = st.tail.len().saturating_sub(1);
+    let mut head_line = st.head_line();
+    head_line.simplify();
+    st.head = head_line.pts;
+    let mut tail_line = st.tail_line();
+    tail_line.simplify();
+    st.tail = tail_line.pts;
+    // `head.ShapeCount()`, `tail.ShapeCount()`: an arc is one shape
+    let (head, tail) = (st.head_line(), st.tail_line());
+    let n_head = shape_count(&head);
+    let n_tail = shape_count(&tail);
     if n_head < 3 {
         return false;
     }
@@ -1453,20 +1561,24 @@ fn merge_head(st: &mut TailState) -> bool {
     if st.head.windows(3).any(|w| forbidden(Direction45::from_seg(w[0], w[1]).angle_to(&Direction45::from_seg(w[1], w[2])))) {
         return false;
     }
+    let dir_head = arc_run_at(&head, 0).map_or_else(|| Direction45::from_seg(st.head[0], st.head[1]), |r| arc_direction(&head, r));
     if n_tail > 0 {
-        let dir_head = Direction45::from_seg(st.head[0], st.head[1]);
         let k = st.tail.len();
-        let dir_tail = Direction45::from_seg(st.tail[k - 2], st.tail[k - 1]);
+        let dir_tail = arc_run_at(&tail, k - 2).map_or_else(|| Direction45::from_seg(st.tail[k - 2], st.tail[k - 1]), |r| arc_direction(&tail, r));
         if forbidden(dir_head.angle_to(&dir_tail)) {
             return false;
         }
     }
     let head = std::mem::take(&mut st.head);
     append_points(&mut st.tail, &head);
-    simplify_points(&mut st.tail);
+    let mut merged = st.tail_line();
+    merged.simplify();
+    st.tail = merged.pts;
     let k = st.tail.len();
     if k >= 2 {
-        st.direction = Direction45::from_seg(st.tail[k - 2], st.tail[k - 1]);
+        // `if( !tail.IsArcSegment( lastSegIdx ) ) m_direction = DIRECTION_45( tail.CSegment( -1 ) ); else m_direction = DIRECTION_45( arc );`
+        let tail = st.tail_line();
+        st.direction = arc_run_of_segment(&tail, k - 2).map_or_else(|| Direction45::from_seg(st.tail[k - 2], st.tail[k - 1]), |r| arc_direction(&tail, r));
     }
     true
 }
@@ -2004,7 +2116,7 @@ mod tests {
 
     fn ts(tail: &[(f64, f64)], head: &[(f64, f64)]) -> TailState {
         let at = |&(x, y): &(f64, f64)| Point { x: mm(x), y: mm(y) };
-        TailState { tail: tail.iter().map(at).collect(), head: head.iter().map(at).collect(), direction: Direction45::E, initial: Direction45::N }
+        TailState { tail: tail.iter().map(at).collect(), head: head.iter().map(at).collect(), arcs: Vec::new(), direction: Direction45::E, initial: Direction45::N }
     }
 
     /// The tail's own steps, held to `pns_line_placer.cpp`: `mergeHead` takes a head of three segments with no acute corner into the tail (one of
@@ -2097,6 +2209,52 @@ mod tests {
         assert_eq!(placer.fix(&node, &rules, &settings, at(6.5, 0.0)), FixOutcome::Fixed { real_end: false });
         assert_eq!(placer.runs[0].pts.first(), Some(&at(0.0, 0.0)));
         assert!(placer.tail_state.borrow().tail.is_empty() && placer.tail_state.borrow().head.is_empty());
+    }
+
+    /// UI-LEFT-2 RR4: in a rounded corner mode the head's arc goes into the tail as a segment's would (`mergeHead` counts it as one shape, takes its
+    /// direction as `DIRECTION_45( const SHAPE_ARC& )`), stays an arc there while the head goes on, and the click fixes the arc.
+    #[test]
+    fn in_a_rounded_mode_a_head_with_an_arc_goes_into_the_tail_and_stays_an_arc() {
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        let settings = RoutingSettings { mode: Mode::Walkaround, corner_mode: crate::direction45::CornerMode::Rounded45, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+        let mut merged = false;
+        let mut pv = None;
+        for (x, y) in [(0.5, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0), (5.0, 0.0), (6.0, 0.0), (7.0, 0.5), (8.0, 1.5), (9.0, 2.5), (10.0, 3.5), (11.0, 3.5), (12.0, 3.5)] {
+            pv = Some(placer.preview(&node, &rules, &settings, at(x, y)));
+            let st = placer.tail_state.borrow();
+            merged |= !arcs_in(&st.arcs, &st.tail).is_empty();
+        }
+        assert!(merged, "an arc went into the tail");
+        let pv = pv.unwrap();
+        assert!(!pv.colliding && pv.head.first() == Some(at(0.0, 0.0)) && pv.head.last() == Some(at(12.0, 3.5)), "{:?}", pv.head.pts);
+        assert!(pv.head.arc_count() >= 1, "the trace keeps its arcs: {:?}", pv.head);
+        assert!(!walkaround::path_collides(&node, &rules, &net_of("SIG"), 0, mm(0.2), &pv.head.pts, &[]));
+        assert_eq!(placer.fix(&node, &rules, &settings, at(12.0, 3.5)), FixOutcome::Fixed { real_end: false });
+        assert!(placer.runs[0].arc_count() >= 1, "fixed as an arc: {:?}", placer.runs[0]);
+    }
+
+    /// `handlePullback` on a tail that ends in an arc: `RemoveShape( -1 )` takes the whole arc off, from its first point, and the direction is the
+    /// arc's (`DIRECTION_45( arc )`: its chord with y turned over).
+    #[test]
+    fn a_pullback_takes_a_whole_arc_off_the_tail() {
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let arc = ArcPts::new(at(1.0, 0.0), at(1.7, 0.3), at(2.0, 1.0));
+        let mut tail = Line::from_points(None, 0, Nm::ZERO, vec![at(0.0, 0.0)]);
+        tail.append_arc(arc);
+        let n_arc = tail.pts.len();
+        let end = *tail.pts.last().unwrap();
+        // the head goes back west from the arc's end: a right or acute turn
+        let mut st = TailState { tail: tail.pts.clone(), head: vec![end, at(0.0, 1.0)], arcs: vec![arc], direction: Direction45::E, initial: Direction45::E };
+        let r = crate::line::arc_runs_in(&[arc], &st.tail)[0];
+        assert_eq!((r.first, r.last), (1, n_arc - 1));
+        assert_eq!(arc_direction(&st.tail_line(), r), Direction45::from_vector(mm(1.0), mm(-1.0)), "KiCad's y-flipped chord");
+        assert!(handle_pullback(&mut st));
+        assert_eq!(st.tail, vec![at(0.0, 0.0)], "the arc and the point it starts at are gone");
+        assert_eq!(st.direction, Direction45::E, "one point left: the initial direction");
     }
 
     /// `reduceTail`: from the tail's last segment back, the earliest whose straight-first trace to the cursor leaves in its own direction and is

@@ -326,6 +326,76 @@ export function patternOutline(p: TuningPattern): P[][] {
   return lines.map((line) => offsetOutline(line, amplitude));
 }
 
+/** Whether `p` is inside the closed polygon `poly` (even-odd). */
+function insidePolygon(p: P, poly: readonly P[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i]!;
+    const [xj, yj] = poly[j]!;
+    if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Where on `a`..`b` (0..1) it crosses the edges of the closed polygon `poly`. */
+function crossings(a: P, b: P, poly: readonly P[]): number[] {
+  const out: number[] = [];
+  const r = sub(b, a);
+  for (let i = 0; i < poly.length; i++) {
+    const c = poly[i]!;
+    const d = poly[(i + 1) % poly.length]!;
+    const s = sub(d, c);
+    const den = r[0] * s[1] - r[1] * s[0];
+    if (Math.abs(den) < 1e-12) continue;
+    const t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den;
+    const u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den;
+    if (t > 0 && t < 1 && u >= 0 && u <= 1) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * The outline of the union of closed polygons (`SHAPE_POLY_SET::BooleanAdd`), as the pieces of each polygon's edges that lie outside every other one: what
+ * `merged.Outline( 0 )` draws when the polygons overlap. Open polylines.
+ */
+export function unionOutline(polys: readonly (readonly P[])[]): P[][] {
+  const out: P[][] = [];
+  polys.forEach((poly, i) => {
+    const others = polys.filter((_, j) => j !== i);
+    let run: P[] = [];
+    const flush = () => {
+      if (run.length >= 2) out.push(run);
+      run = [];
+    };
+    for (let k = 0; k < poly.length; k++) {
+      const a = poly[k]!;
+      const b = poly[(k + 1) % poly.length]!;
+      const ts = [0, 1, ...others.flatMap((o) => crossings(a, b, o))].sort((x, y) => x - y);
+      const at = (t: number): P => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      for (let m = 0; m + 1 < ts.length; m++) {
+        const mid = at((ts[m]! + ts[m + 1]!) / 2);
+        if (others.every((o) => !insidePolygon(mid, o))) {
+          if (run.length === 0) run.push(at(ts[m]!));
+          run.push(at(ts[m + 1]!));
+        } else flush();
+      }
+    }
+    flush();
+  });
+  return out;
+}
+
+/**
+ * What `ViewDraw` draws of `getOutline()`: one closed outline, or for a pair the outline of the union of its two (`merged.BooleanAdd( poly, polyCoupled )`, then
+ * `merged.Outline( 0 )`; both sides or, single-sided, `chain1` and `chain2`) -- the pieces of each that lie outside the other (UI-LEFT-2 RR5). A pair whose two
+ * outlines do not meet has both drawn (KiCad draws the first only).
+ */
+export function patternOutlineDrawn(p: TuningPattern): { pts: P[]; closed: boolean }[] {
+  const polys = patternOutline(p).filter((q) => q.length >= 3);
+  if (polys.length < 2) return polys.map((pts) => ({ pts, closed: true }));
+  return unionOutline(polys).map((pts) => ({ pts, closed: false }));
+}
+
 /** The pattern's baseline, as dashed segments are drawn along it (`ViewDraw`: `m_baseLine`, or the line from the origin to the end). */
 export function patternBaselines(p: TuningPattern): P[][] {
   const line = (pts: readonly { x: Nm; y: Nm }[]): P[] => pts.map((q): P => [q.x, q.y]);

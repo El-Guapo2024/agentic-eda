@@ -6,11 +6,12 @@
 
 import { routeRatsnestAnchor } from "../../api/client";
 import type { LayerPair } from "../../kicad-port/layerPairs";
-import { layerPairMap, planViaCommand, VIA_COMMANDS, type ViaPlan, type ViaRefusal } from "../../kicad-port/routerVia";
+import { addLayerPair, currentRouterSizesPairs, planViaCommand, VIA_COMMANDS, type ViaPlan, type ViaRefusal } from "../../kicad-port/routerVia";
 
-/** The router's sizes' layer pairs a route starts with: `prepareInteractive`'s `sizes.AddLayerPair( m_Route_Layer_TOP, m_Route_Layer_BOTTOM )`. */
+/** The router's sizes' layer pairs a route starts with when its draw state holds none: `prepareInteractive`'s `sizes( m_router->Sizes() )` -- the pairs
+ *  kept from the last route (`m_savedSizes`, UI-LEFT-2 RR3) -- with `sizes.AddLayerPair( m_Route_Layer_TOP, m_Route_Layer_BOTTOM )`. */
 export function startSizesPairs(pair: LayerPair): Record<string, string> {
-  return layerPairMap(pair.a, pair.b);
+  return addLayerPair(currentRouterSizesPairs(), pair.a, pair.b);
 }
 
 /**

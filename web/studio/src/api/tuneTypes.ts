@@ -190,4 +190,6 @@ export interface TunePatternReply {
   info?: string;
   /** The design rule's target (`EvalRules`): lengths in nanometres, or with `time_domain` (a rule in ps) delays in picoseconds. */
   constraint?: { name: string; time_domain?: boolean; min: number; opt: number; max: number } | null;
+  /** What the message panel shows of the pattern (`GetMsgPanelInfo`, kicad-port/tuningPanel.ts), UI-LEFT-2 RR5. */
+  panel?: import("../kicad-port/tuningPanel").TuningPanelData;
 }

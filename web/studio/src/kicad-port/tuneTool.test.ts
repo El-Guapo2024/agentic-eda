@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { carriedSettings, handleAt, statusBoxLayout, kindOfMode, modeOfKind, offsetOutline, offsetSide, pageSettings, patternBaselines, patternOutline, readoutBox, readoutSummary, settingsOfPattern, TUNE_KEY_ACTIONS, tuneStateFromReply } from "./tuneTool";
+import { carriedSettings, handleAt, statusBoxLayout, kindOfMode, modeOfKind, offsetOutline, offsetSide, pageSettings, patternBaselines, patternOutline, patternOutlineDrawn, unionOutline, readoutBox, readoutSummary, settingsOfPattern, TUNE_KEY_ACTIONS, tuneStateFromReply } from "./tuneTool";
 import type { TuneReadout, TuningPattern } from "../api/tuneTypes";
 
 const area = (poly: readonly (readonly [number, number])[]) => {
@@ -168,4 +168,20 @@ test("the status box sits where TUNING_STATUS_VIEW_ITEM::ViewDraw puts it: above
   assert.deepEqual(L.header, { size: 10_000, stroke: 2_000, y: 1_954_000, xs: [1_010_000, 1_147_000, 1_236_000] });
   // the values KiROUND( 19 * 1.3 ) = 25 px below the header, in 12 px glyphs
   assert.deepEqual(L.values, { size: 12_000, stroke: 2_400, y: 1_979_000, xs: [1_010_000, 1_147_000, 1_236_000] });
+});
+
+// UI-LEFT-2 RR5: a pair's outline is drawn as the union of its two (`merged.BooleanAdd( poly, polyCoupled )`, `Outline( 0 )`), not two capsules over each other.
+test("a pair pattern's outline is the outline of the union of its two", () => {
+  const square = (x0: number, y0: number, s: number): [number, number][] => [[x0, y0], [x0 + s, y0], [x0 + s, y0 + s], [x0, y0 + s]];
+  const pieces = unionOutline([square(0, 0, 10), square(5, 5, 10)]);
+  const pts = pieces.flat();
+  // nothing of either square's edges inside the other one is left
+  assert.ok(pts.every(([x, y]) => !(x > 5 && x < 10 && y > 5 && y < 10)), JSON.stringify(pieces));
+  const length = pieces.reduce((n, piece) => n + piece.slice(1).reduce((m, q, i) => m + Math.hypot(q[0] - piece[i]![0], q[1] - piece[i]![1]), 0), 0);
+  assert.ok(Math.abs(length - 60) < 1e-6, `the union's perimeter is 60: ${length}`);
+  const pair = patternOutlineDrawn(pattern({ mode: "diff_pair", last_diff_pair_gap: 450, base_line_coupled: [{ x: 10_000, y: 5_700 }, { x: 30_000, y: 5_700 }] }));
+  assert.ok(pair.every((p) => !p.closed) && pair.length >= 2, "open pieces of the merged outline");
+  const ys = pair.flatMap((p) => p.pts.map((q) => q[1]));
+  assert.ok(Math.abs(Math.max(...ys) - (5_700 + 1_000 + 225 + 250)) < 1e-6 && Math.abs(Math.min(...ys) - (5_000 - 1_475)) < 1e-6, `${Math.min(...ys)}..${Math.max(...ys)}`);
+  assert.equal(patternOutlineDrawn(pattern()).length, 1, "a single track's is the one closed outline");
 });

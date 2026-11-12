@@ -384,6 +384,29 @@ pub fn rule_constraint(design: &Design, model: &ConstraintModel, kind: TuningMod
     Some(Constraint { name, range: TargetRange { min: c.value.min.unwrap_or(tolerance.min), opt, max: c.value.max.unwrap_or(tolerance.max) }, time_domain })
 }
 
+/// `PCB_TUNING_PATTERN::GetMsgPanelInfo`'s rule (UI-LEFT-2 RR5): `drcEngine->EvalRules( SKEW_CONSTRAINT / LENGTH_CONSTRAINT, primaryItem, coupledItem,
+/// m_layer )` of the pattern's first member track and the first of the other net, as it is -- min, opt and max as the rule has them -- with
+/// `constraint.GetName()` and whether its values are times. `None` when it is null.
+pub fn panel_constraint(design: &Design, model: &ConstraintModel, kind: TuningMode, primary: &str, coupled: Option<&str>, layer: &str) -> Option<(String, eda_drc::constraints::MinOptMax, bool)> {
+    use eda_drc::rule_board::RuleBoard;
+    let board = eda_drc::board::build(design, model);
+    let base = |s: &eda_drc::board::DrcTrackSeg| s.id.rsplit_once('#').map_or(s.id.clone(), |(b, _)| b.to_string());
+    let find = |id: &str| board.tracks.iter().position(|s| base(s) == id && s.layer == layer).or_else(|| board.tracks.iter().position(|s| base(s) == id));
+    let a = find(primary)?;
+    let rb = RuleBoard::new(design, model, &board, eda_drc::constraints::Units::Mm, model.board.custom_rules_text.as_deref());
+    let ia = rb.segment_item_at(a);
+    let ib = coupled.and_then(find).map(|b| rb.segment_item_at(b));
+    let ctype = if kind == TuningMode::DiffPairSkew { CType::Skew } else { CType::Length };
+    let c = rb.engine().eval_rules(ctype, Some(&ia), ib.as_ref(), Some(layer), None);
+    if c.is_null() {
+        return None;
+    }
+    let rule = c.parent.and_then(|i| rb.engine().rules.get(i));
+    let time_domain = rule.and_then(|r| r.find_constraint(ctype)).is_some_and(|k| k.options & eda_drc::dru::OPT_TIME_DOMAIN != 0);
+    let name = rule.map(|r| r.name.clone()).unwrap_or(c.name.clone());
+    Some((name, c.value, time_domain))
+}
+
 /// **INACTIVE** (R7-D4; kept, not deleted, per the user's rule for replaced code): the tuner's old rule lookup, a second evaluator over `BoardRules::custom_rules`
 /// (`eda_kicad::parse_custom_rules`, a second `.kicad_dru` reader beside the rule engine's `crates/drc/src/dru.rs`) on two stand-in tracks with a net and a layer
 /// only, and B the partner. Nothing calls it: [`rule_constraint`] is the lookup. Delete it with the reader once nothing reads `custom_rules`.
@@ -952,30 +975,65 @@ fn apply_cmd(scene: &Scene, cmd: &Cmd) -> Result<Design, String> {
     Ok(board.design().clone())
 }
 
-/// `pickSegment` over a baseline: the world's segment on `layer` nearest `at`, within the clearance and half the width of it, preferring the one whose middle is
-/// nearest the baseline.
+/// `pickSegment( aRouter, aWhere, aLayer, aPointOut, aBaseline )` (pcb_tuning_pattern.cpp): the track -- a segment or an arc (`SEGMENT_T | ARC_T`, UI-LEFT-2
+/// RR5) -- on `layer` at `at`: the items under the point (`QueryHoverItems( aWhere, 0 )`), then those within the slop (`maxSlopRadius = Clearance() +
+/// TrackWidth() / 2`, here the candidate's own net's clearance and width), both passes run, each candidate taken in turn when its distance to the point (the
+/// segment's or the arc's nearest point) is no more than the best so far, and with a baseline when its middle (the segment's centre, the arc's mid point) is
+/// no farther from the baseline than the best so far -- KiCad's running filter, not a minimum of the pair.
 pub fn segment_near(scene: &Scene, at: Point, layer: &str, baseline: &[Point]) -> Option<ItemId> {
     let layer_idx = scene.layers.index_of(layer)?;
-    let mut best: Option<((i128, i128), ItemId)> = None;
-    for (id, item) in scene.world.iter() {
-        let Item::Segment(s) = item else { continue };
-        if s.layer != layer_idx || s.net.is_none() {
-            continue;
+    let mut dist = i128::MAX;
+    let mut dist_baseline = i128::MAX;
+    let mut picked: Option<ItemId> = None;
+    let sq = |a: Point, b: Point| (a.x - b.x).area(a.x - b.x) + (a.y - b.y).area(a.y - b.y);
+    let baseline_dist = |target: Point| -> i128 {
+        if baseline.len() > 1 {
+            baseline.windows(2).map(|w| Seg::new(w[0], w[1]).squared_distance(target)).min().unwrap_or(0)
+        } else {
+            sq(baseline[0], target)
         }
-        let seg = Seg::new(s.a, s.b);
-        let slop = Node::clearance(&scene.env.rules, &s.net, &None) + s.width / 2 + Nm::new(1);
-        let d = seg.squared_distance(at);
-        if d > slop.area(slop) {
-            continue;
-        }
-        let centre = Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
-        let dc = baseline.windows(2).map(|w| Seg::new(w[0], w[1]).squared_distance(centre)).min().unwrap_or(0);
-        let key = (d, dc);
-        if best.as_ref().is_none_or(|(k, _)| key < *k) {
-            best = Some((key, id));
+    };
+    let slop_of = |net: &eda_pns::item::Net, width: Nm| Node::clearance(&scene.env.rules, net, &None) + width / 2;
+    for pass in 0..2 {
+        // `QueryHoverItems( aWhere, slopRadius )`, the item table's order
+        let reach = scene.world.iter().map(|(_, it)| match it {
+            Item::Segment(s) => slop_of(&s.net, s.width),
+            Item::Arc(a) => slop_of(&a.net, a.width),
+            _ => Nm::ZERO,
+        }).max().unwrap_or(Nm::ZERO);
+        for id in scene.world.hover_items(at, if pass == 0 { Nm::ZERO } else { reach }) {
+            let (nearest, target, net, width) = match scene.world.get(id) {
+                Some(Item::Segment(s)) if s.layer == layer_idx => (Seg::new(s.a, s.b).nearest_point(at), Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 }, &s.net, s.width),
+                Some(Item::Arc(a)) if a.layer == layer_idx => (a.arc.nearest_point(at), a.arc.mid, &a.net, a.width),
+                _ => continue,
+            };
+            // `IsRoutable()`, and within this candidate's slop on the second pass (`QueryHoverItems` with its radius)
+            if net.is_none() {
+                continue;
+            }
+            if pass == 1 {
+                let shape = scene.world.get(id).map(|it| it.shape(layer_idx));
+                let within = shape.is_some_and(|sh| eda_drc::kimath::Shape::Circle { c: at, r: Nm::ZERO }.clearance_to(&sh).0 <= slop_of(net, width));
+                if !within {
+                    continue;
+                }
+            }
+            let d = sq(nearest, at);
+            if d > dist {
+                continue;
+            }
+            if !baseline.is_empty() {
+                let dc = baseline_dist(target);
+                if dc > dist_baseline {
+                    continue;
+                }
+                dist_baseline = dc;
+            }
+            picked = Some(id);
+            dist = d;
         }
     }
-    best.map(|(_, id)| id)
+    picked
 }
 
 /// `getPNSLine`: the line of the world that both ends of `baseline` are on.

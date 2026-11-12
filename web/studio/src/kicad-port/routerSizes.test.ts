@@ -55,6 +55,10 @@ test("the router's message panel names the width, the clearance and the gap with
   assert.equal(pair[0]!.upper, "Routing Diff Pair: D+, D-");
   assert.equal(pair[2]!.lower, "Shove");
   assert.deepEqual(pair[5], { upper: "Diff Pair Gap: 0.15 mm", lower: "(from user choice)" });
+  assert.equal(pair.length, 6, "no DP Max Uncoupled-length row without a rule");
+  // UI-LEFT-2 RR6: `CT_MAX_UNCOUPLED` of the two traces, from a custom rule
+  const ruled = routerMessagePanel({ pair: true, netA: "D+", netB: "D-", width: 200_000, gap: 150_000 }, { gap_source: "usb", max_uncoupled: 5_000_000, max_uncoupled_source: "uncoupled" }, { mode: "shove", freeAngle: false }, mm);
+  assert.deepEqual(ruled[ruled.length - 1], { upper: "DP Max Uncoupled-length: 5 mm", lower: "(from uncoupled)" });
   assert.deepEqual(routerMessagePanel({ pair: false, net: null, width: 1 }, undefined, { mode: "mark_obstacles", freeAngle: true }, mm).slice(0, 3), [
     { upper: "Routing Track", lower: "(no net)" },
     { upper: "Corner Style", lower: "Free-angle" },

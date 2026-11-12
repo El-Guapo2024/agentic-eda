@@ -20,7 +20,7 @@ import { withEventSizes } from "../kicad-port/routerSizes";
 import { planThroughVia } from "../components/canvas/routerViaArm";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { chosenViaOf, layerPairMap, pickableLayers, planViaCommand, routerLayerTarget, VIA_COMMANDS, type ViaChoice, type ViaCommand, type ViaPlan, type ViaRefusal } from "../kicad-port/routerVia";
+import { chosenViaOf, keepRouterSizesPairs, layerPairMap, pickableLayers, planViaCommand, routerLayerTarget, VIA_COMMANDS, type ViaChoice, type ViaCommand, type ViaPlan, type ViaRefusal } from "../kicad-port/routerVia";
 import { SelectLayerDialog, TrackViaSizeDialog } from "../components/PcbRouterDialogs";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { layerPairsOf } from "./pcbRouterSweep";
@@ -87,7 +87,7 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
             if (reply.message) toast(reply.message, "error");
             return;
           }
-          update({ placingVia: true, pendingViaLayer: plan.toLayer, sizesPairs: plan.sizesPairs });
+          update({ placingVia: true, pendingViaLayer: plan.toLayer, sizesPairs: keepRouterSizesPairs(plan.sizesPairs) });
         });
       };
       const arm = (picked: string | null) => armPlan(planViaCommand({ cmd, currentLayer: draw.layer, copper, layerPair, picked, sizesPairs: draw.sizesPairs }));
@@ -137,7 +137,7 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
           void routeToggleVia(true, size?.diameter, size?.drill, target).then((armed) => {
             if (!armed.ok) return;
             // `sizes.ClearLayerPairs(); .. sizes.AddLayerPair( currentLayer, targetLayer )`
-            const next = { ...draw, placingVia: true, pendingViaLayer: target, sizesPairs: layerPairMap(draw.layer, target) };
+            const next = { ...draw, placingVia: true, pendingViaLayer: target, sizesPairs: keepRouterSizesPairs(layerPairMap(draw.layer, target)) };
             dispatch({ type: "SET_DRAW_STATE", draw: next });
             refresh(next);
           });
@@ -166,7 +166,7 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
           void dpToggleVia(true, target, size?.diameter, size?.drill).then((armed) => {
             if (!armed.ok) return;
             // `sizes.ClearLayerPairs(); .. sizes.AddLayerPair( currentLayer, targetLayer )`
-            const next = { ...draw, placingVia: true, pendingViaLayer: target, sizesPairs: layerPairMap(draw.layer, target) };
+            const next = { ...draw, placingVia: true, pendingViaLayer: target, sizesPairs: keepRouterSizesPairs(layerPairMap(draw.layer, target)) };
             dispatch({ type: "SET_DRAW_STATE", draw: next });
             refresh(next);
           });

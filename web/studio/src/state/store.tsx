@@ -9,7 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
-import { slidePattern } from "../components/canvas/tuneRouting";
+import { dropPatternSlide, patternSlideFor, slidePattern, takePatternSlide } from "../components/canvas/tuneRouting";
 import type { NewZoneSettings } from "../kicad-port/pcbDrawZone";
 import type { FpDimDraw } from "../kicad-port/fpDrawTools";
 import type { RouteSizesInfo } from "../kicad-port/routerSizes";
@@ -1853,6 +1853,8 @@ export interface StudioApi {
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
   distributeSelection: (axis: "x" | "y", mode: "gaps" | "centers") => Promise<void>;
   /** Commit a completed drag: each ref moves by (dxNm, dyNm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
+  /** The Move tool's preview, each time it changes (null when the move ends): a lone tuning pattern slides along its track live (components/canvas/tuneRouting.ts `PatternSlide`). */
+  slideLonePattern: (preview: MovePreview | null) => void;
   commitMove: (refs: string[], dxNm: number, dyNm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetNm?: MovePreview["perRefOffsetNm"], ops?: MovePreview["ops"]) => Promise<void>;
   placeArmedAt: (xNm: number, yNm: number) => Promise<void>;
   /** Place Footprint's click: the footprint of a library armed in the Footprint Chooser becomes a part of its own at this point (`place_footprint`, one undo step). */
@@ -2483,6 +2485,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const cmds = planDistributeSelection(st.board, [...st.selection], axis, mode);
       if (cmds.length > 0) await runBatch(cmds);
     },
+    slideLonePattern: (preview) => {
+      // `doMoveSelection` of a lone generator (not a carried Duplicate or Paste, not Move Individually): the pattern slides live (UI-LEFT-2 RR5)
+      const pattern =
+        preview && preview.kind === "pcb" && preview.refs.length === 1 && !preview.rotateQuarterTurns && !preview.flipped && !(preview.ops?.length) && !carriedPlacementRef.current && !(stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0)
+          ? stateRef.current.board?.drawings?.tuning_patterns?.find((p) => p.id === preview.refs[0])
+          : undefined;
+      if (pattern && preview) patternSlideFor(dispatch, pattern).move(preview.dxNm, preview.dyNm);
+      else dropPatternSlide();
+    },
     commitMove: async (refs, dxNm, dyNm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetNm, ops) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       // The drop ends a carried Duplicate or Paste: it joins the step the duplicate or the paste began (`carry: "commit"`), so both are one undo step. A drop that
@@ -2510,7 +2521,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (kind === "pcb" && refs.length === 1 && !rotateQuarterTurns && !flipped && !(ops?.length) && !carrying && !(stateRef.current.pcbx.movingIndividually && stateRef.current.pcbx.moveQueue.length > 0)) {
         const pattern = stateRef.current.board?.drawings?.tuning_patterns?.find((p) => p.id === refs[0]);
         if (pattern) {
-          if (dxNm !== 0 || dyNm !== 0) await slidePattern(dispatch, api, pattern, dxNm, dyNm);
+          // the live slide the move started (`genStartEdit` at the pick-up), else the slide made now
+          const live = takePatternSlide(pattern.id);
+          if (live) await live.finish(api, dxNm, dyNm);
+          else if (dxNm !== 0 || dyNm !== 0) await slidePattern(dispatch, api, pattern, dxNm, dyNm);
           advanceMoveQueue();
           return;
         }
@@ -2660,6 +2674,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // pad stands for its footprint.
       const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
       if (ids.length === 0) return;
+      // "Duplicating tuning patterns alone is not supported": `if( selection.Size() == 1 && selection.CountType( PCB_GENERATOR_T ) ) return 0;` (UI-LEFT-2 RR5)
+      if (ids.length === 1 && (board.drawings?.tuning_patterns ?? []).some((p) => p.id === ids[0])) return;
       const before = allItemIds(board);
       const ok = await runCmd({ op: "duplicate", ids }, "begin");
       if (!ok) return;

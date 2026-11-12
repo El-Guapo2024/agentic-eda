@@ -482,7 +482,7 @@ impl Dragger {
         let mut line = dragged.clone();
         line.clear_links();
         split_chain_at(&mut line.pts, anchor);
-        let constraints = Constraints { area: Some(affected), preserve_vertex: Some(anchor), keep_topology: true, corner_mode: settings.corner_mode };
+        let constraints = Constraints { area: Some(affected), preserve_vertex: Some(anchor), keep_topology: true, corner_mode: settings.corner_mode, kind_mask: None };
         (optimize_constrained(&line, world, rules, &self.exclude(), flags | effort::PRESERVE_VERTEX, &constraints), line)
     }
 

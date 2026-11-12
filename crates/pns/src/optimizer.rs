@@ -63,10 +63,18 @@ fn corner_cost(pts: &[eda_model::ir::Point]) -> i64 {
 }
 
 fn collides(node: &Node, pts: &[eda_model::ir::Point], layer: i32, width: Nm, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> bool {
+    collides_masked(node, pts, layer, width, net, rules, exclude, None)
+}
+
+/// [`collides`] with the optimizer's `m_collisionKindMask` (`SetCollisionMask`, `CACHE_VISITOR( aItem, m_world, m_collisionKindMask )`): only
+/// items of those kinds count; `None` is `ITEM::ANY_T`, the default.
+#[allow(clippy::too_many_arguments)] // collides' own, and the mask
+fn collides_masked(node: &Node, pts: &[eda_model::ir::Point], layer: i32, width: Nm, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], mask: Option<u8>) -> bool {
     use crate::layer::LayerRange;
+    let opts = crate::node::QueryOpts { kind_mask: mask.unwrap_or(crate::node::kind_mask::ANY), ..Default::default() };
     pts.windows(2).any(|w| {
         let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
-        node.first_colliding(&shape, net, LayerRange::single(layer), rules, exclude).is_some()
+        !node.colliding_with(&shape, net, LayerRange::single(layer), rules, exclude, opts).is_empty()
     })
 }
 
@@ -102,7 +110,7 @@ fn merge_step(pts: &[eda_model::ir::Point], arcs: &[ArcPts], origin: &[eda_model
             // `checkColliding( aLine, bypass )`: only the replacement is tested -- the
             // rest of the line is what it already was (and may already violate
             // something, which must not block every merge).
-            if collides(node, &bypass, layer, width, net, rules, exclude) {
+            if collides_masked(node, &bypass, layer, width, net, rules, exclude, constraints.kind_mask) {
                 continue;
             }
             // `checkConstraints( n, n + step + 1, aLine, aCurrentPath, bypass )`
@@ -296,6 +304,9 @@ pub struct Constraints {
     /// The router's corner mode (`ROUTER::GetInstance()->Settings().GetCornerMode()`, which KiCad's optimizer reads from the router itself): the mode
     /// `mergeStep` builds its bypasses in.
     pub corner_mode: CornerMode,
+    /// `OPTIMIZER::SetCollisionMask`: the kinds of item a shortcut is tested against (`None`: `ITEM::ANY_T`, the default). `rhWalkBase`'s own
+    /// optimizer of the split head takes the walk's mask.
+    pub kind_mask: Option<u8>,
 }
 
 impl Constraints {

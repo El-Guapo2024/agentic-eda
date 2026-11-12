@@ -123,17 +123,30 @@
     const grab = member.pts[Math.floor(member.pts.length / 2)];
     await clickAt(grab[0] / 1e6, grab[1] / 1e6);
     t(E.state().selection.length === 1 && E.state().selection[0].id === placed.id, `the pattern is selected: ${JSON.stringify(E.state().selection)}`);
+    // UI-LEFT-2 RR5: the message panel is `GetMsgPanelInfo`'s, and Duplicate refuses a pattern alone ("Duplicating tuning patterns alone is not supported")
+    await sleep(800);
+    const panel = document.querySelector("[data-tuning-panel]");
+    const panelText = panel ? panel.textContent : "";
+    t(/Tuning Pattern/.test(panelText) && /Nets/.test(panelText) && /Routed Lengths/.test(panelText) && /Target Length|Length Constraints/.test(panelText), `the message panel: ${panelText}`);
+    const countBefore = patternsOf(await state()).length;
+    await E.run("common.Interactive.duplicate");
+    await sleep(800);
+    t(patternsOf(await state()).length === countBefore && E.state().tool !== "move", `Duplicate does nothing to a lone pattern: ${patternsOf(await state()).length} patterns, tool ${E.state().tool}`);
     await E.run("pcbnew.InteractiveMove.move");
     await sleep(300);
     // carried 1.5 mm to the left and 2 mm off the track: it comes back onto the track
     const [gx, gy] = [grab[0] / 1e6, grab[1] / 1e6];
+    const n0 = replies.length;
     fire("pointermove", ...w2c(mm(gx - 0.75), mm(gy - 1)));
-    await sleep(200);
+    // live: the move starts an edit (`genStartEdit`) and every motion slides and tunes it (`genUpdateEdit`), before any drop (UI-LEFT-2 RR5)
+    const live = await waitReply("edit_move", n0, 8000);
+    t(live && live.req && live.req.handle === 4 && live.body && live.body.ok === true, `the motion slides it live: ${live && JSON.stringify(live.req)}`);
+    await sleep(300);
     const n = replies.length;
     await clickAt(gx - 1.5, gy - 2);
     const fx = await waitReply("fix", n, 15000);
     t(fx && fx.body.ok === true, `the move tunes it again (edit_start, edit point 4, fix): ${fx && JSON.stringify(fx.body.message)}`);
-    const em = replies.slice(n).find((r) => r.name === "edit_move");
+    const em = replies.slice(n0).find((r) => r.name === "edit_move");
     t(em && em.req && em.req.handle === 4, `edit point 4, the whole pattern: ${em && JSON.stringify(em.req)}`);
     await quiet();
     const st = await state();

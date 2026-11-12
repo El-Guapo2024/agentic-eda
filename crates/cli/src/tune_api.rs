@@ -374,6 +374,34 @@ fn nets_of(design: &Design, p: &TuningPattern) -> Vec<String> {
     nets
 }
 
+/// What `PCB_TUNING_PATTERN::GetMsgPanelInfo` reads of the board for the message panel (UI-LEFT-2 RR5; the studio builds the rows,
+/// `kicad-port/tuningPanel.ts`): the member tracks' first net and the first other one (`primaryNet`, `coupledNet`), the first's netclass
+/// (`GetEffectiveNetClass()->GetHumanReadableName()`), the members' one width (none when they differ: `mixedWidth`), and `BOARD::GetTrackLength` of a
+/// track of each net -- the track and via length together, the pad-to-die length, and the delays the same way -- for a net of its own (`GetNetCode() > 0`).
+fn msg_panel_json(scene: &Scene, p: &TuningPattern) -> Value {
+    let tracks: Vec<&eda_model::ir::Track> = scene.design.routing.as_ref().map(|rt| p.member_ids.iter().filter_map(|m| rt.tracks.iter().find(|t| &t.id == m)).collect()).unwrap_or_default();
+    let primary = tracks.first().map(|t| t.net.clone());
+    let coupled = primary.as_ref().and_then(|pn| tracks.iter().find(|t| &t.net != pn)).map(|t| t.net.clone());
+    let width = tracks.first().map(|t| t.width).filter(|w| tracks.iter().all(|t| t.width == *w));
+    let lengths = |net: &str| {
+        let s = crate::net_inspector_api::net_length_stats(&scene.design, &scene.model, net);
+        json!({ "length": s.track_length + s.via_length, "die_length": s.pad_to_die_length, "delay": s.track_delay + s.via_delay, "die_delay": s.pad_to_die_delay })
+    };
+    let has_net = |n: &Option<String>| n.as_deref().is_some_and(|n| !n.is_empty());
+    json!({
+        "primary_net": primary, "coupled_net": coupled,
+        "netclass": primary.as_deref().map(|n| crate::route_api::human_readable_class(&scene.model.board, n)),
+        "width": width,
+        "primary": has_net(&primary).then(|| lengths(primary.as_deref().unwrap_or(""))),
+        "coupled": has_net(&coupled).then(|| lengths(coupled.as_deref().unwrap_or(""))),
+        // `EvalRules( .., primaryItem, coupledItem, m_layer )`: min, opt and max as the rule has them (nanometres, or attoseconds with `time_domain`)
+        "constraint": tracks.first().and_then(|t| {
+            let other = coupled.as_ref().and_then(|cn| tracks.iter().find(|u| &u.net == cn)).map(|u| u.id.as_str());
+            tune_edit::panel_constraint(&scene.design, &scene.model, p.mode, &t.id, other, &p.layer)
+        }).map(|(name, v, time_domain)| json!({ "name": name, "min": v.min, "opt": v.opt, "max": v.max, "time_domain": time_domain })),
+    })
+}
+
 /// `POST /api/tune/patterns`: the tuning patterns of the board, as the Generators Manager lists them.
 pub fn patterns(dir: &Path) -> Value {
     let scene = match scene(dir) {
@@ -410,7 +438,7 @@ pub fn pattern(dir: &Path, body: &[u8]) -> Value {
     // `ShowPropertiesDialog`: `EvalRules( .., *m_items.begin(), nullptr, GetLayer() )`, none for a pattern with no items (R7-D4)
     let constraint = p.member_ids.first().and_then(|t| tune_edit::rule_constraint(&scene.design, &scene.model, p.mode, t, &p.layer));
     json!({
-        "ok": true, "pattern": pattern_json(&p), "mode": mode_name(p.mode), "nets": nets, "info": p.tuning_info(),
+        "ok": true, "pattern": pattern_json(&p), "mode": mode_name(p.mode), "nets": nets, "info": p.tuning_info(), "panel": msg_panel_json(&scene, &p),
         // a time domain rule's range is a delay: picoseconds, as the dialog's target delay
         "constraint": constraint.map(|c| if c.time_domain {
             let ps = |a: i64| a as f64 / 1e6;
@@ -891,6 +919,13 @@ mod tests {
         // the dialog's view of the pattern: the rule's range in picoseconds
         let pv = pattern(&dir, &body(json!({ "id": pat.id })));
         assert_eq!((pv["constraint"]["time_domain"].as_bool(), pv["constraint"]["min"].as_f64()), (Some(true), Some(149.9)), "{pv}");
+        // the message panel's view (`GetMsgPanelInfo`, UI-LEFT-2 RR5): the net, its routed delay as the net inspector counts it, and the rule as it is
+        let panel = &pv["panel"];
+        assert_eq!(panel["primary_net"], json!("/SIG"), "{pv}");
+        assert!(panel["coupled_net"].is_null() && panel["width"].as_i64().is_some_and(|w| w > 0), "{pv}");
+        let routed_ps = panel["primary"]["delay"].as_f64().unwrap() / 1e6;
+        assert!((routed_ps - net_ps(&dir, "/SIG")).abs() < 0.5, "{routed_ps} vs {}", net_ps(&dir, "/SIG"));
+        assert_eq!((panel["constraint"]["name"].as_str(), panel["constraint"]["min"].as_i64(), panel["constraint"]["opt"].as_i64(), panel["constraint"]["max"].as_i64(), panel["constraint"]["time_domain"].as_bool()), (Some("sig_delay"), Some(149_900_000), Some(150_000_000), Some(150_100_000), Some(true)), "{pv}");
 
         // kicad-cli measures the delay against the same rule: the tuned net passes it (the 122 ps one would not)
         if std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some() {
@@ -1335,6 +1370,13 @@ mod tests {
         let original = net_mm(&dir, "/SIG");
         let arc_len = 3.0 * std::f64::consts::FRAC_PI_2;
         assert!((original - (7.0 + arc_len + 5.0)).abs() < 0.01, "the arc is measured as an arc: {original}");
+        // `pickSegment` takes an arc (`SEGMENT_T | ARC_T`, UI-LEFT-2 RR5): where a moved pattern's start lands on the arc, the tuner starts there
+        let (_, d, m) = board::load(&dir).unwrap();
+        let scene = Scene::of(d, m);
+        let picked = tune_edit::segment_near(&scene, arc_mid, "F.Cu", &[]).and_then(|id| scene.world.get(id).cloned());
+        assert!(matches!(picked, Some(eda_pns::item::Item::Arc(_))), "the arc under the point: {picked:?}");
+        let near = tune_edit::segment_near(&scene, p(mm(8.0), mm(9.6)), "F.Cu", &[]).and_then(|id| scene.world.get(id).cloned());
+        assert!(matches!(near, Some(eda_pns::item::Item::Segment(_))), "the straight within the slop: {near:?}");
 
         // hovering the arc picks it (its track), the pattern would start at the end of it the cursor is nearer to
         let hov = hover(&dir, &body(json!({ "x": arc_mid.x, "y": arc_mid.y, "tolerance": 100_000, "layer": "F.Cu", "mode": "single" })));
