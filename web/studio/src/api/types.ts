@@ -3498,6 +3498,8 @@ export interface SheetVariantFlags {
   exclude_from_sim?: boolean;
   exclude_from_bom?: boolean;
   exclude_from_board?: boolean;
+  /** The texts the variant gives the sheet's user fields, by name (`VARIANT::m_Fields`; UI-LEFT-2 SS16). */
+  fields?: Record<string, string>;
 }
 
 /** See `Sheet::props`: the border's width (0: the default line width) and colour, the background colour (absent: KiCad's UNSPECIFIED), the four attributes. */

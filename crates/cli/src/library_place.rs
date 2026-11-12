@@ -39,6 +39,8 @@ fn places_from_libraries(cmd: &Cmd) -> bool {
         Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => places_from_libraries(cmd),
         Cmd::AddSymbol { .. } | Cmd::AddPowerSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } | Cmd::ExchangeFootprints { .. } => true,
         Cmd::SchEdit(eda_ops::sch_edit::SchCmd::ChangeSymbol { .. }) => true,
+        // Set Variant Symbol... to a symbol of a library (UI-LEFT-2 SS16)
+        Cmd::SetVariantSymbol { lib_id: Some(_), .. } => true,
         // Import Netlist: the footprints it adds or puts parts on (`crate::netlist_api::filled`)
         Cmd::ImportNetlist(_) => true,
         Cmd::EditSymbolFields { footprint: Some(f), .. } => !f.trim().is_empty(),

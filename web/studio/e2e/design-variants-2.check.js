@@ -66,16 +66,20 @@
     await sleep(800);
 
     // ------------------------------------------------------------------------------------------------------ 1. ${VARIANT} in a variant's Value
+    // a resistor drawn from KiCad's own library (`Device:R`), on whichever sheet has one: its variant symbol is looked for in the libraries
     let sch = await here();
-    let sym = (sch.symbols ?? []).find((x) => !(sch.locked ?? []).includes(x.id) && (x.fields ?? []).some((f) => f.name === "Value"));
-    if (!sym && (sch.sheets ?? []).length) {
-      await select([sch.sheets[0].id]);
+    let sym = (sch.symbols ?? []).find((x) => x.lib_id === "Device:R" && !(sch.locked ?? []).includes(x.id));
+    for (const sheet of sym ? [] : sch.sheets ?? []) {
+      await select([sheet.id]);
       await __eda.run("eeschema.NavigateTool.enterSheet");
       await sleep(1500);
-      sch = await here();
-      sym = (sch.symbols ?? []).find((x) => !(sch.locked ?? []).includes(x.id));
+      const inner = await here();
+      sym = (inner.symbols ?? []).find((x) => x.lib_id === "Device:R" && !(inner.locked ?? []).includes(x.id));
+      if (sym) break;
+      await __eda.run("eeschema.NavigateTool.leaveSheet");
+      await sleep(800);
     }
-    if (!t("a symbol to work on", !!sym, "no unlocked symbol on the root or its first sheet")) throw new Error("no symbol");
+    if (!t("a Device:R symbol to work on", !!sym, "no unlocked Device:R on the root or its sheets")) throw new Error("no symbol");
     const own = fieldShown(sym, "Value");
     const added = await post({ op: "add_design_variant", name: "Lite", description: "No radio" });
     t("'Lite' is added", added.ok !== false, added);
@@ -88,7 +92,7 @@
     t("the default shows the symbol's own Value", fieldShown(inDefault, "Value") === own, { default: fieldShown(inDefault, "Value"), own });
 
     // ------------------------------------------------------------------------------------------------------ 2. the schematic editor in 'Lite'
-    const sel = await until(() => schSelect());
+    const sel = await until(() => (schSelect() && [...schSelect().options].some((o) => o.textContent === "Lite") ? schSelect() : null));
     if (sel) await pick(sel, "Lite");
     await sleep(1200);
     t("'Lite' is the schematic's current variant and the sheet is fetched in it", __eda.state().schVariant === "Lite" || schSelect()?.value === "Lite", schSelect()?.value);
@@ -117,15 +121,17 @@
     }
 
     // ------------------------------------------------------------------------------------------------------ 3. a variant symbol through the API
-    const libId = sym.lib_id ?? "";
-    const bad = await post(wrap({ op: "set_variant_symbol", variant: "Lite", id: sym.id, lib_id: "Device:Q_NPN_BCE" }));
+    // `Device:R_US` has `Device:R`'s two passive pins where `Device:R` has them
+    const libId = "Device:R_US";
+    const bad = await post(wrap({ op: "set_variant_symbol", variant: "Lite", id: sym.id, lib_id: "Device:LED" }));
     const badMsg = JSON.stringify(bad);
     t("a symbol that is not pin-compatible is refused with KiCad's message", bad.ok === false && /is not pin-compatible with the base symbol/.test(badMsg) && /Choose a symbol with equivalent pins and pin positions\./.test(badMsg), badMsg.slice(0, 400));
-    // the symbol's own library id is always compatible with itself
     const same = await post(wrap({ op: "set_variant_symbol", variant: "Lite", id: sym.id, lib_id: libId }));
     t("a pin-compatible symbol is the record's variant symbol", same.ok !== false, same);
-    let mine = (await here("Lite")).symbols.find((x) => x.id === sym.id);
+    const withAlt = await here("Lite");
+    let mine = withAlt.symbols.find((x) => x.id === sym.id);
     t("the record names it", mine?.variants?.Lite?.symbol_override === libId, mine?.variants?.Lite);
+    t("the sheet in 'Lite' draws it: its graphics are sent and the record says it resolved", !!withAlt.lib_symbols?.[libId] && mine?.variants?.Lite?.symbol_resolved === true, { resolved: mine?.variants?.Lite?.symbol_resolved, graphics: !!withAlt.lib_symbols?.[libId] });
     await sleep(800);
     await select([sym.id]);
     const cleared = await __eda.run("eeschema.InteractiveEdit.clearVariantSymbol");
@@ -138,22 +144,24 @@
     // ------------------------------------------------------------------------------------------------------ 4. the board in 'Lite'
     await tab("pcb");
     const stateLite = await json("/api/state?variant=Lite");
-    const reference = (stateLite.parts ?? []).find((p) => p.variant && p.variant.fields?.Value === "V-Lite-No radio")?.ref ?? null;
+    // the variant's own text (`GetFieldValueForVariant`), which the field shows expanded (`PCB_FIELD::GetShownText( variant )`)
+    const raw = "V-${VARIANT}-${VARIANT_DESC}";
+    const reference = (stateLite.parts ?? []).find((p) => p.variant && p.variant.fields?.Value === raw)?.ref ?? null;
     t("the board's state in 'Lite' carries the footprint's Value there", !!reference && stateLite.shown_variant === "Lite", { reference, shown: stateLite.shown_variant });
     const vfield = (stateLite.parts ?? []).find((p) => p.ref === reference)?.fields?.find((f) => f.name === "Value");
-    t("and the Value field shows it", (vfield?.shown ?? vfield?.text) === "V-Lite-No radio", vfield);
+    t("and the Value field shows it expanded", (vfield?.shown ?? vfield?.text) === "V-Lite-No radio", vfield);
     const pcb = await until(() => pcbSelect());
     if (pcb && reference) {
       await set(pcbSelect(), "Lite");
       await sleep(1500);
       await select([reference]);
       await sleep(500);
-      t("the Properties panel's Value row is the variant's", rowInput("Value")?.value === "V-Lite-No radio", rowInput("Value")?.value);
+      t("the Properties panel's Value row is the variant's", rowInput("Value")?.value === raw, rowInput("Value")?.value);
       await set(pcbSelect(), "< Default >");
       await sleep(1500);
       await select([reference]);
       await sleep(500);
-      t("and the footprint's own in the default", rowInput("Value")?.value !== "V-Lite-No radio" && rowInput("Value")?.value != null, rowInput("Value")?.value);
+      t("and the footprint's own in the default", rowInput("Value")?.value !== raw && rowInput("Value")?.value != null, rowInput("Value")?.value);
     }
     await tab("schematic");
 

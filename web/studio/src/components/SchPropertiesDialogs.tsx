@@ -388,7 +388,9 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
   const [page, setPage] = useState(sheet.page ?? "");
   const own = sheet.props ?? null;
   // the user fields' rows (`FIELDS_GRID_TABLE`): the texts and every look (UI-LEFT-2 SS15)
-  const [fields, setFields] = useState<SheetFieldRow[]>(() => (sheet.user_fields ?? []).map((f) => sheetFieldRow(f, sheet.user_field_looks?.[f.name])));
+  // in a variant a field's text is the variant's (`m_sheet->GetFieldText( field->GetName(), &instance, variantName )`, KiCad 25ec2335; UI-LEFT-2 SS16)
+  const variantTexts = (variant !== "" ? sheet.variants?.[variant]?.fields : undefined) ?? {};
+  const [fields, setFields] = useState<SheetFieldRow[]>(() => (sheet.user_fields ?? []).map((f) => sheetFieldRow({ ...f, text: variantTexts[f.name] ?? f.text }, sheet.user_field_looks?.[f.name])));
   // `m_grid->ShowHideColumns( "0 1 2 3 4 5 6 7" )`; a right-click on the column labels shows or hides the others
   const [shownCols, setShownCols] = useState<Set<FieldColumn>>(() => shownColumns(DEFAULT_SHOWN_COLUMNS));
   const [columnsMenu, setColumnsMenu] = useState<{ x: number; y: number } | null>(null);
@@ -425,7 +427,18 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
     if (dup) return setProblem(`Field name '${dup}' already in use.`);
     const sizeProblem = sheetFieldError(fields);
     if (sizeProblem) return setProblem(sizeProblem);
-    const fieldCmds = sheetFieldCmds(sheet.id, fields, sheet.user_fields ?? [], sheet.user_field_looks ?? {});
+    // in a variant an existing field's text goes to the variant (`tmp->SetText( variantText, &instance, variantName )`) and the field keeps its own (`SetText( defaultText,
+    // &instance )`); a new field is the sheet's
+    const variantFields: Record<string, string> = {};
+    const baseRows = variant
+      ? fields.map((r) => {
+          const own = (sheet.user_fields ?? []).find((f) => f.name === r.name.trim());
+          if (!own) return r;
+          if (r.text !== (variantTexts[own.name] ?? own.text)) variantFields[own.name] = r.text;
+          return { ...r, text: own.text };
+        })
+      : fields;
+    const fieldCmds = sheetFieldCmds(sheet.id, baseRows, sheet.user_fields ?? [], sheet.user_field_looks ?? {});
     const was2 = own ?? LEGACY_SHEET;
     const props: Record<string, unknown> = {};
     const sameColor = (a: SchColor | null | undefined, b: SchColor | null | undefined) => JSON.stringify(a && a.a > 0 ? a : null) === JSON.stringify(b && b.a > 0 ? b : null);
@@ -444,6 +457,7 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
     flag("dnp", dnp);
     if (excludeFromBoard !== !!own?.exclude_from_board) props.exclude_from_board = excludeFromBoard;
     const propsCmd = Object.keys(props).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_props", id: sheet.id, ...props } as unknown as Cmd) : null;
+    if (Object.keys(variantFields).length > 0) inVariant.fields = variantFields;
     const variantCmd = Object.keys(inVariant).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_variant", id: sheet.id, variant, ...inVariant } as unknown as Cmd) : null;
     const edit = sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]);
     const editCmds: Cmd[] = edit ? ((edit as { op: string; cmds?: Cmd[] }).op === "batch" ? ((edit as { cmds: Cmd[] }).cmds ?? []) : [edit]) : [];

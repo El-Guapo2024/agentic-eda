@@ -348,7 +348,7 @@ pub fn copy_records(sch: &mut SchematicSection, source: &str, new: &str) {
         }
     }
     for records in sch.extras.sheet_variants.values_mut() {
-        if let Some(r) = records.get(source).copied() {
+        if let Some(r) = records.get(source).cloned() {
             records.entry(new.to_string()).or_insert(r);
         }
     }
@@ -360,7 +360,7 @@ pub fn sheet_flags(sch: &SchematicSection, id: &str, variant: &str) -> crate::sc
     let base = sch.extras.sheet_props_of(id);
     if !variant.is_empty() {
         if let Some(r) = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)) {
-            return *r;
+            return r.clone();
         }
     }
     crate::sch_extras::SheetVariant::initialized(&base)
@@ -370,8 +370,8 @@ pub fn sheet_flags(sch: &SchematicSection, id: &str, variant: &str) -> crate::sc
 /// (`variant.InitializeAttributes( *this )`); a record left with no differential is not kept. Returns whether anything changed.
 pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag: Flag, value: bool) -> bool {
     let base = sch.extras.sheet_props_of(id);
-    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).copied();
-    let mut rec = before.unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
+    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).cloned();
+    let mut rec = before.clone().unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
     match flag {
         Flag::Dnp => rec.dnp = value,
         Flag::ExcludeFromSim => rec.exclude_from_sim = value,
@@ -379,7 +379,13 @@ pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag:
         Flag::ExcludeFromBoard => rec.exclude_from_board = value,
         Flag::ExcludeFromPosFiles => return false,
     }
-    let after = rec.has_differentials(&base).then_some(rec);
+    store_sheet_record(sch, id, variant, &base, before, rec)
+}
+
+/// Keep `rec` as the sheet `id`'s record of `variant` where it has a differential (a record without one is not kept), `before` being the record it had.
+/// Returns whether anything changed.
+fn store_sheet_record(sch: &mut SchematicSection, id: &str, variant: &str, base: &crate::sch_extras::SheetProps, before: Option<crate::sch_extras::SheetVariant>, rec: crate::sch_extras::SheetVariant) -> bool {
+    let after = rec.has_differentials(base).then_some(rec);
     if after == before {
         return false;
     }
@@ -397,6 +403,21 @@ pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag:
         }
     }
     true
+}
+
+/// `SCH_SHEET::SetFieldText( aField, aFieldName, aFieldText, aPath, aVariantName )` for a user field of the sheet `id` (KiCad 25ec2335): a text equal to the
+/// field's own (`own`) takes the record's text of it away; another is the record's text of it, the record made first from the sheet's own flags
+/// (`InitializeAttributes`) when there is none. Returns whether anything changed.
+pub fn set_sheet_field(sch: &mut SchematicSection, id: &str, variant: &str, field: &str, text: &str, own: &str) -> bool {
+    let base = sch.extras.sheet_props_of(id);
+    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).cloned();
+    let mut rec = before.clone().unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
+    if text == own {
+        rec.fields.remove(field);
+    } else {
+        rec.fields.insert(field.to_string(), text.to_string());
+    }
+    store_sheet_record(sch, id, variant, &base, before, rec)
 }
 
 /// `SCH_SHEET_PATH::GetDNP( aVariantName )`, `GetExcludedFromSim`, `GetExcludedFromBOM`, `GetExcludedFromBoard` (8303b2ad `sch_sheet_path.cpp`): a flag is set for

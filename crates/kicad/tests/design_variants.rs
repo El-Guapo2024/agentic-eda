@@ -230,7 +230,7 @@ fn each_sheet_paths_records_and_variant_symbol_come_back_under_their_path() {
     let (a, b) = ("00000000-0000-0000-0000-0000000000a1", "00000000-0000-0000-0000-0000000000a2");
     let sheet = |uuid: &str, name: &str, x: i32, page: &str| {
         format!(
-            "\t(sheet (at {x} 10) (size 20 10) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) (uuid \"{uuid}\")\n\t\t(property \"Sheetname\" \"{name}\" (at {x} 9.3 0) (effects (font (size 1.27 1.27)) (justify left bottom)))\n\t\t(property \"Sheetfile\" \"chan.kicad_sch\" (at {x} 20.5 0) (effects (font (size 1.27 1.27)) (justify left top)))\n\t\t(instances (project \"p\" (path \"/{root}\" (page \"{page}\"))))\n\t)\n"
+            "\t(sheet (at {x} 10) (size 20 10) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) (uuid \"{uuid}\")\n\t\t(property \"Sheetname\" \"{name}\" (at {x} 9.3 0) (effects (font (size 1.27 1.27)) (justify left bottom)))\n\t\t(property \"Sheetfile\" \"chan.kicad_sch\" (at {x} 20.5 0) (effects (font (size 1.27 1.27)) (justify left top)))\n\t\t(property \"Channel\" \"{name}\" (at {x} 22 0) (effects (font (size 1.27 1.27)) (justify left top)))\n\t\t(instances (project \"p\" (path \"/{root}\" (page \"{page}\") (variant (name \"Lite\") (field (name \"Channel\") (value \"{name}-lite\"))))))\n\t)\n"
         )
     };
     let top = format!(
@@ -254,14 +254,31 @@ fn each_sheet_paths_records_and_variant_symbol_come_back_under_their_path() {
     assert_eq!(rb.dnp, Some(true));
     assert!(rb.fields.is_empty(), "path B's record is its own, not path A's");
     assert_eq!(rb.symbol_override.as_deref(), Some("Device:R_Small"));
+    // a sheet's variant text of its user field (`SCH_SHEET_VARIANT::m_Fields`)
+    let top_sch = design.schematic.as_ref().unwrap();
+    assert_eq!(eda_model::variants::sheet_flags(top_sch, a, "Lite").fields.get("Channel").map(String::as_str), Some("A-lite"));
     let out = work_dir("paths_out");
     write(&design, &model, &out, "top");
     let chan_file = std::fs::read_dir(&out).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.file_name().is_some_and(|n| n != "top.kicad_sch" && n.to_string_lossy().ends_with(".kicad_sch"))).expect("the channel file");
     let text = std::fs::read_to_string(&chan_file).unwrap();
     assert!(text.contains("(variant (name \"Lite\") (field (name \"Value\") (value \"4k7\")))"), "{text}");
     assert!(text.contains("(variant (name \"Lite\") (dnp yes) (symbol_override \"Device:R_Small\"))"), "{text}");
+    let top_text = std::fs::read_to_string(out.join("top.kicad_sch")).unwrap();
+    assert!(top_text.contains("(variant (name \"Lite\") (field (name \"Channel\") (value \"A-lite\")))"), "{top_text}");
     let (again, _) = read(&out, "top");
     let screen = again.sheet_contents.as_ref().unwrap().values().next().unwrap();
     assert_eq!(eda_model::variants::record_on(screen, "R1", &pb, "Lite").and_then(|r| r.symbol_override.clone()).as_deref(), Some("Device:R_Small"));
     assert!(eda_model::variants::record_on(screen, "R1", &pa, "Lite").is_some_and(|r| r.symbol_override.is_none() && r.dnp == Some(false)));
+
+    // (slow) kicad-cli reads the file, `symbol_override` and all, and its BOM of 'Lite' is each path's: R1 with path A's Value, R2 (path B) left out as DNP
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = kicad_cli() else { return };
+    let bom = out.join("lite.csv");
+    let run = Command::new(&cli).args(["sch", "export", "bom", "--variant", "Lite", "--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value", "-o"]).arg(&bom).arg(out.join("top.kicad_sch")).output().unwrap();
+    assert!(run.status.success(), "kicad-cli: {}", String::from_utf8_lossy(&run.stderr));
+    let text = std::fs::read_to_string(&bom).unwrap();
+    assert!(text.contains("\"R1\",\"4k7\""), "{text}");
+    assert!(!text.contains("R2"), "path B's R2 is DNP in 'Lite': {text}");
 }

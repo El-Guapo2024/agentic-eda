@@ -125,7 +125,7 @@ impl<'a> Board<'a> {
     }
 
     /// Sheet Properties' Attributes in the current variant: see [`SchCmd::SetSheetVariant`](crate::sch_edit::SchCmd::SetSheetVariant).
-    pub(crate) fn set_sheet_variant(&mut self, id: &str, variant: &str, flags: &VariantFlags) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn set_sheet_variant(&mut self, id: &str, variant: &str, flags: &VariantFlags, fields: &BTreeMap<String, String>) -> Result<(), Vec<CheckResult>> {
         if variant.is_empty() {
             return Err(fail("ops_no_variant", "variant", "the default variant is the sheet itself: set_sheet_props"));
         }
@@ -142,6 +142,13 @@ impl<'a> Board<'a> {
             if let Some(v) = value {
                 changed |= variants::set_sheet_flag(sch, id, &variant, flag, v);
             }
+        }
+        // the user fields' texts in the variant (`SCH_SHEET::SetFieldText( .., aVariantName )`): a field the sheet has, never its name or file
+        for (name, text) in fields {
+            let Some(own) = sch.extras.sheet_fields.get(id).and_then(|fs| fs.iter().find(|f| &f.name == name)).map(|f| f.text.clone()) else {
+                return Err(fail("ops_unknown_item", id, format!("the sheet has no field '{name}'")));
+            };
+            changed |= variants::set_sheet_field(sch, id, &variant, name, text, &own);
         }
         if !changed {
             return Err(fail("ops_nothing_to_change", id, "the sheet already has these attributes in this variant"));

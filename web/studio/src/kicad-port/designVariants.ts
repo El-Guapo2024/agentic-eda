@@ -230,8 +230,23 @@ export function sheetFlags(sheet: Pick<Sheet, "props" | "variants">, variant: st
 
 /** The sheet as `variant` shows it: `variant_flags`, its attributes in the variant (the DNP cross the painter draws, `aSheet->GetDNP( sheetPath, variant )`); its style its own. */
 export function sheetInVariant(sheet: Sheet, variant: string): Sheet {
-  if (variant === "" || !sheet.variants?.[variant]) return sheet;
-  return { ...sheet, variant_flags: sheetFlags(sheet, variant) };
+  const rec = variant !== "" ? sheet.variants?.[variant] : undefined;
+  if (!rec) return sheet;
+  // and its user fields' texts in the variant (`SCH_SHEET::GetFieldText( .., aPath, aVariantName )`, UI-LEFT-2 SS16)
+  const texts = rec.fields ?? {};
+  const has = (name: string): boolean => Object.prototype.hasOwnProperty.call(texts, name);
+  const out: Sheet = { ...sheet, variant_flags: sheetFlags(sheet, variant) };
+  if (Object.keys(texts).length > 0) {
+    if (sheet.user_fields) out.user_fields = sheet.user_fields.map((f) => (has(f.name) ? { ...f, text: texts[f.name]! } : f));
+    if (sheet.user_fields_drawn)
+      out.user_fields_drawn = sheet.user_fields_drawn.map((f) => {
+        if (!has(f.name)) return f;
+        const g = { ...f, text: texts[f.name]! };
+        delete g.shown;
+        return g;
+      });
+  }
+  return out;
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- the edits

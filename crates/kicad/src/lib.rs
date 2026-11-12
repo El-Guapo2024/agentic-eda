@@ -971,6 +971,10 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         if v.exclude_from_bom != props.exclude_from_bom {
             write!(variants, " (in_bom {})", variant_in_bom_word(v.exclude_from_bom, SCH_FILE_VERSION)).unwrap();
         }
+        // and the texts it gives the sheet's user fields (`saveSheet`'s `(field (name ..) (value ..))`, UI-LEFT-2 SS16)
+        for (fname, fvalue) in &v.fields {
+            write!(variants, " (field (name {}) (value {}))", sexpr_str(fname), sexpr_str(fvalue)).unwrap();
+        }
         variants.push(')');
     }
     for (instance_path, page) in instances {

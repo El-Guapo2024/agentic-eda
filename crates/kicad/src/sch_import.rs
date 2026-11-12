@@ -1733,6 +1733,11 @@ fn sheet_variants_of(item: &[Sexpr], base: &eda_model::sch_extras::SheetProps, v
                 if let Some(b) = yes(v, "on_board") {
                     rec.exclude_from_board = !b;
                 }
+                // `T_field`: a text the variant gives a field of the sheet (UI-LEFT-2 SS16)
+                for f in sexpr::find_all(v, "field") {
+                    let text = |k: &str| sexpr::find(f, k).and_then(|n| sexpr::txt(n, 1)).unwrap_or_default().to_string();
+                    rec.fields.insert(text("name"), text("value"));
+                }
                 if rec.has_differentials(base) {
                     out.entry(name.to_string()).or_insert(rec);
                 }

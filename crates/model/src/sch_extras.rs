@@ -556,7 +556,7 @@ pub struct SheetProps {
 
 /// See [`SchExtras::sheet_variants`]: `SCH_SHEET_VARIANT`'s flags (`VARIANT::m_DNP`, `m_ExcludedFromSim`, `m_ExcludedFromBOM`, `m_ExcludedFromBoard`), every one set, as
 /// `SCH_SHEET_VARIANT::InitializeAttributes` snapshots the sheet's own when the record is made.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetVariant {
     #[serde(default, skip_serializing_if = "is_false")]
@@ -567,17 +567,22 @@ pub struct SheetVariant {
     pub exclude_from_bom: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub exclude_from_board: bool,
+    /// The texts the variant gives the sheet's user fields (`VARIANT::m_Fields`, by field name; KiCad 25ec2335 `SCH_SHEET::SetFieldText( .., aVariantName )`:
+    /// never the sheet's name or file), written as `(field (name ..) (value ..))` in the record (`saveSheet`) and read back (UI-LEFT-2 SS16).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
 
 impl SheetVariant {
     /// `SCH_SHEET_VARIANT::InitializeAttributes`: the sheet's own flags.
     pub fn initialized(base: &SheetProps) -> SheetVariant {
-        SheetVariant { dnp: base.dnp, exclude_from_sim: base.exclude_from_sim, exclude_from_bom: base.exclude_from_bom, exclude_from_board: base.exclude_from_board }
+        SheetVariant { dnp: base.dnp, exclude_from_sim: base.exclude_from_sim, exclude_from_bom: base.exclude_from_bom, exclude_from_board: base.exclude_from_board, fields: BTreeMap::new() }
     }
 
-    /// `SCH_SHEET_VARIANT::HasDifferentials` (the field texts aside): DNP, simulation or BOM differ from the sheet's own (Exclude from board is not counted).
+    /// `SCH_SHEET_VARIANT::HasDifferentials`: DNP, simulation or BOM differ from the sheet's own (Exclude from board is not counted), or a field has a text of the
+    /// variant's (`!m_Fields.empty()`).
     pub fn has_differentials(&self, base: &SheetProps) -> bool {
-        self.dnp != base.dnp || self.exclude_from_bom != base.exclude_from_bom || self.exclude_from_sim != base.exclude_from_sim
+        self.dnp != base.dnp || self.exclude_from_bom != base.exclude_from_bom || self.exclude_from_sim != base.exclude_from_sim || !self.fields.is_empty()
     }
 }
 
