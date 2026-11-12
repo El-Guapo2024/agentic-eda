@@ -498,7 +498,7 @@ mod tests {
     }
 
     fn unit_of(model: &ConstraintModel, id: &str, unit: u32, at: Point) -> eda_model::ir::SymbolInstance {
-        let mut s = eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "Test:Dual3".into(), unit, value: "TL072".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let mut s = eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "Test:Dual3".into(), unit, value: "TL072".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         s.value = model.part(id).and_then(|p| p.value.clone()).unwrap_or_default();
         s
     }

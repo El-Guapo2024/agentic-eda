@@ -65,6 +65,7 @@ fn design() -> Design {
         exclude_from_bom: false,
         exclude_from_board: false,
         exclude_from_sim: false,
+        no_footprint: false,
     };
     Design {
         schema: eda_model::ir::SCHEMA_VERSION,

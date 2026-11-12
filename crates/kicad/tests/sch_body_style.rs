@@ -66,7 +66,7 @@ fn model_of(symbol: LibSymbol) -> ConstraintModel {
 /// other style instead.
 fn sheet(model: &ConstraintModel, style: u32, wires_of: u32) -> Design {
     let at = Point { x: mm(76.2), y: mm(76.2) };
-    let sym = SymbolInstance { id: "U1".into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = SymbolInstance { id: "U1".into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
     let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
     let part = model.part("U1").unwrap();
     let mut wired = sch.clone();

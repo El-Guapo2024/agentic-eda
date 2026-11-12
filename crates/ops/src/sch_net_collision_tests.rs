@@ -148,7 +148,7 @@ fn a_wire_moved_away_from_the_one_it_ended_on_is_marked_as_a_connection_pulled_a
 #[test]
 fn a_symbol_moved_off_its_wires_is_marked_at_each_pin_it_left() {
     let mut s = section();
-    s.symbols.push(SymbolInstance { id: "R1".into(), at: p(mm(20.32), mm(25.4)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+    s.symbols.push(SymbolInstance { id: "R1".into(), at: p(mm(20.32), mm(25.4)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false });
     s.wires.push(wire("wire_top", &[p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]));
     s.wires.push(wire("wire_bottom", &[p(mm(20.32), mm(29.21)), p(mm(20.32), mm(38.1))]));
     let o = overlay(s.clone(), mv(&["R1"], mm(10.16), Nm::ZERO));

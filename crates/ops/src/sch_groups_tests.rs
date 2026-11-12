@@ -22,7 +22,7 @@ fn ids(v: &[&str]) -> Vec<String> {
 }
 
 fn sym(id: &str, at: Point) -> SymbolInstance {
-    SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 fn wire(id: &str, pts: &[Point]) -> Wire {

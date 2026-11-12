@@ -49,7 +49,7 @@ fn bus(id: &str, pts: &[Point]) -> Wire {
 }
 
 fn res(id: &str, at: Point, rot: u32, mirrored: bool, mirror_y: bool) -> SymbolInstance {
-    SymbolInstance { id: id.into(), at, rot, mirrored, mirror_y, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: id.into(), at, rot, mirrored, mirror_y, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 fn global(id: &str, at: Point) -> NetLabel {

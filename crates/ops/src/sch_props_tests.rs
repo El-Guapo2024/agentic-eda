@@ -447,7 +447,7 @@ fn set_line_ends_moves_a_wires_or_a_lines_end_and_cleans_the_sheet_up() {
 #[test]
 fn set_exclude_from_pos_files_marks_every_placed_unit_of_the_reference() {
     let mut s = SchematicSection::default();
-    let sym = |unit: u32, y: Nm| eda_model::ir::SymbolInstance { id: "U1".into(), at: p(Nm::ZERO, y), rot: 0, mirrored: false, mirror_y: false, lib_id: "Amp:Dual".into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = |unit: u32, y: Nm| eda_model::ir::SymbolInstance { id: "U1".into(), at: p(Nm::ZERO, y), rot: 0, mirrored: false, mirror_y: false, lib_id: "Amp:Dual".into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
     s.symbols = vec![sym(1, Nm::ZERO), sym(2, mm(10.16))];
     let (m, d) = board(s);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
@@ -806,7 +806,7 @@ fn set_image_offset_keeps_the_point_an_image_is_scaled_about_and_is_one_undo_ste
 // ------------------------------------------------------------------- UI-LEFT-2 SS15: the sheet fields' looks, a sheet pin's font and colour, the sheets' variants
 
 fn sym_at(id: &str) -> eda_model::ir::SymbolInstance {
-    eda_model::ir::SymbolInstance { id: id.into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    eda_model::ir::SymbolInstance { id: id.into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 #[test]

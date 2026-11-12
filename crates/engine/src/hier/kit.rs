@@ -297,6 +297,7 @@ impl Placed {
             exclude_from_bom: false,
             exclude_from_board: false,
             exclude_from_sim: false,
+            no_footprint: false,
         }
     }
 

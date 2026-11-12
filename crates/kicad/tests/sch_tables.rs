@@ -119,7 +119,7 @@ fn a_cross_reference_in_a_cell_is_written_by_the_symbols_path_and_read_back_by_i
     let part = eda_model::Part { reference: "R1".into(), mpn: None, lcsc: None, value: Some("4k7".into()), package: None, footprint: None, symbol: Some("Device:R".into()), datasheet: None, pins: vec![pin("1"), pin("2")], body_nm: None, edge: None };
     let m = ConstraintModel { parts: vec![part], symbols: vec![resistor()], ..Default::default() };
     let mut sch = SchematicSection { imported_from_kicad: true, ..Default::default() };
-    sch.symbols.push(eda_model::ir::SymbolInstance { id: "R1".into(), at: Point { x: mm(50.8), y: mm(50.8) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "4k7".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+    sch.symbols.push(eda_model::ir::SymbolInstance { id: "R1".into(), at: Point { x: mm(50.8), y: mm(50.8) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "4k7".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false });
     let mut t = Table::new_sch_grid(Point { x: mm(100.0), y: mm(50.0) }, 2, 1, mm(30.0), mm(6.0), mm(1.27));
     t.cells[0].text = "${R1:VALUE}".into();
     t.cells[1].text = "${R9:VALUE}".into();

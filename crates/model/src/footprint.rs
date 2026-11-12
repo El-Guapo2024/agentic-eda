@@ -1101,6 +1101,19 @@ pub fn footprint_lib_id(part: &crate::Part) -> String {
     part.package.clone().unwrap_or_default()
 }
 
+/// The Footprint field of a placed symbol, as the derived `.kicad_sch` writes it and every dialog shows it (`SCH_SYMBOL::GetFootprintFieldText`): the symbol's
+/// own text, else nothing for a symbol whose field was emptied ([`crate::ir::SymbolInstance::no_footprint`]: CvPcb's Delete leaves it with no footprint), else
+/// the footprint of its part ([`footprint_lib_id`]).
+pub fn symbol_footprint_field(sym: &crate::ir::SymbolInstance, part: Option<&crate::Part>) -> String {
+    if !sym.footprint.is_empty() {
+        return sym.footprint.clone();
+    }
+    if sym.no_footprint {
+        return String::new();
+    }
+    part.map(footprint_lib_id).unwrap_or_default()
+}
+
 /// The `Lib:Name` the libraries know the footprint of `part` by, which Update Footprint from Library loads (`DIALOG_EXCHANGE_FOOTPRINTS::processFootprint( aFootprint,
 /// aFootprint->GetFPID() )`): the board's link ([`footprint_lib_id`]) without the importer's slot ([`without_import_slot`]), and, for a bare name that stands for an
 /// installed KiCad footprint -- a built-in package, as a part's own copy of its footprint may be named (`0603`) -- that footprint ([`kicad_footprint_of_part`]).

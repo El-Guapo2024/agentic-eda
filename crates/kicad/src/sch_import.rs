@@ -602,6 +602,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 exclude_from_bom: r.exclude_from_bom,
                 exclude_from_board: r.exclude_from_board,
                 exclude_from_sim: r.exclude_from_sim,
+                // the file's empty Footprint is no footprint (a symbol CvPcb's Delete left without one), not the part's: written back empty
+                no_footprint: r.footprint.is_empty(),
             });
             if r.fields_autoplaced {
                 autoplaced_entries.push(eda_model::ir::field_key(&reference, r.unit));
@@ -2529,7 +2531,7 @@ mod tests {
         );
         let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
 
-        let sym = |unit: u32, x: Nm| SymbolInstance { id: "U1".into(), at: Point { x, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = |unit: u32, x: Nm| SymbolInstance { id: "U1".into(), at: Point { x, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         let sch = SchematicSection {
             symbols: vec![sym(1, Nm::ZERO), sym(2, mm(50.0))],
             wires: vec![],
@@ -2611,7 +2613,7 @@ mod tests {
         };
         let u1 = part("U1", vec![pin("1", "A", PinKind::Signal), pin("2", "B", PinKind::Signal), pin("3", "Y", PinKind::Signal)]);
         let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
-        let instance = SymbolInstance { id: "U1".into(), at: Point { x: mm(25.4), y: mm(25.4) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let instance = SymbolInstance { id: "U1".into(), at: Point { x: mm(25.4), y: mm(25.4) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         let mut sch = SchematicSection { symbols: vec![instance], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false };
         let design_with = |sch: SchematicSection| Design { schema: eda_model::ir::SCHEMA_VERSION, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None };
         let meta = ExportMeta { date: "2026-01-01", title: "alt" };

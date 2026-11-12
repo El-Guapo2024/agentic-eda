@@ -38,7 +38,8 @@ export function changeLines(changes: readonly UpdatePcbChange[], done: boolean):
   const lines: ReportLine[] = [];
   for (const c of changes) {
     if (c.to === "") {
-      lines.push({ severity: "error", text: `Cannot update ${c.reference} (no footprint assigned).` });
+      // a symbol whose footprint was taken away (CvPcb's Delete): `PCB_EDIT_FRAME::LoadFootprints` says so and `UpdateNetlist` leaves the board's footprint as it is
+      lines.push({ severity: "error", text: `No footprint defined for symbol ${c.reference}.` });
     } else if (!c.found) {
       lines.push({ severity: "error", text: `Cannot update ${c.reference} (footprint '${c.to}' not found).` });
     } else if (c.locked) {

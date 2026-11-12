@@ -25,7 +25,7 @@ fn model() -> ConstraintModel {
 }
 
 fn resistor(id: &str, at: Point, mirrored: bool) -> SymbolInstance {
-    SymbolInstance { id: id.into(), at, rot: 0, mirrored, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: id.into(), at, rot: 0, mirrored, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 fn wire(id: &str, a: Point, b: Point, net: &str, bus: bool) -> Wire {

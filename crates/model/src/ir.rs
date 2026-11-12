@@ -364,7 +364,8 @@ pub struct SymbolInstance {
     /// `.kicad_sch`, with no accompanying intent, is still self-contained.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub value: String,
-    /// The instance's own `Footprint` field, same reasoning as `value`.
+    /// The instance's own `Footprint` field, same reasoning as `value`. Empty is "unset": the symbol shows and the derived `.kicad_sch` writes its
+    /// part's footprint ([`crate::footprint::symbol_footprint_field`]), unless [`Self::no_footprint`] says it has none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub footprint: String,
     /// The instance's own `Datasheet` field, same reasoning as `value`.
@@ -384,6 +385,21 @@ pub struct SymbolInstance {
     /// `GetExcludedFromSim` (`setExcludeFromSimulation`): left out of the SPICE netlist -- `(exclude_from_sim yes)`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_from_sim: bool,
+    /// The Footprint field was emptied (CvPcb's Delete, `CVPCB_ASSOCIATION_TOOL::DeleteAssoc`; Symbol Properties, the Fields Table or Find and
+    /// Replace leaving it blank): the symbol has no footprint, as a KiCad `SCH_SYMBOL` whose `FOOTPRINT` field is empty has none, and the derived
+    /// `.kicad_sch` writes the field empty instead of the part's footprint (UI-LEFT-2 LL7 after XX4). Only meaningful with an empty `footprint`;
+    /// [`Self::set_footprint`] keeps the two in step. Additive: absent in an older `design.json` reads as "unset, the part's".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_footprint: bool,
+}
+
+impl SymbolInstance {
+    /// Sets the Footprint field as an edit sets it (`SCH_FIELD::SetText`): an empty text is "no footprint" ([`Self::no_footprint`]), any other
+    /// text is the symbol's own.
+    pub fn set_footprint(&mut self, text: &str) {
+        self.footprint = text.to_string();
+        self.no_footprint = text.is_empty();
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5600,8 +5616,8 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: Nm::new(50_800_000), y: Nm::new(63_500_000) }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                    SymbolInstance { id: "C1".into(), at: Point { x: Nm::new(38_100_000), y: Nm::new(63_500_000) }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "U1".into(), at: Point { x: Nm::new(50_800_000), y: Nm::new(63_500_000) }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false },
+                    SymbolInstance { id: "C1".into(), at: Point { x: Nm::new(38_100_000), y: Nm::new(63_500_000) }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false },
                 ],
                 wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: Nm::new(35_000_000), y: Nm::new(60_000_000) }, Point { x: Nm::new(48_000_000), y: Nm::new(60_000_000) }], bus: false }],
                 labels: vec![],

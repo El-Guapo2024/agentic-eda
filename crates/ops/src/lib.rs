@@ -6494,7 +6494,7 @@ impl<'a> Board<'a> {
         if sch.symbols.iter().any(|s| s.id == id && s.unit == unit) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, format!("reference '{id}' already has unit {unit} on the sheet"))]);
         }
-        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false });
         let last = sch.symbols.len() - 1;
         // The placed symbol's fields are copies of the library symbol's (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`), with their face and colour: kept as the
         // symbol's own (`SchExtras::field_looks`), from the design's library symbol, else the one the model resolves (PARITY-sch §87)
@@ -6532,8 +6532,9 @@ impl<'a> Board<'a> {
             if let Some(v) = value {
                 s.value = v.to_string();
             }
+            // an emptied Footprint is no footprint (CvPcb's Delete, `DeleteAssoc`), not the part's again (`SymbolInstance::set_footprint`)
             if let Some(f) = footprint {
-                s.footprint = f.to_string();
+                s.set_footprint(f);
             }
             if let Some(d) = datasheet {
                 s.datasheet = d.to_string();
@@ -6654,14 +6655,14 @@ impl<'a> Board<'a> {
                     search::ItemKind::Field => {
                         let current = match h.name.as_str() {
                             "Value" => sch.symbols.iter().find(|s| s.id == h.id).map(|s| if s.value.is_empty() { model.part(&h.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() }),
-                            "Footprint" => sch.symbols.iter().find(|s| s.id == h.id).map(|s| s.footprint.clone()),
+                            "Footprint" => sch.symbols.iter().find(|s| s.id == h.id).map(|s| eda_model::footprint::symbol_footprint_field(s, model.part(&h.id))),
                             "Datasheet" => sch.symbols.iter().find(|s| s.id == h.id).map(|s| s.datasheet.clone()),
                             other => sch.user_fields.get(&h.id).and_then(|m| m.get(other)).cloned(),
                         };
                         let Some(new) = current.and_then(|c| search::replace_text(&c, &data)) else { continue };
                         match h.name.as_str() {
                             "Value" => sch.symbols.iter_mut().filter(|s| s.id == h.id).for_each(|s| s.value = new.clone()),
-                            "Footprint" => sch.symbols.iter_mut().filter(|s| s.id == h.id).for_each(|s| s.footprint = new.clone()),
+                            "Footprint" => sch.symbols.iter_mut().filter(|s| s.id == h.id).for_each(|s| s.set_footprint(&new)),
                             "Datasheet" => sch.symbols.iter_mut().filter(|s| s.id == h.id).for_each(|s| s.datasheet = new.clone()),
                             other => {
                                 sch.user_fields.entry(h.id.clone()).or_default().insert(other.to_string(), new);

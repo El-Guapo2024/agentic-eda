@@ -153,15 +153,29 @@ pub fn names_footprint_of(part: &Part, name: &str) -> bool {
 }
 
 /// The parts whose symbol names another footprint than the board has (`BOARD_NETLIST_UPDATER::replaceFootprint`'s test: the netlist component's `GetFPID()` against the
-/// footprint's): what Update PCB from Schematic lists and applies, and what Update Schematic from PCB would carry back. A symbol with no Footprint field, one excluded from the
-/// board and a part the model has none of say nothing.
+/// footprint's): what Update PCB from Schematic lists and applies, and what Update Schematic from PCB would carry back. A symbol whose Footprint field is unset (its part's),
+/// one excluded from the board and a part the model has none of say nothing. A symbol whose Footprint was emptied (`SymbolInstance::no_footprint`, CvPcb's Delete) on a
+/// part the board has a footprint for is listed with an empty `to`: Update PCB tells it (`PCB_EDIT_FRAME::LoadFootprints`: "No footprint defined for symbol %s.") and
+/// leaves the footprint on the board (`UpdateNetlist` keeps the footprint matched by reference when the component names none); Update Schematic from PCB gives the
+/// symbol the board's (`BACK_ANNOTATE::applyChangelist`: "Change %s footprint assignment from '%s' to '%s'.").
 pub fn pending_footprint_changes(design: &eda_model::ir::Design, model: &ConstraintModel) -> Vec<FootprintChange> {
     let mut out: Vec<FootprintChange> = Vec::new();
     let locked: BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.locked_ids.iter().map(String::as_str)).collect();
     for screen in design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
         for sym in &screen.symbols {
+            if sym.exclude_from_board || out.iter().any(|c| c.reference == sym.id) {
+                continue;
+            }
             let to = sym.footprint.trim();
-            if to.is_empty() || sym.exclude_from_board || out.iter().any(|c| c.reference == sym.id) {
+            if to.is_empty() && sym.no_footprint {
+                let Some(part) = model.part(&sym.id) else { continue };
+                let from = eda_model::footprint::footprint_lib_id(part);
+                if !from.is_empty() {
+                    out.push(FootprintChange { reference: sym.id.clone(), from, to: String::new(), locked: locked.contains(sym.id.as_str()) });
+                }
+                continue;
+            }
+            if to.is_empty() {
                 continue;
             }
             let Some(part) = model.part(&sym.id) else { continue };

@@ -484,6 +484,7 @@ fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without
                 exclude_from_bom: false,
                 exclude_from_board: false,
                 exclude_from_sim: false,
+                no_footprint: false,
             });
         }
         root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));

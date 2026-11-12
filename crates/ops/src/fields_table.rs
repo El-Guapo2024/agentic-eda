@@ -531,14 +531,9 @@ fn field_value(sch: &SchematicSection, model: &ConstraintModel, sym: &SymbolInst
                 sym.value.clone()
             }
         }
-        // the Footprint field the derived `.kicad_sch` has (`eda_kicad`'s writer: the symbol's own, else the part's board link), which kicad-cli's BOM lists
-        FOOTPRINT => {
-            if sym.footprint.is_empty() {
-                model.part(&sym.id).map(eda_model::footprint::footprint_lib_id).unwrap_or_default()
-            } else {
-                sym.footprint.clone()
-            }
-        }
+        // the Footprint field the derived `.kicad_sch` has (`symbol_footprint_field`: the symbol's own, none where it was emptied, else the part's board
+        // link), which kicad-cli's BOM lists
+        FOOTPRINT => eda_model::footprint::symbol_footprint_field(sym, model.part(&sym.id)),
         DATASHEET => sym.datasheet.clone(),
         attr if is_attribute(attr) => attribute_value(sym, attr).to_string(),
         // the symbol's own Description, else what placing it copied from its library symbol (`UpdateFields`)
@@ -1126,7 +1121,8 @@ fn resolved_store(sch: &SchematicSection, model: &ConstraintModel, mut store: St
             continue;
         }
         let Some(sym) = sch.symbols.iter().find(|s| &s.id == id) else { continue };
-        let mut fields: Vec<(String, String)> = vec![(REFERENCE.into(), sym.id.clone()), (VALUE.into(), field_value(sch, model, sym, VALUE)), (FOOTPRINT.into(), sym.footprint.clone()), (DATASHEET.into(), sym.datasheet.clone())];
+        let mut fields: Vec<(String, String)> = vec![(REFERENCE.into(), sym.id.clone()), (VALUE.into(), field_value(sch, model, sym, VALUE)), (FOOTPRINT.into(), field_value(sch, model, sym, FOOTPRINT)), (DATASHEET.into(), sym.datasheet.clone())];
+        let footprint = field_value(sch, model, sym, FOOTPRINT);
         if let Some(user) = sch.user_fields.get(id) {
             fields.extend(user.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
@@ -1136,8 +1132,8 @@ fn resolved_store(sch: &SchematicSection, model: &ConstraintModel, mut store: St
             }
             let flag = |on: bool, text: &str| Some(if on { text.to_string() } else { String::new() });
             match token {
-                "FOOTPRINT_LIBRARY" => Some(sym.footprint.split_once(':').map_or("", |(l, _)| l).to_string()),
-                "FOOTPRINT_NAME" => Some(sym.footprint.split_once(':').map_or("", |(_, n)| n).to_string()),
+                "FOOTPRINT_LIBRARY" => Some(footprint.split_once(':').map_or("", |(l, _)| l).to_string()),
+                "FOOTPRINT_NAME" => Some(footprint.split_once(':').map_or("", |(_, n)| n).to_string()),
                 "DNP" => flag(sym.dnp, "DNP"),
                 "EXCLUDE_FROM_BOM" => flag(sym.exclude_from_bom, "Excluded from BOM"),
                 "EXCLUDE_FROM_BOARD" => flag(sym.exclude_from_board, "Excluded from board"),
@@ -1357,7 +1353,8 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
                 for s in sch.symbols.iter_mut().filter(|s| s.id == e.id) {
                     match e.field.as_str() {
                         VALUE => s.value = e.value.clone(),
-                        FOOTPRINT => s.footprint = e.value.clone(),
+                        // an emptied Footprint is no footprint, not the part's (`SymbolInstance::set_footprint`)
+                        FOOTPRINT => s.set_footprint(&e.value),
                         _ => s.datasheet = e.value.clone(),
                     }
                 }
@@ -1462,6 +1459,7 @@ mod tests {
             exclude_from_bom: false,
             exclude_from_board: false,
             exclude_from_sim: false,
+            no_footprint: false,
         }
     }
 
@@ -1891,7 +1889,7 @@ mod tests {
     #[test]
     fn the_scope_is_the_sheet_in_view_its_sheets_or_the_selection() {
         use eda_model::ir::{Design, SchematicSection, SheetInstance};
-        let sym = |id: &str| SymbolInstance { id: id.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = |id: &str| SymbolInstance { id: id.into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         let mut root = SchematicSection { symbols: vec![sym("R1")], ..Default::default() };
         root.sheets.push(SheetInstance { id: "s1".into(), name: "A".into(), file: "a.kicad_sch".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (Nm::new(1000), Nm::new(1000)), pins: vec![], page: String::new() });
         let mut a = SchematicSection { symbols: vec![sym("R2")], ..Default::default() };

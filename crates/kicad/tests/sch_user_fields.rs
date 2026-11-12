@@ -89,6 +89,7 @@ fn sheet(rot: u32, mirrored: bool) -> SchematicSection {
         exclude_from_bom: false,
         exclude_from_board: false,
         exclude_from_sim: false,
+        no_footprint: false,
     };
     let mut sch = SchematicSection { symbols: vec![sym], ..Default::default() };
     let user = sch.user_fields.entry("U1".into()).or_default();

@@ -4,7 +4,7 @@
 // Run it in the page of a served COPY of a board made from examples/mcu_board_30plus.yaml without the LED channels' packages (R1..R8 and D1..D8 have no
 // footprint: a part's package is the Footprint field of its symbol in the derived .kicad_sch, which CvPcb shows and leaves alone; `board=mcu30-nofp`) with e2e/cvpcb.equ copied into the board's folder as `cvpcb-check.equ` (the
 // `fixtures=cvpcb` of tools/run-all-checks.sh) and KiCad's footprint libraries installed (Resistor_SMD, LED_SMD, Capacitor_SMD): it adds that file to the project's list, assigns
-// footprints, undoes that, and empties the list again.
+// footprints, undoes that, takes one away again with Delete (the symbol is left with none, not its part's: UI-LEFT-2 LL7 after XX4), and empties the list again.
 //
 // It answers through `window.__cvpcbCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
 // run-all-checks: board=mcu30-nofp minutes=5 fixtures=cvpcb
@@ -181,6 +181,45 @@
       await sleep(900);
       const back = await symbolsOf();
       t(JSON.stringify(back) === JSON.stringify(before), "one undo takes all of them back");
+    });
+
+    await scenario("Delete, then OK, leaves the symbol with no footprint, not its part's; the board keeps its footprint and Update PCB says so; undo brings it back", async (t) => {
+      // the assignments of the scenario before, again (its OK made the board follow: R1's part is on R_0805 now, so an emptied field would fall back to it)
+      await post("/api/redo", { domain: "schematic" });
+      await sleep(900);
+      const R0805 = "Resistor_SMD:R_0805_2012Metric";
+      t((await symbolsOf()).R1 === R0805, `R1 has ${R0805} (${(await symbolsOf()).R1})`);
+      await E.run("eeschema.EditorControl.assignFootprints");
+      await waitFor(() => assignDialog() && assignedOf(R1) === R0805, 6000);
+      t(assignedOf(R1) === R0805, `CvPcb lists R1 with it (${assignedOf(R1)})`);
+      await clickRow(symRow(R1));
+      buttonOf(assignDialog(), "Remove assignment")?.click();
+      await sleep(250);
+      t(assignedOf(R1) === "(none)", `Delete: "(none)" (${assignedOf(R1)})`);
+      const ok = [...assignDialog().querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "Apply 1 assignment");
+      t(!!ok, `OK applies the one change (${[...assignDialog().querySelectorAll(".dialog-footer button")].map((b) => b.textContent.trim())})`);
+      ok?.click();
+      await waitFor(() => !assignDialog(), 6000);
+      await sleep(600);
+      const after = await symbolsOf();
+      t(after.R1 === "", `the schematic's R1 has no footprint, not the part's (${JSON.stringify(after.R1)})`);
+      t(after.R2 === R0805, `R2 keeps its own (${after.R2})`);
+      await E.run("eeschema.EditorControl.assignFootprints");
+      await waitFor(() => assignDialog() && symRow(R1), 6000);
+      t(assignedOf(R1) === "(none)", `opened again, CvPcb lists R1 with none (${assignedOf(R1)})`);
+      // nothing staged: OK closes it
+      [...assignDialog().querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "OK")?.click();
+      await waitFor(() => !assignDialog(), 3000);
+      t(!assignDialog(), "OK with nothing staged closes it");
+      const pcb = await json("/api/update_pcb");
+      const r1 = (pcb.changes ?? []).find((c) => c.reference === R1);
+      t(!!r1 && r1.to === "" && r1.from === R0805 && r1.found === false, `the board keeps R1 on ${R0805}; Update PCB lists it with no footprint ("No footprint defined for symbol R1."): ${JSON.stringify(r1)}`);
+      await post("/api/undo", { domain: "schematic" });
+      await sleep(900);
+      t((await symbolsOf()).R1 === R0805, "one undo gives R1 its footprint back");
+      await post("/api/undo", { domain: "schematic" });
+      await sleep(900);
+      t(JSON.stringify(await symbolsOf()) === JSON.stringify(before), "and the next takes the assignments back: as the check found the schematic");
     });
 
     await scenario("a file the list names that is not there is reported as KiCad reports it", async (t) => {

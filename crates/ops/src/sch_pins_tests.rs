@@ -33,7 +33,7 @@ fn p(x: Nm, y: Nm) -> Point {
 }
 
 fn sym_of(id: &str, lib_id: &str, unit: u32, at: Point) -> SymbolInstance {
-    SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 fn res(id: &str, at: Point) -> SymbolInstance {

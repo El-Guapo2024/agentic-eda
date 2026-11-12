@@ -1157,10 +1157,10 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
 }
 
 /// The Value, Footprint and Datasheet a symbol is written with: its own, else its part's (the Footprint the one the board's footprint is written with,
-/// `footprint_lib_id`; the Datasheet the library symbol's).
+/// `footprint_lib_id`, and empty for a symbol whose Footprint was emptied: `symbol_footprint_field`; the Datasheet the library symbol's).
 fn symbol_texts(sym: &SymbolInstance, part: &Part, resolved: Option<&eda_model::LibSymbol>) -> (String, String, String) {
     let value = if !sym.value.is_empty() { sym.value.clone() } else { part.value.clone().unwrap_or_else(|| sym.id.clone()) };
-    let footprint = if !sym.footprint.is_empty() { sym.footprint.clone() } else { eda_model::footprint::footprint_lib_id(part) };
+    let footprint = eda_model::footprint::symbol_footprint_field(sym, Some(part));
     let datasheet = if !sym.datasheet.is_empty() { sym.datasheet.clone() } else { resolved.map(|s| s.datasheet.clone()).unwrap_or_default() };
     (value, footprint, datasheet)
 }

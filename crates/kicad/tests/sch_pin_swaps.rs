@@ -93,6 +93,7 @@ fn sheet(m: &ConstraintModel, rot: u32, swapped: bool) -> SchematicSection {
         exclude_from_bom: false,
         exclude_from_board: false,
         exclude_from_sim: false,
+        no_footprint: false,
     };
     let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
     let part = m.part("U1").unwrap();

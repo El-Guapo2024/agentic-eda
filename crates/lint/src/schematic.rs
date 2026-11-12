@@ -1545,12 +1545,12 @@ mod tests {
     }
 
     fn r1_geo(model: &ConstraintModel, at: IrPoint) -> SymGeo<'_> {
-        let sym = SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         SymGeo::build(&sym, model.part("R1").unwrap(), model)
     }
 
     fn r1_symbol(at: IrPoint) -> SymbolInstance {
-        SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+        SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
     }
 
     // ---------------------------------------------------------- offgrid
@@ -1654,7 +1654,7 @@ mod tests {
         let r2 = Part { reference: "R2".into(), ..model.parts[0].clone() };
         model.parts.push(r2);
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
-            symbols: vec![r1_symbol(IrPoint { x: Nm::ZERO, y: Nm::ZERO }), SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R2".into(), at: IrPoint { x: mm(1.27), y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }],
+            symbols: vec![r1_symbol(IrPoint { x: Nm::ZERO, y: Nm::ZERO }), SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R2".into(), at: IrPoint { x: mm(1.27), y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }],
             wires: vec![],
             labels: vec![],
         };
@@ -1720,9 +1720,9 @@ mod tests {
         let model = two_conn_model(());
         let sch_for = |u1_x: Nm| SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
             symbols: vec![
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J1".into(), at: IrPoint { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: mm(12.7), y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J1".into(), at: IrPoint { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: mm(12.7), y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: Nm::ZERO }, rot: 0, mirrored: false, mirror_y: false, dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false },
             ],
             wires: vec![Wire { id: String::new(),
                 net: "SIG".into(),

@@ -51,7 +51,7 @@ fn model() -> ConstraintModel {
 }
 
 fn resistor() -> SymbolInstance {
-    SymbolInstance { id: "R1".into(), at: p(mm(50.8), mm(50.8)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "330".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: "R1".into(), at: p(mm(50.8), mm(50.8)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "330".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 /// R1 with three user fields (`MPN`, `Note`, `Tol`) and a GND power symbol with two (`Rating`, shown, and `Spare`, hidden).

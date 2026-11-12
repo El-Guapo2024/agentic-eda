@@ -71,6 +71,7 @@ fn resistor(id: &str, at: Point, rot: u32, mirrored: bool) -> SymbolInstance {
         exclude_from_bom: false,
         exclude_from_board: false,
         exclude_from_sim: false,
+        no_footprint: false,
     }
 }
 

@@ -307,6 +307,7 @@ impl Items {
             exclude_from_bom: kept.is_some_and(|k| k.exclude_from_bom),
             exclude_from_board: kept.is_some_and(|k| k.exclude_from_board),
             exclude_from_sim: kept.is_some_and(|k| k.exclude_from_sim),
+            no_footprint: false,
         });
         let keep = p.keepout();
         self.rects.push(keep);

@@ -2291,9 +2291,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 // same filter `resolveLibSymbol` applies to the `body_style` of each item of `lib_symbols[lib_id]`.
                 "body_style": sch.body_style_of(s),
                 "value": if s.value.is_empty() { part.and_then(|p| p.value.clone()) } else { Some(s.value.clone()) },
-                // the Footprint field the derived `.kicad_sch` writes (`eda_kicad`: the symbol's own, else the part's board link, `footprint_lib_id`), so
-                // Symbol Properties, F and the Fields Table show what KiCad shows for the file (UI-LEFT-2 XX4: the table had it empty, kicad-cli's BOM had it)
-                "footprint": if s.footprint.is_empty() { part.map(eda_model::footprint::footprint_lib_id).filter(|f| !f.is_empty()) } else { Some(s.footprint.clone()) },
+                // the Footprint field the derived `.kicad_sch` writes (`symbol_footprint_field`: the symbol's own, none where it was emptied, else the part's
+                // board link, `footprint_lib_id`), so Symbol Properties, F and the Fields Table show what KiCad shows for the file (UI-LEFT-2 XX4: the table had
+                // it empty, kicad-cli's BOM had it; LL7: CvPcb's Delete leaves the symbol with none)
+                "footprint": Some(eda_model::footprint::symbol_footprint_field(s, part)).filter(|f| !f.is_empty()),
                 "datasheet": if s.datasheet.is_empty() { None } else { Some(s.datasheet.clone()) },
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),

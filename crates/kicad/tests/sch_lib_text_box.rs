@@ -119,6 +119,7 @@ fn placed(lib: &LibSymbol) -> (ConstraintModel, Design) {
             exclude_from_bom: false,
             exclude_from_board: false,
             exclude_from_sim: false,
+            no_footprint: false,
         });
         parts.push(part_of(&reference, lib));
     }
@@ -285,7 +286,7 @@ fn derived_and_kicads(lib: &LibSymbol, own_cache: &str, orientation: (u32, bool,
     let (rot, mirrored, mirror_y) = orientation;
     let at = Point { x: mm(50.8), y: mm(50.8) };
     let mut sch = SchematicSection::default();
-    sch.symbols.push(SymbolInstance { id: "U1".into(), at, rot, mirrored, mirror_y, lib_id: lib.lib_id.clone(), unit: 1, value: "TB".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+    sch.symbols.push(SymbolInstance { id: "U1".into(), at, rot, mirrored, mirror_y, lib_id: lib.lib_id.clone(), unit: 1, value: "TB".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false });
     let m = ConstraintModel { parts: vec![part_of("U1", lib)], symbols: vec![lib.clone()], ..Default::default() };
     let derived = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
     let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(lib, 1);

@@ -4858,7 +4858,7 @@ pub(crate) mod tests {
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-        let sym = |id: &str, x: Nm, y: Nm| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = |id: &str, x: Nm, y: Nm| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: eda_model::ir::SCHEMA_VERSION,
@@ -5672,8 +5672,8 @@ pub(crate) mod tests {
             // Neither point may collide with setup_schematic's own R1
             // (10_000,10_000)/R2 (20_000,10_000) -- `.find(|s| s.at == ...)`
             // below would silently match the wrong symbol otherwise.
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: mm(5.0), y: mm(50.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "A": further left, further down
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: mm(60.0), y: mm(40.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "B": further right, further up
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: mm(5.0), y: mm(50.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }); // "A": further left, further down
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: mm(60.0), y: mm(40.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }); // "B": further right, further up
         }
         save(&dir, &design).unwrap();
 
@@ -7246,7 +7246,7 @@ pub(crate) mod tests {
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
         let pt = |x: Nm, y: Nm| Point { x, y };
-        let sym = |id: &str, lib_id: &str, unit: u32, at: Point| eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = |id: &str, lib_id: &str, unit: u32, at: Point| eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         let mut sch = eda_model::ir::SchematicSection { symbols: vec![sym("R1", "TEST:R2", 1, pt(mm(20.0), mm(20.0))), sym("U2", "TEST:DUAL", 1, pt(mm(60.0), mm(20.0))), sym("U2", "TEST:DUAL", 2000, pt(mm(100.0), mm(20.0)))], imported_from_kicad: true, ..Default::default() };
         // a pin is 2.54 mm above or below its symbol's origin: a wire 10 mm further out to a label
         let mut wire_to_label = |tip: Point, up: bool, label: &str| {

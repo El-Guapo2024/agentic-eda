@@ -17,6 +17,14 @@ test("F8 lists a footprint change as KiCad's dry run does, and tells it in the p
   assert.equal(changeLines(changes, true)[1]!.text, "Could not change R2 footprint from 'R_0603' to 'R_0402' (footprint is locked).");
 });
 
+test("a symbol whose footprint was deleted (CvPcb's Delete) is told by F8 and left on the board; the back-annotation gives it the board's", () => {
+  const cleared = [change("R4", "Resistor_SMD:R_0603_1608Metric", "", { found: false })];
+  assert.deepEqual(changeLines(cleared, false).map((l) => [l.severity, l.text]), [["error", "No footprint defined for symbol R4."]]);
+  assert.deepEqual(updateCommands(cleared), [], "UpdateNetlist keeps the footprint matched by reference");
+  assert.deepEqual(backAnnotateCommands(cleared), [{ op: "edit_symbol_fields", id: "R4", footprint: "Resistor_SMD:R_0603_1608Metric" }]);
+  assert.deepEqual(backAnnotateLines(cleared, false).map((l) => l.text), ["Change R4 footprint assignment from '' to 'Resistor_SMD:R_0603_1608Metric'."]);
+});
+
 test("the update applies the footprints that can be changed, each with every option on", () => {
   const changes = [change("R1", "A", "B"), change("R2", "A", "B", { locked: true }), change("R3", "A", "C", { found: false })];
   assert.deepEqual(appliable(changes).map((c) => c.reference), ["R1"]);

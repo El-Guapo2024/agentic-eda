@@ -60,7 +60,7 @@ fn model() -> ConstraintModel {
 }
 
 fn instance(id: &str, lib_id: &str, unit: u32, value: &str, x: f64) -> SymbolInstance {
-    SymbolInstance { id: id.into(), at: Point { x: mm(x), y: mm(50.8) }, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: id.into(), at: Point { x: mm(x), y: mm(50.8) }, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 /// U1 (two units) and R3, whose field `XREF` names U1's units, in a project of the `.1` notation.

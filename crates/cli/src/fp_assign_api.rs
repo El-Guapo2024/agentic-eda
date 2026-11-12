@@ -29,7 +29,8 @@ pub fn update_pcb(dir: &Path) -> Value {
     let changes: Vec<Value> = eda_ops::pending_footprint_changes(&design, &model)
         .into_iter()
         .map(|c| {
-            let found = crate::library_place::footprint_found(&c.to, &c.reference, &design, &model, &*footprints);
+            // a symbol with no footprint names nothing to look for ("No footprint defined for symbol %s.")
+            let found = !c.to.is_empty() && crate::library_place::footprint_found(&c.to, &c.reference, &design, &model, &*footprints);
             json!({ "reference": c.reference, "from": c.from, "to": c.to, "locked": c.locked, "found": found })
         })
         .collect();

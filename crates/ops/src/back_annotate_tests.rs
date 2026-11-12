@@ -32,7 +32,7 @@ fn p(x: f64, y: f64) -> Point {
 }
 
 fn sym(id: &str, lib_id: &str, unit: u32, at: Point) -> SymbolInstance {
-    SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 fn lib_pin(number: &str, y: f64, unit: u32, kind: &str) -> LibPin {

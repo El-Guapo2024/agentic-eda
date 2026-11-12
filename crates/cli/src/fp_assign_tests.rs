@@ -212,6 +212,67 @@ fn a_symbols_footprint_field_edit_changes_the_boards_footprint_and_one_undo_take
     assert_eq!(symbol_footprint(&dir, "U1"), "Alt:Nope");
 }
 
+/// The `(property "Footprint" ..)` text of the symbol `reference` in the derived `.kicad_sch` files, read back by the importer.
+fn written_footprint(dir: &Path, reference: &str) -> String {
+    let (_, design, model) = load(dir).unwrap();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-12", title: "t" }, "board.kicad_sch").unwrap();
+    let (design, _, _) = files
+        .iter()
+        .find_map(|(_, text)| eda_kicad::import_kicad_sch(text).ok().filter(|(d, _, _)| d.schematic.as_ref().is_some_and(|s| s.symbols.iter().any(|x| x.id == reference))))
+        .unwrap_or_else(|| panic!("no derived sheet has {reference}"));
+    let sym = design.schematic.unwrap().symbols.into_iter().find(|s| s.id == reference).unwrap();
+    assert_eq!(sym.no_footprint, sym.footprint.is_empty(), "an empty Footprint read back is no footprint");
+    sym.footprint
+}
+
+/// CvPcb's Delete (`CVPCB_ASSOCIATION_TOOL::DeleteAssoc`), then OK: the symbol's Footprint field is emptied (`EditSymbolFields` with ""), and in KiCad that leaves it
+/// with no footprint. A symbol whose field is unset shows and writes its part's footprint (UI-LEFT-2 XX4), so "no footprint" is kept apart from "unset"
+/// (`SymbolInstance::no_footprint`): the derived `.kicad_sch` writes it empty and reads back so, the board keeps its footprint (`UpdateNetlist` leaves the footprint
+/// matched by reference) and Update PCB tells it; one undo takes it back; a footprint assigned again ends it.
+#[test]
+fn a_deleted_footprint_leaves_the_symbol_with_none_where_unset_is_its_parts() {
+    let dir = board_with_schematic("cvpcb_delete");
+    // U1's symbol with its Footprint unset: the part's, as a board made from an intent's `package` has it
+    let (_, mut design, _) = load(&dir).unwrap();
+    for screen in design.schematic.iter_mut().chain(design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
+        for s in screen.symbols.iter_mut().filter(|s| s.id == "U1") {
+            s.footprint.clear();
+        }
+    }
+    save(&dir, &design).unwrap();
+    let field = |dir: &Path| {
+        let (_, design, model) = load(dir).unwrap();
+        let sym = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter()).find(|s| s.id == "U1").cloned().unwrap();
+        eda_model::footprint::symbol_footprint_field(&sym, model.part("U1"))
+    };
+    assert_eq!((symbol_footprint(&dir, "U1"), field(&dir), written_footprint(&dir, "U1")), (String::new(), "Test:2PAD".to_string(), "Test:2PAD".to_string()), "unset: the part's");
+    assert!(crate::fp_assign_api::update_pcb(&dir)["changes"].as_array().unwrap().is_empty(), "nothing for Update PCB to do");
+
+    let delete = on_its_sheet(&dir, "U1", Cmd::EditSymbolFields { id: "U1".into(), value: None, footprint: Some(String::new()), datasheet: None });
+    step(&dir, delete, false, "test").unwrap();
+    assert_eq!((field(&dir), written_footprint(&dir, "U1")), (String::new(), String::new()), "deleted: no footprint, in the studio and in the file");
+    assert!(std::fs::read_to_string(dir.join("design.json")).unwrap().contains("\"no_footprint\": true"), "design.json keeps it");
+    let (_, _, model) = load(&dir).unwrap();
+    assert_eq!(model.part("U1").unwrap().footprint.as_deref(), Some("Test:2PAD"), "the board keeps its footprint until Update PCB");
+    assert_eq!(pose_x(&dir, "U1"), Some(mm(5.0)));
+    let report = crate::fp_assign_api::update_pcb(&dir);
+    let changes = report["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{report}");
+    let got = (changes[0]["reference"].as_str(), changes[0]["from"].as_str(), changes[0]["to"].as_str(), changes[0]["found"].as_bool());
+    assert_eq!(got, (Some("U1"), Some("Test:2PAD"), Some(""), Some(false)), "Update PCB: \"No footprint defined for symbol U1.\"");
+    assert_consistent(&dir);
+
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(field(&dir), "Test:2PAD", "one undo: unset again, the part's");
+    redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(field(&dir), "");
+    // a footprint assigned again (CvPcb's Assign) is the symbol's own and ends "none"
+    let assign = on_its_sheet(&dir, "U1", Cmd::EditSymbolFields { id: "U1".into(), value: None, footprint: Some("Test:2PAD".into()), datasheet: None });
+    step(&dir, assign, false, "test").unwrap();
+    assert_eq!((symbol_footprint(&dir, "U1"), written_footprint(&dir, "U1")), ("Test:2PAD".to_string(), "Test:2PAD".to_string()));
+    assert!(!std::fs::read_to_string(dir.join("design.json")).unwrap().contains("no_footprint"));
+}
+
 #[test]
 fn update_pcb_lists_the_footprints_the_symbols_name_that_the_board_does_not_have_and_applies_them() {
     let dir = board_with_schematic("update_pcb_lists");

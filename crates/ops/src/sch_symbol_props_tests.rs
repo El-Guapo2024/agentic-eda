@@ -69,7 +69,7 @@ fn model() -> ConstraintModel {
 }
 
 fn instance(unit: u32, x: f64) -> SymbolInstance {
-    SymbolInstance { id: "U1".into(), at: Point { x: mm(x), y: mm(50.8) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "v".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
+    SymbolInstance { id: "U1".into(), at: Point { x: mm(x), y: mm(50.8) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "v".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false }
 }
 
 fn board<'a>(m: &'a ConstraintModel, units: &[u32]) -> Board<'a> {

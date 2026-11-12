@@ -49,7 +49,7 @@ fn design() -> Design {
     root.assign_missing_ids();
 
     let mut child = eda_model::ir::SchematicSection { imported_from_kicad: true, ..Default::default() };
-    child.symbols.push(SymbolInstance { id: "R1".into(), at: p(mm(20.32), mm(25.4)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
+    child.symbols.push(SymbolInstance { id: "R1".into(), at: p(mm(20.32), mm(25.4)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false });
     child.wires.push(wire("wire_a", &[p(mm(20.32), mm(21.59)), p(mm(20.32), mm(12.7))]));
     child.labels.push(label("lbl_in", "IN", p(mm(20.32), mm(12.7)), LabelKind::Hierarchical { shape: LabelShape::Input }));
     child.wires.push(wire("wire_b", &[p(mm(20.32), mm(29.21)), p(mm(20.32), mm(38.1))]));

@@ -337,7 +337,8 @@ fn field_shown(sch: &SchematicSection, id: &str, name: &str) -> bool {
 fn symbol_fields(sch: &SchematicSection, model: &ConstraintModel, id: &str) -> Vec<(String, String)> {
     let sym = sch.symbols.iter().find(|s| s.id == id).expect("symbol exists");
     let value = if sym.value.is_empty() { model.part(id).and_then(|p| p.value.clone()).unwrap_or_default() } else { sym.value.clone() };
-    let mut out = vec![("Reference".to_string(), id.to_string()), ("Value".to_string(), value), ("Footprint".to_string(), sym.footprint.clone()), ("Datasheet".to_string(), sym.datasheet.clone())];
+    // the Footprint the file has: the symbol's own, none where it was emptied, else its part's (`symbol_footprint_field`)
+    let mut out = vec![("Reference".to_string(), id.to_string()), ("Value".to_string(), value), ("Footprint".to_string(), eda_model::footprint::symbol_footprint_field(sym, model.part(id))), ("Datasheet".to_string(), sym.datasheet.clone())];
     if let Some(user) = sch.user_fields.get(id) {
         out.extend(user.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
@@ -770,7 +771,7 @@ mod tests {
     #[test]
     fn a_user_field_shown_on_the_sheet_is_found_as_kicad_finds_a_visible_field() {
         let m = ConstraintModel::default();
-        let sym = SymbolInstance { id: "R1".into(), at: Point { x: mm(1.0), y: mm(0.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = SymbolInstance { id: "R1".into(), at: Point { x: mm(1.0), y: mm(0.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         let mut sch = SchematicSection { symbols: vec![sym], ..Default::default() };
         sch.user_fields.entry("R1".into()).or_default().insert("MPN".into(), "RC0603".into());
         let names = |sch: &SchematicSection, data: &SearchData| find_items(sch, &m, data).iter().map(|h| h.name.clone()).collect::<Vec<_>>();
@@ -796,7 +797,7 @@ mod tests {
         let mut m = ConstraintModel::default();
         m.symbols.push(lib);
         m.parts.push(serde_json::from_value(serde_json::json!({ "reference": "U1" })).unwrap());
-        let sym = SymbolInstance { id: "U1".into(), at: Point { x: mm(1.0), y: mm(0.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "T:OPA".into(), unit: 1, value: "x".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let sym = SymbolInstance { id: "U1".into(), at: Point { x: mm(1.0), y: mm(0.0) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "T:OPA".into(), unit: 1, value: "x".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         let sch = SchematicSection { symbols: vec![sym], ..Default::default() };
         let hits = find_items(&sch, &m, &d("OPA"));
         assert_eq!(hits.iter().map(|h| (h.kind, h.name.as_str())).collect::<Vec<_>>(), vec![(ItemKind::Field, "Reference")]);

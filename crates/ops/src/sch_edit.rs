@@ -1547,7 +1547,7 @@ mod tests {
     fn change_symbol_swaps_the_library_symbol_of_every_unit_and_refuses_what_cannot_be() {
         use eda_model::ir::SymbolInstance;
         let mut sch = empty_sheet();
-        let mk = |id: &str, lib: &str, unit: u32| SymbolInstance { id: id.into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, mirrored: false, mirror_y: false, lib_id: lib.into(), unit, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let mk = |id: &str, lib: &str, unit: u32| SymbolInstance { id: id.into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, mirrored: false, mirror_y: false, lib_id: lib.into(), unit, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
         sch.symbols.push(mk("R1", "Device:R", 1));
         let model = ConstraintModel::default();
         let mut b = Board::new(design_with_schematic(sch), &model, mm(0.1), mm(0.3));

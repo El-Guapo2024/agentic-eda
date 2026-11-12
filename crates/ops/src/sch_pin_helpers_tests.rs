@@ -95,6 +95,7 @@ fn symbol(id: &str, lib_id: &str, at: Point, rot: u32, mirrored: bool) -> Symbol
         exclude_from_bom: false,
         exclude_from_board: false,
         exclude_from_sim: false,
+        no_footprint: false,
     }
 }
 

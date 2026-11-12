@@ -258,8 +258,9 @@ pub fn is_standard_field(name: &str) -> bool {
 /// The four fields of a placed symbol, in KiCad's order, with the text each shows.
 pub fn symbol_specs(sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib: &str) -> Vec<FieldSpec> {
     let value = if !sym.value.is_empty() { sym.value.clone() } else { part.and_then(|p| p.value.clone()).unwrap_or_else(|| sym.id.clone()) };
-    // the symbol's own, else the name the board's footprint goes by (`footprint_lib_id`: a package's installed KiCad footprint), as the schematic writer writes it
-    let footprint = if !sym.footprint.is_empty() { sym.footprint.clone() } else { part.map(eda_model::footprint::footprint_lib_id).unwrap_or_default() };
+    // the symbol's own, else none where it was emptied, else the name the board's footprint goes by (`footprint_lib_id`: a package's installed KiCad
+    // footprint), as the schematic writer writes it (`symbol_footprint_field`)
+    let footprint = eda_model::footprint::symbol_footprint_field(sym, part);
     let datasheet = if !sym.datasheet.is_empty() { sym.datasheet.clone() } else { datasheet_of_lib.to_string() };
     vec![
         // a placeholder (`R?1`) shows the unannotated `R?` it stands for (UI-LEFT S14)

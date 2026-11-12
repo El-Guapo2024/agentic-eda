@@ -421,7 +421,7 @@ fn derive_schematic_drawn(model: &ConstraintModel, opts: &EngineOptions) -> Resu
                 value: part.value.clone().unwrap_or_default(),
                 footprint: part.footprint.clone().unwrap_or_default(),
                 datasheet: part.datasheet.clone().unwrap_or_default(),
-                dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false,
+                dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false,
             });
         }
 

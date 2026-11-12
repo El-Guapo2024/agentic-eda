@@ -103,6 +103,7 @@ fn sheet_of(m: &ConstraintModel, prefix: &str, lib_id: &str, value: &str) -> Sch
             exclude_from_bom: false,
             exclude_from_board: false,
             exclude_from_sim: false,
+            no_footprint: false,
         };
         let part = m.part(reference).unwrap();
         let lib = m.real_symbol_of(&sym.lib_id, part);

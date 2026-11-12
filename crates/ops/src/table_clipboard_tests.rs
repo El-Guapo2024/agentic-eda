@@ -196,7 +196,7 @@ fn a_sheet_table_and_its_cells_are_copied_and_pasted_as_kicads_sheet_does() {
 fn a_cross_reference_in_a_sheet_cell_follows_its_symbol_through_a_rename() {
     let m = ConstraintModel::default();
     let mut design = sch_design();
-    let sym = |id: &str, x: f64| SymbolInstance { id: id.into(), at: p(mm(x), mm(10.16)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = |id: &str, x: f64| SymbolInstance { id: id.into(), at: p(mm(x), mm(10.16)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
     let sch = design.schematic.as_mut().unwrap();
     sch.symbols = vec![sym("R1", 10.16), sym("R2", 30.48)];
     sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "see ${R1:VALUE}".into(), at: p(mm(5.08), mm(5.08)), angle: 0, size_nm: mm(1.27) });
@@ -219,7 +219,7 @@ fn a_cross_reference_in_a_sheet_cell_follows_its_symbol_through_a_rename() {
 fn a_cross_reference_in_a_label_or_a_field_follows_its_symbol_through_a_rename() {
     let m = ConstraintModel::default();
     let mut design = sch_design();
-    let sym = |id: &str, x: f64| SymbolInstance { id: id.into(), at: p(mm(x), mm(10.16)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = |id: &str, x: f64| SymbolInstance { id: id.into(), at: p(mm(x), mm(10.16)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
     let sch = design.schematic.as_mut().unwrap();
     sch.symbols = vec![sym("R1", 10.16), sym("R2", 30.48)];
     sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N_${R1:VALUE}".into(), at: p(mm(50.8), mm(50.8)), kind: Default::default() });

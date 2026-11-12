@@ -52,7 +52,7 @@ fn design_with(sch: SchematicSection) -> Design {
 /// The gate with a wire from each pin out to a label (`NET_A`, `NET_B`, `NET_Y`), a text, and these groups: `inner = {w_NET_A, l_NET_A}` named "net A",
 /// `outer = {inner, U1}` named "gate" and `other = {l_NET_B, l_NET_Y, txt_note}` named "the rest".
 fn grouped(m: &ConstraintModel) -> SchematicSection {
-    let sym = SymbolInstance { id: "U1".into(), at: Point { x: mm(76.2), y: mm(76.2) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+    let sym = SymbolInstance { id: "U1".into(), at: Point { x: mm(76.2), y: mm(76.2) }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
     let mut sch = SchematicSection { symbols: vec![sym.clone()], ..Default::default() };
     let part = m.part("U1").unwrap();
     for (number, tip) in eda_engine::placed::pin_points(&sym, part, m.real_symbol_of(&sym.lib_id, part).as_ref()) {
