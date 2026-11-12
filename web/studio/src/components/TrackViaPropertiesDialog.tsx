@@ -357,7 +357,7 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
               </>
             )}
           </div>
-          {hasVias && <TeardropFields form={form.teardrops} units={units} what="via" onChange={(teardrops) => setForm((f) => ({ ...f, teardrops }))} />}
+          {hasVias && <TeardropFields form={form.teardrops} units={units} what="via" legacy={!!board.drawings?.legacy_teardrops} onChange={(teardrops) => setForm((f) => ({ ...f, teardrops }))} />}
           {error && (
             <div role="alert" style={{ color: "var(--chrome-error, #c0392b)", fontSize: 12, marginTop: 6 }}>
               {error}

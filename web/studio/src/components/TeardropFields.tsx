@@ -2,13 +2,13 @@
 // 8303b2ad): "Add teardrops on via's (pad's) track connections", "Prefer zone connection" (a pad's), "Allow teardrops to span two track segments", the track width
 // limit, best length and width (percent of the anchor's size, `d`), maximum length and width and "Curved edges". A via dialog's boxes are three-state (several vias
 // that differ), a pad's two-state. The form is kicad-port/teardropParams.ts's; what an anchor without parameters of its own shows is what Board Setup's block gives
-// it. Differs: no "Board contains legacy teardrops." warning -- the studio's derived file is written `(legacy_teardrops yes)` only so that kicad-cli keeps the
-// teardrops it is given, which the studio makes from these parameters (Add All Teardrops).
+// it. On a board read with legacy teardrops (`BOARD::LegacyTeardrops()`, UI-LEFT-2 PP24) the part is greyed (`onTeardropsUpdateUi`: `event.Enable(
+// !LegacyTeardrops() )`) under KiCad's `m_legacyTeardropsWarning`: "Board contains legacy teardrops." / "Use Edit > Edit Teardrops to apply automatic teardrops.".
 import type { TeardropForm } from "../kicad-port/teardropParams";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import { NumberInput } from "./NumberInput";
 
-export function TeardropFields({ form, units, what, onChange }: { form: TeardropForm; units: LengthUnit; what: "via" | "pad"; onChange: (form: TeardropForm) => void }) {
+export function TeardropFields({ form, units, what, legacy = false, onChange }: { form: TeardropForm; units: LengthUnit; what: "via" | "pad"; legacy?: boolean; onChange: (form: TeardropForm) => void }) {
   const set = (patch: Partial<TeardropForm>) => onChange({ ...form, ...patch });
   const check = (label: string, key: "enabled" | "allowTwo" | "preferZone" | "curved", title?: string) => (
     <label style={{ display: "block" }} title={title}>
@@ -41,8 +41,14 @@ export function TeardropFields({ form, units, what, onChange }: { form: Teardrop
     </>
   );
   return (
-    <fieldset style={{ marginTop: 8 }} aria-label="Teardrops">
+    <fieldset style={{ marginTop: 8 }} aria-label="Teardrops" disabled={legacy}>
       <legend>Teardrops</legend>
+      {legacy && (
+        <div role="note" aria-label="Legacy teardrops" style={{ marginBottom: 4 }}>
+          <div>⚠ Board contains legacy teardrops.</div>
+          <div>Use Edit &gt; Edit Teardrops to apply automatic teardrops.</div>
+        </div>
+      )}
       {check(what === "via" ? "Add teardrops on via's track connections" : "Add teardrops on pad's track connections", "enabled")}
       {what === "pad" && check("Prefer zone connection", "preferZone", "Do not create teardrops on tracks connected to pads that are also connected to a copper zone.")}
       {check(

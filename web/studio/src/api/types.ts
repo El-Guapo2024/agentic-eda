@@ -817,6 +817,8 @@ export interface BoardText {
 export interface Drawings {
   shapes: Shape[];
   texts: BoardText[];
+  /** `BOARD::LegacyTeardrops()`: a board read from a file with legacy teardrops (UI-LEFT-2 PP24). Absent: false. */
+  legacy_teardrops?: boolean;
   /** Task item 5 -- `crates/model/src/ir.rs` `Group`. Lives here purely for the lowest construction-site ripple (see that struct's own doc); a group can reference any item kind, not just a drawing. */
   groups: Group[];
   /** Task item 7 -- see `Dimension`'s own doc. */

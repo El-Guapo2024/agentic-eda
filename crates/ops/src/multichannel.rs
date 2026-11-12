@@ -320,6 +320,21 @@ impl Board<'_> {
         self.mc_potential_areas_of(&mc)
     }
 
+    /// [`Self::mc_potential_areas`] for the project `project`: a footprint whose symbol is on the root sheet has the root's file, `<project>.kicad_sch`, as the
+    /// board file the studio writes says (`eda_kicad`'s `FromSchematic::root_sheetfile`, what Update PCB from Schematic sets from the netlist's `Sheetfile`), so
+    /// the dialog's "Sheet Name" column shows it as KiCad's does (`GeneratePotentialRuleAreas`: `PathAndName( fp->GetSheetname(), fp->GetSheetfile() )`).
+    pub fn mc_potential_areas_in(&self, project: &str) -> Vec<PotentialArea> {
+        let root = format!("{project}.kicad_sch");
+        let mut mc = self.mc_board();
+        // as the writer does: a footprint with a symbol whose file named no sheet file is written with its symbol's sheet's file, the root's when that is the root
+        for f in mc.fps.iter_mut().filter(|f| f.sheetfile.is_empty()) {
+            if let Some(link) = self.model.symbol_links.get(&f.reference) {
+                f.sheetfile = if link.sheetfile.is_empty() { root.clone() } else { link.sheetfile.clone() };
+            }
+        }
+        self.mc_potential_areas_of(&mc)
+    }
+
     pub(crate) fn mc_potential_areas_of(&self, mc: &McBoard) -> Vec<PotentialArea> {
         let sheets: BTreeSet<(String, String)> = mc.fps.iter().map(|f| (f.sheetname.clone(), f.sheetfile.clone())).collect();
         let classes: BTreeSet<String> = mc.fps.iter().flat_map(|f| f.classes.iter().cloned()).collect();

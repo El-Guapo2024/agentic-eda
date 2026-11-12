@@ -408,6 +408,9 @@ export function collectSelectionCandidates(
   for (const z of board.routing?.zones ?? []) {
     // "Most footprint children can only be selected in the footprint editor" (`PCB_SELECTION_TOOL::Selectable`): a footprint's zone is not picked on the board (UI-LEFT PP14)
     if (z.outline.length < 3 || z.parent) continue;
+    // "A teardrop is modelled as a property of a via, pad or the board ... The underlying zone is only an implementation detail" (`Selectable`): a teardrop
+    // area is picked only on a board with legacy teardrops (UI-LEFT-2 PP24)
+    if (z.teardrop && !board.drawings?.legacy_teardrops) continue;
     // `PCB_COLLECTOR::Inspect`: a zone is hit on a side of its outline or of one of its holes (`HitTestForCorner( accuracy * 2 ) || HitTestForEdge( accuracy )`,
     // every contour), or inside its area -- inside the outline and in none of its holes (`zoneContainsPoint`, standing in for `HitTestFilledArea`, which
     // reads the fill; a rule area's is `m_Poly->Contains`). A click deep in a hole is outside the zone: its slop is the distance to the hole's side.
@@ -617,7 +620,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("via", v.id, [v.x - r, v.y - r, v.x + r, v.y + r], null);
   }
   for (const z of board.routing?.zones ?? []) {
-    if (z.outline.length < 3 || z.parent) continue;
+    if (z.outline.length < 3 || z.parent || (z.teardrop && !board.drawings?.legacy_teardrops)) continue;
     consider("zone", z.id, boxOf(z.outline), zonePickLayer(z, layerVisible, activeLayer), z.id, !!z.is_rule_area);
   }
   for (const s of board.drawings?.shapes ?? []) {

@@ -968,6 +968,22 @@ fn the_sheets_are_the_ones_the_board_file_is_written_with() {
     assert_eq!(keys, vec![("", ""), ("/Amp 1/", "amp_1.kicad_sch"), ("/Amp 2/", "amp_2.kicad_sch"), ("/ch2/", "channel.kicad_sch")]);
 }
 
+/// UI-LEFT-2 PP24: a footprint whose symbol is on the root sheet is listed by Generate with the root's file, `<project>.kicad_sch`, the `(sheetfile ..)` the writer
+/// gives it (`GeneratePotentialRuleAreas` lists `fp->GetSheetfile()`); before, the row's file was empty.
+#[test]
+fn a_root_sheet_footprint_is_listed_with_the_projects_root_file() {
+    let mut m = model(2);
+    for (reference, sheetname, sheetfile) in [("U1", "/", ""), ("R1", "/", ""), ("U2", "/Amp 2/", "amp_2.kicad_sch")] {
+        m.symbol_links.insert(reference.into(), eda_model::SymbolLink { path: format!("/x/{reference}"), sheetname: sheetname.into(), sheetfile: sheetfile.into(), ..Default::default() });
+    }
+    let mut d = design(2);
+    d.drawings.as_mut().unwrap().footprint_extras.clear();
+    let b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let rows = b.mc_potential_areas_in("amps");
+    let keys: Vec<(&str, &str)> = rows.iter().filter(|r| r.kind == AreaKind::Sheet).map(|r| (r.key.as_str(), r.file.as_str())).collect();
+    assert_eq!(keys, vec![("", ""), ("/", "amps.kicad_sch"), ("/Amp 2/", "amp_2.kicad_sch")]);
+}
+
 /// A schematic whose root places the one sheet file twice, `ch1` and `ch2`, the symbols of the file being U1/R1 on the first and U2/R2 on the second (`instance_overrides`).
 fn schematic_with_a_sheet_placed_twice(d: &mut Design) {
     use eda_model::ir::{SchematicSection, SheetInstance, SymbolInstance, SymbolPathOverride};

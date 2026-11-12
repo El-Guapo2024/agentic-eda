@@ -2901,6 +2901,14 @@ pub struct DrawingsSection {
     /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outline_is_shapes: bool,
+    /// `BOARD::LegacyTeardrops()` (UI-LEFT-2 PP24): the board's teardrops are the file's own zones, not made from the pads' and vias' parameters -- a board read
+    /// from a file that says `(general (legacy_teardrops yes))`, or that has a teardrop zone and is older than 20230517 (`parseZONE`). KiCad then leaves them
+    /// alone as the board is edited (`TEARDROP_MANAGER::UpdateTeardrops` returns at once), hides the Properties panel's Teardrops rows (`supportsTeardrops`),
+    /// greys the dialogs' Teardrops parts with "Board contains legacy teardrops." (`onTeardropsUpdateUi`), lets a teardrop zone be selected
+    /// (`PCB_SELECTION_TOOL::Selectable`), and Edit Teardrops' OK clears it (`DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow`). Additive: absent reads as
+    /// `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_teardrops: bool,
     /// The stroke width of the lines of `placement.outline` when they are written as `gr_line`s on `Edge.Cuts` (an imported board whose outline is one closed loop of lines
     /// of one width keeps the width: kicad-cli measures edge clearances from the drawn line, and plots it at that width). `None` is the width KiCad gives a line that
     /// says none. Additive: absent in an older `design.json` reads as `None`. Lives here for the reason `rules` does.

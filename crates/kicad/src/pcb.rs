@@ -82,8 +82,9 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // `(legacy_teardrops yes)` while the board has teardrops: they are zones of the design, made here (`Cmd::AddAllTeardrops`) or read from a file, and kicad-cli's
     // refill (`ZONE_FILLER_TOOL::FillAllZones` -> `TEARDROP_MANAGER::UpdateTeardrops( .., forceFullUpdate )`) would otherwise delete every one and rebuild only those of
     // pads and vias whose own teardrop parameters say `(enabled yes)`, which the studio's do not: the fills, the Gerbers and the plots lost the teardrop copper. A board
-    // with legacy teardrops keeps them (`if( m_board->LegacyTeardrops() ) return;`) and fills them as the zones they are.
-    let has_teardrops = design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| z.teardrop));
+    // with legacy teardrops keeps them (`if( m_board->LegacyTeardrops() ) return;`) and fills them as the zones they are. A board read as one with legacy
+    // teardrops (`DrawingsSection::legacy_teardrops`) says so whatever it holds, as `format( BOARD )` writes `LegacyTeardrops()`.
+    let has_teardrops = design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| z.teardrop)) || design.drawings.as_ref().is_some_and(|d| d.legacy_teardrops);
     writeln!(out, "\t\t(legacy_teardrops {})", if has_teardrops { "yes" } else { "no" }).unwrap();
     writeln!(out, "\t)").unwrap();
     // The board's paper and title block (Page Settings); A4 landscape and no title block when it never set them.
@@ -2181,6 +2182,25 @@ mod tests {
         sorted.sort();
         assert_eq!(sorted, vec![30000, 30001, 30002], "{out}");
         assert_eq!(teardrop_priorities(&design.routing.as_ref().unwrap().zones).into_iter().collect::<std::collections::BTreeMap<_, _>>(), [("big", 30001), ("small", 30002)].into_iter().collect());
+    }
+
+    /// UI-LEFT-2 PP24: `BOARD::SetLegacyTeardrops` as the parser sets it -- the file's `(general (legacy_teardrops ..))`, a bare token true, or a teardrop zone in a
+    /// file older than 20230517 -- and a board read so is written so even with no teardrop left.
+    #[test]
+    fn a_legacy_teardrop_board_is_read_and_written_so() {
+        let file = |version: u32, general: &str, zone: bool| {
+            let td = if zone { r#"(zone (net 0) (net_name "") (layer "F.Cu") (hatch edge 0.5) (attr (teardrop (type padvia))) (polygon (pts (xy 1 1) (xy 2 1) (xy 1 2))))"# } else { "" };
+            format!("(kicad_pcb (version {version}) (generator \"pcbnew\") (general (thickness 1.6) {general}) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user)) (net 0 \"\") {td})")
+        };
+        let legacy = |text: String| crate::import::import_kicad_pcb(&text).map(|(d, _, _)| d.drawings.as_ref().is_some_and(|d| d.legacy_teardrops)).unwrap();
+        assert!(legacy(file(20241229, "(legacy_teardrops yes)", false)));
+        assert!(legacy(file(20241229, "(legacy_teardrops)", false)), "a bare token is true");
+        assert!(!legacy(file(20241229, "(legacy_teardrops no)", true)));
+        assert!(legacy(file(20221018, "(legacy_teardrops no)", true)), "a teardrop zone of a file older than 20230517");
+        assert!(!legacy(file(20221018, "", false)));
+        let (mut design, model) = fixture();
+        design.drawings.get_or_insert_with(Default::default).legacy_teardrops = true;
+        assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(legacy_teardrops yes)"));
     }
 
     fn fixture() -> (Design, ConstraintModel) {

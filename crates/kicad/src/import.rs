@@ -237,6 +237,14 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_nm.is_none() && barcodes.is_empty() && board_items.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_nm, barcodes, board_items, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
+    // `BOARD::SetLegacyTeardrops`: the file's `(general (legacy_teardrops ..))` (`parseMaybeAbsentBool( true )`), or a teardrop zone in a file older than 20230517
+    // (`parseZONE`: `if( m_board && zone->IsTeardropArea() && m_requiredVersion < 20230517 ) m_board->SetLegacyTeardrops( true )`).
+    let legacy_flag = sexpr::find(root, "general").and_then(|g| sexpr::find(g, "legacy_teardrops")).map(|t| !matches!(sexpr::txt(t, 1), Some("no") | Some("false")));
+    let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
+    let old_teardrops = file_version < 20230517 && design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| z.teardrop));
+    if legacy_flag == Some(true) || old_teardrops {
+        design.drawings.get_or_insert_with(Default::default).legacy_teardrops = true;
+    }
     if !raw_items.is_empty() {
         design.drawings.get_or_insert_with(Default::default).raw_items = raw_items;
     }

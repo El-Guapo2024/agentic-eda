@@ -397,7 +397,7 @@ export function BoardPadPropertiesDialog() {
               {sharesNumber && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "4px 0 0" }}>The clearance and the zone fields are those of every pad of this footprint numbered {pad.num}.</p>}
             </>
           )}
-          {form.kind !== "non_plated_hole" && <TeardropFields form={form.td} units={units} what="pad" onChange={(td) => set("td", td)} />}
+          {form.kind !== "non_plated_hole" && <TeardropFields form={form.td} units={units} what="pad" legacy={!!state.board?.drawings?.legacy_teardrops} onChange={(td) => set("td", td)} />}
           {error && (
             <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "10px 0 0", fontSize: 12 }} data-testid="board-pad-properties-error">
               {error}

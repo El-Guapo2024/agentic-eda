@@ -1664,6 +1664,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         if let Some(z) = &d.zone_defaults {
             drawings["zone_defaults"] = serde_json::to_value(z).unwrap_or(serde_json::Value::Null);
         }
+        // `BOARD::LegacyTeardrops()` (UI-LEFT-2 PP24): the Properties panel hides its Teardrops rows, the dialogs grey theirs, a teardrop zone can be picked.
+        if d.legacy_teardrops {
+            drawings["legacy_teardrops"] = json!(true);
+        }
         drawings
     });
     let mut state = json!({

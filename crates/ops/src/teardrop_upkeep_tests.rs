@@ -97,3 +97,23 @@ fn a_reshaped_pads_teardrop_is_made_again_on_its_new_shape() {
     assert_ne!(after[0].outline, before[0].outline, "made again on the larger pad");
     assert!(!b2.refresh_teardrops(&cmd, &bigger), "nothing more to do");
 }
+
+/// UI-LEFT-2 PP24: a board read with legacy teardrops keeps its teardrop where it is when its via and track move (`UpdateTeardrops` returns at once on
+/// `LegacyTeardrops()`), and Edit Teardrops' Add All clears the flag (`DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow`), after which a move takes the
+/// teardrop along again.
+#[test]
+fn a_legacy_teardrop_board_leaves_its_teardrops_alone_until_edit_teardrops() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    with_teardrop(&mut b);
+    b.design.drawings.get_or_insert_with(Default::default).legacy_teardrops = true;
+    let before = teardrops(&b);
+    b.apply(&Cmd::MoveItems { ids: ids(&["t1", "v1"]), dx: mm(2.0), dy: mm(1.0) }).unwrap();
+    assert_eq!(teardrops(&b)[0].outline, before[0].outline, "the legacy teardrop stays where the file put it");
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    assert!(!b.design().drawings.as_ref().unwrap().legacy_teardrops, "Edit Teardrops' OK clears the flag");
+    let made = teardrops(&b);
+    b.apply(&Cmd::MoveItems { ids: ids(&["t1", "v1"]), dx: mm(1.0), dy: Nm::ZERO }).unwrap();
+    let moved: Vec<Point> = made[0].outline.iter().map(|q| Point { x: q.x + mm(1.0), y: q.y }).collect();
+    assert_eq!(teardrops(&b)[0].outline, moved, "kept current again");
+}
