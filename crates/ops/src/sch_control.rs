@@ -186,7 +186,9 @@ impl<'a> Board<'a> {
     ///
     /// `RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )`: `ids` may also name sheets of the sheet in view (their own flags,
     /// `SchExtras::sheet_props`: `SCH_SHEET::SetDNP( new_state, sheet, variant )` in the default variant) and rule areas (`SCH_RULE_AREA`'s flags, which no
-    /// variant has); `new_state` is worked out over all of them together, as `collectedItems` holds them all.
+    /// variant has); `new_state` is worked out over all of them together, as `collectedItems` holds them all. A power symbol is an `SCH_SYMBOL` too, taken as
+    /// any symbol (its reference is its own, so it has no other units): its flags are `SchExtras::power_props`' (the writer's `(in_bom)`, `(on_board)`,
+    /// `(exclude_from_sim)`, `(dnp)`), in the default variant as a sheet's.
     pub(crate) fn toggle_symbol_attribute(&mut self, ids: &[String], attribute: &str) -> Result<(), Vec<CheckResult>> {
         use eda_model::sch_extras::SchGraphicKind;
         if !matches!(attribute, "dnp" | "exclude_from_bom" | "exclude_from_board" | "exclude_from_sim") {
@@ -195,14 +197,16 @@ impl<'a> Board<'a> {
         if ids.is_empty() {
             return Err(fail("ops_nothing_selected", "attributes", "select a symbol first"));
         }
-        let (sheet_ids, area_ids, symbol_ids) = {
+        let (sheet_ids, area_ids, power_ids, symbol_ids) = {
             let sch = self.schematic()?;
             let is_sheet = |id: &String| sch.sheets.iter().any(|s| &s.id == id);
             let is_area = |id: &String| sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, SchGraphicKind::RuleArea { .. }));
+            let is_power = |id: &String| sch.power_symbols.iter().any(|p| &p.id == id);
             let sheets: Vec<String> = ids.iter().filter(|id| is_sheet(id)).cloned().collect();
             let areas: Vec<String> = ids.iter().filter(|id| !is_sheet(id) && is_area(id)).cloned().collect();
-            let symbols: Vec<String> = ids.iter().filter(|id| !is_sheet(id) && !is_area(id)).cloned().collect();
-            (sheets, areas, symbols)
+            let powers: Vec<String> = ids.iter().filter(|id| !is_sheet(id) && !is_area(id) && is_power(id)).cloned().collect();
+            let symbols: Vec<String> = ids.iter().filter(|id| !is_sheet(id) && !is_area(id) && !is_power(id)).cloned().collect();
+            (sheets, areas, powers, symbols)
         };
         let pick = |dnp: bool, bom: bool, board: bool, sim: bool| match attribute {
             "dnp" => dnp,
@@ -226,6 +230,10 @@ impl<'a> Board<'a> {
                 if let SchGraphicKind::RuleArea { dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, .. } = &g.shape {
                     new_state |= !pick(*dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim);
                 }
+            }
+            for id in &power_ids {
+                let p = sch.extras.power_props.get(id).cloned().unwrap_or_default();
+                new_state |= !pick(p.dnp, p.exclude_from_bom, p.exclude_from_board, p.exclude_from_sim);
             }
         }
         let v = Some(new_state);
@@ -256,6 +264,20 @@ impl<'a> Board<'a> {
                     "exclude_from_board" => exclude_from_board,
                     _ => exclude_from_sim,
                 } = new_state;
+            }
+        }
+        for id in &power_ids {
+            let mut p = sch.extras.power_props.get(id).cloned().unwrap_or_default();
+            *match attribute {
+                "dnp" => &mut p.dnp,
+                "exclude_from_bom" => &mut p.exclude_from_bom,
+                "exclude_from_board" => &mut p.exclude_from_board,
+                _ => &mut p.exclude_from_sim,
+            } = new_state;
+            if p.is_default() {
+                sch.extras.power_props.remove(id);
+            } else {
+                sch.extras.power_props.insert(id.clone(), p);
             }
         }
         Ok(())

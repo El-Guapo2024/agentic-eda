@@ -254,7 +254,8 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   // `RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )`, and the whole collection (every unit of a multi-unit symbol, the sheets, the rule
   // areas) goes to one state -- set when any of it lacks the attribute, cleared when all of it has it -- in one commit ("Toggle Attribute"). KiCad 25ec2335:
   // in the current variant (`GetDNP( sheet, variant )`, `SetDNP( new_state, sheet, variant )`), the items' own flags when it is the default; a rule area
-  // has no variant record (`SCH_RULE_AREA::SetDNP` ignores the variant). A power symbol's flags are its Symbol Properties' (kept: not in this verb).
+  // has no variant record (`SCH_RULE_AREA::SetDNP` ignores the variant). A power symbol is an `SCH_SYMBOL` taken as any (its flags are its Symbol Properties',
+  // `SchExtras::power_props`); kept: the studio keeps no variant record for a power symbol, so in a variant its own flags are read and set.
   const setAttribute = (name: string) => {
     const key: SymbolAttrKey = ATTRIBUTE_ACTIONS[name]!;
     return onSchematic(() => {
@@ -272,6 +273,7 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       for (const i of items) {
         if (i.kind === "symbol" || !!i.flags[key] === next) continue;
         if (i.kind === "sheet") cmds.push({ op: "sch_edit", verb: "set_sheet_variant", id: i.id, variant, [key]: next } as unknown as Cmd);
+        else if (i.kind === "power") cmds.push({ op: "sch_edit", verb: "set_power_props", id: i.id, [key]: next } as unknown as Cmd);
         else if (i.graphic) cmds.push({ op: "sch_edit", verb: "edit_graphic", id: i.id, graphic: { ...i.graphic, shape: { ...i.graphic.shape, [key]: next } } } as unknown as Cmd);
       }
       if (cmds.length > 0) void api.cmdBatch(cmds);
@@ -440,14 +442,21 @@ type AttrFlags = Partial<Record<SymbolAttrKey, boolean>>;
 
 /**
  * `SetAttribute`'s `RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )` over `ids`: each symbol, sheet and rule area, with its four flags in
- * `variant` (a symbol's and a sheet's record of it, else their own flags; a rule area's own, which no variant has).
+ * `variant` (a symbol's and a sheet's record of it, else their own flags; a rule area's own, which no variant has; a power symbol's own, `power_props`, the
+ * studio keeping no variant record for it).
  */
-export function attributeItems(sch: NonNullable<StudioState["schematic"]>, ids: readonly string[], variant: string): Array<{ id: string; kind: "symbol" | "sheet" | "rule_area"; flags: AttrFlags; graphic?: NonNullable<typeof sch.graphics>[number] }> {
+export function attributeItems(sch: NonNullable<StudioState["schematic"]>, ids: readonly string[], variant: string): Array<{ id: string; kind: "symbol" | "power" | "sheet" | "rule_area"; flags: AttrFlags; graphic?: NonNullable<typeof sch.graphics>[number] }> {
   const out: ReturnType<typeof attributeItems> = [];
   for (const id of new Set(ids)) {
     const sym = sch.symbols.find((s) => s.id === id);
     if (sym) {
       out.push({ id, kind: "symbol", flags: variantFlags(sym, variant) });
+      continue;
+    }
+    const power = sch.power_symbols.find((p) => p.id === id);
+    if (power) {
+      const pp = power.props ?? {};
+      out.push({ id, kind: "power", flags: { dnp: !!pp.dnp, exclude_from_bom: !!pp.exclude_from_bom, exclude_from_board: !!pp.exclude_from_board, exclude_from_sim: !!pp.exclude_from_sim } });
       continue;
     }
     const sheet = sch.sheets.find((s) => s.id === id);
