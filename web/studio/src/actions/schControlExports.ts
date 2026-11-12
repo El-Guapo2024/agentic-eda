@@ -30,8 +30,8 @@ export async function saveSheetCopy(ctx: SchControlContext): Promise<void> {
     const source = atRoot ? files[0] : files.find((f) => sheet !== undefined && (f.name === sheet.file || f.name === sheetFileInWork(sheet.file)));
     if (!source) return toast("This sheet has no file to copy.", "error");
     const name = atRoot ? `${fileStem(ctx.state.board?.name ?? "board")}.kicad_sch` : sheetFileBaseName(source.name);
+    // the browser's download is the file dialog; KiCad says nothing once the copy is written
     saveTextFile(source.text, name);
-    toast(`Saved a copy of this sheet as ${name}`, "info");
   } catch (e) {
     toast(`Could not save the sheet: ${message(e)}`, "error");
   }
@@ -77,8 +77,8 @@ export async function copySheetImage(ctx: SchControlContext): Promise<void> {
   const blob = canvas ? await new Promise<Blob | null>((done) => canvas.toBlob(done, "image/png")) : null;
   if (!blob) return toast("Cannot create the schematic image", "error");
   try {
+    // nothing said when the picture is on the clipboard (`wxTheClipboard->SetData`)
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-    toast("Copied the sheet drawing to the clipboard.", "info");
   } catch (e) {
     // A browser that keeps the clipboard from a page (no permission, no focus, no image support): the picture is saved as a file instead.
     const name = `${fileStem(ctx.state.board?.name ?? "schematic")}.png`;

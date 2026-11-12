@@ -118,6 +118,8 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
     schematicOnly(() => {
       // On a nested sheet the item lands on that sheet: `api.cmd` addresses every schematic command to the sheet in view (kicad-port/schSheetCmd.ts).
       ctx.dispatch({ type: "SET_DRAW_STATE", draw: null });
+      // `DrawShape` / `DrawTable` / `DrawRuleArea` start with `m_toolMgr->RunAction( ACTIONS::selectionClear )`
+      if (state.activeTool !== tool && state.selection.size > 0) ctx.dispatch({ type: "SET_SELECTION", refs: [] });
       ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
     });
   m.set("eeschema.InteractiveDrawing.drawRectangle", arm("sch_rect"));
