@@ -2499,7 +2499,7 @@ fn slow_erc_exclusions_on_two_sheets_reach_kicad_cli() {
     step(&dir, Cmd::OnSheet { sheet: sheet_id.clone(), cmd: Box::new(global("sig")) }, false, "test").unwrap();
     let first = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
     let all: Vec<serde_json::Value> = first["violations"].as_array().unwrap().clone();
-    // (a finding whose item the studio has no id for -- a sheet pin -- has no location to key an exclusion on, in the dialog too)
+    assert!(all.iter().filter(|v| v["check"] == "hier_label_mismatch").all(|v| v["location"].as_str().is_some_and(|l| !l.is_empty())), "a sheet pin's finding has an id to key its exclusion on");
     let known: Vec<&serde_json::Value> = all.iter().filter(|v| !v["marker"].is_null() && v["location"].as_str().is_some_and(|l| !l.is_empty())).collect();
     let unknown: Vec<String> = all.iter().filter(|v| v["marker"].is_null()).map(|v| v["check"].as_str().unwrap_or("?").to_string()).collect();
     println!("known markers: {:?}\nunknown: {unknown:?}", known.iter().map(|v| (v["check"].as_str().unwrap_or(""), v["sheet"].as_str().unwrap_or(""))).collect::<Vec<_>>());

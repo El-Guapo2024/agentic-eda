@@ -168,6 +168,16 @@ fn rule(check: &str) -> Option<Rule> {
         // KiCad 25ec2335 erc.cpp `TestConnectivity`'s `HierarchyErrors` (`MISSING_LABEL`, `MISSING_PIN`): `SetItems( error.item )`, `markers.Place( .., error.sheet,
         // error.position, ITEM_PATHS::MAIN, true )` -- the sheet pin or the hierarchical label, at its own position, sheet-specific (UI-LEFT-2 BB2) [probed].
         "hier_label_mismatch" => r(Main, SpecificMain),
+        // KiCad 25ec2335 `TestOffGridEndpoints`: `reportSourceErrors( .., ERCE_ENDPOINT_OFF_GRID, OffGridEndpoints( grid ) )`, `ITEM_PATHS::MAIN`, at the
+        // source's position -- a wire's start when it is off the grid, else its end (`ENGINE::OffGridEndpoints`), a symbol's first pin off it. The caller
+        // gives a wire's item the end's position ([`off_grid_end`]) [probed].
+        "endpoint_off_grid" => r(Main, SpecificMain),
+        // `TestConnectivity`'s `DanglingWireEndpoints`: `SetItems( endpoint.item )`, `markers.Place( .., endpoint.sheet, endpoint.position )` -- sheet-specific, no
+        // item path, at the dangling end; the caller gives the item that end's position [probed].
+        "unconnected_wire_endpoint" => r(Main, Specific),
+        // KiCad 25ec2335 erc.cpp `TestDuplicatePinNets` (one path, no engine branch): `SetItems( pinNetPairs[0].first, conflictPin )`,
+        // `SetSheetSpecificPath( sheet )`, `SetItemsSheetPaths( sheet, sheet )`, at the first pin [read; no fixture makes it here].
+        "duplicate_pins" => r(Main, SpecificMainAux),
         // erc.cpp 1225-1231: the pin that needs a driver [probed: `pin_not_driven`, `power_pin_not_driven`]; 1421-1429: a ground pin on another net; 1460-1465: a
         // pin named like a stacked one.
         "pin_not_driven" | "power_pin_not_driven" | "ground_pin_not_ground" | "stacked_pin_name" => r(Main, SpecificMain),
@@ -193,10 +203,10 @@ fn rule(check: &str) -> Option<Rule> {
         // `Place( item, aMain.sheet, aMain.position, aMain.sheet, aAux.sheet )` -- at the main label or power pin, sheet-specific on its sheet, each item on
         // its own (UI-LEFT B7) [probed on kicad-cli 4fe1ca2060: `similar_labels`, `same_local_global_label`; the other three are the same call].
         "similar_labels" | "similar_power" | "similar_label_and_power" | "same_local_global_label" | "same_local_global_power" => r(Main, SpecificMainAux),
-        // Not here: `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`
+        // Not here: `generic-*`
         // and `unresolved_variable` (a text's own record), `field_name_whitespace` (a field has no uuid of its own: the marker names it with a
         // `kiapi.schematic.ErcSymbolChildReference`, and none of the forms above matched on kicad-cli), `label_multiple_wires` and `four_way_junction` (a point
-        // of their own), `no_connect_connected` (two creators with two sets of paths), `bus_definition_conflict`, `duplicate_pins`.
+        // of their own), `no_connect_connected` (two creators with two sets of paths), `bus_definition_conflict`.
         _ => None,
     }
 }
@@ -269,6 +279,15 @@ pub fn same_sheet(a: Option<&ErcMarker>, b: Option<&ErcMarker>) -> bool {
     match (a, b) {
         // (a marker kept with no sheet is of no sheet in particular: one of a check 8303b2ad put no sheet in, r3 D3-L5)
         (Some(a), Some(b)) => a.sheet.is_empty() || b.sheet.is_empty() || a.sheet == b.sheet,
+        _ => true,
+    }
+}
+
+/// Whether an exclusion's marker and a finding's are one marker: [`same_sheet`], and the same position where both are known -- two findings of one item
+/// (a wire's two dangling ends) are two markers, as KiCad's exclusions are (`DRC_EXCLUSION`'s whole marker is its key).
+pub fn same_marker(a: Option<&ErcMarker>, b: Option<&ErcMarker>) -> bool {
+    same_sheet(a, b) && match (a, b) {
+        (Some(a), Some(b)) => a.at_nm == b.at_nm || a.error_type != b.error_type,
         _ => true,
     }
 }
@@ -458,6 +477,61 @@ pub fn item_sheets(root: &str, read: &dyn Fn(&str) -> Option<String>) -> std::co
         paths.dedup();
     }
     out
+}
+
+/// The wires and bus entries of a derived tree by uuid: each `(wire ..)` / `(bus ..)` segment's two ends in nanometres (`SCH_LINE`'s `A`, `B`), and the
+/// uuids of the `(bus_entry ..)`s (whose ports this module does not place). Every screen is read once (`root`, then each `Sheetfile` from its placing
+/// file's folder).
+pub fn wire_segments(root: &str, read: &dyn Fn(&str) -> Option<String>) -> (std::collections::HashMap<String, [[i64; 2]; 2]>, std::collections::HashSet<String>) {
+    use crate::sexpr::{find, find_all, tag, txt};
+    let mut wires = std::collections::HashMap::new();
+    let mut entries = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = vec![root.to_string()];
+    let nm = |t: Option<&str>| t.and_then(|v| v.parse::<f64>().ok()).map(|mm| (mm * 1_000_000.0).round() as i64);
+    while let Some(name) = todo.pop() {
+        if !seen.insert(name.clone()) || seen.len() > 512 {
+            continue;
+        }
+        let Some(text) = read(&name) else { continue };
+        let Ok(tree) = crate::sexpr::parse(&text) else { continue };
+        let Some(top) = tree.as_list() else { continue };
+        for item in top.iter().skip(1) {
+            let Some(l) = item.as_list() else { continue };
+            let uuid = find(l, "uuid").and_then(|u| txt(u, 1)).map(String::from);
+            match tag(l) {
+                Some("wire" | "bus") => {
+                    let pts: Vec<[i64; 2]> = find(l, "pts").map(|ps| find_all(ps, "xy").filter_map(|p| Some([nm(txt(p, 1))?, nm(txt(p, 2))?])).collect()).unwrap_or_default();
+                    if let (Some(u), [a, b]) = (uuid, pts.as_slice()) {
+                        wires.insert(u, [*a, *b]);
+                    }
+                }
+                Some("bus_entry") => {
+                    if let Some(u) = uuid {
+                        entries.insert(u);
+                    }
+                }
+                Some("sheet") => {
+                    if let Some(file) = find_all(l, "property").find(|p| matches!(txt(p, 1), Some("Sheetfile" | "Sheet file"))).and_then(|p| txt(p, 2)) {
+                        let folder = std::path::Path::new(&name).parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                        todo.push(if folder.is_empty() { file.to_string() } else { format!("{folder}/{file}") });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (wires, entries)
+}
+
+/// `ENGINE::OffGridEndpoints`' place on a wire: `point.x % aGrid != 0 || point.y % aGrid != 0` -- the start when it is off the grid, else the end.
+pub fn off_grid_end(ends: [[i64; 2]; 2], grid_nm: i64) -> [i64; 2] {
+    let off = |p: [i64; 2]| grid_nm > 0 && (p[0] % grid_nm != 0 || p[1] % grid_nm != 0);
+    if off(ends[0]) {
+        ends[0]
+    } else {
+        ends[1]
+    }
 }
 
 /// A `.kicad_sch` text's own `(uuid ..)`: the root sheet's, which the sheet paths of a project's markers start with.
@@ -677,7 +751,8 @@ mod tests {
 
     #[test]
     fn a_check_whose_marker_this_has_not_read_the_source_of_has_no_marker() {
-        for check in ["endpoint_off_grid", "unconnected_wire_endpoint", "unresolved_variable", "generic-warning", "four_way_junction", "no_connect_connected", "field_name_whitespace"] {
+        // (`endpoint_off_grid` and `unconnected_wire_endpoint` have a rule now; the caller gives a wire's item the end's position)
+        for check in ["unresolved_variable", "generic-warning", "four_way_junction", "no_connect_connected", "field_name_whitespace"] {
             assert!(marker(check, "error", &[item("a", 1, 2, "Wire")], ROOT, 1).is_none(), "{check}");
         }
         assert!(marker("footprint_link_issues", "warning", &[], ROOT, 1).is_none(), "a violation naming no item cannot be keyed");

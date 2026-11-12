@@ -473,3 +473,34 @@ fn a_starved_thermal_exclusion_reaches_kicad_cli() {
     assert!(waived.iter().all(|v| v["kicad_matched"] == true), "{after:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-2 BB2 (slow tier): a wire's `endpoint_off_grid` and `unconnected_wire_endpoint` are at one of its ends, which the report does not say: the off-grid
+/// one is the start when it is off the grid, else the end (`OffGridEndpoints`); two dangling ends of one wire are its ends in position order, and a lone one
+/// is found by a probe run of kicad-cli. Every exclusion of either is matched by kicad-cli, and no excluded marker of its own is made.
+#[test]
+fn a_wire_ends_erc_exclusions_reach_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    let dir = board_with_schematic("review_erc_wire_ends");
+    let p = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
+    for pts in [vec![p(25.4, 203.2), p(30.48, 203.2)], vec![p(50.8, 203.2), p(55.88, 203.2)], vec![p(55.88, 203.2), p(55.88, 208.28)], vec![p(76.835, 203.2), p(81.28, 203.2)], vec![p(91.44, 203.2), p(96.52 + 0.3, 203.2)]] {
+        step(&dir, Cmd::AddWire { pts, bus: false }, false, "test").unwrap();
+    }
+    let first = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let kinds = ["unconnected_wire_endpoint", "endpoint_off_grid"];
+    let rows: Vec<Value> = first["violations"].as_array().unwrap().iter().filter(|v| kinds.contains(&v["check"].as_str().unwrap_or(""))).cloned().collect();
+    eprintln!("{}", rows.iter().map(|v| format!("{} {} {}", v["check"], v["location"], v["marker"]["at_nm"])).collect::<Vec<_>>().join("\n"));
+    assert!(rows.iter().filter(|v| v["check"] == "unconnected_wire_endpoint").count() >= 5 && rows.iter().any(|v| v["check"] == "endpoint_off_grid"), "{first:#}");
+    assert!(rows.iter().all(|v| !v["marker"].is_null()), "every one is placed: {rows:#?}");
+    let n = listed(&first);
+    for v in &rows {
+        step(&dir, add(v["check"].as_str().unwrap(), v["location"].as_str().unwrap(), "", Some(marker_of(v))), false, "ui").unwrap();
+    }
+    let after = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let brief = |r: &Value| -> Vec<String> { let mut v: Vec<String> = r["violations"].as_array().unwrap().iter().map(|v| format!("{} {} {} {}", v["check"], v["location"], v["severity"], v["marker"]["at_nm"])).collect(); v.sort(); v };
+    assert_eq!(listed(&after), n, "kicad-cli made no excluded marker of an unmatched record: {:#?} -> {:#?}", brief(&first), brief(&after));
+    let waived: Vec<&Value> = after["violations"].as_array().unwrap().iter().filter(|v| kinds.contains(&v["check"].as_str().unwrap_or(""))).collect();
+    let bad: Vec<String> = waived.iter().filter(|v| !(v["severity"] == "excluded" && v["kicad_matched"] == true)).map(|v| format!("{} {} {} {} {}", v["check"], v["location"], v["severity"], v["kicad_matched"], v["marker"])).collect();
+    assert!(bad.is_empty(), "{bad:#?}");
+}

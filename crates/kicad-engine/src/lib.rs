@@ -1207,7 +1207,8 @@ impl ErcReport {
     /// (`SetSheetSpecificPath`): the two placements of a screen two sheets show name the same items, and the excluded one is not a copy of the
     /// other. (Not by the sheet the report lists it under: kicad-cli lists the stray marker of a check that belongs to no sheet under another one.)
     fn listed(&self) -> Vec<&Violation> {
-        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>(), v.marker.as_ref().map(|m| m.sheet.clone()).unwrap_or_default());
+        // (and by the marker's place: a wire's two dangling ends are two markers of one item)
+        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>(), v.marker.as_ref().map(|m| m.sheet.clone()).unwrap_or_default(), v.marker.as_ref().map(|m| m.at_nm));
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for v in &self.violations {
@@ -1234,14 +1235,23 @@ impl ErcReport {
     /// report lists it under.
     pub fn to_json(&self, exclusions: &[ErcExclusion]) -> Value {
         let mut counts = BTreeMap::<String, usize>::new();
-        let violations: Vec<Value> = self
-            .listed()
+        let listed = self.listed();
+        // An exclusion whose marker is a finding's own is that finding's; one that is no finding's (the item moved since) waives the finding of its check and
+        // location in the studio's report, as it always did -- but not a second marker of that item (a wire's other dangling end) that another exclusion is.
+        let exact = |e: &ErcExclusion, v: &Violation| e.marker.is_some() && v.marker.is_some() && eda_kicad::erc_exclusions::same_marker(e.marker.as_ref(), v.marker.as_ref());
+        let consumed: Vec<bool> = exclusions.iter().map(|e| listed.iter().any(|v| v.kind == e.check && exact(e, v))).collect();
+        let violations: Vec<Value> = listed
             .into_iter()
             .map(|v| {
                 let location = v.items.iter().find_map(|i| i.id.clone()).unwrap_or_default();
                 // `(check, location)`, and the sheet of the marker where both know one: a screen two sheets show has one id per item, and KiCad's marker of
                 // each placement keeps its own sheet path (`SetSheetSpecificPath`), so the exclusion of one placement leaves the other's finding alone.
-                let studio = if location.is_empty() { None } else { exclusions.iter().find(|e| e.check == v.kind && e.location == location && eda_kicad::erc_exclusions::same_sheet(e.marker.as_ref(), v.marker.as_ref())) };
+                let studio = if location.is_empty() {
+                    None
+                } else {
+                    let mine = |e: &&ErcExclusion| e.check == v.kind && e.location == location;
+                    exclusions.iter().filter(mine).find(|e| exact(e, v)).or_else(|| exclusions.iter().zip(&consumed).filter(|(e, used)| !**used && mine(e)).map(|(e, _)| e).find(|e| eda_kicad::erc_exclusions::same_sheet(e.marker.as_ref(), v.marker.as_ref())))
+                };
                 let by_kicad = v.excluded || v.severity == "exclusion";
                 let excluded = by_kicad || studio.is_some();
                 if !excluded {
@@ -1291,14 +1301,111 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
         HashMap::new()
     };
     let item_sheets = |uuid: &str| placed.get(uuid).cloned().unwrap_or_default();
+    // a wire's finding is at one of its ends, which the report does not say (it gives the wire's start): the wires of the tree, and the connection grid
+    let root_name = sch.file_name().and_then(|n| n.to_str()).unwrap_or("board.kicad_sch").to_string();
+    let (wires, bus_entries) = eda_kicad::erc_exclusions::wire_segments(&root_name, &|name| std::fs::read_to_string(work.join(name)).ok());
+    let grid_nm = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils).unwrap_or(50) as i64 * 25_400;
     let mut violations = Vec::new();
+    // (sheet, wire uuid) -> the indexes of its `unconnected_wire_endpoint` findings, for the ends they are at
+    let mut dangling: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    let mut items_of: Vec<Vec<eda_kicad::erc_exclusions::MarkerItem>> = Vec::new();
     for sheet in raw["sheets"].as_array().into_iter().flatten() {
         let path = sheet["uuid_path"].as_str().unwrap_or("");
         for v in sheet["violations"].as_array().into_iter().flatten() {
             let mut violation = Violation::from_json(v, &map, units_mm);
             violation.sheet = path.to_string();
-            violation.marker = eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &Violation::marker_items(v, units_mm), path, sheet_count, &item_sheets);
+            let mut items = Violation::marker_items(v, units_mm);
+            let wire_end = items.first().and_then(|i| wires.get(&i.uuid)).copied();
+            let on_entry = items.first().is_some_and(|i| bus_entries.contains(&i.uuid));
+            violation.marker = match violation.kind.as_str() {
+                // `OffGridEndpoints`: a wire's off-grid end; a bus entry's ports are not placed here
+                "endpoint_off_grid" if on_entry => None,
+                "endpoint_off_grid" => {
+                    if let (Some(ends), Some(first)) = (wire_end, items.first_mut()) {
+                        let at = eda_kicad::erc_exclusions::off_grid_end(ends, grid_nm);
+                        (first.x_nm, first.y_nm) = (Nm::new(at[0]), Nm::new(at[1]));
+                    }
+                    eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &items, path, sheet_count, &item_sheets)
+                }
+                "unconnected_wire_endpoint" => {
+                    if wire_end.is_some() {
+                        dangling.entry((path.to_string(), items[0].uuid.clone())).or_default().push(violations.len());
+                    }
+                    None
+                }
+                _ => eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &items, path, sheet_count, &item_sheets),
+            };
+            items_of.push(items);
             violations.push(violation);
+        }
+    }
+    // `DanglingWireEndpoints`: a finding per dangling end. Two of one wire are its two ends, in the report's order (`visitMarkers` sorts a sheet's markers by
+    // position); one is either end, which only kicad-cli knows: a probe run with the start written for each such wire says which (a real finding the record
+    // matches is excluded; one it does not is still reported).
+    let place = |index: usize, at: [i64; 2], violations: &mut Vec<Violation>| {
+        let mut items = items_of[index].clone();
+        (items[0].x_nm, items[0].y_nm) = (Nm::new(at[0]), Nm::new(at[1]));
+        let v = &violations[index];
+        violations[index].marker = eda_kicad::erc_exclusions::marker_with(&v.kind, &v.severity, &items, &v.sheet, sheet_count, &item_sheets);
+    };
+    let mut lone: Vec<(usize, [[i64; 2]; 2])> = Vec::new();
+    for ((_, uuid), rows) in &dangling {
+        let mut ends = wires[uuid];
+        ends.sort();
+        match rows.as_slice() {
+            [a, b] => {
+                place(*a, ends[0], &mut violations);
+                place(*b, ends[1], &mut violations);
+            }
+            // an excluded one is the exclusion's own marker (the project's record matched it)
+            [one] if violations[*one].excluded => {
+                let mine = design.schematic.iter().flat_map(|s| s.erc_exclusions.iter()).filter_map(|e| e.marker.as_ref()).find(|m| m.error_type == "ERCET_UNCONNECTED_WIRE_ENDPOINT" && m.items == [uuid.clone()]);
+                violations[*one].marker = mine.cloned();
+            }
+            [one] => lone.push((*one, wires[uuid])),
+            _ => {}
+        }
+    }
+    if !lone.is_empty() {
+        for (index, ends) in &lone {
+            place(*index, ends[0], &mut violations);
+        }
+        let probe: Vec<Value> = lone.iter().filter_map(|(i, _)| violations[*i].marker.as_ref()).map(|m| eda_kicad::erc_exclusions::entry(m, "")).collect();
+        let pro = sch.with_extension("kicad_pro");
+        if let Ok(original) = std::fs::read_to_string(&pro) {
+            if let Ok(mut project) = serde_json::from_str::<Value>(&original) {
+                let list = &mut project["erc"]["erc_exclusions"];
+                if !list.is_array() {
+                    *list = json!([]);
+                }
+                list.as_array_mut().map(|a| a.extend(probe));
+                let probed = write_file(&pro, &serde_json::to_string_pretty(&project).unwrap_or_default()).ok().and_then(|_| {
+                    let out = work.join("erc-probe.json");
+                    let mut cmd = cli_command(&cli, Some(&pro));
+                    cmd.args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&out).arg(&sch);
+                    run_report(cmd, &out, "erc").ok()
+                });
+                let _ = write_file(&pro, &original);
+                if let Some(report) = probed {
+                    let still: std::collections::HashSet<String> = report["sheets"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|s| s["violations"].as_array().into_iter().flatten())
+                        .filter(|v| v["type"] == "unconnected_wire_endpoint" && v["excluded"] != true)
+                        .filter_map(|v| v["items"][0]["uuid"].as_str().map(String::from))
+                        .collect();
+                    for (index, ends) in &lone {
+                        if still.contains(&items_of[*index][0].uuid) {
+                            place(*index, ends[1], &mut violations);
+                        }
+                    }
+                } else {
+                    for (index, _) in &lone {
+                        violations[*index].marker = None;
+                    }
+                }
+            }
         }
     }
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));

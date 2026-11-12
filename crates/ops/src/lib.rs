@@ -6282,7 +6282,8 @@ impl<'a> Board<'a> {
         // The list belongs to the schematic as a whole, the root's: a sheet the editor is on does not keep one of its own.
         let sch = self.design.schematic.get_or_insert_with(empty_schematic_section);
         // one per placement of a shared screen: its own sheet in its marker (`eda_kicad::erc_exclusions::same_sheet`)
-        match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location && eda_kicad::erc_exclusions::same_sheet(e.marker.as_ref(), marker.as_ref())) {
+        // and one per marker of an item that has several (a wire's two dangling ends: `eda_kicad::erc_exclusions::same_marker`)
+        match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location && eda_kicad::erc_exclusions::same_marker(e.marker.as_ref(), marker.as_ref())) {
             // Already waived: the comment is the new one (an empty one clears it), the marker the new one when there is one.
             Some(slot) => {
                 slot.comment = comment.into();
