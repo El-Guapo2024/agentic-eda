@@ -1786,7 +1786,7 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
     // 100 on 2026-10-28 (r4: `lib_name` resolution and the pin facts); 87 on 2026-10-23 (nightly 20261021); before
     // the review of that day, 53 (turned and mirrored symbols were traced and written otherwise than drawn, and one file hung Import Sheet)
     if only.is_none() {
-        assert!(same >= 113, "{same} judged alike, fewer than the 113 of 2026-10-28 (r6)");
+        assert!(same >= 114, "{same} judged alike, fewer than the 114 of 2026-11-12 (task-v10-import: a pasted power symbol keeps its renamed cache entry)");
     }
 }
 

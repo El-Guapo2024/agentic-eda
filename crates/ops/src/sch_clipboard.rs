@@ -296,6 +296,28 @@ impl<'a> Board<'a> {
         for (s, new) in src.symbols.iter().zip(symbol_refs) {
             remap.insert(s.id.clone(), new.clone());
         }
+        // the renamed cache entries the pasted power symbols are drawn from (`(lib_name "GND_1")`, `SchExtras::power_lib_names`): a name the sheet already gives
+        // an entry of another library id or kind is numbered on (`SCH_SCREEN::Append`'s `newName`, `<name>_<n>`)
+        let mut entry_names: BTreeMap<String, String> = BTreeMap::new();
+        for (p, new) in src.power_symbols.iter().zip(power_refs) {
+            let Some(entry) = src.extras.power_lib_names.get(&p.id) else { continue };
+            let lib_id_of = |sch: &eda_model::ir::SchematicSection, id: &str| sch.power_symbols.iter().find(|q| q.id == id).map(|q| q.lib_id.clone());
+            let name = match entry_names.get(&entry.name) {
+                Some(n) => n.clone(),
+                None => {
+                    let clashes = |n: &str| sch.extras.power_lib_names.iter().any(|(id, e)| e.name == n && (e.local != entry.local || lib_id_of(sch, id).as_deref() != Some(p.lib_id.as_str())));
+                    let mut name = entry.name.clone();
+                    let mut k = 2;
+                    while clashes(&name) {
+                        name = format!("{}_{k}", entry.name);
+                        k += 1;
+                    }
+                    entry_names.insert(entry.name.clone(), name.clone());
+                    name
+                }
+            };
+            sch.extras.power_lib_names.insert(new.clone(), eda_model::sch_extras::PowerLibName { name, local: entry.local });
+        }
         for (p, new) in src.power_symbols.iter().zip(power_refs) {
             remap.insert(p.id.clone(), new.clone());
             // what its Symbol Properties set, and its fields' font faces and colours, go with the copy (`SchExtras::power_props`, `field_looks`)

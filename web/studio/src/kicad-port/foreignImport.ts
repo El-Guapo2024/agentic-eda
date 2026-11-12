@@ -87,7 +87,7 @@ export const BOARD_ACCEPT = ".brd,.PcbDoc,.pcbdoc,.cpa,.asc,.pcb,.PCB,.txt,.json
 export const SCHEMATIC_ACCEPT = ".sch,.SchDoc,.schdoc,.csa,.json,.zip,.epro,.asc,.dsn,.dch";
 
 /** The project import's chooser: the boards' and the schematics' files of every format, chosen together (an Eagle `.brd` and its `.sch`). */
-export const PROJECT_ACCEPT = ".brd,.sch,.cpa,.csa,.json,.zip,.epro,.PcbDoc,.pcbdoc,.SchDoc,.schdoc,.asc,.txt,.pcb,.PCB,.dsn,.dch";
+export const PROJECT_ACCEPT = ".brd,.sch,.cpa,.csa,.json,.zip,.epro,.PcbDoc,.pcbdoc,.SchDoc,.schdoc,.PrjPcb,.prjpcb,.asc,.txt,.pcb,.PCB,.dsn,.dch";
 
 export function acceptFor(kind: ConvertKind): string {
   return kind === "board" ? BOARD_ACCEPT : kind === "project" ? PROJECT_ACCEPT : SCHEMATIC_ACCEPT;
