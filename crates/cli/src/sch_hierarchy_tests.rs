@@ -2302,7 +2302,12 @@ fn a_schematic_only_import_keeps_the_projects_net_classes() {
     let names: Vec<&str> = model.board.net_classes.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["net_01", "net_02", "usb_diff"]);
     assert_eq!(model.board.net_classes[0].clearance, Some(mm(0.1)), "the class's own numbers");
-    assert!(model.board.net_classes.iter().all(|c| c.nets.is_empty()), "the stored assignments are what the labels say again, so none is a pattern");
+    // The project's stored assignments are what the labels say again, so none is read as a pattern; the nets are in the classes the sheets' net class flags give
+    // them (`GetNetclassesForDriver`, UI-LEFT-2 BB3), each an exact pattern -- the classes kicad-cli's netlist of the original gives them (`/X` and
+    // `/subsheet_01/D` net_02, `/Y` and `/subsheet_01/C` net_01).
+    let nets: Vec<(&str, Vec<String>)> = model.board.net_classes.iter().map(|c| (c.name.as_str(), c.nets.clone())).collect();
+    let exact = |n: &[&str]| n.iter().map(|x| eda_kicad::exact_pattern(x)).collect::<Vec<_>>();
+    assert_eq!(nets, vec![("net_01", exact(&["/Y", "/subsheet_01/C"])), ("net_02", exact(&["/X", "/subsheet_01/D"])), ("usb_diff", vec![])], "the flags' classes, as kicad-cli's netlist has them");
     if kicad_cli_ready() {
         let derived = erc_kinds(&dir);
         let classes: Vec<String> = derived_project(&dir)["net_settings"]["classes"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect();

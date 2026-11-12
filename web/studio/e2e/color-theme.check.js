@@ -242,6 +242,9 @@
     const use = menuItem("Use Color from Schematic");
     t(!!use && use.getAttribute("aria-disabled") !== "true", "Use Color from Schematic is on");
     await click(use, 300);
+    // the class's PCB colour is a cell of its net class (`NETCLASS::SetPcbColor`), set through `set_net_classes`: an undo step here (UI-LEFT-2 BB8)
+    for (let i = 0; i < 30 && __eda.state().appearance.netclassColors?.theme_sch !== "rgb(0, 200, 120)"; i++) await sleep(100);
+    if (__eda.state().appearance.netclassColors?.theme_sch === "rgb(0, 200, 120)") steps.push("color");
     t(__eda.state().appearance.netclassColors?.theme_sch === "rgb(0, 200, 120)", `the PCB colour (${JSON.stringify(__eda.state().appearance.netclassColors)})`);
     await rightClick(document.querySelector('.ap-row[data-netclass="theme_plain"]'));
     t(menuItem("Use Color from Schematic")?.getAttribute("aria-disabled") === "true", "dimmed for a class with no schematic colour");
