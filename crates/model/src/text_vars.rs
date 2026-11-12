@@ -18,7 +18,8 @@
 //!   eeschema/sch_field.cpp, sch_text.cpp, sch_item.cpp   `GetShownText`, `ResolveText`: which resolvers an item's text goes through
 //!
 //! The `@{..}` math expressions (`common/text_eval`) are evaluated for their arithmetic after each pass, as 25ec2335's `ResolveTextVars` does
-//! ([`evaluate_math`]), with the grammar's strings, units, the functions that do not read the clock and the version control's (`vcs..`), and `VCSHASH` /
+//! ([`evaluate_math`]), with the grammar's strings, units, every function (the clock's read the moment [`set_eval_clock`] set, `timeformat` in the
+//! person's local time) and the version control's (`vcs..`), and `VCSHASH` /
 //! `VCSSHORTHASH`: those ask the repository the project is in through a [`Vcs`] the caller sets for its thread ([`set_vcs`], as KiCad's text
 //! evaluator reads `TEXT_EVAL_VCS`'s context path), and are left as written when none is set. Not ported: design variants. Simulation `OP` values are left
 //! as written here and resolved by the studio, which holds the last run (`web/studio/src/kicad-port/sim/opVars.ts`).
@@ -64,6 +65,46 @@ pub fn set_vcs(vcs: Option<Rc<dyn Vcs>>) -> Option<Rc<dyn Vcs>> {
 fn with_vcs<T>(f: impl FnOnce(&dyn Vcs) -> T) -> Option<T> {
     let vcs = VCS.with(|v| v.borrow().clone())?;
     Some(f(vcs.as_ref()))
+}
+
+thread_local! {
+    /// The moment `today()` and `now()` read and the offset of the person's local time from UTC (`set_eval_clock`); `None` is the system clock in UTC.
+    static EVAL_CLOCK: std::cell::Cell<Option<(i64, i64)>> = const { std::cell::Cell::new(None) };
+    /// `EVAL_VISITOR::m_gen` (a `std::mt19937` seeded by `std::random_device`): here a xorshift64* seeded by the clock's nanoseconds.
+    static RANDOM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The texts this thread evaluates from now on read the clock `clock` names: `today()` and `now()` the system's moment (`ENVIRONMENT::CurrentTime`,
+/// `wxDateTime::Now()`), `timeformat()` the local time of the person whose clock it is (`localtime_r`; the server keeps no time zone of the person's). A
+/// clock of no local time ([`Clock::utc_now`]) is UTC.
+pub fn set_eval_clock(clock: &Clock) {
+    let now = unix_now();
+    EVAL_CLOCK.with(|c| c.set(Some((now, clock.utc_offset(now)))));
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// (seconds since 1970 UTC, the local time's offset from UTC in seconds).
+fn eval_now() -> (i64, i64) {
+    EVAL_CLOCK.with(|c| c.get()).unwrap_or_else(|| (unix_now(), 0))
+}
+
+/// A number in [0, 1), a new one each call (`std::uniform_real_distribution<double>( 0.0, 1.0 )`).
+fn random_unit() -> f64 {
+    RANDOM.with(|r| {
+        let mut x = r.get();
+        if x == 0 {
+            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+            x = (nanos ^ (r as *const std::cell::Cell<u64> as usize as u64).rotate_left(32)) | 1;
+        }
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        r.set(x);
+        (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    })
 }
 
 /// `ERC_DRC` flag of `ExpandTextVars`: the report-only tokens (`ERC_WARNING ...`) are kept.
@@ -280,13 +321,14 @@ pub fn resolve_text_vars(source: &str, resolver: &Resolver, depth: &mut usize) -
 /// decimal point, else the shortest form). The grammar is `text_eval.lemon`'s: comparisons, then `+ -`, then `* / %`, then a sign, then `^` (right to
 /// left); numbers with an SI prefix (`4k7`, `2.2u`, `1m`), a unit (`1in`, `10mil`, `2 mm`: in millimetres, `EDA_UNITS::MM`, the evaluator's default) and an
 /// exponent; strings in `"` or `'` with their escapes; `+` joins when either side is a string, `==` and `!=` compare two strings; and the functions of
-/// `EVAL_VISITOR::evaluateFunction` that give the same answer on every machine (the arithmetic ones, `upper`, `lower`, `concat`, `beforefirst` ...,
-/// `replace`, `if`, `format`, `fixed`, `currency`, the E-series' `enearest`, `eup`, `edown`).
+/// `EVAL_VISITOR::evaluateFunction` (the arithmetic ones, `upper`, `lower`, `concat`, `beforefirst` ..., `replace`, `if`, `format`, `fixed`, `currency`,
+/// the E-series' `enearest`, `eup`, `edown`, the clock's `today`, `now`, `dateformat`, `datestring`, `weekdayname`, `timeformat`, `random`, and the
+/// version control's when a repository is set).
 ///
 /// An expression that is not read, or whose evaluation fails (a division by zero, an unknown function, a string where a number is needed), is left as
 /// written, as KiCad leaves it ("If processing had any evaluation errors, return original input unchanged"; the error goes to its error collector only).
-/// **Differs**: the clock's (`today`, `now`, `dateformat`, `datestring`, `weekdayname`, `timeformat`), `random` and the version control's (`vcs..`) functions
-/// are not ported and leave their expression as written; a number with a fraction is written by Rust's shortest form, `fmt::format( "{}" )`'s for most.
+/// **Differs**: a number with a fraction is written by Rust's shortest form, `fmt::format( "{}" )`'s for most; `random` is a xorshift64*, not
+/// `std::mt19937` (both a new number at each evaluation); the version control's functions are left as written when no repository is set.
 pub fn evaluate_math(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -834,6 +876,114 @@ mod text_eval {
         }
     }
 
+    /// `std::stoi`: white space, a sign and the digits that start `s` (what follows them is ignored); `None` where no digit starts it.
+    fn stoi(s: &str) -> Option<i64> {
+        let t = s.trim_start();
+        let (sign, digits) = match t.as_bytes().first() {
+            Some(b'-') => (-1, &t[1..]),
+            Some(b'+') => (1, &t[1..]),
+            _ => (1, t),
+        };
+        let n: String = digits.chars().take_while(char::is_ascii_digit).collect();
+        if n.is_empty() {
+            return None;
+        }
+        n.parse::<i64>().ok().filter(|v| *v <= i64::from(i32::MAX)).map(|v| sign * v)
+    }
+
+    fn is_leap(y: i64) -> bool {
+        (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    }
+
+    fn days_in_month(m: i64, y: i64) -> i64 {
+        if m == 2 && is_leap(y) {
+            29
+        } else {
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][(m - 1).clamp(0, 11) as usize]
+        }
+    }
+
+    /// `DATE_UTILS::YmdToDays`: the day count from 1970-01-01 (the month and day are not checked).
+    pub(super) fn ymd_to_days(year: i64, month: i64, day: i64) -> i64 {
+        let in_year = |y: i64| if is_leap(y) { 366 } else { 365 };
+        let mut total = 0;
+        if year >= 1970 {
+            total += (1970..year).map(in_year).sum::<i64>();
+        } else {
+            total -= (year..1970).map(in_year).sum::<i64>();
+        }
+        total += (1..month).map(|m| days_in_month(m, year)).sum::<i64>();
+        total + day - 1
+    }
+
+    /// `DATE_UTILS::ParseDate`: `YYYY年MM月DD日` / `YYYY년 MM월 DD일` (or mixed); parts split at the first of `-`, `/`, `.` the text holds (one part is
+    /// January 1st, two the month's first; with `/` it is month/day/year when the first is at most 12 and the second at most 31, else day/month/year;
+    /// otherwise year, month, day); eight digits `YYYYMMDD` unchecked; the month and day checked otherwise.
+    pub(super) fn parse_date(s: &str) -> Option<i64> {
+        let has = |m: &str| s.contains(m);
+        let cjk = (has("年") || has("년")) && (has("月") || has("월")) && (has("日") || has("일"));
+        let mut parts: Vec<i64> = Vec::new();
+        let mut separator = None;
+        if cjk {
+            let find = |a: &str, b: &str| s.find(a).or_else(|| s.find(b)).unwrap_or(0);
+            let (year_at, month_at, day_at) = (find("年", "년"), find("月", "월"), find("日", "일"));
+            // "3 bytes for CJK year marker"; `substr( pos, n )` with n past the end, or a negative n, takes the rest
+            let sub = |from: usize, to: usize| s.get(from..to.max(from)).or_else(|| s.get(from..)).unwrap_or("");
+            parts = vec![stoi(sub(0, year_at))?, stoi(sub(year_at + 3, month_at))?, stoi(sub(month_at + 3, day_at))?];
+        } else if s.contains('-') {
+            separator = Some('-');
+        } else if s.contains('/') {
+            separator = Some('/');
+        } else if s.contains('.') {
+            separator = Some('.');
+        }
+        if let Some(sep) = separator {
+            // `std::getline`: a trailing separator makes no empty last part
+            let mut tokens: Vec<&str> = s.split(sep).collect();
+            if tokens.last() == Some(&"") {
+                tokens.pop();
+            }
+            for t in tokens {
+                parts.push(stoi(t)?);
+            }
+        } else if !cjk && s.len() == 8 {
+            let n = stoi(s)?;
+            return Some(ymd_to_days(n / 10000, (n / 100) % 100, n % 100));
+        } else if !cjk {
+            return None;
+        }
+        let (year, month, day) = match parts.as_slice() {
+            [y] => (*y, 1, 1),
+            [y, m] => (*y, *m, 1),
+            [a, b, c] if cjk => (*a, *b, *c),
+            [a, b, c] if separator == Some('/') && *a <= 12 && *b <= 31 => (*c, *a, *b),
+            [a, b, c] if separator == Some('/') && *b <= 12 => (*c, *b, *a),
+            [a, b, c] => (*a, *b, *c),
+            _ => return None,
+        };
+        if !(1..=12).contains(&month) || day < 1 || day > days_in_month(month, year) {
+            return None;
+        }
+        Some(ymd_to_days(year, month, day))
+    }
+
+    /// `DATE_UTILS::FormatTime`: the local time of a moment (`localtime_r`, here the offset of the person's clock, [`super::eval_now`]) as `24h`, `ISO`
+    /// (`14:05:09`), `12h` (`2:05:09 PM`), `HH_MM_SS` / `filename` (`14h05m09s`) or `short` (`14:05`); `HH:MM:SS` for a format it does not know.
+    pub(super) fn format_time(seconds: i64, format: &str) -> String {
+        let local = (seconds + super::eval_now().1).rem_euclid(24 * 3600);
+        let (h, m, s) = (local / 3600, local % 3600 / 60, local % 60);
+        match format {
+            "12h" => {
+                let ampm = if h >= 12 { "PM" } else { "AM" };
+                let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+                format!("{h12}:{m:02}:{s:02} {ampm}")
+            }
+            "HH_MM_SS" | "filename" => format!("{h:02}h{m:02}m{s:02}s"),
+            "short" => format!("{h:02}:{m:02}"),
+            _ => format!("{h:02}:{m:02}:{s:02}"),
+        }
+    }
+
     /// The version control's functions of `EVAL_VISITOR::evaluateFunction` (KiCad 25ec2335 `text_eval_parser.cpp`), over the repository [`super::set_vcs`]
     /// set; `None` when `name` is not one of them, or none is set (the expression is then left as written). An answer the repository does not have is
     /// "<unknown>" (`vcsResult`); a hash is cut to the length asked, from 4 to 40 characters (`GetCommitHash`).
@@ -888,13 +1038,47 @@ mod text_eval {
         Some(Value::Str(s))
     }
 
-    /// `EVAL_VISITOR::evaluateFunction`, but the clock's and `random`; the version control's when a repository is set ([`vcs_function`]).
+    /// `EVAL_VISITOR::evaluateFunction`; the version control's when a repository is set ([`vcs_function`]).
     fn function(name: &str, args: &[Value]) -> Option<Value> {
         if name.starts_with("vcs") {
             return vcs_function(name, args);
         }
         let argc = args.len();
         let text = |i: usize| args[i].to_text();
+        // the zero-argument ones: `DATE_UTILS::GetCurrentDays` (whole UTC days since 1970, `GetTicks() / ( 24 * 3600 )`), `GetCurrentTimestamp` and
+        // `random` (`std::uniform_real_distribution<double>( 0.0, 1.0 )` of a generator seeded by `std::random_device`)
+        if argc == 0 {
+            match name {
+                "today" => return Some(Value::Num((super::eval_now().0 / (24 * 3600)) as f64)),
+                "now" => return Some(Value::Num(super::eval_now().0 as f64)),
+                "random" => return Some(Value::Num(super::random_unit())),
+                _ => {}
+            }
+        }
+        match name {
+            // `static_cast<int>` of the day count, the format `ISO` unless given
+            "dateformat" if argc >= 1 => {
+                let days = args[0].num()? as i32;
+                let format = if argc > 1 { text(1) } else { "ISO".into() };
+                return Some(Value::Str(format_date(i64::from(days), &format)));
+            }
+            "datestring" if argc == 1 => return parse_date(&text(0)).map(|d| Value::Num(d as f64)), // else "Invalid date format: "
+            "weekdayname" if argc == 1 => {
+                const WEEKDAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+                // "+3 because epoch was Thursday (Monday = 0)", C++'s `%` (the sign of the dividend), then made positive
+                let mut weekday = (i64::from(args[0].num()? as i32) + 3) % 7;
+                if weekday < 0 {
+                    weekday += 7;
+                }
+                return Some(Value::Str(WEEKDAYS[weekday as usize].into()));
+            }
+            "timeformat" if argc >= 1 => {
+                let seconds = args[0].num()? as i64;
+                let format = if argc > 1 { text(1) } else { "ISO".into() };
+                return Some(Value::Str(format_time(seconds, &format)));
+            }
+            _ => {}
+        }
         match name {
             "format" | "fixed" if argc >= 1 => {
                 let decimals = if argc > 1 { args[1].num().unwrap_or(2.0) } else { 2.0 };
@@ -1022,6 +1206,20 @@ impl Clock {
         }
         let ok = d.len() == 3 && t.len() >= 3 && d.iter().chain(t.iter().take(3)).all(|p| !p.is_empty() && p.len() <= 4 && p.bytes().all(|b| b.is_ascii_digit()));
         ok.then(|| Clock { date: date.to_string(), time_hms: format!("{}h{}m{}s", t[0], t[1], t[2]), time_locale: format!("{}:{}:{}", t[0], t[1], t[2]) })
+    }
+
+    /// How far the local time this clock names is from UTC at the moment `now` (seconds since 1970), to the quarter hour; 0 when it names none it can
+    /// read (a clock of [`Clock::utc_now`] is UTC).
+    pub fn utc_offset(&self, now: i64) -> i64 {
+        let num = |s: &str| s.parse::<i64>().ok();
+        let d: Vec<Option<i64>> = self.date.split('-').map(num).collect();
+        let t: Vec<Option<i64>> = self.time_locale.split(':').map(num).collect();
+        let (Some(Some(y)), Some(Some(mo)), Some(Some(da)), Some(Some(h)), Some(Some(mi)), Some(Some(s))) = (d.first(), d.get(1), d.get(2), t.first(), t.get(1), t.get(2)) else {
+            return 0;
+        };
+        let local = text_eval::ymd_to_days(*y, *mo, *da) * 86_400 + h * 3600 + mi * 60 + s;
+        let quarter = 15 * 60;
+        ((local - now) as f64 / quarter as f64).round() as i64 * quarter
     }
 
     /// The system clock in UTC (`std` has no local time): the fallback when the caller does not say what its local time is.
@@ -1583,6 +1781,34 @@ mod tests {
         assert_eq!(e("@{sqrt(-1)} @{nope(1)} @{\"a\" - 1} @{1+} @{upper()} ok @{1+1}"), "@{sqrt(-1)} @{nope(1)} @{\"a\" - 1} @{1+} @{upper()} ok 2");
         // a variable left unresolved is no value
         assert_eq!(e("@{${X}+1}"), "@{${X}+1}");
+    }
+
+    /// KiCad 25ec2335's `DATE_UTILS` (`text_eval_parser.cpp`) and the zero-argument `today`, `now` and `random`.
+    #[test]
+    fn the_clocks_functions_and_random_are_evaluated_as_kicad_does() {
+        let e = evaluate_math;
+        // `datestring` -> days since 1970 (`ParseDate`'s every form), `dateformat`, `weekdayname`
+        assert_eq!(e("@{datestring('2026-11-06')} @{datestring('20261106')} @{datestring('2026.11.06')} @{datestring('2026')}"), "20763 20763 20763 @{datestring('2026')}");
+        assert_eq!(e("@{datestring('11/06/2026')} @{datestring('13/06/2026')} @{datestring('2026-11')}"), "20763 20617 20758");
+        assert_eq!(e("@{datestring('2026年11月06日')} @{datestring('2026년 11월 06일')}"), "20763 20763");
+        assert_eq!(e("@{datestring('2026-02-30')} @{datestring('nope')}"), "@{datestring('2026-02-30')} @{datestring('nope')}", "\"Invalid date format\"");
+        assert_eq!(e("@{dateformat(20763)} @{dateformat(20763, 'US')} @{dateformat(20763, 'EU')} @{dateformat(20763, 'long')} @{dateformat(20763, 'short')}"), "2026-11-06 11/06/2026 06/11/2026 November 6, 2026 Nov 6, 2026");
+        assert_eq!(e("@{dateformat(20763, 'CN')} @{dateformat(20763, 'kr')} @{dateformat(-1)}"), "2026年11月06日 2026년 11월 06일 1969-12-31");
+        assert_eq!(e("@{weekdayname(0)} @{weekdayname(20763)} @{weekdayname(-1)} @{weekdayname(datestring('2026-11-09'))}"), "Thursday Friday Wednesday Monday");
+        // `timeformat` in the clock's local time: a clock two hours ahead of UTC
+        let now = 1_794_000_000; // 2026-11-06T21:20:00Z
+        let clock = Clock::from_local("2026-11-06T23:20:00").unwrap();
+        assert_eq!(clock.utc_offset(now), 7200);
+        EVAL_CLOCK.with(|c| c.set(Some((now, clock.utc_offset(now)))));
+        assert_eq!(e("@{timeformat(0)} @{timeformat(45296, '12h')} @{timeformat(0, '12h')} @{timeformat(45296, 'filename')} @{timeformat(45296, 'short')}"), "02:00:00 2:34:56 PM 2:00:00 AM 14h34m56s 14:34");
+        assert_eq!(e("@{today()} @{now()} @{dateformat(today())} @{timeformat(now())}"), "20763 1794000000 2026-11-06 23:20:00");
+        assert_eq!(e("@{today(1)}"), "@{today(1)}", "only without arguments");
+        EVAL_CLOCK.with(|c| c.set(None));
+        // `random`: a number in [0, 1), a new one each time
+        let (a, b) = (e("@{random()}"), e("@{random()}"));
+        assert!(a.parse::<f64>().is_ok_and(|v| (0.0..1.0).contains(&v)), "{a}");
+        assert_ne!(a, b);
+        assert_eq!(e("@{random() < 1}"), "1");
     }
 
     /// A repository that answers what a test says (`TEXT_EVAL_VCS`' readers).
