@@ -204,6 +204,7 @@
     await sleep(150);
     check("the nickname is the library's file name", document.querySelector("#lt-nick").value === "MountingHole", document.querySelector("#lt-nick").value);
     setNative(document.querySelector("#lt-nick"), "LtMount");
+    document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
     button("Add").click();
     await waitFor(() => titles().length === 0);
     const fpRows = mine(await tables(), "footprint");
@@ -227,6 +228,7 @@
     await waitFor(() => document.querySelector("#lt-name"));
     check("New Library opens New Symbol Library, named New_Library (or the next free), in the board's folder", created.dialog === "New Symbol Library" && /^New_Library(_\d+)?$/.test(document.querySelector("#lt-name").value) && document.querySelector("#lt-folder").value === lt.project_dir, `${created.dialog} ${document.querySelector("#lt-name").value}`);
     setNative(document.querySelector("#lt-name"), fresh);
+    document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
     button("Create").click();
     await waitFor(() => titles().length === 0);
     const created2 = mine(await tables(), "symbol").find((r) => r.nickname === fresh);
@@ -238,6 +240,7 @@
     await E.run("common.Control.newLibrary");
     await waitFor(() => document.querySelector("#lt-name"));
     setNative(document.querySelector("#lt-name"), fresh);
+    document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
     button("Create").click();
     await sleep(700);
     check("a name already used is refused, in KiCad's words", /already exists/.test(top()?.querySelector(".lt-error")?.textContent ?? ""), top()?.querySelector(".lt-error")?.textContent);

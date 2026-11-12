@@ -322,6 +322,7 @@
     if (!t(nd, "New Footprint Library opens")) return;
     await until(() => nd.querySelector("#lt-folder")?.value, 4000);
     await type(nd.querySelector("#lt-name"), LIB);
+    document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
     button(nd, "Create").click();
     if (!t(await until(() => !dialog("New Footprint Library"), 6000), `${LIB} made`)) return;
     await selectItem(name);

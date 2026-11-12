@@ -76,7 +76,11 @@
       await E.run("eeschema.EditorControl.assignFootprints");
       t(!!(await waitFor(() => assignDialog())), "Assign Footprints opens");
       t(!!symRow(R1) && !!symRow(D1) && assignedOf(R1) === "(none)", `it lists R1 and D1, R1 with no footprint (${assignedOf(R1)})`);
-      t(!!viewer() && viewer().querySelector("canvas"), "the viewer pane is there (View Selected Footprint)");
+      // KiCad's viewer is a window of its own, not open when CvPcb opens; View Selected Footprint opens it (UI-LEFT-2 LL7)
+      t(!viewer(), "the viewer is not open to begin with");
+      assignDialog().querySelector("[data-cvpcb-viewer-toggle]")?.click();
+      await waitFor(() => viewer(), 3000);
+      t(!!viewer() && viewer().querySelector("canvas") && getComputedStyle(viewer()).position === "fixed", "View Selected Footprint opens the viewer, a window over the page");
       await clickRow(symRow(R1));
       t(viewer()?.getAttribute("data-cvpcb-viewer") === "" && /No footprint selected/.test(viewer()?.textContent ?? ""), "R1 has no footprint and nothing is picked: the viewer is empty");
       const firstFp = assignDialog().querySelector("[data-cvpcb-fp]");
@@ -121,8 +125,27 @@
       t((d.querySelector("[data-equ-message]")?.textContent ?? "").includes(`File '${FILE}' already exists in list.`), "a second Add of it is refused in KiCad's words");
       await clickRow(d.querySelector(`[data-equ-entry="${FILE}"]`));
       d.querySelector('[aria-label="Edit association file"]').click();
-      await sleep(200);
-      t(/cannot start a text editor/.test(d.querySelector("[data-equ-message]")?.textContent ?? ""), "Edit says the page cannot start a text editor");
+      // Edit opens the file in a text editor (KiCad's is the person's; the studio's own here, UI-LEFT-2 LL7): the file's text, Save writes it
+      const ed = await waitFor(() => d.querySelector("[data-equ-editor]"), 4000);
+      const area = ed?.querySelector("[data-equ-editor-text]");
+      const was = area?.value ?? "";
+      t(!!area && was.includes("330"), `Edit opens the file's text in an editor (${JSON.stringify(was.slice(0, 40))})`);
+      if (area) {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(area, `${was}\n# edited by the check\n`);
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(150);
+        ed.querySelector("[data-equ-editor-save]").click();
+        let saved = false;
+        for (let i = 0; i < 40 && !saved; i++) {
+          await sleep(100);
+          saved = ((await json(`/api/cvpcb/equ_text?entry=${encodeURIComponent(FILE)}`)).text ?? "").includes("# edited by the check");
+        }
+        t(!!saved, "Save writes the file");
+        // put it back as it was
+        await post("/api/cvpcb/equ_text", { entry: FILE, text: was });
+        ed.querySelector("[data-equ-editor-close]")?.click();
+        await sleep(150);
+      }
       d.querySelector("[data-equ-ok]").click();
       await waitFor(() => !equDialog(), 4000);
       t(!equDialog() && !!assignDialog(), "OK closes it and Assign Footprints stays open");

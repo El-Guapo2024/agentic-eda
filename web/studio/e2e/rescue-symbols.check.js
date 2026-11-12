@@ -13,6 +13,7 @@
 //     the symbol in one undo step; run again it says "This project has nothing to rescue.";
 //   Remap Legacy Library Symbols on a schematic whose symbols name libraries: the dialog says it is for legacy projects and its button is disabled.
 // The rescue library and the library the check makes stay in the board's folder (their rows are taken out of the table); every design edit is undone.
+// Rescue reads the project's legacy cache library only (KiCad's): the check writes one through the runner's `window.__runCheckWriteFile`, so run it through e2e/run-check.mjs.
 // It answers through `window.__rescueSymbolsCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
 // run-all-checks: board=ldo minutes=6   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
@@ -151,6 +152,14 @@
     const rows = (await json("/api/library_tables")).tables.symbol.project.rows.filter((r) => r.nickname !== LIB);
     const out = await post("/api/library_tables", { kind: "symbol", rows });
     t(!out.error, `${LIB}'s row out of the table: ${out.error ?? "ok"}`);
+    // KiCad's rescuer reads the project's legacy cache library only, never the schematic's own copies (UI-LEFT-2 LL7): without one, nothing of ours to rescue
+    const firstLook = await json("/api/sch/rescue");
+    t(!(firstLook.candidates ?? []).some((c) => c.requested === `${LIB}:${NAME}`), `no cache library: ${LIB}:${NAME} is no candidate`);
+    // the cache library a KiCad 5 project kept beside it (`<project>-cache.lib`, the `Lib-Name` names `findSymbol` looks up second)
+    const projectDir = (await json("/api/library_tables")).project_dir;
+    const cacheLib = `EESchema-LIBRARY Version 2.4\n#encoding utf-8\n#\n# ${LIB}-${NAME}\n#\nDEF ${LIB}-${NAME} R 0 0 N Y 1 F N\nF0 "R" 80 0 50 V V C CNN\nF1 "${LIB}-${NAME}" 0 0 50 V V C CNN\nF2 "" -70 0 50 V I C CNN\nF3 "" 0 0 50 H I C CNN\nDRAW\nS -40 -100 40 100 0 1 10 N\nX ~ 1 0 150 50 D 50 50 1 1 P\nX ~ 2 0 -150 50 U 50 50 1 1 P\nENDDRAW\nENDDEF\n#\n#End Library\n`;
+    const wrote = window.__runCheckWriteFile ? await window.__runCheckWriteFile(`${projectDir}/${board}-cache.lib`, cacheLib) : "no __runCheckWriteFile: run through e2e/run-check.mjs";
+    if (!t(wrote === "ok", `the project's cache library written: ${wrote}`)) return;
 
     await run("eeschema.EditorControl.rescueSymbols");
     const dlg = await until(() => document.querySelector("[data-rescue-dialog] [data-rescue-candidates]")?.closest(".dialog"), 20000);
@@ -202,14 +211,11 @@
   });
 
   await scenario("Remap Legacy Library Symbols: only for a schematic none of whose symbols names a library", async (t) => {
-    await run("eeschema.EditorControl.remapSymbols");
-    const dlg = await until(() => document.querySelector("[data-remap-dialog]"), 5000);
-    if (!t(dlg, "Tools > Remap Legacy Library Symbols... opens Remap Symbols")) return;
-    await until(() => dlg.querySelector("[data-remap-not-legacy]"), 8000);
-    t(/project symbol library list look up method/.test(dlg.textContent), "KiCad's explanation");
-    t(dlg.querySelector("[data-remap-not-legacy]") && dlg.querySelector("[data-remap-run]").disabled, "not a legacy project: said so, and Remap Symbols is disabled");
-    [...dlg.closest(".dialog").querySelectorAll("button")].find((b) => b.textContent.trim() === "Close")?.click();
-    await sleep(200);
+    // `remapSymbolsCondition` (UI-LEFT-2 LL7): the menu entry is disabled on a schematic whose symbols name their libraries
+    t((await json("/api/sch/legacy")).legacy === false, "the server says the schematic is not a legacy one");
+    await sleep(800);
+    const r = await run("eeschema.EditorControl.remapSymbols");
+    t(r && r.ok === false && !document.querySelector("[data-remap-dialog]"), `Tools > Remap Legacy Library Symbols... is disabled: ${JSON.stringify(r).slice(0, 160)}`);
   });
 
   // ----------------------------------------------------------------------------------------------------------- clean up

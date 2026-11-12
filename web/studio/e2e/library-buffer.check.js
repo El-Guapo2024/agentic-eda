@@ -79,6 +79,7 @@
     if (!t(d, `${title} opens`)) return false;
     await until(() => d.querySelector("#lt-folder")?.value, 4000);
     await type(d.querySelector("#lt-name"), name);
+    document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
     button(d, "Create").click();
     return !!t(await until(() => !dialog(title), 6000), `${title}: ${name} made and put in the project's table`);
   };
