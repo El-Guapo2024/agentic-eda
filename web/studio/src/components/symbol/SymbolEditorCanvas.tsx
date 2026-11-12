@@ -54,6 +54,7 @@ import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
 import { newTextBox } from "../../kicad-port/symTextBox";
 import { fieldLooksOf, graphicStateOf } from "../../kicad-port/symLooks";
+import { useSymFind } from "../../actions/symFindOps";
 import { carriedItems } from "../../kicad-port/symCarry";
 import { bezierFromClicks, bezierGraphic } from "../../kicad-port/symBezier";
 import { addCorner, canAddCorner, eeFindHandle, handlePos, POINT_SIZE_PX, removableCorner, removeCorner, type EeHandle } from "../../kicad-port/eePointEdit";
@@ -206,6 +207,7 @@ export function SymbolEditorCanvas() {
 
   const sym = state.symbol;
   /** The fields on show: the symbol's own list, those with a text, the hidden ones only while Show Hidden Fields is on (kicad-port/symFieldLayout.ts). */
+  const symFind = useSymFind();
   const shownFields = useMemo(() => (sym ? fieldsOnShow(allFields(sym), state.showHiddenFields, state.activeUnit, sym.unit_count) : []), [sym, state.showHiddenFields, state.activeUnit]);
 
   // The grid helper of the tool in force (kicad-port/schGridHelper.ts, symbolSnap.ts), kept fed with the view, the grid, the overrides and the pins of the unit being edited: a click goes
@@ -337,8 +339,9 @@ export function SymbolEditorCanvas() {
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintSymbol(ctx, state.view, width, height, sym, {
-      // the Pin Table's cross-probed pin (`FocusOnItem`'s `SetBrightened`), drawn as the selection is
-      selection: state.brightened ? new Set([...state.selection, state.brightened.id]) : state.selection,
+      selection: state.selection,
+      // the Pin Table's cross-probed pin (`FocusOnItem`'s `SetBrightened`) and Find's matches (`UpdateFind`'s `BrightenItem`), in `LAYER_BRIGHTENED`
+      brightened: new Set([...(state.brightened ? [state.brightened.id] : []), ...symFind.bright]),
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       gridYNm,
@@ -369,7 +372,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
+  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

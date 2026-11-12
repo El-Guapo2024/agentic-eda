@@ -259,7 +259,7 @@ pub(crate) fn symbol_svg_args(req: &Value) -> Vec<String> {
     args
 }
 
-/// `POST /api/sym/svg`: `{lib_id, unit?, body_style?, theme?, black_and_white?, include_hidden_pins?, include_hidden_fields?}` -- the symbol (a project library
+/// `POST /api/sym/svg`: `{lib_id, text?, unit?, body_style?, theme?, black_and_white?, include_hidden_pins?, include_hidden_fields?}` -- the symbol (`text`, else a project library
 /// entry, else the resolved one) written out as a one-symbol library and plotted by `kicad-cli sym export svg` ([`symbol_svg_args`]). `{ok, files, svg: {name,
 /// text}}`: `svg` is the unit and body style asked for (`SYMBOL_EDITOR_CONTROL::ExportSymbolAsSVG` plots the unit and style being edited).
 pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
@@ -271,9 +271,14 @@ pub fn symbol_svg(dir: &Path, body: &[u8]) -> Value {
     }
     let unit = req.get("unit").and_then(Value::as_u64).unwrap_or(1).max(1) as u32;
     let style = req.get("body_style").and_then(Value::as_u64).unwrap_or(1).max(1) as u32;
-    let text = match crate::library_api::symbol_kicad_sym_any(dir, lib_id) {
-        Ok(t) => t,
-        Err(e) => return err(crate::board::reasons(&e)),
+    // `text`: a symbol library's text to plot in place of the symbol's own -- Copy's symbol of the selected items, whose SVG goes on the clipboard beside it
+    // (`SYMBOL_EDITOR_EDIT_TOOL::Copy`'s `plotSymbolToSvg`, UI-LEFT-2 YY5)
+    let text = match req.get("text").and_then(Value::as_str) {
+        Some(t) => t.to_string(),
+        None => match crate::library_api::symbol_kicad_sym_any(dir, lib_id) {
+            Ok(t) => t,
+            Err(e) => return err(crate::board::reasons(&e)),
+        },
     };
     let bare = lib_id.rsplit(':').next().unwrap_or(lib_id);
     let args = symbol_svg_args(&req);

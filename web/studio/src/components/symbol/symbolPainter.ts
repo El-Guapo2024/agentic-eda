@@ -344,6 +344,10 @@ export interface SymPaintOptions {
   carried?: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; looks?: (GraphicState | null)[] } | null;
   /** The looks a graphic keeps beside it (kicad-port/symLooks.ts `graphicStateOf`; UI-LEFT-2 YY2). */
   looksOf?: (id: string) => GraphicState | null;
+  /** `SetBrightened` items (`IsBrightened()`): Find's matches while its dialog is open, the Pin Table's cross-probed pin -- drawn in `LAYER_BRIGHTENED`. */
+  brightened?: ReadonlySet<string>;
+  /** The items only: no grid, axes or anchor (Copy's image of the selection, `renderSymbolToBitmap`). */
+  itemsOnly?: boolean;
   /** A field's face and colour kept beside it (UI-LEFT-2 YY2): drawn in its face, and in its colour unless selected or hidden (`getRenderColor`). */
   fieldLooksOf?: (name: string) => FieldLooks;
   /** The point editor (`SCH_POINT_EDITOR`) on the one selected shape: its edit points and indicator lines (internal nm), and the shape as a drag of one point has it so far
@@ -404,7 +408,7 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
   beginTextRecord("sym");
   // the Symbol Editor's axes are always on (`SYMBOL_EDIT_FRAME`: `m_axesEnabled = true`), in its theme's `LAYER_SCHEMATIC_GRID_AXES`
   // (`SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME` and `SwitchCanvas`: `SetAxesColor( m_colorSettings->GetColor( LAYER_SCHEMATIC_GRID_AXES ) )`); the grid itself only when shown
-  {
+  if (!opts.itemsOnly) {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
     paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("grid"), undefined, "symbol", layerColor("LAYER_SCHEMATIC_GRID_AXES"));
   }
@@ -438,7 +442,8 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
     ctx.save();
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     const selected = opts.selection.has(g.id ?? "");
-    drawGraphic(g, selected ? layerColor("selection") : strokeColor);
+    // `getRenderColor`: a brightened item (Find's matches, the Pin Table's cross-probe) in `LAYER_BRIGHTENED`
+    drawGraphic(g, selected ? layerColor("selection") : opts.brightened?.has(g.id ?? "") ? layerColor("LAYER_BRIGHTENED") : strokeColor);
     ctx.restore();
   }
 
@@ -448,14 +453,15 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
   const hiddenColor = layerColor("LAYER_HIDDEN");
   const drawPin = (p: LibrarySymbolPin, selected: boolean) => {
     const rp = resolvePin(toLibPin(p), IDENTITY, [0, 0]);
+    const bright = !selected && !!p.id && !!opts.brightened?.has(p.id);
     ctx.beginPath();
-    ctx.strokeStyle = selected ? layerColor("selection") : p.hidden ? hiddenColor : layerColor("LAYER_PIN");
+    ctx.strokeStyle = selected ? layerColor("selection") : bright ? layerColor("LAYER_BRIGHTENED") : p.hidden ? hiddenColor : layerColor("LAYER_PIN");
     ctx.lineWidth = Math.max(152.4, hairlineNm(view, 1));
     drawPinDecoration(ctx, rp);
     ctx.stroke();
     // The labels are the symbol's call (`GetShowPinNames` / `GetShowPinNumbers`): blank what is not shown, the shared painter draws the rest.
     const shownPin = { ...rp.pin, name: labels.names ? rp.pin.name : "", number: labels.numbers ? rp.pin.number : "" };
-    drawPinText(ctx, { ...rp, pin: shownPin }, p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined, texts);
+    drawPinText(ctx, { ...rp, pin: shownPin }, bright ? { name: layerColor("LAYER_BRIGHTENED"), number: layerColor("LAYER_BRIGHTENED") } : p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined, texts);
     // `SCH_PAINTER::draw( SCH_PIN )`: beside the name, in its colour, when the pin has alternates and the name is drawn
     if (opts.showPinAltIcons !== false && p.alternates?.length && labels.names && shownPinName(p.name) !== "") {
       const nameWidth = measureStrokeText(shownPinName(p.name), PIN_TEXT_SIZE_NM);
@@ -488,11 +494,11 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     const fl = opts.fieldLooksOf?.(f.name);
     const ownColor = fl?.color && !(fl.color.r === 0 && fl.color.g === 0 && fl.color.b === 0 && fl.color.a === 0) ? rgba(fl.color) : null;
-    drawField(ctx, fl?.font ? { ...f, font: fl.font } : f, opts.selection.has(f.id ?? "") ? layerColor("selection") : !f.visible ? hiddenColor : (ownColor ?? fieldColor(f.name)));
+    drawField(ctx, fl?.font ? { ...f, font: fl.font } : f, opts.selection.has(f.id ?? "") ? layerColor("selection") : opts.brightened?.has(f.id ?? "") ? layerColor("LAYER_BRIGHTENED") : !f.visible ? hiddenColor : (ownColor ?? fieldColor(f.name)));
     ctx.restore();
   }
 
-  drawOrigin(ctx, view);
+  if (!opts.itemsOnly) drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorNm);
   // `EDIT_POINTS::ViewDraw`: the indicator lines, then a square at each edit point and a round handle in the middle of each side (components/schematic/schArcEditPaint.ts)
   if (opts.pointEditor) paintEditPoints(ctx, view, opts.pointEditor.edit, { fill: "#1a1a1a", stroke: layerColor("selection") });
