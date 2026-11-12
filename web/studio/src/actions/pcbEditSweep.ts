@@ -177,9 +177,10 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
     })
   );
 
-  // PCB_SELECTION_TOOL::unrouteSelected: delete the tracks/vias connected to the selected footprints' pads and tracks (up to the next pad).
-  // `ClearSelection( true )`, `commit.Push( _( "Unroute Selected" ) )` (an empty commit makes no undo step and says nothing), then the
-  // footprints of the original selection are selected again.
+  // PCB_SELECTION_TOOL::unrouteSelected: delete the tracks/vias connected to the selected footprints' pads, pads and tracks (up to the next pad), and the
+  // tuning patterns selected, met on the way or left without a track, with all their tracks (`unrouteSelected` puts those in `trackIds`; the backend drops a
+  // pattern with no track left, so the one `commit_route` is the one commit). `ClearSelection( true )`, `commit.Push( _( "Unroute Selected" ) )` (an empty
+  // commit makes no undo step and says nothing), then the footprints and pads of the original selection are selected again.
   m.set(
     "pcbnew.InteractiveSelection.unrouteSelected",
     pcbOnly(() => {
