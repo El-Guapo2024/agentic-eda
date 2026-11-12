@@ -47,9 +47,8 @@
   // What each row must take out of the scene when it is turned off, by the names scene.ts gives its pieces (kicad-port/appearance3d.ts has the rows).
   const gates = {
     board: ["board-slab"], plated_barrels: ["plated-barrel"], solder_paste: ["solder-paste"], soldermask_top: ["solder-mask-top"], soldermask_bottom: ["solder-mask-bottom"],
-    zones: ["zone-fill"], references: ["part-ref"], adhesive: ["adhesive-shape-line", "adhesive-shape-fill", "adhesive-text"],
-    user_drawings: ["user_drawings-shape-line", "user_drawings-shape-fill", "user_drawings-text"], user_comments: ["user_comments-shape-line", "user_comments-shape-fill", "user_comments-text"],
-    user_eco1: ["user_eco1-shape-line", "user_eco1-shape-fill", "user_eco1-text"], user_eco2: ["user_eco2-shape-line", "user_eco2-shape-fill", "user_eco2-text"],
+    zones: ["zone-fill"], references: ["part-ref"], adhesive: ["adhesive-shape", "adhesive-fp-shape", "adhesive-text", "adhesive-fp-text"],
+    ...Object.fromEntries(["user_drawings", "user_comments", "user_eco1", "user_eco2"].map((r) => [r, [`${r}-shape`, `${r}-fp-shape`, `${r}-text`, `${r}-fp-text`]])),
     silkscreen_top: ["part-ref"], copper_top: ["pad"], // the copper rows only take away what is on their layer: some, not all, of the tracks and zones
   };
   const settle = async () => { await frame(); await sleep(30); await frame(); await sleep(30); };

@@ -6,9 +6,11 @@
 // The list is the dialog's working copy (`m_shapes3D_list`): nothing is sent until its OK (kicad-port/fpModels.ts `boardModelsCmds`, or the Footprint Editor's whole panel).
 // The rows are the file's numbers; the rotation fields show them the other way round, as the dialog does. The status cell is the server's (`POST /api/3dmodel/check`).
 //
-// The "Extruded 3D Body" box (`EXTRUDED_3D_BODY`: Enable, Show, the overall and standoff heights, the extrusion source, the colour swatch and the material) is the board's dialog's
-// (`body` / `onBody`: kicad-port/fpModels.ts `BodyDraft`, sent by OK as `set_extruded_body`). Not ported: its "Export..." (STEP, GLB, STL or BREP of the body through
-// `STEP_PCB_MODEL`, which no kicad-cli command makes), the body drawn in this tab's preview, and the box in the Footprint Editor's dialog.
+// The "Extruded 3D Body" box (`EXTRUDED_3D_BODY`: Enable, Show, the overall and standoff heights, the extrusion source, the colour swatch, the material and Export...) is in both
+// dialogs (`body` / `onBody`: kicad-port/fpModels.ts `BodyDraft`, sent by OK as `set_extruded_body` on the board, `set_library_extruded_body` in the Footprint Editor). The preview
+// draws the box's body as it stands (`updateExtrusionPreview`, `previewBodyOf`). Export... (`OnExportExtrudedModel`) writes the body and its pins as STEP, GLB, STL or BREP through
+// kicad-cli (crates/cli/src/extruded_body_api.rs `export`: the same `STEP_PCB_MODEL::AddExtrudedBody` and `AddExtrudedPins` KiCad's button calls), and the browser saves the file;
+// it is the board's footprint's only (`exportPart`): a library footprint is on no board kicad-cli could export.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import type { Part } from "../../api/types";
@@ -32,6 +34,9 @@ import {
   stepScale,
   EXTRUSION_MATERIALS,
   EXTRUSION_SOURCES,
+  exportBodyOf,
+  exportBodyProblem,
+  previewBodyOf,
   withMaterial,
   type BodyDraft,
   type ModelCheck,
@@ -39,6 +44,7 @@ import {
   type Vec3,
 } from "../../kicad-port/fpModels";
 import { openConfigurePaths } from "../../state/libraryTableDialogs";
+import { showError } from "../library/libraryDialogs";
 import type { LengthUnit } from "../../state/units";
 import { Model3dChooserDialog } from "./Model3dChooserDialog";
 import { ModelPreview3D } from "./ModelPreview3D";
@@ -52,6 +58,8 @@ export interface FootprintModelsPanelProps {
   /** The Extruded 3D Body box, shown when given (the board's Footprint Properties). */
   body?: BodyDraft;
   onBody?: (body: BodyDraft) => void;
+  /** The board footprint the box's Export... writes the body of (`m_footprint->GetReference()`); absent in the Footprint Editor, where Export... is greyed. */
+  exportPart?: string;
 }
 
 const AXES = ["X", "Y", "Z"] as const;
@@ -110,8 +118,54 @@ const withAxis = (v: Vec3, axis: number, value: number): Vec3 => v.map((x, i) =>
 const hexOf = (c: readonly number[]): string => `#${c.slice(0, 3).map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0")).join("")}`;
 const colourOf = (hex: string, alpha: number): [number, number, number, number] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).concat(alpha) as [number, number, number, number];
 
+/** The file dialog's types (`OnExportExtrudedModel`: `_( "STEP files" ) + " (*.step)|*.step|" ..`), in its order. */
+const EXPORT_TYPES = [
+  { ext: "step", label: "STEP files (*.step)" },
+  { ext: "glb", label: "GLB files (*.glb)" },
+  { ext: "stl", label: "STL files (*.stl)" },
+  { ext: "brep", label: "BREP files (*.brep)" },
+] as const;
+
 /** The box (`m_extrusionSizer`, "Extruded 3D Body"), its controls enabled with "Enable" (`updateExtrusionControls`). */
-function ExtrudedBodyBox({ body, onBody }: { body: BodyDraft; onBody: (b: BodyDraft) => void }) {
+function ExtrudedBodyBox({ body, onBody, exportPart }: { body: BodyDraft; onBody: (b: BodyDraft) => void; exportPart?: string }) {
+  const [saving, setSaving] = useState<{ name: string; format: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  // `OnExportExtrudedModel`: the heights read ("Export Extruded Body"), then the file dialog with `GetReference() + "_extruded"` and the four types.
+  const startExport = () => {
+    const problem = exportBodyProblem(body);
+    if (problem) return void showError(problem, undefined, "Export Extruded Body");
+    setSaving({ name: `${exportPart ?? "REF**"}_extruded`, format: 0 });
+  };
+  const save = async () => {
+    if (!saving || !exportPart) return;
+    const kind = EXPORT_TYPES[saving.format]!;
+    setSaving(null);
+    setBusy(true);
+    try {
+      const r = await fetch("/api/extruded_body/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ part: exportPart, format: kind.ext, body: exportBodyOf(body) }) });
+      const j = (await r.json()) as { ok: boolean; message?: string; data?: string };
+      if (!j.ok || !j.data) {
+        const failed = j.message ?? "Failed to write file.";
+        // "Failed to create extruded body geometry." / "Failed to write file." are KiCad's errors; "No extrusion outline ..." its warning
+        void showError(failed, undefined, "Export Extruded Body");
+        return;
+      }
+      const bytes = Uint8Array.from(atob(j.data), (c) => c.charCodeAt(0));
+      const fileName = saving.name.toLowerCase().endsWith(`.${kind.ext}`) ? saving.name : `${saving.name}.${kind.ext}`;
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      void showError("Failed to write file.", undefined, "Export Extruded Body");
+    } finally {
+      setBusy(false);
+    }
+  };
   const off = !body.enabled;
   const set = (patch: Partial<BodyDraft>) => onBody({ ...body, ...patch });
   const row = { display: "flex", alignItems: "center", gap: 6, marginTop: 3 } as const;
@@ -161,12 +215,38 @@ function ExtrudedBodyBox({ body, onBody }: { body: BodyDraft; onBody: (b: BodyDr
             </option>
           ))}
         </select>
+        <button
+          style={{ marginLeft: "auto" }}
+          title={exportPart ? "Export generated 3D model" : "Export generated 3D model (a footprint on the board only: kicad-cli exports boards)"}
+          disabled={off || !exportPart || busy}
+          onClick={startExport}
+          data-testid="extruded-export"
+        >
+          {busy ? "Exporting..." : "Export..."}
+        </button>
       </div>
+      {saving && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }} role="dialog" aria-label="Export Extruded 3D Body" data-testid="extruded-export-dialog">
+          <b style={{ fontSize: 11 }}>Export Extruded 3D Body</b>
+          <input value={saving.name} onChange={(e) => setSaving({ ...saving, name: e.target.value })} style={{ width: 160 }} data-testid="extruded-export-name" />
+          <select value={saving.format} onChange={(e) => setSaving({ ...saving, format: Number(e.target.value) })} data-testid="extruded-export-type">
+            {EXPORT_TYPES.map((t, i) => (
+              <option key={t.ext} value={i}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <button onClick={() => void save()} data-testid="extruded-export-save">
+            Save
+          </button>
+          <button onClick={() => setSaving(null)}>Cancel</button>
+        </div>
+      )}
     </fieldset>
   );
 }
 
-export function FootprintModelsPanel({ rows, onRows, previewOf, units, body, onBody }: FootprintModelsPanelProps) {
+export function FootprintModelsPanel({ rows, onRows, previewOf, units, body, onBody, exportPart }: FootprintModelsPanelProps) {
   const [selected, setSelected] = useState(0);
   const [checks, setChecks] = useState<Record<string, ModelCheck>>({});
   const [chooser, setChooser] = useState(false);
@@ -362,9 +442,9 @@ export function FootprintModelsPanel({ rows, onRows, previewOf, units, body, onB
             />
           </fieldset>
         </div>
-        <ModelPreview3D part={part} rows={shownRows} height={290} />
+        <ModelPreview3D part={part} rows={shownRows} height={290} body={body ? previewBodyOf(body, part?.extrusion) : null} />
       </div>
-      {body && onBody && <ExtrudedBodyBox body={body} onBody={onBody} />}
+      {body && onBody && <ExtrudedBodyBox body={body} onBody={onBody} exportPart={exportPart} />}
       {chooser && (
         <Model3dChooserDialog
           onCancel={() => setChooser(false)}

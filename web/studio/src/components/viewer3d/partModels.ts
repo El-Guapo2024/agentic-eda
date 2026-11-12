@@ -14,6 +14,7 @@ import type { BoardState, Part } from "../../api/types";
 import { DEFAULT_STACK, inferKind, footprintShown, modelsByUse, modelWorldMatrix, type Model3dEntry, type ModelKind, type Stack } from "../../kicad-port/model3d";
 import type { ModelCache, ModelRecord } from "./modelCache";
 import { buildPartPlaceholder, placeholderMaterials } from "./scene";
+import { cloneLit, kicadLit } from "./glLighting";
 import { buildExtrudedBody } from "./extrudedBody";
 
 /** `render.opengl_selection_color`'s default (eda_3d_viewer_settings.cpp): `COLOR4D( 0.0, 1.0, 0.0, 1.0 )`. */
@@ -68,6 +69,9 @@ export class PartModels {
   /** `render.opengl_selection_color` (Preferences > 3D Viewer > Realtime Rendering), green by default. */
   private selectionColor: number = SELECTION_COLOR;
   private last: { board: BoardState | null; opts: PartModelOptions; stack: Stack } | null = null;
+  /** `render.material_mode` (Preferences > 3D Viewer > General, "Material properties:"): the models' own materials, solid colours or CAD colours. */
+  private materialMode: "realistic" | "solid" | "cad" = "realistic";
+  private readonly modeMaterials = new Map<THREE.Material, THREE.Material>();
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -120,6 +124,44 @@ export class PartModels {
     this.onStats(stats);
   }
 
+  /** "Material properties:" changed: every part with models is drawn again in the new mode. */
+  setMaterialMode(mode: "realistic" | "solid" | "cad"): void {
+    if (mode === this.materialMode) return;
+    this.materialMode = mode;
+    for (const entry of this.parts.values()) this.disposeEntry(entry);
+    this.parts.clear();
+    for (const m of this.modeMaterials.values()) m.dispose();
+    this.modeMaterials.clear();
+    for (const h of this.highlights.values()) h.dispose();
+    this.highlights.clear();
+    this.refresh();
+  }
+
+  /**
+   * A model's material in the material mode (`MODEL_3D::Draw`): "realistic" its own (`OglSetMaterial`); "solid" `OglSetDiffuseMaterial` of its diffuse colour (ambient 0.2,
+   * no specular, no emission, shininess 0, opaque but for the model's opacity); "cad" the same of `MaterialDiffuseToColorCAD( diffuse )` (the colour's grey, cut to four steps,
+   * with an eighth of the colour).
+   */
+  private forMode(base: THREE.Material): THREE.Material {
+    if (this.materialMode === "realistic" || !(base instanceof THREE.MeshPhongMaterial)) return base;
+    let m = this.modeMaterials.get(base);
+    if (!m) {
+      const raw = { r: 0, g: 0, b: 0 };
+      base.color.getRGB(raw, THREE.SRGBColorSpace);
+      if (this.materialMode === "cad") {
+        const gray = raw.r * 0.2126 + raw.g * 0.7152 + raw.b * 0.0722;
+        const luminance = Math.min((Math.trunc(4 * gray) + 0.5) / 4, 1);
+        const max = Math.max(raw.r, raw.g, raw.b, Number.EPSILON);
+        for (const k of ["r", "g", "b"] as const) raw[k] = (raw[k] / max) * 0.125 + luminance * 0.875;
+      }
+      const diffuse = new THREE.Color().setRGB(raw.r, raw.g, raw.b, THREE.SRGBColorSpace);
+      const ambient = new THREE.Color().setRGB(0.2, 0.2, 0.2, THREE.SRGBColorSpace);
+      m = kicadLit(new THREE.MeshPhongMaterial({ color: diffuse, specular: 0x000000, emissive: 0x000000, shininess: 0, side: THREE.DoubleSide }), ambient);
+      this.modeMaterials.set(base, m);
+    }
+    return m;
+  }
+
   /** Re-runs the last sync (a model came in). */
   refresh(): void {
     if (this.last) this.sync(this.last.board, this.last.opts, this.last.stack);
@@ -155,10 +197,11 @@ export class PartModels {
         instance.matrixWorldNeedsUpdate = true;
         for (const child of record.proto!.children) {
           const mesh = child.clone() as THREE.Mesh;
+          mesh.material = this.forMode(mesh.material as THREE.Material);
           if (model.opacity < 1) {
             // `(opacity v)`: this instance's own materials, a fraction as opaque as the model's.
             const base = mesh.material as THREE.Material;
-            const faded = base.clone();
+            const faded = base instanceof THREE.MeshPhongMaterial ? cloneLit(base) : base.clone();
             faded.transparent = true;
             faded.opacity = base.opacity * model.opacity;
             mesh.material = faded;
@@ -243,7 +286,7 @@ export class PartModels {
   private highlightOf(base: THREE.Material): THREE.Material {
     let h = this.highlights.get(base);
     if (!h) {
-      h = base.clone();
+      h = base instanceof THREE.MeshPhongMaterial ? cloneLit(base) : base.clone();
       if (h instanceof THREE.MeshPhongMaterial || h instanceof THREE.MeshStandardMaterial) h.color.set(this.selectionColor);
       this.highlights.set(base, h);
     }
@@ -280,6 +323,8 @@ export class PartModels {
     this.parts.clear();
     for (const h of this.highlights.values()) h.dispose();
     this.highlights.clear();
+    for (const m of this.modeMaterials.values()) m.dispose();
+    this.modeMaterials.clear();
     this.materials.ic.dispose();
     this.materials.passive.dispose();
     this.hovered = null;

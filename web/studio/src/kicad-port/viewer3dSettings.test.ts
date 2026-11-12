@@ -10,7 +10,9 @@ import {
   defaultVisibleLayers,
   deletePreset,
   deleteViewport,
+  differentiatePlatedCopper,
   followPcbVisibility,
+  kicadViewMatrix,
   killsFollow,
   legacyColorsPreset,
   matchingPreset,
@@ -119,4 +121,33 @@ test("the 3D viewer's preferences: KiCad's defaults and ranges", () => {
   assert.deepEqual([DEFAULT_VIEWER3D_PREFS.rotationIncrementDeg, DEFAULT_VIEWER3D_PREFS.movingSpeedMultiplier, DEFAULT_VIEWER3D_PREFS.copperThickness, DEFAULT_VIEWER3D_PREFS.antialiasing, DEFAULT_VIEWER3D_PREFS.selectionColor], [10, 3, false, "8x", "#00ff00"]);
   const p = sanitizeViewer3DPrefs({ rotationIncrementDeg: 400, movingSpeedMultiplier: 9.4, antialiasing: "16x", selectionColor: "#ff000080", highlightOnRollover: false });
   assert.deepEqual([p.rotationIncrementDeg, p.movingSpeedMultiplier, p.antialiasing, p.selectionColor, p.highlightOnRollover], [359, 5, "8x", "#ff0000", false]);
+});
+
+test("the Render Options and While Moving rows: KiCad's defaults (all off, Realistic) and DifferentiatePlatedCopper", () => {
+  const d = DEFAULT_VIEWER3D_PREFS;
+  assert.deepEqual(
+    [d.clipSilkOnViaAnnuli, d.subtractMaskFromSilk, d.differentiatePlatedCopper, d.materialMode, d.aaDisableOnMove, d.thicknessDisableOnMove, d.microviasDisableOnMove, d.holesDisableOnMove],
+    [false, false, false, "realistic", false, false, false, false]
+  );
+  const p = sanitizeViewer3DPrefs({ clipSilkOnViaAnnuli: true, subtractMaskFromSilk: 1, materialMode: "cad", holesDisableOnMove: true });
+  assert.deepEqual([p.clipSilkOnViaAnnuli, p.subtractMaskFromSilk, p.materialMode, p.holesDisableOnMove], [true, false, "cad", true]);
+  assert.equal(sanitizeViewer3DPrefs({ materialMode: "glossy" }).materialMode, "realistic");
+  // `if( engine == OPENGL && use_board_editor_copper_colors ) return false;`
+  assert.equal(differentiatePlatedCopper({ differentiatePlatedCopper: true }, false), true);
+  assert.equal(differentiatePlatedCopper({ differentiatePlatedCopper: true }, true), false);
+});
+
+test("a saved viewport's KiCad view matrix (`CAMERA::updateViewMatrix`, in 3D units of span / 12.8)", () => {
+  // The home top view of a 64 mm board looking at (10, 0, 5) mm: no rotation, the camera 1.25 * 64 = 80 mm back (16 units), the look-at point at (10, -5, 0) mm in
+  // KiCad's world (board y inverted), 2 units and -1 unit.
+  const top = { pos: { x: 0, y: 0, z: -80 }, lookAt: { x: 10, y: 0, z: 5 }, auxDeg: { x: 0, y: 0, z: 0 }, zoom: 1, quat: { x: 0, y: 0, z: 0, w: 1 } };
+  const m = kicadViewMatrix(top, 64);
+  const near = (a: number[], b: number[]) => a.every((x, i) => Math.abs(x - b[i]!) < 1e-9);
+  assert.ok(near(m, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -2, 1, -16, 1]), String(m));
+  // The front view (aux x -90): the board's thickness axis is the camera's y.
+  const front = kicadViewMatrix({ ...top, auxDeg: { x: -90, y: 0, z: 0 } }, 64);
+  assert.ok(Math.abs(front[9]! - 1) < 1e-9 || Math.abs(front[9]! + 1) < 1e-9, "z goes to y");
+  const vps = saveViewport([], "Top", top, 64);
+  assert.equal(vps[0]!.matrix!.length, 16);
+  assert.deepEqual(viewportFromJson(JSON.parse(JSON.stringify(vps[0]))), vps[0]);
 });

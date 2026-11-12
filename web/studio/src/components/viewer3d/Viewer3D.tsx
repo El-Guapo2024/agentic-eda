@@ -38,7 +38,11 @@ import { Navigator3D } from "./navigator";
 import { VIEW_OF } from "../../kicad-port/navigator3d";
 import { getViewer3DUserSettings, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
 import { isMac } from "../../platform";
-import { buildBoardGroup, buildBackgroundTexture, bodyHoleCount, countByName, disposeObject3D, boardOutlineBounds, padShapeCounts, type Board3d } from "./scene";
+import { buildBoardGroup, buildBackgroundTexture, bodyHoleCount, countByName, disposeObject3D, boardOutlineBounds, padShapeCounts, setMoving3d, type Board3d } from "./scene";
+import { isKicadLit, setKicadHeadlight } from "./glLighting";
+import type { JobResults } from "./cull3d";
+import type { PolyJob } from "../../kicad-port/layers3d";
+import { requestBarcodeShape, useBarcodeVersion } from "../canvas/barcodeCache";
 import { copperColorKey, layerColor } from "../canvas/layers";
 import { parseColor } from "../../kicad-port/appearance3d";
 import { ROWS, isSceneRow, toggled } from "../../kicad-port/appearance3d";
@@ -288,44 +292,20 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     }
     container.appendChild(renderer.domElement);
 
-    // render_3d_opengl.cpp's init_lights(): exactly 3 fixed-function GL
-    // lights, always all enabled together -- "top" and "bottom" fixed
-    // directional lights at a shallow 5.4-degree elevation (so they
-    // mostly skim the board, giving its copper/silk a visible highlight
-    // rather than flooding it from directly overhead), and "front", a
-    // positional headlight that moves with the camera every frame (see
-    // the render loop below). Source's own light colors are all neutral
-    // grey/white (ambient 0.084, diffuse/specular 0.7 for top & bottom,
-    // 0.3/0.5 for the headlight) with NO separate scene-wide ambient term
-    // (`GL_LIGHT_MODEL_AMBIENT=(0,0,0)`) -- all ambient comes from the 3
-    // lights' own small ambient terms, folded here into one AmbientLight
-    // at roughly their combined strength (0.084*3 ~= 0.25) since
-    // Three.js's MeshStandardMaterial has no per-light ambient slot.
-    //
-    // Direction vectors are given in KiCad's own axis convention
-    // (SphericalToCartesian(pi*0.03, pi*0.25), 3d_math.h/render_3d_opengl.
-    // cpp:457-474) and converted through this file's camera basis change
-    // (kicad-port/camera3d.ts's header comment: KiCad-local/world (x,y,z)
-    // -> this app's world (x, z, -y)) rather than re-deriving the angle
-    // in this app's own axes.
+    // render_3d_opengl.cpp's init_lights(): KiCad's three fixed-function lights are not three.js lights here -- every material of the live scene computes OpenGL's
+    // lighting itself (glLighting.ts), and the render loop below places the "front" headlight before each frame (`setKicadHeadlight`). These three.js lights light
+    // only KiCad's exported GLB (the RENDER panel's "export" source, physically-based materials the studio does not light itself): an ambient light and the two
+    // directional lights at KiCad's angles, and a headlight that follows the camera.
     scene.add(new THREE.AmbientLight(0xffffff, 0.25));
     const TOP_LIGHT_DIR = new THREE.Vector3(0.0665, 0.9956, -0.0665); // KiCad (0.0665, 0.0665, 0.9956)
     const topLight = new THREE.DirectionalLight(0xffffff, 1.0);
     topLight.position.copy(TOP_LIGHT_DIR).multiplyScalar(1000);
     scene.add(topLight);
     const bottomLight = new THREE.DirectionalLight(0xffffff, 1.0);
-    bottomLight.position.copy(TOP_LIGHT_DIR).multiplyScalar(-1000); // source: same x/y, z negated -- a full negation is the same thing once converted to this app's axes
+    bottomLight.position.copy(TOP_LIGHT_DIR).multiplyScalar(-1000);
     scene.add(bottomLight);
-    // Headlight ("front"): positional, re-aimed at the camera's own
-    // position every frame below. `decay=0` (no inverse-square falloff)
-    // deliberately: a physically-decaying point light would make this
-    // swing from imperceptible to blinding across this viewer's actual
-    // zoom range (a few mm to hundreds of mm from the board), which
-    // source's own fixed-function GL point light never did either (GL's
-    // legacy attenuation was left at its default 1/0/0 = no falloff).
     const headlight = new THREE.PointLight(0xffffff, 0.45, 0, 0);
     scene.add(headlight);
-
     const boardGroup = new THREE.Group();
     scene.add(boardGroup);
     const glbGroup = new THREE.Group();
@@ -621,6 +601,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
 
     let raf = 0;
     let wasMoving = false;
+    let skipped = { holes: false, microvias: false, thickness: false };
+    const movingPrefs = () => prefsRef.current;
     const animate = () => {
       // The move in flight (`EDA_3D_CANVAS::OnPaint`): the camera at this frame's time.
       const moving = camera3d.tick(performance.now());
@@ -630,10 +612,12 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       }
       const pose = camera3d.getRenderPose();
       const proj = camera3d.getProjectionParams();
-      // render_3d_opengl.cpp's init_lights() "front" headlight moves with
-      // the camera every Redraw() -- same here, once per frame rather
-      // than wiring it through every single camera-mutating method.
-      headlight.position.set(pose.position.x, pose.position.y, pose.position.z);
+      // `Redraw( aIsMoving )`'s "While Moving" options (Preferences > 3D Viewer > Realtime Rendering): the holes and the micro vias left out while the camera moves.
+      const skip = { holes: moving && movingPrefs().holesDisableOnMove, microvias: moving && movingPrefs().microviasDisableOnMove, thickness: moving && movingPrefs().thicknessDisableOnMove };
+      if (skip.holes !== skipped.holes || skip.microvias !== skipped.microvias || skip.thickness !== skipped.thickness) {
+        skipped = skip;
+        setMoving3d(threeRef.current?.boardGroup ?? boardGroup, skip);
+      }
       let active: THREE.Camera;
       if (proj.kind === "perspective") {
         perspCamera.fov = proj.fovDeg;
@@ -653,6 +637,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         applyPoseToCamera(orthoCamera, pose);
         active = orthoCamera;
       }
+      // `Redraw()`: the "front" headlight follows the camera, every frame.
+      headlight.position.set(pose.position.x, pose.position.y, pose.position.z);
+      active.updateMatrixWorld();
+      setKicadHeadlight(active, new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z), camera3d.mmPerUnit());
       renderer.render(scene, active);
       // `if( cfg.show_navigator ) m_spheres_gizmo->render3dSpheresGizmo( m_camera.GetRotationMatrix() );`
       if (navigatorShownRef.current) gizmo.render(renderer, active.quaternion, container.clientWidth, container.clientHeight);
@@ -729,6 +717,32 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       cancelled = true;
     };
   }, [state.version]);
+  // `POST /api/board3d/polys`: the polygons the layers need that the page cannot work out (a custom pad's paste and mask grown, a knockout text, the body less its
+  // counterbores ..), asked for once each and kept by key; an answer rebuilds the scene.
+  const jobResultsRef = useRef(new Map<string, ReadonlyArray<{ outer: [number, number][]; holes: [number, number][][] }>>());
+  const jobsAskedRef = useRef(new Set<string>());
+  const [jobsVersion, setJobsVersion] = useState(0);
+  const askJobs = useCallback((jobs: readonly PolyJob[]) => {
+    const missing = jobs.filter((j) => !jobResultsRef.current.has(j.key) && !jobsAskedRef.current.has(j.key));
+    if (missing.length === 0) return;
+    for (const j of missing) jobsAskedRef.current.add(j.key);
+    fetch("/api/board3d/polys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobs: missing }) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v: { results?: Record<string, Array<{ outer: [number, number][]; holes: [number, number][][] }>> } | null) => {
+        if (!v?.results) return;
+        for (const [k, polys] of Object.entries(v.results)) jobResultsRef.current.set(k, polys);
+        setJobsVersion((n) => n + 1);
+      })
+      .catch(() => {});
+  }, []);
+  // The barcodes' shapes (kicad-cli's plot of each, components/canvas/barcodeCache.ts): asked for, and the scene rebuilt when one arrives.
+  const barcodeVersion = useBarcodeVersion();
+  useEffect(() => {
+    for (const b of [...(board?.drawings?.barcodes ?? []), ...(board?.parts ?? []).flatMap((p) => p.items?.barcodes ?? [])]) requestBarcodeShape(b);
+  }, [board]);
+  // The Render Options (Preferences > 3D Viewer > General).
+  const renderPrefs = userSettings.prefs;
+  const renderKey = `${renderPrefs.clipSilkOnViaAnnuli ? 1 : 0}${renderPrefs.subtractMaskFromSilk ? 1 : 0}${renderPrefs.differentiatePlatedCopper ? 1 : 0}`;
   // The inner copper layers (`Is3dLayerEnabled`'s default branch): drawn as the PCB editor shows each, in its colour there with "Use PCB editor copper colors" (`setLayerMaterial`).
   const innerLayers = (board?.layers ?? []).filter((l) => /^In\d+\.Cu$/.test(l));
   const innerKey = innerLayers.map((l) => (state.layerVisible[layerStateKey(l)] !== false ? "1" : "0")).join("") + (state.viewer3d.useEditorCopperColors ? "e" : "");
@@ -744,11 +758,42 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       color: (layer: string) => (useEditor ? (parseColor(layerColor(copperColorKey(layer))) ?? undefined) : undefined),
     };
     // The parts are not in this group: partModels draws them (the real models, a box until they are in).
-    const nextGroup = board ? buildBoardGroup(board, { visible: rows.shown, colors: resolved, zoneFills: zoneFill?.zones, board3d, innerCopper, copperThickness: userSettings.prefs.copperThickness }) : new THREE.Group();
+    const nextGroup = board
+      ? buildBoardGroup(board, {
+          visible: rows.shown,
+          colors: resolved,
+          zoneFills: zoneFill?.zones,
+          board3d,
+          innerCopper,
+          copperThickness: userSettings.prefs.copperThickness,
+          boardEditorCopperColors: useEditor,
+          render: { clipSilkOnViaAnnuli: !!renderPrefs.clipSilkOnViaAnnuli, subtractMaskFromSilk: !!renderPrefs.subtractMaskFromSilk, differentiatePlatedCopper: !!renderPrefs.differentiatePlatedCopper },
+          jobs: jobResultsRef.current as JobResults,
+        })
+      : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
     syncActiveGroupRef.current();
-    viewer3dProbe.update({ scene: countByName(nextGroup), padShapes: padShapeCounts(nextGroup), bodyHoles: bodyHoleCount(nextGroup), bodyFromServer: !!board3d, copperColors: { ...(nextGroup.userData.copperColors ?? {}) } });
+    const jobs = (nextGroup.userData.jobs ?? []) as PolyJob[];
+    askJobs(jobs);
+    // For the test hook: the board's lit materials (OpenGL's equation, glLighting.ts) and any that three.js would light instead.
+    let lit = 0;
+    let unlit = 0;
+    nextGroup.traverse((o) => {
+      const m = (o as THREE.Mesh).material;
+      for (const x of m ? (Array.isArray(m) ? m : [m]) : []) {
+        if (isKicadLit(x)) lit++;
+        else if (x instanceof THREE.MeshPhongMaterial || x instanceof THREE.MeshStandardMaterial || x instanceof THREE.MeshLambertMaterial) unlit++;
+      }
+    });
+    viewer3dProbe.update({
+      scene: countByName(nextGroup),
+      padShapes: padShapeCounts(nextGroup),
+      bodyHoles: bodyHoleCount(nextGroup),
+      bodyFromServer: !!board3d,
+      copperColors: { ...(nextGroup.userData.copperColors ?? {}) },
+      layers3d: { ...(nextGroup.userData.layers3d ?? {}), jobs: jobs.length, jobsAnswered: jobs.filter((j) => jobResultsRef.current.has(j.key)).length, lit, unlit },
+    });
 
     const bounds = board ? boardOutlineBounds(board) : null;
     const spanMm = bounds ? Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 1e-3) : EMPTY_BOARD_SPAN_MM;
@@ -765,7 +810,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) three.camera3d.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board, sceneRows, resolved, zoneFill, board3d, innerKey, userSettings.prefs.copperThickness]);
+  }, [board, sceneRows, resolved, zoneFill, board3d, innerKey, userSettings.prefs.copperThickness, renderKey, jobsVersion, barcodeVersion]);
 
   navigatorShownRef.current = rows.shown("navigator");
   useEffect(() => {
@@ -781,6 +826,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     if (three.partModels.setSelected(state.selection)) viewer3dProbe.update({ selected: three.partModels.selectedRefs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionKey, board, userSettings.prefs.selectionColor]);
+
+  // `render.material_mode` ("Material properties:"): how the models' materials are drawn.
+  useEffect(() => {
+    threeRef.current?.partModels.setMaterialMode(userSettings.prefs.materialMode);
+  }, [userSettings.prefs.materialMode]);
 
   // `camera.animation_enabled` and `camera.moving_speed_multiplier` (Preferences > 3D Viewer > General: "Redraw while moving", "Redraw speed").
   useEffect(() => {

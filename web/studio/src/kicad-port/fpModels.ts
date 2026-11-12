@@ -10,7 +10,7 @@
 // A list here is the file's: millimetres and degrees, the rotation as the file stores it. The dialog shows the rotation the other way round ("Rotation is stored in the file
 // as positive-is-CW, but we use positive-is-CCW in the GUI": `xrot->ChangeValue( formatRotationValue( -modelInfo.m_Rotation.x ) )`), so `showRotation` and `readRotation`
 // carry the sign. The offset is shown in the units of the editor (`formatOffsetValue`: millimetres, inches or mils), stored in millimetres.
-import type { Cmd, ExtrudedBodyCmd, Model3dCmd, Part } from "../api/types";
+import type { Cmd, ExtrudedBodyCmd, ExtrudedBodyInfo, Model3dCmd, Part } from "../api/types";
 import { flippedFrame } from "./model3d";
 import type { LengthUnit } from "../state/units";
 
@@ -203,6 +203,98 @@ export function bodyOfDraft(d: BodyDraft): ExtrudedBodyCmd | null {
     scale: [...d.scale],
     rotate: [...d.rotate],
     show: d.show,
+  };
+}
+
+/** `wxString::ToDouble` as `readExtrusionHeights` asks it: the whole text a number, else null (an empty field reads as zero). */
+function readHeight(text: string): number | null {
+  const t = text.trim();
+  if (t === "") return 0;
+  return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t) ? Number(t) : null;
+}
+
+/**
+ * `OnExportExtrudedModel`'s checks before the file dialog, in its words: `readExtrusionHeights( _( "Export Extruded Body" ), .. )` ("Overall height is not a valid
+ * number.", "Standoff height is not a valid number.") and "Component height must be greater than zero."; null when the export may go on.
+ */
+export function exportBodyProblem(d: BodyDraft): string | null {
+  const height = readHeight(d.height);
+  if (height === null) return "Overall height is not a valid number.";
+  if (readHeight(d.standoff) === null) return "Standoff height is not a valid number.";
+  if (height <= 0) return "Component height must be greater than zero.";
+  return null;
+}
+
+/**
+ * The body `OnExportExtrudedModel` exports: the heights read from the fields, the source and material chosen, the swatch's colour (`m_extrusionColorSwatch->GetSwatchColor()`,
+ * the material's own when it is none), the preview's transform (the dummy footprint's body, `updateExtrusionPreview`), shown.
+ */
+export function exportBodyOf(d: BodyDraft): ExtrudedBodyCmd {
+  return {
+    height: Math.round((readHeight(d.height) ?? 0) * 1e6),
+    standoff: Math.round((readHeight(d.standoff) ?? 0) * 1e6),
+    layer: EXTRUSION_SOURCES[d.source]?.layer ?? "auto",
+    material: EXTRUSION_MATERIALS[d.material]?.material ?? "plastic",
+    color: [...d.color],
+    offset: [...d.offset],
+    scale: [...d.scale],
+    rotate: [...d.rotate],
+    show: true,
+  };
+}
+
+/** The Footprint Editor's box filled from the library footprint's body (`ExtrudedBody` as the file holds it: no colour is the material's own), as [`bodyDraftOf`] fills the board's. */
+export function bodyDraftOfLibrary(body: ExtrudedBodyCmd | null | undefined): BodyDraft {
+  if (!body) return bodyDraftOf({ extruded_body: undefined });
+  const material = (body.material ?? "plastic") as NonNullable<ExtrudedBodyCmd["material"]>;
+  const info: ExtrudedBodyInfo = {
+    height: body.height,
+    standoff: body.standoff ?? 0,
+    layer: body.layer ?? "auto",
+    material,
+    color: body.color ? [...body.color] : extrusionDefaultColor(material),
+    color_set: !!body.color,
+    offset: body.offset ? [...body.offset] : [0, 0, 0],
+    scale: body.scale ? [...body.scale] : [1, 1, 1],
+    rotate: body.rotate ? [...body.rotate] : [0, 0, 0],
+    show: body.show ?? true,
+    at: [0, 0],
+    outline: [],
+    pins: [],
+  };
+  return bodyDraftOf({ extruded_body: info });
+}
+
+/** What the Footprint Editor's OK sends for the box: `set_library_extruded_body` when the body differs from the library footprint's, else nothing. */
+export function libraryBodyCmds(name: string, body: ExtrudedBodyCmd | null | undefined, d: BodyDraft): Cmd[] {
+  const now = body ? bodyOfDraft(bodyDraftOfLibrary(body)) : null;
+  const next = bodyOfDraft(d);
+  return JSON.stringify(now) === JSON.stringify(next) ? [] : [{ op: "set_library_extruded_body", name, body: next }];
+}
+
+/**
+ * `updateExtrusionPreview`: the dummy footprint's body as the box stands -- the heights read as they are typed (`ToDouble`, a field it cannot read leaves 0), the source's
+ * outline, the swatch's colour when the person chose one (else the material's), shown while "Enable" and "Show" are both on (`m_show = enabled && show`) -- for the preview to
+ * draw. Null without the outlines.
+ */
+export function previewBodyOf(d: BodyDraft, extrusion: Part["extrusion"]): ExtrudedBodyInfo | null {
+  if (!extrusion) return null;
+  const layer = EXTRUSION_SOURCES[d.source]?.layer ?? "auto";
+  const material = EXTRUSION_MATERIALS[d.material]?.material ?? "plastic";
+  return {
+    height: Math.round(toDouble(d.height) * 1e6),
+    standoff: Math.round(toDouble(d.standoff) * 1e6),
+    layer,
+    material,
+    color: d.userColor ? [...d.color] : extrusionDefaultColor(material),
+    color_set: d.userColor,
+    offset: [...d.offset],
+    scale: [...d.scale],
+    rotate: [...d.rotate],
+    show: d.enabled && d.show,
+    at: extrusion.at,
+    outline: extrusion.sources[layer] ?? [],
+    pins: extrusion.pins,
   };
 }
 

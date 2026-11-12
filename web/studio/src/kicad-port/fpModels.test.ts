@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Part } from "../api/types";
-import { bodyCmds, bodyDraftOf, bodyDraftProblem, bodyOfDraft, EXTRUSION_MATERIALS, EXTRUSION_SOURCES, extrusionDefaultColor, tabRows, withMaterial, boardModelsCmds, cleanPath, libraryModels, rowOfCmd, rowsOfLibrary, evaluateExpression, evaluateField, formatOffset, isNumberText, formatRotation, formatScale, modelCmd, movedRows, opacityOf, plainRow, readNumber, readOffset, readRotation, rotationFromString, rowsOf, sameRows, showRotation, sliderOf, statusIcon, stepOffset, stepRotation, stepScale } from "./fpModels";
+import { exportBodyOf, exportBodyProblem, bodyCmds, bodyDraftOf, bodyDraftProblem, bodyOfDraft, EXTRUSION_MATERIALS, EXTRUSION_SOURCES, extrusionDefaultColor, tabRows, withMaterial, boardModelsCmds, cleanPath, libraryModels, rowOfCmd, rowsOfLibrary, evaluateExpression, evaluateField, formatOffset, isNumberText, formatRotation, formatScale, modelCmd, movedRows, opacityOf, plainRow, readNumber, readOffset, readRotation, rotationFromString, rowsOf, sameRows, showRotation, sliderOf, statusIcon, stepOffset, stepRotation, stepScale } from "./fpModels";
 
 const part = (models: Part["models"]): Part => ({ ref: "U1", value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: null, models }) as Part;
 const entry = (name: string, over: Record<string, unknown> = {}) => ({ name, offset: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number], rotate: [0, 0, 0] as [number, number, number], opacity: 1, show: true, ...over });
@@ -186,4 +186,15 @@ test("the Extruded 3D Body box starts as TransferDataToWindow fills it and OK se
   assert.deepEqual(bodyOfDraft({ ...d, userColor: true, color: [1, 0, 0, 1] })!.color, [1, 0, 0, 1], "a colour chosen is the body's own");
   assert.deepEqual([EXTRUSION_SOURCES.map((s) => s.label), EXTRUSION_MATERIALS.map((m) => m.label)], [["Auto", "Courtyard layer", "Fabrication layer", "Silkscreen layer", "Pin bounding box"], ["Plastic", "Matte", "Metal", "Copper"]]);
   assert.deepEqual(extrusionDefaultColor("matte"), [0.4, 0.4, 0.4, 1]);
+});
+
+test("the box's Export... checks the fields as OnExportExtrudedModel does and exports the box's body, shown, in the swatch's colour", () => {
+  const d = { ...bodyDraftOf({ extruded_body: undefined }), enabled: true, height: "2.5", standoff: "0.3", source: 2, material: 2 };
+  assert.equal(exportBodyProblem(d), null);
+  assert.equal(exportBodyProblem({ ...d, height: "2,5" }), "Overall height is not a valid number.");
+  assert.equal(exportBodyProblem({ ...d, standoff: "x" }), "Standoff height is not a valid number.");
+  assert.equal(exportBodyProblem({ ...d, height: "" }), "Component height must be greater than zero.", "an empty field reads as zero");
+  const b = exportBodyOf({ ...d, show: false });
+  assert.deepEqual([b.height, b.standoff, b.layer, b.material, b.show], [2_500_000, 300_000, "F.Fab", "metal", true]);
+  assert.deepEqual(b.color, d.color, "the swatch, chosen or not");
 });

@@ -144,6 +144,8 @@ export const SOLDERPASTE_LAYER_MM = 0.04;
 /** `BOARD_STACKUP_ITEM::GetCopperDefaultThickness` (35 um) and `GetMaskDefaultThickness` (10 um), the stackup items' own defaults. */
 const STACKUP_COPPER_NM = 35_000;
 const STACKUP_MASK_NM = 10_000;
+/** `DEFAULT_TECH_LAYER_THICKNESS` (board_adapter.cpp, 0.025 mm): the mask thickness `InitSettings` starts from, kept for a mask the stackup has no item for. */
+const DEFAULT_TECH_LAYER_NM = 25_000;
 /** InitSettings: "The copper thickness must be > 0 to avoid draw issues ... We use a minimal arbitrary value = 1 micrometer here" (the mask's too). */
 const MIN_LAYER_NM = 1_000;
 
@@ -152,6 +154,8 @@ export interface StackRules {
   stackup?: { layers: ReadonlyArray<{ name: string; material?: string | null; thickness_mm: number | null; kind?: string; sublayers?: ReadonlyArray<{ thickness_mm?: number | null }> }> } | null;
   board_thickness_nm?: number;
   copper_layers?: number;
+  /** Board Setup > Board Editor Layers: the technical layers the board has (`GetEnabledLayers()`); absent, all of them. */
+  layer_setup?: { enabled: readonly string[] } | null;
 }
 
 /**
@@ -162,7 +166,7 @@ export interface StackRules {
  * A KiCad board always has a stackup: with no `(stackup ..)` block, `PCB_IO_KICAD_SEXPR_PARSER::parseSetup` builds
  * `BOARD_STACKUP::BuildDefaultStackupList( &bds, copperCount )`, whose dielectrics share `GetBoardThickness() - 35 um * copper - 10 um * masks`
  * (integer division by `copper - 1`). That is what a design with no stackup gets here, from `board_thickness_nm` (default 1.6 mm, BOARD_DESIGN_SETTINGS)
- * and `copper_layers` (default 2), with both masks enabled (ours has no way to disable F.Mask/B.Mask).
+ * and `copper_layers` (default 2), with the masks Board Setup's Board Editor Layers enables (`layer_setup.enabled`; both when it says nothing).
  */
 export function stackOfBoard(rules: StackRules | null | undefined): Stack {
   const layers = rules?.stackup?.layers ?? [];
@@ -170,9 +174,15 @@ export function stackOfBoard(rules: StackRules | null | undefined): Stack {
   if (layers.length === 0) {
     const copper = Math.max(1, Math.round(rules?.copper_layers ?? 2));
     const thickness = rules?.board_thickness_nm ?? 1_600_000;
-    const diel = Math.trunc((thickness - STACKUP_COPPER_NM * copper - STACKUP_MASK_NM * 2) / Math.max(1, copper - 1));
+    // "Take in account the solder mask thickness": `( enabledLayer & LSET( { F_Mask, B_Mask } ) ).count()`; a mask the board does not have is no stackup item, and
+    // `InitSettings` keeps its default thickness (DEFAULT_TECH_LAYER_THICKNESS).
+    const enabled = rules?.layer_setup?.enabled;
+    const hasMask = (l: string) => !enabled || enabled.length === 0 || enabled.includes(l);
+    const masks = (hasMask("F.Mask") ? 1 : 0) + (hasMask("B.Mask") ? 1 : 0);
+    const diel = Math.trunc((thickness - STACKUP_COPPER_NM * copper - STACKUP_MASK_NM * masks) / Math.max(1, copper - 1));
     const body = diel * Math.max(0, copper - 1) + STACKUP_COPPER_NM * Math.max(0, copper - 2);
-    return { boardThicknessMm: body / 1e6, copperMm: STACKUP_COPPER_NM / 1e6, copperBackMm: STACKUP_COPPER_NM / 1e6, maskFrontMm: STACKUP_MASK_NM / 1e6, maskBackMm: STACKUP_MASK_NM / 1e6 };
+    const maskMm = (l: string) => (hasMask(l) ? STACKUP_MASK_NM : DEFAULT_TECH_LAYER_NM) / 1e6;
+    return { boardThicknessMm: body / 1e6, copperMm: STACKUP_COPPER_NM / 1e6, copperBackMm: STACKUP_COPPER_NM / 1e6, maskFrontMm: maskMm("F.Mask"), maskBackMm: maskMm("B.Mask") };
   }
   const out: Stack = { ...DEFAULT_STACK };
   let body = 0;

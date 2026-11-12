@@ -126,6 +126,10 @@ test("a board with no stackup gets BuildDefaultStackupList's from its thickness 
   const s = stackOfBoard({ board_thickness_nm: 800_000, copper_layers: 2, stackup: null });
   assert.ok(Math.abs(s.boardThicknessMm - 0.71) < EPS, `body ${s.boardThicknessMm}`);
   assert.ok(Math.abs(s.copperMm - 0.035) < EPS && Math.abs((s.maskFrontMm ?? 0) - 0.01) < EPS);
+  // A board without B.Mask (Board Editor Layers): one mask in the split, and the missing one keeps DEFAULT_TECH_LAYER_THICKNESS.
+  const oneMask = stackOfBoard({ board_thickness_nm: 800_000, copper_layers: 2, stackup: null, layer_setup: { enabled: ["F.SilkS", "F.Mask", "F.Paste"] } });
+  assert.ok(Math.abs(oneMask.boardThicknessMm - 0.72) < EPS, `body ${oneMask.boardThicknessMm}`);
+  assert.ok(Math.abs((oneMask.maskBackMm ?? 0) - 0.025) < EPS && Math.abs((oneMask.maskFrontMm ?? 0) - 0.01) < EPS);
   // 1.6 mm, 4 layers: three dielectrics of trunc((1.6 - 4 * 0.035 - 0.02) / 3) nm, plus the two inner coppers.
   const f = stackOfBoard({ board_thickness_nm: 1_600_000, copper_layers: 4 });
   assert.ok(Math.abs(f.boardThicknessMm - (3 * 0.48 + 2 * 0.035)) < EPS, `body ${f.boardThicknessMm}`);

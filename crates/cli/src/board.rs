@@ -2321,6 +2321,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MigrateBoardModels { replacements } => format!("3d models migrate ({} name(s))", replacements.len()),
         Cmd::SetBoardModels { part, models } => format!("3d models {part} ({} model(s))", models.len()),
         Cmd::SetExtrudedBody { part, body } => format!("3d extruded-body {part} {}", if body.is_some() { "set" } else { "clear" }),
+        Cmd::SetLibraryExtrudedBody { name, body } => format!("footprint extruded-body {name:?} {}", if body.is_some() { "set" } else { "clear" }),
         Cmd::AddBoardModel { part, model, .. } => format!("3d model add {part} {}", model.path),
         Cmd::RemoveBoardModel { part, index } => format!("3d model remove {part} {}", index + 1),
         Cmd::MoveBoardModel { part, from, to } => format!("3d model move {part} {} -> {}", from + 1, to + 1),
@@ -2725,7 +2726,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetSymbolLibIds { .. } => "schematic-lib-ids",
         Cmd::RescueSymbols { .. } => "schematic-rescue-symbols",
 
-        Cmd::OpenFootprintForEdit { .. } | Cmd::NewFootprint { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::PutLibraryFootprint { .. } | Cmd::RenameLibraryFootprint { .. } | Cmd::ForgetLibraryFootprints { .. } | Cmd::RepairFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
+        Cmd::OpenFootprintForEdit { .. } | Cmd::NewFootprint { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::PutLibraryFootprint { .. } | Cmd::RenameLibraryFootprint { .. } | Cmd::ForgetLibraryFootprints { .. } | Cmd::RepairFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetLibraryExtrudedBody { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::SetPadNumbers { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",

@@ -1403,6 +1403,14 @@ pub enum Cmd {
         #[serde(default)]
         body: Option<eda_model::extruded_body::ExtrudedBody>,
     },
+    /// The Footprint Editor's Footprint Properties, its 3D Models tab's Extruded 3D Body box (the same `PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow` on the library
+    /// footprint `name`, `crate::fp_models`): its body becomes `body` (`None`: the box off), checked as [`Cmd::SetExtrudedBody`]'s; refused when nothing changes. The dialog sends
+    /// it in the batch of its OK, with `EditFootprintProperties`.
+    SetLibraryExtrudedBody {
+        name: String,
+        #[serde(default)]
+        body: Option<eda_model::extruded_body::ExtrudedBody>,
+    },
     /// Put the model at `from` where `to` is (0-based), the others keeping their order; refused for a position the list has none at.
     MoveBoardModel { part: String, from: usize, to: usize },
     /// Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): every model of every footprint on the board whose file name is a key of `replacements` takes the name it maps to --
@@ -2619,6 +2627,7 @@ impl Cmd {
             | Cmd::ForgetLibraryFootprints { .. }
             | Cmd::RepairFootprint { .. }
             | Cmd::EditFootprintProperties { .. }
+            | Cmd::SetLibraryExtrudedBody { .. }
             | Cmd::SetFootprintAnchor { .. }
             | Cmd::UpdateFootprintOnBoard { .. }
             | Cmd::AddPad { .. }
@@ -2978,6 +2987,7 @@ impl Cmd {
             | Cmd::NewFootprint { name }
             | Cmd::DeleteLibraryFootprint { name }
             | Cmd::EditFootprintProperties { name, .. }
+            | Cmd::SetLibraryExtrudedBody { name, .. }
             | Cmd::SetFootprintAnchor { name, .. }
             | Cmd::UpdateFootprintOnBoard { name } => {
                 vec![name.as_str()]
@@ -3618,6 +3628,7 @@ impl<'a> Board<'a> {
             Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
             Cmd::RemoveBoardModel { part, index } => self.remove_board_model(part, *index),
             Cmd::SetExtrudedBody { part, body } => self.set_extruded_body(part, body.as_ref()),
+            Cmd::SetLibraryExtrudedBody { name, body } => self.set_library_extruded_body(name, body.as_ref()),
             Cmd::MoveBoardModel { part, from, to } => self.move_board_model(part, *from, *to),
             Cmd::EditBoardModel { part, index, path, offset, scale, rotate, opacity, show } => {
                 self.edit_board_model(part, *index, &eda_model::fp_models::ModelPatch { path: path.clone(), offset: *offset, scale: *scale, rotate: *rotate, opacity: *opacity, show: *show })

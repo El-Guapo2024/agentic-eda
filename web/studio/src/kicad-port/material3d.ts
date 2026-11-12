@@ -75,6 +75,11 @@ export function copperLayerMaterial3d(copperColor: Rgb, editorColor: Rgb | null)
   return editorColor ? { ...m, diffuse: rgb(editorColor.r, editorColor.g, editorColor.b) } : m;
 }
 
+/** `m_materials.m_NonPlatedCopper` (`setupMaterials`: "Non plated copper (raw copper)"), what `setCopperMaterial` draws every copper layer with when "Differentiate plated copper" is on. */
+export function nonPlatedCopperMaterial3d(): Material3d {
+  return { ambient: rgb(0.191, 0.073, 0.022), diffuse: rgb(184 / 255, 115 / 255, 50 / 255), specular: rgb(0.256, 0.137, 0.086), emissive: BLACK, shininess: 0.1 * 128, transparency: 0 };
+}
+
 /** `m_materials.m_Paste` (`setupMaterials`, `setLayerMaterial`'s `F_Paste`/`B_Paste`): ambient the paste colour, specular its square. */
 export function pasteMaterial3d(paste: Rgb): Material3d {
   return { ambient: rgb(paste.r, paste.g, paste.b), diffuse: rgb(paste.r, paste.g, paste.b), specular: rgb(paste.r * paste.r, paste.g * paste.g, paste.b * paste.b), emissive: BLACK, shininess: 0.1 * 128, transparency: 0 };

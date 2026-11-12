@@ -14,6 +14,7 @@
 // `viewer3d` section beside the design (crates/cli/src/appearance_api.rs). Pure: no React, no three.js.
 import { DEFAULT_COLORS, ROWS, USER_ROWS, isVisible, parseColor, rowLayer, toHex, withVisibility, type Rgba } from "./appearance3d";
 import type { CameraView } from "./camera3d";
+import { multiplyQuat, normalizeQuat, quatFromAxisAngle, rotateVecByQuat, vec3 } from "./math3d";
 
 /** `FOLLOW_PCB` and `FOLLOW_PLOT_SETTINGS` (eda_3d_viewer_settings.h): the two built-in presets, by their internal names. */
 export const FOLLOW_PCB = "follow_pcb_editor";
@@ -234,13 +235,45 @@ export function presetFromJson(j: unknown): LayerPreset3D | null {
 export interface Viewport3D {
   name: string;
   camera: CameraView;
+  /** `VIEWPORT3D::matrix`, the camera's `GetViewMatrix()` in KiCad's 3D units, column-major ([`kicadViewMatrix`]): what the derived `.kicad_pro`'s `board.3dviewports` gets. */
+  matrix?: number[];
+}
+
+/** `RANGE_SCALE_3D` (board_adapter.h) and `BOARD_ADAPTER::InitSettings`' "Hack to keep "home" zoom from being too small" (`m_biuTo3Dunits *= 1.6f`). */
+const RANGE_SCALE_3D = 8;
+const HOME_ZOOM_HACK = 1.6;
+
+/**
+ * `CAMERA::GetViewMatrix()` of a studio camera, as KiCad would have it for the same view: `CAMERA::updateViewMatrix`'s
+ * `translate( m_camera_pos ) * m_rotationMatrix * m_rotationMatrixAux * translate( -m_lookat_pos )` (common/gal/3d/camera.cpp), in KiCad's 3D units
+ * (`m_biuTo3Dunits = RANGE_SCALE_3D / max( board width, height ) * 1.6`) and world axes (board x, board y inverted, the thickness up: board_adapter.cpp
+ * "The y coord is inverted in 3D viewer"). The camera's own state is kept in KiCad's local axes already (camera3d.ts: `cameraPosLocal`, the trackball and
+ * auxiliary rotations, `getRenderPose`); its distances are millimetres scaled by the board span (`initialDistanceMm = 1.25 * span`), so a KiCad unit is
+ * `span / 12.8` mm. Column-major, as glm stores it and `PARAM_VIEWPORT3D::viewportsToJson` writes it (`matrix[0].x` first). `spanMm` is the board outline's
+ * longest edge, the one the camera was homed with (`setBoardGeometry`).
+ */
+export function kicadViewMatrix(view: CameraView, spanMm: number): number[] {
+  const k = (RANGE_SCALE_3D * HOME_ZOOM_HACK) / Math.max(spanMm, 1e-9);
+  const d2r = Math.PI / 180;
+  // `updateRotationMatrix`: rotate x, then y, then z, about the camera's own axes; the trackball's rotation before it.
+  const aux = multiplyQuat(multiplyQuat(quatFromAxisAngle(vec3(1, 0, 0), view.auxDeg.x * d2r), quatFromAxisAngle(vec3(0, 1, 0), view.auxDeg.y * d2r)), quatFromAxisAngle(vec3(0, 0, 1), view.auxDeg.z * d2r));
+  const r = normalizeQuat(multiplyQuat(view.quat, aux));
+  const cx = rotateVecByQuat(vec3(1, 0, 0), r);
+  const cy = rotateVecByQuat(vec3(0, 1, 0), r);
+  const cz = rotateVecByQuat(vec3(0, 0, 1), r);
+  // The look-at point in KiCad's world: the studio's world is (board x, thickness, board y) in mm.
+  const look = vec3(view.lookAt.x * k, -view.lookAt.z * k, view.lookAt.y * k);
+  const rl = rotateVecByQuat(look, r);
+  const t = vec3(view.pos.x * k - rl.x, view.pos.y * k - rl.y, view.pos.z * k - rl.z);
+  return [cx.x, cx.y, cx.z, 0, cy.x, cy.y, cy.z, 0, cz.x, cz.y, cz.z, 0, t.x, t.y, t.z, 1];
 }
 
 /** `onViewportChanged`'s "Save viewport...": a new name goes before the separator (the end of the list), an existing one gets the camera as it is now. */
-export function saveViewport(viewports: readonly Viewport3D[], name: string, camera: CameraView): Viewport3D[] {
+export function saveViewport(viewports: readonly Viewport3D[], name: string, camera: CameraView, spanMm?: number): Viewport3D[] {
+  const vp: Viewport3D = spanMm !== undefined ? { name, camera, matrix: kicadViewMatrix(camera, spanMm) } : { name, camera };
   const at = viewports.findIndex((v) => v.name === name);
-  if (at < 0) return [...viewports, { name, camera }];
-  return viewports.map((v, i) => (i === at ? { name, camera } : v));
+  if (at < 0) return [...viewports, vp];
+  return viewports.map((v, i) => (i === at ? vp : v));
 }
 
 /** "Delete viewport...": the one chosen taken out. */
@@ -258,13 +291,17 @@ export function viewportFromJson(j: unknown): Viewport3D | null {
   if (typeof o.name !== "string" || !c || !isVec(c.pos) || !isVec(c.lookAt) || !isVec(c.auxDeg) || typeof c.zoom !== "number" || typeof c.quat !== "object" || c.quat === null) return null;
   const q = c.quat as Record<string, unknown>;
   if (!["x", "y", "z", "w"].every((k) => typeof q[k] === "number")) return null;
-  return { name: o.name, camera: { pos: { ...c.pos }, lookAt: { ...c.lookAt }, auxDeg: { ...c.auxDeg }, zoom: c.zoom, quat: { x: q.x as number, y: q.y as number, z: q.z as number, w: q.w as number } } };
+  const matrix = Array.isArray(o.matrix) && o.matrix.length === 16 && o.matrix.every((x) => typeof x === "number") ? { matrix: [...(o.matrix as number[])] } : {};
+  return { name: o.name, camera: { pos: { ...c.pos }, lookAt: { ...c.lookAt }, auxDeg: { ...c.auxDeg }, zoom: c.zoom, quat: { x: q.x as number, y: q.y as number, z: q.z as number, w: q.w as number } }, ...matrix };
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- preferences
 
 /** `ANTIALIASING_MODE`: the Preferences' "Anti-aliasing" choice. */
 export type AntialiasingMode = "none" | "2x" | "4x" | "8x";
+
+/** `MATERIAL_MODE` (`render.material_mode`, `PARAM_ENUM` NORMAL .. CAD_MODE): "Material properties:" Realistic, Solid colors, CAD colors. */
+export type MaterialMode = "realistic" | "solid" | "cad";
 
 /**
  * The 3D viewer's settings the studio's viewer honours (`EDA_3D_VIEWER_SETTINGS`), with KiCad's defaults: Preferences > 3D Viewer > General
@@ -286,6 +323,28 @@ export interface Viewer3DPrefs {
   antialiasing: AntialiasingMode;
   /** `render.opengl_selection_color` ("Selection color:", default green), `#rrggbb`. */
   selectionColor: string;
+  /** `render.clip_silk_on_via_annulus` ("Clip silkscreen at via annuli", default off): the silkscreen is culled by the vias' and plated holes' rings, not their holes. */
+  clipSilkOnViaAnnuli: boolean;
+  /** `render.subtract_mask_from_silk` ("Clip silkscreen at solder mask edges", default off): the silkscreen is culled by the mask's openings. */
+  subtractMaskFromSilk: boolean;
+  /** `render.differentiate_plated_copper` ("Use bare copper color for unplated copper (slow)", default off); `DifferentiatePlatedCopper()` is off while "Use PCB editor copper colors" is on. */
+  differentiatePlatedCopper: boolean;
+  /** `render.material_mode` ("Material properties:", default Realistic): how the models' materials are drawn. */
+  materialMode: MaterialMode;
+  /** `render.opengl_AA_disableOnMove` ("Disable anti-aliasing" while moving, default off). */
+  aaDisableOnMove: boolean;
+  /** `render.opengl_thickness_disableOnMove` ("Disable thickness" while moving, default off). */
+  thicknessDisableOnMove: boolean;
+  /** `render.opengl_vias_disableOnMove` ("Disable uVia holes" while moving, default off). */
+  microviasDisableOnMove: boolean;
+  /** `render.opengl_holes_disableOnMove` ("Disable all plated holes" while moving, default off). */
+  holesDisableOnMove: boolean;
+}
+
+/** `EDA_3D_VIEWER_SETTINGS::RENDER_SETTINGS::DifferentiatePlatedCopper` (OpenGL engine): never with the board editor's copper colours. */
+export function differentiatePlatedCopper(prefs: Pick<Viewer3DPrefs, "differentiatePlatedCopper">, useBoardEditorCopperColors: boolean): boolean {
+  if (useBoardEditorCopperColors) return false;
+  return prefs.differentiatePlatedCopper;
 }
 
 export const DEFAULT_VIEWER3D_PREFS: Viewer3DPrefs = {
@@ -296,7 +355,17 @@ export const DEFAULT_VIEWER3D_PREFS: Viewer3DPrefs = {
   highlightOnRollover: true,
   antialiasing: "8x",
   selectionColor: "#00ff00",
+  clipSilkOnViaAnnuli: false,
+  subtractMaskFromSilk: false,
+  differentiatePlatedCopper: false,
+  materialMode: "realistic",
+  aaDisableOnMove: false,
+  thicknessDisableOnMove: false,
+  microviasDisableOnMove: false,
+  holesDisableOnMove: false,
 };
+
+const MATERIAL_MODES: readonly MaterialMode[] = ["realistic", "solid", "cad"];
 
 const AA: readonly AntialiasingMode[] = ["none", "2x", "4x", "8x"];
 
@@ -314,6 +383,14 @@ export function sanitizeViewer3DPrefs(raw: unknown): Viewer3DPrefs {
     highlightOnRollover: bool(o.highlightOnRollover, d.highlightOnRollover),
     antialiasing: AA.includes(o.antialiasing as AntialiasingMode) ? (o.antialiasing as AntialiasingMode) : d.antialiasing,
     selectionColor: typeof o.selectionColor === "string" && parseColor(o.selectionColor) ? o.selectionColor.slice(0, 7) : d.selectionColor,
+    clipSilkOnViaAnnuli: bool(o.clipSilkOnViaAnnuli, d.clipSilkOnViaAnnuli),
+    subtractMaskFromSilk: bool(o.subtractMaskFromSilk, d.subtractMaskFromSilk),
+    differentiatePlatedCopper: bool(o.differentiatePlatedCopper, d.differentiatePlatedCopper),
+    materialMode: MATERIAL_MODES.includes(o.materialMode as MaterialMode) ? (o.materialMode as MaterialMode) : d.materialMode,
+    aaDisableOnMove: bool(o.aaDisableOnMove, d.aaDisableOnMove),
+    thicknessDisableOnMove: bool(o.thicknessDisableOnMove, d.thicknessDisableOnMove),
+    microviasDisableOnMove: bool(o.microviasDisableOnMove, d.microviasDisableOnMove),
+    holesDisableOnMove: bool(o.holesDisableOnMove, d.holesDisableOnMove),
   };
 }
 

@@ -4,7 +4,7 @@
 //
 //   1  the scene: the body has every through and non-plated hole cut out (GET /api/board3d), the pads are their real polygons (a trapezoid four corners, a chamfered and a
 //      rounded rectangle more), the plated holes have barrels, the pads open the solder masks
-//   2  the layer tree: Values, Footprint Text (off takes References and Values with it), Off-board Silkscreen (off: the silkscreen is clipped, the stencil pieces are there),
+//   2  the layer tree: Values, Footprint Text (off takes References and Values with it), Off-board Silkscreen (off: the silkscreen is culled by the board's outside),
 //      3D Navigator
 //   3  the right-click menu: a right click that is not a drag opens it, Rotate Board opens its submenu, View Front moves the camera to the front view
 //   4  the 3D Navigator: a click on its +X sphere goes to the right view
@@ -80,10 +80,10 @@
     ok("References on turns Footprint Text back on", row("footprint_text").checked && row("references").checked && !row("values").checked, []);
     row("values").click();
     await settle();
-    ok("the silkscreen is clipped to the board while Off-board Silkscreen is off", !row("off_board_silk").checked && (view().scene["silk-clip-top"] ?? 0) > 0, [JSON.stringify(view().scene["silk-clip-top"])]);
+    ok("the silkscreen is clipped to the board while Off-board Silkscreen is off", !row("off_board_silk").checked && (view().layers3d?.silkBoardCulled ?? 0) > 0, [JSON.stringify(view().layers3d?.silkBoardCulled)]);
     row("off_board_silk").click();
     await settle();
-    ok("Off-board Silkscreen on leaves it unclipped", (view().scene["silk-clip-top"] ?? 0) === 0, []);
+    ok("Off-board Silkscreen on leaves it unclipped", (view().layers3d?.silkBoardCulled ?? 1) === 0, []);
     row("off_board_silk").click();
     await settle();
     ok("the 3D Navigator is drawn by default and its row hides it", view().navigator === true && (row("navigator").click(), await settle(), view().navigator === false), []);

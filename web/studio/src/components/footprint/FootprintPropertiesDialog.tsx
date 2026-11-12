@@ -32,7 +32,7 @@ import { applyCmd, EMPTY_DRAFT, type EmbeddedDraft } from "../../kicad-port/embe
 import type { EmbeddedListing } from "../../api/embeddedTypes";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { PAD_CONNECTION_OPTIONS } from "../../kicad-port/padSettings";
-import { libraryModels, rowsOfLibrary, type ModelRow } from "../../kicad-port/fpModels";
+import { bodyDraftOfLibrary, bodyDraftProblem, libraryBodyCmds, libraryModels, rowsOfLibrary, type BodyDraft, type ModelRow } from "../../kicad-port/fpModels";
 import { useStudioState } from "../../state/store";
 import { FootprintModelsPanel } from "./FootprintModelsPanel";
 
@@ -57,6 +57,8 @@ export function FootprintLibraryPropertiesDialog() {
   // The 3D Models tab's working copy of the list; OK sends it.
   const [tab, setTab] = useState<TabId>("general");
   const [models, setModels] = useState<ModelRow[]>([]);
+  // The tab's Extruded 3D Body box (`EXTRUDED_3D_BODY`), as the board's dialog has it; OK sends it with the rest.
+  const [body, setBody] = useState<BodyDraft>(() => bodyDraftOfLibrary(null));
   // The fields grid's working copy, and what is wrong with it.
   const [rows, setRows] = useState<LibFieldRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export function FootprintLibraryPropertiesDialog() {
       // command that sends them back is refused for a missing field.
       setForm({ description: description ?? "", keywords: keywords ?? "", attributes, reference_visible, value_visible, model: model ?? null, zone_connection: state.footprint.zone_connection ?? null });
       setModels(rowsOfLibrary(state.footprint));
+      setBody(bodyDraftOfLibrary(state.footprint.extruded_body));
       setRows(rowsOfFootprint(state.footprint));
       setItemName(fpidParts(fpidOf(state.footprint)).item);
       setTabs(settingsForm(state.footprint.settings, units));
@@ -109,6 +112,12 @@ export function FootprintLibraryPropertiesDialog() {
     const padNumbers = new Set(fp.pads.map((p) => p.number));
     const settings = settingsOfForm(tabs, padNumbers, units, fp.settings);
     if ("error" in settings) return setError(settings.error);
+    // The Extruded 3D Body box: `TransferDataFromWindow` refuses the OK, with its message, for a height or a standoff it does not take.
+    const bodyProblem = bodyDraftProblem(body);
+    if (bodyProblem) {
+      setTab("models");
+      return setError(`Extruded 3D Body: ${bodyProblem}`);
+    }
     const { lib, item } = fpidParts(fpid);
     let overwrite = false;
     if (itemName !== item && !fp.board_link) {
@@ -128,6 +137,7 @@ export function FootprintLibraryPropertiesDialog() {
     const cmds: Cmd[] = [
       { op: "edit_footprint_properties", name: fp.name, ...form, ...panelOfRows(rows, fp.name), ...libraryModels(models) },
       { op: "fp_editor", verb: "set_settings", footprint: fp.name, settings: settings.settings },
+      ...libraryBodyCmds(fp.name, fp.extruded_body, body),
     ];
     // The Embedded Files tab's copy (`PANEL_EMBEDDED_FILES::TransferDataFromWindow`), on the footprint's list under the name it has now
     const embeddedCmd = applyCmd({ kind: "library_footprint", name: fp.name }, embedded.listing, embedded.draft);
@@ -177,7 +187,7 @@ export function FootprintLibraryPropertiesDialog() {
               </button>
             ))}
           </div>
-          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ footprint: fp.name }} units={units} />}
+          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ footprint: fp.name }} units={units} body={body} onBody={setBody} />}
           {tab === "embedded" && (
             <EmbeddedFilesPanel owner={{ kind: "library_footprint", name: fp.name }} run={api.cmd} version={studio.version} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
           )}

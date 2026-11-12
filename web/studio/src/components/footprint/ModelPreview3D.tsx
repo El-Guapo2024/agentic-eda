@@ -8,7 +8,7 @@
 // pads") and reload ("Reload board and 3D models").
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import type { BoardState, Part } from "../../api/types";
+import type { BoardState, ExtrudedBodyInfo, Part } from "../../api/types";
 import { FOV_DEG, TrackballCamera, type ViewPreset } from "../../kicad-port/camera3d";
 import { isVisible } from "../../kicad-port/appearance3d";
 import type { ModelRow } from "../../kicad-port/fpModels";
@@ -16,6 +16,8 @@ import { modelWorldMatrix, previewStack, previewWheel } from "../../kicad-port/m
 import { useStudioState } from "../../state/store";
 import { ModelCache } from "../viewer3d/modelCache";
 import { boardOutlineBounds, buildBackgroundTexture, buildBoardGroup, disposeObject3D } from "../viewer3d/scene";
+import { setKicadHeadlight } from "../viewer3d/glLighting";
+import { buildExtrudedBody } from "../viewer3d/extrudedBody";
 import { useViewerColors } from "../viewer3d/useViewerColors";
 
 /** The margin of board round the footprint, µm. */
@@ -68,6 +70,8 @@ interface Scene3D {
   camera: TrackballCamera;
   board: THREE.Group;
   models: THREE.Group;
+  /** The extruded body of the box, drawn as the 3D view draws one (components/viewer3d/extrudedBody.ts). */
+  extruded: THREE.Group;
   cache: ModelCache;
 }
 
@@ -78,9 +82,11 @@ export interface ModelPreview3DProps {
   rows: readonly ModelRow[];
   height?: number;
   testId?: string;
+  /** The Extruded 3D Body box as it stands (`updateExtrusionPreview`: the dummy footprint's body, kicad-port/fpModels.ts `previewBodyOf`); absent or null, none. */
+  body?: ExtrudedBodyInfo | null;
 }
 
-export function ModelPreview3D({ part, rows, height = 250, testId = "model-preview" }: ModelPreview3DProps) {
+export function ModelPreview3D({ part, rows, height = 250, testId = "model-preview", body = null }: ModelPreview3DProps) {
   const state = useStudioState();
   const colors = useViewerColors();
   const layers = state.viewer3d.layers;
@@ -185,9 +191,11 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
     scene.add(headlight);
     const board = new THREE.Group();
     const models = new THREE.Group();
-    scene.add(board, models);
+    const extruded = new THREE.Group();
+    extruded.name = "preview-extruded";
+    scene.add(board, models, extruded);
     const cache = new ModelCache();
-    three.current = { renderer, scene, persp, ortho, camera, board, models, cache };
+    three.current = { renderer, scene, persp, ortho, camera, board, models, extruded, cache };
     const stop = cache.onChange(() => syncRef.current(false));
 
     // Input (HIDPI_GL_3D_CANVAS): left drag turns the view, middle and right drag pan it, the wheel zooms.
@@ -261,6 +269,9 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
       }
       active.position.set(pose.position.x, pose.position.y, pose.position.z);
       active.quaternion.set(pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w);
+      // The board's and the models' materials light themselves as KiCad's OpenGL view does (viewer3d/glLighting.ts): the "front" headlight placed before each frame.
+      active.updateMatrixWorld();
+      setKicadHeadlight(active, new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z), camera.mmPerUnit());
       renderer.render(scene, active);
       raf = requestAnimationFrame(animate);
     };
@@ -278,6 +289,7 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
       el.removeEventListener("contextmenu", onContext);
       disposeObject3D(board);
       disposeOwned(models);
+      disposeObject3D(extruded);
       cache.dispose();
       (scene.background as THREE.Texture | null)?.dispose();
       renderer.dispose();
@@ -302,6 +314,24 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
     syncModels(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [part, bodyShown, layers, colorKey, syncModels]);
+
+  // The body of the Extruded 3D Body box, whenever a control of the box changes (`onExtrusionControlChanged` -> `updateExtrusionPreview` -> `UpdateDummyFootprint`): the footprint
+  // as the preview shows it (top side, not turned, at the origin) with the box's body, built as the 3D view builds a part's.
+  const bodyKey = JSON.stringify(body);
+  useEffect(() => {
+    const t = three.current;
+    if (!t) return;
+    disposeObject3D(t.extruded);
+    t.extruded.clear();
+    const el = containerRef.current;
+    if (el) el.dataset.extruded = "0";
+    if (!body) return;
+    const built = buildExtrudedBody({ ...(part ?? ({ ref: "REF" } as Part)), ref: `preview:${part?.ref ?? "REF"}`, at: [0, 0], side: "top", extruded_body: body } as Part, previewStack());
+    if (!built) return;
+    t.extruded.add(built.object);
+    if (el) el.dataset.extruded = String(built.object.children.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bodyKey, part]);
 
   // The models: whenever the list changes.
   const listKey = JSON.stringify(rows);

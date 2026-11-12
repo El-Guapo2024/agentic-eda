@@ -298,7 +298,7 @@ export function FootprintPropertiesDialog() {
               </button>
             ))}
           </div>
-          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ part: part.ref }} units={units} body={body} onBody={setBody} />}
+          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ part: part.ref }} units={units} body={body} onBody={setBody} exportPart={part.ref} />}
           {tab === "embedded" && (
             <EmbeddedFilesPanel owner={{ kind: "footprint", reference: part.ref }} run={api.cmd} version={state.version} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
           )}
