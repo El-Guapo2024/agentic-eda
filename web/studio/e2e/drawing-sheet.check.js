@@ -1,8 +1,8 @@
 // Page Settings' drawing sheet file on both editors (UI-LEFT C3; PARITY-common.md section 9, GAPS.md item 18): the board shows KiCad's default sheet with its
 // zone letters and numbers from the start (`GAL_SET::DefaultVisible`'s LAYER_DRAWINGSHEET); a `.kicad_wks` from this computer is put in the board's folder from
-// the dialog's "Upload..." and previewed (`UpdateDrawingSheetExample`), OK sets it on the board (`set_drawing_sheet`, one undo step) and the board draws it; the
+// the dialog's "Upload..." with "Embed file" unticked and previewed (`UpdateDrawingSheetExample`), OK sets it on the board (`set_drawing_sheet`) and the board draws it; the
 // browse button lists the `.kicad_wks` files of the board's folder with KiCad's template folder one click away (`OnWksFileSelection`); on the schematic the name
-// typed into the File box is taken on OK and the sheet draws it; Ctrl+Z on each puts KiCad's default back. The sheet is KiCad's own QA sheet
+// typed into the File box is taken on OK and the sheet draws it; Ctrl+Z on each leaves the sheet (a project setting in KiCad, CC8). The sheet is KiCad's own QA sheet
 // (qa/data/cli/basic_test/custom_ds.kicad_wks): four "CUSTOM DRAWING SHEET" texts the default sheet has not.
 // What was drawn is read from `window.__edaDrawingSheet` (components/drawingSheet/dsPainter.ts: the texts of the last sheet painted on each canvas).
 // Runs on a fresh `eda board new examples/mcu_board_30plus.yaml` board; it writes `custom_ds.kicad_wks` into the board's folder, so run it on a scratch copy.
@@ -56,9 +56,12 @@
     t(!shows("pcb", MARK), "not the custom sheet's texts");
   });
 
-  await scenario("on the board: Upload... puts the sheet in the board's folder and previews it, OK sets it in one undo step and the board draws it", async (t) => {
+  await scenario("on the board: Upload... (Embed file unticked) puts the sheet in the board's folder and previews it, OK sets it and the board draws it", async (t) => {
     const r = await run("common.Control.pageSettings");
     t(r.dialog === "Page Settings", `File > Page Settings... opens the dialog (${r.dialog ?? r.error})`);
+    const embed = field("Embed file");
+    if (embed?.checked) embed.click();
+    await sleep(100);
     const input = dialog()?.querySelector('[data-testid="page-drawing-sheet-upload"]');
     if (!t(input, "the dialog has the drawing sheet's upload")) return;
     const dt = new DataTransfer();
@@ -122,19 +125,17 @@
     t(drawn, "the schematic draws the custom sheet");
     t((await state()).drawing_sheet?.path === "custom_ds.kicad_wks", "the board keeps its own");
     await run("common.Interactive.undo");
-    const back = await until(async () => { const x = await schematic(); return x.drawing_sheet == null ? x : null; }, 15000);
-    t(back, "Ctrl+Z on the schematic puts its default sheet back");
-    const redrawn = await until(async () => { await nudge(); return !shows("sch", MARK) && painted("sch"); }, 15000);
-    t(redrawn, "and the schematic draws KiCad's default again");
+    await sleep(1500);
+    t((await schematic()).drawing_sheet?.path === "custom_ds.kicad_wks", "Ctrl+Z on the schematic leaves its sheet: a project setting (`SavePageSettings`, outside the commit)");
   });
 
-  await scenario("Ctrl+Z on the board puts KiCad's default sheet back", async (t) => {
+  await scenario("Ctrl+Z on the board leaves its sheet too", async (t) => {
     await tabTo("PCB");
     await run("common.Interactive.undo");
-    const back = await until(async () => { const s = await state(); return s.drawing_sheet == null ? s : null; }, 15000);
-    t(back, `the board's drawing sheet is the default again (${JSON.stringify((await state()).drawing_sheet?.path ?? null)})`);
-    const drawn = await until(async () => { await nudge(); return !shows("pcb", MARK) && painted("pcb"); }, 15000);
-    t(drawn, "and the board draws it");
+    await sleep(1500);
+    t((await state()).drawing_sheet?.path === "custom_ds.kicad_wks", `the board's drawing sheet stays (${JSON.stringify((await state()).drawing_sheet?.path ?? null)})`);
+    const drawn = await until(async () => { await nudge(); return shows("pcb", MARK); }, 15000);
+    t(drawn, "and the board still draws it");
   });
 
   check.ok = results.every((r) => r.ok);
