@@ -370,7 +370,7 @@ export function SchematicView() {
   const baseDisplaySch: Schematic | null = sch && held && patch ? applyPatch(sch, patch) : sch && breaking && breakCursor ? breakPreviewSheet(sch, breaking, breakCursor) : sch;
   // A paste in progress: what it would add, shifted so its anchor sits on the grid-snapped cursor (`SCH_MOVE_TOOL::Main`'s `delta = m_cursor - *m_anchorPos`) and drawn
   // selected, as KiCad selects the pasted items. The sheet itself is untouched until the click (kicad-port/schClipboard.ts).
-  const pasteSnap = paste && state.cursorNm ? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, "connectable") : null;
+  const pasteSnap = paste && state.cursorNm ? snap.align([state.cursorNm.x, state.cursorNm.y], NO_MODS, paste.place ? "graphics" : "connectable") : null;
   const pasteDx = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[0] : 0;
   const pasteDy = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[1] : 0;
   const pasteShown = paste != null && pasteSnap != null;
@@ -723,6 +723,9 @@ export function SchematicView() {
       // how many items Import Sheet's contents in the hand show, and the point editor's points and side handles (for a browser check; KiCad draws both on the canvas);
       // an arc's points by their roles, as S13's check reads them
       data-import-ghost={importShown ? previewIds(importShown).length : undefined}
+      // how many items a paste in the hand shows (Import Graphics' preview is one: `data-paste-kind="import"`)
+      data-paste-ghost={paste && pasteShown ? previewIds(paste.preview).length : undefined}
+      data-paste-kind={paste ? (paste.place ? "import" : paste.origin) : undefined}
       data-arc-points={shapeEditor?.graphic.shape.type === "arc" ? shapeEditor.edit.points.map((q, i) => `${["start", "mid", "end", "center"][i]}:${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       data-edit-points={shapeEditor ? shapeEditor.edit.points.map((q) => `${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       data-edit-lines={shapeEditor ? shapeEditor.edit.lines.flatMap((l, i) => (l.center ? [handlePos(shapeEditor.edit, { kind: "line", index: i }).join(",")] : [])).join(" ") : undefined}
@@ -754,7 +757,9 @@ export function SchematicView() {
 
         // A paste in progress: this click drops it where the cursor holds it (`SCH_MOVE_TOOL`'s click, then `commit.Push( _( "Paste" ) )`).
         if (paste) {
-          void placeSchPaste(api, dispatch, snapToGrid(wx, wy));
+          // Import Graphics' preview is held on the graphics grid (`grid.Align( .., GRID_GRAPHICS )`)
+          const at = paste.place ? snap.align([wx, wy], NO_MODS, "graphics") : snapToGrid(wx, wy);
+          void placeSchPaste(api, dispatch, [at[0], at[1]]);
           return;
         }
 

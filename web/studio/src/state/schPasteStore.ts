@@ -22,6 +22,12 @@ export interface SchPaste {
   notes: string[];
   /** A Duplicate of the item under the cursor, nothing being selected (`m_duplicateIsHoverSelection`): nothing is left selected when it is dropped. */
   hover?: boolean;
+  /**
+   * Not a paste: Import Graphics' interactive placement (`SCH_DRAWING_TOOLS::ImportGraphics`: the imported items are a preview -- `m_view->Add( &preview )` -- moved to the grid
+   * point under the cursor, `grid.Align( .., GRID_GRAPHICS )`, until a click adds them, `commit.Push( _( "Import Graphic" ) )`, or Escape deletes them). The click calls this
+   * with the snapped point instead of sending `paste_sch`; the grid is the graphics one.
+   */
+  place?: (snapped: [number, number]) => Promise<void>;
 }
 
 let current: SchPaste | null = null;

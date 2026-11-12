@@ -99,6 +99,7 @@ export async function placeSchPaste(api: StudioApi, dispatch: Dispatch<Action>, 
   if (!paste) return;
   const [dx, dy] = pasteOffset(paste.anchor, snapped);
   setSchPaste(null);
+  if (paste.place) return paste.place(snapped);
   const before = api.getState().schematic;
   const ok = await api.cmd({ op: "paste_sch", fragment: paste.fragment, dx, dy, mode: paste.mode, numbering: pasteNumbering(rememberedAnnotateSettings()) });
   if (!ok || !before) return;

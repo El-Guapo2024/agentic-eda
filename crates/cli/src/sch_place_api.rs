@@ -100,6 +100,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Import Graphics' interactive placement on the sheet (`SCH_DRAWING_TOOLS::ImportGraphics`: the imported items are a preview until the click): the command at the
+    /// preview point is drawn as the commit would add it -- the lines and the text, with the text's glyph width -- and nothing is stored.
+    #[test]
+    fn import_graphics_is_previewed_as_the_click_would_add_it_and_nothing_is_stored() {
+        let dir = board("import_gfx");
+        let before = std::fs::read(dir.join("design.json")).unwrap();
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n10\n21\n0\n0\nTEXT\n8\n0\n10\n0\n20\n5\n40\n2.0\n1\nHi\n0\nENDSEC\n0\nEOF\n";
+        let v = preview(&dir, json!({ "op": "import_sch_graphics", "format": "dxf", "text": dxf, "dxf_units": "mm", "scale": 1.0, "offset_x_nm": mm(-254.0).get(), "offset_y_nm": mm(-254.0).get(), "line_width_nm": 0 }));
+        assert_eq!(v["ok"], true, "{v}");
+        let lines = v["preview"]["lines"].as_array().unwrap_or_else(|| panic!("{v}"));
+        assert_eq!(lines.len(), 1, "{v}");
+        let texts = v["preview"]["texts"].as_array().unwrap();
+        assert_eq!((texts.len(), texts[0]["content"].clone(), texts[0]["width_nm"].clone()), (1, json!("Hi"), json!(mm(1.8).get())), "{v}");
+        assert_eq!(std::fs::read(dir.join("design.json")).unwrap(), before, "a preview stores nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Place Symbol (A) with the symbol in the hand (UI-LEFT S1b, `PlaceSymbol`'s `addSymbol`): the click's command -- `add_symbol` with the reference it rides
     /// with, then the turns made while it rode as the placed unit's own `sch_move` (`R5#1`) -- is previewed as the commit draws it and stores nothing; placed, it
     /// is one undo step.
