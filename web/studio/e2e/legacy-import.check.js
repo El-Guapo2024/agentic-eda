@@ -10,8 +10,8 @@
 // What it checks:
 //   a KiCad 5 hierarchy (file version 5, a screen shown on two sheets, library nicknames): the schematic is replaced in one step, the root has its two sheets
 //     and its symbols, the toast says "KiCad legacy schematic", and Remap Symbols is not opened (its symbols name their library);
-//   the legacy rescue is reachable: the cache library came along into the board's folder, so Rescue Symbols lists the symbols whose library is not in the
-//     board's tables as "found only in cache library", in KiCad's words;
+//   Rescue Symbols on it is the symbol library table rescuer's, which finds what KiCad finds there: nothing (KiCad looks the cache up as `Lib:Name` and
+//     `Lib-Name`; a KiCad 5 cache holds `Lib_Name`);
 //   a KiCad 4 schematic (version 2, bare symbol names): Remap Symbols opens by itself after the import, as KiCad opens it as such a project loads, and its
 //     Remap Symbols gives every symbol the library of the project's legacy list ("Symbol R mapped to symbol library 'symbols'.");
 //   the legacy rescuer: on a KiCad 4 project whose libraries are gone (pic_programmer), Rescue Symbols lists every symbol "found only in cache library" and
@@ -19,6 +19,7 @@
 //   Undo brings the old drawing back.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }.
+// run-all-checks: board=ldo ui=legacy minutes=10
 (async () => {
   const results = [];
   window.__legacyImportCheck = { results, done: false };
@@ -67,10 +68,10 @@
     const pins = (after?.symbols ?? []).flatMap((s) => s.pins ?? []).filter((p) => p.net).length;
     check("the nets of the drawing are traced", pins > 10, String(pins));
 
-    // ---- the legacy rescue is reachable: the cache library is the board's
+    // ---- Rescue Symbols on it: the symbol library table rescuer (its symbols name libraries). KiCad looks a symbol up in the cache as `Lib:Name`, then
+    // `Lib-Name` (`RESCUE_SYMBOL_LIB_TABLE_CANDIDATE::FindRescues`), and a KiCad 5 cache holds `Lib_Name`, so with the library gone it finds neither: nothing to rescue
     const rescue = await get("/api/sch/rescue");
-    const onlyInCache = (rescue.candidates ?? []).filter((c) => /^Rescue symbol .* found only in cache library to /.test(c.action));
-    check("Rescue Symbols reads the project's cache library: the symbols whose library the board's tables lack are rescued from it", rescue.legacy === false && onlyInCache.length > 0, JSON.stringify({ legacy: rescue.legacy, n: rescue.candidates?.length, first: rescue.candidates?.[0]?.action, error: rescue.error }));
+    check("Rescue Symbols is the table rescuer's here, and finds what KiCad finds: nothing (the cache's `Lib_Name` is not `Lib:Name` nor `Lib-Name`)", rescue.legacy === false && (rescue.candidates ?? []).length === 0, JSON.stringify({ legacy: rescue.legacy, n: rescue.candidates?.length, error: rescue.error }));
 
     await E.run("common.Interactive.undo");
     appliedSch--;
