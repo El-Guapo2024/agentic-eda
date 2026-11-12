@@ -2480,3 +2480,67 @@ fn slow_a_shared_screen_annotated_by_the_studio_is_numbered_per_path_as_kicad_nu
     assert_eq!(ours, kicad, "the studio's nets are kicad-cli's: a net per placement");
     assert_no_reference_findings(&dir, "after Annotate over a screen shown twice");
 }
+
+/// A directive label's (`SCH_DIRECTIVE_LABEL`, the netclass flag) Netclass puts the net its connection point is on in the class
+/// (`CONNECTION_SUBGRAPH::GetNetclassesForDriver` reads the flag's fields), and a rule area gives the class of a flag on its border to the wires it
+/// touches (`SCH_RULE_AREA::RefreshContainedItemsAndDirectives`, `GetResolvedNetclasses`): in the studio's model, and -- slow -- in kicad-cli's netlist.
+/// One undo takes each back.
+fn directive_and_rule_area_classes(slow: bool) {
+    use eda_model::sch_extras::{DirectiveShape, SchGraphic, SchGraphicKind};
+    let dir = mcu30_board(if slow { "slow_directive_class" } else { "directive_class" });
+    define_high_current(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    // two wires with a pin each, on different nets; the flag sits on a point of the first
+    let mut wires = root.wires.iter().filter(|w| !w.bus && !w.pins.is_empty() && w.pts.len() >= 2);
+    let first = wires.next().expect("a wire with a pin").clone();
+    let second = wires.find(|w| w.net != first.net).expect("a second wire on another net").clone();
+    let net_of = |design: &eda_model::ir::Design, pin: &str| design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap().name.clone();
+    let class_nets = |dir: &Path| load(dir).unwrap().2.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap().nets.clone();
+    let flag = |at: eda_model::ir::Point| {
+        Cmd::SchEdit(eda_ops::sch_edit::SchCmd::AddGraphic {
+            graphic: SchGraphic::new(SchGraphicKind::Directive { at, orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "HighCurrent".into(), component_class: String::new(), text_size_nm: Nm::ZERO }),
+        })
+    };
+    let (pin1, pin2) = (first.pins[0].clone(), second.pins[0].clone());
+    let (net1, net2) = (net_of(&design, &pin1), net_of(&design, &pin2));
+    assert!(!class_nets(&dir).contains(&eda_kicad::exact_pattern(&net1)));
+
+    step(&dir, flag(first.pts[0]), false, "test").unwrap();
+    assert!(class_nets(&dir).contains(&eda_kicad::exact_pattern(&net1)), "the flag's net {net1} is in its class");
+    if slow {
+        assert!(kicad_classes_of_pin(&dir, &pin1).iter().any(|c| c == "HighCurrent"), "kicad-cli puts {pin1}'s net in the flag's class");
+    }
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert!(!class_nets(&dir).contains(&eda_kicad::exact_pattern(&net1)), "one undo takes it out");
+
+    // a rule area around the second wire's middle, a flag on its border away from every wire
+    let (a, b) = (second.pts[0], second.pts[1]);
+    let mid = eda_model::ir::Point { x: Nm::new((a.x.get() + b.x.get()) / 2), y: Nm::new((a.y.get() + b.y.get()) / 2) };
+    let r = mm(0.635).get();
+    let corner = |dx: i64, dy: i64| eda_model::ir::Point { x: Nm::new(mid.x.get() + dx), y: Nm::new(mid.y.get() + dy) };
+    let area = SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![corner(-r, -r), corner(r, -r), corner(r, r), corner(-r, r)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: false });
+    step(&dir, Cmd::SchEdit(eda_ops::sch_edit::SchCmd::AddGraphic { graphic: area }), false, "test").unwrap();
+    assert!(!class_nets(&dir).contains(&eda_kicad::exact_pattern(&net2)), "an area with no flag gives no class");
+    // the flag on the area's top-left corner, its pole pointing away (no wire there on mcu30's grid-aligned sheet)
+    step(&dir, flag(corner(-r, -r)), false, "test").unwrap();
+    assert!(class_nets(&dir).contains(&eda_kicad::exact_pattern(&net2)), "the area's wire {net2} takes its flag's class");
+    if slow {
+        assert!(kicad_classes_of_pin(&dir, &pin2).iter().any(|c| c == "HighCurrent"), "kicad-cli puts {pin2}'s net in the rule area's class");
+    }
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert!(!class_nets(&dir).contains(&eda_kicad::exact_pattern(&net2)), "one undo takes the flag and the class back");
+}
+
+#[test]
+fn a_directive_labels_and_a_rule_areas_net_class_is_the_nets() {
+    directive_and_rule_area_classes(false);
+}
+
+#[test]
+fn slow_a_directive_labels_and_a_rule_areas_net_class_is_read_by_kicad_cli_as_ours() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    directive_and_rule_area_classes(true);
+}

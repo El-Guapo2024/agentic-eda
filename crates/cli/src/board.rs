@@ -401,10 +401,15 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
 /// `checkNetclassDrivers` runs per subgraph, so both are in the class), found by the pins of that wire under the references the placement gives them; a
 /// label off any pin's wire names its own. A bus label's classes go to its members too (`checkNetclassDrivers`' `processBusMember`): the nets of each
 /// member's name on that sheet.
+///
+/// A directive label (`SCH_DIRECTIVE_LABEL`, the netclass flag) gives its Netclass to the net at its connection point (the wire or bus through it, else a
+/// label or a pin there), and a rule area gives the classes of the flags on its border to the wires and buses it touches and the labels and pins inside it
+/// (`SCH_RULE_AREA::RefreshContainedItemsAndDirectives`, `GetResolvedNetclasses`, read by `GetNetclassesForDriver`; UI-LEFT-2 BB3).
 fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     let nets: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
     let net_of_pin: std::collections::BTreeMap<&str, &str> = nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let mut assigned: Vec<(String, String)> = Vec::new();
+    let ro: &ConstraintModel = model;
     for e in eda_model::sheet_list::walk(design) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
         let renamed: std::collections::BTreeMap<&str, String> = sec
@@ -454,6 +459,107 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
                 }
             }
         }
+        // The directive labels (`SCH_DIRECTIVE_LABEL`, the netclass flag) and the rule areas they are attached to (BB3).
+        let directives: Vec<(eda_model::ir::Point, Vec<String>)> = sec
+            .extras
+            .graphics
+            .iter()
+            .filter_map(|g| match &g.shape {
+                eda_model::sch_extras::SchGraphicKind::Directive { at, netclass, .. } => {
+                    let mut classes: Vec<String> = sec.extras.label_netclasses(&g.id).into_iter().map(str::to_string).collect();
+                    if !netclass.trim().is_empty() && !classes.iter().any(|c| c == netclass.trim()) {
+                        classes.push(netclass.trim().to_string());
+                    }
+                    (!classes.is_empty()).then_some((*at, classes))
+                }
+                _ => None,
+            })
+            .collect();
+        if directives.is_empty() {
+            continue;
+        }
+        // every pin of the sheet at its connection point, under the reference this placement gives it
+        let pins: Vec<(eda_model::ir::Point, String)> = sec
+            .symbols
+            .iter()
+            .filter_map(|sym| {
+                let part = ro.part(&sym.id)?;
+                let resolved = ro.real_symbol_of_instance(sec, sym, part);
+                let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
+                Some(eda_engine::placed::pin_points_in(sec, sym, part, resolved.as_ref()).into_iter().map(move |(n, at)| (at, format!("{reference}.{n}"))))
+            })
+            .flatten()
+            .collect();
+        // the nets of a wire: a bus's members (`processBusMember`), else the net the wire is on
+        let wire_nets = |w: &eda_model::ir::Wire| -> Vec<String> {
+            if w.bus {
+                let text = if w.net.starts_with('/') { w.net.rsplit('/').next().unwrap_or(&w.net) } else { w.net.as_str() };
+                return eda_kicad::expand_bus_members(text, &design.bus_aliases)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flat_map(|m| {
+                        let here: Vec<String> = sec.labels.iter().filter(|o| o.net == m).map(|o| net_at(o.at, &m)).collect();
+                        if here.is_empty() { vec![m] } else { here }
+                    })
+                    .collect();
+            }
+            let by_pin = w.pins.iter().find_map(|p| {
+                let pin = match p.split_once('.') {
+                    Some((r, n)) => renamed.get(r).map_or_else(|| p.clone(), |new| format!("{new}.{n}")),
+                    None => p.clone(),
+                };
+                net_of_pin.get(pin.as_str()).map(|n| n.to_string())
+            });
+            by_pin.or_else(|| (!w.net.is_empty()).then(|| w.net.clone())).into_iter().collect()
+        };
+        let label_nets = |l: &eda_model::ir::NetLabel| -> Vec<String> {
+            match eda_kicad::expand_bus_members(&l.net, &design.bus_aliases) {
+                Some(members) => members.into_iter().map(|m| net_at(l.at, &m)).collect(),
+                None => vec![net_at(l.at, &l.net)],
+            }
+        };
+        let pin_net = |pin: &str| net_of_pin.get(pin).map(|n| n.to_string());
+        // A directive's own net: the item at its connection point (`GetConnectionPoints`), a wire or bus through it, else a label or a pin there.
+        for (at, classes) in &directives {
+            let nets: Vec<String> = if let Some(w) = sec.wires.iter().find(|w| !w.bus && polyline_touches(&w.pts, *at)).or_else(|| sec.wires.iter().find(|w| w.bus && polyline_touches(&w.pts, *at))) {
+                wire_nets(w)
+            } else if let Some(l) = sec.labels.iter().find(|l| l.at == *at) {
+                label_nets(l)
+            } else {
+                pins.iter().filter(|(p, _)| p == at).filter_map(|(_, pin)| pin_net(pin)).collect()
+            };
+            for net in nets {
+                for class in classes {
+                    assigned.push((net.clone(), class.clone()));
+                }
+            }
+        }
+        // A rule area gives the classes of the directives on its border (`SCH_RULE_AREA::RefreshContainedItemsAndDirectives`: the connection point within
+        // 5 IU of an edge, `CollideEdge`) to the wires and buses it touches, the labels and pins inside it (`GetNetclassesForDriver` reads the item's rule
+        // areas, `GetResolvedNetclasses`).
+        for g in &sec.extras.graphics {
+            let eda_model::sch_extras::SchGraphicKind::RuleArea { pts, .. } = &g.shape else { continue };
+            if pts.len() < 3 {
+                continue;
+            }
+            let classes: Vec<&String> = directives.iter().filter(|(at, _)| polygon_edge_distance(pts, *at) <= RULE_AREA_EDGE_NM).flat_map(|(_, c)| c.iter()).collect();
+            if classes.is_empty() {
+                continue;
+            }
+            let mut nets: Vec<String> = Vec::new();
+            for w in sec.wires.iter().filter(|w| w.pts.windows(2).any(|s| segment_collides_polygon(pts, s[0], s[1])) || (w.pts.len() == 1 && point_in_polygon(pts, w.pts[0]))) {
+                nets.extend(wire_nets(w));
+            }
+            for l in sec.labels.iter().filter(|l| point_in_polygon(pts, l.at)) {
+                nets.extend(label_nets(l));
+            }
+            nets.extend(pins.iter().filter(|(p, _)| point_in_polygon(pts, *p)).filter_map(|(_, pin)| pin_net(pin)));
+            for net in nets {
+                for class in &classes {
+                    assigned.push((net.clone(), (*class).clone()));
+                }
+            }
+        }
     }
     for (net, class) in assigned {
         let pattern = eda_kicad::exact_pattern(&net);
@@ -464,6 +570,64 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             }
         }
     }
+}
+
+/// `SCH_RULE_AREA::RefreshContainedItemsAndDirectives`' reach of an edge for a directive's connection point: `CollideEdge( pt, nullptr, 5 )`, 5 schematic IU (100 nm each).
+const RULE_AREA_EDGE_NM: f64 = 500.0;
+
+/// True when `p` lies on the polyline `pts` (one of its points, or on a segment between two).
+fn polyline_touches(pts: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
+    pts.contains(&p) || pts.windows(2).any(|s| point_segment_distance(s[0], s[1], p) == 0.0)
+}
+
+fn point_segment_distance(a: eda_model::ir::Point, b: eda_model::ir::Point, p: eda_model::ir::Point) -> f64 {
+    let (ax, ay, bx, by, px, py) = (a.x.get() as f64, a.y.get() as f64, b.x.get() as f64, b.y.get() as f64, p.x.get() as f64, p.y.get() as f64);
+    let (dx, dy) = (bx - ax, by - ay);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 == 0.0 { 0.0 } else { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) };
+    ((ax + t * dx - px).powi(2) + (ay + t * dy - py).powi(2)).sqrt()
+}
+
+/// The distance of `p` to the nearest edge of the closed outline `poly` (`SHAPE_LINE_CHAIN::CollideEdge`).
+fn polygon_edge_distance(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> f64 {
+    (0..poly.len()).map(|i| point_segment_distance(poly[i], poly[(i + 1) % poly.len()], p)).fold(f64::INFINITY, f64::min)
+}
+
+/// `SHAPE_POLY_SET::Collide( VECTOR2I )`: inside the outline or on its edge.
+fn point_in_polygon(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
+    if polygon_edge_distance(poly, p) == 0.0 {
+        return true;
+    }
+    let (px, py) = (p.x.get() as i128, p.y.get() as i128);
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (xi, yi, xj, yj) = (poly[i].x.get() as i128, poly[i].y.get() as i128, poly[j].x.get() as i128, poly[j].y.get() as i128);
+        if (yi > py) != (yj > py) {
+            // the crossing's x compared without dividing: px < xi + (py - yi) * (xj - xi) / (yj - yi)
+            let lhs = (px - xi) * (yj - yi);
+            let rhs = (py - yi) * (xj - xi);
+            if (yj - yi > 0 && lhs < rhs) || (yj - yi < 0 && lhs > rhs) {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+/// `SHAPE_POLY_SET::Collide( SHAPE_SEGMENT )` at the line's centre: an end inside, or the segment crossing an edge.
+fn segment_collides_polygon(poly: &[eda_model::ir::Point], a: eda_model::ir::Point, b: eda_model::ir::Point) -> bool {
+    if point_in_polygon(poly, a) || point_in_polygon(poly, b) {
+        return true;
+    }
+    let orient = |p: eda_model::ir::Point, q: eda_model::ir::Point, r: eda_model::ir::Point| -> i128 {
+        ((q.x.get() as i128 - p.x.get() as i128) * (r.y.get() as i128 - p.y.get() as i128) - (q.y.get() as i128 - p.y.get() as i128) * (r.x.get() as i128 - p.x.get() as i128)).signum()
+    };
+    (0..poly.len()).any(|i| {
+        let (c, d) = (poly[i], poly[(i + 1) % poly.len()]);
+        orient(a, b, c) * orient(a, b, d) < 0 && orient(c, d, a) * orient(c, d, b) < 0
+    })
 }
 
 /// A `Part` in `model` for every footprint that lives only on the board (`DrawingsSection::board_parts`): the copies Duplicate and
