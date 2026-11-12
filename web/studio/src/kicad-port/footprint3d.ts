@@ -46,6 +46,11 @@ export function padPasteMargin3d(pad: Pad, part: Pick<Part, "paste_margin" | "pa
   const onPaste = pad.layers ? pad.layers.includes("F.Paste") : !pad.th && pad.kind !== "non_plated_hole";
   if (!onPaste) return null;
   if (!padHasCopper(pad)) return [0, 0];
+  return pasteMarginOf(pad, part, board);
+}
+
+/** `PAD::GetSolderPasteMargin` of a pad with copper (the margin part of [`padPasteMargin3d`]): the pad's own, else the footprint's, else the board's, per axis of the pad's frame. */
+export function pasteMarginOf(pad: Pad, part: Pick<Part, "paste_margin" | "paste_margin_ratio">, board: Pick<MaskPaste, "paste_margin_nm" | "paste_margin_ratio"> | undefined | null): [number, number] {
   const margin = pad.paste_margin ?? part.paste_margin ?? board?.paste_margin_nm ?? 0;
   const ratio = pad.paste_ratio ?? part.paste_margin_ratio ?? board?.paste_margin_ratio ?? 0;
   const [sx, sy] = pad.size ?? [pad.w, pad.h];
@@ -95,12 +100,12 @@ export function padMaskSides(pad: Pick<Pad, "layers" | "th">, side: "top" | "bot
 
 /**
  * `PAD::GetSolderMaskExpansion`: no expansion for a pad with no copper layer ("Pads defined only on mask layers ... use the shape defined by the pad settings only"); else the
- * pad's own margin, else the board's (`m_SolderMaskExpansion`, Board Setup's "Solder mask expansion"), "ensure mask have a size always >= 0": no less than minus half the
- * pad's smaller side. The footprint's own margin and custom DRC rules are not in the state.
+ * pad's own margin, else the footprint's (`GetLocalSolderMaskMargin`), else the board's (`m_SolderMaskExpansion`, Board Setup's "Solder mask expansion"), "ensure mask have
+ * a size always >= 0": no less than minus half the pad's smaller side. Custom DRC rules are not read.
  */
-export function padMaskMargin3d(pad: Pad, board: Pick<MaskPaste, "expansion_nm"> | undefined | null): number {
+export function padMaskMargin3d(pad: Pad, part: Pick<Part, "mask_margin"> | undefined | null, board: Pick<MaskPaste, "expansion_nm"> | undefined | null): number {
   if (!padHasCopper(pad)) return 0;
-  const margin = pad.mask_margin ?? board?.expansion_nm ?? 0;
+  const margin = pad.mask_margin ?? part?.mask_margin ?? board?.expansion_nm ?? 0;
   if (margin < 0) {
     const [sx, sy] = pad.size ?? [pad.w, pad.h];
     const minsize = -Math.trunc(Math.min(sx, sy) / 2);

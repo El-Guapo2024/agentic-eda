@@ -44,6 +44,8 @@ export interface Viewer3dSnapshot {
   navigator: boolean;
   /** The copper layers drawn and each one's colour (`#rrggbb`, its material's diffuse): an inner layer only while the body does not hide it. */
   copperColors: Record<string, string>;
+  /** What kicad-port/layers3d.ts built (`createLayers`): the through holes, the via annuli, the body's post-machining cuts, the plugs, the off-board pads, the via covers, and the server's polygon jobs (asked, answered). */
+  layers3d: Record<string, number>;
 }
 
 const empty = (): Viewer3dSnapshot => ({
@@ -59,6 +61,7 @@ const empty = (): Viewer3dSnapshot => ({
   padShapes: {},
   navigator: false,
   copperColors: {},
+  layers3d: {},
   hovered: null,
   cameraMoving: false,
   scene: {},

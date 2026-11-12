@@ -51,22 +51,20 @@
 // needs to be re-applied here -- the backend already baked `part.rot`
 // and the bottom-side mirror into `pads[].x/y` and `courtyard`.
 import * as THREE from "three";
-import type { BoardState, BoardText, FillZone, Pad, PadStackLayer, Part, Shape, Side } from "../../api/types";
+import type { BoardState, FillZone, Part, Side } from "../../api/types";
 import { buildTextBoxMesh } from "./pcbItems3d";
 import { layerColor } from "../canvas/layers";
-import { THEME_COLORS, shapeLayerOf, type Rgba } from "../../kicad-port/appearance3d";
-import { circleThrough, normalizeSweep } from "../canvas/painter";
-import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { THEME_COLORS, userRowOfLayer, type Rgba } from "../../kicad-port/appearance3d";
 import { boardOutlinePolygons } from "../../kicad-port/pcbOutline";
 import { fallbackBodyHeightMm, partBodyBoxNm } from "../../kicad-port/partBody";
-import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
-import { artTextAsField, graphicsOf, layersOf } from "../../kicad-port/fpArt";
-import { fieldAsText } from "../../kicad-port/fpFields";
-import { zoneCopperLayers } from "../../kicad-port/zoneLayers";
 import { DEFAULT_STACK, stackOfBoard, type Stack } from "../../kicad-port/model3d";
-import { fieldsDrawn3d, padMaskMargin3d, padMaskSides, padPasteMargin3d } from "../../kicad-port/footprint3d";
-import { MAX_ERROR_NM, circlePolygon, nestContours, ovalPolygon, padContours, padPlacement, toBoard, type Contour, type PadPlacement, type Pt } from "../../kicad-port/padShape3d";
-import { boardMaterial3d, copperLayerMaterial3d, copperMaterial3d, glShininess, innerLayersDrawn, maskMaterial3d, pasteMaterial3d, plasticMaterial3d, silkMaterial3d, type Material3d, type Rgb } from "../../kicad-port/material3d";
+import { MAX_ERROR_NM, arcToSegmentCount, circlePolygon, nestContours, type Contour, type Pt } from "../../kicad-port/padShape3d";
+import { boardMaterial3d, copperLayerMaterial3d, glShininess, innerLayersDrawn, maskMaterial3d, nonPlatedCopperMaterial3d, pasteMaterial3d, plasticMaterial3d, silkMaterial3d, type Material3d, type Rgb } from "../../kicad-port/material3d";
+import { buildLayers3d, makeJob, padHoleContour, type Cylinder, type Layers3d, type PolyJob, type Prim, type ZRef } from "../../kicad-port/layers3d";
+import { fpTextBoxes } from "../../kicad-port/fpBoardItems";
+import { readyPaths } from "../../kicad-port/barcodeShapes";
+import { Culler, MASK_BITS, contoursToShapes, listShapes, maskOpenings, primShapes, type JobResults, type Subtract } from "./cull3d";
+import { cloneLit, kicadLit, scaledColor } from "./glLighting";
 
 // ---------------------------------------------------------------------
 // Units
@@ -99,8 +97,6 @@ const COPPER_MM = DEFAULT_STACK.copperMm;
 const MASK_MM = 0.025;
 /** DEFAULT_COPPER_THICKNESS is 0.035mm already (COPPER_MM above matches); SOLDERPASTE_LAYER_THICKNESS is its own, thicker constant (`pcbIUScale.mmToIU(0.04)`) -- see addSolderPaste. */
 const SOLDERPASTE_MM = 0.04;
-/** Cosmetic-only gap between the mask surface and the silkscreen line loop, so the line never exactly coincides with the mask plane (z-fighting). Not a real stack-up dimension. */
-const SILK_GAP_MM = 0.01;
 /**
  * Part body height. THERE IS NO REAL PER-PART 3D MODEL DATA (the task
  * spec is explicit: "There are no 3D models yet") -- every placed part
@@ -121,10 +117,6 @@ function surfaceY(side: Side): number {
 /** The solder mask's plane: on the outer copper's face (`InitSettings`: F.Mask from `zpos_copperTop_front` to it plus the mask's thickness), the middle of that. */
 function maskCenterY(side: Side): number {
   return surfaceY(side) + outwardSign(side) * (copperMm(side) + maskMm(side) / 2);
-}
-
-function silkY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (copperMm(side) + maskMm(side) + SILK_GAP_MM);
 }
 
 /** Part bodies sit directly on the board surface (task spec: "top parts sit above +0.8mm ... extending further up"), not stacked on top of the copper/mask -- those are sub-0.05mm and not worth the extra offset the spec didn't ask for. */
@@ -153,17 +145,10 @@ function layerY(layerName: string, layerOrder: readonly string[]): number {
   return halfThickness() - t * stack.boardThicknessMm;
 }
 
+
 // ---------------------------------------------------------------------
-// Colors. Every material below reads a real value out of colors.json
-// (extracted from common/settings/builtin_color_themes.h): the
-// LAYER_3D_* keys are KiCad's own default 3D-viewer theme (background
-// gradient, board, copper, mask, silkscreen) -- a *different* set of
-// keys from the 2D editor's per-layer F_Cu/B_Cu/F_SilkS/etc (used
-// elsewhere in this app via copperColorKey()), which exist to tell
-// layers apart at a glance in the 2D canvas, not to look physically
-// real (e.g. F_Mask is magenta, B_Mask cyan). The realistic 3D view
-// uses the LAYER_3D_* set instead, matching real KiCad's own default 3D
-// look rather than recoloring the 2D editor's distinguishing tints.
+// Colors and materials. Every material below reads a real value out of colors.json (common/settings/builtin_color_themes.h's LAYER_3D_* keys: KiCad's own default
+// 3D-viewer theme) through the palette, and is lit as KiCad's OpenGL view lights it (glLighting.ts).
 // ---------------------------------------------------------------------
 
 /** The placeholder body of a part with no model (not a board layer: it stands in for a model file, which has its own material). */
@@ -178,12 +163,6 @@ let palette: Record<string, Rgba> = { ...THEME_COLORS };
 /** Whether an Appearance-manager row is shown, for the build in progress (everything is, unless `buildBoardGroup` is given a function). */
 let rowShown: (row: string) => boolean = () => true;
 
-/** A palette colour as three.js wants it: the RGB read as sRGB (as the theme's hex strings always were) and the alpha apart (the theme itself encodes the mask's translucency in it). */
-function paletteColor(row: string): { color: THREE.Color; alpha: number } {
-  const c = palette[row] ?? THEME_COLORS[row] ?? { r: 0.5, g: 0.5, b: 0.5, a: 1 };
-  return { color: new THREE.Color().setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace), alpha: c.a };
-}
-
 function paletteRgba(row: string): Rgba {
   return palette[row] ?? THEME_COLORS[row] ?? { r: 0.5, g: 0.5, b: 0.5, a: 1 };
 }
@@ -195,44 +174,23 @@ function hexColor(hex: string): THREE.Color {
 const srgb = (c: Rgb): THREE.Color => new THREE.Color().setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
 
 /**
- * A board layer's material as KiCad's OpenGL view sets it (kicad-port/material3d.ts: `setupMaterials`, `setLayerMaterial`, `OglSetMaterial`): Blinn-Phong with the
- * layer's diffuse, specular and emissive colours, OpenGL's shininess (`128 * min( m_Shininess, 1 )`, 128 for every board layer) and the transparency; and its own
- * ambient colour, which fixed-function OpenGL multiplies the lights' ambient by (`GL_AMBIENT`) where three.js would use the diffuse colour: the indirect-diffuse step of the
- * Phong shader is replaced by one that takes the material's ambient colour (`kicadAmbient`). The lights stay three.js's (normalised Blinn-Phong, physically-based units),
- * so the shading is close to KiCad's, not the same: see PARITY-3d section 3.
+ * A board layer's material as KiCad's OpenGL view sets it (kicad-port/material3d.ts: `setupMaterials`, `setLayerMaterial`, `OglSetMaterial`): the layer's ambient,
+ * diffuse, specular and emissive colours, OpenGL's shininess (`128 * min( m_Shininess, 1 )`) and the transparency, lit with OpenGL's own equation and KiCad's three
+ * lights (glLighting.ts).
  */
-function kicadMaterial(m: Material3d, opts: { side?: THREE.Side; depthWrite?: boolean } = {}): THREE.MeshPhongMaterial {
+export function kicadMaterial(m: Material3d, opts: { side?: THREE.Side; depthWrite?: boolean } = {}): THREE.MeshPhongMaterial {
   const transparent = m.transparency > 0;
-  // Fixed-function OpenGL's specular term is `specular * light * pow( N.H, shininess )` with no normalisation; three's Blinn-Phong multiplies it by
-  // `G * D = ( shininess / 2 + 1 ) / ( 4 pi )` at its peak (bsdfs.glsl's `BRDF_BlinnPhong`), 5.2 times at KiCad's 128. The colour is divided by it, so the
-  // highlight is as bright as OpenGL draws it.
-  const shininess = glShininess(m);
-  const norm = (shininess / 2 + 1) / (4 * Math.PI);
   const mat = new THREE.MeshPhongMaterial({
     color: srgb(m.diffuse),
-    specular: srgb({ r: m.specular.r / norm, g: m.specular.g / norm, b: m.specular.b / norm }),
+    specular: srgb(m.specular),
     emissive: srgb(m.emissive),
-    shininess,
+    shininess: glShininess(m),
     transparent,
     opacity: 1 - m.transparency,
     side: opts.side ?? THREE.FrontSide,
     ...(opts.depthWrite !== undefined ? { depthWrite: opts.depthWrite } : transparent ? { depthWrite: false } : {}),
   });
-  const ambient = srgb(m.ambient);
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.kicadAmbient = { value: ambient };
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <lights_phong_pars_fragment>",
-      `#include <lights_phong_pars_fragment>
-uniform vec3 kicadAmbient;
-void RE_IndirectDiffuse_KiCad( const in vec3 irradiance, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in BlinnPhongMaterial material, inout ReflectedLight reflectedLight ) {
-  reflectedLight.indirectDiffuse += irradiance * BRDF_Lambert( kicadAmbient );
-}
-#undef RE_IndirectDiffuse
-#define RE_IndirectDiffuse RE_IndirectDiffuse_KiCad`
-    );
-  };
-  mat.customProgramCacheKey = () => "kicad-layer-material";
+  kicadLit(mat, srgb(m.ambient));
   mat.userData.kicad = m;
   return mat;
 }
@@ -259,90 +217,20 @@ function pasteMaterial(): THREE.MeshPhongMaterial {
   return kicadMaterial(pasteMaterial3d(rgbOf(paletteRgba("solder_paste"))));
 }
 
-/** The solder mask (`setLayerMaterial`'s `F_Mask` / `B_Mask`: `TransparencyControl` of its colour, a darker mask more opaque and shinier), drawn from both sides. */
+/** The solder mask (`setLayerMaterial`'s `F_Mask` / `B_Mask`), drawn from both sides where [`maskOpenings`] left its side's stencil bit clear (`renderSolderMaskLayer`). */
 function maskMaterial(side: Side): THREE.MeshPhongMaterial {
   const m = kicadMaterial(maskMaterial3d(paletteRgba(side === "top" ? "soldermask_top" : "soldermask_bottom")), { side: THREE.DoubleSide, depthWrite: false });
-  // The pads' openings (`renderSolderMaskLayer`: `m_board->DrawCulled( aShowThickness, solder_mask, via_holes )`, the mask layer's items culled out of the board):
-  // the mask is drawn only where [`buildMaskOpenings`] left its side's stencil bit clear.
   m.stencilWrite = true;
   m.stencilWriteMask = 0;
-  m.stencilRef = MASK_STENCIL_BIT[side];
-  m.stencilFuncMask = MASK_STENCIL_BIT[side];
+  m.stencilRef = MASK_BITS[side];
+  m.stencilFuncMask = MASK_BITS[side];
   m.stencilFunc = THREE.NotEqualStencilFunc;
   return m;
 }
 
-/** The stencil bit of a side's mask openings ([`buildMaskOpenings`]); the silkscreen's clip has bits 1 and 2. */
-const MASK_STENCIL_BIT: Record<Side, number> = { top: 4, bottom: 8 };
-
-/** The openings of a side's solder mask (the pads on that mask, grown by their expansion), drawn into the stencil buffer only, before anything else, on the mask's plane. */
-function buildMaskOpenings(shapes: readonly THREE.Shape[], side: Side): THREE.Mesh | null {
-  if (shapes.length === 0) return null;
-  const bit = MASK_STENCIL_BIT[side];
-  const material = new THREE.MeshBasicMaterial({
-    colorWrite: false,
-    depthWrite: false,
-    depthTest: false,
-    side: THREE.DoubleSide,
-    stencilWrite: true,
-    stencilRef: bit,
-    stencilWriteMask: bit,
-    stencilFunc: THREE.AlwaysStencilFunc,
-    stencilZPass: THREE.ReplaceStencilOp,
-  });
-  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shapes as THREE.Shape[]), material);
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.y = maskCenterY(side);
-  mesh.renderOrder = -10;
-  mesh.name = `mask-opening-${side}`;
-  return mesh;
-}
-
-function silkMaterial(side: Side): THREE.LineBasicMaterial {
-  return silkClip(new THREE.LineBasicMaterial({ color: paletteColor(side === "top" ? "silkscreen_top" : "silkscreen_bottom").color }), side);
-}
-
-/** Whether the silkscreen of the build in progress is clipped to the board: the Off-board Silkscreen row off (`render.opengl_show_off_board_silk`, false by default). */
-let clipSilk = false;
-
-/** The stencil bit of a side's board outline, drawn by [`buildSilkClip`]. */
-const SILK_STENCIL_BIT: Record<Side, number> = { top: 1, bottom: 2 };
-
-/**
- * "Do not clip silk layers to board outline" off: KiCad draws each silkscreen layer culled by `m_antiBoard`, everything outside the board's polygon (`RENDER_3D_OPENGL::Redraw`:
- * `if( isSilkLayer && cfg.show_off_board_silk ) anti_board = nullptr; else ... anti_board = m_antiBoard;`). Here the board's outline of each side marks its stencil bit
- * ([`buildSilkClip`]) and a silkscreen material draws only where its side's bit is set.
- */
-function silkClip<T extends THREE.Material>(m: T, side: Side): T {
-  if (!clipSilk) return m;
-  m.stencilWrite = true; // three.js turns the stencil test on with it; the write mask keeps the buffer as it is
-  m.stencilWriteMask = 0;
-  m.stencilRef = SILK_STENCIL_BIT[side];
-  m.stencilFuncMask = SILK_STENCIL_BIT[side];
-  m.stencilFunc = THREE.EqualStencilFunc;
-  return m;
-}
-
-/** The board's outline on `side`'s silkscreen plane, drawn into the stencil buffer only (no colour, no depth), before anything else: where that side's silkscreen may be drawn. */
-function buildSilkClip(shape: THREE.Shape, side: Side): THREE.Mesh {
-  const bit = SILK_STENCIL_BIT[side];
-  const material = new THREE.MeshBasicMaterial({
-    colorWrite: false,
-    depthWrite: false,
-    depthTest: false,
-    side: THREE.DoubleSide,
-    stencilWrite: true,
-    stencilRef: bit,
-    stencilWriteMask: bit,
-    stencilFunc: THREE.AlwaysStencilFunc,
-    stencilZPass: THREE.ReplaceStencilOp,
-  });
-  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), material);
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.y = silkY(side);
-  mesh.renderOrder = -10;
-  mesh.name = `silk-clip-${side}`;
-  return mesh;
+/** `m_materials.m_SilkSTop` / `m_SilkSBot` (`setupMaterials`, `setLayerMaterial`'s `F_SilkS` / `B_SilkS`). */
+function silkMaterial(side: Side): THREE.MeshPhongMaterial {
+  return kicadMaterial(silkMaterial3d(rgbOf(paletteRgba(side === "top" ? "silkscreen_top" : "silkscreen_bottom"))), { side: THREE.DoubleSide });
 }
 
 /** The board body: `m_materials.m_EpoxyBoard` with `renderBoardBody`'s diffuse and transparency (`1 - m_BoardBodyColor.a`, the theme's body is 90 % opaque). */
@@ -358,15 +246,19 @@ function boardMaterial(): THREE.MeshPhongMaterial {
  * for anything else (ICs, connectors, switches...) -- IC_BODY_GREY,
  * given verbatim by the task ("a KiCad-like mid grey (about #3a3a3a)")
  * because a near-black body was reading as a hole in the board -- tan
- * for a recognized 2-pin passive, matching KiCad's own default
- * placeholder body colors.
+ * for a recognized 2-pin passive. Lit as KiCad lights a model's material (`OglSetMaterial`; VRML's default ambient intensity, 0.2 of the colour).
  */
-function icBodyMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: IC_BODY_GREY, roughness: 0.7, metalness: 0.2 });
+function bodyMaterial(hex: number): THREE.MeshPhongMaterial {
+  const color = new THREE.Color(hex);
+  return kicadLit(new THREE.MeshPhongMaterial({ color, specular: new THREE.Color(0x202020), shininess: 128 * 0.2 }), scaledColor(color, 0.2));
 }
-function passiveBodyMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: 0xc9a876, roughness: 0.6, metalness: 0.1 });
+function icBodyMaterial(): THREE.MeshPhongMaterial {
+  return bodyMaterial(IC_BODY_GREY);
 }
+function passiveBodyMaterial(): THREE.MeshPhongMaterial {
+  return bodyMaterial(0xc9a876);
+}
+
 /** A lighter edge outline on every part body, per the task ("a lighter edge, or a soft outline") -- cheap (one THREE.EdgesGeometry per box) and keeps a mid-grey body from reading as a flat hole against the board. */
 const PART_EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x8a8a8a });
 /** Same heuristic as schematic/layout.ts's isTwoPinPassive, adapted to a PCB Part (pad count stands in for pin count -- this type has no pin list). */
@@ -550,11 +442,25 @@ function shapesOf(contours: readonly Contour[], cuts: readonly Contour[] = []): 
 }
 
 /** `shapes` extruded through the height range `[low, high]` (same local-XY -> world-XZ mapping as buildSlab: local z runs down from `high`). */
+/** The walls' material of a layer's material (its copy, marked). */
+const walls = new WeakMap<THREE.Material, THREE.Material>();
+function wallsOf(m: THREE.Material): THREE.Material {
+  let w = walls.get(m);
+  if (!w) {
+    w = m instanceof THREE.MeshPhongMaterial ? cloneLit(m) : m.clone();
+    w.userData.walls = true;
+    walls.set(m, w);
+  }
+  return w;
+}
+
 function extruded(shapes: readonly THREE.Shape[], [low, high]: [number, number], material: THREE.Material, name: string): THREE.Mesh | null {
   if (shapes.length === 0) return null;
   try {
     const geometry = new THREE.ExtrudeGeometry(shapes as THREE.Shape[], { depth: Math.max(high - low, 1e-5), bevelEnabled: false, curveSegments: 1 });
-    const mesh = new THREE.Mesh(geometry, material);
+    // With the thickness shown, the walls (ExtrudeGeometry's second group: `DrawMiddle`) have a material of their own, which "Disable thickness" hides while the camera
+    // moves (`setMoving3d`).
+    const mesh = new THREE.Mesh(geometry, withThickness ? [material, wallsOf(material)] : material);
     mesh.rotation.x = Math.PI / 2;
     mesh.position.y = high;
     mesh.name = name;
@@ -563,166 +469,6 @@ function extruded(shapes: readonly THREE.Shape[], [low, high]: [number, number],
     console.warn(`Viewer3D: could not build ${name}`, err);
     return null;
   }
-}
-
-/** `PAD::TransformHoleToPolygon( aBuffer, inflate, aError, ERROR_INSIDE )` on the board (nm): the oval of `GetEffectiveHoleShape` (`pad.slot` in the pad's own frame, at the pad's position), or null without a hole. */
-function padHoleContour(pad: Pad, part: Part, inflate: number): Contour | null {
-  const cx = pad.px ?? pad.x;
-  const cy = pad.py ?? pad.y;
-  if (pad.slot) {
-    const [sx, sy] = pad.slot;
-    if (!sx || !sy) return null;
-    const hx = Math.trunc(sx / 2);
-    const hy = Math.trunc(sy / 2);
-    const hw = Math.min(hx, hy);
-    const place: PadPlacement = { x: cx, y: cy, padRotDeg: pad.size ? (pad.rot ?? 0) : 0, fpRotDeg: pad.size ? (part.rot ?? 0) : 0, mirror: !!pad.size && part.side === "bottom" };
-    return ovalPolygon(toBoard(place, [-(hx - hw), -(hy - hw)]), toBoard(place, [hx - hw, hy - hw]), 2 * hw + 2 * inflate, MAX_ERROR_NM);
-  }
-  if (pad.drill) return circlePolygon([cx, cy], Math.trunc(pad.drill / 2) + inflate, MAX_ERROR_NM);
-  return null;
-}
-
-/**
- * `PAD::IsOnCopperLayer` for a non-plated pad: "If their annular ring size is 0 or negative, then they have no annular ring either" -- a round or oval pad that is no
- * bigger than its hole, with no offset, has no copper.
- */
-function npthHasRing(pad: Pad): boolean {
-  const [sx, sy] = pad.size ?? [pad.w, pad.h];
-  const [dx, dy] = pad.slot ?? [pad.drill ?? 0, pad.drill ?? 0];
-  const noOffset = !pad.offset || (pad.offset[0] === 0 && pad.offset[1] === 0);
-  if (pad.shape === "circle" && noOffset && sx <= dx) return false;
-  if (pad.shape === "oval" && noOffset && sx <= dx && sy <= dy) return false;
-  return true;
-}
-
-/**
- * The board's copper layers a pad has copper on (`BOARD_ADAPTER::addPads`: `pad->IsOnLayer( aLayerId )`, `IsOnCopperLayer`, `FlashLayer`): the layers Remove Unused Pads
- * left it (`flashed`); else its `(layers ..)` (in the footprint's frame: `F.Cu` is the footprint's side, `*.Cu` every copper layer); else its kind's (an SMD pad its side's
- * outer layer, a hole every copper layer). A non-plated pad with no ring has none.
- */
-function padCopperLayers(pad: Pad, part: Part, layerOrder: readonly string[]): string[] {
-  if (pad.kind === "non_plated_hole" && !npthHasRing(pad)) return [];
-  if (pad.flashed) return pad.flashed;
-  const front = part.side === "bottom" ? "B.Cu" : "F.Cu";
-  const back = part.side === "bottom" ? "F.Cu" : "B.Cu";
-  if (!pad.layers) return pad.th ? [...layerOrder] : [front];
-  const out = new Set<string>();
-  for (const l of pad.layers) {
-    if (l === "*.Cu") layerOrder.forEach((x) => out.add(x));
-    else if (l === "F&B.Cu") [front, back].forEach((x) => out.add(x));
-    else if (l === "F.Cu") out.add(front);
-    else if (l === "B.Cu") out.add(back);
-    else if (/^In\d+\.Cu$/.test(l)) out.add(l);
-  }
-  return [...out].filter((l) => layerOrder.includes(l));
-}
-
-/** A through hole of the board (a via's or a plated pad's), mm: where a track's copper stops (`m_TH_ODPolys` is taken out of every copper layer). */
-interface HoleDisc {
-  x: number;
-  z: number;
-  r: number;
-}
-
-/** The through holes by 1 mm cell, so a track end finds the hole it ends in without a scan of every hole. */
-class HoleIndex {
-  private cells = new Map<string, HoleDisc[]>();
-  add(h: HoleDisc): void {
-    for (let i = Math.floor(h.x - h.r); i <= Math.floor(h.x + h.r); i++)
-      for (let j = Math.floor(h.z - h.r); j <= Math.floor(h.z + h.r); j++) {
-        const k = `${i},${j}`;
-        const list = this.cells.get(k);
-        if (list) list.push(h);
-        else this.cells.set(k, [h]);
-      }
-  }
-  at(x: number, z: number): HoleDisc | undefined {
-    return this.cells.get(`${Math.floor(x)},${Math.floor(z)}`)?.find((h) => Math.hypot(x - h.x, z - h.z) < h.r);
-  }
-}
-
-/**
- * A track polyline as a box per segment plus a cylinder at every point (the round ends and joints of KiCad's `ROUND_SEGMENT_2D`), copper-thick over `[low, high]`. The
- * copper inside a through hole is not drawn (KiCad takes `m_TH_ODPolys` out of the layer): a joint in a hole is left out and a segment that ends in one stops at its edge.
- */
-function addTrack(group: THREE.Group, ptsMm: ReadonlyArray<[number, number]>, range: [number, number], widthMm: number, material: THREE.Material, holes: HoleIndex): void {
-  if (ptsMm.length === 0) return;
-  const radius = Math.max(widthMm / 2, 0.001);
-  const thickness = Math.max(range[1] - range[0], 1e-5);
-  const y = (range[0] + range[1]) / 2;
-  const jointGeometry = new THREE.CylinderGeometry(radius, radius, thickness, 12);
-  for (const [x, z] of ptsMm) {
-    if (holes.at(x, z)) continue;
-    const mesh = new THREE.Mesh(jointGeometry, material);
-    mesh.position.set(x, y, z);
-    group.add(mesh);
-  }
-  // How far along the unit direction `(ux, uz)` from `(x, z)` the track leaves the hole it starts in (0 when it starts in none).
-  const exit = (x: number, z: number, ux: number, uz: number): number => {
-    const h = holes.at(x, z);
-    if (!h) return 0;
-    const dx = x - h.x;
-    const dz = z - h.z;
-    const b = dx * ux + dz * uz;
-    return -b + Math.sqrt(Math.max(0, b * b - (dx * dx + dz * dz - h.r * h.r)));
-  };
-  for (let i = 0; i + 1 < ptsMm.length; i++) {
-    const [x0, z0] = ptsMm[i]!;
-    const [x1, z1] = ptsMm[i + 1]!;
-    const len = Math.hypot(x1 - x0, z1 - z0);
-    if (len < 1e-6) continue;
-    const ux = (x1 - x0) / len;
-    const uz = (z1 - z0) / len;
-    const t0 = exit(x0, z0, ux, uz);
-    const t1 = len - exit(x1, z1, -ux, -uz);
-    if (t1 - t0 < 1e-6) continue;
-    const geometry = new THREE.BoxGeometry(t1 - t0, thickness, Math.max(widthMm, 0.001));
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = "track";
-    const mid = (t0 + t1) / 2;
-    mesh.position.set(x0 + ux * mid, y, z0 + uz * mid);
-    // Rotate the box's local +X (its "length" axis) to point from p0 to p1.
-    mesh.rotation.y = -Math.atan2(uz, ux);
-    group.add(mesh);
-  }
-}
-
-// ---------------------------------------------------------------------
-// Zones
-// ---------------------------------------------------------------------
-
-/**
- * A zone's copper while there is no fill to draw (a caller that has none to give): the outline polygon itself, an honest stand-in for "the pour would go here", in the
- * copper's material made translucent. A zone with a fill is drawn as copper, as KiCad's 3D viewer draws its filled polygons (`addSolidAreasShapes`).
- */
-function zoneStandInMaterial(): THREE.MeshPhongMaterial {
-  return kicadMaterial({ ...copperMaterial3d(rgbOf(paletteRgba("copper_top"))), transparency: 0.6 }, { side: THREE.DoubleSide, depthWrite: false });
-}
-
-/**
- * Same layer height as `layerY`, nudged a hair toward the board's
- * vertical center so a track or pad sitting exactly on this layer (very
- * common -- a zone usually fills in around existing copper on the same
- * layer) doesn't z-fight with the zone fill beneath it. Cosmetic only,
- * same convention as SILK_GAP_MM above.
- */
-function zoneY(layerName: string, layerOrder: readonly string[]): number {
-  const y = layerY(layerName, layerOrder);
-  const eps = 0.004;
-  if (y > 0) return y - eps;
-  if (y < 0) return y + eps;
-  return y;
-}
-
-function addZoneFill(group: THREE.Group, outlineMm: ReadonlyArray<[number, number]>, y: number, material: THREE.Material): void {
-  const shape = buildOutlineShape(outlineMm);
-  if (!shape) return; // degenerate outline (still being drawn, or <3 points) -- skip rather than fake one
-  const geometry = new THREE.ShapeGeometry(shape);
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.rotation.x = Math.PI / 2; // same local-XY -> world-XZ mapping as buildMask
-  mesh.position.y = y;
-  mesh.name = "zone-fill";
-  group.add(mesh);
 }
 
 // ---------------------------------------------------------------------
@@ -776,304 +522,18 @@ export function buildPartPlaceholder(part: Part, materials: PlaceholderMaterials
 }
 
 // ---------------------------------------------------------------------
-// Drawing-tool shapes and text, rendered as silk
-// ---------------------------------------------------------------------
-
-/** Same "B." prefix convention as layerY's own fallback branch above. */
-function silkSide(layerName: string): Side {
-  return layerName.toLowerCase().startsWith("b.") ? "bottom" : "top";
-}
-
-/** `m_materials.m_SilkSTop` / `m_SilkSBot` (`setupMaterials`, `setLayerMaterial`'s `F_SilkS` / `B_SilkS`), for a filled silkscreen shape. */
-function silkFillMaterial(side: Side): THREE.MeshPhongMaterial {
-  return silkClip(kicadMaterial(silkMaterial3d(rgbOf(paletteRgba(side === "top" ? "silkscreen_top" : "silkscreen_bottom"))), { side: THREE.DoubleSide }), side);
-}
-
-const ARC_SEGMENTS = 24;
-
-/**
- * mm-space polyline for one drawing-tool shape, plus whether it's a
- * closed loop (rect/circle/polygon) or open (segment/arc). Arc samples
- * the *true* circumcircle through start/mid/end -- circleThrough/
- * normalizeSweep, imported from the 2D painter rather than
- * re-implemented here -- so this traces the same curve the 2D canvas
- * draws, not the two-chord stand-in itemHitTest.ts uses for hit-testing
- * (that one only needs a distance, not a shape to render).
- */
-function shapePolylinePts(s: Shape): { pts: Array<[number, number]>; closed: boolean } {
-  switch (s.kind) {
-    case "segment":
-      return { pts: [[mm(s.start[0]), mm(s.start[1])], [mm(s.end[0]), mm(s.end[1])]], closed: false };
-    case "rect": {
-      const [x0, y0] = s.start;
-      const [x1, y1] = s.end;
-      return {
-        pts: [[mm(x0), mm(y0)], [mm(x1), mm(y0)], [mm(x1), mm(y1)], [mm(x0), mm(y1)]],
-        closed: true,
-      };
-    }
-    case "circle": {
-      const r = Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]);
-      const pts: Array<[number, number]> = [];
-      for (let i = 0; i < ARC_SEGMENTS; i++) {
-        const a = (i / ARC_SEGMENTS) * Math.PI * 2;
-        pts.push([mm(s.center[0] + r * Math.cos(a)), mm(s.center[1] + r * Math.sin(a))]);
-      }
-      return { pts, closed: true };
-    }
-    case "polygon":
-      return { pts: s.pts.map(([x, y]) => [mm(x), mm(y)] as [number, number]), closed: true };
-    case "arc": {
-      const circle = circleThrough(s.start, s.mid, s.end);
-      if (!circle) {
-        // Degenerate (collinear) points: a straight line is the same
-        // fallback the 2D painter uses.
-        return { pts: [[mm(s.start[0]), mm(s.start[1])], [mm(s.end[0]), mm(s.end[1])]], closed: false };
-      }
-      const [cx, cy, r] = circle;
-      const a0 = Math.atan2(s.start[1] - cy, s.start[0] - cx);
-      const aMid = Math.atan2(s.mid[1] - cy, s.mid[0] - cx);
-      const a1 = Math.atan2(s.end[1] - cy, s.end[0] - cx);
-      const ccw = normalizeSweep(a0, aMid, a1);
-      const twoPi = Math.PI * 2;
-      const fwd = (x: number) => ((x % twoPi) + twoPi) % twoPi;
-      const span = ccw ? fwd(a1 - a0) : -fwd(a0 - a1);
-      const pts: Array<[number, number]> = [];
-      for (let i = 0; i <= ARC_SEGMENTS; i++) {
-        const a = a0 + (span * i) / ARC_SEGMENTS;
-        pts.push([mm(cx + r * Math.cos(a)), mm(cy + r * Math.sin(a))]);
-      }
-      return { pts, closed: false };
-    }
-    case "bezier":
-      // `BEZIER_POLY::GetPoly` at the board's max error -- the same flattening the 2D canvas draws.
-      return { pts: bezierPolyline(s.start, s.c1, s.c2, s.end, 5).map(([x, y]) => [mm(x), mm(y)] as [number, number]), closed: false };
-  }
-}
-
-/**
- * One drawing-tool shape (Place > Line/Arc/Rectangle/Circle/Polygon),
- * rendered as silk regardless of its actual `layer` string -- the
- * drawing tools can place a shape on any layer (whatever's active when
- * drawn), but per the task spec this view always treats them as
- * silkscreen artwork, on whichever side the layer name's "B."/"F."
- * prefix suggests (silkSide), the same simplification already used for
- * the courtyard-outline stand-in below. A filled shape gets a flat white
- * fill (real screen-printed silkscreen fills are commonly solid); an
- * unfilled one gets the same white line-loop/line-strip treatment as the
- * courtyard outline.
- */
-function addLayerShape(group: THREE.Group, s: Shape, y: number, lineMaterial: THREE.LineBasicMaterial, fillMaterial: THREE.Material, kind: string): void {
-  const { pts, closed } = shapePolylinePts(s);
-  if (pts.length < 2) return;
-  if (s.filled && closed) {
-    const shape = buildOutlineShape(pts);
-    if (shape) {
-      const geometry = new THREE.ShapeGeometry(shape);
-      const mesh = new THREE.Mesh(geometry, fillMaterial);
-      mesh.rotation.x = Math.PI / 2; // same local-XY -> world-XZ mapping as buildMask/addZoneFill
-      mesh.position.y = y;
-      mesh.name = `${kind}-shape-fill`;
-      group.add(mesh);
-      return;
-    }
-  }
-  const points = pts.map(([x, z]) => new THREE.Vector3(x, y, z));
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const line = closed ? new THREE.LineLoop(geometry, lineMaterial) : new THREE.Line(geometry, lineMaterial);
-  line.name = `${kind}-shape-line`;
-  group.add(line);
-  // A hatched shape has the lines `EDA_SHAPE::UpdateHatching` makes as well (`GetHatching()` in the 3D viewer's `create_3Dgraphic_brd_items.cpp`).
-  if (s.hatch_lines && s.hatch_lines.length > 0) {
-    const ends: THREE.Vector3[] = [];
-    for (const [x1, y1, x2, y2] of s.hatch_lines) ends.push(new THREE.Vector3(mm(x1), y, mm(y1)), new THREE.Vector3(mm(x2), y, mm(y2)));
-    const hatch = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ends), lineMaterial);
-    hatch.name = `${kind}-shape-hatch`;
-    group.add(hatch);
-  }
-}
-
-/** Texture resolution for silk text -- pixels per mm of text height, chosen crisp enough for typical zoom levels (this becomes strokeFont.ts's own "sizeNm" unit for the offscreen canvas, in pixels rather than um -- see buildSilkTextMesh). */
-const TEXT_TEXTURE_PX_PER_MM = 48;
-
-/**
- * Free-standing board text (Place > Text) in 3D, and a footprint's
- * fields and texts (addFootprintArt, below) --
- * both draw KiCad's real Newstroke font (strokeFont.ts) into an
- * offscreen canvas, then map that canvas onto a flat plane in the silk
- * layer. A texture rather than real 3D glyph geometry (extruded stroke
- * paths) -- legible and correctly shaped either way, and far cheaper
- * than building/disposing real geometry per character on every board
- * edit.
- */
-interface SilkTextSpec {
-  content: string;
-  xMm: number;
-  zMm: number;
-  sizeMm: number;
-  /** Real per-item stroke width when the caller has one (every caller has one now; absent, drawStrokeText falls back to its own default). */
-  thicknessMm?: number;
-  angleDeg: number;
-  side: Side;
-  justify: "left" | "center" | "right";
-  mirror: boolean;
-  name: string;
-  /** The height of the text plane; the silkscreen's of `side` when absent. */
-  y?: number;
-  /** Ink colour (the texture itself is white); white when absent. */
-  tint?: THREE.Color;
-}
-
-/** Shared by buildTextMesh (Place > Text, a footprint's fields and texts) -- see either caller's own comment for why a rendered-string texture stands in for real glyph outlines. */
-function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
-  const sizeMm = Math.max(spec.sizeMm, 0.01);
-  const px = Math.max(TEXT_TEXTURE_PX_PER_MM * sizeMm, 1);
-  const content = spec.content || " ";
-
-  // Measure in the same "mm" unit the caller already works in (this
-  // function's own xMm/zMm/sizeMm), then convert to texture pixels --
-  // strokeFont.ts's layout doesn't care what unit its caller uses, as
-  // long as thickness/positions are all expressed in that same unit.
-  const textWidthPx = Math.max(measureStrokeText(content, sizeMm), 0.01) * px;
-  const canvas = document.createElement("canvas");
-  const padPx = px * 0.3; // room for stroke width + descenders past the nominal em box
-  canvas.width = Math.ceil(textWidthPx) + padPx * 2;
-  canvas.height = Math.ceil(px * 1.3);
-  const ctx = canvas.getContext("2d")!;
-  // Baseline sits a bit above vertical center (descenders need room
-  // below it too), matching the old fillText version's rough centering.
-  drawStrokeText(ctx, content, padPx, canvas.height * 0.6, {
-    sizeNm: px, // "Nm" in name only -- strokeFont.ts is unit-agnostic; this call's unit is texture pixels
-    thicknessNm: spec.thicknessMm !== undefined ? spec.thicknessMm * (px / sizeMm) : undefined,
-    justify: "left",
-    color: "#ffffff",
-  });
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.minFilter = THREE.LinearFilter;
-
-  // Re-derived from the actual (padded) canvas size, not the raw text
-  // measurement, so the plane's aspect ratio always matches the
-  // texture's -- otherwise the padding added above would stretch the
-  // mapped text horizontally.
-  const widthMm = (canvas.width / px) * sizeMm;
-  const heightMm = (canvas.height / px) * sizeMm;
-  const geometry = new THREE.PlaneGeometry(widthMm, heightMm);
-  // The texture itself was always drawn left-aligned -- anchor (x,z) at
-  // the plane's left/center/right edge per `justify` by shifting the
-  // geometry in its own local space, before the flatten/yaw below, the
-  // same way the 2D canvas's translate-then-rotate-then-textAlign order
-  // keeps the alignment offset in the text's own (unrotated) frame.
-  const offsetX = spec.justify === "left" ? widthMm / 2 : spec.justify === "right" ? -widthMm / 2 : 0;
-  geometry.translate(offsetX, 0, 0);
-  // Flatten the plane (local XY, facing local +Z) into this file's
-  // world board plane (X/Z), facing outward from `side` -- the same
-  // local-XY -> world-XZ mapping as buildMask/addZoneFill, mirrored for
-  // the bottom side so the printed face looks outward from the board
-  // rather than into it.
-  geometry.rotateX(spec.side === "top" ? -Math.PI / 2 : Math.PI / 2);
-
-  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
-  if (spec.tint) material.color.copy(spec.tint);
-  // A text on the silkscreen (no height of its own) is clipped to the board with it.
-  if (spec.y === undefined) silkClip(material, spec.side);
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(spec.xMm, spec.y ?? silkY(spec.side), spec.zMm);
-  mesh.rotation.y = -(spec.angleDeg * Math.PI) / 180;
-  if (spec.mirror) mesh.scale.x *= -1;
-  mesh.name = spec.name;
-  return mesh;
-}
-
-/** Free-standing board text (Place > Text) in 3D -- see buildSilkTextMesh's own comment. */
-function buildTextMesh(t: BoardText, y?: number, tint?: THREE.Color, kind = "silk", name = `${kind}-text`): THREE.Mesh {
-  return buildSilkTextMesh({
-    y,
-    tint,
-    content: t.shown ?? t.content,
-    xMm: mm(t.x),
-    zMm: mm(t.y),
-    sizeMm: mm(t.size),
-    thicknessMm: mm(t.stroke_width),
-    // Millidegrees, CCW-positive in board space -- same conversion and
-    // sign the 2D painter's drawTexts uses for its own (canvas)
-    // rotation; kept consistent here even though this file's world axes
-    // are a separate (if parallel/unmirrored) convention from the 2D
-    // canvas's.
-    angleDeg: t.angle / 1000,
-    side: silkSide(t.layer),
-    justify: t.justify,
-    mirror: t.mirror,
-    name,
-  });
-}
-
-/** The line and fill materials and the colour of one ink. */
-interface Ink {
-  line: THREE.LineBasicMaterial;
-  fill: THREE.Material;
-  color: THREE.Color;
-}
-
-/**
- * A footprint's own silkscreen and drawings, in 3D: each graphic of `part.graphics` on the layer KiCad's 3D viewer would draw it on -- the silkscreen of its side (the outline,
- * the pin-1 mark), an adhesive layer, a user layer; the fab and courtyard layers, copper, mask and paste are not drawn flat (`shapeLayerOf`) -- and its texts on those layers.
- * The footprint's fab body is the placeholder box ([`buildPartPlaceholder`]: `part.body` is the box of its `F.Fab` drawings). A text that is the `${REFERENCE}` follows the References row.
- */
-function addFootprintArt(group: THREE.Group, part: Part, mats: { shown: (row: string) => boolean; silkLineMat: Record<Side, THREE.LineBasicMaterial>; silkFillMat: Record<Side, THREE.Material>; inkOf: (row: string) => Ink }): void {
-  const { shown, silkLineMat, silkFillMat, inkOf } = mats;
-  for (const g of graphicsOf(part)) {
-    for (const layer of layersOf(g)) {
-      const on = shapeLayerOf(layer);
-      if (!on) continue;
-      const s = layer === g.layer ? g : { ...g, layer };
-      if (on.kind === "silk") {
-        if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) addLayerShape(group, s, silkY(on.side), silkLineMat[on.side], silkFillMat[on.side], "silk");
-      } else if (on.kind === "adhesive") {
-        if (shown("adhesive")) {
-          const ink = inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes");
-          addLayerShape(group, s, techLayerY(on.side), ink.line, ink.fill, "adhesive");
-        }
-      } else if (shown(on.row)) {
-        const ink = inkOf(on.row);
-        addLayerShape(group, s, techLayerY("top"), ink.line, ink.fill, on.row);
-      }
-    }
-  }
-  // The footprint's fields (`addFootprintShapes`' first loop): the visible ones on a layer the 3D view draws, each as it is on the board -- the Reference
-  // too, from its own field (a hidden one, or one on F.Fab, is drawn nowhere).
-  for (const f of fieldsDrawn3d(part, shown)) {
-    const on = shapeLayerOf(f.layer);
-    if (!on) continue;
-    const text = fieldAsText({ ...f, text: f.text.replace(/\n/g, " "), ...(f.shown !== undefined ? { shown: f.shown.replace(/\n/g, " ") } : {}) });
-    const kind = f.name === "Reference" ? "part-ref" : f.name === "Value" ? "part-value" : "part-field";
-    if (on.kind === "silk") {
-      if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) group.add(buildTextMesh(text, undefined, undefined, kind, kind));
-    } else if (on.kind === "adhesive") {
-      if (shown("adhesive")) group.add(buildTextMesh(text, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive", kind));
-    } else if (shown(on.row)) {
-      group.add(buildTextMesh(text, techLayerY("top"), inkOf(on.row).color, on.row, kind));
-    }
-  }
-  for (const t of part.texts ?? []) {
-    const on = shapeLayerOf(t.layer);
-    // `addFootprintShapes`' text loop: every text with `LAYER_FP_TEXT`, a `${REFERENCE}` one with References, a `${VALUE}` one with Values.
-    if (!on || !t.text || !shown("footprint_text") || (t.role === "reference" && !shown("references")) || (t.role === "value" && !shown("values"))) continue;
-    // One line: the 3D text is a texture of a single line of the stroke font.
-    const text = fieldAsText(artTextAsField({ ...t, text: t.text.replace(/\n/g, " ") }));
-    if (on.kind === "silk") {
-      if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) group.add(buildTextMesh(text));
-    } else if (on.kind === "adhesive") {
-      if (shown("adhesive")) group.add(buildTextMesh(text, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive"));
-    } else if (shown(on.row)) {
-      group.add(buildTextMesh(text, techLayerY("top"), inkOf(on.row).color, on.row));
-    }
-  }
-}
-
-// ---------------------------------------------------------------------
 // Top-level: board -> Group
 // ---------------------------------------------------------------------
+
+/** The Render Options `createLayers` and `Redraw` read (Preferences > 3D Viewer > General, `EDA_3D_VIEWER_SETTINGS::RENDER_SETTINGS`), KiCad's defaults all off. */
+export interface RenderOptions3d {
+  /** `render.clip_silk_on_via_annuli` ("Clip silkscreen at via annuli"). */
+  clipSilkOnViaAnnuli?: boolean;
+  /** `render.subtract_mask_from_silk` ("Clip silkscreen at solder mask edges"). */
+  subtractMaskFromSilk?: boolean;
+  /** `render.differentiate_plated_copper` ("Differentiate plated copper"). */
+  differentiatePlatedCopper?: boolean;
+}
 
 export interface BuildBoardOptions {
   /** Whether a row of the Appearance manager is shown (kicad-port/appearance3d.ts `isVisible` over the person's choices). Everything is, by default. */
@@ -1090,6 +550,12 @@ export interface BuildBoardOptions {
   copperThickness?: boolean;
   /** The copper layers: whether the PCB editor shows an inner one (`Is3dLayerEnabled`'s default branch, `m_board->IsLayerVisible( aLayer )`) and each one's own colour (the PCB editor's, with "Use PCB editor copper colors"). */
   innerCopper?: { visible: (layer: string) => boolean; color: (layer: string) => Rgba | undefined };
+  /** "Use PCB editor copper colors" (`use_board_editor_copper_colors`): `DifferentiatePlatedCopper()` is off with it. */
+  boardEditorCopperColors?: boolean;
+  /** The Render Options. */
+  render?: RenderOptions3d;
+  /** The server's answers to the polygon jobs the layers asked for (`group.userData.jobs`, `POST /api/board3d/polys`). */
+  jobs?: JobResults;
 }
 
 /** `GET /api/board3d` (crates/cli/src/board3d_api.rs): the body polygons in nm, each outline with its holes, and the hole plating in nm. */
@@ -1098,28 +564,165 @@ export interface Board3d {
   plating: number;
 }
 
-/** A silkscreen object's materials clipped to the board (`silkClip`). */
-function clipped<T extends THREE.Object3D>(obj: T | null, side: Side): T | null {
-  obj?.traverse((o) => {
-    const m = (o as THREE.Mesh).material;
-    if (m) for (const mat of Array.isArray(m) ? m : [m]) silkClip(mat, side);
-  });
-  return obj;
+/** `BOARD_ADAPTER::InitSettings`' `m_nonCopperLayerThickness3DU` (DEFAULT_TECH_LAYER_THICKNESS) and `layerThicknessMargin`: where the technical layers sit. */
+const NON_COPPER_MM = MASK_MM;
+const LAYER_THICKNESS_MARGIN = 1.1;
+
+/** `InitSettings`' height range of a technical layer (`m_layerZcoordBottom` .. `m_layerZcoordTop`): the masks and the paste on the copper's face, the silkscreen 1.1 of a technical layer's thickness off it, every other layer twice that. */
+function techRange(layer: string): [number, number] {
+  const back = layer.startsWith("B.");
+  const side: Side = back ? "bottom" : "top";
+  const s = outwardSign(side);
+  const copperTop = surfaceY(side) + s * copperMm(side);
+  const offset = NON_COPPER_MM * LAYER_THICKNESS_MARGIN;
+  let a: number;
+  let b: number;
+  if (layer === "F.Mask" || layer === "B.Mask") [a, b] = [copperTop, copperTop + s * maskMm(side)];
+  else if (layer === "F.Paste" || layer === "B.Paste") [a, b] = [copperTop, copperTop + s * SOLDERPASTE_MM];
+  else if (layer === "F.SilkS" || layer === "B.SilkS") [a, b] = [copperTop + s * offset, copperTop + s * (offset + NON_COPPER_MM)];
+  else [a, b] = [copperTop + s * 2 * offset, copperTop + s * (2 * offset + NON_COPPER_MM)];
+  return flatten([Math.min(a, b), Math.max(a, b)], back ? "bottom" : "top");
 }
 
-/** Where a layer KiCad draws flat above the board sits, in the front or the back (`BOARD_ADAPTER::InitSettings`: a technical layer other than silkscreen, mask and paste is 2 * 1.1 * the layer thickness off the copper). */
-function techLayerY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (copperMm(side) + 2 * 1.1 * MASK_MM);
+/** `m_antiBoard`: everything off the board (`m_antiBoardPolys`, a huge square less `GetBoardPoly()`), as shapes in mm: the square with the outlines as holes, and the cutouts. */
+function antiBoardShapes(board: BoardState): THREE.Shape[] {
+  const polys = boardOutlinePolygons(board);
+  if (polys.length === 0) return [];
+  const big = 1e5;
+  const outer = new THREE.Shape([new THREE.Vector2(-big, -big), new THREE.Vector2(big, -big), new THREE.Vector2(big, big), new THREE.Vector2(-big, big)]);
+  const out = [outer];
+  for (const p of polys) {
+    outer.holes.push(new THREE.Path(p.outer.map(([x, y]) => new THREE.Vector2(mm(x), mm(y)))));
+    for (const h of p.holes) out.push(new THREE.Shape(h.map(([x, y]) => new THREE.Vector2(mm(x), mm(y)))));
+  }
+  return out;
+}
+
+/** The pieces of one layer, by what they are (`Prim.tag`): one mesh per kind, a pad one mesh each (the test hook reads their shapes), named by `nameOf`. */
+function layerMeshes(list: readonly Prim[], range: [number, number], material: THREE.Material, nameOf: (tag: string) => string, jobs: JobResults | undefined): THREE.Mesh[] {
+  const byTag = new Map<string, Prim[]>();
+  const meshes: THREE.Mesh[] = [];
+  for (const p of list) {
+    const tag = p.tag ?? "item";
+    if (tag === "pad" && p.meta?.padShape) {
+      const mesh = extruded(primShapes(p, jobs), range, material, nameOf("pad"));
+      if (mesh) {
+        mesh.userData.padShape = p.meta.padShape;
+        mesh.userData.corners = p.meta.corners;
+        meshes.push(mesh);
+      }
+      continue;
+    }
+    const l = byTag.get(tag);
+    if (l) l.push(p);
+    else byTag.set(tag, [p]);
+  }
+  for (const [tag, prims] of byTag) {
+    const mesh = extruded(listShapes(prims, jobs), range, material, nameOf(tag));
+    if (mesh) meshes.push(mesh);
+  }
+  return meshes;
+}
+
+/** A clone of meshes with another material (the plated copper, the off-board pads), sharing their geometry. */
+function withMaterial(meshes: readonly THREE.Mesh[], material: THREE.Material, name: string): THREE.Mesh[] {
+  return meshes.map((m) => {
+    const c = new THREE.Mesh(m.geometry, material);
+    c.position.copy(m.position);
+    c.rotation.copy(m.rotation);
+    c.name = name;
+    return c;
+  });
+}
+
+/** `glPolygonOffset( -0.1f, -2.0f )` (`setPlatedCopperAndDepthOffset`): the plated copper and the off-board pads drawn over the copper they lie on. */
+function platedOffset(m: THREE.Material): THREE.Material {
+  m.polygonOffset = true;
+  m.polygonOffsetFactor = -0.1;
+  m.polygonOffsetUnits = -2;
+  return m;
+}
+
+/** A height of the stack (`ZRef`) in this scene's mm: a copper layer's face, moved `depth` into the board. */
+function zOf(ref: ZRef, layerOrder: readonly string[]): number {
+  const [low, high] = ref.layer === "F.Cu" ? outerCopperRange("top") : ref.layer === "B.Cu" ? outerCopperRange("bottom") : copperRangeThick(ref.layer, layerOrder);
+  const face = ref.face === "top" ? high : low;
+  return face + (ref.face === "top" ? -1 : 1) * mm(ref.depth ?? 0);
+}
+
+/** An inner copper layer's range with its thickness (the post-machining is measured from its real faces). */
+function copperRangeThick(layer: string, layerOrder: readonly string[]): [number, number] {
+  const y = layerY(layer, layerOrder);
+  return [y - COPPER_MM / 2, y + COPPER_MM / 2];
 }
 
 /**
- * Builds the board as a single Group: the body, the solder mask, the copper (tracks, vias, zones, pads), the solder paste, the silkscreen and the drawings on
- * the layers KiCad's 3D viewer draws (silkscreen, adhesive, the user layers) -- each as its Appearance-manager row says (`opts.visible`) and in its colour (`opts.colors`).
- * The parts' 3D models are not in it: partModels.ts draws them. Safe to call with a board that has no outline and/or no placed parts -- renders whatever subset
- * of the geometry makes sense, never throws.
- *
- * A row gates what it names and nothing else, as in KiCad: the through-hole, SMD and virtual rows hide the 3D models of those footprints (partModels.ts) and not their pads
- * or their silkscreen (`BOARD_ADAPTER::IsFootprintShown` is asked for models only).
+ * `generateCylinder` (a ring between two heights), `generateInvCone` (its top a cone from the inner radius, `coneDdeg` the half-angle from the vertical) and
+ * `appendPostMachiningGeometry`'s countersink plating (a cone wall `coneWall` thick, `wideAt` its wide end): one solid of revolution about the hole's axis.
+ */
+function cylinderMesh(c: Cylinder, layerOrder: readonly string[], material: THREE.Material, name: string): THREE.Mesh | null {
+  const top = zOf(c.top, layerOrder);
+  const bottom = zOf(c.bottom, layerOrder);
+  const [zt, zb] = [Math.max(top, bottom), Math.min(top, bottom)];
+  if (!(zt > zb) || !(c.ro > c.ri)) return null;
+  const ri = mm(c.ri);
+  const ro = mm(c.ro);
+  let profile: THREE.Vector2[];
+  if (c.coneWall !== undefined) {
+    const t = mm(c.coneWall);
+    profile = c.wideAt === "bottom" ? [new THREE.Vector2(ro, zb), new THREE.Vector2(ri, zt), new THREE.Vector2(ri + t, zt), new THREE.Vector2(ro + t, zb)] : [new THREE.Vector2(ri, zb), new THREE.Vector2(ro, zt), new THREE.Vector2(ro + t, zt), new THREE.Vector2(ri + t, zb)];
+  } else if (c.coneDdeg !== undefined) {
+    // "innerHeight = ( outerRadius - innerRadius ) / tan( angle )", no taller than the plug
+    const angle = Math.max((c.coneDdeg / 10) * (Math.PI / 180), 0.01);
+    const inner = Math.min((ro - ri) / Math.tan(angle), zt - zb);
+    profile = [new THREE.Vector2(ri, zb), new THREE.Vector2(ro, zb), new THREE.Vector2(ro, zt), new THREE.Vector2(ri, zb + inner)];
+  } else {
+    profile = [new THREE.Vector2(ri, zb), new THREE.Vector2(ro, zb), new THREE.Vector2(ro, zt), new THREE.Vector2(ri, zt)];
+  }
+  profile.push(profile[0]!.clone());
+  const segments = Math.max(12, arcToSegmentCount(c.ro, MAX_ERROR_NM, 360));
+  const geometry = new THREE.LatheGeometry(profile, segments).toNonIndexed();
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(mm(c.c[0]), 0, mm(c.c[1]));
+  mesh.name = name;
+  return mesh;
+}
+
+/** The shapes of a side's mask openings, the mask layer's items (`m_layers[ F_Mask ]`). */
+function maskShapes(L: Layers3d, side: Side, jobs: JobResults | undefined): THREE.Shape[] {
+  return listShapes(L.layers.get(side === "top" ? "F.Mask" : "B.Mask") ?? [], jobs);
+}
+
+/** The Appearance-manager row of a technical or user layer (`Is3dLayerEnabled`). */
+function techRow(layer: string): string | null {
+  switch (layer) {
+    case "F.Adhes":
+    case "B.Adhes":
+      return "adhesive";
+    case "F.Paste":
+    case "B.Paste":
+      return "solder_paste";
+    case "F.SilkS":
+      return "silkscreen_top";
+    case "B.SilkS":
+      return "silkscreen_bottom";
+    case "F.Mask":
+      return "soldermask_top";
+    case "B.Mask":
+      return "soldermask_bottom";
+    default:
+      return userRowOfLayer(layer);
+  }
+}
+
+/**
+ * Builds the board as a single Group as KiCad's OpenGL view draws it (`RENDER_3D_OPENGL::reload` / `bgWorker` and `Redraw`): the body with its holes and the plugs of its
+ * post-machining, each copper layer's items (kicad-port/layers3d.ts, `BOARD_ADAPTER::createLayers`) culled by the holes and by everything off the board, the plated
+ * copper and the off-board pads, the barrels, the technical layers (the paste, the silkscreen culled by the holes or the via annuli, the mask's openings and the board's
+ * outside, the adhesive, the user layers), and the solder masks with their openings and the vias' covers -- each as its Appearance-manager row says (`opts.visible`) and in
+ * its colour (`opts.colors`). The parts' 3D models are not in it: partModels.ts draws them. `group.userData.jobs` lists the polygons the server has to work out
+ * (`opts.jobs` brings their answers to the next build). Safe to call with a board that has no outline and/or no placed parts.
  */
 export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {}): THREE.Group {
   palette = { ...THEME_COLORS, ...(opts.colors ?? {}) };
@@ -1127,20 +730,53 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   stack = opts.stack ?? stackOfBoard(board.board_rules);
   innerCopperColor = opts.innerCopper?.color ?? (() => undefined);
   const shown = rowShown;
-  clipSilk = !shown("off_board_silk");
   withThickness = opts.copperThickness ?? false;
+  const render = opts.render ?? {};
+  const jobs = opts.jobs;
+  const differentiate = !!render.differentiatePlatedCopper && !opts.boardEditorCopperColors;
+  const offBoardSilk = shown("off_board_silk");
   const layerOrder = board.layers.length > 0 ? board.layers : ["F.Cu", "B.Cu"];
   // `Is3dLayerEnabled`: F.Cu and B.Cu by their rows; an inner layer as the PCB editor shows it, and only when the body does not hide it ("Do not show inner layers when it
   // is displaying the board and board body is opaque enough", `RENDER_3D_OPENGL::Redraw`).
   const innerDrawn = innerLayersDrawn(shown("board"), paletteRgba("board"));
   const copperShown = (layer: string) => (layer === "F.Cu" ? shown("copper_top") : layer === "B.Cu" ? shown("copper_bottom") : innerDrawn && (opts.innerCopper?.visible(layer) ?? true));
+  const plating = opts.board3d?.plating ?? HOLE_PLATING_NM;
 
   const group = new THREE.Group();
   group.name = "viewer3d-board";
+  const culler = new Culler(group);
 
-  // The body: the board's outlines with their cutouts and, once `GET /api/board3d` has answered, every through and non-plated hole (`m_boardWithHoles`), gated by the
-  // Board Body row. The masks are drawn over the same polygon (`renderSolderMaskLayer` culls the through holes out of `m_board`).
-  const bodyShapes = opts.board3d && opts.board3d.body.length > 0 ? opts.board3d.body.flatMap((p) => shapesOf([p.outer, ...p.holes])) : buildOutlineShapes(board);
+  // The layers' items (`createLayers`).
+  const L = buildLayers3d(
+    board,
+    { layerOrder, ...(opts.zoneFills ? { zoneFills: opts.zoneFills } : {}), barcodePaths: (b) => readyPaths(b) },
+    {
+      layerShown: (layer) => (/\.Cu$/.test(layer) ? copperShown(layer) : ((r) => r !== null && shown(r))(techRow(layer))),
+      fpText: shown("footprint_text"),
+      references: shown("references"),
+      values: shown("values"),
+      showZones: shown("zones"),
+      showOffBoardSilk: offBoardSilk,
+      clipSilkOnViaAnnuli: !!render.clipSilkOnViaAnnuli,
+      subtractMaskFromSilk: !!render.subtractMaskFromSilk,
+      differentiatePlatedCopper: differentiate,
+      plating,
+    }
+  );
+  const allJobs: PolyJob[] = [...L.jobs];
+  const stats = { silkMaskCulled: 0, silkBoardCulled: 0, silkAnnuliCulled: 0, plated: 0 };
+
+  // The body: the board's outlines with their cutouts and, once `GET /api/board3d` has answered, every through and non-plated hole (`m_boardWithHoles`), less the
+  // counterbores, countersinks and backdrills (`board_poly_with_holes.BooleanSubtract( GetFrontCounterborePolys() )` ..: the server's), gated by the Board Body row.
+  // The masks are drawn over the same polygon (`renderSolderMaskLayer` culls the through holes out of `m_board`).
+  let body = opts.board3d && opts.board3d.body.length > 0 ? opts.board3d.body.map((p) => ({ outer: p.outer as Contour, holes: p.holes as Contour[] })) : null;
+  if (body && L.bodyCuts.length > 0) {
+    const cut = makeJob({ a: body, b: L.bodyCuts.map((c) => ({ outer: c, holes: [] })) });
+    allJobs.push(cut);
+    const answered = jobs?.get(cut.key);
+    if (answered) body = answered.map((p) => ({ outer: p.outer, holes: p.holes }));
+  }
+  const bodyShapes = body ? body.flatMap((p) => contoursToShapes([p.outer, ...p.holes])) : buildOutlineShapes(board);
   for (const shape of bodyShapes) {
     if (shown("board")) {
       const slab = buildSlab(shape);
@@ -1151,214 +787,216 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     }
     if (shown("soldermask_top")) group.add(buildMask(shape, "top"));
     if (shown("soldermask_bottom")) group.add(buildMask(shape, "bottom"));
-    if (clipSilk) {
-      if (shown("silkscreen_top")) group.add(buildSilkClip(shape, "top"));
-      if (shown("silkscreen_bottom")) group.add(buildSilkClip(shape, "bottom"));
+  }
+  // `m_postMachinePlugs`: the board material left under a counterbore or countersink and beside a backdrill, drawn with the body.
+  if (shown("board") && L.plugs.length > 0) {
+    const bm = boardMaterial();
+    for (const p of L.plugs) {
+      const mesh = cylinderMesh(p, layerOrder, bm, "post-machine-plug");
+      if (mesh) group.add(mesh);
     }
   }
 
-  // One material per copper layer, reused by every track, pad, via and zone on it.
+  const antiBoard = antiBoardShapes(board);
+  const thOD = listShapes(L.thODs);
+  const holeShapes = (layer: string) => listShapes(L.layerHoles.get(layer) ?? []);
+
+  // The solder masks' openings, each side's stencil bit (`renderSolderMaskLayer`: `m_board->DrawCulled( .., solder_mask, via_holes )`).
+  for (const s of ["top", "bottom"] as const) {
+    if (!shown(s === "top" ? "soldermask_top" : "soldermask_bottom")) continue;
+    const mesh = maskOpenings(maskShapes(L, s, jobs), (techRange(s === "top" ? "F.Mask" : "B.Mask")[0] + techRange(s === "top" ? "F.Mask" : "B.Mask")[1]) / 2, s);
+    if (mesh) group.add(mesh);
+  }
+
+  // Copper, layer by layer (`Redraw`: `pLayerDispList->DrawCulled( showThickness, outerTH, viaHoles, anti_board )`): with "Differentiate plated copper" every copper layer
+  // is the bare copper (`setCopperMaterial`) and the plated copper, the outer copper inside the mask's openings, is drawn over it in the layer's colour.
   const copperMats = new Map<string, THREE.Material>();
   const copperMat = (layer: string): THREE.Material => {
     let m = copperMats.get(layer);
     if (!m) copperMats.set(layer, (m = copperMaterialOf(layer)));
     return m;
   };
-  const plating = opts.board3d?.plating ?? HOLE_PLATING_NM;
-  const barrelsShown = shown("plated_barrels");
-  const barrelRange: [number, number] = [outerCopperRange("bottom")[0], outerCopperRange("top")[1]];
-
-  // The through holes the copper stops at (`m_TH_ODPolys`): every through via's and plated pad's round hole, grown by the plating.
-  const holes = new HoleIndex();
-  const vias = board.routing?.vias ?? [];
-  for (const via of vias) if (!via.type) holes.add({ x: mm(via.x), z: mm(via.y), r: mm(via.drill / 2 + plating) });
-  for (const part of board.parts) {
-    if (!part.placed || !part.side) continue;
-    for (const pad of part.pads ?? []) if (pad.th && pad.kind !== "non_plated_hole" && pad.drill && !pad.slot) holes.add({ x: mm(pad.px ?? pad.x), z: mm(pad.py ?? pad.y), r: mm(pad.drill / 2 + plating) });
+  for (const layer of layerOrder) {
+    const list = L.layers.get(layer);
+    if (!list || !copperShown(layer)) continue;
+    const range = copperRange(layer, layerOrder);
+    const y = (range[0] + range[1]) / 2;
+    const material = differentiate ? kicadMaterial(nonPlatedCopperMaterial3d()) : copperMat(layer);
+    const meshes = layerMeshes(list, range, material, (tag) => (["track", "via", "pad", "zone-fill"].includes(tag) ? tag : `copper-${tag}`), jobs);
+    if (meshes.length > 0) group.add(...meshes);
+    const holes = holeShapes(layer);
+    culler.culled(meshes, [{ shapes: thOD, y, hole: true }, { shapes: holes, y, hole: true }, { shapes: antiBoard, y }]);
+    const side: Side | null = layer === "F.Cu" ? "top" : layer === "B.Cu" ? "bottom" : null;
+    if (!side) continue;
+    if (differentiate) {
+      // `m_platedPadsFront`: the copper less the holes and the outside, inside the mask's openings (`BooleanIntersection( *m_layers_poly.at( F_Mask ) )`).
+      const plated = withMaterial(meshes, platedOffset(copperMaterialOf(layer)), "plated-copper");
+      stats.plated += plated.length;
+      if (plated.length > 0) group.add(...plated);
+      culler.culled(plated, [{ shapes: maskShapes(L, side, jobs), y, keep: true }, { shapes: thOD, y, hole: true }, { shapes: holes, y, hole: true }, { shapes: antiBoard, y }], true);
+    }
+    // `m_offboardPadsFront` / `Back`: not culled by the board's outside.
+    const off = side === "top" ? L.offboardPads.front : L.offboardPads.back;
+    if (off.length > 0) {
+      const pads = layerMeshes(off, range, platedOffset(copperMaterialOf(layer)), () => "offboard-pad", jobs);
+      if (pads.length > 0) group.add(...pads);
+      culler.culled(pads, [{ shapes: thOD, y, hole: true }, { shapes: holes, y, hole: true }]);
+    }
   }
 
-  if (board.routing) {
-    for (const track of board.routing.tracks) {
-      if (!copperShown(track.layer)) continue;
-      const ptsMm: Array<[number, number]> = track.pts.map(([x, yy]) => [mm(x), mm(yy)]);
-      addTrack(group, ptsMm, copperRange(track.layer, layerOrder), mm(track.width), copperMat(track.layer), holes);
-    }
-    // A via: its ring on each copper layer it has (`createTrackWithMargin`'s filled circle of the via's width, less its hole) and its barrel, the "Plated Barrels" row
-    // (`generatePlatedHoleShells` for a through via, `generateViaBarrels` for a blind, buried or micro one: the drill and the plating, between its two layers).
-    for (const via of vias) {
-      const from = layerOrder.indexOf(via.from);
-      const to = layerOrder.indexOf(via.to);
-      const span = via.type && from >= 0 && to >= 0 ? layerOrder.slice(Math.min(from, to), Math.max(from, to) + 1) : layerOrder;
-      const viaLayers = via.flashed ?? span;
+  // The barrels of the vias and the plated holes (`generatePlatedHoleShells`: the hole grown by the plating less the hole, from B.Cu's face to F.Cu's, for a through via
+  // and a plated pad; `generateViaBarrels` for a blind, buried or micro via and for one that is backdrilled or post-machined, with the plating of its counterbore or
+  // countersink): the "Plated Barrels" row, `setLayerMaterial( B_Cu )`.
+  if (shown("plated_barrels")) {
+    const barrelRange: [number, number] = [outerCopperRange("bottom")[0], outerCopperRange("top")[1]];
+    const bm = copperMaterialOf("B.Cu");
+    for (const via of board.routing?.vias ?? []) {
+      if (via.type || L.barrelVias.has(via.id)) continue;
       const hole = circlePolygon([via.x, via.y], Math.trunc(via.drill / 2) + plating, MAX_ERROR_NM);
-      const ring = circlePolygon([via.x, via.y], Math.trunc(via.d / 2), MAX_ERROR_NM);
-      for (const layer of viaLayers) {
-        if (!copperShown(layer)) continue;
-        const mesh = extruded(shapesOf([ring], [hole]), copperRange(layer, layerOrder), copperMat(layer), "via");
-        if (mesh) group.add(mesh);
-      }
-      if (barrelsShown) {
-        const top = copperRange(span[0] ?? "F.Cu", layerOrder);
-        const bottom = copperRange(span[span.length - 1] ?? "B.Cu", layerOrder);
-        const mesh = extruded(shapesOf([hole, circlePolygon([via.x, via.y], Math.trunc(via.drill / 2), MAX_ERROR_NM)]), [Math.min(bottom[0], top[0]), Math.max(top[1], bottom[1])], copperMat("B.Cu"), "plated-barrel");
-        if (mesh) group.add(mesh);
+      // A capped via's hole is filled: `tht_outer_holes_poly.BooleanAdd( capped_outer_vias_poly )`, its whole disk.
+      const mesh = extruded(shapesOf(via.props?.capping ? [hole] : [hole, circlePolygon([via.x, via.y], Math.trunc(via.drill / 2), MAX_ERROR_NM)]), barrelRange, bm, "plated-barrel");
+      if (mesh) group.add(mesh);
+    }
+    for (const c of L.barrels) {
+      const mesh = cylinderMesh(c, layerOrder, bm, "plated-barrel");
+      if (mesh) {
+        // `m_microviaHoles`, what "Disable micro vias" leaves out while the camera moves
+        mesh.userData.microvia = true;
+        group.add(mesh);
       }
     }
-    // `render.show_zones` (Preferences > 3D Viewer > Display Options), and the copper layer of the zone.
-    if (board.routing.zones.length > 0 && shown("zones")) {
-      const standIn = zoneStandInMaterial();
-      for (const zone of board.routing.zones) {
-        const outlineMm: Array<[number, number]> = zone.outline.map(([x, yy]) => [mm(x), mm(yy)]);
-        // A zone on several layers is on each of its copper layers; one on no copper layer (silkscreen, mask) is not copper. A rule area has no copper at all.
-        if (zone.is_rule_area) continue;
-        for (const layer of zoneCopperLayers(zone)) {
-          if (!copperShown(layer)) continue;
-          if (!opts.zoneFills) {
-            addZoneFill(group, outlineMm, zoneY(layer, layerOrder), standIn);
-            continue;
-          }
-          const fill = opts.zoneFills.find((f) => f.id === zone.id && f.layer === layer);
-          if (!fill?.filled) continue; // never filled, or edited since: no copper yet
-          // The fill as copper of the layer (`addSolidAreasShapes`): each fractured fragment, copper-thick.
-          const mesh = extruded(fill.fragments.flatMap((ring) => shapesOf([ring.map(([x, yy]) => [x, yy] as Pt)])), copperRange(layer, layerOrder), copperMat(layer), "zone-fill");
-          if (mesh) group.add(mesh);
-        }
-      }
-    }
-  }
-
-  const pasteMat = pasteMaterial();
-  const silkLineMat = { top: silkMaterial("top"), bottom: silkMaterial("bottom") };
-  const silkFillMat = { top: silkFillMaterial("top"), bottom: silkFillMaterial("bottom") };
-  // The ink of a user layer or an adhesive layer, one material per row, for the free drawings and for a footprint's own.
-  const userMat = new Map<string, THREE.LineBasicMaterial>();
-  const userFill = new Map<string, THREE.MeshPhongMaterial>();
-  const inkOf = (row: string): Ink => {
-    let line = userMat.get(row);
-    let fill = userFill.get(row);
-    const color = row.startsWith("user_") ? paletteColor(row).color : hexColor(layerColor(row));
-    if (!line) userMat.set(row, (line = new THREE.LineBasicMaterial({ color })));
-    // `m_materials.m_Plastic` of the layer's colour (`setLayerMaterial`: the adhesive, user and technical layers).
-    if (!fill) userFill.set(row, (fill = kicadMaterial(plasticMaterial3d({ r: color.r, g: color.g, b: color.b }), { side: THREE.DoubleSide })));
-    return { line, fill, color };
-  };
-
-  // The pads' openings in each side's solder mask (`addPads` on F.Mask / B.Mask, `GetSolderMaskExpansion`), collected and drawn as one stencil piece per side below.
-  const openings: Record<Side, THREE.Shape[]> = { top: [], bottom: [] };
-  for (const part of board.parts) {
-    const side = part.side;
-    if (!part.placed || !side) continue;
-    for (const pad of part.pads ?? []) {
-      const plated = pad.th && pad.kind !== "non_plated_hole";
-      const maskSides = padMaskSides(pad, side).filter((s) => shown(s === "top" ? "soldermask_top" : "soldermask_bottom"));
-      if (maskSides.length > 0) {
-        const m = padMaskMargin3d(pad, board.board_rules?.mask_paste);
-        const shapes = shapesOf(padContours(pad, padPlacement(pad, part), [m, m]));
-        for (const s of maskSides) openings[s].push(...shapes);
-      }
-      // The hole taken out of the pad's copper: a plated one grown by the plating (`m_TH_ODPolys`), a non-plated one as drilled (`m_NPTH_ODPolys`).
-      const cut = pad.th ? padHoleContour(pad, part, plated ? plating : 0) : null;
-      const cuts = cut ? [cut] : [];
-      if (Array.isArray(pad.stack_layers)) {
-        // (Empty: a through-hole pad that removes the layers nothing connects and keeps none.) A padstack whose copper differs from layer to layer: each layer has the
-        // shape the stack gives it (`PADSTACK::ForEachUniqueLayer`).
-        for (const g of pad.stack_layers as Array<PadStackLayer & { size?: [number, number] | null }>) {
-          const place = g.size ? padPlacement(pad, part, [g.x, g.y]) : padPlacement({ x: g.x, y: g.y, rot: 0, size: undefined }, part);
-          const contours = padContours({ shape: g.shape, size: g.size ?? null, w: g.w, h: g.h, round: g.round, ratio: g.ratio, outline: g.outline }, place);
-          for (const layer of g.layers) {
-            if (!layerOrder.includes(layer) || !copperShown(layer)) continue;
-            const mesh = extruded(shapesOf(contours, cuts), copperRange(layer, layerOrder), copperMat(layer), "pad");
-            if (mesh) group.add(mesh);
-          }
-        }
-      } else {
-        // The pad's real shape (`createPadWithMargin( pad, .., aLayerId, 0 )`): a turned rectangle, a rounded or chamfered one, a trapezoid, a custom pad's outline.
-        const contours = padContours(pad, padPlacement(pad, part));
-        for (const layer of padCopperLayers(pad, part, layerOrder)) {
-          if (!copperShown(layer)) continue;
-          const mesh = extruded(shapesOf(contours, cuts), copperRange(layer, layerOrder), copperMat(layer), "pad");
-          if (mesh) {
-            mesh.userData.padShape = pad.shape ?? (pad.round ? "circle" : "rect");
-            mesh.userData.corners = contours.reduce((n, c) => n + c.length, 0);
-            group.add(mesh);
-          }
-        }
-      }
-      // The barrel of a plated hole (`generatePlatedHoleShells`: the hole grown by the plating less the hole, from B.Cu to F.Cu), the "Plated Barrels" row.
-      if (plated && barrelsShown) {
+    for (const part of board.parts) {
+      if (!part.placed || !part.side) continue;
+      for (const pad of part.pads ?? []) {
+        if (!pad.th || pad.kind === "non_plated_hole") continue;
         const outer = padHoleContour(pad, part, plating);
         const inner = padHoleContour(pad, part, 0);
         if (outer && inner) {
-          const mesh = extruded(shapesOf([outer, inner]), barrelRange, copperMat("B.Cu"), "plated-barrel");
+          const mesh = extruded(shapesOf([outer, inner]), barrelRange, bm, "plated-barrel");
           if (mesh) group.add(mesh);
         }
       }
-      // The paste of the pad's side, on its paste layer only, the pad's shape grown by its paste margin (`BOARD_ADAPTER::addPads`, kicad-port/footprint3d.ts).
-      const margin = shown("solder_paste") ? padPasteMargin3d(pad, part, board.board_rules?.mask_paste) : null;
-      if (margin) {
-        const contours = padContours(pad, padPlacement(pad, part), margin);
-        const face = outerCopperRange(side);
-        const range = flatten(side === "top" ? [face[1], face[1] + SOLDERPASTE_MM] : [face[0] - SOLDERPASTE_MM, face[0]], side === "top" ? "top" : "bottom");
-        const mesh = contours.length > 0 ? extruded(shapesOf(contours), range, pasteMat, "solder-paste") : null;
-        if (mesh) group.add(mesh);
+    }
+  }
+
+  // The technical layers (`Redraw`'s other branch: `pLayerDispList->DrawCulled( showThickness, solder_mask, throughHolesOuter, anti_board )`).
+  const annuli = render.clipSilkOnViaAnnuli ? listShapes(L.viaAnnuli) : thOD;
+  for (const [layer, list] of L.layers) {
+    if (/\.Cu$/.test(layer) || layer === "F.Mask" || layer === "B.Mask") continue;
+    const row = techRow(layer);
+    if (!row || !shown(row) || list.length === 0) continue;
+    const range = techRange(layer);
+    const y = (range[0] + range[1]) / 2;
+    const silk = layer === "F.SilkS" || layer === "B.SilkS";
+    const side: Side = layer.startsWith("B.") ? "bottom" : "top";
+    const physical = silk || /Paste$|Adhes$/.test(layer);
+    let material: THREE.Material;
+    let nameOf: (tag: string) => string;
+    if (silk) {
+      material = silkMaterial(side);
+      nameOf = (tag) => (tag === "part-ref" || tag === "part-value" || tag === "part-field" ? tag : `silk-${tag}`);
+    } else if (layer === "F.Paste" || layer === "B.Paste") {
+      material = pasteMaterial();
+      nameOf = () => "solder-paste";
+    } else {
+      // `m_materials.m_Plastic` of the layer's colour (`setLayerMaterial`: the adhesive, user and technical layers).
+      const color = row.startsWith("user_") ? srgbOfRow(row) : hexColor(layerColor(layer.startsWith("B.") ? "B_Adhes" : "F_Adhes"));
+      material = kicadMaterial(plasticMaterial3d({ r: color.r, g: color.g, b: color.b }), { side: THREE.DoubleSide });
+      material.userData.ink = color;
+      nameOf = (tag) => `${row}-${tag}`;
+    }
+    const meshes: THREE.Object3D[] = layerMeshes(list, range, material, nameOf, jobs);
+    // The text boxes on the layer, the board's and the footprints' (`addShape( const PCB_TEXTBOX* )`): a picture of the box (pcbItems3d.ts), culled with the layer.
+    for (const b of [...(board.drawings?.text_boxes ?? []), ...board.parts.filter((p) => p.placed).flatMap((p) => fpTextBoxes(p))]) {
+      if (b.layer !== layer) continue;
+      const tint = silk ? paletteColor(row) : ((material as THREE.MeshPhongMaterial).userData.ink as THREE.Color | undefined);
+      const mesh = buildTextBoxMesh(b, range[side === "top" ? 1 : 0], tint, silk ? "silk" : row);
+      if (mesh) {
+        const m = mesh.material as THREE.MeshBasicMaterial;
+        // drawn with the layer (an opaque object), its empty texels left out
+        m.transparent = false;
+        m.alphaTest = 0.5;
+        m.depthWrite = true;
+        meshes.push(mesh);
       }
     }
-
-    // The footprint's own silkscreen and drawings (`part.graphics`, `part.texts`): on the layers KiCad's 3D viewer draws, as a free drawing is.
-    addFootprintArt(group, part, { shown, silkLineMat, silkFillMat, inkOf });
+    if (meshes.length === 0) continue;
+    if (meshes.length > 0) group.add(...meshes);
+    const subtracts: Subtract[] = [{ shapes: silk ? annuli : thOD, y, hole: true }];
+    if (silk && render.subtractMaskFromSilk && !offBoardSilk) {
+      subtracts.push({ shapes: maskShapes(L, side, jobs), y });
+      stats.silkMaskCulled++;
+    }
+    if (physical && !(silk && offBoardSilk)) {
+      subtracts.push({ shapes: antiBoard, y });
+      if (silk) stats.silkBoardCulled++;
+    }
+    if (silk && render.clipSilkOnViaAnnuli) stats.silkAnnuliCulled++;
+    culler.culled(meshes, subtracts);
   }
+
+  // `generateViaCovers`: a covered or tented via's hole closed by the mask (`renderSolderMaskLayer`'s `m_viaFrontCover->DrawTop()`, the mask's material).
   for (const s of ["top", "bottom"] as const) {
-    const mesh = buildMaskOpenings(openings[s], s);
-    if (mesh) group.add(mesh);
+    const covers = s === "top" ? L.covers.front : L.covers.back;
+    if (!shown(s === "top" ? "soldermask_top" : "soldermask_bottom") || covers.length === 0) continue;
+    const r = techRange(s === "top" ? "F.Mask" : "B.Mask");
+    const shapes = covers.map((c) => new THREE.Shape(circlePolygon(c.c, c.r, MAX_ERROR_NM).map(([x, yy]) => new THREE.Vector2(mm(x), mm(yy)))));
+    const m = kicadMaterial(maskMaterial3d(paletteRgba(s === "top" ? "soldermask_top" : "soldermask_bottom")), { side: THREE.DoubleSide, depthWrite: false });
+    const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shapes), m);
+    mesh.rotation.x = Math.PI / 2;
+    mesh.position.y = s === "top" ? r[1] : r[0];
+    mesh.name = `via-cover-${s}`;
+    group.add(mesh);
   }
 
-  // Free drawings, each on the layer KiCad's 3D viewer would draw it on: silkscreen, adhesive, a user layer -- and nothing for the layers it does not draw (`Edge.Cuts`,
-  // courtyard, fab, copper, mask, paste).
-  if (board.drawings) {
-    for (const s of board.drawings.shapes) {
-      const on = shapeLayerOf(s.layer);
-      if (!on) continue;
-      if (on.kind === "silk") {
-        if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) addLayerShape(group, s, silkY(on.side), silkLineMat[on.side], silkFillMat[on.side], "silk");
-      } else if (on.kind === "adhesive") {
-        if (shown("adhesive")) {
-          const ink = inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes");
-          addLayerShape(group, s, techLayerY(on.side), ink.line, ink.fill, "adhesive");
-        }
-      } else if (shown(on.row)) {
-        const ink = inkOf(on.row);
-        addLayerShape(group, s, techLayerY("top"), ink.line, ink.fill, on.row);
-      }
-    }
-    for (const t of board.drawings.texts) {
-      const on = shapeLayerOf(t.layer);
-      if (!on) continue;
-      if (on.kind === "silk") {
-        if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) group.add(buildTextMesh(t));
-      } else if (on.kind === "adhesive") {
-        if (shown("adhesive")) group.add(buildTextMesh(t, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive"));
-      } else if (shown(on.row)) {
-        group.add(buildTextMesh(t, techLayerY("top"), inkOf(on.row).color, on.row));
-      }
-    }
-    // The text boxes (`PCB_TEXTBOX`), on the same layers as the texts: see pcbItems3d.ts.
-    for (const b of board.drawings.text_boxes ?? []) {
-      const on = shapeLayerOf(b.layer);
-      if (!on) continue;
-      const mesh =
-        on.kind === "silk"
-          ? shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom") && clipped(buildTextBoxMesh(b, silkY(on.side)), on.side)
-          : on.kind === "adhesive"
-            ? shown("adhesive") && buildTextBoxMesh(b, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive")
-            : shown(on.row) && buildTextBoxMesh(b, techLayerY("top"), inkOf(on.row).color, on.row);
-      if (mesh) group.add(mesh);
-    }
-  }
-
-  // For the test hook: the colour each copper layer drawn has (its material's diffuse).
+  // For the test hook: the colour each copper layer drawn has (its material's diffuse), and the polygons the server is asked for.
   group.userData.copperColors = Object.fromEntries([...copperMats].map(([layer, m]) => [layer, `#${(m as THREE.MeshPhongMaterial).color.getHexString()}`]));
+  group.userData.jobs = allJobs;
+  const tagCount = (layer: string, tag: string) => (L.layers.get(layer) ?? []).filter((p) => p.tag === tag).length;
+  group.userData.layers3d = {
+    ...stats,
+    thODs: L.thODs.length,
+    viaAnnuli: L.viaAnnuli.length,
+    bodyCuts: L.bodyCuts.length,
+    plugs: L.plugs.length,
+    offboard: L.offboardPads.front.length + L.offboardPads.back.length,
+    coversTop: L.covers.front.length,
+    coversBottom: L.covers.back.length,
+    maskTracksTop: tagCount("F.Mask", "track") + tagCount("B.Mask", "track"),
+    maskViasTop: tagCount("F.Mask", "via"),
+    maskViasBottom: tagCount("B.Mask", "via"),
+    cullPieces: group.children.filter((o) => o.name === "cull-piece").length,
+  };
   return group;
 }
+
+/** A user layer's colour (its row's), as three.js holds a colour. */
+function srgbOfRow(row: string): THREE.Color {
+  const c = paletteRgba(row);
+  return new THREE.Color().setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
+}
+
+/** A palette colour as three.js holds it (the RGB read as sRGB). */
+function paletteColor(row: string): THREE.Color {
+  const c = paletteRgba(row);
+  return new THREE.Color().setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
+}
+
+/**
+ * The "While Moving" options (Preferences > 3D Viewer > Realtime Rendering): `Redraw( aIsMoving )`'s `skipThickness`, `skipRenderHoles` and `skipRenderMicroVias` -- while
+ * the camera moves the layers are drawn without their walls (`DrawCulled( showThickness = false, .. )`), without their culling by the holes and with no barrels
+ * (`m_padHoles`), and the micro, blind and post-machined vias' barrels are left out (`m_microviaHoles`). Called when what applies changes. Not ported: the body drawn
+ * without its holes while moving (`renderBoardBody( skipRenderHoles )` draws `m_board`): the studio's body is one polygon with its holes.
+ */
+export function setMoving3d(root: THREE.Object3D, skip: { holes: boolean; microvias: boolean; thickness: boolean }): void {
+  root.traverse((o) => {
+    if (o.name === "cull-piece" && o.userData.hole) o.visible = !skip.holes;
+    else if (o.name === "plated-barrel") o.visible = !skip.holes && !(skip.microvias && o.userData.microvia);
+    const m = (o as THREE.Mesh).material;
+    if (Array.isArray(m)) for (const x of m) if (x.userData.walls) x.visible = !skip.thickness;
+  });
+}
+
 
 /**
  * KiCad's 3D viewer background: a vertical lavender-to-grey gradient
@@ -1374,7 +1012,9 @@ export function buildBackgroundTexture(top?: Rgba, bottom?: Rgba): THREE.CanvasT
   canvas.height = 256;
   const ctx = canvas.getContext("2d")!;
   const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  const css = (c: Rgba) => `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${c.a})`;
+  // `OglDrawBackground( premultiplyAlpha( m_BgColorTop ), premultiplyAlpha( m_BgColorBot ) )`: each colour times its alpha, drawn opaque (blending off) over the
+  // cleared frame -- a background colour with an alpha under 1 is that much darker, not see-through.
+  const css = (c: Rgba) => `rgb(${Math.round(c.r * c.a * 255)}, ${Math.round(c.g * c.a * 255)}, ${Math.round(c.b * c.a * 255)})`;
   gradient.addColorStop(0, css(top ?? THEME_COLORS.background_top!));
   gradient.addColorStop(1, css(bottom ?? THEME_COLORS.background_bottom!));
   ctx.fillStyle = gradient;

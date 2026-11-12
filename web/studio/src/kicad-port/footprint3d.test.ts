@@ -89,8 +89,9 @@ test("a pad opens the masks it is on, grown by its expansion (addPads, PAD::GetS
   assert.deepEqual(padMaskSides(pad({ layers: ["F.Cu"] }), "top"), [], "a pad on no mask opens none");
   assert.deepEqual(padMaskSides(pad({ th: true }), "top").sort(), ["bottom", "top"], "a hole's kind: both");
   // The pad's own margin, else the board's; never less than minus half the smaller side; none for a pad with no copper.
-  assert.equal(padMaskMargin3d(pad({ mask_margin: 50_000 }), { expansion_nm: 20_000 }), 50_000);
-  assert.equal(padMaskMargin3d(pad(), { expansion_nm: 20_000 }), 20_000);
-  assert.equal(padMaskMargin3d(pad({ mask_margin: -900_000 }), undefined), -300_000);
-  assert.equal(padMaskMargin3d(pad({ layers: ["F.Mask"] }), { expansion_nm: 20_000 }), 0);
+  assert.equal(padMaskMargin3d(pad({ mask_margin: 50_000 }), part([], { mask_margin: 30_000 }), { expansion_nm: 20_000 }), 50_000);
+  assert.equal(padMaskMargin3d(pad(), part([]), { expansion_nm: 20_000 }), 20_000);
+  assert.equal(padMaskMargin3d(pad(), part([], { mask_margin: 30_000 }), { expansion_nm: 20_000 }), 30_000, "the footprint's own before the board's");
+  assert.equal(padMaskMargin3d(pad({ mask_margin: -900_000 }), undefined, undefined), -300_000);
+  assert.equal(padMaskMargin3d(pad({ layers: ["F.Mask"] }), undefined, { expansion_nm: 20_000 }), 0);
 });
