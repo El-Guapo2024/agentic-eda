@@ -1,37 +1,34 @@
 // Port of eeschema/dialogs/dialog_sim_model.cpp (`DIALOG_SIM_MODEL`, "Simulation Model Editor", KiCad 8303b2ad): the Model tab's two halves
 // and the Pin Assignments tab.
 // - "SPICE model from file (*.lib, *.sub or *.ibs)": the File box and Browse, the model list with its filter, the subcircuit's code; the library
-//   is read by the server (`POST /api/sim/model/library`, `eda_sim::library`; kicad-port/sim/simModel.ts). An IBIS file (`eda_sim::ibis`) lists
-//   its components ("Component:"), and the Pin, Pin model, Differential and Waveform choices of `updateIbisWidgets`, `onModelNameChoice`,
-//   `onPinCombobox`, `onDifferentialCheckbox` and `onWaveformChoice`, with the IBIS model's parameters.
-// - "Built-in SPICE model": the Device and Device type choices, the Parameters grid and the Code tab, "Save parameter '%s (%s)' in Value field"
-//   (`TransferDataToWindow`, `updateBuiltinModelWidgets`, `updateModelParamsTab`, `updateModelCodeTab`; kicad-port/sim/simModelDialog.ts over
-//   the models of simModelBuiltin.ts, whose tables tools/extract-sim-models.js copied from the C++ into src/kicad/sim_models.json, loaded when
-//   the dialog opens).
+//   is read by the server (`POST /api/sim/model/library`, `eda_sim::library`) and each of its models made as `loadLibrary` makes them
+//   (kicad-port/sim/simLibraryModel.ts: a `.model`'s parameters and an "ako:" model's parent's, a subcircuit's ports and `params:`, each
+//   model with the library's behind it, so the grid shows the library's values and `Sim.Params` holds what the instance changes). An IBIS file
+//   (`eda_sim::ibis`) lists its components ("Component:"), and the Pin, Pin model, Differential and Waveform choices of `updateIbisWidgets`,
+//   `onModelNameChoice`, `onPinCombobox`, `onDifferentialCheckbox` and `onWaveformChoice`, with the IBIS model's parameters.
+// - "Built-in SPICE model": the Device and Device type choices, the Parameters grid (arithmetic in an Int or Float row, the K device's
+//   inductors) and the Code tab, "Save parameter '%s (%s)' in Value field" (`TransferDataToWindow`, `updateBuiltinModelWidgets`,
+//   `updateModelParamsTab`, `updateModelCodeTab`; kicad-port/sim/simModelDialog.ts over the models of simModelBuiltin.ts, whose tables
+//   tools/extract-sim-models.js copied from the C++ into src/kicad/sim_models.json, loaded when the dialog opens).
 // - Pin Assignments: Symbol Pin and Model Pin, one grid whichever model is current (`updatePinAssignments( model, false )` keeps a row's model
 //   pin index across models).
 // - OK (`TransferDataFromWindow`): `Sim.Library`, `Sim.Name`, the IBIS pin, model and differential fields, then `WriteFields` -- `Sim.Device`,
-//   `Sim.Type`, `Sim.Enable`, `Sim.Pins`, `Sim.Params`, and the Value when the primary parameter is saved there.
+//   `Sim.Type`, `Sim.Enable`, `Sim.Pins`, `Sim.Params`, and the Value when the primary parameter is saved there -- into the copy of Symbol
+//   Properties' fields it was given; Symbol Properties takes them into its grid (`OnEditSpiceModel`) and its own OK applies them, one undo step.
+// - The texts are read resolved where KiCad reads them so (the server's `GetShownText` of each, `shown`); the error boxes are KiCad's
+//   (`DisplayErrorMessage`: "No simulation model definition found ..", "Failed to read simulation model from fields.", a waveform's fields),
+//   the library's messages its info bar.
 //
 // Where it differs from KiCad:
-// - KiCad's dialog is opened from Symbol Properties' "Simulation Model..." button and writes into that dialog's fields, which its OK commits; here
-//   OK is its own undo step (one batch: the Symbol Fields Table's `set_symbol_fields`, which reaches a sheet read from a KiCad file too, and
-//   `remove_user_field`), and Symbol Properties takes the new texts. A field the dialog adds is hidden (KiCad's inference adds `Sim.Device`,
-//   `Sim.Type`, `Sim.Params` and `Sim.Pins` visible, `SetFieldValue`'s default).
-// - A library `.model`'s parameters are not shown in the grid (its base model's values, `SPICE_MODEL_PARSER::ReadModel`); its overrides in
-//   `Sim.Params` are kept for the same model and dropped for another (simModel.ts `fieldsOnOk`).
-// - The grid does not evaluate arithmetic ("1k*2"); the K device's l1 / l2 are text, not a choice of the circuit's inductors.
-// - Browse lists the library files of the board folder (`GET /api/sim/model/files`) instead of a file dialog; a path can be typed as in KiCad.
-// - Error boxes (`DisplayErrorMessage`) are shown in the info bar.
+// - Browse lists the library files of the board folder (`GET /api/sim/model/files`) instead of a file dialog (a browser has no file system to
+//   open); a path can be typed as in KiCad.
+// - The K device's inductors are the items of kicad-cli's netlist of the saved schematic (`POST /api/sim/circuit`), read when a K model's grid
+//   first shows: KiCad reads its own schematic in memory.
 import { useEffect, useMemo, useReducer, useState } from "react";
-import type { Cmd } from "../../api/types";
 import { fetchSimLibrary, fetchSimLibraryFiles, fetchSimModelSymbol, loadSimModelTables, type SimModelSymbolReply } from "../../api/simModelClient";
-import { removeUserFieldCmd } from "../../kicad-port/schFieldEdit";
+import { fetchCircuit } from "../../api/simClient";
+import { showError } from "../library/libraryDialogs";
 import {
-  assignRow,
-  defaultModelPins,
-  fieldsOnOk,
-  fieldVerbs,
   filterModelNames,
   gridModelColumn,
   initialModel,
@@ -39,14 +36,13 @@ import {
   modelPinIndex,
   modelPinString,
   NOT_CONNECTED,
-  parsePins,
-  pinsOnOk,
   SIM_FIELDS,
   symbolPinString,
   type LibraryModelInfo,
   type ModelPin,
 } from "../../kicad-port/sim/simModel";
-import { ibisComponentModel, referencePrefix, type Fields, type SimModel, type SimModelIbis, type SimModelTables } from "../../kicad-port/sim/simModelBuiltin";
+import { ibisComponentModel, readTypeFromFields, referencePrefix, SimModelSpiceFallback, SimModelSubckt, SimModelError, type Fields, type SimModel, type SimModelIbis, type SimModelTables } from "../../kicad-port/sim/simModelBuiltin";
+import { libraryBaseModels, libraryModel } from "../../kicad-port/sim/simLibraryModel";
 import {
   builtinOk,
   chooseDevice,
@@ -54,10 +50,13 @@ import {
   codeTab,
   currentBuiltin,
   deviceChoices,
+  gridText,
   ibisWaveformModel,
+  inductorChoices,
   isRawSpice,
   openBuiltin,
   paramGrid,
+  resolvedFields,
   saveInValueLabel,
   setGridValue,
   typeChoices,
@@ -65,13 +64,28 @@ import {
   type OpenedDialog,
   type ParamRow,
 } from "../../kicad-port/sim/simModelDialog";
-import { useStudioApi } from "../../state/store";
+
+/** The fields Symbol Properties hands the dialog (`OnEditSpiceModel`'s copy of `m_fields`): the Value box and the user fields as its grid has them. */
+export interface SimModelDialogFields {
+  value: string;
+  user: { name: string; text: string }[];
+}
+
+/** What OK hands back: the fields after `TransferDataFromWindow` (Reference and Value among them), the copy it was given, and the visibility of
+ * each field it added. */
+export interface SimModelResult {
+  input: Fields;
+  output: Fields;
+  visible: Record<string, boolean>;
+}
 
 interface Props {
   reference: string;
+  /** Symbol Properties' fields as they stand (unapplied edits among them); the symbol's own when absent. */
+  fields?: SimModelDialogFields;
   onClose: () => void;
-  /** After OK wrote the fields: what each simulation field (and the Value) is now ("" for one removed). */
-  onWritten?: (fields: Record<string, string>) => void;
+  /** OK: the fields, for Symbol Properties to take (`OnEditSpiceModel`). */
+  onOk: (result: SimModelResult) => void;
 }
 
 /** A library model as the server lists it (an IBIS component with its pins, pin models and differential pins). */
@@ -88,10 +102,18 @@ interface Loaded {
 /** The model tables (src/kicad/sim_models.json, 0.8 MB): fetched the first time the dialog opens (shared with the tuner's Save). */
 const loadTables = loadSimModelTables;
 
-const FIELD_ROWS = [SIM_FIELDS.library, SIM_FIELDS.name, SIM_FIELDS.device, SIM_FIELDS.type, SIM_FIELDS.enable, SIM_FIELDS.pins, SIM_FIELDS.params, "Sim.Ibis.Pin", "Sim.Ibis.Model", "Sim.Ibis.Diff"];
+/** `m_fields`: the server's (the instance's over the library symbol's simulation fields) with Symbol Properties' rows over them -- a field its
+ * grid no longer has is not there -- and its Value. */
+function dialogFields(s: SimModelSymbolReply, given: SimModelDialogFields | undefined): Fields {
+  const out: Fields = { Reference: s.ref, Value: given ? given.value : s.value, ...s.fields };
+  if (given) {
+    for (const name of s.own) if (!given.user.some((u) => u.name === name)) delete out[name];
+    for (const u of given.user) out[u.name] = u.text;
+  }
+  return out;
+}
 
-export function SimModelDialog({ reference, onClose, onWritten }: Props) {
-  const api = useStudioApi();
+export function SimModelDialog({ reference, fields: given, onClose, onOk }: Props) {
   const [, bump] = useReducer((x: number) => x + 1, 0);
   const [tables, setTables] = useState<SimModelTables | null>(null);
   const [sym, setSym] = useState<SimModelSymbolReply | null>(null);
@@ -105,10 +127,13 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
   const [info, setInfo] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
-  /** Each SPICE library model's pins (`m_libraryModelsMgr`'s models), by name. */
-  const [modelPins, setModelPins] = useState<Record<string, ModelPin[]>>({});
-  /** Each IBIS component's model, by name (`m_libraryModelsMgr`'s, a waveform's model replacing it: `SetModel`). */
-  const [ibisModels, setIbisModels] = useState<Record<string, SimModelIbis>>({});
+  /** `m_libraryModelsMgr`'s models by name: each SPICE library model's, each IBIS component's (a waveform's model replacing it: `SetModel`);
+   * a library that could not be read has one, its fallback (`CreateModel( nullptr, .. )`), under "". */
+  const [libModels, setLibModels] = useState<Record<string, SimModel>>({});
+  /** The K device's inductors (`newParamProperty`), read once a K model's grid shows. */
+  const [inductors, setInductors] = useState<string[] | null>(null);
+  /** `GetShownText` of each text that holds a variable (the server's). */
+  const [shown, setShown] = useState<Record<string, string>>({});
   const [ibisPin, setIbisPin] = useState(-1);
   const [ibisPinModels, setIbisPinModels] = useState<string[]>([]);
   const [ibisPinModel, setIbisPinModel] = useState("");
@@ -119,9 +144,8 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
   const [code, setCode] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [files, setFiles] = useState<string[] | null>(null);
-  const [busy, setBusy] = useState(false);
 
-  const fieldsOf = (s: SimModelSymbolReply): Fields => ({ Reference: s.ref, Value: s.value, ...s.fields });
+  const resolve = (raw: string) => shown[raw] ?? raw;
 
   /** `TransferDataToWindow`'s IBIS part for the component it opens on: the pin the fields name, its models, the differential box. */
   const openIbisComponent = (m: LibModel, model: SimModelIbis, fields: Fields) => {
@@ -143,7 +167,8 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
     setIbisDiff(diff);
   };
 
-  /** `loadLibrary`: the models, the one the fields name (with the symbol's `Sim.Pins`) or the first, and the info bar. */
+  /** `loadLibrary`: the models (the one the fields name given the fields, `CreateModel( &baseModel, m_sortedPartPins, m_fields, true, .. )`),
+   * the one the fields name or the first, and the info bar. `fields` are read resolved. */
   const loadLibrary = async (path: string, from: SimModelSymbolReply, fields: Fields, t: SimModelTables) => {
     if (path.trim() === "") {
       setLib(null);
@@ -155,59 +180,62 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
     setPathText(path);
     setRadio("library");
     if (!r.ok) {
+      // `TransferDataToWindow` when `loadLibrary` fails: the model is the fields' fallback (`CreateModel( nullptr, .., m_fields, .. )`)
+      const fallback = new SimModelSpiceFallback(t, readTypeFromFields(t, fields));
+      try {
+        fallback.readDataFields(fields, from.pins);
+      } catch (e) {
+        if (!(e instanceof SimModelError)) throw e;
+      }
+      setLibModels({ "": fallback });
       setLib(null);
       setSelected(null);
       setInfo(r.messages.join("\n"));
       return;
     }
     const simName = fields[SIM_FIELDS.name] ?? "";
-    let message: string | null = null;
-    const pins: Record<string, ModelPin[]> = {};
-    const ibis: Record<string, SimModelIbis> = {};
+    const models: Record<string, SimModel> = {};
+    const bases = r.ibis ? null : libraryBaseModels(t, r.models);
     for (const m of r.models) {
-      if (r.ibis) {
-        // `CreateModel( &baseModel, m_sortedPartPins[, m_fields] )`: the fields go to the model they name
-        ibis[m.name] = ibisComponentModel(t, { name: m.name, ibisPins: m.ibisPins ?? [] }, from.pins, m.name === simName ? fields : null);
-        continue;
-      }
-      let p = defaultModelPins(m, from.pins);
-      if (m.name === simName && r.path === (from.fields[SIM_FIELDS.library] ?? "")) {
-        try {
-          p = parsePins(p, from.fields[SIM_FIELDS.pins] ?? "");
-        } catch (e) {
-          message = `Error reading simulation model from symbol '${from.ref}':\n${(e as Error).message}`;
-        }
-      }
-      if (!(m.name in pins)) pins[m.name] = p;
+      if (m.name in models) continue;
+      // `CreateModel( &baseModel, m_sortedPartPins[, m_fields] )`: the fields go to the model they name
+      const named = m.name === simName ? fields : null;
+      if (r.ibis) models[m.name] = ibisComponentModel(t, { name: m.name, ibisPins: m.ibisPins ?? [] }, from.pins, named);
+      else models[m.name] = libraryModel(t, bases!.get(m.name)!, from.pins, named);
     }
     const first = initialModel(r.models.map((m) => m.name), simName, path);
-    setModelPins(pins);
-    setIbisModels(ibis);
+    setLibModels(models);
     setLib({ path, stored: r.path, models: r.models, ibis: !!r.ibis });
     setSelected(first.name);
-    setInfo(message ?? first.message);
-    if (r.ibis && first.name) openIbisComponent(r.models.find((m) => m.name === first.name)!, ibis[first.name]!, fields);
-    const firstPins = first.name ? (r.ibis ? ibis[first.name]!.getPins() : pins[first.name] ?? []) : [];
+    setInfo(first.message);
+    if (r.ibis && first.name) openIbisComponent(r.models.find((m) => m.name === first.name)!, models[first.name] as SimModelIbis, fields);
+    const firstPins = first.name ? models[first.name]!.getPins() : [];
     // `updatePinAssignments( model, false )`: a grid without rows is filled from the model
     setColumn((c) => c ?? (first.name ? gridModelColumn(firstPins, from.pins) : null));
   };
 
   useEffect(() => {
     let stopped = false;
-    void Promise.all([fetchSimModelSymbol(reference), loadTables()]).then(async ([s, t]) => {
+    const texts = given ? [given.value, ...given.user.map((u) => u.text)] : [];
+    void Promise.all([fetchSimModelSymbol(reference, texts), loadTables()]).then(async ([s, t]) => {
       if (stopped) return;
       if (!s.ok) {
         setInfo(s.message ?? "The symbol could not be read.");
         return;
       }
-      const o = openBuiltin(t, referencePrefix(s.ref), fieldsOf(s), s.pins);
+      const shownTexts = s.shown ?? {};
+      const res = (raw: string) => shownTexts[raw] ?? raw;
+      const o = openBuiltin(t, referencePrefix(s.ref), dialogFields(s, given), s.pins, res);
+      setShown(shownTexts);
       setTables(t);
       setSym(s);
       setOpened(o);
       setRadio(o.radio);
       setSaveInValue(o.saveInValue);
-      if (o.errors.length) setInfo(o.errors.join("\n\n"));
-      if (o.radio === "library") await loadLibrary(o.fields[SIM_FIELDS.library] ?? "", s, o.fields, t);
+      // `DisplayErrorMessage( this, .. )`
+      for (const e of o.errors) void showError(e);
+      const rf = resolvedFields(o.fields, res);
+      if (o.radio === "library") await loadLibrary(rf[SIM_FIELDS.library] ?? "", s, rf, t);
       else {
         const m = currentBuiltin(o.builtin);
         setColumn(gridModelColumn(m.getPins(), s.pins));
@@ -223,24 +251,35 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
   const libModel = useMemo(() => lib?.models.find((m) => m.name === selected) ?? null, [lib, selected]);
   const names = useMemo(() => filterModelNames(lib?.models.map((m) => m.name) ?? [], filter), [lib, filter]);
   const ibisLoaded = !!lib?.ibis;
-  const ibisModel = ibisLoaded && selected ? ibisModels[selected] ?? null : null;
+  const libraryCur = selected ? libModels[selected] ?? null : lib ? null : libModels[""] ?? null;
+  const ibisModel = ibisLoaded ? ((libraryCur as SimModelIbis | null) ?? null) : null;
   const builtinModel = opened ? currentBuiltin(opened.builtin) : null;
-  /** `curModel()`: the library's selected model on "SPICE model from file", else the built-in one. A SPICE library model has no `SimModel`. */
-  const curModel: SimModel | null = radio === "library" ? ibisModel : builtinModel;
+  /** `curModel()`: the library's selected model on "SPICE model from file", else the built-in one. */
+  const curModel: SimModel | null = radio === "library" ? libraryCur : builtinModel;
   const modelKey = radio === "library" ? `lib:${selected}:${ibisModel?.type ?? ""}` : `builtin:${opened?.builtin.curModelType}`;
 
-  /** The current model's pins: the built-in or IBIS model's, or a SPICE library model's list. */
-  const curPins = (): ModelPin[] => {
-    if (radio === "library") return ibisModel ? ibisModel.getPins() : selected ? modelPins[selected] ?? [] : [];
-    return builtinModel?.getPins() ?? [];
-  };
+  /** The current model's pins. */
+  const curPins = (): ModelPin[] => curModel?.getPins() ?? [];
 
-  // `updateWidgets` on another model: the grid's categories as `updateModelParamsTab` leaves them, the Code tab, the checkbox, the pin names
+  // the K device's inductors, read the first time a K model shows
+  useEffect(() => {
+    if (curModel?.type !== "K" || inductors !== null) return;
+    let stopped = false;
+    void fetchCircuit()
+      .then((c) => !stopped && setInductors(c.ok ? inductorChoices(c.items) : []))
+      .catch(() => !stopped && setInductors([]));
+    return () => {
+      stopped = true;
+    };
+  }, [curModel?.type, inductors]);
+
+  // `updateWidgets` on another model: the grid's categories as `updateModelParamsTab` leaves them, the Code tab (`updateModelCodeTab`: not for a
+  // fallback), the checkbox, the pin names
   useEffect(() => {
     if (!sym || !opened) return;
     setExpanded({});
     if (curModel) {
-      setCode(codeTab(curModel, opened.fields, radio === "builtin", radio === "library" ? selected ?? "" : ""));
+      if (!(curModel instanceof SimModelSpiceFallback)) setCode(codeTab(curModel, opened.fields, radio === "builtin", radio === "library" ? selected ?? "" : ""));
       if (!curModel.hasPrimaryValue()) setSaveInValue(false);
       if (isRawSpice(curModel)) setPage("code");
     }
@@ -271,7 +310,9 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
   const grid = column ?? sym.pins.map(() => NOT_CONNECTED);
   const builtinOn = radio !== "library";
   const libraryOn = radio !== "builtin";
-  const refreshCode = (m: SimModel) => setCode(codeTab(m, opened.fields, radio === "builtin", radio === "library" ? selected ?? "" : ""));
+  const refreshCode = (m: SimModel) => {
+    if (!(m instanceof SimModelSpiceFallback)) setCode(codeTab(m, opened.fields, radio === "builtin", radio === "library" ? selected ?? "" : ""));
+  };
 
   /** `onModelNameChoice`: another model of the library (for IBIS, its pin list and no pin model yet). */
   const chooseModel = (name: string) => {
@@ -286,20 +327,14 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
 
   /** `onPinAssignmentsGridCellChange`. */
   const changeCell = (row: number, value: string) => {
-    if (curModel) {
-      const old = modelPinIndex(grid[row]!);
-      const now = modelPinIndex(value);
-      if (old >= 0) curModel.assignSymbolPinNumberToModelPinIndex(old, "");
-      if (now >= 0) curModel.assignSymbolPinNumberToModelPinIndex(now, sym.pins[row]!.number);
-      setColumn(gridModelColumn(curModel.getPins(), sym.pins));
-      refreshCode(curModel);
-      bump();
-      return;
-    }
-    if (!selected) return;
-    const p = assignRow(pins, sym.pins, row, grid[row]!, value);
-    setModelPins((m) => ({ ...m, [selected]: p }));
-    setColumn(gridModelColumn(p, sym.pins));
+    if (!curModel) return;
+    const old = modelPinIndex(grid[row]!);
+    const now = modelPinIndex(value);
+    if (old >= 0) curModel.assignSymbolPinNumberToModelPinIndex(old, "");
+    if (now >= 0) curModel.assignSymbolPinNumberToModelPinIndex(now, sym.pins[row]!.number);
+    setColumn(gridModelColumn(curModel.getPins(), sym.pins));
+    refreshCode(curModel);
+    bump();
   };
 
   /** `onPinCombobox`: the pin's models (`ChangePin`), whether it can be differential (`isPinDiff`); one model is selected at once. */
@@ -317,47 +352,27 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
   /** `onWaveformChoice`. */
   const chooseWaveform = (description: string) => {
     if (!ibisModel || !selected) return;
-    const { model: m, error } = ibisWaveformModel(tables, ibisModel, description, opened.fields, sym.pins);
-    if (error) setInfo(error);
-    setIbisModels((all) => ({ ...all, [selected]: m }));
+    const { model: m, error } = ibisWaveformModel(tables, ibisModel, description, resolvedFields(opened.fields, resolve), sym.pins);
+    if (error) void showError(error);
+    setLibModels((all) => ({ ...all, [selected]: m }));
   };
 
-  const ok = async () => {
-    const before: Fields = fieldsOf(sym);
+  /** `TransferDataFromWindow`, then `OnEditSpiceModel` takes the fields. */
+  const ok = () => {
+    const visible: Record<string, boolean> = { ...opened.visible };
+    const common = { saveInValue, column: grid, pins: sym.pins, visible, inferredValueRestore: opened.inferredValueRestore };
     let after: Fields;
-    if (radio === "library" && lib && !lib.ibis && libModel) {
-      const wanted = fieldsOnOk(opened.fields, lib.stored, libModel, pinsOnOk(pins, sym.pins, grid));
-      after = { ...opened.fields };
-      for (const [k, v] of Object.entries(wanted)) {
-        if (v === "") delete after[k];
-        else after[k] = v;
-      }
-    } else if (radio === "library" && lib?.ibis && ibisModel && selected) {
-      const pin = ibisModel.getIbisPins()[ibisPin]?.[0] ?? "";
-      after = builtinOk(ibisModel, opened.fields, { saveInValue, column: grid, pins: sym.pins, library: { path: lib.stored, name: selected, ibis: { pin, model: ibisPinModel, differential: ibisDiff } } });
-    } else if (radio === "library") {
-      // a library that could not be read: its path is stored with the name the symbol had (`SIM_MODEL_SPICE_FALLBACK`)
-      after = { ...opened.fields, [SIM_FIELDS.library]: pathText.trim(), [SIM_FIELDS.name]: pathText.trim() ? opened.fields[SIM_FIELDS.name] ?? "" : "" };
+    if (radio === "library" && lib && curModel && selected) {
+      const ibis = lib.ibis && ibisModel ? { pin: ibisModel.getIbisPins()[ibisPin]?.[0] ?? "", model: ibisPinModel, differential: ibisDiff } : undefined;
+      after = builtinOk(curModel, opened.fields, { ...common, library: { path: lib.stored, name: selected, ibis } });
+    } else if (radio === "library" && curModel) {
+      // a library that could not be read: its path, and the name the symbol had (`SIM_MODEL_SPICE_FALLBACK`)
+      const name = pathText.trim() ? resolvedFields(opened.fields, resolve)[SIM_FIELDS.name] ?? "" : "";
+      after = builtinOk(curModel, opened.fields, { ...common, library: { path: pathText.trim(), name } });
     } else {
-      after = builtinOk(currentBuiltin(opened.builtin), opened.fields, { saveInValue, column: grid, pins: sym.pins, code: page === "code" ? code : undefined });
+      after = builtinOk(currentBuiltin(opened.builtin), opened.fields, { ...common, code: page === "code" ? code : undefined });
     }
-    const wanted: Record<string, string> = {};
-    const simNames = (f: Fields) => Object.keys(f).filter((n) => n.startsWith("Sim."));
-    for (const name of new Set([...FIELD_ROWS, ...simNames(before), ...simNames(after)])) wanted[name] = after[name] ?? "";
-    wanted.Value = after.Value ?? before.Value ?? "";
-    const { edits, removes } = fieldVerbs(sym.ref, { ...sym.fields, Value: sym.value }, sym.own, wanted);
-    const cmds: Cmd[] = [];
-    if (edits.length > 0) cmds.push({ op: "set_symbol_fields", edits });
-    for (const name of removes) cmds.push(removeUserFieldCmd(sym.ref, name));
-    if (cmds.length > 0) {
-      setBusy(true);
-      try {
-        if (!(await api.cmdBatch(cmds))) return;
-      } finally {
-        setBusy(false);
-      }
-      onWritten?.(wanted);
-    }
+    onOk({ input: dialogFields(sym, given), output: after, visible });
     onClose();
   };
 
@@ -366,7 +381,7 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
   const dev = builtinModel && radio !== "library" ? deviceChoices(tables, builtinModel) : { items: [], selected: -1 };
   const types = builtinModel && radio !== "library" ? typeChoices(tables, builtinModel) : { items: [], selected: -1, shown: false };
   const save = curModel ? saveInValueLabel(curModel) : { label: "Save primary parameter in Value field", enabled: false };
-  const gridRows = curModel ? paramGrid(curModel) : null;
+  const gridRows = curModel ? paramGrid(curModel, inductors ?? []) : null;
   const waveforms = ibisModel ? waveformChoices(tables, ibisModel) : { items: [], selected: -1 };
 
   const editParam = (row: ParamRow, value: string | boolean) => {
@@ -383,8 +398,8 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
         {row.kind === "bool" ? (
           <input type="checkbox" aria-label={row.label} checked={row.value === "1"} onChange={(e) => editParam(row, e.target.checked)} />
         ) : row.kind === "enum" ? (
-          <select aria-label={row.label} value={row.choices.includes(row.value) ? row.value : ""} onChange={(e) => editParam(row, e.target.value)}>
-            {!row.choices.includes(row.value) && <option value="" />}
+          <select aria-label={row.label} value={row.selected >= 0 ? row.choices[row.selected] : ""} onChange={(e) => editParam(row, e.target.value)}>
+            {row.selected < 0 && <option value="" />}
             {row.choices.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -397,8 +412,21 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
             aria-label={row.label}
             defaultValue={row.value}
             style={{ width: "100%" }}
-            onBlur={(e) => e.target.value !== row.value && editParam(row, e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+            // `SIM_STRING_PROPERTY::OnEvent`'s `wxEVT_KILL_FOCUS`: the arithmetic's result
+            onBlur={(e) => {
+              const text = gridText(e.target.value, row.valueType, "blur");
+              e.target.value = text;
+              if (text !== row.value) editParam(row, text);
+            }}
+            // Enter commits (`StringToValue`: the result normalized)
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              const input = e.target as HTMLInputElement;
+              const text = gridText(input.value, row.valueType, "enter");
+              input.value = text;
+              if (text !== row.value) editParam(row, text);
+              input.blur();
+            }}
           />
         )}
       </td>
@@ -445,8 +473,8 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
                     setPathText(e.target.value);
                     setRadio("library"); // `onLibraryPathText`
                   }}
-                  onKeyDown={(e) => e.key === "Enter" && void loadLibrary(pathText, sym, opened.fields, tables)}
-                  onBlur={() => pathText !== (lib?.path ?? "") && void loadLibrary(pathText, sym, opened.fields, tables)}
+                  onKeyDown={(e) => e.key === "Enter" && void loadLibrary(pathText, sym, resolvedFields(opened.fields, resolve), tables)}
+                  onBlur={() => pathText !== (lib?.path ?? "") && void loadLibrary(pathText, sym, resolvedFields(opened.fields, resolve), tables)}
                 />
                 <button onClick={() => void browse()} title="Browse Models" data-testid="sim-model-browse">
                   Browse...
@@ -527,7 +555,7 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
                         onClick={(e) => {
                           e.preventDefault();
                           setFiles(null);
-                          void loadLibrary(f, sym, opened.fields, tables);
+                          void loadLibrary(f, sym, resolvedFields(opened.fields, resolve), tables);
                         }}
                       >
                         {f}
@@ -624,23 +652,22 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
                         })}
                       </tbody>
                     </table>
-                  ) : (
-                    <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, padding: 6 }}>A library model's parameters are not shown here (GAPS 34): its Sim.Params are kept for the same model.</p>
-                  )}
+                  ) : null}
                 </div>
               )}
               {page === "code" && (
+                // `m_codePreview`: it takes typing (read back on OK for a raw SPICE element; another model's preview is made again on the next
+                // change, the typing lost)
                 <textarea
-                  value={libModel && !ibisLoaded && radio === "library" ? libModel.code : code}
-                  readOnly={!(curModel && isRawSpice(curModel))}
+                  value={code}
                   onChange={(e) => setCode(e.target.value)}
                   aria-label="Code"
                   data-testid="sim-model-code"
                   style={{ width: "100%", height: 160, fontFamily: "monospace", fontSize: 11 }}
                 />
               )}
-              {radio === "library" && libModel?.kind === "subckt" && page === "params" && (
-                <textarea readOnly value={libModel.code} aria-label="Subcircuit" style={{ width: "100%", height: 110, marginTop: 6, fontFamily: "monospace", fontSize: 11 }} />
+              {curModel instanceof SimModelSubckt && page === "params" && (
+                <textarea readOnly value={curModel.getSpiceCode()} aria-label="Subcircuit" style={{ width: "100%", height: 110, marginTop: 6, fontFamily: "monospace", fontSize: 11 }} />
               )}
               <label style={{ display: "block", marginTop: 8, opacity: save.enabled ? 1 : 0.6 }}>
                 <input type="checkbox" checked={saveInValue && save.enabled} disabled={!save.enabled} onChange={(e) => setSaveInValue(e.target.checked)} data-testid="sim-model-save-in-value" /> {save.label}
@@ -660,7 +687,7 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
                   <tr key={p.number}>
                     <td>{symbolPinString(p)}</td>
                     <td>
-                      <select value={grid[row]} aria-label={`Model pin of ${p.number}`} disabled={!curModel && !libModel} onChange={(e) => changeCell(row, e.target.value)}>
+                      <select value={grid[row]} aria-label={`Model pin of ${p.number}`} disabled={!curModel} onChange={(e) => changeCell(row, e.target.value)}>
                         {[...new Set([...modelPinChoices(pins), grid[row]!])].map((c) => (
                           <option key={c} value={c}>
                             {c}
@@ -676,7 +703,7 @@ export function SimModelDialog({ reference, onClose, onWritten }: Props) {
         </div>
         <div className="dialog-footer">
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={busy} onClick={() => void ok()} data-testid="sim-model-ok">
+          <button className="primary" onClick={ok} data-testid="sim-model-ok">
             OK
           </button>
         </div>

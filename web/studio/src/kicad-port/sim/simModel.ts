@@ -48,6 +48,8 @@ export interface LibraryModelInfo {
   type: string;
   /** The model's pins in order: a subcircuit's ports, or a device's pin names ("<S>" optional); none for a raw SPICE element. */
   pins: string[];
+  /** `SIM_MODEL::TYPE`'s name a `.model` reads as (`ReadTypeFromSpiceStrings`); absent for a raw SPICE element and a subcircuit. */
+  modelType?: string;
   code: string;
   ibisPins?: [string, string][];
   pinModels?: string[][];
