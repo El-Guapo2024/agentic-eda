@@ -59,17 +59,72 @@ export const DRC_MENU_DEFAULTS: DrcMenuOptions = { reportAllTrackErrors: false, 
  * The DRC dialog's Show boxes and options menu as they were last left (`raw`, this browser's copy of `DIALOG_SHIM::SaveControlState`'s controls and
  * `PCBNEW_SETTINGS::m_DRCDialog`), each value that is not there or not a boolean at its start state ([`DRC_SHOW_START`], [`DRC_MENU_DEFAULTS`]).
  */
-export function savedDrcControls(raw: string | null): { filter: RcFilter; options: DrcMenuOptions } {
-  const start = { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS };
+export function savedDrcControls(raw: string | null): { filter: RcFilter; options: DrcMenuOptions; run: DrcRunControls } {
+  const start = { filter: DRC_SHOW_START, options: DRC_MENU_DEFAULTS, run: DRC_RUN_START };
   if (!raw) return start;
   try {
-    const j = JSON.parse(raw) as { filter?: Partial<RcFilter>; options?: Partial<DrcMenuOptions> } | null;
-    const bool = (v: unknown, d: boolean) => (typeof v === "boolean" ? v : d);
-    const f = j?.filter ?? {};
+    const j = JSON.parse(raw) as { filter?: Partial<RcFilter>; options?: Partial<DrcMenuOptions>; run?: Partial<DrcRunControls> } | null;
+    const o = j?.options ?? {};
+    const r = j?.run ?? {};
+    return {
+      filter: savedFilter(j?.filter ?? {}, DRC_SHOW_START),
+      options: { reportAllTrackErrors: bool(o.reportAllTrackErrors, DRC_MENU_DEFAULTS.reportAllTrackErrors), crossprobe: bool(o.crossprobe, DRC_MENU_DEFAULTS.crossprobe), scrollOnCrossprobe: bool(o.scrollOnCrossprobe, DRC_MENU_DEFAULTS.scrollOnCrossprobe) },
+      run: { refillZones: bool(r.refillZones, DRC_RUN_START.refillZones), parity: bool(r.parity, DRC_RUN_START.parity) },
+    };
+  } catch {
+    return start;
+  }
+}
+
+const bool = (v: unknown, d: boolean) => (typeof v === "boolean" ? v : d);
+
+function savedFilter(f: Partial<RcFilter>, start: RcFilter): RcFilter {
+  return { errors: bool(f.errors, start.errors), warnings: bool(f.warnings, start.warnings), exclusions: bool(f.exclusions, start.exclusions), all: bool(f.all, start.all ?? false) };
+}
+
+/**
+ * The DRC dialog's two run options, kept from one opening to the next as KiCad 25ec2335's `DIALOG_SHIM::SaveControlState` keeps every check box of a dialog
+ * that does not opt it out (`DIALOG_DRC` opts none out): "Refill all zones before performing DRC" (`m_cbRefillZones`, `dialog_drc_base.cpp`:
+ * `SetValue(true)`) and "Test for parity between PCB and schematic" (`m_cbTestFootprints`, unchecked).
+ */
+export interface DrcRunControls {
+  refillZones: boolean;
+  parity: boolean;
+}
+
+export const DRC_RUN_START: DrcRunControls = { refillZones: true, parity: false };
+
+/** The ERC dialog's Show boxes as `dialog_erc_base.fbp` starts them: none of the four ticked (no `SetValue`, every `checked` property 0), until a person ticks one. */
+export const ERC_SHOW_START: RcFilter = { errors: false, warnings: false, exclusions: false, all: false };
+
+/**
+ * `DIALOG_ERC::OnMenu`'s check items, kept in `EESCHEMA_SETTINGS::m_ERCDialog` (KiCad 25ec2335 `eeschema_settings.cpp`: `ERC.crossprobe` true,
+ * `ERC.scroll_on_crossprobe` true, `ERC.show_all_errors` false).
+ */
+export interface ErcMenuOptions {
+  /** "Cross-probe Selected Items": "Highlight corresponding items on canvas when selected in the ERC list" (`OnERCItemSelected` skips without it). */
+  crossprobe: boolean;
+  /** "Center on Cross-probe": "When cross-probing, scroll the canvas so that the item is visible" (`FocusOnItem( item, m_scroll_on_crossprobe )`). */
+  scrollOnCrossprobe: boolean;
+  /**
+   * "Show all errors": "Show duplicate ERC markers on all applicable pins" (`ERC_TESTER( sch, m_showAllErrors )`). **Differs**: kept, but kicad-cli's
+   * `sch erc` has no option for it (its job builds the tester with the default), so the studio's runs are always without it and the entry is greyed.
+   */
+  showAllErrors: boolean;
+}
+
+export const ERC_MENU_DEFAULTS: ErcMenuOptions = { crossprobe: true, scrollOnCrossprobe: true, showAllErrors: false };
+
+/** The ERC dialog's Show boxes and options menu as they were last left (`raw`, this browser's copy of `SaveControlState` and `m_ERCDialog`). */
+export function savedErcControls(raw: string | null): { filter: RcFilter; options: ErcMenuOptions } {
+  const start = { filter: ERC_SHOW_START, options: ERC_MENU_DEFAULTS };
+  if (!raw) return start;
+  try {
+    const j = JSON.parse(raw) as { filter?: Partial<RcFilter>; options?: Partial<ErcMenuOptions> } | null;
     const o = j?.options ?? {};
     return {
-      filter: { errors: bool(f.errors, DRC_SHOW_START.errors), warnings: bool(f.warnings, DRC_SHOW_START.warnings), exclusions: bool(f.exclusions, DRC_SHOW_START.exclusions), all: bool(f.all, DRC_SHOW_START.all ?? false) },
-      options: { reportAllTrackErrors: bool(o.reportAllTrackErrors, DRC_MENU_DEFAULTS.reportAllTrackErrors), crossprobe: bool(o.crossprobe, DRC_MENU_DEFAULTS.crossprobe), scrollOnCrossprobe: bool(o.scrollOnCrossprobe, DRC_MENU_DEFAULTS.scrollOnCrossprobe) },
+      filter: savedFilter(j?.filter ?? {}, ERC_SHOW_START),
+      options: { crossprobe: bool(o.crossprobe, ERC_MENU_DEFAULTS.crossprobe), scrollOnCrossprobe: bool(o.scrollOnCrossprobe, ERC_MENU_DEFAULTS.scrollOnCrossprobe), showAllErrors: bool(o.showAllErrors, ERC_MENU_DEFAULTS.showAllErrors) },
     };
   } catch {
     return start;

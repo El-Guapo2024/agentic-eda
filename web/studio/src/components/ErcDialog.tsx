@@ -47,7 +47,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
 import { allShown, countKinds, ercKey, ercMessage, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
-import { setErcView, useCheckerView, type ErcTab } from "../state/checkerView";
+import { setErcOptions, setErcView, useCheckerView, type ErcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { askExclusionComment } from "../state/checkerView";
 import { saveReport, deleteAllMarkersErc, deleteMarkerErc, ercMenuContext, ercSettingSeverity, excludeMarkerErc, frameErc, openSeveritySetup, runMarkerMenu, selectErc, setErcExcluded, setErcSeverity, stepErc, toMenuEntries } from "../actions/checkerOps";
@@ -102,6 +102,23 @@ export function ErcDialog() {
   const deleteAll = () => {
     if (counts.exclusions > 0) setAskDeleteAll(true);
     else void deleteAllMarkersErc(cctx, false);
+  };
+  /**
+   * `DIALOG_ERC::OnMenu`, the gear button (`m_bMenu`): three check items kept in the user's settings (`EESCHEMA_SETTINGS::m_ERCDialog`). "Show all errors" is
+   * kept but greyed: kicad-cli's `sch erc` has no option for it, so a run of the studio cannot use it.
+   */
+  const optionsMenu = (at: DOMRect) => {
+    const o = view.options;
+    const mark = (on: boolean) => <span aria-hidden="true">{on ? "\u2713" : ""}</span>;
+    setMenu({
+      x: at.left,
+      y: at.bottom,
+      entries: [
+        { label: "Cross-probe Selected Items", hint: "Highlight corresponding items on canvas when selected in the ERC list", checked: o.crossprobe, icon: mark(o.crossprobe), onSelect: () => setErcOptions({ crossprobe: !o.crossprobe }) },
+        { label: "Center on Cross-probe", hint: "When cross-probing, scroll the canvas so that the item is visible", checked: o.scrollOnCrossprobe, icon: mark(o.scrollOnCrossprobe), onSelect: () => setErcOptions({ scrollOnCrossprobe: !o.scrollOnCrossprobe }) },
+        { label: "Show all errors", hint: "Show duplicate ERC markers on all applicable pins (not available here: kicad-cli's ERC has no option for it)", checked: o.showAllErrors, icon: mark(o.showAllErrors), disabled: true, onSelect: () => setErcOptions({ showAllErrors: !o.showAllErrors }) },
+      ],
+    });
   };
   /** `OnSaveReport`'s file dialog: the two file types it offers ("Report file (*.rpt)", "JSON file (*.json)"). */
   const saveMenu = (at: DOMRect) =>
@@ -188,6 +205,9 @@ export function ErcDialog() {
               </span>
             )}
             <span style={{ flex: 1 }} />
+            <button className="rc-options" title="ERC options" aria-label="ERC options" onClick={(e) => optionsMenu(e.currentTarget.getBoundingClientRect())}>
+              ⚙
+            </button>
             <button title="Previous Marker" aria-label="Previous Marker" disabled={tab === "lint"} onClick={() => stepErc(cctx, "prev")}>
               ◀ Previous
             </button>

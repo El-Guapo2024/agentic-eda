@@ -37,7 +37,8 @@
 // The gear button is `DIALOG_DRC::OnMenu`: "Report All Errors for Each Track" (`--all-track-errors` on the next run and on Save...),
 // "Cross-probe Selected Items" and "Center on Cross-probe" (what a row's selection does to the board: `OnDRCItemSelected`), kept in the user's
 // settings (`PCBNEW_SETTINGS::m_DRCDialog`; here this browser's). The Show boxes start as the dialog's base does -- Errors and Warnings, not
-// Exclusions or All -- and are kept from one opening to the next (`DIALOG_SHIM::SaveControlState`): state/checkerView.ts.
+// Exclusions or All -- and are kept from one opening to the next (`DIALOG_SHIM::SaveControlState`), and so are the Refill and Parity boxes
+// (KiCad 25ec2335 keeps every check box of the dialog): state/checkerView.ts.
 //
 // "Lint" is a tab of its own: crates/lint, our own checks that KiCad does not have
 // (placement quality, net-class track width). In-process and cheap, so it follows
@@ -46,7 +47,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DrcViolation } from "../api/types";
 import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
 import { allShown, canExclude, countKinds, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
-import { askExclusionComment, setDrcOptions, setDrcView, useCheckerView, type DrcTab } from "../state/checkerView";
+import { askExclusionComment, setDrcOptions, setDrcRun, setDrcView, useCheckerView, type DrcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { saveReport, deleteAllMarkersDrc, deleteMarkerDrc, drcListOf, drcMenuContext, drcSelectedOf, drcSettingSeverity, excludeDrc, excludeMarkerDrc, frameDrc, openSeveritySetup, restoreDrc, runMarkerMenu, selectDrc, setDrcSeverity, stepDrc, toMenuEntries } from "../actions/checkerOps";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
@@ -248,12 +249,12 @@ export function DrcDialog() {
             </div>
           )}
           <div style={{ display: "flex", gap: 18, marginBottom: 10 }}>
-            <label className="toggle" title="KiCad's filler runs first, on a copy of the board (the fills are kept, like Fill All Zones), and the DRC then judges the board with that fill. On by default, as in KiCad; off, it judges the fills the board holds.">
-              <input type="checkbox" checked={state.drcRefillZones} onChange={(e) => dispatch({ type: "SET_DRC_REFILL", refill: e.target.checked })} />
+            <label className="toggle" title="KiCad's filler runs first, on a copy of the board (the fills are kept, like Fill All Zones), and the DRC then judges the board with that fill. On at first, as in KiCad, then as it was last left; off, it judges the fills the board holds.">
+              <input type="checkbox" checked={view.run.refillZones} onChange={(e) => setDrcRun({ refillZones: e.target.checked })} />
               Refill all zones before performing DRC
             </label>
             <label className="toggle" title="kicad-cli --schematic-parity: compare the board with the schematic (missing, extra and duplicate footprints, pads on other nets, footprints other than the symbol's). Applies to the next run.">
-              <input type="checkbox" checked={state.drcParity} onChange={(e) => dispatch({ type: "SET_DRC_PARITY", parity: e.target.checked })} />
+              <input type="checkbox" checked={view.run.parity} onChange={(e) => setDrcRun({ parity: e.target.checked })} />
               Test for parity between PCB and schematic
             </label>
             <span style={{ flex: 1 }} />
