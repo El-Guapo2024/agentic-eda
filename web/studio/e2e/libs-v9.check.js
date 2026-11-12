@@ -144,6 +144,41 @@
     }
   });
 
+  await scenario("the Symbol Editor's tree scrolls sideways to its last column, under a header that stays on top, its vertical scroll bar at the pane's edge", async (t) => {
+    // `LIB_TREE`'s wxDataViewCtrl: Item 300 and Description 600 in a pane narrower than that scroll sideways, header and rows together
+    await clickTab("Symbol");
+    await until(() => E.state().tab === "symbol", 4000);
+    const area = await until(() => document.querySelector('[data-library-tree-columns="symbol"]'), 8000);
+    if (!t(area, "the Symbol Editor's tree")) return;
+    const pane = area.closest("[role=tree]");
+    // an installed library open, so there are more rows than the pane shows
+    const lib = await until(() => [...area.querySelectorAll("[data-library]")].find((g) => g.dataset.library === "Device") ?? area.querySelector("[data-library]"), 6000);
+    if (lib && lib.getAttribute("aria-expanded") !== "true") lib.click();
+    await until(() => area.scrollHeight > area.clientHeight + 50, 15000);
+    t(area.scrollWidth > area.clientWidth + 100, `the columns are wider than the pane (${area.scrollWidth} > ${area.clientWidth})`);
+    t(area.scrollHeight > area.clientHeight, `the rows scroll in the same area (${area.scrollHeight} > ${area.clientHeight})`);
+    const a = area.getBoundingClientRect();
+    const p = pane.getBoundingClientRect();
+    t(a.right <= p.right + 1, `the scroll area, and so its vertical scroll bar, ends at the pane's edge (${Math.round(a.right)} <= ${Math.round(p.right)})`);
+    area.scrollLeft = area.scrollWidth;
+    area.scrollTop = 200;
+    area.dispatchEvent(new Event("scroll"));
+    await sleep(200);
+    const head = area.querySelector('[data-library-tree-header="symbol"]');
+    const last = head.querySelector('[data-column="Description"]');
+    const lr = last?.getBoundingClientRect();
+    const visibleRight = a.left + area.clientWidth;
+    // the rows' 8 px right padding is past the last column
+    t(area.scrollLeft > 0 && lr && lr.right <= visibleRight + 1 && visibleRight - lr.right < 12 && lr.left < visibleRight, `scrolled to the right end, the Description column is in view (its right ${Math.round(lr?.right ?? 0)}, the view's ${Math.round(visibleRight)})`);
+    t(Math.abs(head.getBoundingClientRect().top - a.top) < 2, `scrolled down 200 px, the header is still on top (${Math.round(head.getBoundingClientRect().top)} vs ${Math.round(a.top)})`);
+    const cell = [...area.querySelectorAll('[role=treeitem] [data-column="Description"]')].find((c) => { const r = c.getBoundingClientRect(); return r.top > a.top + 20 && r.bottom < a.bottom; });
+    t(cell && cell.getBoundingClientRect().left < visibleRight && cell.getBoundingClientRect().right > a.left, "a row's Description cell is in view with it");
+    area.scrollLeft = 0;
+    area.scrollTop = 0;
+    await clickTab("Schematic");
+    await until(() => E.state().tab === "schematic", 4000);
+  });
+
   await scenario("the Symbol Chooser's Body style: a De Morgan symbol offers Standard and Alternate; a plain one has it disabled", async (t) => {
     const root = await openChooser();
     if (!t(root, "the Symbol Chooser opens")) return;

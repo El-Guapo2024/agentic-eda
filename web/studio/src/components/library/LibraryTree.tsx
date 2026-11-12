@@ -220,10 +220,12 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
           {"⋯"}
         </button>
       </div>
-      <div style={{ overflowX: "auto", overflowY: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }} data-library-tree-columns={kind}>
+      {/* One scrolled area for the header and the rows, as `LIB_TREE`'s wxDataViewCtrl is: the columns scroll sideways under a header that scrolls with them
+          and stays on top, and the vertical scroll bar stays at the pane's edge (a scroll area of the rows' own, as wide as the columns, put it out of sight) */}
+      <div style={{ overflow: "auto", flex: 1, minHeight: 0 }} data-library-tree-columns={kind}>
       <div
         data-library-tree-header={kind}
-        style={{ ...grid, minWidth: tableWidth, boxSizing: "border-box", padding: "2px 8px 2px 24px", fontSize: 11, fontWeight: 600, color: "var(--chrome-text-dim)", borderBottom: "1px solid var(--chrome-border)" }}
+        style={{ ...grid, minWidth: tableWidth, boxSizing: "border-box", padding: "2px 8px 2px 24px", fontSize: 11, fontWeight: 600, color: "var(--chrome-text-dim)", borderBottom: "1px solid var(--chrome-border)", position: "sticky", top: 0, zIndex: 1, background: "var(--chrome-bg-raised)" }}
         onContextMenu={(e) => {
           // `LIB_TREE::onHeaderContextMenu`
           e.preventDefault();
@@ -238,7 +240,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
           </span>
         ))}
       </div>
-      <div style={{ overflowY: "auto", overflowX: "hidden", flex: 1, minHeight: 0, paddingBottom: 8, minWidth: tableWidth }}>
+      <div style={{ paddingBottom: 8, minWidth: tableWidth }} data-library-tree-rows={kind}>
         {q && searchIndex === "loading" && <div style={{ padding: "2px 10px 6px", color: "var(--chrome-text-dim)", fontSize: 11 }}>Searching every installed library…</div>}
         {groups.length === 0 && <div style={{ padding: "8px 10px", color: "var(--chrome-text-dim)", fontSize: 12 }}>{nothing ? "Nothing in the library yet." : "No match."}</div>}
         {groups.map((g) => {
