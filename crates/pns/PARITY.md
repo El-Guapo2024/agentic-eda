@@ -1465,8 +1465,8 @@ UI-LEFT R2, R3, R5, R7 (and R4, which is `crates/freeroute`'s), each re-read aga
   (`PairedLayer`), else the board's layer pair with no anchor. The studio plans it (`kicad-port/routerVia.ts` `planViaCommand`, `components/canvas/routerViaArm.ts`) for
   V while routing, in a pair, and for the via V armed before a route (`m_startWithVia`); the draw states keep the sizes' layer pairs (the board's pair at the start, each
   via command's after it). V while the router tool is active is `ACT_PlaceThroughVia` (`AS_CONTEXT` over the global `layerToggle`). Tests: `start_layer`
-  `the_nearest_ratsnest_anchor_is_on_the_layer_of_the_pad_at_the_other_end`, `routerVia.test.ts`. **Differs:** the sizes' layer pairs start afresh with each route
-  (KiCad's `m_savedSizes` keeps the last route's via pair beside the board's).
+  `the_nearest_ratsnest_anchor_is_on_the_layer_of_the_pad_at_the_other_end`, `routerVia.test.ts`. ~~**Differs:** the sizes' layer pairs start afresh with each route
+  (KiCad's `m_savedSizes` keeps the last route's via pair beside the board's).~~ (kept, Stage 27)
 - **The sizes after a layer event (R5; Stages 18 and 20's "the clearance is not re-imported").** `ROUTER_TOOL::updateSizesAfterRouterEvent`:
   `Router::update_sizes_after_router_event` asks the clearance, the track width and a pair's width and gap again of a dummy track on the layer after every fix, via and
   layer switch, with `UseNetClassTrack()` / `UseNetClassDiffPair()` and `TrackWidthIsExplicit()` tracked (`use_net_class_track`, `width_explicit`, `user_diff_pair`),
@@ -1529,8 +1529,8 @@ UI-LEFT R6 and R9, each re-read against KiCad 8303b2ad (`pns_line_placer.cpp`: `
   acute, reversed or undefined corner goes into the tail). A failed `routeHead` restores the tail and head (a zero-length tail at the start when
   there was none). `FixRoute` (`setInitialDirection( d_last )`, the stage's `m_direction`), a via, `SetLayer` and `UnfixRoute` (`m_direction =
   st.pts[0].direction`, `m_initial_direction` kept) reset it. A repeated `Move` to the same cursor starts from the state before the last one, as the
-  tracer does. **Differs:** a head with an arc (the rounded corner modes) never goes into the tail -- KiCad's merges handle arcs; the second
-  `optimizer.Optimize( &tmpHead )` of each winding inside `rhWalkBase` is not run with a tail (with none it is the same line again). Tests:
+  tracer does. ~~**Differs:** a head with an arc (the rounded corner modes) never goes into the tail -- KiCad's merges handle arcs; the second
+  `optimizer.Optimize( &tmpHead )` of each winding inside `rhWalkBase` is not run with a tail (with none it is the same line again).~~ (both KiCad's, Stage 27) Tests:
   `the_tail_is_merged_pulled_back_cut_and_split_as_kicads`, `reduce_tail_takes_the_tail_back_to_the_earliest_segment_that_reaches_the_cursor`,
   `a_short_fan_out_from_a_pad_is_straightened`, `a_walked_head_becomes_the_tail_and_a_click_fixes_the_trace`.
 - *The hull snap in Highlight collisions* (`rhMarkObstacles`): a head that collides ends on the hull of the first obstacle it meets
@@ -1551,7 +1551,7 @@ UI-LEFT R6 and R9, each re-read against KiCad 8303b2ad (`pns_line_placer.cpp`: `
   non-plated slot's hole) finds no collision with the edge where the collision point is in one. As in KiCad the list is the world's own (`NODE::Branch`
   copies none), so it counts only for queries of the world itself (`QueryOpts::root_world`): `isStartingPointRoutable`'s start check, which no longer
   refuses a start on a castellated pad on the board edge. Every placer and dragger works in a branch in KiCad, so the head still keeps the edge
-  clearance there. **Not here:** the pair start's check (`dp_placer`). Test: `a_route_may_start_on_a_castellated_pad_on_the_board_edge`.
+  clearance there. ~~**Not here:** the pair start's check (`dp_placer`).~~ (the pair's too, Stage 27) Test: `a_route_may_start_on_a_castellated_pad_on_the_board_edge`.
 - *A footprint's Margin graphics* (R3-6's leftover): its art on Margin, placed, is a board edge as the board's are. Test: `a_footprints_margin_graphic_is_an_edge`.
 - *Text hulls*: a dimension's text was already KiCad's -- `syncDimension` calls `aDimension->PCB_TEXT::TransformShapeToPolygon`, which is
   `buildBoundingHull`, the box of the glyphs (Stage 16 said "each glyph outline": wrong). A barcode's printed text is a box of its own under the symbol
@@ -1563,7 +1563,7 @@ UI-LEFT R6 and R9, each re-read against KiCad 8303b2ad (`pns_line_placer.cpp`: `
   segments is asked segment by segment, each a dummy track of the line's own width, and the smallest clearance taken (`pickSmallerConstraint`); two
   such lines pair by pair within twice the wider width (`linesBBoxOverlap`). Used for the head's nearest obstacle, the walk's hulls and collision tests,
   `path_collides`, `line_colliding` and the shove's line clearances; without such a rule a line is one dummy from its first point to its last, as
-  before. **Differs:** the line placer's own per-segment checks in Highlight collisions still ask each segment alone. Test:
+  before. ~~**Differs:** the line placer's own per-segment checks in Highlight collisions still ask each segment alone.~~ (as a line, Stage 27) Test:
   `a_line_is_asked_segment_by_segment_by_a_rule_on_shapes`.
 - *1-2 nm tolerances*: every node query takes `collideSimple`'s `clearance - 1` ("the hulls are built to exactly the clearance distance"; the
   shove's own tests had it, Stage 12); `line_walk`'s `SEG::Contains` is `SquaredDistance <= 3`, `SEG::Collinear` allows `|qa x + qb y + qc| <= 1`,
@@ -1654,6 +1654,85 @@ in every part read here.
   `locked_tracks` 9/9; eda-cli `route_api` 36 passed; web `dragTool.test.ts` 8/8, typecheck clean; browser `drag-v2` 5/5, `component-drag` 5/5,
   `router-leftovers` 17/17.
 
+## Stage 27 -- the router's and the tuner's round-2 leftovers (branch `task-v7-router`, 2026-11-12)
+
+UI-LEFT-2 RR3 to RR8, each read against KiCad 8303b2ad (25ec2335 where newer): `router_tool.cpp` (`prepareInteractive`, `handleLayerSwitch`,
+`switchLayerOnViaPlacement`, `MainLoop`, `UpdateMessagePanel`), `pns_tool_base.cpp` (`Reset`, `pickSingleItem`, `updateEndItem`), `pns_sizes_settings.cpp`,
+`pns_line_placer.cpp` (`routeStep`, `rhWalkBase`, `splitHeadTail`, `mergeHead`, `handlePullback`, `reduceTail`, `handleSelfIntersections`,
+`optimizeTailHeadTransition`), `libs/kimath` (`SHAPE_LINE_CHAIN::Remove`, `RemoveShape`, `splitArc`; `DIRECTION_45( const SHAPE_ARC& )`), `pns_optimizer.cpp`
+(`Optimize`'s `hasArcs`, `checkColliding`'s `m_collisionKindMask`), `pns_diff_pair.cpp` and `pns_diff_pair_placer.cpp` (`BuildFromPrimitivePair`,
+`buildDpContinuation`, `CursorOrientation`, `FitGateways`, `BuildInitial`, `checkGap`, `routeHead`, `tryWalkDp`, `attemptWalk`), `pns_router.cpp`
+(`isStartingPointRoutable`), `pns_walkaround.cpp` (`processCluster`), `pns_node.cpp` (`AssembleLine`, `FindItemByParent`), `pns_kicad_iface.cpp` (`syncPad`,
+`Commit`'s source items, `GetNetCode`), `generators/pcb_tuning_pattern.cpp` (`GetMsgPanelInfo`, `getOutline`, `ViewDraw`, `pickSegment`), `tools/edit_tool.cpp`
+(`Duplicate`, `doMoveSelection`), `board.cpp::GetTrackLength`, `common/eda_units.cpp::MessageTextFromMinOptMax`, `common/advanced_config.cpp`.
+
+- **RR3, the via layer pair kept (`m_savedSizes`).** `ROUTER` lives as long as the router tool and `prepareInteractive` starts every route from
+  `m_router->Sizes()`, only adding the board's pair (`AddLayerPair( m_Route_Layer_TOP, m_Route_Layer_BOTTOM )`); `MainLoop` keeps them in `m_savedSizes`,
+  which `Reset` gives the next router. `kicad-port/routerVia.ts` keeps the router's pairs for the tab (`currentRouterSizesPairs`, `keepRouterSizesPairs` after
+  every via command's `ClearLayerPairs` + `AddLayerPair`, `startRouterSizesPairs` at a route's or a pair's start, one map for both as one `ROUTER`), so V's
+  "same layer as the active one" case (`PairedLayer( GetCurrentLayer() )`) finds the last route's via pair. Test: `routerVia.test.ts` "the via layer pair of the
+  last route is kept". (Stage 23's "Differs: the sizes' layer pairs start afresh with each route" is closed.)
+- **RR4, the rounded modes' tail.** `TailState::arcs` holds the tail's and head's arcs (found by their points as a `Line`'s): the walk is of the tail and the
+  head with their arcs, `splitHeadTail` and the optimizer keep the ones still whole, `mergeHead` counts an arc as one shape (`ShapeCount`), takes the head's
+  and the tail's direction from an arc as `DIRECTION_45( const SHAPE_ARC& )` does -- its chord from `GetP0()` to `GetP1()` with y turned over, KiCad's own
+  quirk, kept -- and the new direction from `IsArcSegment`; `handlePullback` does the same and its `RemoveShape( -1 )` takes a whole arc off the tail, from its
+  first point (the point the segment before it met it goes too, unless an arc ends there); `optimizeTailHeadTransition` checks `tail.ShapeCount() < 3` and,
+  as `Optimize`'s `hasArcs` does, neither fanout-cleans nor merges a trace with an arc; the trace shown and fixed keeps the arcs. `rhWalkBase`'s second
+  optimizer of each winding is run as KiCad runs it: `splitHeadTail( wr.lines[..], m_tail, .. )` (which always says true) and `optimizer.Optimize( &tmpHead )`
+  with `MERGE_SEGMENTS` and the walk's own collision mask (`SetCollisionMask( aCollisionMask )`, `optimizer::Constraints::kind_mask`, so Shove's pad walk merges
+  past tracks), the tail and the head put back together (`walkaround::walk_base_line`'s `old_tail`). **Differs:** a cut inside an arc (`reduceTail`,
+  `handleSelfIntersections`, `splitHeadTail`) leaves its chords where `SHAPE_LINE_CHAIN::Remove`'s `splitArc` keeps a shorter arc: a studio line holds an arc
+  whole or not at all. Tests: `in_a_rounded_mode_a_head_with_an_arc_goes_into_the_tail_and_stays_an_arc`, `a_pullback_takes_a_whole_arc_off_the_tail`.
+- **RR5, the tuner.** *The lone pattern's move* is live: `doMoveSelection` of a lone generator is `genStartEdit` at the pick-up, `item->Move` + `genUpdateEdit`
+  at every motion, `genFinishEdit` at the drop, `genCancelEdit` on Esc -- `components/canvas/tuneRouting.ts` `PatternSlide` (edit point 4 of
+  `/api/tune/edit_move` per Move-tool preview, the pattern drawn as the tuner has it instead of carried rigidly; the store's `slideLonePattern`, not for a
+  carried Duplicate or Paste or Move Individually). *The slide's start* is `pickSegment`'s: a segment or an arc (`SEGMENT_T | ARC_T`), both passes (under
+  the point, then within `Clearance() + TrackWidth() / 2`) run with KiCad's running filter -- a candidate is taken when it is no farther from the point than the
+  best so far and its middle (an arc's mid point) no farther from the baseline (`tune_edit::segment_near`). *A pair's outline* is the union of its two
+  (`merged.BooleanAdd( poly, polyCoupled )`, `Outline( 0 )`; `kicad-port/tuneTool.ts` `unionOutline`, `patternOutlineDrawn`: the pieces of each outside the
+  other, drawn open). *The message panel* of a selected pattern is `GetMsgPanelInfo`'s (`kicad-port/tuningPanel.ts`; `/api/tune/pattern`'s `panel`: the member
+  tracks' first net and the first other one, the first's class, a shared width, `BOARD::GetTrackLength` of each net -- the track and via length and the
+  pad-to-die length, and the delays -- and `EvalRules( LENGTH / SKEW, primaryItem, coupledItem, m_layer )` as the rule has it): Type, Net(s), Resolved
+  Netclass, Layer, Width, Routed Length(s) / Delay(s), Pad To Die Length / Delay and Full Length / Delay, and Target Length / Delay / Skew "(from tuning
+  pattern properties)" or Length / Delay / Skew Constraints "(from %s)" (`MessageTextFromMinOptMax`). *Duplicate* of a lone pattern does nothing ("Duplicating
+  tuning patterns alone is not supported"). **Differs:** `GetTrackLength` follows `GetConnectedItems( &aTrack )`; here it is the net's (the same unless the
+  net is in pieces); a pair whose two outlines do not meet has both drawn (KiCad draws `Outline( 0 )` only). Tests: `tuningPanel.test.ts` (3),
+  `tuneTool.test.ts` "a pair pattern's outline is the outline of the union of its two", cli `a_time_domain_rule_gives_the_target_delay` (the panel's data),
+  `a_track_that_is_an_arc_can_be_picked_and_a_pattern_is_tuned_along_it` (`segment_near` takes the arc); browser `tuner-arcs` 5/5 (the panel, Duplicate, the
+  live slide: an `edit_move` before the drop), `length-tuning` 11/11.
+- **RR6, pairs.** *The start check* (`isStartingPointRoutable`'s pair half: `m_world->CheckColliding( &dummyStartLineA / B, ITEM::ANY_T )`) asks the world
+  itself (`PairLine::hits_world`, `QueryOpts::root_world`), so a pair may start on two castellated pads on the board edge (Stage 24's "Not here"). *`tryWalkDp`*
+  makes its four attempts (`pfirst = attempt & 1`, `wind_cw = attempt & 2`, which `attemptWalk` never reads: the third and fourth are the first two again,
+  whose results are taken again rather than walked twice; `score < bestScore` keeps the first of equals). *"DP Max Uncoupled-length: %s" "(from %s)"* is the
+  message panel's last row for a pair (`CT_MAX_UNCOUPLED` of the two lines on the layer routed, a `diff_pair_uncoupled` rule's `Max()`: `Router::diff_pair_max_uncoupled`,
+  `dp_start`'s and the layer events' `sizes.max_uncoupled`). *Custom dimensions before the gap check* was done in Stage 18 (r5 R5-4): `start_diff_pair` and
+  `DiffPairPlacer::start_with` apply the user's pair dimensions before every start check. Tests: `a_pair_may_start_on_two_castellated_pads_on_the_board_edge`
+  (fails without the change), `a_pairs_max_uncoupled_length_is_the_rules_on_the_layer_routed`, `routerSizes.test.ts`.
+- **RR7, edge cases.** *Highlight collisions* asks the head as a line (`m_currentNode->CheckColliding( &current )`, `LINE::Collide`: `Side::Line`, so a rule on
+  shapes sees the whole line, `walkaround::path_collides`), not segment by segment. *`processCluster`'s timeout*: past 100 ms over one cluster
+  (`ADVANCED_CFG::m_PNSProcessClusterTimeout`'s default, `walkaround::PNS_PROCESS_CLUSTER_TIMEOUT_MS`) the walk gives up. *A shoved line's source* is the track
+  of the segment it was assembled from (`AssembleLine`: `SetSourceItem( aSeg->GetSourceItem() )`, whose mask and group the commit copies): `SLine::seed`, the
+  lineage of the new segments and the track the commit writes the line under (R6-R8 in Stage 20). *A footprint drag* hands the component dragger the first
+  solid of a padstack pad (`FindItemByParent( pad )`), so its other solids stay in the router's world and the tracks on their layers do not follow, as in
+  KiCad. *`pickSingleItem`'s last resort*: in Highlight collisions an item of no net on the top layer is picked for a route of a net (`prioritized[4]`).
+  *Tracks routed in an entered group* join it since Stage 18 (`createBoardItem`, the studio's `group`; gate `a_dragged_track_keeps_its_mask_and_group_and_a_route_joins_the_entered_group_for_kicad_cli`):
+  the entry's premise was stale. **Not ported:** free pads (`IsFreePad`: a pad of a "free" pin, which `collideSimple` gives no clearance and `pickSingleItem`
+  picks when the cursor is in it -- the studio's router, DRC and connectivity have no free pads); a route of no net keeps to items of no net at its end, where
+  8303b2ad's tool (the orphaned net handle's net code is 0, `GetNetCode( aNet ) <= 0`) takes any -- KiCad's own recorded session `simple-shove-1` (no end item
+  at any move of a route of no net) replays exact only so; a click's via is still never pushed (it sits at a leg's locked joint; KiCad's joint locks belong to
+  the shove's node, so a later leg may push one where a leg had no successful shove). Tests: `a_shoved_line_of_two_tracks_is_committed_under_the_segment_it_was_assembled_from`
+  (fails without the change), `a_footprint_drag_takes_the_first_solid_of_a_padstack`, `pick_single_item_takes_an_item_of_no_net_in_highlight_collisions`.
+- **RR8, a cursor steeply off two arc ends: as KiCad.** Compared function by function with 8303b2ad: `anchorDirection` (an arc's chord), `buildDpContinuation`
+  (the anchors' gateway with no entry lines, the 22.5-degree extensions when the anchors line up), `CursorOrientation` (`Anchor( 0 )` of each arc),
+  `BuildForCursor`, `FitGateways`, `BuildInitial`, `checkGap` (`gap - 100`) and `routeHead`'s `return m_currentTraceOk` are ported as they are. From two arc
+  ends one above the other, a cursor across their line fits no gateway pair -- a straight-first trace runs through the other anchor (`p.Intersects( n )`), a
+  diagonal-first one comes nearer than the pitch -- and the last fitted pair stays; KiCad's code does the same. (25ec2335 rewrote the gateways --
+  `buildDpContinuation`'s aligned `gw0` / `gw180` with a `static_cast<SEGMENT*>` of the primitives, which an arc is not -- and is not the reference here.)
+  Test: `from_two_arc_ends_a_cursor_across_their_line_fits_no_pair_and_the_last_head_stays`.
+- Gates: `cargo check --workspace --tests` 0 warnings; `cargo test -p eda-pns` (with `KICAD_QA_DATA`) 364 unit tests and every integration test passed,
+  `qa_regressions` 13/13 exact, `dp_boards` 5/5; eda-cli `route_api`, `tune`, `net_inspector` 71 passed; slow `gate_vs_kicad` 11/12 (the known box failure,
+  the shove toward mcu30's edge), slow `tune_api` 20/20 (kicad-cli); web typecheck clean, unit tests 3607/3607; browser `tuner-arcs` 5/5, `length-tuning` 11/11, `router-u3` 7/7, `diff-pairs` 11/11.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -1707,7 +1786,7 @@ in every part read here.
 - ~~`MOUSE_TRAIL_TRACER`~~ **Ported 2026-10-20** (Stage 9 step 4). ~~Springback~~
   **Ported 2026-10-23** for the line placer (Stage 10 step 1) and **2026-10-25** for the dragger and the pair placer (Stage 14). See
   `docs/parity/GAPS.md` item 7 for what is left in gap #7: `LockJoint`, ~~virtual vias~~ (Stage 10 step 3),
-  the walkaround cluster timeout, the pad-to-die length and delay, time-domain rules as the tuner's
+  ~~the walkaround cluster timeout~~ (Stage 27), the pad-to-die length and delay, time-domain rules as the tuner's
   target, the rounding of corners, the merged outline of a pair's pattern, a pattern moved, turned
-  or flipped, the tuner's world branched at every move, two walk attempts of a pair where KiCad makes
-  four, and ~~the tracer's `reduceTail` / `handlePullback` family~~ (ported, Stage 24).
+  or flipped, the tuner's world branched at every move, ~~two walk attempts of a pair where KiCad makes
+  four~~ (Stage 27), and ~~the tracer's `reduceTail` / `handlePullback` family~~ (ported, Stage 24).
