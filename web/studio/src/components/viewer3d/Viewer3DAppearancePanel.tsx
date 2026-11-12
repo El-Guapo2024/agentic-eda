@@ -21,6 +21,7 @@ import { useViewer3DRows } from "./useViewer3DRows";
 import { setViewer3DPresets, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
 import { FOLLOW_PCB, FOLLOW_PLOT_SETTINGS, afterVisibilityChange, applyPreset, colorsOf, deletePreset, deleteViewport, matchingPreset, presetEntries, savePreset, saveViewport, viewportFromJson, visibleSnapshot, type Viewport3D } from "../../kicad-port/viewer3dSettings";
 import { sameView } from "../../kicad-port/camera3d";
+import { boardOutlinePolygons } from "../../kicad-port/pcbOutline";
 import { MessageDialog, NameDialog, PickDialog } from "../panels/appearance/shared";
 
 /** The values of the two lists' options: a preset or a viewport by name (`p:`, `v:`), the two commands, and the blank entry the list sits on when nothing matches. */
@@ -340,7 +341,7 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
             onCancel={() => setDlg(null)}
             onOk={(name) => {
               if (name && api) {
-                storeViewports(saveViewport(viewports, name, api.getCamera()));
+                storeViewports(saveViewport(viewports, name, api.getCamera(), boardSpanMm(state.board)));
                 setViewport(name);
               }
               setDlg(null);
@@ -373,4 +374,24 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
       </div>
     </>
   );
+}
+
+/**
+ * The board's longest outline edge in mm, the span the 3D camera is homed with (Viewer3D.tsx `setBoardGeometry`; KiCad's `m_boardSize`, the Edge.Cuts box, 20 mm for a
+ * board with none: `bbbox.Inflate( pcbIUScale.mmToIU( 10 ) )`): what a saved viewport's KiCad view matrix is scaled by (`kicadViewMatrix`).
+ */
+function boardSpanMm(board: Parameters<typeof boardOutlinePolygons>[0] | null | undefined): number {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of board ? boardOutlinePolygons(board) : [])
+    for (const [x, y] of p.outer) {
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  if (!Number.isFinite(minX)) return 20;
+  return Math.max((maxX - minX) / 1e6, (maxY - minY) / 1e6, 1e-3);
 }

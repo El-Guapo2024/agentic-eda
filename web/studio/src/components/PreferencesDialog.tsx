@@ -42,7 +42,7 @@ import { DEFAULT_WINDOW_OPTIONS, EDITOR_WINDOWS, getCommonOptions, setWindowOpti
 import type { GridSnapping } from "../kicad-port/windowOptions";
 import { GRID_MIN_SPACING_RANGE, GRID_THICKNESS_CHOICES, gridMinSpacingValue } from "../kicad-port/grid";
 import { getViewer3DUserSettings, setViewer3DPrefs } from "../state/viewer3dUserSettings";
-import { DEFAULT_VIEWER3D_PREFS, sanitizeViewer3DPrefs, type AntialiasingMode, type Viewer3DPrefs } from "../kicad-port/viewer3dSettings";
+import { DEFAULT_VIEWER3D_PREFS, sanitizeViewer3DPrefs, type AntialiasingMode, type MaterialMode, type Viewer3DPrefs } from "../kicad-port/viewer3dSettings";
 import { useCommonPage, useMaintenancePage } from "./CommonPreferencesPages";
 import { useHotkeysPage } from "./HotkeysPage";
 import { useEditorColorsPage } from "./EditorColorsPages";
@@ -579,14 +579,36 @@ export function PreferencesDialog() {
 const heading3d = (text: string) => <div style={{ fontWeight: 600, margin: "10px 0 4px" }}>{text}</div>;
 
 /**
- * `PANEL_3D_DISPLAY_OPTIONS` (Preferences > 3D Viewer > General): its Camera Options -- "Rotation increment:" (`camera.rotation_increment`, 0 .. 359 deg), "Redraw while
- * moving" (`camera.animation_enabled`) and "Redraw speed:" (`camera.moving_speed_multiplier`, 1 .. 5). Its Render Options are not offered: the silkscreen is not
- * clipped at via annuli or at the mask's edges here, plated and bare copper are one colour, and the models keep their own materials; "Show filled areas in zones" is
- * the Appearance manager's Zones row.
+ * `PANEL_3D_DISPLAY_OPTIONS` (Preferences > 3D Viewer > General, KiCad 25ec2335 `panel_3D_display_options_base.cpp`): Render Options -- "Clip silkscreen at via annuli"
+ * (`render.clip_silk_on_via_annulus`), "Clip silkscreen at solder mask edges" (`render.subtract_mask_from_silk`), "Use bare copper color for unplated copper (slow)"
+ * (`render.differentiate_plated_copper`), "Material properties:" (`render.material_mode`: Realistic, Solid colors, CAD colors) -- and Camera Options: "Rotation increment:"
+ * (`camera.rotation_increment`, 0 .. 359 deg), "Redraw while moving" (`camera.animation_enabled`) and "Redraw speed:" (`camera.moving_speed_multiplier`, 1 .. 5). "Show
+ * filled areas in zones" (`render.show_zones`) is the Appearance manager's Zones row, which the studio keeps with the board's other rows.
  */
 function Viewer3DGeneralPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch: Partial<Viewer3DPrefs>) => void }) {
   return (
     <div className="dialog-body" style={{ flex: 1 }} data-page-body="3d_general">
+      {heading3d("Render Options")}
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Clip silkscreen at via annuli" checked={draft.clipSilkOnViaAnnuli} onChange={(e) => set({ clipSilkOnViaAnnuli: e.target.checked })} />
+        Clip silkscreen at via annuli
+      </label>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Clip silkscreen at solder mask edges" checked={draft.subtractMaskFromSilk} onChange={(e) => set({ subtractMaskFromSilk: e.target.checked })} />
+        Clip silkscreen at solder mask edges
+      </label>
+      <label className="filter-row" title="Use different colors for plated and unplated copper. (Slow)">
+        <input type="checkbox" aria-label="Use bare copper color for unplated copper" checked={draft.differentiatePlatedCopper} onChange={(e) => set({ differentiatePlatedCopper: e.target.checked })} />
+        Use bare copper color for unplated copper (slow)
+      </label>
+      <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span>Material properties:</span>
+        <select aria-label="Material properties" value={draft.materialMode} onChange={(e) => set({ materialMode: e.target.value as MaterialMode })}>
+          <option value="realistic">Realistic</option>
+          <option value="solid">Solid colors</option>
+          <option value="cad">CAD colors</option>
+        </select>
+      </div>
       {heading3d("Camera Options")}
       <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }} title="Set increment (in degrees) for the Rotate commands.">
         <span>Rotation increment:</span>
@@ -603,12 +625,16 @@ function Viewer3DGeneralPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch
         <span>{draft.movingSpeedMultiplier}</span>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={() => set({ rotationIncrementDeg: DEFAULT_VIEWER3D_PREFS.rotationIncrementDeg, animationEnabled: DEFAULT_VIEWER3D_PREFS.animationEnabled, movingSpeedMultiplier: DEFAULT_VIEWER3D_PREFS.movingSpeedMultiplier })}>Reset to Defaults</button>
+        <button
+          onClick={() => {
+            const d = DEFAULT_VIEWER3D_PREFS;
+            set({ clipSilkOnViaAnnuli: d.clipSilkOnViaAnnuli, subtractMaskFromSilk: d.subtractMaskFromSilk, differentiatePlatedCopper: d.differentiatePlatedCopper, materialMode: d.materialMode, rotationIncrementDeg: d.rotationIncrementDeg, animationEnabled: d.animationEnabled, movingSpeedMultiplier: d.movingSpeedMultiplier });
+          }}
+        >
+          Reset to Defaults
+        </button>
       </div>
-      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>
-        Not offered: the Render Options (clip silkscreen at via annuli and at solder mask edges, bare copper colours, material properties). Show filled areas in zones is the
-        Appearance manager&apos;s Zones row.
-      </div>
+      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>Show filled areas in zones is the Appearance manager&apos;s Zones row.</div>
     </div>
   );
 }
@@ -616,8 +642,10 @@ function Viewer3DGeneralPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch
 /**
  * `PANEL_3D_OPENGL_OPTIONS` (Preferences > 3D Viewer > Realtime Rendering): "Show copper and tech layers thickness (slow)" (`render.opengl_copper_thickness`),
  * "Highlight items on rollover" (`render.opengl_highlight_on_rollover`), "Anti-aliasing:" (`render.opengl_AA_mode`; the browser's multisampling is on or off, so
- * 2x, 4x and 8x are all on) and "Selection color:" (`render.opengl_selection_color`). "Show model bounding boxes" is the Appearance manager's row of that name; the
- * While Moving options are not offered (the view does not drop detail while it moves).
+ * 2x, 4x and 8x are all on) and "Selection color:" (`render.opengl_selection_color`); While Moving: "Disable anti-aliasing" (`render.opengl_AA_disableOnMove`: a WebGL
+ * context's multisampling is fixed when it is made, so the browser cannot turn it off for a moving frame -- the setting is kept and not honoured), "Disable thickness"
+ * (`render.opengl_thickness_disableOnMove`), "Disable uVia holes" (`render.opengl_vias_disableOnMove`) and "Disable all plated holes" (`render.opengl_holes_disableOnMove`).
+ * "Show model bounding boxes" is the Appearance manager's row of that name.
  */
 function Viewer3DOpenGLPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch: Partial<Viewer3DPrefs>) => void }) {
   return (
@@ -645,10 +673,36 @@ function Viewer3DOpenGLPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch:
         <span>Selection color:</span>
         <input type="color" aria-label="Selection color" value={draft.selectionColor} onChange={(e) => set({ selectionColor: e.target.value })} />
       </div>
+      {heading3d("While Moving")}
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Disable anti-aliasing" checked={draft.aaDisableOnMove} onChange={(e) => set({ aaDisableOnMove: e.target.checked })} />
+        Disable anti-aliasing
+      </label>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Disable thickness" checked={draft.thicknessDisableOnMove} onChange={(e) => set({ thicknessDisableOnMove: e.target.checked })} />
+        Disable thickness
+      </label>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Disable uVia holes" checked={draft.microviasDisableOnMove} onChange={(e) => set({ microviasDisableOnMove: e.target.checked })} />
+        Disable uVia holes
+      </label>
+      <label className="filter-row">
+        <input type="checkbox" aria-label="Disable all plated holes" checked={draft.holesDisableOnMove} onChange={(e) => set({ holesDisableOnMove: e.target.checked })} />
+        Disable all plated holes
+      </label>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={() => set({ copperThickness: DEFAULT_VIEWER3D_PREFS.copperThickness, highlightOnRollover: DEFAULT_VIEWER3D_PREFS.highlightOnRollover, antialiasing: DEFAULT_VIEWER3D_PREFS.antialiasing, selectionColor: DEFAULT_VIEWER3D_PREFS.selectionColor })}>Reset to Defaults</button>
+        <button
+          onClick={() => {
+            const d = DEFAULT_VIEWER3D_PREFS;
+            set({ copperThickness: d.copperThickness, highlightOnRollover: d.highlightOnRollover, antialiasing: d.antialiasing, selectionColor: d.selectionColor, aaDisableOnMove: d.aaDisableOnMove, thicknessDisableOnMove: d.thicknessDisableOnMove, microviasDisableOnMove: d.microviasDisableOnMove, holesDisableOnMove: d.holesDisableOnMove });
+          }}
+        >
+          Reset to Defaults
+        </button>
       </div>
-      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>Show model bounding boxes is the Appearance manager&apos;s row. Not offered: the While Moving options (the view keeps its detail while it moves).</div>
+      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 10 }}>
+        Show model bounding boxes is the Appearance manager&apos;s row. Disable anti-aliasing is kept but not honoured: a browser&apos;s WebGL multisampling is fixed when the view opens.
+      </div>
     </div>
   );
 }
