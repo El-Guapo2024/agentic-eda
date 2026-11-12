@@ -33,15 +33,15 @@ fn read_template(g: &[Sexpr]) -> ViaTemplate {
         from_layer: layers.and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string(),
         to_layer: layers.and_then(|l| sexpr::txt(l, 2)).unwrap_or("B.Cu").to_string(),
         text: sexpr::to_text(&Sexpr::List(via.to_vec())),
-        kind: None,
-        annular: None,
+        ..ViaTemplate::default()
     }
 }
 
 /// What every via the stitching makes copies of its template beyond the position, size, drill, layers and net (`m_viaTemplate->Clone()` in `PCB_VIA_STITCH::Update`): the via
 /// type and the other tokens of the template's `(via ..)` (`crate::via_io::read`: its annular rings, tenting, covering, plugging, filling, capping, padstack, teardrops, backdrill
-/// and post-machining, `(free yes)`), with what Configure set here (`kind`, `annular`) over them. A template made here has the free via `PCB_VIA_STITCH`'s constructor makes.
-pub fn template_extra(t: &ViaTemplate) -> ViaExtra {
+/// and post-machining, `(free yes)`), with what Configure set here (`kind`, `annular`, `props`, `teardrops`) over them. A template made here has the free via `PCB_VIA_STITCH`'s
+/// constructor makes. `copper` is the board's copper layers, front to back, which a custom padstack names.
+pub fn template_extra(t: &ViaTemplate, copper: &[String]) -> ViaExtra {
     let mut extra = sexpr::parse(&t.text).ok().and_then(|tree| tree.as_list().map(|l| crate::via_io::read(l))).unwrap_or_else(|| ViaExtra { tokens: vec!["(free yes)".into()], ..Default::default() });
     if let Some(kind) = t.kind {
         extra.kind = kind;
@@ -49,19 +49,56 @@ pub fn template_extra(t: &ViaTemplate) -> ViaExtra {
     if let Some(mode) = t.annular {
         extra.set_unconnected_layers(mode);
     }
+    // `TransferDataFromWindow` on the standalone via: the protection, backdrill and post-machining rows, then the dialog's padstack (`SetPadstack( *m_viaStack )`), then
+    // the teardrops
+    if let Some(p) = &t.props {
+        extra.set_props(p);
+        extra.set_padstack(p.padstack.as_ref(), t.size_nm, copper);
+    }
+    if let Some(td) = &t.teardrops {
+        extra.set_teardrops(Some(td));
+    }
     extra
+}
+
+/// The template's net (`GetNetname()`): what Configure set, else its text's `(net ..)` (a name in a KiCad 10 file, a number in an older one, which names no net here).
+pub fn template_net(t: &ViaTemplate) -> String {
+    if let Some(net) = &t.net {
+        return net.clone();
+    }
+    let tree = sexpr::parse(&t.text).ok();
+    tree.as_ref().and_then(|tr| tr.as_list()).and_then(|l| sexpr::find(l, "net")).filter(|n| !sexpr::is_bare_number(n, 1)).and_then(|n| sexpr::txt(n, 1)).unwrap_or_default().to_string()
+}
+
+/// Whether the template is locked (`IsLocked()`): what Configure set, else its text's `(locked yes)` or bare `locked`.
+pub fn template_locked(t: &ViaTemplate) -> bool {
+    if let Some(locked) = t.locked {
+        return locked;
+    }
+    let tree = sexpr::parse(&t.text).ok();
+    tree.as_ref().and_then(|tr| tr.as_list()).is_some_and(|l| {
+        l.iter().any(|item| match item {
+            Sexpr::Atom(a) => a == "locked",
+            Sexpr::List(f) => sexpr::tag(f) == Some("locked") && !matches!(sexpr::txt(f, 1), Some("no")),
+        })
+    })
 }
 
 /// The template as `format( PCB_TRACK )` writes it once Configure set its type or annular rings: `(via [type] (at ..) (size ..) (drill ..) (layers ..) <tokens> (net ..) (uuid ..))`,
 /// the position, net and uuid the file's own (`(at 0 0)`, no net and `uuid` for one made here).
-fn configured_text(t: &ViaTemplate, uuid: &str) -> String {
+fn configured_text(t: &ViaTemplate, uuid: &str, copper: &[String]) -> String {
     let tree = sexpr::parse(&t.text).ok();
     let own = |name: &str| tree.as_ref().and_then(|tr| tr.as_list()).and_then(|l| sexpr::find(l, name)).map(|f| sexpr::to_text(&Sexpr::List(f.to_vec())));
-    let (word, tokens) = crate::via_io::words(Some(&template_extra(t)));
+    let (word, tokens) = crate::via_io::words(Some(&template_extra(t, copper)));
     let at = own("at").unwrap_or_else(|| "(at 0 0)".into());
-    let net = own("net").unwrap_or_else(|| "(net \"\")".into());
+    // the net Configure set, as `format( PCB_TRACK )` writes a KiCad 10 via's (`(net "name")`); else the file's own
+    let net = match &t.net {
+        Some(n) => format!("(net {})", sexpr_str(n)),
+        None => own("net").unwrap_or_else(|| "(net \"\")".into()),
+    };
+    let lock = if template_locked(t) { " (locked yes)" } else { "" };
     let id = own("uuid").unwrap_or_else(|| format!("(uuid \"{uuid}\")"));
-    format!("(via{word} {at} (size {}) (drill {}) (layers {} {}){tokens} {net} {id})", mm(t.size_nm), mm(t.drill_nm), sexpr_str(&t.from_layer), sexpr_str(&t.to_layer))
+    format!("(via{word} {at} (size {}) (drill {}) (layers {} {}){tokens}{lock} {net} {id})", mm(t.size_nm), mm(t.drill_nm), sexpr_str(&t.from_layer), sexpr_str(&t.to_layer))
 }
 
 /// `PCB_VIA_STITCH::SetProperties` on one `(generated ..)`, its members named by the design's via ids (`via_ids`: file uuid -> id).
@@ -111,9 +148,9 @@ pub(crate) fn attach(design: &mut Design, root: &[Sexpr], refs: &mut crate::impo
 
 /// The template via as `format( PCB_TRACK )` writes the free via `PCB_VIA_STITCH`'s constructor makes (`SetIsFree( true )`, on no net), or the file's own with its size and drill
 /// as they are now.
-pub(crate) fn template_text(t: &ViaTemplate, uuid: &str) -> String {
-    if t.kind.is_some() || t.annular.is_some() {
-        return configured_text(t, uuid);
+pub(crate) fn template_text(t: &ViaTemplate, uuid: &str, copper: &[String]) -> String {
+    if t.is_configured() {
+        return configured_text(t, uuid, copper);
     }
     if t.text.is_empty() {
         return format!("(via (at 0 0) (size {}) (drill {}) (layers {} {}) (free yes) (net \"\") (uuid \"{uuid}\"))", mm(t.size_nm), mm(t.drill_nm), sexpr_str(&t.from_layer), sexpr_str(&t.to_layer));
@@ -137,7 +174,7 @@ pub(crate) fn template_text(t: &ViaTemplate, uuid: &str) -> String {
 
 /// The `(generated ..)` blocks of the board's via stitchings: `written` says which uuid each via of the design was written as, `uuid_of` names a generator, `locked` says whether
 /// it is.
-pub(crate) fn write_all(out: &mut String, stitches: &[ViaStitch], written: &BTreeMap<String, Vec<String>>, uuid_of: &dyn Fn(&ViaStitch) -> String, locked: &dyn Fn(&str) -> bool) {
+pub(crate) fn write_all(out: &mut String, stitches: &[ViaStitch], written: &BTreeMap<String, Vec<String>>, uuid_of: &dyn Fn(&ViaStitch) -> String, locked: &dyn Fn(&str) -> bool, copper: &[String]) {
     let mut sorted: Vec<&ViaStitch> = stitches.iter().collect();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     for v in sorted {
@@ -174,7 +211,7 @@ pub(crate) fn write_all(out: &mut String, stitches: &[ViaStitch], written: &BTre
         writeln!(out, "\t\t(pitch {})", fmt_g10(v.pitch_nm.mm())).unwrap();
         writeln!(out, "\t\t(seed {})", v.seed as i32).unwrap();
         let template_uuid = crate::duid_for(&format!("via_stitch:{}:template", v.id), &v.id);
-        writeln!(out, "\t\t(templates (template (name \"via\") {}))", template_text(&v.via, &template_uuid)).unwrap();
+        writeln!(out, "\t\t(templates (template (name \"via\") {}))", template_text(&v.via, &template_uuid, copper)).unwrap();
         write!(out, "\t\t(members").unwrap();
         for m in &members {
             write!(out, " \"{m}\"").unwrap();
@@ -208,18 +245,18 @@ mod tests {
 
         let written: BTreeMap<String, Vec<String>> = [("via_a".to_string(), vec!["u-1".to_string()])].into_iter().collect();
         let mut out = String::new();
-        write_all(&mut out, std::slice::from_ref(&v), &written, &|_| "gen-uuid".into(), &|_| false);
+        write_all(&mut out, std::slice::from_ref(&v), &written, &|_| "gen-uuid".into(), &|_| false, &[]);
         let order: Vec<&str> = ["excluded_grid_cells", "(layout 1)", "(mode 0)", "(net_name \"GND\")", "(origin\n", "(origin_offset_x 0.25)", "(origin_offset_y 0)", "(outline\n", "(pitch 1)", "(seed 7)", "(templates", "(members \"u-1\")"].to_vec();
         let at: Vec<usize> = order.iter().map(|k| out.find(k).unwrap_or_else(|| panic!("{k} in {out}"))).collect();
         assert!(at.windows(2).all(|w| w[0] < w[1]), "{out}");
         assert!(out.contains("(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"b3482f35-c371-4e19-8d52-5caeb32238dd\"))"), "{out}");
         // An edited template keeps the rest of the file's via.
         let edited = ViaTemplate { size_nm: Nm::from_mm(0.8), drill_nm: Nm::from_mm(0.4), ..v.via.clone() };
-        assert!(template_text(&edited, "x").contains("(size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (free yes)"));
+        assert!(template_text(&edited, "x", &[]).contains("(size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (free yes)"));
         // and a new span is the template's too (the dialog's From / To).
         let blind = ViaTemplate { from_layer: "F.Cu".into(), to_layer: "In1.Cu".into(), ..v.via.clone() };
-        assert!(template_text(&blind, "x").contains("(layers \"F.Cu\" \"In1.Cu\") (free yes)"), "{}", template_text(&blind, "x"));
-        assert_eq!(template_text(&ViaTemplate { size_nm: Nm::from_mm(0.6), drill_nm: Nm::from_mm(0.3), ..Default::default() }, "t"), "(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"t\"))");
+        assert!(template_text(&blind, "x", &[]).contains("(layers \"F.Cu\" \"In1.Cu\") (free yes)"), "{}", template_text(&blind, "x", &[]));
+        assert_eq!(template_text(&ViaTemplate { size_nm: Nm::from_mm(0.6), drill_nm: Nm::from_mm(0.3), ..Default::default() }, "t", &[]), "(via (at 0 0) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (free yes) (net \"\") (uuid \"t\"))");
     }
 
     /// Configure (`DIALOG_TRACK_VIA_PROPERTIES` on the template): its via type and annular rings are written as `format( PCB_TRACK )` writes a via of them, the file's other
@@ -229,16 +266,41 @@ mod tests {
         use eda_model::padstack::UnconnectedLayers;
         use eda_model::via_extra::ViaKind;
         let read = ViaTemplate { text: r#"(via (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (tenting (front yes) (back no)) (free yes) (net "") (uuid "b348"))"#.into(), size_nm: Nm::from_mm(0.6), drill_nm: Nm::from_mm(0.3), ..Default::default() };
-        let e = template_extra(&read);
+        let e = template_extra(&read, &[]);
         assert_eq!((e.kind, e.tokens.clone()), (ViaKind::Through, vec!["(tenting (front yes) (back no))".to_string(), "(free yes)".to_string()]));
         let configured = ViaTemplate { kind: Some(ViaKind::Blind), annular: Some(UnconnectedLayers::RemoveExceptStartAndEnd), to_layer: "In1.Cu".into(), ..read.clone() };
         assert_eq!(
-            template_text(&configured, "x"),
+            template_text(&configured, "x", &[]),
             r#"(via blind (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "In1.Cu") (remove_unused_layers yes) (keep_end_layers yes) (zone_layer_connections) (tenting (front yes) (back no)) (free yes) (net "") (uuid "b348"))"#
         );
         // One made here: the constructor's free via, of the type set.
         let fresh = ViaTemplate { size_nm: Nm::from_mm(0.5), drill_nm: Nm::from_mm(0.2), kind: Some(ViaKind::Micro), to_layer: "In1.Cu".into(), ..Default::default() };
-        assert_eq!(template_text(&fresh, "t"), r#"(via micro (at 0 0) (size 0.5) (drill 0.2) (layers "F.Cu" "In1.Cu") (free yes) (net "") (uuid "t"))"#);
-        assert_eq!(template_extra(&ViaTemplate::default()).tokens, ["(free yes)"]);
+        assert_eq!(template_text(&fresh, "t", &[]), r#"(via micro (at 0 0) (size 0.5) (drill 0.2) (layers "F.Cu" "In1.Cu") (free yes) (net "") (uuid "t"))"#);
+        assert_eq!(template_extra(&ViaTemplate::default(), &[]).tokens, ["(free yes)"]);
+    }
+
+    /// UI-LEFT-2 PP22: Configure's other rows -- protection, backdrill, post-machining, padstack, teardrops, net and lock -- are the template's and written in its
+    /// `(via ..)` as `format( PCB_TRACK )` writes a via of them; a file's own net and lock are read back.
+    #[test]
+    fn configures_other_rows_are_the_templates() {
+        use eda_model::teardrop_params::TeardropParams;
+        use eda_model::via_extra::{PostMachiningMode, PostMachiningProps, ViaDrillProps, ViaProps};
+        let read = ViaTemplate { text: r#"(via (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (locked yes) (free yes) (net "GND") (uuid "b348"))"#.into(), size_nm: Nm::from_mm(0.6), drill_nm: Nm::from_mm(0.3), ..Default::default() };
+        assert_eq!((template_net(&read), template_locked(&read)), ("GND".to_string(), true));
+        let props = ViaProps {
+            front_tenting: Some(true),
+            back_tenting: Some(true),
+            backdrill: Some(ViaDrillProps { size: Nm::from_mm(0.4), start: "B.Cu".into(), end: "In1.Cu".into() }),
+            front_post_machining: Some(PostMachiningProps { mode: PostMachiningMode::Countersink, size: Nm::from_mm(0.9), depth: Nm::ZERO, angle_ddeg: 900 }),
+            ..Default::default()
+        };
+        let td = TeardropParams { enabled: true, ..Default::default() };
+        let configured = ViaTemplate { props: Some(props.clone()), teardrops: Some(td), net: Some("VCC".into()), locked: Some(false), ..read.clone() };
+        let e = template_extra(&configured, &[]);
+        assert_eq!((e.props(), e.teardrops()), (props, Some(td)));
+        let text = template_text(&configured, "x", &[]);
+        assert!(text.starts_with(r#"(via (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (backdrill (size 0.4) (layers "B.Cu" "In1.Cu")) (front_post_machining countersink (size 0.9) (angle 90))"#), "{text}");
+        assert!(text.contains("(tenting (front yes) (back yes))") && text.contains("(teardrops") && text.ends_with(r#"(net "VCC") (uuid "b348"))"#) && !text.contains("locked"), "{text}");
+        assert_eq!((template_net(&configured), template_locked(&configured)), ("VCC".to_string(), false));
     }
 }

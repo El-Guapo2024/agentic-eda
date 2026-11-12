@@ -83,8 +83,9 @@ fn is_zero_u32(v: &u32) -> bool {
 ///
 /// What Via Stitching Properties' Configure (`DIALOG_TRACK_VIA_PROPERTIES` on the template, `OnViaConfigureClicked`) set beyond the size, drill and layers -- the via type and
 /// what becomes of the copper on the layers it does not connect -- is `kind` and `annular`; left `None`, the template's text says (and a template read from a file has them
-/// `None`). Every via the stitching makes is a copy of the whole template (`m_viaTemplate->Clone()`): its type and every other token of its text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `None`). Every via the stitching makes is a copy of the whole template (`m_viaTemplate->Clone()`): its type and every other token of its text. The other rows of the
+/// dialog (UI-LEFT-2 PP22) are `props`, `teardrops`, `net` and `locked`, likewise `None` where the text says.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViaTemplate {
     #[serde(alias = "size_um", deserialize_with = "crate::units::de")]
@@ -102,11 +103,32 @@ pub struct ViaTemplate {
     /// `PADSTACK::SetUnconnectedLayerMode` of the template (the dialog's Annular rings), when it was set here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annular: Option<crate::padstack::UnconnectedLayers>,
+    /// The dialog's Padstack mode, Protection features, Backdrill and Hole Post-machining rows (`PCB_VIA::SetPadstack`, `setViaConfiguration`,
+    /// `SetBackdrillMode` ..), when they were set here: the template's whole `ViaProps`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<crate::via_extra::ViaProps>,
+    /// The dialog's Teardrops part (`PCB_VIA::GetTeardropParams()`), when it was set here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teardrops: Option<crate::teardrop_params::TeardropParams>,
+    /// The dialog's Net (`PCB_VIA::SetNetCode`), when it was set here: the net a via the stitching makes is on when the stitching names none (`if( m_netCode )
+    /// via->SetNetCode( m_netCode )` after the clone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net: Option<String>,
+    /// The dialog's Locked (`SetLocked`), when it was set here: the clone of a locked template is locked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
 }
 
 impl Default for ViaTemplate {
     fn default() -> Self {
-        ViaTemplate { size_nm: Nm::ZERO, drill_nm: Nm::ZERO, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new(), kind: None, annular: None }
+        ViaTemplate { size_nm: Nm::ZERO, drill_nm: Nm::ZERO, from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), text: String::new(), kind: None, annular: None, props: None, teardrops: None, net: None, locked: None }
+    }
+}
+
+impl ViaTemplate {
+    /// Whether the dialog set anything the template's text does not say.
+    pub fn is_configured(&self) -> bool {
+        self.kind.is_some() || self.annular.is_some() || self.props.is_some() || self.teardrops.is_some() || self.net.is_some() || self.locked.is_some()
     }
 }
 

@@ -539,7 +539,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
         // KiCad 10's via stitchings, generators too.
-        crate::via_stitch_io::write_all(&mut out, &drawings.board_items.via_stitches, &written, &|v| crate::duid_for(&format!("generated:{}", v.id), &v.id), &is_locked);
+        crate::via_stitch_io::write_all(&mut out, &drawings.board_items.via_stitches, &written, &|v| crate::duid_for(&format!("generated:{}", v.id), &v.id), &is_locked, &model.board.layers);
         // The generators nothing reads (`via_stack`), with the uuids their members were just written as.
         for g in &drawings.raw_generators {
             let members: Vec<String> = g.member_ids.iter().flat_map(|id| written.get(id).into_iter().flatten()).map(|u| sexpr_str(u)).collect();
