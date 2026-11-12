@@ -112,16 +112,18 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
   };
 
   // ------------------------------------------------- Move Corner To... / Move Midpoint To...
-  // PCB_POINT_EDITOR::movePoint: WX_PT_ENTRY_DIALOG on the active point, then `updateItem` with the typed position.
-  const movePoint = (kind: "corner" | "midpoint") =>
+  // PCB_POINT_EDITOR::movePoint: WX_PT_ENTRY_DIALOG on the active point, then `updateItem` with the typed position. Both actions run the one handler
+  // on whatever point is active (`HasPoint()`; the menus offer each only by `HasCorner()` / `HasMidpoint()`), the title by the point's type
+  // (`dynamic_cast<EDIT_LINE*>( m_editedPoint )`).
+  const movePoint = () =>
     pcbOnly(() => {
       const t = target();
-      if (!t?.active || t.active.kind !== kind) return; // `HasCorner()` / `HasMidpoint()`
+      if (!t?.active) return;
       const point = t.active;
       openSweepDialog({
         kind: "element",
         element: createElement(PointEntryDialog, {
-          title: kind === "midpoint" ? "Move Midpoint to Location" : "Move Corner to Location",
+          title: point.kind === "midpoint" ? "Move Midpoint to Location" : "Move Corner to Location",
           x: point.pos[0],
           y: point.pos[1],
           onOk: (x: number, y: number) => {
@@ -142,8 +144,8 @@ export function registerPcbPointEditSweep(m: Map<string, () => void>, ctx: Sweep
         }),
       });
     });
-  m.set("pcbnew.InteractiveEdit.moveCorner", movePoint("corner"));
-  m.set("pcbnew.InteractiveEdit.moveMidpoint", movePoint("midpoint"));
+  m.set("pcbnew.InteractiveEdit.moveCorner", movePoint());
+  m.set("pcbnew.InteractiveEdit.moveMidpoint", movePoint());
 
   // ------------------------------------------------------------------------ Remove Corner
   // PCB_POINT_EDITOR::removeCorner (enabled by `CanRemoveCorner`): the active vertex of a zone or polygon -- of its outline while more than three remain,

@@ -108,15 +108,12 @@ export function registerPcbSelectionSync(m: Map<string, () => void>, ctx: SweepC
       const path = state.currentSheetPath.join("/");
       void sheetsOfDesign()
         .then((sheets) => {
-          if (!sheets.has(path)) {
-            toast("That sheet is not part of the schematic.", "error");
-            return;
-          }
+          // `ClearSelection( true ); selectAllItemsOnSheet( sheetPath ); zoomFitSelection();` -- a sheet with no footprint on the board leaves the
+          // selection empty, and nothing is said
           const refs = selectOnSheetPath(sheets, path) ?? [];
           const rect = canvasSize();
           const bounds = rect ? boundsOf(board, [...refs, ...selectConnections(board, refs)]) : null;
           if (rect && bounds && (bounds.maxX !== bounds.minX || bounds.maxY !== bounds.minY)) dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height, 0) });
-          if (refs.length === 0) toast("No footprints from that sheet are on the board.");
         })
         .catch(() => toast("Could not read the schematic sheets.", "error"));
     })
@@ -128,13 +125,16 @@ export function registerPcbSelectionSync(m: Map<string, () => void>, ctx: SweepC
   const sync = (withNets: boolean) =>
     pcbOnly(() => {
       if (!board || state.selection.size === 0) return;
+      // `if( m_selection.Front() && m_selection.Front()->IsMoving() ) return;`
+      if (state.activeTool === "move") return;
       const ids = [...state.selection];
       const refs = partRefsOf(board, ids);
       const all = withNets ? [...new Set([...ids, ...selectConnections(board, refs)])] : ids;
       if (withNets) dispatch({ type: "SET_SELECTION", refs: all });
       const rect = canvasSize();
       const bounds = rect ? boundsOf(board, all) : null;
-      if (rect && bounds) dispatch({ type: "SET_VIEW", view: crossProbeView(state.view, bounds, rect.width, rect.height) });
+      // `if( bbox.GetWidth() != 0 && bbox.GetHeight() != 0 )`
+      if (rect && bounds && bounds.maxX !== bounds.minX && bounds.maxY !== bounds.minY) dispatch({ type: "SET_VIEW", view: crossProbeView(state.view, bounds, rect.width, rect.height) });
     });
   m.set("pcbnew.InteractiveSelection.SyncSelection", sync(false));
   m.set("pcbnew.InteractiveSelection.SyncSelectionWithNets", sync(true));

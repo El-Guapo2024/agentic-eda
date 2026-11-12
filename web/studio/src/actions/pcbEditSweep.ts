@@ -33,6 +33,7 @@ import { registerPcbMultichannelActions } from "./pcbMultichannelActions";
 import { registerPcbAssignNetclass } from "./assignNetclass";
 import { DEFAULT_FILTER_OPTIONS, filterSelection, netItems, netsOfItems, unrouteSelected, type FilterOptions } from "../kicad-port/pcbSelectionOps";
 import { itemKind } from "../kicad-port/pcbItems";
+import { booleanProcessOrder } from "../kicad-port/pcbHandlerRules";
 import { isLocked } from "../kicad-port/pcbTransform";
 import { mirrorReferencePoint, mirrorableIds, planMirror, type FlipDirection } from "../kicad-port/pcbMirror";
 import { modifyResultCmds } from "../kicad-port/shapeFill";
@@ -395,10 +396,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       }
       // `if( item == last_item ) std::swap( items_to_process.back(), items_to_process.front() )`: the last-added item goes to the front and the
       // one there takes its place.
-      const order = [...ids];
-      const lastAdded = state.selection.size > 0 ? [...state.selection].pop() : ids[ids.length - 1];
-      const at = lastAdded === undefined ? -1 : order.indexOf(lastAdded);
-      if (at > 0) [order[0], order[at]] = [order[at]!, order[0]!];
+      const order = booleanProcessOrder(ids, state.selection.size > 0 ? [...state.selection].pop() : ids[ids.length - 1]);
       void applyEdit([{ op: "boolean_shapes", operation, ids: order }], order);
     });
   m.set("pcbnew.InteractiveEdit.mergePolygons", booleanAction("merge"));

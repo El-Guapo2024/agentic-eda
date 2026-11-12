@@ -66,6 +66,14 @@ const NO_SKIP: ReadonlySet<string> = new Set();
 /** Whole micrometres, as KiCad's integer coordinates are: with the grid off, or on a grid that is not a whole number of um (1 mil is 25.4 um), a point is wherever it falls, and the verbs take integers. */
 const whole = (p: Pt): Pt => [Math.round(p[0]), Math.round(p[1])];
 
+/** The board canvas's snapper as it last rendered, for the actions that need its grids (`pcbSelectionGridSize`). */
+let lastSnap: PcbSnap | null = null;
+
+/** `GetGridSize( GetSelectionGrid( selection ) )` on the board canvas as it last rendered; null before it has. */
+export function pcbSelectionGridSize(ids: readonly string[]): { x: number; y: number } | null {
+  return lastSnap?.selectionGridSize(ids) ?? null;
+}
+
 export class PcbSnap {
   private view: PcbSnapView | null = null;
   private helper: PcbGridHelper | null = null;
@@ -79,6 +87,7 @@ export class PcbSnap {
 
   update(view: PcbSnapView): void {
     this.view = view;
+    lastSnap = this;
     // A new board object: what the helper remembers refers to items that are gone.
     if (this.helper && view.board) this.helper.setScene(sceneOf(view.board));
   }
@@ -178,6 +187,20 @@ export class PcbSnap {
       return pcbItemGrid(mapped);
     });
     return selectionGrid(cats, (c) => gridSizeFor(c, v.gridNm, v.grids, v.overrides));
+  }
+
+  /**
+   * `grid->GetGridSize( grid->GetSelectionGrid( selection ) )`: the X and Y size of the selection's grid (the current grid with nothing selected or the
+   * overrides off), for `COMMON_TOOLS::CursorControl`.
+   */
+  selectionGridSize(ids: readonly string[]): { x: number; y: number } | null {
+    const v = this.view;
+    if (!v) return null;
+    const category = this.selectionCategory(ids);
+    const x = gridSizeFor(category, v.gridNm, v.grids, v.overrides);
+    const ey = gridEnvY(v);
+    const y = ey.gridSizeYOf ? ey.gridSizeYOf(category) : x;
+    return x > 0 && y > 0 ? { x, y } : null;
   }
 
   /** The cursor of a move of `ids`: `BestSnapAnchor( mouse, { active layer }, selectionGrid, ids )`. */

@@ -12,6 +12,9 @@ import { postRepairBoard } from "../api/boardControl";
 import { cliExporterUnavailable } from "../state/cliExporters";
 import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
 import type { ZonePriorityMove } from "../api/types";
+import { overlappingZones } from "../kicad-port/zoneOverlap";
+import { zonePriorityCanMove } from "../kicad-port/pcbHandlerRules";
+import { showError } from "../components/library/libraryDialogs";
 import { highlightedNets, netsOfSelection, ratsnestModeCycle, selectedCopperZones, setNetsHidden, swapHighlight } from "../kicad-port/boardControl";
 
 export interface BoardControlContext {
@@ -72,7 +75,9 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     pcbOnly(() => {
       void postRepairBoard().then(async (r) => {
         await api.refresh();
-        toast(r.ok ? [r.message, ...(r.details ?? [])].join(" ") : r.message, r.ok ? "info" : "error");
+        // `DisplayInfoMessage( m_frame, msg, details )`: "%d potential problems repaired." with the details under it, or "No board problems found."
+        if (r.ok) void showError(r.message, (r.details ?? []).join("\n") || undefined, "Information");
+        else toast(r.message, "error");
       });
     })
   );
@@ -165,8 +170,11 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
   m.set(
     "pcbnew.EditorControl.zoneMerge",
     pcbOnly(() => {
+      if (state.selection.size < 2) return;
       const ids = [...state.selection].filter((id) => api.zoneById(id));
       if (ids.length < 2) return;
+      // `m_toolMgr->RunAction( ACTIONS::selectionClear )` before the merge, whatever comes of it; then `selectItem` on the merged zone.
+      dispatch({ type: "SET_SELECTION", refs: [] });
       void api.cmd({ op: "merge_zones", ids }).then((ok) => {
         if (ok) dispatch({ type: "SET_SELECTION", refs: [ids[0]!] });
       });
@@ -191,6 +199,9 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
       if (ids.length !== 1) return;
       const zone = api.zoneById(ids[0]!);
       if (!zone || zone.is_rule_area || zone.teardrop) return;
+      // `getOverlappingZones`: no overlapping zone above (Top / Raise) or below (Lower / Bottom) returns without a word, as the menu's
+      // `canRaise` / `canLower` keep the entries disabled.
+      if (!zonePriorityCanMove(zone, overlappingZones(zones, zone), to)) return;
       void api.cmd({ op: "set_zone_priority", id: zone.id, to });
     });
   m.set("pcbnew.EditorControl.zonePriorityMoveToTop", priority("top"));

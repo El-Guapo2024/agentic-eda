@@ -37,6 +37,7 @@ import { flashSelectionFilter } from "../kicad-port/filterFlash";
 import { candidateLabel } from "../components/canvas/candidateLabel";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
 import { getGridSnapping, snapPoint } from "../components/canvas/gridHelper";
+import { pcbSelectionGridSize } from "../components/canvas/pcbSnap";
 import { drawShapeStarted, drawZoneStarted, redoRefused, routerEditKey, takeBackLastLine, undoDropsDrawing, withoutLastCorner, type RouterEditKey } from "../kicad-port/drawingCancel";
 import { boardItemAsText } from "../kicad-port/pcbCopyAsText";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
@@ -1771,7 +1772,11 @@ export function useActionRunner() {
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
         const from = state.cursorNm ?? viewCenter(view, rect.width, rect.height);
-        const to = cursorMove(from, activeGridNm(), dir, fast, flippedView);
+        // `grid->GetGridSize( grid->GetSelectionGrid( m_frame->GetCurrentSelection() ) )`: the selection's grid when grid overrides apply (a footprint on the
+        // connected-items grid, text on the text grid ...), else the current one.
+        const ids = [...state.selection];
+        const selGrid = state.tab === "schematic" ? selectionGridNm(ids) : state.tab === "pcb" ? pcbSelectionGridSize(ids) : null;
+        const to = cursorMove(from, selGrid ?? activeGridNm(), dir, fast, flippedView);
         const nextView = warpViewToInclude(view, rect.width, rect.height, to);
         dispatch({ type: "SET_CURSOR", at: to });
         if (nextView !== view) setActiveView(nextView);
@@ -2540,7 +2545,16 @@ export function useActionRunner() {
 
       // J (placeJunction) / I (drawLines) / S (drawSheet): arm the tool; SchematicView.tsx's onPointerDown owns the click behaviour.
       m.set("eeschema.InteractiveDrawing.placeJunction", toggleSchTool("sch_junction"));
-      m.set("eeschema.InteractiveDrawingLineWireBus.drawLines", toggleSchTool("sch_line"));
+      // SCH_LINE_WIRE_BUS_TOOL::DrawSegments / doDrawSegments: "The tool hotkey is interpreted as a click when drawing" (`isSyntheticClick`); idle in
+      // the tool, its own activation pops it (`PopTool`); otherwise the tool starts with `ACTIONS::selectionClear`.
+      m.set(
+        "eeschema.InteractiveDrawingLineWireBus.drawLines",
+        schematicOnly(() => {
+          if (state.activeTool === "sch_line" && state.drawState) return void m.get("common.Control.cursorClick")?.();
+          if (state.activeTool !== "sch_line") dispatch({ type: "CLEAR_SELECTION" });
+          dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "sch_line" ? "select" : "sch_line" });
+        })
+      );
       m.set("eeschema.InteractiveDrawing.drawSheet", toggleSchTool("sch_sheet"));
 
       // C (unfoldBus) -- SCH_LINE_WIRE_BUS_TOOL::UnfoldBus: with the cursor on a bus, pick one of its member nets (`BUS_UNFOLD_MENU`, a dialog here);

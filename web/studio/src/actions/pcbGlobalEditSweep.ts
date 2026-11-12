@@ -44,11 +44,9 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
             const plan = planGlobalDeletions(board, o, layer);
             dispatch({ type: "CLEAR_SELECTION" }); // "Clear selection before removing any items"
             if (plan.clearMarkers) dispatch({ type: "DRC_CLEAR" }); // `board->DeleteMARKERs()`: the DRC results go
-            if (plan.cmds.length === 0) {
-              if (!plan.clearMarkers) toast("Nothing matched the deletion options.");
-              return;
-            }
-            void applyEdit(plan.cmds, plan.removed, `Deleted ${plan.removed.length} item${plan.removed.length === 1 ? "" : "s"}.`);
+            // `commit.Push( _( "Global Delete" ) )` and nothing said, whatever was (or was not) deleted
+            if (plan.cmds.length === 0) return;
+            void applyEdit(plan.cmds, plan.removed, null, { keep: false });
           },
         }),
       });
