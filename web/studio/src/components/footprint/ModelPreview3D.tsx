@@ -16,6 +16,7 @@ import { modelWorldMatrix, previewStack, previewWheel } from "../../kicad-port/m
 import { useStudioState } from "../../state/store";
 import { ModelCache } from "../viewer3d/modelCache";
 import { boardOutlineBounds, buildBackgroundTexture, buildBoardGroup, disposeObject3D } from "../viewer3d/scene";
+import { setKicadHeadlight } from "../viewer3d/glLighting";
 import { buildExtrudedBody } from "../viewer3d/extrudedBody";
 import { useViewerColors } from "../viewer3d/useViewerColors";
 
@@ -268,6 +269,9 @@ export function ModelPreview3D({ part, rows, height = 250, testId = "model-previ
       }
       active.position.set(pose.position.x, pose.position.y, pose.position.z);
       active.quaternion.set(pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w);
+      // The board's and the models' materials light themselves as KiCad's OpenGL view does (viewer3d/glLighting.ts): the "front" headlight placed before each frame.
+      active.updateMatrixWorld();
+      setKicadHeadlight(active, new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z), camera.mmPerUnit());
       renderer.render(scene, active);
       raf = requestAnimationFrame(animate);
     };

@@ -9,6 +9,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { VRML_UNIT_MM, modelUrl } from "../../kicad-port/model3d";
+import { kicadLit, scaledColor } from "./glLighting";
 
 export type ModelStatus = "loading" | "ready" | "missing" | "failed";
 
@@ -97,6 +98,9 @@ export function buildModelObject(scene: THREE.Object3D): { proto: THREE.Group; b
       material.shininess = kicadShininess(material);
       // A model drawn from inside (a hollow with its normals turned the other way) still shows: KiCad draws both faces of every material.
       material.side = THREE.DoubleSide;
+      // Lit as KiCad lights a model's material (`OglSetMaterial` of its `SMATERIAL`, glLighting.ts); VRMLLoader keeps no `ambientIntensity`, so the ambient is VRML's
+      // default, 0.2 of the diffuse colour.
+      kicadLit(material, scaledColor(material.color, 0.2));
     }
     triangles += merged.attributes.position!.count / 3;
     proto.add(new THREE.Mesh(merged, material));

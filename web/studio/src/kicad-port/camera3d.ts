@@ -392,6 +392,11 @@ export class TrackballCamera {
     return this.initialDistanceMm / INITIAL_DISTANCE_3D_UNITS;
   }
 
+  /** Millimetres per one of KiCad's 3D units (`mmPer3DUnit`), for what KiCad sets in those units (the headlight's height, glLighting.ts). */
+  mmPerUnit(): number {
+    return this.mmPer3DUnit();
+  }
+
   /** eda_3d_canvas.cpp SetView3D's VIEW3D_PAN_LEFT/RIGHT/UP/DOWN (arrow keys): `delta_move = m_delta_move_step_factor * zoom` (3D units), signed per direction. */
   panArrow(direction: "left" | "right" | "up" | "down"): void {
     const delta = PAN_STEP_FACTOR * this.zoomValue * this.mmPer3DUnit();

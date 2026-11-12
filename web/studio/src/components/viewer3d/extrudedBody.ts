@@ -7,14 +7,14 @@
 // The scene's frame is scene.ts's: world X = board x, world Y = up, world Z = board y, millimetres. The meshes go in the part's group (partModels.ts), so the part's visibility
 // (`IsFootprintShown`) and its hover highlight (`highlight_on_rollover`: `OglSetMaterial( mat, 1.0f, highlight, extSelColor )`) are the models'.
 //
-// The material is KiCad's `SMATERIAL` the way scene.ts's `kicadMaterial` makes a board layer's (Blinn-Phong with OpenGL's shininess, the specular scaled to OpenGL's
-// unnormalised highlight, the material's own ambient colour through a shader hook), repeated here since that one is scene.ts's own. The pins' copper ambient is the default
+// The material is KiCad's `SMATERIAL` the way scene.ts's `kicadMaterial` makes a board layer's (OpenGL's lighting equation and KiCad's lights, glLighting.ts). The pins' copper ambient is the default
 // theme's copper colour (`builtin_color_themes.h`), not the one the Appearance panel may have set.
 import * as THREE from "three";
 import type { Part } from "../../api/types";
 import { THEME_COLORS } from "../../kicad-port/appearance3d";
 import { applyExtrusionTransform, bodyDrawn, bodyMaterial3d, bodyZRange, pinMaterial3d, pinZRange, type Polygon } from "../../kicad-port/extrudedBody3d";
 import { glShininess, type Material3d, type Rgb } from "../../kicad-port/material3d";
+import { kicadLit } from "./glLighting";
 import type { Stack } from "../../kicad-port/model3d";
 
 /** What was drawn for each part's body, for the test hook `window.__edaExtrudedBodies` (a browser check reads it; a part's entry goes with its meshes). */
@@ -43,37 +43,20 @@ export interface BuiltBody {
 
 const srgb = (c: Rgb): THREE.Color => new THREE.Color().setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
 
-/** `OglSetMaterial` of an `SMATERIAL` (see the header). */
+/** `OglSetMaterial` of an `SMATERIAL` (see the header): lit with OpenGL's equation and KiCad's lights (glLighting.ts), both faces (`GL_FRONT_AND_BACK`). */
 function kicadMaterial(m: Material3d): THREE.MeshPhongMaterial {
   const transparent = m.transparency > 0;
-  const shininess = glShininess(m);
-  const norm = (shininess / 2 + 1) / (4 * Math.PI);
   const mat = new THREE.MeshPhongMaterial({
     color: srgb(m.diffuse),
-    specular: srgb({ r: m.specular.r / norm, g: m.specular.g / norm, b: m.specular.b / norm }),
+    specular: srgb(m.specular),
     emissive: srgb(m.emissive),
-    shininess,
+    shininess: glShininess(m),
     transparent,
     opacity: 1 - m.transparency,
-    // `GL_FRONT_AND_BACK`
     side: THREE.DoubleSide,
     ...(transparent ? { depthWrite: false } : {}),
   });
-  const ambient = srgb(m.ambient);
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.kicadAmbient = { value: ambient };
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <lights_phong_pars_fragment>",
-      `#include <lights_phong_pars_fragment>
-uniform vec3 kicadAmbient;
-void RE_IndirectDiffuse_KiCadBody( const in vec3 irradiance, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in BlinnPhongMaterial material, inout ReflectedLight reflectedLight ) {
-  reflectedLight.indirectDiffuse += irradiance * BRDF_Lambert( kicadAmbient );
-}
-#undef RE_IndirectDiffuse
-#define RE_IndirectDiffuse RE_IndirectDiffuse_KiCadBody`
-    );
-  };
-  mat.customProgramCacheKey = () => "kicad-extruded-body-material";
+  kicadLit(mat, srgb(m.ambient));
   mat.userData.kicad = m;
   return mat;
 }
