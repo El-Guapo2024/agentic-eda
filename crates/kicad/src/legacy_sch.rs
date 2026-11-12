@@ -22,7 +22,9 @@
 //! **Differs**: the libraries themselves (`.lib`, `-cache.lib`) are not read here: KiCad's own legacy library reader runs in kicad-cli
 //! (`kicad-cli sym upgrade`, `SCH_IO_MGR::ConvertLibrary`), and the caller hands each library symbol in as the KiCad-format text it made
 //! ([`LibraryLookup`]). The new items' identifiers, which KiCad draws at random (`KIID()`), are drawn from a hash of the files' paths, so the same project is
-//! read the same way twice. The junctions KiCad adds where a wire's end lands on another's middle (`SCHEMATIC::FixupJunctionsAfterImport`) are not added.
+//! read the same way twice. A symbol no library links is kept as KiCad keeps it, drawn as `LIB_SYMBOL::GetDummy()`, but the file the reader reads names that
+//! placeholder in its `lib_symbols` (KiCad writes no entry and links nothing on reading; the studio's reader keeps only a symbol it can draw).
+//! The junctions are added as `SCHEMATIC::FixupJunctionsAfterImport` adds them, which `OpenProjectFiles` runs last.
 
 use crate::sexpr::{self, Sexpr};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1215,8 +1217,10 @@ pub struct Written {
     pub messages: Vec<String>,
     /// `SCH_SCREENS::HasNoFullyDefinedLibIds`: no symbol names a library (a project that wants Remap Symbols).
     pub no_fully_defined_lib_ids: bool,
-    /// Symbols with no library symbol.
+    /// Symbols with no library symbol (kept, drawn as KiCad's placeholder).
     pub unlinked: usize,
+    /// The junctions `FixupJunctionsAfterImport` added.
+    pub junctions_added: usize,
 }
 
 /// A text quoted as `OUTPUTFORMATTER::Quotew` quotes it.
@@ -1462,10 +1466,17 @@ pub fn write_tree(tree: &Tree, out_dir: &Path, project: &str, lookup: LibraryLoo
                     flattened_symbol(&l.library_text, &l.name, &id)
                 })
             };
+            let found = match found {
+                Some(s) => Some(s),
+                None => {
+                    written.messages.push(format!("No library symbol found for schematic symbol '{} {}'.", sym.reference(), sym.field(1).map(|f| f.text.as_str()).unwrap_or("")));
+                    written.unlinked += 1;
+                    // KiCad keeps the symbol unlinked and draws it as `LIB_SYMBOL::GetDummy()` (the module doc's **Differs**: the file names it)
+                    sexpr::parse(&dummy_symbol(&id, &sym.item)).ok()
+                }
+            };
             if let Some(s) = &found {
                 lib_symbols.insert(id.clone(), s.clone());
-            } else {
-                written.messages.push(format!("No library symbol found for schematic symbol '{} {}'.", sym.reference(), sym.field(1).map(|f| f.text.as_str()).unwrap_or("")));
             }
             linked.insert(id, found.and_then(|s| s.as_list().map(<[Sexpr]>::to_vec)));
         }
@@ -1479,7 +1490,17 @@ pub fn write_tree(tree: &Tree, out_dir: &Path, project: &str, lookup: LibraryLoo
             body.push_str("  )\n");
         }
         let shared = paths_of[i].len() > 1;
-        for it in &screen.items {
+        // "Convert any legacy bus-bus entries to just be bus wires", then `FixupJunctionsAfterImport`
+        let mut items: Vec<Item> = screen
+            .items
+            .iter()
+            .map(|it| match it {
+                Item::BusEntry { bus_bus: true, pos, size } => Item::Line(Line { layer: LineLayer::Bus, start: *pos, end: (pos.0 + size.0, pos.1 + size.1), width: 0, style: None, color: None }),
+                other => other.clone(),
+            })
+            .collect();
+        written.junctions_added += fixup_junctions(&mut items, &|sym: &Symbol| symbol_pin_points(sym, linked.get(&sym.lib_id()).and_then(|l| l.as_deref())));
+        for it in &items {
             match it {
                 Item::Junction(p) => body.push_str(&format!("  (junction (at {}) (diameter 0) (color 0 0 0 0) (uuid {}))\n", xy(*p), q(&ids.next()))),
                 Item::NoConnect(p) => body.push_str(&format!("  (no_connect (at {}) (uuid {}))\n", xy(*p), q(&ids.next()))),
@@ -1541,7 +1562,6 @@ pub fn write_tree(tree: &Tree, out_dir: &Path, project: &str, lookup: LibraryLoo
     }
     written.root = written.files.first().cloned().unwrap_or_default();
     written.no_fully_defined_lib_ids = !any_nickname && screens.iter().any(|(_, s)| s.items.iter().any(|it| matches!(it, Item::Symbol(_))));
-    written.unlinked = written.messages.iter().filter(|m| m.starts_with("No library symbol found")).count();
     Ok(written)
 }
 
@@ -1685,6 +1705,221 @@ fn sheet_sexpr(sh: &Sheet, ids: &mut Ids) -> String {
     s
 }
 
+// ------------------------------------------------------------------------------------------------ an unlinked symbol, and the junctions an import needs
+
+/// `LIB_SYMBOL::GetDummy`: what KiCad draws for a symbol with no library symbol -- a 400 mil square and `??` 150 mils high, no pin -- named as the
+/// schematic names the symbol so the reader keeps it.
+fn dummy_symbol(lib_id: &str, item: &str) -> String {
+    let unit = format!("{}_0_1", item.replace(':', "_"));
+    format!(
+        "(symbol {} (property \"Reference\" \"\" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27)))) (property \"Value\" \"\" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27)))) (symbol {} (rectangle (start -5.08 -5.08) (end 5.08 5.08) (stroke (width 0) (type default)) (fill (type none))) (text \"??\" (at 0 0 0) (effects (font (size 3.81 3.81))))))",
+        q(lib_id),
+        q(&unit)
+    )
+}
+
+/// The places on the sheet of the pins of `sym`'s unit and body style (`SCH_SYMBOL::GetConnectionPoints`), from its flattened library symbol: a
+/// pin's `(at x y ..)` is in the library's y-up frame (`SetPosition( VECTOR2I( x, -y ) )`), turned by the symbol's transform.
+fn symbol_pin_points(sym: &Symbol, lib: Option<&[Sexpr]>) -> Vec<(i64, i64)> {
+    let Some(lib) = lib else { return Vec::new() };
+    let t = sym.transform.unwrap_or(Transform::IDENTITY);
+    let mut out = Vec::new();
+    for unit in sexpr::find_all(lib, "symbol") {
+        let name = sexpr::txt(unit, 1).unwrap_or("");
+        let mut parts = name.rsplit('_');
+        let (Some(b), Some(u)) = (parts.next().and_then(|x| x.parse::<i64>().ok()), parts.next().and_then(|x| x.parse::<i64>().ok())) else { continue };
+        if (u != 0 && u != sym.unit) || (b != 0 && b != sym.body_style) {
+            continue;
+        }
+        for pin in sexpr::find_all(unit, "pin") {
+            let Some(at) = sexpr::find(pin, "at") else { continue };
+            let (x, y) = (sexpr::num(at, 1).unwrap_or(0.0), sexpr::num(at, 2).unwrap_or(0.0));
+            let local = ((x * 10_000.0).round() as i64, (-y * 10_000.0).round() as i64);
+            let p = t.apply(local);
+            out.push((sym.pos.0 + p.0, sym.pos.1 + p.1));
+        }
+    }
+    out
+}
+
+/// `SCH_CONNECTION::IsBusLabel`.
+fn is_bus_label(text: &str) -> bool {
+    (text.contains('[') && text.contains(']') && text.contains("..")) || (text.contains('{') && text.contains('}'))
+}
+
+fn on_segment(a: (i64, i64), b: (i64, i64), p: (i64, i64)) -> bool {
+    let cross = (b.0 - a.0) as i128 * (p.1 - a.1) as i128 - (b.1 - a.1) as i128 * (p.0 - a.0) as i128;
+    cross == 0 && p.0 >= a.0.min(b.0) && p.0 <= a.0.max(b.0) && p.1 >= a.1.min(b.1) && p.1 <= a.1.max(b.1)
+}
+
+/// `SCH_LINE::GetAngleFrom`: the direction from `p` to the far end, in whole degrees.
+fn angle_from(p: (i64, i64), other: (i64, i64)) -> i64 {
+    ((other.1 - p.1) as f64).atan2((other.0 - p.0) as f64).to_degrees().round() as i64
+}
+
+/// The connection points of an item (`GetConnectionPoints`); a notes line and an image have none.
+fn connection_points(it: &Item, pins: &dyn Fn(&Symbol) -> Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    match it {
+        Item::Line(l) if l.layer != LineLayer::Notes => vec![l.start, l.end],
+        Item::Symbol(s) => pins(s),
+        Item::Sheet(sh) => sh.pins.iter().map(|p| p.pos).collect(),
+        Item::Text(t) if t.kind != TextKind::Notes => vec![t.pos],
+        Item::Junction(p) | Item::NoConnect(p) => vec![*p],
+        Item::BusEntry { pos, size, .. } => vec![*pos, (pos.0 + size.0, pos.1 + size.1)],
+        _ => Vec::new(),
+    }
+}
+
+/// `SCH_LINE::MergeOverlap` of two copies: lines of one layer on one line that overlap or touch are one, from end to end.
+fn merge_overlap(a: &Line, b: &Line) -> Option<Line> {
+    if a.layer != b.layer || a.start == a.end || b.start == b.end {
+        return None;
+    }
+    if !(on_line(a.start, a.end, b.start) && on_line(a.start, a.end, b.end)) {
+        return None;
+    }
+    let horizontal = (a.end.0 - a.start.0).abs() >= (a.end.1 - a.start.1).abs();
+    let key = |p: (i64, i64)| if horizontal { p.0 } else { p.1 };
+    let (a0, a1) = (key(a.start).min(key(a.end)), key(a.start).max(key(a.end)));
+    let (b0, b1) = (key(b.start).min(key(b.end)), key(b.start).max(key(b.end)));
+    if b0 > a1 || a0 > b1 {
+        return None;
+    }
+    let pts = [a.start, a.end, b.start, b.end];
+    let lo = *pts.iter().min_by_key(|p| key(**p)).expect("four");
+    let hi = *pts.iter().max_by_key(|p| key(**p)).expect("four");
+    Some(Line { start: lo, end: hi, ..a.clone() })
+}
+
+fn on_line(a: (i64, i64), b: (i64, i64), p: (i64, i64)) -> bool {
+    (b.0 - a.0) as i128 * (p.1 - a.1) as i128 - (b.1 - a.1) as i128 * (p.0 - a.0) as i128 == 0
+}
+
+/// `JUNCTION_HELPERS::AnalyzePoint( .., aBreakCrossings = false )` and `SCH_SCREEN::IsExplicitJunctionNeeded`: three or more wire (or bus) exits meet
+/// at `p` (a wire that ends there one exit, a wire passing through two once something is connected there, each symbol or sheet with a pin there one,
+/// a bus entry one of each), collinear wires merged first, with no junction dot there and no bus entry unless it joins several wires.
+fn junction_needed(items: &[Item], p: (i64, i64), pins: &dyn Fn(&Symbol) -> Vec<(i64, i64)>) -> bool {
+    let mut has_dot = false;
+    let mut has_entry = false;
+    let mut lines: Vec<Line> = Vec::new();
+    let mut others: Vec<&Item> = Vec::new();
+    for it in items {
+        match it {
+            Item::Line(l) if l.layer != LineLayer::Notes => {
+                if on_segment(l.start, l.end, p) {
+                    lines.push(l.clone());
+                }
+            }
+            Item::Junction(j) if *j == p => {
+                has_dot = true;
+                others.push(it);
+            }
+            Item::BusEntry { .. } if connection_points(it, pins).contains(&p) => {
+                has_entry = true;
+                others.push(it);
+            }
+            Item::Symbol(_) | Item::Sheet(_) | Item::Text(_) if connection_points(it, pins).contains(&p) => others.push(it),
+            _ => {}
+        }
+    }
+    if lines.len() + others.len() < 2 {
+        return false;
+    }
+    if !has_dot {
+        let mut merged = true;
+        while merged {
+            merged = false;
+            'outer: for i in 0..lines.len() {
+                for j in i + 1..lines.len() {
+                    if let Some(m) = merge_overlap(&lines[i], &lines[j]) {
+                        lines[i] = m;
+                        lines.remove(j);
+                        merged = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    let (mut brk, mut exits, mut mids): ([bool; 2], [BTreeSet<i64>; 2], [Vec<&Line>; 2]) = ([false; 2], [BTreeSet::new(), BTreeSet::new()], [Vec::new(), Vec::new()]);
+    let mut unique = 10_000;
+    for l in &lines {
+        if l.start == l.end {
+            continue;
+        }
+        let layer = if l.layer == LineLayer::Bus { 1 } else { 0 };
+        if l.start == p || l.end == p {
+            brk[layer] = true;
+            exits[layer].insert(angle_from(p, if l.start == p { l.end } else { l.start }));
+        } else {
+            mids[layer].push(l);
+        }
+    }
+    for it in others {
+        match it {
+            Item::BusEntry { .. } => {
+                brk = [true, true];
+                exits[1].insert(unique);
+                exits[0].insert(unique + 1);
+                unique += 2;
+            }
+            Item::Symbol(_) | Item::Sheet(_) => {
+                brk[0] = true;
+                exits[0].insert(unique);
+                unique += 1;
+            }
+            Item::Text(t) => match t.kind {
+                TextKind::Label if is_bus_label(&t.text) => brk[1] = true,
+                TextKind::Notes => {}
+                _ => brk[0] = true,
+            },
+            _ => {}
+        }
+    }
+    for layer in 0..2 {
+        if brk[layer] {
+            for l in &mids[layer] {
+                exits[layer].insert(angle_from(p, l.end));
+                exits[layer].insert(angle_from(p, l.start));
+            }
+        }
+    }
+    let entry_to_wires = has_entry && exits[0].len() > 2 && exits[1].len() == 1;
+    let junction = exits[0].len() >= 3 || exits[1].len() >= 3;
+    junction && (!has_entry || entry_to_wires) && !has_dot
+}
+
+/// `SCHEMATIC::FixupJunctionsAfterImport` on one screen: `GetNeededJunctions` of every item (each connection point, and each point of the sheet
+/// that lies on a wire), a junction added at each and the wires and buses that pass through it broken there. Returns how many were added.
+fn fixup_junctions(items: &mut Vec<Item>, pins: &dyn Fn(&Symbol) -> Vec<(i64, i64)>) -> usize {
+    let connections: BTreeSet<(i64, i64)> = items.iter().flat_map(|it| connection_points(it, pins)).collect();
+    let mut pts: BTreeSet<(i64, i64)> = BTreeSet::new();
+    for it in items.iter() {
+        pts.extend(connection_points(it, pins));
+        if let Item::Line(l) = it {
+            if l.layer != LineLayer::Notes {
+                pts.extend(connections.iter().copied().filter(|c| on_segment(l.start, l.end, *c)));
+            }
+        }
+    }
+    let needed: Vec<(i64, i64)> = pts.into_iter().filter(|p| junction_needed(items, *p, pins)).collect();
+    for p in &needed {
+        items.push(Item::Junction(*p));
+        // `GetBusesAndWires( point, true )` and `NonGroupAware_BreakAt`
+        let mut added = Vec::new();
+        for it in items.iter_mut() {
+            if let Item::Line(l) = it {
+                if l.layer != LineLayer::Notes && l.start != *p && l.end != *p && on_segment(l.start, l.end, *p) {
+                    added.push(Item::Line(Line { start: *p, ..l.clone() }));
+                    l.end = *p;
+                }
+            }
+        }
+        items.extend(added);
+    }
+    needed.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1808,6 +2043,39 @@ $EndSCHEMATC
         assert_eq!(sch.symbols.len(), 1);
         assert_eq!(sch.sheets.len(), 1);
         assert_eq!(design.sheet_contents.map(|c| c.len()), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn a_wire_ending_on_anothers_middle_gets_its_junction_and_the_wire_is_broken_there() {
+        let line = |a: (i64, i64), b: (i64, i64)| Item::Line(Line { layer: LineLayer::Wire, start: (mils(a.0), mils(a.1)), end: (mils(b.0), mils(b.1)), width: 0, style: None, color: None });
+        let mut items = vec![line((0, 0), (1000, 0)), line((500, 0), (500, 500)), line((0, 1000), (1000, 1000)), line((1000, 1000), (1000, 1500))];
+        let added = fixup_junctions(&mut items, &|_| Vec::new());
+        assert_eq!(added, 1, "a T needs a dot; a corner does not");
+        assert!(items.iter().any(|i| matches!(i, Item::Junction(p) if *p == (mils(500), 0))));
+        let wires = items.iter().filter(|i| matches!(i, Item::Line(_))).count();
+        assert_eq!(wires, 5, "the wire through the T is broken in two");
+        // a crossing of two wires that only pass through is no junction; a label on it makes three exits
+        let mut cross = vec![line((0, 0), (1000, 0)), line((500, -500), (500, 500))];
+        assert_eq!(fixup_junctions(&mut cross, &|_| Vec::new()), 0);
+    }
+
+    #[test]
+    fn a_symbol_no_library_links_is_kept_as_kicads_placeholder() {
+        let dir = std::env::temp_dir().join(format!("eda-legacy-sch-dummy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("d.sch"), SAMPLE.replace("$Sheet\nS 4000 1000 1000 800 \nU 5A000002\nF0 \"Sub\" 50\nF1 \"sub.sch\" 50\nF2 \"A\" I L 4010 1200 50 \n$EndSheet\n", "")).unwrap();
+        let tree = load_tree(&dir.join("d.sch"), &|p| std::fs::read_to_string(p).map_err(|e| e.to_string())).unwrap();
+        let w = write_tree(&tree, &dir.join("out"), "d", &|_| None).unwrap();
+        assert_eq!(w.unlinked, 1);
+        assert!(w.messages.iter().any(|m| m == "No library symbol found for schematic symbol 'R1 10k'."));
+        let (design, _, notes) = crate::import_kicad_sch_tree(&w.root).unwrap();
+        assert_eq!(notes.unresolved_symbols, 0);
+        let sch = design.schematic.unwrap();
+        assert_eq!(sch.symbols.len(), 1, "kept, with its fields");
+        assert_eq!(sch.symbols[0].value, "10k");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
