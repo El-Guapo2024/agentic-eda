@@ -170,6 +170,8 @@ export interface SymbolToCarry {
   oneOnly?: boolean;
   /** Its library drawing, when the sheet has none (the chooser's): the page draws it in the hand from this. */
   lib?: LibSymbol | null;
+  /** The body style it rides in (`SYMBOL_EDITOR_CONTROL::AddSymbolToSchematic`: `new SCH_SYMBOL( *libSymbol, libId, .., unit, bodyStyle )` with `editFrame->GetBodyStyle()`); absent the normal one. */
+  bodyStyle?: number;
 }
 
 /** `addSymbol( symbol )`: the symbol rides the cursor, drawn as the server draws its `add_symbol` (`POST /api/sch/place_preview`). */
@@ -191,6 +193,7 @@ export function carrySymbol(ctx: Pick<PlaceContext, "api">, pick: SymbolToCarry,
     turns: [],
     placeAllUnits: pick.placeAllUnits ?? false,
     oneOnly: pick.oneOnly ?? false,
+    ...((pick.bodyStyle ?? 1) > 1 ? { bodyStyle: pick.bodyStyle } : {}),
   };
   carryItem(ctx, "sch_place_symbol", item, at, [], keep, pick.lib ?? null);
   if (!pick.ref) refineCarriedReference(ctx, item);

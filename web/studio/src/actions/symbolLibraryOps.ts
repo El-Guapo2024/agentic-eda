@@ -435,7 +435,7 @@ export function showFieldsTable(c: SymCtx, scope: "library" | "related"): void {
  * A symbol the schematic cannot see yet (a project-library entry nothing follows) is published first -- `Update Symbol on Board` -- since a
  * placed instance resolves its drawing from the library entry by name.
  */
-export async function symbolForSchematic(c: SymCtx): Promise<{ libId: string; referencePrefix: string; unit: number } | null> {
+export async function symbolForSchematic(c: SymCtx): Promise<{ libId: string; referencePrefix: string; unit: number; bodyStyle: number } | null> {
   const st = c.api.getState();
   const sym = st.symbol;
   if (!st.libId || !sym) return null; // `if( libSymbol )` only: nothing, silently
@@ -443,5 +443,6 @@ export async function symbolForSchematic(c: SymCtx): Promise<{ libId: string; re
     if (!(await c.api.cmd({ op: "update_symbol_on_board", lib_id: st.libId }))) return null;
     info(c, `${st.libId}: placed instances now follow this library entry`);
   }
-  return { libId: st.libId, referencePrefix: sym.reference_prefix, unit: Math.max(1, st.activeUnit) };
+  // `new SCH_SYMBOL( *libSymbol, libId, &sheet, unit, bodyStyle )`, `bodyStyle = editFrame->GetBodyStyle()` (task-v10-handlers: the body style was dropped)
+  return { libId: st.libId, referencePrefix: sym.reference_prefix, unit: Math.max(1, st.activeUnit), bodyStyle: Math.max(1, st.activeBodyStyle ?? 1) };
 }
