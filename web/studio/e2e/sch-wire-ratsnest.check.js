@@ -127,6 +127,44 @@
       t(JSON.stringify(server) === JSON.stringify(before), `GET /api/ratsnest is what it was (${server.length} lines)`);
     });
 
+    // U1's two no-connect pins (NC1, NC2; `PT_NC`) wired together on the MCU sheet: KiCad 25ec2335's connectivity makes a no-connect pin a contact that joins
+    // nothing (`conn_islands.cpp::BuildScreenIslands`: `if( a.kind == NC || b.kind == NC ) continue;`), and 8303b2ad's netlist updater gives every no-connect
+    // pad a net of its own (`BOARD_NETLIST_UPDATER::updateComponentPadConnections`, `IsNoConnectPad`: the `_1` suffix) -- so the board gets no ratsnest line.
+    const mcu = root.sheets.find((s) => /MCU/.test(s.name ?? ""));
+    if (mcu) await scenario("U1's two no-connect pins wired together stay apart on the board, as KiCad: no ratsnest line between U1.12 and U1.13", async (t) => {
+      await toTab("Schematic", "schematic");
+      while (state().sheetPath.length > 0) { await run("eeschema.NavigateTool.leaveSheet"); await sleep(400); }
+      await run("common.InteractiveSelection.clear");
+      await run("common.InteractiveSelection.selectItems", [mcu.id]);
+      await run("eeschema.NavigateTool.enterSheet");
+      t(!!(await until(() => state().sheetPath[0] === mcu.id, 8000)), "the MCU sheet is open");
+      await run("common.InteractiveSelection.clear");
+      await run("common.Control.zoomFitScreen");
+      await sleep(600);
+      const w0 = (await json(`/api/schematic?sheet=${mcu.id}`)).wires.length;
+      const [x1, x2, y, y2] = [149.86 * MM, 152.4 * MM, 88.9 * MM, 91.44 * MM];
+      await run("eeschema.InteractiveDrawingLineWireBus.drawWires");
+      await sleep(300);
+      for (const p of [[x1, y], [x1, y2], [x2, y2]]) await clickAt(...p);
+      await clickAt(x2, y);
+      await dblclickAt(x2, y);
+      for (let i = 0; i < 3 && state().tool !== "select"; i++) { await run("common.Interactive.cancel"); await sleep(400); }
+      const s = await json(`/api/schematic?sheet=${mcu.id}`);
+      t(s.wires.length > w0, `the wire was drawn (${s.wires.length - w0} segment(s))`);
+      const u1 = s.symbols.find((x) => x.id === "U1");
+      const nc = u1.pins.filter((p) => p.number === "12" || p.number === "13").map((p) => p.net ?? null);
+      t(nc.length === 2 && (nc[0] === null || nc[0] !== nc[1]), `the two pins are not one net (${JSON.stringify(nc)})`);
+      await toTab("PCB", "pcb");
+      await sleep(1500);
+      const r = state().ratsnest;
+      t(!!r && !joined(r.edges, "U1.12", "U1.13"), "the board's ratsnest has no line between U1.12 and U1.13");
+      t(JSON.stringify(await serverEdges()) === JSON.stringify(before), "GET /api/ratsnest is unchanged");
+      await toTab("Schematic", "schematic");
+      await run("common.Interactive.undo");
+      await sleep(800);
+      t((await json(`/api/schematic?sheet=${mcu.id}`)).wires.length === w0, "one undo takes the wire away");
+    });
+
     await toTab("Schematic", "schematic");
     while (state().sheetPath.length > 0) { await run("eeschema.NavigateTool.leaveSheet"); await sleep(400); }
     check.ok = results.length > 0 && results.every((r) => r.ok);
