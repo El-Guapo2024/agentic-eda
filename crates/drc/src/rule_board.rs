@@ -161,6 +161,17 @@ impl<'a> RuleBoard<'a> {
         self.engine.env.from_to.replace(Some(cache));
     }
 
+    /// [`enable_from_to`](Self::enable_from_to) with the zones' fills, so a path through a zone is found.
+    pub fn enable_from_to_with(&self, zones: &crate::zone_copper::ZoneCopper) {
+        let cache = crate::from_to::of_board_with(self, Some(zones));
+        self.engine.env.from_to.replace(Some(cache));
+    }
+
+    /// The design's routing section (tracks, vias, zones).
+    pub fn design_routing(&self) -> Option<&eda_model::ir::RoutingSection> {
+        self.design.routing.as_ref()
+    }
+
     /// The environment the board's rules are read and evaluated in (`env`), for a rule the caller parses itself (Show Matches).
     pub fn env_for_rules(&self) -> Env {
         self.env()
@@ -357,6 +368,25 @@ impl<'a> RuleBoard<'a> {
                     it.overrides.zone_connection = Some((ZoneConnection::from_pad_connection(z), format!("footprint {}", fp.id)));
                 }
                 it.overrides.solder_mask_margin = e.solder_mask_margin;
+            }
+            // `FOOTPRINT::GetLocalSolderPasteMargin` / `..MarginRatio`: Footprint Properties' own (`FootprintEdit`), else the file's `(solder_paste_margin ..)` /
+            // `(solder_paste_ratio ..)` kept among a read footprint's tokens; a pad with none of its own takes them (`EvalRules`' local override), and the rules
+            // read them as "Solderpaste Margin Override" and "Solderpaste Margin Ratio Override" (`footprint.cpp`'s property registrations)
+            let edit = self.design.drawings.as_ref().and_then(|d| d.footprint_edits.iter().find(|f| f.id == fp.id));
+            let token = |name: &str| extra.and_then(|e| e.tokens.iter().find_map(|t| t.strip_prefix(&format!("({name} ")).and_then(|r| r.trim_end_matches(')').trim().parse::<f64>().ok())));
+            let paste = edit.and_then(|e| e.solder_paste_margin).or_else(|| token("solder_paste_margin").map(|mm| Nm::new((mm * 1_000_000.0).round() as i64)));
+            let ratio = edit.and_then(|e| e.solder_paste_ratio).or_else(|| token("solder_paste_ratio").or_else(|| token("solder_paste_margin_ratio")));
+            it.overrides.solder_paste_margin = paste;
+            it.overrides.solder_paste_ratio = ratio;
+            if let Some(v) = paste {
+                it.set("Solderpaste Margin Override", Prop::Int(v.get()));
+            }
+            if let Some(v) = ratio {
+                it.set("Solderpaste Margin Ratio Override", Prop::Double(v));
+            }
+            if let Some((c, _)) = &it.local_clearance {
+                let c = c.get();
+                it.set("Clearance Override", Prop::Int(c));
             }
             it.footprint = Some(Rc::new(facts));
             out.insert(fp.id.clone(), Rc::new(it));
@@ -768,7 +798,8 @@ impl<'a> RuleBoard<'a> {
     /// first member (`reportClearance`: `*ag->GetItems().begin()`).
     pub fn item(&self, id: &str, at: Option<Point>) -> Result<Rc<RuleItem>, String> {
         match self.kind_of(id) {
-            None => Err(format!("no such item: {id}")),
+            // a footprint's own field or text (`REF:Name`, `REF~tN`): Clearance Resolution of a field
+            None => self.footprint_child_items().into_iter().find(|(cid, it)| cid == id && it.class != Class::Shape).map(|(_, it)| it).ok_or_else(|| format!("no such item: {id}")),
             Some(ItemKind::Footprint) => Ok(self.footprints[id].clone()),
             Some(ItemKind::Pad) => {
                 let (pid, idx) = self.pad_ids.iter().find(|(p, _)| p == id).cloned().ok_or("no such pad")?;
@@ -913,6 +944,82 @@ impl<'a> RuleBoard<'a> {
         Rc::new(it)
     }
 
+    /// A footprint's own items as KiCad's board has them (`FOOTPRINT::Fields()` and `GraphicalItems()`): its fields (`REF:Name`, `PCB_FIELD`, `A.Type`
+    /// 'Text'), its texts (`REF~tN`) and its graphics (each placed shape of its art, its studio id), each with the footprint as its parent. Show Matches
+    /// visits them (`collectShowMatchCandidates` walks `GetItemByIdCache`), and Clearance Resolution can name them.
+    pub fn footprint_child_items(&self) -> Vec<(String, Rc<RuleItem>)> {
+        let mut out: Vec<(String, Rc<RuleItem>)> = Vec::new();
+        let Some(pl) = &self.design.placement else { return out };
+        let mut fps: Vec<&eda_model::ir::FootprintInstance> = pl.footprints.iter().collect();
+        fps.sort_by(|a, b| a.id.cmp(&b.id));
+        for fp in fps {
+            let Some(part) = self.model.part(&fp.id) else { continue };
+            let Some(footprint) = self.model.footprint_of(part) else { continue };
+            let parent = self.footprints.get(&fp.id).cloned();
+            let facts = parent.as_ref().and_then(|p| p.footprint.clone());
+            let as_text = |l: &eda_model::fp_edit::FieldLayout, shown: String| eda_model::ir::FootprintText {
+                text: shown,
+                layer: l.layer.clone(),
+                at: l.board_position(fp),
+                angle_file_mdeg: l.board_angle(fp),
+                size: l.size,
+                thickness: l.thickness,
+                halign: l.halign,
+                valign: l.valign,
+                mirror: l.mirror,
+                keep_upright: l.keep_upright,
+                bold: l.bold,
+            };
+            let user: Vec<String> = self.design.footprint_edit(&fp.id).map(|e| e.fields.iter().map(|f| f.name.clone()).collect()).unwrap_or_default();
+            let names = ["Reference".to_string(), "Value".to_string()].into_iter().chain(user);
+            for ((layout, shown), name) in crate::hatch::footprint_fields(self.design, part, fp, &footprint).into_iter().zip(names) {
+                let id = format!("{}:{}", fp.id, name);
+                let t = as_text(&layout, shown);
+                let mut it = (*self.text_item_of(&id, &t)).clone();
+                it.class = Class::Field;
+                it.description = format!("{name} field of {}", fp.id);
+                it.parent = parent.clone();
+                it.footprint = facts.clone();
+                out.push((id, Rc::new(it)));
+            }
+            let fpid = eda_model::footprint::footprint_lib_id(part);
+            let value = part.value.as_deref().unwrap_or(&fp.id);
+            let vars = eda_model::fp_art::TextVars { reference: &fp.id, value, footprint: &fpid };
+            for (i, t) in footprint.art.texts.iter().enumerate() {
+                let placed = t.placed(fp, &vars);
+                let ft = eda_model::ir::FootprintText { text: placed.text, layer: placed.layer, at: placed.at, angle_file_mdeg: placed.angle, size: placed.size, thickness: placed.thickness, halign: placed.halign, valign: placed.valign, mirror: placed.mirror, keep_upright: placed.keep_upright, bold: placed.bold };
+                let id = format!("{}~t{i}", fp.id);
+                let mut it = (*self.text_item_of(&id, &ft)).clone();
+                it.parent = parent.clone();
+                it.footprint = facts.clone();
+                out.push((id, Rc::new(it)));
+            }
+            // `FOOTPRINT::BuildNetTieCache`: a copper graphic a pad of a net-tie group touches takes that pad's nets
+            let tie_pads: Vec<RuleItem> = self.pad_ids.iter().filter(|(_, i)| self.board.pads[*i].footprint_ref == fp.id).map(|(pid, i)| self.pad_item(pid, *i)).filter(|p| !p.net_tie.is_empty()).collect();
+            for s in &footprint.art.shapes {
+                let placed = s.placed(fp);
+                let mut it = self.shape_item(&placed.shape);
+                it.parent = parent.clone();
+                it.footprint = facts.clone();
+                if it.layers.iter().any(|l| l.ends_with(".Cu")) {
+                    for pad in &tie_pads {
+                        if pad.shapes.iter().any(|ps| it.shapes.iter().any(|ss| ps.collides(ss, Nm::ZERO).is_some())) {
+                            for n in &pad.net_tie {
+                                if !it.net_tie.contains(n) {
+                                    it.net_tie.push(n.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                // (a footprint's graphic has no id of its own on the board's canvas: it is selected with its footprint)
+                let id = if it.id.is_empty() { fp.id.clone() } else { it.id.clone() };
+                out.push((id, Rc::new(it)));
+            }
+        }
+        out
+    }
+
     /// The rule item of a board text (`Text`) of the IR.
     pub fn board_text_item_of(&self, t: &eda_model::ir::Text) -> Rc<RuleItem> {
         Rc::new(self.text_item(t))
@@ -1008,6 +1115,11 @@ impl<'a> RuleBoard<'a> {
                 let layers = own_layers(&it);
                 out.push((z.id.clone(), it, layers));
             }
+        }
+        // a footprint's own fields, texts and graphics (`GetItemByIdCache` holds them)
+        for (id, it) in self.footprint_child_items() {
+            let layers = own_layers(&it);
+            out.push((id, it, layers));
         }
         if let Some(d) = &self.design.drawings {
             for s in &d.shapes {
@@ -1228,6 +1340,90 @@ mod footprint_facts_tests {
         let mut c = Condition::new(expr);
         assert!(c.compile(&env), "{expr}: {:?}", c.compile_errors());
         c.evaluate_for(&env, Some(item), None, 0, Some("F.Cu"), None)
+    }
+
+    /// UI-LEFT-2 BB7: a footprint's own fields and texts are items of the board (Show Matches visits them, Clearance Resolution names them): `R5:Reference` is a
+    /// field (`A.Type == 'Text'`) whose parent is R5, so a rule on `A.Parent.Reference` -- here `A.memberOfFootprint('R5')` -- finds it.
+    #[test]
+    fn a_footprints_own_fields_are_items_of_the_board() {
+        let (design, model) = hv_board(|_, _| {});
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let items = rb.footprint_child_items();
+        let ids: Vec<&str> = items.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"R5:Reference") && ids.contains(&"R5:Value") && ids.contains(&"R6:Reference"), "{ids:?}");
+        let field = rb.item("R5:Reference", None).unwrap();
+        assert_eq!(field.class, Class::Field);
+        assert!(holds(&rb, "A.Type == 'Text'", &field));
+        assert!(holds(&rb, "A.Text == 'R5'", &field), "the field's shown text");
+        assert!(holds(&rb, "A.memberOfFootprint('R5')", &field), "its parent is the footprint");
+        let matches = crate::show_matches::show_matches(&rb, "(rule t (constraint text_height (min 5mm)) (condition \"A.memberOfFootprint('R5')\"))").unwrap();
+        assert!(matches.ids.iter().any(|i| i == "R5:Reference"), "Show Matches visits a footprint's own items: {:?}", matches.ids);
+    }
+
+    /// UI-LEFT-2 BB7: `FOOTPRINT::BuildNetTieCache` -- a copper graphic of a net-tie footprint that a pad of the tie touches takes the tie's nets, so the clearance
+    /// between it and the other net's pad is the net tie's 0 (`EvalRules`' "Net tie on ..").
+    #[test]
+    fn a_net_tie_footprints_copper_graphic_takes_the_ties_nets() {
+        let (design, model) = hv_board(|d, m| {
+            let pad2 = Pad { number: "2".into(), at: (mm(2.0), Nm::ZERO), ..m.footprints[0].pads[0].clone() };
+            m.footprints[0].pads.push(pad2);
+            m.parts[0].pins.push(Pin { number: "2".into(), name: None, kind: PinKind::Passive });
+            m.nets.push(Net { name: "LV".into(), pins: vec!["R5.2".into()] });
+            m.symbol_links.remove("R5");
+            let bridge: eda_model::fp_art::FpShape = serde_json::from_value(serde_json::json!({ "shape": { "kind": "segment", "layer": "F.Cu", "stroke_width": 200000, "start": { "x": 0, "y": 0 }, "end": { "x": 2000000, "y": 0 } } })).unwrap();
+            m.footprints[0].art.shapes.push(bridge);
+            let mut drawings: eda_model::ir::DrawingsSection = serde_json::from_value(serde_json::json!({})).unwrap();
+            drawings.footprint_extras.push(serde_json::from_value(serde_json::json!({ "id": "R5", "net_tie_pad_groups": ["1, 2"] })).unwrap());
+            d.drawings = Some(drawings);
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let copper: Vec<Rc<RuleItem>> = rb.footprint_child_items().into_iter().filter(|(id, it)| id == "R5" && it.class == Class::Shape).map(|(_, it)| it).collect();
+        assert_eq!(copper.len(), 1);
+        let mut ties = copper[0].net_tie.clone();
+        ties.sort();
+        assert_eq!(ties, ["HV", "LV"], "the bridge touches both tied pads");
+        assert!(rb.footprint_child_items().iter().filter(|(id, it)| id == "R6" && it.class == Class::Shape).all(|(_, it)| it.net_tie.is_empty()), "R6 has no tie");
+    }
+
+    /// UI-LEFT-2 BB7: `fromTo` through a zone -- R5.1 and R6.1 (HV) joined only by an HV zone's fill: the path is R5.1, the zone's fill, R6.1
+    /// (`uniquePathBetweenNodes` walks the `CN_ZONE_LAYER`s), and without the fill there is none.
+    #[test]
+    fn a_from_to_path_goes_through_a_zones_fill() {
+        let (design, model) = hv_board(|d, _| {
+            let zone: eda_model::ir::Zone = serde_json::from_value(serde_json::json!({ "id": "zone_hv", "net": "HV", "layer": "F.Cu",
+                "outline": [{ "x": 5000000, "y": 5000000 }, { "x": 25000000, "y": 5000000 }, { "x": 25000000, "y": 15000000 }, { "x": 5000000, "y": 15000000 }] })).unwrap();
+            d.routing = Some(eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![zone], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let p = |x: i64, y: i64| eda_clipper2::Point64 { x: x * 1_000_000, y: y * 1_000_000, z: 0 };
+        let fill = eda_shape_poly_set::ShapePolySet::from_outline(vec![p(6, 6), p(24, 6), p(24, 14), p(6, 14)]);
+        let mut zc = crate::zone_copper::ZoneCopper::default();
+        zc.zones.insert(("zone_hv".into(), "F.Cu".into()), fill);
+        let with = crate::from_to::of_board_with(&rb, Some(&zc));
+        assert!(with("zone_hv", "R5-1", "R6-1"), "the zone is on the path");
+        assert!(with("R6.1", "R5-1", "R6-1"));
+        let without = crate::from_to::of_board(&rb);
+        assert!(!without("zone_hv", "R5-1", "R6-1") && !without("R6.1", "R5-1", "R6-1"), "no fill, no path");
+    }
+
+    /// UI-LEFT-2 BB7: a footprint's own solder paste margin (Footprint Properties' "Solder paste absolute clearance") is its "Solderpaste Margin Override" to the
+    /// rules, and the pads with none of their own take it (`EvalRules`' local override).
+    #[test]
+    fn a_footprints_own_paste_margin_is_read_by_the_rules() {
+        let (design, model) = hv_board(|d, _| {
+            let mut drawings: eda_model::ir::DrawingsSection = serde_json::from_value(serde_json::json!({})).unwrap();
+            drawings.footprint_edits.push(serde_json::from_value(serde_json::json!({ "id": "R5", "solder_paste_margin": -50000 })).unwrap());
+            d.drawings = Some(drawings);
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let r5 = rb.footprint_item("R5").unwrap();
+        assert!(holds(&rb, "A.Solderpaste_Margin_Override == -0.05mm", &r5));
+        assert_eq!(r5.overrides.solder_paste_margin, Some(Nm::new(-50_000)));
+        assert!(rb.footprint_item("R6").unwrap().overrides.solder_paste_margin.is_none());
     }
 
     /// UI-LEFT-2 BB7: `A.Net` is the code of the derived board, which numbers a lone pin's own net (`unconnected-(R6-Pad2)`, KiCad's netlist) with the

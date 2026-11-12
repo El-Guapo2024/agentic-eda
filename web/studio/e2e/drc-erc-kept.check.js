@@ -173,6 +173,29 @@
     }
     const rules = (await (await fetch("/api/state", { cache: "no-store" })).json()).board_rules?.custom_rules_text ?? "";
     check("nothing was applied to the board's rules", rules === original, rules.length);
+    // ------------------------------------------------------------------------------------------------------------- the DRC Rule Editor's categories
+    await eda.run("pcbnew.DRETool.drcRuleEditor");
+    await sleep(800);
+    const cats = () => [...document.querySelectorAll('[data-testid="re-node-category"]')];
+    const names = () => cats().map((c) => c.dataset.name);
+    const order0 = names();
+    check("the DRC Rule Editor lists its categories", order0.length >= 3, JSON.stringify(order0));
+    if (order0.length >= 3) {
+      const dt = new DataTransfer();
+      const fire = (el, type) => el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+      fire(cats()[0], "dragstart");
+      await sleep(100);
+      const last = cats()[cats().length - 1];
+      fire(last, "dragover");
+      await sleep(100);
+      fire(last, "drop");
+      fire(cats()[0], "dragend");
+      await sleep(300);
+      const after = names();
+      check("a category dragged onto the last one goes last (onRuleTreeItemLeftUp's AppendItem)", after[after.length - 1] === order0[0] && after.length === order0.length, JSON.stringify(after));
+    }
+    [...document.querySelectorAll(".dialog .dialog-footer button")].find((x) => ["Close", "Cancel"].includes(x.textContent.trim()))?.click();
+    await sleep(300);
   } catch (e) {
     check("the check ran to its end", false, (e && e.stack) || e);
   }

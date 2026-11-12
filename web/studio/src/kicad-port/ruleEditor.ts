@@ -226,6 +226,23 @@ export function childrenOf(nodes: readonly TreeNode[], parent: number): TreeNode
   return nodes.filter((n) => n.parent === parent);
 }
 
+/**
+ * `onRuleTreeItemLeftUp` on the tree itself: the dragged item moved among its siblings (`ids`, in the order shown) to where it was dropped -- first when
+ * dropped on the first sibling's label (`PrependItem`), last when dropped on the last (`AppendItem`), else just before the target (`InsertItem( parent,
+ * previous, .. )`). Another parent, or itself, leaves the order as it is.
+ */
+export function dropInOrder(ids: readonly number[], dragged: number, target: number): number[] {
+  if (dragged === target || !ids.includes(dragged) || !ids.includes(target)) return [...ids];
+  const t = ids.indexOf(target);
+  const rest = ids.filter((id) => id !== dragged);
+  if (t === 0) return [dragged, ...rest];
+  if (t === ids.length - 1) return [...rest, dragged];
+  // `InsertItem( parent, previous, .. )` with `previous` the sibling before the target in the tree as it is -- the dragged item itself when it is that one,
+  // so an item dropped on the one after it stays where it was -- and then the dragged item's old place deleted
+  const withNew = [...ids.slice(0, t), -1, ...ids.slice(t)].filter((id) => id !== dragged);
+  return withNew.map((id) => (id === -1 ? dragged : id));
+}
+
 /** `nodeExists`: whether any node of the tree has the name. */
 export function nodeExists(nodes: readonly TreeNode[], name: string): boolean {
   return nodes.some((n) => n.name === name);
