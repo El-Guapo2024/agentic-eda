@@ -2137,9 +2137,9 @@ fn kicad_cli_named_nets(root: &Path) -> std::collections::BTreeMap<String, Vec<S
 /// Round 6's connectivity cases (`tests/fixtures/r6_schematic`), with the nets kicad-cli 25ec2335 gives the original (`#` pins left out):
 /// - A6-M2 (`conn_facts.cpp`: `numbersByName[pin->GetShownName()]`, and `SCH_PIN::GetShownName` is the alternate when one is set; the name part is the
 ///   library pin's, `libPin->GetShownName()`): `alt1`, QA `issue22286/bugtest` with library pins 3 and 7 renamed `IO`, picking `3.out` and `7.in` -- no
-///   duplicate name, so `Net-(J1-IO)` and `Net-(J1-IO)_1`, not `-Pad3` / `-Pad7`. **Differs**: which of the two takes `_1` (kicad-cli: J1.3's) follows
-///   KiCad's node order, the smallest item KIID of each island (`conn_publish.cpp`, `NODE_LESS` over `RECORD_KEY::anchor`), which the design does not
-///   keep; ours gives the suffix to the smaller net, then the later first pin;
+///   duplicate name, so `Net-(J1-IO)` and `Net-(J1-IO)_1`, not `-Pad3` / `-Pad7`. Which of the two takes `_1` follows KiCad's node order, the smallest
+///   item KIID of each island (`conn_publish.cpp`, `NODE_LESS` over `RECORD_KEY::anchor`): the import keeps kicad-cli's names of the original, the tracer
+///   gives kicad-cli's of the derived file ([`the_tracers_net_names_are_kicad_clis_of_the_derived_schematic`], PARITY-sch §87);
 /// - A6-L2 (`fact.noConnect = GetType() == PT_NC`, `m_alt` the symbol's on every path): `a22286x2`, the `a22286` screen placed by two sheets; the later
 ///   path's J11 pin 3 has J1's alternate too.
 #[test]
@@ -2158,6 +2158,87 @@ fn a_pins_alternate_is_its_shown_name_for_the_duplicate_name_test() {
             assert_eq!(kicad_net_groups(&dir), kicad_cli_net_groups(&root), "{case}: kicad-cli reads the derived file as the original");
         }
     }
+}
+
+/// kicad-cli's netlist of the board's derived schematic: each net's name with its pins (`#` references left out, nets of no pin dropped).
+fn kicad_named_nets(dir: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    let done = crate::kicad_engine::export_sch(dir, "netlist", &["--format".to_string(), "kicadxml".to_string()]).expect("kicad-cli exports the netlist");
+    let text = std::fs::read_to_string(dir.join(done["files"][0].as_str().expect("one netlist file"))).unwrap();
+    let attr = |line: &str, name: &str| line.split(&format!(" {name}=\"")).nth(1).and_then(|r| r.split('"').next()).unwrap_or("").to_string();
+    let mut nets = std::collections::BTreeMap::new();
+    let mut current: Option<(String, Vec<String>)> = None;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            current = Some((attr(line, "name"), Vec::new()));
+        } else if line.starts_with("</net>") {
+            if let Some((name, mut pins)) = current.take().filter(|(_, p)| !p.is_empty()) {
+                pins.sort();
+                nets.insert(name, pins);
+            }
+        } else if line.starts_with("<node ") {
+            let reference = attr(line, "ref");
+            if let Some((_, pins)) = current.as_mut().filter(|_| !reference.starts_with('#')) {
+                pins.push(format!("{reference}.{}", attr(line, "pin")));
+            }
+        }
+    }
+    nets
+}
+
+/// PARITY-sch §87 (UI-LEFT-2 SS17): the names the studio's tracer gives the nets of every connectivity fixture are the names kicad-cli gives the nets of the
+/// derived schematic, the `_1` of two nets of one name included: KiCad 25ec2335's `AssignNames` gives the bare name to the net `NODE_LESS` puts first (the
+/// record of the smallest island anchor, the smallest item uuid), and the tracer reads the uuids the writer gives (`eda_kicad::sch_anchor_uuid`). A pin that
+/// two nets have (a pin number used twice, `j3`; a pin common to every unit) is listed by kicad-cli on both; the board's net list keeps it on the net
+/// `COMPONENT::GetNet` gives its pad -- the first by `StrNumCmp` that KiCad did not make up, else the first.
+#[test]
+fn the_tracers_net_names_are_kicad_clis_of_the_derived_schematic() {
+    let cases: &[(&str, &[&str])] = &[
+        ("r3_nets", &["c1", "c4", "c5", "c5d", "c7"]),
+        ("r4_connectivity", &["g6", "j1", "j2", "j3", "lbl", "n1", "p1", "p7", "s1"]),
+        ("r5_connectivity", &["a22286", "dm1", "e1", "h3", "j5", "s2"]),
+        ("r6_schematic", &["a22286x2", "alt1"]),
+    ];
+    let mut differ = Vec::new();
+    for (round, names) in cases {
+        for case in *names {
+            let (dir, _, _) = round_case_in(round, case, &format!("names_{round}_{case}"));
+            let (_, mut design, model) = load(&dir).unwrap();
+            let traced = crate::board::trace_kicad_names(&mut design, &model);
+            let ours: std::collections::BTreeMap<String, Vec<String>> = traced
+                .iter()
+                .map(|t| (t.name.clone(), t.pins.iter().filter(|p| !p.starts_with('#')).cloned().collect::<Vec<_>>()))
+                .filter(|(_, p)| !p.is_empty())
+                .collect();
+            if !kicad_cli_ready() {
+                return;
+            }
+            let theirs = kicad_named_nets(&dir);
+            // the board's net of a pin kicad-cli lists on several nets (`COMPONENT::GetNet`)
+            let auto = |n: &str| n.starts_with("Net-(") || n.starts_with("unconnected-(");
+            let mut board: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+            let mut order: Vec<&String> = theirs.keys().collect();
+            order.sort_by(|a, b| eda_model::reannotate::str_num_cmp(a, b, false));
+            let mut held: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+            for name in &order {
+                for p in &theirs[*name] {
+                    let e = held.entry(p.as_str()).or_insert(name.as_str());
+                    if auto(e) && !auto(name) {
+                        *e = name.as_str();
+                    }
+                }
+            }
+            for (p, n) in held {
+                board.entry(n.to_string()).or_default().push(p.to_string());
+            }
+            for pins in board.values_mut() {
+                pins.sort();
+            }
+            if ours != board {
+                differ.push(format!("{round}/{case}: ours {ours:?}\n  kicad-cli {theirs:?}"));
+            }
+        }
+    }
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
 }
 
 /// The library symbol's user fields in the schematic's cache (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` writes every field): QA `issue22286/bugtest`'s
