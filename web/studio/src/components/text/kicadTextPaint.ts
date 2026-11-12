@@ -44,7 +44,7 @@ export function flippedViewSpec(spec: KicadTextSpec, font: KicadFont, keepAnchor
   return { ...spec, pos: [spec.pos[0] + sign * dx, spec.pos[1] + sign * dy], mirror: !spec.mirror };
 }
 
-type TextRecord = { text: string; font: string; ink: [number, number, number, number] | null; box: [number, number][]; lines: { text: string; x: number; y: number }[]; on: [number, number] | null };
+type TextRecord = { text: string; font: string; ink: [number, number, number, number] | null; box: [number, number][]; lines: { text: string; x: number; y: number }[]; on: [number, number] | null; drawnMirrored: boolean };
 
 function recorder(): Record<string, Record<string, TextRecord>> | null {
   if (typeof window === "undefined") return null;
@@ -67,7 +67,7 @@ export function beginTextRecord(tag: string): void {
   if (r) r[tag] = {};
 }
 
-function record(tag: string, id: string, spec: KicadTextSpec, l: KicadTextLayout): void {
+function record(tag: string, id: string, spec: KicadTextSpec, l: KicadTextLayout, drawnMirrored = l.mirror): void {
   const r = recorder();
   if (!r) return;
   // worked out when a check reads them, not on every paint
@@ -85,7 +85,15 @@ function record(tag: string, id: string, spec: KicadTextSpec, l: KicadTextLayout
   lazy("lines", () => l.lines.map(({ text, x, y }) => ({ text, x, y })));
   // a point on what is drawn, for a check that presses on the text: the middle of its first stroke, or of its first run's ink
   lazy("on", () => onInk(l));
+  // whether it was drawn mirrored on the canvas (Flip Board View toggles it on a text that is not side specific; the rest of the record is the text's own layout)
+  lazy("drawnMirrored", () => drawnMirrored);
   (r[tag] ??= {})[id] = entry;
+}
+
+/** What `paintKicadText` files for a check (`window.__edaText[tag][id]`), for a painter that lays its text out itself (a text box, a table cell): the text's own layout
+ * and whether it was drawn mirrored. */
+export function recordTextLayout(tag: string, id: string, spec: KicadTextSpec, l: KicadTextLayout, drawnMirrored: boolean): void {
+  record(tag, id, spec, l, drawnMirrored);
 }
 
 /** The layouts of the last paints, by what they were laid out from: a canvas repaints on every mouse move, and its texts are mostly the same. */
@@ -161,6 +169,6 @@ export function paintKicadText(ctx: CanvasRenderingContext2D, spec: KicadTextSpe
   const drawn = opts.flippedView ? flippedViewSpec(spec, font, opts.keepAnchor) : spec;
   const l = layoutOf(drawn, font);
   paintLayout(ctx, l, opts, opts.knockout ? { box: knockoutBox(l, spec.size), background: opts.knockout } : undefined);
-  if (opts.record) record(opts.record.tag, opts.record.id, spec, opts.flippedView ? layoutOf(spec, font) : l);
+  if (opts.record) record(opts.record.tag, opts.record.id, spec, opts.flippedView ? layoutOf(spec, font) : l, l.mirror);
   return l;
 }

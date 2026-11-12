@@ -10,7 +10,7 @@
 import type { BoardState, BoardTable } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layoutKicadText, layoutLineAt, resolveFont } from "../../kicad-port/kicadText";
-import { paintLayout } from "../text/kicadTextPaint";
+import { paintLayout, recordTextLayout } from "../text/kicadTextPaint";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 import { dashPattern } from "../../kicad-port/fpArt";
 import { layerColor } from "./layers";
@@ -45,7 +45,10 @@ function drawTable(ctx: CanvasRenderingContext2D, view: ViewTransform, t: BoardT
     // its text mirrored and hung from `GetDrawPos( true )` so it reads as it did (UI-LEFT-2 PP24)
     if (keptReadableInFlippedView(opts.viewFlipped, t.layer, opts.layerTypes)) {
       const pos = drawPosIn(c.corners, c.h_align, c.v_align, c.mirror, c.margins, t.angle, true);
-      paintLayout(ctx, layoutKicadText({ ...look, mirror: !c.mirror, text: c.shown ?? c.text, pos, halign: c.h_align, valign: c.v_align, lineSpacing: (c.line_spacing || 1000) / 1000 }, font), { color, pen });
+      const spec = { ...look, mirror: !c.mirror, text: c.shown ?? c.text, pos, halign: c.h_align, valign: c.v_align, lineSpacing: (c.line_spacing || 1000) / 1000 };
+      const laid = layoutKicadText(spec, font);
+      recordTextLayout(opts.textRecordTag ?? "pcb", c.id, { ...spec, mirror: c.mirror }, layoutKicadText({ ...spec, mirror: c.mirror }, font), laid.mirror);
+      paintLayout(ctx, laid, { color, pen });
       continue;
     }
     if (font.kind === "outline" && c.draw_pos) {
