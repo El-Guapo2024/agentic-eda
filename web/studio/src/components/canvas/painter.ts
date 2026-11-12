@@ -383,7 +383,7 @@ export function padTextLayout(pad: { w: number; h: number }, withNet: boolean): 
 }
 
 /** The pad's number, centred (above the middle when a net name shares the pad), bold, as `PCB_PAINTER::draw( const PAD* )` writes it. */
-function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pad, withNet: boolean, color: string, viewFlipped = false) {
+export function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pick<Pad, "x" | "y" | "w" | "h" | "num">, withNet: boolean, color: string, viewFlipped = false) {
   const layout = padTextLayout(pad, withNet);
   // "We use a size for at least 3 chars ... a smaller text size to handle interline, pen size"; the stroked font is 0.9 as wide.
   let tsize = Math.min((1.5 * layout.width) / Math.max([...pad.num].length, 3), layout.size);

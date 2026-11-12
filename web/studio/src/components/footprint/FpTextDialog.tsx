@@ -7,7 +7,7 @@
 import { textFaceOf, textLookOf } from "../../kicad-port/fpKeep";
 import { FontSelect, useFontFamilies } from "../TextLookControls";
 import { KICAD_FONT } from "../../kicad-port/textLooks";
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { fpTextSizeMessage, noPrintableChars } from "../../kicad-port/fpTextTool";
 import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
@@ -20,12 +20,28 @@ const FP_TEXT_LAYERS = FP_EDITOR_LAYERS;
 const mm = (nm: number) => String(Math.round(nm) / 1e6);
 const nm = (v: string) => Math.round(Number(v) * 1e6);
 
+/**
+ * `DIALOG_TEXT_PROPERTIES`' `SetInitialFocus( m_SingleLineText )`: the text box has the focus when the dialog opens. The text tool opens the dialog from the
+ * canvas' pointerdown, and the mousedown that follows would focus the canvas (it takes the keys) after `autoFocus` ran, so the focus is given once more
+ * after that event (UI-LEFT-2 FF10's click-through: typing went to the canvas, not to the text).
+ */
+function useInitialFocus(): (el: HTMLInputElement | null) => void {
+  return useCallback((el: HTMLInputElement | null) => {
+    if (!el) return;
+    el.focus();
+    window.setTimeout(() => {
+      if (el.isConnected && document.activeElement !== el && !(document.activeElement instanceof HTMLInputElement)) el.focus();
+    }, 0);
+  }, []);
+}
+
 export function FpTextDialog() {
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
   const text = state.textDialog;
   const [content, setContent] = useState("");
+  const initialFocus = useInitialFocus();
   const [layer, setLayer] = useState("F.SilkS");
   const [size, setSize] = useState("1");
   const [thickness, setThickness] = useState("0.1");
@@ -92,7 +108,7 @@ export function FpTextDialog() {
         <div className="dialog-body">
           <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr" }}>
             <span>Text:</span>
-            <input autoFocus value={content} data-testid="fp-text-content" onChange={(e) => setContent(e.target.value)} onKeyDown={enter} />
+            <input ref={initialFocus} autoFocus value={content} data-testid="fp-text-content" onChange={(e) => setContent(e.target.value)} onKeyDown={enter} />
             <span>Layer:</span>
             <select value={layer} data-testid="fp-text-layer" onChange={(e) => setLayer(e.target.value)}>
               {(FP_TEXT_LAYERS.includes(layer) ? FP_TEXT_LAYERS : [layer, ...FP_TEXT_LAYERS]).map((l) => (
@@ -166,6 +182,7 @@ export function FpTextEditDialog() {
   const field = fp && id ? fpFieldById(fp, id) : undefined;
   const text = fp && id && !field ? fp.texts.find((t) => t.id === id) : undefined;
   const [content, setContent] = useState("");
+  const initialFocus = useInitialFocus();
   const [layer, setLayer] = useState("F.SilkS");
   const [width, setWidth] = useState("1");
   const [height, setHeight] = useState("1");
@@ -281,7 +298,7 @@ export function FpTextEditDialog() {
         <div className="dialog-body">
           <div className="kv-grid" style={{ gridTemplateColumns: "100px 1fr" }}>
             <span>{label}</span>
-            <input autoFocus value={content} data-testid="fp-text-edit-content" onChange={(e) => setContent(e.target.value)} onKeyDown={enter} />
+            <input ref={initialFocus} autoFocus value={content} data-testid="fp-text-edit-content" onChange={(e) => setContent(e.target.value)} onKeyDown={enter} />
             <span>Layer:</span>
             <select value={layer} data-testid="fp-text-edit-layer" onChange={(e) => setLayer(e.target.value)}>
               {(FP_TEXT_LAYERS.includes(layer) ? FP_TEXT_LAYERS : [layer, ...FP_TEXT_LAYERS]).map((l) => (

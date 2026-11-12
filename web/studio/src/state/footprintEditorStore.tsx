@@ -980,7 +980,7 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!commit || !session || !name) return;
       const numbers = enumerateCommit(session);
       if (numbers.length === 0) return;
-      if (await runCmd({ op: "set_pad_numbers", footprint: name, numbers })) dispatch({ type: "SET_LAST_PAD_NUMBER", number: numbers[numbers.length - 1]![1] }); // `SetLastPadNumber( newNumber )`
+      await runCmd({ op: "set_pad_numbers", footprint: name, numbers }); // the last pad number was set as the tool ran (`SetLastPadNumber`, FootprintCanvas)
     },
     editPadShapes: async () => {
       const st = stateRef.current;
