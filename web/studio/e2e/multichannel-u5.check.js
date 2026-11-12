@@ -293,6 +293,7 @@
       const ins = d.querySelectorAll("input");
       setValue(ins[1], LIB);
       setValue(ins[2], "Multichannel u5 check");
+      document.querySelector('[data-library-file-table] input[value="project"]')?.click(); // KiCad's hook: the project table (UI-LEFT-2 LL5)
       await sleep(200);
       await press("Create", 1800);
       await post({ op: "group", ids: ["R1", "C1"] });
