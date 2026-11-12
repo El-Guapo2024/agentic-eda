@@ -147,11 +147,12 @@ fn every_pcb_plot_format_drill_format_schematic_plot_and_netlist_writes_its_file
     assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "pdf_single_document": "yes", "outputdirectory": "plots/one/" } }))["ok"], true);
     let pdf = studio.written("one PDF", &studio.post("/api/fab/plot", json!({ "format": "pdf", "layers": layers })));
     assert_eq!(pdf.len(), 1, "one PDF of every layer: {pdf:?}");
-    // The export lists the files of its folder written since a second before it started (`run_export`: some file systems' times are that
-    // coarse), so the next one waits that second out.
-    std::thread::sleep(Duration::from_millis(1200));
-    let dxf = studio.written("one DXF", &studio.post("/api/fab/plot", json!({ "format": "dxf", "layers": layers, "dxf_single_document": true })));
+    // Right after it, into the same folder: the export lists the files its own run wrote (XX3: not the PDF of the run before)
+    let one_dxf = studio.post("/api/fab/plot", json!({ "format": "dxf", "layers": layers, "dxf_single_document": true }));
+    let dxf = studio.written("one DXF", &one_dxf);
     assert_eq!(dxf.len(), 1, "one DXF of every layer: {dxf:?}");
+    // the contours box (on by default) is the polygon mode alone, which only the jobset runner takes (`plot_graphic_items_using_contours` off)
+    assert!(one_dxf["engine"].as_str().unwrap_or_default().ends_with("(jobset)"), "{one_dxf}");
     // A folder outside the board's is refused.
     assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "outputdirectory": "../outside/" } }))["ok"], true);
     let refused = studio.post("/api/fab/plot", json!({ "format": "svg", "layers": layers }));
@@ -185,9 +186,8 @@ fn every_pcb_plot_format_drill_format_schematic_plot_and_netlist_writes_its_file
     }
 
     // ---- Export Netlist: every format, named by it. Allegro's exporter also writes its device files into a `devices` folder beside the
-    // netlist (`NETLIST_EXPORTER_ALLEGRO::WriteNetlist`). Each run waits out the second-long window of the file list (see above).
+    // netlist (`NETLIST_EXPORTER_ALLEGRO::WriteNetlist`). One run right after another: each lists its own file (XX3).
     for (format, extension) in [("kicad", "net"), ("orcadpcb2", "net"), ("allegro", "txt"), ("cadstar", "frp"), ("pads", "asc"), ("spice", "cir"), ("spicemodel", "cir"), ("xml", "xml")] {
-        std::thread::sleep(Duration::from_millis(1200));
         let reply = studio.post("/api/sch/netlist", json!({ "format": format }));
         let files: Vec<String> = studio.written(&format!("netlist {format}"), &reply).into_iter().filter(|f| !f.ends_with("/devices")).collect();
         assert!(files.len() == 1 && ext(&files[0]) == extension, "netlist {format}: {files:?}");

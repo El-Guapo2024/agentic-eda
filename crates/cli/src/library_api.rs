@@ -226,7 +226,22 @@ pub fn symbol_kicad_sym_any(dir: &Path, lib_id: &str) -> Result<String, Vec<Chec
         None => sym,
     };
     let embedded: std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles> = design.symbol_library.as_ref().and_then(|l| l.embedded.get(lib_id)).map(|e| [(flat.lib_id.clone(), e.clone())].into()).unwrap_or_default();
+    let embedded = symbols_with_fonts(&[&flat], &embedded);
     Ok(eda_kicad::export_kicad_sym_library_with(&[&flat], &embedded))
+}
+
+/// `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`'s `if( aSymbol->GetAreFontsEmbedded() ) aSymbol->EmbedFonts()` (KiCad 25ec2335): each symbol's list with the fonts its
+/// texts and fields use added when it embeds fonts (`eda_kicad_engine::fonts::library_symbol_font_uses`); the writer drops them when it does not.
+pub(crate) fn symbols_with_fonts(syms: &[&LibrarySymbol], embedded: &std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles>) -> std::collections::BTreeMap<String, eda_model::embedded_files::EmbeddedFiles> {
+    let mut out = embedded.clone();
+    for sym in syms {
+        if let Some(list) = embedded.get(&sym.lib_id) {
+            if let std::borrow::Cow::Owned(l) = eda_kicad_engine::fonts::with_fonts(list, &eda_kicad_engine::fonts::library_symbol_font_uses(sym)) {
+                out.insert(sym.lib_id.clone(), l);
+            }
+        }
+    }
+    out
 }
 
 /// `GET /api/symbol?lib_id=&flatten=1`: the project-library symbol with everything it inherits -- what the Symbol Editor draws of a derived symbol -- or the symbol itself.
@@ -309,6 +324,8 @@ pub fn footprint_kicad_mod_any(dir: &Path, name: &str) -> Result<String, Vec<Che
     let (fp, _) = footprint_any(dir, name)?;
     // the files a project footprint embeds are written with it
     let embedded = board::load(dir).ok().and_then(|(_, design, _)| design.footprint_library.and_then(|l| l.embedded.get(name).cloned())).unwrap_or_default();
+    // `FP_CACHE::Save`: `if( footprint->GetAreFontsEmbedded() ) footprint->EmbedFonts()` (KiCad 25ec2335 `pcb_io_kicad_sexpr.cpp`)
+    let embedded = eda_kicad_engine::fonts::with_fonts(&embedded, &eda_kicad_engine::fonts::library_footprint_font_uses(&fp)).into_owned();
     Ok(eda_kicad::export_kicad_mod_with(&fp, &embedded))
 }
 

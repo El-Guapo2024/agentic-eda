@@ -35,6 +35,7 @@
 // field added here takes its looks after OK; a unit already placed on the sheet is refused (KiCad makes a second placement of it); Description is a user row (the
 // model keeps it so), so four rows are mandatory, not five; the Embedded Files tab applies as its own step on the library symbol (the Symbol Editor's undo), and
 // only for a symbol in the project library; Angle and Mirror are not offered for the symbol in the hand (R, X and Y turn it).
+import { DatasheetUrlButton } from "./DatasheetUrlButton";
 import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
 import { editCarried } from "../actions/schPlaceActions";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -517,7 +518,17 @@ export function SymbolPropertiesDialog() {
                       ),
                       shown: showBox("Footprint"),
                     })}
-                    {gridRow("main:Datasheet", "Datasheet", { name: "Datasheet", value: textInput(datasheetInput, "Datasheet", datasheet, setDatasheet), shown: showBox("Datasheet") })}
+                    {gridRow("main:Datasheet", "Datasheet", {
+                      name: "Datasheet",
+                      value: (
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {textInput(datasheetInput, "Datasheet", datasheet, setDatasheet)}
+                          {/* `TEXT_BUTTON_URL` with `DIALOG_SYMBOL_PROPERTIES`' stack: the library symbol's files, then the schematic's */}
+                          <DatasheetUrlButton value={datasheet} stack={[...(libId ? [{ kind: "library_symbol" as const, lib_id: libId }] : []), { kind: "schematic" as const }]} />
+                        </div>
+                      ),
+                      shown: showBox("Datasheet"),
+                    })}
                     {visibleUserRows.map((r) =>
                       gridRow(
                         `user:${r.key}`,

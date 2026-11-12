@@ -335,12 +335,29 @@ pub fn collect_plan(dir: &Path) -> Reply {
 
 // ------------------------------------------------------------------------------------------------------------------ fonts and documents
 
-/// The fonts an owner's texts use, as `GetFonts` finds them: the board's (`BOARD::GetFonts`). The other owners' texts are not asked yet: their panels take in no fonts.
-fn text_fonts_of(design: &Design, owner: &EmbeddedOwner) -> (Vec<eda_kicad_engine::fonts::TextFont>, Vec<(eda_kicad_engine::fonts::FontUse, String)>) {
-    match owner {
-        EmbeddedOwner::Board => eda_kicad_engine::fonts::text_fonts(&eda_kicad_engine::fonts::board_font_uses(design)),
-        _ => (Vec::new(), Vec::new()),
+/// The fonts an owner's texts use, as its `GetFonts` finds them (the `EMBEDDED_FILES` the panel's `m_files` is: `BOARD::GetFonts`, `SCHEMATIC::GetFonts`,
+/// `FOOTPRINT::GetFonts` for a footprint on the board -- its texts from `model` -- or in the Footprint Editor, `LIB_SYMBOL::GetFonts`).
+pub(crate) fn text_fonts_of(design: &Design, model: Option<&ConstraintModel>, owner: &EmbeddedOwner) -> (Vec<eda_kicad_engine::fonts::TextFont>, Vec<(eda_kicad_engine::fonts::FontUse, String)>) {
+    use eda_kicad_engine::fonts;
+    let uses = match owner {
+        EmbeddedOwner::Board => fonts::board_font_uses(design),
+        EmbeddedOwner::Schematic => fonts::schematic_font_uses(design),
+        EmbeddedOwner::Footprint { reference } => {
+            let art = model.and_then(|m| m.parts.iter().find(|p| &p.reference == reference).and_then(|p| m.footprint_of(p))).map(|f| f.art);
+            fonts::board_footprint_font_uses(design, art.as_ref(), reference)
+        }
+        EmbeddedOwner::LibraryFootprint { name } => design.footprint_library.as_ref().and_then(|l| l.by_name(name)).map(fonts::library_footprint_font_uses).unwrap_or_default(),
+        EmbeddedOwner::LibrarySymbol { lib_id } => design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).map(fonts::library_symbol_font_uses).unwrap_or_default(),
+    };
+    fonts::text_fonts(&uses)
+}
+
+/// The design and, for a footprint on the board (whose texts are the model's), the model.
+fn design_for(dir: &Path, owner: &EmbeddedOwner) -> Result<(Design, Option<ConstraintModel>), String> {
+    if matches!(owner, EmbeddedOwner::Footprint { .. }) {
+        return crate::board::load(dir).map(|(_, d, m)| (d, Some(m))).map_err(|e| crate::board::reasons(&e));
     }
+    read_design(dir).map(|d| (d, None))
 }
 
 /// `GET /api/embedded/fonts`.
@@ -349,11 +366,11 @@ pub fn fonts(dir: &Path, target: &str) -> Reply {
         Ok(o) => o,
         Err(e) => return reply("400 Bad Request", json!({ "error": e })),
     };
-    let design = match read_design(dir) {
+    let (design, model) = match design_for(dir, &owner) {
         Ok(d) => d,
         Err(e) => return reply("404 Not Found", json!({ "error": e })),
     };
-    let (found, skipped) = text_fonts_of(&design, &owner);
+    let (found, skipped) = text_fonts_of(&design, model.as_ref(), &owner);
     reply(
         "200 OK",
         json!({
@@ -379,11 +396,11 @@ pub fn font_file(dir: &Path, target: &str) -> Reply {
         Err(e) => return reply("400 Bad Request", json!({ "error": e })),
     };
     let name = query(target, "name");
-    let design = match read_design(dir) {
+    let (design, model) = match design_for(dir, &owner) {
         Ok(d) => d,
         Err(e) => return reply("404 Not Found", json!({ "error": e })),
     };
-    let (found, _) = text_fonts_of(&design, &owner);
+    let (found, _) = text_fonts_of(&design, model.as_ref(), &owner);
     let Some(f) = found.iter().find(|f| f.name == name) else { return reply("404 Not Found", json!({ "error": format!("no font named '{name}' is used by the {}'s texts", owner.label()) })) };
     match std::fs::read(&f.path) {
         Ok(bytes) => Reply { status: "200 OK", kind: "application/octet-stream", body: bytes },
@@ -449,13 +466,13 @@ pub fn document(dir: &Path, target: &str) -> Reply {
 
 /// The `apply` verb (the panel's OK) with the box ticked by a click and no font data: the files of the text's fonts the panel still lists (`text_fonts`), read here
 /// (`onFontEmbedClick`'s `AddFile( font->GetFileName(), true )`), so the command replays and undoes the same on a machine without the fonts. `None` when there is nothing to read.
-pub(crate) fn with_text_fonts(cmd: &Cmd, design: &Design) -> Option<Cmd> {
+pub(crate) fn with_text_fonts(cmd: &Cmd, design: &Design, model: &ConstraintModel) -> Option<Cmd> {
     match cmd {
         Cmd::Batch { cmds } => {
             let mut changed = false;
             let out: Vec<Cmd> = cmds
                 .iter()
-                .map(|c| match with_text_fonts(c, design) {
+                .map(|c| match with_text_fonts(c, design, model) {
                     Some(c) => {
                         changed = true;
                         c
@@ -467,7 +484,7 @@ pub(crate) fn with_text_fonts(cmd: &Cmd, design: &Design) -> Option<Cmd> {
         }
         Cmd::Embedded(EmbeddedCmd::Apply { owner, removed, added, fonts, refresh_fonts, text_fonts, font_files: None, nested }) => {
             let files: Vec<EmbeddedFile> = if *refresh_fonts && *fonts {
-                text_fonts_of(design, owner).0.iter().filter(|f| text_fonts.contains(&f.name)).filter_map(|f| eda_kicad_engine::fonts::font_file(&f.path).ok()).collect()
+                text_fonts_of(design, Some(model), owner).0.iter().filter(|f| text_fonts.contains(&f.name)).filter_map(|f| eda_kicad_engine::fonts::font_file(&f.path).ok()).collect()
             } else {
                 Vec::new()
             };

@@ -38,9 +38,10 @@ pub(crate) fn percent_decode(s: &str) -> String {
 /// The project of the board in `dir`: the name kicad-cli's derived project has (`PROJECTNAME`), and the variables the Text Variables page holds. The texts
 /// resolved on this thread from now on ask the git repository the board is in for `${VCSHASH}` and the `@{vcs..}` functions, as kicad-cli asks the one its
 /// derived project is in ([`crate::vcs::GitRepo`]; KiCad's `SETTINGS_MANAGER::LoadProject` sets `TEXT_EVAL_VCS`' context path), each answer kept for the
-/// request that made this project.
+/// request that made this project; `@{today()}`, `@{now()}` and `@{timeformat(..)}` read `clock` ([`eda_model::text_vars::set_eval_clock`]).
 pub(crate) fn project(dir: &Path, intent: &str, clock: Clock) -> Project {
     eda_model::text_vars::set_vcs(Some(std::rc::Rc::new(crate::vcs::GitRepo::of_board(dir))));
+    eda_model::text_vars::set_eval_clock(&clock);
     let stem = Path::new(intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board");
     Project { name: eda_kicad_engine::file_stem(stem), variables: crate::text_variables::project_variables(dir), clock }
 }

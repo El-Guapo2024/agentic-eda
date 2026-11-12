@@ -22,6 +22,9 @@ import {
   constrainPostscript,
   COORD_FORMATS,
   DEFAULT_SESSION,
+  loadPsControls,
+  noLayerSelected,
+  savePsControls,
   DRILL_MARKS,
   drcWarning,
   initialPlotForm,
@@ -46,7 +49,9 @@ import {
 
 /** What KiCad keeps for the session and not in the board (`s_lastAllLayersOrder`, the members `Format` does not write, `DIALOG_SHIM`'s saved
  * text controls): kept here while the page lives. */
-let session: PlotSessionValues = DEFAULT_SESSION;
+let session: PlotSessionValues | null = null;
+/** The session's values, the PostScript text controls as `DIALOG_SHIM::LoadControlState` gives them on the first opening. */
+const sessionValues = (): PlotSessionValues => (session ??= loadPsControls(DEFAULT_SESSION));
 
 const dim = { color: "var(--chrome-text-dim)", fontSize: 11 } as const;
 const boxStyle = { border: "1px solid var(--chrome-border)", borderRadius: 6, padding: "6px 8px", marginBottom: 8 } as const;
@@ -78,7 +83,7 @@ export function PlotDialog() {
   // `m_layerList = board->GetEnabledLayers().UIOrder()`.
   const listed = uiOrder([...copperLayers, ...enabledOptionalLayers(layerSetup)]);
   const board = state.board?.plot_params ?? null;
-  const [form, setForm] = useState<PlotForm>(() => initialPlotForm(board, listed, session));
+  const [form, setForm] = useState<PlotForm>(() => initialPlotForm(board, listed, sessionValues()));
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
   const [menu, setMenu] = useState<{ list: "layers" | "all"; x: number; y: number } | null>(null);
@@ -91,7 +96,7 @@ export function PlotDialog() {
   // KiCad builds the dialog at each opening (`TransferDataToWindow`), so it starts from the board as it is then.
   useEffect(() => {
     if (!open) return;
-    setForm(initialPlotForm(state.board?.plot_params ?? null, listed, session));
+    setForm(initialPlotForm(state.board?.plot_params ?? null, listed, sessionValues()));
     setResult(null);
     setMenu(null);
     setVariant(state.pcbVariant);
@@ -122,6 +127,7 @@ export function PlotDialog() {
   const close = () => {
     // `~DIALOG_PLOT`: `s_lastAllLayersOrder` is the list's order as it closes.
     keepSession(form);
+    savePsControls(sessionValues());
     dispatch({ type: "SET_PLOT_DIALOG_OPEN", open: false });
   };
 
@@ -144,9 +150,14 @@ export function PlotDialog() {
     try {
       const applied = await apply();
       if (!applied) return;
-      // `if( !m_plotOpts.GetLayerSelection().any() ) DisplayError( this, _( "No layer selected, Nothing to plot" ) )`.
-      if (form.checked.length === 0) {
+      // `if( !m_plotOpts.GetLayerSelection().any() ) DisplayError( this, _( "No layer selected, Nothing to plot" ) )`, the selection holding the
+      // copper layers the board lacks; with those only, `PCB_PLOTTER::Plot` skips them all and says "Done.".
+      if (noLayerSelected(form.checked, copperLayers.length)) {
         setResult({ ok: false, message: "No layer selected, Nothing to plot", files: [] });
+        return;
+      }
+      if (form.checked.length === 0) {
+        setResult({ ok: true, message: [...applied.messages, "Done."].join("\n"), files: [] });
         return;
       }
       const reply = await postFabPlot({ ...plotRequest(form, applied.ps), ...(variant ? { variant } : {}) });

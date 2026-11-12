@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { buildDrawItems, buildFullText, convertLegacyVariableRefs, convertToNewOverbarNotation, defaultModel, effectiveModel, expandTextVars, incrementLabel, parseDrawingSheet, pngInfo, replaceAntiSlashSequence, textLines, type DsDrawItem, type DsDrawText, type DsPageContext } from "./dsDataModel";
+import { setDsExpressionEvaluator, buildDrawItems, buildFullText, convertLegacyVariableRefs, convertToNewOverbarNotation, defaultModel, effectiveModel, expandTextVars, incrementLabel, parseDrawingSheet, pngInfo, replaceAntiSlashSequence, textLines, type DsDrawItem, type DsDrawText, type DsPageContext } from "./dsDataModel";
 import { DEFAULT_DRAWING_SHEET, EMPTY_DRAWING_SHEET } from "./dsDefaultSheet";
 
 const A4: DsPageContext = {
@@ -210,4 +210,18 @@ test("where a text's lines go (FONT::getLinePositions)", () => {
   const two = textLines({ ...base, text: "a\nb", multiline: true, hJustify: "center", vJustify: "bottom" }, measure);
   assert.equal(two.length, 2);
   assert.equal(two[1]!.y - two[0]!.y, Math.round(mm(2) * 1.68 * 0.9583));
+});
+
+test("CC8: BuildFullText evaluates `@{..}` after the variables (25ec2335), with the evaluator the caller sets; a text's face goes to its draw item", () => {
+  const ctx: DsPageContext = { ...A4, titleBlock: { ...A4.titleBlock, title: "T" } };
+  try {
+    setDsExpressionEvaluator((t) => t.replace("@{1+1}", "2"));
+    assert.equal(buildFullText("${TITLE} @{1+1}", ctx), "T 2");
+    assert.equal(buildFullText("${TITLE}", ctx), "T", "no `@{` asks nothing");
+  } finally {
+    setDsExpressionEvaluator((t) => t);
+  }
+  const { model } = parseDrawingSheet('(kicad_wks (version 20231118) (tbtext "F" (name "") (pos 10 10) (font (face "DejaVu Sans") (size 2 2))))', "t");
+  const text = buildDrawItems(model, ctx, (s, w) => s.length * w).find((i): i is DsDrawText => i.kind === "text" && i.text === "F");
+  assert.equal(text?.face, "DejaVu Sans");
 });

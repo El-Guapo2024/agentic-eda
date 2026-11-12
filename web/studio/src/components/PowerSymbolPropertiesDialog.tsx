@@ -16,6 +16,7 @@
 // **Differs**: the four symbol buttons are not offered for a power symbol; an alternate assignment of its pin cannot be set; a power symbol has no mirror flag here, so
 // a mirror that leaves its picture mirrored is kept as a turn, and the dialog reads it back as that angle, "Not mirrored"; Angle and Mirror are not offered for the power
 // symbol in the hand (R, X and Y turn it); the Footprint and Datasheet rows have no look columns (they are written hidden at the anchor).
+import { DatasheetUrlButton } from "./DatasheetUrlButton";
 import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
 import { editCarried } from "../actions/schPlaceActions";
 import { useMemo, useState } from "react";
@@ -192,7 +193,15 @@ function PowerForm({ power, carried }: { power: PowerSymbol; carried: boolean })
                 shown: showBox("Value", showValue, setShowValue),
               })}
               {gridRow("main:Footprint", undefined, { name: "Footprint", value: <input aria-label="Footprint" value={footprint} onChange={(e) => setFootprint(e.target.value)} style={{ width: "100%" }} /> })}
-              {gridRow("main:Datasheet", undefined, { name: "Datasheet", value: <input aria-label="Datasheet" value={datasheet} onChange={(e) => setDatasheet(e.target.value)} style={{ width: "100%" }} /> })}
+              {gridRow("main:Datasheet", undefined, {
+                name: "Datasheet",
+                value: (
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <input aria-label="Datasheet" value={datasheet} onChange={(e) => setDatasheet(e.target.value)} style={{ width: "100%" }} />
+                    <DatasheetUrlButton value={datasheet} stack={[...(power.lib_id ? [{ kind: "library_symbol" as const, lib_id: power.lib_id }] : []), { kind: "schematic" as const }]} />
+                  </div>
+                ),
+              })}
               {rows.map((r) =>
                 gridRow(`user:${r.key}`, r.was, {
                   name: <input aria-label="Field name" value={r.name} onChange={(e) => setRows((all) => all.map((o) => (o === r ? { ...o, name: e.target.value } : o)))} style={{ width: 100 }} />,

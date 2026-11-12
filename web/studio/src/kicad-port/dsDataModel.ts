@@ -18,9 +18,10 @@
 //
 // Differs:
 //   - `${KICAD_VERSION}` is the caller's text (the studio passes "KiCad E.D.A. eda studio"); KiCad writes "KiCad E.D.A. " and its version.
-//   - `@{..}` expressions are left as written (KiCad evaluates them with EXPRESSION_EVALUATOR); a variable the sheet, the title block and the
+//   - `@{..}` expressions are evaluated after the variables (`BuildFullText`'s `EXPRESSION_EVALUATOR`, KiCad 25ec2335) by the evaluator the caller sets
+//     ([`setDsExpressionEvaluator`]; the studio's asks the server); a variable the sheet, the title block and the
 //     caller's project resolver do not know is left as `${NAME}`, as KiCad leaves it.
-//   - `(font (face ..))` is kept but every text is drawn in the stroke font (the studio has no outline fonts).
+//   - `(font (face ..))` is the draw item's `face`, which the painter draws in that outline font once it has loaded (the stroke font until then).
 //   - A text's box for `maxlen` / `maxheight` (`SetConstrainedTextSize`, which asks `EDA_TEXT::GetTextBox`) is measured with the caller's
 //     `measure` (the stroke font's advance), the box widened by the pen as `schTextBox` does.
 //   - A bitmap keeps its PNG bytes (base64); its size comes from the PNG's `pHYs` resolution (`BITMAP_BASE::updatePPI`, 300 PPI without one)
@@ -1100,6 +1101,14 @@ function fullName(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
+/** What evaluates the `@{..}` of a text (`EXPRESSION_EVALUATOR::Evaluate`); the text as it is until one is set ([`setDsExpressionEvaluator`]). */
+let evaluateExpressions: (text: string) => string = (text) => text;
+
+/** Sets the `@{..}` evaluator `buildFullText` runs (the studio's asks the server's, `eda_model::text_vars::evaluate_math`, and keeps the answers). */
+export function setDsExpressionEvaluator(f: (text: string) => string): void {
+  evaluateExpressions = f;
+}
+
 /** `DS_DRAW_ITEM_LIST::BuildFullText`: the sheet's own variables, then the title block's (whose values may hold variables of their own), then the project's. */
 export function buildFullText(textbase: string, ctx: DsPageContext): string {
   const resolver = (withTitleBlock: boolean) => (token: string): string | null => {
@@ -1146,7 +1155,9 @@ export function buildFullText(textbase: string, ctx: DsPageContext): string {
     if (v !== null) return ctx.projectVar ? expandTextVars(v, (t) => ctx.projectVar!(t)) : v;
     return ctx.projectVar?.(token) ?? null;
   };
-  return expandTextVars(textbase, resolver(true));
+  // KiCad 25ec2335: `if( retv.Contains( wxS( "@{" ) ) ) retv = EXPRESSION_EVALUATOR().Evaluate( retv )`
+  const full = expandTextVars(textbase, resolver(true));
+  return full.includes("@{") ? evaluateExpressions(full) : full;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------- draw items
@@ -1191,6 +1202,8 @@ export interface DsDrawText {
   bold: boolean;
   multiline: boolean;
   color: DsColor | null;
+  /** `(font (face ..))`: an outline face (`DS_DRAW_ITEM_TEXT`'s font, `FONT::GetFont( face, bold, italic )`), or null for KiCad's own font. */
+  face?: string | null;
 }
 
 export interface DsDrawBitmap {
@@ -1391,7 +1404,7 @@ export function buildDrawItems(model: DsModel | null | undefined, ctx: DsPageCon
         if (item.bold) pen = penSizeForBold(Math.min(size[0], size[1]));
         for (let j = 0; j < item.repeat; j++) {
           if (j > 0 && !insidePage(item, j, c)) continue;
-          out.push({ kind: "text", text: fullText, pos: toIU(pointAt(item.pos, item.incr, j, c)), size, penNm: pen, hJustify: item.hJustify, vJustify: item.vJustify, angleDeg: item.orient, italic: item.italic, bold: item.bold, multiline, color: item.color });
+          out.push({ kind: "text", text: fullText, pos: toIU(pointAt(item.pos, item.incr, j, c)), size, penNm: pen, hJustify: item.hJustify, vJustify: item.vJustify, angleDeg: item.orient, italic: item.italic, bold: item.bold, multiline, color: item.color, face: item.face });
           // "Increment label for the next text (has no meaning for multiline texts)"
           if (item.repeat > 1 && !multiline) fullText = incrementLabel(item.textBase, (j + 1) * item.incrLabel);
         }

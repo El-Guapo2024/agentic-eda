@@ -54,9 +54,12 @@ fn slow_plot_current_page_plots_one_sheet_when_two_share_its_page_number() {
     // the page plotted shows its own number
     let svg = std::fs::read_to_string(dir.join(&files[0])).unwrap();
     assert!(!svg.contains("2~"), "the run-only number of the other sheet is not on this page");
-    // kicad-cli's `--pages 2` by itself keeps both sheets numbered 2 (`TrimToPageNumbers`): what the renumbering is for
+    // kicad-cli's `--pages 2` by itself plots Alpha only: it loads the derived schematic with `SCH_SHEET_LIST::RepairPageNumbers` (KiCad 25ec2335
+    // `EESCHEMA_HELPERS::LoadSchematic`), which leaves "2" to the first sheet and moves Beta to 3 -- so Beta is plotted as page 2 only with Alpha
+    // renumbered for the run (XX3: kicad-cli never sees two sheets of one number, as a KiCad session holding them does)
     let both = crate::sch_output_api::plot(&dir, json!({ "format": "svg", "pages": ["2"] }).to_string().as_bytes());
-    assert_eq!(files_of(&both).len(), 2, "{both}");
+    assert_eq!(files_of(&both).len(), 1, "{both}");
+    assert!(files_of(&both)[0].ends_with("Alpha.svg"), "{both}");
     let all = crate::sch_output_api::plot(&dir, json!({ "format": "svg", "plot_all": true }).to_string().as_bytes());
     assert_eq!(files_of(&all).len(), 3, "{all}");
     // the design itself is as it was: both sheets still numbered 2

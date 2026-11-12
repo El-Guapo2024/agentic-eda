@@ -1,17 +1,23 @@
 // `ACTIONS::pageSettings` -> DIALOG_PAGES_SETTINGS (common/dialogs/dialog_page_settings.cpp), as `BOARD_EDITOR_CONTROL::PageSettings` runs it for the
 // board and `SCH_EDITOR_CONTROL::PageSetup` for the schematic: the paper (a standard format and its orientation, or a custom size), the drawing sheet
 // file (`.kicad_wks`) and the title block (date with the calendar's Apply, revision, title, company, comments 1 to 9), with a preview of the page drawn
-// with the chosen sheet (`UpdateDrawingSheetExample`). OK is one undo step (`set_board_page` / `set_schematic_page`, and `set_drawing_sheet` in the same
-// batch when the sheet changed), and nothing is sent when nothing changed.
+// with the chosen sheet (`UpdateDrawingSheetExample`). OK is one undo step (`set_board_page` / `set_schematic_page`); the drawing sheet file is a project
+// setting in KiCad (`SavePageSettings`, outside the commit), so `set_drawing_sheet` in the same batch is no undo step and stays through an undo; nothing is
+// sent when nothing changed.
 //
 // The drawing sheet (`OnWksFileSelection`): the browse button opens the server-side file browser on the `.kicad_wks` files (the board's folder first,
 // KiCad's template folder one click away) -- a page cannot open the machine's own file dialog -- and the file chosen is read and previewed, and kept by the
-// name KiCad keeps it under: relative to the board's folder when it is in it, else with a path variable, else whole. "Upload..." puts a sheet from the
-// person's computer into the board's folder first. A name typed into the File box is taken on OK (`SavePageSettings`), with KiCad's "Error loading drawing
-// sheet" when it cannot be read; an empty name is KiCad's default sheet.
+// name KiCad keeps it under: relative to the board's folder when it is in it, else with a path variable, else whole. A name typed into the File box is
+// taken on OK (`SavePageSettings`), with KiCad's "Error loading drawing sheet" when it cannot be read; an empty name is KiCad's default sheet.
 //
-// Not ported: the schematic dialog's "export to other sheets" boxes (the editor works on one sheet), and embedding the sheet in the document
-// (`FILEDLG_HOOK_EMBED_FILE`).
+// "Embed file" (KiCad 25ec2335 `FILEDLG_HOOK_EMBED_FILE( true, EMBED_FILE_CONTEXT::DRAWING_SHEET )`, on until changed, `embed_file_defaults.drawing_sheet`):
+// the file picked is embedded in the document at once (`m_embeddedFiles->AddFile( fn, true )` in `OnWksFileSelection`, before OK and kept on Cancel, as
+// KiCad's is) and named `kicad-embed://<name>`; picking another file asks "Remove the previously embedded drawing sheet file '%s'?", and a Yes removes it on
+// OK (`m_embeddedSheetsToRemove`). "Upload..." stands for KiCad's file dialog on a file of the person's own computer, which a page can read but has no path
+// for: with "Embed file" the file is embedded (as KiCad's would be), without it the file is written into the board's folder so the project can name it.
+//
+// The schematic's "Export to other sheets" boxes (`DIALOG_EESCHEMA_PAGE_SETTINGS`): the paper and each ticked title block field go to every other sheet on
+// OK (`onSavePageSettings`); the boxes start as last closed, off for an empty field, and are kept on close (`m_PageSettings.export_*`).
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useStudioApi, useStudioState } from "../state/store";
 import { setPageSettingsOpen, useCommonDialogs } from "../state/commonDialogs";
@@ -33,6 +39,16 @@ import {
   titleBlockFields,
   titleBlockToSend,
   userSizeError,
+  base64OfText,
+  embeddedLink,
+  embeddedName,
+  exportsAnything,
+  initialPageExport,
+  keepEmbedDrawingSheet,
+  keepPageExport,
+  keptEmbedDrawingSheet,
+  keptPageExport,
+  type PageExportBoxes,
   type Paper,
   type TitleBlockFields,
 } from "../kicad-port/pageSettings";
@@ -43,6 +59,7 @@ import { KICAD_VERSION_TEXT, schematicSheetPage } from "./drawingSheet/sheetInfo
 import { layerColor } from "./canvas/layers";
 import { FolderBrowser } from "./libraryTables/FolderBrowser";
 import { drawingSheetFolders, pickDrawingSheet, uploadDrawingSheet } from "../api/drawingSheetClient";
+import { askConfirm } from "./library/libraryDialogs";
 
 /** `MAX_PAGE_EXAMPLE_SIZE`: the longest side of the sketch of the page, px. */
 const EXAMPLE_PX = 200;
@@ -90,6 +107,10 @@ export function PageSettingsDialog() {
   const [browsing, setBrowsing] = useState(false);
   const [templates, setTemplates] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // "Embed file" and the embedded sheets OK removes (`m_embeddedSheetsToRemove`); the schematic's "Export to other sheets" boxes
+  const [embedFile, setEmbedFile] = useState(true);
+  const [toRemove, setToRemove] = useState<string[]>([]);
+  const [exportBoxes, setExportBoxes] = useState<PageExportBoxes>(keptPageExport());
 
   const current =
     target === "pcb"
@@ -112,13 +133,20 @@ export function PageSettingsDialog() {
     setSheetText(current.sheet?.text ?? null);
     setSheetMessage(current.sheet?.error ? `Error loading drawing sheet '${current.sheet.file}'.\n${current.sheet.error}` : null);
     setBrowsing(false);
+    setEmbedFile(keptEmbedDrawingSheet());
+    setToRemove([]);
+    setExportBoxes(initialPageExport(keptPageExport(), titleBlockFields(current.titleBlock)));
     void drawingSheetFolders().then((f) => setTemplates(f.templates ?? null), () => setTemplates(null));
     // Only when the dialog opens -- not on every edit that changes the document under it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
 
   if (!target) return null;
-  const close = () => setPageSettingsOpen(null);
+  // `~DIALOG_EESCHEMA_PAGE_SETTINGS`: the boxes are kept whichever way the dialog closes
+  const close = () => {
+    if (target === "schematic") keepPageExport(exportBoxes, tb);
+    setPageSettingsOpen(null);
+  };
   const maxNm = target === "pcb" ? MAX_PAGE_SIZE_PCBNEW_NM : MAX_PAGE_SIZE_EESCHEMA_NM;
 
   const isUser = paper === USER_PAPER;
@@ -132,8 +160,9 @@ export function PageSettingsDialog() {
   const beforeTb = titleBlockToSend(titleBlockFields(current.titleBlock));
   const afterTb = titleBlockToSend(tb);
   const pageChanged = !samePaper(before, edited) || JSON.stringify(beforeTb) !== JSON.stringify(afterTb);
-  const sheetChanged = sheetPath.trim() !== (current.sheet?.path ?? "");
-  const changed = pageChanged || sheetChanged;
+  const sheetChanged = sheetPath.trim() !== (current.sheet?.path ?? "") || toRemove.length > 0;
+  const exporting = target === "schematic" && exportsAnything(exportBoxes);
+  const changed = pageChanged || sheetChanged || exporting;
 
   // The page the preview draws: the document's own page (the board's page 1 of 1; the schematic's sheet in view) on the paper and title block as typed.
   const tbShown = { title: tb.title, date: tb.date, rev: tb.rev, company: tb.company, comments: tb.comments };
@@ -145,24 +174,51 @@ export function PageSettingsDialog() {
   const setField = (key: "title" | "date" | "rev" | "company", value: string) => setTb({ ...tb, [key]: value });
   const setComment = (i: number, value: string) => setTb({ ...tb, comments: tb.comments.map((c, j) => (j === i ? value : c)) });
 
-  /** `OnWksFileSelection` after the file dialog: read the file (an error keeps the old sheet), then keep its short name and preview it. */
+  /** `OnWksFileSelection`, after the sheet loaded: offer to remove the embedded sheet the dialog had when another file takes its place (removed on OK). */
+  const offerRemoval = async (newEmbedded: string | null) => {
+    const was = embeddedName(sheetPath.trim());
+    if (!was || was === newEmbedded || toRemove.includes(was)) return;
+    if (await askConfirm({ title: "Confirmation", message: `Remove the previously embedded drawing sheet file '${was}'?`, okLabel: "Yes", cancelLabel: "No" })) setToRemove((r) => [...r, was]);
+  };
+
+  /** "Embed file": `m_embeddedFiles->AddFile( fn, true )` at the pick -- the document's list, outside the undo history -- and the name its link. */
+  const embedSheet = async (fileName: string, text: string) => {
+    const name = embeddedLink(fileName).slice("kicad-embed://".length);
+    const done = await api.cmd({ op: "set_drawing_sheet", schematic: target === "schematic", path: current.sheet?.path ?? null, embed: { name, data: base64OfText(text) } });
+    if (!done) return;
+    await offerRemoval(name);
+    // "Re-embedding a file that was queued for removal cancels that removal"
+    setToRemove((r) => r.filter((n) => n !== name));
+    setSheetPath(embeddedLink(name));
+    setSheetText(text);
+    setSheetMessage(null);
+  };
+
+  /** `OnWksFileSelection` after the file dialog: read the file (an error keeps the old sheet), then keep its short name -- or embed it -- and preview it. */
   const takeSheet = async (path: string) => {
-    const r = await pickDrawingSheet(path);
+    keepEmbedDrawingSheet(embedFile);
+    const r = await pickDrawingSheet(path, target);
     if (!r.ok) {
       setSheetMessage(r.error ?? "Error loading drawing sheet.");
       return;
     }
+    if (embedFile && r.text != null) return void (await embedSheet(path, r.text));
+    await offerRemoval(null);
     setSheetPath(r.path ?? path);
     setSheetText(r.text ?? null);
     setSheetMessage(null);
   };
 
   const upload = async (file: File) => {
-    const r = await uploadDrawingSheet(file.name, await file.text());
+    keepEmbedDrawingSheet(embedFile);
+    const text = await file.text();
+    if (embedFile) return void (await embedSheet(file.name, text));
+    const r = await uploadDrawingSheet(file.name, text);
     if (!r.ok) {
       setSheetMessage(r.error ?? "The drawing sheet could not be written into the board's folder.");
       return;
     }
+    await offerRemoval(null);
     setSheetPath(r.path ?? file.name);
     setSheetText(r.text ?? null);
     setSheetMessage(null);
@@ -178,12 +234,16 @@ export function PageSettingsDialog() {
         // `SavePageSettings`: the sheet is loaded on OK; one that cannot be read is said so, and its name kept all the same
         const name = sheetPath.trim();
         if (name) {
-          const r = await pickDrawingSheet(name);
+          const r = await pickDrawingSheet(name, target);
           if (!r.ok && r.error) setSheetMessage(r.error);
         }
-        cmds.push({ op: "set_drawing_sheet", schematic: target === "schematic", path: name || null });
+        cmds.push({ op: "set_drawing_sheet", schematic: target === "schematic", path: name || null, ...(toRemove.length > 0 ? { remove_embedded: toRemove } : {}) });
       }
-      if (pageChanged) cmds.push({ op: target === "pcb" ? "set_board_page" : "set_schematic_page", page: paperToCmd(edited), title_block: afterTb });
+      if (target === "pcb" && pageChanged) cmds.push({ op: "set_board_page", page: paperToCmd(edited), title_block: afterTb });
+      if (target === "schematic" && (pageChanged || exporting)) {
+        const b = exportBoxes;
+        cmds.push({ op: "set_schematic_page", page: paperToCmd(edited), title_block: afterTb, ...(exporting ? { export: { paper: b.paper, revision: b.revision, date: b.date, title: b.title, company: b.company, comments: b.comments } } : {}) });
+      }
       const done = await api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
       if (done) close();
     } finally {
@@ -191,12 +251,23 @@ export function PageSettingsDialog() {
     }
   };
 
-  const field = (label: string, value: string, onChange: (v: string) => void, id: string) => (
+  /** A title block field, with its "Export to other sheets" box on the schematic. */
+  const field = (label: string, value: string, onChange: (v: string) => void, id: string, box?: { on: boolean; set: (on: boolean) => void }) => (
     <Fragment key={id}>
       <span>{label}</span>
-      <input id={id} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} />
+      <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input id={id} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+        {target === "schematic" && box && (
+          <label style={{ whiteSpace: "nowrap", fontSize: 11 }} title="Export to other sheets">
+            <input type="checkbox" aria-label={`Export ${label} to other sheets`} checked={box.on} onChange={(e) => box.set(e.target.checked)} />
+            Export to other sheets
+          </label>
+        )}
+      </span>
     </Fragment>
   );
+  const exportBox = (key: "revision" | "date" | "title" | "company") => ({ on: exportBoxes[key], set: (on: boolean) => setExportBoxes((b) => ({ ...b, [key]: on })) });
+  const commentBox = (i: number) => ({ on: exportBoxes.comments[i] ?? false, set: (on: boolean) => setExportBoxes((b) => ({ ...b, comments: b.comments.map((c, j) => (j === i ? on : c)) })) });
 
   // The browser starts where the sheet is (`OnWksFileSelection`: its folder when the name is whole or expands to a whole path, else the project's).
   const browseStart = sheetPath.includes("/") ? sheetPath.slice(0, sheetPath.lastIndexOf("/")) : "";
@@ -230,6 +301,12 @@ export function PageSettingsDialog() {
               <span>{`Height (${unit})`}</span>
               <input id="page-user-h" aria-label="Height" value={userH} disabled={!isUser} onChange={(e) => setUserH(e.target.value)} />
             </div>
+            {target === "schematic" && (
+              <label style={{ display: "block", marginTop: 6, fontSize: 11 }}>
+                <input type="checkbox" aria-label="Export paper to other sheets" checked={exportBoxes.paper} onChange={(e) => setExportBoxes((b) => ({ ...b, paper: e.target.checked }))} />
+                Export to other sheets
+              </label>
+            )}
             {error && (
               <div role="alert" style={{ marginTop: 8, fontSize: 12, color: "var(--chrome-error, #e55)" }}>
                 {error}
@@ -254,9 +331,13 @@ export function PageSettingsDialog() {
               </button>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-              <button title="Put a drawing sheet from this computer into the board's folder and use it" onClick={() => fileInput.current?.click()}>
+              <button title={embedFile ? "Embed a drawing sheet from this computer in the document and use it" : "Put a drawing sheet from this computer into the board's folder and use it"} onClick={() => fileInput.current?.click()}>
                 Upload...
               </button>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }} title="The file dialog's Embed file box (FILEDLG_HOOK_EMBED_FILE): the file picked is embedded in the document">
+                <input type="checkbox" aria-label="Embed file" checked={embedFile} onChange={(e) => setEmbedFile(e.target.checked)} />
+                Embed file
+              </label>
               <button title="KiCad's default drawing sheet" disabled={!sheetPath} onClick={() => { setSheetPath(""); setSheetText(null); setSheetMessage(null); }}>
                 Default Sheet
               </button>
@@ -283,16 +364,16 @@ export function PageSettingsDialog() {
           <div>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Title Block</div>
             <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr" }}>
-              {field("Issue Date", tb.date, (v) => setField("date", v), "page-date")}
+              {field("Issue Date", tb.date, (v) => setField("date", v), "page-date", exportBox("date"))}
               <span />
               <div style={{ display: "flex", gap: 6 }}>
                 <input type="date" value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Pick a date" />
                 <button onClick={() => pick && setField("date", pick)}>Apply</button>
               </div>
-              {field("Revision", tb.rev, (v) => setField("rev", v), "page-rev")}
-              {field("Title", tb.title, (v) => setField("title", v), "page-title")}
-              {field("Company", tb.company, (v) => setField("company", v), "page-company")}
-              {Array.from({ length: COMMENT_COUNT }, (_, i) => field(`Comment${i + 1}`, tb.comments[i] ?? "", (v) => setComment(i, v), `page-comment-${i + 1}`))}
+              {field("Revision", tb.rev, (v) => setField("rev", v), "page-rev", exportBox("revision"))}
+              {field("Title", tb.title, (v) => setField("title", v), "page-title", exportBox("title"))}
+              {field("Company", tb.company, (v) => setField("company", v), "page-company", exportBox("company"))}
+              {Array.from({ length: COMMENT_COUNT }, (_, i) => field(`Comment${i + 1}`, tb.comments[i] ?? "", (v) => setComment(i, v), `page-comment-${i + 1}`, commentBox(i)))}
             </div>
           </div>
         </div>

@@ -31,6 +31,60 @@ pub fn normalized(path: Option<&str>) -> Result<Option<String>, Vec<CheckResult>
     Ok(Some(p.to_string()))
 }
 
+/// A drawing sheet file taken into the document (`FILEDLG_HOOK_EMBED_FILE`'s "Embed file", on by default: `embed_file_defaults.drawing_sheet`): its name and its
+/// content, base64.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EmbeddedSheet {
+    pub name: String,
+    pub data: String,
+}
+
+/// `FILEEXT::KiCadUriPrefix` + `://`: the prefix of a name that is an embedded file's (`EMBEDDED_FILE::GetLink`).
+pub const EMBED_PREFIX: &str = "kicad-embed://";
+
+/// [`set_drawing_sheet`] with Page Settings' embedding (KiCad 25ec2335 `DIALOG_PAGES_SETTINGS::OnWksFileSelection`, `TransferDataFromWindow`): `embed` is added
+/// to the document's embedded files -- the board's or the schematic's -- as `EMBEDDED_FILES::AddFile( fn, true )` adds it (over a file of that name, typed
+/// worksheet by its extension), and the names in `remove` are taken out (`m_embeddedSheetsToRemove`). `path` is kept as given (`kicad-embed://<name>` for the
+/// embedded one). Refused when nothing changes and nothing is embedded.
+pub fn set_drawing_sheet_with(design: &mut Design, schematic: bool, path: Option<&str>, embed: Option<&EmbeddedSheet>, remove: &[String]) -> Result<(), Vec<CheckResult>> {
+    if embed.is_none() && remove.is_empty() {
+        return set_drawing_sheet(design, schematic, path);
+    }
+    if schematic && design.schematic.is_none() {
+        return Err(fail("ops_no_schematic", "this board has no schematic section yet"));
+    }
+    let new_file = match embed {
+        Some(e) => {
+            let bytes = eda_kicad::embedded::base64_decode(e.data.trim()).map_err(|_| fail("ops_bad_embedded_data", "the drawing sheet's content is not base64"))?;
+            if bytes.is_empty() {
+                return Err(fail("ops_bad_embedded_data", &format!("Failed to add file '{}'.", e.name)));
+            }
+            Some(eda_kicad::embedded::encode_new(&e.name, &bytes).map_err(|err| fail("ops_bad_embedded_data", &err.to_string()))?)
+        }
+        None => None,
+    };
+    let list = if schematic {
+        &mut design.schematic.as_mut().expect("checked above").extras.embedded
+    } else {
+        &mut design.drawings.get_or_insert_with(Default::default).embedded
+    };
+    let before = list.clone();
+    for n in remove {
+        list.remove(n);
+    }
+    if let Some(f) = new_file {
+        list.put(f);
+    }
+    let files_changed = *list != before;
+    match set_drawing_sheet(design, schematic, path) {
+        Ok(()) => Ok(()),
+        // the name stays (a file embedded before the name is chosen, as `OnWksFileSelection` embeds it at the pick); the change is the files' -- or
+        // none, a file embedded again as it was (`AddFile( fn, true )` writes it over itself)
+        Err(_) if files_changed || embed.is_some() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// The board's (`schematic` false) or the schematic's drawing sheet file. Refused when it is already that one, or when there is no schematic to set it on.
 pub fn set_drawing_sheet(design: &mut Design, schematic: bool, path: Option<&str>) -> Result<(), Vec<CheckResult>> {
     let new = normalized(path)?;
@@ -61,6 +115,26 @@ mod tests {
             v["schematic"] = serde_json::json!({ "symbols": [], "wires": [], "labels": [] });
         }
         serde_json::from_value(v).unwrap()
+    }
+
+    /// CC8: "Embed file" takes the sheet into the document (`AddFile( fn, true )`, typed worksheet), the name is `kicad-embed://..`; the dialog's OK can
+    /// remove the one embedded before; nothing new is refused.
+    #[test]
+    fn an_embedded_sheet_goes_into_the_documents_files() {
+        let mut d = design(true);
+        let data = eda_kicad::embedded::base64_encode(b"(kicad_wks (version 20231118))");
+        let e = EmbeddedSheet { name: "frame.kicad_wks".into(), data };
+        set_drawing_sheet_with(&mut d, false, Some("kicad-embed://frame.kicad_wks"), Some(&e), &[]).unwrap();
+        let drawings = d.drawings.as_ref().unwrap();
+        assert_eq!(drawings.drawing_sheet.as_deref(), Some("kicad-embed://frame.kicad_wks"));
+        assert_eq!(drawings.embedded.files.iter().map(|f| (f.name.as_str(), f.kind)).collect::<Vec<_>>(), [("frame.kicad_wks", eda_model::embedded_files::EmbeddedFileType::Worksheet)]);
+        set_drawing_sheet_with(&mut d, false, Some("kicad-embed://frame.kicad_wks"), Some(&e), &[]).expect("the same file embedded again, as `AddFile( fn, true )` does");
+        assert!(set_drawing_sheet_with(&mut d, false, Some("kicad-embed://frame.kicad_wks"), None, &[]).is_err(), "nothing changes");
+        // embedded at the pick with the name as it was (`OnWksFileSelection`), then the name on OK
+        set_drawing_sheet_with(&mut d, true, None, Some(&e), &[]).unwrap();
+        assert!(d.schematic.as_ref().unwrap().extras.embedded.get("frame.kicad_wks").is_some() && d.schematic.as_ref().unwrap().extras.drawing_sheet.is_none());
+        set_drawing_sheet_with(&mut d, false, None, None, &["frame.kicad_wks".into()]).unwrap();
+        assert!(d.drawings.as_ref().unwrap().embedded.files.is_empty() && d.drawings.as_ref().unwrap().drawing_sheet.is_none());
     }
 
     #[test]

@@ -45,7 +45,10 @@ pub(crate) fn page_of(design: &Design, path: &[&str]) -> Option<String> {
 /// `CurrentSheet()` alone, and kicad-cli's `--pages` would keep every sheet of that number (`SCH_SHEET_LIST::TrimToPageNumbers`). So for the
 /// run the other sheets of that number are given numbers no sheet has (`SCH_SHEET_PATH::SetPageNumber` on a copy of the design), and the page
 /// plotted keeps its own. True when some sheet was renumbered. Differs: an intersheet reference on the page plotted that names one of those
-/// sheets shows its run-only number (`~2`, `~3` ..., `SCH_GLOBALLABEL`'s `${INTERSHEET_REFS}`).
+/// sheets shows its run-only number (`~2`, `~3` ..., `SCH_GLOBALLABEL`'s `${INTERSHEET_REFS}`). This cannot follow KiCad: a KiCad session can hold
+/// two sheets of one number (`EditPageNumber` takes any), but kicad-cli loads the derived file through `SCH_SHEET_LIST::RepairPageNumbers` (KiCad
+/// 25ec2335 `EESCHEMA_HELPERS::LoadSchematic`), which gives the number to the first sheet and the next free one to the other, so without the
+/// renumbering the current sheet would be plotted under another number, or not at all (XX3).
 pub(crate) fn alone_on_its_page(design: &mut Design, path: &[&str]) -> bool {
     let entries = eda_model::sheet_list::walk(design);
     let Some(target) = entries.iter().find(|e| e.path.iter().map(String::as_str).eq(path.iter().copied())) else { return false };
@@ -191,7 +194,7 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     let mut args = plot_args_for(kind, &req, page);
     args.extend(crate::fab_api::variant_args(&req));
     // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`): the plot draws the sheet the editor draws
-    args.extend(crate::drawing_sheet_api::plot_args(dir, crate::drawing_sheet_api::schematic_sheet(dir).as_deref()));
+    args.extend(crate::drawing_sheet_api::plot_args(dir, crate::drawing_sheet_api::document_files(dir, true).as_ref(), crate::drawing_sheet_api::schematic_sheet(dir).as_deref()));
     // The hops the editor draws where wires cross (KiCad 25ec2335 `DIALOG_PLOT_SCHEMATIC::plotSchematic`: `plotOpts.m_plotHopOver =
     // Schematic().Settings().GetHopOverScale() > 0.0`), from Schematic Setup > Formatting's "Hop-over size:"
     match &renumbered {

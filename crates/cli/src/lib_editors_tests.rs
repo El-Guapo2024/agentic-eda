@@ -528,6 +528,10 @@ fn the_symbol_svg_route_plots_in_the_theme_it_is_given_with_the_hidden_pins() {
     setup(&dir);
     let mut sym = base_symbol();
     sym.pins[1].hidden = true;
+    // a hidden field far below the body (XX3)
+    let mut f = sym.all_fields();
+    f.push(LibrarySymbolField { name: "Far".into(), text: "FAR AWAY".into(), at: SPoint { x: 0.0, y: -40.0 }, size_mm: 1.27, hidden: true, ..Default::default() });
+    sym.set_fields(f);
     step(&dir, Cmd::PutLibrarySymbol { symbol: sym, overwrite: false }, false, "test").unwrap();
     let plot = |req: serde_json::Value| {
         let r = crate::sch_export_api::symbol_svg(&dir, req.to_string().as_bytes());
@@ -543,6 +547,13 @@ fn the_symbol_svg_route_plots_in_the_theme_it_is_given_with_the_hidden_pins() {
     let without = plot(serde_json::json!({ "lib_id": "Lib:Base", "theme": "_builtin_default" }));
     let pins = |svg: &str| svg.matches("<desc>P").count();
     assert!(pins(&default) > pins(&without), "the hidden pin's name is plotted only with include_hidden_pins ({} / {})", pins(&default), pins(&without));
+    // XX3: `--include-hidden-fields` plots nothing more (`SCH_FIELD::Plot` skips a hidden field) and only takes the hidden field into the page's box;
+    // the editor's box (`SVGPlotSymbol`: `GetSymbolPlotBBox( .., false )`) leaves it out, so Export SVG does not pass it
+    let editor = plot(serde_json::json!({ "lib_id": "Lib:Base", "theme": "_builtin_default", "include_hidden_pins": true }));
+    let root = |svg: &str| svg.lines().find(|l| l.contains("viewBox=")).unwrap_or("").to_string();
+    let body = |svg: &str| svg.lines().filter(|l| !l.contains("viewBox=")).collect::<Vec<_>>().join("\n");
+    assert_eq!(body(&default), body(&editor), "the same drawing");
+    assert_ne!(root(&default), root(&editor), "kicad-cli's box with the hidden field is larger");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

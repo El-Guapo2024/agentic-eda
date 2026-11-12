@@ -593,6 +593,9 @@ fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem
 /// `eda_kicad::sheet_file_in_work`): nothing is ever written outside it.
 fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
+    // `SCH_IO_KICAD_SEXPR::Format`: `if( m_schematic->GetAreFontsEmbedded() ) m_schematic->EmbedFonts()` ([`fonts::with_schematic_fonts`]); the writer drops them
+    // otherwise (`ClearEmbeddedFonts`)
+    let design = &*fonts::with_schematic_fonts(design);
     let date = today();
     let root_name = format!("{stem}.kicad_sch");
     let (files, map) = export_kicad_sch_tree_mapped(design, model, &ExportMeta { date: &date, title: stem }, &root_name)?;
@@ -1953,11 +1956,27 @@ fn run_export_command(cli: &Path, scope: &str, kind: &str, args: &[String], inpu
     output_within(cmd, limit(EXPORT_TIMEOUT))
 }
 
-/// A kicad-cli export that wrote files: their paths relative to `root`.
+/// The lock of one output folder: the exports into it run one after the other, so each run's files are what changed in the folder while it ran.
+fn folder_lock(dir: &Path) -> std::sync::Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, std::sync::Arc<Mutex<()>>>>> = OnceLock::new();
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let mut locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner());
+    locks.entry(key).or_default().clone()
+}
+
+/// Each entry of `dir` with its modification time and length.
+fn folder_snapshot(dir: &Path) -> HashMap<PathBuf, (Option<std::time::SystemTime>, u64)> {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| (e.path(), e.metadata().map(|m| (m.modified().ok(), m.len())).unwrap_or((None, 0)))).collect()
+}
+
+/// A kicad-cli export that wrote files: their paths relative to `root`. They are the files of `out_dir` the run made or wrote again -- new, or with
+/// another modification time or length than before it -- as KiCad's dialogs report the files their own run wrote ("Plotted to '%s'."); exports into
+/// one folder wait for each other ([`folder_lock`]), so two runs a moment apart never list each other's files.
 #[allow(clippy::too_many_arguments)]
 fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path, out_dir: &Path, dir_kind: bool, ext: &str, stem: &str, root: &Path) -> Result<Value, Vec<CheckResult>> {
     std::fs::create_dir_all(out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
-    let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
+    let lock = folder_lock(out_dir);
+    let _one_at_a_time = lock.lock().unwrap_or_else(|e| e.into_inner());
     // An output with no extension is a folder kicad-cli creates itself (ODB++, uncompressed): one left by the last run is cleared first.
     let target = if dir_kind {
         out_dir.to_path_buf()
@@ -1968,6 +1987,7 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     } else {
         out_dir.join(format!("{stem}.{ext}"))
     };
+    let before = folder_snapshot(out_dir);
     let mut out_arg = target.to_string_lossy().to_string();
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
@@ -1995,7 +2015,10 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started))
+        .filter(|e| {
+            let now = e.metadata().map(|m| (m.modified().ok(), m.len())).unwrap_or((None, 0));
+            before.get(&e.path()).is_none_or(|was| *was != now || now.0.is_none())
+        })
         .map(|e| {
             let p = e.path();
             p.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string_lossy().to_string())
@@ -2068,6 +2091,110 @@ pub fn export_pcb_into(design: &Design, model: &ConstraintModel, work: &Path, ro
     let stem = file_stem(name);
     let (pcb, _) = export_board(design, model, work, &stem)?;
     run_export(&cli, "pcb", kind, args, &pcb, out_dir, pcb_dir_kind(kind, args), pcb_ext_for(kind, args), &stem, root)
+}
+
+/// `pcb export dxf`'s arguments ([`export_pcb_into`]'s, as the Plot dialog builds them) as the settings of a `pcb_export_dxf` job
+/// (`JOB_EXPORT_PCB_DXF`, `JOB_EXPORT_PCB_PLOT`'s parameters, KiCad 25ec2335 `common/jobs/job_export_pcb_{plot,dxf}.cpp`), with what the command
+/// line cannot say: "Plot graphic items using their contours" is the polygon mode alone (`--use-contours` sets
+/// `m_plotGraphicItemsUsingContours` too, `command_pcb_export_dxf.cpp`), and the graphic items stay filled, as `DIALOG_PLOT::applyPlotSettings`
+/// leaves `m_DXFPlotMode` (no control; `PCB_PLOT_PARAMS`' `FILLED`); black and white as the dialog sets it for DXF.
+pub fn dxf_job_settings(args: &[String]) -> Value {
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
+    let list = |flag: &str| value(flag).map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+    let hide = has("--hide-DNP-footprints-on-fab-layers");
+    let drill: i64 = value("--drill-shape-opt").and_then(|v| v.parse().ok()).unwrap_or(2);
+    json!({
+        "layers": list("--layers"),
+        "layers_to_include_on_all_layers": list("--common-layers"),
+        "mirror": false,
+        "black_and_white": true,
+        "negative": false,
+        "plot_footprint_values": !has("--exclude-value"),
+        "plot_ref_des": !has("--exclude-refdes"),
+        "hide_dnp_footprints_on_fab_layers": hide,
+        "sketch_dnp_footprints_on_fab_layers": !hide && has("--sketch-DNP-footprints-on-fab-layers"),
+        "crossout_dnp_footprints_on_fab_layers": !hide && has("--crossout-DNP-footprints-on-fab-layers"),
+        "sketch_pads_on_fab_layers": has("--sketch-pads-on-fab-layers"),
+        "plot_pad_numbers": has("--sketch-pad-numbers"),
+        "plot_drawing_sheet": has("--include-border-title"),
+        "subtract_solder_mask_from_silk": has("--subtract-soldermask"),
+        "use_drill_origin": has("--use-drill-origin"),
+        // `DRILL_MARKS`' JSON names (`NO_DRILL_SHAPE`, `SMALL_DRILL_SHAPE`, `FULL_DRILL_SHAPE`), as `--drill-shape-opt` 0, 1, 2
+        "drill_shape": match drill { 0 => "none", 1 => "small", _ => "full" },
+        "drawing_sheet": value("--drawing-sheet").unwrap_or_default(),
+        "check_zones": has("--check-zones"),
+        "variant": value("--variant").unwrap_or_default(),
+        "scale": value("--scale").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0),
+        "plot_graphic_items_using_contours": false,
+        "polygon_mode": has("--use-contours"),
+        "use_kicad_font": true,
+        "units": if value("--output-units").as_deref() == Some("mm") { "mm" } else { "in" },
+        "gen_mode": if has("--mode-single") { "single" } else { "multi" },
+        "output_filename": "",
+    })
+}
+
+/// The Plot dialog's DXF by kicad-cli's jobset runner (`kicad-cli jobset run`, `JOBS_RUNNER`), so the job takes the settings the `pcb export dxf`
+/// command has no flag for ([`dxf_job_settings`]): a one-job jobset with a folder output (`JOBS_OUTPUT_FOLDER`, `output_path` = `out_dir`) next to
+/// the derived project, which gets `PROJECT_FILE`'s `meta` (`{"filename", "version": 3}`, what KiCad writes in every project file: without it
+/// `SETTINGS_MANAGER::LoadProject` refuses the project and the runner exits with `ERR_INVALID_INPUT_FILE`). The files are those of `out_dir` the run
+/// wrote, as [`run_export`] lists them.
+pub fn export_pcb_dxf_job_into(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let stem = file_stem(name);
+    export_board(design, model, work, &stem)?;
+    std::fs::create_dir_all(out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
+    let project = work.join(format!("{stem}.kicad_pro"));
+    let mut pro: Value = std::fs::read_to_string(&project).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}));
+    if pro.get("meta").is_none() {
+        pro["meta"] = json!({ "filename": format!("{stem}.kicad_pro"), "version": 3 });
+        write_file(&project, format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default()))?;
+    }
+    let out_abs = std::fs::canonicalize(out_dir).unwrap_or_else(|_| out_dir.to_path_buf());
+    let jobset = json!({
+        "jobs": [{ "id": "6d1f2a3e-0b8c-4c55-9d3f-000000000d0f", "type": "pcb_export_dxf", "description": "", "settings": dxf_job_settings(args) }],
+        "meta": { "version": 1 },
+        "outputs": [{ "id": "6d1f2a3e-0b8c-4c55-9d3f-0000000001f0", "type": "folder", "description": "", "only": [], "settings": { "output_path": out_abs.to_string_lossy() } }],
+    });
+    let jobset_file = work.join(format!("{stem}-plot.kicad_jobset"));
+    write_file(&jobset_file, format!("{}\n", serde_json::to_string_pretty(&jobset).unwrap_or_default()))?;
+    let lock = folder_lock(out_dir);
+    let _one_at_a_time = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let before = folder_snapshot(out_dir);
+    let mut cmd = cli_command(&cli, Some(&project));
+    cmd.args(["jobset", "run", "--stop-on-error", "-f"]).arg(&jobset_file).arg(&project);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let mut files: Vec<String> = std::fs::read_dir(out_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let now = e.metadata().map(|m| (m.modified().ok(), m.len())).unwrap_or((None, 0));
+            before.get(&e.path()).is_none_or(|was| *was != now || now.0.is_none())
+        })
+        .map(|e| {
+            let p = e.path();
+            p.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string_lossy().to_string())
+        })
+        .collect();
+    files.sort();
+    if !out.status.success() || files.is_empty() {
+        return Err(fail("kicad_cli_export", "dxf", format!("kicad-cli jobset run (pcb_export_dxf) failed: {log}")));
+    }
+    // the runner's own frame ("| Running job 1 ..", "Job successful", the colour codes) is not the plotter's report
+    let said: Vec<&str> = log.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('|') && !l.contains('\u{1b}')).collect();
+    let log = said.join("\n");
+    let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {} (jobset)", cli_version(&cli)), "files": files });
+    let warnings: Vec<String> = said.iter().filter(|l| !l.starts_with("Plotted to") && **l != "Done.").map(|l| l.to_string()).collect();
+    if !warnings.is_empty() {
+        reply["warnings"] = json!(warnings);
+    }
+    if !log.is_empty() {
+        reply["log"] = Value::String(log);
+    }
+    Ok(reply)
 }
 
 /// The Generate Drill Files dialog's "Generate Report File..." (`DIALOG_GENDRILL::onGenReportFile`: `GenDrillReportFile( <board>-drl.rpt )`
@@ -2984,6 +3111,23 @@ fi"#;
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// XX3: the Plot dialog's DXF arguments as a `pcb_export_dxf` job: the contours box is the polygon mode alone, the graphic items filled.
+    #[test]
+    fn the_dxf_job_takes_the_polygon_mode_alone() {
+        let args: Vec<String> = "--layers F.Cu,Edge.Cuts --common-layers Edge.Cuts --include-border-title --sketch-DNP-footprints-on-fab-layers --crossout-DNP-footprints-on-fab-layers --drill-shape-opt 1 --scale 1 --mode-multi --use-contours --output-units mm --use-drill-origin --variant V1"
+            .split(' ')
+            .map(str::to_string)
+            .collect();
+        let j = dxf_job_settings(&args);
+        assert_eq!(j["layers"], json!(["F.Cu", "Edge.Cuts"]));
+        assert_eq!(j["layers_to_include_on_all_layers"], json!(["Edge.Cuts"]));
+        assert_eq!((j["polygon_mode"].clone(), j["plot_graphic_items_using_contours"].clone()), (json!(true), json!(false)));
+        assert_eq!((j["plot_drawing_sheet"].clone(), j["drill_shape"].clone(), j["units"].clone(), j["gen_mode"].clone()), (json!(true), json!("small"), json!("mm"), json!("multi")));
+        assert_eq!((j["use_drill_origin"].clone(), j["variant"].clone(), j["sketch_dnp_footprints_on_fab_layers"].clone()), (json!(true), json!("V1"), json!(true)));
+        let j = dxf_job_settings(&["--layers".into(), "F.Cu".into(), "--mode-single".into()]);
+        assert_eq!((j["polygon_mode"].clone(), j["gen_mode"].clone(), j["units"].clone(), j["drill_shape"].clone()), (json!(false), json!("single"), json!("in"), json!("full")));
+    }
+
     /// X1, X2, X3 (UI-LEFT): a plot goes into the dialog's output folder, as one file per layer in the modes KiCad's dialogs use
     /// (`--mode-multi`, `--mode-separate`: `-o <folder>/`) or as one document (`--mode-multipage`, `--mode-single`: `-o <folder>/<name>.<ext>`);
     /// a netlist is named by its format; the drill report is written where it is asked for, and the drill files of its run are not kept.
@@ -3018,6 +3162,14 @@ fi"#;
         assert_eq!(files(&svg), vec!["plots/svg/board-B_Cu.svg", "plots/svg/board-F_Cu.svg"]);
         let png = export_pcb_into(&design, &model, &work, &dir, "board", "png", &args(&["--dpi", "300"]), &out.join("png")).expect("one PNG per layer");
         assert_eq!(files(&png).len(), 2, "PNG is always a folder (no mode flag): {:?}", files(&png));
+        // two exports into one folder a moment apart (XX3): each lists the files its own run wrote, as KiCad's report does
+        let mixed = out.join("mixed");
+        let a = export_pcb_into(&design, &model, &work, &dir, "board", "pdf", &args(&["--mode-multipage"]), &mixed).expect("a PDF");
+        let b = export_pcb_into(&design, &model, &work, &dir, "board", "svg", &args(&["--mode-multi"]), &mixed).expect("SVGs");
+        assert_eq!(files(&a), vec!["plots/mixed/board.pdf"]);
+        assert_eq!(files(&b), vec!["plots/mixed/board-B_Cu.svg", "plots/mixed/board-F_Cu.svg"], "not the PDF of the run before");
+        let again = export_pcb_into(&design, &model, &work, &dir, "board", "pdf", &args(&["--mode-multipage"]), &mixed).expect("the PDF again");
+        assert_eq!(files(&again), vec!["plots/mixed/board.pdf"], "a file written again is the run's");
         let lines = std::fs::read_to_string(&log).unwrap();
         assert!(lines.contains(&format!("pcb export pdf -o {}/", out.display())) && lines.contains(&format!("-o {}", out.join("one").join("board.pdf").display())), "{lines}");
 
