@@ -30,13 +30,24 @@ export function itemIds(board: BoardState | null): Set<string> {
   return out;
 }
 
+/**
+ * What the selection is after an edit: `keep: false` drops the old selection (the C++ `ClearSelection()` before or after the commit), and
+ * `selectCreated: false` leaves the new items unselected (a commit that only `Add`s them, without `AddItemToSel`: `CreatePolys`, `CreateLines`,
+ * `SegmentToArc`).
+ */
+export interface ApplyOptions {
+  keep?: boolean;
+  selectCreated?: boolean;
+}
+
 export interface SweepHelpers {
   toast: (message: string, kind?: "info" | "error") => void;
   /** Same guard `useActionRunner` puts on every board edit: a stray key on the schematic tab must never reach a board command. */
   pcbOnly: (fn: () => void) => () => void;
   lockedIds: ReadonlySet<string>;
-  requestFiltered: (accept: (id: string) => boolean) => string[];
-  applyEdit: (cmds: Cmd[], removed?: readonly string[], message?: string | null, opts?: { keep?: boolean }) => Promise<boolean>;
+  /** `keepLocked`: the C++ client filter does not call `FilterCollectorForLockedItems` (`CreateLines`, `SegmentToArc`). */
+  requestFiltered: (accept: (id: string) => boolean, keepLocked?: boolean) => string[];
+  applyEdit: (cmds: Cmd[], removed?: readonly string[], message?: string | null, opts?: ApplyOptions) => Promise<boolean>;
 }
 
 export function createSweepHelpers(ctx: SweepCtx): SweepHelpers {
@@ -53,16 +64,16 @@ export function createSweepHelpers(ctx: SweepCtx): SweepHelpers {
    * `RequestSelection( clientFilter )`: the selection (or the hovered item), with the items the filter rejects and
    * the locked ones dropped from the selection itself (`FilterCollectorForLockedItems`).
    */
-  const requestFiltered = (accept: (id: string) => boolean): string[] => {
+  const requestFiltered = (accept: (id: string) => boolean, keepLocked = false): string[] => {
     const ids = ctx.requestSelection();
     // A lock of the item's own, a locked group's above it, or a locked member below it (`FilterCollectorForLockedItems`; round 6 E6-8).
     const board = state.board;
-    const out = ids.filter((id) => accept(id) && !lockedIds.has(id) && !(board && isLocked(board, id)));
+    const out = ids.filter((id) => accept(id) && (keepLocked || (!lockedIds.has(id) && !(board && isLocked(board, id)))));
     if (state.selection.size > 0 && out.length !== ids.length) dispatch({ type: "SET_SELECTION", refs: out });
     return out;
   };
 
-  const applyEdit = (cmds: Cmd[], removed: readonly string[] = [], message: string | null = null, opts: { keep?: boolean } = {}): Promise<boolean> => applyCommands(api, dispatch, cmds, removed, message, opts);
+  const applyEdit = (cmds: Cmd[], removed: readonly string[] = [], message: string | null = null, opts: ApplyOptions = {}): Promise<boolean> => applyCommands(api, dispatch, cmds, removed, message, opts);
 
   return { toast, pcbOnly, lockedIds, requestFiltered, applyEdit };
 }
@@ -74,7 +85,7 @@ export function createSweepHelpers(ctx: SweepCtx): SweepHelpers {
  * drops every non-footprint id from the selection. `keep: false` selects only what the edit created (an outset
  * deselects the originals).
  */
-export async function applyCommands(api: StudioApi, dispatch: Dispatch<Action>, cmds: Cmd[], removed: readonly string[] = [], message: string | null = null, opts: { keep?: boolean } = {}): Promise<boolean> {
+export async function applyCommands(api: StudioApi, dispatch: Dispatch<Action>, cmds: Cmd[], removed: readonly string[] = [], message: string | null = null, opts: ApplyOptions = {}): Promise<boolean> {
   const toast = (text: string) => dispatch({ type: "TOAST", message: text, kind: "info" });
   if (cmds.length === 0) {
     if (message) toast(message);
@@ -88,7 +99,7 @@ export async function applyCommands(api: StudioApi, dispatch: Dispatch<Action>, 
   const after = itemIds(fresh);
   const gone = new Set(removed);
   const keep = opts.keep === false ? [] : previous.filter((id) => !gone.has(id) && (after.has(id) || !!fresh?.parts.some((p) => p.ref === id)));
-  const created = [...after].filter((id) => !before.has(id));
+  const created = opts.selectCreated === false ? [] : [...after].filter((id) => !before.has(id));
   dispatch({ type: "SET_SELECTION", refs: [...keep, ...created] });
   if (message) toast(message);
   return true;

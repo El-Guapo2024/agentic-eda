@@ -162,10 +162,7 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
     "pcbnew.InteractiveSelection.FilterSelection",
     pcbOnly(() => {
       if (!board) return;
-      if (state.selection.size === 0) {
-        toast("Select items first, then filter the selection.");
-        return;
-      }
+      // No guard: the dialog opens on any selection, an empty one too (`filterSelection` re-selects from a copy of `m_selection`).
       openSweepDialog({
         kind: "filter_selection",
         options: last.filterOptions,
@@ -180,17 +177,19 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   );
 
   // PCB_SELECTION_TOOL::unrouteSelected: delete the tracks/vias connected to the selected footprints' pads and tracks (up to the next pad).
+  // `ClearSelection( true )`, `commit.Push( _( "Unroute Selected" ) )` (an empty commit makes no undo step and says nothing), then the
+  // footprints of the original selection are selected again.
   m.set(
     "pcbnew.InteractiveSelection.unrouteSelected",
     pcbOnly(() => {
-      if (!board || state.selection.size === 0) return;
+      if (!board) return;
       const r = unrouteSelected(board, [...state.selection]);
+      dispatch({ type: "SET_SELECTION", refs: [] });
       if (r.trackIds.length === 0 && r.viaIds.length === 0) {
-        toast("Nothing to unroute: no tracks are connected to the selection.");
+        dispatch({ type: "SET_SELECTION", refs: r.reselect });
         return;
       }
-      dispatch({ type: "CLEAR_SELECTION" });
-      void api.cmd({ op: "commit_route", remove_track_ids: r.trackIds, remove_via_ids: r.viaIds }).then((ok) => ok && dispatch({ type: "SET_SELECTION", refs: r.reselect }));
+      void api.cmd({ op: "commit_route", remove_track_ids: r.trackIds, remove_via_ids: r.viaIds }).then(() => dispatch({ type: "SET_SELECTION", refs: r.reselect }));
     })
   );
 
@@ -200,20 +199,24 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   const mirror = (direction: FlipDirection) =>
     pcbOnly(() => {
       if (!board) return;
-      const ids = requestFiltered((id) => {
-        const k = itemKind(board, id);
-        return k === "track" || k === "via" || k === "zone" || k === "shape" || k === "text" || k === "group" || k === "field" || k === "point" || k === "textbox";
-      });
+      // `if( isRouterActive() ) { wxBell(); return 0; }`
+      if (state.drawState?.kind === "route" || state.drawState?.kind === "diffpair") return;
+      const hover = state.selection.size === 0;
+      // The client filter drops markers and locked items only (`FilterCollectorForMarkers`, `..ForLockedItems`): a footprint stays in the selection
+      // and counts for the reference point, though `MirrorableItems` skips it.
+      const ids = requestFiltered(() => true);
       // `FilterCollectorForLockedItems`: an item that is locked, in a locked group, or a group with a locked item in it, is left out -- then its members.
       const free = ids.filter((id) => !isLocked(board, id));
+      if (free.length === 0) return;
       const items = mirrorableIds(board, free).filter((id) => !lockedIds.has(id) && !isLocked(board, id));
-      if (items.length === 0) return;
       let centre = mirrorReferencePoint(board, free);
       if (!centre) return;
       // `updateModificationPoint`: several items mirror about the centre of the selection moved to the best snap anchor (anchors, else the grid).
-      if (ids.length > 1) centre = modificationSnapFor(state)(centre);
+      if (free.length > 1) centre = modificationSnapFor(state)(centre);
+      if (items.length === 0) return;
       const plan = planMirror(board, items, centre, direction);
-      void applyEdit(plan.cmds, plan.removed);
+      // `if( selection.IsHover() ) RunAction( ACTIONS::selectionClear )`
+      void applyEdit(plan.cmds, plan.removed, null, hover ? { keep: false, selectCreated: false } : {});
     });
   m.set("pcbnew.InteractiveEdit.mirrorHoriontally", mirror("leftRight"));
   m.set("pcbnew.InteractiveEdit.mirrorVertically", mirror("topBottom"));
@@ -384,13 +387,18 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         const s = api.shapeById(id);
         return !!s && (s.kind === "polygon" || s.kind === "rect" || s.kind === "circle");
       });
-      if (ids.length < 2) {
-        toast(`Select at least two polygons, rectangles or circles to ${operation} them.`);
+      // The routine runs on whatever is left, one shape too (`boolean_shapes` puts it back as a polygon and notes the refusal); with nothing the
+      // info bar says `GetStatusMessage()`'s "Unable to merge the selected polygons." (no success).
+      if (ids.length === 0) {
+        toast(`Unable to ${operation} the selected polygons.`);
         return;
       }
+      // `if( item == last_item ) std::swap( items_to_process.back(), items_to_process.front() )`: the last-added item goes to the front and the
+      // one there takes its place.
       const order = [...ids];
-      const lastAdded = [...state.selection].pop();
-      if (lastAdded !== undefined && order[order.length - 1] === lastAdded) [order[0], order[order.length - 1]] = [order[order.length - 1]!, order[0]!];
+      const lastAdded = state.selection.size > 0 ? [...state.selection].pop() : ids[ids.length - 1];
+      const at = lastAdded === undefined ? -1 : order.indexOf(lastAdded);
+      if (at > 0) [order[0], order[at]] = [order[at]!, order[0]!];
       void applyEdit([{ op: "boolean_shapes", operation, ids: order }], order);
     });
   m.set("pcbnew.InteractiveEdit.mergePolygons", booleanAction("merge"));
@@ -409,11 +417,12 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       });
       const eb = editBoardOf(board);
       const tracks = ids.map((id) => eb.tracks.find((t) => t.id === id)).filter((t): t is EditTrack => !!t);
-      const segs = tracks.reduce((n, t) => n + (t.arc_mid ? 0 : Math.max(t.pts.length - 1, 0)), 0);
-      if (segs < 2) {
+      // `selection.Size() < 2` over every `PCB_TRACK` (arcs and vias count): the straight segments are counted only by the routine.
+      if (ids.length < 2) {
         toast("At least two straight track segments must be selected.");
         return;
       }
+      const segs = tracks.reduce((n, t) => n + (t.arc_mid ? 0 : Math.max(t.pts.length - 1, 0)), 0);
       openSweepDialog({
         kind: "unit_entry",
         title: "Fillet Tracks",
@@ -422,6 +431,10 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
         allowZero: false,
         onOk: (radiusNm) => {
           last.filletTracksRadiusNm = radiusNm;
+          if (segs < 2) {
+            toast("Unable to fillet the selected track segments.");
+            return;
+          }
           const res = filletTracks(eb, tracks, radiusNm);
           if (!res.ok || !res.cmd) {
             if (res.message) toast(res.message);
