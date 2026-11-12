@@ -2625,6 +2625,8 @@ fn slow_a_directive_labels_and_a_rule_areas_net_class_is_read_by_kicad_cli_as_ou
         return;
     }
     directive_and_rule_area_classes(true);
+}
+
 // ---------------------------------------------------------------------------------------- ERC exclusions across sheets
 
 /// UI-LEFT-2 BB2 (slow): on a design of two sheets, an exclusion of each finding whose marker the studio writes -- the name checks between the root and the child
