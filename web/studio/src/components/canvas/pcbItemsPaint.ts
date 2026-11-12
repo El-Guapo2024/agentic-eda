@@ -174,8 +174,12 @@ export function drawPcbItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
   drawTextBoxes(ctx, view, board, opts);
   drawBarcodes(ctx, view, board, opts);
   drawPoints(ctx, view, board, opts);
-  // the tool's rubber band is the overlay's (`LAYER_GP_OVERLAY`), drawn once outside the layer passes
-  if (opts.galPass) return;
+  // the tool's rubber band is the overlay's (`LAYER_GP_OVERLAY`): `paintBoard` draws it once, over every layer (`drawPcbToolPreviews`)
+  if (!opts.galPass) drawPcbToolPreviews(ctx, view, opts);
+}
+
+/** The rubber band of the tool in progress (the image in the hand, the inductor's rectangle, a grid item, a box): `LAYER_GP_OVERLAY`, over every layer. */
+export function drawPcbToolPreviews(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: PaintOptions): void {
   const cursor = opts.snappedCursor ?? (opts.cursorNm ? ([opts.cursorNm.x, opts.cursorNm.y] as const) : null);
   // The image in the hand follows the cursor, centred on it, at the alpha it will have.
   if (toolPreview?.kind === "image" && cursor && !opts.movePreview) {

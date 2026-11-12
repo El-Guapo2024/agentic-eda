@@ -52,7 +52,7 @@ import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
 import { drawFootprintItems } from "./fpBoardItemsPaint";
 import { isAnyFill } from "../../kicad-port/shapeFill";
-import { drawPcbItems, drawPoints, drawRefImages } from "./pcbItemsPaint";
+import { drawPcbItems, drawPcbToolPreviews, drawPoints, drawRefImages } from "./pcbItemsPaint";
 import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
 import { drawViaStitches } from "./viaStitchPaint";
 import { viaMaxDiameter, viaWidthOn } from "../../kicad-port/viaPadstack";
@@ -2064,6 +2064,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   }
   if (opts.auxOrigin) drawAuxOrigin(ctx, view, opts.auxOrigin);
   drawGridOrigin(ctx, view, opts.gridOrigin, layerColor("background"));
+  // The tools' rubber bands of pcbItemsPaint.ts (the image in the hand ..), on `LAYER_GP_OVERLAY` over every layer (UI-LEFT-2 PP3: the layer passes leave them out).
+  drawPcbToolPreviews(ctx, view, opts);
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, board, opts, [-view.x / view.scale, -view.y / view.scale, (widthPx - view.x) / view.scale, (heightPx - view.y) / view.scale]);
   if (opts.activeTool === "tune" && !opts.drawState && opts.tuneHover) drawTuneHover(ctx, view, opts.tuneHover, opts.units);
