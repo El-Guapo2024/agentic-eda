@@ -102,6 +102,9 @@ export interface HookState {
   moving: { refs: string[]; dx: number; dy: number; turns: number; flipped: boolean; frameDeg: number | null; ops: number } | null;
   /** The items the clarification menu's row under the pointer brightens. */
   menuHighlight: string[];
+  /** The ratsnest the board canvas draws from (`GET /api/ratsnest` as the store last received it): each line's two ends (`REF.PAD`) and its net, and whether the
+   *  ratsnest layer is shown; null off the board tab or before the first fetch. */
+  ratsnest: { shown: boolean; edges: { from: string | null; to: string | null; net: string }[] } | null;
 }
 
 export interface EdaTestHook {
@@ -290,6 +293,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         placeFootprint: placeFootprintStage(),
         moving: studio.movePreview ? { refs: [...studio.movePreview.refs], dx: studio.movePreview.dxNm, dy: studio.movePreview.dyNm, turns: studio.movePreview.rotateQuarterTurns ?? 0, flipped: !!studio.movePreview.flipped, frameDeg: studio.movePreview.frameDeg ?? null, ops: studio.movePreview.ops?.length ?? 0 } : null,
         menuHighlight: [...(getCommonTool().menuHighlight ?? [])],
+        ratsnest: studio.tab === "pcb" && studio.ratsnest ? { shown: studio.showRatsnest, edges: studio.ratsnest.edges.map((e) => ({ from: e.from_id ?? null, to: e.to_id ?? null, net: e.net })) } : null,
       };
     },
 
