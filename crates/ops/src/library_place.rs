@@ -138,14 +138,50 @@ impl Board<'_> {
         if let (Some(lib), Some(target)) = (lib, target) {
             self.put_library_record(&reference, name, &lib, &target);
         }
+        self.apply_board_defaults_to_items(&reference);
         Ok(())
+    }
+
+    /// The rest of `FOOTPRINT::ApplyDefaultSettings` (KiCad 25ec2335), on the footprint's own items the board keeps (`FootprintExtra::items`, put there by
+    /// `put_library_record`): its text boxes with "Apply board defaults to footprint text" (`PCB_TEXTBOX_T`), its dimensions with "... footprint dimensions"
+    /// (`PCB_DIMENSION_BASE::StyleFromSettings`: the text and line of the layer's class and the board's dimension settings) and its barcodes with "... footprint
+    /// barcodes" (`PCB_BARCODE::StyleFromSettings`: the layer's text height). UI-LEFT-2 BB8. A footprint put down is on the front, so each item's layer is the
+    /// board's.
+    fn apply_board_defaults_to_items(&mut self, reference: &str) {
+        let f = self.model.board.formatting.clone();
+        if !(f.apply_to_fp_text || f.apply_to_fp_dimensions || f.apply_to_fp_barcodes) {
+            return;
+        }
+        let defaults = self.model.board.text_graphics;
+        let dr = self.drawings_mut();
+        let dim_style = dr.dimension_settings;
+        let Some(extra) = dr.footprint_extras.iter_mut().find(|x| x.id == reference) else { return };
+        let items = &mut extra.items;
+        if f.apply_to_fp_text {
+            for t in &mut items.text_boxes {
+                let layer = t.layer.clone();
+                crate::pcb_global_edit::style_text_box(t, &defaults, &layer);
+            }
+        }
+        if f.apply_to_fp_dimensions {
+            for d in &mut items.dimensions {
+                let layer = d.layer.clone();
+                crate::pcb_global_edit::style_dimension(d, &defaults, &dim_style, &layer, true);
+            }
+        }
+        if f.apply_to_fp_barcodes {
+            for b in &mut items.barcodes {
+                let layer = b.layer.clone();
+                crate::pcb_global_edit::style_barcode(b, &defaults, &layer);
+            }
+        }
     }
 
     /// `FOOTPRINT::ApplyDefaultSettings`, which KiCad calls for a footprint it puts on the board: with Text & Graphics > Formatting's boxes ticked, the footprint's fields, its text
     /// and its non-copper shapes take what Board Setup gives their layers' classes (`StyleFromSettings`: the text's size, thickness, slant and upright, mirrored on a back layer; the
     /// shape's line width). The fields are the footprint's Reference and Value, laid out as an unedited footprint lays them out but with the board's text; the text and the shapes are
-    /// the ones of the footprint's own copy (`BoardPart::definition`), a footprint the model already knows keeps the art of its library. Library footprints here hold no dimensions or
-    /// barcodes, so those two boxes have nothing to apply to.
+    /// the ones of the footprint's own copy (`BoardPart::definition`), a footprint the model already knows keeps the art of its library. Its text boxes, dimensions and barcodes are
+    /// styled once the board holds them ([`Self::apply_board_defaults_to_items`]).
     fn apply_board_defaults(&mut self, reference: &str, footprint: &str) {
         use eda_model::fp_edit::{default_reference_layout, default_value_layout, FieldLayout, FootprintEdit};
         let f = self.model.board.formatting.clone();
@@ -360,6 +396,35 @@ mod tests {
         let def = dr.board_parts[0].definition.as_ref().unwrap();
         assert_eq!((width_on(def, "F.SilkS"), width_on(def, "F.Fab"), width_on(def, "F.CrtYd")), (Some(mm(0.18)), Some(mm(0.09)), Some(mm(0.05))), "each shape by its layer's class; the courtyard's 0.05 mm is the Courtyard class's default");
         assert_eq!((def.texts[0].size_nm, def.texts[0].stroke_width), (mm(0.8), mm(0.15)));
+    }
+
+    /// KiCad 25ec2335 `FOOTPRINT::ApplyDefaultSettings`' dimension and barcode boxes (UI-LEFT-2 BB8): a footprint put down with them ticked has its own dimension
+    /// styled from the board (`PCB_DIMENSION_BASE::StyleFromSettings`: its layer's text and line, the board's dimension settings) and its barcode's text at its
+    /// layer's height (`PCB_BARCODE::StyleFromSettings`); unticked, both stay as the library has them.
+    #[test]
+    fn a_footprints_dimensions_and_barcodes_take_the_boards_defaults_when_formatting_says_so() {
+        fn place(model: &ConstraintModel) -> (eda_model::ir::Dimension, eda_model::barcode::Barcode) {
+            let mut b = board(model);
+            let mut def = hole();
+            def.items.dimensions.push(crate::pcb_transform_tests::dimension("d1", eda_model::ir::DimensionKind::Aligned { height: mm(1.0) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(2.0), y: Nm::ZERO }));
+            def.items.barcodes.push(eda_model::barcode::Barcode { id: "b1".into(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, angle: 0, layer: "F.SilkS".into(), width_nm: mm(2.0), height_nm: mm(2.0), text: "X".into(), text_height_nm: mm(0.5), kind: Default::default(), ecc: Default::default(), show_text: true, knockout: false, margin_x_nm: Nm::ZERO, margin_y_nm: Nm::ZERO });
+            b.apply(&Cmd::PlaceFootprint { footprint: "MountingHole:MountingHole_3.2mm_M3".into(), at: Point { x: mm(10.0), y: mm(10.0) }, reference: String::new(), value: String::new(), definition: Some(def) }).unwrap();
+            let extra = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "H1").expect("H1's record").clone();
+            (extra.items.dimensions[0].clone(), extra.items.barcodes[0].clone())
+        }
+        let mut model = ConstraintModel::default();
+        model.board.text_graphics.others.text_height_nm = mm(1.7);
+        model.board.text_graphics.others.text_width_nm = mm(1.7);
+        model.board.text_graphics.others.line_width_nm = mm(0.11);
+        model.board.text_graphics.silk.text_height_nm = mm(1.3);
+        model.board.text_graphics.silk.text_width_nm = mm(1.3);
+        let (d, bc) = place(&model);
+        assert_eq!((d.text_size_nm, d.stroke_width, d.precision, bc.text_height_nm), (mm(1.0), mm(0.15), 2, mm(0.5)), "nothing ticked: the library's");
+        model.board.formatting = eda_model::setup_pages::FormattingSettings { apply_to_fp_dimensions: true, apply_to_fp_barcodes: true, ..Default::default() };
+        let (d, bc) = place(&model);
+        let settings = eda_model::ir::DimensionSettings::default();
+        assert_eq!((d.text_size_nm, d.stroke_width, d.precision, d.units), (mm(1.7), mm(0.11), settings.precision, settings.units), "the Dwgs.User class and the board's dimension settings");
+        assert_eq!(bc.text_height_nm, mm(1.3), "the silkscreen class's text height");
     }
 
     #[test]

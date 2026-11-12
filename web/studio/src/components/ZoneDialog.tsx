@@ -32,7 +32,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Cmd, FillMode, IslandRemovalMode, PadConnection, PlacementArea, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { stickySettings, ZONE_SETTINGS_KEEPOUTS, zoneDefaultsCmd } from "../kicad-port/pcbDrawZone";
+import { stickySettings, ZONE_SETTINGS_KEEPOUTS } from "../kicad-port/pcbDrawZone";
 import { nmFrom, nmTo } from "../state/units";
 import { fetchPlacementSources } from "../api/multichannelClient";
 import { chooseMode, NO_CHOICES, placementFormOf, placementOf, placementOptions, placementSelection, type PlacementChoices, type PlacementForm } from "../kicad-port/multichannel";
@@ -215,9 +215,9 @@ export function ZoneDialog() {
       if (dupZone) return { net: dupZone.net, layers: [...zoneLayers(dupZone)], name: dupZone.name ?? "", locked: !!lockedIds?.includes(dupZone.id), settings: { ...dupZone } };
       // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
       // a new rule area keeps out what `ZONE_SETTINGS::ZONE_SETTINGS()` does (tracks, vias, pads)
-      // `GetDefaultZoneSettings()`: what Zone Properties was last OK'd with (UI-LEFT-2 PP10)
+      // `GetDefaultZoneSettings()`: Board Setup > Zones' (KiCad 25ec2335); "A new zone starts unnamed, do not inherit the last drawn zone's name (issue 23131)"
       const sticky = state.board?.drawings?.zone_defaults;
-      const fresh: ZoneFormInit = { net: null, layers: [activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")], name: state.nextZoneIsRuleArea ? "" : (sticky?.name ?? ""), locked: false, settings: { ...DEFAULT_FORM_SETTINGS, ...stickySettings(sticky), ...(state.nextZoneIsRuleArea && !sticky?.is_rule_area ? ZONE_SETTINGS_KEEPOUTS : {}), is_rule_area: state.nextZoneIsRuleArea } };
+      const fresh: ZoneFormInit = { net: null, layers: [activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")], name: "", locked: false, settings: { ...DEFAULT_FORM_SETTINGS, ...stickySettings(sticky), ...(state.nextZoneIsRuleArea && !sticky?.is_rule_area ? ZONE_SETTINGS_KEEPOUTS : {}), is_rule_area: state.nextZoneIsRuleArea } };
       dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
       if (convert) fresh.conv = { strategy: convert.strategy, gapNm: convert.gapNm, deleteOriginals: convert.deleteOriginals };
       return fresh;
@@ -254,8 +254,7 @@ export function ZoneDialog() {
           dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts: [create.at], settings: picked } });
         } else if (draw?.kind === "zone") {
           dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, settings: picked } });
-          // Properties during the draw is `Edit_Zone_Params`, whose OK makes these the board's defaults (`SetDefaultZoneSettings`, UI-LEFT-2 PP10)
-          void api.cmd(zoneDefaultsCmd(form, layers, settings.is_rule_area ? "" : name));
+          // (KiCad 25ec2335's `Edit_Zone_Params` no longer makes these the board's defaults: Board Setup > Zones does, UI-LEFT-2 BB4)
         }
         close();
         return;
@@ -264,8 +263,7 @@ export function ZoneDialog() {
         const cmds: Cmd[] = [{ op: "edit_zone", ...form, id: editZone.id, net: effectiveNet, layer: firstLayer, layers }];
         if ((editZone.name ?? "") !== name && !settings.is_rule_area) cmds.push({ op: "set_zone_name", id: editZone.id, name });
         if (!!lockedIds?.includes(editZone.id) !== locked) cmds.push({ op: "set_locked", ids: [editZone.id], locked });
-        // `Edit_Zone_Params`: `SetDefaultZoneSettings( zoneInfo )` -- the next new zone opens on these (UI-LEFT-2 PP10), in the same step
-        cmds.push(zoneDefaultsCmd(form, layers, settings.is_rule_area ? "" : name));
+        // (KiCad 25ec2335's `Edit_Zone_Params` starts from `GetDefaultZoneSettings()` and no longer sets them: Board Setup > Zones does, UI-LEFT-2 BB4)
         const ok = cmds.length === 1 ? await api.cmd(cmds[0]!) : await api.cmdBatch(cmds);
         if (ok) close();
       } else if (addOutline) {

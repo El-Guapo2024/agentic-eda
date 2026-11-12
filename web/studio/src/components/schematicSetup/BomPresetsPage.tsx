@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchSchSetup } from "../../api/client";
 import type { SchSetupReply } from "../../api/types";
 import { useStudioState } from "../../state/store";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "../boardSetup/fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSchSetupImport } from "../boardSetup/fields";
 
 interface Draft {
   bom: string[];
@@ -36,6 +36,8 @@ export function BomPresetsPage({ hidden, onDirty }: PageProps) {
   }, [load, state.version]);
   const source = useMemo<Draft | undefined>(() => (info ? { bom: info.bom_presets, fmt: info.bom_fmt_presets } : undefined), [info]);
   const page = usePageDraft<Draft>(source);
+  // "Import Settings from Another Project..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSchSetupImport(["bom_presets", "bom_fmt_presets"], (s, o) => (page.draft ? { bom: o.has("bom_presets") ? s.setup.bom_presets : page.draft.bom, fmt: o.has("bom_fmt_presets") ? s.setup.bom_fmt_presets : page.draft.fmt } : undefined), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const d = page.draft;

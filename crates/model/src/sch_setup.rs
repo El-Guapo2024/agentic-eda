@@ -365,12 +365,13 @@ impl NetClassSchematic {
         own.map_or(d.clone(), |o| o.or(&d))
     }
 
-    /// The panel's checks of these columns: a width that is set is larger than zero (`GRID_CELL_MARK_AS_NULLABLE` reads a number; the nullable editor
-    /// allows none for a class other than Default), a line style of the five, a colour as the file writes one.
+    /// The panel's checks of these columns: a width that is set is not negative (`GRID_CELL_MARK_AS_NULLABLE` reads a number and KiCad takes a 0 as typed,
+    /// UI-LEFT-2 BB8; a negative one is the studio's guard; the nullable editor allows none for a class other than Default), a line style of the five, a
+    /// colour as the file writes one.
     pub fn validate(&self) -> Result<(), String> {
         for (what, v) in [("wire width", self.wire_width), ("bus width", self.bus_width)] {
-            if v.is_some_and(|v| v <= Nm::ZERO) {
-                return Err(format!("the {what} must be larger than zero"));
+            if v.is_some_and(|v| v < Nm::ZERO) {
+                return Err(format!("the {what} cannot be negative"));
             }
         }
         if self.line_style.is_some_and(|s| !(0..=4).contains(&s)) {
@@ -506,7 +507,8 @@ mod tests {
         let own = NetClassSchematic { wire_width: Some(Nm::new(254_000)), ..Default::default() };
         assert_eq!(NetClassSchematic::default_class(Some(&own)).wire_width, Some(Nm::new(254_000)));
         assert!(NetClassSchematic { line_style: Some(5), ..Default::default() }.validate().is_err());
-        assert!(NetClassSchematic { wire_width: Some(Nm::ZERO), ..Default::default() }.validate().is_err());
+        assert!(NetClassSchematic { wire_width: Some(Nm::ZERO), ..Default::default() }.validate().is_ok(), "KiCad takes a 0 as typed");
+        assert!(NetClassSchematic { wire_width: Some(Nm::new(-1)), ..Default::default() }.validate().is_err());
     }
 
     #[test]

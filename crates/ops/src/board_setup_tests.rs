@@ -86,6 +86,7 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
         default: NetClass { name: "Default".into(), nets: vec![], track_width: Some(mm(0.25)), clearance: Some(mm(0.22)), via_diameter: Some(mm(0.7)), via_drill: Some(mm(0.35)), ..class("Default", &[], Nm::ZERO) },
         classes: vec![class("power", &["VBUS", "VBUS_*"], mm(0.3)), class("fast", &["SPI_?"], mm(0.15))],
         schematic: Default::default(),
+        pcb_colors: None,
     };
     b.apply(&Cmd::SetNetClasses { settings }).unwrap();
     let m = effective(&b, &base);
@@ -96,7 +97,7 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
     assert_eq!(m.board.clearance_of("SPI_33"), mm(0.22), "and no more: the whole name must match");
     assert_eq!(m.board.clearance_of("GND"), mm(0.22), "a net no pattern claims is in the Default class");
 
-    let dup = NetClassSettings { default: class("Default", &[], Nm::ZERO), classes: vec![class("a", &["X"], Nm::new(1)), class("a", &["Y"], Nm::new(1))], schematic: Default::default() };
+    let dup = NetClassSettings { default: class("Default", &[], Nm::ZERO), classes: vec![class("a", &["X"], Nm::new(1)), class("a", &["Y"], Nm::new(1))], schematic: Default::default(), pcb_colors: None };
     assert_eq!(b.apply(&Cmd::SetNetClasses { settings: dup }).unwrap_err()[0].check, "ops_bad_netclasses");
 }
 
@@ -106,7 +107,7 @@ fn net_classes_with_patterns_replace_the_boards_classes_and_the_defaults() {
 fn a_bus_pattern_is_stored_as_its_members() {
     let base = model();
     let mut b = Board::new(design(), &base, mm(0.1), mm(0.3));
-    let settings = NetClassSettings { default: class("Default", &[], Nm::ZERO), classes: vec![class("bus", &["D[0..3]", "D2", "{SDA SCL}", "USB_D[PM]"], mm(0.3))], schematic: Default::default() };
+    let settings = NetClassSettings { default: class("Default", &[], Nm::ZERO), classes: vec![class("bus", &["D[0..3]", "D2", "{SDA SCL}", "USB_D[PM]"], mm(0.3))], schematic: Default::default(), pcb_colors: None };
     b.apply(&Cmd::SetNetClasses { settings }).unwrap();
     let m = effective(&b, &base);
     assert_eq!(m.board.net_classes[0].nets, vec!["D0", "D1", "D2", "D3", "SDA", "SCL", "USB_D[PM]"]);
@@ -273,6 +274,12 @@ fn fewer_copper_layers_delete_what_is_on_the_layers_that_go_when_asked_to() {
     assert_eq!((board_setup::copper_layer_items(&d, "In1.Cu"), board_setup::copper_layer_items(&d, "In2.Cu")), (5, 4), "HasItemsOnLayer: a through via is on no layer of its own");
 
     let two = StackupSettings::new(2, mm(1.6));
+    // `!removedLayers.empty()`: what tells the board directory's step to clear the history (`ClearUndoRedoList`)
+    assert!(board_setup::deletes_items_on_removed_layers(&d, &set_stackup(&two, true)));
+    assert!(board_setup::deletes_items_on_removed_layers(&d, &Cmd::Batch { cmds: vec![set_stackup(&two, true)] }), "in a batch too");
+    assert!(!board_setup::deletes_items_on_removed_layers(&d, &set_stackup(&two, false)), "refused without the flag: nothing goes");
+    assert!(!board_setup::deletes_items_on_removed_layers(&d, &set_stackup(&StackupSettings::new(4, mm(1.6)), true)), "no layer goes");
+    assert!(!board_setup::deletes_items_on_removed_layers(&design(), &set_stackup(&two, true)), "nothing on the layers that go");
     let mut b = Board::new(d.clone(), &on_four, mm(0.1), mm(0.3));
     assert!(b.apply(&set_stackup(&two, false)).is_err(), "without the flag nothing is deleted");
     assert_eq!(serde_json::to_value(b.design()).unwrap(), serde_json::to_value(&d).unwrap());

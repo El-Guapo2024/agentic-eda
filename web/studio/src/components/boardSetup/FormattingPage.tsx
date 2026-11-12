@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
 import { DEFAULT_FORMATTING, formattingOf, formattingProblems, sameFormatting } from "../../kicad-port/setupPages";
 import type { FormattingSettings } from "../../api/types";
-import { Check, FieldRow, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { Check, FieldRow, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 const BOXES: ReadonlyArray<{ key: keyof FormattingSettings; label: string }> = [
   { key: "apply_to_fp_fields", label: "Apply board defaults to footprint fields" },
@@ -20,6 +20,8 @@ export function FormattingPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
   const stored = state.board?.board_rules?.formatting;
   const page = usePageDraft<FormattingSettings>(state.board?.board_rules && stored ? formattingOf(stored) : undefined);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("formatting", (b) => (b.board_rules?.formatting ? formattingOf(b.board_rules.formatting) : undefined), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;

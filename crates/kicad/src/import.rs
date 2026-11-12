@@ -923,7 +923,7 @@ pub fn merge_project_predefined_sizes(design: &mut Design, project_json: &str) {
 /// `board_design_settings.cpp:526-660`): the target kinds from `teardrop_options` (`td_onvia`, `td_onpthpad`, `td_onsmdpad`) and the round target's sizes
 /// from `teardrop_parameters` (`td_target_name` `td_round_shape`: `td_maxlen` and `td_maxheight` in millimetres, `td_length_ratio`, `td_height_ratio` and
 /// `td_width_to_size_filter_ratio`, and its curved edges, two segments and zone preference: `td_curve_segcount` above 0, `td_allow_use_two_tracks`,
-/// `td_on_pad_in_zone`). This port collapses KiCad's round and rectangle blocks into one (PARITY-pcb §15), so the `td_rect_shape` entry is not read; the
+/// `td_on_pad_in_zone`). The `td_rect_shape` entry is the rectangular-shape block (`TeardropSettings::rect_shape`, UI-LEFT-2 BB8); the
 /// `td_track_end` entry is the track-to-track block (`TeardropSettings::track_end`, its `td_enabled`; KiCad 25ec2335 `UpdateTeardrops` reads
 /// `GetParameters( TARGET_TRACK )->m_Enabled`). An array entry that is empty, not an object or (for the parameters) names no target is skipped, as
 /// KiCad's loader skips it; a key the entry does not have keeps what the design had. Absent `board.design_settings` or text that is not JSON is a no-op.
@@ -956,33 +956,19 @@ pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
         // `GetTeardropTargetTypeFromCanonicalName`: the round target's block feeds this port's collapsed one, the track end's the track-to-track block.
         match entry.get("td_target_name").and_then(|v| v.as_str()) {
             Some("td_round_shape") => {}
+            // `TARGET_RECT` (UI-LEFT-2 BB8): its own block, from `TEARDROP_PARAMETERS()` where the entry is silent
+            Some("td_rect_shape") => {
+                let mut p = t.rect_shape.unwrap_or_default();
+                read_td_block(entry, &mut p);
+                if let Some(v) = flag(entry, "td_on_pad_in_zone") {
+                    p.prefer_zone_connections = !v;
+                }
+                t.rect_shape = Some(p);
+                read = true;
+                continue;
+            }
             Some("td_track_end") => {
-                let p = &mut t.track_end;
-                if let Some(v) = flag(entry, "td_enabled") {
-                    p.enabled = v;
-                }
-                if let Some(v) = num("td_maxlen") {
-                    p.max_length = mm_to_nm(v);
-                }
-                if let Some(v) = num("td_maxheight") {
-                    p.max_width = mm_to_nm(v);
-                }
-                if let Some(v) = num("td_length_ratio") {
-                    p.best_length_ratio = v;
-                }
-                if let Some(v) = num("td_height_ratio") {
-                    p.best_width_ratio = v;
-                }
-                if let Some(v) = num("td_width_to_size_filter_ratio") {
-                    p.filter_ratio = v;
-                }
-                // `if( entry["td_curve_segcount"].get<int>() > 0 ) td_prm->m_CurvedEdges = true;`
-                if num("td_curve_segcount").is_some_and(|n| n > 0.0) {
-                    p.curved_edges = true;
-                }
-                if let Some(v) = flag(entry, "td_allow_use_two_tracks") {
-                    p.allow_two_segments = v;
-                }
+                read_td_block(entry, &mut t.track_end);
                 read = true;
                 continue;
             }
@@ -1023,6 +1009,127 @@ pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
     }
     if read {
         design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }).teardrop_settings = t;
+    }
+}
+
+/// One `teardrop_parameters` entry read into a block (`BOARD_DESIGN_SETTINGS`' `teardrop_parameters` loader): `td_enabled`, the lengths in millimetres, the
+/// ratios, curved edges when `td_curve_segcount` is above 0, two segments. A key the entry lacks keeps what the block had.
+fn read_td_block(entry: &serde_json::Value, p: &mut eda_model::teardrop_params::TeardropParams) {
+    let num = |key: &str| entry.get(key).and_then(|v| v.as_f64());
+    let flag = |key: &str| entry.get(key).and_then(|v| v.as_bool());
+    if let Some(v) = flag("td_enabled") {
+        p.enabled = v;
+    }
+    if let Some(v) = num("td_maxlen") {
+        p.max_length = mm_to_nm(v);
+    }
+    if let Some(v) = num("td_maxheight") {
+        p.max_width = mm_to_nm(v);
+    }
+    if let Some(v) = num("td_length_ratio") {
+        p.best_length_ratio = v;
+    }
+    if let Some(v) = num("td_height_ratio") {
+        p.best_width_ratio = v;
+    }
+    if let Some(v) = num("td_width_to_size_filter_ratio") {
+        p.filter_ratio = v;
+    }
+    // `if( entry["td_curve_segcount"].get<int>() > 0 ) td_prm->m_CurvedEdges = true;`
+    if num("td_curve_segcount").is_some_and(|n| n > 0.0) {
+        p.curved_edges = true;
+    }
+    if let Some(v) = flag("td_allow_use_two_tracks") {
+        p.allow_two_segments = v;
+    }
+}
+
+/// KiCad 25ec2335's Board Setup > Design Rules > Zones (`PANEL_SETUP_ZONES`, `BOARD_DESIGN_SETTINGS::GetDefaultZoneSettings`): the project's
+/// `defaults.zones.*` (`board_design_settings.cpp`' `PARAM_SCALED` / `PARAM_ENUM` / `PARAM_LAMBDA` entries) as a zone with no outline or net, what a new zone
+/// starts from (`ZONE_CREATE_HELPER::createNewZone`). A key the section lacks is KiCad's default (`aResetIfMissing`), an out-of-range number the default
+/// too; absent `defaults.zones`, or text that is not JSON, is `None`. UI-LEFT-2 BB4.
+pub fn project_zone_defaults(project_json: &str) -> Option<eda_model::ir::Zone> {
+    use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, Zone, ZoneBorderStyle, ZoneSmoothing};
+    let root: serde_json::Value = serde_json::from_str(project_json).ok()?;
+    let z = root.get("board")?.get("design_settings")?.get("defaults")?.get("zones")?.as_object()?;
+    let num = |k: &str| z.get(k).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
+    // `PARAM_SCALED` in mm with its range: a value outside it is the default
+    let mm_in = |k: &str, def: Nm, lo: f64, hi: f64| num(k).filter(|v| (lo..=hi).contains(v)).map(mm_to_nm).unwrap_or(def);
+    let mut zone = Zone { net: String::new(), layer: "F.Cu".into(), outline: vec![], ..Default::default() };
+    let d = Zone::default();
+    zone.clearance = mm_in("min_clearance", d.clearance, 0.0, 25.0);
+    zone.min_thickness = mm_in("min_thickness", d.min_thickness, 0.025, 25.0);
+    zone.fill_mode = match num("fill_mode").map(|v| v as i64) {
+        Some(1) => FillMode::HatchPattern,
+        _ => FillMode::Polygons,
+    };
+    zone.hatch_thickness = mm_in("hatch_thickness", d.hatch_thickness, 0.0, 25.0);
+    zone.hatch_gap = mm_in("hatch_gap", d.hatch_gap, 0.0, 25.0);
+    zone.hatch_orientation_mdeg = num("hatch_orientation").map(|deg| (deg * 1000.0).round() as eda_model::ir::Millideg).unwrap_or(0);
+    zone.hatch_smoothing_level = num("hatch_smoothing_level").filter(|v| (0.0..=3.0).contains(v)).map(|v| v as i32).unwrap_or(0);
+    zone.hatch_smoothing_value = num("hatch_smoothing_value").filter(|v| (0.0..=1.0).contains(v)).unwrap_or(0.1);
+    // `ZONE_BORDER_DISPLAY_STYLE`: NO_HATCH, DIAGONAL_FULL, DIAGONAL_EDGE, INVISIBLE_BORDER
+    zone.border_style = match num("border_display_style").map(|v| v as i64) {
+        Some(0) => ZoneBorderStyle::None,
+        Some(1) => ZoneBorderStyle::Full,
+        _ => ZoneBorderStyle::Edge,
+    };
+    zone.border_hatch_pitch = mm_in("border_hatch_pitch", d.border_hatch_pitch, 0.1, 2.0);
+    zone.thermal_gap = mm_in("thermal_relief_gap", d.thermal_gap, 0.0, 25.0);
+    zone.thermal_spoke_width = mm_in("thermal_relief_spoke_width", d.thermal_spoke_width, 0.0, 25.0);
+    // `ZONE_CONNECTION`: NONE, THERMAL, FULL, THT_THERMAL
+    zone.pad_connection = match num("pad_connection").map(|v| v as i64) {
+        Some(0) => PadConnection::None,
+        Some(2) => PadConnection::Full,
+        Some(3) => PadConnection::ThtThermal,
+        _ => PadConnection::Thermal,
+    };
+    // `CORNER_SMOOTHING`: NO_SMOOTHING, CHAMFER, FILLET
+    zone.smoothing = match num("corner_smoothing").map(|v| v as i64) {
+        Some(1) => ZoneSmoothing::Chamfer,
+        Some(2) => ZoneSmoothing::Fillet,
+        _ => ZoneSmoothing::None,
+    };
+    zone.corner_radius = num("corner_radius").map(mm_to_nm).unwrap_or(Nm::ZERO);
+    zone.island_removal_mode = match num("remove_islands").map(|v| v as i64) {
+        Some(1) => IslandRemovalMode::Never,
+        Some(2) => IslandRemovalMode::Area,
+        _ => IslandRemovalMode::Always,
+    };
+    // mm² -> nm²
+    zone.min_island_area = (num("min_island_area").unwrap_or(10.0) * 1e12) as i64;
+    Some(zone)
+}
+
+/// The zone defaults a design keeps (`DrawingsSection::zone_defaults`) as the project's `defaults.zones` (the writer's side of [`project_zone_defaults`]).
+pub fn project_zones_json(z: &eda_model::ir::Zone) -> serde_json::Value {
+    use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, ZoneBorderStyle, ZoneSmoothing};
+    let mm = eda_model::units::to_mm;
+    serde_json::json!({
+        "min_clearance": mm(z.clearance),
+        "min_thickness": mm(z.min_thickness),
+        "fill_mode": match z.fill_mode { FillMode::Polygons => 0, FillMode::HatchPattern => 1 },
+        "hatch_thickness": mm(z.hatch_thickness),
+        "hatch_gap": mm(z.hatch_gap),
+        "hatch_orientation": z.hatch_orientation_mdeg as f64 / 1000.0,
+        "hatch_smoothing_level": z.hatch_smoothing_level,
+        "hatch_smoothing_value": z.hatch_smoothing_value,
+        "border_display_style": match z.border_style { ZoneBorderStyle::None => 0, ZoneBorderStyle::Full => 1, ZoneBorderStyle::Edge => 2 },
+        "border_hatch_pitch": mm(z.border_hatch_pitch),
+        "thermal_relief_gap": mm(z.thermal_gap),
+        "thermal_relief_spoke_width": mm(z.thermal_spoke_width),
+        "pad_connection": match z.pad_connection { PadConnection::None => 0, PadConnection::Thermal => 1, PadConnection::Full => 2, PadConnection::ThtThermal => 3 },
+        "corner_smoothing": match z.smoothing { ZoneSmoothing::None => 0, ZoneSmoothing::Chamfer => 1, ZoneSmoothing::Fillet => 2 },
+        "corner_radius": mm(z.corner_radius),
+        "remove_islands": match z.island_removal_mode { IslandRemovalMode::Always => 0, IslandRemovalMode::Never => 1, IslandRemovalMode::Area => 2 },
+        "min_island_area": z.min_island_area as f64 / 1e12,
+    })
+}
+
+/// [`project_zone_defaults`] into the design (`DrawingsSection::zone_defaults`), when the project has the section.
+pub fn merge_project_zone_defaults(design: &mut Design, project_json: &str) {
+    if let Some(z) = project_zone_defaults(project_json) {
+        design.drawings.get_or_insert_with(Default::default).zone_defaults = Some(z);
     }
 }
 

@@ -87,6 +87,11 @@ pub struct NetClassSettings {
     /// `NET_SETTINGS` of the project; each sends the columns it does not show as it found them. Additive: a page sent without it sets none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub schematic: BTreeMap<String, crate::sch_setup::NetClassSchematic>,
+    /// The PCB Color column (`GRID_PCB_COLOR`, `NETCLASS::GetPcbColor`): each class's colour on the board, by name, none for the Default class or a class that has
+    /// none (transparent). Part of the table, so it goes with the page's Apply in its undo step (UI-LEFT-2 BB8). `None` (a page from before it was sent): the
+    /// colours the Appearance panel kept in `appearance.json` stay in force. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pcb_colors: Option<BTreeMap<String, String>>,
 }
 
 /// Design Rules > Constraints: the board-wide minimums DRC holds every item to
@@ -619,6 +624,9 @@ impl RulesOverlay {
             b.default_class = Some(nc.default.clone());
             b.net_classes = nc.classes.clone();
             b.net_class_schematic = nc.schematic.iter().filter(|(_, l)| !l.is_empty()).map(|(k, v)| (k.clone(), v.clone())).collect();
+            if let Some(colors) = &nc.pcb_colors {
+                b.net_class_pcb_colors = Some(colors.iter().filter(|(k, v)| k.as_str() != "Default" && !v.trim().is_empty()).map(|(k, v)| (k.clone(), v.clone())).collect());
+            }
         }
         if let Some(c) = &self.constraints {
             c.write_to(&mut model.board);
@@ -693,8 +701,9 @@ pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
         }
         for (what, v) in [("track width", c.track_width), ("clearance", c.clearance), ("via diameter", c.via_diameter), ("via drill", c.via_drill), ("microvia diameter", c.microvia_diameter), ("microvia drill", c.microvia_drill), ("differential pair width", c.diff_pair_width), ("differential pair gap", c.diff_pair_gap), ("differential pair via gap", c.diff_pair_via_gap)] {
             if let Some(v) = v {
-                if v < Nm::ZERO || (v == Nm::ZERO && what != "clearance" && what != "differential pair gap" && what != "differential pair via gap") {
-                    return bad(&c.name, format!("{what} is {v} nm; sizes cannot be negative, and only a clearance can be zero"));
+                // (a 0 is taken as typed, as `PANEL_SETUP_NETCLASSES::Validate` takes it: UI-LEFT-2 BB8)
+                if v < Nm::ZERO {
+                    return bad(&c.name, format!("{what} is {v} nm; sizes cannot be negative"));
                 }
             }
         }
@@ -737,7 +746,7 @@ pub fn net_class_settings_of(b: &BoardRules) -> NetClassSettings {
     default.clearance = Some(b.clearance);
     default.via_diameter = Some(b.via_diameter);
     default.via_drill = Some(b.via_drill);
-    NetClassSettings { default, classes: b.net_classes.clone(), schematic: b.net_class_schematic.clone() }
+    NetClassSettings { default, classes: b.net_classes.clone(), schematic: b.net_class_schematic.clone(), pcb_colors: b.net_class_pcb_colors.clone() }
 }
 
 #[cfg(test)]
@@ -816,7 +825,7 @@ mod tests {
 
         let overlay = RulesOverlay {
             constraints: Some(Constraints { min_clearance_nm: Nm::new(300_000), ..Constraints::of(&before) }),
-            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(Nm::new(250_000)), clearance: Some(Nm::new(180_000)), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])], schematic: Default::default() }),
+            net_classes: Some(NetClassSettings { default: NetClass { track_width: Some(Nm::new(250_000)), clearance: Some(Nm::new(180_000)), ..net_class_settings_of(&before).default }, classes: vec![class("signal", &["SPI_*", "I2C_?"])], schematic: Default::default(), pcb_colors: None }),
             ..Default::default()
         };
         overlay.apply(&mut model);
@@ -875,7 +884,7 @@ mod tests {
 
     #[test]
     fn net_class_pages_refuse_what_the_panel_refuses() {
-        let settings = |classes: Vec<NetClass>| NetClassSettings { default: NetClass { name: "Default".into(), nets: vec![], ..class("x", &[]) }, classes, schematic: Default::default() };
+        let settings = |classes: Vec<NetClass>| NetClassSettings { default: NetClass { name: "Default".into(), nets: vec![], ..class("x", &[]) }, classes, schematic: Default::default(), pcb_colors: None };
         assert!(validate_net_classes(&settings(vec![class("power", &["VBUS"]), class("signal", &["SPI_*"])])).is_ok());
         for (bad, why) in [
             (vec![class("a", &["X"]), class("a", &["Y"])], "duplicate"),

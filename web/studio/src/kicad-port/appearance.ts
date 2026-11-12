@@ -376,6 +376,14 @@ export type NetPalette = ReadonlyMap<string, Rgba>;
  * order for copper and `RATSNEST_VIEW_ITEM::ViewDraw`'s for the ratsnest. `classOf` names the class of a net ("Default" owns the nets no class
  * claims; it never has a colour -- "Default netclass can't have an override color").
  */
+/**
+ * The net classes' PCB colours in force (`NETCLASS::GetPcbColor`): the design's once Board Setup or the Appearance panel has set them there
+ * (`board_rules.net_class_pcb_colors`, one undoable `set_net_classes`: UI-LEFT-2 BB8), else the ones an older studio kept in `appearance.json`.
+ */
+export function classColorsInForce(a: Pick<AppearanceState, "netclassColors">, board: { board_rules?: { net_class_pcb_colors?: Record<string, string> | null } } | null | undefined): Record<string, string> {
+  return board?.board_rules?.net_class_pcb_colors ?? a.netclassColors;
+}
+
 export function netPalette(a: Pick<AppearanceState, "netColors" | "netclassColors">, nets: Iterable<string>, classOf: (net: string) => string): Map<string, Rgba> {
   const out = new Map<string, Rgba>();
   for (const net of nets) {

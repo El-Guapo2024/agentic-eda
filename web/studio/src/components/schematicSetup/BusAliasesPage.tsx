@@ -10,7 +10,7 @@ import { fetchSchSetup } from "../../api/client";
 import type { BusAliasDef, SchSetupReply } from "../../api/types";
 import { aliasNameError, busAliasIssue, busAliasesToSend, membersLabel, sortAliases } from "../../kicad-port/schSetup";
 import { useStudioState } from "../../state/store";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "../boardSetup/fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSchSetupImport } from "../boardSetup/fields";
 
 export function BusAliasesPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
@@ -35,6 +35,8 @@ export function BusAliasesPage({ hidden, onDirty }: PageProps) {
 
   const source = useMemo(() => (info ? sortAliases(info.bus_aliases) : undefined), [info]);
   const page = usePageDraft<BusAliasDef[]>(source);
+  // "Import Settings from Another Project..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSchSetupImport("bus_aliases", (s) => sortAliases(s.setup.bus_aliases), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const aliases = page.draft;

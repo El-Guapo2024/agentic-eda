@@ -496,6 +496,10 @@ pub struct BoardRules {
     /// them. Read from a project's `net_settings.classes[]`, written back to the derived project, and drawn on the sheet ([`Self::sch_look_of`]). Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub net_class_schematic: BTreeMap<String, sch_setup::NetClassSchematic>,
+    /// Each class's PCB colour (`NETCLASS::GetPcbColor`, the project's `net_settings.classes[].pcb_color`) once Board Setup's Net Classes page or the Appearance
+    /// panel set it in the design (`RulesOverlay::net_classes`' `pcb_colors`); `None` leaves the colours of `appearance.json` in force. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_class_pcb_colors: Option<BTreeMap<String, String>>,
 }
 
 fn is_zero_nm(v: &ir::Nm) -> bool {
@@ -1025,6 +1029,7 @@ impl Default for BoardRules {
             formatting: setup_pages::FormattingSettings::default(), hatch_offsets: Default::default(), tuning_patterns: setup_pages::TuningPatterns::default(), tuning_profiles: Default::default(),
             component_classes: Default::default(),
             net_class_schematic: BTreeMap::new(),
+            net_class_pcb_colors: None,
         }
     }
 }

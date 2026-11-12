@@ -9,14 +9,28 @@ import { ColorDialog, Eye, Swatch } from "./shared";
 import { NetDisplayOptions } from "./NetDisplayOptions";
 import { ContextMenu, type MenuEntry } from "../../canvas/ContextMenu";
 import { classRows, netclassMenu, netsOfClass } from "../../../kicad-port/appearanceNets";
-import { specifiedColor } from "../../../kicad-port/appearance";
+import { classColorsInForce, specifiedColor } from "../../../kicad-port/appearance";
+import { netClassSettingsOf } from "../../../kicad-port/boardSetupRules";
+import { useStudioApi } from "../../../state/store";
 
 export function NetClassesTab() {
   const { state, dispatch, nets, op } = useAppearanceView();
   const { highlight, select } = useNetActions();
   const [menu, setMenu] = useState<{ x: number; y: number; name: string; isDefault: boolean } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
-  const rows = classRows(nets, state.appearance.netclassColors, state.appearance.hiddenNetclasses);
+  const api = useStudioApi();
+  const colors = classColorsInForce(state.appearance, state.board);
+  const rows = classRows(nets, colors, state.appearance.hiddenNetclasses);
+  // A class's colour is the project's `NETCLASS::SetPcbColor`, held in the design with the rest of the table: one undoable `set_net_classes` (UI-LEFT-2 BB8), the
+  // Appearance panel's view of it following the board. A backend that does not report the classes keeps the panel's own copy.
+  const setClassColor = (name: string, color: string | null) => {
+    const rules = state.board?.board_rules;
+    if (!rules?.net_classes) return op({ op: "netclass_color", name, color });
+    const next = { ...colors };
+    if (color === null) delete next[name];
+    else next[name] = color;
+    void api.cmd({ op: "set_net_classes", settings: { ...netClassSettingsOf(rules), pcb_colors: next } });
+  };
   // `nc->GetSchematicColor()`: the class's wire colour of Schematic Setup > Net Classes (the project's one `NET_SETTINGS`); none, or `COLOR4D::UNSPECIFIED`, dims the entry
   const schematicColor = (name: string): string | null => {
     const css = state.board?.board_rules?.net_class_schematic?.[name]?.color ?? null;
@@ -34,12 +48,12 @@ export function NetClassesTab() {
             setEditing(name);
             break;
           case "clear_color":
-            op({ op: "netclass_color", name, color: null });
+            setClassColor(name, null);
             break;
           case "use_schematic_color": {
             // ID_USE_SCHEMATIC_NET_COLOR: `SetPcbColor( nc->GetSchematicColor() )`
             const css = schematicColor(name);
-            if (css) op({ op: "netclass_color", name, color: css });
+            if (css) setClassColor(name, css);
             break;
           }
           case "highlight":
@@ -114,10 +128,10 @@ export function NetClassesTab() {
       {editing !== null && (
         <ColorDialog
           title={`Net Class Color: ${editing}`}
-          initial={state.appearance.netclassColors[editing] ?? null}
+          initial={colors[editing] ?? null}
           onCancel={() => setEditing(null)}
           onPick={(css) => {
-            op({ op: "netclass_color", name: editing, color: css });
+            setClassColor(editing, css);
             setEditing(null);
           }}
         />

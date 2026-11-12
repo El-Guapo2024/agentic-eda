@@ -401,8 +401,8 @@
       const order = nav();
       const after = (a, b) => order.indexOf(a) >= 0 && order.indexOf(b) === order.indexOf(a) + 1;
       // KiCad 25ec2335's `DIALOG_BOARD_SETUP`: Drill Chart is the last page of Board Stackup, right after Solder Mask/Paste; 8303b2ad's Zone Hatch Offsets
-      // (25ec2335 moved it into Design Rules > Zones, which the studio has not) follows it, the last of the group as it was in 8303b2ad.
-      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Drill Chart") && after("Drill Chart", "Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
+      // is on Design Rules > Zones, after Pre-defined Sizes (UI-LEFT-2 BB4).
+      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Drill Chart") && after("Pre-defined Sizes", "Zones") && after("Zones", "Teardrops") && !order.includes("Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
       const stored = async () => (await state()).board_rules;
       const formattingBefore = JSON.stringify((await stored()).formatting);
       const dash = () => p.querySelector('input[aria-label="Dash length"]');
@@ -423,7 +423,9 @@
       check("Formatting: Apply stores the dash and gap lengths and the footprint boxes, and marks the page as set", savedFormatting === "Saved." && rules.formatting.dash_length_ratio === 8 && rules.formatting.gap_length_ratio === 2.5 && rules.formatting.apply_to_fp_fields === true && rules.formatting.apply_to_fp_shapes === true && rules.formatting.apply_to_fp_text === false && rules.overlay.includes("formatting"), JSON.stringify(rules.formatting));
 
       step("opening Zone Hatch Offsets");
-      p = await openPage("Zone Hatch Offsets");
+      // (KiCad 25ec2335: the hatch offsets panel is on the Zones page, under the default zone settings)
+      await openPage("Zones");
+      p = page("Zone Hatch Offsets");
       const layers = [...p.querySelectorAll("tbody tr[data-layer]")].map((tr) => tr.dataset.layer);
       check("Zone Hatch Offsets: a row for each copper layer, front to back", layers.join() === ((await state()).layers ?? ["F.Cu", "B.Cu"]).join(), layers.join());
       const hx = (layer) => p.querySelector(`input[aria-label="${layer} hatch offset X"]`);
@@ -548,7 +550,9 @@
       await press(p, "Add Netclass");
       await press(p, "Add Netclass");
       const names = [...p.querySelectorAll('input[aria-label$=" name"]')].filter((i) => /^Netclass \d+ name$/.test(i.getAttribute("aria-label")));
-      check("Add Netclass adds a class named like KiCad's", names.length === 2 && names[0].value === "Netclass 1" && names[1].value === "Netclass 2", names.map((i) => i.value).join());
+      // `OnAddNetclassClick`: `InsertRows()` -- a blank row at the top, its name cell focused; the Default class stays in the last row (`loadNetclasses`)
+      const lastRow = [...p.querySelectorAll("table.bs-grid")][0].querySelector("tbody tr:last-child");
+      check("Add Netclass puts a blank row at the top, as KiCad's does, and Default stays last", names.length === 2 && names[0].value === "" && names[1].value === "" && document.activeElement === names[0] && /Default/.test(lastRow?.textContent ?? ""), `${names.map((i) => JSON.stringify(i.value)).join()} last row: ${lastRow?.textContent}`);
       await setText(names[0], "pins");
       await setText(names[1], "leds");
       await setText(p.querySelector('input[aria-label="pins Clearance"]'), "0.3mm");
@@ -587,7 +591,7 @@
       check("Apply stores the classes in the order of the table with their patterns as typed", savedClasses === "Saved." && stored.map((c) => c.name).join() === "pins,leds" && JSON.stringify(stored[0].nets) === JSON.stringify([".*/PA[0-3]"]) && JSON.stringify(stored[1].nets) === JSON.stringify(["*/LED?", ".*/PA(1|7)"]) && stored[0].clearance === 300_000 && stored[1].clearance === 100_000, JSON.stringify(stored));
       step("moving a class");
       const rows = [...p.querySelectorAll("table.bs-grid")][0].querySelectorAll("tbody tr");
-      rows[1].click();
+      rows[0].click();
       await sleep(150);
       await press(p, "Down");
       const movedApply = await apply(p);

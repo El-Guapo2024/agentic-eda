@@ -34,7 +34,7 @@ import {
 } from "../../kicad-port/componentClasses";
 import { FootprintChooserDialog } from "../FootprintChooserDialog";
 import { useIconScheme } from "../../hooks/useColorScheme";
-import { Check, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { Check, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 /** One of KiCad's bitmaps (`KiBitmapBundle( BITMAPS::.. )`), in the colour scheme's set. */
 function Icon({ name }: { name: string }) {
@@ -55,6 +55,8 @@ export function ComponentClassesPage({ hidden, onDirty }: PageProps) {
   const rules = state.board?.board_rules;
   const known = rules !== undefined && rules.component_classes !== undefined;
   const page = usePageDraft<ComponentClassesDraft>(known ? draftOf(rules!.component_classes) : undefined);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("component_classes", (b) => (b.board_rules?.component_classes ? draftOf(b.board_rules.component_classes) : undefined), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;

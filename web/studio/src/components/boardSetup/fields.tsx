@@ -1,7 +1,7 @@
 // Small pieces the Board Setup pages share: a length field that reads units, the label/control/message row, the page frame with its Apply
 // button, and the draft a page edits until Apply (KiCad's panels edit a copy too and write it on OK).
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Cmd } from "../../api/types";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { BoardState, Cmd, ErcPinMapReply, ErcSeveritiesReply, SchFormattingReply, SchSetupReply } from "../../api/types";
 import { useStudioApi } from "../../state/store";
 import type { LengthUnit } from "../../state/units";
 import { lengthText, parseLength } from "../pcbDialogKit";
@@ -205,6 +205,11 @@ export function usePageDraft<T>(source: T | undefined) {
     },
     /** The page was applied: follow the board again. */
     markClean: () => setDirty(false),
+    /** `ImportSettingsFrom`: the page shows another board's settings, not applied yet (UI-LEFT-2 BB4). */
+    importDraft: (value: T) => {
+      setDraft(value);
+      setDirty(true);
+    },
     /** Back to what the board says. */
     revert: () => {
       setDraft(source);
@@ -239,4 +244,54 @@ export function usePageApply() {
       }
     },
   };
+}
+
+/**
+ * "Import Settings from Another Board..." (KiCad 25ec2335 `DIALOG_BOARD_SETUP::onAuxiliaryAction`, UI-LEFT-2 BB4): the other board's settings as `/api/state` shapes
+ * them (`POST /api/import_settings`), the import's options (`DIALOG_IMPORT_SETTINGS`' boxes) and a count that changes with each import.
+ */
+export interface SetupImport {
+  seq: number;
+  board: BoardState;
+  options: ReadonlySet<string>;
+  /** Schematic Setup's import (`POST /api/sch/import_settings`): the other project's pages, in the shapes of the endpoints they load from. */
+  sch?: SchImportParts;
+}
+
+/** What Schematic Setup's pages read of another project (`crates/cli/src/sch_import_settings_api.rs`). */
+export interface SchImportParts {
+  formatting: SchFormattingReply;
+  setup: SchSetupReply;
+  severities: ErcSeveritiesReply;
+  pin_map: ErcPinMapReply;
+}
+
+export const SetupImportContext = createContext<SetupImport | null>(null);
+
+/**
+ * A page's `ImportSettingsFrom`: when an import that ticks `option` arrives, `put` the page's draft as `derive` reads it from the other board (nothing when it
+ * reads nothing). The draft is then the page's unapplied edit, as KiCad's page shows the other board's values until OK.
+ */
+export function useSetupImport<T>(option: string, derive: (board: BoardState) => T | undefined, put: (value: T) => void) {
+  const imp = useContext(SetupImportContext);
+  useEffect(() => {
+    if (!imp || !imp.options.has(option)) return;
+    const value = derive(imp.board);
+    if (value !== undefined) put(value);
+    // only a new import (its `seq`) is acted on
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imp?.seq]);
+}
+
+/** [`useSetupImport`] for a Schematic Setup page: `derive` reads the other project's parts (and the import's options, for a page two boxes feed). */
+export function useSchSetupImport<T>(option: string | readonly string[], derive: (sch: SchImportParts, options: ReadonlySet<string>) => T | undefined, put: (value: T) => void) {
+  const imp = useContext(SetupImportContext);
+  useEffect(() => {
+    const wanted = typeof option === "string" ? [option] : option;
+    if (!imp?.sch || !wanted.some((o) => imp.options.has(o))) return;
+    const value = derive(imp.sch, imp.options);
+    if (value !== undefined) put(value);
+    // only a new import (its `seq`) is acted on
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imp?.seq]);
 }

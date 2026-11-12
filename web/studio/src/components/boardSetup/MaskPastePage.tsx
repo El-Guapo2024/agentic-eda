@@ -4,7 +4,7 @@
 import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
 import type { MaskPaste } from "../../api/types";
-import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 const MASK_EXPANSION_TIP =
   "Global clearance between pads and the solder mask.\nThis value can be superseded by local values for a footprint or a pad.\nPositive clearance means a solder mask opening bigger than the pad (typical for solder mask clearance).";
@@ -23,6 +23,8 @@ export function MaskPastePage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
   const units = state.units;
   const page = usePageDraft<MaskPaste>(state.board?.board_rules?.mask_paste);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("mask_paste", (b) => b.board_rules?.mask_paste, page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;

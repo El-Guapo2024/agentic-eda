@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { useStudioState } from "../../state/store";
 import { availableUserLayers, checkLayerDraft, itemsPerLayer, layerDraft, layerDraftToSend, layerRows, sameLayerSetup, withLayerChecked, withUserLayer, LAYER_TYPE_LABEL, type LayerDraft } from "../../kicad-port/boardLayers";
 import type { BoardLayerType } from "../../api/types";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 export function BoardLayersPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
@@ -15,6 +15,8 @@ export function BoardLayersPage({ hidden, onDirty }: PageProps) {
   const copper = board?.layers ?? [];
   const setup = board?.board_rules?.layer_setup;
   const page = usePageDraft<LayerDraft>(board?.board_rules && setup ? layerDraft(setup, copper) : undefined);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("layers", (b) => (b.board_rules?.layer_setup ? layerDraft(b.board_rules.layer_setup, b.layers ?? []) : undefined), page.importDraft);
   const apply = usePageApply();
   const [toAdd, setToAdd] = useState("");
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);

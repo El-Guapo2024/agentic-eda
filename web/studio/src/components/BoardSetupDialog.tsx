@@ -16,7 +16,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { nmFrom, nmTo } from "../state/units";
 import { predefinedSizesCmds, validatePredefinedSizes } from "../kicad-port/boardSetupRules";
 import { DEFAULT_TEARDROP_PARAMS } from "../kicad-port/teardropParams";
-import type { DiffPairPreset, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
+import type { BoardState, DiffPairPreset, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
 import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
 import { FormattingPage } from "./boardSetup/FormattingPage";
@@ -32,6 +32,9 @@ import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
 import { TuningPatternsPage } from "./boardSetup/TuningPatternsPage";
 import { TuningProfilesPage } from "./boardSetup/TuningProfilesPage";
 import { ZoneHatchOffsetsPage } from "./boardSetup/ZoneHatchOffsetsPage";
+import { ZonesPage } from "./boardSetup/ZonesPage";
+import { ImportSettingsDialog } from "./boardSetup/ImportSettingsDialog";
+import { SetupImportContext, type SetupImport } from "./boardSetup/fields";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import "../styles/boardSetup.css";
 
@@ -40,7 +43,7 @@ export type Page =
   | "stackup"
   | "mask_paste"
   | "drill_chart"
-  | "hatch_offsets"
+  | "zones"
   | "text_graphics"
   | "formatting"
   | "dimensions"
@@ -67,7 +70,6 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       // KiCad 25ec2335 adds Drill Chart here, after Solder Mask/Paste (`m_drillChartPage`); 8303b2ad's Zone Hatch Offsets, which 25ec2335 folds into Design
       // Rules > Zones (`PANEL_SETUP_ZONES`), stays the last of the group as 8303b2ad has it.
       { id: "drill_chart", label: "Drill Chart" },
-      { id: "hatch_offsets", label: "Zone Hatch Offsets" },
     ],
   },
   {
@@ -84,6 +86,8 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
     pages: [
       { id: "constraints", label: "Constraints" },
       { id: "tracks_vias", label: "Pre-defined Sizes" },
+      // KiCad 25ec2335: Zones (`PANEL_SETUP_ZONES`: the default zone settings, then the hatch offsets that were 8303b2ad's own "Zone Hatch Offsets" page)
+      { id: "zones", label: "Zones" },
       { id: "teardrops", label: "Teardrops" },
       { id: "tuning_patterns", label: "Length-tuning Patterns" },
       { id: "tuning_profiles", label: "Tuning Profiles" },
@@ -152,6 +156,9 @@ export function BoardSetupDialog() {
   const [dimSettings, setDimSettings] = useState<DimensionSettings>(DEFAULT_DIMENSION_SETTINGS);
   const [dimBusy, setDimBusy] = useState(false);
   const [dimMessage, setDimMessage] = useState<string | null>(null);
+  // "Import Settings from Another Board..." (`onAuxiliaryAction`, UI-LEFT-2 BB4): the dialog, and the last import the pages took
+  const [importOpen, setImportOpen] = useState(false);
+  const [setupImport, setSetupImport] = useState<SetupImport | null>(null);
   // The pages that have edits not applied yet (the rule pages say so themselves), marked in the tree and asked about on Close.
   const [unapplied, setUnapplied] = useState<ReadonlySet<Page>>(new Set());
   // Close was asked for while some page has such edits: the footer asks whether to drop them.
@@ -288,7 +295,31 @@ export function BoardSetupDialog() {
     }
   };
 
+  // `onAuxiliaryAction`'s `ImportSettingsFrom` calls: the pages that keep their own draft take it from the context; the three this dialog holds (Pre-defined Sizes,
+  // Teardrops, and Dimensions with the text & graphics defaults, as KiCad's Defaults page holds them) are set here, unapplied.
+  const takeImport = (other: BoardState, options: ReadonlySet<string>) => {
+    setImportOpen(false);
+    setSetupImport((prev) => ({ seq: (prev?.seq ?? 0) + 1, board: other, options }));
+    const touched: Page[] = [];
+    if (options.has("sizes")) {
+      setWidths(other.routing?.track_width_presets ?? []);
+      setVias(other.routing?.via_presets ?? []);
+      setDiffPairs(other.routing?.diff_pair_presets ?? []);
+      touched.push("tracks_vias");
+    }
+    if (options.has("teardrops") && other.routing?.teardrop_settings) {
+      setTd(other.routing.teardrop_settings);
+      touched.push("teardrops");
+    }
+    if (options.has("text_graphics") && other.drawings?.dimension_settings) {
+      setDimSettings(other.drawings.dimension_settings);
+      touched.push("dimensions");
+    }
+    if (touched.length > 0) setUnapplied((prev) => new Set([...prev, ...touched]));
+  };
+
   return (
+    <SetupImportContext.Provider value={setupImport}>
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog bs-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
@@ -313,7 +344,8 @@ export function BoardSetupDialog() {
           <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
           <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
           <DrillChartPage hidden={page !== "drill_chart"} onDirty={markers.drill_chart} />
-          <ZoneHatchOffsetsPage hidden={page !== "hatch_offsets"} onDirty={markers.hatch_offsets} />
+          <ZonesPage hidden={page !== "zones"} onDirty={markers.zones} />
+          <ZoneHatchOffsetsPage hidden={page !== "zones"} onDirty={markers.zones} />
           <TextGraphicsPage hidden={page !== "text_graphics"} onDirty={markers.text_graphics} />
           <FormattingPage hidden={page !== "formatting"} onDirty={markers.formatting} />
           <TuningPatternsPage hidden={page !== "tuning_patterns"} onDirty={markers.tuning_patterns} />
@@ -432,8 +464,8 @@ export function BoardSetupDialog() {
           <section className="bs-page" hidden={page !== "teardrops"} aria-label="Teardrops">
             <h3 className="bs-title">Teardrops</h3>
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
-                `pcbnew/teardrop/*` (task item 4; UI-LEFT-2 PP6, PP7). Vias and pads of every shape, as KiCad's "Round pads only" is off by default; one set of settings for every via
-                and pad, and the track-to-track block. Teardrops are kept current as the board is edited and fitted to other nets' clearance (see `eda_connectivity::teardrop`'s own doc).
+                `pcbnew/teardrop/*` (task item 4; UI-LEFT-2 PP6, PP7). Vias and pads of every shape, as KiCad's "Round pads only" is off by default; the round block serves vias and round
+                pads, the rectangular block every other pad, and the track-to-track block. Teardrops are kept current as the board is edited and fitted to other nets' clearance (see `eda_connectivity::teardrop`'s own doc).
               </p>
               <label className="filter-row" style={{ display: "block" }}>
                 <input type="checkbox" checked={td.enabled} onChange={(e) => setTdField("enabled", e.target.checked)} /> Enable teardrops
@@ -450,7 +482,7 @@ export function BoardSetupDialog() {
                 <input type="checkbox" checked={td.target_smd_pads} onChange={(e) => setTdField("target_smd_pads", e.target.checked)} /> SMD pads
               </label>
 
-              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Shape</p>
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Default Properties for Round Shapes</p>
               <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
                 <span>Best length ratio (of anchor size)</span>
                 <input type="number" step="0.05" min={0} max={1} value={td.best_length_ratio} onChange={(e) => setTdField("best_length_ratio", Number(e.target.value))} style={{ width: 90 }} />
@@ -504,6 +536,61 @@ export function BoardSetupDialog() {
               <label className="filter-row" style={{ display: "block" }} title="Do not create teardrops on tracks connected to pads that are also connected to a copper zone.">
                 <input type="checkbox" checked={td.prefer_zone_connections ?? true} onChange={(e) => setTdField("prefer_zone_connections", e.target.checked)} /> Prefer zone connection
               </label>
+
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Default Properties for Rectangular Shapes</p>
+              {(() => {
+                // `TARGET_RECT` (`PANEL_SETUP_TEARDROPS::TransferDataFromWindow`'s second block; UI-LEFT-2 BB8): the pads that are not uniformly round. Until it is
+                // edited it shows the round block's sizes, which is what such a pad got before the block was its own.
+                const r = td.rect_shape ?? { ...DEFAULT_TEARDROP_PARAMS, best_length_ratio: td.best_length_ratio, best_width_ratio: td.best_width_ratio, max_length: td.max_len_nm, max_width: td.max_width_nm, filter_ratio: td.width_to_size_filter_ratio, curved_edges: td.curved_edges ?? false, allow_two_segments: td.allow_two_segments ?? true, prefer_zone_connections: td.prefer_zone_connections ?? true };
+                const setR = (patch: Partial<typeof r>) => setTdField("rect_shape", { ...r, ...patch });
+                const lenField = (label: string, value: number, set: (nm: number) => void) => (
+                  <span>
+                    <input
+                      type="number"
+                      step="any"
+                      aria-label={label}
+                      value={nmTo(value, units)}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isFinite(n)) set(Math.round(nmFrom(n, units)));
+                      }}
+                      style={{ width: 90 }}
+                    />{" "}
+                    {units}
+                  </span>
+                );
+                return (
+                  <>
+                    <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
+                      <span>Best length (L):</span>
+                      <span>
+                        <input type="number" aria-label="Rectangular best length" step="1" min={0} value={Math.round(r.best_length_ratio * 100)} onChange={(e) => setR({ best_length_ratio: Number(e.target.value) / 100 })} style={{ width: 90 }} /> %(w)
+                      </span>
+                      <span>Maximum length (L):</span>
+                      {lenField("Rectangular maximum length", r.max_length, (nm) => setR({ max_length: nm }))}
+                      <span>Best width (W):</span>
+                      <span>
+                        <input type="number" aria-label="Rectangular best width" step="1" min={0} value={Math.round(r.best_width_ratio * 100)} onChange={(e) => setR({ best_width_ratio: Number(e.target.value) / 100 })} style={{ width: 90 }} /> %(w)
+                      </span>
+                      <span>Maximum width (W):</span>
+                      {lenField("Rectangular maximum width", r.max_width, (nm) => setR({ max_width: nm }))}
+                      <span title={"Max pad/via size to track width ratio to create a teardrop.\n100 always creates a teardrop."}>Track width limit:</span>
+                      <span title="Tracks which are similar in size to the pad do not need teardrops.">
+                        <input type="number" aria-label="Rectangular track width limit" step="1" min={0} max={100} value={Math.round(r.filter_ratio * 100)} onChange={(e) => setR({ filter_ratio: Number(e.target.value) / 100 })} style={{ width: 90 }} /> %(w)
+                      </span>
+                    </div>
+                    <label className="filter-row" style={{ display: "block" }} title="Do not create teardrops on tracks connected to pads that are also connected to a copper zone.">
+                      <input type="checkbox" checked={r.prefer_zone_connections} onChange={(e) => setR({ prefer_zone_connections: e.target.checked })} /> Prefer zone connection
+                    </label>
+                    <label className="filter-row" style={{ display: "block" }} title="Allows a teardrop to extend over the first 2 connected track segments if the first track segment is too short to accommodate the best length.">
+                      <input type="checkbox" checked={r.allow_two_segments} onChange={(e) => setR({ allow_two_segments: e.target.checked })} /> Allow teardrop to span track segments
+                    </label>
+                    <label className="filter-row" style={{ display: "block" }}>
+                      <input type="checkbox" aria-label="Rectangular curved edges" checked={r.curved_edges} onChange={(e) => setR({ curved_edges: e.target.checked })} /> Curved edges
+                    </label>
+                  </>
+                );
+              })()}
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Properties for Track-to-Track Teardrops</p>
               {(() => {
@@ -627,6 +714,12 @@ export function BoardSetupDialog() {
           </section>
         </div>
         <div className="dialog-footer">
+          {/* PAGED_DIALOG's auxiliary button (`DIALOG_BOARD_SETUP`: _( "Import Settings from Another Board..." )) */}
+          {!(askDiscard && unapplied.size > 0) && (
+            <button style={{ marginRight: "auto" }} onClick={() => setImportOpen(true)}>
+              Import Settings from Another Board...
+            </button>
+          )}
           {askDiscard && unapplied.size > 0 ? (
             <>
               <span className="bs-error" role="alert" style={{ marginRight: "auto", alignSelf: "center" }}>
@@ -644,6 +737,8 @@ export function BoardSetupDialog() {
           )}
         </div>
       </div>
+      {importOpen && <ImportSettingsDialog onCancel={() => setImportOpen(false)} onImported={takeImport} />}
     </div>
+    </SetupImportContext.Provider>
   );
 }

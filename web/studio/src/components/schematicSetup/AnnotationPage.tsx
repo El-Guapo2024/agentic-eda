@@ -14,7 +14,7 @@ import type { AnnotationSettings, SchSetupReply } from "../../api/types";
 import { rememberAnnotateSettings, rememberedAnnotateSettings, startNumber } from "../../kicad-port/schAnnotate";
 import { DEFAULT_ANNOTATION, UNIT_NOTATIONS, unitNotationChoice } from "../../kicad-port/schSetup";
 import { useStudioState } from "../../state/store";
-import { Check, FieldRow, PageFrame, usePageApply, usePageDraft, type PageProps } from "../boardSetup/fields";
+import { Check, FieldRow, PageFrame, usePageApply, usePageDraft, type PageProps, useSchSetupImport } from "../boardSetup/fields";
 
 interface Draft {
   notation: number;
@@ -50,6 +50,8 @@ export function AnnotationPage({ hidden, onDirty }: PageProps) {
 
   const source = useMemo(() => (info ? draftOf(info) : undefined), [info]);
   const page = usePageDraft<Draft>(source);
+  // "Import Settings from Another Project..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSchSetupImport("annotation", (s) => draftOf(s.setup), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const d = page.draft;

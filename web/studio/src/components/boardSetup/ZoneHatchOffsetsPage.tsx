@@ -4,7 +4,7 @@
 import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
 import { hatchProblems, hatchRows, hatchToSend, sameHatchOffsets, type HatchRow } from "../../kicad-port/setupPages";
-import { LengthField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { LengthField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 export function ZoneHatchOffsetsPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
@@ -12,6 +12,8 @@ export function ZoneHatchOffsetsPage({ hidden, onDirty }: PageProps) {
   const copper = state.board?.layers ?? [];
   const stored = state.board?.board_rules?.zone_hatch_offsets;
   const page = usePageDraft<HatchRow[]>(state.board?.board_rules && stored !== undefined ? hatchRows(copper, stored) : undefined);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("hatch_offsets", (b) => (b.board_rules?.zone_hatch_offsets !== undefined ? hatchRows(copper, b.board_rules.zone_hatch_offsets) : undefined), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const rows = page.draft;

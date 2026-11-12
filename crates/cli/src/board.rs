@@ -401,10 +401,15 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
 /// `checkNetclassDrivers` runs per subgraph, so both are in the class), found by the pins of that wire under the references the placement gives them; a
 /// label off any pin's wire names its own. A bus label's classes go to its members too (`checkNetclassDrivers`' `processBusMember`): the nets of each
 /// member's name on that sheet.
+///
+/// A directive label (`SCH_DIRECTIVE_LABEL`, the netclass flag) gives its Netclass to the net at its connection point (the wire or bus through it, else a
+/// label or a pin there), and a rule area gives the classes of the flags on its border to the wires and buses it touches and the labels and pins inside it
+/// (`SCH_RULE_AREA::RefreshContainedItemsAndDirectives`, `GetResolvedNetclasses`, read by `GetNetclassesForDriver`; UI-LEFT-2 BB3).
 fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     let nets: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
     let net_of_pin: std::collections::BTreeMap<&str, &str> = nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let mut assigned: Vec<(String, String)> = Vec::new();
+    let ro: &ConstraintModel = model;
     for e in eda_model::sheet_list::walk(design) {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
         let renamed: std::collections::BTreeMap<&str, String> = sec
@@ -454,6 +459,107 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
                 }
             }
         }
+        // The directive labels (`SCH_DIRECTIVE_LABEL`, the netclass flag) and the rule areas they are attached to (BB3).
+        let directives: Vec<(eda_model::ir::Point, Vec<String>)> = sec
+            .extras
+            .graphics
+            .iter()
+            .filter_map(|g| match &g.shape {
+                eda_model::sch_extras::SchGraphicKind::Directive { at, netclass, .. } => {
+                    let mut classes: Vec<String> = sec.extras.label_netclasses(&g.id).into_iter().map(str::to_string).collect();
+                    if !netclass.trim().is_empty() && !classes.iter().any(|c| c == netclass.trim()) {
+                        classes.push(netclass.trim().to_string());
+                    }
+                    (!classes.is_empty()).then_some((*at, classes))
+                }
+                _ => None,
+            })
+            .collect();
+        if directives.is_empty() {
+            continue;
+        }
+        // every pin of the sheet at its connection point, under the reference this placement gives it
+        let pins: Vec<(eda_model::ir::Point, String)> = sec
+            .symbols
+            .iter()
+            .filter_map(|sym| {
+                let part = ro.part(&sym.id)?;
+                let resolved = ro.real_symbol_of_instance(sec, sym, part);
+                let reference = eda_model::sheet_list::reference_under(sec, sym, &e.path);
+                Some(eda_engine::placed::pin_points_in(sec, sym, part, resolved.as_ref()).into_iter().map(move |(n, at)| (at, format!("{reference}.{n}"))))
+            })
+            .flatten()
+            .collect();
+        // the nets of a wire: a bus's members (`processBusMember`), else the net the wire is on
+        let wire_nets = |w: &eda_model::ir::Wire| -> Vec<String> {
+            if w.bus {
+                let text = if w.net.starts_with('/') { w.net.rsplit('/').next().unwrap_or(&w.net) } else { w.net.as_str() };
+                return eda_kicad::expand_bus_members(text, &design.bus_aliases)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flat_map(|m| {
+                        let here: Vec<String> = sec.labels.iter().filter(|o| o.net == m).map(|o| net_at(o.at, &m)).collect();
+                        if here.is_empty() { vec![m] } else { here }
+                    })
+                    .collect();
+            }
+            let by_pin = w.pins.iter().find_map(|p| {
+                let pin = match p.split_once('.') {
+                    Some((r, n)) => renamed.get(r).map_or_else(|| p.clone(), |new| format!("{new}.{n}")),
+                    None => p.clone(),
+                };
+                net_of_pin.get(pin.as_str()).map(|n| n.to_string())
+            });
+            by_pin.or_else(|| (!w.net.is_empty()).then(|| w.net.clone())).into_iter().collect()
+        };
+        let label_nets = |l: &eda_model::ir::NetLabel| -> Vec<String> {
+            match eda_kicad::expand_bus_members(&l.net, &design.bus_aliases) {
+                Some(members) => members.into_iter().map(|m| net_at(l.at, &m)).collect(),
+                None => vec![net_at(l.at, &l.net)],
+            }
+        };
+        let pin_net = |pin: &str| net_of_pin.get(pin).map(|n| n.to_string());
+        // A directive's own net: the item at its connection point (`GetConnectionPoints`), a wire or bus through it, else a label or a pin there.
+        for (at, classes) in &directives {
+            let nets: Vec<String> = if let Some(w) = sec.wires.iter().find(|w| !w.bus && polyline_touches(&w.pts, *at)).or_else(|| sec.wires.iter().find(|w| w.bus && polyline_touches(&w.pts, *at))) {
+                wire_nets(w)
+            } else if let Some(l) = sec.labels.iter().find(|l| l.at == *at) {
+                label_nets(l)
+            } else {
+                pins.iter().filter(|(p, _)| p == at).filter_map(|(_, pin)| pin_net(pin)).collect()
+            };
+            for net in nets {
+                for class in classes {
+                    assigned.push((net.clone(), class.clone()));
+                }
+            }
+        }
+        // A rule area gives the classes of the directives on its border (`SCH_RULE_AREA::RefreshContainedItemsAndDirectives`: the connection point within
+        // 5 IU of an edge, `CollideEdge`) to the wires and buses it touches, the labels and pins inside it (`GetNetclassesForDriver` reads the item's rule
+        // areas, `GetResolvedNetclasses`).
+        for g in &sec.extras.graphics {
+            let eda_model::sch_extras::SchGraphicKind::RuleArea { pts, .. } = &g.shape else { continue };
+            if pts.len() < 3 {
+                continue;
+            }
+            let classes: Vec<&String> = directives.iter().filter(|(at, _)| polygon_edge_distance(pts, *at) <= RULE_AREA_EDGE_NM).flat_map(|(_, c)| c.iter()).collect();
+            if classes.is_empty() {
+                continue;
+            }
+            let mut nets: Vec<String> = Vec::new();
+            for w in sec.wires.iter().filter(|w| w.pts.windows(2).any(|s| segment_collides_polygon(pts, s[0], s[1])) || (w.pts.len() == 1 && point_in_polygon(pts, w.pts[0]))) {
+                nets.extend(wire_nets(w));
+            }
+            for l in sec.labels.iter().filter(|l| point_in_polygon(pts, l.at)) {
+                nets.extend(label_nets(l));
+            }
+            nets.extend(pins.iter().filter(|(p, _)| point_in_polygon(pts, *p)).filter_map(|(_, pin)| pin_net(pin)));
+            for net in nets {
+                for class in &classes {
+                    assigned.push((net.clone(), (*class).clone()));
+                }
+            }
+        }
     }
     for (net, class) in assigned {
         let pattern = eda_kicad::exact_pattern(&net);
@@ -464,6 +570,64 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             }
         }
     }
+}
+
+/// `SCH_RULE_AREA::RefreshContainedItemsAndDirectives`' reach of an edge for a directive's connection point: `CollideEdge( pt, nullptr, 5 )`, 5 schematic IU (100 nm each).
+const RULE_AREA_EDGE_NM: f64 = 500.0;
+
+/// True when `p` lies on the polyline `pts` (one of its points, or on a segment between two).
+fn polyline_touches(pts: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
+    pts.contains(&p) || pts.windows(2).any(|s| point_segment_distance(s[0], s[1], p) == 0.0)
+}
+
+fn point_segment_distance(a: eda_model::ir::Point, b: eda_model::ir::Point, p: eda_model::ir::Point) -> f64 {
+    let (ax, ay, bx, by, px, py) = (a.x.get() as f64, a.y.get() as f64, b.x.get() as f64, b.y.get() as f64, p.x.get() as f64, p.y.get() as f64);
+    let (dx, dy) = (bx - ax, by - ay);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 == 0.0 { 0.0 } else { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) };
+    ((ax + t * dx - px).powi(2) + (ay + t * dy - py).powi(2)).sqrt()
+}
+
+/// The distance of `p` to the nearest edge of the closed outline `poly` (`SHAPE_LINE_CHAIN::CollideEdge`).
+fn polygon_edge_distance(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> f64 {
+    (0..poly.len()).map(|i| point_segment_distance(poly[i], poly[(i + 1) % poly.len()], p)).fold(f64::INFINITY, f64::min)
+}
+
+/// `SHAPE_POLY_SET::Collide( VECTOR2I )`: inside the outline or on its edge.
+fn point_in_polygon(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
+    if polygon_edge_distance(poly, p) == 0.0 {
+        return true;
+    }
+    let (px, py) = (p.x.get() as i128, p.y.get() as i128);
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (xi, yi, xj, yj) = (poly[i].x.get() as i128, poly[i].y.get() as i128, poly[j].x.get() as i128, poly[j].y.get() as i128);
+        if (yi > py) != (yj > py) {
+            // the crossing's x compared without dividing: px < xi + (py - yi) * (xj - xi) / (yj - yi)
+            let lhs = (px - xi) * (yj - yi);
+            let rhs = (py - yi) * (xj - xi);
+            if (yj - yi > 0 && lhs < rhs) || (yj - yi < 0 && lhs > rhs) {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+/// `SHAPE_POLY_SET::Collide( SHAPE_SEGMENT )` at the line's centre: an end inside, or the segment crossing an edge.
+fn segment_collides_polygon(poly: &[eda_model::ir::Point], a: eda_model::ir::Point, b: eda_model::ir::Point) -> bool {
+    if point_in_polygon(poly, a) || point_in_polygon(poly, b) {
+        return true;
+    }
+    let orient = |p: eda_model::ir::Point, q: eda_model::ir::Point, r: eda_model::ir::Point| -> i128 {
+        ((q.x.get() as i128 - p.x.get() as i128) * (r.y.get() as i128 - p.y.get() as i128) - (q.y.get() as i128 - p.y.get() as i128) * (r.x.get() as i128 - p.x.get() as i128)).signum()
+    };
+    (0..poly.len()).any(|i| {
+        let (c, d) = (poly[i], poly[(i + 1) % poly.len()]);
+        orient(a, b, c) * orient(a, b, d) < 0 && orient(c, d, a) * orient(c, d, b) < 0
+    })
 }
 
 /// A `Part` in `model` for every footprint that lives only on the board (`DrawingsSection::board_parts`): the copies Duplicate and
@@ -1247,11 +1411,16 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
     let judged_strictly = strictness != Strictness::Off;
     let strictness = if carry == Some(carry::Carry::Begin) && !cmd.always_judged() { Strictness::Off } else { strictness };
     let baseline = if carry == Some(carry::Carry::Commit) && strictness != Strictness::Off { carry::pending_design(dir) } else { None };
+    // `PANEL_SETUP_LAYERS::TransferDataFromWindow`: items deleted from removed layers, then `m_frame->ClearUndoRedoList()`
+    let clears_history = before.as_ref().is_some_and(|d| eda_ops::board_setup::deletes_items_on_removed_layers(d, &cmd));
     let r = step_quiet(dir, &cmd, strictness, baseline);
     match &r {
         Ok((summary, tag)) => {
             if let Some(before) = before.filter(|_| !outside_history(&cmd)) {
                 carry::record(dir, carry, &before, tag, by, judged_strictly);
+            }
+            if clears_history {
+                clear_board_history(dir);
             }
             log_activity(dir, by, &line, true, summary)
         }
@@ -1474,6 +1643,33 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<Snapshot> {
 
 fn clear_dir(stack_dir: &Path) {
     let _ = std::fs::remove_dir_all(stack_dir);
+}
+
+/// `PCB_EDIT_FRAME::ClearUndoRedoList()` after Board Setup deleted the items of removed layers (`PANEL_SETUP_LAYERS::TransferDataFromWindow`: "Undo state may have
+/// copies of pointers deleted above"): no step of the board editor is left to undo or redo, so nothing brings the deleted items back and the question's "...cannot be
+/// undone." holds. KiCad's list is the board editor's own; the schematic editor and the library editors keep theirs. Here the history is one pair of stacks with a tag
+/// per step, so the steps that would restore the board go: the board's (`pcb`) and the whole-design ones (`file`, an outside edit of `design.json`). A step that
+/// changed both editors' halves (`both`) keeps its schematic half -- KiCad made that edit as one commit in each frame -- and is kept as a `schematic` step.
+fn clear_board_history(dir: &Path) {
+    for stack in [undo_dir(dir), redo_dir(dir)] {
+        let Ok(entries) = std::fs::read_dir(&stack) else { continue };
+        for path in entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")) {
+            let Some(stem) = path.file_stem().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+            let Some((stamp, tag)) = stem.rsplit_once('.') else { continue };
+            let by = path.with_extension("by");
+            match tag {
+                "schematic" | "footprint_editor" | "symbol_editor" => {}
+                BOTH_TAG => {
+                    let _ = std::fs::rename(&by, stack.join(format!("{stamp}.schematic.by")));
+                    let _ = std::fs::rename(&path, stack.join(format!("{stamp}.schematic.json")));
+                }
+                _ => {
+                    let _ = std::fs::remove_file(&path);
+                    let _ = std::fs::remove_file(&by);
+                }
+            }
+        }
+    }
 }
 
 /// The Schematic scope's undo also follows the symbol library's published entries. Update Symbol(s) (`SchCmd::UpdateLibrarySymbols`) is run from the
@@ -4305,7 +4501,7 @@ pub(crate) mod tests {
         assert_eq!(count(&dir, "track_width"), 0);
 
         // Violation Severity: the clearance check turned off reports nothing, whatever the rules.
-        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(mm(0.3)), ..defaults.default.clone() }, classes: vec![], schematic: Default::default() };
+        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(mm(0.3)), ..defaults.default.clone() }, classes: vec![], schematic: Default::default(), pcb_colors: None };
         step(&dir, Cmd::SetNetClasses { settings: tight }, false, "ui").unwrap();
         assert!(count(&dir, "clearance") >= 1);
         step(&dir, Cmd::SetRuleSeverities { severities: [("clearance".to_string(), "ignore".to_string())].into() }, false, "ui").unwrap();
@@ -4364,6 +4560,39 @@ pub(crate) mod tests {
         assert!(board_text(&dir).contains("(net_class \"power\""));
         let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
         assert!(project.get("net_settings").is_none());
+
+        // The colour as a cell of the Net Classes table (`pcb_colors`, UI-LEFT-2 BB8): the design's, in the project as before, and one undo takes it back.
+        let (_, _, model) = load(&dir).unwrap();
+        let mut settings = eda_model::rules::net_class_settings_of(&model.board);
+        settings.pcb_colors = Some([("power".to_string(), "rgb(0, 128, 255)".to_string())].into());
+        step(&dir, Cmd::SetNetClasses { settings }, false, "ui").unwrap();
+        assert_eq!(count(&dir, "clearance"), plain);
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        let power = project["net_settings"]["classes"].as_array().unwrap().iter().find(|c| c["name"] == "power").cloned().expect("power");
+        assert_eq!(power["pcb_color"], "rgb(0, 128, 255)", "the design's colour reaches the project");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir, "clearance"), plain);
+        assert!(board_text(&dir).contains("(net_class \"power\""), "one undo takes the colour back");
+    }
+
+    /// The PCB Color column is part of the table (`NETCLASS::SetPcbColor` in `PANEL_SETUP_NETCLASSES::TransferDataFromWindow`): `set_net_classes` with
+    /// `pcb_colors` holds it in the design, and one undo takes it back with the rest of the page (UI-LEFT-2 BB8).
+    #[test]
+    fn a_net_class_pcb_colour_is_in_the_tables_undo_step() {
+        let dir = scratch("class_colour_undo");
+        setup(&dir);
+        let (_, _, model) = load(&dir).unwrap();
+        let defaults = eda_model::rules::net_class_settings_of(&model.board);
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(mm(0.2)), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power.clone()], ..defaults.clone() } }, false, "ui").unwrap();
+        assert_eq!(load(&dir).unwrap().2.board.net_class_pcb_colors, None, "a page sent without colours leaves appearance.json's in force");
+        let colored = eda_model::rules::NetClassSettings { classes: vec![power], pcb_colors: Some([("power".to_string(), "rgb(1, 2, 3)".to_string()), ("Default".to_string(), "rgb(9, 9, 9)".to_string())].into()), ..defaults };
+        step(&dir, Cmd::SetNetClasses { settings: colored }, false, "ui").unwrap();
+        let colors = load(&dir).unwrap().2.board.net_class_pcb_colors.expect("the design holds the colours");
+        assert_eq!(colors.get("power").map(String::as_str), Some("rgb(1, 2, 3)"));
+        assert!(!colors.contains_key("Default"), "the Default class has no colour of its own");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().2.board.net_class_pcb_colors, None, "one undo takes the colour back");
     }
 
     #[test]
@@ -5762,6 +5991,33 @@ pub(crate) mod tests {
         let (_, design, _) = load(&dir).unwrap();
         assert_eq!(sch_at(&design), Point { x: mm(25.0), y: mm(10.0) });
         assert_eq!(pcb_at(&design), Point { x: mm(11.0), y: mm(10.0) });
+    }
+
+    /// Fewer copper layers with the items of the removed layers deleted (`set_stackup` with `delete_items_on_removed_layers`): KiCad clears the board editor's undo
+    /// and redo lists after it (`PANEL_SETUP_LAYERS::TransferDataFromWindow`: `ClearUndoRedoList`), so no Undo brings the items back; the schematic's history
+    /// stays. A stackup change that deletes nothing is one step like any other.
+    #[test]
+    fn deleting_the_items_of_removed_layers_clears_the_boards_undo_history() {
+        let dir = scratch("stackup_clears_history");
+        setup_both(&dir);
+        step_ok(&dir, Cmd::SetStackup { settings: eda_model::rules::StackupSettings::new(4, mm(1.6)), delete_items_on_removed_layers: false });
+        let text = Text { id: String::new(), content: "IN1".into(), at: Point { x: mm(3.0), y: mm(12.0) }, angle: 0, layer: "In1.Cu".into(), size_nm: mm(1.5), stroke_width: mm(0.3), justify: Default::default(), mirror: false };
+        step_ok(&dir, Cmd::AddText { text });
+        step_ok(&dir, Cmd::MoveSymbol { id: "R2".into(), x: mm(25.0), y: mm(10.0), unit: None });
+        step_ok(&dir, Cmd::MoveTo { part: "R1".into(), x: mm(11.0), y: mm(10.0) });
+        // an undone board step waits on the redo stack
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let texts = |dir: &Path| load(dir).unwrap().1.drawings.map_or(0, |d| d.texts.len());
+        assert_eq!(texts(&dir), 1);
+
+        let two = eda_model::rules::StackupSettings::new(2, mm(1.6));
+        step_ok(&dir, Cmd::SetStackup { settings: two, delete_items_on_removed_layers: true });
+        assert_eq!(texts(&dir), 0, "the text on In1.Cu is deleted");
+        assert_eq!(undo(&dir, "test", Some(Domain::Pcb)).unwrap_err()[0].check, "board_no_undo", "no Undo brings the deleted items back");
+        assert!(undo(&dir, "test", Some(Domain::Schematic)).is_ok(), "the schematic's step is still there");
+        assert_eq!(texts(&dir), 0, "and undoing it leaves the board as it is");
+        assert_eq!(redo(&dir, "test", Some(Domain::Pcb)).unwrap_err()[0].check, "board_no_redo");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---------------------------------------------------- footprint editor

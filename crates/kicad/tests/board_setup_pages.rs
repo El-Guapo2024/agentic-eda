@@ -132,9 +132,8 @@ fn a_profile_the_page_would_refuse_is_not_imported() {
 }
 
 /// F3 (round 7): Board Setup > Teardrops is `BOARD_DESIGN_SETTINGS`' `teardrop_options` and `teardrop_parameters` (`board_design_settings.cpp:526-660`). The
-/// reader takes the target kinds and the round block's sizes, curved edges, two segments and zone preference (this port's one block for vias and pads collapses
-/// KiCad's round and rect ones, PARITY-pcb §15), and the track-end block (UI-LEFT-2 PP7); the writer repeats the one block for the round and rectangular targets
-/// and writes the track-end one.
+/// reader takes the target kinds, the round block's sizes, curved edges, two segments and zone preference, the rectangular block (UI-LEFT-2 BB8) and the
+/// track-end block (UI-LEFT-2 PP7); the writer writes the three.
 #[test]
 fn the_projects_teardrop_parameters_are_read_and_written() {
     let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
@@ -153,20 +152,21 @@ fn the_projects_teardrop_parameters_are_read_and_written() {
     assert_eq!((td.best_length_ratio, td.best_width_ratio, td.width_to_size_filter_ratio), (0.2, 0.8, 0.6));
     assert_eq!((td.max_len_nm, td.max_width_nm), (mm(0.5), mm(2.5)));
     let track_end = eda_model::teardrop_params::TeardropParams { max_length: mm(0.7), best_length_ratio: 0.3, ..Default::default() };
+    let rect = eda_model::teardrop_params::TeardropParams { max_length: mm(0.9), max_width: mm(3.0), best_length_ratio: 0.4, ..Default::default() };
     assert_eq!(
         td,
-        TeardropSettings { target_pth_pads: false, best_length_ratio: 0.2, best_width_ratio: 0.8, max_len_nm: mm(0.5), max_width_nm: mm(2.5), width_to_size_filter_ratio: 0.6, curved_edges: true, track_end, ..Default::default() },
-        "the rect entry does not feed the collapsed block; `td_curve_segcount` 4 is curved; the track entry is the track-to-track block"
+        TeardropSettings { target_pth_pads: false, best_length_ratio: 0.2, best_width_ratio: 0.8, max_len_nm: mm(0.5), max_width_nm: mm(2.5), width_to_size_filter_ratio: 0.6, curved_edges: true, track_end, rect_shape: Some(rect), ..Default::default() },
+        "the rect entry is its own block; `td_curve_segcount` 4 is curved; the track entry is the track-to-track block"
     );
 
     let project: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
     let ds = &project["board"]["design_settings"];
     let params = ds["teardrop_parameters"].as_array().expect("the parameter blocks");
     let entry = |name: &str| params.iter().find(|e| e["td_target_name"] == name).unwrap_or_else(|| panic!("{name} in {params:?}")).clone();
-    for name in ["td_round_shape", "td_rect_shape"] {
-        let e = entry(name);
-        assert_eq!((e["td_maxlen"].as_f64(), e["td_maxheight"].as_f64(), e["td_length_ratio"].as_f64(), e["td_height_ratio"].as_f64(), e["td_width_to_size_filter_ratio"].as_f64()), (Some(0.5), Some(2.5), Some(0.2), Some(0.8), Some(0.6)), "{name}: {e}");
-    }
+    let e = entry("td_round_shape");
+    assert_eq!((e["td_maxlen"].as_f64(), e["td_maxheight"].as_f64(), e["td_length_ratio"].as_f64(), e["td_height_ratio"].as_f64(), e["td_width_to_size_filter_ratio"].as_f64()), (Some(0.5), Some(2.5), Some(0.2), Some(0.8), Some(0.6)), "td_round_shape: {e}");
+    let e = entry("td_rect_shape");
+    assert_eq!((e["td_maxlen"].as_f64(), e["td_maxheight"].as_f64(), e["td_length_ratio"].as_f64(), e["td_height_ratio"].as_f64(), e["td_width_to_size_filter_ratio"].as_f64()), (Some(0.9), Some(3.0), Some(0.4), Some(1.0), Some(0.9)), "td_rect_shape: {e}");
     assert_eq!(entry("td_round_shape")["td_curve_segcount"], 1);
     let track = entry("td_track_end");
     assert_eq!((track["td_maxlen"].as_f64(), track["td_maxheight"].as_f64(), track["td_length_ratio"].as_f64(), track["td_height_ratio"].as_f64(), track["td_width_to_size_filter_ratio"].as_f64()), (Some(0.7), Some(2.0), Some(0.3), Some(1.0), Some(0.9)), "the track-to-track block: {track}");
@@ -364,4 +364,28 @@ fn merge_project_setup_pages_keeps_each_group_as_kicad_reads_it() {
     assert_eq!(model.board.tuning_patterns.single_track.spacing_nm, mm(0.9));
     assert_eq!((model.board.tuning_patterns.diff_pair.min_amplitude_nm, model.board.tuning_patterns.diff_pair.max_amplitude_nm), (mm(1.2), mm(1.0)));
     assert_eq!(model.board.tuning_patterns.diff_pair.corner_radius_percentage, 150, "no clamp");
+}
+
+/// KiCad 25ec2335's Board Setup > Zones (`PANEL_SETUP_ZONES`): the project's `defaults.zones.*` are the design's zone defaults, read back as they were written,
+/// with KiCad's defaults for a missing key and an out-of-range value (UI-LEFT-2 BB4).
+#[test]
+fn the_projects_zone_defaults_are_read_and_written() {
+    use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, ZoneBorderStyle, ZoneSmoothing};
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let pro = serde_json::json!({ "board": { "design_settings": { "defaults": { "zones": {
+        "min_clearance": 0.3, "min_thickness": 0.2, "fill_mode": 1, "hatch_thickness": 0.6, "hatch_gap": 0.9, "hatch_orientation": 45.0,
+        "border_display_style": 1, "border_hatch_pitch": 7.0, "thermal_relief_gap": 0.4, "thermal_relief_spoke_width": 0.35, "pad_connection": 3,
+        "corner_smoothing": 2, "corner_radius": 0.5, "remove_islands": 2, "min_island_area": 4.0
+    } } } } });
+    eda_kicad::merge_project_zone_defaults(&mut design, &pro.to_string());
+    let z = design.drawings.as_ref().and_then(|d| d.zone_defaults.clone()).expect("the defaults");
+    assert_eq!((z.clearance, z.min_thickness, z.fill_mode, z.hatch_thickness, z.hatch_gap, z.hatch_orientation_mdeg), (mm(0.3), mm(0.2), FillMode::HatchPattern, mm(0.6), mm(0.9), 45_000));
+    assert_eq!((z.border_style, z.border_hatch_pitch), (ZoneBorderStyle::Full, mm(0.5)), "a pitch above 2 mm is the default");
+    assert_eq!((z.thermal_gap, z.thermal_spoke_width, z.pad_connection), (mm(0.4), mm(0.35), PadConnection::ThtThermal));
+    assert_eq!((z.smoothing, z.corner_radius, z.island_removal_mode, z.min_island_area), (ZoneSmoothing::Fillet, mm(0.5), IslandRemovalMode::Area, 4_000_000_000_000));
+    let project: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();
+    let mut back = design.clone();
+    back.drawings.as_mut().unwrap().zone_defaults = None;
+    eda_kicad::merge_project_zone_defaults(&mut back, &project.to_string());
+    assert_eq!(back.drawings.as_ref().unwrap().zone_defaults, Some(z), "read back as written");
 }

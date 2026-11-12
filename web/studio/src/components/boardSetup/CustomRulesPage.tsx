@@ -24,7 +24,7 @@ import ruleCompletions from "../../kicad/rule_completions.json";
 import rulesHelp from "../../kicad/rules_help.json";
 import { HtmlMessageBox } from "../HtmlMessageBox";
 import { RuleTextEditor, type RuleTextEditorHandle } from "../RuleTextEditor";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 const EXAMPLE = `(version 1)
 
@@ -63,6 +63,8 @@ export function CustomRulesPage({ hidden, onDirty }: PageProps) {
   const text = board?.board_rules?.custom_rules_text;
   const known = board?.board_rules !== undefined && board.board_rules.custom_rules_text !== undefined;
   const page = usePageDraft<string>(known ? (text ?? "") : undefined);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("custom_rules", (b) => b.board_rules?.custom_rules_text ?? undefined, page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const editor = useRef<RuleTextEditorHandle>(null);

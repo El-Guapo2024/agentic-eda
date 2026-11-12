@@ -735,6 +735,8 @@ export interface TeardropSettings {
   prefer_zone_connections?: boolean;
   /** `TARGET_TRACK`'s block ("Properties for Track-to-Track Teardrops", the Edit Teardrops dialog's "Track to track"); absent is `TEARDROP_PARAMETERS()`, off. */
   track_end?: TeardropParams;
+  /** `TARGET_RECT`'s block ("Default Properties for Rectangular Shapes"): a pad that is not uniformly round; its `enabled` is the round block's. Absent: the round block's sizes. UI-LEFT-2 BB8. */
+  rect_shape?: TeardropParams | null;
 }
 
 // ---------------------------------------------------------------- drawings
@@ -1359,6 +1361,8 @@ export interface BoardState {
     default_class?: NetClass;
     /** The schematic's columns of the net classes (Schematic Setup > Net Classes), by class name ("Default" for the Default class); a class with none is absent. */
     net_class_schematic?: Record<string, NetClassSchematic>;
+    /** Each class's PCB colour once the design holds it (Board Setup's PCB Color column, the Appearance panel's Net Classes tab); null: `appearance.json`'s are in force. */
+    net_class_pcb_colors?: Record<string, string> | null;
     constraints?: Constraints;
     /** True when the minimums are stated (an imported project, or an edit); false for the unstated ones of an intent. */
     constraints_explicit?: boolean;
@@ -1509,6 +1513,8 @@ export interface NetClassSettings {
   classes: NetClass[];
   /** The schematic's columns of the same table, by class name ("Default" for the Default class): Schematic Setup > Net Classes edits them, Board Setup sends them back as it found them. */
   schematic?: Record<string, NetClassSchematic>;
+  /** The PCB Color column, by class name (no Default, no transparent class): part of the table and of its undo step (UI-LEFT-2 BB8). Absent: the colours of `appearance.json` stay. */
+  pcb_colors?: Record<string, string>;
 }
 
 /** `eda_model::sch_setup::NetClassSchematic`: a net class's Eeschema columns (`PANEL_SETUP_NETCLASSES` with `aIsEEschema`). Each absent value is "not set". */

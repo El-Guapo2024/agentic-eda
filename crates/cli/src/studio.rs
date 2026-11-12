@@ -752,6 +752,8 @@ fn handle(
         // Schematic Setup's Annotation, Field Name Templates, BOM Presets and Bus Alias Definitions pages (`sch_api::setup`).
         // Label Properties' Label combo box: the labels of the same kind on every screen, the power nets like them, the bus aliases (`crate::sch_label_api`).
         ("GET", "/api/sch/existing_labels") => respond(stream, "200 OK", "application/json", crate::sch_label_api::existing_labels_route(dir, &query_value(target, "kind")).to_string().as_bytes()),
+        // Schematic Setup's "Import Settings from Another Project...": the other project's settings for the pages (nothing here changes)
+        ("POST", "/api/sch/import_settings") => respond(stream, "200 OK", "application/json", crate::sch_import_settings_api::import_settings(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/setup") => respond(stream, "200 OK", "application/json", sch_api::setup(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
@@ -984,6 +986,8 @@ fn handle(
         ("POST", "/api/rule_editor/check") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::check(dir, &body).to_string().as_bytes()),
         ("POST", "/api/rule_editor/show_matches") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::show_matches(dir, &body).to_string().as_bytes()),
         // Board Setup > Component Classes (`crate::board_setup_api`): the field and sheet names of the board's footprints, whether each assignment compiles and what it matches.
+        // Board Setup's "Import Settings from Another Board...": the other board's settings for the pages (nothing on this board changes)
+        ("POST", "/api/import_settings") => respond(stream, "200 OK", "application/json", crate::import_settings_api::import_settings(dir, &body).to_string().as_bytes()),
         ("POST", "/api/component_classes") => respond(stream, "200 OK", "application/json", crate::board_setup_api::component_classes(dir, &body).to_string().as_bytes()),
         ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
         // What Track & Via Properties' OK would ask first: a short, then the pads a net change takes along (`confirmShortingNets`, `confirmPadChange`).
@@ -1624,6 +1628,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "allow_two_segments": r.teardrop_settings.allow_two_segments,
                 "prefer_zone_connections": r.teardrop_settings.prefer_zone_connections,
                 "track_end": r.teardrop_settings.track_end,
+                // UI-LEFT-2 BB8: the rectangular-shape block (`TARGET_RECT`), null until the design has its own
+                "rect_shape": r.teardrop_settings.rect_shape,
             }),
         })
     });
@@ -1771,6 +1777,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     // Schematic Setup > Net Classes' columns of the board's classes (wire and bus widths, colour, line style), by class name -- set apart, the `json!` above being
     // at the macro's recursion limit
     state["board_rules"]["net_class_schematic"] = json!(model.board.net_class_schematic);
+    // the PCB Color column, once the design holds it (null: the Appearance panel's `appearance.json` colours are in force)
+    state["board_rules"]["net_class_pcb_colors"] = json!(model.board.net_class_pcb_colors);
     // Design Rules > Component Classes (`COMPONENT_CLASS_SETTINGS`): "Assign component class per sheet" and the custom assignments, as the board is judged by them now
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too

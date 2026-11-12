@@ -5,12 +5,14 @@ import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
 import { TEXT_GRAPHICS_ROWS, textRowOf, validateTextGraphics, withLineWidth, withTextFields } from "../../kicad-port/boardSetupRules";
 import type { LayerClassDefaults, TextGraphicsDefaults } from "../../api/types";
-import { LengthField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { LengthField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 export function TextGraphicsPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
   const units = state.units;
   const page = usePageDraft<TextGraphicsDefaults>(state.board?.board_rules?.text_graphics);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("text_graphics", (b) => b.board_rules?.text_graphics, page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;

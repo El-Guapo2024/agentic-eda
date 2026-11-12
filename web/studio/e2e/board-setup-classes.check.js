@@ -3,7 +3,7 @@
 //                      menu offers the selection; "Highlight matching footprints" brightens what the rule engine says the assignment matches; Apply refuses a
 //                      condition that does not compile with KiCad's message, then stores the page as one undo step (`board_rules.component_classes`)
 //   net classes        the Tuning Profile and PCB Color columns are on the board's grid, Import colors from schematic is there; a bus pattern `D[0..3]` is stored as
-//                      its four members and the page shows four rows; a PCB colour is the Appearance panel's net class colour once Apply succeeds
+//                      its four members and the page shows four rows; a PCB colour is a cell of the table, in its undo step
 //   assign netclass    the dialog selects every item of the nets its pattern matches as the pattern is typed
 //   rule editor        Show Matches selects what a panel's rule matches and says how many ("Show Matches (n)"); a condition that does not compile says "(error)";
 //                      a rule dragged onto another of its node moves in the file (one undo step)
@@ -116,7 +116,8 @@
     t(heads.join("|").startsWith("Name|Clearance|Track Width|Via Size|Via Hole|uVia Size|uVia Hole|DP Width|DP Gap|Tuning Profile|PCB Color"), `KiCad's columns in its order (${heads.join("|")})`);
     t(!!button(p, "Import colors from schematic") && p.textContent.includes("Set color to transparent to use layer default color."), "Import colors from schematic and the help text");
     await press(p, "Add Netclass");
-    const name = [...p.querySelectorAll('input[aria-label^="Netclass "][aria-label$=" name"]')].pop();
+    // (a new class is the grid's first row: `InsertRows()`)
+    const name = p.querySelector('input[aria-label^="Netclass "][aria-label$=" name"]');
     await setValue(name, "busy");
     await press(p, "Add Assignment");
     const pattern = [...p.querySelectorAll('input[aria-label^="Pattern "]')].pop();
@@ -132,7 +133,7 @@
     await sleep(500);
     const shown = [...p.querySelectorAll('input[aria-label^="Pattern "]')].map((i) => i.value).filter((v) => /^D\d$/.test(v));
     t(shown.join(",") === "D0,D1,D2,D3", `the page shows a row a member (${shown})`);
-    t(/rgb\(255, 128, 0\)/.test(__eda.state().appearance.netclassColors?.busy ?? ""), `the PCB colour is the Appearance panel's (${JSON.stringify(__eda.state().appearance.netclassColors)})`);
+    t(/rgb\(255, 128, 0\)/.test(rules.net_class_pcb_colors?.busy ?? ""), `the PCB colour is a cell of the table, in the design (UI-LEFT-2 BB8: ${JSON.stringify(rules.net_class_pcb_colors)})`);
     await closeBoardSetup();
   });
 
@@ -219,8 +220,7 @@
     const after = await json("/api/state");
     const rulesAfter = JSON.stringify({ cc: after.board_rules?.component_classes ?? {}, nc: after.board_rules?.net_classes, dru: after.board_rules?.custom_rules_text ?? "", tp: after.board_rules?.tuning_profiles?.class_profiles ?? {} });
     t(rulesAfter === rulesBefore, `${made} steps undone, the rules as they were`);
-    // the colour is a view setting (appearance.json, as the Appearance panel keeps it), not an undo step: taken back as that panel would
-    await __eda.run("studio.Appearance.op", { op: "netclass_color", name: "busy", color: null });
+    // (the colour is a cell of the table, taken back with it: UI-LEFT-2 BB8)
     await __eda.run("common.InteractiveSelection.clear");
     t((__eda.errors?.() ?? []).length === 0, `no console errors (${JSON.stringify(__eda.errors?.() ?? []).slice(0, 300)})`);
   });

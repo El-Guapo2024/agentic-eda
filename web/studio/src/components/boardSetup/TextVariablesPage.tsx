@@ -5,12 +5,14 @@
 import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
 import { checkTextVariables, sameTextVariables, textVariableRows, textVariablesToSend, type TextVariableRow } from "../../kicad-port/textVariablesRules";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 export function TextVariablesPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
   const variables = state.board?.board_rules?.text_variables;
   const page = usePageDraft<TextVariableRow[]>(state.board?.board_rules ? textVariableRows(variables) : undefined);
+  // Schematic Setup's "Import Settings from Another Project..." (`PANEL_TEXT_VARIABLES::ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("text_variables", (b) => (b.board_rules ? textVariableRows(b.board_rules.text_variables) : undefined), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const rows = page.draft;
