@@ -527,13 +527,17 @@ pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, wid
 #[allow(clippy::too_many_arguments)] // the node/rules/net/layer/width query context, plus the head, the kind mask, the iteration limit and the hug threshold this is specific to.
 pub fn walk_base(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Nm, head: &[Point], mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId]) -> Option<Vec<Point>> {
     let line = Line::from_points(net.clone(), layer, width, head.to_vec());
-    walk_base_line(node, rules, &line, mask, iteration_limit, hug_threshold, exclude, crate::direction45::CornerMode::Mitered45).map(|l| l.pts)
+    walk_base_line(node, rules, &line, &[], mask, iteration_limit, hug_threshold, exclude, crate::direction45::CornerMode::Mitered45).map(|l| l.pts)
 }
 
 /// [`walk_base`] for a head that may hold arcs (a rounded corner, [`Line::arcs`]), in the router's corner mode: the optimizer's merge builds its
-/// bypasses in `corner` (`OPTIMIZER::mergeStep`), and the walked line keeps the arcs the walk left alone and those the merge made.
-#[allow(clippy::too_many_arguments)] // walk_base's, with the head as a line and the corner mode
-pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId], corner: crate::direction45::CornerMode) -> Option<Line> {
+/// bypasses in `corner` (`OPTIMIZER::mergeStep`), and the walked line keeps the arcs the walk left alone and those the merge made. `head_line`
+/// is `initTrack`, the placer's tail and the new head together, and `old_tail` the tail (`m_tail`): each finished walk, once merged, is cut back
+/// into head and tail (`splitHeadTail( wr.lines[..], m_tail, tmpHead, tmpTail )`, which always says true) and the head optimized again by
+/// `rhWalkBase`'s own `OPTIMIZER` -- `MERGE_SEGMENTS` against the items of the walk's kinds only (`SetCollisionMask( aCollisionMask )`) -- before
+/// the two are put back together (UI-LEFT-2 RR4). With no tail the head is the whole line.
+#[allow(clippy::too_many_arguments)] // walk_base's, with the head as a line, the old tail and the corner mode
+pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, old_tail: &[Point], mask: u8, iteration_limit: u32, hug_threshold: f64, exclude: &[ItemId], corner: crate::direction45::CornerMode) -> Option<Line> {
     let (net, layer, width) = (&head_line.net, head_line.layer, head_line.width);
     let head: &[Point] = &head_line.pts;
     let finish = |pts: Vec<Point>, arcs: Vec<crate::arcs::ArcPts>| {
@@ -571,7 +575,21 @@ pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, mask: u
             let line = finish(lines[i].clone(), arcs[i].clone());
             let constraints = crate::optimizer::Constraints { corner_mode: corner, ..Default::default() };
             let optimized = crate::optimizer::optimize_constrained(&line, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS, &constraints);
-            (lines[i], arcs[i]) = (optimized.pts, optimized.arcs);
+            // `if( splitHeadTail( wr.lines[..], m_tail, tmpHead, tmpTail ) ) { optimizer.Optimize( &tmpHead ); SetShape( tmpTail ); Append( tmpHead ); }`
+            let (head_pts, tail_pts) = crate::line_placer::split_head_tail(&optimized.pts, old_tail);
+            let tmp_head = Line { arcs: optimized.arcs.clone(), ..Line::from_points(net.clone(), layer, width, head_pts) };
+            let masked = crate::optimizer::Constraints { kind_mask: Some(mask), ..constraints };
+            let tmp_head = crate::optimizer::optimize_constrained(&tmp_head, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS, &masked);
+            let mut joined = tail_pts;
+            for (k, &p) in tmp_head.pts.iter().enumerate() {
+                if k == 0 && joined.last() == Some(&p) {
+                    continue;
+                }
+                joined.push(p);
+            }
+            let mut joined_arcs = optimized.arcs.clone();
+            joined_arcs.extend(tmp_head.arcs.iter().copied());
+            (lines[i], arcs[i]) = (joined, joined_arcs);
             len[i] = chain_length(&lines[i]);
             // `if( len_ccw < len_cw ) bestLine = ccw` -- CW wins ties
             if i == 0 || len[1] < len[0] {
@@ -685,7 +703,7 @@ mod tests {
         let head = Line::from_points(net_of("SIG"), 0, mm(0.2), vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }]);
         let diagonal = |pts: &[Point]| pts.windows(2).any(|w| w[0].x != w[1].x && w[0].y != w[1].y);
         for (corner, diagonals) in [(CornerMode::Mitered45, true), (CornerMode::Mitered90, false), (CornerMode::Rounded90, false)] {
-            let walked = walk_base_line(&node, &rules, &head, kind_mask::ANY, 10, 1.5, &[], corner).expect("a way round");
+            let walked = walk_base_line(&node, &rules, &head, &[], kind_mask::ANY, 10, 1.5, &[], corner).expect("a way round");
             assert_eq!((walked.first(), walked.last()), (Some(Point { x: Nm::ZERO, y: Nm::ZERO }), Some(Point { x: mm(5.0), y: Nm::ZERO })), "{corner:?}");
             assert_eq!(diagonal(&walked.pts), diagonals, "{corner:?}: {:?}", walked.pts);
             assert!(all_clear(&node, &walked.pts, mm(0.2), &rules), "{corner:?}: {:?}", walked.pts);
