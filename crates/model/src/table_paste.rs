@@ -77,8 +77,8 @@ impl Table {
     /// deleted (`DeleteMarkedCells`), the rows and columns from the first to the last selected one keep their heights and widths, and the cells left are laid out
     /// `maxCol - minCol + 1` to a row (`SetColCount`) from the first one's corner (`GetPosition` is the first cell's, which `Normalize` lays the rest out from). A
     /// block of cells is copied as that block; a selection that is not one is packed into rows the way KiCad packs it, a short last row dropped (`GetRowCount` is the
-    /// cell count divided by the column count). **Differs**: a merged cell's span is cut to the new table (KiCad keeps it, and the copy then spans cells it does not
-    /// have).
+    /// cell count divided by the column count). A merged cell keeps its span, as KiCad's clone does, so a copy of part of a merged block spans cells the copy does
+    /// not have (they are as wide as nothing, `GetColWidth` of a column past the end).
     pub fn selected_block(&self, sel: &BTreeSet<(usize, usize)>) -> Table {
         let (min_row, max_row) = (sel.iter().map(|c| c.0).min().unwrap_or(0), sel.iter().map(|c| c.0).max().unwrap_or(0));
         let (min_col, max_col) = (sel.iter().map(|c| c.1).min().unwrap_or(0), sel.iter().map(|c| c.1).max().unwrap_or(0));
@@ -95,14 +95,7 @@ impl Table {
         out.cells = kept
             .iter()
             .take(rows * cols)
-            .enumerate()
-            .map(|(i, &(r, c))| {
-                let mut cell = self.cell(r, c).cloned().unwrap_or_else(filler);
-                let (nr, nc) = (i / cols, i % cols);
-                cell.col_span = cell.col_span.min((cols - nc) as u32);
-                cell.row_span = cell.row_span.min((rows - nr) as u32);
-                cell
-            })
+            .map(|&(r, c)| self.cell(r, c).cloned().unwrap_or_else(filler))
             .collect();
         while out.cells.len() < rows * cols {
             out.cells.push(filler());
@@ -110,14 +103,12 @@ impl Table {
         out
     }
 
-    /// `PCB_EDIT_TABLE_TOOL::copyCell` / `SCH_EDIT_TABLE_TOOL::copyCell` for the rows and columns a paste adds: the source cell's looks, no text, a new uuid.
-    /// **Differs**: the copy spans one cell (KiCad's copy constructor keeps the source's span, which on a new row or column spans cells that are not merged into it).
+    /// `PCB_EDIT_TABLE_TOOL::copyCell` / `SCH_EDIT_TABLE_TOOL::copyCell` for the rows and columns a paste adds: the source cell's looks and span (the copy
+    /// constructor's: a copy of a merged cell spans the cells after it on the new row or column, as in KiCad), no text, a new uuid.
     fn paste_copy(src: &TableCell) -> TableCell {
         let mut c = src.clone();
         c.uuid.clear();
         c.text.clear();
-        c.col_span = 1;
-        c.row_span = 1;
         c
     }
 
@@ -257,5 +248,22 @@ mod tests {
         let b = t.selected_block(&BTreeSet::from([(1, 1), (1, 2), (2, 1), (2, 2)]));
         assert_eq!(b.texts(), vec![vec!["t4", "t5"], vec!["t7", "t8"]]);
         assert_eq!(b.at, Point { x: Nm::new(10_000_000), y: Nm::new(5_000_000) });
+    }
+
+    /// UI-LEFT-2 PP22: a merged cell keeps its span in the copy (`deleteUnselectedCells` works on a clone and leaves the spans), and a cell a paste adds is a copy
+    /// of its source with the source's span (`copyCell`'s copy constructor), as in KiCad.
+    #[test]
+    fn a_merged_cell_keeps_its_span_in_a_copy_and_in_the_cells_a_paste_adds() {
+        let mut t = grid(3, 3, "t");
+        assert!(t.merge(&[(1, 1), (1, 2), (2, 1), (2, 2)]));
+        let b = t.selected_block(&BTreeSet::from([(1, 1)]));
+        assert_eq!((b.col_count(), b.row_count()), (1, 1));
+        assert_eq!((b.cells[0].col_span, b.cells[0].row_span), (2, 2), "the copy spans cells it does not have, as KiCad's");
+        let mut target = grid(1, 1, "u");
+        let mut source = grid(2, 1, "s");
+        source.cells[1].col_span = 3;
+        assert!(target.paste_cells(0, 0, &source));
+        assert_eq!(target.cell(1, 0).unwrap().col_span, 3, "the added row's cell is a copy of the source's, its span with it");
+        assert_eq!(target.cell(1, 0).unwrap().text, "s1");
     }
 }

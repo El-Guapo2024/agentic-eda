@@ -676,23 +676,15 @@ impl Table {
         self.translate(target.x - now.x0, target.y - now.y0);
     }
 
-    /// The columns of the table in the other order (`m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col]`, `m_colWidths` likewise), with a merged
-    /// cell moved back to the left end of its block.
+    /// The columns of the table in the other order (`m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col]`, `m_colWidths` likewise). A merged
+    /// cell is left where the reversal puts it, at the right end of its block with its span running on from there, as KiCad 25ec2335's `PCB_TABLE::Flip` leaves it
+    /// (UI-LEFT-2 PP22).
     fn reverse_columns(&mut self) {
         let (rows, cols) = (self.row_count(), self.col_count());
         for r in 0..rows {
             self.cells[r * cols..(r + 1) * cols].reverse();
         }
         self.col_widths.reverse();
-        for r in 0..rows {
-            for c in 0..cols {
-                let span = self.cells[r * cols + c].col_span as usize;
-                // a block that was at old columns `k ..= k + span - 1` is now at `c - span + 1 ..= c`, its merged cell at `c`
-                if span > 1 && c + 1 >= span && self.cells[r * cols + c].row_span > 0 {
-                    self.cells.swap(r * cols + c, r * cols + c + 1 - span);
-                }
-            }
-        }
     }
 
     // ------------------------------------------------------------------------------------------------------------------- structure edits
@@ -1102,14 +1094,18 @@ mod tests {
     }
 
     #[test]
-    fn a_merged_cell_stays_at_the_left_end_of_its_block_when_the_columns_are_reversed() {
+    /// UI-LEFT-2 PP22: KiCad 25ec2335's `PCB_TABLE::Flip` reverses the cells of each row and nothing else, so a merged cell ends up at the right end of its block,
+    /// its span running on past it (here past the table's last column, which has no width), the cell it covered at the left.
+    fn a_merged_cell_is_left_at_the_right_end_of_its_block_when_the_columns_are_reversed() {
         let mut t = grid(2, 3);
         assert!(t.merge(&[(0, 0), (0, 1)]));
         t.flip(Point { x: Nm::ZERO, y: Nm::ZERO }, true, "B.SilkS".into(), true);
         assert!(t.is_well_formed());
-        assert_eq!((t.cell(0, 1).unwrap().col_span, t.cell(0, 2).unwrap().col_span), (2, 0));
-        assert_eq!(t.cell(0, 1).unwrap().text, "c0\nc1");
+        assert_eq!((t.cell(0, 1).unwrap().col_span, t.cell(0, 2).unwrap().col_span), (0, 2));
+        assert_eq!(t.cell(0, 2).unwrap().text, "c0\nc1");
         assert_eq!(t.cell(0, 0).unwrap().text, "c2");
+        let (_, _, w, _) = t.cell_local_rect(0, 2);
+        assert_eq!(w, t.col_widths[2], "the span runs past the table, where the columns are as wide as nothing");
     }
 
     #[test]
