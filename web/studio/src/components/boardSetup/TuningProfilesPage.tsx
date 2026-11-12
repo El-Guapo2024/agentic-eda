@@ -6,12 +6,18 @@
 // Each net class names the profile it uses in the Net Classes grid's "Tuning Profile" column (`GRID_DELAY_PROFILE`), as in KiCad; this page sends those names as it
 // found them. A class may name a profile the project does not have -- the panel keeps the name of a deleted profile -- and that is what kicad-cli's DRC reports as
 // `missing_tuning_profile`; the page lists such classes.
-// Not ported: the transmission-line calculator behind the width and delay cells (`calculateTrackParametersForCell`).
+// The Track width, Diff pair gap and Delay cells each have the button of KiCad's `GRID_CELL_RUN_FUNCTION_EDITOR`: it works out that cell (and the delay) from the
+// profile's target impedance and the board's stackup (`calculateTrackParametersForCell`, kicad-port/tuningCalculator.ts over the transmission-line calculators of
+// kicad-port/transline.ts), and shows KiCad's error box when it cannot; the cells still take a typed value. The profile carries no frequency or "Model solder mask"
+// here, so the calculator uses a new KiCad page's 1 GHz and ticked box.
 import { useEffect, useState } from "react";
 import { useStudioState } from "../../state/store";
 import { PROFILE_TYPE_LABEL, addTrackRow, addViaOverride, asToPs, checkProfiles, emptyProfile, missingProfiles, profilesDraftOf, profilesToSend, psToAs, sameProfiles, type ProfilesDraft } from "../../kicad-port/setupPages";
 import type { ProfileLayerEntry, ProfileViaOverride, TuningProfile, TuningProfileType } from "../../api/types";
 import { Check, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { defaultStackup } from "../../kicad-port/boardSetupRules";
+import { calculateTrackParametersForCell, type CalculationType } from "../../kicad-port/tuningCalculator";
+import { MessageDialog } from "../panels/appearance/shared";
 
 const NONE = "";
 
@@ -24,6 +30,8 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
   const page = usePageDraft<ProfilesDraft>(board?.board_rules && stored ? profilesDraftOf(stored) : undefined);
   const apply = usePageApply();
   const [sel, setSel] = useState(0);
+  // `DisplayErrorMessage` of the calculator
+  const [calcError, setCalcError] = useState<string | null>(null);
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;
   const check = draft ? checkProfiles(draft, copper) : null;
@@ -35,6 +43,22 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
   const editProfile = (fn: (p: TuningProfile) => TuningProfile) => page.edit((d) => ({ ...d, profiles: d.profiles.map((q, k) => (k === index ? fn(q) : q)) }));
   const setEntry = (row: number, patch: Partial<ProfileLayerEntry>) => editProfile((q) => ({ ...q, layer_entries: q.layer_entries.map((e, k) => (k === row ? { ...e, ...patch } : e)) }));
   const setVia = (row: number, patch: Partial<ProfileViaOverride>) => editProfile((q) => ({ ...q, via_overrides: q.via_overrides.map((v, k) => (k === row ? { ...v, ...patch } : v)) }));
+
+  // `GRID_CELL_RUN_FUNCTION_EDITOR`'s button: `calculateTrackParametersForCell( row, col )` over `BOARD::GetStackupOrDefault()`
+  const calculate = (row: number, column: CalculationType) => {
+    const e = p?.layer_entries[row];
+    const rules = board?.board_rules;
+    if (!p || !e) return;
+    const stackup = rules?.stackup ?? defaultStackup(rules?.copper_layers ?? copper.length, rules?.board_thickness_nm ?? 1_600_000);
+    const out = calculateTrackParametersForCell({ profileType: p.profile_type, targetImpedance: p.target_impedance, copperLayers: copper, stackup, row: e, column });
+    if (out.kind === "error") setCalcError(out.message);
+    else if (out.kind === "ok") setEntry(row, out.patch);
+  };
+  const calcButton = (row: number, column: CalculationType) => (
+    <button className="bs-calc" aria-label={`Row ${row + 1} calculate ${column}`} title="Calculate from the target impedance and the board stackup" onClick={() => calculate(row, column)}>
+      &#x21bb;
+    </button>
+  );
 
   const onApply = () => {
     if (!draft || !check) return;
@@ -74,7 +98,7 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
       ) : (
         <>
           <p className="bs-note">
-            A tuning profile says how long a signal takes along the copper of a net class, so tuning can aim at a delay and not only at a length. Delays are in picoseconds per millimetre (a via's in picoseconds). The transmission-line calculator of KiCad's grid cells is not ported: type the values.
+            A tuning profile says how long a signal takes along the copper of a net class, so tuning can aim at a delay and not only at a length. Delays are in picoseconds per millimetre (a via's in picoseconds). The button by a track width, gap or delay works it out from the target impedance and the board stackup (at 1 GHz, the solder mask modelled); a typed value is kept too.
           </p>
           <div className="bs-toolbar">
             <select aria-label="Tuning profile" value={index >= 0 ? index : ""} disabled={draft.profiles.length === 0} onChange={(e) => setSel(Number(e.target.value))}>
@@ -176,14 +200,17 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
                           <td>{layerSelect(`Row ${row + 1} bottom reference`, e.bottom_reference_layer ?? NONE, (v) => setEntry(row, { bottom_reference_layer: v === NONE ? null : v }), true)}</td>
                           <td>
                             <LengthField ariaLabel={`Row ${row + 1} track width`} units={units} value={e.width_nm} invalid={!!error} width={70} onChange={(v) => setEntry(row, { width_nm: v ?? Number.NaN })} />
+                            {calcButton(row, "width")}
                           </td>
                           {p.profile_type === "differential" && (
                             <td>
                               <LengthField ariaLabel={`Row ${row + 1} diff pair gap`} units={units} value={e.diff_pair_gap_nm} invalid={!!error} width={70} onChange={(v) => setEntry(row, { diff_pair_gap_nm: v ?? Number.NaN })} />
+                              {calcButton(row, "gap")}
                             </td>
                           )}
                           <td>
                             <NumberField ariaLabel={`Row ${row + 1} delay`} value={asToPs(e.delay_as_per_mm)} invalid={!!error} width={70} onChange={(v) => setEntry(row, { delay_as_per_mm: v === undefined ? Number.NaN : psToAs(v) })} />
+                            {calcButton(row, "delay")}
                           </td>
                           <td>
                             <button aria-label={`Remove row ${row + 1}`} onClick={() => editProfile((q) => ({ ...q, layer_entries: q.layer_entries.filter((_, k) => k !== row) }))}>
@@ -265,6 +292,7 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
             </p>
           )}
           {check.page && <p className="bs-error">{check.page}</p>}
+          {calcError !== null && <MessageDialog title="Error" message={calcError} onOk={() => setCalcError(null)} onCancel={() => setCalcError(null)} />}
         </>
       )}
     </PageFrame>
