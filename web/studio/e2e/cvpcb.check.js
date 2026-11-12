@@ -1,12 +1,13 @@
 // Assign Footprints (CvPcb), UI-LEFT L4 (task-u4-libs; PARITY-sch.md section 13): the footprint viewer pane, Manage Footprint Association Files... and Automatically Assign
 // Footprints, ported from KiCad 25ec2335's cvpcb/ (`DISPLAY_FOOTPRINTS_FRAME::InitDisplay` / `GetFootprint`, `DIALOG_CONFIG_EQUFILES`, `AutomaticFootprintMatching`), driven
 // through `window.__eda` and the dialogs' own controls and checked against what the server holds (`/api/cvpcb/*`, the schematic).
-// Run it in the page of a served COPY of a board made from examples/mcu_board_30plus.yaml with e2e/cvpcb.equ copied into the board's folder as `cvpcb-check.equ` (the
+// Run it in the page of a served COPY of a board made from examples/mcu_board_30plus.yaml without the LED channels' packages (R1..R8 and D1..D8 have no
+// footprint: a part's package is the Footprint field of its symbol in the derived .kicad_sch, which CvPcb shows and leaves alone; `board=mcu30-nofp`) with e2e/cvpcb.equ copied into the board's folder as `cvpcb-check.equ` (the
 // `fixtures=cvpcb` of tools/run-all-checks.sh) and KiCad's footprint libraries installed (Resistor_SMD, LED_SMD, Capacitor_SMD): it adds that file to the project's list, assigns
 // footprints, undoes that, and empties the list again.
 //
 // It answers through `window.__cvpcbCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
-// run-all-checks: board=mcu30 minutes=5 fixtures=cvpcb
+// run-all-checks: board=mcu30-nofp minutes=5 fixtures=cvpcb
 (async () => {
   const results = [];
   const check = (window.__cvpcbCheck = { results, done: false, ok: false, wait: null });

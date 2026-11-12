@@ -18,7 +18,7 @@
 #
 #   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign|import-files|legacy]
 #
-# and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-new (the same where `eda board new` puts a new board,
+# and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-nofp (the same with no package on R1..R8 and D1..D8), mcu30-new (the same where `eda board new` puts a new board,
 # in the middle of its page; every other kind is made with `--origin 0,0`, the page's corner, which the checks' coordinates were written for), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
@@ -99,6 +99,10 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
     case "$kind" in
         mcu30)
             "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 ;;
+        mcu30-nofp) # mcu30 whose LED channels (R1..R8, D1..D8) have no package, so no footprint: the symbols CvPcb assigns to (cvpcb.check.js). A part with a
+                    # package has the footprint it stands for in the derived .kicad_sch, and CvPcb, like KiCad's AutomaticFootprintMatching, leaves it alone
+            awk '/^  - reference: /{ led = ($3 ~ /^[RD][1-8]$/) } !(led && $1 == "package:")' "$yaml_mcu" > "$t/mcu_nofp.yaml" \
+                && "$eda" board new "$t/mcu_nofp.yaml" -o "$d" --origin 0,0 ;;
         mcu30-new) # a new board where `eda board new` puts it, in the middle of its page (UI-LEFT-2 CC4; new-board-page.check.js)
             "$eda" board new "$yaml_mcu" -o "$d" ;;
         mcu30-few) # three footprints placed, the rest not (board-setup-pages.check.js: `eda board place U1 --at 17.5,17.5` and a few more)
