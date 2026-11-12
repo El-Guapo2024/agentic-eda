@@ -3,9 +3,8 @@
 // `if( m_gal->IsFlippedX() && !aItem->IsSideSpecific() ) attrs.m_Mirrored = !attrs.m_Mirrored`), so front silkscreen reads backwards from behind and a
 // user layer's note does not.
 
-/** `LSET::SideSpecificMask()`: the technical layers of the front and the back and every copper layer -- what `BOARD_ITEM::IsSideSpecific` asks of the
- * item's layers (a user layer typed front or back is side specific too, which this board state does not tell). Both the file names (`F.SilkS`) and the
- * canonical ones (`F.Silkscreen`) count. */
+/** `LSET::SideSpecificMask()`: the technical layers of the front and the back and every copper layer -- what `BOARD_ITEM::IsSideSpecific` asks first of the
+ * item's layers. Both the file names (`F.SilkS`) and the canonical ones (`F.Silkscreen`) count. */
 export function isSideSpecificLayer(layer: string): boolean {
   if (layer.endsWith(".Cu")) return true;
   const m = /^([FB])\.(.+)$/.exec(layer);
@@ -13,7 +12,16 @@ export function isSideSpecificLayer(layer: string): boolean {
   return ["SilkS", "Silkscreen", "Mask", "Paste", "Adhes", "Adhesive", "CrtYd", "Courtyard", "Fab"].includes(m[2]!);
 }
 
+/** `BOARD_ITEM::IsSideSpecific` (KiCad 25ec2335): a layer of `SideSpecificMask()`, or a layer the board types front or back (`board->GetLayerType( m_layer )` is
+ * `LT_FRONT` or `LT_BACK`: a user layer Board Setup > Board Editor Layers made "Off-board, front" or "Off-board, back"). `types` is the board's
+ * `layer_setup.types`, by the file's layer names. */
+export function isSideSpecific(layer: string, types?: Readonly<Record<string, string>> | null): boolean {
+  if (isSideSpecificLayer(layer)) return true;
+  const t = types?.[layer];
+  return t === "front" || t === "back";
+}
+
 /** Is a text on `layer` drawn with its mirror toggled in the flipped view (`IsFlippedX() && !IsSideSpecific()`)? */
-export function keptReadableInFlippedView(viewFlipped: boolean | undefined, layer: string): boolean {
-  return !!viewFlipped && !isSideSpecificLayer(layer);
+export function keptReadableInFlippedView(viewFlipped: boolean | undefined, layer: string, types?: Readonly<Record<string, string>> | null): boolean {
+  return !!viewFlipped && !isSideSpecific(layer, types);
 }

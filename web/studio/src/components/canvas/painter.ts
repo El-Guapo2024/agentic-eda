@@ -92,6 +92,8 @@ function copperPaint(base: string, net: string | null | undefined, opts: PaintOp
 export interface PaintOptions {
   /** Flip Board View is on (`m_FlipBoardView`): a text that is not side specific is drawn to read as it did (kicad-port/flipView.ts). */
   viewFlipped?: boolean;
+  /** The board's layer types not their default (`layer_setup.types`): a user layer typed front or back is side specific, so its texts are mirrored in the flipped view. */
+  layerTypes?: Readonly<Record<string, string>> | null;
   /** Which canvas `window.__edaText` files the texts under (components/text/kicadTextPaint.ts): "pcb" unless said (the Footprint Editor's "fp"). */
   textRecordTag?: string;
   /**
@@ -617,7 +619,7 @@ export function drawFields(ctx: CanvasRenderingContext2D, view: ViewTransform, i
         pen: opts.sketchText ? hairlineNm(view, 1) : undefined,
         minPen: hairlineNm(view, 0.5),
         knockout: f.knockout ? layerColor("background") : null,
-        flippedView: keptReadableInFlippedView(opts.viewFlipped, f.layer),
+        flippedView: keptReadableInFlippedView(opts.viewFlipped, f.layer, opts.layerTypes),
         record: { tag: opts.textRecordTag ?? "pcb", id: f.id },
       });
     });
@@ -1221,7 +1223,7 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
         pen: opts.sketchText ? hairlineNm(view, 1) : undefined,
         minPen: hairlineNm(view, 0.5),
         knockout: t.knockout ? layerColor("background") : null,
-        flippedView: keptReadableInFlippedView(opts.viewFlipped, t.layer),
+        flippedView: keptReadableInFlippedView(opts.viewFlipped, t.layer, opts.layerTypes),
         record: { tag: "pcb", id: t.id },
       })
     );
@@ -1278,7 +1280,7 @@ function drawOneDimension(ctx: CanvasRenderingContext2D, view: ViewTransform, d:
       pen: opts.sketchText ? hairlineNm(view, 1) : undefined,
       minPen: hairlineNm(view, 0.5),
       // `if( m_gal->IsFlippedX() && !aDimension->IsSideSpecific() ) attrs.m_Mirrored = !attrs.m_Mirrored;`, the text where it is
-      flippedView: keptReadableInFlippedView(opts.viewFlipped, d.layer),
+      flippedView: keptReadableInFlippedView(opts.viewFlipped, d.layer, opts.layerTypes),
       keepAnchor: true,
       record: { tag: "pcb", id: d.id },
     });

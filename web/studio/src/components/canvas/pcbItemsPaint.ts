@@ -13,6 +13,7 @@ import { centrelineRect, inductorEnd } from "../../kicad-port/microwave";
 import { requestBarcodeShape } from "./barcodeCache";
 import { parseCssColor } from "../../kicad-port/appearance";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
+import { keptReadableInFlippedView } from "../../kicad-port/flipView";
 import { refImageBounds } from "../../kicad-port/pcbExtraItems";
 import { columnWidthNm, drawPos, linebreakText, outlineOf, shownTextOf } from "../../kicad-port/pcbTextBox";
 import { layoutKicadText, lineAdvance, resolveFont, type KicadFont, type KicadTextLayout } from "../../kicad-port/kicadText";
@@ -32,15 +33,20 @@ const layerKeyOf = (layer: string): string => layer.replace(/\./g, "_");
 // The layout of a box is the same until the board's state is refreshed (which makes new box objects) or its face has loaded: laying out every repaint would measure every glyph
 // of every box per mouse move.
 const layouts = new WeakMap<BoardTextBox, { font: KicadFont; layout: KicadTextLayout }>();
-/** `PCB_TEXTBOX::GetShownText`'s wrap (`LinebreakText( text, colWidth, GetTextSize(), GetTextThickness(), .. )`) in the box's font, then `FONT::Draw` from `GetDrawPos`. */
-function layoutOf(b: BoardTextBox): KicadTextLayout {
+const flippedLayouts = new WeakMap<BoardTextBox, { font: KicadFont; layout: KicadTextLayout }>();
+/** `PCB_TEXTBOX::GetShownText`'s wrap (`LinebreakText( text, colWidth, GetTextSize(), GetTextThickness(), .. )`) in the box's font, then `FONT::Draw` from `GetDrawPos`. `flippedView`:
+ * Flip Board View on a box that is not side specific -- `if( m_gal->IsFlippedX() && !aTextBox->IsSideSpecific() ) { attrs.m_Mirrored = !attrs.m_Mirrored;
+ * strokeText( resolvedText, aTextBox->GetDrawPos( true ), attrs, metrics ); }` (`PCB_PAINTER::draw( const PCB_TEXTBOX* )`), so it reads as it did. */
+function layoutOf(b: BoardTextBox, flippedView = false): KicadTextLayout {
   const font = resolveFont(b.face, b.bold, b.italic);
-  const hit = layouts.get(b);
+  const cache = flippedView ? flippedLayouts : layouts;
+  const hit = cache.get(b);
   if (hit && hit.font.kind === font.kind) return hit.layout;
   const size: [number, number] = [b.width || b.size, b.size];
   const lines = linebreakText(shownTextOf(b), columnWidthNm(b), b.size, b.thickness_auto ? 0 : b.thickness, (text) => lineAdvance(text, font, size, b.italic));
-  const layout = layoutKicadText(textBoxSpec(b, lines.join("\n"), drawPos(b)).spec, font);
-  layouts.set(b, { font, layout });
+  const spec = textBoxSpec(b, lines.join("\n"), drawPos(b, flippedView)).spec;
+  const layout = layoutKicadText(flippedView ? { ...spec, mirror: !spec.mirror } : spec, font);
+  cache.set(b, { font, layout });
   return layout;
 }
 
@@ -262,7 +268,7 @@ export function drawBarcode(ctx: CanvasRenderingContext2D, view: ViewTransform, 
 function drawTextBoxes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
   for (const b of board.drawings?.text_boxes ?? []) {
     if (!layerIsVisible(opts.layerVisible, b.layer)) continue;
-    withBoardLayer(ctx, opts, b.layer, () => drawTextBox(ctx, view, b, opts.selection.has(b.id), !!opts.sketchText));
+    withBoardLayer(ctx, opts, b.layer, () => drawTextBox(ctx, view, b, opts.selection.has(b.id), !!opts.sketchText, { flippedView: keptReadableInFlippedView(opts.viewFlipped, b.layer, opts.layerTypes) }));
   }
 }
 
@@ -271,6 +277,8 @@ export interface TextBoxLook {
   color?: string;
   /** Erase the text from what is drawn (a knockout box) instead of painting it in the background's colour. */
   cutOutText?: boolean;
+  /** Flip Board View on a box that is not side specific (kicad-port/flipView.ts): its text mirrored and hung from `GetDrawPos( true )`. */
+  flippedView?: boolean;
 }
 
 /** One text box. `selected`: drawn in the selection colour; `lineMode`: the text in thin lines (`pcbnew.Control.textOutlines`). */
@@ -312,7 +320,7 @@ export function drawTextBox(ctx: CanvasRenderingContext2D, view: ViewTransform, 
     const cut = !!look.cutOutText && b.knockout;
     if (cut) ctx.globalCompositeOperation = "destination-out";
     const textColor = cut ? "#000000" : b.knockout ? layerColor("background") : color;
-    paintLayout(ctx, layoutOf(b), { color: textColor, pen: lineMode ? hairlineNm(view, 1) : undefined });
+    paintLayout(ctx, layoutOf(b, !!look.flippedView), { color: textColor, pen: lineMode ? hairlineNm(view, 1) : undefined });
   }
   ctx.restore();
 }

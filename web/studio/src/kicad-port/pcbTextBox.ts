@@ -154,16 +154,23 @@ export interface BoxTextLayout {
   lines: BoxTextLine[];
 }
 
-/** `PCB_TEXTBOX::GetDrawPos( false )`: the point of the box the text hangs on, for its justification, the margins in from that side. */
-export function drawPos(b: BoardTextBox): P {
-  const c = cornersInSequence(b, b.angle);
+/** `PCB_TEXTBOX::GetDrawPos( aIsFlipped )`: the point of the box the text hangs on, for its justification, the margins in from that side; `flipped` is the painter's
+ * call in Flip Board View (`GetDrawPos( true )`), which hangs the text from the other side. */
+export function drawPos(b: BoardTextBox, flipped = false): P {
+  return drawPosIn(cornersInSequence(b, b.angle), b.halign, b.valign, b.mirror, b.margins, b.angle, flipped);
+}
+
+/** `GetDrawPos` of a box whose `GetCornersInSequence( drawAngle )` are `c` (a text box's, a table cell's), with its justification, mirror, margins (left, top, right,
+ * bottom) and text angle (millidegrees). */
+export function drawPosIn(c: readonly [P, P, P, P], halign: TextBoxHAlign, valign: TextBoxVAlign, mirror: boolean, margins: readonly [number, number, number, number], angle: number, flipped = false): P {
+  const b = { halign, valign, mirror: mirror !== flipped, margins, angle };
   const mid = (a: P, d: P): P => [(a[0] + d[0]) / 2, (a[1] + d[1]) / 2];
   const midTop = mid(c[0], c[1]);
   const midBottom = mid(c[3], c[2]);
   const midLeft = mid(c[0], c[3]);
   const midRight = mid(c[1], c[2]);
   const center: P = [(c[0][0] + c[1][0] + c[2][0] + c[3][0]) / 4, (c[0][1] + c[1][1] + c[2][1] + c[3][1]) / 4];
-  // `if( IsMirrored() != aIsFlipped )`: a mirrored box is read from its other side
+  // `if( IsMirrored() != aIsFlipped )`: a mirrored box is read from its other side (`b.mirror` above is that test)
   const h: TextBoxHAlign = b.mirror ? (b.halign === "left" ? "right" : b.halign === "right" ? "left" : "center") : b.halign;
   const v: TextBoxVAlign = b.valign;
   const anchors: Record<string, P> = {
