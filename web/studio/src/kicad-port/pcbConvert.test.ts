@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
-import { arcMidOfSegment, convertAvailability, copiedLineWidth, DEFAULT_CONVERT_SETTINGS, DEFAULT_OUTSET_PARAMS, outsetShapes, planConvertToLines, planConvertToTracks, planSegmentToArc, resolveConvertSettings, ringEdges, sourceRings, type OutsetParams } from "./pcbConvert";
+import type { BoardState, Cmd, CmdShape, Pad, Shape } from "../api/types";
+import { arcMidOfSegment, convertAvailability, copiedLineWidth, DEFAULT_CONVERT_SETTINGS, DEFAULT_OUTSET_PARAMS, outsetItems, outsetPadOf, outsetShapes, planConvertToLines, planConvertToTracks, planSegmentToArc, resolveConvertSettings, ringEdges, sourceRings, type OutsetPad, type OutsetParams } from "./pcbConvert";
 
 function board(partial: Partial<BoardState>): BoardState {
   return {
@@ -273,8 +273,9 @@ test("Outset of a rounded rectangle: the corner radius grows by the outset (OUTS
   const out = outsetShapes([roundRect("r", 2 * M)], params);
   const arcs = out.add.filter((s): s is Extract<CmdShape, { kind: "arc" }> => s.kind === "arc");
   assert.equal(arcs.length, 4);
-  // The top-left corner arc: from (-1, 2) through to (2, -1) mm about (2, 2), radius 3 mm.
-  const a = arcs[0]!;
+  // The top-left corner arc (the chain's last, NW): from (-1, 2) through to (2, -1) mm about (2, 2), radius 3 mm.
+  const a = arcs[3]!;
+  assert.deepEqual([a.start, a.end], [{ x: -1 * M, y: 2 * M }, { x: 2 * M, y: -1 * M }]);
   assert.ok(Math.abs(Math.hypot(a.start.x - 2 * M, a.start.y - 2 * M) - 3 * M) < 2, JSON.stringify(a));
   // Not rounded: the source's own radius stays.
   const sharp = outsetShapes([roundRect("r", 2 * M)], { ...params, roundCorners: false });
@@ -291,4 +292,122 @@ test("Copy line width of first object: an arc is placed by its centre (EDA_SHAPE
 test("Create Arc: the mid point as SegmentToArc rounds it (SEG::Center, an int offset; round 5 B5-14)", () => {
   assert.deepEqual(arcMidOfSegment([0, 0], [10_000_005, 0]), [5_000_002, 1_000_000]);
   assert.deepEqual(arcMidOfSegment([-3, 0], [0, 0]), [-2, 0], "A + (B - A) / 2, truncated toward zero");
+});
+
+// ------------------------------------------------------------------ outsets of pads (OUTSET_ROUTINE::ProcessItem, PCB_PAD_T)
+
+const opad = (over: Partial<OutsetPad> = {}): OutsetPad => ({ id: "U1.1", shape: "rect", size: [2 * M, 1 * M], pos: [10 * M, 10 * M], orientationDeg: 0, cornerRadiusNm: 0, ...over });
+const padOut = (pads: OutsetPad[], over: Partial<OutsetParams> = {}) => outsetItems(pads.map((pad) => ({ kind: "pad" as const, pad })), outset(over));
+type ArcCmd = Extract<CmdShape, { kind: "arc" }>;
+type SegCmd = Extract<CmdShape, { kind: "segment" }>;
+
+test("outset of a rectangular pad: the box grown by the distance; sharp corners make one polygon, on F.Cu with the dialog's width", () => {
+  const r = padOut([opad()], { outsetNm: 250_000, roundCorners: false, useSourceLayers: true, useSourceWidths: true, lineWidthNm: 55 });
+  assert.equal(r.successes, 1);
+  assert.deepEqual(r.add, [
+    {
+      layer: "F.Cu",
+      stroke_width: 55,
+      filled: false,
+      kind: "polygon",
+      pts: [
+        { x: 8_750_000, y: 9_250_000 },
+        { x: 11_250_000, y: 9_250_000 },
+        { x: 11_250_000, y: 10_750_000 },
+        { x: 8_750_000, y: 10_750_000 },
+      ],
+    },
+  ]);
+  assert.equal(padOut([opad()], { outsetNm: 250_000, useSourceLayers: false, layer: "F.CrtYd" }).add[0]!.layer, "F.CrtYd");
+});
+
+test("outset of a rectangular pad with rounded corners: four sides then four corner arcs of the outset's radius", () => {
+  const r = padOut([opad()], { outsetNm: 250_000, roundCorners: true });
+  const segs = r.add.filter((s): s is SegCmd => s.kind === "segment");
+  const arcs = r.add.filter((s): s is ArcCmd => s.kind === "arc");
+  assert.deepEqual(
+    r.add.map((s) => s.kind),
+    ["segment", "segment", "segment", "segment", "arc", "arc", "arc", "arc"]
+  );
+  // top side first, left to right; the NE corner from the top to the right side
+  assert.deepEqual([segs[0]!.start, segs[0]!.end], [{ x: 9_000_000, y: 9_250_000 }, { x: 11_000_000, y: 9_250_000 }]);
+  assert.deepEqual([arcs[0]!.start, arcs[0]!.end], [{ x: 11_000_000, y: 9_250_000 }, { x: 11_250_000, y: 9_500_000 }]);
+});
+
+test("outset of an oval pad: two sides and two half circles (MakeSideArcCw180), the radius half the small side plus the outset", () => {
+  const r = padOut([opad({ shape: "oval" })], { outsetNm: 250_000 });
+  assert.deepEqual(
+    r.add.map((s) => s.kind),
+    ["segment", "segment", "arc", "arc"]
+  );
+  const e = r.add[2] as ArcCmd;
+  // the E half: from the top side's right end, over the right-most point, to the bottom side
+  assert.deepEqual([e.start, e.mid, e.end], [{ x: 10_500_000, y: 9_250_000 }, { x: 11_250_000, y: 10_000_000 }, { x: 10_500_000, y: 10_750_000 }]);
+  // standing up: the N and S halves, the right and left sides
+  const up = padOut([opad({ shape: "oval", size: [1 * M, 2 * M] })], { outsetNm: 250_000 });
+  assert.deepEqual(
+    up.add.map((s) => s.kind),
+    ["segment", "segment", "arc", "arc"]
+  );
+  assert.deepEqual((up.add[2] as ArcCmd).mid, { x: 10_000_000, y: 8_750_000 });
+});
+
+test("outset of a round-rect pad: its corner radius plus the outset; turned with the pad about its position", () => {
+  const r = padOut([opad({ shape: "round_rect", cornerRadiusNm: 250_000 })], { outsetNm: 250_000 });
+  const nw = r.add[7] as ArcCmd;
+  // the box is (8.75, 9.25)-(11.25, 10.75); the NW corner, radius 0.5 mm about (9.25, 9.75), from the left side up to the top
+  assert.deepEqual([nw.start, nw.end], [{ x: 8_750_000, y: 9_750_000 }, { x: 9_250_000, y: 9_250_000 }]);
+  const turned = padOut([opad({ shape: "round_rect", cornerRadiusNm: 250_000, orientationDeg: 90 })], { outsetNm: 250_000 });
+  // RotatePoint +90 (counter-clockwise on screen): (x, y) about the centre -> (y, -x), so the top side becomes the left one, running up
+  const top = turned.add[0] as SegCmd;
+  assert.deepEqual([top.start, top.end], [{ x: 9_250_000, y: 10_750_000 }, { x: 9_250_000, y: 9_250_000 }]);
+});
+
+test("outset of a circular pad: a circle of half its width plus the outset, or its square; a shrink to nothing fails", () => {
+  const c = padOut([opad({ shape: "circle", size: [1 * M, 1 * M] })], { outsetNm: 250_000 });
+  assert.deepEqual(c.add[0], { layer: "F.Cu", stroke_width: 50_000, filled: false, kind: "circle", center: { x: 10 * M, y: 10 * M }, end: { x: 10_750_000, y: 10 * M } });
+  const sq = padOut([opad({ shape: "circle", size: [1 * M, 1 * M] })], { outsetNm: 250_000, roundCorners: false });
+  assert.deepEqual(sq.add[0], { layer: "F.Cu", stroke_width: 50_000, filled: false, kind: "rect", start: { x: 9_250_000, y: 9_250_000 }, end: { x: 10_750_000, y: 10_750_000 } });
+  const gone = padOut([opad({ shape: "circle", size: [1 * M, 1 * M] })], { outsetNm: -600_000 });
+  assert.equal(gone.failures, 1);
+  assert.equal(gone.message, "Unable to outset the selected items.");
+});
+
+test("outset of trapezoid, chamfered and custom pads: neither a success nor a failure", () => {
+  for (const shape of ["trapezoid", "chamfered_rect", "custom"] as const) {
+    const r = padOut([opad({ shape })]);
+    assert.deepEqual([r.add.length, r.successes, r.failures, r.message], [0, 0, 0, "Unable to outset the selected items."]);
+  }
+});
+
+test("outset of a mixed selection: one run of counters; a pad is never deleted, its shapes are", () => {
+  const r = outsetItems(
+    [
+      { kind: "pad", pad: opad() },
+      { kind: "shape", shape: rect("r", 0, 0, 1000, 1000) },
+    ],
+    outset({ outsetNm: 100, deleteSourceItems: true })
+  );
+  assert.equal(r.successes, 2);
+  assert.deepEqual(r.remove, ["r"]);
+  const failed = outsetItems(
+    [
+      { kind: "pad", pad: opad({ shape: "circle", size: [100, 100] }) },
+      { kind: "shape", shape: rect("r", 0, 0, 1000, 1000) },
+    ],
+    outset({ outsetNm: -60, deleteSourceItems: true })
+  );
+  assert.deepEqual([failed.successes, failed.failures, failed.remove, failed.message], [1, 1, [], "Some of the items could not be outset."]);
+});
+
+test("outsetPadOf: the front shape, the hole's position, the board angle and KiROUND( min side * ratio )", () => {
+  const pad = { num: "1", net: null, x: 11 * M, y: 10 * M, w: 1, h: 1, round: false, th: false, shape: "round_rect", size: [3 * M, 1_000_001], rot: 90, ratio: 0.25, px: 10 * M, py: 10 * M } as Pad;
+  assert.deepEqual(outsetPadOf("U1.1", pad, { rot: 30, side: "top" }), { id: "U1.1", shape: "round_rect", size: [3 * M, 1_000_001], pos: [10 * M, 10 * M], orientationDeg: -120, cornerRadiusNm: 250_000 });
+  assert.equal(outsetPadOf("U1.1", { ...pad, size: undefined }, { rot: 0, side: "top" }), null);
+});
+
+test("convertAvailability: Create Outsets is offered for pads and shapes (outsetTypes)", () => {
+  const b = board({ drawings: drawings([rect("r", 0, 0, 10, 10)]), parts: [{ ref: "U1", placed: true, at: [0, 0], rot: 0, side: "top", pads: [{ num: "1", net: null, x: 0, y: 0, w: 10, h: 10, round: false, th: false }] }] as unknown as BoardState["parts"] });
+  assert.ok(convertAvailability(b, ["U1.1", "r"]).outset);
+  assert.ok(!convertAvailability(b, ["U1"]).outset);
 });

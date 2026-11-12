@@ -17,14 +17,17 @@ import {
   convertAvailability,
   copiedLineWidth,
   deleteCmd,
-  outsetShapes,
+  outsetItems,
+  outsetPadOf,
   planConvertToLines,
   planConvertToTracks,
   planSegmentToArc,
   resolveConvertSettings,
   type ConvertSettings,
   type OutsetParams,
+  type OutsetSource,
 } from "../kicad-port/pcbConvert";
+import { padById } from "../kicad-port/pcbItems";
 import { ConversionSettingsDialog, CreateTracksDialog, OutsetItemsDialog } from "../components/PcbConvertDialogs";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { openSweepDialog } from "./pcbSweepDialogs";
@@ -219,12 +222,18 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
   );
 
   // --------------------------------------------------------------------- Outsets
-  // CONVERT_TOOL::OutsetItems: DIALOG_OUTSET_ITEMS, then OUTSET_ROUTINE over the selected graphics; the new items are selected.
+  // CONVERT_TOOL::OutsetItems: DIALOG_OUTSET_ITEMS, then OUTSET_ROUTINE over the selected graphics and pads, as one commit ("Outset Items");
+  // the originals are deselected and the new items selected, and the routine's status message goes to the infobar.
   m.set(
     "pcbnew.Convert.outsetItems",
     pcbOnly(() => {
       if (!board) return;
-      const ids = requestFiltered((id) => !!api.shapeById(id));
+      // `IsType( { PCB_PAD_T, PCB_SHAPE_T } )`, then `FilterCollectorForLockedItems` (a pad is locked with its footprint: `PAD::IsLocked`).
+      const ids = requestFiltered((id) => {
+        if (api.shapeById(id)) return true;
+        const hit = padById(board, id);
+        return !!hit && !(board.locked ?? []).includes(hit.part.ref);
+      });
       if (ids.length === 0) return;
       const layers = [...board.layers, ...STANDARD_LAYERS.map((l) => l.label)];
       const saved: OutsetParams = last.outset ?? { ...DEFAULT_OUTSET_PARAMS, lineWidthNm: lineThicknessNm(board.board_rules?.text_graphics, "Edge.Cuts") };
@@ -237,8 +246,19 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           layerDefaultWidth: (layer: string) => layerLineWidthNm(layer, board?.board_rules?.text_graphics),
           onOk: (params: OutsetParams) => {
             last.outset = params;
-            const shapes = ids.map((id) => api.shapeById(id)).filter((s): s is NonNullable<typeof s> => !!s);
-            const res = outsetShapes(shapes, params);
+            // The selection in its order, pads and shapes alike (`for( EDA_ITEM* item : selection ) outset_routine.ProcessItem( *board_item )`).
+            const sources: OutsetSource[] = [];
+            for (const id of ids) {
+              const shape = api.shapeById(id);
+              if (shape) {
+                sources.push({ kind: "shape", shape });
+                continue;
+              }
+              const hit = padById(board, id);
+              const pad = hit ? outsetPadOf(id, hit.pad, hit.part) : null;
+              if (pad) sources.push({ kind: "pad", pad });
+            }
+            const res = outsetItems(sources, params);
             const cmds: Cmd[] = [...res.add.map((shape): Cmd => ({ op: "add_shape", shape })), ...res.remove.map((id): Cmd => ({ op: "delete_shape", id }))];
             if (cmds.length === 0) {
               if (res.message) toast(res.message);

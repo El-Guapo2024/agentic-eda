@@ -12,8 +12,8 @@
 // Units: nanometres (the IR's), KiCad's integer geometry through pcbGeom.ts where
 // rounding matters.
 
-import type { BoardState, Cmd, CmdRouteTrack, CmdShape, Shape } from "../api/types";
-import { arcCentralAngle, arcCenter, arcFromCenterAngle, arcRadius, resize, toIU, fromIU, vsub, type V } from "./pcbGeom";
+import type { BoardState, Cmd, CmdRouteTrack, CmdShape, Pad, PadShapeName, Part, Shape } from "../api/types";
+import { arcCentralAngle, arcCenter, arcFromCenterAngle, arcRadius, kiRound, resize, rotatePoint, toIU, fromIU, vsub, type V } from "./pcbGeom";
 import { itemKind } from "./pcbItems";
 import { arcRouteTrack } from "./trackArc";
 
@@ -118,7 +118,8 @@ export function convertAvailability(board: BoardState, ids: readonly string[]): 
   const lines = anyPolys;
   const tracks = anyPolys || graphicToTrack;
   const arc = ids.length === 1 && (kinds[0] === "track" || shapes[0]?.kind === "segment");
-  const outset = shapes.every((s) => s !== null);
+  // `outsetTypes = { PCB_PAD_T, PCB_SHAPE_T }`
+  const outset = ids.every((_, i) => shapes[i] !== null || kinds[i] === "pad");
   return { poly, zone: poly, keepout: poly, lines, tracks, arc, outset, any: poly || lines || tracks || arc || outset || ids.length > 0 };
 }
 
@@ -156,8 +157,8 @@ function roundedSourcePieces(board: BoardState, id: string): ReturnType<typeof r
   const s = board.drawings?.shapes.find((sh) => sh.id === id);
   if (s?.kind !== "rect" || !s.corner_radius || s.corner_radius <= 0) return null;
   const box: [number, number, number, number] = [Math.min(s.start[0], s.end[0]), Math.min(s.start[1], s.end[1]), Math.max(s.start[0], s.end[0]), Math.max(s.start[1], s.end[1])];
-  const pieces = roundedRectPieces(box, s.corner_radius);
-  return pieces.length > 0 ? pieces : null;
+  // (A square whose radius is half its side is one full-circle arc, which `addGraphicChain` skips: nothing, not the four sides.)
+  return roundedRectPieces(box, s.corner_radius);
 }
 
 /**
@@ -373,18 +374,70 @@ const ceilTo = (v: number, g: number): number => Math.ceil(v / g) * g;
 
 type Mk = (partial: Record<string, unknown>) => CmdShape;
 
+/**
+ * A footprint pad as `OUTSET_ROUTINE::ProcessItem`'s `PCB_PAD_T` case reads it at 8303b2ad: `GetShape( ALL_LAYERS )` and `GetSize( ALL_LAYERS )`
+ * (the front of a padstack: "TODO(JE) padstacks"), `GetPosition()` (the hole's position, the shape offset not added), `GetOrientation()` and
+ * `GetRoundRectCornerRadius( ALL_LAYERS )`.
+ */
+export interface OutsetPad {
+  /** The pad's id (`REF.NUM[#k]`). */
+  id: string;
+  shape: PadShapeName;
+  /** Un-turned size, nm. */
+  size: [number, number];
+  /** `GetPosition()`, nm. */
+  pos: [number, number];
+  /** `GetOrientation()`: KiCad's angle on the board, degrees counter-clockwise on screen. */
+  orientationDeg: number;
+  /** `GetRoundRectCornerRadius`, nm. */
+  cornerRadiusNm: number;
+}
+
+/** What `OUTSET_ROUTINE` is run on: the selection's graphic shapes and pads, in selection order. */
+export type OutsetSource = { kind: "shape"; shape: Shape } | { kind: "pad"; pad: OutsetPad };
+
+/** `PAD::GetLayer()` (`BOARD_ITEM::m_layer`): a pad never sets it, so it is the constructor's `F_Cu` on either side -- the layer "use source layers" puts a pad's outset on. */
+export const PAD_SOURCE_LAYER = "F.Cu";
+
+/**
+ * The `OutsetPad` of a board pad (the studio state's `Pad` of a placed footprint): its front shape and size, the hole's position, and its board angle
+ * (`PAD::GetOrientation`, the pad's own angle in the footprint turned with the footprint: `pcbProperties.ts` `padOrientation`). Null for a pad the state
+ * gives no shape for (an older backend).
+ */
+export function outsetPadOf(id: string, pad: Pad, part: Pick<Part, "rot" | "side">): OutsetPad | null {
+  if (!pad.size || !pad.shape) return null;
+  const sense = part.side === "bottom" ? -1 : 1;
+  const orientationDeg = sense * -(pad.rot ?? 0) - (part.rot ?? 0);
+  // `PADSTACK::RoundRectRadius`: `KiROUND( std::min( size.x, size.y ) * RoundRectRadiusRatio() )`.
+  const cornerRadiusNm = pad.shape === "round_rect" ? kiRound(Math.min(pad.size[0], pad.size[1]) * (pad.ratio ?? 0.25)) : 0;
+  return { id, shape: pad.shape, size: [pad.size[0], pad.size[1]], pos: [pad.px ?? pad.x, pad.py ?? pad.y], orientationDeg, cornerRadiusNm };
+}
+
 /** `OUTSET_ROUTINE::ProcessItem` over `shapes` in order (the success / failure counters run across all of them, as in the C++). */
 export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): OutsetResult {
+  return outsetItems(
+    shapes.map((shape) => ({ kind: "shape", shape })),
+    params
+  );
+}
+
+/**
+ * `OUTSET_ROUTINE::ProcessItem` over the selected shapes and pads in order, the success / failure counters running across all of them. A pad is never
+ * deleted: `item_removal_handler` removes only an item with no parent footprint ("If you do an outset on a FP pad, do you really want to delete the parent?").
+ */
+export function outsetItems(items: readonly OutsetSource[], params: OutsetParams): OutsetResult {
   const add: CmdShape[] = [];
   const remove: string[] = [];
   let successes = 0;
   let failures = 0;
   const d = params.outsetNm;
 
-  for (const s of shapes) {
-    const layer = params.useSourceLayers ? s.layer : params.layer;
+  for (const item of items) {
+    // `layer = useSourceLayers ? aItem.GetLayer() : layer`; `GetBoardItemWidth` has no width for a pad, so it takes the dialog's.
+    const layer = params.useSourceLayers ? (item.kind === "shape" ? item.shape.layer : PAD_SOURCE_LAYER) : params.layer;
     let width = params.lineWidthNm;
-    if (params.useSourceWidths) {
+    if (params.useSourceWidths && item.kind === "shape") {
+      const s = item.shape;
       const w = s.kind === "segment" ? s.stroke_width : s.stroke_width && !s.filled ? s.stroke_width : null;
       if (w != null) width = w;
     }
@@ -409,6 +462,68 @@ export function outsetShapes(shapes: readonly Shape[], params: OutsetParams): Ou
       else rect(c[0] - r, c[1] - r, c[0] + r, c[1] + r);
     };
 
+    if (item.kind === "pad") {
+      const pad = item.pad;
+      switch (pad.shape) {
+        case "rect":
+        case "round_rect":
+        case "oval": {
+          // `BOX2I box{ pad.GetPosition() - pad_size / 2, pad_size }; box.Inflate( outset )`.
+          const [sx, sy] = pad.size;
+          const bx0 = pad.pos[0] - Math.trunc(sx / 2) - d;
+          const by0 = pad.pos[1] - Math.trunc(sy / 2) - d;
+          const bw = sx + 2 * d;
+          const bh = sy + 2 * d;
+          if (bw <= 0 || bh <= 0) {
+            failures++;
+            break;
+          }
+          let radius = d;
+          if (pad.shape === "round_rect") radius += pad.cornerRadiusNm;
+          else if (pad.shape === "oval") radius += Math.trunc(Math.min(sx, sy) / 2);
+          radius = params.roundCorners ? Math.max(radius, 0) : 0;
+          // `ROUNDRECT rrect( box, radius ); rrect.TransformToPolygon( poly ); poly.Rotate( pad.GetOrientation(), pad.GetPosition() ); addPoly( poly )`.
+          const turn = (p: V): V => rotatePoint(p, toIU(pad.pos), pad.orientationDeg);
+          const box: [number, number, number, number] = [bx0, by0, bx0 + bw, by0 + bh];
+          const r = Math.max(0, Math.min(radius, Math.trunc(Math.min(bw, bh) / 2)));
+          if (r === 0) {
+            // A chain with no arc: one polygon (`addPolygonalChain`).
+            const ring: V[] = [
+              [bx0, by0],
+              [bx0 + bw, by0],
+              [bx0 + bw, by0 + bh],
+              [bx0, by0 + bh],
+            ];
+            add.push(mk({ kind: "polygon", pts: ring.map((p) => xy(fromIU(turn(toIU(p))))) }));
+          } else {
+            for (const piece of roundedRectPieces(box, r, turn)) {
+              if (piece.kind === "seg") seg(piece.a, piece.b);
+              else arc(piece.arc);
+            }
+          }
+          successes++;
+          break;
+        }
+        case "circle": {
+          // `pad.GetSize( ALL_LAYERS ).x / 2 + outset`, about `GetPosition()`.
+          const r = Math.trunc(pad.size[0] / 2) + d;
+          if (r <= 0) {
+            failures++;
+            break;
+          }
+          circleOrRect(pt(pad.pos), r);
+          successes++;
+          break;
+        }
+        default:
+          // Trapezoids ("not handled yet"), chamfered rectangles and custom pads: no exact outset, neither a success nor a failure.
+          break;
+      }
+      // (`DeleteItem` on a pad reaches `item_removal_handler`, which leaves an item with a parent footprint alone.)
+      continue;
+    }
+
+    const s = item.shape;
     switch (s.kind) {
       case "rect": {
         // `box.Inflate( outset )` on the (normalised) rectangle; no width or height left = failure.
@@ -520,30 +635,58 @@ function gridOut(x0: number, y0: number, x1: number, y1: number, g: number): [nu
   return [floorTo(x0, g), floorTo(y0, g), ceilTo(x1, g), ceilTo(y1, g)];
 }
 
-/** The straight sides and corner arcs of a rounded rectangle (`ROUNDRECT::TransformToPolygon`), the radius clamped to half the smaller side. */
-function roundedRectPieces(box: readonly [number, number, number, number], radiusNm: number): Array<{ kind: "seg"; a: P; b: P } | { kind: "arc"; arc: { start: V; mid: V; end: V } }> {
+type Piece = { kind: "seg"; a: P; b: P } | { kind: "arc"; arc: { start: V; mid: V; end: V } };
+
+/**
+ * A rounded rectangle as the shapes `addChain` (OUTSET_ROUTINE) and `addGraphicChain` (CreateLines) make of `ROUNDRECT::TransformToPolygon`'s
+ * chain: its straight segments in chain order (top, right, bottom, left; zero-length ones dropped), then its arcs (`MakeCornerArcCw90` NE, SE, SW,
+ * NW, or the two `MakeSideArcCw180` halves of an oval: E and W when only the width has a straight edge, N and S when only the height has). The radius
+ * is clamped to half the smaller side (`ROUNDRECT::ROUNDRECT`). A rectangle that is all corner (a circle: one 360-degree arc whose ends meet) gives
+ * nothing, as `arc.GetP0() == arc.GetP1()` skips it in both callers. `rotate` turns every point about a centre (`SHAPE_POLY_SET::Rotate`, a pad's
+ * orientation).
+ */
+function roundedRectPieces(box: readonly [number, number, number, number], radiusNm: number, rotate?: (p: V) => V): Piece[] {
   const [x0, y0, x1, y1] = box;
-  const r = Math.max(0, Math.min(radiusNm, Math.floor(Math.min(x1 - x0, y1 - y0) / 2)));
-  const out: Array<{ kind: "seg"; a: P; b: P } | { kind: "arc"; arc: { start: V; mid: V; end: V } }> = [];
-  if (r === 0) return out;
-  const xEdge = x1 - x0 - 2 * r;
-  const yEdge = y1 - y0 - 2 * r;
+  const w = x1 - x0;
+  const h = y1 - y0;
+  const r = Math.max(0, Math.min(radiusNm, Math.trunc(Math.min(w, h) / 2)));
+  const out: Piece[] = [];
+  const xEdge = w - 2 * r;
+  const yEdge = h - 2 * r;
+  if (r === 0 || xEdge < 0 || yEdge < 0 || w <= 0 || h <= 0) return out;
+  if (xEdge === 0 && yEdge === 0) return out; // the circle
+  const R = rotate ?? ((p: V) => p);
+  const segs: Array<[V, V]> = [];
+  const arcs: Array<{ start: V; mid: V; end: V }> = [];
+  // `inner_rect{ p0 + ( r, r ), x_edge, y_edge }`; `KIGEOM::GetPoint( inner_rect, dir )` is its corner or side middle in that direction.
+  const [ix0, iy0, ix1, iy1] = [x0 + r, y0 + r, x0 + r + xEdge, y0 + r + yEdge];
+  const quarter = (c: V, start: V) => arcs.push(arcFromCenterAngle(c, start, 90));
+  const half = (c: V, start: V) => arcs.push(arcFromCenterAngle(c, start, 180));
   if (xEdge > 0) {
-    out.push({ kind: "seg", a: [x0 + r, y0], b: [x1 - r, y0] });
-    out.push({ kind: "seg", a: [x1 - r, y1], b: [x0 + r, y1] });
+    segs.push([[x0 + r, y0], [x0 + r + xEdge, y0]]); // top
+    if (yEdge > 0) {
+      quarter([ix1, iy0], [ix1, iy0 - r]); // NE
+      segs.push([[x1, y0 + r], [x1, y0 + r + yEdge]]); // right
+      quarter([ix1, iy1], [ix1 + r, iy1]); // SE
+    } else {
+      half([ix1, Math.trunc((iy0 + iy1) / 2)], [ix1, iy0 - r]); // E
+    }
+    segs.push([[x0 + r + xEdge, y1], [x0 + r, y1]]); // bottom
+    if (yEdge > 0) {
+      quarter([ix0, iy1], [ix0, iy1 + r]); // SW
+      segs.push([[x0, y0 + r + yEdge], [x0, y0 + r]]); // left
+      quarter([ix0, iy0], [ix0 - r, iy0]); // NW
+    } else {
+      half([ix0, Math.trunc((iy0 + iy1) / 2)], [ix0, iy1 + r]); // W
+    }
+  } else {
+    // "x_edge is 0 but y_edge is not, so it's an oval the other way up": the right side, then the closing left side.
+    half([Math.trunc((ix0 + ix1) / 2), iy0], [ix0 - r, iy0]); // N
+    segs.push([[x1, y0 + r], [x1, y0 + r + yEdge]]);
+    half([Math.trunc((ix0 + ix1) / 2), iy1], [ix1 + r, iy1]); // S
+    segs.push([[x0, y0 + r + yEdge], [x0, y0 + r]]);
   }
-  if (yEdge > 0) {
-    out.push({ kind: "seg", a: [x1, y0 + r], b: [x1, y1 - r] });
-    out.push({ kind: "seg", a: [x0, y1 - r], b: [x0, y0 + r] });
-  }
-  const corner = (cx: number, cy: number, from: number): void => {
-    // A quarter circle about (cx, cy), starting at angle `from` (degrees, y down), turning clockwise on screen.
-    const at = (deg: number): V => [Math.round(toIU([cx, cy])[0] + r * Math.cos((deg * Math.PI) / 180)), Math.round(toIU([cx, cy])[1] + r * Math.sin((deg * Math.PI) / 180))];
-    out.push({ kind: "arc", arc: { start: at(from), mid: at(from + 45), end: at(from + 90) } });
-  };
-  corner(x0 + r, y0 + r, 180); // top left: from the left side up to the top
-  corner(x1 - r, y0 + r, 270); // top right
-  corner(x1 - r, y1 - r, 0); // bottom right
-  corner(x0 + r, y1 - r, 90); // bottom left
+  for (const [a, b] of segs) if (a[0] !== b[0] || a[1] !== b[1]) out.push({ kind: "seg", a: fromIU(R(toIU(a))), b: fromIU(R(toIU(b))) });
+  for (const a of arcs) out.push({ kind: "arc", arc: { start: R(a.start), mid: R(a.mid), end: R(a.end) } });
   return out;
 }
