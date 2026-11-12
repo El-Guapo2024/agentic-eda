@@ -5291,16 +5291,23 @@ impl LibrarySymbol {
     /// draws and is written with (`LIB_SYMBOL::GetBodyStyleCount`). A symbol that declares none keeps no alternate even if a stray item is of
     /// `body_style` 2: KiCad would not show it either. A symbol of custom body styles (`body_style_names`) has its second style as the alternate; the
     /// engine has no third one.
+    /// A shape marked "Private to Symbol Editor" (`SCH_ITEM::IsPrivate`, kept in [`crate::lib_keep::LibrarySymbolKeep::graphic_looks`]): a placed symbol does not draw it
+    /// (`SCH_PAINTER::draw( SCH_SHAPE )` returns `if( aShape->IsPrivate() && !m_schSettings.m_IsSymbolEditor )`). A text's and a text box's own flag is
+    /// [`LibrarySymbolGraphic::is_private`].
+    pub fn is_private_shape(&self, g: &LibrarySymbolGraphic) -> bool {
+        self.kicad.graphic_looks.get(g.id()).is_some_and(|l| l.private)
+    }
+
     pub fn to_engine_symbol(&self) -> crate::symbol::LibSymbol {
         let alternate = self.is_multi_body_style().then(|| {
             Box::new(crate::symbol::AlternateBody::new(
-                self.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == 2).flat_map(|g| g.to_engine_graphics()).collect(),
+                self.graphics.iter().filter(|g| (g.body_style() == 0 || g.body_style() == 2) && !self.is_private_shape(g)).flat_map(|g| g.to_engine_graphics()).collect(),
                 self.pins.iter().filter(|p| p.body_style == 0 || p.body_style == 2).map(|p| p.to_engine_pin()).collect(),
             ))
         });
         crate::symbol::LibSymbol {
             lib_id: self.lib_id.clone(),
-            graphics: self.graphics.iter().filter(|g| g.body_style() <= 1).flat_map(|g| g.to_engine_graphics()).collect(),
+            graphics: self.graphics.iter().filter(|g| g.body_style() <= 1 && !self.is_private_shape(g)).flat_map(|g| g.to_engine_graphics()).collect(),
             pins: self.pins.iter().filter(|p| p.body_style <= 1).map(|p| p.to_engine_pin()).collect(),
             power: self.power,
             in_bom: self.in_bom,

@@ -2,7 +2,8 @@
 // -- a box of the two corners, added by OK, and gone with Cancel (`SYMBOL_EDITOR_DRAWING_TOOLS::doDrawShape`) -- or on a box that is there (a double click, `E`, Properties in the
 // context menu). The text, its font, size, bold and italic and colour, its alignment in the box and the way it runs, the border with its width and colour, "Background fill" with
 // its colour (`FILLED_WITH_COLOR` or `NO_FILL`: a box filled with the body's background before is one filled with the default colour after, drawn the same), "Private to symbol
-// editor" and the two "Common to all ..." boxes (UI-LEFT Y4). Not here: the border style (kept as the file says it, by the box's id) and the hyperlink (the schematic's only).
+// editor" and the two "Common to all ..." boxes (UI-LEFT Y4), and the border's Style (`m_borderStyleCombo`, kept beside the box: `set_symbol_graphic_looks`, UI-LEFT-2 YY2). Not
+// here: the hyperlink (`m_hyperlinkCb` is hidden outside the schematic editor).
 // OK makes the box as big as its text needs (`GetMinSize`, kicad-port/symTextBox.ts) and, for a box the tool drew, remembers its looks for the next one.
 import { useEffect, useRef, useState } from "react";
 import type { FieldHAlign, FieldVAlign } from "../../api/types";
@@ -16,6 +17,8 @@ import { looksFromForm, withoutLooks } from "../../kicad-port/symText";
 import { DEFAULT_FONT } from "../../kicad-port/textLooks";
 import { isUnspecified } from "../../kicad-port/schProperties";
 import { ColorSwatch, FontSelect, useFontFamilies } from "../TextLookControls";
+import { graphicLooksCmd, graphicStateOf, LINE_STYLE_CHOICES } from "../../kicad-port/symLooks";
+import type { Cmd } from "../../api/types";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** A swatch's colour as the box keeps it: `COLOR4D::UNSPECIFIED` (the swatch's "Default") is none. */
@@ -38,13 +41,15 @@ interface Form {
   vertical: boolean;
   border: boolean;
   width: string;
+  /** `m_borderStyleCombo`: the box's line style, Solid for the default one. */
+  style: string;
   filled: boolean;
   commonUnits: boolean;
   commonStyles: boolean;
 }
 
 /** `TransferDataToWindow` for a text box in the symbol editor. */
-function formOf(box: LibTextBox, symbol: { unit_count: number } & BodyStyled): Form {
+function formOf(box: LibTextBox, symbol: { unit_count: number } & BodyStyled, lineStyle: string | null): Form {
   return {
     private: !!box.private,
     font: box.font || DEFAULT_FONT,
@@ -60,6 +65,8 @@ function formOf(box: LibTextBox, symbol: { unit_count: number } & BodyStyled): F
     vertical: isVertical(box),
     border: box.stroke_mm >= 0,
     width: String(box.stroke_mm >= 0 ? box.stroke_mm : 0),
+    // `style == -1` (the default) shows `DEFAULT_LINE_STYLE_LABEL`, Solid
+    style: lineStyle ?? "solid",
     // `m_filledCtrl->SetValue( textBox->IsSolidFill() )`
     filled: box.fill !== "none",
     commonUnits: symbol.unit_count > 1 && box.unit === 0,
@@ -84,7 +91,7 @@ export function SymbolTextBoxDialog() {
       setForm(null);
       return;
     }
-    setForm(formOf(req.box, symbol));
+    setForm(formOf(req.box, symbol, req.id ? graphicStateOf(symbol, req.id).lineStyle : null));
     setError(null);
     ref.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -125,12 +132,12 @@ export function SymbolTextBoxDialog() {
       body_style: form.commonStyles ? 0 : state.activeBodyStyle,
     };
     box = grownToFit(box, measureStrokeText);
-    if (req.id) {
-      if (!(await api.replaceGraphic(req.id, box))) return;
-    } else {
-      dispatch({ type: "SET_LAST_TEXT_BOX", last: lastOf(box) });
-      await api.addGraphic(box);
-    }
+    // `stroke.SetLineStyle( it->first )` of the Style chosen; the fill is a colour or none (a hatch goes), the link and the pen stay
+    const before = req.id ? graphicStateOf(symbol, req.id) : { looks: {}, lineStyle: null, thicknessMm: null };
+    const looks = graphicLooksCmd(state.libId!, req.id ?? "", { looks: { ...before.looks, hatch: null }, lineStyle: form.style, thicknessMm: before.thicknessMm }, req.id ? before : undefined);
+    const cmds: Cmd[] = req.id ? [{ op: "replace_symbol_graphic", lib_id: state.libId!, id: req.id, graphic: box }, ...looks] : [{ op: "add_symbol_graphic", lib_id: state.libId!, graphic: box }, ...looks];
+    if (!req.id) dispatch({ type: "SET_LAST_TEXT_BOX", last: lastOf(box) });
+    if (!(await api.runCmds(cmds)) && req.id) return;
     close();
   };
   const radio = (name: string, testid: string, checked: boolean, label: string, onChange: () => void) => (
@@ -198,6 +205,14 @@ export function SymbolTextBoxDialog() {
             <span data-testid="tb-border-color" style={{ opacity: form.border ? 1 : 0.5, pointerEvents: form.border ? undefined : "none" }}>
               <ColorSwatch label="Border color" color={form.borderColor} onChange={(c) => set("borderColor", c)} />
             </span>
+            <span style={{ opacity: form.border ? 1 : 0.5 }}>Style:</span>
+            <select value={form.style} disabled={!form.border} onChange={(e) => set("style", e.target.value)} data-testid="tb-border-style" aria-label="Border style">
+              {LINE_STYLE_CHOICES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
             <span>Fill</span>
             <label>
               <input type="checkbox" checked={form.filled} onChange={(e) => set("filled", e.target.checked)} data-testid="tb-filled" /> Background fill

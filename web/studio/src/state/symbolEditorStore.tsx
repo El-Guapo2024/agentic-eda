@@ -49,6 +49,7 @@ import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kic
 import type { ViewTransform } from "./store";
 import { carriedItems, pastedText, rebased, snappedOrigin, type SymCarry } from "../kicad-port/symCarry";
 import { snapGridNm } from "../components/canvas/gridHelper";
+import { carriedStateOf, graphicLooksCmd, type GraphicState } from "../kicad-port/symLooks";
 
 export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_bezier" | "draw_textbox" | "text" | "anchor";
 
@@ -169,7 +170,7 @@ export interface SymbolEditorState {
   lastPlacedPin: { libId: string | null; pin: LibrarySymbolPin } | null;
   /** `SYMBOL_EDITOR_EDIT_TOOL::Copy`'s items (pins and graphics) and the `.kicad_sym` text it put on the system clipboard: Paste of that same text takes these (nothing lost
    * on the way), and so does a Paste where the browser will not read the clipboard. */
-  copiedItems: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null } | null;
+  copiedItems: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null; looks?: (GraphicState | null)[] } | null;
   /** `g_LastPin*`: the look the next pin starts with -- the last pin placed or edited (see `kicad-port/symPinTemplate.ts`). */
   pinTemplate: PinTemplate;
   /** `updateSymbolFields`: the Update Symbol Fields dialog (`DIALOG_UPDATE_SYMBOL_FIELDS`) is open on the symbol being edited. */
@@ -291,7 +292,7 @@ export type SymAction =
   | { type: "PIN_PLACED"; pin: LibrarySymbolPin }
   /** `RepeatDrawItem`: `selectionClear`, then `selectItem` of the repeated pin -- the last placed one, by the id `PIN_PLACED` found (r4 E4-2). */
   | { type: "SELECT_LAST_PLACED_PIN" }
-  | { type: "SET_COPIED_ITEMS"; items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null } | null }
+  | { type: "SET_COPIED_ITEMS"; items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null; looks?: (GraphicState | null)[] } | null }
   /** After Paste or Duplicate placed its items: they are the selection (the move leaves them selected) -- the pins and graphics the symbol has now that it had not in `before`. */
   | { type: "SELECT_ADDED"; before: string[] }
   /** `g_LastPin*`: the look the next pin starts with. */
@@ -550,6 +551,8 @@ export interface SymbolEditorApi {
   editGraphic: (id: string, strokeMm: number, fill: LibraryFill, scope?: { unit?: number; bodyStyle?: number }) => Promise<boolean>;
   /** A text box's dialog: the whole graphic as it was left (`replace_symbol_graphic`). */
   replaceGraphic: (id: string, graphic: LibrarySymbolGraphic) => Promise<boolean>;
+  /** Commands of a dialog's OK as one undo step (a `batch` of several): Shape Properties' and Text Box Properties' verb with the looks kept beside the graphic (UI-LEFT-2 YY2). */
+  runCmds: (cmds: Cmd[]) => Promise<boolean>;
   /** The point editor's drag (`SCH_POINT_EDITOR`, kicad-port/symPointEdit.ts): the graphic replaced and the pins a rectangle's side took along moved, one undo step. */
   reshapeGraphic: (id: string, graphic: LibrarySymbolGraphic, pins: { id: string; x: number; y: number }[]) => Promise<boolean>;
   deleteGraphic: (id: string) => Promise<void>;
@@ -876,8 +879,10 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       // `SYMBOL_EDITOR_EDIT_TOOL::Duplicate`: the copies (`RequestSelection( nonFields )`), then `SCH_ACTIONS::move` from the cursor -- they follow it until a click
       const d = duplicateItems([...st.selection], sym.pins, sym.graphics);
       if (d.pins.length + d.graphics.length === 0) return;
+      // each copy takes its original's looks (`SCH_ITEM::Duplicate`), in `duplicateItems`' order
+      const looks = sym.graphics.filter((g) => g.id && st.selection.has(g.id)).map((g) => carriedStateOf(sym, g.id));
       dispatch({ type: "CLEAR_SELECTION" });
-      dispatch({ type: "SET_CARRY", carry: { kind: "duplicate", pins: d.pins, graphics: d.graphics, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
+      dispatch({ type: "SET_CARRY", carry: { kind: "duplicate", pins: d.pins, graphics: d.graphics, looks, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
     },
     copySelection: async (cut) => {
       const st = stateRef.current;
@@ -896,7 +901,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       } catch (e) {
         dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
       }
-      dispatch({ type: "SET_COPIED_ITEMS", items: { pins, graphics, text } });
+      dispatch({ type: "SET_COPIED_ITEMS", items: { pins, graphics, text, looks: graphics.map((g) => carriedStateOf(sym, g.id)) } });
       if (cut) await api.deleteItems([...pins, ...graphics].map((i) => i.id!));
     },
     pasteItems: async () => {
@@ -905,7 +910,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       // `Paste`: nothing on a derived symbol (`symbol->IsDerived()`)
       if (!st.libId || !sym || st.derivedOwn || st.carry) return;
       const clip = await readClipboardText();
-      let items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] };
+      let items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; looks?: (GraphicState | null)[] };
       if (st.copiedItems && (clip === null || clip === st.copiedItems.text)) {
         items = st.copiedItems;
       } else if (clip !== null && clip !== "") {
@@ -914,7 +919,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
           const parsed = await parseSymbolText(clip);
           const first = parsed.symbols[0];
           if (!first) return;
-          items = { pins: first.pins, graphics: first.graphics };
+          items = { pins: first.pins, graphics: first.graphics, looks: first.graphics.map((g) => carriedStateOf(first, g.id)) };
         } catch {
           // "If it's not a symbol then paste as text"
           items = { pins: [], graphics: [pastedText(clip)] };
@@ -925,7 +930,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const placed = pastedItems(items, st.activeUnit, st.activeBodyStyle);
       if (placed.pins.length + placed.graphics.length === 0) return;
       dispatch({ type: "CLEAR_SELECTION" });
-      dispatch({ type: "SET_CARRY", carry: { kind: "paste", pins: placed.pins, graphics: placed.graphics, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
+      dispatch({ type: "SET_CARRY", carry: { kind: "paste", pins: placed.pins, graphics: placed.graphics, looks: items.looks, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
     },
     carryPin: (pin) => {
       // `TwoClickPlace`: after `CreatePin`'s dialog the pin follows the cursor (`item->SetPosition( cursorPos )`) until the click that places it
@@ -961,7 +966,14 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         return;
       }
       const before = [...sym.pins, ...sym.graphics].map((i) => i.id).filter((id): id is string => !!id);
-      const cmds: Cmd[] = [...pins.map((pin): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin })), ...graphics.map((graphic): Cmd => ({ op: "add_symbol_graphic", lib_id: libId, graphic }))];
+      // a copy's looks right after it (`set_symbol_graphic_looks` with no id: the graphic just added)
+      const cmds: Cmd[] = [
+        ...pins.map((pin): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin })),
+        ...graphics.flatMap((graphic, n): Cmd[] => {
+          const st2 = c.looks?.[n];
+          return [{ op: "add_symbol_graphic", lib_id: libId, graphic }, ...(st2 ? graphicLooksCmd(libId, "", st2) : [])];
+        }),
+      ];
       dispatch({ type: "SET_CARRY", carry: null });
       if (cmds.length === 0) return;
       // one commit: "Paste", "Duplicate", "Draw Text"
@@ -1026,6 +1038,10 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const libId = stateRef.current.libId;
       if (!libId) return false;
       return runCmd({ op: "replace_symbol_graphic", lib_id: libId, id, graphic });
+    },
+    runCmds: async (cmds) => {
+      if (cmds.length === 0) return true;
+      return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     reshapeGraphic: async (id, graphic, pins) => {
       const libId = stateRef.current.libId;

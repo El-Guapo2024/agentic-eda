@@ -38,13 +38,78 @@ pub struct LibrarySymbolKeep {
     /// `(unit_name "..")` of a unit's sub-symbol (`LIB_SYMBOL::GetUnitDisplayNames`), by unit number.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unit_names: BTreeMap<u32, String>,
-    /// What a text's `(effects ..)` says beyond its size (`LibrarySymbolGraphic::Text` has the text, its place, angle and size), by the text's id.
+    /// What a text's `(effects ..)` says beyond its size (`LibrarySymbolGraphic::Text` has the text, its place, angle and size), by the text's id. A text box's pen
+    /// (`thickness_mm`) is kept here too (UI-LEFT-2 YY2).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_styles: BTreeMap<String, KeptTextStyle>,
     /// The drawn items the editor does not draw or edit (a `(bezier ..)`), as the file wrote them, each with its unit and body style; written back into their
     /// sub-symbol. Move Symbol Anchor does not move them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<KeptSymbolItem>,
+    /// What a graphic has that its kind does not hold as members (UI-LEFT-2 YY2): a shape's Private flag, border and fill colours, hatched fill and a rectangle's
+    /// corner radius, a text's or text box's hyperlink -- by the graphic's id. Edited by `set_symbol_graphic_looks` (the Properties pane, Shape Properties); read
+    /// and written where `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` has them. Additive: absent reads as none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub graphic_looks: BTreeMap<String, KeptGraphicLooks>,
+    /// A field's font face and colour (`EDA_TEXT::Format`'s `(face ..)` and `(color ..)` in the field's `(effects (font ..))`), by the field's name (UI-LEFT-2 YY2).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub field_looks: BTreeMap<String, KeptFieldLooks>,
+}
+
+/// See [`LibrarySymbolKeep::graphic_looks`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeptGraphicLooks {
+    /// `SCH_ITEM::IsPrivate` of a shape (`(rectangle private ..)`, Shape Properties' "Private to Symbol Editor"); a text and a text box hold their own.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub private: bool,
+    /// A shape's border colour (`STROKE_PARAMS::GetColor`, `(stroke .. (color r g b a))`); `None` is `COLOR4D::UNSPECIFIED`. A text box holds its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_color: Option<crate::sch_extras::SchColor>,
+    /// A shape's fill colour (`EDA_SHAPE::GetFillColor`, `formatFill`'s `(color ..)` of a colour or hatched fill); `None` is `COLOR4D::UNSPECIFIED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_color: Option<crate::sch_extras::SchColor>,
+    /// A hatched fill (`FILL_T::HATCH` / `REVERSE_HATCH` / `CROSS_HATCH`: `hatch`, `reverse_hatch`, `cross_hatch`), the shape's `fill` then being
+    /// [`crate::ir::LibraryFill::Color`] (a hatch is drawn in the fill colour; `formatFill` writes its colour as for `color`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hatch: Option<String>,
+    /// A rectangle's corner radius, mm (`EDA_SHAPE::GetCornerRadius`, `formatRect`'s `(radius ..)`); 0 is square corners.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub radius_mm: f64,
+    /// A text's or text box's hyperlink (`EDA_TEXT::GetHyperlink`, `(href "..")` in its `(effects ..)`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hyperlink: String,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+impl KeptGraphicLooks {
+    pub fn is_default(&self) -> bool {
+        *self == KeptGraphicLooks::default()
+    }
+}
+
+/// See [`LibrarySymbolKeep::field_looks`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeptFieldLooks {
+    /// The face (`EDA_TEXT::GetFont`); `None` is the default font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    /// The colour (`EDA_TEXT::GetTextColor`); `None` is `COLOR4D::UNSPECIFIED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<crate::sch_extras::SchColor>,
+    /// The pen, mm (`(thickness ..)`); `None` is Auto Thickness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness_mm: Option<f64>,
+}
+
+impl KeptFieldLooks {
+    pub fn is_default(&self) -> bool {
+        *self == KeptFieldLooks::default()
+    }
 }
 
 /// See [`LibrarySymbolKeep::text_styles`]: `EDA_TEXT::Format`'s `(font (thickness ..) bold italic)`, `(justify ..)` and `(hide yes)`.

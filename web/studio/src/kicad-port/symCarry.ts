@@ -21,6 +21,8 @@ export interface SymCarry {
   originNm: [number, number];
   /** The snapped cursor minus `originNm`: the items are drawn, and placed, moved by it. */
   deltaNm: [number, number];
+  /** Each graphic's looks kept beside it (kicad-port/symLooks.ts), in step with `graphics`: a copy is the original's (`SCH_ITEM::Duplicate`, `Paste`), UI-LEFT-2 YY2. */
+  looks?: (import("./symLooks").GraphicState | null)[];
 }
 
 const IU_PER_MM = 1e4;

@@ -53,6 +53,7 @@ import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
 import { newTextBox } from "../../kicad-port/symTextBox";
+import { fieldLooksOf, graphicStateOf } from "../../kicad-port/symLooks";
 import { carriedItems } from "../../kicad-port/symCarry";
 import { bezierFromClicks, bezierGraphic } from "../../kicad-port/symBezier";
 import { addCorner, canAddCorner, eeFindHandle, handlePos, POINT_SIZE_PX, removableCorner, removeCorner, type EeHandle } from "../../kicad-port/eePointEdit";
@@ -242,7 +243,7 @@ export function SymbolEditorCanvas() {
     const p = snap.point(tool, [wx, wy], snapMods(e), carryCategory());
     return [p[0], p[1]];
   };
-  const carried = useMemo(() => (state.carry ? carriedItems(state.carry) : null), [state.carry]);
+  const carried = useMemo(() => (state.carry ? { ...carriedItems(state.carry), looks: state.carry.looks } : null), [state.carry]);
   /** The point editor's drag in progress: the shape, the handle and where the snapped cursor has it. */
   const [pointDrag, setPointDrag] = useState<{ id: string; handle: EeHandle; to: [number, number] } | null>(null);
   /**
@@ -355,6 +356,10 @@ export function SymbolEditorCanvas() {
       carried,
       pointEditor,
       fields: shownFields,
+      // a graphic's looks kept beside it (UI-LEFT-2 YY2)
+      looksOf: (id) => (sym ? graphicStateOf(sym, id) : null),
+      // a derived symbol's field looks are its own entry's
+      fieldLooksOf: (name) => fieldLooksOf(state.derivedOwn ?? sym!, name),
     });
     // What the grid helper shows: the snap marker, the snap lines, the construction geometry.
     const snapOverlay = snap.overlay();

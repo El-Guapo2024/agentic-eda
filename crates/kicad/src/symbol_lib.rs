@@ -725,7 +725,7 @@ pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::Lib
             writeln!(out, "\t\t\t(unit_name {})", crate::sexpr_str(name)).unwrap();
         }
         for g in sym.graphics.iter().filter(|g| g.unit() == unit && g.body_style() == style) {
-            write_symbol_graphic(out, g, sym.kicad.stroke_types.get(g.id()).map(String::as_str), sym.kicad.text_styles.get(g.id()));
+            write_symbol_graphic_with(out, g, sym.kicad.stroke_types.get(g.id()).map(String::as_str), sym.kicad.text_styles.get(g.id()), sym.kicad.graphic_looks.get(g.id()));
         }
         for k in sym.kicad.items.iter().filter(|k| k.unit == unit && k.body_style == style) {
             writeln!(out, "\t\t\t{}", k.text).unwrap();
@@ -745,7 +745,7 @@ pub(crate) fn write_symbol_named_with(out: &mut String, sym: &eda_model::ir::Lib
 /// The symbol's `(property ...)` forms (`saveField` for each field in order, then `saveDcmInfoAsFields`: the keywords and the footprint filters, hidden, only when there are some).
 fn write_fields(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
     for f in sym.all_fields() {
-        write_field(out, &f);
+        write_field_with(out, &f, sym.kicad.field_looks.get(&f.name));
     }
     // "a custom lock property is used to preserve the locked flag state": a root symbol's, after its fields
     if sym.units_locked && sym.extends.is_none() {
@@ -767,15 +767,24 @@ fn hidden_field(name: &str, text: &str) -> eda_model::sym_fields::LibrarySymbolF
 /// `show_name` and `do_not_autoplace` forms only when they are on, and `hide` inside `effects` (`(effects (font ...) (hide yes))`, as the schematic writer has it: a bare `hide`
 /// after the closing parenthesis is no KiCad syntax, and kicad-cli answers "Unable to load library" to a file that has one).
 fn write_field(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField) {
+    write_field_with(out, f, None);
+}
+
+/// [`write_field`] with the field's face and colour (`EDA_TEXT::Format`: `(face ..)` first in `(font ..)`, `(color ..)` last; UI-LEFT-2 YY2).
+fn write_field_with(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField, looks: Option<&eda_model::lib_keep::KeptFieldLooks>) {
     use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
     use std::fmt::Write as _;
-    let mut font = format!("(font (size {} {})", crate::fmt_mm_f(f.size_mm), crate::fmt_mm_f(f.size_mm));
+    let mut font = format!("(font {}(size {} {})", face_of(looks.and_then(|l| l.font.as_deref())), crate::fmt_mm_f(f.size_mm), crate::fmt_mm_f(f.size_mm));
+    if let Some(t) = looks.and_then(|l| l.thickness_mm) {
+        font.push_str(&format!(" (thickness {})", crate::fmt_mm_f(t)));
+    }
     if f.bold {
         font.push_str(" bold");
     }
     if f.italic {
         font.push_str(" italic");
     }
+    font.push_str(&color_of(looks.and_then(|l| l.color)));
     font.push(')');
     let mut justify: Vec<&str> = Vec::new();
     match f.h_align {
@@ -806,34 +815,53 @@ fn write_field(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField) 
 }
 
 pub(crate) fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic, stroke_type: Option<&str>, text_style: Option<&eda_model::lib_keep::KeptTextStyle>) {
+    write_symbol_graphic_with(out, g, stroke_type, text_style, None);
+}
+
+/// [`write_symbol_graphic`] with what the graphic keeps beside it (UI-LEFT-2 YY2): a shape's `private` (`formatRect` .. `formatPoly`'s `aIsPrivate`), its stroke's
+/// colour (`STROKE_PARAMS::Format`), its fill's colour and hatch (`formatFill`), a rectangle's `(radius ..)` (`formatRect`, when above 0); a text's `(href ..)`
+/// (`EDA_TEXT::Format`).
+pub(crate) fn write_symbol_graphic_with(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic, stroke_type: Option<&str>, text_style: Option<&eda_model::lib_keep::KeptTextStyle>, looks: Option<&eda_model::lib_keep::KeptGraphicLooks>) {
     use eda_model::ir::{LibraryFill, LibrarySymbolGraphic as G};
     use std::fmt::Write as _;
-    // a shape has no fill colour of its own here: a colour fill is the body's background (`fill_of` reads it so)
+    let looks = looks.cloned().unwrap_or_default();
+    // `formatFill`: a colour fill, or a hatched one (the shape's `Color` with its hatch kept beside it), with its colour (`COLOR4D::UNSPECIFIED` as `0 0 0 0`)
     let fill_tok = |f: LibraryFill| match f {
         LibraryFill::None => "none",
         LibraryFill::Outline => "outline",
-        LibraryFill::Background | LibraryFill::Color => "background",
+        LibraryFill::Background => "background",
+        LibraryFill::Color => looks.hatch.as_deref().unwrap_or("color"),
     };
     let kind = stroke_type.unwrap_or("default");
-    let stroke = |s: f64| format!("(stroke (width {}) (type {kind}))", crate::fmt_mm_f(s));
-    let fill = |f: LibraryFill| format!("(fill (type {}))", fill_tok(f));
+    let stroke_color = color_of(looks.stroke_color);
+    let stroke = |s: f64| format!("(stroke (width {}) (type {kind}){stroke_color})", crate::fmt_mm_f(s));
+    let fill = |f: LibraryFill| {
+        if f == LibraryFill::Color {
+            format!("(fill (type {}) (color {}))", fill_tok(f), crate::sch_extras_io::color_str(looks.fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 })))
+        } else {
+            format!("(fill (type {}))", fill_tok(f))
+        }
+    };
     let pt = |p: eda_model::symbol::SPoint| format!("{} {}", crate::fmt_mm_f(p.x), crate::fmt_mm_f(p.y));
+    let shape_private = if looks.private { "private " } else { "" };
+    let href = if looks.hyperlink.is_empty() { String::new() } else { format!(" (href {})", crate::sexpr_str(&looks.hyperlink)) };
     match g {
         G::Rectangle { start, end, stroke_mm, fill: f, .. } => {
-            writeln!(out, "\t\t\t(rectangle (start {}) (end {}) {} {})", pt(*start), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
+            let radius = if looks.radius_mm > 0.0 { format!(" (radius {})", crate::fmt_mm_f(looks.radius_mm)) } else { String::new() };
+            writeln!(out, "\t\t\t(rectangle {shape_private}(start {}) (end {}){radius} {} {})", pt(*start), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
         }
         G::Polyline { pts, stroke_mm, fill: f, .. } => {
-            write!(out, "\t\t\t(polyline (pts").unwrap();
+            write!(out, "\t\t\t(polyline {shape_private}(pts").unwrap();
             for p in pts {
                 write!(out, " (xy {})", pt(*p)).unwrap();
             }
             writeln!(out, ") {} {})", stroke(*stroke_mm), fill(*f)).unwrap();
         }
         G::Circle { center, radius_mm, stroke_mm, fill: f, .. } => {
-            writeln!(out, "\t\t\t(circle (center {}) (radius {}) {} {})", pt(*center), crate::fmt_mm_f(*radius_mm), stroke(*stroke_mm), fill(*f)).unwrap();
+            writeln!(out, "\t\t\t(circle {shape_private}(center {}) (radius {}) {} {})", pt(*center), crate::fmt_mm_f(*radius_mm), stroke(*stroke_mm), fill(*f)).unwrap();
         }
         G::Arc { start, mid, end, stroke_mm, fill: f, .. } => {
-            writeln!(out, "\t\t\t(arc (start {}) (mid {}) (end {}) {} {})", pt(*start), pt(*mid), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
+            writeln!(out, "\t\t\t(arc {shape_private}(start {}) (mid {}) (end {}) {} {})", pt(*start), pt(*mid), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
         }
         G::Text { text, at, angle_deg, size_mm, bold, italic, h_align, v_align, private, font: face, text_color, .. } => {
             use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
@@ -868,11 +896,11 @@ pub(crate) fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibraryS
             let hide = if style.hidden { " (hide yes)" } else { "" };
             // `saveText`: `(text private "..")` for a text private to the Symbol Editor
             let private = if *private { "private " } else { "" };
-            writeln!(out, "\t\t\t(text {private}{} (at {} {} {}) (effects (font {font}){justify}{hide}))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg)).unwrap();
+            writeln!(out, "\t\t\t(text {private}{} (at {} {} {}) (effects (font {font}){justify}{href}{hide}))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg)).unwrap();
         }
         // `formatBezier`: the four points (start, the two control points, end), the stroke and the fill
         G::Bezier { start, c1, c2, end, stroke_mm, fill: f, .. } => {
-            writeln!(out, "\t\t\t(bezier (pts (xy {}) (xy {}) (xy {}) (xy {})) {} {})", pt(*start), pt(*c1), pt(*c2), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
+            writeln!(out, "\t\t\t(bezier {shape_private}(pts (xy {}) (xy {}) (xy {}) (xy {})) {} {})", pt(*start), pt(*c1), pt(*c2), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
         }
         // `SCH_IO_KICAD_SEXPR_LIB_CACHE::saveTextBox`: the box is its start, its angle and the size from the start to the opposite corner (both in the symbol's Y-up mm), the four margins, the
         // stroke and the fill, and `EDA_TEXT::Format`'s effects. A border of no width is the width -1 of a schematic's units, 0.0001 mm (`STROKE_PARAMS`); the file's default
@@ -898,12 +926,13 @@ pub(crate) fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibraryS
             // (`COLOR4D::UNSPECIFIED` as `0 0 0 0`); `EDA_TEXT::Format`'s face first in `(font ..)` and the colour last
             let private = if *private { "private " } else { "" };
             let stroke_color = color_of(*stroke_color);
-            let fill = if *f == LibraryFill::Color { format!("(fill (type color) (color {}))", crate::sch_extras_io::color_str(fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 }))) } else { fill(*f) };
+            let fill = if *f == LibraryFill::Color { format!("(fill (type {}) (color {}))", fill_tok(*f), crate::sch_extras_io::color_str(fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 }))) } else { fill(*f) };
             let face = face_of(face.as_deref());
             let font_color = color_of(*text_color);
+            let pen = text_style.and_then(|t| t.thickness_mm).map(|t| format!(" (thickness {})", crate::fmt_mm_f(t))).unwrap_or_default();
             writeln!(
                 out,
-                "\t\t\t(text_box {private}{} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type {kind}){stroke_color}) {fill} (effects (font {face}(size {size} {size}){}{}{font_color}){justify}))",
+                "\t\t\t(text_box {private}{} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type {kind}){stroke_color}) {fill} (effects (font {face}(size {size} {size}){pen}{}{}{font_color}){justify}{href}))",
                 crate::sexpr_str(text),
                 crate::fmt_mm_f(start.x),
                 crate::fmt_mm_f(start.y),
