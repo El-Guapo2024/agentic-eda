@@ -963,7 +963,7 @@ export function Canvas() {
           // `m_startWithVia` (V before the route started, actions/routerViaActions.ts): the route starts with a via armed, and the flag is spent
           const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current, copper: board.layers } : undefined;
           if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
-          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth, startWithVia);
+          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked(), state.bcx.autoTrackWidth, startWithVia, undefined, layerPairsOf(board, state.pcbx.layerPairs).current);
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);
@@ -984,7 +984,7 @@ export function Canvas() {
           // `m_startWithVia` for a pair too (R7-R3), spent at the start
           const startWithVia = state.pcbx.startWithVia ? { size: chosenViaOf("through", viaChoiceOf(state)), pair: layerPairsOf(board, state.pcbx.layerPairs).current, copper: board.layers } : undefined;
           if (startWithVia) dispatch({ type: "PCBX", patch: { startWithVia: false } });
-          void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth, startWithVia);
+          void startDiffPairRoute(sx, sy, layer, dispatch, dims, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), state.bcx.autoTrackWidth, startWithVia, layerPairsOf(board, state.pcbx.layerPairs).current);
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);

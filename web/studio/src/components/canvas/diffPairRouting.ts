@@ -11,6 +11,7 @@ import type { RouterSettings } from "../../kicad-port/routerSettings";
 import type { LayerPair } from "../../kicad-port/layerPairs";
 import { withEventSizes } from "../../kicad-port/routerSizes";
 import { planThroughVia } from "./routerViaArm";
+import { keepRouterSizesPairs, startRouterSizesPairs } from "../../kicad-port/routerVia";
 
 /** `6` / the first click after arming the diff-pair tool: start a session
  * from whatever pad/via/track-end is at `(x, y)`, on a net with a
@@ -22,7 +23,7 @@ import { planThroughVia } from "./routerViaArm";
 /** `startWithVia`: V was pressed before the pair started (`m_startWithVia`, R7-R3): the pair starts with its vias armed, sized as V sizes them
  *  (`size`: none for the net class's), to Place Through Via's implicit target (`performRouting`: `handleLayerSwitch( ACT_PlaceThroughVia, true )`: the
  *  nearest ratsnest anchor's layer of the P net, else the other layer of the layer pair `pair`, UI-LEFT R5). */
-export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair; copper: readonly string[] }): Promise<void> {
+export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair; copper: readonly string[] }, boardPair?: LayerPair): Promise<void> {
   // `dims`: the "Differential Pair Dimensions..." dialog's custom width and gap, when it was used.
   const preview = await dpStart(x, y, layer, dims, settings, autoTrackWidth);
   if (!preview.ok) {
@@ -34,14 +35,18 @@ export async function startDiffPairRoute(x: number, y: number, layer: string, di
   // whatever the start layer, and given back when it ends (R6-R6)
   draw.originalActiveLayer = layer;
   if (preview.layer && preview.layer !== layer) dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
+  // `prepareInteractive`: the router's sizes as the last route left them (`m_savedSizes`, UI-LEFT-2 RR3; one `ROUTER` for routes and pairs) plus the
+  // board's layer pair
+  const pair = boardPair ?? startWithVia?.pair;
+  if (pair) draw.sizesPairs = startRouterSizesPairs(pair);
   if (startWithVia) {
-    const plan = await planThroughVia({ x, y }, draw.layer, startWithVia.copper, startWithVia.pair, undefined);
+    const plan = await planThroughVia({ x, y }, draw.layer, startWithVia.copper, startWithVia.pair, draw.sizesPairs);
     if (plan.ok) {
       const armed = await dpToggleVia(true, plan.toLayer, startWithVia.size?.diameter, startWithVia.size?.drill);
       if (armed.ok) {
         draw.placingVia = true;
         draw.pendingViaLayer = plan.toLayer;
-        draw.sizesPairs = plan.sizesPairs;
+        draw.sizesPairs = keepRouterSizesPairs(plan.sizesPairs);
       }
     }
   }

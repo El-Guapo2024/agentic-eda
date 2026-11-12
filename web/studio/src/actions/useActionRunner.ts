@@ -99,6 +99,7 @@ import { commonChecked } from "../kicad-port/commonChecked";
 import { getCommonOptions, setWindowOptions, useCommonOptions, windowOptionsOf } from "../state/commonOptions";
 import { unfilledZoneWarning, ZONE_FILL_WARNING_MS } from "../kicad-port/checkRevision";
 import { registerEditorFrameActions } from "./editorFrameActions";
+import { layerPairsOf } from "./pcbRouterSweep";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { toggleSearchPane } from "../state/searchPane";
 import { toggleSchSearchPane } from "../state/schSearchPane";
@@ -2395,7 +2396,7 @@ export function useActionRunner() {
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
             if (api.getState().activeLayer !== originalLayer) dispatch({ type: "SET_ACTIVE_LAYER", layer: originalLayer });
-            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth, undefined, originalLayer)) ? "live" : "done";
+            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch, undefined, state.bcx.autoTrackWidth, undefined, originalLayer, layerPairsOf(board, state.pcbx.layerPairs).current)) ? "live" : "done";
           };
           // "We want autorouted tracks to all be in one undo group except for any tracks that need to be manually finished." (R6-R4)
           let groupStart = true;

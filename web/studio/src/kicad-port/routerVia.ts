@@ -75,6 +75,38 @@ export function layerPairMap(a: string, b: string): Record<string, string> {
   return a === b ? { [a]: a } : { [a]: b, [b]: a };
 }
 
+/** `SIZES_SETTINGS::AddLayerPair( aL1, aL2 )` on a copy of `pairs`: the two entries are set over whatever the map held (a pair kept for another layer stays). */
+export function addLayerPair(pairs: Readonly<Record<string, string>>, a: string, b: string): Record<string, string> {
+  return { ...pairs, ...layerPairMap(a, b) };
+}
+
+/**
+ * The router's sizes' layer pairs kept from one route to the next (UI-LEFT-2 RR3). KiCad's `ROUTER` lives as long as the router tool, so
+ * `m_router->Sizes()` -- its `m_layerPairs` with them -- outlives a route: `prepareInteractive` starts each route from `m_router->Sizes()` and only adds the
+ * board's pair (`sizes.AddLayerPair( m_Route_Layer_TOP, m_Route_Layer_BOTTOM )`), and `ROUTER_TOOL::MainLoop` stores them in `m_savedSizes` when the tool
+ * exits, which `TOOL_BASE::Reset` hands the next router (`m_router->UpdateSizes( m_savedSizes )`). One map for the route and the pair tool (one `ROUTER`).
+ * The studio's router state lives in the browser tab, so this does too: [`keepRouterSizesPairs`] after every `UpdateSizes` that changes them (a route's
+ * start, a via command's `ClearLayerPairs` + `AddLayerPair`).
+ */
+let routerSizesPairs: Record<string, string> = {};
+
+/** The pairs `m_router->Sizes()` holds now (a copy). */
+export function currentRouterSizesPairs(): Record<string, string> {
+  return { ...routerSizesPairs };
+}
+
+/** `m_router->UpdateSizes( sizes )` with these pairs; returns them. */
+export function keepRouterSizesPairs(pairs: Readonly<Record<string, string>>): Record<string, string> {
+  routerSizesPairs = { ...pairs };
+  return { ...pairs };
+}
+
+/** `ROUTER_TOOL::prepareInteractive`: `PNS::SIZES_SETTINGS sizes( m_router->Sizes() ); .. sizes.AddLayerPair( m_Route_Layer_TOP, m_Route_Layer_BOTTOM );
+ *  m_router->UpdateSizes( sizes );` -- the pairs a route or a pair starts with, kept. */
+export function startRouterSizesPairs(boardPair: LayerPair): Record<string, string> {
+  return keepRouterSizesPairs(addLayerPair(routerSizesPairs, boardPair.a, boardPair.b));
+}
+
 /** The layers the layer picker offers (`SelectOneLayer( currentLayer, not_allowed_ly )`, `not_allowed_ly = LSET::AllNonCuMask()`, plus the current layer for a via that is not a through via: "One cannot place a blind/buried via on only one layer"). */
 export function pickableLayers(cmd: ViaCommand, copper: readonly string[], currentLayer: string): string[] {
   return copper.filter((l) => cmd.type === "through" || l !== currentLayer);

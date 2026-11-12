@@ -16,6 +16,7 @@ import { routeAttemptFinish, routeCancel, routeContinueFromEnd, routeFinish, rou
 import type { LayerPair } from "../../kicad-port/layerPairs";
 import { withEventSizes } from "../../kicad-port/routerSizes";
 import { planThroughVia } from "./routerViaArm";
+import { keepRouterSizesPairs, startRouterSizesPairs } from "../../kicad-port/routerVia";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
@@ -36,7 +37,7 @@ import { advanceRouteQueue } from "./routeQueue";
  *  sizes one (`size`: none for the net class's), to Place Through Via's implicit target -- the nearest ratsnest anchor's layer, else the other layer of
  *  the layer pair `pair` (components/canvas/routerViaArm.ts, UI-LEFT R5); `copper` is the board's copper layers in stack order.
  *  `originalActiveLayer`: the active layer to give back when the route ends, when it is not `layer` (Autoroute, R7-R7). */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair; copper: readonly string[] }, originalActiveLayer?: string): Promise<boolean> {
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number | undefined, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null, autoTrackWidth?: boolean, startWithVia?: { size: { diameter: number; drill: number } | null; pair: LayerPair; copper: readonly string[] }, originalActiveLayer?: string, boardPair?: LayerPair): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings, autoTrackWidth);
   // `syncZone`'s warning (KiCad's `KIDIALOG`): a rule area the router cannot handle is left out of its world
   for (const w of preview.warnings ?? []) dispatch({ type: "TOAST", message: w, kind: "info" });
@@ -50,15 +51,18 @@ export async function startInteractiveRoute(x: number, y: number, layer: string,
   // gives `m_originalActiveLayer` back, R6-R6)
   draw.originalActiveLayer = originalActiveLayer ?? layer;
   if (preview.layer && preview.layer !== layer) dispatch({ type: "SET_ACTIVE_LAYER", layer: preview.layer });
+  // `prepareInteractive`: the router's sizes as the last route left them (`m_savedSizes`, UI-LEFT-2 RR3) plus the board's layer pair
+  const pair = boardPair ?? startWithVia?.pair;
+  if (pair) draw.sizesPairs = startRouterSizesPairs(pair);
   // `performRouting`: "If the user pressed 'V' before starting to route, enable via placement now" (`handleLayerSwitch( ACT_PlaceThroughVia, true )`)
   if (startWithVia) {
-    const plan = await planThroughVia({ x, y }, draw.layer, startWithVia.copper, startWithVia.pair, undefined);
+    const plan = await planThroughVia({ x, y }, draw.layer, startWithVia.copper, startWithVia.pair, draw.sizesPairs);
     if (plan.ok) {
       const armed = await routeToggleVia(true, startWithVia.size?.diameter, startWithVia.size?.drill, plan.toLayer, { viaType: plan.viaType, span: plan.span });
       if (armed.ok) {
         draw.placingVia = true;
         draw.pendingViaLayer = plan.toLayer;
-        draw.sizesPairs = plan.sizesPairs;
+        draw.sizesPairs = keepRouterSizesPairs(plan.sizesPairs);
       }
     }
   }

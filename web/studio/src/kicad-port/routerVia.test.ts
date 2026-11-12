@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, NetClass } from "../api/types";
 import { chosenTrackWidthOf } from "./routerSizes";
-import { chosenViaEntry, chosenViaOf, chosenViaSize, currentViaSize, layerPairMap, routerLayerTarget, startWithViaAfterToolChange, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
+import { addLayerPair, chosenViaEntry, chosenViaOf, currentRouterSizesPairs, keepRouterSizesPairs, startRouterSizesPairs, chosenViaSize, currentViaSize, layerPairMap, routerLayerTarget, startWithViaAfterToolChange, DEFAULT_CUSTOM_TRACK_VIA, DEFAULT_MICROVIA, pickableLayers, planViaCommand, validateViaParameters, VIA_COMMANDS, VIA_NEEDS_TWO_LAYERS, viaSizeFor, type ViaCommand } from "./routerVia";
 
 const CU4 = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
 const blind: ViaCommand = { type: "blind", selectLayer: false };
@@ -187,4 +187,25 @@ test("V pressed before a route is cleared when the router tool is entered again 
   assert.equal(startWithViaAfterToolChange("route", "diffpair", true), true, "a mode switch stays in MainLoop");
   assert.equal(startWithViaAfterToolChange("route", "select", true), true, "leaving keeps it, the next entry clears it");
   assert.equal(startWithViaAfterToolChange("select", "route", undefined), undefined);
+});
+
+// UI-LEFT-2 RR3: the router's sizes outlive a route (`prepareInteractive` starts from `m_router->Sizes()`, `m_savedSizes` between tool runs).
+test("the via layer pair of the last route is kept and the next route only adds the board's pair", () => {
+  keepRouterSizesPairs({});
+  const board = { a: "F.Cu", b: "B.Cu" };
+  // route 1 starts: the board's pair
+  assert.deepEqual(startRouterSizesPairs(board), { "F.Cu": "B.Cu", "B.Cu": "F.Cu" });
+  // a blind via In1.Cu -> In2.Cu: `ClearLayerPairs` then `AddLayerPair`
+  const plan = planViaCommand({ cmd: pick("blind"), currentLayer: "In1.Cu", copper: CU4, layerPair: board, picked: "In2.Cu", sizesPairs: currentRouterSizesPairs() });
+  assert.ok(plan.ok);
+  keepRouterSizesPairs(plan.sizesPairs);
+  // route 2 starts: the via's pair is still there beside the board's
+  const next = startRouterSizesPairs(board);
+  assert.deepEqual(next, { "In1.Cu": "In2.Cu", "In2.Cu": "In1.Cu", "F.Cu": "B.Cu", "B.Cu": "F.Cu" });
+  // so V on In2.Cu with the anchor on In2.Cu goes to In1.Cu (`PairedLayer( GetCurrentLayer() )`), as it would in KiCad's second route
+  const v = planViaCommand({ cmd: through, currentLayer: "In2.Cu", copper: CU4, layerPair: board, ratsnestLayer: "In2.Cu", sizesPairs: next });
+  assert.equal(v.ok && v.toLayer, "In1.Cu");
+  // `AddLayerPair` overwrites both entries of the layers it names
+  assert.deepEqual(addLayerPair({ "F.Cu": "In1.Cu", "In1.Cu": "F.Cu" }, "F.Cu", "B.Cu"), { "F.Cu": "B.Cu", "In1.Cu": "F.Cu", "B.Cu": "F.Cu" });
+  keepRouterSizesPairs({});
 });
