@@ -27,19 +27,21 @@ test("each editor takes the extensions its frame's m_acceptedExts has", () => {
   assert.deepEqual(acceptedExtensions("symbol"), []);
 });
 
-test("the first file the studio can open is opened; the others are skipped, unavailable or ignored as they are", () => {
+test("every accepted file the studio can open runs its action, in the drop's order (DoWithAcceptedFiles); the others are unavailable or ignored", () => {
   const enabled = (a: string) => a !== "eeschema.EditorControl.ddAppendFile" && a !== "eeschema.EditorControl.ddAddImage";
   const plan = planDrop("schematic", ["part.kicad_sch", "logo.svg", "board.dxf", "notes.txt", "pic.png"], enabled);
-  assert.deepEqual(plan.open, { name: "logo.svg", action: "eeschema.EditorControl.ddImportGraphics" });
-  assert.deepEqual(plan.extra, ["board.dxf"]);
+  assert.deepEqual(plan.runs, [
+    { name: "logo.svg", action: "eeschema.EditorControl.ddImportGraphics" },
+    { name: "board.dxf", action: "eeschema.EditorControl.ddImportGraphics" },
+  ]);
   assert.deepEqual(plan.unavailable.map((u) => u.name), ["part.kicad_sch", "pic.png"]);
   assert.deepEqual(plan.ignored, ["notes.txt"]);
-  assert.equal(dropMessage("schematic", plan), "Only logo.svg was opened; board.dxf was skipped (drop one file at a time).");
+  assert.equal(dropMessage("schematic", plan), null, "KiCad says nothing of the files its frame passes over");
 });
 
 test("a drop nothing of which is opened says why", () => {
   const none = planDrop("symbol", ["a.dxf"], all);
-  assert.equal(none.open, null);
+  assert.deepEqual(none.runs, []);
   assert.equal(dropMessage("symbol", none), "a.dxf is not a file this editor opens.");
   const text = planDrop("pcb", ["notes.txt", "more.md"], all);
   assert.equal(dropMessage("pcb", text), "notes.txt, more.md are not files this editor opens (it takes .kicad_pcb, .brd, .dxf, .svg).");
@@ -51,15 +53,13 @@ test("a drop nothing of which is opened says why", () => {
 
 test("the schematics of a drop go to Import Sheet together: the sheets a file places are found among them", () => {
   const plan = planDrop("schematic", ["main.kicad_sch", "logo.svg", "power.kicad_sch", "pic.png", "adc.kicad_sch"], all);
-  assert.deepEqual(plan.open, { name: "main.kicad_sch", action: "eeschema.EditorControl.ddAppendFile", names: ["main.kicad_sch", "power.kicad_sch", "adc.kicad_sch"] });
-  assert.deepEqual(plan.extra, ["logo.svg", "pic.png"], "the other kinds are skipped as before: one at a time");
-  assert.equal(dropMessage("schematic", plan), "Only main.kicad_sch was opened; logo.svg, pic.png were skipped (drop one file at a time).");
-  // a drop of schematics only says nothing
-  const only = planDrop("schematic", ["a.kicad_sch", "b.kicad_sch"], all);
-  assert.deepEqual(only.open?.names, ["a.kicad_sch", "b.kicad_sch"]);
-  assert.equal(dropMessage("schematic", only), null);
-  // the other actions take one file, and say so as they always did
-  const boards = planDrop("pcb", ["a.kicad_pcb", "b.kicad_pcb"], all);
-  assert.deepEqual(boards.open, { name: "a.kicad_pcb", action: "pcbnew.Control.DdAppendBoard" });
-  assert.deepEqual(boards.extra, ["b.kicad_pcb"]);
+  assert.deepEqual(plan.runs, [
+    { name: "main.kicad_sch", action: "eeschema.EditorControl.ddAppendFile", names: ["main.kicad_sch", "power.kicad_sch", "adc.kicad_sch"] },
+    { name: "logo.svg", action: "eeschema.EditorControl.ddImportGraphics" },
+    { name: "pic.png", action: "eeschema.EditorControl.ddAddImage" },
+  ]);
+  assert.equal(dropMessage("schematic", plan), null);
+  // several boards: each is appended in turn
+  const boards = planDrop("pcb", ["a.kicad_pcb", "b.kicad_pcb", "c.svg"], all);
+  assert.deepEqual(boards.runs.map((r) => r.name), ["a.kicad_pcb", "b.kicad_pcb", "c.svg"]);
 });

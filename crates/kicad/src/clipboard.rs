@@ -52,6 +52,10 @@ pub struct Clipboard {
     /// The tables (`PCB_TABLE`), with their cells, as the text had them: a copied table, or the table `SaveSelection` makes of copied cells.
     pub tables: Vec<Table>,
     pub groups: Vec<ClipGroup>,
+    /// The items the text has locked (`(locked yes)`, `BOARD_ITEM::IsLocked`): `CLIPBOARD_IO::Parse` is the board parser, which keeps a lock, so a board
+    /// file brought in by Append Board or Place Design Block keeps its locked items locked (KiCad 8303b2ad `PCB_CONTROL::AppendBoard` and
+    /// `placeBoardItems` unlock nothing). A copy the studio or KiCad made holds none: `CLIPBOARD_IO::SaveSelection` writes every copy unlocked.
+    pub locked: Vec<ClipRef>,
     /// True when the text was a single bare footprint (`PCB_FOOTPRINT_T` in `PCB_CONTROL::Paste`) rather than a board.
     pub bare_footprint: bool,
 }
@@ -676,6 +680,27 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
                 .collect();
             group_index.insert(g.id.as_str(), clip.groups.len());
             clip.groups.push(ClipGroup { name: g.name.clone(), members, design_block: g.design_block.clone() });
+        }
+        for id in &dr.locked_ids {
+            let m = id.as_str();
+            let r = group_index
+                .get(m)
+                .copied()
+                .map(ClipRef::Group)
+                .or_else(|| clip.tracks.iter().position(|t| t.id == m).map(ClipRef::Track))
+                .or_else(|| clip.vias.iter().position(|v| v.id == m).map(ClipRef::Via))
+                .or_else(|| clip.zones.iter().position(|z| z.id == m).map(ClipRef::Zone))
+                .or_else(|| clip.shapes.iter().position(|s| s.id() == m).map(ClipRef::Shape))
+                .or_else(|| clip.texts.iter().position(|t| t.id == m).map(ClipRef::Text))
+                .or_else(|| clip.dimensions.iter().position(|d| d.id == m).map(ClipRef::Dimension))
+                .or_else(|| clip.barcodes.iter().position(|b| b.id == m).map(ClipRef::Barcode))
+                .or_else(|| clip.text_boxes.iter().position(|t| t.id == m).map(ClipRef::TextBox))
+                .or_else(|| clip.images.iter().position(|i| i.id == m).map(ClipRef::Image))
+                .or_else(|| clip.tables.iter().position(|t| t.id == m).map(ClipRef::Table))
+                .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint));
+            if let Some(r) = r {
+                clip.locked.push(r);
+            }
         }
     }
     if clip.is_empty() {

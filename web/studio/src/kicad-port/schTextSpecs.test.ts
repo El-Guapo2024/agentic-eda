@@ -114,3 +114,11 @@ test("SCH_TEXTBOX::GetDrawPos and the text broken to the column (GetShownText's 
   assert.ok(spec.text.split("\n").length > 1, spec.text);
   for (const l of layoutKicadText(spec).lines) assert.ok(l.extent <= 8 * MM, `${l.text}: ${l.extent}`);
 });
+
+test("a free text with a glyph width of its own (an imported DXF text) is that wide, and its pen is of that width (GetEffectiveTextPenWidth)", () => {
+  const t = { content: "AB", at: [0, 0] as [number, number], angle: 0, size_nm: 4_000_000, width_nm: 3_600_000, h: "left" as const, v: "bottom" as const };
+  const spec = schTextDrawSpec(t, 0);
+  assert.deepEqual(spec.size, [3_600_000, 4_000_000]);
+  assert.equal(spec.pen, 3_600_000 / 8, "GetPenSizeForNormal( GetTextWidth() )");
+  assert.deepEqual(schTextDrawSpec({ ...t, width_nm: null }, 0).size, [4_000_000, 4_000_000], "no width: as wide as it is high");
+});

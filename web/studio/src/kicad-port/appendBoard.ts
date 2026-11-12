@@ -16,6 +16,10 @@ export interface AppendInfo {
   counts?: Record<string, number>;
   /** What the append will add to or change on this board (copper layers, user layers, nets, references already in use). */
   notes?: string[];
+  /** KiCad 25ec2335 `remapAppendedLayers`: the rows of "Edit Mapping of Imported Layers" when the file's layers do not all fit the board; empty or absent when they do. */
+  layers?: import("./foreignImport").AppendLayerDesc[];
+  /** With a `layer_map` in the request: the file's text with its layers moved, which is what is appended. */
+  text?: string | null;
 }
 
 /** Is `name` a board file Append Board reads? */

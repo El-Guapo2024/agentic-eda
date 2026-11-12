@@ -417,9 +417,13 @@
     d = await dropFiles([{ name: "a.dxf", text: boardDxf }, { name: "b.dxf", text: boardDxf }]);
     await waitFor(() => root());
     await sleep(400);
-    check("two files dropped: the first opens and the toast says the other was skipped", field("File")?.value === "a.dxf" && /Only a\.dxf was opened; b\.dxf was skipped/.test(lastToast()), `${field("File")?.value} / ${lastToast()}`);
+    check("two files dropped: the first opens", field("File")?.value === "a.dxf", `${field("File")?.value} / ${lastToast()}`);
     button("Cancel").click();
-    await sleep(200);
+    // `DoWithAcceptedFiles`: each accepted file runs its action in turn -- the second once the first is done with the frame
+    await waitFor(() => field("File")?.value === "b.dxf", 8000);
+    check("and once its dialog is closed the second opens (DoWithAcceptedFiles runs each file in turn)", field("File")?.value === "b.dxf", field("File")?.value);
+    button("Cancel").click();
+    await sleep(900);
     d = await dropFiles([{ name: "notes.txt", text: "hello" }]);
     check("a file the editor does not take is said not to be one, and the browser did not take it either", d.prevented && dialogs().length === 0 && /notes\.txt is not a file this editor opens \(it takes \.kicad_pcb, \.brd, \.dxf, \.svg\)\./.test(lastToast()), lastToast());
 
@@ -565,36 +569,35 @@
     await sleep(200);
     const [cwx, cwy] = worldOf(cx, cy);
     const gx = Math.round(cwx / 1_270_000) * 1_270_000, gy = Math.round(cwy / 1_270_000) * 1_270_000;
+    // `SCH_DRAWING_TOOLS::ImportGraphics`: the items are a preview, nothing is on the sheet until a click
     q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: false });
-    appliedSch++;
-    nl = newLines(q.sch);
-    const [qx0, , , qy1] = span(nl.flatMap((l) => l.pts));
-    check("interactive placement: the drawing's origin is at the cursor's grid point", qx0 === gx && qy1 === gy, `got ${qx0}, ${qy1}; the cursor's grid point is ${gx}, ${gy}`);
-    check("and the Move tool carries the 8 new items", E.state().tool === "move" && E.state().selection.length === 8, JSON.stringify([E.state().tool, E.state().selection.length]));
+    const ghost = () => canvas().closest(".pcb-canvas-container")?.getAttribute("data-paste-ghost") ?? canvas().parentElement?.closest("[data-paste-ghost]")?.getAttribute("data-paste-ghost");
+    const ghostKind = () => document.querySelector("[data-paste-kind]")?.getAttribute("data-paste-kind");
+    check("interactive placement: OK puts nothing on the sheet; the 8 items are a preview in the hand", newLines(q.sch).length === 0 && newGraphics(q.sch).length === 0 && ghostKind() === "import" && Number(document.querySelector("[data-paste-ghost]")?.getAttribute("data-paste-ghost")) === 8, JSON.stringify([newLines(q.sch).length, ghostKind(), ghost()]));
     key("Escape");
-    await sleep(1000);
+    await sleep(600);
     const gone2 = await sch();
-    check("Escape takes the placement back and leaves nothing behind on the sheet", gone2.lines.length === sBase.lines && gone2.graphics.length === sBase.graphics && E.state().tool === "select", `${gone2.lines.length} lines, tool ${E.state().tool}`);
-    appliedSch--;
-    // and a click drops it where the pointer went: the import and the drop are one undo step of the schematic
+    check("Escape drops the preview and leaves nothing behind on the sheet", gone2.lines.length === sBase.lines && gone2.graphics.length === sBase.graphics && !ghostKind(), `${gone2.lines.length} lines, ${ghostKind()}`);
+    // a click adds the items with the drawing's origin on the grid point there: one command, one undo step, the new items selected
     fire("pointermove", cx, cy);
     await sleep(200);
     q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: false });
-    appliedSch++;
-    const dropAt = [cx + 120_000, cy + 90];
+    const dropAt = [cx + 120, cy + 90];
     fire("pointermove", ...dropAt);
     await sleep(300);
     fire("pointerdown", ...dropAt, 1);
     fire("pointerup", ...dropAt);
-    await sleep(1200);
+    await sleep(1500);
+    appliedSch++;
     const dropped4 = await sch();
     const movedLines = newLines(dropped4);
-    const [dx0] = span(movedLines.flatMap((l) => l.pts));
-    check("a click drops the carried drawing where the pointer went (it moved right of where it was put) and the tool is left", movedLines.length === 4 && dx0 > gx && E.state().tool === "select", `${movedLines.length} lines, x ${dx0} (was ${gx}), tool ${E.state().tool}`);
+    const [dx0, , , dy1] = span(movedLines.flatMap((l) => l.pts));
+    const [dwx, dwy] = worldOf(...dropAt);
+    check("a click adds the drawing with its origin at the grid point under the pointer, and selects the 8 new items", movedLines.length === 4 && Math.abs(dx0 - dwx) <= 1_270_000 && Math.abs(dy1 - dwy) <= 1_270_000 && E.state().selection.length === 8 && !ghostKind(), `${movedLines.length} lines, origin ${dx0}, ${dy1}, pointer ${dwx}, ${dwy}, ${E.state().selection.length} selected`);
     await undoDomain("schematic");
     appliedSch--;
     const afterDrop = await sch();
-    check("and ONE undo of the schematic takes the import and its drop away", afterDrop.lines.length === sBase.lines && afterDrop.graphics.length === sBase.graphics, `${afterDrop.lines.length} lines, ${afterDrop.graphics.length} graphics`);
+    check("and ONE undo of the schematic takes the import away", afterDrop.lines.length === sBase.lines && afterDrop.graphics.length === sBase.graphics, `${afterDrop.lines.length} lines, ${afterDrop.graphics.length} graphics`);
 
     // refusals
     const sNone = await importSch({ name: "dims.dxf", text: dxf(pair(0, "DIMENSION") + pair(8, "0")) }, { placeAt: true }, { ok: false });

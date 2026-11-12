@@ -7,6 +7,7 @@ import { appendBoardCmd, describeAppended, isKicadBoardName } from "../kicad-por
 import { getDesignBlocksUi } from "../state/designBlocks";
 import {
   acceptFor,
+  appendSourceLayers,
   asForeignParam,
   boardIndexOf,
   describeImport,
@@ -88,10 +89,26 @@ async function appendBoardFile(ctx: ImportActionContext, file: PickedFile): Prom
     return toast(e instanceof Error ? e.message : String(e), "error");
   }
   if (!info.ok || !info.reference) return toast(info.message ?? "Error loading board.", "error");
+  // KiCad 25ec2335 `remapAppendedLayers`: when a layer of the file is not on the board, or has another name there, the parser asks `DIALOG_MAP_LAYERS` where each layer
+  // goes. Cancel answers with nothing (`RunModal` returns `{}`), which keeps every layer on its own: the append goes on as it would have.
+  let text = file.text;
+  if (info.layers && info.layers.length > 0) {
+    const permitted = [...new Set(info.layers.flatMap((l) => l.permitted))];
+    const answer = await askLayerMapping({ name: file.name, format: "KiCad", layers: appendSourceLayers(info.layers), keepNames: importKeepKiCadLayerNames(), mode: "append", permitted });
+    if (answer && Object.keys(answer.map).length > 0) {
+      try {
+        info = await readAppendBoard(file, answer.map);
+      } catch (e) {
+        return toast(e instanceof Error ? e.message : String(e), "error");
+      }
+      if (!info.ok || !info.reference) return toast(info.message ?? "Error loading board.", "error");
+      if (typeof info.text === "string") text = info.text;
+    }
+  }
   const reference = info.reference;
   // `AppendBoard` reads the Design Blocks pane's "Place as group" for a plain board too (`cfg->m_DesignBlockChooserPanel.place_as_group`)
   const asGroup = getDesignBlocksUi().options.asGroup;
-  const placed = await ctx.api.placeNewItems((at) => appendBoardCmd(file.text, reference, at, file.name, asGroup), true);
+  const placed = await ctx.api.placeNewItems((at) => appendBoardCmd(text, reference, at, file.name, asGroup), true);
   if (!placed) return; // the refusal is on screen as a toast
   const notes = info.notes ?? [];
   toast(`Appended ${describeAppended(info.counts)}.${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`, "info");

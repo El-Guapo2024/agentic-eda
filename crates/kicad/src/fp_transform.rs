@@ -114,8 +114,9 @@ fn normalize_footprint(fp: &mut Vec<Sexpr>, scaled: &mut Vec<String>) {
 /// * a text's size by `|sx|` across and `|sy|` up (`PCB_TEXT::GetTextSize`), its thickness by the mean (`GetTextThickness`);
 /// * a graphic's points (`rebakeFromTransform`), and its line width by the mean (`PCB_SHAPE::GetWidth`: `fpScaleLinear`).
 ///
-/// **Approximated**: under a scale that differs across and up, KiCad makes a circle an ellipse and an arc an elliptical arc (`SHAPE_T::ELLIPSE`), which the model has not:
-/// their points are scaled, so a circle keeps the radius its point on the circle gives. A custom pad's primitives are not scaled.
+/// Under a scale that differs across and up KiCad makes a circle an ellipse (`SHAPE_T::ELLIPSE`), which the model has not: the circle becomes the closed polyline KiCad draws
+/// and plots that ellipse as ([`ellipse_polyline`]). **Approximated**: an arc, an elliptical arc in KiCad (`SHAPE_T::ELLIPSE_ARC`), has its points scaled, so it stays a
+/// circular arc through them. A custom pad's primitives are not scaled.
 fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
     let point = |p: (f64, f64)| (p.0 * sx, p.1 * sy);
     let mean = (sx.abs() + sy.abs()) * 0.5;
@@ -202,6 +203,40 @@ fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
                     }
                 }
             }
+            // A circle under a scale that differs across and up is an ellipse (KiCad 25ec2335 `PCB_SHAPE::rebakeFromTransform`: `SHAPE_T::ELLIPSE`), which the model has not:
+            // it becomes the polyline KiCad draws and plots the ellipse as (`SHAPE_ELLIPSE::ConvertToPolyline( GetMaxError() )`, closed; `PlotPoly` /
+            // `PlotPolyAsRegion` in `PLOT_BRDITEMS_PLOTTER::PlotShape`), a polygon with the circle's stroke, fill, layer and uuid.
+            Some("fp_circle") if sx.abs() != sy.abs() => {
+                let c = sexpr::find(item, "center").and_then(|l| Some((sexpr::num(l, 1)?, sexpr::num(l, 2)?)));
+                let e = sexpr::find(item, "end").and_then(|l| Some((sexpr::num(l, 1)?, sexpr::num(l, 2)?)));
+                if let (Some(c), Some(e)) = (c, e) {
+                    let r = ((e.0 - c.0).powi(2) + (e.1 - c.1).powi(2)).sqrt();
+                    let pts = ellipse_polyline(point(c), r, (sx.abs(), sy.abs()));
+                    let mut poly = vec![atom("fp_poly"), Sexpr::List(std::iter::once(atom("pts")).chain(pts.iter().map(|(x, y)| Sexpr::List(vec![atom("xy"), atom(&mm(*x)), atom(&mm(*y))]))).collect())];
+                    poly.extend(item.iter().skip(1).filter(|p| !matches!(p.as_list().and_then(sexpr::tag), Some("center") | Some("end"))).cloned());
+                    *item = poly;
+                    // the stroke as any graphic's: the width times the mean
+                    let linear = (sx + sy) * 0.5;
+                    for part in item.iter_mut() {
+                        let Sexpr::List(l) = part else { continue };
+                        if sexpr::tag(l) == Some("stroke") {
+                            for w in l.iter_mut() {
+                                if let Sexpr::List(wl) = w {
+                                    if sexpr::tag(wl) == Some("width") {
+                                        if let Some(v) = sexpr::num(wl, 1) {
+                                            wl[1] = atom(&mm((v * linear).max(0.0)));
+                                        }
+                                    }
+                                }
+                            }
+                        } else if sexpr::tag(l) == Some("width") {
+                            if let Some(v) = sexpr::num(l, 1) {
+                                l[1] = atom(&mm((v * linear).max(0.0)));
+                            }
+                        }
+                    }
+                }
+            }
             Some("fp_line") | Some("fp_arc") | Some("fp_circle") | Some("fp_rect") | Some("fp_poly") | Some("fp_curve") => {
                 // `PCB_SHAPE::GetWidth`: the line width times `fpScaleLinear`, `( sx + sy ) * 0.5` (signed, as KiCad has it)
                 let linear = (sx + sy) * 0.5;
@@ -234,6 +269,51 @@ fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
             _ => {}
         }
     }
+}
+
+/// `PCB_SHAPE::GetMaxError()`: the board's `m_MaxError`, `ARC_HIGH_DEF` (0.005 mm) by default.
+const MAX_ERROR_NM: f64 = 5_000.0;
+
+/// The ellipse a circle of radius `r` (mm, in the footprint's library frame) becomes under the scale `(|sx|, |sy|)`, centred on `centre` (mm, scaled), as KiCad 25ec2335's
+/// `SHAPE_ELLIPSE::ConvertToPolyline( aMaxError )` cuts it: the major axis is the longer of the two (rotation 0 across, 90 degrees up), the points `eval( t )` rounded to the
+/// nanometre, from `t = 0` round to `2 pi` by `subdivideEllipseArc` (the chord's middle within `aMaxError` of the curve, at most 20 levels deep), the closing repeat dropped.
+/// Millimetres back.
+fn ellipse_polyline(centre: (f64, f64), r: f64, (ax, ay): (f64, f64)) -> Vec<(f64, f64)> {
+    let (a, b) = (r * ax.max(ay) * 1e6, r * ax.min(ay) * 1e6);
+    let (cx, cy) = (centre.0 * 1e6, centre.1 * 1e6);
+    // `m_sinRot`, `m_cosRot` of 0 or 90 degrees
+    let (sin_rot, cos_rot) = if ay > ax { (1.0, 0.0) } else { (0.0, 1.0) };
+    let eval = |t: f64| -> (i64, i64) {
+        let (ct, st) = (t.cos(), t.sin());
+        let (lx, ly) = (a * ct, b * st);
+        ((cx + lx * cos_rot - ly * sin_rot).round() as i64, (cy + lx * sin_rot + ly * cos_rot).round() as i64)
+    };
+    fn subdivide(t0: f64, p0: (i64, i64), t1: f64, p1: (i64, i64), max_err_sq: f64, depth: i32, eval: &dyn Fn(f64) -> (i64, i64), out: &mut Vec<(i64, i64)>) {
+        if depth <= 0 {
+            out.push(p1);
+            return;
+        }
+        let tm = 0.5 * (t0 + t1);
+        let pm = eval(tm);
+        let (mx, my) = (0.5 * (p0.0 as f64 + p1.0 as f64), 0.5 * (p0.1 as f64 + p1.1 as f64));
+        let (ex, ey) = (pm.0 as f64 - mx, pm.1 as f64 - my);
+        if ex * ex + ey * ey <= max_err_sq {
+            out.push(p1);
+            return;
+        }
+        subdivide(t0, p0, tm, pm, max_err_sq, depth - 1, eval, out);
+        subdivide(tm, pm, t1, p1, max_err_sq, depth - 1, eval, out);
+    }
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let (p_start, p_end) = (eval(0.0), eval(two_pi));
+    let mut out = vec![p_start];
+    subdivide(0.0, p_start, two_pi, p_end, MAX_ERROR_NM * MAX_ERROR_NM, 20, &eval, &mut out);
+    // `SHAPE_LINE_CHAIN::Append` passes over a point equal to the last one
+    out.dedup();
+    if out.len() > 1 && out.first() == out.last() {
+        out.pop();
+    }
+    out.into_iter().map(|(x, y)| (x as f64 / 1e6, y as f64 / 1e6)).collect()
 }
 
 /// The `(xy ..)` points of one `(pts ..)` list.
@@ -409,6 +489,34 @@ mod tests {
         let mut tree = parse(r#"(kicad_pcb (version 20241229) (generator "pcbnew") (footprint "X" (transform (translate 10 20) (rotate 90) (scale 1 1)) (zone (polygon (pts (xy 1 0))))))"#);
         normalize(&mut tree);
         assert_eq!(first_zone_point(&tree), (Some(10.0), Some(19.0)));
+    }
+
+    /// KiCad 25ec2335: a circle of a footprint scaled 2 across and 1 up is an ellipse of semi-axes 2 r and r, drawn and plotted as `ConvertToPolyline( maxError )`'s closed
+    /// chain: every point on the ellipse, the chords within 5 um of it, the stroke and the layer the circle's.
+    #[test]
+    fn a_circle_under_a_scale_that_differs_across_and_up_is_the_ellipses_polyline() {
+        let mut tree = parse(r#"(kicad_pcb (version 20260901) (footprint "X" (transform (translate 0 0) (rotate 0) (scale 2 1)) (property "Reference" "U9")
+            (fp_circle (center 1 0) (end 2 0) (stroke (width 0.1) (type solid)) (fill no) (layer "F.Fab") (uuid "c1"))))"#);
+        normalize(&mut tree);
+        let fp = sexpr::find(tree.as_list().unwrap(), "footprint").unwrap().to_vec();
+        assert!(sexpr::find(&fp, "fp_circle").is_none());
+        let poly = sexpr::find(&fp, "fp_poly").expect("the ellipse's polyline").to_vec();
+        assert_eq!(sexpr::txt(sexpr::find(&poly, "layer").unwrap(), 1), Some("F.Fab"));
+        let width = sexpr::find(sexpr::find(&poly, "stroke").unwrap(), "width").unwrap().to_vec();
+        assert_eq!(sexpr::num(&width, 1), Some(0.15), "the width times the mean scale");
+        let pts: Vec<(f64, f64)> = sexpr::find_all(sexpr::find(&poly, "pts").unwrap(), "xy").map(|p| (sexpr::num(p, 1).unwrap(), sexpr::num(p, 2).unwrap())).collect();
+        assert!(pts.len() > 32, "{}", pts.len());
+        assert_eq!(pts[0], (4.0, 0.0), "t = 0: the end of the major axis");
+        for &(x, y) in &pts {
+            let on = ((x - 2.0) / 2.0).powi(2) + (y / 1.0).powi(2);
+            assert!((on - 1.0).abs() < 1e-5, "({x}, {y}) is on the ellipse: {on}");
+        }
+        for w in pts.windows(2) {
+            let m = ((w[0].0 + w[1].0) / 2.0, (w[0].1 + w[1].1) / 2.0);
+            // the chord's middle is within the max error of the curve (radially, near enough for a check)
+            let k = (((m.0 - 2.0) / 2.0).powi(2) + m.1.powi(2)).sqrt();
+            assert!(1.0 - k < 0.0051, "{w:?}");
+        }
     }
 
     #[test]

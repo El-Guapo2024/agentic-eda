@@ -76,8 +76,13 @@
     wasStrict = !!strictBox()?.checked;
     if (wasStrict) { strictBox().click(); await sleep(300); }
     await hover(...C);
-    await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: other });
+    void E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: other });
     applied++;
+    // the file's inner layers and its User.3 are not on this board: KiCad 25ec2335's parser asks where they go (`remapAppendedLayers`); OK with nothing matched takes the
+    // suggestions, each layer its own
+    const remap = await waitFor(() => byId("map-layers"), 8000);
+    check("Append Board of a file whose layers this board has not got asks Edit Mapping of Imported Layers (remapAppendedLayers)", !!remap);
+    button("OK")?.click();
     await waitFor(async () => E.state().tool === "move", 8000);
     const carried = E.state().selection;
     check("Append Board: what came in is carried by the Move tool, selected as one group", E.state().tool === "move" && carried.length === 1 && carried[0].kind === "group", JSON.stringify([E.state().tool, carried]));

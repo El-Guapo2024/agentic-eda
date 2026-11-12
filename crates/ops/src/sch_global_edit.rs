@@ -681,6 +681,10 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                             t.size_nm = s;
                             changed = true;
                         }
+                        // `SetTextSize( VECTOR2I( size, size ) )`: as wide as it is high
+                        if sch.extras.text_widths.remove(id).is_some() {
+                            changed = true;
+                        }
                     }
                 }
                 if spec.h_align.is_some() || spec.v_align.is_some() {

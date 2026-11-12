@@ -284,3 +284,43 @@ fn pins_with_no_pad_and_pads_with_no_pin_are_told() {
     assert!(has(&done, "No net found for component U1 pad 4 (no pin 4 in symbol)."), "{:?}", texts(&done));
     assert!(done.errors >= 1 && done.warnings >= 1);
 }
+
+/// `updateComponentClass`, `updateComponentUnits` and the jumper part of `updateFootprintParameters`: the footprint takes the component's class (its names sorted and
+/// joined by commas), its gates and its jumper settings, in KiCad's words in both tenses; the same netlist again has nothing to say of them.
+#[test]
+fn the_component_class_the_units_and_the_jumper_settings_follow_the_component() {
+    let m = model();
+    let extra = r#"(comp (ref "U2") (value "B") (footprint "Test:QUAD") (sheetpath (names "/") (tstamps "/")) (tstamps "a5325dfa-f0ed-4395-9ec3-24765fab7875")
+      (component_classes (class "Power") (class "Analog"))
+      (units (unit (name "A") (pins (pin (num "1")) (pin (num "2")))) (unit (name "B") (pins (pin (num "3")) (pin (num "4")))))
+      (duplicate_pin_numbers_are_jumpers "1") (jumper_pin_groups (group (pin "1") (pin "2"))))"#;
+    // U2's own `comp` replaced by the one with the class, the units and the jumpers
+    let text = netlist("A", "").replace(
+        r#"(comp (ref "U2") (value "B") (footprint "Test:QUAD") (fields (field (name "Datasheet")) (field (name "Description") "quad"))
+      (property (name "Sheetfile") (value "x.kicad_sch")) (sheetpath (names "/") (tstamps "/")) (tstamps "a5325dfa-f0ed-4395-9ec3-24765fab7875"))"#,
+        extra,
+    );
+    assert!(text.contains("component_classes"), "the fixture swaps U2 in");
+    let b = board(&m);
+    let dry = test_netlist(b.design().clone(), &m, mm(0.1), mm(0.3), &cmd(&text, by_ref(NetlistOptions::default())));
+    for line in ["Change U2 component class to 'Analog,Power'.", "Update U2 unit metadata.", "Add U2 'duplicate pad numbers are jumpers' attribute.", "Update U2 jumper pad groups"] {
+        assert!(has(&dry, line), "{line}: {:?}", texts(&dry));
+    }
+    let mut b = board(&m);
+    b.apply(&Cmd::ImportNetlist(cmd(&text, by_ref(NetlistOptions::default())))).unwrap();
+    let done = take_report().unwrap();
+    for line in ["Changed U2 component class to 'Analog,Power'.", "Updated U2 unit metadata.", "Added U2 'duplicate pad numbers are jumpers' attribute.", "Updated U2 jumper pad groups"] {
+        assert!(has(&done, line), "{line}: {:?}", texts(&done));
+    }
+    let extra = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U2").cloned().unwrap();
+    assert_eq!(extra.component_classes, ["Analog", "Power"]);
+    assert_eq!(extra.units.iter().map(|u| (u.name.clone(), u.pins.clone())).collect::<Vec<_>>(), [("A".to_string(), vec!["1".to_string(), "2".to_string()]), ("B".to_string(), vec!["3".to_string(), "4".to_string()])]);
+    assert!(extra.tokens.contains(&"(duplicate_pad_numbers_are_jumpers yes)".to_string()) && extra.tokens.contains(&"(jumper_pad_groups (\"1\" \"2\"))".to_string()), "{:?}", extra.tokens);
+    // and again: nothing
+    let mut m2 = m.clone();
+    m2.nets = b.design().nets.clone().unwrap();
+    b.design().drawings.as_ref().unwrap().imported_netlist.as_ref().unwrap().apply(&mut m2);
+    let again = test_netlist(b.design().clone(), &m2, mm(0.1), mm(0.3), &cmd(&text, by_ref(NetlistOptions::default())));
+    let said: Vec<String> = texts(&again).into_iter().filter(|l| l.contains("class") || l.contains("unit metadata") || l.contains("jumper")).collect();
+    assert!(said.is_empty(), "{said:?}");
+}

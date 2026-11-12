@@ -170,9 +170,13 @@ fn append_board_brings_the_files_layers_and_nets_and_groups_it_under_the_files_s
     assert_eq!(dr.groups.len(), groups + 1);
     let g = dr.groups.last().unwrap();
     assert_eq!((g.name.as_str(), g.design_block.as_str(), g.member_ids.len()), ("other", "", 3), "{g:?}");
-    // the file is read as a paste reads the clipboard, which unlocks what it reads: the file's `(locked yes)` is not kept (KiCad's `LoadBoard` keeps it), so neither the
-    // track nor its group is locked
-    assert!(!dr.locked_ids.contains(&g.id), "{:?}", dr.locked_ids);
+    // the file's `(locked yes)` is kept (the parser keeps it and `AppendBoard` unlocks nothing), and the group of a locked item is locked
+    // (`if( IsLocked() ) group->SetLocked( true )`)
+    let locked_track = rt.tracks.iter().find(|t| t.id != "trk_a" && t.layer == "F.Cu" && t.net == "GND").unwrap();
+    assert!(dr.locked_ids.contains(&locked_track.id), "{:?}", dr.locked_ids);
+    let free_track = rt.tracks.iter().find(|t| t.layer == "In1.Cu").unwrap();
+    assert!(!dr.locked_ids.contains(&free_track.id), "an unlocked item stays unlocked");
+    assert!(dr.locked_ids.contains(&g.id), "{:?}", dr.locked_ids);
 
     // a layer the board already names keeps the board's name (25ec2335: `if( !m_preserveDestinationStackup || !m_board->IsLayerEnabled( .. ) )`)
     let renamed = text.replace("\"Notes\"", "\"Other notes\"");

@@ -777,6 +777,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut text_lie: Vec<eda_model::sch_extras::SchTextJustify> = Vec::new();
     // each text's exclude from simulation, hyperlink, bold, italic and colour, parallel to `texts` (`SchExtras::text_attrs`, r7 H4)
     let mut text_attrs: Vec<eda_model::sch_extras::TextAttrs> = Vec::new();
+    // each text's glyph width when it is not its height (`parseEDA_TEXT`'s `T_size`: the height, then the width), parallel to `texts` (`SchExtras::text_widths`)
+    let mut text_widths: Vec<Option<Nm>> = Vec::new();
     for t in sexpr::find_all(root, "text") {
         let Some(content) = sexpr::txt(t, 1).map(String::from) else { continue };
         let Some(at) = sexpr::find(t, "at") else { continue };
@@ -789,6 +791,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         text_uuid.push(uuid_of(t));
         text_lie.push(justify);
         text_attrs.push(crate::sch_extras_io::read_text_attrs(t));
+        let width_mm = sexpr::find(t, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 2));
+        text_widths.push(width_mm.map(crate::import::sch_mm_to_nm).filter(|w| *w != crate::import::sch_mm_to_nm(size_mm)));
     }
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
@@ -1037,6 +1041,11 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|(color, font)| eda_model::sch_extras::TextAttrs { color, font, ..Default::default() })));
         for (id, a) in attrs.filter(|(id, a)| !id.is_empty() && !a.is_default()).collect::<Vec<_>>() {
             sch.extras.text_attrs.insert(id, a);
+        }
+        for (id, w) in sch.texts.iter().map(|t| t.id.clone()).zip(text_widths) {
+            if let (false, Some(w)) = (id.is_empty(), w) {
+                sch.extras.text_widths.insert(id, w);
+            }
         }
         // A text's justification, as the file has it (`SchExtras::text_justify`); the default keeps no entry.
         for (id, justify) in sch.texts.iter().map(|t| t.id.clone()).zip(text_lie) {

@@ -87,7 +87,7 @@ export const BOARD_ACCEPT = ".brd,.PcbDoc,.pcbdoc,.cpa,.asc,.pcb,.PCB,.txt,.json
 export const SCHEMATIC_ACCEPT = ".sch,.SchDoc,.schdoc,.csa,.json,.zip,.epro,.asc,.dsn,.dch";
 
 /** The project import's chooser: the boards' and the schematics' files of every format, chosen together (an Eagle `.brd` and its `.sch`). */
-export const PROJECT_ACCEPT = ".brd,.sch,.cpa,.csa,.json,.zip,.epro,.PcbDoc,.pcbdoc,.SchDoc,.schdoc,.asc,.txt,.pcb,.PCB,.dsn,.dch";
+export const PROJECT_ACCEPT = ".brd,.sch,.cpa,.csa,.json,.zip,.epro,.PcbDoc,.pcbdoc,.SchDoc,.schdoc,.PrjPcb,.prjpcb,.asc,.txt,.pcb,.PCB,.dsn,.dch";
 
 export function acceptFor(kind: ConvertKind): string {
   return kind === "board" ? BOARD_ACCEPT : kind === "project" ? PROJECT_ACCEPT : SCHEMATIC_ACCEPT;
@@ -193,8 +193,14 @@ const TECH_AND_USER_ORDER: readonly string[] = [
   "B.CrtYd",
   "F.Fab",
   "B.Fab",
-  ...Array.from({ length: 9 }, (_, i) => `User.${i + 1}`),
+  // `LSET::UserDefinedLayersMask()`: `User_1` .. `User_45` (`MAX_USER_DEFINED_LAYERS`)
+  ...Array.from({ length: 45 }, (_, i) => `User.${i + 1}`),
 ];
+
+/** `LSET::AllCuMask( n ).CuStack()`: `F.Cu`, `In1.Cu` .. `In(n-2).Cu`, `B.Cu`. */
+export function copperStack(n: number): string[] {
+  return ["F.Cu", ...Array.from({ length: Math.max(0, n - 2) }, (_, i) => `In${i + 1}.Cu`), "B.Cu"];
+}
 
 function copperRank(layer: string): number {
   if (layer === "F.Cu") return 0;
@@ -204,11 +210,25 @@ function copperRank(layer: string): number {
 }
 
 /**
- * `LSET::UIOrder`: the KiCad layers the dialog's right-hand list offers -- the copper layers the board has (`F.Cu`, `In1.Cu` .., `B.Cu`: the ones the importer
- * mapped something to, and the two outer ones always), then the technical and user layers. The importers' own lists of layers a source layer may go to (`PermittedLayers`) are
- * not in kicad-cli's report, so every layer is offered for every source layer.
+ * The KiCad layers the dialog's right-hand list offers: the union of every source layer's `PermittedLayers` in `LSET::UIOrder` (`DIALOG_MAP_LAYERS`' constructor:
+ * `kiCadLayers |= inLayer.PermittedLayers`). kicad-cli's report does not carry the importers' sets, so they are the importers' own, by format (KiCad 25ec2335):
+ *   Altium (and SolidWorks, read by the Altium importer) and CADSTAR: `enabledLayers | LSET::AllBoardTechMask() | LSET::UserMask() | LSET::UserDefinedLayersMask()` -- the
+ *     copper of the file's stack (the copper layers kicad-cli mapped something to, and the two outer ones), then every technical and user layer;
+ *   Eagle (`defaultKicadLayer`: `permittedLayers.set()` for every layer but the dimension layer), PADS (`GetPermittedLayers`: every copper layer for a copper layer, every
+ *     non-copper one for documentation, all of them for an unknown layer), EasyPC (`AllCuMask` or `AllNonCuMask`) and Allegro (`AllCuMask`, `AllLayersMask`): the union is
+ *     every layer, the 32 copper layers included.
+ * `permitted` overrides all of this with the rows' own sets (Append Board's, `remapAppendedLayers`).
  */
-export function kicadLayerList(layers: SourceLayer[]): string[] {
+export function kicadLayerList(layers: SourceLayer[], format = "", permitted?: string[]): string[] {
+  const rank = (l: string) => {
+    const c = copperRank(l);
+    if (c >= 0) return c;
+    const t = TECH_AND_USER_ORDER.indexOf(l);
+    return t >= 0 ? 2_000 + t : 10_000;
+  };
+  if (permitted) return [...new Set(permitted)].sort((a, b) => rank(a) - rank(b));
+  const f = format.toLowerCase();
+  if (!(f.includes("altium") || f.includes("solidworks") || f.includes("cadstar")) && f !== "") return [...copperStack(32), ...TECH_AND_USER_ORDER];
   const copper = new Set<string>(["F.Cu", "B.Cu"]);
   for (const l of layers) if (l.kicad && copperRank(l.kicad) >= 0) copper.add(l.kicad);
   return [...[...copper].sort((a, b) => copperRank(a) - copperRank(b)), ...TECH_AND_USER_ORDER];
@@ -301,6 +321,46 @@ export function layerMapRequest(state: LayerMapState): Record<string, string> {
  */
 export function keptGuesses(state: LayerMapState): string[] {
   return state.unmatched.filter((s) => state.guess[s]);
+}
+
+/** `POST /api/append_board/read`'s `layers`: a row of the dialog Append Board opens (`remapAppendedLayers`' `INPUT_LAYER_DESC`). */
+export interface AppendLayerDesc {
+  /** The file's own name of the layer, else its standard name: the row's name and the answer's key. */
+  name: string;
+  /** Its board-file name in the file. */
+  layer: string;
+  /** `AutoMapLayer`: the board's layer of the same name, else the file's own. */
+  auto_map: string;
+  /** `PermittedLayers`: any copper layer of the larger stack for a copper layer, its own layer for any other. */
+  permitted: string[];
+  used: boolean;
+}
+
+/** Append Board's rows as the dialog's source layers: the guess is `AutoMapLayer`; no row is required (`desc.Required = false`). */
+export function appendSourceLayers(descs: AppendLayerDesc[]): SourceLayer[] {
+  return descs.map((d) => ({ source: d.name, kicad: d.auto_map, explicit: false }));
+}
+
+/**
+ * The dialog as `DIALOG_MAP_LAYERS`' constructor opens it: every layer in the Unmatched list, nothing matched. (The non-KiCad imports open it matched to kicad-cli's guesses,
+ * `initialMapping`, as their OK can only move a guess; Append Board's answer is the whole map, as KiCad's.)
+ */
+export function unmatchedMapping(layers: SourceLayer[]): LayerMapState {
+  const guess: Record<string, string | null> = {};
+  for (const l of layers) guess[l.source] = l.kicad;
+  return { unmatched: layers.map((l) => l.source), matched: [], guess };
+}
+
+/**
+ * `RunModal`'s answer for Append Board: OK with nothing matched applies the suggestions (`if( dlg.m_matched_layers_map.empty() ) dlg.AutoMatchLayers()`), and the answer is
+ * every matched pair (`m_matched_layers_map`). A layer left unmatched is not in it, so `remapAppendedLayers` keeps it on its own layer
+ * (`target = ( it != remap.end() ) ? it->second : PCB_LAYER_ID( src.m_number )`).
+ */
+export function appendLayerAnswer(state: LayerMapState): Record<string, string> {
+  const done = state.matched.length === 0 ? autoMatch(state) : state;
+  const map: Record<string, string> = {};
+  for (const m of done.matched) map[m.source] = m.kicad;
+  return map;
 }
 
 /** A layer in a list of the dialog: its name, with the `*` of a required layer (`WrapRequired`). */

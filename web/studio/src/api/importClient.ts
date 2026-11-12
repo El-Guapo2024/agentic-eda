@@ -16,8 +16,8 @@ export function readGraphics(req: { format: "dxf" | "svg"; text: string; dxf_uni
 }
 
 /** What a `.kicad_pcb` file would bring to this board and the point its items are held by (nothing on the board changes). */
-export function readAppendBoard(file: { name: string; text: string }): Promise<AppendInfo> {
-  return postJson<AppendInfo>("/api/append_board/read", file);
+export function readAppendBoard(file: { name: string; text: string }, layerMap?: Record<string, string | null>): Promise<AppendInfo> {
+  return postJson<AppendInfo>("/api/append_board/read", layerMap ? { ...file, layer_map: layerMap } : file);
 }
 
 /** The items an interactive Import Graphics would put on the board and the point they are held by (`POST /api/import_graphics/preview`; nothing on the board changes). */

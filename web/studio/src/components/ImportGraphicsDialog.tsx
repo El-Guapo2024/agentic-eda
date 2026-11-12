@@ -19,6 +19,10 @@ import { closeImportGraphics, openImportGraphics, useImportGraphicsDialog, type 
 import { DialogShell } from "./pcbDialogKit";
 import { pickTextFile } from "../api/libraryClient";
 import { previewGraphics, readGraphics } from "../api/importClient";
+import { fetchSchematic, postPlacePreview } from "../api/client";
+import { setSchPaste } from "../state/schPasteStore";
+import { PREVIEW_AT } from "../kicad-port/schPlaceTool";
+import { newIdsAfter } from "../kicad-port/schClipboard";
 import { setImportPreview } from "../state/importPreview";
 import { pickPoint } from "../actions/pcbPicker";
 import { DXF_UNITS, buildImportCmd, buildSchImportCmd, defaultImportValues, defaultSchImportValues, describeInfo, graphicsFormatOf, importLayers, type GraphicsInfo, type ImportValues, type SchImportValues } from "../kicad-port/importGraphics";
@@ -370,6 +374,41 @@ function SchImportGraphics({ editor, file }: { editor: "schematic" | "symbol"; f
     setBusy(true);
     lastSchValues = values;
     let placed: boolean;
+    if (editor === "schematic" && built.interactive) {
+      // `SCH_DRAWING_TOOLS::ImportGraphics`: the items are a preview, selected, moved by the grid point under the cursor (`delta = cursorPos`: the drawing's origin is on it),
+      // until a click adds them -- one command, one undo step ("Import Graphic"), the new items selected -- or Escape deletes them; nothing is on the sheet meanwhile.
+      // The preview is the server's drawing of the very command at `PREVIEW_AT` (`POST /api/sch/place_preview`), shifted by the page as a paste in the hand is.
+      const sheet = [...api.getState().currentSheetPath];
+      const preview = await postPlacePreview({ sheet: sheet.join("/"), cmd: built.build({ x: PREVIEW_AT[0], y: PREVIEW_AT[1] }) });
+      setBusy(false);
+      if (!preview) {
+        setError("No graphic items found in file.");
+        return;
+      }
+      const warnings = (info?.messages ?? []).map((m) => m.text);
+      closeImportGraphics();
+      dispatch({ type: "CLEAR_SELECTION" });
+      setSchPaste({
+        fragment: null,
+        preview,
+        anchor: [PREVIEW_AT[0], PREVIEW_AT[1]],
+        sheet,
+        mode: "keep",
+        origin: "paste",
+        notes: [],
+        place: async (snapped) => {
+          const before = api.getState().schematic;
+          const ok = await api.cmd(built.build({ x: snapped[0], y: snapped[1] }));
+          if (!ok) return;
+          if (warnings.length > 0) dispatch({ type: "TOAST", message: `Items in the imported file could not be handled properly. ${warnings.join(" ")}`, kind: "info" });
+          if (!before) return;
+          const after = await fetchSchematic(sheet).catch(() => null);
+          const ids = after ? newIdsAfter(before, after) : [];
+          if (ids.length > 0) dispatch({ type: "SET_SELECTION", refs: ids, raw: true });
+        },
+      });
+      return;
+    }
     if (editor === "schematic") {
       placed = await api.placeNewSchItems((at) => built.build(at), built.interactive);
     } else {

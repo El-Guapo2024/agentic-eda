@@ -54,6 +54,18 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
         let Some(bytes) = base64_decode(data) else { return refused("the file is not base64") };
         files.push((name.to_string(), bytes));
     }
+    // An Altium project file (`.PrjPcb`) chosen with its documents: KiCad 25ec2335's project import hands it to the schematic importer as `project_file`, which reads its
+    // `[ProjectVariantN]` sections (`ParseAltiumProjectVariants`) into the schematic's design variants. kicad-cli takes no `.PrjPcb`, so it is read here and laid over
+    // the converted schematic as `eda import-kicad Project.PrjPcb` lays it (`altium_variants`).
+    let mut altium_variants: Vec<crate::altium_variants::ProjectVariant> = Vec::new();
+    files.retain(|(n, b)| {
+        if n.to_ascii_lowercase().ends_with(".prjpcb") {
+            altium_variants.extend(crate::altium_variants::parse_project_variants(&String::from_utf8_lossy(b)));
+            false
+        } else {
+            true
+        }
+    });
     if files.is_empty() {
         return refused("there is no file to import");
     }
@@ -121,6 +133,9 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
         }
         match reply(kind, name, &import, project) {
             Ok(mut v) => {
+                if !altium_variants.is_empty() {
+                    with_altium_variants(&mut v, &altium_variants);
+                }
                 // the findings are said the same way: a path of the server's is not the person's
                 if let Some(findings) = v.get_mut("findings").and_then(Value::as_array_mut) {
                     for f in findings {
@@ -184,6 +199,21 @@ fn reply(kind: Kind, name: &str, import: &ForeignImport, project: bool) -> Resul
     Ok(out)
 }
 
+/// The Altium project's variants laid over the reply's schematic (`content`, a [`eda_model::sheet_file::SheetFile`]), and said in its notes; a reply with no schematic (a
+/// board alone) is left as it is.
+fn with_altium_variants(v: &mut Value, variants: &[crate::altium_variants::ProjectVariant]) {
+    let Some(mut content) = v.get("content").cloned().and_then(|c| serde_json::from_value::<eda_model::sheet_file::SheetFile>(c).ok()) else { return };
+    let made = crate::altium_variants::apply(&mut content, variants);
+    let Ok(json) = serde_json::to_value(&content) else { return };
+    v["content"] = json;
+    let note = format!("{} design variant(s) of the Altium project ({}), {made} symbol record(s).", variants.len(), variants.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "));
+    let key = if v.get("schematic_notes").is_some() { "schematic_notes" } else { "notes" };
+    match v.get_mut(key).and_then(Value::as_array_mut) {
+        Some(list) => list.push(json!(note)),
+        None => v[key] = json!([note]),
+    }
+}
+
 /// The schematic a project import made (`<stem>.kicad_sch`, its sheets beside it) as a [`eda_model::sheet_file::SheetFile`]: a KiCad 10 project of several top-level sheets
 /// (`schematic.top_level_sheets`, an Eagle file of several sheets) placed on a root as `eda import-kicad` places them (`combine_top_level_sheets`).
 fn project_sheet_file(sch: &Path, pro: Option<&str>) -> Result<eda_model::sheet_file::SheetFile, Vec<eda_model::CheckResult>> {
@@ -237,6 +267,25 @@ pub(crate) fn base64_decode(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An Altium project file chosen with the documents: its variants are laid over the schematic the reply carries and said in its notes (KiCad 25ec2335's project
+    /// import, `ParseAltiumProjectVariants`); a reply with no schematic is left alone.
+    #[test]
+    fn an_altium_project_files_variants_are_laid_over_the_replys_schematic() {
+        let prj = "[Design]\r\n[ProjectVariant1]\r\nDescription=Lite\r\nVariationCount=1\r\nVariation1=Designator=R2|Kind=1|AlternatePart=\r\n";
+        let variants = crate::altium_variants::parse_project_variants(prj);
+        let mut file = eda_model::sheet_file::SheetFile::default();
+        file.root.symbols = vec![serde_json::from_value(json!({ "id": "R2", "lib_id": "Device:R", "at": { "x": 0, "y": 0 }, "rot": 0 })).unwrap()];
+        let mut v = json!({ "ok": true, "kind": "project", "content": serde_json::to_value(&file).unwrap(), "schematic_notes": [] });
+        with_altium_variants(&mut v, &variants);
+        let back: eda_model::sheet_file::SheetFile = serde_json::from_value(v["content"].clone()).unwrap();
+        assert!(back.root.extras.variants.contains_key("Lite"));
+        assert_eq!(back.root.extras.symbol_variants["R2"]["Lite"].dnp, Some(true));
+        assert_eq!(v["schematic_notes"], json!(["1 design variant(s) of the Altium project (Lite), 1 symbol record(s)."]));
+        let mut board_only = json!({ "ok": true, "kind": "board" });
+        with_altium_variants(&mut board_only, &variants);
+        assert_eq!(board_only, json!({ "ok": true, "kind": "board" }));
+    }
 
     #[test]
     fn base64_is_the_standard_alphabet_with_or_without_padding() {

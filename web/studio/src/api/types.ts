@@ -3424,6 +3424,8 @@ export interface SchematicText {
   at: [Nm, Nm];
   angle: Degrees;
   size_nm: Nm;
+  /** The glyph width when it is not the height (`SchExtras::text_widths`, `EDA_TEXT::GetTextWidth`); absent or null: as wide as it is high. */
+  width_nm?: Nm | null;
   vertical?: boolean;
   h?: "left" | "center" | "right";
   v?: "top" | "center" | "bottom";

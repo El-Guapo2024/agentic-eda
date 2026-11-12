@@ -59,6 +59,7 @@ mod sexpr;
 /// A layer of a board file taken out with what is on it: a source layer left unmatched in the import's layer dialog (`DIALOG_MAP_LAYERS`).
 mod drop_layer;
 pub use drop_layer::drop_board_layer;
+pub mod append_layers;
 mod page;
 pub use page::drawing_sheet_in;
 mod import;
@@ -896,7 +897,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // `saveText`: a free text's `(exclude_from_sim ..)` (`SCH_TEXT_T` only), which the SPICE netlister skips an excluded directive by (r7 H4)
         writeln!(out, "\t\t(exclude_from_sim {})", if attrs.exclude_from_sim { "yes" } else { "no" }).unwrap();
         writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
-        writeln!(out, "\t\t{}", sch_extras_io::text_effects_with(t.size_nm, sch.extras.text_justify_of(&t.id), &attrs)).unwrap();
+        writeln!(out, "\t\t{}", sch_extras_io::free_text_effects(sch, t, &attrs)).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&t.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();

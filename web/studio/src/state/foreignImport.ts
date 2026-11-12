@@ -17,6 +17,13 @@ export interface LayerMapDialog {
   format: string;
   layers: SourceLayer[];
   keepNames: boolean;
+  /**
+   * `"append"`: Append Board's dialog (KiCad 25ec2335 `remapAppendedLayers`): it opens with every layer unmatched, as `DIALOG_MAP_LAYERS` does, its answer is the whole map
+   * (`appendLayerAnswer`) and Cancel keeps every layer on its own. Absent: a non-KiCad board's, which opens on kicad-cli's guesses.
+   */
+  mode?: "append";
+  /** The KiCad layers offered (the rows' `PermittedLayers`), when the caller knows them; otherwise the importer's by `format` (`kicadLayerList`). */
+  permitted?: string[];
   /** Resolves the promise `askLayerMapping` returned: `null` is Cancel, which here abandons the import. */
   resolve: (answer: LayerMapAnswer | null) => void;
 }

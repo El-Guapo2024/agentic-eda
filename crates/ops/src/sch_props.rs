@@ -297,9 +297,14 @@ impl<'a> Board<'a> {
             justify.v = v;
         }
         let after = (t.content.clone(), t.size_nm, t.angle, justify);
-        if before == after {
+        // `SetTextSize( VECTOR2I( size, size ) )`: a size set makes the text as wide as it is high (an imported DXF text's own glyph width goes)
+        let squared = size_nm.is_some() && sch.extras.text_widths.contains_key(id);
+        if before == after && !squared {
             // a legacy angle that was not upright is still made so, but that alone is no edit
             return Err(fail("ops_text_unchanged", id, "the text already has these properties"));
+        }
+        if size_nm.is_some() {
+            sch.extras.text_widths.remove(id);
         }
         sch.extras.set_text_justify(id, justify);
         Ok(())

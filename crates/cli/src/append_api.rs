@@ -7,7 +7,9 @@
 //! sets the selection's reference point to the position of its top left item (`PCB_SELECTION::GetTopLeftItem`: the smallest x, then the smallest y, by each item's
 //! `GetPosition()`), so the page pastes with `at = cursor - reference` and that item is where the cursor is.
 //!
-//! Request: `{ "text": "<the .kicad_pcb>", "name": "board.kicad_pcb" }` (`name` optional). Reply: `{ "ok": true, "reference": { "x", "y" } (nanometres),
+//! Request: `{ "text": "<the .kicad_pcb>", "name": "board.kicad_pcb", "layer_map": { "<row name>": "<board layer>" | null } }` (`name` optional; `layer_map` the answer of
+//! the layer dialog KiCad 25ec2335's parser opens when the file's layers do not fit the board -- `remapAppendedLayers`, `eda_kicad::append_layers` -- whose rows the first
+//! reply's `layers` holds; with it the reply's `text` is the file with its layers moved, which the page appends). Reply: `{ "ok": true, "reference": { "x", "y" } (nanometres),
 //! "counts": { "footprints", "tracks", ... }, "notes": ["..."] }` or `{ "ok": false, "message": "..." }`. Nothing on the board changes; the append itself is the command
 //! (`Cmd::PlaceDesignBlock` with no block: `crates/ops/src/design_blocks.rs`), which loads everything as `LoadBoard` does -- the copper layers when the file has more, the
 //! technical and user layers it enables, every net -- and groups it under the file's stem with "Place as group".
@@ -25,7 +27,7 @@ use crate::board;
 use eda_kicad::{ClipRef, Clipboard};
 use eda_model::ir::{Point, Shape};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub fn read(dir: &Path, body: &[u8]) -> Value {
@@ -40,6 +42,19 @@ pub fn read(dir: &Path, body: &[u8]) -> Value {
             return json!({ "ok": false, "message": "Only KiCad boards (.kicad_pcb files) can be appended." });
         }
     }
+    // The layer dialog's answer (`remapAppendedLayers`): the file's layers moved as it says, before anything reads the file. The page then appends the text this
+    // reply hands back (`text`).
+    let remapped: Option<String> = match req.get("layer_map").and_then(Value::as_object) {
+        Some(m) => {
+            let answer: BTreeMap<String, Option<String>> = m.iter().map(|(k, v)| (k.clone(), v.as_str().map(str::to_string))).collect();
+            match eda_kicad::append_layers::remap_appended_layers(text, &answer) {
+                Some(t) => Some(t),
+                None => return json!({ "ok": false, "message": "Error loading board." }),
+            }
+        }
+        None => None,
+    };
+    let text: &str = remapped.as_deref().unwrap_or(text);
     let clip = match eda_kicad::parse_pcb_clipboard(text) {
         Ok(c) => c,
         Err(e) => return json!({ "ok": false, "message": format!("Error loading board. {}", board::reasons(&e)) }),
@@ -49,8 +64,16 @@ pub fn read(dir: &Path, body: &[u8]) -> Value {
     }
     let reference = reference_point(&clip);
     let mut notes = Vec::new();
+    let mut layers: Vec<eda_kicad::append_layers::AppendLayerDesc> = Vec::new();
     // What the append will add or change, against the board as it is now.
     if let Ok((_, design, model)) = board::load(dir) {
+        // `remapAppendedLayers`' question, asked once (not of a text the dialog has already answered for)
+        if remapped.is_none() {
+            let setup = design.drawings.as_ref().and_then(|d| d.rules.as_ref()).and_then(|r| r.board_layers.clone()).unwrap_or_else(|| model.board.layer_setup.clone());
+            let mut enabled: Vec<String> = model.board.layers.clone();
+            enabled.extend(setup.enabled.iter().cloned());
+            layers = eda_kicad::append_layers::append_layer_descs(text, &enabled, &|l: &str| setup.display_name(l), model.board.layers.len().max(2));
+        }
         let table = eda_kicad::board_layer_setup(text);
         let file_copper = eda_ops::layer_table(text).iter().filter(|l| l.ends_with(".Cu")).count();
         let have = model.board.layers.len().max(2);
@@ -87,6 +110,10 @@ pub fn read(dir: &Path, body: &[u8]) -> Value {
             "shapes": clip.shapes.len(), "texts": clip.texts.len(), "dimensions": clip.dimensions.len(), "groups": clip.groups.len(),
         },
         "notes": notes,
+        // `remapAppendedLayers`: the rows of "Edit Mapping of Imported Layers", empty when the file's layers fit the board
+        "layers": layers,
+        // the text to append: the file's, or the file's with its layers moved as `layer_map` says
+        "text": remapped,
     })
 }
 
@@ -407,6 +434,28 @@ mod tests {
         assert!(notes.iter().any(|n| n == "1 footprint has a reference this board already uses: it shows the reference the file gives (as KiCad's Append Board leaves it) and is filed under the next free one here."), "{notes:?}");
         // The reference is still the leftmost item's position: the new segments at x = 11 sit right of the line at 10.
         assert_eq!(r["reference"], json!({ "x": 10_000_000, "y": 10_000_000 }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// KiCad 25ec2335 `remapAppendedLayers`: a file whose layers do not fit the board brings the dialog's rows; the answer sent back moves the layers and the reply hands the
+    /// moved text over, with no rows (the question is not asked twice).
+    #[test]
+    fn a_file_whose_layers_do_not_fit_brings_the_layer_rows_and_the_answer_moves_them() {
+        let dir = board_dir("remap");
+        let text = board_file()
+            .replace("(2 \"B.Cu\" signal)", "(2 \"B.Cu\" signal) (43 \"User.3\" user \"Notes\")")
+            .replace("(gr_line", "(gr_line (start 1 1) (end 2 1) (stroke (width 0.1) (type solid)) (layer \"User.3\") (uuid \"66666666-6666-6666-6666-666666666663\"))\n  (gr_line");
+        let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{r}");
+        let rows = r["layers"].as_array().unwrap();
+        let notes = rows.iter().find(|l| l["layer"] == "User.3").expect("the file's User.3 is new to the board");
+        assert_eq!((notes["name"].as_str(), notes["auto_map"].as_str(), notes["permitted"].clone()), (Some("Notes"), Some("User.3"), json!(["User.3"])));
+        assert!(r["text"].is_null(), "no answer yet: nothing moved");
+        let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb", "layer_map": { "Notes": "Dwgs.User" } }).to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["layers"], json!([]), "{r}");
+        let moved = r["text"].as_str().unwrap();
+        assert!(moved.contains("(layer \"Dwgs.User\") (uuid \"66666666-6666-6666-6666-666666666663\")"), "{moved}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

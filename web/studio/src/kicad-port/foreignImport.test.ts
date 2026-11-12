@@ -20,6 +20,9 @@ import {
   rowsOfBoards,
   kicadLayerLabel,
   kicadLayerList,
+  appendLayerAnswer,
+  appendSourceLayers,
+  unmatchedMapping,
   layerMapRequest,
   removeMappings,
   unmatchedRequired,
@@ -85,7 +88,7 @@ test("the KiCad Layers list is LSET::UIOrder: the copper the board has, then the
   assert.deepEqual(list.slice(0, 3), ["F.Cu", "In1.Cu", "B.Cu"], "copper from the front to the back; only the inner layers the importer used");
   assert.deepEqual(list.slice(3, 9), ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS"]);
   assert.ok(list.indexOf("Edge.Cuts") < list.indexOf("Margin") && list.indexOf("Margin") < list.indexOf("F.CrtYd") && list.indexOf("B.Fab") < list.indexOf("User.1"));
-  assert.equal(list[list.length - 1], "User.9");
+  assert.equal(list[list.length - 1], "User.45", "every user layer (`LSET::UserDefinedLayersMask()`)");
   assert.equal(new Set(list).size, list.length);
   // Two layers are always there, even when nothing was mapped to them.
   assert.deepEqual(kicadLayerList([]).slice(0, 2), ["F.Cu", "B.Cu"]);
@@ -93,6 +96,32 @@ test("the KiCad Layers list is LSET::UIOrder: the copper the board has, then the
   assert.equal(kicadLayerLabel("F.SilkS"), "F.Silkscreen");
   assert.equal(kicadLayerLabel("Dwgs.User"), "User.Drawings");
   assert.equal(kicadLayerLabel("In1.Cu"), "In1.Cu");
+});
+
+test("the KiCad Layers list is the union of the importer's PermittedLayers", () => {
+  // Altium and CADSTAR: the file's copper, then every technical and user layer
+  assert.deepEqual(kicadLayerList(LAYERS, "Altium Designer").slice(0, 3), ["F.Cu", "In1.Cu", "B.Cu"]);
+  assert.deepEqual(kicadLayerList(LAYERS, "CADSTAR PCB Archive").slice(0, 3), ["F.Cu", "In1.Cu", "B.Cu"]);
+  // Eagle, PADS, Allegro: every layer, all 32 copper layers among them
+  const eagle = kicadLayerList(LAYERS, "Eagle");
+  assert.deepEqual([eagle[0], eagle[1], eagle[30], eagle[31], eagle[32]], ["F.Cu", "In1.Cu", "In30.Cu", "B.Cu", "F.Adhes"]);
+  assert.equal(kicadLayerList([], "PADS").length, 32 + 18 + 45);
+  // Append Board's rows give their own sets: the copper of the larger stack, each other layer itself; in UI order
+  assert.deepEqual(kicadLayerList([], "KiCad", ["User.3", "F.Cu", "B.Cu", "In1.Cu", "In2.Cu", "Edge.Cuts", "F.Cu"]), ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu", "Edge.Cuts", "User.3"]);
+});
+
+test("Append Board's dialog opens with every layer unmatched; OK with none matched takes the suggestions, else the pairs matched (remapAppendedLayers)", () => {
+  const descs = [
+    { name: "Notes", layer: "User.3", auto_map: "User.1", permitted: ["User.3"], used: true },
+    { name: "In1.Cu", layer: "In1.Cu", auto_map: "In1.Cu", permitted: ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"], used: true },
+  ];
+  const layers = appendSourceLayers(descs);
+  const s = unmatchedMapping(layers);
+  assert.deepEqual(s.unmatched, ["Notes", "In1.Cu"]);
+  assert.deepEqual(s.matched, []);
+  assert.deepEqual(appendLayerAnswer(s), { Notes: "User.1", "In1.Cu": "In1.Cu" }, "`AutoMatchLayers` on an empty match");
+  const one = addMappings(s, ["In1.Cu"], "In2.Cu");
+  assert.deepEqual(appendLayerAnswer(one), { "In1.Cu": "In2.Cu" }, "a layer left unmatched is not in the answer: it stays on its own layer");
 });
 
 test("the dialog opens as KiCad's does after Auto-Match Layers: the importer's guesses are matched, the layers it has no guess for are not", () => {
