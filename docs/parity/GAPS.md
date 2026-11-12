@@ -1582,7 +1582,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-28 (`task-r5-rules-zones`, R5-Z1): two same-net fills join only by a vertex of one inside the other (`CN_VISITOR::checkZoneZoneConnection`), not where their edges cross; proof on
   kicad-cli's DRC of a "+" of two GND bars (`kicad_cli_ratsnest.rs`). Cleanup's merge (R5-Z4, R5-Z6): no merge from a segment with a track of another width attached, and the joint's pads, vias and zones
   asked as `testMergeCollinearSegments` asks them.
-- Left (each with its boards in section 51): coordinates in micrometres (sub-micrometre segments of tuned tracks), pads that share a number but not a net, copper graphics with a net, the teardrops kicad-cli's Fill All
+- Done 2026-11-12 (`task-v7-pcb`, UI-LEFT-2 PP21, `PARITY-pcb.md` section 109): copper graphics are connectivity items on their nets (`CN_LIST::Add( PCB_SHAPE* )`), and pads of one number on different nets keep their own (`PadMaskInfo::net`).
+- Left (each with its boards in section 51): coordinates in micrometres (sub-micrometre segments of tuned tracks), the teardrops kicad-cli's Fill All
   rebuilds, and a `.kicad_dru` rule that ignores `via_dangling`.
 
 ### 37. The fab output dialogs (Plot, drill, placement, BOM)
