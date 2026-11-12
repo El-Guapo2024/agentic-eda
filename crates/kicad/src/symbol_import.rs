@@ -143,6 +143,8 @@ pub(crate) struct Properties {
     /// Every field in file order: the mandatory ones (by their canonical names; the match is not case sensitive) and the user fields. A user field whose name is already taken
     /// is renamed `name_1`, `name_2` ..., and after nine tries dropped, as `parseProperty` does.
     pub fields: Vec<LibrarySymbolField>,
+    /// A field's face and colour (`(effects (font (face ..) .. (color ..)))`), by the field's name as it is kept (UI-LEFT-2 YY2).
+    pub field_looks: std::collections::BTreeMap<String, eda_model::lib_keep::KeptFieldLooks>,
     pub keywords: String,
     pub footprint_filters: Vec<String>,
     /// `ki_description`, where a file of KiCad 7 or before kept the description.
@@ -219,10 +221,19 @@ pub(crate) fn read_properties(item: &[Sexpr], tilde_is_empty: bool) -> Propertie
                 if let Some(n) = sexpr::find(prop, "do_not_autoplace") {
                     f.do_not_autoplace = sexpr::txt(n, 1).map(|v| v == "yes").unwrap_or(true);
                 }
+                let mut looks = eda_model::lib_keep::KeptFieldLooks::default();
                 if let Some(effects) = sexpr::find(prop, "effects") {
                     read_effects(&mut f, effects);
+                    // `parseEDA_TEXT`'s face and colour of the field
+                    let thickness_mm = sexpr::find(effects, "font").and_then(|f| sexpr::find(f, "thickness")).and_then(|n| sexpr::num(n, 1));
+                    looks = eda_model::lib_keep::KeptFieldLooks { font: font_face(prop), color: text_color(prop), thickness_mm };
                 }
                 if is_mandatory_field(&f.name) {
+                    if !looks.is_default() {
+                        out.field_looks.insert(f.name.clone(), looks);
+                    } else {
+                        out.field_looks.remove(&f.name);
+                    }
                     if let Some(slot) = out.fields.iter_mut().find(|x| x.name == f.name) {
                         *slot = f;
                     } else {
@@ -238,6 +249,9 @@ pub(crate) fn read_properties(item: &[Sexpr], tilde_is_empty: bool) -> Propertie
                     unique = format!("{}_{n}", f.name);
                 }
                 if !out.fields.iter().any(|x| x.name == unique) {
+                    if !looks.is_default() {
+                        out.field_looks.insert(unique.clone(), looks);
+                    }
                     f.name = unique;
                     out.fields.push(f);
                 }
@@ -251,12 +265,12 @@ fn build(name: &str, item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<St
     let extends = sexpr::find(item, "extends").and_then(|e| sexpr::txt(e, 1)).map(str::to_string);
 
     // A derived symbol keeps no drawing of its own (`SaveSymbol` writes none): what it draws, its units and its pin text options are its root's, which `flatten` takes.
-    let (graphics, pins, unit_count, alt_style, strokes, styles, kept) = if extends.is_some() {
+    let (graphics, pins, unit_count, alt_style, strokes, styles, kept, looks) = if extends.is_some() {
         let own = drawn_items(item, tilde_is_empty, warnings);
         if !own.0.is_empty() || !own.1.is_empty() {
             warnings.push("a derived symbol has a drawing of its own, which is not used: it shows its parent's".to_string());
         }
-        (Vec::new(), Vec::new(), 1, false, Vec::new(), Vec::new(), Vec::new())
+        (Vec::new(), Vec::new(), 1, false, Vec::new(), Vec::new(), Vec::new(), Vec::new())
     } else {
         drawn_items(item, tilde_is_empty, warnings)
     };
@@ -336,13 +350,17 @@ fn build(name: &str, item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<St
         }
     }
     sym.set_fields(fields);
+    sym.kicad.field_looks = props.field_looks;
     if !derived && sym.reference_prefix.is_empty() {
         sym.reference_prefix = "U".to_string();
     }
     sym.assign_missing_ids();
-    for ((g, stroke), style) in sym.graphics.iter().zip(strokes).zip(styles) {
+    for (((g, stroke), style), looks) in sym.graphics.iter().zip(strokes).zip(styles).zip(looks) {
         if let Some(t) = stroke {
             sym.kicad.stroke_types.insert(g.id().to_string(), t);
+        }
+        if let Some(l) = looks {
+            sym.kicad.graphic_looks.insert(g.id().to_string(), l);
         }
         if let Some(t) = style {
             sym.kicad.text_styles.insert(g.id().to_string(), t);
@@ -371,13 +389,42 @@ fn stroke_width(item: &[Sexpr]) -> f64 {
     sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).unwrap_or(0.254)
 }
 
-/// `(fill (type none|outline|background|color))`; a coloured fill reads as the background fill.
+/// `parseFill`'s `(fill (type none|outline|background|color|hatch|reverse_hatch|cross_hatch))`: a colour fill and a hatched one are [`LibraryFill::Color`], the hatch
+/// and the colour kept beside the shape ([`graphic_looks`]).
 fn fill_of(item: &[Sexpr]) -> LibraryFill {
     match sexpr::find(item, "fill").and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1)) {
         Some("outline") => LibraryFill::Outline,
-        Some("background") | Some("color") => LibraryFill::Background,
+        Some("background") => LibraryFill::Background,
+        Some("color") | Some("hatch") | Some("reverse_hatch") | Some("cross_hatch") => LibraryFill::Color,
         _ => LibraryFill::None,
     }
+}
+
+/// What a drawn item of a symbol has beyond its kind's members (UI-LEFT-2 YY2): a shape's `private`, its stroke's `(color ..)`, its fill's colour and hatch
+/// (`parseFill`), a rectangle's `(radius ..)` (`parseSymbolRectangle`); a text's or text box's `(href ..)` (`parseEDA_TEXT`). `None` when it has none of them.
+fn graphic_looks(item: &[Sexpr]) -> Option<eda_model::lib_keep::KeptGraphicLooks> {
+    let shape = matches!(sexpr::tag(item), Some("rectangle" | "polyline" | "circle" | "arc" | "bezier"));
+    let mut l = eda_model::lib_keep::KeptGraphicLooks::default();
+    if shape {
+        l.private = is_private(item);
+        l.stroke_color = sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !is_unspecified(c));
+        let fill = sexpr::find(item, "fill");
+        let kind = fill.and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1));
+        if matches!(kind, Some("color" | "hatch" | "reverse_hatch" | "cross_hatch")) {
+            l.fill_color = fill.and_then(|f| sexpr::find(f, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !is_unspecified(c));
+        }
+        l.hatch = kind.filter(|k| k.ends_with("hatch")).map(str::to_string);
+        if sexpr::tag(item) == Some("rectangle") {
+            l.radius_mm = sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).unwrap_or(0.0);
+        }
+    } else {
+        l.hyperlink = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "href")).and_then(|h| sexpr::txt(h, 1)).unwrap_or_default().to_string();
+        // a text box's hatched fill (its colour is its own `fill_color`)
+        if sexpr::tag(item) == Some("text_box") {
+            l.hatch = sexpr::find(item, "fill").and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1)).filter(|k| k.ends_with("hatch")).map(str::to_string);
+        }
+    }
+    (!l.is_default()).then_some(l)
 }
 
 fn font_size(item: &[Sexpr]) -> Option<f64> {
@@ -393,6 +440,8 @@ fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>)
     let mut strokes: Vec<Option<String>> = Vec::new();
     // and each one's text style (a `(text ..)`'s; none for the others)
     let mut styles: Vec<Option<eda_model::lib_keep::KeptTextStyle>> = Vec::new();
+    // and each one's looks beyond its members
+    let mut looks: Vec<Option<eda_model::lib_keep::KeptGraphicLooks>> = Vec::new();
     let mut pins = Vec::new();
     let mut max_unit = 1u32;
     let mut alt_style = false;
@@ -473,11 +522,18 @@ fn drawn_items(item: &[Sexpr], tilde_is_empty: bool, warnings: &mut Vec<String>)
             }
             if graphics.len() > drawn {
                 strokes.push(stroke_type(child));
-                styles.push((sexpr::tag(child) == Some("text")).then(|| kept_text_style(child)).filter(|t| !t.is_default()));
+                // a text box keeps only its pen there (its looks are members)
+                let style = match sexpr::tag(child) {
+                    Some("text") => Some(kept_text_style(child)),
+                    Some("text_box") => Some(eda_model::lib_keep::KeptTextStyle { thickness_mm: text_style(child).thickness_mm, ..Default::default() }),
+                    _ => None,
+                };
+                styles.push(style.filter(|t| !t.is_default()));
+                looks.push(graphic_looks(child));
             }
         }
     }
-    (graphics, pins, max_unit, alt_style, strokes, styles, kept)
+    (graphics, pins, max_unit, alt_style, strokes, styles, kept, looks)
 }
 
 /// A symbol text's `(effects ..)` beyond its size (`parseEDA_TEXT`).
@@ -533,7 +589,7 @@ fn bezier(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolGra
 
 /// What [`drawn_items`] finds: the graphics, the pins, the highest unit, whether there is a second body style, each graphic's stroke type and text style, and the items
 /// kept as written.
-type DrawnItems = (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>, u32, bool, Vec<Option<String>>, Vec<Option<eda_model::lib_keep::KeptTextStyle>>, Vec<eda_model::lib_keep::KeptSymbolItem>);
+type DrawnItems = (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>, u32, bool, Vec<Option<String>>, Vec<Option<eda_model::lib_keep::KeptTextStyle>>, Vec<eda_model::lib_keep::KeptSymbolItem>, Vec<Option<eda_model::lib_keep::KeptGraphicLooks>>);
 
 /// A graphic's `(stroke (type ..))` when it says something other than `default` (`STROKE_PARAMS_PARSER::ParseStroke`).
 fn stroke_type(item: &[Sexpr]) -> Option<String> {

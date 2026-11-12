@@ -117,3 +117,17 @@ export function pinTableCommands(libId: string, before: readonly LibrarySymbolPi
   for (const r of rows) if (!r.id) cmds.push({ op: "add_symbol_pin", lib_id: libId, pin: r });
   return cmds;
 }
+
+/**
+ * `EDA_DRAW_FRAME::FocusOnLocation( aPos, aAllowScroll = true )` (common/eda_draw_frame.cpp at KiCad 25ec2335): the view centred on `atNm` when it is off the
+ * view or within 10% of its edge (`r.Inflate( -r.GetWidth() / 10.0 )`), else left as it is (`null`). `view` maps world nm to screen px (`screen = world * scale
+ * + (x, y)`); the canvas is `widthPx` by `heightPx`. KiCad also centres it when a dialog covers the point; the browser's dialogs float over the page, so not here.
+ */
+export function focusOnLocation(view: { scale: number; x: number; y: number }, atNm: readonly [number, number], widthPx: number, heightPx: number): { scale: number; x: number; y: number } | null {
+  const sx = atNm[0] * view.scale + view.x;
+  const sy = atNm[1] * view.scale + view.y;
+  // the viewport less a tenth of its width on every side (BOX2D::Inflate by the same amount in x and y)
+  const m = widthPx / 10;
+  if (sx >= m && sx <= widthPx - m && sy >= m && sy <= heightPx - m) return null;
+  return { scale: view.scale, x: widthPx / 2 - atNm[0] * view.scale, y: heightPx / 2 - atNm[1] * view.scale };
+}

@@ -24,7 +24,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
 import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
-import { ensureSymbolInProject, parseSymbolText, readClipboardText, symbolItemsText, writeClipboardText } from "../api/libraryClient";
+import { ensureSymbolInProject, parseSymbolText, readClipboardText, symbolItemsText } from "../api/libraryClient";
 import { bareSymbolForms } from "../kicad-port/symClipboard";
 import { symbolNotLoaded } from "../kicad-port/libraryEnsure";
 import { joinLibName } from "../kicad-port/libraryNames";
@@ -34,7 +34,7 @@ import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchr
 import { DEFAULT_PIN_TEMPLATE, samePinTemplate, type PinTemplate } from "../kicad-port/symPinTemplate";
 import { deletePlan, duplicateItems, pastedItems, placedPinWithId, repeatPin, rotatePivot } from "../kicad-port/symEditItems";
 import { mirrorSelection as mirrorItems, rotateSelection as rotateItems, type MirrorAxis } from "../kicad-port/symTransform";
-import { libFieldBox, libFieldName, movedRows, schFieldOf } from "../kicad-port/symFieldLayout";
+import { fieldsOnShow, libFieldBox, libFieldName, movedRows, schFieldOf } from "../kicad-port/symFieldLayout";
 import type { FieldRow } from "../kicad-port/symFields";
 import { pinBoxAt, pinTextBoxes } from "../kicad-port/schPins";
 import { planSymbolIncrement, type IncrementItem } from "../kicad-port/symIncrement";
@@ -49,6 +49,8 @@ import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kic
 import type { ViewTransform } from "./store";
 import { carriedItems, pastedText, rebased, snappedOrigin, type SymCarry } from "../kicad-port/symCarry";
 import { snapGridNm } from "../components/canvas/gridHelper";
+import { carriedStateOf, fieldLooksOf, graphicLooksCmd, graphicStateOf, type GraphicState } from "../kicad-port/symLooks";
+import { clipboardBox, selectedOnly, selectionPng, selectionSvg, writeClipboardWithImages } from "../components/symbol/symbolClipboardImage";
 
 export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_bezier" | "draw_textbox" | "text" | "anchor";
 
@@ -124,6 +126,8 @@ export interface SymbolEditorState {
   /** "E" on a selected pin, or double-click -- which pin's Pin Properties dialog is open. */
   pinPropertiesId: string | null;
   pinTableOpen: boolean;
+  /** `SYMBOL_EDIT_FRAME::FocusOnItem`: the pin the Pin Table cross-probes (brightened, the view centred on it when it is near the edge); `null` is `ClearFocus()`. */
+  brightened: { id: string; atNm: [number, number] } | null;
   propertiesOpen: boolean;
   /** The field the Symbol Properties dialog opens on (a double click on a field of the canvas): its row is the grid's selected one. */
   propertiesField: string | null;
@@ -167,7 +171,7 @@ export interface SymbolEditorState {
   lastPlacedPin: { libId: string | null; pin: LibrarySymbolPin } | null;
   /** `SYMBOL_EDITOR_EDIT_TOOL::Copy`'s items (pins and graphics) and the `.kicad_sym` text it put on the system clipboard: Paste of that same text takes these (nothing lost
    * on the way), and so does a Paste where the browser will not read the clipboard. */
-  copiedItems: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null } | null;
+  copiedItems: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null; looks?: (GraphicState | null)[] } | null;
   /** `g_LastPin*`: the look the next pin starts with -- the last pin placed or edited (see `kicad-port/symPinTemplate.ts`). */
   pinTemplate: PinTemplate;
   /** `updateSymbolFields`: the Update Symbol Fields dialog (`DIALOG_UPDATE_SYMBOL_FIELDS`) is open on the symbol being edited. */
@@ -214,6 +218,7 @@ const initialState: SymbolEditorState = {
   activeBodyStyle: 1,
   pinPropertiesId: null,
   pinTableOpen: false,
+  brightened: null,
   propertiesOpen: false,
   propertiesField: null,
   treeSelection: [],
@@ -267,6 +272,7 @@ export type SymAction =
   | { type: "SET_ACTIVE_BODY_STYLE"; style: number }
   | { type: "SET_PIN_PROPERTIES_ID"; id: string | null }
   | { type: "SET_PIN_TABLE_OPEN"; open: boolean }
+  | { type: "SET_BRIGHTENED"; item: { id: string; atNm: [number, number] } | null }
   | { type: "SET_PROPERTIES_OPEN"; open: boolean; field?: string }
   | { type: "SET_TREE_SELECTION"; names: string[] }
   | { type: "TOGGLE_ELECTRICAL_TYPES" }
@@ -287,7 +293,7 @@ export type SymAction =
   | { type: "PIN_PLACED"; pin: LibrarySymbolPin }
   /** `RepeatDrawItem`: `selectionClear`, then `selectItem` of the repeated pin -- the last placed one, by the id `PIN_PLACED` found (r4 E4-2). */
   | { type: "SELECT_LAST_PLACED_PIN" }
-  | { type: "SET_COPIED_ITEMS"; items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null } | null }
+  | { type: "SET_COPIED_ITEMS"; items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; text: string | null; looks?: (GraphicState | null)[] } | null }
   /** After Paste or Duplicate placed its items: they are the selection (the move leaves them selected) -- the pins and graphics the symbol has now that it had not in `before`. */
   | { type: "SELECT_ADDED"; before: string[] }
   /** `g_LastPin*`: the look the next pin starts with. */
@@ -383,6 +389,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, pinPropertiesId: action.id };
     case "SET_PIN_TABLE_OPEN":
       return { ...state, pinTableOpen: action.open };
+    case "SET_BRIGHTENED":
+      return { ...state, brightened: action.item };
     case "SET_PROPERTIES_OPEN":
       return { ...state, propertiesOpen: action.open, propertiesField: action.open ? (action.field ?? null) : null };
     case "SET_TREE_SELECTION":
@@ -544,6 +552,8 @@ export interface SymbolEditorApi {
   editGraphic: (id: string, strokeMm: number, fill: LibraryFill, scope?: { unit?: number; bodyStyle?: number }) => Promise<boolean>;
   /** A text box's dialog: the whole graphic as it was left (`replace_symbol_graphic`). */
   replaceGraphic: (id: string, graphic: LibrarySymbolGraphic) => Promise<boolean>;
+  /** Commands of a dialog's OK as one undo step (a `batch` of several): Shape Properties' and Text Box Properties' verb with the looks kept beside the graphic (UI-LEFT-2 YY2). */
+  runCmds: (cmds: Cmd[]) => Promise<boolean>;
   /** The point editor's drag (`SCH_POINT_EDITOR`, kicad-port/symPointEdit.ts): the graphic replaced and the pins a rectangle's side took along moved, one undo step. */
   reshapeGraphic: (id: string, graphic: LibrarySymbolGraphic, pins: { id: string; x: number; y: number }[]) => Promise<boolean>;
   deleteGraphic: (id: string) => Promise<void>;
@@ -805,6 +815,38 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const sym = st.symbol;
       const mouse = st.cursorNm;
       if (!libId || !sym || !mouse) return;
+      // `TwoClickPlace`'s `ACTIONS::increment` (UI-LEFT-2 YY5): the pin or text being placed is the selection (`AddItemToSel( item )`), so it is what is incremented --
+      // a pin's number or name under the cursor, a text's text -- and it goes on following the cursor (`refreshPreview`); nothing is committed
+      if (st.carry && (st.carry.kind === "pin" || st.carry.kind === "text")) {
+        const c = rebased(st.carry);
+        const tag = (n: number) => `__carry_${n}`;
+        const shownC = pinLabelsShown(sym, st.showPinNumbers);
+        const textsC = { namesHidden: !!sym.pin_names_hidden, numbersHidden: !!sym.pin_numbers_hidden, nameOffsetNm: (sym.pin_name_offset_mm ?? 0) * 1e6 };
+        const identityC = symbolTransformMatrix(0, null);
+        const items: IncrementItem[] = [];
+        c.pins.forEach((p0, n) => {
+          const p = { ...p0, id: tag(n) };
+          const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identityC, [0, 0]);
+          const boxes = pinTextBoxes(r.tip, r.root, shownC.names ? p.name : null, shownC.numbers ? p.number : "", textsC, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
+          items.push({ kind: "pin", pin: p, nameBox: boxes.name, numberBox: boxes.number });
+        });
+        c.graphics.forEach((g, n) => {
+          if (g.kind === "text") items.push({ kind: "text", text: { ...g, id: tag(n) } });
+        });
+        const plan = planSymbolIncrement(items, [mouse.x, mouse.y], delta, index);
+        if (!plan) return;
+        const strip = <T extends { id?: string }>(x: T): T => ({ ...x, id: undefined });
+        const pins = c.pins.map((p, n) => {
+          const q = plan.pins.find((x) => x.id === tag(n));
+          return q ? strip(q) : p;
+        });
+        const graphics = c.graphics.map((g, n) => {
+          const q = plan.texts.find((x) => x.id === tag(n));
+          return q ? strip(q) : g;
+        });
+        dispatch({ type: "SET_CARRY", carry: { ...c, pins, graphics } });
+        return;
+      }
       // `RequestSelection( incrementable )`: the selected pins and texts, else the one under the cursor
       let ids = [...st.selection];
       if (ids.length === 0) {
@@ -870,8 +912,10 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       // `SYMBOL_EDITOR_EDIT_TOOL::Duplicate`: the copies (`RequestSelection( nonFields )`), then `SCH_ACTIONS::move` from the cursor -- they follow it until a click
       const d = duplicateItems([...st.selection], sym.pins, sym.graphics);
       if (d.pins.length + d.graphics.length === 0) return;
+      // each copy takes its original's looks (`SCH_ITEM::Duplicate`), in `duplicateItems`' order
+      const looks = sym.graphics.filter((g) => g.id && st.selection.has(g.id)).map((g) => carriedStateOf(sym, g.id));
       dispatch({ type: "CLEAR_SELECTION" });
-      dispatch({ type: "SET_CARRY", carry: { kind: "duplicate", pins: d.pins, graphics: d.graphics, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
+      dispatch({ type: "SET_CARRY", carry: { kind: "duplicate", pins: d.pins, graphics: d.graphics, looks, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
     },
     copySelection: async (cut) => {
       const st = stateRef.current;
@@ -885,12 +929,41 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       // the symbol with only these items, as `FormatLibSymbol` writes it, on the system clipboard (so a paste in KiCad takes it too); the editor keeps the items as well
       let text: string | null = null;
       try {
-        text = bareSymbolForms(await symbolItemsText(st.libId, [...pins, ...graphics].map((i) => i.id!)));
-        if (!(await writeClipboardText(text))) dispatch({ type: "TOAST", message: "The browser would not share the clipboard; Paste still works in this editor.", kind: "info" });
+        const raw = await symbolItemsText(st.libId, [...pins, ...graphics].map((i) => i.id!));
+        text = bareSymbolForms(raw);
+        // the SVG and the PNG of the selection beside the text (`plotSymbolToSvg`, `renderSymbolToImageWithAlpha`; UI-LEFT-2 YY5)
+        const texts = { namesHidden: !!sym.pin_names_hidden, numbersHidden: !!sym.pin_numbers_hidden, nameOffsetNm: (sym.pin_name_offset_mm ?? 0) * 1e6 };
+        const identity = symbolTransformMatrix(0, null);
+        const boxes = [
+          ...pins.map((p) => {
+            const r = resolvePin({ number: p.number, name: p.name, electrical_type: p.electrical_type, shape: p.shape, at: [p.at.x, p.at.y], angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: p.body_style, hidden: p.hidden }, identity, [0, 0]);
+            const b = pinBoxAt(r.tip, r.root, p.name, p.number, texts, measureStrokeText, (p.name_size_mm ?? 1.27) * 1e6, (p.number_size_mm ?? 1.27) * 1e6);
+            return [b.minX, b.minY, b.maxX, b.maxY] as const;
+          }),
+          ...graphics.map((g) => symbolGraphicBox(g)),
+        ];
+        const box = clipboardBox(boxes);
+        const png = box
+          ? selectionPng(selectedOnly(sym, pins, graphics), box, st.view.scale || 1e-5, {
+              gridNm: st.gridNm,
+              gridVisible: false,
+              activeUnit: st.activeUnit,
+              activeBodyStyle: st.activeBodyStyle,
+              showElectricalTypes: st.showElectricalTypes,
+              showHiddenPins: st.showHiddenPins,
+              showPinNumbers: st.showPinNumbers,
+              showPinAltIcons: st.showPinAltIcons,
+              fields: fieldsOnShow(allFields(sym), st.showHiddenFields, st.activeUnit, sym.unit_count),
+              looksOf: (id) => graphicStateOf(sym, id),
+              fieldLooksOf: (name) => fieldLooksOf(st.derivedOwn ?? sym, name),
+            })
+          : Promise.resolve(null);
+        const svg = box ? selectionSvg(st.libId, raw, st.activeUnit, st.activeBodyStyle) : Promise.resolve(null);
+        if (!(await writeClipboardWithImages(text, svg, png))) dispatch({ type: "TOAST", message: "The browser would not share the clipboard; Paste still works in this editor.", kind: "info" });
       } catch (e) {
         dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
       }
-      dispatch({ type: "SET_COPIED_ITEMS", items: { pins, graphics, text } });
+      dispatch({ type: "SET_COPIED_ITEMS", items: { pins, graphics, text, looks: graphics.map((g) => carriedStateOf(sym, g.id)) } });
       if (cut) await api.deleteItems([...pins, ...graphics].map((i) => i.id!));
     },
     pasteItems: async () => {
@@ -899,7 +972,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       // `Paste`: nothing on a derived symbol (`symbol->IsDerived()`)
       if (!st.libId || !sym || st.derivedOwn || st.carry) return;
       const clip = await readClipboardText();
-      let items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] };
+      let items: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; looks?: (GraphicState | null)[] };
       if (st.copiedItems && (clip === null || clip === st.copiedItems.text)) {
         items = st.copiedItems;
       } else if (clip !== null && clip !== "") {
@@ -908,7 +981,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
           const parsed = await parseSymbolText(clip);
           const first = parsed.symbols[0];
           if (!first) return;
-          items = { pins: first.pins, graphics: first.graphics };
+          items = { pins: first.pins, graphics: first.graphics, looks: first.graphics.map((g) => carriedStateOf(first, g.id)) };
         } catch {
           // "If it's not a symbol then paste as text"
           items = { pins: [], graphics: [pastedText(clip)] };
@@ -919,7 +992,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const placed = pastedItems(items, st.activeUnit, st.activeBodyStyle);
       if (placed.pins.length + placed.graphics.length === 0) return;
       dispatch({ type: "CLEAR_SELECTION" });
-      dispatch({ type: "SET_CARRY", carry: { kind: "paste", pins: placed.pins, graphics: placed.graphics, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
+      dispatch({ type: "SET_CARRY", carry: { kind: "paste", pins: placed.pins, graphics: placed.graphics, looks: items.looks, originNm: snappedOrigin(st.cursorNm, snapGridNm(st.gridNm)), deltaNm: [0, 0] } });
     },
     carryPin: (pin) => {
       // `TwoClickPlace`: after `CreatePin`'s dialog the pin follows the cursor (`item->SetPosition( cursorPos )`) until the click that places it
@@ -955,7 +1028,14 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         return;
       }
       const before = [...sym.pins, ...sym.graphics].map((i) => i.id).filter((id): id is string => !!id);
-      const cmds: Cmd[] = [...pins.map((pin): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin })), ...graphics.map((graphic): Cmd => ({ op: "add_symbol_graphic", lib_id: libId, graphic }))];
+      // a copy's looks right after it (`set_symbol_graphic_looks` with no id: the graphic just added)
+      const cmds: Cmd[] = [
+        ...pins.map((pin): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin })),
+        ...graphics.flatMap((graphic, n): Cmd[] => {
+          const st2 = c.looks?.[n];
+          return [{ op: "add_symbol_graphic", lib_id: libId, graphic }, ...(st2 ? graphicLooksCmd(libId, "", st2) : [])];
+        }),
+      ];
       dispatch({ type: "SET_CARRY", carry: null });
       if (cmds.length === 0) return;
       // one commit: "Paste", "Duplicate", "Draw Text"
@@ -1020,6 +1100,10 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const libId = stateRef.current.libId;
       if (!libId) return false;
       return runCmd({ op: "replace_symbol_graphic", lib_id: libId, id, graphic });
+    },
+    runCmds: async (cmds) => {
+      if (cmds.length === 0) return true;
+      return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     reshapeGraphic: async (id, graphic, pins) => {
       const libId = stateRef.current.libId;

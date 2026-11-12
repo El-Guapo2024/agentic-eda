@@ -2397,6 +2397,29 @@ pub enum Cmd {
     /// The properties dialog of a library graphic that has more to it than a stroke and a fill (`DIALOG_TEXT_PROPERTIES` of a text box: the text, its size, bold and italic, its
     /// alignment and way, the border, the fill, the unit and the body style): `graphic` takes the place of the one with `id` -- the same kind, the same place in the list, the id kept.
     ReplaceSymbolGraphic { lib_id: String, id: String, graphic: LibrarySymbolGraphic },
+    /// What a library graphic has beyond its kind's members (UI-LEFT-2 YY2): `looks` (a shape's Private flag, border and fill colours, hatch and corner radius, a
+    /// text's hyperlink, [`eda_model::lib_keep::LibrarySymbolKeep::graphic_looks`]), its line style (`STROKE_PARAMS::GetLineStyle`: `solid`, `dash`, `dot`, `dash_dot`,
+    /// `dash_dot_dot`; `None` is `default`) and a text's pen (`EDA_TEXT::GetTextThickness`, mm; `None` is Auto Thickness) -- all of them as given, the Properties
+    /// pane's, Shape Properties' and Text Box Properties' `SetStroke` / `SetFillColor` / `SetPrivate` / `SetCornerRadius` / `SetHyperlink` / `SetAutoThickness`. An
+    /// empty `id` is the symbol's last graphic (the one an `add_symbol_graphic` before it in the batch added: Duplicate's and Paste's copies keep their looks).
+    SetSymbolGraphicLooks {
+        lib_id: String,
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        looks: eda_model::lib_keep::KeptGraphicLooks,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line_style: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thickness_mm: Option<f64>,
+    },
+    /// A field's face and colour (UI-LEFT-2 YY2, the Properties pane's Font and Color of a field: `EDA_TEXT::SetFont`, `SetTextColor`), as given; by the field's name.
+    SetSymbolFieldLooks {
+        lib_id: String,
+        name: String,
+        #[serde(default)]
+        looks: eda_model::lib_keep::KeptFieldLooks,
+    },
 
     // ------------------------------------------------------- derived symbols
     //
@@ -2631,6 +2654,8 @@ impl Cmd {
             | Cmd::EditSymbolGraphic { .. }
             | Cmd::EditSymbolText { .. }
             | Cmd::ReplaceSymbolGraphic { .. }
+            | Cmd::SetSymbolGraphicLooks { .. }
+            | Cmd::SetSymbolFieldLooks { .. }
             | Cmd::DeriveSymbol { .. }
             | Cmd::FlattenSymbol { .. }
             | Cmd::UpdateSymbolFields { .. }
@@ -2983,6 +3008,8 @@ impl Cmd {
             | Cmd::EditSymbolGraphic { lib_id, .. }
             | Cmd::EditSymbolText { lib_id, .. }
             | Cmd::ReplaceSymbolGraphic { lib_id, .. }
+            | Cmd::SetSymbolGraphicLooks { lib_id, .. }
+            | Cmd::SetSymbolFieldLooks { lib_id, .. }
             | Cmd::FlattenSymbol { lib_id }
             | Cmd::UpdateSymbolFields { lib_id, .. }
             | Cmd::SetSymbolParent { lib_id, .. }
@@ -3864,6 +3891,19 @@ impl<'a> Board<'a> {
             Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, fill, unit, body_style } => self.edit_symbol_graphic(lib_id, id, *stroke_mm, *fill, *unit, *body_style),
             Cmd::EditSymbolText { lib_id, id, text, angle_deg, size_mm } => self.edit_symbol_text(lib_id, id, text.clone(), *angle_deg, *size_mm),
             Cmd::ReplaceSymbolGraphic { lib_id, id, graphic } => self.replace_symbol_graphic(lib_id, id, graphic.clone()),
+            Cmd::SetSymbolGraphicLooks { lib_id, id, looks, line_style, thickness_mm } => self.set_symbol_graphic_looks(lib_id, id, looks, line_style.as_deref(), *thickness_mm),
+            Cmd::SetSymbolFieldLooks { lib_id, name, looks } => {
+                let sym = self.library_symbol_mut(lib_id)?;
+                if !sym.all_fields().iter().any(|f| f.name == *name) {
+                    return Err(vec![CheckResult::fail("ops_bad_field", name, "the symbol has no field of this name")]);
+                }
+                if looks.is_default() {
+                    sym.kicad.field_looks.remove(name);
+                } else {
+                    sym.kicad.field_looks.insert(name.clone(), looks.clone());
+                }
+                Ok(())
+            }
         }
     }
 
@@ -7580,6 +7620,49 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// See [`Cmd::SetSymbolGraphicLooks`].
+    fn set_symbol_graphic_looks(&mut self, lib_id: &str, id: &str, looks: &eda_model::lib_keep::KeptGraphicLooks, line_style: Option<&str>, thickness_mm: Option<f64>) -> Result<(), Vec<CheckResult>> {
+        if let Some(style) = line_style {
+            if !matches!(style, "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot" | "default") {
+                return Err(vec![CheckResult::fail("ops_bad_shape", id, "no such line style")]);
+            }
+        }
+        if let Some(h) = &looks.hatch {
+            if !matches!(h.as_str(), "hatch" | "reverse_hatch" | "cross_hatch") {
+                return Err(vec![CheckResult::fail("ops_bad_shape", id, "no such hatch")]);
+            }
+        }
+        if !(looks.radius_mm >= 0.0) || thickness_mm.is_some_and(|t| !(t >= 0.0)) {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "a negative size")]);
+        }
+        let sym = self.drawing_symbol_mut(lib_id)?;
+        let id = if id.is_empty() { sym.graphics.last().map(|g| g.id().to_string()).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", lib_id, "the symbol has no graphic")])? } else { id.to_string() };
+        let g = sym.graphics.iter().find(|g| g.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", &id, "no shape with this id")])?;
+        let is_text = matches!(g, LibrarySymbolGraphic::Text { .. } | LibrarySymbolGraphic::TextBox { .. });
+        if looks.is_default() {
+            sym.kicad.graphic_looks.remove(&id);
+        } else {
+            sym.kicad.graphic_looks.insert(id.clone(), looks.clone());
+        }
+        match line_style.filter(|s| *s != "default") {
+            Some(s) => {
+                sym.kicad.stroke_types.insert(id.clone(), s.to_string());
+            }
+            None => {
+                sym.kicad.stroke_types.remove(&id);
+            }
+        }
+        // a text's or text box's pen is kept with the rest of its file style (`KeptTextStyle::thickness_mm`)
+        if is_text {
+            let style = sym.kicad.text_styles.entry(id.clone()).or_default();
+            style.thickness_mm = thickness_mm;
+            if style.is_default() {
+                sym.kicad.text_styles.remove(&id);
+            }
+        }
+        Ok(())
+    }
+
     fn add_symbol_graphic(&mut self, lib_id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
         Self::check_symbol_graphic(lib_id, &graphic)?;
         graphic.set_id(String::new());
@@ -7596,6 +7679,10 @@ impl<'a> Board<'a> {
         if sym.graphics.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")]);
         }
+        // what was kept beside it goes with it: an id is a hash of the content, so a graphic drawn again where it was gets the same one
+        sym.kicad.graphic_looks.remove(id);
+        sym.kicad.stroke_types.remove(id);
+        sym.kicad.text_styles.remove(id);
         Ok(())
     }
 

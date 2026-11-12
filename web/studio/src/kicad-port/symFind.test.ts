@@ -102,3 +102,12 @@ test("the dialog starts with the selected field's text, or a selected text's fir
   assert.equal(findStringFromSelection(["p1"], s, fields), "", "a pin gives nothing");
   assert.equal(findStringFromSelection(["t1", "p1"], s, fields), "", "nor two items");
 });
+
+test("UI-LEFT-2 YY6: the find history -- the text moved to the top or put there, case counting, ten kept when the dialog opens", async () => {
+  const { pushHistory, capHistory } = await import("./symFind");
+  assert.deepEqual(pushHistory([], "R1"), ["R1"]);
+  assert.deepEqual(pushHistory(["a", "b", "c"], "c"), ["c", "a", "b"]);
+  assert.deepEqual(pushHistory(["a", "b"], "a"), ["a", "b"]);
+  assert.deepEqual(pushHistory(["a"], "A"), ["A", "a"], "FindString( .., true ): case counts");
+  assert.equal(capHistory(Array.from({ length: 14 }, (_, i) => String(i))).length, 10);
+});

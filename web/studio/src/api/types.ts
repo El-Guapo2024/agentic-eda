@@ -2534,6 +2534,9 @@ export type Cmd =
   | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm }
   /** A text box's properties dialog: the whole graphic, of the same kind, as the dialog left it. */
   | { op: "replace_symbol_graphic"; lib_id: string; id: string; graphic: LibrarySymbolGraphic }
+  /** UI-LEFT-2 YY2 (kicad-port/symLooks.ts): a graphic's looks beside it, its line style and a text's pen, all as given; an empty `id` is the graphic just added. */
+  | { op: "set_symbol_graphic_looks"; lib_id: string; id: string; looks: import("../kicad-port/symLooks").GraphicLooks; line_style?: string | null; thickness_mm?: number | null }
+  | { op: "set_symbol_field_looks"; lib_id: string; name: string; looks: import("../kicad-port/symLooks").FieldLooks }
   // ---------------------------------------------------------------- derived symbols
   /** `deriveFromExistingSymbol` (`DIALOG_LIB_NEW_SYMBOL` with a parent): `lib_id`, a new symbol in the parent's library, derived from `parent`. */
   | { op: "derive_symbol"; parent: string; lib_id: string; keep_footprint?: boolean; keep_datasheet?: boolean; transfer_user_fields?: boolean; keep_content_user_fields?: boolean; overwrite?: boolean }

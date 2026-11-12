@@ -24,6 +24,12 @@
   const E = window.__eda;
   const cmd = (c) => post("/api/cmd", { cmd: c, strict: false });
   const tid = (id) => document.querySelector(`[data-testid="${id}"]`);
+  // a refusal of Symbol Properties is KiCad's message box (`DisplayError`, UI-LEFT-2 YY6): its text, and OK closes it
+  const msgBox = () => {
+    const text = tid("message-box-text")?.textContent ?? "";
+    tid("message-box-ok")?.click();
+    return text;
+  };
   const type = async (el, value) => {
     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, "value").set.call(el, String(value));
@@ -151,7 +157,7 @@
     await type(tid("props-unit-name-1"), "Gate");
     await type(tid("props-unit-name-2"), "gate");
     await click(tid("props-ok"), 500);
-    t(/The unit name 'gate' is already in use\./.test(tid("props-error")?.textContent ?? "") && !!tid("symbol-properties"), `refused: ${tid("props-error")?.textContent}`);
+    { const said = msgBox(); t(/The unit name 'gate' is already in use\./.test(said) && !!tid("symbol-properties"), `refused: ${said}`); }
     await type(tid("props-unit-name-2"), "Power");
     // custom styles: fewer than two names is refused
     await click(tid("props-custom-styles"));
@@ -159,7 +165,7 @@
     await click(tid("props-body-style-names-add"));
     await type(tid("props-body-style-names-row-0"), "Front");
     await click(tid("props-ok"), 500);
-    t(/Custom body styles must have at least 2 entries/.test(tid("props-error")?.textContent ?? ""), `refused: ${tid("props-error")?.textContent}`);
+    { const said = msgBox(); t(/Custom body styles must have at least 2 entries/.test(said), `refused: ${said}`); }
     await click(tid("props-body-style-names-add"));
     await type(tid("props-body-style-names-row-1"), "Top");
     await click(tid("props-body-style-names-add"));
@@ -259,7 +265,8 @@
     const edge = pixel(0, -12_700_000);
     t(edge[0] > 200 && edge[1] < 80 && edge[2] < 80, `its border is red: ${edge}`);
     const text = await exported(ID);
-    t(/\(text_box private "NOTE" .*\(stroke \(width 0\.254\) \(type default\) \(color 255 0 0 1\)\) \(fill \(type color\) \(color 0 0 255 1\)\) \(effects \(font \(face "KiCad Font"\) \(size 1\.27 1\.27\) \(color 0 255 0 1\)\)/.test(text), "saveTextBox writes private, the colours and the face");
+    // the border Style (UI-LEFT-2 YY2) shows the default style as Solid and OK writes it: `stroke.SetLineStyle( it->first )`
+    t(/\(text_box private "NOTE" .*\(stroke \(width 0\.254\) \(type solid\) \(color 255 0 0 1\)\) \(fill \(type color\) \(color 0 0 255 1\)\) \(effects \(font \(face "KiCad Font"\) \(size 1\.27 1\.27\) \(color 0 255 0 1\)\)/.test(text), "saveTextBox writes private, the colours and the face");
     await undo();
     const before = (await symbol(ID)).graphics.find((x) => x.id === ids.box);
     t(before?.fill === "none" && !before?.private && !before?.stroke_color, "one undo step");

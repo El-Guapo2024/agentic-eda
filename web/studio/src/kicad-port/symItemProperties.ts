@@ -8,14 +8,16 @@
 // The registrations keep KiCad's calls, in KiCad's order, so `propertyManager.ts` walks the classes the way `PROPERTY_MANAGER` does and `propertyGrid.ts` builds the grid of the
 // library editors (`isLibraryEditor`). The rows are the schematic panel's (`schItemProperties.ts`) for the same classes; the getters read the library symbol and the setters
 // return the Symbol Editor's verbs -- `edit_symbol_pin`, `replace_symbol_graphic`, the fields as one `edit_library_symbol_fields` and `edit_symbol_properties` -- which an edit
-// sends as ONE `batch` on the editor's own undo stack (`SCH_COMMIT::Push( "Edit Properties" )`). What a library symbol here has no place for (a font, a colour, a hyperlink,
-// a shape's corner radius, line style or private flag, a named body style) is read-only, with the reason as the row's tooltip.
+// sends as ONE `batch` on the editor's own undo stack (`SCH_COMMIT::Push( "Edit Properties" )`). The looks a graphic or field keeps beside it (a shape's Private flag,
+// colours, line style, hatch and corner radius, a text's hyperlink and pen, a field's face, colour and pen; UI-LEFT-2 YY2) are `set_symbol_graphic_looks` /
+// `set_symbol_field_looks` (kicad-port/symLooks.ts). Read-only, with the reason as the tooltip: what KiCad's file has no place for (a pin's Private flag, a field's unit
+// and body style), which KiCad keeps only until the symbol is saved.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`). Lengths are nm in the grid (the panel's unit), mm in the symbol; Y is KiCad's internal Y, the file's negated
 // (eeschema's `ORIGIN_TRANSFORMS` is the identity: Pin Properties shows the same, PARITY-symedit E7-S3).
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, MmPoint, SymbolPropertiesFields } from "../api/types";
 import type { LengthUnit } from "../state/units";
-import { buildGrid, planEdit, positiveInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
+import { buildGrid, planEdit, positiveInt, tooLarge, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { PIN_SHAPE_OPTIONS, PIN_TYPE_OPTIONS } from "./symPinAlternates";
 import { changePinLength } from "./symPinSync";
@@ -24,6 +26,10 @@ import { libFieldId, libFieldName, unitLetters } from "./symFieldLayout";
 import { arcCenter } from "./symTransform";
 import { textBoxMarginMm } from "./symTextBox";
 import { bodyStyleCount, bodyStyleDescription, isMultiBodyStyle } from "./symBodyStyles";
+import { fieldLooksOf, fieldLooksWith, graphicLooksWith, graphicStateOf, isPrivateGraphic } from "./symLooks";
+import { colorToHex, hexToColor, isUnspecified, UNSPECIFIED_COLOR } from "./schProperties";
+import { penSizeForBold } from "./kicadText";
+import type { SchColor } from "../api/schEditTypes";
 
 // ------------------------------------------------------------------------------------------------------------------------------- items
 
@@ -236,17 +242,41 @@ function arcSweepDeg(g: Extract<LibrarySymbolGraphic, { kind: "arc" }>): number 
 }
 
 const READ_ONLY = {
-  font: "A library symbol's field keeps no font face here: KiCad's default font is drawn.",
-  pen: "A library symbol's text keeps its file's pen as it was; it is not edited here.",
-  color: "A library symbol's text, text box or shape keeps no colour here.",
-  link: "A library symbol's text keeps no hyperlink here.",
-  privateItem: "A library pin, shape or text keeps no Private flag here.",
-  corner: "A library rectangle has no corner radius here.",
-  lineStyle: "A shape's line style is kept as the file had it; it is not edited here.",
-  arcEnds: "An arc's ends are dragged on the canvas: the property would move one end about a stale centre.",
-  fieldUnit: "A field of a library symbol is on every unit and body style.",
-  bodyStyles: "Only the standard and the De Morgan body styles are modelled; they are chosen in Symbol Properties.",
+  privatePin: "KiCad's file keeps no Private flag for a pin (saveSymbolPin): KiCad's would be lost when the symbol is saved.",
+  fieldUnit: "KiCad's file keeps no unit or body style for a field (saveField): a field is on every unit and body style once the symbol is saved.",
 };
+
+/** A colour row's text: "" for `COLOR4D::UNSPECIFIED`, else `#RRGGBB[AA]`; and back. */
+const colorValue = (c: SchColor | null | undefined): string => (!c || isUnspecified(c) ? "" : colorToHex(c));
+const colorOf = (text: string): SchColor | null => {
+  const c = text === "" ? UNSPECIFIED_COLOR : (hexToColor(text) ?? UNSPECIFIED_COLOR);
+  return isUnspecified(c) ? null : c;
+};
+
+/**
+ * `EDA_SHAPE::SetStartX` / `SetStartY` / `SetEndX` / `SetEndY` of an arc: the end moves, the centre (`m_arcCenter`) stays, and the arc is the one `formatArc` then writes --
+ * the start, `GetArcMid()` (the start turned about the centre by half `GetArcAngle()`, `CalcArcAngles`: the end's angle past the start's) and the end. Worked in KiCad's
+ * internal units (0.1 um) with Y down, as `RotatePoint` and `KiROUND` do.
+ */
+export function arcWithEnd(g: Extract<LibrarySymbolGraphic, { kind: "arc" }>, which: "start" | "end", at: MmPoint): Extract<LibrarySymbolGraphic, { kind: "arc" }> {
+  const iu = (p: MmPoint) => ({ x: Math.round(p.x * 1e4), y: Math.round(-p.y * 1e4) });
+  const c0 = arcCenter(g.start, g.mid, g.end);
+  const c = iu(c0);
+  const start = iu(which === "start" ? at : g.start);
+  const end = iu(which === "end" ? at : g.end);
+  const deg = (p: { x: number; y: number }) => (Math.atan2(p.y - c.y, p.x - c.x) * 180) / Math.PI;
+  const a0 = deg(start);
+  let a1 = deg(end);
+  if (a1 === a0) a1 = a0 + 360;
+  while (a1 < a0) a1 += 360;
+  // `RotatePoint( mid, m_arcCenter, -GetArcAngle() / 2.0 )`: x' = y sin + x cos, y' = y cos - x sin
+  const r = (-(a1 - a0) / 2) * (Math.PI / 180);
+  const dx = start.x - c.x;
+  const dy = start.y - c.y;
+  const mid = { x: c.x + Math.round(dy * Math.sin(r) + dx * Math.cos(r)), y: c.y + Math.round(dy * Math.cos(r) - dx * Math.sin(r)) };
+  const mm = (p: { x: number; y: number }): MmPoint => ({ x: p.x / 1e4, y: -p.y / 1e4 || 0 });
+  return { ...g, start: mm(start), mid: mm(mid), end: mm(end) };
+}
 
 // ------------------------------------------------------------------------------------------------------------------------------- the registry
 
@@ -291,10 +321,17 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
     name: "Private",
     kind: "bool",
     hiddenFromDesignEditors: true,
-    get: (i) => !!i.field?.private,
-    writeable: (i) => i.type === "SCH_FIELD",
-    readOnlyReason: (i) => (i.type === "SCH_FIELD" ? null : READ_ONLY.privateItem),
-    set: (i, v) => (i.field ? fieldWith(i, { private: Boolean(v) }) : []),
+    get: (i, c) => (i.field ? !!i.field.private : i.graphic ? isPrivateGraphic(c.sym, i.graphic) : false),
+    writeable: (i) => i.type !== "SCH_PIN",
+    readOnlyReason: (i) => (i.type === "SCH_PIN" ? READ_ONLY.privatePin : null),
+    // `SetPrivate`: a field's and a text's or text box's own flag; a shape's kept beside it
+    set: (i, v, c) => {
+      if (i.field) return fieldWith(i, { private: Boolean(v) });
+      const g = i.graphic;
+      if (!g) return [];
+      if (g.kind === "text" || g.kind === "text_box") return graphicWith(i, c, { private: Boolean(v) });
+      return graphicLooksWith(c.libId, c.sym, i.id, { looks: { private: Boolean(v) } });
+    },
   });
 
   // ----------------------------------------------------------------------------------------------------------------- SYMBOL, LIB_SYMBOL
@@ -398,7 +435,7 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
       choices: (_i, c) => Array.from({ length: bodyStyleCount(c.sym) }, (_, k) => ({ label: bodyStyleDescription(c.sym, k + 1), value: bodyStyleDescription(c.sym, k + 1) })),
       // `GetBodyStyleProp`: `GetBodyStyleDescription( 1, false )`; its setter does nothing ("primarily for display purposes")
       get: (_i, c) => bodyStyleDescription(c.sym, 1),
-      readOnlyReason: READ_ONLY.bodyStyles,
+      set: () => [],
     },
     UNITS
   );
@@ -466,19 +503,19 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
   add({ owner: "EDA_TEXT", name: "Orientation", kind: "double", display: "degree", get: () => 0 });
   add({ owner: "EDA_TEXT", name: "Text", kind: "string", get: (i) => textOf(i).text, set: (i, v, c) => textWith(i, c, { text: String(v) }) }, TEXT_PROPS);
   // "Font" (`EDA_TEXT::GetFontProp` / `SetFontProp`): eeschema's "Default Font" is none, any other name the face (`SetFont( FONT::GetFont( aFontName, IsBold(), IsItalic() ) )`);
-  // a text's and a text box's is its `font` (LibTextLooks, the verb of Text Properties' Font, UI-LEFT Y4), a field keeps none here.
-  const fontOf = (i: SymItem): string => (i.graphic?.kind === "text" || i.graphic?.kind === "text_box" ? i.graphic.font || "Default Font" : "Default Font");
+  // a text's and a text box's is its `font` (LibTextLooks, the verb of Text Properties' Font, UI-LEFT Y4), a field's is kept beside it (`set_symbol_field_looks`, UI-LEFT-2 YY2).
+  const fontOf = (i: SymItem, c: SymCtx): string =>
+    i.graphic?.kind === "text" || i.graphic?.kind === "text_box" ? i.graphic.font || "Default Font" : i.field ? fieldLooksOf(c.own, i.field.name).font || "Default Font" : "Default Font";
   add(
     {
       owner: "EDA_TEXT",
       name: "Font",
       kind: "string",
       get: fontOf,
-      writeable: (i) => i.graphic?.kind === "text" || i.graphic?.kind === "text_box",
-      readOnlyReason: READ_ONLY.font,
       set: (i, v, c) => {
         const next = String(v).trim();
-        if (!next || next === fontOf(i)) return [];
+        if (!next || next === fontOf(i, c)) return [];
+        if (i.field) return fieldLooksWith(c.libId, c.own, i.field.name, { font: next === "Default Font" ? null : next });
         const g = { ...i.graphic! } as LibrarySymbolGraphic & { font?: string | null };
         if (next === "Default Font") delete g.font;
         else g.font = next;
@@ -487,7 +524,26 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
     },
     TEXT_PROPS
   );
-  add({ owner: "EDA_TEXT", name: "Auto Thickness", kind: "bool", get: (i) => !textOf(i).bold, readOnlyReason: READ_ONLY.pen }, TEXT_PROPS);
+  // "Auto Thickness" (`SetAutoThickness`): on, the pen is 0 (automatic); off, it is the pen the text is drawn with (`GetEffectiveTextPenWidth`: a fifth of the size for
+  // bold, an eighth otherwise, at most a quarter of it, `ClampTextPenSize`) -- a text's and a text box's kept with its style, a field's beside it (UI-LEFT-2 YY2)
+  const penOf = (i: SymItem, c: SymCtx): number | null => (i.field ? (fieldLooksOf(c.own, i.field.name).thickness_mm ?? null) : i.graphic ? graphicStateOf(c.sym, i.id).thicknessMm : null);
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Auto Thickness",
+      kind: "bool",
+      get: (i, c) => !penOf(i, c),
+      set: (i, v, c) => {
+        if (Boolean(v) === !penOf(i, c)) return [];
+        const t = textOf(i);
+        const sizeIu = Math.round(t.sizeMm * 1e4);
+        const pen = Math.min(t.bold ? penSizeForBold(sizeIu) : Math.round(sizeIu / 8), Math.round(sizeIu * 0.25)) / 1e4;
+        const next = v ? null : pen;
+        return i.field ? fieldLooksWith(c.libId, c.own, i.field.name, { thickness_mm: next }) : graphicLooksWith(c.libId, c.sym, i.id, { thicknessMm: next });
+      },
+    },
+    TEXT_PROPS
+  );
   add({ owner: "EDA_TEXT", name: "Thickness", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Italic", kind: "bool", get: (i) => textOf(i).italic, set: (i, v, c) => textWith(i, c, { italic: Boolean(v) }) }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Bold", kind: "bool", get: (i) => textOf(i).bold, set: (i, v, c) => textWith(i, c, { bold: Boolean(v) }) }, TEXT_PROPS);
@@ -498,8 +554,38 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
   add({ owner: "EDA_TEXT", name: "Height", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Horizontal Justification", kind: "enum", choices: () => H_JUSTIFY, get: (i) => textOf(i).h, set: (i, v, c) => textWith(i, c, { h_align: String(v) }) }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Vertical Justification", kind: "enum", choices: () => V_JUSTIFY, get: (i) => textOf(i).v, set: (i, v, c) => textWith(i, c, { v_align: String(v) }) }, TEXT_PROPS);
-  add({ owner: "EDA_TEXT", name: "Color", kind: "color", get: () => "", readOnlyReason: READ_ONLY.color }, TEXT_PROPS);
-  add({ owner: "EDA_TEXT", name: "Hyperlink", kind: "string", get: () => "", readOnlyReason: READ_ONLY.link }, TEXT_PROPS);
+  // "Color" (`SetTextColor`): a text's and a text box's own `text_color`, a field's kept beside it
+  const textColorOf = (i: SymItem, c: SymCtx): string =>
+    i.graphic?.kind === "text" || i.graphic?.kind === "text_box" ? colorValue(i.graphic.text_color) : i.field ? colorValue(fieldLooksOf(c.own, i.field.name).color) : "";
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Color",
+      kind: "color",
+      get: textColorOf,
+      set: (i, v, c) => {
+        if (textColorOf(i, c) === String(v)) return [];
+        if (i.field) return fieldLooksWith(c.libId, c.own, i.field.name, { color: colorOf(String(v)) });
+        const g = { ...i.graphic! } as LibrarySymbolGraphic & { text_color?: SchColor | null };
+        const col = colorOf(String(v));
+        if (col) g.text_color = col;
+        else delete g.text_color;
+        return [graphicCmd(c, g)];
+      },
+    },
+    TEXT_PROPS
+  );
+  // "Hyperlink" (`SetHyperlink`): a text's or text box's, kept beside it (`(href ..)`); a field's is masked
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Hyperlink",
+      kind: "string",
+      get: (i, c) => (i.graphic ? (graphicStateOf(c.sym, i.id).looks.hyperlink ?? "") : ""),
+      set: (i, v, c) => (i.graphic ? graphicLooksWith(c.libId, c.sym, i.id, { looks: { hyperlink: String(v) } }) : []),
+    },
+    TEXT_PROPS
+  );
   /** "Text Size" (`SetSchTextSize`) of `owner`: "Don't allow text to disappear" (0.01 to 1000 mm, `DIALOG_TEXT_PROPERTIES`'s range). */
   const textSize = (owner: string): void => {
     add(
@@ -548,12 +634,12 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
           const p = which === "start" ? startOf(g(i)) : endOf(g(i));
           return p ? (axis === "x" ? nmOf(p.x) : nmOf(-p.y) || 0) : 0;
         },
-        writeable: (i) => !isKind(i, "arc"),
-        readOnlyReason: (i) => (isKind(i, "arc") ? READ_ONLY.arcEnds : null),
         set: (i, v, c) => {
           const p = which === "start" ? startOf(g(i)) : endOf(g(i));
           if (!p) return [];
           const at = axis === "x" ? { x: mmOf(num(v)), y: p.y } : { x: p.x, y: mmOf(-num(v)) || 0 };
+          // an arc's end moves about its centre (`arcWithEnd`)
+          if (isKind(i, "arc")) return graphicWith(i, c, arcWithEnd(g(i) as Extract<LibrarySymbolGraphic, { kind: "arc" }>, which, at));
           return graphicWith(i, c, { [which]: at });
         },
       },
@@ -571,7 +657,26 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
   // `GetRectangleWidth` / `GetRectangleHeight`: the end less the start (internal Y); a new width or height moves the end
   add({ owner: "EDA_SHAPE", name: "Width", kind: "int", display: "size", available: isRect, get: (i) => nmOf(endOf(g(i))!.x - startOf(g(i))!.x), set: (i, v, c) => graphicWith(i, c, { end: { x: mmOf(nmOf(startOf(g(i))!.x) + num(v)), y: endOf(g(i))!.y } }) }, SHAPE_PROPS);
   add({ owner: "EDA_SHAPE", name: "Height", kind: "int", display: "size", available: isRect, get: (i) => nmOf(startOf(g(i))!.y - endOf(g(i))!.y), set: (i, v, c) => graphicWith(i, c, { end: { x: endOf(g(i))!.x, y: mmOf(nmOf(startOf(g(i))!.y) - num(v)) } }) }, SHAPE_PROPS);
-  add({ owner: "EDA_SHAPE", name: "Corner Radius", kind: "int", display: "size", available: isRect, get: () => 0, readOnlyReason: READ_ONLY.corner }, SHAPE_PROPS);
+  // "Corner Radius" (`SetCornerRadius`, kept beside the rectangle): at most half the shorter side, the validator's `VALIDATION_ERROR_TOO_LARGE` / `_TOO_SMALL`, and the setter
+  // clamps to it (`std::clamp( aRadius, 0, maxRadius )`)
+  const maxRadiusNm = (i: SymItem): number => {
+    const s = startOf(g(i))!;
+    const e = endOf(g(i))!;
+    return Math.trunc(Math.min(nmOf(e.x - s.x), nmOf(s.y - e.y)) / 2);
+  };
+  add(
+    {
+      owner: "EDA_SHAPE",
+      name: "Corner Radius",
+      kind: "int",
+      display: "size",
+      available: isRect,
+      get: (i, c) => nmOf(graphicStateOf(c.sym, i.id).looks.radius_mm ?? 0),
+      validate: (v, i, c) => (num(v) > maxRadiusNm(i) ? tooLarge(maxRadiusNm(i), "size", c.units) : num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+      set: (i, v, c) => graphicLooksWith(c.libId, c.sym, i.id, { looks: { radius_mm: mmOf(Math.max(0, Math.min(num(v), Math.abs(maxRadiusNm(i))))) } }),
+    },
+    SHAPE_PROPS
+  );
   const strokeOf = (i: SymItem): number => ("stroke_mm" in g(i) ? (g(i) as { stroke_mm: number }).stroke_mm : 0);
   add({
     owner: "EDA_SHAPE",
@@ -587,12 +692,37 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
     name: "Line Style",
     kind: "enum",
     choices: () => LINE_STYLES,
-    get: (i, c) => (c.sym as { kicad?: { stroke_types?: Record<string, string> } }).kicad?.stroke_types?.[i.id] ?? "solid",
-    readOnlyReason: READ_ONLY.lineStyle,
+    // `GetLineStyle`: the default one shows as Solid (`DEFAULT_LINE_STYLE_LABEL`); `SetLineStyle` puts the style chosen (kept beside the graphic)
+    get: (i, c) => graphicStateOf(c.sym, i.id).lineStyle ?? "solid",
+    set: (i, v, c) => graphicLooksWith(c.libId, c.sym, i.id, { lineStyle: String(v) }),
   }, SHAPE_PROPS);
-  add({ owner: "EDA_SHAPE", name: "Line Color", kind: "color", get: () => "", readOnlyReason: READ_ONLY.color }, SHAPE_PROPS);
+  // "Line Color" (`SetLineColor`, the stroke's): a text box's own `stroke_color`, a shape's kept beside it
+  const lineColorOf = (i: SymItem, c: SymCtx): string => (isKind(i, "text_box") ? colorValue(box(i).stroke_color) : colorValue(graphicStateOf(c.sym, i.id).looks.stroke_color));
+  add({
+    owner: "EDA_SHAPE",
+    name: "Line Color",
+    kind: "color",
+    get: lineColorOf,
+    set: (i, v, c) => {
+      if (lineColorOf(i, c) === String(v)) return [];
+      if (isKind(i, "text_box")) {
+        const t = { ...box(i) } as LibrarySymbolGraphic & { stroke_color?: SchColor | null };
+        const col = colorOf(String(v));
+        if (col) t.stroke_color = col;
+        else delete t.stroke_color;
+        return [graphicCmd(c, t)];
+      }
+      return graphicLooksWith(c.libId, c.sym, i.id, { looks: { stroke_color: colorOf(String(v)) } });
+    },
+  }, SHAPE_PROPS);
   add({ owner: "EDA_SHAPE", name: "Angle", kind: "double", display: "degree", available: (i) => isKind(i, "arc"), get: (i) => arcSweepDeg(g(i) as Extract<LibrarySymbolGraphic, { kind: "arc" }>) }, SHAPE_PROPS);
   const fillOf = (i: SymItem): LibraryFill => ("fill" in g(i) ? (g(i) as { fill: LibraryFill }).fill : "none");
+  const hatchOf = (i: SymItem, c: SymCtx): string | null => (fillOf(i) === "color" ? (graphicStateOf(c.sym, i.id).looks.hatch ?? null) : null);
+  /** The fill `FILL_T` as the graphic's `fill` and the hatch kept beside it: a hatch is a `color` fill with its hatch, any other leaves no hatch. */
+  const fillCmds = (i: SymItem, c: SymCtx, fill: LibraryFill, hatch: string | null): SymCmd[] => [
+    ...graphicWith(i, c, { fill }),
+    ...(hatchOf(i, c) !== hatch ? graphicLooksWith(c.libId, c.sym, i.id, { looks: { hatch } }) : []),
+  ];
   // `fillAvailable`: a polygon, rectangle, circle or bezier (a text box is a rectangle)
   add({
     owner: "EDA_SHAPE",
@@ -600,27 +730,52 @@ function build(): PropertyManager<SymItem, SymCtx, SymCmd> {
     kind: "enum",
     available: (i) => isKind(i, "polyline", "rectangle", "circle", "bezier", "text_box"),
     choices: () => UI_FILL,
-    // `GetFillModeProp`: none, or solid for any fill; `SetFillModeProp( SOLID )` is `SetFilled( true )`, a symbol's shape's `FILLED_SHAPE` (the body outline colour)
-    get: (i) => (fillOf(i) === "none" ? "none" : "solid"),
-    validate: (v) => (v === "none" || v === "solid" ? null : "A library symbol's shape has no hatched fill here."),
-    set: (i, v, c) => (v === "none" ? graphicWith(i, c, { fill: "none" }) : fillOf(i) === "none" ? graphicWith(i, c, { fill: "outline" }) : []),
+    // `GetFillModeProp`: none, a hatch, or solid for any other fill; `SetFillModeProp`: none, a hatch, or `SetFilled( true )` -- a symbol's shape's `FILLED_SHAPE` (the body
+    // outline colour)
+    get: (i, c) => (fillOf(i) === "none" ? "none" : (hatchOf(i, c) ?? "solid")),
+    set: (i, v, c) => {
+      const mode = String(v);
+      const now = fillOf(i) === "none" ? "none" : (hatchOf(i, c) ?? "solid");
+      if (mode === now) return [];
+      if (mode === "none") return fillCmds(i, c, "none", null);
+      if (mode === "solid") return fillCmds(i, c, "outline", null);
+      return fillCmds(i, c, "color", mode);
+    },
   }, SHAPE_PROPS);
-  add({ owner: "EDA_SHAPE", name: "Fill Color", kind: "color", get: () => "", readOnlyReason: READ_ONLY.color }, SHAPE_PROPS);
+  // "Fill Color" (`SetFillColor`): a text box's own `fill_color`, a shape's kept beside it
+  const fillColorOf = (i: SymItem, c: SymCtx): string => (isKind(i, "text_box") ? colorValue(box(i).fill_color) : colorValue(graphicStateOf(c.sym, i.id).looks.fill_color));
+  add({
+    owner: "EDA_SHAPE",
+    name: "Fill Color",
+    kind: "color",
+    get: fillColorOf,
+    set: (i, v, c) => {
+      if (fillColorOf(i, c) === String(v)) return [];
+      if (isKind(i, "text_box")) {
+        const t = { ...box(i) } as LibrarySymbolGraphic & { fill_color?: SchColor | null };
+        const col = colorOf(String(v));
+        if (col) t.fill_color = col;
+        else delete t.fill_color;
+        return [graphicCmd(c, t)];
+      }
+      return graphicLooksWith(c.libId, c.sym, i.id, { looks: { fill_color: colorOf(String(v)) } });
+    },
+  }, SHAPE_PROPS);
 
   // ----------------------------------------------------------------------------------------------------------------- SCH_SHAPE
   pm.inheritsAfter("SCH_SHAPE", "SCH_ITEM");
   pm.inheritsAfter("SCH_SHAPE", "EDA_SHAPE");
-  // `isFillColorEditable`: a symbol's shape filled with a colour of its own -- none is here
-  pm.overrideWriteability("SCH_SHAPE", "EDA_SHAPE", "Fill Color", () => false, READ_ONLY.color);
+  // `isFillColorEditable`: a symbol's shape filled with a colour of its own (`GetFillMode() == FILLED_WITH_COLOR`; a hatch is not)
+  pm.overrideWriteability("SCH_SHAPE", "EDA_SHAPE", "Fill Color", (i, c) => fillOf(i) === "color" && !hatchOf(i, c), "Only a shape filled with a colour of its own takes a fill colour.");
   add({
     owner: "SCH_SHAPE",
     name: "Fill Mode",
     kind: "enum",
     // `isSymbolItem`: `GetLayer() == LAYER_DEVICE`
     choices: () => FILL_MODES,
+    // `GetFillMode` / `SetFillMode`: a hatch is none of the four (`FILL_T::HATCH` ..), shown as a colour fill here
     get: fillOf,
-    validate: (v) => (v === "color" ? "A library symbol's shape has no fill colour of its own here: fill it with the body's outline or background colour." : null),
-    set: (i, v, c) => graphicWith(i, c, { fill: String(v) as LibraryFill }),
+    set: (i, v, c) => (String(v) === fillOf(i) && !hatchOf(i, c) ? [] : fillCmds(i, c, String(v) as LibraryFill, null)),
   }, SHAPE_PROPS);
 
   // ----------------------------------------------------------------------------------------------------------------- SCH_TEXTBOX

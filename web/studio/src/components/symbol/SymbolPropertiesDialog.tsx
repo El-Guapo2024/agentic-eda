@@ -29,7 +29,7 @@ import { bareName, parentCandidates, wireField } from "../../kicad-port/symField
 import { gridProblem, gridRowsFor, savedFields, type GridRow } from "../../kicad-port/symFieldsGrid";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { notifyLibraryChanged } from "../library/useLibraryNames";
-import { askConfirm } from "../library/libraryDialogs";
+import { askConfirm, showError } from "../library/libraryDialogs";
 import { escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolNameInUse } from "../../kicad-port/libraryNames";
 import { unescapeString } from "../../kicad-port/schNetName";
 import { symbolPropertiesQuestions } from "../../kicad-port/symUnits";
@@ -195,8 +195,10 @@ export function LibrarySymbolPropertiesDialog() {
   const chooseBodyStyle = (mode: BodyStyleMode) => {
     const refusal = bodyStyleChoiceRefusal(mode, subject.pins, pinSummary);
     if (refusal) {
-      setError(refusal);
+      // `DisplayErrorMessage( this, NO_BODY_STYLES_WITH_ALTERNATE_PIN_FUNCTIONS, "(Pins %s.)" )` (UI-LEFT-2 YY6: KiCad's message box, not a line of the dialog)
+      const [text, extra] = refusal.split("\n");
       setBodyMode("single");
+      void showError(text!, extra);
       return;
     }
     setError(null);
@@ -207,12 +209,13 @@ export function LibrarySymbolPropertiesDialog() {
   const namesOut = bodyMode === "custom" ? bodyNames.filter((n) => n !== "") : [];
 
   const submit = async () => {
+    // `Validate`'s `m_delayedErrorMessage`, shown by `DisplayError` once the dialog is back (UI-LEFT-2 YY6)
     const problem = gridProblem(rows, !derived);
-    if (problem) return setError(problem);
-    if (derived && parent === "") return setError("Derived symbol must have a parent selected");
+    if (problem) return void showError(problem);
+    if (derived && parent === "") return void showError("Derived symbol must have a parent selected");
     // KiCad 25ec2335 `Validate`: the unit names in use and the custom body styles' two entries
     const unitsProblem = derived ? null : unitsAndBodyStylesProblem(unitRows, bodyMode, bodyNames);
-    if (unitsProblem) return setError(unitsProblem);
+    if (unitsProblem) return void showError(unitsProblem);
     // `Validate`: "Confirm destructive actions." -- the dropped units' and body styles' items are deleted (`SetUnitCount`, `SetBodyStyleCount`)
     const after = { ...form, has_alternate_body_style: demorganOut, body_style_names: namesOut };
     for (const question of symbolPropertiesQuestions(subject, after, derived)) {
@@ -221,13 +224,14 @@ export function LibrarySymbolPropertiesDialog() {
     // `TransferDataFromWindow`: the name, escaped for a LIB_ID; an empty one, or one the library has (`SymbolNameInUse`, any case), is refused
     const { lib } = splitLibName(subject.lib_id);
     const newName = escapeLibIdName(symbolName);
-    if (newName === "") return setError("Symbol must have a name.");
+    // `wxMessageBox( _( "Symbol must have a name." ) )`
+    if (newName === "") return void showError("Symbol must have a name.", undefined, "Message");
     const newLibId = joinLibName(lib, newName);
     let renamed = false;
     if (newLibId !== subject.lib_id) {
       try {
         const { names } = await fetchSymbolEditorNames();
-        if (symbolNameInUse(newLibId, names.filter((n) => n !== subject.lib_id))) return setError(`Symbol name '${unescapeString(newName)}' already in use in library '${lib || PROJECT_LIBRARY}'.`);
+        if (symbolNameInUse(newLibId, names.filter((n) => n !== subject.lib_id))) return void showError(`Symbol name '${unescapeString(newName)}' already in use in library '${lib || PROJECT_LIBRARY}'.`);
       } catch {
         /* the server refuses a taken name as well */
       }
@@ -303,7 +307,7 @@ export function LibrarySymbolPropertiesDialog() {
               data-testid="props-symbol-name"
             />
           </div>
-          <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={setError} initialField={state.propertiesField} />
+          <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={(m) => (m ? void showError(m) : setError(null))} initialField={state.propertiesField} />
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>
             <span>Keywords:</span>
             <input value={form.keywords} onChange={(e) => set("keywords", e.target.value)} style={{ width: 300 }} data-testid="props-keywords" />

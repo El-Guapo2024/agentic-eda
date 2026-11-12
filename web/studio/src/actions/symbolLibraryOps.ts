@@ -49,6 +49,18 @@ export function targetLibrary(c: SymCtx): string {
   return t.kind === "library" ? t.lib : t.kind === "symbol" ? splitLibName(t.id).lib || PROJECT_SYMBOL_LIB : PROJECT_SYMBOL_LIB;
 }
 
+/**
+ * `SYMBOL_EDITOR_CONTROL::DuplicateSymbol`'s checks of the library a symbol is pasted or duplicated into (UI-LEFT-2 YY6): "Symbol library '%s' not found." for one the tables
+ * lack, "Symbol library '%s' is not writable." for one that cannot be written (`IsLibraryReadOnly`); null when it can take the symbol. The project library always can.
+ */
+async function libraryRefusal(lib: string): Promise<string | null> {
+  if (lib === PROJECT_LIBRARY || lib === PROJECT_SYMBOL_LIB) return null;
+  const rows = new Map((await fetchWritableLibraries("symbol")).map((l) => [l.name, l.writable]));
+  if (!rows.has(lib)) return symbolLibraryNotFound(lib);
+  if (rows.get(lib) === false) return notWritableMessage(lib);
+  return null;
+}
+
 async function runBatch(c: SymCtx, cmds: Cmd[]): Promise<boolean> {
   const ok = await c.api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
   notifyLibraryChanged();
@@ -124,6 +136,9 @@ export async function pasteSymbols(c: SymCtx): Promise<void> {
   try {
     const st = c.api.getState();
     const { activeUnit, activeBodyStyle } = st;
+    // the library is checked before the clipboard is read (`m_frame->ShowInfoBarError( msg )`)
+    const refused = await libraryRefusal(targetLibrary(c));
+    if (refused) return fail(c, new Error(refused));
     const text = await readClipboardText();
     let symbols: LibrarySymbol[];
     if (st.copied && (text === null || text === st.copied.text)) {
@@ -151,9 +166,12 @@ export async function pasteSymbols(c: SymCtx): Promise<void> {
 /** `SYMBOL_EDIT_FRAME::DuplicateSymbol( false )`: a copy of the target under the next free name (`name_1`, ...), opened at the unit and body style being edited. */
 export async function duplicateSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
-  if (!id) return info(c, "No symbol selected.");
+  // "When duplicating a symbol, a source symbol must exists."
+  if (!id) return fail(c, new Error("No symbol selected"));
   try {
     const { activeUnit, activeBodyStyle } = c.api.getState();
+    const refused = await libraryRefusal(splitLibName(id).lib || PROJECT_SYMBOL_LIB);
+    if (refused) return fail(c, new Error(refused));
     const { symbol } = await fetchAnySymbol(id);
     const { all } = await names();
     const libId = ensureUniqueLibId(id, all, true);

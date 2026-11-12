@@ -2,8 +2,9 @@
 // `showRelatedLibraryFieldsTable` "Bulk Edit Related Symbol Fields...": the symbols of the library -- or, with the scope "Related Symbols", the target's root and everything
 // derived from it (`setScope`) -- as rows, their fields as columns, edited in place and saved together: "Symbol Fields Table ('%s' Library)". The columns are the ones
 // `UpdateFieldList` starts with as far as a library symbol keeps them: Symbol Name (never edited here), Reference (the symbol's prefix), Value, Footprint, Datasheet,
-// Description, every user field any listed symbol has (sorted by name; "Add Field" makes a column of a new one), Keywords, the Exclude From BOM / Board check boxes and Power Symbol.
-// A derived symbol's cells are its own: an empty one inherits from the parent. (Exclude From Simulation and Local Power are not part of the library model.)
+// Description, Keywords, the attribute check boxes -- Exclude From BOM, Exclude From Simulation, Exclude From Board, Power Symbol, Local Power Symbol (UI-LEFT-2 YY6:
+// `LIB_FIELDS_EDITOR_GRID_DATA_MODEL::setAttributeValue`) -- then every user field any listed symbol has (sorted by name; "Add Field" makes a column of a new one), in
+// `UpdateFieldList`'s order. A derived symbol's cells are its own: an empty one inherits from the parent.
 // Only the project library's own symbols are rows: one that comes from a library file or the built-in table is read-only until it is opened.
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, LibrarySymbol, SymbolPropertiesFields } from "../../api/types";
@@ -21,11 +22,13 @@ interface Edit {
 }
 type Row = { libId: string; derived: boolean; original: Edit; edited: Edit };
 
-const FIELD_KEYS: (keyof SymbolPropertiesFields)[] = ["reference_prefix", "description", "keywords", "datasheet", "power", "in_bom", "on_board", "pin_numbers_hidden", "pin_names_hidden", "pin_name_offset_mm", "unit_count", "has_alternate_body_style", "footprint_filters"];
+const FIELD_KEYS: (keyof SymbolPropertiesFields)[] = ["reference_prefix", "description", "keywords", "datasheet", "power", "in_bom", "on_board", "pin_numbers_hidden", "pin_names_hidden", "pin_name_offset_mm", "unit_count", "has_alternate_body_style", "footprint_filters", "exclude_from_sim", "power_local"];
 
 function editOf(s: LibrarySymbol): Edit {
   const out: Record<string, unknown> = {};
   for (const k of FIELD_KEYS) out[k] = s[k];
+  out.exclude_from_sim = !!s.exclude_from_sim;
+  out.power_local = !!s.power_local;
   return { props: out as unknown as SymbolPropertiesFields, fields: allFields(s) };
 }
 
@@ -181,19 +184,24 @@ export function LibraryFieldsTableDialog() {
               <thead>
                 <tr>
                   <th>Symbol Name</th>
-                  {columns.map((c) => (
+                  {MANDATORY_COLUMNS.map((c) => (
                     <th key={c}>{c}</th>
                   ))}
                   <th>Keywords</th>
                   <th>Exclude From BOM</th>
+                  <th>Exclude From Simulation</th>
                   <th>Exclude From Board</th>
                   <th>Power Symbol</th>
+                  <th>Local Power Symbol</th>
+                  {userColumns.map((c) => (
+                    <th key={c}>{c}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {shown.length === 0 && (
                   <tr>
-                    <td colSpan={columns.length + 5} style={{ color: "var(--chrome-text-dim)" }}>
+                    <td colSpan={columns.length + 7} style={{ color: "var(--chrome-text-dim)" }}>
                       {emptyMessage}
                     </td>
                   </tr>
@@ -203,7 +211,7 @@ export function LibraryFieldsTableDialog() {
                     <td style={{ whiteSpace: "nowrap", fontStyle: r.derived ? "italic" : undefined }} title={r.derived ? "A derived symbol: an empty cell inherits from its parent" : undefined}>
                       {splitLibName(r.libId).item}
                     </td>
-                    {columns.map((c) => (
+                    {MANDATORY_COLUMNS.map((c) => (
                       <td key={c}>
                         <input
                           value={cellText(r.edited, c)}
@@ -221,11 +229,30 @@ export function LibraryFieldsTableDialog() {
                       <input type="checkbox" checked={!r.edited.props.in_bom} onChange={(e) => setProps(r.libId, { in_bom: !e.target.checked })} aria-label={`Exclude ${r.libId} from BOM`} />
                     </td>
                     <td style={{ textAlign: "center" }}>
+                      <input type="checkbox" checked={!!r.edited.props.exclude_from_sim} onChange={(e) => setProps(r.libId, { exclude_from_sim: e.target.checked })} aria-label={`Exclude ${r.libId} from simulation`} data-testid={`cell-${bareName(r.libId)}-exclude-sim`} />
+                    </td>
+                    <td style={{ textAlign: "center" }}>
                       <input type="checkbox" checked={!r.edited.props.on_board} onChange={(e) => setProps(r.libId, { on_board: !e.target.checked })} aria-label={`Exclude ${r.libId} from board`} />
                     </td>
                     <td style={{ textAlign: "center" }}>
-                      <input type="checkbox" checked={r.edited.props.power} onChange={(e) => setProps(r.libId, { power: e.target.checked })} aria-label={`${r.libId} is a power symbol`} />
+                      {/* `setAttributeValue( "Power" )`: off is `SetNormal`, on `SetGlobalPower` */}
+                      <input type="checkbox" checked={r.edited.props.power} onChange={(e) => setProps(r.libId, { power: e.target.checked, power_local: false })} aria-label={`${r.libId} is a power symbol`} />
                     </td>
+                    <td style={{ textAlign: "center" }}>
+                      {/* `setAttributeValue( "LocalPower" )`: on is `SetLocalPower`, off `SetGlobalPower` ("turning off local power still leaves the global flag set") */}
+                      <input type="checkbox" checked={!!r.edited.props.power && !!r.edited.props.power_local} onChange={(e) => setProps(r.libId, { power: true, power_local: e.target.checked })} aria-label={`${r.libId} is a local power symbol`} data-testid={`cell-${bareName(r.libId)}-local-power`} />
+                    </td>
+                    {userColumns.map((c) => (
+                      <td key={c}>
+                        <input
+                          value={cellText(r.edited, c)}
+                          style={{ width: WIDTH[c] ?? 110 }}
+                          onChange={(e) => setCell(r.libId, c, e.target.value)}
+                          aria-label={`${c} of ${r.libId}`}
+                          data-testid={`cell-${bareName(r.libId)}-${c}`}
+                        />
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>

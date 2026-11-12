@@ -176,9 +176,11 @@ test("a text's Bold, a shape's Fill Mode: the graphic as it is with the value (r
   assert.equal(row(["r"], "Fill")!.value, "solid");
   const fill = symEdit(ctx(), ["r"], "Fill Mode", "outline");
   if (fill.ok) assert.equal((fill.cmds[0] as Extract<Cmd, { op: "replace_symbol_graphic" }>).graphic.kind === "rectangle" && ((fill.cmds[0] as Extract<Cmd, { op: "replace_symbol_graphic" }>).graphic as { fill: string }).fill, "outline");
-  assert.equal(symEdit(ctx(), ["r"], "Fill Mode", "color").ok, false, "no fill colour of its own here");
+  // a colour of its own (UI-LEFT-2 YY2): `FILLED_WITH_COLOR`, its colour kept beside the shape
+  const color = symEdit(ctx(), ["r"], "Fill Mode", "color");
+  assert.ok(color.ok && (color.cmds[0] as Extract<Cmd, { op: "replace_symbol_graphic" }>).graphic.kind === "rectangle");
   assert.deepEqual([row(["r"], "Width")!.value, row(["r"], "Height")!.value], [5_080_000, 5_080_000]);
-  assert.equal(row(["r"], "Line Style")!.writable, false);
+  assert.equal(row(["r"], "Line Style")!.writable, true);
 });
 
 test("a text's Font (UI-LEFT-2 CC1): the graphic's font (SetFontProp: Default Font is none); a field keeps none here", () => {
@@ -192,7 +194,10 @@ test("a text's Font (UI-LEFT-2 CC1): the graphic's font (SetFontProp: Default Fo
   const back = symEdit(ctx(faced), ["t"], "Font", "Default Font");
   if (back.ok) assert.deepEqual(back.cmds, [{ op: "replace_symbol_graphic", lib_id: "Lib:U", id: "t", graphic: symbol().graphics[1]! }]);
   assert.deepEqual(symEdit(ctx(), ["t"], "Font", "Default Font"), { ok: true, cmds: [] }, "the same font: nothing");
-  assert.equal(row([libFieldId("Value")], "Font")!.writable, false);
+  // a field's face is kept beside it (UI-LEFT-2 YY2)
+  assert.equal(row([libFieldId("Value")], "Font")!.writable, true);
+  const ff = symEdit(ctx(), [libFieldId("Value")], "Font", "DejaVu Sans");
+  if (ff.ok) assert.deepEqual(ff.cmds, [{ op: "set_symbol_field_looks", lib_id: "Lib:U", name: "Value", looks: { font: "DejaVu Sans" } }]);
 });
 
 test("fields: two selected fields edited at once are one edit_library_symbol_fields; Private is a user field's", () => {
@@ -220,4 +225,51 @@ test("nothing selected: the symbol itself (getSelection's fallback), its fields,
   if (ref.ok) assert.equal((ref.cmds[0] as Extract<Cmd, { op: "edit_library_symbol_fields" }>).fields.find((f) => f.name === "Reference")!.text, "IC");
   const inside = symEdit(ctx({ ...symbol(), pin_name_offset_mm: 0 }), [], "Place Pin Names Inside", true);
   if (inside.ok) assert.equal((inside.cmds[0] as Extract<Cmd, { op: "edit_symbol_properties" }>).pin_name_offset_mm, 0.508, "inside with no offset is 20 mil (SetPinNamesInsideProp)");
+});
+
+// ------------------------------------------------------------------------------------------------------------------------- UI-LEFT-2 YY2: the looks kept beside an item
+
+const looksCmd = (plan: ReturnType<typeof symEdit>) => (plan.ok ? plan.cmds.find((c) => c.op === "set_symbol_graphic_looks") : undefined) as Extract<Cmd, { op: "set_symbol_graphic_looks" }> | undefined;
+
+test("YY2: a shape's Private, Line Style, Line Color, Corner Radius and hatched Fill are set beside it (set_symbol_graphic_looks), the rest kept", () => {
+  const s = symbol();
+  (s as { kicad?: unknown }).kicad = { graphic_looks: { r: { hyperlink: "x" } }, stroke_types: { r: "dash" } };
+  const c = ctx(s);
+  assert.equal(row(["r"], "Private", c)!.writable, true);
+  assert.equal(row(["r"], "Line Style", c)!.value, "dash");
+  assert.deepEqual(looksCmd(symEdit(c, ["r"], "Private", true)), { op: "set_symbol_graphic_looks", lib_id: "Lib:U", id: "r", looks: { private: true, hyperlink: "x" }, line_style: "dash", thickness_mm: null });
+  assert.equal(looksCmd(symEdit(c, ["r"], "Line Style", "dot"))!.line_style, "dot");
+  assert.deepEqual(looksCmd(symEdit(c, ["r"], "Line Color", "#FF0000"))!.looks.stroke_color, { r: 255, g: 0, b: 0, a: 255 });
+  // the corner radius: at most half the shorter side (5.08 mm square: 2.54 mm)
+  assert.equal(looksCmd(symEdit(c, ["r"], "Corner Radius", 1_000_000))!.looks.radius_mm, 1);
+  const big = symEdit(c, ["r"], "Corner Radius", 3_000_000);
+  assert.ok(!big.ok && /less than or equal to 2\.54/.test(big.error), JSON.stringify(big));
+  // a hatch: the fill is a colour fill with its hatch beside it; Fill Color is not writable for a hatch (`isFillColorEditable`)
+  const hatch = symEdit(c, ["r"], "Fill", "cross_hatch");
+  assert.ok(hatch.ok);
+  if (hatch.ok) {
+    assert.equal(((hatch.cmds[0] as Extract<Cmd, { op: "replace_symbol_graphic" }>).graphic as { fill: string }).fill, "color");
+    assert.equal(looksCmd(hatch)!.looks.hatch, "cross_hatch");
+  }
+  // a pin's Private has no place in KiCad's file
+  assert.equal(row(["p"], "Private", c)!.writable, false);
+});
+
+test("YY2: a text's Color, Hyperlink and Auto Thickness; Body Styles' setter does nothing", () => {
+  const color = symEdit(ctx(), ["t"], "Color", "#00FF00");
+  if (color.ok) assert.deepEqual((color.cmds[0] as Extract<Cmd, { op: "replace_symbol_graphic" }>).graphic, { ...symbol().graphics[1]!, text_color: { r: 0, g: 255, b: 0, a: 255 } });
+  assert.equal(looksCmd(symEdit(ctx(), ["t"], "Hyperlink", "https://kicad.org"))!.looks.hyperlink, "https://kicad.org");
+  assert.equal(row(["t"], "Auto Thickness")!.value, true);
+  // off: the pen it is drawn with, an eighth of 1.27 mm (`GetPenSizeForNormal`)
+  assert.equal(looksCmd(symEdit(ctx(), ["t"], "Auto Thickness", false))!.thickness_mm, 0.1588);
+});
+
+test("YY2: an arc's start moves about its centre, the middle point recomputed (`GetArcMid`)", async () => {
+  const { arcWithEnd } = await import("./symItemProperties");
+  // a quarter circle of radius 2 about the origin, from (2, 0) to (0, 2) through (sqrt2, sqrt2) (file Y up)
+  const arc = { kind: "arc" as const, id: "a", unit: 0, body_style: 1, start: { x: 2, y: 0 }, mid: { x: Math.SQRT2, y: Math.SQRT2 }, end: { x: 0, y: 2 }, stroke_mm: 0, fill: "none" as const };
+  const moved = arcWithEnd(arc, "start", { x: 0, y: -2 });
+  // the start at (0, -2): the arc now runs a half circle the other way round from start to end, its middle at (-2, 0)... or (2, 0)
+  assert.deepEqual(moved.start, { x: 0, y: -2 });
+  assert.equal(Math.hypot(moved.mid.x, moved.mid.y).toFixed(3), "2.000", "the middle is on the circle about the kept centre");
 });

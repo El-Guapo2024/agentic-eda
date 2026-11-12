@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import { drawTarget, useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
+import { focusOnLocation } from "../../kicad-port/pinTable";
 import { paintSymbol, mmPointToNm, nmPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
 import { useGridSettings } from "../../state/gridSettings";
@@ -52,6 +53,8 @@ import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
 import { newTextBox } from "../../kicad-port/symTextBox";
+import { fieldLooksOf, graphicStateOf } from "../../kicad-port/symLooks";
+import { useSymFind } from "../../actions/symFindOps";
 import { carriedItems } from "../../kicad-port/symCarry";
 import { bezierFromClicks, bezierGraphic } from "../../kicad-port/symBezier";
 import { addCorner, canAddCorner, eeFindHandle, handlePos, POINT_SIZE_PX, removableCorner, removeCorner, type EeHandle } from "../../kicad-port/eePointEdit";
@@ -204,6 +207,7 @@ export function SymbolEditorCanvas() {
 
   const sym = state.symbol;
   /** The fields on show: the symbol's own list, those with a text, the hidden ones only while Show Hidden Fields is on (kicad-port/symFieldLayout.ts). */
+  const symFind = useSymFind();
   const shownFields = useMemo(() => (sym ? fieldsOnShow(allFields(sym), state.showHiddenFields, state.activeUnit, sym.unit_count) : []), [sym, state.showHiddenFields, state.activeUnit]);
 
   // The grid helper of the tool in force (kicad-port/schGridHelper.ts, symbolSnap.ts), kept fed with the view, the grid, the overrides and the pins of the unit being edited: a click goes
@@ -241,7 +245,7 @@ export function SymbolEditorCanvas() {
     const p = snap.point(tool, [wx, wy], snapMods(e), carryCategory());
     return [p[0], p[1]];
   };
-  const carried = useMemo(() => (state.carry ? carriedItems(state.carry) : null), [state.carry]);
+  const carried = useMemo(() => (state.carry ? { ...carriedItems(state.carry), looks: state.carry.looks } : null), [state.carry]);
   /** The point editor's drag in progress: the shape, the handle and where the snapped cursor has it. */
   const [pointDrag, setPointDrag] = useState<{ id: string; handle: EeHandle; to: [number, number] } | null>(null);
   /**
@@ -302,6 +306,14 @@ export function SymbolEditorCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sym != null, state.libId, state.fitRequest, containerSize, dispatch]);
 
+  // `FocusOnItem`'s `FocusOnLocation`: the Pin Table's cross-probed pin brought into view when it is off it or near its edge
+  useEffect(() => {
+    if (!state.brightened || containerSize.width < 50) return;
+    const next = focusOnLocation(state.view, state.brightened.atNm, containerSize.width, containerSize.height);
+    if (next) dispatch({ type: "SET_VIEW", view: next });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.brightened]);
+
   useEffect(() => {
     userMovedRef.current = false;
   }, [state.libId]);
@@ -328,6 +340,8 @@ export function SymbolEditorCanvas() {
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintSymbol(ctx, state.view, width, height, sym, {
       selection: state.selection,
+      // the Pin Table's cross-probed pin (`FocusOnItem`'s `SetBrightened`) and Find's matches (`UpdateFind`'s `BrightenItem`), in `LAYER_BRIGHTENED`
+      brightened: new Set([...(state.brightened ? [state.brightened.id] : []), ...symFind.bright]),
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       gridYNm,
@@ -345,6 +359,10 @@ export function SymbolEditorCanvas() {
       carried,
       pointEditor,
       fields: shownFields,
+      // a graphic's looks kept beside it (UI-LEFT-2 YY2)
+      looksOf: (id) => (sym ? graphicStateOf(sym, id) : null),
+      // a derived symbol's field looks are its own entry's
+      fieldLooksOf: (name) => fieldLooksOf(state.derivedOwn ?? sym!, name),
     });
     // What the grid helper shows: the snap marker, the snap lines, the construction geometry.
     const snapOverlay = snap.overlay();
@@ -354,7 +372,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
+  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

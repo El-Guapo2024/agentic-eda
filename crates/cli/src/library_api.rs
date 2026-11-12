@@ -250,6 +250,7 @@ pub fn symbol_items_copy(dir: &Path, body: &[u8]) -> Value {
     let ids: std::collections::BTreeSet<String> = sym.graphics.iter().map(|g| g.id().to_string()).collect();
     sym.kicad.stroke_types.retain(|id, _| ids.contains(id));
     sym.kicad.text_styles.retain(|id, _| ids.contains(id));
+    sym.kicad.graphic_looks.retain(|id, _| ids.contains(id));
     // a derived symbol is copied as the flat one (`partCopy` of the symbol the editor holds): no parent to name
     sym.extends = None;
     json!({ "text": eda_kicad::export_kicad_sym_library(&[&sym]) })

@@ -316,3 +316,48 @@ fn a_footprints_settings_hatches_locks_and_hidden_texts_survive_the_writer_and_t
     let e = again.kicad.text_extra(&k).unwrap();
     assert!(e.italic && e.valign == eda_model::ir::TextVAlign::Top && e.width_nm == Some(eda_model::units::Nm::new(1_200_000)));
 }
+
+const LOOKS: &str = r#"(kicad_symbol_lib (version 20251024) (generator "kicad_symbol_editor")
+  (symbol "L"
+    (property "Reference" "U" (at 0 0 0) (effects (font (face "DejaVu Sans") (size 1.27 1.27) (color 255 0 0 1))))
+    (property "Value" "L" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (symbol "L_1_1"
+      (rectangle private (start -2 -2) (end 2 2) (radius 0.5) (stroke (width 0.254) (type dash) (color 0 0 255 1)) (fill (type hatch) (color 0 255 0 1)))
+      (circle (center 0 0) (radius 1) (stroke (width 0) (type default)) (fill (type color) (color 10 20 30 1)))
+      (polyline private (pts (xy 0 0) (xy 1 1)) (stroke (width 0) (type default)) (fill (type cross_hatch) (color 0 0 0 0)))
+      (text "T" (at 0 0 0) (effects (font (size 1.27 1.27)) (href "https://kicad.org")))
+    )
+  )
+)"#;
+
+/// UI-LEFT-2 YY2: a shape's Private flag, border and fill colours, hatched fill and corner radius, a text's hyperlink and a field's face and colour are read
+/// (`parseSymbolRectangle`, `parseFill`, `parseEDA_TEXT`) and written where `SaveSymbol` writes them (`formatRect`, `formatFill`, `STROKE_PARAMS::Format`, `EDA_TEXT::Format`).
+#[test]
+fn a_shapes_private_flag_colours_hatch_and_radius_a_texts_link_and_a_fields_face_are_kept() {
+    use eda_model::ir::{LibraryFill, LibrarySymbolGraphic as G};
+    let l = one_symbol(LOOKS);
+    let rect = l.graphics.iter().find(|g| matches!(g, G::Rectangle { .. })).unwrap();
+    let looks = &l.kicad.graphic_looks[rect.id()];
+    assert!(looks.private && looks.radius_mm == 0.5 && looks.hatch.as_deref() == Some("hatch"), "{looks:?}");
+    assert_eq!(looks.stroke_color.map(|c| (c.r, c.g, c.b)), Some((0, 0, 255)));
+    assert_eq!(looks.fill_color.map(|c| (c.r, c.g, c.b)), Some((0, 255, 0)));
+    assert!(matches!(rect, G::Rectangle { fill: LibraryFill::Color, .. }));
+    let circle = l.graphics.iter().find(|g| matches!(g, G::Circle { .. })).unwrap();
+    assert!(matches!(circle, G::Circle { fill: LibraryFill::Color, .. }), "a colour fill is the shape's own colour now");
+    assert_eq!(l.kicad.graphic_looks[circle.id()].fill_color.map(|c| c.b), Some(30));
+    let text = l.graphics.iter().find(|g| matches!(g, G::Text { .. })).unwrap();
+    assert_eq!(l.kicad.graphic_looks[text.id()].hyperlink, "https://kicad.org");
+    assert_eq!(l.kicad.field_looks["Reference"].font.as_deref(), Some("DejaVu Sans"));
+    // a private shape is not drawn by a placed symbol
+    assert_eq!(l.to_engine_symbol().graphics.len(), 2, "the circle and the text");
+
+    let out = written(&l);
+    assert!(out.contains("(rectangle private (start -2 -2) (end 2 2) (radius 0.5) (stroke (width 0.254) (type dash) (color 0 0 255 1)) (fill (type hatch) (color 0 255 0 1)))"), "{out}");
+    assert!(out.contains("(fill (type color) (color 10 20 30 1))"), "{out}");
+    assert!(out.contains("(polyline private (pts") && out.contains("(fill (type cross_hatch) (color 0 0 0 0))"), "{out}");
+    assert!(out.contains("(href \"https://kicad.org\")"), "{out}");
+    assert!(out.contains("(property \"Reference\" \"U\"") && out.contains("(font (face \"DejaVu Sans\") (size 1.27 1.27) (color 255 0 0 1))"), "{out}");
+    let back = one_symbol(&out);
+    assert_eq!(back.kicad.graphic_looks, l.kicad.graphic_looks);
+    assert_eq!(back.kicad.field_looks, l.kicad.field_looks);
+}

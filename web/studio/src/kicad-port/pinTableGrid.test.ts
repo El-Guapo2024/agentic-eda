@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COL, COLUMN_LABELS, csvText, DEFAULT_SHOWN_COLUMNS, exportTable, INDETERMINATE_STATE, nextSort, NO_FILTERS, parseTypedLength, pinTableSummary, rebuildRows, renumberGroup, rowValue, updatePin, type GridContext, type TablePin } from "./pinTableGrid";
+import { cellIcon, COL, COLUMN_LABELS, csvText, evaluateCell, selectedArea, DEFAULT_SHOWN_COLUMNS, exportTable, INDETERMINATE_STATE, nextSort, NO_FILTERS, parseTypedLength, pinTableSummary, rebuildRows, renumberGroup, rowValue, updatePin, type GridContext, type TablePin } from "./pinTableGrid";
 import type { LibrarySymbolPin } from "../api/types";
 
 const pin = (over: Partial<LibrarySymbolPin> = {}): LibrarySymbolPin => ({
@@ -72,9 +72,9 @@ test("rows: Count then Number by PIN_NUMBERS::Compare, Group by name, the filter
   const units = [tp("u1", { unit: 1 }), tp("u2", { unit: 2, number: "2" }), tp("u0", { unit: 0, number: "3" })];
   assert.deepEqual(rebuildRows(units, false, { ...NO_FILTERS, unit: 2 }, COL.PIN_COUNT, true, ctx(2)).flat(), ["u2", "u0"]);
   assert.deepEqual(rebuildRows(units, false, { ...NO_FILTERS, unit: 0 }, COL.PIN_COUNT, true, ctx(2)).flat(), ["u0"]);
-  // a body style filter keeps exactly that style
-  const styles = [tp("s1", { body_style: 1 }), tp("s0", { body_style: 0, number: "2" })];
-  assert.deepEqual(rebuildRows(styles, false, { ...NO_FILTERS, bodyStyle: 1 }, COL.PIN_COUNT, true, ctx(1, true)).flat(), ["s1"]);
+  // a body style filter keeps that style and the pins common to every body style (KiCad 25ec2335)
+  const styles = [tp("s1", { body_style: 1 }), tp("s0", { body_style: 0, number: "2" }), tp("s2", { body_style: 2, number: "3" })];
+  assert.deepEqual(rebuildRows(styles, false, { ...NO_FILTERS, bodyStyle: 1 }, COL.PIN_COUNT, true, ctx(1, true)).flat(), ["s1", "s0"]);
   // the selection filter: a copy whose number, name, unit and body style a selected pin has
   assert.deepEqual(rebuildRows(pins, false, { ...NO_FILTERS, selection: [pin({ number: "2", name: "VCC" })] }, COL.PIN_COUNT, true, ctx()).flat(), ["b"]);
 });
@@ -134,4 +134,46 @@ test("Export: every column but Count, no units, True / False, quoted CSV (PIN_TA
   assert.equal(t[1]![8], "-5.08", "X Position without its unit");
   assert.equal(t[1]![10], "True");
   assert.equal(csvText([["a", 'b"c']]), '"a","b""c"\n');
+});
+
+test("YY4: Group Selected Pins puts the selected rows' pins in the first row and every other pin in a row of its own, unsorted (RebuildRows( .., false, true ))", () => {
+  const list = [tp("a", { number: "3", name: "X" }), tp("b", { number: "1", name: "Y" }), tp("c", { number: "2", name: "X" }), tp("d", { number: "4", name: "Z" })];
+  assert.deepEqual(rebuildRows(list, false, NO_FILTERS, COL.PIN_COUNT, true, ctx(), new Set(["a", "d"])), [["a", "d"], ["b"], ["c"]]);
+  // none of the selected passes the filters: the first row stays, empty
+  assert.deepEqual(rebuildRows(list, false, { ...NO_FILTERS, unit: 2 }, COL.PIN_COUNT, true, ctx(2), new Set(["a"])), [[]]);
+});
+
+test("YY4: getSelectedArea -- the block's rows either way, else the cursor's row, else none", () => {
+  assert.deepEqual(selectedArea({ from: 3, to: 1 }, 0), [1, 2, 3]);
+  assert.deepEqual(selectedArea(null, 2), [2]);
+  assert.deepEqual(selectedArea(null, null), []);
+});
+
+test("YY4: a length cell is worked out by NUMERIC_EVALUATOR (SetValue's m_eval), its text kept as the original; other columns are taken as typed", () => {
+  assert.deepEqual(evaluateCell(COL.LENGTH, "2.54*2", "mm"), { value: "5.08", original: "2.54*2" });
+  assert.deepEqual(evaluateCell(COL.POSX, "100mil + 1", "mm"), { value: "3.54", original: "100mil + 1" });
+  assert.deepEqual(evaluateCell(COL.NAME, "1+1", "mm"), { value: "1+1", original: null });
+  const p = updatePin(pin(), evaluateCell(COL.LENGTH, "1.27*3", "mm").value, COL.LENGTH, ctx());
+  assert.equal(p.length_mm, 3.81);
+});
+
+test("YY4: ValueFromString reads a number with an optional unit in the frame's units, 0 for no number, to 0.1 um", () => {
+  assert.equal(parseTypedLength("100 mil", "mm"), 2.54);
+  assert.equal(parseTypedLength("2.5", "mil"), 0.0635);
+  assert.equal(parseTypedLength("abc", "mm"), 0);
+});
+
+test("YY4: boolFromString reports a value that is no boolean (COLUMN_FORMATTER)", () => {
+  const said: string[] = [];
+  assert.equal(updatePin(pin(), "TRUE", COL.VISIBLE, ctx(), (m) => said.push(m)).hidden, false);
+  assert.equal(updatePin(pin(), "0", COL.VISIBLE, ctx(), (m) => said.push(m)).hidden, true);
+  assert.equal(updatePin(pin(), "yes", COL.VISIBLE, ctx(), (m) => said.push(m)).hidden, true);
+  assert.deepEqual(said, ["The value 'yes' can't be converted to boolean correctly, it has been interpreted as 'False'"]);
+});
+
+test("YY4: the cells' icons are KiCad's bitmaps (PinTypeIcons, PinShapeIcons, PinOrientationIcons)", () => {
+  assert.equal(cellIcon(COL.TYPE, "Power input"), "pintype_powerinput");
+  assert.equal(cellIcon(COL.SHAPE, "Falling edge clock"), "pinshape_clock_fall");
+  assert.equal(cellIcon(COL.ORIENTATION, "Up"), "pinorient_up");
+  assert.equal(cellIcon(COL.TYPE, INDETERMINATE_STATE), null);
 });

@@ -8,6 +8,8 @@ import { postJson } from "../api/schControlClient";
 import { defaultSearch, findStartCursor } from "../kicad-port/schFind";
 import { allFields, wireField, type FieldRow } from "../kicad-port/symFields";
 import {
+  capHistory,
+  pushHistory,
   currentSymMatch,
   editorFields,
   findStringFromSelection,
@@ -35,10 +37,16 @@ export interface SymFindState {
   /** When "Reached end of symbol." was last shown (`m_wrapAroundTimer` started), ms; a Find within 4 s of it starts over. */
   wrapArmedAt: number | null;
   status: string;
+  /** The frame's `m_findStringHistoryList` / `m_replaceStringHistoryList` (UI-LEFT-2 YY6): the combo boxes' lists, the latest first, ten at most; kept while the editor is. */
+  findHistory: string[];
+  replaceHistory: string[];
+  /** `UpdateFind`'s brightened items (`BrightenItem`): every item that matches while the dialog is open (UI-LEFT-2 YY6). */
+  bright: string[];
 }
 
 /** `SCH_SEARCH_DATA` as the dialog leaves it in the Symbol Editor: `searchAllPins = true` (and its box hidden). */
-const initial = (): SymFindState => ({ open: null, search: { ...defaultSearch(), search_pins: true }, selectedOnly: false, cursor: null, wrapArmedAt: null, status: "" });
+const initial = (): SymFindState => ({ open: null, search: { ...defaultSearch(), search_pins: true }, selectedOnly: false, cursor: null, wrapArmedAt: null, status: "", findHistory: [], replaceHistory: [], bright: [] });
+
 
 let current: SymFindState = initial();
 const listeners = new Set<() => void>();
@@ -49,6 +57,8 @@ function set(patch: Partial<SymFindState>): void {
 export function getSymFind(): SymFindState {
   return current;
 }
+// what the browser checks read (e2e/symedit-v7.check.js): the dialog's state, its histories and the brightened matches
+(globalThis as { __edaSymFind?: () => SymFindState }).__edaSymFind = getSymFind;
 export function useSymFind(): SymFindState {
   return useSyncExternalStore(
     (l) => {
@@ -68,7 +78,35 @@ export function setSymSelectedOnly(on: boolean): void {
   set({ selectedOnly: on, cursor: null, wrapArmedAt: null, status: "" });
 }
 export function closeSymFind(): void {
-  set({ open: null, status: "" });
+  // `OnFindDialogClose`: the lists kept, then `updateFind` -- nothing is brightened with the dialog gone
+  set({ open: null, status: "", bright: [] });
+}
+
+/** `DIALOG_SCH_FIND::OnFind`'s and `OnReplace`'s combo updates. */
+function remember(replace: boolean): void {
+  if (current.search.find !== "") set({ findHistory: pushHistory(current.findHistory, current.search.find) });
+  if (replace) set({ replaceHistory: pushHistory(current.replaceHistory, current.search.replace) });
+}
+
+/**
+ * `SCH_FIND_REPLACE_TOOL::UpdateFind` while the dialog is open: every item of the symbol that matches (`Matches( data, nullptr )`, and selected with "Search the current
+ * selection only") is brightened, the rest not; an empty find string brightens nothing.
+ */
+export async function refreshSymFindHighlights(api: SymbolEditorApi): Promise<void> {
+  const st = api.getState();
+  if (!current.open || !st.symbol || current.search.find === "") {
+    if (current.bright.length) set({ bright: [] });
+    return;
+  }
+  const { items: list } = items(api, current.selectedOnly);
+  try {
+    const reply = await askMatcher(current.search, textsOf(list).texts, false);
+    const matched = matchedItems(list, reply.matches ?? []);
+    const bright = list.filter((_, i) => matched[i]).map((it) => it.id);
+    if (JSON.stringify(bright) !== JSON.stringify(current.bright)) set({ bright });
+  } catch {
+    // the matcher is the server's; nothing brightened when it cannot answer
+  }
 }
 
 /** `SCH_BASE_FRAME::ShowFindReplaceDialog( aReplace )`: the dialog, with the one selected field's or text's text to search for when there is one. */
@@ -76,7 +114,10 @@ export function showSymFind(replace: boolean, api: SymbolEditorApi): void {
   const st = api.getState();
   const fields = st.symbol ? editorFields(st.symbol) : [];
   const text = findStringFromSelection([...st.selection], st.symbol, fields);
-  set({ open: replace ? "replace" : "find", search: { ...current.search, find: text || current.search.find, search_pins: true }, status: "" });
+  // `SetFindEntries( m_findStringHistoryList, findString )`: the selection's text, else the latest of the list
+  const find = text || current.findHistory[0] || current.search.find;
+  set({ open: replace ? "replace" : "find", search: { ...current.search, find, replace: current.replaceHistory[0] ?? current.search.replace, search_pins: true }, status: "", findHistory: capHistory(current.findHistory), replaceHistory: capHistory(current.replaceHistory) });
+  void refreshSymFindHighlights(api);
 }
 
 interface MatchReply {
@@ -113,6 +154,7 @@ export async function symFindNext(api: SymbolEditorApi, dispatch: Dispatch<SymAc
   if (!st.symbol) return;
   // `else if( data.findString.IsEmpty() ) return FindAndReplace( ACTIONS::find.MakeEvent() );`
   if (current.search.find === "") return showSymFind(false, api);
+  if (current.open) remember(false);
   const now = Date.now();
   const after = findStartCursor(current.cursor, current.wrapArmedAt, now, false);
   const wrapped = after !== current.cursor;
@@ -166,6 +208,7 @@ export async function symReplaceAndFindNext(api: SymbolEditorApi, dispatch: Disp
   const st = api.getState();
   if (!st.symbol || !st.libId) return;
   if (current.search.find === "") return showSymFind(false, api);
+  remember(true);
   const id = currentSymMatch([...st.selection], current.cursor, current.selectedOnly);
   const { items: all, fields } = items(api, false);
   const item = all.find((it) => it.id === id);
@@ -187,6 +230,7 @@ export async function symReplaceAll(api: SymbolEditorApi): Promise<void> {
   const st = api.getState();
   if (!st.symbol || !st.libId) return;
   if (current.search.find === "") return showSymFind(false, api);
+  remember(true);
   const { items: list, fields } = items(api, current.selectedOnly);
   const sym = st.symbol;
   const reps = list.map((it) => replaceTexts(it, sym, fields));

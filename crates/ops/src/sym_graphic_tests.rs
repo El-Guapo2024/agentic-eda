@@ -251,3 +251,31 @@ fn a_bezier_is_added_moved_and_given_its_width_and_fill() {
     assert!(near(*start, p(1.27, -1.27)) && near(*c1, p(2.54, 1.27)) && near(*c2, p(3.81, 1.27)) && near(*end, p(5.08, -1.27)));
     assert_eq!((*stroke_mm, *fill), (0.254, LibraryFill::Background));
 }
+
+/// UI-LEFT-2 YY2: `set_symbol_graphic_looks` puts a shape's Private flag, colours, hatch, radius and line style beside it as given (an empty id is the graphic just
+/// added, as Duplicate's batch sends it); the defaults take the entries out; deleting the shape takes them with it.
+#[test]
+fn a_graphics_looks_and_line_style_are_set_as_given_and_go_with_the_graphic() {
+    use eda_model::lib_keep::KeptGraphicLooks;
+    use eda_model::sch_extras::SchColor;
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:S".into() }).unwrap();
+    let looks = KeptGraphicLooks { private: true, stroke_color: Some(SchColor { r: 1, g: 2, b: 3, a: 255 }), hatch: Some("cross_hatch".into()), radius_mm: 0.5, ..Default::default() };
+    b.apply(&Cmd::Batch { cmds: vec![
+        Cmd::AddSymbolGraphic { lib_id: "Lib:S".into(), graphic: rectangle() },
+        Cmd::SetSymbolGraphicLooks { lib_id: "Lib:S".into(), id: String::new(), looks: looks.clone(), line_style: Some("dash".into()), thickness_mm: None },
+    ] })
+    .unwrap();
+    let id = graphics(&b)[0].id().to_string();
+    let sym = |b: &Board<'_>| b.design().symbol_library.as_ref().unwrap().by_lib_id("Lib:S").unwrap().clone();
+    assert_eq!(sym(&b).kicad.graphic_looks.get(&id), Some(&looks));
+    assert_eq!(sym(&b).kicad.stroke_types.get(&id).map(String::as_str), Some("dash"));
+    assert!(sym(&b).to_engine_symbol().graphics.is_empty(), "a private shape is not drawn on a sheet");
+    assert_eq!(refusal(&mut b, Cmd::SetSymbolGraphicLooks { lib_id: "Lib:S".into(), id: id.clone(), looks: KeptGraphicLooks { hatch: Some("dots".into()), ..Default::default() }, line_style: None, thickness_mm: None }), "ops_bad_shape: no such hatch");
+    b.apply(&Cmd::SetSymbolGraphicLooks { lib_id: "Lib:S".into(), id: id.clone(), looks: KeptGraphicLooks::default(), line_style: None, thickness_mm: None }).unwrap();
+    assert!(sym(&b).kicad.graphic_looks.is_empty() && sym(&b).kicad.stroke_types.is_empty());
+    b.apply(&Cmd::SetSymbolGraphicLooks { lib_id: "Lib:S".into(), id: id.clone(), looks, line_style: Some("dot".into()), thickness_mm: None }).unwrap();
+    b.apply(&Cmd::DeleteSymbolGraphic { lib_id: "Lib:S".into(), id }).unwrap();
+    assert!(sym(&b).kicad.graphic_looks.is_empty() && sym(&b).kicad.stroke_types.is_empty(), "gone with the shape");
+}

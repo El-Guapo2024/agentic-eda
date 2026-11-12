@@ -401,8 +401,8 @@ pub fn symbol_items(imported: &Imported, mapper: &Mapper, unit: u32, body_style:
                     line(&mut out, *start, *end, stroke);
                     continue;
                 }
-                let pts: Vec<SPoint> = poly.iter().map(|p| to_mm((p.x.get(), p.y.get()))).collect();
-                out.push(LibrarySymbolGraphic::Polyline { id: String::new(), unit, body_style, pts, stroke_mm: stroke_mm(stroke), fill: LibraryFill::None });
+                // `addItem( spline )`: the curve itself, a `SHAPE_T::BEZIER` (UI-LEFT-2 YY5; it was cut into its segments before the symbol had beziers)
+                out.push(LibrarySymbolGraphic::Bezier { id: String::new(), unit, body_style, start: to_mm(ps), c1: to_mm(p1), c2: to_mm(p2), end: to_mm(pe), stroke_mm: stroke_mm(stroke), fill: LibraryFill::None });
             }
         }
     }

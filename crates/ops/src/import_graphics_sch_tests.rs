@@ -299,8 +299,10 @@ fn a_symbols_text_stands_at_the_middle_of_its_baseline() {
     assert!((up.1 - 30.0).abs() < 1e-9 && (up.2 - (5.0 + w_up / 2.0)).abs() < 1e-3 && (up.3, up.4) == (90.0, 1.5) && up.0 == "Up", "{up:?}");
 }
 
+/// UI-LEFT-2 YY5: `GRAPHICS_IMPORTER_LIB_SYMBOL::AddSpline` keeps the curve, a `SHAPE_T::BEZIER` of the file's four points (it was cut into segments before the symbol had
+/// beziers).
 #[test]
-fn a_symbol_has_no_curves_so_an_svg_curve_becomes_segments_that_follow_it() {
+fn an_svg_curve_is_a_bezier_of_the_symbol_with_its_four_points() {
     let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10"><path d="M 0 0 C 0 10 10 10 10 0" fill="none" stroke="black" stroke-width="0.2"/></svg>"##;
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
@@ -310,16 +312,12 @@ fn a_symbol_has_no_curves_so_an_svg_curve_becomes_segments_that_follow_it() {
     b.apply(&Cmd::ImportSymbolGraphics(r)).unwrap();
     let g = symbol_graphics(&b);
     assert_eq!(g.len(), 1, "{g:?}");
-    let LibrarySymbolGraphic::Polyline { pts, stroke_mm, .. } = &g[0] else { panic!("{g:?}") };
-    assert!(pts.len() > 4, "{} points", pts.len());
+    let LibrarySymbolGraphic::Bezier { start, c1, c2, end, stroke_mm, .. } = &g[0] else { panic!("{g:?}") };
     // nanosvg works in `float` and the width is truncated to the symbol editor's unit (0.1 um), as in KiCad: 0.2 mm can come out as 0.1999.
     assert!((*stroke_mm - 0.2).abs() <= 1e-4 + 1e-9, "{stroke_mm}");
-    // The curve leaves (0, 0), peaks at 7.5 below the line in the file (up in the picture's own frame, so -7.5 here) and comes back to (10, 0).
-    assert_eq!((pts[0].x, pts[0].y), (0.0, 0.0));
-    let last = pts[pts.len() - 1];
-    assert!((last.x - 10.0).abs() < 1e-3 && last.y.abs() < 1e-3, "{last:?}");
-    let low = pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
-    assert!((low + 7.5).abs() < 0.02, "{low}");
+    // the file's (0, 0), (0, 10), (10, 10), (10, 0) with the Y axis turned up
+    let near = |p: &eda_model::symbol::SPoint, x: f64, y: f64| (p.x - x).abs() < 1e-3 && (p.y - y).abs() < 1e-3;
+    assert!(near(start, 0.0, 0.0) && near(c1, 0.0, -10.0) && near(c2, 10.0, -10.0) && near(end, 10.0, 0.0), "{start:?} {c1:?} {c2:?} {end:?}");
 }
 
 #[test]

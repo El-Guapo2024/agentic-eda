@@ -42,6 +42,11 @@ import { rgba } from "../schematic/schGraphicsPainter";
 import { paintEditPoints } from "../schematic/schArcEditPaint";
 import type { EeEditPoints } from "../../kicad-port/eePointEdit";
 import { withDefaultSchLook } from "../../kicad-port/schFormattingLook";
+import { dashPattern } from "../schematic/schGraphicsPainter";
+import { hatchLines, type SchHatchFill } from "../../kicad-port/schHatch";
+import { arcCenter as symArcCenter } from "../../kicad-port/symTransform";
+import type { FieldLooks, GraphicState } from "../../kicad-port/symLooks";
+import type { SchLineStyle } from "../../api/schEditTypes";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
 export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox";
@@ -146,7 +151,7 @@ function drawOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform) {
  * the box's fill colour, `LAYER_DEVICE_BACKGROUND`'s without one; the text is the box's text colour when it has one, the border its stroke colour (`borderColor ==
  * COLOR4D::UNSPECIFIED` or a brightened box take the layer's). `selected` draws the text and the border in the selection colour, as before.
  */
-function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, layerCol: string, selected = false) {
+function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, layerCol: string, selected = false, lineStyle: string | null = null) {
   const b = boxOfTextBox(g);
   const own = (c: SchColor | null | undefined) => (c && !(c.r === 0 && c.g === 0 && c.b === 0 && c.a === 0) ? rgba(c) : null);
   const color = selected ? layerCol : own(g.text_color) ?? layerCol;
@@ -163,7 +168,104 @@ function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, layerCol: 
   if (g.stroke_mm >= 0) {
     ctx.strokeStyle = selected ? layerCol : own(g.stroke_color) ?? layerCol;
     ctx.lineWidth = g.stroke_mm > 0 ? Math.max(g.stroke_mm * 1e6, 21_200) : 152_400;
+    // the border's line style (UI-LEFT-2 YY2, `STROKE_PARAMS::Stroke`)
+    ctx.setLineDash(dashPattern((lineStyle ?? "solid") as SchLineStyle, ctx.lineWidth));
     ctx.strokeRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+    ctx.setLineDash([]);
+  }
+}
+
+/**
+ * `SCH_PAINTER::draw( SCH_SHAPE )` of a symbol's shape with the looks it keeps beside it (UI-LEFT-2 YY2): the fill on the background layer -- a hatch's lines or a colour fill
+ * in the fill colour, the body outline fill in the stroke's, each `LAYER_DEVICE`'s when unspecified (`getRenderColor`), the body background's -- then the outline in the
+ * stroke's colour with its line style (`STROKE_PARAMS::Stroke`'s dashes); a rectangle with a corner radius is a rounded one (`ROUNDRECT`). `selected` draws the outline in
+ * the selection colour as before. A shape with none of these keeps `drawRealGraphic`.
+ */
+function drawLibShape(ctx: CanvasRenderingContext2D, g: Exclude<LibrarySymbolGraphic, { kind: "text_box" | "text" }>, st: GraphicState, layerCol: string, selected: boolean) {
+  const own = (c: SchColor | null | undefined) => (c && !(c.r === 0 && c.g === 0 && c.b === 0 && c.a === 0) ? rgba(c) : null);
+  const device = layerColor("LAYER_DEVICE");
+  const strokeCol = selected ? layerCol : own(st.looks.stroke_color) ?? layerCol;
+  const pt = (p: { x: number; y: number }): [number, number] => mmPointToNm(p);
+  const radiusNm = g.kind === "rectangle" ? Math.max(0, (st.looks.radius_mm ?? 0) * 1e6) : 0;
+  const trace = () => {
+    ctx.beginPath();
+    switch (g.kind) {
+      case "rectangle": {
+        const [x0, y0] = pt(g.start);
+        const [x1, y1] = pt(g.end);
+        const x = Math.min(x0, x1);
+        const y = Math.min(y0, y1);
+        const w = Math.abs(x1 - x0);
+        const h = Math.abs(y1 - y0);
+        const r = Math.min(radiusNm, w / 2, h / 2);
+        if (r > 0 && typeof ctx.roundRect === "function") ctx.roundRect(x, y, w, h, r);
+        else ctx.rect(x, y, w, h);
+        break;
+      }
+      case "polyline":
+        g.pts.map(pt).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        break;
+      case "circle": {
+        const [cx, cy] = pt(g.center);
+        ctx.moveTo(cx + g.radius_mm * 1e6, cy);
+        ctx.arc(cx, cy, g.radius_mm * 1e6, 0, Math.PI * 2);
+        break;
+      }
+      case "bezier": {
+        const [a, c1, c2, b] = [pt(g.start), pt(g.c1), pt(g.c2), pt(g.end)];
+        ctx.moveTo(a[0], a[1]);
+        ctx.bezierCurveTo(c1[0], c1[1], c2[0], c2[1], b[0], b[1]);
+        break;
+      }
+      case "arc": {
+        const c = pt(symArcCenter(g.start, g.mid, g.end));
+        const [s0, m, e] = [pt(g.start), pt(g.mid), pt(g.end)];
+        const r = Math.hypot(s0[0] - c[0], s0[1] - c[1]);
+        const a0 = Math.atan2(s0[1] - c[1], s0[0] - c[0]);
+        const n180 = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+        const sweep = n180(Math.atan2(m[1] - c[1], m[0] - c[0]) - a0) + n180(Math.atan2(e[1] - c[1], e[0] - c[0]) - Math.atan2(m[1] - c[1], m[0] - c[0]));
+        ctx.arc(c[0], c[1], r, a0, a0 + sweep, sweep < 0);
+        break;
+      }
+    }
+  };
+  const widthNm = g.stroke_mm > 0 ? Math.max(g.stroke_mm * 1e6, 21_200) : g.stroke_mm === 0 ? 152_400 : null;
+  // the background layer: a hatch, a colour fill, the body background (an arc is not filled: "we have no idea which side of the arc is inside")
+  if (g.fill !== "none" && g.kind !== "arc") {
+    ctx.save();
+    if (g.fill === "color" && st.looks.hatch) {
+      trace();
+      ctx.clip();
+      const xs: number[] = [];
+      const ys: number[] = [];
+      const pts = g.kind === "circle" ? [{ x: g.center.x - g.radius_mm, y: g.center.y - g.radius_mm }, { x: g.center.x + g.radius_mm, y: g.center.y + g.radius_mm }] : g.kind === "polyline" ? g.pts : g.kind === "bezier" ? [g.start, g.c1, g.c2, g.end] : [g.start, g.end];
+      for (const p of pts.map(pt)) {
+        xs.push(p[0]);
+        ys.push(p[1]);
+      }
+      const h = hatchLines(st.looks.hatch as SchHatchFill, [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], widthNm ?? 152_400);
+      ctx.strokeStyle = own(st.looks.fill_color) ?? device;
+      ctx.lineWidth = h.width;
+      ctx.beginPath();
+      for (const [ax, ay, bx, by] of h.segments) {
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+      }
+      ctx.stroke();
+    } else {
+      trace();
+      ctx.fillStyle = g.fill === "color" ? (own(st.looks.fill_color) ?? device) : g.fill === "background" ? layerColor("LAYER_DEVICE_BACKGROUND") : selected ? layerCol : (own(st.looks.stroke_color) ?? layerCol);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+  if (widthNm !== null) {
+    trace();
+    ctx.strokeStyle = strokeCol;
+    ctx.lineWidth = widthNm;
+    ctx.setLineDash(dashPattern((st.lineStyle ?? "solid") as SchLineStyle, widthNm));
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 }
 
@@ -239,7 +341,15 @@ export interface SymPaintOptions {
   showPinAltIcons?: boolean;
   /** What the cursor carries until a click places it -- the Pin tool's pin and the Text tool's text after their dialogs, the items of Paste and Duplicate -- where they are now
    * (kicad-port/symCarry.ts `carriedItems`): drawn as the selection, over the symbol (`m_view->AddToPreview( item )`). */
-  carried?: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[] } | null;
+  carried?: { pins: LibrarySymbolPin[]; graphics: LibrarySymbolGraphic[]; looks?: (GraphicState | null)[] } | null;
+  /** The looks a graphic keeps beside it (kicad-port/symLooks.ts `graphicStateOf`; UI-LEFT-2 YY2). */
+  looksOf?: (id: string) => GraphicState | null;
+  /** `SetBrightened` items (`IsBrightened()`): Find's matches while its dialog is open, the Pin Table's cross-probed pin -- drawn in `LAYER_BRIGHTENED`. */
+  brightened?: ReadonlySet<string>;
+  /** The items only: no grid, axes or anchor (Copy's image of the selection, `renderSymbolToBitmap`). */
+  itemsOnly?: boolean;
+  /** A field's face and colour kept beside it (UI-LEFT-2 YY2): drawn in its face, and in its colour unless selected or hidden (`getRenderColor`). */
+  fieldLooksOf?: (name: string) => FieldLooks;
   /** The point editor (`SCH_POINT_EDITOR`) on the one selected shape: its edit points and indicator lines (internal nm), and the shape as a drag of one point has it so far
    * (`replace`, drawn in place of the symbol's). */
   /** The point editor on one shape (kicad-port/symPointEdit.ts): its handles, and the shape as the drag has it. */
@@ -298,7 +408,7 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
   beginTextRecord("sym");
   // the Symbol Editor's axes are always on (`SYMBOL_EDIT_FRAME`: `m_axesEnabled = true`), in its theme's `LAYER_SCHEMATIC_GRID_AXES`
   // (`SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME` and `SwitchCanvas`: `SetAxesColor( m_colorSettings->GetColor( LAYER_SCHEMATIC_GRID_AXES ) )`); the grid itself only when shown
-  {
+  if (!opts.itemsOnly) {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
     paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("grid"), undefined, "symbol", layerColor("LAYER_SCHEMATIC_GRID_AXES"));
   }
@@ -310,13 +420,19 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
   const moved = (id: string | undefined) => (id && opts.movePreview?.refs.includes(id) ? opts.movePreview : null);
   const strokeColor = layerColor("LAYER_DEVICE");
 
-  const drawGraphic = (g: LibrarySymbolGraphic, color: string) => {
+  const looksOf = (g: LibrarySymbolGraphic, st?: GraphicState | null): GraphicState | null => st ?? (g.id && opts.looksOf ? opts.looksOf(g.id) : null);
+  const drawGraphic = (g: LibrarySymbolGraphic, color: string, carriedLooks?: GraphicState | null) => {
     // `drawRealGraphic` strokes with whatever `strokeStyle` is current (a placed symbol's painter sets it first); left alone it is the canvas default, black.
     ctx.strokeStyle = color;
-    if (g.kind === "text_box") drawLibTextBox(ctx, g, color, color !== strokeColor);
+    if (g.kind === "text_box") drawLibTextBox(ctx, g, color, color !== strokeColor, looksOf(g, carriedLooks)?.lineStyle ?? null);
     // `getRenderColor`: a symbol's text in its own colour when it has one (`!isSymbolChild || GetTextColor() != UNSPECIFIED`)
     else if (g.kind === "text") drawLibText(ctx, g, color === strokeColor && g.text_color && g.text_color.a > 0 ? rgba(g.text_color) : color);
-    else drawRealGraphic(ctx, resolveGraphic(g), color);
+    else {
+      const st = looksOf(g, carriedLooks);
+      if (st && (Object.keys(st.looks).length > 0 || (st.lineStyle && st.lineStyle !== "solid") || g.fill === "color")) drawLibShape(ctx, g, st, color, color !== strokeColor);
+      else if (g.fill === "color") drawLibShape(ctx, g, { looks: {}, lineStyle: null, thicknessMm: null }, color, color !== strokeColor);
+      else drawRealGraphic(ctx, resolveGraphic(g), color);
+    }
   };
   const replace = opts.pointEditor?.replace;
   for (const stored of symbol.graphics) {
@@ -326,7 +442,8 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
     ctx.save();
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     const selected = opts.selection.has(g.id ?? "");
-    drawGraphic(g, selected ? layerColor("selection") : strokeColor);
+    // `getRenderColor`: a brightened item (Find's matches, the Pin Table's cross-probe) in `LAYER_BRIGHTENED`
+    drawGraphic(g, selected ? layerColor("selection") : opts.brightened?.has(g.id ?? "") ? layerColor("LAYER_BRIGHTENED") : strokeColor);
     ctx.restore();
   }
 
@@ -336,14 +453,15 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
   const hiddenColor = layerColor("LAYER_HIDDEN");
   const drawPin = (p: LibrarySymbolPin, selected: boolean) => {
     const rp = resolvePin(toLibPin(p), IDENTITY, [0, 0]);
+    const bright = !selected && !!p.id && !!opts.brightened?.has(p.id);
     ctx.beginPath();
-    ctx.strokeStyle = selected ? layerColor("selection") : p.hidden ? hiddenColor : layerColor("LAYER_PIN");
+    ctx.strokeStyle = selected ? layerColor("selection") : bright ? layerColor("LAYER_BRIGHTENED") : p.hidden ? hiddenColor : layerColor("LAYER_PIN");
     ctx.lineWidth = Math.max(152.4, hairlineNm(view, 1));
     drawPinDecoration(ctx, rp);
     ctx.stroke();
     // The labels are the symbol's call (`GetShowPinNames` / `GetShowPinNumbers`): blank what is not shown, the shared painter draws the rest.
     const shownPin = { ...rp.pin, name: labels.names ? rp.pin.name : "", number: labels.numbers ? rp.pin.number : "" };
-    drawPinText(ctx, { ...rp, pin: shownPin }, p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined, texts);
+    drawPinText(ctx, { ...rp, pin: shownPin }, bright ? { name: layerColor("LAYER_BRIGHTENED"), number: layerColor("LAYER_BRIGHTENED") } : p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined, texts);
     // `SCH_PAINTER::draw( SCH_PIN )`: beside the name, in its colour, when the pin has alternates and the name is drawn
     if (opts.showPinAltIcons !== false && p.alternates?.length && labels.names && shownPinName(p.name) !== "") {
       const nameWidth = measureStrokeText(shownPinName(p.name), PIN_TEXT_SIZE_NM);
@@ -374,22 +492,24 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
     const mv = moved(f.id);
     ctx.save();
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-    drawField(ctx, f, opts.selection.has(f.id ?? "") ? layerColor("selection") : !f.visible ? hiddenColor : fieldColor(f.name));
+    const fl = opts.fieldLooksOf?.(f.name);
+    const ownColor = fl?.color && !(fl.color.r === 0 && fl.color.g === 0 && fl.color.b === 0 && fl.color.a === 0) ? rgba(fl.color) : null;
+    drawField(ctx, fl?.font ? { ...f, font: fl.font } : f, opts.selection.has(f.id ?? "") ? layerColor("selection") : opts.brightened?.has(f.id ?? "") ? layerColor("LAYER_BRIGHTENED") : !f.visible ? hiddenColor : (ownColor ?? fieldColor(f.name)));
     ctx.restore();
   }
 
-  drawOrigin(ctx, view);
+  if (!opts.itemsOnly) drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorNm);
   // `EDIT_POINTS::ViewDraw`: the indicator lines, then a square at each edit point and a round handle in the middle of each side (components/schematic/schArcEditPaint.ts)
   if (opts.pointEditor) paintEditPoints(ctx, view, opts.pointEditor.edit, { fill: "#1a1a1a", stroke: layerColor("selection") });
 
   // what the cursor carries, where it is now, as the selection (`AddToPreview`)
   if (opts.carried) {
-    for (const g of opts.carried.graphics) {
+    opts.carried.graphics.forEach((g, n) => {
       ctx.save();
-      drawGraphic(g, layerColor("selection"));
+      drawGraphic(g, layerColor("selection"), opts.carried?.looks?.[n] ?? null);
       ctx.restore();
-    }
+    });
     for (const p of opts.carried.pins) {
       ctx.save();
       drawPin(p, true);

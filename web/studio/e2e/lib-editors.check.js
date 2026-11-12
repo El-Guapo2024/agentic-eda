@@ -26,6 +26,12 @@
   // ------------------------------------------------------------------------------------------------------------------------ helpers
   const cmd = async (c) => (await fetch("/api/cmd", { method: "POST", body: JSON.stringify({ strict: false, cmd: c }) })).json();
   const tid = (id) => document.querySelector(`[data-testid="${id}"]`);
+  // a refusal of Symbol Properties is KiCad's message box (`DisplayError`, UI-LEFT-2 YY6): its text, and OK closes it
+  const msgBox = () => {
+    const text = tid("message-box-text")?.textContent ?? "";
+    tid("message-box-ok")?.click();
+    return text;
+  };
   const clickTab = async (label) => { [...document.querySelectorAll("button, [role=tab]")].find((b) => b.textContent.trim() === label)?.click(); await sleep(700); };
   const type = async (el, value) => { const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, "value").set.call(el, String(value)); el.dispatchEvent(new Event("input", { bubbles: true })); await sleep(70); };
   const choose = async (el, value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, value); el.dispatchEvent(new Event("change", { bubbles: true })); await sleep(70); };
@@ -357,19 +363,19 @@
     await type(tid(`field-name-${last}`), "mpn");
     await type(tid(`field-text-${last}`), "x");
     await click(tid("props-ok"), 300);
-    t(/The name 'mpn' is already in use\./.test(tid("props-error")?.textContent ?? ""), `names compare without case: ${tid("props-error")?.textContent}`);
+    { const said = msgBox(); t(/The name 'mpn' is already in use\./.test(said), `names compare without case: ${said}`); }
     await type(tid(`field-name-${last}`), "");
     await click(tid("props-ok"), 300);
-    t(/Fields must have a name\./.test(tid("props-error")?.textContent ?? ""), `a field with text needs a name: ${tid("props-error")?.textContent}`);
+    { const said = msgBox(); t(/Fields must have a name\./.test(said), `a field with text needs a name: ${said}`); }
     await type(tid(`field-text-${last}`), "");
     await type(tid("field-text-0"), "12");
     await click(tid("props-ok"), 300);
-    t(/References must start with a letter\./.test(tid("props-error")?.textContent ?? ""), `a root symbol's reference: ${tid("props-error")?.textContent}`);
+    { const said = msgBox(); t(/References must start with a letter\./.test(said), `a root symbol's reference: ${said}`); }
     t(!!tid("symbol-properties"), "the dialog stays open on each");
     // the mandatory rows cannot be deleted
     document.querySelector('[data-testid="field-row-1"]').click(); await sleep(60);
     tid("field-delete").click(); await sleep(100);
-    t(/The first 5 fields are mandatory\./.test(tid("props-error")?.textContent ?? ""), `${tid("props-error")?.textContent}`);
+    { const said = msgBox(); t(/The first 5 fields are mandatory\./.test(said), `${said}`); }
     await closeDialogs();
     t((await symbol(BASE)).reference_prefix === "U", "nothing was written");
   });
@@ -1169,7 +1175,8 @@
     g = (await symbol(id)).graphics[0];
     t(g.stroke_mm === -0.0001, `no border is -0.0001: ${g.stroke_mm}`);
     const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
-    t(/\(stroke \(width -0\.0001\) \(type default\)\) \(fill \(type outline\)\)/.test(text), "the exported .kicad_sym says (width -0.0001)");
+    // the border Style (UI-LEFT-2 YY2): the default style shows as Solid and OK writes it (`stroke.SetLineStyle( it->first )`)
+    t(/\(stroke \(width -0\.0001\) \(type solid\)\) \(fill \(type outline\)\)/.test(text), "the exported .kicad_sym says (width -0.0001)");
     // the right-click menu has Properties... for the one selected shape
     await clickAt(...EDGE, {}, false);
     const [sx, sy] = toScreen(...EDGE);
