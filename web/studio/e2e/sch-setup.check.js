@@ -346,6 +346,9 @@
       const erc = await __eda.run("eeschema.InspectionTool.runERC");
       t(erc.ok !== false, `the Electrical Rules Checker opens (${erc.dialog})`);
       const dlg = await until(() => [...document.querySelectorAll(".dialog")].find((d) => d.innerText.startsWith("Electrical Rules Checker")), 4000);
+      // the Show boxes start unticked, as dialog_erc_base.fbp has them (UI-LEFT-2 BB5)
+      const all = dlg?.querySelector(".rc-show input");
+      if (all && !all.checked) all.click();
       button(dlg, "Run ERC")?.click();
       const row = await until(() => [...document.querySelectorAll(".dialog .problem-row")].find((x) => /Netclass NoSuchClass is not defined|not defined/i.test(x.innerText)), 90000);
       if (!t(!!row, "kicad-cli's ERC reports the undefined class")) return;
