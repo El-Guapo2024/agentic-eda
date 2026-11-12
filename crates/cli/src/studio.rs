@@ -1626,6 +1626,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 "allow_two_segments": r.teardrop_settings.allow_two_segments,
                 "prefer_zone_connections": r.teardrop_settings.prefer_zone_connections,
                 "track_end": r.teardrop_settings.track_end,
+                // UI-LEFT-2 BB8: the rectangular-shape block (`TARGET_RECT`), null until the design has its own
+                "rect_shape": r.teardrop_settings.rect_shape,
             }),
         })
     });
