@@ -212,6 +212,11 @@ export interface FootprintEditorState {
   /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`, UI-LEFT-2 FF8): its own members, and the groups directly in it, are picked one by one, and nothing
    * outside it is. `null` outside any group. */
   enteredGroupId: string | null;
+  /** The Appearance manager's Viewports (`APPEARANCE_CONTROLS::m_viewports`): the saved views of this session -- the Footprint Editor keeps none in its settings
+   *  (`FOOTPRINT_EDIT_FRAME::LoadSettings` restores only the layer presets). UI-LEFT-2 FF5. */
+  viewports: import("../kicad-port/appearance").Viewport[];
+  /** `m_lastBuiltinPreset.renderLayers`: the objects that were on when a built-in preset (or none) was last left; null until then. */
+  lastBuiltinObjects: import("../kicad-port/appearance").ObjectId[] | null;
 }
 
 const initialState: FootprintEditorState = {
@@ -266,6 +271,8 @@ const initialState: FootprintEditorState = {
   contrastHidden: false,
   toast: null,
   enteredGroupId: null,
+  viewports: [],
+  lastBuiltinObjects: null,
 };
 
 export type FpAction =
@@ -328,7 +335,9 @@ export type FpAction =
   /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
   | { type: "ENTER_GROUP"; id: string; members: string[] }
   /** `PCB_SELECTION_TOOL::ExitGroup( aSelectGroup )`: no group is worked in; the selection is cleared, or is the group that was left. */
-  | { type: "EXIT_GROUP"; selectGroup: boolean };
+  | { type: "EXIT_GROUP"; selectGroup: boolean }
+  | { type: "SET_VIEWPORTS"; viewports: import("../kicad-port/appearance").Viewport[] }
+  | { type: "SET_LAST_BUILTIN_OBJECTS"; objects: import("../kicad-port/appearance").ObjectId[] | null };
 
 /** The items `after` has that `before` did not, at the top: a new group stands for its members (`placeBoardItems`: "We only need to add the items that aren't inside a
  *  group currently selected"). */
@@ -362,6 +371,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
         layerOpacity: state.layerOpacity,
         appearanceShown: state.appearanceShown,
         contrastHidden: state.contrastHidden,
+        viewports: state.viewports,
+        lastBuiltinObjects: state.lastBuiltinObjects,
       };
     case "FOOTPRINT_OK": {
       // a group that is gone (ungrouped, deleted, undone) is no longer the one worked in
@@ -484,6 +495,10 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, highContrast: action.mode !== "normal", contrastHidden: action.mode === "hidden" };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
+    case "SET_VIEWPORTS":
+      return { ...state, viewports: action.viewports };
+    case "SET_LAST_BUILTIN_OBJECTS":
+      return { ...state, lastBuiltinObjects: action.objects };
     case "ENTER_GROUP":
       return { ...state, enteredGroupId: action.id, selection: new Set(action.members) };
     case "EXIT_GROUP":

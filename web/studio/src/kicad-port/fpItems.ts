@@ -9,7 +9,7 @@
 // text variable (`FOOTPRINT::ResolveTextVar` returns false), so the Reference shows `REF**` and a text `${REFERENCE}` shows as it is written.
 //
 // Pure: no store, no DOM. Unit-tested in fpItems.test.ts.
-import { isHiddenText, textLookOf } from "./fpKeep";
+import { isHiddenText, isLockedItem, textLookOf } from "./fpKeep";
 import type { Cmd, CmdShape, CmdText, FieldInfo, FieldLayoutCmd, Group, LibraryFootprint, LibraryPad } from "../api/types";
 import type { FlipDirectionWire, FootprintItemsDisplay, FpZoneDisplay } from "../api/fpItemTypes";
 import { defaultInfoFieldLayout, defaultReferenceLayout, defaultValueLayout, LIBRARY_REFERENCE_TEXT, newFieldLayout } from "./fpLibFields";
@@ -22,7 +22,7 @@ import { polygonDistance, tableBox } from "./tables";
 import { bezierPolyline } from "./bezierPoly";
 import { groupLeaves, isGroup, parentGroup } from "./groupTree";
 import { arcShapeCenter } from "./pcbItems";
-import { fpFieldSelectable, fpItemSelectable, fpLayersSelectable, fpPadSelectable, fpShapeSelectable, fpTextSelectable, fpZoneSelectable, type FpVisibility } from "./fpAppearance";
+import { fpFieldSelectable, fpItemSelectable, fpLayersSelectable, fpPadSelectable, fpPassesFilter, fpShapeSelectable, fpTextSelectable, fpZoneSelectable, type FpVisibility } from "./fpAppearance";
 import { zoneLayers } from "./zoneLayers";
 
 export const FP_FIELD_PREFIX = "field:";
@@ -349,34 +349,38 @@ function inBox(b: Box | null, wx: number, wy: number, tol: number): boolean {
  * layer, or whose object row is off or at opacity 0, is not, and with high contrast only an item on the active layer is. Without it every item can be picked.
  */
 export function fpHitTest(fp: Fp, wx: number, wy: number, tol: number, vis?: FpVisibility): { kind: FpItemKind; id: string } | null {
+  // the selection filter (`itemPassesFilter`, UI-LEFT-2 FF5): a kind whose row is off, a locked item while Locked items is off
+  const filter = vis?.filter;
+  const passes = (kind: string, id: string | undefined, ruleArea = false): boolean => !filter || fpPassesFilter(filter, kind, fpItemLocked(fp, id), ruleArea);
   for (let i = fp.pads.length - 1; i >= 0; i--) {
     const p = fp.pads[i]!;
-    if (vis && !fpPadSelectable(vis, p.layers)) continue;
+    if (vis && !fpPadSelectable(vis, p.layers, p.kind === "through_hole" || p.kind === "non_plated_hole")) continue;
+    if (!passes("pad", p.id)) continue;
     if (p.id && padContains(p, wx, wy)) return { kind: "pad", id: p.id };
   }
-  for (const f of [...fpFields(fp)].reverse()) if (f.visible && f.text && (!vis || fpFieldSelectable(vis, f)) && inBox(fieldBox(f), wx, wy, tol / 2)) return { kind: "field", id: f.id };
+  for (const f of [...fpFields(fp)].reverse()) if (f.visible && f.text && (!vis || fpFieldSelectable(vis, f)) && passes("field", f.id) && inBox(fieldBox(f), wx, wy, tol / 2)) return { kind: "field", id: f.id };
   for (let i = fp.texts.length - 1; i >= 0; i--) {
     const t = fp.texts[i]!;
-    if (vis && !fpTextSelectable(vis, t)) continue;
+    if ((vis && !fpTextSelectable(vis, t)) || !passes("text", t.id)) continue;
     // a text read hidden is neither drawn nor picked (`PCB_TEXT::ViewGetLOD`, UI-LEFT F5)
     if (isHiddenText(fp as { kicad?: Record<string, unknown> }, t.id)) continue;
     if (t.id && inBox(cmdTextBox(fp, t), wx, wy, tol / 2)) return { kind: "text", id: t.id };
   }
   const d = displayOf(fp);
-  for (const item of extraItems({ drawings: d as never }).reverse()) if ((!vis || fpItemSelectable(vis, item.kind, item.layer)) && extraHitDistance(item, wx, wy) <= tol) return { kind: item.kind as FpItemKind, id: item.id };
-  for (const t of [...d.tables].reverse()) if ((!vis || fpLayersSelectable(vis, [t.layer])) && inBox(tableBox(t), wx, wy, tol)) return { kind: "table", id: t.id };
+  for (const item of extraItems({ drawings: d as never }).reverse()) if ((!vis || fpItemSelectable(vis, item.kind, item.layer)) && passes(item.kind, item.id) && extraHitDistance(item, wx, wy) <= tol) return { kind: item.kind as FpItemKind, id: item.id };
+  for (const t of [...d.tables].reverse()) if ((!vis || fpLayersSelectable(vis, [t.layer])) && passes("table", t.id) && inBox(tableBox(t), wx, wy, tol)) return { kind: "table", id: t.id };
   for (const dim of [...d.dimensions].reverse()) {
-    if (vis && !fpLayersSelectable(vis, [dim.layer])) continue;
+    if ((vis && !fpLayersSelectable(vis, [dim.layer])) || !passes("dimension", dim.id)) continue;
     const near = dim.lines.some(([a, b]) => distToSegment(wx, wy, a[0], a[1], b[0], b[1]) <= Math.max(tol, dim.stroke_width / 2));
     if (near || inBox(fpItemBounds(fp, dim.id), wx, wy, 0) && Math.hypot(wx - dim.text_at[0], wy - dim.text_at[1]) <= dim.text_size_nm * Math.max(dim.text.length, 1) * 0.35) return { kind: "dimension", id: dim.id };
   }
   for (let i = fp.graphics.length - 1; i >= 0; i--) {
     const g = fp.graphics[i]!;
-    if (vis && !fpShapeSelectable(vis, g)) continue;
+    if ((vis && !fpShapeSelectable(vis, g)) || !passes("graphic", g.id)) continue;
     if (g.id && shapeHitDistance(g, wx, wy) <= Math.max(tol, g.stroke_width / 2)) return { kind: "graphic", id: g.id };
   }
   for (const z of [...d.zones].reverse()) {
-    if (vis && !fpZoneSelectable(vis, zoneLayers(z))) continue;
+    if ((vis && !fpZoneSelectable(vis, zoneLayers(z))) || !passes("zone", z.id, !!z.is_rule_area)) continue;
     const ring = zoneRing(z);
     let edge = Infinity;
     for (let i = 0; i < ring.length; i++) {
@@ -387,6 +391,14 @@ export function fpHitTest(fp: Fp, wx: number, wy: number, tol: number, vis?: FpV
     if (edge <= tol || (z.is_rule_area && polygonDistance(ring, wx, wy) === 0)) return { kind: "zone", id: z.id };
   }
   return null;
+}
+
+/** `BOARD_ITEM::IsLocked()` of an item of the footprint: the lock its file gave it (`LibraryFootprintKeep::locked`, a pad's own `(locked yes)`). */
+export function fpItemLocked(fp: Fp, id: string | undefined): boolean {
+  if (!id) return false;
+  if (isLockedItem(fp as { kicad?: Record<string, unknown> }, id)) return true;
+  const pad = fp.pads.find((p) => p.id === id);
+  return !!pad && ((pad.kicad as { tokens?: string[] } | undefined)?.tokens ?? []).some((t) => /^\(locked( yes)?\)$/.test(t.trim()));
 }
 
 /**

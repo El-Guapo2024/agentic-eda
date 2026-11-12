@@ -10,24 +10,26 @@ import { useStudioDispatch } from "../../../state/store";
 import { THEME_DATA, setThemeColor, useColorThemes } from "../../../state/colorThemeStore";
 import { defaultColor } from "../../../kicad-port/colorTheme";
 import { parseCssColor, toHex8 } from "../../../kicad-port/appearance";
-import { layerColor, realColorKey } from "../../canvas/layers";
+import { layerColorIn, realColorKey } from "../../canvas/layers";
 import { ColorDialog } from "./shared";
 
 /** `onReadOnlySwatch`'s message, word for word (two spaces after the first sentence). */
 export const READ_ONLY_THEME_MESSAGE = "The current color theme is read-only.  Create a new theme in Preferences to enable color editing.";
 
-export function useThemeSwatchEdit(): { edit: (bucketOrKey: string, kind: "layer" | "object") => void; dialog: ReactNode; readOnly: boolean } {
+/** `editor`: the frame whose theme the swatches edit (`m_frame->GetColorSettings()`): the board editor's, or the Footprint Editor's own (UI-LEFT-2 FF5). */
+export function useThemeSwatchEdit(editor: "pcb" | "footprint" = "pcb"): { edit: (bucketOrKey: string, kind: "layer" | "object") => void; dialog: ReactNode; readOnly: boolean } {
   const themes = useColorThemes();
   const dispatch = useStudioDispatch();
   const [editing, setEditing] = useState<{ key: string; initial: string; def: string } | null>(null);
-  const readOnly = themes.pcb.readOnly;
+  const theme = editor === "pcb" ? themes.pcb : themes.themes[editor];
+  const readOnly = theme.readOnly;
   const edit = (bucketOrKey: string, kind: "layer" | "object") => {
     if (readOnly) {
       dispatch({ type: "TOAST", message: READ_ONLY_THEME_MESSAGE, kind: "info", ms: 10000 });
       return;
     }
     const key = realColorKey(bucketOrKey);
-    const now = layerColor(key);
+    const now = layerColorIn(editor, key);
     setEditing({ key, initial: now, def: kind === "layer" ? now : (defaultColor(key, THEME_DATA) ?? now) });
   };
   const dialog = editing && (
@@ -38,7 +40,7 @@ export function useThemeSwatchEdit(): { edit: (bucketOrKey: string, kind: "layer
       onCancel={() => setEditing(null)}
       onPick={(css) => {
         const c = css ? parseCssColor(css) : null;
-        if (c) setThemeColor(themes.pcb.filename, { [editing.key]: toHex8(c) });
+        if (c) setThemeColor(theme.filename, { [editing.key]: toHex8(c) });
         setEditing(null);
       }}
     />

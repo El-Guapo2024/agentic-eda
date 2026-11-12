@@ -49,6 +49,8 @@ function boardOptions(o: FpItemsPaintOptions): PaintOptions {
     layerOpacity: o.layerOpacity,
     activeLayer: o.highContrast ? layerStateKey(o.activeLayer) : null,
     highContrast: o.highContrast,
+    // High Contrast Mode as `GetColor` dims: the colour mixed into the background, not a lowered alpha (UI-LEFT-2 FF5)
+    dimByColour: true,
     // the Objects tab's opacities (`PCB_DISPLAY_OPTIONS`, all 1 to begin with in this editor) and the HIDDEN contrast mode, as the board's painters read them
     appearance: { ...PLAIN_APPEARANCE, opacity: fpOpacities(o.layerOpacity), contrastHidden: !!o.contrastHidden },
     gridNm: 0,

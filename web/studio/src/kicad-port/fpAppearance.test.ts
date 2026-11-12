@@ -186,9 +186,9 @@ test("fpHitTest with the Appearance manager's switches picks only what Selectabl
   assert.equal(fpHitTest(fp, 1_000_000, -1_000_000, 50_000, vis({ layerVisible: { f_silks: false } })), null);
   assert.equal(fpHitTest(fp, 1_000_000, -2_000_000, 50_000, vis({ layerVisible: { "User.7": false } })), null);
   assert.equal(fpHitTest(fp, 1_000_000, -2_000_000, 50_000, vis())?.id, "fpg_7");
-  // pads: the Pads row, its opacity, its layers
+  // pads: not the Pads row (the element visibility `Selectable` asks is not the row's in this editor, UI-LEFT-2 FF5), its opacity, its layers
   assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, vis())?.id, "pad_1");
-  assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, vis({ layerVisible: { "obj:pads": false } })), null);
+  assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, vis({ layerVisible: { "obj:pads": false } }))?.id, "pad_1");
   assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, vis({ layerOpacity: { "obj:pads": 0 } })), null);
   assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, vis({ layerVisible: { "F.Cu": false, f_mask: false, F_Paste: false } })), null);
   assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, vis({ layerVisible: { "F.Cu": false } }))?.id, "pad_1");
@@ -209,4 +209,23 @@ test("fpHitTest with the Appearance manager's switches picks only what Selectabl
   const filled = footprint({ graphics: [{ id: "fpg_r", kind: "rect", layer: "F.Fab", stroke_width: 100_000, filled: true, start: { x: 5_000_000, y: 5_000_000 }, end: { x: 7_000_000, y: 7_000_000 } }] });
   assert.equal(fpHitTest(filled, 6_000_000, 6_000_000, 50_000, vis())?.id, "fpg_r");
   assert.equal(fpHitTest(filled, 6_000_000, 6_000_000, 50_000, vis({ layerOpacity: { "obj:shapes": 0 } })), null);
+});
+
+test("the Footprint Editor's presets: what is on screen as a preset view, the matching preset, a preset applied (UI-LEFT-2 FF5)", async () => {
+  const { fpPresetView, fpMatchingPreset, fpApplyPresetView, fpPassesFilter, DEFAULT_FP_SELECTION_FILTER } = await import("./fpAppearance");
+  const { allPresets, selectPreset } = await import("./layerPresets");
+  const universe = ["F.Cu", "B.Cu", "F.SilkS", "B.SilkS", "F.Fab", "Edge.Cuts"];
+  const st = { layerVisible: {}, gridVisible: true, activeLayer: "F.SilkS" };
+  const presets = allPresets(["F.Cu", "B.Cu"], [], ["F.SilkS", "B.SilkS", "F.Fab", "Edge.Cuts"]);
+  assert.equal(fpMatchingPreset(presets, fpPresetView(universe, st)), "All Layers");
+  const front = selectPreset(fpPresetView(universe, st), presets.find((p) => p.name === "Front Layers")!, presets);
+  const out = fpApplyPresetView(universe, {}, front);
+  assert.equal(out.visible["B.Cu"] ?? out.visible["b_cu"], false);
+  assert.equal(fpMatchingPreset(presets, fpPresetView(universe, { ...st, layerVisible: out.visible })), "Front Layers");
+  // the filter's rows: a rule area is Rule Areas, a barcode Other items, a locked pad clicked alone passes
+  assert.equal(fpPassesFilter({ ...DEFAULT_FP_SELECTION_FILTER, keepouts: false }, "zone", false, true), false);
+  assert.equal(fpPassesFilter({ ...DEFAULT_FP_SELECTION_FILTER, keepouts: false }, "zone", false, false), true);
+  assert.equal(fpPassesFilter({ ...DEFAULT_FP_SELECTION_FILTER, otherItems: false }, "barcode", false), false);
+  assert.equal(fpPassesFilter(DEFAULT_FP_SELECTION_FILTER, "pad", true), true);
+  assert.equal(fpPassesFilter(DEFAULT_FP_SELECTION_FILTER, "pad", true, false, true), false);
 });

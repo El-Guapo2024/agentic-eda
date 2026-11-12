@@ -56,7 +56,8 @@ import { layerColor } from "../canvas/layers";
 import { fpPointAt, fpPointDrag, fpPointEditTarget } from "../../kicad-port/fpPointEdit";
 import { shapeEditPoints, type EditPoint } from "../../kicad-port/pcbPointEdit";
 import type { Shape } from "../../api/types";
-import { fpEditTarget, fpFields, fpGroupMembers, fpHitTest, fpItemBounds, fpItemKind, fpSelectionTarget, fpCanMirror, type FpEditTarget } from "../../kicad-port/fpItems";
+import { fpEditTarget, fpFields, fpGroupMembers, fpHitTest, fpItemBounds, fpItemKind, fpItemLocked, fpSelectionTarget, fpCanMirror, type FpEditTarget } from "../../kicad-port/fpItems";
+import { fpPassesFilter } from "../../kicad-port/fpAppearance";
 import { shapeSecondPoint } from "../../kicad-port/pcbShapeSnap";
 import { leaderModeOf, zoneClick, zoneFinish, zoneLeader } from "../../kicad-port/pcbDrawZone";
 import { isGroup } from "../../kicad-port/groupTree";
@@ -351,7 +352,8 @@ export function FootprintCanvas() {
     if (!ctx) return;
     ctx.save();
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = "#1a1a1a";
+    // the Footprint Editor's theme's background (`LAYER_PCB_BACKGROUND` of `FOOTPRINT_EDIT_FRAME::GetColorSettings`), which High Contrast Mode mixes into (UI-LEFT-2 FF5)
+    ctx.fillStyle = layerColor("background");
     ctx.fillRect(0, 0, width, height);
     ctx.save();
     ctx.translate(state.view.x, state.view.y);
@@ -433,13 +435,14 @@ export function FootprintCanvas() {
     (wx: number, wy: number, entered?: string | null): { kind: string; id: string; item: string } | null => {
       if (!fp) return null;
       const tol = Math.max(80_000, 6 / state.view.scale);
-      const hit = fpHitTest(fp, wx, wy, tol, { layerVisible: state.layerVisible, layerOpacity: state.layerOpacity, highContrast: state.highContrast, activeLayer: state.activeLayer }); // what is hidden is not picked (`Selectable`)
+      // what is hidden is not picked (`Selectable`), nor what the Selection Filter pane leaves out (`itemPassesFilter`, UI-LEFT-2 FF5)
+      const hit = fpHitTest(fp, wx, wy, tol, { layerVisible: state.layerVisible, layerOpacity: state.layerOpacity, highContrast: state.highContrast, activeLayer: state.activeLayer, filter: studioPrefs.fpSelectionFilter });
       if (!hit) return null;
       const id = fpSelectionTarget(fp, hit.id, entered === undefined ? state.enteredGroupId : entered);
       if (id === null) return null; // outside the group being worked in (`WithinScope`)
       return { kind: id === hit.id ? hit.kind : "group", id, item: hit.id };
     },
-    [fp, state.view.scale, state.layerVisible, state.layerOpacity, state.highContrast, state.activeLayer, state.enteredGroupId]
+    [fp, state.view.scale, state.layerVisible, state.layerOpacity, state.highContrast, state.activeLayer, state.enteredGroupId, studioPrefs.fpSelectionFilter]
   );
 
   /** One mouse event of the Renumber Pads tool: the numberable pads under the swept path take (or, on a click, give back) their number. */
@@ -735,7 +738,13 @@ export function FootprintCanvas() {
       }
       // `SelectRectArea` -> `SelectMultiple`: what the rectangle takes (as its direction says), each as the item a click on it would select (a group's member as the group)
       const [wx, wy] = worldAt(e);
-      const hits = fp ? [...new Set(rectSelectionHits(footprintItemBoxes(fp), drag.startWorld, [wx, wy]).map((id) => fpSelectionTarget(fp, id, state.enteredGroupId)).filter((id): id is string => id !== null))] : [];
+      // `SelectMultiple` takes what `itemPassesFilter( item, true )` lets through: the Selection Filter's rows, a locked item (a pad too) only with Locked items on
+      const filter = studioPrefs.fpSelectionFilter;
+      const boxed = fp ? rectSelectionHits(footprintItemBoxes(fp), drag.startWorld, [wx, wy]).filter((id) => {
+        const kind = fpItemKind(fp, id);
+        return !kind || kind === "group" || fpPassesFilter(filter, kind, fpItemLocked(fp, id), kind === "zone" && !!(fp.items?.zones ?? []).find((z) => z.id === id)?.is_rule_area, true);
+      }) : [];
+      const hits = fp ? [...new Set(boxed.map((id) => fpSelectionTarget(fp, id, state.enteredGroupId)).filter((id): id is string => id !== null))] : [];
       if (hits.length > 0 || hasModifier(drag.modifiers)) dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, drag.modifiers) });
       else dispatch({ type: "CLEAR_SELECTION" });
       return;
@@ -906,6 +915,7 @@ export function FootprintCanvas() {
     <div
       ref={containerRef}
       className="pcb-canvas-container"
+      data-fp-canvas=""
       tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

@@ -58,6 +58,11 @@ test("a click on a member of a group selects the outermost group; a group stands
   const fp = footprint({ items: { groups: [{ id: "grp_in", name: "", member_ids: ["pad_1", "fpg_1"] }, { id: "grp_out", name: "", member_ids: ["grp_in", "field:Reference"] }] } });
   assert.equal(fpSelectionTarget(fp, "pad_1"), "grp_out");
   assert.equal(fpSelectionTarget(fp, "pad_2"), "pad_2");
+  // with a group entered (`EnterGroup`, UI-LEFT-2 FF8): its members one by one, a nested group as itself, nothing outside it
+  assert.equal(fpSelectionTarget(fp, "pad_1", "grp_out"), "grp_in");
+  assert.equal(fpSelectionTarget(fp, "field:Reference", "grp_out"), "field:Reference");
+  assert.equal(fpSelectionTarget(fp, "pad_1", "grp_in"), "pad_1");
+  assert.equal(fpSelectionTarget(fp, "pad_2", "grp_out"), null);
   assert.equal(fpItemKind(fp, "grp_in"), "group");
   assert.deepEqual(fpLeaves(fp, ["grp_out", "pad_2"]).sort(), ["fpg_1", "field:Reference", "pad_1", "pad_2"].sort());
 });
@@ -119,4 +124,15 @@ test("a centred text's box is about its anchor, a top- or bottom-justified one's
   const top = fpItemBounds({ ...fp, kicad: { text_extras: [{ id: "fpt_r", valign: "top" }] } } as unknown as LibraryFootprint, "fpt_r")!;
   const bottom = fpItemBounds({ ...fp, kicad: { text_extras: [{ id: "fpt_r", valign: "bottom" }] } } as unknown as LibraryFootprint, "fpt_r")!;
   assert.deepEqual([top[1], top[3], bottom[1], bottom[3]], [2_360_000, 3_360_000, 1_640_000, 2_640_000]);
+});
+
+test("the Selection Filter pane gates a click (`itemPassesFilter`, UI-LEFT-2 FF5)", () => {
+  const fp = footprint();
+  const all = { lockedItems: false, footprints: true, text: true, tracks: true, vias: true, pads: true, graphics: true, zones: true, keepouts: true, dimensions: true, points: true, otherItems: true };
+  assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, { layerVisible: {}, filter: all })?.id, "pad_1");
+  assert.equal(fpHitTest(fp, -2_000_000, 0, 50_000, { layerVisible: {}, filter: { ...all, pads: false } }), null);
+  assert.equal(fpHitTest(fp, 1_000_000, -1_000_000, 50_000, { layerVisible: {}, filter: { ...all, graphics: false } }), null);
+  const locked = footprint({ kicad: { locked: ["fpg_1"] } } as never);
+  assert.equal(fpHitTest(locked, 1_000_000, -1_000_000, 50_000, { layerVisible: {}, filter: all }), null, "a locked item needs Locked items");
+  assert.equal(fpHitTest(locked, 1_000_000, -1_000_000, 50_000, { layerVisible: {}, filter: { ...all, lockedItems: true } })?.id, "fpg_1");
 });

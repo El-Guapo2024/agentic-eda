@@ -19,6 +19,8 @@ import { dashPieces, isDashStyle } from "../../kicad-port/strokeDash";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineNm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
+import { installColourScopes, memoColours, withColourScope } from "../canvas/colourScope";
+import { edgeCutsDimFactor, hiContrastDim, hiContrastFactor } from "../../kicad-port/color4d";
 import { circleThrough, drawGridOrigin, drawShapeGeometry as drawBoardShapeGeometry, normalizeSweep } from "../canvas/painter";
 import type { LineEnding } from "../../kicad-port/lineEnding";
 import type { LineEndingIr } from "../../api/fpEditorTypes";
@@ -472,16 +474,21 @@ export interface FpPaintOptions {
   layerOpacity?: Record<string, number>;
 }
 
-/** What High Contrast Mode leaves of an item off the active layer (the board painter's `layerAlpha` uses the same 0.25). */
-const DIMMED_ALPHA = 0.25;
-
 /**
- * `PCB_PAINTER`'s `m_contrastModeDisplay`: with High Contrast Mode on, an item not on the active layer is dimmed (DIMMED) or not drawn (HIDDEN). A pad is on the active
- * layer when one of its layers is it (`PAD::IsOnLayer`: `*.Cu` is every copper layer), which the Appearance manager's copper rows can make it.
+ * `PCB_RENDER_SETTINGS::GetColor` with High Contrast Mode on (pcbnew/pcb_painter.cpp at KiCad 8303b2ad), for an item on `layer` (null: on no active layer): an item
+ * off the active layer is drawn in its colour mixed into the background, `color.Mix( backgroundColor, m_hiContrastFactor )` (Dim), or not at all (Hide) -- an
+ * Edge.Cuts item is never hidden and mixed by `dim_factor_Edge_Cuts` ("Graphics on Edge_Cuts layer are not fully dimmed or hidden"). The selection colour is
+ * left as it is (`!selected`). A pad is on the active layer when one of its layers is it (`PAD::IsOnLayer`: `*.Cu` is every copper layer). UI-LEFT-2 FF5 (it was a
+ * quarter alpha).
  */
-function contrastAlpha(opts: FpPaintOptions, layer: string | null): number {
-  if (!opts.highContrast || !opts.activeLayer) return 1;
-  return layer === opts.activeLayer ? 1 : opts.contrastHidden ? 0 : DIMMED_ALPHA;
+function withContrast(ctx: CanvasRenderingContext2D, opts: FpPaintOptions, layer: string | null, draw: () => void): void {
+  if (!opts.highContrast || !opts.activeLayer || layer === opts.activeLayer) return draw();
+  const edge = layer === "Edge.Cuts";
+  if (opts.contrastHidden && !edge) return;
+  const factor = edge ? edgeCutsDimFactor() : hiContrastFactor();
+  const background = layerColor("background");
+  const selection = layerColor("selection");
+  withColourScope(ctx, memoColours(`fpdim|${factor}|${background}|${selection}`, (css) => (css === selection ? css : hiContrastDim(css, background, factor))), draw);
 }
 
 /** The slice of `FpDrawState` the painter reads. */
@@ -507,7 +514,8 @@ export function paintFootprint(
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
     paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: opts.gridOrigin ?? [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("grid"), undefined, "footprint", layerColor("grid_axes"));
   }
-  drawGridOrigin(ctx, view, opts.gridOrigin, "#1a1a1a"); // the canvas is filled with this colour (FootprintCanvas.tsx)
+  drawGridOrigin(ctx, view, opts.gridOrigin, layerColor("background")); // the canvas is filled with this colour (FootprintCanvas.tsx)
+  installColourScopes(ctx); // High Contrast Mode's colour mix (`withContrast`)
   // what the texts of this paint are, for `window.__edaText.fp` (components/text/kicadTextPaint.ts)
   beginTextRecord("fp");
   if (!footprint) {
@@ -540,11 +548,11 @@ export function paintFootprint(
     const mv = moved(g.id);
     ctx.save();
     // `GetColor`'s per-type opacity: a filled shape takes Filled Shapes', a copper one Tracks' (kicad-port/fpAppearance.ts `fpShapeOpacity`)
-    ctx.globalAlpha *= contrastAlpha(opts, g.layer) * opacity(g.layer) * fpShapeOpacity(g, opts.layerOpacity);
+    ctx.globalAlpha *= opacity(g.layer) * fpShapeOpacity(g, opts.layerOpacity);
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     // A graphic's `(stroke (type ..))` when it is not solid, kept by its id (`LibraryFootprintKeep::stroke_types`).
     const strokeTypes = footprint.kicad?.stroke_types as Record<string, string> | undefined;
-    drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics, g.id ? strokeTypes?.[g.id] : undefined, g.id ? fpEndingsOf(footprint, g.id) : undefined);
+    withContrast(ctx, opts, g.layer, () => drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics, g.id ? strokeTypes?.[g.id] : undefined, g.id ? fpEndingsOf(footprint, g.id) : undefined));
     ctx.restore();
   }
   if (objectOn(visible, "footprint_text")) {
@@ -554,9 +562,9 @@ export function paintFootprint(
       if (isHiddenText(footprint, t.id)) continue;
       const mv = moved(t.id);
       ctx.save();
-      ctx.globalAlpha *= contrastAlpha(opts, t.layer) * opacity(t.layer);
+      ctx.globalAlpha *= opacity(t.layer);
       if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-      drawText(ctx, view, t, opts.selection.has(t.id ?? ""), !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined, textFaceOf(footprint, t.id));
+      withContrast(ctx, opts, t.layer, () => drawText(ctx, view, t, opts.selection.has(t.id ?? ""), !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined, textFaceOf(footprint, t.id)));
       ctx.restore();
     }
   }
@@ -569,9 +577,9 @@ export function paintFootprint(
       if (!fpPadShown(layers, visible)) continue;
       const mv = moved(p.id);
       ctx.save();
-      ctx.globalAlpha *= contrastAlpha(opts, opts.activeLayer && fpPadOnLayer(layers, opts.activeLayer) ? opts.activeLayer : null) * (opts.layerOpacity?.["obj:pads"] ?? 1);
+      ctx.globalAlpha *= opts.layerOpacity?.["obj:pads"] ?? 1;
       if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-      drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? ""), sketch: !!opts.sketchPads });
+      withContrast(ctx, opts, opts.activeLayer && fpPadOnLayer(layers, opts.activeLayer) ? opts.activeLayer : null, () => drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? ""), sketch: !!opts.sketchPads }));
       ctx.restore();
     }
   }

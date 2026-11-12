@@ -16,7 +16,8 @@ import { flashOverlay, getFilterFlash, subscribeFilterFlash } from "../../kicad-
 
 // `PANEL_SELECTION_FILTER`'s rows in its order (panel_selection_filter_base.cpp): Footprints, Text, Tracks, Vias, Pads, Graphics, Zones, Rule Areas,
 // Dimensions, Points, Other items.
-const ROWS: Array<{ key: keyof SelectionFilter; label: string }> = [
+type FilterKey = keyof SelectionFilter;
+const ROWS: Array<{ key: FilterKey; label: string }> = [
   { key: "footprints", label: "Footprints" },
   { key: "text", label: "Text" },
   { key: "tracks", label: "Tracks" },
@@ -33,16 +34,21 @@ const ROWS: Array<{ key: keyof SelectionFilter; label: string }> = [
 export function SelectionFilterPanel() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
-  const f = state.selectionFilter;
+  const flash = useSyncExternalStore(subscribeFilterFlash, getFilterFlash, getFilterFlash);
+  return <SelectionFilterView filter={state.selectionFilter} flash={flash} onChange={(filter) => dispatch({ type: "SET_SELECTION_FILTER", filter })} />;
+}
+
+/** `PANEL_SELECTION_FILTER` on a filter: the board's (the project's), or the Footprint Editor's (its settings', UI-LEFT-2 FF5). `onChange` takes the rows that changed. */
+export function SelectionFilterView({ filter: f, onChange, flash = new Map() }: { filter: Partial<Record<FilterKey, boolean>> & { lockedItems: boolean }; onChange: (patch: Partial<SelectionFilter>) => void; flash?: ReadonlyMap<string, number> }) {
   const allOn = ROWS.every((r) => f[r.key] !== false);
   /** The row a right-click opened the "Only ..." menu on (`m_onlyCheckbox`), and where. */
   const [menu, setMenu] = useState<{ key: (typeof ROWS)[number]["key"]; label: string; x: number; y: number } | null>(null);
-  const flash = useSyncExternalStore(subscribeFilterFlash, getFilterFlash, getFilterFlash);
   /** `onPanelPaint`'s overlay over a flashing row (none for a row at rest). */
   const flashStyle = (key: string) => {
     const step = flash.get(key);
     return step ? { boxShadow: `inset 0 0 0 999px ${flashOverlay(step)}` } : undefined;
   };
+  const dispatch = (a: { type: "SET_SELECTION_FILTER"; filter: Partial<SelectionFilter> }) => onChange(a.filter);
   return (
     <div className="panel-section">
       <h3>Selection Filter</h3>
@@ -79,7 +85,7 @@ export function SelectionFilterPanel() {
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          entries={[{ label: onlyLabel(menu.label), onSelect: () => dispatch({ type: "SET_SELECTION_FILTER", filter: onlyFilter(f, menu.key as Parameters<typeof onlyFilter>[1]) }) }]}
+          entries={[{ label: onlyLabel(menu.label), onSelect: () => dispatch({ type: "SET_SELECTION_FILTER", filter: onlyFilter(f as SelectionFilter, menu.key as Parameters<typeof onlyFilter>[1]) }) }]}
           onClose={() => setMenu(null)}
         />
       )}
