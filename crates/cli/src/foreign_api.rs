@@ -27,7 +27,7 @@ fn refused(message: impl Into<String>) -> Value {
     json!({ "ok": false, "message": message.into(), "unrecognized": false })
 }
 
-pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
+pub(crate) fn convert(dir: &Path, body: &[u8]) -> Value {
     let req: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return refused(format!("not an import request: {e}")),
@@ -84,6 +84,10 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
                 Err(e) => return refused(board::reasons(&e)),
             }
         }
+        // A KiCad 5 schematic is KiCad's own legacy format, which no importer of kicad-cli takes: read as `OpenProjectFiles` reads it (`crate::legacy_import`)
+        if kind == Kind::Schematic && staged.iter().any(|p| crate::legacy_import::is_legacy_schematic_file(p)) {
+            return legacy_reply(dir, work, &staged);
+        }
         // A project: the board is the first file a board importer takes (by the names, those only a board has first), the others go with it to the project command.
         let mut order: Vec<usize> = (0..staged.len()).collect();
         if project {
@@ -133,6 +137,47 @@ pub(crate) fn convert(_dir: &Path, body: &[u8]) -> Value {
             }
             Err(message) => json!({ "ok": false, "message": said(message), "unrecognized": false, "findings": import.to_json()["findings"] }),
         }
+    })
+}
+
+/// A KiCad 5 legacy schematic and the files that came with it (its sheets' `.sch`, the cache library `<project>-cache.lib`, the project's `.lib`s and
+/// `.pro`): the root is the legacy schematic no other one places (the first of them when each is placed), read by `crate::legacy_import::load`. A browser
+/// hands the page the files and not the folder, so they are what the folder is. What the legacy rescue reads comes along into the board's folder `dir`
+/// (`carry_project_files`), named after the board's project. The reply is a schematic's (`content`, `counts`, `notes`), with `format` "KiCad legacy
+/// schematic" and `remap` when no symbol names a library (KiCad opens Remap Symbols as such a project loads).
+fn legacy_reply(dir: &Path, work: &Path, staged: &[std::path::PathBuf]) -> Value {
+    let legacy: Vec<&std::path::PathBuf> = staged.iter().filter(|p| crate::legacy_import::is_legacy_schematic_file(p)).collect();
+    let placed: std::collections::BTreeSet<String> = legacy
+        .iter()
+        .filter_map(|p| std::fs::read(p).ok())
+        .filter_map(|b| eda_kicad::legacy_sch::parse_screen(&String::from_utf8_lossy(&b)).ok())
+        .flat_map(|s| s.items.into_iter().filter_map(|it| if let eda_kicad::legacy_sch::Item::Sheet(sh) = it { Some(sh.file) } else { None }))
+        .filter_map(|f| Path::new(&f.replace('\\', "/")).with_extension("sch").file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    let root = legacy.iter().find(|p| p.file_name().is_some_and(|n| !placed.contains(&*n.to_string_lossy()))).or(legacy.first()).map(|p| (*p).clone());
+    let Some(root) = root else { return refused("there is no legacy schematic among the files") };
+    let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let loaded = match crate::legacy_import::load(&root, work) {
+        Ok(l) => l,
+        Err(e) => return json!({ "ok": false, "message": board::reasons(&e).replace(&work.display().to_string(), "<scratch>"), "unrecognized": false }),
+    };
+    let mut notes = loaded.content.notes.clone();
+    if let Ok((meta, _, _)) = board::load(dir) {
+        notes.extend(crate::legacy_import::carry_project_files(&loaded, dir, &crate::rescue_api::project_name(&meta)));
+    }
+    let content = &loaded.content;
+    let symbols: usize = content.all_screens().map(|(_, s)| s.symbols.len() + s.power_symbols.len()).sum();
+    let notes: Vec<String> = notes.into_iter().map(|n| n.replace(&work.display().to_string(), "<scratch>")).collect();
+    json!({
+        "ok": true,
+        "kind": "schematic",
+        "name": name,
+        "format": "KiCad legacy schematic",
+        "engine": "eda (KiCad's legacy reader, ported)",
+        "counts": { "symbols": symbols, "sheets": 1 + content.screens.len(), "labels": content.all_screens().map(|(_, s)| s.labels.len()).sum::<usize>(), "wires": content.all_screens().map(|(_, s)| s.wires.len()).sum::<usize>() },
+        "notes": notes,
+        "remap": loaded.remap,
+        "content": serde_json::to_value(content).unwrap_or(Value::Null),
     })
 }
 

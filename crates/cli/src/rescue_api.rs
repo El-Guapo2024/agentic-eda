@@ -25,7 +25,8 @@
 //!
 //! Not ported: the legacy flavour (`LEGACY_RESCUER`: `RESCUE_CASE_CANDIDATE` and `RESCUE_CACHE_CANDIDATE`, for a schematic none of whose symbols names
 //! a library, `SCH_SCREENS::HasNoFullyDefinedLibIds`), which writes a legacy `.lib` rescue library and the project's legacy library list; the studio has
-//! no legacy library writer, and such a schematic cannot be brought in (a KiCad 5 `.sch`). The answer says so (`legacy`).
+//! no legacy library writer. The answer says so (`legacy`). (Such a schematic -- a KiCad 5 `.sch` -- is brought in with its cache library and project file
+//! since `task-v10-legacy`: `crate::legacy_import`, PARITY-sch.md section 90.)
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

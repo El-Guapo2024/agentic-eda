@@ -38,7 +38,7 @@ pub(crate) fn with_loaded_file(cmd: &Cmd, dir: &Path) -> Result<Option<Cmd>, Vec
         }
         Cmd::OnSheet { sheet, cmd } => Ok(with_loaded_file(cmd, dir)?.map(|inner| Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(inner) })),
         Cmd::ImportSheet { source, content: None, .. } => {
-            let loaded = eda_kicad::load_sheet_file(&resolve(dir, source))?;
+            let loaded = crate::legacy_import::load_sheet_file(&resolve(dir, source))?;
             let mut read = cmd.clone();
             if let Cmd::ImportSheet { content, .. } = &mut read {
                 *content = Some(loaded);

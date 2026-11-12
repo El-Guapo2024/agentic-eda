@@ -271,7 +271,7 @@ export function useActionRunner() {
     // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
     registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
     registerAppearanceActions(m, { state, dispatch });
-    registerImportActions(m, { tab: state.tab, dispatch, api });
+    registerImportActions(m, { tab: state.tab, dispatch, api, run: (id) => m.get(id)?.() });
     // The Design Blocks panes of the schematic and the board editor: show, place, save, update, properties, delete (actions/designBlockActions.ts).
     registerDesignBlockActions(m, { tab: state.tab, dispatch, api });
     /**

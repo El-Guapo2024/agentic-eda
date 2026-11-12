@@ -69,6 +69,8 @@ export interface ForeignReply {
   /** A project: what the schematic the project command made holds, and what its reader noted. */
   schematic_counts?: Record<string, number>;
   schematic_notes?: string[];
+  /** A KiCad 5 legacy schematic none of whose symbols names a library: Remap Symbols is opened after the import, as KiCad opens it as the project loads. */
+  remap?: boolean;
 }
 
 /** A file the page has read as bytes: its name and its content as base64. */
@@ -84,7 +86,8 @@ export interface ForeignFile {
  * of letters, but not in every browser, so the mixed-case ones are listed as the programs write them.
  */
 export const BOARD_ACCEPT = ".brd,.PcbDoc,.pcbdoc,.cpa,.asc,.pcb,.PCB,.txt,.json,.zip,.epro,.SwPcbDoc,.CMPcbDoc,.CSPcbDoc,.efoo";
-export const SCHEMATIC_ACCEPT = ".sch,.SchDoc,.schdoc,.csa,.json,.zip,.epro,.asc,.dsn,.dch";
+// `.lib`, `.dcm` and `.pro` come with a KiCad 5 legacy `.sch`: its cache library, libraries and project file (crates/cli/src/legacy_import.rs).
+export const SCHEMATIC_ACCEPT = ".sch,.SchDoc,.schdoc,.csa,.json,.zip,.epro,.asc,.dsn,.dch,.lib,.dcm,.pro";
 
 /** The project import's chooser: the boards' and the schematics' files of every format, chosen together (an Eagle `.brd` and its `.sch`). */
 export const PROJECT_ACCEPT = ".brd,.sch,.cpa,.csa,.json,.zip,.epro,.PcbDoc,.pcbdoc,.SchDoc,.schdoc,.asc,.txt,.pcb,.PCB,.dsn,.dch";
