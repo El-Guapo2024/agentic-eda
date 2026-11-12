@@ -16,7 +16,7 @@
 #
 # Which board a check needs is written in its header, on a line of its own:
 #
-#   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign|import-files]
+#   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign|import-files|legacy]
 #
 # and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-new (the same where `eda board new` puts a new board,
 # in the middle of its page; every other kind is made with `--origin 0,0`, the page's corner, which the checks' coordinates were written for), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
@@ -24,7 +24,7 @@
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
 # outline, through replace_board; $KICAD_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
-# simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed), ldo-j1 (ldo where `eda board new` puts it, J1 placed). A check with no such line runs on mcu30 for 10 minutes. `ui=import-foreign` serves a
+# simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed), ldo-j1 (ldo where `eda board new` puts it, J1 placed). A check with no such line runs on mcu30 for 10 minutes. `ui=legacy` serves a copy with KiCad's QA legacy projects in `e2e-legacy/` (legacy-import.check.js). `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
 # configuration folder of its own, empty (`EDA_KICAD_CONFIG_DIR`): a check that writes the global library tables or KiCad's path variables never touches the
 # machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
@@ -241,6 +241,19 @@ ensure_ui() { # ensure_ui <kind>: the directory to serve as --ui
                 cp -r "$repo/web/studio/dist" "$u.tmp" && mkdir -p "$u.tmp/e2e-import-files" \
                     && cp "$q/Adafruit AHT20 Temperature & Humidity.brd" "$u.tmp/e2e-import-files/aht20.brd" \
                     && cp "$q/Adafruit AHT20 Temperature & Humidity.sch" "$u.tmp/e2e-import-files/aht20.sch" && mv "$u.tmp" "$u"
+            ) 9> "$scratch/ui-$kind.lock" && echo "$u" ;;
+        legacy)
+            # legacy-import.check.js (task-v10-legacy): KiCad's QA legacy projects (`.sch`, cache libraries, `.lib`s, `.pro`) under e2e-legacy/<project>/.
+            (
+                flock 9
+                [ -d "$u" ] && exit 0
+                local q="${KICAD_SRC_DIR:?KICAD_SRC_DIR is needed for ui=legacy}/qa/data"
+                local n="$q/eeschema/netlists" l="$u.tmp/e2e-legacy"
+                cp -r "$repo/web/studio/dist" "$u.tmp" && mkdir -p "$l/complex_hierarchy" "$l/legacy_power4" "$l/pic_programmer" \
+                    && cp "$n/complex_hierarchy/"{complex_hierarchy.sch,ampli_ht.sch,complex_hierarchy-cache.lib,complex_hierarchy_schlib.lib,complex_hierarchy.pro,sym-lib-table} "$l/complex_hierarchy/" \
+                    && cp "$n/legacy_power4/"{legacy_power4.sch,legacy_power4-cache.lib,legacy_power4-cache.dcm,symbols.lib,symbols.dcm,legacy_power4.pro} "$l/legacy_power4/" \
+                    && cp "$q/pcbnew/plugins/legacy_demos/pic_programmer/"{pic_programmer.sch,pic_sockets.sch,pic_programmer.cache.lib,pic_programmer.pro} "$l/pic_programmer/" \
+                    && mv "$u.tmp" "$u"
             ) 9> "$scratch/ui-$kind.lock" && echo "$u" ;;
         *) echo "unknown ui $kind" >&2; return 1 ;;
     esac
