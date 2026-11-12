@@ -91,7 +91,8 @@ import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnota
 import { refDesPrefix } from "../kicad-port/packFootprints";
 import { openUpdateDialog } from "./updatePcbAction";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
-import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { registerLibraryEditorActions, symEnableState } from "./libraryEditorActions";
+import { fpActionEnabled, symActionEnabled } from "../kicad-port/fpSymActionEnabled";
 import { placingFootprint, startPlaceFootprint } from "./placeFootprintTool";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
@@ -2750,8 +2751,14 @@ export function useActionRunner() {
   // The simulator's own conditions (`SIMULATOR_FRAME::setupUIConditions`), read again when its window changes.
   const simUi = useSimUi();
   const isEnabled = useCallback(
-    (name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)) && (simEnabled(name, simUi) ?? true) && cliExporterReason(name, cliExporters) === null,
-    [registry, state.tab, simUi, cliExporters],
+    (name: string) =>
+      isActionEnabledForTab(name, state.tab, registry.has(name)) &&
+      (simEnabled(name, simUi) ?? true) &&
+      cliExporterReason(name, cliExporters) === null &&
+      // the library editors' frame conditions (`FOOTPRINT_EDIT_FRAME` / `SYMBOL_EDIT_FRAME::setupUIConditions`), read from their stores when asked
+      (state.tab === "footprint" ? (fpActionEnabled(name, { footprintLoaded: !!fpApi.getState().footprint }) ?? true) : true) &&
+      (state.tab === "symbol" ? (symActionEnabled(name, symEnableState(symApi.getState())) ?? true) : true),
+    [registry, state.tab, simUi, cliExporters, fpApi, symApi],
   );
   /** `param` is the event parameter KiCad's parameterised actions carry (`zoomPreset`'s entry, `selectItems`' items, `changeSheet`'s path ...). */
   const run = useCallback((name: string, param?: unknown) => registry.get(name)?.(param), [registry]);
