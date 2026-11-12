@@ -3,17 +3,20 @@
 // `tablePaint.ts`, the dimensions by `painter.ts::drawDimensions` and the rule areas by `drawRuleArea`, each on the footprint's display shapes
 // (`GET /api/footprint`'s `display`, `crates/cli/src/fp_items_json.rs`) in the footprint's frame, which is the canvas's.
 //
-// Differences: a reference image is drawn as its box with a cross (its pixels are served for a board's images only, `GET /api/pcb_image`), and so is a barcode,
-// whose symbol kicad-cli plots for a board's barcodes only (`GET /api/barcode_shape`); a zone that is no rule area is its outline, dashed, in its layer's colour
-// (kicad-cli fills zones, and a footprint is filled on the board it is placed on).
+// A reference image is drawn with its pixels (`GET /api/pcb_image?fp=..`, the browser decoding the file) and a barcode with the symbol kicad-cli plots of it
+// (`GET /api/barcode_shape?fp=..`), as the board's; a zone, on each of its layers, by the board's zone painter: its outline and border hatch, and the fill it brought
+// (`display.zone_fills`: the Footprint Editor runs no zone filler, `FOOTPRINT_EDIT_FRAME` registers no `ZONE_FILLER_TOOL`, and draws `m_FilledPolysList` as it is) in
+// the frame's zone display mode, filled (UI-LEFT-2 FF6).
 import type { FieldInfo } from "../../api/types";
 import type { FootprintItemsDisplay } from "../../api/fpItemTypes";
 import type { ViewTransform } from "../../kicad-port/view";
-import { hairlineNm } from "../../kicad-port/view";
-import { drawDimensions, drawFields, drawRuleArea, layerAlpha, realLayerKey, withAlpha, type PaintOptions } from "../canvas/painter";
+import { drawDimensions, drawFields, drawRuleArea, layerAlpha, paintZoneOnLayer, realLayerKey, withAlpha, type PaintOptions } from "../canvas/painter";
 import { PLAIN_APPEARANCE } from "../canvas/appearancePaint";
 import { fpObjectOpacity, fpOpacities } from "../../kicad-port/fpAppearance";
-import { drawBarcode, drawPcbItems } from "../canvas/pcbItemsPaint";
+import { drawBarcode, drawPcbItems, paintRefImage } from "../canvas/pcbItemsPaint";
+import { requestBarcodeShape } from "../canvas/barcodeCache";
+import { pcbImageUrl } from "../../kicad-port/refImage";
+import { parseCssColor } from "../../kicad-port/appearance";
 import { drawTables } from "../canvas/tablePaint";
 import { layerColor } from "../canvas/layers";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
@@ -33,6 +36,8 @@ export interface FpItemsPaintOptions {
   sketchGraphics: boolean;
   /** What a drag or a Duplicate pick-up carries, drawn where it would drop. */
   movePreview: { refs: string[]; dxNm: number; dyNm: number } | null;
+  /** The footprint's name in the library (`GET /api/footprint?name=`): the image and barcode routes find its items by it. */
+  footprint?: string;
 }
 
 /** The slice of the board painter's options these painters read, from the footprint editor's own. */
@@ -115,27 +120,25 @@ export function paintFpItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
   const board = (drawings: Partial<NonNullable<BoardState["drawings"]>>) => ({ drawings: { shapes: [], texts: [], groups: [], dimensions: [], tables: [], ...drawings } }) as unknown as BoardState;
   // zones first, under the rest (`ZONE` sits under the graphics in the view's order)
   if (objectOn(o.layerVisible, "zones")) {
+    // `PCB_PAINTER::draw( const ZONE* )` on each layer of the zone (`ZONE::ViewGetLayers`), in that layer's colour: the fill the zone brought, then its outline and
+    // border hatch; a rule area has its outline and hatch only
+    const fillOpts = { ...opts, zoneFill: { zones: d.zone_fills ?? [], source: null }, zoneDisplayMode: "filled" } as PaintOptions;
+    const zoneAlpha = fpObjectOpacity(o.layerOpacity, "zones");
     inTwoPasses(ctx, d.zones, o, (zones) => {
       for (const z of zones) {
-        if (!layerIsVisible(o.layerVisible, z.layer)) continue;
         const selected = o.selection.has(z.id);
         const asBoard = { ...z, outline: z.outline_xy, holes: z.holes_xy } as unknown as Zone;
-        if (z.is_rule_area) {
-          drawRuleArea(ctx, view, asBoard, selected, layerColor(realLayerKey(z.layer)));
-          continue;
-        }
-        withAlpha(ctx, 0.8 * fpObjectOpacity(o.layerOpacity, "zones") * layerAlpha(opts, layerStateKey(z.layer)), () => {
-          ctx.beginPath();
-          for (const ring of [z.outline_xy, ...(z.holes_xy ?? [])]) {
-            ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-            ctx.closePath();
+        const layers = (z as { layers?: string[] }).layers ?? [z.layer];
+        for (const layer of layers) {
+          if (!layerIsVisible(o.layerVisible, layer)) continue;
+          const color = layerColor(realLayerKey(layer));
+          const dim = layerAlpha(opts, layerStateKey(layer));
+          if (z.is_rule_area) {
+            withAlpha(ctx, dim, () => drawRuleArea(ctx, view, asBoard, selected, color));
+            continue;
           }
-          ctx.strokeStyle = selected ? layerColor("selection") : layerColor(realLayerKey(z.layer));
-          ctx.lineWidth = hairlineNm(view, selected ? 2.5 : 1.5);
-          ctx.setLineDash([hairlineNm(view, 5), hairlineNm(view, 3)]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        });
+          paintZoneOnLayer(ctx, view, asBoard, layer, color, zoneAlpha * dim, selected, fillOpts, dim);
+        }
       }
     });
   }
@@ -154,28 +157,23 @@ export function paintFpItems(ctx: CanvasRenderingContext2D, view: ViewTransform,
       opts
     )
   );
-  // a barcode: `drawBarcode` without asking the board's `GET /api/barcode_shape` (which knows a board's barcodes only): its box with a cross
+  // a barcode: `drawBarcode` with the shape kicad-cli plots of it (`GET /api/barcode_shape?fp=..`), its box crossed until it arrives
   inTwoPasses(ctx, d.barcodes, o, (barcodes) => {
-    for (const b of barcodes) if (layerIsVisible(o.layerVisible, b.layer)) withAlpha(ctx, layerAlpha(opts, layerStateKey(b.layer)), () => drawBarcode(ctx, view, b, o.selection.has(b.id)));
+    for (const b of barcodes) {
+      if (!layerIsVisible(o.layerVisible, b.layer)) continue;
+      requestBarcodeShape(b, o.footprint);
+      withAlpha(ctx, layerAlpha(opts, layerStateKey(b.layer)), () => drawBarcode(ctx, view, b, o.selection.has(b.id)));
+    }
   });
-  // a reference image: its box, crossed, in its layer's colour
+  // a reference image: `PCB_PAINTER::draw( const PCB_REFERENCE_IMAGE* )` with its pixels (`GET /api/pcb_image?fp=..`), at its layer colour's alpha times the Images opacity
   if (objectOn(o.layerVisible, "bitmaps")) {
+    const opacity = fpObjectOpacity(o.layerOpacity, "bitmaps");
     for (const i of d.images) {
-      if (!layerIsVisible(o.layerVisible, i.layer)) continue;
+      if (!layerIsVisible(o.layerVisible, i.layer) || opacity <= 0) continue;
       const mv = moved(o, i.id);
-      const [x0, y0] = [i.x - i.w / 2 + (mv?.dxNm ?? 0), i.y - i.h / 2 + (mv?.dyNm ?? 0)];
-      ctx.save();
-      ctx.globalAlpha *= fpObjectOpacity(o.layerOpacity, "bitmaps") * layerAlpha(opts, layerStateKey(i.layer)); // Images' opacity (`m_imageOpacity`), the contrast mode
-      ctx.strokeStyle = o.selection.has(i.id) ? layerColor("selection") : layerColor(realLayerKey(i.layer));
-      ctx.lineWidth = hairlineNm(view, 1.5);
-      ctx.strokeRect(x0, y0, i.w, i.h);
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x0 + i.w, y0 + i.h);
-      ctx.moveTo(x0 + i.w, y0);
-      ctx.lineTo(x0, y0 + i.h);
-      ctx.stroke();
-      ctx.restore();
+      const shown = mv ? { ...i, x: i.x + mv.dxNm, y: i.y + mv.dyNm } : i;
+      const colourAlpha = parseCssColor(layerColor(realLayerKey(i.layer)))?.a ?? 1;
+      withAlpha(ctx, layerAlpha(opts, layerStateKey(i.layer)), () => paintRefImage(ctx, view, shown, colourAlpha * opacity, o.selection.has(i.id), pcbImageUrl(i.id, i.hash, o.footprint)));
     }
   }
 }

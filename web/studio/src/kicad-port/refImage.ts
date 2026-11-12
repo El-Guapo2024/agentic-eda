@@ -157,9 +157,9 @@ export function base64Of(bytes: Uint8Array): string {
   return out;
 }
 
-/** The URL a board's reference image is served at; `hash` changes when its pixels do. */
-export function pcbImageUrl(id: string, hash: string): string {
-  return `/api/pcb_image?id=${encodeURIComponent(id)}&h=${encodeURIComponent(hash)}`;
+/** The URL a board's reference image is served at; `hash` changes when its pixels do. `fp`: the image is the library footprint's the Footprint Editor has open under that name. */
+export function pcbImageUrl(id: string, hash: string, fp?: string): string {
+  return `/api/pcb_image?id=${encodeURIComponent(id)}&h=${encodeURIComponent(hash)}${fp ? `&fp=${encodeURIComponent(fp)}` : ""}`;
 }
 
 /** The URL a schematic image is served at, on the sheet at `sheet` (the root when empty). */

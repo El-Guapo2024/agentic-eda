@@ -20,10 +20,26 @@ fn zone_json(z: &eda_model::ir::Zone) -> Value {
     v
 }
 
-/// `display` of `GET /api/footprint`: the dimensions, zones, text boxes, images, points, barcodes and tables of `fp` in the board's display shapes.
+/// The fills the footprint's zones brought (`LibraryFootprintKeep::zone_fills`), as they hold for each zone now (`eda_kicad::zone_fills::kept_fill_current`): one entry per
+/// zone and layer in the shape of the board's `GET /api/fill` (`FillZone`: its rings as `fragments`), which the board's zone painter draws (UI-LEFT-2 FF6). A rule area
+/// has none.
+fn zone_fills_json(fp: &LibraryFootprint) -> Value {
+    let mut out = Vec::new();
+    for z in fp.items.zones.iter().filter(|z| !z.is_rule_area) {
+        let Some(entry) = fp.kicad.zone_fills.get(&z.id).and_then(|k| eda_kicad::zone_fills::kept_fill_current(k, z)) else { continue };
+        for (layer, rings) in &entry.layers {
+            let fragments: Vec<Vec<[i64; 2]>> = rings.iter().map(|r| r.pts.clone()).collect();
+            out.push(json!({ "id": z.id, "net": "", "layer": layer, "filled": !entry.unfilled, "area_nm2": 0, "fragments": fragments }));
+        }
+    }
+    json!(out)
+}
+
+/// `display` of `GET /api/footprint`: the dimensions, zones, text boxes, images, points, barcodes and tables of `fp` in the board's display shapes, and the zones' fills.
 pub(crate) fn display_json(fp: &LibraryFootprint, tv: &PcbShown) -> Value {
     let it = &fp.items;
     json!({
+        "zone_fills": zone_fills_json(fp),
         "dimensions": it.dimensions.iter().map(crate::studio::dimension_json).collect::<Vec<_>>(),
         "zones": it.zones.iter().map(zone_json).collect::<Vec<_>>(),
         "text_boxes": it.text_boxes.iter().map(|t| crate::pcb_items_json::text_box_json(t, tv)).collect::<Vec<_>>(),

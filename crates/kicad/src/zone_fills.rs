@@ -95,6 +95,19 @@ impl ZoneEntry {
     }
 }
 
+/// The fill a library footprint's zone keeps (`LibraryFootprintKeep::zone_fills`, UI-LEFT-2 FF6) as it holds for `zone` now: [`KicadFills::current`] of the one entry, so
+/// the fill follows the zone when it is moved, turned or mirrored in the Footprint Editor and is lost when it is reshaped, as the board's does.
+pub fn kept_fill_current(kept: &eda_model::lib_keep::KeptZoneFill, zone: &Zone) -> Option<ZoneEntry> {
+    let entry = ZoneEntry {
+        sig: kept.sig.clone(),
+        layers: kept.layers.iter().map(|(l, rings)| (l.clone(), rings.iter().map(|(island, pts)| KicadRing { island: *island, pts: pts.clone() }).collect())).collect(),
+        unfilled: kept.unfilled,
+        shape: Some(FilledShape { outline: kept.outline.clone(), holes: kept.holes.clone(), layers: kept.zone_layers.clone(), fill_epoch: 0, flip_epoch: 0, flip_parity: false }),
+    };
+    let one = KicadFills::new(String::new(), String::new(), 0, BTreeMap::from([(zone.id.clone(), entry)]));
+    one.current(zone).map(Cow::into_owned)
+}
+
 /// What kicad-cli filled, for one design revision.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct KicadFills {

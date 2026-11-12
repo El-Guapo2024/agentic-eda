@@ -36,12 +36,13 @@ function asReply(j: unknown): BarcodeReply {
   return { status: "pending" };
 }
 
-/** Ask for the shape of `b` unless it is known or being asked for: the canvas calls this for every barcode it draws, on every repaint. */
-export function requestBarcodeShape(b: BoardBarcode): void {
+/** Ask for the shape of `b` unless it is known or being asked for: the canvas calls this for every barcode it draws, on every repaint. `fp`: the barcode is the library
+ * footprint's the Footprint Editor has open under that name (UI-LEFT-2 FF6). */
+export function requestBarcodeShape(b: BoardBarcode, fp?: string): void {
   const key = barcodeShapeKey(b);
   if (barcodeShape(key)?.status === "ready" || barcodeShape(key)?.status === "failed" || asked.has(key)) return;
   asked.add(key);
-  const url = `/api/barcode_shape?id=${encodeURIComponent(b.id)}`;
+  const url = `/api/barcode_shape?id=${encodeURIComponent(b.id)}${fp ? `&fp=${encodeURIComponent(fp)}` : ""}`;
   const ask = async (attempt: number): Promise<void> => {
     let reply: BarcodeReply;
     try {

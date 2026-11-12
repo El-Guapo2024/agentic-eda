@@ -778,7 +778,7 @@ function fillOf(opts: PaintOptions, id: string, layer: string) {
  * pour and a non-copper zone (silkscreen, mask, paste, a user layer) are drawn the same way. `alpha` is the fill's (the layer's and the zones' opacity), `outlineAlpha`
  * the outline's (the layer's).
  */
-function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, layerName: string, color: string, alpha: number, selected: boolean, opts: PaintOptions, outlineAlpha = 1) {
+export function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, layerName: string, color: string, alpha: number, selected: boolean, opts: PaintOptions, outlineAlpha = 1) {
   const fill = fillOf(opts, z.id, layerName);
   withAlpha(ctx, alpha, () => {
     if (opts.zoneDisplayMode !== "outline" && fill && fill.fragments.length > 0) {
