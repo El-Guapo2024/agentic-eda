@@ -146,8 +146,9 @@ function Row({ label, selected, onClick, onDoubleClick, testId, dim }: { label: 
 
 function LayerMapping({ dialog }: { dialog: LayerMapDialog }) {
   const layers: SourceLayer[] = dialog.layers;
-  const required = useMemo(() => new Set(layers.filter(isRequiredLayer).map((l) => l.source)), [layers]);
   const append = dialog.mode === "append";
+  // Append Board's rows are never required (`desc.Required = false`)
+  const required = useMemo(() => new Set(append ? [] : layers.filter(isRequiredLayer).map((l) => l.source)), [layers, append]);
   const kicadLayers = useMemo(() => kicadLayerList(layers, dialog.format, dialog.permitted), [layers, dialog.format, dialog.permitted]);
   const [state, setState] = useState(() => (append ? unmatchedMapping(layers) : initialMapping(layers)));
   const [pickedUnmatched, setPickedUnmatched] = useState<string[]>([]);

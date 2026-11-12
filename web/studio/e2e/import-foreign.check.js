@@ -89,7 +89,10 @@
     const matchedTo = (layer) => byId(`matched-to:${layer}`)?.textContent.trim();
     check("the layers kicad-cli guessed are Matched Layers, the ones it has no guess for are Unmatched", matched().includes("Top *") && matchedTo("tNames") === "F.Silkscreen" && unmatched().length > 0 && !unmatched().includes("tNames"), JSON.stringify([matched().slice(0, 6), unmatched().slice(0, 4)]));
     check("a layer that goes to copper is marked * (it must be matched)", matched().some((m) => m.endsWith(" *")) && !matched().includes("tNames *"), JSON.stringify(matched()));
-    check("the KiCad Layers list is KiCad's, in its order: the copper, then the technical layers by their standard names", all("kicad:").map((e) => e.textContent.trim()).slice(0, 8).join(",") === "F.Cu,B.Cu,F.Adhesive,B.Adhesive,F.Paste,B.Paste,F.Silkscreen,B.Silkscreen", all("kicad:").map((e) => e.textContent.trim()).slice(0, 9).join(","));
+    // Eagle's `defaultKicadLayer` permits every layer (`permittedLayers.set()`), so the list is every layer in `LSET::UIOrder` (UI-LEFT-2 II3): the 32 copper layers, then the
+    // technical layers by their standard names, then User.1 .. User.45
+    const kicadNames = all("kicad:").map((e) => e.textContent.trim());
+    check("the KiCad Layers list is KiCad's, in its order: the copper, then the technical layers by their standard names", kicadNames.slice(0, 2).join(",") === "F.Cu,In1.Cu" && kicadNames[31] === "B.Cu" && kicadNames.slice(32, 38).join(",") === "F.Adhesive,B.Adhesive,F.Paste,B.Paste,F.Silkscreen,B.Silkscreen" && kicadNames[kicadNames.length - 1] === "User.45", kicadNames.slice(28, 38).join(","));
     check("Keep KiCad layer names is off by default", byId("map-keep-names")?.checked === false);
 
     // `<` takes a pair back to the unmatched list; the guess a layer-map file cannot take away is said

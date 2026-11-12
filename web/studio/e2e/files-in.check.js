@@ -417,9 +417,13 @@
     d = await dropFiles([{ name: "a.dxf", text: boardDxf }, { name: "b.dxf", text: boardDxf }]);
     await waitFor(() => root());
     await sleep(400);
-    check("two files dropped: the first opens and the toast says the other was skipped", field("File")?.value === "a.dxf" && /Only a\.dxf was opened; b\.dxf was skipped/.test(lastToast()), `${field("File")?.value} / ${lastToast()}`);
+    check("two files dropped: the first opens", field("File")?.value === "a.dxf", `${field("File")?.value} / ${lastToast()}`);
     button("Cancel").click();
-    await sleep(200);
+    // `DoWithAcceptedFiles`: each accepted file runs its action in turn -- the second once the first is done with the frame
+    await waitFor(() => field("File")?.value === "b.dxf", 8000);
+    check("and once its dialog is closed the second opens (DoWithAcceptedFiles runs each file in turn)", field("File")?.value === "b.dxf", field("File")?.value);
+    button("Cancel").click();
+    await sleep(900);
     d = await dropFiles([{ name: "notes.txt", text: "hello" }]);
     check("a file the editor does not take is said not to be one, and the browser did not take it either", d.prevented && dialogs().length === 0 && /notes\.txt is not a file this editor opens \(it takes \.kicad_pcb, \.brd, \.dxf, \.svg\)\./.test(lastToast()), lastToast());
 
