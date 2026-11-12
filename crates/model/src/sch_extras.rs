@@ -51,8 +51,9 @@ pub struct SchExtras {
     /// The ERC dialog's "Ignore all 'Conflict problem between pins' violations" on a pin-to-pin *error* (`DIALOG_ERC::OnERCItemRClick`,
     /// `ID_SET_SEVERITY_TO_IGNORE`): KiCad ignores `ERCE_PIN_TO_PIN_ERROR` too, not only the warning `pin_to_pin` stands for, but keeps that only in the
     /// session -- a project has no key for the error's slot (`ERC_ITEM::GetItemsWithSeverities` stops before `pinTableError`), so kicad-cli and a reopened
-    /// project report the errors again (r3 D3-M2). The studio remembers it here and leaves the pin-to-pin errors out of its own report while `pin_to_pin` is
-    /// ignored (`erc_checks::PIN_TO_PIN_ERROR_SLOT` in a severity table sets it). Nothing of it reaches the derived project. Additive. (Counts in `writes_nothing`.)
+    /// project report the errors again (r3 D3-M2). The studio remembers it here, on its own as KiCad 25ec2335's `ERC_SETTINGS::GetSeverity` reads the slot, and
+    /// leaves the pin-to-pin errors out of its own report and of a saved one (`erc_checks::PIN_TO_PIN_ERROR_SLOT` in a severity table sets or clears it). Nothing of
+    /// it reaches the derived project. Additive. (Counts in `writes_nothing`.)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pin_to_pin_errors_ignored: bool,
     /// Schematic Setup > Formatting > Connection grid spacing (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`, `panel_setup_formatting.cpp`): the grid, in mils, that wire ends and

@@ -165,6 +165,9 @@ fn rule(check: &str) -> Option<Rule> {
         // (The hierarchical label of the root sheet, 4628-4632, sets no sheet: see [`marker`].)
         // [probed]
         "pin_not_connected" => r(Main, SpecificMain),
+        // KiCad 25ec2335 erc.cpp `TestConnectivity`'s `HierarchyErrors` (`MISSING_LABEL`, `MISSING_PIN`): `SetItems( error.item )`, `markers.Place( .., error.sheet,
+        // error.position, ITEM_PATHS::MAIN, true )` -- the sheet pin or the hierarchical label, at its own position, sheet-specific (UI-LEFT-2 BB2) [probed].
+        "hier_label_mismatch" => r(Main, SpecificMain),
         // erc.cpp 1225-1231: the pin that needs a driver [probed: `pin_not_driven`, `power_pin_not_driven`]; 1421-1429: a ground pin on another net; 1460-1465: a
         // pin named like a stacked one.
         "pin_not_driven" | "power_pin_not_driven" | "ground_pin_not_ground" | "stacked_pin_name" => r(Main, SpecificMain),
@@ -193,7 +196,7 @@ fn rule(check: &str) -> Option<Rule> {
         // Not here: `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`
         // and `unresolved_variable` (a text's own record), `field_name_whitespace` (a field has no uuid of its own: the marker names it with a
         // `kiapi.schematic.ErcSymbolChildReference`, and none of the forms above matched on kicad-cli), `label_multiple_wires` and `four_way_junction` (a point
-        // of their own), `no_connect_connected` (two creators with two sets of paths), `hier_label_mismatch`, `bus_definition_conflict`, `duplicate_pins`.
+        // of their own), `no_connect_connected` (two creators with two sets of paths), `bus_definition_conflict`, `duplicate_pins`.
         _ => None,
     }
 }
@@ -207,6 +210,14 @@ fn uuids_of(path: &str) -> Vec<String> {
 /// names (main first), the path of the sheet the report lists it under, and how many sheets the report has (a violation whose sheet the report does
 /// not give is known only on a design of one). `None` when the marker is not known to the letter.
 pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sheets: usize) -> Option<ErcMarker> {
+    marker_with(check, severity, items, sheet, sheets, &|_| Vec::new())
+}
+
+/// [`marker`] on a design of several sheets, knowing where each item is (`item_sheets`: the sheet paths of an item's uuid, [`item_sheets`]): the sheet of an
+/// item the report does not list the violation under -- the aux item of a check whose marker names both items' sheets (`SetItemsSheetPaths( a, b )`: the
+/// name checks, a pin-to-pin conflict, a unit's footprint or net), or the item of a check whose marker names only its sheet -- is the one sheet its screen
+/// is placed on, or, for a screen placed more than once, the placement the report names when it is one of them. `None` when that still leaves it open.
+pub fn marker_with(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sheets: usize, item_sheets: &dyn Fn(&str) -> Vec<Vec<String>>) -> Option<ErcMarker> {
     let rule = rule(check)?;
     let error_type = error_type(check, severity)?;
     let main = items.first()?;
@@ -222,11 +233,30 @@ pub fn marker(check: &str, severity: &str, items: &[MarkerItem], sheet: &str, sh
     let paths = if hier_label { Paths::None } else { rule.paths };
     let single = sheets <= 1;
     let path = uuids_of(sheet);
+    // the sheet an item is on: the one placement of its screen, or the report's sheet when it is one of several
+    let sheet_of = |i: &MarkerItem| -> Option<Vec<String>> {
+        let placed = item_sheets(&i.uuid);
+        match placed.as_slice() {
+            [one] => Some(one.clone()),
+            [] => None,
+            many => many.iter().find(|p| **p == path).cloned(),
+        }
+    };
     let (specific, main_path, aux_path) = match paths {
         Paths::None => (Vec::new(), Vec::new(), Vec::new()),
         Paths::Specific if single && !path.is_empty() => (path, Vec::new(), Vec::new()),
+        Paths::Specific => (sheet_of(main)?, Vec::new(), Vec::new()),
         Paths::SpecificMain if !path.is_empty() => (path.clone(), path, Vec::new()),
         Paths::SpecificMainAux if single && !path.is_empty() => (path.clone(), path.clone(), path),
+        Paths::SpecificMainAux => {
+            // `SetSheetSpecificPath( a )`, `SetItemsSheetPaths( a, b )`: the report lists it under the main item's sheet
+            let main_path = sheet_of(main).or_else(|| (!path.is_empty()).then(|| path.clone()))?;
+            let aux_path = match items.get(1) {
+                Some(aux) => sheet_of(aux)?,
+                None => main_path.clone(),
+            };
+            (main_path.clone(), main_path, aux_path)
+        }
         _ => return None,
     };
     Some(ErcMarker { error_type: error_type.to_string(), at_nm: [at.x_nm, at.y_nm], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
@@ -370,6 +400,66 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
         .collect()
 }
 
+/// Where each item of a derived schematic is: every uuid of the tree (a symbol's, its pins', a wire's, a label's, a sheet's and its pins') with the sheet paths
+/// (root first, as `KIID_PATH` lists them) of the placements of the screen that holds it, the root's file `root` and each sheet's file read by `read` (its
+/// name from the root's folder, `Sheetfile` taken from the placing file's own folder). The report names an item by its uuid and lists the violation under one
+/// sheet; a marker that also names the aux item's sheet, or a sheet other than the one the report lists it under, needs this (`SCH_SHEET_PATH` of the
+/// item). An item of a screen placed more than once has a path per placement.
+pub fn item_sheets(root: &str, read: &dyn Fn(&str) -> Option<String>) -> std::collections::HashMap<String, Vec<Vec<String>>> {
+    use crate::sexpr::{find, find_all, tag, txt, Sexpr};
+    let mut out: std::collections::HashMap<String, Vec<Vec<String>>> = std::collections::HashMap::new();
+    fn uuids(s: &Sexpr, into: &mut Vec<String>) {
+        if let Some(list) = s.as_list() {
+            if tag(list) == Some("uuid") {
+                if let Some(u) = txt(list, 1) {
+                    into.push(u.to_string());
+                }
+                return;
+            }
+            for child in list {
+                uuids(child, into);
+            }
+        }
+    }
+    let Some(text) = read(root) else { return out };
+    let Some(root_uuid) = file_uuid(&text) else { return out };
+    // (file name from the root's folder, its text, the path of this placement); depth-bounded against a sheet that places its own file
+    let mut todo: Vec<(String, String, Vec<String>)> = vec![(root.to_string(), text, vec![root_uuid])];
+    while let Some((name, text, path)) = todo.pop() {
+        let Ok(tree) = crate::sexpr::parse(&text) else { continue };
+        let Some(top) = tree.as_list() else { continue };
+        for item in top.iter().skip(1) {
+            let Some(list) = item.as_list() else { continue };
+            if matches!(tag(list), Some("uuid" | "lib_symbols" | "sheet_instances" | "symbol_instances" | "embedded_files" | "title_block" | "paper" | "version" | "generator" | "generator_version")) {
+                continue;
+            }
+            let mut found = Vec::new();
+            uuids(item, &mut found);
+            for u in found {
+                out.entry(u).or_default().push(path.clone());
+            }
+            if tag(list) == Some("sheet") && path.len() < 32 {
+                let sheet_uuid = find(list, "uuid").and_then(|u| txt(u, 1));
+                let file = find_all(list, "property").find(|p| matches!(txt(p, 1), Some("Sheetfile" | "Sheet file"))).and_then(|p| txt(p, 2));
+                if let (Some(sheet_uuid), Some(file)) = (sheet_uuid, file) {
+                    let folder = std::path::Path::new(&name).parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                    let child = if folder.is_empty() { file.to_string() } else { format!("{folder}/{file}") };
+                    if let Some(child_text) = read(&child) {
+                        let mut child_path = path.clone();
+                        child_path.push(sheet_uuid.to_string());
+                        todo.push((child, child_text, child_path));
+                    }
+                }
+            }
+        }
+    }
+    for paths in out.values_mut() {
+        paths.sort();
+        paths.dedup();
+    }
+    out
+}
+
 /// A `.kicad_sch` text's own `(uuid ..)`: the root sheet's, which the sheet paths of a project's markers start with.
 pub fn file_uuid(text: &str) -> Option<String> {
     let tree = crate::sexpr::parse(text).ok()?;
@@ -427,6 +517,41 @@ mod tests {
 
     fn only(path: &[&str]) -> Vec<String> {
         path.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// UI-LEFT-2 BB2: on a design of several sheets, each item is on the sheet its screen is placed on; an item of a screen placed twice has both paths.
+    #[test]
+    fn the_items_of_a_tree_are_on_the_sheets_their_screen_is_placed_on() {
+        let root = "(kicad_sch (version 1) (uuid \"R\") (symbol (lib_id \"x\") (uuid \"s1\") (pin \"1\" (uuid \"p1\")))
+            (sheet (at 0 0) (uuid \"A\") (property \"Sheetname\" \"a\") (property \"Sheetfile\" \"sub/child.kicad_sch\") (pin \"D\" input (uuid \"sp\")))
+            (sheet (at 9 0) (uuid \"B\") (property \"Sheetname\" \"b\") (property \"Sheetfile\" \"sub/child.kicad_sch\"))
+            (sheet (at 9 9) (uuid \"C\") (property \"Sheetname\" \"c\") (property \"Sheetfile\" \"other.kicad_sch\"))
+            (sheet_instances (path \"/\" (page \"1\"))))";
+        let child = "(kicad_sch (version 1) (uuid \"K\") (label \"x\" (at 0 0 0) (uuid \"l1\")))";
+        let other = "(kicad_sch (version 1) (uuid \"O\") (wire (pts (xy 0 0) (xy 1 0)) (uuid \"w1\")))";
+        let read = |name: &str| match name {
+            "board.kicad_sch" => Some(root.to_string()),
+            "sub/child.kicad_sch" => Some(child.to_string()),
+            "other.kicad_sch" => Some(other.to_string()),
+            _ => None,
+        };
+        let at = item_sheets("board.kicad_sch", &read);
+        assert_eq!(at["s1"], vec![only(&["R"])]);
+        assert_eq!(at["p1"], vec![only(&["R"])], "a symbol's pin is on its symbol's sheet");
+        assert_eq!(at["sp"], vec![only(&["R"])], "a sheet's pin is on the placing sheet");
+        assert_eq!(at["w1"], vec![only(&["R", "C"])]);
+        assert_eq!(at["l1"], vec![only(&["R", "A"]), only(&["R", "B"])], "a screen placed twice: a path per placement");
+
+        // A name check between the root and the sheet: the main item's sheet is the report's, the aux item's is where it is.
+        let items = [item("s1", 1, 2, "Label 'SIG'"), item("w1", 3, 4, "Label 'sig'")];
+        let sheets = |u: &str| at.get(u).cloned().unwrap_or_default();
+        let m = marker_with("similar_labels", "warning", &items, "/R", 3, &sheets).unwrap();
+        assert_eq!((m.sheet.clone(), m.main_sheet.clone(), m.aux_sheet.clone()), (only(&["R"]), only(&["R"]), only(&["R", "C"])));
+        assert_eq!(marker("similar_labels", "warning", &items, "/R", 3), None, "without the tree the aux item's sheet is not known");
+        // An item of a screen placed twice: the report's placement when it is one of them, else not known.
+        let label = [item("l1", 1, 2, "Label 'x'")];
+        assert_eq!(marker_with("label_dangling", "error", &label, "/R/B", 3, &sheets).unwrap().sheet, only(&["R", "B"]));
+        assert_eq!(marker_with("label_dangling", "error", &label, "/R", 3, &sheets), None);
     }
 
     /// Records kicad-cli 10.99.0-5334 consumed when they were written to a project (probed on a derived schematic: the violation was reported as excluded, with the

@@ -1274,13 +1274,21 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     let raw = run_report(cmd, &report, "erc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
     let sheet_count = raw["sheets"].as_array().map_or(0, Vec::len);
+    // where each item of the derived tree is, for a marker that names a sheet the report does not give (`erc_exclusions::marker_with`)
+    let placed = if sheet_count > 1 {
+        let root = sch.file_name().and_then(|n| n.to_str()).unwrap_or("board.kicad_sch").to_string();
+        eda_kicad::erc_exclusions::item_sheets(&root, &|name| std::fs::read_to_string(work.join(name)).ok())
+    } else {
+        HashMap::new()
+    };
+    let item_sheets = |uuid: &str| placed.get(uuid).cloned().unwrap_or_default();
     let mut violations = Vec::new();
     for sheet in raw["sheets"].as_array().into_iter().flatten() {
         let path = sheet["uuid_path"].as_str().unwrap_or("");
         for v in sheet["violations"].as_array().into_iter().flatten() {
             let mut violation = Violation::from_json(v, &map, units_mm);
             violation.sheet = path.to_string();
-            violation.marker = eda_kicad::erc_exclusions::marker(&violation.kind, &violation.severity, &Violation::marker_items(v, units_mm), path, sheet_count);
+            violation.marker = eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &Violation::marker_items(v, units_mm), path, sheet_count, &item_sheets);
             violations.push(violation);
         }
     }
@@ -1374,7 +1382,78 @@ pub fn erc_report(design: &Design, model: &ConstraintModel, work: &Path, opts: &
     let out = work.join(format!("erc-report.{}", opts.extension()));
     let mut cmd = cli_command(&cli, Some(&sch.with_extension("kicad_pro")));
     cmd.args(["sch", "erc"]).args(opts.args()).arg("-o").arg(&out).arg(&sch);
-    Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text: run_saved_report(cmd, &out, "erc")? })
+    let mut text = run_saved_report(cmd, &out, "erc")?;
+    if design.schematic.as_ref().is_some_and(|s| s.extras.pin_to_pin_errors_ignored) {
+        text = if opts.json { drop_pin_to_pin_errors_json(&text) } else { drop_pin_to_pin_errors_text(&text) };
+    }
+    Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text })
+}
+
+/// A saved ERC report (`ERC_REPORT::WriteJsonReport`) without its pin-to-pin errors, for a schematic whose errors' slot is ignored
+/// (`SchExtras::pin_to_pin_errors_ignored`): KiCad's dialog writes the markers it holds, and Ignore deleted every marker of the error's code
+/// (`DIALOG_ERC::OnERCItemRClick`: `ScreenList.DeleteMarkers( MARKER_ERC, ERCE_PIN_TO_PIN_ERROR )`, excluded ones too), while kicad-cli reads only the
+/// warning's slot from the project. Written back as `std::setw( 4 )` writes it (4 spaces, keys in order, as `nlohmann::json`'s map keeps them).
+pub fn drop_pin_to_pin_errors_json(text: &str) -> String {
+    let Ok(mut report) = serde_json::from_str::<Value>(text) else { return text.to_string() };
+    let Some(sheets) = report.get_mut("sheets").and_then(Value::as_array_mut) else { return text.to_string() };
+    for sheet in sheets {
+        if let Some(vs) = sheet.get_mut("violations").and_then(Value::as_array_mut) {
+            vs.retain(|v| !(v["type"] == "pin_to_pin" && v["severity"] == "error"));
+        }
+    }
+    let Ok(pretty) = serde_json::to_string_pretty(&report) else { return text.to_string() };
+    // two spaces a level as serde_json writes them, four as KiCad does (a string's own line breaks are escaped, so every leading space is indentation)
+    let mut out = String::with_capacity(pretty.len() * 2);
+    for line in pretty.lines() {
+        let body = line.trim_start_matches(' ');
+        out.push_str(&" ".repeat((line.len() - body.len()) * 2));
+        out.push_str(body);
+        out.push('\n');
+    }
+    out
+}
+
+/// The text report's form of [`drop_pin_to_pin_errors_json`] (`ERC_REPORT::GetTextReport`): each marker is a `[<key>]: <message>` line and its indented lines
+/// (`RC_ITEM::ShowReport`: the rule and the severity, `error` or `error (excluded)`, then the items and the comment); a pin-to-pin error's block goes and the
+/// closing ` ** ERC messages: %d  Errors %d  Warnings %d` counts it no more (it counted as an error, excluded or not: `settings.GetSeverity( code )`).
+pub fn drop_pin_to_pin_errors_text(text: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(text.len());
+    let mut dropped = 0usize;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let mut end = i + 1;
+        if line.starts_with('[') {
+            while end < lines.len() && lines[end].starts_with("    ") {
+                end += 1;
+            }
+            let severity = lines.get(i + 1).map(|l| l.trim_end()).unwrap_or("");
+            if line.starts_with("[pin_to_pin]:") && (severity.ends_with("; error") || severity.ends_with("; error (excluded)")) {
+                dropped += 1;
+                i = end;
+                continue;
+            }
+        }
+        if dropped > 0 && line.starts_with(" ** ERC messages:") {
+            out.push_str(&recount(line, dropped));
+        } else {
+            for l in &lines[i..end] {
+                out.push_str(l);
+            }
+        }
+        i = end;
+    }
+    out
+}
+
+/// ` ** ERC messages: <total>  Errors <errors>  Warnings <warnings>` with `dropped` errors fewer.
+fn recount(line: &str, dropped: usize) -> String {
+    let nums: Vec<usize> = line.split(|c: char| !c.is_ascii_digit()).filter(|t| !t.is_empty()).filter_map(|t| t.parse().ok()).collect();
+    match nums.as_slice() {
+        [total, errors, warnings] => format!(" ** ERC messages: {}  Errors {}  Warnings {}\n", total.saturating_sub(dropped), errors.saturating_sub(dropped), warnings),
+        _ => line.to_string(),
+    }
 }
 
 /// The DRC report file of a dialog's "Save..." (`DRC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli pcb drc` on the derived board, with the dialog's own
@@ -2637,6 +2716,30 @@ fi"#;
             json!({ "error_type": "ERCET_PIN_NOT_CONNECTED", "at_nm": [115_570_000, 110_490_000], "items": ["693a38f5-591c-4c06-9786-e8973d13af99"], "sheet": ["r"], "main_sheet": ["r"] })
         );
         assert_eq!(j["violations"][0]["sheet"], "/r");
+    }
+
+    /// UI-LEFT-2 BB2: with the pin-to-pin errors ignored, Save... writes what KiCad's dialog holds -- no pin-to-pin error, excluded or not, and the counts
+    /// without them -- while the warnings and every other marker stay as kicad-cli wrote them.
+    #[test]
+    fn a_saved_erc_report_leaves_out_the_ignored_pin_to_pin_errors() {
+        let text = "ERC report (2026-11-12T10:00:00+0000, Encoding UTF8)\nReport includes: Errors, Warnings, Exclusions\n\n***** Sheet /\n\
+[pin_to_pin]: Output pin connected to Output pin\n    ; error\n    @(10.0000 mm, 20.0000 mm): Symbol U1 Pin 1\n    @(30.0000 mm, 20.0000 mm): Symbol U2 Pin 1\n\
+[pin_to_pin]: Input pin connected to Unspecified pin\n    ; warning\n    @(10.0000 mm, 25.0000 mm): Symbol U1 Pin 2\n\
+[pin_to_pin]: Output pin connected to Power output pin\n    ; error (excluded)\n    @(1.0000 mm, 2.0000 mm): Symbol U3 Pin 1\n    on purpose\n\
+[pin_not_connected]: Pin not connected\n    ; error\n    @(5.0000 mm, 5.0000 mm): Symbol U4 Pin 3\n\
+\n ** ERC messages: 4  Errors 3  Warnings 1\n\n ** Ignored checks:\n    - None\n";
+        let kept = drop_pin_to_pin_errors_text(text);
+        assert!(!kept.contains("Output pin connected to Output pin") && !kept.contains("Power output pin") && !kept.contains("on purpose"), "{kept}");
+        assert!(kept.contains("[pin_to_pin]: Input pin connected to Unspecified pin\n    ; warning\n"), "the warning stays: {kept}");
+        assert!(kept.contains("[pin_not_connected]: Pin not connected\n    ; error\n    @(5.0000 mm, 5.0000 mm): Symbol U4 Pin 3\n"));
+        assert!(kept.contains("\n ** ERC messages: 2  Errors 1  Warnings 1\n"), "{kept}");
+        assert!(kept.starts_with("ERC report (") && kept.ends_with(" ** Ignored checks:\n    - None\n"));
+        assert_eq!(drop_pin_to_pin_errors_text("no markers\n ** ERC messages: 0  Errors 0  Warnings 0\n"), "no markers\n ** ERC messages: 0  Errors 0  Warnings 0\n", "nothing dropped, nothing changed");
+
+        let json = "{\n    \"sheets\": [\n        {\n            \"path\": \"/\",\n            \"violations\": [\n                {\n                    \"severity\": \"error\",\n                    \"type\": \"pin_to_pin\"\n                },\n                {\n                    \"severity\": \"warning\",\n                    \"type\": \"pin_to_pin\"\n                }\n            ]\n        }\n    ]\n}\n";
+        let kept: Value = serde_json::from_str(&drop_pin_to_pin_errors_json(json)).unwrap();
+        assert_eq!(kept["sheets"][0]["violations"], json!([{ "severity": "warning", "type": "pin_to_pin" }]));
+        assert!(drop_pin_to_pin_errors_json(json).contains("\n            \"violations\": [\n"), "four spaces a level, as KiCad writes it");
     }
 
     #[test]
