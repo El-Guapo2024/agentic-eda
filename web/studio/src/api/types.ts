@@ -3062,12 +3062,24 @@ export interface LibPin {
 /** eeschema's FILL_T. `color`/the hatch modes are rare in practice (most real symbols use none/outline/background) -- painter.ts treats any hatch mode as `outline` rather than leaving it blank, since real KiCad never leaves a filled-looking shape unfilled. */
 export type LibFill = "none" | "outline" | "background" | "color" | "hatch" | "reverse_hatch" | "cross_hatch";
 
+/**
+ * What a library shape has beyond its geometry (`LibConnectivity::shape_looks`; UI-LEFT-2 YY2, PARITY-sch §87): the line style (`(stroke (type ..))`, absent is
+ * `default`), the border and fill colours (absent is `COLOR4D::UNSPECIFIED`), a hatch of a `color` fill, a rectangle's corner radius. Absent from a backend built before it.
+ */
+export interface LibShapeLooks {
+  line_style?: import("./schEditTypes").SchLineStyle;
+  stroke_color?: import("./schEditTypes").SchColor;
+  fill_color?: import("./schEditTypes").SchColor;
+  hatch?: "hatch" | "reverse_hatch" | "cross_hatch";
+  corner_radius_mm?: Mm;
+}
+
 /** One graphic item on a library symbol, local coordinate space (mm, library Y-up), `unit`/`body_style`: 0 = shared by every unit/style -- KiCad's SHAPE_T-derived library graphics (RECTANGLE/POLY/CIRCLE/ARC) plus SCH_TEXT. */
 export type LibGraphic =
-  | { kind: "rectangle"; start: [Mm, Mm]; end: [Mm, Mm]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number }
-  | { kind: "polyline"; pts: [Mm, Mm][]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number }
-  | { kind: "circle"; center: [Mm, Mm]; radius: Mm; stroke_width: Mm; fill: LibFill; unit: number; body_style: number }
-  | { kind: "arc"; start: [Mm, Mm]; mid: [Mm, Mm]; end: [Mm, Mm]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number }
+  | ({ kind: "rectangle"; start: [Mm, Mm]; end: [Mm, Mm]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number } & LibShapeLooks)
+  | ({ kind: "polyline"; pts: [Mm, Mm][]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number } & LibShapeLooks)
+  | ({ kind: "circle"; center: [Mm, Mm]; radius: Mm; stroke_width: Mm; fill: LibFill; unit: number; body_style: number } & LibShapeLooks)
+  | ({ kind: "arc"; start: [Mm, Mm]; mid: [Mm, Mm]; end: [Mm, Mm]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number } & LibShapeLooks)
   | { kind: "text"; content: string; at: [Mm, Mm]; angle_deg: Degrees; size_mm: Mm; unit: number; body_style: number }
   /**
    * The text of a library text box (`SCH_TEXTBOX`, `(text_box ..)`): its border and fill are a `rectangle` of their own. `start`/`end` are two opposite corners, `angle_deg` 0 or 90 (the text runs up the

@@ -164,6 +164,9 @@ struct Driver {
     /// The net name this driver gives (`SCH_CONNECTION::Name()`, `m_cached_name_with_path`): [`Self::name`] with the path of its sheet in front, but for a
     /// global label or a global power pin (`recacheName`'s `prepend_path`).
     full: String,
+    /// `CLAIM::source`'s item: the uuid the derived file gives the claiming label or power pin ([`Naming::anchor_uuid`]), the last tie-break of `CLAIM_LESS`;
+    /// `None` when no uuids are given.
+    source: Option<String>,
 }
 
 impl Driver {
@@ -173,7 +176,7 @@ impl Driver {
         let name = escape_net_name(&name);
         let full = if prio >= GLOBAL_POWER_PIN || name.is_empty() { name.clone() } else { format!("{sheet_path}/{name}") };
         let depth = if prio >= GLOBAL_POWER_PIN || prio == PIN { 0 } else { depth };
-        Driver { prio, name, depth, power_parent: false, output: false, full }
+        Driver { prio, name, depth, power_parent: false, output: false, full, source: None }
     }
 }
 
@@ -194,6 +197,8 @@ struct Group {
     global_names: Vec<String>,
     /// A no-connect flag is here.
     no_connect: bool,
+    /// `ISLAND::anchor`: the smallest uuid the derived file gives an item of this island ([`Naming::anchor_uuid`]); `None` when no uuids are given.
+    anchor: Option<String>,
 }
 
 /// The screen sheet `sh` of screen `si` shows: by placement path when the screens have paths, else by file.
@@ -271,6 +276,8 @@ fn driver_order(a: &Driver, b: &Driver) -> std::cmp::Ordering {
         .then_with(|| b.output.cmp(&a.output))
         .then_with(|| a.name.contains("-Pad").cmp(&b.name.contains("-Pad")))
         .then_with(|| a.full.cmp(&b.full))
+        // `keys.Less( aRight.source, aLeft.source )`: of two equal claims the smaller source item is the greater claim
+        .then_with(|| a.source.cmp(&b.source))
 }
 
 /// How the tracer names a net that no label, power symbol or sheet pin names.
@@ -320,6 +327,32 @@ pub struct Naming<'a> {
     /// duplicate pin numbers are jumpers (`conn_facts.cpp`: `jumperedWith`, `joinApart`; `BuildScreenIslands`: "Pins merged by number are stacked or jumpered,
     /// so each touches the others wherever they sit"). A key is looked for on each screen.
     pub jumpered: Option<&'a [Vec<String>]>,
+    /// The uuid the derived schematic gives an item of a screen (`eda_kicad::sch_anchor_uuid`), given the screen's file (`""` for the root), its placement's
+    /// path and the item. With it, which of two nets of one name keeps the name is KiCad's choice (`conn_publish.cpp::AssignNames`' `NODE_LESS`: the record
+    /// of the sheet instance nearest the root, then of the smallest island anchor, the smallest item uuid); without it the net nearest the root, then by
+    /// its first pin.
+    pub anchor_uuid: Option<&'a dyn Fn(&str, &[String], &AnchorItem) -> Option<String>>,
+}
+
+/// An item of a screen that is a member of a connectivity island (KiCad 25ec2335 `conn_facts.cpp`: an `ITEM_FACT` with ports, a pin of a symbol, a sheet pin),
+/// by what the derived file mints its uuid from; [`AnchorItem::Sheet`] is a sheet of an instance path (`KIID_PATH`).
+pub enum AnchorItem<'x> {
+    /// Segment `seg` of the wire (or bus) that is `index`-th of the screen's wires ordered by their points.
+    WireSegment { bus: bool, index: usize, seg: usize },
+    /// A label of this text at this place.
+    Label { text: &'x str, at: Point },
+    /// The pin of the power symbol `id`.
+    PowerPin { id: &'x str },
+    /// A symbol pin, by its key in [`ScreenIn::pins`].
+    Pin { key: &'x str },
+    NoConnect { at: Point },
+    /// An explicit junction where no derived one is written.
+    Junction { at: Point },
+    /// A junction the writer derives where three wire ends of one net meet (`geometry::wire_junction_points`), on a bus or not.
+    DerivedJunction { at: Point, bus: bool },
+    SheetPin { sheet: &'x eda_model::ir::SheetInstance, pin: &'x eda_model::ir::SheetPin },
+    BusEntry { entry: &'x eda_model::ir::BusEntry },
+    Sheet { sheet: &'x eda_model::ir::SheetInstance },
 }
 
 impl Naming<'_> {
@@ -500,6 +533,12 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             }
         }
         let shown = |path: &[String], text: &str| -> String { naming.label_text.map(|f| f(path, text)).unwrap_or_else(|| text.to_string()) };
+        let uuid_of = |item: AnchorItem| naming.anchor_uuid.and_then(|f| f(&screen.file, &screen.path, &item));
+        for (pin_ref, _) in screen.pins.iter().filter(|(k, _)| naming.power_pins.is_some_and(|m| m.contains_key(k.as_str()) || m.contains_key(base_pin(k)))) {
+            if let Some(d) = pin_gid.get(pin_ref.as_str()).and_then(|&g| groups[g].drivers.iter_mut().rev().find(|d| d.prio == GLOBAL_POWER_PIN && d.source.is_none())) {
+                d.source = uuid_of(AnchorItem::Pin { key: pin_ref });
+            }
+        }
         for (l, &b) in sch.labels.iter().zip(&label_bus) {
             let g = &mut groups[if b { bus_at[&l.at] } else { at[&l.at] }];
             let name = shown(&screen.path, &l.net);
@@ -508,7 +547,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 LabelKind::Hierarchical { .. } => (HIER_LABEL, 1),
                 LabelKind::Global { .. } => (GLOBAL, 2),
             };
-            g.drivers.push(Driver::new(prio, name.clone(), depth[si], &spath[si]));
+            g.drivers.push(Driver { source: uuid_of(AnchorItem::Label { text: &l.net, at: l.at }), ..Driver::new(prio, name.clone(), depth[si], &spath[si]) });
             // `BuildIslandRecord`'s name edges: every label kind is a name on its sheet (`SCOPE::SHEET`), a global one across the schematic too
             // (`SCOPE::GLOBAL`), a hierarchical one at its sheet's port (`SCOPE::PORT`)
             g.local_names.push(name.clone());
@@ -529,11 +568,11 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             let g = &mut groups[at[&ps.at]];
             // a local power symbol (`LOCAL_POWER_PIN`): a `SCOPE::SHEET` name edge only, its net named with the sheet's path (r2 D-E1's note, QA issue22938)
             if sch.extras.power_symbol_is_local(&ps.id, &ps.lib_id, naming.local_power.and_then(|f| f(&ps.lib_id))) {
-                g.drivers.push(Driver::new(LOCAL_POWER_PIN, name.clone(), depth[si], &spath[si]));
+                g.drivers.push(Driver { source: uuid_of(AnchorItem::PowerPin { id: &ps.id }), ..Driver::new(LOCAL_POWER_PIN, name.clone(), depth[si], &spath[si]) });
                 g.local_names.push(name);
                 continue;
             }
-            g.drivers.push(Driver { power_parent: true, ..Driver::new(GLOBAL_POWER_PIN, name.clone(), depth[si], &spath[si]) });
+            g.drivers.push(Driver { power_parent: true, source: uuid_of(AnchorItem::PowerPin { id: &ps.id }), ..Driver::new(GLOBAL_POWER_PIN, name.clone(), depth[si], &spath[si]) });
             g.local_names.push(name.clone());
             g.global_names.push(name);
         }
@@ -549,6 +588,64 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         let mut per_wire: Vec<Option<usize>> = Vec::with_capacity(sch.wires.len());
         for w in &sch.wires {
             per_wire.push(w.pts.first().map(|p| if w.bus { bus_at[p] } else { at[p] }));
+        }
+        // `ISLAND::anchor` (KiCad 25ec2335 `conn_islands.cpp::BuildScreenIslands`): the smallest uuid of the island's items -- its wire and bus segments,
+        // labels, pins, power pins, junctions, no-connect flags, sheet pins and bus entries -- as the derived file gives them
+        if naming.anchor_uuid.is_some() {
+            let note = |groups: &mut Vec<Group>, g: usize, u: Option<String>| {
+                if let Some(u) = u {
+                    if groups[g].anchor.as_ref().is_none_or(|a| u < *a) {
+                        groups[g].anchor = Some(u);
+                    }
+                }
+            };
+            // the writer's order of the wires: by their points (a stable sort of the screen's list)
+            let mut order: Vec<usize> = (0..sch.wires.len()).collect();
+            order.sort_by(|&a, &b| sch.wires[a].pts.cmp(&sch.wires[b].pts));
+            for (index, &wi) in order.iter().enumerate() {
+                let w = &sch.wires[wi];
+                if let Some(g) = per_wire[wi] {
+                    for seg in 0..w.pts.len().saturating_sub(1) {
+                        note(&mut groups, g, uuid_of(AnchorItem::WireSegment { bus: w.bus, index, seg }));
+                    }
+                }
+            }
+            for (l, &b) in sch.labels.iter().zip(&label_bus) {
+                note(&mut groups, if b { bus_at[&l.at] } else { at[&l.at] }, uuid_of(AnchorItem::Label { text: &l.net, at: l.at }));
+            }
+            for ps in &sch.power_symbols {
+                note(&mut groups, at[&ps.at], uuid_of(AnchorItem::PowerPin { id: &ps.id }));
+            }
+            for (key, &g) in &pin_gid {
+                note(&mut groups, g, uuid_of(AnchorItem::Pin { key }));
+            }
+            for nc in &sch.no_connects {
+                note(&mut groups, at[&nc.at], uuid_of(AnchorItem::NoConnect { at: nc.at }));
+            }
+            // the junctions the writer derives (three wire ends of one net at a point), by group as the writer's are by net, and the explicit ones elsewhere
+            let by_group: Vec<eda_model::ir::Wire> = sch.wires.iter().zip(&per_wire).map(|(w, g)| eda_model::ir::Wire { net: g.map(|g| g.to_string()).unwrap_or_default(), ..w.clone() }).collect();
+            let derived = crate::geometry::wire_junction_points(&by_group);
+            for (g, pt) in &derived {
+                if let Ok(g) = g.parse::<usize>() {
+                    let bus = groups[g].bus;
+                    note(&mut groups, g, uuid_of(AnchorItem::DerivedJunction { at: *pt, bus }));
+                }
+            }
+            for j in sch.junctions.iter().filter(|j| !derived.iter().any(|(_, pt)| *pt == j.at)) {
+                note(&mut groups, at[&j.at], uuid_of(AnchorItem::Junction { at: j.at }));
+            }
+            for (sh, flags) in sch.sheets.iter().zip(&pin_bus) {
+                for (p, &b) in sh.pins.iter().zip(flags) {
+                    note(&mut groups, if b { bus_at[&p.at] } else { at[&p.at] }, uuid_of(AnchorItem::SheetPin { sheet: sh, pin: p }));
+                }
+            }
+            for e in &sch.bus_entries {
+                let ends = [e.at, Point { x: e.at.x + e.size.x, y: e.at.y + e.size.y }];
+                let wire_layer = |p: Point| at.get(&p).copied().or_else(|| sch.wires.iter().zip(&per_wire).find(|(w, _)| !w.bus && w.pts.windows(2).any(|seg| on_interior(p, seg[0], seg[1]))).and_then(|(_, g)| *g));
+                if let Some(g) = ends.iter().filter(|&&p| !touches(p, true)).find_map(|&p| wire_layer(p)) {
+                    note(&mut groups, g, uuid_of(AnchorItem::BusEntry { entry: e }));
+                }
+            }
         }
         group_at.push(at);
         bus_group_at.push(bus_at);
@@ -731,56 +828,86 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         finals.push(Final { gids, pins, name: best.map(|d| d.full.clone()), driven: best.is_some(), screen, no_connect, best: best.map(|d| (*d).clone()) });
     }
 
-    // Two nets that share a name (two sheet symbols' pins `X` with nothing inside naming them) are told apart as KiCad 25ec2335 does
-    // (`conn_publish.cpp::AssignNames`): one keeps the name, the others take `_1`, `_2`, ... (`nextSuffix.try_emplace( .., 1 )`, `Suffix`), a name
-    // already taken skipped. The holder of the bare name is `preferred`'s: a net a strong claim names (`Strong()`: a hierarchical, local or global label,
-    // a power pin, a bus member) over one a sheet pin names, and of two strong ones the greater claim (`CLAIM_LESS`) -- the net the user labelled keeps
-    // it (r3 A3-M3). **Differs**: of two alike after that, KiCad takes the node key (item uuids); here the net nearest the root, then by its name and its
-    // first pin.
-    let strong = |f: &Final| f.best.as_ref().is_some_and(|d| d.prio >= HIER_LABEL);
-    // (a total order: the name first, which is all the holder is chosen among)
-    finals.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| strong(b).cmp(&strong(a)))
-            .then_with(|| match (&a.best, &b.best) {
-                (Some(x), Some(y)) if strong(a) && strong(b) => driver_order(x, y),
-                _ => std::cmp::Ordering::Equal,
-            })
-            .then_with(|| (depth[a.screen], a.pins.first().cloned()).cmp(&(depth[b.screen], b.pins.first().cloned())))
-    });
-    let mut used: BTreeSet<String> = BTreeSet::new();
-    for f in finals.iter_mut() {
-        // a bus, or a member of one no net is on, keeps the name of its driver and takes it from no net
-        if f.pins.is_empty() && f.gids.iter().all(|&g| groups[g].bus || groups[g].member) {
-            continue;
-        }
-        if let Some(n) = f.name.clone() {
-            let mut unique = n.clone();
-            let mut k = 0;
-            while used.contains(&unique) {
-                k += 1;
-                unique = format!("{n}_{k}");
-            }
-            used.insert(unique.clone());
-            f.name = Some(unique);
-        }
-    }
-    // The undriven nets, the larger ones first: what KiCad calls them (`SCH_PIN::GetDefaultNetName` of the best pin). A group with no pin (a
-    // stray wire, a lone label) has no net and stays unnamed.
+    // The undriven nets are named after their best pin as KiCad names it (`SCH_PIN::GetDefaultNetName` of the best pin, `SignalBaseName`); a group with no
+    // pin (a stray wire, a lone label) has no net and stays unnamed.
     let facts = PinFacts { names: naming.pin_names, units: naming.pin_units, nc: naming.nc_pins, common: naming.common_pins, quiet: naming.quiet_pins, alternates: naming.pin_alternate_names };
     let shown_count = shown_name_counts(&facts);
-    let mut order: Vec<usize> = (0..finals.len()).filter(|&i| finals[i].name.is_none() && !finals[i].pins.is_empty()).collect();
-    order.sort_by(|&a, &b| finals[b].pins.len().cmp(&finals[a].pins.len()).then_with(|| finals[a].pins.first().cmp(&finals[b].pins.first())));
-    for i in order {
-        let base = kicad_net_name(&finals[i].pins, &facts, &shown_count, finals[i].no_connect);
-        let mut name = base.clone();
-        let mut k = 0;
-        while used.contains(&name) {
-            k += 1;
-            name = format!("{base}_{k}");
+    for f in finals.iter_mut().filter(|f| f.name.is_none() && !f.pins.is_empty()) {
+        f.name = Some(kicad_net_name(&f.pins, &facts, &shown_count, f.no_connect));
+    }
+
+    // Two nets of one name are told apart as KiCad 25ec2335 does (`conn_publish.cpp::AssignNames`, a schematic as it is read: no predecessor). The nets of a
+    // base name are a bucket; its holder keeps the name (`preferred`: a net a strong claim names -- a hierarchical, local or global label, a power pin, a bus
+    // member -- over one a sheet pin or a pin names; of two strong ones the greater claim, `CLAIM_LESS`; else `NODE_LESS`). Every holder's name is taken
+    // first, then the other nets, in `NODE_LESS` order over all buckets, take the base name with the first `_<n>` from 1 that no net has
+    // (`nextSuffix.try_emplace( baseName, 1 )`, `Suffix`). `NODE_LESS` puts first the net whose first record is (`RECORD_KEY`, `SESSION_KEYS::Less`): of the
+    // sheet instance nearest the root (`KIID_PATH::operator<`: the shorter path, then its sheets' uuids), then of the smallest island anchor (the smallest
+    // item uuid of the island, `BuildScreenIslands`), the uuids the derived file gives ([`Naming::anchor_uuid`]); without them, the net nearest the root,
+    // then by its first pin. A bus keeps the name of its driver and holds it (`occupied`).
+    let strong = |f: &Final| f.best.as_ref().is_some_and(|d| d.prio >= HIER_LABEL);
+    // each screen's instance path as `KIID_PATH` compares it: its length, then its sheets' uuids from the root down
+    let path_key: Vec<(usize, Vec<String>)> = (0..screens.len())
+        .map(|si| {
+            let path = &screens[si].path;
+            let uuids = (0..path.len())
+                .map(|k| {
+                    let parent = screens.iter().find(|s| s.path[..] == path[..k]);
+                    let sheet = parent.and_then(|s| s.sch.sheets.iter().find(|sh| sh.id == path[k]));
+                    sheet.zip(parent).and_then(|(sh, s)| naming.anchor_uuid.and_then(|f| f(&s.file, &s.path, &AnchorItem::Sheet { sheet: sh }))).unwrap_or_default()
+                })
+                .collect();
+            (path.len(), uuids)
+        })
+        .collect();
+    let node_key: Vec<Option<(usize, Vec<String>, String)>> = finals
+        .iter()
+        .map(|f| f.gids.iter().filter_map(|&g| groups[g].anchor.as_ref().map(|a| (path_key[groups[g].screen].0, path_key[groups[g].screen].1.clone(), a.clone()))).min())
+        .collect();
+    let node_less = |a: usize, b: usize| -> std::cmp::Ordering {
+        match (&node_key[a], &node_key[b]) {
+            (Some(x), Some(y)) => x.cmp(y),
+            _ => (depth[finals[a].screen], finals[a].pins.first()).cmp(&(depth[finals[b].screen], finals[b].pins.first())),
         }
-        used.insert(name.clone());
+    };
+    let mut occupied: BTreeSet<String> = BTreeSet::new();
+    let mut buckets: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, f) in finals.iter().enumerate() {
+        let Some(name) = &f.name else { continue };
+        if f.pins.is_empty() && f.gids.iter().all(|&g| groups[g].bus || groups[g].member) {
+            // a bus is a component of its own kind, named before the nets (`AssignNames( KIND::BUNDLE, .. )`); a member of one no net is on is no net
+            if f.gids.iter().all(|&g| groups[g].bus) {
+                occupied.insert(name.clone());
+            }
+            continue;
+        }
+        buckets.entry(name.clone()).or_default().push(i);
+    }
+    let mut remaining: Vec<usize> = Vec::new();
+    for members in buckets.values() {
+        let preferred = |a: usize, b: usize| -> std::cmp::Ordering {
+            let (fa, fb) = (&finals[a], &finals[b]);
+            strong(fb)
+                .cmp(&strong(fa))
+                .then_with(|| match (&fa.best, &fb.best) {
+                    (Some(x), Some(y)) if strong(fa) => driver_order(x, y),
+                    _ => std::cmp::Ordering::Equal,
+                })
+                .then_with(|| node_less(a, b))
+        };
+        let holder = *members.iter().min_by(|&&a, &&b| preferred(a, b)).unwrap();
+        occupied.insert(finals[holder].name.clone().unwrap_or_default());
+        remaining.extend(members.iter().copied().filter(|&m| m != holder));
+    }
+    remaining.sort_by(|&a, &b| node_less(a, b));
+    let mut next_suffix: BTreeMap<String, u32> = BTreeMap::new();
+    for i in remaining {
+        let base = finals[i].name.clone().unwrap_or_default();
+        let k = next_suffix.entry(base.clone()).or_insert(1);
+        while occupied.contains(&format!("{base}_{k}")) {
+            *k += 1;
+        }
+        let name = format!("{base}_{k}");
+        occupied.insert(name.clone());
         finals[i].name = Some(name);
     }
 
@@ -818,21 +945,31 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         }
     }
     let mut nets: Vec<TracedNet> = finals.into_iter().filter(|f| !f.pins.is_empty()).map(|f| TracedNet { name: f.name.unwrap_or_default(), pins: f.pins, driven: f.driven }).collect();
-    // The copies of a pin common to every unit are `REF.PIN` again. KiCad's netlist lists the pin on the net of each copy; the net list here holds a pin
-    // once, so a pin whose copies are on several nets stays on the one with the most pins (the copy that is wired), the others lose it (r3 A3-H1).
+    // The copies of a pin common to every unit, and the further pins of a number used twice on one symbol, are `REF.PIN` again (r3 A3-H1, r4 A4-H3). KiCad's
+    // netlist lists the pin on the net of each copy (`NETLIST_EXPORTER_XML::makeListOfNets`, a pin once per net: `remove_duplicates`), and the board's pad of
+    // that number takes one of them (`BOARD_NETLIST_UPDATER::updateComponentPadConnections`: `COMPONENT::GetNet( pad->GetNumber() )`): of its nets in the
+    // netlist's order (`StrNumCmp` of the names), the first that is not a name KiCad made up (`IsAutoGeneratedNetName`: `Net-(..`, `unconnected-(..`), else
+    // the first. The net list here is the board's (`design.nets`, by `REF.PIN`), so the pin is on that net and the others lose it; kicad-cli's netlist of
+    // the derived file lists it on each.
     if nets.iter().any(|n| n.pins.iter().any(|p| p.contains(PIN_COPY))) {
-        let mut best: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        let auto = |name: &str| name.starts_with("unconnected-(") || name.starts_with("Net-(");
+        let mut best: BTreeMap<String, usize> = BTreeMap::new();
         for (i, n) in nets.iter().enumerate() {
-            let size = n.pins.iter().map(|p| base_pin(p)).collect::<BTreeSet<_>>().len();
             for p in &n.pins {
-                let e = best.entry(base_pin(p).to_string()).or_insert((i, size));
-                if size > e.1 {
-                    *e = (i, size);
+                let e = best.entry(base_pin(p).to_string()).or_insert(i);
+                let held = &nets[*e].name;
+                let better = match (auto(held), auto(&n.name)) {
+                    (true, false) => true,
+                    (false, true) => false,
+                    _ => eda_model::reannotate::str_num_cmp(&n.name, held, false) == std::cmp::Ordering::Less,
+                };
+                if better {
+                    *e = i;
                 }
             }
         }
         for (i, n) in nets.iter_mut().enumerate() {
-            let pins: BTreeSet<String> = n.pins.iter().map(|p| base_pin(p).to_string()).filter(|p| best.get(p).is_some_and(|b| b.0 == i)).collect();
+            let pins: BTreeSet<String> = n.pins.iter().map(|p| base_pin(p).to_string()).filter(|p| best.get(p).is_some_and(|b| *b == i)).collect();
             n.pins = pins.into_iter().collect();
         }
         nets.retain(|n| !n.pins.is_empty());

@@ -172,8 +172,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   the Net Navigator lists labels and pins under their traced nets (C6-M1); Unfold from Bus leans the entry toward the cursor and puts the label at the first
   click (C6-M2); Ctrl+E takes the hovered symbol and refuses a broken link (C6-M3); Compare Symbol with Library is `LIB_SYMBOL::Compare` (C6-M4); Back / Forward
   clean their history (C6-L1); the Hierarchy Navigator's names, folding and Expand / Collapse All (C6-L2); the Symbol Checker's local power note (C6-L3).
-  **Left**: Ctrl+E edits the shared library entry, not the placed symbol's own copy (one library symbol per id, D5-M1); which of two equal default net names
-  takes `_1` (KiCad: the island's smallest item KIID, not kept); Unfold from Bus's bus-member submenus and label ghost; the Hierarchy Navigator's Edit Page
+  **Left**: Ctrl+E edits the shared library entry, not the placed symbol's own copy (one library symbol per id, D5-M1); ~~which of two equal default net names
+  takes `_1`~~ (done 2026-11-12, `PARITY-sch.md` section 87); Unfold from Bus's bus-member submenus and label ghost; the Hierarchy Navigator's Edit Page
   Number, Rename and net highlight; Compare's line style, corner radius, keywords and footprint filters.
 - Round 7 (2026-10-28, `task-r7-schematic`, `PARITY-sch.md` section 52): a schematic-only import reads its `.kicad_pro` as KiCad does -- the net classes
   (H1), every top-level sheet of a KiCad 10 project (H2, on a root sheet), the unit notation, which names the units everywhere (H5, `U1.1`), the text
@@ -237,10 +237,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`eda_model::annotate::RefDesTracker`; the project's `used_designators` read and written in 25ec2335's form, `SchExtras::used_designators`): Annotate, the placement
   reference, paste and Import Sheet skip a number given before when reuse is off, and record what they give; Repeat (Insert) numbers a symbol by the server's
   `annotate()` over the hierarchy; "Place all units" steps past a unit placed on any sheet; Symbol Properties' pin alternates synced to the reference's units on
-  every sheet (`SyncOtherUnits`); a reset that hands a reference to another path moves the footprints with the placements (verified, test). **Left**: which of
-  two equal net names takes `_1` (KiCad: the island's smallest item KIID, `conn_publish.cpp::AssignNames` / `NODE_LESS`; the derived wire uuids are seeded with
-  the net name, so matching needs the writer's uuids reworked); a pin number used twice is one pin in `design.nets` (a model change: the net list keys a pin by
-  reference and number); ~~the tracker is undone with the command (KiCad's is not)~~ (done 2026-11-10, `task-v6-kicad-sch`, `PARITY-sch.md` section 82: it is kept
+  every sheet (`SyncOtherUnits`); a reset that hands a reference to another path moves the footprints with the placements (verified, test). ~~**Left**: which of
+  two equal net names takes `_1`; a pin number used twice is one pin in `design.nets`~~ (done 2026-11-12, `task-v8-sch`, `PARITY-sch.md` section 87: `AssignNames`'
+  holder and `NODE_LESS` order over the derived file's uuids, which no longer depend on the net name, kicad-cli's names on all 22 connectivity fixtures; a pin on two
+  nets stays on the net `COMPONENT::GetNet` gives its pad); ~~the tracker is undone with the command (KiCad's is not)~~ (done 2026-11-10, `task-v6-kicad-sch`, `PARITY-sch.md` section 82: it is kept
   through Undo, Redo and a cancelled carry, as KiCad's project tracker).
 - Done 2026-11-07 (`task-v3-schdlg`, UI-LEFT-2 SS13, SS14; `PARITY-sch.md` section 77): the Symbol Fields Table's Description column (the fifth mandatory field,
   the library's description until the symbol has its own), the BOM Name labels, Include and Group By with the Quantity and Item Number refusals, the grid's
@@ -255,8 +255,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   point editor; Edit Text & Graphics over fields, labels, wires, buses, junctions and sheet pins; Change / Update Symbols' field resets; Break and Repeat without
   `TrimWire` (r3 C3-L1, done), the clean-up after Swap and the Properties verbs (C3-M1, done), C3-L3; the no-connect toggle; Alt+S over every swappable kind;
   Unfold from Bus's submenus and label ghost (r6's leftover done); Find by a field's own visibility; Autoplace with swapped pins (the "Missing" line's item, done);
-  `${U1.1:FIELD}` in the project's notation both ways (r7's letter-form leftover, done) and `@{..}`'s full grammar. **Left**: which of two equal default net names
-  takes `_1` (the derived uuids are seeded with the net name); Copy / Paste of a user field's shown state and place; ~~Edit Text & Graphics over the whole
+  `${U1.1:FIELD}` in the project's notation both ways (r7's letter-form leftover, done) and `@{..}`'s full grammar. **Left**: ~~which of two equal default net names
+  takes `_1`~~ (done 2026-11-12, `PARITY-sch.md` section 87); Copy / Paste of a user field's shown state and place; ~~Edit Text & Graphics over the whole
   hierarchy, colours and fonts~~ (done 2026-11-07, `PARITY-sch.md` section 77); ~~the other arc draw modes and the other shapes' point editor~~ (done below).
 - Done 2026-11-07 (`task-v1-handles`, UI-LEFT-2 SS3, YY1, FF1, FF2; `PARITY-sch.md` section 70, PARITY-symedit "The point editor of every shape", `PARITY-fpedit.md` section 23):
   the point editor of every drawn shape (rectangles, circles, arcs, beziers, polygons, text boxes, rule areas) in the schematic and the Symbol Editor, with "Keep pins

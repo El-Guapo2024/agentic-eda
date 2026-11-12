@@ -1256,3 +1256,37 @@ fn align_moves_a_group_whole_by_its_offset() {
     s.extras.locked.push("grp_a".into());
     assert_eq!(run_err(s, SchMoveCmd::Align { moves: vec![AlignMove { id: "grp_a".into(), dx: mm(2.54), dy: Nm::ZERO }], grid: Nm::ZERO }), "ops_nothing_to_move", "a locked group does not move");
 }
+
+/// PARITY-sch §87 (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`: a placed symbol's fields are copies of the library symbol's): placing a symbol whose library
+/// field has a face and a colour gives the placed field that face and colour, as its own (`SchExtras::field_looks`), in the placing step.
+#[test]
+fn placing_a_symbol_copies_its_library_fields_face_and_colour() {
+    let mut lib = eda_model::symbol::LibSymbol {
+        lib_id: "test:LOOK".into(),
+        graphics: vec![],
+        pins: vec![],
+        power: false,
+        in_bom: true,
+        on_board: true,
+        datasheet: String::new(),
+        description: String::new(),
+        reference_prefix: "U".into(),
+        unit_count: 1,
+        pin_names_hidden: false,
+        pin_numbers_hidden: false,
+        pin_name_offset_mm: 0.508,
+        alternate: None,
+        connectivity: Default::default(),
+    };
+    let blue = eda_model::sch_extras::SchColor { r: 0, g: 0, b: 255, a: 255 };
+    lib.connectivity.field_looks.insert("Reference".into(), eda_model::lib_keep::KeptFieldLooks { font: Some("KiCad Font".into()), color: Some(blue), thickness_mm: None });
+    let m = ConstraintModel { symbols: vec![lib], ..Default::default() };
+    let mut design = empty_design();
+    design.schematic = Some(section());
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddSymbol { annotate: None, id: "U1".into(), lib_id: "test:LOOK".into(), at: p(mm(20.32), mm(25.4)), rot_millideg: 0, value: "LOOK".into(), footprint: String::new(), unit: 1 }).unwrap();
+    let out = b.design().schematic.clone().unwrap();
+    let look = out.extras.field_look("U1", "Reference").cloned().unwrap_or_default();
+    assert_eq!((look.font.as_deref(), look.color), (Some("KiCad Font"), Some(blue)));
+    assert!(out.extras.field_look("U1", "Value").is_none(), "a field the library gives no look keeps the default");
+}

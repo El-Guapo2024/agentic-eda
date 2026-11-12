@@ -232,6 +232,75 @@ pub fn sheet_uuid(s: &eda_model::ir::SheetInstance) -> String {
     }
 }
 
+/// The seed of the uuid the derived file gives an item of a screen that is a member of a connectivity island (`eda_engine::nets::AnchorItem`), minted with
+/// the screen's prefix ([`duid`]). Every one is a function of the drawing alone, never of a net's name, so the tracer can tell which island KiCad reads first
+/// ([`sch_anchor_uuid`]).
+pub(crate) fn anchor_seed(item: &eda_engine::nets::AnchorItem) -> String {
+    use eda_engine::nets::AnchorItem::*;
+    match item {
+        WireSegment { bus, index, seg } => format!("{}:{index}:{seg}", if *bus { "bus" } else { "wire" }),
+        Label { text, at } => format!("label:{text}:{}:{}", at.x, at.y),
+        PowerPin { id } => format!("pwrpin:{id}"),
+        Pin { .. } | SheetPin { .. } | Sheet { .. } => String::new(),
+        NoConnect { at } => format!("nc:{}:{}", at.x, at.y),
+        // a derived junction is written in place of an explicit one on its point, so the two share a seed; a bus's has its own
+        Junction { at } | DerivedJunction { at, bus: false } => format!("junction:{}:{}", at.x, at.y),
+        DerivedJunction { at, bus: true } => format!("junction:bus:{}:{}", at.x, at.y),
+        BusEntry { entry } => format!("bent:{}:{}", entry.at.x, entry.at.y),
+    }
+}
+
+/// The seed of the uuid of the `nth` pin (from 0) numbered `number` of the placed symbol `sym_id` (`(pin "1" (uuid ..))`).
+pub(crate) fn symbol_pin_seed(sym_id: &str, number: &str, nth: usize) -> String {
+    if nth == 0 {
+        format!("pin:{sym_id}:{number}")
+    } else {
+        format!("pin:{sym_id}:{number}:{nth}")
+    }
+}
+
+/// The pins the derived file writes for the placed symbol `sym` (`(pin "1" (uuid ..))`), in its order: each pin's number and which pin of that number it is
+/// among the part's pins (`nth`, from 0, the second seed of [`symbol_pin_seed`]). Only the symbol's own unit's pins and those common to every unit.
+pub fn sch_symbol_pin_seeds(sym: &SymbolInstance, model: &ConstraintModel) -> Vec<(String, usize)> {
+    let Some(part) = model.part(&sym.id) else { return Vec::new() };
+    let lib_id = sym_lib_id(sym);
+    let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
+    let mut out = Vec::new();
+    for (i, pin) in part.pins.iter().enumerate() {
+        let nth = part.pins[..i].iter().filter(|p| p.number == pin.number).count();
+        if resolved.as_ref().and_then(|s| s.nth_pin_by_number(&pin.number, nth)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit) {
+            out.push((pin.number.clone(), nth));
+        }
+    }
+    out
+}
+
+/// The uuid of the sheet pin `p` of `s` in the derived file: its own id when it is one, else minted from the sheet's uuid and the pin.
+fn sheet_pin_uuid(s: &eda_model::ir::SheetInstance, p: &eda_model::ir::SheetPin) -> String {
+    if looks_like_uuid(&p.id) {
+        p.id.clone()
+    } else {
+        duid(&format!("sheetpin:{}:{}:{}:{}", sheet_uuid(s), p.name, p.at.x, p.at.y))
+    }
+}
+
+/// The uuid the derived schematic gives `item` of the screen `file` (the `sheet_contents` key, `""` for the root): the KIID KiCad 25ec2335's connectivity
+/// reads to order islands (`conn_islands.cpp::BuildScreenIslands`: `island.anchor = island.items.front()`, the smallest item KIID) and the sheets of an
+/// instance path (`KIID_PATH`). `pin_seed` is a symbol pin's (sym id, number, nth) for [`eda_engine::nets::AnchorItem::Pin`], which the tracer keys by
+/// reference and does not know. PARITY-sch §87.
+pub fn sch_anchor_uuid(file: &str, item: &eda_engine::nets::AnchorItem, pin_seed: Option<(&str, &str, usize)>) -> Option<String> {
+    use eda_engine::nets::AnchorItem::*;
+    let prefix = if file.is_empty() { String::new() } else { format!("{file}|") };
+    let minted = |seed: String| duid_plain(&format!("{prefix}{seed}"));
+    match item {
+        Pin { .. } => pin_seed.map(|(id, number, nth)| minted(symbol_pin_seed(id, number, nth))),
+        Sheet { sheet } => Some(sheet_uuid(sheet)),
+        SheetPin { sheet, pin } => Some(if looks_like_uuid(&pin.id) { pin.id.clone() } else { minted(format!("sheetpin:{}:{}:{}:{}", sheet_uuid(sheet), pin.name, pin.at.x, pin.at.y)) }),
+        BusEntry { entry } if !entry.id.is_empty() => Some(entry.id.clone()),
+        _ => Some(minted(anchor_seed(item))),
+    }
+}
+
 fn looks_like_uuid(s: &str) -> bool {
     s.len() == 36 && s.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
 }
@@ -295,8 +364,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         return Err(errors);
     }
 
+    // by place only, not by net: a wire's uuid must not depend on the name the tracer gives its net, which KiCad's choice of the name's holder reads
+    // ([`sch_anchor_uuid`], PARITY-sch §87)
     let mut wires: Vec<&Wire> = sch.wires.iter().collect();
-    wires.sort_by(|a, b| (&a.net, &a.pts).cmp(&(&b.net, &b.pts)));
+    wires.sort_by(|a, b| a.pts.cmp(&b.pts));
 
     let mut labels: Vec<&NetLabel> = sch.labels.iter().collect();
     labels.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
@@ -555,7 +626,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             if !resolved.as_ref().and_then(|s| s.nth_pin_by_number(&pin.number, nth)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit) {
                 continue;
             }
-            let pin_uuid = if nth == 0 { duid_for(&format!("pin:{}:{}", sym.id, pin.number), &format!("{}.{}", sym.id, pin.number)) } else { duid_for(&format!("pin:{}:{}:{nth}", sym.id, pin.number), &format!("{}.{}#{nth}", sym.id, pin.number)) };
+            let seed = symbol_pin_seed(&sym.id, &pin.number, nth);
+            let pin_uuid = if nth == 0 { duid_for(&seed, &format!("{}.{}", sym.id, pin.number)) } else { duid_for(&seed, &format!("{}.{}#{nth}", sym.id, pin.number)) };
             // the alternate function the symbol picked for the pin (`SCH_IO_KICAD_SEXPR::saveSymbol`: `(alternate ..)` unless it is empty or the pin's own
             // name, r5 D5-H3)
             let alt = sch.extras.pin_alternate(&eda_model::ir::field_key(&sym.id, sym.unit), &pin.number).filter(|a| pin.name.as_deref() != Some(*a));
@@ -624,7 +696,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let (px, py) = (ps.at.x.mm(), ps.at.y.mm());
         write_property(&mut out, "Footprint", &props.footprint, px, py, true);
         write_property(&mut out, "Datasheet", &props.datasheet, px, py, true);
-        let pin_uuid = duid_for(&format!("pwrpin:{}", ps.id), &ps.id);
+        let pin_uuid = duid_for(&anchor_seed(&eda_engine::nets::AnchorItem::PowerPin { id: &ps.id }), &ps.id);
         writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
@@ -651,7 +723,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             let y1 = sch_mm(pair[0].y);
             let x2 = sch_mm(pair[1].x);
             let y2 = sch_mm(pair[1].y);
-            let uuid = duid_for(&format!("{tag}:{}:{}:{}", w.net, i, j), &w.id);
+            let uuid = duid_for(&anchor_seed(&eda_engine::nets::AnchorItem::WireSegment { bus: w.bus, index: i, seg: j }), &w.id);
             writeln!(out, "\t({tag}").unwrap();
             writeln!(out, "\t\t(pts (xy {x1} {y1}) (xy {x2} {y2}))").unwrap();
             writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(Nm::ZERO, sch.extras.strokes.get(&w.id))).unwrap();
@@ -671,7 +743,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let y = sch_mm(be.at.y);
         let dx = sch_mm(be.size.x);
         let dy = sch_mm(be.size.y);
-        let uuid = if be.id.is_empty() { duid(&format!("bent:{}:{}", be.at.x, be.at.y)) } else { be.id.clone() };
+        let uuid = if be.id.is_empty() { duid(&anchor_seed(&eda_engine::nets::AnchorItem::BusEntry { entry: be })) } else { be.id.clone() };
         note_item_uuid(&be.id, &uuid);
         writeln!(out, "\t(bus_entry (at {x} {y}) (size {dx} {dy})").unwrap();
         writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(Nm::ZERO, sch.extras.strokes.get(&be.id))).unwrap();
@@ -719,7 +791,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     for (net, pt) in &derived_junctions {
         let x = sch_mm(pt.x);
         let y = sch_mm(pt.y);
-        let uuid = duid(&format!("junction:{net}:{}:{}", pt.x, pt.y));
+        let bus = sch.wires.iter().any(|w| w.bus && w.net == *net);
+        let uuid = duid(&anchor_seed(&eda_engine::nets::AnchorItem::DerivedJunction { at: *pt, bus }));
         // an explicit junction on the same point is not written twice: the dot above is its dot, in the groups too
         for j in sch.junctions.iter().filter(|j| j.at == *pt) {
             note_item_uuid(&j.id, &uuid);
@@ -734,7 +807,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     for j in explicit {
         let x = sch_mm(j.at.x);
         let y = sch_mm(j.at.y);
-        let uuid = duid_for(&format!("junction:{}:{}", j.at.x, j.at.y), &j.id);
+        let uuid = duid_for(&anchor_seed(&eda_engine::nets::AnchorItem::Junction { at: j.at }), &j.id);
         writeln!(out, "\t(junction (at {x} {y}) {}", sch_extras_io::junction_attrs(sch.extras.junction_looks.get(&j.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&j.id) {
@@ -773,7 +846,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     for nc in &no_connects {
         let x = sch_mm(nc.at.x);
         let y = sch_mm(nc.at.y);
-        let uuid = duid_for(&format!("nc:{}:{}", nc.at.x, nc.at.y), &nc.id);
+        let uuid = duid_for(&anchor_seed(&eda_engine::nets::AnchorItem::NoConnect { at: nc.at }), &nc.id);
         let locked = if sch.extras.is_locked(&nc.id) { " (locked yes)" } else { "" };
         writeln!(out, "\t(no_connect (at {x} {y}) (uuid \"{uuid}\"){locked})").unwrap();
     }
@@ -782,7 +855,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     for l in &labels {
         let x = sch_mm(l.at.x);
         let y = sch_mm(l.at.y);
-        let uuid = duid_for(&format!("label:{}:{}:{}", l.net, l.at.x, l.at.y), &l.id);
+        let uuid = duid_for(&anchor_seed(&eda_engine::nets::AnchorItem::Label { text: &l.net, at: l.at }), &l.id);
         let (tag, shape) = match &l.kind {
             eda_model::ir::LabelKind::Local => ("label", None),
             eda_model::ir::LabelKind::Global { shape } => ("global_label", Some(*shape)),
@@ -930,7 +1003,7 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
     for p in &s.pins {
         let px = sch_mm(p.at.x);
         let py = sch_mm(p.at.y);
-        let pin_uuid = if looks_like_uuid(&p.id) { p.id.clone() } else { duid(&format!("sheetpin:{uuid}:{}:{}:{}", p.name, p.at.x, p.at.y)) };
+        let pin_uuid = sheet_pin_uuid(s, p);
         // The angle is the side of the sheet the pin sits on (`SCH_SHEET_PIN::SetSide`: 0 right, 90 top, 180 left, 270 bottom):
         // KiCad moves the pin onto that edge when it reads the file, so a pin on the left written as 0 would jump to the right.
         let angle = if p.at.x <= s.at.x {
@@ -1404,6 +1477,20 @@ fn fields_autoplaced_token(sch: &eda_model::ir::SchematicSection, key: &str) -> 
 }
 
 fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide: bool) {
+    write_property_looking(out, key, value, x, y, hide, None)
+}
+
+/// [`write_property`] of a library symbol's field in the schematic's cache with the face, pen and colour the library gives it (`EDA_TEXT::Format`: `(face ..)`,
+/// the size, `(thickness ..)`, the colour; [`eda_model::symbol::LibConnectivity::field_looks`], PARITY-sch §87).
+fn write_property_looking(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide: bool, look: Option<&eda_model::lib_keep::KeptFieldLooks>) {
+    if let Some(l) = look.filter(|l| !l.is_default()) {
+        let face = l.font.as_deref().map(|f| format!("(face {}) ", sexpr_str(f))).unwrap_or_default();
+        let pen = l.thickness_mm.map(|t| format!(" (thickness {})", fmt_mm_f(t))).unwrap_or_default();
+        let color = l.color.map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a))).unwrap_or_default();
+        let hide = if hide { " (hide yes)" } else { "" };
+        writeln!(out, "\t\t(property {} {} (at {x} {y} 0)\n\t\t\t(effects (font {face}(size 1.27 1.27){pen}{color}){hide})\n\t\t)", sexpr_str(key), sexpr_str(value)).unwrap();
+        return;
+    }
     if hide {
         writeln!(
             out,
@@ -1561,16 +1648,18 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
             writeln!(out, "\t\t\t(jumper_pin_groups {})", groups.join(" ")).unwrap();
         }
     }
-    write_property(out, "Reference", "U", 0.0, 0.0, false);
-    write_property(out, "Value", bare_name, 0.0, 0.0, false);
+    // each field with the face, pen and colour the library gives it (PARITY-sch §87)
+    let field_look = |name: &str| resolved.as_ref().and_then(|r| r.connectivity.field_looks.get(name));
+    write_property_looking(out, "Reference", "U", 0.0, 0.0, false, field_look("Reference"));
+    write_property_looking(out, "Value", bare_name, 0.0, 0.0, false, field_look("Value"));
     // the mandatory Description (`SaveSymbol` writes every field, `FIELD_T::DESCRIPTION` among them), which kicad-cli's netlist reads as the part's
     // `<description>` (r7 H3)
     if let Some(d) = resolved.as_ref().map(|r| r.description.as_str()).filter(|d| !d.is_empty()) {
-        write_property(out, "Description", d, 0.0, 0.0, true);
+        write_property_looking(out, "Description", d, 0.0, 0.0, true, field_look("Description"));
     }
     // the library symbol's user fields (`SaveSymbol` writes every field), which its body texts resolve `${NAME}` by (`LIB_SYMBOL::ResolveTextVar`)
     for (name, text) in resolved.iter().flat_map(|r| r.connectivity.user_fields.iter()) {
-        write_property(out, name, text, 0.0, 0.0, true);
+        write_property_looking(out, name, text, 0.0, 0.0, true, field_look(name));
     }
     // the keywords and the footprint filters (`saveDcmInfoAsFields`: `ki_keywords`, `ki_fp_filters`, hidden, each when it is not empty, r7 H3)
     for (name, text) in resolved.iter().flat_map(|r| [("ki_keywords", &r.connectivity.keywords), ("ki_fp_filters", &r.connectivity.fp_filters)]) {
@@ -1776,7 +1865,11 @@ fn write_unit_graphics(out: &mut String, sym: &eda_model::LibSymbol, unit: u32, 
             borders.swap_remove(i);
             continue;
         }
-        write_symbol_graphic(out, &baked_graphic(g, baker, width, x0, y1));
+        write_cache_shape(out, &baked_graphic(g, baker, width, x0, y1), sym.connectivity.shape_look(g));
+    }
+    // the shapes private to the Symbol Editor, which the cache keeps with `private` (`SaveSymbol` writes every draw item; PARITY-sch §87)
+    for l in sym.connectivity.private_shapes(unit, style) {
+        write_cache_shape(out, &baked_graphic(&l.graphic, baker, width, x0, y1), Some(l));
     }
     let (rot, _) = eda_engine::symgeom::kicad_turn(baker.rot, baker.mirrored, baker.mirror_y);
     let quarter_turn = eda_model::sym_textbox::turns_a_quarter(rot);
@@ -1819,7 +1912,10 @@ fn write_power_lib_symbol_named(out: &mut String, name: &str, value: &str, unit_
 
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{unit_name}_0_1"))).unwrap();
     for g in &resolved.graphics {
-        write_symbol_graphic(out, g);
+        write_cache_shape(out, g, resolved.connectivity.shape_look(g));
+    }
+    for l in resolved.connectivity.private_shapes(0, 1).chain(resolved.connectivity.private_shapes(1, 1)) {
+        write_cache_shape(out, &l.graphic, Some(l));
     }
     writeln!(out, "\t\t\t)").unwrap();
 
@@ -1842,62 +1938,53 @@ fn write_power_lib_symbol_named(out: &mut String, name: &str, value: &str, unit_
     writeln!(out, "\t\t)").unwrap();
 }
 
-fn write_symbol_graphic(out: &mut String, g: &eda_model::SymbolGraphic) {
+/// A shape of a symbol in the schematic's cache with its look (UI-LEFT-2 YY2, PARITY-sch §87), as `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` writes it
+/// (`formatRect` .. `formatPoly`: `private` after the keyword, a rectangle's `(radius ..)` after its corners, `STROKE_PARAMS::Format`'s type and colour,
+/// `formatFill`'s type -- a hatch's own -- and the colour of a colour or hatched fill); a shape with no look as before, its fill `background` when it has one.
+fn write_cache_shape(out: &mut String, g: &eda_model::SymbolGraphic, look: Option<&eda_model::symbol::ShapeLook>) {
+    use eda_model::ir::LibraryFill;
+    use eda_model::SymbolGraphic::*;
+    let filled = match g {
+        Rectangle { filled, .. } | Polyline { filled, .. } | Circle { filled, .. } | Arc { filled, .. } => *filled,
+        Text { .. } => return write_symbol_graphic_text(out, g),
+    };
+    let private = if look.is_some_and(|l| l.looks.private) { " private" } else { "" };
+    let kind = look.and_then(|l| l.stroke_type.as_deref()).unwrap_or("default");
+    let color = |c: Option<eda_model::sch_extras::SchColor>| c.filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0)).map(|c| format!(" (color {})", sch_extras_io::color_str(c))).unwrap_or_default();
+    let stroke_color = color(look.and_then(|l| l.looks.stroke_color));
+    let fill = match look.map(|l| l.fill) {
+        Some(LibraryFill::None) => "(fill (type none))".to_string(),
+        Some(LibraryFill::Outline) => "(fill (type outline))".to_string(),
+        Some(LibraryFill::Background) => "(fill (type background))".to_string(),
+        Some(LibraryFill::Color) => {
+            let l = look.unwrap();
+            let c = l.looks.fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 });
+            format!("(fill (type {}) (color {}))", l.looks.hatch.as_deref().unwrap_or("color"), sch_extras_io::color_str(c))
+        }
+        None => format!("(fill (type {}))", if filled { "background" } else { "none" }),
+    };
+    let radius = match (g, look) {
+        (Rectangle { .. }, Some(l)) if l.looks.radius_mm > 0.0 => format!(" (radius {})", fmt_mm_f(l.looks.radius_mm)),
+        _ => String::new(),
+    };
+    let (tag, geometry) = match g {
+        Rectangle { start, end, .. } => ("rectangle", format!("(start {} {}) (end {} {}){radius}", fmt_mm_f(start.x), fmt_mm_f(start.y), fmt_mm_f(end.x), fmt_mm_f(end.y))),
+        Polyline { pts, .. } => ("polyline", format!("(pts{})", pts.iter().map(|p| format!(" (xy {} {})", fmt_mm_f(p.x), fmt_mm_f(p.y))).collect::<String>())),
+        Circle { center, radius_mm, .. } => ("circle", format!("(center {} {}) (radius {})", fmt_mm_f(center.x), fmt_mm_f(center.y), fmt_mm_f(*radius_mm))),
+        Arc { start, mid, end, .. } => ("arc", format!("(start {} {}) (mid {} {}) (end {} {})", fmt_mm_f(start.x), fmt_mm_f(start.y), fmt_mm_f(mid.x), fmt_mm_f(mid.y), fmt_mm_f(end.x), fmt_mm_f(end.y))),
+        Text { .. } => unreachable!(),
+    };
+    let width = match g {
+        Rectangle { stroke_mm, .. } | Polyline { stroke_mm, .. } | Circle { stroke_mm, .. } | Arc { stroke_mm, .. } => *stroke_mm,
+        Text { .. } => 0.0,
+    };
+    writeln!(out, "\t\t\t\t({tag}{private}\n\t\t\t\t\t{geometry}\n\t\t\t\t\t(stroke (width {}) (type {kind}){stroke_color})\n\t\t\t\t\t{fill}\n\t\t\t\t)", fmt_mm_f(width)).unwrap();
+}
+
+/// A symbol's text in the schematic's cache.
+fn write_symbol_graphic_text(out: &mut String, g: &eda_model::SymbolGraphic) {
     use eda_model::SymbolGraphic::*;
     match g {
-        Rectangle { start, end, stroke_mm, filled, .. } => {
-            writeln!(
-                out,
-                "\t\t\t\t(rectangle\n\t\t\t\t\t(start {} {}) (end {} {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(start.x),
-                fmt_mm_f(start.y),
-                fmt_mm_f(end.x),
-                fmt_mm_f(end.y),
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
-        Polyline { pts, stroke_mm, filled, .. } => {
-            write!(out, "\t\t\t\t(polyline\n\t\t\t\t\t(pts").unwrap();
-            for p in pts {
-                write!(out, " (xy {} {})", fmt_mm_f(p.x), fmt_mm_f(p.y)).unwrap();
-            }
-            writeln!(
-                out,
-                ")\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
-        Circle { center, radius_mm, stroke_mm, filled, .. } => {
-            writeln!(
-                out,
-                "\t\t\t\t(circle\n\t\t\t\t\t(center {} {}) (radius {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(center.x),
-                fmt_mm_f(center.y),
-                fmt_mm_f(*radius_mm),
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
-        Arc { start, mid, end, stroke_mm, filled, .. } => {
-            writeln!(
-                out,
-                "\t\t\t\t(arc\n\t\t\t\t\t(start {} {}) (mid {} {}) (end {} {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(start.x),
-                fmt_mm_f(start.y),
-                fmt_mm_f(mid.x),
-                fmt_mm_f(mid.y),
-                fmt_mm_f(end.x),
-                fmt_mm_f(end.y),
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
         Text { text, at, angle_deg, size_mm, .. } => {
             writeln!(
                 out,
@@ -1911,6 +1998,7 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::SymbolGraphic) {
             )
             .unwrap();
         }
+        _ => {}
     }
 }
 

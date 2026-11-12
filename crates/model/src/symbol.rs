@@ -307,11 +307,65 @@ pub struct LibConnectivity {
     pub value: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub footprint: String,
+    /// What the symbol's shapes have beyond a [`SymbolGraphic`]'s members (UI-LEFT-2 YY2, PARITY-sch §87): the file's fill (`FILL_T`, which `filled` cannot
+    /// tell apart), the line style, the border and fill colours, a hatch, a rectangle's corner radius; and the shapes private to the Symbol Editor, which
+    /// [`LibSymbol::graphics`] leaves out (`SCH_PAINTER::draw( SCH_SHAPE )` draws none on a sheet) and the schematic's cache writes with `private`
+    /// (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol`, `formatRect` .. `formatPoly`'s `aIsPrivate`). Each by the graphic as the symbol holds it; kept here, as
+    /// [`Self::text_boxes`] are, so `SymbolGraphic`'s literals stay as they are. Only a shape with a fill or a look of its own has an entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_looks: Vec<ShapeLook>,
+    /// The library symbol's fields' face, colour and pen (`EDA_TEXT::Format`'s `(face ..)`, `(thickness ..)`, `(color ..)` in a field's `(effects (font ..))`),
+    /// by the field's name: the schematic's cache writes them, and a placed symbol's field has them as placing it copied them (`SCH_SYMBOL::SCH_SYMBOL( const
+    /// LIB_SYMBOL& .. )`: every field of the library symbol), unless Symbol Properties gave it its own (`SchExtras::field_looks`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub field_looks: std::collections::BTreeMap<String, crate::lib_keep::KeptFieldLooks>,
+}
+
+/// See [`LibConnectivity::shape_looks`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeLook {
+    /// The shape, as [`LibSymbol::graphics`] (or the alternate body's) holds it.
+    pub graphic: SymbolGraphic,
+    /// The body style of a private shape (0: every one); a shape that is drawn is found in the body it is in.
+    #[serde(default, skip_serializing_if = "is_zero_style")]
+    pub body_style: u32,
+    /// The file's fill (`(fill (type ..))`).
+    #[serde(default)]
+    pub fill: crate::ir::LibraryFill,
+    /// The line style (`(stroke (type ..))`) when it is not `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_type: Option<String>,
+    /// Private, the colours, the hatch, the corner radius.
+    #[serde(default, skip_serializing_if = "crate::lib_keep::KeptGraphicLooks::is_default")]
+    pub looks: crate::lib_keep::KeptGraphicLooks,
+}
+
+fn is_zero_style(s: &u32) -> bool {
+    *s == 0
+}
+
+impl ShapeLook {
+    /// The look of a shape: `None` for a shape of no fill and no look of its own, which needs no entry.
+    pub fn of(graphic: SymbolGraphic, body_style: u32, fill: crate::ir::LibraryFill, stroke_type: Option<String>, looks: crate::lib_keep::KeptGraphicLooks) -> Option<ShapeLook> {
+        let stroke_type = stroke_type.filter(|t| t != "default");
+        (fill != crate::ir::LibraryFill::None || stroke_type.is_some() || !looks.is_default()).then_some(ShapeLook { graphic, body_style, fill, stroke_type, looks })
+    }
 }
 
 impl LibConnectivity {
     pub fn is_default(&self) -> bool {
         *self == LibConnectivity::default()
+    }
+
+    /// The look of the drawn shape `g` (not a private one), if it has one.
+    pub fn shape_look(&self, g: &SymbolGraphic) -> Option<&ShapeLook> {
+        self.shape_looks.iter().find(|l| !l.looks.private && l.graphic == *g)
+    }
+
+    /// The shapes private to the Symbol Editor of unit `unit` that a symbol in body style `style` has.
+    pub fn private_shapes(&self, unit: u32, style: u32) -> impl Iterator<Item = &ShapeLook> {
+        self.shape_looks.iter().filter(move |l| l.looks.private && l.graphic.unit() == unit && (l.body_style == 0 || l.body_style == style))
     }
 
     /// The text boxes a symbol drawn in body style `style` has: those of that style and those of every style (body style 0, `SCH_PAINTER::draw( LIB_SYMBOL )`:

@@ -836,12 +836,19 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
     // A symbol a sheet path draws as another unit (`SCH_SYMBOL::GetPins( aSheet )` takes `GetUnitSelection( aSheet )`, r2 B-M4) has that unit's pins there.
     // the no-connect pins and the jumpered pins of what `pins_of` placed, by the same keys
     let pin_facts = std::cell::RefCell::new(std::collections::BTreeMap::<Vec<String>, (std::collections::BTreeSet<String>, Vec<Vec<String>>)>::new());
+    // each pin key's (symbol id, number, nth) the derived file mints the pin's uuid from (`eda_kicad::sch_symbol_pin_seeds`), by placement, for the tracer's
+    // island anchors (`Naming::anchor_uuid`, PARITY-sch §87)
+    let pin_seeds = std::cell::RefCell::new(std::collections::BTreeMap::<Vec<String>, std::collections::BTreeMap<String, (String, String, usize)>>::new());
     let pins_of = |sch: &eda_model::ir::SchematicSection, path: &[String]| -> std::collections::BTreeMap<String, Point> {
         let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
+        let mut seeds: std::collections::BTreeMap<String, (String, String, usize)> = std::collections::BTreeMap::new();
+        // the k-th pin of a number the symbol draws is the k-th the writer writes of it
+        let writer_nth = |written: &[(String, usize)], number: &str, k: usize| -> usize { written.iter().filter(|(n, _)| n == number).nth(k).map_or(k, |(_, nth)| *nth) };
         let mut nc: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         let mut jumpered: Vec<Vec<String>> = Vec::new();
         for (idx, sym) in sch.symbols.iter().enumerate() {
             let unit = eda_model::sheet_list::unit_under(sch, sym, path);
+            let written = eda_kicad::sch_symbol_pin_seeds(sym, model);
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
                     let resolved = model.real_symbol_of_instance(sch, sym, part);
@@ -855,6 +862,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
                         let key = pin_key(sch, idx, sym, unit, &number, common);
                         // a second pin of the number is a node of its own (r4 A4-H3)
                         let key = if *k == 0 { key } else { eda_engine::nets::pin_twin_key(&key, *k) };
+                        seeds.insert(key.clone(), (sym.id.clone(), number.clone(), writer_nth(&written, &number, *k)));
                         *k += 1;
                         // of the alternate's type when the symbol picked one (`SCH_PIN::GetType`, r5 D5-H3)
                         let alt = sch.extras.pin_alternate(&eda_model::ir::field_key(&sym.id, sym.unit), &number);
@@ -896,6 +904,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
                 let key = pin_key(sch, idx, sym, unit, &number, common);
                 let k = seen.entry(number.clone()).or_insert(0);
                 let key = if *k == 0 { key } else { eda_engine::nets::pin_twin_key(&key, *k) };
+                seeds.insert(key.clone(), (sym.id.clone(), number.clone(), writer_nth(&written, &number, *k)));
                 *k += 1;
                 keyed.push((key.clone(), number, nc_pin));
                 pin_world.insert(key, at);
@@ -905,6 +914,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             jumpered.extend(j);
         }
         pin_facts.borrow_mut().insert(path.to_vec(), (nc, jumpered));
+        pin_seeds.borrow_mut().insert(path.to_vec(), seeds);
         pin_world
     };
     // `SCH_PIN::IsGlobalPower`'s legacy rule: an invisible power input of a symbol that is not a power symbol names its net by its pin name
@@ -954,6 +964,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             let Some(sec) = contents.as_ref().and_then(|c| c.get(&e.file)) else { continue };
             let pins = pins_under_placement(pins_of(sec, &e.path), sec, &e.path);
             take_facts(&e.path, Some(sec));
+            let seeds = pin_seeds.borrow_mut().remove(&e.path).unwrap_or_default();
+            pin_seeds.borrow_mut().insert(e.path.clone(), pins_under_placement(seeds, sec, &e.path));
             power_pins.extend(pins_under_placement(power_pins_of(sec, &e.path), sec, &e.path));
             let first = seen.insert(e.file.as_str());
             if !first {
@@ -973,6 +985,14 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             }
         }
         let resolve = |path: &[String], raw: &str| power_value_under(design_view, path, raw);
+        let seeds = pin_seeds.borrow();
+        let anchor_uuid = |file: &str, path: &[String], item: &eda_engine::nets::AnchorItem| -> Option<String> {
+            let pin_seed = match item {
+                eda_engine::nets::AnchorItem::Pin { key } => Some(seeds.get(path)?.get(*key)?),
+                _ => None,
+            };
+            eda_kicad::sch_anchor_uuid(file, item, pin_seed.map(|(id, number, nth)| (id.as_str(), number.as_str(), *nth)))
+        };
         // a label's and a sheet pin's text as a power symbol's Value: `GetShownText( &path, FOR_NETNAME )` of the placement (r2 A-N10)
         let naming = eda_engine::nets::Naming {
             power_pins: naming.power_pins.or(Some(&power_pins)),
@@ -980,6 +1000,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             label_text: naming.label_text.or(Some(&resolve)),
             nc_contacts: naming.nc_contacts.or(Some(&nc_contacts)),
             jumpered: naming.jumpered.or(Some(&jumpered)),
+            anchor_uuid: naming.anchor_uuid.or(Some(&anchor_uuid)),
             ..*naming
         };
         eda_engine::nets::trace_nets_with(&mut screens, &naming)
