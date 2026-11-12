@@ -19,11 +19,15 @@ import { neighbourSheet, samePath } from "../kicad-port/sheetPages";
 import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, nearestTextItem, nextAttributeState, planIncrement, type IncrementTarget, type SymbolAttrKey } from "../kicad-port/schControl";
 import { setSymbolVariantCmd, variantFlags } from "../kicad-port/designVariants";
 import { labelNet, netAtPoint } from "../kicad-port/schNetAtPoint";
-import { pinDistance, pinItems } from "../kicad-port/schPins";
+import { parsePinItemId, pinDistance, pinItems } from "../kicad-port/schPins";
+import { padIds } from "../kicad-port/pcbItems";
+import { collectSheetRefs } from "../kicad-port/crossProbe";
+import { fetchSchematic } from "../api/client";
 import { measureStrokeText } from "../components/text/strokeFont";
 import { copySheetImage, exportSymbolSvg, saveSheetCopy } from "./schControlExports";
 import { importFootprintAssignments } from "./schControlImports";
 import { openAssignNetclass } from "./assignNetclass";
+import { netNamePattern } from "../kicad-port/schNetclassPattern";
 import { setFindHighlights } from "../state/commonTool";
 import { schematicActions } from "./schActionRegistry";
 
@@ -72,9 +76,8 @@ export function schControlChecked(name: string, ctx: Pick<SchControlContext, "co
       if (!key) return undefined;
       const sch = ctx.state.schematic;
       if (!sch) return false;
-      const ids = new Set(ctx.requestSelection());
-      // KiCad 25ec2335 `attribDNPCond` and kin: `GetDNP( sheet, variant )` of the current variant
-      return attributeChecked(sch.symbols.filter((s) => ids.has(s.id)).map((s) => variantFlags(s, ctx.state.schVariant)), key);
+      // KiCad 25ec2335 `attribDNPCond` and kin: `GetDNP( sheet, variant )` of the current variant, over the symbols, sheets and rule areas selected
+      return attributeChecked(attributeItems(sch, ctx.requestSelection(), ctx.state.schVariant).map((i) => i.flags), key);
     }
   }
 }
@@ -152,12 +155,14 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   // Highlight Nets -- `HighlightNetCursor`: the picker tool; each click is `highlightNet( toolMgr, position )` (SchematicView.tsx owns the click), Esc leaves it.
   m.set("eeschema.EditorControl.highlightNetTool", onSchematic(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "sch_highlight_net" ? "select" : "sch_highlight_net" })));
   // Find Net in Inspector -- `SCH_EDITOR_CONTROL::FindNetInInspector` -> `SCH_EDIT_FRAME::FindNetInInspector`: the net of the first selected item that has one (a wire, label or
-  // power symbol; a symbol itself has no connection), else the highlighted net; the Net Navigator opens with that name in its filter and the highlight is cleared.
+  // power symbol or pin; a symbol itself has no connection), else the highlighted net; the Net Navigator opens with that name in its filter and the highlight is cleared.
   m.set(
     "eeschema.InteractiveEdit.findNetInInspector",
     onSchematic(() => {
       if (!sch) return;
       const netOfItem = new Map<string, string>([...sch.wires, ...sch.labels, ...sch.power_symbols].map((i) => [i.id, i.net]));
+      // a selected pin's connection too (`SCH_PIN::Connection`)
+      for (const pin of pinItems(sch)) if (pin.net) netOfItem.set(pin.id, pin.net);
       let net = "";
       for (const id of state.selection) {
         const n = netOfItem.get(id);
@@ -173,56 +178,103 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       controlDispatch({ type: "SET_NET_NAVIGATOR", open: true });
     })
   );
-  // Assign Netclass... -- `SCH_EDIT_TOOL::AssignNetclass`: the nets of the selected wires, labels and power symbols (a symbol itself has no connection), through the same
-  // dialog as the board editor's (actions/assignNetclass.ts). The assignment is stored with the board's rules, so it is undone from the board editor, as KiCad's project
-  // settings are not part of the schematic's undo either.
+  // Assign Netclass... -- `SCH_EDITOR_CONTROL::AssignNetclass`: the connections of the selected items (`GetSelection()`: no hover; a wire, bus, label, power symbol
+  // or pin -- a symbol itself has no connection), "No nets selected." without one; the selection is cleared "in favor of highlighting"; each connection becomes its
+  // net's name, a bus's `PREFIX*` (vector) or `PREFIX.*` (group), and a net no label names (`GetDriverPriority( driver ) < SHEET_PIN`: KiCad named it itself) stops
+  // it with "All selected nets must be labeled to assign a netclass."; then the dialog (actions/assignNetclass.ts) on those patterns. The assignment is stored
+  // with the board's rules, so it is undone from the board editor, as KiCad's project settings are not part of the schematic's undo either.
   m.set(
     "eeschema.InteractiveEdit.assignNetclass",
     onSchematic(() => {
       if (!sch) return;
       const connected = [...sch.wires, ...sch.labels, ...sch.power_symbols];
-      const netOfItem = new Map(connected.map((i) => [i.id, i.net]));
-      const picked = ctx.requestSelection().map((id) => netOfItem.get(id));
-      const nets = [...new Set(picked.filter((n): n is string => !!n))];
+      const netOf = new Map<string, { net: string; bus: boolean }>(connected.map((i) => [i.id, { net: i.net, bus: "bus" in i && i.bus === true }]));
+      for (const pin of pinItems(sch)) if (pin.net) netOf.set(pin.id, { net: pin.net, bus: false });
+      const conns = [...state.selection].map((id) => netOf.get(id)).filter((c): c is { net: string; bus: boolean } => !!c && c.net !== "");
+      if (conns.length === 0) return toast("No nets selected.", "error");
+      dispatch({ type: "SET_SELECTION", refs: [] });
+      const patterns = new Set<string>();
+      for (const c of conns) {
+        const pattern = netNamePattern(c.net, c.bus);
+        if (pattern === null) return toast("All selected nets must be labeled to assign a netclass.", "error");
+        patterns.add(pattern);
+      }
       const candidates = [...new Set(connected.map((i) => i.net).filter((n) => n !== ""))].sort((a, b) => a.localeCompare(b));
-      // the previewer (`SCH_EDITOR_CONTROL::AssignNetclass`): every item of the sheet on a matching net brightened, the others not
+      // the previewer: every item of the sheet on a matching net brightened, the others not
       const preview = (matching: readonly string[]) => {
         const want = new Set(matching);
         setFindHighlights(connected.filter((i) => i.net !== "" && want.has(i.net)).map((i) => i.id));
       };
-      openAssignNetclass(nets, candidates, toast, preview);
+      openAssignNetclass([...patterns], candidates, toast, preview);
     })
   );
-  // Select on PCB -- `ExplicitCrossProbeToPcb` -> `SendSelectItemsToPcb( items, true )`: the selected symbols' footprints are selected in the board editor.
-  // (`RequestSelection`: the symbol under the cursor when nothing is selected.) Sheets and pins are the other two kinds KiCad sends; this schematic selects neither.
+  // Select on PCB -- `ExplicitCrossProbeToPcb` -> `doCrossProbeSchToPcb( aEvent, true )`: `RequestSelection()` (the whole selection, else the item under the
+  // cursor) -> `SendSelectItemsToPcb( items, true )`, and the board's `FindItemsFromSyncSelection` selects: for a symbol (`F<ref>`) its footprint, for a sheet
+  // (`S<sheet path>`) every footprint whose sheet path starts with the sheet's (its subsheets too), for a pin (`P<ref>/<number>`) the footprint's pads of that
+  // number. Nothing sent (`parts.empty()`) when none of these is selected. The board editor is a tab here, which comes up with that selection.
   m.set(
     "eeschema.EditorControl.selectOnPCB",
     onSchematic(() => {
-      const refs = ctx.requestSelection().filter((id) => api.symbolById(id));
-      const footprints = [...new Set(refs)].filter((ref) => api.partByRef(ref)?.placed);
-      if (footprints.length === 0) return;
-      dispatch({ type: "SET_SELECTION", refs: footprints });
-      dispatch({ type: "SET_TAB", tab: "pcb" });
+      if (!sch) return;
+      const picked = state.selection.size > 0 ? [...state.selection] : ctx.requestSelection();
+      const footprints: string[] = [];
+      const sheetPaths: string[] = [];
+      const add = (ids: Iterable<string>) => {
+        for (const id of ids) if (!footprints.includes(id)) footprints.push(id);
+      };
+      for (const id of picked) {
+        const pin = parsePinItemId(id);
+        if (pin) {
+          const part = api.partByRef(pin.key);
+          if (part?.placed) add(padIds(part).filter((pad) => pad === `${part.ref}.${pin.number}` || pad.startsWith(`${part.ref}.${pin.number}#`)));
+        } else if (sch.sheets.some((s) => s.id === id)) sheetPaths.push([...state.currentSheetPath, id].join("/"));
+        else if (api.symbolById(id) && api.partByRef(id)?.placed) add([id]);
+      }
+      const select = () => {
+        if (footprints.length === 0) return;
+        dispatch({ type: "SET_SELECTION", refs: footprints });
+        dispatch({ type: "SET_TAB", tab: "pcb" });
+      };
+      if (sheetPaths.length === 0) return select();
+      void collectSheetRefs(async (path) => {
+        const s = await fetchSchematic(path);
+        return { symbolIds: s.symbols.map((x) => x.id), childIds: s.sheets.map((x) => x.id) };
+      })
+        .then((sheets) => {
+          for (const [path, refs] of sheets) {
+            if (sheetPaths.some((sp) => path === sp || path.startsWith(`${sp}/`))) add([...refs].filter((r) => api.partByRef(r)?.placed));
+          }
+          select();
+        })
+        .catch(() => select());
     })
   );
 
-  // Do not Populate / Exclude from Bill of Materials / Exclude from Board / Exclude from Simulation -- `SCH_EDIT_TOOL::SetAttribute`: the whole selection (every unit of a
-  // multi-unit symbol) goes to one state -- set when any of it lacks the attribute, cleared when all of it has it. KiCad 25ec2335: in the current variant
-  // (`GetDNP( sheet, variant )`, `SetDNP( new_state, sheet, variant )`), the symbols' own flags when it is the default.
+  // Do not Populate / Exclude from Bill of Materials / Exclude from Board / Exclude from Simulation -- `SCH_EDIT_TOOL::SetAttribute`:
+  // `RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )`, and the whole collection (every unit of a multi-unit symbol, the sheets, the rule
+  // areas) goes to one state -- set when any of it lacks the attribute, cleared when all of it has it -- in one commit ("Toggle Attribute"). KiCad 25ec2335:
+  // in the current variant (`GetDNP( sheet, variant )`, `SetDNP( new_state, sheet, variant )`), the items' own flags when it is the default; a rule area
+  // has no variant record (`SCH_RULE_AREA::SetDNP` ignores the variant). A power symbol's flags are its Symbol Properties' (kept: not in this verb).
   const setAttribute = (name: string) => {
     const key: SymbolAttrKey = ATTRIBUTE_ACTIONS[name]!;
     return onSchematic(() => {
       if (!sch) return;
-      const ids = [...new Set(ctx.requestSelection().filter((id) => api.symbolById(id)))];
-      if (ids.length === 0) return;
       const variant = state.schVariant;
-      const items = sch.symbols.filter((s) => ids.includes(s.id)).map((s) => variantFlags(s, variant));
+      const items = attributeItems(sch, ctx.requestSelection(), variant);
+      if (items.length === 0) return;
       // the default variant: the server collects the units of the reference this sheet path gives each symbol on every sheet and works out `new_state`
-      // over all of them (`CollectOtherUnits` over `Hierarchy()`, r5 D5-M2, UI-LEFT S9); a variant's records are the sheet in view's
-      if (variant === "") return void api.cmd({ op: "sch_edit", verb: "toggle_symbol_attribute", ids, attribute: key });
-      const next = nextAttributeState(items, key);
-      const cmd = setSymbolVariantCmd(variant, ids, { flags: { [key]: next } });
-      if (cmd) void api.cmd(cmd);
+      // over all of them and the sheets and rule areas (`CollectOtherUnits` over `Hierarchy()`, r5 D5-M2, UI-LEFT S9); a variant's records are the sheet in view's
+      if (variant === "") return void api.cmd({ op: "sch_edit", verb: "toggle_symbol_attribute", ids: items.map((i) => i.id), attribute: key });
+      const next = nextAttributeState(items.map((i) => i.flags), key);
+      const cmds: Cmd[] = [];
+      const symCmd = setSymbolVariantCmd(variant, items.filter((i) => i.kind === "symbol").map((i) => i.id), { flags: { [key]: next } });
+      if (symCmd) cmds.push(symCmd);
+      for (const i of items) {
+        if (i.kind === "symbol" || !!i.flags[key] === next) continue;
+        if (i.kind === "sheet") cmds.push({ op: "sch_edit", verb: "set_sheet_variant", id: i.id, variant, [key]: next } as unknown as Cmd);
+        else if (i.graphic) cmds.push({ op: "sch_edit", verb: "edit_graphic", id: i.id, graphic: { ...i.graphic, shape: { ...i.graphic.shape, [key]: next } } } as unknown as Cmd);
+      }
+      if (cmds.length > 0) void api.cmdBatch(cmds);
     });
   };
   m.set("eeschema.EditorControl.setDNP", setAttribute("eeschema.EditorControl.setDNP"));
@@ -310,13 +362,18 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
 
   // ============================================================================================ SYMBOL_EDITOR_CONTROL::ChangeUnit
 
-  // Next / Previous Symbol Unit -- `ChangeUnit`: `newUnit = ( ( unit - 1 + delta + nUnits ) % nUnits ) + 1`.
+  // Next / Previous Symbol Unit -- `ChangeUnit`: `newUnit = ( ( unit - 1 + delta + nUnits ) % nUnits ) + 1`, then `SYMBOL_EDIT_FRAME::SetUnit`: nothing when the
+  // unit is the same (a one-unit symbol), else the tool in progress is cancelled (`cancelInteractive`) and the selection cleared (`selectionClear`) first.
   const changeUnit = (delta: number) =>
     onSymbolEditor(() => {
       const st = ctx.symApi.getState();
       const n = st.symbol?.unit_count ?? 0;
       if (n < 1) return;
       const unit = ((Math.max(st.activeUnit, 1) - 1 + delta + n) % n) + 1;
+      if (unit === st.activeUnit) return;
+      ctx.symDispatch({ type: "SET_DRAW_STATE", draw: null });
+      ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      ctx.symDispatch({ type: "CLEAR_SELECTION" });
       ctx.symDispatch({ type: "SET_ACTIVE_UNIT", unit });
     });
   m.set("eeschema.EditorControl.nextUnit", changeUnit(1));
@@ -378,3 +435,36 @@ export function netAtClick(sch: NonNullable<StudioState["schematic"]>, x: number
     pinItems(sch).map((pin) => ({ net: pin.net, distNm: pinDistance(pin, [x, y], measureStrokeText) }))
   );
 }
+
+type AttrFlags = Partial<Record<SymbolAttrKey, boolean>>;
+
+/**
+ * `SetAttribute`'s `RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )` over `ids`: each symbol, sheet and rule area, with its four flags in
+ * `variant` (a symbol's and a sheet's record of it, else their own flags; a rule area's own, which no variant has).
+ */
+export function attributeItems(sch: NonNullable<StudioState["schematic"]>, ids: readonly string[], variant: string): Array<{ id: string; kind: "symbol" | "sheet" | "rule_area"; flags: AttrFlags; graphic?: NonNullable<typeof sch.graphics>[number] }> {
+  const out: ReturnType<typeof attributeItems> = [];
+  for (const id of new Set(ids)) {
+    const sym = sch.symbols.find((s) => s.id === id);
+    if (sym) {
+      out.push({ id, kind: "symbol", flags: variantFlags(sym, variant) });
+      continue;
+    }
+    const sheet = sch.sheets.find((s) => s.id === id);
+    if (sheet) {
+      const own = sheet.props ?? {};
+      const rec = variant !== "" ? sheet.variants?.[variant] : undefined;
+      // a record holds all four flags (`SCH_SHEET_VARIANT::InitializeAttributes` snapshots the sheet's own; a false one is not written)
+      const flag = (k: SymbolAttrKey) => (rec ? !!rec[k as keyof typeof rec] : !!own[k as keyof typeof own]);
+      out.push({ id, kind: "sheet", flags: { dnp: flag("dnp"), exclude_from_bom: flag("exclude_from_bom"), exclude_from_board: flag("exclude_from_board"), exclude_from_sim: flag("exclude_from_sim") } });
+      continue;
+    }
+    const g = (sch.graphics ?? []).find((x) => x.id === id);
+    if (g?.shape.type === "rule_area") {
+      const r = g.shape;
+      out.push({ id, kind: "rule_area", flags: { dnp: !!r.dnp, exclude_from_bom: !!r.exclude_from_bom, exclude_from_board: !!r.exclude_from_board, exclude_from_sim: !!r.exclude_from_sim }, graphic: g });
+    }
+  }
+  return out;
+}
+

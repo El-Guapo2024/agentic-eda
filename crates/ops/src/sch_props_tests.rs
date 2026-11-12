@@ -640,6 +640,33 @@ fn sheet_properties_keep_the_border_the_fill_and_the_attributes_and_the_legacy_l
     assert_eq!(err(&mut b, sheet_props("nope")), "ops_unknown_sheet");
 }
 
+/// `SCH_EDIT_TOOL::SetAttribute` takes the sheets and rule areas of the selection too (`RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )`),
+/// and `new_state` is worked out over all of them: set when any lacks the attribute, cleared when all have it.
+#[test]
+fn the_attribute_toggles_take_sheets_and_rule_areas_with_one_state_for_all() {
+    use eda_model::sch_extras::{SchGraphic, SchGraphicKind};
+    let m = ConstraintModel::default();
+    let mut d = hierarchy();
+    let mut area = SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0))], exclude_from_sim: false, exclude_from_bom: true, exclude_from_board: false, dnp: false });
+    area.id = "rarea_1".into();
+    d.schematic.as_mut().unwrap().extras.graphics.push(area);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let toggle = || SchCmd::ToggleSymbolAttribute { ids: ids(&["sheet_a", "rarea_1"]), attribute: "exclude_from_bom".into() };
+    let bom = |b: &Board| {
+        let s = sch_of(b);
+        let area = match &s.extras.graphics[0].shape {
+            SchGraphicKind::RuleArea { exclude_from_bom, .. } => *exclude_from_bom,
+            _ => unreachable!(),
+        };
+        (s.extras.sheet_props_of("sheet_a").exclude_from_bom, area)
+    };
+    ok(&mut b, toggle());
+    assert_eq!(bom(&b), (true, true), "the sheet lacked it: both set");
+    ok(&mut b, toggle());
+    assert_eq!(bom(&b), (false, false), "both had it: both cleared");
+    assert!(sch_of(&b).extras.sheet_props.is_empty(), "the legacy look keeps no entry");
+}
+
 #[test]
 fn sheet_fields_are_named_once_and_an_empty_row_goes() {
     let m = ConstraintModel::default();

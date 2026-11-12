@@ -183,37 +183,82 @@ impl<'a> Board<'a> {
     /// [`crate::sch_edit::SchCmd::ToggleSymbolAttribute`]: `SetAttribute`'s `new_state` -- set when any collected item does not have the attribute
     /// (`!item->GetDNP( sheet, variant )`, ...), else cleared -- over everything [`Self::attribute_targets`] collects, the units on other sheets included
     /// (r5 D5-M2), then [`Self::set_symbol_attrs`].
+    ///
+    /// `RequestSelection( { SCH_SYMBOL_T, SCH_SHEET_T, SCH_RULE_AREA_T } )`: `ids` may also name sheets of the sheet in view (their own flags,
+    /// `SchExtras::sheet_props`: `SCH_SHEET::SetDNP( new_state, sheet, variant )` in the default variant) and rule areas (`SCH_RULE_AREA`'s flags, which no
+    /// variant has); `new_state` is worked out over all of them together, as `collectedItems` holds them all.
     pub(crate) fn toggle_symbol_attribute(&mut self, ids: &[String], attribute: &str) -> Result<(), Vec<CheckResult>> {
-        let (targets, _) = self.attribute_targets(ids)?;
-        let has = |s: &eda_model::ir::SymbolInstance| -> Option<bool> {
-            Some(match attribute {
-                "dnp" => s.dnp,
-                "exclude_from_bom" => s.exclude_from_bom,
-                "exclude_from_board" => s.exclude_from_board,
-                "exclude_from_sim" => s.exclude_from_sim,
-                _ => return None,
-            })
+        use eda_model::sch_extras::SchGraphicKind;
+        if !matches!(attribute, "dnp" | "exclude_from_bom" | "exclude_from_board" | "exclude_from_sim") {
+            return Err(fail("ops_bad_attribute", attribute, "the attribute is dnp, exclude_from_bom, exclude_from_board or exclude_from_sim"));
+        }
+        if ids.is_empty() {
+            return Err(fail("ops_nothing_selected", "attributes", "select a symbol first"));
+        }
+        let (sheet_ids, area_ids, symbol_ids) = {
+            let sch = self.schematic()?;
+            let is_sheet = |id: &String| sch.sheets.iter().any(|s| &s.id == id);
+            let is_area = |id: &String| sch.extras.graphics.iter().any(|g| &g.id == id && matches!(g.shape, SchGraphicKind::RuleArea { .. }));
+            let sheets: Vec<String> = ids.iter().filter(|id| is_sheet(id)).cloned().collect();
+            let areas: Vec<String> = ids.iter().filter(|id| !is_sheet(id) && is_area(id)).cloned().collect();
+            let symbols: Vec<String> = ids.iter().filter(|id| !is_sheet(id) && !is_area(id)).cloned().collect();
+            (sheets, areas, symbols)
         };
+        let pick = |dnp: bool, bom: bool, board: bool, sim: bool| match attribute {
+            "dnp" => dnp,
+            "exclude_from_bom" => bom,
+            "exclude_from_board" => board,
+            _ => sim,
+        };
+        let targets = if symbol_ids.is_empty() { Vec::new() } else { self.attribute_targets(&symbol_ids)?.0 };
         let mut new_state = false;
         for (file, i) in &targets {
             let Some(s) = sheet_list::screen_of_file(&self.design, file).and_then(|sch| sch.symbols.get(*i)) else { continue };
-            match has(s) {
-                None => return Err(fail("ops_bad_attribute", attribute, "the attribute is dnp, exclude_from_bom, exclude_from_board or exclude_from_sim")),
-                Some(false) => {
-                    new_state = true;
-                    break;
+            new_state |= !pick(s.dnp, s.exclude_from_bom, s.exclude_from_board, s.exclude_from_sim);
+        }
+        {
+            let sch = self.schematic()?;
+            for id in &sheet_ids {
+                let p = sch.extras.sheet_props_of(id);
+                new_state |= !pick(p.dnp, p.exclude_from_bom, p.exclude_from_board, p.exclude_from_sim);
+            }
+            for g in sch.extras.graphics.iter().filter(|g| area_ids.contains(&g.id)) {
+                if let SchGraphicKind::RuleArea { dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, .. } = &g.shape {
+                    new_state |= !pick(*dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim);
                 }
-                Some(true) => {}
             }
         }
         let v = Some(new_state);
-        match attribute {
-            "dnp" => self.set_symbol_attrs(ids, v, None, None, None),
-            "exclude_from_bom" => self.set_symbol_attrs(ids, None, v, None, None),
-            "exclude_from_board" => self.set_symbol_attrs(ids, None, None, v, None),
-            "exclude_from_sim" => self.set_symbol_attrs(ids, None, None, None, v),
-            _ => Err(fail("ops_bad_attribute", attribute, "the attribute is dnp, exclude_from_bom, exclude_from_board or exclude_from_sim")),
+        if !symbol_ids.is_empty() {
+            match attribute {
+                "dnp" => self.set_symbol_attrs(&symbol_ids, v, None, None, None)?,
+                "exclude_from_bom" => self.set_symbol_attrs(&symbol_ids, None, v, None, None)?,
+                "exclude_from_board" => self.set_symbol_attrs(&symbol_ids, None, None, v, None)?,
+                _ => self.set_symbol_attrs(&symbol_ids, None, None, None, v)?,
+            }
         }
+        let sch = self.schematic_mut()?;
+        for id in &sheet_ids {
+            let mut p = sch.extras.sheet_props_of(id);
+            *match attribute {
+                "dnp" => &mut p.dnp,
+                "exclude_from_bom" => &mut p.exclude_from_bom,
+                "exclude_from_board" => &mut p.exclude_from_board,
+                _ => &mut p.exclude_from_sim,
+            } = new_state;
+            sch.extras.set_sheet_props(id, p);
+        }
+        for g in sch.extras.graphics.iter_mut().filter(|g| area_ids.contains(&g.id)) {
+            if let SchGraphicKind::RuleArea { dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, .. } = &mut g.shape {
+                *match attribute {
+                    "dnp" => dnp,
+                    "exclude_from_bom" => exclude_from_bom,
+                    "exclude_from_board" => exclude_from_board,
+                    _ => exclude_from_sim,
+                } = new_state;
+            }
+        }
+        Ok(())
     }
 
     /// `SCH_EDIT_TOOL::EditPageNumber`: the placement `sheet` (a `SheetInstance::id`, found on the root sheet or on any sheet
