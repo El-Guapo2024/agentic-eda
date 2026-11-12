@@ -8,7 +8,7 @@ import { copperColorKey, layerColor } from "./layers";
 import { hairlineNm } from "./view";
 import { drawStrokeText } from "../text/strokeFont";
 import { formatLength, type LengthUnit } from "../../state/units";
-import { patternBaselines, patternOutline, readoutBox, statusBoxLayout, type TuneDrawState } from "../../kicad-port/tuneTool";
+import { patternBaselines, patternOutlineDrawn, readoutBox, statusBoxLayout, type TuneDrawState } from "../../kicad-port/tuneTool";
 
 type Pt = [number, number];
 
@@ -92,7 +92,7 @@ export function drawTuneHover(ctx: CanvasRenderingContext2D, view: ViewTransform
 export function drawPatternFrame(ctx: CanvasRenderingContext2D, view: ViewTransform, p: TuningPattern, handles: readonly [number, number][] | undefined, withBaseline: boolean) {
   const color = layerColor("selection");
   if (withBaseline) for (const line of patternBaselines(p)) dashed(ctx, view, line, color, 1.5, false, [5, 3]);
-  for (const poly of patternOutline(p)) dashed(ctx, view, poly, color, 1, true, [8, 4]);
+  for (const piece of patternOutlineDrawn(p)) dashed(ctx, view, piece.pts, color, 1, piece.closed, [8, 4]);
   if (handles && handles.length > 0) drawHandles(ctx, view, handles);
 }
 
