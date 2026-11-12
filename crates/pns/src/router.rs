@@ -155,7 +155,7 @@ enum GroupDrag {
 const NPTH_START: &str = "Cannot start routing from a non-plated hole.";
 
 pub struct Router {
-    world: Node,
+    pub(crate) world: Node,
     layers: LayerMap,
     rules: eda_model::BoardRules,
     pub settings: RoutingSettings,
@@ -1560,8 +1560,11 @@ impl Router {
 
     /// The solids of the footprints `refs` (`ROUTER_TOOL::InlineDrag`'s `itemsToDrag` of a footprint selection): every pad's
     /// (`FindItemByParent( pad )`), the copper graphics and texts of the footprint (`footprint->GraphicalItems()` on a copper layer), and the
-    /// footprint's keepout rule areas (`footprint->Zones()`, `FindItemsByParent( zone )`). In id order.
-    fn footprint_solids(&self, refs: &[String]) -> Vec<ItemId> {
+    /// footprint's keepout rule areas (`footprint->Zones()`, `FindItemsByParent( zone )`). In id order. A pad of several solids (a padstack whose
+    /// shape changes from layer to layer, one solid per `ForEachUniqueLayer` group) gives its first only: `FindItemByParent( pad )` returns the first
+    /// item of the net's list whose parent is the pad, the first `syncPad` added (UI-LEFT-2 RR7), so its other solids stay where they are in the
+    /// router's world and the tracks on their layers do not follow, as in KiCad.
+    pub(crate) fn footprint_solids(&self, refs: &[String]) -> Vec<ItemId> {
         let resolver = self.world.rule_resolver();
         let mut out: Vec<ItemId> = self
             .world
@@ -1579,6 +1582,11 @@ impl Router {
             })
             .collect();
         out.sort_unstable();
+        let mut pads_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        out.retain(|id| match self.world.get(*id) {
+            Some(Item::Solid(s)) if !s.edge && !s.is_graphic() && !s.is_text() && !s.is_keepout() && !s.is_obstacle() => pads_seen.insert(s.source.clone()),
+            _ => true,
+        });
         out
     }
 

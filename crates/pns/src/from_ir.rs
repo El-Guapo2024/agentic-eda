@@ -831,6 +831,17 @@ mod tests {
         assert_eq!(pad_solids(&node), vec![(0, 0, (Nm::new(8800), Nm::new(9500), Nm::new(11_200), Nm::new(10_500))), (1, 2, (Nm::new(9400), Nm::new(9400), Nm::new(10_600), Nm::new(10_600))), (3, 3, (Nm::new(9200), Nm::new(9200), Nm::new(10_800), Nm::new(10_800)))]);
     }
 
+    /// UI-LEFT-2 RR7: `InlineDrag` hands the component dragger `FindItemByParent( pad )` -- the first solid `syncPad` made of a padstack (`F_Cu` of a
+    /// front/inner/back stack) -- not every solid of it.
+    #[test]
+    fn a_footprint_drag_takes_the_first_solid_of_a_padstack() {
+        let (design, model) = padstack_board(Side::Top);
+        let router = crate::router::Router::new(&design, &model);
+        let solids = router.footprint_solids(&["J1".to_string()]);
+        let layers: Vec<(i32, i32)> = solids.iter().filter_map(|id| router.world.get(*id)).filter(|it| matches!(it, Item::Solid(s) if !s.edge)).map(|it| (it.layers().start(), it.layers().end())).collect();
+        assert_eq!(layers, vec![(0, 0)], "the front solid alone");
+    }
+
     /// `syncTextItem`: a board text on copper is a solid of no net on its layer, the box of its glyphs turned with the text; nothing joins to
     /// it, and a route keeps the copper clearance from it.
     #[test]

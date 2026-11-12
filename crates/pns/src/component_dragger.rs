@@ -43,8 +43,8 @@
 //! moved only in part is cut into what moved and what did not.
 //!
 //! **Differs:**
-//! - a pad made of several solids (a padstack whose shape changes from layer to layer, `syncPad`'s solids) moves all of them; KiCad's
-//!   `FindItemByParent( pad )` hands the dragger the first one only;
+//! - (no longer a difference) a pad made of several solids (a padstack whose shape changes from layer to layer, `syncPad`'s solids) hands the
+//!   dragger its first solid only, as KiCad's `FindItemByParent( pad )` does (`Router::footprint_solids`, UI-LEFT-2 RR7);
 //! - (no longer a difference) a footprint's own Edge.Cuts and Margin graphics -- its art since the importer keeps them there -- are among the
 //!   solids dragged (`InlineDrag`: `GraphicalItems()` on Edge_Cuts or Margin, `itemsToDrag.Add( solid )`; `from_ir::edge_source`), so a pad
 //!   keeps its distance to the footprint's own slot or edge as the footprint moves;

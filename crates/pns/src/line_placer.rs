@@ -630,10 +630,9 @@ impl LinePlacer {
                     Some(nearest) => build_l1(nearest),
                     None => raw,
                 };
-                let colliding = raw.pts.windows(2).any(|w| {
-                    let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
-                    world_node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
-                });
+                // `m_currentNode->CheckColliding( &current )` of the head as a line (`LINE::Collide`): each segment asks the rules as the whole line
+                // (`Side::Line`, `evaluateLineSegments` with a rule on shapes), not as a segment alone (UI-LEFT-2 RR7)
+                let colliding = walkaround::path_collides(world_node, rules, &self.net, self.current_layer, self.width, &raw.pts, &exclude);
                 // `aNewHead = m_head; aNewTail = m_tail;`
                 let head = raw.pts.clone();
                 let mut r = HeadResult::plain_line(raw, colliding, node, current);

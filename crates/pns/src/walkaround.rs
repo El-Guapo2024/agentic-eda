@@ -307,9 +307,16 @@ impl<'a> Walker<'a> {
         })
     }
 
-    /// `processCluster`: walk `pts` around every item of the cluster in turn.
+    /// `processCluster`: walk `pts` around every item of the cluster in turn. Before each item the wall clock is read: past
+    /// [`PNS_PROCESS_CLUSTER_TIMEOUT_MS`] since the cluster began the walk gives up (`return false`, the line as far as it got): "Emprically, 100ms
+    /// seems to be about where you're not going to find a valid path if you haven't found it by then" (UI-LEFT-2 RR7).
     fn process_cluster(&self, cluster: &[ItemId], pts: &mut Vec<Point>, net: &Net, layer: i32, width: Nm, cw: bool) -> bool {
+        let start_time = std::time::Instant::now();
         for &id in cluster {
+            // `if( elapsed > timeout_ms )`, `duration_cast<milliseconds>`: whole milliseconds
+            if start_time.elapsed().as_millis() > PNS_PROCESS_CLUSTER_TIMEOUT_MS {
+                return false;
+            }
             let Some(item) = self.node.get(id) else { continue };
             // `m_world->GetClearance( clItem, &aLine, false )`, `clItem->Hull( clearance, aLine.Width(), layer )`
             let hull = self.node.obstacle_hull(self.rules, item, Side::Line { net, layer, width, pts: pts.as_slice() }, Nm::ZERO, width, layer, false);
@@ -508,6 +515,10 @@ fn cursor_dist_minimum(chain: &[Point], cursor: Point, length_threshold: f64, co
 }
 
 /// Does `pts`, as a track on `net` of `width`, touch anything in the node (`NODE::CheckColliding( &line )`, whatever the kind)?
+/// `ADVANCED_CFG::m_PNSProcessClusterTimeout`'s default (`common/advanced_config.cpp`: "Default: 100 ms"; the advanced config file is not read
+/// here): how long `WALKAROUND`'s `processCluster` may take over one cluster.
+pub const PNS_PROCESS_CLUSTER_TIMEOUT_MS: u128 = 100;
+
 pub fn path_collides(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Nm, pts: &[Point], exclude: &[ItemId]) -> bool {
     let head = Side::Line { net, layer, width, pts };
     pts.windows(2).any(|w| {

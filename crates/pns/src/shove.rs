@@ -426,11 +426,15 @@ struct SLine {
     line: Line,
     via: Option<LineVia>,
     rank: i32,
+    /// The segment the line was assembled from (`NODE::AssembleLine( aSeg )`: `pl.SetSourceItem( aSeg->GetSourceItem() )`): its board track is
+    /// the line's source, which the segments made of it take (`SEGMENT( aParentLine, seg )`: `m_sourceItem = aParentLine.GetSourceItem()`) and
+    /// the commit copies the mask and group of (`PNS_KICAD_IFACE::Commit`'s `sourceTrack`). `None` for a line not assembled from the node.
+    seed: Option<ItemId>,
 }
 
 impl SLine {
     fn new(line: Line) -> Self {
-        SLine { line, via: None, rank: -1 }
+        SLine { line, via: None, rank: -1, seed: None }
     }
 
     /// `LINK_HOLDER::IsLinked`.
@@ -619,7 +623,7 @@ impl<'a> Shove<'a> {
         // a push made it a tadpole.
         line.via_at_start = None;
         line.via_at_end = None;
-        Some(SLine::new(line))
+        Some(SLine { seed: Some(seg), ..SLine::new(line) })
     }
 
     /// `assembleLine( .., aPreCleanup = true )` / `preShoveCleanup`: merge collinear
@@ -670,9 +674,11 @@ impl<'a> Shove<'a> {
                 i
             }
         };
-        // The new line descends from the IR track the old one stood on (the first, by name, if it stood on several), so a shove run later
-        // in the world this one leaves -- a route that fixed a leg and goes on -- still maps what it moves to the IR.
-        let lineage = old.line.segment_ids.iter().filter_map(|id| self.node.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).min();
+        // The new line descends from the IR track the old one stood on, so a shove run later in the world this one leaves -- a route that fixed a
+        // leg and goes on -- still maps what it moves to the IR: the track of the segment it was assembled from (`GetSourceItem()` of the seed,
+        // UI-LEFT-2 RR7), else the first by name of those it stood on
+        let source_of = |id: ItemId| self.node.get(id).and_then(|it| it.source_track_id()).map(str::to_string);
+        let lineage = old.seed.and_then(source_of).or_else(|| old.line.segment_ids.iter().filter_map(|id| source_of(*id)).min());
         self.node.remove_line_segments(&old.line);
         let ids = match lineage {
             Some(track) => self.node.add_line_tagged(&new.line, &track),
@@ -961,7 +967,7 @@ impl<'a> Shove<'a> {
             if self_intersecting(&path) {
                 continue;
             }
-            let candidate = SLine { line: shoved, via: None, rank: obstacle.rank };
+            let candidate = SLine { line: shoved, via: None, rank: obstacle.rank, seed: obstacle.seed };
             if self.lines_collide(&candidate, cur) {
                 continue;
             }
@@ -1593,7 +1599,7 @@ impl<'a> Shove<'a> {
                 let constraints = crate::optimizer::Constraints { area, corner_mode: self.settings.corner_mode, ..Default::default() };
                 let optimized = crate::optimizer::optimize_constrained(&line.line, &self.node, self.rules, &line.links(), flags, &constraints);
                 if optimized.pts != line.line.pts {
-                    let mut new = SLine { line: optimized, via: line.via.clone(), rank: self.line_rank(&line) };
+                    let mut new = SLine { line: optimized, via: line.via.clone(), rank: self.line_rank(&line), seed: line.seed };
                     new.clear_links();
                     self.replace_line(&line, &mut new, false);
                     self.optimizer_queue[i] = new;
@@ -1737,7 +1743,15 @@ impl<'a> Shove<'a> {
             if root_line.line.pts == new_line.line.pts {
                 continue; // pushed and pushed back: nothing to commit
             }
-            let tracks = self.source_tracks(&root_line.line.segment_ids);
+            // the line is committed under its source (`AssembleLine`'s seed segment's track, UI-LEFT-2 RR7), whose mask and group its new tracks
+            // take; the other tracks it stood on are rewritten from what no shoved line covers
+            let mut tracks = self.source_tracks(&root_line.line.segment_ids);
+            if let Some(seed) = root_line.seed.and_then(|id| self.world.get(id)).and_then(|it| it.source_track_id()) {
+                if let Some(k) = tracks.iter().position(|t| t == seed) {
+                    let t = tracks.remove(k);
+                    tracks.insert(0, t);
+                }
+            }
             covered.extend(root_line.line.segment_ids.iter().copied());
             let mut it = tracks.iter();
             if let Some(first) = it.next() {
@@ -2059,7 +2073,7 @@ mod tests {
         for id in &head.segment_ids {
             sh.root_of.insert(*id, root);
         }
-        let pusher = SLine { line: head.clone(), via: None, rank: HEAD_RANK };
+        let pusher = SLine { line: head.clone(), via: None, rank: HEAD_RANK, seed: None };
         let obs = Line::from_points(None, 0, mm(0.1), vec![p(Nm::ZERO, Nm::ZERO), p(mm(1.0), Nm::ZERO)]);
         let up = Line::from_points(None, 0, mm(0.1), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, mm(0.8)), p(mm(1.0), mm(0.8)), p(mm(1.0), Nm::ZERO)]);
         let down = Line::from_points(None, 0, mm(0.1), vec![p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, mm(-0.8)), p(mm(1.0), mm(-0.8)), p(mm(1.0), Nm::ZERO)]);
@@ -2114,6 +2128,22 @@ mod tests {
         // and the root line remembers where the track was, so the diff is against the original
         assert_eq!(sh.roots.len(), 1);
         assert_eq!(sh.roots[0].root_line.as_ref().unwrap().line.pts, vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(4.0), y: Nm::ZERO }]);
+    }
+
+    /// UI-LEFT-2 RR7 (R6-R8): a shoved line that stood on two IR tracks is committed under the track of the segment it was assembled from -- the one
+    /// the head hit (`NODE::AssembleLine( aSeg )`: `SetSourceItem( aSeg->GetSourceItem() )`, whose mask and group the commit copies) -- not under the
+    /// one whose id sorts first.
+    #[test]
+    fn a_shoved_line_of_two_tracks_is_committed_under_the_segment_it_was_assembled_from() {
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(-2.0) }, b: Point { x: mm(2.5), y: mm(0.5) }, width: mm(0.2), source_track: Some(("zzz".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: mm(2.5), y: mm(0.5) }, b: Point { x: mm(2.5), y: mm(3.0) }, width: mm(0.2), source_track: Some(("aaa".into(), 0)), locked: false }));
+        let raw = vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(5.0), y: Nm::ZERO }];
+        let out = shove_line(&node, &raw, &net_of("SIG"), 0, mm(0.2), &rules(), &RoutingSettings::default()).expect("the line is pushed");
+        let shoved: Vec<_> = out.displaced_lines.iter().filter(|d| d.line.pts.len() >= 2).collect();
+        assert_eq!(shoved.len(), 1, "{:?}", out.displaced_lines);
+        assert_eq!(shoved[0].source_track.as_deref(), Some("zzz"), "the seed's track");
+        assert!(out.displaced_lines.iter().any(|d| d.source_track.as_deref() == Some("aaa") && d.line.pts.is_empty()), "the other track goes: {:?}", out.displaced_lines);
     }
 
     /// A junction cuts an IR track into two lines; only one is shoved, and the other part of the
