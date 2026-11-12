@@ -836,8 +836,10 @@ impl Violation {
     }
 
     /// Also try the positions the design itself gives for the items: the ends and the middle of a track segment, where a trace's marker
-    /// sits (`DRC_TEST_PROVIDER_TRACK_WIDTH` reports `(start + end) / 2`). The report gives a track at its start only.
-    fn add_design_anchors(&mut self, design: &Design) {
+    /// sits (`DRC_TEST_PROVIDER_TRACK_WIDTH` reports `(start + end) / 2`). The report gives a track at its start only. And where a marker between
+    /// two items of the derived board sits: `board` is their shapes by uuid as kicad-cli read them (`eda_kicad::drc_exclusions::board_shapes`:
+    /// tracks, vias, pads, holes, the board edges).
+    fn add_anchors(&mut self, design: &Design, board: &eda_kicad::drc_exclusions::BoardShapes) {
         let ids: Vec<String> = self.items.iter().filter_map(|i| i.id.clone()).collect();
         for id in &ids {
             self.markers_nm.extend(track_anchors(design, id));
@@ -845,6 +847,12 @@ impl Violation {
         // Two tracks or vias: the marker is where KiCad's collision of the two shapes puts it (`eda_kicad::drc_exclusions::contact_point`).
         if let [Some(main), Some(aux)] = [self.items.first(), self.items.get(1)].map(|i| i.and_then(|i| i.id.as_deref()).and_then(|id| copper_of(design, id))) {
             if let Some([x, y]) = eda_kicad::drc_exclusions::contact_point(&self.kind, main, aux) {
+                self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
+            }
+        }
+        // The same on the derived board's shapes, a pad's, a hole's and the board edge's included (`eda_kicad::drc_exclusions::marker_at`).
+        if let (Some(main), Some(aux)) = (self.items.first(), self.items.get(1)) {
+            if let Some([x, y]) = eda_kicad::drc_exclusions::marker_at(&self.kind, &main.uuid, &aux.uuid, board) {
                 self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
             }
         }
@@ -1090,10 +1098,11 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
     cmd.arg("-o").arg(&report).arg(&pcb);
     let (raw, said) = run_report_with_output(cmd, &report, "drc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
+    let board = std::fs::read_to_string(&pcb).map(|t| eda_kicad::drc_exclusions::board_shapes(&t)).unwrap_or_default();
     let read = |key: &str| -> Vec<Violation> {
         let mut list: Vec<Violation> = raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default();
         for v in &mut list {
-            v.add_design_anchors(design);
+            v.add_anchors(design, &board);
         }
         list
     };
@@ -2405,7 +2414,7 @@ mod tests {
         assert!(track_anchors(&design, "R1.1").is_empty() && track_anchors(&design, "t8").is_empty());
 
         let mut v = Violation { kind: "track_width".into(), items: vec![Item { description: "Track".into(), pos: pt(1_000_000, 2_000_000), id: Some("t7".into()), uuid: "u".into() }], markers_nm: vec![pt(1_000_000, 2_000_000)], ..Default::default() };
-        v.add_design_anchors(&design);
+        v.add_anchors(&design, &Default::default());
         assert_eq!(v.markers_nm, vec![pt(1_000_000, 2_000_000), pt(2_000_500, 2_000_000), pt(3_001_000, 2_000_000)], "the start (the report's) is listed once");
     }
 

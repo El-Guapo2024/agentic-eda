@@ -329,3 +329,56 @@ fn a_track_clearance_and_a_crossing_reach_kicad_cli_and_all_track_errors_reports
     assert_eq!((kicad_cli_drc_lists(&dir, &excluded, "clearance"), kicad_cli_drc_lists(&dir, &excluded, "tracks_crossing")), (1, 1), "one excluded marker each");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-2 BB1 (slow tier): a clearance between a track and a pad, and between a via and a pad, is placed where KiCad's collision of the track's
+/// segment or the via's circle with the pad's compound puts it (`eda_kicad::drc_exclusions::board_copper`, `collide`: `Collide( const SHAPE_RECT&,
+/// const SHAPE_SEGMENT& )`, `Collide( const SHAPE_RECT&, const SHAPE_CIRCLE& )`), so an exclusion of either reaches kicad-cli.
+#[test]
+fn a_pad_clearance_reaches_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    // the pads as a rectangle (`SHAPE_RECT`), a rounded rectangle (the inset rectangle and four side segments), a circle and an oval
+    for (shape, ratio, size) in [(eda_model::PadShape::Rect, None, (0.8, 0.8)), (eda_model::PadShape::RoundRect, Some(0.25), (0.8, 0.8)), (eda_model::PadShape::Circle, None, (0.8, 0.8)), (eda_model::PadShape::Oval, None, (0.8, 1.2))] {
+        pad_clearance_reaches_kicad_cli(shape, ratio, size);
+    }
+}
+
+fn pad_clearance_reaches_kicad_cli(shape: eda_model::PadShape, ratio: Option<f64>, size: (f64, f64)) {
+    let dir = scratch(&format!("review_drc_pads_{shape:?}"));
+    setup(&dir);
+    let intent = dir.join("intent.yaml");
+    let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    for pad in &mut model.footprints[0].pads {
+        pad.shape = shape;
+        pad.roundrect_ratio = ratio;
+        pad.size = (mm(size.0), mm(size.1));
+    }
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    let pt = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
+    // U1.2 (VCC) is a 0.8 mm square at (6, 5). A GND track from U2.1 (14, 5) stops 0.15 mm from its right side; a GND track from U1.1 (4, 5) runs
+    // below it to a GND via whose copper comes 0.15 mm from its bottom side.
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(14.0, 5.0), pt(6.65, 5.0)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(4.0, 5.0), pt(4.0, 7.0), pt(7.5, 7.0), pt(7.5, 5.85), pt(6.0, 5.85)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddVia { net: "GND".into(), x: mm(6.0), y: mm(5.85), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+    // A VCC track from U2.2 (16, 5) passing 0.05 mm under the via (its copper and its hole: `clearance` and `hole_clearance`), and a GND track from U2.1
+    // ending 0.2 mm from the board's bottom edge (`copper_edge_clearance`).
+    step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(16.0, 5.0), pt(16.0, 6.3), pt(5.0, 6.3)] }, false, "test").unwrap();
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: mm(0.2), pts: vec![pt(14.0, 5.0), pt(14.0, 19.7)] }, false, "test").unwrap();
+    let every = eda_kicad_engine::DrcOptions { all_track_errors: true, ..Default::default() };
+    let all = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    let pad_rows: Vec<Value> = drc_rows(&all, "clearance").into_iter().filter(|v| v["items"].as_array().unwrap().iter().any(|i| i["description"].as_str().unwrap_or("").starts_with("Pad"))).collect();
+    assert!(pad_rows.len() >= 2, "{shape:?}: a track and a via too near the pad: {all:#}");
+    let holes = drc_rows(&all, "hole_clearance");
+    let edges = drc_rows(&all, "copper_edge_clearance");
+    assert!(!holes.is_empty() && !edges.is_empty(), "{shape:?}: a hole clearance and an edge clearance: {all:#}");
+    let rows: Vec<Value> = pad_rows.iter().chain(&holes).chain(&edges).cloned().collect();
+    step(&dir, Cmd::AddDrcExclusions { exclusions: rows.iter().map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+    let after = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    let waived: Vec<Value> = ["clearance", "hole_clearance", "copper_edge_clearance"].iter().flat_map(|k| drc_rows(&after, k)).filter(|v| v["excluded"] == true).collect();
+    assert_eq!(waived.len(), rows.len(), "{shape:?}: {after:#}");
+    for v in &waived {
+        assert_eq!(v["kicad_matched"], true, "{shape:?}: kicad-cli matched the exclusion at the point the studio computed: {v:#}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
