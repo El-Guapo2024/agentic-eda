@@ -2931,6 +2931,31 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
             Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": style, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
         }
     };
+    // a shape's fill as the file says it, its line style, border and fill colours, hatch and corner radius (`LibConnectivity::shape_looks`, `SCH_PAINTER::draw(
+    // SCH_SHAPE )`; UI-LEFT-2 YY2, PARITY-sch §87)
+    let graphic = |g: &eda_model::SymbolGraphic, style: u32| -> Value {
+        let mut v = graphic(g, style);
+        if let Some(l) = s.connectivity.shape_look(g) {
+            v["fill"] = json!(l.fill);
+            v["filled"] = json!(l.fill != eda_model::ir::LibraryFill::None);
+            if let Some(t) = &l.stroke_type {
+                v["line_style"] = json!(t);
+            }
+            if let Some(c) = l.looks.stroke_color {
+                v["stroke_color"] = json!(c);
+            }
+            if let Some(c) = l.looks.fill_color {
+                v["fill_color"] = json!(c);
+            }
+            if let Some(h) = &l.looks.hatch {
+                v["hatch"] = json!(h);
+            }
+            if l.looks.radius_mm > 0.0 {
+                v["corner_radius_mm"] = json!(l.looks.radius_mm);
+            }
+        }
+        v
+    };
     let pin = |p: &eda_model::LibPin, style: u32| {
         let mut j = json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": style, "hidden": false });
         // the pin's alternate functions (`SCH_PIN::GetAlternates`), which a placed symbol's pin may take (`SCH_PIN::SetAlt`): the Pin Functions table, the

@@ -5354,8 +5354,24 @@ impl LibrarySymbol {
                         g
                     })
                     .collect(),
+                // the shapes' fills and looks, and the private ones (`LibrarySymbolKeep::graphic_looks`, `stroke_types`), PARITY-sch §87
+                shape_looks: self.graphics.iter().filter(|g| g.body_style() <= 1 || (self.is_multi_body_style() && g.body_style() == 2)).filter_map(|g| self.shape_look(g)).collect(),
+                field_looks: self.kicad.field_looks.clone(),
             },
         }
+    }
+
+    /// The look of a shape of the symbol as a placed symbol keeps it ([`crate::symbol::LibConnectivity::shape_looks`]); `None` for a text, a text box and a shape
+    /// of no fill and no look of its own.
+    fn shape_look(&self, g: &LibrarySymbolGraphic) -> Option<crate::symbol::ShapeLook> {
+        let fill = match g {
+            LibrarySymbolGraphic::Rectangle { fill, .. } | LibrarySymbolGraphic::Polyline { fill, .. } | LibrarySymbolGraphic::Circle { fill, .. } | LibrarySymbolGraphic::Arc { fill, .. } | LibrarySymbolGraphic::Bezier { fill, .. } => *fill,
+            _ => return None,
+        };
+        let graphic = g.to_engine_graphics().into_iter().next()?;
+        let looks = self.kicad.graphic_looks.get(g.id()).cloned().unwrap_or_default();
+        let style = if self.is_private_shape(g) { if self.is_multi_body_style() { g.body_style() } else { 0 } } else { 0 };
+        crate::symbol::ShapeLook::of(graphic, style, fill, self.kicad.stroke_types.get(g.id()).cloned(), looks)
     }
 
     /// Assign a deterministic id to every pin/graphic whose `id` is still

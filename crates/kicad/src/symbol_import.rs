@@ -391,7 +391,7 @@ fn stroke_width(item: &[Sexpr]) -> f64 {
 
 /// `parseFill`'s `(fill (type none|outline|background|color|hatch|reverse_hatch|cross_hatch))`: a colour fill and a hatched one are [`LibraryFill::Color`], the hatch
 /// and the colour kept beside the shape ([`graphic_looks`]).
-fn fill_of(item: &[Sexpr]) -> LibraryFill {
+pub(crate) fn fill_of(item: &[Sexpr]) -> LibraryFill {
     match sexpr::find(item, "fill").and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1)) {
         Some("outline") => LibraryFill::Outline,
         Some("background") => LibraryFill::Background,
@@ -402,7 +402,7 @@ fn fill_of(item: &[Sexpr]) -> LibraryFill {
 
 /// What a drawn item of a symbol has beyond its kind's members (UI-LEFT-2 YY2): a shape's `private`, its stroke's `(color ..)`, its fill's colour and hatch
 /// (`parseFill`), a rectangle's `(radius ..)` (`parseSymbolRectangle`); a text's or text box's `(href ..)` (`parseEDA_TEXT`). `None` when it has none of them.
-fn graphic_looks(item: &[Sexpr]) -> Option<eda_model::lib_keep::KeptGraphicLooks> {
+pub(crate) fn graphic_looks(item: &[Sexpr]) -> Option<eda_model::lib_keep::KeptGraphicLooks> {
     let shape = matches!(sexpr::tag(item), Some("rectangle" | "polyline" | "circle" | "arc" | "bezier"));
     let mut l = eda_model::lib_keep::KeptGraphicLooks::default();
     if shape {
@@ -592,7 +592,7 @@ fn bezier(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolGra
 type DrawnItems = (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>, u32, bool, Vec<Option<String>>, Vec<Option<eda_model::lib_keep::KeptTextStyle>>, Vec<eda_model::lib_keep::KeptSymbolItem>, Vec<Option<eda_model::lib_keep::KeptGraphicLooks>>);
 
 /// A graphic's `(stroke (type ..))` when it says something other than `default` (`STROKE_PARAMS_PARSER::ParseStroke`).
-fn stroke_type(item: &[Sexpr]) -> Option<String> {
+pub(crate) fn stroke_type(item: &[Sexpr]) -> Option<String> {
     sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "type")).and_then(|t| sexpr::txt(t, 1)).filter(|t| *t != "default").map(str::to_string)
 }
 
@@ -665,7 +665,7 @@ pub(crate) fn text_box(item: &[Sexpr], unit: u32, body_style: u32) -> Option<Lib
 }
 
 /// `(text private ..)`, `(text_box private ..)`: the word `private` before the text (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbolText` / `parseSymbolTextBox`: `if( token == T_private ) SetPrivate( true )`).
-fn is_private(item: &[Sexpr]) -> bool {
+pub(crate) fn is_private(item: &[Sexpr]) -> bool {
     // the bare keyword, not a quoted text that says "private" (a quoted atom keeps its mark)
     matches!(item.get(1), Some(Sexpr::Atom(a)) if a == "private")
 }

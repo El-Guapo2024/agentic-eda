@@ -2138,14 +2138,15 @@ fn kicad_cli_named_nets(root: &Path) -> std::collections::BTreeMap<String, Vec<S
 /// - A6-M2 (`conn_facts.cpp`: `numbersByName[pin->GetShownName()]`, and `SCH_PIN::GetShownName` is the alternate when one is set; the name part is the
 ///   library pin's, `libPin->GetShownName()`): `alt1`, QA `issue22286/bugtest` with library pins 3 and 7 renamed `IO`, picking `3.out` and `7.in` -- no
 ///   duplicate name, so `Net-(J1-IO)` and `Net-(J1-IO)_1`, not `-Pad3` / `-Pad7`. Which of the two takes `_1` follows KiCad's node order, the smallest
-///   item KIID of each island (`conn_publish.cpp`, `NODE_LESS` over `RECORD_KEY::anchor`): the import keeps kicad-cli's names of the original, the tracer
-///   gives kicad-cli's of the derived file ([`the_tracers_net_names_are_kicad_clis_of_the_derived_schematic`], PARITY-sch §87);
+///   item KIID of each island (`conn_publish.cpp`, `NODE_LESS` over `RECORD_KEY::anchor`): the tracer gives the names kicad-cli gives the derived file
+///   ([`the_tracers_net_names_are_kicad_clis_of_the_derived_schematic`], PARITY-sch §87) -- J1.7's net keeps the bare name there; kicad-cli gives it to J1.3's
+///   in the original, whose item KIIDs the design does not keep;
 /// - A6-L2 (`fact.noConnect = GetType() == PT_NC`, `m_alt` the symbol's on every path): `a22286x2`, the `a22286` screen placed by two sheets; the later
 ///   path's J11 pin 3 has J1's alternate too.
 #[test]
 fn a_pins_alternate_is_its_shown_name_for_the_duplicate_name_test() {
     let cases: &[(&str, &[(&str, &[&str])])] = &[
-        ("alt1", &[("Net-(J1-IO)", &["J1.3", "R1.1"]), ("Net-(J1-IO)_1", &["J1.7", "R1.2"])]),
+        ("alt1", &[("Net-(J1-IO)", &["J1.7", "R1.2"]), ("Net-(J1-IO)_1", &["J1.3", "R1.1"])]),
         ("a22286x2", &[("Net-(J1-Pad3)", &["J1.3", "R1.1"]), ("Net-(J11-Pad3)", &["J11.3", "R11.1"]), ("Net-(J11-Pad7)", &["J11.7", "R11.2"]), ("unconnected-(J11-Pad4)", &["J11.4"])]),
     ];
     for (case, want) in cases {

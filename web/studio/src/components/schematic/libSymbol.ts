@@ -6,18 +6,27 @@
 // `lib_id` is null or isn't a key in `lib_symbols` (no real graphics
 // resolved for it yet -- see types.ts's `SchematicSymbol.lib_id` doc
 // comment).
-import type { LibFill, LibGraphic, LibPin, LibSymbols, Mm, SchematicSymbol } from "../../api/types";
+import type { LibFill, LibGraphic, LibPin, LibShapeLooks, LibSymbols, Mm, SchematicSymbol } from "../../api/types";
 import { resolveSymbol } from "./layout";
 import { DEFAULT_PIN_TEXTS, type PinTexts } from "./pinText";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 import type { SchColor, SchGraphicShape } from "../../api/schEditTypes";
 import { isVerticalAngle, itemOrientationOf, orientedText } from "../../kicad-port/symTextBoxPlaced";
 
+/** A placed symbol's shape's looks (`LibShapeLooks`), the corner radius in nm. Absent: a shape drawn in the symbol's colour, solid, as before. */
+export interface ResolvedShapeLooks {
+  lineStyle?: LibShapeLooks["line_style"];
+  strokeColor?: SchColor;
+  fillColor?: SchColor;
+  hatch?: LibShapeLooks["hatch"];
+  radiusNm?: number;
+}
+
 export type ResolvedGraphic =
-  | { kind: "rectangle"; start: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
-  | { kind: "polyline"; pts: [number, number][]; strokeWidthNm: number; fill: LibFill }
-  | { kind: "circle"; center: [number, number]; radiusNm: number; strokeWidthNm: number; fill: LibFill }
-  | { kind: "arc"; start: [number, number]; mid: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
+  | { kind: "rectangle"; start: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill; looks?: ResolvedShapeLooks }
+  | { kind: "polyline"; pts: [number, number][]; strokeWidthNm: number; fill: LibFill; looks?: ResolvedShapeLooks }
+  | { kind: "circle"; center: [number, number]; radiusNm: number; strokeWidthNm: number; fill: LibFill; looks?: ResolvedShapeLooks }
+  | { kind: "arc"; start: [number, number]; mid: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill; looks?: ResolvedShapeLooks }
   | { kind: "text"; content: string; at: [number, number]; angleDeg: number; sizeNm: number }
   /** A library symbol's bezier (the Symbol Editor's; a placed symbol's engine drawing has its polyline instead): `SCH_PAINTER`'s `DrawCurve( start, c1, c2, end )`. */
   | { kind: "bezier"; start: [number, number]; c1: [number, number]; c2: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
@@ -122,6 +131,17 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
   return { graphics, pins, bbox: { minX, minY, maxX, maxY }, texts };
 }
 
+/** `r` with the looks the library shape `g` has (`LibShapeLooks`), when it has any. */
+function withLooks<T extends ResolvedGraphic>(r: T, g: LibShapeLooks): T {
+  const looks: ResolvedShapeLooks = {};
+  if (g.line_style && g.line_style !== "default") looks.lineStyle = g.line_style;
+  if (g.stroke_color) looks.strokeColor = g.stroke_color;
+  if (g.fill_color) looks.fillColor = g.fill_color;
+  if (g.hatch) looks.hatch = g.hatch;
+  if (g.corner_radius_mm && g.corner_radius_mm > 0) looks.radiusNm = g.corner_radius_mm * 1e6;
+  return Object.keys(looks).length > 0 ? { ...r, looks } : r;
+}
+
 function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatrix>, at: [number, number], grow: (p: [number, number]) => void, textBoxShown?: Record<string, string>): ResolvedGraphic {
   const pt = (p: [Mm, Mm]) => {
     const r = resolveLibPoint(p, m, at);
@@ -130,13 +150,13 @@ function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatri
   };
   switch (g.kind) {
     case "rectangle":
-      return { kind: "rectangle", start: pt(g.start), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
+      return withLooks({ kind: "rectangle", start: pt(g.start), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill }, g);
     case "polyline":
-      return { kind: "polyline", pts: g.pts.map(pt), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
+      return withLooks({ kind: "polyline", pts: g.pts.map(pt), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill }, g);
     case "circle":
-      return { kind: "circle", center: pt(g.center), radiusNm: mmToNm(g.radius), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
+      return withLooks({ kind: "circle", center: pt(g.center), radiusNm: mmToNm(g.radius), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill }, g);
     case "arc":
-      return { kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill };
+      return withLooks({ kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill }, g);
     case "text":
       return { kind: "text", content: g.content, at: pt(g.at), angleDeg: g.angle_deg, sizeNm: mmToNm(g.size_mm) };
     case "text_box": {

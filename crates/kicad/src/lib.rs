@@ -1470,6 +1470,20 @@ fn fields_autoplaced_token(sch: &eda_model::ir::SchematicSection, key: &str) -> 
 }
 
 fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide: bool) {
+    write_property_looking(out, key, value, x, y, hide, None)
+}
+
+/// [`write_property`] of a library symbol's field in the schematic's cache with the face, pen and colour the library gives it (`EDA_TEXT::Format`: `(face ..)`,
+/// the size, `(thickness ..)`, the colour; [`eda_model::symbol::LibConnectivity::field_looks`], PARITY-sch §87).
+fn write_property_looking(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide: bool, look: Option<&eda_model::lib_keep::KeptFieldLooks>) {
+    if let Some(l) = look.filter(|l| !l.is_default()) {
+        let face = l.font.as_deref().map(|f| format!("(face {}) ", sexpr_str(f))).unwrap_or_default();
+        let pen = l.thickness_mm.map(|t| format!(" (thickness {})", fmt_mm_f(t))).unwrap_or_default();
+        let color = l.color.map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a))).unwrap_or_default();
+        let hide = if hide { " (hide yes)" } else { "" };
+        writeln!(out, "\t\t(property {} {} (at {x} {y} 0)\n\t\t\t(effects (font {face}(size 1.27 1.27){pen}{color}){hide})\n\t\t)", sexpr_str(key), sexpr_str(value)).unwrap();
+        return;
+    }
     if hide {
         writeln!(
             out,
@@ -1627,16 +1641,18 @@ fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, inst
             writeln!(out, "\t\t\t(jumper_pin_groups {})", groups.join(" ")).unwrap();
         }
     }
-    write_property(out, "Reference", "U", 0.0, 0.0, false);
-    write_property(out, "Value", bare_name, 0.0, 0.0, false);
+    // each field with the face, pen and colour the library gives it (PARITY-sch §87)
+    let field_look = |name: &str| resolved.as_ref().and_then(|r| r.connectivity.field_looks.get(name));
+    write_property_looking(out, "Reference", "U", 0.0, 0.0, false, field_look("Reference"));
+    write_property_looking(out, "Value", bare_name, 0.0, 0.0, false, field_look("Value"));
     // the mandatory Description (`SaveSymbol` writes every field, `FIELD_T::DESCRIPTION` among them), which kicad-cli's netlist reads as the part's
     // `<description>` (r7 H3)
     if let Some(d) = resolved.as_ref().map(|r| r.description.as_str()).filter(|d| !d.is_empty()) {
-        write_property(out, "Description", d, 0.0, 0.0, true);
+        write_property_looking(out, "Description", d, 0.0, 0.0, true, field_look("Description"));
     }
     // the library symbol's user fields (`SaveSymbol` writes every field), which its body texts resolve `${NAME}` by (`LIB_SYMBOL::ResolveTextVar`)
     for (name, text) in resolved.iter().flat_map(|r| r.connectivity.user_fields.iter()) {
-        write_property(out, name, text, 0.0, 0.0, true);
+        write_property_looking(out, name, text, 0.0, 0.0, true, field_look(name));
     }
     // the keywords and the footprint filters (`saveDcmInfoAsFields`: `ki_keywords`, `ki_fp_filters`, hidden, each when it is not empty, r7 H3)
     for (name, text) in resolved.iter().flat_map(|r| [("ki_keywords", &r.connectivity.keywords), ("ki_fp_filters", &r.connectivity.fp_filters)]) {
@@ -1842,7 +1858,11 @@ fn write_unit_graphics(out: &mut String, sym: &eda_model::LibSymbol, unit: u32, 
             borders.swap_remove(i);
             continue;
         }
-        write_symbol_graphic(out, &baked_graphic(g, baker, width, x0, y1));
+        write_cache_shape(out, &baked_graphic(g, baker, width, x0, y1), sym.connectivity.shape_look(g));
+    }
+    // the shapes private to the Symbol Editor, which the cache keeps with `private` (`SaveSymbol` writes every draw item; PARITY-sch §87)
+    for l in sym.connectivity.private_shapes(unit, style) {
+        write_cache_shape(out, &baked_graphic(&l.graphic, baker, width, x0, y1), Some(l));
     }
     let (rot, _) = eda_engine::symgeom::kicad_turn(baker.rot, baker.mirrored, baker.mirror_y);
     let quarter_turn = eda_model::sym_textbox::turns_a_quarter(rot);
@@ -1885,7 +1905,10 @@ fn write_power_lib_symbol_named(out: &mut String, name: &str, value: &str, unit_
 
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{unit_name}_0_1"))).unwrap();
     for g in &resolved.graphics {
-        write_symbol_graphic(out, g);
+        write_cache_shape(out, g, resolved.connectivity.shape_look(g));
+    }
+    for l in resolved.connectivity.private_shapes(0, 1).chain(resolved.connectivity.private_shapes(1, 1)) {
+        write_cache_shape(out, &l.graphic, Some(l));
     }
     writeln!(out, "\t\t\t)").unwrap();
 
@@ -1908,62 +1931,53 @@ fn write_power_lib_symbol_named(out: &mut String, name: &str, value: &str, unit_
     writeln!(out, "\t\t)").unwrap();
 }
 
-fn write_symbol_graphic(out: &mut String, g: &eda_model::SymbolGraphic) {
+/// A shape of a symbol in the schematic's cache with its look (UI-LEFT-2 YY2, PARITY-sch §87), as `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` writes it
+/// (`formatRect` .. `formatPoly`: `private` after the keyword, a rectangle's `(radius ..)` after its corners, `STROKE_PARAMS::Format`'s type and colour,
+/// `formatFill`'s type -- a hatch's own -- and the colour of a colour or hatched fill); a shape with no look as before, its fill `background` when it has one.
+fn write_cache_shape(out: &mut String, g: &eda_model::SymbolGraphic, look: Option<&eda_model::symbol::ShapeLook>) {
+    use eda_model::ir::LibraryFill;
+    use eda_model::SymbolGraphic::*;
+    let filled = match g {
+        Rectangle { filled, .. } | Polyline { filled, .. } | Circle { filled, .. } | Arc { filled, .. } => *filled,
+        Text { .. } => return write_symbol_graphic_text(out, g),
+    };
+    let private = if look.is_some_and(|l| l.looks.private) { " private" } else { "" };
+    let kind = look.and_then(|l| l.stroke_type.as_deref()).unwrap_or("default");
+    let color = |c: Option<eda_model::sch_extras::SchColor>| c.filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0)).map(|c| format!(" (color {})", sch_extras_io::color_str(c))).unwrap_or_default();
+    let stroke_color = color(look.and_then(|l| l.looks.stroke_color));
+    let fill = match look.map(|l| l.fill) {
+        Some(LibraryFill::None) => "(fill (type none))".to_string(),
+        Some(LibraryFill::Outline) => "(fill (type outline))".to_string(),
+        Some(LibraryFill::Background) => "(fill (type background))".to_string(),
+        Some(LibraryFill::Color) => {
+            let l = look.unwrap();
+            let c = l.looks.fill_color.unwrap_or(eda_model::sch_extras::SchColor { r: 0, g: 0, b: 0, a: 0 });
+            format!("(fill (type {}) (color {}))", l.looks.hatch.as_deref().unwrap_or("color"), sch_extras_io::color_str(c))
+        }
+        None => format!("(fill (type {}))", if filled { "background" } else { "none" }),
+    };
+    let radius = match (g, look) {
+        (Rectangle { .. }, Some(l)) if l.looks.radius_mm > 0.0 => format!(" (radius {})", fmt_mm_f(l.looks.radius_mm)),
+        _ => String::new(),
+    };
+    let (tag, geometry) = match g {
+        Rectangle { start, end, .. } => ("rectangle", format!("(start {} {}) (end {} {}){radius}", fmt_mm_f(start.x), fmt_mm_f(start.y), fmt_mm_f(end.x), fmt_mm_f(end.y))),
+        Polyline { pts, .. } => ("polyline", format!("(pts{})", pts.iter().map(|p| format!(" (xy {} {})", fmt_mm_f(p.x), fmt_mm_f(p.y))).collect::<String>())),
+        Circle { center, radius_mm, .. } => ("circle", format!("(center {} {}) (radius {})", fmt_mm_f(center.x), fmt_mm_f(center.y), fmt_mm_f(*radius_mm))),
+        Arc { start, mid, end, .. } => ("arc", format!("(start {} {}) (mid {} {}) (end {} {})", fmt_mm_f(start.x), fmt_mm_f(start.y), fmt_mm_f(mid.x), fmt_mm_f(mid.y), fmt_mm_f(end.x), fmt_mm_f(end.y))),
+        Text { .. } => unreachable!(),
+    };
+    let width = match g {
+        Rectangle { stroke_mm, .. } | Polyline { stroke_mm, .. } | Circle { stroke_mm, .. } | Arc { stroke_mm, .. } => *stroke_mm,
+        Text { .. } => 0.0,
+    };
+    writeln!(out, "\t\t\t\t({tag}{private}\n\t\t\t\t\t{geometry}\n\t\t\t\t\t(stroke (width {}) (type {kind}){stroke_color})\n\t\t\t\t\t{fill}\n\t\t\t\t)", fmt_mm_f(width)).unwrap();
+}
+
+/// A symbol's text in the schematic's cache.
+fn write_symbol_graphic_text(out: &mut String, g: &eda_model::SymbolGraphic) {
     use eda_model::SymbolGraphic::*;
     match g {
-        Rectangle { start, end, stroke_mm, filled, .. } => {
-            writeln!(
-                out,
-                "\t\t\t\t(rectangle\n\t\t\t\t\t(start {} {}) (end {} {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(start.x),
-                fmt_mm_f(start.y),
-                fmt_mm_f(end.x),
-                fmt_mm_f(end.y),
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
-        Polyline { pts, stroke_mm, filled, .. } => {
-            write!(out, "\t\t\t\t(polyline\n\t\t\t\t\t(pts").unwrap();
-            for p in pts {
-                write!(out, " (xy {} {})", fmt_mm_f(p.x), fmt_mm_f(p.y)).unwrap();
-            }
-            writeln!(
-                out,
-                ")\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
-        Circle { center, radius_mm, stroke_mm, filled, .. } => {
-            writeln!(
-                out,
-                "\t\t\t\t(circle\n\t\t\t\t\t(center {} {}) (radius {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(center.x),
-                fmt_mm_f(center.y),
-                fmt_mm_f(*radius_mm),
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
-        Arc { start, mid, end, stroke_mm, filled, .. } => {
-            writeln!(
-                out,
-                "\t\t\t\t(arc\n\t\t\t\t\t(start {} {}) (mid {} {}) (end {} {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
-                fmt_mm_f(start.x),
-                fmt_mm_f(start.y),
-                fmt_mm_f(mid.x),
-                fmt_mm_f(mid.y),
-                fmt_mm_f(end.x),
-                fmt_mm_f(end.y),
-                fmt_mm_f(*stroke_mm),
-                if *filled { "background" } else { "none" },
-            )
-            .unwrap();
-        }
         Text { text, at, angle_deg, size_mm, .. } => {
             writeln!(
                 out,
@@ -1977,6 +1991,7 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::SymbolGraphic) {
             )
             .unwrap();
         }
+        _ => {}
     }
 }
 

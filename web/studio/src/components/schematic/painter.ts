@@ -57,7 +57,8 @@ import { dashPattern, drawSelectionBox, drawTextBoxText, paintGraphics, paintIma
 import { dnpCross } from "./symbolMarkers";
 import { paintSchTables } from "./schTablePaint";
 import { drawGroups } from "./schGroupPainter";
-import type { SchStroke } from "../../api/schEditTypes";
+import type { SchColor, SchStroke } from "../../api/schEditTypes";
+import { hatchLines } from "../../kicad-port/schHatch";
 import { allItems, itemBounds } from "./schItems";
 import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
 import { isPinItemId, pinById, type PinItem } from "../../kicad-port/schPins";
@@ -492,6 +493,10 @@ export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphi
     return;
   }
 
+  if (g.kind !== "bezier" && g.looks) {
+    drawLookedShape(ctx, g, g.looks, strokeColor);
+    return;
+  }
   const mode = fillPaint(g.fill);
   const widthNm = effectiveStrokeWidthNm(g.strokeWidthNm);
   applyFill(ctx, mode, strokeColor);
@@ -546,6 +551,90 @@ export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphi
   if (widthNm !== null) {
     ctx.lineWidth = widthNm;
     ctx.stroke();
+  }
+}
+
+/**
+ * `SCH_PAINTER::draw( SCH_SHAPE )` of a placed symbol's shape with the looks its library shape has (`ResolvedShapeLooks`; UI-LEFT-2 YY2, PARITY-sch §87), as the Symbol
+ * Editor draws it (components/symbol/symbolPainter.ts `drawLibShape`): the fill on the background layer -- a hatch's lines or a colour fill in the fill colour, the outline
+ * fill in the stroke's, each `LAYER_DEVICE`'s when unspecified (`getRenderColor`), the body background's -- then the outline in the stroke's colour with its line style
+ * (`STROKE_PARAMS::Stroke`'s dashes); a rectangle with a corner radius is a rounded one. The shape's own colours give way to `strokeColor` when that is not the device
+ * colour (a selected or highlighted symbol) or the theme overrides item colours.
+ */
+function drawLookedShape(ctx: CanvasRenderingContext2D, g: Exclude<ResolvedGraphic, { kind: "text" | "text_box" | "bezier" }>, looks: NonNullable<Extract<ResolvedGraphic, { kind: "rectangle" }>["looks"]>, strokeColor: string) {
+  const device = layerColor("LAYER_DEVICE");
+  const ownColors = strokeColor === device && !overrideSchItemColors();
+  const own = (c: SchColor | undefined) => (ownColors && c && !(c.r === 0 && c.g === 0 && c.b === 0 && c.a === 0) ? rgba(c) : null);
+  const stroke = own(looks.strokeColor) ?? strokeColor;
+  const trace = () => {
+    ctx.beginPath();
+    switch (g.kind) {
+      case "rectangle": {
+        const x = Math.min(g.start[0], g.end[0]);
+        const y = Math.min(g.start[1], g.end[1]);
+        const w = Math.abs(g.end[0] - g.start[0]);
+        const h = Math.abs(g.end[1] - g.start[1]);
+        const r = Math.min(looks.radiusNm ?? 0, w / 2, h / 2);
+        if (r > 0 && typeof ctx.roundRect === "function") ctx.roundRect(x, y, w, h, r);
+        else ctx.rect(x, y, w, h);
+        break;
+      }
+      case "polyline":
+        g.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        break;
+      case "circle":
+        ctx.moveTo(g.center[0] + g.radiusNm, g.center[1]);
+        ctx.arc(g.center[0], g.center[1], g.radiusNm, 0, Math.PI * 2);
+        break;
+      case "arc": {
+        const center = arcCenter(g.start, g.mid, g.end);
+        if (!center) {
+          ctx.moveTo(g.start[0], g.start[1]);
+          ctx.lineTo(g.end[0], g.end[1]);
+          break;
+        }
+        const r = Math.hypot(g.start[0] - center[0], g.start[1] - center[1]);
+        const a0 = Math.atan2(g.start[1] - center[1], g.start[0] - center[0]);
+        const sweep = norm180(Math.atan2(g.mid[1] - center[1], g.mid[0] - center[0]) - a0) + norm180(Math.atan2(g.end[1] - center[1], g.end[0] - center[0]) - Math.atan2(g.mid[1] - center[1], g.mid[0] - center[0]));
+        ctx.arc(center[0], center[1], r, a0, a0 + sweep, sweep < 0);
+        break;
+      }
+    }
+  };
+  const widthNm = effectiveStrokeWidthNm(g.strokeWidthNm);
+  // the background layer (an arc is not filled: "we have no idea which side of the arc is inside")
+  if (g.fill !== "none" && g.kind !== "arc") {
+    ctx.save();
+    const hatch = looks.hatch ?? (g.fill === "hatch" || g.fill === "reverse_hatch" || g.fill === "cross_hatch" ? g.fill : undefined);
+    if (hatch) {
+      trace();
+      ctx.clip();
+      const pts: [number, number][] = g.kind === "circle" ? [[g.center[0] - g.radiusNm, g.center[1] - g.radiusNm], [g.center[0] + g.radiusNm, g.center[1] + g.radiusNm]] : g.kind === "polyline" ? g.pts : [g.start, g.end];
+      const xs = pts.map((p) => p[0]);
+      const ys = pts.map((p) => p[1]);
+      const h = hatchLines(hatch, [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], widthNm ?? 152_400);
+      ctx.strokeStyle = own(looks.fillColor) ?? (ownColors ? device : strokeColor);
+      ctx.lineWidth = h.width;
+      ctx.beginPath();
+      for (const [ax, ay, bx, by] of h.segments) {
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+      }
+      ctx.stroke();
+    } else {
+      trace();
+      ctx.fillStyle = g.fill === "color" ? (own(looks.fillColor) ?? (ownColors ? device : strokeColor)) : g.fill === "background" ? layerColor("LAYER_DEVICE_BACKGROUND") : stroke;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+  if (widthNm !== null) {
+    trace();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = widthNm;
+    ctx.setLineDash(dashPattern(looks.lineStyle ?? "solid", widthNm));
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 }
 

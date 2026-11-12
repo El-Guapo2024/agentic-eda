@@ -259,6 +259,25 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
     }
 }
 
+/// Each field's face, colour and pen (`(property "Reference" "R" .. (effects (font (face ..) (size ..) (thickness ..) (color ..)))))`, `parseSchField`), by name,
+/// for a field that has one of them (PARITY-sch §87).
+fn field_looks_of(node: &[Sexpr]) -> std::collections::BTreeMap<String, eda_model::lib_keep::KeptFieldLooks> {
+    let mut out = std::collections::BTreeMap::new();
+    for p in sexpr::find_all(node, "property") {
+        let Some(name) = sexpr::txt(p, 1) else { continue };
+        let Some(font) = sexpr::find(p, "effects").and_then(|e| sexpr::find(e, "font")) else { continue };
+        let look = eda_model::lib_keep::KeptFieldLooks {
+            font: sexpr::find(font, "face").and_then(|f| sexpr::txt(f, 1)).map(str::to_string),
+            color: sexpr::find(font, "color").and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0)),
+            thickness_mm: sexpr::find(font, "thickness").and_then(|t| sexpr::num(t, 1)),
+        };
+        if !look.is_default() {
+            out.insert(name.to_string(), look);
+        }
+    }
+    out
+}
+
 /// `(power local)`, `(duplicate_pin_numbers_are_jumpers yes)` and `(jumper_pin_groups ("1" "2") ..)` of a symbol's node (`SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol`:
 /// `T_power`, `T_duplicate_pin_numbers_are_jumpers`, `T_jumper_pin_groups`), each group's numbers sorted as KiCad's `std::set` keeps them.
 pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectivity {
@@ -310,6 +329,13 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
         jumper_pin_groups,
         pin_alternates,
         text_boxes,
+        // the shapes' looks and the private ones (PARITY-sch §87), of the body styles a symbol is drawn in
+        shape_looks: sexpr::find_all(node, "symbol")
+            .filter_map(|sub| sexpr::txt(sub, 1).map(|n| (sub, unit_and_style_of_subname(n))))
+            .filter(|(_, (_, style))| *style <= 2)
+            .flat_map(|(sub, (unit, style))| sub_symbol_looks(sub, unit, style))
+            .collect(),
+        field_looks: field_looks_of(node),
     }
 }
 
@@ -359,6 +385,25 @@ fn graphics_and_pins(item: &[Sexpr]) -> Bodies {
         }
     }
     Bodies { graphics: normal.0, pins: normal.1, unit_count: max_unit, alternate: has_alt.then(|| Box::new(AlternateBody::new(alt.0, alt.1))) }
+}
+
+/// The looks of the shapes of one `(symbol "Name_<unit>_<style>" ...)` sub-block ([`eda_model::symbol::ShapeLook`], PARITY-sch §87): each shape's fill
+/// (`parseFill`), line style and colour (`STROKE_PARAMS`), hatch, fill colour and a rectangle's `(radius ..)` (`parseSymbolRectangle`), and the shapes private
+/// to the Symbol Editor, of body style `style`, with the graphic [`sub_symbol_items`] reads of each.
+fn sub_symbol_looks(sub: &[Sexpr], unit: u32, style: u32) -> Vec<eda_model::symbol::ShapeLook> {
+    let mut out = Vec::new();
+    for tag in ["rectangle", "polyline", "circle", "arc"] {
+        for item in sexpr::find_all(sub, tag) {
+            // the shape as `sub_symbol_items` reads it (a private one too, by reading it without its keyword)
+            let plain: Vec<Sexpr> = item.iter().enumerate().filter(|(i, c)| !(*i == 1 && matches!(c, Sexpr::Atom(a) if a == "private"))).map(|(_, c)| c.clone()).collect();
+            let wrapped = [Sexpr::List(plain)];
+            let Some(graphic) = sub_symbol_items(&wrapped, unit).0.into_iter().next() else { continue };
+            let looks = crate::symbol_import::graphic_looks(item).unwrap_or_default();
+            let body_style = if looks.private { style } else { 0 };
+            out.extend(eda_model::symbol::ShapeLook::of(graphic, body_style, crate::symbol_import::fill_of(item), crate::symbol_import::stroke_type(item), looks));
+        }
+    }
+    out
 }
 
 /// The graphics and pins of one `(symbol "Name_<unit>_<style>" ...)` sub-block, all of unit `unit`. A shape, text or text box private to the Symbol Editor
