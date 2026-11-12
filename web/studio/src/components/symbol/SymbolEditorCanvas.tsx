@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import { drawTarget, useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
+import { focusOnLocation } from "../../kicad-port/pinTable";
 import { paintSymbol, mmPointToNm, nmPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
 import { useGridSettings } from "../../state/gridSettings";
@@ -302,6 +303,14 @@ export function SymbolEditorCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sym != null, state.libId, state.fitRequest, containerSize, dispatch]);
 
+  // `FocusOnItem`'s `FocusOnLocation`: the Pin Table's cross-probed pin brought into view when it is off it or near its edge
+  useEffect(() => {
+    if (!state.brightened || containerSize.width < 50) return;
+    const next = focusOnLocation(state.view, state.brightened.atNm, containerSize.width, containerSize.height);
+    if (next) dispatch({ type: "SET_VIEW", view: next });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.brightened]);
+
   useEffect(() => {
     userMovedRef.current = false;
   }, [state.libId]);
@@ -327,7 +336,8 @@ export function SymbolEditorCanvas() {
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintSymbol(ctx, state.view, width, height, sym, {
-      selection: state.selection,
+      // the Pin Table's cross-probed pin (`FocusOnItem`'s `SetBrightened`), drawn as the selection is
+      selection: state.brightened ? new Set([...state.selection, state.brightened.id]) : state.selection,
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       gridYNm,
@@ -354,7 +364,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
+  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

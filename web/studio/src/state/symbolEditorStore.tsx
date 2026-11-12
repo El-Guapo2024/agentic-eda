@@ -124,6 +124,8 @@ export interface SymbolEditorState {
   /** "E" on a selected pin, or double-click -- which pin's Pin Properties dialog is open. */
   pinPropertiesId: string | null;
   pinTableOpen: boolean;
+  /** `SYMBOL_EDIT_FRAME::FocusOnItem`: the pin the Pin Table cross-probes (brightened, the view centred on it when it is near the edge); `null` is `ClearFocus()`. */
+  brightened: { id: string; atNm: [number, number] } | null;
   propertiesOpen: boolean;
   /** The field the Symbol Properties dialog opens on (a double click on a field of the canvas): its row is the grid's selected one. */
   propertiesField: string | null;
@@ -214,6 +216,7 @@ const initialState: SymbolEditorState = {
   activeBodyStyle: 1,
   pinPropertiesId: null,
   pinTableOpen: false,
+  brightened: null,
   propertiesOpen: false,
   propertiesField: null,
   treeSelection: [],
@@ -267,6 +270,7 @@ export type SymAction =
   | { type: "SET_ACTIVE_BODY_STYLE"; style: number }
   | { type: "SET_PIN_PROPERTIES_ID"; id: string | null }
   | { type: "SET_PIN_TABLE_OPEN"; open: boolean }
+  | { type: "SET_BRIGHTENED"; item: { id: string; atNm: [number, number] } | null }
   | { type: "SET_PROPERTIES_OPEN"; open: boolean; field?: string }
   | { type: "SET_TREE_SELECTION"; names: string[] }
   | { type: "TOGGLE_ELECTRICAL_TYPES" }
@@ -383,6 +387,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, pinPropertiesId: action.id };
     case "SET_PIN_TABLE_OPEN":
       return { ...state, pinTableOpen: action.open };
+    case "SET_BRIGHTENED":
+      return { ...state, brightened: action.item };
     case "SET_PROPERTIES_OPEN":
       return { ...state, propertiesOpen: action.open, propertiesField: action.open ? (action.field ?? null) : null };
     case "SET_TREE_SELECTION":
