@@ -24,7 +24,8 @@ fn with_board(dir: &Path, f: impl FnOnce(&Board<'_>) -> Value) -> Value {
 }
 
 pub fn areas(dir: &Path) -> Value {
-    with_board(dir, |b| json!({ "ok": true, "areas": b.mc_potential_areas() }))
+    let project = crate::kicad_engine::project_name(dir);
+    with_board(dir, |b| json!({ "ok": true, "areas": b.mc_potential_areas_in(&project) }))
 }
 
 pub fn sources(dir: &Path) -> Value {

@@ -13,6 +13,7 @@ import { footprintShown } from "./appearancePaint";
 import { drawDimensions, withLayer, type PaintOptions } from "./painter";
 import { drawTables } from "./tablePaint";
 import { layerStateKey } from "../../kicad-port/layerPresets";
+import { keptReadableInFlippedView } from "../../kicad-port/flipView";
 
 /** Draw the text boxes, barcodes, points, dimensions and tables of `part`; nothing when it has none or its side is not shown. */
 export function drawFootprintItems(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part, opts: PaintOptions): void {
@@ -20,7 +21,7 @@ export function drawFootprintItems(ctx: CanvasRenderingContext2D, view: ViewTran
   const selected = opts.selection.has(part.ref);
   for (const b of fpTextBoxes(part)) {
     if (!layerIsVisible(opts.layerVisible, b.layer)) continue;
-    withLayer(ctx, opts, layerStateKey(b.layer), 1, () => drawTextBox(ctx, view, b, selected, !!opts.sketchText));
+    withLayer(ctx, opts, layerStateKey(b.layer), 1, () => drawTextBox(ctx, view, b, selected, !!opts.sketchText, { flippedView: keptReadableInFlippedView(opts.viewFlipped, b.layer, opts.layerTypes) }));
   }
   for (const b of fpBarcodes(part)) {
     if (!layerIsVisible(opts.layerVisible, b.layer)) continue;

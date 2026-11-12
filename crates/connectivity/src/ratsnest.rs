@@ -52,6 +52,7 @@ impl RatsnestEdge {
             ItemRef::TrackSeg { track_id, .. } => track_id.clone(),
             ItemRef::Via { via_id } => via_id.clone(),
             ItemRef::ZoneOutline { zone_id } => zone_id.clone(),
+            ItemRef::Shape { shape_id } => shape_id.clone(),
         }
     }
 }

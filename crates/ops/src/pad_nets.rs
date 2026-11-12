@@ -315,7 +315,7 @@ impl Board<'_> {
         }
         while let Some(cur) = queue.pop() {
             for &nb in &graph.items[cur].connected {
-                if !in_cluster[nb] && graph.items[nb].net == graph.items[cur].net && !matches!(graph.items[nb].item, ItemRef::ZoneOutline { .. }) {
+                if !in_cluster[nb] && graph.items[nb].net == graph.items[cur].net && !matches!(graph.items[nb].item, ItemRef::ZoneOutline { .. } | ItemRef::Shape { .. }) {
                     in_cluster[nb] = true;
                     queue.push(nb);
                 }
@@ -346,7 +346,8 @@ impl Board<'_> {
                             shorting.insert(other.net.clone());
                         }
                     }
-                    ItemRef::ZoneOutline { .. } => {}
+                    // the loop asks the board's tracks and pads only
+                    ItemRef::ZoneOutline { .. } | ItemRef::Shape { .. } => {}
                 }
             }
         }

@@ -2,7 +2,7 @@
 // `{ op: "pcb_item", verb: ..., ... }`). `Board*` types are the display shape `GET /api/state` sends in `drawings` (crates/cli/src/pcb_items_json.rs: points are `[x, y]`
 // pairs); `Cmd*` types are the IR's own shape, which a verb takes.
 import type { SchLineStyle } from "./schEditTypes";
-import type { PointXY, Nm } from "./types";
+import type { PointXY, Nm, TeardropParams, ViaProps } from "./types";
 
 export type TextBoxHAlign = "left" | "center" | "right";
 export type TextBoxVAlign = "top" | "center" | "bottom";
@@ -150,8 +150,23 @@ export interface BoardViaStitch {
   guarded_net?: string;
   excluded_cells?: [number, number][];
   excluded_positions?: PointXY[];
-  /** The template every via is a copy of; `kind` and `annular` are what Configure set over its file text (crates/model/src/via_stitch.rs `ViaTemplate`). */
-  via?: { size_nm: number; drill_nm: number; from_layer: string; to_layer: string; text?: string; kind?: "through" | "blind" | "buried" | "micro"; annular?: "keep_all" | "remove_all" | "remove_except_start_and_end" | "start_end_only" };
+  /** The template every via is a copy of; `kind`, `annular`, `props`, `teardrops`, `net` and `locked` are what Configure set over its file text (crates/model/src/via_stitch.rs
+   * `ViaTemplate`). */
+  via?: {
+    size_nm: number;
+    drill_nm: number;
+    from_layer: string;
+    to_layer: string;
+    text?: string;
+    kind?: "through" | "blind" | "buried" | "micro";
+    annular?: "keep_all" | "remove_all" | "remove_except_start_and_end" | "start_end_only";
+    props?: ViaProps;
+    teardrops?: TeardropParams;
+    net?: string;
+    locked?: boolean;
+  };
+  /** The template as Configure shows it: its text with what Configure set over it (the server's, read-only; never sent back). */
+  via_view?: { props: ViaProps; teardrops: TeardropParams | null; net: string; locked: boolean; type: "through" | "blind" | "buried" | "micro"; unconnected: "keep_all" | "remove_all" | "remove_except_start_and_end" | "start_end_only" };
   member_ids?: string[];
   custom_properties?: [string, string][];
 }

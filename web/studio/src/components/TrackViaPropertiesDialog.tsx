@@ -1,5 +1,10 @@
 // `DIALOG_TRACK_VIA_PROPERTIES` over the tracks and vias the dialog was opened on (kicad-port/trackViaDialog.ts holds the form and the edits): a field the items share
-// shows its value, one where they differ is empty (indeterminate) and is left alone; OK sends what changed as one batch, one undo step.
+// shows its value, one where they differ is empty (indeterminate) and is left alone; OK sends what changed as one batch, one undo step. With `standalone` it is the
+// dialog's standalone form (`DIALOG_TRACK_VIA_PROPERTIES( aParent, aStandaloneVia )`, Via Stitching's Configure, UI-LEFT-2 PP22): `board` holds the one via, and OK hands
+// the form to the caller instead of committing anything (`if( !m_standalone ) commit.Push(..)`). "Pre-defined sizes:" of the tracks and of the vias are
+// `m_predefinedTrackWidthsCtrl` and `m_predefinedViaSizesCtrl`: Board Setup's widths and via sizes (`m_TrackWidthList`, `m_ViasDimensionsList` past the net class's
+// entry), the one the items have selected, a choice put into the width or the diameter and hole (`onWidthSelect`, `onViaSelect`), an edit of the via leaving none
+// selected (`onViaEdit`).
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BoardState, Nm } from "../api/types";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
@@ -32,10 +37,24 @@ import { useStudioApi } from "../state/store";
 import { formatLength, nmFrom, nmTo, type LengthUnit } from "../state/units";
 import { useOriginTransforms } from "../state/originTransforms";
 import { fromDisplay, toDisplay, type CoordType } from "../kicad-port/originTransforms";
+import { stringFromValue } from "../kicad-port/fpFields";
 
 type LengthKey = "startX" | "startY" | "endX" | "endY" | "width" | "viaX" | "viaY" | "diameter" | "drill";
 
-export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board: BoardState; ids: string[]; units: LengthUnit; onClose: () => void }) {
+export function TrackViaPropertiesDialog({
+  board,
+  ids,
+  units,
+  onClose,
+  standalone,
+}: {
+  board: BoardState;
+  ids: string[];
+  units: LengthUnit;
+  onClose: () => void;
+  /** The standalone form: OK gives the form to this, which answers the message that keeps the dialog open, or null. */
+  standalone?: (before: TrackViaForm, form: TrackViaForm) => string | null;
+}) {
   const api = useStudioApi();
   const before = useMemo(() => trackViaForm(board, ids), [board, ids]);
   const [form, setForm] = useState<TrackViaForm>(before);
@@ -71,6 +90,8 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
             const t = e.target.value;
             setTexts((x) => ({ ...x, [key]: t }));
             const n = Number(t);
+            // `onViaEdit`: an edit of the via's size leaves no pre-defined size selected
+            if (key === "diameter" || key === "drill") setViaPreset(-1);
             setForm((f) => ({ ...f, [key]: t.trim() === "" || !Number.isFinite(n) ? null : Math.round(fromDisplay(xf, nmFrom(n, units), coordOf[key] ?? "not")) }));
           }}
           style={{ width: 100 }}
@@ -79,7 +100,17 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
       </span>
     </>
   );
+  // `m_predefinedViaSizesCtrl`'s selection: the first size the via has at the open, none after an edit of the via (`onViaEdit`)
+  const viaPresets = board.routing?.via_presets ?? [];
+  const widthPresets = board.routing?.track_width_presets ?? [];
+  const [viaPreset, setViaPreset] = useState<number>(() => viaPresets.findIndex((p) => p.diameter === before.diameter && p.drill === before.drill));
+  const presetText = (nm: Nm) => stringFromValue(nm, units).replace(/ (mm|mils|in)$/, "");
   const ok = async () => {
+    if (standalone) {
+      const why = standalone(before, form);
+      if (why) return setError(why);
+      return onClose();
+    }
     const out = trackViaCmds(board, before, form, (nm) => formatLength(nm, units));
     if ("error" in out) return setError(out.error);
     if (out.cmds.length === 0) return onClose();
@@ -102,8 +133,8 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
   // `DIALOG_TRACK_VIA_PROPERTIES_BASE`'s title, whatever is selected (no `SetTitle`)
   const title = "Track & Via Properties";
   return (
-    <div className="dialog-backdrop" onClick={onClose}>
-      <div className="dialog" style={{ width: 440, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Track & Via Properties">
+    <div className="dialog-backdrop" style={standalone ? { zIndex: 2100 } : undefined} onClick={onClose}>
+      <div className="dialog" style={{ width: 440, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Track & Via Properties" data-testid={standalone ? "via-template-properties" : undefined}>
         <div className="dialog-header">
           <span>{title}</span>
         </div>
@@ -140,6 +171,27 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
                 {lengthRow("End X", "endX")}
                 {lengthRow("End Y", "endY")}
                 {lengthRow("Track width", "width")}
+                <span>Pre-defined sizes:</span>
+                <span>
+                  <select
+                    aria-label="Pre-defined track widths"
+                    value={String(widthPresets.findIndex((w) => w === form.width))}
+                    onChange={(e) => {
+                      const w = widthPresets[Number(e.target.value)];
+                      if (w == null) return;
+                      setForm((f) => ({ ...f, width: w }));
+                      setTexts((x) => ({ ...x, width: shownAs(w, "width") }));
+                    }}
+                  >
+                    <option value="-1" disabled hidden></option>
+                    {widthPresets.map((w, i) => (
+                      <option key={i} value={String(i)}>
+                        {presetText(w)}
+                      </option>
+                    ))}
+                  </select>{" "}
+                  {units}
+                </span>
                 <span>Layer</span>
                 <span>
                   <select aria-label="Layer" value={form.layer ?? "\u0000"} onChange={(e) => setForm((f) => ({ ...f, layer: e.target.value === "\u0000" ? null : e.target.value }))}>
@@ -204,6 +256,29 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
                   </>
                 )}
                 {lengthRow("Via hole", "drill")}
+                <span>Pre-defined sizes:</span>
+                <span>
+                  <select
+                    aria-label="Pre-defined via sizes"
+                    value={String(viaPreset)}
+                    onChange={(e) => {
+                      const i = Number(e.target.value);
+                      const p = viaPresets[i];
+                      if (p == null) return;
+                      setViaPreset(i);
+                      setForm((f) => ({ ...f, diameter: p.diameter, drill: p.drill }));
+                      setTexts((x) => ({ ...x, diameter: shownAs(p.diameter, "diameter"), drill: shownAs(p.drill, "drill") }));
+                    }}
+                  >
+                    <option value="-1" disabled hidden></option>
+                    {viaPresets.map((p, i) => (
+                      <option key={i} value={String(i)}>
+                        {presetText(p.diameter)} / {presetText(p.drill)}
+                      </option>
+                    ))}
+                  </select>{" "}
+                  {units}
+                </span>
                 <span>Via type:</span>
                 <span>
                   <select
@@ -357,7 +432,7 @@ export function TrackViaPropertiesDialog({ board, ids, units, onClose }: { board
               </>
             )}
           </div>
-          {hasVias && <TeardropFields form={form.teardrops} units={units} what="via" onChange={(teardrops) => setForm((f) => ({ ...f, teardrops }))} />}
+          {hasVias && <TeardropFields form={form.teardrops} units={units} what="via" legacy={!!board.drawings?.legacy_teardrops} onChange={(teardrops) => setForm((f) => ({ ...f, teardrops }))} />}
           {error && (
             <div role="alert" style={{ color: "var(--chrome-error, #c0392b)", fontSize: 12, marginTop: 6 }}>
               {error}

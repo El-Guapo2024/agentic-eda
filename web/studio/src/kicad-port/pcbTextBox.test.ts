@@ -89,6 +89,9 @@ test("drawPos: the text hangs on its justified corner, the margins in from it", 
   assert.deepEqual(drawPos(box({ halign: "center", valign: "center" })), [20_000, 15_000]);
   // a mirrored box is read from its other side
   assert.deepEqual(drawPos(box({ mirror: true })), [30_000 - 700, 10_600]);
+  // `GetDrawPos( true )`, Flip Board View's: `IsMirrored() != aIsFlipped`, so a plain box hangs from the right and a mirrored one from the left
+  assert.deepEqual(drawPos(box(), true), [30_000 - 700, 10_600]);
+  assert.deepEqual(drawPos(box({ mirror: true }), true), [10_500, 10_600]);
 });
 
 test("drawPos: the margin is turned with the text", () => {

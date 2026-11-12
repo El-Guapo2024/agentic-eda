@@ -142,6 +142,8 @@ pub fn flashed_layers(design: &Design, model: &ConstraintModel) -> Flashed {
                         !(conditional(own_mode) && conditional(mode_of_pad(reference, number, nth)))
                     }
                     ItemRef::TrackSeg { .. } | ItemRef::Via { .. } => true,
+                    // `nonZoneTypes = { PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T, PCB_PAD_T }`: a copper graphic does not count
+                    ItemRef::Shape { .. } => false,
                 }
             })
         })

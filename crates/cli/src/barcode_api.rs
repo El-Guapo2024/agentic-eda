@@ -13,6 +13,7 @@
 use eda_model::units::{mm, Nm};
 use eda_model::barcode::Barcode;
 use eda_model::ir::{Design, DrawingsSection, PlacementSection, Point, Provenance};
+use eda_ops::{Cmd, MultichannelCmd};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
@@ -118,8 +119,7 @@ pub fn lookup(b: &Barcode, text: &str) -> Reply {
     Reply::Pending
 }
 
-/// [`lookup`] that waits for the plot: what the tests ask for.
-#[cfg(test)]
+/// [`lookup`] that waits for the plot: what the tests and Repeat Layout ask for.
 pub fn shape_blocking(b: &Barcode, text: &str) -> Result<Arc<BarcodeShape>, String> {
     loop {
         match lookup(b, text) {
@@ -215,6 +215,46 @@ fn shown_text(dir: &Path, b: &Barcode, target: &str, owner: Option<&str>) -> Res
         Some(reference) => tv.footprint_text_shown(reference, &b.text, &b.layer),
         None => tv.text_shown(&b.text, &b.layer),
     })
+}
+
+/// `cmd` with the polygons of the board's barcodes on F.Cu put into every Repeat Layout it holds (`MultichannelCmd::RepeatLayout::barcode_shapes`, inside a batch too): what
+/// `PCB_BARCODE::TransformShapeToPolygon` gives the multichannel tool's `enclosedByArea` test (`m_cache->poly`, zint's modules and the text), from kicad-cli's plot of each
+/// (UI-LEFT-2 PP22). `None` when the command has no Repeat Layout or the board no barcode on F.Cu; a barcode kicad-cli cannot plot is left out (judged by its box).
+pub(crate) fn with_barcode_shapes(cmd: &Cmd, dir: &Path, design: &Design, model: &eda_model::ConstraintModel) -> Option<Cmd> {
+    fn has_repeat(c: &Cmd) -> bool {
+        match c {
+            Cmd::Batch { cmds } => cmds.iter().any(has_repeat),
+            Cmd::Multichannel(MultichannelCmd::RepeatLayout { .. }) => true,
+            _ => false,
+        }
+    }
+    let barcodes: Vec<&Barcode> = design.drawings.iter().flat_map(|d| d.barcodes.iter()).filter(|b| b.layer == "F.Cu").collect();
+    if barcodes.is_empty() || !has_repeat(cmd) {
+        return None;
+    }
+    let meta = crate::board::load(dir).ok()?.0;
+    let tv = crate::text_vars_json::PcbShown::new(dir, design, model, crate::text_vars_json::project(dir, &meta.intent, crate::text_vars_json::clock_of("/api/cmd")));
+    let mut shapes: std::collections::BTreeMap<String, Vec<Vec<Point>>> = std::collections::BTreeMap::new();
+    for b in barcodes {
+        let text = tv.text_shown(&b.text, &b.layer);
+        if text.is_empty() {
+            continue;
+        }
+        // the plot is of the barcode centred on the origin, turned and on its layer: moved to where it is
+        let Ok(shape) = shape_blocking(b, &text) else { continue };
+        let contours: Vec<Vec<Point>> = shape.paths.iter().flatten().map(|c| c.iter().map(|p| Point { x: p[0] + b.at.x, y: p[1] + b.at.y }).collect()).collect();
+        shapes.insert(b.id.clone(), contours);
+    }
+    fn fill(c: &Cmd, shapes: &std::collections::BTreeMap<String, Vec<Vec<Point>>>) -> Cmd {
+        match c {
+            Cmd::Batch { cmds } => Cmd::Batch { cmds: cmds.iter().map(|c| fill(c, shapes)).collect() },
+            Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference, targets, options, .. }) => {
+                Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: reference.clone(), targets: targets.clone(), options: options.clone(), barcode_shapes: shapes.clone() })
+            }
+            c => c.clone(),
+        }
+    }
+    Some(fill(cmd, &shapes))
 }
 
 /// What a route answers: the HTTP status and the JSON body.

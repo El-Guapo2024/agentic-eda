@@ -471,6 +471,7 @@ export function Canvas() {
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintBoard(ctx, state.view, width, height, board, {
       viewFlipped: state.bcx.boardFlipped,
+      layerTypes: board.board_rules?.layer_setup?.types,
       selection: state.selection,
       hot: state.hot,
       // the clarification menu's row under the pointer (`doSelectionMenu`'s BRIGHTENED), on the board drawn brightened (UI-LEFT-2 PP19)

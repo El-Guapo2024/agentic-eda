@@ -21,7 +21,8 @@ import { useOriginTransforms } from "../state/originTransforms";
 import { fromDisplay, toDisplay, type CoordType, type OriginTransforms } from "../kicad-port/originTransforms";
 import { layerColor as layerColorOf } from "./canvas/layers";
 import { DrillChartPropertiesDialog, DrillGroupsDialog } from "./DrillChartDialogs";
-import { ViaTemplateDialog } from "./ViaTemplateDialog";
+import { TrackViaPropertiesDialog } from "./TrackViaPropertiesDialog";
+import { TEMPLATE_VIA_ID, templateAsVia, templateBoard, templateFromDialog, templateLocked } from "../kicad-port/viaTemplate";
 
 export function Kicad10ItemDialogs() {
   return (
@@ -310,7 +311,7 @@ function GridItemDialog() {
 /**
  * Via Stitching Properties (`DIALOG_VIA_STITCH_PROPERTIES`, pcbnew/dialogs/dialog_via_stitch_properties.cpp of KiCad 25ec2335): Stitch Net, Position X / Y (the outline's first corner:
  * a new one moves the outline there), Pattern, Pitch, Seed (the Poisson pattern's only), Via Properties (Configure: `OnViaConfigureClicked` opens Track & Via Properties on the
- * template via, components/ViaTemplateDialog.tsx, and the preview redraws with it), Mode and Guard Net (a guard's only), with the sample of the pattern the dialog draws
+ * template via, components/TrackViaPropertiesDialog.tsx in its standalone form, and the preview redraws with it), Mode and Guard Net (a guard's only), with the sample of the pattern the dialog draws
  * (`buildStitchPreview`). OK is "Edit Via Stitching" (`ShowPropertiesDialog`'s `EditStart`, `Update`, `EditFinish`), or, after Draw Via Stitch Area, "Create Via Stitch": one
  * `set_via_stitch` with the template (`SetTemplateItem( "via", .. )`), the vias placed by the server, each a copy of the template; Cancel drops a new one.
  */
@@ -445,20 +446,27 @@ function ViaStitchDialog() {
             {error}
           </p>
         )}
-        {configuring && (
-          <ViaTemplateDialog
-            via={template}
-            copper={copper}
-            layerSetup={board.board_rules?.layer_setup}
-            units={units}
-            onCancel={() => setConfiguring(false)}
-            onOk={(via) => {
-              // `if( dlg.ShowModal() == wxID_OK ) redrawPreview()`: the working copy's template.
-              setWork({ via });
-              setConfiguring(false);
-            }}
-          />
-        )}
+        {configuring &&
+          (() => {
+            // `DIALOG_TRACK_VIA_PROPERTIES dlg( m_frame, m_viaTemplate )`: Track & Via Properties on a board holding the template as its one via
+            const asVia = templateAsVia(template, form.work.via_view);
+            const one = templateBoard(board, asVia, templateLocked(template, form.work.via_view));
+            return (
+              <TrackViaPropertiesDialog
+                board={one}
+                ids={[TEMPLATE_VIA_ID]}
+                units={units}
+                onClose={() => setConfiguring(false)}
+                standalone={(before, f) => {
+                  const out = templateFromDialog(template, one, before, f, copper);
+                  if ("error" in out) return out.error;
+                  // `if( dlg.ShowModal() == wxID_OK ) redrawPreview()`: the working copy's template.
+                  setWork({ via: out.via });
+                  return null;
+                }}
+              />
+            );
+          })()}
         <div className="dialog-footer">
           <button onClick={close} data-testid="vst-cancel">
             Cancel

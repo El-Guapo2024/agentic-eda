@@ -96,7 +96,27 @@ pub(crate) fn extend(drawings: &mut Value, design: &eda_model::ir::Design, model
     drawings["barcodes"] = Value::Array(d.barcodes.iter().map(|b| barcode_json(b, tv)).collect());
     drawings["grid_items"] = Value::Array(d.board_items.grid_items.iter().map(grid_item_json).collect());
     // KiCad 10's via stitchings, as the model has them (what `set_via_stitch` takes back): the outline as `{x, y}` points, micrometres.
-    drawings["via_stitches"] = Value::Array(d.board_items.via_stitches.iter().map(|v| serde_json::to_value(v).unwrap_or(Value::Null)).collect());
+    // `via_view`: the template as Configure's Track & Via Properties shows it (UI-LEFT-2 PP22) -- what its text says with what Configure set over it: the props, the
+    // teardrops, the net and the lock, and the type and annular rings.
+    drawings["via_stitches"] = Value::Array(
+        d.board_items
+            .via_stitches
+            .iter()
+            .map(|v| {
+                let mut j = serde_json::to_value(v).unwrap_or(Value::Null);
+                let extra = eda_kicad::via_template_extra(&v.via, &model.board.layers);
+                j["via_view"] = json!({
+                    "props": extra.props(),
+                    "teardrops": extra.teardrops(),
+                    "net": eda_kicad::via_template_net(&v.via),
+                    "locked": eda_kicad::via_template_locked(&v.via),
+                    "type": extra.kind,
+                    "unconnected": extra.unconnected_layers(),
+                });
+                j
+            })
+            .collect(),
+    );
     // KiCad 10's drill charts (what makes a table one), drill maps and drill symbol profile, as the model has them; and, when the board has a map, the mark of every hole
     // (`ResolveDrillSymbolsByItem`) and the spans a map can show (`EnumerateDrillSpans`), which the canvas draws and the Properties panel offers.
     drawings["drill_charts"] = serde_json::to_value(&d.board_items.drill_charts).unwrap_or(Value::Null);

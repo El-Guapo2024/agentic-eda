@@ -2,16 +2,18 @@
 // `DIALOG_TRACK_VIA_PROPERTIES` in its standalone form on the template (pcbnew/dialogs/dialog_via_stitch_properties.cpp and dialog_track_via_properties.cpp of KiCad 25ec2335),
 // and its OK becomes the stitching's template on the stitching dialog's OK (`SetTemplateItem( "via", .. )`).
 //
-// The rows here are the via rows the studio's Track & Via Properties has (kicad-port/trackViaDialog.ts): Via type, Start layer and End layer (a through via spans F.Cu to B.Cu
-// and the two are disabled, `onViaEdit`), Diameter, Hole (`PCB_VIA::ValidateViaParameters`) and Annular rings (shown when the via spans more than one layer pair,
-// `getLayerDepth() > 1`). The template's other tokens -- tenting, covering, plugging, filling, capping, backdrill, post-machining, teardrops, its padstack -- are kept as the
-// file had them and copied to every via (crates/kicad/src/via_stitch_io.rs `template_extra`).
+// UI-LEFT-2 PP22: the dialog is the studio's Track & Via Properties itself (components/TrackViaPropertiesDialog.tsx, kicad-port/trackViaDialog.ts) on a board that holds the
+// template as its one via ([`templateAsVia`], [`templateBoard`]), so it has every row KiCad's standalone dialog has -- Net, Locked, the position, Pre-defined sizes, the
+// padstack, Via type and layers, Annular rings, Protection features, Backdrill, Hole Post-machining and Teardrops; [`templateFromDialog`] is its `TransferDataFromWindow`
+// on the standalone via: what changed set over the template's text (`kind`, `annular`, `props`, `teardrops`, `net`, `locked`; crates/kicad/src/via_stitch_io.rs). The
+// smaller form below (`viaTemplateForm`, `viaTemplateFrom`) is kept for its tests and callers.
 //
 // Pure: no React, no store. Unit-tested in viaTemplate.test.ts.
 import type { BoardViaStitch } from "../api/pcbItemTypes";
-import type { Nm, UnconnectedLayers } from "../api/types";
+import type { BoardState, Nm, UnconnectedLayers, Via } from "../api/types";
 import { validateViaParameters } from "./routerVia";
-import type { ViaType } from "./trackViaDialog";
+import { viaPropsAfter, type TrackViaForm, type ViaType } from "./trackViaDialog";
+import { applyTeardropForm, teardropFormChanged, viaTeardrops } from "./teardropParams";
 
 export type StitchVia = NonNullable<BoardViaStitch["via"]>;
 
@@ -65,4 +67,69 @@ export function viaTemplateFrom(v: StitchVia, f: ViaTemplateForm, copper: readon
   if (v.kind || f.type !== templateViaType(v)) out.kind = f.type;
   if (v.annular || f.rings !== templateRings(v)) out.annular = f.rings;
   return { via: out };
+}
+
+/** The id the template has as the one via of [`templateBoard`]. */
+export const TEMPLATE_VIA_ID = "via_stitch_template";
+
+/** The template as a via of the board (`DIALOG_TRACK_VIA_PROPERTIES( aParent, aStandaloneVia )`): what Configure set, else what its text says (`via_view`, the server's reading). */
+export function templateAsVia(v: StitchVia, view?: BoardViaStitch["via_view"]): Via {
+  const type = templateViaType(v);
+  const rings = templateRings(v);
+  return {
+    id: TEMPLATE_VIA_ID,
+    net: v.net ?? view?.net ?? "",
+    x: 0,
+    y: 0,
+    d: v.size_nm,
+    drill: v.drill_nm,
+    from: v.from_layer,
+    to: v.to_layer,
+    type: type === "through" ? null : type,
+    unconnected: rings === "keep_all" ? null : rings,
+    props: v.props ?? view?.props ?? null,
+    teardrops: v.teardrops ?? view?.teardrops ?? null,
+  };
+}
+
+/** Whether the template is locked: what Configure set, else what its text says. */
+export function templateLocked(v: StitchVia, view?: BoardViaStitch["via_view"]): boolean {
+  return v.locked ?? view?.locked ?? false;
+}
+
+/** `board` with the template as its one via and no tracks: what the standalone dialog edits (`m_viaStandaloneSelection`). */
+export function templateBoard(board: BoardState, via: Via, locked: boolean): BoardState {
+  const routing = board.routing ?? ({ tracks: [], vias: [], zones: [], track_width_presets: [], via_presets: [] } as unknown as NonNullable<BoardState["routing"]>);
+  return { ...board, routing: { ...routing, tracks: [], vias: [via] }, locked: locked ? [via.id] : [] };
+}
+
+/**
+ * `TransferDataFromWindow` on the standalone via (`m_standalone`: nothing committed): `ValidateViaParameters`' message (word for word), or the template with what the dialog
+ * changed set over its text -- the size and drill, the type, layers and annular rings, the padstack, protection, backdrill and post-machining (`props`, the via's whole
+ * `ViaProps` as `viaPropsAfter` makes them), the teardrops, the net and the lock. A field the dialog left as it opened leaves the template's text to say it. The position is
+ * the template's own and is not kept (a via the stitching makes is put on its cell).
+ */
+export function templateFromDialog(v: StitchVia, board: BoardState, before: TrackViaForm, form: TrackViaForm, copper: readonly string[]): { via: StitchVia } | { error: string } {
+  const via = board.routing!.vias[0]!;
+  const why = validateViaParameters(form.diameter, form.drill);
+  if (why) return { error: why };
+  const type = form.viaType ?? templateViaType(v);
+  if (type !== "through" && form.viaFrom != null && form.viaFrom === form.viaTo) return { error: "Via start layer and end layer cannot be the same" };
+  const [from, to] = type === "through" ? [copper[0] ?? "F.Cu", copper[copper.length - 1] ?? "B.Cu"] : [form.viaFrom ?? v.from_layer, form.viaTo ?? v.to_layer];
+  const out: StitchVia = { ...v, size_nm: form.diameter!, drill_nm: form.drill!, from_layer: from, to_layer: to };
+  if (v.kind || type !== templateViaType(v)) out.kind = type;
+  const rings = form.rings ?? templateRings(v);
+  if (v.annular || rings !== templateRings(v)) out.annular = rings;
+  const props = viaPropsAfter(via, before, form);
+  if (v.props || JSON.stringify(sortedKeys(props)) !== JSON.stringify(sortedKeys(via.props ?? {}))) out.props = props;
+  if (teardropFormChanged(before.teardrops, form.teardrops)) out.teardrops = applyTeardropForm(viaTeardrops(board, via), before.teardrops, form.teardrops);
+  if (form.net != null && form.net !== before.net) out.net = form.net;
+  if (form.locked != null && form.locked !== before.locked) out.locked = form.locked;
+  return { via: out };
+}
+
+function sortedKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortedKeys);
+  if (v && typeof v === "object") return Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, sortedKeys((v as Record<string, unknown>)[k])]));
+  return v;
 }

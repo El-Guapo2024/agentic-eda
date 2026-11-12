@@ -237,6 +237,14 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_nm.is_none() && barcodes.is_empty() && board_items.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_nm, barcodes, board_items, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
+    // `BOARD::SetLegacyTeardrops`: the file's `(general (legacy_teardrops ..))` (`parseMaybeAbsentBool( true )`), or a teardrop zone in a file older than 20230517
+    // (`parseZONE`: `if( m_board && zone->IsTeardropArea() && m_requiredVersion < 20230517 ) m_board->SetLegacyTeardrops( true )`).
+    let legacy_flag = sexpr::find(root, "general").and_then(|g| sexpr::find(g, "legacy_teardrops")).map(|t| !matches!(sexpr::txt(t, 1), Some("no") | Some("false")));
+    let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
+    let old_teardrops = file_version < 20230517 && design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| z.teardrop));
+    if legacy_flag == Some(true) || old_teardrops {
+        design.drawings.get_or_insert_with(Default::default).legacy_teardrops = true;
+    }
     if !raw_items.is_empty() {
         design.drawings.get_or_insert_with(Default::default).raw_items = raw_items;
     }
@@ -2317,6 +2325,7 @@ fn import_footprints(
             let kind = if file_version < 20200826 { eda_model::fp_edit::FootprintKind::ThroughHole } else { eda_model::fp_edit::FootprintKind::Unspecified };
             edit.attrs = Some(eda_model::fp_edit::FootprintAttrs { kind, ..Default::default() });
         }
+        let mut own_nets: Vec<Option<String>> = Vec::new();
         for pad in sexpr::find_all(fp, "pad") {
             let Some(p) = parse_pad_geometry_in(pad, side, rot, notes, false, layers) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
@@ -2346,16 +2355,31 @@ fn import_footprints(
             // still counts as a hole for clearance.
             if p.kind != PadKind::NonPlatedHole {
                 let name = pad_net(sexpr::find(pad, "net"), net_names);
+                // each kept pad's net, in the footprint's pad order (`own_nets`): a number on two nets gives its pads their own (`PadMaskInfo::net`)
+                own_nets.push(Some(name.clone()));
                 if !name.is_empty() {
                     pin_nets.push((format!("{reference}.{}", p.number), name));
                 }
                 pins.push(Pin { number: p.number.clone(), name: None, kind: PinKind::Signal });
+            } else {
+                own_nets.push(None);
             }
             if let Some(u) = import_items::item_uuid(pad) {
                 slots.insert(u.clone(), format!("pad:{}#{}", p.number, pads.iter().filter(|q| q.number == p.number).count() + 1));
                 notes.item_ids.entry(u).or_insert_with(|| format!("{reference}.{}", p.number));
             }
             pads.push(p);
+        }
+        // A number whose pads are on different nets (KiCad keeps a net per `PAD`): each of those pads keeps its own (`PadMaskInfo::net`, UI-LEFT-2 PP21).
+        for (i, own) in own_nets.iter().enumerate() {
+            let Some(net) = own else { continue };
+            let number = &pads[i].number;
+            let split = pads.iter().zip(&own_nets).any(|(q, other)| &q.number == number && other.as_ref().is_some_and(|o| o != net));
+            if split {
+                if let Some(info) = extra.pads.get_mut(i) {
+                    info.net = Some(net.clone());
+                }
+            }
         }
 
         // Pad geometry is keyed by lib id and shared across instances (the

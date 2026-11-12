@@ -21,11 +21,13 @@ test("a drag across cells selects the block it touches, as selectTableCells does
   assert.deepEqual(cellsBetween(t, [1_000_000, 1_000_000], [2_000_000, 2_000_000], ["tbl_a:2:2"], { ...none, additive: true }), ["tbl_a:2:2", "tbl_a:0:0"]);
   assert.deepEqual(cellsBetween(t, [1_000_000, 1_000_000], [12_000_000, 2_000_000], ["tbl_a:0:0"], { ...none, exclusiveOr: true }), ["tbl_a:0:1"]);
   assert.deepEqual(cellsBetween(t, [1_000_000, 1_000_000], [12_000_000, 2_000_000], ["tbl_a:0:0", "tbl_a:2:2"], { ...none, subtractive: true }), ["tbl_a:2:2"]);
-  // a cell another one covers is no item to select
+  // a cell another one covers is selected by the drag too (`selectCellsBetween` selects every cell it touches; only a click goes through `Selectable`), UI-LEFT-2 PP22
   const merged = table(1, 2);
   merged.cells[0]!.col_span = 2;
   merged.cells[1]!.col_span = 0;
-  assert.deepEqual(cellsBetween(merged, [1_000_000, 1_000_000], [15_000_000, 2_000_000], [], none), ["tbl_a:0:0"]);
+  assert.deepEqual(cellsBetween(merged, [1_000_000, 1_000_000], [15_000_000, 2_000_000], [], none), ["tbl_a:0:0", "tbl_a:0:1"]);
+  merged.cells[0]!.corners = [[0, 0], [20_000_000, 0], [20_000_000, 5_000_000], [0, 5_000_000]];
+  assert.equal(cellUnder([merged], 15_000_000, 2_000_000, 0)?.cell.id, "tbl_a:0:0", "a click picks the merged cell, not the one it covers (`Selectable`)");
 });
 
 test("a drag selects cells only from a cell, and on the board only when nothing or only cells are selected", () => {

@@ -2901,6 +2901,14 @@ pub struct DrawingsSection {
     /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outline_is_shapes: bool,
+    /// `BOARD::LegacyTeardrops()` (UI-LEFT-2 PP24): the board's teardrops are the file's own zones, not made from the pads' and vias' parameters -- a board read
+    /// from a file that says `(general (legacy_teardrops yes))`, or that has a teardrop zone and is older than 20230517 (`parseZONE`). KiCad then leaves them
+    /// alone as the board is edited (`TEARDROP_MANAGER::UpdateTeardrops` returns at once), hides the Properties panel's Teardrops rows (`supportsTeardrops`),
+    /// greys the dialogs' Teardrops parts with "Board contains legacy teardrops." (`onTeardropsUpdateUi`), lets a teardrop zone be selected
+    /// (`PCB_SELECTION_TOOL::Selectable`), and Edit Teardrops' OK clears it (`DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow`). Additive: absent reads as
+    /// `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_teardrops: bool,
     /// The stroke width of the lines of `placement.outline` when they are written as `gr_line`s on `Edge.Cuts` (an imported board whose outline is one closed loop of lines
     /// of one width keeps the width: kicad-cli measures edge clearances from the drawn line, and plots it at that width). `None` is the width KiCad gives a line that
     /// says none. Additive: absent in an older `design.json` reads as `None`. Lives here for the reason `rules` does.
@@ -3053,6 +3061,11 @@ pub struct PadMaskInfo {
     /// from a schematic and a rule reads as `A.Pin_Name`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_function: String,
+    /// The pad's own net (`BOARD_CONNECTED_ITEM::GetNetname`) where another pad of its footprint has its number and is on another net: KiCad keeps a net per `PAD`, the
+    /// model one per `REF.NUMBER` (an encoder's two `MP` pads on two `unconnected-..` nets, a test point's two `1` pads). The connectivity and the writer read it
+    /// over the number's net (UI-LEFT-2 PP21); `""` is no net. `None` for every other pad. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net: Option<String>,
     /// An SMD pad whose `(layers ..)` has no paste layer (a fiducial, a test point, a thermal pad covered by its own paste pads): the writer leaves the paste layer out, as the
     /// pad had it, where an SMD pad otherwise gets its side's paste layer (a stencil aperture of its own).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

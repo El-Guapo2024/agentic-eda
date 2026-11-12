@@ -4894,6 +4894,7 @@ impl<'a> Board<'a> {
     /// qualifies -- same as KiCad's own "Update Teardrops" finding nothing
     /// to do.
     fn add_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
+        self.clear_legacy_teardrops();
         let settings = self.design.routing.as_ref().map(|r| r.teardrop_settings).unwrap_or_default();
         let fresh = eda_connectivity::generate_teardrops(&self.design, self.model, &settings);
         let rt = self.routing_mut();
@@ -4904,8 +4905,16 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// Edit Teardrops' OK: `m_brd->SetLegacyTeardrops( false )` (`DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow`), UI-LEFT-2 PP24.
+    fn clear_legacy_teardrops(&mut self) {
+        if let Some(d) = self.design.drawings.as_mut() {
+            d.legacy_teardrops = false;
+        }
+    }
+
     /// `Cmd::RemoveAllTeardrops`.
     fn remove_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
+        self.clear_legacy_teardrops();
         if let Some(rt) = self.design.routing.as_mut() {
             rt.zones.retain(|z| !z.teardrop);
         }

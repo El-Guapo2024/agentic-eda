@@ -62,7 +62,8 @@ function cellBox(c: BoardTableCell): [number, number, number, number] {
  * whose box the rectangle touches (`cell->HitTest( selectionRect, false )`: `BOX2I::Intersects`, edges included) is selected -- unselected with Ctrl+Shift
  * (`m_subtractive`), toggled from what it was when the drag began with Ctrl (`m_exclusive_or`) -- and a cell it does not touch keeps what it was at the start only
  * with a modifier (`m_additive || m_subtractive || m_exclusive_or`). `before` is the selection the drag began with (the `CANDIDATE` flags); its other items
- * stay. A cell another one covers is not a selectable item here (a click cannot pick one) and is left out.
+ * stay. A cell another one covers is taken as any other (`select( cell )` asks nothing of `Selectable`, which keeps a click from picking one): its own column's
+ * and row's box (UI-LEFT-2 PP22).
  */
 export function cellsBetween(table: BoardTable, start: Pt, end: Pt, before: readonly string[], m: CellDragModifiers): string[] {
   const rect = [Math.min(start[0], end[0]), Math.min(start[1], end[1]), Math.max(start[0], end[0]), Math.max(start[1], end[1])] as const;
@@ -70,7 +71,6 @@ export function cellsBetween(table: BoardTable, start: Pt, end: Pt, before: read
   const mine = new Set(table.cells.map((c) => c.id));
   const chosen = new Set<string>();
   for (const cell of table.cells) {
-    if (!isSelectableCell(cell)) continue;
     const b = cellBox(cell);
     const hit = rect[0] <= b[2] && b[0] <= rect[2] && rect[1] <= b[3] && b[1] <= rect[3];
     const wasSelected = was.has(cell.id);

@@ -77,8 +77,10 @@ export function excludedAt(v: BoardViaStitch, at: readonly [number, number]): Bo
 
 /** The command that gives the stitching `v`'s settings and makes its vias again (the server places them from the zone fills): `set_via_stitch` without `vias`. */
 export function viaStitchCmd(id: string | null, v: BoardViaStitch): Cmd {
-  const { id: _drop, ...stitch } = v;
+  // `via_view` is the state's reading of the template, not the stitching's
+  const { id: _drop, via_view: _view, ...stitch } = v;
   void _drop;
+  void _view;
   return { op: "pcb_item", verb: "set_via_stitch", ...(id ? { id } : {}), stitch };
 }
 

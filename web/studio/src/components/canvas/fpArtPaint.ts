@@ -57,19 +57,19 @@ export function drawFootprintArt(ctx: CanvasRenderingContext2D, view: ViewTransf
     if (!t.text || !artTextShown(opts.layerVisible, part, t)) continue;
     // the footprint selected, or the text on its own (UI-LEFT P15)
     const color = selected || opts.selection.has(t.id) ? layerColor("selection") : layerColor(realLayerKey(t.layer));
-    withLayer(ctx, opts, layerStateKey(t.layer), 1, () => drawArtText(ctx, view, t, color, !!opts.sketchText, opts.viewFlipped));
+    withLayer(ctx, opts, layerStateKey(t.layer), 1, () => drawArtText(ctx, view, t, color, !!opts.sketchText, keptReadableInFlippedView(opts.viewFlipped, t.layer, opts.layerTypes)));
   }
 }
 
 /** One text where `FONT::Draw` puts it (`fieldSpec`), the hit test's layout (kicad-port/textHit.ts). */
-function drawArtText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: NonNullable<Part["texts"]>[number], color: string, sketch: boolean, viewFlipped = false): void {
+function drawArtText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: NonNullable<Part["texts"]>[number], color: string, sketch: boolean, flippedView = false): void {
   const { spec, face } = fieldSpec(artTextAsField(t));
   paintKicadText(ctx, spec, face, {
     color,
     pen: sketch ? hairlineNm(view, 1) : undefined,
     minPen: hairlineNm(view, 0.5),
     knockout: t.knockout ? layerColor("background") : null,
-    flippedView: keptReadableInFlippedView(viewFlipped, t.layer),
+    flippedView,
     record: { tag: "pcb", id: t.id },
   });
 }

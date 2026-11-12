@@ -114,14 +114,21 @@ impl<'a> Board<'a> {
         // compare. A new stitch net is no mismatch: `PCB_VIA_STITCH::SetNetCode` gave every member the net before `Update` (the dialog's `SetNetCode( newNetCode )`), so a
         // kept via keeps its id and takes the net.
         let t = &stitch.via;
-        let template = eda_kicad::via_template_extra(t);
+        let template = eda_kicad::via_template_extra(t, &self.model.board.layers);
+        // the net of a via the stitching makes: the stitching's, else the template's own (`if( m_netCode ) via->SetNetCode( m_netCode )` after the clone)
+        let net = if stitch.net.is_empty() { eda_kicad::via_template_net(t) } else { stitch.net.clone() };
+        if !net.is_empty() {
+            self.known_net(&net)?;
+        }
+        // a clone of a locked template is locked (`BOARD_ITEM`'s copy keeps `m_isLocked`)
+        let template_locked = eda_kicad::via_template_locked(t);
         let extras: BTreeMap<String, eda_model::via_extra::ViaExtra> = self.design.drawings.iter().flat_map(|d| d.via_extras.iter()).filter(|x| members.contains(&x.id)).map(|x| (x.id.clone(), x.clone())).collect();
         let padstack = |e: &eda_model::via_extra::ViaExtra| -> (eda_model::via_extra::ViaKind, Vec<String>) {
             (e.kind, e.tokens.iter().filter(|tok| !(tok.as_str() == "free" || tok.starts_with("(free ") || tok.starts_with("(zone_layer_connections"))).cloned().collect())
         };
         let wanted = padstack(&template);
         let matches = |v: &Via| {
-            v.diameter == t.size_nm && v.drill == t.drill_nm && v.from_layer == t.from_layer && v.to_layer == t.to_layer && padstack(extras.get(&v.id).unwrap_or(&Default::default())) == wanted
+            v.diameter == t.size_nm && v.drill == t.drill_nm && v.from_layer == t.from_layer && v.to_layer == t.to_layer && padstack(extras.get(&v.id).unwrap_or(&Default::default())) == wanted && (!stitch.net.is_empty() || v.net == net)
         };
         let mut keep_ids: Vec<String> = Vec::new();
         let mut moves: Vec<(String, Point)> = Vec::new();
@@ -151,11 +158,11 @@ impl<'a> Board<'a> {
             }
         }
         for v in rt.vias.iter_mut().filter(|v| keep_ids.contains(&v.id)) {
-            v.net = stitch.net.clone();
+            v.net = net.clone();
         }
         let before: std::collections::BTreeSet<String> = rt.vias.iter().map(|v| v.id.clone()).collect();
         for at in &adds {
-            rt.vias.push(Via { id: String::new(), net: stitch.net.clone(), at: *at, drill: t.drill_nm, diameter: t.size_nm, from_layer: t.from_layer.clone(), to_layer: t.to_layer.clone() });
+            rt.vias.push(Via { id: String::new(), net: net.clone(), at: *at, drill: t.drill_nm, diameter: t.size_nm, from_layer: t.from_layer.clone(), to_layer: t.to_layer.clone() });
         }
         rt.assign_missing_ids();
         let new_ids: Vec<String> = rt.vias.iter().filter(|v| !before.contains(&v.id)).map(|v| v.id.clone()).collect();
@@ -170,6 +177,9 @@ impl<'a> Board<'a> {
         dr.via_extras.retain(|x| !removed.contains(&x.id));
         for vid in &new_ids {
             dr.via_extras.push(eda_model::via_extra::ViaExtra { id: vid.clone(), ..made.clone() });
+        }
+        if template_locked {
+            dr.locked_ids.extend(new_ids.iter().cloned());
         }
         let mut member_ids: Vec<String> = keep_ids.into_iter().chain(new_ids).collect();
         member_ids.sort();

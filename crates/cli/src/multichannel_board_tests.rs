@@ -147,7 +147,7 @@ fn enclose_the_routing(dir: &Path) {
 fn repeat(dir: &Path) {
     let areas = rule_areas(dir);
     let targets = areas[1..].iter().map(|a| a.0.clone()).collect();
-    step(dir, Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: areas[0].0.clone(), targets, options: RepeatOptions::default() }), false, "test").unwrap();
+    step(dir, Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: areas[0].0.clone(), targets, options: RepeatOptions::default(), barcode_shapes: Default::default() }), false, "test").unwrap();
 }
 
 fn pose(dir: &Path, id: &str) -> (Point, u32) {
@@ -210,7 +210,7 @@ fn strict_refuses_neither_the_areas_nor_the_repeat_on_a_board_that_is_not_routed
     step(&dir, Cmd::Multichannel(MultichannelCmd::GenerateRuleAreas { areas, replace_existing: false, group_items: false }), true, "test").expect("Strict lets the rule areas be made");
     let found = rule_areas(&dir);
     assert_eq!(found.len(), 3);
-    step(&dir, Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: found[0].0.clone(), targets: found[1..].iter().map(|a| a.0.clone()).collect(), options: RepeatOptions::default() }), true, "test").expect("and the layout be repeated");
+    step(&dir, Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: found[0].0.clone(), targets: found[1..].iter().map(|a| a.0.clone()).collect(), options: RepeatOptions::default(), barcode_shapes: Default::default() }), true, "test").expect("and the layout be repeated");
     let (u1, u2) = (pose(&dir, "U1"), pose(&dir, "U2"));
     assert_ne!(u1.0, u2.0);
     // the same board, a copper pour on it instead: the gate does judge that (it is what the exemption is not)
@@ -527,6 +527,16 @@ fn kicad_cli_keeps_the_tables_barcodes_patterns_and_holed_zones_a_repeat_copies(
         dr.assign_missing_ids();
     }
     save(&dir, &d).unwrap();
+    // UI-LEFT-2 PP22: the Repeat Layout the board directory runs carries the barcode's polygon as kicad-cli plots it (`PCB_BARCODE::TransformShapeToPolygon`), its modules
+    // inside the barcode's box, where it is on the board
+    {
+        let (_, design, model) = load(&dir).unwrap();
+        let cmd = Cmd::Multichannel(MultichannelCmd::RepeatLayout { reference: "x".into(), targets: vec!["y".into()], options: RepeatOptions::default(), barcode_shapes: Default::default() });
+        let Some(Cmd::Multichannel(MultichannelCmd::RepeatLayout { barcode_shapes, .. })) = crate::barcode_api::with_barcode_shapes(&cmd, &dir, &design, &model) else { panic!("the command gets the barcodes' shapes") };
+        let contours = &barcode_shapes["bar_u5"];
+        let c = at(1.2, 8.0);
+        assert!(!contours.is_empty() && contours.iter().flatten().all(|p| (p.x - c.x).abs() <= mm(0.5) + Nm::new(1_000) && (p.y - c.y).abs() <= mm(0.5) + Nm::new(1_000)), "the modules, in the barcode's box: {contours:?}");
+    }
     repeat(&dir);
     let (_, d, _) = load(&dir).unwrap();
     let (rt, dr) = (d.routing.as_ref().unwrap(), d.drawings.as_ref().unwrap());

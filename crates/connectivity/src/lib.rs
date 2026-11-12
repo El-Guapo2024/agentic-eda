@@ -144,6 +144,33 @@ mod tests {
         assert!(report.dangling.is_empty());
     }
 
+    /// UI-LEFT-2 PP21: a board graphic on copper is in the connectivity (`CN_LIST::Add( PCB_SHAPE* )`): a line of the net from pad to pad joins them, the ratsnest
+    /// line goes; the same line on no net joins nothing of N1; a line of the net alone on the board is one more piece of N1 to join, as kicad-cli's
+    /// `unconnected_items` counts it (`issue22102`).
+    #[test]
+    fn a_copper_graphic_of_a_net_is_copper_of_that_net() {
+        use eda_model::ir::{DrawingsSection, Shape};
+        use eda_model::pcb_items::ShapeStyle;
+        let (mut design, model) = two_pad_model();
+        let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
+        let line = |id: &str, from: eda_model::ir::Point, to: eda_model::ir::Point| Shape::Segment { id: id.into(), layer: "F.Cu".into(), stroke_width: mm(0.2), filled: false, start: from, end: to };
+        let style = |id: &str, net: Option<&str>| ShapeStyle { net: net.map(str::to_string), ..ShapeStyle::empty(id) };
+        let mut dr = DrawingsSection { shapes: vec![line("shp_a", a, b)], ..Default::default() };
+        dr.board_items.shape_styles = vec![style("shp_a", Some("N1"))];
+        design.drawings = Some(dr.clone());
+        assert!(analyze(&design, &model, &ZoneCopper::default()).ratsnest.is_empty(), "the net's line joins the pads");
+        dr.board_items.shape_styles = vec![style("shp_a", None)];
+        design.drawings = Some(dr.clone());
+        assert_eq!(analyze(&design, &model, &ZoneCopper::default()).ratsnest.len(), 1, "a line on no net joins nothing of N1");
+        let far = eda_model::ir::Point { x: a.x, y: a.y + mm(8.0) };
+        dr.shapes = vec![line("shp_a", far, eda_model::ir::Point { x: far.x + mm(2.0), y: far.y })];
+        dr.board_items.shape_styles = vec![style("shp_a", Some("N1"))];
+        design.drawings = Some(dr);
+        let report = analyze(&design, &model, &ZoneCopper::default());
+        assert_eq!(report.ratsnest.len(), 2, "the line is a third piece of N1");
+        assert!(report.ratsnest.iter().any(|e| RatsnestEdge::item_id(&e.from_item) == "shp_a" || RatsnestEdge::item_id(&e.to_item) == "shp_a"));
+    }
+
     #[test]
     fn a_ratsnest_line_names_the_two_pads_it_joins_and_the_copper_layers_they_are_on() {
         let (design, model) = two_pad_model();

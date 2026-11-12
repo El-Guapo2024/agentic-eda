@@ -82,8 +82,9 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
     // `(legacy_teardrops yes)` while the board has teardrops: they are zones of the design, made here (`Cmd::AddAllTeardrops`) or read from a file, and kicad-cli's
     // refill (`ZONE_FILLER_TOOL::FillAllZones` -> `TEARDROP_MANAGER::UpdateTeardrops( .., forceFullUpdate )`) would otherwise delete every one and rebuild only those of
     // pads and vias whose own teardrop parameters say `(enabled yes)`, which the studio's do not: the fills, the Gerbers and the plots lost the teardrop copper. A board
-    // with legacy teardrops keeps them (`if( m_board->LegacyTeardrops() ) return;`) and fills them as the zones they are.
-    let has_teardrops = design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| z.teardrop));
+    // with legacy teardrops keeps them (`if( m_board->LegacyTeardrops() ) return;`) and fills them as the zones they are. A board read as one with legacy
+    // teardrops (`DrawingsSection::legacy_teardrops`) says so whatever it holds, as `format( BOARD )` writes `LegacyTeardrops()`.
+    let has_teardrops = design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| z.teardrop)) || design.drawings.as_ref().is_some_and(|d| d.legacy_teardrops);
     writeln!(out, "\t\t(legacy_teardrops {})", if has_teardrops { "yes" } else { "no" }).unwrap();
     writeln!(out, "\t)").unwrap();
     // The board's paper and title block (Page Settings); A4 landscape and no title block when it never set them.
@@ -538,7 +539,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &su
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
         // KiCad 10's via stitchings, generators too.
-        crate::via_stitch_io::write_all(&mut out, &drawings.board_items.via_stitches, &written, &|v| crate::duid_for(&format!("generated:{}", v.id), &v.id), &is_locked);
+        crate::via_stitch_io::write_all(&mut out, &drawings.board_items.via_stitches, &written, &|v| crate::duid_for(&format!("generated:{}", v.id), &v.id), &is_locked, &model.board.layers);
         // The generators nothing reads (`via_stack`), with the uuids their members were just written as.
         for g in &drawings.raw_generators {
             let members: Vec<String> = g.member_ids.iter().flat_map(|id| written.get(id).into_iter().flatten()).map(|u| sexpr_str(u)).collect();
@@ -1670,7 +1671,9 @@ pub(crate) fn write_footprint(
         }
         // A non-plated hole has no net by definition -- nothing to look up.
         if pad.kind != PadKind::NonPlatedHole {
-            if let Some(net_name) = pin_net(&pad.number) {
+            // the pad's own net, where its number is on two (`PadMaskInfo::net`), over the number's
+            let own = pad_infos.and_then(|p| p.get(pad_idx)).and_then(|i| i.net.as_deref());
+            if let Some(net_name) = own.filter(|n| !n.is_empty()).or_else(|| if own.is_some() { None } else { pin_net(&pad.number) }) {
                 if let Some(&n) = net_num.get(net_name) {
                     write!(out, " (net {n} {})", sexpr_str(net_name)).unwrap();
                 }
@@ -2181,6 +2184,48 @@ mod tests {
         sorted.sort();
         assert_eq!(sorted, vec![30000, 30001, 30002], "{out}");
         assert_eq!(teardrop_priorities(&design.routing.as_ref().unwrap().zones).into_iter().collect::<std::collections::BTreeMap<_, _>>(), [("big", 30001), ("small", 30002)].into_iter().collect());
+    }
+
+    /// UI-LEFT-2 PP21: two pads of one number on different nets (an encoder's two `MP` pads, `issue23469`) keep their own nets (`PadMaskInfo::net`): read so, and
+    /// written so, each with its own; a number whose pads share a net is left to it.
+    #[test]
+    fn pads_of_one_number_on_two_nets_keep_their_own() {
+        let pad = |num: &str, x: f64, net: &str| format!("(pad \"{num}\" thru_hole rect (at {x} 0) (size 1.5 1.5) (drill 0.8) (layers \"*.Cu\" \"*.Mask\") (net \"{net}\"))");
+        let text = format!(
+            "(kicad_pcb (version 20241229) (generator \"pcbnew\") (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user)) (net 0 \"\") (net 1 \"A\") (net 2 \"B\") \
+             (footprint \"enc\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"SW1\" (at 0 0) (layer \"F.SilkS\")) {} {} {} {}))",
+            pad("MP", -5.0, "A"),
+            pad("MP", 5.0, "B"),
+            pad("1", -2.0, "A"),
+            pad("1", 2.0, "A")
+        );
+        let (design, model, _) = crate::import::import_kicad_pcb(&text).unwrap();
+        let e = design.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "SW1").unwrap();
+        let nets: Vec<Option<&str>> = e.pads.iter().map(|p| p.net.as_deref()).collect();
+        assert_eq!(nets, [Some("A"), Some("B"), None, None]);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad_nets: Vec<&str> = out.lines().filter(|l| l.contains("(pad \"MP\"")).filter_map(|l| l.split("(net ").nth(1)).map(|t| t.split(')').next().unwrap()).collect();
+        assert_eq!(pad_nets.len(), 2, "{out}");
+        assert!(pad_nets[0].ends_with("\"A\"") && pad_nets[1].ends_with("\"B\""), "{pad_nets:?}");
+    }
+
+    /// UI-LEFT-2 PP24: `BOARD::SetLegacyTeardrops` as the parser sets it -- the file's `(general (legacy_teardrops ..))`, a bare token true, or a teardrop zone in a
+    /// file older than 20230517 -- and a board read so is written so even with no teardrop left.
+    #[test]
+    fn a_legacy_teardrop_board_is_read_and_written_so() {
+        let file = |version: u32, general: &str, zone: bool| {
+            let td = if zone { r#"(zone (net 0) (net_name "") (layer "F.Cu") (hatch edge 0.5) (attr (teardrop (type padvia))) (polygon (pts (xy 1 1) (xy 2 1) (xy 1 2))))"# } else { "" };
+            format!("(kicad_pcb (version {version}) (generator \"pcbnew\") (general (thickness 1.6) {general}) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user)) (net 0 \"\") {td})")
+        };
+        let legacy = |text: String| crate::import::import_kicad_pcb(&text).map(|(d, _, _)| d.drawings.as_ref().is_some_and(|d| d.legacy_teardrops)).unwrap();
+        assert!(legacy(file(20241229, "(legacy_teardrops yes)", false)));
+        assert!(legacy(file(20241229, "(legacy_teardrops)", false)), "a bare token is true");
+        assert!(!legacy(file(20241229, "(legacy_teardrops no)", true)));
+        assert!(legacy(file(20221018, "(legacy_teardrops no)", true)), "a teardrop zone of a file older than 20230517");
+        assert!(!legacy(file(20221018, "", false)));
+        let (mut design, model) = fixture();
+        design.drawings.get_or_insert_with(Default::default).legacy_teardrops = true;
+        assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(legacy_teardrops yes)"));
     }
 
     fn fixture() -> (Design, ConstraintModel) {

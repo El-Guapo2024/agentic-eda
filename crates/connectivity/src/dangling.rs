@@ -162,7 +162,8 @@ fn track_seg_dangling(graph: &ConnGraph, idx: usize, ignore_tracks_in_pads: bool
             match &other.item {
                 // Both ends land on the same track/arc: fall through to
                 // the ordinary tie-break below.
-                ItemRef::TrackSeg { .. } => {}
+                // a copper graphic too (`getMinDist`'s `default`: from its position)
+                ItemRef::TrackSeg { .. } | ItemRef::Shape { .. } => {}
                 // Both ends in the same zone: "may be redundant, but not
                 // dangling" -- not just this endpoint, the whole segment.
                 ItemRef::ZoneOutline { .. } => return None,

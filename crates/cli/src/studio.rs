@@ -1357,7 +1357,14 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 .iter()
                 .enumerate()
                 .map(|(i, q)| {
-                    let net = net_of.get(format!("{}.{}", part.reference, q.number).as_str()).copied();
+                    let mut net = net_of.get(format!("{}.{}", part.reference, q.number).as_str()).copied();
+                    // the pad's own net where its number is on two (`PadMaskInfo::net`, UI-LEFT-2 PP21): the k-th pad of the number in the footprint's order
+                    if let (Some((pad, nth)), Some(f), Some(e)) = (engine_pads.get(i), footprint.as_ref(), design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference))) {
+                        let file_idx = f.pads.iter().enumerate().filter(|(_, p)| p.number == pad.number).nth((*nth as usize).saturating_sub(1)).map(|(k, _)| k);
+                        if let Some(own) = file_idx.filter(|_| e.pads.len() == f.pads.len()).and_then(|k| e.pads[k].net.as_deref()) {
+                            net = Some(own).filter(|n| !n.is_empty());
+                        }
+                    }
                     match engine_pads.get(i) {
                         // The pad with its own shape, type, hole and overrides (`crate::fp_json`).
                         Some((pad, nth)) => {
@@ -1663,6 +1670,10 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
         // `GetDefaultZoneSettings()`: what a new zone's dialog opens on (`createNewZone`), the zone Zone Properties was last OK'd on (UI-LEFT-2 PP10); absent: KiCad's own.
         if let Some(z) = &d.zone_defaults {
             drawings["zone_defaults"] = serde_json::to_value(z).unwrap_or(serde_json::Value::Null);
+        }
+        // `BOARD::LegacyTeardrops()` (UI-LEFT-2 PP24): the Properties panel hides its Teardrops rows, the dialogs grey theirs, a teardrop zone can be picked.
+        if d.legacy_teardrops {
+            drawings["legacy_teardrops"] = json!(true);
         }
         drawings
     });

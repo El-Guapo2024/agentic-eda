@@ -9,9 +9,9 @@
 //!
 //! The commands KiCad pushes with `SKIP_TEARDROPS` skip it (Edit Teardrops, which rebuilds them all itself: `Cmd::AddAllTeardrops`, `Cmd::RemoveAllTeardrops`;
 //! Lock and Unlock: `Cmd::SetLocked`), as do Board Setup's page (`Cmd::SetTeardropSettings`: in KiCad it changes no item's parameters, which Edit Teardrops
-//! seeds), a board brought in whole (`Cmd::ReplaceBoard`) and the schematic's and the Footprint Editor's commands. **Differs:** the board's `(legacy_teardrops
-//! yes)` is not kept (the reader drops it), so every board's teardrops are kept current, where KiCad leaves a legacy board's alone (`UpdateTeardrops` returns at
-//! once) -- and the studio writes every board with teardrops so, only for kicad-cli to keep the ones it is given (`eda_kicad::pcb`).
+//! seeds), a board brought in whole (`Cmd::ReplaceBoard`) and the schematic's and the Footprint Editor's commands. A board read with legacy teardrops
+//! (`DrawingsSection::legacy_teardrops`, UI-LEFT-2 PP24) is left alone as KiCad leaves it (`UpdateTeardrops` returns at once) until Edit Teardrops' OK clears the
+//! flag. (The studio writes every board with teardrops `(legacy_teardrops yes)`, only for kicad-cli to keep the ones it is given: `eda_kicad::pcb`.)
 
 use crate::{Board, Cmd, Domain};
 use eda_connectivity::teardrop::TeardropWorld;
@@ -36,9 +36,16 @@ impl Cmd {
 }
 
 impl Board<'_> {
+    /// `BOARD::LegacyTeardrops()`: a board read with legacy teardrops ([`eda_model::ir::DrawingsSection::legacy_teardrops`]) keeps them as they are, as
+    /// `TEARDROP_MANAGER::UpdateTeardrops` returns at once (`if( m_board->LegacyTeardrops() ) return;`), until Edit Teardrops' OK
+    /// ([`Cmd::AddAllTeardrops`], [`Cmd::RemoveAllTeardrops`]) clears it.
+    pub(crate) fn legacy_teardrops(&self) -> bool {
+        self.design.drawings.as_ref().is_some_and(|d| d.legacy_teardrops)
+    }
+
     /// The board's copper before `cmd`, for [`Board::tidy_teardrops`]; `None` when the command skips the update or nothing on the board can have a teardrop.
     pub(crate) fn teardrops_before(&self, cmd: &Cmd) -> Option<TeardropWorld> {
-        if cmd.skips_teardrop_update() {
+        if cmd.skips_teardrop_update() || self.legacy_teardrops() {
             return None;
         }
         if cmd.may_give_teardrops() {
@@ -51,7 +58,7 @@ impl Board<'_> {
     /// model's footprints once the command is applied): the pads whose shape the model `was` had differently are stale, and their teardrops are made again on the
     /// pads as they are now, in the same step. Returns whether the teardrops changed.
     pub fn refresh_teardrops(&mut self, cmd: &Cmd, was: &ConstraintModel) -> bool {
-        if cmd.skips_teardrop_update() || !eda_connectivity::teardrop::teardrops_possible(&self.design) {
+        if cmd.skips_teardrop_update() || self.legacy_teardrops() || !eda_connectivity::teardrop::teardrops_possible(&self.design) {
             return false;
         }
         let before = TeardropWorld::of(&self.design, was);

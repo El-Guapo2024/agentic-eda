@@ -653,13 +653,13 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
 
   // "Teardrops" (`BOARD_CONNECTED_ITEM_DESC`): a pad's and a via's own teardrop parameters (`GetTeardropParams()`), each row `SetTeardrop..` of one of them --
   // `set_teardrop_params` with the item's parameters in effect and the one change (UI-LEFT P3). An item without parameters of its own shows what Board Setup's
-  // block gives it (kicad-port/teardropParams.ts); an edit gives it its own. Differs: KiCad hides the rows on a board with legacy teardrops (`supportsTeardrops`);
-  // the studio's derived file says `(legacy_teardrops yes)` only so that kicad-cli keeps the teardrops it was given, and its teardrops are made from these
-  // parameters (Add All Teardrops), so the rows stay.
+  // block gives it (kicad-port/teardropParams.ts); an edit gives it its own. On a board read with legacy teardrops (`drawings.legacy_teardrops`,
+  // `BOARD::LegacyTeardrops()`) the rows are hidden, as `supportsTeardrops` and `supportsTeardropPreferZoneSetting` hide them (UI-LEFT-2 PP24).
   const TEARDROPS = "Teardrops";
-  const supportsTeardrops = (i: PcbItem): boolean => i.type === "PAD" || i.type === "PCB_VIA";
+  const legacyTeardrops = (c: PcbCtx): boolean => !!c.board.drawings?.legacy_teardrops;
+  const supportsTeardrops = (i: PcbItem, c: PcbCtx): boolean => !legacyTeardrops(c) && (i.type === "PAD" || i.type === "PCB_VIA");
   const tdOf = (i: PcbItem, c: PcbCtx): TeardropParams => (i.via ? viaTeardrops(c.board, i.via) : padTeardrops(c.board, i.pad!));
-  const tdRow = <K extends keyof TeardropParams>(name: string, kind: "bool" | "double" | "int", key: K, available: (i: PcbItem) => boolean = supportsTeardrops): void => {
+  const tdRow = <K extends keyof TeardropParams>(name: string, kind: "bool" | "double" | "int", key: K, available: (i: PcbItem, c: PcbCtx) => boolean = supportsTeardrops): void => {
     add(
       {
         owner: "BOARD_CONNECTED_ITEM",
@@ -684,7 +684,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   tdRow("Best Width Ratio", "double", "best_width_ratio");
   tdRow("Max Width", "int", "max_width");
   tdRow("Curved Teardrops", "bool", "curved_edges");
-  tdRow("Prefer Zone Connections", "bool", "prefer_zone_connections", (i) => i.type === "PAD");
+  tdRow("Prefer Zone Connections", "bool", "prefer_zone_connections", (i, c) => !legacyTeardrops(c) && i.type === "PAD");
   tdRow("Allow Teardrops To Span Two Tracks", "bool", "allow_two_segments");
   tdRow("Max Width Ratio", "double", "filter_ratio");
 

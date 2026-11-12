@@ -216,3 +216,28 @@ fn a_stitchings_vias_are_copies_of_its_whole_template() {
     let via = b.design().routing.as_ref().unwrap().vias.iter().find(|x| x.id == id).unwrap().clone();
     assert_eq!((via.from_layer.as_str(), via.to_layer.as_str()), ("F.Cu", "In1.Cu"));
 }
+
+/// UI-LEFT-2 PP22: Configure's other rows reach the vias as the clone carries them -- the protection, backdrill and teardrops in each via's tokens, the template's net
+/// on a stitching that names none (`if( m_netCode )`), and its lock (`BOARD_ITEM`'s copy keeps `m_isLocked`).
+#[test]
+fn configures_protection_teardrops_net_and_lock_reach_the_stitchings_vias() {
+    use crate::pcb_items::PlannedVia;
+    use eda_model::teardrop_params::TeardropParams;
+    use eda_model::via_extra::{ViaDrillProps, ViaProps};
+    use eda_model::via_stitch::{ViaStitch, ViaTemplate};
+    let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let mut v = ViaStitch::new(vec![p(Nm::ZERO, Nm::ZERO), p(mm(10.0), Nm::ZERO), p(mm(10.0), mm(10.0)), p(Nm::ZERO, mm(10.0))]);
+    v.pitch_nm = mm(2.0);
+    let props = ViaProps { filling: Some(true), backdrill: Some(ViaDrillProps { size: mm(0.4), start: "B.Cu".into(), end: "In2.Cu".into() }), ..Default::default() };
+    let td = TeardropParams { enabled: true, ..Default::default() };
+    v.via = ViaTemplate { size_nm: mm(0.6), drill_nm: mm(0.3), props: Some(props.clone()), teardrops: Some(td), net: Some("GND".into()), locked: Some(true), ..Default::default() };
+    let cells = vec![PlannedVia { cell: (1, 1), at: p(mm(2.0), mm(2.0)) }];
+    b.apply(&Cmd::PcbItem(PcbItemCmd::SetViaStitch { id: None, stitch: v, vias: Some(cells) })).unwrap();
+    let id = drawings(&b).board_items.via_stitches[0].member_ids[0].clone();
+    let e = drawings(&b).via_extras.iter().find(|x| x.id == id).cloned().unwrap();
+    assert_eq!((e.props(), e.teardrops()), (props, Some(td)));
+    let via = b.design().routing.as_ref().unwrap().vias.iter().find(|x| x.id == id).unwrap().clone();
+    assert_eq!(via.net, "GND", "the template's net, the stitching naming none");
+    assert!(drawings(&b).locked_ids.contains(&id), "a clone of a locked template is locked");
+}

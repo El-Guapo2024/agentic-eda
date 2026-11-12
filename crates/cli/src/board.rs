@@ -1693,6 +1693,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
     // KiCad 10's via stitching: the vias a `set_via_stitch` leaves out are placed here, from the zone fills (`crate::via_stitch_api`).
     let with_vias = crate::via_stitch_api::with_planned_vias(cmd, dir, &design, &model, meta.snap_nm, meta.spacing_nm);
     let cmd = with_vias.as_ref().unwrap_or(cmd);
+    // Repeat Layout judges a barcode by its polygon: the board's barcodes plotted by kicad-cli are put into the command here (`crate::barcode_api`, UI-LEFT-2 PP22).
+    let with_barcodes = crate::barcode_api::with_barcode_shapes(cmd, dir, &design, &model);
+    let cmd = with_barcodes.as_ref().unwrap_or(cmd);
     // A board imported from another EDA format brings a model of its own: the file the command names is written before it runs (`crate::import_foreign`).
     crate::import_foreign::prepare_board(cmd, dir)?;
     // The studio shows a board with no stored schematic as the one derived
