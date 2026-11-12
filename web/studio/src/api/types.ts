@@ -381,6 +381,8 @@ export interface Part {
   symbol_fields?: { Datasheet: string; Description: string };
   /** The footprint's Extruded 3D Body (`EXTRUDED_3D_BODY`, crates/cli/src/extruded_body_api.rs `body_json`); absent when it has none. */
   extruded_body?: ExtrudedBodyInfo;
+  /** `GET /api/3dmodel/preview` only: the outline `GetExtrusionOutline` makes for each of the box's sources (by its layer word) and the pins, nm, the footprint at `at` (crates/cli/src/extruded_body_api.rs `preview_outlines`). */
+  extrusion?: { sources: Record<string, ExtrudedBodyInfo["outline"]>; pins: ExtrudedBodyInfo["pins"]; at: [Nm, Nm] };
   /** A back footprint whose `models` are held half a turn from its board file's numbers (read by a reader of before 2026-10-25): the 3D Models tab shows them turned back
    *  (kicad-port/fpModels.ts `tabRows`). Absent = false. */
   models_turned?: boolean;
@@ -1229,6 +1231,8 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   settings?: import("./fpEditorTypes").FootprintSettings;
   /** A footprint loaded from the board (UI-LEFT F3): the instance it is linked to and its own name; absent for a library footprint. */
   board_link?: import("./fpEditorTypes").BoardLink;
+  /** The footprint's Extruded 3D Body as its `.kicad_mod` has it (`eda_model::extruded_body::ExtrudedBody`, no colour: the material's own); absent for none. */
+  extruded_body?: ExtrudedBodyCmd;
   /** What each pad's kept forms say that the Properties pane shows (UI-LEFT-2 FF3): KiCad 10's backdrill and post-machining and the pad's own teardrop parameters,
    * by pad id; served only, absent for a pad with neither. */
   pad_extras?: Record<string, { drill_props: PadDrillProps; teardrops: TeardropParams | null }>;
@@ -2292,6 +2296,8 @@ export type Cmd =
   /** The 3D Models tab's Extruded 3D Body box (`PANEL_FP_PROPERTIES_3D_MODEL::TransferDataFromWindow`, crates/ops/src/fp_models.rs `set_extruded_body`): the footprint's body, or none (`null`: the box off); one
    *  undo step. Lengths nm, the layer the top side's. */
   | { op: "set_extruded_body"; part: string; body: ExtrudedBodyCmd | null }
+  /** The Footprint Editor's Footprint Properties, the same box on the library footprint `name` (crates/ops/src/fp_models.rs `set_library_extruded_body`); sent in the batch of its OK. */
+  | { op: "set_library_extruded_body"; name: string; body: ExtrudedBodyCmd | null }
   | { op: "add_board_model"; part: string; model: Model3dCmd; at?: number }
   | { op: "remove_board_model"; part: string; index: number }
   | { op: "move_board_model"; part: string; from: number; to: number }

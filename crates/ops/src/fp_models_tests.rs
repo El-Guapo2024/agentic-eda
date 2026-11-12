@@ -413,3 +413,24 @@ fn the_extruded_body_box_sets_and_clears_a_footprints_body_in_one_command_and_re
     b.apply(&cmd).unwrap();
     assert_eq!(serde_json::from_value::<Cmd>(serde_json::json!({ "op": "set_extruded_body", "part": "U1" })).unwrap(), set(None), "no body is the box off");
 }
+
+/// The Footprint Editor's Extruded 3D Body box (`SetLibraryExtrudedBody`): the library footprint's body set and cleared, checked as the board's box checks it.
+#[test]
+fn the_footprint_editors_extruded_body_box_sets_the_library_footprints_body() {
+    use eda_model::extruded_body::ExtrudedBody;
+    let m0 = library_model();
+    let mut b = board(&m0);
+    b.apply(&Cmd::NewFootprint { name: "Test:Body".into() }).unwrap();
+    let body = ExtrudedBody { height: mm(2.0), standoff: mm(-0.5), layer: "F.CrtYd".into(), ..Default::default() };
+    let set = |body: Option<ExtrudedBody>| Cmd::SetLibraryExtrudedBody { name: "Test:Body".into(), body };
+    let lib = |b: &Board<'_>| b.design().footprint_library.as_ref().and_then(|l| l.by_name("Test:Body")).and_then(|f| f.extruded_body.clone());
+    b.apply(&set(Some(body.clone()))).unwrap();
+    assert_eq!(lib(&b), Some(ExtrudedBody { standoff: mm(0.0), ..body.clone() }), "a negative standoff is none");
+    assert_eq!(refusal(&mut b, set(Some(ExtrudedBody { standoff: mm(0.0), ..body.clone() }))), "ops_nothing_to_change: the Extruded 3D Body is as it was");
+    assert_eq!(refusal(&mut b, set(Some(ExtrudedBody { height: mm(0.0), ..body.clone() }))), "ops_bad_extruded_body: Component height must be greater than zero.");
+    b.apply(&set(None)).unwrap();
+    assert_eq!(lib(&b), None);
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_library_extruded_body", "name": "Test:Body", "body": { "height": 1000000 } })).unwrap();
+    b.apply(&cmd).unwrap();
+    assert_eq!(lib(&b).map(|x| x.height), Some(mm(1.0)));
+}

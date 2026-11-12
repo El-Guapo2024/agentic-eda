@@ -127,6 +127,21 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// `Cmd::SetLibraryExtrudedBody`: the Footprint Editor's box on the library footprint `name` (`m_footprint->EnsureExtrudedBody()` or `ClearExtrudedBody()`), checked as
+    /// [`Self::set_extruded_body`] checks it.
+    pub(crate) fn set_library_extruded_body(&mut self, name: &str, body: Option<&eda_model::extruded_body::ExtrudedBody>) -> Result<(), Vec<CheckResult>> {
+        let checked = match body {
+            Some(b) => Some(eda_model::extruded_body::checked_body(b).map_err(|p| refuse(name, ModelProblem { check: "ops_bad_extruded_body", reason: p.message().into() }))?),
+            None => None,
+        };
+        let fp = self.library_footprint_mut(name)?;
+        if fp.extruded_body == checked {
+            return Err(refuse(name, ModelProblem { check: "ops_nothing_to_change", reason: "the Extruded 3D Body is as it was".into() }));
+        }
+        fp.extruded_body = checked;
+        Ok(())
+    }
+
     /// `Cmd::EditBoardModel`.
     pub(crate) fn edit_board_model(&mut self, part: &str, index: usize, patch: &ModelPatch) -> Result<(), Vec<CheckResult>> {
         self.change_models(part, |list| fp_models::edit_model(list, index, patch))

@@ -366,7 +366,7 @@ pub(crate) fn auto_migrate_in(dir: &Path, target: &str, allowed: &Roots, listing
 // ------------------------------------------------------------------------------------------------------------ the preview
 
 /// The part of a footprint at the origin, top side, not turned, in the shape `/api/state` sends a placed part: its pads, its graphics and texts, its courtyard and body.
-fn preview_part(model: &ConstraintModel, part: &Part) -> Option<Value> {
+fn preview_part(model: &ConstraintModel, part: &Part, design: Option<&eda_model::ir::Design>) -> Option<Value> {
     let footprint = model.footprint_of(part)?;
     let pose = FootprintInstance { id: part.reference.clone(), at: Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 0, side: Side::Top, label: LabelSide::Above };
     let pads: Vec<Value> = placed_pads(model, part, &pose)
@@ -394,6 +394,10 @@ fn preview_part(model: &ConstraintModel, part: &Part) -> Option<Value> {
         "pads": pads,
     });
     crate::fp_art_json::add_art(&mut p, part, &pose, &footprint);
+    // The outlines the Extruded 3D Body box's preview extrudes, for each of its sources (`updateExtrusionPreview`).
+    if let Some(d) = design {
+        p["extrusion"] = crate::extruded_body_api::preview_outlines(d, &footprint, &pose);
+    }
     Some(p)
 }
 
@@ -401,11 +405,11 @@ fn preview_part(model: &ConstraintModel, part: &Part) -> Option<Value> {
 pub fn preview(dir: &Path, target: &str) -> Reply {
     let not_found = |why: String| reply("404 Not Found", json!({ "error": why }));
     if let Some(reference) = query_value(target, "part") {
-        let (_, _, model) = match crate::board::load(dir) {
+        let (_, design, model) = match crate::board::load(dir) {
             Ok(loaded) => loaded,
             Err(e) => return not_found(crate::board::reasons(&e)),
         };
-        return match model.part(&reference).and_then(|p| preview_part(&model, p)) {
+        return match model.part(&reference).and_then(|p| preview_part(&model, p, Some(&design))) {
             Some(part) => reply("200 OK", json!({ "part": part })),
             None => not_found(format!("{reference} is not a footprint of this board with a footprint to show")),
         };
@@ -420,7 +424,8 @@ pub fn preview(dir: &Path, target: &str) -> Reply {
     let engine = library.to_engine_footprint();
     let probe = Part { reference: "REF".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(engine.name.clone()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
     let model = ConstraintModel { parts: vec![probe.clone()], footprints: vec![engine], ..Default::default() };
-    match preview_part(&model, &probe) {
+    let design = crate::board::load(dir).ok().map(|(_, d, _)| d);
+    match preview_part(&model, &probe, design.as_ref()) {
         Some(part) => reply("200 OK", json!({ "part": part })),
         None => not_found(format!("{name} has no geometry to show")),
     }
@@ -618,7 +623,7 @@ mod tests {
         let footprint = eda_model::Footprint { name: "T:Two".into(), pads: vec![pad("1", mm(-1.0), Nm::ZERO), pad("2", mm(1.0), Nm::ZERO)], courtyard: Some((mm(2.4), mm(1.0))), art, ..Default::default() };
         let probe = Part { reference: "U1".into(), mpn: None, lcsc: None, value: Some("v".into()), package: None, footprint: Some("T:Two".into()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let model = ConstraintModel { parts: vec![probe.clone()], footprints: vec![footprint], ..Default::default() };
-        let p = preview_part(&model, &probe).unwrap();
+        let p = preview_part(&model, &probe, None).unwrap();
         assert_eq!((p["side"].as_str(), p["at"].clone(), p["rot"].as_f64()), (Some("top"), json!([0, 0]), Some(0.0)));
         let pads: Vec<(i64, i64, i64, i64)> = p["pads"].as_array().unwrap().iter().map(|q| (q["x"].as_i64().unwrap(), q["y"].as_i64().unwrap(), q["w"].as_i64().unwrap(), q["h"].as_i64().unwrap())).collect();
         assert_eq!(pads, [(-1_000_000, 0, 800_000, 600_000), (1_000_000, 0, 800_000, 600_000)], "in the footprint's own frame");

@@ -1231,6 +1231,7 @@ fn handle(
         // The other Export / Fabrication Outputs dialogs kicad-cli has a command for (STEP and the 3D formats, VRML,
         // GenCAD, IPC-D-356, IPC-2581, ODB++, the board's BOM): `crate::board_output_api`, off the loop like the rest.
         ("POST", "/api/fab/3d") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::three_d),
+        ("POST", "/api/extruded_body/export") => offload(stream, lane, dir, job, path, &body, crate::extruded_body_api::export),
         ("POST", "/api/fab/vrml") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::vrml),
         ("POST", "/api/fab/gencad") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::gencad),
         ("POST", "/api/fab/idf") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::idf),

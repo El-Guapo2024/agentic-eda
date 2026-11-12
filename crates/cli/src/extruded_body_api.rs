@@ -229,6 +229,100 @@ pub fn body_json(design: &Design, _model: &ConstraintModel, part: &Part, footpri
     }))
 }
 
+/// What the 3D Models tab's preview needs to draw the box's body as it is being set (`PANEL_FP_PROPERTIES_3D_MODEL::updateExtrusionPreview`: the dummy footprint's body takes
+/// the box's heights, source, colour and material, and `UpdateDummyFootprint` draws it): the outline `GetExtrusionOutline` makes of the footprint at `fp` for each of the box's
+/// sources (`m_extrusionLayers`: "auto", `F.CrtYd`, `F.Fab`, `F.SilkS`, "pad_bbox"; an empty list where it makes none) and the pins (`GetExtrusionPinOutline`), board nm.
+pub fn preview_outlines(design: &Design, footprint: &Footprint, fp: &FootprintInstance) -> Value {
+    let mut sources = serde_json::Map::new();
+    for layer in [LAYER_AUTO, "F.CrtYd", "F.Fab", "F.SilkS", LAYER_PAD_BBOX] {
+        let body = ExtrudedBody { layer: layer.into(), ..Default::default() };
+        sources.insert(layer.into(), contours(&extrusion_outline(design, footprint, fp, &body)));
+    }
+    json!({ "sources": sources, "pins": contours(&pin_outline(footprint, fp)), "at": [fp.at.x, fp.at.y] })
+}
+
+/// The formats of the box's "Export..." file dialog (`OnExportExtrudedModel`: "STEP files (*.step)", "GLB files (*.glb)", "STL files (*.stl)", "BREP files
+/// (*.brep)"), by their kicad-cli command.
+pub const EXPORT_FORMATS: [&str; 4] = ["step", "glb", "stl", "brep"];
+
+/// The kicad-cli arguments of the export of footprint `reference`'s body alone, its position the origin (`STEP_PCB_MODEL( .. )` with `origin =
+/// m_footprint->GetPosition()` and `CreatePCB( outline, origin, false )`: no board body): `--no-board-body`, the one footprint (`--component-filter`), the origin
+/// at the footprint (`--user-origin`, mm).
+pub fn export_args(reference: &str, at: Point) -> Vec<String> {
+    vec![
+        "--no-board-body".into(),
+        "--component-filter".into(),
+        reference.into(),
+        format!("--user-origin={:.6}x{:.6}mm", at.x.as_f64() / 1e6, at.y.as_f64() / 1e6),
+        "-f".into(),
+    ]
+}
+
+/// RFC 4648 base64 of `bytes`, padded: the file sent back to the page, which saves it (the browser's download stands for KiCad's `wxFileDialog`).
+fn base64(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            out.push(if i <= c.len() { A[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+fn fail(message: &str) -> Value {
+    json!({ "ok": false, "message": message })
+}
+
+/// `POST /api/extruded_body/export` -- the Extruded 3D Body box's "Export..." (`PANEL_FP_PROPERTIES_3D_MODEL::OnExportExtrudedModel`, pcbnew/dialogs/
+/// panel_fp_properties_3d_model.cpp at KiCad 25ec2335): `{ part, format: "step"|"glb"|"stl"|"brep", body }`, `body` the box as it stands (the page checked the
+/// heights as `readExtrusionHeights` does, "Export Extruded Body"). The outline is `GetExtrusionOutline( m_footprint, .., layer )` of the footprint on the board:
+/// none is KiCad's "No extrusion outline could be generated for this footprint.". KiCad then builds the body and its pins in a `STEP_PCB_MODEL` (OpenCASCADE) and
+/// writes it; the studio has kicad-cli do the same through `EXPORTER_STEP::buildFootprint3DShapes` (the same `AddExtrudedBody` and `AddExtrudedPins` with the same
+/// heights) on a copy of the board where the footprint has the box's body and no model files, with the board body left out, that footprint alone and its
+/// position the origin ([`export_args`]). The reply is `{ ok, name: "<REF>_extruded.<ext>", data: base64 }` (the file dialog's default name, `GetReference() +
+/// "_extruded"`), or `{ ok: false, message }` -- "Failed to create extruded body geometry." for a body the board's check refuses (a standoff not under the height),
+/// "Failed to write file." when kicad-cli writes nothing.
+pub fn export(dir: &std::path::Path, req_body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(req_body).unwrap_or(Value::Null);
+    let Some(reference) = req.get("part").and_then(Value::as_str) else { return fail("no part") };
+    let format = EXPORT_FORMATS.iter().copied().find(|f| Some(*f) == req.get("format").and_then(Value::as_str)).unwrap_or("step");
+    let Some(mut body) = req.get("body").cloned().and_then(|b| serde_json::from_value::<ExtrudedBody>(b).ok()) else { return fail("no body") };
+    let (meta, design, model) = match crate::board::load(dir) {
+        Ok(x) => x,
+        Err(e) => return fail(&crate::board::reasons(&e)),
+    };
+    let Some(fp) = design.placement.as_ref().and_then(|p| p.footprints.iter().find(|f| f.id == reference)).cloned() else { return fail("the part is not on the board") };
+    let Some(footprint) = model.parts.iter().find(|p| p.reference == reference).and_then(|p| model.footprint_of(p)) else { return fail("the part has no footprint") };
+    if extrusion_outline(&design, &footprint, &fp, &body).outline_count() == 0 {
+        return fail("No extrusion outline could be generated for this footprint.");
+    }
+    // The exporter draws a body only while it is shown (`GetExtruded()->m_show`); the dialog's export does not ask.
+    body.show = true;
+    let mut board = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
+    if let Err(e) = board.apply(&eda_ops::Cmd::SetExtrudedBody { part: reference.into(), body: Some(body) }) {
+        if !e.iter().any(|c| c.check == "ops_nothing_to_change") {
+            return fail("Failed to create extruded body geometry.");
+        }
+    }
+    // The body alone: the footprint's model files are not the body's (an empty list may already be what it has).
+    let _ = board.apply(&eda_ops::Cmd::SetBoardModels { part: reference.into(), models: vec![] });
+    let scratch = dir.join(".kicad").join("extruded-export");
+    let out = scratch.join("out");
+    let _ = std::fs::remove_dir_all(&scratch);
+    let name = crate::kicad_engine::project_name_of(dir);
+    let reply = eda_kicad_engine::export_pcb_into(board.design(), &model, &scratch.join("work"), dir, &name, format, &export_args(reference, fp.at), &out);
+    let file = std::fs::read_dir(&out).ok().and_then(|d| d.filter_map(Result::ok).map(|e| e.path()).find(|p| p.extension().and_then(|e| e.to_str()) == Some(format)));
+    let result = match (reply, file.and_then(|f| std::fs::read(f).ok())) {
+        (Ok(_), Some(bytes)) if !bytes.is_empty() => json!({ "ok": true, "name": format!("{reference}_extruded.{format}"), "data": base64(&bytes) }),
+        (Err(e), _) => json!({ "ok": false, "message": format!("Failed to write file.\n{}", crate::board::reasons(&e)) }),
+        _ => fail("Failed to write file."),
+    };
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +375,16 @@ mod tests {
             art,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_export_is_the_footprint_alone_at_its_position_and_its_file_is_base64() {
+        assert_eq!(export_args("U1", Point { x: mm(10.5), y: mm(-2.0) }), ["--no-board-body", "--component-filter", "U1", "--user-origin=10.500000x-2.000000mm", "-f"]);
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(crate::foreign_api::base64_decode(&base64(&[0, 255, 7, 128, 1])).unwrap(), vec![0, 255, 7, 128, 1]);
     }
 
     #[test]
