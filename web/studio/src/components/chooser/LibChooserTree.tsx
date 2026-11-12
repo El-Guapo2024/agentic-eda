@@ -6,8 +6,9 @@
 // context menu of a library row pins or unpins it (`LIB_TREE_MODEL_ADAPTER::PinLibrary`).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PIN_GLYPH } from "../../kicad-port/libraryTreeState";
-import { availableColumns, cellText, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
-import { setLibTreeColumns, useLibTreeColumns } from "../../state/libTreeColumns";
+import { availableColumns, cellText, columnsTemplate, columnsWidth, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
+import { setLibTreeColumns, useLibTreeColumnWidths, useLibTreeColumns } from "../../state/libTreeColumns";
+import { ColumnResizer } from "../library/ColumnResizer";
 import { SelectColumnsDialog } from "../library/SelectColumnsDialog";
 import type { ChooserRow } from "../../kicad-port/libChooser";
 import { unitLetter } from "../../kicad-port/unitLetter";
@@ -39,7 +40,9 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
   const extra = columns.slice(1);
   // `addColumnIfNecessary` for each library loaded: the fields of its items
   const available = useMemo(() => availableColumns(rows.filter((r) => r.kind === "group").map((r) => (r.kind === "group" ? extraFieldsOf(r.group.items) : []))), [rows]);
-  const grid = { gridTemplateColumns: ["minmax(150px, 38%)", ...extra.map(() => "1fr")].join(" ") };
+  // each column at its kept width (`column_widths`; Item 300 and Description 600 at first), the last one filling the rest (`FinishTreeInitialization`)
+  const widths = useLibTreeColumnWidths(treeId);
+  const grid = { gridTemplateColumns: columnsTemplate(columns, widths), minWidth: columnsWidth(columns, widths) };
 
   // The selected row stays in view as the arrow keys move it.
   useEffect(() => {
@@ -60,8 +63,9 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
         }}
       >
         {columns.map((c) => (
-          <div key={c} data-column={c}>
+          <div key={c} data-column={c} style={{ position: "relative" }}>
             {c}
+            <ColumnResizer tree={treeId} header={c} />
           </div>
         ))}
       </div>

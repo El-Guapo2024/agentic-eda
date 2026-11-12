@@ -120,10 +120,16 @@ const sym = (id: string, description: string, extra: Partial<ChooserItem> = {}):
   return { id, lib, name, description, ...extra };
 };
 
-test("the terms of a symbol are the library, the name, Lib:Name, the keywords, the description, the footprint and the Description and Value columns", () => {
-  const [item] = scoreItems("symbol", [sym("Amplifier_Operational:LM358", "Dual op-amp", { keywords: "dual opamp", value: "LM358", footprint: "Package_SO:SOIC-8" })], "lm358");
-  // name 8 * 8, Lib:Name (inside) 16, Value column (exact) 8 * 4
-  assert.equal(item!.score, 1 + 64 + 16 + 32);
+test("the terms of a symbol are the library, the name, Lib:Name, the keywords, the description, the footprint and the shown columns' fields", () => {
+  const lm = sym("Amplifier_Operational:LM358", "Dual op-amp", { keywords: "dual opamp", value: "LM358", footprint: "Package_SO:SOIC-8" });
+  // name 8 * 8, Lib:Name (inside) 16; the Value column is not shown by default (Item and Description, `loadColumnConfig`)
+  assert.equal(scoreItems("symbol", [lm], "lm358")[0]!.score, 1 + 64 + 16);
+  // shown, its value is a term of weight 4 (`RebuildSearchTerms`): exact, 8 * 4
+  assert.equal(scoreItems("symbol", [lm], "lm358", ["Item", "Description", "Value"])[0]!.score, 1 + 64 + 16 + 32);
+  // a field the item came with, in a shown column (UI-LEFT-2 LL4: the Already Placed and project rows carry theirs)
+  const withMpn = { ...lm, fields: { Description: "Dual op-amp", Value: "LM358", MPN: "LM358DR" } };
+  assert.equal(scoreItems("symbol", [withMpn], "lm358dr", ["Item", "MPN"])[0]!.score, 1 + 8 * 4);
+  assert.equal(scoreItems("symbol", [withMpn], "lm358dr").length, 0, "not shown, not searched");
   assert.equal(scoreItems("symbol", [sym("Device:R", "Resistor")], "resistor")[0]!.score, 1 + 8 * 1 + 8 * 4, "the description counts once as itself and once as the Description column");
   assert.equal(scoreItems("symbol", [sym("Device:R", "Resistor")], "zzz").length, 0);
   assert.equal(scoreItems("symbol", [sym("Device:R", "Resistor")], "")[0]!.score, 1, "no query: everything, with the base score");

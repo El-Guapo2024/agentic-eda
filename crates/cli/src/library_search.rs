@@ -72,7 +72,7 @@ pub(crate) struct Matcher {
     /// Starts with `*`: the regex `.*x` matches from the first character on.
     leading_star: bool,
     /// `EDA_PATTERN_MATCH_REGEX`: a word written `/re/` (the closing `/` may be left off: "Requiring a '/' on the end means they get no feedback while
-    /// they type") or `^re$`, compiled as `wxRegEx::Compile( .., wxRE_ADVANCED )` is -- `Flavor::NetClass` -- and found anywhere in a term. `None` when the
+    /// they type") or `^re$`, compiled as `wxRegEx::Compile( .., wxRE_ADVANCED )` is -- `Flavor::Advanced`, wxWidgets 3.2's PCRE2 (UI-LEFT-2 LL4) -- and found anywhere in a term. `None` when the
     /// word is not written as one, or does not compile.
     regex: Option<eda_model::wx_regex::Regex>,
     /// `EDA_PATTERN_MATCH_RELATIONAL`: a word `key<op>value[unit]`.
@@ -129,8 +129,9 @@ fn relational_regexes() -> &'static (eda_model::wx_regex::Regex, eda_model::wx_r
     static R: OnceLock<(Regex, Regex)> = OnceLock::new();
     R.get_or_init(|| {
         (
-            Regex::compile(r"^(\w+)(<|<=|=|>=|>)([-+]?[\d.]*)(\w*)$", false, Flavor::NetClass).expect("SetPattern's regex compiles"),
-            Regex::compile(r"(\w+)[=:]([-+]?[\d.]+)(\w*)", false, Flavor::NetClass).expect("FindOne's regex compiles"),
+            // `wxRegEx( .., wxRE_ADVANCED )`: PCRE2's ASCII `\w` (UI-LEFT-2 LL4)
+            Regex::compile(r"^(\w+)(<|<=|=|>=|>)([-+]?[\d.]*)(\w*)$", false, Flavor::Advanced).expect("SetPattern's regex compiles"),
+            Regex::compile(r"(\w+)[=:]([-+]?[\d.]+)(\w*)", false, Flavor::Advanced).expect("FindOne's regex compiles"),
         )
     })
 }
@@ -218,7 +219,7 @@ fn explicit_regex(word: &str) -> Option<eda_model::wx_regex::Regex> {
     } else {
         return None;
     };
-    eda_model::wx_regex::Regex::compile(pattern, false, eda_model::wx_regex::Flavor::NetClass)
+    eda_model::wx_regex::Regex::compile(pattern, false, eda_model::wx_regex::Flavor::Advanced)
 }
 
 impl Matcher {
@@ -373,15 +374,36 @@ pub(crate) struct Filter {
     /// Only power symbols: the chooser Place Power opens (`SYMBOL_LIBRARY_FILTER::FilterPowerSymbols( true )`, which `PANEL_SYMBOL_CHOOSER` turns into
     /// the tree filter `aNode.m_IsPower`).
     pub(crate) only_power: bool,
+    /// The tree's shown columns (`LIB_TREE_MODEL_ADAPTER::GetShownColumns`, Select Columns...; UI-LEFT-2 LL4): the value of each of an item's chooser fields
+    /// named here is a search term of weight 4 (`LIB_TREE_NODE::RebuildSearchTerms`). `None` is `loadColumnConfig`'s default, Item and Description.
+    pub(crate) columns: Option<Vec<String>>,
 }
 
 impl Filter {
+    /// The shown columns of the search's tree, sent as a tab-separated list (`cols`); an empty one leaves the default.
+    pub(crate) fn with_columns(mut self, cols: &str) -> Filter {
+        let list: Vec<String> = cols.split('\t').map(str::trim).filter(|c| !c.is_empty()).map(str::to_string).collect();
+        if !list.is_empty() {
+            self.columns = Some(list);
+        }
+        self
+    }
+
+    /// The shown columns (Item and Description by default).
+    fn shown_columns(&self) -> Vec<&str> {
+        match &self.columns {
+            Some(c) => c.iter().map(String::as_str).collect(),
+            None => vec!["Item", "Description"],
+        }
+    }
+
     pub(crate) fn parse(pins: &str, fp_filters: &str, power: &str) -> Filter {
         Filter {
             pins: pins.trim().parse::<usize>().ok().filter(|&n| n > 0),
             fp_filters: fp_filters.split_whitespace().map(str::to_lowercase).collect(),
             exclude_power: power == "exclude",
             only_power: power == "only",
+            columns: None,
         }
     }
 
@@ -422,7 +444,7 @@ impl SymbolLib {
     }
 }
 
-/// `LIB_SYMBOL::cacheSearchTerms` plus the shown columns' fields (`LIB_TREE_NODE::RebuildSearchTerms`: Description and Value, 4 each).
+/// `LIB_SYMBOL::cacheSearchTerms` (`m_sourceSearchTerms`); the shown columns' fields are added per search ([`column_terms`]).
 fn symbol_terms(lib: &str, s: &SymbolSummary) -> Vec<Term> {
     let mut terms = vec![term(lib, 4), term(&s.name, 8), term(&format!("{lib}:{}", s.name), 16)];
     terms.extend(s.keywords.split_whitespace().map(|k| term(k, 4)));
@@ -431,9 +453,28 @@ fn symbol_terms(lib: &str, s: &SymbolSummary) -> Vec<Term> {
     if !s.footprint.is_empty() {
         terms.push(term(&s.footprint, 1));
     }
-    terms.push(term(&s.description, 4));
-    terms.push(term(&s.value, 4));
     terms
+}
+
+/// One chooser field of a symbol by name (`LIB_SYMBOL::GetChooserFields`, see [`chooser_fields`]): a mandatory field, a user field, or "Keywords".
+fn chooser_field<'a>(s: &'a SymbolSummary, name: &str) -> Option<&'a str> {
+    if let Some((_, v)) = s.user_fields.iter().find(|(k, _)| k == name) {
+        return Some(v);
+    }
+    match name {
+        "Reference" => Some(&s.reference),
+        "Value" => Some(&s.value),
+        "Footprint" => Some(&s.footprint),
+        "Datasheet" => Some(&s.datasheet),
+        "Description" => Some(&s.description),
+        "Keywords" => Some(&s.keywords),
+        _ => None,
+    }
+}
+
+/// `LIB_TREE_NODE::RebuildSearchTerms`: the value of each of the symbol's chooser fields whose column is shown, weight 4 (a footprint has no chooser fields).
+fn column_terms(s: &SymbolSummary, shown: &[&str]) -> Vec<Term> {
+    shown.iter().filter_map(|name| chooser_field(s, name)).map(|v| term(v, 4)).collect()
 }
 
 /// One footprint library, indexed.
@@ -731,6 +772,7 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
     let finished = ensure_background_index(kind, src);
     let libs = libraries_in(kind, src);
     let matchers = parse_query(query);
+    let shown = filter.shown_columns();
     // Nothing installed is nothing to wait for.
     let done = finished.load(AtomicOrdering::Acquire) || libs.is_empty();
 
@@ -774,7 +816,9 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
                         if !filter.symbol_passes(s.power) {
                             continue;
                         }
-                        let score = score_item(&matchers, terms);
+                        let mut terms = terms.clone();
+                        terms.extend(column_terms(s, &shown));
+                        let score = score_item(&matchers, &terms);
                         if score > 0 {
                             hits.push(Hit { lib: li, item: i, score });
                         }
@@ -1169,7 +1213,7 @@ mod tests {
 
     const AMPS: &str = r##"(kicad_symbol_lib (version 20251024)
         (symbol "LM358" (property "Reference" "U") (property "Value" "LM358") (property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm")
-            (property "Datasheet" "http://ti.com/lm358.pdf") (property "Description" "Low-Power, Dual Operational Amplifier, DIP-8/SOIC-8") (property "ki_keywords" "dual opamp") (property "ki_fp_filters" "SOIC*3.9x4.9mm* DIP*W7.62mm*")
+            (property "Datasheet" "http://ti.com/lm358.pdf") (property "Description" "Low-Power, Dual Operational Amplifier, DIP-8/SOIC-8") (property "ki_keywords" "dual opamp") (property "ki_fp_filters" "SOIC*3.9x4.9mm* DIP*W7.62mm*") (property "MPN" "LM358DR")
             (symbol "LM358_1_1" (pin input line (at 0 0 0) (length 1) (name "+") (number "3")) (pin input line (at 0 0 0) (length 1) (name "-") (number "2")) (pin output line (at 0 0 0) (length 1) (name "~") (number "1")))
             (symbol "LM358_2_1" (pin input line (at 0 0 0) (length 1) (name "+") (number "5")) (pin input line (at 0 0 0) (length 1) (name "-") (number "6")) (pin output line (at 0 0 0) (length 1) (name "~") (number "7")))
             (symbol "LM358_3_1" (pin power_in line (at 0 0 0) (length 1) (name "V+") (number "8")) (pin power_in line (at 0 0 0) (length 1) (name "V-") (number "4"))))
@@ -1282,10 +1326,18 @@ mod tests {
         let n = names_of(&opamp);
         assert!(n.contains(&"Amplifier_Operational:LM358".to_string()) && n.contains(&"Amplifier_Operational:TL072".to_string()), "{n:?}");
         assert!(n.contains(&"Device:Opamp_Model".to_string()), "the name of Device's model contains it too: {n:?}");
-        // A name that starts with the word (Device:Opamp_Model: 16 + 16 + 8 on top of 1) outscores a keyword that is exactly it (32 + 1): the library with the best item first.
-        assert_eq!((opamp["libraries"][0]["name"].clone(), opamp["libraries"][0]["score"].clone()), (json!("Device"), json!(41)), "{opamp}");
-        assert_eq!((opamp["libraries"][1]["name"].clone(), opamp["libraries"][1]["score"].clone()), (json!("Amplifier_Operational"), json!(34)));
-        let amps = opamp["libraries"][1]["items"].as_array().unwrap();
+        // A keyword that is exactly the word (4 * 8 + 1 on top of 1) outscores a name that starts with it (Device:Opamp_Model: 16 + 16 on top of 1) while the
+        // Value column is not shown (Item and Description, `loadColumnConfig`): the library with the best item first.
+        assert_eq!((opamp["libraries"][0]["name"].clone(), opamp["libraries"][0]["score"].clone()), (json!("Amplifier_Operational"), json!(34)), "{opamp}");
+        assert_eq!((opamp["libraries"][1]["name"].clone(), opamp["libraries"][1]["score"].clone()), (json!("Device"), json!(33)));
+        // shown, the Value column's field is a term of weight 4 (`RebuildSearchTerms`; UI-LEFT-2 LL4): Opamp_Model's value starts with the word, 2 * 4 more
+        let with_value = search_in(Kind::Symbol, &root, "opamp", &Filter::default().with_columns("Item\tDescription\tValue"), 50);
+        assert_eq!((with_value["libraries"][0]["name"].clone(), with_value["libraries"][0]["score"].clone()), (json!("Device"), json!(41)), "{with_value}");
+        // a user field in a shown column is searched; not shown, it is not
+        let mpn = |cols: &str| names_of(&search_in(Kind::Symbol, &root, "lm358dr", &Filter::default().with_columns(cols), 50));
+        assert!(mpn("Item\tMPN").contains(&"Amplifier_Operational:LM358".to_string()), "{:?}", mpn("Item\tMPN"));
+        assert!(mpn("Item\tDescription").is_empty());
+        let amps = opamp["libraries"][0]["items"].as_array().unwrap();
         assert_eq!(amps.iter().map(|i| i["name"].as_str().unwrap()).collect::<Vec<_>>(), ["LM358", "LM2904", "TL072"], "equal scores keep the library's own (natural) order");
 
         // a word of the description, case does not matter; both words must be found

@@ -37,6 +37,7 @@ import {
 import { fetchInstalledLibraries } from "../api/libraryIndexClient";
 import type { LibraryFootprint, LibrarySymbol } from "../api/types";
 import { chosenOf, type ChooserItem, type ChooserRow } from "../kicad-port/libChooser";
+import { bodyStyleCount, bodyStyleDescription } from "../kicad-port/symBodyStyles";
 import { unitLetter } from "../kicad-port/unitLetter";
 import { loadErrorDetails, loadErrorSummary } from "../kicad-port/libraryLoadErrors";
 import { useLibraryLoadErrors } from "../state/libraryLoadErrors";
@@ -161,6 +162,12 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
     setFootprintOverride(null);
   }, [id]);
   const unit = Math.min(Math.max(chosen && chosen.unit > 0 ? chosen.unit : unitPick, 1), units);
+  // KiCad 25ec2335's "Body style:" choice under the preview (`PANEL_SYMBOL_CHOOSER::updateBodyStyleChoice`, `onSelectBodyStyle`; UI-LEFT-2 LL4): enabled for a
+  // symbol of more than one body style, its entries `GetBodyStyleDescription( i, false )`; the style chosen is kept from one symbol to the next unless the
+  // next has fewer, the preview draws it (`DisplaySymbol( id, unit, m_selectedBodyStyle )`) and the placed symbol has it (`GetSelectedLibId( &unit, &bodyStyle )`)
+  const [bodyStylePick, setBodyStylePick] = useState(1);
+  const styleCount = bodyStyleCount(shown?.symbol ?? null);
+  const bodyStyle = styleCount > 1 && bodyStylePick <= styleCount ? bodyStylePick : 1;
 
   // The default footprint, and its drawing (`PANEL_SYMBOL_CHOOSER::showFootprintFor`).
   const defaultFootprint = info?.footprint ?? chosen?.item.footprint ?? "";
@@ -257,6 +264,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
           referencePrefix: reference,
           unit: Math.min(Math.max(c.unit > 0 ? c.unit : unitPick, 1), units),
           unitCount: units,
+          bodyStyle,
           value: details?.value || undefined,
           footprint: footprintOverride ?? details?.footprint ?? "",
           placeAllUnits: allUnits,
@@ -267,7 +275,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, allUnits, at, pick, prefs.schNewPowerSymbols]
+    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch, power, keep, allUnits, at, pick, prefs.schNewPowerSymbols, bodyStyle]
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -328,7 +336,28 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
               />
             </div>
             <div className="chooser-right">
-              <SymbolPreview symbol={sym} unit={unit} bodyStyle={1} status={!id ? "No symbol selected" : shown?.error ? shown.error : shown ? "" : "Loading…"} />
+              <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+                <label htmlFor="chooser-body-style">Body style:</label>
+                <select
+                  id="chooser-body-style"
+                  data-chooser-body-style
+                  style={{ flex: 1, fontSize: 12 }}
+                  disabled={styleCount <= 1}
+                  value={styleCount > 1 ? String(bodyStyle) : ""}
+                  onChange={(e) => setBodyStylePick(Number(e.target.value))}
+                >
+                  {styleCount > 1 ? (
+                    Array.from({ length: styleCount }, (_, i) => i + 1).map((b) => (
+                      <option key={b} value={String(b)}>
+                        {bodyStyleDescription(shown?.symbol ?? null, b)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="" />
+                  )}
+                </select>
+              </div>
+              <SymbolPreview symbol={sym} unit={unit} bodyStyle={bodyStyle} status={!id ? "No symbol selected" : shown?.error ? shown.error : shown ? "" : "Loading…"} />
               {units > 1 && (
                 <div className="chooser-units">
                   <span style={{ opacity: 0.8 }}>Unit</span>

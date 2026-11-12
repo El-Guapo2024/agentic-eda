@@ -12,6 +12,8 @@
 
 // ---------------------------------------------------------------------------------------------------------------------------------- matching
 
+import { WxRegex } from "./wxRegex";
+
 /** One searchable text of an item with its weight (`SEARCH_TERM`), normalized the way `ScoreTerms` does: lower case, trimmed, at most 1000 characters. */
 export interface SearchTerm {
   text: string;
@@ -47,11 +49,11 @@ export interface Matcher {
   leadingStar: boolean;
   wild: boolean;
   /**
-   * `EDA_PATTERN_MATCH_REGEX`: compiled with JavaScript's RegExp (the `u` flag), as kicad-port/edaPatternMatch.ts does -- wxRegEx compiles `wxRE_ADVANCED`
-   * (the server's search runs `eda_model::wx_regex`); the usual classes, quantifiers, groups and anchors read the same. A pattern RegExp refuses is a matcher
-   * not added, as wxRegEx's refusal is.
+   * `EDA_PATTERN_MATCH_REGEX`: compiled as `wxRegEx::Compile( pattern, wxRE_ADVANCED )` is under wxWidgets 3.2 -- PCRE2 after wxWidgets' metasyntax
+   * conversion -- by kicad-port/wxRegex.ts, the port of the server's engine (`eda_model::wx_regex`, `Flavor::Advanced`; UI-LEFT-2 LL4). A pattern it refuses
+   * is a matcher not added, as wxRegEx's refusal is.
    */
-  regex: RegExp | null;
+  regex: WxRegex | null;
   relational: Relational | null;
 }
 
@@ -72,11 +74,23 @@ const UNITS: Readonly<Record<string, number>> = {
   ti: 1099511627776,
 };
 
-/** `\w` as wxRegEx's advanced syntax (and `eda_model::wx_regex`) reads it: a letter or digit of any script, or `_`. */
-const W = "[\\p{Alphabetic}\\p{N}_]";
-/** `EDA_PATTERN_MATCH_RELATIONAL::SetPattern`'s and `FindOne`'s expressions. */
-const RELATIONAL_WORD = new RegExp(`^(${W}+)(<|<=|=|>=|>)([-+]?[\\d.]*)(${W}*)$`, "u");
-const RELATIONAL_FIELD = new RegExp(`(${W}+)[=:]([-+]?[\\d.]+)(${W}*)`, "u");
+/** `EDA_PATTERN_MATCH_RELATIONAL::SetPattern`'s and `FindOne`'s expressions, compiled `wxRE_ADVANCED` as KiCad's are (PCRE2's ASCII `\w`; kicad-port/wxRegex.ts). */
+const RELATIONAL_WORD = WxRegex.compile("^(\\w+)(<|<=|=|>=|>)([-+]?[\\d.]*)(\\w*)$")!;
+const RELATIONAL_FIELD = WxRegex.compile("(\\w+)[=:]([-+]?[\\d.]+)(\\w*)")!;
+
+/** A match of `re` in `text`: where it starts (in characters) and each group's text. */
+function execGroups(re: WxRegex, text: string): { index: number; groups: string[] } | null {
+  const chars = [...text].map((c) => c.codePointAt(0)!);
+  const m = re.findAt(chars, 0);
+  if (!m) return null;
+  const groups: string[] = [];
+  for (let g = 0; g <= re.groups; g++) {
+    const a = m[2 * g];
+    const b = m[2 * g + 1];
+    groups.push(a === null || a === undefined || b === null || b === undefined ? "" : String.fromCodePoint(...chars.slice(a, b)));
+  }
+  return { index: m[0]!, groups };
+}
 
 /** `wxString::ToCDouble`: the whole text a number (its characters are `[-+]?[\d.]+` already). */
 function toCDouble(text: string): number | null {
@@ -87,9 +101,9 @@ function toCDouble(text: string): number | null {
 
 /** `EDA_PATTERN_MATCH_RELATIONAL::SetPattern`: the key lowered, an empty value matching any, a value that is no number or a unit not in the table refusing the word. */
 export function makeRelational(word: string): Relational | null {
-  const m = RELATIONAL_WORD.exec(word);
+  const m = execGroups(RELATIONAL_WORD, word);
   if (!m) return null;
-  const [, key = "", rel = "", val = "", unit = ""] = m;
+  const [, key = "", rel = "", val = "", unit = ""] = m.groups;
   const relations: Record<string, Relation> = { "<": "lt", "<=": "le", "=": "eq", ">=": "ge", ">": "gt" };
   let relation = relations[rel];
   if (!relation) return null;
@@ -108,9 +122,9 @@ export function makeRelational(word: string): Relational | null {
 /** `EDA_PATTERN_MATCH_RELATIONAL::FindOne`: the first `key=value[unit]` (or `key:value`) of one token, its key this one's, its value (scaled by a known unit) in the relation. */
 function findOneRelational(r: Relational, token: string): number | null {
   if (!token.includes("=") && !token.includes(":")) return null;
-  const m = RELATIONAL_FIELD.exec(token);
+  const m = execGroups(RELATIONAL_FIELD, token);
   if (!m) return null;
-  const [, key = "", val = "", unit = ""] = m;
+  const [, key = "", val = "", unit = ""] = m.groups;
   if (key.toLowerCase() !== r.key) return null;
   let parsed = toCDouble(val);
   if (parsed === null) return null;
@@ -135,18 +149,14 @@ export function findRelational(r: Relational, text: string): number | null {
 }
 
 /** `EDA_PATTERN_MATCH_REGEX::SetPattern`: `^...$` as it is, `/...` less the slashes ("Requiring a '/' on the end means they get no feedback while they type"), else none. */
-export function explicitRegex(word: string): RegExp | null {
+export function explicitRegex(word: string): WxRegex | null {
   let pattern: string;
   if (word.startsWith("^") && word.endsWith("$")) pattern = word;
   else if (word.startsWith("/")) {
     pattern = word.slice(1);
     if (pattern.endsWith("/")) pattern = pattern.slice(0, -1);
   } else return null; // "For now regular expressions must be explicit"
-  try {
-    return new RegExp(pattern, "u");
-  } catch {
-    return null;
-  }
+  return WxRegex.compile(pattern);
 }
 
 export function makeMatcher(word: string): Matcher {
@@ -185,8 +195,8 @@ function findWild(m: Matcher, text: string): number | null {
 export function findIn(m: Matcher, text: string): number | null {
   const found: number[] = [];
   if (m.regex) {
-    const r = m.regex.exec(text);
-    if (r) found.push(r.index);
+    const r = m.regex.findStart(text);
+    if (r !== null) found.push(r);
   }
   if (m.wild) {
     const w = findWild(m, text);
@@ -319,23 +329,36 @@ export function splitId(id: string): { lib: string; name: string } {
   return at < 0 ? { lib: "", name: id } : { lib: id.slice(0, at), name: id.slice(at + 1) };
 }
 
-/** `LIB_SYMBOL::cacheSearchTerms` and the shown columns (Description and Value, 4 each); `FOOTPRINT_INFO::GetSearchTerms` for a footprint. */
-export function itemTerms(kind: ChooserKind, item: ChooserItem, shownColumns: readonly string[] = []): SearchTerm[] {
+/** `loadColumnConfig`'s default columns: Item and Description. */
+const DEFAULT_SHOWN: readonly string[] = ["Item", "Description"];
+
+/** A symbol's chooser fields (`LIB_SYMBOL::GetChooserFields`): the ones it came with, else what its members say. */
+export function chooserFieldsOf(item: ChooserItem): Readonly<Record<string, string>> {
+  if (item.fields) return item.fields;
+  return { Reference: item.reference ?? "", Value: item.value ?? item.name, Footprint: item.footprint ?? "", Description: item.description, Keywords: item.keywords ?? "" };
+}
+
+/**
+ * `LIB_SYMBOL::cacheSearchTerms` and, `LIB_TREE_NODE::RebuildSearchTerms`, the value of each chooser field whose column is shown, weight 4 (Description is
+ * shown by default); `FOOTPRINT_INFO::GetSearchTerms` for a footprint, which has no chooser fields. An item that came without its fields (a recently used entry
+ * kept from before they were sent) has its Description, Value, Reference, Footprint and Keywords from its own members.
+ */
+export function itemTerms(kind: ChooserKind, item: ChooserItem, shownColumns: readonly string[] = DEFAULT_SHOWN): SearchTerm[] {
   const keywords = item.keywords ?? "";
   const terms = [searchTerm(item.lib, 4), searchTerm(item.name, 8), searchTerm(`${item.lib}:${item.name}`, 16)];
   for (const k of keywords.split(/\s+/)) if (k !== "") terms.push(searchTerm(k, 4));
   terms.push(searchTerm(keywords, 1), searchTerm(item.description, 1));
   if (kind === "symbol") {
     if (item.footprint) terms.push(searchTerm(item.footprint, 1));
-    terms.push(searchTerm(item.description, 4), searchTerm(item.value ?? "", 4));
+    // `LIB_TREE_NODE::RebuildSearchTerms`: `m_Fields` in name order (a `std::map`), each one whose column is shown
+    const fields = chooserFieldsOf(item);
+    for (const name of Object.keys(fields).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) if (shownColumns.includes(name)) terms.push(searchTerm(fields[name]!, 4));
   }
-  // `LIB_TREE_NODE::RebuildSearchTerms`: the value of each shown extra column (Select Columns..., kicad-port/libTreeColumns.ts), weighted 4
-  for (const [name, text] of Object.entries(item.fields ?? {})) if (shownColumns.includes(name)) terms.push(searchTerm(text, 4));
   return terms;
 }
 
 /** The items a search keeps, each with its score, in the tree's order within a score (name, naturally); the whole list when the query is empty. */
-export function scoreItems(kind: ChooserKind, items: readonly ChooserItem[], query: string, shownColumns: readonly string[] = []): ChooserItem[] {
+export function scoreItems(kind: ChooserKind, items: readonly ChooserItem[], query: string, shownColumns: readonly string[] = DEFAULT_SHOWN): ChooserItem[] {
   const matchers = parseQuery(query);
   const out: ChooserItem[] = [];
   for (const item of items) {

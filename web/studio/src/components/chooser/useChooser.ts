@@ -103,7 +103,9 @@ export function useChooser(o: ChooserOptions): Chooser {
 
   const filterKey = JSON.stringify(o.filter ?? {});
   const searching = parseQuery(debounced).length > 0;
-  const searchKey = `${kind}\u0001${debounced}\u0001${filterKey}`;
+  // the tree's shown columns: their fields are search words (`RebuildSearchTerms`), so a change of columns is a new search
+  const shownColumns = useLibTreeColumns(kind === "symbol" ? "symbol_chooser" : "footprint_chooser");
+  const searchKey = `${kind}\u0001${debounced}\u0001${filterKey}\u0001${shownColumns.join("\t")}`;
   const results = answer && answer.for === searchKey ? answer.answer : null;
   const treeKey = o.treeKey ?? kind;
   const onlyPower = !!o.filter?.onlyPower;
@@ -197,7 +199,7 @@ export function useChooser(o: ChooserOptions): Chooser {
     const ctl = new AbortController();
     const run = async () => {
       try {
-        const got = await searchInstalled(kind, debounced, o.filter, ctl.signal);
+        const got = await searchInstalled(kind, debounced, o.filter, ctl.signal, shownColumns);
         if (cancelled) return;
         setAnswer({ for: key, answer: got });
         setError(null);
@@ -214,7 +216,7 @@ export function useChooser(o: ChooserOptions): Chooser {
       ctl.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, kind, debounced, searching, filterKey]);
+  }, [active, kind, debounced, searching, filterKey, searchKey]);
 
   // A narrower filter changes what a library holds: forget what was loaded.
   useEffect(() => {
@@ -245,7 +247,6 @@ export function useChooser(o: ChooserOptions): Chooser {
 
   const keep = o.keep;
   const kept = useCallback((items: readonly ChooserItem[] | undefined) => (items ? (keep ? items.filter(keep) : [...items]) : undefined), [keep]);
-  const shownColumns = useLibTreeColumns(kind === "symbol" ? "symbol_chooser" : "footprint_chooser");
   const groups = useMemo(
     () =>
       composeGroups({
