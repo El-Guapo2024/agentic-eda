@@ -61,6 +61,7 @@ mod library_tables;
 mod library_watch;
 mod rescue_api;
 mod legacy_import;
+mod legacy_rescue;
 mod text_variables;
 mod table_json;
 mod text_vars_json;

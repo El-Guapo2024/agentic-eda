@@ -14,6 +14,8 @@
 //     board's tables as "found only in cache library", in KiCad's words;
 //   a KiCad 4 schematic (version 2, bare symbol names): Remap Symbols opens by itself after the import, as KiCad opens it as such a project loads, and its
 //     Remap Symbols gives every symbol the library of the project's legacy list ("Symbol R mapped to symbol library 'symbols'.");
+//   the legacy rescuer: on a KiCad 4 project whose libraries are gone (pic_programmer), Rescue Symbols lists every symbol "found only in cache library" and
+//     writes `<project>-rescue.lib` (LEGACY_RESCUER, KiCad's legacy library writer);
 //   Undo brings the old drawing back.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }.
@@ -103,6 +105,28 @@
     appliedSch--;
     const back = await waitFor(async () => { const s = await get("/api/schematic"); return s.sheets.length === before.sheets.length && placedOn(s) === placedOn(before) ? s : null; });
     check("two Undos take the remap and the import back", !!back);
+
+    // ---- the legacy rescuer: a KiCad 4 project whose libraries are gone (pic_programmer: bare names, the 2007 cache `pic_programmer.cache.lib`)
+    const pp = await Promise.all(["pic_programmer.sch", "pic_sockets.sch", "pic_programmer.cache.lib", "pic_programmer.pro"].map((f) => b64(`pic_programmer/${f}`)));
+    check("the QA project pic_programmer is served to the page", pp.every((f) => f.size > 0), pp.map((f) => `${f.name}:${f.size}`).join(" "));
+    await E.run("eeschema.EditorControl.importNonKicadSchematic", pp);
+    const pic = await waitFor(async () => { const s = await get("/api/schematic"); return placedOn(s) > 10 ? s : null; }, 60000);
+    if (pic) appliedSch++;
+    check("the KiCad 4 schematic comes in", !!pic, pic ? `${placedOn(pic)} symbols` : "not replaced");
+    await waitFor(() => document.querySelector("[data-remap-dialog]"), 10000);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    (document.querySelector("[data-remap-dialog]")?.closest("[role=dialog]")?.querySelector("button[aria-label=Close], button[title=Close]") ?? { click() {} }).click();
+    await sleep(300);
+    await E.run("eeschema.EditorControl.rescueSymbols");
+    const rows = await waitFor(() => { const r = [...document.querySelectorAll("[data-rescue-candidates] tbody tr")]; return r.length > 0 ? r : null; }, 30000);
+    check("Rescue Symbols lists the legacy rescuer's candidates in KiCad's words", !!rows && rows.every((r) => /Rescue symbol .* found only in cache library to /.test(r.textContent)), rows?.slice(0, 2).map((r) => r.textContent).join(" | "));
+    document.querySelector("[data-rescue-ok]")?.click();
+    const said = await waitFor(() => (/Rescued \d+ symbols? into .*-rescue\.lib\./.test(toastText()) ? toastText() : null), 30000);
+    check("Rescue Symbols writes the legacy rescue library", !!said, toastText());
+    await E.run("common.Interactive.undo");
+    appliedSch--;
+    const back2 = await waitFor(async () => { const s = await get("/api/schematic"); return s.sheets.length === before.sheets.length && placedOn(s) === placedOn(before) ? s : null; });
+    check("Undo takes the KiCad 4 import back", !!back2);
   } catch (e) {
     check("the check ran to the end", false, e && e.stack ? e.stack : e);
   } finally {

@@ -23,10 +23,10 @@
 //! `lib_symbols` are): a symbol whose library is gone, or whose library symbol's pins changed, can be rescued from the copy the schematic keeps. The
 //! studio's own project library (`eda:`) and generated symbols (`gen:`) have no library file and are never candidates.
 //!
-//! Not ported: the legacy flavour (`LEGACY_RESCUER`: `RESCUE_CASE_CANDIDATE` and `RESCUE_CACHE_CANDIDATE`, for a schematic none of whose symbols names
-//! a library, `SCH_SCREENS::HasNoFullyDefinedLibIds`), which writes a legacy `.lib` rescue library and the project's legacy library list; the studio has
-//! no legacy library writer. The answer says so (`legacy`). (Such a schematic -- a KiCad 5 `.sch` -- is brought in with its cache library and project file
-//! since `task-v10-legacy`: `crate::legacy_import`, PARITY-sch.md section 90.)
+//! The legacy flavour (`LEGACY_RESCUER`: `RESCUE_CASE_CANDIDATE` and `RESCUE_CACHE_CANDIDATE`, for a schematic none of whose symbols names a library,
+//! `SCH_SCREENS::HasNoFullyDefinedLibIds` -- a KiCad 5 `.sch` brought in by `crate::legacy_import`), which writes a legacy `.lib` rescue library and the
+//! project's legacy library list, is `crate::legacy_rescue` (`legacy` in the answer says which flavour the candidates are). Remap Legacy Library Symbols
+//! runs it first, as `OnRemapSymbols` does; **differs**: KiCad shows the Project Rescue Helper there, the studio takes every candidate it offers.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -272,6 +272,13 @@ fn candidate_json(c: &Candidate, placed: &[Placed]) -> Value {
 /// `GET /api/sch/rescue`: `{legacy, library, candidates: [{requested, new_id, action, cache, lib, unit, body_style, instances: [{reference, value}]}]}` or `{error}`.
 pub(crate) fn candidates(dir: &Path) -> Value {
     match candidates_of(dir) {
+        // `SCH_EDITOR_CONTROL::RescueSymbols`: "if( schematic.HasNoFullyDefinedLibIds() ) RescueLegacyProject( true )" -- `crate::legacy_rescue`
+        Ok((_, placed, nickname, true)) => {
+            let Ok((meta, _, _)) = board::load(dir) else { return json!({ "error": "the board cannot be read" }) };
+            let libs = crate::legacy_rescue::legacy_libs(dir, &project_name(&meta));
+            let found = crate::legacy_rescue::find_candidates(&placed, &libs);
+            json!({ "legacy": true, "library": nickname, "candidates": found.iter().map(|c| crate::legacy_rescue::candidate_json(c, &placed)).collect::<Vec<_>>() })
+        }
         Ok((found, placed, nickname, legacy)) => json!({
             "legacy": legacy,
             "library": nickname,
@@ -294,7 +301,7 @@ pub(crate) fn rescue(dir: &Path, body: &[u8]) -> Value {
         Err(e) => return json!({ "error": e }),
     };
     if legacy {
-        return json!({ "error": "The legacy symbol rescue (a schematic whose symbols name no library) is not available here: it writes a legacy symbol library." });
+        return legacy_rescue_chosen(dir, &wanted);
     }
     let chosen: Vec<&Candidate> = found.iter().filter(|c| wanted.contains(&c.requested)).collect();
     // `RESCUE_SYMBOL_LIB_TABLE_CANDIDATE::PerformAction`: a candidate with neither symbol has nothing to put in the library (KiCad's `wxCHECK_MSG( tmp, false, ..)`)
@@ -307,6 +314,32 @@ pub(crate) fn rescue(dir: &Path, body: &[u8]) -> Value {
             let changes: Vec<(String, String)> = rescued.iter().map(|(from, to, _)| (from.clone(), to.clone())).collect();
             let symbols: Vec<&LibrarySymbol> = rescued.iter().map(|(_, _, s)| s).collect();
             json!({ "ok": true, "library": path.display().to_string(), "cmd": { "op": "rescue_symbols", "changes": changes, "symbols": symbols } })
+        }
+        Err(e) => json!({ "error": e }),
+    }
+}
+
+/// `RescueLegacyProject( true )` for the candidates the helper kept: `<project>-rescue.lib` written and put first in the legacy list
+/// (`crate::legacy_rescue::rescue`), and the case candidates' renames as one command (none when only cached symbols were rescued under their own name).
+fn legacy_rescue_chosen(dir: &Path, wanted: &[String]) -> Value {
+    let (meta, design, model) = match board::load(dir) {
+        Ok(x) => x,
+        Err(e) => return json!({ "error": board::reasons(&e) }),
+    };
+    let project = project_name(&meta);
+    let libs = crate::legacy_rescue::legacy_libs(dir, &project);
+    let found = crate::legacy_rescue::find_candidates(&placed_symbols(&design, &model), &libs);
+    let chosen: Vec<&crate::legacy_rescue::LegacyCandidate> = found.iter().filter(|c| wanted.contains(&c.requested)).collect();
+    if chosen.is_empty() {
+        return json!({ "error": "No symbols were rescued." });
+    }
+    match crate::legacy_rescue::rescue(dir, &project, &libs, &chosen) {
+        Ok((path, renames, symbols)) => {
+            let mut v = json!({ "ok": true, "library": path.display().to_string() });
+            if !renames.is_empty() {
+                v["cmd"] = json!({ "op": "rescue_symbols", "changes": renames, "symbols": symbols });
+            }
+            v
         }
         Err(e) => json!({ "error": e }),
     }
@@ -433,11 +466,22 @@ fn backup_project(dir: &Path, project: &str, stamp: &str, report: &mut Vec<Repor
 /// holds its name, found in the tables by its file (`remapSymbolToLibTable`, `FindLibraryByURI`). Returns the report and the identifier changes
 /// (`bare name -> Library:Name`), which the studio applies as one `Cmd::RescueSymbols`. **Differs**: the rescue KiCad runs first (`LEGACY_RESCUER`, a
 /// legacy `.lib` rescue library) is not ported, and the project file's legacy library list is left as it is.
-pub(crate) fn remap_plan(dir: &Path, design: &Design, project: &str, stamp: &str) -> Result<(Vec<ReportLine>, Vec<(String, String)>), String> {
+pub(crate) fn remap_plan(dir: &Path, design: &Design, project: &str, stamp: &str) -> Result<(Vec<ReportLine>, Vec<(String, String)>, Vec<LibrarySymbol>), String> {
     let mut report = Vec::new();
     if let Err(e) = backup_project(dir, project, stamp, &mut report) {
         return Err(e);
     }
+    // "one last rescue of legacy symbol libraries before remapping to the symbol library table": `LEGACY_RESCUER`, every candidate the Project Rescue
+    // Helper offers taken as it opens with them all accepted (the module doc's **Differs**)
+    let libs = crate::legacy_rescue::legacy_libs(dir, project);
+    let candidates = crate::legacy_rescue::find_candidates(&crate::legacy_rescue::placed_of(design), &libs);
+    let rescuable: Vec<&crate::legacy_rescue::LegacyCandidate> = candidates.iter().filter(|c| c.source.is_some()).collect();
+    let (renames, rescued): (BTreeMap<String, String>, Vec<LibrarySymbol>) = if rescuable.is_empty() {
+        (BTreeMap::new(), Vec::new())
+    } else {
+        let (_, renames, rescued) = crate::legacy_rescue::rescue(dir, project, &libs, &rescuable)?;
+        (renames.into_iter().collect(), rescued)
+    };
     // "Delete the existing project symbol library table."
     let table = crate::library_tables::project_table_path(dir, TableKind::Symbol);
     if table.is_file() {
@@ -483,22 +527,33 @@ pub(crate) fn remap_plan(dir: &Path, design: &Design, project: &str, stamp: &str
     let mut changes: BTreeMap<String, String> = BTreeMap::new();
     for sch in screens(design) {
         let ids = sch.symbols.iter().map(|s| s.lib_id.as_str()).chain(sch.power_symbols.iter().map(|p| p.lib_id.as_str()));
-        for id in ids {
-            if id.contains(':') || id.is_empty() {
+        for from in ids {
+            if from.contains(':') || from.is_empty() {
                 continue;
             }
+            // a case candidate's symbols were renamed by the rescue
+            let id = renames.get(from).map(String::as_str).unwrap_or(from);
             let nickname = contents.iter().filter(|(_, names)| names.iter().any(|n| n == id)).find_map(|(path, _)| tables.iter().find(|l| l.path == *path).map(|l| l.nickname.clone()));
             match nickname {
                 Some(nick) => {
                     report.push(line("action", format!("Symbol {id} mapped to symbol library '{nick}'.")));
-                    changes.insert(id.to_string(), format!("{nick}:{id}"));
+                    changes.insert(from.to_string(), format!("{nick}:{id}"));
                 }
                 None => report.push(line("warning", format!("No symbol {id} found in symbol library table."))),
             }
         }
     }
     report.push(line("info", "Symbol library table mapping complete!".to_string()));
-    Ok((report, changes.into_iter().collect()))
+    // the rescued symbols the renamed ones are drawn from, under the identifier they now have
+    let symbols: Vec<LibrarySymbol> = rescued
+        .into_iter()
+        .filter_map(|mut s| {
+            let to = changes.iter().find(|(from, _)| renames.get(*from) == Some(&s.lib_id)).map(|(_, to)| to.clone())?;
+            s.lib_id = to;
+            Some(s)
+        })
+        .collect();
+    Ok((report, changes.into_iter().collect(), symbols))
 }
 
 /// `POST /api/sch/remap`: [`remap_plan`] for the board in `dir`, `{ok, report: [{severity, text}], cmd}` (no `cmd` when nothing was mapped) or `{error}`.
@@ -513,10 +568,10 @@ pub(crate) fn remap(dir: &Path) -> Value {
     }
     let stamp = chrono_stamp();
     match remap_plan(dir, &design, &project_name(&meta), &stamp) {
-        Ok((report, changes)) => {
+        Ok((report, changes, symbols)) => {
             let mut v = json!({ "ok": true, "report": report.iter().map(|l| json!({ "severity": l.severity, "text": l.text })).collect::<Vec<_>>() });
             if !changes.is_empty() {
-                v["cmd"] = json!({ "op": "rescue_symbols", "changes": changes, "symbols": [] });
+                v["cmd"] = json!({ "op": "rescue_symbols", "changes": changes, "symbols": symbols });
             }
             v
         }

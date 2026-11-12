@@ -168,8 +168,8 @@ pub(crate) fn carry_project_files(legacy: &LegacySchematic, board_dir: &Path, bo
     };
     let mut cache_copied = None;
     if let Some(cache) = cache_library(dir, project) {
-        let suffix = if cache.to_string_lossy().ends_with(".cache.lib") { ".cache" } else { "-cache" };
-        let to = board_dir.join(format!("{board_project}{suffix}.lib"));
+        // always as `<project>-cache.lib`, the name `CacheName` looks for first: a 2007 `.cache.lib` would lose to a cache an earlier import left
+        let to = board_dir.join(format!("{board_project}-cache.lib"));
         copy(&cache, &to, &mut said, true);
         copy(&cache.with_extension("dcm"), &to.with_extension("dcm"), &mut said, true);
         cache_copied = Some(to);

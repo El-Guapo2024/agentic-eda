@@ -2552,7 +2552,8 @@ fn slow_kicad_qa_legacy_schematics_trace_as_kicad_cli_reads_the_sch() {
             let derived = kicad_net_names(&dir);
             println!("{rel}: kicad-cli cannot read the .sch; imported: {symbols} symbols, kicad-cli reads {} pins on nets in the derived schematic", derived.len());
             // a project with no cache library and none of its libraries (`ecc83-pp_v2`: its `.pro` names the other project's `.\\ecc83-pp.cache`) links no
-            // symbol: KiCad shows them as unlinked boxes ("No library symbol found for schematic symbol"); the import leaves them out and says so
+            // symbol: KiCad keeps them unlinked, drawn as its placeholder box with no pin ("No library symbol found for schematic symbol"), and so does
+            // the import -- so no pin is on a net
             let no_libraries = crate::legacy_import::cache_library(root.parent().unwrap(), &root.file_stem().unwrap().to_string_lossy()).is_none();
             let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
@@ -2587,4 +2588,65 @@ fn slow_kicad_qa_legacy_schematics_trace_as_kicad_cli_reads_the_sch() {
         let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The legacy rescue of a KiCad 4 project brought in from its `.sch` (pic_programmer: bare names, the 2007 cache `pic_programmer.cache.lib`, no library in
+/// its list): Rescue Symbols offers every symbol as "found only in cache library", writes `intent-rescue.lib` with KiCad's legacy writer -- which
+/// kicad-cli's legacy reader reads back pin for pin -- and puts it first in the legacy list; Remap Symbols then gives every symbol that library, and
+/// kicad-cli reads the derived schematic net for net as it reads the `.sch`, its symbols found in the rescue library.
+#[test]
+fn slow_the_legacy_rescue_writes_a_library_kicad_cli_reads_and_remap_links_to_it() {
+    if !kicad_cli_ready() || std::env::var_os("KICAD_SRC_DIR").is_none() {
+        return;
+    }
+    let root = legacy_project("pcbnew/plugins/legacy_demos/pic_programmer/pic_programmer.sch", "legacy_rescue_pic").unwrap();
+    let groups = |names: &std::collections::BTreeMap<String, String>| -> Vec<Vec<String>> {
+        let mut g: std::collections::BTreeMap<&String, Vec<String>> = std::collections::BTreeMap::new();
+        for (pin, net) in names {
+            g.entry(net).or_default().push(pin.clone());
+        }
+        let mut v: Vec<Vec<String>> = g.into_values().filter(|x| x.len() > 1).collect();
+        v.sort();
+        v
+    };
+    let original = groups(&kicad_cli_net_names(&root));
+    let dir = scratch("legacy_rescue_pic_board");
+    crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+    let found = crate::rescue_api::candidates(&dir);
+    assert_eq!(found["legacy"], true, "{found}");
+    let list = found["candidates"].as_array().unwrap();
+    assert!(list.len() > 5, "{found}");
+    assert!(list.iter().all(|c| c["action"].as_str().unwrap().contains("found only in cache library")), "{found}");
+    let wanted: Vec<String> = list.iter().map(|c| c["requested"].as_str().unwrap().to_string()).collect();
+    let done = crate::rescue_api::rescue(&dir, serde_json::json!({ "requested": wanted }).to_string().as_bytes());
+    assert_eq!(done["ok"], true, "{done}");
+    // kicad-cli's legacy reader reads the library the legacy writer wrote, pin for pin
+    let converted = crate::library_convert::readable(eda_kicad::library_table::TableKind::Symbol, &dir.join("intent-rescue.lib")).expect("kicad-cli reads the rescue library");
+    let text = eda_kicad::read_symbol_library_text(&converted).unwrap();
+    let parsed = eda_kicad::parse_library_symbols(&text).unwrap();
+    let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols, ..Default::default() };
+    for c in list {
+        let cached: eda_model::ir::LibrarySymbol = serde_json::from_value(c["cache"].clone()).unwrap();
+        let name = c["requested"].as_str().unwrap();
+        let back = section.flatten(name).unwrap_or_else(|e| panic!("{name} in the rescue library: {e}"));
+        assert!(!crate::rescue_api::pins_conflict_with(&cached, &back, true, true, true, true, true), "{name}: the pins read back are the cache's");
+    }
+    let (_, names) = crate::rescue_api::legacy_library_list(&dir, "intent");
+    assert_eq!(names.first().map(String::as_str), Some("intent-rescue"));
+    // Remap: every symbol to the rescue library
+    let r = crate::rescue_api::remap(&dir);
+    assert_eq!(r["ok"], true, "{r}");
+    let report: Vec<String> = r["report"].as_array().unwrap().iter().map(|l| l["text"].as_str().unwrap().to_string()).collect();
+    assert!(report.iter().any(|l| l.ends_with("mapped to symbol library 'intent-rescue'.")) && !report.iter().any(|l| l.starts_with("No symbol")), "{report:#?}");
+    let cmd: eda_ops::Cmd = serde_json::from_value(r["cmd"].clone()).unwrap();
+    step(&dir, cmd, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert!(design.schematic.as_ref().unwrap().symbols.iter().all(|s| s.lib_id.starts_with("intent-rescue:")));
+    assert_eq!(groups(&kicad_net_names(&dir)), original, "kicad-cli reads the remapped schematic as it reads the .sch");
+    step(&dir, eda_ops::Cmd::SetErcSeverities { severities: [("lib_symbol_issues".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
+    let erc = crate::kicad_engine::erc(&dir).expect("kicad-cli runs ERC");
+    let issues: Vec<String> = erc["violations"].as_array().unwrap().iter().map(|v| v.to_string()).filter(|v| v.contains("lib_symbol_issues")).collect();
+    assert!(!issues.iter().any(|f| f.contains("intent-rescue")), "kicad-cli finds the symbols in the rescue library: {issues:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
 }
