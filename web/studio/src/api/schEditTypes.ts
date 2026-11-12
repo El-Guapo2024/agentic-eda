@@ -110,8 +110,9 @@ export type SchToolDialog =
   | { kind: "directive"; at: PointXY }
   /** Cleanup Sheet Pins asking before it deletes the unreferenced pins of a sheet (`IsOK`). */
   | { kind: "cleanup_pins"; sheetId: string; sheetName: string; pins: Array<{ id: string; name: string }> }
-  /** The Sync Sheet Pins dialog (`DIALOG_SYNC_SHEET_PINS`) for these sheets, `first` the one whose page opens. */
-  /** `path`: the sheet path the sheets are on, when it is not the one in view (the dialog shown again after Add Labels went into a sheet). */
+  /** The Sync Sheet Pins dialog (`DIALOG_SYNC_SHEET_PINS`) for these sheets, `first` the one whose page opens. Each of `sheetIds` is a `/`-joined sheet path
+   *  relative to `path` (Sync All Sheet Pins: every sheet path of the hierarchy from the root, `path` empty; Sync Sheet Pins: the selected sheet's id). */
+  /** `path`: the sheet path the sheets are under, when it is not the one in view (the dialog shown again after Add Labels went into a sheet). */
   | { kind: "sync_pins"; sheetIds: string[]; first?: string; path?: string[] }
   /** Change Symbols / Update Symbols (`DIALOG_CHANGE_SYMBOLS`), `selected` the references selected when it opened. */
   | { kind: "change_symbols"; mode: "change" | "update"; selected: string[] }
