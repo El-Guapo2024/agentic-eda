@@ -10,7 +10,7 @@
 // tail) -- 65000+ lines, almost all of it scripts this app has no use
 // for (no CJK/RTL/Indic text appears anywhere in this app's data model).
 // This script keeps only the ranges an English-language PCB/schematic
-// tool actually needs: Basic Latin (0020-007F), Latin-1 Supplement
+// tool actually needs (see KEEP_RANGES): Basic Latin (0020-007F), Latin-1 Supplement
 // (0080-00FF -- degree/plus-minus/micro/multiply/divide signs used in
 // real component values like "10µF" or "±5%"), and Greek and Coptic
 // (0370-03FF, for Ω -- the ohm sign, U+03A9, is genuinely common in
@@ -42,7 +42,12 @@ const SOURCE_FILE = "common/newstroke_font.cpp";
 const KEEP_RANGES = [
   [0x0020, 0x007f], // Basic Latin
   [0x0080, 0x00ff], // Latin-1 Supplement
+  [0x0100, 0x024f], // Latin Extended-A and -B
   [0x0370, 0x03ff], // Greek and Coptic
+  // General Punctuation to Geometric Shapes: the symbols a board's own texts use and KiCad draws from this font -- the double prime of a drill chart in inches
+  // (`GENERATED_TABLE_SCHEMA`'s "%.*f″", U+2033), the prime, en and em dashes, the bullet, the per-mille sign, sub- and superscript digits, currency signs,
+  // arrows, the mathematical operators (≤, ≥, ≈, ∅) and the technical symbols. A codepoint left out is drawn as '?', which is a different width (UI-LEFT-2 PP24).
+  [0x2000, 0x25ff],
 ];
 
 function keepCodepoint(cp) {

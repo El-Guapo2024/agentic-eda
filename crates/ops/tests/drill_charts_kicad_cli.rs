@@ -238,8 +238,7 @@ fn backdrills_post_machining_layer_names_and_imperial_holes_are_charted_as_kicad
 
 /// Drill Chart Properties' OK (`edit_drill_chart`): the columns the dialog shows, in its order, a heading and an alignment of the user's, a minimum width, mils to four
 /// places, no vias and no totals, the grouping without the layer span, the strokes -- written by us and read by kicad-cli as the dialog meant them: `pcb upgrade --force`
-/// rebuilds the stale chart from what the file says, and builds the chart we built. (Inches are not the units here: a column sized to a text of inches comes out 60 um wider
-/// than kicad-cli's, the `″` glyph's ink measured wider by `autosize` -- millimetres and mils agree to the nanometre.)
+/// rebuilds the stale chart from what the file says, and builds the chart we built. (Inches: `a_chart_in_inches_sized_to_its_text_is_as_wide_as_kicad_clis`.)
 #[test]
 fn drill_chart_properties_written_by_us_are_read_by_kicad_cli_as_the_dialog_meant() {
     if slow_tests_off() {
@@ -318,3 +317,39 @@ fn a_groups_mark_set_here_is_the_one_kicad_cli_charts() {
     assert!(!kc.row_shapes.contains_key(&1), "a letter draws no shape");
 }
 
+
+/// UI-LEFT-2 PP24: a chart in inches whose columns are sized to their text is built as kicad-cli builds it -- the `″` of each size (`"%.*f″"`, U+2033) is the
+/// stroke font's own glyph, as KiCad draws it; the studio's font left General Punctuation out, so it measured a `?` and the column came out 60 um wider.
+#[test]
+fn a_chart_in_inches_sized_to_its_text_is_as_wide_as_kicad_clis() {
+    if slow_tests_off() {
+        return;
+    }
+    let (Some(cli), Some(text)) = (kicad_cli(), kitchen_sink()) else {
+        eprintln!("skipped: needs kicad-cli and KiCad 25ec2335's api_kitchen_sink.kicad_pcb (KICAD10_QA_DATA)");
+        return;
+    };
+    use eda_ops::drill_chart::{profile_of, DrillChartEdit};
+    let (d, m, _) = import_kicad_pcb(&text).unwrap();
+    let (t, c) = chart_of(&d);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let edit = DrillChartEdit {
+        layer: t.layer.clone(),
+        units: TableUnits::Inch,
+        precision: 4,
+        columns: c.columns.iter().cloned().map(|mut k| { k.width_nm = Nm::ZERO; k }).collect(),
+        filter: c.filter,
+        show_totals: c.show_totals,
+        group_by: profile_of(b.design()).group_by,
+        external_border: t.border.external,
+        header_separator: t.border.header,
+        row_separators: t.separators.rows,
+        column_separators: t.separators.cols,
+        border_width_nm: t.border.stroke.width_nm,
+        separators_width_nm: t.separators.stroke.width_nm,
+    };
+    b.apply(&Cmd::PcbItem(PcbItemCmd::EditDrillChart { id: t.id.clone(), chart: edit })).unwrap();
+    let (kicad, _) = upgraded(&cli, &export(b.design(), &m), "inches");
+    assert!(chart_of(b.design()).0.cells.iter().any(|c| c.text.ends_with('\u{2033}')), "sizes in inches");
+    assert_same_chart("inches", b.design(), &kicad);
+}
