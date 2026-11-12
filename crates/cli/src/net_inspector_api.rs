@@ -412,6 +412,19 @@ fn delay_params(model: &ConstraintModel, net: &str) -> Option<DelayParams> {
 }
 
 /// The rows of every net of the board (`calculateNets( .., true )`: the zero-pad nets too, the page filters them).
+/// The length details of the net `net` as the panel's row has them (`CalculateLengthDetails` with `WITH_DELAY_DETAIL`), for `BOARD::GetTrackLength` of a
+/// track of it: the studio's connectivity is the net's (KiCad's `GetConnectedItems( &aTrack )`, the same unless the net is in pieces).
+pub(crate) fn net_length_stats(design: &Design, model: &ConstraintModel, net: &str) -> LengthStats {
+    let board = eda_drc::board::build(design, model);
+    let copper = model.board.layers.clone();
+    let die = die_lengths(design, model, &board);
+    let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(copper.len(), model.board.board_thickness_nm));
+    let height_fn = |a: &str, b: &str| eda_pns::tuning_path::stackup_distance(&stackup, &copper, a, b);
+    let height: Option<&dyn Fn(&str, &str) -> Nm> = if model.board.use_height_for_length_calcs { Some(&height_fn) } else { None };
+    let delay = delay_params(model, net);
+    length_details(&board, net, &copper, &die, height, delay.as_ref())
+}
+
 pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
     let board = eda_drc::board::build(design, model);
     let copper = model.board.layers.clone();

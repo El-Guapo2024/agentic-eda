@@ -2660,6 +2660,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // pad stands for its footprint.
       const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
       if (ids.length === 0) return;
+      // "Duplicating tuning patterns alone is not supported": `if( selection.Size() == 1 && selection.CountType( PCB_GENERATOR_T ) ) return 0;` (UI-LEFT-2 RR5)
+      if (ids.length === 1 && (board.drawings?.tuning_patterns ?? []).some((p) => p.id === ids[0])) return;
       const before = allItemIds(board);
       const ok = await runCmd({ op: "duplicate", ids }, "begin");
       if (!ok) return;

@@ -384,6 +384,29 @@ pub fn rule_constraint(design: &Design, model: &ConstraintModel, kind: TuningMod
     Some(Constraint { name, range: TargetRange { min: c.value.min.unwrap_or(tolerance.min), opt, max: c.value.max.unwrap_or(tolerance.max) }, time_domain })
 }
 
+/// `PCB_TUNING_PATTERN::GetMsgPanelInfo`'s rule (UI-LEFT-2 RR5): `drcEngine->EvalRules( SKEW_CONSTRAINT / LENGTH_CONSTRAINT, primaryItem, coupledItem,
+/// m_layer )` of the pattern's first member track and the first of the other net, as it is -- min, opt and max as the rule has them -- with
+/// `constraint.GetName()` and whether its values are times. `None` when it is null.
+pub fn panel_constraint(design: &Design, model: &ConstraintModel, kind: TuningMode, primary: &str, coupled: Option<&str>, layer: &str) -> Option<(String, eda_drc::constraints::MinOptMax, bool)> {
+    use eda_drc::rule_board::RuleBoard;
+    let board = eda_drc::board::build(design, model);
+    let base = |s: &eda_drc::board::DrcTrackSeg| s.id.rsplit_once('#').map_or(s.id.clone(), |(b, _)| b.to_string());
+    let find = |id: &str| board.tracks.iter().position(|s| base(s) == id && s.layer == layer).or_else(|| board.tracks.iter().position(|s| base(s) == id));
+    let a = find(primary)?;
+    let rb = RuleBoard::new(design, model, &board, eda_drc::constraints::Units::Mm, model.board.custom_rules_text.as_deref());
+    let ia = rb.segment_item_at(a);
+    let ib = coupled.and_then(find).map(|b| rb.segment_item_at(b));
+    let ctype = if kind == TuningMode::DiffPairSkew { CType::Skew } else { CType::Length };
+    let c = rb.engine().eval_rules(ctype, Some(&ia), ib.as_ref(), Some(layer), None);
+    if c.is_null() {
+        return None;
+    }
+    let rule = c.parent.and_then(|i| rb.engine().rules.get(i));
+    let time_domain = rule.and_then(|r| r.find_constraint(ctype)).is_some_and(|k| k.options & eda_drc::dru::OPT_TIME_DOMAIN != 0);
+    let name = rule.map(|r| r.name.clone()).unwrap_or(c.name.clone());
+    Some((name, c.value, time_domain))
+}
+
 /// **INACTIVE** (R7-D4; kept, not deleted, per the user's rule for replaced code): the tuner's old rule lookup, a second evaluator over `BoardRules::custom_rules`
 /// (`eda_kicad::parse_custom_rules`, a second `.kicad_dru` reader beside the rule engine's `crates/drc/src/dru.rs`) on two stand-in tracks with a net and a layer
 /// only, and B the partner. Nothing calls it: [`rule_constraint`] is the lookup. Delete it with the reader once nothing reads `custom_rules`.

@@ -159,7 +159,7 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
 
 /// `NETCLASS::GetHumanReadableName` of the net class KiCad gives `net` (`NET_SETTINGS::GetEffectiveNetClass`): one class's name, or its classes'
 /// in precedence order -- "%s and %s", "%s, %s and %s", "%s, %s and %d more".
-fn human_readable_class(rules: &eda_model::BoardRules, net: &str) -> String {
+pub(crate) fn human_readable_class(rules: &eda_model::BoardRules, net: &str) -> String {
     let c = rules.effective_class(net).constituents;
     match c.as_slice() {
         [] => "Default".into(),

@@ -9,6 +9,12 @@ import { formatLength, formatXY } from "../state/units";
 import { routerMessagePanel } from "../kicad-port/routerSizes";
 import { useOriginTransforms } from "../state/originTransforms";
 import { toDisplayAbs } from "../kicad-port/originTransforms";
+import { useEffect, useState } from "react";
+import { tunePattern } from "../api/tuneClient";
+import type { TunePatternReply } from "../api/tuneTypes";
+import { tuningPatternMsgPanel } from "../kicad-port/tuningPanel";
+import { formatDelay } from "../kicad-port/netInspector";
+import { layerDisplayName } from "../kicad-port/boardLayers";
 
 export function MessagePanel() {
   const state = useStudioState();
@@ -16,6 +22,20 @@ export function MessagePanel() {
   const selectedRefs = [...state.selection];
   // the studio's own "At" field, counted from Origins & Axes' origin as every board coordinate is (`ToDisplayAbs`, UI-LEFT-2 PP9)
   const xf = useOriginTransforms();
+  // a lone tuning pattern selected: `PCB_TUNING_PATTERN::GetMsgPanelInfo` of what the server reads of it (kicad-port/tuningPanel.ts, UI-LEFT-2 RR5), asked
+  // again when the board changes
+  const patternId = selectedRefs.length === 1 && (board?.drawings?.tuning_patterns ?? []).some((p) => p.id === selectedRefs[0]) ? selectedRefs[0]! : null;
+  const [pattern, setPattern] = useState<{ id: string; reply: TunePatternReply } | null>(null);
+  useEffect(() => {
+    if (!patternId) return;
+    let live = true;
+    void tunePattern(patternId)
+      .then((reply) => live && reply.ok && setPattern({ id: patternId, reply }))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [patternId, board]);
 
   if (!board) return <div className="message-panel" />;
 
@@ -31,6 +51,22 @@ export function MessagePanel() {
         : routerMessagePanel({ pair: true, netA: draw.netA, netB: draw.netB, width: draw.width, gap: draw.gap ?? 0 }, draw.sizes, settings, fmt);
     return (
       <div className="message-panel" data-router-panel="">
+        {items.map((it) => (
+          <span className="kv" key={it.upper}>
+            <b>{it.upper}</b>
+            {it.lower}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  if (patternId && pattern?.id === patternId && pattern.reply.pattern && pattern.reply.panel) {
+    // `LayerMaskDescribe()`: the one layer's name (`BOARD::GetLayerName`)
+    const layerName = (l: string) => layerDisplayName(board.board_rules?.layer_setup, l);
+    const items = tuningPatternMsgPanel(pattern.reply.pattern, pattern.reply.panel, (nm) => formatLength(nm, state.units), (as) => formatDelay(as), layerName);
+    return (
+      <div className="message-panel" data-tuning-panel="">
         {items.map((it) => (
           <span className="kv" key={it.upper}>
             <b>{it.upper}</b>
