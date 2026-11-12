@@ -274,8 +274,9 @@ fn fab_layer_args(plot: &eda_model::plot_params::PlotParams, a: &mut Vec<String>
 /// - PostScript: one file per layer (`--mode-multi`, `transferPlotParamsToJob`'s `GEN_MODE::MULTI`), the fine scale adjusts, the width
 ///   correction (mm) and "Force A4 output";
 /// - SVG: one file per layer (`--mode-multi`) and "Fit page to board";
-/// - DXF: "Single document" (`--mode-single`, else `--mode-multi`), "Plot graphic items using their contours" (`--use-contours`), "Export
-///   units:" (`--output-units`) and "Use drill/place file origin" (`--use-drill-origin`);
+/// - DXF: "Single document" (`--mode-single`, else `--mode-multi`), "Plot graphic items using their contours" (`--use-contours`, which [`plot`]
+///   hands to kicad-cli's jobset runner as the polygon mode alone, `eda_kicad_engine::dxf_job_settings`), "Export units:" (`--output-units`) and
+///   "Use drill/place file origin" (`--use-drill-origin`);
 /// - PDF: "Single document" (`--mode-multipage`: one page per layer in one file, else `--mode-separate`), the property popups
 ///   (`--no-property-popups`, front and back together) and "Background Color" (`--bg-color`, colour mode only);
 /// - PNG: "DPI:" (`--dpi`) and "Anti-alias" (`--no-antialias`).
@@ -286,9 +287,9 @@ fn fab_layer_args(plot: &eda_model::plot_params::PlotParams, a: &mut Vec<String>
 /// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Use drill/place file origin" in PostScript, SVG, PDF and PNG (none of those commands has it; KiCad's PostScript plot turns it off too),
 /// SVG's "Precision:" (kicad-cli plots with `SVG_PRECISION_DEFAULT`, 4), PDF's "Generate metadata from AUTHOR && SUBJECT variables" (always on,
 /// `JOB_EXPORT_PCB_PDF::m_pdfMetadata`), the two property popup boxes apart (one flag clears both), DXF's "Use KiCad font to plot text"
-/// (always the KiCad font, `JOB_EXPORT_PCB_DXF::m_useKiCadFont`) and DXF's black and white (KiCad's dialog plots DXF in black, kicad-cli in the
-/// layers' colours). `--use-contours` also sets the graphic items' sketch mode (`m_plotGraphicItemsUsingContours`), which the dialog leaves
-/// filled. The colour theme is kicad-cli's PCB Editor default (the dialog plots with the PCB editor's theme, `cfg->m_ColorTheme`).
+/// (always the KiCad font, `JOB_EXPORT_PCB_DXF::m_useKiCadFont`). DXF's black and white makes no difference: `DXF_PLOTTER` writes every entity
+/// by layer and the layer table in the render settings' colours whatever `m_colorMode` (`StartPlot`, `GetCurrentLayerName` with
+/// `m_layersToExport` set), so the dialog's file and kicad-cli's are the same (XX3). The colour theme is kicad-cli's PCB Editor default (the dialog plots with the PCB editor's theme, `cfg->m_ColorTheme`).
 pub(crate) fn plot_args(format: PlotFormat, layers: &[String], plot: &eda_model::plot_params::PlotParams, session: &PlotSession) -> Vec<String> {
     let on = |key: &str, default: bool| plot.flag(key).unwrap_or(default);
     let layers = ui_order(layers);
@@ -526,7 +527,10 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     args.extend(variant_args(&req));
     // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`), which the plot's sheet is drawn from (`PCBNEW_JOBS_HANDLER`'s `--drawing-sheet` override)
     args.extend(crate::drawing_sheet_api::plot_args(dir, design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref())));
-    let mut v = reply(kicad_engine::export_into(dir, format.kind(), &args, &out_dir));
+    // DXF with "Plot graphic items using their contours" ticked: the polygon mode alone, the graphic items filled, as the dialog plots it -- which
+    // `pcb export dxf --use-contours` cannot say (it sketches the graphic items too), so the job goes through kicad-cli's jobset runner
+    let by_job = format == PlotFormat::Dxf && args.iter().any(|a| a == "--use-contours");
+    let mut v = reply(if by_job { kicad_engine::export_dxf_job_into(dir, &args, &out_dir) } else { kicad_engine::export_into(dir, format.kind(), &args, &out_dir) });
     if v["ok"].as_bool().unwrap_or(false) {
         let mut files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
         if format == PlotFormat::Gerber && !plot.flag("creategerberjobfile").unwrap_or(true) {

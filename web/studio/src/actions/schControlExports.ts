@@ -95,10 +95,11 @@ export const SYMBOL_EDITOR_THEME = "_builtin_default";
  * kicad-cli's (`kicad-cli sym export svg` through the server's lane); the browser saves the SVG it wrote.
  *
  * `SYMBOL_EDIT_FRAME::SVGPlotSymbol` plots with the editor's colour theme (`renderSettings.LoadColors( GetColorSettings() )`) and a fresh `SCH_RENDER_SETTINGS`, whose
- * `m_ShowHiddenPins` and `m_ShowHiddenFields` are on: the theme goes to kicad-cli as `--theme`, the hidden items as `--include-hidden-pins` and
- * `--include-hidden-fields` (X11). The studio's Symbol Editor draws in "KiCad Default" (it has no colour theme setting of its own; Preferences has the board's), so that
- * is the theme sent. **Differs**: kicad-cli's box takes the hidden fields in with `--include-hidden-fields` (`GetSymbolPlotBBox( .., m_includeHiddenFields )`), the
- * editor's leaves them out (`GetSymbolPlotBBox( .., false )`), so the SVG's page can be a little larger; and the pen is kicad-cli's 6 mils, the editor's its own default.
+ * `m_ShowHiddenPins` and `m_ShowHiddenFields` are on: the theme goes to kicad-cli as `--theme`, the hidden pins as `--include-hidden-pins` (X11). The studio's Symbol
+ * Editor draws in "KiCad Default" (it has no colour theme setting of its own; Preferences has the board's), so that is the theme sent. `--include-hidden-fields` is
+ * not sent (XX3): a hidden field is never plotted (`SCH_FIELD::Plot` returns for `!IsVisible() && !IsForceVisible()`, whatever `m_ShowHiddenFields`), so all the
+ * flag does is take the hidden fields into kicad-cli's box (`GetSymbolPlotBBox( .., m_includeHiddenFields )`), where the editor's box leaves them out
+ * (`GetSymbolPlotBBox( .., false )`); without it the page is the editor's. **Differs**: the pen is kicad-cli's 6 mils, the editor's its own default.
  */
 export async function exportSymbolSvg(ctx: SchControlContext): Promise<void> {
   const toast = (text: string, kind: "info" | "error") => ctx.dispatch({ type: "TOAST", message: text, kind });
@@ -112,7 +113,6 @@ export async function exportSymbolSvg(ctx: SchControlContext): Promise<void> {
       body_style: isMultiBodyStyle(symbol) ? Math.max(1, st.activeBodyStyle) : 1,
       theme: SYMBOL_EDITOR_THEME,
       include_hidden_pins: true,
-      include_hidden_fields: true,
     });
     if (!r.ok || !r.svg) return toast(r.message ?? "kicad-cli wrote no SVG", "error");
     saveTextFile(r.svg.text, r.svg.name, "image/svg+xml");

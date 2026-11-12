@@ -142,8 +142,43 @@ export interface PlotSessionValues {
   lastAllLayersOrder: string[];
 }
 
-/** `PCB_PLOT_PARAMS::PCB_PLOT_PARAMS`' values of the session's members, `m_zoneFillCheck->SetValue(true)`. */
-export const DEFAULT_SESSION: PlotSessionValues = { svgFitPage: false, pdfBackground: null, dxfSingle: false, psXScale: "1", psYScale: "1", psWidthAdjust: "0", zoneFillCheck: true, lastAllLayersOrder: [] };
+/** `PCB_PLOT_PARAMS::PCB_PLOT_PARAMS`' values of the session's members, `m_zoneFillCheck->SetValue(true)`. The PostScript text controls start as
+ * `dialog_plot_base.cpp` builds them, empty (`wxEmptyString`): `TransferDataToWindow` sets them only for a job (`if( m_job && .. )`), and
+ * `DIALOG_SHIM::LoadControlState` gives them what was last typed (`loadPsControls`). */
+export const DEFAULT_SESSION: PlotSessionValues = { svgFitPage: false, pdfBackground: null, dxfSingle: false, psXScale: "", psYScale: "", psWidthAdjust: "", zoneFillCheck: true, lastAllLayersOrder: [] };
+
+/** Where `DIALOG_SHIM::SaveControlState` keeps the Plot dialog's PostScript text controls (KiCad: `kicad_common.json`'s `m_dialogControlValues`, kept
+ * across runs; here the browser's storage). */
+const PS_CONTROLS_KEY = "eda.dialogControlValues.plot.ps";
+
+/** `DIALOG_SHIM::LoadControlState` of the three PostScript text controls: the session's values with what was last typed, if anything was. */
+export function loadPsControls(session: PlotSessionValues): PlotSessionValues {
+  try {
+    const kept = JSON.parse(globalThis.localStorage?.getItem(PS_CONTROLS_KEY) ?? "null") as Partial<Record<"x" | "y" | "w", unknown>> | null;
+    if (!kept) return session;
+    const str = (v: unknown, d: string) => (typeof v === "string" ? v : d);
+    return { ...session, psXScale: str(kept.x, session.psXScale), psYScale: str(kept.y, session.psYScale), psWidthAdjust: str(kept.w, session.psWidthAdjust) };
+  } catch {
+    return session;
+  }
+}
+
+/** `DIALOG_SHIM::SaveControlState` of the three PostScript text controls (on the dialog's close). */
+export function savePsControls(session: PlotSessionValues): void {
+  try {
+    globalThis.localStorage?.setItem(PS_CONTROLS_KEY, JSON.stringify({ x: session.psXScale, y: session.psYScale, w: session.psWidthAdjust }));
+  } catch {
+    /* storage refused: the values last for the page */
+  }
+}
+
+/** `DIALOG_PLOT::Plot`'s "No layer selected, Nothing to plot": `applyPlotSettings` adds every copper layer the board does not have to the selection
+ * (`selectedLayers | disabledCopperLayers`, "If someone enables more copper layers they will be selected by default"), so the selection is empty only when
+ * nothing is checked on a board of all 32 copper layers. With nothing checked on any other board the plot goes on and `PCB_PLOTTER::Plot` skips the
+ * disabled copper layers (`copperLayerShouldBeSkipped`): nothing is plotted and the report is "Done.". */
+export function noLayerSelected(checked: readonly string[], copperLayerCount: number): boolean {
+  return checked.length === 0 && copperLayerCount >= 32;
+}
 
 /** `PCB_PLOT_PARAMS::PCB_PLOT_PARAMS` as `PCB_PLOT_PARAMS::Format` writes it: what a token the board lacks starts as. */
 export const DEFAULT_OPTIONS: Readonly<Record<string, string>> = {
@@ -437,8 +472,12 @@ function toDouble(text: string): number {
  * in nm; `fmt` writes a length as `StringFromValue( .., true )` does (with its units). */
 export function constrainPostscript(form: PlotForm, widthRange: [number, number], fmt: (nm: number) => string): { x: number; y: number; widthMm: number; form: PlotForm; messages: string[] } {
   const messages: string[] = [];
-  const x = clip(toDouble(form.psXScale), PLOT_MIN_SCALE, PLOT_MAX_SCALE);
-  const y = clip(toDouble(form.psYScale), PLOT_MIN_SCALE, PLOT_MAX_SCALE);
+  // An empty control (how the dialog first opens) parses nothing: `wxString::ToDouble` leaves `tmpDouble` as it was, which the C++ never set, so what
+  // KiCad does then cannot be copied. Here it is no adjustment: `Plot`'s `if( m_XScaleAdjust != 0.0 )` keeps the plot options' scale, 1, and nothing
+  // is said.
+  const scale = (text: string) => (text.trim() === "" ? { value: 1, clipped: false } : clip(toDouble(text), PLOT_MIN_SCALE, PLOT_MAX_SCALE));
+  const x = scale(form.psXScale);
+  const y = scale(form.psYScale);
   let next = form;
   if (x.clipped) {
     next = { ...next, psXScale: x.value.toFixed(6) };

@@ -199,6 +199,12 @@ pub fn export_into(dir: &Path, kind: &str, args: &[String], out_dir: &Path) -> R
     eda_kicad_engine::export_pcb_into(&design, &model, &work(dir), dir, &project_name(dir), kind, args, out_dir)
 }
 
+/// The Plot dialog's DXF through kicad-cli's jobset runner ([`eda_kicad_engine::export_pcb_dxf_job_into`]): `args` are `pcb export dxf`'s.
+pub fn export_dxf_job_into(dir: &Path, args: &[String], out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    eda_kicad_engine::export_pcb_dxf_job_into(&design, &model, &work(dir), dir, &project_name(dir), args, out_dir)
+}
+
 /// The drill report alone (`DIALOG_GENDRILL::onGenReportFile`), written by kicad-cli at `report`.
 pub fn export_drill_report(dir: &Path, args: &[String], report: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;

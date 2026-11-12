@@ -5,6 +5,9 @@ import {
   arrangeAllLayers,
   constrainPostscript,
   DEFAULT_SESSION,
+  loadPsControls,
+  noLayerSelected,
+  savePsControls,
   drcWarning,
   formatOfOutputformat,
   initialPlotForm,
@@ -118,6 +121,31 @@ test("PostScript: the scales and the width correction are constrained, with KiCa
   assert.equal(r.form.psXScale, "100.000000");
   const body = plotRequest(f, r);
   assert.deepEqual([body.format, body.ps_x_scale, body.ps_width_adjust_mm, body.check_zones], ["ps", 100, 0.199999, true]);
+});
+
+test("PostScript's text controls start empty, as dialog_plot_base.cpp builds them, and an empty one adjusts nothing", () => {
+  const f = withFormat(initialPlotForm(BOARD, LISTED, DEFAULT_SESSION), "ps");
+  assert.deepEqual([f.psXScale, f.psYScale, f.psWidthAdjust], ["", "", ""]);
+  const r = constrainPostscript(f, [-149999, 199999], (nm) => `${nm}`);
+  assert.deepEqual([r.x, r.y, r.widthMm, r.messages], [1, 1, 0, []]);
+  // `DIALOG_SHIM::LoadControlState`: what was typed last comes back
+  const store = new Map<string, string>();
+  const g = globalThis as { localStorage?: unknown };
+  const had = g.localStorage;
+  g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+  try {
+    assert.equal(loadPsControls(DEFAULT_SESSION), DEFAULT_SESSION);
+    savePsControls({ ...DEFAULT_SESSION, psXScale: "1.02", psYScale: "0.98", psWidthAdjust: "0.01" });
+    assert.deepEqual([loadPsControls(DEFAULT_SESSION).psXScale, loadPsControls(DEFAULT_SESSION).psYScale, loadPsControls(DEFAULT_SESSION).psWidthAdjust], ["1.02", "0.98", "0.01"]);
+  } finally {
+    g.localStorage = had;
+  }
+});
+
+test("\"No layer selected\" only where the selection, with the copper layers the board lacks, is empty", () => {
+  assert.equal(noLayerSelected([], 2), false, "a two-layer board selects the 30 copper layers it lacks: nothing is plotted, \"Done.\"");
+  assert.equal(noLayerSelected([], 32), true);
+  assert.equal(noLayerSelected(["F.Cu"], 32), false);
 });
 
 test("the DRC line, the solder mask alert and the format of an old board", () => {
