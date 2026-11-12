@@ -138,3 +138,32 @@ fn the_fields_table_shows_a_variant_and_marks_what_differs() {
     let own = fields_table::build_table(&s, &m, &spec);
     assert_eq!(own.rows.iter().find(|r| r.refs == ["R1".to_string()]).unwrap().cells[col("Value")], "10k");
 }
+
+/// KiCad 25ec2335 Set Variant Symbol... / Clear Variant Symbol (`SCH_EDIT_TOOL::SetVariantSymbol`, `ClearVariantSymbol`; UI-LEFT-2 SS16): a pin-compatible library symbol is
+/// the variant's, one that is not is refused with KiCad's message, and Clear takes it away; the default variant has none.
+#[test]
+fn a_variant_symbol_is_set_when_pin_compatible_and_cleared() {
+    let base = eda_model::symbol::builtin("Device:R").unwrap();
+    let mut alt = base.clone();
+    alt.lib_id = "Mine:R_alt".into();
+    alt.connectivity.value = "R_alt".into();
+    let mut bad = base.clone();
+    bad.lib_id = "Mine:R_bad".into();
+    bad.pins[0].at.y += 2.54;
+    let m = ConstraintModel { symbols: vec![alt, bad], ..Default::default() };
+    let mut b = board(&m);
+    add(&mut b, "Lite", "").unwrap();
+    let set_sym = |lib: Option<&str>| Cmd::SetVariantSymbol { variant: "Lite".into(), id: "R1".into(), lib_id: lib.map(str::to_string) };
+    let why = |r: Result<(), Vec<CheckResult>>| r.unwrap_err()[0].hint.clone().unwrap_or_default();
+    assert!(why(b.apply(&set_sym(Some("Mine:R_bad")))).starts_with("The selected symbol 'Mine:R_bad' is not pin-compatible with the base symbol 'Device:R'.\n\n\u{2022} Unit 1, body style 1: pin '1' position mismatch"));
+    assert_eq!(why(b.apply(&set_sym(Some("Mine:Nope")))), "Could not load symbol 'Mine:Nope' from library.");
+    b.apply(&set_sym(Some("Mine:R_alt"))).unwrap();
+    assert_eq!(variants::record(sch(&b), "R1", "Lite").unwrap().symbol_override.as_deref(), Some("Mine:R_alt"));
+    // a field equal to what the variant symbol gives is no text of the record's own (`SetFieldText`'s "Diff against the value the variant resolves to")
+    b.apply(&set("Lite", &["R1"], None, &[("Value", "R_alt")])).unwrap();
+    assert!(variants::record(sch(&b), "R1", "Lite").unwrap().fields.is_empty());
+    b.apply(&set_sym(None)).unwrap();
+    assert!(variants::record(sch(&b), "R1", "Lite").is_none_or(|r| r.symbol_override.is_none()));
+    assert!(b.apply(&set_sym(None)).is_err(), "nothing to clear");
+    assert!(b.apply(&Cmd::SetVariantSymbol { variant: String::new(), id: "R1".into(), lib_id: Some("Mine:R_alt".into()) }).is_err(), "the default variant has no variant symbol");
+}

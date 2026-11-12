@@ -151,10 +151,14 @@ impl<'a> Board<'a> {
 
     /// The current variant's edit of the symbols `ids` (`SCH_SYMBOL::SetDNP` / `SetExcludedFromBOM` / `SetExcludedFromBoard` / `SetExcludedFromSim` /
     /// `SetExcludedFromPosFiles` and `SetFieldText` with the variant): each flag given and each field text given, on the record of `variant` of every reference,
-    /// as `eda_model::variants::set_flag` and `set_field` keep it. The references are looked for on every sheet (the Fields Table covers the design; a later sheet
-    /// path's reference is its screen's symbol); an annotated one's units on every sheet get the same edit, as `SetAttribute` collects them and `SyncOtherUnits`
-    /// keeps the fields, an unannotated one only the sheet in view's. A field the symbol does not have, `Reference` and an empty or unknown
-    /// variant are refused. Nothing that changes nothing is refused: the dialog's OK sends every field.
+    /// as `eda_model::variants::set_flag_on` and `set_field_on` keep it. The references are looked for on every sheet (the Fields Table covers the design; a
+    /// later sheet path's reference is its screen's symbol on that path); an annotated one's units on every sheet get the same edit, as `SetAttribute` collects
+    /// them and `SyncOtherUnits` keeps the fields, an unannotated one only the sheet in view's. A record is an instance's, one per sheet path
+    /// (`SCH_SYMBOL::getInstance( aPath )`, UI-LEFT-2 SS16): on a screen shown on several paths, the edit is that of the path in view for the screen in view, of
+    /// the path a later path's reference names, and of the symbol's own path (its id's) elsewhere. A field text equal to what the variant shows without one --
+    /// the symbol's own, or its variant symbol's (`SetFieldText`: "Diff against the value the variant resolves to without an explicit override") -- takes the
+    /// record's text away. A field the symbol does not have, `Reference` and an empty or unknown variant are refused. Nothing that changes nothing is refused:
+    /// the dialog's OK sends every field.
     pub(crate) fn set_symbol_variant(&mut self, variant: &str, ids: &[String], flags: &VariantFlags, fields: &BTreeMap<String, String>) -> Result<(), Vec<CheckResult>> {
         if variant.is_empty() {
             return Err(fail("ops_no_variant", "variant", "the default variant is the symbol itself: edit the symbol"));
@@ -167,11 +171,11 @@ impl<'a> Board<'a> {
             return Err(fail("ops_variant_reference", "Reference", "the reference is the same in every design variant"));
         }
         // The Symbol Fields Table covers the whole design (`fields_table::project_view`), so a reference is looked for on every sheet, and the row of a later
-        // sheet path stands for the screen's symbol (`fields_table::path_aliases`), as a field edit does.
-        let aliases = crate::fields_table::path_aliases(&self.design);
-        let ids: Vec<String> = ids.iter().map(|id| aliases.get(id).cloned().unwrap_or_else(|| id.clone())).collect();
+        // sheet path stands for the screen's symbol on that path (`fields_table::path_alias_paths`).
+        let aliases = crate::fields_table::path_alias_paths(&self.design);
+        let targets: Vec<(String, Option<Vec<String>>)> = ids.iter().map(|id| aliases.get(id).map_or((id.clone(), None), |(own, path)| (own.clone(), Some(path.clone())))).collect();
         self.schematic()?;
-        for id in &ids {
+        for (id, _) in &targets {
             let homes: Vec<&eda_model::ir::SchematicSection> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).filter(|s| s.symbols.iter().any(|x| &x.id == id)).collect();
             if homes.is_empty() {
                 return Err(fail("ops_unknown_symbol", id, "no symbol instance with this reference"));
@@ -183,31 +187,124 @@ impl<'a> Board<'a> {
                 }
             }
         }
-        let model = self.model;
+        let paths_of = eda_model::sheet_list::paths_of_screens(&self.design);
+        let focus_path = self.focus_sheet_path();
         let here = self.focus.clone();
         let annotated = |id: &str| !id.ends_with('?');
-        let screens = std::iter::once((None, self.design.schematic.as_mut())).chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.iter_mut()).map(|(k, v)| (Some(k.clone()), Some(v))));
-        for (key, sch) in screens {
-            let Some(sch) = sch else { continue };
-            let in_view = key == here;
-            for id in ids.iter().filter(|id| in_view || annotated(id)) {
-                let Some(sym) = sch.symbols.iter().find(|s| &s.id == id).cloned() else { continue };
-                for (flag, value) in flags.each() {
-                    if let Some(v) = value {
-                        variants::set_flag(sch, id, &variant, flag, v);
-                    }
-                }
-                for (name, text) in fields {
-                    let own = match name.as_str() {
-                        "Value" if sym.value.is_empty() => model.part(id).and_then(|p| p.value.clone()).unwrap_or_default(),
-                        "Value" => sym.value.clone(),
-                        "Footprint" => sym.footprint.clone(),
-                        "Datasheet" => sym.datasheet.clone(),
-                        other => sch.user_fields.get(id).and_then(|m| m.get(other)).cloned().unwrap_or_default(),
-                    };
-                    variants::set_field(sch, id, &variant, name, text, &own);
+        // what each edit is to: (screen key, reference, the sheet path of the instance, or none for the reference's own records)
+        let mut edits: Vec<(Option<String>, String, Option<Vec<String>>)> = Vec::new();
+        let screens: Vec<(Option<String>, &eda_model::ir::SchematicSection)> =
+            self.design.schematic.iter().map(|s| (None, s)).chain(self.design.sheet_contents.iter().flat_map(|c| c.iter()).map(|(k, v)| (Some(k.clone()), v))).collect();
+        for (key, sch) in &screens {
+            let in_view = *key == here;
+            let paths = paths_of.get(key.as_deref().unwrap_or("")).cloned().unwrap_or_default();
+            for (id, alias_path) in &targets {
+                let Some(sym) = sch.symbols.iter().find(|s| &s.id == id) else { continue };
+                let path = match alias_path {
+                    // a later path's row: that path of its own screen only
+                    Some(p) if paths.contains(p) => Some(p.clone()),
+                    Some(_) => continue,
+                    None if !(in_view || annotated(id)) => continue,
+                    None if paths.len() <= 1 => None,
+                    None if in_view && paths.contains(&focus_path) => Some(focus_path.clone()),
+                    None => eda_model::sheet_list::own_path(sch, sym, &paths).cloned(),
+                };
+                edits.push((key.clone(), id.clone(), path));
+            }
+        }
+        for (key, id, path) in edits {
+            let own_texts: Vec<(String, String)> = {
+                let sch = self.section_of_key(key.as_deref()).expect("a screen just listed");
+                let Some(sym) = sch.symbols.iter().find(|s| s.id == id).cloned() else { continue };
+                let alt = self.variant_lib_symbol(sch, &sym, path.as_deref().unwrap_or(&[]), &variant);
+                fields
+                    .keys()
+                    .map(|name| {
+                        let own = match name.as_str() {
+                            "Value" if sym.value.is_empty() => self.model.part(&id).and_then(|p| p.value.clone()).unwrap_or_default(),
+                            "Value" => sym.value.clone(),
+                            "Footprint" => sym.footprint.clone(),
+                            "Datasheet" => sym.datasheet.clone(),
+                            other => sch.user_fields.get(&id).and_then(|m| m.get(other)).cloned().unwrap_or_default(),
+                        };
+                        let shown = alt.as_ref().and_then(|a| eda_model::variant_symbol::field_of(a, name)).map(str::to_string).unwrap_or(own);
+                        (name.clone(), shown)
+                    })
+                    .collect()
+            };
+            let sch = self.section_of_key_mut(key.as_deref()).expect("a screen just listed");
+            for (flag, value) in flags.each() {
+                if let Some(v) = value {
+                    variants::set_flag_on(sch, &id, path.as_deref(), &variant, flag, v);
                 }
             }
+            for (name, own) in own_texts {
+                variants::set_field_on(sch, &id, path.as_deref(), &variant, &name, &fields[&name], &own);
+            }
+        }
+        Ok(())
+    }
+
+    /// The section a screen key names: the root's for `None`, else the sheet screen's.
+    fn section_of_key(&self, key: Option<&str>) -> Option<&eda_model::ir::SchematicSection> {
+        match key {
+            None => self.design.schematic.as_ref(),
+            Some(k) => self.design.sheet_contents.as_ref()?.get(k),
+        }
+    }
+
+    fn section_of_key_mut(&mut self, key: Option<&str>) -> Option<&mut eda_model::ir::SchematicSection> {
+        match key {
+            None => self.design.schematic.as_mut(),
+            Some(k) => self.design.sheet_contents.as_mut()?.get_mut(k),
+        }
+    }
+
+    /// `SCH_SYMBOL::GetVariantLibSymbol( variant, path )` of `sym` on `sch`: the library symbol its record of `variant` on the sheet at `path` names, when the
+    /// design can resolve it and it is pin-compatible with the symbol's own ([`eda_model::variant_symbol::resolve_override`]).
+    pub(crate) fn variant_lib_symbol(&self, sch: &eda_model::ir::SchematicSection, sym: &eda_model::ir::SymbolInstance, path: &[String], variant: &str) -> Option<eda_model::LibSymbol> {
+        if variant.is_empty() {
+            return None;
+        }
+        let over = variants::record_on(sch, &sym.id, path, variant)?.symbol_override.as_deref()?;
+        let base = self.design_symbol(&sym.lib_id);
+        eda_model::variant_symbol::resolve_override(base.as_ref(), &sym.lib_id, over, |id| self.design_symbol(id))
+    }
+
+    /// `SCH_EDIT_TOOL::SetVariantSymbol` (`eeschema.InteractiveEdit.setVariantSymbol`, "Set Variant Symbol...") with `lib_id`, and `ClearVariantSymbol`
+    /// (`clearVariantSymbol`, "Clear Variant Symbol") without: the symbol `id` (each of its units, as an edit of a reference is) is drawn as `lib_id` in the
+    /// current `variant`, on the sheet path in view (`SetVariantSymbolOverride( currentSheet, variantName, picked.LibId )`). The default variant does
+    /// nothing in KiCad (`if( variantName.IsEmpty() ) return 0;`) and is refused here. A symbol the libraries do not have is KiCad's "Could not load symbol
+    /// '%s' from library."; one that is not pin-compatible with the symbol's own is refused with KiCad's message (`ValidateVariantSymbolCompatibility`, the
+    /// "Variant Symbol Compatibility" box); clearing a record with no variant symbol changes nothing (`if( !existingVariant ||
+    /// !existingVariant->m_SymbolOverride.has_value() ) return 0;`).
+    pub(crate) fn set_variant_symbol(&mut self, variant: &str, id: &str, lib_id: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        if variant.is_empty() {
+            return Err(fail("ops_no_variant", "variant", "Set Variant Symbol needs a design variant to be current"));
+        }
+        let variant = self.existing_variant(variant)?;
+        let file = self.focus.clone().unwrap_or_default();
+        let paths = eda_model::sheet_list::paths_of_screens(&self.design).remove(&file).unwrap_or_default();
+        let path = (paths.len() > 1).then(|| self.focus_sheet_path());
+        let sch = self.schematic()?;
+        let Some(sym) = sch.symbols.iter().find(|s| s.id == id).cloned() else {
+            return Err(fail("ops_unknown_symbol", id, "no symbol with this reference on the sheet"));
+        };
+        if let Some(lib_id) = lib_id {
+            let Some(candidate) = self.design_symbol(lib_id) else {
+                return Err(fail("ops_unknown_lib_symbol", lib_id, format!("Could not load symbol '{lib_id}' from library.")));
+            };
+            if let Some(base) = self.design_symbol(&sym.lib_id) {
+                let issues = eda_model::variant_symbol::validate_compatibility(&base, &candidate);
+                if !issues.is_empty() {
+                    return Err(fail("ops_variant_symbol_incompatible", lib_id, eda_model::variant_symbol::incompatible_message(lib_id, &sym.lib_id, &issues)));
+                }
+            }
+        }
+        let sch = self.schematic_mut()?;
+        let changed = variants::set_symbol_override_on(sch, id, path.as_deref(), &variant, lib_id);
+        if !changed {
+            return Err(fail("ops_nothing_to_change", id, if lib_id.is_some() { "the symbol already has this variant symbol" } else { "the symbol has no variant symbol in this variant" }));
         }
         Ok(())
     }

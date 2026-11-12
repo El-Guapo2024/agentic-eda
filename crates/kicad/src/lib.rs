@@ -577,7 +577,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
             writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&reference)).unwrap();
             writeln!(out, "\t\t\t\t\t(unit {})", eda_model::sheet_list::unit_under(sch, sym, model_path)).unwrap();
-            write_symbol_variants(&mut out, sch, sym);
+            write_symbol_variants(&mut out, sch, sym, model_path);
             writeln!(out, "\t\t\t\t)").unwrap();
         }
         writeln!(out, "\t\t\t)").unwrap();
@@ -1337,14 +1337,14 @@ pub(crate) fn variant_in_bom_word(excluded: bool, version: i64) -> &'static str 
 
 /// A placed symbol's design variants inside each `(path ..)` of its `(instances ..)` (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR::saveSymbol`): one `(variant (name ..)
 /// ..)` per record with differentials (`SCH_SYMBOL_VARIANT::HasDifferentials`), each flag only where it is not the symbol's own (`dnp`, `exclude_from_sim`,
-/// `in_bom`, `on_board` and `in_pos_files` as the positive words), then its field texts (`(field (name ..) (value ..))`). The record is the reference's, so
-/// every path of a screen shown twice gets it (`eda_model::variants`). `in_bom` is written in the sense this file's version is read in
-/// ([`variant_in_bom_word`]): **differs** from 25ec2335's writer, whose files are at 20261015.
-fn write_symbol_variants(out: &mut String, sch: &eda_model::ir::SchematicSection, sym: &SymbolInstance) {
+/// `in_bom`, `on_board` and `in_pos_files` as the positive words), then its field texts (`(field (name ..) (value ..))`) and its variant symbol
+/// (`(symbol_override "<lib id>")`). Each path writes the records of its own instance (`eda_model::variants::records_on`, UI-LEFT-2 SS16). `in_bom` is
+/// written in the sense this file's version is read in ([`variant_in_bom_word`]): **differs** from 25ec2335's writer, whose files are at 20261015.
+fn write_symbol_variants(out: &mut String, sch: &eda_model::ir::SchematicSection, sym: &SymbolInstance, path: &[String]) {
     use eda_model::variants::{Flag, SymbolFlags};
     let yes_no = |b: bool| if b { "yes" } else { "no" };
     let base = SymbolFlags::of(sch, sym);
-    for (name, rec) in eda_model::variants::written_records(sch, sym) {
+    for (name, rec) in eda_model::variants::written_records_on(sch, sym, path) {
         let flags = rec.flags(base);
         write!(out, "\t\t\t\t\t(variant (name {})", sexpr_str(name)).unwrap();
         for f in Flag::ALL {
@@ -1363,6 +1363,9 @@ fn write_symbol_variants(out: &mut String, sch: &eda_model::ir::SchematicSection
         }
         for (field, text) in &rec.fields {
             write!(out, " (field (name {}) (value {}))", sexpr_str(field), sexpr_str(text)).unwrap();
+        }
+        if let Some(lib_id) = &rec.symbol_override {
+            write!(out, " (symbol_override {})", sexpr_str(lib_id)).unwrap();
         }
         writeln!(out, ")").unwrap();
     }

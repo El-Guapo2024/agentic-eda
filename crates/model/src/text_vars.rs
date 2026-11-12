@@ -1175,6 +1175,10 @@ pub struct PcbBoard {
     pub file_path: String,
     pub title_block: Option<TitleBlockVars>,
     pub footprints: Vec<PcbFootprint>,
+    /// `BOARD::m_currentVariant` and its description: `${VARIANT}` and `${VARIANT_DESC}` (KiCad 25ec2335 `BOARD::ResolveTextVar( token, aVariantName )`);
+    /// empty for the default variant.
+    pub variant: String,
+    pub variant_desc: String,
 }
 
 fn short_net_name(net: &str) -> &str {
@@ -1199,8 +1203,8 @@ impl PcbBoard {
         match token {
             "FILENAME" => return Some(self.file_name.clone()),
             "FILEPATH" => return Some(self.file_path.clone()),
-            // No design variants.
-            "VARIANT" | "VARIANT_DESC" => return Some(String::new()),
+            "VARIANT" => return Some(self.variant.clone()),
+            "VARIANT_DESC" => return Some(self.variant_desc.clone()),
             "PROJECTNAME" => return Some(self.project.name.clone()),
             _ => {}
         }
@@ -1356,6 +1360,10 @@ pub struct SchSheet {
     pub file_path: String,
     /// Every symbol of the schematic, for `${REF:field}`.
     pub symbols: Vec<SchSymbol>,
+    /// `SCHEMATIC::m_currentVariant` and its description (`GetVariantDescription`): `${VARIANT}` (and `${VARIANTNAME}`) and `${VARIANT_DESC}`; empty for the
+    /// default variant (KiCad 25ec2335 `SCHEMATIC::ResolveTextVar`, UI-LEFT-2 SS16).
+    pub variant: String,
+    pub variant_desc: String,
 }
 
 impl SchSheet {
@@ -1399,7 +1407,8 @@ impl SchSheet {
             "FILENAME" => return Some(self.file_name.clone()),
             "FILEPATH" => return Some(self.file_path.clone()),
             "PROJECTNAME" => return Some(self.project.name.clone()),
-            "VARIANT" | "VARIANTNAME" | "VARIANT_DESC" => return Some(String::new()),
+            "VARIANT" | "VARIANTNAME" => return Some(self.variant.clone()),
+            "VARIANT_DESC" => return Some(self.variant_desc.clone()),
             _ => {}
         }
         // The path has been taken back to the root by now (`SCH_SHEET::ResolveTextVar` pops one sheet at a time), so it is the root screen's title block.
@@ -1703,6 +1712,8 @@ mod tests {
             file_path: "/work/demo/.kicad/demo.kicad_pcb".into(),
             title_block: Some(TitleBlockVars { title: "Demo".into(), revision: "C".into(), ..Default::default() }),
             footprints: vec![fp("R1", "10k", "F.Cu", &[("MPN", "ERJ-3 ${VALUE}")]), fp("R2", "${REV}-22k", "B.Cu", &[])],
+            variant: String::new(),
+            variant_desc: String::new(),
         }
     }
 
@@ -1794,6 +1805,8 @@ mod tests {
             file_name: "demo.kicad_sch".into(),
             file_path: "/work/demo/.kicad/demo.kicad_sch".into(),
             symbols: vec![sym("R1", "10k"), sym("R2", "22k")],
+            variant: String::new(),
+            variant_desc: String::new(),
         }
     }
 

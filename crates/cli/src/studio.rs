@@ -658,7 +658,8 @@ fn handle(
             respond(stream, r.status, "application/json", r.body.as_bytes())
         }
         ("GET", "/api/state") => {
-            let v = state(dir, job, crate::text_vars_json::clock_of(target)).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `?variant=<name>`: the board editor's current design variant (`BOARD::m_currentVariant`), which the board's texts and fields show (UI-LEFT-2 PP16)
+            let v = state_in(dir, job, crate::text_vars_json::clock_of(target), target).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/schematic.svg") => match schematic_svg(dir, schematic) {
@@ -673,7 +674,8 @@ fn handle(
             // existed already behaved.
             let query = target.split('?').nth(1).unwrap_or("");
             let sheet_path = query.split('&').find_map(|kv| kv.strip_prefix("sheet=")).unwrap_or("");
-            let v = schematic_json(dir, sheet_path, crate::text_vars_json::clock_of(target)).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `?variant=<name>`: the schematic editor's current design variant (`SCHEMATIC::m_currentVariant`), which the texts resolve in (UI-LEFT-2 SS16)
+            let v = schematic_json_in(dir, sheet_path, crate::text_vars_json::clock_of(target), target).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         // File > Save As... (`common.Control.saveAs`): the design as the derived KiCad files, for the browser to save.
@@ -1302,9 +1304,16 @@ fn version(dir: &Path, job: &Job) -> Value {
 }
 
 pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -> Result<Value, Vec<CheckResult>> {
+    state_in(dir, job, clock, "")
+}
+
+/// [`state`] in the board's current design variant, as the request `target` names it (`?variant=`): the footprints' fields and texts show the variant's
+/// texts, each part carries its attributes and field texts there (`variant`), and `shown_variant` says which variant that is (UI-LEFT-2 PP16).
+pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock, target: &str) -> Result<Value, Vec<CheckResult>> {
     let (meta, design, model) = board::load(dir)?;
+    let variant = crate::variant_view::of_request(&design, target);
     // What `${NAME}` stands for in the board's texts and fields (`crate::text_vars_json`); each of them carries `shown` where it differs from the stored text.
-    let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock));
+    let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock)).with_variant(&design, &model, &variant);
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
     let view = eda_ops::view::view(&b, &model)?;
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
@@ -1385,6 +1394,15 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 // The footprint's fields as laid out on the board, and its attributes.
                 p["fields"] = json!(crate::fp_json::fields_json(&design, &model, part, fp, footprint));
                 tv.annotate_fields(&part.reference, &mut p["fields"]);
+                if let Some(mut v) = tv.variant_json(&part.reference) {
+                    // the fields its symbol has, which a variant may give a text (`set_symbol_variant` takes these)
+                    let mut names: Vec<String> = ["Value", "Footprint", "Datasheet"].iter().map(|n| n.to_string()).collect();
+                    if let Some((sch, sym, _)) = eda_model::variants::instance_of(&design, &part.reference) {
+                        names.extend(sch.user_fields.get(&sym.id).into_iter().flat_map(|m| m.keys().cloned()));
+                    }
+                    v["symbol_fields"] = json!(names);
+                    p["variant"] = v;
+                }
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
                 // A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`), for Swap Gate Nets' menu: absent for fewer than two.
                 let units = eda_model::fp_units::unit_info(&design, &model, &part.reference);
@@ -1775,6 +1793,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
     state["variants"] = json!(design_variants_json(&design));
+    state["shown_variant"] = json!(variant);
     // `BOARD::GetNetInfo()`, which the Search panel's Nets tab goes through (UI-LEFT-2 PP13): every net of the board by name, one no item is on too -- the model's
     // nets (an added net, a design block's) and any a track, via or zone names -- sorted as the writer numbers them, the unconnected net left out
     state["nets"] = json!(board_net_names(&design, &model));
@@ -2098,7 +2117,14 @@ pub(crate) fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) ->
 /// next to `schematic_svg`'s -- these boards are small, so deriving again
 /// on a cache miss costs nothing worth guarding.
 pub(crate) fn schematic_json(dir: &Path, sheet_path: &str, clock: eda_model::text_vars::Clock) -> Result<Value, Vec<CheckResult>> {
+    schematic_json_in(dir, sheet_path, clock, "")
+}
+
+/// [`schematic_json`] in the design variant the request `target` names (`?variant=`, [`crate::variant_view::of_request`]): its texts and fields are
+/// shown as that variant resolves them, and `shown_variant` says which variant that is.
+pub(crate) fn schematic_json_in(dir: &Path, sheet_path: &str, clock: eda_model::text_vars::Clock, target: &str) -> Result<Value, Vec<CheckResult>> {
     let (meta, mut design, model) = board::load(dir)?;
+    let variant = crate::variant_view::of_request(&design, target);
     // A board with no stored schematic shows the one derived from its intent: module sheets, whole, so the sheet path resolves.
     if design.schematic.is_none() {
         let derived = board::derived_schematic(&design, &model)?;
@@ -2106,7 +2132,8 @@ pub(crate) fn schematic_json(dir: &Path, sheet_path: &str, clock: eda_model::tex
         design.sheet_contents = derived.sheet_contents;
     }
     let project = crate::text_vars_json::project(dir, &meta.intent, clock);
-    let mut v = schematic_json_with(&design, &model, sheet_path, Some((dir, project)));
+    let mut v = schematic_json_with(&design, &model, sheet_path, Some((dir, project, variant.as_str())));
+    v["shown_variant"] = json!(variant);
     // Page Settings' drawing sheet file (`schematic.page_layout_descr_file`), as the board's is in `GET /api/state`
     v["drawing_sheet"] = crate::drawing_sheet_api::state_json(dir, design.schematic.as_ref().and_then(|s| s.extras.drawing_sheet.as_deref()));
     Ok(v)
@@ -2132,13 +2159,13 @@ fn net_of_pin<'a>(pin_net: &std::collections::HashMap<&str, &'a str>, reference:
 
 /// [`schematic_json_of`] with the board folder and project of the board it is the schematic of, which the `shown` form of each text and field needs
 /// (`${NAME}`, `crate::text_vars_json`); without them the texts are sent as stored.
-fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str, shown: Option<(&Path, eda_model::text_vars::Project)>) -> Value {
+fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str, shown: Option<(&Path, eda_model::text_vars::Project, &str)>) -> Value {
     let (sch, breadcrumb) = resolve_sheet(design, sheet_path);
     // the sheet's path from the root (`SCH_SHEET_PATH`), which a screen shown twice files each placement's references under
     let sheet_ids: Vec<String> = breadcrumb.iter().map(|(id, _)| id.clone()).collect();
     // The net each pin is on ("REF.PIN" -> net), for the pin highlight and the pin's description.
     let pin_net: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
-    let shown = shown.map(|(dir, project)| crate::text_vars_json::SchShown::new(dir, design, model, &breadcrumb, project));
+    let shown = shown.map(|(dir, project, variant)| crate::text_vars_json::SchShown::in_variant(dir, design, model, &breadcrumb, project, variant));
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
@@ -2253,8 +2280,23 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             }
             // Its records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SchExtras::symbol_variants`), which the studio lays over the
             // symbol while one is the current variant: by name, each flag it sets and each field text.
-            if let Some(records) = sch.extras.symbol_variants.get(&s.id) {
-                symbol["variants"] = json!(records);
+            // The records are the instance's on the sheet path in view (`SCH_SYMBOL_INSTANCE::m_Variants`, `eda_model::variants::records_on`; UI-LEFT-2 SS16). A
+            // record's variant symbol that the design draws (`GetVariantLibSymbol`: resolved and pin-compatible) says so (`symbol_resolved`) and brings the
+            // field texts it gives where the record has none of its own (`symbol_fields`, `GetFieldText`'s `altSymbol` fallback).
+            if let Some(records) = eda_model::variants::records_on(&sch, &s.id, &sheet_ids) {
+                let mut v = json!(records);
+                for (name, rec) in records {
+                    let Some(over) = rec.symbol_override.as_deref() else { continue };
+                    let alt = eda_model::variant_symbol::resolve_override(model.symbol_of(&s.lib_id).as_ref(), &s.lib_id, over, |id| model.symbol_of(id));
+                    v[name]["symbol_resolved"] = json!(alt.is_some());
+                    if let Some(alt) = alt {
+                        let mut names: Vec<String> = ["Value", "Footprint", "Datasheet", "Description"].iter().map(|n| n.to_string()).collect();
+                        names.extend(sch.user_fields.get(&s.id).into_iter().flat_map(|m| m.keys().cloned()));
+                        let texts: serde_json::Map<String, Value> = names.iter().filter_map(|n| eda_model::variant_symbol::field_of(&alt, n).map(|t| (n.clone(), json!(t)))).collect();
+                        v[name]["symbol_fields"] = Value::Object(texts);
+                    }
+                }
+                symbol["variants"] = v;
             }
             symbol
         })
@@ -2443,6 +2485,14 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // for anything neither covers.
     let mut lib_ids: Vec<String> = sch.symbols.iter().map(|s| if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }).collect();
     lib_ids.extend(sch.power_symbols.iter().map(|p| p.lib_id.clone()));
+    // the variant symbols the design draws a symbol as in a variant (`SCH_SYMBOL::GetEffectiveLibSymbol`, UI-LEFT-2 SS16): (override lib id, the symbol)
+    let overrides: Vec<(String, &eda_model::ir::SymbolInstance)> = sch
+        .symbols
+        .iter()
+        .flat_map(|s| eda_model::variants::records_on(&sch, &s.id, &sheet_ids).into_iter().flat_map(|m| m.values()).filter_map(move |r| r.symbol_override.clone().map(|o| (o, s))))
+        .filter(|(o, s)| eda_model::variant_symbol::resolve_override(model.symbol_of(&s.lib_id).as_ref(), &s.lib_id, o, |id| model.symbol_of(id)).is_some())
+        .collect();
+    lib_ids.extend(overrides.iter().map(|(o, _)| o.clone()));
     lib_ids.sort();
     lib_ids.dedup();
     let lib_symbols: Value = lib_ids
@@ -2450,10 +2500,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .map(|lib_id| {
             // A sheet this project drew places its symbols by the corner of their box: draw the symbol the writer bakes (its origin
             // at that corner, every pin where a wire ends) instead of the library's own, so symbol and wires meet.
-            let instance = sch.symbols.iter().find(|s| (if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }) == *lib_id);
+            let instance = sch.symbols.iter().find(|s| (if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }) == *lib_id).or_else(|| overrides.iter().find(|(o, _)| o == lib_id).map(|(_, s)| *s));
             if let (false, Some(s)) = (sch.imported_from_kicad, instance) {
                 if let Some(part) = model.part(&s.id) {
-                    let resolved = model.real_symbol_of(&s.lib_id, part);
+                    let resolved = if s.lib_id == *lib_id { model.real_symbol_of(&s.lib_id, part) } else { model.symbol_of(lib_id) };
                     return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)));
                 }
             }

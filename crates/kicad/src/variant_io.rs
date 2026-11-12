@@ -8,8 +8,8 @@
 //! which starts as the footprint's flags, then the flag or the field). The design's board is derived from the schematic, so the writer does the same here.
 //!
 //! **Differs**: no variant footprint (a variant's `Footprint` field naming another footprint, `applyComponentVariants`' several footprints of one reference);
-//! the variants of a board read from a `.kicad_pcb` alone are not kept; a footprint of a screen shown twice gets the records of the screen's symbol only
-//! under that symbol's own reference.
+//! the variants of a board read from a `.kicad_pcb` alone are not kept. A footprint of a screen shown twice gets the records of the instance its reference
+//! names (the netlist's component of each sheet path, `SCH_SYMBOL_INSTANCE::m_Variants`; UI-LEFT-2 SS16).
 
 use crate::sexpr_str;
 use eda_model::ir::{Design, SchematicSection, SymbolInstance};
@@ -41,11 +41,6 @@ pub(crate) fn superseded(design: &Design, kept: &str) -> bool {
     design.schematic.is_some() && (kept.starts_with("(variants") || kept.starts_with("(variant "))
 }
 
-/// The symbol of reference `id` and the section it is on (the root's, else a sheet screen's).
-fn symbol_of<'a>(design: &'a Design, id: &str) -> Option<(&'a SchematicSection, &'a SymbolInstance)> {
-    design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).find_map(|sch| sch.symbols.iter().find(|s| s.id == id).map(|s| (sch, s)))
-}
-
 /// A field's own text on the symbol (what the footprint's field of that name has, as the board writer copies the symbol's fields): the Value, Datasheet and
 /// user fields; `part_value` is the part's Value for a symbol whose own is empty.
 fn own_field_text<'a>(sch: &'a SchematicSection, sym: &'a SymbolInstance, part_value: Option<&'a str>, field: &str) -> &'a str {
@@ -64,10 +59,10 @@ fn own_field_text<'a>(sch: &'a SchematicSection, sym: &'a SymbolInstance, part_v
 /// symbol's own (`applyComponentVariants`, then the writer's `if( variant.GetDNP() != baseDnp )`). A variant with nothing to say is no block, as the updater
 /// adds no footprint variant for it.
 pub(crate) fn write_footprint_variants(out: &mut String, design: &Design, part_value: Option<&str>, id: &str, fp_dnp: bool, fp_no_bom: bool, fp_no_pos: bool) {
-    let Some((sch, sym)) = symbol_of(design, id) else { return };
+    let Some((sch, sym, path)) = eda_model::variants::instance_of(design, id) else { return };
     let base = SymbolFlags::of(sch, sym);
     let yes_no = |b: bool| if b { "yes" } else { "no" };
-    for (name, rec) in eda_model::variants::written_records(sch, sym) {
+    for (name, rec) in eda_model::variants::written_records_on(sch, sym, &path) {
         let flags = rec.flags(base);
         let mut body = String::new();
         // the footprint's own flag for each the board writes; a footprint is never excluded from simulation here (the writer gives it no such attribute)

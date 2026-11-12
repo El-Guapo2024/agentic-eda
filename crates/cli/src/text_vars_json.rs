@@ -19,7 +19,7 @@ pub(crate) fn clock_of(target: &str) -> Clock {
     query.split('&').find_map(|kv| kv.strip_prefix("clock=")).and_then(|v| Clock::from_local(&percent_decode(v))).unwrap_or_else(Clock::utc_now)
 }
 
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -65,6 +65,8 @@ fn field_of(v: &Value) -> PcbField {
 pub(crate) struct PcbShown {
     board: PcbBoard,
     by_part: HashMap<String, usize>,
+    /// The board is shown in a design variant ([`PcbShown::with_variant`]): a field whose text the variant changes shows it even without a variable in it.
+    variant_active: bool,
 }
 
 impl PcbShown {
@@ -109,8 +111,47 @@ impl PcbShown {
             }
         }
         let title_block = design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(TitleBlockVars::of);
-        let board = PcbBoard { project, layer_names: model.board.layer_setup.names.clone(), file_name: format!("{stem}.kicad_pcb"), file_path: dir.join(".kicad").join(format!("{stem}.kicad_pcb")).display().to_string(), title_block, footprints };
-        PcbShown { board, by_part }
+        let board = PcbBoard { project, layer_names: model.board.layer_setup.names.clone(), file_name: format!("{stem}.kicad_pcb"), file_path: dir.join(".kicad").join(format!("{stem}.kicad_pcb")).display().to_string(), title_block, footprints, variant: String::new(), variant_desc: String::new() };
+        PcbShown { board, by_part, variant_active: false }
+    }
+
+    /// The board in its current `variant` (`BOARD::SetCurrentVariant`; UI-LEFT-2 PP16): `${VARIANT}` and `${VARIANT_DESC}`, and each footprint's fields
+    /// and attributes as the variant gives them (`FOOTPRINT::GetFieldValueForVariant`, `GetDNPForVariant` ...: a field's variant text where the variant has one,
+    /// the `Footprint` field aside; an attribute the variant sets other than the symbol's own, else the footprint's), which its texts and fields then show.
+    pub(crate) fn with_variant(mut self, design: &Design, model: &ConstraintModel, variant: &str) -> PcbShown {
+        if variant.is_empty() {
+            return self;
+        }
+        self.board.variant = variant.to_string();
+        self.board.variant_desc = crate::variant_view::description(design, variant);
+        for (reference, &i) in &self.by_part {
+            let Some(iv) = crate::variant_view::reference_in_variant(design, model, reference, variant) else { continue };
+            let fp = &mut self.board.footprints[i];
+            for f in fp.fields.iter_mut().filter(|f| f.name != "Footprint" && f.name != "Reference") {
+                if let Some(t) = iv.fields.get(&f.name) {
+                    f.text = t.clone();
+                }
+            }
+            let pick = |own: bool, base: bool, v: bool| if v != base { v } else { own };
+            fp.dnp = pick(fp.dnp, iv.base.dnp, iv.flags.dnp);
+            fp.exclude_from_bom = pick(fp.exclude_from_bom, iv.base.exclude_from_bom, iv.flags.exclude_from_bom);
+            fp.exclude_from_pos_files = pick(fp.exclude_from_pos_files, iv.base.exclude_from_pos_files, iv.flags.exclude_from_pos_files);
+            fp.exclude_from_sim = pick(fp.exclude_from_sim, iv.base.exclude_from_sim, iv.flags.exclude_from_sim);
+        }
+        self.variant_active = true;
+        self
+    }
+
+    /// The footprint `part`'s attributes in the current variant (`GetDNPForVariant`, `GetExcludedFromBOMForVariant`, `GetExcludedFromPosFilesForVariant`,
+    /// `GetExcludedFromSimForVariant`) and its fields' texts there: `{"dnp", "exclude_from_bom", "exclude_from_pos_files", "exclude_from_sim", "fields": {name:
+    /// text}}`, for the board editor's toggles, Properties panel and Footprint Properties while a variant is current; none in the default variant.
+    pub(crate) fn variant_json(&self, part: &str) -> Option<Value> {
+        if !self.variant_active {
+            return None;
+        }
+        let fp = &self.board.footprints[*self.by_part.get(part)?];
+        let fields: serde_json::Map<String, Value> = fp.fields.iter().map(|f| (f.name.clone(), json!(f.text))).collect();
+        Some(json!({ "dnp": fp.dnp, "exclude_from_bom": fp.exclude_from_bom, "exclude_from_pos_files": fp.exclude_from_pos_files, "exclude_from_sim": fp.exclude_from_sim, "fields": fields }))
     }
 
     /// The board the resolvers read: what a table cell's `${..}` is resolved against.
@@ -152,7 +193,9 @@ impl PcbShown {
         for f in list {
             let name = f["name"].as_str().unwrap_or("").to_string();
             let raw = f["text"].as_str().unwrap_or("").to_string();
-            if !eda_model::text_vars::has_text_vars(&raw) && !raw.contains('{') {
+            // in a variant a field may show the variant's text, variables or not (`PCB_FIELD::GetShownText( variant, .. )`)
+            let changed = self.variant_active && fp.fields.iter().any(|x| x.name == name && x.text != raw);
+            if !changed && !eda_model::text_vars::has_text_vars(&raw) && !raw.contains('{') {
                 continue;
             }
             let shown = fp.field_shown(&self.board, &name, 0).unwrap_or_else(|| raw.clone());
@@ -204,6 +247,8 @@ pub(crate) fn title_block_json(tb: &TitleBlock, project: &Project) -> Value {
 pub(crate) struct SchShown {
     sheet: SchSheet,
     by_key: HashMap<String, usize>,
+    /// The fields whose text the current variant changes, by symbol (its index in `sheet.symbols`): they show the variant's text, variables or not.
+    variant_changed: HashMap<usize, std::collections::BTreeSet<String>>,
 }
 
 fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::ir::SymbolInstance, subpart: &eda_model::annotate::SubpartIds) -> SchSymbol {
@@ -288,6 +333,13 @@ pub(crate) fn sheet_levels(design: &Design, ids: &[String]) -> Vec<SchSheetLevel
 impl SchShown {
     /// `breadcrumb` is the `(placement id, name)` chain from the root down to the sheet in view, empty for the root.
     pub(crate) fn new(dir: &Path, design: &Design, model: &ConstraintModel, breadcrumb: &[(String, String)], project: Project) -> SchShown {
+        SchShown::in_variant(dir, design, model, breadcrumb, project, "")
+    }
+
+    /// [`SchShown::new`] while `variant` is the current one (`SCHEMATIC::m_currentVariant`; UI-LEFT-2 SS16): `${VARIANT}` and `${VARIANT_DESC}`, and every
+    /// symbol's flags and field texts as the variant gives them on the sheet path of its instance (`GetDNP( aPath, aVariantName )`, `GetFieldText( .., aPath,
+    /// aVariantName )`, the variant symbol's texts where the record has none), which `${DNP}`, `${VALUE}`, `${REF:FIELD}` and a field's own text then read.
+    pub(crate) fn in_variant(dir: &Path, design: &Design, model: &ConstraintModel, breadcrumb: &[(String, String)], project: Project, variant: &str) -> SchShown {
         let stem = project.name.clone();
         let ids: Vec<String> = breadcrumb.iter().map(|(id, _)| id.clone()).collect();
         let levels = sheet_levels(design, &ids);
@@ -296,20 +348,40 @@ impl SchShown {
         let page = entries.iter().find(|e| e.path == ids).map(|e| e.effective_page()).unwrap_or_else(|| "1".into());
         let mut symbols = Vec::new();
         let mut by_key = HashMap::new();
-        let mut screens: Vec<&SchematicSection> = design.schematic.iter().collect();
+        let mut variant_changed: HashMap<usize, std::collections::BTreeSet<String>> = HashMap::new();
+        let mut screens: Vec<(&str, &SchematicSection)> = design.schematic.iter().map(|s| ("", s)).collect();
         if let Some(c) = design.sheet_contents.as_ref() {
-            screens.extend(c.values());
+            screens.extend(c.iter().map(|(k, v)| (k.as_str(), v)));
         }
+        let paths_of = eda_model::sheet_list::paths_of_screens(design);
         let subpart = eda_model::annotate::SubpartIds::of_design(design);
         // the sheet in view's symbols take its sheet path's flags too (`SCH_SYMBOL::ResolveTextVar`: `${DNP}` is `aPath->GetDNP( variant ) || ResolveDNP( aPath,
         // variant )`, and the same for `${EXCLUDE_FROM_BOM}`, `${EXCLUDE_FROM_BOARD}`, `${EXCLUDE_FROM_SIM}`; UI-LEFT-2 SS15)
         let in_view = eda_model::sheet_list::screen_of(design, &ids);
-        let path_flags = eda_model::variants::sheet_path_flags(design, &ids, "");
-        for sch in screens {
+        let path_flags = eda_model::variants::sheet_path_flags(design, &ids, variant);
+        for (key, sch) in screens {
             let here = in_view.is_some_and(|v| std::ptr::eq(v, sch));
+            let paths = paths_of.get(key).map(Vec::as_slice).unwrap_or(&[]);
             for sym in &sch.symbols {
                 by_key.insert(eda_model::ir::field_key(&sym.id, sym.unit), symbols.len());
                 let mut s = symbol_of(sch, model, sym, &subpart);
+                // the instance's record of the variant: the path in view's for its screen, the symbol's own path's elsewhere
+                let path: &[String] = if here { &ids } else { eda_model::sheet_list::own_path(sch, sym, paths).map(Vec::as_slice).unwrap_or(&[]) };
+                if let Some(iv) = crate::variant_view::symbol_in_variant(model, sch, sym, path, variant) {
+                    s.dnp = iv.flags.dnp;
+                    s.exclude_from_bom = iv.flags.exclude_from_bom;
+                    s.exclude_from_board = iv.flags.exclude_from_board;
+                    s.exclude_from_sim = iv.flags.exclude_from_sim;
+                    for (name, text) in s.fields.iter_mut() {
+                        if let Some(t) = iv.fields.get(name.as_str()).filter(|t| *t != text) {
+                            *text = t.clone();
+                            variant_changed.entry(symbols.len()).or_default().insert(name.clone());
+                        }
+                    }
+                    if let Some(t) = iv.fields.get("Footprint") {
+                        s.footprint = t.clone();
+                    }
+                }
                 if here {
                     s.dnp |= path_flags.dnp;
                     s.exclude_from_bom |= path_flags.exclude_from_bom;
@@ -332,8 +404,10 @@ impl SchShown {
             file_name: format!("{stem}.kicad_sch"),
             file_path: dir.join(".kicad").join(format!("{stem}.kicad_sch")).display().to_string(),
             symbols,
+            variant: variant.to_string(),
+            variant_desc: crate::variant_view::description(design, variant),
         };
-        SchShown { sheet, by_key }
+        SchShown { sheet, by_key, variant_changed }
     }
 
     /// One variable as the sheet in view resolves it (`SCH_SHEET::ResolveTextVar` for each sheet of the path, then `SCHEMATIC::ResolveTextVar`): what a table cell's own
@@ -356,15 +430,22 @@ impl SchShown {
         let Some(&i) = self.by_key.get(key) else { return };
         let sym = &self.sheet.symbols[i];
         let level = self.sheet.levels.len().saturating_sub(1);
+        let changed = self.variant_changed.get(&i);
         for f in fields {
-            if f["name"].as_str() == Some("Reference") {
+            let Some(name) = f["name"].as_str().map(str::to_string) else { continue };
+            if name == "Reference" {
                 continue;
             }
             let raw = f["text"].as_str().unwrap_or("").to_string();
-            if !eda_model::text_vars::has_text_vars(&raw) && !raw.contains('{') {
+            // in a variant a field shows the variant's text (`SCH_FIELD::GetShownText( .., aVariantName )`), expanded as its own would be
+            let text = match changed.filter(|c| c.contains(&name)) {
+                Some(_) => sym.fields.iter().find(|(n, _)| *n == name).map(|(_, t)| t.clone()).unwrap_or_else(|| raw.clone()),
+                None => raw.clone(),
+            };
+            if text == raw && !eda_model::text_vars::has_text_vars(&raw) && !raw.contains('{') {
                 continue;
             }
-            let shown = self.sheet.field_shown(level, Some(sym), &raw, 0);
+            let shown = self.sheet.field_shown(level, Some(sym), &text, 0);
             if shown != raw {
                 f["shown"] = json!(shown);
             }
@@ -374,16 +455,18 @@ impl SchShown {
     /// The shown Value and Footprint of the symbol with the field key `key` -- `{"value": .., "footprint": ..}` with the ones that differ from the stored text, or
     /// none when neither does. What the painter draws for a symbol whose fields the state does not list.
     pub(crate) fn symbol_shown_json(&self, key: &str) -> Option<Value> {
-        let sym = &self.sheet.symbols[*self.by_key.get(key)?];
+        let i = *self.by_key.get(key)?;
+        let sym = &self.sheet.symbols[i];
         let level = self.sheet.levels.len().saturating_sub(1);
+        let changed = self.variant_changed.get(&i);
         let mut out = serde_json::Map::new();
         for (name, key) in [("Value", "value"), ("Footprint", "footprint")] {
             let Some((_, raw)) = sym.fields.iter().find(|(n, _)| n == name) else { continue };
-            if !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {
+            if !changed.is_some_and(|c| c.contains(name)) && !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {
                 continue;
             }
             let shown = self.sheet.field_shown(level, Some(sym), raw, 0);
-            if shown != *raw {
+            if shown != *raw || changed.is_some_and(|c| c.contains(name)) {
                 out.insert(key.into(), json!(shown));
             }
         }

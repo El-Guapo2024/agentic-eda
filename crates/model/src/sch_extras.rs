@@ -205,6 +205,15 @@ pub struct SchExtras {
     /// `(instances ..)`): by reference, then by variant name. A reference with none has no entry. See [`crate::variants`]. Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub symbol_variants: BTreeMap<String, BTreeMap<String, crate::variants::SymbolVariant>>,
+    /// The records a symbol of this screen has on one sheet path, where the screen is shown on several paths and that path's records are not the
+    /// reference's own [`Self::symbol_variants`] (KiCad 25ec2335 keeps them per instance, `SCH_SYMBOL_INSTANCE::m_Variants`, one instance per sheet path:
+    /// a channel sheet placed twice can fit 10k on one channel and 4k7 on the other in one variant): by reference, then by the sheet path (the placement ids
+    /// from the root down, joined with `/`) -> the path's whole set of records, by variant name (an empty set: the path has none). Read through
+    /// `crate::variants::records_on`; read from each `(path ..)` of a file's `(instances ..)` and written back per path; a variant edit made on a path of a
+    /// screen shown twice sets that path's (`SCH_SYMBOL::SetDNP( .., &GetCurrentSheet(), variant )`). A path's set equal to the reference's is not kept.
+    /// Additive (UI-LEFT-2 SS16).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub path_symbol_variants: BTreeMap<String, BTreeMap<String, BTreeMap<String, crate::variants::SymbolVariant>>>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -1050,6 +1059,7 @@ impl SchExtras {
             && self.power_lib_names.is_empty()
             && self.excluded_from_pos_files.is_empty()
             && self.symbol_variants.is_empty()
+            && self.path_symbol_variants.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()

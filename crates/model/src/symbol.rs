@@ -300,6 +300,13 @@ pub struct LibConnectivity {
     /// rectangle. Kept here, as [`Self::pin_alternates`] is, so the symbol's literals and `SymbolGraphic`'s matches stay as they are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_boxes: Vec<crate::ir::LibrarySymbolGraphic>,
+    /// The library symbol's Value and Footprint field texts (`LIB_SYMBOL::GetValueField`, `GetFootprintField`), which a variant that draws this symbol in
+    /// place of its own shows where it has no text of its own for them (KiCad 25ec2335 `SCH_SYMBOL::GetFieldText` with the variant:
+    /// `altSymbol->GetField( .. )` when its text is not empty; [`crate::variant_symbol`]). Not connectivity; kept here as [`Self::user_fields`] is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub value: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub footprint: String,
 }
 
 impl LibConnectivity {

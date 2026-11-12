@@ -220,3 +220,48 @@ fn a_sheets_variant_record_comes_back_and_kicad_clis_bom_leaves_its_symbols_out(
     write(&design, &model, &dir, "variants");
     assert!(!has(&bom(None), first), "the sheet's own DNP leaves it out of the default BOM");
 }
+
+/// A channel sheet placed twice (UI-LEFT-2 SS16): KiCad keeps a symbol's records per instance (`SCH_SYMBOL_INSTANCE::m_Variants`, one per sheet path), so each path's
+/// `(variant ..)` blocks are read as that path's, a variant symbol (`(symbol_override ..)`) with them, and written back under the same path.
+#[test]
+fn each_sheet_paths_records_and_variant_symbol_come_back_under_their_path() {
+    let dir = work_dir("paths");
+    let root = "00000000-0000-0000-0000-000000000001";
+    let (a, b) = ("00000000-0000-0000-0000-0000000000a1", "00000000-0000-0000-0000-0000000000a2");
+    let sheet = |uuid: &str, name: &str, x: i32, page: &str| {
+        format!(
+            "\t(sheet (at {x} 10) (size 20 10) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) (uuid \"{uuid}\")\n\t\t(property \"Sheetname\" \"{name}\" (at {x} 9.3 0) (effects (font (size 1.27 1.27)) (justify left bottom)))\n\t\t(property \"Sheetfile\" \"chan.kicad_sch\" (at {x} 20.5 0) (effects (font (size 1.27 1.27)) (justify left top)))\n\t\t(instances (project \"p\" (path \"/{root}\" (page \"{page}\"))))\n\t)\n"
+        )
+    };
+    let top = format!(
+        "(kicad_sch (version 20250114) (generator \"eeschema\") (generator_version \"9.0\") (uuid \"{root}\") (paper \"A4\")\n\t(lib_symbols)\n{}{}\t(sheet_instances (path \"/\" (page \"1\")))\n)\n",
+        sheet(a, "A", 10, "2"),
+        sheet(b, "B", 40, "3")
+    );
+    let chan = format!(
+        "(kicad_sch (version 20250114) (generator \"eeschema\") (generator_version \"9.0\") (uuid \"00000000-0000-0000-0000-0000000000c1\") (paper \"A4\")\n\t(lib_symbols (symbol \"Device:R\" (pin_numbers (hide yes)) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes) (property \"Reference\" \"R\" (at 2.032 0 90) (effects (font (size 1.27 1.27)))) (property \"Value\" \"R\" (at 0 0 90) (effects (font (size 1.27 1.27)))) (symbol \"R_0_1\" (rectangle (start -1.016 -2.54) (end 1.016 2.54) (stroke (width 0.254) (type default)) (fill (type none)))) (symbol \"R_1_1\" (pin passive line (at 0 3.81 270) (length 1.27) (name \"~\" (effects (font (size 1.27 1.27)))) (number \"1\" (effects (font (size 1.27 1.27))))) (pin passive line (at 0 -3.81 90) (length 1.27) (name \"~\" (effects (font (size 1.27 1.27)))) (number \"2\" (effects (font (size 1.27 1.27))))))))\n\t(symbol (lib_id \"Device:R\") (at 50 50 0) (unit 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (uuid \"00000000-0000-0000-0000-0000000000d1\")\n\t\t(property \"Reference\" \"R1\" (at 52 49 0) (effects (font (size 1.27 1.27))))\n\t\t(property \"Value\" \"10k\" (at 52 51 0) (effects (font (size 1.27 1.27))))\n\t\t(property \"Footprint\" \"\" (at 50 50 0) (effects (font (size 1.27 1.27)) (hide yes)))\n\t\t(property \"Datasheet\" \"\" (at 50 50 0) (effects (font (size 1.27 1.27)) (hide yes)))\n\t\t(instances (project \"p\"\n\t\t\t(path \"/{root}/{a}\" (reference \"R1\") (unit 1) (variant (name \"Lite\") (field (name \"Value\") (value \"4k7\"))))\n\t\t\t(path \"/{root}/{b}\" (reference \"R2\") (unit 1) (variant (name \"Lite\") (dnp yes) (symbol_override \"Device:R_Small\")))\n\t\t))\n\t)\n)\n"
+    );
+    std::fs::write(dir.join("top.kicad_sch"), top).unwrap();
+    std::fs::write(dir.join("chan.kicad_sch"), chan).unwrap();
+    let (design, model) = read(&dir, "top");
+    let screen = design.sheet_contents.as_ref().unwrap().values().next().unwrap();
+    let pa = vec![a.to_string()];
+    let pb = vec![b.to_string()];
+    let ra = eda_model::variants::record_on(screen, "R1", &pa, "Lite").expect("path A's record");
+    assert_eq!(ra.fields.get("Value").map(String::as_str), Some("4k7"));
+    assert_eq!(ra.symbol_override, None);
+    let rb = eda_model::variants::record_on(screen, "R1", &pb, "Lite").expect("path B's record");
+    assert_eq!(rb.dnp, Some(true));
+    assert!(rb.fields.is_empty(), "path B's record is its own, not path A's");
+    assert_eq!(rb.symbol_override.as_deref(), Some("Device:R_Small"));
+    let out = work_dir("paths_out");
+    write(&design, &model, &out, "top");
+    let chan_file = std::fs::read_dir(&out).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.file_name().is_some_and(|n| n != "top.kicad_sch" && n.to_string_lossy().ends_with(".kicad_sch"))).expect("the channel file");
+    let text = std::fs::read_to_string(&chan_file).unwrap();
+    assert!(text.contains("(variant (name \"Lite\") (field (name \"Value\") (value \"4k7\")))"), "{text}");
+    assert!(text.contains("(variant (name \"Lite\") (dnp yes) (symbol_override \"Device:R_Small\"))"), "{text}");
+    let (again, _) = read(&out, "top");
+    let screen = again.sheet_contents.as_ref().unwrap().values().next().unwrap();
+    assert_eq!(eda_model::variants::record_on(screen, "R1", &pb, "Lite").and_then(|r| r.symbol_override.clone()).as_deref(), Some("Device:R_Small"));
+    assert!(eda_model::variants::record_on(screen, "R1", &pa, "Lite").is_some_and(|r| r.symbol_override.is_none() && r.dnp == Some(false)));
+}

@@ -166,6 +166,15 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
                 Cmd::Batch { cmds: embeds }
             })
         }
+        // Set Variant Symbol... to a library symbol the design has no definition of: its definition goes in first, so the design can draw the symbol as it in the
+        // variant (KiCad 25ec2335 loads it through the library adapter, `SCH_SYMBOL::GetVariantLibSymbol`; the studio's design keeps what it draws, UI-LEFT-2 SS16)
+        Cmd::SetVariantSymbol { lib_id: Some(lib_id), .. } => {
+            if !lacks_definition(lib_id.trim(), design, model) {
+                return None;
+            }
+            let (definition, _) = crate::library_search::installed_symbol(symbols, lib_id.trim())?;
+            Some(Cmd::Batch { cmds: vec![Cmd::EmbedLibSymbol { symbol: definition }, cmd.clone()] })
+        }
         // Change Symbols to a symbol of a library the design does not use yet: its definition first (a second change to it in the same batch finds it there).
         Cmd::SchEdit(eda_ops::sch_edit::SchCmd::ChangeSymbol { lib_id, .. }) => {
             if !lacks_definition(lib_id.trim(), design, model) {

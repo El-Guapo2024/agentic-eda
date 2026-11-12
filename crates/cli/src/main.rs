@@ -63,6 +63,7 @@ mod rescue_api;
 mod text_variables;
 mod table_json;
 mod text_vars_json;
+mod variant_view;
 mod page_json;
 mod drawing_sheet_api;
 mod barcode_api;

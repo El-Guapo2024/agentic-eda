@@ -257,7 +257,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         /// The alternate functions picked for its pins, `(pin "3" (uuid ..) (alternate "3.out"))` (`SchExtras::pin_alternates`, r5 D5-H3).
         alternates: BTreeMap<String, String>,
         /// Its records of the design variants, `(variant ..)` inside its `(instances ..)` (`SchExtras::symbol_variants`, KiCad 25ec2335).
-        variants: BTreeMap<String, eda_model::variants::SymbolVariant>,
+        /// by the sheet path of each `(path ..)` (the uuids below the root), in file order
+        variants: Vec<(Vec<String>, BTreeMap<String, eda_model::variants::SymbolVariant>)>,
         /// The font face and colour of each of its fields, `(effects (font (face ..) .. (color ..)))` (`SchExtras::field_looks`).
         field_looks: BTreeMap<String, eda_model::sch_extras::FieldFontLook>,
     }
@@ -477,8 +478,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // the symbols whose fields the file says Autoplace Fields put where they are, by `field_key` (`SchExtras::fields_autoplaced`)
     let mut autoplaced_entries: Vec<String> = Vec::new();
     let mut pos_files_excluded: Vec<String> = Vec::new();
-    // the symbols' records of the design variants, by reference: a reference's first unit read that has one of a variant gives it (`SchExtras::symbol_variants`)
-    let mut variant_records: BTreeMap<String, BTreeMap<String, eda_model::variants::SymbolVariant>> = BTreeMap::new();
+    // the symbols' records of the design variants, by reference, then by sheet path in the order first read: a reference's first unit read that has one of
+    // a variant on a path gives it (`SchExtras::symbol_variants`, `path_symbol_variants`)
+    let mut variant_records: BTreeMap<String, Vec<(String, BTreeMap<String, eda_model::variants::SymbolVariant>)>> = BTreeMap::new();
     // the places Swap Pins traded, by `field_key` (`SchExtras::pin_swaps`)
     let mut pin_swap_entries: Vec<(String, BTreeMap<String, String>)> = Vec::new();
     // the alternate functions picked for pins, by `field_key` (`SchExtras::pin_alternates`)
@@ -571,8 +573,19 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             if r.exclude_from_pos_files {
                 pos_files_excluded.push(eda_model::ir::field_key(&reference, r.unit));
             }
-            for (name, rec) in &r.variants {
-                variant_records.entry(reference.clone()).or_default().entry(name.clone()).or_insert_with(|| rec.clone());
+            for (path, records) in &r.variants {
+                let key = path.join("/");
+                let paths = variant_records.entry(reference.clone()).or_default();
+                let i = match paths.iter().position(|(k, _)| *k == key) {
+                    Some(i) => i,
+                    None => {
+                        paths.push((key, BTreeMap::new()));
+                        paths.len() - 1
+                    }
+                };
+                for (name, rec) in records {
+                    paths[i].1.entry(name.clone()).or_insert_with(|| rec.clone());
+                }
             }
             symbols.push(SymbolInstance {
                 id: reference.clone(),
@@ -947,7 +960,16 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         sch.extras.body_styles.extend(body_style_entries);
         sch.extras.fields_autoplaced.extend(autoplaced_entries.into_iter().map(|k| (k, eda_model::sch_extras::AutoplaceAlgo::Auto)));
         sch.extras.excluded_from_pos_files.extend(pos_files_excluded);
-        sch.extras.symbol_variants.extend(variant_records);
+        // the first path's records are the reference's own; a path whose records differ keeps its own set (KiCad's are per instance, UI-LEFT-2 SS16)
+        for (reference, paths) in variant_records {
+            let Some((_, own)) = paths.first().cloned() else { continue };
+            for (key, set) in paths.into_iter().skip(1).filter(|(k, set)| !k.is_empty() && *set != own) {
+                sch.extras.path_symbol_variants.entry(reference.clone()).or_default().insert(key, set);
+            }
+            if !own.is_empty() {
+                sch.extras.symbol_variants.insert(reference, own);
+            }
+        }
         sch.extras.pin_swaps.extend(pin_swap_entries);
         sch.extras.pin_alternates.extend(pin_alternate_entries);
         sch.extras.field_looks.extend(field_look_entries);
@@ -1723,15 +1745,18 @@ fn sheet_variants_of(item: &[Sexpr], base: &eda_model::sch_extras::SheetProps, v
 /// A placed symbol's records of the design variants (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`, `T_instances` > `T_path` > `T_variant`):
 /// each `(variant (name ..) ..)` of each path starts as the symbol's own flags (`variant.InitializeAttributes( *symbol )`) and takes the flags and field
 /// texts it says -- `dnp` and `exclude_from_sim` as they are, `on_board` and `in_pos_files` negated, `in_bom` as the exclusion itself in a file before
-/// 20260306 and negated from it on (`if( m_requiredVersion >= 20260306 ) variant.m_ExcludedFromBOM = !variant.m_ExcludedFromBOM`). A variant read twice
-/// (two paths of a screen shown twice) is the first path's: the design keeps one record per reference (`eda_model::variants`, **differs**). Its
-/// `symbol_override` and `pin_map_override` are not read.
-fn symbol_variants_of(item: &[Sexpr], base: eda_model::variants::SymbolFlags, version: f64) -> BTreeMap<String, eda_model::variants::SymbolVariant> {
-    let mut out = BTreeMap::new();
+/// 20260306 and negated from it on (`if( m_requiredVersion >= 20260306 ) variant.m_ExcludedFromBOM = !variant.m_ExcludedFromBOM`) -- and its variant symbol
+/// (`T_symbol_override`, `parseSymbolOverride`). One set per `(path ..)`, by the path's sheets (the uuids below the root, as
+/// [`parse_instance_overrides`] reads them), in file order; a path with no record has an empty set. Its `pin_map_override` is not read (the studio has no
+/// pin-to-pad maps).
+fn symbol_variants_of(item: &[Sexpr], base: eda_model::variants::SymbolFlags, version: f64) -> Vec<(Vec<String>, BTreeMap<String, eda_model::variants::SymbolVariant>)> {
+    let mut out: Vec<(Vec<String>, BTreeMap<String, eda_model::variants::SymbolVariant>)> = Vec::new();
     let Some(instances) = sexpr::find(item, "instances") else { return out };
     let yes = |v: &[Sexpr], name: &str| sexpr::find(v, name).and_then(|n| sexpr::txt(n, 1)).map(|t| t == "yes" || t == "true");
     for project in sexpr::find_all(instances, "project") {
         for path in sexpr::find_all(project, "path") {
+            let sheet_path: Vec<String> = sexpr::txt(path, 1).unwrap_or("").split('/').filter(|s| !s.is_empty()).skip(1).map(String::from).collect();
+            let mut set = BTreeMap::new();
             for v in sexpr::find_all(path, "variant") {
                 let Some(name) = sexpr::find(v, "name").and_then(|n| sexpr::txt(n, 1)) else { continue };
                 let mut rec = eda_model::variants::SymbolVariant::initialized(base);
@@ -1754,8 +1779,14 @@ fn symbol_variants_of(item: &[Sexpr], base: eda_model::variants::SymbolFlags, ve
                     let text = |k: &str| sexpr::find(f, k).and_then(|n| sexpr::txt(n, 1)).unwrap_or_default().to_string();
                     rec.fields.insert(text("name"), text("value"));
                 }
-                out.entry(name.to_string()).or_insert(rec);
+                if let Some(lib_id) = sexpr::find(v, "symbol_override").and_then(|n| sexpr::txt(n, 1)) {
+                    rec.symbol_override = Some(lib_id.to_string());
+                }
+                set.insert(name.to_string(), rec);
             }
+            // of two instances of one path (two projects' blocks), the last read wins (`AddHierarchicalReference`)
+            out.retain(|(p, _)| *p != sheet_path);
+            out.push((sheet_path, set));
         }
     }
     out
