@@ -125,7 +125,7 @@
     const rect = canvasBox().getBoundingClientRect();
     const onScreen = sx > 60 && sy > 60 && sx < rect.width - 60 && sy < rect.height - 60;
 
-    await scenario("PP12: a padstack's wider back ring is drawn under the front's, and is the via's own with B.Cu active", async (t) => {
+    await scenario("PP12: a padstack's wider back ring is drawn under the front's, each in its layer's colour, the active layer's on top (PP3)", async (t) => {
       t(!occupied && onScreen && v0.scale * 1e6 > 20, `a free spot on screen at ${(v0.scale * 1e6).toFixed(1)} px/mm (${JSON.stringify(spot)}, ${sx.toFixed(0)},${sy.toFixed(0)})`);
       await __eda.run("pcbnew.Control.layerTop"); await sleep(300);
       const before = (await viasNow()).map((v) => v.id);
@@ -134,7 +134,7 @@
       await sleep(900);
       const via = (await viasNow()).find((v) => !before.includes(v.id));
       const ring = [spot[0] + 0.5, spot[1]]; // between the front's 0.3 mm radius and the back's 0.7 mm
-      const inFront = [spot[0] + 0.15, spot[1]];
+      const inFront = [spot[0] + 0.22, spot[1]]; // in the front's ring, between the 0.15 mm hole and its 0.3 mm edge
       const bg = pixel(ring[0], ring[1]);
       const frontColour = pixel(inFront[0], inFront[1]);
       const r2 = await post({ op: "set_via_props", id: via.id, props: { padstack: { mode: "front_inner_back", sizes: { Inner: 600000, "B.Cu": 1400000 } } } });
@@ -144,10 +144,11 @@
       t(st.routing.vias.find((v) => v.id === via.id)?.props?.padstack?.sizes?.["B.Cu"] === 1400000, "the state sends the padstack");
       const backUnder = pixel(ring[0], ring[1]);
       t(backUnder !== bg, `0.5 mm from the centre the back's ring now shows under the front's (${bg} -> ${backUnder})`);
-      t(pixel(inFront[0], inFront[1]) === frontColour, `inside the front's ring it is the via as before (${frontColour})`);
+      t(pixel(inFront[0], inFront[1]) === frontColour, `inside the front's ring it is the front's ring as before (${frontColour})`);
       await __eda.run("pcbnew.Control.layerBottom"); await sleep(500);
-      const backOnTop = pixel(ring[0], ring[1]);
-      t(backOnTop === frontColour, `with B.Cu active the back's ring is the via's colour, on top (${backOnTop} vs ${frontColour})`);
+      const backOnTop = pixel(inFront[0], inFront[1]);
+      // `VIA_COPPER_LAYER_FOR( B_Cu )` raised by `SetTopLayer`: the back's ring, in B.Cu's colour, now covers the front's
+      t(backOnTop === backUnder && backOnTop !== frontColour, `with B.Cu active the back's ring is on top, in its own colour (${backOnTop}; the back ring ${backUnder}, the front's ${frontColour})`);
       await __eda.run("pcbnew.Control.layerTop"); await sleep(300);
       await undoUntilBase();
       t((await snapshot()) === base, "undone, the board is as it was");
