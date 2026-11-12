@@ -271,7 +271,7 @@ export async function renameSymbol(c: SymCtx): Promise<void> {
     }
     const wasOpen = c.api.getState().libId === id;
     if (!(await runBatch(c, [{ op: "rename_library_symbol", lib_id: id, new_lib_id: newId, overwrite }]))) return;
-    if (wasOpen) await c.api.openSymbol(newId);
+    if (wasOpen) await c.api.openSymbol(newId, undefined, { keepHistory: true });
     select(c, [newId]);
   } catch (e) {
     fail(c, e);

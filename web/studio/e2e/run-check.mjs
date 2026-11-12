@@ -118,7 +118,7 @@ while (Date.now() < deadline) {
 }
 for (const s of results) {
   console.log(`${s.ok ? "ok  " : "FAIL"} ${s.name}`);
-  for (const n of s.notes || []) if (!n.startsWith("ok")) console.log(`       ${n}`);
+  for (const n of s.notes || []) if (!n.startsWith("ok") || process.env.RUN_CHECK_ALL_NOTES) console.log(`       ${n}`); // every note with RUN_CHECK_ALL_NOTES=1
 }
 if (failure) console.log(`the script threw: ${failure}`);
 const failed = results.filter((s) => !s.ok).map((s) => s.name);

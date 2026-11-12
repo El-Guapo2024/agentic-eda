@@ -10,7 +10,7 @@
 // pad_tool.cpp's own Copy/Paste Pad Properties needs.
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Nm } from "../api/types";
-import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCarry, postCmd, postRedo, postUndo, type CarryStep } from "../api/client";
+import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCarry, postClearEditorHistory, postCmd, postRedo, postUndo, type CarryStep } from "../api/client";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { fpClipboardKind, fpPlainTextPaste } from "../kicad-port/fpClipboard";
 import { LONG_TEXT_QUESTION } from "../kicad-port/plainTextPaste";
@@ -691,6 +691,8 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       // whose file cannot be read: that refusal is said too, and nothing is opened
       const opened = await postCmd({ op: "open_footprint_for_edit", name }, false);
       if (!opened.ok) return notLoaded(opened.message);
+      // `LoadFootprintFromLibrary` -> `ClearUndoRedoList()`: the footprint loaded starts with no history
+      await postClearEditorHistory("footprint_editor");
       const footprint = await fetchFootprint(name);
       dispatch({ type: "FOOTPRINT_OK", footprint });
     },
@@ -703,6 +705,8 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       }
       dispatch({ type: "SET_NAME", name: key });
       dispatch({ type: "SET_LINKED_PART", ref: reference });
+      // `LoadFootprintFromBoard` -> `ClearUndoRedoList()`
+      await postClearEditorHistory("footprint_editor");
       try {
         dispatch({ type: "FOOTPRINT_OK", footprint: await fetchFootprint(key) });
       } catch (e) {
@@ -770,6 +774,8 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       }
       dispatch({ type: "SET_NAME", name });
       dispatch({ type: "SET_TREE_SELECTION", name });
+      // `NewFootprint` ends in `AddFootprintToBoard` and `ClearUndoRedoList()` (footprint_editor_control.cpp): making it is not a step to undo
+      await postClearEditorHistory("footprint_editor");
       dispatch({ type: "FOOTPRINT_OK", footprint: await fetchFootprint(name) });
     },
     duplicateSelection: async (increment) => {

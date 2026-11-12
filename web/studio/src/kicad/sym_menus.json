@@ -3,7 +3,7 @@
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
     "kicadCommitDate": null,
-    "extractedAt": "2026-10-05T01:42:46.674Z",
+    "extractedAt": "2026-11-12T09:30:04.980Z",
     "sourceFiles": [
       "eeschema/symbol_editor/menubar_symbol_editor.cpp",
       "pcbnew/tools/pcb_actions.cpp",
@@ -70,11 +70,13 @@
           "items": [
             {
               "type": "item",
-              "action": "eeschema.SymbolLibraryControl.importSymbol"
+              "action": "eeschema.SymbolLibraryControl.importSymbol",
+              "label": "Symbol..."
             },
             {
               "type": "item",
-              "action": "eeschema.EditorControl.importGraphics"
+              "action": "eeschema.EditorControl.importGraphics",
+              "label": "Graphics..."
             }
           ]
         },
@@ -84,15 +86,18 @@
           "items": [
             {
               "type": "item",
-              "action": "eeschema.SymbolLibraryControl.exportSymbol"
+              "action": "eeschema.SymbolLibraryControl.exportSymbol",
+              "label": "Symbol..."
             },
             {
               "type": "item",
-              "action": "eeschema.SymbolLibraryControl.exportSymbolView"
+              "action": "eeschema.SymbolLibraryControl.exportSymbolView",
+              "label": "View as PNG..."
             },
             {
               "type": "item",
-              "action": "eeschema.SymbolLibraryControl.exportSymbolAsSVG"
+              "action": "eeschema.SymbolLibraryControl.exportSymbolAsSVG",
+              "label": "Symbol as SVG..."
             }
           ]
         },

@@ -1073,6 +1073,13 @@ fn handle(
             respond(stream, "200 OK", "application/json", a.to_string().as_bytes())
         }
         ("POST", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
+        // a library editor that loads a symbol or footprint clears its history (`ClearUndoRedoList`): `{domain: "symbol_editor" | "footprint_editor"}`
+        ("POST", "/api/undo_clear") => {
+            if let Some(scope) = request_domain(&body) {
+                board::clear_editor_history(dir, scope);
+            }
+            respond(stream, "200 OK", "application/json", json!({ "ok": true }).to_string().as_bytes())
+        }
         ("POST", "/api/undo") => {
             let scope = request_domain(&body);
             if let Some(refused) = route_api::undo_redo_blocked(route_session, scope) {
@@ -2459,7 +2466,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)));
                 }
             }
-            let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
+            let resolved = model.placed_symbol_of(lib_id);
             let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, model));
             (lib_id.clone(), lib_symbol_json(&value))
         })

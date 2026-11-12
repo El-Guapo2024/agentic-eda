@@ -61,15 +61,18 @@
           "items": [
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.importNetlist"
+              "action": "pcbnew.EditorControl.importNetlist",
+              "label": "Netlist..."
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.importSpecctraSession"
+              "action": "pcbnew.EditorControl.importSpecctraSession",
+              "label": "Specctra Session..."
             },
             {
               "type": "item",
-              "action": "pcbnew.InteractiveDrawing.placeImportedGraphics"
+              "action": "pcbnew.InteractiveDrawing.placeImportedGraphics",
+              "label": "Graphics..."
             },
             {
               "type": "item",
@@ -86,38 +89,46 @@
           "items": [
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportSpecctraDSN"
+              "action": "pcbnew.EditorControl.exportSpecctraDSN",
+              "label": "Specctra DSN..."
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportGenCAD"
+              "action": "pcbnew.EditorControl.exportGenCAD",
+              "label": "GenCAD..."
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportVRML"
+              "action": "pcbnew.EditorControl.exportVRML",
+              "label": "VRML..."
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportIDF"
+              "action": "pcbnew.EditorControl.exportIDF",
+              "label": "IDFv3..."
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportSTEP"
+              "action": "pcbnew.EditorControl.exportSTEP",
+              "label": "STEP/GLB/BREP/XAO/PLY/STL..."
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportFootprintAssociations"
+              "action": "pcbnew.EditorControl.exportFootprintAssociations",
+              "label": "Footprint Association (.cmp) File..."
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportHyperlynx"
+              "action": "pcbnew.EditorControl.exportHyperlynx",
+              "label": "Hyperlynx..."
             },
             {
               "type": "separator"
             },
             {
               "type": "item",
-              "action": "pcbnew.EditorControl.exportFootprints"
+              "action": "pcbnew.EditorControl.exportFootprints",
+              "label": "Footprints..."
             }
           ]
         },
@@ -328,7 +339,8 @@
             },
             {
               "type": "item",
-              "action": "pcbnew.PcbDesignBlockControl.showDesignBlockPanel"
+              "action": "pcbnew.PcbDesignBlockControl.showDesignBlockPanel",
+              "label": "Design Blocks"
             }
           ]
         },

@@ -333,13 +333,10 @@ fn publish_overlay(design: &eda_model::ir::Design, model: &mut ConstraintModel) 
     }
 }
 
-/// The library symbol a placed symbol's `lib_id` names; none for an empty or synthetic (`eda:...`) id, which is drawn as a generic box.
+/// The library symbol a placed symbol's `lib_id` names; none for an empty or synthetic (`eda:...`) id, which is drawn as a generic box, unless it names a
+/// published entry of the project library, whose nickname is `eda` too (`ConstraintModel::placed_symbol_of`).
 fn resolve_lib_symbol(lib_id: &str, model: &ConstraintModel) -> Option<eda_model::LibSymbol> {
-    if lib_id.is_empty() || eda_model::is_synthetic_lib_id(lib_id) {
-        None
-    } else {
-        model.symbol_of(lib_id)
-    }
+    model.placed_symbol_of(lib_id)
 }
 
 /// A synthesized `Part` in `model` for every symbol instance of the design's schematic -- on every sheet -- that the model has none for: `AddSymbol`
@@ -1470,6 +1467,27 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<Snapshot> {
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&by_path);
     Some(Snapshot { domain, tag, by, design })
+}
+
+/// `EDA_BASE_FRAME::ClearUndoRedoList` of a library editor: a symbol or footprint loaded into it starts with no history -- KiCad's
+/// `SYMBOL_EDIT_FRAME::LoadSymbol` / `LoadOneLibrarySymbolAux` / `emptyScreen` and `FOOTPRINT_EDIT_FRAME`'s `LoadFootprintFromLibrary` (load_select_footprint.cpp)
+/// clear it -- so Ctrl+Z there never reaches the symbol or footprint shown before, nor its opening or making (UI-LEFT-2 YY8's click-through: six undos of
+/// six edits went on into the symbol opened before). Only that editor's own steps go; the board's, the schematic's and the whole-design ones stay.
+pub(crate) fn clear_editor_history(dir: &Path, scope: Domain) {
+    if !matches!(scope, Domain::SymbolEditor | Domain::FootprintEditor) {
+        return;
+    }
+    let _lock = lock(dir);
+    let tag = domain_tag(scope);
+    for stack in [undo_dir(dir), redo_dir(dir)] {
+        let Ok(entries) = std::fs::read_dir(&stack) else { continue };
+        for p in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+            let own = p.file_stem().and_then(|n| n.to_str()).and_then(|n| n.rsplit('.').next()) == Some(tag);
+            if own && p.extension().is_some_and(|e| e == "json" || e == "by") {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
 }
 
 fn clear_dir(stack_dir: &Path) {
@@ -7184,6 +7202,26 @@ pub(crate) mod tests {
         let e = step(&dir, on_sheet(V::SwapPins { pins: ids(&["pin:R1:1"]) }), false, "test").unwrap_err();
         assert!(reasons(&e).contains("at least two pins"), "{}", reasons(&e));
         assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A library editor's history is cleared when it loads a symbol or footprint (`ClearUndoRedoList`): its own steps go from both stacks, every other scope's stay.
+    #[test]
+    fn a_library_editor_clears_its_own_history_only() {
+        let dir = scratch("editor_history_clear");
+        setup_pin_swap_board(&dir);
+        let (_, design, _) = load(&dir).unwrap();
+        for tag in ["symbol_editor", "pcb", "symbol_editor", "footprint_editor", "schematic"] {
+            push_snapshot_tagged(&undo_dir(&dir), &design, tag, "test").unwrap();
+        }
+        push_snapshot_tagged(&redo_dir(&dir), &design, "symbol_editor", "test").unwrap();
+        clear_editor_history(&dir, Domain::SymbolEditor);
+        assert!(pop_snapshot(&undo_dir(&dir), Some(Domain::SymbolEditor)).is_none(), "no symbol editor step is left to undo");
+        assert!(pop_snapshot(&redo_dir(&dir), Some(Domain::SymbolEditor)).is_none(), "nor to redo");
+        for d in [Domain::Pcb, Domain::FootprintEditor, Domain::Schematic] {
+            assert!(pop_snapshot(&undo_dir(&dir), Some(d)).is_some(), "{d:?} keeps its step");
+        }
+        clear_editor_history(&dir, Domain::Pcb);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -47,9 +47,22 @@ export function SymbolTextDialog() {
     const t = target();
     setForm(t && symbol ? textFormOf(t, symbol) : null);
     setError(null);
-    ref.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [req]);
+  // `DIALOG_TEXT_PROPERTIES::SetInitialFocus( m_StyledTextCtrl )`: the text box has the focus once the dialog is drawn -- not in the effect above, where the
+  // form is not set yet and nothing is drawn, and once more after the event that opened it, whose mousedown would give the focus to the canvas (UI-LEFT-2
+  // YY8's click-through: the text typed went to the canvas)
+  const shown = !!req && form !== null;
+  useEffect(() => {
+    if (!shown) return;
+    const el = ref.current;
+    el?.focus();
+    const id = window.setTimeout(() => {
+      const a = document.activeElement;
+      if (el?.isConnected && a !== el && !(a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement)) el.focus();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [shown, req]);
 
   const text = target();
   if (!req || !symbol || !form || !text) return null;

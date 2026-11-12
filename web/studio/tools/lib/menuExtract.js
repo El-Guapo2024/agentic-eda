@@ -70,16 +70,17 @@ function walkSpan(span, text, spans, topLevelNames, titles, resolve, unresolved,
     }
     if (m[2]) {
       const dotted = resolve(`${m[1]}::${m[2]}`) ?? resolve(m[2]);
-      if (dotted) items.push({ type: "item", action: dotted });
+      // the menu's own label, where it gives one, over the action's friendly name (`ACTION_MENU::Add( aAction, aCheckmark, aOverrideLabel )`)
+      if (dotted) items.push(m[3] !== undefined ? { type: "item", action: dotted, label: cleanLabel(m[3]) } : { type: "item", action: dotted });
       else unresolved.add(`${m[1]}::${m[2]}`);
-    } else if (m[3] !== undefined) {
-      const subSpan = spans.get(m[3]);
+    } else if (m[4] !== undefined) {
+      const subSpan = spans.get(m[4]);
       const subItems = subSpan ? walkSpan(subSpan, text, spans, topLevelNames, titles, resolve, unresolved, itemRe) : [];
-      items.push({ type: "submenu", label: cleanLabel(m[4]), items: subItems });
-    } else if (m[5] !== undefined) {
-      if (!spans.has(m[5])) continue; // a bare ->Add(x) of something that is not a known ACTION_MENU variable
-      const subItems = walkSpan(spans.get(m[5]), text, spans, topLevelNames, titles, resolve, unresolved, itemRe);
-      items.push({ type: "submenu", label: titles.get(m[5]) ?? m[5], items: subItems });
+      items.push({ type: "submenu", label: cleanLabel(m[5]), items: subItems });
+    } else if (m[6] !== undefined) {
+      if (!spans.has(m[6])) continue; // a bare ->Add(x) of something that is not a known ACTION_MENU variable
+      const subItems = walkSpan(spans.get(m[6]), text, spans, topLevelNames, titles, resolve, unresolved, itemRe);
+      items.push({ type: "submenu", label: titles.get(m[6]) ?? m[6], items: subItems });
     } else {
       items.push({ type: "separator" });
     }
@@ -101,8 +102,9 @@ export function extractMenuBar(text, qualifiers, resolve) {
   const titles = findTitles(text);
   const unresolved = new Set();
   const missingSpan = [];
-  // Group 1/2: qualifier and action; 3/4: ->AppendSubMenu( var, "Label" ); 5: bare ->Add( var ); no group: ->AppendSeparator().
-  const itemRe = new RegExp(`->\\s*Add\\(\\s*(${qualifiers.join("|")})::(\\w+)|->\\s*AppendSeparator\\s*\\(|->\\s*AppendSubMenu\\(\\s*(\\w+)\\s*,\\s*_\\(\\s*"((?:[^"\\\\]|\\\\.)*)"|->\\s*Add\\(\\s*(\\w+)\\s*\\)`, "g");
+  // Group 1/2: qualifier and action, 6: the menu's own label for it (`->Add( SCH_ACTIONS::exportSymbol, ACTION_MENU::NORMAL, _( "Symbol..." ) )`);
+  // 3/4: ->AppendSubMenu( var, "Label" ); 5: bare ->Add( var ); no group: ->AppendSeparator().
+  const itemRe = new RegExp(`->\\s*Add\\(\\s*(${qualifiers.join("|")})::(\\w+)(?:\\s*,\\s*ACTION_MENU::\\w+\\s*,\\s*_\\(\\s*"((?:[^"\\\\]|\\\\.)*)")?|->\\s*AppendSeparator\\s*\\(|->\\s*AppendSubMenu\\(\\s*(\\w+)\\s*,\\s*_\\(\\s*"((?:[^"\\\\]|\\\\.)*)"|->\\s*Add\\(\\s*(\\w+)\\s*\\)`, "g");
   const menus = topLevel.map(({ varName, label }) => {
     const span = spans.get(varName);
     if (!span) {

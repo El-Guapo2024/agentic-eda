@@ -255,7 +255,7 @@ fn unit_suffix_of<'a>(design: &Design, model: &'a ConstraintModel) -> impl Fn(&s
     let cache: std::cell::RefCell<BTreeMap<String, Option<eda_model::symbol::LibSymbol>>> = Default::default();
     move |lib_id: &str, unit: u32| {
         let mut cache = cache.borrow_mut();
-        let lib = cache.entry(lib_id.to_string()).or_insert_with(|| if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) });
+        let lib = cache.entry(lib_id.to_string()).or_insert_with(|| model.placed_symbol_of(lib_id));
         match lib {
             Some(l) if l.unit_count <= 1 => None,
             Some(l) => Some(l.sub_reference_in(unit, &subpart, true)),
@@ -489,7 +489,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     for sym in &symbols {
         let part = parts_by_ref[sym.id.as_str()];
         let lib_id = sym_lib_id(sym);
-        let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
+        let resolved = model.placed_symbol_of(&lib_id);
         let x = sch_mm(sym.at.x);
         let y = sch_mm(sym.at.y);
         // each placed unit is a symbol of its own with a uuid of its own (`SCH_SYMBOL::m_Uuid`): `ResolveItem` finds unit B of a cross-reference by it
@@ -1116,7 +1116,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
             let reference = eda_model::sheet_list::reference_under(sch, sym, &e.path);
             let Some(part) = model.part(&sym.id) else { continue };
             let lib_id = sym_lib_id(sym);
-            let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
+            let resolved = model.placed_symbol_of(&lib_id);
             // the pins this symbol draws: its unit's and those of every unit (a pin of a unit no symbol places is in no netlist)
             let drawn = |number: &str| resolved.as_ref().filter(|r| r.unit_count > 1).and_then(|r| r.pin_by_number(number)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit);
             if let Some(link) = out.get_mut(&reference) {
