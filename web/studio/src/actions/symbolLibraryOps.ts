@@ -19,7 +19,7 @@ import { clipboardTextForSymbols, looksLikeSymbolText } from "../kicad-port/symC
 import { treeConditions } from "../kicad-port/symFields";
 import { duplicateLanding, planImport, planPaste } from "../kicad-port/symImportPlan";
 import type { ConflictStrategy } from "../kicad-port/symSaveAsPlan";
-import { askChoice, askConfirm, askText } from "../components/library/libraryDialogs";
+import { askChoice, askConfirm, askText, showError } from "../components/library/libraryDialogs";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 
@@ -104,7 +104,7 @@ export async function symbolProperties(c: SymCtx): Promise<void> {
 /** `SYMBOL_EDIT_FRAME::CopySymbolToClipboard` (and, with `cut`, the delete that `CutCopyDelete` follows it with). */
 export async function copySymbols(c: SymCtx, cut: boolean): Promise<void> {
   const ids = targetIds(c);
-  if (ids.length === 0) return info(c, "Select a symbol in the library tree first.");
+  if (ids.length === 0) return; // `if( GetTreeLIBIDs( symbols ) == 0 ) return;`
   try {
     const symbols: LibrarySymbol[] = [];
     const texts: string[] = [];
@@ -115,9 +115,9 @@ export async function copySymbols(c: SymCtx, cut: boolean): Promise<void> {
       texts.push(await fetchSymbolKicadSymText(id));
     }
     const text = clipboardTextForSymbols(texts);
-    const wrote = await writeClipboardText(text);
+    // silent, as `CopySymbolToClipboard` is (a clipboard that cannot be opened is `return`, no message); Paste Symbol reads the editor's own copy too
+    await writeClipboardText(text);
     c.dispatch({ type: "SET_COPIED", copied: { text, symbols } });
-    info(c, `${ids.length === 1 ? ids[0] : `${ids.length} symbols`} ${cut ? "cut" : "copied"}${wrote ? "" : " (the browser would not share the clipboard; Paste Symbol still works here)"}`);
   } catch (e) {
     return fail(c, e);
   }
@@ -292,13 +292,17 @@ export async function exportSymbol(c: SymCtx): Promise<void> {
 /** `SYMBOL_EDITOR_CONTROL::ExportView`: the canvas as a PNG, `<symbol name>.png`. */
 export async function exportSymbolView(c: SymCtx): Promise<void> {
   const st = c.api.getState();
-  if (!st.libId) return info(c, "No symbol to export.");
+  // `if( !symbol ) { wxMessageBox( _( "No symbol to export" ) ); return 0; }` (a plain message box: "Message", OK)
+  if (!st.libId || !st.symbol) return showError("No symbol to export", undefined, "Message");
+  const file = `${splitLibName(st.libId).item}.png`;
   const canvas = document.querySelector<HTMLCanvasElement>(".pcb-canvas-container canvas");
-  if (!canvas) return info(c, "No symbol to export.");
-  if (!(await saveCanvasPng(canvas, `${splitLibName(st.libId).item}.png`))) fail(c, new Error("Can't save the picture."));
+  if (!canvas || !(await saveCanvasPng(canvas, file))) await showError(`Can't save file '${file}'.`, undefined, "Message");
 }
 
-/** `SYMBOL_EDIT_FRAME::ImportSymbol`: choose a `.kicad_sym`, read it, and let the person pick the symbols to bring in. */
+/**
+ * `SYMBOL_EDIT_FRAME::ImportSymbol`: choose a `.kicad_sym`, read it, and let the person pick the symbols to bring in. A file that cannot be read is `DisplayError`
+ * (the reader's message; KiCad's select dialog reports a load failure so).
+ */
 export async function importSymbol(c: SymCtx): Promise<void> {
   try {
     const file = await pickTextFile(".kicad_sym,.sym");
@@ -306,14 +310,14 @@ export async function importSymbol(c: SymCtx): Promise<void> {
     const parsed = await parseSymbolText(file.text);
     c.dispatch({ type: "SET_IMPORT_REQUEST", request: { fileName: file.name, symbols: parsed.symbols, warnings: parsed.warnings, lib: targetLibrary(c) } });
   } catch (e) {
-    fail(c, e);
+    await showError(e instanceof Error ? e.message : String(e));
   }
 }
 
 /**
  * `ImportSymbol`'s loop over the selected symbols, after the select dialog: each is stored in the library under its own name; a symbol
  * the library already has is skipped or overwritten as the dialog's resolution says (`CONFLICT_RESOLUTION::SKIP` / `OVERWRITE`). The first
- * imported symbol is loaded, and a skipped count is reported ("Imported %d symbol(s), skipped %d.").
+ * imported symbol is loaded, and only a skipped count is reported (`DisplayInfoMessage`: "Imported %d symbol(s), skipped %d."); nothing imported is silent.
  */
 export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbol[], resolutions: Record<string, "skip" | "overwrite">, file: LibrarySymbol[] = chosen): Promise<void> {
   try {
@@ -329,7 +333,7 @@ export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbo
       }
       wanted.push(sym);
     }
-    if (wanted.length === 0) return info(c, skipped > 0 ? `Skipped ${skipped} symbol(s).` : "Nothing to import.");
+    if (wanted.length === 0) return; // `if( importedCount > 0 )` only
     // a derived symbol comes after its parent, and brings the parent along when the library lacks it and it was not ticked
     const present = new Set(all.filter((n) => (splitLibName(n).lib || PROJECT_LIBRARY) === lib).map((n) => splitLibName(n).item));
     const cmds: Cmd[] = planImport(file, wanted, present).map((sym): Cmd => {
@@ -340,7 +344,7 @@ export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbo
     if (!(await runBatch(c, cmds))) return;
     await c.api.openSymbol(first);
     select(c, [first]);
-    info(c, skipped > 0 ? `Imported ${wanted.length} symbol(s), skipped ${skipped}.` : `Imported ${wanted.length} symbol(s).`);
+    if (skipped > 0) await showError(`Imported ${wanted.length} symbol(s), skipped ${skipped}.`, undefined, "Information");
   } catch (e) {
     fail(c, e);
   }
@@ -434,10 +438,7 @@ export function showFieldsTable(c: SymCtx, scope: "library" | "related"): void {
 export async function symbolForSchematic(c: SymCtx): Promise<{ libId: string; referencePrefix: string; unit: number } | null> {
   const st = c.api.getState();
   const sym = st.symbol;
-  if (!st.libId || !sym) {
-    info(c, "Open a symbol first.");
-    return null;
-  }
+  if (!st.libId || !sym) return null; // `if( libSymbol )` only: nothing, silently
   if (!sym.published) {
     if (!(await c.api.cmd({ op: "update_symbol_on_board", lib_id: st.libId }))) return null;
     info(c, `${st.libId}: placed instances now follow this library entry`);

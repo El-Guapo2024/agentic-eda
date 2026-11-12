@@ -737,8 +737,9 @@ export function SymbolEditorCanvas() {
           ...(idx >= 0 ? [{ label: "Remove Corner", onSelect: () => { const next = removeCorner(shape, idx); if (next) void api.reshapeGraphic(id, symGraphicFrom(next, g), []); } }] : []),
         ] as MenuEntry[];
       })(),
-      // `SYMBOL_EDITOR_PIN_TOOL::Init`: with a single pin selected (`singlePinCondition`) the menu offers to push its length / sizes to every other pin.
-      ...(refs.length === 1 && pinRefs.length === 1
+      // `SYMBOL_EDITOR_PIN_TOOL::Init`: with a single pin selected (`singlePinCondition`) of a symbol that can be edited (`canEdit`: `IsSymbolEditable() && !IsSymbolAlias()`,
+      // so not on a derived symbol) the menu offers to push its length / sizes to every other pin.
+      ...(refs.length === 1 && pinRefs.length === 1 && !state.derivedOwn
         ? ([
             { label: "Push Pin Length", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "length") },
             { label: "Push Pin Name Size", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "name_size") },

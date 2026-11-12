@@ -18,6 +18,12 @@ import { fpArrayIds } from "../kicad-port/fpArray";
 import { padToolsBlocked } from "../kicad-port/padEditMode";
 import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
+import { symActionEnabled, type SymEnableState } from "../kicad-port/fpSymActionEnabled";
+
+/** What `symActionEnabled` reads, from the Symbol Editor's state. */
+export function symEnableState(st: ReturnType<SymbolEditorApi["getState"]>): SymEnableState {
+  return { symbolLoaded: !!st.symbol, derived: !!st.derivedOwn, unitCount: st.symbol?.unit_count ?? 0, unitsLocked: !!st.symbol?.units_locked };
+}
 
 export interface LibraryActionContext {
   tab: string;
@@ -220,14 +226,14 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   // Show Hidden Fields / Show Pin Alternate Icons -- SYMBOL_EDITOR_CONTROL::ToggleHiddenFields, TogglePinAltIcons: render-setting toggles.
   m.set("eeschema.SymbolLibraryControl.showHiddenFields", symTab(() => ctx.symDispatch({ type: "TOGGLE_HIDDEN_FIELDS" })));
   m.set("eeschema.EditorControl.togglePinAltIcons", symTab(() => ctx.symDispatch({ type: "TOGGLE_PIN_ALT_ICONS" })));
-  // Synchronized Pins Mode -- ToggleSyncedPinsMode: `m_SyncPinEdit = !m_SyncPinEdit`; enabled for a multi-unit symbol only (`multiUnitModeCond`).
+  // Synchronized Pins Mode -- ToggleSyncedPinsMode: `m_SyncPinEdit = !m_SyncPinEdit`, silently; enabled for a multi-unit symbol whose units are interchangeable only
+  // (`multiUnitModeCond`: `IsMultiUnit() && !UnitsLocked()`).
   m.set(
     "eeschema.SymbolLibraryControl.toggleSyncedPinsMode",
     symTab(() => {
       const st = ctx.symApi.getState();
-      if (!st.symbol || st.symbol.unit_count <= 1) return symToast("Synchronized Pins Mode needs a symbol with more than one unit.");
+      if (!symActionEnabled("eeschema.SymbolLibraryControl.toggleSyncedPinsMode", symEnableState(st))) return;
       ctx.symDispatch({ type: "SET_SYNC_PINS", on: !st.syncPins });
-      symToast(`Synchronized Pins Mode ${st.syncPins ? "off" : "on"}`);
     })
   );
   // Bulk Edit Symbol Fields... / Bulk Edit Related Symbol Fields... -- SYMBOL_EDITOR_CONTROL::ShowLibraryTable (DIALOG_LIB_FIELDS_TABLE, scope library / related symbols).
@@ -264,29 +270,35 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   // Draw Bezier Curve (`SCH_ACTIONS::drawBezier` -> `DrawShape( SHAPE_T::BEZIER )`, kicad-port/symBezier.ts)
   armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawBezier", "draw_bezier");
 
-  // Push Pin Length / Name Size / Number Size -- SYMBOL_EDITOR_PIN_TOOL::PushPinProperties: from the one selected pin to every other pin.
+  // Push Pin Length / Name Size / Number Size -- SYMBOL_EDITOR_PIN_TOOL::PushPinProperties: from the selection's first item, when it is a pin
+  // (`dynamic_cast<SCH_PIN*>( selection.Front() )`; else nothing), to every other pin, one undo step. The menu shows the rows for a single selected pin of an
+  // editable symbol only (`canEdit && singlePinCondition`, SymbolEditorCanvas.tsx).
   const pushPin = (field: "length" | "name_size" | "number_size") =>
     symTab(() => {
       const st = ctx.symApi.getState();
-      const pins = [...st.selection].filter((id) => ctx.symApi.pinById(id));
-      if (pins.length !== 1) return; // `singlePinCondition`
-      void ctx.symApi.pushPinProperty(pins[0]!, field);
+      const front = st.selection.values().next().value;
+      if (front === undefined || !ctx.symApi.pinById(front)) return;
+      void ctx.symApi.pushPinProperty(front, field);
     });
   m.set("eeschema.PinEditing.pushPinLength", pushPin("length"));
   m.set("eeschema.PinEditing.pushPinNameSize", pushPin("name_size"));
   m.set("eeschema.PinEditing.pushPinNumSize", pushPin("number_size"));
 
   // Draw Lines / Draw Polygons / Move Symbol Anchor / Draw Text -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape (SEGMENT / POLY), PlaceAnchor, TwoClickPlace: arm the tool.
-  const armSymTool = (tool: "draw_lines" | "draw_polygon" | "draw_textbox" | "anchor" | "text") =>
-    symTab(() => {
-      const st = ctx.symApi.getState();
-      if (!st.symbol) return symToast("Open a symbol first.");
-      ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: st.activeTool === tool ? "select" : tool });
-    });
-  m.set("eeschema.SymbolDrawing.drawSymbolLines", armSymTool("draw_lines"));
-  m.set("eeschema.SymbolDrawing.drawSymbolPolygon", armSymTool("draw_polygon"));
+  // Each is `EDIT_TOOL( .. )` in `setupUIConditions` (`Enable( isEditableCond )`: a loaded symbol that is not derived), so with none, or a derived one, nothing.
+  const armSymTool = (name: string, tool: "draw_lines" | "draw_polygon" | "draw_textbox" | "anchor" | "text") =>
+    m.set(
+      name,
+      symTab(() => {
+        const st = ctx.symApi.getState();
+        if (!symActionEnabled(name, symEnableState(st))) return;
+        ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: st.activeTool === tool ? "select" : tool });
+      })
+    );
+  armSymTool("eeschema.SymbolDrawing.drawSymbolLines", "draw_lines");
+  armSymTool("eeschema.SymbolDrawing.drawSymbolPolygon", "draw_polygon");
   // Draw Text Box -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawSymbolTextBox (`doDrawShape` without a shape): two clicks, then Text Box Properties.
-  m.set("eeschema.SymbolDrawing.drawSymbolTextBox", armSymTool("draw_textbox"));
-  m.set("eeschema.SymbolDrawing.placeSymbolAnchor", armSymTool("anchor"));
-  m.set("eeschema.SymbolDrawing.placeSymbolText", armSymTool("text"));
+  armSymTool("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
+  armSymTool("eeschema.SymbolDrawing.placeSymbolAnchor", "anchor");
+  armSymTool("eeschema.SymbolDrawing.placeSymbolText", "text");
 }
