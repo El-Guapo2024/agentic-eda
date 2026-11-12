@@ -1,0 +1,17 @@
+# The board web/studio/e2e/sim-v10.check.js runs on (UI-LEFT-2 MM1-MM4, task-v10-sim): a DC source on a divider R1 / R2, two inductors L1 / L2 a
+# K device can couple, a diode D1 the check gives a library model of models/diode.lib (web/studio/e2e/sim-model-diode.lib), and R3 the check
+# gives a Sim.Type no model has. `eda board new web/studio/e2e/sim-v10-board.yaml -o <dir>`, copy the library to <dir>/models/diode.lib, then
+# `eda board serve -C <dir>`. ngspice runs the operating point (the probe needs a run).
+parts:
+  - { reference: V1, value: "1", symbol: "Simulation_SPICE:VDC", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R1, value: 1k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R2, value: 1k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: R3, value: 10k, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: L1, value: 10u, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: L2, value: 22u, package: "0603", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+  - { reference: D1, value: 1N4148, symbol: "Device:D", pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }] }
+nets:
+  - { name: IN, pins: [V1.1, R1.1] }
+  - { name: MID, pins: [R1.2, R2.1, L1.1, D1.2, R3.1] }
+  - { name: X, pins: [L1.2, L2.1] }
+  - { name: GND, pins: [V1.2, R2.2, L2.2, D1.1, R3.2] }

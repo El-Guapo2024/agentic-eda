@@ -11,7 +11,8 @@
 //   the plot's zooms and their history (Undo/Redo Last Zoom), the View toggles (legend, dotted, dark mode, side panel, console) and their check marks;
 //   an operating point: "Simulation results:" in the console with V(/OUT) = 989mV, and the voltages and currents on the sheet toggled;
 //   a DC sweep of the supply; Show SPICE Netlist; Probe (a wire's voltage) and Tune (a tuner, a value tuned and run, Save as one undo step);
-//   the Simulation Model dialog from Symbol Properties: U1's library, its models, the pin grid, a reassignment written as Sim.Pins (one undo step);
+//   the Simulation Model dialog from Symbol Properties: U1's library, its models, the pin grid, a reassignment written as Sim.Pins by Symbol
+//   Properties' OK (one undo step);
 //   the exports (PNG, CSV, the clipboard, the plot pasted on the sheet), held back from the disk and the clipboard;
 //   the workbook saved in the design (one undo step), the window closed and opened again on it, and a KiCad workbook opened;
 //   Stop Simulation killing a long run; nothing logged an error.
@@ -415,10 +416,12 @@
     click(dlg()?.querySelector('[data-testid="sim-model-ok"]'));
     await sleep(1200);
     t(!dlg(), "OK closes the dialog");
+    // `OnEditSpiceModel`: the fields go to Symbol Properties, whose OK applies them
+    t((await fields())["Sim.Pins"] === before["Sim.Pins"], "nothing written before Symbol Properties' OK");
+    click([...document.querySelectorAll(".dialog-footer button.primary")].find((b) => b.textContent.trim() === "OK"));
+    await sleep(1500);
     const after = await fields();
     t(after["Sim.Pins"] === "1=in- 2=in+ 3=vcc 4=vee 5=out" && after["Sim.Name"] === "kicad_builtin_opamp", `Sim.Pins written: ${after["Sim.Pins"]}`);
-    click([...document.querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "Cancel"));
-    await sleep(300);
     await E.run("common.Interactive.undo");
     await sleep(900);
     t((await fields())["Sim.Pins"] === before["Sim.Pins"], "one undo step takes it back");

@@ -452,6 +452,14 @@ impl SchShown {
         }
     }
 
+    /// `SCH_FIELD::GetShownText` of a text on a field of the symbol with the field key `key` (the Simulation Model dialog's copy of its fields,
+    /// whose parent is the symbol): the text as it is when the symbol is not on the schematic.
+    pub(crate) fn symbol_text_shown(&self, key: &str, raw: &str) -> String {
+        let Some(&i) = self.by_key.get(key) else { return raw.to_string() };
+        let level = self.sheet.levels.len().saturating_sub(1);
+        self.sheet.field_shown(level, Some(&self.sheet.symbols[i]), raw, 0)
+    }
+
     /// The shown Value and Footprint of the symbol with the field key `key` -- `{"value": .., "footprint": ..}` with the ones that differ from the stored text, or
     /// none when neither does. What the painter draws for a symbol whose fields the state does not list.
     pub(crate) fn symbol_shown_json(&self, key: &str) -> Option<Value> {

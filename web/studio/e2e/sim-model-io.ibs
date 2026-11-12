@@ -20,8 +20,14 @@ io33   3.3 V IO
 io18   1.8 V IO
 [Model] drv
 Model_type Output
+C_comp 1p NA NA
+[Voltage Range] 3.3 3.0 3.6
 [Model] io33
 Model_type I/O
+C_comp 1p NA NA
+[Voltage Range] 3.3 3.0 3.6
 [Model] io18
 Model_type I/O
+C_comp 1p NA NA
+[Voltage Range] 1.8 1.7 1.9
 [End]

@@ -59,6 +59,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { useSymApi } from "../state/symbolEditorStore";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
 import { SimModelDialog } from "./simulator/SimModelDialog";
+import { editedFieldsMerge } from "../kicad-port/sim/simModelDialog";
 
 const MAIN_FIELDS = STANDARD_SYMBOL_FIELDS;
 
@@ -751,17 +752,32 @@ export function SymbolPropertiesDialog() {
       {editingSimModel && (
         <SimModelDialog
           reference={symbol.id}
+          // `OnEditSpiceModel`: a copy of the grid's fields as they stand
+          fields={{ value, user: userRows.filter((r) => !r.removed).map((r) => ({ name: r.name.trim(), text: r.text })) }}
           onClose={() => setEditingSimModel(false)}
-          // the Simulation Model dialog wrote the fields itself (its own undo step): the rows show them as the symbol has them now
-          onWritten={(all) => {
-            // the Value (the primary parameter saved there) is the dialog's own box; the rest are user rows
-            const { Value: writtenValue, ...written } = all;
-            if (writtenValue !== undefined) setValue(writtenValue);
+          // "Add in any new fields" / "Remove any deleted fields": the grid takes the dialog's fields; OK applies them with the rest
+          onOk={({ input, output, visible }) => {
+            if (output.Value !== undefined && output.Value !== input.Value) setValue(output.Value);
+            const { set, add, remove } = editedFieldsMerge(input, output, visible);
             setUserRows((rows) => {
-              let out = rows.filter((r) => !(r.name in written && written[r.name] === "" && !r.isNew));
-              out = out.map((r) => (r.name in written && written[r.name] !== "" ? { ...r, text: written[r.name]!, removed: false, was: { text: written[r.name]!, visible: r.was?.visible ?? r.shown } } : r));
-              for (const [name, text] of Object.entries(written)) {
-                if (text !== "" && !out.some((r) => r.name === name)) out.push({ key: nextKey.current++, name, text, shown: false, isNew: false, removed: false, was: { text, visible: false } });
+              let out = [...rows];
+              const live = (name: string) => out.find((r) => !r.removed && r.name.trim() === name);
+              // a field of the library symbol the grid does not list (a sheet the studio drew): the instance's own field stands for it, hidden
+              const own = (name: string, text: string, shownNow: boolean) => out.push({ key: nextKey.current++, name, text, shown: shownNow, isNew: true, removed: false });
+              for (const f of set) {
+                const r = live(f.name);
+                if (r) out = out.map((o) => (o === r ? { ...o, text: f.text } : o));
+                else own(f.name, f.text, false);
+              }
+              for (const f of add) {
+                const r = live(f.name);
+                if (r) out = out.map((o) => (o === r ? { ...o, text: f.text } : o));
+                else own(f.name, f.text, f.visible);
+              }
+              for (const name of remove) {
+                const r = live(name);
+                if (r) out = out.map((o) => (o === r ? { ...o, removed: true } : o));
+                else own(name, "", false);
               }
               return out;
             });

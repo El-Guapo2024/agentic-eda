@@ -15,6 +15,9 @@ export interface SimModelSymbolReply {
   /** The fields that are the instance's own. */
   own: string[];
   pins: SymbolPin[];
+  /** Each text that holds a variable, as the symbol shows it (`SCH_FIELD::GetShownText`): the fields', the Value's, "${SIM.PARAMS}" and the
+   * texts the request named. */
+  shown?: Record<string, string>;
 }
 
 export interface SimLibraryReply {
@@ -33,9 +36,9 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
-/** POST /api/sim/model/symbol. */
-export function fetchSimModelSymbol(ref: string): Promise<SimModelSymbolReply> {
-  return post("/api/sim/model/symbol", { ref });
+/** POST /api/sim/model/symbol; `texts` are more texts to resolve as the symbol's (Symbol Properties' rows, not yet applied). */
+export function fetchSimModelSymbol(ref: string, texts: string[] = []): Promise<SimModelSymbolReply> {
+  return post("/api/sim/model/symbol", { ref, texts });
 }
 
 /** POST /api/sim/model/library. */

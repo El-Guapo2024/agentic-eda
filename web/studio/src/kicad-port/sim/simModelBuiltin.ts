@@ -11,8 +11,8 @@
 //   `ReadTypeFromFields`, `ReadDataFields`, `WriteFields`, `requiresSpiceModelLine`, `InferSimModel`.
 // - the classes: `SIM_MODEL_IDEAL`, `SIM_MODEL_R_POT`, `SIM_MODEL_L_MUTUAL`, `SIM_MODEL_BEHAVIORAL`, `SIM_MODEL_TLINE`, `SIM_MODEL_SWITCH`,
 //   `SIM_MODEL_SOURCE` (its `doSetParamValue` fill, autofill, `HasPrimaryValue` for DC only), `SIM_MODEL_NGSPICE` (the instance parameters it
-//   takes, `doFindParam`'s second pass for escaped names), `SIM_MODEL_RAW_SPICE`, `SIM_MODEL_XSPICE`, `SIM_MODEL_SUBCKT`, `SIM_MODEL_IBIS`
-//   (its pins, `SwitchSingleEndedDiff`).
+//   takes, `doFindParam`'s second pass for escaped names, `SetParamFromSpiceCode`), `SIM_MODEL_RAW_SPICE`, `SIM_MODEL_XSPICE`, `SIM_MODEL_SUBCKT`
+//   (`SetBaseModel`), `SIM_MODEL_SPICE_FALLBACK`, `SIM_MODEL_IBIS` (its pins, `SwitchSingleEndedDiff`).
 // - `SIM_MODEL_SERIALIZER`: `GenerateDevice`, `GenerateDeviceSubtype`, `GenerateValue`, `GenerateParams`, `GeneratePins`, `GenerateEnable`,
 //   `ParseValue`, `ParseParams`, `ParsePins`, `ParseEnable`, `generateParamValuePair`, with the PEG grammars of sim_model_serializer.h read by
 //   hand (their error messages, PEGTL's "source:line:column: message").
@@ -21,7 +21,8 @@
 //   `_TLINE`, `_R_POT`, `_L_MUTUAL`, `_SPICE` (and `_NGSPICE`), `_RAW_SPICE`, `_IBIS`.
 //
 // Where it differs:
-// - Field texts are taken as written: KiCad reads them resolved (`GetShownText`), so a `${VAR}` in a `Sim.*` field is not expanded here.
+// - Field texts are taken as given: the dialog hands these functions the texts resolved where KiCad reads them so (`GetShownText`, the server's;
+//   simModelDialog.ts `resolvedFields`).
 // - IBIS: `SPICE_GENERATOR_IBIS::IbisDevice` (the KIBIS SPICE of a pin's model) is not ported; kicad-cli writes it in the netlist. The dialog
 //   needs only the model's parameters and pins.
 // - Design variants (`WriteFields`' sheet path and variant name) are not taken: the fields are the symbol's own.
@@ -243,6 +244,8 @@ export class SimModel {
   params: Param[] = [];
   modelPins: SimModelPin[] = [];
   baseModel: SimModel | null = null;
+  /** `SIM_MODEL_SPICE::m_spiceCode`: a library model's SPICE as the library has it (`SPICE_MODEL_PARSER::ReadModel`); empty for a built-in one. */
+  spiceCode = "";
   isEnabled = true;
   protected storedInValue = false;
   readonly generator: SpiceGenerator;
@@ -589,6 +592,47 @@ export class SimModelNgspice extends SimModel {
   override getPinNames() {
     return this.modelInfo.pinNames;
   }
+  /** `SIM_MODEL_NGSPICE::SetParamFromSpiceCode` (a `.model` card's parameter, SPICE notation): "level" and "version" ignored; the name among the
+   * parameters that are not instance or superfluous ones, then as an escaped name ("m" for "m_"), then any of the ngspice table's model
+   * parameters of that name ("One Spice param can have multiple names"), set on the parameter of the same id; else the LTspice and unused
+   * parameters `canSilentlyIgnoreParam` lets pass, or "Unknown simulation model parameter '%s'". */
+  setParamFromSpiceCode(name: string, value: string, notation: Notation = "SPICE"): void {
+    if (iequals(name, "level") || iequals(name, "version")) return;
+    for (let i = 0; i < this.params.length; i++) {
+      const p = this.getParam(i);
+      if (p.info.isSpiceInstanceParam || p.info.category === "SUPERFLUOUS") continue;
+      if (iequals(p.info.name, name)) return this.setParamValue(i, value, notation);
+    }
+    for (let i = 0; i < this.params.length; i++) {
+      const p = this.getParam(i);
+      if (p.info.isSpiceInstanceParam || p.info.category === "SUPERFLUOUS") continue;
+      if (!p.info.name.endsWith("_")) continue;
+      if (iequals(p.info.name, name + "_")) return this.setParamValue(i, value, notation);
+    }
+    for (const ngspice of this.modelInfo.modelParams) {
+      if (iequals(ngspice.name, name)) {
+        for (let i = 0; i < this.params.length; i++) {
+          const info = this.getParam(i).info;
+          if (info.category === "SUPERFLUOUS") continue;
+          if (info.id === ngspice.id) return this.setParamValue(i, value, notation);
+        }
+        break;
+      }
+    }
+    if (!this.canSilentlyIgnoreParam(name)) throw new SimModelError(`Unknown simulation model parameter '${name}'`);
+  }
+  /** `SIM_MODEL_NGSPICE::canSilentlyIgnoreParam`. */
+  canSilentlyIgnoreParam(name: string): boolean {
+    const is = (...names: string[]) => names.some((n) => iequals(name, n));
+    // "Ignore the purely informative LTspice-specific parameters "mfg" and "type"."
+    if (is("mfg", "type")) return true;
+    const device = this.deviceType();
+    if (device === "D" && is("perim", "isw", "ns", "rsw", "cjsw", "vjsw", "mjsw", "fcs")) return true;
+    if ((device === "NPN" || device === "PNP") && is("icrating", "vceo")) return true;
+    if ((this.type === "NPN_GUMMELPOON" || this.type === "PNP_GUMMELPOON") && is("bvcbo", "nbvcbo", "tbvcbo1", "tbvcbo2", "bvbe", "ibvbe", "nbvbe")) return true;
+    if ((this.type === "NMOS_VDMOS" || this.type === "PMOS_VDMOS") && is("vds", "ron", "qg")) return true;
+    return false;
+  }
   /** `SIM_MODEL_NGSPICE::doFindParam`: the name, then an escaped name ("m_" for "m"). */
   override doFindParam(name: string): number {
     for (let i = 0; i < this.params.length; i++) if (iequals(this.getParam(i).info.name, name)) return i;
@@ -628,10 +672,53 @@ export class SimModelXspice extends SimModel {
   }
 }
 
-/** `SIM_MODEL_SUBCKT` (a library's subcircuit; the dialog's library part has its own reader). */
+/** `SIM_MODEL_SUBCKT`: a library's subcircuit, its ports and `params:` read by `SPICE_MODEL_PARSER_SUBCKT::ReadModel` (simLibraryModel.ts). */
 export class SimModelSubckt extends SimModel {
   constructor(tables: SimModelTables) {
     super(tables, "SUBCKT", (m) => new SpiceGeneratorSpice(m));
+  }
+  /** `SIM_MODEL_SUBCKT::SetBaseModel`: "Pins aren't constant for subcircuits, so they need to be copied from the base model. Same for
+   * parameters." */
+  override setBaseModel(base: SimModel): void {
+    super.setBaseModel(base);
+    for (const pin of base.getPins()) this.addPin(pin);
+    for (let i = 0; i < base.getParamCount(); i++) this.addParam(base.getParam(i).info);
+  }
+  /** `SIM_MODEL_SUBCKT::GetSpiceCode`: its own, else the base model's. */
+  getSpiceCode(): string {
+    if (this.spiceCode !== "") return this.spiceCode;
+    return this.baseModel instanceof SimModelSubckt ? this.baseModel.getSpiceCode() : "";
+  }
+}
+
+/** `SIM_MODEL_SPICE_FALLBACK`: a library model KiCad could not read (`SIM_MODEL_SPICE::Create` when `ReadModel` throws, or a type whose class
+ * is not a SPICE one), kept as its raw code. Its constructor means to copy the type's parameters ("Create the model we *should* have had to
+ * copy its parameter list") but loops over its own, none, so it has no parameters; its pins are the type's (`GetPinNames`), and a pin it does
+ * not know is added (`AssignSymbolPinNumberToModelPin`). */
+export class SimModelSpiceFallback extends SimModel {
+  constructor(tables: SimModelTables, type: string, rawSpiceCode = "") {
+    super(tables, type, (m) => new SpiceGeneratorSpice(m));
+    this.spiceCode = rawSpiceCode;
+  }
+  override getPinNames(): string[] {
+    return createModel(this.tables, this.type).getPinNames();
+  }
+  override assignSymbolPinNumberToModelPin(modelPinName: string, symbolPinNumber: string): void {
+    try {
+      super.assignSymbolPinNumberToModelPin(modelPinName, symbolPinNumber);
+    } catch (e) {
+      if (!(e instanceof SimModelError)) throw e;
+      // "This is a fall-back, so we won't necessarily know the pin names. If we didn't find it, then just create a new pin."
+      this.modelPins.push({ modelPinName, symbolPinNumber });
+    }
+  }
+  override doFindParam(name: string): number {
+    for (let i = 0; i < this.params.length; i++) if (iequals(this.getParam(i).info.name, name)) return i;
+    for (let i = 0; i < this.params.length; i++) {
+      const n = this.getParam(i).info.name;
+      if (n.endsWith("_") && iequals(n, name + "_")) return i;
+    }
+    return -1;
   }
 }
 
@@ -1443,7 +1530,9 @@ export function formatPwlValues(input: string): string {
  * the item has no reference. */
 export class SpiceGeneratorSpice extends SpiceGenerator {
   override preview(item: SpiceItem): string {
-    const code = this.modelLine(item);
+    let code = this.modelLine(item);
+    if (code === "") code = this.model.spiceCode;
+    if (code === "" && this.model.baseModel) code = this.model.baseModel.spiceCode;
     const itemLine = this.itemLine({ ...item, refName: "" });
     let out = code;
     if (out !== "" && itemLine !== "") out += "\n\n";

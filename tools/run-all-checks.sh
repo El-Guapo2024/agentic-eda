@@ -188,6 +188,8 @@ print(json.dumps({"cmd": {"op": "replace_board", "text": t[:-1] + edge + ")\n"},
             "$eda" board new "$e2e/sim-left-board.yaml" -o "$d" --origin 0,0 ;;
         sim-model) # sim-model.check.js: the built-in models, and an IBIS file in the board folder
             "$eda" board new "$e2e/sim-model-board.yaml" -o "$d" --origin 0,0 && mkdir -p "$d/models" && cp "$e2e/sim-model-io.ibs" "$d/models/io.ibs" && cp "$e2e/sim-model-diode.lib" "$d/models/diode.lib" ;;
+        sim-v10) # sim-v10.check.js (UI-LEFT-2 MM1-MM4): inductors for a K, a library diode, a sheet pin to probe; runs ngspice
+            "$eda" board new "$e2e/sim-v10-board.yaml" -o "$d" --origin 0,0 && mkdir -p "$d/models" && cp "$e2e/sim-model-diode.lib" "$d/models/diode.lib" ;;
         *) echo "unknown board kind $kind"; return 1 ;;
     esac
 }

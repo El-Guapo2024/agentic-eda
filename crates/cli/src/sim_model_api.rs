@@ -58,7 +58,7 @@ pub(crate) fn str_num_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 pub fn symbol_route(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let reference = req.get("ref").and_then(Value::as_str).unwrap_or("");
-    let (_, mut design, model) = match board::load(dir) {
+    let (meta, mut design, model) = match board::load(dir) {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
@@ -94,16 +94,49 @@ pub fn symbol_route(dir: &Path, body: &[u8]) -> Value {
     let mut pins: Vec<(String, String)> = part.map(|p| p.pins.iter().map(|pin| (pin.number.clone(), pin.name.clone().unwrap_or_default())).collect()).unwrap_or_default();
     pins.sort_by(|a, b| str_num_cmp(&a.0, &b.0));
     pins.dedup_by(|a, b| a.0 == b.0);
+    // `GetFieldValue( &m_fields, .., aResolve = true, .. )`: a text of the dialog's fields as `SCH_FIELD::GetShownText` shows it, the field's
+    // parent being the symbol (`SCH_SYMBOL::ResolveTextVar`, then its sheet's): the texts the request names, the symbol's own, and
+    // "${SIM.PARAMS}" (the inferred Value)
+    let mut texts: Vec<String> = req.get("texts").and_then(Value::as_array).into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
+    texts.extend(fields.values().filter_map(|v| v.as_str().map(str::to_string)));
+    texts.push(value.clone());
+    texts.push("${SIM.PARAMS}".into());
+    let mut shown = serde_json::Map::new();
+    if texts.iter().any(|t| eda_model::text_vars::has_text_vars(t) || t.contains('{')) {
+        let ids = sheet_ids_of(&design, &sym.id);
+        let entries = eda_model::sheet_list::walk(&design);
+        let breadcrumb: Vec<(String, String)> =
+            (1..=ids.len()).map(|n| (ids[n - 1].clone(), entries.iter().find(|e| e.path[..] == ids[..n]).map(|e| e.name.clone()).unwrap_or_default())).collect();
+        let project = crate::text_vars_json::project(dir, &meta.intent, eda_model::text_vars::Clock::utc_now());
+        let resolver = crate::text_vars_json::SchShown::new(dir, &design, &model, &breadcrumb, project);
+        let key = eda_model::ir::field_key(&sym.id, sym.unit);
+        for t in &texts {
+            if eda_model::text_vars::has_text_vars(t) || t.contains('{') {
+                shown.insert(t.clone(), json!(resolver.symbol_text_shown(&key, t)));
+            }
+        }
+    }
     json!({
         "ok": true,
         "ref": sym.id,
         "value": value,
+        "shown": shown,
         "imported": sch.imported_from_kicad,
         "fields": fields,
         // the fields that are the instance's own (`SchematicSection::user_fields`), which a verb can remove; the others are the library symbol's
         "own": own,
         "pins": pins.iter().map(|(n, name)| json!({ "number": n, "name": name })).collect::<Vec<_>>(),
     })
+}
+
+/// The placement ids from the root down to the first sheet whose screen holds the symbol `reference` (`[]` for the root).
+fn sheet_ids_of(design: &eda_model::ir::Design, reference: &str) -> Vec<String> {
+    for e in eda_model::sheet_list::walk(design) {
+        if eda_model::sheet_list::screen_of(design, &e.path).is_some_and(|s| s.symbols.iter().any(|x| x.id == reference)) {
+            return e.path;
+        }
+    }
+    Vec::new()
 }
 
 /// The `Sim.Library` text for a path: relative to the project when it is inside it (`fn.MakeRelativeTo( Prj().GetProjectPath() )` and not
@@ -138,7 +171,7 @@ pub fn library_route(dir: &Path, body: &[u8]) -> Value {
         .map(|m| match &m.kind {
             ModelKind::Subckt { ports } => json!({ "name": m.name, "kind": "subckt", "device": "SUBCKT", "type": "", "pins": ports, "code": m.code }),
             ModelKind::Model { spice_type, model_type } => match model_type {
-                Some(t) => json!({ "name": m.name, "kind": "model", "spice_type": spice_type, "device": t.device, "type": t.type_field, "pins": t.pins, "code": m.code }),
+                Some(t) => json!({ "name": m.name, "kind": "model", "spice_type": spice_type, "modelType": t.name, "device": t.device, "type": t.type_field, "pins": t.pins, "code": m.code }),
                 // `TYPE::RAWSPICE`: KiCad's raw SPICE element, whose pins are not known here
                 None => json!({ "name": m.name, "kind": "model", "spice_type": spice_type, "device": "SPICE", "type": "", "pins": [], "code": m.code }),
             },
@@ -147,9 +180,14 @@ pub fn library_route(dir: &Path, body: &[u8]) -> Value {
     json!({ "ok": lib.messages.is_empty(), "path": stored_path(&path, dir), "models": models, "messages": lib.messages })
 }
 
-/// An IBIS library (`SIM_LIBRARY_IBIS::ReadFile`): each `[Component]` a model of the KIBIS device type, with its pins (`m_ibisPins`), each pin's
-/// models (`ChangePin`) and the differential pins (`isPinDiff`), read by `eda_sim::ibis`; "Invalid IBIS file '%s'" for a file with no
-/// component (KIBIS's own checks of the model tables are not ported).
+/// An IBIS library (`SIM_LIBRARY_IBIS::ReadFile`): `KIBIS` of the file (`eda_sim::ibis`, KiCad's `IbisParser` and its checks), whose messages
+/// go to the dialog's reporter in order, then "Invalid IBIS file '%s'" (an error, with the resolved path, `aFilePath`) when `!m_kibis.m_valid`;
+/// the dialog's `loadLibrary` refuses the library when the reporter has an error (`HasMessageOfSeverity( RPT_SEVERITY_UNDEFINED |
+/// RPT_SEVERITY_ERROR )`): `ok: false`, no model, and `messages` the reported lines (`WX_STRING_REPORTER::GetMessages`, one a line). Else each
+/// `[Component]` is a model of the KIBIS device type, with its pins (`m_ibisPins`), each pin's models (`ChangePin`) and the differential pins
+/// (`isPinDiff`); `messages` then holds what was reported all the same (warnings, the checks' "Checking ..." lines), which KiCad's dialog does
+/// not show. Where KiCad's parser throws (`std::out_of_range`, which ends KiCad), the last line says so and the library is refused, without
+/// "Invalid IBIS file" (`ReadFile` does not get there).
 fn ibis_library(path: &str, expanded: &str, dir: &Path, spice_lib_dir: Option<&Path>) -> Value {
     let file = match eda_sim::library::resolve_library_path(expanded, dir, spice_lib_dir) {
         Ok(f) => f,
@@ -160,8 +198,14 @@ fn ibis_library(path: &str, expanded: &str, dir: &Path, spice_lib_dir: Option<&P
         Err(_) => return json!({ "ok": false, "path": path, "models": [], "messages": [format!("File '{}' does not exist.", file.display())] }),
     };
     let ibis = eda_sim::ibis::read_ibis(&text);
-    if ibis.components.is_empty() {
-        return json!({ "ok": false, "path": path, "models": [], "messages": [format!("Invalid IBIS file '{path}'")] });
+    let mut messages: Vec<String> = ibis.messages.iter().map(|(_, m)| m.clone()).collect();
+    let mut refused = ibis.messages.iter().any(|(s, _)| *s == eda_sim::ibis::Severity::Error);
+    if !ibis.valid && ibis.thrown.is_none() {
+        messages.push(format!("Invalid IBIS file '{}'", file.display()));
+        refused = true;
+    }
+    if refused || ibis.thrown.is_some() {
+        return json!({ "ok": false, "path": path, "models": [], "messages": messages });
     }
     let models: Vec<Value> = ibis
         .components
@@ -175,7 +219,7 @@ fn ibis_library(path: &str, expanded: &str, dir: &Path, spice_lib_dir: Option<&P
             })
         })
         .collect();
-    json!({ "ok": true, "ibis": true, "path": stored_path(path, dir), "models": models, "messages": [] })
+    json!({ "ok": true, "ibis": true, "path": stored_path(path, dir), "models": models, "messages": messages })
 }
 
 /// `GET /api/sim/model/files`: the board folder's files with a SPICE library's usual extensions, relative, sorted; the studio's own folders
@@ -239,14 +283,36 @@ mod tests {
         let f = files_route(&dir);
         assert_eq!(f["files"], json!(["spice/amp.lib"]));
         // an IBIS file: its components with their pins, each pin's models and the differential pins
-        std::fs::write(dir.join("spice/io.ibs"), "[IBIS Ver] 5.1\n[Component] CHIP\n[Pin] signal_name model_name R_pin L_pin C_pin\n1 OUT drv NA NA NA\n2 GND GND NA NA NA\n[Model] drv\n[End]\n").unwrap();
+        // (a file KiCad's IbisParser takes: a [File Name] and [File Rev], the component's [Manufacturer] and [Package], the model's type,
+        // C_comp and voltage range)
+        std::fs::write(
+            dir.join("spice/io.ibs"),
+            "[IBIS Ver] 5.1\n[File Name] io.ibs\n[File Rev] 1.0\n[Component] CHIP\n[Manufacturer] ACME\n[Package]\nR_pkg 0.1 NA NA\nL_pkg 1n NA NA\nC_pkg 1p NA NA\n[Pin] signal_name model_name R_pin L_pin C_pin\n1 OUT drv NA NA NA\n2 GND GND NA NA NA\n[Model] drv\nModel_type Output\nC_comp 1p NA NA\n[Voltage Range] 3.3 3.0 3.6\n[End]\n",
+        )
+        .unwrap();
         let r = library_route(&dir, json!({ "path": "spice/io.ibs" }).to_string().as_bytes());
         assert_eq!((r["ok"].as_bool(), r["ibis"].as_bool(), r["models"][0]["name"].as_str()), (Some(true), Some(true), Some("CHIP")), "{r}");
         assert_eq!(r["models"][0]["ibisPins"], json!([["1", "OUT"], ["2", "GND"]]));
         assert_eq!(r["models"][0]["pinModels"], json!([["drv"], []]));
+        assert_eq!(r["messages"], json!([]));
+        // a header alone: a valid file with no component (KIBIS is valid), so a library with no model
         std::fs::write(dir.join("spice/empty.ibs"), "[IBIS Ver] 5.1\n").unwrap();
         let r = library_route(&dir, json!({ "path": "spice/empty.ibs" }).to_string().as_bytes());
-        assert_eq!(r["messages"], json!(["Invalid IBIS file 'spice/empty.ibs'"]));
+        assert_eq!((r["ok"].as_bool(), r["models"].clone(), r["messages"].clone()), (Some(true), json!([]), json!([])), "{r}");
+        // a file KIBIS refuses: what it reported, then "Invalid IBIS file" with the resolved path
+        std::fs::write(dir.join("spice/bad.ibs"), "[IBIS Ver] 5.1\n[File Name] bad.ibs\n[Component] X\n").unwrap();
+        let r = library_route(&dir, json!({ "path": "spice/bad.ibs" }).to_string().as_bytes());
+        assert_eq!((r["ok"].as_bool(), r["models"].clone()), (Some(false), json!([])), "{r}");
+        let invalid = format!("Invalid IBIS file '{}'", dir.join("spice/bad.ibs").display());
+        assert_eq!(r["messages"], json!(["Checking Header...", "Missing [File Rev]", "Error on line 3", invalid]));
+        // an error that does not invalidate the file still refuses the library (`loadLibrary`), and a warning does not
+        let io = std::fs::read_to_string(dir.join("spice/io.ibs")).unwrap();
+        std::fs::write(dir.join("spice/ramp.ibs"), io.replace("[End]\n", "[Ramp]\ndV/dt_r NA NA NA\n[End]\n")).unwrap();
+        let r = library_route(&dir, json!({ "path": "spice/ramp.ibs" }).to_string().as_bytes());
+        assert_eq!((r["ok"].as_bool(), r["messages"].clone()), (Some(false), json!(["Invalid rising dV/dt.", "Invalid Ramp specification."])), "{r}");
+        std::fs::write(dir.join("spice/warn.ibs"), io.replace("[Voltage Range] 3.3 3.0 3.6", "[Voltage Range] 3.3")).unwrap();
+        let r = library_route(&dir, json!({ "path": "spice/warn.ibs" }).to_string().as_bytes());
+        assert_eq!((r["ok"].as_bool(), r["messages"].clone()), (Some(true), json!(["Failed to read a word.", "Failed to read a word."])), "{r}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
