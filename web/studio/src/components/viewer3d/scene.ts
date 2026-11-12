@@ -881,10 +881,14 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
 
   // The technical layers (`Redraw`'s other branch: `pLayerDispList->DrawCulled( showThickness, solder_mask, throughHolesOuter, anti_board )`).
   const annuli = render.clipSilkOnViaAnnuli ? listShapes(L.viaAnnuli) : thOD;
-  for (const [layer, list] of L.layers) {
+  // The text boxes, the board's and the footprints' (`addShape( const PCB_TEXTBOX* )`), are on their layer's list too: a layer with nothing else still has them.
+  const textBoxes = [...(board.drawings?.text_boxes ?? []), ...board.parts.filter((p) => p.placed).flatMap((p) => fpTextBoxes(p))];
+  const techLayers = new Map(L.layers);
+  for (const b of textBoxes) if (!techLayers.has(b.layer)) techLayers.set(b.layer, []);
+  for (const [layer, list] of techLayers) {
     if (/\.Cu$/.test(layer) || layer === "F.Mask" || layer === "B.Mask") continue;
     const row = techRow(layer);
-    if (!row || !shown(row) || list.length === 0) continue;
+    if (!row || !shown(row) || (list.length === 0 && !textBoxes.some((b) => b.layer === layer))) continue;
     const range = techRange(layer);
     const y = (range[0] + range[1]) / 2;
     const silk = layer === "F.SilkS" || layer === "B.SilkS";
@@ -907,7 +911,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     }
     const meshes: THREE.Object3D[] = layerMeshes(list, range, material, nameOf, jobs);
     // The text boxes on the layer, the board's and the footprints' (`addShape( const PCB_TEXTBOX* )`): a picture of the box (pcbItems3d.ts), culled with the layer.
-    for (const b of [...(board.drawings?.text_boxes ?? []), ...board.parts.filter((p) => p.placed).flatMap((p) => fpTextBoxes(p))]) {
+    for (const b of textBoxes) {
       if (b.layer !== layer) continue;
       const tint = silk ? paletteColor(row) : ((material as THREE.MeshPhongMaterial).userData.ink as THREE.Color | undefined);
       const mesh = buildTextBoxMesh(b, range[side === "top" ? 1 : 0], tint, silk ? "silk" : row);
@@ -965,6 +969,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     maskTracksTop: tagCount("F.Mask", "track") + tagCount("B.Mask", "track"),
     maskViasTop: tagCount("F.Mask", "via"),
     maskViasBottom: tagCount("B.Mask", "via"),
+    silkFpShapePrims: tagCount("F.SilkS", "fp-shape") + tagCount("B.SilkS", "fp-shape"),
     cullPieces: group.children.filter((o) => o.name === "cull-piece").length,
   };
   return group;

@@ -203,9 +203,10 @@
     while (Date.now() - t0 < 20000 && !(view() && view().open && view().parts.total > 0)) await sleep(150);
     await sleep(800);
     const scene = view().scene;
-    const drawn = (scene["silk-shape-line"] ?? 0) + (scene["silk-shape-fill"] ?? 0);
+    // `addFootprintShapes`: each graphic is one or more of KiCad's 2D objects on its silkscreen layer (kicad-port/layers3d.ts), drawn as the layer's "silk-fp-shape" piece.
+    const prims = view().layers3d?.silkFpShapePrims ?? 0;
     t(silkCount > 0, `${silkCount} silkscreen graphics on the placed footprints`);
-    t(drawn === silkCount, `the scene has one piece for each: ${drawn} (${scene["silk-shape-line"] ?? 0} lines, ${scene["silk-shape-fill"] ?? 0} fills)`);
+    t((scene["silk-fp-shape"] ?? 0) >= 1 && prims >= silkCount, `the silkscreen layers draw them: ${prims} objects for ${silkCount} graphics, ${scene["silk-fp-shape"] ?? 0} pieces`);
     // back to the board
     [...document.querySelectorAll("button, [role=tab]")].find((b) => b.textContent.trim() === "PCB")?.click();
     await sleep(800);
