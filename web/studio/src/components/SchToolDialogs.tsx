@@ -16,6 +16,7 @@ import { SheetPinPropertiesDialog } from "./SheetPinPropertiesDialog";
 import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, StrokePropertiesDialog, TextPropertiesDialog } from "./SchPropertiesDialogs";
 import { SchImageDialog } from "./SchImageDialog";
+import { SymbolPickerDialog } from "./SymbolChooserDialog";
 import { commitGraphic } from "./schematic/schShapeTools";
 import { lastPlaced, rememberPlaced } from "../kicad-port/schLastPlaced";
 import { poleOfSpin, spinOfPole, type CarriedDirective } from "../kicad-port/schPlaceTool";
@@ -76,6 +77,8 @@ export function SchToolDialogs() {
       return <SyncPinsDialog key={`sp:${dialog.sheetIds.join(",")}`} dialog={dialog} />;
     case "change_symbols":
       return <ChangeSymbolsDialog key={`cs:${dialog.mode}:${dialog.selected.join(",")}`} dialog={dialog} />;
+    case "variant_symbol":
+      return <VariantSymbolPicker key={`vs:${dialog.id}:${dialog.variant}`} dialog={dialog} />;
     case "edit_text_graphics":
       return <GlobalEditDialog key={`ge:${dialog.selected.join(",")}`} dialog={dialog} />;
     // Properties (`E`, a double-click): SchPropertiesDialogs.tsx; a text box and a directive label reopen the dialogs that drew them.
@@ -321,5 +324,26 @@ function DirectiveDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { ki
         ))}
       </select>
     </Shell>
+  );
+}
+
+/**
+ * Set Variant Symbol... (KiCad 25ec2335 `SCH_EDIT_TOOL::SetVariantSymbol`): `PickSymbolFromLibrary( .., &symbol->GetLibId(), .., compatFunc )` opened on the symbol's own library id;
+ * the pick is set for the variant on the sheet path in view (`SetVariantSymbolOverride`), which the server refuses with KiCad's "Variant Symbol Compatibility" message for a
+ * symbol that is not pin-compatible (UI-LEFT-2 SS16).
+ */
+function VariantSymbolPicker({ dialog }: { dialog: Extract<SchToolDialog, { kind: "variant_symbol" }> }) {
+  const dispatch = useStudioDispatch();
+  const api = useStudioApi();
+  const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  return (
+    <SymbolPickerDialog
+      preselect={dialog.libId}
+      onCancel={close}
+      onChoose={(libId) => {
+        close();
+        void api.cmd({ op: "set_variant_symbol", variant: dialog.variant, id: dialog.id, lib_id: libId });
+      }}
+    />
   );
 }

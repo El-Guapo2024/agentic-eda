@@ -737,6 +737,36 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     "Fields"
   );
+  // KiCad 25ec2335 `FOOTPRINT::GetDynamicProperties`: a row for each mandatory field but the Reference (Value, Datasheet, Description), `PCB_FOOTPRINT_FIELD_PROPERTY`,
+  // whose getter and setter are the board's current design variant's (`GetFieldValueForVariant`; the setter's `AddVariant( variantName )->SetFieldValue`), the field's
+  // own text in the default variant (UI-LEFT-2 PP16). A variant's text is the symbol's record of the variant (`set_symbol_variant`): the board's variants are the
+  // schematic's, as Update PCB from Schematic carries them (one design for both). The rows for the user fields (sorted by name) are not here.
+  const fieldRow = (name: string): void => {
+    const own = (i: PcbItem): FieldInfo | undefined => i.part!.fields?.find((f) => f.name === name);
+    add(
+      {
+        owner: "FOOTPRINT",
+        name,
+        kind: "string",
+        dynamic: true,
+        available: (i) => !!own(i),
+        get: (i) => i.part!.variant?.fields[name] ?? own(i)?.text ?? "",
+        set: (i, v, c) => {
+          const text = String(v);
+          const variant = c.board.shown_variant ?? "";
+          if (variant !== "" && i.part!.variant) {
+            return i.part!.variant.fields[name] === text ? [] : [{ op: "set_symbol_variant", variant, ids: [i.part!.ref], fields: { [name]: text } }];
+          }
+          const f = own(i)!;
+          return f.text === text ? [] : [editFieldCmd(i.part!, f, {}, text)];
+        },
+      },
+      "Fields"
+    );
+  };
+  fieldRow("Value");
+  fieldRow("Datasheet");
+  fieldRow("Description");
   // `GetFPIDAsString`: the link the board file writes (`lib_link`, `GetFPID().Format()`: a built-in `0603` is `Resistor_SMD:R_0603_1608Metric`), else the footprint's name
   add({ owner: "FOOTPRINT", name: "Library Link", kind: "string", get: (i) => i.part!.lib_link ?? i.part!.footprint ?? "" }, "Footprint Properties");
   add({ owner: "FOOTPRINT", name: "Library Description", kind: "string", get: (i) => i.part!.lib_description ?? "" }, "Footprint Properties");

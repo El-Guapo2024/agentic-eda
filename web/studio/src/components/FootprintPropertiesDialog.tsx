@@ -107,7 +107,8 @@ export function FootprintPropertiesDialog() {
   // Fill the form when the dialog opens on a footprint -- not on every poll, or a keystroke would be lost to the next refresh.
   useEffect(() => {
     if (!open || !part) return;
-    setRows(fieldsOf(part).map((f, i) => ({ key: i, from: f.name, name: f.name, text: f.text, layout: layoutOf(f) })));
+    // KiCad 25ec2335 `TransferDataToWindow`: a field's text is the board's current variant's (`GetFieldValueForVariant( variantName, .. )`, UI-LEFT-2 PP16)
+    setRows(fieldsOf(part).map((f, i) => ({ key: i, from: f.name, name: f.name, text: part.variant?.fields[f.name] ?? f.text, layout: layoutOf(f) })));
     setAttrs(attrsOf(part));
     setX(part.at?.[0] ?? 0);
     setY(part.at?.[1] ?? 0);
@@ -173,7 +174,21 @@ export function FootprintPropertiesDialog() {
       if (message) return setError(`${r.name || `Field ${i + 1}`}: ${message}`);
     }
     // A repeated field name as KiCad's reader takes it: the later row's text and look on the first row of the name, a mandatory one's too.
-    const merged = mergeDuplicateFields(rows);
+    // KiCad 25ec2335 `TransferDataFromWindow` in a variant: each field's text goes to the variant (`variant->SetFieldValue( field.GetName(), newText )`) and the field keeps
+    // its own (`newField.SetText( baseText )`). The variant's texts are the symbol's record of it here (`set_symbol_variant`), which the board's variant follows; the
+    // Reference is never a variant's, and a field the symbol does not have stays the footprint's (UI-LEFT-2 PP16).
+    const variant = state.board?.shown_variant ?? "";
+    const inVariant = variant !== "" && !!part.variant;
+    const variantFields: Record<string, string> = {};
+    const shownRows = inVariant
+      ? rows.map((r) => {
+          const own = r.from !== null ? fieldsOf(part).find((f) => f.name === r.from) : undefined;
+          if (!own || r.from === REFERENCE) return r;
+          if (r.text !== (part.variant!.fields[own.name] ?? own.text) && (part.variant!.symbol_fields ?? []).includes(own.name)) variantFields[own.name] = r.text;
+          return { ...r, text: own.text };
+        })
+      : rows;
+    const merged = mergeDuplicateFields(shownRows);
     const [ref0, val0, ...users] = merged;
     const original = (name: string): FieldInfo | undefined => infos.get(name);
     const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -236,6 +251,7 @@ export function FootprintPropertiesDialog() {
     // The Datasheet and the Description the dialog changed, carried to the symbol as Update Schematic from PCB's "Other fields" would (UI-LEFT-2 PP18).
     const symbolEdits = backAnnotateEdits(part, attrs.board_only, new Map([...infos].map(([n, f]) => [n, f.text])), merged);
     if (symbolEdits.length > 0) cmds.push({ op: "set_symbol_fields", edits: symbolEdits });
+    if (Object.keys(variantFields).length > 0) cmds.push({ op: "set_symbol_variant", variant, ids: [part.ref], fields: variantFields });
     if (ref0 && ref0.text.trim() !== part.ref) cmds.push({ op: "rename_symbol", id: part.ref, new_id: ref0.text.trim() });
     if (cmds.length === 0) return close();
     setBusy(true);

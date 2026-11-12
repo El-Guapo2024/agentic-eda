@@ -4728,6 +4728,21 @@
       "flags": []
     },
     {
+      "name": "eeschema.InteractiveEdit.clearVariantSymbol",
+      "label": "Clear Variant Symbol",
+      "tooltip": "Remove the variant symbol override and revert to the base symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "cancel",
+      "flags": []
+    },
+    {
       "name": "eeschema.InteractiveEdit.cleanupSheetPins",
       "label": "Cleanup Sheet Pins",
       "tooltip": "Delete unreferenced sheet pins",
@@ -4965,6 +4980,21 @@
       "macHotkeyRaw": null,
       "macAltHotkeyRaw": null,
       "icon": "rotate_cw",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.setVariantSymbol",
+      "label": "Set Variant Symbol...",
+      "tooltip": "Assign an alternate library symbol for this design variant",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "exchange",
       "flags": []
     },
     {

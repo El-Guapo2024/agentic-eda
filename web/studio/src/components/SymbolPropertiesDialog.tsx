@@ -95,7 +95,8 @@ export function SymbolPropertiesDialog() {
   // the placed unit it was opened on (KiCad's dialog is one `SCH_SYMBOL`'s), else the reference's first
   const baseSymbol = open ? (viewSch?.symbols.find((s) => s.id === open.id && (open.unit === undefined || s.unit === open.unit)) ?? (open.carried ? undefined : api.symbolById(open.id))) : undefined;
   // the symbol as the current variant shows it (`GetFieldText( .., variant )`)
-  const symbol = useMemo(() => (baseSymbol ? symbolInVariant(baseSymbol, variant) : undefined), [baseSymbol, variant]);
+  // the symbol's own library id stays (the dialog edits the symbol: Edit Symbol..., its units and pins are `GetLibId()`'s)
+  const symbol = useMemo(() => (baseSymbol ? { ...symbolInVariant(baseSymbol, variant), lib_id: baseSymbol.lib_id } : undefined), [baseSymbol, variant]);
 
   const [reference, setReference] = useState("");
   const [value, setValue] = useState("");
@@ -346,6 +347,11 @@ export function SymbolPropertiesDialog() {
     after();
   };
   const changeSymbols = (mode: "change" | "update") => thenDo(() => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "change_symbols", mode, selected: [reference.trim() || symbol.id] } }));
+  // KiCad 25ec2335: in a variant Change Symbol... is "Set Variant Symbol..." (`m_changeSymbolBtn->SetLabel`, `OnExchangeSymbol`: `SYMBOL_PROPS_WANT_SET_VARIANT_SYMBOL`), and
+  // "Clear Variant Symbol" is shown for a symbol that has one there (`m_clearVariantSymbolBtn->Show( hasVariantSymbol )`, `OnClearVariantSymbol`)
+  const hasVariantSymbol = variant !== "" && !!baseSymbol?.variants?.[variant]?.symbol_override;
+  const exchange = variant === "" ? changeSymbols("change") : thenDo(() => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "variant_symbol", id: symbol.id, variant, libId: symbol.lib_id ?? "" } }));
+  const clearVariantSymbol = thenDo(() => void api.cmd({ op: "set_variant_symbol", variant, id: symbol.id, lib_id: null }));
   // `editor->LoadSymbol( symbol->GetLibId(), symbol->GetUnit(), symbol->GetBodyStyle() )`; `onUpdateEditSymbol`: enabled when the symbol has its library symbol
   const canEditSymbol = !!symbol.lib_id && !!sch?.lib_symbols[symbol.lib_id];
   const editSymbol = thenDo(() => {
@@ -654,9 +660,14 @@ export function SymbolPropertiesDialog() {
                   <button onClick={changeSymbols("update")} disabled={!!open.carried} data-testid="symbol-update-from-library">
                     Update Symbol from Library...
                   </button>
-                  <button onClick={changeSymbols("change")} disabled={!!open.carried} data-testid="symbol-change">
-                    Change Symbol...
+                  <button onClick={exchange} disabled={!!open.carried} data-testid="symbol-change">
+                    {variant === "" ? "Change Symbol..." : "Set Variant Symbol..."}
                   </button>
+                  {hasVariantSymbol && (
+                    <button onClick={clearVariantSymbol} disabled={!!open.carried} data-testid="symbol-clear-variant-symbol">
+                      Clear Variant Symbol
+                    </button>
+                  )}
                   <button onClick={editSymbol} disabled={!canEditSymbol || !!open.carried} data-testid="symbol-edit">
                     Edit Symbol...
                   </button>

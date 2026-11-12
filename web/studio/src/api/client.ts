@@ -52,8 +52,21 @@ export function fetchVersion(): Promise<string> {
   return getJson<string>("/api/version");
 }
 
+/**
+ * The current design variants of the two editors (KiCad 25ec2335 `SCHEMATIC::m_currentVariant`, `BOARD::m_currentVariant`), which the server resolves the
+ * texts and fields of `GET /api/schematic` and `GET /api/state` in (`?variant=`; UI-LEFT-2 SS16, PP16). The store sets them whenever one changes.
+ */
+const requestVariants = { sch: "", pcb: "" };
+
+export function setRequestVariants(sch: string, pcb: string): void {
+  requestVariants.sch = sch;
+  requestVariants.pcb = pcb;
+}
+
+const variantQuery = (v: string): string => (v !== "" ? `&variant=${encodeURIComponent(v)}` : "");
+
 export async function fetchState(): Promise<BoardState> {
-  const s = await getJson<BoardState & { error?: string }>(`/api/state?clock=${encodeURIComponent(localClock())}`);
+  const s = await getJson<BoardState & { error?: string }>(`/api/state?clock=${encodeURIComponent(localClock())}${variantQuery(requestVariants.pcb)}`);
   if (s.error) throw new ApiError(s.error);
   return s;
 }
@@ -70,7 +83,7 @@ export async function fetchState(): Promise<BoardState> {
  * hierarchy support existed already did.
  */
 export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Schematic> {
-  const query = `?${sheetPath && sheetPath.length > 0 ? `sheet=${sheetPath.join("/")}&` : ""}clock=${encodeURIComponent(localClock())}`;
+  const query = `?${sheetPath && sheetPath.length > 0 ? `sheet=${sheetPath.join("/")}&` : ""}clock=${encodeURIComponent(localClock())}${variantQuery(requestVariants.sch)}`;
   const s = await getJson<Schematic & { error?: string }>(`/api/schematic${query}`);
   if (s.error) throw new ApiError(s.error);
   // Defensive defaults for the lib_symbols/power_symbols/no_connects

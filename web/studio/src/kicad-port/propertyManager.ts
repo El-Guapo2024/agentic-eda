@@ -59,6 +59,10 @@ export interface PropertyDef<I extends PropItem = PropItem, C = unknown, K = unk
   validate?: (value: PropValue, item: I, ctx: C) => string | null;
   /** `SetIsHiddenFromPropertiesManager`. */
   hidden?: boolean;
+  /** An `INSPECTABLE::GetDynamicProperties` property (KiCad 25ec2335 `FOOTPRINT::GetDynamicProperties`: a footprint's field rows): the Properties panel lists and edits it
+   *  (`PROPERTY_MANAGER::GetProperties( aObject )`), but it is no registration of the class, so `GetProperties( type )` and `GetProperty( type, name )` -- which the
+   *  expression language and Find by Properties ask -- do not know it. */
+  dynamic?: boolean;
   /** `SetIsHiddenFromDesignEditors`. */
   hiddenFromDesignEditors?: boolean;
   /** `SetIsHiddenFromLibraryEditors`: not listed in the Footprint and Symbol Editors' panels. */
@@ -241,9 +245,10 @@ export class PropertyManager<I extends PropItem = PropItem, C = unknown, K = unk
   }
 
   /** `GetProperties`: every property of the class, own and inherited, once each. */
-  getProperties(type: string): readonly PropertyDef<I, C, K>[] {
+  getProperties(type: string, withDynamic = false): readonly PropertyDef<I, C, K>[] {
     this.ensureBuilt();
-    return this.classes.get(type)?.all ?? [];
+    const all = this.classes.get(type)?.all ?? [];
+    return withDynamic ? all : all.filter((p) => !p.dynamic);
   }
 
   /** `GetDisplayOrder`. */
@@ -262,9 +267,9 @@ export class PropertyManager<I extends PropItem = PropItem, C = unknown, K = unk
    * `GetProperty( type, name )`. KiCad picks the first of several properties of one name by their address; here, given the item and its context, the first of them that
    * the item has (a dimension's "Text" is two properties, one of them switched off for all but a leader), else the first.
    */
-  getProperty(type: string, name: string, item?: I, ctx?: C): PropertyDef<I, C, K> | undefined {
+  getProperty(type: string, name: string, item?: I, ctx?: C, withDynamic = false): PropertyDef<I, C, K> | undefined {
     const lower = name.toLowerCase();
-    const same = this.getProperties(type).filter((p) => p.name.toLowerCase() === lower);
+    const same = this.getProperties(type, withDynamic).filter((p) => p.name.toLowerCase() === lower);
     if (same.length <= 1 || item === undefined) return same[0];
     return same.find((p) => this.isAvailableFor(type, p, item, ctx as C)) ?? same[0];
   }
