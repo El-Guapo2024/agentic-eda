@@ -1,6 +1,6 @@
 // The round-2 leftovers of task-r2-misc-leftovers in the page (findings/round2/r2-pcb-edit.md):
 //   * A5: Track & Via Properties on a via has the Via type, Start layer and End layer rows (no Annular rings on two layers); Micro is one set_via_layers, one Undo.
-//   * A6: a footprint's Properties panel rows are FOOTPRINT_DESC's: Library Description, Keywords, Component Class, the overrides with Zone Connection Style;
+//   * A6: a footprint's Properties panel rows are FOOTPRINT_DESC's (and KiCad 25ec2335's dynamic field rows): Library Description, Keywords, Component Class, the overrides with Zone Connection Style;
 //     no Value, MPN, Block or Nets row; Zone Connection Style "Solid" is one undo step.
 //   * Mirror of a text box (PCB_TEXTBOX::Mirror): the box mirrors about its position and its text angle becomes 180; one Undo.
 // Run it in the page of a served COPY of a board with footprints placed (it edits and undoes, and leaves Strict off while it runs); it answers
@@ -110,7 +110,12 @@
       await select([fp.ref]); await sleep(600);
       const row = (name) => document.querySelector(`.prop-row[data-prop="${name}"]`);
       for (const name of ["Library Link", "Library Description", "Keywords", "Component Class", "Clearance Override", "Zone Connection Style"]) t(!!row(name), `the ${name} row`);
-      for (const name of ["Value", "MPN", "Block", "Nets"]) t(!row(name), `no ${name} row`);
+      // KiCad 25ec2335 `FOOTPRINT::GetDynamicProperties`: the mandatory fields but the Reference are rows of the Fields group (`PCB_FOOTPRINT_FIELD_PROPERTY`, which the
+      // panel adds with `GetCommonDynamicProperties`), after the Reference (PARITY-pcb section 110)
+      t(!!row("Value"), "the Value row (a dynamic Fields row)");
+      const fieldRows = [...document.querySelectorAll(".prop-row")].map((r) => r.getAttribute("data-prop"));
+      t(fieldRows.indexOf("Reference") >= 0 && fieldRows.indexOf("Value") === fieldRows.indexOf("Reference") + 1, `Value follows Reference (${fieldRows.slice(0, 12).join(", ")})`);
+      for (const name of ["MPN", "Block", "Nets"]) t(!row(name), `no ${name} row`);
       const zc = row("Zone Connection Style")?.querySelector("select");
       t(!!zc, "Zone Connection Style is a choice");
       if (!zc) return;
