@@ -14,7 +14,7 @@ import { useEffect, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { useFpApi, useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
-import { useCommonOptions, type CommonOptions } from "../state/commonOptions";
+import { useCommonOptions, windowOptionsOf, type CommonOptions } from "../state/commonOptions";
 import { closeSelectionMenu, getCommonTool, requestMoreSelectionChoices, setLasso, setLastPointer, setMeasure, setMenuHighlight, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
 import { clarificationRows } from "../kicad-port/clarificationMenu";
 import { isMac } from "../platform";
@@ -157,7 +157,7 @@ export function CommonToolHost() {
         }
         return;
       }
-      if (latest.current.opts.selectionMode !== "lasso" || !a.toolIdle || picker.session()) return;
+      if (windowOptionsOf(latest.current.opts, a.tab).selectionMode !== "lasso" || !a.toolIdle || picker.session()) return;
       const hits = a.candidatesAt(w[0], w[1]).filter((h) => h.kind !== "zone" || a.selection.has(h.id)); // "Don't allow starting a drag from a zone filled area that isn't already selected"
       if (hits.length > 0 && !e.shiftKey) return;
       e.stopPropagation();

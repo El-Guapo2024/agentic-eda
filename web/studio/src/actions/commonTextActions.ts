@@ -17,22 +17,24 @@ function requestedIds(adapter: EditorAdapter): string[] {
 export function registerTextActions(m: Map<string, ActionHandler>, ctx: CommonActionContext): void {
   if (ctx.tab !== "pcb" && ctx.tab !== "footprint") return;
 
-  // ACTIONS::leftJustify / centerJustify / rightJustify -- EDIT_TOOL::JustifyText: every selected text gets the horizontal justification, as
-  // one undo step; items that are not text are left alone and a locked text is skipped.
+  // ACTIONS::leftJustify / centerJustify / rightJustify -- EDIT_TOOL::JustifyText: every selected text and text box gets the horizontal justification, as
+  // one undo step; items that are not text are left alone and a locked one is skipped (on the board: `FilterCollectorForLockedItems` is the PCB Editor's only).
   const justify =
     (which: TextJustify): ActionHandler =>
     () => {
       const adapter = ctx.getAdapter();
       if (!adapter) return;
+      // `if( isRouterActive() ) { wxBell(); return 0; }`
+      if (adapter.tab === "pcb" && (ctx.state.drawState?.kind === "route" || ctx.state.drawState?.kind === "diffpair")) return;
       const ids = requestedIds(adapter);
       if (ids.length === 0) return;
       void (async () => {
         if (adapter.tab === "pcb") {
           const board = ctx.api.getState().board;
           if (!board) return;
-          const { cmds, skippedLocked } = boardJustifyCmds(board, ids, which);
+          // a locked item is left out silently: JustifyText does not call `ReportFilteredLockedItems` (task-v10-handlers: the studio said "Item locked.")
+          const { cmds } = boardJustifyCmds(board, ids, which);
           if (cmds.length > 0) await ctx.api.cmdBatch(cmds);
-          else if (skippedLocked > 0) ctx.dispatch({ type: "TOAST", message: "Item locked.", kind: "info" });
         } else if (adapter.tab === "footprint") {
           const fp = ctx.fpApi.getState();
           if (!fp.name || !fp.footprint) return;

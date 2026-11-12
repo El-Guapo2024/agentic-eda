@@ -31,6 +31,10 @@ export interface WindowOptions {
    *  (`render_settings.cpp`: `m_drawBoundingBoxes( false )`, flipped only by `COMMON_TOOLS::ToggleBoundingBoxes`), so `parseWindowOptions` never reads it
    *  back: every session starts with it off. */
   drawBoundingBoxes: boolean;
+  /** `PCB_SELECTION_TOOL::m_selectionMode` / `SCH_SELECTION_TOOL::m_selectionMode`: which tool a drag on empty space starts, "rect" (`INSIDE_RECTANGLE`, the
+   *  constructor's) or "lasso" (`INSIDE_LASSO`). A member of each frame's selection tool, set only by Select by Rectangle / Select by Lasso and never saved, so
+   *  `parseWindowOptions` never reads it back either (task-v10-handlers: it was one saved setting for the four editors). */
+  selectionMode: "rect" | "lasso";
 }
 
 /** `KIGFX::GRID_SNAPPING`: ALWAYS, WITH_GRID, NEVER. */
@@ -46,6 +50,7 @@ export const DEFAULT_WINDOW_OPTIONS: WindowOptions = {
   gridSnap: "always",
   gridAxes: false,
   drawBoundingBoxes: false,
+  selectionMode: "rect",
 };
 
 const crossHair = (v: unknown, d: CrossHairMode): CrossHairMode => (v === "small" || v === "full" || v === "diag45" ? v : d);
@@ -64,6 +69,7 @@ export function parseWindowOptions(raw: unknown, base: WindowOptions = DEFAULT_W
     gridAxes: typeof j.gridAxes === "boolean" ? j.gridAxes : base.gridAxes,
     // not a saved setting (see `WindowOptions::drawBoundingBoxes`)
     drawBoundingBoxes: false,
+    selectionMode: "rect",
   };
 }
 

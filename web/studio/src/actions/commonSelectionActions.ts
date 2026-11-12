@@ -14,7 +14,7 @@ import { isCanvasTab, type PickedItem } from "./editorAdapter";
 import { picker } from "./pcbPicker";
 import type { PickerSession } from "../kicad-port/pickerHost";
 import { cancelAreaTool, getCommonTool, getLastPointer, setMeasure, setPickerHover, setZoomArea, showSelectionMenu } from "../state/commonTool";
-import { setCommonOptions } from "../state/commonOptions";
+import { setWindowOptions } from "../state/commonOptions";
 import { selectionModeForAction } from "../kicad-port/lasso";
 import { idsOfParameter, reselectIds, selectCursorResult, selectIds, unselectIds } from "../kicad-port/selectionEvents";
 
@@ -123,13 +123,13 @@ export function registerSelectionActions(m: Map<string, ActionHandler>, ctx: Com
   });
 
   // ACTIONS::selectSetRect / selectSetLasso -- PCB_SELECTION_TOOL::SetSelectRect / SetSelectPoly (and the schematic's): `m_selectionMode =
-  // INSIDE_RECTANGLE / INSIDE_LASSO`, then `PostAction( ACTIONS::selectionTool )`. components/CommonToolHost.tsx draws the lasso.
+  // INSIDE_RECTANGLE / INSIDE_LASSO`, then `PostAction( ACTIONS::selectionTool )`. The mode is the frame's own selection tool's and is not saved. components/CommonToolHost.tsx draws the lasso.
   m.set("common.Interactive.selectSetRect", () => {
-    setCommonOptions({ selectionMode: selectionModeForAction("selectSetRect") });
+    setWindowOptions(ctx.tab, { selectionMode: selectionModeForAction("selectSetRect") });
     cancelActiveTool();
   });
   m.set("common.Interactive.selectSetLasso", () => {
-    setCommonOptions({ selectionMode: selectionModeForAction("selectSetLasso") });
+    setWindowOptions(ctx.tab, { selectionMode: selectionModeForAction("selectSetLasso") });
     cancelActiveTool();
   });
 
