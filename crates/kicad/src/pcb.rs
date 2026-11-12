@@ -1174,6 +1174,10 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         defaults["dimension_precision"] = precision;
         defaults["dimensions"] = dims;
     }
+    // Board Setup > Design Rules > Zones (KiCad 25ec2335 `defaults.zones.*`, UI-LEFT-2 BB4): the defaults a new zone starts from, once the design keeps some
+    if let Some(z) = design.drawings.as_ref().and_then(|d| d.zone_defaults.as_ref()) {
+        project["board"]["design_settings"]["defaults"]["zones"] = crate::import::project_zones_json(z);
+    }
     // (a check whose marker names its layer is listed on each copper layer of the board: `drc_exclusions::markers_on`)
     let copper: Vec<String> = model.board.layers.iter().filter(|l| eda_model::layers::is_copper_layer_name(l)).cloned().collect();
     let waived = crate::drc_exclusions::project_entries_on(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()), &copper);

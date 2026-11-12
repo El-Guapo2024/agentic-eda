@@ -365,3 +365,27 @@ fn merge_project_setup_pages_keeps_each_group_as_kicad_reads_it() {
     assert_eq!((model.board.tuning_patterns.diff_pair.min_amplitude_nm, model.board.tuning_patterns.diff_pair.max_amplitude_nm), (mm(1.2), mm(1.0)));
     assert_eq!(model.board.tuning_patterns.diff_pair.corner_radius_percentage, 150, "no clamp");
 }
+
+/// KiCad 25ec2335's Board Setup > Zones (`PANEL_SETUP_ZONES`): the project's `defaults.zones.*` are the design's zone defaults, read back as they were written,
+/// with KiCad's defaults for a missing key and an out-of-range value (UI-LEFT-2 BB4).
+#[test]
+fn the_projects_zone_defaults_are_read_and_written() {
+    use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, ZoneBorderStyle, ZoneSmoothing};
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let pro = serde_json::json!({ "board": { "design_settings": { "defaults": { "zones": {
+        "min_clearance": 0.3, "min_thickness": 0.2, "fill_mode": 1, "hatch_thickness": 0.6, "hatch_gap": 0.9, "hatch_orientation": 45.0,
+        "border_display_style": 1, "border_hatch_pitch": 7.0, "thermal_relief_gap": 0.4, "thermal_relief_spoke_width": 0.35, "pad_connection": 3,
+        "corner_smoothing": 2, "corner_radius": 0.5, "remove_islands": 2, "min_island_area": 4.0
+    } } } } });
+    eda_kicad::merge_project_zone_defaults(&mut design, &pro.to_string());
+    let z = design.drawings.as_ref().and_then(|d| d.zone_defaults.clone()).expect("the defaults");
+    assert_eq!((z.clearance, z.min_thickness, z.fill_mode, z.hatch_thickness, z.hatch_gap, z.hatch_orientation_mdeg), (mm(0.3), mm(0.2), FillMode::HatchPattern, mm(0.6), mm(0.9), 45_000));
+    assert_eq!((z.border_style, z.border_hatch_pitch), (ZoneBorderStyle::Full, mm(0.5)), "a pitch above 2 mm is the default");
+    assert_eq!((z.thermal_gap, z.thermal_spoke_width, z.pad_connection), (mm(0.4), mm(0.35), PadConnection::ThtThermal));
+    assert_eq!((z.smoothing, z.corner_radius, z.island_removal_mode, z.min_island_area), (ZoneSmoothing::Fillet, mm(0.5), IslandRemovalMode::Area, 4_000_000_000_000));
+    let project: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();
+    let mut back = design.clone();
+    back.drawings.as_mut().unwrap().zone_defaults = None;
+    eda_kicad::merge_project_zone_defaults(&mut back, &project.to_string());
+    assert_eq!(back.drawings.as_ref().unwrap().zone_defaults, Some(z), "read back as written");
+}

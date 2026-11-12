@@ -984,6 +984,8 @@ fn handle(
         ("POST", "/api/rule_editor/check") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::check(dir, &body).to_string().as_bytes()),
         ("POST", "/api/rule_editor/show_matches") => respond(stream, "200 OK", "application/json", crate::rule_editor_api::show_matches(dir, &body).to_string().as_bytes()),
         // Board Setup > Component Classes (`crate::board_setup_api`): the field and sheet names of the board's footprints, whether each assignment compiles and what it matches.
+        // Board Setup's "Import Settings from Another Board...": the other board's settings for the pages (nothing on this board changes)
+        ("POST", "/api/import_settings") => respond(stream, "200 OK", "application/json", crate::import_settings_api::import_settings(dir, &body).to_string().as_bytes()),
         ("POST", "/api/component_classes") => respond(stream, "200 OK", "application/json", crate::board_setup_api::component_classes(dir, &body).to_string().as_bytes()),
         ("POST", "/api/swap_nets/preview") => respond(stream, "200 OK", "application/json", crate::pad_nets_api::preview(dir, &body).to_string().as_bytes()),
         // What Track & Via Properties' OK would ask first: a short, then the pads a net change takes along (`confirmShortingNets`, `confirmPadChange`).

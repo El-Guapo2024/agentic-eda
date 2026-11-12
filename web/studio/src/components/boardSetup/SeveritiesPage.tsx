@@ -7,7 +7,7 @@ import checks from "../../kicad/drc_checks.json";
 import { useStudioState } from "../../state/store";
 import { severitiesToSend, severityOf, type SeverityItem } from "../../kicad-port/boardSetupRules";
 import type { RuleSeverity } from "../../api/types";
-import { PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 interface CheckItem extends SeverityItem {
   title: string;
@@ -28,6 +28,8 @@ export function SeveritiesPage({ hidden, onDirty }: PageProps) {
   // The page edits every check's severity (the table only names the ones that differ from KiCad's default).
   const source = useMemo<Record<string, RuleSeverity> | undefined>(() => (table ? Object.fromEntries(ITEMS.map((i) => [i.key, severityOf(i, table)])) : undefined), [table]);
   const page = usePageDraft<Record<string, RuleSeverity>>(source);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("severities", (b) => (b.board_rules?.severities ? Object.fromEntries(ITEMS.map((i) => [i.key, severityOf(i, b.board_rules!.severities!)])) : undefined), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;

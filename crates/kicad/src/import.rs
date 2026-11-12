@@ -1044,6 +1044,95 @@ fn read_td_block(entry: &serde_json::Value, p: &mut eda_model::teardrop_params::
     }
 }
 
+/// KiCad 25ec2335's Board Setup > Design Rules > Zones (`PANEL_SETUP_ZONES`, `BOARD_DESIGN_SETTINGS::GetDefaultZoneSettings`): the project's
+/// `defaults.zones.*` (`board_design_settings.cpp`' `PARAM_SCALED` / `PARAM_ENUM` / `PARAM_LAMBDA` entries) as a zone with no outline or net, what a new zone
+/// starts from (`ZONE_CREATE_HELPER::createNewZone`). A key the section lacks is KiCad's default (`aResetIfMissing`), an out-of-range number the default
+/// too; absent `defaults.zones`, or text that is not JSON, is `None`. UI-LEFT-2 BB4.
+pub fn project_zone_defaults(project_json: &str) -> Option<eda_model::ir::Zone> {
+    use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, Zone, ZoneBorderStyle, ZoneSmoothing};
+    let root: serde_json::Value = serde_json::from_str(project_json).ok()?;
+    let z = root.get("board")?.get("design_settings")?.get("defaults")?.get("zones")?.as_object()?;
+    let num = |k: &str| z.get(k).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
+    // `PARAM_SCALED` in mm with its range: a value outside it is the default
+    let mm_in = |k: &str, def: Nm, lo: f64, hi: f64| num(k).filter(|v| (lo..=hi).contains(v)).map(mm_to_nm).unwrap_or(def);
+    let mut zone = Zone { net: String::new(), layer: "F.Cu".into(), outline: vec![], ..Default::default() };
+    let d = Zone::default();
+    zone.clearance = mm_in("min_clearance", d.clearance, 0.0, 25.0);
+    zone.min_thickness = mm_in("min_thickness", d.min_thickness, 0.025, 25.0);
+    zone.fill_mode = match num("fill_mode").map(|v| v as i64) {
+        Some(1) => FillMode::HatchPattern,
+        _ => FillMode::Polygons,
+    };
+    zone.hatch_thickness = mm_in("hatch_thickness", d.hatch_thickness, 0.0, 25.0);
+    zone.hatch_gap = mm_in("hatch_gap", d.hatch_gap, 0.0, 25.0);
+    zone.hatch_orientation_mdeg = num("hatch_orientation").map(|deg| (deg * 1000.0).round() as eda_model::ir::Millideg).unwrap_or(0);
+    zone.hatch_smoothing_level = num("hatch_smoothing_level").filter(|v| (0.0..=3.0).contains(v)).map(|v| v as i32).unwrap_or(0);
+    zone.hatch_smoothing_value = num("hatch_smoothing_value").filter(|v| (0.0..=1.0).contains(v)).unwrap_or(0.1);
+    // `ZONE_BORDER_DISPLAY_STYLE`: NO_HATCH, DIAGONAL_FULL, DIAGONAL_EDGE, INVISIBLE_BORDER
+    zone.border_style = match num("border_display_style").map(|v| v as i64) {
+        Some(0) => ZoneBorderStyle::None,
+        Some(1) => ZoneBorderStyle::Full,
+        _ => ZoneBorderStyle::Edge,
+    };
+    zone.border_hatch_pitch = mm_in("border_hatch_pitch", d.border_hatch_pitch, 0.1, 2.0);
+    zone.thermal_gap = mm_in("thermal_relief_gap", d.thermal_gap, 0.0, 25.0);
+    zone.thermal_spoke_width = mm_in("thermal_relief_spoke_width", d.thermal_spoke_width, 0.0, 25.0);
+    // `ZONE_CONNECTION`: NONE, THERMAL, FULL, THT_THERMAL
+    zone.pad_connection = match num("pad_connection").map(|v| v as i64) {
+        Some(0) => PadConnection::None,
+        Some(2) => PadConnection::Full,
+        Some(3) => PadConnection::ThtThermal,
+        _ => PadConnection::Thermal,
+    };
+    // `CORNER_SMOOTHING`: NO_SMOOTHING, CHAMFER, FILLET
+    zone.smoothing = match num("corner_smoothing").map(|v| v as i64) {
+        Some(1) => ZoneSmoothing::Chamfer,
+        Some(2) => ZoneSmoothing::Fillet,
+        _ => ZoneSmoothing::None,
+    };
+    zone.corner_radius = num("corner_radius").map(mm_to_nm).unwrap_or(Nm::ZERO);
+    zone.island_removal_mode = match num("remove_islands").map(|v| v as i64) {
+        Some(1) => IslandRemovalMode::Never,
+        Some(2) => IslandRemovalMode::Area,
+        _ => IslandRemovalMode::Always,
+    };
+    // mm² -> nm²
+    zone.min_island_area = (num("min_island_area").unwrap_or(10.0) * 1e12) as i64;
+    Some(zone)
+}
+
+/// The zone defaults a design keeps (`DrawingsSection::zone_defaults`) as the project's `defaults.zones` (the writer's side of [`project_zone_defaults`]).
+pub fn project_zones_json(z: &eda_model::ir::Zone) -> serde_json::Value {
+    use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, ZoneBorderStyle, ZoneSmoothing};
+    let mm = eda_model::units::to_mm;
+    serde_json::json!({
+        "min_clearance": mm(z.clearance),
+        "min_thickness": mm(z.min_thickness),
+        "fill_mode": match z.fill_mode { FillMode::Polygons => 0, FillMode::HatchPattern => 1 },
+        "hatch_thickness": mm(z.hatch_thickness),
+        "hatch_gap": mm(z.hatch_gap),
+        "hatch_orientation": z.hatch_orientation_mdeg as f64 / 1000.0,
+        "hatch_smoothing_level": z.hatch_smoothing_level,
+        "hatch_smoothing_value": z.hatch_smoothing_value,
+        "border_display_style": match z.border_style { ZoneBorderStyle::None => 0, ZoneBorderStyle::Full => 1, ZoneBorderStyle::Edge => 2 },
+        "border_hatch_pitch": mm(z.border_hatch_pitch),
+        "thermal_relief_gap": mm(z.thermal_gap),
+        "thermal_relief_spoke_width": mm(z.thermal_spoke_width),
+        "pad_connection": match z.pad_connection { PadConnection::None => 0, PadConnection::Thermal => 1, PadConnection::Full => 2, PadConnection::ThtThermal => 3 },
+        "corner_smoothing": match z.smoothing { ZoneSmoothing::None => 0, ZoneSmoothing::Chamfer => 1, ZoneSmoothing::Fillet => 2 },
+        "corner_radius": mm(z.corner_radius),
+        "remove_islands": match z.island_removal_mode { IslandRemovalMode::Always => 0, IslandRemovalMode::Never => 1, IslandRemovalMode::Area => 2 },
+        "min_island_area": z.min_island_area as f64 / 1e12,
+    })
+}
+
+/// [`project_zone_defaults`] into the design (`DrawingsSection::zone_defaults`), when the project has the section.
+pub fn merge_project_zone_defaults(design: &mut Design, project_json: &str) {
+    if let Some(z) = project_zone_defaults(project_json) {
+        design.drawings.get_or_insert_with(Default::default).zone_defaults = Some(z);
+    }
+}
+
 /// A `.kicad_pro`'s Board Setup > Text & Graphics > Dimensions defaults (8303b2ad `board_design_settings.cpp`): `defaults.dimension_units` and
 /// `defaults.dimension_precision` (`PARAM_ENUM`s, INCH..AUTOMATIC and X..V_VVVVV), `defaults.dimensions.units_format` (NO_SUFFIX..PAREN_SUFFIX),
 /// `suppress_zeroes`, `text_position` (OUTSIDE..INLINE: "excluding DIM_TEXT_POSITION::MANUAL from the valid range"), `keep_text_aligned`, and the

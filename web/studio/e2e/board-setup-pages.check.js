@@ -401,8 +401,8 @@
       const order = nav();
       const after = (a, b) => order.indexOf(a) >= 0 && order.indexOf(b) === order.indexOf(a) + 1;
       // KiCad 25ec2335's `DIALOG_BOARD_SETUP`: Drill Chart is the last page of Board Stackup, right after Solder Mask/Paste; 8303b2ad's Zone Hatch Offsets
-      // (25ec2335 moved it into Design Rules > Zones, which the studio has not) follows it, the last of the group as it was in 8303b2ad.
-      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Drill Chart") && after("Drill Chart", "Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
+      // is on Design Rules > Zones, after Pre-defined Sizes (UI-LEFT-2 BB4).
+      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Drill Chart") && after("Pre-defined Sizes", "Zones") && after("Zones", "Teardrops") && !order.includes("Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
       const stored = async () => (await state()).board_rules;
       const formattingBefore = JSON.stringify((await stored()).formatting);
       const dash = () => p.querySelector('input[aria-label="Dash length"]');
@@ -423,7 +423,9 @@
       check("Formatting: Apply stores the dash and gap lengths and the footprint boxes, and marks the page as set", savedFormatting === "Saved." && rules.formatting.dash_length_ratio === 8 && rules.formatting.gap_length_ratio === 2.5 && rules.formatting.apply_to_fp_fields === true && rules.formatting.apply_to_fp_shapes === true && rules.formatting.apply_to_fp_text === false && rules.overlay.includes("formatting"), JSON.stringify(rules.formatting));
 
       step("opening Zone Hatch Offsets");
-      p = await openPage("Zone Hatch Offsets");
+      // (KiCad 25ec2335: the hatch offsets panel is on the Zones page, under the default zone settings)
+      await openPage("Zones");
+      p = page("Zone Hatch Offsets");
       const layers = [...p.querySelectorAll("tbody tr[data-layer]")].map((tr) => tr.dataset.layer);
       check("Zone Hatch Offsets: a row for each copper layer, front to back", layers.join() === ((await state()).layers ?? ["F.Cu", "B.Cu"]).join(), layers.join());
       const hx = (layer) => p.querySelector(`input[aria-label="${layer} hatch offset X"]`);

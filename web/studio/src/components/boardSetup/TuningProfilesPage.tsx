@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import { useStudioState } from "../../state/store";
 import { PROFILE_TYPE_LABEL, addTrackRow, addViaOverride, asToPs, checkProfiles, emptyProfile, missingProfiles, profilesDraftOf, profilesToSend, psToAs, sameProfiles, type ProfilesDraft } from "../../kicad-port/setupPages";
 import type { ProfileLayerEntry, ProfileViaOverride, TuningProfile, TuningProfileType } from "../../api/types";
-import { Check, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { Check, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 import { defaultStackup } from "../../kicad-port/boardSetupRules";
 import { calculateTrackParametersForCell, type CalculationType } from "../../kicad-port/tuningCalculator";
 import { MessageDialog } from "../panels/appearance/shared";
@@ -28,6 +28,8 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
   const copper = board?.layers ?? [];
   const stored = board?.board_rules?.tuning_profiles;
   const page = usePageDraft<ProfilesDraft>(board?.board_rules && stored ? profilesDraftOf(stored) : undefined);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("tuning_profiles", (b) => (b.board_rules?.tuning_profiles ? profilesDraftOf(b.board_rules.tuning_profiles) : undefined), page.importDraft);
   const apply = usePageApply();
   const [sel, setSel] = useState(0);
   // `DisplayErrorMessage` of the calculator

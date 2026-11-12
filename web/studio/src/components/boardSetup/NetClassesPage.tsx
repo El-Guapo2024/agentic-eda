@@ -28,7 +28,7 @@ import { hasRegexSyntax, isRegex } from "../../kicad-port/netPattern";
 import { carryRenamedClass } from "../../kicad-port/appearanceNets";
 import { classColorsInForce } from "../../kicad-port/appearance";
 import type { Cmd, NetClass, NetClassSchematic } from "../../api/types";
-import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 interface Draft {
   def: NetClass;
@@ -74,6 +74,14 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
   // `UpdateDelayProfileNames`: a blank, then the project's profiles.
   const profileNames = useMemo(() => (rules?.tuning_profiles?.profiles ?? []).map((p) => p.name).filter((n) => n !== ""), [rules]);
   const page = usePageDraft<Draft>(source);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("net_classes", (b) => {
+    // `PANEL_SETUP_NETCLASSES::ImportSettingsFrom( otherProjectFile.m_NetSettings )`: the classes with every column, the patterns, the colours, the profiles
+    const r = b.board_rules;
+    if (!r?.net_classes) return undefined;
+    const { default: def, classes, schematic } = netClassSettingsOf(r);
+    return { def, classes, rows: assignmentRows(classes), schematic: { ...(schematic ?? {}) }, profiles: { ...(r.tuning_profiles?.class_profiles ?? {}) }, colors: { ...(r.net_class_pcb_colors ?? {}) } };
+  }, page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
 

@@ -272,6 +272,8 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                     eda::merge_project_teardrops(&mut design, &pro_text);
                     // Text & Graphics > Dimensions: the defaults a new dimension is styled from, which the project keeps.
                     eda_kicad::merge_project_dimension_defaults(&mut design, &pro_text);
+                    // Board Setup > Zones (KiCad 25ec2335 `defaults.zones.*`): what a new zone starts from.
+                    eda_kicad::merge_project_zone_defaults(&mut design, &pro_text);
                     // The project's own DRC exclusions (`board.design_settings.drc_exclusions`, `BOARD_DESIGN_SETTINGS::m_DrcExclusions`), their items named as the
                     // derived board names them, so kicad-cli still waives them.
                     let derived = eda_kicad::export_kicad_pcb_mapped(&design, &model, &eda_kicad::ExportMeta { date: "", title: "" }).map(|(_, map)| map).unwrap_or_default();
@@ -318,6 +320,8 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                     eda::merge_project_setup_pages(&mut model, &pro_text);
                     eda::merge_project_predefined_sizes(&mut design, &pro_text);
                     eda_kicad::merge_project_dimension_defaults(&mut design, &pro_text);
+                    // Board Setup > Zones (KiCad 25ec2335 `defaults.zones.*`): what a new zone starts from.
+                    eda_kicad::merge_project_zone_defaults(&mut design, &pro_text);
                     let dir = std::fs::canonicalize(&args.input).ok().and_then(|p| p.parent().map(Path::to_path_buf));
                     setup = dir.map(|dir| eda_kicad::library_table::import_project_setup(&dir, out, Some(&pro_text)));
                 }

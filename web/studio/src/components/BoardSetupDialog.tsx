@@ -16,7 +16,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { nmFrom, nmTo } from "../state/units";
 import { predefinedSizesCmds, validatePredefinedSizes } from "../kicad-port/boardSetupRules";
 import { DEFAULT_TEARDROP_PARAMS } from "../kicad-port/teardropParams";
-import type { DiffPairPreset, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
+import type { BoardState, DiffPairPreset, DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Nm } from "../api/types";
 import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
 import { FormattingPage } from "./boardSetup/FormattingPage";
@@ -32,6 +32,9 @@ import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
 import { TuningPatternsPage } from "./boardSetup/TuningPatternsPage";
 import { TuningProfilesPage } from "./boardSetup/TuningProfilesPage";
 import { ZoneHatchOffsetsPage } from "./boardSetup/ZoneHatchOffsetsPage";
+import { ZonesPage } from "./boardSetup/ZonesPage";
+import { ImportSettingsDialog } from "./boardSetup/ImportSettingsDialog";
+import { SetupImportContext, type SetupImport } from "./boardSetup/fields";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import "../styles/boardSetup.css";
 
@@ -40,7 +43,7 @@ export type Page =
   | "stackup"
   | "mask_paste"
   | "drill_chart"
-  | "hatch_offsets"
+  | "zones"
   | "text_graphics"
   | "formatting"
   | "dimensions"
@@ -67,7 +70,6 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       // KiCad 25ec2335 adds Drill Chart here, after Solder Mask/Paste (`m_drillChartPage`); 8303b2ad's Zone Hatch Offsets, which 25ec2335 folds into Design
       // Rules > Zones (`PANEL_SETUP_ZONES`), stays the last of the group as 8303b2ad has it.
       { id: "drill_chart", label: "Drill Chart" },
-      { id: "hatch_offsets", label: "Zone Hatch Offsets" },
     ],
   },
   {
@@ -84,6 +86,8 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
     pages: [
       { id: "constraints", label: "Constraints" },
       { id: "tracks_vias", label: "Pre-defined Sizes" },
+      // KiCad 25ec2335: Zones (`PANEL_SETUP_ZONES`: the default zone settings, then the hatch offsets that were 8303b2ad's own "Zone Hatch Offsets" page)
+      { id: "zones", label: "Zones" },
       { id: "teardrops", label: "Teardrops" },
       { id: "tuning_patterns", label: "Length-tuning Patterns" },
       { id: "tuning_profiles", label: "Tuning Profiles" },
@@ -152,6 +156,9 @@ export function BoardSetupDialog() {
   const [dimSettings, setDimSettings] = useState<DimensionSettings>(DEFAULT_DIMENSION_SETTINGS);
   const [dimBusy, setDimBusy] = useState(false);
   const [dimMessage, setDimMessage] = useState<string | null>(null);
+  // "Import Settings from Another Board..." (`onAuxiliaryAction`, UI-LEFT-2 BB4): the dialog, and the last import the pages took
+  const [importOpen, setImportOpen] = useState(false);
+  const [setupImport, setSetupImport] = useState<SetupImport | null>(null);
   // The pages that have edits not applied yet (the rule pages say so themselves), marked in the tree and asked about on Close.
   const [unapplied, setUnapplied] = useState<ReadonlySet<Page>>(new Set());
   // Close was asked for while some page has such edits: the footer asks whether to drop them.
@@ -288,7 +295,31 @@ export function BoardSetupDialog() {
     }
   };
 
+  // `onAuxiliaryAction`'s `ImportSettingsFrom` calls: the pages that keep their own draft take it from the context; the three this dialog holds (Pre-defined Sizes,
+  // Teardrops, and Dimensions with the text & graphics defaults, as KiCad's Defaults page holds them) are set here, unapplied.
+  const takeImport = (other: BoardState, options: ReadonlySet<string>) => {
+    setImportOpen(false);
+    setSetupImport((prev) => ({ seq: (prev?.seq ?? 0) + 1, board: other, options }));
+    const touched: Page[] = [];
+    if (options.has("sizes")) {
+      setWidths(other.routing?.track_width_presets ?? []);
+      setVias(other.routing?.via_presets ?? []);
+      setDiffPairs(other.routing?.diff_pair_presets ?? []);
+      touched.push("tracks_vias");
+    }
+    if (options.has("teardrops") && other.routing?.teardrop_settings) {
+      setTd(other.routing.teardrop_settings);
+      touched.push("teardrops");
+    }
+    if (options.has("text_graphics") && other.drawings?.dimension_settings) {
+      setDimSettings(other.drawings.dimension_settings);
+      touched.push("dimensions");
+    }
+    if (touched.length > 0) setUnapplied((prev) => new Set([...prev, ...touched]));
+  };
+
   return (
+    <SetupImportContext.Provider value={setupImport}>
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog bs-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
@@ -313,7 +344,8 @@ export function BoardSetupDialog() {
           <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
           <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
           <DrillChartPage hidden={page !== "drill_chart"} onDirty={markers.drill_chart} />
-          <ZoneHatchOffsetsPage hidden={page !== "hatch_offsets"} onDirty={markers.hatch_offsets} />
+          <ZonesPage hidden={page !== "zones"} onDirty={markers.zones} />
+          <ZoneHatchOffsetsPage hidden={page !== "zones"} onDirty={markers.zones} />
           <TextGraphicsPage hidden={page !== "text_graphics"} onDirty={markers.text_graphics} />
           <FormattingPage hidden={page !== "formatting"} onDirty={markers.formatting} />
           <TuningPatternsPage hidden={page !== "tuning_patterns"} onDirty={markers.tuning_patterns} />
@@ -682,6 +714,12 @@ export function BoardSetupDialog() {
           </section>
         </div>
         <div className="dialog-footer">
+          {/* PAGED_DIALOG's auxiliary button (`DIALOG_BOARD_SETUP`: _( "Import Settings from Another Board..." )) */}
+          {!(askDiscard && unapplied.size > 0) && (
+            <button style={{ marginRight: "auto" }} onClick={() => setImportOpen(true)}>
+              Import Settings from Another Board...
+            </button>
+          )}
           {askDiscard && unapplied.size > 0 ? (
             <>
               <span className="bs-error" role="alert" style={{ marginRight: "auto", alignSelf: "center" }}>
@@ -699,6 +737,8 @@ export function BoardSetupDialog() {
           )}
         </div>
       </div>
+      {importOpen && <ImportSettingsDialog onCancel={() => setImportOpen(false)} onImported={takeImport} />}
     </div>
+    </SetupImportContext.Provider>
   );
 }

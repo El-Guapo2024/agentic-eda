@@ -135,7 +135,8 @@ export function newZoneInitial(
   const settings: ZoneSettingsFields & RuleAreaFields = { ...opts.defaults, ...own, ...(opts.ruleArea ? keepouts : {}), is_rule_area: opts.ruleArea };
   if (isCopperLayerName(opts.layer)) settings.priority = uniqueZonePriority(board.routing?.zones ?? []);
   // A rule area takes no net (`ExportSetting`: `if( !m_isRuleArea ) aTarget.SetNetCode( m_Netcode )`); the name is the defaults' (`m_Name`).
-  return { net: opts.ruleArea ? "" : newZoneNet(board, opts.highlighted, opts.selection), layers: [opts.layer], name: opts.ruleArea ? "" : (sticky?.name ?? ""), locked: false, settings };
+  // KiCad 25ec2335 `createNewZone`: "A new zone starts unnamed, do not inherit the last drawn zone's name (issue 23131)"
+  return { net: opts.ruleArea ? "" : newZoneNet(board, opts.highlighted, opts.selection), layers: [opts.layer], name: "", locked: false, settings };
 }
 
 /** The keys of `ZONE_SETTINGS` a zone's dialog edits that the defaults carry over (`createNewZone` resets the layers and their properties, the net and the rule area flag). */

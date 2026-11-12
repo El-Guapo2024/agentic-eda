@@ -107,14 +107,14 @@ test("commitZone: the drawn zone takes the dialog's settings; a cutout or simila
 
 // ------------------------------------------------------------------------------------------------ UI-LEFT-2 PP10
 
-test("PP10: the settings are sticky -- a new zone opens on the last OK'd zone's (GetDefaultZoneSettings), its layer, net and priority its own", () => {
+test("PP10 / BB4: a new zone opens on the board's defaults (GetDefaultZoneSettings, Board Setup > Zones), its layer, net and priority its own, unnamed (25ec2335)", () => {
   const sticky = { ...board, drawings: { zone_defaults: { clearance: 1_000_000, min_thickness: 300_000, fill_mode: "HatchPattern", name: "Pour", priority: 7, layers: ["F.Cu", "B.Cu"], is_rule_area: false } } } as unknown as BoardState;
   const z = newZoneInitial(sticky, { layer: "B.Cu", ruleArea: false, highlighted: [], selection: [], defaults });
-  assert.deepEqual([z.settings.clearance, z.settings.min_thickness, z.settings.fill_mode, z.name, z.layers, z.settings.priority], [1_000_000, 300_000, "HatchPattern", "Pour", ["B.Cu"], 2]);
+  assert.deepEqual([z.settings.clearance, z.settings.min_thickness, z.settings.fill_mode, z.name, z.layers, z.settings.priority], [1_000_000, 300_000, "HatchPattern", "", ["B.Cu"], 2]);
   // A rule area: no net, no name, and `ZONE_SETTINGS()`' keep-outs, the last zone OK'd being a pour (a pour here holds none of its own)
   const ra = newZoneInitial(sticky, { layer: "F.Cu", ruleArea: true, highlighted: [], selection: [], defaults });
   assert.deepEqual([ra.name, ra.net, ra.settings.keepout_tracks, ra.settings.keepout_copper_pour], ["", "", true, false]);
-  // Zone Properties' OK: the settings, the layers and the name, no net, no outline
+  // Board Setup > Zones' Apply: the settings, the layers and the name, no net, no outline
   const cmd = zoneDefaultsCmd({ ...defaults, clearance: 400_000 }, ["F.Cu", "In1.Cu"], "GND pour");
   assert.ok(cmd.op === "set_zone_defaults");
   if (cmd.op === "set_zone_defaults") {

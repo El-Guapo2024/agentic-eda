@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
 import { TUNING_GROUPS, sameTuningPatterns, tuningPatternsOf, tuningPatternsProblems, type TuningGroup } from "../../kicad-port/setupPages";
 import type { MeanderCornerStyle, MeanderSettings, TuningPatterns } from "../../api/types";
-import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 const GROUP_TITLE: Record<TuningGroup, string> = {
   single_track: "Single Track Tuning Pattern",
@@ -19,6 +19,8 @@ export function TuningPatternsPage({ hidden, onDirty }: PageProps) {
   const units = state.units;
   const stored = state.board?.board_rules?.tuning_patterns;
   const page = usePageDraft<TuningPatterns>(state.board?.board_rules && stored ? tuningPatternsOf(stored) : undefined);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("tuning_patterns", (b) => (b.board_rules?.tuning_patterns ? tuningPatternsOf(b.board_rules.tuning_patterns) : undefined), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;

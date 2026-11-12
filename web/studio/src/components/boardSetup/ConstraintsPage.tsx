@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { useStudioState } from "../../state/store";
 import { spokeCountOf, validateConstraints } from "../../kicad-port/boardSetupRules";
 import type { Constraints } from "../../api/types";
-import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
+import { Check, FieldRow, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 
 interface Item {
   key: keyof Constraints;
@@ -63,6 +63,8 @@ export function ConstraintsPage({ hidden, onDirty }: PageProps) {
   const rules = state.board?.board_rules;
   const units = state.units;
   const page = usePageDraft<Constraints>(rules?.constraints);
+  // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
+  useSetupImport("constraints", (b) => b.board_rules?.constraints, page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const draft = page.draft;
