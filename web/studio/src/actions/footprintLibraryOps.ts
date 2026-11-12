@@ -12,7 +12,7 @@ import { fetchFootprintLibraryNames, fetchState, postCmd } from "../api/client";
 import { fetchAnyFootprint, parseFootprintText, pickTextFile } from "../api/libraryClient";
 import { addedPart, insertedMessage, outlineCentre } from "../kicad-port/fpInsert";
 import { duplicateIdCount, repairMessage } from "../kicad-port/fpRepair";
-import { pastedFootprint } from "../kicad-port/fpLibFields";
+import { pastedFootprint, storableFootprint } from "../kicad-port/fpLibFields";
 import { ensureUniqueLibId, footprintNameError, joinLibName, pastedFootprintName, PROJECT_LIBRARY, splitLibName } from "../kicad-port/libraryNames";
 import { askConfirm, askText } from "../components/library/libraryDialogs";
 import { fetchLibraryItemsNow, fetchWritableLibraries, saveToLibrary } from "../api/librarySaveClient";
@@ -92,7 +92,7 @@ export async function pasteFootprint(c: FpCtx): Promise<void> {
     const { all } = await names();
     const lib = splitLibName(targetName(c) ?? "").lib;
     const name = pastedFootprintName(joinLibName(lib, splitLibName(copied.name).item), all);
-    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...pastedFootprint(copied, name), published: false } }]))) return;
+    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...storableFootprint(pastedFootprint(copied, name)), published: false } }]))) return;
     await c.api.openFootprint(name);
     select(c, name);
   } catch (e) {
@@ -108,7 +108,7 @@ export async function duplicateFootprint(c: FpCtx): Promise<void> {
     const { footprint } = await fetchAnyFootprint(name);
     const { all } = await names();
     const copyName = ensureUniqueLibId(name, all);
-    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...footprint, name: copyName, published: false } }]))) return;
+    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...storableFootprint(footprint), name: copyName, published: false } }]))) return;
     await c.api.openFootprint(copyName);
     select(c, copyName);
   } catch (e) {
@@ -210,7 +210,7 @@ export async function importFootprint(c: FpCtx, dropped?: { name: string; text: 
     const { all } = await names();
     const lib = splitLibName(targetName(c) ?? "").lib;
     const name = ensureUniqueLibId(joinLibName(lib, splitLibName(parsed.footprint.name).item || file.name.replace(/\.kicad_mod$/i, "")), all);
-    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...parsed.footprint, name, published: false } }]))) return;
+    if (!(await runBatch(c, [{ op: "put_library_footprint", footprint: { ...storableFootprint(parsed.footprint), name, published: false } }]))) return;
     await c.api.openFootprint(name);
     select(c, name);
     info(c, parsed.warnings.length ? `Imported ${name}. ${parsed.warnings.join("; ")}` : `Imported ${name}`);

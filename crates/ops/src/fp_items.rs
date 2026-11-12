@@ -132,6 +132,18 @@ pub enum FpItemCmd {
     /// `(kicad_pcb ..)`), with their looks, new, the clipboard's origin at `at` ([`crate::fp_copy::paste`]). Refused for a text that is no footprint (the studio
     /// pastes that as a text item, `add_footprint_text`).
     Paste { footprint: String, text: String, at: Point },
+    /// The Properties pane's rows of a library pad that its file keeps among the pad's other forms (UI-LEFT-2 FF3): KiCad 10's "Post-machining Properties" and
+    /// "Backdrill Properties" (`PAD::SetFrontPostMachiningMode` .., `PADSTACK::SetBackdrillMode` .., KiCad 25ec2335 `PAD_DESC`) as `drill_props`, and the "Teardrops"
+    /// rows (`BOARD_CONNECTED_ITEM_DESC`'s `SetTeardrop..` on the pad's `TEARDROP_PARAMETERS`) as `teardrops`. Each is set whole; left out, it stays as it is.
+    /// Teardrop parameters that are `TEARDROP_PARAMETERS()`'s are not written (`isDefaultTeardropParameters`, KiCad 25ec2335's `format( const PAD* )`).
+    SetPadExtras {
+        footprint: String,
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drill_props: Option<eda_model::via_extra::PadDrillProps>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        teardrops: Option<eda_model::teardrop_params::TeardropParams>,
+    },
 }
 
 /// A graphic's looks the library footprint keeps by id ([`eda_model::lib_keep::LibraryFootprintKeep`]): `STROKE_PARAMS`' line style (`solid`, `dash`, `dot`, `dash_dot`,
@@ -142,6 +154,10 @@ pub struct ShapeLook {
     pub line_style: String,
     #[serde(default)]
     pub hatch: Option<eda_model::fp_art::Hatch>,
+    /// KiCad 10's line endings of an open shape (`SetStartEnding` / `SetEndEnding`, KiCad 25ec2335; the Properties pane's Start Shape .. End Stroke Width rows,
+    /// UI-LEFT-2 FF3); left out, the graphic keeps the ones it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endings: Option<eda_model::line_ending::LineEndings>,
 }
 
 /// A footprint text's looks beyond [`Text`] (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`: `SetBoldFlag`, `SetItalicFlag`, `SetVertJustify`, `SetTextWidth`,
@@ -192,7 +208,8 @@ impl FpItemCmd {
             | FpItemCmd::Ungroup { footprint, .. }
             | FpItemCmd::SetGroupName { footprint, .. }
             | FpItemCmd::Duplicate { footprint, .. }
-            | FpItemCmd::Paste { footprint, .. } => footprint,
+            | FpItemCmd::Paste { footprint, .. }
+            | FpItemCmd::SetPadExtras { footprint, .. } => footprint,
         }
     }
 
@@ -214,6 +231,7 @@ impl FpItemCmd {
             FpItemCmd::SetGroupName { id, name, .. } => format!("name group {id} {name:?}"),
             FpItemCmd::Duplicate { ids, pad_number, .. } => format!("duplicate {} item(s){}", ids.len(), pad_number.as_ref().map(|n| format!(" as pad {n}")).unwrap_or_default()),
             FpItemCmd::Paste { at, .. } => format!("paste at {:.3},{:.3}", eda_model::units::to_mm(at.x), eda_model::units::to_mm(at.y)),
+            FpItemCmd::SetPadExtras { id, .. } => format!("edit pad {id}"),
         };
         format!("footprint {:?}: {verb}", self.footprint())
     }
@@ -532,6 +550,17 @@ impl Board<'_> {
             FpItemCmd::Swap { ids, centres, .. } => crate::pcb_swap::swap(&mut crate::pcb_swap::FpSwap(fp), ids, centres),
             FpItemCmd::Delete { ids, .. } => delete(fp, ids),
             FpItemCmd::EditField { name, text, layout, .. } => edit_field(fp, name, text, layout),
+            FpItemCmd::SetPadExtras { id, drill_props, teardrops, .. } => {
+                let pad = fp.pads.iter_mut().find(|p| &p.id == id).ok_or_else(|| fail("ops_unknown_pad", id, "no pad with this id"))?;
+                if let Some(d) = drill_props {
+                    d.set_in_tokens(&mut pad.kicad.tokens);
+                }
+                if let Some(t) = teardrops {
+                    let default = eda_model::teardrop_params::TeardropParams::default();
+                    eda_model::teardrop_params::set_in_tokens(&mut pad.kicad.tokens, (*t != default).then_some(t));
+                }
+                Ok(())
+            }
             FpItemCmd::SetGraphic { id, shape, look, .. } => {
                 if shape.layer().is_empty() {
                     return Err(fail("ops_bad_shape", id, "a shape needs a layer"));
@@ -562,6 +591,15 @@ impl Board<'_> {
                         None => {
                             fp.kicad.hatches.remove(id);
                         }
+                    }
+                    match l.endings {
+                        Some(e) if !e.is_none() => {
+                            fp.kicad.endings.insert(id.clone(), e);
+                        }
+                        Some(_) => {
+                            fp.kicad.endings.remove(id);
+                        }
+                        None => {}
                     }
                 }
                 Ok(())

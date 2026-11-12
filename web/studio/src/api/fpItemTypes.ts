@@ -61,4 +61,6 @@ export type FpItemCmd =
    *  Increment gives the copied pads (crates/ops/src/fp_copy.rs, UI-LEFT-2 FF2). */
   | { verb: "duplicate"; footprint: string; ids: string[]; pad_number?: string }
   /** `PCB_CONTROL::Paste` in the footprint editor: the items of KiCad's clipboard footprint text, new, its origin at `at` (UI-LEFT-2 FF1). */
-  | { verb: "paste"; footprint: string; text: string; at: PointXY };
+  | { verb: "paste"; footprint: string; text: string; at: PointXY }
+  /** A library pad's backdrill and post-machining and its own teardrop parameters, each set whole, left out to stay (UI-LEFT-2 FF3). */
+  | { verb: "set_pad_extras"; footprint: string; id: string; drill_props?: import("./types").PadDrillProps; teardrops?: import("./types").TeardropParams };

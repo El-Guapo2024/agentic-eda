@@ -73,6 +73,13 @@ export function checkLibFieldRow(name: string, layout: Pick<FieldLayoutCmd, "siz
  * `FOOTPRINT_EDITOR_CONTROL::PasteFootprint`: the copy only takes its new name (`m_copiedFootprint->SetFPID( LIB_ID( newLib, newName ) )`); its Value keeps the text it showed,
  * which for a Value with no text of its own was the old name -- so that text is written out, or the copy would show its new name.
  */
+/** The footprint as `put_library_footprint` takes it: without what `GET /api/footprint` serves beside the IR (`display`, `board_link`, `pad_extras`), which the IR's
+ * `deny_unknown_fields` refuses. */
+export function storableFootprint(fp: LibraryFootprint): LibraryFootprint {
+  const { display: _d, board_link: _b, pad_extras: _p, ...rest } = fp;
+  return rest;
+}
+
 export function pastedFootprint(copied: LibraryFootprint, name: string): LibraryFootprint {
   const value: FieldLayoutCmd = { ...defaultValueLayout(), ...(copied.value ?? {}), text: copied.value?.text ?? copied.name };
   return { ...copied, name, value };

@@ -382,13 +382,13 @@ const ZONE_CONNECTION_CHOICES: Choice[] = [
   { label: "Thermal reliefs for PTH", value: "ThtThermal" },
 ];
 /** `ENUM_MAP<PAD_DRILL_POST_MACHINING_MODE>` (pad.cpp). */
-const POST_MACHINING_CHOICES: Choice[] = [
+export const POST_MACHINING_CHOICES: Choice[] = [
   { label: "Not post-machined", value: "not_post_machined" },
   { label: "Counterbore", value: "counterbore" },
   { label: "Countersink", value: "countersink" },
 ];
 /** `ENUM_MAP<BACKDRILL_MODE>` (pad.cpp). */
-const BACKDRILL_CHOICES: Choice[] = [
+export const BACKDRILL_CHOICES: Choice[] = [
   { label: "No backdrill", value: "no_backdrill" },
   { label: "Backdrill bottom", value: "bottom" },
   { label: "Backdrill top", value: "top" },
@@ -409,7 +409,7 @@ const PAD_PROP_CHOICES: Choice[] = [
 /** "Pin Type"'s choices (`GetCanonicalElectricalTypeName` of every `ELECTRICAL_PINTYPE`), and none. */
 const PIN_TYPE_CHOICES: Choice[] = [{ label: "", value: "" }, ...["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"].map((t) => ({ label: t, value: t }))];
 /** `ENUM_MAP<UNCONNECTED_LAYER_MODE>` (pad.cpp), the values `PadStack::unconnected` names them by. */
-const UNCONNECTED_CHOICES: Choice[] = [
+export const UNCONNECTED_CHOICES: Choice[] = [
   { label: "All copper layers", value: "keep_all" },
   { label: "Connected layers only", value: "remove_all" },
   { label: "Front, back and connected layers", value: "remove_except_start_and_end" },

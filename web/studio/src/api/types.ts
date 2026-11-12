@@ -1227,6 +1227,9 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
   settings?: import("./fpEditorTypes").FootprintSettings;
   /** A footprint loaded from the board (UI-LEFT F3): the instance it is linked to and its own name; absent for a library footprint. */
   board_link?: import("./fpEditorTypes").BoardLink;
+  /** What each pad's kept forms say that the Properties pane shows (UI-LEFT-2 FF3): KiCad 10's backdrill and post-machining and the pad's own teardrop parameters,
+   * by pad id; served only, absent for a pad with neither. */
+  pad_extras?: Record<string, { drill_props: PadDrillProps; teardrops: TeardropParams | null }>;
 }
 
 /** `crates/model/src/ir.rs` `PadEditMode`: the pad flagged `ENTERED`, and what its explode set aside (the custom pad's zone option and proxy items, which the recombine gives back). */

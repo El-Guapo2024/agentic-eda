@@ -1833,7 +1833,7 @@ fn move_exact_rejects_an_empty_part_list() {
 
 // -------------------------------------------------- footprint editor (GAPS.md #8)
 
-fn fp_pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
+pub(crate) fn fp_pad(number: &str, x: Nm, y: Nm) -> LibraryPad {
     LibraryPad {
         id: String::new(),
         number: number.into(),

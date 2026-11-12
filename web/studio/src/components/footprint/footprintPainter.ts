@@ -19,7 +19,10 @@ import { dashPieces, isDashStyle } from "../../kicad-port/strokeDash";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineNm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
-import { circleThrough, drawGridOrigin, normalizeSweep } from "../canvas/painter";
+import { circleThrough, drawGridOrigin, drawShapeGeometry as drawBoardShapeGeometry, normalizeSweep } from "../canvas/painter";
+import type { LineEnding } from "../../kicad-port/lineEnding";
+import type { LineEndingIr } from "../../api/fpEditorTypes";
+import { fpEndingsOf } from "../../kicad-port/fpKeep";
 import { drawArcPreview } from "../canvas/arcPreview";
 import { drawBezierPreview } from "../canvas/bezierPreview";
 import { BEZIER_MAX_ERROR_NM } from "../canvas/itemHitTest";
@@ -313,7 +316,11 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape, sketch = 
   ctx.stroke();
 }
 
-function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdShape, selected: boolean, sketch = false, strokeType?: string) {
+/** `LINE_ENDING` as the board's painter takes it (kicad-port/lineEnding.ts), from the IR's form (`LibraryFootprintKeep::endings`). */
+const boardEnding = (e: LineEndingIr | undefined): LineEnding | undefined =>
+  e && e.style && e.style !== "none" ? { style: e.style, length: e.length_nm ?? 0, width: e.width_nm ?? 0, stroke_width: e.stroke_width_nm ?? 0 } : undefined;
+
+function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdShape, selected: boolean, sketch = false, strokeType?: string, endings?: { start?: LineEndingIr; end?: LineEndingIr }) {
   ctx.save();
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(s.layer));
   ctx.strokeStyle = color;
@@ -322,7 +329,13 @@ function drawGraphic(ctx: CanvasRenderingContext2D, view: ViewTransform, s: CmdS
   ctx.lineWidth = sketch ? hairlineNm(view, selected ? 2 : 1) : Math.max(s.stroke_width, hairlineNm(view, selected ? 2 : 1));
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  if (isDashStyle(strokeType)) {
+  const start = boardEnding(endings?.start);
+  const end = boardEnding(endings?.end);
+  if ((start || end) && (s.kind === "segment" || s.kind === "arc" || s.kind === "bezier")) {
+    // KiCad 10's line endings (UI-LEFT-2 FF3): the board's painter, which shortens the body and draws the arrow, circle or square (`PCB_PAINTER::draw( PCB_SHAPE )`).
+    const dash = isDashStyle(strokeType) ? { style: strokeType!, width: s.stroke_width > 0 ? s.stroke_width : ctx.lineWidth } : undefined;
+    drawBoardShapeGeometry(ctx, { ...cmdShapeAsShape(s), ...(start ? { start_ending: start } : {}), ...(end ? { end_ending: end } : {}) } as Shape, sketch, dash);
+  } else if (isDashStyle(strokeType)) {
     // The footprint editor's `PCB_PAINTER` strokes a dashed graphic as the board does (`STROKE_PARAMS::Stroke`, kicad-port/strokeDash.ts) with the plotter's 12 and 3:
     // the editor's board has no Formatting page (UI-LEFT P5). A solid fill is filled without its outline.
     const shape = cmdShapeAsShape(s);
@@ -531,7 +544,7 @@ export function paintFootprint(
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     // A graphic's `(stroke (type ..))` when it is not solid, kept by its id (`LibraryFootprintKeep::stroke_types`).
     const strokeTypes = footprint.kicad?.stroke_types as Record<string, string> | undefined;
-    drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics, g.id ? strokeTypes?.[g.id] : undefined);
+    drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""), !!opts.sketchGraphics, g.id ? strokeTypes?.[g.id] : undefined, g.id ? fpEndingsOf(footprint, g.id) : undefined);
     ctx.restore();
   }
   if (objectOn(visible, "footprint_text")) {

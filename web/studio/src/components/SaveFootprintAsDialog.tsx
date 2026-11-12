@@ -18,6 +18,7 @@ import { useLibraryTree } from "../state/libraryTree";
 import { footprintExists, isTableLibrary, libraryRowLabel, saveAsLibraryRows } from "../kicad-port/librarySave";
 import { typedFootprintName, existsMessage, saveAsDefaults, saveAsError, savedFootprintId, savedMessage } from "../kicad-port/saveFootprintAs";
 import { notifyLibraryChanged } from "./library/useLibraryNames";
+import { storableFootprint } from "../kicad-port/fpLibFields";
 import { setLibraryStatusText } from "../state/libraryStatus";
 
 export function SaveFootprintAsDialog() {
@@ -68,7 +69,7 @@ function SaveFootprintAsBody({ req }: { req: SaveFootprintAsRequest }) {
       const { footprint } = await fetchAnyFootprint(req.name);
       // the dialog has ended (`ret == wxID_OK`) and the footprint takes its new id (`SetFPID`): a library that cannot be written refuses the save after that
       // (`SaveFootprintInLibrary` -> `FootprintSave`'s "Library '%s' is read only." in a message box), and the footprint keeps the new id (UI-LEFT-2 LL6)
-      const ok = await api.cmd({ op: "put_library_footprint", footprint: { ...footprint, name: id, published: false }, overwrite: replacing });
+      const ok = await api.cmd({ op: "put_library_footprint", footprint: { ...storableFootprint(footprint), name: id, published: false }, overwrite: replacing });
       notifyLibraryChanged();
       if (!ok) return;
       close();

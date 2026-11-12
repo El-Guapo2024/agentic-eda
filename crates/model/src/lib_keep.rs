@@ -125,6 +125,10 @@ pub struct LibraryFootprintKeep {
     /// A graphic's hatched fill (`(fill hatch|reverse_hatch|cross_hatch)`, `EDA_SHAPE::SetFillMode`), by id; the graphic's `filled` is then false (UI-LEFT F5).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hatches: BTreeMap<String, crate::fp_art::Hatch>,
+    /// KiCad 10's line endings of a line, an arc or a curve (`(start_shape ..)`, `(end_shape ..)` after the stroke, `EDA_SHAPE::SetStartEnding` / `SetEndEnding`, KiCad
+    /// 25ec2335), by the graphic's id (UI-LEFT-2 FF3: the Properties pane's Start Shape .. End Stroke Width rows). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub endings: BTreeMap<String, crate::line_ending::LineEndings>,
 }
 
 impl LibraryFootprintKeep {
@@ -144,6 +148,9 @@ impl LibraryFootprintKeep {
         }
         if let Some(h) = self.hatches.get(from).copied() {
             self.hatches.insert(to.to_string(), h);
+        }
+        if let Some(e) = self.endings.get(from).cloned() {
+            self.endings.insert(to.to_string(), e);
         }
         if let Some(mut e) = self.text_extra(from).cloned() {
             e.id = to.to_string();
@@ -167,6 +174,9 @@ impl LibraryFootprintKeep {
         if let Some(h) = other.hatches.get(from) {
             self.hatches.insert(to.to_string(), *h);
         }
+        if let Some(e) = other.endings.get(from) {
+            self.endings.insert(to.to_string(), e.clone());
+        }
         if let Some(e) = other.text_extra(from) {
             self.text_extras.push(TextExtra { id: to.to_string(), ..e.clone() });
         }
@@ -181,6 +191,7 @@ impl LibraryFootprintKeep {
     pub fn forget(&mut self, id: &str) {
         self.stroke_types.remove(id);
         self.hatches.remove(id);
+        self.endings.remove(id);
         self.text_extras.retain(|e| e.id != id);
         for set in [&mut self.unlocked_texts, &mut self.locked, &mut self.hidden_texts] {
             set.remove(id);
