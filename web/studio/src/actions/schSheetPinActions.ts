@@ -6,6 +6,9 @@
 import type { Cmd, Sheet } from "../api/types";
 import { loadHierLabels, pinExtentOf, sheetAt } from "../components/schematic/schPinTool";
 import { autoplacePins, hasUndefinedPins, pinsToCleanUp, unplacedLabels } from "../kicad-port/schSheetPins";
+import { fetchHierarchyTree } from "../api/schControlClient";
+import { syncSheetPaths } from "../kicad-port/schSyncSheetList";
+import { samePath } from "../kicad-port/sheetPages";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import type { SchEditContext } from "./schEditActions";
 
@@ -101,16 +104,27 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
     "eeschema.InteractiveDrawing.syncSheetPins",
     rootSheetOnly(() => {
       const sheet = targetSheet();
-      if (sheet) dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: [sheet.id], first: sheet.id } });
+      // `current.push_back( sheet )`: the one sheet, on the sheet path in view
+      if (sheet) dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: [sheet.id], first: sheet.id, path: [...state.currentSheetPath] } });
     })
   );
+  // Sync All: every sheet path of the whole hierarchy (kicad-port/schSyncSheetList.ts), each entry a `/`-joined path from the root (`path: []`); the
+  // dialog addresses each sheet's edits to its own sheet path.
   m.set(
     "eeschema.InteractiveDrawing.syncAllSheetsPins",
     rootSheetOnly(() => {
-      if (!sch || sch.sheets.length === 0) return info("No sub schematic found in the current project");
       // "If a sheet is currently selected, pre-select its tab in the dialog": the selection's first item (`GetSelection().Front()`), not the one under the cursor
       const selected = frontSheet();
-      dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: sch.sheets.map((s) => s.id), first: selected?.id } });
+      const here = [...state.currentSheetPath];
+      void fetchHierarchyTree().then(({ sheets, virtualRoot }) => {
+        const paths = syncSheetPaths(sheets, virtualRoot);
+        if (paths.length === 0) return info("No sub schematic found in the current project");
+        // `sheet == aInitialSheet`: the first path that ends in the selected sheet (a screen's sheets are listed under the first path reaching it)
+        const hereFile = sheets.find((e) => samePath(e.path, here))?.file;
+        const fileOf = (p: readonly string[]) => sheets.find((e) => samePath(e.path, p))?.file;
+        const first = selected ? paths.find((p) => p[p.length - 1] === selected.id && fileOf(p.slice(0, -1)) === hereFile) : undefined;
+        dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "sync_pins", sheetIds: paths.map((p) => p.join("/")), first: first?.join("/"), path: [] } });
+      }, (e: unknown) => dispatch({ type: "TOAST", message: String(e instanceof Error ? e.message : e), kind: "error" }));
     })
   );
 }
