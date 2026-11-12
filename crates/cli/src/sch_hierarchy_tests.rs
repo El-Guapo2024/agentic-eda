@@ -2673,6 +2673,7 @@ fn slow_erc_exclusions_on_two_sheets_reach_kicad_cli() {
     for v in waived {
         assert_eq!(v["kicad_matched"], true, "kicad-cli matched it itself: {v:#}");
     }
+}
 
 // ------------------------------------------------------------------- KiCad 5 legacy schematics (UI-LEFT-2 II1, `crate::legacy_import`)
 
