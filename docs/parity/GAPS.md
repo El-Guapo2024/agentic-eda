@@ -590,9 +590,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   **Remap Legacy Library Symbols** (`DIALOG_SYMBOL_REMAP`: only for a schematic none of whose symbols names a library; the backup into `rescue-backup/`, the
   project table made again with Legacy rows from the project file's legacy library list, each bare name given its library; KiCad QA `legacy_power4` remapped
   and read by kicad-cli); **Select Columns** in the two choosers and the two library editors' trees (the header's menu, `EDA_REORDERABLE_LIST_DIALOG`, a symbol
-  library's every field and Keywords as columns, the choice kept per tree in the browser). `e2e/rescue-symbols.check.js` 5/5. **Left**: the legacy rescuer
-  (`LEGACY_RESCUER`, a legacy `.lib` rescue library: no legacy writer) and a KiCad 5 `.sch` cannot be brought in, so Remap runs only on a design whose symbols
-  already name bare ids; the legacy list stays in the project file; Remote Symbols (KiCad 25ec2335's `PANEL_REMOTE_SYMBOL`: a provider's web page, OAuth and
+  library's every field and Keywords as columns, the choice kept per tree in the browser). `e2e/rescue-symbols.check.js` 5/5. **Left**: ~~the legacy rescuer
+  (`LEGACY_RESCUER`, a legacy `.lib` rescue library: no legacy writer)~~ (done, `task-v10-legacy`: `crates/cli/src/legacy_rescue.rs` with KiCad's legacy writer
+  `crates/kicad/src/legacy_lib.rs`); ~~a KiCad 5 `.sch` cannot be brought in~~ (done, `task-v10-legacy`, UI-LEFT-2 II1,
+  `PARITY-sch.md` section 90: the legacy reader ported, the cache library and project file brought into the board's folder, Remap Symbols opened after the
+  import of a schematic of bare names); the legacy list stays in the project file; Remote Symbols (KiCad 25ec2335's `PANEL_REMOTE_SYMBOL`: a provider's web page, OAuth and
   HTTPS downloads -- no provider is reachable, its reason in `ui-parity-missing.json`); the server's search of the installed libraries does not take the shown
   columns as search words; the "-- Already Placed --" and project items show no field columns.
 - Done 2026-11-12 (`task-v9-libs`, UI-LEFT-2 LL4, LL5, LL7, `PARITY-common.md` section 24): the server's search takes the shown columns, the Already Placed and project

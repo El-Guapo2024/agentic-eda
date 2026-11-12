@@ -146,7 +146,7 @@ fn check_sheet_file(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> 
         return Err(bad("name a schematic file"));
     }
     let path = crate::sheet_import::resolve(dir, &source);
-    let content = eda_kicad::load_sheet_file(&path)?;
+    let content = crate::legacy_import::load_sheet_file(&path)?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("sheet").to_string();
     let keep = req.get("keep_annotations").and_then(Value::as_bool).unwrap_or(false);
     let name = req.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).unwrap_or(&stem).to_string();

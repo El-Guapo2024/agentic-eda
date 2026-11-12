@@ -113,6 +113,10 @@ pub mod sch_overlap;
 mod sch_import;
 mod sch_crossref;
 mod sheet_file;
+// KiCad 5 legacy schematics (`.sch`), read as KiCad 8 / 10 reads them and written as the `.kicad_sch` files KiCad saves them as.
+pub mod legacy_sch;
+// KiCad's legacy symbol library writer (`.lib`), for the legacy rescue library.
+pub mod legacy_lib;
 mod variant_io;
 pub use sheet_file::{load_sheet_file, referenced_sheet_files};
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_tree_with, import_kicad_sch_with, pin_kind_from_electrical_type, project_bus_aliases, reconcile, transform_local_point, ImportOptions};

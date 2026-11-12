@@ -30,7 +30,9 @@ impl<'a> Board<'a> {
         }
         let screens = || self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
         for (from, to) in changes {
-            if !lib_id_is_valid(to) {
+            // the legacy rescuer renames a bare name to another (`RESCUE_CASE_CANDIDATE::PerformAction`: `SetLibItemName( m_new_name )`)
+            let legacy_rename = !from.contains(':') && !to.is_empty() && !to.contains(':');
+            if !lib_id_is_valid(to) && !legacy_rename {
                 return Err(fail("ops_bad_lib_id", to, format!("Symbol library identifier {to} is not valid.")));
             }
             if !screens().any(|s| s.symbols.iter().any(|x| &x.lib_id == from) || s.power_symbols.iter().any(|p| &p.lib_id == from)) {

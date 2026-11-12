@@ -17,7 +17,7 @@ export interface RescueCandidate {
 }
 
 export interface RescueCandidates {
-  /** `SCH_SCREENS::HasNoFullyDefinedLibIds`: no symbol names a library (the legacy rescuer's case, which is not ported). */
+  /** `SCH_SCREENS::HasNoFullyDefinedLibIds`: no symbol names a library -- the candidates are the legacy rescuer's (`LEGACY_RESCUER`). */
   legacy: boolean;
   /** The rescue library's nickname, `<project>-rescue`. */
   library: string;
@@ -33,8 +33,8 @@ export async function fetchRescueCandidates(): Promise<RescueCandidates> {
 }
 
 /** The chosen candidates rescued: the library written and put in the project's table; the command that relinks the symbols comes back. */
-export async function rescueSymbols(requested: readonly string[]): Promise<{ library: string; cmd: Cmd }> {
-  const j = await postJson<{ ok?: boolean; error?: string; library: string; cmd: Cmd }>("/api/sch/rescue", { requested });
+export async function rescueSymbols(requested: readonly string[]): Promise<{ library: string; cmd?: Cmd }> {
+  const j = await postJson<{ ok?: boolean; error?: string; library: string; cmd?: Cmd }>("/api/sch/rescue", { requested });
   if (j.error) throw new ApiError(j.error);
   return j;
 }

@@ -2,7 +2,8 @@
 // ("Project Rescue Helper", eeschema/dialogs/dialog_rescue_each.cpp at KiCad 8303b2ad). The server finds the candidates (crates/cli/src/rescue_api.rs);
 // the dialog lists them -- Accept, Symbol Name, Action Taken, each accepted at first -- with the instances of the selected one and its cached and library
 // symbols side by side. "Rescue Symbols" writes the rescue library and its table row and relinks the symbols as one undoable command; "Skip Symbol Rescue"
-// keeps nothing. Run on demand, so the "Never Show Again" button is not shown (`m_askShowAgain` is false).
+// keeps nothing. A schematic none of whose symbols names a library gets the legacy rescuer's candidates (`LEGACY_RESCUER`: a `<project>-rescue.lib` put
+// first in the project's legacy list, crates/cli/src/legacy_rescue.rs). Run on demand, so the "Never Show Again" button is not shown (`m_askShowAgain` is false).
 import { useEffect, useState } from "react";
 import { fetchRescueCandidates, rescueSymbols, type RescueCandidates } from "../../api/rescueClient";
 import { chosenCandidates, instancesTitle, NOTHING_RESCUED, NOTHING_TO_RESCUE, RESCUE_INFO, rescueOutcome } from "../../kicad-port/rescueSymbols";
@@ -27,7 +28,7 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
       (r) => {
         if (!alive) return;
         // `RescueProject( .., aRunningOnDemand = true )` with no candidate: the message box alone
-        if (!r.legacy && r.candidates.length === 0) {
+        if (r.candidates.length === 0) {
           dispatch({ type: "TOAST", message: NOTHING_TO_RESCUE, kind: "info" });
           onClose();
           return;
@@ -60,7 +61,8 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       const done = await rescueSymbols(chosen);
-      if (await api.cmd(done.cmd)) {
+      // the legacy rescuer's cached symbols keep their names (the rescue library is put first in the project's legacy list): no command then
+      if (!done.cmd || (await api.cmd(done.cmd))) {
         dispatch({ type: "TOAST", message: `Rescued ${chosen.length} symbol${chosen.length === 1 ? "" : "s"} into ${done.library}.`, kind: "info" });
         onClose();
       }
@@ -78,7 +80,7 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
       onClose={skip}
       footer={
         <>
-          <button className="primary" disabled={busy || !found || found.legacy} onClick={() => void submit()} data-rescue-ok>
+          <button className="primary" disabled={busy || !found} onClick={() => void submit()} data-rescue-ok>
             Rescue Symbols
           </button>
           <button onClick={skip} data-rescue-skip>
@@ -90,13 +92,7 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
       <div data-rescue-dialog style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
         {error && <div style={{ color: "var(--chrome-error, #c33)" }}>{error}</div>}
         {!found && !error && <div className="panel-empty">Looking for symbols to rescue…</div>}
-        {found?.legacy && (
-          <div data-rescue-legacy>
-            No symbol of this schematic names a library (a schematic of the project symbol library list): KiCad rescues it with the legacy rescuer, which writes a legacy symbol library, and that is not available here.
-            Remap Legacy Library Symbols... links the symbols to the symbol library table.
-          </div>
-        )}
-        {found && !found.legacy && (
+        {found && (
           <>
             <div style={{ whiteSpace: "pre-wrap" }}>{RESCUE_INFO}</div>
             <div style={{ fontWeight: 600 }}>Symbols to update:</div>

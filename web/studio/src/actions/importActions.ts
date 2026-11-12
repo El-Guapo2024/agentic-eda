@@ -72,6 +72,8 @@ export interface ImportActionContext {
   tab: string;
   dispatch: Dispatch<Action>;
   api: StudioApi;
+  /** Run another action of the registry (a legacy schematic opens Remap Symbols after its import). */
+  run?: (id: string) => void;
 }
 
 /**
@@ -191,14 +193,15 @@ async function importForeign(ctx: ImportActionContext, kind: ConvertKind, given:
       const yes = await askImportQuestion({ title: "Confirmation", message: REPLACE_SCHEMATIC_QUESTION, buttons: ["Yes", "No"] });
       if (yes !== "Yes") return;
     }
-    const files: ForeignFile[] = given ? (Array.isArray(given) ? given : [given]) : kind === "project" ? await pickBinaryFiles(acceptFor(kind)) : [await pickBinaryFile(acceptFor(kind))].filter((f): f is ForeignFile => !!f);
+    // A schematic may come with the files beside it: a KiCad 5 legacy schematic's sheets, cache library and libraries (a browser hands the page files, not a folder).
+    const files: ForeignFile[] = given ? (Array.isArray(given) ? given : [given]) : kind !== "board" ? await pickBinaryFiles(acceptFor(kind)) : [await pickBinaryFile(acceptFor(kind))].filter((f): f is ForeignFile => !!f);
     if (files.length === 0) return;
     const first = (Array.isArray(given) ? given[0] : given) ?? null;
     const file = files[0]!;
     const shown = files.map((f) => f.name).join(" + ");
     if (kind !== "schematic" && !(await handleUnsavedChanges(ctx, "pcb", PCB_MODIFIED_MESSAGE))) return;
     if (kind === "project" && !(await handleUnsavedChanges(ctx, "schematic", SCHEMATIC_MODIFIED_MESSAGE))) return;
-    const target = kind === "project" ? files : file;
+    const target = kind === "project" || (kind === "schematic" && files.length > 1) ? files : file;
     let board: number | undefined = first?.board;
     let reply = await postImportForeign(kind, target, first?.layerMap, first?.dropLayers, board);
     if (reply.ok && reply.choose_board) {
@@ -249,6 +252,9 @@ async function importForeign(ctx: ImportActionContext, kind: ConvertKind, given:
     if (issuesOf(reply.findings).length > 0 && !first?.skipReport && importShowIssues()) {
       showImportReport({ name: shown, format: reply.format ?? "", summary: `${describeImport(reply)} ${issues}`.trim(), findings: issuesOf(reply.findings), notes: [...(reply.notes ?? []), ...(reply.schematic_notes ?? [])] });
     }
+    // A legacy schematic none of whose symbols names a library: `OpenProjectFiles` opens Remap Symbols (`DIALOG_SYMBOL_REMAP`) as the project loads
+    // ("Convert old projects over to use symbol library table").
+    if (kind === "schematic" && reply.remap) ctx.run?.("eeschema.EditorControl.remapSymbols");
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), "error");
   }
@@ -366,7 +372,8 @@ export function registerImportActions(m: Map<string, ActionHandler>, ctx: Import
   }
   if (ctx.tab === "schematic") {
     // SCH_ACTIONS::importNonKicadSchematic ("Import Non-KiCad Schematic..."): the same, for the schematic.
-    m.set("eeschema.EditorControl.importNonKicadSchematic", (param) => void importForeign(ctx, "schematic", asForeignParam(param)));
+    // The parameter may be several files: a KiCad 5 legacy schematic with its sheets, cache library and libraries.
+    m.set("eeschema.EditorControl.importNonKicadSchematic", (param) => void importForeign(ctx, "schematic", asProjectParam(param) ?? asForeignParam(param)));
   }
   if (ctx.tab === "pcb" || ctx.tab === "schematic") {
     // The project manager's File > Import Non-KiCad Project... (`KICAD_MANAGER_FRAME::ImportNonKiCadProject`, `IMPORT_PROJ_HELPER::ImportFiles`): a board and its schematic

@@ -52,7 +52,7 @@ struct Meta {
     spacing_nm: Nm,
 }
 
-const USAGE: &str = "usage: eda import-kicad <board.kicad_pcb | schematic.kicad_sch | file of another EDA format> -o <dir> [--format NAME] [--kind board|schematic] [--layer-map FILE] [--keep-kicad-layer-names] [--report FILE|-] [--no-pair]";
+const USAGE: &str = "usage: eda import-kicad <board.kicad_pcb | schematic.kicad_sch | KiCad 5 schematic.sch | file of another EDA format> -o <dir> [--format NAME] [--kind board|schematic] [--layer-map FILE] [--keep-kicad-layer-names] [--report FILE|-] [--no-pair]";
 
 #[derive(Debug)]
 struct Args {
@@ -105,6 +105,8 @@ struct Sources {
     top_level_files: Vec<String>,
     /// An Altium project's variants (`[ProjectVariantN]` of the `.PrjPcb`), put on the schematic once its sheets are one (`crate::altium_variants`).
     altium_variants: Vec<crate::altium_variants::ProjectVariant>,
+    /// A KiCad 5 legacy schematic's project (`crate::legacy_import`): its files for the legacy rescue come along to the board's folder.
+    legacy: Option<crate::legacy_import::LegacySchematic>,
 }
 
 fn stem_of(path: &Path) -> String {
@@ -127,7 +129,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
     let input = PathBuf::from(&args.input);
     let ext = input.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new(), top_level_files: Vec::new(), altium_variants: Vec::new() };
+    let mut s = Sources { board: None, project: None, rules: None, sheets: Vec::new(), imports: Vec::new(), top_level_files: Vec::new(), altium_variants: Vec::new(), legacy: None };
     let mut runs = 0;
     let mut convert_one = |s: &mut Sources, path: &Path, kind: Option<Kind>| -> Result<ForeignImport, Vec<CheckResult>> {
         runs += 1;
@@ -162,6 +164,14 @@ fn gather(args: &Args, work: &Path) -> Result<Sources, Vec<CheckResult>> {
                 let file = eda_kicad::load_sheet_file(&input)?;
                 s.sheets.push((stem_of(&input), file));
             }
+        }
+        // A KiCad 5 schematic (`SCH_IO_MGR::GuessPluginTypeFromSchPath`: the legacy plugin reads a file whose first line says "EESchema Schematic File"; an
+        // Eagle or gEDA `.sch` goes to kicad-cli's importers below), read as `OpenProjectFiles` reads it (`crate::legacy_import`).
+        "sch" if crate::legacy_import::is_legacy_schematic_file(&input) => {
+            let legacy = crate::legacy_import::load(&input, work)?;
+            eprintln!("import-kicad: KiCad legacy schematic '{}' (project '{}')", name_of(&input), legacy.project);
+            s.sheets.push((stem_of(&input), legacy.content.clone()));
+            s.legacy = Some(legacy);
         }
         "prjpcb" => {
             let project = foreign::altium_project(&input)?;
@@ -311,6 +321,11 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
             // A KiCad schematic's project (`.kicad_pro` beside it) is read as KiCad reads it for the schematic alone (r7 H1, H6): its net classes (a net class
             // label names one: `TestMissingNetclasses`; the netlist puts the net in it), the rest of its setup the board would read, and its library tables and
             // text variables (`PROJECT::GetTextVars`, which `${VAR}` resolves from).
+            if let Some(legacy) = &sources.legacy {
+                // the legacy project's library tables (`sym-lib-table` beside it, `${KIPRJMOD}` its folder) and, when KiCad already migrated it, its `.kicad_pro`
+                let pro_text = std::fs::read_to_string(legacy.project_dir.join(format!("{}.kicad_pro", legacy.project))).ok();
+                setup = Some(eda_kicad::library_table::import_project_setup(&legacy.project_dir, out, pro_text.as_deref()));
+            }
             if args.input.to_ascii_lowercase().ends_with(".kicad_sch") {
                 let pro_path = PathBuf::from(&args.input).with_extension("kicad_pro");
                 if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
@@ -388,6 +403,17 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     }
     if libraries > 0 {
         eprintln!("  library setup: {libraries} library file(s) kicad-cli made of the footprints and symbols it read, with the tables that name them");
+    }
+
+    // A legacy project: what Rescue Symbols and Remap Legacy Library Symbols read, in the board's folder (the board's project is the intent's name)
+    if let Some(legacy) = &sources.legacy {
+        for line in crate::legacy_import::carry_project_files(legacy, out, "intent") {
+            eprintln!("  legacy project: {line}");
+        }
+        if legacy.remap {
+            // `OpenProjectFiles`: "Convert old projects over to use symbol library table." -- `DIALOG_SYMBOL_REMAP`
+            eprintln!("  legacy project: no symbol names its library; Tools > Remap Legacy Library Symbols... gives them the libraries of the project's legacy list");
+        }
     }
 
     // The schematic, over the board: the command the studio's File > Import > Non-KiCad Schematic runs, so the nets are traced from the drawing by the same code.
