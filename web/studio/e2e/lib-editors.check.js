@@ -1175,7 +1175,8 @@
     g = (await symbol(id)).graphics[0];
     t(g.stroke_mm === -0.0001, `no border is -0.0001: ${g.stroke_mm}`);
     const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
-    t(/\(stroke \(width -0\.0001\) \(type default\)\) \(fill \(type outline\)\)/.test(text), "the exported .kicad_sym says (width -0.0001)");
+    // the border Style (UI-LEFT-2 YY2): the default style shows as Solid and OK writes it (`stroke.SetLineStyle( it->first )`)
+    t(/\(stroke \(width -0\.0001\) \(type solid\)\) \(fill \(type outline\)\)/.test(text), "the exported .kicad_sym says (width -0.0001)");
     // the right-click menu has Properties... for the one selected shape
     await clickAt(...EDGE, {}, false);
     const [sx, sy] = toScreen(...EDGE);
