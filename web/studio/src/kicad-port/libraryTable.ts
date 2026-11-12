@@ -95,6 +95,8 @@ export function guessType(kind: TableKind, path: string): string | null {
   if (name === "sym-lib-table" || name === "fp-lib-table" || name === "design-block-lib-table") return TABLE_TYPE;
   if (name.endsWith(libraryExtension(kind))) return KICAD_TYPE;
   if (kind === "symbol" && name.endsWith(".kicad_symdir")) return KICAD_TYPE;
+  // `SCH_IO_HTTP_LIB::GetLibraryDesc`'s extension (UI-LEFT-2 LL5)
+  if (kind === "symbol" && name.endsWith(".kicad_httplib")) return "HTTP";
   return null;
 }
 
@@ -424,4 +426,75 @@ export function migrateQuestion(kind: TableKind, nicknames: readonly string[]): 
 export function migrateOverwriteQuestion(kind: TableKind, dest: string): string {
   if (kind === "symbol") return `File '${dest}' already exists. Do you want overwrite this file?`;
   return `Folder '${dest}' already exists. Do you want overwrite any existing ${kind === "footprint" ? "footprints" : "design blocks"}?`;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------- pasting text (UI-LEFT-2 LL5)
+
+/** `LIB_TABLE_GRID_TRICKS::getTablePreamble`: the text a table's s-expression starts with (`PANEL_SYM_LIB_TABLE`: "(sym_lib_table", ...). */
+export function tablePreamble(kind: TableKind): string {
+  return kind === "symbol" ? "(sym_lib_table" : kind === "footprint" ? "(fp_lib_table" : "(design_block_lib_table";
+}
+
+/** `paste_text`'s first branch: the text holds the preamble, and is read as a table whose rows go in at the top (`std::inserter( rows, rows.begin() )`). */
+export function isTableText(kind: TableKind, text: string): boolean {
+  return text.includes(tablePreamble(kind));
+}
+
+/** The grid's columns in `COL_ORDER`: the status, Enable, Show (hidden where the table has no Show box), then the text columns. */
+const GRID_COLUMNS = ["status", "enabled", "visible", "nickname", "uri", "type", "options", "descr"] as const;
+export type GridColumn = (typeof GRID_COLUMNS)[number];
+
+/** `!text.Contains( '\t' ) && text.Contains( ',' )`: a comma-separated text is read as tab-separated. */
+export function tabbedText(text: string): string {
+  return !text.includes("\t") && text.includes(",") ? text.replace(/,/g, "\t") : text;
+}
+
+/**
+ * `LIB_TABLE_GRID_TRICKS::onCharHook`'s Ctrl+V while a cell is being edited: a text of several cells (a tab or a line break in it) is pasted into the grid --
+ * unless the cell's row already has a nickname ("Row already has data, don't allow pasting over it": `wxBell`); any other text is the cell's own paste.
+ * `"grid"`: paste it with [`pasteTableText`] from this row; `"refuse"`: nothing (the bell); `"cell"`: the editor's own paste.
+ */
+export function cellPasteKind(row: TableRow | undefined, text: string): "grid" | "refuse" | "cell" {
+  const t = tabbedText(text);
+  if (!(t.includes("\t") || t.includes("\n") || t.includes("\r"))) return "cell";
+  return row && row.nickname !== "" ? "refuse" : "grid";
+}
+
+/**
+ * `LIB_TABLE_GRID_TRICKS::paste_text`'s spreadsheet branch and `GRID_TRICKS::paste_text`: commas read as tabs; a text with a tab is pasted from the cursor
+ * row's first column (`SetGridCursor( row, 0 )`), else from the cursor's cell; each line a row from the cursor row down (rows added at the end as needed,
+ * `m_addHandler`), each tab-separated cell a column from there (a hidden column skipped: the Show column of a table that has none). The status column takes
+ * nothing; Enable and Show are on for "1" and off for anything else (`SetValueAsBool( row, col, cellTxt == "1" )`); a text column takes the text
+ * (`SetValue`, a path giving the row its format as typing does).
+ */
+export function pasteTableText(rows: readonly TableRow[], cursorRow: number, cursorCol: GridColumn, text: string, kind: TableKind, supportsVisibility: boolean): TableRow[] {
+  const t = tabbedText(text);
+  const out = rows.map((r) => ({ ...r }));
+  const row0 = Math.max(0, cursorRow);
+  const col0 = t.includes("\t") ? 0 : GRID_COLUMNS.indexOf(cursorCol);
+  // `wxStringTokenizer( cb_text, ROW_SEP, wxTOKEN_RET_EMPTY )`: an empty token between two separators, none after the last
+  const lines = t.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  while (out.length < row0 + lines.length) out.push(emptyRow());
+  lines.forEach((line, k) => {
+    const cells = line.split("\t");
+    if (cells.length > 1 && cells[cells.length - 1] === "") cells.pop();
+    let r = out[row0 + k]!;
+    let at = 0;
+    for (let c = col0; c < GRID_COLUMNS.length && at < cells.length; c++) {
+      const col = GRID_COLUMNS[c]!;
+      if (col === "visible" && !supportsVisibility) continue; // `if( !m_grid->IsColShown( col ) )`
+      const cell = cells[at++]!.replace(/\r$/, "");
+      if (col === "status") continue;
+      if (col === "enabled" || col === "visible") r = { ...r, [col]: cell === "1" };
+      else r = setCell(r, col, cell, kind);
+    }
+    out[row0 + k] = r;
+  });
+  return out;
+}
+
+/** The s-expression branch's result: the pasted table's rows first, then the grid's. */
+export function insertTableRows(rows: readonly TableRow[], pasted: readonly TableRow[]): TableRow[] {
+  return [...pasted.map((r) => ({ ...r })), ...rows];
 }

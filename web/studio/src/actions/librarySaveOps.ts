@@ -68,11 +68,11 @@ export async function saveAllSymbols(toast: Toast): Promise<void> {
 }
 
 /** `SYMBOL_EDIT_FRAME::SaveLibraryAs` (Ctrl+Shift+S): the library of `GetTargetLibId()`, the tree's selection or the open symbol's. */
-export function saveSymbolLibraryAs(api: SymbolEditorApi, toast: Toast): void {
+export function saveSymbolLibraryAs(api: SymbolEditorApi, toast: Toast, mode?: "packed" | "unpacked"): void {
   const st = api.getState();
   const t = symbolTarget(st.treeSelection, getLibraryTree("symbol").selectedLibs, st.libId);
   if (t.kind === "none") return toast("Select a library in the library tree first.");
-  openSaveLibraryAs("symbol", t.kind === "library" ? t.lib : libraryOfId(t.id));
+  openSaveLibraryAs("symbol", t.kind === "library" ? t.lib : libraryOfId(t.id), mode);
 }
 
 /**

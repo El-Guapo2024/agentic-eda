@@ -15,6 +15,8 @@ export interface InstalledLibrary {
   description?: string;
   /** The table the library is in: KiCad's own (`global`) or the board's (`project`). */
   scope?: "global" | "project";
+  /** A symbol library that is a folder (`.kicad_symdir`): KiCad 25ec2335 offers it Save Library As Packed, a file library Save Library As Unpacked. */
+  unpacked?: boolean;
 }
 
 async function get<T extends { error?: string }>(url: string): Promise<T> {

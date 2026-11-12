@@ -13,19 +13,24 @@ import { LibraryTree } from "../library/LibraryTree";
 import { hideTreeEntry, pinEntries } from "../library/libraryTreeMenu";
 import { notifyLibraryChanged, useLibraryNames } from "../library/useLibraryNames";
 import { useLibraryTree } from "../../state/libraryTree";
+import { KICAD10_ACTIONS } from "../../kicad/kicad10Actions";
+import { libraryOfId } from "../../kicad-port/librarySave";
 import { bareName, treeConditions } from "../../kicad-port/symFields";
 
-const labelOf = new Map((actionsData as ActionsFile).actions.map((a) => [a.name, a.label]));
+const labelOf = new Map([...(actionsData as ActionsFile).actions.map((a) => [a.name, a.label] as const), ...KICAD10_ACTIONS.map((a) => [a.name, a.label] as const)]);
 
 /**
  * `SYMBOL_EDITOR_CONTROL::Init`'s entries, in its order (the `ctxMenu.AddItem` calls); `needs` is the condition: a library context, a selected symbol, a derived symbol
  * (`derivedSymbolSelectedCondition`: Flatten) or a related one (`relatedSymbolSelectedCondition`: it is derived or something is derived from it).
  */
-const MENU: { name: string; needs: "library" | "symbol" | "derived" | "related" }[] = [
+const MENU: { name: string; needs: "library" | "symbol" | "derived" | "related" | "unpacked" | "packed" }[] = [
   { name: "eeschema.SymbolLibraryControl.newSymbol", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.deriveFromExistingSymbol", needs: "symbol" },
   { name: "common.Control.save", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.saveLibraryAs", needs: "library" },
+  // KiCad 25ec2335 (`isUnpackedLibraryCondition` / `isPackedLibraryCondition`: the target library's path is a folder / a file)
+  { name: "eeschema.SymbolLibraryControl.saveLibraryAsPacked", needs: "unpacked" },
+  { name: "eeschema.SymbolLibraryControl.saveLibraryAsUnpacked", needs: "packed" },
   { name: "eeschema.SymbolLibraryControl.saveSymbolAs", needs: "symbol" },
   { name: "eeschema.SymbolLibraryControl.saveSymbolCopyAs", needs: "symbol" },
   { name: "common.Control.revert", needs: "library" },
@@ -66,6 +71,11 @@ export function SymbolLibraryPanel() {
       if (needs === "symbol" && !hasSymbol) continue;
       if (needs === "derived" && !cond.isDerived) continue;
       if (needs === "related" && !cond.related) continue;
+      if (needs === "unpacked" || needs === "packed") {
+        const lib = libs[0] ?? (sel[0] ? libraryOfId(sel[0]) : "");
+        const row = names.installed.find((l) => l.name === lib);
+        if (!row || (needs === "unpacked") !== !!(row as { unpacked?: boolean }).unpacked) continue;
+      }
       const enabled = isEnabled(name);
       const label = labelOf.get(name) ?? name;
       entries.push({ label: enabled ? label : `${label} (not ported yet)`, disabled: !enabled, onSelect: () => run(name) });

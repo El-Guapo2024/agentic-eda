@@ -127,6 +127,42 @@ pub fn convertible(kind: TableKind, lib_type: &str) -> bool {
     }
 }
 
+/// `LIBRARY_TABLE::ParseOptions`: a row's options, `name=value` pairs joined by `|` (`\|` a `|` of a value), leading white space skipped, a name without `=`
+/// present with an empty value.
+pub fn parse_options(list: &str) -> std::collections::BTreeMap<String, String> {
+    let mut props = std::collections::BTreeMap::new();
+    let chars: Vec<char> = list.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        while i < chars.len() && chars[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let mut pair = String::new();
+        while i < chars.len() {
+            if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1] == '|' {
+                pair.push('|');
+                i += 2;
+            } else if chars[i] == '|' {
+                i += 1;
+                break;
+            } else {
+                pair.push(chars[i]);
+                i += 1;
+            }
+        }
+        if !pair.is_empty() {
+            match pair.split_once('=') {
+                Some((n, v)) => props.insert(n.to_string(), v.to_string()),
+                None => props.insert(pair, String::new()),
+            };
+        }
+    }
+    props
+}
+
+/// `SCH_IO_MGR::SCH_HTTP`'s table type: a symbol library a REST server serves, its row naming a `.kicad_httplib` settings file.
+pub const HTTP_TYPE: &str = "HTTP";
+
 /// One `(lib ...)` of a table (`LIBRARY_TABLE_ROW`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Row {
@@ -981,6 +1017,10 @@ pub fn check_row(kind: TableKind, row: &Row, path: &Path) -> Option<String> {
     if convertible(kind, &row.lib_type) {
         // read through kicad-cli's conversion (the server's `library_convert`); here only whether the file (a gEDA library: the folder) is there
         return (!path.exists()).then(|| format!("Library '{}' not found.", path.display()));
+    }
+    // an HTTP library (`SCH_IO_HTTP_LIB`) is read by the server over the network from its settings file (UI-LEFT-2 LL5); here only whether the file is there
+    if kind == TableKind::Symbol && row.lib_type == HTTP_TYPE {
+        return (!path.is_file()).then(|| format!("HTTP library settings file {} missing or invalid.", path.display()));
     }
     if row.lib_type != KICAD_TYPE {
         return Some(format!("The studio reads KiCad-format libraries and the formats kicad-cli converts; a '{}' library is not read here.", row.lib_type));

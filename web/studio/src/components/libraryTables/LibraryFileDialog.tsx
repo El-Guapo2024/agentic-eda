@@ -3,20 +3,26 @@
 // `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary` / `AddDesignBlockLibrary` (common/widgets/design_block_pane.cpp).
 //
 // New Library makes an empty `.kicad_sym` file (symbols), `.pretty` folder (footprints) or `.kicad_blocks` folder (design blocks) and a row for it in the library table; Add Library puts a library that exists in
-// the table. KiCad's file dialog has a "Add to global / project library table" choice; the global tables are KiCad's and are not written here, so the row goes into
-// the board's own table (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`), which is said in the dialog. The path is written as a table writes one (`NormalizePath`: under a variable
+// the table. The table is the file dialog's choice (`FILEDLG_HOOK_NEW_LIBRARY`: "Add new library to global library table" / "Add new library to project library
+// table"; UI-LEFT-2 LL5): KiCad's global table in its configuration folder, or the board's own (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`). It starts
+// where KiCad's does: global for a symbol library (`AddLibraryFile`: `useGlobalTable = true`), project for a footprint library (`createNewLibrary` / `AddLibrary`:
+// `isGlobal = false`), and for a design block library the last choice of the session (`static bool isGlobal = true`). The path is written as a table writes one (`NormalizePath`: under a variable
 // or `${KIPRJMOD}` where one holds it), the nickname is the file's name (`LIB_ID::FixIllegalChars`), and a nickname a library already has is refused ("Library '%s'
 // already exists."). New Design Block Library on a folder that is there says "Library %s is read only." when it cannot be written, else asks "Library %s already
 // exists." with an Overwrite button, as `createNewDesignBlockLibrary` does (the other kinds refuse it).
 import { useEffect, useState } from "react";
 import { addLibrary, fetchLibraryTables, type LibraryTablesView } from "../../api/libraryTablesClient";
 import { baseName, libraryExtension, nicknameForFile, tableFileName, type TableKind } from "../../kicad-port/libraryTable";
+import { NEW_LIBRARY_TABLE_OPTIONS } from "../../kicad-port/librarySave";
 import { closeLibraryFile, useLibraryTableDialogs } from "../../state/libraryTableDialogs";
 import { selectDesignBlockLibrary } from "../../state/designBlocks";
 import { selectLibraries, setLibraryOpen } from "../../state/libraryTree";
 import { useStudioDispatch } from "../../state/store";
 import { FolderBrowser, type BrowseWhat } from "./FolderBrowser";
 import "../../styles/libraryTables.css";
+
+/** `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary`'s `static bool isGlobal = true`: the last choice, for this page's life. */
+let designBlockGlobal = true;
 
 export function LibraryFileDialog() {
   const req = useLibraryTableDialogs().library;
@@ -35,6 +41,7 @@ function FileBody({ kind, create, onDone }: { kind: TableKind; create: boolean; 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [browse, setBrowse] = useState<BrowseWhat | null>(null);
+  const [global, setGlobal] = useState(kind === "symbol" ? true : kind === "design_block" ? designBlockGlobal : false);
   /** The Overwrite question on screen, and its answer's resolver. */
   const [question, setQuestion] = useState<{ message: string; okLabel: string; resolve: (yes: boolean) => void } | null>(null);
   const ask = (message: string, okLabel: string) => new Promise<boolean>((resolve) => setQuestion({ message, okLabel, resolve }));
@@ -79,7 +86,8 @@ function FileBody({ kind, create, onDone }: { kind: TableKind; create: boolean; 
     if (!create && path.trim() === "") return setError("Choose a library to add.");
     setBusy(true);
     try {
-      const request = { kind, path: target, create, nickname: create ? undefined : nickname.trim() || undefined, descr: descr.trim() || undefined };
+      if (kind === "design_block") designBlockGlobal = global;
+      const request = { kind, path: target, create, nickname: create ? undefined : nickname.trim() || undefined, descr: descr.trim() || undefined, global };
       let answer = await addLibrary(request);
       // `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary` on an existing writable folder: a KIDIALOG "Library %s already exists." titled "Confirmation", OK labelled
       // "Overwrite"; Cancel leaves everything as it was
@@ -89,7 +97,7 @@ function FileBody({ kind, create, onDone }: { kind: TableKind; create: boolean; 
       }
       if ("ok" in answer && answer.ok) {
         const lib = answer.added.nickname;
-        dispatch({ type: "TOAST", message: `${answer.added.created ? "Created" : "Added"} library '${lib}' in the project's ${tableFileName(kind)}.`, kind: "info" });
+        dispatch({ type: "TOAST", message: `${answer.added.created ? "Created" : "Added"} library '${lib}' in the ${global ? "global" : "project's"} ${tableFileName(kind)}.`, kind: "info" });
         // `FocusOnLibID`: the new library is the one selected in the tree (`AddDesignBlockLibrary`: `SelectLibId( LIB_ID( libName, "" ) )`)
         if (kind === "design_block") {
           selectDesignBlockLibrary(lib);
@@ -149,9 +157,16 @@ function FileBody({ kind, create, onDone }: { kind: TableKind; create: boolean; 
             <input id="lt-descr" type="text" value={descr} spellCheck={false} onChange={(e) => setDescr(e.target.value)} />
             <span />
           </div>
-          {create && <div className="lt-note" style={{ marginTop: 8 }}>{`Makes ${target}${kind === "symbol" ? ", an empty symbol library," : kind === "footprint" ? ", an empty footprint library," : ", an empty design block library,"} and adds it to the board's library table.`}</div>}
+          <div role="radiogroup" aria-label="Library table" style={{ marginTop: 10, display: "grid", gap: 4 }} data-library-file-table>
+            {NEW_LIBRARY_TABLE_OPTIONS.map((o) => (
+              <label key={o.value}>
+                <input type="radio" name="lt-file-table" value={o.value} checked={global === (o.value === "global")} onChange={() => setGlobal(o.value === "global")} /> {o.label}
+              </label>
+            ))}
+          </div>
+          {create && <div className="lt-note" style={{ marginTop: 8 }}>{`Makes ${target}${kind === "symbol" ? ", an empty symbol library," : kind === "footprint" ? ", an empty footprint library," : ", an empty design block library,"} and adds it to the ${global ? "global" : "project's"} library table.`}</div>}
           <div className="lt-note" style={{ marginTop: 6 }}>
-            {`The library goes in the project's ${tableFileName(kind)}${view ? ` (${view.tables[kind].project.path})` : ""}. KiCad's global table is read only here.`}
+            {global ? `The library goes in KiCad's global ${tableFileName(kind)}.` : `The library goes in the project's ${tableFileName(kind)}${view ? ` (${view.tables[kind].project.path})` : ""}.`}
           </div>
           {error && <div className="lt-error" role="alert" style={{ marginTop: 8 }}>{error}</div>}
         </div>

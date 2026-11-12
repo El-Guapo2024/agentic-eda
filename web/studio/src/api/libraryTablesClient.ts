@@ -179,6 +179,8 @@ export interface AddRequest {
   table?: boolean;
   /** New Design Block Library on an existing folder: the "Overwrite" answer (`createNewDesignBlockLibrary`: `DeleteLibrary` then `CreateLibrary`). */
   overwrite?: boolean;
+  /** `FILEDLG_HOOK_NEW_LIBRARY`'s "Add new library to global library table": the row goes into KiCad's global table. */
+  global?: boolean;
 }
 
 export type AddAnswer = ({ ok: true; added: { kind: TableKind; nickname: string; uri: string; path: string; created: boolean } } & LibraryTablesView) | ({ ok?: false; confirm?: string } & Refusal);
@@ -213,8 +215,13 @@ export interface FolderListing {
 
 /** What the browse buttons list: the folders of `path` and the files `what` asks for (`symbol`: .kicad_sym, `table`: a library table; folders only for `symbol_folder`, `footprint`,
  *  `design_block` and `folder`). */
-export async function browseFolder(path: string, what: "symbol" | "symbol_folder" | "footprint" | "design_block" | "table" | "folder" | "drawing_sheet"): Promise<FolderListing> {
+export async function browseFolder(path: string, what: "symbol" | "symbol_folder" | "http" | "footprint" | "design_block" | "table" | "folder" | "drawing_sheet"): Promise<FolderListing> {
   const r = await send<FolderListing & { error?: string }>(`/api/fs/list?path=${encodeURIComponent(path)}&what=${what}`);
   if (r.error) throw new ApiError(r.error);
   return r;
+}
+
+/** `paste_text`'s s-expression branch (UI-LEFT-2 LL5): the rows of a pasted table text, read by the server's table reader, or KiCad's error. */
+export async function parseTableText(kind: TableKind, text: string): Promise<{ rows?: TableRow[]; error?: string }> {
+  return send<{ rows?: TableRow[]; error?: string }>("/api/library_tables/parse", { kind, text });
 }

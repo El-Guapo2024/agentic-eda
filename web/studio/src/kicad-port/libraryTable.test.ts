@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  cellPasteKind,
+  insertTableRows,
+  isTableText,
+  pasteTableText,
   appendRow,
   baseName,
   canEditOptions,
@@ -288,4 +292,28 @@ test("Migrate Libraries: the selected rows of another format (symbols: not Datab
   assert.equal(migrateQuestion("footprint", ["B", "D"]), "Save 2 libraries as current KiCad format and replace entries in table?");
   assert.equal(migrateOverwriteQuestion("symbol", "/x/B.kicad_sym"), "File '/x/B.kicad_sym' already exists. Do you want overwrite this file?");
   assert.equal(migrateOverwriteQuestion("footprint", "/x/D.pretty"), "Folder '/x/D.pretty' already exists. Do you want overwrite any existing footprints?");
+});
+
+test("pasting table text: tab- or comma-separated rows from the cursor row, rows added, the s-expression's rows at the top (paste_text; UI-LEFT-2 LL5)", () => {
+  const rows = [{ ...emptyRow(), nickname: "Old", uri: "/a/Old.kicad_sym", type: "KiCad" }];
+  // copied from KiCad's grid: status, Enable, Show, Nickname, Library Path, Library Format, Options, Description
+  const text = "\t1\t0\tA\t/x/A.kicad_sym\tKiCad\t\tFirst\n\t0\t1\tB\t/x/B.kicad_sym\tKiCad\t\tSecond\n";
+  const got = pasteTableText(rows, 1, "nickname", text, "symbol", true);
+  assert.equal(got.length, 3, "two rows added after the one there");
+  assert.deepEqual([got[1]!.nickname, got[1]!.uri, got[1]!.descr, got[1]!.enabled, got[1]!.visible], ["A", "/x/A.kicad_sym", "First", true, false]);
+  assert.deepEqual([got[2]!.nickname, got[2]!.enabled, got[2]!.visible], ["B", false, true]);
+  assert.equal(got[0]!.nickname, "Old", "the rows above are left");
+  // no Show column (footprints): the column is skipped
+  const fp = pasteTableText([], 0, "nickname", "\t1\tP\t/p/P.pretty\tKiCad\t\tPads", "footprint", false);
+  assert.deepEqual([fp[0]!.nickname, fp[0]!.uri, fp[0]!.descr], ["P", "/p/P.pretty", "Pads"]);
+  // commas are tabs
+  assert.equal(pasteTableText([], 0, "nickname", ",1,1,C,/c/C.kicad_sym", "symbol", true)[0]!.nickname, "C");
+  // lines without a tab: one column, from the cursor's
+  const descr = pasteTableText([emptyRow(), emptyRow()], 0, "descr", "one\ntwo", "symbol", true);
+  assert.deepEqual(descr.map((r) => r.descr), ["one", "two"]);
+  assert.equal(cellPasteKind({ ...emptyRow(), nickname: "Old" }, "a\tb"), "refuse", "a row with a nickname is not pasted over");
+  assert.equal(cellPasteKind(emptyRow(), "a\tb"), "grid");
+  assert.equal(cellPasteKind(emptyRow(), "plain"), "cell");
+  assert.ok(isTableText("symbol", '(sym_lib_table (version 7) (lib (name "X")))') && !isTableText("footprint", "(sym_lib_table)"));
+  assert.deepEqual(insertTableRows(rows, [{ ...emptyRow(), nickname: "N" }]).map((r) => r.nickname), ["N", "Old"]);
 });

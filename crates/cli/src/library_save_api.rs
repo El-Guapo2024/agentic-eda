@@ -454,15 +454,18 @@ pub(crate) fn save(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `POST /api/library/save_as` -- Save Library As.
-///  * Symbols, `{kind: "symbol", lib, path, table: "project" | "replace", overwrite?}`: `SYMBOL_EDIT_FRAME::saveLibrary( lib, true )` -- every symbol of the
-///    library, its modified ones as the design has them, into a new `.kicad_sym` file (a folder library is packed into one file, as `SaveLibrary` writes the
-///    cache to a file path), then the library table: "Add new project library table entry" (`addLibTableEntry`) or "Update existing library table entry"
-///    (`replaceLibTableEntry`). An existing file is replaced only when `overwrite` (the file dialog's `wxFD_OVERWRITE_PROMPT`: `{error, confirm: "Replace"}`
-///    asks first). The project library (`eda`) is saved as a library file of its own.
-///  * Footprints, `{kind: "footprint", lib, path, nickname?, descr?}`: `FOOTPRINT_EDIT_FRAME::SaveLibraryAs` -- `CreateNewLibrary` (the new `.pretty` and its
-///    row in the board's table, `crate::library_tables::add_library`) and every footprint of the library copied into it; "Footprint library '%s' saved as '%s'.".
-///
-/// The new path is written into the board's table in the same request, so the studio writes no library file outside the tables' paths.
+///  * Symbols, `{kind: "symbol", lib, path, table: "none" | "replace" | "global" | "project", mode?: "packed" | "unpacked", overwrite?}`:
+///    `SYMBOL_EDIT_FRAME::saveLibrary( lib, true )` -- every symbol of the library, its modified ones as the design has them, into a new `.kicad_sym` file (a
+///    folder library is packed into one file, as `SaveLibrary` writes the cache to a file path), then the library table as `SYMBOL_LIBRARY_SAVE_AS_FILEDLG_HOOK`
+///    says: "Do not update library tables" (`none`, the hook's default), "Update existing library table entry" (`replaceLibTableEntry`), "Add new global
+///    library table entry" or "Add new project library table entry" (`addLibTableEntry( file, GLOBAL | PROJECT )`; UI-LEFT-2 LL5). An existing file is replaced
+///    only when `overwrite` (the file dialog's `wxFD_OVERWRITE_PROMPT`: `{error, confirm: "Replace"}` asks first). The project library (`eda`) is saved as a
+///    library file of its own. KiCad 25ec2335's Save Library As Packed (`mode: "packed"`) is the same file save of a folder library; Save Library As
+///    Unpacked (`mode: "unpacked"`, a file library) writes every symbol into a file of its own in the folder `path` (`wxDirDialog`, no table choice: the tables
+///    are not updated).
+///  * Footprints, `{kind: "footprint", lib, path, nickname?, descr?, global?}`: `FOOTPRINT_EDIT_FRAME::SaveLibraryAs` -- `CreateNewLibrary` (the new `.pretty`
+///    and its row in the board's table, or KiCad's global one with `global`: `FILEDLG_HOOK_NEW_LIBRARY`, `crate::library_tables::add_library`) and every
+///    footprint of the library copied into it; "Footprint library '%s' saved as '%s'.".
 pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
     let req = match parse_body(body) {
         Ok(r) => r,
@@ -483,6 +486,30 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
     }
     let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
     match text(&req, "kind") {
+        "symbol" if text(&req, "mode") == "unpacked" => {
+            let dst = vars.expand_uri(typed, dir);
+            if let Err(e) = library_tables::refuse_inside_kicads_configuration(&env, &dst) {
+                return bad(e);
+            }
+            let src = match lib_entry(dir, Kind::Symbol, lib) {
+                Some(e) => e.path,
+                None => return bad("No library specified."),
+            };
+            if !src.is_file() {
+                return bad(format!("Library '{lib}' is not a packed (single file) library."));
+            }
+            if dst.is_file() {
+                return bad(format!("'{}' is a file: choose a folder.", dst.display()));
+            }
+            let symbols = symbols_to_save(&design, &src, lib);
+            let deleted = live_symbol_marks(&design, &src, lib);
+            let gone: Vec<&str> = deleted.iter().map(String::as_str).collect();
+            let shown = dst.display().to_string();
+            match ls::save_symbol_library_unpacked(&src, &dst, &saves(&design, &symbols), &gone) {
+                Ok(w) => json!({ "ok": true, "path": shown, "nickname": Value::Null, "written": w.written, "message": format!("Symbol library file '{shown}' saved.") }),
+                Err(e) => json!({ "error": format!("Failed to save changes to symbol library file '{shown}'."), "detail": e }),
+            }
+        }
         "symbol" => {
             let mut dst = vars.expand_uri(typed, dir);
             // `if( fn.GetExt().IsEmpty() ) fn.SetExt( FILEEXT::KiCadSymbolLibFileExtension )`
@@ -495,10 +522,13 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
             if let Err(e) = library_tables::refuse_inside_kicads_configuration(&env, &dst) {
                 return bad(e);
             }
-            let replace = match text(&req, "table") {
-                "replace" => Some(lib),
-                "project" | "" => None,
-                other => return bad(format!("table is project or replace, not {other:?}")),
+            // `SYMBOL_SAVEAS_TYPE`: the hook's choice, "Do not update library tables" when none is given
+            let (update, replace, global) = match text(&req, "table") {
+                "none" | "" => (false, None, false),
+                "replace" => (true, Some(lib), false),
+                "global" => (true, None, true),
+                "project" => (true, None, false),
+                other => return bad(format!("table is none, replace, global or project, not {other:?}")),
             };
             let src = if lib == PROJECT_LIBRARY {
                 None
@@ -537,7 +567,10 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
             if replace == Some(PROJECT_LIBRARY) {
                 return bad("The project library has no library table entry to update: add the new library to the project's table instead.");
             }
-            match library_tables::put_library_row(dir, eda_kicad::library_table::TableKind::Symbol, &dst, replace) {
+            if !update {
+                return json!({ "ok": true, "path": shown, "nickname": Value::Null, "message": format!("Symbol library file '{shown}' saved.") });
+            }
+            match library_tables::put_library_row(dir, eda_kicad::library_table::TableKind::Symbol, &dst, replace, global) {
                 Ok((nickname, uri)) => json!({ "ok": true, "path": shown, "nickname": nickname, "uri": uri, "message": format!("Symbol library file '{shown}' saved.") }),
                 Err(e) => json!({ "error": format!("Error saving library table.\n{e}"), "path": shown }),
             }
@@ -552,7 +585,7 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
                 }
             };
             // an existing folder is asked about and replaced on Overwrite (`createNewLibrary`, `crate::library_tables::add_library_with`)
-            let mut add = json!({ "kind": "footprint", "path": typed, "create": true, "overwrite": req.get("overwrite").and_then(Value::as_bool) == Some(true) });
+            let mut add = json!({ "kind": "footprint", "path": typed, "create": true, "overwrite": req.get("overwrite").and_then(Value::as_bool) == Some(true), "global": req.get("global").and_then(Value::as_bool) == Some(true) });
             for key in ["nickname", "descr"] {
                 if !text(&req, key).is_empty() {
                     add[key] = json!(text(&req, key));

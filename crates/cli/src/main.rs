@@ -53,6 +53,7 @@ mod graphics_api;
 mod library_api;
 mod library_buffer;
 mod library_convert;
+mod http_lib;
 mod library_index;
 mod library_place;
 mod library_save_api;

@@ -6,12 +6,14 @@
 //    only after the file dialog's question (`wxFD_OVERWRITE_PROMPT`).
 //  * Footprints: `FOOTPRINT_EDIT_FRAME::SaveLibraryAs` (pcbnew/load_select_footprint.cpp) -- `CreateNewLibrary( _( "Save Footprint Library As" ), .. )` makes the
 //    `.pretty` folder and its row, then every footprint of the library is saved into it; "Footprint library '%s' saved as '%s'.".
-// Differs: the file dialog is a folder and a name over the server's folders (a page cannot see the machine's); KiCad's "Do not update library tables" and "Add new
-// global library table entry" are not offered (a library file no table names is not written, and KiCad's global table is read only here).
+//  * KiCad 25ec2335's Save Library As Packed (a folder library into one `.kicad_sym`, the same file dialog and table choice, "Save Library '%s' As Packed
+//    Library...") and Save Library As Unpacked (a file library into a folder, a symbol per file, `wxDirDialog` with no table choice: the tables are not updated).
+// The table choice is the hook's four, "Do not update library tables" first and selected; the footprint one is `FILEDLG_HOOK_NEW_LIBRARY`'s two (project first
+// selected, `isGlobal = false`). UI-LEFT-2 LL5. Differs: the file dialog is a folder and a name over the server's folders (a page cannot see the machine's).
 import { useEffect, useState } from "react";
 import { saveLibraryAs, type SaveLibraryAsRequest } from "../../api/librarySaveClient";
 import { fetchLibraryTables } from "../../api/libraryTablesClient";
-import { FOOTPRINT_SAVE_LIBRARY_AS_TITLE, isTableLibrary, saveLibraryAsDefaultName, saveLibraryAsTitle, TABLE_OPTIONS, type TableOption } from "../../kicad-port/librarySave";
+import { FOOTPRINT_SAVE_LIBRARY_AS_TITLE, isTableLibrary, NEW_LIBRARY_TABLE_OPTIONS, saveLibraryAsDefaultName, saveLibraryAsPackedTitle, saveLibraryAsTitle, saveLibraryAsUnpackedTitle, TABLE_OPTIONS, type TableOption } from "../../kicad-port/librarySave";
 import { closeSaveLibraryAs, useSaveLibraryAs, type SaveLibraryAsUi } from "../../state/librarySaveDialogs";
 import { selectLibraries, setLibraryOpen } from "../../state/libraryTree";
 import { useStudioDispatch } from "../../state/store";
@@ -21,17 +23,20 @@ import "../../styles/libraryTables.css";
 
 export function SaveLibraryAsDialog() {
   const req = useSaveLibraryAs();
-  return req ? <Body key={`${req.kind}:${req.lib}`} req={req} /> : null;
+  return req ? <Body key={`${req.kind}:${req.lib}:${req.mode ?? ""}`} req={req} /> : null;
 }
 
 function Body({ req }: { req: SaveLibraryAsUi }) {
   const dispatch = useStudioDispatch();
   const symbol = req.kind === "symbol";
-  const title = symbol ? saveLibraryAsTitle(req.lib) : FOOTPRINT_SAVE_LIBRARY_AS_TITLE;
+  const unpacked = symbol && req.mode === "unpacked";
+  const title = !symbol ? FOOTPRINT_SAVE_LIBRARY_AS_TITLE : req.mode === "packed" ? saveLibraryAsPackedTitle(req.lib) : unpacked ? saveLibraryAsUnpackedTitle(req.lib) : saveLibraryAsTitle(req.lib);
   const [folder, setFolder] = useState("");
-  const [name, setName] = useState(saveLibraryAsDefaultName(req.kind, req.lib));
-  // the project library has no row of its own to point elsewhere
-  const [table, setTable] = useState<TableOption>("project");
+  // Unpacked: a folder (`wxDirDialog`), named after the library to begin with
+  const [name, setName] = useState(unpacked ? `${req.lib}.kicad_symdir` : saveLibraryAsDefaultName(req.kind, req.lib));
+  // the hook's choice: "Do not update library tables" to begin with (`NORMAL_SAVE_AS`); the footprint one's project table (`isGlobal = false`)
+  const [table, setTable] = useState<TableOption>("none");
+  const [fpGlobal, setFpGlobal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [browse, setBrowse] = useState(false);
@@ -56,7 +61,7 @@ function Body({ req }: { req: SaveLibraryAsUi }) {
     if (name.trim() === "") return setError("Give the library a file name.");
     setBusy(true);
     try {
-      const request: SaveLibraryAsRequest = { kind: req.kind, lib: req.lib, path: target, ...(symbol ? { table } : {}) };
+      const request: SaveLibraryAsRequest = { kind: req.kind, lib: req.lib, path: target, ...(symbol ? (unpacked ? { mode: "unpacked" as const } : { table, ...(req.mode ? { mode: req.mode } : {}) }) : { global: fpGlobal }) };
       let answer = await saveLibraryAs(request);
       if (!answer.ok && answer.confirm) {
         if (!(await ask(answer.error, answer.confirm))) return;
@@ -66,9 +71,11 @@ function Body({ req }: { req: SaveLibraryAsUi }) {
         // "Footprint library '%s' saved as '%s'." is `DisplayInfoMessage`; the Symbol Editor's `saveLibrary` formats "Symbol library file '%s' saved." and shows
         // nothing (UI-LEFT-2 LL6)
         if (!symbol) dispatch({ type: "TOAST", message: answer.message, kind: "info" });
-        // `SyncLibraries( true )` / `FocusOnLibID`: the new library is listed and selected in the tree
-        setLibraryOpen(req.kind, answer.nickname, true);
-        selectLibraries(req.kind, [answer.nickname]);
+        // `SyncLibraries( true )` / `FocusOnLibID`: the new library is listed and selected in the tree (none when the tables were not updated)
+        if (answer.nickname) {
+          setLibraryOpen(req.kind, answer.nickname, true);
+          selectLibraries(req.kind, [answer.nickname]);
+        }
         notifyLibraryChanged();
         close();
       } else {
@@ -96,19 +103,30 @@ function Body({ req }: { req: SaveLibraryAsUi }) {
             <input id="sla-name" type="text" autoFocus value={name} spellCheck={false} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void save()} />
             <span />
           </div>
-          {symbol && (
-            <div role="radiogroup" aria-label="Library table" style={{ marginTop: 10, display: "grid", gap: 4 }}>
+          {symbol && !unpacked && (
+            <div role="radiogroup" aria-label="Library table" style={{ marginTop: 10, display: "grid", gap: 4 }} data-save-library-table>
               {TABLE_OPTIONS.filter((o) => o.value !== "replace" || isTableLibrary(req.lib)).map((o) => (
                 <label key={o.value}>
-                  <input type="radio" name="sla-table" checked={table === o.value} onChange={() => setTable(o.value)} /> {o.label}
+                  <input type="radio" name="sla-table" value={o.value} checked={table === o.value} onChange={() => setTable(o.value)} /> {o.label}
+                </label>
+              ))}
+            </div>
+          )}
+          {!symbol && (
+            <div role="radiogroup" aria-label="Library table" style={{ marginTop: 10, display: "grid", gap: 4 }} data-save-library-table>
+              {NEW_LIBRARY_TABLE_OPTIONS.map((o) => (
+                <label key={o.value}>
+                  <input type="radio" name="sla-fp-table" value={o.value} checked={fpGlobal === (o.value === "global")} onChange={() => setFpGlobal(o.value === "global")} /> {o.label}
                 </label>
               ))}
             </div>
           )}
           <div className="lt-note" style={{ marginTop: 8 }}>
-            {symbol
-              ? `Writes every symbol of '${req.lib}' (with the changes not saved yet) to ${target}${table === "replace" ? ` and points the library's table row at it.` : `, and adds it to the project's sym-lib-table.`}`
-              : `Makes ${target}${target.endsWith(".pretty") ? "" : ".pretty"}, adds it to the project's fp-lib-table and saves every footprint of '${req.lib}' into it.`}
+            {unpacked
+              ? `Writes every symbol of '${req.lib}' (with the changes not saved yet) into the folder ${target}, a file per symbol; the library tables are not updated.`
+              : symbol
+                ? `Writes every symbol of '${req.lib}' (with the changes not saved yet) to ${target}${table === "replace" ? " and points the library's table row at it." : table === "global" ? ", and adds it to KiCad's global sym-lib-table." : table === "project" ? ", and adds it to the project's sym-lib-table." : "; the library tables are not updated."}`
+                : `Makes ${target}${target.endsWith(".pretty") ? "" : ".pretty"}, adds it to the ${fpGlobal ? "global" : "project's"} fp-lib-table and saves every footprint of '${req.lib}' into it.`}
           </div>
           {error && (
             <div className="lt-error" role="alert" style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>

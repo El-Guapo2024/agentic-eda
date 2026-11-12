@@ -11,8 +11,13 @@
 // Migrate Libraries converts the selected rows' libraries through kicad-cli and points the rows at the result; Edit Options... is `DIALOG_PLUGIN_OPTIONS`. The design
 // block table has no Show column (`DESIGN_BLOCK_GRID_TRICKS::SupportsVisibilityColumn` is false).
 import { useEffect, useMemo, useRef, useState } from "react";
-import { checkLibraryRows, fetchLibraryTables, migrateLibraries, normalizeLibraryPath, resetGlobalTable, saveLibraryTable, type KindView, type LibraryTablesView } from "../../api/libraryTablesClient";
+import { checkLibraryRows, fetchLibraryTables, migrateLibraries, normalizeLibraryPath, parseTableText, resetGlobalTable, saveLibraryTable, type KindView, type LibraryTablesView } from "../../api/libraryTablesClient";
 import {
+  cellPasteKind,
+  insertTableRows,
+  isTableText,
+  pasteTableText,
+  type GridColumn,
   appendRow,
   baseName,
   canEditOptions,
@@ -221,6 +226,36 @@ function TablesBody({ kind }: { kind: TableKind }) {
     }
   };
 
+  /**
+   * Ctrl+V on the grid (`GRID_TRICKS::paste_clipboard` -> `LIB_TABLE_GRID_TRICKS::paste_text`), and in a cell being edited (`onCharHook`): a table's s-expression
+   * (its preamble in the text) puts that table's rows at the top; a text of several cells (tabs or commas, line breaks) fills the rows from the cursor's down,
+   * adding rows as needed -- in a cell only when its row has no nickname yet (else the bell: nothing). A plain text pastes into the cell as typing would.
+   */
+  const onPaste = async (e: React.ClipboardEvent) => {
+    if (!editable) return;
+    const text = e.clipboardData.getData("text/plain");
+    if (!text) return;
+    const input = (e.target as HTMLElement).closest<HTMLInputElement>("input[data-row]");
+    const at = input ? Number(input.dataset.row) : cursor;
+    if (input) {
+      const how = cellPasteKind(rows[at], text);
+      if (how === "cell") return;
+      e.preventDefault();
+      if (how === "refuse") return;
+    } else e.preventDefault();
+    setProblem(null);
+    setMessage(null);
+    if (isTableText(kind, text)) {
+      const r = await parseTableText(kind, text);
+      if (r.error || !r.rows) return setMessage(r.error ?? "The text is not a library table.");
+      setRows((now) => insertTableRows(now, r.rows!));
+      return;
+    }
+    // in a cell: `SetGridCursor( row, 0 )` first; on the grid: the cursor's row, its first column (the grid keeps no cell cursor of its own here)
+    const col: GridColumn = "status";
+    setRows((now) => pasteTableText(now, Math.max(0, at), col, text, kind, supportsVisibility));
+  };
+
   const addEmpty = () => {
     setProblem(null);
     focusRow.current = rows.length;
@@ -263,7 +298,7 @@ function TablesBody({ kind }: { kind: TableKind }) {
       const row: TableRow = {
         nickname: nicknameForFile(kind, baseName(path)),
         uri: norm.uri,
-        type: what === "table" ? "Table" : "KiCad",
+        type: what === "table" ? "Table" : what === "http" ? "HTTP" : "KiCad",
         options: "",
         descr: "",
         enabled: true,
@@ -458,6 +493,8 @@ function TablesBody({ kind }: { kind: TableKind }) {
           { what: "symbol", label: "KiCad (.kicad_sym)" },
           // `PANEL_SYM_LIB_TABLE`'s browse menu: "Add folder-based entry right after KiCad file-based entry" (KiCad 10's `.kicad_symdir` libraries)
           { what: "symbol_folder", label: "KiCad (folder with .kicad_sym files)" },
+          // `SCH_IO_HTTP_LIB::GetLibraryDesc` (UI-LEFT-2 LL5: the server reads it)
+          { what: "http", label: "HTTP (*.kicad_httplib)" },
           { what: "table", label: "Table (nested library table)" },
         ]
       : kind === "footprint"
@@ -538,7 +575,7 @@ function TablesBody({ kind }: { kind: TableKind }) {
               {kv.project.error && <span className="lt-error"> {kv.project.error}</span>}
             </div>
           )}
-          <div className="lt-gridwrap" ref={gridRef}>
+          <div className="lt-gridwrap" ref={gridRef} onPaste={(e) => void onPaste(e)} data-lt-grid-paste>
             <table className="lt-grid" aria-label={tab === GLOBAL ? "Global libraries" : tab === PROJECT ? "Project libraries" : "Library table"}>
               <colgroup>
                 <col style={{ width: 30 }} />
