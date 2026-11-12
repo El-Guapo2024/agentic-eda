@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { braceLight, braceMatch, changedRange, convertSmartQuotesAndDashes, tabIndent, toggleComment } from "./scintillaTricks";
+import { backspaceUnindent, braceLight, braceMatch, changedRange, columnAt, convertSmartQuotesAndDashes, indentGuides, tabIndent, toggleComment } from "./scintillaTricks";
 
 test("BraceMatch: nested pairs, both ways, a parenthesis in a string counts (no lexer), none for an unmatched one", () => {
   const t = "(rule x (constraint clearance (min 1mm)))";
@@ -48,4 +48,31 @@ test("ConvertSmartQuotesAndDashes, and the one range an edit changes", () => {
   assert.deepEqual(changedRange("(rule a)", "(rule\t a)"), { from: 5, to: 5, insert: "\t" });
   assert.deepEqual(changedRange("abc", "abc"), { from: 3, to: 3, insert: "" });
   assert.deepEqual(changedRange("#a\n#b", "a\nb"), { from: 0, to: 4, insert: "a\n" });
+});
+
+test("Backspace in a line's leading blanks un-indents to the step below (SetBackSpaceUnIndents)", () => {
+  // a caret at the end of 8 columns of blanks: back to 4, made of a tab (`useTabs`)
+  assert.deepEqual(backspaceUnindent("(rule a\n        (b))", 16, 16), { text: "(rule a\n\t(b))", anchor: 9, caret: 9 });
+  // 6 columns: back to the step at 4 (`indentation % IndentSize()`)
+  assert.deepEqual(backspaceUnindent("x\n      y", 8, 8), { text: "x\n\ty", anchor: 3, caret: 3 });
+  // a caret within the blanks counts too; the caret goes to the end of the new blanks
+  assert.deepEqual(backspaceUnindent("\t\ty", 1, 1), { text: "\ty", anchor: 1, caret: 1 });
+  // after text, at the line's start, or with a selection: a plain Backspace
+  assert.equal(backspaceUnindent("  ab", 3, 3), null);
+  assert.equal(backspaceUnindent("a\n  b", 2, 2), null);
+  assert.equal(backspaceUnindent("    b", 2, 4), null);
+});
+
+test("the indentation guides are in the leading blanks at each indent step, the matched brace's column lit", () => {
+  const text = "(rule a\n\t(constraint\n\t\t(min 1)))\n        x";
+  const g = indentGuides(text, 4);
+  // line 2: one tab, no guide (column 0); line 3: the second tab starts at column 4; line 4: spaces at columns 4 (lit)
+  const second = text.indexOf("\t\t") + 1;
+  assert.equal(g.get(second), true);
+  assert.equal(g.has(text.indexOf("\t")), false);
+  const spaces = text.indexOf("        ");
+  assert.equal(g.get(spaces + 4), true);
+  assert.equal(g.size, 2);
+  assert.equal(indentGuides(text, 0).get(second), false, "no highlight");
+  assert.equal(columnAt(text, text.indexOf("(min")), 8);
 });

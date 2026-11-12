@@ -102,6 +102,17 @@
   color: var(--chrome-selected-text);
   background: color-mix(in srgb, var(--chrome-text) 20%, var(--chrome-input-bg));
 }
+/* `SetIndentationGuides( true )`: a dotted line at the left of the blank that starts an indent step (`STYLE_INDENTGUIDE`, the text's colour faded), the
+   one `SetHighlightGuide` names in the brace light's colours. A background, so the blank keeps its width and the caret stays on its letter. */
+.rte-guide {
+  background-image: linear-gradient(to bottom, color-mix(in srgb, var(--chrome-text) 35%, transparent) 50%, transparent 50%);
+  background-size: 1px 2px;
+  background-repeat: repeat-y;
+  background-position: left top;
+}
+.rte-guide-lit {
+  background-image: linear-gradient(to bottom, var(--chrome-text) 50%, transparent 50%);
+}
 /* `STYLE_BRACEBAD`: `*wxRED`. */
 .rte-brace-bad {
   color: #ff0000;

@@ -187,7 +187,9 @@ impl<'a> RuleBoard<'a> {
             }),
         );
         env.nets = model.nets.iter().map(|n| n.name.clone()).collect();
-        env.number_nets(model.nets.iter().map(|n| n.name.as_str()));
+        // `A.Net`: the derived board's codes, which number the nets KiCad's netlist gives a lone pin (`unconnected-(..)`) with the model's
+        let lone = eda_engine::nets::unconnected_pad_nets(self.design, model);
+        env.number_nets(model.nets.iter().map(|n| n.name.as_str()).chain(lone.values().map(String::as_str)));
         env.footprints = self.footprints.values().cloned().collect();
         env.footprints.sort_by(|a, b| a.id.cmp(&b.id));
         env.areas = self.areas();
@@ -1226,6 +1228,24 @@ mod footprint_facts_tests {
         let mut c = Condition::new(expr);
         assert!(c.compile(&env), "{expr}: {:?}", c.compile_errors());
         c.evaluate_for(&env, Some(item), None, 0, Some("F.Cu"), None)
+    }
+
+    /// UI-LEFT-2 BB7: `A.Net` is the code of the derived board, which numbers a lone pin's own net (`unconnected-(R6-Pad2)`, KiCad's netlist) with the
+    /// model's: a net whose name sorts after it has the next code.
+    #[test]
+    fn a_nets_code_counts_the_lone_pins_nets_as_the_board_file_does() {
+        let (design, model) = hv_board(|_, m| {
+            m.nets[0].name = "zz".into();
+            m.parts[1].pins.push(Pin { number: "2".into(), name: None, kind: PinKind::Passive });
+            // (a linked symbol draws only the pins its link lists: R6 with no link draws both)
+            m.symbol_links.remove("R6");
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let pads: Vec<Rc<RuleItem>> = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).collect();
+        let r5 = pads.iter().find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R5")).unwrap().clone();
+        assert!(holds(&rb, "A.Net == 2", &r5), "unconnected-(R6-Pad2) is 1, zz 2");
+        assert_eq!(rb.env_for_rules().net_code("unconnected-(R6-Pad2)"), 1);
     }
 
     /// R5-D1: the footprint's sheet (`GetSheetname`), its fields (`GetField`: no "Footprint" field) and its sheet in `memberOfSheet` for a pad of it.

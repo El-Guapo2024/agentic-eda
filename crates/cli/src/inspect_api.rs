@@ -353,6 +353,6 @@ pub fn pcb_query(dir: &Path, body: &[u8]) -> Value {
     let env = rb.env_for_rules();
     // the from-to cache only when the query asks for it (it is the whole board's connectivity)
     let asks_from_to = String::from_utf8_lossy(body).to_lowercase().contains("fromto");
-    let board_facts = eda_drc::query::BoardFacts { footprint: Some(&facts), item: Some(&item), footprints: env.footprints.clone(), areas: env.areas.clone(), from_to: asks_from_to.then(|| eda_drc::from_to::of_board(&rb)) };
+    let board_facts = eda_drc::query::BoardFacts { footprint: Some(&facts), item: Some(&item), footprints: env.footprints.clone(), areas: env.areas.clone(), from_to: asks_from_to.then(|| eda_drc::from_to::of_board(&rb)), net_codes: Some(env.net_codes.clone()) };
     eda_drc::query::handle_on(body, &board_facts)
 }

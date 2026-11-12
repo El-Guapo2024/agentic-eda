@@ -25,14 +25,15 @@
 // them. Escape is taken in the window's capture phase, before a dialog's own Escape (Board Setup's closes the dialog): with the list open it
 // only closes the list; otherwise `onEscape` (onCharHook's "Cancel Changes?") may take it, or it goes on to the dialog.
 //
-// Not ported: the indentation guides (`SetIndentationGuides( true )` and the highlighted guide of the matched brace), Ctrl+wheel zoom,
-// Backspace un-indenting, Ctrl+Tab moving to the next control (the browser keeps Ctrl+Tab).
+// The multi-line editor (Custom Rules) has `panel_setup_rules_base.cpp`'s indentation guides (`SetIndentationGuides( true )`, the guide at the
+// matched brace's column lit: `SetHighlightGuide`) and Backspace un-indenting (`SetBackSpaceUnIndents( true )`); Ctrl+wheel zooms as Scintilla's
+// does (a notch a point, the same zoom as the menu's). Not ported: Ctrl+Tab moving to the next control (the browser keeps Ctrl+Tab).
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { isMac } from "../platform";
 import { autoCompSelect, doAutocomplete, substitutionSelection, type AutoCompList, type CharAdded } from "../kicad-port/ruleCompletion";
-import { braceLight, changedRange, convertSmartQuotesAndDashes, tabIndent, toggleComment } from "../kicad-port/scintillaTricks";
+import { backspaceUnindent, braceLight, changedRange, columnAt, convertSmartQuotesAndDashes, indentGuides, tabIndent, toggleComment } from "../kicad-port/scintillaTricks";
 import "../styles/ruleTextEditor.css";
 
 export interface RuleTextEditorHandle {
@@ -435,6 +436,15 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
       applyEdit(el.value, tabIndent(el.value, anchorOf(el), caretOf(el)));
       return;
     }
+    if (e.key === "Backspace" && plain && !e.shiftKey && !singleLine && !l) {
+      // `SetBackSpaceUnIndents( true )`: in the leading blanks Backspace goes back an indentation step
+      const un = backspaceUnindent(el.value, anchorOf(el), caretOf(el));
+      if (un) {
+        e.preventDefault();
+        applyEdit(el.value, un);
+        return;
+      }
+    }
     if (e.key === "Enter" && (e.shiftKey || singleLine) && onAccept) {
       e.preventDefault();
       onAccept();
@@ -444,6 +454,8 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
   // ------------------------------------------------------------------------------------------------------------ the highlights and the list
 
   const light = useMemo(() => (sel.focused || list ? braceLight(value, sel.caret) : null), [value, sel.caret, sel.focused, list]);
+  // `SetIndentationGuides( true )` on the multi-line editor, the guide at a matched brace's column lit (`SetHighlightGuide( GetColumn( bracePos1 ) )`)
+  const guides = useMemo(() => (singleLine ? new Map<number, boolean>() : indentGuides(value, light?.kind === "match" ? columnAt(value, light.at[0]) : 0)), [value, light, singleLine]);
   const wordStart = list ? list.posStart - list.lenEntered : -1;
 
   /** The text as the overlay draws it: the lit braces in their spans, markers where the caret and the list's word are. */
@@ -458,7 +470,7 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
       lit.set(light.at[1], "match");
     } else if (light?.kind === "bad") lit.set(light.at, "bad");
     const out: ReactNode[] = [];
-    const cuts = [...new Set([0, value.length, ...marks.keys(), ...[...lit.keys()].flatMap((p) => [p, p + 1])])].filter((p) => p >= 0 && p <= value.length).sort((a, b) => a - b);
+    const cuts = [...new Set([0, value.length, ...marks.keys(), ...[...lit.keys(), ...guides.keys()].flatMap((p) => [p, p + 1])])].filter((p) => p >= 0 && p <= value.length).sort((a, b) => a - b);
     for (let i = 0; i < cuts.length; i++) {
       const p = cuts[i]!;
       for (const m of marks.get(p) ?? []) out.push(m);
@@ -466,12 +478,15 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
       if (next === undefined) break;
       const piece = value.slice(p, next);
       const kind = lit.get(p);
-      out.push(kind ? <span key={`b${p}`} className={kind === "match" ? "rte-brace" : "rte-brace-bad"} data-brace={kind}>{piece}</span> : piece);
+      const guide = guides.get(p);
+      if (kind) out.push(<span key={`b${p}`} className={kind === "match" ? "rte-brace" : "rte-brace-bad"} data-brace={kind}>{piece}</span>);
+      else if (guide !== undefined) out.push(<span key={`g${p}`} className={guide ? "rte-guide rte-guide-lit" : "rte-guide"} data-guide={guide ? "lit" : ""}>{piece}</span>);
+      else out.push(piece);
     }
     // A last empty line has a height only with something on it.
     if (value === "" || value.endsWith("\n")) out.push(" ");
     return out;
-  }, [value, sel.caret, light, wordStart]);
+  }, [value, sel.caret, light, wordStart, guides]);
 
   const lines = useMemo(() => {
     let n = 1;
@@ -524,6 +539,24 @@ export const RuleTextEditor = forwardRef<RuleTextEditorHandle, RuleTextEditorPro
     setZoom(v);
     writeZoom(v);
   };
+
+  // Ctrl+wheel: Scintilla's `DoMouseWheel` zooms a point a notch (`SCI_ZOOMIN` turning up, `SCI_ZOOMOUT` down) instead of scrolling. A native listener:
+  // React's wheel listener is passive and cannot keep the browser from zooming the page.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || e.deltaY === 0) return;
+      e.preventDefault();
+      setZoom((z) => {
+        const v = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z + (e.deltaY < 0 ? 1 : -1)));
+        writeZoom(v);
+        return v;
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const menuEntries = (): MenuEntry[] => {
     const el = area.current;

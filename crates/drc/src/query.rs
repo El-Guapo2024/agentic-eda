@@ -153,6 +153,9 @@ pub struct BoardFacts<'a> {
     pub areas: Vec<Rc<AreaFacts>>,
     /// The board's from-to cache ([`crate::from_to::of_board`]).
     pub from_to: Option<Rc<dyn Fn(&str, &str, &str) -> bool>>,
+    /// The derived board's net codes (`A.Net`, the rule board's: the model's nets and the lone pins' `unconnected-(..)` ones numbered together), for the
+    /// request's own numbering of the nets it sends.
+    pub net_codes: Option<HashMap<String, i64>>,
 }
 
 fn rule_item(q: &QueryItem, facts: &dyn Fn(&str) -> Option<(String, Vec<String>)>, shaped: Option<&RuleItem>) -> RuleItem {
@@ -234,6 +237,9 @@ pub fn run_on(req: &Request, board: &BoardFacts) -> Value {
     env.footprints = board.footprints.clone();
     env.areas = board.areas.clone();
     env.from_to = std::cell::RefCell::new(board.from_to.clone());
+    if let Some(codes) = &board.net_codes {
+        env.net_codes = codes.clone();
+    }
     let env = Rc::new(env);
     let compiled = compile(&req.expression, &PCB_UNITS, &env);
     let errors: Vec<String> = compiled.errors.iter().map(|e| e.message.clone()).collect();
