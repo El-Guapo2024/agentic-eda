@@ -332,6 +332,8 @@ fn event_sizes_json(s: &eda_pns::router::EventSizes) -> Value {
         "width_applied": s.width_applied,
         "gap": s.diff_pair_gap.as_ref().map(|g| g.0),
         "gap_source": s.diff_pair_gap.as_ref().map(|g| g.1.clone()),
+        "max_uncoupled": s.max_uncoupled.as_ref().map(|m| m.0),
+        "max_uncoupled_source": s.max_uncoupled.as_ref().map(|m| m.1.clone()),
     })
 }
 
@@ -873,6 +875,11 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
                     "rule_width_source": s.diff_pair_width_source,
                     "rule_gap_source": s.diff_pair_gap_source,
                 });
+                // "DP Max Uncoupled-length: %s" (`CT_MAX_UNCOUPLED` of the two traces on the current layer), UI-LEFT-2 RR6
+                if let Some((max, rule)) = router.diff_pair_max_uncoupled() {
+                    reply["sizes"]["max_uncoupled"] = json!(max);
+                    reply["sizes"]["max_uncoupled_source"] = json!(rule);
+                }
             }
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply

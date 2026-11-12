@@ -430,11 +430,12 @@ impl DiffPairPlacer {
                 }
             }
             // the two lines, as dots, collide with nothing: "If the only reason we collide is track width; it's better to allow the user to
-            // start anyway and just highlight the resulting collisions, so they can change width later."
+            // start anyway and just highlight the resulting collisions, so they can change width later." `m_world->CheckColliding`: the
+            // router's world itself, so the board edge in a castellated pad's hole is none (`QueryEdgeExclusions`, UI-LEFT-2 RR6)
             let dummy_collides = |width: Nm| {
                 [(found.pair.anchor_n, &net_n), (found.pair.anchor_p, &net_p)].iter().any(|(at, net)| {
                     let pts = [*at, *at];
-                    PairLine { pts: &pts, net: *net, layer, width, via: None }.hits_node(world, rules, kind_mask::ANY)
+                    PairLine { pts: &pts, net: *net, layer, width, via: None }.hits_world(world, rules, kind_mask::ANY)
                 })
             };
             if dummy_collides(sizes.width) && dummy_collides(rules.track_width_min_nm) {
@@ -926,7 +927,7 @@ impl DiffPairPlacer {
         Some(walked)
     }
 
-    /// `DIFF_PAIR_PLACER::tryWalkDp`: the better of the walks starting with P and with N -- the lowest `1 + coupled length + 3 |skew|`
+    /// `DIFF_PAIR_PLACER::tryWalkDp`: the best of its four attempts, the walks starting with P and with N (twice each) -- the lowest `1 + coupled length + 3 |skew|`
     /// (`double score = cl + fabs( skew ) * 3.0; if( score < bestScore )`), so the *shortest* coupled length -- then optimized ([`crate::optimizer::optimize_pair`]). When neither walk works, KiCad's `if( bestScore > 0.0 )` is true all the same (the score
     /// starts at 1e14 and nothing lowers it): `aPair.SetShape( best )` takes the default `DIFF_PAIR` -- two empty lines -- and the function says `true`, so
     /// a pair that cannot be walked disappears and has no head to show. (Walk around then calls that a fit, and fixing it places nothing; Shove runs
@@ -934,9 +935,15 @@ impl DiffPairPlacer {
     fn try_walk_dp(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, pair: &mut DiffPair, solids_only: bool) -> bool {
         let mut best: Option<DiffPair> = None;
         let mut best_score = 100_000_000_000_000.0f64;
-        // KiCad tries four attempts, `pfirst = attempt & 1` and a winding it never reads: the third and fourth repeat the first two
-        for p_first in [false, true] {
-            if let Some(p) = Self::attempt_walk(node, rules, settings, pair, p_first, solids_only) {
+        // `for( int attempt = 0; attempt <= 3; attempt++ )`: `pfirst = attempt & 1`, `wind_cw = attempt & 2`, which `attemptWalk` takes and never
+        // reads, so the third and fourth attempts walk the same pair in the same world as the first two (each on a fresh `Branch()`) and find what
+        // they found; `score < bestScore` keeps the first of equals. Their results are those of attempts 0 and 1, taken again (UI-LEFT-2 RR6).
+        let mut walks: [Option<Option<DiffPair>>; 2] = [None, None];
+        for attempt in 0..=3usize {
+            let p_first = attempt & 1 != 0;
+            let _wind_cw = attempt & 2 != 0;
+            let walked = walks[attempt & 1].get_or_insert_with(|| Self::attempt_walk(node, rules, settings, pair, p_first, solids_only)).clone();
+            if let Some(p) = walked {
                 let cl = 1.0 + p.coupled_length();
                 let skew = p.skew();
                 let score = cl + skew.abs() * 3.0;
@@ -1461,6 +1468,39 @@ mod tests {
         assert!(pv.head_a.point_count() >= 2 && pv.head_b.point_count() >= 2, "{pv:?}");
         assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(at(r_p, 90.0)), Some(at(r_n, 90.0))), "it starts where the arcs end");
         assert!(!pv.colliding, "{pv:?}");
+    }
+
+    /// UI-LEFT-2 RR8, held to KiCad 8303b2ad's code: from two arc ends one above the other (`delta.x == 0`), a cursor straight up
+    /// ("steeply off the chord") fits no pair. `buildDpContinuation` gives the anchors' gateway (no entry lines, so `BuildInitial` checks
+    /// no connection angle) and the two 22.5-degree extensions along the chord; `BuildForCursor` gives eight gateways round the cursor. To
+    /// go up, P (the lower anchor) must get past N: a straight-first trace runs through N's anchor (`p.Intersects( n )`), a
+    /// diagonal-first one comes nearer N than the pitch (`checkGap`'s `gap - 100`), and the 22.5-degree gateways lead north-west, the
+    /// same. KiCad's `routeHead` then returns `m_currentTraceOk`: the last fitted pair stays, as here. Not a port difference.
+    #[test]
+    fn from_two_arc_ends_a_cursor_across_their_line_fits_no_pair_and_the_last_head_stays() {
+        let mut node = Node::new();
+        let (r_p, r_n) = (mm(5.0), mm(5.45));
+        let at = |r: Nm, deg: f64| p(Nm::kiround(r.as_f64() * deg.to_radians().cos()), Nm::kiround(-r.as_f64() * deg.to_radians().sin()));
+        smd_pad(&mut node, "USB_DP", at(r_p, 0.0), mm(0.1));
+        smd_pad(&mut node, "USB_DN", at(r_n, 0.0), mm(0.1));
+        let arc = |net: &str, r: Nm| Item::Arc(crate::item::Arc::new(net_of(net), 0, mm(0.2), crate::arcs::ArcPts::new(at(r, 0.0), at(r, 45.0), at(r, 90.0)), Some(format!("arc_{net}")), false));
+        let start = node.add(arc("USB_DP", r_p));
+        node.add(arc("USB_DN", r_n));
+        let found = find_dp_primitive_pair(&node, start).expect("the arcs' free ends");
+        let begin = || DiffPairPlacer::start(&node, &rules(), &RoutingSettings::default(), start, found.pair.anchor_p, 0, LayerRange::new(0, 1), true).expect("starts on arcs");
+        // straight up from the ends, and up-left and up-right of it: nothing fits
+        for c in [p(Nm::ZERO, mm(-8.2)), p(mm(-1.5), mm(-7.8)), p(mm(1.5), mm(-7.8))] {
+            let mut dp = begin();
+            assert!(!dp.move_to(&rules(), &RoutingSettings::default(), c), "{c:?}");
+            assert_eq!(dp.preview().head_a.point_count(), 0);
+        }
+        // west, along the arcs' way out: it fits; then up, it does not, and the pair fitted last is still the head
+        let mut dp = begin();
+        assert!(dp.move_to(&rules(), &RoutingSettings::default(), p(mm(-3.0), mm(-5.2))));
+        let before = dp.preview();
+        assert!(before.head_a.point_count() >= 2);
+        dp.move_to(&rules(), &RoutingSettings::default(), p(Nm::ZERO, mm(-8.2)));
+        assert_eq!(dp.preview().head_a.pts, before.head_a.pts, "`return m_currentTraceOk`: the last fitted pair");
     }
 
     /// UI-LEFT R2 (`handleLayerSwitch` in the pair tool, `DIFF_PAIR_PLACER::makeVia`: `m_sizes.ViaType()`): a pair of blind vias armed from the blind

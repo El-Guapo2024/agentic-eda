@@ -699,6 +699,30 @@ mod tests {
         assert!(node.colliding_with(&off, &net_of("N1"), crate::layer::LayerRange::single(0), &model.board, &[], crate::node::QueryOpts { root_world: true, ..Default::default() }).iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if s.edge)));
     }
 
+    /// UI-LEFT-2 RR6: `isStartingPointRoutable`'s pair half asks the world itself too (`m_world->CheckColliding( &dummyStartLineA / B, ITEM::ANY_T )`),
+    /// so a pair may start on two castellated pads on the board edge; without the property the start is refused as before.
+    #[test]
+    fn a_pair_may_start_on_two_castellated_pads_on_the_board_edge() {
+        use eda_model::{Net, Pad, PadKind, PadShape};
+        for castellated in [true, false] {
+            let (mut design, mut model) = edge_pad_board(Default::default(), castellated);
+            let pad = |n: &str, x: Nm| Pad { number: n.into(), at: (x, Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(0.4)), drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() };
+            model.footprints[0].pads = vec![pad("1", Nm::ZERO), pad("2", mm(1.0))];
+            model.parts[0].pins.push(Pin { number: "2".into(), name: None, kind: PinKind::Passive });
+            model.nets = vec![Net { name: "USB_P".into(), pins: vec!["J1.1".into()] }, Net { name: "USB_N".into(), pins: vec!["J1.2".into()] }];
+            let extras = &mut design.drawings.as_mut().unwrap().footprint_extras[0];
+            let mask = extras.pads[0].clone();
+            extras.pads.push(mask);
+            let mut router = crate::router::Router::new(&design, &model);
+            let r = router.start_diff_pair(Point { x: mm(10.0), y: Nm::ZERO }, "F.Cu");
+            if castellated {
+                assert_eq!(r, Ok(()), "the pair's start on the castellated pads");
+            } else {
+                assert_eq!(r, Err("The routing start point violates DRC.".to_string()));
+            }
+        }
+    }
+
     /// `QueryConstraint`'s `evaluateLineSegments`: with a rule that looks at shapes (`HasGeometryDependentRules`), a line of the router of several
     /// segments is asked segment by segment -- each a dummy track of the line's width -- and the smallest clearance is the line's. Here a rule gives
     /// 0.05 mm to a track that crosses the rule area Z, which only the line's second segment does: the whole line has 0.05 mm. (It was asked by its

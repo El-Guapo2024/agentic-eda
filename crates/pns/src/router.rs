@@ -228,6 +228,8 @@ pub struct EventSizes {
     /// A pair's `DiffPairWidth()` / `DiffPairGap()` and their sources, when asked (`nets.size() >= 2 && ( bds.UseNetClassDiffPair() || !explicit )`).
     pub diff_pair_width: Option<(Nm, String)>,
     pub diff_pair_gap: Option<(Nm, String)>,
+    /// A pair's "DP Max Uncoupled-length" row ([`Router::diff_pair_max_uncoupled`]) on the layer of the event.
+    pub max_uncoupled: Option<(Nm, String)>,
 }
 
 impl Router {
@@ -661,6 +663,7 @@ impl Router {
                 out.width_applied = true;
             }
         }
+        out.max_uncoupled = self.diff_pair_max_uncoupled_on(layer);
         if let (Some(d), Some((w, g))) = (self.diff.as_mut(), dp_sizes) {
             // "When continuing from an existing track in connected-track-width mode, preserve the inherited diff pair width"
             let keep_width = !explicit && !d.legs().is_empty();
@@ -668,6 +671,23 @@ impl Router {
             d.set_dimensions((!keep_width).then_some(w), Some(g), None);
         }
         Some(out)
+    }
+
+    /// `ROUTER_TOOL::UpdateMessagePanel`'s last row for a pair (UI-LEFT-2 RR6): `resolver->QueryConstraint( PNS::CONSTRAINT_TYPE::CT_MAX_UNCOUPLED,
+    /// traces[0], traces[1], m_router->GetCurrentLayer(), &constraint )` -- `DIFF_PAIR_MAX_UNCOUPLED_CONSTRAINT` of the pair's two lines (a dummy track of
+    /// each net, `getBoardItem`) -- shown as "DP Max Uncoupled-length: %s" of `constraint.m_Value.Max()` over "(from %s)" of the rule's name. `None`
+    /// with no pair in progress or no rule giving one (only a custom rule does: `diff_pair_uncoupled`).
+    pub fn diff_pair_max_uncoupled(&self) -> Option<(Nm, String)> {
+        self.diff_pair_max_uncoupled_on(self.diff.as_ref()?.current_layer())
+    }
+
+    fn diff_pair_max_uncoupled_on(&self, layer: i32) -> Option<(Nm, String)> {
+        use crate::rule_resolver::Side;
+        let d = self.diff.as_ref()?;
+        let r = self.world.rule_resolver()?;
+        let (a, b) = (Side::Track { net: &d.net_p, layer, seg: None }, Side::Track { net: &d.net_n, layer, seg: None });
+        let (c, rule) = r.query_constraint(eda_drc::constraints::CType::MaxUncoupled, &a, Some(&b), Some(layer))?;
+        Some((Nm::new(c.max()), rule))
     }
 
     /// `ROUTER::SwitchLayer` (R6-R3): `m_placer->SetLayer( aLayer )` while a track is routed ([`LinePlacer::set_layer`]); false when no route is in
@@ -2330,6 +2350,27 @@ mod tests {
             assert_eq!(pts[..pts.len() - 1], head.pts[..pts.len() - 1], "{net}: {pts:?} vs {:?}", head.pts);
             assert_eq!(pts.last().unwrap().y, mm(12.0));
         }
+    }
+
+    /// UI-LEFT-2 RR6 (`ROUTER_TOOL::UpdateMessagePanel`): the pair's "DP Max Uncoupled-length" row is `CT_MAX_UNCOUPLED` of its two lines on the layer
+    /// routed, from a `diff_pair_uncoupled` rule; none without one.
+    #[test]
+    fn a_pairs_max_uncoupled_length_is_the_rules_on_the_layer_routed() {
+        let (design, mut model) = two_pad_board();
+        model.nets = vec![IrNet { name: "USB_DP".into(), pins: vec!["R1.1".into(), "R2.1".into()] }, IrNet { name: "USB_DN".into(), pins: vec!["R1.2".into(), "R2.2".into()] }];
+        let mut router = Router::new(&design, &model);
+        router.start_diff_pair(Point { x: mm(-0.825), y: Nm::ZERO }, "F.Cu").expect("R1.1 and R1.2 are a pair");
+        assert_eq!(router.diff_pair_max_uncoupled(), None, "no rule");
+        model.board.custom_rules_text = Some("(version 1)\n(rule uncoupled\n  (layer \"F.Cu\")\n  (constraint diff_pair_uncoupled (max 5mm)))\n".into());
+        let mut router = Router::new(&design, &model);
+        router.start_diff_pair(Point { x: mm(-0.825), y: Nm::ZERO }, "F.Cu").expect("R1.1 and R1.2 are a pair");
+        assert_eq!(router.diff_pair_max_uncoupled(), Some((mm(5.0), "uncoupled".to_string())));
+        let mut on = |l: &str| {
+            let layer = router.layer_index(l).unwrap();
+            router.update_sizes_after_router_event(layer, Point { x: Nm::ZERO, y: mm(3.0) }).expect("a pair").max_uncoupled
+        };
+        assert_eq!(on("B.Cu"), None, "the rule is F.Cu's");
+        assert_eq!(on("F.Cu"), Some((mm(5.0), "uncoupled".to_string())));
     }
 
     /// findings p5 F4-6: a pair started where nothing is gets KiCad's own refusal.

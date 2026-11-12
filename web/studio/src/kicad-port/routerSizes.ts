@@ -95,6 +95,9 @@ export interface RouteSizesInfo {
   rule_gap?: Nm;
   rule_via_gap?: Nm;
   rule_gap_source?: string;
+  /** A pair's `CT_MAX_UNCOUPLED` on the layer routed (`constraint.m_Value.Max()`) and the rule's name: the "DP Max Uncoupled-length" row, UI-LEFT-2 RR6. */
+  max_uncoupled?: Nm | null;
+  max_uncoupled_source?: string | null;
 }
 
 /** One field of the message panel: the upper and lower text (`MSG_PANEL_ITEM( aUpperText, aLowerText )`). */
@@ -128,7 +131,8 @@ export function routerModeName(mode: string): string {
 /**
  * `ROUTER_TOOL::UpdateMessagePanel` while routing (r5 R5-8): "Routing Track: %s" over "Resolved Netclass: %s" (or "Routing Track" over "(no net)"),
  * or "Routing Diff Pair: %s" for a pair; "Corner Style"; "Mode"; "Track Width: %s" over "(from %s)"; "Min Clearance: %s" over "(from %s)"; and for a
- * pair "Diff Pair Gap: %s" over "(from %s)". **Differs:** "DP Max Uncoupled-length" (`CT_MAX_UNCOUPLED` of the two traces) is not shown.
+ * pair "Diff Pair Gap: %s" over "(from %s)", then "DP Max Uncoupled-length: %s" over "(from %s)" when a rule gives the two traces a
+ * `CT_MAX_UNCOUPLED` (the server's `max_uncoupled`, UI-LEFT-2 RR6).
  */
 export function routerMessagePanel(
   route: { pair: false; net: string | null; width: Nm } | { pair: true; netA: string | null; netB: string | null; width: Nm; gap: Nm },
@@ -145,6 +149,7 @@ export function routerMessagePanel(
   items.push({ upper: `Track Width: ${fmt(sizes?.width ?? route.width)}`, lower: `(from ${sizes?.width_source ?? ""})` });
   if (sizes?.clearance != null) items.push({ upper: `Min Clearance: ${fmt(sizes.clearance)}`, lower: `(from ${sizes.clearance_source ?? ""})` });
   if (route.pair) items.push({ upper: `Diff Pair Gap: ${fmt(route.gap)}`, lower: `(from ${sizes?.gap_source ?? ""})` });
+  if (route.pair && sizes?.max_uncoupled != null) items.push({ upper: `DP Max Uncoupled-length: ${fmt(sizes.max_uncoupled)}`, lower: `(from ${sizes.max_uncoupled_source ?? ""})` });
   return items;
 }
 
@@ -159,12 +164,20 @@ export interface RouterEventSizes {
   width_applied?: boolean;
   gap?: Nm | null;
   gap_source?: string | null;
+  /** A pair's "DP Max Uncoupled-length" on the new layer (none without a rule). */
+  max_uncoupled?: Nm | null;
+  max_uncoupled_source?: string | null;
 }
 
 /** [`RouterEventSizes`] folded into a route's or a pair's draw state: `{ width, gap, sizes }` to spread over it. */
 export function withEventSizes<T extends { width: Nm; gap?: Nm; sizes?: RouteSizesInfo }>(draw: T, ev: RouterEventSizes | null | undefined): T {
   if (!ev) return draw;
   const sizes: RouteSizesInfo = { ...(draw.sizes ?? {}), clearance: ev.clearance, clearance_source: ev.clearance_source };
+  // `UpdateMessagePanel` asks `CT_MAX_UNCOUPLED` again on `GetCurrentLayer()`; a route of one track has none
+  if (draw.gap !== undefined) {
+    sizes.max_uncoupled = ev.max_uncoupled ?? null;
+    sizes.max_uncoupled_source = ev.max_uncoupled_source ?? null;
+  }
   let width = draw.width;
   if (ev.width != null) {
     if (ev.width_applied) {
