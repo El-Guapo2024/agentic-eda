@@ -8,6 +8,9 @@
 // - "Show pad clearance" (`m_PadClearance`, `pcb_display.pad_clearance`, default on): the pads' outlines on the active copper layer.
 // The level-of-detail tests are `VIEW_ITEM::lodScaleForThreshold` against the view's zoom (`VIEW::m_scale`, `GAL::m_zoomFactor`).
 
+import type { BoardState, DisplayClearances } from "../api/types";
+import { padIds } from "./pcbItems";
+
 /** `m_NetNames`: 0 "Do not show", 1 "Show on pads", 2 "Show on tracks", 3 "Show on pads & tracks". */
 export type NetNamesMode = 0 | 1 | 2 | 3;
 
@@ -268,3 +271,61 @@ export function viaNetNameLayout(widthNm: number, netname: string, showNets: boo
   }
   return { lines, sizeNm: tsize, penNm: tsize / 10 };
 }
+
+/**
+ * The clearances a router preview reply carries for its clearance outlines (UI-LEFT-3 P3-6): `ROUTER::updateView`'s `Clearance( item, nullptr )` of the items a
+ * shove moved (`displaced_clearances`, `displaced_via_clearances`, in the order of `displaced` and `displaced_vias`) and, of a drag (`moveDragging`), the dragged
+ * line's or via's and each fanout line's. Absent from an older server: nothing is outlined.
+ */
+export interface PreviewClearances {
+  line?: number | null;
+  via?: number | null;
+  fanout?: number[];
+  displaced?: number[];
+  displacedVias?: number[];
+}
+
+/** The clearances of a route or drag preview reply. */
+export function previewClearancesOf(reply: { clearance?: number | null; via_clearance?: number | null; fanout_clearances?: number[]; displaced_clearances?: number[]; displaced_via_clearances?: number[] }): PreviewClearances {
+  return { line: reply.clearance ?? null, via: reply.via_clearance ?? null, fanout: reply.fanout_clearances ?? [], displaced: reply.displaced_clearances ?? [], displacedVias: reply.displaced_via_clearances ?? [] };
+}
+
+type Contour = [number, number][];
+
+/** Is (x, y) inside the contour (even-odd)? */
+function inside(c: Contour, x: number, y: number): boolean {
+  let hit = false;
+  for (let i = 0, j = c.length - 1; i < c.length; j = i++) {
+    const [xi, yi] = c[i]!;
+    const [xj, yj] = c[j]!;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
+/** A pad's outline (`Pad.outline`: each piece's outline, then its holes, to fill even-odd) as polygons with their holes: a contour inside another is that one's hole. */
+export function outlinePolys(outline: readonly Contour[]): { outer: Contour; holes: Contour[] }[] {
+  const isHole = outline.map((c, i) => c.length > 0 && outline.some((o, k) => k !== i && inside(o, c[0]![0], c[0]![1])));
+  const polys = outline.flatMap((c, i) => (isHole[i] ? [] : [{ outer: c, holes: [] as Contour[] }]));
+  outline.forEach((c, i) => {
+    if (!isHole[i]) return;
+    polys.find((p) => inside(p.outer, c[0]![0], c[0]![1]))?.holes.push(c);
+  });
+  return polys;
+}
+
+/** The `POST /api/board3d/polys` jobs that grow the custom pads of the reply by their clearances. */
+export function customPadJobs(board: Pick<BoardState, "parts">, reply: DisplayClearances): { key: string; a: { outer: Contour; holes: Contour[] }[]; inflate: number }[] {
+  const jobs: { key: string; a: { outer: Contour; holes: Contour[] }[]; inflate: number }[] = [];
+  for (const part of board.parts) {
+    if (!part.placed) continue;
+    const ids = padIds(part);
+    (part.pads ?? []).forEach((pad, i) => {
+      const c = reply.pads?.[ids[i]!];
+      if (pad.shape !== "custom" || !pad.outline?.length || !c || c <= 0) return;
+      jobs.push({ key: ids[i]!, a: outlinePolys(pad.outline as Contour[]), inflate: c });
+    });
+  }
+  return jobs;
+}
+

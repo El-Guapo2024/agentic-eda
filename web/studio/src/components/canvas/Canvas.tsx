@@ -442,7 +442,7 @@ export function Canvas() {
   // The reference images are bitmaps that arrive after the board does: the canvas paints again when one has.
   const imageVersion = useImageVersion();
   // Display Options' clearance outlines: the active copper layer's clearances (UI-LEFT-3 P3-6)
-  const ownClearances = useDisplayClearances(state.activeLayer ?? "F.Cu", board?.layers ?? [], state.version ?? undefined, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance);
+  const ownClearances = useDisplayClearances(state.activeLayer ?? "F.Cu", board, state.version ?? undefined, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance);
   // Render loop: repaint whenever anything visible changes.
   useEffect(() => {
     const canvas = canvasRef.current;

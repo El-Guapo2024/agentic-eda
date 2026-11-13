@@ -18,6 +18,9 @@ import {
   TRACK_CLEARANCE_CHOICES,
   trackNetNameLabels,
   viaNetNameLayout,
+  outlinePolys,
+  customPadJobs,
+  previewClearancesOf,
 } from "./pcbDisplayOptions";
 import { DEFAULT_PREFERENCES, sanitizePreferences } from "./preferences";
 
@@ -123,4 +126,21 @@ test("PrintableCharCount leaves the markup out; a hierarchical net's short name 
   assert.equal(printableCharCount("A\tB"), 2);
   assert.equal(shortNetname("/sheet1/SDA"), "SDA");
   assert.equal(shortNetname("GND"), "GND");
+});
+
+test("a custom pad's outline is grouped into polygons with their holes, and only a custom pad with a clearance is grown", () => {
+  const sq = (x0: number, y0: number, x1: number, y1: number): [number, number][] => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const polys = outlinePolys([sq(0, 0, 10, 10), sq(20, 0, 30, 10), sq(2, 2, 4, 4)]);
+  assert.equal(polys.length, 2);
+  assert.deepEqual(polys[0]!.holes, [sq(2, 2, 4, 4)], "the ring's hole goes with the outline holding it");
+  assert.deepEqual(polys[1]!.holes, []);
+  const pad = (num: string, shape: string, outline: [number, number][][] | null) => ({ num, shape, outline, x: 0, y: 0, w: 1, h: 1, round: false, net: "A", th: false });
+  const board = { parts: [{ ref: "U1", placed: true, pads: [pad("1", "custom", [sq(0, 0, 10, 10)]), pad("2", "rect", null), pad("3", "custom", [sq(0, 0, 5, 5)])] }] } as never;
+  const jobs = customPadJobs(board, { ok: true, pads: { "U1.1": 200_000, "U1.2": 200_000, "U1.3": 0 } });
+  assert.deepEqual(jobs.map((j) => [j.key, j.inflate]), [["U1.1", 200_000]], "a rectangle is grown by the page, a zero clearance not at all");
+});
+
+test("a preview reply's clearances: the drag's line, via and fanout, the shoved items; none from an older server", () => {
+  assert.deepEqual(previewClearancesOf({ clearance: 1, via_clearance: null, fanout_clearances: [2], displaced_clearances: [3, 4], displaced_via_clearances: [5] }), { line: 1, via: null, fanout: [2], displaced: [3, 4], displacedVias: [5] });
+  assert.deepEqual(previewClearancesOf({}), { line: null, via: null, fanout: [], displaced: [], displacedVias: [] });
 });

@@ -56,6 +56,7 @@ import { drawPcbItems, drawPcbToolPreviews, drawPoints, drawRefImages } from "./
 import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
 import { drawViaStitches } from "./viaStitchPaint";
 import { viaMaxDiameter, viaWidthOn } from "../../kicad-port/viaPadstack";
+import type { PreviewClearances } from "../../kicad-port/pcbDisplayOptions";
 import { boardShowsTrackClearance, netNamesOnPads, netNamesOnTracks, netNamesOnVias, routerShowsClearance, shortNetname, trackNetNameLabels, viaNetNameLayout, type NetNamesMode, type TrackClearanceMode, type ViewBox } from "../../kicad-port/pcbDisplayOptions";
 import { unescapeString } from "../../kicad-port/schNetName";
 import { padContours, padPlacement } from "../../kicad-port/padShape3d";
@@ -877,8 +878,8 @@ function drawViaHoles(ctx: CanvasRenderingContext2D, view: ViewTransform, board:
  */
 interface DisplayRecord {
   netnames: { kind: "track" | "via"; id: string; text: string; x: number; y: number; angleRad: number; sizeNm: number; color: string }[];
-  clearances: { kind: "track" | "via" | "pad"; id: string; clearance: number; color: string }[];
-  route: { kind: "track" | "via"; clearance: number }[];
+  clearances: { kind: "track" | "via" | "pad"; id: string; clearance: number; color: string; grown?: boolean }[];
+  route: { kind: "track" | "via"; clearance: number; what: "route" | "shoved" | "drag" }[];
 }
 
 function displayRecord(): DisplayRecord | null {
@@ -923,7 +924,8 @@ function displayNetname(net: string): string {
  * The tracks' net names on copper layer `onLayer` (`NETNAMES_LAYER_INDEX( layer )`, UI-LEFT-3 P3-1): `PCB_PAINTER::draw( const PCB_TRACK* )`'s netname branch with
  * "Net names:" on tracks (`m_NetNames >= 2`), a track with a net only; `PCB_TRACK::ViewGetLOD` hides them on a dimmed layer ("Hide netnames on dimmed tracks") and
  * under its zoom threshold (kicad-port/pcbDisplayOptions.ts `trackNetNameLabels`, which places them as `renderNetNameForSegment` does). An arc has none ("Anyone
- * fancy implementing text on a path?"). The colour is the layer's net-name colour, darkened or brightened by the net highlight (`GetColor`).
+ * fancy implementing text on a path?"). The colour is the layer's net-name colour, darkened or brightened by the net highlight (`GetColor`) unless the track is
+ * selected, which keeps the colour as it is (a netname layer's selection colour is its own).
  */
 function drawTrackNetNames(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, onLayer: string): void {
   if (!board.routing || !opts.viewBox || !netNamesOnTracks(opts.netNamesMode ?? 3) || !on(opts.layerVisible, "tracks") || opts.layerVisible[onLayer] === false) return;
@@ -932,7 +934,9 @@ function drawTrackNetNames(ctx: CanvasRenderingContext2D, view: ViewTransform, b
   for (const t of board.routing.tracks) {
     if (t.layer !== onLayer || !t.net || t.arc_mid) continue;
     const name = displayNetname(t.net);
-    const color = withNetHighlight(base, t.net, opts.netHighlight);
+    // a selected track's: `m_layerColorsSel` of a netname layer is its own colour ("Skip selection brightening for .. netname text",
+    // `RENDER_SETTINGS::update`), and a selected item is left out of the net highlight (`!selected && m_highlightEnabled`)
+    const color = opts.selection.has(t.id) ? base : withNetHighlight(base, t.net, opts.netHighlight);
     for (let i = 0; i + 1 < t.pts.length; i++) {
       for (const l of trackNetNameLabels(t.pts[i]!, t.pts[i + 1]!, t.width, name, opts.viewBox, view.scale)) {
         bitmapText(ctx, name, l.x, l.y, l.angleRad, l.sizeNm, l.penNm, color, opts.viewFlipped);
@@ -968,7 +972,7 @@ function drawViaNetNames(ctx: CanvasRenderingContext2D, view: ViewTransform, boa
     if (!lodShownWidth(view, v.d, 10_000_000)) continue;
     const layout = viaNetNameLayout(v.d, v.net ? displayNetname(v.net) : "", showNets, viaLayerNumbers(v, copper));
     if (!layout) continue;
-    const color = withNetHighlight(base, v.net, opts.netHighlight);
+    const color = opts.selection.has(v.id) ? base : withNetHighlight(base, v.net, opts.netHighlight);
     for (const line of layout.lines) {
       bitmapText(ctx, line.text, v.x, v.y + line.dy, 0, layout.sizeNm, layout.penNm, color, opts.viewFlipped);
       displayRecord()?.netnames.push({ kind: "via", id: v.id, text: line.text, x: v.x, y: v.y + line.dy, angleRad: 0, sizeNm: layout.sizeNm, color });
@@ -1072,8 +1076,17 @@ function drawClearanceOutlines(ctx: CanvasRenderingContext2D, view: ViewTransfor
         const npth = pad.kind === "non_plated_hole";
         const css = npth ? layerColor("LAYER_NON_PLATEDHOLES") : copperPaint(layerCss, pad.net, opts);
         const shape = padCopperOn(pad, onLayer, sideCopper, copper);
-        displayRecord()?.clearances.push({ kind: "pad", id: ids[i]!, clearance: c, color: css });
-        if (shape) {
+        displayRecord()?.clearances.push({ kind: "pad", id: ids[i]!, clearance: c, color: css, grown: pad.shape === "custom" ? !!own.customPads?.[ids[i]!] : undefined });
+        const grown = pad.shape === "custom" ? own.customPads?.[ids[i]!] : undefined;
+        if (shape && grown) {
+          // a custom pad: its copper grown by the server (`outline.Inflate( clearance, ROUND_ALL_CORNERS, .. )`, components/canvas/useDisplayClearances.ts)
+          outline(pad.net, css, () => {
+            for (const contour of grown) {
+              contour.forEach(([x, y], k) => (k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+              ctx.closePath();
+            }
+          });
+        } else if (shape) {
           // a padstack layer's own copper is drawn from its board box (no turn); the pad itself from its shape, turned with it
           const contours = shape === pad ? padContours(pad, padPlacement(pad, part), [c, c]) : padContours({ ...shape, size: undefined }, padPlacement({ ...shape, size: undefined }, part), [c, c]);
           outline(pad.net, css, () => {
@@ -1883,34 +1896,71 @@ function strokeViaGhost(ctx: CanvasRenderingContext2D, view: ViewTransform, x: n
  * stroked `width + 2 * clearance` wide in `DARKDARKGRAY` at 0.9 alpha, a via a disc of its radius plus the clearance at 0.7 -- when "Tracks:" asks for it
  * (`PNS_KICAD_IFACE::DisplayItem`'s `ShowClearance`: a track always but with "Do not show clearances", a via with the "w/ via" modes and up).
  */
-function drawRouteClearance(ctx: CanvasRenderingContext2D, draw: Extract<DrawState, { kind: "route" }>, mode: TrackClearanceMode): void {
-  const c = draw.clearance ?? 0;
-  if (c > 0 && routerShowsClearance(mode, "track", false)) {
-    ctx.save();
-    ctx.strokeStyle = "rgba(72, 72, 72, 0.9)";
-    ctx.lineWidth = draw.width + 2 * c;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    displayRecord()?.route.push({ kind: "track", clearance: c });
-    for (const pts of [...(draw.runs ?? []).map((r) => r.pts), draw.pts]) {
-      if (pts.length < 1) continue;
+function drawRouteClearance(ctx: CanvasRenderingContext2D, board: BoardState, draw: Extract<DrawState, { kind: "route" }>, mode: TrackClearanceMode): void {
+  const lines = [...(draw.runs ?? []).map((r) => ({ pts: r.pts, width: draw.width, c: draw.clearance ?? 0 })), { pts: draw.pts, width: draw.width, c: draw.clearance ?? 0 }];
+  const vias = draw.via ? [{ x: draw.via.x, y: draw.via.y, d: draw.via.diameter, c: draw.viaClearance ?? 0 }] : [];
+  drawPreviewClearances(ctx, lines, vias, mode, false, "route");
+  // `updateView`'s items: what the shove moved
+  drawShovedClearances(ctx, board, draw, mode, false);
+}
+
+/** The clearance outlines of the items a shove moved (`ROUTER::updateView`'s `added`), each with its own clearance (`clearances.displaced`, `displacedVias`). */
+function drawShovedClearances(ctx: CanvasRenderingContext2D, board: BoardState, draw: { displaced?: { pts: [number, number][]; width?: number }[]; displacedVias?: { source_via: string; x: number; y: number }[]; clearances?: PreviewClearances; width: number }, mode: TrackClearanceMode, edit: boolean): void {
+  const cs = draw.clearances;
+  if (!cs) return;
+  const lines = (draw.displaced ?? []).map((d, i) => ({ pts: d.pts, width: d.width ?? draw.width, c: cs.displaced?.[i] ?? 0 }));
+  const vias = (draw.displacedVias ?? []).map((v, i) => {
+    const src = board.routing?.vias.find((b) => b.id === v.source_via);
+    return { x: v.x, y: v.y, d: src ? viaMaxDiameter(src) : 0, c: cs.displacedVias?.[i] ?? 0 };
+  });
+  drawPreviewClearances(ctx, lines, vias, mode, edit, "shoved");
+}
+
+/**
+ * `ROUTER_PREVIEW_ITEM::drawShape`'s clearance, drawn first, under the item (UI-LEFT-3 P3-6): a line stroked `width + 2 * clearance` wide in `DARKDARKGRAY` at 0.9
+ * alpha, a via a disc of its radius plus the clearance at 0.7 -- when "Tracks:" asks for it (`PNS_KICAD_IFACE::DisplayItem`'s `ShowClearance`, `edit` an item of a
+ * drag) and the clearance is positive.
+ */
+function drawPreviewClearances(ctx: CanvasRenderingContext2D, lines: readonly { pts: [number, number][]; width: number; c: number }[], vias: readonly { x: number; y: number; d: number; c: number }[], mode: TrackClearanceMode, edit: boolean, what: "route" | "shoved" | "drag"): void {
+  if (routerShowsClearance(mode, "track", edit)) {
+    for (const l of lines) {
+      if (l.c <= 0 || l.pts.length < 1) continue;
+      displayRecord()?.route.push({ kind: "track", clearance: l.c, what });
+      ctx.save();
+      ctx.strokeStyle = "rgba(72, 72, 72, 0.9)";
+      ctx.lineWidth = l.width + 2 * l.c;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.beginPath();
-      pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-      if (pts.length === 1) ctx.lineTo(pts[0]![0], pts[0]![1]);
+      l.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      if (l.pts.length === 1) ctx.lineTo(l.pts[0]![0], l.pts[0]![1]);
       ctx.stroke();
+      ctx.restore();
     }
-    ctx.restore();
   }
-  const vc = draw.viaClearance ?? 0;
-  if (draw.via && vc > 0 && routerShowsClearance(mode, "via", false)) {
-    ctx.save();
-    displayRecord()?.route.push({ kind: "via", clearance: vc });
-    ctx.fillStyle = "rgba(72, 72, 72, 0.7)";
-    ctx.beginPath();
-    ctx.arc(draw.via.x, draw.via.y, draw.via.diameter / 2 + vc, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+  if (routerShowsClearance(mode, "via", edit)) {
+    for (const v of vias) {
+      if (v.c <= 0) continue;
+      displayRecord()?.route.push({ kind: "via", clearance: v.c, what });
+      ctx.save();
+      ctx.fillStyle = "rgba(72, 72, 72, 0.7)";
+      ctx.beginPath();
+      ctx.arc(v.x, v.y, v.d / 2 + v.c, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
+}
+
+/** A drag's clearance outlines (`moveDragging` -> `updateView( .., aDragging = true )`): the dragged line or via, the fanout lines, what the shove moved. */
+function drawDragClearance(ctx: CanvasRenderingContext2D, board: BoardState, draw: Extract<DrawState, { kind: "drag" }>, mode: TrackClearanceMode): void {
+  const cs = draw.clearances;
+  if (!cs) return;
+  const lines = (draw.fanout ?? []).map((f, i) => ({ pts: f.pts, width: f.width, c: cs.fanout?.[i] ?? 0 }));
+  if (draw.dragKind !== "via" && draw.dragKind !== "component" && draw.dragKind !== "multi") lines.push({ pts: draw.pts, width: draw.width, c: cs.line ?? 0 });
+  const vias = draw.dragKind === "via" && !draw.virtualVia && draw.pts[0] ? [{ x: draw.pts[0][0], y: draw.pts[0][1], d: draw.viaDiameter ?? 0, c: cs.via ?? 0 }] : [];
+  drawPreviewClearances(ctx, lines, vias, mode, true, "drag");
+  drawShovedClearances(ctx, board, draw, mode, true);
 }
 
 function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, viewport: readonly [number, number, number, number]) {
@@ -1936,7 +1986,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
 
   if (draw.kind === "route") {
     const violationColor = "#ff3333";
-    drawRouteClearance(ctx, draw, opts.trackClearance ?? "routing_via");
+    drawRouteClearance(ctx, board, draw, opts.trackClearance ?? "routing_via");
     for (const run of draw.runs ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     strokeDashedPolyline(ctx, view, draw.pts, draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer)), draw.width, false);
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width, false);
@@ -1952,6 +2002,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
 
   if (draw.kind === "drag") {
     const violationColor = "#ff3333";
+    drawDragClearance(ctx, board, draw, opts.trackClearance ?? "routing_via");
     const color = draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer));
     if (draw.dragKind === "via") {
       const [x, y] = draw.pts[0] ?? [0, 0];

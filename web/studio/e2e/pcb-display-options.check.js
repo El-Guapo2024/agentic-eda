@@ -6,6 +6,8 @@
 //               always" adds the tracks and vias; the outlines follow the active copper layer (`PCB_EDIT_FRAME::SetActiveLayer`: only its clearance layer is shown);
 //   routing     with the default "Show when routing w/ via clearance at end" the route's head is drawn with its clearance (`ROUTER::movePlacing`'s `Clearance( line, nullptr
 //               )`), with "Do not show clearances" it is not;
+//   dragging    with "Show when routing and editing" a drag's line is drawn with its clearance (`moveDragging` -> `updateView( .., aDragging )`), not with the
+//               routing-only modes;
 //   reset       the page's Reset sets them back to a fresh PCBNEW_SETTINGS';
 //   plating     the state carries KiCad's hole plating thickness, `ADVANCED_CFG::m_HoleWallThickness` 0.020 mm (P3-7).
 // It reads what the painter drew through `window.__edaDisplay` ({ netnames, clearances, route }), which the board paint fills. Nothing on the board is edited; the
@@ -209,9 +211,16 @@
     await clickAt(pad.x, pad.y);
     const s = await waitReply("start", n);
     t(s && s.body.ok === true && s.body.clearance > 0, `the start's preview carries the head's clearance: ${s && JSON.stringify([s.body.ok, s.body.clearance, s.body.message])}`);
+    // a head to draw: the pointer a little way off the pad
+    n = replies.length;
+    const [hx, hy] = w2c(pad.x + 3_000_000, pad.y + 3_000_000);
+    fire("pointermove", hx, hy);
+    await waitReply("move", n);
     await sleep(400);
     await redraw();
     const r = shown().route.find((x) => x.kind === "track");
+    const mv = replies.filter((q) => q.name === "move").pop();
+    t(mv && (mv.body.head ?? []).length >= 2, `the head has a leg: ${mv && JSON.stringify(mv.body.head)}`);
     t(r && s && r.clearance === s.body.clearance, `the head is drawn with it: ${JSON.stringify(shown().route)}`);
     await leaveTool();
     await displayOptions(async (page) => choose(page.querySelector('[data-testid="pref-track-clearance"]'), "none"));
@@ -223,6 +232,41 @@
     await sleep(400);
     await redraw();
     t(shown().route.length === 0, `Do not show clearances: no outline (${JSON.stringify(shown().route)})`);
+    await leaveTool();
+  });
+
+  await scenario("dragging: the dragged line is drawn with its clearance with Show when routing and editing, not with the routing-only modes", async (t) => {
+    if (!seg) return t(false, "nothing to drag");
+    const mid = [(seg.a[0] + seg.b[0]) / 2, (seg.a[1] + seg.b[1]) / 2];
+    const off = seg.vertical ? [300_000, 0] : [0, 300_000];
+    const drag = async () => {
+      await E.run("pcbnew.Control.layerTop");
+      await zoomTo(mid[0], mid[1], ZOOM / 3);
+      await clickAt(mid[0], mid[1]);
+      const [x, y] = w2c(mid[0], mid[1]);
+      fire("pointermove", x, y);
+      await sleep(150);
+      let n = replies.length;
+      await E.run("pcbnew.InteractiveRouter.Drag45Degree");
+      const s = await waitReply("drag_start", n);
+      n = replies.length;
+      const [x2, y2] = w2c(mid[0] + off[0], mid[1] + off[1]);
+      fire("pointermove", x2, y2);
+      const m = await waitReply("drag_move", n);
+      await sleep(400);
+      await redraw();
+      return { s, m };
+    };
+    await displayOptions(async (page) => choose(page.querySelector('[data-testid="pref-track-clearance"]'), "routing_editing"));
+    const { s, m } = await drag();
+    t(s && s.body.ok === true, `the drag starts on the segment: ${s && JSON.stringify([s.body.ok, s.body.drag, s.body.message])}`);
+    t(m && m.body.clearance > 0, `the drag's reply carries the line's clearance: ${m && m.body.clearance}`);
+    const d = shown().route.filter((r) => r.what === "drag");
+    t(d.length > 0 && m && d.some((r) => r.kind === "track" && r.clearance === m.body.clearance), `the dragged line is drawn with it: ${JSON.stringify(shown().route)}`);
+    await leaveTool();
+    await displayOptions(async (page) => choose(page.querySelector('[data-testid="pref-track-clearance"]'), "routing_via"));
+    await drag();
+    t(!shown().route.some((r) => r.what === "drag"), `while routing w/ via: a drag shows none (\`!aEdit\`): ${JSON.stringify(shown().route)}`);
     await leaveTool();
   });
 
