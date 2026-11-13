@@ -41,8 +41,9 @@ export function FpTextDialog() {
   const [content, setContent] = useState("");
   const initialFocus = useInitialFocus();
   const [layer, setLayer] = useState("F.SilkS");
-  // the editor board's enabled layers by their names, every layer when the text is on one not enabled (`ShowNonActivatedLayers`; UI-LEFT-3 F3-1)
-  const layerChoices = useFpTextLayerChoices(layer);
+  // the editor board's enabled layers by their names, every layer when the text was on one not enabled as the dialog opened (`ShowNonActivatedLayers`; UI-LEFT-3 F3-1)
+  const [openLayer, setOpenLayer] = useState("F.SilkS");
+  const layerChoices = useFpTextLayerChoices(openLayer);
   const [size, setSize] = useState("1");
   const [thickness, setThickness] = useState("0.1");
   const [x, setX] = useState("0");
@@ -56,6 +57,7 @@ export function FpTextDialog() {
     if (!text) return;
     setContent(text.content);
     setLayer(text.layer);
+    setOpenLayer(text.layer);
     setSize(mm(text.size_nm));
     setThickness(mm(text.stroke_width));
     setX(mm(text.at.x));
@@ -184,8 +186,9 @@ export function FpTextEditDialog() {
   const [content, setContent] = useState("");
   const initialFocus = useInitialFocus();
   const [layer, setLayer] = useState("F.SilkS");
-  // the editor board's enabled layers by their names, every layer when the text is on one not enabled (`ShowNonActivatedLayers`; UI-LEFT-3 F3-1)
-  const layerChoices = useFpTextLayerChoices(layer);
+  // the editor board's enabled layers by their names, every layer when the text was on one not enabled as the dialog opened (`ShowNonActivatedLayers`; UI-LEFT-3 F3-1)
+  const [openLayer, setOpenLayer] = useState("F.SilkS");
+  const layerChoices = useFpTextLayerChoices(openLayer);
   const [width, setWidth] = useState("1");
   const [height, setHeight] = useState("1");
   const [thickness, setThickness] = useState("0.1");
@@ -209,6 +212,7 @@ export function FpTextEditDialog() {
       setFace(field.face || KICAD_FONT);
       setContent(field.text);
       setLayer(field.layer);
+      setOpenLayer(field.layer);
       setWidth(mm(field.w));
       setHeight(mm(field.h));
       setThickness(mm(field.thickness));
@@ -229,6 +233,7 @@ export function FpTextEditDialog() {
       setFace(textFaceOf(fp, text.id) || KICAD_FONT);
       setContent(text.content);
       setLayer(text.layer);
+      setOpenLayer(text.layer);
       setWidth(mm(look.width_nm ?? text.size_nm));
       setHeight(mm(text.size_nm));
       setValign(look.valign);
