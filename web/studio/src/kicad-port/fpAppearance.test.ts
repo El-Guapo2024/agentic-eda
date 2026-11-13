@@ -229,3 +229,24 @@ test("the Footprint Editor's presets: what is on screen as a preset view, the ma
   assert.equal(fpPassesFilter(DEFAULT_FP_SELECTION_FILTER, "pad", true), true);
   assert.equal(fpPassesFilter(DEFAULT_FP_SELECTION_FILTER, "pad", true, false, true), false);
 });
+
+test("UI-LEFT-3 F3-1: the layer box, the dialogs and the Properties pane list the enabled layers by GetLayerName -- a user layer by its User Layer Names name", async () => {
+  const { fpLayerChoices, fpTextLayerChoices, fpAllLayers } = await import("./fpAppearance");
+  const names = { "User.2": "Assembly", "User.9": "Notes" };
+  const choices = fpLayerChoices(footprint(), names, 4);
+  // the Appearance panel's layers (`updateEnabledLayers`): User.1 .. User.4, User.7 the footprint uses and User.9 that has a name
+  assert.deepEqual(choices.map((c) => c.value).slice(-6), ["User.1", "User.2", "User.3", "User.4", "User.7", "User.9"]);
+  const label = new Map(choices.map((c) => [c.value, c.label]));
+  assert.equal(label.get("User.2"), "Assembly");
+  assert.equal(label.get("User.9"), "Notes");
+  assert.equal(label.get("User.1"), "User.1");
+  assert.equal(label.get("In1.Cu"), "Inner layers");
+  assert.equal(label.get("F.SilkS"), "F.Silkscreen", "a standard layer by GetStandardLayerName");
+  // a text on a layer the board has not enabled: every layer, the others marked (ShowNonActivatedLayers)
+  assert.equal(fpTextLayerChoices("F.SilkS", footprint(), names, 4).length, choices.length);
+  const all = fpTextLayerChoices("User.30", footprint(), names, 4);
+  assert.equal(all.length, fpAllLayers().length);
+  assert.equal(all.find((c) => c.value === "User.30")?.label, "User.30 (not activated)");
+  assert.equal(all.find((c) => c.value === "User.2")?.label, "Assembly");
+  assert.equal(all.find((c) => c.value === "In5.Cu")?.label, "In5.Cu (not activated)");
+});

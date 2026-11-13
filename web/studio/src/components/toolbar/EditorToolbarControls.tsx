@@ -4,16 +4,13 @@
 import { gridMenuEntries, type GridEditor } from "../../kicad-port/gridSettings";
 import { zoomAbout } from "../../kicad-port/view";
 import { useActionRunner } from "../../actions/useActionRunner";
-import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
+import { useFpLayerChoices } from "../footprint/useFpLayerChoices";
 import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { useGridSettings } from "../../state/gridSettings";
 import { useStudioState } from "../../state/store";
 import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { bodyStyleSelectorEntries, isMultiBodyStyle, unitDisplayName } from "../../kicad-port/symBodyStyles";
 import { formatLength } from "../../state/units";
-
-/** The Footprint Editor's layer box: every layer a footprint item can be on (kicad-port/fpDrawDefaults.ts). */
-const GRAPHIC_LAYERS = FP_EDITOR_LAYERS;
 
 /** 100% is one screen pixel per 100 um, the same reference the board toolbar's zoom box uses. */
 const ZOOM_PRESET_PERCENTS = [25, 50, 100, 200, 400, 800, 1600, 3200];
@@ -91,15 +88,17 @@ function ZoomSelect({ view, onView }: { view: { scale: number; x: number; y: num
 export function FootprintToolbarControl({ control }: { control: string }) {
   const state = useFpState();
   const dispatch = useFpDispatch();
+  // the layer box: the editor board's enabled layers by their names (`PCB_LAYER_BOX_SELECTOR::Resync`, a user layer by its User Layer Names name; UI-LEFT-3 F3-1)
+  const layers = useFpLayerChoices();
   if (control === "gridSelect") return <GridSelect editor="footprint" gridNm={state.gridNm} onChange={(um) => dispatch({ type: "SET_GRID_NM", um })} />;
   if (control === "zoomSelect") return <ZoomSelect view={state.view} onView={(view) => dispatch({ type: "SET_VIEW", view })} />;
   if (control === "layerSelector") {
     return (
       <div className="toolbar-control" title="Layer new graphics and text are drawn on">
         <select value={state.activeLayer} onChange={(e) => dispatch({ type: "SET_ACTIVE_LAYER", layer: e.target.value })}>
-          {GRAPHIC_LAYERS.map((l) => (
-            <option key={l} value={l}>
-              {l}
+          {(layers.some((l) => l.value === state.activeLayer) ? layers : [{ value: state.activeLayer, label: state.activeLayer }, ...layers]).map((l) => (
+            <option key={l.value} value={l.value}>
+              {l.label}
             </option>
           ))}
         </select>

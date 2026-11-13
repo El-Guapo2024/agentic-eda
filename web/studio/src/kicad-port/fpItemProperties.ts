@@ -62,6 +62,11 @@ export interface FpPropCtx {
   /** The key the editor holds the footprint by (a board copy's is not its name). */
   name: string;
   units: LengthUnit;
+  /**
+   * The Layer row's choices: the editor board's enabled layers by their names (`PCB_PROPERTIES_PANEL::updateLists`: `GetEnabledLayers().UIOrder()`, shown by
+   * `GetLayerName`; kicad-port/fpAppearance.ts `fpLayerChoices`, UI-LEFT-3 F3-1). Without it, the editor's fixed list by the layers' own names.
+   */
+  layers?: readonly { value: string; label: string }[];
 }
 
 /** The item a selection id names (a pad, a graphic, a text, a field `field:<name>`), or null for the kinds the pane does not list (dimensions, zones ...). */
@@ -136,7 +141,7 @@ const READ_ONLY = {
   pad_to_die_delay: "The pad-to-die delay is set in Pad Properties.",
 };
 
-const layerChoices = (): Choice[] => FP_EDITOR_LAYERS.map((l) => ({ label: l, value: l }));
+const layerChoices = (c?: FpPropCtx): Choice[] => (c?.layers ? c.layers.map((l) => ({ label: l.label, value: l.value })) : FP_EDITOR_LAYERS.map((l) => ({ label: l, value: l })));
 
 /** `BOARD_ITEM::GetPosition()` of a footprint item: a pad's and a text's place, a field's anchor, a shape's start (a circle's or an arc's centre, a polygon's first corner). */
 function positionOf(i: FpPropItem): [number, number] {
@@ -345,7 +350,7 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     owner: "BOARD_ITEM",
     name: "Layer",
     kind: "enum",
-    choices: () => layerChoices(),
+    choices: (_i, c) => layerChoices(c),
     get: (i) => i.text?.layer ?? i.field?.layer ?? "",
     set: (i, v, c) => {
       const layer = String(v);
@@ -1020,7 +1025,7 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     owner: "PCB_SHAPE",
     name: "Layer",
     kind: "enum",
-    choices: () => layerChoices(),
+    choices: (_i, c) => layerChoices(c),
     get: (i) => i.shape?.layer ?? "",
     set: (i, v, c) => (i.shape!.layer === String(v) ? [] : [graphicCmd(c, { ...i.shape!, layer: String(v) })]),
   });

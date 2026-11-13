@@ -8,6 +8,7 @@ import { useFpApi, useFpState } from "../../state/footprintEditorStore";
 import { fpEdit, fpGrid, type FpPropCtx } from "../../kicad-port/fpItemProperties";
 import type { PropValue } from "../../kicad-port/propertyManager";
 import { PropertyGrid } from "../panels/PropertyGrid";
+import { useFpLayerChoices } from "./useFpLayerChoices";
 
 export function FootprintPropertiesPane() {
   const state = useFpState();
@@ -15,7 +16,9 @@ export function FootprintPropertiesPane() {
   const units = useStudioState().units;
   const fp = state.footprint;
   const ids = useMemo(() => [...state.selection], [state.selection]);
-  const ctx = useMemo<FpPropCtx | null>(() => (fp && state.name ? { fp, name: state.name, units } : null), [fp, state.name, units]);
+  // the Layer row lists the editor board's enabled layers by their names (`PCB_PROPERTIES_PANEL::updateLists`, UI-LEFT-3 F3-1)
+  const layers = useFpLayerChoices();
+  const ctx = useMemo<FpPropCtx | null>(() => (fp && state.name ? { fp, name: state.name, units, layers } : null), [fp, state.name, units, layers]);
   const model = useMemo(() => (ctx ? fpGrid(ctx, ids) : null), [ctx, ids]);
   if (!ctx || !model) {
     return (

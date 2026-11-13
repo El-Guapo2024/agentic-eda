@@ -7,6 +7,7 @@
 //     (`commit.Push( _( "Draw Text Box" ) )` ... `selectItem`), Cancel drops it, and the tool waits for its next click.
 // The items of a library footprint keep no lock and their zones no net (`eda_model::fp_items`), so these dialogs have no Locked box and the zone dialog no net to pick;
 // the Placement tab of a rule area offers what the footprint editor's board has, nothing.
+import { useMemo } from "react";
 import { useFpApi, useFpDispatch, useFpState, type FootprintEditorState } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
 import { DimensionPropertiesForm, type DimensionHost } from "../DimensionPropertiesDialog";
@@ -15,6 +16,8 @@ import { TextBoxForm, RefImagePropertiesForm, type TextBoxHost, type RefImageHos
 import { BarcodeForm, type BarcodeHost } from "../BarcodeDialog";
 import { TablePropertiesForm, type TableHost } from "../TableDialogs";
 import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
+import { useFpLayerChoices } from "./useFpLayerChoices";
+import { fpLayerLabel } from "../../kicad-port/fpAppearance";
 import { fpNewTable, fpPatchTable, fpZoneWithSettings, type FpTable } from "../../kicad-port/fpDrawTools";
 import { tablePatchOf } from "../../kicad-port/tables";
 import { lineThicknessNm } from "../../kicad-port/layerDefaults";
@@ -25,8 +28,18 @@ import type { CmdDimension, CmdZone } from "../../api/types";
 import type { CmdBarcode, CmdRefImage, CmdTextBox } from "../../api/pcbItemTypes";
 import type { FpItemWire } from "../../api/fpItemTypes";
 
-const layers = [...FP_EDITOR_LAYERS];
-const layerName = (l: string) => l;
+/**
+ * The dialogs' layer choices: the editor board's enabled layers, each by `BOARD::GetLayerName` -- a user layer by the name User Layer Names gives it (UI-LEFT-3 F3-1,
+ * components/footprint/useFpLayerChoices.ts). The zone dialog keeps its own list (the footprint's copper and the other layers it always offered), by the same names.
+ */
+function useDialogLayers(): { layers: string[]; layerName: (l: string) => string } {
+  const choices = useFpLayerChoices();
+  return useMemo(() => {
+    const names = new Map(choices.map((c) => [c.value, c.label]));
+    return { layers: choices.map((c) => c.value), layerName: (l: string) => names.get(l) ?? fpLayerLabel(l) };
+  }, [choices]);
+}
+const ZONE_LAYERS = [...FP_EDITOR_LAYERS];
 const items = (st: FootprintEditorState) => st.footprint?.items ?? {};
 const display = (st: FootprintEditorState) => st.footprint?.display;
 
@@ -59,6 +72,7 @@ function useClose(kind: string) {
 /** Dimension Properties on a dimension of the footprint (`case PCB_DIM_*_T: DIALOG_DIMENSION_PROPERTIES`). */
 export function FpDimensionDialog() {
   const st = useFpState();
+  const { layers, layerName } = useDialogLayers();
   const api = useFpApi();
   const units = useStudioState().units;
   const commit = useCommit();
@@ -97,6 +111,7 @@ function settingsOf(z: CmdZone): ZoneFormSettings {
  */
 export function FpZoneDialog() {
   const st = useFpState();
+  const { layers, layerName } = useDialogLayers();
   const api = useFpApi();
   const units = useStudioState().units;
   const commit = useCommit();
@@ -117,8 +132,8 @@ export function FpZoneDialog() {
     duplicate: false,
     convert: false,
     nets: [],
-    copperLayers: layers.filter(isCopper),
-    optionalLayers: layers.filter((l) => !isCopper(l)),
+    copperLayers: ZONE_LAYERS.filter(isCopper),
+    optionalLayers: [...ZONE_LAYERS.filter((l) => !isCopper(l)), ...layers.filter((l) => !isCopper(l) && !ZONE_LAYERS.includes(l))],
     layerName,
     units,
     lockable: false,
@@ -149,6 +164,7 @@ export function FpZoneDialog() {
 /** Text Box Properties on a text box of the footprint (`case PCB_TEXTBOX_T: ShowTextBoxPropertiesDialog`) or on the box Draw Text Box has just drawn. */
 export function FpTextBoxDialog() {
   const st = useFpState();
+  const { layers, layerName } = useDialogLayers();
   const dispatch = useFpDispatch();
   const commit = useCommit();
   const close = useClose("textbox");
@@ -175,6 +191,7 @@ export function FpTextBoxDialog() {
 /** Barcode Properties on a barcode of the footprint (`case PCB_BARCODE_T: ShowBarcodePropertiesDialog`) or on the one Add Barcode has just made. */
 export function FpBarcodeDialog() {
   const st = useFpState();
+  const { layers, layerName } = useDialogLayers();
   const commit = useCommit();
   const close = useClose("barcode");
   const id = editingId(st, "barcode");
@@ -196,6 +213,7 @@ export function FpBarcodeDialog() {
 /** Table Properties on a table of the footprint (`case PCB_TABLE_T: DIALOG_TABLE_PROPERTIES`) or on the one Draw Table has just sized. */
 export function FpTableDialog() {
   const st = useFpState();
+  const { layers, layerName } = useDialogLayers();
   const units = useStudioState().units;
   const commit = useCommit();
   const close = useClose("table");
@@ -229,6 +247,7 @@ export function FpTableDialog() {
 /** Reference Image Properties on an image of the footprint (`case PCB_REFERENCE_IMAGE_T: ShowReferenceImagePropertiesDialog`). Its pixels are the IR's, shown from its own data. */
 export function FpRefImageDialog() {
   const st = useFpState();
+  const { layers, layerName } = useDialogLayers();
   const commit = useCommit();
   const close = useClose("image");
   const id = editingId(st, "image");
