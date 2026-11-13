@@ -29,7 +29,7 @@ import type { ArcEditMode } from "./pcbPointEdit";
 import { kiRound } from "./pcbGeom";
 import { DEFAULT_PPI, imageSizeNm, SCALE_PPM } from "./refImage";
 import { schDrag, schPointEditor, schShapeFrom } from "./schPointEdit";
-import { sheetPinBox, sheetPinItems, type Measure } from "./schSheetPinItems";
+import { sheetPinBox, sheetPinItems, sheetPinSide, type Measure } from "./schSheetPinItems";
 
 const MILS = 25_400;
 /** `MIN_SHEET_WIDTH` / `MIN_SHEET_HEIGHT` (eeschema/sch_sheet.h), mils. */
@@ -141,13 +141,12 @@ export function sheetDrag(sch: Schematic, sheet: Sheet, h: EeHandle, to: readonl
 }
 
 /** `SetPositionIgnoringPins( at )` then `Resize( size )`: every pin back on the side it was on, at its place along it clamped to the side's ends (`ConstrainOnEdge( pos, false )`). */
-export function resizedSheet(sch: Schematic, sheet: Sheet, at: P, size: P): Sheet {
+export function resizedSheet(sheet: Sheet, at: P, size: P): Sheet {
   const [l, t, r, b] = [at[0], at[1], at[0] + size[0], at[1] + size[1]];
-  const sides = new Map(pinsOf(sch, sheet).map((p) => [p.id, p.side]));
   const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
   const pins: SheetPin[] = sheet.pins.map((p) => {
     const [x, y] = p.at;
-    switch (sides.get(p.id) ?? "left") {
+    switch (sheetPinSide(sheet, p.at)) {
       case "top":
         return { ...p, at: [clamp(x, l, r), t] };
       case "bottom":
@@ -492,7 +491,7 @@ export function schItemPointEditor(
   if (sheet) {
     const r = drag ? sheetDrag(sch, sheet, drag.handle, drag.to, measure) : null;
     const changed = r && !(same(r.at, sheet.at) && same(r.size, sheet.size));
-    const next = changed ? resizedSheet(sch, sheet, r.at, r.size) : sheet;
+    const next = changed ? resizedSheet(sheet, r.at, r.size) : sheet;
     return {
       id,
       kind: "sheet",
