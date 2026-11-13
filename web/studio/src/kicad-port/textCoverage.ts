@@ -50,9 +50,9 @@ export function boardTextAsField(t: BoardText): FieldInfo {
  * The strokes of a text as polygons, each grown by `margin` (`TransformOvalToPolygon` of the pen's width, then `Inflate( aClearance )`); an outline font's runs as the
  * boxes of their ink, grown likewise (KiCad's glyphs are their triangles: task-v1-text, UI-LEFT-2 CC1).
  */
-export function strokeRings(s: TextStrokes, margin = 0, error = ARC_LOW_DEF_NM): Ring[] {
+export function strokeRings(s: TextStrokes, margin = 0, error = ARC_LOW_DEF_NM, inside = false): Ring[] {
   const width = s.pen + 2 * margin;
-  const strokes = width <= 0 ? [] : s.segs.map(([x0, y0, x1, y1]) => stadiumRing([x0, y0], [x1, y1], width, error));
+  const strokes = width <= 0 ? [] : s.segs.map(([x0, y0, x1, y1]) => stadiumRing([x0, y0], [x1, y1], width, error, inside));
   return [...strokes, ...(s.areas ?? []).map((q) => grownQuad(q, margin))];
 }
 
@@ -68,9 +68,13 @@ function grownQuad(q: readonly (readonly [number, number])[], m: number): Ring {
   return q.map((p, i) => [p[0] + m * (signs[i]![0] * u[0] + signs[i]![1] * v[0]), p[1] + m * (signs[i]![0] * u[1] + signs[i]![1] * v[1])] as Pt);
 }
 
-/** `GetCoverageArea` of a text: the area its strokes, grown by the collector's accuracy, cover (0 for a text with no strokes). */
+/**
+ * `GetCoverageArea` of a text: the area its strokes, grown by the collector's accuracy, cover (0 for a text with no strokes). `ERROR_INSIDE`
+ * (`TransformTextToPolySet( poly, textMargin, ARC_LOW_DEF, ERROR_INSIDE )`): the round ends' polygons have their vertices on the arcs, the chords inside them
+ * (UI-LEFT-3 P3-24; they were outside, as `ERROR_OUTSIDE` builds them for the coverage ratio).
+ */
 export function textCoverageArea(s: TextStrokes, accuracyNm: number): number {
-  return intersectionArea(strokeRings(s, accuracyNm));
+  return intersectionArea(strokeRings(s, accuracyNm, ARC_LOW_DEF_NM, true));
 }
 
 /** `PCB_TEXT::buildBoundingHull`: the box of the strokes in the text's frame, grown by `margin`, its corners turned back onto the board; none with no strokes. */

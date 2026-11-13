@@ -11,9 +11,10 @@ import { routeDragFinish, routeDragStart, routeDragStartGroup } from "../../api/
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { inlineDragBegin, inlineDragEnd, type DragDrawState, type GroupDragTarget, type InlineDragContext } from "../../kicad-port/dragTool";
-import { pickSelectionCandidates, type SelectionFilter } from "./selectionCandidates";
+import { pickSelectionCandidates, type FootprintFilterView, type SelectionFilter } from "./selectionCandidates";
 import { askConfirm } from "../library/libraryDialogs";
 import { viaMaxDiameter } from "../../kicad-port/viaPadstack";
+import { getOverrideLocks, LOCKED_ITEMS_FILTERED } from "../../kicad-port/overrideLocks";
 
 export interface DraggableHit {
   kind: "track" | "via";
@@ -46,10 +47,12 @@ export function findDraggableAt(
   filter: SelectionFilter,
   layerVisible: Record<string, boolean>,
   activeLayer: string | null,
-  highContrast: boolean
+  highContrast: boolean,
+  fpView?: FootprintFilterView
 ): DraggableHit | null {
   const fallbackLayer = activeLayer ?? board.layers[0] ?? "F.Cu";
-  const candidates = pickSelectionCandidates(board, xNm, yNm, toleranceNm, onePixelNm, filter, layerVisible, activeLayer, highContrast, selection, false, false);
+  // (`selectPoint`'s `FilterCollectorForFootprints` with the view, when the caller knows it: UI-LEFT-3 P3-24)
+  const candidates = pickSelectionCandidates(board, xNm, yNm, toleranceNm, onePixelNm, filter, layerVisible, activeLayer, highContrast, selection, false, false, undefined, fpView);
   const hit = candidates.find((c) => c.kind === "track" || c.kind === "via");
   if (hit) return { kind: hit.kind as "track" | "via", id: hit.id, layer: hit.layer ?? fallbackLayer };
 
@@ -129,11 +132,14 @@ export async function startGroupDrag(x: number, y: number, target: GroupDragTarg
 export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false, fromRouterTool = false, context?: InlineDragContext): Promise<void> {
   // `InlineDrag` drags the selected item (`itemsToDrag` from the selection), never one picked again at the point (UI-LEFT-2 RR2): the router is told which
   const item = hit.selected ? hit.id : undefined;
-  let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, false, item);
   // `D` from the selection tool is `EDIT_TOOL::Drag`, whose selection filter drops a locked item (`FilterCollectorForLockedItems`): the
-  // selection comes out empty and the tool only warns (`ReportFilteredLockedItems`; this studio has no "Override locks"). (findings p5 F3-3)
+  // selection comes out empty and the tool only warns (`ReportFilteredLockedItems`). (findings p5 F3-3) With "Override locks" checked nothing is
+  // filtered and `InlineDrag` unlocks the item for the drag without asking ("If we overrode locks, we want to clear the flag from the source item":
+  // `item->SetLocked( false )`, the lock not put back; UI-LEFT-3 P3-3).
+  const overridden = !fromRouterTool && getOverrideLocks("pcb");
+  let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, overridden, item);
   if (!preview.ok && preview.locked && !fromRouterTool) {
-    dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+    dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
     return;
   }
   // `ROUTER_TOOL::performDragging` (`D` while the router tool is active): a locked item asks first, and "Drag Anyway" unlocks it for the drag

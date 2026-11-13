@@ -219,4 +219,7 @@ fn a_rename_is_a_step_of_both_editors() {
     assert!(Cmd::Batch { cmds: vec![mask.clone(), fields.clone()] }.spans_both_editors());
     assert!(!Cmd::Batch { cmds: vec![mask.clone(), mask] }.spans_both_editors());
     assert!(!Cmd::Batch { cmds: vec![fields.clone(), fields] }.spans_both_editors());
+    // UI-LEFT-3 P3-4: a symbol's flags are its footprint's, set from the board's Attributes menu too: one step of both
+    assert!(Cmd::SetSymbolAttrs { ids: vec!["U1".into()], dnp: None, exclude_from_bom: None, exclude_from_board: None, exclude_from_sim: Some(true) }.spans_both_editors());
+    assert!(Cmd::SetSymbolVariant { variant: "Lite".into(), ids: vec!["U1".into()], dnp: None, exclude_from_bom: Some(true), exclude_from_board: None, exclude_from_sim: None, exclude_from_pos_files: None, fields: None }.spans_both_editors());
 }

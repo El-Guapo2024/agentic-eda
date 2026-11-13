@@ -28,6 +28,7 @@ import {
   type OutsetSource,
 } from "../kicad-port/pcbConvert";
 import { padById } from "../kicad-port/pcbItems";
+import { lockedForTools } from "../kicad-port/pcbTransform";
 import { ConversionSettingsDialog, CreateTracksDialog, OutsetItemsDialog } from "../components/PcbConvertDialogs";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { openSweepDialog } from "./pcbSweepDialogs";
@@ -232,7 +233,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
       const ids = requestFiltered((id) => {
         if (api.shapeById(id)) return true;
         const hit = padById(board, id);
-        return !!hit && !(board.locked ?? []).includes(hit.part.ref);
+        return !!hit && !lockedForTools(board, hit.part.ref);
       });
       if (ids.length === 0) return;
       const layers = [...board.layers, ...STANDARD_LAYERS.map((l) => l.label)];

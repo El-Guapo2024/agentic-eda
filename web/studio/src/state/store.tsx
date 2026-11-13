@@ -76,6 +76,8 @@ import type { PinPlacement } from "../components/schematic/schPinTool";
 import type { AlignEdge } from "../kicad-port/alignDistribute";
 import { withBoardImagePixels, withSheetImagePixels } from "../actions/imagePixels";
 import { zonesToRefill } from "../kicad-port/autoRefill";
+import { LOCKED_ITEMS_FILTERED } from "../kicad-port/overrideLocks";
+import { withSchLockOverride } from "../kicad-port/schLock";
 
 /** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
 const isRouterDraw = (d: { kind: string } | null | undefined): boolean => d?.kind === "route" || d?.kind === "diffpair" || d?.kind === "drag";
@@ -2332,7 +2334,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   /** Sends a transform plan (kicad-port/pcbTransform.ts) as one undo step; says so when the locks left nothing to do (`ReportFilteredLockedItems`). */
   const runPlan = async (plan: TransformPlan, carry?: CarryStep): Promise<boolean> => {
     if (plan.cmds.length === 0) {
-      if (plan.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+      if (plan.lockedOut) dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
       return false;
     }
     return runBatch(plan.cmds, carry);
@@ -2430,7 +2432,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     transformSchItems: async (ids, turn, vertices) => {
       if (ids.length === 0) return;
       // an image's pixels turn with it (`SCH_BITMAP::Rotate`, `Mirror*`; actions/imagePixels.ts)
-      await runCmd(await withSheetImagePixels(stateRef.current.schematic, turnCmd(ids, turn, vertices), stateRef.current.currentSheetPath));
+      // (with "Override locks" checked the server keeps the locked items too: `withSchLockOverride`, UI-LEFT-3 P3-3)
+      await runCmd(withSchLockOverride(await withSheetImagePixels(stateRef.current.schematic, turnCmd(ids, turn, vertices), stateRef.current.currentSheetPath)));
     },
     commitSchHeld: async (preview) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
@@ -2448,7 +2451,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // backend refuses, leaves the import standing as a step of its own.
       const carrying = carriedPlacementRef.current;
       carriedPlacementRef.current = false;
-      const ok = cmd ? await runCmd(await withSheetImagePixels(stateRef.current.schematic, cmd, stateRef.current.currentSheetPath), carrying ? "commit" : undefined) : false;
+      const ok = cmd ? await runCmd(withSchLockOverride(await withSheetImagePixels(stateRef.current.schematic, cmd, stateRef.current.currentSheetPath)), carrying ? "commit" : undefined) : false;
       if (carrying && !ok) await postCarry("commit");
     },
     cmd: (c) => runCmd(c),
@@ -2699,7 +2702,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (after && editableSelection(after, newIds).ids.length === 0) {
         await postCarry("cancel");
         await refresh();
-        dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+        dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
         return;
       }
       carriedPlacementRef.current = true;

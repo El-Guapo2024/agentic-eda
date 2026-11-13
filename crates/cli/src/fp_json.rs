@@ -91,6 +91,9 @@ pub(crate) fn attrs_json(design: &Design, fp: &FootprintInstance, footprint: &Fo
         "dnp": a.dnp,
         "allow_missing_courtyard": a.allow_missing_courtyard,
         "custom": design.footprint_edit(&fp.id).is_some_and(|e| e.attrs.is_some()),
+        // `FOOTPRINT::IsExcludedFromSim` (KiCad 25ec2335's `FP_EXCLUDE_FROM_SIM`): the footprint's is its symbol's (one design; `BOARD_NETLIST_UPDATER` copies it), what
+        // the context menu's Attributes > Exclude from Simulation reads in the default variant (UI-LEFT-3 P3-4); false for a footprint with no symbol.
+        "exclude_from_sim": eda_model::variants::instance_of(design, &fp.id).is_some_and(|(_, sym, _)| sym.exclude_from_sim),
     })
 }
 
@@ -330,5 +333,17 @@ mod tests {
         design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![extra], ..Default::default() });
         assert_eq!(super::pad_file_layers(&design, &fp, &footprint, &footprint.pads[1]), ["F.Cu", "F.Mask"]);
         assert_eq!(super::pad_file_layers(&design, &fp, &footprint, &footprint.pads[0]), ["F.Cu", "F.Paste", "F.Mask"]);
+    }
+
+    /// UI-LEFT-3 P3-4: a footprint's `exclude_from_sim` is its symbol's (`IsExcludedFromSim`), which the context menu's Attributes > Exclude from Simulation reads.
+    #[test]
+    fn a_footprints_simulation_exclusion_is_its_symbols() {
+        let footprint = eda_model::Footprint::default();
+        let fp = FootprintInstance { id: "R1".into(), at: Point::default(), rot: 0, side: Side::Top, label: LabelSide::Above };
+        let mut design: eda_model::ir::Design = serde_json::from_value(serde_json::json!({ "provenance": { "engine_version": "t", "intent_hash": "x", "seed": 0, "stage_hashes": [] } })).unwrap();
+        assert_eq!(super::attrs_json(&design, &fp, &footprint)["exclude_from_sim"], false, "no symbol");
+        let sym = eda_model::ir::SymbolInstance { id: "R1".into(), at: Point::default(), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: true, no_footprint: false };
+        design.schematic = Some(eda_model::ir::SchematicSection { symbols: vec![sym], ..Default::default() });
+        assert_eq!(super::attrs_json(&design, &fp, &footprint)["exclude_from_sim"], true);
     }
 }

@@ -40,7 +40,8 @@ test("GetCoverageArea of a text is the area of its strokes grown by the accuracy
   const r = 150_000 + m;
   const exact = len * 2 * r + Math.PI * r * r;
   const a = textCoverageArea(s, m);
-  assert.ok(a >= exact && a < exact * 1.02, `${a} vs ${exact}`);
+  // `ERROR_INSIDE` (UI-LEFT-3 P3-24): the round ends' chords inside the arcs, so a little under the exact area
+  assert.ok(a <= exact && a > exact * 0.98, `${a} vs ${exact}`);
   // much less than its box grown by the margin once the text has holes: "O"
   const o = fieldStrokes(boardTextAsField(text({ content: "O" })));
   const [u0, v0, u1, v1] = o.box!;

@@ -1,7 +1,9 @@
 // Lock / Unlock / Toggle Lock for the schematic -- `SCH_EDIT_TOOL::modifyLockSelected` -- and the way a locked
 // item is kept out of edits (`FilterSelectionForLockedItems`, which Move, Rotate, Mirror, Swap and Delete call first;
 // keeping it out of selections is the selection filter's "Locked items", kicad-port/schSelectionFilter.ts).
+import type { Cmd } from "../api/types";
 import type { SchEditCmd } from "../api/schEditTypes";
+import { getOverrideLocks } from "./overrideLocks";
 
 export type LockMode = "toggle" | "lock" | "unlock";
 
@@ -31,4 +33,20 @@ export function lockCmd(mode: LockMode, ids: readonly string[], locked: Readonly
 /** `FilterSelectionForLockedItems`: the selection with every locked item removed. */
 export function withoutLocked(ids: readonly string[], locked: ReadonlySet<string>): string[] {
   return ids.filter((id) => !locked.has(id));
+}
+
+/**
+ * The locks `FilterSelectionForLockedItems` filters by: the sheet's locked items, or none when the schematic editor's "Override locks" box is checked
+ * (`if( m_frame && m_frame->GetOverrideLocks() ) return;`, UI-LEFT-3 P3-3).
+ */
+export function schToolLocks(locked: readonly string[] | undefined): Set<string> {
+  return getOverrideLocks("schematic") ? new Set() : new Set(locked ?? []);
+}
+
+/**
+ * A move, drag, turn, mirror or align-to-grid command as the server takes it: wrapped in `override_locks` while the box is checked, so the server's
+ * `sch_move` keeps the locked items too (`Cmd::OverrideLocks`, crates/ops/src/lib.rs); as it is otherwise.
+ */
+export function withSchLockOverride(cmd: Cmd): Cmd {
+  return getOverrideLocks("schematic") ? { op: "override_locks", cmd } : cmd;
 }

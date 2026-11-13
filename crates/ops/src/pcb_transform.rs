@@ -16,7 +16,9 @@
 //!   is counter-clockwise on the screen); the studio negates where it ports a KiCad angle.
 //! * An item keeps its id: ids are assigned once, never recomputed from the new geometry (see `Track::id`).
 //! * A group moves, turns and flips as its members do; the members that are footprints included.
-//! * Placed parts land on the placement grid like every other pose here (`Board::set_pose`).
+//! * A footprint goes where the edit says (`Board::set_pose_exact`: `FOOTPRINT::Move` is `m_pos + aMoveVector`), never rounded to the board's placement step:
+//!   the editor snapped the pointer as its "Snap to grid" says (`GRID_HELPER::canUseGrid`), so a part moved with Snap to grid Never stays off the grid
+//!   (UI-LEFT-3 C3-1). Only the CLI's and the agents' own placer verbs (`move --to`, `nudge`, `place --near/--edge/--region`) keep the step.
 //! * **The routing stays where it is** (`EDIT_TOOL::Move` / `Rotate` / `Flip` and `DeleteItems` touch the items they name, never the copper
 //!   routed to a footprint's pads, which is left unconnected for the ratsnest to show). A footprint moved away from its tracks is judged by
 //!   the studio's Strict switch like any other edit that opens a connection (`routing_connectivity`); the older part verbs (`move_to`,

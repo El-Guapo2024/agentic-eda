@@ -37,6 +37,7 @@ test("a single footprint: Select, then the edit tool's entries, the submenus, th
     A.editFpInFpEditor,
     A.updateFootprint,
     A.changeFootprint,
+    "Attributes >",
     "-",
     "Routing >",
     "Position >",
@@ -484,4 +485,11 @@ test("a lone field or text box gets Mirror / Rotate and Copy as Text, and no Net
   assert.ok(!outline(pcbSelectionMenu(sel({ total: 1, others: { barcode: 1 } }))).includes("Net Inspection Tools >"), "a barcode has no net menu");
   assert.ok(actions(sel({ tables: 1 })).includes(A.copyAsText), "a table copies as text");
   assert.ok(outline(pcbSelectionMenu(sel({ tracks: 1 }))).includes("Net Inspection Tools >"), "a track still has it");
+});
+
+test("KiCad 25ec2335's Attributes submenu (UI-LEFT-3 P3-4): its three toggles for one footprint or several, not for other items", () => {
+  const toggles = ["pcbnew.InteractiveEdit.toggleExcludeFromBOM", "pcbnew.InteractiveEdit.toggleExcludeFromSim", "pcbnew.InteractiveEdit.toggleExcludeFromPosFiles"];
+  assert.deepEqual(menuActions(submenu(pcbSelectionMenu(sel({ footprints: 1 })), "Attributes")!), toggles);
+  assert.deepEqual(menuActions(submenu(pcbSelectionMenu(sel({ footprints: 3 })), "Attributes")!), toggles);
+  assert.equal(submenu(pcbSelectionMenu(sel({ tracks: 1 })), "Attributes"), null);
 });

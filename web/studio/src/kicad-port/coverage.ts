@@ -190,14 +190,15 @@ export function rectRing(cx: number, cy: number, w: number, h: number, deg = 0):
 }
 
 /** A segment of `width` with round ends (`TransformOvalToPolygon`): the two sides and a half circle at each end. */
-export function stadiumRing(a: Pt, b: Pt, width: number, error = ARC_LOW_DEF_NM): Ring {
+export function stadiumRing(a: Pt, b: Pt, width: number, error = ARC_LOW_DEF_NM, inside = false): Ring {
   const r = width / 2;
   if (r <= 0) return [];
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  if (len === 0) return circleRing(a[0], a[1], r, error);
+  if (len === 0 && !inside) return circleRing(a[0], a[1], r, error);
   const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
   const n = Math.max(4, Math.ceil(circleSegments(r, error) / 2));
-  const rr = r / Math.cos(Math.PI / (2 * n));
+  // `inside` (`ERROR_INSIDE`): every vertex on the arc, the chords inside it; else (`ERROR_OUTSIDE`) the corners between are outside it
+  const rr = inside ? r : r / Math.cos(Math.PI / (2 * n));
   const out: Pt[] = [];
   // the end at b, from one side round to the other, then the end at a; the straight sides at the half width, the corners between outside the arc
   for (let i = 0; i <= n; i++) {

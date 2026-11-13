@@ -1683,6 +1683,12 @@ pub enum Cmd {
     /// (`BOARD_COMMIT::Push`: `enteredGroup->AddItem( boardItem )`; `PCB_CONTROL::placeBoardItems` does it for a paste). The command is applied as
     /// itself, one undo step; a group that is gone is not joined. See [`pcb_groups`].
     InGroup { group: String, cmd: Box<Cmd> },
+    /// Run `cmd` with the schematic editor's "Override locks" box checked (`EDA_DRAW_FRAME::GetOverrideLocks()`, KiCad 8303b2ad
+    /// common/eda_draw_frame.cpp): `SCH_SELECTION_TOOL::FilterSelectionForLockedItems` returns at once (`if( m_frame && m_frame->GetOverrideLocks() )
+    /// return;`), so Move, Drag, Rotate, Mirror and Align to Grid act on locked items too, which stay locked. The box lives in the editor, not in the
+    /// design, so the studio wraps the command while it is checked (UI-LEFT-3 P3-3). The command is applied as itself, one undo step. On the wire:
+    /// `{"op": "override_locks", "cmd": {...}}`.
+    OverrideLocks { cmd: Box<Cmd> },
     /// Tools > Reorganize into Module Sheets: turn the current flat schematic into one sheet per functional module (an IC with the
     /// passives that serve it, repeated channels, each connector) with a sheet symbol for each on the root, nets that cross modules
     /// as sheet pins and power as power symbols. Every symbol keeps its reference, value, footprint and fields; only places change,
@@ -2561,7 +2567,7 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
             Cmd::FpEditor(c) => c.domain(),
-            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.domain(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd.domain(),
             Cmd::ReorganizeSheets => Domain::Schematic,
             Cmd::SetDrawingSheet { schematic: true, .. } => Domain::Schematic,
             Cmd::Embedded(c) => c.domain(),
@@ -2706,7 +2712,7 @@ impl Cmd {
     pub fn edits_connectivity(&self) -> bool {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
-            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd.edits_connectivity(),
             // A severity table and the findings waived are about the report, not the drawing.
             Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } | Cmd::SetIntersheetRefs { .. } | Cmd::SetSimulator { .. } => false,
             // Schematic Setup's sizes, field templates and BOM presets are how the sheet is drawn and listed, not what it connects (a bus alias does connect,
@@ -2765,7 +2771,7 @@ impl Cmd {
             // A batch with a board edit and a sheet edit is one step of both (Footprint Properties' OK: the footprint's fields, then the symbol's Value, Datasheet
             // and Description, UI-LEFT-2 PP18): one Ctrl+Z on the board takes the symbol's half back too, as KiCad's dialog commit is one.
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::spans_both_editors) || (cmds.iter().any(|c| c.domain() == Domain::Pcb) && cmds.iter().any(|c| c.domain() == Domain::Schematic)),
-            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.spans_both_editors(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd.spans_both_editors(),
             Cmd::RenameSymbol { .. } | Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => true,
             // the project's net classes: Board Setup and Schematic Setup edit the one table (the board's sizes, the sheet's wires), so either tab takes it back
             Cmd::SetNetClasses { .. } => true,
@@ -2773,6 +2779,9 @@ impl Cmd {
             Cmd::SetTextVariables { .. } => true,
             // the board's footprint and the symbol's Footprint field are put right together
             Cmd::ExchangeFootprints { .. } => true,
+            // a symbol's DNP / BOM / board / simulation flags, and its variant's, are its footprint's too (one design: the board shows them, and the board's
+            // context menu > Attributes sets them -- `EDIT_TOOL::ToggleFootprintAttribute` is a board commit, UI-LEFT-3 P3-4): either tab takes them back
+            Cmd::SetSymbolAttrs { .. } | Cmd::SetSymbolVariant { .. } => true,
             // a footprint the Footprint Editor puts back on the board may carry a DNP or BOM flag the symbol takes
             Cmd::FpEditor(fp_editor::FpEditorCmd::SaveToBoard { .. }) => true,
             // the footprints' references and the symbols' go together
@@ -2804,7 +2813,7 @@ impl Cmd {
         match self {
             Cmd::PasteSch { numbering, .. } => *numbering,
             Cmd::AddSymbol { annotate: Some(a), .. } | Cmd::AddPowerSymbol { annotate: Some(a), .. } => of(a),
-            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.numbering(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd.numbering(),
             Cmd::Batch { cmds } => cmds.iter().map(Cmd::numbering).find(|n| *n != Default::default()).unwrap_or_default(),
             _ => Default::default(),
         }
@@ -2855,7 +2864,7 @@ impl Cmd {
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::CommitTuning { pattern, remove_pattern, .. } => remove_pattern.iter().map(String::as_str).chain(pattern.iter().map(|p| p.layer.as_str())).collect(),
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
-            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -3065,7 +3074,7 @@ impl Cmd {
         if let Cmd::Batch { cmds } = self {
             return cmds.iter().any(Cmd::clears_routing);
         }
-        if let Cmd::InGroup { cmd, .. } = self {
+        if let Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } = self {
             return cmd.clears_routing();
         }
         matches!(
@@ -3109,7 +3118,7 @@ impl Cmd {
     pub fn clears_routing_in(&self, board: &Board<'_>) -> bool {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
-            Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
+            Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd.clears_routing_in(board),
             Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::MirrorTracks { .. } | Cmd::MirrorItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
             Cmd::SwapChain { .. } | Cmd::SwapItems { .. } | Cmd::MoveExact { .. } => false,
             // the autoplacer moves footprints as the edit tools do: what was routed to them stays where it is
@@ -3125,7 +3134,7 @@ impl Cmd {
         match self {
             Cmd::Autoplace(_) => true,
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::always_judged),
-            Cmd::InGroup { cmd, .. } => cmd.always_judged(),
+            Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd.always_judged(),
             _ => false,
         }
     }
@@ -3160,6 +3169,8 @@ pub struct Board<'a> {
     /// flags a junction and deletes it last, r5 B5-H1): a junction Delete Junction removed (`true`), or the point of a deleted sheet pin, whose junction
     /// goes only when it is no longer explicit (`false`, r5 B5-L1).
     pending_junction_merges: Vec<(Option<String>, Point, bool)>,
+    /// Set while one [`Cmd::OverrideLocks`] runs: the schematic's locked items are not filtered out of a move (`sch_move::select`).
+    override_locks: bool,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -3203,7 +3214,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, focus_path: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new() }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, focus_path: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new(), override_locks: false }
     }
 
     /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
@@ -3250,6 +3261,7 @@ impl<'a> Board<'a> {
             net_collision: None,
             pending_clean_up: None,
             pending_junction_merges: Vec::new(),
+            override_locks: self.override_locks,
         }
     }
 
@@ -3769,6 +3781,7 @@ impl<'a> Board<'a> {
             Cmd::SchTable(c) => self.apply_sch_table(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
+            Cmd::OverrideLocks { cmd } => self.with_override_locks(cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => {
                 let pts: Vec<Point> = self.schematic().map(|s| s.no_connects.iter().filter(|n| n.id == *id).map(|n| n.at).collect()).unwrap_or_default();
@@ -3807,7 +3820,22 @@ impl<'a> Board<'a> {
             // the symbol's own screen (UI-LEFT P14)
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.on_symbols_screen(id, |b| b.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()).and_then(|_| b.commit_clean_up())),
             Cmd::RenameSymbol { id, new_id } => self.on_symbols_screen(id, |b| b.rename_symbol(id, new_id)),
-            Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
+            Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => {
+                // The board's Attributes > Exclude from Simulation names footprints, whose symbols may be on any sheet (UI-LEFT-3 P3-4): a reference the screen in
+                // view does not have is set on its own screen, as `EditSymbolFields` is; the schematic's own toggles name the sheet in view and run as one.
+                let on_focus = self.schematic().map(|sch| ids.iter().all(|id| sch.symbols.iter().any(|s| &s.id == id))).unwrap_or(false);
+                if on_focus || ids.is_empty() {
+                    self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim)
+                } else {
+                    // all or nothing, as the one call is
+                    let saved = self.design.clone();
+                    let r = ids.iter().try_for_each(|id| self.on_symbols_screen(id, |b| b.set_symbol_attrs(std::slice::from_ref(id), *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim)));
+                    if r.is_err() {
+                        self.design = saved;
+                    }
+                    r
+                }
+            }
             Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
             Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
             Cmd::EditDesignVariantDescription { name, description } => self.edit_design_variant_description(name, description),
@@ -5697,6 +5725,14 @@ impl<'a> Board<'a> {
             return Vec::new();
         }
         eda_model::sheet_list::walk(&self.design).into_iter().find(|e| e.file == file).map(|e| e.path).unwrap_or_default()
+    }
+
+    /// [`Cmd::OverrideLocks`]: `cmd` with the locks overridden (nested, it stays overridden).
+    fn with_override_locks(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
+        let saved = std::mem::replace(&mut self.override_locks, true);
+        let r = self.apply(cmd);
+        self.override_locks = saved;
+        r
     }
 
     /// [`Cmd::OnSheet`]: run one command with the schematic verbs pointed at another sheet. All or nothing, like a `Batch`.

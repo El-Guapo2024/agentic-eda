@@ -59,6 +59,7 @@ import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, a
 import { isMac } from "../platform";
 import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
 import { applyPatch, heldCmd, holdPoint, pickedVertices, previewBody, wirePick } from "../kicad-port/schMove";
+import { withSchLockOverride } from "../kicad-port/schLock";
 import { paintNetCollision } from "./schematic/netCollisionPainter";
 import { paintOperatingPoints } from "./simulator/opPainter";
 import { useSimUi } from "../state/simulator";
@@ -339,7 +340,8 @@ export function SchematicView() {
       setPatch(null);
       return;
     }
-    pump.want = JSON.stringify(previewBody(cmd, state.currentSheetPath));
+    // the preview runs as the drop will (`withSchLockOverride`: locked items held with "Override locks" checked)
+    pump.want = JSON.stringify(previewBody(withSchLockOverride(cmd), state.currentSheetPath));
     if (pump.busy) return;
     pump.busy = true;
     void (async () => {

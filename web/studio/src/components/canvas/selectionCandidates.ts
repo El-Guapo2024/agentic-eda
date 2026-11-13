@@ -16,8 +16,9 @@ import { stitchFilteredAsVia } from "../../kicad-port/viaStitch";
 import type { BoardState, Dimension, FieldInfo, Part } from "../../api/types";
 import { fpTextById, padIds, padParent } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
-import { artBounds, artHitDistance, artTextAsField, artTextShown, unionBox } from "../../kicad-port/fpArt";
-import { fpItemsHitDistance } from "../../kicad-port/fpBoardItems";
+import { artBounds, artHitDistance, artTextAsField, artTextShown, graphicsOf, layersOf, unionBox } from "../../kicad-port/fpArt";
+import { fpItemsHitDistance, fpPoints } from "../../kicad-port/fpBoardItems";
+import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, shapeBoundingBox, shapeHitDistance, textBoundingBox, zoneArea, zoneContainsPoint, zoneEdgeDistance } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
@@ -779,6 +780,108 @@ export function footprintCoverageRatio(board: BoardState, ref: string, pool: rea
 }
 
 /**
+ * What `FilterCollectorForFootprints` reads of the view and of the click: the viewport's box in board nanometres (`getView()->GetViewport()`; null when not
+ * known: every footprint then has items in view), whether the click adds to, takes from or toggles the selection (`m_additive || m_subtractive ||
+ * m_exclusive_or`), and the selection it is made over.
+ */
+export interface FootprintFilterView {
+  viewport: Box | null;
+  modifying: boolean;
+  selection: ReadonlySet<string>;
+}
+
+/** `PAD::IsOnLayer` for a board layer: the pad's `(layers ..)` (`*.Cu`, `*.Mask` for every one), turned to the board's side for a footprint on the back; without them, its kind's. */
+function padOnLayer(p: Part, pad: NonNullable<Part["pads"]>[number], layer: string): boolean {
+  const back = p.side === "bottom";
+  const own = pad.layers?.length ? pad.layers : pad.th ? ["*.Cu", "*.Mask"] : ["F.Cu", "F.Paste", "F.Mask"];
+  return own.some((raw) => {
+    const l = back ? (raw.startsWith("F.") ? `B.${raw.slice(2)}` : raw.startsWith("B.") ? `F.${raw.slice(2)}` : raw) : raw;
+    return l === layer || (l.startsWith("*.") && layer.endsWith(l.slice(1)));
+  });
+}
+
+/** `VIEW::GetViewport()`: the board box the canvas of `width` x `height` pixels shows at `view` (a point on screen is `world * scale + offset`). */
+export function viewportBox(view: { x: number; y: number; scale: number }, width: number, height: number): Box {
+  const s = view.scale || 1;
+  return [-view.x / s, -view.y / s, (width - view.x) / s, (height - view.y) / s];
+}
+
+const boxesMeet = (a: Box, b: Box): boolean => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+
+/**
+ * `PCB_SELECTION_TOOL::FilterCollectorForFootprints` (pcbnew/tools/pcb_selection_tool.cpp at 8303b2ad; UI-LEFT-3 P3-24), `selectPoint`'s pass after the client
+ * and hierarchy filters: a footprint whose own layer (`fp->GetLayer()`, F.Cu or B.Cu) is shown -- the visible layers, or with High Contrast the active
+ * layer alone -- stays ("Make footprints not difficult to select in high-contrast modes"). Any other goes when the click is outside the box of its items on
+ * the shown layers (`GetLayerBoundingBox( layers )`), or when none of those items is in the view (`HitTestOnLayer( extents, false, layer )`); with a
+ * selection made without a modifier ("This prevents us from being unable to clear the selection when zoomed into a footprint") it then needs a direct hit
+ * of one of them (`HitTestOnLayer( aWhere, layer )`: a pad, a zone or a graphic, not a text) -- unless every selected item is of that footprint ("you can have a
+ * selection of pads from a single footprint and still click in the center of the footprint to select it"). Its items: its pads, graphics and zones, and for the
+ * box its points too.
+ */
+export function filterCollectorForFootprints(board: BoardState, candidates: readonly SelectionCandidate[], xNm: number, yNm: number, layerVisible: Record<string, boolean>, activeLayer: string | null, highContrast: boolean, view: FootprintFilterView): SelectionCandidate[] {
+  // `layers`: the board's visible layers, or High Contrast's layers (the active one; the others of `GetHighContrastLayers` are not board layers)
+  const shown = (layer: string): boolean => (highContrast && activeLayer != null ? layerStateKey(layer) === activeLayer : layerIsVisible(layerVisible, layer));
+  const needDirectHit = !view.modifying && view.selection.size > 0;
+  // `single_fp`: the one footprint every selected item is or belongs to
+  let singleFp: string | null = null;
+  if (needDirectHit) {
+    for (const id of view.selection) {
+      // (`GetParentFootprint()` of a pad, a field or a footprint's text)
+      const fp = board.parts.some((p) => p.ref === id) ? id : (padParent(board, id) ?? fpTextById(board, id)?.part.ref ?? board.parts.find((p) => p.fields?.some((f) => f.id === id))?.ref ?? null);
+      if (!fp || (singleFp !== null && singleFp !== fp)) {
+        singleFp = null;
+        break;
+      }
+      singleFp = fp;
+    }
+  }
+  // the layers a pad can be on: the copper layers, the masks and the pastes
+  const padLayerNames = [...new Set([...board.layers, "F.Cu", "B.Cu", "F.Mask", "B.Mask", "F.Paste", "B.Paste"])];
+  return candidates.filter((c) => {
+    if (c.kind !== "part") return true;
+    const p = board.parts.find((q) => q.ref === c.id);
+    if (!p) return true;
+    if (shown(p.side === "bottom" ? "B.Cu" : "F.Cu")) return true;
+    // its items on the shown layers: each one's box, and whether the point hits it
+    const items: { box: Box; hits: () => boolean }[] = [];
+    for (const pad of p.pads ?? []) {
+      let onShown = false;
+      for (const l of padLayerNames) if (shown(l) && padOnLayer(p, pad, l)) onShown = true;
+      if (!onShown) continue;
+      const rings = padCopperRings(pad);
+      const pts = rings.flat();
+      if (pts.length === 0) continue;
+      items.push({ box: [Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1]))], hits: () => padShapeDistance(pad, xNm, yNm) <= 0 });
+    }
+    for (const g of graphicsOf(p)) {
+      if (!layersOf(g).some(shown)) continue;
+      const [x0, y0, x1, y1] = shapeBoundingBox(g);
+      const half = g.stroke_width / 2;
+      items.push({ box: [x0 - half, y0 - half, x1 + half, y1 + half], hits: () => shapeHitDistance(g, xNm, yNm) - half <= 0 });
+    }
+    // its zones (`m_zones`: in the box, the view and the direct hit -- inside the outline or on it)
+    for (const z of board.routing?.zones ?? []) {
+      if (z.parent !== p.ref || z.outline.length < 3 || !zoneLayers(z).some(shown)) continue;
+      const xs = z.outline.map((q) => q[0]);
+      const ys = z.outline.map((q) => q[1]);
+      items.push({ box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], hits: () => zoneContainsPoint(z, xNm, yNm) || zoneEdgeDistance(z, xNm, yNm) <= 0 });
+    }
+    // its points (`m_points`): in `GetLayerBoundingBox` only -- `HitTestOnLayer` does not look at them
+    const boxOnly: Box[] = fpPoints(p)
+      .filter((q) => shown(q.layer))
+      .map((q) => [q.x - q.size / 2, q.y - q.size / 2, q.x + q.size / 2, q.y + q.size / 2] as Box);
+    // "If the point clicked is not inside the visible bounding box, we can also remove it."
+    const box = [...items.map((i) => i.box), ...boxOnly].reduce<Box | null>((b, i) => (b ? [Math.min(b[0], i[0]), Math.min(b[1], i[1]), Math.max(b[2], i[2]), Math.max(b[3], i[3])] : i), null);
+    if (!box || xNm < box[0] || xNm > box[2] || yNm < box[1] || yNm > box[3]) return false;
+    // "If the point is outside of the visible bounding box, we can remove it." (no item in view)
+    if (view.viewport && !items.some((i) => boxesMeet(i.box, view.viewport!))) return false;
+    if (singleFp !== null) return true;
+    if (needDirectHit) return items.some((i) => i.hits());
+    return true;
+  });
+}
+
+/**
  * `RequestSelection` with the edit tools' client filter, for the item under the cursor when nothing is selected (M, R, F, D, E, Delete ...): the items
  * collected, `applyToolFilter`, then the heuristics -- in `selectPoint`'s order (the client filter runs before `GuessSelectionCandidates`). Over a footprint's
  * fab reference this takes the footprint, as a click there takes the text.
@@ -855,13 +958,19 @@ export function toolCandidateSets(
   highContrast: boolean,
   selection: ReadonlySet<string>,
   mode: ToolPickMode,
-  rejected?: FilterRejections
+  rejected?: FilterRejections,
+  fpView?: FootprintFilterView
 ): { guessed: SelectionCandidate[]; all: SelectionCandidate[] } {
   const collected = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, false, onePixelNm, rejected);
   const accuracy = Math.round(5 * onePixelNm);
   const guess = (cands: SelectionCandidate[]) => guessSelectionCandidates(cands, onePixelNm, activeLayer, highContrast, (c, pool) => footprintCoverageRatio(board, c.id, pool, accuracy));
-  if (mode === "plain") return { guessed: guess(collected), all: collected };
-  let all = applyToolFilter(board, collected, xNm, yNm, layerVisible);
+  // `FilterCollectorForFootprints( collector, aWhere )` after the client and hierarchy filters, before the heuristics
+  const byFootprints = (cands: SelectionCandidate[]) => (fpView ? filterCollectorForFootprints(board, cands, xNm, yNm, layerVisible, activeLayer, highContrast, fpView) : cands);
+  if (mode === "plain") {
+    const plain = byFootprints(collected);
+    return { guessed: guess(plain), all: plain };
+  }
+  let all = byFootprints(applyToolFilter(board, collected, xNm, yNm, layerVisible));
   let left = all;
   if (mode === "drag") {
     const { kept, removed } = applyDragFilter(board, all, guess);
@@ -884,9 +993,12 @@ export function pickSelectionCandidates(
   selection: ReadonlySet<string>,
   subtractiveOnly: boolean,
   skipHeuristics: boolean,
-  rejected?: FilterRejections
+  rejected?: FilterRejections,
+  fpView?: FootprintFilterView
 ): SelectionCandidate[] {
-  const all = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly, onePixelNm, rejected);
+  const collected = collectSelectionCandidates(board, xNm, yNm, toleranceNm, filter, layerVisible, activeLayer, highContrast, selection, subtractiveOnly, onePixelNm, rejected);
+  // `FilterCollectorForFootprints`, with the view and the click when the caller knows them (UI-LEFT-3 P3-24)
+  const all = fpView ? filterCollectorForFootprints(board, collected, xNm, yNm, layerVisible, activeLayer, highContrast, fpView) : collected;
   if (skipHeuristics) return all;
   // `textMargin = aCollector.GetGuide()->Accuracy()`: `KiROUND( 5 * OnePixelInIU() )`
   const accuracy = Math.round(5 * onePixelNm);

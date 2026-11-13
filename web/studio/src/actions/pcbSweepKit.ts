@@ -7,7 +7,7 @@ import type { Action, StudioApi, StudioState } from "../state/store";
 import type { BoardState, Cmd } from "../api/types";
 import { fetchState } from "../api/client";
 import { extraItemIds } from "../kicad-port/pcbExtraItems";
-import { isLocked } from "../kicad-port/pcbTransform";
+import { lockedForTools } from "../kicad-port/pcbTransform";
 
 export interface SweepCtx {
   state: StudioState;
@@ -68,7 +68,8 @@ export function createSweepHelpers(ctx: SweepCtx): SweepHelpers {
     const ids = ctx.requestSelection();
     // A lock of the item's own, a locked group's above it, or a locked member below it (`FilterCollectorForLockedItems`; round 6 E6-8).
     const board = state.board;
-    const out = ids.filter((id) => accept(id) && (keepLocked || (!lockedIds.has(id) && !(board && isLocked(board, id)))));
+    // (none with Override locks: `lockedForTools`, UI-LEFT-3 P3-3)
+    const out = ids.filter((id) => accept(id) && (keepLocked || !(board && lockedForTools(board, id))));
     if (state.selection.size > 0 && out.length !== ids.length) dispatch({ type: "SET_SELECTION", refs: out });
     return out;
   };

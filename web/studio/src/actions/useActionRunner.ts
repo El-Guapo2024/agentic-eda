@@ -32,7 +32,7 @@ import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
-import { itemPassesFilter, newFilterRejections, pickSelectionCandidates, pickToolCandidates, rowsToFlash, toolCandidateSets, type SelectionCandidate, type ToolPickMode } from "../components/canvas/selectionCandidates";
+import { itemPassesFilter, newFilterRejections, pickSelectionCandidates, rowsToFlash, toolCandidateSets, viewportBox, type SelectionCandidate, type ToolPickMode } from "../components/canvas/selectionCandidates";
 import { flashSelectionFilter } from "../kicad-port/filterFlash";
 import { candidateLabel } from "../components/canvas/candidateLabel";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
@@ -95,6 +95,9 @@ import { registerLibraryEditorActions, symEnableState } from "./libraryEditorAct
 import { fpActionEnabled, symActionEnabled } from "../kicad-port/fpSymActionEnabled";
 import { placingFootprint, startPlaceFootprint } from "./placeFootprintTool";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
+import { askingRegistry, newForcedSelection, SelectionMenuPending } from "./selectionMenuReplay";
+import { FP_ATTRIBUTE_ACTIONS, fpAttributeChecked, toggleFpAttributeCmds, type FpAttribute } from "../kicad-port/fpAttributeToggle";
+import { getOverrideLocks, LOCKED_ITEMS_FILTERED } from "../state/overrideLocks";
 import { makeEditorAdapter } from "./editorAdapter";
 import { cancelAreaTool, getCommonTool, getLastPointer, showSelectionMenu } from "../state/commonTool";
 import { commonChecked } from "../kicad-port/commonChecked";
@@ -118,7 +121,7 @@ import { allItems, itemBounds } from "../components/schematic/schItems";
 import { pickItem } from "../components/schematic/schPick";
 import { isPinItemId, pinItems, promoteLonePin } from "../kicad-port/schPins";
 import { deleteCmds } from "../kicad-port/schDelete";
-import { withoutLocked } from "../kicad-port/schLock";
+import { schToolLocks, withoutLocked, withSchLockOverride } from "../kicad-port/schLock";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { registerSchEditActions } from "./schEditActions";
 import { registerSchPlaceActions } from "./schPlaceActions";
@@ -171,6 +174,8 @@ export function useActionRunner() {
   const markerCursor = useRef<string | null>(null);
   /** The net navigator's own tree selection (`m_netNavigator->GetSelection()`): which item of the highlighted net Tab/Shift+Tab last landed on. */
   const netNavKey = useRef<string | null>(null);
+  /** The clarification menu's choice while the action that asked replays (`requestSelection`; kept across the registry's rebuilds while the menu is open). */
+  const forcedSelection = useRef(newForcedSelection()).current;
 
   const registry = useMemo(() => {
     // A handler may take the one parameter an action carries (`TOOL_EVENT::Parameter`), e.g. the sheet path of `NavigateTool.changeSheet`.
@@ -200,15 +205,24 @@ export function useActionRunner() {
     const setView = (view: typeof state.view) => dispatch({ type: state.tab === "schematic" ? "SET_SCHEMATIC_VIEW" : "SET_VIEW", view });
 
     /**
-     * `PCB_SELECTION_TOOL::RequestSelection` / `SCH_SELECTION_TOOL::RequestSelection`: the current
-     * selection, or -- when nothing is selected -- the item under the cursor (`selectPoint`; no
-     * clarification menu, the best candidate wins). Used by every edit hotkey (R/F/M/Del/E/U/Shift+M...)
-     * so hover + key works without a prior click.
+     * `PCB_SELECTION_TOOL::RequestSelection` / `SCH_SELECTION_TOOL::RequestSelection`: the current selection, or -- when nothing is selected -- the item under
+     * the cursor (`selectPoint`). Used by every edit hotkey (R/F/M/Del/E/U/Shift+M, Copy, Cut, Lock, Swap ...) so hover + key works without a prior click.
+     * On the board, where the tool's client filter and the heuristics leave several items, `selectPoint` asks with the clarification menu
+     * (`if( !doSelectionMenu( &collector ) ) return false;`) for every tool (UI-LEFT-3 P3-2; it was M, R, F, D, G, Delete and E only): inside an action this
+     * throws `SelectionMenuPending`, the menu opens at the pointer (numbered rows chosen by their keys, Select All (A), Show More Choices... (M)) and its
+     * choice replays the action, answered here from `forcedSelection` (actions/selectionMenuReplay.ts). `mode` is the tool's client filter (`ToolPickMode`;
+     * `true` is "plain", `EDIT_TOOL::Properties`' empty one).
      */
-    const requestSelection = (plain = false): string[] => {
+    /** What `selectPoint`'s `FilterCollectorForFootprints` reads for a pick at the cursor (UI-LEFT-3 P3-24): the viewport, no modifier, `selection`. */
+    const fpViewOf = (selection: ReadonlySet<string>) => {
+      const rect = canvasRect();
+      return { viewport: rect ? viewportBox(state.view, rect.width, rect.height) : null, modifying: false, selection };
+    };
+    const requestSelection = (mode: boolean | ToolPickMode = false): string[] => {
       // `RequestSelection` with the tool's scan types: a pin is no item of the tools that move, turn or edit, so a selection of pins is trimmed to nothing (a selection that was not empty is
       // not replaced by what is under the cursor); `requestPins` asks for the pins.
       if (state.selection.size > 0) return state.tab === "schematic" ? [...state.selection].filter((id) => !isPinItemId(id)) : [...state.selection];
+      if (state.tab === "pcb" && forcedSelection.ids) return [...forcedSelection.ids];
       if (!state.cursorNm) return [];
       if (state.tab === "schematic") {
         const sch = state.schematic;
@@ -217,47 +231,43 @@ export function useActionRunner() {
         const hit = pickItem(sch, state.cursorNm.x, state.cursorNm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "none");
         return hit ? [hit] : [];
       }
-      if (state.tab !== "pcb" || !state.board) return [];
+      const board = state.board;
+      if (state.tab !== "pcb" || !board) return [];
+      const pick: ToolPickMode = mode === true ? "plain" : mode === false ? "tool" : mode;
       const toleranceNm = Math.max(150_000, 6 / state.view.scale);
       // The edit tools' client filter (`FilterCollectorForFreePads`, `FilterCollectorForHierarchy( aCollector, true )`) before the heuristics: a pad under the
-      // cursor stands for its footprint, and a footprint's field or text goes for the footprint it lies on -- the edit tools work on that. `plain`: a tool
+      // cursor stands for its footprint, and a footprint's field or text goes for the footprint it lies on -- the edit tools work on that. "plain": a tool
       // whose filter is empty (`EDIT_TOOL::Properties`) takes what a click takes.
-      const cands = plain
-        ? pickSelectionCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
-        : pickToolCandidates(state.board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection);
-      const hit = cands[0];
-      return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
-    };
-    /**
-     * `RequestSelection( aClientFilter )` as the board's edit tools run it (UI-LEFT-2 PP2): the selection, or the item under the cursor -- and where the tool's
-     * client filter and the heuristics leave several, `selectPoint` asks (`if( !doSelectionMenu( &collector ) ) return false;`): the clarification menu at the
-     * pointer, its numbered rows chosen by their keys, Select All (A) and Show More Choices... (M); the tool runs on what is chosen and does nothing when the menu
-     * is dismissed. `mode` is the tool's client filter (`ToolPickMode`). Off the board, and with a selection, it is `requestSelection` at once.
-     */
-    const withRequestedSelection = (run: (ids: string[]) => void, mode: ToolPickMode = "tool"): void => {
-      const board = state.board;
-      if (state.tab !== "pcb" || !board || state.selection.size > 0 || !state.cursorNm) return run(requestSelection(mode === "plain"));
-      const toleranceNm = Math.max(150_000, 6 / state.view.scale);
       const rejected = newFilterRejections();
-      const { guessed, all } = toolCandidateSets(board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, mode, rejected);
+      // (`selectPoint`'s `FilterCollectorForFootprints` with the view; nothing is selected and no modifier is held here)
+      const fpView = fpViewOf(state.selection);
+      const { guessed, all } = toolCandidateSets(board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, pick, rejected, fpView);
       // `selectPoint`'s `HighlightSelectionFilter( rejected )` when the filter refused everything under the cursor
       const flash = rowsToFlash(rejected);
       if (flash.length > 0) flashSelectionFilter(flash);
-      // a pad stands for its footprint (`requestSelection`'s own mapping)
+      // a pad stands for its footprint
       const asItem = (id: string, kind: string) => (kind === "pad" ? (padParent(board, id) ?? id) : id);
-      if (guessed.length <= 1) return run(guessed.map((c) => asItem(c.id, c.kind)));
+      // outside an action (nothing to replay) the best candidate is taken, as before
+      if (guessed.length <= 1 || forcedSelection.depth === 0) return guessed.slice(0, 1).map((c) => asItem(c.id, c.kind));
       const kinds = new Map(all.map((c) => [c.id, c.kind] as const));
       for (const c of guessed) kinds.set(c.id, c.kind);
       const row = (c: SelectionCandidate) => ({ id: c.id, label: candidateLabel(board, c) });
-      showSelectionMenu({
-        at: getLastPointer(),
-        items: guessed.map(row),
-        more: all.length > guessed.length ? () => all.map(row) : undefined,
-        onChoose: (ids) => {
-          if (ids) run([...new Set(ids.map((id) => asItem(id, kinds.get(id) ?? "")))]);
-        },
-      });
+      throw new SelectionMenuPending((choose) =>
+        showSelectionMenu({
+          at: getLastPointer(),
+          items: guessed.map(row),
+          more: all.length > guessed.length ? () => all.map(row) : undefined,
+          onChoose: (ids) => {
+            if (ids) choose([...new Set(ids.map((id) => asItem(id, kinds.get(id) ?? "")))]);
+          },
+        })
+      );
     };
+    /**
+     * `RequestSelection( aClientFilter )` as the board's edit tools run it (UI-LEFT-2 PP2): `requestSelection` with the tool's client filter `mode`, the tool
+     * run on what it hands back (after the clarification menu when it asks).
+     */
+    const withRequestedSelection = (run: (ids: string[]) => void, mode: ToolPickMode = "tool"): void => run(requestSelection(mode));
     /** `RequestSelection( { SCH_PIN_T } )` (Swap Pins, Swap Pin Labels): the selected pins in selection order, or the pin under the cursor when nothing is selected. */
     const requestPins = (): string[] => {
       if (state.selection.size > 0) return [...state.selection].filter(isPinItemId);
@@ -294,7 +304,7 @@ export function useActionRunner() {
       const cmds: Cmd[] = [];
       let keepSelection: string[] | undefined;
       // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
-      if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
+      if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, schToolLocks(state.schematic.locked)));
       // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
       // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
       if (state.tab === "pcb" && state.board) {
@@ -302,6 +312,8 @@ export function useActionRunner() {
         const cursor = state.cursorNm ? (([x, y]) => ({ x, y }))(snapPoint(state.cursorNm.x, state.cursorNm.y, state.gridNm)) : null;
         const del = boardDeleteCmds(state.board, refs, { cursor, isCut });
         cmds.push(...del.cmds);
+        // `EDIT_TOOL::Remove`: "if( selectionCopy.Empty() ) { m_selectionTool->ReportFilteredLockedItems(); ..." -- every item was locked (UI-LEFT-3 P3-3)
+        if (!isCut && del.cmds.length === 0 && del.skippedLocked > 0) dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
         keepSelection = del.keepSelection;
         if (del.message) dispatch({ type: "TOAST", message: del.message, kind: "error" });
       }
@@ -614,7 +626,7 @@ export function useActionRunner() {
       const highlighted = highlightedNets(state.netHighlight, state.bcx.netHighlightMore);
       if (fromRouterTool) {
         const toleranceNm = Math.max(150_000, 6 / state.view.scale);
-        const hit = findDraggableAt(board, new Set(), cursor.x, cursor.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        const hit = findDraggableAt(board, new Set(), cursor.x, cursor.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, fpViewOf(new Set()));
         if (!hit) {
           dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
           return;
@@ -640,7 +652,7 @@ export function useActionRunner() {
           return;
         }
         if (group.lockedOut) {
-          dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+          dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
           return;
         }
         // `selection.Size() == 1 && selection.Front()->IsType( GENERAL_COLLECTOR::DraggableItems )`: the one track, arc track or via, dragged by its id
@@ -884,7 +896,7 @@ export function useActionRunner() {
         const cursor = state.cursorNm;
         const candidates =
           cursor && connectedStartCount(board, state.selection) === 0
-            ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150_000, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
+            ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150_000, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false, undefined, fpViewOf(state.selection))
             : [];
         // `itemPassesFilter( item, true )` on what the walk selects, and `selectAllConnectedShapes`' collector for graphic lines (5 pixels, the shape's hit test)
         const filter = state.selectionFilter;
@@ -1015,7 +1027,7 @@ export function useActionRunner() {
         withRequestedSelection((picked) => {
           const { ids, lockedOut } = editableSelection(board, picked);
           if (ids.length === 0) {
-            if (lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+            if (lockedOut) dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
             return;
           }
           if (state.selection.size === 0 && picked.length > 0) dispatch({ type: "SET_SELECTION", refs: picked });
@@ -1387,7 +1399,7 @@ export function useActionRunner() {
     // pointer carries them and a click drops them (SchematicView.tsx). `G` stretches the wires, labels, junctions and no-connects attached.
     const armMove = (tool: "move" | "drag") =>
       schematicOnly(() => {
-        const refs = withoutLocked(requestSelection(), new Set(state.schematic?.locked ?? []));
+        const refs = withoutLocked(requestSelection(), schToolLocks(state.schematic?.locked));
         if (refs.length === 0) return;
         adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool });
@@ -1398,8 +1410,9 @@ export function useActionRunner() {
 
     // sch_edit_tool.cpp Rotate/Mirror: RequestSelection (hover fallback), every selected item of every kind, one turn point for 2+ items, one undo step.
     // Rotate/Mirror skip locked items (`FilterSelectionForLockedItems`, called first by SCH_EDIT_TOOL::Rotate/Mirror).
+    // (none with "Override locks" checked: `schToolLocks`, UI-LEFT-3 P3-3)
     const schLocked = () => new Set(state.schematic?.locked ?? []);
-    const schItems = () => withoutLocked(requestSelection(), schLocked());
+    const schItems = () => withoutLocked(requestSelection(), schToolLocks(state.schematic?.locked));
     const schTurn = (turn: SchTurn) =>
       schematicOnly(() => {
         // the wire tool's own R / Shift+R (`doDrawSegments`): while unfolding a bus they turn the member's label; while drawing otherwise, nothing (`wxBell()`) (UI-LEFT-2 SS18)
@@ -1717,7 +1730,7 @@ export function useActionRunner() {
         const ids = schItems();
         // the selection's grid (`grid.GetSelectionGrid( selection )`, r4 C4-M1); the server's 50 mil without one
         const grid = selectionGridNm(ids);
-        if (ids.length > 0) void api.cmd({ op: "sch_move", verb: "align_to_grid", ids, ...(grid ? { grid } : {}) });
+        if (ids.length > 0) void api.cmd(withSchLockOverride({ op: "sch_move", verb: "align_to_grid", ids, ...(grid ? { grid } : {}) }));
       })
     );
 
@@ -2043,6 +2056,19 @@ export function useActionRunner() {
         dispatch({ type: "SET_MOVE_ORIGIN", at: { x: at[0], y: at[1] } });
       };
       m.set("pcbnew.InteractiveMove.moveIndividually", pcbOnly(() => startMoveIndividually(requestSelection())));
+      // KiCad 25ec2335 `EDIT_TOOL::ToggleFootprintAttribute` (context menu > Attributes, UI-LEFT-3 P3-4): `RequestSelection( FootprintFilter )` -- the selected
+      // footprints, or the one under the cursor -- each set to the new state in the board's current variant, one step (kicad-port/fpAttributeToggle.ts).
+      const toggleFpAttribute = (attr: FpAttribute) =>
+        pcbOnly(() => {
+          const board = state.board;
+          if (!board) return;
+          const refs = new Set(requestSelection());
+          const cmds = toggleFpAttributeCmds(board.parts.filter((p) => refs.has(p.ref)), attr, state.pcbVariant);
+          if (cmds.length > 0) void api.cmdBatch(cmds);
+        });
+      m.set("pcbnew.InteractiveEdit.toggleExcludeFromBOM", toggleFpAttribute("bom"));
+      m.set("pcbnew.InteractiveEdit.toggleExcludeFromSim", toggleFpAttribute("sim"));
+      m.set("pcbnew.InteractiveEdit.toggleExcludeFromPosFiles", toggleFpAttribute("pos"));
       if (state.pcbx.movingIndividually) {
         m.set(
           "pcbnew.InteractiveEdit.skip",
@@ -2114,7 +2140,7 @@ export function useActionRunner() {
         pcbOnly(() => {
           if (!board) return;
           const { cmd, lockedOut } = planSwap(board, [...state.selection], state.enteredGroupId);
-          if (lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+          if (lockedOut) dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
           if (cmd) void api.cmd(cmd);
         })
       );
@@ -2522,7 +2548,8 @@ export function useActionRunner() {
         // `if( isRouterActive() || m_dragging ) { wxBell(); return 0; }`
         const routing = state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair";
         if (routing || state.activeTool === "move" || state.armed) return;
-        const plan = planPack(state.board.parts, requestSelection(), new Set(state.board.locked ?? []));
+        // (`FilterCollectorForLockedItems`: none with Override locks, UI-LEFT-3 P3-3)
+        const plan = planPack(state.board.parts, requestSelection(), new Set(getOverrideLocks("pcb") ? [] : (state.board.locked ?? [])));
         if (!plan) return;
         dispatch({ type: "SET_SELECTION", refs: plan.refs });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
@@ -2617,7 +2644,8 @@ export function useActionRunner() {
                 (sch.junctions ?? []).some((j) => j.id === id) ||
                 sch.no_connects.some((n) => n.id === id)
             );
-          const ids = [...state.selection].filter(swappable);
+          // `FilterSelectionForLockedItems()` first (none with "Override locks" checked), then `if( selection.Size() < 2 ) return 0;`
+          const ids = withoutLocked([...state.selection].filter(swappable), schToolLocks(sch.locked));
           if (ids.length < 2) return;
           void api.cmdBatch(ids.slice(0, -1).map((a, i) => ({ op: "swap_sch_items" as const, a, b: ids[i + 1]! })));
         })
@@ -2736,6 +2764,8 @@ export function useActionRunner() {
     // their loops answer it while an item rides (`TwoClickPlace`, `PlaceSymbol`): last, as it wraps what everything above registered.
     registerSchPlaceActions(m, { state, dispatch, api, cursorSnapped });
 
+    // Every action may stop on the clarification menu and replay with its choice (`requestSelection`, UI-LEFT-3 P3-2): last, as it wraps everything above.
+    askingRegistry(m, forcedSelection);
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);
 
@@ -2803,6 +2833,9 @@ export function useActionRunner() {
         const blocks = designBlockChecked(name);
         if (blocks !== undefined) return blocks;
       }
+      // the footprint attribute toggles' check marks (`excludeFromBOMCond` and kin: every selected footprint has it, in the board's variant)
+      const fpAttr = FP_ATTRIBUTE_ACTIONS[name];
+      if (fpAttr && state.tab === "pcb" && state.board) return fpAttributeChecked(state.board.parts.filter((p) => state.selection.has(p.ref)), fpAttr, state.pcbVariant);
       if (state.tab !== "schematic" || !registry.has(name)) return undefined;
       const selection = state.selection;
       const sch = state.schematic;

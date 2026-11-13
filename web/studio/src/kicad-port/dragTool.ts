@@ -34,7 +34,7 @@
 import { previewClearancesOf, type PreviewClearances } from "./pcbDisplayOptions";
 import type { BoardState, DragPreview } from "../api/types";
 import { itemKind, padParent } from "./pcbItems";
-import { isLocked } from "./pcbTransform";
+import { lockedForTools } from "./pcbTransform";
 
 /** Mirrors `state/store.tsx`'s `DrawState`'s "drag" variant exactly --
  * duplicated rather than imported, same convention `RouteDrawState` already
@@ -178,14 +178,14 @@ export function findGroupDragTarget(board: BoardState, selection: readonly strin
   const ids = [...new Set(items.map(asItem))];
   const footprints = ids.filter((id) => itemKind(board, id) === "part");
   if (footprints.length > 0 && (!isHover || ids.length === 1)) {
-    const refs = footprints.filter((r) => !isLocked(board, r));
+    const refs = footprints.filter((r) => !lockedForTools(board, r));
     const lockedOut = refs.length < footprints.length;
     if (refs.length === 0) return { target: null, lockedOut };
     if (freeAngle && refs.length > 1) return { target: null, lockedOut };
     return { target: { kind: "footprints", refs }, lockedOut };
   }
   if (!isHover && ids.length > 1) {
-    const unlocked = ids.filter((id) => !isLocked(board, id));
+    const unlocked = ids.filter((id) => !lockedForTools(board, id));
     const tracks = unlocked.filter((id) => itemKind(board, id) === "track" && !board.routing?.tracks.find((t) => t.id === id)?.arc_mid);
     if (tracks.length > 1 && tracks.length === unlocked.length) return { target: { kind: "tracks", ids: tracks }, lockedOut: unlocked.length < ids.length };
   }

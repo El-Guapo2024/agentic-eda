@@ -23,7 +23,7 @@ import { parseFieldId } from "./fpFields";
 import { fpItemBounds, fpItemKind, fpSelectionTarget, type Fp } from "./fpItems";
 import { topLevelGroup } from "./groupTree";
 import { itemBounds, itemKind, padParent } from "./pcbItems";
-import { isLocked } from "./pcbTransform";
+import { lockedForTools } from "./pcbTransform";
 
 const centreOf = (b: readonly [number, number, number, number] | null): PointXY | null => (b ? { x: Math.round((b[0] + b[2]) / 2), y: Math.round((b[1] + b[3]) / 2) } : null);
 
@@ -69,7 +69,7 @@ export function swapSelection(board: BoardState, selection: readonly string[], e
     if (kind === "tablecell" || kind === "via_stitch" || kind === "grid" || kind === "drill_map") continue;
     if (kind === "group" && board.drawings?.tuning_patterns?.some((p) => p.id === id)) continue;
     if (out.includes(id)) continue;
-    if (isLocked(board, id)) {
+    if (lockedForTools(board, id)) {
       lockedOut = true;
       continue;
     }

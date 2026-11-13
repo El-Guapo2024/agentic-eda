@@ -17,6 +17,7 @@ import { postSchCopy, postSchParse } from "../api/schClipboardClient";
 import { clipboardTextOrNull, newIdsAfter, pasteOffset, selectionAfterPaste, type SchPasteMode } from "../kicad-port/schClipboard";
 import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
 import { deleteCmds } from "../kicad-port/schDelete";
+import { schToolLocks } from "../kicad-port/schLock";
 import { pasteNumbering, rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { getSchPaste, openPasteSpecial, setSchPaste } from "../state/schPasteStore";
 import type { Action, StudioApi, StudioState } from "../state/store";
@@ -148,7 +149,7 @@ export function registerSchClipboardActions(registry: ActionMap, ctx: SchEditCon
     const ids = requestSelection();
     void copy(ids).then((copied) => {
       if (!copied || !sch) return;
-      const cmds = deleteCmds(sch, ids, new Set(sch.locked ?? []));
+      const cmds = deleteCmds(sch, ids, schToolLocks(sch.locked));
       dispatch({ type: "CLEAR_SELECTION" });
       if (cmds.length > 0) void api.cmdBatch(cmds);
     });

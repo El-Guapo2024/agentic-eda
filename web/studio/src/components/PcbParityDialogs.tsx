@@ -23,7 +23,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { nmFrom, nmTo } from "../state/units";
 import { coordField, coordValue, useOriginTransforms } from "../state/originTransforms";
 import { movableItem, polarTranslation, positionRelativeSelectionAnchor, relativeMoveVector, toPolarDeg, type MovableKind } from "../kicad-port/pcbEditActions";
-import { editableSelection, isLocked } from "../kicad-port/pcbTransform";
+import { editableSelection, lockedForTools } from "../kicad-port/pcbTransform";
 import { itemKind, padById } from "../kicad-port/pcbItems";
 import { itemPosition } from "../kicad-port/pcbReference";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
@@ -165,7 +165,7 @@ function PositionRelativeDialog() {
     for (const id of state.selection) {
       const pad = itemKind(board, id) === "pad" ? padById(board, id) : null;
       if (pad) {
-        if (!isLocked(board, pad.part.ref)) items.push({ isFootprint: false, isPad: true, x: pad.pad.x, y: pad.pad.y });
+        if (!lockedForTools(board, pad.part.ref)) items.push({ isFootprint: false, isPad: true, x: pad.pad.x, y: pad.pad.y });
         continue;
       }
       const m = movables.find((q) => q.ref === id);
