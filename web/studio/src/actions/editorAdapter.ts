@@ -13,7 +13,8 @@ import type { SymAction, SymbolEditorApi, SymbolEditorState } from "../state/sym
 import { boxOfIds, boxOfPoints, footprintItemBoxes, pcbContentBox, pcbItemBoxes, symbolItemBoxes, unionBoxes, type Box, type ItemBoxes } from "../kicad-port/itemBoxes";
 import type { Schematic } from "../api/types";
 import { pageOf } from "../components/schematic/drawingSheet";
-import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { pickSelectionCandidates, viewportBox } from "../components/canvas/selectionCandidates";
+import { canvasRect } from "./canvasEvents";
 import { hitSymbol, hitWire } from "../components/schematic/schHit";
 import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
 import { describeGroup, groupsOf, substituteSchSelection } from "../kicad-port/schGroups";
@@ -194,7 +195,10 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         candidatesAt: (x, y) => {
           if (!board) return [];
           const toleranceNm = Math.max(150_000, 6 / (studio.view.scale || 1));
-          const cands = pickSelectionCandidates(board, x, y, toleranceNm, 1 / (studio.view.scale || 1), studio.selectionFilter, studio.layerVisible, studio.activeLayer, studio.highContrast, studio.selection, false, false);
+          // (`selectPoint`'s `FilterCollectorForFootprints` with the view, UI-LEFT-3 P3-24)
+          const rect = canvasRect();
+          const fpView = { viewport: rect ? viewportBox(studio.view, rect.width, rect.height) : null, modifying: false, selection: studio.selection };
+          const cands = pickSelectionCandidates(board, x, y, toleranceNm, 1 / (studio.view.scale || 1), studio.selectionFilter, studio.layerVisible, studio.activeLayer, studio.highContrast, studio.selection, false, false, undefined, fpView);
           const groups = board.drawings?.groups ?? [];
           return cands.map((c) => ({ id: promoteToGroup(c.id, groups, studio.enteredGroupId), kind: c.kind }));
         },

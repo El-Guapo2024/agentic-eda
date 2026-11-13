@@ -82,3 +82,17 @@ test("a padstack group turned off the quarter turns is its own shape turned, not
   assert.ok(padHitDistance(p, 700_000, 700_000) <= 0, "along the turned long axis");
   assert.ok(padHitDistance(p, 700_000, -700_000) > 0, "across it, inside the box: a miss (it was a hit by the box)");
 });
+
+test("FilterCollectorForFootprints counts a footprint's zones (box, view and direct hit) and its points (box only)", () => {
+  // B.Cu, B.SilkS hidden: the pads (B.Cu/B.Mask/B.Paste: the masks still shown) and the silk; a keepout zone of U1 on F.Cu, a point on F.Fab
+  const hidden: Record<string, boolean> = { "B.Cu": false, b_mask: false, b_paste: false, b_silks: false, "B.Mask": false, "B.Paste": false, "B.SilkS": false };
+  const zone = { id: "z1", net: "", parent: "U1", layer: "F.Cu", layers: ["F.Cu"], is_rule_area: true, outline: [[-1_000_000, 4_000_000], [1_000_000, 4_000_000], [1_000_000, 6_000_000], [-1_000_000, 6_000_000]] };
+  const p = { ...part("U1"), items: { points: [{ id: "U1~p", x: 8_000_000, y: 0, size: 1_000_000, layer: "F.Fab" }] } } as unknown as Part;
+  const b = board({ parts: [p], routing: { tracks: [], vias: [], zones: [zone], track_width_presets: [], via_presets: [], teardrop_settings: {} } as never });
+  const go = (x: number, y: number, o: Parameters<typeof view>[0] = {}) => ids(filterCollectorForFootprints(b, [cand("U1")], x, y, hidden, null, false, view(o)));
+  assert.deepEqual(go(0, 5_000_000), ["U1"], "inside its zone");
+  assert.deepEqual(go(7_500_000, 0), ["U1"], "the point stretches the box to x 8.5 mm");
+  assert.deepEqual(go(0, 5_000_000, { selection: new Set(["T1"]) }), ["U1"], "a direct hit on its zone");
+  assert.deepEqual(go(7_500_000, 0, { selection: new Set(["T1"]) }), [], "the point is no direct hit (`HitTestOnLayer` does not count points)");
+  assert.deepEqual(go(0, 5_000_000, { viewport: [20_000_000, 20_000_000, 30_000_000, 30_000_000] }), [], "nothing of it in the view");
+});

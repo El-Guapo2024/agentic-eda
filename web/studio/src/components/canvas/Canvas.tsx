@@ -79,7 +79,7 @@ import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
-import { pickSelectionCandidates, collectBoxSelection, viewportBox, newFilterRejections, rowsToFlash, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
+import { pickSelectionCandidates, collectBoxSelection, viewportBox, type FootprintFilterView, newFilterRejections, rowsToFlash, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
 import { flashSelectionFilter } from "../../kicad-port/filterFlash";
 import { candidateLabel as boardCandidateLabel } from "./candidateLabel";
 import { gridCarryAnchor as placeCarryAnchor, gridCarryDrop as placeCarryDrop } from "../../kicad-port/placeCarry";
@@ -583,6 +583,11 @@ export function Canvas() {
    * layer and the graphics grid, `PlaceText` on the text grid, `DrawDimension` on every layer and the graphics grid, the picker and the ruler on every layer and the current
    * grid; the router's tools use its `snapToItem` instead (`routePoint`). Run on every pointer move (so the marker follows) and again for the press.
    */
+  /** What `selectPoint`'s `FilterCollectorForFootprints` reads (UI-LEFT-3 P3-24): the viewport, whether the click modifies the selection, the selection. */
+  const fpViewNow = (modifying = false): FootprintFilterView => {
+    const box = containerRef.current?.getBoundingClientRect();
+    return { viewport: box ? viewportBox(state.view, box.width, box.height) : null, modifying, selection: state.selection };
+  };
   const toolPoint = (tool: string, wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): [number, number] => {
     const mods = snapMods(e);
     const draw = state.drawState;
@@ -1315,8 +1320,7 @@ export function Canvas() {
       if (!board) return [];
       const rejected = newFilterRejections();
       // `FilterCollectorForFootprints` reads the viewport and whether the click modifies the selection (UI-LEFT-3 P3-24)
-      const box = containerRef.current?.getBoundingClientRect();
-      const fpView = { viewport: box ? viewportBox(state.view, box.width, box.height) : null, modifying: hasModifier(modifiers), selection: state.selection };
+      const fpView = fpViewNow(hasModifier(modifiers));
       const picked = pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics, rejected, fpView).filter((c) => pickable(c.id));
       const flash = rowsToFlash(rejected);
       if (flash.length > 0) flashSelectionFilter(flash);
@@ -1766,7 +1770,7 @@ export function Canvas() {
     if (refs.length === 0 && (state.activeTool === "select" || state.activeTool === "move")) {
       const toleranceNm = Math.max(150_000, 6 / state.view.scale);
       const groupsNow = board.drawings?.groups ?? [];
-      const top = pickSelectionCandidates(board, wx, wy, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false).find(
+      const top = pickSelectionCandidates(board, wx, wy, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false, undefined, fpViewNow()).find(
         (c) => state.enteredGroupId === null || withinScope(groupsNow, padParent(board, c.id) ?? c.id, state.enteredGroupId)
       );
       const id = top?.id ?? partHit(board.parts, wx, wy)?.ref ?? null;
@@ -1854,7 +1858,7 @@ export function Canvas() {
       const [wx, wy] = worldAt(e);
       const toleranceNm = Math.max(150_000, 6 / state.view.scale);
       const onePixelNm = 1 / state.view.scale;
-      const candidates = pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+      const candidates = pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false, undefined, fpViewNow());
       if (candidates.length === 0) return;
       refs = [candidates[0]!.id];
       dispatch({ type: "SET_SELECTION", refs });

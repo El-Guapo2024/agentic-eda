@@ -17,7 +17,8 @@ import type { BoardState, Dimension, FieldInfo, Part } from "../../api/types";
 import { fpTextById, padIds, padParent } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, artTextAsField, artTextShown, graphicsOf, layersOf, unionBox } from "../../kicad-port/fpArt";
-import { fpItemsHitDistance } from "../../kicad-port/fpBoardItems";
+import { fpItemsHitDistance, fpPoints } from "../../kicad-port/fpBoardItems";
+import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, shapeBoundingBox, shapeHitDistance, textBoundingBox, zoneArea, zoneContainsPoint, zoneEdgeDistance } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
@@ -814,7 +815,8 @@ const boxesMeet = (a: Box, b: Box): boolean => a[0] <= b[2] && b[0] <= a[2] && a
  * the shown layers (`GetLayerBoundingBox( layers )`), or when none of those items is in the view (`HitTestOnLayer( extents, false, layer )`); with a
  * selection made without a modifier ("This prevents us from being unable to clear the selection when zoomed into a footprint") it then needs a direct hit
  * of one of them (`HitTestOnLayer( aWhere, layer )`: a pad, a zone or a graphic, not a text) -- unless every selected item is of that footprint ("you can have a
- * selection of pads from a single footprint and still click in the center of the footprint to select it"). Its items here are its pads and graphics.
+ * selection of pads from a single footprint and still click in the center of the footprint to select it"). Its items: its pads, graphics and zones, and for the
+ * box its points too.
  */
 export function filterCollectorForFootprints(board: BoardState, candidates: readonly SelectionCandidate[], xNm: number, yNm: number, layerVisible: Record<string, boolean>, activeLayer: string | null, highContrast: boolean, view: FootprintFilterView): SelectionCandidate[] {
   // `layers`: the board's visible layers, or High Contrast's layers (the active one; the others of `GetHighContrastLayers` are not board layers)
@@ -857,8 +859,19 @@ export function filterCollectorForFootprints(board: BoardState, candidates: read
       const half = g.stroke_width / 2;
       items.push({ box: [x0 - half, y0 - half, x1 + half, y1 + half], hits: () => shapeHitDistance(g, xNm, yNm) - half <= 0 });
     }
+    // its zones (`m_zones`: in the box, the view and the direct hit -- inside the outline or on it)
+    for (const z of board.routing?.zones ?? []) {
+      if (z.parent !== p.ref || z.outline.length < 3 || !zoneLayers(z).some(shown)) continue;
+      const xs = z.outline.map((q) => q[0]);
+      const ys = z.outline.map((q) => q[1]);
+      items.push({ box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], hits: () => zoneContainsPoint(z, xNm, yNm) || zoneEdgeDistance(z, xNm, yNm) <= 0 });
+    }
+    // its points (`m_points`): in `GetLayerBoundingBox` only -- `HitTestOnLayer` does not look at them
+    const boxOnly: Box[] = fpPoints(p)
+      .filter((q) => shown(q.layer))
+      .map((q) => [q.x - q.size / 2, q.y - q.size / 2, q.x + q.size / 2, q.y + q.size / 2] as Box);
     // "If the point clicked is not inside the visible bounding box, we can also remove it."
-    const box = items.reduce<Box | null>((b, i) => (b ? [Math.min(b[0], i.box[0]), Math.min(b[1], i.box[1]), Math.max(b[2], i.box[2]), Math.max(b[3], i.box[3])] : i.box), null);
+    const box = [...items.map((i) => i.box), ...boxOnly].reduce<Box | null>((b, i) => (b ? [Math.min(b[0], i[0]), Math.min(b[1], i[1]), Math.max(b[2], i[2]), Math.max(b[3], i[3])] : i), null);
     if (!box || xNm < box[0] || xNm > box[2] || yNm < box[1] || yNm > box[3]) return false;
     // "If the point is outside of the visible bounding box, we can remove it." (no item in view)
     if (view.viewport && !items.some((i) => boxesMeet(i.box, view.viewport!))) return false;

@@ -10,7 +10,7 @@ import { routeDragFinish, routeDragStart, routeDragStartGroup } from "../../api/
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { inlineDragBegin, inlineDragEnd, type DragDrawState, type GroupDragTarget, type InlineDragContext } from "../../kicad-port/dragTool";
-import { pickSelectionCandidates, type SelectionFilter } from "./selectionCandidates";
+import { pickSelectionCandidates, type FootprintFilterView, type SelectionFilter } from "./selectionCandidates";
 import { askConfirm } from "../library/libraryDialogs";
 import { viaMaxDiameter } from "../../kicad-port/viaPadstack";
 import { getOverrideLocks, LOCKED_ITEMS_FILTERED } from "../../kicad-port/overrideLocks";
@@ -46,10 +46,12 @@ export function findDraggableAt(
   filter: SelectionFilter,
   layerVisible: Record<string, boolean>,
   activeLayer: string | null,
-  highContrast: boolean
+  highContrast: boolean,
+  fpView?: FootprintFilterView
 ): DraggableHit | null {
   const fallbackLayer = activeLayer ?? board.layers[0] ?? "F.Cu";
-  const candidates = pickSelectionCandidates(board, xNm, yNm, toleranceNm, onePixelNm, filter, layerVisible, activeLayer, highContrast, selection, false, false);
+  // (`selectPoint`'s `FilterCollectorForFootprints` with the view, when the caller knows it: UI-LEFT-3 P3-24)
+  const candidates = pickSelectionCandidates(board, xNm, yNm, toleranceNm, onePixelNm, filter, layerVisible, activeLayer, highContrast, selection, false, false, undefined, fpView);
   const hit = candidates.find((c) => c.kind === "track" || c.kind === "via");
   if (hit) return { kind: hit.kind as "track" | "via", id: hit.id, layer: hit.layer ?? fallbackLayer };
 

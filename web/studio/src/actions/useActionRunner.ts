@@ -213,6 +213,11 @@ export function useActionRunner() {
      * choice replays the action, answered here from `forcedSelection` (actions/selectionMenuReplay.ts). `mode` is the tool's client filter (`ToolPickMode`;
      * `true` is "plain", `EDIT_TOOL::Properties`' empty one).
      */
+    /** What `selectPoint`'s `FilterCollectorForFootprints` reads for a pick at the cursor (UI-LEFT-3 P3-24): the viewport, no modifier, `selection`. */
+    const fpViewOf = (selection: ReadonlySet<string>) => {
+      const rect = canvasRect();
+      return { viewport: rect ? viewportBox(state.view, rect.width, rect.height) : null, modifying: false, selection };
+    };
     const requestSelection = (mode: boolean | ToolPickMode = false): string[] => {
       // `RequestSelection` with the tool's scan types: a pin is no item of the tools that move, turn or edit, so a selection of pins is trimmed to nothing (a selection that was not empty is
       // not replaced by what is under the cursor); `requestPins` asks for the pins.
@@ -235,8 +240,7 @@ export function useActionRunner() {
       // whose filter is empty (`EDIT_TOOL::Properties`) takes what a click takes.
       const rejected = newFilterRejections();
       // (`selectPoint`'s `FilterCollectorForFootprints` with the view; nothing is selected and no modifier is held here)
-      const rect = canvasRect();
-      const fpView = { viewport: rect ? viewportBox(state.view, rect.width, rect.height) : null, modifying: false, selection: state.selection };
+      const fpView = fpViewOf(state.selection);
       const { guessed, all } = toolCandidateSets(board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, pick, rejected, fpView);
       // `selectPoint`'s `HighlightSelectionFilter( rejected )` when the filter refused everything under the cursor
       const flash = rowsToFlash(rejected);
@@ -622,7 +626,7 @@ export function useActionRunner() {
       const highlighted = highlightedNets(state.netHighlight, state.bcx.netHighlightMore);
       if (fromRouterTool) {
         const toleranceNm = Math.max(150_000, 6 / state.view.scale);
-        const hit = findDraggableAt(board, new Set(), cursor.x, cursor.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        const hit = findDraggableAt(board, new Set(), cursor.x, cursor.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, fpViewOf(new Set()));
         if (!hit) {
           dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
           return;
@@ -892,7 +896,7 @@ export function useActionRunner() {
         const cursor = state.cursorNm;
         const candidates =
           cursor && connectedStartCount(board, state.selection) === 0
-            ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150_000, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
+            ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150_000, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false, undefined, fpViewOf(state.selection))
             : [];
         // `itemPassesFilter( item, true )` on what the walk selects, and `selectAllConnectedShapes`' collector for graphic lines (5 pixels, the shape's hit test)
         const filter = state.selectionFilter;
