@@ -991,7 +991,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-10-14 (P17, `PARITY-fpedit.md` section 14, `PARITY-symedit.md` "Snapping to the pins of the symbol"): the Footprint Editor's tools call `PcbGridHelper` on the open footprint's pads, graphics and texts (`kicad-port/fpSnapScene.ts`: the editor's own magnetic defaults, the
   active layer for shapes and text, every layer for pads and the anchor; the footprint itself is no item) and the Symbol Editor's `SchGridHelper` on the pins of the unit being edited (`kicad-port/symSnapItems.ts`); real pointer events in `e2e/lib-editors.check.js`.
 - Left: Preferences > Magnetic Points is the board's (the footprint editor keeps KiCad's own defaults); with the default
-  Magnetic Points ("In Track Tool") a move or a shape does not snap to pads or tracks until they are set to Always (KiCad's default too); the junction tool keeps its own 12 px snap; the server still snaps a part's placement to 100 um (`meta.snap_um`) whatever grid is shown; the studio never moves the real pointer, so a Move computes the cursor
+  Magnetic Points ("In Track Tool") a move or a shape does not snap to pads or tracks until they are set to Always (KiCad's default too); the junction tool keeps its own 12 px snap; the studio's board edits keep the editor's point (UI-LEFT P19; UI-LEFT-3 C3-1 proved Snap to grid Never and Always end to end, PARITY-pcb section 115) -- only the CLI's and agents' placer verbs keep the placement step; the studio never moves the real pointer, so a Move computes the cursor
   KiCad's warp would give (`kicad-port/heldCursor.ts`).
 - Port from: `pcbnew/tools/pcb_grid_helper.cpp`, `common/tool/grid_helper.cpp`, `eeschema/tools/ee_grid_helper.cpp`, `common/tool/tool_dispatcher.cpp`, `common/tool/construction_manager.cpp`.
 
@@ -1010,7 +1010,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-11-07 (`task-v1-select`, UI-LEFT-2 PP2, PP4, RR2, PP19, `PARITY-pcb.md` section 93, pns Stage 25): the board's edit tools (M, R, F, D, G, Delete, Shift+Delete, E) ask with the clarification menu when
   several items are left under the cursor, D with `EDIT_TOOL::Drag`'s own filter, and D drags the selected track or via by its id; pads are hit by their real outline and board texts by their strokes, the
   area and coverage passes over strokes; Place Footprint's carry is on the grid point and E does nothing while it carries; the filter row that refused a click flashes; Select Connection walks copper
-  graphic shapes; Highlight Net under the cursor goes through the filter; the menu's hover draws the item brightened. Left: Copy, Cut, Lock, Swap and the other edit tools still take the first candidate;
+  graphic shapes; Highlight Net under the cursor goes through the filter; the menu's hover draws the item brightened. Every other edit tool asks too since UI-LEFT-3 P3-2 (`task-v13-pcbselect`, PARITY-pcb section 115). Left:
   the schematic and library editors box the hovered item.
 
 ### 16. The PCB context menu
