@@ -135,8 +135,13 @@ fn settings_over(req: &Value, base: RoutingSettings) -> RoutingSettings {
 }
 
 fn preview_json(router: &Router, preview: &Preview) -> Value {
+    // `ROUTER::movePlacing`'s `Clearance( item, nullptr )` of the head and of its via, which `DisplayItem` draws their clearance outlines with
+    // (Display Options' "Tracks:" clearance mode, UI-LEFT-3 P3-6)
+    let (clearance, via_clearance) = router.preview_clearances(preview).map_or((None, None), |(h, v)| (Some(h), v));
     json!({
         "ok": true,
+        "clearance": clearance,
+        "via_clearance": via_clearance,
         "net": router.current_net(),
         "width": router.current_width(),
         "colliding": preview.colliding,
@@ -1244,6 +1249,33 @@ mod tests {
         assert_eq!(sizes["netclass"], json!("Power and Default"), "the class sets no via sizes: the Default class completes it");
         assert_eq!(at(json!({ "auto_track_width": false, "width": 400_000 }))["sizes"]["width_source"], json!("user choice"));
         assert_eq!(at(json!({ "auto_track_width": false }))["sizes"]["width_source"], json!("netclass 'Power'"));
+    }
+
+    /// UI-LEFT-3 P3-6 (`ROUTER::movePlacing`): every preview carries the head's own clearance (`Clearance( line, nullptr )`, the net class's 0.3 mm
+    /// here) and, with a via armed, the via's -- its copper's, or its hole's clearance less the annular ring when that is more (`excessHoleClearance`).
+    #[test]
+    fn a_preview_carries_the_clearance_of_its_head_and_its_via() {
+        let dir = scratch("preview_clearance");
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))], arc_mid_offset: None };
+        setup_board(&dir, vec![stub], vec![]);
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.net_classes.push(eda_model::NetClass { name: "Power".into(), nets: vec!["SIG".into()], track_width: None, clearance: Some(mm(0.3)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let cell = RouteCell::default();
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000 })));
+        assert_eq!((reply["clearance"].clone(), reply["via_clearance"].clone()), (json!(300_000), Value::Null), "{reply}");
+        // a 0.6 mm via of 0.3 mm drill: a 0.15 mm ring; the hole clearance (0.25 mm by default) less the ring is 0.1 mm, under the 0.3 mm
+        assert_eq!(via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu", "diameter": 600_000, "drill": 300_000 })))["ok"], json!(true));
+        let pv = mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
+        assert_eq!((pv["clearance"].clone(), pv["via_clearance"].clone()), (json!(300_000), json!(300_000)), "{pv}");
+        // a hole clearance of 0.6 mm: 0.6 - 0.15 = 0.45 mm wins
+        model.board.hole_clearance_nm = mm(0.6);
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000 })));
+        via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu", "diameter": 600_000, "drill": 300_000 })));
+        let pv = mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
+        assert_eq!(pv["via_clearance"], json!(450_000), "{pv}");
     }
 
     /// R6-R2 (`ImportSizes`: `trackWidth = bds.m_TrackMinWidth`, then `std::max( trackWidth, bds.GetCurrentTrackWidth() )`): a chosen width below

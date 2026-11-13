@@ -847,6 +847,12 @@ impl<'a> RuleBoard<'a> {
         Some(Rc::new(self.pad_item(&pid, i)))
     }
 
+    /// The studio's id of every pad of the board (`REF.NUMBER`, `REF.NUMBER#k` for the k-th pad of a repeated number) with its index into
+    /// `DrcBoard::pads`.
+    pub fn pad_ids(&self) -> &[(String, usize)] {
+        &self.pad_ids
+    }
+
     /// The items the connectivity is made of (`CN_ITEM`s, zones aside: [`crate::from_to`]): every pad, track segment and via of the board, in that order,
     /// each with the studio's id (a pad's `REF.NUMBER`, a segment's track, a via's).
     pub fn copper_items(&self) -> Vec<(String, Rc<RuleItem>)> {

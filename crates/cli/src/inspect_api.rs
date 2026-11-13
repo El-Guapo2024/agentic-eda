@@ -95,13 +95,13 @@ pub fn constraints(dir: &Path, body: &[u8]) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use eda_model::units::{mm, Nm};
     use super::*;
     use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side};
     use eda_model::{ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
-    struct Scratch(std::path::PathBuf);
+    pub(crate) struct Scratch(std::path::PathBuf);
     impl std::ops::Deref for Scratch {
         type Target = std::path::PathBuf;
         fn deref(&self) -> &Self::Target {
@@ -114,7 +114,7 @@ mod tests {
         }
     }
 
-    fn scratch(name: &str) -> Scratch {
+    pub(crate) fn scratch(name: &str) -> Scratch {
         let d = std::env::temp_dir().join(format!("eda_cli_inspect_test_{}_{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();

@@ -1214,6 +1214,8 @@ fn handle(
         ("GET", "/api/drill_groups") => respond(stream, "200 OK", "application/json", crate::drill_groups_api::drill_groups(dir).to_string().as_bytes()),
         ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
         ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
+        // Display Options' clearance outlines of the active copper layer: every track's, via's and pad's own clearance (`display_api`, UI-LEFT-3 P3-6).
+        ("POST", "/api/display/clearances") => respond(stream, "200 OK", "application/json", crate::display_api::clearances(dir, &body).to_string().as_bytes()),
         // Find by Properties' Query tab: the expression language runs here, on the items the studio sends (`eda_drc::query`).
         ("POST", "/api/pcb/query") => respond(stream, "200 OK", "application/json", crate::inspect_api::pcb_query(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
@@ -1829,6 +1831,9 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
     state["board_rules"]["net_class_pcb_colors"] = json!(model.board.net_class_pcb_colors);
     // Design Rules > Component Classes (`COMPONENT_CLASS_SETTINGS`): "Assign component class per sheet" and the custom assignments, as the board is judged by them now
     state["board_rules"]["component_classes"] = json!(model.board.component_classes);
+    // `BOARD_DESIGN_SETTINGS::GetHolePlatingThickness()`: `ADVANCED_CFG::m_HoleWallThickness`, 0.020 mm (not the stackup's), what the painter draws the
+    // hole walls and an unflashed via's clearance outline with (UI-LEFT-3 P3-7)
+    state["board_rules"]["hole_plating_nm"] = json!(crate::board3d_api::HOLE_PLATING_THICKNESS.get());
     // the design variants (KiCad 25ec2335 `BOARD::GetVariantNames` / `GetVariantDescription`, which the board's `(variants ..)` gets from the schematic), set apart too
     state["variants"] = json!(design_variants_json(&design));
     state["shown_variant"] = json!(variant);

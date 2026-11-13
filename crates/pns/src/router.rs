@@ -563,6 +563,27 @@ impl Router {
         self.session().map(|s| s.placer.preview(s.world.as_ref().unwrap_or(&self.world), &self.rules, &self.settings, at))
     }
 
+    /// `ROUTER::movePlacing`'s clearances of a preview (UI-LEFT-3 P3-6): `GetRuleResolver()->Clearance( line, nullptr )` of the head, and of the
+    /// via at its end `Clearance( &via, nullptr )`, raised to the hole's own clearance less the annular ring where that is more
+    /// (`excessHoleClearance = holeClearance - annularWidth`). What `DisplayItem` draws the head's and the via's clearance outlines with.
+    pub fn preview_clearances(&self, preview: &Preview) -> Option<(Nm, Option<Nm>)> {
+        let s = self.session()?;
+        let world = s.world.as_ref().unwrap_or(&self.world);
+        let head = world.own_clearance(&self.rules, crate::rule_resolver::Side::of_line(&preview.head));
+        let via = preview.via.map(|(pos, diameter, drill)| {
+            let layers = s.placer.pending_via_layers();
+            let net = &preview.head.net;
+            let mut c = world.own_clearance(&self.rules, crate::rule_resolver::Side::Via { net, layers, pos });
+            let hole = world.own_clearance(&self.rules, crate::rule_resolver::Side::ViaHole { net, layers, pos });
+            let annular = Nm::new(((diameter - drill).get() / 2).max(0));
+            if hole - annular > c {
+                c = hole - annular;
+            }
+            c
+        });
+        Some((head, via))
+    }
+
     /// The `/` posture toggle and `W` width-cycle hook both fold into this
     /// call (applied before the preview is computed) rather than being
     /// separate endpoints, keeping the per-request surface small per the

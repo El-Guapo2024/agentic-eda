@@ -981,6 +981,15 @@ impl Node {
         self.rules.as_ref().and_then(|r| r.track_clearance(net, layer)).unwrap_or_else(|| Self::clearance(rules, net, &None))
     }
 
+    /// `GetRuleResolver()->Clearance( aItem, nullptr )`: what the rules ask of `a` alone ([`crate::rule_resolver::RuleResolver::own_clearance`]);
+    /// the net classes' (the board minimum under it) without a rule resolver.
+    pub fn own_clearance(&self, rules: &BoardRules, a: Side) -> Nm {
+        match &self.rules {
+            Some(r) => r.own_clearance(&a),
+            None => Self::clearance(rules, a.net(), &None),
+        }
+    }
+
     /// `GetClearance( item, aHead, false )`: the clearance an item of the world asks of the head `head` (no epsilon).
     pub fn clearance_to(&self, rules: &BoardRules, head: Side, item: &Item) -> Nm {
         self.clearance_between(rules, Side::Item(item), head, false)

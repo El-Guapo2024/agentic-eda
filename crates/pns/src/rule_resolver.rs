@@ -943,6 +943,39 @@ impl RuleResolver {
         (!c.is_null()).then(|| Nm::new(c.value.min()))
     }
 
+    /// `PNS_PCBNEW_RULE_RESOLVER::Clearance( aA, nullptr, false )`: what the rules ask of the item alone, the largest over its layers of
+    /// `CT_HOLE_CLEARANCE` (a hole), `CT_CLEARANCE` (copper), `CT_EDGE_CLEARANCE` (the edge, a non-plated slot) and `CT_PHYSICAL_CLEARANCE`
+    /// -- what `ROUTER::movePlacing` gives `DisplayItem` to draw the clearance outline of the route's head and its via with ("Show track
+    /// clearance", UI-LEFT-3 P3-6). 0 when no rule gives one.
+    pub fn own_clearance(&self, a: &Side) -> Nm {
+        let layers = a.layers();
+        let mut rv: i64 = 0;
+        if layers.start() < 0 {
+            return Nm::ZERO;
+        }
+        for layer in layers.start()..=layers.end() {
+            let Some(name) = self.layer_name(layer) else { continue };
+            let ia = self.board_item(a, name);
+            let mut take = |t: CType| {
+                if let Some((v, _)) = self.query_constraint(t, a, None, Some(layer)) {
+                    rv = rv.max(v.min());
+                }
+            };
+            // `IsDrilledHole( aA ) && IsDrilledHole( aB )` is false with no B
+            if a.is_hole() {
+                take(CType::HoleClearance);
+            }
+            if self.is_copper(a, &ia) {
+                take(CType::Clearance);
+            }
+            if a.is_edge() || self.is_non_plated_slot(a) {
+                take(CType::EdgeClearance);
+            }
+            take(CType::PhysicalClearance);
+        }
+        Nm::new(rv.max(0))
+    }
+
     /// The board's clearance rules are its board setup's and its net classes' plain clearances alone, which [`Self::clearance`] answers
     /// without the engine for the items that have no rules of their own.
     pub fn is_plain(&self) -> bool {
