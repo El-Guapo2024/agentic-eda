@@ -7308,6 +7308,8 @@ pub(crate) mod tests {
             Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None, size_nm: None, bold: None, italic: None }),
             Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
             Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
+            // the sheet point editor's drag of the left side (UI-LEFT-3 S3-2): the pin and its wire follow
+            Cmd::SchEdit(V::ResizeSheet { id: "sheet_a".into(), at: Point { x: mm(85.0), y: mm(10.0) }, width_nm: mm(25.0), height_nm: mm(10.0) }),
         ];
         for cmd in commands {
             step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));

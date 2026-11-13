@@ -341,3 +341,82 @@ fn deleting_a_sheet_pin_merges_the_wires_at_its_junction() {
     assert!(sch.junctions.is_empty(), "{:?}", sch.junctions);
     assert_eq!(sch.wires.iter().filter(|w| w.pts.iter().all(|q| q.x == mm(100.0))).count(), 1, "{:?}", sch.wires);
 }
+
+// ------------------------------------------------------------------------------------------- the sheet point editor (UI-LEFT-3 S3-2, `SHEET_POINT_EDIT_BEHAVIOR`)
+
+fn resize(at: Point, w: Nm, h: Nm) -> Cmd {
+    Cmd::SchEdit(SchCmd::ResizeSheet { id: "sheet_sub".into(), at, width_nm: w, height_nm: h })
+}
+
+fn wire_pts(d: &Design, id: &str) -> Vec<Point> {
+    root_of(d).wires.iter().find(|w| w.id == id).unwrap_or_else(|| panic!("no {id}: {:?}", root_of(d).wires)).pts.clone()
+}
+
+#[test]
+fn a_sheet_resized_by_its_right_side_takes_the_pins_of_that_side_and_their_wires_along() {
+    let d = design();
+    // the right side's middle dragged 10 mm right: the corner stays, the sheet is 50 mm wide
+    let after = ok(&d, resize(SHEET_AT, mm(50.0), mm(30.0)));
+    let s = &root_of(&after).sheets[0];
+    assert_eq!((s.at, s.size), (SHEET_AT, (mm(50.0), mm(30.0))));
+    // `Resize`: the pin on the right side is on the new right side; the one on the left stays
+    assert_eq!(pin_at(&after, "shpin_out"), p(mm(150.0), mm(70.0)));
+    assert_eq!(pin_at(&after, "shpin_in"), p(mm(100.0), mm(60.0)));
+    // `m_connectedWires`: the wire that ended on OUT ends on it still; the one on IN is as it was
+    assert_eq!(wire_pts(&after, "wire_out"), vec![p(mm(150.0), mm(70.0)), p(mm(160.0), mm(70.0))]);
+    assert_eq!(wire_pts(&after, "wire_in"), vec![p(mm(80.0), mm(60.0)), p(mm(100.0), mm(60.0))]);
+    let n = nets(&after);
+    assert_eq!((n["R1.1"].as_str(), n["R1.2"].as_str()), ("/SIG", "/RES"), "the hierarchy is still wired: {n:?}");
+}
+
+#[test]
+fn a_sheet_resized_by_its_left_side_moves_its_corner_without_the_pins_then_puts_them_on_their_sides() {
+    let d = design();
+    // the left side dragged 10 mm left: `SetPositionIgnoringPins` then `Resize`, the left pin on the new left side at its height
+    let after = ok(&d, resize(p(mm(90.0), mm(50.0)), mm(50.0), mm(30.0)));
+    assert_eq!(pin_at(&after, "shpin_in"), p(mm(90.0), mm(60.0)));
+    assert_eq!(pin_at(&after, "shpin_out"), p(mm(140.0), mm(70.0)));
+    assert_eq!(wire_pts(&after, "wire_in"), vec![p(mm(80.0), mm(60.0)), p(mm(90.0), mm(60.0))]);
+    assert_eq!(wire_pts(&after, "wire_out"), vec![p(mm(140.0), mm(70.0)), p(mm(160.0), mm(70.0))]);
+}
+
+#[test]
+fn a_pin_past_the_end_of_its_shortened_side_is_clamped_to_it_and_its_no_connect_follows() {
+    let mut d = design();
+    // a no-connect on IN instead of its wire
+    let root = d.schematic.as_mut().unwrap();
+    root.wires.retain(|w| w.id != "wire_in");
+    root.labels.retain(|l| l.id != "lbl_sig");
+    root.no_connects.push(eda_model::ir::NoConnect { id: "nc_in".into(), at: p(mm(100.0), mm(60.0)), pin: String::new() });
+    // the bottom side up to 55 mm: OUT (70 mm) is clamped to the side's end (`ConstrainOnEdge`), IN (60 mm) too, and its no-connect goes with it
+    let after = ok(&d, resize(SHEET_AT, mm(40.0), mm(5.0)));
+    assert_eq!(pin_at(&after, "shpin_out"), p(mm(140.0), mm(55.0)));
+    assert_eq!(pin_at(&after, "shpin_in"), p(mm(100.0), mm(55.0)));
+    assert_eq!(root_of(&after).no_connects.iter().map(|n| n.at).collect::<Vec<_>>(), vec![p(mm(100.0), mm(55.0))]);
+    assert_eq!(wire_pts(&after, "wire_out")[0], p(mm(140.0), mm(55.0)));
+}
+
+#[test]
+fn a_resize_is_refused_below_the_smallest_sheet_unchanged_locked_or_of_no_sheet() {
+    let d = design();
+    let check = |d: &Design, cmd: Cmd| run(d, cmd).unwrap_err()[0].check.clone();
+    // `MIN_SHEET_WIDTH` x `MIN_SHEET_HEIGHT`: 500 x 150 mils
+    assert_eq!(check(&d, resize(SHEET_AT, mm(12.0), mm(30.0))), "ops_bad_sheet_size");
+    assert_eq!(check(&d, resize(SHEET_AT, mm(40.0), mm(3.0))), "ops_bad_sheet_size");
+    ok(&d, resize(SHEET_AT, mm(12.7), mm(3.81)));
+    assert_eq!(check(&d, resize(SHEET_AT, SHEET_SIZE.0, SHEET_SIZE.1)), "ops_nothing_to_change");
+    assert_eq!(check(&d, Cmd::SchEdit(SchCmd::ResizeSheet { id: "nope".into(), at: SHEET_AT, width_nm: mm(50.0), height_nm: mm(30.0) })), "ops_unknown_sheet");
+    let locked = ok(&d, Cmd::SchEdit(SchCmd::SetLocked { ids: vec!["sheet_sub".into()], locked: true }));
+    assert_eq!(check(&locked, resize(SHEET_AT, mm(50.0), mm(30.0))), "ops_locked");
+}
+
+#[test]
+fn the_resize_verb_reads_from_json() {
+    let cmd: SchCmd = serde_json::from_value(serde_json::json!({ "verb": "resize_sheet", "id": "sheet_sub", "at": { "x": 100_000_000, "y": 50_000_000 }, "width_nm": 50_000_000, "height_nm": 30_000_000 })).unwrap();
+    assert_eq!(cmd, SchCmd::ResizeSheet { id: "sheet_sub".into(), at: SHEET_AT, width_nm: mm(50.0), height_nm: mm(30.0) });
+    let d = design();
+    let m = ConstraintModel::default();
+    let mut b = Board::new(d.clone(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SchEdit(cmd)).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].size, (mm(50.0), mm(30.0)));
+}

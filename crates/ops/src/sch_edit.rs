@@ -43,6 +43,11 @@ pub enum SchCmd {
     /// point on the sheet's border (`SCH_SHEET_PIN::ConstrainOnEdge` is the caller's). An empty name, an unknown
     /// sheet or a point off the border is refused.
     AddSheetPin { sheet: String, name: String, shape: LabelShape, at: Point },
+    /// The sheet point editor's drag of a placed sheet's corner or side (`SHEET_POINT_EDIT_BEHAVIOR::UpdateItem`, `SCH_POINT_EDITOR`'s "Move Point" commit): the
+    /// sheet's corner goes to `at` without its pins (`SCH_SHEET::SetPositionIgnoringPins`) and its size becomes `width_nm` x `height_nm` (`SCH_SHEET::Resize`:
+    /// every pin kept on its side, `SCH_SHEET_PIN::ConstrainOnEdge( pos, false )`); the wire and bus ends and the no-connects on the pins follow them. See
+    /// [`Board::resize_sheet`](crate::Board::resize_sheet).
+    ResizeSheet { id: String, at: Point, width_nm: Nm, height_nm: Nm },
     /// Delete one sheet pin (`SCH_EDIT_TOOL::DoDelete` on a pin; what `CleanupSheetPins` and the sync dialog send).
     DeleteSheetPin { id: String },
     /// Rename, reshape or move one sheet pin (`SCH_SHEET_PIN` properties and the sync dialog's "update"); a field left
@@ -540,6 +545,7 @@ impl SchCmd {
             SchCmd::UpdateLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
             SchCmd::SetBodyStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::SetImageData { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
+            SchCmd::ResizeSheet { id, .. } => vec![id.as_str()],
             SchCmd::SetSheetProps { id, .. } | SchCmd::SetSheetFields { id, .. } | SchCmd::SetSheetFieldLooks { id, .. } | SchCmd::SetSheetVariant { id, .. } | SchCmd::DeleteTopLevelSheet { id } => vec![id.as_str()],
             SchCmd::AddTopLevelSheet { name } => vec![name.as_str()],
             SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } | SchCmd::EditField { id, .. } => vec![id.as_str()],
@@ -581,6 +587,13 @@ impl SchCmd {
             SchCmd::AddSheetPin { sheet, name, .. } => format!("schematic sheet-pin add {sheet} {name}"),
             SchCmd::DeleteSheetPin { id } => format!("schematic sheet-pin delete {id}"),
             SchCmd::EditSheetPin { id, .. } => format!("schematic sheet-pin edit {id}"),
+            SchCmd::ResizeSheet { id, at, width_nm, height_nm } => format!(
+                "schematic resize-sheet {id} --at {:.4},{:.4} --size {:.4},{:.4}",
+                eda_model::units::to_mm(at.x),
+                eda_model::units::to_mm(at.y),
+                eda_model::units::to_mm(*width_nm),
+                eda_model::units::to_mm(*height_nm)
+            ),
             SchCmd::ChangeSymbol { id, lib_id } => format!("schematic change-symbol {id} {lib_id}"),
             SchCmd::UpdateLibrarySymbols { lib_ids } => format!("schematic update-symbols {}", lib_ids.join(" ")),
             SchCmd::SetBodyStyle { ids, style } => match style {
@@ -645,7 +658,7 @@ impl SchCmd {
         match self {
             SchCmd::SetLocked { .. } => "schematic-lock",
             SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } | SchCmd::SetImageData { .. } | SchCmd::SetImageOffset { .. } => "schematic-graphic",
-            SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
+            SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } | SchCmd::ResizeSheet { .. } => "schematic-sheet",
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
             SchCmd::PlaceLabel { .. } => "schematic-label",
@@ -735,6 +748,7 @@ impl<'a> Board<'a> {
             // the Properties dialogs and the swaps below edit connectable items (a sheet pin, a symbol, a label, a wire or a junction): their commit runs the
             // clean-up, as every commit that holds one does (`SCH_COMMIT::pushSchEdit`: "Do a local clean up if there are any connectable objects in the
             // commit", `LOCAL_CLEANUP`; r3 C3-M1)
+            SchCmd::ResizeSheet { id, at, width_nm, height_nm } => self.resize_sheet(id, *at, (*width_nm, *height_nm)),
             SchCmd::EditSheetPin { id, name, shape, at, size_nm, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic }).and_then(|_| self.commit_clean_up()),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id).and_then(|_| self.commit_clean_up()),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
