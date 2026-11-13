@@ -207,6 +207,8 @@ function SchematicToolbarControl({ item }: { item: Extract<ToolbarItem, { type: 
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   if (item.control === "gridSelect") return <GridSelect editor="schematic" gridNm={state.schGridNm} onChange={(um) => dispatch({ type: "SET_SCH_GRID_NM", um })} />;
+  // the schematic frame's own box (`EDA_DRAW_FRAME::GetOverrideLocks()`, read by `SCH_SELECTION_TOOL::FilterSelectionForLockedItems`; UI-LEFT-3 P3-3: it was inert)
+  if (item.control === "overrideLocks") return <OverrideLocksBox frame="schematic" />;
   return (
     <div className="toolbar-control" title={`${item.label ?? item.control} (not ported yet)`} style={{ opacity: 0.5 }}>
       <span className="icon-placeholder" aria-hidden />

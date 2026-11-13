@@ -336,6 +336,19 @@ fn dnp_reaches_the_units_on_other_sheets() {
 }
 
 #[test]
+fn the_boards_simulation_toggle_reaches_a_symbol_on_another_sheet() {
+    // UI-LEFT-3 P3-4: the board's Attributes > Exclude from Simulation sends `set_symbol_attrs` with the footprints' references and no sheet in view: R6 is on
+    // sheet a, R5 on the root; each is set on its own screen.
+    let m = ConstraintModel::default();
+    let mut b = Board::new(two_sheet_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::SetSymbolAttrs { ids: vec!["R6".into(), "R5".into()], dnp: None, exclude_from_bom: None, exclude_from_board: None, exclude_from_sim: Some(true) }).unwrap();
+    let a = &b.design().sheet_contents.as_ref().unwrap()["a.kicad_sch"];
+    assert!(a.symbols.iter().find(|s| s.id == "R6").unwrap().exclude_from_sim);
+    assert!(b.design().schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R5").unwrap().exclude_from_sim);
+    assert_eq!(b.apply(&Cmd::SetSymbolAttrs { ids: vec!["R404".into()], dnp: None, exclude_from_bom: None, exclude_from_board: None, exclude_from_sim: Some(true) }).unwrap_err()[0].check, "ops_unknown_symbol");
+}
+
+#[test]
 fn increment_annotations_over_all_sheets() {
     // r5 D5-M3: "All sheets" is `Hierarchy().GetSymbols(..)`.
     let m = ConstraintModel::default();

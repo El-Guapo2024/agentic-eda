@@ -308,6 +308,8 @@ export function useActionRunner() {
         const cursor = state.cursorNm ? (([x, y]) => ({ x, y }))(snapPoint(state.cursorNm.x, state.cursorNm.y, state.gridNm)) : null;
         const del = boardDeleteCmds(state.board, refs, { cursor, isCut });
         cmds.push(...del.cmds);
+        // `EDIT_TOOL::Remove`: "if( selectionCopy.Empty() ) { m_selectionTool->ReportFilteredLockedItems(); ..." -- every item was locked (UI-LEFT-3 P3-3)
+        if (!isCut && del.cmds.length === 0 && del.skippedLocked > 0) dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
         keepSelection = del.keepSelection;
         if (del.message) dispatch({ type: "TOAST", message: del.message, kind: "error" });
       }

@@ -3316,6 +3316,23 @@ fn a_placement_keeps_the_editors_point_and_the_cli_move_snaps_to_the_step_from_t
     assert!(b.design().drawings.as_ref().and_then(|d| d.grid_origin).is_none());
 }
 
+/// UI-LEFT-3 C3-1: the studio's board edits never round a footprint to the board's placement step, so "Snap to grid: Never" (the editor's pointer not snapped,
+/// `GRID_HELPER::canUseGrid` false) leaves it off the grid: an unplaced part's click (`place_at`), a move (`move_items`) and a turn about a point
+/// (`rotate_items`) keep the nanometres they are given on a board whose step is 1 mm.
+#[test]
+fn the_studios_edits_keep_an_off_grid_point_whatever_the_placement_step() {
+    let m = model(vec![part("R1", "0603")], &[], vec![]);
+    let mut b = Board::new(empty_design(), &m, mm(1.0), mm(0.3));
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: mm(10.0) + Nm::new(1_234), y: mm(10.0) + Nm::new(5_678) }).unwrap();
+    assert_eq!(b.pose_of("R1").unwrap().at, Point { x: mm(10.0) + Nm::new(1_234), y: mm(10.0) + Nm::new(5_678) });
+    b.apply(&Cmd::MoveItems { ids: vec!["R1".into()], dx: Nm::new(333), dy: Nm::new(-77) }).unwrap();
+    assert_eq!(b.pose_of("R1").unwrap().at, Point { x: mm(10.0) + Nm::new(1_567), y: mm(10.0) + Nm::new(5_601) });
+    let pivot = Point { x: mm(10.0), y: mm(10.0) };
+    b.apply(&Cmd::RotateItems { ids: vec!["R1".into()], pivot, angle_millideg: 90_000 }).unwrap();
+    let at = b.pose_of("R1").unwrap().at;
+    assert!((at.x - mm(10.0)).abs() < Nm::new(10_000) && at.x != mm(10.0), "turned about the pivot, not put on the 1 mm step: {at:?}");
+}
+
 /// r3 X3-3: the Plot dialog's checklist and origin, and the drill dialog's origin, are stored back in the board's plot settings
 /// (`DIALOG_PLOT::applyPlotSettings`, `DIALOG_GENDRILL::updateConfig`); the copper layers the board lacks stay selected; nothing changed is refused.
 #[test]

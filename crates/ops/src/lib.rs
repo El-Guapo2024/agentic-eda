@@ -2779,6 +2779,9 @@ impl Cmd {
             Cmd::SetTextVariables { .. } => true,
             // the board's footprint and the symbol's Footprint field are put right together
             Cmd::ExchangeFootprints { .. } => true,
+            // a symbol's DNP / BOM / board / simulation flags, and its variant's, are its footprint's too (one design: the board shows them, and the board's
+            // context menu > Attributes sets them -- `EDIT_TOOL::ToggleFootprintAttribute` is a board commit, UI-LEFT-3 P3-4): either tab takes them back
+            Cmd::SetSymbolAttrs { .. } | Cmd::SetSymbolVariant { .. } => true,
             // a footprint the Footprint Editor puts back on the board may carry a DNP or BOM flag the symbol takes
             Cmd::FpEditor(fp_editor::FpEditorCmd::SaveToBoard { .. }) => true,
             // the footprints' references and the symbols' go together
@@ -3817,7 +3820,22 @@ impl<'a> Board<'a> {
             // the symbol's own screen (UI-LEFT P14)
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.on_symbols_screen(id, |b| b.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()).and_then(|_| b.commit_clean_up())),
             Cmd::RenameSymbol { id, new_id } => self.on_symbols_screen(id, |b| b.rename_symbol(id, new_id)),
-            Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
+            Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => {
+                // The board's Attributes > Exclude from Simulation names footprints, whose symbols may be on any sheet (UI-LEFT-3 P3-4): a reference the screen in
+                // view does not have is set on its own screen, as `EditSymbolFields` is; the schematic's own toggles name the sheet in view and run as one.
+                let on_focus = self.schematic().map(|sch| ids.iter().all(|id| sch.symbols.iter().any(|s| &s.id == id))).unwrap_or(false);
+                if on_focus || ids.is_empty() {
+                    self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim)
+                } else {
+                    // all or nothing, as the one call is
+                    let saved = self.design.clone();
+                    let r = ids.iter().try_for_each(|id| self.on_symbols_screen(id, |b| b.set_symbol_attrs(std::slice::from_ref(id), *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim)));
+                    if r.is_err() {
+                        self.design = saved;
+                    }
+                    r
+                }
+            }
             Cmd::AddDesignVariant { name, description } => self.add_design_variant(name, description),
             Cmd::RemoveDesignVariant { name } => self.remove_design_variant(name),
             Cmd::EditDesignVariantDescription { name, description } => self.edit_design_variant_description(name, description),
