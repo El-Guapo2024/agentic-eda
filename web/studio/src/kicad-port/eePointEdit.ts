@@ -155,7 +155,7 @@ export interface EeDragResult {
 }
 
 /** The edit points after the edited handle was set to `to` (`EDIT_POINT::SetPosition`, or `EDIT_LINE::SetPosition`: both ends by the same amount). */
-function movedPoints(e: EeEditPoints, h: EeHandle, to: readonly [number, number]): P[] {
+export function movedPoints(e: EeEditPoints, h: EeHandle, to: readonly [number, number]): P[] {
   const pts = e.points.map((p) => cp(p.pos));
   if (h.kind === "point") {
     pts[h.index] = [to[0], to[1]];
@@ -173,7 +173,7 @@ function movedPoints(e: EeEditPoints, h: EeHandle, to: readonly [number, number]
  * `RECTANGLE_POINT_EDIT_BEHAVIOR::PinEditedCorner`: the edited corner stays `minW` x `minH` inside the opposite one and pushes its neighbours along; an edited side stays
  * that far from the opposite side.
  */
-function pinEditedCorner(h: EeHandle, minW: number, minH: number, c: { tl: P; tr: P; bl: P; br: P }): void {
+export function pinEditedCorner(h: EeHandle, minW: number, minH: number, c: { tl: P; tr: P; bl: P; br: P }): void {
   const { tl, tr, bl, br } = c;
   if (h.kind === "point") {
     switch (h.index) {

@@ -25,7 +25,7 @@ import { drawStrokeText } from "./text/strokeFont";
 import { ARC_DRAW_MODES } from "../kicad-port/arcGeom";
 import { ARC_MODE_ACTIONS, CYCLE_ARC_DRAW_MODE, schArcDrawMode } from "../kicad-port/schArcDraw";
 import { eeFindHandle, handlePos, POINT_SIZE_PX, type EeHandle } from "../kicad-port/eePointEdit";
-import { schDrag, schPointEditor, schShapeFrom } from "../kicad-port/schPointEdit";
+import { schItemPointEditor } from "../kicad-port/schItemPointEdit";
 import { paintEditPoints } from "./schematic/schArcEditPaint";
 import { measureStrokeText } from "./text/strokeFont";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -266,17 +266,16 @@ export function SchematicView() {
   /** The point editor's drag in progress: the graphic, the handle and where the snapped cursor has it (UI-LEFT S13, UI-LEFT-2 SS3). */
   const [pointDrag, setPointDrag] = useState<{ id: string; handle: EeHandle; to: [number, number] } | null>(null);
   /**
-   * `SCH_POINT_EDITOR` on a selection of one drawn graphic it has a behaviour for (a rectangle, circle, arc, bezier, polyline, text box or rule area;
-   * kicad-port/schPointEdit.ts) with the select tool and nothing held: its edit points and lines, and the graphic as the drag has it.
+   * `SCH_POINT_EDITOR` on a selection of one item it has a behaviour for -- a drawn graphic (a rectangle, circle, arc, bezier, polyline, text box or rule area;
+   * kicad-port/schPointEdit.ts), a sheet, an image, a graphic line or a table cell (kicad-port/schItemPointEdit.ts, UI-LEFT-3 S3-2 / S3-4) -- with the select tool
+   * and nothing held: its edit points and lines, the sheet as the drag has it and what the drop sends. A locked item (a cell of a locked table) has none.
    */
   const shapeEditor = useMemo(() => {
     if (!sch || state.activeTool !== "select" || armedKind || state.selection.size !== 1) return null;
     const id = [...state.selection][0]!;
-    if ((sch.locked ?? []).includes(id)) return null;
-    const g = (sch.graphics ?? []).find((x) => x.id === id);
-    if (!g) return null;
-    const ed = schPointEditor(g, pointDrag && pointDrag.id === id ? pointDrag : null, state.prefs.schArcEditMode, measureStrokeText);
-    return ed ? { id, graphic: g, shown: ed.graphic, edit: ed.edit } : null;
+    const locked = sch.locked ?? [];
+    if (locked.includes(id) || (sch.tables ?? []).some((t) => id.startsWith(`${t.id}:`) && locked.includes(t.id))) return null;
+    return schItemPointEditor(sch, id, pointDrag && pointDrag.id === id ? pointDrag : null, state.prefs.schArcEditMode, measureStrokeText);
   }, [sch, state.activeTool, armedKind, state.selection, pointDrag, state.prefs.schArcEditMode]);
 
   // The grid helper of the tool in force (kicad-port/schGridHelper.ts, schematic/schSnap.ts), fed with the sheet, the view, the grid list and its overrides.
@@ -480,8 +479,8 @@ export function SchematicView() {
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
     // `${OP}` in a symbol's field or a label: the last operating point's values (kicad-port/sim/opVars.ts), resolved in what is drawn.
     // the current design variant's flags and field texts (KiCad 25ec2335 `SCH_EDIT_FRAME::SetCurrentVariant` -> `HardRedraw`: the painter reads every symbol through it)
-    // the graphic being edited is drawn as its points have it so far (the point editor changes the item as it goes)
-    const shownSch = shapeEditor && pointDrag ? { ...displaySch, graphics: (displaySch.graphics ?? []).map((g) => (g.id === shapeEditor.id ? shapeEditor.shown : g)) } : displaySch;
+    // the item being edited is drawn as its points have it so far, with what follows it (the point editor changes the items as it goes)
+    const shownSch = shapeEditor && pointDrag ? shapeEditor.shown(displaySch) : displaySch;
     paintSchematic(ctx, state.schematicView, withOpVars(withVariant(shownSch, state.schVariant), simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
     // the carried item is on the canvas, in this state of it (the test hook's timing: no round trip before it shows)
     if (carryShown && carry) noteCarryPainted(carry.seq);
@@ -726,7 +725,7 @@ export function SchematicView() {
       // how many items a paste in the hand shows (Import Graphics' preview is one: `data-paste-kind="import"`)
       data-paste-ghost={paste && pasteShown ? previewIds(paste.preview).length : undefined}
       data-paste-kind={paste ? (paste.place ? "import" : paste.origin) : undefined}
-      data-arc-points={shapeEditor?.graphic.shape.type === "arc" ? shapeEditor.edit.points.map((q, i) => `${["start", "mid", "end", "center"][i]}:${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
+      data-arc-points={shapeEditor?.graphic?.shape.type === "arc" ? shapeEditor.edit.points.map((q, i) => `${["start", "mid", "end", "center"][i]}:${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       data-edit-points={shapeEditor ? shapeEditor.edit.points.map((q) => `${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       data-edit-lines={shapeEditor ? shapeEditor.edit.lines.flatMap((l, i) => (l.center ? [handlePos(shapeEditor.edit, { kind: "line", index: i }).join(",")] : [])).join(" ") : undefined}
       style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
@@ -1251,15 +1250,10 @@ export function SchematicView() {
           return;
         }
         if (drag.kind === "editpoint") {
-          // the drag ends: the graphic as its points have it, one undo step (`commit.Push( _( "Move Point" ) )`); a drag that changed nothing sends nothing
-          const g = (sch?.graphics ?? []).find((x) => x.id === drag.id);
-          const moved = g && pointDrag ? schDrag(g, drag.handle, pointDrag.to, state.prefs.schArcEditMode, measureStrokeText) : null;
+          // the drag ends: the item as its points have it and what followed it, one undo step (`commit.Push( _( "Move Point" ) )`); a drag that changed nothing sends nothing
+          const cmds = shapeEditor && shapeEditor.id === drag.id && pointDrag ? shapeEditor.cmds : [];
           setPointDrag(null);
-          const shape = g && moved ? schShapeFrom(moved.shape, g.shape) : null;
-          if (g && shape && JSON.stringify(shape) !== JSON.stringify(g.shape)) {
-            const { id: _id, ...rest } = g;
-            void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: drag.id, graphic: { ...rest, shape } });
-          }
+          if (cmds.length > 0) void api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
           return;
         }
         if (drag.kind === "move") {
