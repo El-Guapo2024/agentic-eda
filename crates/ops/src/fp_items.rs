@@ -134,7 +134,8 @@ pub enum FpItemCmd {
         pad_number: Option<String>,
     },
     /// `PCB_CONTROL::Paste` in the footprint editor: the items of the footprint(s) KiCad's clipboard text `text` holds (a `.kicad_mod`'s `(footprint ..)`, or a board's
-    /// `(kicad_pcb ..)`), with their looks, new, the clipboard's origin at `at` ([`crate::fp_copy::paste`]). Refused for a text that is no footprint (the studio
+    /// `(kicad_pcb ..)`: its footprints' items in the editor's frame and its own drawings and groups), with their looks, new, the clipboard's origin at `at`
+    /// ([`crate::fp_copy::paste`]). Refused for a text that is no footprint (the studio
     /// pastes that as a text item, `add_footprint_text`).
     Paste { footprint: String, text: String, at: Point },
     /// The Properties pane's rows of a library pad that its file keeps among the pad's other forms (UI-LEFT-2 FF3): KiCad 10's "Post-machining Properties" and
@@ -542,6 +543,36 @@ fn check_item(what: &str, item: &FpItem) -> Result<(), Vec<CheckResult>> {
 }
 
 impl Board<'_> {
+    /// `Cmd::InGroup` of a Footprint Editor command (UI-LEFT-3 F3-3): `cmd`, then what it added to the footprint that holds `group` joins that group when it is in no
+    /// group yet and can be in one -- `BOARD_COMMIT::Push`'s `if( enteredGroup && boardItem->IsGroupableType() && !boardItem->GetParentGroup() )
+    /// enteredGroup->AddItem( boardItem )` with the Footprint Editor's selection tool in the group (a pad, a graphic, a text, a field, a text box, a dimension, a
+    /// zone, a table, a barcode, an image, a group; a point is not groupable). A pasted or duplicated group joins as itself, its members staying in it. A group
+    /// that no footprint holds any more is not joined; the command is applied all the same.
+    pub(crate) fn fp_in_group(&mut self, group: &str, cmd: &super::Cmd) -> Result<(), Vec<CheckResult>> {
+        let holder = |d: &eda_model::ir::Design| -> Option<String> {
+            let lib = d.footprint_library.as_ref()?;
+            lib.footprints.iter().chain(lib.board_copies.iter().map(|c| &c.footprint)).find(|f| GroupTree(&f.items.groups).is_group(group)).map(|f| f.name.clone())
+        };
+        let name = holder(&self.design);
+        let before = name.as_deref().and_then(|n| self.design.footprint_library.as_ref()?.by_name(n)).map(live_ids).unwrap_or_default();
+        self.apply(cmd)?;
+        let Some(name) = name else { return Ok(()) };
+        let Some(fp) = self.design.footprint_library.as_mut().and_then(|l| l.by_name_mut(&name)) else { return Ok(()) };
+        let tree = GroupTree(&fp.items.groups);
+        if !tree.is_group(group) {
+            return Ok(());
+        }
+        let fresh: Vec<String> = live_ids(fp)
+            .difference(&before)
+            .filter(|id| id.as_str() != group && tree.parent_group(id).is_none() && !fp.items.points.iter().any(|p| &p.id == *id) && !(tree.is_group(id) && tree.group_holds(id, group)))
+            .cloned()
+            .collect();
+        if !fresh.is_empty() {
+            fp.add_members(group, &fresh).map_err(|r| fail(r.check, &r.subject, r.why))?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn apply_fp_item(&mut self, cmd: &FpItemCmd) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(cmd.footprint())?;
         match cmd {
@@ -727,11 +758,14 @@ impl Board<'_> {
                 super::fp_copy::duplicate(fp, ids, pad_number.as_deref()).map(|_| ())
             }
             FpItemCmd::Paste { text, at, .. } => {
-                let clips = eda_kicad::parse_clipboard_footprints(text).map_err(|e| fail("ops_bad_paste", &fp.name, format!("the clipboard footprint cannot be read: {e}")))?;
+                let clips = eda_kicad::parse_footprint_clipboard(text).map_err(|e| fail("ops_bad_paste", &fp.name, format!("the clipboard footprint cannot be read: {e}")))?;
                 let clips = clips.ok_or_else(|| fail("ops_bad_paste", &fp.name, "the clipboard holds no footprint"))?;
                 let mut pasted = 0;
-                for c in &clips {
-                    if let Ok(ids) = super::fp_copy::paste(fp, &c.footprint, *at) {
+                for c in clips {
+                    // a board's footprint into the editor's frame first (`pasteFootprintItemsToFootprintEditor`, UI-LEFT-3 F3-10)
+                    let mut clip = c.parsed.footprint;
+                    super::fp_copy::board_footprint_to_editor(&mut clip, c.at, c.angle);
+                    if let Ok(ids) = super::fp_copy::paste(fp, &clip, *at) {
                         pasted += ids.len();
                     }
                 }
