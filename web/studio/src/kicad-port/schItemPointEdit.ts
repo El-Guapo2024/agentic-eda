@@ -13,11 +13,12 @@
 //   commits (kicad-port/schItemProperties.ts): `edit_graphic` with the new centre and scale and `set_image_offset`, in one step.
 // - The graphic line: its start and its end. Another graphic line with an end on one of them (`MakePoints`' scan: the last one found for each end) has that end
 //   follow. Committed as `set_line_ends` of every line that moved, in one step. A line is a chain of points here: its first and last are KiCad's start and end.
+//   A drag that puts a line's start on its end is committed as KiCad commits it: the zero-length graphic line stays (`SCHEMATIC::CleanUp` takes only wires and buses).
 // - The table cell: a point in the middle of its right side (`COL_WIDTH`) and one in the middle of its bottom (`ROW_HEIGHT`), in the cell's own frame; the drag
 //   sets the cell's end there and gives the last column (row) it spans the width (height) that leaves (`table.SetColWidth` / `SetRowHeight`), the cell's other
 //   columns (rows) kept. Committed as the Properties panel's "Column Width" / "Row Height" (`sch_table` `edit_cells` on the cell of that column).
 //
-// Differs: a drag that would make a graphic line's start and end meet sends nothing (`set_line_ends` refuses a zero-length line; KiCad commits one). An image's scale is
+// Differs: an image's scale is
 // kept in millionths (`scale_ppm`), KiCad's is a double. The table's preview moves the table's lines, corners and text with the edited column or row; its text is laid
 // out again by the server when the drag lands (KiCad re-lays it at each step).
 //
@@ -315,13 +316,11 @@ export function lineDrag(lines: readonly SchLine[], line: SchLine, h: EeHandle, 
   return out;
 }
 
-function lineCmds(lines: readonly SchLine[], moved: Map<string, SchLine>): Cmd[] | null {
+function lineCmds(lines: readonly SchLine[], moved: Map<string, SchLine>): Cmd[] {
   const cmds: Cmd[] = [];
   for (const [id, now] of moved) {
     const was = lines.find((l) => l.id === id);
     if (!was) continue;
-    // `set_line_ends` refuses a line whose two ends meet (see the header)
-    if (now.pts.length === 2 && same(now.pts[0]!, now.pts[1]!)) return null;
     const s = same(first(was), first(now)) ? null : pt(first(now));
     const e = same(last(was), last(now)) ? null : pt(last(now));
     if (s || e) cmds.push({ op: "sch_edit", verb: "set_line_ends", id, ...(s ? { start: s } : {}), ...(e ? { end: e } : {}) } as Cmd);
@@ -511,7 +510,7 @@ export function schItemPointEditor(
       kind: "line",
       edit: lineEditPoints(moved?.get(id) ?? line),
       shown: (s) => (moved ? { ...s, lines: (s.lines ?? []).map((l) => moved.get(l.id) ?? l) } : s),
-      cmds: cmds ?? [],
+      cmds,
     };
   }
   const tc = cellOf(sch, id);

@@ -1,7 +1,8 @@
 // The schematic's point editor on the items that are not drawn shapes (UI-LEFT-3 S3-2, S3-4; task-v13-schpoints), driven by pointer drags on the canvas:
 //   S3-2  a hierarchical sheet's side is dragged by its middle (`SHEET_POINT_EDIT_BEHAVIOR`): the pin on that side and the wire ending on it follow, and a corner dragged
 //         across the sheet stops at the smallest size the pins allow; each drag one undo step.
-//   S3-4  an image's corner scales it about its centre (`BITMAP_POINT_EDIT_BEHAVIOR`); a graphic line's end takes the line ending there along (`LINE_POINT_EDIT_BEHAVIOR`);
+//   S3-4  an image's corner scales it about its centre (`BITMAP_POINT_EDIT_BEHAVIOR`); a graphic line's end takes the line ending there along (`LINE_POINT_EDIT_BEHAVIOR`),
+//         and one dragged onto its start leaves a zero-length line, as KiCad's commit does;
 //         a table cell's right-side point sets its column's width (`SCH_TABLECELL_POINT_EDIT_BEHAVIOR`); each one undo step.
 //
 // Run it in the page of a served board made from examples/ldo.yaml, on a COPY of a board: every scenario undoes what it did.
@@ -158,6 +159,17 @@
     await undo();
     const back = (await sch()).lines ?? [];
     t(back.find((l) => l.id === la.id)?.pts[1][0] === X + 4 * G && back.find((l) => l.id === lb.id)?.pts[0][0] === X + 4 * G, "one undo puts both back");
+    // the end dragged onto the start: KiCad commits the zero-length graphic line and its clean-up keeps it (only wires and buses are cleaned up)
+    if (t(await select(la.id), "the line is selected again")) {
+      const [, end] = points();
+      await sDrag(end, [X, Y]);
+      const z = ((await sch()).lines ?? []).find((l) => l.id === la.id);
+      t(z && z.pts[0][0] === X && z.pts[0][1] === Y && z.pts[1][0] === X && z.pts[1][1] === Y, `the line is kept with its ends on one point (${JSON.stringify(z?.pts)})`);
+      const zb = ((await sch()).lines ?? []).find((l) => l.id === lb.id);
+      t(zb && zb.pts[0][0] === X && zb.pts[0][1] === Y, `the connected line's start followed (${JSON.stringify(zb?.pts)})`);
+      await undo();
+      t(((await sch()).lines ?? []).find((l) => l.id === la.id)?.pts[1][0] === X + 4 * G, "one undo gives the line its length back");
+    }
     await undoAll(2);
   });
 

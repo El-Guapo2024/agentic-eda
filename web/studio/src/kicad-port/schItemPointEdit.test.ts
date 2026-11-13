@@ -170,9 +170,12 @@ test("a graphic line's ends are its points; another line's end on one of them fo
     { op: "sch_edit", verb: "set_line_ends", id: "a", start: { x: -2 * MM, y: 0 } },
     { op: "sch_edit", verb: "set_line_ends", id: "c", end: { x: -2 * MM, y: 0 } },
   ]);
-  // a line on both ends of this one counts for its start only (the `else if` chain); its end onto its start sends nothing
+  // a line on both ends of this one counts for its start only (the `else if` chain)
   assert.deepEqual(lineLinks([ln("a", at(0, 0), at(10, 0)), ln("d", at(0, 0), at(10, 0))], ln("a", at(0, 0), at(10, 0))), [{ id: "d", end: "start" }, null]);
-  assert.deepEqual(schItemPointEditor(sch({ lines: [ln("a", at(0, 0), at(10, 0))] }), "a", { handle: { kind: "point", index: 1 }, to: at(0, 0) }, MODE, measure)!.cmds, []);
+  // its end onto its start is committed as KiCad commits it: a zero-length graphic line
+  assert.deepEqual(schItemPointEditor(sch({ lines: [ln("a", at(0, 0), at(10, 0))] }), "a", { handle: { kind: "point", index: 1 }, to: at(0, 0) }, MODE, measure)!.cmds, [
+    { op: "sch_edit", verb: "set_line_ends", id: "a", end: { x: 0, y: 0 } },
+  ]);
 });
 
 // ------------------------------------------------------------------------------------------------------------------------------------ table cell

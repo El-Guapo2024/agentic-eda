@@ -669,8 +669,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// The panel's Start X/Y and End X/Y of a wire, a bus or a graphic line: see [`SchCmd::SetLineEnds`](crate::sch_edit::SchCmd::SetLineEnds). A line
-    /// whose ends would meet is refused, as a zero-length line is no line (`SCH_LINE_WIRE_BUS_TOOL::finishSegments` deletes it).
+    /// The panel's Start X/Y and End X/Y of a wire, a bus or a graphic line, and the point editor's drag of a graphic line's end: see
+    /// [`SchCmd::SetLineEnds`](crate::sch_edit::SchCmd::SetLineEnds). A wire or bus whose ends would meet is refused, as a zero-length wire is no wire
+    /// (`SCH_LINE_WIRE_BUS_TOOL::finishSegments` deletes it, and so does `SCHEMATIC::CleanUp`, which takes `IsNull()` lines of `LAYER_WIRE` and `LAYER_BUS`).
+    /// A graphic line's ends may meet: `LINE_POINT_EDIT_BEHAVIOR::UpdateItem` sets them where the points are and the commit keeps it, as `CleanUp` gathers only
+    /// the wire and bus layers' lines (KiCad 8303b2ad `eeschema/schematic.cpp`), so the zero-length line stays on the sheet (UI-LEFT-3 S3-4).
     pub(crate) fn set_sch_line_ends(&mut self, id: &str, start: Option<Point>, end: Option<Point>) -> Result<(), Vec<CheckResult>> {
         if start.is_none() && end.is_none() {
             return Err(fail("ops_bad_wire", id, "nothing to change: give a new start, a new end, or both"));
@@ -697,8 +700,8 @@ impl<'a> Board<'a> {
         if next == *pts {
             return Err(fail("ops_nothing_to_change", id, "the line already ends there"));
         }
-        if next.len() == 2 && next[0] == next[1] {
-            return Err(fail("ops_bad_wire", id, "a line needs two different end points"));
+        if is_wire && next.len() == 2 && next[0] == next[1] {
+            return Err(fail("ops_bad_wire", id, "a wire needs two different end points"));
         }
         *pts = next;
         if is_wire {
