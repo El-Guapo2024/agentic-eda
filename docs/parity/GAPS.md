@@ -261,7 +261,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-11-07 (`task-v1-handles`, UI-LEFT-2 SS3, YY1, FF1, FF2; `PARITY-sch.md` section 70, PARITY-symedit "The point editor of every shape", `PARITY-fpedit.md` section 23):
   the point editor of every drawn shape (rectangles, circles, arcs, beziers, polygons, text boxes, rule areas) in the schematic and the Symbol Editor, with "Keep pins
   attached when dragging edges"; Draw Arc's five KiCad 10 modes with the Arc palette and tangent seeds; the Footprint Editor's Copy / Cut / Paste through KiCad's
-  clipboard footprint and Duplicate / Create Array of every kind with its looks. **Left**: the sheet's, image's, table cell's and graphic line's point editors; the
+  clipboard footprint and Duplicate / Create Array of every kind with its looks. **Left**: ~~the sheet's, image's, table cell's and graphic line's point editors~~ (done 2026-11-13, `task-v13-schpoints`, UI-LEFT-3 S3-2 / S3-4,
+  `PARITY-sch.md` section 94); the
   Symbol Editor's Draw Arc modes; Paste Special and Copy as Text in the Footprint Editor.
 - Done 2026-11-10 (`task-v6-ss15-sheets`, UI-LEFT-2 SS15; `PARITY-sch.md` section 83): Sheet Properties' fields grid gives a sheet's user field every look
   (H / V Align, Bold, Text Size, Orientation, X / Y Position, Font, Color; `set_sheet_field_looks`), drawn on the canvas and written; Sheet Pin Properties and Edit

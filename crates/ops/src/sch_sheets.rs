@@ -850,3 +850,84 @@ pub(crate) fn place_by_box_corner(sec: &mut SchematicSection, engine_of: &BTreeM
     }
     sec.imported_from_kicad = false;
 }
+
+// --------------------------------------------------------------------------------------------------------------- the sheet point editor (UI-LEFT-3 S3-2)
+
+/// `MIN_SHEET_WIDTH` and `MIN_SHEET_HEIGHT` (eeschema/sch_sheet.h: 500 and 150 mils): `SCH_SHEET::GetMinWidth` / `GetMinHeight` never let a sheet be narrower or lower.
+pub(crate) const MIN_SHEET_WIDTH: Nm = Nm::new(500 * 25_400);
+pub(crate) const MIN_SHEET_HEIGHT: Nm = Nm::new(150 * 25_400);
+
+/// `SCH_SHEET::SetPositionIgnoringPins( at )` then `SCH_SHEET::Resize( size )` (eeschema/sch_sheet.cpp): the corner moves without the pins, the size changes, and
+/// every pin is put back on the side it was on (`SCH_SHEET_PIN::ConstrainOnEdge( GetPosition(), false )`: `SetSide( GetSide() )` puts it on that side's new line,
+/// and its place along the side is kept, clamped to the side's ends). The side is the one the pin is on in `old` ([`crate::sch_move::side_of`]: KiCad keeps it as
+/// `m_edge`).
+pub(crate) fn resized_sheet(old: &SheetInstance, at: Point, size: (Nm, Nm)) -> SheetInstance {
+    let mut s = old.clone();
+    s.at = at;
+    s.size = size;
+    let (l, t, r, b) = (at.x, at.y, at.x + size.0, at.y + size.1);
+    for p in s.pins.iter_mut() {
+        p.at = match crate::sch_move::side_of(old, p.at) {
+            0 => Point { x: p.at.x.clamp(l, r), y: t },
+            1 => Point { x: r, y: p.at.y.clamp(t, b) },
+            2 => Point { x: p.at.x.clamp(l, r), y: b },
+            _ => Point { x: l, y: p.at.y.clamp(t, b) },
+        };
+    }
+    s
+}
+
+impl<'a> Board<'a> {
+    /// The sheet point editor's commit (`SHEET_POINT_EDIT_BEHAVIOR::UpdateItem`, eeschema/tools/sch_point_editor.cpp; `SchCmd::ResizeSheet`): the sheet `id` gets
+    /// its corner at `at` and the size `size` ([`resized_sheet`]), then what KiCad's behaviour takes along:
+    ///
+    /// * the no-connects on its pins follow them (`m_noConnects`, `SCH_SHEET::GetNoConnects`: a no-connect where a pin's text position is);
+    /// * the wires and buses that end on a pin follow it (`m_connectedWires`: a line whose start or end is on the pin's position when the edit began). A wire
+    ///   is a chain of points here, so a vertex on the pin is the end of the two KiCad lines that meet there, and moves;
+    /// * the sheet's name and file fields are placed again when they were placed by Autoplace Fields (`Resize`: `AutoplaceFields( nullptr, m_fieldsAutoplaced )`);
+    ///   its user fields keep their offset from the corner, which is `SetPositionIgnoringPins` moving them with it.
+    ///
+    /// The commit's clean-up follows (`SCH_COMMIT::Push` -> `SchematicCleanUp`). The smallest size the point editor lets a drag reach (`GetMinWidth` /
+    /// `GetMinHeight`: the pins' boxes and their text) is the browser's, which measures the text (kicad-port/schSheetPointEdit.ts); here a size under
+    /// `MIN_SHEET_WIDTH` x `MIN_SHEET_HEIGHT` is refused, as no drag of KiCad's can make one.
+    pub(crate) fn resize_sheet(&mut self, id: &str, at: Point, size: (Nm, Nm)) -> Result<(), Vec<CheckResult>> {
+        let model = self.model;
+        let sch = self.schematic_mut()?;
+        let Some(i) = sch.sheets.iter().position(|s| s.id == id) else {
+            return Err(vec![CheckResult::fail("ops_unknown_sheet", id, "no sheet with this id")]);
+        };
+        if sch.extras.is_locked(id) {
+            return Err(vec![CheckResult::fail("ops_locked", id, "the item is locked")]);
+        }
+        if size.0 < MIN_SHEET_WIDTH || size.1 < MIN_SHEET_HEIGHT {
+            return Err(vec![CheckResult::fail("ops_bad_sheet_size", id, "a sheet is at least 500 mils wide and 150 mils high")]);
+        }
+        let old = sch.sheets[i].clone();
+        if old.at == at && old.size == size {
+            return Err(vec![CheckResult::fail("ops_nothing_to_change", id, "the sheet already has this place and size")]);
+        }
+        let new = resized_sheet(&old, at, size);
+        // each pin's old place and its new one, the wires and no-connects read as they were when the edit began
+        let moves: Vec<(Point, Point)> = old.pins.iter().zip(&new.pins).filter(|(a, b)| a.at != b.at).map(|(a, b)| (a.at, b.at)).collect();
+        let follow = |p: &mut Point| {
+            if let Some((_, to)) = moves.iter().find(|(from, _)| from == p) {
+                *p = *to;
+            }
+        };
+        for w in sch.wires.iter_mut() {
+            w.pts.iter_mut().for_each(follow);
+        }
+        for nc in sch.no_connects.iter_mut() {
+            follow(&mut nc.at);
+        }
+        sch.sheets[i] = new;
+        if sch.extras.fields_autoplaced.contains_key(id) {
+            let mut scene = crate::sch_scene::Scene::new(sch, model);
+            scene.replace_fields_if_autoplaced(id);
+            if let Some(placed) = scene.sch.field_layout.get(id).cloned() {
+                sch.field_layout.insert(id.to_string(), placed);
+            }
+        }
+        self.commit_clean_up()
+    }
+}

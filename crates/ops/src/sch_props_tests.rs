@@ -439,7 +439,14 @@ fn set_line_ends_moves_a_wires_or_a_lines_end_and_cleans_the_sheet_up() {
     assert_eq!(sch_of(&b).wires.iter().map(|w| w.pts.clone()).collect::<Vec<_>>(), vec![vec![p(Nm::ZERO, Nm::ZERO), p(mm(12.7), Nm::ZERO)]]);
     ok(&mut b, ends("sln_a", Some(p(mm(1.27), mm(5.08))), None));
     assert_eq!(sch_of(&b).lines[0].pts, vec![p(mm(1.27), mm(5.08)), p(mm(5.08), mm(5.08))]);
-    assert_eq!(err(&mut b, ends("sln_a", None, Some(p(mm(1.27), mm(5.08))))), "ops_bad_wire", "a line whose ends meet is no line");
+    // a wire whose ends meet is set so, and the commit's clean-up deletes it (`SCHEMATIC::CleanUp`: `IsNull()` lines of the wire and bus layers)
+    ok(&mut b, ends("wire_a", None, Some(p(Nm::ZERO, Nm::ZERO))));
+    assert!(sch_of(&b).wires.is_empty(), "{:?}", sch_of(&b).wires);
+    // a graphic line's ends may meet (`LINE_POINT_EDIT_BEHAVIOR`; `SCHEMATIC::CleanUp` takes only the wire and bus layers' null lines): it stays, zero-length
+    ok(&mut b, ends("sln_a", None, Some(p(mm(1.27), mm(5.08)))));
+    assert_eq!(sch_of(&b).lines[0].pts, vec![p(mm(1.27), mm(5.08)), p(mm(1.27), mm(5.08))]);
+    assert_eq!(sch_of(&b).lines.len(), 1);
+    ok(&mut b, ends("sln_a", None, Some(p(mm(5.08), mm(5.08)))));
     assert_eq!(err(&mut b, ends("sln_a", None, None)), "ops_bad_wire");
     assert_eq!(err(&mut b, ends("nope", Some(p(Nm::ZERO, Nm::ZERO)), None)), "ops_unknown_item");
 }
