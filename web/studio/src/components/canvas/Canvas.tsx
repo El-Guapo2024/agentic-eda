@@ -109,6 +109,7 @@ import { askExclusionComment } from "../../state/checkerView";
 import { useImageVersion } from "./imageCache";
 import "../../styles/canvas.css";
 import { setZonePickFills } from "../../kicad-port/zonePickFill";
+import { LOCKED_ITEMS_FILTERED } from "../../kicad-port/overrideLocks";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
 function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
@@ -1415,7 +1416,7 @@ export function Canvas() {
         if (start.refs.length > 0) {
           dragRef.current = { kind: "move", refs: start.refs, pivotNm: start.pivotNm, flipPivotNm: start.flipPivotNm, startWorld: [wx, wy], snapOrigin: moveOrigin(wx, wy, start.refs), moved: false };
         } else if (start.lockedOut) {
-          dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+          dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
         }
       }
       return;
@@ -1533,7 +1534,7 @@ export function Canvas() {
       const held = state.movePreview?.kind === "pcb" ? state.movePreview : null;
       const start = packing || held ? null : carryStart(board, [...state.selection], modificationSnapFor(state));
       if (!packing && !held && start && start.refs.length === 0) {
-        if (start.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+        if (start.lockedOut) dispatch({ type: "TOAST", message: LOCKED_ITEMS_FILTERED, kind: "info" });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;
       }

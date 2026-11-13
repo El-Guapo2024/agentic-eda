@@ -9,7 +9,7 @@
 import { createElement } from "react";
 import { OffsetItemDialog } from "../components/PcbReferenceDialogs";
 import { movableItem } from "../kicad-port/pcbEditActions";
-import { editableSelection } from "../kicad-port/pcbTransform";
+import { editableSelection, lockedForTools } from "../kicad-port/pcbTransform";
 import { interactiveOffsetMove, moveSelectionCommands, offsetVector, type Vec } from "../kicad-port/pcbReference";
 import type { PickerSession } from "../kicad-port/pickerHost";
 import { applyCommands, createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
@@ -99,7 +99,7 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
 
       const apply = async (first: Vec, second: Vec, edited: Vec) => {
         const live = api.getState();
-        const movable = [...live.selection].filter((id) => live.board && movableItem(live.board, id) && !(live.board.locked ?? []).includes(id));
+        const movable = [...live.selection].filter((id) => live.board && movableItem(live.board, id) && !lockedForTools(live.board, id));
         const cmds = live.board ? moveSelectionCommands(live.board, movable, interactiveOffsetMove(first, second, edited)) : [];
         if (cmds.length) await applyCommands(api, dispatch, cmds);
         else if (movable.length === 0) return;

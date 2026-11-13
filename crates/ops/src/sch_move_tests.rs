@@ -189,6 +189,38 @@ fn move_of_nothing_or_of_an_unknown_id_is_refused_and_a_locked_item_is_not_moved
     assert_eq!(after.texts[0].at, p(s.texts[0].at.x + G, s.texts[0].at.y), "the rest of the selection moves");
 }
 
+/// `FilterSelectionForLockedItems` with the "Override locks" box checked (`if( m_frame && m_frame->GetOverrideLocks() ) return;`, UI-LEFT-3 P3-3): wrapped
+/// in `Cmd::OverrideLocks`, a locked symbol moves, turns and drags, and stays locked; the wrapper parses from the wire and nothing else changes.
+#[test]
+fn override_locks_lets_move_rotate_and_drag_act_on_a_locked_item_which_stays_locked() {
+    let mut s = every_kind();
+    s.extras.set_locked("R1", true);
+    let m = ConstraintModel::default();
+    let run = |cmd: SchMoveCmd| {
+        let mut design = empty_design();
+        design.schematic = Some(s.clone());
+        let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+        b.apply(&Cmd::OverrideLocks { cmd: Box::new(Cmd::SchMove(cmd)) }).unwrap_or_else(|e| panic!("{e:?}"));
+        b.design().schematic.clone().unwrap()
+    };
+    let moved = run(mv(&["R1"], G, Nm::ZERO));
+    assert_eq!(moved.symbols[0].at, p(s.symbols[0].at.x + G, s.symbols[0].at.y), "the locked symbol moves");
+    assert!(moved.extras.is_locked("R1"), "and stays locked");
+    let turned = run(SchMoveCmd::Rotate { ids: ids(&["R1"]), vertices: BTreeMap::new(), ccw: true, about: None, grid: Nm::ZERO });
+    assert_ne!(turned.symbols[0].rot, s.symbols[0].rot, "it turns");
+    let dragged = run(drag(&["R1"], G, Nm::ZERO));
+    assert_eq!(dragged.symbols[0].at.x, s.symbols[0].at.x + G, "it drags");
+    // without the wrapper the lock holds, and the override does not leak into the next command
+    let mut design = empty_design();
+    design.schematic = Some(s.clone());
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::OverrideLocks { cmd: Box::new(Cmd::SchMove(mv(&["R1"], G, Nm::ZERO))) }).unwrap();
+    assert_eq!(b.apply(&Cmd::SchMove(mv(&["R1"], G, Nm::ZERO))).unwrap_err()[0].check, "ops_locked");
+    let wire: Cmd = serde_json::from_value(serde_json::json!({ "op": "override_locks", "cmd": { "op": "sch_move", "verb": "move", "ids": ["R1"], "dx": 1270000, "dy": 0 } })).unwrap();
+    assert!(matches!(&wire, Cmd::OverrideLocks { cmd } if matches!(**cmd, Cmd::SchMove(SchMoveCmd::Move { .. }))), "{wire:?}");
+    assert_eq!(wire.domain(), Domain::Schematic);
+}
+
 #[test]
 fn move_of_a_multi_unit_symbol_takes_every_unit_and_one_unit_can_be_named() {
     let mut s = section();

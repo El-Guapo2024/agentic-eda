@@ -21,6 +21,7 @@ import { itemBounds, itemKind, itemPosition, padParent, unionBounds } from "./pc
 import { ancestors, groupAndDescendants, groupLeaves, isGroup, parentGroup } from "./groupTree";
 import { cellById } from "./tables";
 import type { CarryOp } from "./pcbCarry";
+import { getOverrideLocks } from "./overrideLocks";
 
 export type FlipDirection = "left_right" | "top_bottom";
 export type Pt = readonly [number, number];
@@ -58,12 +59,22 @@ export function isLocked(board: BoardState, id: string): boolean {
   return ancestors(groups, id).some((g) => locked.has(g.id));
 }
 
+/**
+ * `PCB_SELECTION_TOOL::FilterCollectorForLockedItems`' test: `isLocked`, unless the board editor's "Override locks" box is checked
+ * (`if( m_frame && m_frame->IsType( FRAME_PCB_EDITOR ) && !m_frame->GetOverrideLocks() )`; UI-LEFT-3 P3-3) -- then nothing is filtered and the edit
+ * tools act on locked items too.
+ */
+export function lockedForTools(board: BoardState, id: string): boolean {
+  return !getOverrideLocks("pcb") && isLocked(board, id);
+}
+
 // ------------------------------------------------------- the working selection
 
 /**
  * What `RequestSelection` hands the edit tools: the selection with every pad promoted to its footprint (`FilterCollectorForFreePads`,
  * pads are edited through their footprint), ids the board no longer has dropped, and every locked item taken out
- * (`FilterCollectorForLockedItems`) -- so `lockedOut` is how the tool knows it left something where it was. Order is kept, repeats dropped.
+ * (`FilterCollectorForLockedItems`, none with Override locks: `lockedForTools`) -- so `lockedOut` is how the tool knows it left something where it was.
+ * Order is kept, repeats dropped.
  */
 export function editableSelection(board: BoardState, ids: readonly string[], opts: { respectLocks?: boolean; forClipboard?: boolean } = {}): { ids: string[]; lockedOut: boolean } {
   const respectLocks = opts.respectLocks ?? true;
@@ -78,7 +89,7 @@ export function editableSelection(board: BoardState, ids: readonly string[], opt
     const id = kind === "pad" ? (opts.forClipboard ? raw : padParent(board, raw)) : kind === "tablecell" ? (opts.forClipboard ? raw : (cellById(board, raw)?.table.id ?? null)) : raw;
     if (id == null || seen.has(id) || itemKind(board, id) == null) continue;
     seen.add(id);
-    if (respectLocks && isLocked(board, id)) {
+    if (respectLocks && lockedForTools(board, id)) {
       lockedOut = true;
       continue;
     }

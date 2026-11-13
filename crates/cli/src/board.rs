@@ -1483,7 +1483,7 @@ pub(crate) fn judge_against(dir: &Path, baseline: eda_model::ir::Design) -> Resu
 fn outside_history(cmd: &Cmd) -> bool {
     match cmd {
         // the studio sends a schematic command on the sheet in view, and a dialog's close may come as a batch of its own
-        Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => outside_history(cmd),
+        Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => outside_history(cmd),
         Cmd::Batch { cmds } => !cmds.is_empty() && cmds.iter().all(outside_history),
         // Page Settings' drawing sheet file is a project setting (`BASE_SCREEN::m_DrawingSheetFileName`, saved in the project's
         // `page_layout_descr_file` by `SavePageSettings`, outside the commit; CC8)
@@ -2467,6 +2467,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::ReannotateBoard { options, selection } => format!("footprint reannotate --direction {} --scope {:?}{}", options.direction, options.scope, if selection.is_empty() { String::new() } else { format!(" --selection {}", selection.join(",")) }),
         Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
         Cmd::InGroup { group, cmd } => format!("in-group {group:?} {}", cmd_line(cmd)),
+        Cmd::OverrideLocks { cmd } => format!("override-locks {}", cmd_line(cmd)),
         Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
         Cmd::Annotate { reset_existing, order, ids, .. } => format!(
             "schematic annotate{}{}{}",
@@ -2764,7 +2765,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::ExchangeFootprints { footprint: Some(_), .. } => "change-footprint",
         Cmd::ExchangeFootprints { footprint: None, .. } => "update-footprint",
         Cmd::ReannotateBoard { .. } => "reannotate",
-        Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd_name(cmd),
+        Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } | Cmd::OverrideLocks { cmd } => cmd_name(cmd),
         Cmd::ReorganizeSheets => "schematic-reorganize-sheets",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
         Cmd::RenameSymbol { .. } => "schematic-rename",

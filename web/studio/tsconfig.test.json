@@ -37,6 +37,9 @@
     "src/kicad-port/**/*.ts",
     "src/actions/hotkeys.test.ts",
     "src/actions/hotkeys.ts",
+    // The clarification menu's replay of the action that asked (UI-LEFT-3 P3-2): no React in it.
+    "src/actions/selectionMenuReplay.ts",
+    "src/actions/selectionMenuReplay.test.ts",
     "src/kicad/types.ts",
     "src/platform.ts",
     "tools/types/node-test-shims.d.ts",

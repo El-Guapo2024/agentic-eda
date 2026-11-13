@@ -6,7 +6,7 @@
 //   pcbnew/tools/edit_tool.cpp      EDIT_TOOL::DeleteItems: a locked item is skipped; deleting a group deletes its members
 import type { BoardState, Cmd } from "../api/types";
 import { expandGroups } from "./groupTree";
-import { isLocked } from "./pcbTransform";
+import { lockedForTools } from "./pcbTransform";
 import { extraDeleteCmd, extraItems } from "./pcbExtraItems";
 import { cellById } from "./tables";
 import { editFieldCmd, fieldById } from "./fpFields";
@@ -42,7 +42,7 @@ export function boardDeleteCmds(
   for (const id of ids) {
     // a tuning pattern is not deleted with its tracks: it is removed (`PCB_TUNING_PATTERN::Remove`, the track put back) -- see [`tuningPatternIds`]
     if (patterns.has(id)) continue;
-    if (isLocked(board, id)) skippedLocked++;
+    if (lockedForTools(board, id)) skippedLocked++;
     else free.push(id);
   }
   if (free.length === 1 && patterns.size === 0 && !opts.isCut && opts.cursor) {
@@ -76,7 +76,7 @@ export function boardDeleteCmds(
     const cell = tables.has(id) ? undefined : cellById(board, id);
     if (!cell) continue;
     if (wanted.has(cell.table.id)) continue;
-    if (isLocked(board, cell.table.id)) {
+    if (lockedForTools(board, cell.table.id)) {
       skippedLocked++;
       continue;
     }

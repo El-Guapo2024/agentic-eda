@@ -2232,6 +2232,8 @@ export type Cmd =
   | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
   /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
   | { op: "in_group"; group: string; cmd: Cmd }
+  /** Run `cmd` with the schematic editor's "Override locks" box checked (`Cmd::OverrideLocks`): `sch_move` keeps the locked items. */
+  | { op: "override_locks"; cmd: Cmd }
   /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. `definition` is the footprint's own copy, for one the board cannot find by name (Insert footprint into PCB sends the Footprint Editor's). */
   | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string; definition?: LibraryFootprint | null }
   /** Change Footprint(s) / Update Footprint(s) from Library (`DIALOG_EXCHANGE_FOOTPRINTS`) and the footprint a symbol's Footprint field names (`replaceFootprint`): put `references` on `footprint`, or -- `footprint` absent -- each on the library copy of the footprint it is on. The pose, lock and group stay; the rest follows `options`. The server brings the library copy. See crates/ops/src/fp_exchange.rs. */

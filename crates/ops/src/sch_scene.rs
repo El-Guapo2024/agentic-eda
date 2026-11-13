@@ -294,6 +294,9 @@ pub(crate) struct Scene<'m> {
     pub rigid: BTreeSet<Item>,
     /// The selection is one group and nothing else: `SCH_EDIT_TOOL::Rotate` turns it on itself and `Mirror` mirrors it about its own centre.
     pub lone_group: bool,
+    /// The schematic editor's "Override locks" box is checked ([`crate::Cmd::OverrideLocks`]): `sch_move::select` keeps locked items
+    /// (`FilterSelectionForLockedItems` returns at once).
+    pub override_locks: bool,
 }
 
 impl<'m> Scene<'m> {
@@ -312,7 +315,7 @@ impl<'m> Scene<'m> {
         }
         let shapes = sch.symbols.iter().map(|s| symbol_shape(model, &sch, s)).collect();
         let power_shapes = sch.power_symbols.iter().map(|p| power_shape(model, p)).collect();
-        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new(), rigid: BTreeSet::new(), lone_group: false }
+        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new(), rigid: BTreeSet::new(), lone_group: false, override_locks: false }
     }
 
     // -------------------------------------------------------------------------------------------------------------- items

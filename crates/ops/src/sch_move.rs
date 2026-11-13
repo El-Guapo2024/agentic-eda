@@ -188,7 +188,7 @@ impl<'a> Board<'a> {
         let model = self.model;
         let (out, overlay) = {
             let sch = self.schematic()?;
-            run_with_overlay(sch, model, cmd)?
+            run_with_overlay(sch, model, cmd, self.override_locks)?
         };
         *self.schematic_mut()? = out;
         self.net_collision = Some(overlay);
@@ -201,8 +201,10 @@ fn fail(check: &str, subject: &str, why: impl Into<String>) -> Vec<CheckResult> 
 }
 
 /// The edited section, and what the net-collision monitor draws for it (nothing for a turn, a mirror or an alignment: only a held selection has one).
-pub(crate) fn run_with_overlay(sch: &SchematicSection, model: &ConstraintModel, cmd: &SchMoveCmd) -> Result<(SchematicSection, crate::sch_net_collision::NetCollision), Vec<CheckResult>> {
+/// `override_locks`: the "Override locks" box ([`crate::Cmd::OverrideLocks`]) -- checked, the locked items move too.
+pub(crate) fn run_with_overlay(sch: &SchematicSection, model: &ConstraintModel, cmd: &SchMoveCmd, override_locks: bool) -> Result<(SchematicSection, crate::sch_net_collision::NetCollision), Vec<CheckResult>> {
     let mut scene = Scene::new(sch, model);
+    scene.override_locks = override_locks;
     let mut overlay = crate::sch_net_collision::NetCollision::default();
     match cmd {
         SchMoveCmd::Move { ids, dx, dy, turns, about } => {
@@ -244,7 +246,7 @@ fn grid_of(g: Nm) -> Nm {
 // the selection
 
 /// Resolve `ids` (and which points of a wire are picked) to the scene's items. A locked item is left out
-/// (`FilterSelectionForLockedItems`); no item left is an error, so an edit that would change nothing leaves no undo step.
+/// (`FilterSelectionForLockedItems`), unless the locks are overridden ([`Scene::override_locks`]); no item left is an error, so an edit that would change nothing leaves no undo step.
 ///
 /// A group stands for the items below it, nested groups opened (`SCH_GROUP::Move`, `Rotate`, `Mirror` hand the work to each member, and a member that is a
 /// group hands it on). Those items are held as the group holds them ([`Scene::rigid`]), and a selection that is one group alone is turned on itself
@@ -278,7 +280,7 @@ pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<Stri
     let (mut groups_in, mut loose_in) = (0usize, 0usize);
     for id in ids {
         if scene.sch.extras.is_group(id) {
-            if crate::sch_groups::group_has_locked(&scene.sch, id) {
+            if !scene.override_locks && crate::sch_groups::group_has_locked(&scene.sch, id) {
                 locked_skipped += 1;
                 continue;
             }
@@ -303,7 +305,7 @@ pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<Stri
             let Some(f) = scene.find_field(id) else {
                 return Err(fail("ops_unknown_item", id, "no field with this id on the sheet"));
             };
-            if scene.is_field_locked(&f) {
+            if !scene.override_locks && scene.is_field_locked(&f) {
                 locked_skipped += 1;
             } else if !scene.fields.contains(&f) {
                 scene.fields.push(f);
@@ -317,7 +319,7 @@ pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<Stri
             }
             return Err(fail("ops_unknown_item", id, "no item with this id on the sheet"));
         }
-        if crate::sch_groups::locked_in_tree(&scene.sch, id) {
+        if !scene.override_locks && crate::sch_groups::locked_in_tree(&scene.sch, id) {
             locked_skipped += 1;
             continue;
         }

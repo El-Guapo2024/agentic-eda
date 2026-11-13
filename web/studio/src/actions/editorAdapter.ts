@@ -20,6 +20,7 @@ import { describeGroup, groupsOf, substituteSchSelection } from "../kicad-port/s
 import { boxOfId } from "../components/schematic/schGroupBounds";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { deleteCmds as schDeleteCmds } from "../kicad-port/schDelete";
+import { schToolLocks } from "../kicad-port/schLock";
 import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
 import { removeTuningPatterns } from "../components/canvas/tuneRouting";
 import { topLevelGroup } from "../kicad-port/groupTree";
@@ -259,7 +260,8 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         },
         deleteIds: async (ids) => {
           if (!sch || !snap.api) return null;
-          const locked = new Set(sch.locked ?? []);
+          // `DoDelete`'s `FilterSelectionForLockedItems` (none with "Override locks" checked)
+          const locked = schToolLocks(sch.locked);
           const cmds = schDeleteCmds(sch, ids, locked);
           if (cmds.length > 0) await snap.api.cmdBatch(cmds);
           return cmds.length === 0 && ids.some((id) => locked.has(id)) ? "Item locked." : null;

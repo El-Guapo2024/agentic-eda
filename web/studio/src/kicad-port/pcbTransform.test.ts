@@ -4,6 +4,9 @@ import type { BoardState, Dimension, Part, Pad } from "../api/types";
 import { carryAngleDeg, carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planMoveExact, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
 import { dimensionTextAngleRad, padById, padIds, padParent, itemKind, itemPosition, itemBounds } from "./pcbItems";
 import { boardDeleteCmds } from "./deleteCmds";
+import { lockedForTools } from "./pcbTransform";
+import { planSwap } from "./pcbSwap";
+import { setOverrideLocks } from "./overrideLocks";
 
 function board(partial: Partial<BoardState>): BoardState {
   return { name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100, parts: [], rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle", ...partial } as BoardState;
@@ -51,6 +54,28 @@ test("editableSelection: locked items stay out -- the item, a member of a locked
   assert.ok(isLocked(b, "g_has_locked"), "a member (U4) of it is locked");
   assert.deepEqual(editableSelection(b, ["U1", "U2", "t1", "U3", "g_has_locked"]), { ids: ["U3"], lockedOut: true });
   assert.deepEqual(editableSelection(b, ["U1"], { respectLocks: false }), { ids: ["U1"], lockedOut: false });
+});
+
+test("Override locks (UI-LEFT-3 P3-3): FilterCollectorForLockedItems filters nothing -- move, rotate, flip, swap and delete act on locked items", () => {
+  const b = board({ parts: [part("U1", [0, 0]), part("U2", [9000, 0])], routing: routing([track("t1", [[0, 5000], [1000, 5000]])]), locked: ["U1", "t1"] });
+  assert.deepEqual(editableSelection(b, ["U1", "U2"]), { ids: ["U2"], lockedOut: true });
+  assert.equal(boardDeleteCmds(b, ["t1"]).skippedLocked, 1);
+  setOverrideLocks("pcb", true);
+  try {
+    assert.ok(isLocked(b, "U1"), "the item stays locked");
+    assert.ok(!lockedForTools(b, "U1"), "but the tools are not stopped by it");
+    assert.deepEqual(editableSelection(b, ["U1", "U2"]), { ids: ["U1", "U2"], lockedOut: false });
+    assert.deepEqual(planMove(b, ["U1"], 100, 0).cmds, [{ op: "move_items", ids: ["U1"], dx: 100, dy: 0 }]);
+    assert.equal(planRotate(b, ["U1"], 1).cmds.length, 1);
+    assert.equal(planFlip(b, ["U1"]).cmds.length, 1);
+    assert.equal(planSwap(b, ["U1", "U2"]).lockedOut, false);
+    const del = boardDeleteCmds(b, ["t1"]);
+    assert.equal(del.skippedLocked, 0);
+    assert.equal(del.cmds.length, 1, "the locked track is deleted");
+  } finally {
+    setOverrideLocks("pcb", false);
+  }
+  assert.ok(lockedForTools(b, "U1"), "unchecked, the lock holds again");
 });
 
 test("groups nest: a lock anywhere in the tree locks the groups above it, and a locked group locks everything below it", () => {
