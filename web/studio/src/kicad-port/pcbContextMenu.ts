@@ -318,6 +318,9 @@ export class ConditionalMenu {
   }
 }
 
+/** KiCad 25ec2335 `EDIT_TOOL::Init`'s `fpAttributesMenu` items, in its order. */
+const FP_ATTRIBUTE_ITEMS = ["pcbnew.InteractiveEdit.toggleExcludeFromBOM", "pcbnew.InteractiveEdit.toggleExcludeFromSim", "pcbnew.InteractiveEdit.toggleExcludeFromPosFiles"];
+
 /** A submenu that is itself a `CONDITIONAL_MENU`: its title and what it shows. */
 const submenu = (menu: ConditionalMenu): ((s: Sel, c: PcbMenuContext) => MenuNode[]) => (s, c) => menu.evaluate(s, c);
 
@@ -741,6 +744,9 @@ export function buildSelectionMenu(): ConditionalMenu {
   menu.addItem(A.updateFootprints, multipleFootprints);
   menu.addItem(A.changeFootprint, singleFootprint);
   menu.addItem(A.changeFootprints, multipleFootprints);
+  // KiCad 25ec2335's `fpAttributesMenu` ("Attributes": its three check items, `ShowAlways`), for one footprint or several (UI-LEFT-3 P3-4); the check marks
+  // are the action runner's (`excludeFromBOMCond` and kin, kicad-port/fpAttributeToggle.ts)
+  menu.addMenu("Attributes", () => FP_ATTRIBUTE_ITEMS.map((action) => item(action)), (s, c) => singleFootprint(s, c) || multipleFootprints(s, c));
   // Add the submenu for the special tools: modifiers and positioning tools
   menu.addSeparator(always, 100);
   menu.addMenu("Routing", submenu(routing), isRoutable, 100);

@@ -197,6 +197,8 @@ export interface FootprintAttrsInfo {
   dnp: boolean;
   allow_missing_courtyard: boolean;
   custom: boolean;
+  /** `IsExcludedFromSim`: its symbol's (absent from an older backend; false with no symbol). */
+  exclude_from_sim?: boolean;
 }
 
 /** `[minX, minY, maxX, maxY]`, footprint-local, nm. */

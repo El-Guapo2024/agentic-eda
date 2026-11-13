@@ -96,6 +96,7 @@ import { fpActionEnabled, symActionEnabled } from "../kicad-port/fpSymActionEnab
 import { placingFootprint, startPlaceFootprint } from "./placeFootprintTool";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { askingRegistry, newForcedSelection, SelectionMenuPending } from "./selectionMenuReplay";
+import { FP_ATTRIBUTE_ACTIONS, fpAttributeChecked, toggleFpAttributeCmds, type FpAttribute } from "../kicad-port/fpAttributeToggle";
 import { getOverrideLocks, LOCKED_ITEMS_FILTERED } from "../state/overrideLocks";
 import { makeEditorAdapter } from "./editorAdapter";
 import { cancelAreaTool, getCommonTool, getLastPointer, showSelectionMenu } from "../state/commonTool";
@@ -2046,6 +2047,19 @@ export function useActionRunner() {
         dispatch({ type: "SET_MOVE_ORIGIN", at: { x: at[0], y: at[1] } });
       };
       m.set("pcbnew.InteractiveMove.moveIndividually", pcbOnly(() => startMoveIndividually(requestSelection())));
+      // KiCad 25ec2335 `EDIT_TOOL::ToggleFootprintAttribute` (context menu > Attributes, UI-LEFT-3 P3-4): `RequestSelection( FootprintFilter )` -- the selected
+      // footprints, or the one under the cursor -- each set to the new state in the board's current variant, one step (kicad-port/fpAttributeToggle.ts).
+      const toggleFpAttribute = (attr: FpAttribute) =>
+        pcbOnly(() => {
+          const board = state.board;
+          if (!board) return;
+          const refs = new Set(requestSelection());
+          const cmds = toggleFpAttributeCmds(board.parts.filter((p) => refs.has(p.ref)), attr, state.pcbVariant);
+          if (cmds.length > 0) void api.cmdBatch(cmds);
+        });
+      m.set("pcbnew.InteractiveEdit.toggleExcludeFromBOM", toggleFpAttribute("bom"));
+      m.set("pcbnew.InteractiveEdit.toggleExcludeFromSim", toggleFpAttribute("sim"));
+      m.set("pcbnew.InteractiveEdit.toggleExcludeFromPosFiles", toggleFpAttribute("pos"));
       if (state.pcbx.movingIndividually) {
         m.set(
           "pcbnew.InteractiveEdit.skip",
@@ -2810,6 +2824,9 @@ export function useActionRunner() {
         const blocks = designBlockChecked(name);
         if (blocks !== undefined) return blocks;
       }
+      // the footprint attribute toggles' check marks (`excludeFromBOMCond` and kin: every selected footprint has it, in the board's variant)
+      const fpAttr = FP_ATTRIBUTE_ACTIONS[name];
+      if (fpAttr && state.tab === "pcb" && state.board) return fpAttributeChecked(state.board.parts.filter((p) => state.selection.has(p.ref)), fpAttr, state.pcbVariant);
       if (state.tab !== "schematic" || !registry.has(name)) return undefined;
       const selection = state.selection;
       const sch = state.schematic;
