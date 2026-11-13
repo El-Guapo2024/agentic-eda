@@ -79,7 +79,7 @@ import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
-import { pickSelectionCandidates, collectBoxSelection, newFilterRejections, rowsToFlash, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
+import { pickSelectionCandidates, collectBoxSelection, viewportBox, newFilterRejections, rowsToFlash, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
 import { flashSelectionFilter } from "../../kicad-port/filterFlash";
 import { candidateLabel as boardCandidateLabel } from "./candidateLabel";
 import { gridCarryAnchor as placeCarryAnchor, gridCarryDrop as placeCarryDrop } from "../../kicad-port/placeCarry";
@@ -1314,7 +1314,10 @@ export function Canvas() {
     const runPick = (skipHeuristics: boolean): SelectionCandidate[] => {
       if (!board) return [];
       const rejected = newFilterRejections();
-      const picked = pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics, rejected).filter((c) => pickable(c.id));
+      // `FilterCollectorForFootprints` reads the viewport and whether the click modifies the selection (UI-LEFT-3 P3-24)
+      const box = containerRef.current?.getBoundingClientRect();
+      const fpView = { viewport: box ? viewportBox(state.view, box.width, box.height) : null, modifying: hasModifier(modifiers), selection: state.selection };
+      const picked = pickSelectionCandidates(board, wx, wy, toleranceNm, onePixelNm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics, rejected, fpView).filter((c) => pickable(c.id));
       const flash = rowsToFlash(rejected);
       if (flash.length > 0) flashSelectionFilter(flash);
       return picked;

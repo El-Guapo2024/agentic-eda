@@ -134,6 +134,8 @@ export interface PadStackLayer {
   h: Nm;
   round: boolean;
   shape: PadShapeName;
+  /** The group's size before the pad's turn (the pad's own rotation turns it); absent from an older backend. */
+  size?: [Nm, Nm];
   ratio?: number | null;
   outline?: [Nm, Nm][][] | null;
 }

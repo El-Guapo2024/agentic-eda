@@ -32,7 +32,7 @@ import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
-import { itemPassesFilter, newFilterRejections, pickSelectionCandidates, rowsToFlash, toolCandidateSets, type SelectionCandidate, type ToolPickMode } from "../components/canvas/selectionCandidates";
+import { itemPassesFilter, newFilterRejections, pickSelectionCandidates, rowsToFlash, toolCandidateSets, viewportBox, type SelectionCandidate, type ToolPickMode } from "../components/canvas/selectionCandidates";
 import { flashSelectionFilter } from "../kicad-port/filterFlash";
 import { candidateLabel } from "../components/canvas/candidateLabel";
 import { shapeHitDistance } from "../components/canvas/itemHitTest";
@@ -234,7 +234,10 @@ export function useActionRunner() {
       // cursor stands for its footprint, and a footprint's field or text goes for the footprint it lies on -- the edit tools work on that. "plain": a tool
       // whose filter is empty (`EDIT_TOOL::Properties`) takes what a click takes.
       const rejected = newFilterRejections();
-      const { guessed, all } = toolCandidateSets(board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, pick, rejected);
+      // (`selectPoint`'s `FilterCollectorForFootprints` with the view; nothing is selected and no modifier is held here)
+      const rect = canvasRect();
+      const fpView = { viewport: rect ? viewportBox(state.view, rect.width, rect.height) : null, modifying: false, selection: state.selection };
+      const { guessed, all } = toolCandidateSets(board, state.cursorNm.x, state.cursorNm.y, toleranceNm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, pick, rejected, fpView);
       // `selectPoint`'s `HighlightSelectionFilter( rejected )` when the filter refused everything under the cursor
       const flash = rowsToFlash(rejected);
       if (flash.length > 0) flashSelectionFilter(flash);

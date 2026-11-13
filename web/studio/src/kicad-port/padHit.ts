@@ -11,8 +11,8 @@
 // arc, misses it, as in KiCad. The distances here are exact (no chords); the coverage polygons are cut into chords outside the curve (`ERROR_OUTSIDE`,
 // `ARC_LOW_DEF`) as `TransformShapeToPolygon` cuts them.
 //
-// A padstack whose copper differs from layer to layer (`Pad.stack_layers`) is measured on each group of layers too; such a group carries the board box of its
-// copper, not its size, so a group turned off the quarter turns is measured by that box (the studio's state has nothing better). Pure: no store, no DOM.
+// A padstack whose copper differs from layer to layer (`Pad.stack_layers`) is measured on each group of layers too, by its own shape and its size before the
+// pad's turn (`size`; a group turned off the quarter turns was its board box, UI-LEFT-3 P3-24). Pure: no store, no DOM.
 import type { Pad, PadShapeName } from "../api/types";
 import { outlineContains, outlineDistance } from "./padOutline";
 import { ARC_LOW_DEF_NM, circleRing, circleSegments, intersectionArea, stadiumRing, type Pt, type Ring } from "./coverage";
@@ -54,7 +54,8 @@ export function padCoppers(pad: PadLike): PadCopper[] {
     : { x: pad.x, y: pad.y, shape: pad.outline?.length ? "custom" : pad.round ? (pad.w === pad.h ? "circle" : "oval") : "box", w: pad.w, h: pad.h, rot: 0, ratio: DEFAULT_RR_RATIO, outline: pad.outline ?? null };
   const out = [front];
   for (const l of pad.stack_layers ?? []) {
-    const size = untilted(l.w, l.h, rot);
+    // the group's own size before the pad's turn (`size`, UI-LEFT-3 P3-24), else one read back from its board box: exact on a quarter turn only
+    const size = l.size ? ([l.size[0], l.size[1]] as [number, number]) : untilted(l.w, l.h, rot);
     out.push(
       size
         ? { x: l.x, y: l.y, shape: l.shape, w: size[0], h: size[1], rot, ratio: l.ratio ?? DEFAULT_RR_RATIO, outline: l.outline ?? null }
