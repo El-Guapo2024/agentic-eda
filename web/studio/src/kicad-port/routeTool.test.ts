@@ -90,3 +90,11 @@ test("R6-R2: a width chosen while routing below the board minimum is drawn at th
   // a plain move's reply (no width asked) never changes the width the studio holds
   assert.equal(drawStateFromPreview(current, basePreview({ width: 250_000 })).width, 100_000);
 });
+
+test("drawStateFromPreview takes the head's and the via's clearances for their outlines (UI-LEFT-3 P3-6)", () => {
+  const next = drawStateFromPreview(baseDraw(), basePreview({ clearance: 200_000, via_clearance: 250_000, via: { x: 0, y: 0, diameter: 600, drill: 300 } }));
+  assert.deepEqual([next.clearance, next.viaClearance], [200_000, 250_000]);
+  // an older server says nothing: no outline
+  const old = drawStateFromPreview(baseDraw(), basePreview());
+  assert.deepEqual([old.clearance, old.viaClearance], [null, null]);
+});

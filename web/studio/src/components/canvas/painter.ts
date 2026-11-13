@@ -5,7 +5,7 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineNm`) and text size.
 
-import type { BoardState, Dimension, DrcViolation, FieldInfo, FillReport, Part, Pad, RatsnestEdge, Shape, Nm, Zone } from "../../api/types";
+import type { BoardState, Dimension, DisplayClearances, DrcViolation, FieldInfo, FillReport, Part, Pad, RatsnestEdge, Shape, Nm, Track, Via, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineNm } from "./view";
 import { layerColor, copperColorKey } from "./layers";
@@ -56,6 +56,9 @@ import { drawPcbItems, drawPcbToolPreviews, drawPoints, drawRefImages } from "./
 import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
 import { drawViaStitches } from "./viaStitchPaint";
 import { viaMaxDiameter, viaWidthOn } from "../../kicad-port/viaPadstack";
+import { boardShowsTrackClearance, netNamesOnPads, netNamesOnTracks, netNamesOnVias, routerShowsClearance, shortNetname, trackNetNameLabels, viaNetNameLayout, type NetNamesMode, type TrackClearanceMode, type ViewBox } from "../../kicad-port/pcbDisplayOptions";
+import { unescapeString } from "../../kicad-port/schNetName";
+import { padContours, padPlacement } from "../../kicad-port/padShape3d";
 import { drawDrillItems } from "./drillPaint";
 import { gridGeometry, type GridGeometry } from "../../kicad-port/gridItem";
 import { drawTablePreview, drawTables } from "./tablePaint";
@@ -167,6 +170,18 @@ export interface PaintOptions {
   sketchText?: boolean;
   /** `m_DisplayPadNum` (`pcbnew.Control.showPadNumbers`). */
   showPadNumbers?: boolean;
+  /** Display Options' "Net names:" (`m_NetNames`, kicad-port/pcbDisplayOptions.ts): on pads, tracks and vias by the mode; KiCad's 3 (pads & tracks) when absent (UI-LEFT-3 P3-1). */
+  netNamesMode?: NetNamesMode;
+  /** "Clearance Outlines" > "Tracks:" (`m_TrackClearance`): the board's tracks and vias show theirs with "Show always", the router's preview by the mode (UI-LEFT-3 P3-6). */
+  trackClearance?: TrackClearanceMode;
+  /** "Show pad clearance" (`m_PadClearance`). */
+  padClearance?: boolean;
+  /** `GetOwnClearance( layer )` of the items on the active copper layer (`POST /api/display/clearances`): what the clearance outlines are drawn at; none until fetched. */
+  ownClearances?: DisplayClearances | null;
+  /** `GetHolePlatingThickness()` (`board_rules.hole_plating_nm`): `ADVANCED_CFG::m_HoleWallThickness`, 0.020 mm when absent (UI-LEFT-3 P3-7). */
+  holePlatingNm?: number;
+  /** The board's area on screen (set by `paintBoard`): where a track's net names are placed (`renderNetNameForSegment`'s viewport). */
+  viewBox?: ViewBox;
   /** The drill/place file origin (`pcbnew.EditorControl.drillOrigin`), drawn as KiCad's red circle-and-cross when it is not at (0, 0). */
   auxOrigin?: [number, number] | null;
   /** The point the grid is anchored at (`common.Control.gridSetOrigin`): the grid dots follow it and its marker is drawn when it is not at (0, 0). */
@@ -517,9 +532,14 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   ctx.restore();
 }
 
-/** `m_holePlatingThickness` (`BOARD_DESIGN_SETTINGS::GetHolePlatingThickness()`, Board Setup's 0.018 mm, which the state does not send) times
- * `ADVANCED_CFG::m_HoleWallPaintingMultiplier` (1.5): the width a hole wall is painted at. */
-const HOLE_WALL_NM = 18_000 * 1.5;
+/** `ADVANCED_CFG::m_HoleWallThickness` (`common/advanced_config.cpp`: 0.020 mm), `GetHolePlatingThickness()` of a state that does not say (UI-LEFT-3 P3-7). */
+const HOLE_PLATING_NM = 20_000;
+
+/** `m_holePlatingThickness` (`BOARD_DESIGN_SETTINGS::GetHolePlatingThickness()`: `ADVANCED_CFG::m_HoleWallThickness`, not the stackup's -- `board_rules.hole_plating_nm`)
+ * times `ADVANCED_CFG::m_HoleWallPaintingMultiplier` (1.5): the width a hole wall is painted at. */
+function holeWallNm(opts: Pick<PaintOptions, "holePlatingNm">): number {
+  return (opts.holePlatingNm ?? HOLE_PLATING_NM) * 1.5;
+}
 
 /** The pad net-name layer of a pad (`PAD::ViewGetLayers`): a pad on more than one copper layer -- or a plated one -- `LAYER_PAD_NETNAMES`, an SMD pad its side's. */
 function padNamesLayer(pad: Pad, side: Part["side"]): string {
@@ -550,7 +570,7 @@ function padCopperOn(pad: Pad, layer: string, sideCopper: string, copper: readon
  * - `PAD_COPPER_LAYER_FOR( layer )`: the pad's copper on that copper layer, in the layer's colour ("Pad and via copper and clearance outlines take their color
  *   from the copper layer") -- a through-hole pad on every copper layer it flashes on, each its own shape (`PADSTACK::ForEachUniqueLayer`), the active layer's
  *   on top (`SetTopLayer`); active in High Contrast Mode on the primary layer only (`m_highContrastLayers.count( aLayer )`);
- * - `LAYER_PAD_HOLEWALLS`: a plated hole's wall, `HOLE_WALL_NM` wide round the hole in the via-hole colour ("Use via 'golden copper' hole color for pad hole walls
+ * - `LAYER_PAD_HOLEWALLS`: a plated hole's wall, `holeWallNm` wide round the hole in the via-hole colour ("Use via 'golden copper' hole color for pad hole walls
  *   for contrast"); `LAYER_PAD_PLATEDHOLES`: the hole in the background's colour; `LAYER_NON_PLATEDHOLES`: an unplated one in its own colour -- over all the
  *   copper; active on a copper layer (`LAYER_PAD_PLATEDHOLES` is high contrast with a copper layer only);
  * - `LAYER_PAD_NETNAMES` / `LAYER_PAD_FR_NETNAMES` / `LAYER_PAD_BK_NETNAMES`: the number and net name, only on an active pad;
@@ -616,7 +636,7 @@ function drawPads(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part
           withLook(ctx, look(pad, "hole", ""), () => {
             if (pathForHole(ctx, pad)) {
               ctx.strokeStyle = copperPaint(layerColor("pad_th"), pad.net, opts);
-              ctx.lineWidth = 2 * Math.max(HOLE_WALL_NM, hairlineNm(view, 1));
+              ctx.lineWidth = 2 * Math.max(holeWallNm(opts), hairlineNm(view, 1));
               ctx.stroke();
             } else {
               // no hole size from the backend: the pad's outline, as before
@@ -649,16 +669,18 @@ function drawPads(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part
       if (look(pad, "copper", nameLayer) !== "active") continue;
       scoped(() => {
         const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
-        if (pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10) {
+        // `if( displayOpts->m_NetNames == 1 || displayOpts->m_NetNames == 3 ) netname = aPad->GetDisplayNetname();` (UI-LEFT-3 P3-1)
+        const named = !!pad.net && netNamesOnPads(opts.netNamesMode ?? 3) && pad.w * view.scale > 22 && pad.h * view.scale > 10;
+        if (named) {
           ctx.fillStyle = "rgba(0,0,0,0.75)";
           const fontNm = Math.min(pad.w, pad.h) * 0.35;
           ctx.font = `${fontNm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           // With the number on too, the two share the pad: the net name drops below the middle (`Y_offset_netname`).
-          ctx.fillText(pad.net, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
+          ctx.fillText(pad.net!, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
         }
-        if (numbered) drawPadNumber(ctx, pad, !!pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10, layerColor("pad_netname"), opts.viewFlipped);
+        if (numbered) drawPadNumber(ctx, pad, named, layerColor("pad_netname"), opts.viewFlipped);
       });
     }
   }
@@ -795,7 +817,7 @@ function drawViaCopper(ctx: CanvasRenderingContext2D, view: ViewTransform, board
 }
 
 /**
- * The vias' holes (`LAYER_VIA_HOLEWALLS`, `LAYER_VIA_HOLES`), over every copper layer: the wall a disc `HOLE_WALL_NM` wider than the hole -- no wider than the via's
+ * The vias' holes (`LAYER_VIA_HOLEWALLS`, `LAYER_VIA_HOLES`), over every copper layer: the wall a disc `holeWallNm` wider than the hole -- no wider than the via's
  * top copper -- in the hole-wall colour ("Underpaint the hole so that there aren't artifacts at its edge"); the hole a disc in the via-hole colour, or for a blind,
  * buried or micro via between inner layers its top half in its top layer's colour and its bottom half in its bottom layer's. Active in High Contrast Mode with a
  * copper layer primary (a blind, buried or micro via one it spans).
@@ -813,7 +835,7 @@ function drawViaHoles(ctx: CanvasRenderingContext2D, view: ViewTransform, board:
       ctx.save();
       ctx.globalAlpha *= viaAlpha;
       if (which === "walls") {
-        const radius = Math.min(v.drill / 2 + HOLE_WALL_NM, viaWidthOn(v, v.from) / 2);
+        const radius = Math.min(v.drill / 2 + holeWallNm(opts), viaWidthOn(v, v.from) / 2);
         if (radius > v.drill / 2) {
           ctx.beginPath();
           ctx.arc(v.x, v.y, Math.max(radius, v.drill / 2 + hairlineNm(view, 0.5)), 0, Math.PI * 2);
@@ -846,6 +868,244 @@ function drawViaHoles(ctx: CanvasRenderingContext2D, view: ViewTransform, board:
       }
       ctx.restore();
     });
+  }
+}
+
+/**
+ * What the last board paint drew of Display Options' annotations, for the browser checks (`window.__edaDisplay`, UI-LEFT-3 P3-1, P3-6): the net names written on
+ * tracks and vias, the clearance outlines (item, its clearance) and the route's clearance outlines.
+ */
+interface DisplayRecord {
+  netnames: { kind: "track" | "via"; id: string; text: string; x: number; y: number; angleRad: number; sizeNm: number; color: string }[];
+  clearances: { kind: "track" | "via" | "pad"; id: string; clearance: number; color: string }[];
+  route: { kind: "track" | "via"; clearance: number }[];
+}
+
+function displayRecord(): DisplayRecord | null {
+  if (typeof window === "undefined") return null;
+  return (window as unknown as { __edaDisplay?: DisplayRecord }).__edaDisplay ?? null;
+}
+
+/** A board paint starts: what it drew before is forgotten. */
+function beginDisplayRecord(): void {
+  if (typeof window === "undefined") return;
+  (window as unknown as { __edaDisplay?: DisplayRecord }).__edaDisplay = { netnames: [], clearances: [], route: [] };
+}
+
+/** `PCB_RENDER_SETTINGS::LoadColors`' "Netnames for copper layers": the track net names' colour (`board.track_net_names`), inverted over a copper layer brighter than
+ * half (`m_layerColors[layer].GetBrightness() > 0.5`: the weighted W3C formula). */
+function trackNetNameColour(layer: string): string {
+  const label = layerColor("NETNAMES_LAYER_ID_START");
+  const copper = parseColor(layerColor(copperColorKey(layer)));
+  const c = parseColor(label);
+  if (!copper || !c) return label;
+  const brightness = copper.r * 0.299 + copper.g * 0.587 + copper.b * 0.117;
+  return brightness > 0.5 ? cssOf({ r: 1 - c.r, g: 1 - c.g, b: 1 - c.b, a: c.a }) : label;
+}
+
+/** `GAL::BitmapText` of `text` centred at (x, y), turned by `angleRad` (canvas radians), in the stroke font: `sizeNm` the glyph size, `penNm` the pen; the view's flip
+ * does not mirror it ("Prevent text flipping when view is flipped"). */
+function bitmapText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, angleRad: number, sizeNm: number, penNm: number, color: string, viewFlipped?: boolean): void {
+  ctx.save();
+  ctx.translate(x, y);
+  if (angleRad) ctx.rotate(angleRad);
+  // (0, size * 0.35) is the baseline that puts the glyphs' middle on the centre (`GR_TEXT_V_ALIGN_CENTER`), as `drawPadNumber`'s
+  drawStrokeText(ctx, text, 0, sizeNm * 0.35, { sizeNm, justify: "center", thicknessNm: penNm, color, keepReadable: viewFlipped, readableAnchorKept: true });
+  ctx.restore();
+}
+
+/** `GetDisplayNetname()`: the net's short name, unescaped. */
+function displayNetname(net: string): string {
+  return unescapeString(shortNetname(net));
+}
+
+/**
+ * The tracks' net names on copper layer `onLayer` (`NETNAMES_LAYER_INDEX( layer )`, UI-LEFT-3 P3-1): `PCB_PAINTER::draw( const PCB_TRACK* )`'s netname branch with
+ * "Net names:" on tracks (`m_NetNames >= 2`), a track with a net only; `PCB_TRACK::ViewGetLOD` hides them on a dimmed layer ("Hide netnames on dimmed tracks") and
+ * under its zoom threshold (kicad-port/pcbDisplayOptions.ts `trackNetNameLabels`, which places them as `renderNetNameForSegment` does). An arc has none ("Anyone
+ * fancy implementing text on a path?"). The colour is the layer's net-name colour, darkened or brightened by the net highlight (`GetColor`).
+ */
+function drawTrackNetNames(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, onLayer: string): void {
+  if (!board.routing || !opts.viewBox || !netNamesOnTracks(opts.netNamesMode ?? 3) || !on(opts.layerVisible, "tracks") || opts.layerVisible[onLayer] === false) return;
+  if (opts.highContrast && opts.activeLayer && layerNameOfKey(opts.activeLayer) !== onLayer) return;
+  const base = trackNetNameColour(onLayer);
+  for (const t of board.routing.tracks) {
+    if (t.layer !== onLayer || !t.net || t.arc_mid) continue;
+    const name = displayNetname(t.net);
+    const color = withNetHighlight(base, t.net, opts.netHighlight);
+    for (let i = 0; i + 1 < t.pts.length; i++) {
+      for (const l of trackNetNameLabels(t.pts[i]!, t.pts[i + 1]!, t.width, name, opts.viewBox, view.scale)) {
+        bitmapText(ctx, name, l.x, l.y, l.angleRad, l.sizeNm, l.penNm, color, opts.viewFlipped);
+        displayRecord()?.netnames.push({ kind: "track", id: t.id, text: name, x: l.x, y: l.y, angleRad: l.angleRad, sizeNm: l.sizeNm, color });
+      }
+    }
+  }
+}
+
+/** A via's layer numbers as `draw( const PCB_VIA* )` writes them (1 the front, the copper layer count the back), or null for a through via (`showLayers`). */
+function viaLayerNumbers(v: Via, copper: readonly string[]): [number, number] | null {
+  if (!v.type) return null;
+  const a = copper.indexOf(v.from);
+  const b = copper.indexOf(v.to);
+  if (a < 0 || b < 0) return null;
+  return [Math.min(a, b) + 1, Math.max(a, b) + 1];
+}
+
+/**
+ * `LAYER_VIA_NETNAMES` (UI-LEFT-3 P3-1): `draw( const PCB_VIA* )`'s description layer -- the net name in the via's ring (any "Net names:" but "Do not show") and a blind,
+ * buried or micro via's layer pair ("1-2"), laid out by kicad-port/pcbDisplayOptions.ts `viaNetNameLayout`, in the via net-name colour. `PCB_VIA::ViewGetLOD`: only a
+ * via flashed on a shown layer -- in High Contrast Mode on the primary one -- once the zoom gives it 10 mm of width.
+ */
+function drawViaNetNames(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions): void {
+  if (!board.routing || !on(opts.layerVisible, "vias")) return;
+  const copper = opts.copperLayers ?? board.layers.filter(isCopper);
+  const primary = opts.highContrast && opts.activeLayer ? layerNameOfKey(opts.activeLayer) : null;
+  const showNets = netNamesOnVias(opts.netNamesMode ?? 3);
+  const base = layerColor("LAYER_VIA_NETNAMES");
+  for (const v of board.routing.vias) {
+    const flashes = (l: string) => viaSpans(v, l, copper) && (!v.flashed || v.flashed.includes(l));
+    if (primary ? !flashes(primary) : !copper.some((l) => opts.layerVisible[l] !== false && flashes(l))) continue;
+    if (!lodShownWidth(view, v.d, 10_000_000)) continue;
+    const layout = viaNetNameLayout(v.d, v.net ? displayNetname(v.net) : "", showNets, viaLayerNumbers(v, copper));
+    if (!layout) continue;
+    const color = withNetHighlight(base, v.net, opts.netHighlight);
+    for (const line of layout.lines) {
+      bitmapText(ctx, line.text, v.x, v.y + line.dy, 0, layout.sizeNm, layout.penNm, color, opts.viewFlipped);
+      displayRecord()?.netnames.push({ kind: "via", id: v.id, text: line.text, x: v.x, y: v.y + line.dy, angleRad: 0, sizeNm: layout.sizeNm, color });
+    }
+  }
+}
+
+/** `lodScaleForThreshold( aView, whatNm, thresholdNm ) < m_scale`. */
+function lodShownWidth(view: ViewTransform, whatNm: number, thresholdNm: number): boolean {
+  return whatNm > 0 && thresholdNm / whatNm < view.scale / ((91 * 1e-9) / 0.0254);
+}
+
+/** The outline of a track `width` wide along `a`-`b`, `DrawSegment( a, b, width )` stroked: a stadium. */
+function stadiumPath(ctx: CanvasRenderingContext2D, a: readonly [number, number], b: readonly [number, number], width: number): void {
+  const r = width / 2;
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+  ctx.moveTo(b[0] + r * Math.cos(ang + Math.PI / 2), b[1] + r * Math.sin(ang + Math.PI / 2));
+  ctx.arc(b[0], b[1], r, ang + Math.PI / 2, ang - Math.PI / 2, true);
+  ctx.arc(a[0], a[1], r, ang - Math.PI / 2, ang + Math.PI / 2, true);
+  ctx.closePath();
+}
+
+/** The outline of an arc track `width` wide through `a`, `mid`, `b` (`DrawArcSegment( center, radius, start, angle, width )` stroked); a stadium when the three are in a line. */
+function arcBandPath(ctx: CanvasRenderingContext2D, a: readonly [number, number], mid: readonly [number, number], b: readonly [number, number], width: number): void {
+  const d = 2 * (a[0] * (mid[1] - b[1]) + mid[0] * (b[1] - a[1]) + b[0] * (a[1] - mid[1]));
+  if (Math.abs(d) < 1e-9) return stadiumPath(ctx, a, b, width);
+  const sq = (p: readonly [number, number]) => p[0] * p[0] + p[1] * p[1];
+  const cx = (sq(a) * (mid[1] - b[1]) + sq(mid) * (b[1] - a[1]) + sq(b) * (a[1] - mid[1])) / d;
+  const cy = (sq(a) * (b[0] - mid[0]) + sq(mid) * (a[0] - b[0]) + sq(b) * (mid[0] - a[0])) / d;
+  const radius = Math.hypot(a[0] - cx, a[1] - cy);
+  const t0 = Math.atan2(a[1] - cy, a[0] - cx);
+  const t1 = Math.atan2(b[1] - cy, b[0] - cx);
+  // the way from a to b that passes the mid point
+  const ccw = (b[0] - a[0]) * (mid[1] - a[1]) - (b[1] - a[1]) * (mid[0] - a[0]) > 0;
+  const h = width / 2;
+  const outer = radius + h;
+  const inner = Math.max(radius - h, 0);
+  ctx.arc(cx, cy, outer, t0, t1, ccw);
+  ctx.arc(b[0], b[1], h, t1, t1 + Math.PI, ccw);
+  ctx.arc(cx, cy, inner, t1, t0, !ccw);
+  ctx.arc(a[0], a[1], h, t0 + Math.PI, t0, ccw);
+  ctx.closePath();
+}
+
+/**
+ * `CLEARANCE_LAYER_FOR( layer )` (UI-LEFT-3 P3-6): the clearance outlines of copper layer `onLayer`, which only the active copper layer shows (`PCB_EDIT_FRAME::SetActiveLayer`:
+ * "Only show pad, via and track clearances when a copper layer is active and then only show the clearance layer for that copper layer") -- each a hairline
+ * (`m_outlineWidth`) in the layer's colour (an unplated pad's in the unplated holes' colour), the item's own clearance out (`GetOwnClearance( layer )`, the server's
+ * `opts.ownClearances`):
+ * - with "Tracks:" "Show always" (`m_TrackClearance == SHOW_WITH_VIA_ALWAYS`) a track's `DrawSegment( start, end, width + clearance * 2 )`, an arc's band, a via's circle
+ *   of its width on the layer (its hole and plating where it is not flashed) plus the clearance;
+ * - with "Show pad clearance" (`m_PadClearance`) a pad's copper on the layer inflated by its clearance (`TransformShapeToPolygon( .., clearance, .. )`; a custom pad's
+ *   outline as it is), or where it does not flash its hole's (`GetEffectiveHoleShape`), when the clearance is positive.
+ * The clearance layers are not among High Contrast Mode's active layers (`SetHighContrastLayer`), so with it on they are dimmed (or hidden) unless the net is
+ * highlighted.
+ */
+function drawClearanceOutlines(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, onLayer: string): void {
+  const own = opts.ownClearances;
+  if (!own?.ok || own.layer !== onLayer || opts.layerVisible[onLayer] === false) return;
+  const copper = opts.copperLayers ?? board.layers.filter(isCopper);
+  const layerCss = layerColor(copperColorKey(onLayer));
+  const hairline = hairlineNm(view, 1);
+  const look = (net: string | null | undefined): ContrastLook => (!opts.highContrast || isHighlighted(net, opts.netHighlight) ? "active" : opts.appearance?.contrastHidden ? "hide" : "dim");
+  const outline = (net: string | null | undefined, css: string, path: () => void) =>
+    withLook(ctx, look(net), () => {
+      ctx.beginPath();
+      path();
+      ctx.strokeStyle = css;
+      ctx.lineWidth = hairline;
+      ctx.stroke();
+    });
+  if (boardShowsTrackClearance(opts.trackClearance ?? "routing_via") && board.routing) {
+    if (on(opts.layerVisible, "tracks")) {
+      for (const t of board.routing.tracks) {
+        const cs = t.layer === onLayer ? own.tracks?.[t.id] : undefined;
+        if (!cs) continue;
+        const css = copperPaint(layerCss, t.net, opts);
+        drawTrackClearance(t, cs, (path) => outline(t.net, css, () => path(ctx)));
+        displayRecord()?.clearances.push({ kind: "track", id: t.id, clearance: Math.max(...cs), color: css });
+      }
+    }
+    if (on(opts.layerVisible, "vias")) {
+      for (const v of board.routing.vias) {
+        const c = own.vias?.[v.id];
+        if (c === undefined) continue;
+        const flashed = viaSpans(v, onLayer, copper) && (!v.flashed || v.flashed.includes(onLayer));
+        const radius = flashed ? viaWidthOn(v, onLayer) / 2 : v.drill / 2 + (opts.holePlatingNm ?? HOLE_PLATING_NM);
+        outline(v.net, copperPaint(layerCss, v.net, opts), () => ctx.arc(v.x, v.y, radius + c, 0, Math.PI * 2));
+        displayRecord()?.clearances.push({ kind: "via", id: v.id, clearance: c, color: copperPaint(layerCss, v.net, opts) });
+      }
+    }
+  }
+  if ((opts.padClearance ?? true) && on(opts.layerVisible, "pads")) {
+    for (const part of board.parts) {
+      if (!part.placed || !footprintShown(opts.layerVisible, part)) continue;
+      const sideCopper = part.side === "bottom" ? "B.Cu" : "F.Cu";
+      const ids = padIds(part);
+      (part.pads ?? []).forEach((pad, i) => {
+        const c = own.pads?.[ids[i]!];
+        if (!c || c <= 0) return;
+        const npth = pad.kind === "non_plated_hole";
+        const css = npth ? layerColor("LAYER_NON_PLATEDHOLES") : copperPaint(layerCss, pad.net, opts);
+        const shape = padCopperOn(pad, onLayer, sideCopper, copper);
+        displayRecord()?.clearances.push({ kind: "pad", id: ids[i]!, clearance: c, color: css });
+        if (shape) {
+          // a padstack layer's own copper is drawn from its board box (no turn); the pad itself from its shape, turned with it
+          const contours = shape === pad ? padContours(pad, padPlacement(pad, part), [c, c]) : padContours({ ...shape, size: undefined }, padPlacement({ ...shape, size: undefined }, part), [c, c]);
+          outline(pad.net, css, () => {
+            for (const contour of contours) {
+              contour.forEach(([x, y], k) => (k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+              ctx.closePath();
+            }
+          });
+        } else if (pad.th && (pad.drill || pad.slot)) {
+          // `GetEffectiveHoleShape()`: `DrawSegment( slot.A, slot.B, slot.width + 2 * clearance )`
+          const cx = pad.px ?? pad.x;
+          const cy = pad.py ?? pad.y;
+          const [w, h] = pad.slot ? (pad.w < pad.h ? [pad.slot[1], pad.slot[0]] : [pad.slot[0], pad.slot[1]]) : [pad.drill!, pad.drill!];
+          const len = Math.max(w, h) - Math.min(w, h);
+          const along: [number, number] = w >= h ? [len / 2, 0] : [0, len / 2];
+          outline(pad.net, css, () => stadiumPath(ctx, [cx - along[0], cy - along[1]], [cx + along[0], cy + along[1]], Math.min(w, h) + 2 * c));
+        }
+      });
+    }
+  }
+}
+
+/** A track's clearance outlines, `cs` its segments' clearances in order (an arc one): each segment's stadium `width + clearance * 2` wide, an arc's band. */
+function drawTrackClearance(t: Track, cs: readonly number[], draw: (path: (ctx: CanvasRenderingContext2D) => void) => void): void {
+  if (t.arc_mid && t.pts.length >= 2) {
+    const c = cs[0] ?? 0;
+    draw((ctx) => arcBandPath(ctx, t.pts[0]!, t.arc_mid!, t.pts[t.pts.length - 1]!, t.width + c * 2));
+    return;
+  }
+  for (let i = 0; i + 1 < t.pts.length; i++) {
+    const c = cs[i] ?? cs[cs.length - 1] ?? 0;
+    draw((ctx) => stadiumPath(ctx, t.pts[i]!, t.pts[i + 1]!, t.width + c * 2));
   }
 }
 
@@ -1617,6 +1877,42 @@ function strokeViaGhost(ctx: CanvasRenderingContext2D, view: ViewTransform, x: n
   ctx.restore();
 }
 
+/**
+ * The route's clearance outlines (UI-LEFT-3 P3-6): `ROUTER::movePlacing` displays the line being placed and its via with their own clearance
+ * (`Clearance( item, nullptr )`, the preview's `clearance` and `via_clearance`), and `ROUTER_PREVIEW_ITEM::drawShape` draws it first, under the item -- a line
+ * stroked `width + 2 * clearance` wide in `DARKDARKGRAY` at 0.9 alpha, a via a disc of its radius plus the clearance at 0.7 -- when "Tracks:" asks for it
+ * (`PNS_KICAD_IFACE::DisplayItem`'s `ShowClearance`: a track always but with "Do not show clearances", a via with the "w/ via" modes and up).
+ */
+function drawRouteClearance(ctx: CanvasRenderingContext2D, draw: Extract<DrawState, { kind: "route" }>, mode: TrackClearanceMode): void {
+  const c = draw.clearance ?? 0;
+  if (c > 0 && routerShowsClearance(mode, "track", false)) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(72, 72, 72, 0.9)";
+    ctx.lineWidth = draw.width + 2 * c;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    displayRecord()?.route.push({ kind: "track", clearance: c });
+    for (const pts of [...(draw.runs ?? []).map((r) => r.pts), draw.pts]) {
+      if (pts.length < 1) continue;
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      if (pts.length === 1) ctx.lineTo(pts[0]![0], pts[0]![1]);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  const vc = draw.viaClearance ?? 0;
+  if (draw.via && vc > 0 && routerShowsClearance(mode, "via", false)) {
+    ctx.save();
+    displayRecord()?.route.push({ kind: "via", clearance: vc });
+    ctx.fillStyle = "rgba(72, 72, 72, 0.7)";
+    ctx.beginPath();
+    ctx.arc(draw.via.x, draw.via.y, draw.via.diameter / 2 + vc, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, viewport: readonly [number, number, number, number]) {
   const draw = opts.drawState;
   if (!draw) return;
@@ -1640,6 +1936,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
 
   if (draw.kind === "route") {
     const violationColor = "#ff3333";
+    drawRouteClearance(ctx, draw, opts.trackClearance ?? "routing_via");
     for (const run of draw.runs ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     strokeDashedPolyline(ctx, view, draw.pts, draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer)), draw.width, false);
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width, false);
@@ -1880,10 +2177,18 @@ function layersInUse(board: BoardState): Set<string> {
   return used;
 }
 
-/** Whether a pass can draw anything: a layer nothing is on is skipped; the pads' and vias' copper passes run on the board's copper layers. */
-function passHasWork(pass: GalPass, used: ReadonlySet<string>, copper: readonly string[] | undefined): boolean {
-  if (pass.kind === "gal") return pass.layer === "LAYER_VIA_HOLES" || pass.layer === "LAYER_VIA_HOLEWALLS" || PAD_GAL_LAYERS.has(pass.layer);
-  if (pass.kind === "netnames" || pass.kind === "clearance") return false;
+/**
+ * Whether a pass can draw anything: a layer nothing is on is skipped; the pads' and vias' copper passes run on the board's copper layers; a copper layer's net names
+ * with "Net names:" on tracks; its clearance outlines on the active copper layer alone, once its clearances are known and one of the switches asks for them.
+ */
+function passHasWork(pass: GalPass, used: ReadonlySet<string>, copper: readonly string[] | undefined, opts?: PaintOptions): boolean {
+  if (pass.kind === "gal") return pass.layer === "LAYER_VIA_HOLES" || pass.layer === "LAYER_VIA_HOLEWALLS" || pass.layer === "LAYER_VIA_NETNAMES" || PAD_GAL_LAYERS.has(pass.layer);
+  if (pass.kind === "netnames") return !!opts && netNamesOnTracks(opts.netNamesMode ?? 3) && (copper ?? ["F.Cu", "B.Cu"]).includes(pass.layer);
+  if (pass.kind === "clearance") {
+    if (!opts || opts.ownClearances?.layer !== pass.layer) return false;
+    const active = opts.activeLayer ? layerNameOfKey(opts.activeLayer) : "F.Cu";
+    return active === pass.layer && (boardShowsTrackClearance(opts.trackClearance ?? "routing_via") || (opts.padClearance ?? true));
+  }
   if (pass.kind === "pad" || pass.kind === "via") return (copper ?? ["F.Cu", "B.Cu"]).includes(pass.layer);
   return used.has(pass.layer);
 }
@@ -1919,6 +2224,7 @@ function paintPass(ctx: CanvasRenderingContext2D, view: ViewTransform, b: BoardS
     case "gal":
       if (pass.layer === "LAYER_VIA_HOLEWALLS") drawViaHoles(ctx, view, b, o, "walls");
       else if (pass.layer === "LAYER_VIA_HOLES") drawViaHoles(ctx, view, b, o, "holes");
+      else if (pass.layer === "LAYER_VIA_NETNAMES") drawViaNetNames(ctx, view, b, o);
       else if (PAD_GAL_LAYERS.has(pass.layer)) for (const part of b.parts) drawFootprint(ctx, view, part, o);
       return;
     case "item":
@@ -1936,8 +2242,13 @@ function paintPass(ctx: CanvasRenderingContext2D, view: ViewTransform, b: BoardS
         drawPcbItems(ctx, view, b, o);
       });
       return;
+    case "netnames":
+      drawTrackNetNames(ctx, view, b, o, pass.layer);
+      return;
+    case "clearance":
+      drawClearanceOutlines(ctx, view, b, o, pass.layer);
+      return;
     default:
-      // a copper layer's track net names and clearance outlines: not drawn by the studio
       return;
   }
 }
@@ -1954,6 +2265,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   installColourScopes(ctx);
   // what the texts of this paint are, for `window.__edaText.pcb` (components/text/kicadTextPaint.ts)
   beginTextRecord("pcb");
+  beginDisplayRecord();
   const opts: PaintOptions = { ...given, dimByColour: true };
   // The net highlight darkens every item that is not of a highlighted net (`GetColor`'s single-net highlight branch: an item that is not a connected copper
   // item has net -1, so the silkscreen, the outline and the texts darken too); a selected item keeps its colour (`!selected`). The copper items are
@@ -1966,6 +2278,9 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // kicad-port/galLayerOrder.ts), back to front, each a pass of the painter (UI-LEFT-2 PP3). KiCad's frame always has an active layer; none here stands for F.Cu.
   const order = galDrawOrder(opts.activeLayer ? layerNameOfKey(opts.activeLayer) : "F.Cu");
   opts.copperLayers = fullBoard.layers.filter(isCopper);
+  // the board on screen (`renderNetNameForSegment`'s viewport) and `GetHolePlatingThickness()` (UI-LEFT-3 P3-1, P3-7)
+  opts.viewBox = { x0: -view.x / view.scale, y0: -view.y / view.scale, x1: (widthPx - view.x) / view.scale, y1: (heightPx - view.y) / view.scale };
+  opts.holePlatingNm = fullBoard.board_rules?.hole_plating_nm ?? opts.holePlatingNm;
   // A PCB selection in the hand (kicad-port/pcbCarry.ts): the rest of the board is painted as it is, the carried items afterwards through the carry transform.
   const preview = opts.movePreview?.kind === "pcb" ? opts.movePreview : null;
   const carry = preview ? splitCarried(fullBoard, preview.refs) : null;
@@ -2025,7 +2340,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       continue;
     }
     const pass = galPassOf(gal);
-    if (!passHasWork(pass, used, opts.copperLayers)) continue;
+    if (!passHasWork(pass, used, opts.copperLayers, opts)) continue;
     for (const p of passes) withAlpha(ctx, p.alpha, () => paintPass(ctx, view, p.b, { ...opts, galPass: pass }, withUnlit));
   }
   // The carried items, layer by layer as the board's, through the transform the drop would apply.
@@ -2042,7 +2357,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       else if (gal === "LAYER_VIA_STITCHING") drawViaStitches(ctx, view, carry.moving, own.layerVisible, own.selection);
       else if (!special[gal]) {
         const pass = galPassOf(gal);
-        if (passHasWork(pass, movingUsed, opts.copperLayers)) paintPass(ctx, view, carried, { ...own, galPass: pass }, withUnlit, carry.fields);
+        if (passHasWork(pass, movingUsed, opts.copperLayers, opts)) paintPass(ctx, view, carried, { ...own, galPass: pass }, withUnlit, carry.fields);
       }
     }
     drawSelectedGroups(ctx, view, carry.moving, own);
@@ -2058,7 +2373,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       for (const gal of order) {
         if (special[gal]) continue;
         const pass = galPassOf(gal);
-        if (passHasWork(pass, litUsed, opts.copperLayers)) paintPass(ctx, view, lit.board, { ...own, galPass: pass }, (draw) => draw(), lit.fields);
+        if (passHasWork(pass, litUsed, opts.copperLayers, opts)) paintPass(ctx, view, lit.board, { ...own, galPass: pass }, (draw) => draw(), lit.fields);
       }
     });
   }

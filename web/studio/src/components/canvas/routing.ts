@@ -45,7 +45,7 @@ export async function startInteractiveRoute(x: number, y: number, layer: string,
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return false;
   }
-  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width: preview.width ?? width ?? 250_000, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined, sizes: preview.sizes };
+  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width: preview.width ?? width ?? 250_000, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined, sizes: preview.sizes, clearance: preview.clearance ?? null, viaClearance: preview.via_clearance ?? null };
   // `ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer` is saved whatever the start layer, the route starts on `getStartLayer`'s layer -- the
   // start item's when it is not on the active one -- and that becomes the active layer until the route ends (r5 R5-1; `finishInteractive` always
   // gives `m_originalActiveLayer` back, R6-R6)

@@ -291,6 +291,9 @@ export type DrawState =
       widthOverride?: boolean;
       /** The router's sizes' layer pairs (`PairedLayer`): see kicad-port/routeTool.ts. */
       sizesPairs?: Record<string, string>;
+      /** The head's and its via's own clearances, for their clearance outlines: see kicad-port/routeTool.ts. */
+      clearance?: Nm | null;
+      viaClearance?: Nm | null;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's

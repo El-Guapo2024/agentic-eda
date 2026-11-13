@@ -60,6 +60,9 @@ export interface RouteDrawState {
    *  each via command's own (`handleLayerSwitch`: `ClearLayerPairs(); AddLayerPair( currentLayer, targetLayer )`) -- read by Place Through Via's implicit
    *  target (kicad-port/routerVia.ts `planViaCommand`, UI-LEFT R5). */
   sizesPairs?: Record<string, string>;
+  /** The head's and its via's own clearances (`RoutePreview.clearance`, `via_clearance`): their clearance outlines (UI-LEFT-3 P3-6). */
+  clearance?: number | null;
+  viaClearance?: number | null;
 }
 
 /** The `DrawState` "route" patch for a successful `RoutePreview` reply,
@@ -82,6 +85,8 @@ export function drawStateFromPreview(current: RouteDrawState, preview: RoutePrev
     snappedEnd: preview.snapped_end,
     displaced: preview.displaced,
     displacedVias: preview.displaced_vias,
+    clearance: preview.clearance ?? null,
+    viaClearance: preview.via_clearance ?? null,
   };
 }
 

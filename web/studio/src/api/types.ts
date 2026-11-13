@@ -451,6 +451,17 @@ export interface Track {
 }
 
 /** `eda_model::via_extra::ViaDrillProps`: a backdrill or tertiary drill (`PADSTACK::DRILL_PROPS`). */
+/** `POST /api/display/clearances` (crates/cli/src/display_api.rs): every item's own clearance on one copper layer (`GetOwnClearance( layer )`), for the
+ * clearance outlines (UI-LEFT-3 P3-6). A track has one per segment, in order (an arc one). */
+export interface DisplayClearances {
+  ok: boolean;
+  message?: string;
+  layer?: string;
+  tracks?: Record<string, Nm[]>;
+  vias?: Record<string, Nm>;
+  pads?: Record<string, Nm>;
+}
+
 export interface ViaDrillProps {
   size: Nm;
   start: string;
@@ -1356,6 +1367,8 @@ export interface BoardState {
     net_classes: NetClass[];
     hole_to_hole_min_nm: Nm;
     hole_clearance_nm: Nm;
+    /** `BOARD_DESIGN_SETTINGS::GetHolePlatingThickness()`: `ADVANCED_CFG::m_HoleWallThickness` (0.020 mm), what a hole wall is painted at (UI-LEFT-3 P3-7). Absent from an older server. */
+    hole_plating_nm?: Nm;
     silk_clearance_nm: Nm;
     annular_width_min_nm: Nm;
     min_silk_text_height_nm: Nm;
@@ -2669,6 +2682,10 @@ export interface RoutePreview {
   sizes?: RouteSizesInfo;
   colliding: boolean;
   layer: string;
+  /** `ROUTER::movePlacing`'s `Clearance( head, nullptr )`: the clearance outline the head is drawn with (Display Options' "Tracks:" clearance mode, UI-LEFT-3 P3-6). */
+  clearance?: Nm | null;
+  /** The same of the via at the head's end (`Clearance( &via, nullptr )`, raised by the hole's excess clearance); null with no via. */
+  via_clearance?: Nm | null;
   /** The live, not-yet-fixed head: last fixed point (or the route's
    * origin) to the cursor, already resolved (walked/shoved/mark-obstacled)
    * server-side -- draw this directly, no client-side posture math needed. */

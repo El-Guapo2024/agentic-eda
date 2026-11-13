@@ -31,6 +31,7 @@
 // "Cmd" and Alt reads "Option", as in the C++.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
+import { NET_NAMES_CHOICES, TRACK_CLEARANCE_CHOICES, sanitizeNetNamesMode, sanitizeTrackClearanceMode } from "../kicad-port/pcbDisplayOptions";
 import { assignScrollModifier, DEFAULT_PREFERENCES, MOUSE_SCROLL_DEFAULTS, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
@@ -227,6 +228,9 @@ export function PreferencesDialog() {
   // What the board's and the schematic's Editing Options edit outside the preferences (their line modes, the ratsnest's curves).
   const editingExtraNow = (): EditingExtra => ({ pcbConstrain45: state.pcbx.angleSnapMode !== "direct", ratsnestCurved: state.ratsnestCurved, schLineMode: state.schLineMode });
   const [editingExtra, setEditingExtraState] = useState<EditingExtra>(editingExtraNow);
+  // Display Options' "Show pad numbers" (`m_ViewersDisplay.m_DisplayPadNumbers`), which the studio keeps beside the preferences (`bcx.showPadNumbers`, the same switch as
+  // `pcbnew.Control.showPadNumbers`)
+  const [padNumbers, setPadNumbers] = useState(state.bcx.showPadNumbers);
   const setEditingExtra = (patch: Partial<EditingExtra>) => setEditingExtraState((e) => ({ ...e, ...patch }));
   // each editor's Display Options as edited so far (`PANEL_GAL_OPTIONS` of its frame); OK keeps them
   const [windows, setWindows] = useState<Record<EditorWindow, WindowOptions>>(getCommonOptions().window);
@@ -240,6 +244,7 @@ export function PreferencesDialog() {
       setFpRotationText(String(state.prefs.fpRotationStepDeg));
       setFpExtraState({ lineMode: fpState.lineMode });
       setEditingExtraState(editingExtraNow());
+      setPadNumbers(state.bcx.showPadNumbers);
       setPageState(lastPage);
       setShownPages(new Set([lastPage]));
       setWindows(getCommonOptions().window);
@@ -281,6 +286,7 @@ export function PreferencesDialog() {
     if (shownPages.has("pcb_edit") && angle !== state.pcbx.angleSnapMode) dispatch({ type: "PCBX", patch: { angleSnapMode: angle } });
     if (editingExtra.ratsnestCurved !== state.ratsnestCurved) dispatch({ type: "TOGGLE_RATSNEST_CURVED" });
     if (editingExtra.schLineMode !== state.schLineMode) dispatch({ type: "SET_SCH_LINE_MODE", mode: editingExtra.schLineMode });
+    if (shownPages.has("display_pcb") && padNumbers !== state.bcx.showPadNumbers) dispatch({ type: "BCX", patch: { showPadNumbers: padNumbers } });
     colors.commit();
     for (const h of Object.values(handles)) h?.commit();
     grids.commit();
@@ -319,7 +325,16 @@ export function PreferencesDialog() {
     if (page === "fp_axes") return { run: () => set(defaultsOf(["fpInvertXAxis", "fpInvertYAxis"])), tooltip: RESET_TOOLTIP };
     if (page.startsWith("display_")) {
       const e = page.slice("display_".length) as EditorWindow;
-      // `PANEL_GAL_OPTIONS::ResetPanel( defaults )`: the Grid Display and the Cursor of a fresh settings file
+      // `PANEL_GAL_OPTIONS::ResetPanel( defaults )`: the Grid Display and the Cursor of a fresh settings file; the board editor's `PANEL_DISPLAY_OPTIONS::ResetPanel`
+      // also its clearance outlines, net names and pad numbers (`loadPCBSettings( &cfg )` of a fresh `PCBNEW_SETTINGS`)
+      if (e === "pcb") {
+        const run = () => {
+          set({ pcbNetNames: DEFAULT_PREFERENCES.pcbNetNames, pcbTrackClearance: DEFAULT_PREFERENCES.pcbTrackClearance, pcbPadClearance: DEFAULT_PREFERENCES.pcbPadClearance });
+          setPadNumbers(true);
+          setWindows((all) => ({ ...all, pcb: { ...all.pcb, gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } }));
+        };
+        return { run, tooltip: RESET_TOOLTIP };
+      }
       return { run: () => setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })), tooltip: RESET_TOOLTIP };
     }
     if (page === "fp_graphics") return { run: () => set({ fpTextGraphics: null }), tooltip: `Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values` };
@@ -411,9 +426,50 @@ export function PreferencesDialog() {
           <input type="checkbox" checked={w.alwaysShowCursor} onChange={(e) => setW({ alwaysShowCursor: e.target.checked })} />
           Always show crosshairs
         </label>
+        {editor === "pcb" && pcbDisplayOptions()}
       </div>
     );
   };
+
+  /**
+   * `PANEL_DISPLAY_OPTIONS`' board editor part (UI-LEFT-3 P3-1, P3-6; kicad-port/pcbDisplayOptions.ts): "Clearance Outlines" -- "Tracks:" and "Show pad clearance" --
+   * and "Annotations" -- "Net names:" and "Show pad numbers". Not here: "Use via color for normal through hole padstacks", "Show all fields when parent footprint is
+   * selected", the Cross-probing switches and "Refresh 3D view automatically" (the studio has no such settings yet).
+   */
+  const pcbDisplayOptions = () => (
+    <>
+      {heading("Clearance Outlines")}
+      <div className="filter-row">
+        <span style={{ width: 170 }}>Tracks:</span>
+        <select aria-label="Tracks:" data-testid="pref-track-clearance" value={draft.pcbTrackClearance} onChange={(e) => set({ pcbTrackClearance: sanitizeTrackClearanceMode(e.target.value) })}>
+          {TRACK_CLEARANCE_CHOICES.map((c) => (
+            <option key={c.mode} value={c.mode}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <label className="filter-row">
+        <input type="checkbox" data-testid="pref-pad-clearance" checked={draft.pcbPadClearance} onChange={(e) => set({ pcbPadClearance: e.target.checked })} />
+        Show pad clearance
+      </label>
+      {heading("Annotations")}
+      <div className="filter-row">
+        <span style={{ width: 170 }}>Net names:</span>
+        <select aria-label="Net names:" data-testid="pref-net-names" value={String(draft.pcbNetNames)} onChange={(e) => set({ pcbNetNames: sanitizeNetNamesMode(Number(e.target.value)) })}>
+          {NET_NAMES_CHOICES.map((label, i) => (
+            <option key={label} value={String(i)}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <label className="filter-row">
+        <input type="checkbox" data-testid="pref-pad-numbers" checked={padNumbers} onChange={(e) => setPadNumbers(e.target.checked)} />
+        Show pad numbers
+      </label>
+    </>
+  );
 
   const mousePage = (): ReactNode => (
     <>

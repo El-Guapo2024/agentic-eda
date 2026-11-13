@@ -35,6 +35,7 @@ import type { TextGraphicsDefaults } from "../api/types";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 import { DEFAULT_USER_LAYER_COUNT, sanitizeFpTextItems, sanitizeUserLayerNames, type FpTextItem } from "./fpFieldDefaults";
 import { sanitizeDisplayOrigin, type DisplayOrigin } from "./originTransforms";
+import { DEFAULT_PCB_DISPLAY, sanitizeNetNamesMode, sanitizeTrackClearanceMode, type NetNamesMode, type TrackClearanceMode } from "./pcbDisplayOptions";
 
 /** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
 export function defaultZoomSpeed(isMacPlatform: boolean): number {
@@ -150,6 +151,13 @@ export interface Preferences {
   /** `EESCHEMA_SETTINGS::m_Drawing.new_power_symbols` ("Power Symbols:" of Defaults for New Objects): `POWER_SYMBOLS::DEFAULT` (0, follow the symbol's
    *  library), `GLOBAL` (1) or `LOCAL` (2) -- what Place Power converts a new power symbol to (`SCH_DRAWING_TOOLS::PlaceSymbol`). Default 0. */
   schNewPowerSymbols: 0 | 1 | 2;
+  /** `PCBNEW_SETTINGS::m_Display.m_NetNames` ("Net names:" of Preferences > PCB Editor > Display Options, `pcb_display.net_names_mode`): 0 do not show, 1 on pads,
+   *  2 on tracks, 3 on pads & tracks (the default) -- kicad-port/pcbDisplayOptions.ts, UI-LEFT-3 P3-1. */
+  pcbNetNames: NetNamesMode;
+  /** `m_Display.m_TrackClearance` ("Clearance Outlines" > "Tracks:", `pcb_display.track_clearance_mode`): default "Show when routing w/ via clearance at end" (UI-LEFT-3 P3-6). */
+  pcbTrackClearance: TrackClearanceMode;
+  /** `m_Display.m_PadClearance` ("Show pad clearance", `pcb_display.pad_clearance`). Default on. */
+  pcbPadClearance: boolean;
 }
 
 /** The ratsnest thickness as `m_ratsnestThickness` (a `wxSpinCtrlDouble` of 0.5 .. 10 by 0.5) can hold it; anything else is the default 0.5. */
@@ -231,6 +239,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schRepeatLabelIncrement: 1,
   schFootprintPreview: true,
   schNewPowerSymbols: 0,
+  pcbNetNames: DEFAULT_PCB_DISPLAY.netNames,
+  pcbTrackClearance: DEFAULT_PCB_DISPLAY.trackClearance,
+  pcbPadClearance: DEFAULT_PCB_DISPLAY.padClearance,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH" | "horizontalPan">;
@@ -384,6 +395,9 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schFootprintPreview: bool(o.schFootprintPreview, d.schFootprintPreview),
     // `PARAM_ENUM<POWER_SYMBOLS>( .., POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::LOCAL )`: out of range is the default
     schNewPowerSymbols: o.schNewPowerSymbols === 1 || o.schNewPowerSymbols === 2 ? o.schNewPowerSymbols : d.schNewPowerSymbols,
+    pcbNetNames: sanitizeNetNamesMode(o.pcbNetNames, d.pcbNetNames),
+    pcbTrackClearance: sanitizeTrackClearanceMode(o.pcbTrackClearance, d.pcbTrackClearance),
+    pcbPadClearance: bool(o.pcbPadClearance, d.pcbPadClearance),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }
