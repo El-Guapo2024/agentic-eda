@@ -40,6 +40,12 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.PointEditor.arcKeepCenter",
   "pcbnew.PointEditor.arcKeepEndpoint",
   "pcbnew.PointEditor.arcKeepRadius",
+  // its corner operations (`addCorner`, `removeCorner`, `chamferCorner`, `movePoint`) on the Footprint Editor's graphic too (UI-LEFT-3 F3-2)
+  "pcbnew.PointEditor.addCorner",
+  "pcbnew.PointEditor.removeCorner",
+  "pcbnew.PointEditor.chamferCorner",
+  "pcbnew.InteractiveEdit.moveCorner",
+  "pcbnew.InteractiveEdit.moveMidpoint",
   "pcbnew.InteractiveEdit.duplicateIncrementPads",
   // Create Array (Ctrl+T): `ARRAY_TOOL` is registered by both frames; the footprint editor's has the pad numbering panels.
   "pcbnew.Array.createArray",

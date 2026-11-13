@@ -178,3 +178,11 @@ test("Mirror, Swap, the line modes, the display modes and the Appearance manager
     assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
   }
 });
+
+test("UI-LEFT-3 F3-2: the point editor's corner operations run on the board and the Footprint Editor", () => {
+  for (const name of ["pcbnew.PointEditor.addCorner", "pcbnew.PointEditor.removeCorner", "pcbnew.PointEditor.chamferCorner", "pcbnew.InteractiveEdit.moveCorner", "pcbnew.InteractiveEdit.moveMidpoint"]) {
+    assert.equal(isActionEnabledForTab(name, "pcb", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "footprint", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
+  }
+});

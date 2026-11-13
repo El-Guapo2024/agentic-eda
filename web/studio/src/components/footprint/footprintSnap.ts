@@ -176,3 +176,18 @@ export class FootprintSnap {
     reportSnap(null);
   }
 }
+
+/**
+ * `EDIT_TOOL::copyToClipboard`'s reference point for the open Footprint Editor (UI-LEFT-3 F3-10): `grid.BestDragOrigin( GetCursorPosition(), items )` -- the anchor of the
+ * copied items nearest the cursor (the cursor on the grid), else the cursor -- with the canvas' grid helper, which the canvas registers while it is shown. Without a
+ * canvas, the cursor itself.
+ */
+let dragOriginOfCanvas: ((cursor: Pt, ids: readonly string[]) => Pt) | null = null;
+
+export function setFpCopyOrigin(f: ((cursor: Pt, ids: readonly string[]) => Pt) | null): void {
+  dragOriginOfCanvas = f;
+}
+
+export function fpCopyOrigin(cursor: Pt, ids: readonly string[]): Pt {
+  return dragOriginOfCanvas ? dragOriginOfCanvas(cursor, ids) : cursor;
+}

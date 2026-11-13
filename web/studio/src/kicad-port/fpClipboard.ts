@@ -6,6 +6,10 @@
 // Pure: no React, no DOM.
 import type { CmdText } from "../api/types";
 import { plainTextPaste } from "./plainTextPaste";
+import { fpFieldById, fpItemKind, type Fp, type FpItemKind } from "./fpItems";
+import { shownTextOf } from "./pcbTextBox";
+import { cellAt } from "./tables";
+import { selectionAsText } from "./itemText";
 
 /** `CLIPBOARD_IO::Parse` succeeds (`"kicad"`) or the paste makes a text of the clipboard (`"text"`); an empty clipboard pastes nothing (`"none"`). */
 export function fpClipboardKind(text: string): "kicad" | "text" | "none" {
@@ -18,4 +22,54 @@ export function fpPlainTextPaste(text: string, at: { x: number; y: number }, lay
   const p = plainTextPaste(text, at, layer);
   if (!p || p.cmd.op !== "add_text") return null;
   return { text: { ...p.cmd.text }, longText: p.longText };
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------- Copy as Text
+
+/** `EDIT_TOOL::Init`'s `canCopyAsText`: a selection of only fields, texts, text boxes, dimensions and tables (`OnlyTypes( { PCB_FIELD_T, PCB_TEXT_T, PCB_TEXTBOX_T, PCB_DIM_*, PCB_TABLE_T, PCB_TABLECELL_T } )`), not empty. */
+export function fpCanCopyAsText(fp: Fp, ids: readonly string[]): boolean {
+  return ids.length > 0 && ids.every((id) => COPY_AS_TEXT_KINDS.has(fpItemKind(fp, id) ?? "pad"));
+}
+const COPY_AS_TEXT_KINDS: ReadonlySet<FpItemKind> = new Set(["field", "text", "textbox", "dimension", "table"]);
+
+/**
+ * The text Copy as Text takes from the item `id` of the footprint (`EDIT_TOOL::copyToClipboardAsText`'s `getItemText`, UI-LEFT-3 F3-10), `undefined` for one it does not copy:
+ * a text's, a field's, a text box's, a dimension's `GetShownText( true )`, a table's cells a tab between the cells of a row and a newline between rows. In the Footprint
+ * Editor the shown text is the text as it is: its board is a `BOARD_USE::FPHOLDER`, whose footprint resolves no variable (`FOOTPRINT::ResolveTextVar`'s first line).
+ * A dimension's is the text it draws (the server's `text`).
+ */
+export function fpItemAsText(fp: Fp, id: string): string | undefined {
+  switch (fpItemKind(fp, id)) {
+    case "text":
+      return fp.texts.find((t) => t.id === id)?.content;
+    case "field":
+      return fpFieldById(fp, id)?.text;
+    case "textbox": {
+      const b = fp.display?.text_boxes.find((x) => x.id === id);
+      return b ? shownTextOf(b) : undefined;
+    }
+    case "dimension":
+      return fp.display?.dimensions.find((x) => x.id === id)?.text;
+    case "table": {
+      const t = fp.display?.tables.find((x) => x.id === id);
+      if (!t) return undefined;
+      const rows: string[] = [];
+      for (let row = 0; row < t.rows; row++) {
+        const cells: string[] = [];
+        for (let col = 0; col < t.cols; col++) {
+          const c = cellAt(t, row, col);
+          cells.push(c ? (c.shown ?? c.text) : "");
+        }
+        rows.push(cells.join("\t"));
+      }
+      return rows.join("\n");
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** Copy as Text of `ids`: each item's text, trimmed, the empty ones left out, a newline between them (`wxJoin( itemTexts, '\n', '\0' )`); "" for nothing to copy. */
+export function fpSelectionAsText(fp: Fp, ids: readonly string[]): string {
+  return selectionAsText(ids.map((id) => fpItemAsText(fp, id)));
 }

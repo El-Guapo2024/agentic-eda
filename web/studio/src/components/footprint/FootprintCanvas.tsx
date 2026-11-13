@@ -50,10 +50,12 @@ import { useGridSettings } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
 import { heldCursor } from "../../kicad-port/heldCursor";
-import { FootprintSnap, type FootprintPointOpts, type FootprintSnapMods } from "./footprintSnap";
+import { FootprintSnap, setFpCopyOrigin, type FootprintPointOpts, type FootprintSnapMods } from "./footprintSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
 import { fpPointAt, fpPointDrag, fpPointEditTarget } from "../../kicad-port/fpPointEdit";
+import { fpEditPointToleranceNm, fpPointOpsAt, runFpPointOp, type FpPointOp } from "../../actions/fpPointEditActions";
+import { fpCanCopyAsText } from "../../kicad-port/fpClipboard";
 import { shapeEditPoints, type EditPoint } from "../../kicad-port/pcbPointEdit";
 import type { Shape } from "../../api/types";
 import { fpEditTarget, fpFields, fpGroupMembers, fpHitTest, fpItemBounds, fpItemKind, fpItemLocked, fpSelectionTarget, fpCanMirror, type FpEditTarget } from "../../kicad-port/fpItems";
@@ -69,6 +71,15 @@ import { hairlineNm } from "../../kicad-port/view";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
 import { useBarcodeVersion } from "../canvas/barcodeCache";
 import { useImageVersion } from "../canvas/imageCache";
+
+/** The point editor's rows (`PCB_ACTIONS::pointEditorMoveCorner` .. friendly names). */
+const FP_POINT_OP_LABEL: Readonly<Record<FpPointOp, string>> = {
+  moveCorner: "Move Corner To...",
+  moveMidpoint: "Move Midpoint To...",
+  addCorner: "Create Corner",
+  removeCorner: "Remove Corner",
+  chamferCorner: "Chamfer Corner",
+};
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
   draw_segment: "segment",
@@ -249,6 +260,11 @@ export function FootprintCanvas() {
     bumpSnap((n) => n + 1);
   }, [snap, state.activeTool]);
   useEffect(() => () => snap.reset(), [snap]);
+  // Copy's reference point (`BestDragOrigin` on the copied items, UI-LEFT-3 F3-10): the store asks this canvas' grid helper
+  useEffect(() => {
+    setFpCopyOrigin((cursor, ids) => snap.dragOrigin(cursor, ids));
+    return () => setFpCopyOrigin(null);
+  }, [snap]);
   const snapMods = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): FootprintSnapMods => ({ ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey });
   /** What each placing tool asks `BestSnapAnchor` for: the shape and text tools the active layer and their grid; the pad and anchor tools (and the pickers) every layer. */
   const toolOpts = (tool: string): FootprintPointOpts => {
@@ -414,7 +430,7 @@ export function FootprintCanvas() {
       ctx.restore();
     }
     // the point editor's edit points of the one selected graphic (`EDIT_POINTS::ViewDraw`), as the board draws a shape's handles
-    const editTarget = shown && state.activeTool === "select" ? fpPointEditTarget(shown.graphics, state.selection) : null;
+    const editTarget = shown && fp && state.activeTool === "select" ? fpPointEditTarget(shown.graphics, state.selection, (id) => fpItemLocked(fp, id)) : null;
     if (editTarget) paintFpEditPoints(ctx, state.view.scale || 1, editTarget);
     // What the grid helper shows: the snap marker and its icon, the snap lines, the construction geometry.
     // what the dimension, table and reference image tools hold (components/footprint/fpItemTools.ts)
@@ -648,8 +664,9 @@ export function FootprintCanvas() {
 
     // Select tool.
     // `PCB_POINT_EDITOR`: a press on an edit point of the one selected graphic drags that point (`EDIT_POINTS::FindPoint`; the drag starts at `IsDrag( BUT_LEFT )`).
-    const pointTarget = fp && state.activeTool === "select" ? fpPointEditTarget(fp.graphics, state.selection) : null;
-    const pressedPoint = pointTarget ? fpPointAt(pointTarget, [wx, wy], Math.max(100_000, 10 / (state.view.scale || 1))) : null;
+    // (not on a locked graphic: `OnSelectionChange`'s `if( !item || item->IsLocked() ) return 0;`, UI-LEFT-3 F3-2)
+    const pointTarget = fp && state.activeTool === "select" ? fpPointEditTarget(fp.graphics, state.selection, (id) => fpItemLocked(fp, id)) : null;
+    const pressedPoint = pointTarget ? fpPointAt(pointTarget, [wx, wy], fpEditPointToleranceNm(state.view.scale)) : null;
     if (pointTarget && pressedPoint) {
       dragRef.current = { kind: "point", id: pointTarget.id, base: pointTarget, point: pressedPoint };
       setPointPreview(null);
@@ -776,8 +793,8 @@ export function FootprintCanvas() {
     }
     if (drag.kind === "move" && state.movePreview) {
       const { refs, dxNm, dyNm } = state.movePreview;
-      if (dxNm === 0 && dyNm === 0) dispatch({ type: "SET_MOVE_PREVIEW", preview: null }); // dragged back to where it began: nothing to commit
-      else void api.commitMove(refs, dxNm, dyNm); // one undo step for the whole drop
+      // one undo step for the whole drop; dragged back to where it began, nothing is moved (a Mirror made on the way is still committed, F3-4)
+      void api.commitMove(refs, dxNm, dyNm);
     }
   };
 
@@ -838,8 +855,10 @@ export function FootprintCanvas() {
       return;
     }
     if (e.key === "Escape") {
-      // `EDIT_TOOL::Duplicate`: a cancelled pick-up `commit.Revert()`s the copies -- the duplicate was the last undo step.
-      if (state.duplicatePending) void api.cancelPickUp();
+      // `EDIT_TOOL::Duplicate`: a cancelled pick-up `commit.Revert()`s the copies -- the duplicate was the last undo step. A drag cancelled reverts what Mirror did
+      // on the way (`doMoveSelection`'s `commit->Revert()`, UI-LEFT-3 F3-4), and the drag ends.
+      if (dragRef.current?.kind === "move") dragRef.current = null;
+      void api.cancelPickUp();
       dispatch({ type: "ESCAPE" });
       return;
     }
@@ -889,6 +908,7 @@ export function FootprintCanvas() {
     /** An entry that runs a registered KiCad action (PAD_TOOL's selection-menu items, `PAD_TOOL::Init`). */
     const act = (name: string, label: string, disabled = false): MenuEntry => ({ label, onSelect: () => run(name), disabled: disabled || !isEnabled(name) });
     const anyGroup = !!fp && refs.some((r) => isGroup(fp.items?.groups ?? [], r));
+    const pointOps = hit && !state.selection.has(hit.id) ? [] : fpPointOpsAt(api, [wx, wy]);
     const entries: MenuEntry[] = [
       // `PCB_SELECTION_TOOL::Init`: Enter Group with one group selected (`groupEnterCondition`), Leave Group inside one (`inGroupCondition`)
       ...(fp && refs.length === 1 && isGroup(fp.items?.groups ?? [], refs[0]!) ? [act("common.Interactive.groupEnter", "Enter Group")] : []),
@@ -907,9 +927,21 @@ export function FootprintCanvas() {
       // `GROUP_CONTEXT_MENU::update`: Add Items with one group and an ungrouped item, Remove Items with a member
       act("common.Interactive.addToGroup", "Add Items", !fp || !planAddToGroup(refs, fp.items?.groups ?? [])),
       act("common.Interactive.removeFromGroup", "Remove Items", !fp || planRemoveFromGroup(refs, fp.items?.groups ?? []).length === 0),
-      // `EDIT_TOOL::Init`'s clipboard rows (UI-LEFT-2 FF1)
+      // `EDIT_TOOL::Init`'s Shape Modification submenu (`makeShapeModificationMenu`): the point editor's rows on the one selected graphic, at the place the menu was opened
+      // (kicad-port/fpPointEdit.ts, UI-LEFT-3 F3-2); shown when it has any
+      ...(pointOps.length > 0
+        ? [
+            {
+              label: "Shape Modification",
+              onSelect: () => {},
+              submenu: pointOps.map((op): MenuEntry => ({ label: FP_POINT_OP_LABEL[op], onSelect: () => runFpPointOp(api, op, [wx, wy], studioPrefs.fpArcEditMode) })),
+            },
+          ]
+        : []),
+      // `EDIT_TOOL::Init`'s clipboard rows (UI-LEFT-2 FF1); Copy as Text by `canCopyAsText` (UI-LEFT-3 F3-10; Paste Special is not in the Footprint Editor's menu: `!inFootprintEditor`)
       act("common.Interactive.cut", "Cut (Ctrl+X)", refs.length === 0),
       act("common.Interactive.copy", "Copy (Ctrl+C)", refs.length === 0),
+      ...(fp && fpCanCopyAsText(fp, refs) ? [act("common.Interactive.copyAsText", "Copy as Text (Ctrl+Shift+C)")] : []),
       act("common.Interactive.paste", "Paste (Ctrl+V)"),
       { label: "Duplicate (Ctrl+D)", onSelect: () => void api.duplicateSelection(false), disabled: refs.length === 0 },
       { label: "Duplicate and Increment (Ctrl+Shift+D)", onSelect: () => void api.duplicateSelection(true), disabled: refs.length === 0 },
