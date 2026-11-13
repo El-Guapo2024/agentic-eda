@@ -7310,6 +7310,8 @@ pub(crate) mod tests {
             Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
             // the sheet point editor's drag of the left side (UI-LEFT-3 S3-2): the pin and its wire follow
             Cmd::SchEdit(V::ResizeSheet { id: "sheet_a".into(), at: Point { x: mm(85.0), y: mm(10.0) }, width_nm: mm(25.0), height_nm: mm(10.0) }),
+            // a wire's end put on its start: set, then deleted by the commit's clean-up (`SCHEMATIC::CleanUp`); one Undo brings it back
+            Cmd::SchEdit(V::SetLineEnds { id: "wire_in".into(), start: None, end: Some(Point { x: mm(80.0), y: mm(15.0) }) }),
         ];
         for cmd in commands {
             step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
