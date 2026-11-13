@@ -6,6 +6,7 @@
 // then nudge the poller to refetch immediately, exactly like the old
 // studio.html's `send()`.
 
+import type { PreviewClearances } from "../kicad-port/pcbDisplayOptions";
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
 import type { TuneDrawState } from "../kicad-port/tuneTool";
@@ -291,6 +292,11 @@ export type DrawState =
       widthOverride?: boolean;
       /** The router's sizes' layer pairs (`PairedLayer`): see kicad-port/routeTool.ts. */
       sizesPairs?: Record<string, string>;
+      /** The head's and its via's own clearances, for their clearance outlines: see kicad-port/routeTool.ts. */
+      clearance?: Nm | null;
+      viaClearance?: Nm | null;
+      /** The shoved items' clearances: see kicad-port/routeTool.ts. */
+      clearances?: PreviewClearances;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -326,6 +332,8 @@ export type DrawState =
       /** Via drag only: its own directly-attached tracks, already
        * stretched to follow it live, each with its own real width. */
       fanout?: { layer: string; width: Nm; pts: [Nm, Nm][] }[];
+      /** The clearances of what the preview shows: see kicad-port/dragTool.ts. */
+      clearances?: PreviewClearances;
       /** Component drag only: the footprints dragged, how far they have moved, where the drag started (the anchor the cursor is held on) and where the pointer was then. */
       footprints?: string[];
       offset?: [Nm, Nm] | null;

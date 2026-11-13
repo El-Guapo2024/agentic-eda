@@ -23,6 +23,7 @@
 //   V              -> arm "drop a via here, continue on the other layer"
 //   /              -> flip posture
 //   W              -> cycle track width
+import { previewClearancesOf, type PreviewClearances } from "./pcbDisplayOptions";
 import type { RoutePreview } from "../api/types";
 import type { RouteSizesInfo } from "./routerSizes";
 
@@ -60,6 +61,11 @@ export interface RouteDrawState {
    *  each via command's own (`handleLayerSwitch`: `ClearLayerPairs(); AddLayerPair( currentLayer, targetLayer )`) -- read by Place Through Via's implicit
    *  target (kicad-port/routerVia.ts `planViaCommand`, UI-LEFT R5). */
   sizesPairs?: Record<string, string>;
+  /** The head's and its via's own clearances (`RoutePreview.clearance`, `via_clearance`): their clearance outlines (UI-LEFT-3 P3-6). */
+  clearance?: number | null;
+  viaClearance?: number | null;
+  /** The clearances of the items a shove moved (`displaced`, `displacedVias`): kicad-port/pcbDisplayOptions.ts `PreviewClearances`. */
+  clearances?: PreviewClearances;
 }
 
 /** The `DrawState` "route" patch for a successful `RoutePreview` reply,
@@ -82,6 +88,9 @@ export function drawStateFromPreview(current: RouteDrawState, preview: RoutePrev
     snappedEnd: preview.snapped_end,
     displaced: preview.displaced,
     displacedVias: preview.displaced_vias,
+    clearance: preview.clearance ?? null,
+    viaClearance: preview.via_clearance ?? null,
+    clearances: previewClearancesOf(preview),
   };
 }
 

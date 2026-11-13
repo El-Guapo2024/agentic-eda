@@ -31,6 +31,7 @@
 // -- held on the anchor of a single one, where KiCad warps the pointer, and on the wire grid (`updateEndItem` with no net: `snapToItem( nullptr )`)
 // -- and every track on their pads follows them (`fanout`). `D` with several tracks selected is `MULTI_DRAGGER` (`"multi"`). Both are `InlineDrag`'s:
 // a click before the cursor has moved does nothing, and a click the router refuses ends the drag with nothing committed (`refused`).
+import { previewClearancesOf, type PreviewClearances } from "./pcbDisplayOptions";
 import type { BoardState, DragPreview } from "../api/types";
 import { itemKind, padParent } from "./pcbItems";
 import { isLocked } from "./pcbTransform";
@@ -72,6 +73,8 @@ export interface DragDrawState {
   /** Via drag only: the via's own directly-attached tracks, already
    * stretched to follow it live -- see `DragPreview.fanout`'s own doc. */
   fanout?: { layer: string; width: number; pts: [number, number][] }[];
+  /** The clearances of what the preview shows, for the clearance outlines (kicad-port/pcbDisplayOptions.ts `PreviewClearances`, UI-LEFT-3 P3-6). */
+  clearances?: PreviewClearances;
   /** `"component"` (`COMPONENT_DRAGGER`) only: the footprints dragged (drawn moved by `offset`), how far they have moved (`aP - m_p0`), where the
    * drag started (`start`: the footprint's anchor, onto which KiCad warps the cursor) and where the pointer was at `D` (`grabbed`). `fanout` is then
    * the lines that follow the pads and the tracks that move with them; for `"multi"` it is the dragged lines. */
@@ -151,6 +154,7 @@ export function dragStateFromPreview(current: DragDrawState, preview: DragPrevie
     displaced: preview.displaced,
     displacedVias: preview.displaced_vias,
     fanout: preview.fanout,
+    clearances: previewClearancesOf(preview),
   };
 }
 

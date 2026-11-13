@@ -4,6 +4,7 @@
 // cursor, turn a click/move into the right `/api/route/drag_*` call and
 // `DrawState` update), not a second copy of `eda_pns::dragger::Dragger`'s
 // own algorithm. `D` on a selection of footprints or of several tracks is `startGroupDrag` (`COMPONENT_DRAGGER`, `MULTI_DRAGGER`).
+import { previewClearancesOf } from "../../kicad-port/pcbDisplayOptions";
 import type { BoardState, CmdReply } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
 import { routeDragFinish, routeDragStart, routeDragStartGroup } from "../../api/client";
@@ -103,6 +104,7 @@ export async function startGroupDrag(x: number, y: number, target: GroupDragTarg
     displaced: preview.displaced,
     displacedVias: preview.displaced_vias,
     fanout: preview.fanout,
+    clearances: previewClearancesOf(preview),
     footprints: preview.footprints ?? (target.kind === "footprints" ? target.refs : undefined),
     offset: preview.offset ?? null,
     start: preview.start ?? [x, y],
@@ -164,6 +166,7 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
     displaced: preview.displaced,
     displacedVias: preview.displaced_vias,
     fanout: preview.fanout,
+    clearances: previewClearancesOf(preview),
   };
   dispatch({ type: "SET_DRAW_STATE", draw: beginInlineDrag(draw, context, !fromRouterTool, draw.net, dispatch) });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });

@@ -135,8 +135,17 @@ fn settings_over(req: &Value, base: RoutingSettings) -> RoutingSettings {
 }
 
 fn preview_json(router: &Router, preview: &Preview) -> Value {
+    // `ROUTER::movePlacing`'s `Clearance( item, nullptr )` of the head and of its via, which `DisplayItem` draws their clearance outlines with
+    // (Display Options' "Tracks:" clearance mode, UI-LEFT-3 P3-6)
+    let (clearance, via_clearance) = router.preview_clearances(preview).map_or((None, None), |(h, v)| (Some(h), v));
+    // `ROUTER::updateView`'s for the items the shove moved, in the order of `displaced` and `displaced_vias`
+    let (shoved, shoved_vias) = router.shoved_clearances(&preview.displaced_lines, &preview.displaced_vias);
     json!({
         "ok": true,
+        "clearance": clearance,
+        "via_clearance": via_clearance,
+        "displaced_clearances": shoved,
+        "displaced_via_clearances": shoved_vias,
         "net": router.current_net(),
         "width": router.current_width(),
         "colliding": preview.colliding,
@@ -145,7 +154,7 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
         "runs": preview.runs.iter().map(|r| json!({ "layer": router.layer_name(r.layer), "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
         "via": preview.via.map(|(p, diameter, drill)| json!({ "x": p.x, "y": p.y, "diameter": diameter, "drill": drill })),
         "snapped_end": preview.snapped_end.map(|p| json!([p.x, p.y])),
-        "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "width": d.line.width, "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
         // `Preview::displaced_vias` existed on the Rust side since stage 3
         // (shove) but was never actually serialized here -- a shove-mode
         // route preview that would push a via out of the way never showed
@@ -593,8 +602,17 @@ fn drag_kind_name(router: &Router) -> &'static str {
 }
 
 fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -> Value {
+    // `ROUTER::moveDragging` -> `updateView( .., aDragging = true )`'s `Clearance( item, nullptr )` of what the drag shows: the dragged line or via, the
+    // fanout lines, the items a shove moved -- their clearance outlines with "Show when routing and editing" and "Show always" (UI-LEFT-3 P3-6)
+    let (clearance, via_clearance, fanout_clearances) = router.drag_clearances(preview);
+    let (shoved, shoved_vias) = router.shoved_clearances(&preview.displaced_lines, &preview.displaced_vias);
     json!({
         "ok": true,
+        "clearance": clearance,
+        "via_clearance": via_clearance,
+        "fanout_clearances": fanout_clearances,
+        "displaced_clearances": shoved,
+        "displaced_via_clearances": shoved_vias,
         // `DM_SEGMENT` (the whole segment slides), `DM_CORNER` (a vertex follows the cursor), `DM_VIA` or `DM_ARC` (the arc's curvature follows it)
         "drag": drag_kind_name(router),
         // `DM_VIA` of a virtual via (the joint where tracks meet, `DRAGGER::checkVirtualVia`): no via is drawn (`ROUTER_PREVIEW_ITEM`: "if( v->IsVirtual() ) return") or committed
@@ -606,7 +624,7 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
         // the first position failed, so the drag only marks obstacles; a violation then needs Ctrl+click (`GetForceMarkObstaclesMode`)
         "forced_mark_obstacles": preview.forced_mark_obstacles,
         "pts": pts_json(&preview.pts),
-        "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "width": d.line.width, "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
         // See `preview_json`'s matching comment -- same previously-dropped field.
         "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
         // `DragKind::Via` only: the attached tracks' own live stretched
@@ -829,7 +847,7 @@ fn dp_preview_json(router: &Router, preview: &eda_pns::dp_placer::DiffPairPrevie
         "placing_via": preview.placing_via,
         "vias": preview.vias.iter().map(|v| dp_via_json(router, v)).collect::<Vec<_>>(),
         "fixed_vias": preview.fixed_vias.iter().map(|v| dp_via_json(router, v)).collect::<Vec<_>>(),
-        "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "width": d.line.width, "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
         "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
     })
 }
@@ -1246,6 +1264,33 @@ mod tests {
         assert_eq!(at(json!({ "auto_track_width": false }))["sizes"]["width_source"], json!("netclass 'Power'"));
     }
 
+    /// UI-LEFT-3 P3-6 (`ROUTER::movePlacing`): every preview carries the head's own clearance (`Clearance( line, nullptr )`, the net class's 0.3 mm
+    /// here) and, with a via armed, the via's -- its copper's, or its hole's clearance less the annular ring when that is more (`excessHoleClearance`).
+    #[test]
+    fn a_preview_carries_the_clearance_of_its_head_and_its_via() {
+        let dir = scratch("preview_clearance");
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))], arc_mid_offset: None };
+        setup_board(&dir, vec![stub], vec![]);
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.board.net_classes.push(eda_model::NetClass { name: "Power".into(), nets: vec!["SIG".into()], track_width: None, clearance: Some(mm(0.3)), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let cell = RouteCell::default();
+        let reply = start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000 })));
+        assert_eq!((reply["clearance"].clone(), reply["via_clearance"].clone()), (json!(300_000), Value::Null), "{reply}");
+        // a 0.6 mm via of 0.3 mm drill: a 0.15 mm ring; the hole clearance (0.25 mm by default) less the ring is 0.1 mm, under the 0.3 mm
+        assert_eq!(via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu", "diameter": 600_000, "drill": 300_000 })))["ok"], json!(true));
+        let pv = mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
+        assert_eq!((pv["clearance"].clone(), pv["via_clearance"].clone()), (json!(300_000), json!(300_000)), "{pv}");
+        // a hole clearance of 0.6 mm: 0.6 - 0.15 = 0.45 mm wins
+        model.board.hole_clearance_nm = mm(0.6);
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000 })));
+        via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu", "diameter": 600_000, "drill": 300_000 })));
+        let pv = mv(&cell, &body(json!({ "x": 10_000_000, "y": 5_000_000 })));
+        assert_eq!(pv["via_clearance"], json!(450_000), "{pv}");
+    }
+
     /// R6-R2 (`ImportSizes`: `trackWidth = bds.m_TrackMinWidth`, then `std::max( trackWidth, bds.GetCurrentTrackWidth() )`): a chosen width below
     /// the board's minimum track width routes at the minimum, "(from board minimum track width)"; at or above it, as chosen, "user choice". A width
     /// chosen while routing (W, the width menu: `onTrackViaSizeChanged` imports the sizes again) is raised the same way, and the reply says so.
@@ -1552,6 +1597,32 @@ mod tests {
         // near an end it is the corner instead
         let near_end = drag_start(&dir, &cell, &body(json!({ "x": 2_000_000, "y": 8_050_000, "layer": "F.Cu" })));
         assert_eq!(near_end["drag"], json!("corner"), "{near_end}");
+    }
+
+    /// UI-LEFT-3 P3-6 (`ROUTER::moveDragging` -> `updateView( .., aDragging = true )`, `ROUTER::updateView` of a route): a drag's reply carries the
+    /// dragged line's own clearance, a via drag the via's and its fanout lines'; a shove's moved via carries its own in the route's reply too.
+    #[test]
+    fn drag_and_shove_replies_carry_the_clearances_of_what_they_show() {
+        let dir = scratch("drag_clearances");
+        let via = Via { id: "v".into(), net: "SIG".into(), at: p(mm(10.0), mm(5.0)), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        setup_board(&dir, vec![track("u", "SIG", &[p(mm(2.0), mm(12.0)), p(mm(2.0), mm(10.0)), p(mm(12.0), mm(10.0)), p(mm(12.0), mm(12.0))]), track("sig", "SIG", &[p(mm(10.0), mm(9.0)), p(mm(10.0), mm(5.0))])], vec![via]);
+        let cell: RouteCell = Mutex::new(None);
+        assert_eq!(drag_start(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 10_000_000, "layer": "F.Cu" })))["drag"], json!("segment"));
+        let moved = drag_move(&cell, &body(json!({ "x": 7_000_000, "y": 11_000_000 })));
+        assert_eq!((moved["clearance"].clone(), moved["via_clearance"].clone()), (json!(200_000), Value::Null), "the Default class's 0.2 mm: {moved}");
+        let v = drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 5_000_000, "layer": "F.Cu", "item": "v" })));
+        assert_eq!(v["drag"], json!("via"), "{v}");
+        let moved = drag_move(&cell, &body(json!({ "x": 11_000_000, "y": 5_000_000 })));
+        assert_eq!((moved["clearance"].clone(), moved["via_clearance"].clone()), (Value::Null, json!(200_000)), "{moved}");
+        assert_eq!(moved["fanout_clearances"].as_array().map(Vec::len), moved["fanout"].as_array().map(Vec::len), "one per fanout line: {moved}");
+        assert!(moved["fanout_clearances"].as_array().unwrap().iter().all(|c| c == &json!(200_000)), "{moved}");
+        // a shove: the GND via in SIG's way is moved, with its clearance
+        let dir = scratch("shove_clearances");
+        setup(&dir);
+        start_with(&dir, &cell, json!({ "mode": "shove" }));
+        let pushed = mv(&cell, &body(json!({ "x": 10_000_000, "y": 2_000_000 })));
+        assert_eq!(pushed["displaced_via_clearances"], json!([200_000]), "{pushed}");
+        assert_eq!(pushed["displaced_clearances"].as_array().map(Vec::len), pushed["displaced"].as_array().map(Vec::len), "{pushed}");
     }
 
     /// `ROUTER_TOOL::InlineDrag` drags the selection (UI-LEFT-2 RR2): D on a track that ends on a via, pressed on the via, drags the selected track from

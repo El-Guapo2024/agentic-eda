@@ -15,6 +15,7 @@
 //     `move_items` on drop (see state/store.tsx `commitMove`); M starts the
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
+import { useDisplayClearances } from "./useDisplayClearances";
 import { useGridDisplay } from "../../state/commonOptions";
 import { gridYOf } from "../../kicad-port/gridSettings";
 import { openViaStitchDialog } from "../../state/kicad10Dialogs";
@@ -440,6 +441,8 @@ export function Canvas() {
 
   // The reference images are bitmaps that arrive after the board does: the canvas paints again when one has.
   const imageVersion = useImageVersion();
+  // Display Options' clearance outlines: the active copper layer's clearances (UI-LEFT-3 P3-6)
+  const ownClearances = useDisplayClearances(state.activeLayer ?? "F.Cu", board, state.version ?? undefined, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance);
   // Render loop: repaint whenever anything visible changes.
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -526,6 +529,11 @@ export function Canvas() {
       sketchGraphics: state.bcx.sketchGraphics,
       sketchText: state.bcx.sketchText,
       showPadNumbers: state.bcx.showPadNumbers,
+      // Preferences > PCB Editor > Display Options (kicad-port/pcbDisplayOptions.ts, UI-LEFT-3 P3-1, P3-6)
+      netNamesMode: state.prefs.pcbNetNames,
+      trackClearance: state.prefs.pcbTrackClearance,
+      padClearance: state.prefs.pcbPadClearance,
+      ownClearances,
       auxOrigin: board.aux_origin ?? null,
       gridOrigin: board.grid_origin ?? null,
       drawState: state.drawState,
@@ -564,7 +572,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, state.prefs.pcbNetNames, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance, ownClearances, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

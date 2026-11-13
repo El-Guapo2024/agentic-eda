@@ -563,6 +563,70 @@ impl Router {
         self.session().map(|s| s.placer.preview(s.world.as_ref().unwrap_or(&self.world), &self.rules, &self.settings, at))
     }
 
+    /// `ROUTER::movePlacing`'s clearances of a preview (UI-LEFT-3 P3-6): `GetRuleResolver()->Clearance( line, nullptr )` of the head, and of the
+    /// via at its end `Clearance( &via, nullptr )`, raised to the hole's own clearance less the annular ring where that is more
+    /// (`excessHoleClearance = holeClearance - annularWidth`). What `DisplayItem` draws the head's and the via's clearance outlines with.
+    pub fn preview_clearances(&self, preview: &Preview) -> Option<(Nm, Option<Nm>)> {
+        let s = self.session()?;
+        let world = s.world.as_ref().unwrap_or(&self.world);
+        let head = world.own_clearance(&self.rules, crate::rule_resolver::Side::of_line(&preview.head));
+        let via = preview.via.map(|(pos, diameter, drill)| {
+            let layers = s.placer.pending_via_layers();
+            let net = &preview.head.net;
+            let mut c = world.own_clearance(&self.rules, crate::rule_resolver::Side::Via { net, layers, pos });
+            let hole = world.own_clearance(&self.rules, crate::rule_resolver::Side::ViaHole { net, layers, pos });
+            let annular = Nm::new(((diameter - drill).get() / 2).max(0));
+            if hole - annular > c {
+                c = hole - annular;
+            }
+            c
+        });
+        Some((head, via))
+    }
+
+    /// The world the live preview is drawn from: the route session's (a start split a track) or the router's.
+    fn display_world(&self) -> &Node {
+        self.session().and_then(|s| s.world.as_ref()).unwrap_or(&self.world)
+    }
+
+    /// `ROUTER::updateView`'s `Clearance( item, nullptr )` of the items a shove moved (`added`), which `DisplayItem` draws their clearance outlines
+    /// with (UI-LEFT-3 P3-6): each displaced line's, and each displaced via's (the board via `source_via` names, where the shove put it).
+    pub fn shoved_clearances(&self, lines: &[crate::shove::DisplacedLine], vias: &[crate::shove::DisplacedVia]) -> (Vec<Nm>, Vec<Nm>) {
+        let world = self.display_world();
+        let l = lines.iter().map(|d| world.own_clearance(&self.rules, crate::rule_resolver::Side::of_line(&d.line))).collect();
+        let v = vias
+            .iter()
+            .map(|d| {
+                let via = world.iter().find_map(|(_, it)| match it {
+                    Item::Via(v) if v.source_via.as_deref() == Some(d.source_via.as_str()) => Some(v),
+                    _ => None,
+                });
+                via.map_or(Nm::ZERO, |v| world.own_clearance(&self.rules, crate::rule_resolver::Side::Via { net: &v.net, layers: v.layers, pos: d.pos }))
+            })
+            .collect();
+        (l, v)
+    }
+
+    /// `ROUTER::moveDragging` -> `updateView( .., aDragging = true )`: the clearances of a drag preview's items (UI-LEFT-3 P3-6) -- the dragged line's
+    /// (`Clearance( line, nullptr )` at the preview's points) or the dragged via's, and each fanout line's; `None` for what the drag has not.
+    pub fn drag_clearances(&self, preview: &crate::dragger::DragPreview) -> (Option<Nm>, Option<Nm>, Vec<Nm>) {
+        let world = &self.world;
+        let own = |side| world.own_clearance(&self.rules, side);
+        let fanout = preview.fanout.iter().map(|l| own(crate::rule_resolver::Side::of_line(l))).collect();
+        let Some(d) = self.drag.as_ref() else { return (None, None, fanout) };
+        if d.kind == crate::dragger::DragKind::Via {
+            let layers = d.via_id.and_then(|id| match world.get(id) {
+                Some(Item::Via(v)) => Some(v.layers),
+                _ => None,
+            });
+            let pos = preview.pts.first().copied().unwrap_or(d.via_pos);
+            let via = layers.map(|layers| own(crate::rule_resolver::Side::Via { net: &d.net, layers, pos }));
+            return (None, via, fanout);
+        }
+        let line = (preview.pts.len() >= 2).then(|| own(crate::rule_resolver::Side::Line { net: &d.net, layer: d.layer, width: d.width, pts: &preview.pts }));
+        (line, None, fanout)
+    }
+
     /// The `/` posture toggle and `W` width-cycle hook both fold into this
     /// call (applied before the preview is computed) rather than being
     /// separate endpoints, keeping the per-request surface small per the

@@ -23,6 +23,7 @@ mod board_control_api;
 mod board_output_api;
 mod body_api;
 mod board3d_api;
+mod display_api;
 mod model3d_api;
 mod extruded_body_api;
 mod microwave_api;

@@ -451,6 +451,20 @@ export interface Track {
 }
 
 /** `eda_model::via_extra::ViaDrillProps`: a backdrill or tertiary drill (`PADSTACK::DRILL_PROPS`). */
+/** `POST /api/display/clearances` (crates/cli/src/display_api.rs): every item's own clearance on one copper layer (`GetOwnClearance( layer )`), for the
+ * clearance outlines (UI-LEFT-3 P3-6). A track has one per segment, in order (an arc one). */
+export interface DisplayClearances {
+  ok: boolean;
+  message?: string;
+  layer?: string;
+  tracks?: Record<string, Nm[]>;
+  vias?: Record<string, Nm>;
+  pads?: Record<string, Nm>;
+  /** Not the server's reply: a custom pad's copper grown by its clearance (`TransformShapeToPolygon`'s `outline.Inflate( clearance, ROUND_ALL_CORNERS, maxError )`),
+   * worked out by `POST /api/board3d/polys` (components/canvas/useDisplayClearances.ts), by the pad's id: contours to stroke. */
+  customPads?: Record<string, [Nm, Nm][][]>;
+}
+
 export interface ViaDrillProps {
   size: Nm;
   start: string;
@@ -1356,6 +1370,8 @@ export interface BoardState {
     net_classes: NetClass[];
     hole_to_hole_min_nm: Nm;
     hole_clearance_nm: Nm;
+    /** `BOARD_DESIGN_SETTINGS::GetHolePlatingThickness()`: `ADVANCED_CFG::m_HoleWallThickness` (0.020 mm), what a hole wall is painted at (UI-LEFT-3 P3-7). Absent from an older server. */
+    hole_plating_nm?: Nm;
     silk_clearance_nm: Nm;
     annular_width_min_nm: Nm;
     min_silk_text_height_nm: Nm;
@@ -2631,6 +2647,8 @@ export interface RoutePreviewRun {
 export interface RouteDisplacedLine {
   source_track: string | null;
   layer: string;
+  /** The line's width (absent from an older server). */
+  width?: Nm;
   pts: [Nm, Nm][];
 }
 
@@ -2669,6 +2687,13 @@ export interface RoutePreview {
   sizes?: RouteSizesInfo;
   colliding: boolean;
   layer: string;
+  /** `ROUTER::movePlacing`'s `Clearance( head, nullptr )`: the clearance outline the head is drawn with (Display Options' "Tracks:" clearance mode, UI-LEFT-3 P3-6). */
+  clearance?: Nm | null;
+  /** The same of the via at the head's end (`Clearance( &via, nullptr )`, raised by the hole's excess clearance); null with no via. */
+  via_clearance?: Nm | null;
+  /** `ROUTER::updateView`'s `Clearance( item, nullptr )` of the items a shove moved, in the order of `displaced` and `displaced_vias` (UI-LEFT-3 P3-6). */
+  displaced_clearances?: Nm[];
+  displaced_via_clearances?: Nm[];
   /** The live, not-yet-fixed head: last fixed point (or the route's
    * origin) to the cursor, already resolved (walked/shoved/mark-obstacled)
    * server-side -- draw this directly, no client-side posture math needed. */
@@ -2746,6 +2771,13 @@ export interface DragPreview {
    * which reuse the one active session width) since each attached track
    * can genuinely have a different width from its neighbors. */
   fanout: { layer: string; width: Nm; pts: [Nm, Nm][] }[];
+  /** `moveDragging` -> `updateView( .., aDragging = true )`'s `Clearance( item, nullptr )` (UI-LEFT-3 P3-6): the dragged line's (null for a via drag), the dragged
+   * via's (null otherwise), each fanout line's and each item the shove moved. */
+  clearance?: Nm | null;
+  via_clearance?: Nm | null;
+  fanout_clearances?: Nm[];
+  displaced_clearances?: Nm[];
+  displaced_via_clearances?: Nm[];
   /** `"component"` (`COMPONENT_DRAGGER`) only: how far the footprints and their pads have moved (`aP - m_p0`); `fanout` is the lines that follow the pads. */
   offset?: [Nm, Nm] | null;
   /** `drag_start` of a `"component"` or `"multi"` drag: where it starts (`m_p0`: the footprint's anchor, or the dragged item nearest the cursor), and the footprints. */

@@ -714,6 +714,11 @@ impl LinePlacer {
         *self.last_move.borrow_mut() = None;
     }
 
+    /// The layers the pending via at the head's end spans (what [`Preview::via`] is drawn on).
+    pub fn pending_via_layers(&self) -> LayerRange {
+        self.via_layers(self.via_to_layer.unwrap_or(self.current_layer))
+    }
+
     /// The layers of the pending via: [`Self::via_span`], else from the current layer to `to_layer`.
     fn via_layers(&self, to_layer: i32) -> LayerRange {
         self.via_span.unwrap_or_else(|| LayerRange::new(self.current_layer, to_layer))
