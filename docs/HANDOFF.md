@@ -2,7 +2,18 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
-## Start here (2026-11-10): round 2 landed through batch v4; batch v5 in flight
+## Start here (2026-11-13): round 2 done; round 3 (leftovers) starting
+
+- **Main 1fd92482** holds all of round 2: batches v5-v10 and `task-v11-cvpcb`. Every `docs/parity/UI-LEFT-2.md` entry is done or kept by design. Full suite on 1fd92482: web 3834/0; Rust 5118 passed, with only the 2 known failures `corpus_runs_every_seed` and `kicad_cli_plots_each_layer_of_the_qa_boards_padstacks_...`; parity reexport ok; browser 172/172, with rescue-symbols passing on retry.
+- **Round 3:** each branch's "What's left" column below, the PARITY files' leftovers and GAPS.md lows go into `docs/parity/UI-LEFT-3.md`, ranked by user impact. They are done in batches of 4 agents; each batch is gated in `~/work/agentic-eda-gate` and pushed.
+- **Decisions made:**
+  - Follow KiCad, except where design.json or the browser can't. Kept: the symbol is updated at Footprint Properties' OK; Strict mode is on by default; the studio's own placer. No PNG/JPEG crate for now (PP22: images turned outside the browser keep their pixels).
+  - `SymbolInstance::no_footprint` marks a footprint deleted on purpose, as distinct from unset, which means the part's footprint. A new `SymbolInstance` literal needs it.
+- **Lessons:**
+  - Branches that pass alone can clash once merged: v10 changed menu labels to KiCad's and cleared editor history on load. Gate the merged tree, not the branches.
+  - `tools/run-all-checks.sh` has a board kind `mcu30-nofp`.
+
+## Earlier (2026-11-10): round 2 landed through batch v4; batch v5 in flight
 
 - **Main 21d30106** holds everything of 2026-11-07 plus `task-v2-libs`, `task-v3-schdlg`, `task-v3-pcbmisc` (merged and fixed at 8a6e5642) and batch v4: `task-v4-pp8-props` (PP8, PARITY-pcb §104), `task-v4-pp15-swap` (PP15, §105), `task-v4-ss12-labels` (SS12, PARITY-sch §78), `task-v4-ss17-annot` (SS17 partly, §79). Gates below.
 - **In flight (2026-11-10):** batch v5 in worktrees `~/work/agentic-eda-v5-*`: PP18 (PARITY-pcb §106), PP23 (§107), SS10 (PARITY-sch §80), SS18 (§81); section numbers were given out in advance so the merges do not clash.
