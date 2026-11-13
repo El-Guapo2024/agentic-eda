@@ -13,8 +13,8 @@
 //
 // Pure: the canvas (components/footprint/FootprintCanvas.tsx) runs the drag and commits it with `fp_item set_graphic` (one undo step, the shape's looks kept by id); the
 // corner operations are actions/fpPointEditActions.ts.
-import type { CmdShape, Shape } from "../api/types";
-import { activeEditPoint, chamferContourCorner, cmdShapeToShape, moveContourPoint, moveShapePoint, nearestContourVertex, shapeEditPoints, shapeToCmd, type ArcEditMode, type EditPoint } from "./pcbPointEdit";
+import type { CmdShape, CmdZone, Shape } from "../api/types";
+import { activeEditPoint, chamferContourCorner, cmdShapeToShape, contourEditPoints, moveContourPoint, moveShapePoint, nearestContourVertex, shapeEditPoints, shapeToCmd, type ArcEditMode, type EditPoint } from "./pcbPointEdit";
 import { addCornerToContours, splitArcAtCursor, splitSegmentAt, type P } from "./pcbAddCorner";
 import { canRemoveContourCorner, removeContourCorner } from "./zonePointEditor";
 
@@ -147,4 +147,84 @@ export function fpMovePoint(s: Shape, point: EditPoint, to: readonly [number, nu
     return moved ? polygonWith(s, moved) : null;
   }
   return fpPointDrag(s, point, to, arcModeIndex);
+}
+
+// ---------------------------------------------------------------------------------------------------- a footprint zone's point editor (F3-2 follow-up)
+
+/**
+ * The zone the point editor works on: the one selected zone of the footprint, not a locked one (`PCB_POINT_EDITOR::OnSelectionChange`), with its outline and holes as
+ * `SHAPE_POLY_SET`'s contours (`ZONE_POINT_EDIT_BEHAVIOR`: `BuildForPolyOutline` over the outline and every hole). `zone` is the IR's zone, what `fp_item set` takes back.
+ */
+export interface FpZoneEdit {
+  id: string;
+  zone: CmdZone;
+  contours: P[][];
+}
+
+type ZoneIr = CmdZone & { holes?: { x: number; y: number }[][] };
+
+export function fpZoneEditTarget(zones: readonly CmdZone[], selection: ReadonlySet<string>, locked: (id: string) => boolean = () => false): FpZoneEdit | null {
+  if (selection.size !== 1) return null;
+  const id = [...selection][0]!;
+  const z = zones.find((x) => x.id === id) as ZoneIr | undefined;
+  if (!z || locked(id) || z.outline.length < 3) return null;
+  const ring = (pts: readonly { x: number; y: number }[]): P[] => pts.map((q) => [q.x, q.y] as P);
+  return { id, zone: z, contours: [ring(z.outline), ...(z.holes ?? []).filter((h) => h.length >= 3).map(ring)] };
+}
+
+/** The zone's edit points: a corner per vertex of every contour, a side's middle per side (`contourEditPoints`). */
+export function fpZoneEditPoints(z: FpZoneEdit): EditPoint[] {
+  return contourEditPoints(z.contours);
+}
+
+/** The edit point of the zone under the pointer, or null. */
+export function fpZonePointAt(z: FpZoneEdit, at: readonly [number, number], tolNm: number): EditPoint | null {
+  return activeEditPoint(fpZoneEditPoints(z), at, tolNm);
+}
+
+/** The zone's contours with `point` dragged to `to` (`ZONE_POINT_EDIT_BEHAVIOR::UpdateItem`: a corner set, a side moved with both its ends); null when the point names nothing. */
+export function fpZoneDrag(z: FpZoneEdit, point: EditPoint, to: readonly [number, number]): P[][] | null {
+  return moveContourPoint(z.contours, point, to);
+}
+
+/** The zone as `fp_item set` takes it, with `contours` for its outline and holes (the rest of the zone as it was). */
+export function fpZoneWith(z: FpZoneEdit, contours: readonly (readonly P[])[]): CmdZone {
+  const [outline, ...holes] = contours;
+  const xy = (r: readonly P[]) => r.map((p) => ({ x: p[0], y: p[1] }));
+  const out: ZoneIr = { ...(z.zone as ZoneIr), outline: xy(outline ?? []) };
+  if (holes.length > 0) out.holes = holes.map(xy);
+  else delete out.holes;
+  return out;
+}
+
+/** What a corner operation does to a zone: its new contours, or the zone removed (`commit.Remove( item )`, an outline of three corners). */
+export type FpZoneCornerEdit = { kind: "contours"; contours: P[][] } | { kind: "remove" };
+
+/** `addCorner` on a zone: the point of the nearest side of the outline or of a hole nearest the cursor, inserted there ("Add Zone Corner"). */
+export function fpZoneAddCorner(z: FpZoneEdit, cursor: readonly [number, number]): FpZoneCornerEdit | null {
+  const next = addCornerToContours(z.contours, [cursor[0], cursor[1]]);
+  return next ? { kind: "contours", contours: next } : null;
+}
+
+const zoneVertex = (point: EditPoint | null): number | null => (point?.kind === "corner" && /^v\d+$/.test(point.id) ? Number(point.id.slice(1)) : null);
+
+/** `CanRemoveCorner` on a zone: a corner of the outline while more than three remain, of a hole always. */
+export function fpZoneCanRemoveCorner(z: FpZoneEdit, point: EditPoint | null): boolean {
+  const v = zoneVertex(point);
+  return v !== null && canRemoveContourCorner(z.contours, v);
+}
+
+/** `removeCorner` on a zone ("Remove Zone Corner"): the corner, a hole of three corners whole, an outline of three the zone. */
+export function fpZoneRemoveCorner(z: FpZoneEdit, point: EditPoint | null): FpZoneCornerEdit | null {
+  const v = zoneVertex(point);
+  if (v === null) return null;
+  const r = removeContourCorner(z.contours, v);
+  if (!r) return null;
+  return r.kind === "remove_item" ? { kind: "remove" } : { kind: "contours", contours: r.contours };
+}
+
+/** `chamferCorner` on a zone ("Break Zone Corner"): the corner of the outline or of a hole nearest the cursor. */
+export function fpZoneChamferCorner(z: FpZoneEdit, cursor: readonly [number, number]): FpZoneCornerEdit | null {
+  const next = chamferContourCorner(z.contours, nearestContourVertex(z.contours, cursor));
+  return next ? { kind: "contours", contours: next } : null;
 }

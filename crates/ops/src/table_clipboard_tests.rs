@@ -8,7 +8,7 @@ use eda_model::table::{cell_item_id, Table, TableBorder, TableCell, TableSeparat
 use eda_model::units::mm;
 
 /// A `rows` x `cols` board table of 10 x 5 mm cells at (10, 20) mm on `layer`, each cell's text its row and column (`r0c1`).
-fn pcb_table(rows: usize, cols: usize, layer: &str) -> Table {
+pub(super) fn pcb_table(rows: usize, cols: usize, layer: &str) -> Table {
     let mut cells: Vec<TableCell> = (0..rows * cols).map(|_| TableCell::pcb_new(false)).collect();
     for (i, c) in cells.iter_mut().enumerate() {
         c.text = format!("r{}c{}", i / cols, i % cols);
@@ -27,7 +27,7 @@ fn pcb_table(rows: usize, cols: usize, layer: &str) -> Table {
     }
 }
 
-fn add_pcb(b: &mut Board<'_>, t: Table) -> String {
+pub(super) fn add_pcb(b: &mut Board<'_>, t: Table) -> String {
     b.apply(&Cmd::Table(TableCmd::Add { table: t })).expect("adds");
     b.design().drawings.as_ref().unwrap().tables.last().unwrap().id.clone()
 }

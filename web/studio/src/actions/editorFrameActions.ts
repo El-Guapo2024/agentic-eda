@@ -36,6 +36,7 @@ import { snapGridNm } from "../components/canvas/gridHelper";
 import { createElement } from "react";
 import { readClipboardText } from "../api/libraryClient";
 import { clearNetsOffered, pasteSource } from "../kicad-port/pcbPasteSpecial";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
 import { PcbPasteSpecialDialog } from "../components/PcbPasteSpecialDialog";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { fpSelectionAsText } from "../kicad-port/fpClipboard";
@@ -191,8 +192,11 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       if (!fpIdle()) return;
       void (async () => {
         const source = pasteSource(await readClipboardText(), ctx.fpApi.sessionClipboard());
-        if (!source) return;
-        if (source.kind === "text") return void ctx.fpApi.pasteItems();
+        // nothing of KiCad's on the clipboard: a bitmap or a text is pasted at once (the dialog comes after `CLIPBOARD_IO::Parse`)
+        if (!source || source.kind === "text") return void ctx.fpApi.pasteItems();
+        // table cells selected and a table on a board's clipboard: "Paste Cells" before any dialog (`hasTableCells`)
+        const st = ctx.fpApi.getState();
+        if (source.kind === "board" && clipboardHasTable(source.text, 1) && hasTableCells(st.selection, st.footprint?.display?.tables ?? [])) return void ctx.fpApi.pasteItems();
         openSweepDialog({ kind: "element", element: createElement(PcbPasteSpecialDialog, { showClearNets: clearNetsOffered(source), onOk: () => void ctx.fpApi.pasteItems() }) });
       })();
     });

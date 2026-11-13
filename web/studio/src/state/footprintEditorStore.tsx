@@ -11,7 +11,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Nm } from "../api/types";
 import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCarry, postClearEditorHistory, postCmd, postRedo, postUndo, type CarryStep } from "../api/client";
-import { readClipboardText, writeClipboardText } from "../api/libraryClient";
+import { readClipboardImage, readClipboardText, writeClipboardText } from "../api/libraryClient";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
+import { isBoardFragment } from "../kicad-port/pcbPasteSpecial";
 import { fpClipboardKind, fpPlainTextPaste } from "../kicad-port/fpClipboard";
 import { LONG_TEXT_QUESTION } from "../kicad-port/plainTextPaste";
 import { ensureFootprintInProject } from "../api/libraryClient";
@@ -550,6 +552,8 @@ export interface FootprintEditorApi {
    * duplicate`) and both halves set, in one carry.
    */
   cornerEdit: (id: string, edit: FpCornerEdit) => Promise<boolean>;
+  /** A point edit of the zone `id` (a dragged or typed point, Create / Remove / Chamfer Corner; UI-LEFT-3 F3-2): the zone set (`fp_item set`), or removed (null). One undo step. */
+  zoneEdit: (id: string, zone: CmdZone | null) => Promise<boolean>;
   /** This session's last Copy (what Paste falls back to where the browser will not hand the system clipboard over), or null. */
   sessionClipboard: () => string | null;
   /**
@@ -860,15 +864,26 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const name = st.name;
       if (!fp || !name) return;
       const system = await readClipboardText();
-      const text = system != null && system !== "" ? system : clipboardRef.current;
-      if (!text) return;
+      // this session's Copy only where the browser will not read the clipboard (null); a clipboard that holds no text (a bitmap only) is read as such
+      const text = system ?? clipboardRef.current;
       const c = st.cursorNm ?? { x: 0, y: 0 };
       const g = snapGridNm(st.gridNm) || 1;
       const at = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
-      // KiCad's text (`CLIPBOARD_IO::Parse`) goes in as items; any other text as a text item on the active layer ("If it wasn't content, then paste as a text object")
+      const kicad = !!text && fpClipboardKind(text) === "kicad";
+      // `hasTableCells`: with table cells selected and a table on a board's clipboard, its cells go into them ("Paste Cells", `pasteCellsIntoSelection`; UI-LEFT-3 F3-10)
+      if (kicad && isBoardFragment(text!) && clipboardHasTable(text!, 1) && hasTableCells(st.selection, fp.display?.tables ?? [])) {
+        await runCmd({ op: "fp_item", verb: "paste_cells", footprint: name, ids: [...st.selection], text: text! });
+        return;
+      }
+      // KiCad's text (`CLIPBOARD_IO::Parse`) goes in as items; else a bitmap on the clipboard as a reference image (`GetImageFromClipboard`, a `PCB_REFERENCE_IMAGE`
+      // at the origin on F.Cu, which the paste puts on the cursor; UI-LEFT-3 F3-10); else the text as a text item on the active layer ("If it wasn't content, then
+      // paste as a text object")
       let cmd: Cmd;
-      if (fpClipboardKind(text) === "kicad") cmd = { op: "fp_item", verb: "paste", footprint: name, text, at };
+      const image = kicad ? null : await readClipboardImage();
+      if (kicad) cmd = { op: "fp_item", verb: "paste", footprint: name, text: text!, at };
+      else if (image) cmd = { op: "fp_item", verb: "add", footprint: name, item: { image: { layer: "F.Cu", at, data: image } } };
       else {
+        if (!text) return;
         const plain = fpPlainTextPaste(text, at, st.activeLayer || "F.SilkS");
         if (!plain || (plain.longText && !window.confirm(LONG_TEXT_QUESTION))) return;
         cmd = { op: "add_footprint_text", footprint: name, text: plain.text };
@@ -892,6 +907,13 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       pendingRef.current = true;
     },
     sessionClipboard: () => clipboardRef.current,
+    zoneEdit: async (id, zone) => {
+      const name = stateRef.current.name;
+      if (!name) return false;
+      if (zone) return runCmd({ op: "fp_item", verb: "set", footprint: name, id, item: { zone } });
+      dispatch({ type: "CLEAR_SELECTION" });
+      return runCmd({ op: "fp_item", verb: "delete", footprint: name, ids: [id] });
+    },
     cornerEdit: async (id, edit) => {
       const st = stateRef.current;
       const name = st.name;

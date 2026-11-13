@@ -65,6 +65,8 @@ export type FpItemCmd =
   | { verb: "duplicate"; footprint: string; ids: string[]; pad_number?: string }
   /** `PCB_CONTROL::Paste` in the footprint editor: the items of KiCad's clipboard footprint text, new, its origin at `at` (UI-LEFT-2 FF1). */
   | { verb: "paste"; footprint: string; text: string; at: PointXY }
+  /** `PCB_CONTROL::Paste` with table cells selected and a table on a board's clipboard: its cells into the selected ones ("Paste Cells"). */
+  | { verb: "paste_cells"; footprint: string; ids: string[]; text: string }
   | { verb: "add_to_group"; footprint: string; group_id: string; ids: string[] }
   | { verb: "remove_from_group"; footprint: string; ids: string[] }
   /** A library pad's backdrill and post-machining and its own teardrop parameters, each set whole, left out to stay (UI-LEFT-2 FF3). */

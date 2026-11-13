@@ -274,3 +274,31 @@ fn what_is_added_while_a_footprint_group_is_entered_joins_that_group() {
     b.apply(&other).unwrap();
     assert!(fp(&b).graphics.iter().any(|g| matches!(g, Shape::Circle { center, .. } if *center == p(mm(20.0), Nm::ZERO))));
 }
+
+/// UI-LEFT-3 F3-10: with cells of a footprint table selected, a board's clipboard holding a table pastes into them (`PCB_CONTROL::Paste`'s `hasTableCells` branch,
+/// `pasteCellsIntoSelection`), and a selection KiCad refuses is refused with its words.
+#[test]
+fn a_boards_table_pastes_into_the_selected_cells_of_a_footprint_table() {
+    use super::table_clipboard_tests::{add_pcb, pcb_table};
+    use eda_model::table::cell_item_id;
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = with_footprint(&m);
+    let mut source = pcb_table(1, 2, "F.SilkS");
+    for c in source.cells.iter_mut() {
+        c.text = format!("new {}", c.text);
+    }
+    let src = add_pcb(&mut b, source);
+    let text = eda_kicad::export_pcb_clipboard(b.design(), &m, &[src], p(Nm::ZERO, Nm::ZERO)).unwrap();
+    b.apply(&Cmd::FpItem(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Table(pcb_table(2, 2, "F.Fab")) })).unwrap();
+    let target = fp(&b).items.tables[0].id.clone();
+    let paste = |ids: Vec<String>| Cmd::FpItem(FpItemCmd::PasteCells { footprint: NAME.into(), ids, text: text.clone() });
+    b.apply(&paste(vec![cell_item_id(&target, 1, 0)])).unwrap();
+    let t = fp(&b).items.tables[0].clone();
+    assert_eq!(t.texts(), vec![vec!["r0c0", "r0c1"], vec!["new r0c0", "new r0c1"]]);
+    let e = b.apply(&paste(vec![cell_item_id(&target, 0, 0), cell_item_id(&target, 1, 1)])).unwrap_err();
+    assert_eq!(e[0].hint.clone().unwrap_or_default(), "Selected cells must form a contiguous block");
+    // a footprint's clipboard is no board: no table is looked for in it
+    let fp_clip = eda_kicad::export_kicad_mod(&clipboard_footprint(fp(&b), &[target.clone()], p(Nm::ZERO, Nm::ZERO), "00000000-0000-4000-8000-000000000003").unwrap());
+    let e = b.apply(&Cmd::FpItem(FpItemCmd::PasteCells { footprint: NAME.into(), ids: vec![cell_item_id(&target, 0, 0)], text: fp_clip })).unwrap_err();
+    assert_eq!(e[0].check, "ops_no_clipboard_table");
+}

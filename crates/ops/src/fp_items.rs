@@ -138,6 +138,10 @@ pub enum FpItemCmd {
     /// ([`crate::fp_copy::paste`]). Refused for a text that is no footprint (the studio
     /// pastes that as a text item, `add_footprint_text`).
     Paste { footprint: String, text: String, at: Point },
+    /// `PCB_CONTROL::Paste` with table cells selected and a board's clipboard holding a table (UI-LEFT-3 F3-10): the clipboard's first table goes into the selected cells
+    /// of the footprint's table (`PCB_EDIT_TABLE_TOOL::validatePasteIntoSelection`, `pasteCellsIntoSelection`, "Paste Cells"); `ids` is the editor's selection. A
+    /// selection KiCad refuses is refused with its message.
+    PasteCells { footprint: String, ids: Vec<String>, text: String },
     /// The Properties pane's rows of a library pad that its file keeps among the pad's other forms (UI-LEFT-2 FF3): KiCad 10's "Post-machining Properties" and
     /// "Backdrill Properties" (`PAD::SetFrontPostMachiningMode` .., `PADSTACK::SetBackdrillMode` .., KiCad 25ec2335 `PAD_DESC`) as `drill_props`, and the "Teardrops"
     /// rows (`BOARD_CONNECTED_ITEM_DESC`'s `SetTeardrop..` on the pad's `TEARDROP_PARAMETERS`) as `teardrops`. Each is set whole; left out, it stays as it is.
@@ -217,6 +221,7 @@ impl FpItemCmd {
             | FpItemCmd::RemoveFromGroup { footprint, .. }
             | FpItemCmd::Duplicate { footprint, .. }
             | FpItemCmd::Paste { footprint, .. }
+            | FpItemCmd::PasteCells { footprint, .. }
             | FpItemCmd::SetPadExtras { footprint, .. } => footprint,
         }
     }
@@ -242,6 +247,7 @@ impl FpItemCmd {
             FpItemCmd::Duplicate { ids, pad_number, .. } => format!("duplicate {} item(s){}", ids.len(), pad_number.as_ref().map(|n| format!(" as pad {n}")).unwrap_or_default()),
             FpItemCmd::Paste { at, .. } => format!("paste at {:.3},{:.3}", eda_model::units::to_mm(at.x), eda_model::units::to_mm(at.y)),
             FpItemCmd::SetPadExtras { id, .. } => format!("edit pad {id}"),
+            FpItemCmd::PasteCells { ids, .. } => format!("paste into {} cell(s)", ids.len()),
         };
         format!("footprint {:?}: {verb}", self.footprint())
     }
@@ -757,6 +763,7 @@ impl Board<'_> {
                 targets(fp, ids)?;
                 super::fp_copy::duplicate(fp, ids, pad_number.as_deref()).map(|_| ())
             }
+            FpItemCmd::PasteCells { ids, text, .. } => paste_cells(fp, ids, text),
             FpItemCmd::Paste { text, at, .. } => {
                 let clips = eda_kicad::parse_footprint_clipboard(text).map_err(|e| fail("ops_bad_paste", &fp.name, format!("the clipboard footprint cannot be read: {e}")))?;
                 let clips = clips.ok_or_else(|| fail("ops_bad_paste", &fp.name, "the clipboard holds no footprint"))?;
@@ -775,6 +782,33 @@ impl Board<'_> {
                 Ok(())
             }
         }
+    }
+}
+
+/// [`FpItemCmd::PasteCells`]: as the board's `TableCmd::PasteCells` (`crate::table_paste_cells`), on the footprint's tables. Only a board's clipboard (`clipItem->Type()
+/// == PCB_T`) is looked in for a table (`clipBoard->Drawings()`).
+fn paste_cells(fp: &mut LibraryFootprint, ids: &[String], text: &str) -> Result<(), Vec<CheckResult>> {
+    use eda_model::table::parse_cell_item_id;
+    use eda_model::table_paste::{cell_block_bounds, validate_paste_into, PasteTarget};
+    let board = text.trim_start_matches('\u{feff}').trim_start().starts_with("(kicad_pcb");
+    let source = board.then(|| eda_kicad::parse_pcb_clipboard(text).ok()).flatten().and_then(|c| c.tables.into_iter().find(|t| t.is_well_formed()));
+    let Some(source) = source else { return Err(fail("ops_no_clipboard_table", "paste", "the clipboard holds no table")) };
+    let Some(table_id) = ids.iter().find_map(|id| parse_cell_item_id(id).map(|(t, _, _)| t.to_string())) else { return Err(fail("ops_bad_paste_cells", "paste", "No cells selected")) };
+    let known: BTreeSet<String> = fp.items.tables.iter().map(|t| t.id.clone()).collect();
+    let targets: Vec<PasteTarget<'_>> = ids
+        .iter()
+        .map(|id| match parse_cell_item_id(id) {
+            Some((t, row, col)) if known.contains(t) => PasteTarget::Cell { table: t, row, col },
+            _ => PasteTarget::Other,
+        })
+        .collect();
+    let table = fp.items.tables.iter_mut().find(|t| t.id == table_id).ok_or_else(|| fail("ops_unknown_item", &table_id, "no table of this footprint has this id"))?;
+    let cells = validate_paste_into(table, &targets).map_err(|m| fail("ops_bad_paste_cells", &table_id, m))?;
+    let Some((col_min, _, row_min, _, _)) = cell_block_bounds(table, &cells) else { return Err(fail("ops_bad_paste_cells", &table_id, "No cells selected")) };
+    if table.paste_cells(row_min, col_min, &source) {
+        Ok(())
+    } else {
+        Err(fail("ops_bad_paste_cells", &table_id, "Failed to paste cells"))
     }
 }
 

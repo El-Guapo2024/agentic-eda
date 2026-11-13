@@ -15,9 +15,8 @@ import { DEFAULT_FORM_SETTINGS, ZoneForm, type ZoneFormSettings, type ZoneHost }
 import { TextBoxForm, RefImagePropertiesForm, type TextBoxHost, type RefImageHost } from "../PcbItemDialogs";
 import { BarcodeForm, type BarcodeHost } from "../BarcodeDialog";
 import { TablePropertiesForm, type TableHost } from "../TableDialogs";
-import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
 import { useFpLayerChoices } from "./useFpLayerChoices";
-import { fpLayerLabel } from "../../kicad-port/fpAppearance";
+import { FP_COPPER_LAYERS, fpAllLayers, fpLayerLabel } from "../../kicad-port/fpAppearance";
 import { fpNewTable, fpPatchTable, fpZoneWithSettings, type FpTable } from "../../kicad-port/fpDrawTools";
 import { tablePatchOf } from "../../kicad-port/tables";
 import { lineThicknessNm } from "../../kicad-port/layerDefaults";
@@ -30,7 +29,7 @@ import type { FpItemWire } from "../../api/fpItemTypes";
 
 /**
  * The dialogs' layer choices: the editor board's enabled layers, each by `BOARD::GetLayerName` -- a user layer by the name User Layer Names gives it (UI-LEFT-3 F3-1,
- * components/footprint/useFpLayerChoices.ts). The zone dialog keeps its own list (the footprint's copper and the other layers it always offered), by the same names.
+ * components/footprint/useFpLayerChoices.ts). The zone dialog lists the layers `ZONE_SETTINGS::SetupLayersList` is given, by the same names.
  */
 function useDialogLayers(): { layers: string[]; layerName: (l: string) => string } {
   const choices = useFpLayerChoices();
@@ -39,7 +38,6 @@ function useDialogLayers(): { layers: string[]; layerName: (l: string) => string
     return { layers: choices.map((c) => c.value), layerName: (l: string) => names.get(l) ?? fpLayerLabel(l) };
   }, [choices]);
 }
-const ZONE_LAYERS = [...FP_EDITOR_LAYERS];
 const items = (st: FootprintEditorState) => st.footprint?.items ?? {};
 const display = (st: FootprintEditorState) => st.footprint?.display;
 
@@ -111,7 +109,7 @@ function settingsOf(z: CmdZone): ZoneFormSettings {
  */
 export function FpZoneDialog() {
   const st = useFpState();
-  const { layers, layerName } = useDialogLayers();
+  const { layerName } = useDialogLayers();
   const api = useFpApi();
   const units = useStudioState().units;
   const commit = useCommit();
@@ -132,8 +130,10 @@ export function FpZoneDialog() {
     duplicate: false,
     convert: false,
     nets: [],
-    copperLayers: ZONE_LAYERS.filter(isCopper),
-    optionalLayers: [...ZONE_LAYERS.filter((l) => !isCopper(l)), ...layers.filter((l) => !isCopper(l) && !ZONE_LAYERS.includes(l))],
+    // `ZONE_SETTINGS::SetupLayersList` on the editor's board: a copper zone's `LSET::AllCuMask( GetCopperLayerCount() )` -- the footprint's stackup, F.Cu, In1.Cu
+    // ("Inner layers") and B.Cu --, a non-copper zone's `LSET::AllNonCuMask()` (every technical and user layer), a rule area's both; each by `GetLayerName` (UI-LEFT-3 F3-1)
+    copperLayers: [...FP_COPPER_LAYERS],
+    optionalLayers: fpAllLayers().filter((l) => !isCopper(l)),
     layerName,
     units,
     lockable: false,

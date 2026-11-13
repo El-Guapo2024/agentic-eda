@@ -5,7 +5,9 @@
 //   F3-3   with a group entered, a line drawn joins the group;
 //   F3-4   Mirror while a drag moves the selection mirrors it about the point held, one undo step with the drop; Escape reverts both;
 //   F3-10  Copy's reference is the copied items' anchor nearest the cursor (BestDragOrigin); Copy as Text; Paste Special asks DIALOG_PASTE_SPECIAL and pastes; a board's
-//          clipboard pastes its footprint's pad where the board had it and its own line.
+//          clipboard pastes its footprint's pad where the board had it and its own line; a bitmap on the clipboard is a reference image, an image copied comes back;
+//          cells dragged over in a footprint table take a board's copied table;
+//   F3-2   (zones) a footprint zone's corner dragged and a corner created; the zone dialog lists "Inner layers".
 //
 // Run it on a COPY of a board (`eda board new examples/ldo.yaml -o <dir>`, `eda board serve -C <dir> --port N --ui web/studio/dist`). It makes a footprint of its own and
 // puts the preferences it changes back. It answers through `window.__fpV13Check`: { results, done, ok, wait(ms) }.
@@ -297,6 +299,115 @@
     t(fp.graphics.some((g) => g.kind === "segment" && g.start.x === mm(20) && g.start.y === mm(20)), "the board's own line pasted too");
     await undo();
     t((await footprint(name)).pads.length === fp0.pads.length, "one undo takes the paste away");
+  });
+
+  await scenario("F3-2: a zone of the footprint gets the point editor -- a corner dragged, Create Corner -- and its dialog lists the editor board's layers by name", async (t) => {
+    const outline = [[-20, -20], [-12, -20], [-12, -12], [-20, -12]].map(([x, y]) => ({ x: mm(x), y: mm(y) }));
+    const r = await cmd({ op: "fp_item", verb: "add", footprint: name, item: { zone: { net: "", layer: "F.Cu", outline } } });
+    if (!t(r.ok !== false, `a zone added (${r.message ?? "ok"})`)) return;
+    let fp = await footprint(name);
+    const z = (fp.items?.zones ?? [])[0];
+    if (!t(!!z, "the zone")) return;
+    ids.zone = z.id;
+    await E.run("common.Control.zoomFitScreen");
+    await sleep(600);
+    await select([z.id]);
+    // drag the corner at (-20, -20) to (-22, -21)
+    await hover(mm(-20), mm(-20));
+    fire("pointerdown", mm(-20), mm(-20), 1);
+    await sleep(60);
+    for (let i = 1; i <= 5; i++) { fire("pointermove", mm(-20 - (2 * i) / 5), mm(-20 - i / 5), 1); await sleep(60); }
+    fire("pointerup", mm(-22), mm(-21));
+    await sleep(1000);
+    fp = await footprint(name);
+    let o = (fp.items?.zones ?? []).find((x) => x.id === z.id)?.outline ?? [];
+    t(o[0] && o[0].x === mm(-22) && o[0].y === mm(-21), `the corner dragged (${JSON.stringify(o[0])})`);
+    await undo();
+    // Create Corner on the top side
+    await select([z.id]);
+    await hover(mm(-16), mm(-19.8));
+    await E.run("pcbnew.PointEditor.addCorner");
+    await sleep(800);
+    o = ((await footprint(name)).items?.zones ?? []).find((x) => x.id === z.id)?.outline ?? [];
+    t(o.length === 5 && o.some((q) => q.y === mm(-20) && q.x > mm(-19) && q.x < mm(-13)), `a fifth corner on the side (${JSON.stringify(o)})`);
+    await undo();
+    // the zone dialog: the copper layers of the footprint's stackup by their names
+    await select([z.id]);
+    await E.run("pcbnew.InteractiveEdit.properties");
+    await sleep(600);
+    const dlg = document.querySelector(".dialog-backdrop .dialog, [role='dialog']");
+    t(dlg && /Inner layers/.test(dlg.textContent), `the zone dialog lists "Inner layers" (${dlg ? "open" : "no dialog"})`);
+    await closeDialogs();
+  });
+
+  await scenario("F3-10: a bitmap on the clipboard is pasted as a reference image; an image copied and pasted comes back", async (t) => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const bytes = Uint8Array.from(atob(png), (ch) => ch.charCodeAt(0));
+    let restore = null;
+    try {
+      const old = navigator.clipboard.read;
+      Object.defineProperty(navigator.clipboard, "read", { configurable: true, value: async () => [{ types: ["image/png"], getType: async () => new Blob([bytes], { type: "image/png" }) }] });
+      restore = () => Object.defineProperty(navigator.clipboard, "read", { configurable: true, value: old });
+    } catch { /* no clipboard object */ }
+    clip = "";
+    const n0 = ((await footprint(name)).items?.images ?? []).length;
+    await select([]);
+    await hover(mm(30), mm(10));
+    await E.run("common.Interactive.paste");
+    const carried = await until(() => E.state().tool === "move", 5000);
+    t(!!carried, "the image rides the cursor");
+    await clickAt(mm(30), mm(10));
+    let fp = await footprint(name);
+    const imgs = fp.items?.images ?? [];
+    t(imgs.length === n0 + 1, `a reference image (${imgs.length})`);
+    restore?.();
+    const img = imgs.find((x) => !x.id || true);
+    if (!img) return;
+    await select([imgs[imgs.length - 1].id]);
+    await hover(mm(30), mm(10));
+    await E.run("common.Interactive.copy");
+    await sleep(600);
+    t(/\(image/.test(clip), "Copy puts the image in KiCad's clipboard footprint");
+    await select([]);
+    await hover(mm(36), mm(10));
+    await E.run("common.Interactive.paste");
+    await until(() => E.state().tool === "move", 5000);
+    await clickAt(mm(36), mm(10));
+    fp = await footprint(name);
+    t((fp.items?.images ?? []).length === n0 + 2, `the copy pasted back (${(fp.items?.images ?? []).length})`);
+  });
+
+  await scenario("F3-10: cells dragged over in a footprint table take a board's copied table (Paste Cells)", async (t) => {
+    const cells = (n, prefix) => Array.from({ length: n }, (_, i) => ({ text: `${prefix}${i}`, margins: [mm(0.5), mm(0.5), mm(0.5), mm(0.5)] }));
+    const table = (at, prefix) => ({ layer: "F.SilkS", at, col_widths: [mm(5), mm(5)], row_heights: [mm(3), mm(3)], cells: cells(4, prefix) });
+    const rb = await cmd({ op: "table", verb: "add", table: { ...table({ x: mm(100), y: mm(100) }, "S"), cells: cells(2, "S"), row_heights: [mm(3)] } });
+    const rf = await cmd({ op: "fp_item", verb: "add", footprint: name, item: { table: table({ x: mm(-20), y: mm(10) }, "F") } });
+    if (!t(rb.ok !== false && rf.ok !== false, `the tables (${rb.message ?? "ok"}, ${rf.message ?? "ok"})`)) return;
+    const st = await json("/api/state");
+    const bt = (st.drawings?.tables ?? st.board?.drawings?.tables ?? []).slice(-1)[0];
+    const copy = bt ? await fetch("/api/clipboard/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [bt.id], reference: { x: mm(100), y: mm(100) } }) }).then((r) => r.json()) : null;
+    if (!t(copy && copy.text && /\(table/.test(copy.text), "the board's table copied")) return;
+    let fp = await footprint(name);
+    const ft = (fp.items?.tables ?? [])[0];
+    await E.run("common.Control.zoomFitScreen");
+    await sleep(600);
+    await select([]);
+    // drag within the second row's first cell: it alone is selected
+    await hover(mm(-18), mm(14.5));
+    fire("pointerdown", mm(-18), mm(14.5), 1);
+    await sleep(60);
+    for (let i = 1; i <= 4; i++) { fire("pointermove", mm(-18 + i * 0.4), mm(14.5 + i * 0.2), 1); await sleep(60); }
+    fire("pointerup", mm(-16.4), mm(15.3));
+    await sleep(400);
+    const sel = E.state().selection.map((x) => x.id);
+    t(sel.length === 1 && /:1:0$/.test(sel[0]), `the cell selected (${JSON.stringify(sel)})`);
+    clip = copy.text;
+    await E.run("common.Interactive.paste");
+    await sleep(900);
+    fp = await footprint(name);
+    const after = (fp.items?.tables ?? []).find((x) => x.id === ft.id);
+    t(after && after.cells[2]?.text === "S0" && after.cells[3]?.text === "S1" && after.cells[0]?.text === "F0", `the copied cells in the second row (${JSON.stringify(after?.cells.map((c) => c.text))})`);
+    await undo();
   });
 
   // the footprint made here goes

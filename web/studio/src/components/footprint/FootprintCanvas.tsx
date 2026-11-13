@@ -53,7 +53,8 @@ import { heldCursor } from "../../kicad-port/heldCursor";
 import { FootprintSnap, setFpCopyOrigin, type FootprintPointOpts, type FootprintSnapMods } from "./footprintSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
-import { fpPointAt, fpPointDrag, fpPointEditTarget } from "../../kicad-port/fpPointEdit";
+import { fpPointAt, fpPointDrag, fpPointEditTarget, fpZoneDrag, fpZoneEditPoints, fpZoneEditTarget, fpZonePointAt, fpZoneWith, type FpZoneEdit } from "../../kicad-port/fpPointEdit";
+import { cellsBetween, cellUnder, onlyCells } from "../../kicad-port/tableCells";
 import { fpEditPointToleranceNm, fpPointOpsAt, runFpPointOp, type FpPointOp } from "../../actions/fpPointEditActions";
 import { fpCanCopyAsText } from "../../kicad-port/fpClipboard";
 import { shapeEditPoints, type EditPoint } from "../../kicad-port/pcbPointEdit";
@@ -152,7 +153,11 @@ type DragState =
    * without a drag ("Left button drag:" sent the drag to the rectangle). */
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; modifiers: ClickModifiers; click: string | null }
   /** `PCB_POINT_EDITOR` on the one selected graphic (kicad-port/fpPointEdit.ts): the edit point pressed, the shape as it was at the press (UI-LEFT-2 FF7). */
-  | { kind: "point"; id: string; base: Shape; point: EditPoint };
+  | { kind: "point"; id: string; base: Shape; point: EditPoint }
+  /** The same on the one selected zone (`ZONE_POINT_EDIT_BEHAVIOR`, UI-LEFT-3 F3-2): its contours as they were at the press. */
+  | { kind: "zonePoint"; id: string; base: FpZoneEdit; point: EditPoint }
+  /** `PCB_SELECTION_TOOL::Main`'s drag from a table cell (`hoverCells`, `selectTableCells`): the cells under it selected (UI-LEFT-3 F3-10). `moved`: it has become a drag. */
+  | { kind: "cells"; table: string; startWorld: [number, number]; before: string[]; modifiers: ClickModifiers; moved: boolean };
 
 /** The shape a point-counted tool commits: the layer class's width and, for a polygon, KiCad's fill rule (kicad-port/fpDrawDefaults.ts). */
 function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
@@ -216,6 +221,8 @@ export function FootprintCanvas() {
   const studioPrefs = useStudioState().prefs;
   /** The graphic as the point editor's drag has it so far (drawn in place of the graphic until the drop commits it). */
   const [pointPreview, setPointPreview] = useState<CmdShape | null>(null);
+  /** The zone as the point editor's drag has it so far (its contours), drawn in place of the zone until the drop. */
+  const [zonePreview, setZonePreview] = useState<{ id: string; contours: [number, number][][] } | null>(null);
   // The dimension Draw Dimension holds as the server works it out (`POST /api/dimension/preview`, as the board's tool asks): the preview is the dimension itself, its
   // arrows and text included (`DrawDimension`'s `m_view->AddToPreview`, UI-LEFT-2 FF8). Only the latest request's reply is kept; it goes with the tool's dimension.
   const [dimPreview, setDimPreview] = useState<Dimension | null>(null);
@@ -394,6 +401,10 @@ export function FootprintCanvas() {
     if (shown && carriedAt && state.carriedText) shown = { ...shown, texts: [...shown.texts, { ...state.carriedText, id: undefined, at: { x: carriedAt[0], y: carriedAt[1] } }] };
     // The fields (`PCB_FIELD`s) and the dimensions, zones, text boxes ... of the footprint (kicad-port/fpItems.ts), drawn by the board's painters.
     if (shown && pointPreview) shown = { ...shown, graphics: shown.graphics.map((g) => (g.id === pointPreview.id ? pointPreview : g)) };
+    if (shown?.display && zonePreview) {
+      const [outline, ...holes] = zonePreview.contours;
+      shown = { ...shown, display: { ...shown.display, zones: shown.display.zones.map((z) => (z.id === zonePreview.id ? { ...z, outline_xy: outline ?? [], holes_xy: holes } : z)), zone_fills: (shown.display.zone_fills ?? []).filter((f) => (f as { id?: string }).id !== zonePreview.id) } };
+    }
     const painted = shown && fp ? { ...shown, fieldsToDraw: fpFields(fp), display: fp.display, name: fp.name } : shown;
     // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer -- and the line mode's constraint (`drawShape`, `DrawZone`)
     const rubber = placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm;
@@ -431,7 +442,10 @@ export function FootprintCanvas() {
     }
     // the point editor's edit points of the one selected graphic (`EDIT_POINTS::ViewDraw`), as the board draws a shape's handles
     const editTarget = shown && fp && state.activeTool === "select" ? fpPointEditTarget(shown.graphics, state.selection, (id) => fpItemLocked(fp, id)) : null;
-    if (editTarget) paintFpEditPoints(ctx, state.view.scale || 1, editTarget);
+    if (editTarget) paintFpEditPoints(ctx, state.view.scale || 1, shapeEditPoints(editTarget));
+    // a selected zone's: every corner of its outline and holes and the middle of every side (UI-LEFT-3 F3-2)
+    const zoneTarget = fp && !editTarget && state.activeTool === "select" ? fpZoneEditTarget(fp.items?.zones ?? [], state.selection, (id) => fpItemLocked(fp, id)) : null;
+    if (zoneTarget) paintFpEditPoints(ctx, state.view.scale || 1, fpZoneEditPoints(zonePreview && zonePreview.id === zoneTarget.id ? { ...zoneTarget, contours: zonePreview.contours } : zoneTarget));
     // What the grid helper shows: the snap marker and its icon, the snap lines, the construction geometry.
     // what the dimension, table and reference image tools hold (components/footprint/fpItemTools.ts)
     paintFpItemToolPreview(ctx, state.view, state, rubber ? [rubber.x, rubber.y] : null, state.itemDraw?.tool === "dimension" ? dimPreview : null);
@@ -444,7 +458,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, themeStamp, dimPreview, state.enteredGroupId, barcodeStamp, imageStamp]);
+  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, zonePreview, themeStamp, dimPreview, state.enteredGroupId, barcodeStamp, imageStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -672,6 +686,23 @@ export function FootprintCanvas() {
       setPointPreview(null);
       return;
     }
+    // the one selected zone's corners and sides (`ZONE_POINT_EDIT_BEHAVIOR`, UI-LEFT-3 F3-2)
+    const zoneTarget = fp && !pointTarget && state.activeTool === "select" ? fpZoneEditTarget(fp.items?.zones ?? [], state.selection, (id) => fpItemLocked(fp, id)) : null;
+    const zonePoint = zoneTarget ? fpZonePointAt(zoneTarget, [wx, wy], fpEditPointToleranceNm(state.view.scale)) : null;
+    if (zoneTarget && zonePoint) {
+      dragRef.current = { kind: "zonePoint", id: zoneTarget.id, base: zoneTarget, point: zonePoint };
+      setZonePreview(null);
+      return;
+    }
+    // `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` from a table cell (`hoverCells.Collect( board(), { PCB_TABLECELL_T }, DragOrigin )`): with nothing selected or only
+    // cells, the drag selects the cells under it (`selectTableCells`); a release with no drag is the click, as below (UI-LEFT-3 F3-10)
+    const fpTables = (fp?.display?.tables ?? []).filter((t) => state.layerVisible[t.layer] !== false);
+    const under = fpTables.length > 0 ? cellUnder(fpTables, wx, wy, 5 / (state.view.scale || 1)) : null;
+    if (under && onlyCells(state.selection, fp?.display?.tables ?? [])) {
+      const mods = computeClickModifiers(e.shiftKey, isMac() ? e.metaKey : e.ctrlKey, e.altKey);
+      dragRef.current = { kind: "cells", table: under.table.id, startWorld: [wx, wy], before: [...state.selection], modifiers: mods, moved: false };
+      return;
+    }
     // `selectPoint`: "if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) ) ExitGroup();" -- a click outside the group being worked in leaves it
     const groupBox = fp && state.enteredGroupId ? fpItemBounds(fp, state.enteredGroupId) : null;
     const leaving = !!state.enteredGroupId && (!groupBox || wx < groupBox[0] || wx > groupBox[2] || wy < groupBox[1] || wy > groupBox[3]);
@@ -739,6 +770,17 @@ export function FootprintCanvas() {
       const x0 = drag.startScreen[0] - rect.left;
       const x1 = e.clientX - rect.left;
       setMarquee({ x0, y0: drag.startScreen[1] - rect.top, x1, y1: e.clientY - rect.top, crossing: isCrossingSelection(x0, x1) });
+    } else if (drag.kind === "zonePoint") {
+      if (!motion?.dragging) return;
+      // the point on the grid or an anchor of another item, on the zone's layer (`BestSnapAnchor`), the zone's contours as the point puts them
+      const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.zone.layer]), category: "graphics", skip: new Set([drag.id]) });
+      const moved = fpZoneDrag(drag.base, drag.point, [p[0], p[1]]);
+      if (moved) setZonePreview({ id: drag.id, contours: moved });
+    } else if (drag.kind === "cells") {
+      if (!motion?.dragging) return;
+      drag.moved = true;
+      const table = fp?.display?.tables.find((t) => t.id === drag.table);
+      if (table) dispatch({ type: "SET_SELECTION", refs: cellsBetween(table, drag.startWorld, [wx, wy], drag.before, drag.modifiers) });
     } else if (drag.kind === "point") {
       if (!motion?.dragging) return;
       // the point on the graphics grid or an anchor of another item (`BestSnapAnchor( cursor, layers, GRID_GRAPHICS, item )`), moved in the Footprint Editor's arc mode
@@ -781,6 +823,23 @@ export function FootprintCanvas() {
       const hits = fp ? [...new Set(boxed.map((id) => fpSelectionTarget(fp, id, state.enteredGroupId)).filter((id): id is string => id !== null))] : [];
       if (hits.length > 0 || hasModifier(drag.modifiers)) dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, drag.modifiers) });
       else dispatch({ type: "CLEAR_SELECTION" });
+      return;
+    }
+    if (drag.kind === "zonePoint") {
+      // the drop: one `fp_item set` of the zone with its new outline and holes, one undo step
+      const next = zonePreview;
+      setZonePreview(null);
+      if (next && next.id === drag.id && JSON.stringify(next.contours) !== JSON.stringify(drag.base.contours)) void api.zoneEdit(drag.id, fpZoneWith(drag.base, next.contours));
+      return;
+    }
+    if (drag.kind === "cells") {
+      // no drag: the click -- what the selection tool picks there (the table, as a click on it picks it)
+      if (!drag.moved) {
+        const [wx, wy] = worldAt(e);
+        const hit = hitTest(wx, wy);
+        if (hit) dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, hit.id, drag.modifiers) });
+        else if (!hasModifier(drag.modifiers)) dispatch({ type: "CLEAR_SELECTION" });
+      }
       return;
     }
     if (drag.kind === "point") {
@@ -986,14 +1045,14 @@ export function FootprintCanvas() {
   );
 }
 
-/** `EDIT_POINTS::ViewDraw` of a graphic's edit points, as the board draws them (`drawShapeHandles`): a square at a corner, a diamond at a middle; in world units. */
-function paintFpEditPoints(ctx: CanvasRenderingContext2D, scale: number, shape: Shape): void {
+/** `EDIT_POINTS::ViewDraw` of an item's edit points, as the board draws them (`drawShapeHandles`): a square at a corner, a diamond at a middle; in world units. */
+function paintFpEditPoints(ctx: CanvasRenderingContext2D, scale: number, points: readonly EditPoint[]): void {
   const r = 4 / scale;
   ctx.save();
   ctx.fillStyle = layerColor("selection");
   ctx.strokeStyle = "rgba(0,0,0,0.6)";
   ctx.lineWidth = 1 / scale;
-  for (const p of shapeEditPoints(shape)) {
+  for (const p of points) {
     const [x, y] = p.pos;
     ctx.beginPath();
     if (p.kind === "corner") ctx.rect(x - r, y - r, r * 2, r * 2);

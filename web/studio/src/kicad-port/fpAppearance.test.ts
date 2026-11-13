@@ -250,3 +250,12 @@ test("UI-LEFT-3 F3-1: the layer box, the dialogs and the Properties pane list th
   assert.equal(all.find((c) => c.value === "User.2")?.label, "Assembly");
   assert.equal(all.find((c) => c.value === "In5.Cu")?.label, "In5.Cu (not activated)");
 });
+
+test("UI-LEFT-3 F3-1: every layer of a board in UIOrder (AllCuMask | AllNonCuMask): the zone dialog's non-copper list", async () => {
+  const { fpAllLayers } = await import("./fpAppearance");
+  const all = fpAllLayers();
+  assert.equal(all.length, 32 + 18 + 45);
+  assert.deepEqual(all.slice(0, 2), ["F.Cu", "In1.Cu"]);
+  assert.equal(all[31], "B.Cu");
+  assert.equal(all[all.length - 1], "User.45");
+});

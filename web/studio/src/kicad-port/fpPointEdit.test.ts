@@ -103,3 +103,33 @@ test("Move Corner To / Move Midpoint To: the title by the point's kind, the poin
   const m2 = fpMovePoint(seg, end, [3_000_000, 1_000_000], 0);
   assert.ok(m2?.kind === "segment" && m2.end.x === 3_000_000 && m2.end.y === 1_000_000);
 });
+
+test("UI-LEFT-3 F3-2: a footprint zone's point editor -- corners and sides of its outline and holes, Create / Remove / Chamfer Corner, a locked zone none", async () => {
+  const { fpZoneEditTarget, fpZoneEditPoints, fpZonePointAt, fpZoneDrag, fpZoneWith, fpZoneAddCorner, fpZoneCanRemoveCorner, fpZoneRemoveCorner, fpZoneChamferCorner } = await import("./fpPointEdit");
+  const sq = (x0: number, y0: number, s: number) => [{ x: x0, y: y0 }, { x: x0 + s, y: y0 }, { x: x0 + s, y: y0 + s }, { x: x0, y: y0 + s }];
+  const zone = { id: "z1", net: "", layer: "F.Cu", outline: sq(0, 0, 10_000_000), holes: [sq(4_000_000, 4_000_000, 2_000_000).slice(0, 3)], priority: 3 } as never;
+  assert.equal(fpZoneEditTarget([zone], new Set(["z1"]), () => true), null, "locked: no edit points");
+  const z = fpZoneEditTarget([zone], new Set(["z1"]))!;
+  assert.equal(z.contours.length, 2);
+  assert.equal(fpZoneEditPoints(z).length, 2 * (4 + 3), "a corner and a side per vertex of the outline and the hole");
+  // a hole's corner dragged
+  const hv = fpZonePointAt(z, [6_000_000, 4_000_000], 50_000)!;
+  assert.equal(hv.id, "v5");
+  const dragged = fpZoneDrag(z, hv, [7_000_000, 4_000_000])!;
+  assert.deepEqual(dragged[1]![1], [7_000_000, 4_000_000]);
+  const set = fpZoneWith(z, dragged) as { outline: unknown[]; holes?: { x: number; y: number }[][]; priority: number };
+  assert.deepEqual(set.holes?.[0]?.[1], { x: 7_000_000, y: 4_000_000 });
+  assert.equal(set.priority, 3, "the rest of the zone as it was");
+  // Create Corner on the nearest side, of the hole too
+  const added = fpZoneAddCorner(z, [5_000_000, -200_000]);
+  assert.ok(added?.kind === "contours" && added.contours[0]!.length === 5);
+  // a hole's corner of three can go (the hole goes); the outline of four keeps three
+  assert.ok(fpZoneCanRemoveCorner(z, hv));
+  const r = fpZoneRemoveCorner(z, hv);
+  assert.ok(r?.kind === "contours" && r.contours.length === 1, "the hole of three is removed whole");
+  const ov = fpZonePointAt(z, [0, 0], 50_000)!;
+  const r2 = fpZoneRemoveCorner(z, ov);
+  assert.ok(r2?.kind === "contours" && r2.contours[0]!.length === 3);
+  const ch = fpZoneChamferCorner(z, [9_900_000, 9_900_000]);
+  assert.ok(ch?.kind === "contours" && ch.contours[0]!.length === 5);
+});
