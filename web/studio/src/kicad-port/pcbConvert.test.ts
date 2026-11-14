@@ -109,16 +109,16 @@ test("Create Lines: a selection with nothing to convert does nothing", () => {
   assert.deepEqual(plan.cmds, []);
 });
 
-test("Create Tracks: segments, arcs and polygon outlines become tracks on the net and layer given", () => {
+test("Create Tracks: segments, arcs and polygon outlines become tracks of no net on the layer given (P3-20)", () => {
   const arc: Shape = { kind: "arc", id: "a", layer: "F.SilkS", stroke_width: 200, filled: false, start: [0, 0], mid: [50, -50], end: [100, 0] };
   const b = board({ drawings: drawings([seg("s", 0, 0, 100, 0, 250), arc, poly("p", [[0, 0], [100, 0], [100, 100]])]) });
-  const plan = planConvertToTracks(b, ["s", "a", "p"], "F.Cu", "GND", 200, true);
+  const plan = planConvertToTracks(b, ["s", "a", "p"], "F.Cu", 200, true);
   const route = plan.cmds[0];
   assert.equal(route?.op, "commit_route");
   if (route?.op !== "commit_route") return;
   const tracks = route.tracks ?? [];
   assert.equal(tracks.length, 1 + 1 + 3);
-  assert.ok(tracks.every((t) => t.net === "GND" && t.layer === "F.Cu"));
+  assert.ok(tracks.every((t) => t.net === "" && t.layer === "F.Cu"), "no net: `new PCB_TRACK( parent )`");
   assert.equal(tracks[0]!.width, 250);
   assert.ok(tracks[1]!.arc_mid_offset, "the arc stays an arc");
   assert.equal(tracks[2]!.width, 120, "a polygon's own width");
@@ -262,7 +262,7 @@ test("Create Lines from a rounded rectangle: four sides and four corner arcs (RO
   const kinds = plan.cmds.map((c) => (c.op === "add_shape" ? c.shape.kind : c.op));
   assert.equal(kinds.filter((k) => k === "segment").length, 4, kinds.join(","));
   assert.equal(kinds.filter((k) => k === "arc").length, 4, kinds.join(","));
-  const tracks = planConvertToTracks(b, ["r"], "F.Cu", "GND", 200_000, false);
+  const tracks = planConvertToTracks(b, ["r"], "F.Cu", 200_000, false);
   const cmd = tracks.cmds[0];
   const made = cmd && cmd.op === "commit_route" ? (cmd.tracks ?? []) : [];
   assert.ok(made.length === 8 && made.filter((t) => t.arc_mid_offset).length === 4, JSON.stringify(cmd).slice(0, 200));
