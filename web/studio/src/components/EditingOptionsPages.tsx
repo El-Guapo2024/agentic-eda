@@ -7,16 +7,20 @@
 //     menu's toggle), Ratsnest line thickness, <ESC> clears net highlighting, Show courtyard collisions when moving/dragging. Greyed: Track mouse-drag mode,
 //     Allow free pads, Ctrl+click's Highlight net, Always show selected ratsnest, Show page limits. Automatically refill zones is live (UI-LEFT-2 PP10: kicad-cli fills,
 //     kicad-port/autoRefill.ts).
-//   * Schematic Editor > Editing Options (`PANEL_EESCHEMA_EDITING_OPTIONS`, eeschema/dialogs/panel_eeschema_editing_options.cpp and _base): Line drawing mode,
-//     Arc editing mode, <ESC> clears net highlighting, Allow unconstrained pin swaps, Repeated Items (Horizontal pitch, Vertical pitch, Label increment: what
-//     Repeat Last Item moves and counts by), Show footprint previews in Symbol Chooser. Greyed: Mouse drag performs Drag (G), Automatically start wires on
-//     unconnected pins, Automatically annotate symbols, the new sheets' colours, Power Symbols (`new_power_symbols`, ported), Symbol Field Automatic Placement, Never show Rescue Symbols tool.
-//   * Symbol Editor > Editing Options (`PANEL_SYM_EDITING_OPTIONS`, eeschema/dialogs/panel_sym_editing_options.cpp and _base): Repeated Items (Pitch of repeated
-//     pins, forced to 25 mils on leaving the field, `onKillFocusPinPitch`; Label increment) and Keep pins attached when dragging edges. Greyed: Defaults for New
-//     Objects.
+//   * Schematic Editor > Editing Options (`PANEL_EESCHEMA_EDITING_OPTIONS`, eeschema/dialogs/panel_eeschema_editing_options.cpp and _base): Line drawing mode
+//     (kept between sessions, `m_Drawing.line_mode`), Arc editing mode, Mouse drag performs Drag (G) operation (`m_Input.drag_is_move`), Automatically start wires on
+//     unconnected pins (`m_Drawing.auto_start_wires`, `SCH_SELECTION_TOOL::autostartEvent`), <ESC> clears net highlighting, Allow unconstrained pin swaps, the new
+//     sheets' border and background colours (`DrawSheet`), Power Symbols (`new_power_symbols`), Symbol Field Automatic Placement (`m_AutoplaceFields`: the server's
+//     `AutoplacePrefs`), Repeated Items (Horizontal pitch, Vertical pitch, Label increment: what Repeat Last Item moves and counts by), Show footprint previews in
+//     Symbol Chooser, Never show Rescue Symbols tool (`m_RescueNeverShow`). Greyed: Automatically annotate symbols (kept by design: no Annotate Automatically).
+//   * Symbol Editor > Editing Options (`PANEL_SYM_EDITING_OPTIONS`, eeschema/dialogs/panel_sym_editing_options.cpp and _base): Defaults for New Objects (the line
+//     width of a new shape or text box, the text size of a new text, text box or field, the first new pin's length and name and number sizes:
+//     `SYMBOL_EDITOR_SETTINGS::m_Defaults`), Repeated Items (Pitch of repeated pins, forced to 25 mils on leaving the field, `onKillFocusPinPitch`; Label increment)
+//     and Keep pins attached when dragging edges.
 // The lengths are typed in mils (KiCad's `UNIT_BINDER` shows the frame's units). The Footprint Editor's page is components/FpPreferencesPages.tsx.
 import type { ReactNode } from "react";
 import { sanitizePinStepMils, sanitizeRatsnestThickness, type Preferences } from "../kicad-port/preferences";
+import { ColorSwatch } from "./TextLookControls";
 import type { ArcEditMode } from "../kicad-port/pcbPointEdit";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { isMac } from "../platform";
@@ -237,18 +241,21 @@ export function SchEditingOptionsPage({ draft, set, extra, setExtra }: PageProps
           </select>
         </div>
         {arcModeRow(draft.schArcEditMode, (m) => set({ schArcEditMode: m }), "pref-sch-arc-mode")}
-        {offCheck("Mouse drag performs Drag (G) operation", false, "Not ported: a mouse drag moves (M), KiCad's default. KiCad: If unchecked, mouse drag will perform move (M) operation")}
-        {offCheck("Automatically start wires on unconnected pins", true, "Not ported: a click on an unconnected pin selects it; wires start with the wire tool. KiCad: When enabled, you can start wiring by clicking on unconnected pins even when the wire tool is not active")}
+        {check("Mouse drag performs Drag (G) operation", !draft.schDragIsMove, (v) => set({ schDragIsMove: !v }), "pref-sch-mouse-drag-is-drag", "If unchecked, mouse drag will perform move (M) operation")}
+        {check("Automatically start wires on unconnected pins", draft.schAutoStartWires, (v) => set({ schAutoStartWires: v }), "pref-sch-auto-start-wires", "When enabled, you can start wiring by clicking on unconnected pins even when the wire tool is not active")}
         {check("<ESC> clears net highlighting", draft.schEscClearsNetHighlight, (v) => set({ schEscClearsNetHighlight: v }), "pref-sch-esc-clears-highlight", "First <ESC> in selection tool clears selection, next clears net highlighting")}
-        {offCheck("Automatically annotate symbols", true, "Not ported: placed symbols are always annotated (KiCad's default).")}
+        {offCheck("Automatically annotate symbols", true, "Kept by design: placed symbols are always annotated (KiCad's default); the studio has no Annotate Automatically switch.")}
         {check("Allow unconstrained pin swaps", draft.allowUnconstrainedPinSwaps, (v) => set({ allowUnconstrainedPinSwaps: v }), "pref-allow-pin-swaps", "Allows swapping symbol pins' positions. May cause invalid design changes; use with caution.")}
         {heading("Defaults for New Objects")}
-        <NotOffered reason="Not ported: a new sheet takes KiCad's default sheet colours.">
+        {/* `m_borderColorSwatch` / `m_backgroundColorSwatch` ("Clear Color" is the default: `COLOR4D::UNSPECIFIED`, the layer's colour) */}
+        <div className="filter-row" data-testid="pref-sch-sheet-border">
           <span style={{ width: 120 }}>Sheet border:</span>
-          <span style={{ width: 28, height: 14, border: "1px solid var(--chrome-border)" }} />
-          <span style={{ width: 120, marginLeft: 12 }}>Sheet background:</span>
-          <span style={{ width: 28, height: 14, border: "1px solid var(--chrome-border)" }} />
-        </NotOffered>
+          <ColorSwatch label="Sheet border:" color={draft.schSheetBorderColor} onChange={(c) => set({ schSheetBorderColor: c })} />
+        </div>
+        <div className="filter-row" data-testid="pref-sch-sheet-background">
+          <span style={{ width: 120 }}>Sheet background:</span>
+          <ColorSwatch label="Sheet background:" color={draft.schSheetBackgroundColor} onChange={(c) => set({ schSheetBackgroundColor: c })} />
+        </div>
         <div className="filter-row">
           <span style={{ width: 120 }}>Power Symbols:</span>
           <select
@@ -268,9 +275,9 @@ export function SchEditingOptionsPage({ draft, set, extra, setExtra }: PageProps
       </div>
       <div style={{ flex: "1 1 300px", minWidth: 0 }}>
         {heading("Symbol Field Automatic Placement")}
-        {offCheck("Automatically place symbol fields", true, "Not ported: the schematic's own Autoplace Fields rules decide (always on).")}
-        {offCheck("Allow field autoplace to change justification", true, "Not ported: the schematic's own Autoplace Fields rules decide (always on).")}
-        {offCheck("Always align autoplaced fields to the 50 mil grid", true, "Not ported: the schematic's own Autoplace Fields rules decide (always on).")}
+        {check("Automatically place symbol fields", draft.schAutoplaceFields, (v) => set({ schAutoplaceFields: v }), "pref-sch-autoplace-fields")}
+        {check("Allow field autoplace to change justification", draft.schAutoplaceJustify, (v) => set({ schAutoplaceJustify: v }), "pref-sch-autoplace-justify")}
+        {check("Always align autoplaced fields to the 50 mil grid", draft.schAutoplaceAlign, (v) => set({ schAutoplaceAlign: v }), "pref-sch-autoplace-align")}
         {heading("Repeated Items")}
         {milsInput("Horizontal pitch:", draft.schRepeatOffsetXMils, (v) => set({ schRepeatOffsetXMils: Number.isFinite(v) ? Math.round(v) : 0 }), "pref-sch-repeat-x")}
         {milsInput("Vertical pitch:", draft.schRepeatOffsetYMils, (v) => set({ schRepeatOffsetYMils: Number.isFinite(v) ? Math.round(v) : 0 }), "pref-sch-repeat-y")}
@@ -280,7 +287,7 @@ export function SchEditingOptionsPage({ draft, set, extra, setExtra }: PageProps
         </div>
         {heading("Dialog Preferences")}
         {check("Show footprint previews in Symbol Chooser", draft.schFootprintPreview, (v) => set({ schFootprintPreview: v }), "pref-sch-footprint-preview")}
-        {offCheck("Never show Rescue Symbols tool", false, "Not ported: the studio never opens Rescue Symbols by itself; it is in the Tools menu.")}
+        {check("Never show Rescue Symbols tool", draft.schRescueNeverShow, (v) => set({ schRescueNeverShow: v }), "pref-sch-never-show-rescue")}
       </div>
     </div>
   );
@@ -288,22 +295,19 @@ export function SchEditingOptionsPage({ draft, set, extra, setExtra }: PageProps
 
 /** Preferences > Symbol Editor > Editing Options. `fallbackPinStep`: the step kept when the field holds nothing usable. */
 export function SymEditingOptionsPage({ draft, set, fallbackPinStep }: Pick<PageProps, "draft" | "set"> & { fallbackPinStep: number }) {
-  const defaults: Array<[string, number]> = [
-    ["Default line width:", 0],
-    ["Default text size:", 50],
-    ["Default pin length:", 100],
-    ["Default pin number size:", 50],
-    ["Default pin name size:", 50],
+  // `m_lineWidth`, `m_textSize`, `m_pinLength`, `m_pinNumberSize`, `m_pinNameSize` (`UNIT_BINDER`s; `TransferDataFromWindow` keeps whole mils)
+  const defaults: Array<[string, keyof Preferences, string]> = [
+    ["Default line width:", "symDefaultLineWidthMils", "pref-sym-default-line-width"],
+    ["Default text size:", "symDefaultTextSizeMils", "pref-sym-default-text-size"],
+    ["Default pin length:", "symDefaultPinLengthMils", "pref-sym-default-pin-length"],
+    ["Default pin number size:", "symDefaultPinNumSizeMils", "pref-sym-default-pin-num-size"],
+    ["Default pin name size:", "symDefaultPinNameSizeMils", "pref-sym-default-pin-name-size"],
   ];
   return (
     <div data-testid="sym-editing-options">
       {heading("Defaults for New Objects")}
-      {defaults.map(([label, v]) => (
-        <NotOffered key={label} reason="Not ported: the Symbol Editor's new items do not read these defaults yet (KiCad's defaults are shown).">
-          <span style={{ width: 170 }}>{label}</span>
-          <input disabled type="number" value={v} readOnly aria-label={label} style={{ width: 70 }} />
-          <span>mils</span>
-        </NotOffered>
+      {defaults.map(([label, key, testid]) => (
+        <div key={label}>{milsInput(label, draft[key] as number, (v) => set({ [key]: Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0 } as Partial<Preferences>), testid)}</div>
       ))}
       <div style={{ fontStyle: "italic", fontSize: 11, opacity: 0.7, marginLeft: 4 }}>Set to 0 to allow symbols to inherit line width properties{"\n"}from schematic</div>
       {heading("Repeated Items")}

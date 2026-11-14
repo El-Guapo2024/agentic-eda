@@ -3,14 +3,14 @@
 //   Common (components/CommonPreferencesPages.tsx, `PANEL_COMMON_SETTINGS`), Mouse and Touchpad (below, `PANEL_MOUSE_SETTINGS`), Hotkeys
 //   (components/HotkeysPage.tsx, `PANEL_HOTKEYS_EDITOR`);
 //   Symbol Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
-//   Schematic Editor > Display Options, Grids, Editing Options, Colors, Toolbars;
+//   Schematic Editor > Display Options, Grids, Editing Options, Colors, Toolbars, Field Name Templates, Simulator (components/SchPreferencesPages.tsx);
 //   Footprint Editor > Display Options, Grids, Origins & Axes, Editing Options, Colors, Toolbars, Footprint Defaults, Graphics Defaults, User Layer Names;
 //   PCB Editor > Display Options, Grids, Origins & Axes (components/PcbOriginsAxesPage.tsx), Editing Options, Colors, Toolbars;
 //   3D Viewer > General, Toolbars, Realtime Renderer;
 //   Maintenance (`PANEL_MAINTENANCE`).
 //
 // An editor's name is a blank parent page (`book->AddPage( new wxPanel( book ), _( "PCB Editor" ) )`). KiCad's other pages are not here: SpaceMouse, Version
-// Control, Packages and Updates, Plugins, the Schematic Editor's Field Name Templates, Data Sources and Simulator, the 3D
+// Control, Packages and Updates, Plugins, the Schematic Editor's Data Sources (ODBC, out of a browser's reach), the 3D
 // Viewer's Raytracing Renderer, and the Gerber Viewer's and Drawing Sheet Editor's pages (no such editors).
 //
 // Each editor's Display Options is the Grid Display and Cursor part of `PANEL_GAL_OPTIONS` (common/dialogs/panel_gal_options.cpp: Dots / Lines / Small crosses,
@@ -53,6 +53,11 @@ import { PcbEditingOptionsPage, SchEditingOptionsPage, SymEditingOptionsPage, ty
 import { GridsPageBody, useGridsPages } from "./GridsDialog";
 import type { GridEditor } from "../kicad-port/gridSettings";
 import type { PreferencesPageHandle } from "./preferencesPage";
+import { GlobalFieldNamesPage, SimulatorPrefsPage } from "./SchPreferencesPages";
+import { DEFAULT_SIM_WHEEL_ACTIONS } from "../kicad-port/sim/simWheel";
+import { transferGlobalTemplates } from "../kicad-port/fieldNameTemplates";
+import { WHITESPACE_EXTENDED, WHITESPACE_KEEP, WHITESPACE_REMOVE } from "../kicad-port/schSetup";
+import { askConfirm } from "./library/libraryDialogs";
 
 /** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`). */
 type PrefsPage =
@@ -68,6 +73,8 @@ type PrefsPage =
   | "sch_edit"
   | "sch_colors"
   | "sch_toolbars"
+  | "sch_field_names"
+  | "sch_simulator"
   | "fp_grids"
   | FpPrefsPage
   | "fp_colors"
@@ -101,6 +108,8 @@ const TREE: ReadonlyArray<[PrefsPage | null, string, number]> = [
   ["sch_edit", "Editing Options", 1],
   ["sch_colors", "Colors", 1],
   ["sch_toolbars", "Toolbars", 1],
+  ["sch_field_names", "Field Name Templates", 1],
+  ["sch_simulator", "Simulator", 1],
   [null, "Footprint Editor", 0],
   ["display_footprint", "Display Options", 1],
   ["fp_grids", "Grids", 1],
@@ -150,8 +159,25 @@ const ROW_KEY: Record<ScrollRow, "scrollModifierZoom" | "scrollModifierPanH" | "
 /** The fields of `Preferences` each page owns, for its `ResetPanel`. */
 const MOUSE_FIELDS: ReadonlyArray<keyof Preferences> = ["scrollModifierZoom", "scrollModifierPanH", "scrollModifierPanV", "reverseScrollZoom", "reverseScrollPanH", "autoPan", "autoPanAcceleration", "dragMiddle", "dragRight", "dragLeft", "motionPanModifier", "horizontalPan", "zoomAcceleration", "zoomSpeedAuto", "zoomSpeed"];
 const PCB_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["rotationStepDeg", "pcbArcEditMode", "flipDirection", "magneticPads", "magneticTracks", "magneticGraphics", "ratsnestThicknessPx", "escClearsNetHighlight", "showCourtyardCollisions"];
-const SCH_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["schArcEditMode", "schEscClearsNetHighlight", "allowUnconstrainedPinSwaps", "schRepeatOffsetXMils", "schRepeatOffsetYMils", "schRepeatLabelIncrement", "schFootprintPreview", "schNewPowerSymbols"];
-const SYM_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["symRepeatPinStepMils", "symRepeatLabelDelta", "symDragPinsWithEdges"];
+const SCH_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = [
+  "schArcEditMode",
+  "schDragIsMove",
+  "schAutoStartWires",
+  "schEscClearsNetHighlight",
+  "allowUnconstrainedPinSwaps",
+  "schSheetBorderColor",
+  "schSheetBackgroundColor",
+  "schNewPowerSymbols",
+  "schAutoplaceFields",
+  "schAutoplaceJustify",
+  "schAutoplaceAlign",
+  "schRepeatOffsetXMils",
+  "schRepeatOffsetYMils",
+  "schRepeatLabelIncrement",
+  "schFootprintPreview",
+  "schRescueNeverShow",
+];
+const SYM_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["symDefaultLineWidthMils", "symDefaultTextSizeMils", "symDefaultPinLengthMils", "symDefaultPinNumSizeMils", "symDefaultPinNameSizeMils", "symRepeatPinStepMils", "symRepeatLabelDelta", "symDragPinsWithEdges"];
 
 function defaultsOf(fields: ReadonlyArray<keyof Preferences>): Partial<Preferences> {
   const out: Partial<Preferences> = {};
@@ -265,12 +291,18 @@ export function PreferencesDialog() {
   const graphicsProblem = fpGraphicsProblem(draft.fpTextGraphics);
   const scrollValid = scrollModSetValid(draft);
   const valid = scrollValid && !graphicsProblem && allHandles.every((h) => h.valid !== false);
-  const submit = () => {
+  const submit = async () => {
     if (!valid) return;
+    // Field Name Templates' `TransferDataFromWindow` (a lazy page: only when it was shown): each name with white space at an end is asked about, then the rows
+    // with a name are kept as `AddTemplateFieldName` keeps them (kicad-port/fieldNameTemplates.ts)
+    const fieldNames = shownPages.has("sch_field_names")
+      ? await transferGlobalTemplates(draft.schGlobalFieldNames, (message) => askConfirm({ title: "Warning", message: `${message}\n\n${WHITESPACE_EXTENDED}`, okLabel: WHITESPACE_REMOVE, cancelLabel: WHITESPACE_KEEP }))
+      : draft.schGlobalFieldNames;
     dispatch({
       type: "SET_PREFERENCES",
       prefs: sanitizePreferences({
         ...draft,
+        schGlobalFieldNames: fieldNames,
         rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg),
         // `m_rotationAngle.GetAngleValue()`: the Footprint Editor's own step
         fpRotationStepDeg: sanitizeRotationStep(Number(fpRotationText), state.prefs.fpRotationStepDeg),
@@ -320,6 +352,8 @@ export function PreferencesDialog() {
         tooltip: RESET_TOOLTIP,
       };
     if (page === "sym_edit") return { run: () => set(defaultsOf(SYM_EDIT_FIELDS)), tooltip: RESET_TOOLTIP };
+    // `PANEL_SIMULATOR_PREFERENCES::ResetPanel`: the mouse defaults
+    if (page === "sch_simulator") return { run: () => set({ simWheel: DEFAULT_SIM_WHEEL_ACTIONS }), tooltip: RESET_TOOLTIP };
     // `PANEL_PCBNEW_DISPLAY_ORIGIN::ResetPanel`: the settings of a fresh `PCBNEW_SETTINGS` / `FOOTPRINT_EDITOR_SETTINGS` (the page, X right, Y down)
     if (page === "pcb_axes") return { run: () => set(defaultsOf(PCB_AXES_FIELDS)), tooltip: RESET_TOOLTIP };
     if (page === "fp_axes") return { run: () => set(defaultsOf(["fpInvertXAxis", "fpInvertYAxis"])), tooltip: RESET_TOOLTIP };
@@ -609,6 +643,8 @@ export function PreferencesDialog() {
             {page === "pcb_edit" && <PcbEditingOptionsPage draft={draft} set={set} extra={editingExtra} setExtra={setEditingExtra} rotationText={rotationText} setRotationText={setRotationText} />}
             {page === "sch_edit" && <SchEditingOptionsPage draft={draft} set={set} extra={editingExtra} setExtra={setEditingExtra} rotationText={rotationText} setRotationText={setRotationText} />}
             {page === "sym_edit" && <SymEditingOptionsPage draft={draft} set={set} fallbackPinStep={state.prefs.symRepeatPinStepMils} />}
+            {page === "sch_field_names" && <GlobalFieldNamesPage rows={draft.schGlobalFieldNames} setRows={(rows) => set({ schGlobalFieldNames: rows })} />}
+            {page === "sch_simulator" && <SimulatorPrefsPage actions={draft.simWheel} setActions={(a) => set({ simWheel: a })} />}
             {page === "3d_general" && <Viewer3DGeneralPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
             {page === "3d_opengl" && <Viewer3DOpenGLPage draft={draft3d} set={(patch) => setDraft3d((d) => ({ ...d, ...patch }))} />}
             {isFpPage(page) && (
@@ -623,7 +659,7 @@ export function PreferencesDialog() {
             {reset ? `Reset ${title} to Defaults` : "Reset to Defaults"}
           </button>
           <button onClick={cancel}>Cancel</button>
-          <button className="primary" disabled={!valid} onClick={submit} data-testid="preferences-ok">
+          <button className="primary" disabled={!valid} onClick={() => void submit()} data-testid="preferences-ok">
             OK
           </button>
         </div>

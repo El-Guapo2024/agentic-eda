@@ -233,7 +233,7 @@ export function SymbolFieldsTableDialog() {
   useEffect(() => {
     if (!open) return;
     const id = ++requestId.current;
-    void fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, undefined, { variant, variant_edits: variantEdits, ...scopeKeys }).then((reply) => {
+    void fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, undefined, { variant, variant_edits: variantEdits, ...scopeKeys }, state.prefs.schGlobalFieldNames).then((reply) => {
       if (id !== requestId.current) return;
       if (!reply.ok) {
         setError(reply.message ?? "Could not build the table.");
@@ -323,7 +323,7 @@ export function SymbolFieldsTableDialog() {
     if (!spec || name === "") return;
     const preset = [...(table?.built_in_presets ?? []), ...(held ?? [])].find((p) => p.name === name);
     if (preset) return setSpec(withPresetSpec(spec, preset.spec));
-    const reply = await fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, name, { variant, variant_edits: variantEdits, ...scopeKeys });
+    const reply = await fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, name, { variant, variant_edits: variantEdits, ...scopeKeys }, state.prefs.schGlobalFieldNames);
     if (!reply.ok) {
       setError(reply.message ?? "Could not apply the preset.");
       return;

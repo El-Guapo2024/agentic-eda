@@ -71,7 +71,12 @@ export interface ForeignReply {
   schematic_notes?: string[];
   /** A KiCad 5 legacy schematic none of whose symbols names a library: Remap Symbols is opened after the import, as KiCad opens it as the project loads. */
   remap?: boolean;
+  /** A KiCad 5 legacy schematic: its cache library came with it (`cacheExists`); without one, Rescue Symbols runs as it comes in (state/rescueOnLoad.ts). */
+  cache_found?: boolean;
 }
+
+/** The `format` of a KiCad 5 legacy schematic's import (crates/cli/src/foreign_api.rs `legacy_reply`). */
+export const LEGACY_SCHEMATIC_FORMAT = "KiCad legacy schematic";
 
 /** A file the page has read as bytes: its name and its content as base64. */
 export interface ForeignFile {
