@@ -1940,9 +1940,10 @@ export interface StudioApi {
   /**
    * The footprints `refs` a command already made inside a held step (`carry: "begin"` sent by the caller: Import Netlist's Update PCB) handed to the Move tool, as
    * `placeNewItems` hands its new items over: picked up at `at`, each shifted by `offsets` (`SpreadFootprints`' arrangement) while they are carried; the drop joins
-   * the held step, Escape takes the step back.
+   * the held step, Escape takes the step back -- or, with `keepOnEscape` (Import Netlist, UI-LEFT-3 P3-29), drops them where `offsets` spread them: KiCad pushes the
+   * update and spreads the footprints before the Move tool picks them up, so cancelling the move leaves them spread (`OnNetlistChanged`, `m_runDragCommand`).
    */
-  carryPlaced: (refs: string[], at: { x: number; y: number }, offsets?: Record<string, [number, number]>) => void;
+  carryPlaced: (refs: string[], at: { x: number; y: number }, offsets?: Record<string, [number, number]>, keepOnEscape?: boolean) => void;
   /**
    * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
@@ -2028,9 +2029,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   /** ... once Escape took them back (`PlaceNewItemsOptions.afterCancel`), and once the step was settled by leaving the Move tool some other way (`afterSettle`). */
   const afterCancelRef = useRef<(() => void) | null>(null);
   const afterSettleRef = useRef<(() => void) | null>(null);
+  /** A carry whose Escape (or any other way out of the Move tool) drops the items where they were spread rather than taking them back (`carryPlaced`'s `keepOnEscape`). */
+  const spreadOnCancelRef = useRef<{ refs: string[]; offsets?: Record<string, [number, number]> } | null>(null);
+  const commitMoveRef = useRef<StudioApi["commitMove"] | null>(null);
   useEffect(() => {
     // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
     if (state.activeTool !== "move" && state.activeTool !== "drag" && carriedPlacementRef.current) {
+      const spread = spreadOnCancelRef.current;
+      spreadOnCancelRef.current = null;
+      if (spread && commitMoveRef.current) {
+        // (Import Netlist's footprints: where `SpreadFootprints` put them, the held step ended with them)
+        void commitMoveRef.current(spread.refs, 0, 0, "part", 0, false, spread.offsets);
+        return;
+      }
       carriedPlacementRef.current = false;
       afterDropRef.current = null;
       afterCancelRef.current = null;
@@ -2522,6 +2533,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       else dropPatternSlide();
     },
     commitMove: async (refs, dxNm, dyNm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetNm, ops) => {
+      spreadOnCancelRef.current = null;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       // The drop ends a carried Duplicate or Paste: it joins the step the duplicate or the paste began (`carry: "commit"`), so both are one undo step. A drop that
       // sends nothing, or one the backend refuses, leaves the duplicate or the paste standing as a step of its own.
@@ -2665,6 +2677,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     revertCarriedPlacement: async () => {
       if (!carriedPlacementRef.current) return false;
+      // Import Netlist's carry: Escape ends the move, not the update -- the footprints stay where they were spread (UI-LEFT-3 P3-29)
+      const spread = spreadOnCancelRef.current;
+      spreadOnCancelRef.current = null;
+      if (spread) {
+        await api.commitMove(spread.refs, 0, 0, "part", 0, false, spread.offsets);
+        return true;
+      }
       carriedPlacementRef.current = false;
       afterDropRef.current = null;
       afterSettleRef.current = null;
@@ -2863,9 +2882,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
     // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
-    carryPlaced: (refs, at, offsets) => {
+    carryPlaced: (refs, at, offsets, keepOnEscape) => {
       if (refs.length === 0) return;
       carriedPlacementRef.current = true;
+      spreadOnCancelRef.current = keepOnEscape ? { refs, offsets } : null;
       afterDropRef.current = null;
       afterCancelRef.current = null;
       afterSettleRef.current = null;
@@ -2949,6 +2969,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     unfillZones,
     refreshFill,
   };
+  commitMoveRef.current = api.commitMove;
 
   return (
     <StudioStateContext.Provider value={state}>
