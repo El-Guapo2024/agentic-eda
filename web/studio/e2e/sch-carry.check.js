@@ -255,7 +255,7 @@
       const inputs = [...props.querySelectorAll("input")];
       const refIn = inputs.find((i) => i.value === c.ref);
       t(!!refIn, `the dialog is the carried symbol's: Reference ${c.ref}`);
-      t(!!props.querySelector("[data-testid=symbol-change]")?.disabled, "Change Symbol... is for a placed symbol: disabled");
+      t(!props.querySelector("[data-testid=symbol-change]")?.disabled, "Change Symbol... is enabled on the symbol in the hand too, as KiCad's dialog has it (UI-LEFT-3 S3-30)");
       const valueIn = inputs.find((i) => i.value === c.value);
       if (!t(!!valueIn, `its Value ${c.value} is there`)) return;
       setValue(valueIn, "4k7");

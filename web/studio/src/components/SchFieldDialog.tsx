@@ -10,7 +10,8 @@
 // A label's field (UI-LEFT S6: its net class, a global label's Sheet References, any other) opens here too: moved, turned or justified by hand it stays where it was
 // put (the label's fields are no longer autoplaced). Its text size, bold, "Show field name" and "Allow autoplacement" are its own (`LabelField`, UI-LEFT-2 SS12),
 // a global label's Sheet References' too (`SchExtras::intersheet_refs_looks`, UI-LEFT-3 S3-31), which keep their text and Schematic Setup's visibility.
-import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+import { carryDrawing, schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+import { CARRIED_POWER_ID, carriedFieldLocal } from "../kicad-port/schPlaceTool";
 import { editCarried } from "../actions/schPlaceActions";
 import { useState } from "react";
 import { fieldDialogCaption, fieldSizeNm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_NM, FIELD_SIZE_MIN_NM, type FieldChanges } from "../kicad-port/schFieldEdit";
@@ -38,12 +39,19 @@ export function FieldPropertiesDialog({ id, carried }: { id: string; carried?: b
   const base = useStudioState().schematic;
   const carry = useSchCarry();
   const sch = carried && base && carry ? schematicWithCarry(base, carry) : base;
-  const item = sch ? findField(sch, id) : null;
-  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} carried={!!carried} /> : null;
+  // a field of the power symbol in the hand named by the page's drawing (`carry:power`) is the server's numbered one's once that comes back (UI-LEFT-3 S3-30)
+  const drawnPower = carried && base && carry && id.startsWith(`fld:${CARRIED_POWER_ID}:`) ? carryDrawing(carry, base).power_symbols[0]?.id : undefined;
+  const item = sch ? (findField(sch, id) ?? (drawnPower ? findField(sch, `fld:${drawnPower}:${id.slice(`fld:${CARRIED_POWER_ID}:`.length)}`) : null)) : null;
+  // the orientation of the item in the hand, which a typed position is turned back through (`carriedFieldLocal`)
+  const owner = carried && item && sch ? (sch.symbols.find((s) => s.id === item.field.owner || `${s.id}#${s.unit}` === item.field.owner) ?? sch.power_symbols.find((p) => p.id === item.field.owner)) : undefined;
+  const ownerOrient = owner ? { rot: owner.rot ?? 0, mirror: ((owner as { mirror?: unknown }).mirror === "x" || (owner as { mirror?: unknown }).mirror === "y" ? (owner as { mirror: "x" | "y" }).mirror : null) } : undefined;
+  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} carried={!!carried} ownerOrient={ownerOrient} /> : null;
 }
 
-function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: SchField & { id: string }; carried: boolean }) {
+function FieldForm({ owner, field, carried, ownerOrient }: { owner: FieldOwnerKind; field: SchField & { id: string }; carried: boolean; ownerOrient?: { rot: number; mirror: "x" | "y" | null } }) {
   const api = useStudioApi();
+  // "Automatically place symbol fields" (`m_AutoplaceFields.enable`): whether the click of the tool holding the item places its fields
+  const autoplaceOn = useStudioState().prefs.schAutoplaceFields;
   const dispatch = useStudioDispatch();
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   const [text, setText] = useState(field.text);
@@ -96,9 +104,19 @@ function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: Sc
     const cmd = oneStep([fieldEditCmd(field, changes), looks]);
     if (!cmd) return close();
     if (carried) {
-      // the item in the hand takes the edit (actions/schPlaceActions.ts `editCarried`); its place is Autoplace Fields' once the click puts it down
-      // (`AutoplaceFields( screen, AUTOPLACE_AUTO )`), so a position typed here is not kept
-      const parts = (cmd.op === "batch" ? cmd.cmds : [cmd]).map((c) => Object.fromEntries(Object.entries(c).filter(([k]) => k !== "at")) as unknown as Cmd);
+      // the item in the hand takes the edit (actions/schPlaceActions.ts `editCarried`). The click places its fields by Autoplace Fields (`if( m_AutoplaceFields.enable )
+      // symbol->AutoplaceFields( screen, AUTOPLACE_AUTO )`, which leaves a field that does not allow it): a position typed here is kept, in the item's own frame
+      // (`local_at`, so it goes where the click puts the item), when automatic placement is off or the field is not autoplaced (UI-LEFT-3 S3-30)
+      const delta: [number, number] = [xNm! - field.at[0], yNm! - field.at[1]];
+      const keepPlace = (!autoplaceOn || !allowAutoplace) && (delta[0] !== 0 || delta[1] !== 0) && !!field.local && !!ownerOrient;
+      const parts = (cmd.op === "batch" ? cmd.cmds : [cmd]).map((c) => {
+        const rest = Object.fromEntries(Object.entries(c).filter(([k]) => k !== "at")) as Record<string, unknown>;
+        if (keepPlace && rest.verb === "edit_field" && rest.id === field.id) {
+          const [lx, ly] = carriedFieldLocal(field.local!, delta, ownerOrient!.rot, ownerOrient!.mirror);
+          rest.local_at = { x: lx, y: ly };
+        }
+        return rest as unknown as Cmd;
+      });
       editCarried(parts.filter((c) => Object.keys(c).some((k) => !["op", "verb", "id"].includes(k))));
       return close();
     }

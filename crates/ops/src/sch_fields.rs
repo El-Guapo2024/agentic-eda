@@ -260,8 +260,11 @@ impl<'a> Board<'a> {
                 return Err(fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm."));
             }
         }
-        let model = self.model;
         let before = self.schematic()?.clone();
+        // a symbol placed earlier in this step (the symbol in the hand's dialogs ride with the click that places it, UI-LEFT-3 S3-30) is not in the board's model
+        // yet: measured with the part and library definition the step brings (`model_with_placed`), as `add_symbol` measures it
+        let placed = before.symbols.iter().find(|s| field_key(&s.id, s.unit) == key || s.id == key).filter(|s| self.model.part(&s.id).is_none()).and_then(|s| self.model_with_placed(&s.id, &s.lib_id, &s.value));
+        let model: &ConstraintModel = placed.as_ref().unwrap_or(self.model);
         let Some(ctx) = OwnerCtx::new(&before, model, &key) else {
             return Err(fail("ops_unknown_item", id, "no field with this id on the sheet (a schematic read from a KiCad file has no places for its fields yet)"));
         };

@@ -17,7 +17,7 @@
 // a mirror that leaves its picture mirrored is kept as a turn, and the dialog reads it back as that angle, "Not mirrored"; Angle and Mirror are not offered for the power
 // symbol in the hand (R, X and Y turn it); the Footprint and Datasheet rows have no look columns (they are written hidden at the anchor).
 import { DatasheetUrlButton } from "./DatasheetUrlButton";
-import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+import { carryDrawing, schematicWithCarry, useSchCarry } from "../state/schCarryStore";
 import { editCarried } from "../actions/schPlaceActions";
 import { useMemo, useState } from "react";
 import { ANGLE_CHOICES, autoplaceKeptCmd, canMoveDown, canMoveUp, columnMenu, DEFAULT_SHOWN_COLUMNS, FIELD_COLUMNS, MIRROR_CHOICES, moveRow, orientationChoice, orientationCmd, shownColumns, toggleColumn, type FieldColumn } from "../kicad-port/symbolFieldsGrid";
@@ -35,7 +35,10 @@ export function PowerSymbolPropertiesDialog({ id, carried }: { id: string; carri
   const base = useStudioState().schematic;
   const carry = useSchCarry();
   const sch = carried && base && carry ? schematicWithCarry(base, carry) : base;
-  const power = sch?.power_symbols.find((p) => p.id === id);
+  // the power symbol in the hand is the page's drawing of it, `carry:power` until the server's number comes back, then that number (UI-LEFT-3 S3-30: the dialog
+  // does not wait for it, and stays open when it comes)
+  const drawnId = carried && base && carry ? carryDrawing(carry, base).power_symbols[0]?.id : undefined;
+  const power = sch?.power_symbols.find((p) => p.id === id) ?? (drawnId ? sch?.power_symbols.find((p) => p.id === drawnId) : undefined);
   return power ? <PowerForm key={id} power={power} carried={!!carried} /> : null;
 }
 
@@ -112,8 +115,8 @@ function PowerForm({ power, carried }: { power: PowerSymbol; carried: boolean })
     const wasFields = (props.fields ?? []).map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true }));
     if (JSON.stringify(fields) !== JSON.stringify(wasFields)) edit.fields = fields;
     if (Object.keys(edit).length > 0) cmds.push({ op: "sch_edit", verb: "set_power_props", id: power.id, ...edit } as Cmd);
-    // Angle and Mirror (`SetOrientation`), not for the power symbol in the hand
-    const turn = carried ? null : orientationCmd(power.id, undefined, wasOrient, orient);
+    // Angle and Mirror (`SetOrientation`), the power symbol in the hand's too (the turn it is made with: kicad-port/schPlaceTool.ts `applyCarriedCmds`)
+    const turn = orientationCmd(power.id, undefined, wasOrient, orient);
     if (turn) cmds.push(turn);
     if (cmds.length === 0) return close();
     // `SCH_EDIT_TOOL::Properties` after OK: `AutoplaceFields( screen, fieldsAutoplaced )`
@@ -260,16 +263,16 @@ function PowerForm({ power, carried }: { power: PowerSymbol; carried: boolean })
               <select aria-label="Body style" disabled data-testid="power-body-style">
                 <option>{""}</option>
               </select>
-              <span style={{ opacity: carried ? 0.5 : 1 }}>Angle:</span>
-              <select aria-label="Angle" value={orient.angle} disabled={carried} title={carried ? "Turn the power symbol in the hand with R, X and Y." : undefined} onChange={(e) => setOrient({ ...orient, angle: Number(e.target.value) })} data-testid="power-angle">
+              <span>Angle:</span>
+              <select aria-label="Angle" value={orient.angle} onChange={(e) => setOrient({ ...orient, angle: Number(e.target.value) })} data-testid="power-angle">
                 {ANGLE_CHOICES.map((a) => (
                   <option key={a.angle} value={a.angle}>
                     {a.label}
                   </option>
                 ))}
               </select>
-              <span style={{ opacity: carried ? 0.5 : 1 }}>Mirror:</span>
-              <select aria-label="Mirror" value={orient.mirror ?? ""} disabled={carried} title={carried ? "Turn the power symbol in the hand with R, X and Y." : undefined} onChange={(e) => setOrient({ ...orient, mirror: (e.target.value || null) as "x" | "y" | null })} data-testid="power-mirror">
+              <span>Mirror:</span>
+              <select aria-label="Mirror" value={orient.mirror ?? ""} onChange={(e) => setOrient({ ...orient, mirror: (e.target.value || null) as "x" | "y" | null })} data-testid="power-mirror">
                 {MIRROR_CHOICES.map((m) => (
                   <option key={m.label} value={m.mirror ?? ""}>
                     {m.label}

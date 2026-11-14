@@ -24,7 +24,7 @@ import { lastPlaced } from "../kicad-port/schLastPlaced";
 import { rememberedAnnotateSettings, startNumber } from "../kicad-port/schAnnotate";
 import { fetchPlacementReference } from "../api/hierarchyClient";
 import { fetchSymbolPlacements } from "../api/schControlClient";
-import { afterPlaced, applyCarriedCmds, armedKey, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, renameInCmd, rotateCarried, scopeOfTool, settledSymbol, type CarriedItem, type CarriedSymbol, type CarryTool, unitOccupied, unitsByReference } from "../kicad-port/schPlaceTool";
+import { afterPlaced, applyCarriedCmds, armedKey, CARRIED_POWER_ID, carryKey, incrementCarried, isCarryTool, mirrorCarried, placeCmd, previewCmd, renameInCmd, rotateCarried, scopeOfTool, settledSymbol, type CarriedItem, type CarriedSymbol, type CarryTool, unitOccupied, unitsByReference } from "../kicad-port/schPlaceTool";
 import { needsServerDrawing } from "../kicad-port/schCarryPreview";
 import { bodyStyleCount } from "../kicad-port/schBodyStyle";
 import { editFieldTarget } from "../kicad-port/schFieldEdit";
@@ -223,7 +223,14 @@ export function placeCarried(ctx: Pick<PlaceContext, "api"> & Partial<Pick<Place
   const plainSpin = carry.item.kind === "label" && !carry.item.spin ? inferSpin(sch.wires, at) : null;
   // `PlaceSymbol` numbers a power symbol by the project's Annotate method and start number (r3 D3-M5)
   const a = rememberedAnnotateSettings();
-  const committed = ctx.api.cmd(placeCmd(carry.item, at, { plainSpin, annotate: { algo: a.algo, start_number: startNumber(a.start) }, powerId: powerIdOf(carry) }));
+  const annotate = { algo: a.algo, start_number: startNumber(a.start) };
+  // a power symbol whose dialogs named it before the server's number came back: the number asked for first (the server numbers it the same at the preview's
+  // point and the click's), so its edits are not lost
+  const pending = carry.item.kind === "power" && (carry.item.edits?.length ?? 0) > 0 && !powerIdOf(carry);
+  const item = carry.item;
+  const committed = pending
+    ? postPlacePreview({ sheet: carry.sheet.join("/"), cmd: previewCmd(item) }).then((preview) => ctx.api.cmd(placeCmd(item, at, { plainSpin, annotate, powerId: preview?.power_symbols[0]?.id })))
+    : ctx.api.cmd(placeCmd(item, at, { plainSpin, annotate, powerId: powerIdOf(carry) }));
   const placed = carry.item;
   // the units of the reference already on the sheet, the one just placed among them (`unitOccupied`), and the next free reference past it (`annotate()`)
   const next = afterPlaced(
@@ -316,12 +323,12 @@ function armPlacingTool(ctx: PlaceContext, tool: CarryTool): void {
 
 /** The id the carried item has in the page's drawing of it (`schematicWithCarry`): a symbol's reference, a power symbol's number once the server gave it. */
 function carriedIdOf(carry: SchCarry): string | null {
-  return carry.item.kind === "symbol" ? carry.item.ref : carry.item.kind === "power" ? (powerIdOf(carry) ?? null) : null;
+  return carry.item.kind === "symbol" ? carry.item.ref : carry.item.kind === "power" ? (powerIdOf(carry) ?? CARRIED_POWER_ID) : null;
 }
 
 /**
  * Properties of the carried item (`SCH_EDIT_TOOL::Properties` on the selection, which is the item): its dialog opens on it, and OK changes it -- Symbol
- * Properties on a carried symbol, the power symbol's Properties on a carried power symbol (once the server has numbered it), a label's, a text's or a directive
+ * Properties on a carried symbol, the power symbol's Properties on a carried power symbol, a label's, a text's or a directive
  * label's dialog on those.
  */
 function reopenDialog(ctx: PlaceContext, carry: SchCarry): void {
@@ -332,8 +339,9 @@ function reopenDialog(ctx: PlaceContext, carry: SchCarry): void {
     return;
   }
   if (item.kind === "power") {
-    const id = powerIdOf(carry);
-    if (!id) return;
+    // the server's number when it is back, else the page's drawing's (`carry:power`): the dialog opens at once (UI-LEFT-3 S3-30), its commands renamed to the
+    // number at the click (`placeCmd`)
+    const id = powerIdOf(carry) ?? CARRIED_POWER_ID;
     ctx.dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_power", id, carried: true } });
     return;
   }
