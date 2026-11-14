@@ -6,7 +6,7 @@
 // What it checks:
 //   1  P3-2 `RequestSelection` -> `selectPoint` -> `doSelectionMenu` for a tool that took the first candidate before: Lock with the pointer on two crossing
 //      tracks asks with the menu; 2 locks the second row's track only; the menu dismissed locks nothing.
-//   2  P3-3 `FilterCollectorForLockedItems`: Delete leaves a selected locked track and says so with KiCad's message; with Override locks checked it deletes
+//   2  P3-3 `FilterCollectorForLockedItems`: Delete leaves a selected locked track and says so with KiCad's message (in the info bar); with Override locks checked it deletes
 //      it. The schematic's `FilterSelectionForLockedItems`: R on a locked symbol turns nothing; with its Override locks checked it turns, and stays locked.
 //   3  P3-4 `ToggleFootprintAttribute`: the context menu of a footprint has Attributes with the three check items; Exclude from Bill of Materials sets the
 //      footprint's attribute (checked after), again clears it; Exclude from Simulation sets its symbol's flag.
@@ -61,8 +61,6 @@
   /** The toolbar's Override locks box of the editor in view (`data-control="overrideLocks"`). */
   const overrideBox = () => [...document.querySelectorAll('[data-control="overrideLocks"] input')].find((el) => el.offsetParent !== null) ?? null;
   const setOverride = async (on) => { const b = overrideBox(); if (b && b.checked !== on) { b.click(); await sleep(300); } return !!b && b.checked === on; };
-  /** The page's toast (App.tsx: a div with inline styles, its text the message) saying `text`. */
-  const toastSays = (re) => [...document.querySelectorAll("div")].some((d) => d.children.length === 0 && re.test(d.textContent ?? ""));
   const tid = (id) => document.querySelector(`[data-testid="${id}"]`);
   const choose = async (el, value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, String(value)); el.dispatchEvent(new Event("change", { bubbles: true })); await sleep(120); };
   const setSnapMode = async (mode) => {
@@ -158,7 +156,10 @@
       await E.run("common.Interactive.delete");
       await sleep(900);
       t(((await board()).routing?.tracks ?? []).some((x) => x.id === a), "Delete leaves the locked track");
-      t(toastSays(/^Selection contains locked items\. Enable 'Override locks' to operate on them\.$/), "with KiCad's message");
+      // KiCad says it in the info bar (`ReportFilteredLockedItems`: `ShowInfoBarWarning( .., true )`, pcb_selection_tool.cpp), a warning with a close button
+      const bar = tid("pcb-infobar");
+      const barText = tid("pcb-infobar-text")?.textContent ?? "";
+      t(/^Selection contains locked items\. Enable 'Override locks' to operate on them\.$/.test(barText) && bar?.getAttribute("data-kind") === "warning" && !!tid("pcb-infobar-close"), `with KiCad's message, in the info bar as a warning (${barText}; ${bar?.getAttribute("data-kind")})`);
       if (!t(await setOverride(true), "the toolbar's Override locks box is checked")) return;
       await select([a]);
       await E.run("common.Interactive.delete");
