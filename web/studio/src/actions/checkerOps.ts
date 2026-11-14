@@ -17,7 +17,7 @@ import { inspectViolation } from "./inspectActions";
 import drcChecks from "../kicad/drc_checks.json";
 import ercChecks from "../kicad/erc_checks.json";
 import { revisionAfterOwnEdit } from "../kicad-port/checkRevision";
-import { canExclude, drcExclusionSpec, drcFixEntry, drcInspectEntry, drcKey, ercFixEntry, ercInspectEntry, ercKey, listedIndexes, menuSeverity, ofCheck, ofRule, selectionAfterRowGone, severitiesAfter, stepListed, violatingRule, type MarkerEntry, type RcMenuContext, type RcMenuEntry, type RcMenuId } from "../kicad-port/rcItems";
+import { canExclude, drcExclusionSpec, drcFixEntry, drcInspectEntry, drcKey, ercFixEntry, ercInspectEntry, ercKey, ignoredRowSeverity, listedIndexes, menuSeverity, ofCheck, ofRule, selectionAfterRowGone, severitiesAfter, stepListed, violatingRule, type MarkerEntry, type RcMenuContext, type RcMenuEntry, type RcMenuId } from "../kicad-port/rcItems";
 import { fitTransform } from "../kicad-port/view";
 import { drcMarkerObject, objectOn } from "../kicad-port/appearance";
 import { DRC_MARKER_HIT_NM, nearestMarker } from "../kicad-port/markerHit";
@@ -618,7 +618,33 @@ export async function setErcSeverity(ctx: CheckerCtx, check: string, severity: R
   if (pinErrors) table[PIN_TO_PIN_ERROR_SLOT] = "ignore";
   if (!(await api.cmd({ op: "set_erc_severities", severities: table }))) return false;
   setErcView({ severities: null });
-  dispatch({ type: "ERC_PATCH_SEVERITY", check, severity, description: ercTitle(check), version: await revisionAfter(before.ercVersion, before), keepPinErrors: check === "pin_to_pin" && !pinErrors });
+  // `ID_SET_SEVERITY_TO_IGNORE` lists the marker's own code: a pin-to-pin error's row is the error's slot
+  dispatch({ type: "ERC_PATCH_SEVERITY", check, severity, description: ercTitle(check), version: await revisionAfter(before.ercVersion, before), keepPinErrors: check === "pin_to_pin" && !pinErrors, row: pinErrors ? PIN_TO_PIN_ERROR_SLOT : check });
+  return true;
+}
+
+/** The severity a row of the Ignored Tests list has now (`OnIgnoredItemRClick`'s `menu.Check( settings.GetSeverity( errorCode ) )`); null when the table cannot be read. */
+export async function ercIgnoredRowSeverity(key: string): Promise<RuleSeverity | null> {
+  const reply = await fetchErcSeverities().catch(() => null);
+  if (!reply?.ok) return null;
+  return ignoredRowSeverity(key, reply.severities, reply.pin_to_pin_errors_ignored ?? false, ERC_CHECK_ITEMS);
+}
+
+/**
+ * `DIALOG_ERC::OnIgnoredItemRClick`: a severity picked from a row of the Ignored Tests list sets that row's code -- the pin-to-pin error's row its own slot -- and
+ * deletes that row only (`m_ignoredList->DeleteItem( event.m_itemIndex )`); the markers are the next run's.
+ */
+export async function setErcIgnoredRowSeverity(ctx: CheckerCtx, index: number, key: string, severity: RuleSeverity): Promise<boolean> {
+  const { api, dispatch } = ctx;
+  const before = api.getState();
+  const current = await fetchErcSeverities().then((r) => r.severities).catch(() => null);
+  if (!current) return false;
+  const slot = key === PIN_TO_PIN_ERROR_SLOT;
+  const table = slot ? severitiesAfter(ERC_CHECK_ITEMS, current, "pin_to_pin", ignoredRowSeverity("pin_to_pin", current, false, ERC_CHECK_ITEMS)) : severitiesAfter(ERC_CHECK_ITEMS, current, key, severity);
+  if (slot) table[PIN_TO_PIN_ERROR_SLOT] = severity;
+  if (!(await api.cmd({ op: "set_erc_severities", severities: table }))) return false;
+  setErcView({ severities: null });
+  dispatch({ type: "ERC_PATCH_SEVERITY", check: key, severity, description: ercTitle(key), version: await revisionAfter(before.ercVersion, before), ignoredRow: index });
   return true;
 }
 

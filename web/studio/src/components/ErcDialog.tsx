@@ -42,15 +42,16 @@
 // derived project lists in `erc.erc_exclusions` for kicad-cli (crates/kicad/src/erc_exclusions.rs); the report on screen is patched in place
 // (no new kicad-cli run for a waiver). "Change severity" and "Ignore all" in the menu write the
 // schematic's per-check severities (`set_erc_severities`, Schematic Setup > Violation
-// Severity), which go to kicad-cli in the derived project. "Ignored Tests" lists the
-// report's `ignored_checks`.
+// Severity), which go to kicad-cli in the derived project. "Ignored Tests" is `m_ignoredList`: a run lists the
+// report's `ignored_checks`; Ignore from a marker's menu adds the marker's own code (a pin-to-pin error's is its own slot) and a change from the list's
+// menu deletes that row (`patchErcSeverity`), the rows kept until the next run.
 import { useEffect, useMemo, useState } from "react";
 import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
 import { allShown, countKinds, ercKey, ercMessage, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
 import { setErcOptions, setErcView, useCheckerView, type ErcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { askExclusionComment } from "../state/checkerView";
-import { saveReport, deleteAllMarkersErc, deleteMarkerErc, ercMenuContext, ercSettingSeverity, excludeMarkerErc, frameErc, openSeveritySetup, runMarkerMenu, selectErc, setErcExcluded, setErcSeverity, stepErc, toMenuEntries } from "../actions/checkerOps";
+import { saveReport, deleteAllMarkersErc, ercIgnoredRowSeverity, setErcIgnoredRowSeverity, deleteMarkerErc, ercMenuContext, ercSettingSeverity, excludeMarkerErc, frameErc, openSeveritySetup, runMarkerMenu, selectErc, setErcExcluded, stepErc, toMenuEntries } from "../actions/checkerOps";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { RcList, type RcRow } from "./RcList";
 
@@ -172,12 +173,18 @@ export function ErcDialog() {
     frameErc(cctx, lint[index], true);
   };
 
-  const ignoredMenu = (key: string, x: number, y: number) => {
-    const current = ignored.some((c) => c.key === key) ? "ignore" : "warning";
+  /**
+   * `OnIgnoredItemRClick`: Error, Warning and Ignore, the row's code's severity checked (`GetSeverity`); a different one sets that code (the pin-to-pin error's row
+   * its own slot) and deletes this row only.
+   */
+  const ignoredMenu = async (index: number, key: string, x: number, y: number) => {
+    const current = (await ercIgnoredRowSeverity(key)) ?? "ignore";
     const entries: MenuEntry[] = (["error", "warning", "ignore"] as const).map((sev) => ({
       label: sev === "error" ? "Error" : sev === "warning" ? "Warning" : "Ignore",
       checked: current === sev,
-      onSelect: () => void setErcSeverity(cctx, key, sev),
+      onSelect: () => {
+        if (sev !== current) void setErcIgnoredRowSeverity(cctx, index, key, sev);
+      },
     }));
     setMenu({ x, y, entries });
   };
@@ -284,15 +291,16 @@ export function ErcDialog() {
                 {!report && <div className="panel-empty">{running ? "Running ERC…" : "Run ERC to list the ignored tests."}</div>}
                 {report && ignored.length === 0 && <div className="panel-empty">No test is ignored.</div>}
                 <div role="list">
-                  {ignored.map((c) => (
+                  {ignored.map((c, i) => (
                     <div
-                      key={c.key}
+                      key={`${c.key}#${i}`}
                       role="listitem"
                       className="rc-ignored-row"
                       title={c.key}
+                      data-key={c.key}
                       onContextMenu={(e) => {
                         e.preventDefault();
-                        ignoredMenu(c.key, e.clientX, e.clientY);
+                        void ignoredMenu(i, c.key, e.clientX, e.clientY);
                       }}
                     >
                       {" • "}

@@ -34,6 +34,7 @@ import {
   ercKey,
   patchErcExcluded,
   patchErcSeverity,
+  ignoredRowSeverity,
   refilterDrc,
   rcKind,
   rcMenu,
@@ -291,6 +292,31 @@ test("Ignore on a pin-to-pin warning leaves the pin-to-pin errors; on an error i
   const both = patchErcSeverity(report, "pin_to_pin", "ignore", "Conflict problem between pins");
   assert.deepEqual(both.violations, []);
   assert.deepEqual(both.ignored_checks, [{ key: "pin_to_pin", description: "Conflict problem between pins" }]);
+});
+
+test("the Ignored Tests list is DIALOG_ERC's m_ignoredList: a row per code, kept until the next run, a change from it deletes that row (UI-LEFT-3 B3-5)", () => {
+  const e = (check: string, severity: "error" | "warning", location: string): ErcViolation => ({ check, severity, location, hint: null, base_severity: severity });
+  const report: ErcReport = { violations: [e("pin_to_pin", "error", "U1.1"), e("pin_to_pin", "warning", "U2.1"), e("label_dangling", "warning", "L1")], counts: {}, ignored_checks: [{ key: "similar_labels", description: "Labels are similar" }] };
+  // Ignore on a pin-to-pin warning, then on an error: two rows, the error's its own slot
+  const warning = patchErcSeverity(report, "pin_to_pin", "ignore", "Conflict problem between pins", true, { row: "pin_to_pin" });
+  const both = patchErcSeverity(warning, "pin_to_pin", "ignore", "Conflict problem between pins", false, { row: "pin_to_pin_error" });
+  assert.deepEqual(both.ignored_checks?.map((c) => c.key), ["similar_labels", "pin_to_pin", "pin_to_pin_error"]);
+  assert.deepEqual(both.violations.map((v) => v.location), ["L1"]);
+  // Error from a marker's menu leaves the list alone
+  const raised = patchErcSeverity(both, "label_dangling", "error", "Label not connected");
+  assert.deepEqual(raised.ignored_checks, both.ignored_checks);
+  assert.equal(raised.violations[0]!.severity, "error");
+  // a change from the list deletes that row only
+  const back = patchErcSeverity(both, "pin_to_pin_error", "error", "Conflict problem between pins", false, { ignoredRow: 2 });
+  assert.deepEqual(back.ignored_checks?.map((c) => c.key), ["similar_labels", "pin_to_pin"]);
+  const first = patchErcSeverity(both, "similar_labels", "warning", "Labels are similar", false, { ignoredRow: 0 });
+  assert.deepEqual(first.ignored_checks?.map((c) => c.key), ["pin_to_pin", "pin_to_pin_error"]);
+  // `GetSeverity` of a row: the error's slot is an error unless ignored; a check its table's, else its default
+  const defaults = [{ key: "similar_labels", defaultSeverity: "warning" as const }];
+  assert.equal(ignoredRowSeverity("pin_to_pin_error", {}, true, defaults), "ignore");
+  assert.equal(ignoredRowSeverity("pin_to_pin_error", {}, false, defaults), "error");
+  assert.equal(ignoredRowSeverity("similar_labels", { similar_labels: "ignore" }, false, defaults), "ignore");
+  assert.equal(ignoredRowSeverity("similar_labels", {}, false, defaults), "warning");
 });
 
 test("the two placements of a shared screen have one location and their own sheets: waiving one leaves the other (p13-p16 F5)", () => {
