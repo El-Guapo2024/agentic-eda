@@ -117,7 +117,7 @@
     t(snapshot(await state()) === original, "nothing was committed");
   });
 
-  await scenario("via info bar: Draw Via's DRC message stays until closed, and a clean via dismisses it", async (t) => {
+  await scenario("via info bar: Draw Via's DRC message stays its 8 s or until closed, and a clean via dismisses it", async (t) => {
     const st = await state();
     const nets = [...new Set(pads.map((q) => q.net).filter((x) => !!x))];
     // a whole-millimetre spot well inside the board, away from every pad, and a track of another net 0.52 mm off it (not snapped onto, within the clearance)
@@ -144,8 +144,14 @@
     const bar = toast(), col = document.querySelector(".canvas-col");
     t(!!bar && !!col && Math.abs(bar.getBoundingClientRect().top - col.getBoundingClientRect().top) < 2, "a bar over the canvas, at its top");
     t(!!toast()?.querySelector('[data-testid="pcb-infobar-close"]'), "with a close button, as the info bar has");
-    await sleep(7000);
-    t(!!toast(), "it is still there after 7 s (`ShowInfoBarError`: 8 s; an error toast goes after 6 s)");
+    // `ShowInfoBarError`'s 8 s (an error toast goes after 6): still there 6.5 s after it came, gone by 9 s
+    const shownAt = performance.now();
+    while (performance.now() - shownAt < 5800) await sleep(250);
+    t(!!toast(), "it is still there more than 6 s after it came (an error toast goes after 6)");
+    while (performance.now() - shownAt < 9000 && toast()) await sleep(250);
+    t(!toast(), `gone after its 8 s (${((performance.now() - shownAt) / 1000).toFixed(1)} s)`);
+    await placeVia(x0 * 1e6, y0 * 1e6);
+    t(!!toast(), "refused again: said again");
     toast()?.querySelector('[data-testid="pcb-infobar-close"]')?.click();
     await sleep(300);
     t(!toast(), "the close button takes it away");
