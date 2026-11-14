@@ -345,6 +345,8 @@ function visibleHere(itemUnit: number, itemBodyStyle: number, activeUnit: number
 }
 
 export interface SymPaintOptions {
+  /** `m_Selection.highlight_thickness`, mils (the schematic's Display Options' "Highlight thickness:", `eeconfig()` in the Symbol Editor too). KiCad's 2 when absent. */
+  highlightThicknessMils?: number;
   selection: Set<string>;
   gridNm: number;
   gridVisible: boolean;
@@ -535,7 +537,7 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
     })();
     installColourScopes(ctx);
     withFinalColourScope(ctx, memoColours(`symshade|${shade}`, () => shade), () =>
-      withWiderLines(ctx, brightenedShadowWidth(view.scale), () => {
+      withWiderLines(ctx, brightenedShadowWidth(view.scale, opts.highlightThicknessMils), () => {
         for (const g of symbol.graphics) if (g.id && lit.has(g.id) && visibleHere(g.unit, g.body_style, opts.activeUnit, opts.activeBodyStyle)) drawGraphic(g, shade);
         for (const p of symbol.pins) if (p.id && lit.has(p.id) && pinShown(p.hidden, opts.showHiddenPins) && visibleHere(p.unit, p.body_style, opts.activeUnit, opts.activeBodyStyle)) drawPin(p, false);
         for (const f of opts.fields ?? []) if (f.id && lit.has(f.id)) drawField(ctx, f, shade);

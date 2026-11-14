@@ -8,8 +8,11 @@
 //     counterclockwise from the X axis (`-EDA_ANGLE( rulerVec )`), in the user's unit at a preview's precision (`DimensionLabel`);
 //   - with ticks (the Measure tool, `m_showTicks` true by default): a tick every 1-2-5 step of at least 10 pixels, longer and labelled every major and mid step
 //     (`|....:....|`, `|....|`, `|.|.|`), and on the other side the ruler halved by three back ticks;
-//   - the end: an arrowhead of two 30 degree strokes (`m_showEndArrowHead`, Interactive Offset's ruler) or, without one, a short stroke back from the origin.
-// Not drawn: the drop shadows (`getShadowLayer`, the outline in the shadow colour drawn under the strokes on the other overlay layer).
+//   - the end: an arrowhead of two 30 degree strokes (`m_showEndArrowHead`, Interactive Offset's ruler) or, without one, a short stroke back from the origin;
+//   - the drop shadows (UI-LEFT-3 C3-7): `ViewDraw` runs once per layer of `ViewGetLayers` (`LAYER_SELECT_OVERLAY`, `LAYER_GP_OVERLAY`), the one `getShadowLayer`
+//     names drawing everything again under the strokes, in `GetShadowColor` of the stroke's colour (black under a light colour, white under a dark one), each line
+//     `ShadowWidth` wider (`getTickLineWidth`) and each text's stroke two `ShadowWidth`s wider, its anchor moved by 1.2 shadow widths so the wider text still
+//     covers the thin one (`DrawTextNextToCursor`'s and `drawTicksAlongLine`'s `shadowXoffset`). `rulerDrawing( .., true )` is that pass; `paintRuler` draws it first.
 import type { LengthUnit } from "../state/units";
 
 export type Vec = [number, number];
@@ -60,15 +63,26 @@ const MAX_TICK_DENSITY = 10; // min pixels between tick marks
 const MID_TICK_LENGTH_FACTOR = 1.5;
 const MAJOR_TICK_LENGTH_FACTOR = 2.5;
 
-/** `GetConstantGlyphHeight( gal, aRelativeSize )` off a HiDPI canvas: 8 .. 18 px tall by relative size -3 .. 3, stroke 0.20 of it, line pitch 1.9. */
-export function constantGlyph(scale: number, relativeSize = 0): { size: number; stroke: number; linePitch: number } {
+/** `GetConstantGlyphHeight( gal, aRelativeSize )` off a HiDPI canvas: 8 .. 18 px tall by relative size -3 .. 3, stroke 0.20 of it, shadow 0.15, line pitch 1.9. */
+export function constantGlyph(scale: number, relativeSize = 0): { size: number; stroke: number; shadow: number; linePitch: number } {
   const sizes = [8, 10, 12, 14, 15, 16, 18];
   const height = sizes[3 + relativeSize]! / scale;
-  return { size: height, stroke: height * 0.2, linePitch: height * 1.9 };
+  return { size: height, stroke: height * 0.2, shadow: height * 0.15, linePitch: height * 1.9 };
 }
 
-/** `getTickLineWidth`: 0.8 of the preview text's stroke (no shadow). */
-const tickLineWidth = (stroke: number) => stroke * 0.8;
+/** `getTickLineWidth( textDims, aDrawingDropShadows )`: 0.8 of the preview text's stroke, a shadow width more on the shadow layer. */
+const tickLineWidth = (g: { stroke: number; shadow: number }, shadows: boolean) => g.stroke * 0.8 + (shadows ? g.shadow : 0);
+
+/**
+ * `shadowXoffset`: `int shadowXoffset = ShadowWidth; shadowXoffset *= 1.2f` ("Value chosen after tests") -- both truncated to whole internal units as the C++'s
+ * `int` does; 0 off the shadow layer.
+ */
+const shadowXOffset = (shadow: number, shadows: boolean) => (shadows ? Math.trunc(Math.trunc(shadow) * 1.2) : 0);
+
+/** `KIGFX::PREVIEW::GetShadowColor`: black under a colour brighter than half (`COLOR4D::GetBrightness`, r 0.299 + g 0.587 + b 0.117), else white. */
+export function shadowColorOf(rgb: { r: number; g: number; b: number }): "#000000" | "#ffffff" {
+  return rgb.r * 0.299 + rgb.g * 0.587 + rgb.b * 0.117 > 0.5 ? "#000000" : "#ffffff";
+}
 
 /** `KiROUND`-free unit conversion of `DimensionLabel`: the value in the user's unit at a preview's precision, with the unit when asked. */
 export function dimensionLabel(prefix: string, valueNm: number, units: LengthUnit | "deg", includeUnits = true): string {
@@ -152,13 +166,18 @@ export function rulerStrings(origin: Vec, end: Vec, o: RulerOptions): string[] {
   return [dimensionLabel("x", t[0], o.units), dimensionLabel("y", t[1], o.units), dimensionLabel("r", norm(v), o.units), dimensionLabel("θ", theta === 0 ? 0 : theta, "deg")];
 }
 
-/** `RULER_ITEM::ViewDraw` (the drawing layer, not the shadow one). `textWidth` measures a string at a glyph size (`StringBoundaryLimits`). */
-export function rulerDrawing(origin: Vec, end: Vec, view: RulerView, o: RulerOptions, textWidth: (s: string, size: number) => number): RulerDrawing {
+/**
+ * `RULER_ITEM::ViewDraw` on the drawing layer, or with `shadows` on the shadow layer (`drawingDropShadows`: the same strokes and texts, wider, the texts' anchors moved
+ * by `shadowXoffset`). `textWidth` measures a string at a glyph size (`StringBoundaryLimits`).
+ */
+export function rulerDrawing(origin: Vec, end: Vec, view: RulerView, o: RulerOptions, textWidth: (s: string, size: number) => number, shadows = false): RulerDrawing {
   const segs: RulerSeg[] = [];
   const texts: RulerText[] = [];
   const scale = view.scale;
   const g = constantGlyph(scale);
-  const lineW = tickLineWidth(g.stroke);
+  const lineW = tickLineWidth(g, shadows);
+  // the line width the last strokes (the arrowhead, the back of the origin) are drawn at: the GAL's current one, the back ticks' once they were drawn
+  let lastW = lineW;
   segs.push({ a: origin, b: end, width: lineW });
   const rulerVec = sub(end, origin);
   const strings = rulerStrings(origin, end, o);
@@ -194,14 +213,18 @@ export function rulerDrawing(origin: Vec, end: Vec, view: RulerView, o: RulerOpt
       chosen = c;
     }
   }
-  // `DrawTextNextToCursor`: 15 px beside the cursor, left-aligned on its right or right-aligned on its left; above it, shifted up by one more line than it has
+  // `DrawTextNextToCursor`: 15 px beside the cursor, left-aligned on its right or right-aligned on its left; above it, shifted up by one more line than it has;
+  // on the shadow layer moved back by `shadowXoffset` (left of a left-aligned text, right of a right-aligned one) and its stroke two shadow widths wider
   const pos: Vec = [end[0], end[1]];
   if (chosen[1] > 0) pos[1] -= g.linePitch * (strings.length + 1);
   const halign = chosen[0] < 0 ? "left" : "right";
   pos[0] += (chosen[0] < 0 ? 15 : -15) / scale;
+  const cursorShadowX = shadowXOffset(g.shadow, shadows);
+  pos[0] += halign === "left" ? -cursorShadowX : cursorShadowX;
+  const cursorStroke = shadows ? g.stroke + 2 * g.shadow : g.stroke;
   for (const s of strings) {
     pos[1] += g.linePitch;
-    texts.push({ text: s, at: [pos[0], pos[1]], halign, angleDeg: 0, size: g.size, stroke: g.stroke });
+    texts.push({ text: s, at: [pos[0], pos[1]], halign, angleDeg: 0, size: g.size, stroke: cursorStroke });
   }
 
   const minorTickLen = 5 / scale;
@@ -214,10 +237,21 @@ export function rulerDrawing(origin: Vec, end: Vec, view: RulerView, o: RulerOpt
     const tickLine = rotatePoint(rulerVec, 90);
     const numTicks = Math.ceil(norm(rulerVec) / fmt.tickSpace);
     const label = constantGlyph(scale, -1);
+    // the labels' stroke two shadow widths wider on the shadow layer, and the label moved back along its own direction by `shadowXoffset`
+    const labelStroke = shadows ? label.stroke + 2 * label.shadow : label.stroke;
+    const labelShadowX = shadowXOffset(label.shadow, shadows);
     const labelAngle = -vectorAngleDeg(tickLine);
     const labelOffset = resize(tickLine, fullMajor);
     const rulerAngle = vectorAngleDeg(rulerVec);
     const [labelHalign, labelTextAngle]: ["left" | "right", number] = rulerAngle > 0 ? ["left", labelAngle] : ["right", labelAngle + 180];
+    const rad = (labelTextAngle * Math.PI) / 180;
+    if (labelHalign === "left") {
+      labelOffset[0] -= labelShadowX * Math.cos(rad);
+      labelOffset[1] += labelShadowX * Math.sin(rad);
+    } else {
+      labelOffset[0] += labelShadowX * Math.cos(rad);
+      labelOffset[1] -= labelShadowX * Math.sin(rad);
+    }
     for (let i = 0; i < numTicks; i++) {
       const tickPos = add(origin, resize(rulerVec, fmt.tickSpace * i));
       if (!inside(tickPos, view.viewport, fullMajor * 2)) continue;
@@ -230,27 +264,30 @@ export function rulerDrawing(origin: Vec, end: Vec, view: RulerView, o: RulerOpt
         drawLabel = true;
         length *= MID_TICK_LENGTH_FACTOR;
       }
-      segs.push({ a: tickPos, b: add(tickPos, resize(tickLine, length)), width: label.stroke / 2 });
-      if (drawLabel) texts.push({ text: dimensionLabel("", fmt.tickSpace * i, o.units, false), at: add(tickPos, labelOffset), halign: labelHalign, angleDeg: labelTextAngle, size: label.size, stroke: label.stroke });
+      lastW = labelStroke / 2;
+      segs.push({ a: tickPos, b: add(tickPos, resize(tickLine, length)), width: lastW });
+      if (drawLabel) texts.push({ text: dimensionLabel("", fmt.tickSpace * i, o.units, false), at: add(tickPos, labelOffset), halign: labelHalign, angleDeg: labelTextAngle, size: label.size, stroke: labelStroke });
     }
-    // `drawBacksideTicks( aView, origin, rulerVec, majorTickLen, 2, ... )`
+    // `drawBacksideTicks( aView, origin, rulerVec, majorTickLen, 2, ... )`: `getTickLineWidth` of the small glyph (`GetConstantGlyphHeight( gal, -1 )`)
     const back = resize(rotatePoint(rulerVec, -90), majorTickLen);
     const backSpace = norm(rulerVec) / 2;
     for (let i = 0; i < 3; i++) {
       const p = add(origin, resize(rulerVec, backSpace * i));
       if (!inside(p, view.viewport, majorTickLen * 4)) continue;
-      segs.push({ a: p, b: add(p, back), width: lineW });
+      lastW = tickLineWidth(label, shadows);
+      segs.push({ a: p, b: add(p, back), width: lastW });
     }
   }
 
+  // these two strokes set no width of their own: the GAL's last one (the main line's without ticks, the back ticks' with them)
   if (o.showEndArrowHead) {
     const head1 = resize(rotatePoint(rulerVec, 30), majorTickLen);
     const head2 = resize(rotatePoint(rulerVec, -30), majorTickLen);
-    segs.push({ a: end, b: sub(end, head1), width: lineW });
-    segs.push({ a: end, b: sub(end, head2), width: lineW });
+    segs.push({ a: end, b: sub(end, head1), width: lastW });
+    segs.push({ a: end, b: sub(end, head2), width: lastW });
   } else {
     // "draw the back of the origin crosshair"
-    segs.push({ a: origin, b: add(origin, resize(rulerVec, -minorTickLen * MID_TICK_LENGTH_FACTOR)), width: lineW });
+    segs.push({ a: origin, b: add(origin, resize(rulerVec, -minorTickLen * MID_TICK_LENGTH_FACTOR)), width: lastW });
   }
   return { segs, texts };
 }

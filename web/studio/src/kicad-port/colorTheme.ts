@@ -186,9 +186,19 @@ export function themeColor(theme: ColorTheme, key: string, data: ThemeData): str
   return theme.colors[key] ?? data.defaults[key];
 }
 
-/** `COLOR_SETTINGS::GetDefaultColor`: the param's default, which is `s_defaultTheme`'s colour for every board layer. */
+/**
+ * `COLOR_SETTINGS::GetDefaultColor`'s fallback for a layer of no param: `s_userColors[ aLayer % s_userColors.size() ]` (common/settings/builtin_color_themes.h: (89, 148,
+ * 220), (180, 219, 210), (216, 200, 82), (194, 194, 194)). The two schematic page rows of no `schematic.*` param in 8303b2ad are `LAYER_INTERSHEET_REFS` (1107) and
+ * `LAYER_SHAPES_BACKGROUND` (1127) of include/layer_ids.h (`SCH_LAYER_ID_START` = `GAL_LAYER_ID_END` = 1096), both `% 4 == 3`: light grey (UI-LEFT-3 C3-12).
+ */
+const USER_COLOR_DEFAULTS: Readonly<Record<string, string>> = {
+  LAYER_INTERSHEET_REFS: "#c2c2c2ff",
+  LAYER_SHAPES_BACKGROUND: "#c2c2c2ff",
+};
+
+/** `COLOR_SETTINGS::GetDefaultColor`: the param's default, which is `s_defaultTheme`'s colour for every board layer; a layer of no param its `s_userColors` entry. */
 export function defaultColor(key: string, data: ThemeData): string | undefined {
-  return data.defaults[key];
+  return data.defaults[key] ?? USER_COLOR_DEFAULTS[key];
 }
 
 /** The characters `FOOTPRINT_NAME_VALIDATOR` will not let the "New theme name:" field hold (`wxFILTER_EXCLUDE_CHAR_LIST`: they cannot be typed). */
@@ -417,6 +427,20 @@ export function schSaveColors(colors: Readonly<Record<string, string>>): Record<
     out[k] = "#fcfcfcff";
   }
   return out;
+}
+
+/** `PANEL_EESCHEMA_COLOR_SETTINGS::validateSave`'s question, word for word ("Warning", Yes / No). */
+export const SCH_SAME_AS_BACKGROUND_QUESTION = "Some items have the same color as the background\nand they will not be seen on the screen.  Are you\nsure you want to use these colors?";
+
+/**
+ * `PANEL_EESCHEMA_COLOR_SETTINGS::validateSave` (asked by OK's `saveCurrentTheme( true )`, after the no-white rule): whether a schematic layer -- any of
+ * `SCH_LAYER_ID_START` .. `SCH_LAYER_ID_END` (`keys`), but the background and the sheet background -- has exactly the background's colour (`COLOR4D ==`, the alpha
+ * too). A layer of no colour (`UNSPECIFIED`) is never the background's (UI-LEFT-3 C3-12).
+ */
+export function schSameAsBackground(colorOf: (key: string) => string | undefined, keys: readonly string[]): boolean {
+  const bg = colorOf("LAYER_SCHEMATIC_BACKGROUND")?.toLowerCase();
+  if (!bg) return false;
+  return keys.some((k) => k !== "LAYER_SCHEMATIC_BACKGROUND" && k !== "LAYER_SHEET_BACKGROUND" && colorOf(k)?.toLowerCase() === bg);
 }
 
 /**

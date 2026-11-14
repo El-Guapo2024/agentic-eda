@@ -46,7 +46,7 @@ import { flipCarriedPad } from "../../kicad-port/fpPadPlacer";
 import { useStudioState } from "../../state/store";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useFootprintGridOrigin } from "../../state/gridOrigin";
-import { useGridSettings } from "../../state/gridSettings";
+import { useGridSettings, useLastGridIndex } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
 import { heldCursor } from "../../kicad-port/heldCursor";
@@ -181,10 +181,12 @@ export function FootprintCanvas() {
   const gridOrigin = useFootprintGridOrigin();
   // Grid overrides (`common.Control.toggleGridOverrides`): a pad on the connected-items grid, a shape on the graphics grid, text on the text grid -- `GetItemGrid`.
   const gridSettingsList = useGridSettings("footprint");
+  // the row last chosen (`last_size_idx`): of two grids with the same X, the one chosen is current (UI-LEFT-3 C3-6)
+  const gridIdx = useLastGridIndex("footprint");
   const gridList = gridSettingsList.grids;
   // the editor's own Display Options > Grid Display, and the Y of its grid (Edit Grids' "Y:")
   const gridDisplay = useGridDisplay("footprint");
-  const gridYNm = gridYOf(gridSettingsList, state.gridNm);
+  const gridYNm = gridYOf(gridSettingsList, state.gridNm, gridIdx);
   const gridOverrides = useGridOverrides("footprint");
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held. */
@@ -260,7 +262,7 @@ export function FootprintCanvas() {
   const fp = state.footprint;
   // Preferences > Footprint Editor > Editing Options' Magnetic Points (`m_MagneticItems.pads` CAPTURE_ALWAYS or NO_EFFECT, `.graphics`), UI-LEFT F8
   const magnetic = { ...FOOTPRINT_EDITOR_MAGNETIC, pads: studioPrefs.fpMagneticPads ? ("always" as const) : ("never" as const), graphics: studioPrefs.fpMagneticGraphics };
-  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer, magnetic });
+  snap.update({ footprint: fp, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, gridIdx, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer, magnetic });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {

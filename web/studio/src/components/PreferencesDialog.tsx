@@ -32,7 +32,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { NET_NAMES_CHOICES, TRACK_CLEARANCE_CHOICES, sanitizeNetNamesMode, sanitizeTrackClearanceMode } from "../kicad-port/pcbDisplayOptions";
-import { assignScrollModifier, DEFAULT_PREFERENCES, MOUSE_SCROLL_DEFAULTS, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
+import { assignScrollModifier, DEFAULT_PREFERENCES, MOUSE_SCROLL_DEFAULTS, sanitizeHighlightThickness, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
 import { PCB_AXES_FIELDS, PcbOriginsAxesPage } from "./PcbOriginsAxesPage";
@@ -51,6 +51,7 @@ import { useToolbarsPage } from "./ToolbarsPage";
 import { useFpFieldDefaultsPage, useFpLayerNamesPage } from "./FpDefaultsPages";
 import { PcbEditingOptionsPage, SchEditingOptionsPage, SymEditingOptionsPage, type EditingExtra } from "./EditingOptionsPages";
 import { GridsPageBody, useGridsPages } from "./GridsDialog";
+import { takePreferencesStartPage } from "../state/preferencesStart";
 import type { GridEditor } from "../kicad-port/gridSettings";
 import type { PreferencesPageHandle } from "./preferencesPage";
 import { GlobalFieldNamesPage, SimulatorPrefsPage } from "./SchPreferencesPages";
@@ -160,7 +161,7 @@ const ROW_KEY: Record<ScrollRow, "scrollModifierZoom" | "scrollModifierPanH" | "
 
 /** The fields of `Preferences` each page owns, for its `ResetPanel`. */
 const MOUSE_FIELDS: ReadonlyArray<keyof Preferences> = ["scrollModifierZoom", "scrollModifierPanH", "scrollModifierPanV", "reverseScrollZoom", "reverseScrollPanH", "autoPan", "autoPanAcceleration", "dragMiddle", "dragRight", "dragLeft", "motionPanModifier", "horizontalPan", "zoomAcceleration", "zoomSpeedAuto", "zoomSpeed"];
-const PCB_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["rotationStepDeg", "pcbArcEditMode", "flipDirection", "allowFreePads", "magneticPads", "magneticTracks", "magneticGraphics", "ratsnestThicknessPx", "escClearsNetHighlight", "showCourtyardCollisions"];
+const PCB_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = ["rotationStepDeg", "pcbArcEditMode", "flipDirection", "allowFreePads", "magneticPads", "magneticTracks", "magneticGraphics", "ratsnestThicknessPx", "escClearsNetHighlight", "showCourtyardCollisions", "pcbTrackDragAction", "pcbCtrlClickHighlight", "pcbShowSelectedRatsnest", "pcbShowPageLimits"];
 const SCH_EDIT_FIELDS: ReadonlyArray<keyof Preferences> = [
   "schArcEditMode",
   "schDragIsMove",
@@ -269,6 +270,9 @@ export function PreferencesDialog() {
 
   useEffect(() => {
     if (open) {
+      // `ShowPreferences( aStartPage, aStartParentPage )`: a page a tool asked for (Edit Grids: the editor's Grids page), else the last one (`g_lastPage`)
+      const start = takePreferencesStartPage();
+      if (start) lastPage = (Object.keys(GRIDS_PAGE) as PrefsPage[]).find((p) => GRIDS_PAGE[p] === start.grids) ?? lastPage;
       setDraft(state.prefs);
       setRotationText(String(state.prefs.rotationStepDeg));
       setFpRotationText(String(state.prefs.fpRotationStepDeg));
@@ -297,6 +301,11 @@ export function PreferencesDialog() {
   const valid = scrollValid && !graphicsProblem && allHandles.every((h) => h.valid !== false);
   const submit = async () => {
     if (!valid) return;
+    // `PAGED_DIALOG::TransferDataFromWindow`: a page's own question first (the schematic Colors page's `validateSave`); a No keeps the dialog up and saves nothing.
+    // Only a page that was built (shown) is asked, as KiCad's lazy pages are.
+    for (const [id, h] of Object.entries(handles) as Array<[PrefsPage, PreferencesPageHandle | undefined]>) {
+      if (h?.confirmOk && shownPages.has(id) && !(await h.confirmOk())) return;
+    }
     // Field Name Templates' `TransferDataFromWindow` (a lazy page: only when it was shown): each name with white space at an end is asked about, then the rows
     // with a name are kept as `AddTemplateFieldName` keeps them (kicad-port/fieldNameTemplates.ts)
     const fieldNames = shownPages.has("sch_field_names")
@@ -373,8 +382,8 @@ export function PreferencesDialog() {
         };
         return { run, tooltip: RESET_TOOLTIP };
       }
-      // the schematic's `PANEL_EESCHEMA_DISPLAY_OPTIONS::ResetPanel` also its Appearance ("Default font:" of a fresh `EESCHEMA_SETTINGS`)
-      return { run: () => { if (e === "schematic") set({ schDefaultFont: DEFAULT_PREFERENCES.schDefaultFont }); setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })); }, tooltip: RESET_TOOLTIP };
+      // the schematic's `PANEL_EESCHEMA_DISPLAY_OPTIONS::ResetPanel` also its Appearance ("Default font:") and Selection ("Highlight thickness:") of a fresh `EESCHEMA_SETTINGS`
+      return { run: () => { if (e === "schematic") set({ schDefaultFont: DEFAULT_PREFERENCES.schDefaultFont, schHighlightThicknessMils: DEFAULT_PREFERENCES.schHighlightThicknessMils }); setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })); }, tooltip: RESET_TOOLTIP };
     }
     if (page === "fp_graphics") return { run: () => set({ fpTextGraphics: null }), tooltip: `Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values` };
     return null;
@@ -490,6 +499,23 @@ export function PreferencesDialog() {
               </option>
             ))}
           </select>
+        </div>
+        {/* Selection's "Highlight thickness:" (`m_highlightWidthCtrl`, a 0 .. 50 spin box, `selection.highlight_thickness`): the brightened items' shadow,
+            `SCH_PAINTER::getShadowWidth( true )`. KiCad's other Selection rows are not here (the studio has no such settings yet). */}
+        {heading("Selection")}
+        <div className="filter-row">
+          <span style={{ width: 170 }}>Highlight thickness:</span>
+          <input
+            type="number"
+            aria-label="Highlight thickness:"
+            data-testid="pref-sch-highlight-thickness"
+            style={{ width: 70 }}
+            min={0}
+            max={50}
+            step={1}
+            value={draft.schHighlightThicknessMils}
+            onChange={(e) => set({ schHighlightThicknessMils: sanitizeHighlightThickness(Number(e.target.value), draft.schHighlightThicknessMils) })}
+          />
         </div>
       </>
     );
@@ -634,7 +660,7 @@ export function PreferencesDialog() {
 
   const gridsEditor = GRIDS_PAGE[page];
   const title = pageTitle(page);
-  const wide = page === "hotkeys" || page === "common" || page.endsWith("_edit") || page.endsWith("_toolbars") || page === "fp_defaults";
+  const wide = page === "hotkeys" || page === "common" || page.endsWith("_edit") || page.endsWith("_toolbars") || page === "fp_defaults" || page === "pcb_colors" || page === "sch_colors";
 
   return (
     <div className="dialog-backdrop" onClick={cancel}>

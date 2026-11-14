@@ -1,4 +1,5 @@
-// Draw Via's DRC message as KiCad's info bar shows it (`VIA_PLACER::PlaceItem`, pcbnew/tools/drawing_tool.cpp at 8303b2ad), UI-LEFT-3 P3-32.
+// Draw Via's DRC message as KiCad's info bar shows it (`VIA_PLACER::PlaceItem`, pcbnew/tools/drawing_tool.cpp at 8303b2ad), UI-LEFT-3 P3-32: the board
+// editor's info bar over the canvas (components/PcbInfoBar.tsx, `state.pcbInfoBar`).
 
 /** `PlaceItem`'s info bar message when `checkDRCViolation` finds one, word for word (crates/ops/src/via_place.rs `VIA_VIOLATES_DRC`). */
 export const VIA_VIOLATES_DRC = "Via location violates DRC.";
@@ -10,4 +11,9 @@ export const VIA_VIOLATES_DRC = "Via location violates DRC.";
  */
 export function isViaDrcMessage(op: string, message: string | undefined): boolean {
   return op === "place_via" && (message ?? "").includes(VIA_VIOLATES_DRC);
+}
+
+/** What the info bar says: KiCad's words alone (`ShowInfoBarError( _( "Via location violates DRC." ), .. )`), without the server's error code before them. */
+export function viaDrcInfoBarText(message: string): string {
+  return message.includes(VIA_VIOLATES_DRC) ? VIA_VIOLATES_DRC : message;
 }

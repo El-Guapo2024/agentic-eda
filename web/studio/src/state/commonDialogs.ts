@@ -2,7 +2,6 @@
 // Plain module state with subscribers (like `state/commonOptions.ts` and `state/commonTool.ts`), so an action registered in the
 // action runner can open a dialog without a place in the big reducer. `components/CommonDialogs.tsx` renders them.
 import { useSyncExternalStore } from "react";
-import type { GridEditor } from "../kicad-port/gridSettings";
 
 /** `DIALOG_GROUP_PROPERTIES`: the group being edited, its name and member list as the dialog has them so far. */
 export interface GroupDialog {
@@ -24,13 +23,11 @@ export interface CommonDialogsState {
   page: "pcb" | "schematic" | null;
   /** `COMMON_TOOLS::GridOrigin`'s X / Y entry dialog is open. */
   gridOrigin: boolean;
-  /** `PANEL_GRID_SETTINGS` ("Edit Grids..."): the editor whose Grids page of the Preferences is showing, or null when the dialog is closed. */
-  grids: GridEditor | null;
   /** `SAVE_AS_DIALOG` ("Save Footprint As", the Footprint Editor's Save As): the footprint being saved and whether it is the one loaded, or null when closed. */
   saveFootprintAs: SaveFootprintAsRequest | null;
 }
 
-const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false, grids: null, saveFootprintAs: null };
+const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false, saveFootprintAs: null };
 
 let current: CommonDialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -77,9 +74,6 @@ export function setGridOriginDialogOpen(open: boolean): void {
   set({ ...current, gridOrigin: open });
 }
 
-export function setGridsDialogOpen(editor: GridEditor | null): void {
-  set({ ...current, grids: editor });
-}
 
 /** The Save Footprint As dialog's request; `again` is the dialog shown again after its New Library... with the name typed and the library made (`ID_MAKE_NEW_LIBRARY`). */
 export interface SaveFootprintAsRequest {

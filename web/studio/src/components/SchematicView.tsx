@@ -44,7 +44,7 @@ import { withVariant } from "../kicad-port/designVariants";
 import { resolveLibSymbol, symbolBounds as libSymbolBounds } from "./schematic/libSymbol";
 import { SchSnap, SCH_PLACING_TOOLS, toolCategory, type SchSnapMods } from "./schematic/schSnap";
 import { useGridOverrides } from "../state/gridOverrides";
-import { useGridSettings } from "../state/gridSettings";
+import { useGridSettings, useLastGridIndex } from "../state/gridSettings";
 import { heldCursor } from "../kicad-port/heldCursor";
 import { paintSnapOverlay } from "./canvas/snapOverlayPainter";
 import { layerColor } from "./canvas/layers";
@@ -291,11 +291,13 @@ export function SchematicView() {
   if (!snapRef.current) snapRef.current = new SchSnap();
   const snap = snapRef.current;
   const gridSettingsList = useGridSettings("schematic");
+  // the row last chosen (`last_size_idx`): of two grids with the same X, the one chosen is current (UI-LEFT-3 C3-6)
+  const gridIdx = useLastGridIndex("schematic");
   const gridList = gridSettingsList.grids;
   const gridOverrides = useGridOverrides("schematic");
   const gridNm = state.schGridNm;
   const gridDisplay = useGridDisplay("schematic");
-  snap.update({ sch, scale: state.schematicView.scale, gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides });
+  snap.update({ sch, scale: state.schematicView.scale, gridNm, grids: gridList, gridYs: gridSettingsList.ys, gridIdx, overrides: gridOverrides });
   // A tool of its own starts a helper of its own: the anchor snapped to and the snap line go with the last one.
   useEffect(() => snap.reset(), [snap, state.activeTool]);
   /** The modifiers of the last pointer event (Ctrl, Cmd on a Mac, turns the grid off; Shift the anchors): the click handlers below snap through `snapToGrid` without an event. */
@@ -500,7 +502,7 @@ export function SchematicView() {
     const page = pageOf(sch.paper);
     drawPaper(ctx, page);
     // `GAL::DrawGrid` over the whole canvas (eeschema clips it to nothing), in the Schematic Editor's Display Options > Grid Display style
-    if (state.gridVisible) paintEditorGrid(ctx, state.schematicView, width, height, { size: { x: gridNm, y: gridYOf(gridSettingsList, gridNm) }, origin: [0, 0], style: gridDisplay.style, lineWidthPx: gridDisplay.lineWidthPx, minSpacingPx: gridDisplay.minSpacingPx }, layerColor("LAYER_SCHEMATIC_GRID"), undefined, "schematic");
+    if (state.gridVisible) paintEditorGrid(ctx, state.schematicView, width, height, { size: { x: gridNm, y: gridYOf(gridSettingsList, gridNm, gridIdx) }, origin: [0, 0], style: gridDisplay.style, lineWidthPx: gridDisplay.lineWidthPx, minSpacingPx: gridDisplay.minSpacingPx }, layerColor("LAYER_SCHEMATIC_GRID"), undefined, "schematic");
     // The drawing sheet (`SCH_VIEW::DisplaySheet`): the `.kicad_wks` Page Settings chose, else KiCad's default, on this sheet's page
     drawSchematicDrawingSheet(ctx, state.schematicView, schematicSheetPage(sch, state.board?.name), sch.drawing_sheet?.text);
     // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)
@@ -509,7 +511,7 @@ export function SchematicView() {
     // the current design variant's flags and field texts (KiCad 25ec2335 `SCH_EDIT_FRAME::SetCurrentVariant` -> `HardRedraw`: the painter reads every symbol through it)
     // the item being edited is drawn as its points have it so far, with what follows it (the point editor changes the items as it goes)
     const shownSch = shapeEditor && pointDrag ? shapeEditor.shown(displaySch) : displaySch;
-    paintSchematic(ctx, state.schematicView, withOpVars(withVariant(shownSch, state.schVariant), simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId, brightened: [...menuHighlight, ...findHighlights], defaultFont: state.prefs.schDefaultFont });
+    paintSchematic(ctx, state.schematicView, withOpVars(withVariant(shownSch, state.schVariant), simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId, brightened: [...menuHighlight, ...findHighlights], defaultFont: state.prefs.schDefaultFont, highlightThicknessMils: state.prefs.schHighlightThicknessMils });
     // the carried item is on the canvas, in this state of it (the test hook's timing: no round trip before it shows)
     if (carryShown && carry) noteCarryPainted(carry.seq);
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
@@ -620,7 +622,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }), [menuHighlight, findHighlights, state.prefs.schDefaultFont, sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion, themeStamp]);
+  }), [menuHighlight, findHighlights, state.prefs.schDefaultFont, state.prefs.schHighlightThicknessMils, sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, gridIdx, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion, themeStamp]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -1250,7 +1252,7 @@ export function SchematicView() {
           const carriedId = previewIds(carryShown)[0] ?? (carry.item.kind === "symbol" ? carry.item.ref : null);
           if (carriedId) {
             const other = state.units === "mm" ? "mil" : "mm";
-            const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other)) };
+            const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other), gridIdx) };
             setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(view, [carriedId], [wx, wy], POINT_SIZE_PX / scale, { allowPinSwaps: false, inGroup: false, unit: carry.item.kind === "symbol" ? carry.item.unit : undefined }), std) });
           }
           return;
@@ -1265,7 +1267,7 @@ export function SchematicView() {
         const underPointer = ids.length === 1 ? sch.symbols.filter((x) => x.id === ids[0]).find((x) => { const b = libSymbolBounds(x, sch.lib_symbols); return wx >= b.minX && wx <= b.maxX && wy >= b.minY && wy <= b.maxY; })?.unit : undefined;
         // `AddStandardSubMenus`: the Zoom submenu over the eeschema zoom list, the Grid submenu over the Schematic Editor's grids
         const other = state.units === "mm" ? "mil" : "mm";
-        const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other)) };
+        const std = { zoom: zoomMenuEntries(zoomListFor("schematic"), state.schematicView.scale), grid: gridMenuEntries(gridSettingsList, gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, other), gridIdx) };
         const nodes = schContextMenu(summarizeSelection(sch, ids, [wx, wy], POINT_SIZE_PX / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null, unit: underPointer, variant: state.schVariant }), std);
         // KiCad 25ec2335's `EE_GRAPHIC_TOOL` menu while Draw Arc is armed (`inDrawingArc`, order 200): the five modes as check items, then Cycle Arc Drawing Mode
         const arcModes: MenuNode[] =

@@ -95,7 +95,7 @@ import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions, symEnableState } from "./libraryEditorActions";
 import { fpActionEnabled, symActionEnabled } from "../kicad-port/fpSymActionEnabled";
 import { placingFootprint, startPlaceFootprint } from "./placeFootprintTool";
-import { registerCommonActions, type ActionHandler } from "./commonActions";
+import { registerCommonActions, type ActionHandler, contrastModeFeedback, snapModeFeedback } from "./commonActions";
 import { askingRegistry, newForcedSelection, SelectionMenuPending } from "./selectionMenuReplay";
 import { FP_ATTRIBUTE_ACTIONS, fpAttributeChecked, toggleFpAttributeCmds, type FpAttribute } from "../kicad-port/fpAttributeToggle";
 import { getOverrideLocks, LOCKED_ITEMS_FILTERED } from "../state/overrideLocks";
@@ -1135,9 +1135,12 @@ export function useActionRunner() {
     m.set("pcbnew.Control.showRatsnest", () => dispatch({ type: "TOGGLE_RATSNEST" }));
     m.set("pcbnew.Control.ratsnestLineMode", () => dispatch({ type: "TOGGLE_RATSNEST_CURVED" }));
     // PCB_CONTROL::HighContrastModeCycle: normal -> dimmed -> hidden -> normal (the Appearance panel's "Inactive layers": Normal, Dim, Hide).
-    m.set("common.Control.highContrastModeCycle", () =>
-      dispatch({ type: "APPEARANCE", op: { op: "contrast", mode: nextContrastMode(!state.highContrast ? "normal" : state.appearance.contrastHidden ? "hidden" : "dimmed") } })
-    );
+    // `PostEvent( EVENTS::ContrastModeChangedByKeyEvent )`: `ContrastModeFeedback`'s "Inactive Layer Display" popup (UI-LEFT-3 C3-9)
+    m.set("common.Control.highContrastModeCycle", () => {
+      const mode = nextContrastMode(!state.highContrast ? "normal" : state.appearance.contrastHidden ? "hidden" : "dimmed");
+      dispatch({ type: "APPEARANCE", op: { op: "contrast", mode } });
+      contrastModeFeedback(mode);
+    });
     // `ACTIONS::togglePolarCoords` -> `PCB_BASE_FRAME::m_polarCoords`, saved as each frame's `editing.polar_coords`: the board editor's and the Footprint Editor's own (state/commonOptions.ts).
     m.set("common.Control.togglePolarCoords", () => setWindowOptions(state.tab, { polarCoords: !windowOptionsOf(getCommonOptions(), state.tab).polarCoords }));
     // cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs: actions/commonActions.ts (each editor's own setting).
@@ -1211,7 +1214,8 @@ export function useActionRunner() {
       "pcbnew.Control.zoneDisplayEnable",
       pcbOnly(() => {
         const warning = unfilledZoneWarning(state.zoneFill?.zones ?? null, state.board?.routing?.zones ?? [], getCommonOptions().zoneFillWarningDismissed);
-        if (warning) dispatch({ type: "TOAST", message: warning, kind: "info", ms: ZONE_FILL_WARNING_MS, dontShowAgain: "zoneFillWarningDismissed" });
+        // `unfilledZoneCheck`: the info bar's warning, `ShowMessageFor( msg, 5000, wxICON_WARNING )`, with its "Don't show again" link (components/PcbInfoBar.tsx)
+        if (warning) dispatch({ type: "SHOW_PCB_INFOBAR", message: warning, kind: "warning", ms: ZONE_FILL_WARNING_MS, close: false, dontShowAgain: "zoneFillWarningDismissed" });
         dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "filled" });
       })
     );
@@ -1854,12 +1858,12 @@ export function useActionRunner() {
     if (state.tab === "pcb") {
       // pcb_control.cpp PCB_CONTROL::SnapMode (magneticSnapToggle, Shift+S):
       // `settings.allLayers = !settings.allLayers`; SnapModeFeedback pops up
-      // "Object Snapping: Active Layer / All Layers". The setting feeds
+      // "Object Snapping" with Active Layer / All Layers (state/hotkeyPopup.ts, UI-LEFT-3 C3-9). The setting feeds
       // the board's snapping (`toPcbMagnetic( prefs, allLayers )`, components/canvas/Canvas.tsx -> pcbSnap.ts).
       m.set("common.Control.magneticSnapToggle", () => {
         const next = !state.magneticAllLayers;
         dispatch({ type: "SET_MAGNETIC_ALL_LAYERS", value: next });
-        dispatch({ type: "TOAST", message: `Object Snapping: ${next ? "All Layers" : "Active Layer"}`, kind: "info" });
+        snapModeFeedback(next);
       });
     }
 

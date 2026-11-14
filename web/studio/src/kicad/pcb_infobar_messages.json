@@ -1,0 +1,366 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-11-14T08:20:24.167Z",
+    "sourceFiles": [
+      "pcbnew/autorouter/autoplace_tool.cpp",
+      "pcbnew/build_BOM_from_board.cpp",
+      "pcbnew/files.cpp",
+      "pcbnew/footprint_edit_frame.cpp",
+      "pcbnew/footprint_libraries_utils.cpp",
+      "pcbnew/generators/pcb_tuning_pattern.cpp",
+      "pcbnew/microwave/microwave_inductor.cpp",
+      "pcbnew/microwave/microwave_polygon.cpp",
+      "pcbnew/pcb_edit_frame.cpp",
+      "pcbnew/pcbnew_config.cpp",
+      "pcbnew/router/router_tool.cpp",
+      "pcbnew/tools/board_editor_control.cpp",
+      "pcbnew/tools/board_inspection_tool.cpp",
+      "pcbnew/tools/convert_tool.cpp",
+      "pcbnew/tools/drawing_tool.cpp",
+      "pcbnew/tools/edit_tool.cpp",
+      "pcbnew/tools/edit_tool_move_fct.cpp",
+      "pcbnew/tools/footprint_editor_control.cpp",
+      "pcbnew/tools/multichannel_tool.cpp",
+      "pcbnew/tools/pad_tool.cpp",
+      "pcbnew/tools/pcb_control.cpp",
+      "pcbnew/tools/pcb_selection_tool.cpp",
+      "pcbnew/tools/zone_filler_tool.cpp",
+      "pcbnew/widgets/appearance_controls.cpp",
+      "pcbnew/widgets/pcb_properties_panel.cpp"
+    ]
+  },
+  "messages": [
+    {
+      "pattern": "-?[\\d.]+ 3D model\\(s\\) successfully embedded\\.",
+      "kind": "info",
+      "ms": 5000,
+      "close": false,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "A shape with at least two lines must be selected\\.",
+      "kind": "info",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool.cpp"
+    },
+    {
+      "pattern": "At least two straight track segments must be selected\\.",
+      "kind": "info",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool.cpp"
+    },
+    {
+      "pattern": "Automatic refill of zones can be turned off in Preferences if it becomes too slow\\.",
+      "kind": "info",
+      "ms": 10000,
+      "close": false,
+      "source": "pcbnew/tools/zone_filler_tool.cpp"
+    },
+    {
+      "pattern": "Board edges must be defined on the [\\s\\S]*? layer\\.",
+      "kind": "error",
+      "ms": 5000,
+      "close": false,
+      "source": "pcbnew/autorouter/autoplace_tool.cpp"
+    },
+    {
+      "pattern": "Cannot auto-generate any placement areas because the schematic has only one or no hierarchical sheets, groups, or component classes\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": true,
+      "source": "pcbnew/tools/multichannel_tool.cpp"
+    },
+    {
+      "pattern": "Cannot export BOM: there are no footprints on the PCB\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/build_BOM_from_board.cpp"
+    },
+    {
+      "pattern": "Cannot generate clearance report on empty group\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/board_inspection_tool.cpp"
+    },
+    {
+      "pattern": "Copy Rule Area contents failed between rule areas '[\\s\\S]*?' and '[\\s\\S]*?'\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": true,
+      "source": "pcbnew/tools/multichannel_tool.cpp"
+    },
+    {
+      "pattern": "Could not find design block [\\s\\S]*?\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": true,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "Design block [\\s\\S]*? does not have a board file\\.",
+      "kind": "warning",
+      "ms": 5000,
+      "close": false,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "Design block has no layout to place\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": true,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "Design block placement failed - no footprints were placed\\.",
+      "kind": "warning",
+      "ms": 5000,
+      "close": false,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "Exactly two lines must be selected to extend them\\.",
+      "kind": "info",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool.cpp"
+    },
+    {
+      "pattern": "Footprint [\\s\\S]*? is locked and cannot be placed\\.",
+      "kind": "warning",
+      "ms": 5000,
+      "close": false,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "Gate swapping failed: pad in unit missing from footprint\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool_move_fct.cpp"
+    },
+    {
+      "pattern": "Gate swapping has no effect: all selected gates have identical nets\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool_move_fct.cpp"
+    },
+    {
+      "pattern": "Gate swapping must be performed on gates with equal pin counts\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool_move_fct.cpp"
+    },
+    {
+      "pattern": "Gate swapping must be performed on pads within one multi-gate footprint\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool_move_fct.cpp"
+    },
+    {
+      "pattern": "Library '[\\s\\S]*?' is read only\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/footprint_libraries_utils.cpp"
+    },
+    {
+      "pattern": "Library [\\s\\S]*? is read only\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/footprint_libraries_utils.cpp"
+    },
+    {
+      "pattern": "No Rule Areas to repeat layout to have been found\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": true,
+      "source": "pcbnew/tools/multichannel_tool.cpp"
+    },
+    {
+      "pattern": "No board currently open\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/footprint_libraries_utils.cpp"
+    },
+    {
+      "pattern": "No datasheet found in the footprint\\.",
+      "kind": "info",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/footprint_editor_control.cpp"
+    },
+    {
+      "pattern": "Not all zones are filled\\. Use Edit > Fill All Zones \\([\\s\\S]*?\\) if you wish to see all fills\\.",
+      "kind": "warning",
+      "ms": 5000,
+      "close": false,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "Press <ESC> to cancel image creation\\.",
+      "kind": "info",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/drawing_tool.cpp"
+    },
+    {
+      "pattern": "Select a footprint for a footprint associations report\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/board_inspection_tool.cpp"
+    },
+    {
+      "pattern": "Select a footprint to diff with its library equivalent\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/board_inspection_tool.cpp"
+    },
+    {
+      "pattern": "Select a single item for a constraints resolution report\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/board_inspection_tool.cpp"
+    },
+    {
+      "pattern": "Select a track to tune first\\.",
+      "kind": "warning",
+      "ms": 6000,
+      "close": false,
+      "source": "pcbnew/generators/pcb_tuning_pattern.cpp"
+    },
+    {
+      "pattern": "Select two different items for clearance resolution\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/board_inspection_tool.cpp"
+    },
+    {
+      "pattern": "Selected group contains no footprints to place\\.",
+      "kind": "warning",
+      "ms": 5000,
+      "close": false,
+      "source": "pcbnew/tools/pcb_control.cpp"
+    },
+    {
+      "pattern": "Selection contains locked items\\. Enable 'Override locks' to operate on them\\.",
+      "kind": "warning",
+      "ms": 6000,
+      "close": true,
+      "source": "pcbnew/tools/pcb_selection_tool.cpp"
+    },
+    {
+      "pattern": "Selection contains no items with labeled nets\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/board_editor_control.cpp"
+    },
+    {
+      "pattern": "Shape has a null size\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/microwave/microwave_polygon.cpp"
+    },
+    {
+      "pattern": "Shape has no points\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/microwave/microwave_polygon.cpp"
+    },
+    {
+      "pattern": "Some of the track segments could not be filleted\\.",
+      "kind": "info",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool.cpp"
+    },
+    {
+      "pattern": "Target group does not have a group\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": true,
+      "source": "pcbnew/tools/multichannel_tool.cpp"
+    },
+    {
+      "pattern": "The current color theme is read-only\\.  Create a new theme in Preferences to enable color editing\\.",
+      "kind": "info",
+      "ms": 10000,
+      "close": false,
+      "source": "pcbnew/widgets/appearance_controls.cpp"
+    },
+    {
+      "pattern": "Tracks on Copper layers only\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/router/router_tool.cpp"
+    },
+    {
+      "pattern": "Unable to fillet the selected track segments\\.",
+      "kind": "info",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool.cpp"
+    },
+    {
+      "pattern": "Unable to resize arc tracks of [\\s\\S]*? or greater\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool.cpp"
+    },
+    {
+      "pattern": "Unable to tune segments inside other tuning patterns\\.",
+      "kind": "warning",
+      "ms": 6000,
+      "close": false,
+      "source": "pcbnew/generators/pcb_tuning_pattern.cpp"
+    },
+    {
+      "pattern": "Use the Footprint Properties dialog to remove fields\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": false,
+      "source": "pcbnew/tools/edit_tool.cpp"
+    },
+    {
+      "pattern": "Via location violates DRC\\.",
+      "kind": "error",
+      "ms": 8000,
+      "close": true,
+      "source": "pcbnew/tools/drawing_tool.cpp"
+    },
+    {
+      "pattern": "Via needs 2 different layers\\.",
+      "kind": "error",
+      "ms": 2000,
+      "close": false,
+      "source": "pcbnew/router/router_tool.cpp"
+    },
+    {
+      "pattern": "Zone fills may be inaccurate\\.  DRC rules contain errors\\.",
+      "kind": "warning",
+      "ms": 10000,
+      "close": false,
+      "source": "pcbnew/tools/zone_filler_tool.cpp"
+    }
+  ]
+}

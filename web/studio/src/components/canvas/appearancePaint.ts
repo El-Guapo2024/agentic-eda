@@ -67,7 +67,7 @@ export const on = (layerVisible: Readonly<Record<string, boolean>>, id: ObjectId
 
 // ------------------------------------------------------------------------------------------------------------------------------------ overlays
 
-type Opts = { layerVisible: Record<string, boolean>; appearance?: PaintAppearance; activeLayer?: string | null; highContrast?: boolean };
+type Opts = { layerVisible: Record<string, boolean>; appearance?: PaintAppearance; activeLayer?: string | null; highContrast?: boolean; showPageLimits?: boolean };
 
 /** `PCB_PAINTER::draw( const FOOTPRINT* )` on `LAYER_ANCHOR`: a cross five pixels either way, one pixel wide, at the footprint's origin -- only where its side shows (`FOOTPRINT::ViewGetLOD`) and zoomed in enough (the item's level of detail 1.5). */
 export function drawAnchors(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: Opts): void {
@@ -236,6 +236,17 @@ export function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, op
     kicadVersion: KICAD_VERSION_TEXT,
   };
   paintDrawingSheet(ctx, model, page, { tag: "pcb", color: layerColor("LAYER_DRAWINGSHEET"), pixelNm: hairlineNm(view, 1) });
+  // `DS_PROXY_VIEW_ITEM::ViewDraw`: "Draw gray line that outlines the sheet size" when `PCB_RENDER_SETTINGS::GetShowPageLimits()` (Preferences > PCB Editor > Editing
+  // Options > "Show page limits", `m_ShowPageLimits`, default on; UI-LEFT-3 C3-10) -- `DS_PAINTER::DrawBorder`: the page's rectangle in `LAYER_PAGE_LIMITS`'s colour
+  // (`SetPageBorderColor( GetLayerColor( m_pageBorderColorLayer ) )`) at the default pen width, 0 (the GAL's thinnest line)
+  if (opts.showPageLimits !== false) {
+    ctx.save();
+    ctx.strokeStyle = layerColor("LAYER_PAGE_LIMITS");
+    ctx.lineWidth = hairlineNm(view, 1);
+    ctx.strokeRect(0, 0, sheet.widthNm, sheet.heightNm);
+    ctx.restore();
+    if (typeof window !== "undefined") (window as unknown as { __edaPageLimits?: unknown }).__edaPageLimits = { w: sheet.widthNm, h: sheet.heightNm, color: layerColor("LAYER_PAGE_LIMITS"), at: Date.now() };
+  } else if (typeof window !== "undefined") (window as unknown as { __edaPageLimits?: unknown }).__edaPageLimits = null;
 }
 
 /**

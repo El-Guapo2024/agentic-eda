@@ -4,11 +4,11 @@
 //   honoured   Icon theme: Light / Dark / Automatic (`appearance.icon_theme`, default AUTO: the icon set follows the system's light or dark mode); Toolbar icon size:
 //              Small 16 / Normal 24 / Large 32 (`appearance.toolbar_icon_size`, default 24); "Use alternating row colors in tables" (`appearance.grid_striping`,
 //              default off); "High-contrast mode dimming factor:" (`appearance.hicontrast_dimming_factor`, default 0.8, in percent on the page: the board's High
-//              Contrast Mode mixes the inactive layers `1 - factor` of the way back to the background, `PCB_RENDER_SETTINGS::LoadColors`).
+//              Contrast Mode mixes the inactive layers `1 - factor` of the way back to the background, `PCB_RENDER_SETTINGS::LoadColors`); "Show popup indicator when
+//              toggling settings with hotkeys" (`input.hotkey_feedback`, default on: the `HOTKEY_CYCLE_POPUP` of components/HotkeyCyclePopup.tsx, UI-LEFT-3 C3-9).
 //   greyed     the Rendering Engine (the studio draws with the browser's canvas), Antialiasing (the browser's canvas always antialiases), the Helper Applications
 //              (a page cannot start programs), Show icons in menus (the studio's menus are drawn without icons), Show scrollbars in editors (its canvases have
-//              none), Focus follows mouse between schematic and PCB editors (the editors are tabs of one window), the hotkey popup indicator (`HOTKEY_CYCLE_POPUP`
-//              is not ported), Disable custom cursors (the canvases use the browser's cursors), Warp mouse to anchor of moved object (a page cannot move the
+//              none), Focus follows mouse between schematic and PCB editors (the editors are tabs of one window), Disable custom cursors (the canvases use the browser's cursors), Warp mouse to anchor of moved object (a page cannot move the
 //              pointer), First hotkey selects tool (the studio's hotkeys always act at once, KiCad's default), Session (no project manager re-opens files), and
 //              Project Backup (the studio keeps every edit in the board's own `.history`, the undo history, not KiCad's backup archives).
 //   not shown  as KiCad hides them: the canvas scale (`m_AllowManualCanvasScale` is off by default), "Apply icon scaling to fonts" (`m_scaleFonts->Show( false )`)
@@ -29,9 +29,11 @@ export interface CommonSettings {
   gridStriping: boolean;
   /** `appearance.hicontrast_dimming_factor`, 0 .. 1 (default 0.8). */
   hicontrastDimmingFactor: number;
+  /** `input.hotkey_feedback`: the popup indicator of a hotkey that cycles a setting (`HOTKEY_CYCLE_POPUP`). Default on. */
+  hotkeyFeedback: boolean;
 }
 
-export const DEFAULT_COMMON_SETTINGS: CommonSettings = { iconTheme: "auto", toolbarIconSize: 24, gridStriping: false, hicontrastDimmingFactor: 0.8 };
+export const DEFAULT_COMMON_SETTINGS: CommonSettings = { iconTheme: "auto", toolbarIconSize: 24, gridStriping: false, hicontrastDimmingFactor: 0.8, hotkeyFeedback: true };
 
 /** The page's three toolbar icon sizes (`m_rbIconSizeSmall` 16, `m_rbIconSizeNormal` 24, `m_rbIconSizeLarge` 32). */
 export const TOOLBAR_ICON_SIZES: ReadonlyArray<{ size: number; label: string; tip: string }> = [
@@ -81,6 +83,7 @@ export function sanitizeCommonSettings(raw: unknown): CommonSettings {
     toolbarIconSize: sanitizeToolbarIconSize(o.toolbarIconSize),
     gridStriping: typeof o.gridStriping === "boolean" ? o.gridStriping : d.gridStriping,
     hicontrastDimmingFactor: typeof o.hicontrastDimmingFactor === "number" && Number.isFinite(o.hicontrastDimmingFactor) ? Math.min(1, Math.max(0, o.hicontrastDimmingFactor)) : d.hicontrastDimmingFactor,
+    hotkeyFeedback: typeof o.hotkeyFeedback === "boolean" ? o.hotkeyFeedback : d.hotkeyFeedback,
   };
 }
 
@@ -92,7 +95,6 @@ export const COMMON_ROW_NOT_OFFERED = {
   iconsInMenus: "Not offered here: the studio's menus are drawn without icons.",
   scrollbars: "Not offered here: the studio's canvases have no scrollbars.",
   focusFollows: "Not offered here: the editors are tabs of one browser window.",
-  hotkeyFeedback: "Not ported: the studio has no hotkey popup indicator (KiCad's HOTKEY_CYCLE_POPUP).",
   customCursors: "Not offered here: the canvases use the browser's own cursors.",
   warpMouse: "Not offered here: a web page cannot move the pointer.",
   immediateActions: "Not ported: the studio's hotkeys always act at once (KiCad's default).",

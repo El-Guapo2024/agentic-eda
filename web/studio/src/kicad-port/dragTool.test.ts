@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dragHighlight, dragStateFromPreview, inlineDragBegin, inlineDragEnd, type DragDrawState } from "./dragTool";
+import { dragHighlight, dragStateFromPreview, inlineDragBegin, inlineDragEnd, routableSelection, type DragDrawState } from "./dragTool";
 import type { DragPreview } from "../api/types";
 
 function baseDraw(overrides: Partial<DragDrawState> = {}): DragDrawState {
@@ -131,4 +131,15 @@ test("an inline drag clears the selection, Esc puts it back, a commit selects th
   // no context (a caller that knows nothing of the editor): nothing changes
   assert.deepEqual(inlineDragBegin(baseDraw(), undefined, true, "SIG"), { draw: baseDraw(), clearSelection: false, highlight: null });
   assert.deepEqual(inlineDragEnd(null, { cancelled: true }), { highlight: null, selection: null });
+});
+
+test("C3-10: PCB_SELECTION_TOOL::Main's routable -- tracks and arcs, or one via, nothing else", () => {
+  const board = { routing: { tracks: [{ id: "t1" }, { id: "t2" }], vias: [{ id: "v1" }, { id: "v2" }] } };
+  assert.equal(routableSelection(board, ["t1"]), true);
+  assert.equal(routableSelection(board, ["t1", "t2"]), true, "multi-track dragging");
+  assert.equal(routableSelection(board, ["v1"]), true);
+  assert.equal(routableSelection(board, ["v1", "v2"]), false, "not multi-via");
+  assert.equal(routableSelection(board, ["t1", "v1"]), true, "segs >= 1 and all of them routable");
+  assert.equal(routableSelection(board, ["t1", "U1"]), false, "a footprint with them: Move");
+  assert.equal(routableSelection(board, []), false);
 });

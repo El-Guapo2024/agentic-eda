@@ -25,15 +25,22 @@ import { ActionIcon } from "../Toolbar";
 import { ContextMenu } from "../canvas/ContextMenu";
 import { resolvedToolbar, useToolbarSettings } from "../../state/toolbarSettings";
 import type { Viewer3DApi } from "./Viewer3D";
+import { HOTKEY_TABLE_3D } from "../../actions/hotkeyActions";
+import { useUserHotkeysVersion } from "../../state/userHotkeys";
+import { openExport3DImage } from "../../state/viewer3dExport";
+import { Export3DImageDialog } from "./Export3DImageDialog";
 
 const file = toolbarData as unknown as Viewer3dToolbarsFile;
 const own = new Map<string, Viewer3dAction>([...file.actions, ...(file.otherActions ?? [])].map((a) => [a.name, a]));
 const common = new Map((actionsData as ActionsFile).actions.map((a) => [a.name, a]));
+const keys3d = new Map(HOTKEY_TABLE_3D.map((a) => [a.name, a]));
 
 /** What a toolbar item shows: its label, tooltip, hotkey and KiCad icon, from the 3D action table or, for the shared zoom actions, actions.json. The right-click menu shows the same. */
 export function describe(name: string): { label: string; tooltip: string; hotkey: string | null; icon: string | null } {
   const a = own.get(name);
-  if (a) return { label: a.label, tooltip: a.tooltip, hotkey: a.hotkey, icon: a.icon };
+  // the hotkey the person gave it in Preferences > Hotkeys, else KiCad's (`TOOL_ACTION::GetHotKey`; the 3D actions' table src/kicad/actions3d.json)
+  const k = keys3d.get(name);
+  if (a) return { label: a.label, tooltip: a.tooltip, hotkey: k ? effectiveHotkey(k).hotkey : a.hotkey, icon: a.icon };
   const c = common.get(name);
   return { label: c?.label ?? name, tooltip: c?.tooltip ?? "", hotkey: c ? effectiveHotkey(c).hotkey : null, icon: c?.icon ?? null };
 }
@@ -72,6 +79,7 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
   const toast = (message: string, kind: "info" | "error") => dispatch({ type: "TOAST", message, kind });
   const ready = !!api;
   useToolbarSettings();
+  useUserHotkeysVersion(); // the tooltips' hotkeys follow Preferences > Hotkeys
   const items = resolvedToolbar("3d", "main")?.items ?? file.toolbars[0]!.items;
   const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; items: string[] } | null>(null);
 
@@ -81,6 +89,8 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
       run: () => void api?.copyImage().then((ok) => toast(ok ? "3D image copied to the clipboard." : "The browser did not allow copying the image to the clipboard.", ok ? "info" : "error")),
       enabled: ready,
     },
+    // `ExportImage` with no format: "Export 3D View", then the file (components/viewer3d/Export3DImageDialog.tsx)
+    "3DViewer.Control.exportImage": { run: () => openExport3DImage(), enabled: ready },
     "3DViewer.Control.toggleRaytacing": { run: () => {}, enabled: false, reason: "not ported: this viewer has one render engine (KiCad's own render, or the live scene), not a raytracer" },
     // Zoom In / Out step the camera, Zoom to Fit is the home view. Zoom Redraw would repaint a view that repaints every frame already: it stays on the
     // toolbar (KiCad's has it), dimmed with that reason, rather than a button that visibly does nothing.
@@ -131,6 +141,7 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
           </button>
         );
       })}
+      <Export3DImageDialog api={api} />
       {groupMenu && (
         <ContextMenu
           x={groupMenu.x}

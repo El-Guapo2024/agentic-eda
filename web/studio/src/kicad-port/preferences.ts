@@ -49,6 +49,9 @@ export function defaultZoomSpeed(isMacPlatform: boolean): number {
 export type { DragAction, LeftDragAction, MotionPanModifier, ScrollModifier, FlipDirection };
 export type ScrollRow = "zoom" | "panH" | "panV";
 
+/** `TRACK_DRAG_ACTION` (pcbnew/pcbnew_settings.h): `MOVE`, `DRAG`, `DRAG_FREE_ANGLE` -- the choices of "Track mouse-drag mode:" in that order. */
+export type TrackDragAction = "move" | "drag" | "drag_free_angle";
+
 export interface Preferences {
   /** `input.scroll_modifier_zoom` / `_pan_h` / `_pan_v`: the key held while scrolling for each action. */
   scrollModifierZoom: ScrollModifier;
@@ -140,6 +143,18 @@ export interface Preferences {
   escClearsNetHighlight: boolean;
   /** `PCBNEW_SETTINGS::m_ShowCourtyardCollisions` ("Show courtyard collisions when moving/dragging", `editing.show_courtyard_collisions`). Default on. */
   showCourtyardCollisions: boolean;
+  /** `PCBNEW_SETTINGS::m_TrackDragAction` ("Track mouse-drag mode:", `editing.track_drag_action`): what a left drag of tracks and a via does -- `MOVE` moves them,
+   *  `DRAG` is the router's 45 degree drag (`PCB_ACTIONS::drag45Degree`), `DRAG_FREE_ANGLE` its free-angle drag (`PCB_SELECTION_TOOL::Main`). Default DRAG. */
+  pcbTrackDragAction: TrackDragAction;
+  /** `m_CtrlClickHighlight` (Left Click Mouse Commands' Ctrl: "Highlight net (for pads/tracks)", `editing.ctrl_click_highlight`): Ctrl+click highlights the net under
+   *  the pointer instead of toggling the selection (`SELECTION_TOOL::setModifiersState`, `ctrlClickHighlights`). Default off. */
+  pcbCtrlClickHighlight: boolean;
+  /** `m_Display.m_ShowModuleRatsnest` ("Always show selected ratsnest", `pcb_display.ratsnest_footprint`): while selected items move, their ratsnest is drawn even with
+   *  the board's ratsnest hidden (`BOARD_INSPECTION_TOOL::calculateSelectionRatsnest`). Default on. */
+  pcbShowSelectedRatsnest: boolean;
+  /** `m_ShowPageLimits` ("Show page limits", `pcb_display.show_page_borders`): the outline of the sheet's size, in the Page limits colour (`DS_PAINTER::DrawBorder`).
+   *  Default on. */
+  pcbShowPageLimits: boolean;
   /** `PCBNEW_SETTINGS::m_AutoRefillZones` ("Automatically refill zones", `editing.auto_fill_zones`): after each edit the zones it damaged and the unfilled ones are filled
    *  (`BOARD_COMMIT::Push` -> `zoneFillDirty`; kicad-port/autoRefill.ts). Default off (UI-LEFT-2 PP10). */
   autoRefillZones: boolean;
@@ -190,6 +205,10 @@ export interface Preferences {
   /** `m_Appearance.default_font` (Preferences > Schematic Editor > Display Options > "Default font:", `appearance.default_font`): the face of every schematic text with none
    *  of its own -- fields, labels, texts, pins' names and numbers (`PIN_LAYOUT_CACHE`) -- and of the plots (`SetDefaultFont`). Default "KiCad Font" (UI-LEFT-3 S3-29). */
   schDefaultFont: string;
+  /** `m_Selection.highlight_thickness` (Preferences > Schematic Editor > Display Options > Selection's "Highlight thickness:", `selection.highlight_thickness`, mils, 0 ..
+   *  50 on the page, `KiROUND` on OK): how much wider than the item a brightened item's shadow is drawn, in screen pixels and in mils (`SCH_PAINTER::getShadowWidth(
+   *  true )`), in the schematic and the Symbol Editor. Default 2. */
+  schHighlightThicknessMils: number;
   /** `m_Drawing.field_names` (Preferences > Schematic Editor > Field Name Templates, `PANEL_TEMPLATE_FIELDNAMES` global): the person's own templates, offered with the
    *  project's (`TEMPLATES::resolveTemplates`: a project template of the same name wins) and alone in the Symbol Editor's Symbol Properties. Default none (UI-LEFT-3 C3-2). */
   schGlobalFieldNames: TemplateFieldName[];
@@ -278,6 +297,10 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schArcEditMode: DEFAULT_ARC_EDIT_MODE,
   escClearsNetHighlight: true,
   showCourtyardCollisions: true,
+  pcbTrackDragAction: "drag",
+  pcbCtrlClickHighlight: false,
+  pcbShowSelectedRatsnest: true,
+  pcbShowPageLimits: true,
   autoRefillZones: false,
   ratsnestThicknessPx: 0.5,
   schEscClearsNetHighlight: true,
@@ -299,6 +322,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schSheetBackgroundColor: null,
   schRescueNeverShow: false,
   schDefaultFont: "KiCad Font",
+  schHighlightThicknessMils: 2,
   schGlobalFieldNames: [],
   simWheel: DEFAULT_SIM_WHEEL_ACTIONS,
   symDefaultLineWidthMils: 0,
@@ -406,6 +430,11 @@ export function toPcbMagnetic(p: Pick<Preferences, "magneticPads" | "magneticTra
 }
 
 /** Whatever was stored, made into valid preferences: unknown or malformed fields fall back to their defaults, a clashing wheel assignment to the defaults. */
+/** "Highlight thickness:" as taken on OK: `m_highlightWidthCtrl` is a spin box of 0 .. 50, `KiROUND( GetValue() )`; anything else keeps `fallback`. */
+export function sanitizeHighlightThickness(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? Math.min(50, Math.max(0, Math.round(v))) : fallback;
+}
+
 export function sanitizePreferences(raw: unknown): Preferences {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const d = DEFAULT_PREFERENCES;
@@ -457,6 +486,10 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
     escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),
     showCourtyardCollisions: bool(o.showCourtyardCollisions, d.showCourtyardCollisions),
+    pcbTrackDragAction: o.pcbTrackDragAction === "move" || o.pcbTrackDragAction === "drag" || o.pcbTrackDragAction === "drag_free_angle" ? o.pcbTrackDragAction : d.pcbTrackDragAction,
+    pcbCtrlClickHighlight: bool(o.pcbCtrlClickHighlight, d.pcbCtrlClickHighlight),
+    pcbShowSelectedRatsnest: bool(o.pcbShowSelectedRatsnest, d.pcbShowSelectedRatsnest),
+    pcbShowPageLimits: bool(o.pcbShowPageLimits, d.pcbShowPageLimits),
     autoRefillZones: bool(o.autoRefillZones, d.autoRefillZones),
     ratsnestThicknessPx: sanitizeRatsnestThickness(o.ratsnestThicknessPx, d.ratsnestThicknessPx),
     schEscClearsNetHighlight: bool(o.schEscClearsNetHighlight, d.schEscClearsNetHighlight),
@@ -479,6 +512,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schSheetBackgroundColor: schColor(o.schSheetBackgroundColor),
     schRescueNeverShow: bool(o.schRescueNeverShow, d.schRescueNeverShow),
     schDefaultFont: typeof o.schDefaultFont === "string" && o.schDefaultFont.trim() ? o.schDefaultFont : d.schDefaultFont,
+    schHighlightThicknessMils: sanitizeHighlightThickness(o.schHighlightThicknessMils, d.schHighlightThicknessMils),
     schGlobalFieldNames: Array.isArray(o.schGlobalFieldNames)
       ? (o.schGlobalFieldNames as unknown[]).filter((t): t is TemplateFieldName => !!t && typeof (t as TemplateFieldName).name === "string").map((t) => ({ name: t.name, visible: !!t.visible, url: !!t.url }))
       : d.schGlobalFieldNames,

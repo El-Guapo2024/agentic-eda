@@ -160,8 +160,9 @@
     t(red > 50, `F.Cu is Classic's red (${red} pixels)`);
     await dbl(document.querySelector('.ap-row[data-layer="F.Cu"] .ap-swatch'));
     t(!dialogTitled("Color Picker"), "the Appearance swatch does not open");
-    const toast = [...document.querySelectorAll("div")].find((d) => d.textContent === "The current color theme is read-only.  Create a new theme in Preferences to enable color editing.");
-    t(!!toast, "KiCad's read-only message");
+    // in the board's info bar, as KiCad's `infobar->ShowMessageFor` (components/PcbInfoBar.tsx)
+    const toast = document.querySelector('[data-testid="pcb-infobar-text"]')?.textContent === "The current color theme is read-only.  Create a new theme in Preferences to enable color editing.";
+    t(!!toast, "KiCad's read-only message, in the info bar");
   });
 
   await scenario("New Theme...: the name, the shown theme's colours, the theme selected; the same name: Theme already exists!", async (t) => {

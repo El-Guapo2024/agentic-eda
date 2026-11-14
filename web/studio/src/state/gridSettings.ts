@@ -3,7 +3,7 @@
 // hotkeys read. Plain module state with subscribers, kept in the browser's local storage like `state/commonOptions.ts` -- these are the user's preferences,
 // not the design's. The rules for them are kicad-port/gridSettings.ts.
 import { useSyncExternalStore } from "react";
-import { GRID_EDITORS, gridAt, gridDefs, isDefaultGridSettings, normalizeGridSettings, parseStoredGridSettings, sameGrid, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
+import { GRID_EDITORS, currentGridIndex, gridAt, gridDefs, isDefaultGridSettings, normalizeGridSettings, parseStoredGridSettings, sameGrid, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
 
 /** The grids in nanometres. `OLD_STORAGE_KEY` held them in micrometres, before the design was in nanometres. */
 const STORAGE_KEY = "eda-studio.grid-settings.nm";
@@ -72,4 +72,50 @@ function subscribe(listener: () => void): () => void {
 /** One editor's grids, re-rendering the caller whenever they change. */
 export function useGridSettings(editor: GridEditor): GridSettings {
   return useSyncExternalStore(subscribe, () => current[editor], () => current[editor]);
+}
+
+// ---------------------------------------------------------------------------------------------- `last_size_idx`
+
+/** Each editor's `window.grid.last_size_idx` (the row of the grid chosen), kept as KiCad keeps it in the editor's settings file. */
+const LAST_IDX_KEY = "eda-studio.grid-last-idx";
+
+let lastIdx: Partial<Record<GridEditor, number>> = (() => {
+  try {
+    const raw: unknown = JSON.parse(storage()?.getItem(LAST_IDX_KEY) ?? "{}");
+    const out: Partial<Record<GridEditor, number>> = {};
+    if (raw && typeof raw === "object") for (const e of GRID_EDITORS) if (Number.isInteger((raw as Record<string, unknown>)[e])) out[e] = (raw as Record<string, number>)[e];
+    return out;
+  } catch {
+    return {};
+  }
+})();
+
+/** The row last chosen in the editor's list (undefined before any). */
+export function getLastGridIndex(editor: GridEditor): number | undefined {
+  return lastIdx[editor];
+}
+
+/**
+ * `last_size_idx = idx`: the row chosen -- by the grid box, a context menu's Grid entry, Next / Previous Grid, the fast grids, or OK on the Grids page -- so of two
+ * grids of the same X the one chosen is current (UI-LEFT-3 C3-6). The editor's own size (`gridNm`) is set beside it by the caller.
+ */
+export function setLastGridIndex(editor: GridEditor, idx: number): void {
+  if (!Number.isInteger(idx) || idx < 0 || lastIdx[editor] === idx) return;
+  lastIdx = { ...lastIdx, [editor]: idx };
+  try {
+    storage()?.setItem(LAST_IDX_KEY, JSON.stringify(lastIdx));
+  } catch {
+    /* the row still applies for this session */
+  }
+  for (const l of listeners) l();
+}
+
+/** The row of the editor's current grid (`currentGridIndex` of its list, its size and the row last chosen). */
+export function currentGridRow(editor: GridEditor, gridNm: number): number {
+  return currentGridIndex(current[editor].grids, gridNm, lastIdx[editor]);
+}
+
+/** The row last chosen, re-rendering the caller whenever it changes. */
+export function useLastGridIndex(editor: GridEditor): number | undefined {
+  return useSyncExternalStore(subscribe, () => lastIdx[editor], () => lastIdx[editor]);
 }

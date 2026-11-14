@@ -93,11 +93,18 @@ export function withGrids(s: GridSettings, defs: readonly GridDef[], fast1 = s.f
 }
 
 /**
- * The Y size of the editor's current grid. The editors keep their grid as its X size (`gridNm`), so this is the Y of the first grid of the list with that X -- the
- * grid itself unless two grids share an X -- and the X again for a size the list does not have.
+ * The row of the editor's current grid (`GRID_SETTINGS::last_size_idx`, common/settings/app_settings.cpp): the editors keep their grid's X size (`gridNm`) and the
+ * row last chosen (`lastIdx`, state/gridSettings.ts), so of two grids with the same X the one chosen stays current (UI-LEFT-3 C3-6). A row whose X is no longer the
+ * current size (the list was edited, the size set some other way) gives way to the first grid of that X; -1 for a size the list does not have.
  */
-export function gridYOf(s: GridSettings, xNm: number): number {
-  const at = s.grids.findIndex((g) => sameSize(g, xNm));
+export function currentGridIndex(grids: readonly number[], xNm: number, lastIdx?: number): number {
+  if (lastIdx !== undefined && Number.isInteger(lastIdx) && sameSize(grids[lastIdx], xNm)) return lastIdx;
+  return grids.findIndex((g) => sameSize(g, xNm));
+}
+
+/** The Y size of the editor's current grid (`currentGridIndex`): its row's Y, and the X again for a size the list does not have. */
+export function gridYOf(s: GridSettings, xNm: number, lastIdx?: number): number {
+  const at = currentGridIndex(s.grids, xNm, lastIdx);
   return at >= 0 ? (s.ys?.[at] ?? xNm) : xNm;
 }
 
@@ -249,18 +256,23 @@ export function isDefaultGridSettings(s: GridSettings, editor: GridEditor): bool
   return s.fast1 === d.fast1 && s.fast2 === d.fast2 && s.grids.length === d.grids.length && gridDefs(s).every((g, i) => sameGrid(g, squareGrid(d.grids[i]!)));
 }
 
-/** `GridNext` / `GridPrev`: the grid after / before the current one in the list, wrapping round; a current grid that is not in the list goes to the first / last. */
-export function stepGrid(grids: readonly number[], currentNm: number, dir: 1 | -1): number {
-  const at = grids.findIndex((g) => sameSize(g, currentNm));
+/** `GridNext` / `GridPrev`: the row after / before the current one (`currentGridIndex`) in the list, wrapping round; a current grid that is not in the list goes to the first / last. */
+export function stepGridIndex(grids: readonly number[], currentNm: number, dir: 1 | -1, lastIdx?: number): number {
+  const at = currentGridIndex(grids, currentNm, lastIdx);
   const next = at + dir;
-  return grids[next < 0 ? grids.length - 1 : next >= grids.length ? 0 : next]!;
+  return next < 0 ? grids.length - 1 : next >= grids.length ? 0 : next;
+}
+
+/** `stepGridIndex`'s grid size. */
+export function stepGrid(grids: readonly number[], currentNm: number, dir: 1 | -1, lastIdx?: number): number {
+  return grids[stepGridIndex(grids, currentNm, dir, lastIdx)]!;
 }
 
 /**
  * `GRID_MENU::update` / `BuildChoiceList` (the context menus' Grid submenu, the toolbar's grid box): each grid as `gridListLabel` says, the editor's current one checked --
- * the first with the current X size (see `gridYOf`).
+ * `last_size_idx` (see `currentGridIndex`).
  */
-export function gridMenuEntries(s: GridSettings, currentNm: number, primary: (nm: number) => string, secondary: (nm: number) => string): { label: string; checked: boolean }[] {
-  const current = s.grids.findIndex((g) => sameSize(g, currentNm));
+export function gridMenuEntries(s: GridSettings, currentNm: number, primary: (nm: number) => string, secondary: (nm: number) => string, lastIdx?: number): { label: string; checked: boolean }[] {
+  const current = currentGridIndex(s.grids, currentNm, lastIdx);
   return gridDefs(s).map((g, i) => ({ label: gridListLabel(g, primary, secondary), checked: i === current }));
 }

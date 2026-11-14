@@ -29,14 +29,17 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { fetchBoardGlb } from "../../api/client";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import { TrackballCamera, FOV_DEG, KEY_ZOOM_FACTOR, type CameraView, type ViewPreset as FacePreset } from "../../kicad-port/camera3d";
-import { CONTEXT_MENU_3D, contextAction3D, resolve3DAction, ROTATE_SIGN, type Action3D, type ContextItem3D } from "../../kicad-port/actions3d";
+import { CONTEXT_MENU_3D, contextAction3D, resolve3DKey, ROTATE_SIGN, type Action3D, type ContextItem3D } from "../../kicad-port/actions3d";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { ActionIcon } from "../Toolbar";
 import { displayHotkey } from "../../actions/hotkeys";
 import { describe as describe3dAction } from "./Viewer3DToolbar";
 import { Navigator3D } from "./navigator";
 import { VIEW_OF } from "../../kicad-port/navigator3d";
-import { getViewer3DUserSettings, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
+import { getViewer3DUserSettings, setViewer3DPrefs, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
+import { getDockLayout, setDockColumnCollapsed } from "../../state/dockLayoutStore";
+import { openExport3DImage } from "../../state/viewer3dExport";
+import { GRID3D_ALPHA, GRID3D_COLOR, GRID3D_MARKER_COLOR, grid3dLines } from "../../kicad-port/grid3d";
 import { isMac } from "../../platform";
 import { buildBoardGroup, buildBackgroundTexture, bodyHoleCount, countByName, disposeObject3D, boardOutlineBounds, movingBodyOf, padShapeCounts, setMoving3d, type Board3d } from "./scene";
 import { isKicadLit, setKicadHeadlight } from "./glLighting";
@@ -121,6 +124,10 @@ export interface Viewer3DApi {
   reload(): void;
   /** `EDA_3D_ACTIONS::copyToClipboard`: the current view as a PNG on the clipboard; resolves whether the browser took it. */
   copyImage(): Promise<boolean>;
+  /** `EDA_3D_ACTIONS::exportImage`'s `captureScreenshot`: the view rendered at a size, as a PNG or JPEG. */
+  exportImage(width: number, height: number, format: "png" | "jpeg"): Promise<Blob | null>;
+  /** The canvas' size in pixels (`GetCanvas()->GetClientSize()`). */
+  viewSize(): { width: number; height: number };
   /** The camera as a saved viewport keeps it (`GetCurrentCamera().GetViewMatrix()`), and the camera put back at one (`doApplyViewport`: `SetViewMatrix`). */
   getCamera(): CameraView;
   setCamera(view: CameraView): void;
@@ -514,7 +521,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
 
     const macPlatform = isMac();
     /**
-     * kicad-port/actions3d.ts's resolve3DAction, dispatched here (not in
+     * kicad-port/actions3d.ts's resolve3DKey, dispatched here (not in
      * useGlobalHotkeys.ts/actions.json -- see actions3d.ts's own header
      * comment for why the 3D tab's hotkeys are kept fully separate from
      * this app's shared hotkey system). Attached to the canvas itself
@@ -524,28 +531,76 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
      * to something keeps it from *also* reaching that shared window-level
      * listener and maybe firing an unrelated same-key 2D action.
      */
-    const onKeyDown = (e: KeyboardEvent) => {
-      // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') / showVirtual ('V') -- visibility
-      // view-OPTIONS, not camera actions, so these go straight to the
-      // store (Viewer3DOptions) rather than through Action3D/camera3d.
-      // showNotInPosFile ('P') and showDNP ('D') toggle the two attribute rows the same way.
-      // The plain letters only: KiCad binds no Shift form of them (`eda_3d_actions.cpp`), so Shift+D does nothing.
-      const k = e.key.toLowerCase();
-      const modelRow = k === "t" ? "th_models" : k === "s" ? "smd_models" : k === "v" ? "virtual_models" : k === "p" ? "not_in_pos_models" : k === "d" ? "dnp_models" : null;
-      if (modelRow && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        e.preventDefault();
-        e.stopPropagation();
-        dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { layers: toggled(viewer3dRef.current.layers, modelRow) } });
-        return;
+    /** `EDA_3D_ACTIONS::copyToClipboard`: the view as a PNG on the clipboard. Render and read the canvas in the same task: a WebGL canvas without a preserved drawing
+     *  buffer is only guaranteed to hold the frame until it is composited. */
+    const copyImage = async (): Promise<boolean> => {
+      renderer.render(scene, camera3d.projection === "perspective" ? perspCamera : orthoCamera);
+      const blob = await new Promise<Blob | null>((resolve) => renderer.domElement.toBlob(resolve, "image/png"));
+      if (!blob) return false;
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        return true;
+      } catch {
+        return false;
       }
-
-      const action = resolve3DAction(e, macPlatform);
-      if (!action) return;
+    };
+    /**
+     * `EDA_3D_VIEWER_FRAME::captureScreenshot( aSize )`: the view rendered at `width` x `height` pixels (the camera's window that size, as `SetCurWindowSize`), as a
+     * PNG or JPEG; the canvas is put back at its own size after.
+     */
+    const exportImage = async (width: number, height: number, format: "png" | "jpeg"): Promise<Blob | null> => {
+      const was = new THREE.Vector2();
+      renderer.getSize(was);
+      const ratio = renderer.getPixelRatio();
+      const cam = camera3d.projection === "perspective" ? perspCamera : orthoCamera;
+      try {
+        renderer.setPixelRatio(1);
+        renderer.setSize(width, height, false);
+        perspCamera.aspect = width / height;
+        perspCamera.updateProjectionMatrix();
+        camera3d.setWindowSize(width, height);
+        renderer.render(scene, cam);
+        return await new Promise<Blob | null>((resolve) => renderer.domElement.toBlob(resolve, format === "jpeg" ? "image/jpeg" : "image/png"));
+      } finally {
+        renderer.setPixelRatio(ratio);
+        renderer.setSize(was.x, was.y, false);
+        perspCamera.aspect = was.x / was.y;
+        perspCamera.updateProjectionMatrix();
+        camera3d.setWindowSize(was.x, was.y);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      // `ACTION_MANAGER::RunHotKey` on the 3D view's actions (kicad-port/actions3d.ts `resolve3DKey`: the person's keys from Preferences > Hotkeys, else KiCad's)
+      const target = resolve3DKey(e, macPlatform);
+      if (!target) return;
       e.preventDefault();
       e.stopPropagation();
-      runAction3D(camera3d, action, () => {
+      // showTHT ('T') / showSMD ('S') / showVirtual ('V') / showNotInPosFile ('P') / showDNP ('D'): `ToggleVisibility`'s `flipLayer`, view options (Viewer3DOptions),
+      // not camera actions
+      if (target.kind === "modelRow") return dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { layers: toggled(viewer3dRef.current.layers, target.row) } });
+      // `ToggleOrtho`, `ReloadBoard`: what the toolbar's buttons do
+      if (target.kind === "ortho") return dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { orthographic: !viewer3dRef.current.orthographic } });
+      if (target.kind === "reload") return reloadModels();
+      // the actions of the menus and the toolbar a person gave a key (UI-LEFT-3 C3-4): `On3DGridSelection`, `SetMaterial`, `ToggleVisibility` of the navigator and the
+      // bounding boxes, `ExportImage` (the clipboard, or the Export 3D View dialog), `ToggleLayersManager`
+      if (target.kind === "grid" || target.kind === "material") {
+        const prefs = getViewer3DUserSettings().prefs;
+        return setViewer3DPrefs(target.kind === "grid" ? { ...prefs, gridType: target.grid } : { ...prefs, materialMode: target.mode });
+      }
+      if (target.kind === "row") return dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { layers: toggled(viewer3dRef.current.layers, target.row) } });
+      if (target.kind === "copy") return void copyImage().then((ok) => dispatch({ type: "TOAST", message: ok ? "3D image copied to the clipboard." : "The browser did not allow copying the image to the clipboard.", kind: ok ? "info" : "error" }));
+      if (target.kind === "export") return openExport3DImage();
+      if (target.kind === "layersManager") return setDockColumnCollapsed("right", !getDockLayout().rightCollapsed);
+      runAction3D(camera3d, target as Action3D, () => {
         if (lastPointerPx) pivotAtPointer(lastPointerPx);
       });
+    };
+    // `EDA_3D_ACTIONS::reloadBoard`: every model is read again (a model file that changed on disk, a conversion that failed), and KiCad's export builds again when it is the view.
+    const reloadModels = () => {
+      cache.clear();
+      partModels.refresh();
+      retryNextRef.current = true;
+      setReloadNonce((n) => n + 1);
     };
 
     onReadyRef.current?.({
@@ -554,26 +609,15 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         runAction3D(camera3d, action, () => {
           if (lastPointerPx) pivotAtPointer(lastPointerPx);
         }),
-      reload: () => {
-        // `EDA_3D_ACTIONS::reloadBoard`: every model is read again (a model file that changed on disk, a conversion that failed), and KiCad's export builds again when it is the view.
-        cache.clear();
-        partModels.refresh();
-        retryNextRef.current = true;
-        setReloadNonce((n) => n + 1);
-      },
+      reload: reloadModels,
       getCamera: () => camera3d.getView(),
       setCamera: (view) => camera3d.setView(view),
-      copyImage: async () => {
-        // Render and read the canvas in the same task: a WebGL canvas without a preserved drawing buffer is only guaranteed to hold the frame until it is composited.
-        renderer.render(scene, camera3d.projection === "perspective" ? perspCamera : orthoCamera);
-        const blob = await new Promise<Blob | null>((resolve) => renderer.domElement.toBlob(resolve, "image/png"));
-        if (!blob) return false;
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          return true;
-        } catch {
-          return false;
-        }
+      copyImage,
+      exportImage,
+      viewSize: () => {
+        const v = new THREE.Vector2();
+        renderer.getSize(v);
+        return { width: Math.round(v.x), height: Math.round(v.y) };
       },
     });
 
@@ -871,6 +915,31 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     // The parts just built that the board editor has selected are drawn in the selection colour (PartModels.sync paints them).
     if (pm) viewer3dProbe.update({ selected: pm.selectedRefs });
   }, [board, thtShown, smdShown, virtualShown, notInPosShown, dnpShown, bboxShown]);
+
+  // View > 3D Grid (`render.grid_type`, `RENDER_3D_OPENGL::generate3dGrid`; kicad-port/grid3d.ts): the lines on the board's middle plane and up through its
+  // centre, every fifth LIGHTBLUE, at 0.35 alpha; none by default
+  const gridType = userSettings.prefs.gridType;
+  useEffect(() => {
+    const three = threeRef.current;
+    if (!three) return;
+    const b = board ? boardOutlineBounds(board) : null;
+    const lines = b ? grid3dLines(gridType, [b.minX, b.minZ, b.maxX, b.maxZ], stackOfBoard(board?.board_rules).boardThicknessMm / 2) : [];
+    const group = new THREE.Group();
+    group.name = "grid3d";
+    for (const marker of [false, true]) {
+      const pts = lines.filter((l) => l.marker === marker).flatMap((l) => [...l.a, ...l.b]);
+      if (pts.length === 0) continue;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      group.add(new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color: marker ? GRID3D_MARKER_COLOR : GRID3D_COLOR, transparent: true, opacity: GRID3D_ALPHA, depthWrite: false })));
+    }
+    three.scene.add(group);
+    viewer3dProbe.update({ grid3d: { type: gridType, lines: lines.length } });
+    return () => {
+      three.scene.remove(group);
+      disposeObject3D(group);
+    };
+  }, [board, gridType]);
 
   // The background gradient (the Appearance manager's Background Start / End swatches).
   useEffect(() => {

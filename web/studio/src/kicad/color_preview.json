@@ -1,0 +1,5002 @@
+{
+ "board": {
+  "aux_origin": null,
+  "board_rules": {
+   "annular_width_min_nm": 100000,
+   "board_thickness_nm": 1600000,
+   "clearance": 200000,
+   "component_classes": {},
+   "constraints": {
+    "max_error_nm": 5000,
+    "min_annular_width_nm": 100000,
+    "min_clearance_nm": 0,
+    "min_connection_nm": 0,
+    "min_copper_edge_clearance_nm": 500000,
+    "min_groove_width_nm": 0,
+    "min_hole_clearance_nm": 250000,
+    "min_hole_to_hole_nm": 250000,
+    "min_microvia_diameter_nm": 200000,
+    "min_microvia_drill_nm": 100000,
+    "min_resolved_spokes": 2,
+    "min_silk_clearance_nm": 0,
+    "min_silk_text_height_nm": 800000,
+    "min_silk_text_thickness_nm": 80000,
+    "min_through_hole_nm": 300000,
+    "min_track_width_nm": 200000,
+    "min_via_diameter_nm": 500000,
+    "use_height_for_length_calcs": true,
+    "zones_allow_external_fillets": false
+   },
+   "constraints_explicit": true,
+   "copper_layers": 2,
+   "custom_rules_text": null,
+   "default_class": {
+    "clearance": 200000,
+    "name": "Default",
+    "nets": [],
+    "priority": 0,
+    "track_width": 200000,
+    "via_diameter": 600000,
+    "via_drill": 300000
+   },
+   "formatting": {
+    "apply_to_fp_barcodes": false,
+    "apply_to_fp_dimensions": false,
+    "apply_to_fp_fields": false,
+    "apply_to_fp_shapes": false,
+    "apply_to_fp_text": false,
+    "dash_length_ratio": 12.0,
+    "gap_length_ratio": 3.0
+   },
+   "hole_clearance_nm": 250000,
+   "hole_plating_nm": 20000,
+   "hole_to_hole_min_nm": 250000,
+   "layer_names": [
+    "F.Cu",
+    "B.Cu"
+   ],
+   "layer_setup": {
+    "enabled": [
+     "F.Adhes",
+     "B.Adhes",
+     "F.Paste",
+     "B.Paste",
+     "F.SilkS",
+     "B.SilkS",
+     "F.Mask",
+     "B.Mask",
+     "Dwgs.User",
+     "Cmts.User",
+     "Eco1.User",
+     "Eco2.User",
+     "Edge.Cuts",
+     "Margin",
+     "F.CrtYd",
+     "B.CrtYd",
+     "F.Fab",
+     "B.Fab",
+     "User.1",
+     "User.2",
+     "User.3",
+     "User.4",
+     "User.5",
+     "User.6",
+     "User.7",
+     "User.8",
+     "User.9"
+    ]
+   },
+   "mask_paste": {
+    "allow_bridges_in_footprints": false,
+    "expansion_nm": 0,
+    "min_width_nm": 0,
+    "paste_margin_nm": 0,
+    "paste_margin_ratio": 0.0,
+    "tent_vias_back": true,
+    "tent_vias_front": true,
+    "to_copper_clearance_nm": 0
+   },
+   "min_silk_text_height_nm": 800000,
+   "min_silk_text_thickness_nm": 80000,
+   "net_class_pcb_colors": null,
+   "net_class_schematic": {},
+   "net_classes": [],
+   "overlay": [],
+   "refdes_font_nm": null,
+   "severities": {
+    "lib_footprint_issues": "ignore",
+    "lib_footprint_mismatch": "ignore"
+   },
+   "silk_clearance_nm": 0,
+   "stackup": null,
+   "text_graphics": {
+    "copper": {
+     "italic": false,
+     "line_width_nm": 200000,
+     "text_height_nm": 1500000,
+     "text_thickness_nm": 300000,
+     "text_width_nm": 1500000,
+     "upright": true
+    },
+    "courtyard_line_width_nm": 50000,
+    "edge_cuts_line_width_nm": 50000,
+    "fab": {
+     "italic": false,
+     "line_width_nm": 100000,
+     "text_height_nm": 1000000,
+     "text_thickness_nm": 150000,
+     "text_width_nm": 1000000,
+     "upright": true
+    },
+    "others": {
+     "italic": false,
+     "line_width_nm": 100000,
+     "text_height_nm": 1000000,
+     "text_thickness_nm": 150000,
+     "text_width_nm": 1000000,
+     "upright": true
+    },
+    "silk": {
+     "italic": false,
+     "line_width_nm": 100000,
+     "text_height_nm": 1000000,
+     "text_thickness_nm": 100000,
+     "text_width_nm": 1000000,
+     "upright": true
+    }
+   },
+   "text_variables": {},
+   "track_width": 200000,
+   "tuning_patterns": {
+    "diff_pair": {
+     "corner_radius_percentage": 80,
+     "corner_style": "round",
+     "max_amplitude_nm": 1000000,
+     "min_amplitude_nm": 200000,
+     "single_sided": false,
+     "spacing_nm": 1000000
+    },
+    "diff_pair_skew": {
+     "corner_radius_percentage": 80,
+     "corner_style": "round",
+     "max_amplitude_nm": 1000000,
+     "min_amplitude_nm": 200000,
+     "single_sided": false,
+     "spacing_nm": 600000
+    },
+    "single_track": {
+     "corner_radius_percentage": 80,
+     "corner_style": "round",
+     "max_amplitude_nm": 1000000,
+     "min_amplitude_nm": 200000,
+     "single_sided": false,
+     "spacing_nm": 600000
+    }
+   },
+   "tuning_profiles": {
+    "profiles": []
+   },
+   "via_diameter": 600000,
+   "via_drill": 300000,
+   "zone_hatch_offsets": {}
+  },
+  "drawing_sheet": null,
+  "drawings": {
+   "barcodes": [],
+   "dimension_settings": {
+    "arrow_length": 1270000,
+    "extension_height": 586420,
+    "extension_offset": 500000,
+    "keep_text_aligned": true,
+    "precision": 4,
+    "stroke_width": 200000,
+    "suppress_trailing_zeros": true,
+    "text_position": "outside",
+    "text_size_nm": 1000000,
+    "units": "automatic",
+    "units_format": "no_suffix"
+   },
+   "dimensions": [
+    {
+     "arrow_direction": "outward",
+     "arrow_length": 1270000,
+     "bold": false,
+     "circles": [],
+     "computed_text_angle": 90000,
+     "crossbar": [
+      [
+       54470000,
+       24500000
+      ],
+      [
+       54470000,
+       20900000
+      ]
+     ],
+     "end": [
+      44880000,
+      20900000
+     ],
+     "extension_height": 586420,
+     "extension_offset": 0,
+     "face": null,
+     "h_justify": "center",
+     "height": 9590000,
+     "horizontal": null,
+     "id": "dim_d2698304179a",
+     "italic": false,
+     "keep_text_aligned": true,
+     "keep_upright": false,
+     "kind": "aligned",
+     "knee": null,
+     "layer": "Margin",
+     "leader_length": null,
+     "lines": [
+      [
+       [
+        44880000,
+        24500000
+       ],
+       [
+        55056420,
+        24500000
+       ]
+      ],
+      [
+       [
+        44880000,
+        20900000
+       ],
+       [
+        55056420,
+        20900000
+       ]
+      ],
+      [
+       [
+        54470000,
+        24500000
+       ],
+       [
+        54470000,
+        20900000
+       ]
+      ],
+      [
+       [
+        54470000,
+        24500000
+       ],
+       [
+        55056421,
+        23373496
+       ]
+      ],
+      [
+       [
+        54470000,
+        24500000
+       ],
+       [
+        53883579,
+        23373496
+       ]
+      ],
+      [
+       [
+        54470000,
+        20900000
+       ],
+       [
+        53883579,
+        22026504
+       ]
+      ],
+      [
+       [
+        54470000,
+        20900000
+       ],
+       [
+        55056421,
+        22026504
+       ]
+      ]
+     ],
+     "measured_value_nm": 3600000,
+     "mirrored": false,
+     "override_text": null,
+     "precision": 4,
+     "prefix": "",
+     "start": [
+      44880000,
+      24500000
+     ],
+     "stroke_width": 50800,
+     "suffix": "",
+     "suppress_trailing_zeros": false,
+     "text": "0.1417 in",
+     "text_angle": 90000,
+     "text_at": [
+      55359000,
+      22700000
+     ],
+     "text_effects": {},
+     "text_frame": "none",
+     "text_pos": null,
+     "text_position": "outside",
+     "text_size_nm": 762000,
+     "text_thickness_nm": 127000,
+     "text_width_nm": 762000,
+     "units": "inch",
+     "units_format": "bare_suffix"
+    }
+   ],
+   "drill_charts": [],
+   "drill_maps": [],
+   "drill_profile": {
+    "freeze_assignments": true,
+    "group_by": [
+     "size",
+     "slot",
+     "plating",
+     "span",
+     "operation",
+     "post_machining"
+    ],
+    "mark_policy": "shapes_then_letters",
+    "size_nm": 1500000,
+    "width_nm": 150000
+   },
+   "grid_items": [],
+   "groups": [],
+   "images": [],
+   "points": [],
+   "shapes": [
+    {
+     "end": [
+      52500000,
+      38800000
+     ],
+     "filled": false,
+     "id": "shp_85d48fc7228e",
+     "kind": "rect",
+     "layer": "Edge.Cuts",
+     "start": [
+      15650000,
+      13740000
+     ],
+     "stroke_width": 50000
+    }
+   ],
+   "tables": [],
+   "text_boxes": [],
+   "texts": [],
+   "tuning_patterns": [],
+   "via_stitches": []
+  },
+  "grid_origin": null,
+  "layers": [
+   "F.Cu",
+   "B.Cu"
+  ],
+  "locked": [
+   "Hidden RefDes"
+  ],
+  "name": "intent",
+  "nets": [
+   "GND"
+  ],
+  "outline": [
+   [
+    52500000,
+    38800000
+   ],
+   [
+    15650000,
+    38800000
+   ],
+   [
+    15650000,
+    13740000
+   ],
+   [
+    52500000,
+    13740000
+   ]
+  ],
+  "outline_errors": [],
+  "outline_is_shapes": true,
+  "outline_polys": [
+   {
+    "holes": [],
+    "outer": [
+     [
+      52500000,
+      38800000
+     ],
+     [
+      15650000,
+      38800000
+     ],
+     [
+      15650000,
+      13740000
+     ],
+     [
+      52500000,
+      13740000
+     ]
+    ]
+   }
+  ],
+  "page": null,
+  "parts": [
+   {
+    "at": [
+     22700000,
+     34090000
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": null,
+    "courtyard": [
+     20674940,
+     32064940,
+     24725060,
+     36115060
+    ],
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP1:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.SilkS",
+      "lx": 0,
+      "ly": -3810000,
+      "mirror": false,
+      "name": "Reference",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 22700000,
+      "y": 30280000
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP1:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 11400000,
+      "ly": 2810000,
+      "mirror": false,
+      "name": "Value",
+      "text": "SolderWirePad_single_1-2mmDrill",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1000000,
+      "x": 34100000,
+      "y": 36900000
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP1:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 22700000,
+      "y": 34090000
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP1:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 22700000,
+      "y": 34090000
+     }
+    ],
+    "footprint": "Wire_Pads:SolderWirePad_single_1-2mmDrill",
+    "from_board_file": true,
+    "label": "above",
+    "lib_link": "Wire_Pads:SolderWirePad_single_1-2mmDrill",
+    "mpn": null,
+    "orientation": 0.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 1198880,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 3500120,
+      "id": "FP1.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "bidirectional",
+      "px": 22700000,
+      "py": 34090000,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       3500120,
+       3500120
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 3500120,
+      "x": 22700000,
+      "y": 34090000
+     }
+    ],
+    "placed": true,
+    "ref": "FP1",
+    "rot": 0.0,
+    "side": "top",
+    "size": [
+     4000120,
+     4000120
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": ""
+    },
+    "texts": null,
+    "value": "SolderWirePad_single_1-2mmDrill"
+   },
+   {
+    "at": [
+     21675000,
+     27952500
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": [
+     19475000,
+     25452500,
+     25175000,
+     30452500
+    ],
+    "courtyard": [
+     19800000,
+     25077500,
+     25550000,
+     30827500
+    ],
+    "courtyard_graphics": [
+     {
+      "id": "C48~c0",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "C48~c1",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "C48~c2",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "C48~c3",
+      "layer": "F.CrtYd"
+     }
+    ],
+    "dnp": false,
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C48:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.SilkS",
+      "lx": 952500,
+      "ly": -3333750,
+      "mirror": false,
+      "name": "Reference",
+      "text": "C48",
+      "thickness": 220000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1200000,
+      "x": 22627500,
+      "y": 24618750
+     },
+     {
+      "angle": 90000,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C48:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.Fab",
+      "lx": 4775000,
+      "ly": -1250,
+      "mirror": false,
+      "name": "Value",
+      "text": "47uF",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1000000,
+      "x": 26450000,
+      "y": 27951250
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C48:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 21675000,
+      "y": 27952500
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C48:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 21675000,
+      "y": 27952500
+     }
+    ],
+    "footprint": "Capacitors_THT:CP_Radial_D5.0mm_P2.00mm",
+    "from_board_file": true,
+    "graphics": [
+     {
+      "end": [
+       20675000,
+       27952500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       19475000,
+       27952500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       20075000,
+       28602500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       20075000,
+       27302500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       24980722,
+       26772778
+      ],
+      "kind": "arc",
+      "layer": "F.SilkS",
+      "mid": [
+       22675156,
+       25362500
+      ],
+      "start": [
+       20369420,
+       26772500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       24980722,
+       29132222
+      ],
+      "kind": "arc",
+      "layer": "F.SilkS",
+      "mid": [
+       25265000,
+       27952344
+      ],
+      "start": [
+       24980580,
+       26772500
+      ],
+      "stroke_width": 500000
+     },
+     {
+      "end": [
+       20369420,
+       29132500
+      ],
+      "kind": "arc",
+      "layer": "F.SilkS",
+      "mid": [
+       22675156,
+       30542500
+      ],
+      "start": [
+       24980722,
+       29132222
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       20675000,
+       27952500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       19475000,
+       27952500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       20075000,
+       28602500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       20075000,
+       27302500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "center": [
+       22675000,
+       27952500
+      ],
+      "end": [
+       25175000,
+       27952500
+      ],
+      "kind": "circle",
+      "layer": "F.Fab",
+      "stroke_width": 100000
+     }
+    ],
+    "keywords": "CP Radial series Radial pin pitch 2.00mm  diameter 5mm Electrolytic Capacitor",
+    "kind3d": "tht",
+    "label": "above",
+    "lib_description": "CP, Radial series, Radial, pin pitch=2.00mm, , diameter=5mm, Electrolytic Capacitor",
+    "lib_link": "Capacitors_THT:CP_Radial_D5.0mm_P2.00mm",
+    "models": [
+     {
+      "name": "${KICAD7_3DMODEL_DIR}/Capacitors_THT.3dshapes/CP_Radial_D5.0mm_P2.00mm.wrl",
+      "offset": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "opacity": 1.0,
+      "rotate": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "scale": [
+       1.0,
+       1.0,
+       1.0
+      ],
+      "show": true
+     }
+    ],
+    "mpn": null,
+    "not_in_pos": false,
+    "orientation": 0.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 800000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1400000,
+      "id": "C48.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 21675000,
+      "py": 27952500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": false,
+      "shape": "rect",
+      "size": [
+       1400000,
+       1400000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1400000,
+      "x": 21675000,
+      "y": 27952500
+     },
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 800000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1600000,
+      "id": "C48.2",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "2",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 23675000,
+      "py": 27952500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1600000,
+       1600000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1600000,
+      "x": 23675000,
+      "y": 27952500
+     }
+    ],
+    "placed": true,
+    "ref": "C48",
+    "rot": 0.0,
+    "side": "top",
+    "size": [
+     7700000,
+     5700000
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": "Unpolarized capacitor"
+    },
+    "texts": null,
+    "value": "47uF"
+   },
+   {
+    "at": [
+     44852500,
+     24460000
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": null,
+    "courtyard": [
+     43327820,
+     22935320,
+     46377180,
+     25984680
+    ],
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 180000,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "Hidden RefDes:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 180000,
+      "layer": "F.SilkS",
+      "lx": -283500,
+      "ly": 7470250,
+      "mirror": false,
+      "name": "Reference",
+      "text": "Hidden RefDes",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 44569000,
+      "y": 31930250
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "Hidden RefDes:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": -213500,
+      "ly": 9050250,
+      "mirror": false,
+      "name": "Value",
+      "text": "Hidden Value",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 44639000,
+      "y": 33510250
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "Hidden RefDes:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 44852500,
+      "y": 24460000
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "Hidden RefDes:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 44852500,
+      "y": 24460000
+     }
+    ],
+    "footprint": "Wire_Pads:SolderWirePad_single_1mmDrill",
+    "from_board_file": true,
+    "label": "above",
+    "lib_link": "Wire_Pads:SolderWirePad_single_1mmDrill",
+    "mpn": null,
+    "orientation": 0.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 1000760,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 2499360,
+      "id": "Hidden RefDes.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": null,
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "bidirectional",
+      "px": 44852500,
+      "py": 24460000,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       2499360,
+       2499360
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 2499360,
+      "x": 44852500,
+      "y": 24460000
+     }
+    ],
+    "placed": true,
+    "ref": "Hidden RefDes",
+    "rot": 0.0,
+    "side": "top",
+    "size": [
+     2999360,
+     2999360
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": ""
+    },
+    "texts": [
+     {
+      "angle": 90000,
+      "bold": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "Hidden RefDes~t0",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.SilkS",
+      "lx": 158750,
+      "ly": 3333750,
+      "mirror": false,
+      "raw": "LED",
+      "text": "LED",
+      "thickness": 250000,
+      "upright": true,
+      "valign": 0,
+      "w": 1100000,
+      "x": 45011250,
+      "y": 27793750
+     }
+    ],
+    "value": "Hidden Value"
+   },
+   {
+    "at": [
+     44852500,
+     20967500
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": null,
+    "courtyard": [
+     43327820,
+     19442820,
+     46377180,
+     22492180
+    ],
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 90000,
+      "bold": false,
+      "custom": true,
+      "h": 1300000,
+      "halign": 0,
+      "id": "FP4:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.SilkS",
+      "lx": 2222500,
+      "ly": 0,
+      "mirror": false,
+      "name": "Reference",
+      "text": "",
+      "thickness": 250000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1500000,
+      "x": 47075000,
+      "y": 20967500
+     },
+     {
+      "angle": 90000,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP4:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.Fab",
+      "lx": 2457500,
+      "ly": 1723750,
+      "mirror": false,
+      "name": "Value",
+      "text": "Front Panel PWR",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1000000,
+      "x": 47310000,
+      "y": 22691250
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP4:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 44852500,
+      "y": 20967500
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP4:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 44852500,
+      "y": 20967500
+     }
+    ],
+    "footprint": "Wire_Pads:SolderWirePad_single_1mmDrill#2",
+    "from_board_file": true,
+    "label": "above",
+    "lib_link": "Wire_Pads:SolderWirePad_single_1mmDrill",
+    "mpn": null,
+    "orientation": 0.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 1000760,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 2499360,
+      "id": "FP4.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "bidirectional",
+      "px": 44852500,
+      "py": 20967500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       2499360,
+       2499360
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 2499360,
+      "x": 44852500,
+      "y": 20967500
+     }
+    ],
+    "placed": true,
+    "ref": "FP4",
+    "rot": 0.0,
+    "side": "top",
+    "size": [
+     2999360,
+     2999360
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": ""
+    },
+    "texts": [
+     {
+      "angle": 90000,
+      "bold": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "FP4~t0",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.SilkS",
+      "lx": 158750,
+      "ly": -3333750,
+      "mirror": false,
+      "raw": "12V",
+      "text": "12V",
+      "thickness": 250000,
+      "upright": true,
+      "valign": 0,
+      "w": 1100000,
+      "x": 45011250,
+      "y": 17633750
+     }
+    ],
+    "value": "Front Panel PWR"
+   },
+   {
+    "at": [
+     28977500,
+     20967500
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": [
+     28977500,
+     19717500,
+     39137500,
+     22217500
+    ],
+    "courtyard": [
+     27902500,
+     19342500,
+     40252500,
+     22592500
+    ],
+    "courtyard_graphics": [
+     {
+      "id": "R74~c0",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R74~c1",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R74~c2",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R74~c3",
+      "layer": "F.CrtYd"
+     }
+    ],
+    "dnp": false,
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": true,
+      "h": 1400000,
+      "halign": 0,
+      "id": "R74:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.SilkS",
+      "lx": 5080000,
+      "ly": 0,
+      "mirror": false,
+      "name": "Reference",
+      "text": "R74",
+      "thickness": 300000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1600000,
+      "x": 34057500,
+      "y": 20967500
+     },
+     {
+      "angle": 90000,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R74:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.Fab",
+      "lx": 12292500,
+      "ly": 3503750,
+      "mirror": false,
+      "name": "Value",
+      "text": "10K",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1000000,
+      "x": 41270000,
+      "y": 24471250
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R74:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 28977500,
+      "y": 20967500
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R74:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 28977500,
+      "y": 20967500
+     }
+    ],
+    "footprint": "Resistors_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+    "from_board_file": true,
+    "graphics": [
+     {
+      "end": [
+       30847500,
+       20967500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       29957500,
+       20967500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30847500,
+       22277500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       30847500,
+       19657500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       22277500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       30847500,
+       22277500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30847500,
+       19657500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       37267500,
+       19657500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       19657500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       37267500,
+       22277500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       20967500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       38157500,
+       20967500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30907500,
+       20967500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       28977500,
+       20967500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       30907500,
+       22217500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       30907500,
+       19717500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       22217500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       30907500,
+       22217500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       30907500,
+       19717500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       37207500,
+       19717500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       19717500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       37207500,
+       22217500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       20967500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       39137500,
+       20967500
+      ],
+      "stroke_width": 100000
+     }
+    ],
+    "keywords": "Resistor Axial_DIN0207 series Axial Horizontal pin pitch 10.16mm 0.25W = 1/4W length 6.3mm diameter 2.5mm",
+    "kind3d": "tht",
+    "label": "above",
+    "lib_description": "Resistor, Axial_DIN0207 series, Axial, Horizontal, pin pitch=10.16mm, 0.25W = 1/4W, length*diameter=6.3*2.5mm^2, http://cdn-reichelt.de/documents/datenblatt/B400/1_4W%23YAG.pdf",
+    "lib_link": "Resistors_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+    "models": [
+     {
+      "name": "${KICAD7_3DMODEL_DIR}/Resistors_THT.3dshapes/R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal.wrl",
+      "offset": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "opacity": 1.0,
+      "rotate": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "scale": [
+       0.393701,
+       0.393701,
+       0.393701
+      ],
+      "show": true
+     }
+    ],
+    "mpn": null,
+    "not_in_pos": false,
+    "orientation": 0.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 850000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1800000,
+      "id": "R74.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 28977500,
+      "py": 20967500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1800000,
+       1800000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1800000,
+      "x": 28977500,
+      "y": 20967500
+     },
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 850000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1800000,
+      "id": "R74.2",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": null,
+      "num": "2",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 39137500,
+      "py": 20967500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1800000,
+       1800000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1800000,
+      "x": 39137500,
+      "y": 20967500
+     }
+    ],
+    "placed": true,
+    "ref": "R74",
+    "rot": 0.0,
+    "side": "top",
+    "size": [
+     22500000,
+     3200000
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": "Resistor"
+    },
+    "texts": null,
+    "value": "10K"
+   },
+   {
+    "at": [
+     28977500,
+     27952500
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": [
+     28977500,
+     26702500,
+     39137500,
+     29202500
+    ],
+    "courtyard": [
+     27902500,
+     26327500,
+     40252500,
+     29577500
+    ],
+    "courtyard_graphics": [
+     {
+      "id": "R75~c0",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R75~c1",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R75~c2",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R75~c3",
+      "layer": "F.CrtYd"
+     }
+    ],
+    "dnp": false,
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": true,
+      "h": 1400000,
+      "halign": 0,
+      "id": "R75:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.SilkS",
+      "lx": 5080000,
+      "ly": 0,
+      "mirror": false,
+      "name": "Reference",
+      "text": "R75",
+      "thickness": 300000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1600000,
+      "x": 34057500,
+      "y": 27952500
+     },
+     {
+      "angle": 90000,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R75:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.Fab",
+      "lx": 12292500,
+      "ly": 68750,
+      "mirror": false,
+      "name": "Value",
+      "text": "4K7",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1000000,
+      "x": 41270000,
+      "y": 28021250
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R75:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 28977500,
+      "y": 27952500
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R75:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 28977500,
+      "y": 27952500
+     }
+    ],
+    "footprint": "Resistors_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+    "from_board_file": true,
+    "graphics": [
+     {
+      "end": [
+       30847500,
+       27952500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       29957500,
+       27952500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30847500,
+       29262500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       30847500,
+       26642500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       29262500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       30847500,
+       29262500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30847500,
+       26642500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       37267500,
+       26642500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       26642500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       37267500,
+       29262500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       27952500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       38157500,
+       27952500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30907500,
+       27952500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       28977500,
+       27952500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       30907500,
+       29202500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       30907500,
+       26702500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       29202500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       30907500,
+       29202500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       30907500,
+       26702500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       37207500,
+       26702500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       26702500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       37207500,
+       29202500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       27952500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       39137500,
+       27952500
+      ],
+      "stroke_width": 100000
+     }
+    ],
+    "keywords": "Resistor Axial_DIN0207 series Axial Horizontal pin pitch 10.16mm 0.25W = 1/4W length 6.3mm diameter 2.5mm",
+    "kind3d": "tht",
+    "label": "above",
+    "lib_description": "Resistor, Axial_DIN0207 series, Axial, Horizontal, pin pitch=10.16mm, 0.25W = 1/4W, length*diameter=6.3*2.5mm^2, http://cdn-reichelt.de/documents/datenblatt/B400/1_4W%23YAG.pdf",
+    "lib_link": "Resistors_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+    "models": [
+     {
+      "name": "${KICAD7_3DMODEL_DIR}/Resistors_THT.3dshapes/R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal.wrl",
+      "offset": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "opacity": 1.0,
+      "rotate": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "scale": [
+       0.393701,
+       0.393701,
+       0.393701
+      ],
+      "show": true
+     }
+    ],
+    "mpn": null,
+    "not_in_pos": false,
+    "orientation": 0.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 850000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1800000,
+      "id": "R75.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 28977500,
+      "py": 27952500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1800000,
+       1800000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1800000,
+      "x": 28977500,
+      "y": 27952500
+     },
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 850000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1800000,
+      "id": "R75.2",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": null,
+      "num": "2",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 39137500,
+      "py": 27952500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1800000,
+       1800000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1800000,
+      "x": 39137500,
+      "y": 27952500
+     }
+    ],
+    "placed": true,
+    "ref": "R75",
+    "rot": 0.0,
+    "side": "top",
+    "size": [
+     22500000,
+     3200000
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": "Resistor"
+    },
+    "texts": null,
+    "value": "4K7"
+   },
+   {
+    "at": [
+     39137500,
+     24460000
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": [
+     28977500,
+     23210000,
+     39137500,
+     25710000
+    ],
+    "courtyard": [
+     27862500,
+     22835000,
+     40212500,
+     26085000
+    ],
+    "courtyard_graphics": [
+     {
+      "id": "R73~c0",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R73~c1",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R73~c2",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "R73~c3",
+      "layer": "F.CrtYd"
+     }
+    ],
+    "dnp": false,
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 180000,
+      "bold": false,
+      "custom": true,
+      "h": 1300000,
+      "halign": 0,
+      "id": "R73:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.SilkS",
+      "lx": 5080000,
+      "ly": 0,
+      "mirror": false,
+      "name": "Reference",
+      "text": "R73",
+      "thickness": 250000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1500000,
+      "x": 34057500,
+      "y": 24460000
+     },
+     {
+      "angle": 270000,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R73:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.Fab",
+      "lx": -2082500,
+      "ly": 3538750,
+      "mirror": false,
+      "name": "Value",
+      "text": "10K",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1000000,
+      "x": 41220000,
+      "y": 20921250
+     },
+     {
+      "angle": 180000,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R73:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 39137500,
+      "y": 24460000
+     },
+     {
+      "angle": 180000,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "R73:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 39137500,
+      "y": 24460000
+     }
+    ],
+    "footprint": "Resistors_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal#2",
+    "from_board_file": true,
+    "graphics": [
+     {
+      "end": [
+       30847500,
+       24460000
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       29957500,
+       24460000
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30847500,
+       25770000
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       30847500,
+       23150000
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       25770000
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       30847500,
+       25770000
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30847500,
+       23150000
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       37267500,
+       23150000
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       23150000
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       37267500,
+       25770000
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       37267500,
+       24460000
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       38157500,
+       24460000
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       30907500,
+       24460000
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       28977500,
+       24460000
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       30907500,
+       25710000
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       30907500,
+       23210000
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       25710000
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       30907500,
+       25710000
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       30907500,
+       23210000
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       37207500,
+       23210000
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       23210000
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       37207500,
+       25710000
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       37207500,
+       24460000
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       39137500,
+       24460000
+      ],
+      "stroke_width": 100000
+     }
+    ],
+    "keywords": "Resistor Axial_DIN0207 series Axial Horizontal pin pitch 10.16mm 0.25W = 1/4W length 6.3mm diameter 2.5mm",
+    "kind3d": "tht",
+    "label": "above",
+    "lib_description": "Resistor, Axial_DIN0207 series, Axial, Horizontal, pin pitch=10.16mm, 0.25W = 1/4W, length*diameter=6.3*2.5mm^2, http://cdn-reichelt.de/documents/datenblatt/B400/1_4W%23YAG.pdf",
+    "lib_link": "Resistors_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+    "models": [
+     {
+      "name": "${KICAD7_3DMODEL_DIR}/Resistors_THT.3dshapes/R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal.wrl",
+      "offset": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "opacity": 1.0,
+      "rotate": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "scale": [
+       0.393701,
+       0.393701,
+       0.393701
+      ],
+      "show": true
+     }
+    ],
+    "mpn": null,
+    "not_in_pos": false,
+    "orientation": 180.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 850000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1800000,
+      "id": "R73.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": null,
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 39137500,
+      "py": 24460000,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1800000,
+       1800000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1800000,
+      "x": 39137500,
+      "y": 24460000
+     },
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 850000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1800000,
+      "id": "R73.2",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": null,
+      "num": "2",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 28977500,
+      "py": 24460000,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1800000,
+       1800000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1800000,
+      "x": 28977500,
+      "y": 24460000
+     }
+    ],
+    "placed": true,
+    "ref": "R73",
+    "rot": 180.0,
+    "side": "top",
+    "size": [
+     22500000,
+     3200000
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": "Resistor"
+    },
+    "texts": null,
+    "value": "10K"
+   },
+   {
+    "at": [
+     21675000,
+     20967500
+    ],
+    "attrs": {
+     "allow_missing_courtyard": false,
+     "board_only": false,
+     "custom": true,
+     "dnp": false,
+     "exclude_from_bom": false,
+     "exclude_from_pos_files": false,
+     "exclude_from_sim": false,
+     "kind": "through_hole"
+    },
+    "block": "",
+    "body": [
+     19475000,
+     18467500,
+     25175000,
+     23467500
+    ],
+    "courtyard": [
+     19800000,
+     18092500,
+     25550000,
+     23842500
+    ],
+    "courtyard_graphics": [
+     {
+      "id": "C47~c0",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "C47~c1",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "C47~c2",
+      "layer": "F.CrtYd"
+     },
+     {
+      "id": "C47~c3",
+      "layer": "F.CrtYd"
+     }
+    ],
+    "dnp": false,
+    "excluded_from_board": false,
+    "fields": [
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C47:Reference",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.SilkS",
+      "lx": 952500,
+      "ly": -3333750,
+      "mirror": false,
+      "name": "Reference",
+      "text": "C47",
+      "thickness": 220000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1200000,
+      "x": 22627500,
+      "y": 17633750
+     },
+     {
+      "angle": 90000,
+      "bold": false,
+      "custom": true,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C47:Value",
+      "italic": false,
+      "knockout": false,
+      "langle": 90000,
+      "layer": "F.Fab",
+      "lx": 4775000,
+      "ly": -16250,
+      "mirror": false,
+      "name": "Value",
+      "text": "47uF",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": true,
+      "w": 1000000,
+      "x": 26450000,
+      "y": 20951250
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C47:Datasheet",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Datasheet",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 21675000,
+      "y": 20967500
+     },
+     {
+      "angle": 0,
+      "bold": false,
+      "custom": false,
+      "h": 1000000,
+      "halign": 0,
+      "id": "C47:Description",
+      "italic": false,
+      "knockout": false,
+      "langle": 0,
+      "layer": "F.Fab",
+      "lx": 0,
+      "ly": 0,
+      "mirror": false,
+      "name": "Description",
+      "text": "",
+      "thickness": 150000,
+      "upright": true,
+      "valign": 0,
+      "visible": false,
+      "w": 1000000,
+      "x": 21675000,
+      "y": 20967500
+     }
+    ],
+    "footprint": "Capacitors_THT:CP_Radial_D5.0mm_P2.00mm",
+    "from_board_file": true,
+    "graphics": [
+     {
+      "end": [
+       20675000,
+       20967500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       19475000,
+       20967500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       20075000,
+       21617500
+      ],
+      "kind": "segment",
+      "layer": "F.SilkS",
+      "start": [
+       20075000,
+       20317500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       24980722,
+       19787778
+      ],
+      "kind": "arc",
+      "layer": "F.SilkS",
+      "mid": [
+       22675156,
+       18377500
+      ],
+      "start": [
+       20369420,
+       19787500
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       24980722,
+       22147222
+      ],
+      "kind": "arc",
+      "layer": "F.SilkS",
+      "mid": [
+       25265000,
+       20967344
+      ],
+      "start": [
+       24980580,
+       19787500
+      ],
+      "stroke_width": 500000
+     },
+     {
+      "end": [
+       20369420,
+       22147500
+      ],
+      "kind": "arc",
+      "layer": "F.SilkS",
+      "mid": [
+       22675156,
+       23557500
+      ],
+      "start": [
+       24980722,
+       22147222
+      ],
+      "stroke_width": 120000
+     },
+     {
+      "end": [
+       20675000,
+       20967500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       19475000,
+       20967500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "end": [
+       20075000,
+       21617500
+      ],
+      "kind": "segment",
+      "layer": "F.Fab",
+      "start": [
+       20075000,
+       20317500
+      ],
+      "stroke_width": 100000
+     },
+     {
+      "center": [
+       22675000,
+       20967500
+      ],
+      "end": [
+       25175000,
+       20967500
+      ],
+      "kind": "circle",
+      "layer": "F.Fab",
+      "stroke_width": 100000
+     }
+    ],
+    "keywords": "CP Radial series Radial pin pitch 2.00mm  diameter 5mm Electrolytic Capacitor",
+    "kind3d": "tht",
+    "label": "above",
+    "lib_description": "CP, Radial series, Radial, pin pitch=2.00mm, , diameter=5mm, Electrolytic Capacitor",
+    "lib_link": "Capacitors_THT:CP_Radial_D5.0mm_P2.00mm",
+    "models": [
+     {
+      "name": "${KICAD7_3DMODEL_DIR}/Capacitors_THT.3dshapes/CP_Radial_D5.0mm_P2.00mm.wrl",
+      "offset": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "opacity": 1.0,
+      "rotate": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "scale": [
+       1.0,
+       1.0,
+       1.0
+      ],
+      "show": true
+     }
+    ],
+    "mpn": null,
+    "not_in_pos": false,
+    "orientation": 0.0,
+    "package": null,
+    "pads": [
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 800000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1400000,
+      "id": "C47.1",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "1",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 21675000,
+      "py": 20967500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": false,
+      "shape": "rect",
+      "size": [
+       1400000,
+       1400000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1400000,
+      "x": 21675000,
+      "y": 20967500
+     },
+     {
+      "chamfer_corners": null,
+      "chamfer_ratio": null,
+      "custom": null,
+      "delta": null,
+      "drill": 800000,
+      "edit": null,
+      "edited": false,
+      "flashed": null,
+      "h": 1600000,
+      "id": "C47.2",
+      "kind": "through_hole",
+      "layers": [
+       "*.Cu",
+       "F.Mask",
+       "B.Mask"
+      ],
+      "mask_margin": null,
+      "net": "GND",
+      "num": "2",
+      "offset": null,
+      "outline": null,
+      "paste_margin": null,
+      "paste_ratio": null,
+      "pin_function": null,
+      "pin_type": "passive",
+      "px": 23675000,
+      "py": 20967500,
+      "ratio": null,
+      "rot": 0.0,
+      "round": true,
+      "shape": "circle",
+      "size": [
+       1600000,
+       1600000
+      ],
+      "slot": null,
+      "stack": null,
+      "stack_layers": null,
+      "th": true,
+      "w": 1600000,
+      "x": 23675000,
+      "y": 20967500
+     }
+    ],
+    "placed": true,
+    "ref": "C47",
+    "rot": 0.0,
+    "side": "top",
+    "size": [
+     7700000,
+     5700000
+    ],
+    "symbol_fields": {
+     "Datasheet": "",
+     "Description": "Unpolarized capacitor"
+    },
+    "texts": null,
+    "value": "47uF"
+   }
+  ],
+  "plot_params": {
+   "ipc2581_bom": {},
+   "layers": [
+    "F.Cu",
+    "F.Mask",
+    "B.Cu",
+    "B.Mask",
+    "F.SilkS",
+    "B.SilkS",
+    "F.Paste",
+    "B.Paste",
+    "Edge.Cuts"
+   ],
+   "options": {
+    "creategerberjobfile": "yes",
+    "crossoutdnponfab": "yes",
+    "disableapertmacros": "no",
+    "drillshape": "1",
+    "dxfimperialunits": "yes",
+    "dxfpolygonmode": "yes",
+    "dxfusepcbnewfont": "yes",
+    "gerberprecision": "6",
+    "hidednponfab": "no",
+    "mirror": "no",
+    "mode": "1",
+    "outputdirectory": "",
+    "outputformat": "1",
+    "pdf_back_fp_property_popups": "yes",
+    "pdf_front_fp_property_popups": "yes",
+    "pdf_metadata": "yes",
+    "pdf_single_document": "no",
+    "plot_black_and_white": "yes",
+    "plotframeref": "no",
+    "plotpadnumbers": "no",
+    "pngantialias": "yes",
+    "pngdpi": "300",
+    "psa4output": "no",
+    "psnegative": "no",
+    "scaleselection": "1",
+    "sketchdnponfab": "yes",
+    "sketchpadsonfab": "no",
+    "subtractmaskfromsilk": "no",
+    "svgprecision": "6",
+    "useauxorigin": "no",
+    "usegerberadvancedattributes": "yes",
+    "usegerberattributes": "yes",
+    "usegerberextensions": "no"
+   },
+   "plot_on_all_layers": [],
+   "sch_revision": "",
+   "use_aux_origin": false
+  },
+  "routing": {
+   "diff_pair_presets": [],
+   "teardrop_settings": {
+    "allow_two_segments": true,
+    "best_length_ratio": 0.5,
+    "best_width_ratio": 1.0,
+    "curved_edges": false,
+    "enabled": false,
+    "max_len_nm": 1000000,
+    "max_width_nm": 2000000,
+    "prefer_zone_connections": true,
+    "rect_shape": null,
+    "round_shapes_only": false,
+    "target_pth_pads": true,
+    "target_smd_pads": true,
+    "target_vias": true,
+    "track_end": {
+     "allow_two_segments": true,
+     "best_length_ratio": 0.5,
+     "best_width_ratio": 1.0,
+     "curved_edges": false,
+     "enabled": false,
+     "filter_ratio": 0.9,
+     "max_length": 1000000,
+     "max_width": 2000000,
+     "prefer_zone_connections": true
+    },
+    "width_to_size_filter_ratio": 0.9
+   },
+   "track_width_presets": [],
+   "tracks": [
+    {
+     "arc_mid": null,
+     "id": "trk_18038987dba6",
+     "layer": "F.Cu",
+     "mask": null,
+     "net": "",
+     "pts": [
+      [
+       44852500,
+       24460000
+      ],
+      [
+       39137500,
+       24460000
+      ]
+     ],
+     "width": 381000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_c7dde011b582",
+     "layer": "B.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       21680000,
+       19221250
+      ],
+      [
+       21680000,
+       27947500
+      ]
+     ],
+     "width": 762000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_1e3d9c1bc775",
+     "layer": "B.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       21680000,
+       27947500
+      ],
+      [
+       21675000,
+       27952500
+      ]
+     ],
+     "width": 762000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_90801cf4f930",
+     "layer": "B.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       28977500,
+       20967500
+      ],
+      [
+       23675000,
+       20967500
+      ]
+     ],
+     "width": 381000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_f0e37a35dcca",
+     "layer": "B.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       28977500,
+       27952500
+      ],
+      [
+       23675000,
+       27952500
+      ]
+     ],
+     "width": 381000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_91daad4e4a8e",
+     "layer": "B.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       35010000,
+       19221250
+      ],
+      [
+       44852500,
+       19221250
+      ]
+     ],
+     "width": 762000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_020c773b3887",
+     "layer": "B.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       35010000,
+       19221250
+      ],
+      [
+       21680000,
+       19221250
+      ]
+     ],
+     "width": 762000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_cc8145c10cea",
+     "layer": "B.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       44852500,
+       19221250
+      ],
+      [
+       44852500,
+       20967500
+      ]
+     ],
+     "width": 762000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_e11e51d28fd4",
+     "layer": "F.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       33105000,
+       27952500
+      ],
+      [
+       28977500,
+       27952500
+      ]
+     ],
+     "width": 381000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_474bb6ce0cc1",
+     "layer": "F.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       33105000,
+       32740250
+      ],
+      [
+       33105000,
+       27952500
+      ]
+     ],
+     "width": 381000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_3b6391fa9ae4",
+     "layer": "F.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       34057500,
+       20967500
+      ],
+      [
+       28977500,
+       20967500
+      ]
+     ],
+     "width": 381000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_b708662919aa",
+     "layer": "F.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       34057500,
+       32740250
+      ],
+      [
+       34057500,
+       20967500
+      ]
+     ],
+     "width": 381000
+    },
+    {
+     "arc_mid": null,
+     "id": "trk_2df225eb97c8",
+     "layer": "F.Cu",
+     "mask": null,
+     "net": "GND",
+     "pts": [
+      [
+       35010000,
+       19221250
+      ],
+      [
+       35010000,
+       32740250
+      ]
+     ],
+     "width": 381000
+    }
+   ],
+   "via_presets": [],
+   "vias": [
+    {
+     "d": 750000,
+     "drill": 350000,
+     "flashed": null,
+     "from": "F.Cu",
+     "id": "via_f4c276bcf6a1",
+     "net": "GND",
+     "props": null,
+     "teardrops": null,
+     "to": "B.Cu",
+     "type": null,
+     "unconnected": null,
+     "x": 35010000,
+     "y": 19221250
+    }
+   ],
+   "zones": [
+    {
+     "border_hatch_pitch": 508000,
+     "border_style": "edge",
+     "clearance": 508000,
+     "corner_radius": 0,
+     "fill_mode": "Polygons",
+     "hatch_border_algorithm": 1,
+     "hatch_gap": 1500000,
+     "hatch_hole_min_area": 0.15,
+     "hatch_offsets": {},
+     "hatch_orientation_mdeg": 0,
+     "hatch_smoothing_level": 0,
+     "hatch_smoothing_value": 0.1,
+     "hatch_thickness": 1000000,
+     "holes": [],
+     "id": "zone_7e80f8024a6e",
+     "is_rule_area": false,
+     "island_removal_mode": "Always",
+     "keepout_copper_pour": false,
+     "keepout_footprints": false,
+     "keepout_pads": false,
+     "keepout_tracks": false,
+     "keepout_vias": false,
+     "layer": "F.Cu",
+     "layers": [
+      "F.Cu"
+     ],
+     "min_island_area": 10000000000000,
+     "min_thickness": 254000,
+     "name": "",
+     "net": "GND",
+     "outline": [
+      [
+       37060000,
+       36600000
+      ],
+      [
+       19800000,
+       36700000
+      ],
+      [
+       19800000,
+       31400000
+      ],
+      [
+       37060000,
+       31400000
+      ]
+     ],
+     "pad_connection": "Thermal",
+     "parent": null,
+     "placement": {
+      "enabled": false,
+      "source": "",
+      "source_type": "sheetname"
+     },
+     "priority": 0,
+     "smoothing": "none",
+     "teardrop": false,
+     "thermal_gap": 508000,
+     "thermal_spoke_width": 508000
+    }
+   ]
+  },
+  "rules": [],
+  "shown_variant": "",
+  "snap": 100000,
+  "title_block": null,
+  "variants": []
+ },
+ "fill": {
+  "source": {
+   "engine": "kicad-cli 10.99.0",
+   "stale": 0,
+   "zones": 1
+  },
+  "zones": [
+   {
+    "area_nm2": 77955504747936.5,
+    "filled": true,
+    "fragments": [
+     [
+      [
+       37002121,
+       31420002
+      ],
+      [
+       37048614,
+       31473658
+      ],
+      [
+       37060000,
+       31526000
+      ],
+      [
+       37060000,
+       36474727
+      ],
+      [
+       37039998,
+       36542848
+      ],
+      [
+       36986342,
+       36589341
+      ],
+      [
+       36934730,
+       36600725
+      ],
+      [
+       19926730,
+       36699265
+      ],
+      [
+       19858495,
+       36679658
+      ],
+      [
+       19811692,
+       36626272
+      ],
+      [
+       19800000,
+       36573267
+      ],
+      [
+       19800000,
+       33941996
+      ],
+      [
+       20441940,
+       33941996
+      ],
+      [
+       20441940,
+       34238003
+      ],
+      [
+       20480574,
+       34531463
+      ],
+      [
+       20557187,
+       34817386
+      ],
+      [
+       20670463,
+       35090858
+      ],
+      [
+       20670468,
+       35090869
+      ],
+      [
+       20818460,
+       35347199
+      ],
+      [
+       20818465,
+       35347206
+      ],
+      [
+       20933573,
+       35497216
+      ],
+      [
+       22134648,
+       34296141
+      ],
+      [
+       22141410,
+       34321375
+      ],
+      [
+       22220328,
+       34458065
+      ],
+      [
+       22331935,
+       34569672
+      ],
+      [
+       22468625,
+       34648590
+      ],
+      [
+       22493857,
+       34655350
+      ],
+      [
+       21292782,
+       35856425
+      ],
+      [
+       21292782,
+       35856426
+      ],
+      [
+       21442794,
+       35971535
+      ],
+      [
+       21442800,
+       35971539
+      ],
+      [
+       21699130,
+       36119531
+      ],
+      [
+       21699141,
+       36119536
+      ],
+      [
+       21972613,
+       36232812
+      ],
+      [
+       22258536,
+       36309425
+      ],
+      [
+       22551996,
+       36348059
+      ],
+      [
+       22552006,
+       36348060
+      ],
+      [
+       22847994,
+       36348060
+      ],
+      [
+       22848003,
+       36348059
+      ],
+      [
+       23141463,
+       36309425
+      ],
+      [
+       23427386,
+       36232812
+      ],
+      [
+       23700858,
+       36119536
+      ],
+      [
+       23700869,
+       36119531
+      ],
+      [
+       23957199,
+       35971539
+      ],
+      [
+       23957205,
+       35971535
+      ],
+      [
+       24107216,
+       35856426
+      ],
+      [
+       24107216,
+       35856425
+      ],
+      [
+       22906142,
+       34655351
+      ],
+      [
+       22931375,
+       34648590
+      ],
+      [
+       23068065,
+       34569672
+      ],
+      [
+       23179672,
+       34458065
+      ],
+      [
+       23258590,
+       34321375
+      ],
+      [
+       23265351,
+       34296142
+      ],
+      [
+       24466425,
+       35497216
+      ],
+      [
+       24466426,
+       35497216
+      ],
+      [
+       24581535,
+       35347205
+      ],
+      [
+       24581539,
+       35347199
+      ],
+      [
+       24729531,
+       35090869
+      ],
+      [
+       24729536,
+       35090858
+      ],
+      [
+       24842812,
+       34817386
+      ],
+      [
+       24919425,
+       34531463
+      ],
+      [
+       24958059,
+       34238003
+      ],
+      [
+       24958060,
+       34237994
+      ],
+      [
+       24958060,
+       33942006
+      ],
+      [
+       24958059,
+       33941996
+      ],
+      [
+       24919425,
+       33648536
+      ],
+      [
+       24842812,
+       33362613
+      ],
+      [
+       24729536,
+       33089141
+      ],
+      [
+       24729531,
+       33089130
+      ],
+      [
+       24581539,
+       32832800
+      ],
+      [
+       24581535,
+       32832794
+      ],
+      [
+       24466426,
+       32682782
+      ],
+      [
+       24466425,
+       32682782
+      ],
+      [
+       23265350,
+       33883857
+      ],
+      [
+       23258590,
+       33858625
+      ],
+      [
+       23179672,
+       33721935
+      ],
+      [
+       23068065,
+       33610328
+      ],
+      [
+       22931375,
+       33531410
+      ],
+      [
+       22906141,
+       33524648
+      ],
+      [
+       24107216,
+       32323573
+      ],
+      [
+       24107216,
+       32323572
+      ],
+      [
+       23957206,
+       32208465
+      ],
+      [
+       23957199,
+       32208460
+      ],
+      [
+       23700869,
+       32060468
+      ],
+      [
+       23700858,
+       32060463
+      ],
+      [
+       23427386,
+       31947187
+      ],
+      [
+       23141463,
+       31870574
+      ],
+      [
+       22848003,
+       31831940
+      ],
+      [
+       22551996,
+       31831940
+      ],
+      [
+       22258536,
+       31870574
+      ],
+      [
+       21972613,
+       31947187
+      ],
+      [
+       21699141,
+       32060463
+      ],
+      [
+       21699130,
+       32060468
+      ],
+      [
+       21442791,
+       32208465
+      ],
+      [
+       21292783,
+       32323572
+      ],
+      [
+       21292782,
+       32323573
+      ],
+      [
+       22493857,
+       33524648
+      ],
+      [
+       22468625,
+       33531410
+      ],
+      [
+       22331935,
+       33610328
+      ],
+      [
+       22220328,
+       33721935
+      ],
+      [
+       22141410,
+       33858625
+      ],
+      [
+       22134648,
+       33883857
+      ],
+      [
+       20933573,
+       32682782
+      ],
+      [
+       20933572,
+       32682783
+      ],
+      [
+       20818465,
+       32832791
+      ],
+      [
+       20670468,
+       33089130
+      ],
+      [
+       20670463,
+       33089141
+      ],
+      [
+       20557187,
+       33362613
+      ],
+      [
+       20480574,
+       33648536
+      ],
+      [
+       20441940,
+       33941996
+      ],
+      [
+       19800000,
+       33941996
+      ],
+      [
+       19800000,
+       31526000
+      ],
+      [
+       19820002,
+       31457879
+      ],
+      [
+       19873658,
+       31411386
+      ],
+      [
+       19926000,
+       31400000
+      ],
+      [
+       36934000,
+       31400000
+      ]
+     ]
+    ],
+    "id": "zone_7e80f8024a6e",
+    "layer": "F.Cu",
+    "net": "GND"
+   }
+  ]
+ },
+ "meta": {
+  "by": "tools/make-color-preview.sh",
+  "generated": true,
+  "kicadCommit": "8303b2ad"
+ },
+ "sheet": {
+  "annotation": null,
+  "bus_entries": [
+   {
+    "at": [
+     46990000,
+     35560000
+    ],
+    "id": "00000000-0000-4000-8000-000000000004",
+    "size": [
+     2540000,
+     2540000
+    ],
+    "stroke": null
+   },
+   {
+    "at": [
+     46990000,
+     63500000
+    ],
+    "id": "00000000-0000-4000-8000-000000000005",
+    "size": [
+     2540000,
+     2540000
+    ],
+    "stroke": null
+   }
+  ],
+  "drawing_sheet": null,
+  "file": "",
+  "graphic_shown": {},
+  "graphic_text_attrs": {},
+  "graphics": [],
+  "groups": [],
+  "image_offsets": {},
+  "junctions": [
+   {
+    "at": [
+     78105000,
+     40640000
+    ],
+    "id": "jct_27c1cd15ff1f",
+    "look": null
+   }
+  ],
+  "labels": [
+   {
+    "at": [
+     50165000,
+     38100000
+    ],
+    "auto_rotate": false,
+    "bold": false,
+    "color": null,
+    "fields": [],
+    "fields_hand_placed": false,
+    "font": null,
+    "id": "lbl_7c6acc284d37",
+    "italic": false,
+    "net": "LABEL_{0}",
+    "net_name": "/LABEL_{0}",
+    "scope": "local",
+    "shape": null,
+    "size_nm": 1270000,
+    "spin": "right"
+   },
+   {
+    "at": [
+     50165000,
+     66040000
+    ],
+    "auto_rotate": false,
+    "bold": false,
+    "color": null,
+    "fields": [],
+    "fields_hand_placed": false,
+    "font": null,
+    "id": "lbl_74ddb0b75014",
+    "italic": false,
+    "net": "LABEL_{1}",
+    "net_name": "/LABEL_{1}",
+    "scope": "local",
+    "shape": null,
+    "size_nm": 1270000,
+    "spin": "right"
+   },
+   {
+    "at": [
+     44450000,
+     33020000
+    ],
+    "auto_rotate": false,
+    "bold": false,
+    "color": null,
+    "fields": [
+     {
+      "at": [
+       28016200,
+       33020000
+      ],
+      "bold": false,
+      "color": null,
+      "font": null,
+      "h": "right",
+      "id": "fld:lbl_ba3ff2688365:Intersheetrefs",
+      "intersheet_refs": true,
+      "italic": false,
+      "name": "Intersheetrefs",
+      "name_shown": false,
+      "owner": "lbl_ba3ff2688365",
+      "shown": "[1]",
+      "size_nm": 1270000,
+      "text": "${INTERSHEET_REFS}",
+      "v": "center",
+      "vertical": false,
+      "visible": false
+     }
+    ],
+    "fields_hand_placed": false,
+    "font": null,
+    "id": "lbl_ba3ff2688365",
+    "italic": false,
+    "net": "GLOBAL[0..3]",
+    "net_name": "GLOBAL[0..3]",
+    "scope": "global",
+    "shape": "bidirectional",
+    "size_nm": 1270000,
+    "spin": "left"
+   },
+   {
+    "at": [
+     82550000,
+     40640000
+    ],
+    "auto_rotate": false,
+    "bold": false,
+    "color": null,
+    "fields": [],
+    "fields_hand_placed": false,
+    "font": null,
+    "id": "lbl_464cad559a88",
+    "italic": false,
+    "net": "HIER_LABEL",
+    "net_name": "/HIER_LABEL",
+    "scope": "hierarchical",
+    "shape": "input",
+    "size_nm": 1270000,
+    "spin": "right"
+   }
+  ],
+  "lib_symbols": {
+   "preview:OPA604": {
+    "body_style_count": 1,
+    "body_style_names": [],
+    "datasheet": "",
+    "description": "",
+    "graphics": [
+     {
+      "body_style": 0,
+      "fill": "background",
+      "filled": true,
+      "kind": "polyline",
+      "line_style": "solid",
+      "pts": [
+       [
+        1.2699999999999996,
+        -10.16
+       ],
+       [
+        11.43,
+        -5.08
+       ],
+       [
+        1.2699999999999996,
+        0.0
+       ],
+       [
+        1.2699999999999996,
+        -10.16
+       ]
+      ],
+      "stroke_mm": 0.254,
+      "stroke_width": 0.254,
+      "unit": 0
+     }
+    ],
+    "in_bom": true,
+    "keywords": "",
+    "on_board": true,
+    "pin_name_offset": 0.0,
+    "pin_names_hidden": false,
+    "pin_numbers_hidden": false,
+    "pins": [
+     {
+      "angle_deg": 0.0,
+      "at": [
+       -1.2700000000000005,
+       -2.54
+      ],
+      "body_style": 0,
+      "electrical_type": "input",
+      "hidden": false,
+      "length_mm": 2.54,
+      "name": "-",
+      "number": "1",
+      "shape": "line",
+      "unit": 0
+     },
+     {
+      "angle_deg": 0.0,
+      "at": [
+       -1.2700000000000005,
+       -7.62
+      ],
+      "body_style": 0,
+      "electrical_type": "input",
+      "hidden": false,
+      "length_mm": 2.54,
+      "name": "+",
+      "number": "2",
+      "shape": "line",
+      "unit": 0
+     },
+     {
+      "angle_deg": 180.0,
+      "at": [
+       13.969999999999999,
+       -5.08
+      ],
+      "body_style": 0,
+      "electrical_type": "output",
+      "hidden": false,
+      "length_mm": 2.54,
+      "name": "OUT",
+      "number": "3",
+      "shape": "line",
+      "unit": 0
+     }
+    ],
+    "power": false,
+    "power_local": false,
+    "unit_count": 1,
+    "unit_names": {}
+   }
+  },
+  "lines": [
+   {
+    "id": "sln_8528481bbeed",
+    "pts": [
+     [
+      59690000,
+      53975000
+     ],
+     [
+      59690000,
+      58420000
+     ]
+    ],
+    "stroke": null,
+    "width_nm": 152400
+   },
+   {
+    "id": "sln_4dc0c6afa9bd",
+    "pts": [
+     [
+      59690000,
+      53975000
+     ],
+     [
+      74930000,
+      53975000
+     ]
+    ],
+    "stroke": null,
+    "width_nm": 152400
+   },
+   {
+    "id": "sln_72457750a42c",
+    "pts": [
+     [
+      74930000,
+      53975000
+     ],
+     [
+      74930000,
+      58420000
+     ]
+    ],
+    "stroke": null,
+    "width_nm": 152400
+   },
+   {
+    "id": "sln_c21a08acb893",
+    "pts": [
+     [
+      74930000,
+      58420000
+     ],
+     [
+      59690000,
+      58420000
+     ]
+    ],
+    "stroke": null,
+    "width_nm": 152400
+   }
+  ],
+  "locked": [],
+  "no_connects": [
+   {
+    "at": [
+     59690000,
+     66040000
+    ],
+    "id": "nc_b161bb08f382",
+    "pin": ""
+   }
+  ],
+  "page": {
+   "paper": "User",
+   "portrait": false,
+   "size_nm": [
+    152400000,
+    127000000
+   ],
+   "user_size_nm": [
+    152400000,
+    127000000
+   ]
+  },
+  "page_number": 1,
+  "paper": {
+   "height_nm": 127000000,
+   "name": "User",
+   "width_nm": 152400000
+  },
+  "power_symbols": [],
+  "setup": {
+   "dash_ratio": 12.0,
+   "default_line_width_nm": 152400,
+   "default_text_size_nm": 1270000,
+   "default_wire_width_nm": 152400,
+   "gap_ratio": 3.0,
+   "hop_over_size_choice": 0,
+   "junction_diameter_nm": 914400,
+   "label_size_ratio": 0.375,
+   "opo_i_precision": 3,
+   "opo_i_range": "~A",
+   "opo_v_precision": 3,
+   "opo_v_range": "~V",
+   "overbar_offset_ratio": 1.23,
+   "pin_symbol_size_nm": 635000,
+   "text_offset_ratio": 0.15
+  },
+  "sheet_page": {
+   "count": 2,
+   "first": true,
+   "number": "1"
+  },
+  "sheet_path": [],
+  "sheets": [
+   {
+    "at": [
+     101600000,
+     33020000
+    ],
+    "fields": [
+     {
+      "allow_autoplace": true,
+      "at": [
+       101600000.0,
+       32308400.0
+      ],
+      "bold": false,
+      "h": "left",
+      "id": "fld:00000000-0000-4000-8000-000000000025:Sheetname",
+      "italic": false,
+      "name": "Sheetname",
+      "name_shown": false,
+      "owner": "00000000-0000-4000-8000-000000000025",
+      "size_nm": 1270000.0,
+      "text": "SHEET",
+      "v": "bottom",
+      "vertical": false,
+      "visible": true
+     },
+     {
+      "allow_autoplace": true,
+      "at": [
+       101600000.0,
+       66624600.0
+      ],
+      "bold": false,
+      "h": "left",
+      "id": "fld:00000000-0000-4000-8000-000000000025:Sheetfile",
+      "italic": false,
+      "name": "Sheetfile",
+      "name_shown": false,
+      "owner": "00000000-0000-4000-8000-000000000025",
+      "size_nm": 1270000.0,
+      "text": "/path/to/sheet",
+      "v": "top",
+      "vertical": false,
+      "visible": true
+     }
+    ],
+    "fields_autoplaced": null,
+    "file": "/path/to/sheet",
+    "id": "00000000-0000-4000-8000-000000000025",
+    "name": "SHEET",
+    "page": "2",
+    "pins": [
+     {
+      "at": [
+       114300000,
+       38100000
+      ],
+      "id": "00000000-0000-4000-8000-000000000026",
+      "name": "SHEET PIN",
+      "shape": "input"
+     }
+    ],
+    "props": {
+     "border_width_nm": 0
+    },
+    "size": [
+     20320000,
+     33020000
+    ],
+    "user_field_looks": {},
+    "user_fields": null,
+    "user_fields_drawn": [],
+    "variants": null
+   }
+  ],
+  "shown_variant": "",
+  "subpart_first_id": null,
+  "subpart_id_separator": null,
+  "symbols": [
+   {
+    "at": [
+     60325000,
+     35560000
+    ],
+    "body_style": 1,
+    "datasheet": null,
+    "dnp": false,
+    "exclude_from_board": false,
+    "exclude_from_bom": false,
+    "exclude_from_pos_files": false,
+    "exclude_from_sim": false,
+    "fields": [
+     {
+      "allow_autoplace": true,
+      "at": [
+       67437000.0,
+       34036000.0
+      ],
+      "bold": false,
+      "h": "left",
+      "id": "fld:U1:Reference",
+      "italic": false,
+      "local": [
+       7112000,
+       -1524000
+      ],
+      "local_vertical": false,
+      "name": "Reference",
+      "name_shown": false,
+      "owner": "U1",
+      "size_nm": 1270000.0,
+      "text": "U1",
+      "v": "center",
+      "vertical": false,
+      "visible": true
+     },
+     {
+      "allow_autoplace": true,
+      "at": [
+       67437000.0,
+       36068000.0
+      ],
+      "bold": false,
+      "h": "left",
+      "id": "fld:U1:Value",
+      "italic": false,
+      "local": [
+       7112000,
+       508000
+      ],
+      "local_vertical": false,
+      "name": "Value",
+      "name_shown": false,
+      "owner": "U1",
+      "size_nm": 1270000.0,
+      "text": "OPA604",
+      "v": "center",
+      "vertical": false,
+      "visible": true
+     },
+     {
+      "allow_autoplace": true,
+      "at": [
+       66675000.0,
+       30480000.0
+      ],
+      "bold": false,
+      "h": "center",
+      "id": "fld:U1:Footprint",
+      "italic": false,
+      "local": [
+       6350000,
+       -5080000
+      ],
+      "local_vertical": false,
+      "name": "Footprint",
+      "name_shown": false,
+      "owner": "U1",
+      "size_nm": 1270000.0,
+      "text": "",
+      "v": "center",
+      "vertical": false,
+      "visible": false
+     },
+     {
+      "allow_autoplace": true,
+      "at": [
+       66675000.0,
+       30480000.0
+      ],
+      "bold": false,
+      "h": "center",
+      "id": "fld:U1:Datasheet",
+      "italic": false,
+      "local": [
+       6350000,
+       -5080000
+      ],
+      "local_vertical": false,
+      "name": "Datasheet",
+      "name_shown": false,
+      "owner": "U1",
+      "size_nm": 1270000.0,
+      "text": "",
+      "v": "center",
+      "vertical": false,
+      "visible": false
+     }
+    ],
+    "fields_autoplaced": null,
+    "footprint": null,
+    "id": "U1",
+    "lib_id": "preview:OPA604",
+    "mirror": null,
+    "mirrored": false,
+    "mpn": null,
+    "package": null,
+    "pin_swaps": null,
+    "pins": [
+     {
+      "kind": "signal",
+      "name": "-",
+      "net": "/LABEL_{0}",
+      "number": "1"
+     },
+     {
+      "kind": "signal",
+      "name": "+",
+      "net": "/HIER_LABEL",
+      "number": "2"
+     },
+     {
+      "kind": "signal",
+      "name": "OUT",
+      "net": "/HIER_LABEL",
+      "number": "3"
+     }
+    ],
+    "reference": "U1",
+    "rot": 0.0,
+    "unit": 1,
+    "value": "OPA604"
+   }
+  ],
+  "tables": [],
+  "texts": [
+   {
+    "angle": 0.0,
+    "at": [
+     67310000,
+     56896000
+    ],
+    "bold": false,
+    "color": null,
+    "content": "PLAIN TEXT",
+    "exclude_from_sim": false,
+    "font": null,
+    "h": "left",
+    "href": null,
+    "id": "txt_1a496fd97f6d",
+    "italic": false,
+    "size_nm": 1270000,
+    "v": "bottom",
+    "vertical": false,
+    "width_nm": null
+   }
+  ],
+  "title_block": {
+   "comments": [],
+   "company": "",
+   "date": "2026-11-14",
+   "rev": "",
+   "title": "Color Preview"
+  },
+  "variants": [],
+  "wires": [
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_01528594f2b4",
+    "label_driver": "LABEL_{0}",
+    "net": "/LABEL_{0}",
+    "pins": [
+     "U1.1"
+    ],
+    "pts": [
+     [
+      49530000,
+      38100000
+     ],
+     [
+      59055000,
+      38100000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_6326c8cbff3a",
+    "label_driver": "LABEL_{1}",
+    "net": "/LABEL_{1}",
+    "pins": [],
+    "pts": [
+     [
+      49530000,
+      66040000
+     ],
+     [
+      59690000,
+      66040000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_93f880764369",
+    "net": "/HIER_LABEL",
+    "pins": [
+     "U1.2"
+    ],
+    "pts": [
+     [
+      54610000,
+      43180000
+     ],
+     [
+      59055000,
+      43180000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_ab2511e52b38",
+    "net": "/HIER_LABEL",
+    "pins": [],
+    "pts": [
+     [
+      54610000,
+      50800000
+     ],
+     [
+      54610000,
+      43180000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_70543d287591",
+    "net": "/HIER_LABEL",
+    "pins": [
+     "U1.3"
+    ],
+    "pts": [
+     [
+      74295000,
+      40640000
+     ],
+     [
+      78105000,
+      40640000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_321ef3aa50e3",
+    "net": "/HIER_LABEL",
+    "pins": [],
+    "pts": [
+     [
+      78105000,
+      40640000
+     ],
+     [
+      78105000,
+      50800000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_dadbba39d119",
+    "net": "/HIER_LABEL",
+    "pins": [],
+    "pts": [
+     [
+      78105000,
+      40640000
+     ],
+     [
+      82550000,
+      40640000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": false,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 152400
+    },
+    "id": "wire_8f4e86d04ab3",
+    "net": "/HIER_LABEL",
+    "pins": [],
+    "pts": [
+     [
+      78105000,
+      50800000
+     ],
+     [
+      54610000,
+      50800000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 152400
+    }
+   },
+   {
+    "bus": true,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 304800
+    },
+    "id": "wire_aaefc403137a",
+    "member_tree": [
+     {
+      "members": [],
+      "name": "GLOBAL0"
+     },
+     {
+      "members": [],
+      "name": "GLOBAL1"
+     },
+     {
+      "members": [],
+      "name": "GLOBAL2"
+     },
+     {
+      "members": [],
+      "name": "GLOBAL3"
+     }
+    ],
+    "members": [
+     "GLOBAL0",
+     "GLOBAL1",
+     "GLOBAL2",
+     "GLOBAL3"
+    ],
+    "net": "GLOBAL[0..3]",
+    "pins": [],
+    "pts": [
+     [
+      44450000,
+      33020000
+     ],
+     [
+      46990000,
+      33020000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 304800
+    }
+   },
+   {
+    "bus": true,
+    "class_look": {
+     "color": null,
+     "style": 0,
+     "width_nm": 304800
+    },
+    "id": "wire_f53f89750ca1",
+    "member_tree": [
+     {
+      "members": [],
+      "name": "GLOBAL0"
+     },
+     {
+      "members": [],
+      "name": "GLOBAL1"
+     },
+     {
+      "members": [],
+      "name": "GLOBAL2"
+     },
+     {
+      "members": [],
+      "name": "GLOBAL3"
+     }
+    ],
+    "members": [
+     "GLOBAL0",
+     "GLOBAL1",
+     "GLOBAL2",
+     "GLOBAL3"
+    ],
+    "net": "GLOBAL[0..3]",
+    "pins": [],
+    "pts": [
+     [
+      46990000,
+      63500000
+     ],
+     [
+      46990000,
+      33020000
+     ]
+    ],
+    "stroke": {
+     "style": "solid",
+     "width_nm": 304800
+    }
+   }
+  ]
+ }
+}

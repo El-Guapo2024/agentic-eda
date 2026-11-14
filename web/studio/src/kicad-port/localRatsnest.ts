@@ -95,6 +95,19 @@ export function carryRatsnest<E extends RatsnestEdgeLike>(
   return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to), ...(moves(e.from) || moves(e.to) ? { dynamic: true as const } : {}) }));
 }
 
+/**
+ * The lines the ratsnest layer draws while items move (`RATSNEST_VIEW_ITEM::ViewDraw`): the static ones as the board shows them (`shown`, the global switch and the
+ * Local Ratsnest tool's pads -- a line with an end on a moving item is not static), and the dynamic ones of the moving items -- `BOARD_INSPECTION_TOOL::
+ * calculateSelectionRatsnest` takes a selected pad or connected item into `m_dynamicData` when `GetLocalRatsnestVisible() || m_ShowModuleRatsnest`: with "Always show
+ * selected ratsnest" on (`showSelected`) every line of a moving item (`all`, the hidden nets left out), even with the board's ratsnest hidden; off, only the ones the
+ * board shows. Both lists already carry the move (`offsetRatsnestForPreview` / `carryRatsnest`); UI-LEFT-3 C3-10.
+ */
+export function withSelectedRatsnest<E>(shown: readonly MovedEdge<E>[], all: readonly MovedEdge<E>[], showSelected: boolean): MovedEdge<E>[] {
+  const out = shown.filter((e) => !e.dynamic || !showSelected);
+  if (showSelected) for (const e of all) if (e.dynamic) out.push(e);
+  return out;
+}
+
 /** `RATSNEST_VIEW_ITEM::ViewDraw`'s `CROSS_SIZE`: 0.2 mm each way from the point, nm. */
 export const RATSNEST_CROSS_SIZE_NM = 200_000;
 

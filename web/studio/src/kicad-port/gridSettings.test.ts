@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { DEFAULT_PCB_GRIDS_NM } from "./grid";
 import {
   EESCHEMA_GRIDS_NM,
+  currentGridIndex,
+  stepGridIndex,
   defaultGridSettings,
   gridEditorOfTab,
   gridListError,
@@ -254,4 +256,18 @@ test("RebuildGridSizes / GRID::MessageText: 'name: X x Y (other unit)', one size
   const entries = gridMenuEntries(s, 500_000, mm, mil);
   assert.deepEqual(entries.map((e) => e.checked), [false, false, true]);
   assert.equal(entries[0]!.label, "1 mm x 2 mm (39 mil x 79 mil)");
+});
+
+test("C3-6: last_size_idx -- of two grids with the same X the one chosen is current: its Y, its menu entry, Next / Previous from it", () => {
+  const mm = (nm: number) => `${nm / 1e6} mm`;
+  const s = { grids: [1_000_000, 1_000_000, 500_000], ys: [2_000_000, 1_000_000, 500_000], fast1: 0, fast2: 1 };
+  assert.equal(currentGridIndex(s.grids, 1_000_000, 1), 1, "the row chosen");
+  assert.equal(currentGridIndex(s.grids, 1_000_000), 0, "none chosen yet: the first with the X");
+  assert.equal(currentGridIndex(s.grids, 500_000, 1), 2, "a row whose X is not the current size gives way");
+  assert.equal(currentGridIndex(s.grids, 123, 1), -1);
+  assert.equal(gridYOf(s, 1_000_000, 1), 1_000_000, "the second grid's Y, not the first's");
+  assert.deepEqual(gridMenuEntries(s, 1_000_000, mm, mm, 1).map((e) => e.checked), [false, true, false]);
+  assert.equal(stepGridIndex(s.grids, 1_000_000, 1, 1), 2, "Next Grid from the second row is the third");
+  assert.equal(stepGridIndex(s.grids, 1_000_000, -1, 1), 0, "and Previous the first");
+  assert.equal(stepGridIndex(s.grids, 1_000_000, 1), 1, "from the first row when none was chosen");
 });

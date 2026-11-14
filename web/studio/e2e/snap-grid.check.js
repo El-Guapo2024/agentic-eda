@@ -368,9 +368,10 @@
 
     // Edit Grids: the Schematic page and its overrides.
     await run("common.Control.editGrids");
-    const editorSel = document.querySelector('select[aria-label="Editor"]');
+    // `ShowPreferences( _( "Grids" ), _( "Schematic Editor" ) )`: the Preferences dialog on the Schematic Editor's Grids page (UI-LEFT-3 C3-5)
+    const schGridsPage = document.querySelector('[data-testid="prefs-page-sch_grids"]');
     const text = dialog()?.innerText ?? "";
-    check("Edit Grids on the schematic opens the Schematic page with its overrides", !!editorSel && /Schematic Editor/.test(editorSel.selectedOptions[0].textContent) && /Grid Overrides/.test(text) && /Wires/.test(text) && !/Vias/.test(text), `${editorSel?.selectedOptions[0]?.textContent}`);
+    check("Edit Grids on the schematic opens the Schematic page with its overrides", schGridsPage?.getAttribute("aria-selected") === "true" && /Grid Overrides/.test(text) && /Wires/.test(text) && !/Vias/.test(text), `${document.querySelector('[role="treeitem"][aria-selected="true"]')?.getAttribute("data-page")}`);
     const on = (label) => document.querySelector(`input[aria-label="${label} grid override"]`)?.checked;
     check("the schematic's overrides start as KiCad's: connected items, wires and text on, graphics off", on("Connected items") === true && on("Wires") === true && on("Text") === true && on("Graphics") === false, [on("Connected items"), on("Wires"), on("Text"), on("Graphics")].join(","));
     button("Cancel")?.click();

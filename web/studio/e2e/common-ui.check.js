@@ -315,7 +315,8 @@
     // Reset to Defaults and the grid that was current
     await E.run("common.Control.editGrids");
     await until(() => dlg(), 3000);
-    buttonIn(dlg(), "Reset to Defaults").click();
+    // the Preferences dialog's reset button on the Grids page (`ShowPreferences( "Grids", .. )`, UI-LEFT-3 C3-5)
+    buttonIn(dlg(), "Reset Grids to Defaults").click();
     await sleep(150);
     const l2 = dlg().querySelector('select[aria-label="Grids"]');
     t(![...l2.options].some((o) => o.textContent.startsWith("Wide")), "Reset to Defaults drops it");

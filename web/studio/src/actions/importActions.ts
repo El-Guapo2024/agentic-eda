@@ -115,7 +115,9 @@ async function appendBoardFile(ctx: ImportActionContext, file: PickedFile): Prom
   const placed = await ctx.api.placeNewItems((at) => appendBoardCmd(text, reference, at, file.name, asGroup), true);
   if (!placed) return; // the refusal is on screen as a toast
   const notes = info.notes ?? [];
-  toast(`Appended ${describeAppended(info.counts)}.${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`, "info");
+  // what the append did, in the board's info bar as KiCad says its append's news there (KiCad 25ec2335's "Board changed from %d to %d copper layers, stackup updated.",
+  // `ShowInfoBarMsg`): the information icon, 8 s
+  ctx.dispatch({ type: "SHOW_PCB_INFOBAR", message: `Appended ${describeAppended(info.counts)}.${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`, kind: "info", ms: 8000, close: false });
 }
 
 /** The view is fitted to what was imported (the canvas fits by itself only until the view has been moved by hand, and an imported board is elsewhere). */

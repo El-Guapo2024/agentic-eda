@@ -21,4 +21,6 @@ export interface PreferencesPageHandle {
   resetTooltip?: string;
   /** False refuses OK (a page's `TransferDataFromWindow` returning false keeps the dialog up). */
   valid?: boolean;
+  /** A question OK asks first (`TransferDataFromWindow`'s, e.g. the schematic Colors page's `validateSave`): false keeps the dialog up and saves nothing. */
+  confirmOk?: () => Promise<boolean>;
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { constantGlyph, dimensionLabel, rotatePoint, rulerDrawing, rulerStrings, tickFormatForScale, vectorAngleDeg, type Vec } from "./rulerItem";
+import { constantGlyph, dimensionLabel, rotatePoint, rulerDrawing, rulerStrings, shadowColorOf, tickFormatForScale, vectorAngleDeg, type Vec } from "./rulerItem";
 
 const width = (s: string, size: number) => s.length * size * 0.6;
 // 1 px = 10 um, a 1000 x 800 px screen from (0, 0)
@@ -52,6 +52,9 @@ test("the Measure tool's ruler: the line, ticks with labels every mid and major 
   assert.ok(Math.abs(tickSegs[10]!.b[1] - (4_000_000 - 12.5 / 1e-4)) < 1e-6);
   const back = d.segs.slice(31, 34);
   assert.deepEqual(back.map((s) => s.a[0]), [1_000_000, 2_500_000, 4_000_000], "the ruler halved");
+  // `drawBacksideTicks`' `getTickLineWidth( GetConstantGlyphHeight( gal, -1 ) )`: the small glyph's, as the stroke back from the origin after them
+  const small = constantGlyph(1e-4, -1);
+  assert.ok(back.every((s) => Math.abs(s.width - small.stroke * 0.8) < 1e-9));
   assert.ok(back.every((s) => Math.abs(s.b[1] - (4_000_000 + 12.5 / 1e-4)) < 1e-6), "on the other side, the major length");
   const last = d.segs[d.segs.length - 1]!;
   assert.deepEqual(last.a, origin);
@@ -79,4 +82,42 @@ test("the strings go to the quadrant that fits on screen, not across the ruler",
   const d = rulerDrawing([2_000_000, 2_000_000], [9_500_000, 7_800_000], view, { units: "mm" }, width);
   const strings = d.texts.filter((t) => t.text.includes(":"));
   assert.ok(strings[0]!.at[1] < 7_800_000, "above the end");
+});
+
+test("C3-7: the shadow layer draws the same ruler under it, every line a shadow width wider, the texts two wider and moved back by 1.2 shadow widths", () => {
+  const origin: Vec = [1_000_000, 4_000_000];
+  const end: Vec = [4_000_000, 4_000_000];
+  const d = rulerDrawing(origin, end, view, { units: "mm" }, width);
+  const sh = rulerDrawing(origin, end, view, { units: "mm" }, width, true);
+  const g = constantGlyph(1e-4);
+  const small = constantGlyph(1e-4, -1);
+  assert.equal(sh.segs.length, d.segs.length);
+  assert.equal(sh.texts.length, d.texts.length);
+  // `getTickLineWidth( textDims, true )`: 0.8 of the stroke plus the shadow width (0.15 of the glyph height)
+  assert.ok(Math.abs(sh.segs[0]!.width - (g.stroke * 0.8 + g.shadow)) < 1e-9);
+  // the ticks: half the label's stroke, two shadow widths wider
+  assert.ok(Math.abs(sh.segs[1]!.width - (small.stroke + 2 * small.shadow) / 2) < 1e-9);
+  // the back ticks: the small glyph's tick width plus its shadow
+  assert.ok(Math.abs(sh.segs[31]!.width - (small.stroke * 0.8 + small.shadow)) < 1e-9);
+  // the cursor strings: right-aligned left of the cursor here, so moved right by trunc( trunc( shadow ) * 1.2 ), their stroke two shadow widths wider
+  const strings = d.texts.filter((t) => t.text.includes(":"));
+  const shStrings = sh.texts.filter((t) => t.text.includes(":"));
+  const off = Math.trunc(Math.trunc(g.shadow) * 1.2);
+  assert.ok(shStrings.every((t, i) => Math.abs(t.at[0] - (strings[i]!.at[0] + off)) < 1e-6 && t.at[1] === strings[i]!.at[1]));
+  assert.ok(Math.abs(shStrings[0]!.stroke - (g.stroke + 2 * g.shadow)) < 1e-9);
+  // a tick label of a ruler pointing right: right-aligned at 90 + 180 degrees, moved along its own direction (`labelOffset.x += off * cos`, `y -= off * sin`)
+  const lab = d.texts.find((t) => t.text === "0.500")!;
+  const shLab = sh.texts.find((t) => t.text === "0.500")!;
+  const loff = Math.trunc(Math.trunc(small.shadow) * 1.2);
+  const rad = (lab.angleDeg * Math.PI) / 180;
+  assert.equal(lab.halign, "right");
+  assert.ok(Math.abs(shLab.at[0] - (lab.at[0] + loff * Math.cos(rad))) < 1e-6 && Math.abs(shLab.at[1] - (lab.at[1] - loff * Math.sin(rad))) < 1e-6);
+});
+
+test("C3-7: GetShadowColor -- black under a bright colour (weighted brightness above half), white under a dark one", () => {
+  assert.equal(shadowColorOf({ r: 1, g: 1, b: 1 }), "#000000");
+  assert.equal(shadowColorOf({ r: 0.2, g: 0.2, b: 0.2 }), "#ffffff");
+  // 0.299 + 0.117 = 0.416: magenta is "dark"
+  assert.equal(shadowColorOf({ r: 1, g: 0, b: 1 }), "#ffffff");
+  assert.equal(shadowColorOf({ r: 0, g: 1, b: 0 }), "#000000");
 });

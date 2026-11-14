@@ -1,27 +1,28 @@
-// `ACTIONS::gridProperties` ("Edit Grids...", common.Control.editGrids) -> `COMMON_TOOLS::GridProperties` -> `ShowPreferences( "Grids", <editor> )`: the Grids page of
-// KiCad's Preferences (common/dialogs/panel_grid_settings.cpp), opened on the editor that asked. The list of grids with its Add / Edit / Remove / Move Up / Move Down
-// buttons (the row selected is the current grid, `last_size_idx`, and the one the buttons act on), Fast Grid Switching (Grid 1 and Grid 2, the grids the fast grid
-// hotkeys switch between) and Reset to Defaults. The editors are the pages of the Preferences tree: the PCB Editor, the Footprint Editor and the Symbol Editor each
-// have their own list, and OK keeps all of them (state/gridSettings.ts) and makes the row selected on each page the current grid of that editor.
+// The Grids pages of KiCad's Preferences (`PANEL_GRID_SETTINGS`, common/dialogs/panel_grid_settings.cpp), one per editor: the PCB Editor, the Footprint Editor, the
+// Schematic Editor and the Symbol Editor each have their own list, and OK keeps all of them (state/gridSettings.ts) and makes the row selected on each page the current
+// grid of that editor (`last_size_idx`). "Edit Grids..." (`ACTIONS::gridProperties`, `COMMON_TOOLS::GridProperties`) opens the Preferences dialog on the editor's
+// Grids page (`ShowPreferences( _( "Grids" ), <the editor> )`, state/preferencesStart.ts; UI-LEFT-3 C3-5), as from the tree (components/PreferencesDialog.tsx).
+// The list of grids with its Add / Edit / Remove / Move Up / Move Down buttons (the row selected is the current grid, `last_size_idx`, and the one the buttons act
+// on), Fast Grid Switching (Grid 1 and Grid 2, the grids the fast grid hotkeys switch between); the dialog's "Reset Grids to Defaults" is the page's `ResetPanel`.
 //
 // Add and Edit open Grid Settings (`DIALOG_GRID_SETTINGS`): "Name:" (optional), "X:", "Linked" (on: Y is X; on by default, and when an edited grid is square) and "Y:", in
 // the display unit, checked the way it checks them (0.001 to 1000 mm, "Grid size X out of range." / "Grid size Y out of range."; "Grid size '%s' already exists." for a
 // grid the list has -- the same name, X and Y). The list shows each grid as "name: X x Y (in the other unit)" (`RebuildGridSizes`). Under the list, "Grid Overrides": a grid
 // of its own for each category of item (connected items, wires, vias, text, graphics -- the rows each editor has are `PANEL_GRID_SETTINGS`'s), which the snapping uses while
 // Grid Overrides (Ctrl+Shift+G) is on; an override follows its grid when the list is edited (`RebuildGridSizes` keeps the selection by its text). The editors keep their
-// current grid by its X size, so of two grids with the same X the first is the one chosen (kicad-port/gridSettings.ts `gridYOf`).
+// current grid by its X size and the row last chosen (`last_size_idx`), so of two grids with the same X the one chosen is current (kicad-port/gridSettings.ts
+// `currentGridIndex`; UI-LEFT-3 C3-6).
 import { useState } from "react";
 import actionsData from "../kicad/actions.json";
 import type { ActionsFile } from "../kicad/types";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { useSymDispatch, useSymState } from "../state/symbolEditorStore";
-import { setGridsDialogOpen, useCommonDialogs } from "../state/commonDialogs";
-import { getGridSettings, setGridSettings } from "../state/gridSettings";
+import { currentGridRow, getGridSettings, setGridSettings, setLastGridIndex } from "../state/gridSettings";
 import { getGridOverrides, setGridOverrides } from "../state/gridOverrides";
 import { formatLength, nmTo, type LengthUnit } from "../state/units";
 import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
-import { GRID_EDITORS, GRID_EDITOR_LABEL, gridAt, gridDefs, gridListLabel, gridMessageText, insertGrid, moveGrid, parseGridSize, removeGrid, replaceGrid, resetGrids, sameGrid, type GridDef, type GridEdit, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
+import { GRID_EDITORS, gridAt, gridDefs, gridListLabel, gridMessageText, insertGrid, moveGrid, parseGridSize, removeGrid, replaceGrid, resetGrids, sameGrid, type GridDef, type GridEdit, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
 import { overrideRows, rebuildOverrides, safeOverrideIndex, type GridOverrides } from "../kicad-port/gridOverrides";
 
 interface Page {
@@ -61,12 +62,6 @@ function entryText(um: number, units: LengthUnit): string {
   return String(Number(nmTo(um, units).toFixed(6)));
 }
 
-export function GridsDialog() {
-  const editor = useCommonDialogs().grids;
-  if (!editor) return null;
-  return <GridsDialogBody initial={editor} />;
-}
-
 /** Each editor's current grid size (the row its page starts on). */
 function useCurrentGrids(): Record<GridEditor, number> {
   const state = useStudioState();
@@ -75,14 +70,14 @@ function useCurrentGrids(): Record<GridEditor, number> {
   return { pcb: state.gridNm, footprint: fp.gridNm, symbol: sym.gridNm, schematic: state.schGridNm };
 }
 
-/** A page as the dialog opens it: the editor's kept list, its current grid's row, its overrides. */
+/** A page as the dialog opens it: the editor's kept list, its current grid's row (`last_size_idx`), its overrides. */
 function initialPage(e: GridEditor, currentGrid: Record<GridEditor, number>): Page {
   const settings = getGridSettings(e);
-  return { settings, row: Math.max(0, settings.grids.findIndex((g) => Math.abs(g - currentGrid[e]) < 1e-9)), overrides: getGridOverrides(e) };
+  return { settings, row: Math.max(0, currentGridRow(e, currentGrid[e])), overrides: getGridOverrides(e) };
 }
 
 /**
- * The Grids pages' working copies (`PANEL_GRID_SETTINGS`, one per editor), for Edit Grids' dialog and the Preferences dialog: `commit` is OK (`TransferDataFromWindow`
+ * The Grids pages' working copies (`PANEL_GRID_SETTINGS`, one per editor), for the Preferences dialog: `commit` is OK (`TransferDataFromWindow`
  * of each page that was shown: its list, its overrides, and the row selected made the editor's current grid), `reset` the page's `ResetPanel`.
  */
 export function useGridsPages(initial: GridEditor | null): {
@@ -115,6 +110,8 @@ export function useGridsPages(initial: GridEditor | null): {
         const { settings: s, row: r, overrides: o } = pages[e];
         setGridSettings(e, s);
         setGridOverrides(e, o);
+        // `TransferDataFromWindow`: `last_size_idx = m_currentGridCtrl->GetSelection()`, the row (not its size) -- of two grids of one X, the one selected
+        if (r >= 0 && r < s.grids.length) setLastGridIndex(e, r);
         const um = s.grids[r];
         if (um === undefined || Math.abs(um - currentGrid[e]) < 1e-9) continue;
         if (e === "pcb") dispatch({ type: "SET_GRID_NM", um });
@@ -132,54 +129,6 @@ export function useGridsPages(initial: GridEditor | null): {
         return { ...p, [e]: { settings: next, row: Math.max(0, keptAt), overrides: rebuildOverrides(page.overrides, gridDefs(page.settings), gridDefs(next), sameGrid) } };
       }),
   };
-}
-
-function GridsDialogBody({ initial }: { initial: GridEditor }) {
-  const grids = useGridsPages(initial);
-  const [editor, setEditor] = useState<GridEditor>(initial);
-  const close = () => setGridsDialogOpen(null);
-
-  const showEditor = (e: GridEditor) => {
-    setEditor(e);
-    grids.show(e);
-  };
-
-  const ok = () => {
-    grids.commit();
-    close();
-  };
-
-  return (
-    <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && close()} role="dialog" aria-label="Preferences - Grids">
-        <div className="dialog-header">
-          <span>Preferences - Grids</span>
-        </div>
-        <div className="dialog-body">
-          <div className="kv-grid" style={{ gridTemplateColumns: "70px 1fr" }}>
-            <span>Editor:</span>
-            <select aria-label="Editor" value={editor} onChange={(e) => showEditor(e.target.value as GridEditor)}>
-              {GRID_EDITORS.map((e) => (
-                <option key={e} value={e}>
-                  {GRID_EDITOR_LABEL[e]}
-                </option>
-              ))}
-            </select>
-          </div>
-          <GridsPageBody key={editor} editor={editor} page={grids.pages[editor]} setPage={(next) => grids.setPage(editor, next)} />
-        </div>
-        <div className="dialog-footer" style={{ justifyContent: "space-between" }}>
-          <button onClick={() => grids.reset(editor)}>Reset to Defaults</button>
-          <span style={{ display: "flex", gap: 8 }}>
-            <button onClick={close}>Cancel</button>
-            <button className="primary" onClick={ok}>
-              OK
-            </button>
-          </span>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 /** One editor's Grids page (`PANEL_GRID_SETTINGS`): the list and its buttons, Grid Settings, Grid Overrides, Fast Grid Switching. */

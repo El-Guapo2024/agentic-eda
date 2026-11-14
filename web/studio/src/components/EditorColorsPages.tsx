@@ -12,12 +12,16 @@
 //     Footprint Editor's own theme (`FOOTPRINT_EDITOR_SETTINGS::m_ColorTheme`): F.Cu, "Internal Layers", B.Cu and the GAL layers with a colour
 //     (`fpColorPageRows`); no override box (`m_optOverrideColors->Hide()`). The Footprint Editor's canvas draws the page's colours while it is shown.
 import { useEffect, useState } from "react";
-import { getColorThemes, selectSymbolTheme, useColorThemes } from "../state/colorThemeStore";
-import { DEFAULT_THEME, findTheme, fpColorPageKeys, fpColorPageRows, schColorPageKeys, schColorPageRows, schSaveColors, sortedThemes } from "../kicad-port/colorTheme";
+import { THEME_PARAMS, getColorThemes, selectSymbolTheme, useColorThemes } from "../state/colorThemeStore";
+import { DEFAULT_THEME, SCH_SAME_AS_BACKGROUND_QUESTION, findTheme, fpColorPageKeys, fpColorPageRows, schColorPageKeys, schColorPageRows, schSameAsBackground, schSaveColors, sortedThemes } from "../kicad-port/colorTheme";
+import { SchColorPreview } from "./ColorPreview";
 import { useThemeColorsPage, type ThemeColorsPageConfig } from "./ThemeColorsPage";
 import type { PreferencesPageHandle } from "./preferencesPage";
 
 export type ColorsPageEditor = "schematic" | "symbol" | "footprint";
+
+/** The schematic layers (`SCH_LAYER_ID`): the `schematic.*` params' and the page's rows (the two rows of no param among them). */
+const SCH_ALL_LAYER_KEYS: readonly string[] = [...new Set([...THEME_PARAMS.filter((p) => p.key.startsWith("schematic.")).map((p) => p.layer), ...schColorPageKeys()])];
 
 const SCH_PAGE: ThemeColorsPageConfig = {
   editor: "schematic",
@@ -27,6 +31,10 @@ const SCH_PAGE: ThemeColorsPageConfig = {
   backgroundKey: "LAYER_SCHEMATIC_BACKGROUND",
   overrideOption: true,
   saveColors: schSaveColors,
+  // `validateSave`: every schematic layer (`SCH_LAYER_ID_START` .. `SCH_LAYER_ID_END`: the page's and the ones it leaves out) against the background
+  validateSave: (colorOf) => (schSameAsBackground(colorOf, SCH_ALL_LAYER_KEYS) ? SCH_SAME_AS_BACKGROUND_QUESTION : null),
+  // `createPreviewItems`' sheet (components/ColorPreview.tsx)
+  preview: (working) => <SchColorPreview working={working} />,
 };
 
 const FP_PAGE: ThemeColorsPageConfig = {
@@ -43,7 +51,7 @@ export function useEditorColorsPage(editor: ColorsPageEditor, open: boolean, sho
   if (editor === "symbol") return useSymbolColorsPage(open, shown);
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const page = useThemeColorsPage(editor === "schematic" ? SCH_PAGE : FP_PAGE, open, shown);
-  return { element: page.element, reset: page.reset, resetLabel: page.resetLabel, resetTooltip: page.resetTooltip, commit: page.commit, cancel: page.cancel };
+  return { element: page.element, reset: page.reset, resetLabel: page.resetLabel, resetTooltip: page.resetTooltip, commit: page.commit, cancel: page.cancel, confirmOk: page.confirmOk };
 }
 
 /** `PANEL_SYM_COLOR_SETTINGS`. */

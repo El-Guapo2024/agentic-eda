@@ -9,8 +9,8 @@
 //   pair outlines  with Display Options' default "Tracks: Show when routing w/ via clearance at end" the pair tool's two heads are drawn with their own clearance
 //                  (`ROUTER::movePlacing`'s `Clearance( item, nullptr )` of each line of `m_placer->Traces()`), as a single route's head is; the reply carries
 //                  `clearance_a`, `clearance_b`;
-//   via info bar   Draw Via where it would break another net's clearance: "Via location violates DRC." stays on screen (KiCad's info bar, no timer), with a close
-//                  button that takes it away; refused again, a via put down clean elsewhere dismisses it (`infobar->Dismiss()`);
+//   via info bar   Draw Via where it would break another net's clearance: "Via location violates DRC." stays on screen in the info bar over the canvas (KiCad's
+//                  `WX_INFOBAR`, `ShowInfoBarError`'s 8 s), with a close button that takes it away; refused again, a via put down clean elsewhere dismisses it (`infobar->Dismiss()`);
 //   zone teardrop  a pad and its track inside a filled pour of their net get no teardrop from Add All Teardrops while "Prefer zone connection" is on (KiCad's
 //                  default, `areItemsInSameZone` on kicad-cli's fills); off, the pad gets its teardrop.
 // It answers through `window.__copperV14Check`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
@@ -60,7 +60,8 @@
   };
   const redraw = async () => { await E.run("common.Control.zoomRedraw").catch(() => null); await sleep(400); };
   const shown = () => window.__edaDisplay ?? { netnames: [], clearances: [], route: [] };
-  const toast = () => [...document.querySelectorAll("div")].find((d) => d.style && d.style.position === "absolute" && d.style.bottom === "16px" && /Via location violates DRC\./.test(d.textContent ?? ""));
+  // the board editor's info bar over the canvas (components/PcbInfoBar.tsx, UI-LEFT-3 P3-32)
+  const toast = () => { const bar = document.querySelector('[data-testid="pcb-infobar"]'); return bar && /Via location violates DRC\./.test(bar.textContent ?? "") ? bar : null; };
   const leaveTool = async () => { for (let i = 0; i < 3 && E.state().tool !== "select"; i++) { await E.run("common.Interactive.cancel"); await sleep(250); } await realFetch("/api/route/cancel", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => null); };
   const scenario = async (name, fn) => {
     const entry = { name, ok: true, notes: [] };
@@ -116,7 +117,7 @@
     t(snapshot(await state()) === original, "nothing was committed");
   });
 
-  await scenario("via info bar: Draw Via's DRC message stays until closed, and a clean via dismisses it", async (t) => {
+  await scenario("via info bar: Draw Via's DRC message stays its 8 s or until closed, and a clean via dismisses it", async (t) => {
     const st = await state();
     const nets = [...new Set(pads.map((q) => q.net).filter((x) => !!x))];
     // a whole-millimetre spot well inside the board, away from every pad, and a track of another net 0.52 mm off it (not snapped onto, within the clearance)
@@ -139,10 +140,19 @@
     await placeVia(x0 * 1e6, y0 * 1e6);
     t(viasOf(await state()).length === viasBefore, "the via is refused");
     t(!!toast(), "KiCad's message is said");
-    t(!!toast()?.querySelector('[data-testid="toast-close"]'), "with a close button, as the info bar has");
-    await sleep(7000);
-    t(!!toast(), "it is still there after 7 s (an error toast goes after 6 s)");
-    toast()?.querySelector('[data-testid="toast-close"]')?.click();
+    t(document.querySelector('[data-testid="pcb-infobar-text"]')?.textContent === "Via location violates DRC.", `in KiCad's words (${document.querySelector('[data-testid="pcb-infobar-text"]')?.textContent})`);
+    const bar = toast(), col = document.querySelector(".canvas-col");
+    t(!!bar && !!col && Math.abs(bar.getBoundingClientRect().top - col.getBoundingClientRect().top) < 2, "a bar over the canvas, at its top");
+    t(!!toast()?.querySelector('[data-testid="pcb-infobar-close"]'), "with a close button, as the info bar has");
+    // `ShowInfoBarError`'s 8 s (an error toast goes after 6): still there 6.5 s after it came, gone by 9 s
+    const shownAt = performance.now();
+    while (performance.now() - shownAt < 5800) await sleep(250);
+    t(!!toast(), "it is still there more than 6 s after it came (an error toast goes after 6)");
+    while (performance.now() - shownAt < 9000 && toast()) await sleep(250);
+    t(!toast(), `gone after its 8 s (${((performance.now() - shownAt) / 1000).toFixed(1)} s)`);
+    await placeVia(x0 * 1e6, y0 * 1e6);
+    t(!!toast(), "refused again: said again");
+    toast()?.querySelector('[data-testid="pcb-infobar-close"]')?.click();
     await sleep(300);
     t(!toast(), "the close button takes it away");
     await placeVia(x0 * 1e6, y0 * 1e6);

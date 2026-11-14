@@ -217,7 +217,6 @@ function openNames(L: Latest): string[] {
   if (L.common.page) out.push(`common.page:${L.common.page}`);
   if (L.common.group) out.push("common.group");
   if (L.common.gridOrigin) out.push("common.gridOrigin");
-  if (L.common.grids) out.push(`common.grids:${L.common.grids}`);
   return out.sort();
 }
 
@@ -342,6 +341,8 @@ export function useEdaTestHook(): void {
   useEffect(() => noteToast(studio.toast), [studio.toast]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => noteToast(fp.toast), [fp.toast]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => noteToast(sym.toast), [sym.toast]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the board editor's info bar (Draw Via's DRC message, UI-LEFT-3 P3-32) is an error the person sees too
+  useEffect(() => noteToast(studio.pcbInfoBar && { message: studio.pcbInfoBar.message, kind: studio.pcbInfoBar.kind === "error" ? "error" : "info" }), [studio.pcbInfoBar]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (studio.boardError) errorLog.add(studio.boardError);
   }, [studio.boardError]);

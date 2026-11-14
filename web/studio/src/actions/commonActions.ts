@@ -11,6 +11,7 @@
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: the actions that need a subsystem the
 // studio does not have (tables of items, the Python plugin host, the project manager, the simulator's plot zoom).
+import { showHotkeyPopup } from "../state/hotkeyPopup";
 import type { Dispatch } from "react";
 import type { Action as StudioAction, EditorTab, StudioApi, StudioState } from "../state/store";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
@@ -50,6 +51,16 @@ export interface CommonActionContext {
   symDispatch: Dispatch<SymAction>;
 }
 
+/** `PCB_CONTROL::ContrastModeFeedback`: the "Inactive Layer Display" popup, Normal / Dimmed / Hidden, at the mode now (`m_ContrastModeDisplay`). */
+export function contrastModeFeedback(mode: "normal" | "dimmed" | "hidden"): void {
+  showHotkeyPopup("Inactive Layer Display", ["Normal", "Dimmed", "Hidden"], mode === "normal" ? 0 : mode === "dimmed" ? 1 : 2);
+}
+
+/** `PCB_CONTROL::SnapModeFeedback`: the "Object Snapping" popup, Active Layer / All Layers, at `MAGNETIC_SETTINGS::allLayers`. */
+export function snapModeFeedback(allLayers: boolean): void {
+  showHotkeyPopup("Object Snapping", ["Active Layer", "All Layers"], allLayers ? 1 : 0);
+}
+
 export function registerCommonActions(m: Map<string, ActionHandler>, ctx: CommonActionContext): void {
   const { dispatch } = ctx;
   const tab = isCanvasTab(ctx.tab) ? ctx.tab : null;
@@ -61,7 +72,6 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
       const rect = canvasRect();
       if (adapter && rect) fn(adapter, rect, arg);
     };
-  const toast = (message: string, kind: "error" | "info" = "info") => dispatch({ type: "TOAST", message, kind });
 
   // ---------------------------------------------------------------------------------------- framing the view
 
@@ -159,7 +169,10 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   if (tab === "footprint")
     m.set("common.Control.highContrastModeCycle", () => {
       const st = ctx.fpApi.getState();
-      ctx.fpDispatch({ type: "SET_CONTRAST_MODE", mode: nextContrastMode(fpContrastMode(st.highContrast, st.contrastHidden)) });
+      const mode = nextContrastMode(fpContrastMode(st.highContrast, st.contrastHidden));
+      ctx.fpDispatch({ type: "SET_CONTRAST_MODE", mode });
+      // `PostEvent( EVENTS::ContrastModeChangedByKeyEvent )` -> `PCB_CONTROL::ContrastModeFeedback` (UI-LEFT-3 C3-9)
+      contrastModeFeedback(mode);
     });
   else if (tab === "schematic" || tab === "symbol") m.delete("common.Control.highContrastModeCycle");
 
@@ -168,7 +181,7 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   if (tab === "pcb") {
     const snapMode = (allLayers: boolean): ActionHandler => () => {
       dispatch({ type: "SET_MAGNETIC_ALL_LAYERS", value: allLayers });
-      toast(`Object Snapping: ${allLayers ? "All Layers" : "Active Layer"}`);
+      snapModeFeedback(allLayers);
     };
     m.set("common.Control.magneticSnapActiveLayer", snapMode(false));
     m.set("common.Control.magneticSnapAllLayers", snapMode(true));

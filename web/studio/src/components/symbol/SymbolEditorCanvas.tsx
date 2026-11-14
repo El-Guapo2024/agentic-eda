@@ -21,7 +21,7 @@ import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/vi
 import { focusOnLocation } from "../../kicad-port/pinTable";
 import { paintSymbol, mmPointToNm, nmPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
-import { useGridSettings } from "../../state/gridSettings";
+import { useGridSettings, useLastGridIndex } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
 import { heldCursor } from "../../kicad-port/heldCursor";
@@ -167,10 +167,12 @@ export function SymbolEditorCanvas() {
   const api = useSymApi();
   // Grid overrides (`common.Control.toggleGridOverrides`): each kind of item snaps to the grid its category is overridden to while they are on.
   const gridSettingsList = useGridSettings("symbol");
+  // the row last chosen (`last_size_idx`): of two grids with the same X, the one chosen is current (UI-LEFT-3 C3-6)
+  const gridIdx = useLastGridIndex("symbol");
   const gridList = gridSettingsList.grids;
   // the editor's own Display Options > Grid Display, and the Y of its grid (Edit Grids' "Y:")
   const gridDisplay = useGridDisplay("symbol");
-  const gridYNm = gridYOf(gridSettingsList, state.gridNm);
+  const gridYNm = gridYOf(gridSettingsList, state.gridNm, gridIdx);
   const gridOverrides = useGridOverrides("symbol");
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridNm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held (a pin is a connectable item, a graphic is text or a shape). */
@@ -226,7 +228,7 @@ export function SymbolEditorCanvas() {
   if (!snapRef.current) snapRef.current = new SymbolSnap();
   const snap = snapRef.current;
   const [snapTick, bumpSnap] = useState(0);
-  snap.update({ symbol: sym, fields: shownFields, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides });
+  snap.update({ symbol: sym, fields: shownFields, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, gridIdx, overrides: gridOverrides });
   useEffect(() => {
     snap.reset();
     bumpSnap((n) => n + 1);
@@ -358,6 +360,8 @@ export function SymbolEditorCanvas() {
       selection: state.selection,
       // the Pin Table's cross-probed pin (`FocusOnItem`'s `SetBrightened`) and Find's matches (`UpdateFind`'s `BrightenItem`), in `LAYER_BRIGHTENED`
       brightened: new Set([...(state.brightened ? [state.brightened.id] : []), ...symFind.bright, ...menuHighlight]),
+      // their shadow's width: the schematic's Display Options' "Highlight thickness:" (`eeconfig()->m_Selection.highlight_thickness`)
+      highlightThicknessMils: studioPrefs.schHighlightThicknessMils,
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       gridYNm,
@@ -390,7 +394,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, menuHighlight, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
+  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, menuHighlight, studioPrefs.schHighlightThicknessMils, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
