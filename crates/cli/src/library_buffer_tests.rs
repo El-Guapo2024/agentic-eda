@@ -381,3 +381,20 @@ fn a_file_only_kicads_parser_refuses_is_not_listed_and_its_library_says_so() {
     let v = crate::library_index::items(&dir, Kind::Symbol, "Mine");
     assert!(strings(&v["names"]).is_empty(), "{v}");
 }
+
+/// UI-LEFT-3 F3-5: `POST /api/library/clear_modify` is `ClearModify()` -- the read-only info bar's "Save as editable copy" ends with it: the editor's modified flag
+/// goes, the copy stays as it is.
+#[test]
+fn clear_modify_takes_the_modified_flag_off_and_leaves_the_copy() {
+    let (dir, _) = board_with_footprints("libbuf_clear_modify");
+    ok(&dir, Cmd::OpenFootprintForEdit { name: "Fp:Chip".into() });
+    let mut fp = design(&dir).footprint_library.unwrap().by_name("Fp:Chip").unwrap().clone();
+    fp.description = "edited".into();
+    ok(&dir, Cmd::PutLibraryFootprint { footprint: fp, overwrite: true });
+    assert!(is_dirty(&dir, Kind::Footprint, "Fp:Chip"));
+    let r = crate::library_save_api::clear_modify(&dir, br#"{"kind":"footprint","id":"Fp:Chip"}"#);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!is_dirty(&dir, Kind::Footprint, "Fp:Chip"), "the flag is gone");
+    assert_eq!(design(&dir).footprint_library.unwrap().by_name("Fp:Chip").unwrap().description, "edited", "the copy is as it was");
+    assert!(crate::library_save_api::clear_modify(&dir, br#"{"kind":"footprint"}"#)["error"].is_string());
+}

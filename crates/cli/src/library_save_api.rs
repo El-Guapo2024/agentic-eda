@@ -633,6 +633,26 @@ pub(crate) fn save_library_as(dir: &Path, body: &[u8]) -> Value {
     }
 }
 
+/// `POST /api/library/clear_modify` `{kind, id}` -- `ClearModify()` of the editor that holds `id` (`GetScreen()->SetContentModified( false )`): its modified flag
+/// goes (`crate::library_buffer::clear`), the copy as it is. The Footprint Editor's read-only info bar's "Save as editable copy" ends with it, whatever its Save As
+/// did (`FOOTPRINT_EDIT_FRAME::AddFootprintToBoard`'s `saveAsEditableCopy`: `SaveFootprintAs( .. ); .. ClearModify();`, UI-LEFT-3 F3-5). `{ok}` or `{error}`.
+pub(crate) fn clear_modify(dir: &Path, body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let kind = match kind_of(text(&req, "kind")) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    let id = text(&req, "id");
+    if id.is_empty() {
+        return bad("no item named");
+    }
+    crate::library_buffer::clear(dir, kind, &[id.to_string()], false);
+    json!({ "ok": true })
+}
+
 /// `POST /api/library/revert` -- Revert in the two library editors, and the reload of a library changed on disk (UI-LEFT-2 LL3), as one undoable step
 /// (`Cmd::ForgetLibrarySymbols` / `ForgetLibraryFootprints` and the file's items put back, one batch):
 ///  * `{kind: "symbol", id}`: `SYMBOL_EDIT_FRAME::Revert` -> `SYMBOL_LIBRARY_MANAGER::RevertSymbol`: the symbol goes back to what the library's file holds
