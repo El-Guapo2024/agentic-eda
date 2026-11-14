@@ -6,7 +6,8 @@
 //! - `POST /api/sim/model/library` `{path}`: the models of a SPICE library (`loadLibrary`, `eda_sim::library`), each with its pins and the
 //!   `Sim.Device` / `Sim.Type` its model type writes, and the path as `Sim.Library` stores it (`TransferDataFromWindow`: made relative to the project
 //!   when it is inside it); or what the info bar says when the library cannot be read;
-//! - `GET /api/sim/model/files`: the files under the board folder a library can be, for the dialog's Browse (`wxFileDialog` "Browse Models").
+//! - `GET /api/sim/model/files`: the files under the board folder a library can be, for the dialog's Browse (`wxFileDialog` "Browse Models");
+//! - `GET /api/sim/model/inductors`: the circuit's inductors, the K device's l1 / l2 choices, read from the design (UI-LEFT-3 M3-1).
 //!
 //! The project folder a relative library path is read from is the board folder (the simulator's netlist step reads the libraries from there,
 //! `crate::sim_api`'s resolver).
@@ -127,6 +128,158 @@ pub fn symbol_route(dir: &Path, body: &[u8]) -> Value {
         "own": own,
         "pins": pins.iter().map(|(n, name)| json!({ "number": n, "name": name })).collect::<Vec<_>>(),
     })
+}
+
+/// `SCH_SYMBOL::UpdatePrefix` of a reference: trailing digits, "?" and "*" off, "~" a space, trimmed.
+fn reference_prefix(reference: &str) -> String {
+    reference.replace('~', " ").trim_end_matches(|c: char| c.is_ascii_digit() || c == '?' || c == '*').trim().to_string()
+}
+
+/// `convertSeparators` (sim_model.cpp, `InferSimModel`'s): a "," or "." is a decimal point or a thousands separator by where it is; `None` when it can be
+/// neither.
+fn convert_separators(mantissa: &str) -> Option<String> {
+    let m: Vec<char> = mantissa.chars().filter(|c| *c != ' ').collect();
+    let (mut ambiguous, mut thousands, mut decimal) = ('?', '?', '?');
+    let (mut thousands_found, mut decimal_found, mut digits) = (false, false, 0);
+    for ii in (0..m.len()).rev() {
+        let c = m[ii];
+        if c.is_ascii_digit() {
+            digits += 1;
+        } else if c == '.' || c == ',' {
+            if decimal != '?' || thousands != '?' {
+                if c == decimal {
+                    if thousands_found || decimal_found {
+                        return None;
+                    }
+                    decimal_found = true;
+                } else if c == thousands {
+                    if digits != 3 {
+                        return None;
+                    }
+                    thousands_found = true;
+                }
+            } else if ambiguous != '?' {
+                if c == ambiguous {
+                    thousands = ambiguous;
+                    thousands_found = true;
+                    decimal = if c == '.' { ',' } else { '.' };
+                } else {
+                    decimal = ambiguous;
+                    decimal_found = true;
+                    thousands = c;
+                    thousands_found = true;
+                }
+            } else if (ii == 1 && m[0] == '0') || digits != 3 {
+                decimal = c;
+                decimal_found = true;
+                thousands = if c == '.' { ',' } else { '.' };
+            } else {
+                ambiguous = c;
+            }
+            digits = 0;
+        } else {
+            digits = 0;
+        }
+    }
+    if decimal == '?' && thousands == '?' {
+        decimal = '.';
+        thousands = ',';
+    }
+    Some(m.iter().filter(|c| **c != thousands).map(|c| if *c == decimal { '.' } else { *c }).collect())
+}
+
+/// `SIM_MODEL::InferSimModel`'s value pattern for a passive (`idealVal`, sim_model.cpp; the micro and ohm signs as the source has them).
+fn ideal_value_regex() -> &'static eda_model::wx_regex::Regex {
+    static RE: std::sync::OnceLock<eda_model::wx_regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        let pattern = "^([0-9,. ]+)([fFpPnNuUmMkKgGtT\u{3bc}\u{b5}\u{1d6cd}\u{1d707}\u{1d741} ]|M(e|E)(g|G))?([fFhH\u{3a9}\u{2126}\u{1d6c0}\u{1d6fa}\u{1d76e}rR]|ohm)?([-1-9 ]*)([fFhH\u{3a9}\u{2126}\u{1d6c0}\u{1d6fa}\u{1d76e}rR]|ohm)?$";
+        eda_model::wx_regex::Regex::compile(pattern, false, eda_model::wx_regex::Flavor::Find).expect("the pattern compiles")
+    })
+}
+
+/// Whether the model `SIM_LIB_MGR::CreateModel` makes of a symbol's fields is of device L (`SIM_MODEL::GetDeviceType() == DEVICE_T::L`): `Sim.Device` "L"
+/// (`ReadTypeFromFields`), a library model of an inductor's type (`device`: the library model's, read by the caller), or, with no model fields at all, a
+/// two-pin symbol whose reference starts with "L" and has a Value (`InferSimModel`; not when its number's separators cannot be read).
+fn is_inductor(reference: &str, field: &dyn Fn(&str) -> String, value: &str, pins: usize, library_device: &mut dyn FnMut(&str, &str) -> Option<String>) -> bool {
+    let (device, kind, library, name) = (field("Sim.Device"), field("Sim.Type"), field("Sim.Library"), field("Sim.Name"));
+    if !device.is_empty() {
+        return device == "L";
+    }
+    if !library.is_empty() {
+        return library_device(&library, &name).as_deref() == Some("L");
+    }
+    if pins != 2 || !kind.is_empty() || !name.is_empty() || value.is_empty() || !reference_prefix(reference).starts_with('L') {
+        return false;
+    }
+    let chars: Vec<char> = value.chars().collect();
+    match ideal_value_regex().find_at(&chars, 0).and_then(|c| c.group(1)) {
+        Some((a, b)) => convert_separators(&chars[a..b].iter().collect::<String>()).is_some(),
+        None => true,
+    }
+}
+
+/// The circuit's inductors the K device's "l1" and "l2" choose from (UI-LEFT-3 M3-1; `DIALOG_SIM_MODEL::newParamProperty`: `SPICE_CIRCUIT_MODEL circuit(
+/// &schEditFrame->Schematic() ); circuit.ReadSchematicAndLibraries( OPTION_DEFAULT_FLAGS, devNul )`, the items whose model is of device L by `refName`,
+/// `StrNumCmp` order). Read from the design -- the schematic in memory, as KiCad's dialog reads it -- not from a netlist of the saved files:
+/// `NETLIST_EXPORTER_SPICE::ReadSchematicAndLibraries` visits every sheet path's symbols, once per reference (`findNextSymbol`), not a power or other
+/// `#` symbol, not one excluded from the simulation on itself or a sheet above it (`ResolveExcludedFromSim`); its fields are the instance's over the library
+/// symbol's simulation fields (which a sheet the studio drew writes beside them).
+pub(crate) fn inductors(dir: &Path, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<String> {
+    use eda_model::sheet_list;
+    let spice_lib_dir = std::env::var_os("SPICE_LIB_DIR").map(std::path::PathBuf::from);
+    let vars = crate::library_tables::Env::discover().vars(dir, &crate::text_variables::project_variables(dir));
+    let mut libraries: std::collections::HashMap<String, eda_sim::library::Library> = std::collections::HashMap::new();
+    let mut library_device = |path: &str, name: &str| -> Option<String> {
+        let lib = libraries.entry(path.to_string()).or_insert_with(|| read_library(&vars.expand(path), dir, spice_lib_dir.as_deref()));
+        lib.models.iter().find(|m| m.name.eq_ignore_ascii_case(name)).and_then(|m| match &m.kind {
+            ModelKind::Model { model_type: Some(t), .. } => Some(t.device.to_string()),
+            _ => None,
+        })
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for e in sheet_list::walk(design) {
+        let Some(screen) = sheet_list::screen_of(design, &e.path) else { continue };
+        let sheet_excluded = eda_model::variants::sheet_path_flags(design, &e.path, "").exclude_from_sim;
+        for sym in &screen.symbols {
+            let reference = sheet_list::reference_under(screen, sym, &e.path);
+            if reference.starts_with('#') || !seen.insert(reference.clone()) || sym.exclude_from_sim || sheet_excluded {
+                continue;
+            }
+            let part = model.part(&sym.id);
+            let lib_id = part.map(eda_model::symbol::resolve_lib_id).unwrap_or_else(|| sym.lib_id.clone());
+            let library_fields = (!screen.imported_from_kicad).then(|| model.symbol_sim_fields.get(&lib_id)).flatten();
+            let own = screen.user_fields.get(&sym.id);
+            let field = |n: &str| -> String {
+                own.and_then(|f| f.get(n)).cloned().or_else(|| library_fields.and_then(|f| f.iter().find(|(k, _)| k == n).map(|(_, t)| t.clone()))).unwrap_or_default()
+            };
+            let value = if !sym.value.is_empty() { sym.value.clone() } else { part.and_then(|p| p.value.clone()).unwrap_or_default() };
+            let pins: std::collections::BTreeSet<&str> = part.map(|p| p.pins.iter().map(|pin| pin.number.as_str()).collect()).unwrap_or_default();
+            if is_inductor(&reference, &field, &value, pins.len(), &mut library_device) {
+                out.push(reference);
+            }
+        }
+    }
+    out.sort_by(|a, b| str_num_cmp(a, b));
+    out
+}
+
+/// `GET /api/sim/model/inductors`: `{ok, inductors}` ([`inductors`]).
+pub fn inductors_route(dir: &Path) -> Value {
+    let (_, mut design, model) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    if design.schematic.is_none() {
+        match board::derived_schematic(&design, &model) {
+            Ok(d) => {
+                design.schematic = d.schematic;
+                design.sheet_contents = d.sheet_contents;
+            }
+            Err(e) => return err(board::reasons(&e)),
+        }
+    }
+    json!({ "ok": true, "inductors": inductors(dir, &design, &model) })
 }
 
 /// The placement ids from the root down to the first sheet whose screen holds the symbol `reference` (`[]` for the root).

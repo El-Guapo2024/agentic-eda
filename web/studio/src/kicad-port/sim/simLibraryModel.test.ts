@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { decodeTables, generateParams, SimModelSpiceFallback, SimModelSubckt, spiceItem, type SimModelsJson } from "./simModelBuiltin";
 import { baseModelOf, cardTokens, joinCard, libraryBaseModels, libraryModel, modelCardParams, subcktParams } from "./simLibraryModel";
-import { builtinOk, codeTab, currentBuiltin, editedFieldsMerge, gridText, inductorChoices, openBuiltin, paramGrid } from "./simModelDialog";
+import { builtinOk, codeTab, currentBuiltin, editedFieldsMerge, gridText, openBuiltin, paramGrid } from "./simModelDialog";
 import { gridModelColumn } from "./simModel";
 
 const tables = decodeTables(JSON.parse(readFileSync("src/kicad/sim_models.json", "utf8")) as SimModelsJson);
@@ -93,12 +93,8 @@ test("the grid's arithmetic (SIM_STRING_PROPERTY, NUMERIC_EVALUATOR in SI mode):
 });
 
 test("the K device's l1 and l2 are a choice of the circuit's inductors, none selected (newParamProperty, SIM_ENUM_PROPERTY)", () => {
-  const inductors = inductorChoices([
-    { ref: "L10", sim_device: "L" },
-    { ref: "R1", sim_device: "R" },
-    { ref: "L2", sim_device: "L" },
-  ]);
-  assert.deepEqual(inductors, ["L2", "L10"]);
+  // the server's list (`GET /api/sim/model/inductors`, `StrNumCmp` order: crates/cli/src/sim_model_api.rs)
+  const inductors = ["L2", "L10"];
   const o = openBuiltin(tables, "K", { Reference: "K1", Value: "K", "Sim.Device": "K", "Sim.Params": "l1=L2 l2=L10 k=0.9" }, two);
   const m = currentBuiltin(o.builtin);
   const rows = paramGrid(m, inductors).principal;

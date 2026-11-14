@@ -56,7 +56,6 @@ import {
 import { modelPinIndex } from "./simModel";
 import { NumericEvaluator } from "../numericEvaluator";
 import { normalize, simValueEqual, toDouble } from "./simValue";
-import { strNumCmp } from "../schSheetPins";
 
 /** The built-in models of the dialog (`m_builtinModelsMgr`, `m_curModelType`, `m_curModelTypeOfDeviceType`). */
 export interface BuiltinModels {
@@ -283,14 +282,6 @@ function paramRow(model: SimModel, index: number, inductors: readonly string[]):
   return { index, name: info.name, label, kind, value: p.value, choices, selected, valueType: info.type, unit: info.unit, default: info.defaultValue, type: TYPE_STRINGS[info.type] ?? "" };
 }
 
-/** The K device's choices (`newParamProperty`): the circuit's items of device L by reference, `StrNumCmp` order. */
-export function inductorChoices(items: readonly { ref: string; sim_device?: string }[]): string[] {
-  return items
-    .filter((i) => i.sim_device === "L")
-    .map((i) => i.ref)
-    .sort((a, b) => strNumCmp(a, b, true));
-}
-
 /** `SIM_STRING_PROPERTY`'s arithmetic on an Int or Float row (`allowEval`), `NUMERIC_EVALUATOR( EDA_UNITS::UNSCALED )`: on Enter
  * (`StringToValue`, `m_needsEval`) the result normalized ("2k"), when the row loses the focus (`OnEvent`, `wxEVT_KILL_FOCUS`) the evaluator's
  * result ("2000"); the text as typed when it is empty, does not work out, or works out to what it is already ("Don't mess up user formatting if
@@ -306,7 +297,7 @@ export function gridText(text: string, valueType: string, how: "enter" | "blur")
 }
 
 /** The Parameters grid: the principal rows, then each category with rows (`HideProperty( .., false )` only for those), in KiCad's order.
- * `inductors` are the K device's choices ([`inductorChoices`]). */
+ * `inductors` are the K device's choices (the server's `GET /api/sim/model/inductors`). */
 export function paramGrid(model: SimModel, inductors: readonly string[] = []): { principal: ParamRow[]; groups: { category: Category; title: string; rows: ParamRow[]; expanded: boolean }[] } {
   const principal: ParamRow[] = [];
   const byCategory = new Map<Category, ParamRow[]>();

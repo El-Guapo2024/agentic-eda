@@ -22,11 +22,10 @@
 // Where it differs from KiCad:
 // - Browse lists the library files of the board folder (`GET /api/sim/model/files`) instead of a file dialog (a browser has no file system to
 //   open); a path can be typed as in KiCad.
-// - The K device's inductors are the items of kicad-cli's netlist of the saved schematic (`POST /api/sim/circuit`), read when a K model's grid
-//   first shows: KiCad reads its own schematic in memory.
+// - The K device's inductors are read from the design, the schematic in memory, as KiCad's `ReadSchematicAndLibraries` reads it (`GET
+//   /api/sim/model/inductors`, UI-LEFT-3 M3-1), when a K model's grid first shows.
 import { useEffect, useMemo, useReducer, useState } from "react";
-import { fetchSimLibrary, fetchSimLibraryFiles, fetchSimModelSymbol, loadSimModelTables, type SimModelSymbolReply } from "../../api/simModelClient";
-import { fetchCircuit } from "../../api/simClient";
+import { fetchSimInductors, fetchSimLibrary, fetchSimLibraryFiles, fetchSimModelSymbol, loadSimModelTables, type SimModelSymbolReply } from "../../api/simModelClient";
 import { showError } from "../library/libraryDialogs";
 import {
   filterModelNames,
@@ -52,7 +51,6 @@ import {
   deviceChoices,
   gridText,
   ibisWaveformModel,
-  inductorChoices,
   isRawSpice,
   openBuiltin,
   paramGrid,
@@ -265,8 +263,8 @@ export function SimModelDialog({ reference, fields: given, onClose, onOk }: Prop
   useEffect(() => {
     if (curModel?.type !== "K" || inductors !== null) return;
     let stopped = false;
-    void fetchCircuit()
-      .then((c) => !stopped && setInductors(c.ok ? inductorChoices(c.items) : []))
+    void fetchSimInductors()
+      .then((list) => !stopped && setInductors(list))
       .catch(() => !stopped && setInductors([]));
     return () => {
       stopped = true;
