@@ -132,6 +132,10 @@ test("UI-LEFT-3 B3-4: a new profile is the panel's (1 GHz, both boxes ticked); a
   const old = { name: "x", profile_type: "single" as const, target_impedance: 50, enable_time_domain_tuning: false, layer_entries: [], via_propagation_delay_as: 0, via_overrides: [] };
   const d = profilesDraftOf({ profiles: [old] });
   assert.deepEqual([d.profiles[0]!.frequency_hz, d.profiles[0]!.model_solder_mask, d.profiles[0]!.net_chain_bridge_delay_as_per_mm], [1e9, false, 0]);
+  // the server leaves an empty grid out
+  const bare = { name: "y", profile_type: "single" } as unknown as TuningProfile;
+  assert.deepEqual([profilesDraftOf({ profiles: [bare] }).profiles[0]!.layer_entries, profilesDraftOf({ profiles: [bare] }).profiles[0]!.via_overrides], [[], []]);
+  assert.ok(sameProfiles({ profiles: [bare] }, { profiles: [{ ...bare, layer_entries: [], via_overrides: [] }] }));
   assert.ok(sameProfiles({ profiles: [old] }, { profiles: [{ ...old, frequency_hz: 1e9, model_solder_mask: false, net_chain_bridge_delay_as_per_mm: 0 }] }), "absent is the defaults");
   assert.deepEqual(frequencyShown(2.4e9), { value: 2.4, unit: 3 });
   assert.deepEqual(frequencyShown(100e6), { value: 100, unit: 2 });

@@ -140,7 +140,7 @@
     const tree = [...d.querySelectorAll(".bs-nav > div")].map((g) => [g.querySelector(".bs-nav-group")?.textContent, [...g.querySelectorAll(".bs-nav-item")].map((b) => b.textContent.trim())]);
     const want = [
       ["General", ["Formatting", "Annotation", "Field Name Templates", "BOM Presets"]],
-      ["Electrical Rules", ["Violation Severity", "Pin Conflicts Map"]],
+      ["Electrical Rules", ["Violation Severity", "Compare Symbol with Library", "Pin Conflicts Map"]],
       ["Project", ["Net Classes", "Bus Alias Definitions", "Text Variables"]],
       ["Schematic Data", ["Embedded Files"]],
     ];

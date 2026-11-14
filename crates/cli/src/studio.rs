@@ -1684,6 +1684,8 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                 "track_end": r.teardrop_settings.track_end,
                 // UI-LEFT-2 BB8: the rectangular-shape block (`TARGET_RECT`), null until the design has its own
                 "rect_shape": r.teardrop_settings.rect_shape,
+                // UI-LEFT-3 B3-4: "Round pads only" (`m_UseRoundShapesOnly`)
+                "round_shapes_only": r.teardrop_settings.round_shapes_only,
             }),
         })
     });

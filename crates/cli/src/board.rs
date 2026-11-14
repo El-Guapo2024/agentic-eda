@@ -3854,7 +3854,9 @@ pub(crate) mod tests {
 
         step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![], class_profiles: [("power".to_string(), "USB 90".to_string())].into() } }, false, "ui").unwrap();
         assert_eq!(count(&dir), 1, "the class names a profile the project does not have");
-        step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![a_tuning_profile("USB 90")], class_profiles: [("power".to_string(), "USB 90".to_string())].into() } }, false, "ui").unwrap();
+        // with KiCad 25ec2335's schema-2 keys set (UI-LEFT-3 B3-4): kicad-cli's `TUNING_PROFILES` reader takes the profile as written
+        let profile = eda_model::setup_pages::TuningProfile { frequency_hz: 2.4e9, model_solder_mask: true, net_chain_bridge_delay_as_per_mm: 7_000_000, ..a_tuning_profile("USB 90") };
+        step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![profile], class_profiles: [("power".to_string(), "USB 90".to_string())].into() } }, false, "ui").unwrap();
         assert_eq!(count(&dir), 0, "the profile is defined");
         // The classes moved into the project did not change what kicad-cli judges the board by: the class's own 250 um track width is read from the project.
         let report = crate::kicad_engine::drc_with(&dir, false, false).unwrap();
