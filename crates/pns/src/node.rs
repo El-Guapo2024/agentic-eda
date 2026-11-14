@@ -41,7 +41,7 @@ const SEGMENT_AT_REACH: Nm = Nm::new(2_500_000);
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
 
 use crate::arcs::ArcPts;
-use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
+use crate::item::{same_net, Item, ItemId, Kind, Net, Solid, Via};
 pub use crate::rule_resolver::Side;
 use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
@@ -397,7 +397,9 @@ impl Node {
         for anchor in item.anchors() {
             let key = JointKey::new(anchor, item.net());
             if let Some(joint) = self.joints.get_mut(&key) {
-                if joint.unlink(id) {
+                // a locked joint stays when its last item leaves (KiCad keeps every joint: "fixme: remove dangling joints"), so an item that links
+                // there again finds it locked, as a `NODE` branched after a `LockJoint` does
+                if joint.unlink(id) && !joint.locked {
                     self.joints.remove(&key);
                 }
             }
@@ -409,12 +411,10 @@ impl Node {
         self.joints.get(&JointKey::new(pos, net))
     }
 
-    /// `NODE::LockJoint( aPos, aItem, true )`: lock the joint of `net` at `pos`, if there is one (KiCad's `touchJoint` makes an empty one where
-    /// there is none, which nothing can stop at and which goes when an item links to it and leaves again).
+    /// `NODE::LockJoint( aPos, aItem, true )`: lock the joint of `net` at `pos` (`touchJoint`: made, empty, where there is none). A locked joint
+    /// outlives its items ([`Self::remove`]), as KiCad's joints all do, so the lock is there for whatever links at `pos` later.
     pub fn lock_joint(&mut self, pos: Point, net: &Net) {
-        if let Some(j) = self.joints.get_mut(&JointKey::new(pos, net)) {
-            j.locked = true;
-        }
+        self.joints.entry(JointKey::new(pos, net)).or_default().locked = true;
     }
 
     /// `NODE::QueryJoints( bbox, joints, layers, ITEM::SOLID_T )` for what the optimizer's `KEEP_TOPOLOGY_CONSTRAINT` asks: the position and net of the joint of
@@ -1415,8 +1415,8 @@ impl Node {
     /// `NODE::CheckColliding( aItem )` of an item of this node (`QueryColliding( aItem, obs, { m_limitCount = 1 } )`): the first item it collides
     /// with, itself apart ("Collisions with self aren't a thing; don't spend time on them"). A via is asked with its hole (`aHead->Hole()`), a
     /// virtual item collides with nothing ("By default, virtual items cannot collide"). What `COMPONENT_DRAGGER::FixRoute` asks of each pad and
-    /// track it moved. **Differs:** a pad's own hole is not asked as the probe's (`aHead->HasHole()`: its hole clearance and hole to hole against
-    /// the world); its copper and the world's holes are.
+    /// track it moved. A pad is asked with its hole too ("a special case for the "head" via's hole": `aHead->HasHole()`, [`Self::pad_hole_collision`]),
+    /// so a moved pad's own hole keeps its hole clearance and hole-to-hole clearance from the world.
     pub fn item_colliding(&self, rules: &BoardRules, id: ItemId) -> Option<Obstacle> {
         let item = self.items.get(&id)?;
         if item.is_virtual() {
@@ -1426,12 +1426,56 @@ impl Node {
             return self.via_colliding(v, rules, &[id], QueryOpts::default()).into_iter().next();
         }
         let shape = item.shape(item.layers().start());
-        let bbox = Self::bbox_of(item);
+        let hole = self.hole_of(item).map(|(h, _)| h);
+        let mut bbox = Self::bbox_of(item);
+        if let Some(h) = &hole {
+            let b = h.bbox(Nm::ZERO);
+            bbox = (bbox.0.min(b.0), bbox.1.min(b.1), bbox.2.max(b.2), bbox.3.max(b.3));
+        }
         let margin = self.search_margin(rules);
         let bbox = (bbox.0 - margin, bbox.1 - margin, bbox.2 + margin, bbox.3 + margin);
         let mut ids = self.index.query(bbox);
         ids.sort_unstable();
-        ids.into_iter().filter(|&o| o != id).find_map(|o| self.items.get(&o).and_then(|other| self.item_collision(rules, o, other, &shape, Side::Item(item), item.layers(), QueryOpts::default())))
+        ids.into_iter().filter(|&o| o != id).find_map(|o| {
+            let other = self.items.get(&o)?;
+            self.item_collision(rules, o, other, &shape, Side::Item(item), item.layers(), QueryOpts::default()).or_else(|| match (item, &hole) {
+                (Item::Solid(s), Some(h)) => self.pad_hole_collision(rules, s, h, o, other),
+                _ => None,
+            })
+        })
+    }
+
+    /// `ITEM::collideSimple( aHead = pad )`'s "special case for the "head" via's hole", for a pad (`holeH = aHead->Hole()`, a `SOLID`'s): the item `id`
+    /// of the world against the pad's hole `hole` --
+    /// - its copper, when it is of another net (`Kind() == HOLE_T || Net() != holeH->Net()`), at the clearance the rules ask between it and a hole
+    ///   (`GetClearance( this, holeH )`), unless one of the two is a free pad ("a pad associated with a "free" pin (NIC) doesn't have a net until it
+    ///   has been used": the hole's `IsFreePad()` is its pad's) or the item is not flashed on the hole's layers (`IsFlashedOnLayer( this,
+    ///   holeH->Layers() )`);
+    /// - its hole (the world's `HOLE_T` item), whatever the nets ("Hole-to-hole collisions don't have anything to do with nets"), at the
+    ///   hole-to-hole clearance.
+    ///
+    /// A keepout rule area is asked of the pad's copper only ([`Self::item_collision`]); the hole lies inside that copper.
+    fn pad_hole_collision(&self, rules: &BoardRules, s: &Solid, hole: &Shape, id: ItemId, item: &Item) -> Option<Obstacle> {
+        let r = self.rules.as_ref()?;
+        if !item.layers().overlaps(&s.layers) || matches!(item, Item::Solid(k) if r.keepout(k).is_some()) {
+            return None;
+        }
+        let hit = |clearance: Nm, (actual, pos): (Nm, Point)| Obstacle { id, kind: item.kind(), actual, clearance_needed: clearance, pos };
+        let hole_side = Side::PadHole(s);
+        let free = s.free_pad || matches!(item, Item::Solid(o) if o.free_pad);
+        if !same_net(item.net(), &s.net) && !free && r.is_flashed_on(item, s.layers) {
+            let item_shape = match item {
+                Item::Via(v) => Shape::Circle { c: v.pos, r: v.diameter_runs(s.layers).into_iter().map(|(_, d)| d).max().unwrap_or(v.diameter) / 2 },
+                _ => item.shape(item.layers().start()),
+            };
+            let clearance = self.clearance_between(rules, Side::Item(item), hole_side, true);
+            if let Some(c) = hole.collides(&item_shape, collide_clearance(clearance)) {
+                return Some(hit(clearance, c));
+            }
+        }
+        let (other_hole, other_side) = self.hole_of(item)?;
+        let clearance = self.clearance_between(rules, other_side, hole_side, true);
+        hole.collides(&other_hole, collide_clearance(clearance)).map(|c| hit(clearance, c))
     }
 
     /// `NODE::QueryJoints( aBox, aJoints, aLayerMask, aKindMask )`: the joints inside `bbox` (`x0, y0, x1, y1`, edges included: `BOX2I::Contains`) on a
@@ -1689,7 +1733,7 @@ impl std::fmt::Debug for Node {
 mod tests {
     use eda_model::units::mm;
     use super::*;
-    use crate::item::{net_of, Segment, Solid, Via};
+    use crate::item::{net_of, Segment, Via};
     use eda_model::ir::Point;
 
     fn p(x: Nm, y: Nm) -> Point {

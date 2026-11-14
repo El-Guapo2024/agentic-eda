@@ -17,7 +17,7 @@ import { openEmbeddedDocument } from "../api/embeddedClient";
 import { markContentSaved } from "../state/contentModified";
 import { boardCopyKey } from "../api/fpEditorTypes";
 import { saveSymbolLibraryAs } from "./librarySaveOps";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { Cmd, CmdDimensionKind } from "../api/types";
@@ -58,7 +58,7 @@ import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../components/canvas/diffPairRouting";
 import { endInlineDrag, findDraggableAt, startGroupDrag, startInlineDrag, type DraggableHit, type InlineDragContext } from "../components/canvas/dragging";
-import { findGroupDragTarget } from "../kicad-port/dragTool";
+import { dragEndsOnActivate, findGroupDragTarget, type DragDrawState } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
@@ -177,6 +177,19 @@ export function useActionRunner() {
   const netNavKey = useRef<string | null>(null);
   /** The clarification menu's choice while the action that asked replays (`requestSelection`; kept across the registry's rebuilds while the menu is open). */
   const forcedSelection = useRef(newForcedSelection()).current;
+  // `InlineDrag`'s loop on another tool's activation (`evt->IsActivate()`: `hasMultidragCancelled = true; break;`): a drag still on screen when the
+  // active tool changes to another is cancelled as Esc cancels it -- nothing committed, the selection put back (`restoreSelection`), the highlight as
+  // `highlightNets( false )` leaves it (UI-LEFT-3 R3-10). A click that ends the drag clears its draw state with the tool, so it is not one.
+  const toolBefore = useRef(state.activeTool);
+  useEffect(() => {
+    const before = toolBefore.current;
+    toolBefore.current = state.activeTool;
+    if (!dragEndsOnActivate(before, state.activeTool, state.drawState?.kind)) return;
+    const draw = state.drawState as DragDrawState;
+    cancelInteractiveRoute(dispatch, api);
+    endInlineDrag(draw, { cancelled: true }, dispatch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the tool change alone, as `IsActivate()` is
+  }, [state.activeTool]);
 
   const registry = useMemo(() => {
     // A handler may take the one parameter an action carries (`TOOL_EVENT::Parameter`), e.g. the sheet path of `NavigateTool.changeSheet`.

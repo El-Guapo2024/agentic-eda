@@ -43,8 +43,8 @@ pub struct Joint {
     pub layers: LayerRange,
     pub links: Vec<ItemId>,
     /// `JOINT::Lock()` / `IsLocked()` (`NODE::LockJoint`): a line the shove assembles ends here (`AssembleLine( .., aStopAtLockedJoints =
-    /// true )`). `SHOVE::Run` locks the ends of each head it is given, so the route's own tail stops at the point the head starts from; the
-    /// lock lives as long as the joint (a joint left with no links is gone, and a new one is not locked).
+    /// true )`). `SHOVE::Run` locks the ends of each head it is given, so the route's own tail stops at the point the head starts from; a
+    /// locked joint is kept when its last item leaves (`NODE::unlinkJoint` keeps every joint), so the lock holds for what links there again.
     pub locked: bool,
 }
 

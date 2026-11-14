@@ -600,9 +600,10 @@ impl LinePlacer {
                     // shortcut is only taken where the pushed items now allow it.
                     let (optimized, head, tail) = split_and_optimize(line, &outcome.world);
                     let via = head_via.as_ref().and_then(|_| optimized.pts.last().copied());
-                    // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame
+                    // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame, the joints it locked with it
                     let mut world = parent;
                     world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
+                    world.lock_head_ends(&walked.pts, &self.net, head_via.is_some());
                     self.springback.borrow_mut().push(node, world.clone(), outcome.area);
                     let r = HeadResult { pts: optimized.pts, arcs: optimized.arcs, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via, via_shoved: true, kept: false };
                     return Some((r, head, tail));
@@ -2005,6 +2006,7 @@ mod tests {
             vias: placer.displaced_vias().map(|(v, p)| (v.to_string(), p)).collect(),
             fixed: placer.placed_runs(),
             fixed_vias: Vec::new(),
+            locked: Vec::new(),
         };
         world.apply(node)
     }
@@ -2188,6 +2190,42 @@ mod tests {
         assert!(!near_via(&pv), "GND is not shoved onto the via, nor walked round it: {:?}", pv.displaced_lines);
         assert_eq!(placer.placed_vias().len(), 1);
         assert_eq!(placer.placed_vias()[0].pos, at(5.0, 0.0), "the via stays where it was placed");
+    }
+
+    /// The locks of a click's via are the shoves': `SHOVE::Run` locks the joint a leg starts from in the frame it pushes (`LockJoint( head.CPoint( 0
+    /// ) )`), and the frames after keep it (`NODE::Branch` copies the joints) -- so where the leg that starts at a via had no shove (routed in Walk
+    /// around: `ChangeRouterMode` while routing), no frame holds that lock, and a later leg's shove that pushes GND onto the via pushes the via
+    /// (`pushOrShoveVia`, `ShoveVias()`), as KiCad's does. The legs of the test above, the second walked.
+    #[test]
+    fn a_later_legs_shove_pushes_a_clicks_via_no_shove_locked() {
+        use crate::item::Segment;
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: at(2.0, 0.8), b: at(7.0, 0.8), width: mm(0.2), source_track: Some(("G".into(), 0)), locked: false }));
+        let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
+        let walk = RoutingSettings { mode: Mode::Walkaround, ..settings.clone() };
+        let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+        placer.preview(&node, &rules, &settings, at(0.5, 0.0));
+        placer.preview(&node, &rules, &settings, at(5.0, 0.0));
+        placer.toggle_via(true, mm(0.6), mm(0.3));
+        placer.switch_layer(&node, &rules, &settings, at(5.0, 0.0), 1, mm(0.6), mm(0.3));
+        for (s, moves, fix) in [(&walk, vec![at(6.0, 0.0)], at(8.0, 0.0)), (&settings, vec![at(8.0, 0.5)], at(8.0, 0.95))] {
+            for m in moves {
+                placer.preview(&node, &rules, s, m);
+            }
+            assert_eq!(placer.fix(&node, &rules, s, fix), FixOutcome::Fixed { real_end: false });
+        }
+        let frame = placer.springback.borrow().locked_top();
+        assert!(frame.locked.iter().all(|(p, _)| *p != at(5.0, 0.0)), "no frame locked the via's joint: {:?}", frame.locked);
+        for x in [7.5, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0] {
+            placer.preview(&node, &rules, &settings, at(x, 0.95));
+        }
+        assert_eq!(placer.placed_vias().len(), 1);
+        let via = placer.placed_vias()[0].pos;
+        assert_ne!(via, at(5.0, 0.0), "the via is pushed");
+        let runs = placer.placed_runs();
+        assert_eq!(runs.iter().filter(|r| r.first() == Some(via) || r.last() == Some(via)).count(), 2, "the runs on it follow it: {via:?} {runs:?}");
     }
 
     fn ts(tail: &[(f64, f64)], head: &[(f64, f64)]) -> TailState {

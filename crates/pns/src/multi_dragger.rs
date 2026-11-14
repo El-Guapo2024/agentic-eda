@@ -42,13 +42,14 @@
 //! segments of that solution (`restoreLeaderSegments`: each line's last segment in `DM_CORNER`, `findNewLeaderSegment`'s in `DM_SEGMENT`; the
 //! selected segments where it did not resolve) are what `InlineDrag` selects afterwards ([`MultiDragger::leader_segments`]).
 //!
+//! The springback frames are [`World`]s against the world without the dragged lines, rebuilt into a node for each shove ([`crate::springback`]'s
+//! decision); each keeps the joints its run locked (`LockJoint` of the heads' ends) and those of the frames below it, as KiCad's frames do. The mode
+//! is read live (`Settings().Mode()`), but only a drag started in Shove has a `SHOVE`. A position that is not resolved commits, with "Allow DRC
+//! violations", what KiCad's `m_lastNode` then is ([`Unresolved`]): nothing, or the shove's frame without the dragged lines.
+//!
 //! **Differs:**
-//! - The springback frames are [`World`]s against the world without the dragged lines, rebuilt into a node for each shove
-//!   ([`crate::springback`]'s decision): the joints a run locked are locked again by the next run at its own heads' ends, not inherited from the
-//!   frame (KiCad's frames keep the joints `LockJoint` locked).
 //! - A position that cannot be resolved is shown as the dragged lines flagged colliding over what the frames had pushed; KiCad shows the world
-//!   as it was (Walk around) or the shove's world without the dragged lines (Shove). With "Allow DRC violations" such a position commits the
-//!   dragged lines where they are; KiCad's `m_lastNode` is then the shove's world without them (the lines the posture took are not added back).
+//!   as it was (Walk around) or the shove's world without the dragged lines (Shove).
 //! - A line with arcs: `leaderSegIndex` is the index of the segment in the line's points; KiCad's is the index of the link, which differs from
 //!   it after an arc.
 
@@ -114,6 +115,9 @@ pub struct MultiDragger {
     last: Option<Point>,
     /// The gesture's one `SHOVE` (`m_shove`), made for a drag in Shove mode: its world (`m_preShoveNode`) and its springback stack.
     shove: Option<MultiShove>,
+    /// `m_shove` exists: the drag started in Shove (`Start`). A drag started in another mode and switched to Shove resolves nothing in Shove
+    /// (`multidragShove`: `if( !m_shove ) return false;`).
+    shove_made: bool,
     /// What the last `Drag` left (`m_lastNode`, `m_dragStatus`, `m_leaderSegments`): what `FixRoute` commits.
     last_drag: Option<MultiDrag>,
 }
@@ -142,6 +146,21 @@ pub struct MultiDrag {
     /// shape -- the last one in `DM_CORNER`, the one `findNewLeaderSegment` finds in `DM_SEGMENT`. Empty where the mode could not resolve the
     /// position (KiCad's then still are `m_origDraggedItems`: [`MultiDragger::leader_segments`]).
     pub leaders: Vec<(i32, Seg2)>,
+    /// What `m_lastNode` is where the position was not resolved (`status` false), which is what `FixRoute` commits when "Allow DRC violations"
+    /// lets it: `None` for a resolved position.
+    pub unresolved: Option<Unresolved>,
+}
+
+/// `m_lastNode` after a `Drag` that did not resolve its position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unresolved {
+    /// `multidragWalkaround` with no attempt that worked, or `multidragShove` with no `SHOVE`: `m_lastNode` was deleted and is null, so
+    /// `CurrentNode()` is `m_world` -- the board as it is.
+    World,
+    /// `multidragShove` whose `Run` failed: `m_lastNode = m_shove->CurrentNode()->Branch()`, the springback frame the shove started from with no
+    /// dragged line in it ("Re-add any m_mdragLines that were removed from m_preShoveNode during Start() but are not part of aCompletedLines": only
+    /// those come back), so the lines the posture took are gone from it.
+    ShoveFrame,
 }
 
 /// What committing a multi-track drag replaces and adds (`ROUTER::CommitRouting( m_lastNode )`).
@@ -334,8 +353,9 @@ fn clip_to_other_line(node: &Node, rules: &BoardRules, reference: &Line, clipped
 
 impl MultiDragger {
     /// `MULTI_DRAGGER::Start( aP, aPrimitives )`: `items` are the selected tracks' segments and arcs, `at` the point the drag starts from (the
-    /// cursor snapped onto the nearest of them). `None` when there is nothing to drag.
-    pub fn start(node: &Node, at: Point, items: &[ItemId]) -> Option<MultiDragger> {
+    /// cursor snapped onto the nearest of them), `mode` the router's mode then (`if( Settings().Mode() == RM_Shove )`: only a drag started in Shove
+    /// has a `SHOVE`, `m_shove`). `None` when there is nothing to drag.
+    pub fn start(node: &Node, at: Point, items: &[ItemId], start_mode: Mode) -> Option<MultiDragger> {
         if items.is_empty() {
             return None;
         }
@@ -466,7 +486,7 @@ impl MultiDragger {
                 l.is_primary_line = true;
             }
         }
-        Some(MultiDragger { mode, lines, start_point: at, orig_dragged: items.to_vec(), last: None, shove: None, last_drag: None })
+        Some(MultiDragger { mode, lines, start_point: at, orig_dragged: items.to_vec(), last: None, shove: None, shove_made: start_mode == Mode::Shove, last_drag: None })
     }
 
     /// `m_dragMode`.
@@ -770,7 +790,7 @@ impl MultiDragger {
                 lines.sort_by_key(|(i, _)| completed.iter().position(|l| l.mdrag_index == *i));
                 MultiDrag { lines, status: true, ..MultiDrag::default() }
             }
-            None => MultiDrag { lines: completed.into_iter().map(|l| (l.mdrag_index, l.dragged_line)).collect(), status: false, colliding: true, ..MultiDrag::default() },
+            None => MultiDrag { lines: completed.into_iter().map(|l| (l.mdrag_index, l.dragged_line)).collect(), status: false, colliding: true, unresolved: Some(Unresolved::World), ..MultiDrag::default() },
         }
     }
 
@@ -781,6 +801,10 @@ impl MultiDragger {
     /// pushed while the bus presses on it and springs back, frame by frame, once the bus draws back.
     fn multidrag_shove(&mut self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, mut completed: Vec<MDragLine>) -> MultiDrag {
         completed.sort_by_key(|l| l.drag_dist);
+        // `if( !m_shove ) return false;`: `m_lastNode` deleted above, the world as it is
+        if !self.shove_made {
+            return MultiDrag { lines: completed.into_iter().map(|l| (l.mdrag_index, l.dragged_line)).collect(), status: false, colliding: true, unresolved: Some(Unresolved::World), ..MultiDrag::default() };
+        }
         if self.shove.is_none() {
             // `m_preShoveNode`: the world without every dragged line (`Start`), not only the completed ones
             self.shove = Some(MultiShove { pre_shove: Self::without(world, &self.lines), springback: Springback::new() });
@@ -801,6 +825,7 @@ impl MultiDragger {
             status: false,
             colliding: true,
             leaders: Vec::new(),
+            unresolved: Some(Unresolved::ShoveFrame),
         };
         // "empty head? nothing to shove...": `SH_INCOMPLETE`
         if heads.iter().any(|h| h.line.segment_count() == 0) {
@@ -818,6 +843,10 @@ impl MultiDragger {
         };
         let mut frame = parent;
         frame.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
+        // `LockJoint` of each head's ends (`AddHeads( .., SHP_SHOVE | SHP_DONT_OPTIMIZE )`: no `SHP_DONT_LOCK_ENDPOINTS`), kept with the frame
+        for l in &completed {
+            frame.lock_head_ends(&l.dragged_line.pts, &l.dragged_line.net, false);
+        }
         shove.springback.push(&shove.pre_shove, frame.clone(), outcome.area);
         let lines: Vec<(usize, Line)> = completed
             .iter()
@@ -827,7 +856,7 @@ impl MultiDragger {
                 (l.mdrag_index, Line { pts, segment_ids: Vec::new(), ..l.dragged_line.clone() })
             })
             .collect();
-        MultiDrag { lines, displaced_lines: frame.displaced_lines(&shove.pre_shove), displaced_vias: frame.displaced_vias(), status: true, colliding: false, leaders: Vec::new() }
+        MultiDrag { lines, displaced_lines: frame.displaced_lines(&shove.pre_shove), displaced_vias: frame.displaced_vias(), status: true, colliding: false, leaders: Vec::new(), unresolved: None }
     }
 
     /// The last position the drag was given, if any.
@@ -836,19 +865,29 @@ impl MultiDragger {
     }
 
     /// `MULTI_DRAGGER::FixRoute( aForceCommit )`: what the last `Drag` left (`CommitRouting( CurrentNode() )`, `m_lastNode`), committed when it
-    /// resolved its position (`m_dragStatus`) or violations are allowed (`AllowDRCViolations()`); `None` otherwise, and before any `Drag`.
-    /// `aForceCommit` is not read.
+    /// resolved its position (`m_dragStatus`) or violations are allowed (`AllowDRCViolations()`, read now); `None` otherwise, and before any `Drag`.
+    /// `aForceCommit` is not read. A position that was not resolved commits KiCad's `m_lastNode` of it ([`Unresolved`]): nothing (`m_world`), or
+    /// the shove's frame, where the dragged lines are not -- their tracks go.
     pub fn fix_route(&self, world: &Node, settings: &RoutingSettings) -> Option<MultiCommit> {
         let drag = self.last_drag.as_ref()?;
         if !drag.status && !settings.allow_drc_violations() {
             return None;
         }
-        Some(self.commit_of(world, drag))
+        match drag.unresolved {
+            Some(Unresolved::World) => Some(MultiCommit::default()),
+            Some(Unresolved::ShoveFrame) => Some(self.commit_with(world, drag, false)),
+            None => Some(self.commit_of(world, drag)),
+        }
     }
 
     /// What committing `drag` replaces and adds: the IR tracks of each dragged line (what they kept of themselves beyond the line handed back),
     /// the new lines (each from the track the line was assembled from: `pl.SetSourceItem( aSeg->GetSourceItem() )`), and what a shove moved.
     pub fn commit_of(&self, world: &Node, drag: &MultiDrag) -> MultiCommit {
+        self.commit_with(world, drag, true)
+    }
+
+    /// [`Self::commit_of`], the dragged lines written (`with_lines`) or taken away with nothing in their place (a shove frame without them).
+    fn commit_with(&self, world: &Node, drag: &MultiDrag, with_lines: bool) -> MultiCommit {
         let mut commit = MultiCommit::default();
         let mut covered: HashSet<ItemId> = HashSet::new();
         let mut tracks: Vec<String> = Vec::new();
@@ -874,7 +913,7 @@ impl MultiDragger {
                 commit.sources.push(Some(t.clone()));
             }
         }
-        for (index, line) in &drag.lines {
+        for (index, line) in drag.lines.iter().filter(|_| with_lines) {
             if line.point_count() < 2 {
                 continue;
             }
@@ -945,7 +984,7 @@ mod tests {
     #[test]
     fn a_segment_drag_slides_every_selected_parallel_line() {
         let (node, items) = bus();
-        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items).expect("starts");
+        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Shove).expect("starts");
         assert_eq!(d.mode(), MultiDragMode::Segment);
         assert_eq!(d.lines().len(), 3);
         assert!(d.lines()[0].is_primary_line && !d.lines()[1].is_primary_line);
@@ -969,7 +1008,7 @@ mod tests {
     #[test]
     fn a_corner_drag_takes_every_parallel_end_along() {
         let (node, items) = bus();
-        let mut d = MultiDragger::start(&node, p(10.0, 0.0), &items).expect("starts");
+        let mut d = MultiDragger::start(&node, p(10.0, 0.0), &items, Mode::Shove).expect("starts");
         assert_eq!(d.mode(), MultiDragMode::Corner);
         for mode in [Mode::Walkaround, Mode::MarkObstacles, Mode::Shove] {
             let drag = d.drag(&node, &rules(), &settings(mode), p(12.0, -2.0));
@@ -988,11 +1027,11 @@ mod tests {
     fn a_connected_corner_falls_back_to_a_segment_drag_and_a_crossing_line_stays() {
         let (mut node, mut items) = bus();
         node.add(Item::Solid(Solid { net: net_of("A"), layers: LayerRange::single(0), pos: p(10.0, 0.0), shape: Shape::Circle { c: p(10.0, 0.0), r: mm(0.3) }, source: "J1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
-        let d = MultiDragger::start(&node, p(10.0, 0.0), &items).expect("starts");
+        let d = MultiDragger::start(&node, p(10.0, 0.0), &items, Mode::Shove).expect("starts");
         assert_eq!(d.mode(), MultiDragMode::Segment, "the corner is on a pad");
         // a vertical line D, selected too
         items.extend(track(&mut node, "D", "tD", &[p(20.0, -5.0), p(20.0, 5.0)]));
-        let mut d = MultiDragger::start(&node, p(5.0, 1.0), &items).expect("starts");
+        let mut d = MultiDragger::start(&node, p(5.0, 1.0), &items, Mode::Shove).expect("starts");
         assert_eq!(d.mode(), MultiDragMode::Segment);
         let drag = d.drag(&node, &rules(), &settings(Mode::Walkaround), p(5.0, -1.0));
         assert!(drag.status);
@@ -1008,7 +1047,7 @@ mod tests {
         let (mut node, items) = bus();
         track(&mut node, "GND", "tG", &[p(4.0, -2.2), p(6.0, -2.2)]);
         let rules = rules();
-        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items).expect("starts");
+        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Shove).expect("starts");
         let shoved = d.drag(&node, &rules, &settings(Mode::Shove), p(5.0, -2.0));
         assert!(shoved.status, "{shoved:?}");
         assert!(shoved.displaced_lines.iter().any(|l| l.source_track.as_deref() == Some("tG")), "the GND track is pushed: {shoved:?}");
@@ -1036,7 +1075,7 @@ mod tests {
         track(&mut node, "GND", "tG", &[p(4.0, -2.2), p(6.0, -2.2)]);
         let rules = rules();
         let shove = settings(Mode::Shove);
-        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items).expect("starts");
+        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Shove).expect("starts");
         let depth = |d: &MultiDragger| d.shove.as_ref().map_or(0, |s| s.springback.len());
         let gnd_y = |drag: &MultiDrag| drag.displaced_lines.iter().filter(|l| l.source_track.as_deref() == Some("tG")).flat_map(|l| l.line.pts.iter().map(|q| q.y)).min();
         let first = d.drag(&node, &rules, &shove, p(5.0, -0.5));
@@ -1066,10 +1105,54 @@ mod tests {
     #[test]
     fn nothing_is_committed_before_a_drag_and_an_unresolved_one_leads_with_the_selected_segments() {
         let (node, items) = bus();
-        let d = MultiDragger::start(&node, p(5.0, 0.0), &items).expect("starts");
+        let d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Shove).expect("starts");
         assert!(d.fix_route(&node, &settings(Mode::Shove)).is_none());
         let leaders = d.leader_segments(&node);
         assert_eq!(leaders, vec![(0, (p(0.0, 0.0), p(10.0, 0.0))), (0, (p(0.0, 1.0), p(10.0, 1.0))), (0, (p(0.0, 2.0), p(10.0, 2.0)))]);
+    }
+
+    /// `MULTI_DRAGGER::Drag` reads the mode live (`switch( Settings().Mode() )`), but only a drag started in Shove has a `SHOVE` (`Start`): switched
+    /// to Shove later, `multidragShove` resolves nothing ("if( !m_shove ) return false;", `m_lastNode` null: the world as it is). And where a position
+    /// is not resolved, a click with "Allow DRC violations" commits KiCad's `m_lastNode` of it: nothing at all (the walk found no way, or no shove),
+    /// or -- a shove that failed -- the frame it started from, which holds none of the dragged lines, so their tracks go.
+    #[test]
+    fn a_drag_started_in_walk_around_never_shoves_and_an_unresolved_position_commits_kicads_last_node() {
+        let (mut node, items) = bus();
+        track(&mut node, "GND", "tG", &[p(4.0, -2.2), p(6.0, -2.2)]);
+        let rules = rules();
+        let allow = RoutingSettings { mode: Mode::MarkObstacles, can_violate_drc: true, ..RoutingSettings::default() };
+        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Walkaround).expect("starts");
+        let drag = d.drag(&node, &rules, &settings(Mode::Shove), p(5.0, -2.0));
+        assert!(!drag.status && drag.unresolved == Some(Unresolved::World), "{drag:?}");
+        assert!(d.fix_route(&node, &settings(Mode::Shove)).is_none(), "refused");
+        let commit = d.fix_route(&node, &allow).expect("allowed");
+        assert!(commit.remove_track_ids.is_empty() && commit.tracks.is_empty(), "m_world: nothing changes: {commit:?}");
+        // a shove that failed: the frame it started from, without the dragged lines
+        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Shove).expect("starts");
+        d.last_drag = Some(MultiDrag { lines: d.lines.iter().map(|l| (l.mdrag_index, l.dragged_line.clone())).collect(), status: false, colliding: true, unresolved: Some(Unresolved::ShoveFrame), ..MultiDrag::default() });
+        let commit = d.fix_route(&node, &allow).expect("allowed");
+        let mut removed = commit.remove_track_ids.clone();
+        removed.sort();
+        assert_eq!(removed, vec!["tA", "tB", "tC"]);
+        assert!(commit.tracks.is_empty(), "the dragged lines are not in the frame: {commit:?}");
+    }
+
+    /// The joints a shove locks are the frame's (`LockJoint` in the node `pushSpringback` keeps; `NODE::Branch` copies them): each head's ends,
+    /// carried by every frame after.
+    #[test]
+    fn the_bus_shoves_frames_keep_the_joints_it_locked() {
+        let (mut node, items) = bus();
+        track(&mut node, "GND", "tG", &[p(4.0, -2.2), p(6.0, -2.2)]);
+        let rules = rules();
+        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Shove).expect("starts");
+        assert!(d.drag(&node, &rules, &settings(Mode::Shove), p(5.0, -2.0)).status);
+        assert!(d.drag(&node, &rules, &settings(Mode::Shove), p(5.0, -2.5)).status);
+        let shove = d.shove.as_ref().expect("the gesture's shove");
+        let (top, _) = shove.springback.top();
+        for end in [p(0.0, 0.0), p(10.0, 0.0), p(0.0, 2.0), p(10.0, 2.0)] {
+            assert!(top.locked.iter().any(|(q, _)| *q == end), "{end:?} is locked in the frame: {:?}", top.locked);
+            assert!(top.apply(&shove.pre_shove).joint_at(end, &top.locked.iter().find(|(q, _)| *q == end).unwrap().1).is_some_and(|j| j.locked));
+        }
     }
 
     /// Highlight collisions: a release always commits (`multidragMarkObstacles` returns true), collisions and all -- a Ctrl+click is not needed.
@@ -1077,7 +1160,7 @@ mod tests {
     fn highlight_collisions_commits_whatever_it_runs_into() {
         let (mut node, items) = bus();
         track(&mut node, "GND", "tG", &[p(4.0, -2.2), p(6.0, -2.2)]);
-        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items).expect("starts");
+        let mut d = MultiDragger::start(&node, p(5.0, 0.0), &items, Mode::Shove).expect("starts");
         let drag = d.drag(&node, &rules(), &settings(Mode::MarkObstacles), p(5.0, -2.0));
         assert!(drag.status && drag.colliding, "{drag:?}");
         assert!(d.fix_route(&node, &settings(Mode::MarkObstacles)).is_some());

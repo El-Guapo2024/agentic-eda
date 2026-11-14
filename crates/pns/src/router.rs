@@ -1588,8 +1588,13 @@ impl Router {
         self.drag.as_mut().map(|d| d.drag(world, rules, &settings, at))
     }
 
-    /// The router's settings with the mode the drag started in.
+    /// The router's settings a drag runs with: `DRAGGER::Start`'s `m_currentMode = Settings().Mode()` keeps the mode the single drag started in;
+    /// the component and multi-track draggers read `Settings()` live (`COMPONENT_DRAGGER::FixRoute`'s `AllowDRCViolations()`, `MULTI_DRAGGER::Drag`'s
+    /// `switch( Settings().Mode() )`), so a mode changed while they run counts from the next position on.
     fn drag_settings(&self) -> RoutingSettings {
+        if self.group_drag.is_some() {
+            return self.settings.clone();
+        }
         RoutingSettings { mode: self.drag_mode.unwrap_or(self.settings.mode), ..self.settings.clone() }
     }
 
@@ -1790,7 +1795,7 @@ impl Router {
         });
         let p = self.snap_to_nearest(at, &items);
         let net = self.closest_net(at, &items);
-        let dragger = crate::multi_dragger::MultiDragger::start(&self.world, p, &items).ok_or("nothing to drag")?;
+        let dragger = crate::multi_dragger::MultiDragger::start(&self.world, p, &items, self.settings.mode).ok_or("nothing to drag")?;
         self.drag_net = net;
         self.session = None;
         self.diff = None;
@@ -1858,15 +1863,15 @@ impl Router {
         }
     }
 
-    /// `ROUTER::FixRoute` of a group drag (`m_dragger->FixRoute( aForceCommit )`, after the position the click is at): the commit, or `None`
-    /// when the dragger refuses it -- and the drag is over either way (`InlineDrag`).
-    fn group_drag_finish(&mut self, at: Point, force_commit: bool, settings: &RoutingSettings) -> Option<RouteCommit> {
+    /// `ROUTER::FixRoute` of a group drag (`m_dragger->FixRoute( aForceCommit )`): the commit of what the last motion left (`CurrentNode()`, the
+    /// node the last `Drag` made: `InlineDrag`'s click calls `FixRoute` with no `Move` first, so `at` is not dragged to), or `None` when the dragger
+    /// refuses it -- and the drag is over either way (`InlineDrag`).
+    fn group_drag_finish(&mut self, _at: Point, force_commit: bool, settings: &RoutingSettings) -> Option<RouteCommit> {
         let mut g = self.group_drag.take()?;
         let (world, rules) = (&self.world, &self.rules);
         let mut commit = RouteCommit::default();
         match &mut g {
             GroupDrag::Component(c) => {
-                c.drag(world, at);
                 let cc = c.fix_route(world, rules, settings, force_commit)?;
                 commit.remove_track_ids = cc.remove_track_ids;
                 for (k, line) in cc.tracks.iter().enumerate() {
@@ -1878,7 +1883,6 @@ impl Router {
                 commit.move_by = cc.offset;
             }
             GroupDrag::Multi(m) => {
-                m.drag(world, rules, settings, at);
                 // `GetLastCommittedLeaderSegments()`: what `InlineDrag` selects once the drag is over, whatever `FixRoute` says
                 self.drag_leaders = m.leader_segments(world).into_iter().map(|(layer, (a, b))| (self.layer_name(layer).to_string(), a, b)).collect();
                 let mc = m.fix_route(world, settings)?;

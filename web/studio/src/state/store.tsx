@@ -352,6 +352,8 @@ export type DrawState =
       restoreSelection?: string[];
       /** The nets highlighted again when the drag ends (see kicad-port/dragTool.ts `dragHighlight`). */
       restoreHighlight?: string[];
+      /** `InlineDrag`'s: a click ends it whatever the router says (see kicad-port/dragTool.ts). */
+      inline?: boolean;
     }
   /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair ->
    * `eda_pns::diff_pair::DiffPairPlacer`): an in-progress differential-

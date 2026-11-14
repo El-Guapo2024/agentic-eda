@@ -7,7 +7,7 @@
 import { previewClearancesOf } from "../../kicad-port/pcbDisplayOptions";
 import type { BoardState, CmdReply } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
-import { routeDragFinish, routeDragStart, routeDragStartGroup } from "../../api/client";
+import { routeCancel, routeDragFinish, routeDragMove, routeDragStart, routeDragStartGroup } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { inlineDragBegin, inlineDragEnd, type DragDrawState, type GroupDragTarget, type InlineDragContext } from "../../kicad-port/dragTool";
@@ -195,11 +195,18 @@ export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+Click to commit an
  * drag that only marks obstacles. `draw` is the drag's draw state: the highlight it changed goes back, and a multi-track drag's leaders are
  * selected (`select`, `InlineDrag`'s `selectItems` of `GetLastCommittedLeaderSegments()`). */
 export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, forceCommit = false, draw?: DragDrawState): Promise<void> {
+  // the motion to where the click is (KiCad's last `Move` before the button event; the studio throttles its previews), which `FixRoute` then
+  // commits: a component or multi-track drag commits the last motion's node, not a position of the click's own (UI-LEFT-3 R3-3)
+  if (draw?.moved !== false) await routeDragMove(x, y);
   const reply = (await routeDragFinish(x, y, forceCommit)) as CmdReply & { dragging?: boolean; refused?: boolean; select?: string[] };
   // `InlineDrag`: a component or multi-track drag the router refuses ends with nothing committed, and KiCad says nothing (`refused`)
-  if (!reply.ok && !reply.refused) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
-  // `performDragging`: a click `FixRoute` refuses leaves the drag going (`if( m_router->FixRoute( .. ) ) break;`)
-  if (!reply.ok && reply.dragging) return;
+  if (!reply.ok && !reply.refused && !(reply.dragging && draw?.inline)) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
+  // `performDragging`: a click `FixRoute` refuses leaves the drag going (`if( m_router->FixRoute( .. ) ) break;`); `InlineDrag` breaks out of its
+  // loop whatever `FixRoute` says, so its drag ends there, nothing committed (UI-LEFT-3 R3-10)
+  if (!reply.ok && reply.dragging) {
+    if (!draw?.inline) return;
+    await routeCancel();
+  }
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   await api.refresh();
