@@ -491,9 +491,11 @@ export function drcExclusionSpec(v: DrcViolation, comment = ""): DrcExclusionSpe
   return spec;
 }
 
-/** Whether a violation can be waived: it names the items to key the waiver on (a lint finding does not; neither does a report from an older server). */
-export function canExclude(v: Pick<DrcViolation, "items">): boolean {
-  return v.items.length > 0 && v.items.every((i) => (i.uuid ?? "") !== "");
+/** Whether a violation can be waived: it names the items to key the waiver on (a lint finding does not; neither does a report from an older server), or it
+ *  names none and the report says where its marker may be (`copper_sliver`: `DRC_ITEM` with no items, KiCad's exclusion is its marker). */
+export function canExclude(v: Pick<DrcViolation, "items"> & { marker_nm?: DrcViolation["marker_nm"] }): boolean {
+  if (v.items.length === 0) return (v.marker_nm?.length ?? 0) > 0;
+  return v.items.every((i) => (i.uuid ?? "") !== "");
 }
 
 /** The violations of one check, as `ExcludeAll` / `RemoveAll` work on them: the ones not waived yet (to exclude) or the ones that are (to remove). */
@@ -659,20 +661,33 @@ export function patchErcDeleteAll(report: ErcReport, includeExclusions: boolean)
   return { ...report, violations, counts: {}, markers_deleted: true };
 }
 
-/** [`patchDrcSeverity`] for the schematic: an excluded finding stays excluded, whatever the check becomes. */
 /**
+ * [`patchDrcSeverity`] for the schematic: an excluded finding stays excluded, whatever the check becomes.
+ *
  * `ID_SET_SEVERITY_TO_IGNORE` on a pin-to-pin finding (`DIALOG_ERC::OnERCItemRClick`): on a warning only the warning's slot is ignored and only its markers
  * go (`DeleteMarkers( MARKER_ERC, rcItem->GetErrorCode() )`, `ERCE_PIN_TO_PIN_WARNING`) -- the errors stay; on an error both slots are
  * (`SetSeverity( ERCE_PIN_TO_PIN_WARNING, RPT_SEVERITY_IGNORE )` too). `keepPinErrors` is the first case.
+ *
+ * The Ignored Tests list is the dialog's `m_ignoredList` (KiCad 25ec2335 `dialog_erc.cpp`): Ignore appends a row of the marker's own code (`row`: the pin-to-pin
+ * error's is its own slot, `pin_to_pin_error`), whatever the list holds already (`InsertItem`); Error or Warning from a marker's menu leaves the list alone; a
+ * change from the list's own menu (`OnIgnoredItemRClick`) deletes that row only (`ignoredRow`, its index). The next run builds the list again from the
+ * report.
  */
-export function patchErcSeverity(report: ErcReport, check: string, severity: RuleSeverity, description: string, keepPinErrors = false): ErcReport {
+export function patchErcSeverity(report: ErcReport, check: string, severity: RuleSeverity, description: string, keepPinErrors = false, opts: { row?: string; ignoredRow?: number } = {}): ErcReport {
   const ignoring = severity === "ignore";
   const goes = (v: ErcViolation) => ignoring && v.check === check && !(keepPinErrors && v.check === "pin_to_pin" && (v.base_severity ?? (v.severity === "warning" ? "warning" : "error")) === "error");
   const violations = report.violations.filter((v) => !goes(v)).map((v) => (v.check === check && !ignoring && v.severity !== "excluded" ? { ...v, severity } : v));
   const counts: Record<string, number> = {};
   for (const v of violations) if (v.severity !== "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
-  const rest = (report.ignored_checks ?? []).filter((c) => c.key !== check);
-  return { ...report, violations, counts, ignored_checks: ignoring ? [...rest, { key: check, description }] : rest };
+  const rows = (report.ignored_checks ?? []).filter((_, i) => i !== opts.ignoredRow);
+  return { ...report, violations, counts, ignored_checks: ignoring && opts.ignoredRow === undefined ? [...rows, { key: opts.row ?? check, description }] : rows };
+}
+
+/** `ERC_SETTINGS::GetSeverity` of a row of the Ignored Tests list: the pin-to-pin error's slot is an error unless it is ignored; a check is its table's severity, else
+ *  KiCad's default for it. */
+export function ignoredRowSeverity(key: string, table: Readonly<Record<string, RuleSeverity>>, pinErrorsIgnored: boolean, defaults: readonly { key: string; defaultSeverity: RuleSeverity }[]): RuleSeverity {
+  if (key === "pin_to_pin_error") return pinErrorsIgnored ? "ignore" : "error";
+  return table[key] ?? defaults.find((d) => d.key === key)?.defaultSeverity ?? "error";
 }
 
 /** The finding's own line (`RC_ITEM::GetErrorMessage`): kicad-cli's description, without the item list `hint` appends to it ("Pin not connected: Symbol U1 Pin 2

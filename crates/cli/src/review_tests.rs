@@ -504,3 +504,48 @@ fn a_wire_ends_erc_exclusions_reach_kicad_cli() {
     let bad: Vec<String> = waived.iter().filter(|v| !(v["severity"] == "excluded" && v["kicad_matched"] == true)).map(|v| format!("{} {} {} {} {}", v["check"], v["location"], v["severity"], v["kicad_matched"], v["marker"])).collect();
     assert!(bad.is_empty(), "{bad:#?}");
 }
+
+/// UI-LEFT-3 B3-2 (slow tier): the studio's ERC puts together the markers whose report names fewer items than the marker (`four_way_junction`: four wire ends
+/// at a point) and those of a text (`unresolved_variable`, `generic-warning`) from the derived tree (`erc_exclusions::witnesses`); an exclusion of each is matched
+/// by kicad-cli and no excluded marker of its own is made. (The other cases -- a no-connect pin or flag, a symbol's field, `duplicate_pins` -- are proved on a
+/// sheet of their own: `crates/kicad/tests/kicad_cli_erc_exclusions.rs`.)
+#[test]
+fn a_four_way_junction_and_a_texts_erc_exclusions_reach_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    let dir = board_with_schematic("review_erc_witnesses");
+    let (_, mut design, _) = load(&dir).unwrap();
+    design.schematic.as_mut().unwrap().extras.erc_severities.insert("four_way_junction".into(), "warning".into());
+    save(&dir, &design).unwrap();
+    let p = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
+    let c = p(254.0, 203.2);
+    for from in [p(248.92, 203.2), p(259.08, 203.2), p(254.0, 198.12), p(254.0, 208.28)] {
+        step(&dir, Cmd::AddWire { pts: vec![from, c], bus: false }, false, "test").unwrap();
+    }
+    for (content, y) in [("${NOPE}", 220.98), ("${ERC_WARNING watch}", 231.14)] {
+        step(&dir, Cmd::AddSchText { content: content.into(), at: p(254.0, y), angle_millideg: Default::default(), size_nm: mm(1.27) }, false, "test").unwrap();
+    }
+    let first = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let kinds = ["four_way_junction", "unresolved_variable", "generic-warning"];
+    let rows: Vec<Value> = first["violations"].as_array().unwrap().iter().filter(|v| kinds.contains(&v["check"].as_str().unwrap_or(""))).cloned().collect();
+    for k in kinds {
+        assert!(rows.iter().any(|v| v["check"] == k), "{k} reported: {first:#}");
+    }
+    assert!(rows.iter().all(|v| !v["marker"].is_null() && v["location"].as_str().is_some_and(|l| !l.is_empty())), "every one is placed and keyed: {rows:#?}");
+    let n = listed(&first);
+    for v in &rows {
+        step(&dir, add(v["check"].as_str().unwrap(), v["location"].as_str().unwrap(), "", Some(marker_of(v))), false, "ui").unwrap();
+    }
+    let after = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    assert_eq!(listed(&after), n, "kicad-cli made no excluded marker of an unmatched record: {after:#}");
+    let bad: Vec<String> = after["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|v| kinds.contains(&v["check"].as_str().unwrap_or("")))
+        .filter(|v| !(v["severity"] == "excluded" && v["kicad_matched"] == true))
+        .map(|v| format!("{} {} {} {} {}", v["check"], v["location"], v["severity"], v["kicad_matched"], v["marker"]))
+        .collect();
+    assert!(bad.is_empty(), "{bad:#?}");
+}

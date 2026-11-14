@@ -203,10 +203,19 @@ fn rule(check: &str) -> Option<Rule> {
         // `Place( item, aMain.sheet, aMain.position, aMain.sheet, aAux.sheet )` -- at the main label or power pin, sheet-specific on its sheet, each item on
         // its own (UI-LEFT B7) [probed on kicad-cli 4fe1ca2060: `similar_labels`, `same_local_global_label`; the other three are the same call].
         "similar_labels" | "similar_power" | "similar_label_and_power" | "same_local_global_label" | "same_local_global_power" => r(Main, SpecificMainAux),
-        // Not here: `generic-*`
-        // and `unresolved_variable` (a text's own record), `field_name_whitespace` (a field has no uuid of its own: the marker names it with a
-        // `kiapi.schematic.ErcSymbolChildReference`, and none of the forms above matched on kicad-cli), `label_multiple_wires` and `four_way_junction` (a point
-        // of their own), `no_connect_connected` (two creators with two sets of paths), `bus_definition_conflict`.
+        // KiCad 25ec2335 erc.cpp `TestFourWayJunction` and `TestLabelMultipleWires` (the engine's branch): `markers.Report( .., junction.sheet, junction.position,
+        // ITEM_PATHS::NONE )` -- sheet-specific, no item path, at the point; the items the report does not name are the tree's ([`witnesses`]) [probed: four-way].
+        "four_way_junction" | "label_multiple_wires" => r(Main, Specific),
+        // `TestNoConnectPins` (`NoConnectPinConflicts`, ITEM_PATHS::NONE, at the pin) and `TestConnectivity`'s `NoConnectFlagErrors` (ITEM_PATHS::MAIN, at the pin
+        // or the flag): see [`marker_with`], which tells them apart [probed: both].
+        "no_connect_connected" => r(Main, Specific),
+        // `TestTextVars`: `SetItems( source.item )`, `SetSheetSpecificPath( sheet )`, `SetItemsSheetPaths( sheet )`, at the text (`reportAssertions`: the assertion's
+        // position) -- a field's finding names its owner, or the field by its parent and text ([`witnesses`]) [probed: a text, a symbol's field, both kinds].
+        "unresolved_variable" | "generic-warning" | "generic-error" => r(Main, SpecificMain),
+        // Not here: `field_name_whitespace` -- `TestFieldNameWhitespace` names `{ owner, field }` by the field's own uuid, and a field has none in the file: each
+        // load gives it a new one (probed: two runs of kicad-cli on one file, two uuids), and its `ToProto` has no `child` for this check, so no record matches a
+        // later run (KiCad's own exclusion of one does not survive reopening the project either). `bus_definition_conflict`: no check of 25ec2335 raises
+        // `ERCE_BUS_ALIAS_CONFLICT` (only `erc_item.cpp` defines it), so kicad-cli never reports one.
         _ => None,
     }
 }
@@ -240,7 +249,16 @@ pub fn marker_with(check: &str, severity: &str, items: &[MarkerItem], sheet: &st
     };
     // The root sheet's hierarchical labels get a `pin_not_connected` of their own, with no sheet in it (connection_graph.cpp 4628-4632).
     let hier_label = check == "pin_not_connected" && main.description.to_ascii_lowercase().starts_with("hierarchical label");
-    let paths = if hier_label { Paths::None } else { rule.paths };
+    // A no-connect flag on a connected net (`NoConnectFlagErrors`: `{ pin, flag }` or `{ flag }`, `ITEM_PATHS::MAIN`) names the flag last; a pin of the
+    // no-connect type touching other items (`NoConnectPinConflicts`, `ITEM_PATHS::NONE`) never names one.
+    let nc_flag = check == "no_connect_connected" && items.last().is_some_and(|i| i.description == "No Connect");
+    let paths = if hier_label {
+        Paths::None
+    } else if nc_flag {
+        Paths::SpecificMain
+    } else {
+        rule.paths
+    };
     let single = sheets <= 1;
     let path = uuids_of(sheet);
     // the sheet an item is on: the one placement of its screen, or the report's sheet when it is one of several
@@ -269,7 +287,7 @@ pub fn marker_with(check: &str, severity: &str, items: &[MarkerItem], sheet: &st
         }
         _ => return None,
     };
-    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [at.x_nm, at.y_nm], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path })
+    Some(ErcMarker { error_type: error_type.to_string(), at_nm: [at.x_nm, at.y_nm], items: items.iter().map(|i| i.uuid.clone()).collect(), sheet: specific, main_sheet: main_path, aux_sheet: aux_path, child: String::new() })
 }
 
 /// Whether an exclusion's marker and a finding's are of one sheet (`SCH_MARKER::GetSheetSpecificPath`): the same sheet path, or either not known (an
@@ -313,6 +331,9 @@ pub fn entry(marker: &ErcMarker, comment: &str) -> Value {
     }
     if !marker.aux_sheet.is_empty() {
         m["auxItemSheetPath"] = sheet_path_json(&marker.aux_sheet);
+    }
+    if !marker.child.is_empty() {
+        m["child"] = json!({ "textValue": marker.child });
     }
     let mut e = json!({ "marker": m });
     if !comment.is_empty() {
@@ -368,15 +389,17 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
             return None;
         }
         let check = *props.first()?;
-        if matches!(check, "generic-warning" | "generic-error" | "unresolved_variable") {
-            return None;
-        }
         // `ERC_ITEM::Create( key )` takes the first item type of the key: `pin_to_pin` is the warning (`pinTableWarning` comes before the error)
         let error_type = error_type(check, "warning")?;
         let iu = |i: usize| Nm::new(props.get(i).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0) * eda_model::units::SCH_IU_NM);
-        let items = [3, 4].iter().filter_map(|&i| props.get(i).map(|s| s.trim())).filter(|u| !u.is_empty() && *u != NIL_UUID).map(String::from).collect();
+        let main = props.get(3).map(|s| s.trim()).unwrap_or("");
+        let aux = props.get(4).map(|s| s.trim()).unwrap_or("");
+        // `ERC_EXCLUSION::FromLegacyStrings`: a generic or unresolved-variable text names its parent and, as the aux part, the child's text
+        let child_text = matches!(check, "generic-warning" | "generic-error" | "unresolved_variable") && !main.is_empty() && main != NIL_UUID && !aux.is_empty() && aux != NIL_UUID;
+        let items = if child_text { vec![main.to_string()] } else { [main, aux].into_iter().filter(|u| !u.is_empty() && *u != NIL_UUID).map(String::from).collect() };
+        let child = if child_text { aux.to_string() } else { String::new() };
         let p = |i: usize| props.get(i).map(|t| text_path(t)).unwrap_or_default();
-        Some((ErcMarker { error_type: error_type.to_string(), at_nm: [iu(1), iu(2)], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7) }, comment.to_string()))
+        Some((ErcMarker { error_type: error_type.to_string(), at_nm: [iu(1), iu(2)], items, sheet: p(5), main_sheet: p(6), aux_sheet: p(7), child }, comment.to_string()))
     };
     if legacy {
         // `ERC_SETTINGS::migrateSchema0to1` keeps the texts in a `std::set<std::pair<wxString, wxString>>` (`m_ErcExclusionsLegacy`): each (text, comment)
@@ -410,6 +433,7 @@ pub fn read_project(pro_text: &str) -> Vec<(ErcMarker, String)> {
                     sheet: path(field(m, "sheet_specific_path", "sheetSpecificPath")),
                     main_sheet: path(field(m, "main_item_sheet_path", "mainItemSheetPath")),
                     aux_sheet: path(field(m, "aux_item_sheet_path", "auxItemSheetPath")),
+                    child: field(&field(m, "child", "child"), "text_value", "textValue").as_str().unwrap_or("").to_string(),
                 };
                 Some((marker, e.get("comment").and_then(Value::as_str).unwrap_or("").to_string()))
             }
@@ -534,6 +558,317 @@ pub fn off_grid_end(ends: [[i64; 2]; 2], grid_nm: i64) -> [i64; 2] {
     }
 }
 
+/// A symbol's pin on its sheet, as the connectivity's `PIN_FACT` has it: its uuid, its symbol's, where its end is in nanometres, and whether it is of the
+/// no-connect type, hidden, or a power flag's (`noConnectSources`: a pin of a power symbol that is a power output).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinFact {
+    pub uuid: String,
+    pub owner: String,
+    pub at: [i64; 2],
+    pub nc: bool,
+    pub hidden: bool,
+    pub power_flag: bool,
+}
+
+/// A field of a symbol, a sheet or a label: its owner's uuid, its name, its text as the file holds it and where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldFact {
+    pub owner: String,
+    pub name: String,
+    pub text: String,
+    pub at: [i64; 2],
+}
+
+/// What one screen of a derived tree holds that a marker the report does not spell out is put together from ([`witnesses`]).
+#[derive(Debug, Clone, Default)]
+pub struct ScreenFacts {
+    pub pins: Vec<PinFact>,
+    /// The wires and buses (`SCH_LINE`), each with its two ends.
+    pub lines: Vec<(String, [[i64; 2]; 2])>,
+    /// Labels of every kind and sheet pins, by uuid, at their connection point, with the label's own text (a sheet pin's name).
+    pub labels: Vec<(String, [i64; 2], String)>,
+    pub fields: Vec<FieldFact>,
+}
+
+/// The screens of a derived tree ([`tree_facts`]) and the screen each item uuid is on.
+#[derive(Debug, Clone, Default)]
+pub struct TreeFacts {
+    pub screens: Vec<ScreenFacts>,
+    pub screen_of: std::collections::HashMap<String, usize>,
+}
+
+/// [`ScreenFacts`] of every screen of a derived tree (`root`, then each `Sheetfile` from its placing file's folder, each read once): a symbol's pins of its own
+/// unit and body style at `SCH_SYMBOL`'s transform of the library pin (`(at)` is the pin's end; the library is y up), the instance's `(pin ..)` uuids given to
+/// the library's pins of each number in order (`SCH_SYMBOL::UpdatePins`).
+pub fn tree_facts(root: &str, read: &dyn Fn(&str) -> Option<String>) -> TreeFacts {
+    use crate::sexpr::{find, find_all, tag, txt, Sexpr};
+    let mut facts = TreeFacts::default();
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = vec![root.to_string()];
+    let nm = |t: Option<&str>| t.and_then(|v| v.parse::<f64>().ok()).map(|mm| (mm * 1_000_000.0).round() as i64);
+    let xy = |l: &[Sexpr]| -> Option<[i64; 2]> { Some([nm(txt(l, 1))?, nm(txt(l, 2))?]) };
+    let uuid_of = |l: &[Sexpr]| find(l, "uuid").and_then(|u| txt(u, 1)).map(String::from);
+    let fields_of = |l: &[Sexpr], owner: &str, out: &mut Vec<FieldFact>| {
+        for p in find_all(l, "property") {
+            if let (Some(name), Some(text), Some(at)) = (txt(p, 1), txt(p, 2), find(p, "at").and_then(xy)) {
+                out.push(FieldFact { owner: owner.to_string(), name: name.to_string(), text: text.to_string(), at });
+            }
+        }
+    };
+    while let Some(name) = todo.pop() {
+        if !seen.insert(name.clone()) || seen.len() > 512 {
+            continue;
+        }
+        let Some(text) = read(&name) else { continue };
+        let Ok(tree) = crate::sexpr::parse(&text) else { continue };
+        let Some(top) = tree.as_list() else { continue };
+        // the library pins of each symbol: (unit, body style, number, type, hidden, at)
+        type LibPin = (u32, u32, String, String, bool, [i64; 2]);
+        let mut libs: std::collections::HashMap<String, (bool, Vec<LibPin>)> = std::collections::HashMap::new();
+        if let Some(ls) = find(top, "lib_symbols") {
+            for def in find_all(ls, "symbol") {
+                let Some(lib_id) = txt(def, 1) else { continue };
+                let power = find(def, "power").is_some();
+                let mut pins = Vec::new();
+                for sub in find_all(def, "symbol") {
+                    // `NAME_<unit>_<body style>`
+                    let sub_name = txt(sub, 1).unwrap_or("");
+                    let mut parts = sub_name.rsplit('_');
+                    let style: u32 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let unit: u32 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                    for pin in find_all(sub, "pin") {
+                        let (Some(kind), Some(at)) = (txt(pin, 1), find(pin, "at").and_then(xy)) else { continue };
+                        let number = find(pin, "number").and_then(|n| txt(n, 1)).unwrap_or("").to_string();
+                        let hidden = pin.iter().any(|a| a.text() == Some("hide")) || find(pin, "hide").is_some_and(|h| txt(h, 1) != Some("no"));
+                        pins.push((unit, style, number, kind.to_string(), hidden, at));
+                    }
+                }
+                libs.insert(lib_id.to_string(), (power, pins));
+            }
+        }
+        let index = facts.screens.len();
+        let mut screen = ScreenFacts::default();
+        for item in top.iter().skip(1) {
+            let Some(l) = item.as_list() else { continue };
+            let uuid = uuid_of(l);
+            match tag(l) {
+                Some("symbol") => {
+                    let (Some(u), Some(lib_id), Some(at)) = (uuid.clone(), find(l, "lib_id").and_then(|x| txt(x, 1)), find(l, "at")) else { continue };
+                    let Some(pos) = xy(at) else { continue };
+                    let angle = txt(at, 3).and_then(|a| a.parse::<f64>().ok()).unwrap_or(0.0);
+                    let xf = eda_model::kicad_geom::Xf::of_instance(angle, find(l, "mirror").and_then(|m| txt(m, 1)));
+                    let unit: u32 = find(l, "unit").and_then(|x| txt(x, 1)).and_then(|v| v.parse().ok()).unwrap_or(1);
+                    let style: u32 = find(l, "body_style").or_else(|| find(l, "convert")).and_then(|x| txt(x, 1)).and_then(|v| v.parse().ok()).unwrap_or(1);
+                    // the instance's pin uuids by number, in order
+                    let mut by_number: std::collections::HashMap<&str, Vec<String>> = std::collections::HashMap::new();
+                    for p in find_all(l, "pin") {
+                        if let (Some(n), Some(pu)) = (txt(p, 1), find(p, "uuid").and_then(|x| txt(x, 1))) {
+                            by_number.entry(n).or_default().push(pu.to_string());
+                        }
+                    }
+                    let mut taken: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    if let Some((power, pins)) = libs.get(lib_id) {
+                        for (pu, ps, number, kind, hidden, lat) in pins {
+                            if (*pu != 0 && *pu != unit) || (*ps != 0 && *ps != style) {
+                                continue;
+                            }
+                            let nth = taken.entry(number.clone()).or_default();
+                            let Some(pin_uuid) = by_number.get(number.as_str()).and_then(|v| v.get(*nth)).cloned() else { continue };
+                            *nth += 1;
+                            let (lx, ly) = (lat[0], -lat[1]);
+                            let p = [pos[0] + xf.x1 as i64 * lx + xf.y1 as i64 * ly, pos[1] + xf.x2 as i64 * lx + xf.y2 as i64 * ly];
+                            facts.screen_of.insert(pin_uuid.clone(), index);
+                            screen.pins.push(PinFact { uuid: pin_uuid, owner: u.clone(), at: p, nc: kind == "no_connect", hidden: *hidden, power_flag: *power && kind == "power_out" });
+                        }
+                    }
+                    fields_of(l, &u, &mut screen.fields);
+                    facts.screen_of.insert(u, index);
+                }
+                Some("wire" | "bus") => {
+                    let pts: Vec<[i64; 2]> = find(l, "pts").map(|ps| find_all(ps, "xy").filter_map(xy).collect()).unwrap_or_default();
+                    if let (Some(u), [a, b]) = (uuid, pts.as_slice()) {
+                        facts.screen_of.insert(u.clone(), index);
+                        screen.lines.push((u, [*a, *b]));
+                    }
+                }
+                Some("label" | "global_label" | "hierarchical_label" | "directive_label" | "netclass_flag") => {
+                    if let (Some(u), Some(at)) = (uuid, find(l, "at").and_then(xy)) {
+                        fields_of(l, &u, &mut screen.fields);
+                        facts.screen_of.insert(u.clone(), index);
+                        screen.labels.push((u, at, txt(l, 1).unwrap_or("").to_string()));
+                    }
+                }
+                Some("text") => {
+                    if let Some(u) = uuid {
+                        facts.screen_of.insert(u, index);
+                    }
+                }
+                Some("sheet") => {
+                    if let Some(u) = uuid.clone() {
+                        fields_of(l, &u, &mut screen.fields);
+                        facts.screen_of.insert(u, index);
+                    }
+                    for pin in find_all(l, "pin") {
+                        if let (Some(pu), Some(at)) = (uuid_of(pin), find(pin, "at").and_then(xy)) {
+                            facts.screen_of.insert(pu.clone(), index);
+                            screen.labels.push((pu, at, txt(pin, 1).unwrap_or("").to_string()));
+                        }
+                    }
+                    if let Some(file) = find_all(l, "property").find(|p| matches!(txt(p, 1), Some("Sheetfile" | "Sheet file"))).and_then(|p| txt(p, 2)) {
+                        let folder = std::path::Path::new(&name).parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                        todo.push(if folder.is_empty() { file.to_string() } else { format!("{folder}/{file}") });
+                    }
+                }
+                _ => {}
+            }
+        }
+        facts.screens.push(screen);
+    }
+    facts
+}
+
+/// The text variables a symbol's or sheet's field resolves without the project (`SCH_SYMBOL::ResolveTextVar`, `SCH_SHEET::ResolveTextVar`, the title block's):
+/// a field naming one of these, or another field of its own owner, is not a finding.
+const KNOWN_VARS: &[&str] = &[
+    "REFERENCE", "VALUE", "FOOTPRINT", "DATASHEET", "DESCRIPTION", "KEYWORDS", "FOOTPRINT_LIBRARY", "FOOTPRINT_NAME", "UNIT", "SHORT_REFERENCE", "SYMBOL_LIBRARY", "SYMBOL_NAME",
+    "SYMBOL_DESCRIPTION", "SYMBOL_KEYWORDS", "EXCLUDE_FROM_BOM", "EXCLUDE_FROM_BOARD", "EXCLUDE_FROM_SIM", "DNP", "NET_NAME", "NET_CLASS", "PIN_NAME", "SHEETNAME",
+    "SHEETPATH", "SHEETFILE", "FILENAME", "FILEPATH", "PROJECTNAME", "CURRENT_DATE", "ISSUE_DATE", "REVISION", "TITLE", "COMPANY", "PAPER", "LAYER", "#", "##",
+    "COMMENT1", "COMMENT2", "COMMENT3", "COMMENT4", "COMMENT5", "COMMENT6", "COMMENT7", "COMMENT8", "COMMENT9", "VARIANT", "VARIANTNAME", "VARIANT_DESCRIPTION",
+];
+
+/// The `${..}` references of a text.
+fn text_vars(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("${") {
+        let after = &rest[i + 2..];
+        let Some(j) = after.find('}') else { break };
+        out.push(&after[..j]);
+        rest = &after[j + 1..];
+    }
+    out
+}
+
+/// The marker's own items and place for the checks whose report names fewer items than the marker, or names an item the file has no uuid for, put together from
+/// the derived tree as KiCad 25ec2335's checks make them. `items` are the report's (main first); on `Some`, they are the marker's, the first at the marker's
+/// position, and the string is the marker's `child` text (empty for none). `None`: the tree does not say (the marker stays the studio's).
+/// - `four_way_junction` (`ENGINE::FourWayJunctions`, `TestFourWayJunction`): at the end of the main item where the others meet it, one pin per
+///   symbol (the visible one first, then the least uuid) sorted, then the wires and buses with an end there sorted -- the first four;
+/// - `label_multiple_wires` (`LabelWireConflicts`, `TestLabelMultipleWires`): the label, then up to three wires sorted whose inside (not an end) holds it;
+/// - `no_connect_connected` of a pin (`NoConnectPinConflicts`, `TestNoConnectPins`): at the pin, up to three no-connect pins there sorted, then the items they
+///   touch sorted -- pins of another type (not a power flag's), wire and bus ends, labels and sheet pins; a no-connect flag and a junction are not among them
+///   (probed) -- four at most; the flag's own finding names its items as the report does;
+/// - `unresolved_variable` of a symbol or a sheet (`TestTextVars`: the field's source names its owner, at the field): the one field of the owner whose text
+///   holds a variable it cannot resolve;
+/// - `generic-warning` / `generic-error` of a field (`SCH_MARKER`'s `ToProto`: a field has no uuid in the file, so its parent's uuid and the field's text,
+///   `ErcSymbolChildReference`): the field at the report's place.
+pub fn witnesses(facts: &TreeFacts, check: &str, items: &mut Vec<MarkerItem>) -> Option<String> {
+    let main = items.first()?.clone();
+    let screen = facts.screen_of.get(&main.uuid).and_then(|&i| facts.screens.get(i));
+    let set_at = |items: &mut Vec<MarkerItem>, at: [i64; 2]| {
+        if let Some(first) = items.first_mut() {
+            (first.x_nm, first.y_nm) = (Nm::new(at[0]), Nm::new(at[1]));
+        }
+    };
+    let item = |uuid: &str, at: [i64; 2]| MarkerItem { uuid: uuid.to_string(), x_nm: Nm::new(at[0]), y_nm: Nm::new(at[1]), description: String::new() };
+    // the report names the marker's first two items: what is put together must start with them
+    let agrees = |built: &[String], items: &[MarkerItem]| items.iter().zip(built).all(|(a, b)| a.uuid == *b) && built.len() >= items.len();
+    match check {
+        "four_way_junction" => {
+            let screen = screen?;
+            // the point is where the main item meets the others: a pin's end, or an end of a wire (the message's "at %d, %d" is in a unit of its own)
+            let candidates: Vec<[i64; 2]> = match screen.lines.iter().find(|(u, _)| *u == main.uuid) {
+                Some((_, ends)) => ends.to_vec(),
+                None => screen.pins.iter().filter(|p| p.uuid == main.uuid).map(|p| p.at).collect(),
+            };
+            let at_point = |at: [i64; 2]| -> Vec<String> {
+                let mut per_owner: std::collections::BTreeMap<&str, &PinFact> = std::collections::BTreeMap::new();
+                for p in screen.pins.iter().filter(|p| p.at == at) {
+                    let pick = per_owner.entry(p.owner.as_str()).or_insert(p);
+                    if (p.hidden, &p.uuid) < (pick.hidden, &pick.uuid) {
+                        *pick = p;
+                    }
+                }
+                let mut pins: Vec<String> = per_owner.values().map(|p| p.uuid.clone()).collect();
+                pins.sort();
+                let mut lines: Vec<String> = screen.lines.iter().filter(|(_, e)| e[0] == at || e[1] == at).map(|(u, _)| u.clone()).collect();
+                lines.sort();
+                lines.dedup();
+                pins.into_iter().chain(lines).take(4).collect()
+            };
+            let mut found: Vec<([i64; 2], Vec<String>)> = candidates.into_iter().map(|at| (at, at_point(at))).filter(|(_, b)| b.len() == 4 && agrees(b, items)).collect();
+            found.dedup();
+            let [(at, built)] = found.as_slice() else { return None };
+            let at = *at;
+            *items = built.iter().map(|u| item(u, at)).collect();
+            Some(String::new())
+        }
+        "label_multiple_wires" => {
+            let screen = screen?;
+            let at = [main.x_nm.get(), main.y_nm.get()];
+            let inside = |e: &[[i64; 2]; 2]| {
+                let (a, b) = (e[0], e[1]);
+                let cross = (b[0] - a[0]) as i128 * (at[1] - a[1]) as i128 - (b[1] - a[1]) as i128 * (at[0] - a[0]) as i128;
+                cross == 0 && at != a && at != b && at[0] >= a[0].min(b[0]) && at[0] <= a[0].max(b[0]) && at[1] >= a[1].min(b[1]) && at[1] <= a[1].max(b[1])
+            };
+            let mut wires: Vec<String> = screen.lines.iter().filter(|(_, e)| inside(e)).map(|(u, _)| u.clone()).collect();
+            wires.sort();
+            if wires.len() < 2 {
+                return None;
+            }
+            let built: Vec<String> = std::iter::once(main.uuid.clone()).chain(wires.into_iter().take(3)).collect();
+            if !agrees(&built, items) {
+                return None;
+            }
+            *items = built.iter().map(|u| item(u, at)).collect();
+            Some(String::new())
+        }
+        "no_connect_connected" if items.last().is_some_and(|i| i.description == "No Connect") => Some(String::new()),
+        "no_connect_connected" => {
+            let screen = screen?;
+            let at = [main.x_nm.get(), main.y_nm.get()];
+            let mut pins: Vec<String> = screen.pins.iter().filter(|p| p.at == at && p.nc).map(|p| p.uuid.clone()).collect();
+            let mut others: Vec<String> = screen.pins.iter().filter(|p| p.at == at && !p.nc && !p.power_flag).map(|p| p.uuid.clone()).collect();
+            others.extend(screen.lines.iter().filter(|(_, e)| e[0] == at || e[1] == at).map(|(u, _)| u.clone()));
+            others.extend(screen.labels.iter().filter(|(_, p, _)| *p == at).map(|(u, _, _)| u.clone()));
+            pins.sort();
+            others.sort();
+            others.dedup();
+            let np = pins.len().min(3);
+            let built: Vec<String> = pins.into_iter().take(np).chain(others.into_iter().take(4 - np)).collect();
+            if !agrees(&built, items) {
+                return None;
+            }
+            *items = built.iter().map(|u| item(u, at)).collect();
+            Some(String::new())
+        }
+        "unresolved_variable" => {
+            let Some(screen) = screen else { return Some(String::new()) };
+            // a symbol or a sheet: the field; a label or a text: the item itself, at its place
+            if screen.labels.iter().any(|(u, _, _)| *u == main.uuid) || !screen.fields.iter().any(|f| f.owner == main.uuid) {
+                return Some(String::new());
+            }
+            let own: Vec<&FieldFact> = screen.fields.iter().filter(|f| f.owner == main.uuid).collect();
+            let resolves = |var: &str| {
+                let v = var.to_ascii_uppercase();
+                KNOWN_VARS.contains(&v.as_str()) || own.iter().any(|f| f.name.to_ascii_uppercase() == v) || var.starts_with("ERC_")
+            };
+            let unresolved: Vec<&&FieldFact> = own.iter().filter(|f| text_vars(&f.text).iter().any(|v| !resolves(v))).collect();
+            let [field] = unresolved.as_slice() else { return None };
+            set_at(items, field.at);
+            Some(String::new())
+        }
+        "generic-warning" | "generic-error" if !facts.screen_of.contains_key(&main.uuid) => {
+            let at = [main.x_nm.get(), main.y_nm.get()];
+            let hits: Vec<&FieldFact> = facts.screens.iter().flat_map(|s| s.fields.iter()).filter(|f| f.at == at && f.text.contains("${ERC_")).collect();
+            let [field] = hits.as_slice() else { return None };
+            *items = vec![item(&field.owner, at)];
+            Some(field.text.clone())
+        }
+        _ => Some(String::new()),
+    }
+}
+
 /// A `.kicad_sch` text's own `(uuid ..)`: the root sheet's, which the sheet paths of a project's markers start with.
 pub fn file_uuid(text: &str) -> Option<String> {
     let tree = crate::sexpr::parse(text).ok()?;
@@ -628,6 +963,68 @@ mod tests {
         assert_eq!(marker_with("label_dangling", "error", &label, "/R", 3, &sheets), None);
     }
 
+    /// UI-LEFT-3 B3-2: the markers whose report names fewer items than the marker, or a field by a uuid the file does not keep, are put together from the tree:
+    /// a symbol's pins at their ends (the library is y up), the wires at a point, a label on two wires' insides, a field by its owner and text.
+    #[test]
+    fn the_tree_gives_the_items_a_marker_names_beyond_the_report() {
+        let sheet = "(kicad_sch (version 1) (uuid \"R\")
+            (lib_symbols (symbol \"T:X\" (power) (symbol \"X_1_1\" (pin passive line (at -3.81 0 0) (length 2.54) (number \"1\")) (pin no_connect line (at 3.81 0 180) (length 2.54) (number \"2\")))))
+            (symbol (lib_id \"T:X\") (at 50.8 50.8 90) (unit 1) (uuid \"s1\") (property \"Note\" \"${NOPE} ${VALUE}\" (at 50.8 57 0)) (property \"Chk\" \"${ERC_ERROR boom}\" (at 50.8 59 0))
+                (pin \"1\" (uuid \"p1\")) (pin \"2\" (uuid \"p2\")))
+            (wire (pts (xy 50.8 46.99) (xy 50.8 40)) (uuid \"wa\")) (wire (pts (xy 50.8 54.61) (xy 50.8 60)) (uuid \"wb\")) (label \"L\" (at 50.8 54.61 0) (uuid \"lb\"))
+            (wire (pts (xy 10 10) (xy 20 10)) (uuid \"w1\")) (wire (pts (xy 20 10) (xy 30 10)) (uuid \"w2\")) (wire (pts (xy 20 0) (xy 20 10)) (uuid \"w3\")) (wire (pts (xy 20 20) (xy 20 10)) (uuid \"w4\"))
+            (wire (pts (xy 0 30) (xy 10 30)) (uuid \"h1\")) (wire (pts (xy 5 25) (xy 5 35)) (uuid \"h2\")) (label \"M\" (at 5 30 0) (uuid \"lm\")))";
+        let facts = tree_facts("s.kicad_sch", &|n: &str| (n == "s.kicad_sch").then(|| sheet.to_string()));
+        let pins = &facts.screens[0].pins;
+        // turned 90 degrees: the pin at (-3.81, 0) of the library is below the symbol on the page, the one at (3.81, 0) above... in y down
+        assert_eq!(pins.iter().map(|p| (p.uuid.as_str(), p.at, p.nc)).collect::<Vec<_>>(), vec![("p1", [50_800_000, 54_610_000], false), ("p2", [50_800_000, 46_990_000], true)]);
+        let mi = |u: &str, x: f64, y: f64, d: &str| item(u, (x * 1e6) as i64, (y * 1e6) as i64, d);
+        // four wire ends at (20, 10): the first four lines sorted
+        let mut four = vec![mi("w1", 10.0, 10.0, "Horizontal Wire"), mi("w2", 20.0, 10.0, "Horizontal Wire")];
+        assert_eq!(witnesses(&facts, "four_way_junction", &mut four), Some(String::new()));
+        assert_eq!(four.iter().map(|i| i.uuid.as_str()).collect::<Vec<_>>(), ["w1", "w2", "w3", "w4"]);
+        assert_eq!((four[0].x_nm, four[0].y_nm), (Nm::new(20_000_000), Nm::new(10_000_000)), "at the point they meet");
+        // a no-connect pin touching a wire end and a label: the pin, then the others sorted
+        let mut nc = vec![mi("p2", 50.8, 46.99, "Symbol U1 Pin 2"), mi("wa", 50.8, 46.99, "Vertical Wire")];
+        assert!(witnesses(&facts, "no_connect_connected", &mut nc).is_some());
+        assert_eq!(nc.iter().map(|i| i.uuid.as_str()).collect::<Vec<_>>(), ["p2", "wa"]);
+        let mut wrong = vec![mi("p2", 50.8, 46.99, "Symbol U1 Pin 2"), mi("zz", 50.8, 46.99, "Vertical Wire")];
+        assert_eq!(witnesses(&facts, "no_connect_connected", &mut wrong), None, "the report's items must lead the built list");
+        // a label on the insides of two crossing wires
+        let mut lab = vec![mi("lm", 5.0, 30.0, "Label 'M'"), mi("h1", 0.0, 30.0, "Horizontal Wire")];
+        assert!(witnesses(&facts, "label_multiple_wires", &mut lab).is_some());
+        assert_eq!(lab.iter().map(|i| i.uuid.as_str()).collect::<Vec<_>>(), ["lm", "h1", "h2"]);
+        // the symbol's one field with a variable it cannot resolve (`${VALUE}` it can): the marker is at the field
+        let mut unres = vec![mi("s1", 50.8, 50.8, "Symbol U1 [X]")];
+        assert!(witnesses(&facts, "unresolved_variable", &mut unres).is_some());
+        assert_eq!((unres[0].uuid.as_str(), unres[0].y_nm), ("s1", Nm::new(57_000_000)));
+        // an assertion in a field: the field's parent, and the field's text as the child
+        let mut generic = vec![mi("random-field-uuid", 50.8, 59.0, "Field Chk")];
+        assert_eq!(witnesses(&facts, "generic-error", &mut generic), Some("${ERC_ERROR boom}".to_string()));
+        assert_eq!(generic.iter().map(|i| i.uuid.as_str()).collect::<Vec<_>>(), ["s1"]);
+        let m = marker("generic-error", "error", &generic, "/R", 1).map(|m| ErcMarker { child: "${ERC_ERROR boom}".into(), ..m }).unwrap();
+        assert_eq!(entry(&m, "")["marker"]["child"], json!({ "textValue": "${ERC_ERROR boom}" }));
+        // the record reads back with its child
+        let pro = json!({ "erc": { "meta": { "version": 1 }, "erc_exclusions": [entry(&m, "c")] } }).to_string();
+        assert_eq!(read_project(&pro), vec![(m.clone(), "c".to_string())]);
+        // a no-connect flag's own finding is the item's sheet's (`ITEM_PATHS::MAIN`); a pin's is the sheet's only
+        let flag = marker("no_connect_connected", "warning", &[mi("p1", 1.0, 2.0, "Symbol U2 Pin 1"), mi("nc", 1.0, 2.0, "No Connect")], "/R", 1).unwrap();
+        assert_eq!((flag.sheet.clone(), flag.main_sheet.clone()), (only(&["R"]), only(&["R"])));
+        let pin = marker("no_connect_connected", "warning", &nc, "/R", 1).unwrap();
+        assert_eq!((pin.sheet.clone(), pin.main_sheet.clone()), (only(&["R"]), vec![]));
+        assert_eq!(marker("field_name_whitespace", "warning", &[mi("s1", 1.0, 1.0, "Symbol"), mi("f", 1.0, 1.0, "Field")], "/R", 1), None, "a field's uuid is new on each load");
+    }
+
+    /// `ERC_EXCLUSION::FromLegacyStrings`: a generic or unresolved-variable text names the parent and the child's text.
+    #[test]
+    fn a_legacy_generic_exclusion_keeps_its_childs_text() {
+        let text = "generic-error|500|590|s1|${ERC_ERROR boom}|/R|/R|";
+        let pro = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": [text] } }).to_string();
+        let got = read_project(&pro);
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].0.items.clone(), got[0].0.child.as_str()), (only(&["s1"]), "${ERC_ERROR boom}"));
+    }
+
     /// Records kicad-cli 10.99.0-5334 consumed when they were written to a project (probed on a derived schematic: the violation was reported as excluded, with the
     /// comment, and no marker of its own was left beside it).
     #[test]
@@ -636,7 +1033,7 @@ mod tests {
         let m = marker("pin_not_connected", "error", &[pin], ROOT, 1).unwrap();
         assert_eq!(
             m,
-            ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [mm(115.57), mm(110.49)], items: only(&["693a38f5-591c-4c06-9786-e8973d13af99"]), sheet: only(&[ROOT_UUID]), main_sheet: only(&[ROOT_UUID]), aux_sheet: vec![] }
+            ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [mm(115.57), mm(110.49)], items: only(&["693a38f5-591c-4c06-9786-e8973d13af99"]), sheet: only(&[ROOT_UUID]), main_sheet: only(&[ROOT_UUID]), aux_sheet: vec![], child: String::new() }
         );
         assert_eq!(
             entry(&m, "unused on purpose"),
@@ -752,7 +1149,8 @@ mod tests {
     #[test]
     fn a_check_whose_marker_this_has_not_read_the_source_of_has_no_marker() {
         // (`endpoint_off_grid` and `unconnected_wire_endpoint` have a rule now; the caller gives a wire's item the end's position)
-        for check in ["unresolved_variable", "generic-warning", "four_way_junction", "no_connect_connected", "field_name_whitespace"] {
+        // (`four_way_junction`, `label_multiple_wires`, `no_connect_connected`, `unresolved_variable`, `generic-*` have one now, their items from the tree: `witnesses`)
+        for check in ["field_name_whitespace", "bus_definition_conflict"] {
             assert!(marker(check, "error", &[item("a", 1, 2, "Wire")], ROOT, 1).is_none(), "{check}");
         }
         assert!(marker("footprint_link_issues", "warning", &[], ROOT, 1).is_none(), "a violation naming no item cannot be keyed");
@@ -761,7 +1159,7 @@ mod tests {
 
     #[test]
     fn every_check_with_a_marker_rule_has_a_kind_of_finding_and_the_names_are_kicads() {
-        for check in ["footprint_link_issues", "simulation_model_issue", "lib_symbol_issues", "lib_symbol_mismatch", "duplicate_sheet_names", "undefined_netclass", "different_unit_footprint", "pin_not_connected", "pin_not_driven", "power_pin_not_driven", "ground_pin_not_ground", "stacked_pin_name", "missing_unit", "missing_input_pin", "missing_bidi_pin", "missing_power_pin", "no_connect_dangling", "single_global_label", "wire_dangling", "label_dangling", "isolated_pin_label", "bus_to_net_conflict", "bus_to_bus_conflict", "net_not_bus_member", "pin_to_pin", "different_unit_net", "multiple_net_names", "similar_labels", "similar_power", "similar_label_and_power", "same_local_global_label", "same_local_global_power"] {
+        for check in ["footprint_link_issues", "simulation_model_issue", "lib_symbol_issues", "lib_symbol_mismatch", "duplicate_sheet_names", "undefined_netclass", "different_unit_footprint", "pin_not_connected", "pin_not_driven", "power_pin_not_driven", "ground_pin_not_ground", "stacked_pin_name", "missing_unit", "missing_input_pin", "missing_bidi_pin", "missing_power_pin", "no_connect_dangling", "single_global_label", "wire_dangling", "label_dangling", "isolated_pin_label", "bus_to_net_conflict", "bus_to_bus_conflict", "net_not_bus_member", "pin_to_pin", "different_unit_net", "multiple_net_names", "similar_labels", "similar_power", "similar_label_and_power", "same_local_global_label", "same_local_global_power", "four_way_junction", "label_multiple_wires", "no_connect_connected", "unresolved_variable", "generic-warning", "generic-error", "duplicate_pins"] {
             assert!(rule(check).is_some() && error_type(check, "error").is_some(), "{check}");
         }
         // `ERCE_` of erc_item.cpp with the library's `ERCET_`; two spellings that differ.
@@ -809,13 +1207,15 @@ mod tests {
         let file_ids: std::collections::BTreeMap<String, String> = [("f-pin".to_string(), "U1.1".to_string())].into();
         let derived: std::collections::HashMap<String, String> = [("d-pin".to_string(), "U1.1".to_string())].into();
         let got = from_project(&records, &file_ids, &derived, "f-root", "d-root");
-        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::new(1000), Nm::new(2000)], items: only(&["d-pin"]), sheet: only(&["d-root", "s1"]), main_sheet: only(&["d-root", "s1"]), aux_sheet: vec![] };
+        let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::new(1000), Nm::new(2000)], items: only(&["d-pin"]), sheet: only(&["d-root", "s1"]), main_sheet: only(&["d-root", "s1"]), aux_sheet: vec![], child: String::new() };
         assert_eq!(got, vec![excl("pin_not_connected", "U1.1", Some(marker), "kept")], "the record whose second item is not in the import is left out, and the text is not read at schema 1");
         // schema 0: the texts, and not the records
         let legacy = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": [["pin_not_connected|13335|8128|f-pin|00000000-0000-0000-0000-000000000000|||", "comment1"], "generic-warning|1|1|f-pin|some text|||", "bad|1"] } }).to_string();
         let got = from_project(&legacy, &file_ids, &derived, "f-root", "d-root");
         let marker = ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [Nm::new(1_333_500), Nm::new(812_800)], items: only(&["d-pin"]), ..Default::default() };
-        assert_eq!(got, vec![excl("pin_not_connected", "U1.1", Some(marker), "comment1")]);
+        // a generic text names its parent and the child's text (`FromLegacyStrings`, UI-LEFT-3 B3-2)
+        let generic = ErcMarker { error_type: "ERCET_GENERIC_WARNING".into(), at_nm: [Nm::new(100), Nm::new(100)], items: only(&["d-pin"]), child: "some text".into(), ..Default::default() };
+        assert_eq!(got, vec![excl("generic-warning", "U1.1", Some(generic), ""), excl("pin_not_connected", "U1.1", Some(marker), "comment1")]);
         let pin_to_pin = json!({ "erc": { "meta": { "version": 0 }, "erc_exclusions": ["pin_to_pin|1|1|f-pin|00000000-0000-0000-0000-000000000000|||"] } }).to_string();
         assert_eq!(read_project(&pin_to_pin)[0].0.error_type, "ERCET_PIN_TO_PIN_WARNING", "a legacy pin_to_pin text is the warning");
         assert_eq!(file_uuid("(kicad_sch (version 20250114) (uuid \"ab-cd\"))").as_deref(), Some("ab-cd"));

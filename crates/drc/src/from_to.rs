@@ -12,8 +12,10 @@
 //! The zones are items too when their fill is known (KiCad 25ec2335 `uniquePathBetweenNodes` walks `ConnectedItems()`, which hold the `CN_ZONE_LAYER`s; the
 //! endpoints' island is the zones' too, `EXCLUDE_ZONES` leaving them out of the answer only): each outline of a zone's fill on a layer is one item, joined
 //! to an item on that layer whose shape meets it (`checkZoneItemConnection`'s `Collide`) and is not wholly in one of its holes, unless both are of two nets.
+//! Two zone items of one net on one layer are joined when a point of either one's outline is in the other's fill (`checkZoneZoneConnection`, KiCad 25ec2335
+//! `pcbnew/connectivity/connectivity_algo.cpp`: each outline point inside the other's bounding box, `CN_ZONE_LAYER::ContainsPoint`).
 //!
-//! Differs: a pad's shape is its front one on every layer; two zones are not joined to each other (`checkZoneZoneConnection`).
+//! Differs: a pad's shape is its front one on every layer.
 
 use crate::pcbexpr::wild_compare;
 use crate::rtree::DrcRTree;
@@ -62,6 +64,56 @@ fn bbox_of(it: &RuleItem) -> (Nm, Nm, Nm, Nm) {
         out = (p.x, p.y, p.x, p.y);
     }
     out
+}
+
+/// The outline of a zone item's fill (its one `Shape::Polygon`).
+fn zone_outline(it: &RuleItem) -> &[eda_model::ir::Point] {
+    match it.shapes.first() {
+        Some(crate::kimath::Shape::Polygon { pts }) => pts,
+        _ => &[],
+    }
+}
+
+/// `CN_ZONE_LAYER::ContainsPoint`: the point is in the fill's outline and not in one of its holes (`AnyTriangleHit` over the fill's triangulation, which holds
+/// the outline's edges and leaves the holes out).
+fn fill_contains(outline: &[eda_model::ir::Point], holes: &[Vec<eda_model::ir::Point>], p: eda_model::ir::Point) -> bool {
+    let inside = |poly: &[eda_model::ir::Point], strict: bool| -> bool {
+        if poly.len() < 3 {
+            return false;
+        }
+        let (px, py) = (p.x.get() as i128, p.y.get() as i128);
+        let mut wind = false;
+        for k in 0..poly.len() {
+            let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+            let (ax, ay, bx, by) = (a.x.get() as i128, a.y.get() as i128, b.x.get() as i128, b.y.get() as i128);
+            // on the edge
+            let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+            if cross == 0 && px >= ax.min(bx) && px <= ax.max(bx) && py >= ay.min(by) && py <= ay.max(by) {
+                return !strict;
+            }
+            if (ay > py) != (by > py) {
+                // x of the edge at py, compared without division
+                let lhs = (px - ax) * (by - ay);
+                let rhs = (bx - ax) * (py - ay);
+                if (by > ay && lhs < rhs) || (by < ay && lhs > rhs) {
+                    wind = !wind;
+                }
+            }
+        }
+        wind
+    };
+    inside(outline, false) && !holes.iter().any(|h| inside(h, true))
+}
+
+/// `checkZoneZoneConnection`'s test of one side: a point of `other`'s outline inside `zone`'s bounding box (`boxB.Contains( pt )`) that its fill holds
+/// (`ContainsPoint`).
+fn zone_holds_a_point_of(zone: &RuleItem, holes: &[Vec<eda_model::ir::Point>], other: &RuleItem) -> bool {
+    let outline = zone_outline(zone);
+    if outline.is_empty() {
+        return false;
+    }
+    let (x0, y0, x1, y1) = bbox_of(zone);
+    zone_outline(other).iter().any(|&p| p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1 && fill_contains(outline, holes, p))
 }
 
 impl FromToCache {
@@ -124,10 +176,15 @@ impl FromToCache {
                 if fixed(a.class) && fixed(b.class) && a.net != b.net {
                     continue;
                 }
-                // two zones are not joined here; a zone and an item wholly in one of its holes are not joined
+                // two zones: `checkZoneZoneConnection`
                 if i >= copper_count && j >= copper_count {
+                    if a.layers == b.layers && (zone_holds_a_point_of(b, &holes[j], a) || zone_holds_a_point_of(a, &holes[i], b)) {
+                        adjacency[i].push(j);
+                        adjacency[j].push(i);
+                    }
                     continue;
                 }
+                // a zone and an item wholly in one of its holes are not joined
                 if (j >= copper_count && in_a_hole(&holes[j], a)) || (i >= copper_count && in_a_hole(&holes[i], b)) {
                     continue;
                 }

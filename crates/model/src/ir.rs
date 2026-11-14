@@ -772,6 +772,10 @@ pub struct ErcMarker {
     pub main_sheet: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aux_sheet: Vec<String>,
+    /// `ErcMarker.child.text_value` (`kiapi.schematic.ErcSymbolChildReference`): a generic or unresolved-variable finding on a symbol's, label's or sheet's field
+    /// has no uuid of its own in the file, so the marker names its parent in `items` and the field by its text (`SCH_MARKER`'s `ToProto`). Empty: none. Additive.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub child: String,
 }
 
 /// A waived DRC violation: `BOARD_DESIGN_SETTINGS::m_DrcExclusions` with its `m_DrcExclusionComments`

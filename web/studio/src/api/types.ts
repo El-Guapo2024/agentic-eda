@@ -4050,6 +4050,8 @@ export interface ErcMarker {
   sheet?: string[];
   main_sheet?: string[];
   aux_sheet?: string[];
+  /** A field's text, when the marker names the field's parent in `items` (`kiapi.schematic.ErcSymbolChildReference`). */
+  child?: string;
 }
 
 export interface ErcViolation {
@@ -4139,6 +4141,8 @@ export interface ErcSeveritiesReply {
   severities: Record<string, RuleSeverity>;
   /** True when the design stores a table of its own. */
   custom: boolean;
+  /** The pin-to-pin error's own slot is set to Ignore (`SchExtras::pin_to_pin_errors_ignored`): the Ignored Tests row of the error reads it. */
+  pin_to_pin_errors_ignored?: boolean;
 }
 
 // ---------------------------------------------------------------- Lint

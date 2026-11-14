@@ -123,6 +123,7 @@ pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_t
 
 // The review workflow's share of the derived project: the waived DRC and ERC violations as KiCad's marker texts, and the per-check ERC severities.
 pub mod drc_exclusions;
+pub mod drc_markers;
 pub mod erc_exclusions;
 // An imported project's Schematic Setup (`.kicad_pro`'s `schematic` object): the unit notation and the rest kept for the derived project (r7 H5, M1).
 pub mod project_schematic;
