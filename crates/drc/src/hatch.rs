@@ -633,6 +633,26 @@ mod tests {
         (xs.iter().max().unwrap() - xs.iter().min().unwrap(), ys.iter().max().unwrap() - ys.iter().min().unwrap())
     }
 
+    /// UI-LEFT-3 C3-3: a text in an outline face knocks the hatch out by its glyphs (`OUTLINE_FONT`): DejaVu Sans' "HELLO" is wider than the stroke font's at the
+    /// same size (its em is 1.4 sizes), and its box starts at the anchor with no stroke-font offset.
+    #[test]
+    fn an_outline_face_is_knocked_out_by_its_glyphs() {
+        if eda_model::outline_font::OutlineFont::load(Some("DejaVu Sans"), false, false).is_none() {
+            return;
+        }
+        let stroke = spec_at(0);
+        let outline = TextSpec { face: Some("DejaVu Sans"), ..spec_at(0) };
+        let (s, _) = text_hull(&stroke, Nm::ZERO).unwrap();
+        let (o, _) = text_hull(&outline, Nm::ZERO).unwrap();
+        let ((ws, _), (wo, ho)) = (extent(&s), extent(&o));
+        assert!(wo > ws, "{wo} {ws}");
+        // H's stem is 0.098 em from the origin; the box is the glyphs grown by the knockout's error (0.02 mm)
+        let x0 = o.iter().map(|p| p.x).min().unwrap();
+        assert!((x0 - (10_000_000 + 2_800_000 * 201 / 2048 - 20_000)).abs() < 5_000, "{x0}");
+        // the O's overshoots (-29 .. 1520 of 2048) make the ink 0.756 em tall: 2.118 mm, and the error each side
+        assert!((ho - (2_800_000 * 1549 / 2048 + 40_000)).abs() < 15_000, "{ho}");
+    }
+
     #[test]
     fn the_box_round_a_turned_text_is_turned_with_it() {
         let (flat, _) = text_hull(&spec_at(0), mm(1.0)).unwrap();

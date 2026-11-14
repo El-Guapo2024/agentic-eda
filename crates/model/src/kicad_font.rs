@@ -267,6 +267,25 @@ mod tests {
         assert_eq!(wide.3 - wide.1, square(HJustify::Left, false, false).3 - square(HJustify::Left, false, false).1, "the height is the height's");
     }
 
+    /// UI-LEFT-3 C3-3: a box in an outline face is `GetTextBox` in that font -- its runs' advance wide, its size's ascender to descender tall, no stroke-font fudge
+    /// on the height; the stroke font's is [`text_box_styled_iu`]'s.
+    #[test]
+    fn a_box_in_an_outline_face_is_that_fonts() {
+        let s = TextBoxStyle { width_iu: 12_700, height_iu: 12_700, h: HJustify::Left, v: VJustify::Top, mirrored: false, italic: false };
+        assert_eq!(text_box_face_iu("R1", 2_382, s, None, false), text_box_styled_iu("R1", 2_382, s));
+        assert_eq!(text_box_face_iu("R1", 2_382, s, Some("KiCad Font"), false), text_box_styled_iu("R1", 2_382, s));
+        if crate::outline_font::OutlineFont::load(Some("DejaVu Sans"), false, false).is_none() {
+            return;
+        }
+        let (x0, y0, x1, y1) = text_box_face_iu("H", 2_382, s, Some("DejaVu Sans"), false);
+        let em = 1.4 * 12_700.0;
+        // H's advance (1540 of 2048), a top justification's fudge up (0.17 of the height, whatever the font), the size's ascender and descender (pixel-rounded)
+        assert_eq!(x0, 0);
+        assert!(((x1 - x0) as f64 - em * 1540.0 / 2048.0).abs() < 20.0, "{x1}");
+        assert!(((y1 - y0) as f64 - em * (1901.0 + 483.0) / 2048.0).abs() < 60.0, "{}", y1 - y0);
+        assert_eq!(y0, -kiround((y1 - y0) as f64 * 0.17));
+    }
+
     #[test]
     fn markup_is_not_drawn() {
         assert_eq!(strip_markup("~{CS}"), ("CS".to_string(), true));

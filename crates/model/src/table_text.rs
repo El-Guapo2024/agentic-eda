@@ -534,6 +534,29 @@ mod tests {
         TableText { height_nm: size_nm, width_nm: size_nm, thickness_nm, ..TableText::pcb_default() }
     }
 
+    /// UI-LEFT-3 C3-3: a cell in an outline face is broken with that font's advances and placed with its interline and no stroke-font offsets
+    /// (`OUTLINE_FONT::GetTextAsGlyphs`, `GetInterline`; `getLinePositions` leaves the fudge factors to the stroke font).
+    #[test]
+    fn a_cell_in_an_outline_face_is_broken_and_placed_in_it() {
+        if crate::outline_font::OutlineFont::load(Some("DejaVu Sans"), false, false).is_none() {
+            return;
+        }
+        let face = TableText { face: Some("DejaVu Sans".into()), ..style(Nm::new(1_000_000), Nm::new(150_000)) };
+        // "WWW WWW": DejaVu's W is 2025 / 2048 of a 1.4 mm em (1.384 mm), the stroke font's 1.143 mm: a 5 mm column holds three of the stroke font's, not of DejaVu's
+        let col = Nm::new(5_000_000);
+        assert_eq!(linebreak_text("WWW WWW", col, Nm::new(1_000_000), Nm::new(150_000)), "WWW\nWWW");
+        assert_eq!(linebreak_text_styled("WW WW", Nm::new(3_000_000), &face, Nm::new(150_000)), "WW\nWW");
+        assert_eq!(linebreak_text("WW WW", Nm::new(3_000_000), Nm::new(1_000_000), Nm::new(150_000)), "WW\nWW");
+        assert_eq!(linebreak_text_styled("WWW", Nm::new(4_000_000), &face, Nm::new(150_000)), "WWW", "a word wider than the column keeps its line");
+        let stroke = place_lines_at(&style(Nm::new(1_000_000), Nm::new(150_000)), 150_000.0, (Nm::ZERO, Nm::ZERO), 0, "A\nB");
+        let outline = place_lines_at(&face, 150_000.0, (Nm::ZERO, Nm::ZERO), 0, "A\nB");
+        // centred vertically (the pcb default): the block is 1.17 sizes plus an interline -- 1.68 sizes in DejaVu, 1.68 x 0.9583 in the stroke font
+        assert_eq!((outline[1].y_nm - outline[0].y_nm) as i64, 1_680_000);
+        assert_eq!((stroke[1].y_nm - stroke[0].y_nm) as i64, (1_000_000.0 * 1.68 * 0.9583) as i64);
+        assert_eq!(outline[0].x_nm, 0.0, "no `thickness / 1.52` offset");
+        assert!(stroke[0].x_nm > 0.0);
+    }
+
     #[test]
     fn cell_addresses_are_spreadsheet_names_from_one() {
         assert_eq!(pcb_cell_addr(0, 0), "A1");
