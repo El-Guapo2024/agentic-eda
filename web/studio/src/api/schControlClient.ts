@@ -147,3 +147,13 @@ export async function fetchSchematicFiles(): Promise<Array<{ name: string; text:
   if (!j.files || j.files.length === 0) throw new ApiError("there is no schematic to save");
   return j.files;
 }
+
+/**
+ * Set Variant Symbol...'s chooser (KiCad 25ec2335 `SetVariantSymbol`'s `compatFunc`, UI-LEFT-3 S3-14): for each library id, why it is not pin-compatible with the
+ * placed symbol `id` on the sheet `sheet` (`ValidateVariantSymbolCompatibility`'s details); an empty list is a compatible one.
+ */
+export async function fetchVariantCompat(sheet: string, id: string, libIds: readonly string[]): Promise<Record<string, string[]>> {
+  const j = await postJson<{ ok?: boolean; issues?: Record<string, string[]>; error?: string }>("/api/sch/variant_compat", { sheet, id, lib_ids: libIds });
+  if (j.error) throw new ApiError(j.error);
+  return j.issues ?? {};
+}

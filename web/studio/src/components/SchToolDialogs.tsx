@@ -1,7 +1,7 @@
 // The small dialogs the schematic edit and drawing tools open (`StudioState.schToolDialog`): a drawn text box's text and look
 // (`DIALOG_TEXT_PROPERTIES` as `DrawShape` opens it), a directive label's fields (`DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it, before the
 // label rides the cursor).
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import type { DirectiveShape, SchColor, SchFill, SchGraphic, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
 import { chosenFont, DEFAULT_FONT, HYPERLINK_ERROR, oneStep, textAttrsCmd, validHyperlink } from "../kicad-port/textLooks";
 import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } from "./TextLookControls";
@@ -18,6 +18,7 @@ import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, StrokePropertiesDialog, TextPropertiesDialog } from "./SchPropertiesDialogs";
 import { SchImageDialog } from "./SchImageDialog";
 import { SymbolPickerDialog } from "./SymbolChooserDialog";
+import { fetchVariantCompat } from "../api/schControlClient";
 import { commitGraphic } from "./schematic/schShapeTools";
 import { lastPlaced, rememberPlaced } from "../kicad-port/schLastPlaced";
 import { poleOfSpin, spinOfPole, type CarriedDirective } from "../kicad-port/schPlaceTool";
@@ -337,9 +338,13 @@ function VariantSymbolPicker({ dialog }: { dialog: Extract<SchToolDialog, { kind
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
+  // `compatFunc`: each candidate against the symbol's own library symbol, flattened (UI-LEFT-3 S3-14)
+  const sheet = useStudioState().currentSheetPath.join("/");
+  const compat = useCallback((libIds: readonly string[]) => fetchVariantCompat(sheet, dialog.id, libIds), [sheet, dialog.id]);
   return (
     <SymbolPickerDialog
       preselect={dialog.libId}
+      compat={compat}
       onCancel={close}
       onChoose={(libId) => {
         close();

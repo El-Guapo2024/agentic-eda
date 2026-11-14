@@ -774,6 +774,8 @@ fn handle(
         ("POST", "/api/sch/import_settings") => respond(stream, "200 OK", "application/json", crate::sch_import_settings_api::import_settings(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/setup") => respond(stream, "200 OK", "application/json", sch_api::setup(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
+        // Set Variant Symbol...'s chooser: which library symbols are not pin-compatible with the placed symbol (`compatFunc`, UI-LEFT-3 S3-14)
+        ("POST", "/api/sch/variant_compat") => respond(stream, "200 OK", "application/json", crate::variant_view::variant_compat(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
@@ -2624,6 +2626,12 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             let instance = sch.symbols.iter().find(|s| (if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }) == *lib_id).or_else(|| overrides.iter().find(|(o, _)| o == lib_id).map(|(_, s)| *s));
             if let (false, Some(s)) = (sch.imported_from_kicad, instance) {
                 if let Some(part) = model.part(&s.id) {
+                    if s.lib_id != *lib_id {
+                        // a variant symbol: at the placed symbol's origin (`GetEffectiveLibSymbol`), the corner of the base symbol's box here (UI-LEFT-3 S3-14)
+                        if let (Some(alt), Some(base)) = (model.symbol_of(lib_id), model.real_symbol_of(&s.lib_id, part)) {
+                            return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol_in_frame_of(lib_id, &alt, &base, s.unit)));
+                        }
+                    }
                     let resolved = if s.lib_id == *lib_id { model.real_symbol_of(&s.lib_id, part) } else { model.symbol_of(lib_id) };
                     return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)));
                 }

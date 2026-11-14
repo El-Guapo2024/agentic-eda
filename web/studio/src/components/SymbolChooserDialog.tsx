@@ -23,7 +23,7 @@
 // (`onFootprintSelected` -> `showFootprint`) and is the footprint placed (`m_fp_override`). The "Choose..." button beside it, which opens the Footprint
 // Chooser, is the studio's. A library that loaded with errors (a broken file of a `.kicad_symdir` folder) is named under the search box, as KiCad's status
 // bar names it (`GetLibraryLoadErrors`).
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchFootprintSelection,
   fetchProjectFootprintDrawing,
@@ -79,6 +79,12 @@ export interface SymbolPick {
   preselect?: string | null;
   onChoose: (libId: string) => void;
   onCancel: () => void;
+  /**
+   * Set Variant Symbol...'s `compatFunc` (KiCad 25ec2335 `PickSymbolFromLibrary( .., aCompatFunc )`, UI-LEFT-3 S3-14): why each library id is not pin-compatible
+   * (empty: it is). The tree draws an incompatible symbol's name in orange (`SYMBOL_TREE_MODEL_ADAPTER::GetAttr`: `wxColour( 200, 120, 0 )`, asked once per
+   * id, `m_compatCache`) and the details list its issues under "Compatibility Warnings:" (`PANEL_SYMBOL_CHOOSER`'s `m_details->AppendToPage`).
+   */
+  compat?: (libIds: readonly string[]) => Promise<Record<string, string[]>>;
 }
 
 /**
@@ -128,6 +134,25 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
 
   const chosen = chosenOf(chooser.selectedRow);
   const id = chosen?.item.id ?? null;
+  // the compatibility of each symbol the tree shows, asked as rows come into it (`m_compatCache`: once per id)
+  const [compat, setCompat] = useState<ReadonlyMap<string, string[]>>(new Map());
+  const asked = useRef(new Set<string>());
+  const compatOf = pick?.compat;
+  useEffect(() => {
+    if (!compatOf) return;
+    const ids = [...new Set(chooser.rows.flatMap((r) => (r.kind === "item" ? [r.item.id] : [])))].filter((i) => !asked.current.has(i));
+    if (ids.length === 0) return;
+    ids.forEach((i) => asked.current.add(i));
+    let cancelled = false;
+    compatOf(ids)
+      .then((issues) => !cancelled && setCompat((m) => new Map([...m, ...Object.entries(issues)])))
+      .catch(() => ids.forEach((i) => asked.current.delete(i)));
+    return () => {
+      cancelled = true;
+    };
+  }, [chooser.rows, compatOf]);
+  const incompatible = useMemo(() => new Set([...compat].filter(([, issues]) => issues.length > 0).map(([i]) => i)), [compat]);
+  const warnings = id ? (compat.get(id) ?? []) : [];
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   useEffect(() => {
     if (!id) {
@@ -333,6 +358,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
                 onToggleGroup={chooser.toggleGroup}
                 onToggleItem={chooser.toggleItem}
                 emptyText={s.searching ? (s.indexing ? "Searching…" : "No symbol matches.") : "Nothing to show."}
+                warned={compatOf ? incompatible : undefined}
               />
             </div>
             <div className="chooser-right">
@@ -417,6 +443,16 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
                     ...(pinCount > 0 ? [{ name: "Pins", value: String(pinCount) }] : []),
                   ]}
                 />
+              )}
+              {chosen && warnings.length > 0 && (
+                <div className="chooser-details" data-compat-warnings style={{ fontSize: 12 }}>
+                  <b>Compatibility Warnings:</b>
+                  <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                    {warnings.map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
           </div>

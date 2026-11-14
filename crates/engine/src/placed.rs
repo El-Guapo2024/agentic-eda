@@ -156,37 +156,53 @@ fn shift_graphic(g: &SymbolGraphic, dx: f64, dy: f64) -> SymbolGraphic {
 /// alternate style sits by the same corner as in the normal one.
 pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, unit: u32) -> LibSymbol {
     if let Some(sym) = resolved {
-        let (x0, _y0, _x1, y1) = real_symbol_bbox(sym, unit);
-        let (dx, dy) = (-x0, -y1);
-        let shift_body = |alt: &AlternateBody| AlternateBody {
-            style: alt.style,
-            graphics: alt.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
-            pins: alt.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
-        };
-        let alternate = sym.alternate.as_deref().map(|alt| Box::new(shift_body(alt)));
-        // the text boxes (`LibConnectivity::text_boxes`, beside the rectangles of their borders) and the further custom body styles move with the rest
-        let mut connectivity = sym.connectivity.clone();
-        connectivity.extra_bodies = sym.connectivity.extra_bodies.iter().map(shift_body).collect();
-        for t in &mut connectivity.text_boxes {
-            t.translate(dx, dy);
-        }
-        // and the shapes' looks, kept by the shape (`LibConnectivity::shape_looks`, PARITY-sch §87)
-        for l in &mut connectivity.shape_looks {
-            l.graphic = shift_graphic(&l.graphic, dx, dy);
-        }
-        // and the texts' looks (`LibConnectivity::text_looks`, UI-LEFT-3 S3-5)
-        for l in &mut connectivity.text_looks {
-            l.graphic = shift_graphic(&l.graphic, dx, dy);
-        }
-        return LibSymbol {
-            lib_id: lib_id.to_string(),
-            graphics: sym.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
-            pins: sym.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
-            alternate,
-            connectivity,
-            ..sym.clone()
-        };
+        return shifted_to_corner_of(lib_id, sym, sym, unit);
     }
+    corner_box(lib_id, part, unit)
+}
+
+/// `sym` moved as [`corner_symbol`] moves `frame`: its origin at the top-left corner of `frame`'s box. A design variant's symbol (KiCad 25ec2335
+/// `SCH_SYMBOL::GetEffectiveLibSymbol`) is drawn at the placed symbol's origin, which a sheet this project drew keeps at the corner of the base symbol's box,
+/// so the alternate is moved by the base's box, not its own: its pins, pin-compatible with the base's, land where the base's are (UI-LEFT-3 S3-14).
+pub fn corner_symbol_in_frame_of(lib_id: &str, sym: &LibSymbol, frame: &LibSymbol, unit: u32) -> LibSymbol {
+    shifted_to_corner_of(lib_id, sym, frame, unit)
+}
+
+fn shifted_to_corner_of(lib_id: &str, sym: &LibSymbol, frame: &LibSymbol, unit: u32) -> LibSymbol {
+    let (x0, _y0, _x1, y1) = real_symbol_bbox(frame, unit);
+    let (dx, dy) = (-x0, -y1);
+    let shift_body = |alt: &AlternateBody| AlternateBody {
+        style: alt.style,
+        graphics: alt.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
+        pins: alt.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
+    };
+    let alternate = sym.alternate.as_deref().map(|alt| Box::new(shift_body(alt)));
+    // the text boxes (`LibConnectivity::text_boxes`, beside the rectangles of their borders) and the further custom body styles move with the rest
+    let mut connectivity = sym.connectivity.clone();
+    connectivity.extra_bodies = sym.connectivity.extra_bodies.iter().map(shift_body).collect();
+    for t in &mut connectivity.text_boxes {
+        t.translate(dx, dy);
+    }
+    // and the shapes' looks, kept by the shape (`LibConnectivity::shape_looks`, PARITY-sch §87)
+    for l in &mut connectivity.shape_looks {
+        l.graphic = shift_graphic(&l.graphic, dx, dy);
+    }
+    // and the texts' looks (`LibConnectivity::text_looks`, UI-LEFT-3 S3-5)
+    for l in &mut connectivity.text_looks {
+        l.graphic = shift_graphic(&l.graphic, dx, dy);
+    }
+    LibSymbol {
+        lib_id: lib_id.to_string(),
+        graphics: sym.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
+        pins: sym.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
+        alternate,
+        connectivity,
+        ..sym.clone()
+    }
+}
+
+/// [`corner_symbol`] of a part with no library symbol: the generic box.
+fn corner_box(lib_id: &str, part: &Part, unit: u32) -> LibSymbol {
     let b = part_box(part, None, unit);
     let (w, h) = (b.width(), b.height());
     let mut pins: Vec<LibPin> = Vec::new();
@@ -293,5 +309,23 @@ mod tests {
         assert_eq!(get(&up, "1").y, get(&down, "2").y, "pin 2 now sits where pin 1 was");
         assert_eq!(get(&up, "2").y, get(&down, "1").y);
         assert_eq!(get(&up, "1").x, get(&down, "1").x, "the column does not move");
+    }
+
+    /// UI-LEFT-3 S3-14 (`SCH_SYMBOL::GetEffectiveLibSymbol`: the variant symbol is drawn at the placed symbol's origin): a pin-compatible alternate with a
+    /// wider body, moved by the base symbol's box, has its pins where the base's are; moved by its own box they would sit apart.
+    #[test]
+    fn a_variant_symbol_is_moved_by_the_base_symbols_box() {
+        let base = eda_model::symbol::builtin("Device:R").unwrap();
+        let mut alt = base.clone();
+        alt.lib_id = "Device:R_Wide".into();
+        // a body twice as wide to the left: its own box starts further left
+        alt.graphics.push(SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(-5.0, -2.0), end: SPoint::new(5.0, 2.0), stroke_mm: 0.254, filled: false });
+        let drawn_base = corner_symbol_in_frame_of("Device:R", &base, &base, 1);
+        let drawn_alt = corner_symbol_in_frame_of("Device:R_Wide", &alt, &base, 1);
+        for p in &drawn_base.pins {
+            assert_eq!(drawn_alt.pin_by_number(&p.number).map(|q| q.at), Some(p.at), "pin {} on the base's", p.number);
+        }
+        let own = corner_symbol_in_frame_of("Device:R_Wide", &alt, &alt, 1);
+        assert_ne!(own.pins[0].at, drawn_base.pins[0].at, "by its own box it would not be");
     }
 }
