@@ -436,7 +436,7 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             sheet_name: if e.path.is_empty() { "Root".to_string() } else { e.name.clone() },
             ..Default::default()
         };
-        let netclasses_of = |id: &str, directive: bool| -> Vec<String> { label_netclasses_shown(&sheet, sec.extras.label_fields.get(id).map(Vec::as_slice).unwrap_or(&[]), directive) };
+        let netclasses_of = |id: &str, directive: bool, shape: Option<eda_model::ir::LabelShape>| -> Vec<String> { label_netclasses_shown(&sheet, sec.extras.label_fields.get(id).map(Vec::as_slice).unwrap_or(&[]), directive, shape) };
         let renamed: std::collections::BTreeMap<&str, String> = sec
             .symbols
             .iter()
@@ -459,7 +459,12 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             by_pin.or_else(|| (!w.net.is_empty()).then(|| w.net.clone())).unwrap_or_else(|| name.to_string())
         };
         for l in &sec.labels {
-            let classes = netclasses_of(&l.id, false);
+            // (a global or hierarchical label's `${CONNECTION_TYPE}` is its shape's electrical type)
+            let shape = match &l.kind {
+                eda_model::ir::LabelKind::Global { shape } | eda_model::ir::LabelKind::Hierarchical { shape } => Some(*shape),
+                eda_model::ir::LabelKind::Local => None,
+            };
+            let classes = netclasses_of(&l.id, false, shape);
             if classes.is_empty() {
                 continue;
             }
@@ -491,7 +496,7 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             .iter()
             .filter_map(|g| match &g.shape {
                 eda_model::sch_extras::SchGraphicKind::Directive { at, netclass, .. } => {
-                    let mut classes: Vec<String> = netclasses_of(&g.id, true);
+                    let mut classes: Vec<String> = netclasses_of(&g.id, true, None);
                     let fields = sec.extras.label_fields.get(&g.id).map(Vec::as_slice).unwrap_or(&[]);
                     let own = label_field_shown(&sheet, fields, netclass, true);
                     let own = own.trim();
@@ -602,11 +607,11 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
 
 /// The net classes a label's (or a directive's) `Netclass` fields name on a placement: each field's shown text ([`label_field_shown`]), trimmed, the empty
 /// ones left out (`if( !name.empty() )`).
-fn label_netclasses_shown(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], directive: bool) -> Vec<String> {
+fn label_netclasses_shown(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], directive: bool, shape: Option<eda_model::ir::LabelShape>) -> Vec<String> {
     fields
         .iter()
         .filter(|f| f.name == eda_model::sch_extras::NETCLASS_FIELD)
-        .map(|f| label_field_shown(sheet, fields, &f.text, directive).trim().to_string())
+        .map(|f| label_field_shown_of(sheet, fields, &f.text, directive, shape).trim().to_string())
         .filter(|c| !c.is_empty())
         .collect()
 }
@@ -614,9 +619,29 @@ fn label_netclasses_shown(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_
 /// `SCH_FIELD::GetShownText( &aPath, FOR_NETNAME )` of a label's field while the connectivity reads it (KiCad 25ec2335 `SCH_CONNECTIVITY::INPUT_TEXT_SCOPE`):
 /// the text's variables resolved by `SCH_LABEL_BASE::ResolveTextVar` -- `NET_NAME`, `SHORT_NET_NAME`, `NET_CLASS` and `OP..` are empty (a directive's
 /// `EXCLUDE_FROM_*` and `DNP` too), `REF:FIELD` the schematic's cross-reference, then the label's own fields by name, then the sheet the placement is
-/// (`SCH_SHEET::ResolveTextVar` up to the schematic and the project). **Differs**: a global or hierarchical label's `CONNECTION_TYPE` is not answered.
+/// (`SCH_SHEET::ResolveTextVar` up to the schematic and the project). A global or hierarchical label's `CONNECTION_TYPE` is its shape's electrical type
+/// ([`label_field_shown_of`]).
 pub(crate) fn label_field_shown(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], raw: &str, directive: bool) -> String {
-    fn resolve(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], token: &str, directive: bool, depth: usize) -> Option<String> {
+    label_field_shown_of(sheet, fields, raw, directive, None)
+}
+
+/// `getElectricalTypeLabel( label->GetShape() )` (KiCad 25ec2335 `eeschema/sch_label.cpp`): a global or hierarchical label's `${CONNECTION_TYPE}`.
+pub(crate) fn connection_type_text(shape: eda_model::ir::LabelShape) -> &'static str {
+    use eda_model::ir::LabelShape::*;
+    match shape {
+        Input => "Input",
+        Output => "Output",
+        Bidirectional => "Bidirectional",
+        TriState => "Tri-State",
+        Passive => "Passive",
+    }
+}
+
+/// [`label_field_shown`] of a label of the kind `shape` says: a global or hierarchical label's (`Some`, its shape) answers `CONNECTION_TYPE` with its
+/// electrical type (`SCH_LABEL_BASE::ResolveTextVar`: `Type() == SCH_GLOBAL_LABEL_T || SCH_HIER_LABEL_T || SCH_SHEET_PIN_T`, after the cross-references and
+/// before the label's fields; not emptied under `INPUT_TEXT_SCOPE`, UI-LEFT-3 setup leftover); a local label and a directive (`None`) leave it to the sheet.
+pub(crate) fn label_field_shown_of(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], raw: &str, directive: bool, shape: Option<eda_model::ir::LabelShape>) -> String {
+    fn resolve(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], token: &str, directive: bool, shape: Option<eda_model::ir::LabelShape>, depth: usize) -> Option<String> {
         // `^OP(.([0-9])?([a-zA-Z]*))?$`
         let op = token.strip_prefix("OP").is_some_and(|rest| {
             let mut c = rest.chars();
@@ -636,16 +661,19 @@ pub(crate) fn label_field_shown(sheet: &eda_model::text_vars::SchSheet, fields: 
         if token.contains(':') {
             return sheet.resolve_level(at, token, depth + 1);
         }
+        if let (Some(shape), "CONNECTION_TYPE") = (shape, token) {
+            return Some(connection_type_text(shape).to_string());
+        }
         if let Some(f) = fields.iter().find(|f| f.name == token) {
             if depth >= eda_model::text_vars::MAX_DEPTH {
                 return Some(f.text.clone());
             }
-            let inner = |t: &str| resolve(sheet, fields, t, directive, depth + 1);
+            let inner = |t: &str| resolve(sheet, fields, t, directive, shape, depth + 1);
             return Some(eda_model::text_vars::shown_text(&f.text, &inner, depth + 1));
         }
         sheet.resolve_level(at, token, depth + 1)
     }
-    let resolver = |t: &str| resolve(sheet, fields, t, directive, 0);
+    let resolver = |t: &str| resolve(sheet, fields, t, directive, shape, 0);
     eda_model::text_vars::shown_text(raw, &resolver, 0)
 }
 

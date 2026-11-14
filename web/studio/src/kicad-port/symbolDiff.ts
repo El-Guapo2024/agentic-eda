@@ -13,17 +13,21 @@
 //   shapes are one), their count, then each pair by `SCH_SHAPE::compare` -> `SCH_ITEM::compare` (unit, body style, position) and
 //   `EDA_SHAPE::Compare` (points within `EPSILON` 2 IU, 200 nm, the corner radius, the stroke width, its line style, the fill);
 // - each schematic pin not found by number, unit and body style in the library ("Extra pin"), or found but different (`PIN_COMPARISON_VIEW::Compare`:
-//   the number, place, length, direction, shape and type; the hidden flag with "Compare pin name/number visibilities"; the alternates with "Compare
-//   alternate pin functions"; a pin's name is not compared), and each library pin the schematic's symbol lacks ("Missing pin");
+//   the number, place, length, direction, shape and type; the hidden flag with "Compare pin name/number visibilities"; the name and number text sizes; the
+//   alternates with "Compare alternate pin functions"; a pin's name is not compared), and each library pin the schematic's symbol lacks ("Missing pin");
 // - each placed field the library lacks ("Extra field", with "Check for extra fields"), and of one it has: its text but the Reference's ("Compare
-//   non-reference field text"), its text size and styles ("... sizes and styles"), its visibility and name-shown flags ("Compare field visibilities"),
-//   its privacy, its place ("Compare field positions"); then each library user field the placed symbol lacks ("Missing field", "Check for missing fields");
+//   non-reference field text"), its font, text size and styles ("... sizes and styles": `TEXT_ATTRIBUTES::Compare`'s font, size, angle, justification,
+//   italic, bold and colour), its visibility and name-shown flags ("Compare field visibilities"), its privacy, its place ("Compare field positions"); then
+//   each library user field the placed symbol lacks ("Missing field", "Check for missing fields");
 // - the footprint filters, keywords and pin name offset; the show pin names and numbers flags ("Compare pin name/number visibilities"); the attribute
-//   flags the boxes of the page name.
+//   flags the boxes of the page name (UI-LEFT-3 S3-22: a shape's line style and corner radius, a pin's text sizes, a field's font and the position-file flag
+//   are compared too, and the keywords and footprint filters always).
 //
-// Left: neither side's JSON carries a shape's line style or corner radius, a pin's text sizes, a field's font, a symbol's DNP or (on the schematic's side)
-// position-file flag; those compare equal. The schematic side's keywords, footprint filters and attribute flags are compared only when the server sends them.
+// "Do not populate settings differ." is never reported: a library symbol holds no DNP of its own (`SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol` reads no `dnp`, so
+// `LIB_SYMBOL::m_DNP` is false on both sides). **Differs**: a placed field's pen width (`TEXT_ATTRIBUTES::m_StrokeWidth`) is not kept by the studio, so the text
+// styles do not compare it; a server built before these were sent leaves the schematic's side of each out (compared equal).
 import type { LibGraphic, LibPin, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibSymbol, PinAlternate, PinElectricalType, PinShape, SchField, SymbolParitySettings } from "../api/types";
+import { fieldLooksOf, graphicStateOf, isUnspecified } from "./symLooks";
 import { DEFAULT_SYMBOL_PARITY } from "./schSetup";
 import { messageTextFromValue } from "./messageText";
 import { ELECTRICAL_TYPE_NAMES } from "./symPinText";
@@ -63,11 +67,16 @@ interface Pin {
   angle: number;
   /** By name, as `std::map<wxString, PIN_ALTERNATE>` holds them. */
   alternates: PinAlternate[];
+  /** IU; null where the side does not say (compared equal). */
+  numberSize: number | null;
+  nameSize: number | null;
 }
 
 const byName = (alts: readonly PinAlternate[] | undefined) => [...(alts ?? [])].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-const pinOfResolved = (p: LibPin): Pin => ({ number: p.number, name: p.name ?? "", type: p.electrical_type, shape: p.shape, pos: iu(p.at[0], p.at[1]), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden, length: iuLen(p.length_mm), angle: ((Math.round(p.angle_deg) % 360) + 360) % 360, alternates: byName(p.alternates) });
-const pinOfLibrary = (p: LibrarySymbolPin): Pin => ({ number: p.number, name: p.name, type: p.electrical_type, shape: p.shape, pos: iu(p.at.x, p.at.y), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden, length: iuLen(p.length_mm), angle: ((Math.round(p.angle_deg) % 360) + 360) % 360, alternates: byName(p.alternates) });
+const sizeIu = (mmValue: number | null | undefined, fallback: number | null): number | null => (mmValue === undefined ? fallback : iuLen(mmValue ?? 1.27));
+const pinOfResolved = (p: LibPin): Pin => ({ number: p.number, name: p.name ?? "", type: p.electrical_type, shape: p.shape, pos: iu(p.at[0], p.at[1]), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden, length: iuLen(p.length_mm), angle: ((Math.round(p.angle_deg) % 360) + 360) % 360, alternates: byName(p.alternates), numberSize: sizeIu(p.number_size_mm, null), nameSize: sizeIu(p.name_size_mm, null) });
+// (a library pin with no size of its own has KiCad's 50 mil, `schIUScale.MilsToIU( DEFAULT_PINNUM_SIZE )`)
+const pinOfLibrary = (p: LibrarySymbolPin): Pin => ({ number: p.number, name: p.name, type: p.electrical_type, shape: p.shape, pos: iu(p.at.x, p.at.y), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden, length: iuLen(p.length_mm), angle: ((Math.round(p.angle_deg) % 360) + 360) % 360, alternates: byName(p.alternates), numberSize: iuLen(p.number_size_mm ?? 1.27), nameSize: iuLen(p.name_size_mm ?? 1.27) });
 
 const shapeName = (s: PinShape) => PIN_SHAPE_OPTIONS.find((o) => o.value === s)?.label ?? s;
 
@@ -94,7 +103,15 @@ interface Shape {
   pts?: [number, number][];
   width: number;
   fill: string;
+  /** `LINE_STYLE`: default -1, solid 0, dash 1, dot 2, dash-dot 3, dash-dot-dot 4; null where the side does not say (compared equal). */
+  lineStyle: number | null;
+  /** A rectangle's corner radius, IU (`m_cornerRadius`); null where the side does not say. */
+  radius: number | null;
 }
+
+/** `LINE_STYLE`'s values by the file's words (`STROKE_PARAMS::Format`). */
+const LINE_STYLES: Record<string, number> = { default: -1, solid: 0, dash: 1, dot: 2, dash_dot: 3, dash_dot_dot: 4 };
+const lineStyleOf = (s: string | null | undefined): number => LINE_STYLES[s ?? "default"] ?? -1;
 
 function circumcentre(a: [number, number], b: [number, number], c: [number, number]): [number, number] {
   const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
@@ -107,7 +124,9 @@ function circumcentre(a: [number, number], b: [number, number], c: [number, numb
 const position = (s: Shape): [number, number] => (s.type === 2 ? circumcentre(s.start, s.mid!, s.end) : s.type === 4 ? (s.pts![0] ?? s.start) : s.start);
 
 function shapeOfResolved(g: LibGraphic): Shape | null {
-  const base = { unit: g.unit, bodyStyle: g.body_style };
+  // the line style and corner radius the server sends (`LibConnectivity::shape_looks`), absent the default
+  const looks = g as { line_style?: string; corner_radius_mm?: number };
+  const base = { unit: g.unit, bodyStyle: g.body_style, lineStyle: lineStyleOf(looks.line_style), radius: g.kind === "rectangle" ? iuLen(looks.corner_radius_mm ?? 0) : null };
   switch (g.kind) {
     case "rectangle":
       return { ...base, type: 1, start: iu(...g.start), end: iu(...g.end), width: iuLen(g.stroke_width), fill: g.fill };
@@ -130,8 +149,10 @@ function shapeOfResolved(g: LibGraphic): Shape | null {
   }
 }
 
-function shapeOfLibrary(g: LibrarySymbolGraphic): Shape | null {
-  const base = { unit: g.unit, bodyStyle: g.body_style };
+function shapeOfLibrary(g: LibrarySymbolGraphic, sym: LibrarySymbol): Shape | null {
+  // the line style and corner radius the Symbol Editor keeps by the graphic's id (`stroke_types`, `graphic_looks`)
+  const state = g.id ? graphicStateOf(sym, g.id) : null;
+  const base = { unit: g.unit, bodyStyle: g.body_style, lineStyle: lineStyleOf(state?.lineStyle), radius: g.kind === "rectangle" ? iuLen(state?.looks.radius_mm ?? 0) : null };
   switch (g.kind) {
     case "rectangle":
       return { ...base, type: 1, start: iu(g.start.x, g.start.y), end: iu(g.end.x, g.end.y), width: iuLen(g.stroke_mm), fill: g.fill };
@@ -172,6 +193,7 @@ function compareShapes(a: Shape, b: Shape): number {
   let r = pt(a.start, b.start) || pt(a.end, b.end);
   if (r) return r;
   if (a.type !== b.type) return a.type - b.type;
+  if (a.type === 1 && a.radius !== null && b.radius !== null && a.radius !== b.radius) return a.radius - b.radius;
   if (a.type === 2) {
     r = pt(a.mid!, b.mid!);
     if (r) return r;
@@ -185,6 +207,7 @@ function compareShapes(a: Shape, b: Shape): number {
   }
   r = e(a.width, b.width);
   if (r) return r;
+  if (a.lineStyle !== null && b.lineStyle !== null && a.lineStyle !== b.lineStyle) return a.lineStyle - b.lineStyle;
   return FILL_ORDER.indexOf(a.fill) - FILL_ORDER.indexOf(b.fill);
 }
 
@@ -232,7 +255,7 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
   if (unitsOf(schPins, schematic.graphics) !== Math.max(unitsOf(libPins, library.graphics), library.unit_count)) out.push("Unit count differs.");
 
   const aShapes = shapeSet(schematic.graphics.map(shapeOfResolved).filter((s): s is Shape => s !== null));
-  const bShapes = shapeSet(library.graphics.map(shapeOfLibrary).filter((s): s is Shape => s !== null));
+  const bShapes = shapeSet(library.graphics.map((g) => shapeOfLibrary(g, library)).filter((s): s is Shape => s !== null));
   if (aShapes.length !== bShapes.length) {
     out.push("Graphic item count differs.");
   } else {
@@ -267,9 +290,18 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
       }
       if (flags.field_texts && f.name !== "Reference" && f.text !== other.text) out.push(`Field '${f.name}' differs: ${f.text}; ${other.text}.`);
       if (flags.field_styles) {
-        // the text size in IU (absent is 50 mil); the styles are `TEXT_ATTRIBUTES::Compare`'s bold and italic (the font, which neither side sends, is not compared)
-        if (Math.round((f.size_nm ?? 1_270_000) / NM_PER_IU) !== iuLen(other.size_mm)) out.push(`Field '${f.name}' text sizes differ.`);
-        if (!!f.bold !== other.bold || !!f.italic !== other.italic) out.push(`Field '${f.name}' text styles differ.`);
+        // the font (`GetFont()`: none is the default font, "KiCad Font" the stroke font), the text size in IU (absent is 50 mil), then `TEXT_ATTRIBUTES::Compare`:
+        // the font's name, the size, the angle, the justification, italic, bold and the colour (the pen width the studio does not keep for a placed field)
+        const looks = fieldLooksOf(library, other.name);
+        const fontOf = (font: string | null | undefined) => (font ? font : "");
+        const sameFont = fontOf(f.font) === fontOf(looks.font);
+        const sameSize = Math.round((f.size_nm ?? 1_270_000) / NM_PER_IU) === iuLen(other.size_mm);
+        const colorKey = (c: { r: number; g: number; b: number; a: number } | null | undefined) => (isUnspecified(c) ? "" : `${c!.r},${c!.g},${c!.b},${c!.a}`);
+        const sameAngle = f.local_vertical === undefined || f.local_vertical === (Math.round(other.angle_deg) % 180 === 90);
+        const sameJustify = (f.local_h === undefined || f.local_h === other.h_align) && (f.local_v === undefined || f.local_v === other.v_align);
+        if (!sameFont) out.push(`Field '${f.name}' fonts differ.`);
+        if (!sameSize) out.push(`Field '${f.name}' text sizes differ.`);
+        if (!sameFont || !sameSize || !sameAngle || !sameJustify || !!f.italic !== other.italic || !!f.bold !== other.bold || colorKey(f.color) !== colorKey(looks.color)) out.push(`Field '${f.name}' text styles differ.`);
       }
       if (flags.field_visibilities) {
         if (f.visible !== !other.hidden) out.push(`Field '${f.name}' visibility flags differ.`);
@@ -300,7 +332,8 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
     if (!!schematic.pin_names_hidden !== library.pin_names_hidden) out.push("Show pin names settings differ.");
     if (!!schematic.pin_numbers_hidden !== library.pin_numbers_hidden) out.push("Show pin numbers settings differ.");
   }
-  // the attribute flags, each when the schematic's side says it (the server sends "in BOM" and "on board"; a symbol's DNP and position-file flags not)
+  // the attribute flags, each when the schematic's side says it (a server built before them may not send them); "Do not populate settings differ." never: a library
+  // symbol has no DNP of its own (`parseLibSymbol` reads no `dnp`)
   if (flags.exclude_from_bom && schematic.in_bom !== undefined && schematic.in_bom !== library.in_bom) out.push("Exclude from bill of materials settings differ.");
   if (flags.exclude_from_board && schematic.on_board !== undefined && schematic.on_board !== library.on_board) out.push("Exclude from board settings differ.");
   if (flags.exclude_from_pos_files && schematic.exclude_from_pos_files !== undefined && schematic.exclude_from_pos_files !== !!library.exclude_from_pos_files) out.push("Exclude from position files settings differ.");
@@ -308,7 +341,7 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
   return out;
 }
 
-/** `PIN_COMPARISON_VIEW::Compare` with `SymbolCompareFlags` (UNIT off): 0 is the same. A pin's text sizes are not compared (the schematic's side does not send them). */
+/** `PIN_COMPARISON_VIEW::Compare` with `SymbolCompareFlags` (UNIT off): 0 is the same. */
 function comparePins(a: Pin, b: Pin, flags: SymbolParitySettings): number {
   if (a.number !== b.number) return a.number < b.number ? -1 : 1;
   if (a.pos[0] !== b.pos[0]) return a.pos[0] - b.pos[0];
@@ -318,6 +351,9 @@ function comparePins(a: Pin, b: Pin, flags: SymbolParitySettings): number {
   if (a.shape !== b.shape) return a.shape < b.shape ? -1 : 1;
   if (a.type !== b.type) return a.type < b.type ? -1 : 1;
   if (flags.pin_visibilities && a.hidden !== b.hidden) return a.hidden ? 1 : -1;
+  // `numberTextSize`, `nameTextSize` (a side that does not say is taken to be the other's)
+  if (a.numberSize !== null && b.numberSize !== null && a.numberSize !== b.numberSize) return a.numberSize - b.numberSize;
+  if (a.nameSize !== null && b.nameSize !== null && a.nameSize !== b.nameSize) return a.nameSize - b.nameSize;
   if (!flags.pin_alt_functions) return 0;
   if (a.alternates.length !== b.alternates.length) return a.alternates.length - b.alternates.length;
   for (let i = 0; i < a.alternates.length; i++) {

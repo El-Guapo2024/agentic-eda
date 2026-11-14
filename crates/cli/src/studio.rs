@@ -3079,6 +3079,18 @@ pub(crate) fn owner_fields_json(sch: &eda_model::ir::SchematicSection, model: &e
 pub(crate) fn with_local_place(mut v: Value, p: &eda_model::ir::FieldPlacement) -> Value {
     v["local"] = json!([p.dx, p.dy]);
     v["local_vertical"] = json!(p.angle == 90_000);
+    // its justification in that frame (the `(justify ..)` the file keeps, `SCH_FIELD::GetHorizJustify` / `GetVertJustify`), which Compare Symbol with Library's
+    // text styles compare (`TEXT_ATTRIBUTES::Compare`, UI-LEFT-3 S3-22)
+    v["local_h"] = json!(match p.h {
+        eda_model::ir::TextJustify::Left => "left",
+        eda_model::ir::TextJustify::Center => "center",
+        eda_model::ir::TextJustify::Right => "right",
+    });
+    v["local_v"] = json!(match p.v {
+        eda_model::ir::TextVAlign::Top => "top",
+        eda_model::ir::TextVAlign::Center => "center",
+        eda_model::ir::TextVAlign::Bottom => "bottom",
+    });
     v
 }
 
@@ -3168,6 +3180,10 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         if let Some(alts) = s.connectivity.pin_alternates.get(&p.number).filter(|a| !a.is_empty()) {
             j["alternates"] = json!(alts);
         }
+        // its name and number text sizes (`m_nameTextSize`, `m_numTextSize`), which Compare Symbol with Library compares (UI-LEFT-3 S3-22)
+        let (name_size, number_size) = s.connectivity.pin_text_sizes.get(&p.number).copied().unwrap_or((1.27, 1.27));
+        j["name_size_mm"] = json!(name_size);
+        j["number_size_mm"] = json!(number_size);
         j
     };
     // every body by style (De Morgan's two, or KiCad 25ec2335's custom styles): an item every body draws is shared (0), the rest of their own style
@@ -3207,7 +3223,9 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         }
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "in_bom": s.in_bom, "on_board": s.on_board, "body_style_count": s.body_style_count(), "body_style_names": (1..=s.body_style_count()).map(|n| s.body_style_description(n)).filter(|_| s.body_style_count() > 1).collect::<Vec<_>>(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "in_bom": s.in_bom, "on_board": s.on_board, "body_style_count": s.body_style_count(), "body_style_names": (1..=s.body_style_count()).map(|n| s.body_style_description(n)).filter(|_| s.body_style_count() > 1).collect::<Vec<_>>(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local,
+        // the footprint filters (`GetFPFilters`, a `{space}` in one a space) and "Exclude from position files", which Compare Symbol with Library compares (UI-LEFT-3 S3-22)
+        "footprint_filters": s.connectivity.fp_filters.split_whitespace().map(|f| f.replace("{space}", " ")).collect::<Vec<_>>(), "exclude_from_pos_files": s.connectivity.exclude_from_pos_files })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document

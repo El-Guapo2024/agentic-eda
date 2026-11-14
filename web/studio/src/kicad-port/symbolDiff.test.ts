@@ -154,3 +154,31 @@ test("r7 A7-L1: two_polylines_with_one_first_point_pair_by_vertex_count (a POLY'
   const lib = library({ graphics: [lpoly([[0, 0], [10, 0]]), lpoly([[0, 0], [1, 2], [-10, 0]])] });
   assert.deepEqual(diffSymbols(sch, lib), ["Graphic item differs: Polyline, 3 points; Polyline, 3 points."]);
 });
+
+test("a shape's line style and corner radius, a pin's text sizes, a field's font and the position-file flag are compared (UI-LEFT-3 S3-22)", () => {
+  // the library's rectangle dashed and rounded (the Symbol Editor keeps them by the graphic's id)
+  const styled = library({ graphics: [{ ...library().graphics[0]!, id: "g1" } as LibrarySymbol["graphics"][number]], kicad: { stroke_types: { g1: "dash" }, graphic_looks: { g1: { radius_mm: 0.5 } } } } as Partial<LibrarySymbol>);
+  const lines = diffSymbols(resolved(), styled);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /^Graphic item differs: Rectangle/);
+  const same = resolved({ graphics: [{ ...resolved().graphics[0]!, line_style: "dash", corner_radius_mm: 0.5 } as LibSymbol["graphics"][number]] });
+  assert.deepEqual(diffSymbols(same, styled), [], "the server sends both: the same");
+  // a pin's number text size
+  const small = library();
+  small.pins[0] = { ...small.pins[0]!, number_size_mm: 1.0 };
+  const sent = resolved({ pins: [resolvedPin({ name_size_mm: 1.27, number_size_mm: 1.27 }), resolvedPin({ number: "2", at: [0, -3.81], angle_deg: 90, name_size_mm: 1.27, number_size_mm: 1.27 })] });
+  assert.deepEqual(diffSymbols(sent, small), ["Pin 1 differs: Pin 1 [Passive, Line]; Pin 1 [Passive, Line]"]);
+  assert.deepEqual(diffSymbols(resolved(), small), [], "a server that sends no sizes: equal");
+  // a field's font, with "Compare field sizes and styles": both lines (`GetFont()`, then `TEXT_ATTRIBUTES::Compare`'s font name)
+  const flags = { ...DEFAULT_SYMBOL_PARITY, field_styles: true, missing_fields: false, field_texts: false };
+  const placed = { at: [0, 0] as const, fields: [{ name: "Value", text: "R", at: [0, 0] as [number, number], vertical: false, h: "center" as const, v: "center" as const, visible: true, font: "KiCad Font" }] };
+  assert.deepEqual(diffSymbols(resolved(), library(), placed, flags), ["Field 'Value' fonts differ.", "Field 'Value' text styles differ."]);
+  const withFont = library({ kicad: { field_looks: { Value: { font: "KiCad Font" } } } } as Partial<LibrarySymbol>);
+  assert.deepEqual(diffSymbols(resolved(), withFont, placed, flags), []);
+  // its justification in the symbol's frame
+  const left = { ...placed, fields: [{ ...placed.fields[0]!, local_h: "left" as const, local_v: "center" as const }] };
+  assert.deepEqual(diffSymbols(resolved(), withFont, left, flags), ["Field 'Value' text styles differ."]);
+  // "Exclude from position files" on the schematic's side
+  assert.deepEqual(diffSymbols(resolved({ exclude_from_pos_files: true } as Partial<LibSymbol>), library()), ["Exclude from position files settings differ."]);
+  assert.deepEqual(diffSymbols(resolved({ exclude_from_pos_files: false } as Partial<LibSymbol>), library()), []);
+});

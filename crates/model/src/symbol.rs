@@ -298,6 +298,14 @@ pub struct LibConnectivity {
     /// escaped), written back the same way (r7 H3).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fp_filters: String,
+    /// The pins' name and number text sizes, mm (`SCH_PIN::m_nameTextSize`, `m_numTextSize`: a pin's `(name .. (effects (font (size ..))))` and `(number ..)`), by
+    /// pin number, where either is not 50 mil (1.27). Compare Symbol with Library compares them (`PIN_COMPARISON_VIEW::Compare`, UI-LEFT-3 S3-22). Kept here, as
+    /// [`Self::pin_alternates`] is, so the pin's literals stay as they are.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub pin_text_sizes: std::collections::BTreeMap<String, (f64, f64)>,
+    /// `(in_pos_files no)` (`LIB_SYMBOL::GetExcludedFromPosFiles`, "Exclude from position files"), which Compare Symbol with Library compares (UI-LEFT-3 S3-22).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_from_pos_files: bool,
     /// The library symbol's text boxes (`SCH_TEXTBOX`es of its draw items, `(text_box "text" ..)`), each a [`crate::ir::LibrarySymbolGraphic::TextBox`] in the symbol's mm
     /// with Y up, of its unit and body style (0: every one), none private to the Symbol Editor (`SCH_PAINTER::draw( SCH_TEXTBOX )` returns for one on a sheet). Not
     /// connectivity: [`LibSymbol::graphics`] has each box's border and fill as a rectangle ([`crate::ir::LibrarySymbolGraphic::to_engine_graphics`]), and this list is
