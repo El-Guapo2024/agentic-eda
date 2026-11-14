@@ -71,7 +71,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
         // the pad as flashed on all of them and leaves the test of what is connected to the checks). A group whose layers are not next to each other (a custom stack's front
         // shape on the front and on a deeper layer) is a solid for each run of layers.
         if !pad.copper_by_layer.is_empty() {
-            let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(&mut net_of).unwrap_or(None) };
+            let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().or(pad.lone_net.as_deref()).map(&mut net_of).unwrap_or(None) };
             for (names, shape) in pad.copper_groups() {
                 let mut idx: Vec<i32> = names.iter().filter_map(|n| layers.index_of(n)).collect();
                 idx.sort_unstable();
@@ -99,7 +99,9 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
             })
         });
         let layer_range = layer_range.unwrap_or_else(|| layers.all());
-        let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(&mut net_of).unwrap_or(None) };
+        // `syncPad`: `solid->SetNet( aPad->GetNet() )` -- the net the board has for the pad: a lone pin's pad its `unconnected-(..)` net
+        // (`DrcPad::lone_net`), so a route started on it takes that net and a track of no net keeps its clearance from it
+        let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().or(pad.lone_net.as_deref()).map(&mut net_of).unwrap_or(None) };
         node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), free_pad: pad.free, anchor_points: Vec::new() }));
     }
 

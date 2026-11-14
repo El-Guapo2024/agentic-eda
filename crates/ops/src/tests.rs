@@ -1743,6 +1743,21 @@ fn commit_route_tolerates_an_already_gone_id() {
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
+/// A route takes the net of the pad it starts on (`syncPad`): the pad of a pin on no net of the model has the `unconnected-(..)` net KiCad's netlist
+/// gives a lone pin, which the board has (`BOARD::FindNet`), so the commit of such a route is taken; so is a route of no net (net code 0, a route
+/// started in empty space). A made-up `unconnected-(..)` name is no net of the board.
+#[test]
+fn commit_route_takes_a_lone_pins_net_and_no_net() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: mm(10.0), y: mm(10.0) }).unwrap();
+    let route = |net: &str| Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }] , arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None, keep_track_ids: vec![] };
+    b.apply(&route("unconnected-(U1-Pad2)")).expect("the lone pin's net");
+    b.apply(&route("")).expect("no net");
+    assert_eq!(b.apply(&route("unconnected-(U9-Pad1)")).unwrap_err()[0].check, "ops_unknown_net");
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 2);
+}
+
 #[test]
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();

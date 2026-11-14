@@ -163,6 +163,10 @@ pub struct DrcPad {
     /// been used": the router gives it no clearance to another net and lets a route end in it, the copper clearance check takes the first net that
     /// touches it ([`pad_is_free`]).
     pub free: bool,
+    /// The net the derived board writes for a pad the model has on no net ([`Self::net`] `None`): the file's own net of a footprint read from one,
+    /// else the `unconnected-(..)` net KiCad gives a lone pin's pad (`SCH_PIN::GetDefaultNetName( .., aForceNoConnect = true )`, which Update PCB
+    /// puts on the pad). The router takes it as the pad's net (`syncPad`: `solid->SetNet( aPad->GetNet() )`).
+    pub lone_net: Option<String>,
 }
 
 /// `PAD::IsFreePad` (`pcbnew/pad.cpp`): `GetShortNetname().StartsWith( wxT( "unconnected-(" ) ) && m_pinType == wxT( "free" )`, of the net and the pin type the
@@ -720,6 +724,11 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 };
                 let pmask = extra.and_then(|e| if e.pads.len() == footprint.pads.len() { e.pads.get(pad_idx) } else { None });
                 let free = pad.kind != PadKind::NonPlatedHole && written_pad_is_free(design, model, &pin_net, &unconnected, &fp.id, extra, pmask, &pad.number, nth);
+                let lone_net = if net.is_some() || pad.kind == PadKind::NonPlatedHole {
+                    None
+                } else {
+                    pmask.and_then(|m| m.net.clone()).filter(|n| !n.is_empty()).or_else(|| unconnected.get(&format!("{}.{}", fp.id, pad.number)).cloned())
+                };
                 mask.pads.push(DrcPadMask {
                     fp: Some(fp_mask_idx),
                     layers: pmask.map(|m| m.layers.clone()).unwrap_or_default(),
@@ -754,6 +763,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     .rem_euclid(360_000),
                     zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number),
                     free,
+                    lone_net,
                 });
             }
         }
