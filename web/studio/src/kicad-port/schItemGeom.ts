@@ -138,6 +138,17 @@ export function rectCorners(a: P, b: P): P[] {
 export const DIRECTIVE_SYMBOL_SIZE_NM = 508_000;
 
 /**
+ * The pen of a directive label's flag (`SCH_PAINTER::draw( SCH_DIRECTIVE_LABEL )`'s `getLineWidth`: `SCH_DIRECTIVE_LABEL::GetPenWidth()`, which is
+ * `GetEffectiveTextPenWidth( m_DefaultLineWidth )`): the schematic's default line width, or a bold text's pen (`GetPenSizeForBold`: a fifth of the text size),
+ * clipped for a small text (`ClampTextPenSize`: a quarter of the size). The text size is the flag's own (50 mil when it keeps none).
+ */
+export function directivePenNm(textSizeNm: number | undefined, bold: boolean, defaultLineNm = 152_400): number {
+  const size = textSizeNm && textSizeNm > 0 ? textSizeNm : 1_270_000;
+  const pen = bold ? Math.round(size / 5) : defaultLineNm > 1 ? defaultLineNm : Math.round(size / 8);
+  return Math.min(pen, Math.round(size * 0.25));
+}
+
+/**
  * `SCH_DIRECTIVE_LABEL::CreateGraphicShape`: the flag's outline points -- the pole along the local +y axis, then
  * the flag's own outline -- rotated by the spin style and moved to `at`. `orientation` is the file angle in
  * degrees: 0 right, 90 up, 180 left, 270 bottom.

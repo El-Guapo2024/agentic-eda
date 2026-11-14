@@ -11,11 +11,12 @@
 //! colour and style, a shape's fill colour, a junction's size and colour. Every edit lands on the screen's item, so a screen shown on two paths is edited
 //! once (its items are KiCad's same objects on both paths).
 //!
+//! A directive label takes the size, bold, italic, font and colour; the net filter names an item on a screen shown twice per sheet path (`ScreenFacts`).
+//!
 //! **Differs** (each said where it is done): a label's justification is its spin, so H and V
-//! Align set a field's, a text's and a text box's only (KiCad's `processItem` sets any `EDA_TEXT`'s, which turns a label's spin); a directive label takes
-//! the font and the colour only (its size, bold and italic are not modelled); a global label's Sheet References field keeps its visibility (it follows
-//! Schematic Setup); the user fields of a power symbol keep their looks (they are not placed: `PowerProps`); the net of an item on a screen shown twice is
-//! the name its wire keeps, one for every path (KiCad names it per path); a field of a symbol on a sheet read from a KiCad file has no place to keep its
+//! Align turn a label's spin as its `SetHorizJustify` does (`GetSpinStyle`), but a centred label keeps its side and V Align leaves a label as it is
+//! ([`spin_of_justify`]); a global label's Sheet References field keeps its visibility (it follows Schematic Setup); the user fields of a power symbol keep
+//! their looks (they are not placed: `PowerProps`); a field of a symbol on a sheet read from a KiCad file has no place to keep its
 //! size, alignment or visibility in, and takes its font and colour only. Nothing changed is refused (KiCad pushes a commit of unchanged items).
 
 use crate::{Board, CheckResult};
@@ -155,23 +156,80 @@ struct ScreenFacts {
     buses: Vec<(Point, Point, String)>,
     /// Each pin's point, with the net of `REF.PIN` on the path (`None` for one the model has no net for); a power symbol's pin with its net.
     pins: Vec<(Point, Option<String>)>,
+    /// The stored net name of a wire -> its name on this path, for a screen shown more than once.
+    per_path: BTreeMap<String, String>,
+}
+
+/// The sheet path names of one placement and of the other placements of its screen (`SCH_SHEET_PATH::PathHumanReadable`: "/", "/A/", "/A/B/").
+#[derive(Debug, Default, Clone)]
+struct PathPrefixes {
+    here: String,
+    others: Vec<String>,
+}
+
+impl PathPrefixes {
+    fn shared(&self) -> bool {
+        !self.others.is_empty()
+    }
+
+    /// A local net named under another placement's path, named under this one (`CONNECTION_GRAPH` names a local net by the path it is on).
+    fn on_this_path(&self, net: &str) -> String {
+        if net.starts_with(&self.here) {
+            return net.to_string();
+        }
+        let mut others: Vec<&String> = self.others.iter().collect();
+        others.sort_by_key(|p| std::cmp::Reverse(p.len()));
+        match others.into_iter().find(|p| net.starts_with(p.as_str())) {
+            Some(p) => format!("{}{}", self.here, &net[p.len()..]),
+            None => net.to_string(),
+        }
+    }
 }
 
 impl ScreenFacts {
-    fn new(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[String]) -> ScreenFacts {
-        let segs = |bus: bool| -> Vec<(Point, Point, String)> { sch.wires.iter().filter(|w| w.bus == bus).flat_map(|w| w.pts.windows(2).map(move |s| (s[0], s[1], w.net.clone()))).collect() };
+    /// `path`'s facts. `prefixes`: the sheet path names (`SCH_SHEET_PATH::PathHumanReadable`, "/A/B/") of `path` and of the other placements of its screen.
+    fn new(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[String], prefixes: &PathPrefixes) -> ScreenFacts {
         let pin_net: BTreeMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
         let mut pins: Vec<(Point, Option<String>)> = Vec::new();
+        // "REF.PIN" as the screen names it -> as this placement names it (`GetRef( &aSheetPath )`)
+        let mut pin_on_path: BTreeMap<String, String> = BTreeMap::new();
         for sym in &sch.symbols {
             let Some(part) = model.part(&sym.id) else { continue };
             let resolved = model.real_symbol_of_instance(sch, sym, part);
             let reference = eda_model::sheet_list::reference_under(sch, sym, path);
             for (number, at) in eda_engine::placed::pin_points_in(sch, sym, part, resolved.as_ref()) {
                 pins.push((at, pin_net.get(format!("{reference}.{number}").as_str()).map(|s| s.to_string())));
+                pin_on_path.insert(format!("{}.{number}", sym.id), format!("{reference}.{number}"));
             }
         }
         pins.extend(sch.power_symbols.iter().map(|p| (p.at, Some(p.net.clone()))));
-        ScreenFacts { wires: segs(false), buses: segs(true), pins }
+        // `SCH_CONNECTION::Name()` on this path (`aItem->Connection( &aSheetPath )`): the model keeps one name per wire, the last placement traced, so a screen
+        // shown twice names each wire again here -- the net of a pin of its net on this placement (its wires' pins, or a pin on one of them), else the stored
+        // name with this placement's sheet path in place of another placement's (a local net, "/A/NET" -> "/B/NET")
+        let mut per_path: BTreeMap<String, String> = BTreeMap::new();
+        if prefixes.shared() {
+            for w in sch.wires.iter().filter(|w| !w.net.is_empty()) {
+                if per_path.contains_key(&w.net) {
+                    continue;
+                }
+                let group: Vec<&eda_model::ir::Wire> = sch.wires.iter().filter(|o| o.net == w.net && o.bus == w.bus).collect();
+                let by_pin = group
+                    .iter()
+                    .flat_map(|o| o.pins.iter())
+                    .find_map(|p| pin_net.get(pin_on_path.get(p).map_or(p.as_str(), String::as_str)).map(|n| n.to_string()))
+                    .or_else(|| pins.iter().find(|(at, n)| n.is_some() && group.iter().any(|o| o.pts.windows(2).any(|s| crate::sch_scene::on_segment(s[0], s[1], *at)))).and_then(|(_, n)| n.clone()));
+                per_path.insert(w.net.clone(), by_pin.unwrap_or_else(|| prefixes.on_this_path(&w.net)));
+            }
+        }
+        let segs = |bus: bool| -> Vec<(Point, Point, String)> {
+            sch.wires.iter().filter(|w| w.bus == bus).flat_map(|w| { let net = per_path.get(&w.net).cloned().unwrap_or_else(|| w.net.clone()); w.pts.windows(2).map(move |s| (s[0], s[1], net.clone())).collect::<Vec<_>>() }).collect()
+        };
+        ScreenFacts { wires: segs(false), buses: segs(true), pins, per_path }
+    }
+
+    /// The name of wire `w`'s connection on this path.
+    fn wire_net(&self, w: &eda_model::ir::Wire) -> String {
+        self.per_path.get(&w.net).cloned().unwrap_or_else(|| w.net.clone())
     }
 
     fn on(segs: &[(Point, Point, String)], at: Point) -> Option<&str> {
@@ -196,8 +254,8 @@ impl ScreenFacts {
 
 /// `visitItem` over one sheet path's screen: the items `processItem` reaches, put in `out`. `in_view`: the screen is the sheet in view's, whose items
 /// the selection names.
-fn visit(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[String], spec: &GlobalEditSpec, in_view: bool, out: &mut BTreeSet<Target>) {
-    let facts = ScreenFacts::new(sch, model, path);
+fn visit(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[String], prefixes: &PathPrefixes, spec: &GlobalEditSpec, in_view: bool, out: &mut BTreeSet<Target>) {
+    let facts = ScreenFacts::new(sch, model, path, prefixes);
     let selected: BTreeSet<&str> = spec.selection.iter().map(String::as_str).collect();
     // `processItem`'s first test: the item or its parent selected (only items of the screen in view are)
     let take = |id: &str, parent: Option<&str>| !spec.selected_only || (in_view && (selected.contains(id) || parent.is_some_and(|p| selected.contains(p))));
@@ -287,14 +345,14 @@ fn visit(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[Str
 
     // ---- wires and buses (`SCH_LINE_T` on LAYER_WIRE / LAYER_BUS)
     for w in &sch.wires {
-        if (if w.bus { spec.buses } else { spec.wires }) && take(&w.id, None) && net_ok(Some(w.net.clone()).filter(|n| !n.is_empty())) {
+        if (if w.bus { spec.buses } else { spec.wires }) && take(&w.id, None) && net_ok(Some(facts.wire_net(w)).filter(|n| !n.is_empty())) {
             out.insert(Target::Wire(w.id.clone()));
         }
     }
 
     // ---- labels (`SCH_LABEL_T`, `SCH_GLOBAL_LABEL_T`, `SCH_HIER_LABEL_T`)
     for l in &sch.labels {
-        if !net_ok(facts.net_at(l.at).or_else(|| Some(l.net.clone()))) {
+        if !net_ok(facts.net_at(l.at).or_else(|| Some(facts.per_path.get(&l.net).cloned().unwrap_or_else(|| l.net.clone())))) {
             continue;
         }
         let kind_ticked = match l.kind {
@@ -350,6 +408,18 @@ fn visit(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[Str
                 out.insert(Target::Line(l.id.clone()));
             }
         }
+    }
+}
+
+/// `SCH_LABEL_BASE::GetSpinStyle` of a label whose `SetHorizJustify( h )` H Align set: `GR_TEXT_H_ALIGN_RIGHT` is LEFT (BOTTOM for a vertical label), anything
+/// else RIGHT (UP). **Differs**: a centred label's text stays at its side of the anchor (the model keeps a label's justification as its spin only), and
+/// V Align does not reach a label (its `SetVertJustify` has no place: a label is always bottom justified here, as `SetSpinStyle` leaves it).
+fn spin_of_justify(h: SchHAlign, vertical: bool) -> LabelSpin {
+    match (h, vertical) {
+        (SchHAlign::Right, false) => LabelSpin::Left,
+        (SchHAlign::Right, true) => LabelSpin::Bottom,
+        (_, false) => LabelSpin::Right,
+        (_, true) => LabelSpin::Up,
     }
 }
 
@@ -606,9 +676,12 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                     }
                 }
                 here |= edit_text_attrs(sch, id, spec, false);
-                // `SCH_LABEL_BASE::SetSpinStyle`: a spin the label already shows (its own, or the one its wire gives it) changes nothing
-                if let Some(spin) = spec.orientation {
-                    let shows = sch.labels.iter().find(|x| x.id == *id).map(|label| eda_engine::label_fields::label_spin(sch, label));
+                // `SCH_LABEL_BASE::SetSpinStyle`: a spin the label already shows (its own, or the one its wire gives it) changes nothing. Before it (`processItem`
+                // sets the `EDA_TEXT` first), H Align is the label's `SetHorizJustify`, which is its spin as `GetSpinStyle` reads it back: Right justified is
+                // LEFT (BOTTOM when vertical), Left or Center RIGHT (UP); the Orientation, set after, wins
+                let shows = sch.labels.iter().find(|x| x.id == *id).map(|label| eda_engine::label_fields::label_spin(sch, label));
+                let wanted = spec.orientation.or_else(|| spec.h_align.zip(shows).map(|(h, s)| spin_of_justify(h, matches!(s, LabelSpin::Up | LabelSpin::Bottom))));
+                if let Some(spin) = wanted {
                     if shows.is_some_and(|s| s != spin) {
                         sch.extras.label_spins.insert(id.clone(), spin);
                         here = true;
@@ -620,8 +693,22 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                 }
             }
             Target::Directive(id) => {
-                // **differs**: a directive label's text size, bold and italic are not modelled; its font and colour are its `text_attrs`
-                if edit_text_attrs(sch, id, spec, false) {
+                // a directive label is an `EDA_TEXT` too: its size (`SchGraphicKind::Directive::text_size_nm`, 50 mil kept as none), bold and italic (its
+                // `text_attrs`, which the Properties panel masks as `SCH_DIRECTIVE_LABEL_DESC` does but `processItem` sets), font and colour
+                let mut here = false;
+                if let Some(size) = spec.text_size_nm {
+                    if let Some(g) = sch.extras.graphics.iter_mut().find(|g| g.id == *id) {
+                        if let SchGraphicKind::Directive { text_size_nm, .. } = &mut g.shape {
+                            let size = field_size(size);
+                            if *text_size_nm != size {
+                                *text_size_nm = size;
+                                here = true;
+                            }
+                        }
+                    }
+                }
+                here |= edit_text_attrs(sch, id, spec, true);
+                if here {
                     changed = true;
                     connectable = true;
                 }
@@ -768,9 +855,14 @@ impl<'a> Board<'a> {
         let in_view = self.focus.clone().unwrap_or_default();
         // `for( const SCH_SHEET_PATH& sheetPath : m_parent->Schematic().Hierarchy() )`: every path visits its screen; a screen's items are edited once
         let mut targets: BTreeMap<String, BTreeSet<Target>> = BTreeMap::new();
-        for entry in eda_model::sheet_list::walk(&self.design) {
+        let entries = eda_model::sheet_list::walk(&self.design);
+        // each placement's sheet path name ("/A/B/"), by the placement names from the root down
+        let names: BTreeMap<&[String], &str> = entries.iter().map(|e| (e.path.as_slice(), e.name.as_str())).collect();
+        let human = |path: &[String]| -> String { (1..=path.len()).map(|n| format!("{}/", names.get(&path[..n]).copied().unwrap_or(""))).fold("/".to_string(), |a, b| a + &b) };
+        for entry in &entries {
             let Some(screen) = eda_model::sheet_list::screen_of(&self.design, &entry.path) else { continue };
-            visit(screen, model, &entry.path, spec, entry.file == in_view, targets.entry(entry.file.clone()).or_default());
+            let prefixes = PathPrefixes { here: human(&entry.path), others: entries.iter().filter(|o| o.file == entry.file && o.path != entry.path).map(|o| human(&o.path)).collect() };
+            visit(screen, model, &entry.path, &prefixes, spec, entry.file == in_view, targets.entry(entry.file.clone()).or_default());
         }
         let saved_focus = self.focus.clone();
         let mut changed = false;

@@ -287,8 +287,8 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     sch_mm(at.x),
                     sch_mm(at.y),
                     angle_str(*orientation),
-                    // its own size and font face (`EDA_TEXT::Format`), with the colour
-                    effects_with(if *text_size_nm > Nm::ZERO { *text_size_nm } else { mm(1.27) }, false, false, SchHAlign::Left, SchVAlign::Bottom, attrs.color, None, attrs.font.as_deref())
+                    // its own size, bold, italic and font face (`EDA_TEXT::Format`; Edit Text & Graphics sets the bold and italic the Properties panel masks), with the colour
+                    effects_with(if *text_size_nm > Nm::ZERO { *text_size_nm } else { mm(1.27) }, attrs.bold, attrs.italic, SchHAlign::Left, SchVAlign::Bottom, attrs.color, None, attrs.font.as_deref())
                 );
             }
         }
@@ -523,9 +523,9 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let text_size_nm = if size == mm(1.27) { Nm::ZERO } else { size };
                 let kind = SchGraphicKind::Directive { at: Point { x: crate::import::sch_mm_to_nm(x), y: crate::import::sch_mm_to_nm(y) }, orientation, shape, pin_length_nm, netclass: field("Netclass"), component_class: field("Component Class"), text_size_nm };
                 let mut read = ReadGraphic::new(SchGraphic::new(kind), locked_of(item));
-                // the flag's font colour (r7 M5) and face (`T_face`)
+                // the flag's font colour (r7 M5), face (`T_face`), bold and italic (`parseEDA_TEXT`)
                 let attrs = read_text_attrs(item);
-                read.attrs = eda_model::sch_extras::TextAttrs { color: attrs.color, font: attrs.font, ..Default::default() };
+                read.attrs = eda_model::sch_extras::TextAttrs { color: attrs.color, font: attrs.font, bold: attrs.bold, italic: attrs.italic, ..Default::default() };
                 out.push(read);
             }
             _ => {}
@@ -633,15 +633,17 @@ mod tests {
         ];
         sch.assign_missing_ids();
         let dir = sch.extras.graphics[1].id.clone();
-        sch.extras.text_attrs.insert(dir, eda_model::sch_extras::TextAttrs { font: Some("KiCad Font".into()), color: Some(SchColor { r: 200, g: 0, b: 0, a: 255 }), ..Default::default() });
+        sch.extras.text_attrs.insert(dir, eda_model::sch_extras::TextAttrs { font: Some("KiCad Font".into()), color: Some(SchColor { r: 200, g: 0, b: 0, a: 255 }), bold: true, italic: true, ..Default::default() });
         let mut text = String::new();
         write_graphics(&mut text, &sch);
         assert!(text.contains("(margins 0.5 1 1.5 2)"), "{text}");
-        assert!(text.contains("(face \"KiCad Font\") (size 2 2)"), "{text}");
+        assert!(text.contains("(face \"KiCad Font\") (size 2 2) (bold yes) (italic yes)"), "{text}");
         let back = read_back(&sch);
         assert!(matches!(back[0].graphic.shape, SchGraphicKind::TextBox { margins_nm: Some(m), .. } if m == margins), "{:?}", back[0].graphic.shape);
         assert!(matches!(back[1].graphic.shape, SchGraphicKind::Directive { text_size_nm, .. } if text_size_nm == mm(2.0)), "{:?}", back[1].graphic.shape);
         assert_eq!((back[1].attrs.font.as_deref(), back[1].attrs.color), (Some("KiCad Font"), Some(SchColor { r: 200, g: 0, b: 0, a: 255 })));
+        // the bold and italic Edit Text & Graphics sets (UI-LEFT-3 S3-10)
+        assert!(back[1].attrs.bold && back[1].attrs.italic, "{:?}", back[1].attrs);
         // four equal margins are one, as before
         let mut one = sch.clone();
         if let SchGraphicKind::TextBox { margins_nm, .. } = &mut one.extras.graphics[0].shape {

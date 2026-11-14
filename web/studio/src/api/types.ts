@@ -3684,7 +3684,7 @@ export interface Schematic {
   /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
   graphics?: SchGraphic[];
   /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
-  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean }>;
+  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean; bold?: boolean; italic?: boolean }>;
   /** An image's transform origin offset by its graphic's id (`REFERENCE_IMAGE::m_transformOriginOffset`, `SchExtras::image_offsets`): the point Scale scales it about, from its
    *  centre; absent: its centre. */
   image_offsets?: Record<string, PointXY>;

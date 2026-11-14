@@ -5,7 +5,7 @@
 import type { SchColor, SchGraphic, SchLineStyle } from "../../api/schEditTypes";
 import type { ViewTransform } from "../../state/store";
 import { schImageUrl } from "../../kicad-port/refImage";
-import { arcFromThreePoints, directiveShape, graphicBounds, pt, rectCorners, schImageBox } from "../../kicad-port/schItemGeom";
+import { arcFromThreePoints, directivePenNm, directiveShape, graphicBounds, pt, rectCorners, schImageBox } from "../../kicad-port/schItemGeom";
 import { hatchLines } from "../../kicad-port/schHatch";
 import { imageFor } from "../canvas/imageCache";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
@@ -102,14 +102,14 @@ function tracePath(ctx: CanvasRenderingContext2D, g: SchGraphic, stroke = false)
   }
 }
 
-function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: SchGraphic, color: string, defaultPen: number): void {
+function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: SchGraphic, color: string, defaultPen: number, bold = false): void {
   const s = g.shape;
   if (s.type !== "directive") return;
   const d = directiveShape(pt(s.at), (s.orientation ?? 0) / 1000, s.shape ?? "round", s.pin_length_nm);
   const hair = 1 / view.scale;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = Math.max(DEFAULT_WIDTH_NM, hair);
+  ctx.lineWidth = Math.max(directivePenNm(s.text_size_nm, bold, defaultPen), hair);
   const shape = s.shape ?? "round";
   ctx.beginPath();
   if (shape === "dot" || shape === "round") {
@@ -172,7 +172,7 @@ export function paintGraphics(
   view: ViewTransform,
   graphics: readonly SchGraphic[],
   selection: ReadonlySet<string>,
-  textAttrs?: Readonly<Record<string, { color?: SchColor; font?: string | null }>>,
+  textAttrs?: Readonly<Record<string, { color?: SchColor; font?: string | null; bold?: boolean }>>,
   shown?: Readonly<Record<string, string>>,
   defaultPen = SCH_DEFAULT_PEN_NM
 ): void {
@@ -186,7 +186,7 @@ export function paintGraphics(
     if (g.shape.type === "directive") {
       // `SCH_PAINTER::getRenderColor` of a label: its own text colour wins over its layer's (`GetTextColor() != UNSPECIFIED`), unless item colours are overridden
       const own = textAttrs?.[g.id]?.color;
-      drawDirective(ctx, view, g, !selected && own && own.a > 0 && !overrideSchItemColors() ? rgba(own) : color, defaultPen);
+      drawDirective(ctx, view, g, !selected && own && own.a > 0 && !overrideSchItemColors() ? rgba(own) : color, defaultPen, !!textAttrs?.[g.id]?.bold);
       ctx.restore();
       continue;
     }

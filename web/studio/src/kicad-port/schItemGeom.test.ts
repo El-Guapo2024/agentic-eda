@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { arcFromThreePoints, directiveShape, distPointSegment, graphicBounds, graphicHit, graphicOutline, pointInPolygon } from "./schItemGeom";
+import { arcFromThreePoints, directivePenNm, directiveShape, distPointSegment, graphicBounds, graphicHit, graphicOutline, pointInPolygon } from "./schItemGeom";
 import type { SchGraphic } from "../api/schEditTypes";
 
 const rect = (x0: number, y0: number, x1: number, y1: number, fill: SchGraphic["fill"] = "none"): SchGraphic => ({ id: "r", shape: { type: "rectangle", start: { x: x0, y: y0 }, end: { x: x1, y: y1 } }, fill });
@@ -93,4 +93,12 @@ test("an image on the sheet is its box: pixels at their definition times the sca
   assert.deepEqual(graphicOutline(g).pts, [[7_000_000, 18_000_000], [13_000_000, 18_000_000], [13_000_000, 22_000_000], [7_000_000, 22_000_000]]);
   const big = { ...g, shape: { ...g.shape, scale_ppm: 2_500_000 } };
   assert.deepEqual(graphicBounds(big), { minX: 2_500_000, minY: 15_000_000, maxX: 17_500_000, maxY: 25_000_000 });
+});
+
+test("a directive label's pen: the default line width, a bold text's fifth of its size, clipped to a quarter (UI-LEFT-3 S3-10)", () => {
+  assert.equal(directivePenNm(undefined, false), 152_400, "`GetEffectiveTextPenWidth( m_DefaultLineWidth )`");
+  assert.equal(directivePenNm(2_000_000, true), 400_000, "`GetPenSizeForBold`: 2 mm / 5");
+  assert.equal(directivePenNm(undefined, true), 254_000, "50 mil when it keeps no size");
+  assert.equal(directivePenNm(500_000, false), 125_000, "`ClampTextPenSize`: a quarter of a 0.5 mm text");
+  assert.equal(directivePenNm(1_270_000, false, 0), 158_750, "no default line width: `GetPenSizeForNormal`, an eighth");
 });

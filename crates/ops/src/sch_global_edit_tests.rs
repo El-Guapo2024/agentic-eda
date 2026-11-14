@@ -300,3 +300,74 @@ fn a_symbol_placed_with_automatic_placement_off_has_its_fields_where_the_library
     with_autoplace_prefs(off, || b.apply(&add)).unwrap();
     assert!(root(b.design()).field_layout.contains_key("R7") && !root(b.design()).extras.fields_autoplaced.contains_key("R7"));
 }
+
+/// UI-LEFT-3 S3-10: H Align on a label is its `SetHorizJustify`, which `GetSpinStyle` reads back as its spin (Right justified: LEFT; Left: RIGHT; a vertical
+/// label BOTTOM / UP); the Orientation, set after it in `processItem`, wins.
+#[test]
+fn h_align_turns_a_labels_spin_and_the_orientation_wins() {
+    let d = run(GlobalEditSpec { wires: true, h_align: Some(SchHAlign::Right), ..Default::default() }).unwrap();
+    assert_eq!(root(&d).extras.label_spins.get("l1"), Some(&LabelSpin::Left), "right justified: the text ends at the anchor");
+    let d = run(GlobalEditSpec { wires: true, h_align: Some(SchHAlign::Right), orientation: Some(LabelSpin::Up), ..Default::default() }).unwrap();
+    assert_eq!(root(&d).extras.label_spins.get("l1"), Some(&LabelSpin::Up), "SetSpinStyle after SetHorizJustify");
+    // a label already left justified (spin RIGHT): Left changes nothing, so nothing the dialog reaches changes
+    assert!(run(GlobalEditSpec { wires: true, h_align: Some(SchHAlign::Left), ..Default::default() }).is_err());
+    // a vertical label: Right justified is BOTTOM
+    let m = model();
+    let mut des = design();
+    des.schematic.as_mut().unwrap().extras.label_spins.insert("l1".into(), LabelSpin::Up);
+    let mut b = Board::new(des, &m, mm(0.1), mm(0.3));
+    b.apply(&edit(GlobalEditSpec { wires: true, h_align: Some(SchHAlign::Right), ..Default::default() })).unwrap();
+    assert_eq!(root(b.design()).extras.label_spins.get("l1"), Some(&LabelSpin::Bottom));
+}
+
+/// UI-LEFT-3 S3-10: a directive label is an `EDA_TEXT`: `processItem` sets its size, bold and italic as well as its font and colour.
+#[test]
+fn a_directive_label_takes_the_size_bold_and_italic() {
+    let m = model();
+    let mut des = design();
+    let mut flag = SchGraphic::new(SchGraphicKind::Directive { at: p(30.48, 20.32), orientation: 0, shape: eda_model::sch_extras::DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: "HV".into(), component_class: String::new(), text_size_nm: Nm::ZERO });
+    flag.id = "dir1".into();
+    des.schematic.as_mut().unwrap().extras.graphics.push(flag);
+    let mut b = Board::new(des, &m, mm(0.1), mm(0.3));
+    b.apply(&edit(GlobalEditSpec { wires: true, text_size_nm: Some(mm(2.0)), bold: Some(true), italic: Some(true), ..Default::default() })).unwrap();
+    let sch = root(b.design());
+    let g = sch.extras.graphics.iter().find(|g| g.id == "dir1").unwrap();
+    assert!(matches!(g.shape, SchGraphicKind::Directive { text_size_nm, .. } if text_size_nm == mm(2.0)), "{:?}", g.shape);
+    assert!(sch.extras.text_attrs["dir1"].bold && sch.extras.text_attrs["dir1"].italic);
+    // 50 mil is kept as none, as the reader keeps it
+    b.apply(&edit(GlobalEditSpec { wires: true, text_size_nm: Some(mm(1.27)), ..Default::default() })).unwrap();
+    let g = root(b.design()).extras.graphics.iter().find(|g| g.id == "dir1").unwrap().clone();
+    assert!(matches!(g.shape, SchGraphicKind::Directive { text_size_nm, .. } if text_size_nm == Nm::ZERO));
+}
+
+/// UI-LEFT-3 S3-10: "By net:" on a screen shown twice reads each sheet path's name of a wire's net (`aItem->Connection( &aSheetPath )->Name()`): a local net
+/// under each placement's path ("/A/LOC", "/B/LOC"), a net named by a pin under the reference each placement gives it. The model keeps one name per wire.
+#[test]
+fn the_net_filter_names_a_shared_screens_wire_per_sheet_path() {
+    let mut m = model();
+    m.nets = vec![eda_model::Net { name: "NA".into(), pins: vec!["R2.1".into()] }, eda_model::Net { name: "NB".into(), pins: vec!["R3.1".into()] }];
+    let shared = || {
+        let mut des = design();
+        let root = des.schematic.as_mut().unwrap();
+        root.sheets.push(SheetInstance { id: "sb".into(), name: "B".into(), file: "a.kicad_sch".into(), at: p(150.0, 80.0), size: (mm(50.0), mm(30.0)), pins: vec![], page: String::new() });
+        let a = des.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap();
+        a.wires.push(wire("loc", p(0.0, 60.96), p(20.32, 60.96), "/A/LOC", false));
+        let mut by_pin = wire("pinw", p(0.0, 71.12), p(20.32, 71.12), "NA", false);
+        by_pin.pins = vec!["R2.1".into()];
+        a.wires.push(by_pin);
+        a.instance_overrides = vec![eda_model::ir::SymbolPathOverride { at: p(50.8, 50.8), sheet_path: vec!["sb".into()], reference: "R3".into(), unit: 1 }];
+        des
+    };
+    let width = |filter: &str| -> Option<Vec<String>> {
+        let mut b = Board::new(shared(), &m, mm(0.1), mm(0.3));
+        b.apply(&edit(GlobalEditSpec { wires: true, net_filter: Some(filter.into()), line_width_nm: Some(mm(0.3)), ..Default::default() })).ok()?;
+        let mut ids: Vec<String> = sheet_a(b.design()).extras.strokes.keys().cloned().collect();
+        ids.sort();
+        Some(ids)
+    };
+    assert_eq!(width("/B/LOC"), Some(vec!["loc".to_string()]), "the second placement's name of the local net");
+    assert_eq!(width("/A/LOC"), Some(vec!["loc".to_string()]), "the first's");
+    assert_eq!(width("NB"), Some(vec!["pinw".to_string()]), "R2 is R3 on the second placement: its net there");
+    assert_eq!(width("NA"), Some(vec!["pinw".to_string()]));
+    assert_eq!(width("/C/LOC"), None, "no placement names it so");
+}
