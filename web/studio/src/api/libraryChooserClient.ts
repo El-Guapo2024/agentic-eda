@@ -78,6 +78,32 @@ export function fetchEntries(kind: ChooserKind, lib: string, filter?: ChooserFil
   return p;
 }
 
+const allEntriesCache = new Map<string, Promise<ReadonlyMap<string, ChooserItem[]>>>();
+
+/**
+ * Every installed library's items with their descriptions and fields (`GET /api/library/entries_all`), for the library editors' trees (UI-LEFT-3 L3-5: KiCad's
+ * `LIB_TREE_MODEL_ADAPTER` is filled with them when the tree is built). The server reads the libraries in the background: `onProgress` gets the ones read so
+ * far until it has read them all. Asked once per kind for the page's life.
+ */
+export function fetchAllEntries(kind: ChooserKind, onProgress?: (libs: ReadonlyMap<string, ChooserItem[]>) => void): Promise<ReadonlyMap<string, ChooserItem[]>> {
+  const hit = allEntriesCache.get(kind);
+  if (hit) return hit;
+  const p = (async () => {
+    for (;;) {
+      const r = await get<{ status: "ready" | "indexing"; libraries: Record<string, WireItem[]>; error?: string }>(`/api/library/entries_all?kind=${kind}`);
+      const libs = new Map(Object.entries(r.libraries).map(([lib, items]) => [lib, items.map((w) => toItem(lib, w))] as const));
+      onProgress?.(libs);
+      if (r.status === "ready") return libs;
+      await new Promise((res) => setTimeout(res, 1000));
+    }
+  })();
+  allEntriesCache.set(kind, p);
+  p.catch(() => {
+    if (allEntriesCache.get(kind) === p) allEntriesCache.delete(kind);
+  });
+  return p;
+}
+
 export interface SearchLibrary {
   name: string;
   description?: string;

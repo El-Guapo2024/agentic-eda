@@ -854,13 +854,15 @@ fn handle(
         }
         // The Symbol and Footprint Choosers (`crate::library_search`): one library's items with their descriptions, the search over every library's
         // names, descriptions and keywords (best first, capped), and the drawing of the one item selected. The project's own symbols come apart.
-        ("GET", "/api/library/entries" | "/api/library/search" | "/api/library/details") => {
+        ("GET", "/api/library/entries" | "/api/library/search" | "/api/library/details" | "/api/library/entries_all") => {
             let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
                 None => json!({ "error": "kind is footprint or symbol" }),
                 Some(kind) => {
                     let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power")).with_columns(&query_value(target, "cols"));
                     match path {
                         "/api/library/entries" => crate::library_search::entries(dir, kind, &query_value(target, "lib"), &filter),
+                        // every library's items with their descriptions and fields, for the library editors' trees (UI-LEFT-3 L3-5)
+                        "/api/library/entries_all" => crate::library_search::entries_all(dir, kind),
                         "/api/library/search" => {
                             let limit = query_value(target, "limit").parse::<usize>().ok().filter(|&n| n > 0).map_or(crate::library_search::SEARCH_LIMIT, |n| n.min(2000));
                             crate::library_search::search(dir, kind, &query_value(target, "q"), &filter, limit)

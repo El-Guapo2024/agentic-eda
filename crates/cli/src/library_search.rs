@@ -765,6 +765,34 @@ pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, 
     v
 }
 
+/// `GET /api/library/entries_all?kind=`: every library's items with their descriptions and fields, for the library editors' trees (UI-LEFT-3 L3-5): KiCad's
+/// `LIB_TREE_MODEL_ADAPTER` is filled with every library's items, descriptions and chooser fields when the tree is built (`SYMBOL_TREE_SYNCHRONIZING_ADAPTER::
+/// Sync`, `FP_TREE_SYNCHRONIZING_ADAPTER::Sync`; `AddLibrary` -> `LIB_TREE_NODE_ITEM`'s `m_Desc`, `m_Fields`), so its Description and field columns are filled
+/// and Select Columns offers every library's fields before any library is opened. The libraries are read by the background index (the choosers' own, which
+/// KiCad's lazy load stands for): `{"status": "indexing", "libraries": {lib: [items]}}` with the ones read so far, then `"ready"`.
+pub(crate) fn entries_all_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
+    let finished = ensure_background_index(kind, src);
+    let done = finished.load(AtomicOrdering::Acquire);
+    let mut libraries = serde_json::Map::new();
+    for info in libraries_in(kind, src).iter() {
+        let indexed = match kind {
+            Kind::Symbol => cached_symbol_lib(src, &info.name).is_some(),
+            Kind::Footprint => cached_footprint_lib(src, &info.name).is_some(),
+        };
+        if !indexed && !done {
+            continue;
+        }
+        if let Some(e) = entries_in(kind, src, &info.name, &Filter::default()).get("entries") {
+            libraries.insert(info.name.clone(), e.clone());
+        }
+    }
+    json!({ "status": if done { "ready" } else { "indexing" }, "libraries": libraries })
+}
+
+pub(crate) fn entries_all(dir: &Path, kind: Kind) -> Value {
+    entries_all_in(kind, &*crate::library_tables::libs(dir, kind))
+}
+
 pub(crate) fn entries(dir: &Path, kind: Kind, lib: &str, filter: &Filter) -> Value {
     entries_in(kind, &*crate::library_tables::libs(dir, kind), lib, filter)
 }
@@ -1285,6 +1313,25 @@ mod tests {
         // power symbols are left out on request
         let d = entries_in(Kind::Symbol, &root, "Device", &Filter { exclude_power: true, ..Default::default() });
         assert_eq!(d["entries"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Opamp_Model", "R", "R_Small"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// UI-LEFT-3 L3-5: every library's items with their descriptions and fields in one answer, once the background index has read them.
+    #[test]
+    fn every_librarys_entries_come_with_the_tree() {
+        let root = symbol_root("entries_all");
+        let all = loop {
+            let v = entries_all_in(Kind::Symbol, &root);
+            if v["status"] == "ready" {
+                break v;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let libs = all["libraries"].as_object().unwrap();
+        assert!(libs.contains_key("Amplifier_Operational") && libs.contains_key("Device"), "{all}");
+        let lm358 = libs["Amplifier_Operational"].as_array().unwrap().iter().find(|i| i["name"] == "LM358").unwrap();
+        assert_eq!(lm358["description"], "Low-Power, Dual Operational Amplifier, DIP-8/SOIC-8");
+        assert_eq!(lm358["fields"]["Datasheet"], "http://ti.com/lm358.pdf");
         let _ = std::fs::remove_dir_all(&root);
     }
 
