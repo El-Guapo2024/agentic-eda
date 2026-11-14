@@ -362,6 +362,11 @@ mod tests {
         if design.nets.as_ref().is_some_and(|n| n.iter().any(|n| n.name.starts_with("NET_"))) {
             board::undo(&dir, "test", None).expect("one undo");
         }
+        // the box's `work/mcu30` is an empty scratch, not the user's board (on the Mac): nothing to push there
+        if !board::load(&dir).unwrap().1.placement.as_ref().is_some_and(|p| p.footprints.iter().any(|f| f.id == "D8")) {
+            eprintln!("work/mcu30 has no D8 (not the user's board); skipping");
+            return;
+        }
         let baseline = edge_and_copper_counts(&dir);
         eprintln!("mcu30: {} copper_edge_clearance, {} copper clearance violations before", baseline.0, baseline.1);
 
@@ -387,6 +392,57 @@ mod tests {
             board::undo(&dir, "test", None).expect("undo the commit");
         }
         assert!(pushed > 0, "none of the routes pushed a track: the test is not testing a shove");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// UI-LEFT-3 R3-1: a shove that has no room between the pushed track and the board edge walks the track round the outline (`SHOVE::onCollidingSolid`,
+    /// the walk's clusters taking every side of it, with no bound on its length, as KiCad's), and every commit of such a session is clean for
+    /// kicad-cli: no `copper_edge_clearance`, no copper clearance, short or crossing. A 20 mm square with GND along y = 1 mm (2 to 18 mm) and SIG's
+    /// stub coming down x = 10 mm from y = 9 to 8 mm; SIG is routed on toward the bottom edge, pushing GND ahead of it.
+    #[test]
+    fn a_shove_toward_the_board_edge_and_one_that_walks_round_it_leave_kicad_cli_no_copper_violation() {
+        if !kicad_available() {
+            return;
+        }
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let track = |id: &str, net: &str, pts: Vec<eda_model::ir::Point>| eda_model::ir::Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts, arc_mid_offset: None };
+        let design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: eda_model::ir::Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(eda_model::ir::PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(20.0)), p(Nm::ZERO, mm(20.0))], footprints: vec![], modules: vec![] }),
+            routing: Some(eda_model::ir::RoutingSection { tracks: vec![track("gnd", "GND", vec![p(mm(2.0), mm(1.0)), p(mm(18.0), mm(1.0))]), track("sig", "SIG", vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: None,
+        };
+        let mut model = ConstraintModel::default();
+        model.nets = ["GND", "SIG"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect();
+        let dir = scratch("edge_walk");
+        let before = pair_counts(&design, &model, &dir);
+        let (mut pushed, mut walked_round) = (0, 0);
+        for tip in [mm(1.4), mm(1.1), mm(1.0), mm(0.9), mm(0.8), mm(0.6)] {
+            let mut router = eda_pns::router::Router::new(&design, &model);
+            router.settings.mode = eda_pns::settings::Mode::Shove;
+            router.start(p(mm(10.0), mm(8.0)), "F.Cu", mm(0.2)).expect("SIG's stub end starts a route");
+            let Some(commit) = router.finish(p(mm(10.0), tip)) else {
+                eprintln!("tip {tip}: the router refuses it");
+                continue;
+            };
+            let moved: Vec<&eda_model::ir::Track> = commit.tracks.iter().filter(|t| t.net == "GND").collect();
+            pushed += usize::from(!moved.is_empty());
+            walked_round += usize::from(moved.iter().any(|t| t.pts.iter().any(|q| q.y > mm(8.0))));
+            let after = pair_counts(&apply_commit(&design, &commit), &model, &dir);
+            eprintln!("tip {tip}: GND {:?}; kicad-cli {after:?}", moved.iter().map(|t| &t.pts).collect::<Vec<_>>());
+            for kind in ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"] {
+                assert!(after.get(kind).copied().unwrap_or(0) <= before.get(kind).copied().unwrap_or(0), "tip {tip}: {kind} {after:?} (before {before:?})");
+            }
+        }
+        assert!(pushed > 0, "none of the routes pushed GND: the test is not testing a shove");
+        assert!(walked_round > 0, "no shove walked GND round the outline");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
