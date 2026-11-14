@@ -22,6 +22,9 @@ import { openViaStitchDialog } from "../../state/kicad10Dialogs";
 import { chartRowCells } from "../../kicad-port/drillChartDialog";
 import { carryFrameTurn } from "../../kicad-port/gridFrame";
 import { newViaStitch } from "../../kicad-port/viaStitchTool";
+import { paintViaStackPreview, previewAt, stackClick, stackCursor, type StackToolInput } from "./viaStackPlace";
+import { getViaStackTool, setViaStackPlacement, useViaStackTool } from "../../state/viaStackTool";
+import { viaStackCmd } from "../../kicad-port/viaStack";
 import { chosenDiffPair, chosenTrackWidthOf } from "../../kicad-port/routerSizes";
 import { chosenViaOf, currentViaSize } from "../../kicad-port/routerVia";
 import { viaChoiceOf } from "../../actions/routerViaActions";
@@ -137,7 +140,7 @@ function componentDragPreview(draw: DrawState | null): PaintOptions["movePreview
   return { refs: draw.footprints, dxNm: draw.offset[0], dyNm: draw.offset[1], kind: "pcb" };
 }
 
-const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "table", "measure", "drill_origin", "local_ratsnest", "picker"]);
+const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "via_stack", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "table", "measure", "drill_origin", "local_ratsnest", "picker"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown start DRAG_PANNING or DRAG_ZOOMING as Preferences > Mouse and Touchpad say (m_dragMiddle/m_dragRight, both PAN by default), or nothing. A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
@@ -270,6 +273,11 @@ export function Canvas() {
   const drawCtrlRef = useRef(false);
   // Draw Via's preview: where the via the next click places would land (`SnapItem` after the grid, round 6 C6-7), set by the mouse's motion
   const viaGhostRef = useRef<readonly [number, number] | null>(null);
+  // Place Microvia Stack's loop (state/viaStackTool.ts, components/canvas/viaStackPlace.ts; UI-LEFT-3 X3-1): the preview repaints with it, and leaving the tool ends it.
+  const viaStackPlacement = useViaStackTool().placement;
+  useEffect(() => {
+    if (state.activeTool !== "via_stack") setViaStackPlacement(null);
+  }, [state.activeTool]);
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag (kicad-port/dragThreshold.ts). Made at every press, read by the move, the up and the long press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
@@ -585,6 +593,7 @@ export function Canvas() {
     });
     // What the grid helper shows (kicad-port/pcbGridHelper.ts `overlay()`): the snap marker and its icon, the snap guides and snap line, the construction geometry.
     // (The visible world is the same flipped or not: a mirrored screen x is still `width - x`.)
+    if (state.activeTool === "via_stack" && viaStackPlacement) paintViaStackPreview(ctx, viaStackPlacement.preview, layerColor("via"), layerColor(viaStackPlacement.span[1] ?? "F.Cu"));
     const snapOverlay = snap.overlay();
     if (snapOverlay) {
       const k = state.view.scale || 1;
@@ -607,7 +616,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.prefs.pcbShowPageLimits, state.prefs.pcbShowSelectedRatsnest, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, state.prefs.pcbNetNames, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance, ownClearances, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, imagePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.prefs.pcbShowPageLimits, state.prefs.pcbShowSelectedRatsnest, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, state.prefs.pcbNetNames, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance, ownClearances, paintAppearance, viaStackPlacement, marquee, zoneCornerPreview, shapePointPreview, imagePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -674,6 +683,7 @@ export function Canvas() {
     const opts: PointOpts = {};
     switch (tool) {
       case "via":
+      case "via_stack":
         opts.layers = "all";
         opts.category = "vias";
         break;
@@ -727,6 +737,14 @@ export function Canvas() {
     };
     return { placer, viaPreset, copper };
   };
+
+  /** What Place Microvia Stack's loop reads (components/canvas/viaStackPlace.ts): the via placer's view, the current via size, the line mode and Ctrl. */
+  const stackToolFor = (b: NonNullable<typeof board>, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): StackToolInput | null => {
+    const { placer, viaPreset } = viaPlacerFor(b, e);
+    const ctrl = snapMods(e).ctrl;
+    return { board: b, placer, current: viaPreset, angleMode: leaderModeOf(state.pcbx.angleSnapMode, false), ctrl };
+  };
+  const viaStackPlacementNow = () => getViaStackTool().placement;
 
   /** Place Footprint's carry (`StudioState.moveGridCarry`, kicad-port/placeCarry.ts): the anchor of the one footprint carried, which the grid point under the cursor moves; null for any other move. */
   const gridCarryAnchor = (b: NonNullable<typeof board>, refs: readonly string[]): [number, number] | null => (state.moveGridCarry ? placeCarryAnchor(b, refs) : null);
@@ -1000,6 +1018,26 @@ export function Canvas() {
             entries: [{ label: SELECT_NET_TITLE, onSelect: () => {}, disabled: true }, { label: "", onSelect: () => {}, separator: true }, ...choice.nets.map((net, i) => ({ label: labels[i]!, onSelect: () => place(net, null) }))],
           });
         }
+        return;
+      }
+
+      // `DRAWING_TOOL::PlaceMicroviaStack` (components/canvas/viaStackPlace.ts): a stacked stack at the snapped cursor, a staggered one hop by hop; the backend refuses one
+      // that breaks a clearance with "Microvia stack location violates DRC." (UI-LEFT-3 X3-1)
+      if (state.activeTool === "via_stack") {
+        const input = stackToolFor(board, e);
+        const p = viaStackPlacementNow();
+        if (!input || !p) return;
+        const at = stackCursor(p, input, [wx, wy], [sx, sy]);
+        const copper = (board.layers ?? []).filter((l) => l.endsWith(".Cu"));
+        void stackClick(input, at, (stack) =>
+          api.cmd(
+            viaStackCmd(null, stack, {
+              current: { via_size_nm: input.current.diameter, via_drill_nm: input.current.drill },
+              allow_drc_violations: state.routerSettings.mode === "mark_obstacles" && state.routerSettings.allowDrcViolations,
+              hidden_layers: copper.filter((l) => !layerIsVisible(state.layerVisible, l)),
+            })
+          )
+        );
         return;
       }
 
@@ -1555,6 +1593,12 @@ export function Canvas() {
     const snapped: [number, number] | null = board && !dragRef.current && !moveMode && PLACING_TOOLS.has(tracking) ? toolPoint(tracking, wx, wy, e) : null;
     // Draw Via's preview follows the cursor as `doInteractiveItemPlacement` moves it: the grid point, then `m_placer->SnapItem( newItem )` (round 6 C6-7)
     viaGhostRef.current = board && tracking === "via" && snapped ? snapViaPosition(viaPlacerFor(board, e).placer, [wx, wy], snapped) : null;
+    // Place Microvia Stack's motion (`updatePreview( cursorPos )`): the stack, or the hops so far and the one being steered, at the cursor.
+    if (board && tracking === "via_stack" && snapped) {
+      const input = stackToolFor(board, e);
+      const p = viaStackPlacementNow();
+      if (input && p) setViaStackPlacement(previewAt(p, input, stackCursor(p, input, [wx, wy], snapped)));
+    }
 
     // `DrawDimension`'s motion: the end, then an aligned or orthogonal dimension's height, follows the snapped cursor; the preview is the dimension as drawn.
     if (board && state.activeTool === "dimension" && state.drawState?.kind === "dimension" && state.drawState.dim && snapped) {
@@ -2011,6 +2055,9 @@ export function Canvas() {
       // `m_selection.GetSize() == 1 && m_selection[0]->Type() == PCB_GROUP_T` -> `EnterGroup()` (leaving the group entered, if any, first), else Properties.
       const groups = board.drawings?.groups ?? [];
       const hitGroup = isGroup(groups, refs[0]!) ? refs[0]! : topLevelGroup(groups, refs[0]!, state.enteredGroupId);
+      // a generator is no `PCB_GROUP_T` (`PCB_GENERATOR_T`): its properties, not EnterGroup (KiCad 25ec2335 `PCB_VIA_STACK::ShowPropertiesDialog`; UI-LEFT-3 X3-1)
+      const generator = hitGroup ? groups.find((g) => g.id === hitGroup)?.generator : undefined;
+      if (hitGroup && generator) return openPropertiesFor(hitGroup, api, dispatch);
       if (hitGroup && hitGroup !== state.enteredGroupId) {
         dispatch({ type: "ENTER_GROUP", id: hitGroup });
         return;

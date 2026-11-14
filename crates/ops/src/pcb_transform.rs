@@ -190,6 +190,12 @@ impl Board<'_> {
                 let on_board = |m: &String| self.design.routing.as_ref().is_some_and(|rt| rt.vias.iter().any(|x| &x.id == m));
                 out.vias.extend(v.member_ids.iter().filter(|m| on_board(m)).cloned());
             }
+            // A microvia stack is one too (`PCB_VIA_STACK` is a `PCB_GENERATOR`): its vias and traces go with it.
+            if let Some(s) = dr.board_items.via_stacks.iter().find(|s| s.id == id) {
+                let rt = self.design.routing.as_ref();
+                out.vias.extend(s.member_ids.iter().filter(|m| rt.is_some_and(|rt| rt.vias.iter().any(|x| &x.id == *m))).cloned());
+                out.tracks.extend(s.member_ids.iter().filter(|m| rt.is_some_and(|rt| rt.tracks.iter().any(|x| &x.id == *m))).cloned());
+            }
         } else if dr.tables.iter().any(|t| t.id == id) {
             out.tables.insert(id.to_string());
         } else if let Some(p) = dr.tuning_patterns.iter().find(|p| p.id == id) {

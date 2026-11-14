@@ -4,7 +4,7 @@
 // Microvia Stack Preset", then the Microvia Stack dialog), Edit... (the dialog on the row) and Remove. Apply sends the list as one undoable
 // `set_via_stack_presets`; "Import Settings from Another Board..." brings it with the pre-defined sizes (`m_TracksAndViasOpt`), as KiCad's does (UI-LEFT-3 B3-8).
 //
-// The board's `(generated (type via_stack) ..)` items are kept as KiCad wrote them (written back with their members); nothing here places or edits one.
+// The board's stacks (`(generated (type via_stack) ..)`) are placed and edited with the same dialog (components/ViaStackDialog.tsx, UI-LEFT-3 X3-1).
 import { useEffect, useMemo, useState } from "react";
 import { useStudioState } from "../../state/store";
 import type { ViaStackPreset } from "../../api/types";
@@ -175,7 +175,7 @@ export function ViaStacksPage({ hidden, onDirty }: PageProps) {
  * greyed, `showNetclassViaSize`; unticked again they show what was typed, a 0 giving way to the class's), Copper-filled (on and greyed for a stacked stack), Capped,
  * and Pitch (a staggered stack's only). OK runs `TransferDataFromWindow`'s checks with their messages.
  */
-function MicroviaStackDialog({
+export function MicroviaStackDialog({
   preset,
   copper,
   layerName,

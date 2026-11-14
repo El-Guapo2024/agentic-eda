@@ -11,7 +11,7 @@
       "common/hotkey_store.cpp",
       "eeschema/tools/sch_actions.cpp"
     ],
-    "kicad10Additions": "pcbnew.GridItem.place, pcbnew.InteractiveDrawing.drawViaStitchArea, pcbnew.Generator.excludeStitchVia, pcbnew.Generator.clearStitchViaExclusions, pcbnew.InteractiveDrawing.placeDrillChart, pcbnew.InteractiveDrawing.placeDrillMap, pcbnew.InteractiveDrawing.showDrillGroups: from pcbnew/tools/pcb_actions.cpp of KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
+    "kicad10Additions": "pcbnew.GridItem.place, pcbnew.InteractiveDrawing.drawViaStitchArea, pcbnew.Generator.excludeStitchVia, pcbnew.Generator.clearStitchViaExclusions, pcbnew.InteractiveDrawing.placeDrillChart, pcbnew.InteractiveDrawing.placeDrillMap, pcbnew.InteractiveDrawing.showDrillGroups, pcbnew.InteractiveDrawing.viaStack, pcbnew.Generator.makeViaStack: from pcbnew/tools/pcb_actions.cpp of KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
   },
   "actions": [
     {
@@ -12219,6 +12219,38 @@
       "flags": [
         "AF_ACTIVATE"
       ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.viaStack",
+      "label": "Place Microvia Stack",
+      "tooltip": "Place a stacked or staggered microvia stack",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "add_via_stack",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.Generator.makeViaStack",
+      "label": "Create Stack from Selection",
+      "tooltip": "Wrap the selected microvias and traces into a microvia stack",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "add_via_stack",
+      "flags": []
     },
     {
       "name": "pcbnew.Generator.excludeStitchVia",

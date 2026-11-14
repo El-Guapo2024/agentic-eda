@@ -361,6 +361,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     }
     // KiCad 10's via stitchings (`(generated (type via_stitch) ..)`), their members named by the ids the vias have just been given.
     crate::via_stitch_io::attach(&mut design, root, &mut refs);
+    // KiCad 10's microvia stacks (`(generated (type via_stack) ..)`), their members the vias and traces just read (UI-LEFT-3 X3-1).
+    crate::via_stack_io::attach(&mut design, root, &mut refs);
     // `(generated ..)`: the tuning patterns, named by the same file uuids -- before the groups, which may hold one.
     crate::pcb_generated::attach_patterns(&mut design, root, &mut refs);
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
@@ -374,7 +376,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if !custom.is_empty() {
         design.drawings.get_or_insert_with(Default::default).custom_properties = custom;
     }
-    // The unread generators (KiCad 10's `via_stack`), their members named by our ids (`DrawingsSection::raw_generators`).
+    // The unread generators (a kind of a newer KiCad), their members named by our ids (`DrawingsSection::raw_generators`).
     let ids_by_uuid: BTreeMap<String, String> = refs.item_ids(&design).into_iter().collect();
     if let Some(dr) = design.drawings.as_mut() {
         let (generators, rest): (Vec<String>, Vec<String>) = std::mem::take(&mut dr.raw_items).into_iter().partition(|t| t.starts_with("(generated"));
@@ -443,12 +445,12 @@ const READ_ITEMS: &[&str] = &[
 ];
 
 /// Whether a reader here takes the top-level `item` of kind `tag`: its kind is in [`READ_ITEMS`], a reference image is one whose data is a file the reader understands
-/// (an image that is not goes on as text, as KiCad would not have loaded the board at all), and a generator is a tuning pattern or a via stitching.
+/// (an image that is not goes on as text, as KiCad would not have loaded the board at all), and a generator is a tuning pattern, a via stitching or a microvia stack.
 fn is_read(item: &[Sexpr], tag: &str) -> bool {
     READ_ITEMS.contains(&tag)
         && (tag != "image" || crate::pcb_image::read(item).is_some())
-        // A generator of a kind nothing here reads (KiCad 10's microvia stack, `via_stack`) goes on as text, as an unknown item does.
-        && (tag != "generated" || matches!(sexpr::find(item, "type").and_then(|t| sexpr::txt(t, 1)), Some("tuning_pattern") | Some("via_stitch")))
+        // A generator of a kind nothing here reads goes on as text, as an unknown item does.
+        && (tag != "generated" || matches!(sexpr::find(item, "type").and_then(|t| sexpr::txt(t, 1)), Some("tuning_pattern") | Some("via_stitch") | Some("via_stack")))
 }
 
 /// The top-level items of the board whose kind no reader here takes ([`READ_ITEMS`]), counted by kind.

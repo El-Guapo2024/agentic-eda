@@ -563,12 +563,20 @@ fn export_kicad_pcb_items(design: &Design, model: &ConstraintModel, meta: &super
                 written.entry(p.id.clone()).or_default().push(crate::duid_for(&format!("generated:{}", p.id), &p.id));
             }
         }
+        // and a microvia stack that is written (a member on the board), as `crate::via_stack_io` names it
+        for s in &drawings.board_items.via_stacks {
+            if s.member_ids.iter().any(|m| written.contains_key(m)) {
+                written.entry(s.id.clone()).or_default().push(crate::via_stack_io::uuid_of(s));
+            }
+        }
         write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
         // KiCad 10's via stitchings, generators too.
         crate::via_stitch_io::write_all(&mut out, &drawings.board_items.via_stitches, &written, &|v| crate::duid_for(&format!("generated:{}", v.id), &v.id), &is_locked, &model.board.layers);
-        // The generators nothing reads (`via_stack`), with the uuids their members were just written as.
+        // KiCad 10's microvia stacks (UI-LEFT-3 X3-1).
+        crate::via_stack_io::write_all(&mut out, &drawings.board_items.via_stacks, &written, &is_locked);
+        // The generators nothing reads (a newer KiCad's), with the uuids their members were just written as.
         for g in &drawings.raw_generators {
             let members: Vec<String> = g.member_ids.iter().flat_map(|id| written.get(id).into_iter().flatten()).map(|u| sexpr_str(u)).collect();
             let text = g.text.strip_suffix(')').unwrap_or(&g.text);

@@ -151,6 +151,7 @@ import { picker } from "./pcbPicker";
 import { useCliExporters } from "../state/cliExporters";
 import { cliExporterReason } from "../kicad-port/cliExporters";
 import { zoneFromExisting } from "../kicad-port/pcbDrawZone";
+import { stackUndo } from "../components/canvas/viaStackPlace";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -512,6 +513,8 @@ export function useActionRunner() {
       // (`Activate()`, then `RequestSelection`), so that selection is what is deleted -- this handler's `state` is from before the cancel
       const restored = state.tab === "pcb" && state.drawState?.kind === "drag" ? (state.drawState.restoreSelection ?? []) : [];
       if (routerKey("delete")) return;
+      // Place Microvia Stack's loop: Delete takes back a staggered stack's last hop ("Swallowed for the whole loop like the router does"; UI-LEFT-3 X3-1)
+      if (state.tab === "pcb" && state.activeTool === "via_stack") return stackUndo();
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
       // `DrawZone`'s loop on the board: Delete with a corner placed removes the last corner (zones, rule areas, cutouts, graphic polygons)
@@ -840,6 +843,8 @@ export function useActionRunner() {
     m.set("common.Interactive.undo", () => {
       if (boardMoving()) return void m.get("common.Interactive.cancel")?.();
       if (routerKey("undo")) return;
+      // Place Microvia Stack's loop: Undo takes back a staggered stack's last hop, and never the board's last edit (UI-LEFT-3 X3-1)
+      if (state.tab === "pcb" && state.activeTool === "via_stack") return stackUndo();
       // `DrawZone`: Undo with a corner placed removes the last corner (`DeleteLastCorner`)
       if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
       // `drawShape`: "( started && evt->IsAction( &ACTIONS::undo ) )" cancels the item being drawn, as Escape does, and keeps the tool (not the measure tool's)

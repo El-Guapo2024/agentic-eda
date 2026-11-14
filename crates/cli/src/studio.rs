@@ -1750,7 +1750,9 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
             }))).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
             // (`generator` names what it is); `tuning_patterns` has the pattern itself.
-            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids, "design_block": g.design_block })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids, "design_block": g.design_block })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" })))
+                // KiCad 10's microvia stacks select as one too (UI-LEFT-3 X3-1); `drawings.via_stacks` has the stack itself
+                .chain(d.board_items.via_stacks.iter().map(|s| json!({ "id": s.id, "name": s.name, "member_ids": s.member_ids, "generator": "via_stack" }))).collect::<Vec<_>>(),
             "tuning_patterns": d.tuning_patterns.iter().map(|p| {
                 let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
                 v["handles"] = tune_api::handles_json(p);

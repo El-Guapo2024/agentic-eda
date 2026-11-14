@@ -105,6 +105,28 @@ pub enum PcbItemCmd {
     },
     /// `PCB_VIA_STITCH::Remove`: the generator and every via it made.
     DeleteViaStitch { id: String },
+    /// KiCad 10's microvia stack (`PCB_VIA_STACK`, UI-LEFT-3 X3-1), see [`crate::via_stack`]. With no `id`, Place Microvia Stack's `placeStack`: the stack where its
+    /// settings put it (a stacked one at its `origin`, a staggered one at its `hops`), on `stack.net` (what its first hop lands on, `FindNetAtPosition`, which the studio
+    /// works out), refused with "Microvia stack location violates DRC." unless `allow_drc_violations` ("Place Microvia Stack"). With an `id`, the Microvia Stack
+    /// dialog's OK on a placed stack (`ShowPropertiesDialog`, "Edit Microvia Stack"): its settings replaced, its hops re-spaced to the pitch, its net the given one
+    /// when it had none. Either way its vias and traces are made again (`Regenerate`); `current` is the toolbar's via size (`GetCurrentViaSize`), a 0 the board's.
+    SetViaStack {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        stack: eda_model::via_stack::MicroviaStack,
+        #[serde(default)]
+        current: crate::via_stack::CurrentSizes,
+        #[serde(default)]
+        allow_drc_violations: bool,
+        /// The layers the Appearance panel hides: their items do not refuse the stack (as `Cmd::PlaceVia`'s).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hidden_layers: Vec<String>,
+    },
+    /// `PCB_VIA_STACK::Remove`: the stack and every via and trace it is made of.
+    DeleteViaStack { id: String },
+    /// Create Stack from Selection (`GENERATOR_TOOL::MakeViaStackFromSelection`, "Create Microvia Stack"): the selected microvias and connecting traces made the
+    /// members of a new stack, refused with KiCad's message when they are not one.
+    MakeViaStack { ids: Vec<String> },
     /// `PCB_CONTROL::PlaceDrillChart` ("Place Drill Chart"): KiCad 10's drill chart of the default template on `layer` (a documentation layer), built from the board, its first
     /// corner at `at`. See [`crate::drill_chart`].
     PlaceDrillChart { layer: String, at: Point },
@@ -151,6 +173,9 @@ impl PcbItemCmd {
             PcbItemCmd::EditGridItem { id, .. } | PcbItemCmd::DeleteGridItem { id } => vec![id.as_str()],
             PcbItemCmd::SetViaStitch { id, stitch, .. } => vec![id.as_deref().unwrap_or(stitch.net.as_str())],
             PcbItemCmd::DeleteViaStitch { id } => vec![id.as_str()],
+            PcbItemCmd::SetViaStack { id, stack, .. } => vec![id.as_deref().unwrap_or(stack.start_layer.as_str())],
+            PcbItemCmd::DeleteViaStack { id } => vec![id.as_str()],
+            PcbItemCmd::MakeViaStack { ids } => ids.iter().map(String::as_str).collect(),
             PcbItemCmd::PlaceDrillChart { layer, .. } | PcbItemCmd::PlaceDrillMap { layer } => vec![layer.as_str()],
             PcbItemCmd::SetDrillChart { id, .. } | PcbItemCmd::EditDrillChart { id, .. } | PcbItemCmd::EditDrillMap { id, .. } | PcbItemCmd::DeleteDrillMap { id } => vec![id.as_str()],
             PcbItemCmd::SetDrillProfile { .. } => vec!["drill_profile"],
@@ -200,6 +225,21 @@ impl PcbItemCmd {
             )
             .to_lowercase(),
             PcbItemCmd::DeleteViaStitch { id } => format!("via-stitch delete {id}"),
+            PcbItemCmd::SetViaStack { id, stack: v, .. } => format!(
+                "via-stack {} --layers {}..{} --style {} --net {:?} --at {},{} --via {}x{} --pitch {}",
+                id.as_deref().unwrap_or("place"),
+                v.start_layer,
+                v.end_layer,
+                v.style.word(),
+                v.net,
+                mm(v.origin.x),
+                mm(v.origin.y),
+                mm(v.via_size_nm),
+                mm(v.via_drill_nm),
+                mm(v.pitch_nm)
+            ),
+            PcbItemCmd::DeleteViaStack { id } => format!("via-stack delete {id}"),
+            PcbItemCmd::MakeViaStack { ids } => format!("via-stack make {}", ids.join(",")),
             PcbItemCmd::PlaceDrillChart { layer, at } => format!("drill-chart place --layer {layer} --at {},{}", mm(at.x), mm(at.y)),
             PcbItemCmd::SetDrillChart { id, units, precision, show_totals, .. } => format!("drill-chart edit {id} --units {} --precision {precision} --totals {show_totals}", units.token()),
             PcbItemCmd::EditDrillChart { id, chart: c } => format!(
@@ -251,6 +291,7 @@ impl PcbItemCmd {
             PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
             PcbItemCmd::AddGridItem { .. } | PcbItemCmd::EditGridItem { .. } | PcbItemCmd::DeleteGridItem { .. } => "grid-item",
             PcbItemCmd::SetViaStitch { .. } | PcbItemCmd::DeleteViaStitch { .. } => "via-stitch",
+            PcbItemCmd::SetViaStack { .. } | PcbItemCmd::DeleteViaStack { .. } | PcbItemCmd::MakeViaStack { .. } => "via-stack",
             PcbItemCmd::PlaceDrillChart { .. } | PcbItemCmd::SetDrillChart { .. } | PcbItemCmd::EditDrillChart { .. } => "drill-chart",
             PcbItemCmd::SetDrillProfile { .. } => "drill-profile",
             PcbItemCmd::PlaceDrillMap { .. } | PcbItemCmd::EditDrillMap { .. } | PcbItemCmd::DeleteDrillMap { .. } => "drill-map",
@@ -282,6 +323,9 @@ impl<'a> Board<'a> {
             PcbItemCmd::DeleteGridItem { id } => self.delete_grid_item(id),
             PcbItemCmd::SetViaStitch { id, stitch, vias } => self.set_via_stitch(id.as_deref(), stitch.clone(), vias.as_deref()),
             PcbItemCmd::DeleteViaStitch { id } => self.delete_via_stitch(id),
+            PcbItemCmd::SetViaStack { id, stack, current, allow_drc_violations, hidden_layers } => self.set_via_stack(id.as_deref(), stack.clone(), *current, *allow_drc_violations, hidden_layers, &Default::default()),
+            PcbItemCmd::DeleteViaStack { id } => self.delete_via_stack(id),
+            PcbItemCmd::MakeViaStack { ids } => self.make_via_stack(ids),
             PcbItemCmd::PlaceDrillChart { layer, at } => self.place_drill_chart(layer, *at),
             PcbItemCmd::SetDrillChart { id, units, precision, show_totals, filter } => self.set_drill_chart(id, *units, *precision, *show_totals, *filter),
             PcbItemCmd::EditDrillChart { id, chart } => self.edit_drill_chart(id, chart),
@@ -636,6 +680,10 @@ pub(crate) fn transform_board_items(dr: &mut DrawingsSection, ids: &BTreeSet<Str
     }
     for g in dr.board_items.grid_items.iter_mut().filter(|g| ids.contains(&g.id)) {
         crate::kicad10_items::transform_grid_item(g, x);
+    }
+    // KiCad 10's microvia stacks: their position and hops, and a Flip turns their span over (their vias and traces go with them as members).
+    for s in dr.board_items.via_stacks.iter_mut().filter(|s| ids.contains(&s.id)) {
+        crate::via_stack::transform_via_stack(s, x, copper);
     }
     for v in dr.board_items.via_stitches.iter_mut().filter(|v| ids.contains(&v.id)) {
         crate::kicad10_items::transform_via_stitch(v, x);

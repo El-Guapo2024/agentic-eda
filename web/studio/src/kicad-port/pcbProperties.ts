@@ -30,7 +30,7 @@ import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooLarge, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
 import { customPropertyGroup } from "./pcbCustomProperties";
-import type { BoardBarcode, BoardDrillMap, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import type { BoardBarcode, BoardDrillMap, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStack, BoardViaStitch } from "../api/pcbItemTypes";
 import { barcodeCmd, pointCmd, registerDrillChart, registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
 import { NO_ENDING, type LineEnding, type LineEndingStyle } from "./lineEnding";
@@ -91,6 +91,7 @@ export type PcbType =
   | "PCB_BARCODE"
   | "PCB_GRID_ITEM"
   | "PCB_VIA_STITCH"
+  | "PCB_VIA_STACK"
   | "PCB_DRILL_MAP"
   | "PCB_TABLE"
   | "PCB_TABLECELL";
@@ -118,6 +119,8 @@ export interface PcbItem {
   readonly grid?: BoardGridItem;
   /** KiCad 10's via stitching (a generator). */
   readonly stitch?: BoardViaStitch;
+  /** KiCad 10's microvia stack (a generator, UI-LEFT-3 X3-1). */
+  readonly viaStack?: BoardViaStack;
   /** KiCad 10's drill map. */
   readonly drillMap?: BoardDrillMap;
   /** A table (`PCB_TABLE`), or the table a cell (`PCB_TABLECELL`) is in. */
@@ -192,6 +195,9 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   const dim = dr?.dimensions.find((d) => d.id === id);
   if (dim) return { type: DIM_TYPE[dim.kind], id, dim };
   const group = dr?.groups.find((g) => g.id === id);
+  // a microvia stack is listed with the groups (it selects as one), but it is a `PCB_VIA_STACK` (UI-LEFT-3 X3-1)
+  const viaStack = dr?.via_stacks?.find((s) => s.id === id);
+  if (viaStack) return { type: "PCB_VIA_STACK", id, viaStack };
   if (group) return { type: "PCB_GROUP", id, group };
   const textBox = dr?.text_boxes?.find((t) => t.id === id);
   if (textBox) return { type: "PCB_TEXTBOX", id, textBox };
@@ -233,6 +239,7 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const shape of dr?.shapes ?? []) put({ type: "PCB_SHAPE", id: shape.id, shape });
   for (const text of dr?.texts ?? []) put({ type: "PCB_TEXT", id: text.id, text });
   for (const dim of dr?.dimensions ?? []) put({ type: DIM_TYPE[dim.kind], id: dim.id, dim });
+  for (const viaStack of dr?.via_stacks ?? []) put({ type: "PCB_VIA_STACK", id: viaStack.id, viaStack });
   for (const group of dr?.groups ?? []) put({ type: "PCB_GROUP", id: group.id, group });
   for (const textBox of dr?.text_boxes ?? []) put({ type: "PCB_TEXTBOX", id: textBox.id, textBox });
   for (const image of dr?.images ?? []) put({ type: "PCB_REFERENCE_IMAGE", id: image.id, image });
@@ -294,6 +301,7 @@ export function typeName(item: PcbItem): string {
     case "PCB_GRID_ITEM":
       return "Grid";
     case "PCB_VIA_STITCH":
+    case "PCB_VIA_STACK":
       return "Generator";
     case "PCB_DRILL_MAP":
       return "Drill Map";
@@ -350,6 +358,8 @@ export function pcbFriendlyName(item: PcbItem): string {
       return "Grid";
     case "PCB_VIA_STITCH":
       return "Via Stitching";
+    case "PCB_VIA_STACK":
+      return "Microvia Stack";
     case "PCB_DRILL_MAP":
       return "Drill Map";
     case "PCB_TABLE":
@@ -467,6 +477,7 @@ export function positionOf(i: PcbItem): [number, number] {
   if (i.barcode) return [i.barcode.x, i.barcode.y];
   if (i.grid) return [i.grid.x, i.grid.y];
   if (i.stitch) return stitchPosition(i.stitch);
+  if (i.viaStack) return [i.viaStack.origin.x, i.viaStack.origin.y];
   if (i.drillMap) return [i.drillMap.offset.x, i.drillMap.offset.y];
   const s = i.shape;
   if (s) {

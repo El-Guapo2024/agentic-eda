@@ -10,10 +10,19 @@ export const VIA_VIOLATES_DRC = "Via location violates DRC.";
  * place, or a clean via dismisses it (`if( infobar->GetMessageType() == DRC_VIOLATION ) infobar->Dismiss()`), UI-LEFT-3 P3-32.
  */
 export function isViaDrcMessage(op: string, message: string | undefined): boolean {
-  return op === "place_via" && (message ?? "").includes(VIA_VIOLATES_DRC);
+  // Place Microvia Stack's own (`placeStack`: `ShowInfoBarError( _( "Microvia stack location violates DRC." ), true, DRC_VIOLATION )`, UI-LEFT-3 X3-1)
+  return (op === "place_via" && (message ?? "").includes(VIA_VIOLATES_DRC)) || (op === "pcb_item" && (message ?? "").includes(STACK_VIOLATES_DRC));
 }
+
+/** Place Microvia Stack's info bar message, word for word (crates/ops/src/via_stack.rs `STACK_VIOLATES_DRC`). */
+export const STACK_VIOLATES_DRC = "Microvia stack location violates DRC.";
 
 /** What the info bar says: KiCad's words alone (`ShowInfoBarError( _( "Via location violates DRC." ), .. )`), without the server's error code before them. */
 export function viaDrcInfoBarText(message: string): string {
-  return message.includes(VIA_VIOLATES_DRC) ? VIA_VIOLATES_DRC : message;
+  return message.includes(VIA_VIOLATES_DRC) ? VIA_VIOLATES_DRC : message.includes(STACK_VIOLATES_DRC) ? STACK_VIOLATES_DRC : message;
+}
+
+/** A placement whose clean result dismisses a standing DRC bar: a Draw Via via, or a Place Microvia Stack stack (a `set_via_stack` with no id). */
+export function isViaPlacement(cmd: { op: string; verb?: string; id?: unknown }): boolean {
+  return cmd.op === "place_via" || (cmd.op === "pcb_item" && cmd.verb === "set_via_stack" && cmd.id === undefined);
 }

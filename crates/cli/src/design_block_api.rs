@@ -442,6 +442,7 @@ fn board_selection_made(dir: &Path, ids: &[String]) -> Result<Made, String> {
         bi.points.retain(|p| keep.contains(p.id.as_str()));
         bi.grid_items.retain(|g| keep.contains(g.id.as_str()));
         bi.via_stitches.retain(|v| keep.contains(v.id.as_str()));
+        bi.via_stacks.retain(|v| keep.contains(v.id.as_str()));
         bi.drill_maps.retain(|x| keep.contains(x.id.as_str()));
         // the groups saved whole (`DeepClone`): their members are all in the block
         dr.groups.retain(|g| kept_groups.contains(&g.id));

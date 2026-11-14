@@ -345,6 +345,7 @@ pub(crate) fn rename_design(design: &mut Design, model: &ConstraintModel, rename
             }
         }
         d.board_items.via_stitches.iter_mut().for_each(|v| rename(&mut v.net));
+        d.board_items.via_stacks.iter_mut().for_each(|v| rename(&mut v.net));
         d.via_tenting.iter_mut().for_each(|v| rename(&mut v.net));
         for bp in d.board_parts.iter_mut() {
             bp.pad_nets.iter_mut().for_each(|(_, n)| rename(n));

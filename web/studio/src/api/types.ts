@@ -12,7 +12,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
-import type { BoardBarcode, BoardDrillChart, BoardDrillMap, BoardDrillMark, BoardDrillProfile, BoardDrillSpan, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch, PcbItemCmd } from "./pcbItemTypes";
+import type { BoardBarcode, BoardDrillChart, BoardDrillMap, BoardDrillMark, BoardDrillProfile, BoardDrillSpan, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStack, BoardViaStitch, PcbItemCmd } from "./pcbItemTypes";
 import type { MicrowaveCmd } from "./microwaveTypes";
 import type { EmbeddedCmd } from "./embeddedTypes";
 import type { TableCmdWire } from "./tableTypes";
@@ -873,6 +873,8 @@ export interface Drawings {
   grid_items?: BoardGridItem[];
   /** KiCad 10's via stitchings (`PCB_VIA_STITCH`) -- see api/pcbItemTypes.ts. */
   via_stitches?: BoardViaStitch[];
+  /** KiCad 10's microvia stacks (`PCB_VIA_STACK`) -- see api/pcbItemTypes.ts; each is listed with the groups too (`generator: "via_stack"`). */
+  via_stacks?: BoardViaStack[];
   /** KiCad 10's drill charts (what makes a table one), drill maps, drill symbol profile, and -- when the board has a map -- every hole's mark and the spans a map can show. */
   drill_charts?: BoardDrillChart[];
   drill_maps?: BoardDrillMap[];
@@ -989,7 +991,7 @@ export interface Group {
   /** `EDA_GROUP::m_designBlockLibId` (`Lib:Name`): the design block the group was placed from or saved to; empty or missing for none. */
   design_block?: string;
   /** A `PCB_GENERATOR` (which is a `PCB_GROUP`): what makes the group -- a tuning pattern (`Drawings.tuning_patterns`). It is selected as a group but edited through its properties and edit points, and deleting it puts the track back. */
-  generator?: "tuning_pattern";
+  generator?: "tuning_pattern" | "via_stack";
 }
 
 /** `crates/model/src/ir.rs` `DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/`ArrowDirection` (task item 7). */

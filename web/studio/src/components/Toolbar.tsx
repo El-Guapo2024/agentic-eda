@@ -22,6 +22,8 @@ import { KICAD10_ACTIONS, KICAD10_ICONS } from "../kicad/kicad10Actions";
 import { resolvedToolbar, useToolbarSettings } from "../state/toolbarSettings";
 import { setOverrideLocks, useOverrideLocks, type OverrideLocksFrame } from "../state/overrideLocks";
 import type { RenderToolbarItem } from "../kicad-port/toolbarCustomization";
+import { setViaStackIndex, useViaStackTool } from "../state/viaStackTool";
+import { viaStackBoxLabels, viaStackBoxPick } from "../kicad-port/viaStack";
 
 // No source-verified "100% = this many px/mm" reference for KiCad's own
 // zoom percentage readout either; this defines 100% as 1 screen px per
@@ -124,6 +126,7 @@ function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "con
   }
 
   if (item.control === "trackWidth" || item.control === "viaDiameter") return <SizeSelectBox control={item.control} label={item.label ?? item.control} />;
+  if (item.control === "viaStack") return <ViaStackSelectBox />;
 
   // `ACTION_TOOLBAR_CONTROLS::overrideLocks`: `new wxCheckBox( aToolbar, ID_ON_OVERRIDE_LOCKS, _( "Override locks" ) )` (eda_draw_frame.cpp), read by
   // `GetOverrideLocks()` -- Place > Auto-Place Footprints places a locked footprint with it checked (UI-LEFT-2 PP20).
@@ -171,6 +174,44 @@ function SizeSelectBox({ control, label }: { control: "trackWidth" | "viaDiamete
       >
         {labels.map((text, i) => (
           <option key={i} value={i} disabled={text === BOX_SEPARATOR}>
+            {text}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/**
+ * The auxiliary toolbar's microvia stack selector (KiCad 25ec2335 `m_SelViaStackBox`, `UpdateViaStackSelectBox`, UI-LEFT-3 X3-1): "Microvia stack: <name>" per preset of
+ * Board Setup's Microvia Stacks ("Microvia stack: none defined" without one), "---" and "Edit Pre-defined Microvia Stacks..." (Board Setup on that page); a pick is the
+ * preset Place Microvia Stack places (`SetViaStackIndex`).
+ */
+function ViaStackSelectBox() {
+  const state = useStudioState();
+  const dispatch = useStudioDispatch();
+  const { index } = useViaStackTool();
+  const presets = state.board?.drawings?.via_stack_presets ?? [];
+  const labels = viaStackBoxLabels(presets);
+  // "if( idx >= presets.size() ) SetViaStackIndex( 0 )"
+  const shown = presets.length === 0 || index >= presets.length ? 0 : index;
+  return (
+    <div className="toolbar-control" title="Select the microvia stack preset placed by the microvia stack tool.">
+      <select
+        aria-label="Microvia stack selector"
+        data-control="viaStack"
+        value={shown}
+        disabled={!state.board}
+        onChange={(e) => {
+          const pick = viaStackBoxPick(Number(e.target.value), labels.length, presets.length);
+          if (pick.kind === "edit") {
+            dispatch({ type: "SET_BOARD_SETUP_INITIAL_PAGE", page: "via_stacks" });
+            dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true });
+          } else if (pick.kind === "index") setViaStackIndex(pick.index);
+        }}
+      >
+        {labels.map((text, i) => (
+          <option key={i} value={i} disabled={text === "---"}>
             {text}
           </option>
         ))}

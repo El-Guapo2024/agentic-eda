@@ -79,6 +79,7 @@ pub mod variant_symbol;
 pub mod track_mask;
 pub mod via_extra;
 pub mod via_stitch;
+pub mod via_stack;
 pub mod drill_chart;
 
 use crate::units::Nm;
@@ -972,6 +973,12 @@ impl BoardRules {
     /// class (or no class) = the board default.
     pub fn via_drill_of(&self, net: &str) -> ir::Nm {
         self.class_setting(net, |c| c.via_drill).unwrap_or(self.via_drill)
+    }
+
+    /// The microvia diameter and drill `net`'s class gives (`NETCLASS::HasuViaDiameter` / `GetuViaDiameter`, `HasuViaDrill` / `GetuViaDrill`): the first class in
+    /// precedence order that sets each, else the Default class's; `None` where none does. KiCad 25ec2335 `PCB_VIA_STACK::GetNetclassViaSize` (UI-LEFT-3 X3-1).
+    pub fn microvia_of(&self, net: &str) -> (Option<ir::Nm>, Option<ir::Nm>) {
+        (self.class_setting(net, |c| c.microvia_diameter), self.class_setting(net, |c| c.microvia_drill))
     }
 
     /// Differential-pair trace width for `net`'s class. Unlike every

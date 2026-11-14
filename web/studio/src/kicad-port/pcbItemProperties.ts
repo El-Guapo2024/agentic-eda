@@ -4,7 +4,7 @@
 // the whole box (`edit_text_box`) -- the free text's setters are the text's own verbs and a field's the footprint's.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
+import type { BarcodeEcc, BarcodeKind, BoardBarcode, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStack, BoardViaStitch } from "../api/pcbItemTypes";
 import type { BoardDrillChart, BoardDrillMap, TableUnits } from "../api/pcbItemTypes";
 import { spanChoiceOf, spanChoices, withSpanChoice } from "./drillChart";
 import { LAYOUT_PROPERTY_CHOICES, layoutOf, MODE_CHOICES, modeOf, viaStitchCmd, withLayoutAndMode, type StitchLayout, type StitchMode } from "./viaStitch";
@@ -400,9 +400,35 @@ export function registerDrillChart(add: Add): void {
   );
 }
 
+/**
+ * Register KiCad 10's `PCB_VIA_STACK` (`PCB_VIA_STACK_DESC`, UI-LEFT-3 X3-1): a board item with its Layer masked ("A stack spans layers, so the single inherited layer is
+ * meaningless, as for a via"), then in "Microvia Stack Properties" Start Layer, End Layer and Style, the Net, Use Netclass Values, Via Diameter, Via Hole, Pitch (a
+ * staggered stack's), Copper-filled and Capped -- all read-only: "a stack's geometry is rebuilt from these, and the Properties panel has no way to trigger that rebuild.
+ * Editing goes through the stack's own dialog."
+ */
+function registerViaStack(pm: PM, add: Add): void {
+  pm.registerType("PCB_VIA_STACK");
+  pm.inheritsAfter("PCB_VIA_STACK", "BOARD_ITEM");
+  pm.mask("PCB_VIA_STACK", "BOARD_ITEM", "Layer");
+  const own = (i: PcbItem): BoardViaStack => i.viaStack!;
+  const group = "Microvia Stack Properties";
+  const layer = (name: string, get: (s: BoardViaStack) => string) => add({ owner: "PCB_VIA_STACK", name, kind: "enum", choices: (_i, c) => c.allLayers.map((l) => ({ label: l, value: l })), get: (i) => get(own(i)) }, group);
+  layer("Start Layer", (s) => s.start_layer);
+  layer("End Layer", (s) => s.end_layer);
+  add({ owner: "PCB_VIA_STACK", name: "Style", kind: "enum", choices: () => [{ label: "Stacked", value: "stacked" }, { label: "Staggered", value: "staggered" }], get: (i) => own(i).style ?? "stacked" }, group);
+  add({ owner: "PCB_VIA_STACK", name: "Net", kind: "net", choices: (_i, c) => [{ label: "<no net>", value: "" }, ...c.nets.map((n) => ({ label: n, value: n }))], get: (i) => own(i).net ?? "" });
+  add({ owner: "PCB_VIA_STACK", name: "Use Netclass Values", kind: "bool", get: (i) => own(i).use_netclass ?? false }, group);
+  add({ owner: "PCB_VIA_STACK", name: "Via Diameter", kind: "int", display: "size", get: (i) => own(i).via_size_nm ?? 0 }, group);
+  add({ owner: "PCB_VIA_STACK", name: "Via Hole", kind: "int", display: "size", get: (i) => own(i).via_drill_nm ?? 0 }, group);
+  add({ owner: "PCB_VIA_STACK", name: "Pitch", kind: "int", display: "size", available: (i) => own(i).style === "staggered", get: (i) => own(i).pitch_nm ?? 0 }, group);
+  add({ owner: "PCB_VIA_STACK", name: "Copper-filled", kind: "bool", get: (i) => own(i).filled ?? true }, group);
+  add({ owner: "PCB_VIA_STACK", name: "Capped", kind: "bool", get: (i) => own(i).capped ?? false }, group);
+}
+
 export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
   registerGridItem(pm, add);
   registerViaStitch(pm, add);
+  registerViaStack(pm, add);
   registerDrillMap(pm, add);
   registerReferenceImage(pm, add, layerChoices);
   registerPoint(pm, add);

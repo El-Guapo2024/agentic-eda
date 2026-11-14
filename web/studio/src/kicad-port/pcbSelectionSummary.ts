@@ -101,6 +101,9 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
         if (board.drawings?.tuning_patterns?.some((p) => p.id === id)) {
           s.others = { ...s.others, generator: (s.others?.generator ?? 0) + 1 };
           s.tuningPatterns = (s.tuningPatterns ?? 0) + 1;
+        } else if (board.drawings?.via_stacks?.some((v) => v.id === id)) {
+          // KiCad 10's microvia stack: a `PCB_GENERATOR` too (UI-LEFT-3 X3-1)
+          s.others = { ...s.others, generator: (s.others?.generator ?? 0) + 1 };
         } else s.groups++;
         break;
       default: {
@@ -109,7 +112,7 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
       }
     }
     // GROUP_CONTEXT_MENU::update (`item->Type() == PCB_GROUP_T`: a generator is an ungrouped item there)
-    const isPattern = kind === "group" && !!board.drawings?.tuning_patterns?.some((p) => p.id === id);
+    const isPattern = kind === "group" && (!!board.drawings?.tuning_patterns?.some((p) => p.id === id) || !!board.drawings?.via_stacks?.some((v) => v.id === id));
     if (kind === "group" && !isPattern) {
       if (hasGroup) onlyOneGroup = false;
       else {

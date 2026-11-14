@@ -88,6 +88,8 @@ export const TOOLBAR_CONTROLS: readonly ToolbarControlDesc[] = [
   { name: "control.OverrideLocks", id: "overrideLocks", uiName: "Override locks", description: "Allow moving of locked items with the mouse", frames: ["pcb", "schematic"] },
   { name: "control.PCBTrackWidth", id: "trackWidth", uiName: "Track width selector", description: "Control to select the track width", frames: ["pcb"] },
   { name: "control.PCBViaDia", id: "viaDiameter", uiName: "Via diameter selector", description: "Control to select the via diameter", frames: ["pcb"] },
+  // KiCad 25ec2335 `PCB_ACTION_TOOLBAR_CONTROLS::viaStack` (UI-LEFT-3 X3-1)
+  { name: "control.PCBViaStack", id: "viaStack", uiName: "Microvia stack selector", description: "Control to select the microvia stack preset", frames: ["pcb"] },
   { name: "control.PCBCurrentVariant", id: "currentVariant", uiName: "Current variant", description: "Control to select the current variant", frames: ["pcb"] },
   { name: "control.currentVariant", id: "currentVariant", uiName: "Current variant", description: "Selects the current schematic variant", frames: ["schematic"] },
 ];

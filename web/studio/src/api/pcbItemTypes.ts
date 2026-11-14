@@ -173,6 +173,30 @@ export interface BoardViaStitch {
   custom_properties?: [string, string][];
 }
 
+/**
+ * KiCad 10's microvia stack (`PCB_VIA_STACK`, crates/model/src/via_stack.rs; UI-LEFT-3 X3-1) as the state lists it -- the model's own form, which `set_via_stack` takes back.
+ * nm; an absent number is 0, an absent `filled` true and an absent flag false; `net` is the stack's members' (`GetNetCode`), else its own.
+ */
+export interface BoardViaStack {
+  id: string;
+  name?: string;
+  start_layer: string;
+  end_layer: string;
+  style?: "stacked" | "staggered";
+  pitch_nm?: number;
+  filled?: boolean;
+  capped?: boolean;
+  via_size_nm?: number;
+  via_drill_nm?: number;
+  use_netclass?: boolean;
+  preset?: string;
+  origin: PointXY;
+  hops?: PointXY[];
+  net?: string;
+  member_ids?: string[];
+  custom_properties?: [string, string][];
+}
+
 export interface BoardPoint {
   id: string;
   layer: string;
@@ -291,6 +315,14 @@ export type PcbItemCmd =
    */
   | { verb: "set_via_stitch"; id?: string; stitch: Omit<BoardViaStitch, "id"> & { id?: string }; vias?: { cell: [number, number]; at: PointXY }[] }
   | { verb: "delete_via_stitch"; id: string }
+  /**
+   * KiCad 10's microvia stack (UI-LEFT-3 X3-1): Place Microvia Stack's stack (no `id`; refused with "Microvia stack location violates DRC." unless
+   * `allow_drc_violations`) or the Microvia Stack dialog's OK on a placed one; its vias and traces are made again. `current` is the toolbar's via size. One undo step.
+   */
+  | { verb: "set_via_stack"; id?: string; stack: Omit<BoardViaStack, "id"> & { id?: string }; current?: { via_size_nm: number; via_drill_nm: number }; allow_drc_violations?: boolean; hidden_layers?: string[] }
+  | { verb: "delete_via_stack"; id: string }
+  /** Create Stack from Selection: the selected microvias and their connecting traces made one stack. */
+  | { verb: "make_via_stack"; ids: string[] }
   /** KiCad 10's Place Drill Chart: a chart of the default template on a documentation layer, built from the board, its first corner at `at`. One undo step. */
   | { verb: "place_drill_chart"; layer: string; at: PointXY }
   /** The Properties panel's Units, Decimal Places and Show Totals of a drill chart (`id` is its table's): the chart rebuilt from the board. */

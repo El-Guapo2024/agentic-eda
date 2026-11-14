@@ -289,7 +289,7 @@ impl SwapHost for Board<'_> {
             if dr.is_group(id) {
                 return Ok(SwapType::Group);
             }
-            if dr.tuning_patterns.iter().any(|p| p.id == id) || bi.via_stitches.iter().any(|v| v.id == id) {
+            if dr.tuning_patterns.iter().any(|p| p.id == id) || bi.via_stitches.iter().any(|v| v.id == id) || bi.via_stacks.iter().any(|v| v.id == id) {
                 return Err(fail("ops_swap", id, "a tuning pattern or a via stitching is not swapped here (PCB_GENERATOR::SetPosition moves its origin alone)"));
             }
         }

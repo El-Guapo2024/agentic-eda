@@ -57,6 +57,7 @@ pub(crate) fn universe(design: &Design) -> BTreeSet<String> {
         out.extend(dr.board_items.text_boxes.iter().map(|t| t.id.clone()));
         out.extend(dr.board_items.images.iter().map(|i| i.id.clone()));
         out.extend(dr.board_items.via_stitches.iter().map(|v| v.id.clone()));
+        out.extend(dr.board_items.via_stacks.iter().map(|v| v.id.clone()));
         out.extend(dr.board_items.points.iter().map(|q| q.id.clone()));
         out.extend(dr.board_items.grid_items.iter().map(|g| g.id.clone()));
         out.extend(dr.board_items.drill_maps.iter().map(|m| m.id.clone()));
