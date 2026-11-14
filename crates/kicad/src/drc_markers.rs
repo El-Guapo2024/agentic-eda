@@ -634,18 +634,23 @@ fn subshape_pairs(a: &[Copper], b: &[Copper], clearance: i64) -> Vec<[i64; 2]> {
             .collect()
     };
     let (fa, fb) = (flat(a), flat(b));
-    let mut out = Vec::new();
+    let mut hits = Vec::new();
     for x in &fa {
         for y in &fb {
             if let Some((actual, at)) = collide_single(x, y) {
                 if actual <= clearance.max(0) {
-                    out.push(at);
+                    hits.push((actual, at));
                 }
             }
         }
     }
-    out
+    // under a wide clearance every pair is a candidate: the nearest ones first, at most `MAX_PAIRS` (a record each in the project)
+    hits.sort_by_key(|h| h.0);
+    hits.into_iter().take(MAX_PAIRS).map(|h| h.1).collect()
 }
+
+/// The most subshape pairs offered for one silkscreen finding.
+const MAX_PAIRS: usize = 32;
 
 /// `zoneOutline->Collide( shape, 0, &actual, &pos )` of a keepout rule area's outline against an item (`DRC_TEST_PROVIDER_DISALLOW`): a track's
 /// `SquaredDistanceToSeg` -- the middle of the segment when both ends are inside (`containsSingle`, accuracy 1), else the nearest point of the side
