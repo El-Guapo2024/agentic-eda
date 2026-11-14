@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, LibraryFootprint } from "../api/types";
-import { fpSwapCmd, planSwap, swapSelection } from "./pcbSwap";
+import { fpSwapCmd, groupSwapCentre, planSwap, swapSelection } from "./pcbSwap";
 import type { Fp } from "./fpItems";
 
 const part = (ref: string, x: number, y: number) => ({ ref, placed: true, at: [x, y], rot: 0, side: "top", pads: [{ num: "1", net: "N", x, y, w: 500, h: 500, round: false, th: false }] });
@@ -81,4 +81,23 @@ test("Swap in the Footprint Editor keeps pads as pads and promotes a group's mem
   assert.deepEqual(cmd.ids, ["grp", "p1"]);
   assert.ok(cmd.centres.grp);
   assert.equal(fpSwapCmd(libFp(), "L:F", ["p1"]), null);
+});
+
+test("Swap takes tuning patterns, via stitchings, grid items and drill maps, leaves a table cell out; a group's centre is BOX2I's (UI-LEFT-3 P3-33)", () => {
+  const b = board([], []);
+  const dr = b.drawings as unknown as Record<string, unknown>;
+  dr.tuning_patterns = [{ id: "tun1", member_ids: ["t1"] }];
+  dr.groups = [{ id: "tun1", name: "Tuning Pattern", member_ids: ["t1"], generator: "tuning_pattern" }];
+  dr.via_stitches = [{ id: "vst1", layer: "F.Cu", outline: [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }], via: {} }];
+  dr.grid_items = [{ id: "grd1", kind: "cartesian", x: 100, y: 200, extent: [1000, 1000], spacing: [100, 100], angle: 0, phi_extent: 360, phi_spacing: 10, priority: 1, tick_interval: 0, affects: { cursor: true, routing: true, placement: true } }];
+  dr.tables = [{ id: "tbl1", rows: 1, cols: 2, cells: [{ id: "tbl1:0:0", row: 0, col: 0, corners: [[0, 0], [1, 0], [1, 1], [0, 1]] }, { id: "tbl1:0:1", row: 0, col: 1, corners: [[1, 0], [2, 0], [2, 1], [1, 1]] }], bbox: [0, 0, 2, 1], layer: "F.SilkS" }];
+  const sel = swapSelection(b, ["tun1", "vst1", "grd1", "tbl1:0:1", "a"]);
+  assert.deepEqual(sel.ids, ["tun1", "vst1", "grd1", "a"]);
+  assert.ok(!sel.ids.includes("tbl1:0:1"), "a table cell is left out");
+  // a tuning pattern's position is its origin, read by the backend: no centre
+  const plan = planSwap(b, ["tun1", "a"]).cmd as { centres?: Record<string, unknown> };
+  assert.equal(plan.centres, undefined);
+  // `GetBoundingBox().Centre()`: the 0.25 mm inflation and integer halves
+  assert.deepEqual(groupSwapCentre([0, 0, 1001, 3]), { x: 500, y: 1 });
+  assert.deepEqual(groupSwapCentre([-1001, -3, 0, 0]), { x: -501, y: -2 });
 });
