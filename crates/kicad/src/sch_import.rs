@@ -731,11 +731,15 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
     // each label's font colour and face, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
-    let mut label_colors: Vec<(Option<eda_model::sch_extras::SchColor>, Option<String>)> = Vec::new();
+    let mut label_colors: Vec<(Option<eda_model::sch_extras::SchColor>, Option<String>, Option<Nm>)> = Vec::new();
     // each label's field places when they are not autoplaced, parallel to `labels` (`field_layout` under the label's id, `eda_engine::label_fields`)
     let mut label_field_places: Vec<Option<Vec<eda_model::ir::FieldPlacement>>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
     let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
+    let mut label_justify_read: Vec<eda_model::sch_extras::LabelJustify> = Vec::new();
+    // each global label's Sheet References' own looks, and each label's fields' font faces and colours, parallel to `labels` (UI-LEFT-3 S3-31)
+    let mut label_isr_looks: Vec<Option<eda_model::sch_extras::LabelField>> = Vec::new();
+    let mut label_field_looks: Vec<BTreeMap<String, eda_model::sch_extras::FieldFontLook>> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
         for l in sexpr::find_all(root, tag) {
             let Some(net) = sexpr::txt(l, 1).map(String::from) else { continue };
@@ -761,10 +765,19 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             labels.push(eda_model::ir::NetLabel { id: String::new(), net, at: mm_point_to_um(at), kind });
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
+            // a centred text (neither left nor right) or a vertical justification other than `SetSpinStyle`'s: the label's own (`parseEDA_TEXT` after `(at ..)`)
+            {
+                let has = |w: &str| look.justify.iter().any(|j| j == w);
+                let v = if has("top") { eda_model::sch_extras::SchVAlign::Top } else if has("bottom") { eda_model::sch_extras::SchVAlign::Bottom } else { eda_model::sch_extras::SchVAlign::Center };
+                let spin_v = if global.is_none() { eda_model::sch_extras::SchVAlign::Bottom } else { eda_model::sch_extras::SchVAlign::Center };
+                label_justify_read.push(eda_model::sch_extras::LabelJustify { center: !has("left") && !has("right"), v: (v != spin_v).then_some(v) });
+            }
             label_geometry.push((spin, look));
             let attrs = crate::sch_extras_io::read_text_attrs(l);
-            label_colors.push((attrs.color, attrs.font));
+            label_colors.push((attrs.color, attrs.font, attrs.thickness_nm));
             label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
+            label_isr_looks.push(if tag == "global_label" { crate::label_fields::read_intersheet_refs_look(l) } else { None });
+            label_field_looks.push(crate::label_fields::read_label_field_looks(l, tag == "global_label"));
             label_field_places.push(crate::label_fields::read_label_field_places(l, tag == "global_label", labels.last().map(|x| x.at).unwrap_or_default()));
         }
     }
@@ -1033,10 +1046,28 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 sch.extras.label_looks.insert(id, label_look);
             }
         }
+        // A label's centred text or own vertical justification (`SchExtras::label_justify`).
+        for (id, j) in sch.labels.iter().map(|l| l.id.clone()).zip(label_justify_read) {
+            if !id.is_empty() && !j.is_default() {
+                sch.extras.label_justify.insert(id, j);
+            }
+        }
         // A label's own fields (`SchExtras::label_fields`): its net class and the others, not a global label's Sheet References.
         for (id, fields) in sch.labels.iter().map(|l| l.id.clone()).zip(label_fields_read) {
             if !id.is_empty() && !fields.is_empty() {
                 sch.extras.label_fields.insert(id, fields);
+            }
+        }
+        // A global label's Sheet References' looks (`SchExtras::intersheet_refs_looks`) and the font and colour of a label's fields (`field_looks` under its id).
+        for ((id, isr), looks) in sch.labels.iter().map(|l| l.id.clone()).zip(label_isr_looks).zip(label_field_looks) {
+            if id.is_empty() {
+                continue;
+            }
+            if let Some(isr) = isr {
+                sch.extras.intersheet_refs_looks.insert(id.clone(), isr);
+            }
+            if !looks.is_empty() {
+                sch.extras.field_looks.insert(id, looks);
             }
         }
         // Where a label's fields are when the file has them placed by hand (no `(fields_autoplaced ..)`): `field_layout` under the label's id.
@@ -1049,7 +1080,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         // no entry.
         let attrs = sch.texts.iter().map(|t| t.id.clone()).zip(text_attrs)
             .chain(sch.extras.graphics.iter().map(|g| g.id.clone()).zip(graphic_attrs))
-            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|(color, font)| eda_model::sch_extras::TextAttrs { color, font, ..Default::default() })));
+            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|(color, font, thickness_nm)| eda_model::sch_extras::TextAttrs { color, font, thickness_nm, ..Default::default() })));
         for (id, a) in attrs.filter(|(id, a)| !id.is_empty() && !a.is_default()).collect::<Vec<_>>() {
             sch.extras.text_attrs.insert(id, a);
         }

@@ -34,7 +34,8 @@
 // **Differs**: Show pin numbers / Show pin names (one library symbol per lib_id: S10) are not here; the Private column is the Symbol Editor's (`getColumnCount`); a
 // field added here takes its looks after OK; a unit already placed on the sheet is refused (KiCad makes a second placement of it); Description is a user row (the
 // model keeps it so), so four rows are mandatory, not five; the Embedded Files tab applies as its own step on the library symbol (the Symbol Editor's undo), and
-// only for a symbol in the project library; Angle and Mirror are not offered for the symbol in the hand (R, X and Y turn it).
+// only for a symbol in the project library. The symbol in the hand has every row and button (UI-LEFT-3 S3-30): Angle and Mirror give the orientation it is made with,
+// the four buttons apply OK to it first; the Symbol Editor's tab leaves the Place Symbol tool, so the symbol in the hand goes with it (one page, KiCad's two windows).
 import { DatasheetUrlButton } from "./DatasheetUrlButton";
 import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
 import { editCarried } from "../actions/schPlaceActions";
@@ -309,8 +310,8 @@ export function SymbolPropertiesDialog() {
     // Move Up / Move Down: the user fields in the grid's order (`SetOrdinal( ordinal++ )`)
     const order = fieldOrderCmd(owner, userFieldsOf(symbol.fields).map((f) => f.name), kept.map((r) => r.name.trim()));
     if (order) cmds.push(order);
-    // Angle and Mirror (`SetOrientation`); the symbol in the hand is turned with R, X and Y
-    const turn = open.carried ? null : orientationCmd(symbol.id, symbol.unit, orientationChoice(symbol.rot, symbol.mirror), orient);
+    // Angle and Mirror (`SetOrientation`), the symbol in the hand's too (kicad-port/schPlaceTool.ts `applyCarriedCmds`: the orientation it is made with)
+    const turn = orientationCmd(symbol.id, symbol.unit, orientationChoice(symbol.rot, symbol.mirror), orient);
     if (turn) cmds.push(turn);
     const placeAgain = cmds.length > fieldCmdsFrom || cmds.some((c) => c.op === "edit_symbol_fields");
     if (sch && bodyStyle !== (symbol.body_style || 1)) {
@@ -357,7 +358,8 @@ export function SymbolPropertiesDialog() {
   const exchange = variant === "" ? changeSymbols("change") : thenDo(() => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "variant_symbol", id: symbol.id, variant, libId: symbol.lib_id ?? "" } }));
   const clearVariantSymbol = thenDo(() => void api.cmd({ op: "set_variant_symbol", variant, id: symbol.id, lib_id: null }));
   // `editor->LoadSymbol( symbol->GetLibId(), symbol->GetUnit(), symbol->GetBodyStyle() )`; `onUpdateEditSymbol`: enabled when the symbol has its library symbol
-  const canEditSymbol = !!symbol.lib_id && !!sch?.lib_symbols[symbol.lib_id];
+  // (the symbol in the hand has the one the chooser loaded)
+  const canEditSymbol = !!symbol.lib_id && (!!sch?.lib_symbols[symbol.lib_id] || !!open.carried);
   const editSymbol = thenDo(() => {
     if (!symbol.lib_id) return;
     dispatch({ type: "SET_TAB", tab: "symbol" });
@@ -628,12 +630,10 @@ export function SymbolPropertiesDialog() {
                     ))}
                   </select>
                   {/* `m_orientationCtrl` / `m_mirrorCtrl`: `SetOrientation( SYM_ORIENT_.. )`, then `SetOrientation( SYM_MIRROR_.. )` */}
-                  <span style={{ opacity: open.carried ? 0.5 : 1 }}>Angle:</span>
+                  <span>Angle:</span>
                   <select
                     aria-label="Angle"
                     value={orient.angle}
-                    disabled={!!open.carried}
-                    title={open.carried ? "Turn the symbol in the hand with R, X and Y." : undefined}
                     onChange={(e) => setOrient({ ...orient, angle: Number(e.target.value) })}
                     data-testid="symbol-angle"
                   >
@@ -643,12 +643,10 @@ export function SymbolPropertiesDialog() {
                       </option>
                     ))}
                   </select>
-                  <span style={{ opacity: open.carried ? 0.5 : 1 }}>Mirror:</span>
+                  <span>Mirror:</span>
                   <select
                     aria-label="Mirror"
                     value={orient.mirror ?? ""}
-                    disabled={!!open.carried}
-                    title={open.carried ? "Turn the symbol in the hand with R, X and Y." : undefined}
                     onChange={(e) => setOrient({ ...orient, mirror: (e.target.value || null) as "x" | "y" | null })}
                     data-testid="symbol-mirror"
                   >
@@ -669,13 +667,13 @@ export function SymbolPropertiesDialog() {
                     ))}
                   </fieldset>
                 )}
-                {/* the four buttons act on a placed symbol (Change Symbols, the Symbol Editor): disabled on the symbol in the hand, which `PlaceSymbol` refuses to
-                    hand to them too (`editWithLibEdit`, `changeSymbol`: `wxBell()`) */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, alignSelf: "flex-start" }} title={open.carried ? "The symbol is not placed yet." : undefined}>
-                  <button onClick={changeSymbols("update")} disabled={!!open.carried} data-testid="symbol-update-from-library">
+                {/* the four buttons, the symbol in the hand's too (`DIALOG_SYMBOL_PROPERTIES` has them whatever symbol it is open on): OK, then Change Symbols on it
+                    (which, as KiCad's walks the sheets' symbols, finds the one in the hand on none of them) or the Symbol Editor on its library symbol */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, alignSelf: "flex-start" }}>
+                  <button onClick={changeSymbols("update")} data-testid="symbol-update-from-library">
                     Update Symbol from Library...
                   </button>
-                  <button onClick={exchange} disabled={!!open.carried} data-testid="symbol-change">
+                  <button onClick={exchange} data-testid="symbol-change">
                     {variant === "" ? "Change Symbol..." : "Set Variant Symbol..."}
                   </button>
                   {hasVariantSymbol && (
@@ -683,10 +681,10 @@ export function SymbolPropertiesDialog() {
                       Clear Variant Symbol
                     </button>
                   )}
-                  <button onClick={editSymbol} disabled={!canEditSymbol || !!open.carried} data-testid="symbol-edit">
+                  <button onClick={editSymbol} disabled={!canEditSymbol} data-testid="symbol-edit">
                     Edit Symbol...
                   </button>
-                  <button onClick={editSymbol} disabled={!canEditSymbol || !!open.carried} data-testid="symbol-edit-library">
+                  <button onClick={editSymbol} disabled={!canEditSymbol} data-testid="symbol-edit-library">
                     Edit Library Symbol...
                   </button>
                 </div>

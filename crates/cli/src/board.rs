@@ -7722,7 +7722,7 @@ pub(crate) mod tests {
         };
         let global = eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Output };
         // wire A runs from R1's top pin up to (20, 7.46) mm, where the local label A is
-        let place = V::PlaceLabel { net: "CLK".into(), at: pt(mm(20.0), mm(7.46)), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_nm: None, bold: None, italic: None, auto_rotate: Some(true) };
+        let place = V::PlaceLabel { net: "CLK".into(), at: pt(mm(20.0), mm(7.46)), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_nm: None, bold: None, italic: None, auto_rotate: Some(true), fields: None, intersheet_refs: None, field_looks: None };
         check(Cmd::SchEdit(place.clone()), &|d| {
             let sch = d.schematic.as_ref().unwrap();
             let l = sch.labels.iter().find(|l| l.net == "CLK").expect("the label is on the sheet");
@@ -7737,7 +7737,7 @@ pub(crate) mod tests {
         });
         // a refused one is no step at all
         let before = sheet_of(&load(&dir).unwrap().1);
-        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PlaceLabel { net: "X".into(), at: pt(Nm::ZERO, Nm::ZERO), kind: eda_model::ir::LabelKind::Local, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: Some(true) })), false, "test").unwrap_err();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PlaceLabel { net: "X".into(), at: pt(Nm::ZERO, Nm::ZERO), kind: eda_model::ir::LabelKind::Local, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: Some(true), fields: None, intersheet_refs: None, field_looks: None })), false, "test").unwrap_err();
         assert!(reasons(&e).contains("rotate itself"), "{}", reasons(&e));
         assert_eq!(sheet_of(&load(&dir).unwrap().1), before);
 

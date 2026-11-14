@@ -8,6 +8,7 @@
 //
 // Not ported: the syntax help window and the text-variable autocomplete of the cell editors (a plain text area is the cell's editor, and `${ROW}`, `${COL}`, `${ADDR}`, `${LAYER}`
 // and the board's variables are resolved as they are anywhere else).
+import { SchColorOverrideNote } from "./SchColorOverrideNote";
 import { useEffect, useState, type CSSProperties } from "react";
 import { fetchSchematic, fetchState } from "../api/client";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -216,6 +217,7 @@ export function TablePropertiesForm({ host }: { host: TableHost }) {
         <div className="dialog-header">
           <span>Table Properties</span>
         </div>
+        {host.sch && <SchColorOverrideNote />}
         <div className="dialog-body">
           <div style={{ overflow: "auto", maxHeight: "40vh", border: "1px solid var(--border, #555)", marginBottom: 8 }}>
             <table style={{ borderCollapse: "collapse", width: "100%", tableLayout: "fixed" }} data-testid="table-grid">
@@ -379,6 +381,7 @@ export function TableCellPropertiesDialog() {
         <div className="dialog-header">
           <span>Table Cell Properties ({cellNames})</span>
         </div>
+        {sch && <SchColorOverrideNote />}
         <div className="dialog-body">
           <textarea
             data-testid="cell-text"

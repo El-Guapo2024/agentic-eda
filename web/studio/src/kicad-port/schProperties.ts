@@ -140,7 +140,7 @@ export function sameColor(a: SchColor | null | undefined, b: SchColor | null | u
 
 /** The label's own fields as Label Properties' grid starts with them: every field but a global label's Sheet References (`SCH_LABEL_BASE::m_fields` past the mandatory one). */
 export function ownLabelFields(label: Partial<Pick<SchematicLabel, "fields">>): LabelFieldEdit[] {
-  return (label.fields ?? []).filter((f) => !f.intersheet_refs).map((f) => ({ name: f.name, text: f.text, visible: f.visible, italic: f.italic, size_nm: f.size_nm && f.size_nm > 0 ? f.size_nm : LABEL_FIELD_SIZE_NM, bold: !!f.bold, name_shown: !!f.name_shown }));
+  return (label.fields ?? []).filter((f) => !f.intersheet_refs).map((f) => ({ name: f.name, text: f.text, visible: f.visible, italic: f.italic, size_nm: f.size_nm && f.size_nm > 0 ? f.size_nm : LABEL_FIELD_SIZE_NM, bold: !!f.bold, name_shown: !!f.name_shown, ...(f.allow_autoplace === false ? { no_autoplace: true } : {}) }));
 }
 
 /** How a label's field is named in the grid (`SCH_LABEL_BASE::GetDefaultFieldName`): "Net Class" for `Netclass`, "Sheet References" for `Intersheetrefs`. */
@@ -167,7 +167,7 @@ export function newLabelField(fields: readonly LabelFieldEdit[], isrVisible: boo
 
 function sameFields(a: readonly LabelFieldEdit[], b: readonly LabelFieldEdit[]): boolean {
   const size = (f: LabelFieldEdit) => (f.size_nm && f.size_nm > 0 ? f.size_nm : LABEL_FIELD_SIZE_NM);
-  return a.length === b.length && a.every((f, i) => f.name === b[i]!.name && f.text === b[i]!.text && f.visible === b[i]!.visible && f.italic === b[i]!.italic && size(f) === size(b[i]!) && !!f.bold === !!b[i]!.bold && !!f.name_shown === !!b[i]!.name_shown);
+  return a.length === b.length && a.every((f, i) => f.name === b[i]!.name && f.text === b[i]!.text && f.visible === b[i]!.visible && f.italic === b[i]!.italic && size(f) === size(b[i]!) && !!f.bold === !!b[i]!.bold && !!f.name_shown === !!b[i]!.name_shown && !!f.no_autoplace === !!b[i]!.no_autoplace);
 }
 
 /** Label Properties: only the fields that differ from the label as it is (`spin` is the label's current spin, stored or read off its wire). */

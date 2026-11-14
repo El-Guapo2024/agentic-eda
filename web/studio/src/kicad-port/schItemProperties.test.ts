@@ -144,7 +144,7 @@ test("a power symbol is a symbol without a mirror, a value of its own to edit, o
   // A power symbol is a SCH_SYMBOL: KiCad lists its mirror and attributes too; here they are read-only.
   assert.deepEqual(names(s, ["#PWR01"]), [
     ["Basic Properties", ["Locked", "Position X", "Position Y", "Orientation", "Mirror X", "Mirror Y"]],
-    ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords"]],
+    ["Fields", ["Reference", "Value", "Library Link", "Library Description", "Keywords", "Datasheet", "Description", "Footprint"]],
     ["Attributes", ["Exclude From Simulation", "Exclude From Bill of Materials", "Exclude From Board", "Exclude From Position Files", "Do not Populate"]],
     ["Pin Display", ["Show Pin Number", "Show Pin Name", "Pin Name Position Offset"]],
   ]);
@@ -154,6 +154,17 @@ test("a power symbol is a symbol without a mirror, a value of its own to edit, o
   assert.equal(rowOf(s, ["#PWR01"], "Value")!.writable, false);
   assert.equal(rowOf(s, ["#PWR01"], "Reference")!.writable, false);
   assert.equal(rowOf(s, ["#PWR01"], "Orientation")!.value, 180);
+});
+
+test("a power symbol's Footprint, Datasheet and Description rows are set as its own (UI-LEFT-3 S3-32)", () => {
+  const s = sheet();
+  const fields = names(s, ["#PWR01"]).find(([g]) => g === "Fields")![1];
+  assert.ok(["Footprint", "Datasheet", "Description"].every((n) => fields.includes(n)), String(fields));
+  assert.equal(rowOf(s, ["#PWR01"], "Footprint")!.writable, true);
+  assert.deepEqual(edit(s, ["#PWR01"], "Footprint", "Lib:FP"), [{ op: "sch_edit", verb: "set_power_props", id: "#PWR01", footprint: "Lib:FP" }]);
+  assert.deepEqual(edit(s, ["#PWR01"], "Datasheet", "~"), [{ op: "sch_edit", verb: "set_power_props", id: "#PWR01", datasheet: "~" }]);
+  // `AddField`: a field the power symbol lacks is added hidden, its other user fields kept
+  assert.deepEqual(edit(s, ["#PWR01"], "Description", "ground rail"), [{ op: "sch_edit", verb: "set_power_props", id: "#PWR01", fields: [{ name: "Description", text: "ground rail", visible: false, italic: false }] }]);
 });
 
 test("wires, buses and lines: the end points, the length and the stroke", () => {
@@ -214,12 +225,33 @@ test("a text box has its margins and text rows before its shape rows, and no cor
   assert.equal(rowOf(sheet(), ["shp_box"], "Fill")!.writable, true, "`fillAvailable` gives a schematic text box the row, edited as a shape's");
 });
 
-test("a rule area has its attributes and the polygon's look, unfilled (this editor draws it as an outline)", () => {
-  assert.deepEqual(names(sheet(), ["shp_rule"]), [
+test("a rule area has its attributes and the polygon's look, its fill edited as a shape's (UI-LEFT-3 S3-32)", () => {
+  const s = sheet();
+  assert.deepEqual(names(s, ["shp_rule"]), [
     ["Basic Properties", ["Locked"]],
     ["Attributes", ["Exclude From Board", "Exclude From Simulation", "Exclude From Bill of Materials", "Do not Populate"]],
     ["Shape Properties", ["Shape", "Line Width", "Line Style", "Line Color", "Fill", "Fill Color"]],
   ]);
+  assert.equal(rowOf(s, ["shp_rule"], "Fill")!.writable, true);
+  const cmd = edit(s, ["shp_rule"], "Fill", "Solid")[0] as { verb: string; graphic: { fill: string } };
+  assert.equal(cmd.verb, "edit_graphic");
+  assert.notEqual(cmd.graphic.fill, "none");
+});
+
+test("Auto Thickness: unticked keeps the pen it is drawn with, ticked none of its own; a bold text is not automatic (UI-LEFT-3 S3-32)", () => {
+  const s = sheet();
+  assert.equal(rowOf(s, ["txt_a"], "Auto Thickness")!.value, true);
+  assert.equal(rowOf(s, ["txt_a"], "Auto Thickness")!.writable, true);
+  // `SetAutoThickness( false )`: `GetEffectiveTextPenWidth()` of a 1.27 um text rounds to nothing in eeschema's units; a 1.27 mm text's is 0.1588 mm
+  const big = { ...s, texts: s.texts.map((t) => ({ ...t, size_nm: 1_270_000 })) };
+  assert.deepEqual(edit(big, ["txt_a"], "Auto Thickness", false), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], thickness_nm: 158_800 }]);
+  const own = { ...big, texts: big.texts.map((t) => ({ ...t, thickness_nm: 300_000 })) };
+  assert.equal(rowOf(own, ["txt_a"], "Auto Thickness")!.value, false);
+  assert.deepEqual(edit(own, ["txt_a"], "Auto Thickness", true), [{ op: "sch_edit", verb: "set_text_attrs", ids: ["txt_a"], thickness_nm: 0 }]);
+  const bold = { ...big, texts: big.texts.map((t) => ({ ...t, bold: true })) };
+  assert.equal(rowOf(bold, ["txt_a"], "Auto Thickness")!.value, false, "SetBold gave it the bold pen");
+  assert.equal(rowOf(s, ["lbl_a"], "Auto Thickness")!.writable, true, "a label has its own pen too");
+  assert.equal(rowOf(s, ["shp_dir"], "Auto Thickness")!.writable, false, "a directive label does not, here");
 });
 
 test("the registry has no property twice for one class", () => {

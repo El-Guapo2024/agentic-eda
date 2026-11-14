@@ -34,6 +34,8 @@ fn cases() -> Vec<(LabelKind, LabelSpin, Vec<LabelField>)> {
         (LabelKind::Hierarchical { shape: LabelShape::Bidirectional }, LabelSpin::Right, vec![field("Netclass", "Signal", true, true)]),
         // a field's own size, bold and shown name (UI-LEFT-2 SS12): `(effects (font (size 2 2) (bold yes)))`, `(show_name yes)`
         (LabelKind::Local, LabelSpin::Right, vec![LabelField { size_nm: mm(2.0), bold: true, name_shown: true, ..field("Netclass", "Power", true, false) }, LabelField { bold: true, ..field("Note", "x", true, true) }]),
+        // Allow Autoplacement unticked (UI-LEFT-3 S3-31): `(do_not_autoplace yes)`
+        (LabelKind::Local, LabelSpin::Right, vec![LabelField { no_autoplace: true, ..field("Note", "free", true, false) }]),
     ]
 }
 
@@ -49,6 +51,9 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
             sch.extras.label_fields.insert(id, fields);
         }
     }
+    // the first global label's Sheet References with looks of their own, and the first label's net class in a face and a colour (UI-LEFT-3 S3-31)
+    sch.extras.intersheet_refs_looks.insert("lbl_fields_2".into(), LabelField { name: "Intersheetrefs".into(), size_nm: mm(2.0), bold: true, italic: true, name_shown: true, no_autoplace: true, ..Default::default() });
+    sch.extras.field_looks.entry("lbl_fields_0".into()).or_default().insert("Netclass".into(), eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(eda_model::sch_extras::SchColor { r: 0, g: 128, b: 0, a: 255 }) });
     (design, model)
 }
 
@@ -82,6 +87,26 @@ fn a_labels_fields_come_back_from_the_file_our_writer_wrote() {
     assert!(line.contains("(at 200 123.235 0) (show_name yes)") && line.contains("(font (size 2 2) (bold yes))"), "{line}");
 }
 
+/// The looks a label keeps beside its fields' (UI-LEFT-3 S3-31): a global label's Sheet References' size, bold, italic, shown name and `do_not_autoplace`
+/// (`SchExtras::intersheet_refs_looks`), a field's face and colour (`field_looks` under the label's id), each read back from the file.
+fn looks_back(text: &str) -> (Option<LabelField>, Option<eda_model::sch_extras::FieldFontLook>) {
+    let (design, _, _) = import_kicad_sch(text).expect("the file reads");
+    let sch = design.schematic.unwrap();
+    let id = |net: &str| sch.labels.iter().find(|l| l.net == net).unwrap().id.clone();
+    (sch.extras.intersheet_refs_looks.get(&id("FLD2")).cloned(), sch.extras.field_look(&id("FLD0"), "Netclass").cloned())
+}
+
+#[test]
+fn a_global_labels_sheet_references_and_a_fields_face_come_back() {
+    let (design, model) = drawn();
+    let text = export_kicad_sch(&design, &model, &META).expect("the sheet exports");
+    let line = text.lines().find(|l| l.contains("(property \"Intersheetrefs\"") && l.contains("show_name")).expect("the looked Sheet References");
+    assert!(line.contains("(show_name yes) (do_not_autoplace yes)") && line.contains("(size 2 2) (bold yes) (italic yes)"), "{line}");
+    let (isr, face) = looks_back(&text);
+    assert_eq!(isr, Some(LabelField { name: "Intersheetrefs".into(), size_nm: mm(2.0), bold: true, italic: true, name_shown: true, no_autoplace: true, ..Default::default() }));
+    assert_eq!(face.and_then(|f| f.font), Some("KiCad Font".to_string()));
+}
+
 #[test]
 fn kicad_loads_the_labels_fields_and_writes_them_back() {
     if std::env::var_os("EDA_SLOW_TESTS").is_none() {
@@ -105,6 +130,9 @@ fn kicad_loads_the_labels_fields_and_writes_them_back() {
     assert_ne!(kicads, text, "KiCad wrote the file itself");
     let want: Vec<Vec<LabelField>> = cases().into_iter().map(|(_, _, f)| f).collect();
     assert_eq!(read_back(&kicads), want, "what KiCad kept of the labels' fields");
+    let (isr, face) = looks_back(&kicads);
+    assert_eq!(isr, Some(LabelField { name: "Intersheetrefs".into(), size_nm: mm(2.0), bold: true, italic: true, name_shown: true, no_autoplace: true, ..Default::default() }), "the Sheet References' looks KiCad kept");
+    assert_eq!(face.and_then(|f| f.color), Some(eda_model::sch_extras::SchColor { r: 0, g: 128, b: 0, a: 255 }), "the net class's colour KiCad kept");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

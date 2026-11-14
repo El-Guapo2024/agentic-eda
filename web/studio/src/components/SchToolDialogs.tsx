@@ -8,6 +8,7 @@ import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } f
 import { graphicsEqual } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
+import { SchColorOverrideNote } from "./SchColorOverrideNote";
 import { ChangeSymbolsDialog } from "./SchChangeSymbolsDialog";
 import { FieldPropertiesDialog } from "./SchFieldDialog";
 import { GlobalEditDialog } from "./SchGlobalEditDialog";
@@ -110,9 +111,9 @@ export function SchToolDialogs() {
 }
 
 /** The label/value grid the property dialogs lay their fields out in. */
-function Shell({ title, onCancel, onOk, okLabel, canOk, children }: { title: string; onCancel: () => void; onOk: () => void; okLabel: string; canOk: boolean; children: ReactNode }) {
+function Shell({ title, onCancel, onOk, okLabel, canOk, note, children }: { title: string; onCancel: () => void; onOk: () => void; okLabel: string; canOk: boolean; note?: ReactNode; children: ReactNode }) {
   return (
-    <SchDialogShell title={title} onCancel={onCancel} onOk={onOk} okLabel={okLabel} canOk={canOk}>
+    <SchDialogShell title={title} onCancel={onCancel} onOk={onOk} okLabel={okLabel} canOk={canOk} note={note}>
       <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr" }}>
         {children}
       </div>
@@ -173,7 +174,7 @@ function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind
     close();
   };
   return (
-    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10_000 && size <= 1_000_000_000}>
+    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10_000 && size <= 1_000_000_000} note={<SchColorOverrideNote />}>
       <span>Text</span>
       <textarea autoFocus rows={4} value={text} onChange={(e) => setText(e.target.value)} />
       {edit && (

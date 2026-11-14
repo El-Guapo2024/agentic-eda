@@ -475,6 +475,13 @@ impl<'a> Board<'a> {
             if let Some(looks) = src.extras.field_looks.get(&l.id) {
                 sch.extras.field_looks.insert(new_id.clone(), looks.clone());
             }
+            // a global label's Sheet References' looks (UI-LEFT-3 S3-31) and a centred or V-aligned text (S3-10), as `SCH_LABEL_BASE`'s copy carries them
+            if let Some(isr) = src.extras.intersheet_refs_looks.get(&l.id) {
+                sch.extras.intersheet_refs_looks.insert(new_id.clone(), isr.clone());
+            }
+            if let Some(j) = src.extras.label_justify.get(&l.id) {
+                sch.extras.label_justify.insert(new_id.clone(), j.clone());
+            }
             // and its own fields (its net class, ...)
             if let Some(fields) = src.extras.label_fields.get(&l.id) {
                 sch.extras.label_fields.insert(new_id, fields.clone());

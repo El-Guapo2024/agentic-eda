@@ -37,6 +37,8 @@ import {
   symbolOrientation,
   describeCarried,
   type CarriedItem,
+  powerRotOf,
+  carriedFieldLocal,
 } from "./schPlaceTool";
 
 const label = (over: Partial<CarriedLabel> = {}): CarriedLabel => ({ kind: "label", scope: "global", text: "DATA0", shape: "output", spin: "right", sizeNm: null, bold: false, italic: false, autoRotate: true, ...over });
@@ -325,7 +327,7 @@ test("the keys while a symbol rides are PlaceSymbol's: A places it, R / X / Y tu
   assert.deepEqual(k("common.Control.zoomIn"), { do: "pass" });
   // armed with nothing in the hand, Place Symbol lets Undo through (it checks Undo only with a symbol in hand)
   assert.equal(armedKey("sch_place_symbol", "common.Interactive.undo"), "pass");
-  assert.deepEqual(describeCarried(symbol({ turns: ["rot_ccw"] })), { kind: "symbol", libId: "Amplifier_Operational:LM358", ref: "U3", unit: 1, turns: ["rot_ccw"], placeAllUnits: false, oneOnly: false, value: "LM358", footprint: "", bodyStyle: 1, attrs: {}, edits: 0 });
+  assert.deepEqual(describeCarried(symbol({ turns: ["rot_ccw"] })), { kind: "symbol", libId: "Amplifier_Operational:LM358", ref: "U3", unit: 1, rotDeg: 0, mirror: null, turns: ["rot_ccw"], placeAllUnits: false, oneOnly: false, value: "LM358", footprint: "", bodyStyle: 1, attrs: {}, edits: 0 });
 });
 
 test("the turns of a carried symbol fold into KiCad's orientation as `Matrix::then` composes them and `GetOrientation` reads them back", () => {
@@ -413,4 +415,28 @@ test("Place all units: a unit placed on another sheet is occupied (`schematic.Co
   // through the tool's rule: after A on this sheet, with B on another, C rides
   const ctx = { occupied: (u: number) => unitOccupied("U3", u, placed, here, hierarchy), nextRef: () => "U4" };
   assert.deepEqual(nextSymbolAfter(symbol({ placeAllUnits: true, unit: 1 }), false, ctx), symbol({ placeAllUnits: true, unit: 3 }));
+});
+
+test("Symbol Properties' Angle and Mirror on the symbol and the power symbol in the hand (UI-LEFT-3 S3-30)", () => {
+  const sym: CarriedSymbol = { kind: "symbol", libId: "Device:R", ref: "R1", prefix: "R", value: "10k", footprint: "", unit: 1, unitCount: 1, rotDeg: 0, mirror: null, turns: ["rot_ccw"], placeAllUnits: false, oneOnly: false };
+  const turned = applyCarriedCmds(sym, [{ op: "sch_edit", verb: "set_symbol_orientation", id: "R1", unit: 1, angle: 180, mirror: "y" } as Cmd]) as CarriedSymbol;
+  assert.deepEqual([turned.rotDeg, turned.mirror, turned.turns, turned.edits], [180, "y", [], []], "the orientation it is made with, the turns gone, nothing left to run");
+  // a power symbol: a mirror across the vertical axis leaves its turn, across the horizontal one turns it half a turn (the server's fold)
+  assert.deepEqual([powerRotOf(90, null), powerRotOf(0, "y"), powerRotOf(0, "x"), powerRotOf(90, "x")], [90_000, 0, 180_000, 270_000]);
+  const p = applyCarriedCmds(power(), [{ op: "sch_edit", verb: "set_symbol_orientation", id: "carry:power", angle: 90 } as Cmd]) as CarriedPower;
+  assert.equal(p.rotMillideg, 90_000);
+});
+
+test("the power symbol in the hand: edits named by the page's drawing are renamed to the server's number at the click (UI-LEFT-3 S3-30)", () => {
+  const item = power({ edits: [{ op: "sch_edit", verb: "set_power_props", id: "carry:power", footprint: "X" } as unknown as Cmd] });
+  const cmd = placeCmd(item, [0, 0], { powerId: "#PWR07" }) as { op: string; cmds: Array<Record<string, unknown>> };
+  assert.equal(cmd.op, "batch");
+  assert.equal(cmd.cmds[1]!.id, "#PWR07");
+});
+
+test("a field's typed position in the hand goes into the item's own frame (UI-LEFT-3 S3-30)", () => {
+  assert.deepEqual(carriedFieldLocal([1_000, 2_000], [500, 0], 0, null), [1_500, 2_000]);
+  // turned a quarter counter-clockwise (`x' = y`, `y' = -x`): a move right on the sheet is a move along the item's own y
+  assert.deepEqual(carriedFieldLocal([0, 0], [500, 0], 90, null), [0, 500]);
+  assert.deepEqual(carriedFieldLocal([0, 0], [500, 0], 0, "y"), [-500, 0], "mirrored across the vertical axis");
 });

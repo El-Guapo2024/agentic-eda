@@ -412,7 +412,7 @@ fn set_text_attrs_keeps_a_free_texts_bold_italic_colour_and_hyperlink_and_a_labe
     s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
     let (m, d) = board(s);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let attrs = |ids_: &[&str], bold, italic, color, href: Option<&str>| SchCmd::SetTextAttrs { ids: ids(ids_), bold, italic, color, href: href.map(str::to_string), font: None, exclude_from_sim: None };
+    let attrs = |ids_: &[&str], bold, italic, color, href: Option<&str>| SchCmd::SetTextAttrs { ids: ids(ids_), bold, italic, color, href: href.map(str::to_string), font: None, exclude_from_sim: None, thickness_nm: None };
     ok(&mut b, attrs(&["txt_a"], Some(true), None, Some(red()), Some(" https://kicad.org ")));
     let a = &sch_of(&b).extras.text_attrs["txt_a"];
     assert_eq!((a.bold, a.italic, a.color, a.href.as_deref()), (true, false, Some(red()), Some("https://kicad.org")));
@@ -421,10 +421,43 @@ fn set_text_attrs_keeps_a_free_texts_bold_italic_colour_and_hyperlink_and_a_labe
     // UNSPECIFIED and no hyperlink take them away, and an entry that says nothing goes.
     ok(&mut b, attrs(&["txt_a", "lbl_l"], None, None, Some(SchColor { r: 0, g: 0, b: 0, a: 0 }), None));
     ok(&mut b, attrs(&["txt_a"], Some(false), None, None, Some("")));
-    assert!(sch_of(&b).extras.text_attrs.is_empty(), "{:?}", sch_of(&b).extras.text_attrs);
+    // unbolded, the text keeps `SetBold( false )`'s pen (`GetPenSizeForNormal`) and nothing else
+    let left: Vec<_> = sch_of(&b).extras.text_attrs.values().map(|a| (a.bold, a.color, a.href.clone(), a.thickness_nm.is_some())).collect();
+    assert_eq!(left, vec![(false, None, None, true)], "{:?}", sch_of(&b).extras.text_attrs);
     assert_eq!(err(&mut b, attrs(&["lbl_l"], Some(true), None, None, None)), "ops_bad_text", "a label's bold is Label Properties'");
     assert_eq!(err(&mut b, attrs(&["nope"], None, None, Some(red()), None)), "ops_unknown_item");
     assert_eq!(err(&mut b, attrs(&["txt_a"], Some(false), None, None, None)), "ops_nothing_to_change");
+}
+
+/// UI-LEFT-3 S3-32: Auto Thickness (`EDA_TEXT::SetAutoThickness`): unticked, the text keeps a pen of its own; ticked, none (a bold text keeps the mark, its bold
+/// pen being otherwise implied); a change of bold drops it (`SetBold` sets the stroke font's pen anew); a label's too.
+#[test]
+fn auto_thickness_keeps_a_texts_own_pen_and_a_change_of_bold_drops_it() {
+    let mut s = text_sheet();
+    s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let pen = |id: &str, t: Nm| SchCmd::SetTextAttrs { ids: ids(&[id]), bold: None, italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: Some(t) };
+    let bold = |on: bool| SchCmd::SetTextAttrs { ids: ids(&["txt_a"]), bold: Some(on), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None };
+    ok(&mut b, pen("txt_a", mm(0.3)));
+    assert_eq!(sch_of(&b).extras.text_attrs["txt_a"].thickness_nm, Some(mm(0.3)));
+    assert!(!sch_of(&b).extras.text_attrs["txt_a"].auto_thickness(false));
+    ok(&mut b, pen("txt_a", Nm::ZERO));
+    assert!(!sch_of(&b).extras.text_attrs.contains_key("txt_a"), "ticked on a text that is not bold: nothing of its own");
+    ok(&mut b, pen("txt_a", mm(0.3)));
+    ok(&mut b, bold(true));
+    let a = &sch_of(&b).extras.text_attrs["txt_a"];
+    assert_eq!((a.bold, a.thickness_nm), (true, None), "SetBold: the bold pen");
+    assert!(!a.auto_thickness(true));
+    ok(&mut b, pen("txt_a", Nm::ZERO));
+    assert_eq!(sch_of(&b).extras.text_attrs["txt_a"].thickness_nm, Some(Nm::ZERO), "ticked on a bold text");
+    assert!(sch_of(&b).extras.text_attrs["txt_a"].auto_thickness(true));
+    ok(&mut b, pen("lbl_l", mm(0.2)));
+    assert_eq!(sch_of(&b).extras.text_attrs["lbl_l"].thickness_nm, Some(mm(0.2)));
+    // `SetBold( false )`: `GetPenSizeForNormal( size )`, an eighth of the size, the text's own from then on
+    ok(&mut b, bold(false));
+    let size = sch_of(&b).texts.iter().find(|t| t.id == "txt_a").unwrap().size_nm;
+    assert_eq!(sch_of(&b).extras.text_attrs["txt_a"].thickness_nm, Some(Nm::new(((size.as_f64() / 800.0).round() as i64) * 100)));
 }
 
 #[test]
@@ -469,7 +502,7 @@ fn set_exclude_from_pos_files_marks_every_placed_unit_of_the_reference() {
 // ------------------------------------------------------------------- Text, Label and Text Box Properties' looks (UI-LEFT S6, task-u3-schtext)
 
 fn text_attrs_cmd(ids_: &[&str], font: Option<&str>, href: Option<&str>, exclude: Option<bool>, color: Option<SchColor>) -> SchCmd {
-    SchCmd::SetTextAttrs { ids: ids(ids_), bold: None, italic: None, color, href: href.map(str::to_string), font: font.map(str::to_string), exclude_from_sim: exclude }
+    SchCmd::SetTextAttrs { ids: ids(ids_), bold: None, italic: None, color, href: href.map(str::to_string), font: font.map(str::to_string), exclude_from_sim: exclude, thickness_nm: None }
 }
 
 #[test]
@@ -493,7 +526,7 @@ fn the_text_dialogs_font_link_and_simulation_exclusion_are_kept_and_default_font
     // a text box takes a font, a colour, a link and the exclusion; its bold is its shape's
     ok(&mut b, text_attrs_cmd(&["shp_tb"], Some("DejaVu Sans"), Some("https://kicad.org"), Some(true), Some(red())));
     assert_eq!(sch_of(&b).extras.text_attrs["shp_tb"].font.as_deref(), Some("DejaVu Sans"));
-    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["shp_tb"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text");
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["shp_tb"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None }), "ops_bad_text");
     // a label takes a font and a colour, not a link or the exclusion
     ok(&mut b, text_attrs_cmd(&["lbl_l"], Some("DejaVu Sans"), None, None, None));
     assert_eq!(sch_of(&b).extras.text_attrs["lbl_l"].font.as_deref(), Some("DejaVu Sans"));
@@ -591,10 +624,17 @@ fn a_labels_field_keeps_its_size_bold_and_shown_name() {
     ok(&mut b, looks("fld:lbl_g:Netclass", Some(mm(1.27)), None, None));
     assert_eq!(sch_of(&b).extras.label_fields["lbl_g"][0].size_nm, Nm::ZERO);
     assert_eq!(err(&mut b, looks("fld:lbl_g:Netclass", Some(mm(1.27)), Some(true), Some(true))), "ops_field_unchanged");
-    // the Sheet References keep the default look (the studio stores nothing of that field)
-    assert_eq!(err(&mut b, looks("fld:lbl_g:Intersheetrefs", None, Some(true), None)), "ops_bad_field");
+    // the Sheet References keep their own looks (`SchExtras::intersheet_refs_looks`, UI-LEFT-3 S3-31)
+    ok(&mut b, looks("fld:lbl_g:Intersheetrefs", Some(mm(2.0)), Some(true), Some(true)));
+    let isr = &sch_of(&b).extras.intersheet_refs_looks["lbl_g"];
+    assert_eq!((isr.size_nm, isr.bold, isr.name_shown), (mm(2.0), true, true));
+    let placed = placed_field(&b, "Intersheetrefs");
+    assert_eq!((placed.size_nm, placed.bold, placed.name_shown, placed.intersheet_refs), (mm(2.0), true, true, true));
+    // back to the defaults: no entry
+    ok(&mut b, looks("fld:lbl_g:Intersheetrefs", Some(mm(1.27)), Some(false), Some(false)));
+    assert!(!sch_of(&b).extras.intersheet_refs_looks.contains_key("lbl_g"));
     // Label Properties' grid: the row's Text Size, Bold and Show Name
-    let row = eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true, size_nm: mm(1.778), bold: false, name_shown: true };
+    let row = eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true, size_nm: mm(1.778), bold: false, name_shown: true, no_autoplace: false };
     ok(&mut b, SchCmd::EditLabel { id: "lbl_g".into(), text: None, shape: None, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(vec![row.clone()]) });
     assert_eq!(sch_of(&b).extras.label_fields["lbl_g"], vec![row]);
     // Edit Text & Graphics on the label fields: size, bold and Show Field Names
@@ -786,7 +826,7 @@ fn a_directive_label_takes_a_font_and_a_colour_and_nothing_else_of_set_text_attr
     assert_eq!((a.font.as_deref(), a.color), (Some("KiCad Font"), Some(red())));
     // its italic, bold and link are (`SCH_DIRECTIVE_LABEL_DESC`, `SCH_LABEL_BASE_DESC`)
     assert_eq!(err(&mut b, text_attrs_cmd(&["dirl_a"], None, Some("#1"), None, None)), "ops_bad_text");
-    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["dirl_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text");
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["dirl_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None }), "ops_bad_text");
 }
 
 #[test]
@@ -901,10 +941,10 @@ fn a_sheet_pins_font_and_colour_are_set_text_attrs_and_go_with_the_pin() {
     root.sheets.push(s);
     let m = ConstraintModel::default();
     let mut b = Board::new(design(root), &m, mm(0.1), mm(0.3));
-    ok(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: None, italic: None, color: Some(red()), href: None, font: Some("KiCad Font".into()), exclude_from_sim: None });
+    ok(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: None, italic: None, color: Some(red()), href: None, font: Some("KiCad Font".into()), exclude_from_sim: None, thickness_nm: None });
     let a = &sch_of(&b).extras.text_attrs["spin_a"];
     assert_eq!((a.color, a.font.as_deref()), (Some(red()), Some("KiCad Font")));
-    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text", "a pin's bold is Sheet Pin Properties' edit_sheet_pin");
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None }), "ops_bad_text", "a pin's bold is Sheet Pin Properties' edit_sheet_pin");
     ok(&mut b, SchCmd::DeleteSheetPin { id: "spin_a".into() });
     assert!(sch_of(&b).extras.text_attrs.is_empty());
 }
@@ -990,4 +1030,30 @@ fn a_sheet_excluded_from_the_board_keeps_its_symbols_off_it() {
     ok(&mut b, SchCmd::SetSheetProps { id: "sheet_a".into(), border_width_nm: None, border_color: None, fill_color: None, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: Some(true), dnp: None });
     assert_eq!(b.design().symbols_excluded_from_board().into_iter().collect::<Vec<_>>(), vec!["R1", "R2"]);
     assert!(!b.design().symbol_excluded_from_board("R3"));
+}
+
+/// UI-LEFT-3 S3-31: Label Properties' X / Y Position, Orientation and Allow Autoplacement on a label's field (`FIELDS_GRID_TABLE` on the label's fields: the
+/// offset from the label's anchor, `positioningChanged` taking the fields out of the autoplaced ones), and Edit Text & Graphics reaching the Sheet References.
+#[test]
+fn label_properties_place_a_field_by_its_offset_and_keep_allow_autoplacement() {
+    let (m, d) = board(with_label_field());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let anchor = sch_of(&b).labels[0].at;
+    let place = SchCmd::EditField { id: "fld:lbl_g:Netclass".into(), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: None, name_shown: None, allow_autoplace: None, local_at: Some(p(mm(5.08), mm(2.54))), local_vertical: Some(true), keep_autoplaced: false };
+    ok(&mut b, place);
+    let f = placed_field(&b, "Netclass");
+    assert_eq!((f.at.x - anchor.x, f.at.y - anchor.y, f.vertical), (mm(5.08), mm(2.54), true));
+    assert!(eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"), "positioningChanged: AUTOPLACE_NONE");
+    // the Sheet References kept where they were (every field keeps its place)
+    assert!(sch_of(&b).field_layout["lbl_g"].iter().any(|p| p.name == "Intersheetrefs"));
+    // Allow Autoplacement unticked: kept on the field (`SetCanAutoplace`)
+    let autoplace = SchCmd::EditField { id: "fld:lbl_g:Netclass".into(), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: None, name_shown: None, allow_autoplace: Some(false), local_at: None, local_vertical: None, keep_autoplaced: false };
+    ok(&mut b, autoplace);
+    assert!(sch_of(&b).extras.label_fields["lbl_g"][0].no_autoplace);
+    // Edit Text & Graphics' label fields: the Sheet References take the size and italic, not the visibility
+    let spec = crate::sch_global_edit::GlobalEditSpec { label_fields: true, text_size_nm: Some(mm(2.0)), italic: Some(true), visible: Some(true), ..Default::default() };
+    ok(&mut b, SchCmd::GlobalEditTextGraphics { spec });
+    let isr = &sch_of(&b).extras.intersheet_refs_looks["lbl_g"];
+    assert_eq!((isr.size_nm, isr.italic), (mm(2.0), true));
+    assert!(!placed_field(&b, "Intersheetrefs").visible, "Schematic Setup's visibility");
 }

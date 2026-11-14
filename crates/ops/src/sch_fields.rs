@@ -260,8 +260,11 @@ impl<'a> Board<'a> {
                 return Err(fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm."));
             }
         }
-        let model = self.model;
         let before = self.schematic()?.clone();
+        // a symbol placed earlier in this step (the symbol in the hand's dialogs ride with the click that places it, UI-LEFT-3 S3-30) is not in the board's model
+        // yet: measured with the part and library definition the step brings (`model_with_placed`), as `add_symbol` measures it
+        let placed = before.symbols.iter().find(|s| field_key(&s.id, s.unit) == key || s.id == key).filter(|s| self.model.part(&s.id).is_none()).and_then(|s| self.model_with_placed(&s.id, &s.lib_id, &s.value));
+        let model: &ConstraintModel = placed.as_ref().unwrap_or(self.model);
         let Some(ctx) = OwnerCtx::new(&before, model, &key) else {
             return Err(fail("ops_unknown_item", id, "no field with this id on the sheet (a schematic read from a KiCad file has no places for its fields yet)"));
         };
@@ -342,24 +345,58 @@ impl<'a> Board<'a> {
     /// ("Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting"). A new place, orientation or justification
     /// takes the label's fields out of the autoplaced ones (`UpdateField`: `parent->SetFieldsAutoplaced( AUTOPLACE_NONE )`): every field keeps the place it
     /// has, this one the new one (`eda_engine::label_fields`). Its text size, bold and "Show field name" are the field's own (`UpdateField`: `SetTextSize`,
-    /// `SetBold`, `SetNameShown`; UI-LEFT-2 SS12), and its font face and colour are Field Properties' Font and Color (`set_field_looks`). **Differs**: a global
-    /// label's Sheet References keeps the default size, regular, without its name (the studio makes that field up from Schematic Setup and stores nothing of it).
+    /// `SetBold`, `SetNameShown`; UI-LEFT-2 SS12), as is Allow Autoplacement (`SetCanAutoplace`, kept only: a label places all its fields), and its font face
+    /// and colour are Field Properties' Font and Color (`set_field_looks`). A global label's Sheet References keep their looks in
+    /// `SchExtras::intersheet_refs_looks` (UI-LEFT-3 S3-31).
     fn edit_label_field(&mut self, ctx: &OwnerCtx, index: usize, id: &str, edit: &FieldEdit) -> Result<(), Vec<CheckResult>> {
         let name = ctx.specs[index].name.clone();
         let isr = name == eda_model::sch_extras::INTERSHEET_REFS_FIELD && ctx.label().is_some_and(|l| matches!(l.kind, eda_model::ir::LabelKind::Global { .. }));
-        if isr && (edit.size_nm.is_some_and(|s| s != eda_model::ir::DEFAULT_FIELD_SIZE_NM) || edit.bold == Some(true) || edit.name_shown == Some(true)) {
-            return Err(fail("ops_bad_field", id, "a global label's Sheet References keep the default size, regular, without their name"));
-        }
         let sch = self.schematic_mut()?;
         let label_id = ctx.key.clone();
         let mut fields = sch.extras.label_fields.get(&label_id).cloned().unwrap_or_default();
         let mut text_changed = false;
+        // the looks every label field keeps as its own: size, bold, italic, shown name and Allow Autoplacement (`UpdateField`, `FIELDS_GRID_TABLE::SetValue`)
+        let set_looks = |f: &mut eda_model::sch_extras::LabelField, changed: &mut bool| {
+            if let Some(i) = edit.italic {
+                *changed |= f.italic != i;
+                f.italic = i;
+            }
+            if let Some(size) = edit.size_nm {
+                let size = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
+                *changed |= f.size_nm != size;
+                f.size_nm = size;
+            }
+            if let Some(b) = edit.bold {
+                *changed |= f.bold != b;
+                f.bold = b;
+            }
+            if let Some(n) = edit.name_shown {
+                *changed |= f.name_shown != n;
+                f.name_shown = n;
+            }
+            if let Some(a) = edit.allow_autoplace {
+                *changed |= f.no_autoplace == a;
+                f.no_autoplace = !a;
+            }
+        };
         if isr {
             if edit.text.as_ref().is_some_and(|t| *t != ctx.specs[index].text) {
                 return Err(fail("ops_field_text_fixed", id, "the Sheet References of a global label show the pages its net is on"));
             }
             if edit.visible.is_some_and(|v| v != ctx.specs[index].visible) {
                 return Err(fail("ops_field_text_fixed", id, "Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting"));
+            }
+            // its own looks (`SchExtras::intersheet_refs_looks`, UI-LEFT-3 S3-31); the default kept as no entry
+            let mut look = sch.extras.intersheet_refs_looks.get(&label_id).cloned().unwrap_or_else(|| eda_model::sch_extras::LabelField { name: eda_model::sch_extras::INTERSHEET_REFS_FIELD.into(), ..Default::default() });
+            let mut changed = false;
+            set_looks(&mut look, &mut changed);
+            if changed {
+                text_changed = true;
+                if look == (eda_model::sch_extras::LabelField { name: eda_model::sch_extras::INTERSHEET_REFS_FIELD.into(), ..Default::default() }) {
+                    sch.extras.intersheet_refs_looks.remove(&label_id);
+                } else {
+                    sch.extras.intersheet_refs_looks.insert(label_id.clone(), look);
+                }
             }
         } else if let Some(f) = fields.iter_mut().find(|f| f.name == name) {
             if let Some(t) = &edit.text {
@@ -370,31 +407,17 @@ impl<'a> Board<'a> {
                 text_changed |= f.visible != v;
                 f.visible = v;
             }
-            if let Some(i) = edit.italic {
-                text_changed |= f.italic != i;
-                f.italic = i;
-            }
-            if let Some(size) = edit.size_nm {
-                let size = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
-                text_changed |= f.size_nm != size;
-                f.size_nm = size;
-            }
-            if let Some(b) = edit.bold {
-                text_changed |= f.bold != b;
-                f.bold = b;
-            }
-            if let Some(n) = edit.name_shown {
-                text_changed |= f.name_shown != n;
-                f.name_shown = n;
-            }
+            set_looks(f, &mut text_changed);
         } else {
             return Err(fail("ops_unknown_item", id, format!("the label has no field '{name}'")));
         }
         let mut placements = ctx.current(sch);
         let old = placements[index].clone();
         let now = ctx.page(&old, &ctx.specs[index].text);
-        let anchor = edit.at.map(|p| (p.x.as_f64(), p.y.as_f64())).unwrap_or(now.at);
-        let vertical = edit.vertical.unwrap_or(now.vertical);
+        // Label Properties' X / Y Position and Orientation (`FIELDS_GRID_TABLE` on the label's fields, `field_copy.Offset( -m_currentLabel->GetPosition() )`):
+        // the offset from the label's anchor, a label's fields being in the sheet's frame
+        let anchor = edit.at.map(|p| (p.x.as_f64(), p.y.as_f64())).or_else(|| edit.local_at.map(|l| ((ctx.at.x + l.x).as_f64(), (ctx.at.y + l.y).as_f64()))).unwrap_or(now.at);
+        let vertical = edit.vertical.or(edit.local_vertical).unwrap_or(now.vertical);
         let h = edit.h.map(hjustify).unwrap_or(now.h);
         let v = edit.v.map(vjustify).unwrap_or(now.v);
         // `positioningModified`: the position, the orientation or the justification

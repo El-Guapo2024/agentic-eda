@@ -11,6 +11,7 @@
 // the server's to know (it traces the nets): `SchematicWire.label_driver`. A hierarchical label and a directive label always open the dialog.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
+import type { LabelFieldEdit, SchColor } from "../api/schEditTypes";
 import type { Cmd, LabelScope, LabelShape, SchematicWire } from "../api/types";
 import type { LabelSpinName } from "./schLastPlaced";
 
@@ -53,6 +54,10 @@ export interface LabelPlacement {
   italic: boolean;
   /** The "Auto" check is on, for a global or hierarchical label. */
   autoRotate: boolean;
+  /** Its dialog's fields grid (UI-LEFT-3 S3-31): its own fields, a global label's Sheet References' looks, each field's font and colour by name. */
+  fields?: readonly LabelFieldEdit[];
+  intersheetRefs?: LabelFieldEdit | null;
+  fieldLooks?: Readonly<Record<string, { font?: string | null; color?: SchColor | null }>>;
 }
 
 export function placeLabelCmd(p: LabelPlacement): Cmd {
@@ -68,5 +73,8 @@ export function placeLabelCmd(p: LabelPlacement): Cmd {
     ...(p.bold ? { bold: true } : {}),
     ...(p.italic ? { italic: true } : {}),
     ...(p.autoRotate ? { auto_rotate: true } : {}),
+    ...(p.fields && p.fields.length > 0 ? { fields: p.fields } : {}),
+    ...(p.intersheetRefs ? { intersheet_refs: p.intersheetRefs } : {}),
+    ...(p.fieldLooks && Object.keys(p.fieldLooks).length > 0 ? { field_looks: p.fieldLooks } : {}),
   } as Cmd;
 }

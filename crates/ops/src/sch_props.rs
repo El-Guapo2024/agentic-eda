@@ -136,6 +136,39 @@ pub(crate) struct TextAttrsEdit {
     pub href: Option<String>,
     pub font: Option<String>,
     pub exclude_from_sim: Option<bool>,
+    pub thickness_nm: Option<Nm>,
+}
+
+/// `EDA_TEXT::SetBold( bold )` on the free text, label or text box `id` (`TextAttrs::set_bold_pen`): the stroke font's pen set anew for the weight, its size
+/// read off the item.
+pub(crate) fn rebold_pen(sch: &mut eda_model::ir::SchematicSection, id: &str, bold: bool) {
+    let size = if let Some(t) = sch.texts.iter().find(|t| t.id == id) {
+        t.size_nm
+    } else if sch.labels.iter().any(|l| l.id == id) {
+        sch.extras.label_looks.get(id).copied().unwrap_or_default().text_size_nm()
+    } else if let Some(eda_model::sch_extras::SchGraphicKind::TextBox { size_nm, .. }) = sch.extras.graphics.iter().find(|g| g.id == id).map(|g| &g.shape) {
+        *size_nm
+    } else {
+        return;
+    };
+    let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
+    a.set_bold_pen(bold, size);
+    if a.is_default() {
+        sch.extras.text_attrs.remove(id);
+    } else {
+        sch.extras.text_attrs.insert(id.to_string(), a);
+    }
+}
+
+/// Whether the free text, label or text box `id` is bold (a free text's in `attrs`, a label's in its look, a text box's in its shape).
+fn text_bold(sch: &eda_model::ir::SchematicSection, id: &str, attrs: &eda_model::sch_extras::TextAttrs) -> bool {
+    if sch.labels.iter().any(|l| l.id == id) {
+        return sch.extras.label_looks.get(id).is_some_and(|l| l.bold);
+    }
+    if let Some(g) = sch.extras.graphics.iter().find(|g| g.id == id) {
+        return matches!(g.shape, eda_model::sch_extras::SchGraphicKind::TextBox { bold: true, .. });
+    }
+    attrs.bold
 }
 
 /// What [`SchCmd::SetSheetProps`](crate::sch_edit::SchCmd::SetSheetProps) changes; a member left out is unchanged.
@@ -229,6 +262,10 @@ impl<'a> Board<'a> {
         if let Some(i) = look.italic {
             now.italic = i;
         }
+        // `SetBold`: the stroke font's pen set anew for the weight
+        if now.bold != before.bold {
+            rebold_pen(sch, id, now.bold);
+        }
         if let Some(auto) = look.auto_rotate {
             now.auto_rotate = auto && auto_supported;
         }
@@ -248,11 +285,14 @@ impl<'a> Board<'a> {
             if scene.auto_rotate_item(crate::sch_scene::Item::Label(index)) {
                 let new_spin = scene.sch.extras.label_spins.get(id).copied().unwrap_or(before_spin);
                 if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
+                    // `SetSpinStyle`: the justification the spin says, a centred text or another vertical one gone
+                    sch.extras.label_justify.remove(id);
                     changed = true;
                 }
             }
         } else if let Some(new_spin) = spin {
             if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
+                sch.extras.label_justify.remove(id);
                 changed = true;
             }
         }
@@ -417,6 +457,11 @@ impl<'a> Board<'a> {
             if text_box && (edit.bold.is_some() || edit.italic.is_some()) {
                 return Err(fail("ops_bad_text", id, "a text box's bold and italic are set with its shape"));
             }
+            // Auto Thickness: `EDA_TEXT_DESC`'s row, which `SCH_TEXT_DESC` and `SCH_TEXTBOX_DESC` leave (they mask the Thickness row only); not a sheet pin's or a
+            // directive label's here
+            if (directive || sheet_pin) && edit.thickness_nm.is_some() {
+                return Err(fail("ops_bad_text", id, "only a free text, a label or a text box has an Auto Thickness row"));
+            }
             if sch.extras.is_locked(id) {
                 return Err(fail("ops_locked", id, "the item is locked"));
             }
@@ -425,6 +470,11 @@ impl<'a> Board<'a> {
         for id in ids {
             let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
             if let Some(b) = edit.bold {
+                // `EDA_TEXT::SetBold`: a stroke font's pen is set anew for the weight
+                if a.bold != b {
+                    let size = sch.texts.iter().find(|t| &t.id == id).map(|t| t.size_nm).unwrap_or(eda_model::ir::DEFAULT_FIELD_SIZE_NM);
+                    a.set_bold_pen(b, size);
+                }
                 a.bold = b;
             }
             if let Some(i) = edit.italic {
@@ -432,6 +482,12 @@ impl<'a> Board<'a> {
             }
             if let Some(c) = edit.color {
                 a.color = specified(c);
+            }
+            if let Some(t) = edit.thickness_nm {
+                // `SetAutoThickness( aAuto )`: ticked, no pen of its own (a bold text keeps the mark, its bold pen being otherwise implied); unticked, the pen
+                // it was drawn with
+                let bold = text_bold(sch, id, &a);
+                a.thickness_nm = if t > Nm::ZERO { Some(t) } else if bold { Some(Nm::ZERO) } else { None };
             }
             if let Some(h) = edit.href.as_deref() {
                 a.href = (!h.trim().is_empty()).then(|| h.trim().to_string());

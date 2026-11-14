@@ -8,10 +8,10 @@
 // Properties, as KiCad's dialog disables it too.
 //
 // A label's field (UI-LEFT S6: its net class, a global label's Sheet References, any other) opens here too: moved, turned or justified by hand it stays where it was
-// put (the label's fields are no longer autoplaced). Its text size, bold and "Show field name" are its own (`LabelField`, UI-LEFT-2 SS12). **Differs**: the
-// Sheet References keep their text and Schematic Setup's visibility, the default size, regular, without their name (the studio stores nothing of that field), and
-// a label's field has no "Allow autoplacement" (the label's fields are placed together).
-import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+// put (the label's fields are no longer autoplaced). Its text size, bold, "Show field name" and "Allow autoplacement" are its own (`LabelField`, UI-LEFT-2 SS12),
+// a global label's Sheet References' too (`SchExtras::intersheet_refs_looks`, UI-LEFT-3 S3-31), which keep their text and Schematic Setup's visibility.
+import { carryDrawing, schematicWithCarry, useSchCarry } from "../state/schCarryStore";
+import { CARRIED_POWER_ID, carriedFieldLocal } from "../kicad-port/schPlaceTool";
 import { editCarried } from "../actions/schPlaceActions";
 import { useState } from "react";
 import { fieldDialogCaption, fieldSizeNm, fieldEditCmd, findField, isSheetMandatoryField, isStandardSymbolField, parseFieldId, FIELD_SIZE_MAX_NM, FIELD_SIZE_MIN_NM, type FieldChanges } from "../kicad-port/schFieldEdit";
@@ -39,15 +39,22 @@ export function FieldPropertiesDialog({ id, carried }: { id: string; carried?: b
   const { schematic: base, schVariant } = useStudioState();
   const carry = useSchCarry();
   const sch = carried && base && carry ? schematicWithCarry(base, carry) : base;
-  const item = sch ? findField(sch, id) : null;
+  // a field of the power symbol in the hand named by the page's drawing (`carry:power`) is the server's numbered one's once that comes back (UI-LEFT-3 S3-30)
+  const drawnPower = carried && base && carry && id.startsWith(`fld:${CARRIED_POWER_ID}:`) ? carryDrawing(carry, base).power_symbols[0]?.id : undefined;
+  const item = sch ? (findField(sch, id) ?? (drawnPower ? findField(sch, `fld:${drawnPower}:${id.slice(`fld:${CARRIED_POWER_ID}:`.length)}`) : null)) : null;
   // a sheet's user field in a design variant: its text is the variant's (KiCad 25ec2335 `DIALOG_FIELD_PROPERTIES`: `aField->GetText( &sheetPath, variant )`, and
   // `UpdateField`'s `sheet->SetFieldText( name, text, &sheetPath, variantName )` for a field that is not mandatory; UI-LEFT-3 S3-6)
   const sheetVariant = item?.ownerKind === "sheet" && schVariant !== "" && !isSheetMandatoryField(item.field.name) ? schVariant : "";
-  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} carried={!!carried} sheetVariant={sheetVariant} /> : null;
+  // the orientation of the item in the hand, which a typed position is turned back through (`carriedFieldLocal`)
+  const owner = carried && item && sch ? (sch.symbols.find((s) => s.id === item.field.owner || `${s.id}#${s.unit}` === item.field.owner) ?? sch.power_symbols.find((p) => p.id === item.field.owner)) : undefined;
+  const ownerOrient = owner ? { rot: owner.rot ?? 0, mirror: ((owner as { mirror?: unknown }).mirror === "x" || (owner as { mirror?: unknown }).mirror === "y" ? (owner as { mirror: "x" | "y" }).mirror : null) } : undefined;
+  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} carried={!!carried} sheetVariant={sheetVariant} ownerOrient={ownerOrient} /> : null;
 }
 
-function FieldForm({ owner, field, carried, sheetVariant }: { owner: FieldOwnerKind; field: SchField & { id: string }; carried: boolean; sheetVariant: string }) {
+function FieldForm({ owner, field, carried, sheetVariant, ownerOrient }: { owner: FieldOwnerKind; field: SchField & { id: string }; carried: boolean; sheetVariant: string; ownerOrient?: { rot: number; mirror: "x" | "y" | null } }) {
   const api = useStudioApi();
+  // "Automatically place symbol fields" (`m_AutoplaceFields.enable`): whether the click of the tool holding the item places its fields
+  const autoplaceOn = useStudioState().prefs.schAutoplaceFields;
   const dispatch = useStudioDispatch();
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   const [text, setText] = useState(field.text);
@@ -89,8 +96,11 @@ function FieldForm({ owner, field, carried, sheetVariant }: { owner: FieldOwnerK
       v,
       italic,
       ...(isr ? {} : { visible }),
-      // a label's field has its own size, bold and shown name, but no autoplace flag; the Sheet References keep none of them
-      ...(isr ? {} : label ? { sizeNm: sizeNm!, bold, nameShown } : { sizeNm: sizeNm!, bold, nameShown, allowAutoplace }),
+      // every field has its own size, bold, shown name and autoplace flag, a label's and a global label's Sheet References too (UI-LEFT-3 S3-31)
+      sizeNm: sizeNm!,
+      bold,
+      nameShown,
+      allowAutoplace,
     };
     const nextFont = chosenFont(font);
     const fontChanged = nextFont !== undefined && nextFont !== (field.font ?? "");
@@ -99,9 +109,19 @@ function FieldForm({ owner, field, carried, sheetVariant }: { owner: FieldOwnerK
     const cmd = oneStep([fieldEditCmd(field, changes), looks, variantText]);
     if (!cmd) return close();
     if (carried) {
-      // the item in the hand takes the edit (actions/schPlaceActions.ts `editCarried`); its place is Autoplace Fields' once the click puts it down
-      // (`AutoplaceFields( screen, AUTOPLACE_AUTO )`), so a position typed here is not kept
-      const parts = (cmd.op === "batch" ? cmd.cmds : [cmd]).map((c) => Object.fromEntries(Object.entries(c).filter(([k]) => k !== "at")) as unknown as Cmd);
+      // the item in the hand takes the edit (actions/schPlaceActions.ts `editCarried`). The click places its fields by Autoplace Fields (`if( m_AutoplaceFields.enable )
+      // symbol->AutoplaceFields( screen, AUTOPLACE_AUTO )`, which leaves a field that does not allow it): a position typed here is kept, in the item's own frame
+      // (`local_at`, so it goes where the click puts the item), when automatic placement is off or the field is not autoplaced (UI-LEFT-3 S3-30)
+      const delta: [number, number] = [xNm! - field.at[0], yNm! - field.at[1]];
+      const keepPlace = (!autoplaceOn || !allowAutoplace) && (delta[0] !== 0 || delta[1] !== 0) && !!field.local && !!ownerOrient;
+      const parts = (cmd.op === "batch" ? cmd.cmds : [cmd]).map((c) => {
+        const rest = Object.fromEntries(Object.entries(c).filter(([k]) => k !== "at")) as Record<string, unknown>;
+        if (keepPlace && rest.verb === "edit_field" && rest.id === field.id) {
+          const [lx, ly] = carriedFieldLocal(field.local!, delta, ownerOrient!.rot, ownerOrient!.mirror);
+          rest.local_at = { x: lx, y: ly };
+        }
+        return rest as unknown as Cmd;
+      });
       editCarried(parts.filter((c) => Object.keys(c).some((k) => !["op", "verb", "id"].includes(k))));
       return close();
     }
@@ -116,12 +136,8 @@ function FieldForm({ owner, field, carried, sheetVariant }: { owner: FieldOwnerK
         <input value={x} onChange={(e) => setX(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={xNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
         <span>Position Y (mm)</span>
         <input value={y} onChange={(e) => setY(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={yNm === null ? { outline: "1px solid var(--error, #d33)" } : undefined} />
-        {!isr && (
-          <>
-            <span>Text size (mm)</span>
-            <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
-          </>
-        )}
+        <span>Text size (mm)</span>
+        <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Font:</span>
         <FontSelect families={families} current={field.font} value={font} onChange={setFont} />
         <span>Color:</span>
@@ -133,11 +149,9 @@ function FieldForm({ owner, field, carried, sheetVariant }: { owner: FieldOwnerK
         </select>
         <span>Style</span>
         <span style={{ display: "flex", gap: 14 }}>
-          {!isr && (
-            <label>
-              <input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
-            </label>
-          )}
+          <label>
+            <input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
+          </label>
           <label>
             <input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
           </label>
@@ -163,18 +177,13 @@ function FieldForm({ owner, field, carried, sheetVariant }: { owner: FieldOwnerK
           <label title={isr ? "Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting" : undefined}>
             <input type="checkbox" checked={visible} disabled={isr} onChange={(e) => setVisible(e.target.checked)} /> Visible
           </label>
-          {!isr && (
-            <label>
-              <input type="checkbox" checked={nameShown} onChange={(e) => setNameShown(e.target.checked)} /> Show field name
-            </label>
-          )}
-          {!label && (
-            <>
-              <label>
-                <input type="checkbox" checked={allowAutoplace} onChange={(e) => setAllowAutoplace(e.target.checked)} /> Allow autoplacement
-              </label>
-            </>
-          )}
+          <label>
+            <input type="checkbox" checked={nameShown} onChange={(e) => setNameShown(e.target.checked)} /> Show field name
+          </label>
+          {/* `m_cbAllowAutoPlace->Show()` for every schematic field, a label's too (where it is only kept: a label places all its fields) */}
+          <label>
+            <input type="checkbox" checked={allowAutoplace} onChange={(e) => setAllowAutoplace(e.target.checked)} /> Allow autoplacement
+          </label>
         </span>
       </div>
     </SchDialogShell>

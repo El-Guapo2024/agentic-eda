@@ -81,6 +81,11 @@ pub struct SchExtras {
     /// (`Netclass`, which puts the label's net in that class: `CONNECTION_GRAPH` `checkNetclassDrivers`) and any field the user added. A label with no entry has none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub label_fields: BTreeMap<String, Vec<LabelField>>,
+    /// A global label's Sheet References' own looks (`SCH_GLOBALLABEL`'s `INTERSHEET_REFS` field, which Label Properties' grid, Field Properties and Edit
+    /// Text & Graphics set like any field), by label id: its size, bold, italic, shown name and `no_autoplace`. Its name, text (`${INTERSHEET_REFS}`) and
+    /// visibility (Schematic Setup's `m_IntersheetRefsShow`) are not kept here. A label with no entry has the field's defaults. Additive (UI-LEFT-3 S3-31).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intersheet_refs_looks: BTreeMap<String, LabelField>,
     /// Drawn graphics and annotations, in drawing order (later ones paint over earlier ones).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<SchGraphic>,
@@ -102,6 +107,12 @@ pub struct SchExtras {
     /// set one; an entry is written only when a turn or a mirror set it, so a design that never turned a label serializes as before.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub label_spins: BTreeMap<String, LabelSpin>,
+    /// A label's justification beyond what its spin gives (`SCH_LABEL_BASE`'s `EDA_TEXT` attributes, which Edit Text & Graphics' H and V Align set with
+    /// `SetHorizJustify` / `SetVertJustify`): centred on its anchor, and a vertical justification other than `SetSpinStyle`'s (bottom for a local label, centre
+    /// for a global or hierarchical one), by label id. `SetSpinStyle` puts both back (no entry); a turn or a mirror keeps them (`Rotate90` / `MirrorSpinStyle`
+    /// flip a left or right justification only). Written in the label's `(justify ..)` and read back. Additive (UI-LEFT-3 S3-10).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub label_justify: BTreeMap<String, LabelJustify>,
     /// A wire's, bus's, bus entry's or graphic line's stroke (`SCH_LINE::GetStroke`, `SCH_BUS_ENTRY_BASE::GetStroke`), by item id, once
     /// Wire/Bus Properties (`DIALOG_WIRE_BUS_PROPERTIES`) or Line Properties set one. An item with no entry has the default stroke (the
     /// sheet's default width, a solid line, the layer's colour); an entry equal to the default is never stored. A graphic line's width
@@ -554,6 +565,56 @@ pub struct TextAttrs {
     /// back. Kept for a free text, a text box and a label (a directive label hides the choice: `DIALOG_LABEL_PROPERTIES`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The text's own pen (`EDA_TEXT::GetTextThickness`, `(thickness ..)` in `(font ..)`): the Properties panel's Auto Thickness unticked
+    /// (`SetAutoThickness( false )`: the pen it was drawn with, `GetEffectiveTextPenWidth()`), `Some(0)` ticked on a bold text (whose pen is otherwise the
+    /// bold one `SetBold` gives it), `None` the pen KiCad gives the text for its size and weight. A change of bold drops it, as `SetBold` sets the stroke font's
+    /// pen anew. Kept for a free text, a label and a text box. Additive (UI-LEFT-3 S3-32).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::units::de")]
+    pub thickness_nm: Option<Nm>,
+}
+
+impl TextAttrs {
+    /// `EDA_TEXT::GetAutoThickness` of a text whose bold is `bold`: no pen of its own (a bold text has the bold one `SetBold` gave it, so it is not automatic).
+    pub fn auto_thickness(&self, bold: bool) -> bool {
+        match self.thickness_nm {
+            Some(t) => t == Nm::ZERO,
+            None => !bold,
+        }
+    }
+
+    /// `EDA_TEXT::SetBold( aBold )` of a text of `size_nm` in the stroke font (no face of its own, or "KiCad Font"): bolded, the pen is the bold one
+    /// (`GetPenSizeForBold`, which the bold flag implies here: no pen of its own); unbolded, `GetPenSizeForNormal( size )`, an eighth of the size, its own from then
+    /// on (KiCad's `m_StoredStrokeWidth`, the pen before bolding, is not kept in a file, so a text read back has none to restore either). An outline font's
+    /// text keeps its pen.
+    pub fn set_bold_pen(&mut self, bold: bool, size_nm: Nm) {
+        if !self.font.as_deref().is_none_or(|f| f == "KiCad Font") {
+            return;
+        }
+        self.thickness_nm = if bold { None } else { Some(Nm::new(((size_nm.as_f64() / 100.0 / 8.0).round() as i64) * 100)) };
+    }
+
+    /// The pen the text is drawn with when it has one of its own (`GetTextThickness() > 1`).
+    pub fn own_pen(&self) -> Option<Nm> {
+        self.thickness_nm.filter(|t| *t > Nm::new(1))
+    }
+}
+
+/// See [`SchExtras::label_justify`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabelJustify {
+    /// `GR_TEXT_H_ALIGN_CENTER`: the text centred on the anchor (its spin, as `GetSpinStyle` reads it, is RIGHT or UP).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub center: bool,
+    /// The vertical justification when it is not `SetSpinStyle`'s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v: Option<SchVAlign>,
+}
+
+impl LabelJustify {
+    pub fn is_default(&self) -> bool {
+        *self == LabelJustify::default()
+    }
 }
 
 /// See [`SchExtras::sheet_props`]: Sheet Properties' Style (`m_borderWidth`, `m_borderSwatch`, `m_backgroundSwatch`) and Attributes (the four checks).
@@ -786,12 +847,16 @@ pub struct LabelField {
     /// `SCH_FIELD::IsNameShown` (`(show_name yes)`): drawn as `Name: value`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub name_shown: bool,
+    /// `!SCH_FIELD::CanAutoplace` (`(do_not_autoplace yes)`, the fields grid's Allow Autoplacement unticked). `SCH_LABEL_BASE::AutoplaceFields` places every
+    /// field of a label whatever it says, so for a label's field it is only kept, written and read back. Additive (UI-LEFT-3 S3-31).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_autoplace: bool,
 }
 
 impl Default for LabelField {
     /// A new field as `SCH_FIELD`'s constructor makes one: shown, 50 mil, regular, its value alone.
     fn default() -> Self {
-        LabelField { name: String::new(), text: String::new(), visible: true, italic: false, size_nm: Nm::ZERO, bold: false, name_shown: false }
+        LabelField { name: String::new(), text: String::new(), visible: true, italic: false, size_nm: Nm::ZERO, bold: false, name_shown: false, no_autoplace: false }
     }
 }
 
@@ -1087,10 +1152,12 @@ impl SchExtras {
             && self.page.is_none()
             && self.drawing_sheet.is_none()
             && self.label_spins.is_empty()
+            && self.label_justify.is_empty()
             && self.strokes.is_empty()
             && self.junction_looks.is_empty()
             && self.label_looks.is_empty()
             && self.label_fields.is_empty()
+            && self.intersheet_refs_looks.is_empty()
             && self.sheet_pin_looks.is_empty()
             && self.sheet_fields.is_empty()
             && self.sheet_field_places.is_empty()

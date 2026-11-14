@@ -35,6 +35,8 @@ pub struct PlacedLabelField {
     pub size_nm: Nm,
     pub bold: bool,
     pub name_shown: bool,
+    /// `!SCH_FIELD::CanAutoplace` (kept only: a label's `AutoplaceFields` places every field).
+    pub no_autoplace: bool,
     /// The global label's Sheet References.
     pub intersheet_refs: bool,
     pub at: Point,
@@ -75,7 +77,9 @@ fn fields_of(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bool) -
     let own = sch.extras.label_fields.get(&l.id).map(Vec::as_slice).unwrap_or(&[]);
     let mut fields: Vec<(LabelField, bool)> = Vec::new();
     if global {
-        fields.push((LabelField { name: INTERSHEET_REFS_FIELD.into(), text: "${INTERSHEET_REFS}".into(), visible: show_intersheet_refs, ..Default::default() }, true));
+        // its own looks (`SchExtras::intersheet_refs_looks`: size, bold, italic, shown name), its text and visibility Schematic Setup's
+        let look = sch.extras.intersheet_refs_looks.get(&l.id).cloned().unwrap_or_default();
+        fields.push((LabelField { name: INTERSHEET_REFS_FIELD.into(), text: "${INTERSHEET_REFS}".into(), visible: show_intersheet_refs, ..look }, true));
     }
     fields.extend(own.iter().cloned().map(|f| (f, false)));
     fields
@@ -126,6 +130,7 @@ pub fn autoplaced(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bo
             size_nm: f.size_nm,
             bold: f.bold,
             name_shown: f.name_shown,
+            no_autoplace: f.no_autoplace,
             intersheet_refs: isr,
             at: Point { x: Nm::kiround(p.at.0), y: Nm::kiround(p.at.1) },
             vertical: p.vertical,
@@ -182,7 +187,7 @@ pub fn placement_of(l: &NetLabel, f: &PlacedLabelField) -> FieldPlacement {
         bold: f.bold,
         italic: f.italic,
         name_shown: f.name_shown,
-        no_autoplace: false,
+        no_autoplace: f.no_autoplace,
     }
 }
 

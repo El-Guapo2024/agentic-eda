@@ -31,7 +31,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Cmd, LabelScope, LabelShape } from "../api/types";
 import type { AnnotateOptions } from "../api/hierarchyTypes";
-import type { DirectiveShape, SchHAlign, SchVAlign } from "../api/schEditTypes";
+import type { DirectiveShape, LabelFieldEdit, SchColor, SchHAlign, SchVAlign } from "../api/schEditTypes";
 import { placeLabelCmd } from "./schLabelName";
 import { ATTRIBUTE_ACTIONS, type SymbolAttrKey } from "./schControl";
 import type { LabelSpinName } from "./schLastPlaced";
@@ -70,6 +70,11 @@ export interface CarriedLabel {
   italic: boolean;
   /** The "Auto" check of a global or hierarchical label: the click that places it turns it to what it lands on (`AutoRotateItem`). */
   autoRotate: boolean;
+  /** Its dialog's fields grid (`DIALOG_LABEL_PROPERTIES` on the new label, UI-LEFT-3 S3-31): its own fields, a global label's Sheet References' looks, each field's
+   *  font and colour by name, placed with it. */
+  fields?: LabelFieldEdit[];
+  intersheetRefs?: LabelFieldEdit | null;
+  fieldLooks?: Record<string, { font?: string | null; color?: SchColor | null }>;
 }
 
 export interface CarriedDirective {
@@ -263,7 +268,7 @@ const xy = (p: readonly [number, number]) => ({ x: p[0], y: p[1] });
 export function placeCmd(item: CarriedItem, at: readonly [number, number], o: PlaceOptions = {}): Cmd {
   switch (item.kind) {
     case "label":
-      return placeLabelCmd({ at, scope: item.scope, text: item.text, shape: item.shape, spin: item.spin, plainSpin: o.plainSpin ?? null, sizeNm: item.sizeNm, bold: item.bold, italic: item.italic, autoRotate: !o.preview && item.scope !== "local" && item.autoRotate });
+      return placeLabelCmd({ at, scope: item.scope, text: item.text, shape: item.shape, spin: item.spin, plainSpin: o.plainSpin ?? null, sizeNm: item.sizeNm, bold: item.bold, italic: item.italic, autoRotate: !o.preview && item.scope !== "local" && item.autoRotate, fields: item.fields, intersheetRefs: item.intersheetRefs, fieldLooks: item.fieldLooks });
     case "directive":
       return { op: "sch_edit", verb: "add_graphic", graphic: { shape: { type: "directive", at: xy(at), orientation: item.orientation, shape: item.shape, pin_length_nm: item.pinLengthNm, netclass: item.netclass, component_class: item.componentClass } } };
     case "text":
@@ -275,13 +280,17 @@ export function placeCmd(item: CarriedItem, at: readonly [number, number], o: Pl
       // what its dialogs did while it rode, by the id it is numbered with (the server numbers it the same at the preview's point and at the click's)
       const edits = item.edits ?? [];
       const id = o.powerId;
-      const after = edits.length === 0 || !id ? [] : (() => { const from = powerIdOfEdits(edits); return edits.map((c) => (from ? renameInCmd(c, from, id) : c)); })();
+      // (edits made before the server's number came back name the page's drawing of it, `carry:power`)
+      const after = edits.length === 0 || !id ? [] : (() => { const from = powerIdOfEdits(edits); return edits.map((c) => renameInCmd(from ? renameInCmd(c, from, id) : c, CARRIED_POWER_ID, id)); })();
       return kind.length === 0 && after.length === 0 ? add : { op: "batch", cmds: [add, ...kind, ...after] };
     }
     case "symbol":
       return placeSymbolCmd(item, at, o);
   }
 }
+
+/** The id the page draws a carried power symbol with until the server numbers it (kicad-port/schCarryPreview.ts `CARRIED_IDS.power`). */
+export const CARRIED_POWER_ID = "carry:power";
 
 /** The power symbol id the first of `edits` names (`set_power_props`' `id`, a field id's owner). */
 function powerIdOfEdits(edits: readonly Cmd[]): string | null {
@@ -328,8 +337,14 @@ export function applyCarriedCmds(item: CarriedSymbol | CarriedPower, cmds: reado
   };
   if (item.kind === "power") {
     let net = item.net;
+    let rotMillideg = item.rotMillideg;
     for (const c of flat) {
       const x = c as unknown as Record<string, unknown>;
+      if (c.op === "sch_edit" && x.verb === "set_symbol_orientation" && typeof x.angle === "number") {
+        // Angle and Mirror (`SetOrientation`) in the hand: the turn it is made with, a mirror folded into it as the server folds a power symbol's
+        rotMillideg = powerRotOf(x.angle, (x.mirror as "x" | "y" | undefined) ?? null);
+        continue;
+      }
       if (c.op === "sch_edit" && x.verb === "edit_field" && typeof x.text === "string" && fieldName(x.id) === "Value") {
         // the Value is the net it asserts (`add_power_symbol`'s `net`)
         net = x.text.trim();
@@ -339,7 +354,7 @@ export function applyCarriedCmds(item: CarriedSymbol | CarriedPower, cmds: reado
       }
       kept.push(c);
     }
-    return { ...item, net, edits: [...(item.edits ?? []), ...kept] };
+    return { ...item, net, rotMillideg, edits: [...(item.edits ?? []), ...kept] };
   }
   const next: CarriedSymbol = { ...item };
   let renameTo: string | null = null;
@@ -363,6 +378,14 @@ export function applyCarriedCmds(item: CarriedSymbol | CarriedPower, cmds: reado
     }
     if (c.op === "sch_edit" && x.verb === "set_symbol_unit" && typeof x.new_unit === "number") {
       next.unit = x.new_unit;
+      continue;
+    }
+    if (c.op === "sch_edit" && x.verb === "set_symbol_orientation" && typeof x.angle === "number") {
+      // Angle and Mirror (`SetOrientation( SYM_ORIENT_.. )` then `SYM_MIRROR_..`, from the unturned symbol): the orientation it is made with, the turns it
+      // rode with gone (`DIALOG_SYMBOL_PROPERTIES` on the symbol in the hand, UI-LEFT-3 S3-30)
+      next.rotDeg = x.angle;
+      next.mirror = (x.mirror as "x" | "y" | undefined) ?? null;
+      next.turns = [];
       continue;
     }
     if (c.op === "sch_edit" && x.verb === "set_body_style" && typeof x.style === "number") {
@@ -392,6 +415,28 @@ export function applyCarriedCmds(item: CarriedSymbol | CarriedPower, cmds: reado
 }
 
 // ------------------------------------------------------------------------------------------------------------------- orientation
+
+/**
+ * A power symbol's turn for Symbol Properties' Angle and Mirror (`set_symbol_orientation` on a power symbol, `crates/ops/src/sch_symbol_props.rs`): the angle's
+ * matrix then the mirror's, a mirrored picture folded back by a flip across the vertical axis (a power symbol is symmetric about it), read as its rotation.
+ */
+export function powerRotOf(angle: number, mirror: "x" | "y" | null): number {
+  let m = matrixOf(((((angle % 360) + 360) % 360) * 1000), false, false);
+  if (mirror === "x") m = thenM(m, M_MIRROR_X);
+  else if (mirror === "y") m = thenM(m, M_MIRROR_Y);
+  if (m.x1 * m.y2 - m.y1 * m.x2 < 0) m = thenM(m, M_MIRROR_Y);
+  return orientationOf(m).rotMillideg;
+}
+
+/**
+ * A field of the symbol or power symbol in the hand moved by `delta` on the sheet (Field Properties' Position X / Y): the new offset in the item's own unturned frame
+ * (`local`, what `edit_field`'s `local_at` takes), the sheet's move turned back through the item's orientation (`rotDeg`, `mirror`: the transpose of its `TRANSFORM`),
+ * so the place goes with the item wherever the click puts it and however it is turned after.
+ */
+export function carriedFieldLocal(local: readonly [number, number], delta: readonly [number, number], rotDeg: number, mirror: "x" | "y" | null | undefined): [number, number] {
+  const m = matrixOf(Math.round(rotDeg * 1000), mirror === "y", mirror === "x");
+  return [Math.round(local[0] + m.x1 * delta[0] + m.x2 * delta[1]), Math.round(local[1] + m.y1 * delta[0] + m.y2 * delta[1])];
+}
 
 /** `crates/ops/src/sch_scene.rs` `Matrix` (KiCad's `TRANSFORM` of a placed symbol): `x' = x1*x + y1*y`, `y' = x2*x + y2*y`. */
 interface OrientMatrix {
@@ -679,7 +724,7 @@ export function describeCarried(item: CarriedItem): Record<string, unknown> {
     case "power":
       return { kind: "power", libId: item.libId, net: item.net, rot: item.rotMillideg, edits: item.edits?.length ?? 0, powerKind: item.powerKind ?? null };
     case "symbol":
-      return { kind: "symbol", libId: item.libId, ref: item.ref, unit: item.unit, turns: [...item.turns], placeAllUnits: item.placeAllUnits, oneOnly: item.oneOnly, value: item.value, footprint: item.footprint, bodyStyle: item.bodyStyle ?? 1, attrs: { ...item.attrs }, edits: item.edits?.length ?? 0 };
+      return { kind: "symbol", libId: item.libId, ref: item.ref, unit: item.unit, rotDeg: item.rotDeg, mirror: item.mirror, turns: [...item.turns], placeAllUnits: item.placeAllUnits, oneOnly: item.oneOnly, value: item.value, footprint: item.footprint, bodyStyle: item.bodyStyle ?? 1, attrs: { ...item.attrs }, edits: item.edits?.length ?? 0 };
   }
 }
 

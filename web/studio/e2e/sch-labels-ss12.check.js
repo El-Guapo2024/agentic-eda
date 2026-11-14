@@ -177,6 +177,11 @@
       await run("eeschema.InteractiveEdit.properties");
       let dlg = await opened(/^Global Label Properties/);
       if (!t(!!dlg, "E opens Global Label Properties")) return;
+      // Text Size is not one of the columns the dialog opens with (`ShowHideColumns( "0 1 2 3 4 5 6 7" )`): the column labels' right-click shows it
+      dlg.querySelector("thead").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+      await sleep(200);
+      [...document.querySelectorAll(".menu-node-item")].find((el) => /Text Size/.test(el.textContent))?.click();
+      await sleep(200);
       const size = aria("Field 1 text size", dlg);
       const bold = aria("Field 1 bold", dlg);
       const showName = aria("Field 1 show name", dlg);

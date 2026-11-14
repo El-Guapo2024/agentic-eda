@@ -39,7 +39,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     let mut design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
     let sch = design.schematic.as_mut().unwrap();
     sch.texts.push(SchematicText { id: "txt_look".into(), content: "LOOK_TEXT".into(), at: Point { x: mm(200.0), y: mm(20.0) }, angle: 0, size_nm: mm(1.27) });
-    sch.extras.text_attrs.insert("txt_look".into(), TextAttrs { bold: true, italic: true, color: Some(blue()), href: Some("#1".into()), font: Some("KiCad Font".into()), exclude_from_sim: true });
+    sch.extras.text_attrs.insert("txt_look".into(), TextAttrs { bold: true, italic: true, color: Some(blue()), href: Some("#1".into()), font: Some("KiCad Font".into()), exclude_from_sim: true, thickness_nm: None });
     sch.extras.graphics.push(SchGraphic {
         id: "shp_look".into(),
         shape: SchGraphicKind::TextBox { start: Point { x: mm(200.0), y: mm(40.0) }, end: Point { x: mm(230.0), y: mm(50.0) }, text: "LOOK_BOX".into(), angle: 0, size_nm: mm(1.27), bold: false, italic: false, h_align: Default::default(), v_align: Default::default(), margin_nm: Nm::ZERO, margins_nm: None },
@@ -49,10 +49,10 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
         fill: Default::default(),
         fill_color: None,
     });
-    sch.extras.text_attrs.insert("shp_look".into(), TextAttrs { color: Some(blue()), href: Some("https://kicad.org".into()), font: Some("KiCad Font".into()), ..Default::default() });
+    sch.extras.text_attrs.insert("shp_look".into(), TextAttrs { color: Some(blue()), href: Some("https://kicad.org".into()), font: Some("KiCad Font".into()), thickness_nm: Some(mm(0.25)), ..Default::default() });
     sch.labels.push(NetLabel { id: "lbl_look_l".into(), net: "LOOK_L".into(), at: Point { x: mm(200.0), y: mm(70.0) }, kind: LabelKind::Local });
     sch.extras.label_spins.insert("lbl_look_l".into(), LabelSpin::Right);
-    sch.extras.text_attrs.insert("lbl_look_l".into(), TextAttrs { color: Some(blue()), font: Some("KiCad Font".into()), ..Default::default() });
+    sch.extras.text_attrs.insert("lbl_look_l".into(), TextAttrs { color: Some(blue()), font: Some("KiCad Font".into()), thickness_nm: Some(mm(0.2)), ..Default::default() });
     sch.labels.push(NetLabel { id: "lbl_look_g".into(), net: "LOOK_G".into(), at: Point { x: mm(200.0), y: mm(90.0) }, kind: LabelKind::Global { shape: LabelShape::Input } });
     sch.extras.label_spins.insert("lbl_look_g".into(), LabelSpin::Right);
     sch.extras.label_fields.insert("lbl_look_g".into(), vec![LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: false, ..Default::default() }]);
@@ -93,6 +93,12 @@ fn a_texts_font_colour_and_link_and_a_labels_hand_placed_fields_come_back_from_o
     assert_eq!(t, design.schematic.as_ref().unwrap().extras.text_attrs["txt_look"]);
     assert_eq!(b, design.schematic.as_ref().unwrap().extras.text_attrs["shp_look"]);
     assert_eq!(l, design.schematic.as_ref().unwrap().extras.text_attrs["lbl_look_l"]);
+    // the text box's and the label's own pens (UI-LEFT-3 S3-32: Auto Thickness unticked), `(thickness ..)` after the size
+    assert!(text.contains("(size 1.27 1.27) (thickness 0.25)") && text.contains("(size 1.27 1.27) (thickness 0.2)"), "{text}");
+    // a bold text's `(thickness ..)` that is its bold pen (`GetPenSizeForBold`, as KiCad writes every bold text) is the bold flag's, no pen of its own
+    let kicad_bold = text.replace("(size 1.27 1.27) (bold yes) (italic yes)", "(size 1.27 1.27) (thickness 0.254) (bold yes) (italic yes)");
+    assert_ne!(kicad_bold, text);
+    assert_eq!(read_back(&kicad_bold).0.thickness_nm, None);
     assert_eq!(places, want_places(), "the hand places of the global label's fields");
     // the hand-placed label has no `(fields_autoplaced yes)`; the other global labels keep it
     let label = text.split("(global_label \"LOOK_G\"").nth(1).unwrap();
@@ -193,7 +199,7 @@ fn with_sheet_looks() -> (eda_model::ir::Design, ConstraintModel) {
     let (mut design, model) = with_sheet();
     let id = "a1b2c3d4-0000-4000-8000-000000000001";
     let sch = design.schematic.as_mut().unwrap();
-    sch.extras.sheet_fields.insert(id.into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: true, italic: true, size_nm: mm(2.0), bold: true, name_shown: true }]);
+    sch.extras.sheet_fields.insert(id.into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: true, italic: true, size_nm: mm(2.0), bold: true, name_shown: true, no_autoplace: false }]);
     sch.extras.sheet_field_places.entry(id.into()).or_default().insert("Rev".into(), eda_model::sch_extras::SheetFieldPlace { dx: mm(5.08), dy: mm(25.4), angle: 90_000, h: eda_model::ir::TextJustify::Left, v: eda_model::ir::TextVAlign::Bottom });
     sch.extras.set_field_look(id, "Rev", eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()) });
     let s = sch.sheets.iter_mut().find(|s| s.id == id).unwrap();
@@ -257,4 +263,20 @@ fn kicad_keeps_a_sheet_fields_looks_and_a_sheet_pins_font_and_colour() {
     assert_ne!(kicads, ours, "KiCad wrote the file itself");
     assert_eq!(sheet_looks_back(&kicads), sheet_looks_back(&ours), "what KiCad kept of the sheet field's looks and the pin's font and colour");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+
+/// UI-LEFT-3 S3-10: a label's centred text and its own vertical justification (`SchExtras::label_justify`) are written in its `(justify ..)` and read back; a
+/// label with none is written and read as its spin says.
+#[test]
+fn a_labels_centred_text_and_vertical_justification_come_back() {
+    let (mut design, model) = drawn();
+    let j = eda_model::sch_extras::LabelJustify { center: true, v: Some(eda_model::sch_extras::SchVAlign::Top) };
+    design.schematic.as_mut().unwrap().extras.label_justify.insert("lbl_look_l".into(), j);
+    let text = export_kicad_sch(&design, &model, &META).expect("the sheet exports");
+    let (back, _, _) = import_kicad_sch(&text).expect("the file reads");
+    let sch = back.schematic.unwrap();
+    let id = |net: &str| sch.labels.iter().find(|l| l.net == net).unwrap().id.clone();
+    assert_eq!(sch.extras.label_justify.get(&id("LOOK_L")).copied(), Some(j), "{text}");
+    assert!(!sch.extras.label_justify.contains_key(&id("LOOK_G")), "a global label's own centre is its spin's");
 }

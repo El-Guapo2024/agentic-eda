@@ -9,10 +9,13 @@
 // shown, Schematic Setup shows or hides it.
 import { useState, type ReactNode } from "react";
 import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
-import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
-import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, LABEL_FIELD_SIZE_NM, newLabelField, ownLabelFields, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
+import type { SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
+import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
+import { LabelFieldsGrid, labelRowsOk } from "./LabelFieldsGrid";
+import { itemColorsOverridden, SchColorOverrideNote } from "./SchColorOverrideNote";
+import { noteAnswer, rememberedAnswer } from "../kicad-port/kidialog";
 import { inferSpin } from "./schematic/labelShape";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { textLie } from "../kicad-port/schTextItem";
@@ -24,6 +27,7 @@ import { sheetFlags } from "../kicad-port/designVariants";
 import { newSheetFieldRow, sheetFieldCmds, sheetFieldError, sheetFieldRow, SHEET_FIELD_COLUMNS, type SheetFieldRow } from "../kicad-port/sheetFieldLooks";
 import { columnMenu, DEFAULT_SHOWN_COLUMNS, shownColumns, toggleColumn, type FieldColumn } from "../kicad-port/symbolFieldsGrid";
 import { fontChoices } from "../kicad-port/symbolPropsDialog";
+import { labelFieldEditOf, labelGridRows, labelLookCmds, labelPlaceCmds, type LabelGridRow } from "../kicad-port/labelFieldsGrid";
 import { lookCellOf } from "./fieldGridCells";
 import { ContextMenu } from "./canvas/ContextMenu";
 
@@ -100,26 +104,10 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const families = useFontFamilies();
   const [font, setFont] = useState(label.font || DEFAULT_FONT);
   const [color, setColor] = useState(label.color ?? null);
-  // the grid of the label's own fields (`m_grid` over `m_fields`), a global label's Sheet References above them
-  const [fields, setFields] = useState<LabelFieldEdit[]>(() => ownLabelFields(label).map((f) => ({ ...f, name: labelFieldDisplayName(f.name) })));
-  // each row's Text Size as typed (mm); a row whose size does not read keeps the dialog from closing (`FIELDS_GRID_TABLE`'s size validator)
-  const [fieldSizes, setFieldSizes] = useState<string[]>(() => fields.map((f) => nmToMm(f.size_nm ?? LABEL_FIELD_SIZE_NM)));
-  const fieldSizeNm = (i: number): number | null => {
-    const nm = mmToNm(fieldSizes[i] ?? "");
-    return nm !== null && nm >= 10_000 && nm <= 1_000_000_000 ? nm : null;
-  };
-  const fieldSizesOk = fields.every((_, i) => fieldSizeNm(i) !== null);
-  const isr = (label.fields ?? []).find((f) => f.intersheet_refs) ?? null;
-  const setField = (i: number, change: Partial<LabelFieldEdit>) => setFields((fs) => fs.map((f, k) => (k === i ? { ...f, ...change } : f)));
-  const addField = () => {
-    const f = newLabelField(fields.map((x, i) => ({ ...x, name: x.name === "Net Class" ? "Netclass" : x.name, size_nm: fieldSizeNm(i) ?? x.size_nm })), isr ? isr.visible : null);
-    setFields((fs) => [...fs, { ...f, name: labelFieldDisplayName(f.name) }]);
-    setFieldSizes((ss) => [...ss, nmToMm(f.size_nm ?? LABEL_FIELD_SIZE_NM)]);
-  };
-  const deleteField = (i: number) => {
-    setFields((fs) => fs.filter((_, k) => k !== i));
-    setFieldSizes((ss) => ss.filter((_, k) => k !== i));
-  };
+  // the grid of the label's fields (`m_grid` over `m_fields`, kicad-port/labelFieldsGrid.ts): a global label's Sheet References first, then its own
+  const [rows, setRows] = useState<LabelGridRow[]>(() => labelGridRows((label.fields ?? []).filter((f) => !f.intersheet_refs || label.scope === "global"), label.at));
+  const own = rows.filter((r) => !r.isr);
+  const fieldSizesOk = labelRowsOk(rows);
   const title = label.scope === "global" ? "Global Label Properties" : label.scope === "hierarchical" ? "Hierarchical Label Properties" : "Label Properties";
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
@@ -128,12 +116,16 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const canOk = text.trim().length > 0 && sizeOk && fieldSizesOk;
   // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
   const autoSpin = auto ? labelOrientationForPoint(orientationSceneOf(sch), label.at, turn) : null;
+  // `TransferDataFromWindow`: the places first (`positioningChanged` takes the fields out of the autoplaced ones, each keeping its grid place), the label and its
+  // fields' texts and looks, then the fonts and colours (kicad-port/labelFieldsGrid.ts)
   const submit = () =>
     canOk &&
     void send(
       oneStep([
-        labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields: fields.map((f, i) => ({ ...f, size_nm: fieldSizeNm(i) ?? f.size_nm })) }),
+        ...labelPlaceCmds(label.id, rows),
+        labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields: own.map((r) => ({ ...labelFieldEditOf(r), name: r.name === "Net Class" ? "Netclass" : r.name })) }),
         textAttrsCmd(label.id, { font: label.font, color: label.color }, { font: chosenFont(font), color }, false),
+        ...labelLookCmds(label.id, rows),
       ])
     );
   return (
@@ -192,75 +184,8 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
         <span>Color:</span>
         <ColorSwatch label="Label color" color={color} onChange={setColor} />
       </Grid>
-      <table className="label-fields" aria-label="Label fields" style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ textAlign: "left" }}>Name</th>
-            <th style={{ textAlign: "left" }}>Value</th>
-            <th>Show</th>
-            <th>Show Name</th>
-            <th>Italic</th>
-            <th>Bold</th>
-            <th>Text Size</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {isr && (
-            <tr title="Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting">
-              <td>Sheet References</td>
-              <td>{isr.text}</td>
-              <td style={{ textAlign: "center" }}>
-                <input type="checkbox" checked={isr.visible} disabled aria-label="Show Sheet References" />
-              </td>
-              <td />
-              <td />
-              <td />
-              <td />
-              <td />
-            </tr>
-          )}
-          {fields.map((f, i) => (
-            <tr key={i}>
-              <td>
-                <input aria-label={`Field ${i + 1} name`} value={f.name} onChange={(e) => setField(i, { name: e.target.value })} style={{ width: 110 }} />
-              </td>
-              <td>
-                <input aria-label={`Field ${i + 1} value`} value={f.text} onChange={(e) => setField(i, { text: e.target.value })} />
-              </td>
-              <td style={{ textAlign: "center" }}>
-                <input type="checkbox" aria-label={`Field ${i + 1} shown`} checked={f.visible} onChange={(e) => setField(i, { visible: e.target.checked })} />
-              </td>
-              <td style={{ textAlign: "center" }}>
-                <input type="checkbox" aria-label={`Field ${i + 1} show name`} checked={!!f.name_shown} onChange={(e) => setField(i, { name_shown: e.target.checked })} />
-              </td>
-              <td style={{ textAlign: "center" }}>
-                <input type="checkbox" aria-label={`Field ${i + 1} italic`} checked={f.italic} onChange={(e) => setField(i, { italic: e.target.checked })} />
-              </td>
-              <td style={{ textAlign: "center" }}>
-                <input type="checkbox" aria-label={`Field ${i + 1} bold`} checked={!!f.bold} onChange={(e) => setField(i, { bold: e.target.checked })} />
-              </td>
-              <td>
-                <input
-                  aria-label={`Field ${i + 1} text size`}
-                  value={fieldSizes[i] ?? ""}
-                  onChange={(e) => setFieldSizes((ss) => ss.map((v, k) => (k === i ? e.target.value : v)))}
-                  style={{ width: 52, ...(fieldSizeNm(i) === null ? { outline: "1px solid var(--error, #d33)" } : {}) }}
-                  title="mm, 0.01 to 1000"
-                />
-              </td>
-              <td>
-                <button type="button" aria-label={`Delete field ${i + 1}`} title="Delete field" onClick={() => deleteField(i)}>
-                  ✕
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <button type="button" aria-label="Add field" title="Add field" onClick={addField} style={{ marginTop: 4 }}>
-        + Add Field
-      </button>
+      <LabelFieldsGrid rows={rows} setRows={setRows} isrVisible={null} />
+
     </SchDialogShell>
   );
 }
@@ -368,6 +293,12 @@ export function SheetPropertiesDialog({ id }: { id: string }) {
 }
 
 /** The look the writer has always given a sheet with no style of its own (`SheetProps::legacy`): a 6 mil border, a pale yellow fill. */
+/** `DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`'s warning, word for word (`checkboxLabel` is the Colors page's `m_optOverrideColors` label). */
+const SHEET_COLOR_WARNING = "Note: item colors are overridden in the current color theme.";
+const SHEET_COLOR_WARNING_DETAIL = "To see individual item colors uncheck 'Override individual item colors'\nin Preferences > Schematic Editor > Colors.";
+/** `DoNotShowCheckbox( __FILE__, __LINE__ )`: the question's hash. */
+const SHEET_COLOR_WARNING_KEY = "dialog_sheet_properties.cpp:item-colors-overridden";
+
 const LEGACY_SHEET = { border_width_nm: 152_400, border_color: null as SchColor | null, fill_color: { r: 255, g: 255, b: 194, a: 255 } as SchColor | null };
 
 
@@ -461,10 +392,47 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
     const variantCmd = Object.keys(inVariant).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_variant", id: sheet.id, variant, ...inVariant } as unknown as Cmd) : null;
     const edit = sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]);
     const editCmds: Cmd[] = edit ? ((edit as { op: string; cmds?: Cmd[] }).op === "batch" ? ((edit as { cmds: Cmd[] }).cmds ?? []) : [edit]) : [];
-    void send(oneStep([propsCmd, variantCmd, ...fieldCmds, ...editCmds]));
+    const go = () => void send(oneStep([propsCmd, variantCmd, ...fieldCmds, ...editCmds]));
+    // `TransferDataFromWindow`: a border or background colour set while the theme overrides the items' colours is warned of first (`KIDIALOG` with
+    // `KD_WARNING` and `DoNotShowCheckbox`); its only button goes on
+    const colorsSet = !sameColor(borderColor, was2.border_color) || !sameColor(fillColor, was2.fill_color);
+    if (colorsSet && itemColorsOverridden("schematic") && rememberedAnswer(SHEET_COLOR_WARNING_KEY) === undefined) return setColorWarning(() => go);
+    go();
   };
+  const [colorWarning, setColorWarning] = useState<(() => void) | null>(null);
+  const [warningTicked, setWarningTicked] = useState(false);
   return (
-    <SchDialogShell title="Sheet Properties" width={560} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title="Sheet Properties" width={560} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk} note={<SchColorOverrideNote />}>
+      {colorWarning && (
+        <div className="dialog-backdrop" onClick={(e) => e.stopPropagation()}>
+          <div className="dialog" style={{ width: 440 }} role="dialog" aria-label="Warning" data-testid="sheet-color-warning">
+            <div className="dialog-header">
+              <span>Warning</span>
+            </div>
+            <div className="dialog-body" style={{ whiteSpace: "pre-wrap" }}>
+              {SHEET_COLOR_WARNING}
+              <p style={{ fontSize: 11, color: "var(--chrome-text-dim)" }}>{SHEET_COLOR_WARNING_DETAIL}</p>
+              <label style={{ display: "block", marginTop: 10 }}>
+                <input type="checkbox" checked={warningTicked} onChange={(e) => setWarningTicked(e.target.checked)} data-testid="do-not-show-again" /> Do not show again
+              </label>
+            </div>
+            <div className="dialog-footer">
+              <button
+                className="primary"
+                autoFocus
+                onClick={() => {
+                  noteAnswer(SHEET_COLOR_WARNING_KEY, warningTicked, true);
+                  const go = colorWarning;
+                  setColorWarning(null);
+                  go();
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Grid>
         <span>Sheet name</span>
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
@@ -743,7 +711,7 @@ function ShapeForm({ graphic }: { graphic: SchGraphic }) {
   };
   const closed = graphic.shape.type !== "arc" && graphic.shape.type !== "bezier";
   return (
-    <SchDialogShell title={rule ? "Rule Area Properties" : "Shape Properties"} width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title={rule ? "Rule Area Properties" : "Shape Properties"} width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk} note={<SchColorOverrideNote />}>
       <Grid>
         <span>Border width (mm)</span>
         <input autoFocus value={width} onChange={(e) => setWidth(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} title="0 is the default line width" />

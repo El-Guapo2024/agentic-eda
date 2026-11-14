@@ -38,9 +38,10 @@ export const SCH_DEFAULT_PEN_NM = 152_400;
 const iuRound = (v: number): number => kiRound(v / SCH_IU) * SCH_IU;
 const iuTrunc = (v: number): number => Math.trunc(v / SCH_IU) * SCH_IU;
 
-/** `SCH_PAINTER::getTextThickness`: `GetEffectiveTextPenWidth( GetDefaultPenWidth() )` of a text of `size` with no pen of its own. */
-export function schDrawPen(size: number, bold: boolean, defaultPen = SCH_DEFAULT_PEN_NM): number {
-  return iuRound(effectiveTextPenWidth(0, [size, size], bold, defaultPen));
+/** `SCH_PAINTER::getTextThickness`: `GetEffectiveTextPenWidth( GetDefaultPenWidth() )` of a text of `size`; `thickness` its own pen (`GetTextThickness`, Auto
+ *  Thickness unticked: `TextAttrs::thickness_nm`), none or 0 for KiCad's for its size and weight. */
+export function schDrawPen(size: number, bold: boolean, defaultPen = SCH_DEFAULT_PEN_NM, thickness?: number | null): number {
+  return iuRound(effectiveTextPenWidth(thickness && thickness > 1 ? thickness : 0, [size, size], bold, defaultPen));
 }
 
 /** `EDA_TEXT::GetEffectiveTextPenWidth()` with no default (what `GetTextBox`, `GetPenWidth` and the label offsets take): an eighth of the size, a fifth once bold. */
@@ -130,12 +131,14 @@ export function deviceTextDrawSpec(text: string, f: SchFieldLook, font: KicadFon
  * width of its own (an imported DXF text's, `width_nm`) is that wide (`GetTextSize().x`), and its pen is of that width (`GetEffectiveTextPenWidth`: `GetPenSizeForNormal(
  * GetTextWidth() )`, clamped to the smaller side).
  */
-export function schTextDrawSpec(t: Pick<SchematicText, "content" | "shown" | "at" | "angle" | "size_nm" | "width_nm" | "h" | "v" | "vertical" | "bold" | "italic">, defaultPen = SCH_DEFAULT_PEN_NM): KicadTextSpec {
+export function schTextDrawSpec(t: Pick<SchematicText, "content" | "shown" | "at" | "angle" | "size_nm" | "width_nm" | "h" | "v" | "vertical" | "bold" | "italic"> & { thickness_nm?: number | null }, defaultPen = SCH_DEFAULT_PEN_NM): KicadTextSpec {
   const lie = textLie(t);
   const size = sizeOf(t.size_nm);
   const width = t.width_nm && t.width_nm > 0 ? t.width_nm : size;
   const bold = !!t.bold;
-  const pen = width === size ? schDrawPen(size, bold, defaultPen) : iuRound(effectiveTextPenWidth(0, [width, size], bold, defaultPen));
+  // its own pen when Auto Thickness is unticked (`GetTextThickness() > 1`)
+  const own = t.thickness_nm && t.thickness_nm > 1 ? t.thickness_nm : 0;
+  const pen = width === size ? schDrawPen(size, bold, defaultPen, own) : iuRound(effectiveTextPenWidth(own, [width, size], bold, defaultPen));
   return { text: t.shown ?? t.content, pos: t.at, size: [width, size], pen, halign: lie.h, valign: lie.v, angleDeg: lie.vertical ? 90 : 0, italic: !!t.italic, bold, multiline: true, iu: SCH_IU };
 }
 
@@ -147,6 +150,10 @@ export interface SchLabelLook {
   size_nm?: number | null;
   bold?: boolean;
   italic?: boolean;
+  /** Its own pen (`TextAttrs::thickness_nm`: Auto Thickness unticked). */
+  thickness_nm?: number | null;
+  /** The justification its spin does not say (`SchExtras::label_justify`): centred on the anchor, its own vertical one. */
+  justify?: { center?: boolean; v?: "top" | "center" | "bottom" | null } | null;
 }
 
 /** `SCH_LABEL_BASE::SetSpinStyle`: right and up are left-justified, left and bottom right-justified; up and bottom run up the sheet. */
@@ -187,9 +194,11 @@ export function schLabelDrawSpec(l: SchLabelLook, spin: LabelSpin, defaultPen = 
     text: l.net,
     pos: [l.at[0] + dx, l.at[1] + dy],
     size: [size, size],
-    pen: schDrawPen(size, bold, defaultPen),
+    pen: schDrawPen(size, bold, defaultPen, l.thickness_nm),
     ...spinAttrs(spin),
-    valign: flagged ? "center" : "bottom",
+    // a centred text or its own vertical justification (Edit Text & Graphics' H and V Align; `SetSpinStyle` puts them back)
+    ...(l.justify?.center ? { halign: "center" as const } : {}),
+    valign: l.justify?.v ?? (flagged ? "center" : "bottom"),
     italic: !!l.italic,
     bold,
     multiline: false,
@@ -217,6 +226,8 @@ export interface SchTextBoxLook {
   v: VJustify;
   bold?: boolean;
   italic?: boolean;
+  /** Its own pen (`TextAttrs::thickness_nm`: Auto Thickness unticked). */
+  thickness_nm?: number | null;
 }
 
 /** `SCH_TEXTBOX::GetDrawPos`: the box's corner, side middle or centre the justification names, the margins in from it (a text that runs up the box reads the box turned). */
@@ -255,7 +266,7 @@ export function schTextBoxDrawSpec(b: SchTextBoxLook, font: KicadFont = STROKE, 
     text: lines.join("\n"),
     pos: schTextBoxDrawPos(b),
     size: [size, size],
-    pen: schDrawPen(size, bold, defaultPen),
+    pen: schDrawPen(size, bold, defaultPen, b.thickness_nm),
     halign: b.h,
     valign: b.v,
     angleDeg: vertical ? 90 : 0,

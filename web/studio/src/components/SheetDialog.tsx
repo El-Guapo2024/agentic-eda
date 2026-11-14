@@ -11,6 +11,7 @@
 // With a `source` (Import Sheet... / Draw Sheet from File, `DrawSheet( drawSheetFromFile )`) the sheet is named after the file (`fn.GetName()`) and shows a copy of it: the
 // dialog asks the server what taking the file in brings (`LoadSheetFromFile`'s checks, POST /api/sch/sheet_file), lists the findings and refuses to add while one is an error.
 import { useEffect, useState } from "react";
+import { SchColorOverrideNote } from "./SchColorOverrideNote";
 import { fetchSheetFileCheck } from "../api/hierarchyClient";
 import type { SheetFileCheck } from "../api/hierarchyTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -85,6 +86,8 @@ export function SheetDialog() {
         <div className="dialog-header">
           <span>Hierarchical Sheet Properties</span>
         </div>
+        {/* `DIALOG_SHEET_PROPERTIES`' info bar, the new sheet's too */}
+        <SchColorOverrideNote />
         <div className="dialog-body">
           <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr" }}>
             <span>Sheet name</span>

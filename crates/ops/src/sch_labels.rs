@@ -159,6 +159,8 @@ impl<'m> Scene<'m> {
             return false;
         }
         let id = l.id.clone();
+        // `SetSpinStyle`: the justification the spin says
+        self.sch.extras.label_justify.remove(&id);
         self.sch.extras.label_spins.insert(id, spin);
         true
     }
@@ -177,6 +179,9 @@ pub(crate) struct PlacedLabel {
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub auto_rotate: Option<bool>,
+    pub fields: Option<Vec<eda_model::sch_extras::LabelField>>,
+    pub intersheet_refs: Option<eda_model::sch_extras::LabelField>,
+    pub field_looks: Option<std::collections::BTreeMap<String, eda_model::sch_extras::FieldFontLook>>,
 }
 
 impl<'a> Board<'a> {
@@ -194,6 +199,8 @@ impl<'a> Board<'a> {
         if props.auto_rotate == Some(true) && !auto_rotate_supported(kind) {
             return Err(fail("ops_label_no_auto_rotate", net, "only a global or a hierarchical label can rotate itself on placement"));
         }
+        // the dialog's grid as its OK takes it (`TransferDataFromWindow`: empty rows dropped, "Net Class" as `Netclass`, a name twice refused)
+        let fields_now = props.fields.as_deref().map(|f| crate::sch_props::label_fields_after(net, f)).transpose()?;
         let model = self.model;
         let sch = self.schematic_mut_or_create();
         sch.labels.push(NetLabel { id: String::new(), net: net.trim().to_string(), at, kind: kind.clone() });
@@ -209,6 +216,18 @@ impl<'a> Board<'a> {
         look.auto_rotate = props.auto_rotate.unwrap_or(false) && auto_rotate_supported(kind);
         if !look.is_default() {
             sch.extras.label_looks.insert(id.clone(), look);
+        }
+        if let Some(fields) = fields_now.filter(|f| !f.is_empty()) {
+            sch.extras.label_fields.insert(id.clone(), fields);
+        }
+        if let Some(isr) = props.intersheet_refs.clone().filter(|_| matches!(kind, LabelKind::Global { .. })) {
+            let isr = eda_model::sch_extras::LabelField { name: eda_model::sch_extras::INTERSHEET_REFS_FIELD.into(), text: String::new(), visible: true, ..isr };
+            if isr != (eda_model::sch_extras::LabelField { name: eda_model::sch_extras::INTERSHEET_REFS_FIELD.into(), ..Default::default() }) {
+                sch.extras.intersheet_refs_looks.insert(id.clone(), isr);
+            }
+        }
+        for (name, look) in props.field_looks.iter().flatten() {
+            sch.extras.set_field_look(&id, if name == "Net Class" { "Netclass" } else { name }, look.clone());
         }
         // "if( !m_currentLabel->AutoRotateOnPlacement() && spin != selected ) SetSpinStyle( selected )", after the placement's AutoRotateItem. A label always
         // has a spin of its own (`createNewLabel`: `SetSpinStyle( m_lastTextOrientation )`, which the tool starts as `SPIN_STYLE::RIGHT`), so none given is

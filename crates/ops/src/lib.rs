@@ -6348,6 +6348,9 @@ impl<'a> Board<'a> {
             (Slot::Label(i), Slot::Label(j)) if std::mem::discriminant(&sch.labels[i].kind) == std::mem::discriminant(&sch.labels[j].kind) => {
                 let (ia, ib) = (sch.labels[i].id.clone(), sch.labels[j].id.clone());
                 let (spa, spb) = (sch.extras.label_spins.remove(&ia), sch.extras.label_spins.remove(&ib));
+                // `SetSpinStyle` on each: the justification its new spin says
+                sch.extras.label_justify.remove(&ia);
+                sch.extras.label_justify.remove(&ib);
                 if let Some(s) = spb {
                     sch.extras.label_spins.insert(ia, s);
                 }
