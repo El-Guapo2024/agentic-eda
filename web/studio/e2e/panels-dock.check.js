@@ -2,8 +2,8 @@
 // captions, sashes and headings with the pointer and reads the layout back from the page and from what the browser keeps:
 //   buttons       the caption's buttons dock the Net Inspector on the left, the right and the top of the canvas, float it as a window, and bring it back under
 //                 the canvas; each place is kept (`eda-studio.pcb-pane-dock.v1`)
-//   drag          Search's caption dragged onto the centre dock guide's right arrow docks it on the right (the hint shows first); dragged anywhere else it floats
-//                 where it was let go; a double click on the caption docks it back on the side it came from, again floats it
+//   drag          Search's caption dragged: the pane floats at once; by the canvas's right edge it docks on the right (the hint shows first); let go in the
+//                 middle of the canvas it floats where it was let go; a double click on the caption docks it back where it was, again floats it
 //   sash          a side dock's sash dragged sizes it, and the size is kept
 //   ni-columns    the Net Inspector's headings: Pad Count dragged before Netclass (the click that ends the drag does not sort), the Name never moves, an edge
 //                 dragged widens its column, the headings' right-click menu (Auto-fit Column, Auto-fit All Columns, then Show / Hide Columns) fits a column to its
@@ -90,26 +90,25 @@
     t(where("netInspector") === "bottom" && kept()?.at?.netInspector === "bottom", "back under the canvas");
   });
 
-  await scenario("Search dragged by its caption onto a dock guide docks there; let go elsewhere it floats; a double click docks it back, again floats it", async (t) => {
+  await scenario("Search dragged by its caption to the canvas's right edge docks there; let go elsewhere it floats; a double click docks it back, again floats it", async (t) => {
     const cap = caption("search");
     const [x0, y0] = [cap.getBoundingClientRect().left + 30, cap.getBoundingClientRect().top + 6];
-    // the right arrow of the centre dock guide, known once the drag has begun
+    // wxAUI 3.2 has no dock guides: `DoDrop` docks a pane dragged near an edge of the canvas in a new dock on that side (UI-LEFT-3 P3-37)
     ptr(cap, "pointerdown", x0, y0);
     ptr(window, "pointermove", x0 + 20, y0 - 20);
     await sleep(150);
-    const guide = document.querySelector('[data-testid="pcb-pane-guide-right"]');
-    t(!!guide && document.querySelectorAll(".pcb-pane-dock-guide").length === 4, "the centre dock guide's four arrows show while the caption is dragged");
-    t(!!document.querySelector('[data-testid="pcb-pane-drag-ghost"]'), "the pane's window follows the pointer");
-    const [gx, gy] = mid(guide);
+    t(!!document.querySelector('[data-testid="pcb-pane-floating-search"]'), "the pane floats as soon as its caption is dragged (Float()), its window following the pointer");
+    const c0 = canvas();
+    const [gx, gy] = [c0.right - 12, c0.top + c0.height / 2];
     for (let i = 1; i <= 5; i++) { ptr(window, "pointermove", x0 + 20 + ((gx - x0 - 20) * i) / 5, y0 - 20 + ((gy - y0 + 20) * i) / 5); await sleep(30); }
     await sleep(150);
     const hint = document.querySelector('[data-testid="pcb-pane-dock-hint"]');
     const c = canvas();
-    t(hint?.dataset.side === "right" && hint.getBoundingClientRect().right >= c.right - 2, `over the arrow, the hint shows the right of the canvas (${hint?.dataset.side})`);
+    t(hint?.dataset.side === "right" && hint.getBoundingClientRect().right >= c.right - 2, `by the canvas's right edge, the hint shows the right of the canvas (${hint?.dataset.side})`);
     ptr(window, "pointerup", gx, gy);
     await sleep(500);
     t(where("search") === "right" && kept()?.at?.search === "right", `docked on the right (${where("search")})`);
-    t(!document.querySelector(".pcb-pane-dock-guide"), "the guide is gone");
+    t(!document.querySelector('[data-testid="pcb-pane-dock-hint"]'), "the hint is gone");
     // let go away from the guide: a floating window where it was let go
     const cap2 = caption("search");
     const [x1, y1] = [cap2.getBoundingClientRect().left + 20, cap2.getBoundingClientRect().top + 6];
@@ -141,7 +140,7 @@
     await dragFrom(sash, sx, sy, sx - 80, sy);
     const w1 = document.querySelector('[data-testid="pcb-pane-dock-right"]').getBoundingClientRect().width;
     t(Math.abs(w1 - w0 - 80) < 4, `80 px wider (${Math.round(w0)} -> ${Math.round(w1)})`);
-    t(Math.abs((kept()?.size?.right ?? 0) - w1) < 4, `kept (${kept()?.size?.right})`);
+    t(Math.abs((kept()?.depth?.search ?? 0) - w1) < 4, `kept (${kept()?.depth?.search})`);
     await click(moveBtn("search", "bottom"), 500);
     t(where("search") === "bottom", "Search back under the canvas");
   });

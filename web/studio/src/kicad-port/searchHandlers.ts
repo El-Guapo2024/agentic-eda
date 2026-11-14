@@ -456,7 +456,7 @@ export function clickSearchColumn(sort: { col: number | null; ascending: boolean
  * `CopySelectionToClipboard`: the selected rows' cells, tab-separated, a line each, in the columns' own order (`GetItemText( row, col )`, whatever order they are
  * shown in), leaving out a column dragged to no width (`if( GetColumnWidth( col ) <= 0 ) continue;`). `widths` are the columns' widths; none: every column.
  */
-export function searchRowsText(rows: readonly SearchRow[], widths?: readonly number[]): string {
+export function searchRowsText<T extends { cells: readonly string[] }>(rows: readonly T[], widths?: readonly number[]): string {
   return rows.map((r) => r.cells.filter((_, i) => !widths || (widths[i] ?? 1) > 0).join("\t") + "\n").join("");
 }
 
@@ -502,7 +502,11 @@ const SEARCH_CELL_MARGINS = 12;
  * cut. `measure` is the text's width in the list's font.
  */
 export function autosizeSearchColumn(tab: SearchTabId, col: number, rows: readonly SearchRow[], measure: (text: string) => number): number {
-  const heading = SEARCH_TABS.find((t) => t.id === tab)?.columns[col]?.name ?? "";
+  return autosizeListColumn(SEARCH_TABS.find((t) => t.id === tab)?.columns[col]?.name ?? "", col, rows, measure);
+}
+
+/** [`autosizeSearchColumn`] of a column headed `heading`, whatever pane's (the schematic's Search pane shares `SEARCH_PANE_LISTVIEW`). */
+export function autosizeListColumn(heading: string, col: number, rows: readonly { cells: readonly string[] }[], measure: (text: string) => number): number {
   let max = measure(heading) + SEARCH_CELL_MARGINS + 12; // the sort arrow's room on the heading
   for (const r of rows) max = Math.max(max, measure(r.cells[col] ?? "") + SEARCH_CELL_MARGINS);
   return Math.ceil(max);
