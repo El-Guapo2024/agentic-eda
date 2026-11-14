@@ -71,7 +71,7 @@ export async function saveToLibrary(req: { kind: "symbol"; lib: string } | { kin
   return a;
 }
 
-export type RevertAnswer = { ok: true; reverted: string[]; gone: string[]; message: string } | { ok?: undefined; nothing: true; message: string } | { ok?: undefined; nothing?: undefined; error: string };
+export type RevertAnswer = { ok: true; reverted: string[]; gone: string[]; lib_id?: string | null; message: string } | { ok?: undefined; nothing: true; message: string } | { ok?: undefined; nothing?: undefined; error: string };
 
 /**
  * Revert (`RevertSymbol`, `RevertLibrary`, `RevertFootprint`) and the reload of a library changed on disk (`UpdateLibraryBuffer`, `ReloadFootprint`): the server puts

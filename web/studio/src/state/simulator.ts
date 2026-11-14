@@ -31,6 +31,7 @@ import {
   currentTab,
   fromWorkbook,
   measurementRequests,
+  rebuildMeasurementsGrid,
   newFrame,
   newSimTab,
   rebuildSignals,
@@ -323,6 +324,8 @@ export async function applyAnalysis(mode: "new" | "edit", command: string, optio
   }
   applyPlot(tab);
   rebuildSignals(current.frame);
+  // `OnPlotSettingsChanged`
+  rebuildMeasurementsGrid(tab);
   current.frame.modified = true;
   setSimDialog(null);
   await saveSettings(settings);
@@ -373,8 +376,8 @@ let lastRunStopped = false;
 
 /** `SIMULATOR_FRAME::StartSimulation`. `fromTuner`: `onUpdateSim`'s run, the loaded circuit run again with the tuned values -- no FFT or schematic
  *  checks (here the batch run reads the schematic again, without asking). */
-export async function startSimulation(overrides?: Map<string, number>, fromTuner = false): Promise<void> {
-  const run = startSimulationInner(overrides, fromTuner);
+export async function startSimulation(overrides?: Map<string, number>, fromTuner = false, query = false): Promise<void> {
+  const run = startSimulationInner(overrides, fromTuner, query);
   runInProgress = run;
   try {
     await run;
@@ -383,10 +386,13 @@ export async function startSimulation(overrides?: Map<string, number>, fromTuner
   }
 }
 
-async function startSimulationInner(overrides: Map<string, number> | undefined, fromTuner: boolean): Promise<void> {
+/** `query`: the run stands for a question KiCad asks the loaded simulator (`rerunIfFinished`), not a `StartSimulation`, so the measurements grid is not
+ *  built again (`OnPlotSettingsChanged`): a row cleared since stays (UI-LEFT-3 M3-3). */
+async function startSimulationInner(overrides: Map<string, number> | undefined, fromTuner: boolean, query: boolean): Promise<void> {
   const f = current.frame;
   const tab = currentTab(f);
   if (!tab) return;
+  if (!query) rebuildMeasurementsGrid(tab);
   const type = simTypeOf(tab);
   let fftTran: RunRequest["fft_tran"];
   if (type === "FFT") {
@@ -494,7 +500,7 @@ export async function doFourier(signals: string[], fundamental: string): Promise
 
 /** What changed after a run that KiCad asks the loaded simulator for (a measurement, a user-defined signal, a tuner): the run made again with it. */
 export async function rerunIfFinished(): Promise<void> {
-  if (current.frame.finished && !current.frame.running) await startSimulation();
+  if (current.frame.finished && !current.frame.running) await startSimulation(undefined, false, true);
   else emit();
 }
 
@@ -769,6 +775,7 @@ export function toggleOp(which: "voltages" | "currents"): void {
 /** Switch tabs (`onPlotChanged`). */
 export function selectTab(i: number): void {
   current.frame.current = i;
+  rebuildMeasurementsGrid(currentTab(current.frame));
   rebuildSignals(current.frame);
   emit();
 }

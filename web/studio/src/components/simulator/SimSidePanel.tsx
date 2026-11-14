@@ -3,7 +3,7 @@
 // CURSORS_GRID_TRICKS, rebuildMeasurementsGrid, onMeasurementsGridCellChanged, MEASUREMENTS_GRID_TRICKS; eeschema/widgets/tuner_slider.cpp).
 import { useState } from "react";
 import { cssRgb, parseColor } from "../../kicad-port/sim/mathPlot";
-import { addMeasurement, createCursor, currentTab, cursorColumns, cursorRows, deleteCursor, deleteMeasurement, findTrace, setCursor, setCursorX, setMeasurement, setSignalPlotted, setTunerRange, setTunerSlider, setTunerValue, simTypeOf, sliderOf, tunerSteps } from "../../kicad-port/sim/simFrame";
+import { addMeasurement, createCursor, currentTab, cursorColumns, cursorRows, deleteCursor, deleteMeasurement, findTrace, measurementGridRows, setMeasurementFormat, setCursor, setCursorX, setMeasurement, setSignalPlotted, setTunerRange, setTunerSlider, setTunerValue, simTypeOf, sliderOf, tunerSteps } from "../../kicad-port/sim/simFrame";
 import { measurementFor, measurementValue, signalsGrid } from "../../kicad-port/sim/simSignals";
 import { setTraceColor } from "../../kicad-port/sim/simPlotTab";
 import { SpiceValue, formatFromString, formatToString } from "../../kicad-port/sim/spiceValue";
@@ -244,8 +244,9 @@ function MeasurementsGrid() {
   const [menu, setMenu] = useState<Menu>(null);
   const t = simTypeOf(tab);
   if (!tab?.plot) return <div className="sim-section" />;
-  const ms = tab.plot.measurements;
-  // `rebuildMeasurementsGrid`: an empty row to type into for TRAN, AC, DC and SP.
+  // the grid's rows as typed (a cleared row stays empty until the grid is built again, UI-LEFT-3 M3-3); `rebuildMeasurementsGrid`: an empty row to type
+  // into for TRAN, AC, DC and SP
+  const ms = measurementGridRows(tab);
   const typeIn = t === "TRAN" || t === "AC" || t === "DC" || t === "SP";
   const rows = typeIn ? [...ms, { expr: "", format: "" }] : ms;
   return (
@@ -264,7 +265,7 @@ function MeasurementsGrid() {
               const items: NonNullable<Menu>["items"] = [];
               if (row < ms.length) {
                 items.push({ label: "Format Value...", fn: () => setSimDialog({ kind: "format", title: "Value", format: formatFromString(m.format), apply: (fm) => {
-                  m.format = formatToString(fm);
+                  setMeasurementFormat(f, row, formatToString(fm));
                   touch(true);
                 } }) });
                 items.push({ label: "Delete Measurement", fn: () => {
@@ -280,7 +281,7 @@ function MeasurementsGrid() {
                   void rerunIfFinished();
                 }} />
               </td>
-              <td>{row < ms.length ? (f.finished || tab.measured.size > 0 ? measurementValue(tab.measured.get(row), m.format) : "?") : ""}</td>
+              <td>{row < ms.length && m.expr !== "" ? (f.finished || tab.measured.size > 0 ? measurementValue(tab.measured.get(row), m.format) : "?") : ""}</td>
             </tr>
           ))}
         </tbody>

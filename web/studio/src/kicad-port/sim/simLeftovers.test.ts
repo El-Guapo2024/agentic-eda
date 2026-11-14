@@ -93,9 +93,20 @@ test("User-defined Signals offer the plot's vectors and ngspice's functions for 
 test("the probe cursors are KiCad's pictures at their hot spots", () => {
   const svg = xpmToSvg(["  .+", "++  "]);
   assert.equal(svg, '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2" shape-rendering="crispEdges"><rect x="2" y="0" width="1" height="1" fill="#FFFFFF"/><rect x="3" y="0" width="1" height="1" fill="#000000"/><rect x="0" y="1" width="2" height="1" fill="#000000"/></svg>');
-  assert.ok(probeCursorCss("voltage_probe").endsWith('") 1 31, crosshair'));
-  assert.ok(probeCursorCss("current_probe").endsWith('") 4 27, crosshair'));
-  assert.ok(decodeURIComponent(probeCursorCss("voltage_probe")).includes('width="32" height="32"'));
+  // the standard picture and the HiDPI one as an image set, at the standard one's hot spot (UI-LEFT-3 M3-2: `cursors_defs`' pairs, a `wxCursorBundle`)
+  const all = () => true;
+  for (const [kind, x, y] of [["voltage_probe", 1, 31], ["current_probe", 4, 27], ["tune", 1, 30]] as const) {
+    const css = probeCursorCss(kind, all);
+    assert.ok(css.startsWith('image-set(url("data:image/svg+xml,') && css.endsWith(`") 2x) ${x} ${y}, crosshair`), css.slice(-40));
+    const text = decodeURIComponent(css);
+    assert.ok(text.includes('width="32" height="32"') && text.includes('width="64" height="64"'), kind);
+  }
+  // the tune cursor's XPM has '.' black and '+' white
+  assert.ok(decodeURIComponent(probeCursorCss("tune", all)).includes('fill="#000000"'));
+  // a browser that takes only the prefixed image set, or none
+  assert.ok(probeCursorCss("voltage_probe", (v) => v.startsWith("-webkit-")).startsWith("-webkit-image-set("));
+  const plain = probeCursorCss("current_probe", () => false);
+  assert.ok(plain.startsWith('url("data:') && plain.endsWith('") 4 27, crosshair') && !decodeURIComponent(plain).includes('width="64"'));
 });
 
 test("the operating-point overlay takes the project's formats, a voltage range in A made V", () => {

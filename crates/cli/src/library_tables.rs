@@ -479,7 +479,7 @@ fn row_json(kind: TableKind, row: &lt::Row, loaded: Option<&LoadedRow>, vars: &V
         _ => lt::check_row(kind, row, &path)
             .or_else(|| lt::convertible(kind, &row.lib_type).then(|| crate::library_convert::status(kind, &path)).flatten())
             .or_else(|| (kind == TableKind::Symbol && row.lib_type == lt::HTTP_TYPE).then(|| crate::http_lib::status(&path)).flatten())
-            .or_else(|| (kind == TableKind::Symbol && row.lib_type == lt::KICAD_TYPE).then(|| eda_kicad::symbol_library_load_errors(&path)).flatten()),
+            .or_else(|| (kind == TableKind::Symbol && row.lib_type == lt::KICAD_TYPE).then(|| crate::library_verdict::symbol_refusals(&path, false).1).flatten()),
     };
     let status = if error.is_some() { "error" } else if row.is_table() { "table" } else { "ok" };
     let mut v = json!({

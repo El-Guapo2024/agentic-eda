@@ -15,9 +15,16 @@
 //!   * **Whether an item is modified** ([`note_step`], [`is_dirty`]): KiCad's flag per buffer (`SYMBOL_BUFFER::IsModified`, its screen's `IsContentModified()`;
 //!     the Footprint Editor's screen), set by every edit and by Undo and Redo and cleared by Save and Revert. The studio's server keeps it per item from the
 //!     steps it makes, beside "the copy's text differs from the file's" (`crate::library_save_api::modified`), so an item edited and edited back -- by hand or
-//!     by Undo -- stays modified as in KiCad. It lives as long as the server; after a restart only the text comparison is left.
+//!     by Undo -- stays modified as in KiCad.
 //!   * **The symbol as it was made** ([`original`]): a buffer KiCad makes for a new symbol (`LIB_BUFFER::CreateBuffer`: `m_original` is a copy of it) is
 //!     what Revert puts back for a symbol never saved (`SYMBOL_LIBRARY_MANAGER::RevertSymbol`). Kept with the flag, for the same time.
+//!   * **The name a renamed symbol had** ([`original_name`], UI-LEFT-3 L3-1, L3-2): KiCad's buffer keeps its original under the old name through a rename
+//!     (`UpdateSymbolAfterRename` changes `GetSymbol()` only), Revert goes back to it, name and all (`RevertSymbol`: `UpdateSymbolAfterRename( &original,
+//!     aSymbolName, .. )`), and a derived symbol stays derived (its buffer keeps the parent's pointer). The design keeps the names a symbol went by
+//!     (`SymbolLibrarySection::renamed`, undone and redone with the rename); the first of them the library's file holds is the original.
+//!
+//! The flag and the made symbols are kept with the design's history (`.history/library-buffers.json`), so they last as the design's copies and its Undo do --
+//! across a reload of the page and a restart of the server (UI-LEFT-3 L3-4: KiCad's last as long as its frame keeps the buffers).
 
 use crate::library_index::Kind;
 use crate::library_save_api as lsa;
@@ -196,11 +203,13 @@ fn new_footprint_attributes(dir: &Path, name: &str) -> Option<eda_model::ir::Foo
 
 // ------------------------------------------------------------------------------------------------ the modified flag and the originals
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Buffers {
     /// The items edited since they were opened, saved or reverted (`IsContentModified()`), by kind: `(symbol?, Lib:Name)`.
+    #[serde(default)]
     dirty: BTreeSet<(bool, String)>,
     /// The symbols as they were made, for the ones a library's file does not have.
+    #[serde(default)]
     originals: BTreeMap<String, LibrarySymbol>,
 }
 
@@ -209,9 +218,31 @@ fn state() -> &'static Mutex<HashMap<PathBuf, Buffers>> {
     STATE.get_or_init(Default::default)
 }
 
+/// Where the flags and the made symbols of a design are kept: beside its undo history (`board::history_root`), which they belong with (an Undo sets the flag).
+fn buffers_file(dir: &Path) -> PathBuf {
+    dir.join(".history").join("library-buffers.json")
+}
+
+/// The buffers of `dir`, read from [`buffers_file`] the first time this server asks (UI-LEFT-3 L3-4), changed by `f` and written back when `f` changed them.
 fn with_buffers<T>(dir: &Path, f: impl FnOnce(&mut Buffers) -> T) -> T {
     let mut all = state().lock().unwrap_or_else(PoisonError::into_inner);
-    f(all.entry(dir.to_path_buf()).or_default())
+    let b = all.entry(dir.to_path_buf()).or_insert_with(|| std::fs::read_to_string(buffers_file(dir)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default());
+    let before = serde_json::to_string(&*b).unwrap_or_default();
+    let out = f(b);
+    let after = serde_json::to_string(&*b).unwrap_or_default();
+    if after != before {
+        let path = buffers_file(dir);
+        if b.dirty.is_empty() && b.originals.is_empty() {
+            let _ = std::fs::remove_file(&path);
+        } else if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, after).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+    out
 }
 
 /// The two library sections of the design on disk, read without building the model (the design's own reader: its tagged items need it, `arbitrary_precision`).
@@ -316,6 +347,21 @@ pub(crate) fn clear(dir: &Path, kind: Kind, ids: &[String], saved: bool) {
 /// The symbol `lib_id` as it was made, for one its library's file does not hold (`SYMBOL_BUFFER::GetOriginal` of a new buffer).
 pub(crate) fn original(dir: &Path, lib_id: &str) -> Option<LibrarySymbol> {
     with_buffers(dir, |b| b.originals.get(lib_id).cloned())
+}
+
+/// The names the symbol `lib_id` went by, oldest first, then its own (`SymbolLibrarySection::renamed`).
+pub(crate) fn names_of(section: Option<&SymbolLibrarySection>, lib_id: &str) -> Vec<String> {
+    let mut names: Vec<String> = section.and_then(|l| l.renamed.get(lib_id)).cloned().unwrap_or_default();
+    names.push(lib_id.to_string());
+    names
+}
+
+/// The name of `SYMBOL_BUFFER::GetOriginal()` of the design's symbol `lib_id` (UI-LEFT-3 L3-1): the first name it went by that its library's file holds
+/// (`Lib:Name`), or, when the file holds none of them (a symbol never saved), the first name it had (the symbol as it was made, [`original`]). A rename
+/// keeps the original; a Save makes the saved name the file's, so the names before it are no longer held.
+pub(crate) fn original_name(section: Option<&SymbolLibrarySection>, summaries: &[eda_kicad::SymbolSummary], lib_id: &str) -> String {
+    let names = names_of(section, lib_id);
+    names.iter().find(|n| summaries.iter().any(|s| s.name == split(n).1)).unwrap_or(&names[0]).clone()
 }
 
 

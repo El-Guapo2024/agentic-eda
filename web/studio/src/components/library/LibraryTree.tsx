@@ -14,7 +14,7 @@
 // symbol row (`LIB_TREE_NODE::TYPE::LIBRARY`); a pinned library is listed first with a star in front of its name. Whether the tree is shown is the
 // dock layout's (the Libraries column folds to its handle).
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchEntries } from "../../api/libraryChooserClient";
+import { fetchAllEntries, fetchEntries } from "../../api/libraryChooserClient";
 import type { ChooserItem } from "../../kicad-port/libChooser";
 import { availableColumns, cellText, columnsTemplate, columnsWidth, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
 import { closeSelectColumns, openSelectColumns, setLibTreeColumns, useLibTreeColumnWidths, useLibTreeColumns, useSelectColumnsOpen } from "../../state/libTreeColumns";
@@ -80,14 +80,28 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
   const flat = useMemo(() => groups.flatMap((g) => (isOpen(g) ? g.items.map((i) => i.name) : [])), [groups, ui.fold, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const projectOf = useMemo(() => new Map(items.map((i) => [i.name, i.project])), [items]);
 
-  // The columns (`LIB_TREE`'s Item column and the ones Select Columns... shows: Description by default, kicad-port/libTreeColumns.ts); a library's
-  // descriptions and fields are read when its group is open and a column needs them (the chooser's `GET /api/library/entries`, cached).
+  // The columns (`LIB_TREE`'s Item column and the ones Select Columns... shows: Description by default, kicad-port/libTreeColumns.ts); every library's
+  // descriptions and fields come with the tree, as KiCad's adapter is filled with them when the tree is built (`GET /api/library/entries_all`, read by the
+  // server in the background; UI-LEFT-3 L3-5), and a library opened before the server has read it is asked for alone (`GET /api/library/entries`).
   const treeId = kind === "symbol" ? "symbol_editor" : "footprint_editor";
   const shown = useLibTreeColumns(treeId);
   const choosing = useSelectColumnsOpen(treeId);
   const columns = useMemo(() => treeColumns(shown), [shown]);
   const extra = columns.slice(1);
   const [details, setDetails] = useState<ReadonlyMap<string, readonly ChooserItem[]>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    const merge = (libs: ReadonlyMap<string, readonly ChooserItem[]>) =>
+      alive &&
+      setDetails((prev) => {
+        const fresh = [...libs].filter(([lib]) => !prev.has(lib));
+        return fresh.length === 0 ? prev : new Map([...prev, ...fresh]);
+      });
+    fetchAllEntries(kind, merge).then(merge, () => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [kind]);
   const openInstalled = groups.filter((g) => g.installed && isOpen(g)).map((g) => g.lib);
   const openKey = openInstalled.join("\u0001");
   useEffect(() => {

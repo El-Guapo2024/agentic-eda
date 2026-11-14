@@ -19,7 +19,9 @@ import {
   scoreItemTerms,
   scoreItems,
   searchTerm,
+  sourceLibrary,
   splitId,
+  subLibraryGroups,
   unitKey,
   urlIn,
   visibleRows,
@@ -305,4 +307,23 @@ test("the documentation link of a footprint is the address in its description, w
   assert.equal(urlIn("See https://example.com/a.pdf."), "https://example.com/a.pdf");
   assert.equal(urlIn("(Body style from: https://this.url/part.pdf)"), "https://this.url/part.pdf");
   assert.equal(urlIn("no link here"), null);
+});
+
+test("an HTTP library's categories are libraries of their own, \"Nickname - Category\", described as KiCad's adapter describes them (UI-LEFT-3 L3-3)", () => {
+  const w5 = { name: "W5", description: "Parts server", sublibraries: [{ name: "Resistors", description: "Fixed resistors" }, { name: "Caps", description: "" }] };
+  assert.deepEqual(subLibraryGroups(w5), [
+    { name: "W5 - Resistors", description: "Parts server (Fixed resistors)", category: "Resistors" },
+    { name: "W5 - Caps", description: "Parts server (W5)", category: "Caps" },
+  ]);
+  assert.deepEqual(subLibraryGroups({ ...w5, description: "" })[0]!.description, "Fixed resistors", "no library description: the category's");
+  assert.equal(sourceLibrary([w5], "W5 - Caps"), "W5");
+  assert.equal(sourceLibrary([w5], "Device"), "Device");
+  const r10k = { ...sym("W5:RC0603 10k", "10k"), sublib: "Resistors" };
+  const c1u = { ...sym("W5:C 1u", "1u"), sublib: "Caps" };
+  let groups = composeGroups(input({ installed: [w5, { name: "Device" }] }));
+  assert.deepEqual(groups.map((g) => [g.lib, g.lazy, g.source ?? ""]), [["Device", true, ""], ["W5 - Caps", true, "W5"], ["W5 - Resistors", true, "W5"]]);
+  groups = composeGroups(input({ installed: [w5], loaded: new Map([["W5", [r10k, c1u]]]) }));
+  assert.deepEqual(groups.map((g) => [g.lib, g.items.map((i) => i.id)]), [["W5 - Caps", ["W5:C 1u"]], ["W5 - Resistors", ["W5:RC0603 10k"]]], "each part under its category, its id the library's");
+  groups = composeGroups(input({ installed: [w5], query: "10k", results: [{ name: "W5", score: 30, items: [{ ...r10k, score: 30 }] }] }));
+  assert.deepEqual(groups.map((g) => g.lib), ["W5 - Resistors"], "a search lists the categories with a match");
 });

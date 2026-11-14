@@ -4453,6 +4453,13 @@ pub struct SymbolLibrarySection {
     /// name has been changed"). A name the library holds again (a copy in `symbols`) is not here. Sorted. Additive: absent reads as none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deleted: Vec<String>,
+    /// The names a renamed symbol of a library of the tables went by before, oldest first, by its present `lib_id` (UI-LEFT-3 L3-1): what KiCad's buffer
+    /// keeps as its original (`SYMBOL_BUFFER::GetOriginal`, whose name `RevertSymbol` goes back to with `UpdateSymbolAfterRename( &original, .. )`, and which
+    /// `LIB_BUFFER::SaveBuffer` takes out of the file). The first of them (or the present name) the library's file holds is the one Revert goes back to and
+    /// Save derives from (`crates/cli/src/library_buffer.rs`). A Put, a Forget or a Delete of the symbol ends its entry (a new buffer). Additive: absent
+    /// reads as none.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub renamed: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl SymbolLibrarySection {

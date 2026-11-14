@@ -347,6 +347,10 @@ fn libraries_json<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
             if kind == Kind::Symbol && src.lib_path(kind, &l.name).is_ok_and(|p| p.is_dir()) {
                 v["unpacked"] = json!(true);
             }
+            // an HTTP library's categories, which the Symbol Chooser lists as libraries of their own (`SupportsSubLibraries`, UI-LEFT-3 L3-3)
+            if let Some(subs) = (kind == Kind::Symbol).then(|| src.lib_path(kind, &l.name).ok().and_then(|p| crate::http_lib::sub_libraries(&p))).flatten() {
+                v["sublibraries"] = json!(subs.categories.iter().map(|(n, d)| json!({ "name": n, "description": d })).collect::<Vec<_>>());
+            }
             v
         }).collect::<Vec<_>>(),
     })
@@ -363,28 +367,32 @@ pub(crate) fn items_in_for_tests(kind: Kind, src: &dyn LibSource, lib: &str) -> 
     items_in(kind, src, lib).map(|n| n.as_ref().clone())
 }
 
-/// `GET /api/library/items?kind=...&lib=Name`: `{"lib", "names": [..]}` -- the bare item names of one library, or `{"error"}`.
+/// The item names of library `lib` the trees list, and the library's load error: [`items_in`]'s, less what the readers refuse -- this crate's and KiCad's
+/// parser's (`crate::library_verdict`, UI-LEFT-2 LL6, UI-LEFT-3 L3-6): `FP_CACHE::Load` leaves a footprint file that does not parse out of the library and
+/// says why ("Unable to read file '%s'"); a symbol library loaded with errors says so (KiCad 25ec2335's `LIB_STATUS::error`) and lists the symbols that
+/// loaded. `ask`: kicad-cli is asked now when the library's verdict is not known yet (else what is known).
+pub(crate) fn listed<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, ask: bool) -> Result<(Vec<String>, Option<String>), String> {
+    let names = items_in(kind, src, lib)?;
+    let Ok(path) = src.lib_path(kind, lib) else { return Ok((names.as_ref().clone(), None)) };
+    let (refused, error) = match kind {
+        Kind::Symbol => crate::library_verdict::symbol_refusals(&path, ask),
+        Kind::Footprint => {
+            let (refused, messages) = crate::library_verdict::footprint_refusals(&path, ask);
+            let error = (!messages.is_empty()).then(|| messages.join("\n\n"));
+            (refused, error)
+        }
+    };
+    Ok((names.iter().filter(|n| !refused.contains(n)).cloned().collect(), error))
+}
+
+/// `GET /api/library/items?kind=...&lib=Name`: `{"lib", "names": [..], "load_error"?}` -- the bare item names of one library ([`listed`]), or `{"error"}`.
 pub fn items(dir: &Path, kind: Kind, lib: &str) -> Value {
     let libs = crate::library_tables::libs(dir, kind);
-    match items_in(kind, &*libs, lib) {
-        Ok(names) => {
-            let mut v = json!({ "lib": lib, "names": names.as_slice() });
-            // a folder library that loaded with errors: its tree row says so (KiCad 25ec2335's `LIB_STATUS::error`)
-            if kind == Kind::Symbol {
-                if let Some(e) = libs.lib_path(kind, lib).ok().and_then(|p| eda_kicad::symbol_library_load_errors(&p)) {
-                    v["load_error"] = json!(e);
-                }
-            }
-            // `FP_CACHE::Load`: a footprint file the reader refuses is not in the library, and the library says why ("Unable to read file '%s'", UI-LEFT-2 LL6;
-            // the tree opening one library only: the search index keeps the scan's names)
-            if kind == Kind::Footprint {
-                if let Ok(p) = libs.lib_path(kind, lib) {
-                    let (refused, messages) = eda_kicad::library_save::footprint_library_refusals(&p);
-                    if !refused.is_empty() {
-                        v["names"] = json!(names.iter().filter(|n| !refused.contains(n)).collect::<Vec<_>>());
-                        v["load_error"] = json!(messages.join("\n\n"));
-                    }
-                }
+    match listed(kind, &*libs, lib, true) {
+        Ok((names, error)) => {
+            let mut v = json!({ "lib": lib, "names": names });
+            if let Some(e) = error {
+                v["load_error"] = json!(e);
             }
             v
         }
@@ -406,6 +414,7 @@ fn all_builds() -> &'static Mutex<HashMap<(Kind, String), AllBuild>> {
 fn build_all<S: LibSource + ?Sized>(kind: Kind, src: &S) -> BTreeMap<String, Arc<Vec<String>>> {
     let mut all = BTreeMap::new();
     for lib in libraries_in(kind, src).iter() {
+        // what the trees' search finds, less what KiCad's parser refuses as far as that is known when the answer is given (`all_of`, UI-LEFT-3 L3-6)
         if let Ok(names) = items_in(kind, src, &lib.name) {
             all.insert(lib.name.clone(), names);
         }
@@ -427,7 +436,17 @@ fn all_of(kind: Kind, src: &dyn LibSource) -> Value {
         Some(AllBuild::Done(all)) => {
             let all = all.clone();
             drop(builds);
-            json!({ "status": "ready", "libraries": all.iter().map(|(lib, names)| (lib.clone(), json!(names.as_slice()))).collect::<serde_json::Map<_, _>>() })
+            let refused = |lib: &str| -> Vec<String> {
+                let Ok(path) = src.lib_path(kind, lib) else { return Vec::new() };
+                match kind {
+                    Kind::Footprint => crate::library_verdict::kicad_refused(kind, &path, false).iter().filter_map(|f| f.file_stem().map(|s| s.to_string_lossy().into_owned())).collect(),
+                    Kind::Symbol => crate::library_verdict::symbol_refusals(&path, false).0,
+                }
+            };
+            json!({ "status": "ready", "libraries": all.iter().map(|(lib, names)| {
+                let gone = refused(lib);
+                (lib.clone(), json!(names.iter().filter(|n| !gone.contains(n)).collect::<Vec<_>>()))
+            }).collect::<serde_json::Map<_, _>>() })
         }
         Some(AllBuild::Running) => json!({ "status": "pending" }),
         None => {

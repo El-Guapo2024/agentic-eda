@@ -389,10 +389,25 @@ function required(...vals: string[]): { error: string } | null {
   return null;
 }
 
-function positiveInt(v: string): { error: string } | null {
-  const n = Number(v);
-  if (v.trim() === "" || !Number.isInteger(n) || n < 1) return { error: `'${v}' is not a valid number of points.` };
-  return null;
+/**
+ * The points fields' `wxIntegerValidator<int>` (`m_posIntValidator`, `SetMin( 1 )`) as wxWidgets 3.2 -- the library KiCad links on this box,
+ * libwx_gtk3u_core-3.2.so.0 -- has it (UI-LEFT-3 M3-3): `wxNumValidatorBase::OnChar` takes a typed character only when `wxIntegerValidatorBase::IsCharOk`
+ * does (a digit; a minus sign only for a validator whose minimum is below 0, which this one's is not) and rings the bell otherwise;
+ * `OnKillFocus` puts the text back as `NormalizeString` reads it (the number it parses as, else nothing). `Validate` is the header's `return true`: the
+ * library has no `DoValidateNumber` and no message, so OK takes the field as it is (`TransferDataFromWindow` writes `GetValue()` into the command).
+ */
+export function integerCharOk(ch: string, min = 1): boolean {
+  if (ch === "-") return min < 0;
+  return ch.length === 1 && ch >= "0" && ch <= "9";
+}
+
+/** `wxNumValidator::NormalizeString` of an integer validator: the parsed number's text ("007" -> "7"), nothing for a text that is no integer. */
+export function normalizeInteger(text: string): string {
+  const t = text.trim();
+  if (!/^[-+]?[0-9]+$/.test(t)) return "";
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n > 2147483647 || n < -2147483648) return "";
+  return String(n);
 }
 
 /** `DIALOG_SIM_COMMAND::TransferDataFromWindow`: the command the page makes, or KiCad's message for what is wrong with it. `previous` is the
@@ -402,13 +417,13 @@ export function buildCommand(f: CommandFields, itemName: ItemNames, previous = "
   let cmd: string;
   switch (f.page) {
     case "AC": {
-      const e = positiveInt(f.acPoints) ?? required(f.acStart, f.acStop);
+      const e = required(f.acStart, f.acStop);
       if (e) return e;
       cmd = `.ac ${f.acScale} ${f.acPoints} ${s(f.acStart)} ${s(f.acStop)}`;
       break;
     }
     case "SP": {
-      const e = positiveInt(f.spPoints) ?? required(f.spStart, f.spStop);
+      const e = required(f.spStart, f.spStop);
       if (e) return e;
       // `m_spDoNoise ? "1" : ""` tests the check box's pointer, never null: KiCad always writes the 1
       cmd = `.sp ${f.spScale} ${f.spPoints} ${s(f.spStart)} ${s(f.spStop)} 1`;

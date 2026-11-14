@@ -14,6 +14,7 @@ import {
   keyOfItem,
   moveSelection,
   parseQuery,
+  sourceLibrary,
   splitId,
   visibleRows,
   type ChooserGroup,
@@ -228,7 +229,8 @@ export function useChooser(o: ChooserOptions): Chooser {
   const installedNames = useMemo(() => new Set(installed.map((l) => l.name)), [installed]);
   useEffect(() => {
     if (!active || searching) return;
-    for (const lib of openGroups) {
+    // a sub-library's group ("Nickname - Category") loads its library (UI-LEFT-3 L3-3)
+    for (const lib of new Set([...openGroups].map((g) => sourceLibrary(installed, g)))) {
       if (!installedNames.has(lib) || loaded.has(lib) || loading.has(lib)) continue;
       setLoading((prev) => new Set(prev).add(lib));
       fetchEntries(kind, lib, o.filter)

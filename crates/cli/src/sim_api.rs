@@ -399,6 +399,22 @@ mod tests {
     /// tenth of a volt from a divider of its 12 V supply, and an RC charging from the supply beside it.
     const OPAMP: &str = "parts:\n  - { reference: V1, value: \"12\", symbol: \"Simulation_SPICE:VDC\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - reference: U1\n    value: OPAMP\n    symbol: \"Simulation_SPICE:OPAMP\"\n    pins: [{ number: \"1\", kind: signal }, { number: \"2\", kind: signal }, { number: \"3\", kind: power }, { number: \"4\", kind: power }, { number: \"5\", kind: signal }]\n  - { reference: R1, value: 10k, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: R2, value: 100k, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: R3, value: 119k, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: R4, value: 1k, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: R5, value: 1k, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: C1, value: 1u, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\nnets:\n  - { name: VCC, pins: [V1.1, U1.3, R3.1, R5.1] }\n  - { name: GND, pins: [V1.2, U1.4, R4.2, R1.2, C1.2] }\n  - { name: IN, pins: [R3.2, R4.1, U1.1] }\n  - { name: FB, pins: [U1.2, R2.1, R1.1] }\n  - { name: OUT, pins: [U1.5, R2.2] }\n  - { name: RC, pins: [R5.2, C1.1] }\n";
 
+    /// UI-LEFT-3 M3-1: the K device's inductors are read from the design, the schematic in memory (no kicad-cli): every two-pin "L" symbol with a Value
+    /// (`InferSimModel`), a `Sim.Device` "L", not one whose Value's separators cannot be read, not a symbol excluded from the simulation; `StrNumCmp` order.
+    #[test]
+    fn the_k_devices_inductors_come_from_the_design() {
+        let yaml = "parts:\n  - { reference: L10, value: 1m, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: L2, value: 10u, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: L3, value: \"1,2,3\", package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: L4, value: 1u, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: R1, value: 1k, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\n  - { reference: X1, value: coil, package: \"0603\", pins: [{ number: \"1\", kind: passive }, { number: \"2\", kind: passive }] }\nnets:\n  - { name: A, pins: [L10.1, L2.1, L3.1, L4.1, R1.1, X1.1] }\n  - { name: B, pins: [L10.2, L2.2, L3.2, L4.2, R1.2, X1.2] }\n";
+        let b = board("inductors", yaml);
+        let got = |b: &Path| crate::sim_model_api::inductors_route(b)["inductors"].clone();
+        assert_eq!(got(&b), json!(["L2", "L4", "L10"]), "L3's value has no number KiCad reads");
+        // a Sim.Device of "L" makes any symbol one; excluded from the simulation, none
+        let edit = eda_ops::fields_table::FieldEdit { id: "X1".into(), field: "Sim.Device".into(), value: "L".into() };
+        crate::board::step(&b, eda_ops::Cmd::SetSymbolFields { edits: vec![edit], add_fields: vec!["Sim.Device".into()], rename_fields: vec![], remove_fields: vec![] }, false, "ui").unwrap();
+        crate::board::step(&b, eda_ops::Cmd::SetSymbolAttrs { ids: vec!["L4".into()], dnp: None, exclude_from_bom: None, exclude_from_board: None, exclude_from_sim: Some(true) }, false, "ui").unwrap();
+        assert_eq!(got(&b), json!(["L2", "L10", "X1"]));
+        let _ = std::fs::remove_dir_all(b.parent().unwrap());
+    }
+
     fn slow() -> bool {
         if std::env::var_os("EDA_SLOW_TESTS").is_none() {
             eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");

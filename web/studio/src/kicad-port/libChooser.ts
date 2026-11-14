@@ -319,6 +319,8 @@ export interface ChooserItem {
   score?: number;
   /** A symbol's chooser fields by name (`LIB_TREE_NODE::m_Fields`, `LIB_SYMBOL::GetChooserFields`): what the tree's extra columns show (kicad-port/libTreeColumns.ts). */
   fields?: Readonly<Record<string, string>>;
+  /** An HTTP library's part: the category it is listed under (its `LIB_ID`'s sub-library name, UI-LEFT-3 L3-3). */
+  sublib?: string;
 }
 
 export type ChooserKind = "symbol" | "footprint";
@@ -389,6 +391,8 @@ export interface ChooserGroup {
   count?: number;
   /** Its items are not loaded yet (an installed library nobody opened): the row can be opened to load them. */
   lazy: boolean;
+  /** A sub-library's group ("Nickname - Category"): the library its items are loaded from. */
+  source?: string;
   /** The best score of its items, 0 when there was no search. */
   score: number;
 }
@@ -411,6 +415,33 @@ export function orderGroups(groups: readonly ChooserGroup[], searching: boolean)
   });
 }
 
+/** An installed library as the chooser lists it: an HTTP library with its categories (`sublibraries`). */
+export interface InstalledForChooser {
+  name: string;
+  description?: string;
+  count?: number;
+  sublibraries?: readonly { name: string; description: string }[];
+}
+
+/**
+ * `SYMBOL_TREE_MODEL_ADAPTER::AddLibraries` for a library that `SupportsSubLibraries` (an HTTP library, UI-LEFT-3 L3-3): a library node per sub-library, named
+ * "Nickname - Category", described by the category's description -- "Library description (category description)" when the library has one, the nickname in
+ * place of an empty category description -- holding the items whose sub-library it is.
+ */
+export function subLibraryGroups(lib: InstalledForChooser): { name: string; description: string; category: string }[] {
+  return (lib.sublibraries ?? []).map((s) => {
+    const name = lib.name === "" ? lib.name : `${lib.name} - ${s.name}`;
+    const description = lib.description ? `${lib.description} (${s.description === "" ? lib.name : s.description})` : s.description;
+    return { name, description, category: s.name };
+  });
+}
+
+/** The library a group's items are loaded from: a sub-library's own library, else the group's. */
+export function sourceLibrary(installed: readonly InstalledForChooser[], group: string): string {
+  for (const l of installed) for (const s of subLibraryGroups(l)) if (s.name === group) return l.name;
+  return group;
+}
+
 export interface ComposeInput {
   kind: ChooserKind;
   query: string;
@@ -423,7 +454,7 @@ export interface ComposeInput {
   /** An extra pseudo-library at the top (Place Footprint: the unplaced parts). */
   extra?: { label: string; items: readonly ChooserItem[] };
   /** The installed libraries; `lazy` until their items are loaded. */
-  installed: readonly { name: string; description?: string; count?: number }[];
+  installed: readonly InstalledForChooser[];
   /** The items of the installed libraries opened so far (no search). */
   loaded: ReadonlyMap<string, readonly ChooserItem[]>;
   /** The server's answer to the search: the libraries with a match and their best items. Null while there is no search. */
@@ -465,15 +496,31 @@ export function composeGroups(input: ComposeInput): ChooserGroup[] {
   }
 
   const taken = new Set(groups.map((g) => g.lib));
+  const installedByName = new Map(input.installed.map((l) => [l.name, l]));
   if (searching) {
     for (const r of input.results ?? []) {
       if (taken.has(r.name) || r.items.length === 0) continue;
+      const lib = installedByName.get(r.name);
+      if (lib?.sublibraries?.length) {
+        for (const s of subLibraryGroups(lib)) {
+          const items = r.items.filter((i) => i.sublib === s.category);
+          if (items.length > 0) groups.push({ lib: s.name, description: s.description, pinned: input.pinned.has(s.name), items, lazy: false, score: Math.max(0, ...items.map((i) => i.score ?? 0)), source: lib.name });
+        }
+        continue;
+      }
       groups.push({ lib: r.name, description: r.description, pinned: input.pinned.has(r.name), items: [...r.items], lazy: false, score: r.score });
     }
   } else {
     for (const lib of input.installed) {
       if (taken.has(lib.name)) continue;
       const items = input.loaded.get(lib.name);
+      if (lib.sublibraries?.length) {
+        for (const s of subLibraryGroups(lib)) {
+          const mine = items?.filter((i) => i.sublib === s.category);
+          groups.push({ lib: s.name, description: s.description, pinned: input.pinned.has(s.name), items: mine ?? [], count: mine?.length, lazy: !mine, score: 0, source: lib.name });
+        }
+        continue;
+      }
       groups.push({ lib: lib.name, description: lib.description, pinned: input.pinned.has(lib.name), items: items ? [...items] : [], count: items ? items.length : lib.count, lazy: !items, score: 0 });
     }
   }

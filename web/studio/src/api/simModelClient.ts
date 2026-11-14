@@ -46,6 +46,15 @@ export function fetchSimLibrary(path: string): Promise<SimLibraryReply> {
   return post("/api/sim/model/library", { path });
 }
 
+/** GET /api/sim/model/inductors: the K device's l1 / l2 choices, the circuit's inductors read from the design (the schematic in memory, UI-LEFT-3 M3-1). */
+export async function fetchSimInductors(): Promise<string[]> {
+  const r = await fetch("/api/sim/model/inductors", { cache: "no-store" });
+  if (!r.ok) throw new Error(`/api/sim/model/inductors: HTTP ${r.status}`);
+  const j = (await r.json()) as { ok: boolean; inductors?: string[]; message?: string };
+  if (!j.ok) throw new Error(j.message ?? "no inductors");
+  return j.inductors ?? [];
+}
+
 /** GET /api/sim/model/files. */
 export async function fetchSimLibraryFiles(): Promise<string[]> {
   const r = await fetch("/api/sim/model/files", { cache: "no-store" });

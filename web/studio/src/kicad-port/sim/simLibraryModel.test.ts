@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { decodeTables, generateParams, SimModelSpiceFallback, SimModelSubckt, spiceItem, type SimModelsJson } from "./simModelBuiltin";
 import { baseModelOf, cardTokens, joinCard, libraryBaseModels, libraryModel, modelCardParams, subcktParams } from "./simLibraryModel";
-import { builtinOk, codeTab, currentBuiltin, editedFieldsMerge, gridText, inductorChoices, openBuiltin, paramGrid } from "./simModelDialog";
+import { builtinOk, codeTab, currentBuiltin, editedFieldsMerge, gridText, openBuiltin, paramGrid } from "./simModelDialog";
 import { gridModelColumn } from "./simModel";
 
 const tables = decodeTables(JSON.parse(readFileSync("src/kicad/sim_models.json", "utf8")) as SimModelsJson);
@@ -93,12 +93,8 @@ test("the grid's arithmetic (SIM_STRING_PROPERTY, NUMERIC_EVALUATOR in SI mode):
 });
 
 test("the K device's l1 and l2 are a choice of the circuit's inductors, none selected (newParamProperty, SIM_ENUM_PROPERTY)", () => {
-  const inductors = inductorChoices([
-    { ref: "L10", sim_device: "L" },
-    { ref: "R1", sim_device: "R" },
-    { ref: "L2", sim_device: "L" },
-  ]);
-  assert.deepEqual(inductors, ["L2", "L10"]);
+  // the server's list (`GET /api/sim/model/inductors`, `StrNumCmp` order: crates/cli/src/sim_model_api.rs)
+  const inductors = ["L2", "L10"];
   const o = openBuiltin(tables, "K", { Reference: "K1", Value: "K", "Sim.Device": "K", "Sim.Params": "l1=L2 l2=L10 k=0.9" }, two);
   const m = currentBuiltin(o.builtin);
   const rows = paramGrid(m, inductors).principal;
@@ -160,4 +156,17 @@ test("MM3: before a run User-defined Signals offer libngspice's const plot (SimP
   const { simPlotVectors, CONST_PLOT_VECTORS } = await import("./userSignals");
   assert.deepEqual(simPlotVectors(undefined), [...CONST_PLOT_VECTORS]);
   assert.ok(simPlotVectors(undefined).includes("pi") && simPlotVectors(undefined).includes("boltz"));
+});
+
+test("a .model of a type KiCad does not know is a raw SPICE fall-back with no pins of its own; Sim.Pins gives it its pins (UI-LEFT-3 M3-3)", () => {
+  // `SPICE_MODEL_PARSER::ReadType` gives `TYPE::RAWSPICE`; `SIM_MODEL_SPICE_FALLBACK::GetPinNames` is `SIM_MODEL::Create( RAWSPICE )`'s, which
+  // `SIM_MODEL_RAW_SPICE` does not override: `{}`, so `createPins` adds none ("intentionally nothing is added"), as in KiCad
+  const src = { name: "ZAP", kind: "model" as const, pins: [], code: ".model ZAP zork(a=1)" };
+  const base = baseModelOf(tables, src, () => null);
+  assert.ok(base instanceof SimModelSpiceFallback && base.type === "RAWSPICE");
+  const none = libraryModel(tables, base, two, { Reference: "X1", "Sim.Library": "z.lib", "Sim.Name": "ZAP" });
+  assert.equal(none.getPinCount(), 0);
+  // a Sim.Pins the model does not know: `AssignSymbolPinNumberToModelPin`'s fall-back adds each pin
+  const pinned = libraryModel(tables, base, two, { Reference: "X1", "Sim.Library": "z.lib", "Sim.Name": "ZAP", "Sim.Pins": "1=a 2=b" });
+  assert.deepEqual(pinned.getPins().map((p) => [p.symbolPinNumber, p.modelPinName]), [["1", "a"], ["2", "b"]]);
 });

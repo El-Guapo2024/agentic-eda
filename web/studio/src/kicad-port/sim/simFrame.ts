@@ -63,6 +63,10 @@ export interface SimTab {
   secondPlots: RawPlot[];
   /** The measurements' results of the last run, by row. */
   measured: Map<number, number>;
+  /** The rows of the measurements grid as typed since it was last built (`m_measurementsGrid`, the trailing type-in row aside): a row whose text was cleared
+   *  stays, empty, until the grid is built again from the tab's measurements (`rebuildMeasurementsGrid`: a run, another tab, new settings; UI-LEFT-3 M3-3).
+   *  Absent: the grid is the tab's measurements. */
+  measurementRows?: { expr: string; format: string }[];
 }
 
 export interface Tuner {
@@ -384,46 +388,88 @@ export function setUserSignals(f: SimFrame, signals: Map<number, string>): void 
   f.modified = true;
 }
 
-/** `AddMeasurement` (no duplicate) and `DeleteMeasurement`. */
+/** The rows of the measurements grid (`m_measurementsGrid` less its type-in row): as typed since it was built, else the tab's measurements. */
+export function measurementGridRows(tab: SimTab | null): { expr: string; format: string }[] {
+  if (!tab?.plot) return [];
+  return tab.measurementRows ?? tab.plot.measurements.map((m) => ({ ...m }));
+}
+
+/** `updateMeasurementsFromGrid` and `onMeasurementsGridCellChanged`'s "Always leave a single empty row for type-in": the tab's measurements are the rows with
+ *  text, in the grid's order; empty rows at the end go (the type-in row is drawn after them), an empty row between two others stays. */
+function setGridRows(f: SimFrame, tab: SimTab, rows: { expr: string; format: string }[]): void {
+  while (rows.length > 0 && rows[rows.length - 1]!.expr === "") rows.pop();
+  tab.measurementRows = rows;
+  tab.plot!.measurements = rows.filter((m) => m.expr !== "").map((m) => ({ ...m }));
+  f.modified = true;
+}
+
+/** `AddMeasurement` (no duplicate: any row of the grid with that text): into the first empty row, else a new one. */
 export function addMeasurement(f: SimFrame, expr: string): boolean {
   const tab = currentTab(f);
   if (!tab?.plot) return false;
-  if (tab.plot.measurements.some((m) => m.expr === expr)) return false;
-  tab.plot.measurements.push({ expr, format: measurementCommand(expr, simTypeOf(tab), "").format });
-  f.modified = true;
+  const rows = measurementGridRows(tab);
+  if (rows.some((m) => m.expr === expr)) return false;
+  const m = { expr, format: measurementCommand(expr, simTypeOf(tab), "").format };
+  const empty = rows.findIndex((r) => r.expr === "");
+  if (empty >= 0) rows[empty] = m;
+  else rows.push(m);
+  setGridRows(f, tab, rows);
   return true;
 }
 
+/** `onMeasurementsGridCellChanged` of the Measurement column: the row's text (`UpdateMeasurement`: a row cleared shows no value, and stays as an empty row). */
 export function setMeasurement(f: SimFrame, row: number, expr: string): void {
   const tab = currentTab(f);
   if (!tab?.plot) return;
-  const ms = tab.plot.measurements;
-  if (row >= ms.length) {
-    if (expr !== "") ms.push({ expr, format: measurementCommand(expr, simTypeOf(tab), "").format });
-  } else if (expr === "") ms.splice(row, 1);
-  else ms[row] = { expr, format: measurementCommand(expr, simTypeOf(tab), ms[row]!.format).format };
-  tab.measured.clear();
-  f.modified = true;
+  const rows = measurementGridRows(tab);
+  if (row >= rows.length) {
+    if (expr === "") return;
+    rows.push({ expr, format: measurementCommand(expr, simTypeOf(tab), "").format });
+  } else rows[row] = { expr, format: expr === "" ? rows[row]!.format : measurementCommand(expr, simTypeOf(tab), rows[row]!.format).format };
+  tab.measured.delete(row);
+  setGridRows(f, tab, rows);
 }
 
+/** Format Value... of a row (`SetMeasureFormat`): its format, kept with the tab's measurements. */
+export function setMeasurementFormat(f: SimFrame, row: number, format: string): void {
+  const tab = currentTab(f);
+  const rows = measurementGridRows(tab);
+  if (!tab?.plot || row >= rows.length) return;
+  rows[row] = { ...rows[row]!, format };
+  setGridRows(f, tab, rows);
+}
+
+/** `DeleteMeasurement`: the grid's row goes (not the type-in row). */
 export function deleteMeasurement(f: SimFrame, row: number): void {
   const tab = currentTab(f);
-  if (!tab?.plot || row >= tab.plot.measurements.length) return;
-  tab.plot.measurements.splice(row, 1);
+  const rows = measurementGridRows(tab);
+  if (!tab?.plot || row >= rows.length) return;
+  rows.splice(row, 1);
   tab.measured.clear();
-  f.modified = true;
+  setGridRows(f, tab, rows);
+}
+
+/** `rebuildMeasurementsGrid` (`OnPlotSettingsChanged`, after a run starts, on another tab, on new settings): the grid is the tab's measurements again. */
+export function rebuildMeasurementsGrid(tab: SimTab | null): void {
+  if (tab) tab.measurementRows = undefined;
 }
 
 /** The measurements a run of the tab asks ngspice for (`UpdateMeasurement`, which `OnSimRefresh` calls for every row): the row and what follows
  *  `meas <TYPE> meas_result_<row>`. Each row's format gets its units again (`fmt.UpdateUnits( units ); SetMeasureFormat( aRow, fmt )`), so a
  *  measurement read from a workbook or kept across a change of analysis is written in the units it has now. */
 export function measurementRequests(tab: SimTab): { row: number; text: string }[] {
+  // the grid's rows (`UpdateMeasurement( row )` for every row; an empty one asks nothing); a run that starts the simulation builds the grid again first
+  // (`StartSimulation`: `m_simulator->Run(); m_ui->OnPlotSettingsChanged()`)
   const out: { row: number; text: string }[] = [];
-  tab.plot?.measurements.forEach((m, row) => {
+  const rows = measurementGridRows(tab);
+  rows.forEach((m, row) => {
+    if (m.expr === "") return;
     const c = measurementCommand(m.expr, simTypeOf(tab), m.format);
     m.format = c.format;
     if (c.text) out.push({ row, text: c.text });
   });
+  if (tab.measurementRows) tab.measurementRows = rows;
+  if (tab.plot) tab.plot.measurements = rows.filter((m) => m.expr !== "").map((m) => ({ ...m }));
   return out;
 }
 

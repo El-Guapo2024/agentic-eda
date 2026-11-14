@@ -7,7 +7,9 @@ import {
   buildCommand,
   commandDialogOptions,
   dcUnit,
+  integerCharOk,
   longName,
+  normalizeInteger,
   optionsOf,
   shortName,
   commandToSimType,
@@ -134,6 +136,26 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
       </select>
     </Row>
   );
+  // the points fields' `wxIntegerValidator` (kicad-port/sim/simCommand.ts): a typed character other than a digit is refused, the text normalized when the
+  // field loses the focus; no message at OK (UI-LEFT-3 M3-3)
+  const points = (key: "acPoints" | "spPoints" | "noisePoints", label: string) => (
+    <Row label={label}>
+      <input
+        aria-label={label}
+        value={String(f[key] ?? "")}
+        onBeforeInput={(e) => {
+          const ne = e.nativeEvent as InputEvent & { data?: string | null };
+          // React hands a typed character over as the browser's `textInput` (or `beforeinput`): its `data`
+          if (ne.data && ![...ne.data].every((c) => integerCharOk(c))) e.preventDefault();
+        }}
+        onChange={(e) => set({ [key]: e.target.value } as Partial<CommandFields>)}
+        onBlur={(e) => {
+          const n = normalizeInteger(e.target.value);
+          if (n !== e.target.value) set({ [key]: n } as Partial<CommandFields>);
+        }}
+      />
+    </Row>
+  );
   // `dialog_sim_command_base.cpp`: the label stays "per decade" whatever the scale
   const pointsLabel = (_s: string) => "Number of points per decade:";
 
@@ -141,7 +163,7 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
     AC: (
       <>
         {scale("acScale")}
-        {text("acPoints", pointsLabel(f.acScale))}
+        {points("acPoints", pointsLabel(f.acScale))}
         {text("acStart", "Start frequency:", "Hz")}
         {text("acStop", "Stop frequency:", "Hz")}
       </>
@@ -149,7 +171,7 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
     SP: (
       <>
         {scale("spScale")}
-        {text("spPoints", pointsLabel(f.spScale))}
+        {points("spPoints", pointsLabel(f.spScale))}
         {text("spStart", "Start frequency:", "Hz")}
         {text("spStop", "Stop frequency:", "Hz")}
         <label className="sim-check">
@@ -239,7 +261,7 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
         <div className="sim-hint">(optional; default GND)</div>
         {choice("noiseSrc", "Noise source:", vSources)}
         {scale("noiseScale")}
-        {text("noisePoints", pointsLabel(f.noiseScale))}
+        {points("noisePoints", pointsLabel(f.noiseScale))}
         {text("noiseStart", "Start frequency:", "Hz")}
         {text("noiseStop", "Stop frequency:", "Hz")}
         <label className="sim-check">

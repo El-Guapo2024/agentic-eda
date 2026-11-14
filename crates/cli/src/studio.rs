@@ -854,13 +854,15 @@ fn handle(
         }
         // The Symbol and Footprint Choosers (`crate::library_search`): one library's items with their descriptions, the search over every library's
         // names, descriptions and keywords (best first, capped), and the drawing of the one item selected. The project's own symbols come apart.
-        ("GET", "/api/library/entries" | "/api/library/search" | "/api/library/details") => {
+        ("GET", "/api/library/entries" | "/api/library/search" | "/api/library/details" | "/api/library/entries_all") => {
             let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
                 None => json!({ "error": "kind is footprint or symbol" }),
                 Some(kind) => {
                     let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power")).with_columns(&query_value(target, "cols"));
                     match path {
                         "/api/library/entries" => crate::library_search::entries(dir, kind, &query_value(target, "lib"), &filter),
+                        // every library's items with their descriptions and fields, for the library editors' trees (UI-LEFT-3 L3-5)
+                        "/api/library/entries_all" => crate::library_search::entries_all(dir, kind),
                         "/api/library/search" => {
                             let limit = query_value(target, "limit").parse::<usize>().ok().filter(|&n| n > 0).map_or(crate::library_search::SEARCH_LIMIT, |n| n.min(2000));
                             crate::library_search::search(dir, kind, &query_value(target, "q"), &filter, limit)
@@ -1261,6 +1263,7 @@ fn handle(
         ("POST", "/api/sim/model/symbol") => respond(stream, "200 OK", "application/json", crate::sim_model_api::symbol_route(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sim/model/library") => respond(stream, "200 OK", "application/json", crate::sim_model_api::library_route(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sim/model/files") => respond(stream, "200 OK", "application/json", crate::sim_model_api::files_route(dir).to_string().as_bytes()),
+        ("GET", "/api/sim/model/inductors") => respond(stream, "200 OK", "application/json", crate::sim_model_api::inductors_route(dir).to_string().as_bytes()),
         // The schematic control actions' outputs (`crate::sch_export_api`): the Fields Table's BOM file, a legacy BOM generator's output and one symbol's SVG.
         // kicad-cli's, so off the loop like the plots above.
         ("POST", "/api/sch/bom") => offload(stream, lane, dir, job, path, &body, sch_export_api::bom),

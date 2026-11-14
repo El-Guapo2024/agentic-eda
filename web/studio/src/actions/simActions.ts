@@ -243,6 +243,8 @@ export function registerSimActions(m: ActionMap, ctx: SimActionContext): void {
     picker.start({
       kind: "point",
       prompt: "Tune: a symbol whose value to tune",
+      // `picker->SetCursor( KICURSOR::TUNE )` (UI-LEFT-3 M3-2)
+      cursorCss: probeCursorCss("tune"),
       onPoint: (at) => {
         const sch = api.getState().schematic;
         if (!sch) return true;
