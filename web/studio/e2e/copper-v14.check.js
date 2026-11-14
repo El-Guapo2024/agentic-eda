@@ -10,7 +10,7 @@
 //                  (`ROUTER::movePlacing`'s `Clearance( item, nullptr )` of each line of `m_placer->Traces()`), as a single route's head is; the reply carries
 //                  `clearance_a`, `clearance_b`;
 //   via info bar   Draw Via where it would break another net's clearance: "Via location violates DRC." stays on screen in the info bar over the canvas (KiCad's
-//                  `WX_INFOBAR`, no timer), with a close button that takes it away; refused again, a via put down clean elsewhere dismisses it (`infobar->Dismiss()`);
+//                  `WX_INFOBAR`, `ShowInfoBarError`'s 8 s), with a close button that takes it away; refused again, a via put down clean elsewhere dismisses it (`infobar->Dismiss()`);
 //   zone teardrop  a pad and its track inside a filled pour of their net get no teardrop from Add All Teardrops while "Prefer zone connection" is on (KiCad's
 //                  default, `areItemsInSameZone` on kicad-cli's fills); off, the pad gets its teardrop.
 // It answers through `window.__copperV14Check`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
@@ -145,7 +145,7 @@
     t(!!bar && !!col && Math.abs(bar.getBoundingClientRect().top - col.getBoundingClientRect().top) < 2, "a bar over the canvas, at its top");
     t(!!toast()?.querySelector('[data-testid="pcb-infobar-close"]'), "with a close button, as the info bar has");
     await sleep(7000);
-    t(!!toast(), "it is still there after 7 s (an error toast goes after 6 s)");
+    t(!!toast(), "it is still there after 7 s (`ShowInfoBarError`: 8 s; an error toast goes after 6 s)");
     toast()?.querySelector('[data-testid="pcb-infobar-close"]')?.click();
     await sleep(300);
     t(!toast(), "the close button takes it away");
