@@ -2418,7 +2418,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // every colour they set brightened (`GetColor`: `color.Brightened( m_selectFactor ).WithAlpha( 0.8 )`), as the highlight group is drawn in the overlay.
   if (opts.brightened && opts.brightened.length > 0) {
     const lit = brightenedBoard(fullBoard, opts.brightened);
-    const own: PaintOptions = { ...opts, selection: new Set(), hot: new Set(), movePreview: null, netHighlight: null };
+    // `GetColor` returns the brightened colour before its high-contrast branch, so a brightened item is never dimmed (UI-LEFT-3 P3-24).
+    const own: PaintOptions = { ...opts, selection: new Set(), hot: new Set(), movePreview: null, netHighlight: null, highContrast: false };
     const litUsed = layersInUse(lit.board);
     withFinalColourScope(ctx, memoColours("brightened", brightenedCss), () => {
       for (const gal of order) {
