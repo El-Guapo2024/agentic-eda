@@ -118,6 +118,9 @@ impl Board<'_> {
             }
             dr.locked_ids.sort();
             dr.locked_ids.dedup();
+            // the custom properties are the item's, which keeps its uuid through a new reference (`EDA_ITEM::m_customProperties`)
+            let props = std::mem::take(&mut dr.custom_properties);
+            dr.custom_properties = props.into_iter().map(|(id, p)| (new_of(&id).unwrap_or(id), p)).collect();
             for g in dr.groups.iter_mut() {
                 for m in g.member_ids.iter_mut() {
                     if let Some(n) = new_of(m) {

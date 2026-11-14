@@ -40,6 +40,33 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, meta: &super::
 /// [`export_kicad_pcb`] with the fills of the zones: each zone is written with the rings kicad-cli made of it for as long as the zone is the one it filled (a zone that was
 /// edited since is written unfilled, as KiCad writes a zone it has emptied), nanometre for nanometre and with `(island yes)` where kicad-cli said so.
 pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, meta: &super::ExportMeta, fills: Option<&crate::zone_fills::KicadFills>) -> Result<String, Vec<CheckResult>> {
+    // The items' custom properties (`DrawingsSection::custom_properties`) go into the forms of the uuids the items were written as (`crate::custom_props_io`):
+    // the uuid map is kept for the write when no mapped export keeps it already.
+    let custom = design.drawings.as_ref().map(|d| &d.custom_properties).filter(|c| !c.is_empty());
+    let own_map = custom.is_some() && crate::uuid_map_snapshot().is_none();
+    if own_map {
+        crate::start_uuid_map();
+    }
+    let written = export_kicad_pcb_items(design, model, meta, fills);
+    let map = if own_map { Some(crate::take_uuid_map()) } else { custom.and_then(|_| crate::uuid_map_snapshot()) };
+    let mut out = written?;
+    if let (Some(custom), Some(map)) = (custom, map) {
+        let mut uuid_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for (uuid, id) in map.into_iter().filter(|(_, id)| custom.contains_key(id)) {
+            // the first uuid an id was written as, in the file's order (a track of several segments is never a holder)
+            let at = out.find(&format!("(uuid {})", crate::sexpr_str(&uuid))).unwrap_or(usize::MAX);
+            let keep = uuid_of.get(&id).map(|u| out.find(&format!("(uuid {})", crate::sexpr_str(u))).unwrap_or(usize::MAX) > at).unwrap_or(true);
+            if keep {
+                uuid_of.insert(id, uuid);
+            }
+        }
+        crate::custom_props_io::inject(&mut out, custom, &uuid_of);
+    }
+    Ok(out)
+}
+
+/// [`export_kicad_pcb_with`]'s board text, the custom properties aside.
+fn export_kicad_pcb_items(design: &Design, model: &ConstraintModel, meta: &super::ExportMeta, fills: Option<&crate::zone_fills::KicadFills>) -> Result<String, Vec<CheckResult>> {
     let Some(pl) = &design.placement else {
         return Err(vec![CheckResult::fail("kicad.no_placement", "design", "design has no placement section")]);
     };
@@ -4679,6 +4706,38 @@ mod tests {
     /// A footprint keeps the uuid its board file gave it, so a text that names a footprint by uuid (`${uuid:REFERENCE}`, KiCad's cross-reference) still finds it: re-exported with a
     /// uuid of its own, `issue4257`'s text read `<Unknown reference: ..>`, was longer than the original's and touched the pads beside it. Two footprints that claim one uuid
     /// are not both written with it, and a footprint made here has the uuid derived from its reference as always.
+    /// KiCad 25ec2335's custom properties (`(custom_property "name" "text")`, `EDA_ITEM::m_customProperties`): a footprint's, a pad's and a graphic's are read into
+    /// the design by the items' ids, written back into the same items' forms, and read back the same.
+    #[test]
+    fn custom_properties_are_read_and_written_back_on_their_items() {
+        let board = r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "L:A" (layer "F.Cu") (uuid "00000000-0000-0000-0000-00005e384273") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "a2000000-0000-0000-0000-000000000001") (custom_property "Note" "pin one"))
+    (custom_property "Supplier" "ACME") (custom_property "MPN" "X-1"))
+  (gr_line (start 0 0) (end 5 0) (stroke (width 0.15) (type solid)) (layer "F.SilkS") (uuid "a1000000-0000-0000-0000-000000000001") (custom_property "Why" "a \"line\""))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let props = design.drawings.as_ref().unwrap().custom_properties.clone();
+        let line = design.drawings.as_ref().unwrap().shapes[0].id().to_string();
+        assert_eq!(props["U1"]["Supplier"], "ACME");
+        assert_eq!(props["U1"]["MPN"], "X-1");
+        assert_eq!(props["U1.1"]["Note"], "pin one");
+        assert_eq!(props[&line]["Why"], "a \"line\"");
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("(custom_property ").count(), 4, "each once, none kept twice as an unread token:\n{out}");
+        assert!(out.contains("(custom_property \"Why\" \"a \\\"line\\\"\")"), "{out}");
+        let (again, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(again.drawings.as_ref().unwrap().custom_properties.get("U1"), props.get("U1"));
+        assert_eq!(again.drawings.as_ref().unwrap().custom_properties.get("U1.1"), props.get("U1.1"));
+        assert_eq!(again.drawings.as_ref().unwrap().custom_properties.values().filter(|p| p.contains_key("Why")).count(), 1);
+    }
+
     #[test]
     fn a_footprint_keeps_the_uuid_its_file_gave_it() {
         let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")

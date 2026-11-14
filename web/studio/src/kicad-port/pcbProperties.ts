@@ -29,6 +29,7 @@ import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooLarge, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
 import { PropertyManager, type Choice, type PropValue, type PropertyDef } from "./propertyManager";
+import { customPropertyGroup } from "./pcbCustomProperties";
 import type { BoardBarcode, BoardDrillMap, BoardGridItem, BoardPoint, BoardRefImage, BoardTextBox, BoardViaStitch } from "../api/pcbItemTypes";
 import { barcodeCmd, pointCmd, registerDrillChart, registerExtraItemProperties } from "./pcbItemProperties";
 import { fillOf, SHAPE_FILL_CHOICES } from "./shapeFill";
@@ -2595,7 +2596,10 @@ export function syncFootprintFieldRows(items: readonly PcbItem[]): void {
 export function pcbGrid(board: BoardState, ids: Iterable<string>, units: LengthUnit): GridModel {
   const items = pcbItemsOf(board, ids);
   syncFootprintFieldRows(items);
-  return buildGrid(PCB_PROPERTIES, items, pcbContext(board, units, items.length), pcbFriendlyName);
+  const model = buildGrid(PCB_PROPERTIES, items, pcbContext(board, units, items.length), pcbFriendlyName);
+  // KiCad 25ec2335's "Custom Properties", the group always shown for its add button (kicad-port/pcbCustomProperties.ts)
+  const custom = customPropertyGroup(board, items);
+  return custom ? { ...model, groups: [...model.groups, custom] } : model;
 }
 
 /** The commands an edit of one row sets on the selection, or why it is refused. */

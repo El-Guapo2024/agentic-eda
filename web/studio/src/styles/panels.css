@@ -486,6 +486,21 @@
   border-top: 1px solid var(--chrome-border);
   border-bottom: 1px solid var(--chrome-border);
 }
+/* the "+" of a category that adds a row (`addCategoryButton`: KiCad 25ec2335's "Add Custom Property") */
+.prop-group-button {
+  padding: 0 6px;
+  line-height: 14px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--chrome-border);
+  color: var(--chrome-text);
+  cursor: pointer;
+}
+input.prop-label {
+  min-width: 0;
+  margin: 1px 4px 1px 6px;
+  font: inherit;
+}
 .prop-row {
   display: grid;
   grid-template-columns: 46% 1fr;

@@ -133,6 +133,7 @@ mod poly_holes;
 pub mod zone_priority;
 pub mod autoplace;
 mod zone_unfill;
+mod custom_props;
 mod teardrop_upkeep;
 pub mod rule_editor;
 pub use rule_editor::DrcRuleAction;
@@ -784,6 +785,18 @@ pub enum Cmd {
     /// one Cmd is one `commit.Push( "Lock" / "Unlock" )`. An unknown id
     /// refuses the whole Cmd (nothing partially applied).
     SetLocked { ids: Vec<String>, locked: bool },
+    /// KiCad 25ec2335 `PCB_PROPERTIES_PANEL`'s "Custom Properties" (`EDA_ITEM::SetCustomProperty`, `RemoveCustomProperty`; [`crate::custom_props`]): on every
+    /// item of `ids`, `name` set to `value` ("Add Custom Property" with an empty text, an edit of the row); with no `value`, the property removed ("Remove
+    /// Custom Property"); with `rename_to`, the property renamed on the items that have it, its text kept (the row's label edited,
+    /// `onPropertyLabelEdited`). One undo step ("Add Custom Property", "Remove Custom Property", "Edit Properties"). An unknown id refuses the whole Cmd.
+    SetCustomProperty {
+        ids: Vec<String>,
+        name: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        rename_to: Option<String>,
+    },
     /// `EDIT_TOOL::Swap` (`Alt+S`) for footprints: `parts` is in selection
     /// order and, exactly like source's `for i in 0..n-1: swap(sorted[i],
     /// sorted[i+1])`, the result is a cyclic shift of the whole pose
@@ -2961,6 +2974,7 @@ impl Cmd {
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetCustomProperty { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
             Cmd::SwapItems { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::BooleanShapes { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -3458,6 +3472,8 @@ impl<'a> Board<'a> {
             eda_model::sheet_list::keep_pages(&mut self.design, &before);
         }
         self.tidy_groups(groups_before);
+        // a custom property of an item that is gone goes with it (UI-LEFT-3, `crate::custom_props`)
+        self.tidy_custom_properties();
         self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);
         outline::refresh_if_changed(&mut self.design, self.model, edge_before);
@@ -3565,6 +3581,7 @@ impl<'a> Board<'a> {
             Cmd::SetComponentClasses { settings } => board_setup::set_component_classes(&mut self.design, self.model, settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
+            Cmd::SetCustomProperty { ids, name, value, rename_to } => self.set_custom_property(ids, name, value.as_deref(), rename_to.as_deref()),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
             Cmd::SwapItems { ids, centres } => self.swap_items(ids, centres),
             Cmd::BooleanShapes { operation, ids } => pcb_edit::boolean_shapes(self.drawings_mut(), *operation, ids),
@@ -5568,7 +5585,11 @@ impl<'a> Board<'a> {
     #[allow(clippy::too_many_arguments)]
     fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize], via_kinds: &[(usize, eda_model::via_extra::ViaKind)], track_sources: &[(usize, String)], group: Option<&str>, keep_track_ids: &[usize]) -> Result<(), Vec<CheckResult>> {
         for t in &tracks {
-            self.known_net(&t.net)?;
+            // a track of no net (`""`, KiCad's net 0) is copper too: Create Tracks from Selection leaves its tracks with none (`CONVERT_TOOL::CreateLines`'
+            // `new PCB_TRACK( parent )`, UI-LEFT-3 P3-20)
+            if !t.net.is_empty() {
+                self.known_net(&t.net)?;
+            }
             self.known_layer(&t.layer)?;
             if t.width <= Nm::ZERO || t.pts.len() < 2 {
                 return Err(vec![CheckResult::fail("ops_bad_track", &t.net, "a committed route track needs a positive width and at least two points")]);

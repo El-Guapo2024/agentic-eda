@@ -137,7 +137,11 @@ const board = (): BoardState =>
     job: "idle",
   }) as unknown as BoardState;
 
-const names = (b: BoardState, ids: string[]): Array<[string, string[]]> => pcbGrid(b, ids, "mm").groups.map((g) => [g.caption, g.rows.map((r) => r.name)]);
+// (the "Custom Properties" group every selection ends with is kicad-port/pcbCustomProperties.test.ts's)
+const names = (b: BoardState, ids: string[]): Array<[string, string[]]> =>
+  pcbGrid(b, ids, "mm")
+    .groups.filter((g) => !g.custom)
+    .map((g) => [g.caption, g.rows.map((r) => r.name)]);
 const rowOf = (b: BoardState, ids: string[], name: string) => pcbGrid(b, ids, "mm").groups.flatMap((g) => g.rows).find((r) => r.name === name);
 const edit = (b: BoardState, ids: string[], name: string, value: string | number | boolean, units: "mm" | "mil" | "in" = "mm"): Cmd[] => {
   const plan = pcbEdit(b, ids, name, value, units);

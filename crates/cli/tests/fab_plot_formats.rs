@@ -193,3 +193,77 @@ fn every_pcb_plot_format_drill_format_schematic_plot_and_netlist_writes_its_file
         assert!(files.len() == 1 && ext(&files[0]) == extension, "netlist {format}: {files:?}");
     }
 }
+
+/// UI-LEFT-3 P3-25, P3-26, P3-27 and KiCad 25ec2335's custom properties, through the real kicad-cli:
+/// - a Gerber plot of no layer (the copper layers the board lacks, all skipped) writes the job file alone, "Created Gerber job file '%s'." then "Done.";
+///   unticked, nothing; another format, nothing;
+/// - DXF with "Use KiCad font to plot text" unticked plots its texts as DXF text entities (`PLOT_TEXT_MODE::NATIVE`, the jobset's `use_kicad_font`); ticked,
+///   as strokes;
+/// - Placement Files' "Exclude all footprints with the Exclude from BOM flag set" leaves the flagged footprint out (the jobset's `exclude_bom`), the file named as
+///   the dialog names it;
+/// - a footprint's custom property is in the board file kicad-cli is handed, and `kicad-cli pcb upgrade` keeps it.
+#[test]
+fn a_plot_of_no_layer_the_dxf_font_the_placement_bom_filter_and_custom_properties() {
+    if !slow() {
+        return;
+    }
+    let studio = Studio::start("pcbmisc");
+    // ---- P3-26
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "outputdirectory": "nothing/" } }))["ok"], true);
+    let job = studio.post("/api/fab/plot", json!({ "format": "gerber", "layers": [] }));
+    let files = studio.written("Gerber of no layer", &job);
+    assert!(files.len() == 1 && files[0].ends_with("-job.gbrjob"), "the job file alone: {files:?}");
+    assert_eq!(job["message"].as_str().unwrap_or_default(), format!("Created Gerber job file '{}'.\nDone.", files[0]));
+    let gbrjob: Value = serde_json::from_str(&std::fs::read_to_string(studio.board.join(&files[0])).unwrap()).unwrap();
+    assert!(gbrjob["FilesAttributes"].as_array().is_none_or(|a| a.is_empty()), "a job of no file: {gbrjob}");
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "creategerberjobfile": "no", "outputdirectory": "nothing2/" } }))["ok"], true);
+    let none = studio.post("/api/fab/plot", json!({ "format": "gerber", "layers": [] }));
+    assert_eq!((none["ok"].clone(), none["files"].clone(), none["message"].clone()), (json!(true), json!([]), json!("Done.")), "{none}");
+    assert_eq!(std::fs::read_dir(studio.board.join("nothing2")).map(|d| d.count()).unwrap_or(0), 0, "nothing written (the folder made, `EnsureFileDirectoryExists`)");
+    let svg = studio.post("/api/fab/plot", json!({ "format": "svg", "layers": [] }));
+    assert_eq!((svg["files"].clone(), svg["message"].clone()), (json!([]), json!("Done.")), "{svg}");
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "creategerberjobfile": "yes", "outputdirectory": "" } }))["ok"], true);
+
+    // ---- P3-25
+    let entities = |files: &[String]| -> usize {
+        files.iter().map(|f| std::fs::read_to_string(studio.board.join(f)).unwrap().lines().map(str::trim).filter(|l| *l == "TEXT" || *l == "MTEXT").count()).sum()
+    };
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "dxfpolygonmode": "no", "dxfusepcbnewfont": "no", "outputdirectory": "dxf-native/" } }))["ok"], true);
+    let native = studio.post("/api/fab/plot", json!({ "format": "dxf", "layers": ["F.SilkS"] }));
+    let native_files = studio.written("DXF, DXF font", &native);
+    assert!(native["engine"].as_str().unwrap_or_default().ends_with("(jobset)"), "{native}");
+    assert!(entities(&native_files) > 0, "the texts are DXF text entities: {native_files:?}");
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "dxfusepcbnewfont": "yes", "outputdirectory": "dxf-stroke/" } }))["ok"], true);
+    let stroke = studio.post("/api/fab/plot", json!({ "format": "dxf", "layers": ["F.SilkS"] }));
+    let stroke_files = studio.written("DXF, KiCad font", &stroke);
+    assert_eq!(entities(&stroke_files), 0, "the KiCad font draws strokes: {stroke_files:?}");
+    assert_eq!(studio.cmd(json!({ "op": "set_plot_settings", "options": { "dxfpolygonmode": "yes", "outputdirectory": "" } }))["ok"], true);
+
+    // ---- P3-27
+    assert_eq!(studio.cmd(json!({ "op": "edit_board_footprint", "part": "R1", "attrs": { "kind": "smd", "exclude_from_bom": true } }))["ok"], true);
+    let rows = |reply: &Value| -> String { studio.written("placement", reply).iter().map(|f| std::fs::read_to_string(studio.board.join(f)).unwrap()).collect() };
+    let all = studio.post("/api/fab/pos", json!({ "format": "csv", "side": "both", "units_mm": true, "smd_only": false, "exclude_fp_th": false, "single_file": true, "output_directory": "pos-all/" }));
+    let all_rows = rows(&all);
+    assert!(all_rows.contains("\"R1\"") && all_rows.contains("\"U1\""), "{all_rows}");
+    let kept = studio.post("/api/fab/pos", json!({ "format": "csv", "side": "both", "units_mm": true, "smd_only": false, "exclude_fp_th": false, "exclude_bom": true, "single_file": true, "output_directory": "pos-bom/" }));
+    assert!(kept["engine"].as_str().unwrap_or_default().ends_with("(jobset)"), "{kept}");
+    let kept_files = studio.written("placement, BOM filter", &kept);
+    assert!(kept_files.len() == 1 && kept_files[0].ends_with("-all-pos.csv"), "the dialog's file name: {kept_files:?}");
+    let kept_rows = rows(&kept);
+    assert!(!kept_rows.contains("\"R1\"") && kept_rows.contains("\"U1\""), "R1 is out: {kept_rows}");
+    // the rest of the file is the per-run export's: the same lines but R1's
+    let without: Vec<&str> = all_rows.lines().filter(|l| !l.contains("\"R1\"")).collect();
+    assert_eq!(kept_rows.lines().collect::<Vec<_>>(), without);
+
+    // ---- custom properties
+    assert_eq!(studio.cmd(json!({ "op": "set_custom_property", "ids": ["R1"], "name": "Supplier", "value": "ACME \"best\"" }))["ok"], true);
+    studio.written("a plot after", &studio.post("/api/fab/plot", json!({ "format": "svg", "layers": ["F.Cu"] })));
+    let pcb = std::fs::read_dir(studio.board.join(".kicad")).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e == "kicad_pcb")).expect("the derived board");
+    let copy = studio.root.join("upgraded.kicad_pcb");
+    std::fs::copy(&pcb, &copy).unwrap();
+    let cli = std::env::var("EDA_KICAD_CLI").unwrap_or_else(|_| "kicad-cli".into());
+    let out = Command::new(cli).args(["pcb", "upgrade", "--force", copy.to_str().unwrap()]).output().expect("kicad-cli");
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let upgraded = std::fs::read_to_string(&copy).unwrap();
+    assert!(upgraded.contains("(custom_property \"Supplier\" \"ACME \\\"best\\\"\")"), "kicad-cli read it and wrote it back: {}", upgraded.lines().filter(|l| l.contains("custom")).collect::<Vec<_>>().join("\n"));
+}
