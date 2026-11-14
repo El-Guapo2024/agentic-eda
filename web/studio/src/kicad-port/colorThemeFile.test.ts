@@ -34,7 +34,11 @@ test("wxColour::FromString: rgb() and rgba() in any case, clipped, the alpha rou
   assert.equal(parseColorString("#12345"), null);
   assert.equal(parseColorString("rgba(1, 2, 3, x)"), null);
   assert.equal(parseColorString("rgb (1, 2, 3)"), null); // the bracket must follow "rgb" ("( %d , ..." has no leading blank)
-  assert.equal(parseColorString("red"), null);
+  // a colour name (`wxTheColourDatabase->Find`: any case, GRAY as GREY), opaque; one it has not is nothing
+  assert.equal(parseColorString("red"), "#ff0000ff");
+  assert.equal(parseColorString("Light Grey"), "#c0c0c0ff");
+  assert.equal(parseColorString("dark slate gray"), "#2f4f4fff");
+  assert.equal(parseColorString("rebeccapurple"), null);
   assert.equal(parseColorString(""), null);
 });
 
@@ -118,10 +122,11 @@ test("migrateSchema0to1: a version-0 file's fpedit namespace becomes a theme of 
 });
 
 test("a colour string wxColour cannot read is black; a value that is no string, and a file without a name or version, keep KiCad's defaults", () => {
-  const r = parseThemeFile(JSON.stringify({ board: { grid: "light grey", cursor: 7 }, schematic: { override_item_colors: true } }), "x", PARAMS);
+  const r = parseThemeFile(JSON.stringify({ board: { grid: "no such colour", anchor: "light grey", cursor: 7 }, schematic: { override_item_colors: true } }), "x", PARAMS);
   const t = r.themes[0]!;
   assert.equal(t.name, "KiCad Default");
   assert.equal(t.colors.LAYER_GRID, "#000000ff");
+  assert.equal(t.colors.LAYER_ANCHOR, "#c0c0c0ff", "a wxWidgets colour name is read (UI-LEFT-3 C3-12)");
   assert.equal(t.colors.LAYER_CURSOR, undefined);
   assert.equal(t.overrideSchItemColors, true);
   assert.equal(t.colors.LAYER_DRC_HIGHLIGHTED, undefined, "no meta.version: not migrated");

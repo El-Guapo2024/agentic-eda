@@ -301,6 +301,11 @@ export function PreferencesDialog() {
   const valid = scrollValid && !graphicsProblem && allHandles.every((h) => h.valid !== false);
   const submit = async () => {
     if (!valid) return;
+    // `PAGED_DIALOG::TransferDataFromWindow`: a page's own question first (the schematic Colors page's `validateSave`); a No keeps the dialog up and saves nothing.
+    // Only a page that was built (shown) is asked, as KiCad's lazy pages are.
+    for (const [id, h] of Object.entries(handles) as Array<[PrefsPage, PreferencesPageHandle | undefined]>) {
+      if (h?.confirmOk && shownPages.has(id) && !(await h.confirmOk())) return;
+    }
     // Field Name Templates' `TransferDataFromWindow` (a lazy page: only when it was shown): each name with white space at an end is asked about, then the rows
     // with a name are kept as `AddTemplateFieldName` keeps them (kicad-port/fieldNameTemplates.ts)
     const fieldNames = shownPages.has("sch_field_names")

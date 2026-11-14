@@ -32,6 +32,7 @@ import { saveTextFile } from "../api/libraryClient";
 import { ColorDialog, MessageDialog, NameDialog } from "./panels/appearance/shared";
 import { ContextMenu } from "./canvas/ContextMenu";
 import type { PreferencesPageHandle } from "./preferencesPage";
+import { askConfirm } from "./library/libraryDialogs";
 
 /** What makes one editor's page: its editor, its swatches (they may depend on the override box) and its layers. */
 export interface ThemeColorsPageConfig {
@@ -48,6 +49,8 @@ export interface ThemeColorsPageConfig {
   overrideOption?: boolean;
   /** The page's own `saveCurrentTheme` step before the save (the schematic's no-white rule). */
   saveColors?: (colors: Readonly<Record<string, string>>) => Record<string, string>;
+  /** `validateSave` on OK (the schematic page's): the question to ask about the colours as they would be saved, or null for none. */
+  validateSave?: (colorOf: (key: string) => string | undefined) => string | null;
 }
 
 /** The page's working copy (`m_currentSettings`) of a theme: every colour of the page resolved, and its override flag. */
@@ -324,5 +327,15 @@ export function useThemeColorsPage(config: ThemeColorsPageConfig, open: boolean,
       setEditorThemePreview(editor, null);
     },
     cancel: () => setEditorThemePreview(editor, null),
+    // `saveCurrentTheme( true )` -> `validateSave()`: the colours as the save would write them (the no-white rule first), the theme's own for the layers not on the
+    // page; No keeps the dialog up (`TransferDataFromWindow` returns false). A read-only theme saves nothing, so asks nothing.
+    confirmOk: config.validateSave
+      ? async () => {
+          if (working.readOnly) return true;
+          const colors = config.saveColors ? config.saveColors(working.colors) : working.colors;
+          const message = config.validateSave!((k) => colors[k] ?? themeColor(saved, k, THEME_DATA));
+          return message ? askConfirm({ title: "Warning", message, okLabel: "Yes", cancelLabel: "No" }) : true;
+        }
+      : undefined,
   };
 }

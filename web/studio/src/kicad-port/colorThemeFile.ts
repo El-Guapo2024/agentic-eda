@@ -14,8 +14,8 @@
 //   * Writing (`SaveToFile`): the whole file, every key sorted (`nlohmann::json` is a `std::map`), indented by two (`std::setw( 2 )`), with what was
 //     read and not understood kept (`toSave.update( m_internals )`: the 3D viewer's and the Gerber viewer's colours, keys of older versions).
 //
-// Not read: a colour by its wxWidgets name (`wxTheColourDatabase`: "red", "light grey", ...) -- black, as a string `FromString` rejects is; comments in the
-// file (nlohmann's `ignore_comments`) -- the file is refused. Pure: unit-tested in colorThemeFile.test.ts against a theme KiCad wrote (fixtures/nord.json).
+// A colour by its wxWidgets name (`wxTheColourDatabase`: "red", "light grey", "Dark Gray", ...) is read as `FromString` reads it (UI-LEFT-3 C3-12); a name the
+// database has not is black. Not read: comments in the file (nlohmann's `ignore_comments`) -- the file is refused. Pure: unit-tested in colorThemeFile.test.ts against a theme KiCad wrote (fixtures/nord.json).
 import type { ColorTheme, StoredTheme, ThemeData } from "./colorTheme";
 
 /** `colorsSchemaVersion`. */
@@ -32,9 +32,95 @@ const clip = (v: number) => Math.min(255, Math.max(0, v));
 /** `wxRound`: half away from zero. */
 const wxRound = (v: number) => (v < 0 ? -Math.round(-v) : Math.round(v));
 
+/** `wxColourDatabase::Initialize`'s `wxColourTable` (wxWidgets 3.2.4 src/common/gdicmn.cpp): the colour names `wxTheColourDatabase` knows, upper case. */
+const WX_COLOUR_TABLE: ReadonlyArray<readonly [string, number, number, number]> = [
+  ["AQUAMARINE", 112, 219, 147],
+  ["BLACK", 0, 0, 0],
+  ["BLUE", 0, 0, 255],
+  ["BLUE VIOLET", 159, 95, 159],
+  ["BROWN", 165, 42, 42],
+  ["CADET BLUE", 95, 159, 159],
+  ["CORAL", 255, 127, 0],
+  ["CORNFLOWER BLUE", 66, 66, 111],
+  ["CYAN", 0, 255, 255],
+  ["DARK GREY", 47, 47, 47],
+  ["DARK GREEN", 47, 79, 47],
+  ["DARK OLIVE GREEN", 79, 79, 47],
+  ["DARK ORCHID", 153, 50, 204],
+  ["DARK SLATE BLUE", 107, 35, 142],
+  ["DARK SLATE GREY", 47, 79, 79],
+  ["DARK TURQUOISE", 112, 147, 219],
+  ["DIM GREY", 84, 84, 84],
+  ["FIREBRICK", 142, 35, 35],
+  ["FOREST GREEN", 35, 142, 35],
+  ["GOLD", 204, 127, 50],
+  ["GOLDENROD", 219, 219, 112],
+  ["GREY", 128, 128, 128],
+  ["GREEN", 0, 255, 0],
+  ["GREEN YELLOW", 147, 219, 112],
+  ["INDIAN RED", 79, 47, 47],
+  ["KHAKI", 159, 159, 95],
+  ["LIGHT BLUE", 191, 216, 216],
+  ["LIGHT GREY", 192, 192, 192],
+  ["LIGHT STEEL BLUE", 143, 143, 188],
+  ["LIME GREEN", 50, 204, 50],
+  ["LIGHT MAGENTA", 255, 119, 255],
+  ["MAGENTA", 255, 0, 255],
+  ["MAROON", 142, 35, 107],
+  ["MEDIUM AQUAMARINE", 50, 204, 153],
+  ["MEDIUM GREY", 100, 100, 100],
+  ["MEDIUM BLUE", 50, 50, 204],
+  ["MEDIUM FOREST GREEN", 107, 142, 35],
+  ["MEDIUM GOLDENROD", 234, 234, 173],
+  ["MEDIUM ORCHID", 147, 112, 219],
+  ["MEDIUM SEA GREEN", 66, 111, 66],
+  ["MEDIUM SLATE BLUE", 127, 0, 255],
+  ["MEDIUM SPRING GREEN", 127, 255, 0],
+  ["MEDIUM TURQUOISE", 112, 219, 219],
+  ["MEDIUM VIOLET RED", 219, 112, 147],
+  ["MIDNIGHT BLUE", 47, 47, 79],
+  ["NAVY", 35, 35, 142],
+  ["ORANGE", 204, 50, 50],
+  ["ORANGE RED", 255, 0, 127],
+  ["ORCHID", 219, 112, 219],
+  ["PALE GREEN", 143, 188, 143],
+  ["PINK", 255, 192, 203],
+  ["PLUM", 234, 173, 234],
+  ["PURPLE", 176, 0, 255],
+  ["RED", 255, 0, 0],
+  ["SALMON", 111, 66, 66],
+  ["SEA GREEN", 35, 142, 107],
+  ["SIENNA", 142, 107, 35],
+  ["SKY BLUE", 50, 153, 204],
+  ["SLATE BLUE", 0, 127, 255],
+  ["SPRING GREEN", 0, 255, 127],
+  ["STEEL BLUE", 35, 107, 142],
+  ["TAN", 219, 147, 112],
+  ["THISTLE", 216, 191, 216],
+  ["TURQUOISE", 173, 234, 234],
+  ["VIOLET", 79, 47, 79],
+  ["VIOLET RED", 204, 50, 153],
+  ["WHEAT", 216, 216, 191],
+  ["WHITE", 255, 255, 255],
+  ["YELLOW", 255, 255, 0],
+  ["YELLOW GREEN", 153, 204, 50],
+];
+const WX_COLOURS: ReadonlyMap<string, readonly [number, number, number]> = new Map(WX_COLOUR_TABLE.map(([n, r, g, b]) => [n, [r, g, b] as const]));
+
+/**
+ * `wxColourDatabase::Find`: "make the comparison case insensitive and also match both grey and gray" -- the name upper-cased, then with GRAY written GREY; null for
+ * a name the table has not (`wxNullColour`).
+ */
+export function wxColourByName(name: string): readonly [number, number, number] | null {
+  const upper = name.toUpperCase();
+  const alt = upper.includes("GRAY") ? upper.replaceAll("GRAY", "GREY") : "";
+  return WX_COLOURS.get(upper) ?? (alt ? WX_COLOURS.get(alt) : undefined) ?? null;
+}
+
 /**
  * `wxColourBase::FromString`: "rgb( r , g , b )", "rgba( r , g , b , a )" (any case of "rgb"; the alpha a C-locale double, `wxRound( a * 255 )`), each
- * channel clipped to 0 .. 255; "#rrggbb", "#rrggbbaa", "#rgb", "#rgba". As `#rrggbbaa`, or null when it cannot be read (or is a colour name).
+ * channel clipped to 0 .. 255; "#rrggbb", "#rrggbbaa", "#rgb", "#rgba"; else a colour name of `wxTheColourDatabase` ("red", "Light Grey", "dark gray"), opaque
+ * (`Set( clr.Red(), clr.Green(), clr.Blue() )`; UI-LEFT-3 C3-12). As `#rrggbbaa`, or null when it cannot be read.
  */
 export function parseColorString(text: string): string | null {
   if (text === "") return null;
@@ -72,7 +158,9 @@ export function parseColorString(text: string): string | null {
     if (len === 3 || len === 4) return `#${nib(12)}${nib(8)}${nib(4)}${nib(0)}`;
     return null;
   }
-  return null;
+  // "a colour name ?"
+  const named = wxColourByName(text);
+  return named ? `#${hex2(named[0])}${hex2(named[1])}${hex2(named[2])}ff` : null;
 }
 
 /** `COLOR4D::ToCSSString`: "rgb(r, g, b)" when opaque, else "rgba(r, g, b, a)" with the alpha to three places (`wxString::FromCDouble( alpha / 255.0, 3 )`). */

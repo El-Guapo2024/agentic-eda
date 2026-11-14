@@ -3,6 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  SCH_SAME_AS_BACKGROUND_QUESTION,
+  schSameAsBackground,
   BUILTIN_CLASSIC,
   BUILTIN_DEFAULT,
   DEFAULT_THEME,
@@ -33,6 +35,8 @@ import {
   themeColor,
   themeListEntries,
   themeRegistry,
+  defaultColor,
+  type ColorTheme,
   type ThemeData,
 } from "./colorTheme";
 import { carryRenamedClass, netclassColorUpdates } from "./appearanceNets";
@@ -267,4 +271,22 @@ test("a theme's override flag and the file's other entries are kept by the store
   assert.deepEqual(s1.themes[0], { ...s0.themes[0], colors: { LAYER_WIRE: "#ff0000ff" } });
   const s2 = setThemeColors(s1, themeRegistry(DATA, s1), "t", {}, false);
   assert.equal(s2.themes[0]!.overrideSchItemColors, false);
+});
+
+test("C3-12: GetDefaultColor's s_userColors for the rows of no param (Sheet references, Shape fills: layers 1107 and 1127, % 4 == 3, light grey); Reset gives them it", () => {
+  assert.equal(defaultColor("LAYER_INTERSHEET_REFS", DATA), "#c2c2c2ff");
+  assert.equal(defaultColor("LAYER_SHAPES_BACKGROUND", DATA), "#c2c2c2ff");
+  const reset = resetThemeColors({ filename: "user", name: "User", readOnly: false, colors: {} } as ColorTheme, ["LAYER_INTERSHEET_REFS", "LAYER_SHAPES_BACKGROUND"], DATA);
+  assert.deepEqual(reset.colors, { LAYER_INTERSHEET_REFS: "#c2c2c2ff", LAYER_SHAPES_BACKGROUND: "#c2c2c2ff" });
+});
+
+test("C3-12: validateSave -- a schematic layer of the background's very colour asks, the background and the sheet background never; no colour never", () => {
+  const colors: Record<string, string> = { LAYER_SCHEMATIC_BACKGROUND: "#F5F4EFff", LAYER_SHEET_BACKGROUND: "#f5f4efff", LAYER_WIRE: "#008400ff" };
+  const keys = ["LAYER_WIRE", "LAYER_SCHEMATIC_BACKGROUND", "LAYER_SHEET_BACKGROUND", "LAYER_INTERSHEET_REFS"];
+  assert.equal(schSameAsBackground((k) => colors[k], keys), false);
+  colors.LAYER_WIRE = "#f5f4efff";
+  assert.equal(schSameAsBackground((k) => colors[k], keys), true);
+  colors.LAYER_WIRE = "#f5f4ef80";
+  assert.equal(schSameAsBackground((k) => colors[k], keys), false, "the alpha counts (COLOR4D ==)");
+  assert.equal(SCH_SAME_AS_BACKGROUND_QUESTION, "Some items have the same color as the background\nand they will not be seen on the screen.  Are you\nsure you want to use these colors?");
 });
