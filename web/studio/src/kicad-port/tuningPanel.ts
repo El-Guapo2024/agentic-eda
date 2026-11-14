@@ -1,6 +1,7 @@
 // The message panel of a selected tuning pattern: `PCB_TUNING_PATTERN::GetMsgPanelInfo` (pcbnew/generators/pcb_tuning_pattern.cpp at 8303b2ad),
-// UI-LEFT-2 RR5. The server reads the board (`/api/tune/pattern`'s `panel`: the member tracks' nets, class, width, `BOARD::GetTrackLength` of each
-// net and the rule `EvalRules` gives the two tracks); the rows and their words are built here, as KiCad builds them.
+// UI-LEFT-2 RR5. The server reads the board (`/api/tune/pattern`'s `panel`: the member tracks' nets, class, width, `BOARD::GetTrackLength` of the
+// first member track and of the first of the other net -- what each is connected to, `GetConnectedItems( &aTrack, EXCLUDE_ZONES )`, the piece of a
+// net in pieces it is in (UI-LEFT-3 R3-4) -- and the rule `EvalRules` gives the two tracks); the rows and their words are built here, as KiCad builds them.
 //
 // Dependency-free (no React), so it runs under `npm run test:unit`.
 
@@ -12,8 +13,8 @@ export interface PanelItem {
   lower: string;
 }
 
-/** `BOARD::GetTrackLength` of a track of a net: the track and via length together, the pad-to-die length (nanometres), and the same as delays
- *  (attoseconds). */
+/** `BOARD::GetTrackLength( aTrack )`: of the items connected to the track, the track and via length together, the pad-to-die length (nanometres),
+ *  and the same as delays (attoseconds). */
 export interface NetLengths {
   length: number;
   die_length: number;

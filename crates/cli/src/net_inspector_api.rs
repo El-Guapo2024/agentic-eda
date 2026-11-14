@@ -411,20 +411,49 @@ fn delay_params(model: &ConstraintModel, net: &str) -> Option<DelayParams> {
     Some(DelayParams { enabled: p.enable_time_domain_tuning, track_as_per_mm, via_as_per_mm: p.via_propagation_delay_as, via_overrides: p.via_overrides.clone() })
 }
 
-/// The rows of every net of the board (`calculateNets( .., true )`: the zero-pad nets too, the page filters them).
-/// The length details of the net `net` as the panel's row has them (`CalculateLengthDetails` with `WITH_DELAY_DETAIL`), for `BOARD::GetTrackLength` of a
-/// track of it: the studio's connectivity is the net's (KiCad's `GetConnectedItems( &aTrack )`, the same unless the net is in pieces).
-pub(crate) fn net_length_stats(design: &Design, model: &ConstraintModel, net: &str) -> LengthStats {
-    let board = eda_drc::board::build(design, model);
+/// `BOARD::GetTrackLength( aTrack )` of the board track `track_id` (a studio track is a run of KiCad's `PCB_TRACK`s, each of which is in the same
+/// cluster): the length details of the items `CONNECTIVITY_DATA::GetConnectedItems( &aTrack, EXCLUDE_ZONES )` gives -- the cluster of the track's
+/// net that holds it (`SearchClusters( CSM_CONNECTIVITY_CHECK, .., aItem->GetNetCode() )`, `cl->Contains( aItem )`), its tracks, vias and pads, no
+/// zone -- which for a net in pieces is the piece the track is in, not the net. `None` when the track has no net or is not on the board.
+pub(crate) fn track_length_stats(design: &Design, model: &ConstraintModel, track_id: &str) -> Option<LengthStats> {
+    use eda_connectivity::items::ItemRef;
+    let net = design.routing.as_ref()?.tracks.iter().find(|t| t.id == track_id)?.net.clone();
+    if net.is_empty() {
+        return None;
+    }
+    // `EXCLUDE_ZONES`: no zone copper in the search
+    let graph = eda_connectivity::build_graph(design, model, &eda_drc::zone_copper::ZoneCopper::default());
+    let clusters = eda_connectivity::search_clusters(&graph);
+    let cluster = clusters.iter().find(|c| c.items.iter().any(|&i| matches!(&graph.items[i].item, ItemRef::TrackSeg { track_id: t, .. } if t == track_id)))?;
+    let (mut pads, mut segs, mut vias): (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) = Default::default();
+    for &i in &cluster.items {
+        match &graph.items[i].item {
+            ItemRef::Pad { reference, number } => {
+                pads.insert(format!("{reference}.{number}"));
+            }
+            ItemRef::TrackSeg { track_id, seg_index } => {
+                segs.insert(format!("{track_id}#{seg_index}"));
+            }
+            ItemRef::Via { via_id } => {
+                vias.insert(via_id.clone());
+            }
+            _ => {}
+        }
+    }
+    let mut board = eda_drc::board::build(design, model);
+    board.pads.retain(|p| pads.contains(&p.id));
+    board.tracks.retain(|t| segs.contains(&t.id));
+    board.vias.retain(|v| vias.contains(&v.id));
     let copper = model.board.layers.clone();
     let die = die_lengths(design, model, &board);
     let stackup = model.stackup.clone().unwrap_or_else(|| eda_model::rules::default_stackup(copper.len(), model.board.board_thickness_nm));
     let height_fn = |a: &str, b: &str| eda_pns::tuning_path::stackup_distance(&stackup, &copper, a, b);
     let height: Option<&dyn Fn(&str, &str) -> Nm> = if model.board.use_height_for_length_calcs { Some(&height_fn) } else { None };
-    let delay = delay_params(model, net);
-    length_details(&board, net, &copper, &die, height, delay.as_ref())
+    let delay = delay_params(model, &net);
+    Some(length_details(&board, &net, &copper, &die, height, delay.as_ref()))
 }
 
+/// The rows of every net of the board (`calculateNets( .., true )`: the zero-pad nets too, the page filters them).
 pub(crate) fn rows(design: &Design, model: &ConstraintModel) -> Vec<Value> {
     let board = eda_drc::board::build(design, model);
     let copper = model.board.layers.clone();

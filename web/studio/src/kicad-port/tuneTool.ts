@@ -385,14 +385,41 @@ export function unionOutline(polys: readonly (readonly P[])[]): P[][] {
   return out;
 }
 
+/** Do the outlines `a` and `b` meet (an edge of one crosses the other, or one lies inside the other)? */
+function outlinesMeet(a: readonly P[], b: readonly P[]): boolean {
+  for (let k = 0; k < a.length; k++) if (crossings(a[k]!, a[(k + 1) % a.length]!, b).length > 0) return true;
+  return insidePolygon(a[0]!, b) || insidePolygon(b[0]!, a);
+}
+
+/**
+ * `SHAPE_POLY_SET::BooleanAdd` of outlines that do not meet: one outline each, in the order Clipper2 makes them (`Clipper64::Execute` into a
+ * `PolyTree64`, which `importTree` reads child by child): its sweep starts from the local minima sorted by `LocMinSorter` -- the largest y first
+ * (Clipper's bottom, the screen's), then the smaller x -- and each output polygon is made at the first of its own minima, so the outline holding the
+ * vertex of largest y (then smallest x) is `Outline( 0 )`. The index of that outline.
+ */
+export function clipperFirstOutline(polys: readonly (readonly P[])[]): number {
+  let best = 0;
+  let key: P | null = null;
+  polys.forEach((poly, i) => {
+    for (const q of poly) {
+      if (key == null || q[1] > key[1] || (q[1] === key[1] && q[0] < key[0])) {
+        key = q;
+        best = i;
+      }
+    }
+  });
+  return best;
+}
+
 /**
  * What `ViewDraw` draws of `getOutline()`: one closed outline, or for a pair the outline of the union of its two (`merged.BooleanAdd( poly, polyCoupled )`, then
  * `merged.Outline( 0 )`; both sides or, single-sided, `chain1` and `chain2`) -- the pieces of each that lie outside the other (UI-LEFT-2 RR5). A pair whose two
- * outlines do not meet has both drawn (KiCad draws the first only).
+ * outlines do not meet is two outlines of the union, of which `Outline( 0 )` alone is drawn: the one Clipper2 makes first (`clipperFirstOutline`).
  */
 export function patternOutlineDrawn(p: TuningPattern): { pts: P[]; closed: boolean }[] {
   const polys = patternOutline(p).filter((q) => q.length >= 3);
   if (polys.length < 2) return polys.map((pts) => ({ pts, closed: true }));
+  if (polys.length === 2 && !outlinesMeet(polys[0]!, polys[1]!)) return [{ pts: polys[clipperFirstOutline(polys)]!, closed: true }];
   return unionOutline(polys).map((pts) => ({ pts, closed: false }));
 }
 

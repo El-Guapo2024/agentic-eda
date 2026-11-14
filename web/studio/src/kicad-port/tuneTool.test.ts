@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { carriedSettings, handleAt, statusBoxLayout, kindOfMode, modeOfKind, offsetOutline, offsetSide, pageSettings, patternBaselines, patternOutline, patternOutlineDrawn, unionOutline, readoutBox, readoutSummary, settingsOfPattern, TUNE_KEY_ACTIONS, tuneStateFromReply } from "./tuneTool";
+import { carriedSettings, clipperFirstOutline, handleAt, statusBoxLayout, kindOfMode, modeOfKind, offsetOutline, offsetSide, pageSettings, patternBaselines, patternOutline, patternOutlineDrawn, unionOutline, readoutBox, readoutSummary, settingsOfPattern, TUNE_KEY_ACTIONS, tuneStateFromReply } from "./tuneTool";
 import type { TuneReadout, TuningPattern } from "../api/tuneTypes";
 
 const area = (poly: readonly (readonly [number, number])[]) => {
@@ -184,4 +184,16 @@ test("a pair pattern's outline is the outline of the union of its two", () => {
   const ys = pair.flatMap((p) => p.pts.map((q) => q[1]));
   assert.ok(Math.abs(Math.max(...ys) - (5_700 + 1_000 + 225 + 250)) < 1e-6 && Math.abs(Math.min(...ys) - (5_000 - 1_475)) < 1e-6, `${Math.min(...ys)}..${Math.max(...ys)}`);
   assert.equal(patternOutlineDrawn(pattern()).length, 1, "a single track's is the one closed outline");
+});
+
+// UI-LEFT-3 R3-4: a pair whose two outlines do not meet makes a union of two outlines, and `ViewDraw` draws `Outline( 0 )` only -- Clipper2's first,
+// the one whose lowest point on the screen (largest y, then smallest x) is lowest.
+test("a pair pattern whose outlines do not meet draws the first outline Clipper makes, alone", () => {
+  const square = (x0: number, y0: number, s: number): [number, number][] => [[x0, y0], [x0 + s, y0], [x0 + s, y0 + s], [x0, y0 + s]];
+  assert.equal(clipperFirstOutline([square(0, 0, 10), square(0, 20, 10)]), 1, "the lower one");
+  assert.equal(clipperFirstOutline([square(30, 0, 10), square(0, 0, 10)]), 1, "side by side: the one further left");
+  const apart = patternOutlineDrawn(pattern({ mode: "diff_pair", last_diff_pair_gap: 450, base_line_coupled: [{ x: 10_000, y: 25_000 }, { x: 30_000, y: 25_000 }] }));
+  assert.equal(apart.length, 1, JSON.stringify(apart.map((p) => p.pts.length)));
+  assert.equal(apart[0]!.closed, true);
+  assert.ok(Math.min(...apart[0]!.pts.map((q) => q[1])) > 20_000, "the coupled outline, below the other");
 });

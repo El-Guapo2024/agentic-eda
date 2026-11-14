@@ -383,17 +383,19 @@ fn msg_panel_json(scene: &Scene, p: &TuningPattern) -> Value {
     let primary = tracks.first().map(|t| t.net.clone());
     let coupled = primary.as_ref().and_then(|pn| tracks.iter().find(|t| &t.net != pn)).map(|t| t.net.clone());
     let width = tracks.first().map(|t| t.width).filter(|w| tracks.iter().all(|t| t.width == *w));
-    let lengths = |net: &str| {
-        let s = crate::net_inspector_api::net_length_stats(&scene.design, &scene.model, net);
-        json!({ "length": s.track_length + s.via_length, "die_length": s.pad_to_die_length, "delay": s.track_delay + s.via_delay, "die_delay": s.pad_to_die_delay })
+    // `BOARD::GetTrackLength( *primaryItem )` / `( *coupledItem )`: what the track is connected to (`GetConnectedItems`), not the whole net
+    let lengths = |track: Option<&&eda_model::ir::Track>| {
+        track.and_then(|t| crate::net_inspector_api::track_length_stats(&scene.design, &scene.model, &t.id)).map(|s| {
+            json!({ "length": s.track_length + s.via_length, "die_length": s.pad_to_die_length, "delay": s.track_delay + s.via_delay, "die_delay": s.pad_to_die_delay })
+        })
     };
-    let has_net = |n: &Option<String>| n.as_deref().is_some_and(|n| !n.is_empty());
+    let coupled_item = coupled.as_ref().and_then(|cn| tracks.iter().find(|t| &t.net == cn));
     json!({
         "primary_net": primary, "coupled_net": coupled,
         "netclass": primary.as_deref().map(|n| crate::route_api::human_readable_class(&scene.model.board, n)),
         "width": width,
-        "primary": has_net(&primary).then(|| lengths(primary.as_deref().unwrap_or(""))),
-        "coupled": has_net(&coupled).then(|| lengths(coupled.as_deref().unwrap_or(""))),
+        "primary": lengths(tracks.first()),
+        "coupled": lengths(coupled_item),
         // `EvalRules( .., primaryItem, coupledItem, m_layer )`: min, opt and max as the rule has them (nanometres, or attoseconds with `time_domain`)
         "constraint": tracks.first().and_then(|t| {
             let other = coupled.as_ref().and_then(|cn| tracks.iter().find(|u| &u.net == cn)).map(|u| u.id.as_str());
@@ -880,6 +882,24 @@ mod tests {
         let rounded = pts(&m);
         assert!(segs(&rounded).iter().any(|&(dx, dy)| dx != 0 && dy != 0 && dx.abs() != dy.abs()), "rounded corners are arcs");
         assert!(rounded.iter().flatten().any(|q| q.1 > 9_800_000), "both sides");
+    }
+
+    /// The message panel's routed length is `BOARD::GetTrackLength( *primaryItem )`: the items `GetConnectedItems( &aTrack, EXCLUDE_ZONES )` gives,
+    /// the piece of the net the pattern's track is in -- a 10 mm piece of the same net elsewhere, touching nothing, is not counted (UI-LEFT-3 R3-4).
+    #[test]
+    fn the_panels_routed_length_is_the_connected_items_not_the_whole_net() {
+        let dir = scratch("panel_piece");
+        let straight = |y: Nm, x0: f64, x1: f64| vec![p(mm(x0), y), p(mm(x1), y)];
+        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("SIG", straight(mm(9.5), 5.0, 25.0)), ("OTHER", straight(mm(10.5), 5.0, 25.0)), ("SIG", straight(mm(16.0), 5.0, 15.0))]);
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        assert_eq!(fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })))["ok"], json!(true));
+        let pat = &tune_edit::patterns_of(&design_of(&dir))[0];
+        let pv = pattern(&dir, &body(json!({ "id": pat.id })));
+        let routed = pv["panel"]["primary"]["length"].as_i64().unwrap();
+        assert!((routed - 24_000_000).abs() < 200_000, "the tuned piece only, not the 10 mm one beside it: {routed}");
     }
 
     /// The board's rules as `.kicad_dru` text (what the rule engine compiles).
