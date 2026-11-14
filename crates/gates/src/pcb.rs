@@ -666,6 +666,9 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     let mut pads: Vec<PadItem> = Vec::new();
     let mut fp_ok = true;
     let free_pads = eda_drc::board::free_pads(design, model);
+    // a pin on no net of the model: the `unconnected-(..)` net the derived board gives its pad (KiCad's netlist, Update PCB), which a route started
+    // on the pad takes (the router's `syncPad`); copper of that net touching the pad is its own
+    let lone_nets = eda_engine::nets::unconnected_pad_nets(design, model);
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
         let Some(geoms) = placed_pads(model, part, fp) else {
@@ -681,6 +684,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
                 .iter()
                 .find(|n| n.pins.iter().any(|p| p == &refpin))
                 .map(|n| n.name.clone())
+                .or_else(|| lone_nets.get(&refpin).cloned())
                 .unwrap_or_else(|| format!("__unassigned__{refpin}"));
             let rect = Rect::centered(g.center, g.size);
             // The footprint's own pad, to take the exact outline and the copper side from. Without it
@@ -1519,6 +1523,21 @@ mod tests {
         // the same pad with a passive pin is no free pad: A's track is a short to it
         let (d, m) = free_r1_1(rt(vec![a_in]), "passive");
         assert!(eda_drc::board::free_pads(&d, &m).is_empty());
+        assert!(!fails(&d, &m, "routing_clearance").is_empty());
+    }
+
+    /// The pad of a pin on no net is on its `unconnected-(..)` net (`unconnected-(R1-Pad1)`, KiCad's netlist name, which the router gives a route
+    /// started on it): a track of that net ending in it is its own copper; one of no net touching it is a short.
+    #[test]
+    fn a_lone_pins_pad_is_on_its_unconnected_net() {
+        let lone = |tracks: Vec<Track>| {
+            let (d, mut m) = wfixture(RoutingSection { tracks, ..clean_routing() });
+            m.nets.retain(|n| n.name != "B");
+            (d, m)
+        };
+        let (d, m) = lone(vec![track("unconnected-(R1-Pad1)", &[(mm(4.175), mm(1.0)), (mm(4.175), mm(5.0))])]);
+        assert!(fails(&d, &m, "routing_clearance").is_empty(), "{:?}", fails(&d, &m, "routing_clearance"));
+        let (d, m) = lone(vec![track("A", &[(mm(4.175), mm(1.0)), (mm(4.175), mm(5.0))])]);
         assert!(!fails(&d, &m, "routing_clearance").is_empty());
     }
 

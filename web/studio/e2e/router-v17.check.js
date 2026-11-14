@@ -217,8 +217,9 @@
   await scenario("lone-pad", async (t) => {
     await clearSelection();
     st = await state();
-    const pad = st.parts.find((p) => p.ref === "U1")?.pads?.find((q) => q.id === "U1.12" || q.number === "12");
-    t(!!pad && !pad.net, `U1.12 is a pin on no net of the model: ${JSON.stringify(pad && [pad.id, pad.net])}`);
+    const u1 = st.parts.find((p) => p.ref === "U1");
+    const pad = u1?.pads?.find((q) => q.id === "U1.12" || q.num === "12");
+    t(!!pad && (!pad.net || pad.net.startsWith("unconnected-(")), `U1.12 is a pin on no net of the model: ${JSON.stringify(pad ? [pad.id, pad.num, pad.net] : [u1?.placed, (u1?.pads ?? []).length])}`);
     if (!pad) return;
     const at = [pad.px ?? pad.x, pad.py ?? pad.y];
     await E.run("pcbnew.InteractiveRouter.SingleTrack");

@@ -490,6 +490,9 @@ export function useActionRunner() {
     // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
     m.set("common.Interactive.delete", () => {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
+      // Delete under an `InlineDrag`: the drag's cancel puts its selection back (`restoreSelection`) before `EDIT_TOOL::Remove` asks for it
+      // (`Activate()`, then `RequestSelection`), so that selection is what is deleted -- this handler's `state` is from before the cancel
+      const restored = state.tab === "pcb" && state.drawState?.kind === "drag" ? (state.drawState.restoreSelection ?? []) : [];
       if (routerKey("delete")) return;
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
@@ -497,7 +500,7 @@ export function useActionRunner() {
       if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
       // `drawShape`'s loop: Delete with a line, rectangle or circle started takes back the chain's last line, or drops the shape (round 4 A-1, A-2)
       if (drawShapeStarted(state.tab, state.activeTool, state.drawState)) return takeBackLine();
-      withRequestedSelection((refs) => {
+      const remove = (refs: string[]) => {
         // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
         // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
         // user wanted)."
@@ -509,7 +512,9 @@ export function useActionRunner() {
           }
         }
         deleteRefs(refs);
-      });
+      };
+      if (restored.length > 0) remove([...restored]);
+      else withRequestedSelection(remove);
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack
