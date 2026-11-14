@@ -157,3 +157,16 @@ test("MM3: before a run User-defined Signals offer libngspice's const plot (SimP
   assert.deepEqual(simPlotVectors(undefined), [...CONST_PLOT_VECTORS]);
   assert.ok(simPlotVectors(undefined).includes("pi") && simPlotVectors(undefined).includes("boltz"));
 });
+
+test("a .model of a type KiCad does not know is a raw SPICE fall-back with no pins of its own; Sim.Pins gives it its pins (UI-LEFT-3 M3-3)", () => {
+  // `SPICE_MODEL_PARSER::ReadType` gives `TYPE::RAWSPICE`; `SIM_MODEL_SPICE_FALLBACK::GetPinNames` is `SIM_MODEL::Create( RAWSPICE )`'s, which
+  // `SIM_MODEL_RAW_SPICE` does not override: `{}`, so `createPins` adds none ("intentionally nothing is added"), as in KiCad
+  const src = { name: "ZAP", kind: "model" as const, pins: [], code: ".model ZAP zork(a=1)" };
+  const base = baseModelOf(tables, src, () => null);
+  assert.ok(base instanceof SimModelSpiceFallback && base.type === "RAWSPICE");
+  const none = libraryModel(tables, base, two, { Reference: "X1", "Sim.Library": "z.lib", "Sim.Name": "ZAP" });
+  assert.equal(none.getPinCount(), 0);
+  // a Sim.Pins the model does not know: `AssignSymbolPinNumberToModelPin`'s fall-back adds each pin
+  const pinned = libraryModel(tables, base, two, { Reference: "X1", "Sim.Library": "z.lib", "Sim.Name": "ZAP", "Sim.Pins": "1=a 2=b" });
+  assert.deepEqual(pinned.getPins().map((p) => [p.symbolPinNumber, p.modelPinName]), [["1", "a"], ["2", "b"]]);
+});

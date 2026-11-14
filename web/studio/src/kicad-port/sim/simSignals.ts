@@ -283,11 +283,13 @@ export function traceData(simType: SimType, command: string, plot: RawPlot | und
   if (!v) return null;
   let y: number[];
   switch (simType) {
+    // a trace with neither bit gets no data (`wxFAIL_MSG( "Plot type missing .." )`, then `data_y.size() >= size` fails): the probe's "(gain)" half on
+    // an SP tab, which `AddTrace` asks for with `SPT_AC_GAIN` (UI-LEFT-3 M3-3)
     case "AC":
-      y = type & SPT_AC_GAIN ? gainOf(v) : phaseOf(v);
+      y = type & SPT_AC_GAIN ? gainOf(v) : type & SPT_AC_PHASE ? phaseOf(v) : [];
       break;
     case "SP":
-      y = type & SPT_SP_AMP ? gainOf(v) : phaseOf(v);
+      y = type & SPT_SP_AMP ? gainOf(v) : type & SPT_AC_PHASE ? phaseOf(v) : [];
       break;
     default:
       y = gainOf(v);

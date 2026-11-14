@@ -43,6 +43,8 @@ export interface Trace {
   multiRun?: boolean;
   /** `TRACE::GetMultiRunLabels`: each run's tuned values ("R1=1k, C1=10n"), by run. */
   multiRunLabels?: string[];
+  /** `mpFXYVector::SetData` was called: the bounds are the data's, (0, 0) for no data; before it, the constructor's -1 .. 1. */
+  dataSet?: boolean;
 }
 
 /** `TRACE::GetDisplayName`. */
@@ -263,6 +265,7 @@ export function setTraceData(tab: PlotTab, tr: Trace, xs: number[], ys: number[]
   if (x.length !== y.length) return;
   tr.x = x;
   tr.y = y;
+  tr.dataSet = true;
   tr.sweepCount = sweepCount;
   tr.sweepSize = sweepSize;
   tr.multiRun = false;
@@ -282,11 +285,11 @@ function minMax(v: number[]): [number, number] {
   return [lo, hi];
 }
 
-/** `mpFXY::UpdateScales`. */
+/** `mpFXY::UpdateScales`: the scales extended to the trace's bounds -- `mpFXYVector::SetData`'s, which are (0, 0) for empty vectors, or the constructor's
+ *  -1 .. 1 before any data (UI-LEFT-3 M3-3: an empty trace stretches the scales to 0 as KiCad's does). */
 function updateScalesOf(tab: PlotTab, tr: Trace): void {
-  if (tr.x.length === 0) return;
-  const [xl, xh] = minMax(tr.x);
-  const [yl, yh] = minMax(tr.y);
+  const [xl, xh] = tr.dataSet ? minMax(tr.x) : [-1, 1];
+  const [yl, yh] = tr.dataSet ? minMax(tr.y) : [-1, 1];
   if (tab.x) extendDataRange(tab.x, xl, xh);
   const ys = scaleOf(tab, tr);
   if (ys) extendDataRange(ys, yl, yh);
