@@ -1329,6 +1329,8 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     let root_name = sch.file_name().and_then(|n| n.to_str()).unwrap_or("board.kicad_sch").to_string();
     let (wires, bus_entries) = eda_kicad::erc_exclusions::wire_segments(&root_name, &|name| std::fs::read_to_string(work.join(name)).ok());
     let grid_nm = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils).unwrap_or(50) as i64 * 25_400;
+    // the pins, wires, labels and fields of each screen, for the markers that name more items than the report does, or a field by its parent (`witnesses`)
+    let tree = eda_kicad::erc_exclusions::tree_facts(&root_name, &|name| std::fs::read_to_string(work.join(name)).ok());
     let mut violations = Vec::new();
     // (sheet, wire uuid) -> the indexes of its `unconnected_wire_endpoint` findings, for the ends they are at
     let mut dangling: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
@@ -1357,7 +1359,14 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
                     }
                     None
                 }
-                _ => eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &items, path, sheet_count, &item_sheets),
+                _ => {
+                    let mut marker_items = items.clone();
+                    eda_kicad::erc_exclusions::witnesses(&tree, &violation.kind, &mut marker_items).and_then(|child| {
+                        let mut m = eda_kicad::erc_exclusions::marker_with(&violation.kind, &violation.severity, &marker_items, path, sheet_count, &item_sheets)?;
+                        m.child = child;
+                        Some(m)
+                    })
+                }
             };
             items_of.push(items);
             violations.push(violation);

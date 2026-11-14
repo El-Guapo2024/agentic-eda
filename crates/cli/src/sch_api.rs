@@ -392,7 +392,9 @@ pub fn erc_severities(dir: &Path) -> Value {
 /// [`erc_severities`] of a design (also another project's, for Schematic Setup's Import Settings: `sch_import_settings_api`).
 pub(crate) fn erc_severities_of(design: &eda_model::ir::Design) -> Value {
     let custom = design.schematic.as_ref().is_some_and(|s| !s.extras.erc_severities.is_empty());
-    json!({ "ok": true, "severities": eda_kicad::effective_erc_severities(&design), "custom": custom })
+    // the pin-to-pin error's own slot (`erc_checks::PIN_TO_PIN_ERROR_SLOT`), which no project names: the ERC dialog's Ignored Tests row of the error reads it
+    let pin_errors_ignored = design.schematic.as_ref().is_some_and(|s| s.extras.pin_to_pin_errors_ignored);
+    json!({ "ok": true, "severities": eda_kicad::effective_erc_severities(&design), "custom": custom, "pin_to_pin_errors_ignored": pin_errors_ignored })
 }
 
 /// `GET /api/sch/formatting`: `{ok, connection_grid_mils, custom, intersheet_refs}` -- Schematic Setup > Formatting, the settings of that page the design keeps: the
