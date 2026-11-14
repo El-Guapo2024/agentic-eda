@@ -434,7 +434,7 @@ impl<'c> Updater<'c> {
             }
         } else {
             let key = crate::pad_nets::PadKey { reference: reference.to_string(), number: number.to_string(), nth };
-            if let Some(own) = b.own_pad_net(&key) {
+            if let Some(own) = b.own_pad_net(&key, self.pads_now.get(reference)) {
                 return own;
             }
             if let Some(net) = b.design.nets.as_ref().unwrap_or(&b.model.nets).iter().find(|n| n.pins.iter().any(|p| *p == pin)) {
@@ -494,7 +494,8 @@ impl<'c> Updater<'c> {
         let count = self.footprint_of(b, reference).map_or(0, |f| f.pads.iter().filter(|p| p.number == number).count() as u32);
         let mut moves: Vec<(crate::pad_nets::PadKey, String)> = (1..=count).filter(|&k| k != nth).map(|k| (key(k), self.pad_net(b, reference, number, k, false))).collect();
         moves.push((key(nth), net.to_string()));
-        b.set_pad_nets(&mut nets, &moves);
+        let now = self.pads_now.get(reference).cloned();
+        b.set_pad_nets_on(&mut nets, &moves, now.as_ref());
         b.design.nets = Some(nets);
     }
 

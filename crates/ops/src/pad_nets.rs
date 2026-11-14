@@ -48,7 +48,7 @@ pub(crate) struct PadKey {
 
 impl PadKey {
     /// `REF.NUM`: the pin of the net list.
-    fn pin(&self) -> String {
+    pub(crate) fn pin(&self) -> String {
         format!("{}.{}", self.reference, self.number)
     }
 
@@ -362,10 +362,13 @@ impl Board<'_> {
         Ok(())
     }
 
-    /// The board's footprint of `reference` (`model.footprint_of`, whose pads the footprint's pad records follow) and its record's pads, when the two line up.
-    fn pad_records(&self, reference: &str) -> Option<(eda_model::Footprint, Option<&[eda_model::ir::PadMaskInfo]>)> {
-        let part = self.model.part(reference)?;
-        let footprint = self.model.footprint_of(part)?;
+    /// The board's footprint of `reference` (`model.footprint_of`, whose pads the footprint's pad records follow; `footprint` when the command has put another one on
+    /// the part, which the model does not know yet) and its record's pads, when the two line up.
+    fn pad_records(&self, reference: &str, footprint: Option<&eda_model::Footprint>) -> Option<(eda_model::Footprint, Option<&[eda_model::ir::PadMaskInfo]>)> {
+        let footprint = match footprint {
+            Some(f) => f.clone(),
+            None => self.model.footprint_of(self.model.part(reference)?)?,
+        };
         let records = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).map(|e| e.pads.as_slice()).filter(|p| p.len() == footprint.pads.len());
         Some((footprint, records))
     }
@@ -373,12 +376,12 @@ impl Board<'_> {
     /// `PAD::GetNetname` of one pad of the board (UI-LEFT-3 P3-35): its own net where its number is on two (`PadMaskInfo::net`, `""` none), else its number's
     /// in the net list `nets`. KiCad keeps a net per `PAD`; the model one per `REF.NUMBER`, with the pads of a split number holding their own.
     pub(crate) fn pad_net(&self, nets: &[Net], key: &PadKey) -> String {
-        self.own_pad_net(key).unwrap_or_else(|| net_of(nets, &key.pin()))
+        self.own_pad_net(key, None).unwrap_or_else(|| net_of(nets, &key.pin()))
     }
 
-    /// The pad's own net (`PadMaskInfo::net`, `Some("")` for none), `None` where it has its number's.
-    pub(crate) fn own_pad_net(&self, key: &PadKey) -> Option<String> {
-        let (footprint, records) = self.pad_records(&key.reference)?;
+    /// The pad's own net (`PadMaskInfo::net`, `Some("")` for none), `None` where it has its number's; `footprint` as for [`Self::pad_records`].
+    pub(crate) fn own_pad_net(&self, key: &PadKey, footprint: Option<&eda_model::Footprint>) -> Option<String> {
+        let (footprint, records) = self.pad_records(&key.reference, footprint)?;
         let k = footprint.pads.iter().enumerate().filter(|(_, p)| p.number == key.number).nth(key.nth.saturating_sub(1) as usize)?.0;
         records?.get(k)?.net.clone()
     }
@@ -387,12 +390,17 @@ impl Board<'_> {
     /// net, that is the number's in the net list `nets` and none keeps a net of its own; where they differ, each keeps its own (`PadMaskInfo::net`, the record
     /// made where the footprint has none, as a renamed pad's is) and the number is on each of their nets, as a board read from a file has it.
     pub(crate) fn set_pad_nets(&mut self, nets: &mut Vec<Net>, moves: &[(PadKey, String)]) {
+        self.set_pad_nets_on(nets, moves, None);
+    }
+
+    /// [`Self::set_pad_nets`] with the footprint the command has put the part on (`footprint`, for moves of that one part), which the model does not know yet.
+    pub(crate) fn set_pad_nets_on(&mut self, nets: &mut Vec<Net>, moves: &[(PadKey, String)], footprint: Option<&eda_model::Footprint>) {
         let mut by_footprint: BTreeMap<&str, Vec<&(PadKey, String)>> = BTreeMap::new();
         for m in moves {
             by_footprint.entry(m.0.reference.as_str()).or_default().push(m);
         }
         for (reference, moves) in by_footprint {
-            let Some((footprint, _)) = self.pad_records(reference) else {
+            let Some((footprint, _)) = self.pad_records(reference, footprint) else {
                 // no geometry: the number's net, as before
                 for (key, net) in moves {
                     move_pin(nets, &key.pin(), net);
@@ -410,7 +418,7 @@ impl Board<'_> {
                     PadKey { reference: reference.to_string(), number: p.number.clone(), nth: *n }
                 })
                 .collect();
-            let mut now: Vec<String> = keys.iter().map(|k| self.pad_net(nets, k)).collect();
+            let mut now: Vec<String> = keys.iter().map(|k| self.own_pad_net(k, Some(&footprint)).unwrap_or_else(|| net_of(nets, &k.pin()))).collect();
             let mut numbers: BTreeSet<String> = BTreeSet::new();
             for (key, net) in moves {
                 if let Some(k) = keys.iter().position(|k| k == key) {
