@@ -1141,7 +1141,13 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
     cmd.arg("-o").arg(&report).arg(&pcb);
     let (raw, said) = run_report_with_output(cmd, &report, "drc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
-    let board = std::fs::read_to_string(&pcb).map(|t| eda_kicad::drc_exclusions::board_shapes(&t)).unwrap_or_default();
+    // the project's text variables, which a silkscreen text's shown text resolves last
+    let project_vars: BTreeMap<String, String> = std::fs::read_to_string(pcb.with_extension("kicad_pro"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|p| p.get("text_variables").and_then(Value::as_object).map(|o| o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect()))
+        .unwrap_or_default();
+    let board = std::fs::read_to_string(&pcb).map(|t| eda_kicad::drc_exclusions::board_shapes_with(&t, &project_vars)).unwrap_or_default();
     let read = |key: &str| -> Vec<Violation> {
         let mut list: Vec<Violation> = raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default();
         for v in &mut list {
