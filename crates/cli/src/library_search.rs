@@ -531,12 +531,9 @@ pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Ar
             return Ok(hit.clone());
         }
     }
-    let (text, _) = eda_kicad::read_symbol_library(&path)?;
+    let (text, load_error) = eda_kicad::read_symbol_library(&path)?;
     let mut summaries = eda_kicad::scan_symbols(&text);
     eda_kicad::inherit_symbol_summaries(&mut summaries);
-    // what KiCad's parser refuses is not in the library (UI-LEFT-3 L3-6, `crate::library_verdict`), and the library says so
-    let (refused, load_error) = crate::library_verdict::symbol_refusals(&path, true);
-    summaries.retain(|s| !refused.contains(&s.name));
     summaries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
     summaries.dedup_by(|b, a| a.name == b.name);
     let terms = summaries.iter().map(|s| symbol_terms(lib, s)).collect();
@@ -573,13 +570,11 @@ pub(crate) fn footprint_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result
         .filter_map(|p| Some((p.file_stem()?.to_str()?.to_string(), p)))
         .collect();
     files.sort_by(|a, b| natural_cmp(&a.0, &b.0).then_with(|| a.0.cmp(&b.0)));
-    // `FP_CACHE::Load`: a file the reader refuses -- this crate's or KiCad's parser (`crate::library_verdict`, UI-LEFT-3 L3-6) -- is not in the library, so the
-    // choosers neither list nor find it
-    let (refused, _) = crate::library_verdict::footprint_refusals(&dir, true);
-    files.retain(|(name, _)| !refused.contains(name));
     let mut names = Vec::with_capacity(files.len());
     let mut infos = Vec::with_capacity(files.len());
     for (name, path) in files {
+        // A file that cannot be read or is no footprint is kept (by its name, with nothing to search but the name): the choosers leave out what KiCad's
+        // parser refuses when they answer ([`kicad_refused`], UI-LEFT-3 L3-6), and a library opened alone what this crate's reader refuses too
         let info = std::fs::read_to_string(&path).ok().and_then(|t| eda_kicad::scan_footprint(&t)).unwrap_or_default();
         names.push(name);
         infos.push(info);
@@ -594,6 +589,16 @@ fn cached_footprint_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Option<Arc
     let dir = footprint_dir(src, lib).ok()?;
     let hit = lock(footprint_cache()).get(&dir).cloned()?;
     (hit.stamp == modified(&dir)).then_some(hit)
+}
+
+/// The items of library `lib` KiCad's parser refuses (`crate::library_verdict`, UI-LEFT-3 L3-6) -- footprints by file name, symbols by name --, known now or
+/// (`ask`) asked of kicad-cli now. The indexes keep every item this crate's reader takes; the choosers leave these out when they answer.
+fn kicad_refused<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, ask: bool) -> std::collections::HashSet<String> {
+    let Ok(path) = src.lib_path(kind, lib) else { return Default::default() };
+    match kind {
+        Kind::Footprint => crate::library_verdict::kicad_refused(kind, &path, ask).iter().filter_map(|f| f.file_stem().map(|s| s.to_string_lossy().into_owned())).collect(),
+        Kind::Symbol => crate::library_verdict::symbol_refusals(&path, ask).0.into_iter().collect(),
+    }
 }
 
 /// Index library `lib` of `kind` of a source (a no-op when it is indexed already).
@@ -634,6 +639,10 @@ fn ensure_background_index<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Arc<At
     let spawned = std::thread::Builder::new().name("library-search-index".into()).spawn(move || {
         index_all(kind, &*owned);
         flag.store(true, AtomicOrdering::Release);
+        // then KiCad's parser's verdict on each library, one kicad-cli at a time, kept for its state (UI-LEFT-3 L3-6; KiCad's lazy load reads them all)
+        for lib in libraries_in(kind, &*owned).iter() {
+            let _ = kicad_refused(kind, &*owned, &lib.name, true);
+        }
     });
     if spawned.is_err() {
         // No thread: the search indexes what it needs inline instead.
@@ -740,11 +749,16 @@ pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, 
     let mut v = match kind {
         Kind::Symbol => match symbol_lib(src, lib) {
             Ok(idx) => {
-                let mut entries: Vec<Value> = idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect();
+                // what KiCad's parser refuses is not in the library, and the library says so (UI-LEFT-3 L3-6)
+                let (refused, load_error) = match symbol_path(src, lib) {
+                    Ok(p) => crate::library_verdict::symbol_refusals(&p, true),
+                    Err(_) => (Vec::new(), idx.load_error.clone()),
+                };
+                let mut entries: Vec<Value> = idx.summaries.iter().filter(|s| filter.symbol_passes(s.power) && !refused.contains(&s.name)).map(|s| symbol_item(s, None)).collect();
                 tag_sub_libraries(src, lib, &mut entries);
                 let mut v = json!({ "lib": lib, "entries": entries });
                 // read with errors: the symbols that read are listed, and KiCad's message goes with them (`LIB_STATUS::error`)
-                if let Some(e) = &idx.load_error {
+                if let Some(e) = load_error {
                     v["load_error"] = json!(e);
                 }
                 v
@@ -752,10 +766,17 @@ pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, 
             Err(e) => return json!({ "error": e }),
         },
         Kind::Footprint => match footprint_lib(src, lib) {
-            Ok(idx) => json!({
-                "lib": lib,
-                "entries": idx.names.iter().zip(&idx.infos).filter(|(n, i)| filter.footprint_passes(lib, n, i.numbered_pads)).map(|(n, i)| footprint_item(n, i, None)).collect::<Vec<_>>(),
-            }),
+            Ok(idx) => {
+                // `FP_CACHE::Load`: what KiCad's parser refuses, and what this crate's reader refuses, is not in the library (UI-LEFT-3 L3-6)
+                let mut refused = kicad_refused(kind, src, lib, true);
+                if let Ok(dir) = footprint_dir(src, lib) {
+                    refused.extend(eda_kicad::library_save::footprint_library_refusals(&dir).0);
+                }
+                json!({
+                    "lib": lib,
+                    "entries": idx.names.iter().zip(&idx.infos).filter(|(n, i)| filter.footprint_passes(lib, n, i.numbered_pads) && !refused.contains(*n)).map(|(n, i)| footprint_item(n, i, None)).collect::<Vec<_>>(),
+                })
+            }
             Err(e) => return json!({ "error": e }),
         },
     };
@@ -855,11 +876,13 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
         if matchers.is_empty() {
             continue;
         }
+        // what KiCad's parser refuses, as far as it is known (UI-LEFT-3 L3-6; the index thread asks kicad-cli about each library once it has read them)
+        let refused = kicad_refused(kind, src, &info.name, false);
         match kind {
             Kind::Symbol => {
                 if let Some(idx) = &sym_libs[li] {
                     for (i, (s, terms)) in idx.summaries.iter().zip(&idx.terms).enumerate() {
-                        if !filter.symbol_passes(s.power) {
+                        if !filter.symbol_passes(s.power) || refused.contains(&s.name) {
                             continue;
                         }
                         let mut terms = terms.clone();
@@ -874,7 +897,7 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
             Kind::Footprint => {
                 if let Some(idx) = &fp_libs[li] {
                     for (i, ((n, f), terms)) in idx.names.iter().zip(&idx.infos).zip(&idx.terms).enumerate() {
-                        if !filter.footprint_passes(&info.name, n, f.numbered_pads) {
+                        if !filter.footprint_passes(&info.name, n, f.numbered_pads) || refused.contains(n) {
                             continue;
                         }
                         let score = score_item(&matchers, terms);
@@ -1002,8 +1025,9 @@ pub(crate) fn footprint_select_in<S: LibSource + ?Sized>(src: &S, filter: &Filte
             continue;
         };
         indexed += 1;
+        let refused = kicad_refused(Kind::Footprint, src, &info.name, false);
         for (n, f) in idx.names.iter().zip(&idx.infos) {
-            if filter.footprint_passes(&info.name, n, f.numbered_pads) {
+            if filter.footprint_passes(&info.name, n, f.numbered_pads) && !refused.contains(n) {
                 out.push(format!("{}:{n}", info.name));
                 if out.len() >= limit {
                     break 'libs;

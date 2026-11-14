@@ -414,10 +414,9 @@ fn all_builds() -> &'static Mutex<HashMap<(Kind, String), AllBuild>> {
 fn build_all<S: LibSource + ?Sized>(kind: Kind, src: &S) -> BTreeMap<String, Arc<Vec<String>>> {
     let mut all = BTreeMap::new();
     for lib in libraries_in(kind, src).iter() {
-        // what the trees' search finds is what the libraries list (the background thread asks kicad-cli about each library in turn, as KiCad's lazy load
-        // reads them all)
-        if let Ok((names, _)) = listed(kind, src, &lib.name, true) {
-            all.insert(lib.name.clone(), Arc::new(names));
+        // what the trees' search finds, less what KiCad's parser refuses as far as that is known when the answer is given (`all_of`, UI-LEFT-3 L3-6)
+        if let Ok(names) = items_in(kind, src, &lib.name) {
+            all.insert(lib.name.clone(), names);
         }
     }
     all
@@ -437,7 +436,17 @@ fn all_of(kind: Kind, src: &dyn LibSource) -> Value {
         Some(AllBuild::Done(all)) => {
             let all = all.clone();
             drop(builds);
-            json!({ "status": "ready", "libraries": all.iter().map(|(lib, names)| (lib.clone(), json!(names.as_slice()))).collect::<serde_json::Map<_, _>>() })
+            let refused = |lib: &str| -> Vec<String> {
+                let Ok(path) = src.lib_path(kind, lib) else { return Vec::new() };
+                match kind {
+                    Kind::Footprint => crate::library_verdict::kicad_refused(kind, &path, false).iter().filter_map(|f| f.file_stem().map(|s| s.to_string_lossy().into_owned())).collect(),
+                    Kind::Symbol => crate::library_verdict::symbol_refusals(&path, false).0,
+                }
+            };
+            json!({ "status": "ready", "libraries": all.iter().map(|(lib, names)| {
+                let gone = refused(lib);
+                (lib.clone(), json!(names.iter().filter(|n| !gone.contains(n)).collect::<Vec<_>>()))
+            }).collect::<serde_json::Map<_, _>>() })
         }
         Some(AllBuild::Running) => json!({ "status": "pending" }),
         None => {

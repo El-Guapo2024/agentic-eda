@@ -144,8 +144,9 @@ function CommandDialog({ d }: { d: Extract<NonNullable<ReturnType<typeof useSimU
         aria-label={label}
         value={String(f[key] ?? "")}
         onBeforeInput={(e) => {
-          const ne = e.nativeEvent as InputEvent;
-          if (ne.inputType === "insertText" && ne.data && ![...ne.data].every((c) => integerCharOk(c))) e.preventDefault();
+          const ne = e.nativeEvent as InputEvent & { data?: string | null };
+          // React hands a typed character over as the browser's `textInput` (or `beforeinput`): its `data`
+          if (ne.data && ![...ne.data].every((c) => integerCharOk(c))) e.preventDefault();
         }}
         onChange={(e) => set({ [key]: e.target.value } as Partial<CommandFields>)}
         onBlur={(e) => {

@@ -11,9 +11,10 @@
 //! derived symbol needs). A library that loads costs one run (about half a second for KiCad's largest); the verdict is kept against the library's state, in
 //! memory and in the studio's library cache (`crate::library_convert::cache_dir`, `verdicts/`), so each state of a library is loaded once.
 //!
-//! Where it is read: the trees (`GET /api/library/items`, `library_index`), the choosers' items, search and footprint selector (`library_search`'s indexes);
-//! a library the index has not read yet is answered by the verdicts already known (the background index reads every library in turn, as KiCad's lazy load
-//! does). **Differs**: kicad-cli does not print the parser's reason, so a file refused by KiCad's parser alone says "Unable to read file '%s'" and
+//! Where it is read: the trees (`GET /api/library/items`, `library_index`, asked now for the library opened) and the choosers' items (`library_search::entries`,
+//! the same); the choosers' search and footprint selector and the trees' search over every library leave out what is known when they answer, and the
+//! choosers' index thread asks kicad-cli about each library in turn once it has read them all (as KiCad's lazy load reads every library; the index itself
+//! never waits for kicad-cli). **Differs**: kicad-cli does not print the parser's reason, so a file refused by KiCad's parser alone says "Unable to read file '%s'" and
 //! [`KICAD_REFUSES`] in place of the lexer's words.
 
 use crate::library_index::Kind;
