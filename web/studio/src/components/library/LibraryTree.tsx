@@ -72,7 +72,13 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
   const anchor = useRef<string | null>(null);
 
   const q = filter.trim();
-  const built = useMemo(() => buildTreeGroups(items, installed, loaded, q), [items, installed, loaded, q]);
+  // (the columns and every library's details, which the search scores too, are below: declared first)
+  const treeId = kind === "symbol" ? "symbol_editor" : "footprint_editor";
+  const shown = useLibTreeColumns(treeId);
+  const [details, setDetails] = useState<ReadonlyMap<string, readonly ChooserItem[]>>(new Map());
+  const detailOf = useMemo(() => new Map([...details.values()].flat().map((d) => [d.id, d])), [details]);
+  // KiCad's search scores each item's description, keywords and shown fields, best first (`LIB_TREE_NODE_ITEM::UpdateScore`, UI-LEFT-3 L3-5 follow-up)
+  const built = useMemo(() => buildTreeGroups(items, installed, loaded, q, undefined, { kind, details: detailOf, shownColumns: shown }), [items, installed, loaded, q, kind, detailOf, shown]);
   const { truncated } = built;
   const groups = useMemo(() => pinnedFirst(built.groups, ui.pinned), [built.groups, ui.pinned]);
   /** Whether a group is open: a search opens them all (the matches are what it is for); else the fold decides. */
@@ -83,12 +89,9 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
   // The columns (`LIB_TREE`'s Item column and the ones Select Columns... shows: Description by default, kicad-port/libTreeColumns.ts); every library's
   // descriptions and fields come with the tree, as KiCad's adapter is filled with them when the tree is built (`GET /api/library/entries_all`, read by the
   // server in the background; UI-LEFT-3 L3-5), and a library opened before the server has read it is asked for alone (`GET /api/library/entries`).
-  const treeId = kind === "symbol" ? "symbol_editor" : "footprint_editor";
-  const shown = useLibTreeColumns(treeId);
   const choosing = useSelectColumnsOpen(treeId);
   const columns = useMemo(() => treeColumns(shown), [shown]);
   const extra = columns.slice(1);
-  const [details, setDetails] = useState<ReadonlyMap<string, readonly ChooserItem[]>>(new Map());
   useEffect(() => {
     let alive = true;
     const merge = (libs: ReadonlyMap<string, readonly ChooserItem[]>) =>
@@ -118,7 +121,6 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
       alive = false;
     };
   }, [openKey, extra.length, kind]); // eslint-disable-line react-hooks/exhaustive-deps
-  const detailOf = useMemo(() => new Map([...details.values()].flat().map((d) => [d.id, d])), [details]);
   const available = useMemo(() => availableColumns([...details.values()].map(extraFieldsOf)), [details]);
   // each column at its kept width (`column_widths`, dragged in the header; Item 300 and Description 600 at first), the last one filling the rest
   // (`FinishTreeInitialization`); the tree scrolls sideways when they are wider than the pane, as KiCad's does (UI-LEFT-2 LL4)

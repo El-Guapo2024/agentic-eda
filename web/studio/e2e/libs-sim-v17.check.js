@@ -1,7 +1,8 @@
 // Libraries and the simulator, round 3 (UI-LEFT-3 L3-1 .. L3-6, M3-1 .. M3-3, C3-11; lane libs-sim, task-v17-libssim):
 //   L3-1  Revert of a renamed library symbol goes back to its old name, and the tree selects it (`RevertSymbol`, `UpdateSymbolAfterRename( &original, .. )`);
 //   L3-2  a renamed derived symbol is saved derived from its parent;
-//   L3-5  the library editors' trees get every library's descriptions and fields with the tree (`GET /api/library/entries_all`), no library opened;
+//   L3-5  the library editors' trees get every library's descriptions and fields with the tree (`GET /api/library/entries_all`), no library opened, and
+//         their search scores them, best first;
 //   L3-6  a footprint file only KiCad's parser refuses (kicad-cli's verdict) is not in the Footprint Editor's tree, nor in the chooser's items;
 //   M3-1  the K device's l1 / l2 list the design's inductors (`GET /api/sim/model/inductors`), no kicad-cli netlist asked for, an inductor excluded from the
 //         simulation left out;
@@ -65,6 +66,19 @@
     t(!!all && Object.keys(all.libraries).length > 0, `every library's items: ${all ? Object.keys(all.libraries).length : "none"} libraries`);
     const device = all?.libraries?.Device?.find((i) => i.name === "R");
     t(!!device && device.description !== "" && device.fields?.Datasheet !== undefined, `Device:R comes with its description and fields: ${JSON.stringify(device ?? {}).slice(0, 160)}`);
+  });
+
+  await scenario("L3-5: the Symbol Editor tree's search scores descriptions and keywords (LIB_TREE_NODE_ITEM::UpdateScore)", async (t) => {
+    const box = document.querySelector('[data-library-tree-search="symbol"]');
+    if (!t(!!box, "the tree's search box")) return;
+    setValue(box, "unpolarized capacitor");
+    const row = await until(() => treeRow("Device:C"), 120000);
+    t(!!row, "Device:C found by its description's words");
+    t(!treeRow("Device:R"), "Device:R not listed");
+    const first = document.querySelector('[data-library-tree-rows="symbol"] [role=treeitem][data-name]')?.dataset.name;
+    t(first === "Device:C" || first === "Device:C_Polarized" || /^Device:C/.test(first ?? ""), `the best match first: ${first}`);
+    setValue(box, "");
+    await sleep(300);
   });
 
   await scenario("L3-1, L3-2: Revert of a renamed symbol goes back to its name; a renamed derived symbol is saved derived", async (t) => {
