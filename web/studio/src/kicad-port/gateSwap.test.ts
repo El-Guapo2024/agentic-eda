@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardState, Pad, Part } from "../api/types";
+import type { BoardState, Cmd, Pad, Part } from "../api/types";
 import { gateSwapChoice, padsOnly, swapNetsCmd, unselectedPadLabel } from "./gateSwap";
 
 function board(parts: Part[]): BoardState {
@@ -62,7 +62,7 @@ test("the unselected pads are listed as KiCad lists them, the reference, a colon
 });
 
 test("swapNetsCmd: the answer goes with the verb, wrapped in override_locks while the box is checked (UI-LEFT-3 P3-23)", () => {
-  const cmd = { op: "swap_pad_nets", ids: ["U1.1", "U1.2"] } as const;
+  const cmd: Cmd = { op: "swap_pad_nets", ids: ["U1.1", "U1.2"] };
   assert.deepEqual(swapNetsCmd(cmd, undefined, false), cmd);
   assert.deepEqual(swapNetsCmd(cmd, true, false), { ...cmd, connected_pads: true });
   assert.deepEqual(swapNetsCmd(cmd, false, true), { op: "override_locks", cmd: { ...cmd, connected_pads: false } });
