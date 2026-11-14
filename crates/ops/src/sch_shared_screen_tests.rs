@@ -195,7 +195,7 @@ fn dnp_on_the_second_placement_collects_the_units_of_its_reference() {
     ch.symbols.truncate(1);
     ch.instance_overrides.truncate(1);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let toggle = Cmd::SchEdit(crate::sch_edit::SchCmd::ToggleSymbolAttribute { ids: vec!["U1".into()], attribute: "dnp".into() });
+    let toggle = Cmd::SchEdit(crate::sch_edit::SchCmd::ToggleSymbolAttribute { ids: vec!["U1".into()], attribute: "dnp".into(), variant: String::new() });
     b.apply(&on("sb", toggle.clone())).unwrap();
     let d = b.design();
     assert!(d.sheet_contents.as_ref().unwrap()["ch.kicad_sch"].symbols[0].dnp, "the symbol in view (its flag is the shared screen's)");

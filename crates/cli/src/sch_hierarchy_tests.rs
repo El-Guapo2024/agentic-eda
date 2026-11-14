@@ -847,6 +847,35 @@ fn slow_a_bus_labels_net_class_is_its_members() {
     }
 }
 
+/// UI-LEFT-3 S3-27 (`checkNetclassDrivers`: the classes of every item of the bus's subgraphs, `processBusMember` on the members of the subgraph's driver
+/// connection): a class on a second bus label `X[0..1]` of the root's bus, which `D[0..1]` drives (`CLAIM_LESS`: `/D..` before `/X..`), goes to D0 and D1,
+/// the driver's members -- R1.1 and R2.1, and the child's R3.1 and R4.1 on them -- in the studio's model as in kicad-cli's netlist.
+#[test]
+fn slow_a_class_on_any_label_of_a_bus_goes_to_its_drivers_members() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let (dir, sheet_id, hl) = bus_board("slow_bus_class_second", "D[0..1]");
+    define_high_current(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let bus = root.wires.iter().find(|w| w.bus).unwrap();
+    let mid = Point { x: Nm::new((bus.pts[0].x.get() + bus.pts[1].x.get()) / 2), y: bus.pts[0].y };
+    step(&dir, Cmd::AddLabel { net: "X[0..1]".into(), at: mid, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+    let add = Cmd::AddLabel { net: "D[0..1]".into(), at: hl, kind: eda_model::ir::LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Bidirectional } };
+    step(&dir, Cmd::OnSheet { sheet: sheet_id, cmd: Box::new(add) }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let x = design.schematic.as_ref().unwrap().labels.iter().find(|l| l.net == "X[0..1]").unwrap().id.clone();
+    step(&dir, edit_label_fields(&x, vec![netclass("HighCurrent")]), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
+    for pin in ["R1.1", "R2.1", "R3.1", "R4.1"] {
+        let net = design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap().name.clone();
+        assert!(kicad_classes_of_pin(&dir, pin).iter().any(|c| c == "HighCurrent"), "kicad-cli puts {pin}'s net in the class");
+        assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{pin}'s net {net} is in the class: {:?}", class.nets);
+    }
+}
+
 /// A label's net class on a screen shown twice is in force on both placements (`checkNetclassDrivers` runs for each net, and each placement has its own): the
 /// second placement's net is in the class too, in the studio's model and in kicad-cli's netlist.
 #[test]
@@ -2463,6 +2492,64 @@ fn a_labels_expression_names_its_net_as_kicad_cli_does() {
             std::fs::write(derived_dir.join(name), text).unwrap();
         }
         assert_eq!(names(&kicad_cli_named_nets(&derived_dir.join("board.kicad_sch"))), names(&ours), "and of the derived file");
+    }
+}
+
+/// UI-LEFT-3 S3-15 (`SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol` reads a placed symbol's `(property ..)` in file order, `saveSymbol` writes them so,
+/// `DIALOG_SYMBOL_PROPERTIES` lists them so): R1's user fields `Zeta`, `Alpha`, `Mid` come in that order -- not by name -- in Symbol Properties (the fields the
+/// studio sends for the unit), in the derived file, and after Move Up / Move Down (`reorder_fields`) in the new order, read back from the derived file so.
+#[test]
+fn a_kicad_files_user_fields_keep_the_files_order() {
+    let (dir, _root, _) = round_case("v18_fields", "order");
+    let names_of = |dir: &Path| -> Vec<String> {
+        let (_, design, model) = load(dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        crate::studio::owner_fields_json(sch, &model, &eda_model::ir::field_key("R1", 1)).iter().filter_map(|f| f["name"].as_str().map(String::from)).collect()
+    };
+    let user = |names: Vec<String>| -> Vec<String> { names.into_iter().filter(|n| !["Reference", "Value", "Footprint", "Datasheet", "Description"].contains(&n.as_str())).collect() };
+    assert_eq!(user(names_of(&dir)), ["Zeta", "Alpha", "Mid"], "Symbol Properties' rows");
+    let written_order = |dir: &Path| -> Vec<String> {
+        let (_, design, model) = load(dir).unwrap();
+        let text = eda_kicad::export_kicad_sch(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "t" }).unwrap();
+        let r1 = text.split("(symbol").find(|s| s.contains("\"R1\"") && s.contains("(lib_id")).map(|_| ()).and_then(|_| text.find("(property \"Reference\" \"R1\"")).unwrap();
+        let tail = &text[r1..];
+        let tail = &tail[..tail.find("(instances").unwrap_or(tail.len())];
+        tail.split("(property \"").skip(1).filter_map(|s| s.split('"').next().map(String::from)).filter(|n| ["Zeta", "Alpha", "Mid"].contains(&n.as_str())).collect()
+    };
+    assert_eq!(written_order(&dir), ["Zeta", "Alpha", "Mid"], "the derived file");
+    step(&dir, Cmd::sch(eda_ops::sch_edit::SchCmd::ReorderFields { key: eda_model::ir::field_key("R1", 1), names: vec!["Mid".into(), "Zeta".into(), "Alpha".into()] }), false, "test").unwrap();
+    assert_eq!(user(names_of(&dir)), ["Mid", "Zeta", "Alpha"], "Move Up / Move Down");
+    assert_eq!(written_order(&dir), ["Mid", "Zeta", "Alpha"]);
+    let (_, design, model) = load(&dir).unwrap();
+    let text = eda_kicad::export_kicad_sch(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "t" }).unwrap();
+    let (back, back_model, _) = eda_kicad::import_kicad_sch(&text).unwrap();
+    let back_sch = back.schematic.as_ref().unwrap();
+    let r1 = back_sch.symbols.iter().find(|s| s.id == "R1").unwrap();
+    let specs = eda_engine::fields::symbol_specs_in(back_sch, r1, back_model.part("R1"), "");
+    assert_eq!(user(specs.iter().map(|s| s.name.clone()).collect()), ["Mid", "Zeta", "Alpha"], "read back in the written order");
+}
+
+/// UI-LEFT-3 S3-20 (`SCH_CONNECTION::IsBusLabel` of the label's shown text, `NET_SETTINGS::ParseBusGroup`; `NETLIST_EXPORTER_XML::makeListOfNets`): a label
+/// whose `@{..}` fails stays as written, and `N@{1/0}` / `M@{5-}` then read as bus groups, as `Z{A B}` does -- kicad-cli's netlist has no node for R1.1, R1.2
+/// or R3.1, and neither has the studio's net list; `V_{OK}@{1+1}` (a subscript, then 2) is the net `/V_{OK}2`. kicad-cli reads the derived file so too.
+#[test]
+fn a_label_whose_expression_fails_leaves_its_pins_off_the_netlist() {
+    let (dir, root, nets) = round_case("u4_netnames", "err");
+    let ours: std::collections::BTreeMap<String, Vec<String>> = nets.into_iter().filter(|(_, pins)| !pins.is_empty()).collect();
+    assert_eq!(ours.get("/V_{OK}2").map(|p| p.join(" ")).as_deref(), Some("R3.2"), "{ours:?}");
+    for pin in ["R1.1", "R1.2", "R3.1"] {
+        assert!(!ours.values().flatten().any(|p| p == pin), "{pin} is on no net: {ours:?}");
+    }
+    if kicad_cli_ready() {
+        let theirs = kicad_cli_named_nets(&root);
+        assert_eq!(theirs, ours, "kicad-cli's netlist of the original is the studio's");
+        let (_, design, model) = load(&dir).unwrap();
+        let derived_dir = dir.parent().unwrap().join("derived");
+        std::fs::create_dir_all(&derived_dir).unwrap();
+        for (name, text) in eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "t" }, "board.kicad_sch").unwrap() {
+            std::fs::write(derived_dir.join(name), text).unwrap();
+        }
+        assert_eq!(kicad_cli_named_nets(&derived_dir.join("board.kicad_sch")), ours, "and of the derived file");
     }
 }
 

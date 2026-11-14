@@ -5,7 +5,7 @@
 //! KiCad runs these once per mouse event; here the whole drag is one step, so the move is applied once for the final offset (an `x` move,
 //! then a `y` move, as `performItemMove` splits every move). Where a function differs from the C++ the difference is said at that function.
 
-use crate::sch_scene::{on_segment, parallel, Item, Scene, Seg, F_BY_DRAG, F_END, F_NEW, F_SELECTED, F_START};
+use crate::sch_scene::{on_segment, parallel, Item, Scene, Seg, F_BROKEN, F_BY_DRAG, F_END, F_NEW, F_SELECTED, F_START};
 use eda_model::ir::{Point, Nm};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -89,9 +89,12 @@ impl<'m> Scene<'m> {
 
     /// `SCH_MOVE_TOOL::setupItemsForDrag`: add the things attached to the selection, and cache what each wire's fixed end is attached to.
     pub(crate) fn setup_items_for_drag(&mut self, st: &mut Drag) {
+        // the lines' dangling ends as they are before anything moves, which `trimDanglingLines` compares against (`UpdateDanglingState`'s "changed")
+        self.dangling_before = (0..self.segs.len()).filter(|&i| !self.segs[i].dead).map(|i| (i, (self.end_is_dangling(i, self.segs[i].a), self.end_is_dangling(i, self.segs[i].b)))).collect();
         let selection = self.in_selection();
         let mut connected: Vec<Item> = Vec::new();
-        // all but labels first, so a junction is not dragged when the wire it sits on is going to be
+        // all but labels first, so a junction is not dragged when the wire it sits on is going to be: the four label types wait (`SCH_LABEL_T`,
+        // `SCH_HIER_LABEL_T`, `SCH_GLOBAL_LABEL_T`, `SCH_DIRECTIVE_LABEL_T`); a sheet pin is taken with the rest, at its connection point (r2 C-L9)
         let mut stage_two: Vec<Item> = Vec::new();
         for &it in &selection {
             // an item held through a group is moved by the group, which has no connection points: nothing attached to it follows
@@ -99,7 +102,7 @@ impl<'m> Scene<'m> {
                 continue;
             }
             let points: Vec<Point> = match it {
-                Item::Label(_) | Item::SheetPin(..) => {
+                Item::Label(_) => {
                     stage_two.push(it);
                     Vec::new()
                 }
@@ -142,36 +145,19 @@ impl<'m> Scene<'m> {
                 self.by_drag.insert(it);
             }
         }
-        // what each line's loose end is attached to, to see if the drag can stretch a neighbour instead of adding a bend
+        // "Pre-cache all connections of our selected objects so we can keep track of what they were originally connected to as we drag them around":
+        // `StoreAngle()` and `getConnectedItems` at both ends of every line of the selection, the drag's additions included (r2 S3-21: the moving end's
+        // items count too -- a line whose loose end is free but whose moving end is on a dragged pin is attached, and gets its bends). `getConnectedItems`'
+        // `SCH_SHEET_T` case records a line end on a selected sheet pin (`m_specialCaseSheetPins`), past its junction early return (r2 C-H1, r3 C3-L3).
         for it in self.in_selection() {
             let Item::Seg(i) = it else { continue };
-            let (start, end) = (self.segs[i].has(F_START), self.segs[i].has(F_END));
             if self.segs[i].length() > 0.0 {
                 self.segs[i].stored = self.segs[i].dir();
             }
-            // Only the end that stays put is special, and only when the line is partly selected: a fully selected line, and the moving end
-            // of a partly selected one, "are moved around normally and don't care about their connections". (KiCad also caches what is
-            // at the moving end, so a wire whose far end is free still counts as attached and gets bends; this reads the intent.)
-            if start != end {
-                let loose = if start { self.segs[i].b } else { self.segs[i].a };
-                let mut found = Vec::new();
-                self.get_connected_items(st, Item::Seg(i), loose, &mut found);
-                st.line_conn.entry(i).or_default().extend(found);
-            }
-            // r2 C-H1: KiCad runs `getConnectedItems` on both ends of every line of the selection, drag additions included, and its `SCH_SHEET_T` case
-            // records a line end on a selected sheet pin (`m_specialCaseSheetPins[pin] = { line, line->GetStartPoint() == aPoint }`; a pin the drag added is
-            // selected too, `AddItemToSel`): `performItemMove` then puts that end where `ConstrainOnEdge` left the pin, so a wire dragged sideways into
-            // a pin, or a pin dragged past its sheet's corner, keeps the wire on the pin.
             for end_pt in [self.segs[i].a, self.segs[i].b] {
-                // r3 C3-L3: that case is reached only past `getConnectedItems`' early return -- "If you're connected to a junction, you're only connected to
-                // the junction" (or to the pin of a symbol a junction is on): a line end on a junction records no sheet pin
-                if self.items().into_iter().any(|t| matches!(t, Item::Junction(_)) && self.is_connected(t, end_pt)) {
-                    continue;
-                }
-                let pins: Vec<Item> = self.items().into_iter().filter(|&t| matches!(t, Item::SheetPin(..)) && (self.is_user_selected(t) || self.by_drag.contains(&t)) && self.is_connected(t, end_pt)).collect();
-                for pin in pins {
-                    note_special_pin(st, pin, i, self.segs[i].a == end_pt);
-                }
+                let mut found = Vec::new();
+                self.get_connected_items(st, Item::Seg(i), end_pt, &mut found);
+                st.line_conn.entry(i).or_default().extend(found);
             }
         }
     }
@@ -222,7 +208,8 @@ impl<'m> Scene<'m> {
                 Item::SheetPin(..) => {
                     if let Item::Seg(oi) = original {
                         if self.is_connected(test, p) {
-                            if self.is_user_selected(test) {
+                            // `pin->IsSelected()`: picked, or added by the drag (`AddItemToSel`)
+                            if self.is_user_selected(test) || self.has_by_drag(test) {
                                 note_special_pin(st, test, oi, self.segs[oi].a == p);
                             }
                             list.push(test);
@@ -241,9 +228,11 @@ impl<'m> Scene<'m> {
                         }
                     }
                 }
-                Item::BusEntry(_) => {
+                Item::BusEntry(bi) => {
+                    // `items.Overlapping( aOriginalItem->GetBoundingBox() )`, then `line->HitTest( aPoint, 1 )` (the line's own end: always): an entry
+                    // whose box meets the line's (each grown by half its pen), not every entry of the sheet
                     if let Item::Seg(oi) = original {
-                        if self.seg_hit(oi, p) {
+                        if self.seg_hit(oi, p) && self.entry_meets_seg_box(bi, oi) {
                             list.push(test);
                         }
                     }
@@ -251,6 +240,19 @@ impl<'m> Scene<'m> {
                 _ => {}
             }
         }
+    }
+
+    /// The boxes of bus entry `bi` and segment `si` overlap, as the R-tree's `Overlapping( line->GetBoundingBox() )` finds the entry: the entry's box grown by
+    /// half its pen, the line's by half its own (`SCH_LINE::GetBoundingBox`: `Inflate( GetPenWidth() / 2 )`, 6 mil for a wire, 12 for a bus by default).
+    fn entry_meets_seg_box(&self, bi: usize, si: usize) -> bool {
+        let e = &self.sch.bus_entries[bi];
+        let end = Point { x: e.at.x + e.size.x, y: e.at.y + e.size.y };
+        let ep = crate::sch_scene::HALF_ENTRY_PEN_NM;
+        let s = &self.segs[si];
+        let sp = if s.bus { Nm::new(152_400) } else { Nm::new(76_200) };
+        let (ex0, ex1, ey0, ey1) = (e.at.x.min(end.x) - ep, e.at.x.max(end.x) + ep, e.at.y.min(end.y) - ep, e.at.y.max(end.y) + ep);
+        let (sx0, sx1, sy0, sy1) = (s.a.x.min(s.b.x) - sp, s.a.x.max(s.b.x) + sp, s.a.y.min(s.b.y) - sp, s.a.y.max(s.b.y) + sp);
+        ex0 <= sx1 && sx0 <= ex1 && ey0 <= sy1 && sy0 <= ey1
     }
 
     /// A new wire between a fixed item and a selected one (`makeNewWire`): a line of no length at `p`, so the selected item can be dragged
@@ -324,23 +326,30 @@ impl<'m> Scene<'m> {
                         // these items can connect anywhere along a line
                         let anywhere = matches!(selected, Item::BusEntry(_)) || self.is_label_like(selected);
                         if anywhere && self.seg_hit(ti, p) && !self.segs[ti].has(F_SELECTED) && !self.segs[ti].has(F_BY_DRAG) {
+                            // the stub is the call's one `newWire`: no second stub is made at this point for a symbol, a junction or a label (r2 C-L9)
                             let nw = self.make_new_wire(test, selected, p, p);
+                            new_wire = Some(nw);
                             self.segs[nw].flags |= F_BY_DRAG | F_START;
                             let (dx, dy) = self.segs[ti].dir();
                             self.segs[nw].stored = (-dy, dx);
                             list.push(Item::Seg(nw));
-                            // split the line in half at the point, with a junction there
-                            let old_end = self.segs[ti].b;
-                            self.segs[ti].b = p;
-                            let mut tail = self.segs[ti].clone();
-                            tail.a = p;
-                            tail.b = old_end;
-                            tail.flags = F_NEW;
-                            tail.from = self.segs[ti].from;
-                            self.segs.push(tail);
-                            self.sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p });
-                            st.line_conn.insert(nw, vec![Item::Seg(ti)]);
-                            st.line_conn.insert(ti, vec![Item::Seg(nw)]);
+                            let (a, b) = (self.segs[ti].a, self.segs[ti].b);
+                            if p != a && p != b {
+                                // split the line in half at the point (`makeNewWire( line, line, aPoint, oldEnd )`, a new line, not a broken one), with a
+                                // junction there
+                                let old_end = self.segs[ti].b;
+                                self.segs[ti].b = p;
+                                let mut tail = self.segs[ti].clone();
+                                tail.a = p;
+                                tail.b = old_end;
+                                tail.flags = F_NEW;
+                                tail.from = self.segs[ti].from;
+                                self.segs.push(tail);
+                                self.sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p });
+                            } else {
+                                st.line_conn.insert(nw, vec![Item::Seg(ti)]);
+                                st.line_conn.insert(ti, vec![Item::Seg(nw)]);
+                            }
                         }
                         continue;
                     }
@@ -485,10 +494,18 @@ impl<'m> Scene<'m> {
                 }
             }
             Item::SheetPin(s, p) => {
-                // `MoveSchematicItem`: the pin follows the delta along the sheet's edge (and may change edge)
-                let sheet = &self.sch.sheets[s];
-                let target = add(sheet.pins[p].at);
-                self.sch.sheets[s].pins[p].at = constrain_on_edge(&self.sch.sheets[s], target, true, sheet.pins[p].at);
+                // "Don't double move pins": the sheet moving takes its pins
+                if self.selected.contains(&Item::Sheet(s)) || self.by_drag.contains(&Item::Sheet(s)) {
+                    return;
+                }
+                // `MoveSchematicItem`: `SetStoredPos( GetStoredPos() + aDelta )`, `ConstrainOnEdge( GetStoredPos(), true )` -- the unconstrained place adds up
+                // over the moves (and the x and y splits of one), so the pin goes to the edge nearest where the pointer has taken it, not where the last
+                // constrained place plus this split would be (r2 C-L7)
+                let current = self.sch.sheets[s].pins[p].at;
+                let stored = self.pin_stored.entry((s, p)).or_insert(current);
+                *stored = add(*stored);
+                let target = *stored;
+                self.sch.sheets[s].pins[p].at = constrain_on_edge(&self.sch.sheets[s], target, true, current);
             }
         }
     }
@@ -801,6 +818,13 @@ impl<'m> Scene<'m> {
     /// The tail of `SCH_MOVE_TOOL::finalizeMoveOperation` that edits the sheet: a junction where the items left a point three wires still
     /// meet at, `TrimOverLappingWires`, `AddJunctionsIfNeeded`, `trimDanglingLines` for a drag, and `CleanUp`.
     pub(crate) fn finalize(&mut self, st: Option<&Drag>, internal_points: &[Point]) {
+        // "Save whatever new bend lines and changed lines survived the drag": `ClearEditFlags()` on `m_newDragLines` and `m_changedDragLines` -- they are no
+        // longer new or broken when `trimDanglingLines` looks (the stubs `makeNewWire` made keep `IS_NEW`)
+        if let Some(st) = st {
+            for &i in st.new_lines.iter().chain(st.changed_lines.iter()) {
+                self.segs[i].flags &= !(F_NEW | F_BROKEN);
+            }
+        }
         // "If we move items away from a junction, we _may_ want to add a junction there to denote the state"
         for &p in internal_points {
             if self.is_explicit_junction_needed(p) {
@@ -829,7 +853,7 @@ impl<'m> Scene<'m> {
         // "Clear SELECTED_BY_DRAG and other temp flags before CleanUp so that cleanup can properly process all items"
         self.by_drag.clear();
         for s in self.segs.iter_mut() {
-            s.flags &= !(F_BY_DRAG | F_NEW);
+            s.flags &= !(F_BY_DRAG | F_NEW | F_BROKEN);
         }
         self.clean_up();
     }
@@ -911,17 +935,28 @@ impl<'m> Scene<'m> {
         false
     }
 
-    /// `SCH_MOVE_TOOL::trimDanglingLines`: a line the drag made that ended up with both ends free is a stub, and goes.
+    /// `SCH_MOVE_TOOL::trimDanglingLines`, after a local `CleanUp`: `TestDanglingEnds` with a change handler, which sees each line whose dangling state it
+    /// changes (from the state before the drag, [`Scene::dangling_before`]; a line the drag made starts with none). Of those, not selected: "Split segments
+    /// that are dangling get trimmed back since they extend past the break point" -- a broken piece (`IS_BROKEN`: a junction added at the end broke a wire,
+    /// `BreakSegment`) with either end dangling goes; and "Drag wires that are completely disconnected (both ends dangling) are stubs that should be removed"
+    /// -- a new line (`IS_NEW`, not broken: a stub `makeNewWire` made, the half of a wire a label split) with both ends dangling goes. A line whose dangling
+    /// state did not change is left, whatever it is (r2 C-L8).
     pub(crate) fn trim_dangling_lines(&mut self, st: &Drag) {
+        let _ = st;
         self.clean_up();
         let mut danglers: Vec<usize> = Vec::new();
         for i in 0..self.segs.len() {
             let s = &self.segs[i];
-            if s.dead || s.has(F_SELECTED) || !s.has(F_NEW) {
+            if s.dead || s.has(F_SELECTED) {
                 continue;
             }
-            let _ = st;
-            if self.end_is_dangling(i, s.a) && self.end_is_dangling(i, s.b) {
+            let now = (self.end_is_dangling(i, s.a), self.end_is_dangling(i, s.b));
+            if now == self.dangling_before.get(&i).copied().unwrap_or((false, false)) {
+                continue;
+            }
+            if s.has(F_BROKEN) && (now.0 || now.1) {
+                danglers.push(i);
+            } else if s.has(F_NEW) && !s.has(F_BROKEN) && now.0 && now.1 {
                 danglers.push(i);
             }
         }

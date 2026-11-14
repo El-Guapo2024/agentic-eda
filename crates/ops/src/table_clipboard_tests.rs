@@ -235,3 +235,30 @@ fn a_cross_reference_in_a_label_or_a_field_follows_its_symbol_through_a_rename()
     assert_eq!(sch.extras.sheet_fields["sheet_x"][0].text, "of ${R5:VALUE}");
     assert_eq!(sch.user_fields["R2"]["Pair"], "${R5:REFERENCE}");
 }
+
+/// UI-LEFT-3 S3-19: `DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow` converts every field (`ConvertRefsToKIIDs`), a variant's text too (KiCad 25ec2335), so a
+/// placed symbol's Value, Footprint and Datasheet, its variant records' field texts and a sheet's variant field texts follow a rename; a symbol that shows its
+/// part's Value takes the part's text, rewritten.
+#[test]
+fn a_cross_reference_in_a_symbols_value_footprint_datasheet_or_variant_follows_a_rename() {
+    let mut m = ConstraintModel::default();
+    m.parts.push(eda_model::Part { reference: "R3".into(), mpn: None, lcsc: None, value: Some("x${R1:VALUE}".into()), package: None, footprint: None, pins: vec![], body_nm: None, symbol: None, datasheet: None, edge: None });
+    let mut design = sch_design();
+    let sym = |id: &str, value: &str, footprint: &str, datasheet: &str| SymbolInstance { id: id.into(), at: p(mm(10.16), mm(10.16)), rot: 0, mirrored: false, mirror_y: false, lib_id: "Device:R".into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: datasheet.into(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false };
+    let sch = design.schematic.as_mut().unwrap();
+    sch.symbols = vec![sym("R1", "10k", "", ""), sym("R2", "${R1:VALUE}", "${R1:FOOTPRINT}", "see ${R1:DATASHEET}"), sym("R3", "", "", "")];
+    let mut rec = eda_model::variants::SymbolVariant::default();
+    rec.fields.insert("Value".into(), "alt ${R1:VALUE}".into());
+    sch.extras.symbol_variants.entry("R2".into()).or_default().insert("V1".into(), rec);
+    let mut sheet_rec = eda_model::sch_extras::SheetVariant::default();
+    sheet_rec.fields.insert("Note".into(), "${R1:VALUE}".into());
+    sch.extras.sheet_variants.entry("sheet_x".into()).or_default().insert("V1".into(), sheet_rec);
+    let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::RenameSymbol { id: "R1".into(), new_id: "R5".into() }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let r2 = sch.symbols.iter().find(|s| s.id == "R2").unwrap();
+    assert_eq!((r2.value.as_str(), r2.footprint.as_str(), r2.datasheet.as_str()), ("${R5:VALUE}", "${R5:FOOTPRINT}", "see ${R5:DATASHEET}"));
+    assert_eq!(sch.extras.symbol_variants["R2"]["V1"].fields["Value"], "alt ${R5:VALUE}");
+    assert_eq!(sch.extras.sheet_variants["sheet_x"]["V1"].fields["Note"], "${R5:VALUE}");
+    assert_eq!(sch.symbols.iter().find(|s| s.id == "R3").unwrap().value, "x${R5:VALUE}", "the part's Value, rewritten, as the symbol's own");
+}

@@ -343,9 +343,12 @@ fn drag_sideways_slides_the_corner_of_an_elbow_wire_instead_of_adding_bends() {
 
 #[test]
 fn drag_of_a_part_off_the_end_of_a_wire_that_ends_on_a_junction_slides_that_end_along_the_other_wire() {
-    // "These are special-cased and get a single line added instead of a 90-degree bend"
+    // "These are special-cased and get a single line added instead of a 90-degree bend". The through wire runs between the pins of R2 and R3: with free ends
+    // its pieces would be trimmed (`trimDanglingLines`, see `a_wire_with_free_ends_broken_by_the_drags_junction_is_trimmed_back`)
     let mut s = section();
     s.symbols.push(sym("R1", p(mm(20.32), mm(45.72))));
+    s.symbols.push(sym("R2", p(mm(10.16), mm(21.59))));
+    s.symbols.push(sym("R3", p(mm(40.64), mm(21.59))));
     s.wires.push(wire("wire_t", &[p(mm(20.32), mm(41.91)), p(mm(20.32), mm(25.4))]));
     s.wires.push(wire("wire_h", &[p(mm(10.16), mm(25.4)), p(mm(40.64), mm(25.4))]));
     s.junctions.push(Junction { id: "jct_a".into(), at: p(mm(20.32), mm(25.4)) });
@@ -356,6 +359,24 @@ fn drag_of_a_part_off_the_end_of_a_wire_that_ends_on_a_junction_slides_that_end_
     assert_eq!(after.junctions.iter().map(|j| j.at).collect::<Vec<_>>(), vec![p(mm(26.67), mm(25.4))]);
     // the through wire is whole again
     assert!(connected(&segs, p(mm(10.16), mm(25.4)), p(mm(40.64), mm(25.4))));
+}
+
+/// r2 C-L8 (`SCH_MOVE_TOOL::trimDanglingLines`: "Split segments that are dangling get trimmed back since they extend past the break point"): the same drag
+/// with the through wire's ends free -- the junction `AddJunctionsIfNeeded` puts where the T now meets it breaks it (`BreakSegment`: both pieces
+/// `IS_BROKEN`), both pieces are then dangling at their free ends and change state, so both go; the junction, joining nothing then, goes with `CleanUp`. The
+/// dragged T stays (its line is not broken, and one end is on R1's pin).
+#[test]
+fn a_wire_with_free_ends_broken_by_the_drags_junction_is_trimmed_back() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(mm(20.32), mm(45.72))));
+    s.wires.push(wire("wire_t", &[p(mm(20.32), mm(41.91)), p(mm(20.32), mm(25.4))]));
+    s.wires.push(wire("wire_h", &[p(mm(10.16), mm(25.4)), p(mm(40.64), mm(25.4))]));
+    s.junctions.push(Junction { id: "jct_a".into(), at: p(mm(20.32), mm(25.4)) });
+    let after = run_on(s, drag(&["R1"], 5 * G, Nm::ZERO));
+    let segs: Vec<(Point, Point)> = after.wires.iter().flat_map(|w| w.pts.windows(2).map(|q| (q[0], q[1])).collect::<Vec<_>>()).collect();
+    assert!(after.junctions.is_empty(), "{:?}", after.junctions);
+    assert!(!segs.iter().any(|(a, b)| a.x == mm(10.16) || b.x == mm(10.16) || a.x == mm(40.64) || b.x == mm(40.64)), "the through wire's pieces are trimmed: {segs:?}");
+    assert!(connected(&segs, p(mm(26.67), mm(41.91)), p(mm(26.67), mm(25.4))), "{segs:?}");
 }
 
 #[test]
@@ -494,9 +515,12 @@ fn drag_of_a_sheet_keeps_the_wire_on_its_pin_attached_with_right_angles() {
     assert!(segs.iter().all(|(a, b)| a.x == b.x || a.y == b.y), "{segs:?}");
 }
 
+/// r2 S3-21 (`setupItemsForDrag` caches `getConnectedItems` at both ends of every line): the wire's moving end is on the sheet's pin, which the cache holds
+/// (`SCH_SHEET_T`: the selected pin), so the wire is attached and a drag across it keeps its free end where it is with two bend lines (`orthoLineDrag`'s
+/// `foundAttachment && line->IsOrthogonal()`), the bend one grid from the pin; "Original line has no attachments, just move the unselected end" is for a line
+/// nothing is cached for.
 #[test]
-fn drag_of_a_sheet_with_a_free_wire_just_carries_the_wire() {
-    // "Original line has no attachments, just move the unselected end"
+fn drag_of_a_sheet_with_a_free_wire_bends_the_wire_at_its_free_end() {
     let mut s = section();
     s.sheets.push(SheetInstance {
         id: "sheet_a".into(),
@@ -510,7 +534,10 @@ fn drag_of_a_sheet_with_a_free_wire_just_carries_the_wire() {
     s.wires.push(wire("wire_a", &[p(mm(25.4), mm(17.78)), p(mm(50.8), mm(17.78))]));
     let after = run_on(s, drag(&["sheet_a"], Nm::ZERO, 2 * G));
     assert_eq!(after.sheets[0].pins[0].at, p(mm(50.8), mm(17.78) + 2 * G));
-    assert_eq!(wire_pts(&after), vec![vec![p(mm(25.4), mm(17.78) + 2 * G), p(mm(50.8), mm(17.78) + 2 * G)]]);
+    let segs: Vec<(Point, Point)> = after.wires.iter().flat_map(|w| w.pts.windows(2).map(|q| (q[0], q[1])).collect::<Vec<_>>()).collect();
+    assert!(segs.iter().all(|(a, b)| a.x == b.x || a.y == b.y), "{segs:?}");
+    assert!(connected(&segs, p(mm(25.4), mm(17.78)), p(mm(50.8), mm(17.78) + 2 * G)), "the free end stays, the pin end follows: {segs:?}");
+    assert!(connected(&segs, p(mm(50.8) - G, mm(17.78)), p(mm(50.8) - G, mm(17.78) + 2 * G)), "the bend one grid from the pin: {segs:?}");
 }
 
 // ----------------------------------------------------------------------------------------------------------------------- rotate
@@ -1325,4 +1352,17 @@ fn placing_a_symbol_copies_its_library_fields_face_and_colour() {
     let look = out.extras.field_look("U1", "Reference").cloned().unwrap_or_default();
     assert_eq!((look.font.as_deref(), look.color), (Some("KiCad Font"), Some(blue)));
     assert!(out.extras.field_look("U1", "Value").is_none(), "a field the library gives no look keeps the default");
+}
+
+/// r2 C-L9 (`JUNCTION_HELPERS::AnalyzePoint`): a bus wire entry counts at a point its box holds (`aItems.Overlapping( aPosition )`), not only at its ends.
+#[test]
+fn analyze_point_takes_a_bus_entry_by_its_box() {
+    let m = ConstraintModel::default();
+    let mut s = section();
+    s.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: p(mm(10.16), mm(10.16)), size: p(mm(2.54), mm(2.54)) });
+    let scene = crate::sch_scene::Scene::new(&s, &m);
+    let none = std::collections::BTreeSet::new();
+    assert!(scene.analyze_point(p(mm(11.43), mm(11.43)), false, &none).has_bus_entry, "the middle of its diagonal");
+    assert!(scene.analyze_point(p(mm(10.16), mm(12.7)), false, &none).has_bus_entry, "a corner of its box");
+    assert!(!scene.analyze_point(p(mm(15.24), mm(11.43)), false, &none).has_bus_entry, "outside it");
 }

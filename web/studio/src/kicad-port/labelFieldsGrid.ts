@@ -10,7 +10,8 @@
 //   1. `edit_field` of each field whose place changed, by the name it had, before anything else -- the first one leaves every other field where it is, as the
 //      grid shows it (the label's spin, set after, does not move a field: `SetSpinStyle`); the Sheet References' looks ride in theirs;
 //   2. `edit_label` with the rows' texts, Show, Italic, Bold, Text Size, Show Name and Allow Autoplacement (`LabelField`), the label's own changes;
-//   3. `set_field_looks` of each field whose Font or Color changed, and `edit_field` of a new field's H / V Align, by the name it has then.
+//   3. `set_field_looks` of each field whose Font or Color changed, by the name it has then, and on a label placed by hand `edit_field` of a new field
+//      whose place cells were changed (a new field is at the label's anchor with the angle and justification of the row before it: `OnAddField`).
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Cmd, SchLabelField } from "../api/types";
@@ -59,9 +60,15 @@ export function labelGridRows(fields: readonly SchLabelField[], labelAt: readonl
   });
 }
 
-/** A row added by Add Field from `OnAddField`'s new field (kicad-port/schProperties.ts `newLabelField`): its looks, centred, horizontal, no place yet. */
-export function newLabelGridRow(key: number, f: LabelFieldEdit): LabelGridRow {
-  const look: FieldLook = { nameShown: !!f.name_shown, h: "left", v: "center", italic: f.italic, bold: !!f.bold, sizeMm: mm(f.size_nm && f.size_nm > 0 ? f.size_nm : LABEL_FIELD_SIZE_NM), font: DEFAULT_FONT_NAME, color: "", allowAutoplace: true };
+/**
+ * A row added by Add Field from `OnAddField`'s new field (kicad-port/schProperties.ts `newLabelField`). `before` is the look of the grid's last row
+ * (`newField.SetAttributes( m_fields->at( m_fields->size() - 1 ) )`: its angle and justification) when the label has a place for its fields: the new field
+ * is then at (0, 0), the label's anchor once OK offsets it (`field.Offset( m_currentLabel->GetPosition() )`; UI-LEFT-3 S3-17). With no row before it the
+ * field is centred and horizontal (`SCH_FIELD`'s defaults); a new label's rows have no place (`before` absent, the X and Y cells empty).
+ */
+export function newLabelGridRow(key: number, f: LabelFieldEdit, before?: FieldLook | null): LabelGridRow {
+  const look: FieldLook = { nameShown: !!f.name_shown, h: "center", v: "center", italic: f.italic, bold: !!f.bold, sizeMm: mm(f.size_nm && f.size_nm > 0 ? f.size_nm : LABEL_FIELD_SIZE_NM), font: DEFAULT_FONT_NAME, color: "", allowAutoplace: true };
+  if (before !== undefined) Object.assign(look, { h: before?.h ?? "center", v: before?.v ?? "center", vertical: !!before?.vertical, xMm: 0, yMm: 0 });
   return { key, was: null, isr: false, name: f.name, text: f.text, visible: f.visible, look, wasLook: look };
 }
 
@@ -106,13 +113,19 @@ export function labelPlaceCmds(labelId: string, rows: readonly LabelGridRow[]): 
   return out;
 }
 
-/** Step 3: the Font and Color of each field (`set_field_looks`), and a new field's H / V Align, by the name the field has once `edit_label` is done. */
-export function labelLookCmds(labelId: string, rows: readonly LabelGridRow[]): Cmd[] {
+/**
+ * Step 3: the Font and Color of each field (`set_field_looks`), by the name the field has once `edit_label` is done; and, on a label whose fields were placed
+ * by hand (`handPlaced`), a new field's place where the grid's X / Y Position, Orientation or H / V Align were changed from those it was added with (the
+ * server puts it at the anchor like the field before it otherwise). On an autoplaced label `AutoplaceFields` places every field after OK, a new one too, and
+ * `positioningChanged` compares only the fields the label had, so a new row's place cells change nothing there.
+ */
+export function labelLookCmds(labelId: string, rows: readonly LabelGridRow[], handPlaced = false): Cmd[] {
   const out: Cmd[] = [];
   for (const r of rows) {
     const name = r.isr ? (r.was ?? r.name) : r.name.trim() === "Net Class" ? "Netclass" : r.name.trim();
     if (!name) continue;
-    if (r.was === null && (r.look.h !== r.wasLook.h || r.look.v !== r.wasLook.v)) out.push({ op: "sch_edit", verb: "edit_field", id: fieldId(labelId, name), h: r.look.h, v: r.look.v } as Cmd);
+    if (r.was === null && handPlaced && positioningChanged(r.look, r.wasLook))
+      out.push({ op: "sch_edit", verb: "edit_field", id: fieldId(labelId, name), local_at: { x: nm(r.look.xMm), y: nm(r.look.yMm) }, local_vertical: !!r.look.vertical, h: r.look.h, v: r.look.v } as Cmd);
     const fontChanged = r.look.font !== r.wasLook.font;
     const colorChanged = r.look.color !== r.wasLook.color;
     if (fontChanged || colorChanged) out.push({ op: "sch_edit", verb: "set_field_looks", ids: [fieldId(labelId, name)], ...(fontChanged ? { font: r.look.font } : {}), ...(colorChanged ? { color: colorOfCell(r.look.color) } : {}) });

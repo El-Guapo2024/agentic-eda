@@ -189,7 +189,14 @@ impl<'a> Board<'a> {
     /// variant has); `new_state` is worked out over all of them together, as `collectedItems` holds them all. A power symbol is an `SCH_SYMBOL` too, taken as
     /// any symbol (its reference is its own, so it has no other units): its flags are `SchExtras::power_props`' (the writer's `(in_bom)`, `(on_board)`,
     /// `(exclude_from_sim)`, `(dnp)`), in the default variant as a sheet's.
-    pub(crate) fn toggle_symbol_attribute(&mut self, ids: &[String], attribute: &str) -> Result<(), Vec<CheckResult>> {
+    ///
+    /// In a design variant (`variant` not empty; KiCad 25ec2335 `SetAttribute`: `GetDNP( sheet, variant )`, `SetDNP( new_state, sheet, variant )`), a symbol's
+    /// state is its record of the variant, else its own flag, read and set on every record [`Self::set_symbol_variant`] edits -- each unit of the reference
+    /// on every sheet, at its own sheet path (UI-LEFT-3 S3-18) -- a sheet's its record at the path in view, a rule area's and a power symbol's their own (no
+    /// variant has them). **Differs**: KiCad passes the sheet in view for every collected unit, so a unit on another sheet has no instance there: its own flag
+    /// counts for `new_state` (`GetDNP` falls back to `m_DNP`) and `setVariantAttribute` leaves it alone (`wxCHECK_MSG( instance, .. )`, an assertion); here
+    /// its record is read and set as the units of the sheet in view are, so the units of one part never part in a variant.
+    pub(crate) fn toggle_symbol_attribute(&mut self, ids: &[String], attribute: &str, variant: &str) -> Result<(), Vec<CheckResult>> {
         use eda_model::sch_extras::SchGraphicKind;
         if !matches!(attribute, "dnp" | "exclude_from_bom" | "exclude_from_board" | "exclude_from_sim") {
             return Err(fail("ops_bad_attribute", attribute, "the attribute is dnp, exclude_from_bom, exclude_from_board or exclude_from_sim"));
@@ -214,17 +221,40 @@ impl<'a> Board<'a> {
             "exclude_from_board" => board,
             _ => sim,
         };
-        let targets = if symbol_ids.is_empty() { Vec::new() } else { self.attribute_targets(&symbol_ids)?.0 };
+        let variant = if variant.is_empty() { String::new() } else { self.existing_variant(variant)? };
+        // a sheet's record of the variant: the path in view's where its screen is shown on several paths (`set_sheet_variant`'s)
+        let sheet_parent: Vec<String> = if self.focus.as_ref().is_some_and(|f| eda_model::sheet_list::placement_counts(&self.design).get(f).copied().unwrap_or(0) > 1) { self.focus_sheet_path() } else { Vec::new() };
         let mut new_state = false;
-        for (file, i) in &targets {
-            let Some(s) = sheet_list::screen_of_file(&self.design, file).and_then(|sch| sch.symbols.get(*i)) else { continue };
-            new_state |= !pick(s.dnp, s.exclude_from_bom, s.exclude_from_board, s.exclude_from_sim);
+        if variant.is_empty() {
+            let targets = if symbol_ids.is_empty() { Vec::new() } else { self.attribute_targets(&symbol_ids)?.0 };
+            for (file, i) in &targets {
+                let Some(s) = sheet_list::screen_of_file(&self.design, file).and_then(|sch| sch.symbols.get(*i)) else { continue };
+                new_state |= !pick(s.dnp, s.exclude_from_bom, s.exclude_from_board, s.exclude_from_sim);
+            }
+        } else {
+            if !symbol_ids.is_empty() {
+                // refused as the default variant's is: a symbol the sheet in view does not have
+                self.attribute_targets(&symbol_ids)?;
+            }
+            for (key, id, path) in self.variant_symbol_records(&symbol_ids) {
+                let Some(sch) = self.section_of_key(key.as_deref()) else { continue };
+                for sym in sch.symbols.iter().filter(|s| s.id == id) {
+                    let f = eda_model::variants::resolved_flags_on(sch, sym, path.as_deref().unwrap_or(&[]), &variant);
+                    new_state |= !pick(f.dnp, f.exclude_from_bom, f.exclude_from_board, f.exclude_from_sim);
+                }
+            }
         }
         {
             let sch = self.schematic()?;
             for id in &sheet_ids {
-                let p = sch.extras.sheet_props_of(id);
-                new_state |= !pick(p.dnp, p.exclude_from_bom, p.exclude_from_board, p.exclude_from_sim);
+                let on = if variant.is_empty() {
+                    let p = sch.extras.sheet_props_of(id);
+                    pick(p.dnp, p.exclude_from_bom, p.exclude_from_board, p.exclude_from_sim)
+                } else {
+                    let r = eda_model::variants::sheet_flags_on(sch, id, &sheet_parent, &variant);
+                    pick(r.dnp, r.exclude_from_bom, r.exclude_from_board, r.exclude_from_sim)
+                };
+                new_state |= !on;
             }
             for g in sch.extras.graphics.iter().filter(|g| area_ids.contains(&g.id)) {
                 if let SchGraphicKind::RuleArea { dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, .. } = &g.shape {
@@ -237,7 +267,24 @@ impl<'a> Board<'a> {
             }
         }
         let v = Some(new_state);
-        if !symbol_ids.is_empty() {
+        if !variant.is_empty() {
+            let flags = crate::sch_variants::VariantFlags {
+                dnp: (attribute == "dnp").then_some(new_state),
+                exclude_from_bom: (attribute == "exclude_from_bom").then_some(new_state),
+                exclude_from_board: (attribute == "exclude_from_board").then_some(new_state),
+                exclude_from_sim: (attribute == "exclude_from_sim").then_some(new_state),
+                exclude_from_pos_files: None,
+            };
+            if !symbol_ids.is_empty() {
+                self.set_symbol_variant(&variant, &symbol_ids, &flags, &BTreeMap::new())?;
+            }
+            for id in &sheet_ids {
+                let r = eda_model::variants::sheet_flags_on(self.schematic()?, id, &sheet_parent, &variant);
+                if pick(r.dnp, r.exclude_from_bom, r.exclude_from_board, r.exclude_from_sim) != new_state {
+                    self.set_sheet_variant(id, &variant, &flags, &BTreeMap::new())?;
+                }
+            }
+        } else if !symbol_ids.is_empty() {
             match attribute {
                 "dnp" => self.set_symbol_attrs(&symbol_ids, v, None, None, None)?,
                 "exclude_from_bom" => self.set_symbol_attrs(&symbol_ids, None, v, None, None)?,
@@ -246,7 +293,7 @@ impl<'a> Board<'a> {
             }
         }
         let sch = self.schematic_mut()?;
-        for id in &sheet_ids {
+        for id in sheet_ids.iter().filter(|_| variant.is_empty()) {
             let mut p = sch.extras.sheet_props_of(id);
             *match attribute {
                 "dnp" => &mut p.dnp,

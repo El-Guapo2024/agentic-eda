@@ -125,7 +125,7 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
         ...labelPlaceCmds(label.id, rows),
         labelEditCmd(label, spin, { text, shape, spin: turn, sizeNm, bold, italic, autoRotate: supportsAuto ? auto : undefined, fields: own.map((r) => ({ ...labelFieldEditOf(r), name: r.name === "Net Class" ? "Netclass" : r.name })) }),
         textAttrsCmd(label.id, { font: label.font, color: label.color }, { font: chosenFont(font), color }, false),
-        ...labelLookCmds(label.id, rows),
+        ...labelLookCmds(label.id, rows, !!label.fields_hand_placed),
       ])
     );
   return (

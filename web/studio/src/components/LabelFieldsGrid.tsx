@@ -28,7 +28,8 @@ export function LabelFieldsGrid({ rows, setRows, placeless = false, fontsId = "l
   const setRow = (key: number, change: Partial<LabelGridRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...change } : r)));
   const addField = () => {
     const f = newLabelField(own.map((r) => ({ ...labelFieldEditOf(r), name: r.name === "Net Class" ? "Netclass" : r.name })), isrRow ? isrRow.visible : null);
-    setRows((rs) => [...rs, { ...newLabelGridRow(nextKey.current++, f), name: labelFieldDisplayName(f.name) }]);
+    // `SetAttributes( m_fields->at( m_fields->size() - 1 ) )`: the angle and justification of the last row, at the anchor (a new label's rows have no place)
+    setRows((rs) => [...rs, { ...newLabelGridRow(nextKey.current++, f, placeless ? undefined : (rs[rs.length - 1]?.look ?? null)), name: labelFieldDisplayName(f.name) }]);
   };
   const deleteField = (key: number) => setRows((rs) => rs.filter((r) => r.key !== key));
   return (

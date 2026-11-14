@@ -27,6 +27,9 @@ pub(crate) const F_END: u8 = 4;
 pub(crate) const F_BY_DRAG: u8 = 8;
 /// `IS_NEW`: made by this edit.
 pub(crate) const F_NEW: u8 = 16;
+/// `IS_BROKEN`: one of the two pieces `SCH_LINE_WIRE_BUS_TOOL::BreakSegment` made of a line (`IS_CHANGED | IS_BROKEN` on the head, `IS_NEW | IS_BROKEN` on the
+/// tail), which `SCH_MOVE_TOOL::trimDanglingLines` trims when it is left dangling.
+pub(crate) const F_BROKEN: u8 = 32;
 
 /// One item of the sheet, by position in its vector. A [`Seg`] is one segment of a wire (`SCH_LINE_T` on the wire or bus layer).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -297,6 +300,12 @@ pub(crate) struct Scene<'m> {
     /// The schematic editor's "Override locks" box is checked ([`crate::Cmd::OverrideLocks`]): `sch_move::select` keeps locked items
     /// (`FilterSelectionForLockedItems` returns at once).
     pub override_locks: bool,
+    /// `SCH_ITEM::GetStoredPos` of a sheet pin being moved (by sheet and pin index): set to where it is when it first moves (`initializeMoveOperation`'s
+    /// `SetStoredPos( GetPosition() )`), every split of the move added to it, and the pin placed by `ConstrainOnEdge( stored )` (`MoveSchematicItem`).
+    pub pin_stored: BTreeMap<(usize, usize), Point>,
+    /// Each segment's dangling ends (start, end) as the last dangling test left them, before a drag (`SCH_LINE::m_startIsDangling`, `m_endIsDangling`):
+    /// `trimDanglingLines` acts on a line whose state its `TestDanglingEnds` changes. A segment the edit made has none (`false, false`, a new `SCH_LINE`'s).
+    pub dangling_before: BTreeMap<usize, (bool, bool)>,
 }
 
 impl<'m> Scene<'m> {
@@ -315,7 +324,7 @@ impl<'m> Scene<'m> {
         }
         let shapes = sch.symbols.iter().map(|s| symbol_shape(model, &sch, s)).collect();
         let power_shapes = sch.power_symbols.iter().map(|p| power_shape(model, p)).collect();
-        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new(), rigid: BTreeSet::new(), lone_group: false, override_locks: false }
+        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new(), rigid: BTreeSet::new(), lone_group: false, override_locks: false, pin_stored: BTreeMap::new(), dangling_before: BTreeMap::new() }
     }
 
     // -------------------------------------------------------------------------------------------------------------- items
@@ -542,8 +551,10 @@ impl<'m> Scene<'m> {
                 info.has_explicit_junction_dot = true;
             }
         }
+        // `aItems.Overlapping( aPosition )`: a bus wire entry whose box holds the point, wherever along it (`SCH_BUS_ENTRY_BASE::GetBoundingBox`: from its
+        // start to its end, grown by half its pen, the wire's 6 mil by default)
         for (i, b) in self.sch.bus_entries.iter().enumerate() {
-            if (b.at == p || entry_end(b) == p) && !skip.contains(&Item::BusEntry(i)) {
+            if !skip.contains(&Item::BusEntry(i)) && entry_box_holds(b, p) {
                 info.has_bus_entry = true;
             }
         }
@@ -627,18 +638,13 @@ impl<'m> Scene<'m> {
                 }
             }
         }
-        // a label at the point only marks it as one where lines break
+        // a label at the point only marks it as one where lines break: a local label the bus layer when its text is a bus (`SCH_LABEL_T`:
+        // `SCH_CONNECTION::IsBusLabel`), a global or hierarchical label always the wires (`SCH_HIER_LABEL_T`, `SCH_GLOBAL_LABEL_T`); a directive label not at
+        // all (`AnalyzePoint` lists no `SCH_DIRECTIVE_LABEL_T`)
         for (i, l) in self.sch.labels.iter().enumerate() {
             if l.at == p && !skip.contains(&Item::Label(i)) {
-                let bus_label = is_bus_label(&l.net);
+                let bus_label = matches!(l.kind, eda_model::ir::LabelKind::Local) && is_bus_label(&l.net);
                 break_lines[if bus_label { BUSES } else { WIRES }] = true;
-            }
-        }
-        for (i, g) in self.sch.extras.graphics.iter().enumerate() {
-            if let SchGraphicKind::Directive { at, .. } = g.shape {
-                if at == p && !skip.contains(&Item::Graphic(i)) {
-                    break_lines[WIRES] = true;
-                }
             }
         }
         for layer in [WIRES, BUSES] {
@@ -700,12 +706,14 @@ impl<'m> Scene<'m> {
         }
     }
 
-    /// `SCH_LINE::BreakAt`: the segment keeps its start and ends at `p`; the new one runs from `p` to the old end and copies the rest.
+    /// `SCH_LINE_WIRE_BUS_TOOL::BreakSegment` (`SCH_LINE::BreakAt`): the segment keeps its start and ends at `p`; the new one runs from `p` to the old end
+    /// and copies the rest. Both are flagged broken (`IS_CHANGED | IS_BROKEN`, `IS_NEW | IS_BROKEN`).
     pub(crate) fn break_seg(&mut self, i: usize, p: Point) -> usize {
         let mut tail = self.segs[i].clone();
         tail.a = p;
         tail.flags &= !(F_START | F_END);
-        tail.flags |= F_NEW;
+        tail.flags |= F_NEW | F_BROKEN;
+        self.segs[i].flags |= F_BROKEN;
         self.segs[i].b = p;
         // the tail follows its head in the wire it came from
         if let Some((w, k)) = self.segs[i].from {
@@ -969,6 +977,17 @@ impl<'m> Scene<'m> {
 
 fn entry_end(b: &eda_model::ir::BusEntry) -> Point {
     Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }
+}
+
+/// Half the pen of a bus wire entry with nothing set: the Default net class's 6 mil wire (`SCH_BUS_WIRE_ENTRY::GetPenWidth`).
+pub(crate) const HALF_ENTRY_PEN_NM: Nm = Nm::new(76_200);
+
+/// `SCH_BUS_ENTRY_BASE::GetBoundingBox` holds `p`: the box from the entry's start to its end, normalised and grown by half its pen.
+pub(crate) fn entry_box_holds(b: &eda_model::ir::BusEntry, p: Point) -> bool {
+    let e = entry_end(b);
+    let (x0, x1) = (b.at.x.min(e.x) - HALF_ENTRY_PEN_NM, b.at.x.max(e.x) + HALF_ENTRY_PEN_NM);
+    let (y0, y1) = (b.at.y.min(e.y) - HALF_ENTRY_PEN_NM, b.at.y.max(e.y) + HALF_ENTRY_PEN_NM);
+    (x0..=x1).contains(&p.x) && (y0..=y1).contains(&p.y)
 }
 
 fn remap_indices(keep: &[bool]) -> Vec<Option<usize>> {

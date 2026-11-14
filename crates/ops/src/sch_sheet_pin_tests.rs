@@ -159,6 +159,18 @@ fn a_pin_pushed_past_the_end_of_its_border_stops_at_the_corner_and_one_dragged_a
     assert_eq!(pin_at(&across, "shpin_out"), p(mm(140.0), mm(70.0)));
 }
 
+/// r2 C-L7 (`MoveSchematicItem`: `SetStoredPos( GetStoredPos() + aDelta )`, `ConstrainOnEdge( GetStoredPos(), true )`): the pin's unconstrained place adds
+/// up over the x and y parts of the move, so moved 3 mm in and 9 mm up from the left border's (100, 60) the pin goes to the top border at x 103 -- its
+/// stored place (103, 51) is nearest the top -- not back onto the left border at y 51, as the constrained place after the x part plus the y part would.
+#[test]
+fn a_pins_move_adds_up_its_unconstrained_place_before_the_edge_takes_it() {
+    let d = design();
+    let after = ok(&d, mv(&["shpin_in"], mm(3.0), mm(-9.0)));
+    assert_eq!(pin_at(&after, "shpin_in"), p(mm(103.0), mm(50.0)));
+    let dragged = ok(&d, drag(&["shpin_in"], mm(3.0), mm(-9.0)));
+    assert_eq!(pin_at(&dragged, "shpin_in"), p(mm(103.0), mm(50.0)), "a drag the same");
+}
+
 #[test]
 fn dragging_the_pin_takes_the_wire_with_it_and_the_net_stays() {
     let d = design();

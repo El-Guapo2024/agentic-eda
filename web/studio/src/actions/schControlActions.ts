@@ -16,8 +16,8 @@ import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import type { Cmd } from "../api/types";
 import { fetchHierarchy } from "../api/schControlClient";
 import { neighbourSheet, samePath } from "../kicad-port/sheetPages";
-import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, nearestTextItem, nextAttributeState, planIncrement, type IncrementTarget, type SymbolAttrKey } from "../kicad-port/schControl";
-import { setSymbolVariantCmd, variantFlags } from "../kicad-port/designVariants";
+import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, nearestTextItem, planIncrement, type IncrementTarget, type SymbolAttrKey } from "../kicad-port/schControl";
+import { variantFlags } from "../kicad-port/designVariants";
 import { labelNet, netAtPoint } from "../kicad-port/schNetAtPoint";
 import { parsePinItemId, pinDistance, pinItems } from "../kicad-port/schPins";
 import { padIds } from "../kicad-port/pcbItems";
@@ -263,20 +263,9 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       const variant = state.schVariant;
       const items = attributeItems(sch, ctx.requestSelection(), variant);
       if (items.length === 0) return;
-      // the default variant: the server collects the units of the reference this sheet path gives each symbol on every sheet and works out `new_state`
-      // over all of them and the sheets and rule areas (`CollectOtherUnits` over `Hierarchy()`, r5 D5-M2, UI-LEFT S9); a variant's records are the sheet in view's
-      if (variant === "") return void api.cmd({ op: "sch_edit", verb: "toggle_symbol_attribute", ids: items.map((i) => i.id), attribute: key });
-      const next = nextAttributeState(items.map((i) => i.flags), key);
-      const cmds: Cmd[] = [];
-      const symCmd = setSymbolVariantCmd(variant, items.filter((i) => i.kind === "symbol").map((i) => i.id), { flags: { [key]: next } });
-      if (symCmd) cmds.push(symCmd);
-      for (const i of items) {
-        if (i.kind === "symbol" || !!i.flags[key] === next) continue;
-        if (i.kind === "sheet") cmds.push({ op: "sch_edit", verb: "set_sheet_variant", id: i.id, variant, [key]: next } as unknown as Cmd);
-        else if (i.kind === "power") cmds.push({ op: "sch_edit", verb: "set_power_props", id: i.id, [key]: next } as unknown as Cmd);
-        else if (i.graphic) cmds.push({ op: "sch_edit", verb: "edit_graphic", id: i.id, graphic: { ...i.graphic, shape: { ...i.graphic.shape, [key]: next } } } as unknown as Cmd);
-      }
-      if (cmds.length > 0) void api.cmdBatch(cmds);
+      // the server collects the units of the reference this sheet path gives each symbol on every sheet and works out `new_state` over all of them and the
+      // sheets and rule areas (`CollectOtherUnits` over `Hierarchy()`, r5 D5-M2, UI-LEFT S9), in the variant too: every unit's record of it (UI-LEFT-3 S3-18)
+      void api.cmd({ op: "sch_edit", verb: "toggle_symbol_attribute", ids: items.map((i) => i.id), attribute: key, ...(variant !== "" ? { variant } : {}) });
     });
   };
   m.set("eeschema.EditorControl.setDNP", setAttribute("eeschema.EditorControl.setDNP"));

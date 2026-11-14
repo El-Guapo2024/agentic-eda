@@ -159,8 +159,10 @@ pub fn kiids_to_refs(text: &str, reference_of: &dyn Fn(&str) -> Option<String>) 
 /// designator: a text (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`), a text box (the same dialog), a table cell (`DIALOG_TABLE_PROPERTIES`,
 /// `DIALOG_TABLECELL_PROPERTIES` in 25ec2335), a label's text (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`: "convert any text variable cross-references to
 /// their UUIDs"), and a field of a label, of a sheet or of a symbol (`DIALOG_FIELD_PROPERTIES::UpdateField`, `DIALOG_SHEET_PROPERTIES` and
-/// `DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow` over the user fields). `f` is called on each, in that order. **Differs**: a symbol's Value, Footprint and
-/// Datasheet (which the symbol dialog converts too) are left out: the studio keeps them with the part, not as the screen's text.
+/// `DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow` over every field: the user fields and a placed symbol's own Value, Footprint and Datasheet), and the
+/// texts a design variant gives a symbol's or a sheet's fields (KiCad 25ec2335 `DIALOG_SYMBOL_PROPERTIES` and `DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`:
+/// `variantText = ConvertRefsToKIIDs( field.GetText() )`). `f` is called on each, in that order. A symbol whose Value is the part's (an empty `value`) is the
+/// caller's to see to: the part is not the screen's text (`eda_ops`' rename gives the symbol the part's text, rewritten).
 pub fn for_each_cross_reference_text(sch: &mut crate::ir::SchematicSection, mut f: impl FnMut(&mut String)) {
     for t in sch.extras.tables.iter_mut() {
         for c in t.cells.iter_mut() {
@@ -185,6 +187,21 @@ pub fn for_each_cross_reference_text(sch: &mut crate::ir::SchematicSection, mut 
     }
     for fields in sch.user_fields.values_mut() {
         for text in fields.values_mut() {
+            f(text);
+        }
+    }
+    for sym in sch.symbols.iter_mut() {
+        f(&mut sym.value);
+        f(&mut sym.footprint);
+        f(&mut sym.datasheet);
+    }
+    for records in sch.extras.symbol_variants.values_mut().chain(sch.extras.path_symbol_variants.values_mut().flat_map(|p| p.values_mut())) {
+        for text in records.values_mut().flat_map(|r| r.fields.values_mut()) {
+            f(text);
+        }
+    }
+    for records in sch.extras.sheet_variants.values_mut().chain(sch.extras.path_sheet_variants.values_mut().flat_map(|p| p.values_mut())) {
+        for text in records.values_mut().flat_map(|r| r.fields.values_mut()) {
             f(text);
         }
     }
