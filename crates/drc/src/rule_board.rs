@@ -1415,6 +1415,32 @@ mod footprint_facts_tests {
         assert!(!without("zone_hv", "R5-1", "R6-1") && !without("R6.1", "R5-1", "R6-1"), "no fill, no path");
     }
 
+    /// UI-LEFT-3 B3-3: `fromTo` through two zones -- R5.1 in one HV zone's fill, R6.1 in another's: the fills overlap, so a point of one outline is in the other
+    /// (`checkZoneZoneConnection`) and the path is R5.1, both fills, R6.1. Fills that do not reach each other make no path.
+    #[test]
+    fn a_from_to_path_goes_through_two_zones_that_meet() {
+        let zone = |id: &str| -> eda_model::ir::Zone {
+            serde_json::from_value(serde_json::json!({ "id": id, "net": "HV", "layer": "F.Cu",
+                "outline": [{ "x": 5000000, "y": 5000000 }, { "x": 25000000, "y": 5000000 }, { "x": 25000000, "y": 15000000 }, { "x": 5000000, "y": 15000000 }] })).unwrap()
+        };
+        let (design, model) = hv_board(|d, _| {
+            d.routing = Some(eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![zone("zone_a"), zone("zone_b")], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+        });
+        let p = |x: i64, y: i64| eda_clipper2::Point64 { x: x * 1_000_000, y: y * 1_000_000, z: 0 };
+        let fills = |a_right: i64, b_left: i64| {
+            let mut zc = crate::zone_copper::ZoneCopper::default();
+            zc.zones.insert(("zone_a".into(), "F.Cu".into()), eda_shape_poly_set::ShapePolySet::from_outline(vec![p(6, 6), p(a_right, 6), p(a_right, 14), p(6, 14)]));
+            zc.zones.insert(("zone_b".into(), "F.Cu".into()), eda_shape_poly_set::ShapePolySet::from_outline(vec![p(b_left, 6), p(24, 6), p(24, 14), p(b_left, 14)]));
+            zc
+        };
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        let joined = crate::from_to::of_board_with(&rb, Some(&fills(16, 14)));
+        assert!(joined("zone_a", "R5-1", "R6-1") && joined("zone_b", "R5-1", "R6-1") && joined("R6.1", "R5-1", "R6-1"), "both zones are on the path");
+        let apart = crate::from_to::of_board_with(&rb, Some(&fills(12, 16)));
+        assert!(!apart("zone_a", "R5-1", "R6-1") && !apart("R6.1", "R5-1", "R6-1"), "fills that do not meet join nothing");
+    }
+
     /// UI-LEFT-2 BB7: a footprint's own solder paste margin (Footprint Properties' "Solder paste absolute clearance") is its "Solderpaste Margin Override" to the
     /// rules, and the pads with none of their own take it (`EvalRules`' local override).
     #[test]
