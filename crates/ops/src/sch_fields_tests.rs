@@ -425,3 +425,15 @@ fn change_symbols_resets_the_fields_visibility_size_and_style_and_place_from_the
     let cmd: Cmd = serde_json::from_value(serde_json::json!({"op": "sch_edit", "verb": "reset_symbol_fields", "ids": ["R1"], "positions": true})).unwrap();
     assert_eq!(cmd, reset(false, false, true));
 }
+
+/// UI-LEFT-3 S3-3: with "Automatically place symbol fields" off a turn does not place the fields again (`SCH_EDIT_TOOL::Rotate`: `if( m_frame->eeconfig()->
+/// m_AutoplaceFields.enable )`): they turn with the symbol, autoplaced or not.
+#[test]
+fn turning_a_symbol_with_automatic_placement_off_carries_its_fields_round() {
+    use eda_engine::fields::{with_autoplace_prefs, AutoplacePrefs};
+    let mut start = sheet(0, false);
+    start.extras.fields_autoplaced.insert("R1".into(), AutoplaceAlgo::Auto);
+    let before = field_named(&start, "Reference");
+    let turned = with_autoplace_prefs(AutoplacePrefs { enable: false, ..AutoplacePrefs::default() }, || run(start, rotate(&["R1"], true))).unwrap();
+    assert!(field_named(&turned, "Reference").vertical && !before.vertical, "the text turned with the symbol");
+}

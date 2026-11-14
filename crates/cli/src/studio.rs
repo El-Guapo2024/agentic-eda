@@ -1018,6 +1018,10 @@ fn handle(
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
+            // the person's Symbol Field Automatic Placement (Preferences > Schematic Editor > Editing Options), for the verbs that place a symbol's fields
+            let _autoplace = eda_engine::fields::scoped_autoplace_prefs(eda_engine::fields::AutoplacePrefs::from_json(req.get("autoplace")));
+            // and the colours a new sheet is drawn with (Defaults for New Objects)
+            let _sheet_colors = eda_ops::sch_prefs::scoped_new_sheet_colors(eda_ops::sch_prefs::NewSheetColors::from_json(req.get("sheet_colors")));
             // `"carry": "begin"` / `"commit"`: the command starts or ends a carried placement (Duplicate and Paste and the drop are one undo step; `carry.rs`).
             let carry = req.get("carry").and_then(Value::as_str).and_then(board::carry::Carry::parse);
             let reply = match serde_json::from_value::<eda_ops::Cmd>(req.get("cmd").cloned().unwrap_or(Value::Null)) {

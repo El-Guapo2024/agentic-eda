@@ -269,3 +269,29 @@ fn a_change_and_its_reset_are_one_batch() {
     b.apply(&batch).unwrap();
     assert!(root(b.design()).field_layout.contains_key("R1"));
 }
+
+/// UI-LEFT-3 S3-3: "Automatically place symbol fields" off (`EESCHEMA_SETTINGS::m_AutoplaceFields.enable`): a symbol placed has its library's fields where the
+/// library puts them (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`, no `AutoplaceFields` in `PlaceSymbol`) and is not autoplaced; and Change Symbols' reset
+/// of the positions leaves them at the library's places (`if( resetPositions && .. m_AutoplaceFields.enable )`).
+#[test]
+fn a_symbol_placed_with_automatic_placement_off_has_its_fields_where_the_library_puts_them() {
+    use eda_engine::fields::{with_autoplace_prefs, AutoplacePrefs};
+    use eda_model::sym_fields::LibrarySymbolField;
+    let m = ConstraintModel { parts: vec![part("R1"), part("R7"), part("R7")], ..Default::default() };
+    let mut d = design();
+    let mut lib = eda_model::ir::LibrarySymbol { lib_id: "Device:R".into(), reference_prefix: "R".into(), published: true, ..Default::default() };
+    lib.set_fields(vec![LibrarySymbolField { name: "Reference".into(), text: "R".into(), at: eda_model::symbol::SPoint { x: 2.032, y: 0.0 }, ..LibrarySymbolField::default() }]);
+    d.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![lib], ..Default::default() });
+    let add = Cmd::AddSymbol { annotate: None, id: "R7".into(), lib_id: "Device:R".into(), at: p(101.6, 101.6), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 };
+    let off = AutoplacePrefs { enable: false, ..AutoplacePrefs::default() };
+    let mut b = Board::new(d.clone(), &m, mm(0.1), mm(0.3));
+    with_autoplace_prefs(off, || b.apply(&add)).unwrap();
+    let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&eda_model::symbol::builtin("Device:R").unwrap(), 1);
+    let r = root(b.design()).field_layout["R7"].iter().find(|f| f.name == "Reference").cloned().unwrap();
+    assert_eq!((r.dx, r.dy), (mm(2.032 - x0), mm(y1)), "the library's place");
+    assert!(!root(b.design()).extras.fields_autoplaced.contains_key("R7"), "not autoplaced (AUTOPLACE_NONE)");
+    // on (KiCad's default): no places are stored, the derivation autoplaces the new symbol
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&add).unwrap();
+    assert!(!root(b.design()).field_layout.contains_key("R7"));
+}

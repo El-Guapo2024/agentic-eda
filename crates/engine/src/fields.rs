@@ -32,11 +32,14 @@ pub struct FieldSpec {
     pub name_shown: bool,
     /// `SCH_FIELD::CanAutoplace`: Autoplace Fields leaves a field that does not allow it where it is.
     pub can_autoplace: bool,
+    /// The justification the field has now, in the item's own frame (`FieldPlacement::h` / `v`), when a placement says: what Autoplace Fields keeps when
+    /// "Allow field autoplace to change justification" is off ([`AutoplacePrefs::allow_rejustify`]). `None` for a field that has no placement yet.
+    pub just: Option<(TextJustify, TextVAlign)>,
 }
 
 impl FieldSpec {
     pub fn new(name: &str, text: String, visible: bool) -> FieldSpec {
-        FieldSpec { name: name.to_string(), text, visible, size_nm: Nm::ZERO, bold: false, italic: false, name_shown: false, can_autoplace: true }
+        FieldSpec { name: name.to_string(), text, visible, size_nm: Nm::ZERO, bold: false, italic: false, name_shown: false, can_autoplace: true, just: None }
     }
 
     /// The same field as a stored placement sets it: visibility, size, bold, italic, shown name and whether it may be autoplaced.
@@ -47,6 +50,7 @@ impl FieldSpec {
         self.italic = p.italic;
         self.name_shown = p.name_shown;
         self.can_autoplace = !p.no_autoplace;
+        self.just = Some((p.h, p.v));
         self
     }
 
@@ -310,6 +314,74 @@ const MIL_IU: i64 = 254;
 const HPADDING: i64 = 25 * MIL_IU;
 const VPADDING: i64 = 15 * MIL_IU;
 const GRID_IU: i64 = 50 * MIL_IU;
+/// `FIELD_PADDING` (autoplace_fields.cpp): the gap between two fields when they are not aligned to the 50 mil grid.
+const FIELD_PADDING: i64 = 15 * MIL_IU;
+
+/// The person's Symbol Field Automatic Placement (`EESCHEMA_SETTINGS::m_AutoplaceFields`, Preferences > Schematic Editor > Editing Options, `autoplace_fields.*`
+/// of eeschema.json, all on by default):
+///   * `enable` ("Automatically place symbol fields"): a symbol placed, turned, given another unit, or whose field or properties were edited has its fields placed by
+///     Autoplace Fields (`SCH_DRAWING_TOOLS::PlaceSymbol`, `SCH_EDIT_TOOL::Rotate`, `SCH_EDIT_FRAME::SelectUnit`, `SCH_EDIT_TOOL::editFieldText` and `Properties`,
+///     `DIALOG_CHANGE_SYMBOLS::processSymbols`: `if( m_frame->eeconfig()->m_AutoplaceFields.enable )`); off, a new symbol's fields are where its library puts them and
+///     nothing moves them but the Autoplace Fields command. Read by the verbs of `eda_ops`, not here.
+///   * `allow_rejustify` ("Allow field autoplace to change justification", `AUTOPLACER::m_allow_rejustify`): `justifyField` sets each field's justification for the
+///     side it goes to; off, a field keeps its own (`fieldHPlacement` places it by that).
+///   * `align_to_grid` ("Always align autoplaced fields to the 50 mil grid", `AUTOPLACER::m_align_to_grid`): the fields' rows are rounded to 50 mil and their
+///     anchors put on it (`computeFBoxSize`, `fieldVPlacement`, `DoAutoplace`); off, the rows are the text's height and `FIELD_PADDING` apart.
+///
+/// KiCad reads them from the settings file wherever `AUTOPLACER` is built (`Kiface().KifaceSettings()`). The studio keeps them in the browser with the person's other
+/// preferences; each request sets them for the thread it runs on ([`with_autoplace_prefs`]), and a command run with none (the CLI, a test) has KiCad's defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoplacePrefs {
+    pub enable: bool,
+    pub allow_rejustify: bool,
+    pub align_to_grid: bool,
+}
+
+impl Default for AutoplacePrefs {
+    fn default() -> Self {
+        AutoplacePrefs { enable: true, allow_rejustify: true, align_to_grid: true }
+    }
+}
+
+thread_local! {
+    static AUTOPLACE_PREFS: std::cell::Cell<AutoplacePrefs> = std::cell::Cell::new(AutoplacePrefs { enable: true, allow_rejustify: true, align_to_grid: true });
+}
+
+/// The Symbol Field Automatic Placement in force on this thread.
+pub fn autoplace_prefs() -> AutoplacePrefs {
+    AUTOPLACE_PREFS.with(|p| p.get())
+}
+
+/// Run `f` with `prefs` in force on this thread, and put back what was in force before.
+pub fn with_autoplace_prefs<R>(prefs: AutoplacePrefs, f: impl FnOnce() -> R) -> R {
+    let _scope = scoped_autoplace_prefs(prefs);
+    f()
+}
+
+/// `prefs` in force on this thread until the scope returned is dropped, which puts back what was in force before.
+#[must_use = "the preferences are in force only while the scope lives"]
+pub fn scoped_autoplace_prefs(prefs: AutoplacePrefs) -> AutoplacePrefsScope {
+    AutoplacePrefsScope(AUTOPLACE_PREFS.with(|p| p.replace(prefs)))
+}
+
+/// See [`scoped_autoplace_prefs`].
+pub struct AutoplacePrefsScope(AutoplacePrefs);
+
+impl Drop for AutoplacePrefsScope {
+    fn drop(&mut self) {
+        let before = self.0;
+        AUTOPLACE_PREFS.with(|p| p.set(before));
+    }
+}
+
+impl AutoplacePrefs {
+    /// The request's `autoplace` (`{ "enable", "allow_rejustify", "align_to_grid" }`, each a boolean; one left out is KiCad's default, on).
+    pub fn from_json(v: Option<&serde_json::Value>) -> AutoplacePrefs {
+        let d = AutoplacePrefs::default();
+        let flag = |k: &str, dflt: bool| v.and_then(|o| o.get(k)).and_then(serde_json::Value::as_bool).unwrap_or(dflt);
+        AutoplacePrefs { enable: flag("enable", d.enable), allow_rejustify: flag("allow_rejustify", d.allow_rejustify), align_to_grid: flag("align_to_grid", d.align_to_grid) }
+    }
+}
 
 /// `round_n`: round up or down to a multiple of `n`, with C++'s truncating division.
 fn round_n(value: i64, n: i64, up: bool) -> i64 {
@@ -432,7 +504,13 @@ fn measure(f: &FieldSpec) -> Measured {
 /// a symbol between horizontal wires the fields are spaced to fit between them (`fitFieldsBetweenWires`). `force` puts them on a side of the
 /// symbol KiCad would not have chosen, `push` grid steps (50 mil) further from it: where the schematic needs the room the symbol's own side has
 /// not got.
-fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, rot: u32, fields: &[&FieldSpec], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<((f64, f64), TextJustify, TextVAlign)> {
+///
+/// The person's [`AutoplacePrefs`] decide two things (`AUTOPLACER::m_allow_rejustify`, `m_align_to_grid`): with "Allow field autoplace to change justification" off a
+/// field keeps the justification `page_just` gives it (on the sheet, as the field will be drawn: `GetHorizJustify` read through `IsHorizJustifyFlipped`), and with
+/// "Always align autoplaced fields to the 50 mil grid" off the rows are the text's height and `FIELD_PADDING` apart and nothing is rounded to the grid.
+#[allow(clippy::too_many_arguments)]
+fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, rot: u32, fields: &[&FieldSpec], page_just: &[Option<(TextJustify, TextVAlign)>], force: Option<(Side, i64)>, manual: Option<&Surroundings>) -> Vec<((f64, f64), TextJustify, TextVAlign)> {
+    let prefs = autoplace_prefs();
     let metrics: Vec<Measured> = fields.iter().map(|f| measure(f)).collect();
     let sizes: Vec<(i64, i64)> = metrics
         .iter()
@@ -442,7 +520,8 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, rot: u32, fields
         })
         .collect();
     let fbox_w = sizes.iter().map(|s| s.0).max().unwrap_or(0);
-    let fbox_h: i64 = sizes.iter().map(|s| round_n(s.1, GRID_IU, true)).sum();
+    // `computeFBoxSize( aDynamic = true )`: each row its height rounded up to 50 mil, or its height and `FIELD_PADDING` when not aligned to the grid
+    let fbox_h: i64 = sizes.iter().map(|s| if prefs.align_to_grid { round_n(s.1, GRID_IU, true) } else { s.1 + FIELD_PADDING }).sum();
 
     // r2 C-M4: `AUTOPLACER` skips a symbol's invisible pins (`pinsOnSide`, `getPinsBox`: `if( !each_pin->IsVisible() && !m_is_power_symbol ) continue;`), and
     // its body box (`GetBodyBoundingBox`, pins left out) still has the root of every visible pin ("the roots of the pins are always included")
@@ -624,24 +703,55 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, rot: u32, fields
     };
     let mut acc = fy;
     let mut out = Vec::new();
-    for &(_, h) in sizes.iter() {
-        let mut x = match h_just {
+    for (i, &(_, h)) in sizes.iter().enumerate() {
+        // `if( m_allow_rejustify ) justifyField( .. )`: the side's justification and centred vertically; else the field's own
+        let (hj, vj) = if prefs.allow_rejustify { (h_just, TextVAlign::Center) } else { page_just.get(i).copied().flatten().unwrap_or((h_just, TextVAlign::Center)) };
+        // `fieldHPlacement`
+        let mut x = match hj {
             TextJustify::Left => fx,
             TextJustify::Center => fx + fbox_w / 2,
             TextJustify::Right => fx + fbox_w,
         };
-        let (padding, height) = if dynamic { (round_n(h, GRID_IU, true) - h, h) } else { (WIRE_V_SPACING / 2, WIRE_V_SPACING / 2) };
+        // `fieldVPlacement`
+        let (padding, height) = if !dynamic {
+            (WIRE_V_SPACING / 2, WIRE_V_SPACING / 2)
+        } else if prefs.align_to_grid {
+            (round_n(h, GRID_IU, true) - h, h)
+        } else {
+            (FIELD_PADDING, h)
+        };
         let mut y = acc + padding / 2 + height / 2;
         acc += padding + height;
-        if sv.0 != 0 {
-            x = round_n(x, GRID_IU, sv.0 >= 0);
+        if prefs.align_to_grid {
+            if sv.0 != 0 {
+                x = round_n(x, GRID_IU, sv.0 >= 0);
+            }
+            if sv.1 != 0 {
+                y = round_n(y, GRID_IU, sv.1 >= 0);
+            }
         }
-        if sv.1 != 0 {
-            y = round_n(y, GRID_IU, sv.1 >= 0);
-        }
-        out.push((((x * eda_model::units::SCH_IU_NM) as f64, (y * eda_model::units::SCH_IU_NM) as f64), h_just, TextVAlign::Center));
+        out.push((((x * eda_model::units::SCH_IU_NM) as f64, (y * eda_model::units::SCH_IU_NM) as f64), hj, vj));
     }
     out
+}
+
+/// The justification a field with the placement's own (`h`, `v`, in the item's frame) shows on the sheet once Autoplace Fields has turned it to read horizontally
+/// (`SetTextAngle( m_field_angle )` and `IsHorizJustifyFlipped` / `IsVertJustifyFlipped`): what `fieldHPlacement` places it by when it keeps its justification.
+fn page_justify(at: Point, rot: u32, mirrored: bool, width: f64, h: TextJustify, v: TextVAlign) -> (TextJustify, TextVAlign) {
+    let stored_vertical = Lin::of_symbol(rot, mirrored).swaps_axes();
+    let p = FieldPlacement { angle: if stored_vertical { 90_000 } else { 0 }, h, v, ..FieldPlacement::at_origin("") };
+    let f = page_field(at, rot, mirrored, width, &p, "");
+    let hj = match f.h {
+        HJustify::Left => TextJustify::Left,
+        HJustify::Center => TextJustify::Center,
+        HJustify::Right => TextJustify::Right,
+    };
+    let vj = match f.v {
+        VJustify::Top => TextVAlign::Top,
+        VJustify::Center => TextVAlign::Center,
+        VJustify::Bottom => TextVAlign::Bottom,
+    };
+    (hj, vj)
 }
 
 /// The placements Autoplace Fields gives a symbol's fields, in the symbol's own frame: one per spec, in order. A hidden field takes the
@@ -678,7 +788,8 @@ fn place_fields_of(at: Point, sym_rot: u32, sym_mirrored: bool, sym_mirror_y: bo
     // `getPreferredSides`' `h_mirrored`: `GetOrientation()` has `SYM_MIRROR_X` at 0 or 180 degrees, which of the twelve orientations (the first that
     // gives the matrix) is the one that flips top and bottom alone -- a half turn and a left-right mirror, folded
     let h_mirrored = (rot, mirrored) == (180_000, true);
-    let placed = autoplace_page(geom, at, h_mirrored, rot, &movable, force, manual);
+    let page_just: Vec<Option<(TextJustify, TextVAlign)>> = movable.iter().map(|s| s.just.map(|(h, v)| page_justify(at, rot, mirrored, geom.width, h, v))).collect();
+    let placed = autoplace_page(geom, at, h_mirrored, rot, &movable, &page_just, force, manual);
     let style = |mut p: FieldPlacement, spec: &FieldSpec| {
         p.size_nm = spec.size_nm;
         p.bold = spec.bold;
