@@ -287,7 +287,7 @@ impl ArcDrag {
             None if short(self.arc.end, ne) => (&line.pts[self.last + 1..], self.arc.end),
             None => (&line.pts[self.last..], ne),
         };
-        let final_arc = ArcPts { start: arc_start, mid, end: arc_end };
+        let final_arc = ArcPts::new(arc_start, mid, arc_end);
         if pts.last() != Some(&arc_start) {
             pts.push(arc_start);
         }

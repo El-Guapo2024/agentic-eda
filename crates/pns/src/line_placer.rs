@@ -25,7 +25,7 @@
 //!    `optimizeTailHeadTransition` (its `FANOUT_CLEANUP` straightens a short fan-out from a pad) and `mergeHead` are ported
 //!    ([`LinePlacer::build_head`]), and the walk and the shove are of the whole leg, split back into head and tail (`splitHeadTail`). A repeated
 //!    request for the same cursor starts from the state before the last one, as the tracer does. The tail keeps a rounded corner's arc
-//!    (UI-LEFT-2 RR4); **differs:** a cut inside an arc leaves chords, not KiCad's shorter arc.
+//!    (UI-LEFT-2 RR4), and a cut inside an arc keeps the part left as a shorter arc on the same circle (`splitArc`, UI-LEFT-3 R3-9).
 //!
 //! Each fixed "run" is single-layer (`crate::line::Line`); a via placed
 //! mid-route (`switch_layer`) ends the current run and starts a new one on
@@ -295,9 +295,9 @@ impl LinePlacer {
     /// The tail and head keep their arcs (a rounded corner mode's, [`TailState::arcs`]), and the steps treat them as KiCad's do: `mergeHead` and
     /// `optimizeTailHeadTransition` count an arc as one shape, `mergeHead` and `handlePullback` take an arc's direction as `DIRECTION_45( const
     /// SHAPE_ARC& )` does, `handlePullback`'s `RemoveShape( -1 )` takes a whole arc off the tail, and the optimizer leaves a line with an arc alone
-    /// (`hasArcs`), so the tail-head merge and the fan-out cleanup do nothing there (UI-LEFT-2 RR4). **Differs:** where `reduceTail` or
-    /// `handleSelfIntersections` cut the tail inside an arc (`SHAPE_LINE_CHAIN::Remove`'s `splitArc` keeps the part of the arc left as a shorter
-    /// arc), the part left is the arc's chords: the studio's lines hold an arc whole or not at all ([`Line::arcs`]).
+    /// (`hasArcs`), so the tail-head merge and the fan-out cleanup do nothing there (UI-LEFT-2 RR4). Where `reduceTail`, `handleSelfIntersections`
+    /// or `splitHeadTail` cut inside an arc, `SHAPE_LINE_CHAIN::Remove`'s, `Split`'s and `Slice`'s `splitArc` keep each part as an arc on the
+    /// same circle ([`crate::line::split_arcs_at`], [`ArcPts::sub_arc`]; UI-LEFT-3 R3-9).
     fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> HeadResult {
         let follow_mouse = settings.mode != Mode::MarkObstacles;
         let mut st = self.tail_state.borrow().clone();
@@ -411,6 +411,8 @@ impl LinePlacer {
         }
         if let Some((i, dir)) = reduce {
             st.direction = dir;
+            // `tail.Remove( reduce_index + 1, -1 )`: an arc the cut falls inside keeps its first part, an arc (`splitArc`)
+            crate::line::split_arcs_at(&mut st.arcs, &st.tail, i);
             st.tail.truncate(i + 1);
             st.head.clear();
             return true;
@@ -471,6 +473,9 @@ impl LinePlacer {
         if merged.segment_count() < new_head.segment_count() && merged.pts.len() >= 2 {
             st.head.clear();
             let keep = st.tail.len() - threshold;
+            if keep > 0 {
+                crate::line::split_arcs_at(&mut st.arcs, &st.tail, keep - 1);
+            }
             st.tail.truncate(keep);
             append_points(&mut st.tail, &merged.pts);
             simplify_points(&mut st.tail);
@@ -557,10 +562,10 @@ impl LinePlacer {
                 let head = optimized.pts.clone();
                 return (optimized, head, Vec::new());
             }
-            // the head and the tail keep the arcs of the line that are still whole in them
-            let (head_pts, tail_pts) = split_head_tail(&line.pts, &st.tail);
-            let head = optimize(&Line { arcs: line.arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, head_pts) }, world);
-            let mut full = Line { arcs: line.arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, tail_pts.clone()) };
+            // the head and the tail keep the arcs of the line in them, an arc the split falls inside as its two pieces
+            let (head_pts, tail_pts, split_arcs) = split_head_tail_arcs(&line.pts, &line.arcs, &st.tail);
+            let head = optimize(&Line { arcs: split_arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, head_pts) }, world);
+            let mut full = Line { arcs: split_arcs, ..Line::from_points(self.net.clone(), self.current_layer, self.width, tail_pts.clone()) };
             append_points(&mut full.pts, &head.pts);
             full.arcs.extend(head.arcs.iter().copied());
             let kept = arcs_in(&full.arcs, &full.pts);
@@ -1451,11 +1456,21 @@ fn find_point(chain: &[Point], p: Point) -> Option<usize> {
 /// where it leaves the old tail -- at the first point of the old tail it no longer has (`l2.CLine().Find( aOldTail.CPoint( i ) ) < 0`), the old
 /// tail's end first split into it when it lies on one of its segments (`PointOnEdge`, `Split`). `(head, tail)`; with an old tail of fewer than two
 /// points the whole line is the head.
+#[cfg(test)]
 pub(crate) fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>, Vec<Point>) {
+    let (head, tail, _) = split_head_tail_arcs(line, &[], old_tail);
+    (head, tail)
+}
+
+/// [`split_head_tail`] of a line with arcs (`arcs`, found by their points): the third is the line's arcs after the split -- an arc the inserted
+/// point or the cut between tail and head falls inside is two arcs on the same circle (`Split`'s and `Slice`'s `splitArc`), so the head and the
+/// tail each keep their part of it as an arc.
+pub(crate) fn split_head_tail_arcs(line: &[Point], arcs: &[ArcPts], old_tail: &[Point]) -> (Vec<Point>, Vec<Point>, Vec<ArcPts>) {
     let mut l2 = line.to_vec();
+    let mut pool = arcs.to_vec();
     let n = l2.len();
     if !(n > 1 && old_tail.len() > 1) {
-        return (l2, Vec::new());
+        return (l2, Vec::new(), pool);
     }
     let last = *old_tail.last().unwrap();
     // `if( l2.CLine().PointOnEdge( aOldTail.CLastPoint() ) ) l2.Line().Split( aOldTail.CLastPoint() );`
@@ -1464,6 +1479,7 @@ pub(crate) fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>
         a == last || b == last || eda_drc::kimath::Seg::new(a, b).sq_distance_to_point(last) <= 1
     }) {
         if !l2.contains(&last) {
+            crate::line::split_arcs_for_insert(&mut pool, &l2, i + 1, last);
             l2.insert(i + 1, last);
         }
     }
@@ -1482,8 +1498,10 @@ pub(crate) fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>
     if i >= l2.len() {
         i = l2.len() - 1;
     }
+    // `Slice( 0, i )` and `Slice( i, -1 )`: an arc cut at `i` is two
+    crate::line::split_arcs_at(&mut pool, &l2, i);
     let tail = if i == 0 { Vec::new() } else { l2[..=i].to_vec() };
-    (l2[i..].to_vec(), tail)
+    (l2[i..].to_vec(), tail, pool)
 }
 
 /// `SHAPE_LINE_CHAIN::Intersect( aChain, aIp )` of two open chains, `ours` against `theirs` (KiCad 8303b2ad's: `theirs`' segments taken in the order
@@ -1556,6 +1574,8 @@ fn handle_self_intersections(st: &mut TailState) -> bool {
     }
     // `const SEG last = tail.CSegment( n - 1 ); m_direction = DIRECTION_45( last ); tail.Remove( n, -1 );`
     st.direction = Direction45::from_seg(st.tail[n - 1], st.tail[n]);
+    // `Remove( n, -1 )`: `splitArc( n, false )` keeps the part of an arc before the cut, an arc ending at point `n - 1`
+    crate::line::split_arcs_at(&mut st.arcs, &st.tail, n - 1);
     st.tail.truncate(n);
     true
 }
@@ -2266,6 +2286,30 @@ mod tests {
         assert_ne!(via, at(5.0, 0.0), "the via is pushed");
         let runs = placer.placed_runs();
         assert_eq!(runs.iter().filter(|r| r.first() == Some(via) || r.last() == Some(via)).count(), 2, "the runs on it follow it: {via:?} {runs:?}");
+    }
+
+    /// `handleSelfIntersections`' `tail.Remove( n, -1 )` inside an arc of the tail (a rounded corner mode's corner, UI-LEFT-3 R3-9): `splitArc`
+    /// keeps the part before the cut as an arc on the same circle, ending at the tail's new last point -- the tail is not left with the arc's chords.
+    #[test]
+    fn a_tail_cut_inside_its_arc_keeps_the_arcs_first_part_as_an_arc() {
+        let pt = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
+        let arc = ArcPts::new(pt(0, 0), pt(2_928_932, 7_071_068), pt(10_000_000, 10_000_000));
+        let mut tail = vec![pt(-5_000_000, 0)];
+        tail.extend(arc.polyline());
+        tail.push(pt(20_000_000, 10_000_000));
+        let k = tail.len() / 2;
+        // a head from the tail's end back across the arc, between its vertices k - 1 and k
+        let (a, b) = (tail[k - 1], tail[k]);
+        let cross_at = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        let normal = (-(b.y - a.y), b.x - a.x);
+        let head = vec![*tail.last().unwrap(), Point { x: cross_at.x + normal.0 * 50, y: cross_at.y + normal.1 * 50 }, Point { x: cross_at.x - normal.0 * 50, y: cross_at.y - normal.1 * 50 }];
+        let mut st = TailState { tail, head, arcs: vec![arc], direction: Direction45::E, initial: Direction45::E };
+        assert!(handle_self_intersections(&mut st));
+        let kept = st.tail_line();
+        // the head crosses segment k - 1: `n = k - 1`, and `Remove( n, -1 )` keeps the points before it
+        assert_eq!(kept.pts.len(), k - 1, "cut before the crossed chord");
+        let pieces = kept.pieces();
+        assert!(matches!(pieces[..], [crate::line::LinePiece::Poly(_), crate::line::LinePiece::Arc(p)] if p.start == arc.start && p.end == kept.pts[k - 2]), "{pieces:?}");
     }
 
     fn ts(tail: &[(f64, f64)], head: &[(f64, f64)]) -> TailState {

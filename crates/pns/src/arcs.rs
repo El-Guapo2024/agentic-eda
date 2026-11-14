@@ -26,6 +26,10 @@ pub struct ArcPts {
     pub start: Point,
     pub mid: Point,
     pub end: Point,
+    /// A piece of another arc cut where a line was cut (`SHAPE_LINE_CHAIN::splitArc`, [`Self::sub_arc`]): the three points of the arc whose
+    /// polygonisation the line holds. KiCad keeps the chain's points and gives the piece a `SHAPE_ARC` of its own on the same circle, so the
+    /// piece's polyline is not its own `ConvertToPolyline` but the vertices of that arc's between its ends ([`Self::polyline_with_error`]).
+    pub of: Option<[Point; 3]>,
 }
 
 fn cross(o: Point, a: Point, b: Point) -> i128 {
@@ -38,12 +42,30 @@ fn dist(a: Point, b: Point) -> f64 {
 
 impl ArcPts {
     pub fn new(start: Point, mid: Point, end: Point) -> Self {
-        ArcPts { start, mid, end }
+        ArcPts { start, mid, end, of: None }
     }
 
     /// The same arc walked the other way (`SHAPE_ARC::Reverse`: the ends swap, the middle stays).
     pub fn reversed(&self) -> ArcPts {
-        ArcPts { start: self.end, mid: self.mid, end: self.start }
+        ArcPts { start: self.end, mid: self.mid, end: self.start, of: self.of }
+    }
+
+    /// The arc whose polygonisation this one's points are: itself, or the arc it is a piece of ([`Self::of`]).
+    fn polygonised(&self) -> ArcPts {
+        self.of.map_or(*self, |[s, m, e]| ArcPts::new(s, m, e))
+    }
+
+    /// `SHAPE_LINE_CHAIN::splitArc` / `amendArc` / `Slice` of a line through this arc, cut at `from` and `to` (points of its polyline, or a point
+    /// `Split` inserted on one of its chords): the piece from `from` to `to`, a `SHAPE_ARC` on the same circle
+    /// (`ConstructFromStartEndCenter( from, to, GetCenter(), IsClockwise() )`) whose polyline is the points the line keeps -- the vertices of the
+    /// polygonised arc between the two ([`Self::of`]).
+    pub fn sub_arc(&self, from: Point, to: Point) -> ArcPts {
+        let shape = self.shape_nm();
+        let piece = ShapeArc::from_start_end_center(from, to, shape.center(), shape.is_clockwise());
+        ArcPts { start: from, mid: piece.mid, end: to, of: Some({
+            let p = self.polygonised();
+            [p.start, p.mid, p.end]
+        }) }
     }
 
     /// `SHAPE_ARC` of it on the nanometre grid, width 0.
@@ -64,6 +86,9 @@ impl ArcPts {
     /// `SHAPE_ARC::ConvertToPolyline( aMaxError )`: the arc's own ends, and between them a point
     /// in the middle of each slice, a little outside the arc. A degenerate arc, or one that is flatter than the error, is its chord.
     pub fn polyline_with_error(&self, max_error_nm: Nm) -> Vec<Point> {
+        if self.of.is_some() {
+            return self.piece_polyline(max_error_nm);
+        }
         if self.is_degenerate() {
             return if self.start == self.end { vec![self.start] } else { vec![self.start, self.end] };
         }
@@ -80,6 +105,35 @@ impl ArcPts {
         if out.last() != Some(&self.end) {
             out.push(self.end);
         }
+        out
+    }
+
+    /// The polyline of a piece of an arc ([`Self::of`]): its ends, and between them the vertices of the polygonised arc whose angle about the
+    /// centre lies between theirs, in the piece's direction.
+    fn piece_polyline(&self, max_error_nm: Nm) -> Vec<Point> {
+        let whole = self.polygonised();
+        let poly = whole.polyline_with_error(max_error_nm);
+        if whole.is_degenerate() || self.start == self.end {
+            return if self.start == self.end { vec![self.start] } else { vec![self.start, self.end] };
+        }
+        let arc = whole.shape_nm();
+        let c = arc.center();
+        let (a0, sweep) = (arc.start_angle(), arc.central_angle());
+        // how far along the whole arc's sweep a point is, degrees from its start (a little before the start is a little below 0)
+        let t = |p: Point| {
+            let a = angle_of((p.x - c.x).as_f64(), (p.y - c.y).as_f64());
+            let along = normalize(if sweep >= 0.0 { a - a0 } else { a0 - a });
+            if along > sweep.abs() + (360.0 - sweep.abs()) / 2.0 { along - 360.0 } else { along }
+        };
+        let (ts, te) = (t(self.start), t(self.end));
+        let (lo, hi) = (ts.min(te), ts.max(te));
+        let mut inner: Vec<Point> = poly.into_iter().filter(|&v| v != self.start && v != self.end && (lo..=hi).contains(&t(v))).collect();
+        if ts > te {
+            inner.reverse();
+        }
+        let mut out = vec![self.start];
+        out.extend(inner);
+        out.push(self.end);
         out
     }
 
@@ -175,7 +229,7 @@ impl ArcPts {
         let (center, clockwise) = (orig.center(), orig.is_clockwise());
         let half = |s: Point, e: Point| -> ArcPts {
             let a = ShapeArc::from_start_end_center(s, e, center, clockwise);
-            ArcPts { start: s, mid: a.mid, end: e }
+            ArcPts::new(s, a.mid, e)
         };
         Some((half(self.start, at), half(at, self.end)))
     }
@@ -183,7 +237,7 @@ impl ArcPts {
     /// The arc around `center` from `start` to `end` the short way, with the middle `CalcArcMid` finds (what `EDIT_TOOL::DragArcTrack` makes of a
     /// dragged arc).
     pub fn from_start_end_center(start: Point, end: Point, center: Point) -> ArcPts {
-        ArcPts { start, mid: calc_arc_mid(start, end, center), end }
+        ArcPts::new(start, calc_arc_mid(start, end, center), end)
     }
 }
 

@@ -590,8 +590,8 @@ pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, old_tai
             let constraints = crate::optimizer::Constraints { corner_mode: corner, ..Default::default() };
             let optimized = crate::optimizer::optimize_constrained(&line, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS, &constraints);
             // `if( splitHeadTail( wr.lines[..], m_tail, tmpHead, tmpTail ) ) { optimizer.Optimize( &tmpHead ); SetShape( tmpTail ); Append( tmpHead ); }`
-            let (head_pts, tail_pts) = crate::line_placer::split_head_tail(&optimized.pts, old_tail);
-            let tmp_head = Line { arcs: optimized.arcs.clone(), ..Line::from_points(net.clone(), layer, width, head_pts) };
+            let (head_pts, tail_pts, split_arcs) = crate::line_placer::split_head_tail_arcs(&optimized.pts, &optimized.arcs, old_tail);
+            let tmp_head = Line { arcs: split_arcs.clone(), ..Line::from_points(net.clone(), layer, width, head_pts) };
             let masked = crate::optimizer::Constraints { kind_mask: Some(mask), ..constraints };
             let tmp_head = crate::optimizer::optimize_constrained(&tmp_head, node, rules, exclude, crate::optimizer::effort::MERGE_SEGMENTS, &masked);
             let mut joined = tail_pts;
@@ -601,7 +601,7 @@ pub fn walk_base_line(node: &Node, rules: &BoardRules, head_line: &Line, old_tai
                 }
                 joined.push(p);
             }
-            let mut joined_arcs = optimized.arcs.clone();
+            let mut joined_arcs = split_arcs;
             joined_arcs.extend(tmp_head.arcs.iter().copied());
             (lines[i], arcs[i]) = (joined, joined_arcs);
             len[i] = chain_length(&lines[i]);

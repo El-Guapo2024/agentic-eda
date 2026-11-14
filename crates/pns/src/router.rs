@@ -2086,7 +2086,7 @@ pub fn line_to_tracks(line: &Line, layer_name: &str, net: Option<&str>) -> Vec<e
         .into_iter()
         .map(|piece| match piece {
             LinePiece::Poly(pts) => eda_model::ir::Track { id: String::new(), net: net.clone(), pins: Vec::new(), layer: layer_name.to_string(), width: line.width, pts, arc_mid_offset: None },
-            LinePiece::Arc(ArcPts { start, mid, end }) => eda_model::ir::Track::new_arc(net.clone(), layer_name.to_string(), line.width, start, mid, end),
+            LinePiece::Arc(ArcPts { start, mid, end, .. }) => eda_model::ir::Track::new_arc(net.clone(), layer_name.to_string(), line.width, start, mid, end),
         })
         .collect()
 }
