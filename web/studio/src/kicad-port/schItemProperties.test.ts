@@ -484,6 +484,12 @@ test("an image is a SCH_BITMAP with the rows of SCH_BITMAP_DESC; its scale and s
   assert.ok(!("data" in half.graphic.shape) && !("px" in half.graphic.shape) && !("hash" in half.graphic.shape), "no pixels and none of the state's description go back");
   assert.deepEqual(edit(s, ["img_a"], "Scale", 1), []);
   assert.deepEqual(edit(s, ["img_a"], "Position X", 51_000_000), [{ op: "sch_move", verb: "move", ids: ["img_a"], dx: 1_000_000, dy: 0 }]);
+  // `SCH_BITMAP_DESC` registers no validator: 0 is taken and changes nothing (`SetImageScale` / `SetWidth` / `SetHeight` return on it, UI-LEFT-3 P3-8's schematic side)
+  for (const name of ["Scale", "Width", "Height"]) {
+    const zero = schEdit(s, ["img_a"], name, 0, "mm");
+    assert.ok(zero.ok, `${name} takes 0`);
+    assert.deepEqual(zero.ok ? zero.cmds : null, []);
+  }
 });
 
 // ------------------------------------------------------------------------------------------------------------ the rows of UI-LEFT S7

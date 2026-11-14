@@ -1243,7 +1243,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       name: "Scale",
       kind: "double",
       get: (i) => (image(i).scale_ppm ?? SCALE_PPM) / SCALE_PPM,
-      validate: (v) => (num(v) <= 0 ? "Scale must be a positive number." : null),
+      // no validator (`SCH_BITMAP_DESC`): a scale of 0 or less changes nothing (`REFERENCE_IMAGE::SetImageScale` returns on it, UI-LEFT-3 P3-8 on the board)
       set: (i, v, c) => rescale(i, Math.round(num(v) * SCALE_PPM), c),
     },
     IMAGE_PROPS
@@ -1256,7 +1256,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
         kind: "int",
         display: "size",
         get: (i) => imageSizeNm(image(i).px ?? [0, 0], image(i).ppi ?? DEFAULT_PPI, image(i).scale_ppm ?? SCALE_PPM)[name === "Width" ? 0 : 1],
-        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
+        // a `PT_COORD` row with no validator: a size of 0 or less changes nothing (`REFERENCE_IMAGE::SetWidth` / `SetHeight` return on it)
         set: (i, v, c) => {
           const want = Math.round(num(v));
           const px = image(i).px ?? [0, 0];
