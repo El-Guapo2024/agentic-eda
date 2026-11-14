@@ -3132,7 +3132,28 @@ export type LibGraphic =
   | ({ kind: "polyline"; pts: [Mm, Mm][]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number } & LibShapeLooks)
   | ({ kind: "circle"; center: [Mm, Mm]; radius: Mm; stroke_width: Mm; fill: LibFill; unit: number; body_style: number } & LibShapeLooks)
   | ({ kind: "arc"; start: [Mm, Mm]; mid: [Mm, Mm]; end: [Mm, Mm]; stroke_width: Mm; fill: LibFill; unit: number; body_style: number } & LibShapeLooks)
-  | { kind: "text"; content: string; at: [Mm, Mm]; angle_deg: Degrees; size_mm: Mm; unit: number; body_style: number }
+  | {
+      kind: "text";
+      content: string;
+      at: [Mm, Mm];
+      angle_deg: Degrees;
+      size_mm: Mm;
+      unit: number;
+      body_style: number;
+      /** `(justify ..)`: absent is centred (`EDA_TEXT`'s default). UI-LEFT-3 S3-5. */
+      h_align?: "left" | "center" | "right";
+      v_align?: "top" | "center" | "bottom";
+      bold?: boolean;
+      italic?: boolean;
+      /** `(font (face ..))`; absent is the default font. */
+      font?: string;
+      /** `EDA_TEXT::GetTextColor`, 0..255 each; absent is `LAYER_DEVICE`'s. */
+      text_color?: { r: number; g: number; b: number; a: number };
+      /** `(thickness ..)`, mm; absent is the automatic pen. */
+      thickness_mm?: Mm;
+      /** `(hide yes)`: drawn only with Show Hidden Fields, in the hidden colour. */
+      hidden?: boolean;
+    }
   /**
    * The text of a library text box (`SCH_TEXTBOX`, `(text_box ..)`): its border and fill are a `rectangle` of their own. `start`/`end` are two opposite corners, `angle_deg` 0 or 90 (the text runs up the
    * box), `margin_mm` the margin on every side; `index` is its place in the symbol's list, which a placed symbol's `text_box_shown` names. Absent from a backend built before it.
@@ -3152,6 +3173,8 @@ export type LibGraphic =
       margin_mm: Mm;
       /** `EDA_TEXT::GetTextColor`, 0..255 each; absent is `LAYER_DEVICE`'s. */
       text_color?: { r: number; g: number; b: number; a: number };
+      /** `(font (face ..))`; absent is the default font (UI-LEFT-3 S3-8). */
+      font?: string;
       unit: number;
       body_style: number;
     };
@@ -3264,6 +3287,8 @@ export interface SchematicSymbol {
   shown?: { value?: string; footprint?: string };
   /** The shown text of each of its library symbol's text boxes whose variables change it (`expandLibItemTextVars`: `${REFERENCE}` ... of this symbol), by the box's `index` in `lib_symbols`. */
   text_box_shown?: Record<string, string>;
+  /** The shown texts of its library texts whose variables change them (`expandLibItemTextVars`), by the stored text (UI-LEFT-3 S3-5). */
+  text_shown?: Record<string, string>;
   /** The symbol's records of the design variants (KiCad 25ec2335 `SCH_SYMBOL_INSTANCE::m_Variants`, `SCH_SYMBOL_VARIANT`), by variant name. A variant with no record
    * resolves to the symbol's own values (`SCH_SYMBOL::GetDNP( sheet, variant )` falls back to `m_DNP`). Absent from a backend built before variants. */
   variants?: Record<string, SymbolVariantInfo>;
@@ -3309,6 +3334,9 @@ export interface DesignVariantInfo {
  * pin is named "GND").
  */
 export interface PowerSymbol {
+  /** The shown texts of its library texts (by the stored text) and text boxes (by `index`) whose variables change them (`expandLibItemTextVars`; UI-LEFT-3 S3-5, S3-8). */
+  text_shown?: Record<string, string>;
+  text_box_shown?: Record<string, string>;
   id: string;
   /** The reference this sheet's placement gives it (`GetRef( &sheetPath )`: a power symbol has one per sheet path, UI-LEFT S9); `id` unless the screen is shown twice. */
   reference?: string;

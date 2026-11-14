@@ -66,6 +66,7 @@ import { addCorner, canAddCorner, eeFindHandle, handlePos, POINT_SIZE_PX, remova
 import { pinsDraggedWithEdge, symArcEditMode, symDrag, symEditShape, symGraphicFrom, symPointEditor } from "../../kicad-port/symPointEdit";
 import { paintingIn, useColorThemeStamp } from "../../state/colorThemeStore";
 import "../../styles/canvas.css";
+import { useMenuHighlight } from "../../state/commonTool";
 
 const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
   draw_segment: "segment",
@@ -215,6 +216,8 @@ export function SymbolEditorCanvas() {
   const sym = state.symbol;
   /** The fields on show: the symbol's own list, those with a text, the hidden ones only while Show Hidden Fields is on (kicad-port/symFieldLayout.ts). */
   const symFind = useSymFind();
+  // the items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, .. )`), drawn brightened (UI-LEFT-3 S3-24)
+  const menuHighlight = useMenuHighlight();
   const shownFields = useMemo(() => (sym ? fieldsOnShow(allFields(sym), state.showHiddenFields, state.activeUnit, sym.unit_count) : []), [sym, state.showHiddenFields, state.activeUnit]);
 
   // The grid helper of the tool in force (kicad-port/schGridHelper.ts, symbolSnap.ts), kept fed with the view, the grid, the overrides and the pins of the unit being edited: a click goes
@@ -354,7 +357,7 @@ export function SymbolEditorCanvas() {
     paintSymbol(ctx, state.view, width, height, sym, {
       selection: state.selection,
       // the Pin Table's cross-probed pin (`FocusOnItem`'s `SetBrightened`) and Find's matches (`UpdateFind`'s `BrightenItem`), in `LAYER_BRIGHTENED`
-      brightened: new Set([...(state.brightened ? [state.brightened.id] : []), ...symFind.bright]),
+      brightened: new Set([...(state.brightened ? [state.brightened.id] : []), ...symFind.bright, ...menuHighlight]),
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       gridYNm,
@@ -387,7 +390,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
+  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, menuHighlight, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

@@ -67,6 +67,24 @@ export interface SchFieldLook {
   size_nm?: number | null;
   bold?: boolean;
   italic?: boolean;
+  /** The text's own pen (`(thickness ..)`, `EDA_TEXT::GetTextThickness`); absent or 0 is the automatic one. Read by `deviceTextDrawSpec`. */
+  pen_nm?: number | null;
+}
+
+/**
+ * `SCH_TEXT::GetBoundingBox` / `SCH_FIELD::GetBoundingBox` of a text laid out by `spec` (UI-LEFT-3 S3-29): `GetTextBox` in the text's face with its own pen
+ * (`GetEffectiveTextPenWidth()`, an eighth of the size, a fifth once bold), turned about the position by the text's angle (`RotatePoint( pos, GetTextPos(),
+ * GetTextAngle() )`), normalized. What the hit tests and bounds of a text in an outline face take, as KiCad's do.
+ */
+export function schTextBoundsInFace(spec: KicadTextSpec, font: KicadFont): { minX: number; minY: number; maxX: number; maxY: number } {
+  const own: KicadTextSpec = { ...spec, pen: schOwnPen(spec.size[1], !!spec.bold) };
+  const b = kicadTextBox(own, font);
+  let [p, q]: [[number, number], [number, number]] = [
+    [b.x0, b.y0],
+    [b.x1, b.y1],
+  ];
+  if (Math.round(spec.angleDeg ?? 0) % 180 !== 0) [p, q] = [quarter(p, spec.pos), quarter(q, spec.pos)];
+  return { minX: Math.min(p[0], q[0]), minY: Math.min(p[1], q[1]), maxX: Math.max(p[0], q[0]), maxY: Math.max(p[1], q[1]) };
 }
 
 /**
@@ -89,7 +107,9 @@ export function schFieldDrawSpec(text: string, f: SchFieldLook, font: KicadFont 
 export function deviceTextDrawSpec(text: string, f: SchFieldLook, font: KicadFont = STROKE, defaultPen = SCH_DEFAULT_PEN_NM): KicadTextSpec {
   const size = sizeOf(f.size_nm);
   const bold = !!f.bold;
-  const own: KicadTextSpec = { text, pos: f.at, size: [size, size], pen: schOwnPen(size, bold), halign: f.h, valign: f.v, italic: !!f.italic, bold, multiline: true, iu: SCH_IU };
+  // a pen of its own (`(thickness ..)`): `GetEffectiveTextPenWidth` is it, clamped to the size, for the box and for the drawing (`getTextThickness`)
+  const ownPen = f.pen_nm && f.pen_nm > 0 ? iuRound(effectiveTextPenWidth(f.pen_nm, [size, size], bold, 0)) : 0;
+  const own: KicadTextSpec = { text, pos: f.at, size: [size, size], pen: ownPen || schOwnPen(size, bold), halign: f.h, valign: f.v, italic: !!f.italic, bold, multiline: true, iu: SCH_IU };
   const b = kicadTextBox(own, font);
   let box = b;
   if (f.vertical) {
@@ -102,7 +122,7 @@ export function deviceTextDrawSpec(text: string, f: SchFieldLook, font: KicadFon
     else if (f.h === "right") y = box.y0;
   } else if (f.h === "left") x = box.x0;
   else if (f.h === "right") x = box.x1;
-  return { ...own, pos: [x, y], valign: "center", angleDeg: f.vertical ? 90 : 0, pen: schDrawPen(size, bold, defaultPen) };
+  return { ...own, pos: [x, y], valign: "center", angleDeg: f.vertical ? 90 : 0, pen: ownPen || schDrawPen(size, bold, defaultPen) };
 }
 
 /**

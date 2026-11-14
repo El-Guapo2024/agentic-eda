@@ -36,3 +36,21 @@ test("a library text box's text is drawn on the placed symbol where its turned a
   const turned = placed(90, null);
   assert.deepEqual([turned.start, turned.angle, turned.h_align], [{ x: 5_555_000, y: 24_445_000 }, 90_000, "left"]);
 });
+
+test("a library text is drawn on the placed symbol turned, justified, in its face and colour, with the symbol's variables (`SCH_PAINTER::draw( SCH_SYMBOL )`, UI-LEFT-3 S3-5)", () => {
+  const text = { kind: "text", content: "${REFERENCE}", at: [1.27, 2.54], angle_deg: 0, size_mm: 1.27, unit: 0, body_style: 0, h_align: "left", v_align: "top", bold: true, font: "DejaVu Sans", text_color: { r: 10, g: 20, b: 30, a: 1 }, thickness_mm: 0.3, hidden: true };
+  const lib = { "Test:T": { graphics: [text], pins: [] } } as unknown as LibSymbols;
+  const at = (rot: number, mirror: "x" | "y" | null, shown?: Record<string, string>) => {
+    const s = { id: "U7", lib_id: "Test:T", at: [10_000_000, 20_000_000], rot, mirror, unit: 1, body_style: 1, pins: [], ...(shown ? { text_shown: shown } : {}) } as unknown as SchematicSymbol;
+    const g = resolveLibSymbol(s, lib)!.graphics[0]!;
+    if (g.kind !== "text") throw new Error("a text");
+    return g;
+  };
+  const upright = at(0, null, { "${REFERENCE}": "U7" });
+  assert.deepEqual([upright.content, upright.at, upright.angleDeg, upright.h, upright.v], ["U7", [11_270_000, 17_460_000], 0, "left", "top"], "the shown text at its anchor, Y down");
+  assert.deepEqual([upright.bold, upright.font, upright.color, upright.thicknessNm, upright.hidden, upright.recordId], [true, "DejaVu Sans", { r: 10, g: 20, b: 30, a: 1 }, 300_000, true, "U7/text/0"]);
+  const turned = at(90, null);
+  assert.deepEqual([turned.content, turned.at, turned.angleDeg, turned.h], ["${REFERENCE}", [7_460_000, 18_730_000], 90, "left"], "a quarter turn: up the sheet, its anchor turned with the body");
+  const mirrored = at(0, "y");
+  assert.deepEqual([mirrored.at, mirrored.angleDeg, mirrored.h, mirrored.v], [[8_730_000, 17_460_000], 0, "right", "top"], "mirrored left to right: the anchor mirrored, the justification flipped");
+});

@@ -13,7 +13,7 @@ import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-
 import { hitPin, pinBox, pinById, pinItems } from "../../kicad-port/schPins";
 import { sheetPinBox, sheetPinById, sheetPinItems } from "../../kicad-port/schSheetPinItems";
 import { schTextBox } from "../../kicad-port/schTextItem";
-import { labelTextBoxWidth } from "../../kicad-port/schTextSpecs";
+import { labelTextBoxWidth, schLabelDrawSpec, schTextBoundsInFace, schTextDrawSpec } from "../../kicad-port/schTextSpecs";
 import { resolveFont } from "../../kicad-port/kicadText";
 import { cellHitDistance, isSelectableCell } from "../../kicad-port/tables";
 
@@ -49,6 +49,9 @@ function textBox(text: string, at: P, sizeNm: number, justify: "left" | "center"
 
 /** The box a free text takes on the sheet: justified about its anchor as it is drawn (`EDA_TEXT::GetTextBox`). */
 export function textItemBounds(t: SchematicText): Box {
+  // in an outline face, the box in that face (`SCH_TEXT::GetBoundingBox`, UI-LEFT-3 S3-29), as it is drawn
+  const font = resolveFont(t.font, !!t.bold, !!t.italic);
+  if (font.kind === "outline") return schTextBoundsInFace(schTextDrawSpec(t), font);
   return schTextBox(t, measureStrokeText);
 }
 
@@ -60,6 +63,9 @@ export function labelBounds(sch: Schematic, l: SchematicLabel): Box {
     const outline = l.scope === "global" ? globalLabelOutline(l.net, l.shape, spin, l.at, size, labelTextBoxWidth(l, resolveFont(l.font, !!l.bold, !!l.italic))) : hierLabelOutline(l.shape, spin, l.at, size);
     return boxOfPoints(outline as P[]) ?? { minX: l.at[0], minY: l.at[1], maxX: l.at[0], maxY: l.at[1] };
   }
+  // a local label in an outline face: its text's box in that face (`SCH_LABEL_BASE::GetBodyBoundingBox`'s text part, UI-LEFT-3 S3-29)
+  const font = resolveFont(l.font, !!l.bold, !!l.italic);
+  if (font.kind === "outline") return schTextBoundsInFace(schLabelDrawSpec({ net: l.net, at: l.at, scope: l.scope, shape: l.shape, size_nm: size, bold: l.bold, italic: l.italic }, spin), font);
   const { pos, justify } = localLabelTextPlacement(spin, l.at, size);
   const vertical = spin === "up" || spin === "bottom";
   return textBox(l.net, pos as P, size, justify, vertical ? -90 : 0);

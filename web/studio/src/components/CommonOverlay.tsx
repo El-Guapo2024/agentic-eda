@@ -126,17 +126,9 @@ export function CommonOverlay() {
       }
     }
 
-    // The items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`): the board draws
-    // them brightened itself (components/canvas/painter.ts, UI-LEFT-2 PP19); the other editors still outline their boxes.
-    if (tab !== "pcb" && tool.menuHighlight && tool.menuHighlight.length > 0) {
-      const boxes = adapter.itemBoxes();
-      ctx.strokeStyle = HOVER_BOX_COLOR;
-      ctx.lineWidth = 2;
-      for (const id of tool.menuHighlight) {
-        const box = boxes.get(id);
-        if (box) strokeBox(box);
-      }
-    }
+    // The items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`) are drawn brightened
+    // by each editor's painter itself: the board's and the Footprint Editor's (UI-LEFT-2 PP19, `PCB_RENDER_SETTINGS::GetColor`), the schematic's and the Symbol
+    // Editor's (`LAYER_BRIGHTENED`, UI-LEFT-3 S3-24). Nothing of them is drawn here.
 
     // The item a picker would take (`BrightenItem` of the delete tool's candidate).
     if (picker && tool.hover) {
