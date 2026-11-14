@@ -536,10 +536,11 @@ fn check_item(what: &str, item: &FpItem) -> Result<(), Vec<CheckResult>> {
     match item {
         FpItem::Zone(z) if z.outline.len() < 3 => Err(fail("ops_bad_zone", what, "a zone outline needs at least three corners")),
         FpItem::TextBox(t) => check_text_look(what, &t.layer, &[t.size_nm]),
-        FpItem::Point(p) if p.size_nm <= Nm::ZERO => Err(fail("ops_bad_point", what, "the size of a point must be greater than zero")),
+        // `PCB_POINT::SetSize` and `PCB_BARCODE::SetBarcodeWidth` / `Height` take a size of 0 (no validator; the Properties panel's size rows refuse only a negative one, UI-LEFT-3 P3-8)
+        FpItem::Point(p) if p.size_nm < Nm::ZERO => Err(fail("ops_bad_point", what, "the size of a point cannot be negative")),
         FpItem::Image(i) if i.scale_ppm <= 0 => Err(fail("ops_bad_image", what, "the scale of an image must be greater than zero")),
         FpItem::Image(i) if i.header().is_none() => Err(fail("ops_bad_image", what, "the image data is not a PNG, JPEG, GIF or BMP file")),
-        FpItem::Barcode(b) if b.width_nm <= Nm::ZERO || b.height_nm <= Nm::ZERO => Err(fail("ops_bad_barcode", what, "the size of a barcode must be greater than zero")),
+        FpItem::Barcode(b) if b.width_nm < Nm::ZERO || b.height_nm < Nm::ZERO => Err(fail("ops_bad_barcode", what, "the size of a barcode cannot be negative")),
         FpItem::Barcode(b) if b.text_height_nm <= Nm::ZERO => Err(fail("ops_bad_barcode", what, "the text size of a barcode must be greater than zero")),
         FpItem::Table(t) if t.col_widths.is_empty() || t.row_heights.is_empty() || t.cells.len() != t.col_widths.len() * t.row_heights.len() => {
             Err(fail("ops_bad_table", what, "a table needs a cell for every row and column"))

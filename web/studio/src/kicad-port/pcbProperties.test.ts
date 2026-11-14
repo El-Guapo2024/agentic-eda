@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardState, Cmd, Dimension, Shape, Zone } from "../api/types";
+import type { FieldInfo, BoardState, Cmd, Dimension, Shape, Zone } from "../api/types";
 import { PCB_PROPERTIES, pcbContext, pcbEdit, pcbFriendlyName, pcbGrid, pcbItemOf, pcbItemsOf, pcbRow, shapeWith } from "./pcbProperties";
 
 // ---------------------------------------------------------------------------------------------------------------------------- fixture
@@ -203,6 +203,27 @@ test("a footprint lists FOOTPRINT_DESC's rows: position, side and orientation, t
   assert.deepEqual(names(board(), ["R1"]), rows);
 });
 
+test("a footprint's user fields are rows of Fields after the mandatory ones, sorted by name without regard to case (KiCad 25ec2335 GetDynamicProperties, UI-LEFT-3 P3-36)", () => {
+  const b = board();
+  const field = (name: string, text: string): FieldInfo =>
+    ({ id: `U1:${name}`, name, text, x: 0, y: 0, angle: 0, w: 1_000_000, h: 1_000_000, thickness: 150_000, layer: "F.Fab", visible: false, halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: true, knockout: false, lx: 0, ly: 0, langle: 0, custom: false }) as FieldInfo;
+  const u1 = b.parts.find((p) => p.ref === "U1")!;
+  const r1 = b.parts.find((p) => p.ref === "R1")!;
+  u1.fields = [field("Reference", "U1"), field("Value", "MCU"), field("supplier", "ACME"), field("MPN", "STM32F1"), field("Color", "red")];
+  r1.fields = [field("Reference", "R1"), field("Value", "10k"), field("MPN", "RC0603")];
+  assert.deepEqual(Object.fromEntries(names(b, ["U1"]))["Fields"], ["Reference", "Value", "Color", "MPN", "supplier"]);
+  // `GetCommonDynamicProperties`: what every selected footprint has; values that differ show as such
+  assert.deepEqual(Object.fromEntries(names(b, ["U1", "R1"]))["Fields"], ["Reference", "Value", "MPN"]);
+  assert.equal(rowOf(b, ["U1", "R1"], "MPN")!.value, null);
+  assert.deepEqual(edit(b, ["U1"], "supplier", "Digi"), [{ op: "edit_board_field", part: "U1", name: "supplier", layout: (edit(b, ["U1"], "supplier", "Digi")[0] as Extract<Cmd, { op: "edit_board_field" }>).layout, text: "Digi" }]);
+  assert.deepEqual(edit(b, ["U1"], "supplier", "ACME"), [], "the same text");
+  // in a design variant: the variant's text, set as the symbol's record of it; a field the symbol lacks is read-only
+  const v: BoardState = { ...b, shown_variant: "Lite", parts: b.parts.map((p) => (p.ref === "U1" ? { ...p, variant: { dnp: false, exclude_from_bom: false, exclude_from_pos_files: false, exclude_from_sim: false, fields: { MPN: "STM32F0" }, symbol_fields: ["MPN"] } } : p)) };
+  assert.equal(rowOf(v, ["U1"], "MPN")!.value, "STM32F0");
+  assert.deepEqual(edit(v, ["U1"], "MPN", "STM32G0"), [{ op: "set_symbol_variant", variant: "Lite", ids: ["U1"], fields: { MPN: "STM32G0" } }]);
+  assert.equal(rowOf(v, ["U1"], "Color")!.writable, false);
+});
+
 test("a footprint's Clearance Override (empty: none) and Zone Connection Style go through set_footprint_zone_connection, each keeping the other", () => {
   const b = board();
   const u1 = b.parts.find((p) => p.ref === "U1")!;
@@ -328,7 +349,15 @@ test("dimensions: the kinds share the text and layer rows and each adds its own"
   assert.deepEqual(rows("dim_a")["Text Properties"], ["Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Keep Upright", "Color", "Keep Aligned with Dimension", "Orientation"]);
   // A dimension's label is its own text (UI-LEFT-2 PP11): its looks are writeable; only the automatic pen is not modelled for it.
   for (const name of ["Font", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Keep Upright"]) assert.equal(rowOf(b, ["dim_a"], name)!.writable, true, name);
-  assert.equal(rowOf(b, ["dim_a"], "Auto Thickness")!.writable, false);
+  // UI-LEFT-3 P3-11: a label with no pen of its own has the automatic one, which the row turns off (the pen it is drawn with) and on (none of its own)
+  assert.equal(rowOf(b, ["dim_a"], "Auto Thickness")!.writable, true);
+  assert.equal(rowOf(b, ["dim_a"], "Auto Thickness")!.value, true);
+  assert.equal(rowOf(b, ["dim_a"], "Thickness")!.value, 125, "GetTextThicknessProperty: the automatic pen, an eighth of the width");
+  const off = edit(b, ["dim_a"], "Auto Thickness", false)[0] as Extract<Cmd, { op: "edit_dimension" }>;
+  assert.equal(off.dimension.text_thickness_nm, 125);
+  const own: BoardState = { ...b, drawings: { ...b.drawings!, dimensions: [dim({ text_thickness_nm: 180 })] } };
+  const on = edit(own, ["dim_a"], "Auto Thickness", true)[0] as Extract<Cmd, { op: "edit_dimension" }>;
+  assert.equal(on.dimension.text_thickness_nm, undefined);
 });
 
 test("a dimension's label rows set its looks in one edit_dimension each (UI-LEFT-2 PP11)", () => {

@@ -37,6 +37,8 @@ import type { LengthUnit } from "../../state/units";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "../../kicad-port/lineEnding";
 import { dimensionEditPoints } from "../../kicad-port/dimensionDraw";
+import { imageEditPoints } from "../../kicad-port/refImagePointEdit";
+import type { BoardRefImage } from "../../api/pcbItemTypes";
 import { DEFAULT_DASH_RATIOS, dashPieces, isDashStyle, strokeArc, strokeSegment, type DashPiece, type DashRatios, type DashSpec } from "../../kicad-port/strokeDash";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
@@ -209,6 +211,8 @@ export interface PaintOptions {
   dashRatios?: DashRatios;
   /** The dimension the Draw Dimension tool is drawing (`id` null) or the point editor is reshaping (`POST /api/dimension/preview`), drawn in place of the committed one. */
   dimensionPreview?: { id: string | null; dim: Dimension } | null;
+  /** A reference image as its point editor's drag has it (kicad-port/refImagePointEdit.ts, UI-LEFT-3 P3-10), drawn in place of the committed one. */
+  imagePointPreview?: { id: string; image: BoardRefImage } | null;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
   drcSelected: number | null;
   /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`): drawn in a frame with its name, and everything outside it dimmed. */
@@ -2277,7 +2281,7 @@ function paintPass(ctx: CanvasRenderingContext2D, view: ViewTransform, b: BoardS
   const pass = o.galPass!;
   switch (pass.kind) {
     case "bitmap":
-      drawRefImages(ctx, view, b, o);
+      drawRefImages(ctx, view, withImagePreview(b, o), o);
       return;
     case "zone":
       if (isCopper(pass.layer)) drawZones(ctx, view, b, o, pass.layer);
@@ -2476,6 +2480,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   if (opts.activeTool === "select") drawZoneHandles(ctx, view, board, opts);
   if (opts.activeTool === "select") drawShapeHandles(ctx, view, board, opts);
   if (opts.activeTool === "select") drawDimensionHandles(ctx, view, board, opts);
+  if (opts.activeTool === "select") drawImageHandles(ctx, view, board, opts);
   // Task item 5: a selected group's own bounding box, same tier as the
   // zone corner handles above (a selection-mode indicator, not board
   // content).
@@ -2555,6 +2560,34 @@ function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, 
  * pcb_point_editor.cpp's handles for a single selected graphic shape (kicad-port/pcbPointEdit.ts): a square at each point, a smaller
  * diamond at the middle of a polygon's or rectangle's edges; unlocked shapes only. Follows the drag preview while one is live.
  */
+/** The board with the image the point editor is dragging as the drag has it (`imagePointPreview`). */
+function withImagePreview(b: BoardState, o: PaintOptions): BoardState {
+  const pv = o.imagePointPreview;
+  if (!pv || !b.drawings?.images?.some((i) => i.id === pv.id)) return b;
+  return { ...b, drawings: { ...b.drawings, images: b.drawings.images.map((i) => (i.id === pv.id ? pv.image : i)) } };
+}
+
+/** `REFERENCE_IMAGE_POINT_EDIT_BEHAVIOR`'s handles of a single selected reference image that is not locked: its corners and its transform origin (UI-LEFT-3 P3-10). */
+function drawImageHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  if (opts.selection.size !== 1) return;
+  const id = [...opts.selection][0]!;
+  if ((board.locked ?? []).includes(id)) return;
+  const image = opts.imagePointPreview?.id === id ? opts.imagePointPreview.image : board.drawings?.images?.find((x) => x.id === id);
+  if (!image) return;
+  const r = hairlineNm(view, 4);
+  ctx.save();
+  ctx.fillStyle = layerColor("selection");
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.lineWidth = hairlineNm(view, 1);
+  for (const p of imageEditPoints(image)) {
+    ctx.beginPath();
+    ctx.rect(p.pos[0] - r, p.pos[1] - r, r * 2, r * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /** `PCB_POINT_EDITOR`'s handles of a single selected dimension that is not locked (kicad-port/dimensionDraw.ts `dimensionEditPoints`), at the dimension the drag has. */
 function drawDimensionHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   if (opts.selection.size !== 1) return;

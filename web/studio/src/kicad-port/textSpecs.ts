@@ -68,7 +68,7 @@ export function fieldSpec(f: FieldInfo): FacedSpec {
 
 /**
  * A dimension's label (`PCB_DIMENSION_BASE`, a `PCB_TEXT`; `PCB_PAINTER::draw( const PCB_DIMENSION_BASE* )`): at its text position and angle, centred vertically, with
- * its own width and height, pen (15 % of its height unless it says), horizontal justification, mirror, bold, italic and face (UI-LEFT-2 PP11: before, it was square,
+ * its own width and height, pen (the automatic one, `GetEffectiveTextPenWidth`, unless it says), horizontal justification, mirror, bold, italic and face (UI-LEFT-2 PP11: before, it was square,
  * centred and in the stroke font whatever the file said). A backend without them gives a square, centred label in the stroke font.
  */
 export function dimensionTextSpec(
@@ -82,7 +82,8 @@ export function dimensionTextSpec(
       text: d.text,
       pos: [d.text_at[0], d.text_at[1]],
       size,
-      pen: effectiveTextPenWidth(d.text_thickness_nm ?? Math.round(d.text_size_nm * 0.15), size, bold),
+      // `GetEffectiveTextPenWidth`: its own pen, or the automatic one (UI-LEFT-3 P3-11)
+      pen: effectiveTextPenWidth(d.text_thickness_nm ?? 0, size, bold),
       halign: d.h_justify ?? "center",
       valign: "center",
       angleDeg: d.computed_text_angle / 1000,

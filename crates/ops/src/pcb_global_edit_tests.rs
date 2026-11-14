@@ -624,3 +624,56 @@ fn a_footprints_own_dimensions_and_text_boxes_take_the_rows() {
     assert_eq!((items.dimensions[0].stroke_width, items.dimensions[0].text_size_nm, items.dimensions[0].text_effects.keep_upright), (mm(0.09), mm(0.9), m.board.text_graphics.fab.upright));
     assert_eq!(items.text_boxes[0].size_nm, mm(0.9));
 }
+
+/// UI-LEFT-3 P3-13: "Center on footprint" (`text->SetTextPos( aItem->GetParent()->GetCenter() )`) puts a footprint's dimension's label at the footprint's centre where
+/// the dimension keeps its text's place (placed by hand), in the footprint's frame; one that places its own text, and a text box (drawn from its corners), keep theirs.
+/// "auto" thickness gives a dimension's label its automatic pen (UI-LEFT-3 P3-11).
+#[test]
+fn center_on_footprint_moves_a_footprints_dimension_label_placed_by_hand() {
+    use eda_model::ir::DimensionTextPosition;
+    use eda_model::pcb_items::TextBox;
+    let m = model_with_defaults();
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    let mut manual = dr.dimensions[0].clone();
+    manual.id = "dim_m".into();
+    manual.text_position = DimensionTextPosition::Manual;
+    manual.text_pos = Some(p(mm(9.0), mm(9.0)));
+    manual.text_thickness_nm = Some(mm(0.2));
+    let mut outside = dr.dimensions[0].clone();
+    outside.id = "dim_o".into();
+    outside.text_position = DimensionTextPosition::Outside;
+    outside.text_pos = None;
+    let mut tb = TextBox::new("F.SilkS", p(Nm::ZERO, Nm::ZERO), p(mm(4.0), mm(2.0)), mm(1.0), mm(0.1));
+    tb.id = "tbx_1".into();
+    let before_tb = tb.clone();
+    let mut items = eda_model::fp_items::FootprintItems::default();
+    items.dimensions.extend([manual, outside]);
+    items.text_boxes.push(tb);
+    dr.footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), items, ..Default::default() });
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let pose = b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().clone();
+    let cmd = Cmd::EditTextAndGraphics {
+        shape_ids: vec![],
+        text_ids: ids(&["U1~tbx_1"]),
+        dimension_ids: ids(&["U1~dim_m", "U1~dim_o"]),
+        layer_defaults: false,
+        layer: None,
+        line_width: None,
+        text_size: None,
+        text_thickness: None,
+        footprint: Default::default(),
+        rows: TextRows { center_on_footprint: true, auto_thickness: true, ..Default::default() },
+    };
+    b.apply(&cmd).unwrap();
+    let items = &drawings(&b).footprint_extras.iter().find(|x| x.id == "U1").unwrap().items;
+    let manual = items.dimensions.iter().find(|d| d.id == "dim_m").unwrap();
+    // the footprint's box on the board, its centre taken back into the footprint's frame
+    let part = m.part("U1").unwrap();
+    let c = super::pcb_global_edit::box_center(b.mc_footprint_box(&pose, part, m.footprint_of(part).as_ref(), drawings(&b).footprint_extras.iter().find(|x| x.id == "U1")));
+    let local = eda_model::fp_items_place::unplacement_steps(&pose).into_iter().fold(c, |q, x| x.point(q));
+    assert_eq!(manual.text_pos, Some(local));
+    assert!(manual.text_auto_thickness(), "auto: the automatic pen");
+    assert_eq!(items.dimensions.iter().find(|d| d.id == "dim_o").unwrap().text_pos, None, "placed by its own layout");
+    assert_eq!(items.text_boxes[0].start, before_tb.start, "a text box draws from its corners");
+}

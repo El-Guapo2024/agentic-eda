@@ -22,6 +22,8 @@ export const INTERLINE = 1.68 * 0.9583;
 /** `TEXT_MIN_SIZE_MM` and `TEXT_MAX_SIZE_MM`. */
 export const TEXT_MIN_SIZE_NM = 1000;
 export const TEXT_MAX_SIZE_NM = 250_000_000;
+/** `EDA_TEXT::SetTextWidth` / `SetTextHeight`: `std::clamp( size, TEXT_MIN_SIZE_MM, TEXT_MAX_SIZE_MM )` in IU. */
+export const clampTextSize = (nm: number): number => Math.min(TEXT_MAX_SIZE_NM, Math.max(TEXT_MIN_SIZE_NM, nm));
 
 /** `GetPenSizeForNormal` / `GetPenSizeForBold`: an eighth and a fifth of the glyph. */
 export function autoPenNm(sizeNm: number, bold: boolean): number {

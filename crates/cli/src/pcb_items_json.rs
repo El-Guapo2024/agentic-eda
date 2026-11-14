@@ -91,7 +91,20 @@ pub(crate) fn point_json(p: &PcbPoint) -> Value {
 /// Add the new item kinds to the `drawings` object of the state, and the hatch, line endings and net of the shapes `drawings["shapes"]` already lists.
 pub(crate) fn extend(drawings: &mut Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, d: &DrawingsSection, tv: &PcbShown) {
     drawings["text_boxes"] = Value::Array(d.board_items.text_boxes.iter().map(|t| text_box_json(t, tv)).collect());
-    drawings["images"] = Value::Array(d.board_items.images.iter().map(image_json).collect());
+    // each with its transform origin offset where it has one (`BoardItems::image_offsets`, UI-LEFT-3 P3-10)
+    drawings["images"] = Value::Array(
+        d.board_items
+            .images
+            .iter()
+            .map(|i| {
+                let mut v = image_json(i);
+                if let Some(o) = d.board_items.image_offsets.get(&i.id) {
+                    v["offset"] = json!({ "x": o.x, "y": o.y });
+                }
+                v
+            })
+            .collect(),
+    );
     drawings["points"] = Value::Array(d.board_items.points.iter().map(point_json).collect());
     drawings["barcodes"] = Value::Array(d.barcodes.iter().map(|b| barcode_json(b, tv)).collect());
     drawings["grid_items"] = Value::Array(d.board_items.grid_items.iter().map(grid_item_json).collect());

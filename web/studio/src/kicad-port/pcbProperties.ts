@@ -432,6 +432,12 @@ function textCmd(t: BoardText, patch: Partial<{ content: string; angle: number; 
 }
 
 /** `edit_dimension` replaces the whole dimension: the current one with `patch` laid over it. */
+/** `GetEffectiveTextPenWidth()` of a dimension's label: its own thickness, else the bold or normal pen of its width, clamped (UI-LEFT-3 P3-11). */
+function dimPen(d: Dimension): number {
+  const width = d.text_width_nm ?? d.text_size_nm;
+  return effectiveTextPenWidth(d.text_thickness_nm ?? 0, [width, d.text_size_nm], !!d.bold);
+}
+
 function dimCmd(d: Dimension, patch: Partial<CmdDimension>): Cmd {
   return { op: "edit_dimension", id: d.id, dimension: { ...toCmdDimension(d), ...patch } };
 }
@@ -745,7 +751,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   // KiCad 25ec2335 `FOOTPRINT::GetDynamicProperties`: a row for each mandatory field but the Reference (Value, Datasheet, Description), `PCB_FOOTPRINT_FIELD_PROPERTY`,
   // whose getter and setter are the board's current design variant's (`GetFieldValueForVariant`; the setter's `AddVariant( variantName )->SetFieldValue`), the field's
   // own text in the default variant (UI-LEFT-2 PP16). A variant's text is the symbol's record of the variant (`set_symbol_variant`): the board's variants are the
-  // schematic's, as Update PCB from Schematic carries them (one design for both). The rows for the user fields (sorted by name) are not here.
+  // schematic's, as Update PCB from Schematic carries them (one design for both). The rows for the user fields (sorted by name) are added per selection
+  // (`syncFootprintFieldRows`, UI-LEFT-3 P3-36).
   const fieldRow = (name: string): void => {
     const own = (i: PcbItem): FieldInfo | undefined => i.part!.fields?.find((f) => f.name === name);
     add(
@@ -1799,10 +1806,15 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "EDA_TEXT",
       name: "Auto Thickness",
       kind: "bool",
-      get: (i) => (i.text ? !!i.text.auto_thickness : i.field ? i.field.thickness === 0 : i.dim!.text_thickness_nm == null),
-      writeable: (i) => !!i.text || !!i.field,
-      readOnlyReason: () => "A dimension's label keeps its own pen (15% of its size unless set).",
+      get: (i) => (i.text ? !!i.text.auto_thickness : i.field ? i.field.thickness === 0 : !i.dim!.text_thickness_nm),
       set: (i, v) => {
+        // a dimension's label: `SetAutoThickness( true )` is a thickness of 0 (none of its own), `false` keeps the pen it is drawn with
+        // (`GetEffectiveTextPenWidth()`; UI-LEFT-3 P3-11)
+        if (i.dim) {
+          const d = i.dim;
+          if (!d.text_thickness_nm === Boolean(v)) return [];
+          return [dimCmd(d, { text_thickness_nm: Boolean(v) ? undefined : dimPen(d) })];
+        }
         // a field's automatic pen is a thickness of 0 (`FieldLayout::thickness`): `SetAutoThickness` sets 0, or the pen it is drawn with
         // (`GetEffectiveTextPenWidth()`, the bold or normal pen of its width, clamped) when it is turned off (UI-LEFT-2 PP8)
         if (i.field) {
@@ -1815,8 +1827,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     TEXT
   );
-  /** `EDA_TEXT::GetTextThicknessProperty`: a text's pen; a dimension's label's, 15 % of its size unless it says otherwise. */
-  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.field ? (i.field.thickness || effectiveTextPenWidth(0, [i.field.w, i.field.h], i.field.bold)) : i.dim!.text_thickness_nm ?? Math.round(i.dim!.text_size_nm * 0.15));
+  /** `EDA_TEXT::GetTextThicknessProperty`: a text's pen; a field's or a dimension's label's own, else the automatic one it is drawn with (`GetEffectiveTextPenWidth`). */
+  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.field ? (i.field.thickness || effectiveTextPenWidth(0, [i.field.w, i.field.h], i.field.bold)) : i.dim!.text_thickness_nm || dimPen(i.dim!));
   add(
     {
       owner: "EDA_TEXT",
@@ -1829,10 +1841,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         const w = Math.round(num(v));
         // a field's typed pen ends its automatic one even when it is the pen it had (`SetTextThickness`)
         if (i.field) return i.field.thickness === w ? [] : [editFieldCmd(i.part!, i.field, { thickness: w })];
+        // a dimension's typed pen ends its automatic one, as a field's does (`SetTextThickness`)
+        if (i.dim) return i.dim.text_thickness_nm === w ? [] : [dimCmd(i.dim, { text_thickness_nm: w })];
         if (thickness(i) === w && !i.text?.auto_thickness) return [];
-        if (!i.text) return [dimCmd(i.dim!, { text_thickness_nm: w })];
         // `SetTextThickness` ends the automatic width (`GetAutoThickness` is a thickness of 0).
-        return [...(thickness(i) === w ? [] : [textCmd(i.text, { stroke_width: w })]), ...(i.text.auto_thickness ? [styleCmd(i.text, { auto_thickness: false })] : [])];
+        const t = i.text!;
+        return [...(thickness(i) === w ? [] : [textCmd(t, { stroke_width: w })]), ...(t.auto_thickness ? [styleCmd(t, { auto_thickness: false })] : [])];
       },
     },
     TEXT
@@ -1848,7 +1862,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
           if (i.field) return i.field[key] === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { [key]: Boolean(v) })];
           // `EDA_TEXT::SetBold`: in the stroke font the pen goes to the bold or the normal one (KiCad gives back a pen it kept aside, `m_StoredStrokeWidth`;
           // the model keeps none: the normal pen); an outline face is its own weight
-          if (i.dim) return dimLookCmd(i, (l) => (key === "bold" && !l.face ? boldToggled(l, Boolean(v)) : { ...l, [key]: Boolean(v) }));
+          // (8303b2ad `SetBold` sets `m_StrokeWidth` even on an automatic pen: the label has a pen of its own after it)
+          if (i.dim) return dimLookCmd(i, (l) => (key === "bold" && !l.face ? boldToggled({ ...l, autoThickness: false }, Boolean(v)) : { ...l, [key]: Boolean(v) }));
           return !!i.text![key] === Boolean(v) ? [] : [styleCmd(i.text!, { [key]: Boolean(v) })];
         },
       },
@@ -2515,20 +2530,84 @@ export const PCB_PROPERTIES: PropertyManager<PcbItem, PcbCtx, Cmd> = build();
 
 // ----------------------------------------------------------------------------------------------------------------------- the panel
 
+/** KiCad's mandatory footprint fields (`FOOTPRINT::FOOTPRINT`'s `addField`: REFERENCE, VALUE, DATASHEET, DESCRIPTION): rows of their own above. */
+const MANDATORY_FOOTPRINT_FIELDS = new Set(["Reference", "Value", "Datasheet", "Description"]);
+/** The user-field rows registered so far, in the order they are registered (`wxString::CmpNoCase`). */
+const footprintUserFieldRows: string[] = [];
+
+/**
+ * `PCB_FOOTPRINT_FIELD_PROPERTY` for the user field `name` (KiCad 25ec2335 pcbnew/footprint.cpp): in "Fields"; its getter is the field's text in the board's current
+ * design variant (`GetFieldValueForVariant`), else its own; the setter sets the variant's (`AddVariant( variantName )->SetFieldValue`) or the field's text. A variant's
+ * text is the symbol's record of the variant (`set_symbol_variant`, one design for board and schematic), so a field the symbol lacks (a footprint's own) has no
+ * variant text here and is read-only in a variant.
+ */
+function footprintUserFieldProperty(name: string): PropertyDef<PcbItem, PcbCtx, Cmd> {
+  const own = (i: PcbItem): FieldInfo | undefined => i.part!.fields?.find((f) => f.name === name);
+  const variantOf = (i: PcbItem, c: PcbCtx) => ((c.board.shown_variant ?? "") !== "" ? i.part!.variant : undefined);
+  return {
+    owner: "FOOTPRINT",
+    name,
+    kind: "string",
+    dynamic: true,
+    // `GetCommonDynamicProperties`: a row for a field every selected footprint has
+    available: (i) => !!own(i),
+    get: (i) => i.part!.variant?.fields[name] ?? own(i)?.text ?? "",
+    writeable: (i, c) => {
+      const v = variantOf(i, c);
+      return !v || (v.symbol_fields ?? []).includes(name);
+    },
+    readOnlyReason: "The field is the footprint's own: a variant's text is its symbol's, which has no such field.",
+    set: (i, v, c) => {
+      const text = String(v);
+      const variant = variantOf(i, c);
+      if (variant) return variant.fields[name] === text ? [] : [{ op: "set_symbol_variant", variant: c.board.shown_variant!, ids: [i.part!.ref], fields: { [name]: text } }];
+      const f = own(i)!;
+      return f.text === text ? [] : [editFieldCmd(i.part!, f, {}, text)];
+    },
+  };
+}
+
+/**
+ * KiCad 25ec2335 `FOOTPRINT::GetDynamicProperties`' user fields: a row for each field of the selected footprints that is not mandatory and that no class property
+ * of the footprint has the name of, sorted by name without regard to case (`CmpNoCase`). Registered once each (the panel shows one while every selected
+ * footprint has the field, `GetCommonDynamicProperties`); a new name puts them in order again (UI-LEFT-3 P3-36).
+ */
+export function syncFootprintFieldRows(items: readonly PcbItem[]): void {
+  const names = new Set(footprintUserFieldRows);
+  for (const i of items) {
+    if (i.type !== "FOOTPRINT") continue;
+    for (const f of i.part!.fields ?? []) if (!MANDATORY_FOOTPRINT_FIELDS.has(f.name) && !PCB_PROPERTIES.getProperty("FOOTPRINT", f.name)) names.add(f.name);
+  }
+  if (names.size === footprintUserFieldRows.length) return;
+  for (const n of footprintUserFieldRows) PCB_PROPERTIES.removeProperty("FOOTPRINT", n);
+  footprintUserFieldRows.length = 0;
+  const sorted = [...names].sort((a, b) => {
+    const [x, y] = [a.toLowerCase(), b.toLowerCase()];
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+  for (const n of sorted) {
+    PCB_PROPERTIES.addProperty(footprintUserFieldProperty(n), "Fields");
+    footprintUserFieldRows.push(n);
+  }
+}
+
 /** The grid the Properties panel shows for a selection of board items. */
 export function pcbGrid(board: BoardState, ids: Iterable<string>, units: LengthUnit): GridModel {
   const items = pcbItemsOf(board, ids);
+  syncFootprintFieldRows(items);
   return buildGrid(PCB_PROPERTIES, items, pcbContext(board, units, items.length), pcbFriendlyName);
 }
 
 /** The commands an edit of one row sets on the selection, or why it is refused. */
 export function pcbEdit(board: BoardState, ids: Iterable<string>, name: string, value: PropValue, units: LengthUnit): EditPlan<Cmd> {
   const items = pcbItemsOf(board, ids);
+  syncFootprintFieldRows(items);
   return planEdit(PCB_PROPERTIES, items, name, value, pcbContext(board, units, items.length));
 }
 
 /** `extractValueAndWritability` for one named property of a selection (tests and the panel's tooltips). */
 export function pcbRow(board: BoardState, ids: Iterable<string>, name: string, units: LengthUnit): ReturnType<typeof extractValueAndWritability> {
   const items = pcbItemsOf(board, ids);
+  syncFootprintFieldRows(items);
   return extractValueAndWritability(PCB_PROPERTIES, items, name, pcbContext(board, units, items.length));
 }

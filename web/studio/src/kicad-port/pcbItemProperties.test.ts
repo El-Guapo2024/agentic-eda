@@ -146,9 +146,28 @@ test("the scale, the size and the layer of an image are one edit_ref_image that 
   assert.equal(sentImage(edit(b, ["img_a"], "Associated Layer", "Dwgs.User")).layer, "Dwgs.User");
   assert.deepEqual(edit(b, ["img_a"], "Scale", 1), [], "the same scale sends nothing");
   assert.deepEqual(edit(b, ["img_a"], "Position X", 51_000_000), [{ op: "move_items", ids: ["img_a"], dx: 1_000_000, dy: 0 }]);
-  // a scale that is not a number above zero is refused
-  const refused = pcbEdit(b, ["img_a"], "Scale", 0, "mm");
-  assert.equal(refused.ok, false);
+  // `PCB_REFERENCE_IMAGE_DESC` has no validator (UI-LEFT-3 P3-8): a scale, width or height of 0 is taken and `SetImageScale` / `SetWidth` ignore it
+  for (const row of ["Scale", "Width", "Height"]) {
+    const zero = pcbEdit(b, ["img_a"], row, 0, "mm");
+    assert.equal(zero.ok, true, row);
+    assert.deepEqual(edit(b, ["img_a"], row, 0), [], `${row} 0 changes nothing`);
+  }
+});
+
+test("Transform Offset X / Y set the point an image is scaled about; Scale, Width and Height scale about it (REFERENCE_IMAGE::scaleBy, UI-LEFT-3 P3-10)", () => {
+  const b = withImage();
+  assert.equal(pcbGrid(b, ["img_a"], "mm").groups.flatMap((g) => g.rows).find((r) => r.name === "Transform Offset X")?.writable, true);
+  assert.deepEqual(edit(b, ["img_a"], "Transform Offset X", 2_000_000), [{ op: "pcb_item", verb: "set_ref_image_offset", id: "img_a", offset: { x: 2_000_000, y: 0 } }]);
+  assert.deepEqual(edit(b, ["img_a"], "Transform Offset Y", 0), [], "the centre it already has");
+  b.drawings!.images![0] = { ...refImage, offset: { x: 2_000_000, y: -1_000_000 } };
+  // the origin (52, 39) stays where it is: the centre moves towards it by half the offset, and the offset halves
+  const half = edit(b, ["img_a"], "Scale", 0.5);
+  assert.deepEqual(half, [
+    { op: "pcb_item", verb: "edit_ref_image", id: "img_a", layer: "Cmts.User", at: { x: 51_000_000, y: 39_500_000 }, scale_ppm: 500_000 },
+    { op: "pcb_item", verb: "set_ref_image_offset", id: "img_a", offset: { x: 1_000_000, y: -500_000 } },
+  ]);
+  assert.equal(edit(b, ["img_a"], "Width", 24_000_000).length, 2, "a width is a scale about the origin too");
+  assert.equal(pcbGrid(b, ["img_a"], "mm").groups.flatMap((g) => g.rows).find((r) => r.name === "Transform Offset Y")?.value, -1_000_000);
 });
 
 // ------------------------------------------------------------------------------------------------------------------------------- points
@@ -174,7 +193,9 @@ test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, la
   assert.equal(sentPoint(edit(b, ["pnt_a"], "Layer", "F.Fab")).layer, "F.Fab");
   assert.deepEqual(edit(b, ["pnt_a"], "Size", 1_000_000), [], "the same size sends nothing");
   assert.deepEqual(edit(b, ["pnt_a"], "Position Y", 21_000_000), [{ op: "move_items", ids: ["pnt_a"], dx: 0, dy: 1_000_000 }]);
-  assert.equal(pcbEdit(b, ["pnt_a"], "Size", 0, "mm").ok, false, "a mark of no size is refused");
+  // `PCB_POINT::SetSize( 0 )` is taken (no validator, UI-LEFT-3 P3-8); the PT_SIZE row refuses a negative size
+  assert.equal(sentPoint(edit(b, ["pnt_a"], "Size", 0)).size_nm, 0);
+  assert.equal(pcbEdit(b, ["pnt_a"], "Size", -1, "mm").ok, false, "a negative size is refused");
 });
 
 // ----------------------------------------------------------------------------------------------------------------------------- barcodes
@@ -202,7 +223,12 @@ test("a barcode is a PCB_BARCODE with the rows of PCB_BARCODE_DESC; Error Correc
   assert.equal(sentBarcode(edit(b, ["bar_a"], "Layer", "F.Fab")).barcode.layer, "F.Fab");
   assert.deepEqual(edit(b, ["bar_a"], "Text", "HELLO"), [], "the same text sends nothing");
   assert.deepEqual(edit(b, ["bar_a"], "Position X", 11_000_000), [{ op: "move_items", ids: ["bar_a"], dx: 1_000_000, dy: 0 }]);
-  assert.equal(pcbEdit(b, ["bar_a"], "Width", 0, "mm").ok, false, "a symbol of no size is refused");
+  // no validator (UI-LEFT-3 P3-8): a size of 0 is taken, a square kind's both sides (`KeepSquare`); the text size is at least 1 nm (`SetTextSize`)
+  const zero = sentBarcode(edit(b, ["bar_a"], "Width", 0)).barcode;
+  assert.deepEqual([zero.width_nm, zero.height_nm], [0, 0]);
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Height", 7_000_000)).barcode.width_nm, 7_000_000, "a QR code stays square");
+  assert.equal(sentBarcode(edit(b, ["bar_a"], "Text Size", 0)).barcode.text_height_nm, 1);
+  assert.equal(pcbEdit(b, ["bar_a"], "Width", -1, "mm").ok, false, "a negative size is refused");
   // the kinds: Micro QR has no High, so a High level goes to Q with the kind; Code 128 has no level at all
   b.drawings!.barcodes![0]!.ecc = "H";
   const micro = sentBarcode(edit(b, ["bar_a"], "Barcode Type", "microqr"));

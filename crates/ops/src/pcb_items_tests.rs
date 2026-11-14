@@ -156,6 +156,28 @@ fn add_image(b: &mut Board<'_>, layer: &str, at: Point) -> String {
     images(b).last().unwrap().id.clone()
 }
 
+/// UI-LEFT-3 P3-10: `REFERENCE_IMAGE::SetTransformOriginOffset` kept by the image's id; `(0, 0)` keeps none, a deleted image takes its offset with it, and the board file has no
+/// token for it (KiCad's writer has none either).
+#[test]
+fn a_reference_images_transform_offset_is_kept_by_its_id_and_never_written() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let id = add_image(&mut b, "Cmts.User", p(mm(5.0), mm(6.0)));
+    let offset = p(mm(1.0), mm(-0.5));
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id: id.clone(), offset })).unwrap();
+    assert_eq!(drawings(&b).board_items.image_offsets.get(&id), Some(&offset));
+    let pcb = eda_kicad::export_kicad_pcb(b.design(), &m, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    let image = &pcb[pcb.find("(image").expect("the image is written")..];
+    let image = &image[..image.find("(data").unwrap()];
+    assert!(image.contains("(at 5 6)") && !image.contains("offset") && !image.contains("origin"), "the file has no transform offset: {image}");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id: id.clone(), offset: p(Nm::ZERO, Nm::ZERO) })).unwrap();
+    assert!(drawings(&b).board_items.image_offsets.is_empty(), "the centre is no offset");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id: id.clone(), offset })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteRefImage { id: id.clone() })).unwrap();
+    assert!(drawings(&b).board_items.image_offsets.is_empty(), "gone with its image");
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id, offset })).unwrap_err()[0].check, "ops_unknown_ref_image");
+}
+
 #[test]
 fn a_reference_image_is_added_with_an_id_of_ours_edited_and_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);
@@ -307,7 +329,6 @@ fn a_point_that_cannot_be_drawn_is_refused() {
         assert!(points(b).is_empty(), "nothing was added");
         e[0].check.clone()
     };
-    assert_eq!(refused(&mut b, &|q| q.size_nm = Nm::ZERO), "ops_bad_point");
     assert_eq!(refused(&mut b, &|q| q.size_nm = um(-5.0)), "ops_bad_point");
     assert_eq!(refused(&mut b, &|q| q.layer = String::new()), "ops_bad_point");
     let mut off = model(&["F.Cu", "B.Cu"]);
@@ -565,7 +586,7 @@ fn a_barcode_that_cannot_be_drawn_is_refused_and_a_micro_qr_code_has_no_high_lev
         e[0].check.clone()
     };
     assert_eq!(refused(&mut b, &|c| c.layer = String::new()), "ops_bad_barcode");
-    assert_eq!(refused(&mut b, &|c| c.width_nm = Nm::ZERO), "ops_bad_barcode");
+    assert_eq!(refused(&mut b, &|c| c.width_nm = Nm::new(-1)), "ops_bad_barcode");
     assert_eq!(refused(&mut b, &|c| c.height_nm = Nm::new(-1)), "ops_bad_barcode");
     assert_eq!(refused(&mut b, &|c| c.text_height_nm = Nm::ZERO), "ops_bad_barcode");
     assert_eq!(refused(&mut b, &|c| c.angle = 360_000), "ops_bad_barcode");
@@ -1038,4 +1059,21 @@ fn mirror_items_mirrors_a_text_box_as_pcb_textbox_mirror() {
     let t = boxes(&b).iter().find(|t| t.id == id).unwrap();
     assert_eq!((t.start, t.end, t.angle), (p(mm(-10.0), mm(0.0)), p(mm(-30.0), mm(-10.0)), 210_000));
     assert!(b.apply(&Cmd::MirrorItems { ids: vec!["img_nope".into()], pivot: p(mm(0.0), mm(0.0)), direction: FlipDirection::LeftRight }).is_err());
+}
+
+/// UI-LEFT-3 P3-8: `PCB_POINT::SetSize( 0 )` and `PCB_BARCODE::SetBarcodeWidth( 0 )` / `SetBarcodeHeight( 0 )` are taken (no validator), as the Properties panel sends them.
+#[test]
+fn a_point_and_a_barcode_take_a_size_of_zero() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddPoint { point: PcbPoint::new("F.SilkS", p_at(Nm::ZERO, Nm::ZERO)) })).unwrap();
+    let id = points(&b)[0].id.clone();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditPoint { id, layer: "F.SilkS".into(), at: p_at(Nm::ZERO, Nm::ZERO), size_nm: Nm::ZERO })).expect("a point of size 0");
+    assert_eq!(points(&b)[0].size_nm, Nm::ZERO);
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::AddBarcode { barcode: qr("F.SilkS", p(Nm::ZERO, Nm::ZERO)) })).unwrap();
+    let mut c = barcodes(&b)[0].clone();
+    c.width_nm = Nm::ZERO;
+    c.height_nm = Nm::ZERO;
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::EditBarcode { id: c.id.clone(), barcode: c })).expect("a barcode of size 0");
+    assert_eq!((barcodes(&b)[0].width_nm, barcodes(&b)[0].height_nm), (Nm::ZERO, Nm::ZERO));
 }

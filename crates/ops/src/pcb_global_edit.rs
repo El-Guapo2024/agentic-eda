@@ -34,7 +34,9 @@
 //!   (`FootprintExtra::courtyard_items`: its layer and width set in the text), else the k-th of the library footprint's (`FpArt::courtyard`, in the instance's copy);
 //! * a text box, a table cell, a barcode or a dimension of the footprint (`U1~tbx_..`, `U1~tbl_..:<row>:<col>`, `U1~bar_..`, `U1~dim_..`) is the footprint's own
 //!   ([`eda_model::ir::FootprintExtra::items`]), with the rows a board item of its kind takes; a dimension's label also takes "Keep upright" (`if( parentFP )`).
-//!   "Center on footprint" leaves them: `SetTextPos` on a text box or on a dimension that places its text itself is undone by the item's own layout.
+//!   "Center on footprint" puts a dimension's label at the footprint's centre where the dimension keeps its text's place (placed by hand, a radial one's, a
+//!   leader's; the others are placed again by `updateText`); a text box draws from its corners (`PCB_TEXTBOX::GetDrawPos`), so `SetTextPos` and `SetKeepUpright`
+//!   (neither drawn nor written for a text box) change nothing of it (UI-LEFT-3 P3-13).
 //!
 //! `processItem`'s rows for them: a text's width and height, its thickness or "auto" (`SetAutoThickness`: a field's and a footprint text's thickness 0),
 //! bold, italic, the font (`m_fontCtrl`: "KiCad Font" is the stroke font, no face; any other is the face), keep upright and "Center on footprint" (only for an
@@ -44,7 +46,7 @@
 //!
 //! The board's own texts take the same rows: a width that is not the height, bold, italic and the face land on the text's `TextExtra`; "auto" is
 //! `TextExtra::auto_thickness` with the pen `GetEffectiveTextPenWidth` gives. A dimension's label takes them too, in its `Dimension::text_effects` (UI-LEFT-2
-//! PP11); its "auto" thickness is written as that pen (no automatic pen is kept for it).
+//! PP11); its "auto" thickness is its automatic pen (`Dimension::text_thickness_nm` none, UI-LEFT-3 P3-11).
 //!
 //! # Track & Via Properties' via rows
 //!
@@ -295,7 +297,7 @@ fn style_text_from_settings(l: &mut FieldLayout, d: &TextGraphicsDefaults, board
 }
 
 /// The centre of `FOOTPRINT::GetBoundingBox( false )` (`FOOTPRINT::GetCenter`).
-fn box_center(b: eda_model::multichannel::Box4) -> Point {
+pub(crate) fn box_center(b: eda_model::multichannel::Box4) -> Point {
     Point { x: (b.0 + b.2) / 2, y: (b.1 + b.3) / 2 }
 }
 
@@ -439,8 +441,8 @@ impl ItemRows<'_> {
         d.text_size_nm = h;
         d.text_effects.width_nm = (w != h).then_some(w);
         if e.rows.auto_thickness {
-            // no automatic pen for a dimension's label here: the pen it would have (`GetPenSizeForNormal` / `GetPenSizeForBold` of the width)
-            d.text_thickness_nm = Some(auto_pen_nm(w, d.text_effects.bold));
+            // `SetAutoThickness( true )`: the label's automatic pen (none of its own, UI-LEFT-3 P3-11)
+            d.text_thickness_nm = None;
         } else if let Some(th) = e.text_thickness {
             d.text_thickness_nm = Some(th);
         }
@@ -603,6 +605,13 @@ impl Board<'_> {
             let Some(pose) = self.pose_of(&reference).cloned() else { continue };
             let Some(part) = self.model.part(&reference) else { continue };
             let written = eda_model::fp_items_place::written_name(self.model, part);
+            // "Center on footprint" (`text->SetTextPos( aItem->GetParent()->GetCenter() )`, UI-LEFT-3 P3-13): the centre of the footprint's box on the board, in its frame
+            let center = (e.rows.center_on_footprint && !e.layer_defaults).then(|| {
+                let footprint = self.model.footprint_of(part);
+                let extra = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|x| x.id == reference));
+                let c = box_center(self.mc_footprint_box(&pose, part, footprint.as_ref(), extra));
+                eda_model::fp_items_place::unplacement_steps(&pose).into_iter().fold(c, |p, x| x.point(p))
+            });
             let Some(extra) = self.design.drawings.as_mut().and_then(|d| d.footprint_extras.iter_mut().find(|x| x.id == reference)) else { continue };
             if !extra.items_are_for(&written) {
                 continue;
@@ -621,6 +630,15 @@ impl Board<'_> {
             }
             for d in items.dimensions.iter_mut().filter(|d| wanted.contains(&d.id)) {
                 rows.dimension(d);
+                // A dimension's label goes to the centre where the dimension keeps its text's place (a text placed by hand, a radial dimension's, a leader's); the
+                // others are placed again by `Update()` (`updateText`), as KiCad's next update of them places them. A text box draws from its corners
+                // (`PCB_TEXTBOX::GetDrawPos`), so `SetTextPos` moves nothing of it, nor does its `SetKeepUpright` (not drawn, not written): it is left as it is.
+                if let Some(c) = center {
+                    let keeps_place = matches!(d.kind, eda_model::ir::DimensionKind::Radial { .. } | eda_model::ir::DimensionKind::Leader) || d.text_position == eda_model::ir::DimensionTextPosition::Manual;
+                    if keeps_place {
+                        d.text_pos = Some(c);
+                    }
+                }
             }
         }
     }

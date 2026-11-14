@@ -134,6 +134,12 @@ test("a cell's rows send edit_cells for that cell, and a selection of cells send
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Column Width", 12_000_000), one({ col_width_nm: 12_000_000 }));
   assert.deepEqual(edit(b, ["tbl_a:1:2"], "Row Height", 4_000_000), one({ row_height_nm: 4_000_000 }));
   assert.equal(edit(b, ["tbl_a:0:0", "tbl_a:0:1", "tbl_a:0:2"], "Bold", true).length, 3);
+  // No validator on PCB_TABLECELL_DESC's sizes or EDA_TEXT's (UI-LEFT-3 P3-8): a column or row of 0 is taken, a text size clamped to 0.001 .. 250 mm
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Column Width", 0), one({ col_width_nm: 0 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Row Height", 0), one({ row_height_nm: 0 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Width", 0), one({ width_nm: 1_000 }));
+  assert.deepEqual(edit(b, ["tbl_a:1:2"], "Height", 300_000_000), one({ height_nm: 250_000_000 }));
+  assert.equal(pcbEdit(b, ["tbl_a:1:2"], "Row Height", -1, "mm").ok, false, "a negative size is refused");
 });
 
 test("cells that differ show <...>, and a table with its cells selected shares only what both have", () => {

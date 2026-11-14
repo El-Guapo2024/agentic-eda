@@ -48,6 +48,9 @@ pub enum PcbItemCmd {
     SetRefImageData { id: String, data: String },
     /// Remove a reference image.
     DeleteRefImage { id: String },
+    /// The Properties panel's "Transform Offset X/Y" and the point editor's origin handle (`REFERENCE_IMAGE::SetTransformOriginOffset`): the point the image is scaled
+    /// about, from its centre ([`eda_model::pcb_items::BoardItems::image_offsets`]); `(0, 0)` is the centre. UI-LEFT-3 P3-10.
+    SetRefImageOffset { id: String, offset: Point },
     /// `pcbnew.InteractiveDrawing.placePoint` (`DRAWING_TOOL::PlacePoint`): a point on the board. `point.id` is ignored.
     AddPoint { point: PcbPoint },
     /// Point Properties / the Properties panel: the point's layer, place and size, in place.
@@ -157,6 +160,7 @@ impl PcbItemCmd {
             | PcbItemCmd::EditRefImage { id, .. }
             | PcbItemCmd::SetRefImageData { id, .. }
             | PcbItemCmd::DeleteRefImage { id }
+            | PcbItemCmd::SetRefImageOffset { id, .. }
             | PcbItemCmd::EditPoint { id, .. }
             | PcbItemCmd::DeletePoint { id } => vec![id.as_str()],
         }
@@ -173,6 +177,7 @@ impl PcbItemCmd {
             PcbItemCmd::EditRefImage { id, layer, at, scale_ppm } => format!("ref-image edit {id} --layer {layer} --at {},{} --scale {}", mm(at.x), mm(at.y), *scale_ppm as f64 / 1e6),
             PcbItemCmd::SetRefImageData { id, data } => format!("ref-image pixels {id} ({} bytes of data)", data.len() / 4 * 3),
             PcbItemCmd::DeleteRefImage { id } => format!("ref-image delete {id}"),
+            PcbItemCmd::SetRefImageOffset { id, offset } => format!("ref-image offset {id} --offset {},{}", mm(offset.x), mm(offset.y)),
             PcbItemCmd::AddPoint { point: p } => format!("point add --layer {} --at {},{} --size {}", p.layer, mm(p.at.x), mm(p.at.y), mm(p.size_nm)),
             PcbItemCmd::EditPoint { id, layer, at, size_nm } => format!("point edit {id} --layer {layer} --at {},{} --size {}", mm(at.x), mm(at.y), mm(*size_nm)),
             PcbItemCmd::DeletePoint { id } => format!("point delete {id}"),
@@ -240,7 +245,7 @@ impl PcbItemCmd {
     pub fn kind(&self) -> &'static str {
         match self {
             PcbItemCmd::AddTextBox { .. } | PcbItemCmd::EditTextBox { .. } | PcbItemCmd::DeleteTextBox { .. } => "text-box",
-            PcbItemCmd::AddRefImage { .. } | PcbItemCmd::EditRefImage { .. } | PcbItemCmd::SetRefImageData { .. } | PcbItemCmd::DeleteRefImage { .. } => "ref-image",
+            PcbItemCmd::AddRefImage { .. } | PcbItemCmd::EditRefImage { .. } | PcbItemCmd::SetRefImageData { .. } | PcbItemCmd::DeleteRefImage { .. } | PcbItemCmd::SetRefImageOffset { .. } => "ref-image",
             PcbItemCmd::AddPoint { .. } | PcbItemCmd::EditPoint { .. } | PcbItemCmd::DeletePoint { .. } => "point",
             PcbItemCmd::SetShapeStyle { .. } => "shape-style",
             PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
@@ -264,6 +269,7 @@ impl<'a> Board<'a> {
             PcbItemCmd::EditRefImage { id, layer, at, scale_ppm } => self.edit_ref_image(id, layer, *at, *scale_ppm),
             PcbItemCmd::SetRefImageData { id, data } => self.set_ref_image_data(id, data),
             PcbItemCmd::DeleteRefImage { id } => self.delete_ref_image(id),
+            PcbItemCmd::SetRefImageOffset { id, offset } => self.set_ref_image_offset(id, *offset),
             PcbItemCmd::AddPoint { point } => self.add_point(point.clone()),
             PcbItemCmd::EditPoint { id, layer, at, size_nm } => self.edit_point(id, layer, *at, *size_nm),
             PcbItemCmd::DeletePoint { id } => self.delete_point(id),
@@ -293,8 +299,9 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_barcode", what, "a barcode needs a layer"));
         }
         self.layer_is_on(&b.layer, what)?;
-        if b.width_nm <= Nm::ZERO || b.height_nm <= Nm::ZERO {
-            return Err(fail("ops_bad_barcode", what, "the size of a barcode must be greater than zero"));
+        // `PCB_BARCODE::SetBarcodeWidth` / `SetBarcodeHeight` take a size of 0 (`PCB_BARCODE_DESC` registers no validator; UI-LEFT-3 P3-8)
+        if b.width_nm < Nm::ZERO || b.height_nm < Nm::ZERO {
+            return Err(fail("ops_bad_barcode", what, "the size of a barcode cannot be negative"));
         }
         if b.text_height_nm <= Nm::ZERO {
             return Err(fail("ops_bad_barcode", what, "the text size of a barcode must be greater than zero"));
@@ -505,6 +512,22 @@ impl<'a> Board<'a> {
         if dr.board_items.images.len() == before {
             return Err(fail("ops_unknown_ref_image", id, "no reference image with this id"));
         }
+        dr.board_items.image_offsets.remove(id);
+        Ok(())
+    }
+
+    /// `REFERENCE_IMAGE::SetTransformOriginOffset`: any offset is taken (`PCB_REFERENCE_IMAGE_DESC` registers no validator); `(0, 0)` keeps none. The offsets of images that
+    /// are gone are dropped with it.
+    fn set_ref_image_offset(&mut self, id: &str, offset: Point) -> Result<(), Vec<CheckResult>> {
+        self.ref_image_mut(id)?;
+        let items = &mut self.drawings_mut().board_items;
+        let ids: std::collections::BTreeSet<String> = items.images.iter().map(|i| i.id.clone()).collect();
+        items.image_offsets.retain(|k, _| ids.contains(k));
+        if offset.x == Nm::ZERO && offset.y == Nm::ZERO {
+            items.image_offsets.remove(id);
+        } else {
+            items.image_offsets.insert(id.to_string(), offset);
+        }
         Ok(())
     }
 }
@@ -518,8 +541,9 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_point", what, "a point needs a layer"));
         }
         self.layer_is_on(layer, what)?;
-        if size_nm <= Nm::ZERO {
-            return Err(fail("ops_bad_point", what, "the size of a point must be greater than zero"));
+        // `PCB_POINT::SetSize` takes a size of 0 (`PCB_POINT_DESC` registers no validator; UI-LEFT-3 P3-8)
+        if size_nm < Nm::ZERO {
+            return Err(fail("ops_bad_point", what, "the size of a point cannot be negative"));
         }
         Ok(())
     }
