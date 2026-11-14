@@ -1,5 +1,5 @@
 // A placed symbol's library texts and text boxes, the clarification menu's brightened rows, an outline face's bounds (UI-LEFT-3 S3-5, S3-8, S3-24, S3-29; lane
-// sch-text, task-v15-schtext; PARITY-sch section 96).
+// sch-text, task-v15-schtext; PARITY-sch section 97).
 //
 // What it checks:
 //   1  S3-5: `SCH_PAINTER::draw( SCH_SYMBOL )`'s temp copy: a library text is drawn with the symbol's variables (`${REFERENCE}`), justified (a left-justified text
@@ -8,6 +8,10 @@
 //   2  S3-8: a library text box's border keeps its line style (served as the border's `line_style`) and its text its face.
 //   3  S3-24: the clarification menu's row under the pointer brightens its item on the schematic canvas (`LAYER_BRIGHTENED`, magenta in KiCad's theme), not a box.
 //   4  S3-29: a text in an outline face is hit where its glyphs are drawn: a click on the far end of its ink selects it.
+//   5  S3-5: a library's hidden text (`(hide yes)`, read from a `.kicad_sym`) is not drawn on the placed symbol, and is drawn with Show Hidden Fields.
+//   6  S3-24: the open Find dialog's matches are drawn brightened (`BrightenItem`), with their shadow; nothing once it closes.
+//   7  S3-24: the clarification menu's row brightens its item in the Symbol Editor and in the Footprint Editor.
+//   8  S3-29: Preferences > Schematic Editor > Display Options > "Default font:" draws the texts with no face of their own in it, and they are hit in it.
 //
 // Run it in the page of a served board (a COPY: `eda board new examples/ldo.yaml -o <dir>`, then `eda board serve -C <dir> --port N --ui web/studio/dist`), e.g.
 // `node web/studio/e2e/run-check.mjs http://localhost:N/ web/studio/e2e/sch-text-v15.check.js 5`. It keeps a symbol `TextT:TXT` with the schematic, places U881
@@ -167,6 +171,180 @@
     const picked = S().selection.map((s) => s.id);
     t(picked.includes(tx.id), `a click on the far end of its glyphs (${((x1 - x0) / MM).toFixed(2)} mm of ink) selects it (${picked})`);
     await select([]);
+  });
+
+  const tabTo = async (label) => { [...document.querySelectorAll("button, [role=tab]")].find((b) => b.textContent.trim() === label)?.click(); await until(() => S().tab === label.toLowerCase(), 5000); await sleep(800); };
+  const menuRows = () => [...document.querySelectorAll(".menubar-dropdown .menu-node-item")];
+  /** The clarification menu over `ids`, its first row under the pointer: what is lit, and the canvas before, during and after. */
+  const hoverFirstRow = async (ids, measure) => {
+    const before = measure();
+    await E.run("common.InteractiveSelection.selectionMenu", ids);
+    const rows = await until(() => (menuRows().length >= 2 ? menuRows() : null), 4000);
+    if (!rows) return null;
+    rows[0].dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    await sleep(800);
+    const lit = [...S().menuHighlight];
+    const during = measure();
+    rows[0].dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+    await sleep(800);
+    const after = measure();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await sleep(400);
+    return { before, during, after, lit };
+  };
+
+  await scenario("S3-5: a library's hidden text is not drawn on the placed symbol, and is with Show Hidden Fields", async (t) => {
+    if (S().tab !== "schematic") await tabTo("Schematic");
+    const file = `(kicad_symbol_lib (version 20241209) (generator "test")
+  (symbol "HID" (pin_names (offset 0.508)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+    (property "Reference" "U" (at 0 5.08 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "HID" (at 0 -5.08 0) (effects (font (size 1.27 1.27))))
+    (symbol "HID_0_1"
+      (rectangle (start -3.81 3.81) (end 3.81 -3.81) (stroke (width 0.254) (type default)) (fill (type none)))
+      (text "SEEN" (at 0 1.27 0) (effects (font (size 1.27 1.27))))
+      (text "GONE" (at 0 -1.27 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    )
+    (symbol "HID_1_1"
+      (pin passive line (at -6.35 0 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)`;
+    const parsed = await fetch("/api/symbol_library/parse", { method: "POST", body: file }).then((r) => r.json());
+    const sym = parsed.symbols?.[0];
+    if (!t(sym, `the library is read (${JSON.stringify(parsed).slice(0, 200)})`)) return;
+    const put = await post({ op: "embed_lib_symbol", symbol: { ...sym, lib_id: "HidT:HID" } });
+    t(put.ok !== false, `the symbol is kept with the design: ${put.message ?? "ok"}`);
+    const add = await post({ op: "add_symbol", id: "U883", lib_id: "HidT:HID", at: { x: 230 * MM, y: 135 * MM }, rot_millideg: 0, value: "HID", footprint: "", unit: 1 });
+    t(add.ok !== false, `add_symbol: ${add.message ?? "ok"}`);
+    const sch = await until(async () => { const x = await json("/api/schematic"); return x.symbols.some((y) => y.id === "U883") ? x : null; });
+    const served = sch?.lib_symbols?.["HidT:HID"]?.graphics?.find((g) => g.content === "GONE");
+    t(served?.hidden === true, `the hidden flag is served (${JSON.stringify(served)})`);
+    await select(["U883"]);
+    await E.run("common.Control.zoomFitSelection");
+    await sleep(900);
+    await select([]);
+    const seen = await until(() => (textsOf("U883")["SEEN"] ? textsOf("U883") : null), 6000);
+    t(seen && !seen["GONE"], `the shown text is drawn, the hidden one not (${Object.keys(textsOf("U883"))})`);
+    await E.run("eeschema.EditorControl.showHiddenFields");
+    const shown = await until(() => (textsOf("U883")["GONE"] ? textsOf("U883") : null), 6000);
+    t(!!shown, "with Show Hidden Fields it is drawn");
+    await E.run("eeschema.EditorControl.showHiddenFields");
+    await sleep(600);
+    t(!textsOf("U883")["GONE"], "and off again, it is not");
+  });
+
+  await scenario("S3-24: Find's matches are drawn brightened while it is open (BrightenItem), not boxed", async (t) => {
+    if (S().tab !== "schematic") await tabTo("Schematic");
+    await select(["U881"]);
+    await E.run("common.Control.zoomFitSelection");
+    await select([]);
+    await sleep(600);
+    const before = count(MAGENTA);
+    await E.run("common.Interactive.find");
+    const dlg = await until(() => [...document.querySelectorAll(".dialog")].find((d) => /^Find$/.test(d.querySelector(".dialog-header")?.textContent ?? "")), 4000);
+    if (!t(dlg, "Find opens")) return;
+    const input = dlg.querySelector(".kv-grid input");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "U881");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await sleep(1500);
+    const bright = S().brightened;
+    t(bright.length > 0, `the matches are brightened (${bright.slice(0, 4)})`);
+    const during = count(MAGENTA);
+    t(during > before + 30, `drawn in the brightened colour: ${before} -> ${during} magenta pixels`);
+    [...dlg.querySelectorAll(".dialog-footer button")].find((b) => /^(Close|Cancel)$/.test(b.textContent.trim()))?.click();
+    await sleep(900);
+    t(count(MAGENTA) < during - 30, `nothing brightened once it closes (${count(MAGENTA)})`);
+  });
+
+  await scenario("S3-24: the clarification menu's row brightens its item in the Symbol Editor (LAYER_BRIGHTENED) and in the Footprint Editor", async (t) => {
+    if (S().tab !== "schematic") await tabTo("Schematic");
+    await select(["U881"]);
+    await E.run("eeschema.EditorControl.editWithSymbolEditor");
+    await until(() => S().tab === "symbol" && S().symbolEditor?.libId === LIB_ID, 8000);
+    if (!t(S().symbolEditor?.libId === LIB_ID, `the Symbol Editor shows ${LIB_ID} (${S().tab}, ${S().symbolEditor?.libId})`)) return;
+    await E.run("common.Control.zoomFitScreen");
+    await sleep(800);
+    const sym = await json(`/api/symbol?lib_id=${encodeURIComponent(LIB_ID)}`);
+    const rect = sym.graphics.find((g) => g.kind === "rectangle")?.id;
+    const txt = sym.graphics.find((g) => g.kind === "text")?.id;
+    const r = await hoverFirstRow([rect, txt], () => count(MAGENTA));
+    if (t(r, "the menu opens in the Symbol Editor")) {
+      t(r.lit.length === 1, `row 1 brightens an item (${r.lit})`);
+      t(r.during > r.before + 100 && r.after < r.during - 100, `it is drawn in the brightened colour, and not once the pointer leaves (${r.before} -> ${r.during} -> ${r.after} magenta pixels)`);
+    }
+    // the Footprint Editor: a new footprint with a wide silkscreen line and a text
+    await tabTo("Footprint");
+    const names = async () => (await json("/api/footprint_library")).project ?? [];
+    const was = await names();
+    await E.run("pcbnew.ModuleEditor.newFootprint");
+    const name = await until(async () => (await names()).find((n) => !was.includes(n)), 6000);
+    if (!t(name, `a new footprint (${name})`)) return;
+    await post({ op: "add_footprint_graphic", footprint: name, shape: { kind: "segment", layer: "F.SilkS", stroke_width: 600_000, filled: false, start: { x: -4 * MM, y: 0 }, end: { x: 4 * MM, y: 0 } } });
+    await post({ op: "add_footprint_text", footprint: name, text: { content: "LIT", at: { x: 0, y: 3 * MM }, angle: 0, layer: "F.SilkS", size_nm: 2 * MM, stroke_width: 300_000, justify: "center", mirror: false } });
+    const fp = await json(`/api/footprint?name=${encodeURIComponent(name)}`);
+    const seg = fp.graphics.find((g) => g.kind === "segment")?.id;
+    const lit = fp.texts.find((x) => x.content === "LIT")?.id;
+    await E.run("common.Control.zoomFitScreen");
+    await sleep(900);
+    const light = () => {
+      const c = canvas();
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2];
+      return n / 1000;
+    };
+    const f = await hoverFirstRow([seg, lit], light);
+    if (t(f, "the menu opens in the Footprint Editor")) {
+      t(f.lit.length === 1, `row 1 brightens an item (${f.lit})`);
+      t(f.during > f.before * 1.002 && f.after < f.during, `the item is drawn lighter, and as before once the pointer leaves (${f.before.toFixed(0)} -> ${f.during.toFixed(0)} -> ${f.after.toFixed(0)})`);
+    }
+    await tabTo("Schematic");
+  });
+
+  await scenario("S3-29: Display Options' \"Default font:\" draws the texts with no face of their own in it, and they are hit where they are drawn", async (t) => {
+    if (S().tab !== "schematic") await tabTo("Schematic");
+    const tid = (id) => document.querySelector(`[data-testid="${id}"]`);
+    const setFont = async (font) => {
+      await E.run("common.SuiteControl.openPreferences");
+      await until(() => tid("preferences-dialog"), 4000);
+      tid("prefs-page-display_schematic")?.click();
+      await sleep(400);
+      const sel = await until(() => (tid("pref-sch-default-font")?.querySelector(`option[value="${font}"]`) ? tid("pref-sch-default-font") : null), 8000);
+      if (!sel) return false;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(sel, font);
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(200);
+      tid("preferences-ok")?.click();
+      await sleep(900);
+      return true;
+    };
+    const at = { x: 260 * MM, y: 185 * MM };
+    await post({ op: "add_sch_text", content: "MMMMMMMMMM", at, angle_millideg: 0, size_nm: 2_540_000 });
+    const tx = (await json("/api/schematic")).texts.find((x) => x.content === "MMMMMMMMMM");
+    if (!t(tx, "a text with no face of its own")) return;
+    await select([tx.id, "U881"]);
+    await E.run("common.Control.zoomFitSelection");
+    await select([]);
+    await sleep(800);
+    const strokeInk = drawn()[tx.id]?.ink;
+    t(drawn()[tx.id]?.font === "stroke", `in the KiCad font, KiCad's default (${drawn()[tx.id]?.font})`);
+    if (!t(await setFont("DejaVu Sans"), "Default font: DejaVu Sans")) return;
+    const rec = await until(() => ((drawn()[tx.id]?.font ?? "stroke") !== "stroke" ? drawn()[tx.id] : null), 20000);
+    t(!!rec, `the text is drawn in it (${drawn()[tx.id]?.font})`);
+    const lib = textsOf("U881")["U881"];
+    t(lib && lib.font !== "stroke", `and a symbol's library text with no face (${lib?.font})`);
+    const ref = Object.entries(drawn()).find(([k, v]) => k.includes("U881") && k.includes("Reference") && v)?.[1];
+    t(!ref || ref.font !== "stroke", `and its Reference field (${ref?.font})`);
+    if (rec && strokeInk) {
+      const [x0, y0, x1, y1] = rec.ink;
+      t(Math.abs(x1 - x0 - (strokeInk[2] - strokeInk[0])) > 0.2 * MM, `its glyphs are another width (${((x1 - x0) / MM).toFixed(2)} against ${((strokeInk[2] - strokeInk[0]) / MM).toFixed(2)} mm)`);
+      await clickAt(x1 - (x1 - x0) * 0.02, (y0 + y1) / 2);
+      t(S().selection.some((s) => s.id === tx.id), `a click on the far end of its glyphs selects it (${S().selection.map((s) => s.id)})`);
+      await select([]);
+    }
+    t(await setFont("KiCad Font"), "put back to the KiCad font");
+    await sleep(800);
+    t(drawn()[tx.id]?.font === "stroke", "drawn in the stroke font again");
   });
 
   check.ok = results.length > 0 && results.every((r) => r.ok);
