@@ -178,6 +178,9 @@ pub struct LinePlacer {
     /// `m_last_p_end`: the cursor of the last `routeStep` (set at its end, every mode; reset by `initPlacement` at `Start` only), the second lead
     /// `buildInitialLine` pushes a pending via along ([`Self::push_via`]).
     last_p_end: Cell<Option<Point>>,
+    /// `aViaOk` of the last `rhWalkBase`: whether `buildInitialLine` freed the pending via (`v.PushoutForce` in one of its two attempts). A head whose
+    /// via it could not free has no via (`if( m_placingVia && viaOk ) .. AppendVia`).
+    via_ok: Cell<bool>,
     /// `m_tail`, `m_head`, `m_direction` and `m_initial_direction` of the leg being routed: what `routeStep` keeps from one `Move` to the next in
     /// Walk around and Shove ([`TailState`]).
     tail_state: RefCell<TailState>,
@@ -250,7 +253,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_p_end: Cell::new(None), tail_state: RefCell::new(TailState::new(direction)), stage_dirs: Vec::new(), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_p_end: Cell::new(None), via_ok: Cell::new(true), tail_state: RefCell::new(TailState::new(direction)), stage_dirs: Vec::new(), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
     }
 
     /// `FixRoute`'s `setInitialDirection( d_last )` -- "if( m_tail.SegmentCount() == 0 ) m_direction = aDirection;" -- then
@@ -542,7 +545,10 @@ impl LinePlacer {
             let to_layer = self.via_to_layer.unwrap_or(self.current_layer);
             let (mut walk_p, mut walked) = (p, None);
             for _round in 0..2 {
-                let target = self.push_via(world, rules, settings, walk_p, to_layer, mask);
+                // `aViaOk = buildInitialLine( walkP, l1, aMode, .. )`: the head goes to where the via was freed, or -- not freed -- to the cursor
+                let freed = self.try_push_via(world, rules, settings, walk_p, to_layer, mask);
+                self.via_ok.set(freed.is_some());
+                let target = freed.unwrap_or(walk_p);
                 let l1 = with_tail(build_l1(target));
                 let w = walkaround::walk_base_line(world, rules, &l1, &st.tail, mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode)?;
                 walk_p = w.last().unwrap_or(target);
@@ -584,7 +590,7 @@ impl LinePlacer {
                 // `if( m_placingVia && viaOk ) newHead.AppendVia( makeVia( newHead.CLastPoint() ) )`: the via is part of the head, so the shove
                 // moves what is in the way of the via as well as what is in the way of the track (`SHOVE::Run`: `headVia->SetRank( 100000 )`,
                 // `m_currentNode->Add( std::move( headVia ) )`)
-                let head_via = if self.placing_via { walked.last().map(|end| self.make_via(end)) } else { None };
+                let head_via = if self.placing_via && self.via_ok.get() { walked.last().map(|end| self.make_via(end)) } else { None };
                 // `SHOVE::Run`: "Pop NODEs containing previous shoves which are no longer necessary" (`reduceSpringback( headSet )`), then
                 // `m_currentNode = parent->Branch()`: the shove starts from the world the newest frame the head still presses on left
                 let head_set = HeadSet { pts: &walked.pts, net: &self.net, layer: self.current_layer, width: self.width, via: head_via.as_ref() };
@@ -667,7 +673,8 @@ impl LinePlacer {
                 // `rhWalkOnly` fails when the walk does (ST_STUCK) or still collides
                 walked.map(|path| {
                     let (optimized, head, tail) = split_and_optimize(path, world_node);
-                    let via = if self.placing_via { optimized.last() } else { None };
+                    // `if( m_placingVia && viaOk ) walkFull.AppendVia( .. )`
+                    let via = if self.placing_via && self.via_ok.get() { optimized.last() } else { None };
                     (HeadResult { via, ..HeadResult::plain_line(optimized, false, node, current) }, head, tail)
                 })
             }
@@ -766,6 +773,14 @@ impl LinePlacer {
         if settings.mode == Mode::MarkObstacles {
             return at;
         }
+        self.try_push_via(node, rules, settings, at, to_layer, mask).unwrap_or(at)
+    }
+
+    /// [`Self::push_via`]'s two attempts, `None` when neither frees the via (`buildInitialLine`'s `return false; // via placement unsuccessful`).
+    fn try_push_via(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, at: Point, to_layer: i32, mask: u8) -> Option<Point> {
+        if settings.mode == Mode::MarkObstacles {
+            return Some(at);
+        }
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         let start = self.fixed_start();
         for attempt in 0..2 {
@@ -776,10 +791,10 @@ impl LinePlacer {
             };
             let lead = (at.x - from.x, at.y - from.y);
             if let Some(force) = crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
-                return Point { x: at.x + force.0, y: at.y + force.1 };
+                return Some(Point { x: at.x + force.0, y: at.y + force.1 });
             }
         }
-        at
+        None
     }
 
     /// `LINE_PLACER::Move`: the live preview, including end-of-route
@@ -842,14 +857,21 @@ impl LinePlacer {
                 // shoved together with the head: what was in its way has been moved, so the via is where the head ends and collides with nothing
                 Some((head.last().unwrap_or(target), self.via_diameter, self.via_drill))
             } else {
-                // pushed off before the head was walked to it (the head ends there), or placed on the head's end now
+                // pushed off before the head was walked to it (the head ends there), or (Highlight collisions) placed on the head's end now;
+                // in Walk around / Shove a via `buildInitialLine` could not free is not on the head (`aViaOk` false: no `AppendVia`)
                 let to_layer = self.via_to_layer.unwrap_or(self.current_layer);
-                let placed = resolved_via.unwrap_or_else(|| self.place_via(node, rules, settings, head.last().unwrap_or(target), to_layer));
-                let shape = Shape::Circle { c: placed, r: self.via_diameter / 2 };
-                if node.first_colliding(&shape, &self.net, self.via_layers(to_layer), rules, &[]).is_some() {
-                    colliding = true;
-                }
-                Some((placed, self.via_diameter, self.via_drill))
+                let placed = match resolved_via {
+                    Some(v) => Some(v),
+                    None if settings.mode != Mode::MarkObstacles => None,
+                    None => Some(self.place_via(node, rules, settings, head.last().unwrap_or(target), to_layer)),
+                };
+                placed.map(|placed| {
+                    let shape = Shape::Circle { c: placed, r: self.via_diameter / 2 };
+                    if node.first_colliding(&shape, &self.net, self.via_layers(to_layer), rules, &[]).is_some() {
+                        colliding = true;
+                    }
+                    (placed, self.via_diameter, self.via_drill)
+                })
             }
         } else {
             None
@@ -1110,6 +1132,13 @@ impl LinePlacer {
     /// shrink below the route's own origin.
     pub fn undo_last_segment(&mut self) -> bool {
         let Some(popped) = self.runs.pop() else { return false };
+        // `UnfixRoute`: "m_p_start = st.pts[0].p" -- the leg starts where the undone run did (with no run left that is not the via the run ended in,
+        // which a click's via had made the start)
+        if self.runs.is_empty() {
+            if let Some(&first) = popped.pts.first() {
+                self.origin = first;
+            }
+        }
         // `UnfixRoute`: "m_startItem = nullptr;" (`m_chainedPlacement` is left as it was)
         self.start_layers = None;
         // the via that run ended in goes with it, and the route is back on the layer the run was on (`m_currentLayer = st.pts[0].layer`)
@@ -1850,6 +1879,24 @@ mod tests {
         assert_eq!(placer.last_p_end.get(), Some(Point { x: Nm::ZERO, y: mm(-10.0) }));
         let placed = placer.place_via(&node, &rules, &settings, at, 1);
         assert!(placed.y > mm(0.8), "pushed up and out: {placed:?}");
+    }
+
+    /// `buildInitialLine`'s `return false; // via placement unsuccessful` (UI-LEFT-3, router-2 follow-up): in Walk around a pending via that
+    /// `VIA::PushoutForce` cannot free in its steps is not on the head (`if( m_placingVia && viaOk ) walkFull.AppendVia( .. )`) -- the preview has no
+    /// via; with the steps to free it, the via is on the head where it came free.
+    #[test]
+    fn a_via_that_cannot_be_freed_leaves_the_head_with_no_via() {
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
+        let rules = rules();
+        let cursor = Point { x: mm(0.95), y: Nm::ZERO };
+        for (limit, via) in [(1, false), (40, true)] {
+            let settings = RoutingSettings { mode: Mode::Walkaround, via_force_prop_iteration_limit: limit, ..RoutingSettings::default() };
+            let mut placer = LinePlacer::start(&node, Point { x: mm(5.0), y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
+            placer.toggle_via(true, mm(0.6), mm(0.3));
+            let pv = placer.preview(&node, &rules, &settings, cursor);
+            assert_eq!(pv.via.is_some(), via, "limit {limit}: {:?}", pv.via);
+        }
     }
 
     /// findings p5 F2-4 / F2-5: a `Move` whose `routeHead` fails keeps the head of the last one that routed (`routeStep`: `m_head = std::move(

@@ -47,9 +47,10 @@
 //! is read live (`Settings().Mode()`), but only a drag started in Shove has a `SHOVE`. A position that is not resolved commits, with "Allow DRC
 //! violations", what KiCad's `m_lastNode` then is ([`Unresolved`]): nothing, or the shove's frame without the dragged lines.
 //!
+//! A position that is not resolved is previewed as that `m_lastNode` too ([`crate::router::Router::drag_preview`]): the board as it is, or what the
+//! shove's frame pushed, with no dragged line drawn.
+//!
 //! **Differs:**
-//! - A position that cannot be resolved is shown as the dragged lines flagged colliding over what the frames had pushed; KiCad shows the world
-//!   as it was (Walk around) or the shove's world without the dragged lines (Shove).
 //! - A line with arcs: `leaderSegIndex` is the index of the segment in the line's points; KiCad's is the index of the link, which differs from
 //!   it after an arc.
 

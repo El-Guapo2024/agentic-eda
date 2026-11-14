@@ -339,6 +339,26 @@ fn a_multi_track_drag_moves_the_selected_tracks_together() {
     }
 }
 
+/// `ROUTER::moveDragging`'s `updateView( m_dragger->CurrentNode(), .. )` of a multi-track position not resolved: `m_lastNode` is null (a drag started
+/// in Walk around switched to Shove has no `SHOVE`), so the view shows the world as it is -- nothing drawn over the board, no line flagged.
+#[test]
+fn an_unresolved_multi_track_position_shows_the_board_as_it_is() {
+    let (mut design, model) = board(&[("R1", "PAD1", p(5.0, 10.0)), ("R2", "PAD1", p(35.0, 10.0)), ("R3", "PAD1", p(5.0, 12.0)), ("R4", "PAD1", p(35.0, 12.0))], &[("N1", &["R1.1", "R2.1"]), ("N2", &["R3.1", "R4.1"])]);
+    let rt = design.routing.as_mut().unwrap();
+    for (id, net, y) in [("ta", "N1", 10.0), ("tb", "N2", 12.0)] {
+        rt.tracks.push(eda_model::ir::Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(5.0, y), p(35.0, y)], arc_mid_offset: None });
+    }
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start_multi(p(20.0, 10.0), &["ta".to_string(), "tb".to_string()]).expect("starts");
+    router.settings.mode = Mode::Shove;
+    let pv = router.drag_preview(p(20.0, 8.0)).unwrap();
+    assert!(pv.fanout.is_empty() && pv.displaced_lines.is_empty() && !pv.colliding, "the world as it is: {pv:?}");
+    router.settings.mode = Mode::Walkaround;
+    let pv = router.drag_preview(p(20.0, 8.0)).unwrap();
+    assert_eq!(pv.fanout.len(), 2, "resolved again: the lines are drawn");
+}
+
 fn qa_board(name: &str) -> Option<(Design, ConstraintModel)> {
     let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew/pns_regressions/boards");
     let text = std::fs::read_to_string(root.join(format!("{name}.kicad_pcb"))).ok()?;

@@ -1857,8 +1857,16 @@ impl Router {
             }
             GroupDrag::Multi(m) => {
                 let drag = m.drag(world, rules, settings, at);
-                let fanout = drag.lines.iter().map(|(_, l)| l.clone()).collect();
-                crate::dragger::DragPreview { colliding: drag.colliding, fanout, displaced_lines: drag.displaced_lines, displaced_vias: drag.displaced_vias, ..Default::default() }
+                // `ROUTER::moveDragging`: `updateView( m_dragger->CurrentNode(), .. )` -- a position not resolved shows `m_lastNode`: the world as it is
+                // (nothing drawn over the board), or the shove's frame, whose dragged lines are not in it (only what the frame pushed is drawn)
+                match drag.unresolved {
+                    Some(crate::multi_dragger::Unresolved::World) => crate::dragger::DragPreview::default(),
+                    Some(crate::multi_dragger::Unresolved::ShoveFrame) => crate::dragger::DragPreview { displaced_lines: drag.displaced_lines, displaced_vias: drag.displaced_vias, ..Default::default() },
+                    None => {
+                        let fanout = drag.lines.iter().map(|(_, l)| l.clone()).collect();
+                        crate::dragger::DragPreview { colliding: drag.colliding, fanout, displaced_lines: drag.displaced_lines, displaced_vias: drag.displaced_vias, ..Default::default() }
+                    }
+                }
             }
         }
     }
