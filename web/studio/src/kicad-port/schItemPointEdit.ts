@@ -472,9 +472,11 @@ export function schItemPointEditor(
     };
   }
   if (g) {
-    const ed = schPointEditor(g, drag, mode, measure);
+    // a text box's minimum size is its text's in its face (UI-LEFT-3 C3-3)
+    const face = sch.graphic_text_attrs?.[g.id]?.font ?? null;
+    const ed = schPointEditor(g, drag, mode, measure, face);
     if (!ed) return null;
-    const res = drag ? schDrag(g, drag.handle, drag.to, mode, measure) : null;
+    const res = drag ? schDrag(g, drag.handle, drag.to, mode, measure, face) : null;
     const shape = res ? schShapeFrom(res.shape, g.shape) : null;
     const { id: _id, ...rest } = g;
     return {

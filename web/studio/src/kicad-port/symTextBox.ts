@@ -11,6 +11,8 @@ import { defaultPenNm } from "./schText";
 import { interlineNm } from "./schTextItem";
 import { layoutTextBox, type Measure, type TextBoxLayout } from "./schTextBox";
 import type { SchColor } from "../api/schEditTypes";
+import { kicadTextBox, resolveFont } from "./kicadText";
+import { schTextBoxDrawSpec } from "./schTextSpecs";
 
 export type LibTextBox = Extract<LibrarySymbolGraphic, { kind: "text_box" }>;
 
@@ -76,6 +78,15 @@ export function layoutLibTextBox(g: LibTextBox, measure: Measure): TextBoxLayout
 export function textBoxMinSizeNm(g: LibTextBox, measure: Measure): { w: number; h: number } {
   if (g.text === "") return { w: 0, h: 0 };
   const size = g.size_mm * 1e6;
+  // in an outline face, `GetTextBox`'s height in that font, the text broken to the box in it (UI-LEFT-3 C3-3); the Symbol Editor's default font is the stroke font
+  const font = resolveFont(g.font, !!g.bold, !!g.italic);
+  if (font.kind === "outline") {
+    const m = Math.round(textBoxMarginMm(g) * 1e6);
+    const look = { start: um(g.start), end: um(g.end), margins: [m, m, m, m] as const, text: g.text, angleDeg: isVertical(g) ? 90 : 0, size_nm: size, h: g.h_align, v: g.v_align, bold: !!g.bold, italic: !!g.italic };
+    const b = kicadTextBox(schTextBoxDrawSpec(look, font), font);
+    const textHeight = Math.abs(b.y1 - b.y0);
+    return isVertical(g) ? { w: textHeight + 2 * m, h: 0 } : { w: 0, h: textHeight + 2 * m };
+  }
   const pen = g.bold ? Math.round(size / 5) : defaultPenNm(size);
   const ext = size + 2 * Math.round(pen * 1.5);
   const lines = layoutLibTextBox(g, measure).lines.length;

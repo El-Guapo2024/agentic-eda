@@ -10,7 +10,7 @@
 import type { BoardTextBox, CmdTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
 import type { BoardState, PointXY, Nm } from "../api/types";
 import { inferBold, isBackLayer, lineThicknessNm, textStyleOf } from "./layerDefaults";
-import { layoutKicadText, lineAdvance, resolveFont, type KicadFont, type KicadTextLayout, type KicadTextSpec } from "./kicadText";
+import { kicadTextBox, layoutKicadText, lineAdvance, resolveFont, type KicadFont, type KicadTextLayout, type KicadTextSpec } from "./kicadText";
 import { textBoxSpec } from "./textSpecs";
 
 export type P = [number, number];
@@ -236,10 +236,18 @@ export function layoutBoxText(b: BoardTextBox, measure: Measure): BoxTextLayout 
  */
 export function minSizeNm(b: BoardTextBox, measure: Measure): { w: number; h: number } {
   if (shownTextOf(b) === "") return { w: 0, h: 0 };
-  const lines = layoutBoxText(b, measure).lines.length;
-  const ext = b.size + 2 * Math.round(b.thickness * 1.5);
-  const interline = Math.trunc(b.size * INTERLINE * (b.line_spacing_permille / 1000));
-  const textHeight = ext + Math.round(ext * 0.17) + (lines - 1) * interline;
+  let textHeight: number;
+  if (resolveFont(b.face, b.bold, b.italic).kind === "outline") {
+    // in an outline face, `GetTextBox( nullptr )` in that font of the text broken to the column in it (UI-LEFT-3 C3-3)
+    const { font, spec } = textBoxKicadLayout(b);
+    const box = kicadTextBox(spec, font);
+    textHeight = Math.abs(box.y1 - box.y0);
+  } else {
+    const lines = layoutBoxText(b, measure).lines.length;
+    const ext = b.size + 2 * Math.round(b.thickness * 1.5);
+    const interline = Math.trunc(b.size * INTERLINE * (b.line_spacing_permille / 1000));
+    textHeight = ext + Math.round(ext * 0.17) + (lines - 1) * interline;
+  }
   const horizontal = b.angle % 180_000 === 0;
   const need = textHeight + (horizontal ? b.margins[1] + b.margins[3] : b.margins[0] + b.margins[2]);
   const rotation = b.angle % 360_000;

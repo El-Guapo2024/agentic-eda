@@ -10,10 +10,12 @@
 //
 // A canvas draws synchronously: a face not loaded yet is drawn in the stroke font, and once it has loaded the canvases repaint (`noteAssetArrived`, the same version the
 // bitmaps move). A face fontconfig cannot match, or a file the browser cannot read (a Type 1 font), stays the stroke font, as `FONT::GetFont` falls back to it.
-// A collection's (`.ttc`) face is its first: `FontFace` takes no index.
+// A collection's (`.ttc`) face is the one fontconfig named (`FT_New_Face( .., faceIndex, .. )`): `FontFace` takes no index, so that face is cut out of the collection
+// into a font file of its own (kicad-port/sfnt.ts `sfntFaceFile`) before it is loaded (UI-LEFT-3 C3-8). A fake bold's ink is the emboldened outline's (one pixel of
+// the 358 to the em up and right, `FT_Outline_Embolden`), and the canvas fills its glyphs' polygons (components/text/kicadTextPaint.ts).
 import { isStrokeFace, setFontResolver, STROKE, type KicadFont, type OutlineFace } from "../../kicad-port/kicadText";
 import { noteAssetArrived } from "../canvas/imageCache";
-import { readSfnt, sfntGlyphPolys, sfntInk, type GlyphPoly, type SfntFace } from "../../kicad-port/sfnt";
+import { FAKE_BOLD_EM, readSfnt, sfntFaceFile, sfntGlyphPolys, sfntInk, type GlyphPoly, type SfntFace } from "../../kicad-port/sfnt";
 
 type Entry = { state: "loading" } | { state: "ready"; face: OutlineFace; file: string; style: string } | { state: "failed"; reason: string };
 
@@ -65,9 +67,10 @@ async function load(k: string, face: string, bold: boolean, italic: boolean): Pr
     if (!m.ok || !m.found) throw new Error(`Error loading font '${face}'.`);
     const res = await fetch(`/api/fonts/file?${q}`);
     if (!res.ok) throw new Error(`${m.file ?? face}: not a font file the canvas reads`);
-    const bytes = await res.arrayBuffer();
-    const sfnt = readSfnt(new Uint8Array(bytes), m.index ?? 0);
-    if (!sfnt) throw new Error(`${m.file ?? face}: no head and hhea tables`);
+    // the face fontconfig named, on its own (a collection's other faces cut away: `FontFace` loads a collection's first)
+    const bytes = sfntFaceFile(new Uint8Array(await res.arrayBuffer()), m.index ?? 0);
+    const sfnt = bytes && readSfnt(bytes, 0);
+    if (!bytes || !sfnt) throw new Error(`${m.file ?? face}: no head and hhea tables`);
     const family = `eda-outline-${++serial}`;
     const ff = new FontFace(family, bytes);
     await ff.load();
@@ -125,6 +128,8 @@ function measuredFace(family: string, sfnt: SfntFace, fakeBold: boolean, fakeIta
     advance,
     ink: (text) => {
       const own = sfntInk(sfnt, text, advance);
+      // `FT_Outline_Embolden` moves the right and top sides out by the strength, the left and bottom ones not
+      if (own && fakeBold) return [own[0], own[1] - FAKE_BOLD_EM, own[2] + FAKE_BOLD_EM, own[3]] as const;
       if (own !== undefined) return own;
       const t = measure(text);
       const [l, r, a, d] = [-t.actualBoundingBoxLeft, t.actualBoundingBoxRight, t.actualBoundingBoxAscent, t.actualBoundingBoxDescent];

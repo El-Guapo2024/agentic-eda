@@ -99,3 +99,65 @@ test("BEZIER_POLY::getQuadPoly: the ends, and points within the error of the cur
   assert.ok(pts.length > 4);
   for (const [x, y] of pts) assert.ok(Math.abs(y - (x * (10 - x)) / 5) < 1e-9, "on the parabola y = x (10 - x) / 5");
 });
+
+import { sfntFaceFile } from "./sfnt";
+
+/** A collection (`ttcf`) of `fonts`, each table copied once per face (as a collection that shares none). */
+function collectionOf(fonts: Uint8Array[]): Uint8Array {
+  const parts: Uint8Array[] = [];
+  const header = 12 + 4 * fonts.length;
+  const dirs = fonts.map((f) => 12 + 16 * new DataView(f.buffer, f.byteOffset).getUint16(4));
+  let tableAt = header + dirs.reduce((a, b) => a + b, 0);
+  const out: number[] = [];
+  const u32 = (v: number) => out.push((v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255);
+  u32(0x74746366);
+  u32(0x00010000);
+  u32(fonts.length);
+  let dirAt = header;
+  for (const d of dirs) {
+    u32(dirAt);
+    dirAt += d;
+  }
+  const tables: Uint8Array[] = [];
+  for (const f of fonts) {
+    const v = new DataView(f.buffer, f.byteOffset, f.byteLength);
+    const n = v.getUint16(4);
+    out.push(...f.subarray(0, 12));
+    for (let i = 0; i < n; i++) {
+      const rec = 12 + 16 * i;
+      const [off, len] = [v.getUint32(rec + 8), v.getUint32(rec + 12)];
+      out.push(...f.subarray(rec, rec + 8));
+      u32(tableAt);
+      u32(len);
+      const t = f.subarray(off, off + len);
+      tables.push(t, new Uint8Array(((len + 3) & ~3) - len));
+      tableAt += (len + 3) & ~3;
+    }
+  }
+  parts.push(new Uint8Array(out), ...tables);
+  const all = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    all.set(p, at);
+    at += p.length;
+  }
+  return all;
+}
+
+test("a collection's face is the one fontconfig names, cut out into a font of its own (UI-LEFT-3 C3-8; skipped without the files)", () => {
+  const BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+  if (!existsSync(DEJAVU) || !existsSync(BOLD)) return;
+  const [regular, bold] = [new Uint8Array(readFileSync(DEJAVU)), new Uint8Array(readFileSync(BOLD))];
+  const ttc = collectionOf([regular, bold]);
+  const second = sfntFaceFile(ttc, 1)!;
+  assert.equal(new DataView(second.buffer).getUint32(0), 0x00010000, "a plain sfnt, no collection header");
+  const [want, got] = [readSfnt(bold)!, readSfnt(second, 0)!];
+  const h = want.glyphOf("H".codePointAt(0)!);
+  assert.equal(got.glyphOf("H".codePointAt(0)!), h);
+  assert.equal(got.advanceOf(h), want.advanceOf(h), "the bold face's advance, not the regular one's");
+  assert.notEqual(got.advanceOf(h), readSfnt(regular)!.advanceOf(h));
+  assert.deepEqual(got.boxOf(h), want.boxOf(h));
+  assert.deepEqual(readSfnt(sfntFaceFile(ttc, 0)!, 0)!.boxOf(h), readSfnt(regular)!.boxOf(h));
+  assert.equal(sfntFaceFile(ttc, 2), null, "past the collection's faces");
+  assert.equal(sfntFaceFile(regular, 0), regular, "a file that is no collection is as it is");
+});
