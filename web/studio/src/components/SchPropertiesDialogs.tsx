@@ -13,6 +13,8 @@ import type { LabelFieldEdit, SchColor, SchFill, SchGraphic, SchLineStyle } from
 import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, LABEL_FIELD_SIZE_NM, newLabelField, ownLabelFields, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
+import { itemColorsOverridden, SchColorOverrideNote } from "./SchColorOverrideNote";
+import { noteAnswer, rememberedAnswer } from "../kicad-port/kidialog";
 import { inferSpin } from "./schematic/labelShape";
 import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
 import { textLie } from "../kicad-port/schTextItem";
@@ -368,6 +370,12 @@ export function SheetPropertiesDialog({ id }: { id: string }) {
 }
 
 /** The look the writer has always given a sheet with no style of its own (`SheetProps::legacy`): a 6 mil border, a pale yellow fill. */
+/** `DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`'s warning, word for word (`checkboxLabel` is the Colors page's `m_optOverrideColors` label). */
+const SHEET_COLOR_WARNING = "Note: item colors are overridden in the current color theme.";
+const SHEET_COLOR_WARNING_DETAIL = "To see individual item colors uncheck 'Override individual item colors'\nin Preferences > Schematic Editor > Colors.";
+/** `DoNotShowCheckbox( __FILE__, __LINE__ )`: the question's hash. */
+const SHEET_COLOR_WARNING_KEY = "dialog_sheet_properties.cpp:item-colors-overridden";
+
 const LEGACY_SHEET = { border_width_nm: 152_400, border_color: null as SchColor | null, fill_color: { r: 255, g: 255, b: 194, a: 255 } as SchColor | null };
 
 
@@ -461,10 +469,47 @@ function SheetForm({ sheet }: { sheet: Sheet }) {
     const variantCmd = Object.keys(inVariant).length > 0 ? ({ op: "sch_edit", verb: "set_sheet_variant", id: sheet.id, variant, ...inVariant } as unknown as Cmd) : null;
     const edit = sheetEditCmd(sheet, { name, file, page }, [...here, sheet.id]);
     const editCmds: Cmd[] = edit ? ((edit as { op: string; cmds?: Cmd[] }).op === "batch" ? ((edit as { cmds: Cmd[] }).cmds ?? []) : [edit]) : [];
-    void send(oneStep([propsCmd, variantCmd, ...fieldCmds, ...editCmds]));
+    const go = () => void send(oneStep([propsCmd, variantCmd, ...fieldCmds, ...editCmds]));
+    // `TransferDataFromWindow`: a border or background colour set while the theme overrides the items' colours is warned of first (`KIDIALOG` with
+    // `KD_WARNING` and `DoNotShowCheckbox`); its only button goes on
+    const colorsSet = !sameColor(borderColor, was2.border_color) || !sameColor(fillColor, was2.fill_color);
+    if (colorsSet && itemColorsOverridden("schematic") && rememberedAnswer(SHEET_COLOR_WARNING_KEY) === undefined) return setColorWarning(() => go);
+    go();
   };
+  const [colorWarning, setColorWarning] = useState<(() => void) | null>(null);
+  const [warningTicked, setWarningTicked] = useState(false);
   return (
-    <SchDialogShell title="Sheet Properties" width={560} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title="Sheet Properties" width={560} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk} note={<SchColorOverrideNote />}>
+      {colorWarning && (
+        <div className="dialog-backdrop" onClick={(e) => e.stopPropagation()}>
+          <div className="dialog" style={{ width: 440 }} role="dialog" aria-label="Warning" data-testid="sheet-color-warning">
+            <div className="dialog-header">
+              <span>Warning</span>
+            </div>
+            <div className="dialog-body" style={{ whiteSpace: "pre-wrap" }}>
+              {SHEET_COLOR_WARNING}
+              <p style={{ fontSize: 11, color: "var(--chrome-text-dim)" }}>{SHEET_COLOR_WARNING_DETAIL}</p>
+              <label style={{ display: "block", marginTop: 10 }}>
+                <input type="checkbox" checked={warningTicked} onChange={(e) => setWarningTicked(e.target.checked)} data-testid="do-not-show-again" /> Do not show again
+              </label>
+            </div>
+            <div className="dialog-footer">
+              <button
+                className="primary"
+                autoFocus
+                onClick={() => {
+                  noteAnswer(SHEET_COLOR_WARNING_KEY, warningTicked, true);
+                  const go = colorWarning;
+                  setColorWarning(null);
+                  go();
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Grid>
         <span>Sheet name</span>
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
@@ -743,7 +788,7 @@ function ShapeForm({ graphic }: { graphic: SchGraphic }) {
   };
   const closed = graphic.shape.type !== "arc" && graphic.shape.type !== "bezier";
   return (
-    <SchDialogShell title={rule ? "Rule Area Properties" : "Shape Properties"} width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
+    <SchDialogShell title={rule ? "Rule Area Properties" : "Shape Properties"} width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk} note={<SchColorOverrideNote />}>
       <Grid>
         <span>Border width (mm)</span>
         <input autoFocus value={width} onChange={(e) => setWidth(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} title="0 is the default line width" />

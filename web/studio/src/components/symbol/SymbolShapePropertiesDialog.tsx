@@ -3,6 +3,7 @@
 // a symbol with several units or body styles; the border's Color and Style, "Fill with:" a colour of its own and "Private to Symbol Editor" (UI-LEFT-2 YY2), kept beside the shape
 // (`set_symbol_graphic_looks`) in the dialog's one batch. A derived
 // symbol has no drawing of its own, so its OK says "Read Only" and is off, as `IsSymbolAlias()` makes it in KiCad. The rules live in kicad-port/symShapeProps.ts.
+import { SchColorOverrideNote } from "../SchColorOverrideNote";
 import { useEffect, useState } from "react";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { BORDER_HELP, FILL_CHOICES, schColorOfCss, shapeEditOf, shapeFormOf, shapeTitle, withBorderColor, withFillChoice, withFillColor, type DeviceColors, type ShapeForm } from "../../kicad-port/symShapeProps";
@@ -57,6 +58,7 @@ export function SymbolShapePropertiesDialog() {
         <div className="dialog-header">
           <span>{shapeTitle(shape)}</span>
         </div>
+        <SchColorOverrideNote editor="symbol" />
         <div className="dialog-body">
           <div className="kv-grid" style={{ gridTemplateColumns: "100px 1fr" }}>
             <span>Border</span>

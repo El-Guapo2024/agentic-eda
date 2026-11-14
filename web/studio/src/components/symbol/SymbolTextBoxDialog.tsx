@@ -5,6 +5,7 @@
 // editor" and the two "Common to all ..." boxes (UI-LEFT Y4), and the border's Style (`m_borderStyleCombo`, kept beside the box: `set_symbol_graphic_looks`, UI-LEFT-2 YY2). Not
 // here: the hyperlink (`m_hyperlinkCb` is hidden outside the schematic editor).
 // OK makes the box as big as its text needs (`GetMinSize`, kicad-port/symTextBox.ts) and, for a box the tool drew, remembers its looks for the next one.
+import { SchColorOverrideNote } from "../SchColorOverrideNote";
 import { useEffect, useRef, useState } from "react";
 import type { FieldHAlign, FieldVAlign } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
@@ -152,6 +153,7 @@ export function SymbolTextBoxDialog() {
         <div className="dialog-header">
           <span>Text Box Properties</span>
         </div>
+        <SchColorOverrideNote editor="symbol" />
         <div className="dialog-body" style={{ maxHeight: "74vh", overflowY: "auto" }}>
           <label style={{ display: "block", marginBottom: 4 }}>Text</label>
           <textarea
