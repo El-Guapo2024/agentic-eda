@@ -44,6 +44,7 @@ pub mod multichannel;
 pub mod net_pattern;
 pub mod netlist_import;
 pub mod wx_regex;
+mod wx_regex_unicode;
 pub mod outline;
 pub mod outline_font;
 pub mod pad_geom;
