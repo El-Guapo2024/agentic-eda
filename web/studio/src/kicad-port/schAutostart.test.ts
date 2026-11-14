@@ -50,7 +50,7 @@ test("a wire's free end starts a wire, a bus's a bus; the joined ends and a grap
   const t2 = tip(bare, "2");
   const far: [number, number] = [t2[0], t2[1] + 5_080_000];
   const sch = sheet({ wires: [{ id: "w1", net: "N", pins: [], bus: false, pts: [t2, far] }, { id: "b1", net: "D[0..3]", pins: [], bus: true, pts: [[0, 0], [20_000_000, 0]] }] } as Partial<Schematic>);
-  assert.deepEqual(autostartEvent(sch, "w1", far, { showHiddenPins: false }), { tool: "wire", at: far });
+  assert.deepEqual(autostartEvent(sch, "w1", far, { showHiddenPins: false }), { tool: "wire", at: far, like: "w1" }, "the clicked wire is the source segment");
   assert.equal(autostartEvent(sch, "w1", t2, { showHiddenPins: false }), null, "on the pin");
   assert.equal(autostartEvent(sch, "b1", [20_000_000, 0], { showHiddenPins: false })?.tool, "bus");
   // the middle of a wire is no end
@@ -77,6 +77,8 @@ test("a dangling label or sheet pin starts a wire, a bus label a bus; one on a w
   assert.equal(autostartEvent(sch, "l3", [0, 30_000_000], { showHiddenPins: false })?.tool, "bus");
   assert.equal(autostartEvent(sch, "sp1", [60_000_000, 5_000_000], { showHiddenPins: false })?.tool, "wire");
   assert.ok(labelIsBus("{A B}") && labelIsBus("D[0..7]") && !labelIsBus("D0"));
+  // a bus alias is a bus inside a group; a bare alias's name is a net (`ConfigureFromLabel`)
+  assert.ok(labelIsBus("{MEMBUS}") && !labelIsBus("MEMBUS"));
 });
 
 test("a bus entry's free end: a wire from the end off the bus, a bus from an entry on no bus", () => {

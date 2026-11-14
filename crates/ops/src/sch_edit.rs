@@ -490,6 +490,15 @@ pub enum SchCmd {
         bus: bool,
         by: WireOrigin,
     },
+    /// A wire (or bus) drawn from a free end of the wire `like` (`SCH_SELECTION_TOOL::autostartEvent` on an `SCH_LINE`: `params->sourceSegment`; `startSegments`
+    /// duplicates it, `aSegment->Duplicate()`, so the new segments have its stroke -- width, style, colour): `add_wire`, then the new wires take `like`'s stroke
+    /// (`SchExtras::strokes`). UI-LEFT-3 S3-1.
+    AddWireLike {
+        pts: Vec<Point>,
+        #[serde(default)]
+        bus: bool,
+        like: String,
+    },
     /// Change / Update Symbols' reset options (`DIALOG_CHANGE_SYMBOLS::processSymbols`, UI-LEFT S16, UI-LEFT-2 SS14): on every placed unit of the references `ids`,
     /// each field the library symbol has (`Reference`, `Value`, `Footprint`, `Datasheet` and its user fields) takes the library field's visibility ("Update field
     /// visibilities", `SetVisible( libField->IsVisible() )`), its size, angle, justification, bold, italic, Show Name and Allow Autoplace ("Update field sizes and
@@ -569,6 +578,7 @@ impl SchCmd {
             SchCmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
             SchCmd::LinkDesignBlock { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddWireAs { .. } => vec!["wire"],
+            SchCmd::AddWireLike { like, .. } => vec![like.as_str()],
             SchCmd::ResetSymbolFields { ids, .. } | SchCmd::ToggleSymbolAttribute { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::GlobalEditTextGraphics { .. } => vec!["edit_text_graphics"],
             SchCmd::SetNewPowerKind { lib_id, .. } => vec![lib_id.as_str()],
@@ -637,6 +647,11 @@ impl SchCmd {
             SchCmd::RemoveFromGroup { ids } => format!("schematic group-remove {}", ids.join(" ")),
             SchCmd::EditGroup { id, name, .. } => format!("schematic group-properties {id} {name:?}"),
             SchCmd::LinkDesignBlock { ids, block } => format!("schematic link-design-block {block} {}", ids.join(" ")),
+            SchCmd::AddWireLike { pts, bus, like } => format!(
+                "schematic {} --pts \"{}\" --like {like}",
+                if *bus { "bus" } else { "wire" },
+                pts.iter().map(|p| format!("{:.2},{:.2}", eda_model::units::to_mm(p.x), eda_model::units::to_mm(p.y))).collect::<Vec<_>>().join(" ")
+            ),
             SchCmd::AddWireAs { pts, bus, by } => format!(
                 "schematic {} --pts \"{}\" --by {}",
                 if *bus { "bus" } else { "wire" },
@@ -676,7 +691,7 @@ impl SchCmd {
             SchCmd::SetLineEnds { .. } => "schematic-wire",
             SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } | SchCmd::PinHelper { .. } => "schematic-pins",
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
-            SchCmd::AddWireAs { .. } => "schematic-wire",
+            SchCmd::AddWireAs { .. } | SchCmd::AddWireLike { .. } => "schematic-wire",
             SchCmd::ResetSymbolFields { .. } => "schematic-fields",
             SchCmd::GlobalEditTextGraphics { .. } => "schematic-text",
             SchCmd::SetNewPowerKind { .. } => "schematic-power",
@@ -849,6 +864,7 @@ impl<'a> Board<'a> {
             SchCmd::EditGroup { id, name, member_ids, design_block } => self.sch_edit_group(id, name, member_ids, design_block.as_deref()),
             SchCmd::LinkDesignBlock { ids, block } => self.sch_link_design_block(ids, block),
             SchCmd::AddWireAs { pts, bus, .. } => self.add_wire_finished(pts.clone(), *bus, false),
+            SchCmd::AddWireLike { pts, bus, like } => self.add_wire_like(pts.clone(), *bus, like),
             SchCmd::ResetSymbolFields { ids, visibility, effects, positions, allow_unchanged } => self.reset_symbol_fields(ids, *visibility, *effects, *positions, *allow_unchanged),
             SchCmd::GlobalEditTextGraphics { spec } => self.global_edit_text_graphics(spec),
             SchCmd::SetNewPowerKind { lib_id, local } => self.set_new_power_kind(lib_id, *local),
@@ -1617,5 +1633,23 @@ pub(crate) fn apply_library_field(p: &mut eda_model::ir::FieldPlacement, lf: &ed
         // corner the symbol sits by (+y down)
         p.dx = eda_model::units::mm(lf.at.x - x0);
         p.dy = eda_model::units::mm(y1 - lf.at.y);
+    }
+}
+
+impl Board<'_> {
+    /// [`SchCmd::AddWireLike`]: the wire drawn as `add_wire` finishes it, and every wire the step made (the ids that were not there) with the stroke of `like`.
+    fn add_wire_like(&mut self, pts: Vec<Point>, bus: bool, like: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic()?;
+        let stroke = sch.extras.strokes.get(like).cloned();
+        let before: BTreeSet<Vec<Point>> = sch.wires.iter().map(|w| w.pts.clone()).collect();
+        self.add_wire_finished(pts, bus, true)?;
+        let Some(stroke) = stroke else { return Ok(()) };
+        let sch = self.schematic_mut()?;
+        sch.assign_missing_ids();
+        let new: Vec<String> = sch.wires.iter().filter(|w| !before.contains(&w.pts)).map(|w| w.id.clone()).collect();
+        for id in new {
+            sch.extras.strokes.insert(id, stroke.clone());
+        }
+        Ok(())
     }
 }

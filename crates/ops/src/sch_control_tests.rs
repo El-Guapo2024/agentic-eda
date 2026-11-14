@@ -400,3 +400,25 @@ fn a_new_sheet_takes_the_default_sheet_colours() {
     assert_eq!((first.border_color, first.fill_color), (Some(red), None));
     assert_eq!((second.border_color, second.fill_color), (None, None), "no colour of its own");
 }
+
+/// UI-LEFT-3 S3-1: a wire started from a free end of a wire (`autostartEvent`'s `sourceSegment`, `startSegments`' `Duplicate`) has that wire's stroke; one
+/// with the default stroke gives the default.
+#[test]
+fn a_wire_drawn_from_a_wire_end_takes_its_stroke() {
+    use crate::sch_edit::SchCmd;
+    use eda_model::sch_extras::{SchColor, SchLineStyle, SchStroke};
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(0.0), mm(0.0)), p(mm(10.16), mm(0.0))], bus: false }).unwrap();
+    b.design.schematic.as_mut().unwrap().assign_missing_ids();
+    let source = b.design().schematic.as_ref().unwrap().wires[0].id.clone();
+    let stroke = SchStroke { width_nm: mm(0.3), style: SchLineStyle::Dash, color: Some(SchColor { r: 10, g: 20, b: 30, a: 255 }) };
+    b.design.schematic.as_mut().unwrap().extras.strokes.insert(source.clone(), stroke.clone());
+    b.apply(&Cmd::sch(SchCmd::AddWireLike { pts: vec![p(mm(10.16), mm(0.0)), p(mm(10.16), mm(10.16))], bus: false, like: source.clone() })).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let new = sch.wires.iter().find(|w| w.pts.contains(&p(mm(10.16), mm(10.16)))).unwrap();
+    assert_ne!(new.id, source);
+    assert_eq!(sch.extras.strokes.get(&new.id), Some(&stroke), "the clicked wire's stroke");
+    let verb: Cmd = serde_json::from_value(serde_json::json!({ "op": "sch_edit", "verb": "add_wire_like", "pts": [{ "x": 0, "y": 0 }, { "x": 0, "y": 2540000 }], "like": "w" })).unwrap();
+    assert!(matches!(verb, Cmd::SchEdit(SchCmd::AddWireLike { .. })));
+}

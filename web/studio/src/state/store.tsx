@@ -406,7 +406,7 @@ export type DrawState =
   | { kind: "table"; origin: [Nm, Nm] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
   | { kind: "wire"; pts: [Nm, Nm][]; /** Started by the selection tool on an unconnected pin, label or wire end (`autostartEvent`'s `quitOnDraw`): the tool gives way to the
-     *  selection tool once the wire is finished or cancelled (UI-LEFT-3 S3-1). */ quitOnDraw?: boolean }
+     *  selection tool once the wire is finished or cancelled (UI-LEFT-3 S3-1). */ quitOnDraw?: boolean; /** The wire it was started from (`sourceSegment`): the new wire takes its stroke. */ like?: string }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
   /** `arrow`: Interactive Offset's ruler (`POSITION_RELATIVE_TOOL::InteractiveOffset`: the anchor colour, no ticks, an arrowhead at the end) rather than the Measure tool's. */
   | { kind: "measure"; pts: [Nm, Nm][]; arrow?: boolean };

@@ -78,6 +78,7 @@ import { boxItems } from "./schematic/schItems";
 import { pickItem } from "./schematic/schPick";
 import { isPinItemId, promoteLonePin } from "../kicad-port/schPins";
 import { autostartEvent, type Autostart, type AutostartTool } from "../kicad-port/schAutostart";
+import { KICURSOR_CSS } from "../kicad-port/kiCursors";
 import { schItemGrid, type SchItemKind } from "../kicad-port/gridOverrides";
 import { openSchProperties } from "./schematic/schPropertiesOpen";
 import { SchContextMenu } from "./schematic/SchContextMenu";
@@ -527,6 +528,10 @@ export function SchematicView() {
       // `DrawState` kind), colored to match whichever is actually armed.
       ctx.strokeStyle = layerColor(state.activeTool === "bus" ? "LAYER_BUS" : state.activeTool === "sch_line" ? "LAYER_NOTES" : "LAYER_WIRE");
       ctx.lineWidth = Math.max(150_000, (1 / state.schematicView.scale) * 1.5);
+      // drawn from a wire's end: the segments are duplicates of it, its colour and width
+      const likeStroke = state.drawState.like ? sch?.wires.find((w) => w.id === (state.drawState as { like?: string }).like)?.stroke : undefined;
+      if (likeStroke?.color && likeStroke.color.a > 0) ctx.strokeStyle = `rgba(${likeStroke.color.r},${likeStroke.color.g},${likeStroke.color.b},${likeStroke.color.a / 255})`;
+      if (likeStroke?.width_nm) ctx.lineWidth = Math.max(likeStroke.width_nm, ctx.lineWidth);
       ctx.beginPath();
       pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.stroke();
@@ -633,7 +638,7 @@ export function SchematicView() {
     dispatch({ type: "SET_SELECTION", refs: [] });
     dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
     dispatch({ type: "SET_ACTIVE_TOOL", tool: a.tool });
-    dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [a.at], quitOnDraw: true } });
+    dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [a.at], quitOnDraw: true, ...(a.like ? { like: a.like } : {}) } });
     setAutostartHover(null);
   };
 
@@ -666,7 +671,10 @@ export function SchematicView() {
       void api.cmd({ op: "add_sch_line", pts: points });
       return;
     }
-    const wire: Cmd = { op: "add_wire", pts: points, bus: state.activeTool === "bus" };
+    // a wire started from a wire's end has that wire's stroke (`startSegments`' `Duplicate`): `add_wire_like` when the wire has one of its own
+    const like = state.drawState?.kind === "wire" ? state.drawState.like : undefined;
+    const likeStroke = like ? sch?.wires.find((w) => w.id === like)?.stroke : undefined;
+    const wire: Cmd = likeStroke ? ({ op: "sch_edit", verb: "add_wire_like", pts: points, bus: state.activeTool === "bus", like: like! } as Cmd) : { op: "add_wire", pts: points, bus: state.activeTool === "bus" };
     const unfold = state.busUnfold;
     if (!unfold) {
       void api.cmd(wire);
@@ -758,8 +766,8 @@ export function SchematicView() {
       data-edit-points={shapeEditor ? shapeEditor.edit.points.map((q) => `${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       data-edit-lines={shapeEditor ? shapeEditor.edit.lines.flatMap((l, i) => (l.center ? [handlePos(shapeEditor.edit, { kind: "line", index: i }).join(",")] : [])).join(" ") : undefined}
       data-autostart-hover={autostartHover ?? undefined}
-      // (`displayWireCursor` / `displayBusCursor` over a point a click would start a wire from: KiCad's pencil cursors are not the studio's, the crosshair stands for them)
-      style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : autostartHover ? "crosshair" : "default" }}
+      // (`displayWireCursor` / `displayBusCursor` over a point a click would start a wire from: KiCad's own LINE_WIRE / LINE_BUS cursors, kicad-port/kiCursors.ts)
+      style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : autostartHover ? KICURSOR_CSS[autostartHover] : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
         modsRef.current = { ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey };

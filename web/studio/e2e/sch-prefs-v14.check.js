@@ -2,9 +2,9 @@
 // the canvas:
 //   tree      Schematic Editor > ... Toolbars, Field Name Templates, Simulator; the Editing Options rows that were greyed are live (only Automatically annotate
 //             symbols stays greyed); the Symbol Editor's Defaults for New Objects are inputs
-//   S3-1      a click of the selection tool on an unconnected pin starts a wire there (the hover shows the crosshair first); the wire finishes with a
+//   S3-1      a click of the selection tool on an unconnected pin starts a wire there (the hover shows KiCad's wire cursor first); the wire finishes with a
 //             double-click and the selection tool is back (`quitOnDraw`); the command carried the person's autoplace and sheet colours; with "Automatically start
-//             wires on unconnected pins" off, the click selects the pin
+//             wires on unconnected pins" off, the click selects the pin; KiCad's LINE_WIRE cursor over such a point; a wire started from a wire's end takes its stroke
 //   S3-26     "Mouse drag performs Drag (G)" off: a drag of the symbol moves it away from its wire (the wire stays); on (KiCad's default) the wire's end follows; the
 //             line mode is kept with the preferences; a sheet drawn takes the default sheet colours; the never-show-rescue row is stored
 //   S3-3      a symbol placed with "Automatically place symbol fields" off is not autoplaced (the request's `autoplace`), with it on it is
@@ -148,7 +148,8 @@
     if (!t(added.ok !== false, `add_symbol: ${added.message ?? "ok"}`)) return;
     const ends = await findPinEnds();
     if (!t(ends.length >= 2, `the hover finds the resistor's pin ends (${ends.length} points)`)) return;
-    t(sContainer().style.cursor === "crosshair" || (await hoverAt(ends[0])) === "wire", "the cursor over a pin end is the crosshair");
+    await hoverAt(ends[0]);
+    t(/^url\("data:image\/svg\+xml,.*\) 5 26, crosshair$/.test(sContainer().style.cursor), `the cursor over a pin end is KiCad's LINE_WIRE pencil (${sContainer().style.cursor.slice(0, 40)}...)`);
     const [top] = ends;
     sent.length = 0;
     await clickAt(top);
@@ -176,6 +177,29 @@
     await ok();
     await undo();
     t(!(await sch()).wires.some((x) => x.pts.some((q) => q[0] === to[0] && q[1] === to[1])), "one undo takes the wire back");
+  });
+
+  await scenario("S3-1: a wire started from a wire's free end takes that wire's stroke", async (t) => {
+    const a0 = [X + 10 * G, Y + 30 * G], a1 = [X + 16 * G, Y + 30 * G];
+    await cmd({ op: "add_wire", pts: [{ x: a0[0], y: a0[1] }, { x: a1[0], y: a1[1] }] });
+    await sleep(800);
+    const w0 = (await sch()).wires.find((w) => w.pts.some((q) => q[0] === a1[0] && q[1] === a1[1]));
+    if (!t(!!w0, "the source wire")) return;
+    const stroke = { width_nm: 300000, style: "dash", color: { r: 200, g: 40, b: 40, a: 255 } };
+    const set = await cmd({ op: "sch_edit", verb: "set_stroke", ids: [w0.id], ...stroke });
+    t(set.ok !== false, `set_stroke: ${set.message ?? "ok"}`);
+    await sleep(800);
+    t((await hoverAt(a1)) === "wire", "its free end is an autostart point");
+    await clickAt(a1);
+    const to = [a1[0], a1[1] + 4 * G];
+    await dblClickAt(to);
+    const s1 = await sch();
+    const w1 = s1.wires.find((w) => w.id !== w0.id && w.pts.some((q) => q[0] === to[0] && q[1] === to[1]));
+    t(!!w1 && w1.stroke?.width_nm === 300000 && w1.stroke?.color?.r === 200 && w1.stroke?.style === "dash", `the new wire has the clicked wire's stroke (${JSON.stringify(w1?.stroke)})`);
+    await undo();
+    await undo();
+    await undo();
+    t(!(await sch()).wires.some((w) => w.pts.some((q) => q[0] === a1[0] && q[1] === a1[1])), "undone");
   });
 
   await scenario("S3-26: a mouse drag moves (M) with Drag (G) off, and drags (the wire follows) with it on", async (t) => {

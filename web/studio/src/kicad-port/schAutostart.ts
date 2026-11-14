@@ -7,7 +7,9 @@
 // no point under the cursor. The clickable anchors:
 //   * a pin of a symbol (`SCH_PIN::IsPointClickableAnchor`: dangling and at the point) of the symbol's unit and body style, shown (or hidden pins shown);
 //   * a local, global or hierarchical label, or a sheet pin (`SCH_LABEL`, `SCH_GLOBALLABEL`, `SCH_HIERLABEL`, `SCH_SHEET_PIN`): dangling, at its anchor; a label whose
-//     text is a bus (`SCH_CONNECTION::ConfigureFromLabel( .. ).IsBus()`) starts a bus;
+//     text is a bus (`SCH_CONNECTION::ConfigureFromLabel( .. ).IsBus()`: a bus vector or a bus group; a bus alias is a bus only inside a group, `{ALIAS}`, as
+//     `ConfigureFromLabel` looks aliases up among a group's members -- a label of a bare alias's name is a net in 8303b2ad and 25ec2335 alike) starts a bus;
+//   * an end of a wire or a bus: the new wire takes the clicked one's stroke (`startSegments`' `Duplicate`, `SchCmd::AddWireLike`);
 //   * an end of a wire or a bus (`SCH_LINE::IsPointClickableAnchor`: that end dangling); a bus starts a bus; a graphic line is never dangling;
 //   * an end of a bus entry (`SCH_BUS_ENTRY_BASE::IsPointClickableAnchor`): a wire, or a bus when the entry has no bus on it.
 // A directive label, a junction, a no-connect, a power symbol (its pin hidden, as KiCad's power libraries have it) or a sheet are none.
@@ -138,9 +140,11 @@ export interface Autostart {
   tool: AutostartTool;
   /** Where the wire starts: the snapped point (`newEvt->SetMousePosition( pos )`). */
   at: [number, number];
+  /** The wire or bus clicked (`params->sourceSegment = dynamic_cast<SCH_LINE*>( collector[0] )`): `startSegments` duplicates it, so the new segments have its stroke. */
+  like?: string;
 }
 
-/** `ConfigureFromLabel( text ).IsBus()`: a bus vector (`D[0..7]`) or a bus group (`{A B}`). (A bus alias's name is a bus too in KiCad; the sheet the studio sends names no aliases.) */
+/** `ConfigureFromLabel( text ).IsBus()`: a bus vector (`D[0..7]`) or a bus group (`{A B}`, which a bus alias goes in); anything else -- a bare alias's name too -- is a net. */
 export function labelIsBus(text: string): boolean {
   return parseBusVector(text) !== null || parseBusGroup(text) !== null;
 }
@@ -173,7 +177,7 @@ export function autostartEvent(sch: Schematic, id: string, pos: P, opts: { showH
   const wire = sch.wires.find((w) => w.id === id);
   if (wire) {
     for (let i = 0; i + 1 < wire.pts.length; i++) {
-      if ((same(wire.pts[i]!, pos) && dangling.segEnds.has(`${wire.id}#${i}:start`)) || (same(wire.pts[i + 1]!, pos) && dangling.segEnds.has(`${wire.id}#${i}:end`))) return start(wire.bus ? "bus" : "wire");
+      if ((same(wire.pts[i]!, pos) && dangling.segEnds.has(`${wire.id}#${i}:start`)) || (same(wire.pts[i + 1]!, pos) && dangling.segEnds.has(`${wire.id}#${i}:end`))) return { ...start(wire.bus ? "bus" : "wire"), like: wire.id };
     }
     return null;
   }
