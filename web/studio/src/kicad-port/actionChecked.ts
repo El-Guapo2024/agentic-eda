@@ -18,7 +18,7 @@ export interface CheckedContext {
   fpTool: string;
   symTool: string;
   /** The Symbol Editor's view toggles and Synchronized Pins Mode. */
-  sym: { showElectricalTypes: boolean; showHiddenPins: boolean; syncPins: boolean; showHiddenFields?: boolean; showPinAltIcons?: boolean };
+  sym: { showElectricalTypes: boolean; showHiddenPins: boolean; syncPins: boolean; showHiddenFields?: boolean; showPinAltIcons?: boolean; arcDrawMode?: string };
   dock: DockLayout;
   /** The board editor's right dock tab. */
   rightDockTab: string;
@@ -72,6 +72,15 @@ export const SYM_TOOL_OF_ACTION: Readonly<Record<string, string>> = {
   "eeschema.SymbolDrawing.drawSymbolPolygon": "draw_polygon",
   "eeschema.SymbolDrawing.drawSymbolTextBox": "draw_textbox",
   "eeschema.SymbolDrawing.placeSymbolAnchor": "anchor",
+};
+
+/** The five Draw Arc mode actions of KiCad 25ec2335 and their modes (kicad-port/schArcDraw.ts `ARC_MODE_ACTIONS`). */
+const SYM_ARC_MODE_OF_ACTION: Readonly<Record<string, string>> = {
+  "eeschema.InteractiveDrawing.drawArcCenter": "center_start_end",
+  "eeschema.InteractiveDrawing.drawArcStartEndMid": "start_end_mid",
+  "eeschema.InteractiveDrawing.drawArcStartEndCenter": "start_end_center",
+  "eeschema.InteractiveDrawing.drawArcTangent": "tangent",
+  "eeschema.InteractiveDrawing.drawArcStartDirEnd": "start_dir_end",
 };
 
 /** `true` / `false` for an action that toggles (pressed or not), `undefined` for one that does not -- its button never shows a pressed state. */
@@ -141,5 +150,7 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
   }
   if (c.tab === "footprint" && name in FP_TOOL_OF_ACTION) return c.fpTool === FP_TOOL_OF_ACTION[name];
   if (c.tab === "symbol" && name in SYM_TOOL_OF_ACTION) return c.symTool === SYM_TOOL_OF_ACTION[name];
+  // KiCad 25ec2335's Draw Arc modes (`TOOLBAR_STATE::TOGGLE`): the Symbol Editor's mode in force is pressed while its arc tool runs (`SelectToolbarAction( DrawArcForMode( mode ) )`)
+  if (c.tab === "symbol" && name in SYM_ARC_MODE_OF_ACTION) return c.symTool === "draw_arc" && c.sym.arcDrawMode === SYM_ARC_MODE_OF_ACTION[name];
   return undefined;
 }

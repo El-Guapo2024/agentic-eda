@@ -9,6 +9,7 @@ import type { Schematic } from "../api/types";
 import type { SchGraphic } from "../api/schEditTypes";
 import type { ArcDrawMode } from "./arcGeom";
 import { arcTangentSeedAt, ARC_SEED_PICK_PIXELS, type ArcTangentSeed, type SeedShape } from "./arcTangentSeed";
+import { arcDrawModeSetting } from "./arcDrawSession";
 
 /** `SCH_ACTIONS::DrawArcForMode`: the action of each mode, its friendly name and its tooltip (KiCad 25ec2335 eeschema/tools/sch_actions.cpp). */
 export const ARC_MODE_ACTIONS: Record<ArcDrawMode, { action: string; label: string; tooltip: string; icon: string }> = {
@@ -22,30 +23,15 @@ export const ARC_MODE_ACTIONS: Record<ArcDrawMode, { action: string; label: stri
 /** `ACTIONS::cycleArcDrawMode` (Alt+/): "Cycle Arc Drawing Mode", "Switch to the next method of drawing arcs". */
 export const CYCLE_ARC_DRAW_MODE = "common.InteractiveDrawing.cycleArcDrawMode";
 
-const KEY = "eda.sch.arcDrawMode";
-const MODES: readonly ArcDrawMode[] = ["center_start_end", "start_end_mid", "start_end_center", "tangent", "start_dir_end"];
-let mode: ArcDrawMode | null = null;
+/** `m_ArcDrawMode` of eeschema's settings (`editing.arc_draw_mode` of eeschema.json), kept in this browser (kicad-port/arcDrawSession.ts `arcDrawModeSetting`). */
+const schMode = arcDrawModeSetting("eda.sch.arcDrawMode");
 
-/** `m_ArcDrawMode` of eeschema's settings, kept in this browser as KiCad keeps it in the user's settings. */
 export function schArcDrawMode(): ArcDrawMode {
-  if (mode) return mode;
-  try {
-    const v = globalThis.localStorage?.getItem(KEY);
-    mode = v && (MODES as readonly string[]).includes(v) ? (v as ArcDrawMode) : "center_start_end";
-  } catch {
-    mode = "center_start_end";
-  }
-  return mode;
+  return schMode.get();
 }
 
 export function setSchArcDrawMode(next: ArcDrawMode): ArcDrawMode {
-  mode = next;
-  try {
-    globalThis.localStorage?.setItem(KEY, next);
-  } catch {
-    // no storage: the mode lasts the session
-  }
-  return next;
+  return schMode.set(next);
 }
 
 const xy = (p: { x: number; y: number }): [number, number] => [p.x, p.y];
