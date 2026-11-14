@@ -367,3 +367,42 @@ fn a_copied_pad_pasted_after_its_footprint_was_deleted_is_still_one_pad() {
     let bp = b.design().drawings.as_ref().unwrap().board_parts.iter().find(|p| p.reference == new.id).expect("a board part");
     assert_eq!(bp.definition.as_ref().map(|d| d.pads.len()), Some(1), "one pad: {bp:?}");
 }
+
+/// KiCad 25ec2335's custom properties go with a copy (`EDA_ITEM`'s copy constructor copies `m_customProperties`): Duplicate, Create Array, and Copy / Paste through
+/// the clipboard's text (`(custom_property ..)` in the item's form) -- a footprint's, one of its pads', a graphic's and a track's.
+#[test]
+fn duplicate_array_and_paste_carry_the_custom_properties() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let set = |ids: &[&str], name: &str, value: &str| Cmd::SetCustomProperty { ids: ids.iter().map(|s| s.to_string()).collect(), name: name.into(), value: Some(value.into()), rename_to: None };
+    b.apply(&set(&["U1"], "Supplier", "ACME")).unwrap();
+    b.apply(&set(&["U1.1"], "Note", "pin one")).unwrap();
+    b.apply(&set(&["shp_seg", "trk_a"], "Why", "x")).unwrap();
+    let props = |b: &Board<'_>| b.design().drawings.as_ref().unwrap().custom_properties.clone();
+
+    // Duplicate
+    b.apply(&Cmd::Duplicate { ids: ids(&["U1", "shp_seg"]) }).unwrap();
+    let pr = props(&b);
+    assert_eq!(pr.get("U3").and_then(|q| q.get("Supplier")).map(String::as_str), Some("ACME"), "{pr:?}");
+    assert_eq!(pr.get("U3.1").and_then(|q| q.get("Note")).map(String::as_str), Some("pin one"));
+    let shapes_with = pr.iter().filter(|(_, q)| q.get("Why").is_some()).count();
+    assert_eq!(shapes_with, 3, "the line, its copy and the track: {pr:?}");
+
+    // Create Array: three copies of the track, each with its properties
+    let tracks_before: Vec<String> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
+    b.apply(&Cmd::CreateArray { ids: ids(&["trk_a"]), geometry: ArrayGeometry::Grid { nx: 4, ny: 1, dx: mm(5.0), dy: Nm::ZERO, offset_x: Nm::ZERO, offset_y: Nm::ZERO, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false }, arrange: false, reannotate: true, group_positions: Default::default() }).unwrap();
+    let pr = props(&b);
+    let new_tracks: Vec<String> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).filter(|id| !tracks_before.contains(id)).collect();
+    assert_eq!(new_tracks.len(), 3);
+    assert!(new_tracks.iter().all(|id| pr.get(id).and_then(|q| q.get("Why")).is_some()), "{pr:?}");
+
+    // Copy and Paste: the text has them, and the pasted copies take them
+    let text = eda_kicad::export_pcb_clipboard(b.design(), &m, &ids(&["U1", "shp_seg"]), p(mm(30.0), mm(20.0))).unwrap();
+    assert!(text.contains("(custom_property \"Supplier\" \"ACME\")") && text.contains("(custom_property \"Note\" \"pin one\")") && text.contains("(custom_property \"Why\" \"x\")"), "{text}");
+    let before: std::collections::BTreeSet<String> = props(&b).keys().cloned().collect();
+    b.apply(&Cmd::PasteClipboard { text, at: p(mm(10.0), mm(10.0)) }).unwrap();
+    let pr = props(&b);
+    let added: Vec<&String> = pr.keys().filter(|k| !before.contains(*k)).collect();
+    assert_eq!(added.len(), 3, "the pasted footprint, its pad and the line: {added:?}");
+    assert!(added.iter().any(|k| pr[*k].get("Supplier").is_some()) && added.iter().any(|k| k.ends_with(".1") && pr[*k].get("Note").is_some()) && added.iter().any(|k| pr[*k].get("Why").is_some()));
+}

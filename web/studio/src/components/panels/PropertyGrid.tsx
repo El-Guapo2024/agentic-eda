@@ -6,10 +6,9 @@
 //
 // The model comes from kicad-port/propertyGrid.ts (`buildGrid`); what an edit does is the caller's `onCommit` (it plans the commands and sends them as one batch).
 //
-// KiCad 25ec2335's "Custom Properties" group (`GridGroup.custom`, kicad-port/pcbCustomProperties.ts), when the caller hands `custom`: its category row has the "+"
-// button (`addCategoryButton( "Custom Properties", "Add Custom Property", small_plus )`) that adds a row and puts its name in edit, blank (`beginLabelEdit( name, true )`);
-// a double click on a row's name edits it (`onPropertyLabelEdited`); a right click on the group or a row opens `buildContextMenu`'s "Remove Custom Property" and
-// "Add Custom Property".
+// KiCad 25ec2335's category buttons (`PROPERTIES_PANEL::addCategoryButton`), when the caller hands `categories`: "Custom Properties" ("Add Custom Property", kicad-port/
+// pcbCustomProperties.ts) and "Fields" ("Add Field"). The button adds a row and puts its name in edit, blank (`beginLabelEdit( name, true )`); a double click on the name
+// of a row whose name can be edited (`isKeyEditable`) edits it (`onPropertyLabelEdited`); a right click on the group or a row opens `buildContextMenu`'s Remove / Add.
 import { DatasheetUrlButton } from "../DatasheetUrlButton";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { editText, formatValue, parseValue, type GridModel, type GridRow } from "../../kicad-port/propertyGrid";
@@ -38,22 +37,26 @@ function unitSuffix(row: Pick<GridRow, "kind" | "display">, units: LengthUnit): 
   }
 }
 
-/** What the "Custom Properties" group does (the caller's `PCB_PROPERTIES_PANEL` handlers); each resolves to a refusal's message or null. */
-export interface CustomPropertyHandlers {
-  /** `addBlankCustomProperty`: the name of the property added, or null when none was. */
+/** What a category with a button does (the caller's `PCB_PROPERTIES_PANEL` handlers); each resolves to a refusal's message or null. */
+export interface CategoryHandlers {
+  /** The button's and the menus' words: "Custom Property" or "Field" ("Add Custom Property", "Remove Field"). */
+  noun: string;
+  /** `addBlankCustomProperty` / `addBlankField`: the name of the row added, or null when none was. */
   add: () => Promise<string | null>;
-  /** The text of a row typed in. */
-  commit: (name: string, text: string) => Promise<string | null>;
-  /** A name edited (`onPropertyLabelEdited`); `pending` for the property just added. */
+  /** `isKeyEditable`: a row whose name can be edited and which can be removed. */
+  editable: (name: string) => boolean;
+  /** A name edited (`onPropertyLabelEdited`); `pending` for the row just added. */
   label: (oldName: string, newName: string, pending: boolean) => Promise<string | null>;
-  /** `removeCustomProperty`. */
+  /** `removeCustomProperty` / `removeField`. */
   remove: (name: string) => Promise<string | null>;
+  /** The text of a row typed in; absent: the grid's own `onCommit`. */
+  commit?: (name: string, text: string) => Promise<string | null>;
 }
 
 export interface PropertyGridProps {
   model: GridModel;
-  /** The "Custom Properties" group's handlers; without them the group is not shown. */
-  custom?: CustomPropertyHandlers;
+  /** The categories with a button, by group name ("Custom Properties", "Fields"); a group marked `custom` without its handlers is not shown. */
+  categories?: Readonly<Record<string, CategoryHandlers>>;
   units: LengthUnit;
   /** The frame's origin transforms (`GetOriginTransforms()`), which the `PT_COORD` rows are shown and typed through; absent: none (the base class's). */
   xf?: OriginTransforms;
@@ -63,12 +66,12 @@ export interface PropertyGridProps {
   selectionKey: string;
 }
 
-export function PropertyGrid({ model, units, xf, onCommit, selectionKey, custom }: PropertyGridProps) {
+export function PropertyGrid({ model, units, xf, onCommit, selectionKey, categories }: PropertyGridProps) {
   const [error, setError] = useState<string | null>(null);
-  /** The row whose name is being edited, and whether it is the one just added (`m_pendingNewKey`). */
-  const [labelEdit, setLabelEdit] = useState<{ name: string; pending: boolean } | null>(null);
-  /** The context menu of the custom group (`buildContextMenu`): where, and the row it was opened on (null: the group's category row). */
-  const [menu, setMenu] = useState<{ x: number; y: number; name: string | null } | null>(null);
+  /** The row whose name is being edited, its group, and whether it is the one just added (`m_pendingNewKey`). */
+  const [labelEdit, setLabelEdit] = useState<{ group: string; name: string; pending: boolean } | null>(null);
+  /** A category's context menu (`buildContextMenu`): where, its group, and the row it was opened on (null: the group's category row). */
+  const [menu, setMenu] = useState<{ x: number; y: number; group: string; name: string | null } | null>(null);
   useEffect(() => {
     setError(null);
     setLabelEdit(null);
@@ -78,28 +81,31 @@ export function PropertyGrid({ model, units, xf, onCommit, selectionKey, custom 
   const commit = async (name: string, value: PropValue): Promise<void> => {
     setError(await onCommit(name, value));
   };
-  const addCustom = async (): Promise<void> => {
+  const add = async (group: string): Promise<void> => {
     setMenu(null);
-    if (!custom) return;
-    const name = await custom.add();
-    if (name) setLabelEdit({ name, pending: true });
+    const h = categories?.[group];
+    if (!h) return;
+    const name = await h.add();
+    if (name) setLabelEdit({ group, name, pending: true });
   };
-  const removeCustom = async (name: string): Promise<void> => {
+  const remove = async (group: string, name: string): Promise<void> => {
     setMenu(null);
-    if (custom) setError(await custom.remove(name));
+    const h = categories?.[group];
+    if (h) setError(await h.remove(name));
   };
   const finishLabel = async (oldName: string, newName: string | null): Promise<void> => {
     const edit = labelEdit;
     setLabelEdit(null);
-    if (!custom || !edit) return;
+    const h = edit ? categories?.[edit.group] : undefined;
+    if (!h || !edit) return;
     // Escape on the new one leaves its name blank (`onNewItemLeftBlank`), on an old one puts it back
     if (newName === null) {
-      if (edit.pending) setError(await custom.label(oldName, "", true));
+      if (edit.pending) setError(await h.label(oldName, "", true));
       return;
     }
-    setError(await custom.label(oldName, newName, edit.pending));
+    setError(await h.label(oldName, newName, edit.pending));
   };
-  const groups = custom ? model.groups : model.groups.filter((g) => !g.custom);
+  const groups = model.groups.filter((g) => !g.custom || !!categories?.[g.name]);
 
   return (
     <div className="prop-grid" data-testid="properties-grid">
@@ -109,56 +115,69 @@ export function PropertyGrid({ model, units, xf, onCommit, selectionKey, custom 
           {error}
         </div>
       )}
-      {groups.map((g) =>
-        g.custom ? (
+      {groups.map((g) => {
+        const h = categories?.[g.name];
+        if (!h) {
+          return (
+            <div key={g.name} className="prop-group" data-group={g.caption}>
+              <div className="prop-group-caption">{g.caption}</div>
+              {g.rows.map((r) => (
+                <PropertyRow key={r.name} row={r} units={units} xf={xf} commit={commit} fail={setError} />
+              ))}
+            </div>
+          );
+        }
+        const rowCommit = h.commit ? async (name: string, value: PropValue) => setError(await h.commit!(name, String(value))) : commit;
+        return (
           <div key={g.name} className="prop-group" data-group={g.caption}>
             <div
               className="prop-group-caption"
               style={{ display: "flex", alignItems: "center" }}
               onContextMenu={(e) => {
                 e.preventDefault();
-                setMenu({ x: e.clientX, y: e.clientY, name: null });
+                setMenu({ x: e.clientX, y: e.clientY, group: g.name, name: null });
               }}
             >
               <span style={{ flex: 1 }}>{g.caption}</span>
-              <button className="prop-group-button" title="Add Custom Property" aria-label="Add Custom Property" data-testid="prop-add-custom" onClick={() => void addCustom()}>
+              <button className="prop-group-button" title={`Add ${h.noun}`} aria-label={`Add ${h.noun}`} data-testid={g.custom ? "prop-add-custom" : `prop-add-${g.name.toLowerCase()}`} onClick={() => void add(g.name)}>
                 +
               </button>
             </div>
-            {g.rows.map((r) => (
-              <CustomPropertyRow
-                key={r.name}
-                row={r}
-                units={units}
-                editing={labelEdit?.name === r.name ? labelEdit : null}
-                onBeginLabel={() => setLabelEdit({ name: r.name, pending: false })}
-                onEndLabel={(text) => void finishLabel(r.name, text)}
-                onMenu={(x, y) => setMenu({ x, y, name: r.name })}
-                commit={async (name, value) => setError(custom ? await custom.commit(name, String(value)) : null)}
-                fail={setError}
-              />
-            ))}
+            {g.rows.map((r) =>
+              h.editable(r.name) || g.custom ? (
+                <KeyedRow
+                  key={r.name}
+                  row={r}
+                  units={units}
+                  xf={xf}
+                  custom={!!g.custom}
+                  editing={labelEdit?.group === g.name && labelEdit.name === r.name ? labelEdit : null}
+                  onBeginLabel={() => setLabelEdit({ group: g.name, name: r.name, pending: false })}
+                  onEndLabel={(text) => void finishLabel(r.name, text)}
+                  onMenu={(x, y) => setMenu({ x, y, group: g.name, name: r.name })}
+                  commit={rowCommit}
+                  fail={setError}
+                />
+              ) : (
+                <div key={r.name} onContextMenu={(e) => (e.preventDefault(), setMenu({ x: e.clientX, y: e.clientY, group: g.name, name: null }))}>
+                  <PropertyRow row={r} units={units} xf={xf} commit={rowCommit} fail={setError} />
+                </div>
+              ),
+            )}
           </div>
-        ) : (
-          <div key={g.name} className="prop-group" data-group={g.caption}>
-            <div className="prop-group-caption">{g.caption}</div>
-            {g.rows.map((r) => (
-              <PropertyRow key={r.name} row={r} units={units} xf={xf} commit={commit} fail={setError} />
-            ))}
-          </div>
-        ),
-      )}
+        );
+      })}
       {menu && (
         <>
           <div style={{ position: "fixed", inset: 0, zIndex: 999 }} onClick={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} />
           <div className="context-menu" role="menu" data-testid="prop-custom-menu" style={{ position: "fixed", left: menu.x, top: menu.y, zIndex: 1000, background: "var(--chrome-bg-raised)", border: "1px solid var(--chrome-border)", borderRadius: 6, padding: 4 }}>
             {menu.name !== null && (
-              <div className="context-menu-item" role="menuitem" style={{ padding: "3px 10px", cursor: "pointer" }} onClick={() => void removeCustom(menu.name!)}>
-                Remove Custom Property
+              <div className="context-menu-item" role="menuitem" style={{ padding: "3px 10px", cursor: "pointer" }} onClick={() => void remove(menu.group, menu.name!)}>
+                Remove {categories?.[menu.group]?.noun}
               </div>
             )}
-            <div className="context-menu-item" role="menuitem" style={{ padding: "3px 10px", cursor: "pointer" }} onClick={() => void addCustom()}>
-              Add Custom Property
+            <div className="context-menu-item" role="menuitem" style={{ padding: "3px 10px", cursor: "pointer" }} onClick={() => void add(menu.group)}>
+              Add {categories?.[menu.group]?.noun}
             </div>
           </div>
         </>
@@ -167,10 +186,12 @@ export function PropertyGrid({ model, units, xf, onCommit, selectionKey, custom 
   );
 }
 
-/** A row of the "Custom Properties" group: its name, which a double click edits (blank for the one just added), and its text. */
-function CustomPropertyRow({
+/** A row whose name can be edited (a custom property, a footprint's user field): its name, which a double click edits (blank for the one just added), and its value. */
+function KeyedRow({
   row,
   units,
+  xf,
+  custom,
   editing,
   onBeginLabel,
   onEndLabel,
@@ -180,6 +201,8 @@ function CustomPropertyRow({
 }: {
   row: GridRow;
   units: LengthUnit;
+  xf?: OriginTransforms;
+  custom: boolean;
   editing: { pending: boolean } | null;
   onBeginLabel: () => void;
   /** The name typed, or null for Escape. */
@@ -206,7 +229,8 @@ function CustomPropertyRow({
     <div
       className="prop-row"
       data-prop={row.name}
-      data-custom-prop={row.name}
+      data-custom-prop={custom ? row.name : undefined}
+      data-keyed-prop={row.name}
       title={row.name}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -216,7 +240,7 @@ function CustomPropertyRow({
       {editing ? (
         <input
           className="prop-label"
-          data-testid="prop-custom-label"
+          data-testid="prop-key-label"
           autoFocus
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -231,9 +255,7 @@ function CustomPropertyRow({
           {row.name}
         </span>
       )}
-      <div className="prop-value">
-        <TextEditor row={row} units={units} commit={commit} fail={fail} />
-      </div>
+      <div className="prop-value">{row.writable ? <Editor row={row} units={units} xf={xf} commit={commit} fail={fail} /> : <ReadOnly row={row} units={units} xf={xf} mixed={row.value === null} />}</div>
     </div>
   );
 }

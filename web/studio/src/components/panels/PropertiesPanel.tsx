@@ -10,8 +10,9 @@ import { withVariant } from "../../kicad-port/designVariants";
 import type { PropValue } from "../../kicad-port/propertyManager";
 import type { Cmd, Rule } from "../../api/types";
 import { DockPanel } from "./Dock";
-import { PropertyGrid, type CustomPropertyHandlers } from "./PropertyGrid";
-import { addCustomPropertyCmd, labelEdited, newCustomPropertyName, removeCustomPropertyCmd, setCustomPropertyCmd } from "../../kicad-port/pcbCustomProperties";
+import { PropertyGrid, type CategoryHandlers } from "./PropertyGrid";
+import { addFieldCmds, fieldKeyEditable, labelOutcome, newBlankFieldName, removeFieldCmds, renameFieldCmds } from "../../kicad-port/pcbFieldRows";
+import { addCustomPropertyCmd, CUSTOM_PROPERTIES, labelEdited, newCustomPropertyName, removeCustomPropertyCmd, setCustomPropertyCmd } from "../../kicad-port/pcbCustomProperties";
 import { useOriginTransforms } from "../../state/originTransforms";
 import { stillToPlace } from "../../kicad-port/updatePcb";
 
@@ -131,11 +132,13 @@ function PropertiesBody() {
   // KiCad 25ec2335's "Custom Properties" (`PCB_PROPERTIES_PANEL`'s handlers): one `set_custom_property` each, one undo step (kicad-port/pcbCustomProperties.ts).
   const send = async (cmd: Cmd): Promise<string | null> => ((await api.cmd(cmd)) ? null : "The board refused the custom property.");
   const rowNames = model.groups.filter((g) => !g.custom).flatMap((g) => g.rows.map((r) => r.name));
-  const custom: CustomPropertyHandlers = {
+  const custom: CategoryHandlers = {
+    noun: "Custom Property",
     add: async () => {
       const name = newCustomPropertyName(board, ids);
       return (await api.cmd(addCustomPropertyCmd(ids, name))) ? name : null;
     },
+    editable: () => true,
     commit: (name, text) => send(setCustomPropertyCmd(ids, name, text)),
     label: async (oldName, newName, pending) => {
       const cmd = labelEdited(board, ids, rowNames, oldName, newName, pending);
@@ -143,6 +146,25 @@ function PropertiesBody() {
     },
     remove: (name) => send(removeCustomPropertyCmd(ids, name)),
   };
+  // KiCad 25ec2335's "Fields" button on footprints (`addBlankField`, `removeField`, `onKeyRenamed`; kicad-port/pcbFieldRows.ts): one batch, one undo step.
+  const parts = ids.map((id) => board.parts.find((p) => p.placed && p.ref === id)).filter((p): p is NonNullable<typeof p> => !!p);
+  const batch = async (cmds: Cmd[]): Promise<string | null> => (cmds.length === 0 || (await api.cmdBatch(cmds)) ? null : "The board refused the field.");
+  const frontCustom = board.custom_properties?.[ids[0] ?? ""] ?? {};
+  const inUse = (name: string) => rowNames.includes(name) || name in frontCustom;
+  const fields: CategoryHandlers = {
+    noun: "Field",
+    add: async () => {
+      const name = newBlankFieldName(parts);
+      return (await batch(addFieldCmds(parts, name, board.board_rules?.text_graphics))) === null ? name : null;
+    },
+    editable: (name) => fieldKeyEditable(parts[0], name),
+    label: async (oldName, newName, pending) => {
+      const outcome = labelOutcome(newName, pending, inUse);
+      return outcome === "remove" ? batch(removeFieldCmds(parts, oldName)) : outcome === "rename" ? batch(renameFieldCmds(parts, oldName, newName)) : null;
+    },
+    remove: (name) => batch(removeFieldCmds(parts, name)),
+  };
+  const categories: Record<string, CategoryHandlers> = parts.length === ids.length && parts.length > 0 ? { [CUSTOM_PROPERTIES]: custom, Fields: fields } : { [CUSTOM_PROPERTIES]: custom };
 
   // The one app-specific section KiCad's grid does not have: the placement rules the intent states for a single footprint.
   const part = ids.length === 1 ? board.parts.find((x) => x.ref === ids[0]) : undefined;
@@ -150,7 +172,7 @@ function PropertiesBody() {
 
   return (
     <>
-      <PropertyGrid model={model} units={state.units} xf={xf} onCommit={commit} selectionKey={ids.join("\n")} custom={custom} />
+      <PropertyGrid model={model} units={state.units} xf={xf} onCommit={commit} selectionKey={ids.join("\n")} categories={categories} />
       {rules.length > 0 && (
         <div className="panel-section">
           <h3>Placement rules</h3>
