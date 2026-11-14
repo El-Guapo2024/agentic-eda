@@ -509,9 +509,10 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
         }
     }
     // The simulation model files the design names inside its folder (`Sim.Library "diode.lib"`), beside the derived project, where KiCad looks for them
-    // (`SIM_LIB_MGR::ResolveLibraryPath`: the project's folder, r7 M6). Only the studio's own `<board>/.kicad` has a board folder to take them from.
+    // (`SIM_LIB_MGR::ResolveLibraryPath`: the project's folder, r7 M6), with the texts' `.include` files and what they include (UI-LEFT-3 S3-23). Only the
+    // studio's own `<board>/.kicad` has a board folder to take them from.
     if let Some(board_dir) = work.file_name().filter(|n| *n == ".kicad").and(work.parent()) {
-        for rel in eda_kicad::project_schematic::sim_library_files(design, model) {
+        for rel in eda_kicad::project_schematic::simulation_files(design, model, board_dir) {
             let (from, to) = (board_dir.join(&rel), work.join(&rel));
             if from.is_file() {
                 if let Some(parent) = to.parent() {

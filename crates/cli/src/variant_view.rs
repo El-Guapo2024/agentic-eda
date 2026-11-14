@@ -73,3 +73,50 @@ pub(crate) fn of_request(design: &Design, target: &str) -> String {
     }
     asked
 }
+
+/// `POST /api/sch/variant_compat` `{sheet?, id, lib_ids}` -> `{ok, issues: {lib_id: [detail]}}`: Set Variant Symbol...'s chooser asks which library symbols are
+/// not pin-compatible with the placed symbol `id` (KiCad 25ec2335 `SCH_EDIT_TOOL::SetVariantSymbol`'s `compatFunc`: `ValidateVariantSymbolCompatibility( *baseFlat,
+/// *flat )` of the symbol's own library symbol, flattened, and the candidate loaded through the library adapter). Each candidate is read from the libraries of the
+/// tables, else the design's own; one neither has, or the base when the symbol has no library symbol, has no issues (`return {}`). UI-LEFT-3 S3-14.
+pub fn variant_compat(dir: &std::path::Path, body: &[u8]) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let id = req.get("id").and_then(Value::as_str).unwrap_or("");
+    let lib_ids: Vec<String> = req.get("lib_ids").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let (_, design, model) = match crate::sch_clipboard_api::loaded(dir) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let sheet = req.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let (section, _) = crate::studio::resolve_sheet(&design, sheet);
+    let base = section.symbols.iter().find(|s| s.id == id).and_then(|s| model.symbol_of(&s.lib_id));
+    let mut issues = serde_json::Map::new();
+    if let Some(base) = base {
+        let symbols = crate::library_tables::libs(dir, crate::library_index::Kind::Symbol);
+        for lib_id in lib_ids {
+            let candidate = crate::library_search::installed_symbol(&*symbols, &lib_id).map(|(s, _)| s.to_engine_symbol()).or_else(|| model.symbol_of(&lib_id));
+            let found: Vec<String> = candidate.map(|c| eda_model::variant_symbol::validate_compatibility(&base, &c).into_iter().map(|i| i.detail).collect()).unwrap_or_default();
+            issues.insert(lib_id, json!(found));
+        }
+    }
+    json!({ "ok": true, "issues": issues })
+}
+
+#[cfg(test)]
+mod tests {
+    /// UI-LEFT-3 S3-14 (`SetVariantSymbol`'s `compatFunc`): a resistor's chooser marks a symbol whose pins differ (the LED's, KiCad's words) and not one with
+    /// the resistor's pins; an unknown id has no issues (`return {}`).
+    #[test]
+    fn the_variant_symbol_chooser_is_told_which_symbols_are_not_pin_compatible() {
+        let dir = crate::sch_hierarchy_tests::mcu30_board("variant_compat");
+        let (_, design, _) = crate::board::load(&dir).unwrap();
+        let r = design.schematic.as_ref().unwrap().symbols.iter().find(|s| s.lib_id == "Device:R").expect("a resistor").id.clone();
+        let body = serde_json::json!({ "id": r, "lib_ids": ["Device:R", "Device:LED", "Nope:Nothing"] }).to_string();
+        let out = super::variant_compat(&dir, body.as_bytes());
+        assert_eq!(out["ok"], true, "{out}");
+        assert_eq!(out["issues"]["Device:R"], serde_json::json!([]));
+        assert_eq!(out["issues"]["Nope:Nothing"], serde_json::json!([]));
+        let led = out["issues"]["Device:LED"].as_array().expect("the LED's issues");
+        assert!(!led.is_empty() && led.iter().all(|d| d.as_str().is_some_and(|d| d.starts_with("Unit 1, body style 1: pin '"))), "{led:?}");
+    }
+}

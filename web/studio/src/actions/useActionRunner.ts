@@ -64,7 +64,7 @@ import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAt
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
 import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
-import { unfoldRotate } from "../kicad-port/schBusUnfold";
+import { unfoldMirror, unfoldRotate } from "../kicad-port/schBusUnfold";
 import { turnCarriedContents } from "../kicad-port/schImportSheet";
 import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
@@ -1461,6 +1461,14 @@ export function useActionRunner() {
           const spin = unfoldRotate(state.busUnfold, turn === "rot_ccw");
           if (spin && state.busUnfold) dispatch({ type: "SET_BUS_UNFOLD", unfold: { ...state.busUnfold, spin } });
           return;
+        }
+        // X / Y while the member's label rides: passed on to Mirror with the label selected (UI-LEFT-3 S3-13)
+        if (state.drawState?.kind === "wire" && (turn === "mirror_h" || turn === "mirror_v")) {
+          const spin = unfoldMirror(state.busUnfold, turn === "mirror_h");
+          if (spin && state.busUnfold) {
+            dispatch({ type: "SET_BUS_UNFOLD", unfold: { ...state.busUnfold, spin } });
+            return;
+          }
         }
         // Import Sheet's contents in the hand: they are the move tool's selection in KiCad, so the turn is theirs (UI-LEFT-2 SS18)
         if (state.activeTool === "sch_import_sheet") {

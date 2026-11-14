@@ -31,7 +31,8 @@ import { editFieldTarget } from "../kicad-port/schFieldEdit";
 import type { SymbolAttrKey } from "../kicad-port/schControl";
 import { nextReference, placementMinRef } from "../kicad-port/nextReference";
 import { unitCountOf } from "../kicad-port/schUnits";
-import { carryCursor, getSchCarry, noteCarryMade, noteCarryRequest, noteChooserAt, schematicWithCarry, setSchCarry, type SchCarry } from "../state/schCarryStore";
+import { carryCursor, getSchCarry, getSyncTemplates, noteCarryMade, noteCarryRequest, noteChooserAt, schematicWithCarry, setSchCarry, setSyncTemplates, type SchCarry } from "../state/schCarryStore";
+import { syncTemplatesAfter } from "../kicad-port/schSheetPins";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 
 export interface PlaceContext {
@@ -104,6 +105,15 @@ export function beginItem(ctx: Pick<PlaceContext, "api" | "dispatch">, tool: Car
   const sch = ctx.api.getState().schematic;
   if (!sch) return;
   dispatch({ type: "SET_SELECTION", refs: [] }); // `ACTIONS::selectionClear`
+  // Sync Sheet Pins' labels left after an Esc: the click makes the current template's label (`m_dialogSyncSheetPin->GetPlacementTemplate()`), with the tool's
+  // last spin, bold, italic and Auto, and the rest follow it (UI-LEFT-3 S3-13)
+  const templates = getSyncTemplates();
+  if (tool === "sch_label_hier" && templates && templates.sheet.join("/") === ctx.api.getState().currentSheetPath.join("/")) {
+    const last = lastPlaced();
+    const fresh = (i: CarriedItem): CarriedItem => (i.kind === "label" ? { ...i, spin: last.spin || "right", bold: last.bold, italic: last.italic, autoRotate: last.autoRotate } : i);
+    carryItem(ctx, tool, fresh(templates.items[0]!), at, templates.items.slice(1).map(fresh));
+    return;
+  }
   const scope = scopeOfTool(tool);
   if (scope) {
     const named = labelNameFromWire(sch.wires, at, scope);
@@ -241,6 +251,9 @@ export function placeCarried(ctx: Pick<PlaceContext, "api"> & Partial<Pick<Place
   );
   // the hierarchy's units once this one is in, for the next click of "Place all units"
   if (placed.kind === "symbol" && placed.placeAllUnits) void committed.then(() => refreshHierarchyUnits());
+  // Sync Sheet Pins' labels: this template is placed (`EndPlaceItem`), the next rides or the placement ends (UI-LEFT-3 S3-13)
+  const templates = getSyncTemplates();
+  if (templates) setSyncTemplates({ ...templates, items: syncTemplatesAfter("placed", carry.item, carry.queue) ?? [] });
   if (next) {
     // the next one rides, selected in its place (`addSymbol` / `prepItemForPlacement`: `ClearSelection(); AddItemToSel( item )`)
     ctx.dispatch?.({ type: "SET_SELECTION", refs: [] });
@@ -404,6 +417,9 @@ export function editCarried(cmds: readonly Cmd[]): boolean {
 
 /** Esc, Undo or Delete with an item carried: it goes and the tool stays. Place Symbol and Place Power with "Place repeated copies" open the chooser again ("Re-enter symbol chooser"). */
 function dropCarried(ctx: PlaceContext, carry: SchCarry): void {
+  // Sync Sheet Pins' labels: only the riding one goes; its template stays the current one (`cleanup()`, UI-LEFT-3 S3-13)
+  const templates = getSyncTemplates();
+  if (templates) setSyncTemplates({ ...templates, items: syncTemplatesAfter("dropped", carry.item, carry.queue) ?? [] });
   setSchCarry(null);
   if (carry.tool === "sch_power" && carry.keep) ctx.dispatch({ type: "SET_SCH_POWER_PENDING", pending: { at: cursorAt(ctx) } });
   if (carry.tool === "sch_place_symbol" && carry.keep) {

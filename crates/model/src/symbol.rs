@@ -298,6 +298,14 @@ pub struct LibConnectivity {
     /// escaped), written back the same way (r7 H3).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fp_filters: String,
+    /// The pins' name and number text sizes, mm (`SCH_PIN::m_nameTextSize`, `m_numTextSize`: a pin's `(name .. (effects (font (size ..))))` and `(number ..)`), by
+    /// pin number, where either is not 50 mil (1.27). Compare Symbol with Library compares them (`PIN_COMPARISON_VIEW::Compare`, UI-LEFT-3 S3-22). Kept here, as
+    /// [`Self::pin_alternates`] is, so the pin's literals stay as they are.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub pin_text_sizes: std::collections::BTreeMap<String, (f64, f64)>,
+    /// `(in_pos_files no)` (`LIB_SYMBOL::GetExcludedFromPosFiles`, "Exclude from position files"), which Compare Symbol with Library compares (UI-LEFT-3 S3-22).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_from_pos_files: bool,
     /// The library symbol's text boxes (`SCH_TEXTBOX`es of its draw items, `(text_box "text" ..)`), each a [`crate::ir::LibrarySymbolGraphic::TextBox`] in the symbol's mm
     /// with Y up, of its unit and body style (0: every one), none private to the Symbol Editor (`SCH_PAINTER::draw( SCH_TEXTBOX )` returns for one on a sheet). Not
     /// connectivity: [`LibSymbol::graphics`] has each box's border and fill as a rectangle ([`crate::ir::LibrarySymbolGraphic::to_engine_graphics`]), and this list is
@@ -447,7 +455,26 @@ impl LibConnectivity {
     }
 }
 
+/// `SCH_DRAWING_TOOLS::PlaceSymbol`'s rewrite of a power symbol's keywords and description when it makes a global one local ([`LibSymbol::power_texts`]):
+/// every "global power" becomes "local power", every "global label" "local label".
+pub fn made_local_power_texts(keywords: &str, description: &str) -> (String, String) {
+    (keywords.replace("global power", "local power"), description.replace("global label", "local label"))
+}
+
 impl LibSymbol {
+    /// The keywords and the description of this power symbol's copy of the kind `local` (UI-LEFT-3 S3-11). KiCad 8303b2ad / 25ec2335
+    /// `SCH_DRAWING_TOOLS::PlaceSymbol` (`eeschema/tools/sch_drawing_tools.cpp`): a power symbol that is not local, placed with the preference Local
+    /// (`SetLocalPower()`), has "Adjust the KiCad library default fields to match the new power symbol type": every "global power" of its keywords becomes
+    /// "local power", every "global label" of its description "local label" (`wxString::Replace`, all of them). One made global from a local one keeps
+    /// both ("We do not currently have local power symbols in the KiCad library, so don't update any fields"), as does a copy of its own kind.
+    pub fn power_texts(&self, local: bool) -> (String, String) {
+        let (keywords, description) = (self.connectivity.keywords.clone(), self.description.clone());
+        if !(self.power && local && !self.connectivity.power_local) {
+            return (keywords, description);
+        }
+        made_local_power_texts(&keywords, &description)
+    }
+
     /// `SCH_SYMBOL::SubReference( aUnit, false )` (KiCad 25ec2335, `sch_symbol.cpp`): "A custom unit display name overrides the default A/B/C (or numeric)
     /// suffix", else the unit's letters (`LIB_SYMBOL::LetterSubReference( aUnit, 'A' )`), with KiCad's default unit notation (no separator, letters from A); [`Self::sub_reference_in`] takes a project's.
     pub fn sub_reference(&self, unit: u32) -> String {

@@ -235,3 +235,15 @@ export function sheetPinEditCmd(
   if (next.italic !== undefined && next.italic !== !!pin.italic) edit.italic = next.italic;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_sheet_pin", id: pin.id, ...edit } : null;
 }
+
+/**
+ * Sync Sheet Pins' Add Labels in the hand (`DIALOG_SYNC_SHEET_PINS::m_placementTemplateSet`, `m_currentTemplate`; UI-LEFT-3 S3-13): what is still to place once
+ * the riding label is placed or dropped. A click that places it ends that template (`EndPlaceItem`: `m_placementTemplateSet.erase( m_currentTemplate )`), and
+ * the next rides (`CanPlaceMore` -> `goto PLACE_NEXT`); none left, the placement ends (`EndPlacement`) and the dialog shows itself again. Esc drops only the
+ * riding label (`TwoClickPlace`'s `cleanup()`): its template stays the current one, so the next click makes it again (`GetPlacementTemplate`), and only the
+ * second Esc, with nothing in the hand, ends the tool -- then `EndPlacement()` and `Show( true )`. `null`: nothing left.
+ */
+export function syncTemplatesAfter<T>(event: "placed" | "dropped", riding: T, queue: readonly T[]): T[] | null {
+  if (event === "dropped") return [riding, ...queue];
+  return queue.length > 0 ? [...queue] : null;
+}

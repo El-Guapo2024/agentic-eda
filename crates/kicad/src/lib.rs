@@ -697,6 +697,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         // the file keeps a turned symbol's field where it is on the sheet, with the angle and justification it has before the turn
         for (p, text) in eda_engine::fields::power_placements(sch, ps) {
+            // a placeholder reference (`#PWR?1`, two unannotated power symbols read from one file) is the `#PWR?` it stands for (UI-LEFT-3 S3-12)
+            let text = if p.name == "Reference" { eda_model::annotate::shown_reference(&text).to_string() } else { text };
             let (ox, oy) = eda_engine::symgeom::bake(ps.rot, false, 0.0, p.dx.as_f64(), p.dy.as_f64());
             write_field_text(&mut out, &p.name, &text, (ps.at.x.as_f64() + ox, ps.at.y.as_f64() + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible, &FieldLook::of(&p).with_font_look(sch, &ps.id, &p.name));
         }
@@ -705,6 +707,17 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let (px, py) = (ps.at.x.mm(), ps.at.y.mm());
         write_property(&mut out, "Footprint", &props.footprint, px, py, true);
         write_property(&mut out, "Datasheet", &props.datasheet, px, py, true);
+        // its Description, the copy of its library symbol's (`SCH_SYMBOL::UpdateFields` from `PlaceSymbol`'s converted `libSymbol`: "local label" for a
+        // global one made local, `LibSymbol::power_texts`, UI-LEFT-3 S3-11), hidden at its anchor; one its Symbol Properties keep is written with its fields
+        if !props.fields.iter().any(|f| f.name.eq_ignore_ascii_case("Description")) {
+            if let Some(lib) = model.symbol_of(&ps.lib_id) {
+                let local = sch.extras.power_symbol_is_local(&ps.id, &ps.lib_id, Some(lib.power && lib.connectivity.power_local));
+                let (_, description) = lib.power_texts(local);
+                if !description.is_empty() {
+                    write_property(&mut out, "Description", &description, px, py, true);
+                }
+            }
+        }
         let pin_uuid = duid_for(&anchor_seed(&eda_engine::nets::AnchorItem::PowerPin { id: &ps.id }), &ps.id);
         writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
         writeln!(out, "\t\t(instances").unwrap();
@@ -713,7 +726,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         for (k, path) in ctx.instance_paths.iter().enumerate() {
             let model_path = ctx.instance_sheet_paths.get(k).map(Vec::as_slice).unwrap_or(&[]);
             writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
-            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&eda_model::sheet_list::power_reference_under(sch, ps, model_path))).unwrap();
+            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(eda_model::annotate::shown_reference(&eda_model::sheet_list::power_reference_under(sch, ps, model_path)))).unwrap();
             writeln!(out, "\t\t\t\t\t(unit 1)").unwrap();
             writeln!(out, "\t\t\t\t)").unwrap();
         }
@@ -1970,6 +1983,15 @@ fn write_power_lib_symbol_named(out: &mut String, name: &str, value: &str, unit_
     write_property(out, "Value", value, 0.0, 2.0, false);
     write_property(out, "Footprint", "", 0.0, 0.0, true);
     write_property(out, "Datasheet", &resolved.datasheet, 0.0, 0.0, true);
+    // the Description and the keywords (`SaveSymbol` writes every field, `saveDcmInfoAsFields` the `ki_keywords`), as `PlaceSymbol` left them on the copy of
+    // this kind: a library's global power symbol made local reads "local power" / "local label" (`LibSymbol::power_texts`, UI-LEFT-3 S3-11)
+    let (keywords, description) = resolved.power_texts(local);
+    if !description.is_empty() {
+        write_property(out, "Description", &description, 0.0, 0.0, true);
+    }
+    if !keywords.is_empty() {
+        write_property(out, "ki_keywords", &keywords, 0.0, 0.0, true);
+    }
 
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{unit_name}_0_1"))).unwrap();
     // a text box as KiCad's `(text_box ..)` in place of the rectangle its border is drawn with (UI-LEFT-3 S3-8), as `write_unit_graphics` writes a symbol's; a power

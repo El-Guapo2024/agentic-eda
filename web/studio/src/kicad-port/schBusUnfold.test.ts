@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nearestPointOnSegment, placeUnfoldLabel, setUnfoldLabelSpin, unfoldEntrySize, unfoldLabelSpin, unfoldRotate } from "./schBusUnfold";
+import { nearestPointOnSegment, placeUnfoldLabel, setUnfoldLabelSpin, unfoldEntrySize, unfoldLabelSpin, unfoldMirror, unfoldRotate } from "./schBusUnfold";
 
 test("the entry roots at the bus point nearest the grid-snapped cursor, which is on the grid for a horizontal bus", () => {
   // a horizontal bus along y = 2540 from x = 60960 to 68580; the raw cursor is off-grid, the snapped one (50 mil = 1270) is not
@@ -43,4 +43,17 @@ test("R while unfolding turns the member's label a quarter and the next unfold s
   assert.equal(unfoldRotate(null, true), null, "not unfolding: wxBell()");
   assert.equal(unfoldLabelSpin(), "bottom");
   setUnfoldLabelSpin("right");
+});
+
+test("X / Y mirror the riding member label as `SCH_TEXT::MirrorSpinStyle` does, not once it is placed, and are not kept (UI-LEFT-3 S3-13)", () => {
+  setUnfoldLabelSpin("right");
+  assert.equal(unfoldMirror({ spin: "right" }, true), "left", "X: a horizontal label flips");
+  assert.equal(unfoldMirror({}, true), "left", "no spin yet is RIGHT");
+  assert.equal(unfoldMirror({ spin: "left" }, true), "right");
+  assert.equal(unfoldMirror({ spin: "up" }, true), "up", "X leaves a vertical one");
+  assert.equal(unfoldMirror({ spin: "up" }, false), "bottom", "Y: a vertical label flips");
+  assert.equal(unfoldMirror({ spin: "right" }, false), "right", "Y leaves a horizontal one");
+  assert.equal(unfoldMirror({ spin: "right", labelAt: [0, 0] }, true), null, "placed: the edit tool's");
+  assert.equal(unfoldMirror(null, true), null);
+  assert.equal(unfoldLabelSpin(), "right", "the next unfold starts as R left it");
 });

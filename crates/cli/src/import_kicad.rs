@@ -428,6 +428,13 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
         if legacy.remap {
             // `OpenProjectFiles`: "Convert old projects over to use symbol library table." -- `DIALOG_SYMBOL_REMAP`
             eprintln!("  legacy project: no symbol names its library; Tools > Remap Legacy Library Symbols... gives them the libraries of the project's legacy list");
+        } else if crate::legacy_import::cache_library(&legacy.project_dir, &legacy.project).is_none() {
+            // `OpenProjectFiles`: "if( ( !cfg || !cfg->m_RescueNeverShow ) && !cacheExists ) RescueSymbolLibTableProject( false )" -- the studio runs it as it
+            // first opens the board (UI-LEFT-3 S3-16)
+            match crate::rescue_api::mark_rescue_on_open(out) {
+                Ok(()) => eprintln!("  legacy project: no cache library; the studio runs Rescue Symbols as it opens the board"),
+                Err(e) => eprintln!("  legacy project: {e}"),
+            }
         }
     }
 
@@ -470,6 +477,8 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
             keep_sim_libraries(out, Path::new(&args.input))?;
         }
     }
+    // the project's drawing sheet files, beside the board as beside the project (UI-LEFT-3 S3-23)
+    keep_drawing_sheets(out, Path::new(&args.input))?;
 
     if let Some(report) = &args.report {
         let doc = json!({
@@ -578,14 +587,15 @@ fn keep_project_erc_exclusions(out: &Path, root: &Path) -> Result<(), Vec<CheckR
 
 /// The simulation model files the schematic names in its project's folder (`Sim.Library "diode.lib"`, `eda_kicad::project_schematic::sim_library_files`), copied
 /// into the board folder at the same place, so the derived project finds them where KiCad finds them in the original (`SIM_LIB_MGR::ResolveLibraryPath`, r7 M6).
-/// A file the board folder has already is kept.
+/// With them the files a text's `.include` / `.lib` directive names (`NETLIST_EXPORTER_SPICE::ReadDirectives`, which hands the directive to the simulator as it
+/// is), and every file those files `.include` in turn, by the including file's folder (UI-LEFT-3 S3-23). A file the board folder has already is kept.
 fn keep_sim_libraries(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
     let Some(src) = root.parent() else { return Ok(()) };
     let (_, design, model) = crate::board::load(out)?;
     let mut n = 0;
-    for rel in eda_kicad::project_schematic::sim_library_files(&design, &model) {
+    for rel in eda_kicad::project_schematic::simulation_files(&design, &model, src) {
         let (from, to) = (src.join(&rel), out.join(&rel));
-        if !from.is_file() || to.exists() {
+        if to.exists() {
             continue;
         }
         if let Some(parent) = to.parent() {
@@ -597,6 +607,49 @@ fn keep_sim_libraries(out: &Path, root: &Path) -> Result<(), Vec<CheckResult>> {
     }
     if n > 0 {
         eprintln!("  {n} simulation model file(s) of the project kept");
+    }
+    Ok(())
+}
+
+/// The project's drawing sheet files (`schematic.page_layout_descr_file`, `pcbnew.page_layout_descr_file` of the `.kicad_pro` beside `input`, `PROJECT_FILE`'s
+/// page layout): each is the design's (Page Settings' file, `SchExtras::drawing_sheet`, `DrawingsSection::drawing_sheet`) under the name the project gives it,
+/// and a file of the project's folder (`eda_kicad::project_schematic::project_relative`) is copied to the same place in the board's, so the editors and kicad-cli
+/// draw and plot the project's sheet where KiCad opening the project would (`SCH_EDIT_FRAME::LoadProjectSettings`, `PCB_EDIT_FRAME::LoadProjectSettings`:
+/// `BASE_SCREEN::m_DrawingSheetFileName`, resolved against the project). A file the board's folder has already is kept (UI-LEFT-3 S3-23).
+fn keep_drawing_sheets(out: &Path, input: &Path) -> Result<(), Vec<CheckResult>> {
+    let Ok(pro_text) = std::fs::read_to_string(input.with_extension("kicad_pro")) else { return Ok(()) };
+    let Ok(pro) = serde_json::from_str::<serde_json::Value>(&pro_text) else { return Ok(()) };
+    let src = input.parent().unwrap_or(Path::new("."));
+    let (_, mut design, _) = crate::board::load(out)?;
+    let mut changed = false;
+    for key in ["schematic", "pcbnew"] {
+        let Some(name) = pro[key]["page_layout_descr_file"].as_str().map(str::trim).filter(|n| !n.is_empty()) else { continue };
+        if let Some(rel) = eda_kicad::project_schematic::project_relative(name) {
+            let (from, to) = (src.join(&rel), out.join(&rel));
+            if from.is_file() && !to.exists() {
+                if let Some(parent) = to.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::copy(&from, &to).is_ok() {
+                    eprintln!("  the project's drawing sheet '{name}' kept");
+                }
+            }
+        }
+        match key {
+            "schematic" => {
+                if let Some(sch) = design.schematic.as_mut() {
+                    sch.extras.drawing_sheet = Some(name.to_string());
+                    changed = true;
+                }
+            }
+            _ => {
+                design.drawings.get_or_insert_with(Default::default).drawing_sheet = Some(name.to_string());
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        crate::board::save(out, &design)?;
     }
     Ok(())
 }
@@ -685,6 +738,47 @@ mod tests {
         assert_eq!(app["viewer3d"]["viewports"][0]["name"], "Side", "{app}");
         assert_eq!(app["viewer3d"]["viewports"][0]["matrix"][14].as_f64(), Some(-7.5));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// UI-LEFT-3 S3-23: a schematic of graphics only comes in (`SCH_EDIT_FRAME::importFile` tests nothing), and the project's files the simulator and the
+    /// drawing sheet read come with it -- a text's `.include` file and the file it includes in turn, the project's drawing sheet, named as the project names it.
+    #[test]
+    fn a_schematic_brings_its_include_files_and_drawing_sheet() {
+        let root = std::env::temp_dir().join(format!("eda-import-includes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (project, board) = (root.join("project"), root.join("board"));
+        std::fs::create_dir_all(project.join("models")).unwrap();
+        std::fs::write(
+            project.join("s.kicad_sch"),
+            "(kicad_sch (version 20250114) (generator \"eeschema\") (uuid \"6f0b5e3a-1c1d-4a55-9a43-9a6b1d1d0001\") (paper \"A4\")\n (text \".include \\\"models/a.lib\\\"\" (exclude_from_sim no) (at 50 50 0) (effects (font (size 1.27 1.27))) (uuid \"6f0b5e3a-1c1d-4a55-9a43-9a6b1d1d0002\"))\n (rectangle (start 10 10) (end 30 30) (stroke (width 0) (type default)) (fill (type none)) (uuid \"6f0b5e3a-1c1d-4a55-9a43-9a6b1d1d0003\"))\n)\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("models/a.lib"), "* a\n.include b.lib\n.model D1 D\n").unwrap();
+        std::fs::write(project.join("models/b.lib"), ".model D2 D\n").unwrap();
+        std::fs::write(project.join("frame.kicad_wks"), "(kicad_wks (version 20231118) (generator \"t\"))\n").unwrap();
+        std::fs::write(project.join("s.kicad_pro"), r#"{ "schematic": { "page_layout_descr_file": "${KIPRJMOD}/frame.kicad_wks" }, "pcbnew": { "page_layout_descr_file": "/abs/other.kicad_wks" } }"#).unwrap();
+        let args = [project.join("s.kicad_sch").display().to_string(), "-o".to_string(), board.display().to_string()];
+        if let Err(e) = run(&args) {
+            panic!("import failed: {}", e.iter().map(|c| format!("{c:?}")).collect::<String>());
+        }
+        assert!(board.join("models/a.lib").is_file() && board.join("models/b.lib").is_file(), "the include and what it includes");
+        assert!(board.join("frame.kicad_wks").is_file(), "the drawing sheet");
+        let (_, design, _) = crate::board::load(&board).unwrap();
+        let sch = design.schematic.as_ref().expect("a schematic of graphics only is taken");
+        assert_eq!(sch.extras.drawing_sheet.as_deref(), Some("${KIPRJMOD}/frame.kicad_wks"));
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref()), Some("/abs/other.kicad_wks"), "a whole path is named as it is");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn spice_includes_and_project_paths_are_read_as_the_simulator_reads_them() {
+        use eda_kicad::project_schematic::{project_relative, spice_include_names};
+        assert_eq!(spice_include_names(".include \"a b.lib\"\n.LIB 'c.lib' TT\n.inc d.lib\n.model X D\n.includes e.lib"), vec!["a b.lib", "c.lib", "d.lib"]);
+        assert_eq!(project_relative("${KIPRJMOD}/m/x.lib"), Some(PathBuf::from("m/x.lib")));
+        assert_eq!(project_relative("./x.lib"), Some(PathBuf::from("x.lib")));
+        assert_eq!(project_relative("../x.lib"), None);
+        assert_eq!(project_relative("${SPICE_LIB_DIR}/x.lib"), None);
+        assert_eq!(project_relative("/abs/x.lib"), None);
     }
 
     #[test]

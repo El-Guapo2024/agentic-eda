@@ -470,6 +470,11 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let (dx, dy) = place_offset_mm(angle, false, false, pin_local);
     let (ox, oy) = (p.at.x.mm() - dx, p.at.y.mm() - dy);
     let _ = writeln!(out, "\t(symbol");
+    // drawn from a renamed cache entry of the sheet (`SchExtras::power_lib_names`, PARITY-sch §82): `saveSymbol`'s `(lib_name ..)`, which `Paste` looks the
+    // clipboard's entry up by (`ChoosePasteLibSymbol( .., symbol->GetSchSymbolLibraryName() )`, UI-LEFT-3 S3-12)
+    if let Some(entry) = input.section.extras.power_lib_names.get(&p.id) {
+        let _ = writeln!(out, "\t\t(lib_name {})", sexpr_str(&entry.name));
+    }
     let _ = writeln!(out, "\t\t(lib_id {})", sexpr_str(&p.lib_id));
     let _ = writeln!(out, "\t\t(at {} {} {})", fmt_mm_f(ox), fmt_mm_f(oy), fmt_mm_f(angle));
     let _ = writeln!(out, "\t\t(unit 1)");
@@ -494,6 +499,7 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
     // its Reference and Value where the sheet draws them, as the `.kicad_sch` writer has them (from its pin, through its turn)
     for (place, text) in eda_engine::fields::power_placements(sch, p) {
+        let text = if place.name == "Reference" { eda_model::annotate::shown_reference(&text).to_string() } else { text };
         let (dx, dy) = eda_engine::symgeom::bake(p.rot, false, 0.0, place.dx.as_f64(), place.dy.as_f64());
         let look = crate::FieldLook::of(&place).with_font_look(sch, &p.id, &place.name);
         crate::write_field_text(out, &place.name, &text, (p.at.x.as_f64() + dx, p.at.y.as_f64() + dy), place.angle == 90_000, eda_engine::fields::to_hj(place.h), eda_engine::fields::to_vj(place.v), !place.visible, &look);
@@ -508,7 +514,7 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let _ = writeln!(out, "\t\t(instances");
     let _ = writeln!(out, "\t\t\t(project {}", sexpr_str(input.project));
     let _ = writeln!(out, "\t\t\t\t(path \"\"");
-    let _ = writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&p.id));
+    let _ = writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(eda_model::annotate::shown_reference(&p.id)));
     let _ = writeln!(out, "\t\t\t\t\t(unit 1)");
     let _ = writeln!(out, "\t\t\t\t)");
     let _ = writeln!(out, "\t\t\t)");
@@ -618,9 +624,26 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     for p in &powers {
         let engine = input.model.symbol_of(&p.lib_id).or_else(|| eda_model::symbol::builtin(&p.lib_id));
         if let Some(engine) = engine {
-            cache.entry(p.lib_id.clone()).or_insert_with(|| match input.design.symbol_library.as_ref().and_then(|l| l.flatten(&p.lib_id).ok().filter(|_| l.by_lib_id(&p.lib_id).is_some_and(|s| s.published))) {
-                Some(rich) => rich,
-                None => LibrarySymbol::from_engine_symbol(&engine),
+            // the sheet's cache entry the symbol is drawn from (`SCH_SCREEN::m_libSymbols`, which `SaveSelection` writes): its id's, of the kind the sheet
+            // keeps for it, or the renamed one of the other kind (PARITY-sch §82), with the keywords and description of that kind (UI-LEFT-3 S3-11, S3-12)
+            let lib_local = engine.power && engine.connectivity.power_local;
+            let (name, local) = match sch.extras.power_lib_names.get(&p.id) {
+                Some(entry) => (entry.name.clone(), entry.local),
+                None => (p.lib_id.clone(), sch.extras.power_is_local(&p.lib_id, Some(lib_local))),
+            };
+            cache.entry(name).or_insert_with(|| {
+                let mut entry = match input.design.symbol_library.as_ref().and_then(|l| l.flatten(&p.lib_id).ok().filter(|_| l.by_lib_id(&p.lib_id).is_some_and(|s| s.published))) {
+                    Some(rich) => rich,
+                    None => LibrarySymbol::from_engine_symbol(&engine),
+                };
+                if entry.power {
+                    // (`PlaceSymbol`'s rewrite of a global one made local, `LibSymbol::power_texts`)
+                    if local && !entry.power_local {
+                        (entry.keywords, entry.description) = eda_model::symbol::made_local_power_texts(&entry.keywords, &entry.description);
+                    }
+                    entry.power_local = local;
+                }
+                entry
             });
             power_engine.insert(p.lib_id.clone(), engine);
         }

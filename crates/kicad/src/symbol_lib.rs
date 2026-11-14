@@ -319,7 +319,21 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
         .flat_map(|(sub, (unit, style))| sexpr::find_all(sub, "text_box").filter_map(move |t| crate::symbol_import::text_box(t, unit, style)))
         .filter(|t| !t.is_private())
         .collect();
+    // the pins' text sizes where either is not 50 mil (`parseSymbolPin`: `(name .. (effects (font (size ..))))`, `(number ..)`; UI-LEFT-3 S3-22), by number, the first
+    let mut pin_text_sizes: std::collections::BTreeMap<String, (f64, f64)> = std::collections::BTreeMap::new();
+    let font_size = |n: &[Sexpr]| sexpr::find(n, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1));
+    for pin in sexpr::find_all(node, "pin").chain(sexpr::find_all(node, "symbol").flat_map(|sub| sexpr::find_all(sub, "pin"))) {
+        let Some(number) = sexpr::find(pin, "number") else { continue };
+        let Some(num) = sexpr::txt(number, 1) else { continue };
+        let sizes = (sexpr::find(pin, "name").and_then(font_size).unwrap_or(1.27), font_size(number).unwrap_or(1.27));
+        if (sizes.0 - 1.27).abs() > 1e-9 || (sizes.1 - 1.27).abs() > 1e-9 {
+            pin_text_sizes.entry(num.to_string()).or_insert(sizes);
+        }
+    }
     eda_model::symbol::LibConnectivity {
+        pin_text_sizes,
+        // `(in_pos_files no)`: "Exclude from position files" (UI-LEFT-3 S3-22)
+        exclude_from_pos_files: sexpr::find(node, "in_pos_files").and_then(|p| sexpr::txt(p, 1)) == Some("no"),
         unit_names,
         user_fields,
         keywords: ki("ki_keywords"),
@@ -1588,5 +1602,35 @@ mod tests {
 
         let without_alt = eda_model::ir::LibrarySymbol { has_alternate_body_style: false, ..eda_model::ir::LibrarySymbol::new_empty("Test:NoAlt") };
         assert!(!export_kicad_sym(&without_alt).contains("_1_2\""), "no style-2 sub-block at all when has_alternate_body_style is false");
+    }
+
+    /// UI-LEFT-3 S3-22 (`PIN_COMPARISON_VIEW::Compare`'s text sizes, `LIB_SYMBOL::Compare`'s "Exclude from position files"): a pin's name and number sizes that are
+    /// not 50 mil and `(in_pos_files no)` are read into the symbol a schematic draws, and survive the design's copy of it.
+    #[test]
+    fn a_pins_text_sizes_and_the_position_file_flag_are_read() {
+        let lib = r##"(kicad_symbol_lib (version 20241209) (generator "test")
+  (symbol "Q" (exclude_from_sim no) (in_bom yes) (on_board yes) (in_pos_files no)
+    (property "Reference" "Q" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Q" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (symbol "Q_1_1"
+      (pin input line (at -5.08 0 0) (length 2.54) (name "A" (effects (font (size 1.016 1.016)))) (number "1" (effects (font (size 0.8 0.8)))))
+      (pin input line (at 5.08 0 180) (length 2.54) (name "B" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)
+"##;
+        let dir = std::env::temp_dir().join(format!("eda_pin_sizes_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("q.kicad_sym");
+        std::fs::write(&path, lib).unwrap();
+        let sym = crate::list_symbols_in_file(&path, "q").into_iter().find(|s| s.lib_id == "q:Q").expect("the reader reads it");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(sym.connectivity.pin_text_sizes.get("1"), Some(&(1.016, 0.8)));
+        assert!(!sym.connectivity.pin_text_sizes.contains_key("2"), "50 mil is the default");
+        assert!(sym.connectivity.exclude_from_pos_files);
+        let copy = eda_model::ir::LibrarySymbol::from_engine_symbol(&sym);
+        assert!(copy.exclude_from_pos_files);
+        assert_eq!(copy.pins.iter().find(|p| p.number == "1").map(|p| (p.name_size_mm, p.number_size_mm)), Some((Some(1.016), Some(0.8))));
+        assert_eq!(copy.to_engine_symbol().connectivity.pin_text_sizes, sym.connectivity.pin_text_sizes);
     }
 }

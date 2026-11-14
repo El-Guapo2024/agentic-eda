@@ -33,3 +33,12 @@ export function parseCmpFile(text: string): CmpLink[] {
   }
   return links;
 }
+
+/** `ImportFPAssignments`' question (`wxSingleChoiceDialog( m_frame, .., _( "Change Visibility" ), choices )`), word for word (UI-LEFT-3 S3-25). */
+export const FP_VISIBILITY_TITLE = "Change Visibility";
+export const FP_VISIBILITY_PROMPT = "Select the footprint field visibility setting.";
+export const FP_VISIBILITY_CHOICES: readonly string[] = ["Keep existing footprint field visibility", "Show all footprint fields", "Hide all footprint fields"];
+
+/** The choice's meaning (`forceVisibility = GetSelection() != 0`, `visibilityState = GetSelection() == 1`): the visibility every listed symbol's Footprint field
+ *  is given, or null to keep each one's. */
+export const forcedFootprintVisibility = (choice: number): boolean | null => (choice === 0 ? null : choice === 1);

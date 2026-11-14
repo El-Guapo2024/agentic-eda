@@ -27,9 +27,11 @@ export interface LibChooserTreeProps {
   onToggleItem: (key: string) => void;
   /** The empty tree says why (nothing installed, no match). */
   emptyText: string;
+  /** Items whose name is drawn in orange: not pin-compatible with the symbol Set Variant Symbol... picks for (`SYMBOL_TREE_MODEL_ADAPTER::GetAttr`, UI-LEFT-3 S3-14). */
+  warned?: ReadonlySet<string>;
 }
 
-export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onChoose, onToggleGroup, onToggleItem, emptyText }: LibChooserTreeProps) {
+export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onChoose, onToggleGroup, onToggleItem, emptyText, warned }: LibChooserTreeProps) {
   const holder = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const treeId = kind === "symbol" ? "symbol_chooser" : "footprint_chooser";
@@ -118,7 +120,7 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
               onClick={() => onSelect(row.key)}
               onDoubleClick={() => onChoose(row)}
             >
-              <div title={row.item.id}>
+              <div title={row.item.id} style={warned?.has(row.item.id) ? { color: "rgb(200, 120, 0)" } : undefined} data-incompatible={warned?.has(row.item.id) ? "" : undefined}>
                 <span
                   className="twisty"
                   onClick={

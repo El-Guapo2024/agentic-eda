@@ -494,3 +494,83 @@ fn compare_symbol_with_library_reaches_the_project_and_undoes() {
         assert!(on > 0, "kicad-cli reads `compare_symbols.field_positions` as written: every Device:R mismatches");
     }
 }
+
+/// UI-LEFT-3 (the setup lane's leftover; KiCad 25ec2335 `SCH_LABEL_BASE::ResolveTextVar`): a global or hierarchical label's `${CONNECTION_TYPE}` is its shape's
+/// electrical type (`getElectricalTypeLabel`), also while the connectivity reads a Netclass field (not emptied under `INPUT_TEXT_SCOPE`); a local label and a
+/// directive leave it to the sheet (here: unresolved, kept as written).
+#[test]
+fn a_global_labels_connection_type_is_its_shapes_electrical_type() {
+    use eda_model::ir::LabelShape;
+    use eda_model::sch_extras::LabelField;
+    let field = |name: &str, text: &str| LabelField { name: name.into(), text: text.into(), ..serde_json::from_str::<LabelField>(r#"{"name":"x"}"#).unwrap() };
+    let project = eda_model::text_vars::Project { name: "p".into(), variables: Default::default(), clock: Default::default() };
+    let sheet = eda_model::text_vars::SchSheet { project, levels: vec![Default::default()], page: "1".into(), page_count: 1, ..Default::default() };
+    let fields = vec![field("Netclass", "${CONNECTION_TYPE}_net")];
+    for (shape, want) in [(LabelShape::Input, "Input"), (LabelShape::Output, "Output"), (LabelShape::Bidirectional, "Bidirectional"), (LabelShape::TriState, "Tri-State"), (LabelShape::Passive, "Passive")] {
+        assert_eq!(crate::board::label_field_shown_of(&sheet, &fields, "${CONNECTION_TYPE}_net", false, Some(shape)), format!("{want}_net"));
+    }
+    assert_eq!(crate::board::label_field_shown(&sheet, &fields, "${CONNECTION_TYPE}", false), "${CONNECTION_TYPE}", "a local label has none");
+}
+
+/// The same, end to end (slow): a global label of shape Input on mcu30's wire, whose Netclass field reads `${CONNECTION_TYPE}`, puts the wire's net in the class
+/// "Input" -- in the studio's model and in kicad-cli's netlist of the derived files.
+#[test]
+fn slow_a_global_labels_connection_type_names_its_class_as_kicad_cli_reads_it() {
+    let dir = mcu30_board("connection_type_class");
+    define_class(&dir, "Input", NetClassSchematic::default());
+    let (_, design, _) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let wire = root.wires.iter().find(|w| !w.bus && !w.pins.is_empty() && w.pts.len() >= 2).expect("a wire with a pin").clone();
+    let pin = wire.pins[0].clone();
+    let place = eda_ops::sch_edit::SchCmd::PlaceLabel {
+        net: "CT_IN".into(),
+        at: wire.pts[0],
+        kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input },
+        spin: None,
+        size_nm: None,
+        bold: None,
+        italic: None,
+        auto_rotate: None,
+        fields: Some(vec![netclass("${CONNECTION_TYPE}")]),
+        intersheet_refs: None,
+        field_looks: None,
+    };
+    step(&dir, Cmd::SchEdit(place), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let net = design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| *p == pin)).unwrap().name.clone();
+    let class = model.board.net_classes.iter().find(|c| c.name == "Input").expect("the class");
+    assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{net} is in Input: {:?}", class.nets);
+    if kicad_cli_ready() {
+        assert!(crate::sch_hierarchy_tests::kicad_classes_of_pin(&dir, &pin).iter().any(|c| c == "Input"), "kicad-cli resolves `${{CONNECTION_TYPE}}` to Input too");
+    }
+}
+
+/// UI-LEFT-3 S3-35 (`DIALOG_SYMBOL_REMAP::OnRemapSymbols`: `RESCUER::RescueProject( this, rescuer, false )`, the Project Rescue Helper first): the remap rescues
+/// only the candidates the helper kept -- none kept, no rescue library is written and the symbols are mapped to the project's own libraries, which do not
+/// have them; one kept, the rescue library holds that one alone. Slow: QA pic_programmer's legacy project (`KICAD_SRC_DIR`).
+#[test]
+fn slow_remap_rescues_only_what_the_project_rescue_helper_kept() {
+    if !kicad_cli_ready() || std::env::var_os("KICAD_SRC_DIR").is_none() {
+        return;
+    }
+    for (tag, keep_one) in [("none", false), ("one", true)] {
+        let root = crate::sch_hierarchy_tests::legacy_project("pcbnew/plugins/legacy_demos/pic_programmer/pic_programmer.sch", &format!("remap_helper_{tag}")).unwrap();
+        let dir = crate::sch_hierarchy_tests::scratch(&format!("remap_helper_{tag}_board"));
+        crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+        let found = crate::rescue_api::candidates(&dir);
+        let list: Vec<String> = found["candidates"].as_array().unwrap().iter().map(|c| c["requested"].as_str().unwrap().to_string()).collect();
+        assert!(list.len() > 5, "{found}");
+        let kept: Vec<String> = if keep_one { vec![list[0].clone()] } else { vec![] };
+        let r = crate::rescue_api::remap(&dir, serde_json::json!({ "requested": kept }).to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{r}");
+        let rescue = dir.join("intent-rescue.lib");
+        if keep_one {
+            let text = std::fs::read_to_string(&rescue).expect("the rescue library");
+            assert_eq!(text.matches("\nDEF ").count(), 1, "the kept one alone: {text}");
+        } else {
+            assert!(!rescue.exists(), "nothing kept, nothing rescued");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
+    }
+}

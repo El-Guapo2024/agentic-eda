@@ -5365,17 +5365,21 @@ impl LibrarySymbol {
                 }
             }
         }
-        // each pin's alternate functions (r5 D5-H3)
+        // each pin's alternate functions (r5 D5-H3), and its text sizes (UI-LEFT-3 S3-22)
         for p in pins.iter_mut() {
             if let Some(alts) = sym.connectivity.pin_alternates.get(&p.number) {
                 p.alternates = alts.clone();
+            }
+            if let Some(&(name, number)) = sym.connectivity.pin_text_sizes.get(&p.number) {
+                (p.name_size_mm, p.number_size_mm) = (Some(name), Some(number));
             }
         }
         LibrarySymbol {
             lib_id: sym.lib_id.clone(),
             reference_prefix: sym.reference_prefix.clone(),
             description: sym.description.clone(),
-            keywords: String::new(),
+            // (the keywords the engine's symbol keeps, `LibConnectivity::keywords`, which `to_engine_symbol` gives back)
+            keywords: sym.connectivity.keywords.clone(),
             datasheet: sym.datasheet.clone(),
             power: sym.power,
             in_bom: sym.in_bom,
@@ -5386,6 +5390,7 @@ impl LibrarySymbol {
             unit_count: sym.unit_count.max(1),
             has_alternate_body_style: sym.alternate.is_some() && sym.connectivity.body_style_names.is_empty(),
             body_style_names: sym.connectivity.body_style_names.clone(),
+            exclude_from_pos_files: sym.connectivity.exclude_from_pos_files,
             graphics,
             pins,
             ..Default::default()
@@ -5455,6 +5460,14 @@ impl LibrarySymbol {
                 value: self.fields.iter().find(|f| f.name == "Value").map(|f| f.text.clone()).unwrap_or_default(),
                 footprint: self.fields.iter().find(|f| f.name == "Footprint").map(|f| f.text.clone()).unwrap_or_default(),
                 fp_filters: self.footprint_filters.iter().map(|f| f.replace(' ', "{space}")).collect::<Vec<_>>().join(" "),
+                // the pins' text sizes where either is not 50 mil, and "Exclude from position files" (UI-LEFT-3 S3-22)
+                pin_text_sizes: self
+                    .pins
+                    .iter()
+                    .map(|p| (p.number.clone(), (p.name_size_mm.unwrap_or(1.27), p.number_size_mm.unwrap_or(1.27))))
+                    .filter(|(_, (a, b))| (a - 1.27).abs() > 1e-9 || (b - 1.27).abs() > 1e-9)
+                    .collect(),
+                exclude_from_pos_files: self.exclude_from_pos_files,
                 // the text boxes a placed symbol draws (not one private to the Symbol Editor), of the body styles its graphics are taken from, without the editor's
                 // ids: the engine symbol of a library's symbol and of the same one opened in the editor have the same boxes
                 text_boxes: self

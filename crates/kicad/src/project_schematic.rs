@@ -11,8 +11,8 @@
 //!   reads the formatting, annotation, BOM, netlist and simulator keys of the project as KiCad saved them.
 //! * Left out: the keys the studio holds itself (above, written back from the extras), the project's list of top-level sheets (the import reads them, and the
 //!   derived project has one root), its bus aliases (the design's own, `Design::bus_aliases`), and the keys that name files of the original folder, which the
-//!   derived folder does not have (`legacy_lib_dir`, `legacy_lib_list`, `page_layout_descr_file`). **Differs**: a project's own drawing sheet
-//!   (`page_layout_descr_file`) is not carried; the derived project draws KiCad's default.
+//!   derived folder does not have (`legacy_lib_dir`, `legacy_lib_list`, `page_layout_descr_file`). A project's own drawing sheet is the design's Page Settings
+//!   file (`eda import-kicad` keeps the name and copies a file of the project's folder, UI-LEFT-3 S3-23), which the derived project names again.
 
 use eda_model::sch_extras::{IntersheetRefs, NgspiceSettings, SchExtras};
 use eda_model::sch_setup::{AnnotationSettings, SchFormatting, TemplateFieldName};
@@ -292,6 +292,79 @@ pub fn sim_library_files(design: &eda_model::ir::Design, model: &eda_model::Cons
         if !out.contains(&path) {
             out.push(path);
         }
+    }
+    out
+}
+
+/// A file name of the original project's folder as a path relative to it: a name relative to the folder, or one starting `${KIPRJMOD}/` (`FILENAME_RESOLVER`
+/// takes either against the project's folder); `None` for a name with another path variable, a whole path, an embedded file or one that climbs out (`..`), which
+/// the board's folder can name as it is.
+pub fn project_relative(name: &str) -> Option<std::path::PathBuf> {
+    let name = name.trim().replace('\\', "/");
+    let rel = name.strip_prefix("${KIPRJMOD}/").unwrap_or(&name);
+    let path = std::path::Path::new(rel);
+    if rel.is_empty() || rel.contains("${") || rel.contains("$(") || rel.starts_with("kicad-embed://") || !path.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)) {
+        return None;
+    }
+    Some(path.components().filter(|c| matches!(c, std::path::Component::Normal(_))).collect())
+}
+
+/// The files a SPICE text names with `.include` or `.lib` (`NETLIST_EXPORTER_SPICE::ReadDirectives` sends a text with such a line to the simulator as it is, and
+/// ngspice reads the file; a library's own `.include`s are read the same way), each as written: the first word after the directive, its quotes taken off.
+pub fn spice_include_names(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines().map(str::trim) {
+        let upper = line.to_ascii_uppercase();
+        let rest = [".INCLUDE", ".INC", ".LIB"].iter().find_map(|d| upper.strip_prefix(d).filter(|r| r.starts_with([' ', '\t'])).map(|r| &line[line.len() - r.len()..]));
+        let Some(rest) = rest.map(str::trim) else { continue };
+        let name = match rest.chars().next() {
+            Some(q @ ('"' | '\'')) => rest[1..].split(q).next().unwrap_or(""),
+            _ => rest.split_whitespace().next().unwrap_or(""),
+        };
+        if !name.is_empty() && !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// The `.include` / `.lib` files the schematic's texts and text boxes name for the simulator ([`spice_include_names`]), as paths of the project's folder
+/// ([`project_relative`]).
+pub fn directive_include_files(design: &eda_model::ir::Design) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for sch in design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
+        let texts = sch.texts.iter().map(|t| t.content.as_str()).chain(sch.extras.graphics.iter().filter_map(|g| match &g.shape {
+            eda_model::sch_extras::SchGraphicKind::TextBox { text, .. } => Some(text.as_str()),
+            _ => None,
+        }));
+        for name in texts.flat_map(spice_include_names) {
+            if let Some(rel) = project_relative(&name) {
+                if !out.contains(&rel) {
+                    out.push(rel);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every file of `folder` the simulator reads for the design: the symbols' model files ([`sim_library_files`]), the texts' `.include` / `.lib` files
+/// ([`directive_include_files`]), and the files each of those includes in turn ([`spice_include_names`], by the including file's folder), each once, as paths of
+/// `folder`; a file `folder` does not have is left out, and so are the files it would include (UI-LEFT-3 S3-23).
+pub fn simulation_files(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, folder: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut queue: Vec<std::path::PathBuf> = sim_library_files(design, model);
+    queue.extend(directive_include_files(design));
+    queue.reverse();
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    while let Some(rel) = queue.pop() {
+        if out.contains(&rel) || !folder.join(&rel).is_file() {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(folder.join(&rel)) {
+            let dir = rel.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+            queue.extend(spice_include_names(&text).iter().filter_map(|n| project_relative(n)).map(|inner| dir.join(inner)));
+        }
+        out.push(rel);
     }
     out
 }

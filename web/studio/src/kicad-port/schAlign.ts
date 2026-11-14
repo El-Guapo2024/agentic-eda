@@ -7,6 +7,8 @@
 // the connection grid (`adjustDeltaForGrid`) and with the wires on each item stretching -- as one undo step.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
+import { kiRound } from "./gridHelperBase";
+
 export type SchAlignKind = "left" | "right" | "top" | "bottom" | "centerX" | "centerY";
 
 export interface SchAlignItem {
@@ -80,6 +82,7 @@ export function alignMoves(items: readonly SchAlignItem[], kind: SchAlignKind, c
 function snapGroupMove(item: SchAlignItem, move: SchAlignMove, grid: number): SchAlignMove {
   if (move.dx === 0 && move.dy === 0) return move;
   const [cx, cy] = centre(item.box);
-  const snap = (v: number) => Math.round(v / grid) * grid;
+  // `GRID_HELPER::computeNearest`: `KiROUND( (double) aPoint.x / aGrid.x ) * aGrid.x` -- half-way away from zero, a negative one too (UI-LEFT-3 S3-13)
+  const snap = (v: number) => kiRound(v / grid) * grid;
   return { id: move.id, dx: snap(cx + move.dx) - cx, dy: snap(cy + move.dy) - cy };
 }

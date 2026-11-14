@@ -3175,6 +3175,9 @@ export interface LibPin {
   hidden: boolean;
   /** The pin's alternate functions (`SCH_PIN::GetAlternates`), sorted by name; absent when it has none. A placed symbol's pin may take one (`SchematicPin.alt`): it is then drawn, named and typed by it. */
   alternates?: PinAlternate[];
+  /** Its name's and number's text sizes, mm (`m_nameTextSize`, `m_numTextSize`); absent from a backend built before they were sent (UI-LEFT-3 S3-22). */
+  name_size_mm?: Mm;
+  number_size_mm?: Mm;
 }
 
 /** eeschema's FILL_T. `color`/the hatch modes are rare in practice (most real symbols use none/outline/background) -- painter.ts treats any hatch mode as `outline` rather than leaving it blank, since real KiCad never leaves a filled-looking shape unfilled. */
@@ -3299,6 +3302,9 @@ export interface SchField {
   allow_autoplace?: boolean;
   /** Its anchor in its item's own unturned frame, nanometres from the item's origin: Symbol Properties' X and Y Position (`FDC_POSX`, `FDC_POSY`). */
   local?: [Nm, Nm];
+  /** Its justification in that frame (the field's own `(justify ..)`), which Compare Symbol with Library compares (UI-LEFT-3 S3-22). */
+  local_h?: "left" | "center" | "right";
+  local_v?: "top" | "center" | "bottom";
   /** Its text's angle before the item turns it is vertical: Symbol Properties' Orientation (`FDC_ORIENTATION`). */
   local_vertical?: boolean;
   /** `EDA_TEXT::GetFont` (`SchExtras::field_looks`): absent is the default font; "KiCad Font" the stroke font; anything else an outline font's family. */

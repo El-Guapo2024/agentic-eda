@@ -10,7 +10,7 @@ import { useSyncExternalStore } from "react";
 import type { LibSymbol, Schematic } from "../api/types";
 import { carriedPreview, type ServerDrawing } from "../kicad-port/schCarryPreview";
 import { withPaste, type SchPastePreview } from "../kicad-port/schClipboard";
-import { PREVIEW_AT, type Carry } from "../kicad-port/schPlaceTool";
+import { PREVIEW_AT, type CarriedItem, type Carry } from "../kicad-port/schPlaceTool";
 
 export interface SchCarry extends Carry {
   /** The sheet it was made on (path of sheet-instance ids): an item belongs to that sheet. */
@@ -66,6 +66,24 @@ export function cancelSchCarry(): boolean {
   current = null;
   emit();
   return true;
+}
+
+/**
+ * Sync Sheet Pins' labels still to place on the sheet `sheet` (`DIALOG_SYNC_SHEET_PINS::m_placementTemplateSet`, the current one first; UI-LEFT-3 S3-13): set
+ * by Add Labels, kept while one rides and after Esc drops it (the next click makes the current one again, kicad-port/schSheetPins.ts `syncTemplatesAfter`),
+ * cleared once the last is placed or the tool ends. The dialog shows itself again when neither a label nor a template is left.
+ */
+export interface SyncTemplates {
+  sheet: string[];
+  items: CarriedItem[];
+}
+let templates: SyncTemplates | null = null;
+
+export const getSyncTemplates = (): SyncTemplates | null => templates;
+
+export function setSyncTemplates(next: SyncTemplates | null): void {
+  templates = next && next.items.length > 0 ? next : null;
+  emit();
 }
 
 export const useSchCarry = (): SchCarry | null => useSyncExternalStore(subscribe, getSchCarry, getSchCarry);

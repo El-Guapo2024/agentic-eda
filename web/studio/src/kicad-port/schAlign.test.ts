@@ -41,3 +41,11 @@ test("a group is one item, its offset snapped by its centre to the connection gr
   // a group not on the connection grid (graphics alone) is moved as measured
   assert.deepEqual(alignMoves([left, item("grp", [1000, 0, 3100, 1300], false)], "left", null)[1], { id: "grp", dx: -1000, dy: 0 });
 });
+
+test("a group's half-way offset is rounded away from zero, a negative one too (`KiROUND`, UI-LEFT-3 S3-13)", () => {
+  // the group's centre (-1050, -150) is half-way between grid points of 100 on both axes: `KiROUND` takes -10.5 to -11 and -1.5 to -2 (`Math.round`: -10, -1)
+  const left = item("A", [-2000, 2000, -1900, 2100], false);
+  const group = { ...item("grp", [-1100, -200, -1000, -100], false), groupGridNm: 100 };
+  // Align Left: dx -900 takes the centre to -1950 (-19.5 grids: -2000); dy 0 is snapped too (-150 -> -200)
+  assert.deepEqual(alignMoves([left, group], "left", null)[1], { id: "grp", dx: -950, dy: -50 });
+});

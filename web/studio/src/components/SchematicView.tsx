@@ -118,7 +118,7 @@ import { pickNewMemberAt } from "../actions/schGroupActions";
 import { pasteOffset, previewIds, withPaste } from "../kicad-port/schClipboard";
 import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
 import { useSchImageHand } from "../state/schImageHand";
-import { cancelSchCarry, carryCursor, carryDrawing, noteCarryCursor, noteCarryPainted, useSchCarry } from "../state/schCarryStore";
+import { cancelSchCarry, carryCursor, carryDrawing, getSyncTemplates, noteCarryCursor, noteCarryPainted, setSyncTemplates, useSchCarry } from "../state/schCarryStore";
 import { isCarryTool, PREVIEW_AT } from "../kicad-port/schPlaceTool";
 import { beginItem, carrySymbol, placeCarried } from "../actions/schPlaceActions";
 import { imageSizeNm, SCALE_PPM } from "../kicad-port/refImage";
@@ -454,6 +454,9 @@ export function SchematicView() {
       }
     }
     if (carry && (carry.tool !== state.activeTool || carry.sheet.join("/") !== state.currentSheetPath.join("/"))) cancelSchCarry();
+    // Sync Sheet Pins' labels left to place end with the tool or the sheet (`EndPlacement()` at the tool's end, UI-LEFT-3 S3-13)
+    const templates = getSyncTemplates();
+    if (templates && (state.activeTool !== "sch_label_hier" || templates.sheet.join("/") !== state.currentSheetPath.join("/"))) setSyncTemplates(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [carry, state.activeTool, state.currentSheetPath]);
   const apiForUnmount = useRef(api);

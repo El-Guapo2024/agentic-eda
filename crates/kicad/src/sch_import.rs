@@ -288,6 +288,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // (place, own unit, sheet path, the unit on that path) of a symbol whose `(path .. (unit N))` is not its own `(unit ..)` (r2 B-M4)
     let mut path_units: Vec<(Point, u32, Vec<String>, u32)> = Vec::new();
 
+    let mut power_refs_seen: BTreeSet<String> = BTreeSet::new();
     for item in sexpr::find_all(root, "symbol") {
         let Some(lib_id) = sexpr::find(item, "lib_id").and_then(|l| sexpr::txt(l, 1)) else { continue };
         let Some(resolved) = lib_table.get(lib_id) else {
@@ -361,6 +362,17 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         // `(in_pos_files no)`: "Exclude from position files" (r2 B-L2)
         let exclude_from_pos_files = flag("in_pos_files") == Some("no");
 
+        // a power symbol whose reference another of the file has (two unannotated `#PWR?`, as a KiCad clipboard holds them): the design names a power
+        // symbol by its reference, so it gets a placeholder of its own (`#PWR?1`, shown and written `#PWR?`, `annotate::shown_reference`) and keeps its own
+        // cache entry, flags and fields (UI-LEFT-3 S3-12)
+        if resolved.power {
+            if !power_refs_seen.insert(reference.clone()) {
+                let prefix = reference.trim_end_matches(|c: char| c.is_ascii_digit() || c == '?').to_string();
+                let placeholder = (1..).map(|n| format!("{prefix}?{n}")).find(|r| !power_refs_seen.contains(r)).unwrap_or_default();
+                power_refs_seen.insert(placeholder.clone());
+                reference = placeholder;
+            }
+        }
         if is_locked(item) {
             locked_refs.insert(reference.clone());
         }
@@ -377,7 +389,11 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
                 exclude_from_board,
                 dnp,
                 exclude_from_pos_files,
-                fields: user_fields_of(item).into_iter().map(|f| eda_model::sch_extras::LabelField { name: f.name, text: f.text, visible: !f.hidden, italic: false, ..Default::default() }).collect(),
+                // (the hidden Description its library symbol's copy gives it is the writer's to write again, UI-LEFT-3 S3-11; one edited or shown is kept)
+                fields: user_fields_of(item)
+                    .into_iter()
+                    .filter(|f| !(f.name == "Description" && f.hidden && power_description_is_derived(resolved, sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).and_then(|n| lib_table.get(n)), &f.text)))
+                    .map(|f| eda_model::sch_extras::LabelField { name: f.name, text: f.text, visible: !f.hidden, italic: false, ..Default::default() }).collect(),
             };
             if !props.is_default() {
                 power_props_read.push((reference.clone(), props));
@@ -1677,6 +1693,12 @@ impl RawUserField {
     }
 }
 
+/// Whether a power symbol's Description `text` is the one its library symbol's copy gives it (`SCH_SYMBOL::UpdateFields`): the cache entry it is drawn
+/// from (`(lib_name ..)`'s, else its id's), or that copy made local by `PlaceSymbol` ([`eda_model::LibSymbol::power_texts`], UI-LEFT-3 S3-11).
+fn power_description_is_derived(id_entry: &LibSymbol, named: Option<&LibSymbol>, text: &str) -> bool {
+    [Some(id_entry), named].into_iter().flatten().any(|lib| lib.description == text || lib.power_texts(true).1 == text)
+}
+
 /// The properties of a placed symbol beyond the four the instance holds itself: every `(property ...)` but Reference, Value, Footprint and Datasheet (matched
 /// without regard to case, as `parseSchField` does), in file order, the first of a name. `(property private "Name" "text" ...)` is read too (the flag is not
 /// kept). The mandatory Description (`FIELD_T::DESCRIPTION`) is one of them, kept as a field of that name with its text, place and look, so the writer
@@ -2303,6 +2325,38 @@ mod tests {
         let (again, again_model, _) = import_kicad_sch(&written).unwrap();
         let rewritten = export_kicad_sch(&again, &again_model, &ExportMeta { date: "2026-01-01", title: "pw" }).unwrap();
         assert!((value_y(&rewritten, "#PWR01") - 99.06).abs() < 1e-6);
+    }
+
+    /// UI-LEFT-3 S3-11, `SCH_DRAWING_TOOLS::PlaceSymbol`: a library's global power symbol placed as a local one has "global power" of its keywords and "global
+    /// label" of its description made "local ..": its cache entry and the instance's Description say so; the global copy keeps the library's words. The
+    /// Description read back is the copy's again (no user field of the design).
+    #[test]
+    fn a_power_symbol_made_local_reads_local_power_and_local_label() {
+        let p5 = r##"(symbol "power:+5V" (power) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+   (property "Reference" "#PWR" (at 0 -3.81 0) (hide yes) (effects (font (size 1.27 1.27)))) (property "Value" "+5V" (at 0 3.556 0) (effects (font (size 1.27 1.27))))
+   (property "Description" "Power symbol creates a global label with name \"+5V\"" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+   (property "ki_keywords" "global power" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+   (symbol "+5V_1_1" (pin power_in line (at 0 0 90) (length 0) (hide yes) (name "" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))"##;
+        let text = format!(
+            r##"(kicad_sch (version 20250114) (generator "eeschema") (uuid "12345678-1234-1234-1234-123456789aaa") (paper "A4") (lib_symbols {p5})
+ (symbol (lib_id "power:+5V") (at 100 50 0) (unit 1) (uuid "19d8a70f-fdaa-401b-b7db-c26505f6cf91")
+  (property "Reference" "#PWR01" (at 100 46 0) (hide yes) (effects (font (size 1.27 1.27)))) (property "Value" "+5V" (at 100 46.5 0) (effects (font (size 1.27 1.27))))
+  (property "Description" "Power symbol creates a global label with name \"+5V\"" (at 100 50 0) (hide yes) (effects (font (size 1.27 1.27))))
+  (pin "1" (uuid "28fa0626-4efd-41ee-9e7f-2a5364d0ca31"))))"##
+        );
+        let (mut design, model, _) = import_kicad_sch(&text).unwrap();
+        assert!(design.schematic.as_ref().unwrap().extras.power_props.get("#PWR01").is_none(), "the copy's Description is no field of the design");
+        let meta = ExportMeta { date: "2026-01-01", title: "pw" };
+        let global = export_kicad_sch(&design, &model, &meta).unwrap();
+        assert!(global.contains("(property \"ki_keywords\" \"global power\"") && global.matches("creates a global label").count() == 2, "{global}");
+        // the click of Place Power with Local (`set_new_power_kind`): the screen's entry for the id is local
+        design.schematic.as_mut().unwrap().extras.local_power.insert("power:+5V".into());
+        let local = export_kicad_sch(&design, &model, &meta).unwrap();
+        assert!(local.contains("(property \"ki_keywords\" \"local power\""), "{local}");
+        assert_eq!(local.matches("Power symbol creates a local label with name \\\"+5V\\\"").count(), 2, "the entry and the instance: {local}");
+        assert!(!local.contains("global label") && !local.contains("global power"));
+        let (back, _, _) = import_kicad_sch(&local).unwrap();
+        assert!(back.schematic.as_ref().unwrap().extras.power_props.get("#PWR01").is_none(), "read back, still the copy's");
     }
 
     #[test]

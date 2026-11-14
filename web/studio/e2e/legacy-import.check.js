@@ -91,6 +91,9 @@
     const run = await waitFor(() => { const b = document.querySelector("[data-remap-run]"); return b && !b.disabled ? b : null; }, 10000);
     check("and offers Remap Symbols (the schematic is a legacy one)", !!run);
     run?.click();
+    // `OnRemapSymbols`' "one last rescue": the Project Rescue Helper when the legacy rescuer has candidates (UI-LEFT-3 S3-35), every one kept
+    const helper = await waitFor(() => document.querySelector("[data-rescue-ok]:not(:disabled)") ?? document.querySelector("[data-remap-report]"), 15000);
+    if (helper?.matches?.("[data-rescue-ok]")) helper.click();
     const report = await waitFor(() => document.querySelector("[data-remap-report]"), 30000);
     const text = report?.textContent ?? "";
     check("the remap gives each symbol the library of the project's legacy list, in KiCad's words", /Symbol R mapped to symbol library 'symbols'\./.test(text) && /Symbol \+3\.3V mapped to symbol library 'symbols'\./.test(text) && /Symbol library table mapping complete!/.test(text), text.slice(0, 400));

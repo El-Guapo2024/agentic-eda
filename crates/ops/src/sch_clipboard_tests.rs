@@ -373,9 +373,56 @@ fn paste_keeps_the_clipboards_local_power_symbol() {
     b.apply(&paste(&lvcc, mm(40.0), Nm::ZERO, PasteMode::Unique)).unwrap();
     let sch = b.design().schematic.as_ref().unwrap();
     let pasted = sch.power_symbols.last().unwrap();
-    assert_ne!(pasted.lib_id, "power:VCC", "a copy of its own");
-    assert!(published(&b, &pasted.lib_id).is_some_and(|s| s.power_local), "{}", pasted.lib_id);
+    // UI-LEFT-3 S3-12 (`ChoosePasteLibSymbol`, `SCH_SCREEN::Append`): the same library id, drawn from a renamed cache entry of the sheet of its kind
+    assert_eq!(pasted.lib_id, "power:VCC", "the same library symbol");
+    assert!(published(&b, "power:VCC").is_none() && b.design().symbol_library.as_ref().is_none_or(|l| l.symbols.is_empty()), "no library symbol of its own");
+    assert_eq!(sch.extras.power_lib_names.get(&pasted.id).map(|e| (e.name.as_str(), e.local)), Some(("VCC_1", true)));
+    assert!(sch.extras.power_symbol_is_local(&pasted.id, "power:VCC", Some(false)));
     assert_eq!(sch.power_symbols[0].lib_id, "power:VCC", "the first stays the design's global one");
+    assert!(!sch.extras.power_symbol_is_local(&sch.power_symbols[0].id, "power:VCC", Some(false)));
+    // pasted again: the entry it equals (`getLibSymbolNameMatches`); a global copy is drawn from the id's entry
+    b.apply(&paste(&lvcc, mm(60.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    b.apply(&paste(&vcc, mm(80.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let names: Vec<Option<&str>> = sch.power_symbols.iter().map(|q| sch.extras.power_lib_names.get(&q.id).map(|e| e.name.as_str())).collect();
+    assert_eq!(names, vec![None, Some("VCC_1"), Some("VCC_1"), None]);
+}
+
+/// UI-LEFT-3 S3-12 (`ChoosePasteLibSymbol( tempScreen, .., symbol->GetSchSymbolLibraryName() )`, `SCH_SCREEN::Append`): a clipboard power symbol drawn from a
+/// renamed entry (`(lib_name "VCC_1")`) is looked up by that name: on a sheet with no entry of that name it keeps it; where `VCC_1` is another kind, it is
+/// drawn from the entry of its kind the sheet has (the id's), else a new `VCC_<n>`. On a sheet with no `power:VCC` the clipboard's own kind is the id's entry.
+#[test]
+fn a_pasted_power_symbol_is_looked_up_by_its_lib_name() {
+    let m = ConstraintModel::default();
+    let local = |b: &Board<'_>, n: usize| {
+        let sch = b.design().schematic.as_ref().unwrap();
+        let q = &sch.power_symbols[n];
+        (sch.extras.power_lib_names.get(&q.id).map(|e| e.name.clone()), sch.extras.power_symbol_is_local(&q.id, &q.lib_id, Some(false)))
+    };
+    // the clipboard: a global VCC (the id's entry) and a local one drawn from `VCC_1`
+    let mut two = fragment(|s| {
+        s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:VCC".into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, net: "VCC".into(), pin: String::new() });
+        s.power_symbols.push(PowerSymbol { id: "#PWR02".into(), lib_id: "power:VCC".into(), at: p(mm(10.0), Nm::ZERO), rot: 0, net: "VCC".into(), pin: String::new() });
+    });
+    two.section.extras.power_lib_names.insert("#PWR02".into(), eda_model::sch_extras::PowerLibName { name: "VCC_1".into(), local: true });
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&paste(&two, Nm::ZERO, Nm::ZERO, PasteMode::Unique)).unwrap();
+    assert_eq!(local(&b, 0), (None, false));
+    assert_eq!(local(&b, 1), (Some("VCC_1".into()), true), "kept under its name");
+    // a sheet where the id's entry is local and `VCC_1` is global: the local copy is drawn from the id's entry, the global one from `VCC_1`
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    let mut lone_local = fragment(|s| s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:VCC".into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, net: "VCC".into(), pin: String::new() }));
+    let mut lvcc = LibrarySymbol::from_engine_symbol(&eda_model::symbol::builtin("power:VCC").unwrap());
+    lvcc.power_local = true;
+    lone_local.lib_symbols = vec![lvcc];
+    b.apply(&paste(&lone_local, mm(50.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    assert_eq!(local(&b, 0), (None, true), "the clipboard's kind is the id's entry of a sheet that has none");
+    let global = fragment(|s| s.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:VCC".into(), at: p(Nm::ZERO, Nm::ZERO), rot: 0, net: "VCC".into(), pin: String::new() }));
+    b.apply(&paste(&global, mm(60.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    assert_eq!(local(&b, 1), (Some("VCC_1".into()), false));
+    b.apply(&paste(&two, mm(70.0), Nm::ZERO, PasteMode::Unique)).unwrap();
+    assert_eq!(local(&b, 2), (Some("VCC_1".into()), false), "the global one shares `VCC_1`");
+    assert_eq!(local(&b, 3), (None, true), "`VCC_1` is global here: the local one is drawn from the id's entry, which is local");
 }
 
 /// r4 B4-M2 (`SCH_SYMBOL::m_excludedFromPosFiles` is the symbol's, kept by the clipboard): a pasted copy of a symbol excluded from position files is excluded

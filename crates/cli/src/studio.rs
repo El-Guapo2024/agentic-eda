@@ -774,6 +774,8 @@ fn handle(
         ("POST", "/api/sch/import_settings") => respond(stream, "200 OK", "application/json", crate::sch_import_settings_api::import_settings(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/setup") => respond(stream, "200 OK", "application/json", sch_api::setup(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
+        // Set Variant Symbol...'s chooser: which library symbols are not pin-compatible with the placed symbol (`compatFunc`, UI-LEFT-3 S3-14)
+        ("POST", "/api/sch/variant_compat") => respond(stream, "200 OK", "application/json", crate::variant_view::variant_compat(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
@@ -786,8 +788,10 @@ fn handle(
         // `remapSymbolsCondition` (UI-LEFT-2 LL7): whether the schematic is a legacy one, which alone enables Remap Legacy Library Symbols...
         ("GET", "/api/sch/legacy") => respond(stream, "200 OK", "application/json", crate::rescue_api::legacy(dir).to_string().as_bytes()),
         ("POST", "/api/sch/rescue") => respond(stream, "200 OK", "application/json", crate::rescue_api::rescue(dir, &body).to_string().as_bytes()),
+        // A board `eda import-kicad` brought in from a KiCad 5 project with no cache library: Rescue Symbols as it opens (`OpenProjectFiles`, UI-LEFT-3 S3-16)
+        ("POST", "/api/sch/rescue/on_open") => respond(stream, "200 OK", "application/json", crate::rescue_api::rescue_on_open(dir).to_string().as_bytes()),
         // Remap Legacy Library Symbols (`DIALOG_SYMBOL_REMAP::OnRemapSymbols`): the backup, the project table made again, the command that names each symbol's library.
-        ("POST", "/api/sch/remap") => respond(stream, "200 OK", "application/json", crate::rescue_api::remap(dir).to_string().as_bytes()),
+        ("POST", "/api/sch/remap") => respond(stream, "200 OK", "application/json", crate::rescue_api::remap(dir, &body).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -2627,8 +2631,23 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             let instance = sch.symbols.iter().find(|s| (if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }) == *lib_id).or_else(|| overrides.iter().find(|(o, _)| o == lib_id).map(|(_, s)| *s));
             if let (false, Some(s)) = (sch.imported_from_kicad, instance) {
                 if let Some(part) = model.part(&s.id) {
+                    // how far the drawing is moved from the library's frame (`corner_offset_mm`, mm, library Y up): Compare Symbol with Library compares in the
+                    // library's frame, as KiCad's cache holds the symbol (UI-LEFT-3 S3-22)
+                    let with_offset = |mut v: Value, frame: Option<&eda_model::LibSymbol>| {
+                        if let Some(f) = frame {
+                            let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(f, s.unit);
+                            v["corner_offset_mm"] = json!([-x0, -y1]);
+                        }
+                        v
+                    };
+                    if s.lib_id != *lib_id {
+                        // a variant symbol: at the placed symbol's origin (`GetEffectiveLibSymbol`), the corner of the base symbol's box here (UI-LEFT-3 S3-14)
+                        if let (Some(alt), Some(base)) = (model.symbol_of(lib_id), model.real_symbol_of(&s.lib_id, part)) {
+                            return (lib_id.clone(), with_offset(lib_symbol_json(&eda_engine::placed::corner_symbol_in_frame_of(lib_id, &alt, &base, s.unit)), Some(&base)));
+                        }
+                    }
                     let resolved = if s.lib_id == *lib_id { model.real_symbol_of(&s.lib_id, part) } else { model.symbol_of(lib_id) };
-                    return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)));
+                    return (lib_id.clone(), with_offset(lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)), resolved.as_ref()));
                 }
             }
             let resolved = model.placed_symbol_of(lib_id);
@@ -3072,6 +3091,18 @@ pub(crate) fn owner_fields_json(sch: &eda_model::ir::SchematicSection, model: &e
 pub(crate) fn with_local_place(mut v: Value, p: &eda_model::ir::FieldPlacement) -> Value {
     v["local"] = json!([p.dx, p.dy]);
     v["local_vertical"] = json!(p.angle == 90_000);
+    // its justification in that frame (the `(justify ..)` the file keeps, `SCH_FIELD::GetHorizJustify` / `GetVertJustify`), which Compare Symbol with Library's
+    // text styles compare (`TEXT_ATTRIBUTES::Compare`, UI-LEFT-3 S3-22)
+    v["local_h"] = json!(match p.h {
+        eda_model::ir::TextJustify::Left => "left",
+        eda_model::ir::TextJustify::Center => "center",
+        eda_model::ir::TextJustify::Right => "right",
+    });
+    v["local_v"] = json!(match p.v {
+        eda_model::ir::TextVAlign::Top => "top",
+        eda_model::ir::TextVAlign::Center => "center",
+        eda_model::ir::TextVAlign::Bottom => "bottom",
+    });
     v
 }
 
@@ -3161,6 +3192,10 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         if let Some(alts) = s.connectivity.pin_alternates.get(&p.number).filter(|a| !a.is_empty()) {
             j["alternates"] = json!(alts);
         }
+        // its name and number text sizes (`m_nameTextSize`, `m_numTextSize`), which Compare Symbol with Library compares (UI-LEFT-3 S3-22)
+        let (name_size, number_size) = s.connectivity.pin_text_sizes.get(&p.number).copied().unwrap_or((1.27, 1.27));
+        j["name_size_mm"] = json!(name_size);
+        j["number_size_mm"] = json!(number_size);
         j
     };
     // every body by style (De Morgan's two, or KiCad 25ec2335's custom styles): an item every body draws is shared (0), the rest of their own style
@@ -3200,7 +3235,9 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         }
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "in_bom": s.in_bom, "on_board": s.on_board, "body_style_count": s.body_style_count(), "body_style_names": (1..=s.body_style_count()).map(|n| s.body_style_description(n)).filter(|_| s.body_style_count() > 1).collect::<Vec<_>>(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "in_bom": s.in_bom, "on_board": s.on_board, "body_style_count": s.body_style_count(), "body_style_names": (1..=s.body_style_count()).map(|n| s.body_style_description(n)).filter(|_| s.body_style_count() > 1).collect::<Vec<_>>(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local,
+        // the footprint filters (`GetFPFilters`, a `{space}` in one a space) and "Exclude from position files", which Compare Symbol with Library compares (UI-LEFT-3 S3-22)
+        "footprint_filters": s.connectivity.fp_filters.split_whitespace().map(|f| f.replace("{space}", " ")).collect::<Vec<_>>(), "exclude_from_pos_files": s.connectivity.exclude_from_pos_files })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document

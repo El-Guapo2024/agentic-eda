@@ -1,13 +1,15 @@
 // Remap Legacy Library Symbols... (`eeschema.EditorControl.remapSymbols`, `SCH_EDITOR_CONTROL::RemapSymbols` -> `DIALOG_SYMBOL_REMAP`, eeschema/dialogs/
 // dialog_symbol_remap.cpp at KiCad 8303b2ad): KiCad's explanation, "Remap Symbols" and the report. The server backs the project up into `rescue-backup/`, makes
 // the project's symbol library table again from the legacy libraries and names each symbol's library (crates/cli/src/rescue_api.rs); the change of the
-// symbols' links is one undoable command. KiCad offers the action only for a schematic none of whose symbols names a library (`remapSymbolsCondition`,
+// symbols' links is one undoable command. Before it, the Project Rescue Helper runs on the legacy rescuer's candidates (`OnRemapSymbols`' "one last rescue",
+// `RescueProject( this, rescuer, false )`: Never Show Again offered, nothing said when there is nothing to rescue); the remap rescues the ones it kept. KiCad offers the action only for a schematic none of whose symbols names a library (`remapSymbolsCondition`,
 // `HasNoFullyDefinedLibIds`); here the dialog asks the server, and says so for any other schematic. Once a remap ran, the button is disabled (`m_remapped`).
 import { useEffect, useState } from "react";
 import { fetchRescueCandidates, remapSymbols, type RemapLine } from "../../api/rescueClient";
 import { REMAP_INFO } from "../../kicad-port/rescueSymbols";
 import { useStudioApi } from "../../state/store";
 import { SchDialogFrame } from "./SchDialogFrame";
+import { RescueSymbolsDialog } from "./RescueSymbolsDialog";
 
 const COLORS: Record<RemapLine["severity"], string | undefined> = { info: undefined, warning: "var(--chrome-warning, #b80)", action: "var(--chrome-accent, #3a7)" };
 
@@ -30,10 +32,14 @@ export function RemapSymbolsDialog({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
+  // `OnRemapSymbols`' "one last rescue": the Project Rescue Helper on the legacy candidates first, then the remap with what it kept (UI-LEFT-3 S3-35)
+  const [helper, setHelper] = useState<((chosen: string[]) => void) | null>(null);
   const run = async () => {
     setBusy(true);
+    const chosen = await new Promise<string[]>((resolve) => setHelper(() => resolve));
+    setHelper(null);
     try {
-      const r = await remapSymbols();
+      const r = await remapSymbols(chosen);
       setReport(r.report);
       if (r.cmd) await api.cmd(r.cmd);
       setRemapped(true);
@@ -69,6 +75,7 @@ export function RemapSymbolsDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
+      {helper && <RescueSymbolsDialog onClose={() => undefined} onChosen={helper} />}
     </SchDialogFrame>
   );
 }

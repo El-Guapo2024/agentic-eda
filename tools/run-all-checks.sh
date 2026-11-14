@@ -30,7 +30,7 @@
 # machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
 # `gps.lbr` (an Eagle library), for Migrate Libraries and the libraries kicad-cli converts (needs $KICAD_SRC_DIR); `fixtures=broken-symdir` a folder symbol library
 # `Broken.kicad_symdir` with a good file and a cut-off one (a library KiCad 10 loads with errors); `fixtures=cvpcb` e2e/cvpcb.equ as `cvpcb-check.equ` (a footprint
-# association file for cvpcb.check.js). Several are joined by commas. `fixtures=cvpcb` puts
+# association file for cvpcb.check.js); `fixtures=rescue-on-open` the mark `eda import-kicad` leaves for Rescue Symbols at the studio's opening. Several are joined by commas. `fixtures=cvpcb` puts
 # web/studio/e2e/cvpcb.equ (a footprint association file) in the board's folder as `cvpcb-check.equ`, for cvpcb.check.js.
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
@@ -289,6 +289,9 @@ run_one() { # run_one <check> <port>: prints the check's line; its logs are in $
                 mkdir -p "$r/board/Broken.kicad_symdir"
                 printf '(kicad_symbol_lib (version 20241209) (generator "eda")\n  (symbol "GoodPart" (property "Reference" "U" (at 0 0 0)) (property "Value" "GoodPart" (at 0 0 0)))\n)\n' > "$r/board/Broken.kicad_symdir/GoodPart.kicad_sym"
                 printf '(kicad_symbol_lib (version 20241209) (generator "eda")\n  (symbol "BadPart" (property "Reference" "U" (at 0 0 0)\n' > "$r/board/Broken.kicad_symdir/BadPart.kicad_sym" ;;
+            rescue-on-open)
+                # the mark `eda import-kicad` leaves on a KiCad 5 project with no cache library: the studio runs Rescue Symbols as it opens (sch-misc-v18.check.js)
+                printf 'RescueSymbolLibTableProject( false )\n' > "$r/board/.eda-rescue-on-open" ;;
             cvpcb)
                 # a footprint association file for cvpcb.check.js
                 cp "$e2e/cvpcb.equ" "$r/board/cvpcb-check.equ" || { printf 'FAIL %-22s %s is missing\n' "$c" "$e2e/cvpcb.equ"; return 1; } ;;
