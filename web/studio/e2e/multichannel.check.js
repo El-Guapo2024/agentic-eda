@@ -22,7 +22,7 @@
 //     placement, Copy routing, Copy other items, Include locked items);
 //   Apply Design Block Layout: a block saved from the laid-out channel is applied to the group of another channel linked to it: its footprints laid out as the block's, the copper and the other
 //     items of the block copied onto the group's nets and joined to the group, nothing of the board's own taken away, one undo step; a group with a locked footprint, or one whose
-//     footprints do not match the block's, is refused in KiCad's words.
+//     footprints do not match the block's, is refused in KiCad's words (the locked one in the info bar, as KiCad's warning).
 //
 // It answers through `window.__multichannelCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. A run takes about three minutes: read it with
 // `await __multichannelCheck.wait(20000)` (it returns when the run is done or the time is up; the Browser pane's javascript tool gives up after 45 s) until `.done`.
@@ -759,9 +759,12 @@
       const lockedSnap = await snapshot();
       let t0 = Date.now();
       await select([g2.id]);
-      await E.run("pcbnew.InteractiveDrawing.applyDesignBlockLayout");
+      const rl = await E.run("pcbnew.InteractiveDrawing.applyDesignBlockLayout");
       await sleep(1200);
-      t(errorsSince(t0).some((m) => /Footprint R3 is locked and cannot be placed\./.test(m)) && (await snapshot()) === lockedSnap, `a locked footprint is refused in KiCad's words, and nothing changes (${JSON.stringify(errorsSince(t0)).slice(0, 160)})`);
+      // KiCad says it in the info bar (`GetInfoBar()->ShowMessageFor( msg, 5000, wxICON_WARNING )`, pcb_control.cpp), a warning rather than an error toast (UI-LEFT-3 P3-32 follow-up)
+      const bar = document.querySelector('[data-testid="pcb-infobar"]');
+      const barText = document.querySelector('[data-testid="pcb-infobar-text"]')?.textContent ?? "";
+      t(/^Footprint R3 is locked and cannot be placed\.$/.test(barText) && bar?.getAttribute("data-kind") === "warning" && /Footprint R3 is locked and cannot be placed\./.test(rl.toast ?? "") && (await snapshot()) === lockedSnap, `a locked footprint is refused in KiCad's words, in the info bar as a warning, and nothing changes (${barText}; ${bar?.getAttribute("data-kind")}; ${rl.toast ?? rl.error})`);
       await undo(); // the lock
       await post({ op: "remove_from_group", ids: ["C2"] });
       t0 = Date.now();
