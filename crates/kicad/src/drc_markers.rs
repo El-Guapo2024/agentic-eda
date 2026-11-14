@@ -494,6 +494,12 @@ pub fn candidates(check: &str, main: &str, aux: &str, board: &BoardShapes, clear
                 out.extend(subshape_pairs(a, b, clearance.unwrap_or(0)));
                 out.extend(subshape_pairs(b, a, clearance.unwrap_or(0)));
             }
+            // a knockout text: its shape is its box less the text, whose triangles meet the other item on the box's sides or inside it
+            for (k, other) in [(main, aux), (aux, main)] {
+                if let (Some(bx), Some(o)) = (board.silk_knockouts.get(k), shapes(other)) {
+                    out.extend(knockout_pairs(bx, o));
+                }
+            }
         }
         "copper_sliver" => {
             for (layer, fills) in &board.fills_by_layer {
@@ -649,8 +655,34 @@ fn subshape_pairs(a: &[Copper], b: &[Copper], clearance: i64) -> Vec<[i64; 2]> {
     hits.into_iter().take(MAX_PAIRS).map(|h| h.1).collect()
 }
 
+/// A knockout text's box against another item's subshapes: its corners inside the item, the item's points inside the box, and where the item's segments
+/// cross the box's sides (`Collide( SHAPE_LINE_CHAIN_BASE, <item> )` of the triangles that hold the box's sides).
+fn knockout_pairs(bx: &[[i64; 2]; 4], other: &[Copper]) -> Vec<[i64; 2]> {
+    let mut out = Vec::new();
+    let sides_of = |pts: &[[i64; 2]]| sides(pts);
+    for o in other {
+        let parts = match o {
+            Copper::Compound(p) => p.clone(),
+            x => vec![x.clone()],
+        };
+        for p in parts {
+            out.extend(points_of(&p).into_iter().filter(|q| point_inside(bx, *q)));
+            if let Copper::Segment { a, b, .. } = p {
+                for s in sides_of(bx) {
+                    if let Some(x) = crate::drc_exclusions::seg_intersect(s, [a, b]) {
+                        out.push(x);
+                        out.push(seg_nearest_to_seg(s, [a, b]));
+                        out.push(seg_nearest_to_seg([a, b], s));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The most subshape pairs offered for one silkscreen finding.
-const MAX_PAIRS: usize = 128;
+const MAX_PAIRS: usize = 32;
 
 /// `zoneOutline->Collide( shape, 0, &actual, &pos )` of a keepout rule area's outline against an item (`DRC_TEST_PROVIDER_DISALLOW`): a track's
 /// `SquaredDistanceToSeg` -- the middle of the segment when both ends are inside (`containsSingle`, accuracy 1), else the nearest point of the side

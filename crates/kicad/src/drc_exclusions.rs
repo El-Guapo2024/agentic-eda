@@ -682,8 +682,10 @@ pub struct BoardShapes {
     /// (`FOOTPRINT::BuildCourtyardCaches`), each as the list of its corners on the board.
     pub courtyards: std::collections::HashMap<String, [Vec<Vec<[i64; 2]>>; 2]>,
     /// Each silkscreen graphic's subshapes by its uuid (`EDA_SHAPE::MakeEffectiveShapes`: a line's segment, a rectangle's or polygon's sides, a filled
-    /// one's `SHAPE_SIMPLE`), the board's and the footprints'.
+    /// one's `SHAPE_SIMPLE`; a text's glyph segments), the board's and the footprints'.
     pub silk: std::collections::HashMap<String, Vec<Copper>>,
+    /// Each knockout silkscreen text's box by its uuid (`PCB_TEXT::buildBoundingHull`): its shape is the box less the text.
+    pub silk_knockouts: std::collections::HashMap<String, [[i64; 2]; 4]>,
 }
 
 /// Where KiCad 25ec2335 puts the marker of `check` between the items `main` and `aux` (the report's order) of `board`:
@@ -704,10 +706,81 @@ pub fn marker_at(check: &str, main: &str, aux: &str, board: &BoardShapes) -> Opt
 
 /// [`BoardShapes`] of a `.kicad_pcb` text.
 pub fn board_shapes(pcb_text: &str) -> BoardShapes {
+    board_shapes_with(pcb_text, &BTreeMap::new())
+}
+
+/// [`board_shapes`] with the project's text variables (`text_variables` of the derived `.kicad_pro`), which a text's shown text resolves last
+/// (`BOARD::ResolveTextVar`: `PROJECT::TextVarResolver`).
+pub fn board_shapes_with(pcb_text: &str, project_vars: &BTreeMap<String, String>) -> BoardShapes {
     use crate::sexpr::{find, find_all, tag, txt};
     let mut shapes = BoardShapes::default();
     let Ok(tree) = crate::sexpr::parse(pcb_text) else { return shapes };
     let Some(top) = tree.as_list() else { return shapes };
+    // what a text's variables resolve to: the layers' user names (`GetLayerName`), the title block (`TITLE_BLOCK::TextVarResolver`), each footprint's fields
+    // by its reference (`${REF:FIELD}`), the project's variables
+    let mut layer_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Some(layers) = find(top, "layers") {
+        for l in layers.iter().skip(1).filter_map(|l| l.as_list()) {
+            if let Some(name) = txt(l, 1) {
+                layer_names.insert(name.to_string(), txt(l, 3).unwrap_or(name).to_string());
+            }
+        }
+    }
+    let mut title: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Some(tb) = find(top, "title_block") {
+        for e in tb.iter().skip(1).filter_map(|e| e.as_list()) {
+            match (tag(e), txt(e, 1), txt(e, 2)) {
+                (Some("title"), Some(v), _) => drop(title.insert("TITLE".into(), v.into())),
+                (Some("date"), Some(v), _) => drop(title.insert("ISSUE_DATE".into(), v.into())),
+                (Some("rev"), Some(v), _) => drop(title.insert("REVISION".into(), v.into())),
+                (Some("company"), Some(v), _) => drop(title.insert("COMPANY".into(), v.into())),
+                (Some("comment"), Some(n), Some(v)) => drop(title.insert(format!("COMMENT{n}"), v.into())),
+                _ => {}
+            }
+        }
+    }
+    let fields_of = |fp: &[crate::sexpr::Sexpr]| -> Vec<(String, String)> {
+        let mut f: Vec<(String, String)> = find_all(fp, "property").filter_map(|p| Some((txt(p, 1)?.to_string(), txt(p, 2)?.to_string()))).collect();
+        if let Some(lib) = txt(fp, 1) {
+            let (nick, name) = lib.split_once(':').unwrap_or(("", lib));
+            f.push(("FOOTPRINT_LIBRARY".into(), nick.into()));
+            f.push(("FOOTPRINT_NAME".into(), name.into()));
+        }
+        f
+    };
+    let by_reference: std::collections::HashMap<String, Vec<(String, String)>> = top
+        .iter()
+        .skip(1)
+        .filter_map(|i| i.as_list())
+        .filter(|l| tag(l) == Some("footprint"))
+        .filter_map(|l| {
+            let f = fields_of(l);
+            let r = f.iter().find(|(k, _)| k == "Reference")?.1.clone();
+            Some((r.to_lowercase(), f))
+        })
+        .collect();
+    let field = |fields: &[(String, String)], token: &str| -> Option<String> {
+        match token {
+            "REFERENCE" => fields.iter().find(|(k, _)| k == "Reference").map(|(_, v)| v.clone()),
+            "VALUE" => fields.iter().find(|(k, _)| k == "Value").map(|(_, v)| v.clone()),
+            _ => fields.iter().find(|(k, _)| k == token).map(|(_, v)| v.clone()),
+        }
+    };
+    let board_var = |token: &str| -> Option<String> {
+        if let Some((r, rest)) = token.split_once(':') {
+            return Some(match by_reference.get(&r.to_lowercase()) {
+                Some(f) => field(f, rest).unwrap_or_else(|| format!("<Unresolved: {r}:{rest}>")),
+                None => format!("<Unknown reference: {r}>"),
+            });
+        }
+        match token {
+            "FILENAME" => return Some("board.kicad_pcb".into()),
+            "PROJECTNAME" => return Some("board".into()),
+            _ => {}
+        }
+        title.get(token).cloned().or_else(|| project_vars.get(token).cloned())
+    };
+    let layer_var = |token: &str, layer: &str| -> Option<String> { (token == "LAYER").then(|| layer_names.get(layer).cloned().unwrap_or_else(|| layer.to_string())) };
     let out = &mut shapes.copper;
     let holes = &mut shapes.holes;
     let edges = &mut shapes.edges;
@@ -748,8 +821,11 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
                 }
             }
             Some("gr_text") => {
-                if let (Some(u), Some(parts)) = (uuid(l), silk_text(l, &|p| p, false)) {
-                    shapes.silk.insert(u, parts);
+                let resolve = |token: &str, layer: &str| layer_var(token, layer).or_else(|| board_var(token));
+                match (uuid(l), silk_text(l, &|p| p, false, &resolve)) {
+                    (Some(u), Some(SilkText::Strokes(parts))) => drop(shapes.silk.insert(u, parts)),
+                    (Some(u), Some(SilkText::Knockout(b))) => drop(shapes.silk_knockouts.insert(u, b)),
+                    _ => {}
                 }
             }
             Some("gr_line" | "gr_rect" | "gr_poly") if matches!(find(l, "layer").and_then(|y| txt(y, 1)), Some("F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen")) => {
@@ -804,8 +880,12 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
                     // a field or a text on the silkscreen: its glyph segments (`crate::stroke_text`), at the place the legacy loader puts it (`parsePCB_TEXT_effects`:
                     // the angle the file's, the position turned by the footprint and moved to it)
                     if matches!(tag(g), Some("property" | "fp_text")) {
-                        if let (Some(u), Some(parts)) = (uuid(g), silk_text(g, &place, true)) {
-                            shapes.silk.insert(u, parts);
+                        let fields = fields_of(l);
+                        let resolve = |token: &str, layer: &str| layer_var(token, layer).or_else(|| field(&fields, token)).or_else(|| board_var(token));
+                        match (uuid(g), silk_text(g, &place, true, &resolve)) {
+                            (Some(u), Some(SilkText::Strokes(parts))) => drop(shapes.silk.insert(u, parts)),
+                            (Some(u), Some(SilkText::Knockout(b))) => drop(shapes.silk_knockouts.insert(u, b)),
+                            _ => {}
                         }
                         continue;
                     }
@@ -953,16 +1033,20 @@ fn chain_courtyard(parts: Vec<Vec<[i64; 2]>>) -> Vec<Vec<[i64; 2]>> {
         .collect()
 }
 
-/// A silkscreen text's effective shape (`PCB_TEXT::GetEffectiveShape`, `EDA_TEXT::GetEffectiveTextShape`): its glyph segments as wide as its pen
-/// ([`crate::stroke_text`]). `None` for a text off the silkscreen, hidden, a knockout, in another font, or one the port does not draw. `place` takes a
-/// footprint's text from its frame to the board's; `in_footprint` keeps it upright (`GetDrawRotation`).
-fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in_footprint: bool) -> Option<Vec<Copper>> {
+/// A silkscreen text's effective shape (`PCB_TEXT::GetEffectiveShape`): its glyph segments as wide as its pen (`EDA_TEXT::GetEffectiveTextShape`,
+/// [`crate::stroke_text`]), or for a knockout text its box ([`crate::stroke_text::knockout_box`], the shape being the box less the text). The shown text is
+/// `GetShownText`'s: `resolve` is the text's resolver (`PCB_TEXT::GetShownText`: `LAYER`, its footprint's, the board's). `None` for a text off the
+/// silkscreen, hidden, in an outline font, or one the port does not draw. `place` takes a footprint's text from its frame to the board's; `in_footprint`
+/// keeps it upright (`GetDrawRotation`).
+fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in_footprint: bool, resolve: &dyn Fn(&str, &str) -> Option<String>) -> Option<SilkText> {
     use crate::sexpr::{find, tag, txt};
     let nm = |t: Option<&str>| -> Option<i64> { t.and_then(|v| v.parse::<f64>().ok()).map(|mm| (mm * 1_000_000.0).round() as i64) };
     let layer = find(g, "layer")?;
-    if !matches!(txt(layer, 1), Some("F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen")) || layer.iter().skip(2).any(|t| t.text() == Some("knockout")) || find(layer, "knockout").is_some() {
+    let layer_name = txt(layer, 1)?;
+    if !matches!(layer_name, "F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen") {
         return None;
     }
+    let knockout = layer.iter().skip(2).any(|t| t.text() == Some("knockout")) || find(layer, "knockout").is_some_and(|k| txt(k, 1).is_none_or(|v| v == "yes"));
     let yes = |l: Option<&[crate::sexpr::Sexpr]>| l.is_some_and(|l| txt(l, 1).is_none_or(|v| v == "yes"));
     let bare = |l: &[crate::sexpr::Sexpr], word: &str| l.iter().any(|t| t.text() == Some(word));
     let effects = find(g, "effects")?;
@@ -974,6 +1058,7 @@ fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in
         Some("fp_text") => txt(g, 2)?,
         _ => txt(g, 1)?,
     };
+    let shown = crate::stroke_text::expand_vars(text, &|token| resolve(token, layer_name));
     let at = find(g, "at")?;
     let local = [nm(txt(at, 1))?, nm(txt(at, 2))?];
     let angle = txt(at, 3).and_then(|a| a.parse::<f64>().ok()).unwrap_or(0.0);
@@ -985,10 +1070,11 @@ fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in
     let size = find(font, "size")?;
     let (h, w) = (nm(txt(size, 1))?, nm(txt(size, 2))?);
     let thickness = find(font, "thickness").and_then(|t| nm(txt(t, 1))).unwrap_or(0);
+    let line_spacing = find(font, "line_spacing").and_then(|t| txt(t, 1)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
     let justify = find(effects, "justify");
     let has = |word: &str| justify.is_some_and(|j| bare(j, word));
     let shape = crate::stroke_text::TextShape {
-        text: text.to_string(),
+        text: shown,
         pos: place(local),
         size: [w, h],
         thickness,
@@ -998,9 +1084,19 @@ fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in
         bold: yes(find(font, "bold")) || bare(font, "bold"),
         h_align: if has("left") { -1 } else if has("right") { 1 } else { 0 },
         v_align: if has("top") { -1 } else if has("bottom") { 1 } else { 0 },
+        line_spacing,
     };
+    if knockout {
+        return crate::stroke_text::knockout_box(&shape, CHAMFER_MAX_ERROR).map(SilkText::Knockout);
+    }
     let pen = crate::stroke_text::pen_width(&shape);
-    Some(crate::stroke_text::segments(&shape)?.into_iter().map(|[a, b]| Copper::Segment { a, b, width: pen }).collect())
+    Some(SilkText::Strokes(crate::stroke_text::segments(&shape)?.into_iter().map(|[a, b]| Copper::Segment { a, b, width: pen }).collect()))
+}
+
+/// What [`silk_text`] gives: a text's glyph segments, or a knockout text's box.
+enum SilkText {
+    Strokes(Vec<Copper>),
+    Knockout([[i64; 2]; 4]),
 }
 
 /// `ConvertOutlineToPolygon`'s chaining: closed rectangles and polygons as they are, lines end to end into the outlines they close.
