@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { boardDimensionStyle, crossbarOf, dimensionEditPoints, dimensionPointAt, moveDimensionPoint, textAfterCrossbarChange } from "./dimensionDraw";
+import { boardDimensionStyle, crossbarOf, dimensionEditPoints, dimensionPointAt, justifyAfterCrossbarChange, moveDimensionPoint, showDrawingLayerOp, textAfterCrossbarChange } from "./dimensionDraw";
 import { fpDimensionClick, fpDimensionMotion, fpNewDimension } from "./fpDrawTools";
+import { layerStateKey } from "./layerPresets";
 import type { BoardState, CmdDimension, Dimension, DimensionSettings } from "../api/types";
 
 const MM = 1_000_000;
@@ -154,6 +155,30 @@ test("a text placed by hand follows the crossbar (DIM_ALIGNED_TEXT_UPDATER): ove
   const manual = display({ ...aligned(-2 * MM), text_position: "manual", text_pos: { x: 5 * MM, y: -3 * MM } });
   const longer = moveDimensionPoint(manual, "end", [40 * MM, 0]);
   assert.deepEqual(longer.text_pos, { x: 10 * MM, y: -3 * MM });
+});
+
+test("a left- or right-justified label flips its justification when its text passes to the other side of the crossbar's end (DIM_ALIGNED_TEXT_UPDATER, UI-LEFT-3 P3-12)", () => {
+  const old: [[number, number], [number, number]] = [[0, 0], [20 * MM, 0]];
+  const now: [[number, number], [number, number]] = [[0, 0], [-20 * MM, 0]];
+  // 2 mm past the end on the right; the crossbar turned round: 2 mm past its end on the left
+  const moved = textAfterCrossbarChange([22 * MM, 0], old, now);
+  assert.deepEqual(moved, [-22 * MM, 0]);
+  assert.equal(justifyAfterCrossbarChange("left", [22 * MM, 0], old, moved, now), "right");
+  assert.equal(justifyAfterCrossbarChange("right", [22 * MM, 0], old, moved, now), "left");
+  assert.equal(justifyAfterCrossbarChange("center", [22 * MM, 0], old, moved, now), "center", "a centred label has nothing to flip");
+  // over the crossbar before and after: no flip
+  assert.equal(justifyAfterCrossbarChange("left", [5 * MM, -1 * MM], old, [10 * MM, -1 * MM], [[0, 0], [40 * MM, 0]]), "left");
+  // through the point editor: the end dragged across the start, a manual text placed past the end
+  const manual = display({ ...aligned(-2 * MM), text_position: "manual", text_pos: { x: 22 * MM, y: -2 * MM } }, { h_justify: "left", text_effects: { h_justify: "left" } });
+  const across = moveDimensionPoint(manual, "end", [-20 * MM, 0]);
+  assert.equal(across.text_effects?.h_justify, "right");
+  assert.equal(moveDimensionPoint(manual, "end", [30 * MM, 0]).text_effects?.h_justify, "left", "still past the same end");
+});
+
+test("Draw Dimension shows a hidden layer it draws on (DrawDimension's SetLayerVisible, UI-LEFT-3 P3-12)", () => {
+  const key = layerStateKey("Cmts.User");
+  assert.deepEqual(showDrawingLayerOp({ [key]: false }, "Cmts.User"), { op: "layer", key, visible: true });
+  assert.equal(showDrawingLayerOp({ [key]: true }, "Cmts.User"), null);
 });
 
 test("an orthogonal dimension's crossbar end turns it when it leaves the box; a radial one's knee sets the leader length and moves the text; a leader's text keeps to 45 degrees", () => {

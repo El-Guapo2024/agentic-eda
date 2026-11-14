@@ -93,7 +93,7 @@ import type { MenuNode } from "../../kicad/types";
 import { findNearestContourCorner, flatVertices, moveContourCorner, zoneContours, zoneOutlineCmd } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { fpDimensionClick, fpDimensionHeightOffGrid, fpDimensionMotion, fpDimensionOnLayer } from "../../kicad-port/fpDrawTools";
-import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPointId } from "../../kicad-port/dimensionDraw";
+import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, showDrawingLayerOp, type DimPointId } from "../../kicad-port/dimensionDraw";
 import { imagePointAt, imagePointCmds, moveImagePoint, type ImagePointId } from "../../kicad-port/refImagePointEdit";
 import { toCmdDimension } from "../../kicad-port/dimensionConvert";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
@@ -290,6 +290,9 @@ export function Canvas() {
     if (!draw?.dim || state.activeTool !== "dimension") return;
     const layer = activeLayerName(state.activeLayer, "Dwgs.User");
     if (draw.dim.dim.layer === layer) return;
+    // a hidden layer is shown (`GetAppearancePanel()->SetLayerVisible( layer, true )`, UI-LEFT-3 P3-12)
+    const show = showDrawingLayerOp(state.layerVisible, layer);
+    if (show) dispatch({ type: "APPEARANCE", op: show });
     dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, dim: { ...draw.dim, dim: fpDimensionOnLayer(draw.dim.dim, layer, boardDimensionStyle(state.board)) } } });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.activeLayer]);
@@ -1072,6 +1075,11 @@ export function Canvas() {
         const kind = draw?.dim?.kind ?? state.nextDimensionKind;
         if (!draw?.dim) dispatch({ type: "SET_SELECTION", refs: [] });
         const r = fpDimensionClick(draw?.dim ?? null, kind, activeLayerName(state.activeLayer, "Dwgs.User"), [sx, sy], leaderModeOf(state.pcbx.angleSnapMode, snapMods(e).ctrl) !== "direct", boardDimensionStyle(board));
+        // SET_ORIGIN: the dimension's layer is shown if it was hidden (`SetLayerVisible( layer, true )`, UI-LEFT-3 P3-12)
+        if (!draw?.dim && r.draw) {
+          const show = showDrawingLayerOp(state.layerVisible, r.draw.dim.layer);
+          if (show) dispatch({ type: "APPEARANCE", op: show });
+        }
         dispatch({ type: "SET_DRAW_STATE", draw: r.draw ? { kind: "dimension", pts: [[r.draw.dim.start.x, r.draw.dim.start.y]], dim: r.draw } : null });
         if (r.draw) requestDimPreview(r.draw.dim, null);
         else setDimPreview(null);

@@ -10,11 +10,13 @@
 //                                                          or orthogonal dimension, is placed by hand from then on (`DIM_TEXT_POSITION::MANUAL`)
 //
 // The geometry of a dimension is the server's (`POST /api/dimension/preview`, `eda_connectivity::dimension`); this module needs only the crossbar of an aligned
-// or orthogonal one, which `DIM_ALIGNED_TEXT_UPDATER` compares before and after a change. Not ported: the text justification flip of a left- or right-justified
-// text that passes the crossbar's middle (the IR has no justification for a dimension's text, it is always centred).
+// or orthogonal one, which `DIM_ALIGNED_TEXT_UPDATER` compares before and after a change -- the text's new place and, for a left- or right-justified label,
+// the flip of its justification when the text passes to the other side of the crossbar's end (UI-LEFT-3 P3-12).
 //
 // Pure: no store, no DOM. Unit-tested in dimensionDraw.test.ts.
-import type { BoardState, CmdDimension, Dimension } from "../api/types";
+import type { BoardState, CmdDimension, Dimension, TextJustify } from "../api/types";
+import type { AppearanceOp } from "./appearanceOps";
+import { layerIsVisible, layerStateKey } from "./layerPresets";
 import { toCmdDimension } from "./dimensionConvert";
 import { FP_DIMENSION_DEFAULTS, radialKnee, type DimensionEditorStyle } from "./fpDrawTools";
 import { snapVector45 } from "./polygonGeom";
@@ -175,6 +177,31 @@ export function textAfterCrossbarChange(text: P, old: [P, P], now: [P, P]): P {
   return add(along, across);
 }
 
+/** `SEG::LineProject`: `p` projected on the line through the segment (`rescale` rounds); the start when the segment has no length. */
+function lineProject(a: P, b: P, p: P): P {
+  const d = sub(b, a);
+  const l2 = d[0] * d[0] + d[1] * d[1];
+  if (l2 === 0) return a;
+  const t = d[0] * (p[0] - a[0]) + d[1] * (p[1] - a[1]);
+  return [kiRound((t * d[0]) / l2) + a[0], kiRound((t * d[1]) / l2) + a[1]];
+}
+
+/**
+ * `DIM_ALIGNED_TEXT_UPDATER::UpdateTextAfterChange`'s justification: a left- or right-justified label whose text was beyond one end of the crossbar ("left of":
+ * the projection's offset from the segment points to -x, or along +y when it is vertical) and no longer is, or the other way round, swaps left and right
+ * ("Flip whatever the user had set"). A centred label, or a crossbar that did not change, keeps its justification.
+ */
+export function justifyAfterCrossbarChange(justify: TextJustify, text: P, old: [P, P], newText: P, now: [P, P]): TextJustify {
+  if (justify !== "left" && justify !== "right") return justify;
+  if (old[0][0] === now[0][0] && old[0][1] === now[0][1] && old[1][0] === now[1][0] && old[1][1] === now[1][1]) return justify;
+  const leftOf = (seg: [P, P], at: P): boolean => {
+    const project = lineProject(seg[0], seg[1], at);
+    const off = sub(project, nearestOnSeg(seg[0], seg[1], project).pt);
+    return off[0] < 0 || (off[0] === 0 && off[1] > 0);
+  };
+  return leftOf(old, text) !== leftOf(now, newText) ? (justify === "left" ? "right" : "left") : justify;
+}
+
 /** `EC_LINE`: `p` projected on the line through `through` along `dir` (`projection.IntersectLines( main )`); `p` as it is when the line has no direction. */
 function onLine(p: P, through: P, dir: P): P {
   const l2 = dir[0] * dir[0] + dir[1] * dir[1];
@@ -250,9 +277,17 @@ export function moveDimensionPoint(d: Dimension, id: DimPointId, pos: P): CmdDim
     } else if (id === "end") {
       cmd.end = xy(pos);
     }
-    // `textPositionUpdater.UpdateTextAfterChange()`: only a text placed by hand keeps a place of its own to move.
+    // `textPositionUpdater.UpdateTextAfterChange()`: only a text placed by hand keeps a place of its own to move (`Update()` places the others again); a left- or
+    // right-justified label of any mode flips its justification when its text passes the crossbar's end (UI-LEFT-3 P3-12).
     const after = crossbarOf(cmd);
-    if (cmd.text_position === "manual" && before && after) cmd.text_pos = xy(textAfterCrossbarChange(cmd.text_pos ? [cmd.text_pos.x, cmd.text_pos.y] : textNow, before, after));
+    if (before && after) {
+      const original: P = cmd.text_position === "manual" && cmd.text_pos ? [cmd.text_pos.x, cmd.text_pos.y] : textNow;
+      const moved = textAfterCrossbarChange(original, before, after);
+      if (cmd.text_position === "manual") cmd.text_pos = xy(moved);
+      const justify = cmd.text_effects?.h_justify ?? d.h_justify ?? "center";
+      const flipped = justifyAfterCrossbarChange(justify, original, before, moved, after);
+      if (flipped !== justify) cmd.text_effects = { ...(cmd.text_effects ?? {}), h_justify: flipped };
+    }
     return cmd;
   }
   if (k.kind === "center") {
@@ -291,4 +326,12 @@ export function moveDimensionPoint(d: Dimension, id: DimPointId, pos: P): CmdDim
     cmd.text_pos = xy(on45(pos, e));
   }
   return cmd;
+}
+
+/**
+ * `DRAWING_TOOL::DrawDimension`: at SET_ORIGIN and at a `layerChanged` while drawing, a layer that is hidden is shown (`GetAppearancePanel()->SetLayerVisible( layer,
+ * true )`); the Appearance panel's op that does it, null when the layer is shown already (UI-LEFT-3 P3-12).
+ */
+export function showDrawingLayerOp(layerVisible: Readonly<Record<string, boolean>>, layer: string): AppearanceOp | null {
+  return layerIsVisible(layerVisible, layer) ? null : { op: "layer", key: layerStateKey(layer), visible: true };
 }
