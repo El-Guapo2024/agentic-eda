@@ -5407,14 +5407,22 @@ impl LibrarySymbol {
                     .collect(),
                 // the shapes' fills and looks, and the private ones (`LibrarySymbolKeep::graphic_looks`, `stroke_types`), PARITY-sch §87
                 shape_looks: self.graphics.iter().filter(|g| g.body_style() <= 1 || (self.is_multi_body_style() && g.body_style() == 2)).filter_map(|g| self.shape_look(g)).collect(),
+                // the texts' justification, face, colour, pen and hidden flag (UI-LEFT-3 S3-5), of the body styles its graphics are taken from
+                text_looks: self.graphics.iter().filter(|g| g.body_style() <= 1 || (self.is_multi_body_style() && g.body_style() <= self.body_style_count())).filter_map(|g| self.text_look(g)).collect(),
                 field_looks: self.kicad.field_looks.clone(),
             },
         }
     }
 
-    /// The look of a shape of the symbol as a placed symbol keeps it ([`crate::symbol::LibConnectivity::shape_looks`]); `None` for a text, a text box and a shape
-    /// of no fill and no look of its own.
+    /// The look of a shape of the symbol as a placed symbol keeps it ([`crate::symbol::LibConnectivity::shape_looks`]); `None` for a text and a shape of no fill
+    /// and no look of its own. A text box's is that of its border and fill (the rectangle [`LibrarySymbolGraphic::to_engine_graphics`] makes of it): its fill, line
+    /// style and border and fill colours (UI-LEFT-3 S3-8), which a placed symbol draws the box with (`SCH_PAINTER::draw( SCH_TEXTBOX )`) and the cache writes.
     fn shape_look(&self, g: &LibrarySymbolGraphic) -> Option<crate::symbol::ShapeLook> {
+        if let LibrarySymbolGraphic::TextBox { fill, stroke_color, fill_color, .. } = g {
+            let graphic = g.to_engine_graphics().into_iter().next()?;
+            let looks = crate::lib_keep::KeptGraphicLooks { stroke_color: *stroke_color, fill_color: *fill_color, ..Default::default() };
+            return crate::symbol::ShapeLook::of(graphic, 0, *fill, self.kicad.stroke_types.get(g.id()).cloned(), looks);
+        }
         let fill = match g {
             LibrarySymbolGraphic::Rectangle { fill, .. } | LibrarySymbolGraphic::Polyline { fill, .. } | LibrarySymbolGraphic::Circle { fill, .. } | LibrarySymbolGraphic::Arc { fill, .. } | LibrarySymbolGraphic::Bezier { fill, .. } => *fill,
             _ => return None,
@@ -5423,6 +5431,16 @@ impl LibrarySymbol {
         let looks = self.kicad.graphic_looks.get(g.id()).cloned().unwrap_or_default();
         let style = if self.is_private_shape(g) { if self.is_multi_body_style() { g.body_style() } else { 0 } } else { 0 };
         crate::symbol::ShapeLook::of(graphic, style, fill, self.kicad.stroke_types.get(g.id()).cloned(), looks)
+    }
+
+    /// The look of a text of the symbol as a placed symbol keeps it ([`crate::symbol::LibConnectivity::text_looks`]): its justification, bold, italic, face and
+    /// colour, with the pen and the hidden flag the file gave it (`LibrarySymbolKeep::text_styles`); `None` for anything but a text drawn on a sheet and for a
+    /// text of no look of its own.
+    fn text_look(&self, g: &LibrarySymbolGraphic) -> Option<crate::symbol::TextLook> {
+        let LibrarySymbolGraphic::Text { h_align, v_align, bold, italic, font, text_color, private: false, .. } = g else { return None };
+        let graphic = g.to_engine_graphics().into_iter().next()?;
+        let kept = self.kicad.text_styles.get(g.id());
+        crate::symbol::TextLook::of(graphic, *h_align, *v_align, *bold || kept.is_some_and(|k| k.bold), *italic || kept.is_some_and(|k| k.italic), font.clone(), *text_color, kept.and_then(|k| k.thickness_mm), kept.is_some_and(|k| k.hidden))
     }
 
     /// Assign a deterministic id to every pin/graphic whose `id` is still

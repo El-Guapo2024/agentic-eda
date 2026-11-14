@@ -337,9 +337,28 @@ pub(crate) fn connectivity_of(node: &[Sexpr]) -> eda_model::symbol::LibConnectiv
             .filter(|(_, (_, style))| *style <= 2)
             .flat_map(|(sub, (unit, style))| sub_symbol_looks(sub, unit, style))
             .collect(),
+        // the texts' justification, face, colour, pen and hidden flag (UI-LEFT-3 S3-5), of the body styles a symbol is drawn in
+        text_looks: sexpr::find_all(node, "symbol")
+            .filter_map(|sub| sexpr::txt(sub, 1).map(|n| (sub, unit_and_style_of_subname(n))))
+            .filter(|(_, (_, style))| *style <= declared_body_styles(node).map_or(2, |n| if n.is_empty() { 2 } else { n.len() as u32 }))
+            .flat_map(|(sub, (unit, _))| sub_symbol_text_looks(sub, unit))
+            .collect(),
         field_looks: field_looks_of(node),
         ..Default::default()
     }
+}
+
+/// The looks of the texts of one `(symbol "Name_<unit>_<style>" ...)` sub-block ([`eda_model::symbol::TextLook`], UI-LEFT-3 S3-5), each with the text
+/// [`sub_symbol_items`] reads of it; a private text is drawn on no sheet and has none.
+fn sub_symbol_text_looks(sub: &[Sexpr], unit: u32) -> Vec<eda_model::symbol::TextLook> {
+    sexpr::find_all(sub, "text")
+        .filter(|t| !matches!(t.get(1), Some(Sexpr::Atom(a)) if a == "private"))
+        .filter_map(|t| {
+            let wrapped = [Sexpr::List(t.to_vec())];
+            let graphic = sub_symbol_items(&wrapped, unit).0.into_iter().next()?;
+            crate::symbol_import::text_look(t, graphic)
+        })
+        .collect()
 }
 
 /// What one symbol's raw node draws: the normal body style (the `Name_<unit>_0` sub-blocks every style shares and the `Name_<unit>_1` ones), the second one
@@ -428,6 +447,15 @@ fn sub_symbol_looks(sub: &[Sexpr], unit: u32, style: u32) -> Vec<eda_model::symb
             let body_style = if looks.private { style } else { 0 };
             out.extend(eda_model::symbol::ShapeLook::of(graphic, body_style, crate::symbol_import::fill_of(item), crate::symbol_import::stroke_type(item), looks));
         }
+    }
+    // a text box's border and fill (the rectangle `sub_symbol_items` draws it with): its fill, line style and border and fill colours (`parseSymbolTextBox`, UI-LEFT-3
+    // S3-8); a private one is drawn on no sheet
+    for item in sexpr::find_all(sub, "text_box").filter(|t| !matches!(t.get(1), Some(Sexpr::Atom(a)) if a == "private")) {
+        let wrapped = [Sexpr::List(item.to_vec())];
+        let Some(graphic) = sub_symbol_items(&wrapped, unit).0.into_iter().next() else { continue };
+        let Some(eda_model::ir::LibrarySymbolGraphic::TextBox { fill, stroke_color, fill_color, .. }) = crate::symbol_import::text_box(item, unit, style) else { continue };
+        let looks = eda_model::lib_keep::KeptGraphicLooks { stroke_color, fill_color, ..Default::default() };
+        out.extend(eda_model::symbol::ShapeLook::of(graphic, 0, fill, crate::symbol_import::stroke_type(item), looks));
     }
     out
 }

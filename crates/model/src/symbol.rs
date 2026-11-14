@@ -319,6 +319,12 @@ pub struct LibConnectivity {
     /// [`Self::text_boxes`] are, so `SymbolGraphic`'s literals stay as they are. Only a shape with a fill or a look of its own has an entry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shape_looks: Vec<ShapeLook>,
+    /// What the symbol's texts have beyond a [`SymbolGraphic::Text`]'s members (UI-LEFT-3 S3-5): the justification, bold and italic, the face, the colour, the pen
+    /// and the hidden flag (`EDA_TEXT::Format`'s `(effects (font (face ..) (size ..) (thickness ..) bold italic (color ..)) (justify ..) (hide yes))`), which a placed
+    /// symbol draws its texts with (`SCH_PAINTER::draw( SCH_TEXT )` of the temp copy) and the schematic's cache writes. Each by the text as [`LibSymbol::graphics`] (or an
+    /// alternate body) holds it; kept here, as [`Self::shape_looks`] are, so `SymbolGraphic`'s literals stay as they are. Only a text with a look of its own has an entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_looks: Vec<TextLook>,
     /// The library symbol's fields' face, colour and pen (`EDA_TEXT::Format`'s `(face ..)`, `(thickness ..)`, `(color ..)` in a field's `(effects (font ..))`),
     /// by the field's name: the schematic's cache writes them, and a placed symbol's field has them as placing it copied them (`SCH_SYMBOL::SCH_SYMBOL( const
     /// LIB_SYMBOL& .. )`: every field of the library symbol), unless Symbol Properties gave it its own (`SchExtras::field_looks`).
@@ -357,6 +363,51 @@ pub struct ShapeLook {
     pub looks: crate::lib_keep::KeptGraphicLooks,
 }
 
+/// See [`LibConnectivity::text_looks`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextLook {
+    /// The text, as [`LibSymbol::graphics`] (or the alternate body's) holds it.
+    pub graphic: SymbolGraphic,
+    #[serde(default, skip_serializing_if = "is_center_h")]
+    pub h_align: crate::sym_fields::FieldHAlign,
+    #[serde(default, skip_serializing_if = "is_center_v")]
+    pub v_align: crate::sym_fields::FieldVAlign,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    /// The face (`(font (face ..))`); `None` is the default font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    /// The colour (`EDA_TEXT::GetTextColor`); `None` is `COLOR4D::UNSPECIFIED`, `LAYER_DEVICE`'s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<crate::sch_extras::SchColor>,
+    /// The pen, mm (`(thickness ..)`); `None` is the automatic one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness_mm: Option<f64>,
+    /// `(hide yes)`: drawn only with Show Hidden Fields, in the hidden colour (`SCH_PAINTER::draw( SCH_TEXT )`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+fn is_center_h(a: &crate::sym_fields::FieldHAlign) -> bool {
+    *a == crate::sym_fields::FieldHAlign::Center
+}
+
+fn is_center_v(a: &crate::sym_fields::FieldVAlign) -> bool {
+    *a == crate::sym_fields::FieldVAlign::Center
+}
+
+impl TextLook {
+    /// The look of a text: `None` for one of no look of its own (centred, plain, the default face, colour and pen, shown), which needs no entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn of(graphic: SymbolGraphic, h_align: crate::sym_fields::FieldHAlign, v_align: crate::sym_fields::FieldVAlign, bold: bool, italic: bool, font: Option<String>, text_color: Option<crate::sch_extras::SchColor>, thickness_mm: Option<f64>, hidden: bool) -> Option<TextLook> {
+        let l = TextLook { graphic, h_align, v_align, bold, italic, font: font.filter(|f| !f.is_empty()), text_color, thickness_mm, hidden };
+        (!is_center_h(&l.h_align) || !is_center_v(&l.v_align) || l.bold || l.italic || l.font.is_some() || l.text_color.is_some() || l.thickness_mm.is_some() || l.hidden).then_some(l)
+    }
+}
+
 fn is_zero_style(s: &u32) -> bool {
     *s == 0
 }
@@ -377,6 +428,11 @@ impl LibConnectivity {
     /// The look of the drawn shape `g` (not a private one), if it has one.
     pub fn shape_look(&self, g: &SymbolGraphic) -> Option<&ShapeLook> {
         self.shape_looks.iter().find(|l| !l.looks.private && l.graphic == *g)
+    }
+
+    /// The look of the text `g`, if it has one.
+    pub fn text_look(&self, g: &SymbolGraphic) -> Option<&TextLook> {
+        self.text_looks.iter().find(|l| l.graphic == *g)
     }
 
     /// The shapes private to the Symbol Editor of unit `unit` that a symbol in body style `style` has.
