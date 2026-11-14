@@ -574,6 +574,86 @@ pub fn plan_net_back_annotation(design: &Design, model: &ConstraintModel, board_
     planner.out
 }
 
+impl crate::Board<'_> {
+    /// [`Cmd::CarrySymbolFields`]: `BACK_ANNOTATE::applyChangelist` with "Other fields" (`m_processOtherFields`, KiCad 8303b2ad `eeschema/tools/backannotate.cpp`) for
+    /// the symbol `id`, from the fields `fields` of its footprint (`PCB_EDIT_FRAME::KiwayMailIn`'s `MAIL_PCB_GET_NETLIST`: `fields[ field->GetCanonicalName() ] =
+    /// field->GetText()`), on every sheet the symbol is on (its units share them):
+    ///
+    /// 1. "Existing fields has changed value": a field of that name that names no variable (`HasTextVars`) and shows another text takes the footprint's
+    ///    (`symField->SetText( fpFieldValue )`); Reference and Value are passed over ("Skip fields that are individually controlled");
+    /// 2. "New field has been added to footprint": a name the symbol has no field of is added with the text, hidden at the symbol (`newField.SetVisible( false )`,
+    ///    `SetTextPos( symbol->GetPosition() )`: the studio's user field with no placement, which is hidden at the symbol's origin);
+    /// 3. "Existing field has been deleted from footprint": a field of the symbol that is not mandatory and that the footprint has not is removed, with its places
+    ///    and the variants' texts of it (`symbol->RemoveField( fieldName )`).
+    ///
+    /// A footprint field named like a mandatory one the footprint does not have (Footprint) is a field of the symbol's like any other, as `GetField( name )` finds it.
+    pub(crate) fn carry_symbol_fields(&mut self, id: &str, fields: &BTreeMap<String, String>) -> Result<(), Vec<eda_model::CheckResult>> {
+        use eda_model::sym_fields::is_mandatory_field;
+        let fail = |m: &str| vec![eda_model::CheckResult::fail("ops_unknown_item", id, m.to_string())];
+        if self.design.schematic.is_none() {
+            return Err(vec![eda_model::CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")]);
+        }
+        let model = self.model;
+        let mut found = false;
+        let screens = self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut()));
+        for sch in screens {
+            let Some(first) = sch.symbols.iter().position(|s| s.id == id) else { continue };
+            found = true;
+            for (name, text) in fields {
+                if name == "Reference" || name == "Value" {
+                    continue;
+                }
+                let sym = sch.symbols[first].clone();
+                match name.as_str() {
+                    "Datasheet" => {
+                        if !eda_model::text_vars::has_text_vars(&sym.datasheet) && sym.datasheet != *text {
+                            for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
+                                s.datasheet = text.clone();
+                            }
+                        }
+                    }
+                    "Footprint" => {
+                        let now = eda_model::footprint::symbol_footprint_field(&sym, model.part(id));
+                        if !eda_model::text_vars::has_text_vars(&now) && now != *text {
+                            for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
+                                s.set_footprint(text);
+                            }
+                        }
+                    }
+                    other => {
+                        let own = sch.user_fields.get(id).and_then(|m| m.get(other)).cloned();
+                        // the Description a symbol shows without one of its own is its library symbol's (`UpdateFields`): a field it has
+                        let shown = own.clone().or_else(|| (other == "Description").then(|| model.part(id).and_then(|p| model.real_symbol_of(&sym.lib_id, p)).map(|l| l.description).unwrap_or_default()));
+                        match shown {
+                            Some(now) if eda_model::text_vars::has_text_vars(&now) || now == *text => {}
+                            // 1. and 2.: the text set, or the field added (hidden: a user field with no placement is)
+                            _ => {
+                                sch.user_fields.entry(id.to_string()).or_default().insert(other.to_string(), text.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            // 3.
+            let gone: Vec<String> = sch.user_fields.get(id).map(|m| m.keys().filter(|n| !is_mandatory_field(n) && !fields.contains_key(*n)).cloned().collect()).unwrap_or_default();
+            for name in gone {
+                if let Some(m) = sch.user_fields.get_mut(id) {
+                    m.remove(&name);
+                }
+                crate::sch_fields::drop_field_placements(sch, &[id.to_string()], &name);
+                eda_model::variants::rename_field(sch, Some(id), &name, None);
+            }
+            if sch.user_fields.get(id).is_some_and(|m| m.is_empty()) {
+                sch.user_fields.remove(id);
+            }
+        }
+        if !found {
+            return Err(fail("no symbol with this reference"));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[path = "back_annotate_tests.rs"]
 mod tests;

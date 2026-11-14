@@ -1568,6 +1568,13 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                 if e.allow_soldermask_bridges {
                     p["allow_soldermask_bridges"] = json!(true);
                 }
+                // Footprint Properties' "Jumper groups:" (`GetDuplicatePadNumbersAreJumpers`, `JumperPadGroups`, UI-LEFT-3 P3-14): the record's tokens, absent when none
+                let mut tokens = e.tokens.clone();
+                let mut settings = eda_model::fp_settings::FootprintSettings::default();
+                settings.absorb_kept(&mut tokens);
+                if settings.duplicate_pad_numbers_are_jumpers || !settings.jumper_pad_groups.is_empty() {
+                    p["jumpers"] = json!({ "duplicates": settings.duplicate_pad_numbers_are_jumpers, "groups": settings.jumper_pad_groups });
+                }
             }
             // The schematic symbol's Datasheet and Description, which Footprint Properties carries an edit of the footprint's to (Update Schematic from PCB's
             // "Other fields", UI-LEFT-2 PP18); absent when no symbol is for the footprint.
@@ -1575,7 +1582,15 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
             let shown = if design.schematic.is_some() { Some(&design) } else { derived_sch.get_or_init(|| board::derived_schematic(&design, &model).ok()).as_ref() };
             let symbol_field = |name: &str| shown.and_then(|d| eda_ops::fields_table::symbol_field_text(d, &model, &part.reference, name));
             if let (Some(datasheet), Some(description)) = (symbol_field("Datasheet"), symbol_field("Description")) {
-                p["symbol_fields"] = json!({ "Datasheet": datasheet, "Description": description });
+                // and its user fields (Update Schematic from PCB's "Other fields" adds, sets and deletes them too, UI-LEFT-3 P3-14), as stored (a `${..}` kept)
+                let mut fields: serde_json::Map<String, Value> = shown
+                    .and_then(|d| d.schematic.iter().chain(d.sheet_contents.iter().flat_map(|c| c.values())).find(|sch| sch.symbols.iter().any(|s| s.id == part.reference)))
+                    .and_then(|sch| sch.user_fields.get(&part.reference))
+                    .map(|m| m.iter().map(|(k, v)| (k.clone(), json!(v))).collect())
+                    .unwrap_or_default();
+                fields.insert("Datasheet".into(), json!(datasheet));
+                fields.insert("Description".into(), json!(description));
+                p["symbol_fields"] = Value::Object(fields);
             }
         }
         parts.push(p);

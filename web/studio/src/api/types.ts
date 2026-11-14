@@ -390,9 +390,12 @@ export interface Part {
    *  (UI-LEFT-2 PP18). */
   mask_margin?: Nm;
   allow_soldermask_bridges?: boolean;
-  /** The schematic symbol's Datasheet and Description, which Footprint Properties carries an edit of the footprint's to (Update Schematic from PCB's "Other fields",
-   *  UI-LEFT-2 PP18); absent when no symbol is for the footprint. */
-  symbol_fields?: { Datasheet: string; Description: string };
+  /** The schematic symbol's Datasheet, Description and user fields (as stored), which Footprint Properties carries the footprint's fields to (Update Schematic from
+   *  PCB's "Other fields", UI-LEFT-2 PP18, UI-LEFT-3 P3-14); absent when no symbol is for the footprint. */
+  symbol_fields?: Record<string, string> & { Datasheet: string; Description: string };
+  /** The footprint's jumper settings (`GetDuplicatePadNumbersAreJumpers`, `JumperPadGroups`: each group's pad numbers, sorted), which Footprint Properties shows;
+   *  absent when none (UI-LEFT-3 P3-14). */
+  jumpers?: { duplicates: boolean; groups: string[][] };
   /** The footprint's Extruded 3D Body (`EXTRUDED_3D_BODY`, crates/cli/src/extruded_body_api.rs `body_json`); absent when it has none. */
   extruded_body?: ExtrudedBodyInfo;
   /** `GET /api/3dmodel/preview` only: the outline `GetExtrusionOutline` makes for each of the box's sources (by its layer word) and the pins, nm, the footprint at `at` (crates/cli/src/extruded_body_api.rs `preview_outlines`). */
@@ -2549,6 +2552,8 @@ export type Cmd =
   | { op: "set_simulator"; ngspice: { workbook_filename: string; fix_include_paths: boolean; model_mode: number } | null; workbook: string | null }
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
+  /** Update Schematic from PCB's "Other fields" for one footprint (`BACK_ANNOTATE::applyChangelist`, UI-LEFT-3 P3-14): `fields` every field of the footprint. */
+  | { op: "carry_symbol_fields"; id: string; fields: Record<string, string> }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
   | { op: "replace_text"; search: SchSearchData; items?: string[] | null; /** Replace All over every sheet (`SCH_FIND_REPLACE_TOOL::ReplaceAll` without "Search the current sheet only"). */ all_sheets?: boolean }
   /** panel_setup_pinmap.cpp changeErrorLevel: one pin-map cell + its mirror (type indexes 0..11, level 0 OK / 1 warning / 2 error). */
