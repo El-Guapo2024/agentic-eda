@@ -69,9 +69,12 @@ pub fn dangling_tracks_and_vias_with(graph: &ConnGraph, ignore_tracks_in_pads: b
 /// `dist_sq == 0 || dist_sq < SEG::Square( min_dist )`), a via a `SHAPE_CIRCLE` (`SHAPE::Collide( VECTOR2I )`
 /// is `Collide( SEG( aP, aP ) )`: `minDist = aClearance + Radius`, the same strict test), an arc track the true
 /// `SHAPE_ARC` ([`arc_hits_point`]), not its tessellation; a pad keeps its own distance test.
-fn item_hits_point(other: &crate::items::CnItem, p: Point, accuracy: i64) -> bool {
+///
+/// The shape is the item's on the track's layer `layer` (`GetEffectiveShape( layer )`): a padstack via's circle of that layer's diameter, the hole of a pad or
+/// via on a layer it does not flash ([`crate::items::CnItem::shape_on`]).
+fn item_hits_point(other: &crate::items::CnItem, layer: i32, p: Point, accuracy: i64) -> bool {
     let strict = |dist_sq: f64, min_dist: i64| dist_sq == 0.0 || dist_sq < (min_dist as f64) * (min_dist as f64);
-    match &other.shape {
+    match other.shape_on(layer) {
         ItemShape::Pad(pad) => pad.signed_distance(p) <= accuracy as f64,
         // `GetEffectiveShape()` of a via: `SHAPE_CIRCLE( m_Start, GetWidth( layer ) / 2 )`, an integer radius.
         ItemShape::Via { center, radius } => strict(geom::dist(p, *center).powi(2), (radius.floor() as i64) + accuracy),
@@ -156,7 +159,7 @@ fn track_seg_dangling(graph: &ConnGraph, idx: usize, ignore_tracks_in_pads: bool
     let (mut start_count, mut end_count) = (0i32, 0i32);
     for &cj in &it.connected {
         let other = &graph.items[cj];
-        let (hit_a, hit_b) = (item_hits_point(other, a, accuracy), item_hits_point(other, b, accuracy));
+        let (hit_a, hit_b) = (item_hits_point(other, it.layer_lo, a, accuracy), item_hits_point(other, it.layer_lo, b, accuracy));
 
         if hit_a && hit_b {
             match &other.item {

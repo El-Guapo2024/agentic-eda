@@ -531,7 +531,7 @@ pub fn format_length(nm: Nm, units: TableUnits, precision: i32) -> String {
 const NO_VALUE: &str = "\u{2014}";
 
 /// `BOARD_STACKUP::GetLayerDistance`: the thickness between two copper layers, half of an inner one at either end, nm.
-fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: &str) -> Nm {
+pub(crate) fn layer_distance_nm(stackup: &Stackup, copper: &[String], first: &str, second: &str) -> Nm {
     if first == second {
         return Nm::ZERO;
     }

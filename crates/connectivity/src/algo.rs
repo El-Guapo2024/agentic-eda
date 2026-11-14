@@ -100,17 +100,25 @@ pub fn build_graph(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
     ConnGraph { items }
 }
 
-/// `CN_VISITOR::operator()`'s collision of two items. A zone and an item: the item's whole shape (`checkZoneItemConnection`, `ALWAYS_FLASHED`). Two
-/// other items: on each copper layer they share, the shapes they have there (`GetEffectiveShape( layer, flashing )`: a pad or via that removes its unused
-/// copper is its hole on a layer it is `ConditionallyFlashed` on, [`CnItem::shape_on`]); they touch when they collide on one of those layers.
+/// `CN_VISITOR::operator()`'s collision of two items. A zone and an item: the item's shape on the zone's layer, flashed (`checkZoneItemConnection`:
+/// `GetEffectiveShape( layer, ALWAYS_FLASHED )`, a padstack via's circle of that layer's diameter, [`CnItem::flashed_shape_on`]). Two other items: on each
+/// copper layer they share, the shapes they have there (`GetEffectiveShape( layer, flashing )`: a pad or via that removes its unused copper is its hole on a
+/// layer it is `ConditionallyFlashed` on, a padstack via the circle of the layer's own diameter, [`CnItem::shape_on`]; UI-LEFT-3 P3-15); they touch when they
+/// collide on one of those layers.
 fn touch(a: &CnItem, b: &CnItem) -> bool {
     let zone = |i: &CnItem| matches!(i.shape, crate::items::ItemShape::Zone { .. });
-    if (a.never_flashed.is_none() && b.never_flashed.is_none()) || zone(a) || zone(b) {
+    if zone(a) && !zone(b) {
+        return geom::touches(&a.shape, &a.anchors, b.flashed_shape_on(a.layer_lo), &b.anchors);
+    }
+    if zone(b) && !zone(a) {
+        return geom::touches(a.flashed_shape_on(b.layer_lo), &a.anchors, &b.shape, &b.anchors);
+    }
+    if (a.one_shape() && b.one_shape()) || zone(a) || zone(b) {
         return geom::touches(&a.shape, &a.anchors, &b.shape, &b.anchors);
     }
-    let mut tried: Vec<(bool, bool)> = Vec::new();
+    let mut tried: Vec<(usize, usize)> = Vec::new();
     for layer in a.layer_lo.max(b.layer_lo)..=a.layer_hi.min(b.layer_hi) {
-        let key = (a.is_hole_on(layer), b.is_hole_on(layer));
+        let key = (a.shape_key(layer), b.shape_key(layer));
         if tried.contains(&key) {
             continue;
         }
@@ -354,5 +362,43 @@ mod tests {
         };
         assert_eq!(clusters_of(&[(4.0, 10.0), (6.0, 10.0), (6.0, 20.0), (4.0, 20.0)]), 2, "edges crossing join nothing");
         assert_eq!(clusters_of(&[(4.0, 10.0), (6.0, 10.0), (6.0, 15.0), (4.0, 15.0)]), 1, "a vertex inside the other fill joins them");
+    }
+
+    /// UI-LEFT-3 P3-15, `CN_VISITOR::operator()` and `checkZoneItemConnection` (`GetEffectiveShape( layer )`): a via whose padstack is front/inner/back is a
+    /// circle of each layer's own diameter. A track on In1.Cu ending 0.5 mm from the centre of a via 0.6 mm wide on F.Cu and 1.2 mm wide inside touches it; the
+    /// same track on F.Cu does not; and a zone fill on In1.Cu reaching 0.5 mm from it joins it.
+    #[test]
+    fn a_padstack_via_touches_by_each_layers_own_diameter() {
+        use eda_model::via_extra::{ViaExtra, ViaPadstack};
+        let graph_of = |layer: &str, with_stack: bool, fill: bool| {
+            let (mut design, mut model) = two_pad_model();
+            model.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+            let at = eda_model::ir::Point { x: mm(10.0), y: mm(15.0) };
+            let rt = design.routing.as_mut().unwrap();
+            rt.vias.push(eda_model::ir::Via { id: "v1".into(), net: "N1".into(), at, drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+            rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: layer.into(), width: mm(0.2), pts: vec![eda_model::ir::Point { x: at.x + mm(0.5), y: at.y }, eda_model::ir::Point { x: at.x + mm(5.0), y: at.y }], arc_mid_offset: None });
+            let mut copper = ZoneCopper::default();
+            if fill {
+                rt.tracks.clear();
+                let ring = [(10.5, 14.0), (14.0, 14.0), (14.0, 16.0), (10.5, 16.0)];
+                let chain = ring.iter().map(|&(x, y)| eda_clipper2::Point64 { x: mm(x).get(), y: mm(y).get(), z: 0 }).collect();
+                copper.zones.insert(("z1".into(), "In1.Cu".into()), eda_shape_poly_set::ShapePolySet::from_outline(chain));
+                rt.zones.push(eda_model::ir::Zone { id: "z1".into(), net: "N1".into(), layer: "In1.Cu".into(), outline: ring.iter().map(|&(x, y)| eda_model::ir::Point { x: mm(x), y: mm(y) }).collect(), ..Default::default() });
+            }
+            if with_stack {
+                let mut extra = ViaExtra { id: "v1".into(), ..Default::default() };
+                let stack = ViaPadstack { mode: eda_model::padstack::PadStackMode::FrontInnerBack, sizes: [("Inner".to_string(), mm(1.2)), ("B.Cu".to_string(), mm(0.6))].into_iter().collect() };
+                extra.set_padstack(Some(&stack), mm(0.6), &model.board.layers);
+                design.drawings = Some(eda_model::ir::DrawingsSection { via_extras: vec![extra], ..Default::default() });
+            }
+            let graph = build_graph(&design, &model, &copper);
+            let via = graph.items.iter().position(|i| matches!(&i.item, ItemRef::Via { via_id } if via_id == "v1")).unwrap();
+            !graph.items[via].connected.is_empty()
+        };
+        assert!(graph_of("In1.Cu", true, false), "the inner ring is 1.2 mm wide: the track touches it");
+        assert!(!graph_of("F.Cu", true, false), "the front ring is 0.6 mm wide: the track is clear of it");
+        assert!(!graph_of("In1.Cu", false, false), "a normal via is 0.6 mm wide on every layer");
+        assert!(graph_of("", true, true), "the inner fill reaches the 1.2 mm ring");
+        assert!(!graph_of("", false, true), "but not a 0.6 mm one");
     }
 }

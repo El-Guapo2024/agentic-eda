@@ -14,6 +14,7 @@
 //! flag. (The studio writes every board with teardrops `(legacy_teardrops yes)`, only for kicad-cli to keep the ones it is given: `eda_kicad::pcb`.)
 
 use crate::{Board, Cmd, Domain};
+use std::sync::Arc;
 use eda_connectivity::teardrop::TeardropWorld;
 use eda_model::ConstraintModel;
 
@@ -36,6 +37,13 @@ impl Cmd {
 }
 
 impl Board<'_> {
+    /// The board with the zones' fills `fills` (kicad-cli's, `eda_kicad::zone_fills`), which the teardrop update asks whether a pad and a track are joined by a
+    /// pour of their net (`TEARDROP_MANAGER::areItemsInSameZone`, UI-LEFT-3 P3-5). A board without them has no zone filled.
+    pub fn with_zone_copper(mut self, fills: Option<eda_drc::zone_copper::ZoneCopper>) -> Self {
+        self.zone_copper = fills.map(Arc::new);
+        self
+    }
+
     /// `BOARD::LegacyTeardrops()`: a board read with legacy teardrops ([`eda_model::ir::DrawingsSection::legacy_teardrops`]) keeps them as they are, as
     /// `TEARDROP_MANAGER::UpdateTeardrops` returns at once (`if( m_board->LegacyTeardrops() ) return;`), until Edit Teardrops' OK
     /// ([`Cmd::AddAllTeardrops`], [`Cmd::RemoveAllTeardrops`]) clears it.
@@ -62,7 +70,7 @@ impl Board<'_> {
             return false;
         }
         let before = TeardropWorld::of(&self.design, was);
-        let changed = eda_connectivity::teardrop::update_after_edit(&mut self.design, self.model, &before);
+        let changed = eda_connectivity::teardrop::update_after_edit_with(&mut self.design, self.model, &before, self.zone_copper.as_deref());
         if changed {
             if let Some(rt) = self.design.routing.as_mut() {
                 rt.assign_missing_ids();
@@ -75,7 +83,7 @@ impl Board<'_> {
     /// `BOARD_COMMIT::Push`'s teardrop update after a command, from the board as it was (`before`): the teardrops it made stale made again, new ones given ids.
     pub(crate) fn tidy_teardrops(&mut self, before: Option<TeardropWorld>) {
         let Some(before) = before else { return };
-        if eda_connectivity::teardrop::update_after_edit(&mut self.design, self.model, &before) {
+        if eda_connectivity::teardrop::update_after_edit_with(&mut self.design, self.model, &before, self.zone_copper.as_deref()) {
             if let Some(rt) = self.design.routing.as_mut() {
                 rt.assign_missing_ids();
             }

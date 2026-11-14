@@ -257,6 +257,82 @@ pub(crate) fn with_barcode_shapes(cmd: &Cmd, dir: &Path, design: &Design, model:
     Some(fill(cmd, &shapes))
 }
 
+/// `cmd` with the polygons of the board's barcodes on copper near the via put into every `Cmd::PlaceVia` it holds (`barcode_shapes`, inside a batch too): what
+/// `VIA_PLACER::checkDRCViolation` measures a barcode by (`PCB_BARCODE::GetEffectiveShape`, `m_poly`: zint's modules and the text), from kicad-cli's plot of each
+/// (UI-LEFT-3 P3-32) -- the board's barcodes and every footprint's, each with its text as shown (a footprint's own variables first). Only the barcodes whose box comes
+/// within 5 mm of the via's ring are plotted: the plot only narrows what the box already covers, and a barcode left out (or one kicad-cli cannot plot) is judged by
+/// its box. `None` when the command places no via or none is near a barcode.
+pub(crate) fn with_via_barcode_shapes(cmd: &Cmd, dir: &Path, design: &Design, model: &eda_model::ConstraintModel) -> Option<Cmd> {
+    fn vias(c: &Cmd, out: &mut Vec<(Point, Nm)>) {
+        match c {
+            Cmd::Batch { cmds } => cmds.iter().for_each(|c| vias(c, out)),
+            Cmd::PlaceVia { x, y, diameter, .. } => out.push((Point { x: *x, y: *y }, *diameter)),
+            _ => {}
+        }
+    }
+    let mut at = Vec::new();
+    vias(cmd, &mut at);
+    if at.is_empty() {
+        return None;
+    }
+    let copper = |l: &str| eda_model::layers::is_copper_layer_name(l);
+    let mut barcodes: Vec<(Barcode, Option<String>)> = design.drawings.iter().flat_map(|d| d.barcodes.iter()).filter(|b| copper(&b.layer)).map(|b| (b.clone(), None)).collect();
+    for fp in design.placement.iter().flat_map(|pl| pl.footprints.iter()) {
+        let Some(items) = model.part(&fp.id).and_then(|part| eda_model::fp_items_place::items_of(design, model, part)) else { continue };
+        barcodes.extend(eda_model::fp_items_place::placed(items, fp).barcodes.into_iter().filter(|b| copper(&b.layer)).map(|b| (b, Some(fp.id.clone()))));
+    }
+    let reach = mm(5.0);
+    let near = |b: &Barcode| {
+        let pts: Vec<Point> = eda_connectivity::copper_shapes::barcode_box_shapes(b).into_iter().flat_map(|s| match s {
+            eda_drc::kimath::Shape::Polygon { pts } => pts,
+            _ => Vec::new(),
+        }).collect();
+        at.iter().any(|(p, d)| {
+            let grow = reach + *d / 2;
+            pts.iter().any(|q| q.x >= p.x - grow) && pts.iter().any(|q| q.x <= p.x + grow) && pts.iter().any(|q| q.y >= p.y - grow) && pts.iter().any(|q| q.y <= p.y + grow)
+        })
+    };
+    barcodes.retain(|(b, _)| near(b));
+    if barcodes.is_empty() {
+        return None;
+    }
+    let meta = crate::board::load(dir).ok()?.0;
+    let tv = crate::text_vars_json::PcbShown::new(dir, design, model, crate::text_vars_json::project(dir, &meta.intent, crate::text_vars_json::clock_of("/api/cmd")));
+    let mut shapes: std::collections::BTreeMap<String, Vec<Vec<Point>>> = std::collections::BTreeMap::new();
+    for (b, owner) in barcodes {
+        let text = match &owner {
+            Some(reference) => tv.footprint_text_shown(reference, &b.text, &b.layer),
+            None => tv.text_shown(&b.text, &b.layer),
+        };
+        if text.is_empty() {
+            continue;
+        }
+        // the plot is of the barcode centred on the origin, turned and on its layer: moved to where it is
+        let Ok(shape) = shape_blocking(&b, &text) else { continue };
+        shapes.insert(b.id.clone(), shape.paths.iter().flatten().map(|c| c.iter().map(|p| Point { x: p[0] + b.at.x, y: p[1] + b.at.y }).collect()).collect());
+    }
+    fn fill(c: &Cmd, shapes: &std::collections::BTreeMap<String, Vec<Vec<Point>>>) -> Cmd {
+        match c {
+            Cmd::Batch { cmds } => Cmd::Batch { cmds: cmds.iter().map(|c| fill(c, shapes)).collect() },
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, .. } => Cmd::PlaceVia {
+                net: net.clone(),
+                x: *x,
+                y: *y,
+                drill: *drill,
+                diameter: *diameter,
+                from_layer: from_layer.clone(),
+                to_layer: to_layer.clone(),
+                split_track: split_track.clone(),
+                allow_drc_violations: *allow_drc_violations,
+                hidden_layers: hidden_layers.clone(),
+                barcode_shapes: shapes.clone(),
+            },
+            c => c.clone(),
+        }
+    }
+    (!shapes.is_empty()).then(|| fill(cmd, &shapes))
+}
+
 /// What a route answers: the HTTP status and the JSON body.
 pub(crate) struct Answer {
     pub status: &'static str,

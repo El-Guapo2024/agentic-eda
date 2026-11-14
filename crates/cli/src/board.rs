@@ -1961,6 +1961,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
     // Repeat Layout judges a barcode by its polygon: the board's barcodes plotted by kicad-cli are put into the command here (`crate::barcode_api`, UI-LEFT-2 PP22).
     let with_barcodes = crate::barcode_api::with_barcode_shapes(cmd, dir, &design, &model);
     let cmd = with_barcodes.as_ref().unwrap_or(cmd);
+    // Draw Via's check measures a barcode by its polygon too (`VIA_PLACER::checkDRCViolation`, UI-LEFT-3 P3-32).
+    let with_via_barcodes = crate::barcode_api::with_via_barcode_shapes(cmd, dir, &design, &model);
+    let cmd = with_via_barcodes.as_ref().unwrap_or(cmd);
     // A board imported from another EDA format brings a model of its own: the file the command names is written before it runs (`crate::import_foreign`).
     crate::import_foreign::prepare_board(cmd, dir)?;
     // The studio shows a board with no stored schematic as the one derived
@@ -1993,7 +1996,10 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
         }
         before
     });
-    let mut board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm);
+    // The zones' fills, which the teardrop update reads (`areItemsInSameZone`, UI-LEFT-3 P3-5): loaded only for a board that can have a teardrop.
+    let zone_copper = || eda_connectivity::teardrop::teardrops_possible(&design).then(|| eda_kicad::zone_fills::load(dir).map(|f| f.copper(&design))).flatten();
+    let fills = zone_copper();
+    let mut board = Board::new(design, &model, meta.snap_nm, meta.spacing_nm).with_zone_copper(fills.clone());
     // Reorganizing into sheets draws the design's nets anew: let it give a net back the name the intent declared for it.
     if matches!(cmd, Cmd::ReorganizeSheets) {
         if let Some(intent) = std::fs::read_to_string(&meta.intent).ok().and_then(|t| serde_yaml::from_str::<ConstraintModel>(&t).ok()) {
@@ -2042,7 +2048,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness, baseline: Option<ed
         })
     };
     let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
-    let mut board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_nm, meta.spacing_nm) } else { board };
+    let mut board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_nm, meta.spacing_nm).with_zone_copper(fills) } else { board };
     // KiCad 10's drill charts report the board, so a command that changed a hole has made them wrong: they are built again in the same step (`OnModify`'s
     // `RefreshGeneratedTables`), against the board as the command left it -- the model with the footprints a Paste, a pad edit or a new board brought (`refolded`).
     board.refresh_drill_charts();
@@ -2196,7 +2202,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => {
             format!("via add --net {net} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}", mm(*x), mm(*y), mm(*drill), mm(*diameter))
         }
-        Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers } => format!(
+        Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, .. } => format!(
             "via place --net {net:?} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}{}{}{}",
             mm(*x),
             mm(*y),
@@ -3072,7 +3078,7 @@ pub fn run(
                 let to_layer = flag(rest, "--to-layer").ok_or_else(|| fail("board_usage", "via place", "needs --to-layer LAYER"))?;
                 let split_track = flag(rest, "--split");
                 let hidden_layers = flag(rest, "--hidden").map(|h| h.split_whitespace().map(str::to_string).collect()).unwrap_or_default();
-                let cmd = Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations: has(rest, "--allow-drc"), hidden_layers };
+                let cmd = Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations: has(rest, "--allow-drc"), hidden_layers, barcode_shapes: Default::default() };
                 step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
@@ -4709,7 +4715,7 @@ pub(crate) mod tests {
     fn the_logged_draw_via_line_runs_as_a_cli_command() {
         let dir = scratch("via_place_line");
         setup(&dir);
-        let cmd = Cmd::PlaceVia { net: String::new(), x: mm(10.0), y: mm(15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: None, allow_drc_violations: true, hidden_layers: vec!["B.Cu".into()] };
+        let cmd = Cmd::PlaceVia { net: String::new(), x: mm(10.0), y: mm(15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: None, allow_drc_violations: true, hidden_layers: vec!["B.Cu".into()], barcode_shapes: Default::default() };
         step(&dir, cmd, false, "ui").unwrap();
         let log = std::fs::read_to_string(dir.join("activity.jsonl")).unwrap();
         let line = serde_json::from_str::<serde_json::Value>(log.lines().last().unwrap()).unwrap()["cmd"].as_str().unwrap().to_string();

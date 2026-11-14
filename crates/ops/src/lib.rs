@@ -407,6 +407,11 @@ pub enum Cmd {
         /// The layers the Appearance panel hides: their items are not judged (`view->Query` skips them; round 6 C6-1).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         hidden_layers: Vec<String>,
+        /// The polygons of the board's barcodes on copper (the board's and the footprints'), by barcode id, in board coordinates: `PCB_BARCODE::GetEffectiveShape`
+        /// (`m_poly`, the modules zint works out and the text under them), which the board directory fills from kicad-cli's plot of each (`crate::barcode_api` of
+        /// the CLI), as the studio has no zint (UI-LEFT-3 P3-32). A barcode not in it is judged by its box.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        barcode_shapes: BTreeMap<String, Vec<Vec<Point>>>,
     },
     /// Remove a via by id.
     DeleteVia { id: String },
@@ -3171,6 +3176,9 @@ pub struct Board<'a> {
     pending_junction_merges: Vec<(Option<String>, Point, bool)>,
     /// Set while one [`Cmd::OverrideLocks`] runs: the schematic's locked items are not filtered out of a move (`sch_move::select`).
     override_locks: bool,
+    /// The zones' fills as kicad-cli made them, when the caller handed them over ([`Board::with_zone_copper`]): what the teardrops' `areItemsInSameZone` reads
+    /// (`teardrop_upkeep.rs`, UI-LEFT-3 P3-5). `None`: no zone has a fill.
+    zone_copper: Option<Arc<eda_drc::zone_copper::ZoneCopper>>,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -3214,7 +3222,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, focus_path: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new(), override_locks: false }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, focus_path: None, intent_nets: None, net_collision: None, pending_clean_up: None, pending_junction_merges: Vec::new(), override_locks: false, zone_copper: None }
     }
 
     /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
@@ -3262,6 +3270,7 @@ impl<'a> Board<'a> {
             pending_clean_up: None,
             pending_junction_merges: Vec::new(),
             override_locks: self.override_locks,
+            zone_copper: self.zone_copper.clone(),
         }
     }
 
@@ -3449,8 +3458,8 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidth { id, width } => self.set_track_width(id, *width),
 
             Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => self.add_via(net, *x, *y, *drill, *diameter, from_layer, to_layer),
-            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers } => {
-                self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations, hidden_layers)
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes } => {
+                self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations, hidden_layers, barcode_shapes)
             }
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
@@ -4966,7 +4975,7 @@ impl<'a> Board<'a> {
     fn add_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
         self.clear_legacy_teardrops();
         let settings = self.design.routing.as_ref().map(|r| r.teardrop_settings).unwrap_or_default();
-        let fresh = eda_connectivity::generate_teardrops(&self.design, self.model, &settings);
+        let fresh = eda_connectivity::teardrop::generate_teardrops_with(&self.design, self.model, &settings, self.zone_copper.as_deref());
         let rt = self.routing_mut();
         rt.zones.retain(|z| !z.teardrop);
         rt.zones.extend(fresh);

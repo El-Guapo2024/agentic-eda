@@ -441,3 +441,106 @@ fn the_teardrops_round_7_left_out_are_kicad_clis_own() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-3 P3-5: the rest of 25ec2335's `TEARDROP_MANAGER`, each as kicad-cli 10.99 makes it, ours point for point:
+/// - `pairClearance` asks the rules (`EvalRules( CLEARANCE_CONSTRAINT, .. )`): a custom rule (`.kicad_dru`) and a pad's own clearance narrow a teardrop the net
+///   classes' clearance lets be;
+/// - the copper index (`ensureCopperIndex`) holds texts on copper and a footprint's own graphics on copper;
+/// - a track of no net on a via of no net gets its teardrop ("Net 0 is no net at all, so geometry stands in for it"), and a track on another net's via gets one
+///   (`GetConnectedPadsAndVias`: a track connects to what it touches);
+/// - "Prefer zone connection" (`areItemsInSameZone`): kicad-cli is run twice, the second run reading the first's fills, and a pad a pour of its net joins to its
+///   track gets no teardrop then; ours are made on the board the second run read, with its fills (`eda_kicad::zone_fills`).
+#[test]
+fn the_teardrops_round_v14_left_out_are_kicad_clis_own() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let mut s = String::from(
+        "(kicad_pcb (version 20241229) (generator \"pcbnew\") (generator_version \"9.0\")\n  (general (thickness 1.6))\n  (paper \"A3\")\n  (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (1 \"F.Mask\" user) (3 \"B.Mask\" user) (13 \"F.Paste\" user) (15 \"B.Paste\" user) (25 \"Edge.Cuts\" user))\n  (setup (pad_to_mask_clearance 0))\n  (net 0 \"\")\n  (net 1 \"N1\")\n  (net 2 \"N2\")\n  (net 3 \"N3\")\n  (gr_rect (start 85 85) (end 200 130) (stroke (width 0.1) (type solid)) (fill no) (layer \"Edge.Cuts\") (uuid \"00000000-0000-0000-0000-000000000001\"))\n",
+    );
+    let uuid = std::cell::Cell::new(0x5000);
+    let next = || {
+        uuid.set(uuid.get() + 1);
+        format!("00000000-0000-0000-0000-{:012x}", uuid.get())
+    };
+    let via = |s: &mut String, x: f64, y: f64, net: u32| {
+        *s += &format!("  (via (at {x} {y}) (size 0.8) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net {net}) {PARAMS} (uuid \"{}\"))\n", next());
+    };
+    let seg = |s: &mut String, (sx, sy, ex, ey, w): Seg, net: u32| {
+        *s += &format!("  (segment (start {sx} {sy}) (end {ex} {ey}) (width {w}) (layer \"F.Cu\") (net {net}) (uuid \"{}\"))\n", next());
+    };
+    // A: a custom rule asks 0.4 mm of N3: N3's track 0.25 mm from the full teardrop (the classes ask 0.2 mm)
+    via(&mut s, 100.0, 100.0, 1);
+    seg(&mut s, (100.0, 100.0, 105.0, 100.0, 0.2), 1);
+    seg(&mut s, (100.5, 100.75, 104.0, 100.75, 0.2), 3);
+    // B: a pad of N2 asking 0.4 mm of its own, 0.25 mm from the full teardrop
+    via(&mut s, 110.0, 100.0, 1);
+    seg(&mut s, (110.0, 100.0, 115.0, 100.0, 0.2), 1);
+    s += &format!("  (footprint \"T:PB\" (layer \"F.Cu\") (uuid \"{}\") (at 110.8 100.9)\n    (property \"Reference\" \"UB\" (at 0 -3 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n    (pad \"1\" smd rect (at 0 0) (size 1 0.5) (layers \"F.Cu\" \"F.Mask\") (net 2 \"N2\") (clearance 0.4) (uuid \"{}\"))\n  )\n", next(), next(), next());
+    // C: a text on F.Cu just over the teardrop
+    via(&mut s, 120.0, 100.0, 1);
+    seg(&mut s, (120.0, 100.0, 125.0, 100.0, 0.2), 1);
+    s += &format!("  (gr_text \"I\" (at 120.5 101.05) (layer \"F.Cu\") (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n", next());
+    // D: a footprint's own line on F.Cu over the teardrop
+    via(&mut s, 130.0, 100.0, 1);
+    seg(&mut s, (130.0, 100.0, 135.0, 100.0, 0.2), 1);
+    s += &format!("  (footprint \"T:PD\" (layer \"F.Cu\") (uuid \"{}\") (at 131 101)\n    (property \"Reference\" \"UD\" (at 0 -3 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n    (fp_line (start -0.8 -0.45) (end 1 -0.45) (stroke (width 0.2) (type solid)) (layer \"F.Cu\") (uuid \"{}\"))\n  )\n", next(), next(), next());
+    // E: a track of no net on a via of no net
+    via(&mut s, 140.0, 100.0, 0);
+    seg(&mut s, (140.0, 100.0, 145.0, 100.0, 0.2), 0);
+    // F: a track of N2 on a via of N1
+    via(&mut s, 150.0, 100.0, 1);
+    seg(&mut s, (150.0, 100.0, 155.0, 100.0, 0.2), 2);
+    // G: a pad of N1 in a pour of N1, its track in the pour too; H: the same pad and track outside it
+    for (x, zone) in [(165.0, true), (185.0, false)] {
+        s += &format!("  (footprint \"T:PG\" (layer \"F.Cu\") (uuid \"{}\") (at {x} 115)\n    (property \"Reference\" \"UG{x}\" (at 0 -3 0) (layer \"F.SilkS\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n    (pad \"1\" smd rect (at 0 0) (size 1.5 1) (layers \"F.Cu\" \"F.Mask\") (net 1 \"N1\") {PARAMS} (uuid \"{}\"))\n  )\n", next(), next(), next());
+        seg(&mut s, (x, 115.0, x + 5.0, 115.0, 0.25), 1);
+        if zone {
+            s += &format!("  (zone (net 1) (net_name \"N1\") (layer \"F.Cu\") (uuid \"{}\") (hatch edge 0.5) (connect_pads (clearance 0.3)) (min_thickness 0.25) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy {} 110) (xy {} 110) (xy {} 120) (xy {} 120))))\n", next(), x - 5.0, x + 8.0, x + 8.0, x - 5.0);
+        }
+    }
+    s += ")\n";
+    let dru = "(version 1)\n(rule \"wide_n3\" (constraint clearance (min 0.4mm)) (condition \"A.NetName == 'N3' || B.NetName == 'N3'\"))\n";
+    let dir = std::env::temp_dir().join(format!("eda_td_v14_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pcb = dir.join("td.kicad_pcb");
+    std::fs::write(&pcb, &s).unwrap();
+    std::fs::write(dir.join("td.kicad_dru"), dru).unwrap();
+    std::fs::write(dir.join("td.kicad_pro"), r#"{"meta":{"filename":"td.kicad_pro","version":3}}"#).unwrap();
+    let run = || {
+        let out = Command::new(&cli).args(["pcb", "drc", "--refill-zones", "--save-board", "-o"]).arg(dir.join("drc.rpt")).arg(&pcb).output().unwrap();
+        assert!(out.status.success() || dir.join("drc.rpt").exists(), "kicad-cli: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    run();
+    // the second run reads the first's fills
+    let second_input = std::fs::read_to_string(&pcb).unwrap();
+    run();
+    let (saved, _, _) = import_kicad_pcb(&std::fs::read_to_string(&pcb).unwrap()).unwrap();
+    let mut kicad: Vec<_> = saved.routing.as_ref().unwrap().zones.iter().filter(|z| z.teardrop).map(|z| (z.layer.clone(), z.outline.clone())).collect();
+    let (mut design, mut model, _notes) = import_kicad_pcb(&second_input).unwrap();
+    model.board.custom_rules_text = Some(dru.to_string());
+    let fills = eda_kicad::zone_fills::KicadFills::new("kicad-cli".into(), String::new(), 1, eda_kicad::zone_fills::entries_of_imported_file(&design, eda_kicad::zone_fills::scan_zone_fills(&second_input))).copper(&design);
+    assert!(!fills.is_empty(), "the first run filled the pour");
+    design.routing.as_mut().unwrap().zones.retain(|z| !z.teardrop);
+    let mut ours: Vec<_> = eda_connectivity::teardrop::generate_teardrops_with(&design, &model, &TeardropSettings::default(), Some(&fills)).into_iter().map(|z| (z.layer, z.outline)).collect();
+    let key = |o: &(String, Vec<eda_model::ir::Point>)| (o.0.clone(), o.1[0].x.get(), o.1[0].y.get());
+    kicad.sort_by_key(key);
+    ours.sort_by_key(key);
+    eprintln!("kicad-cli: {} teardrops; ours: {}", kicad.len(), ours.len());
+    assert_eq!(show_all(&ours), show_all(&kicad));
+    // what each case proves: the via teardrops of A to F, the pad outside the pour (H), none on the pad in it (G)
+    let near = |x: f64, y: f64| kicad.iter().filter(|(_, o)| o.iter().any(|p| (p.x.get() as f64 / 1e6 - x).abs() < 3.0 && (p.y.get() as f64 / 1e6 - y).abs() < 3.0)).count();
+    assert_eq!([near(100.0, 100.0), near(110.0, 100.0), near(120.0, 100.0), near(130.0, 100.0), near(140.0, 100.0), near(150.0, 100.0), near(165.0, 115.0), near(185.0, 115.0)], [1, 1, 1, 1, 1, 1, 0, 1]);
+    // the obstacles narrowed A to D: each is narrower than F's, which nothing hems in
+    let height = |x: f64| kicad.iter().find(|(_, o)| o.iter().any(|p| (p.x.get() as f64 / 1e6 - x).abs() < 0.5)).map(|(_, o)| o.iter().map(|p| p.y.get()).max().unwrap() - o.iter().map(|p| p.y.get()).min().unwrap()).unwrap();
+    for x in [100.0, 110.0, 120.0, 130.0] {
+        assert!(height(x) < height(150.0), "case at {x} mm: {} against {}", height(x), height(150.0));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
