@@ -132,6 +132,21 @@ export function setRouterStartHighlight(nets: readonly string[]): void {
   startHighlightNetcodes = [...nets];
 }
 
+/** `ROUTER_TOOL::prepareInteractive`: a route (or a pair) started on an item of a net highlights it (`highlightNets( true, { m_startItem->Net() } )`, a
+ * pair's both nets), the router tool remembering what to put back (`m_startHighlightNetcodes`); `null` with no net (no call). `current` is what is
+ * highlighted now. */
+export function routeHighlightBegin(current: readonly string[], nets: readonly (string | null | undefined)[]): string[] | null {
+  const highlight = dragHighlight(current, nets.filter((n): n is string => !!n));
+  if (!highlight) return null;
+  startHighlightNetcodes = [...highlight.restore];
+  return highlight.show;
+}
+
+/** `ROUTER_TOOL::finishInteractive`'s `highlightNets( false )`: the highlight the router tool remembers (`m_startHighlightNetcodes`), off when empty. */
+export function routeHighlightEnd(): string[] {
+  return [...startHighlightNetcodes];
+}
+
 /** `InlineDrag` once the router has started the drag: whether the selection is cleared (`m_toolMgr->RunAction( ACTIONS::selectionClear )`, the
  * selection tool's drag; `clearsSelection`), the nets to highlight now (`highlightNets( true, { closestItem->Net() } )`, `net`), and the draw
  * state with what the end puts back (`highlightNets( false )`: `m_startHighlightNetcodes`, set by this drag when it has a net, else what the last

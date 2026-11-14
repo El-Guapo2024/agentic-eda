@@ -679,6 +679,10 @@ let routerStrict = true;
 export function setRouterStrict(strict: boolean): void {
   routerStrict = strict;
 }
+/** The Strict switch as [`setRouterStrict`] last set it (the length tuner's requests carry it too: api/tuneClient.ts). */
+export function routerStrictNow(): boolean {
+  return routerStrict;
+}
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const sent = url.startsWith("/api/route/") && body && typeof body === "object" && !Array.isArray(body) ? { ...(body as Record<string, unknown>), strict: routerStrict } : body;

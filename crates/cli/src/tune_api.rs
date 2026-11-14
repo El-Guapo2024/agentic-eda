@@ -265,7 +265,7 @@ pub fn fix(dir: &Path, body: &[u8]) -> Value {
     };
     let readout = session.tuner.last().map(|m| m.readout.json());
     let p = session.tuner.pattern.clone();
-    match board::step(dir, cmd, true, "ui") {
+    match board::step(dir, cmd, strict_of(&req), "ui") {
         Ok(summary) => {
             let id = board::load(dir).ok().and_then(|(_, d, _)| tune_edit::patterns_of(&d).into_iter().find(|q| q.mode == p.mode && q.layer == p.layer && (q.origin == p.origin || (!p.id.is_empty() && q.id == p.id))).map(|q| q.id));
             json!({ "ok": true, "message": summary, "pattern_id": id, "readout": readout })
@@ -451,9 +451,14 @@ pub fn pattern(dir: &Path, body: &[u8]) -> Value {
     })
 }
 
-fn board_stepped(dir: &Path, cmds: Vec<Cmd>) -> Result<String, String> {
+/// The Strict switch the studio sends with a request that commits (`"strict"`, as `/api/cmd` takes it); strict when absent.
+fn strict_of(req: &Value) -> bool {
+    req.get("strict").and_then(Value::as_bool).unwrap_or(true)
+}
+
+fn board_stepped(dir: &Path, cmds: Vec<Cmd>, strict: bool) -> Result<String, String> {
     let cmd = if cmds.len() == 1 { cmds.into_iter().next().unwrap() } else { Cmd::Batch { cmds } };
-    board::step(dir, cmd, true, "ui").map_err(|e| board::reasons(&e))
+    board::step(dir, cmd, strict, "ui").map_err(|e| board::reasons(&e))
 }
 
 /// `POST /api/tune/update` `{id, settings}`: the pattern tuned again with these settings (`ShowPropertiesDialog`'s OK, `EditStart`, `Update`, `EditFinish`).
@@ -482,7 +487,7 @@ pub fn update(dir: &Path, body: &[u8]) -> Value {
             }
         }
     }
-    match tune_edit::retune_cmds(&scene, &p, &settings).and_then(|cmds| board_stepped(dir, cmds)) {
+    match tune_edit::retune_cmds(&scene, &p, &settings).and_then(|cmds| board_stepped(dir, cmds, strict_of(&req))) {
         Ok(summary) => {
             let after = board::load(dir).ok().and_then(|(_, d, _)| tune_edit::patterns_of(&d).into_iter().find(|q| q.id == p.id));
             json!({ "ok": true, "message": summary, "pattern": after.as_ref().map(pattern_json), "info": after.map(|q| q.tuning_info()) })
@@ -503,7 +508,7 @@ pub fn remove(dir: &Path, body: &[u8]) -> Value {
         Ok(p) => p,
         Err(m) => return err(m),
     };
-    match tune_edit::reset_cmd(&scene, &p).and_then(|c| board_stepped(dir, vec![c])) {
+    match tune_edit::reset_cmd(&scene, &p).and_then(|c| board_stepped(dir, vec![c], strict_of(&req))) {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(m) => err(m),
     }
@@ -543,7 +548,7 @@ pub fn regenerate(dir: &Path, body: &[u8]) -> Value {
     if cmds.is_empty() {
         return err(format!("No tuning pattern could be regenerated. {}", failed.join(" ")));
     }
-    match board_stepped(dir, cmds) {
+    match board_stepped(dir, cmds, strict_of(&req)) {
         Ok(summary) => json!({ "ok": true, "message": summary, "regenerated": chosen.len() - failed.len(), "failed": failed }),
         Err(m) => err(m),
     }
@@ -900,6 +905,20 @@ mod tests {
         let pv = pattern(&dir, &body(json!({ "id": pat.id })));
         let routed = pv["panel"]["primary"]["length"].as_i64().unwrap();
         assert!((routed - 24_000_000).abs() < 200_000, "the tuned piece only, not the 10 mm one beside it: {routed}");
+    }
+
+    /// A pattern's commit follows the Strict switch the studio sends (`"strict"`, strict when absent): the switch read from the request, and a pattern
+    /// committed with it off, one undo step as with it on.
+    #[test]
+    fn a_patterns_commit_takes_the_strict_switch() {
+        assert!(strict_of(&json!({})) && strict_of(&json!({ "strict": true })) && !strict_of(&json!({ "strict": false })));
+        let dir = scratch("tune_strict_off");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000, "strict": false })))["ok"], json!(true));
+        assert_eq!(tune_edit::patterns_of(&design_of(&dir)).len(), 1);
     }
 
     /// The board's rules as `.kicad_dru` text (what the rule engine compiles).

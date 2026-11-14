@@ -1,10 +1,13 @@
 // The requests of the length tuner (crates/cli/src/tune_api.rs): hover a track, click to start a pattern, move the cursor to where it ends, click to put it on the
 // board; the patterns that are on the board.
 import type { Nm } from "./types";
+import { routerStrictNow } from "./client";
 import type { TuneFixReply, TuneHoverReply, TuneKind, TunePatternReply, TunePatternRow, TuneSessionReply, TuneSettings } from "./tuneTypes";
 
+/** Every request carries the status bar's Strict switch (`"strict"`): a pattern's commit is judged by the gates only with it on, as `/api/cmd`'s. */
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const sent = body && typeof body === "object" && !Array.isArray(body) ? { ...(body as Record<string, unknown>), strict: routerStrictNow() } : body;
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) });
   return (await r.json()) as T;
 }
 

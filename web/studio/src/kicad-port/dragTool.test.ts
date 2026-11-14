@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dragEndsOnActivate, dragHighlight, dragStateFromPreview, inlineDragBegin, inlineDragEnd, routerStartHighlight, setRouterStartHighlight, type DragDrawState } from "./dragTool";
+import { dragEndsOnActivate, dragHighlight, routeHighlightBegin, routeHighlightEnd, dragStateFromPreview, inlineDragBegin, inlineDragEnd, routerStartHighlight, setRouterStartHighlight, type DragDrawState } from "./dragTool";
 import type { DragPreview } from "../api/types";
 
 function baseDraw(overrides: Partial<DragDrawState> = {}): DragDrawState {
@@ -157,5 +157,18 @@ test("an inline drag ends on a refused click and on another tool's activation", 
   assert.equal(dragEndsOnActivate("drag", "route", "drag"), true);
   assert.equal(dragEndsOnActivate("drag", "select", null), false, "a drag that ended");
   assert.equal(dragEndsOnActivate("select", "drag", "drag"), false, "the drag starting");
+  setRouterStartHighlight([]);
+});
+
+// `prepareInteractive` / `finishInteractive`: a route highlights its net, a pair both, and the end puts back what the router tool remembers; a route of
+// no net highlights nothing and its end puts back what the last one left.
+test("a route highlights its net and its end puts back the router tool's remembered highlight", () => {
+  setRouterStartHighlight([]);
+  assert.deepEqual(routeHighlightBegin(["GND"], ["SIG"]), ["SIG"]);
+  assert.deepEqual(routeHighlightEnd(), [], "GND did not hold SIG: off");
+  assert.deepEqual(routeHighlightBegin(["P", "N"], ["P", "N"]), ["P", "N"]);
+  assert.deepEqual(routeHighlightEnd(), ["P", "N"]);
+  assert.equal(routeHighlightBegin(["X"], [""]), null, "no net: no call");
+  assert.deepEqual(routeHighlightEnd(), ["P", "N"], "the last route's set");
   setRouterStartHighlight([]);
 });

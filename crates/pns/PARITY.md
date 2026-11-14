@@ -1860,9 +1860,16 @@ transitions still run), `edit_tool.cpp::Remove`, `pns_tool_base.cpp::highlightNe
 - **The Strict switch (coordinator's report).** The router's commits (`/api/route/finish`, `fix`'s, `attempt_finish`, `continue_from_end`, `cancel`, `drag_finish`,
   the pair's) stepped the board strict whatever the status bar's Strict said; they now take the `"strict"` the studio sends (`api/client.ts` `setRouterStrict`,
   every `/api/route/*` request) as `/api/cmd` does, strict when absent. Tests: cli `a_drag_commit_follows_the_strict_switch`, browser `router-v17` strict.
-- **Differs (kept):** a multi-track position that is not resolved is previewed as its lines flagged colliding (KiCad shows `m_lastNode`, the world or the
-  shove's frame without them); a via `buildInitialLine` cannot push free stays at the cursor, flagged, where KiCad's head has no via (`aViaOk` false); a
-  route does not highlight its net (`prepareInteractive`'s `highlightNets`), so only drags set `m_startHighlightNetcodes`.
+- **Follow-ups (coordinator, same branch).** A multi-track position not resolved previews `m_lastNode` (`updateView( m_dragger->CurrentNode() )`): the
+  board as it is, or what the shove's frame pushed, no dragged line drawn (`Router::drag_preview`; test `an_unresolved_multi_track_position_shows_the_board_as_it_is`).
+  A pending via `buildInitialLine` cannot free in Walk around or Shove leaves the head with no via (`aViaOk`, `LinePlacer::via_ok`; Highlight collisions
+  appends it at the cursor as KiCad does; test `a_via_that_cannot_be_freed_leaves_the_head_with_no_via`); with it, Backspace of the only run gives the leg its
+  start back (`UnfixRoute`'s `m_p_start = st.pts[0].p`; the run was lost before -- `head_via` `backspace_takes_a_via_leg_back_with_the_via_armed_again` now
+  checks it is committed). A route or pair highlights its net(s) when it starts (`prepareInteractive`'s `highlightNets( true, .. )`) and puts back the
+  router tool's remembered highlight however it ends (`finishInteractive`'s `highlightNets( false )`; `dragTool.ts` `routeHighlightBegin` / `routeHighlightEnd`,
+  the effect in `useActionRunner.ts`; browser `router-v17` route-hl). The length tuner's commits take the Strict switch too (`tune_api::strict_of`,
+  `api/tuneClient.ts`; test `a_patterns_commit_takes_the_strict_switch`).
+- **Differs (kept):** none of this stage's.
 - Gates: see the branch's report.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)

@@ -58,7 +58,7 @@ import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../components/canvas/diffPairRouting";
 import { endInlineDrag, findDraggableAt, startGroupDrag, startInlineDrag, type DraggableHit, type InlineDragContext } from "../components/canvas/dragging";
-import { dragEndsOnActivate, findGroupDragTarget, type DragDrawState } from "../kicad-port/dragTool";
+import { dragEndsOnActivate, findGroupDragTarget, routeHighlightBegin, routeHighlightEnd, type DragDrawState } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
@@ -190,6 +190,24 @@ export function useActionRunner() {
     endInlineDrag(draw, { cancelled: true }, dispatch);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the tool change alone, as `IsActivate()` is
   }, [state.activeTool]);
+  // `ROUTER_TOOL::prepareInteractive`'s `highlightNets( true, { m_startItem->Net() } )` (a pair's two nets) when a route or a pair starts, and
+  // `finishInteractive`'s `highlightNets( false )` -- the router tool's remembered highlight -- when it ends, however it ends
+  const routeKindBefore = useRef<string | null>(null);
+  useEffect(() => {
+    const d = state.drawState;
+    const kind = d?.kind === "route" || d?.kind === "diffpair" ? d.kind : null;
+    const before = routeKindBefore.current;
+    routeKindBefore.current = kind;
+    if (state.tab !== "pcb") return;
+    if (kind && !before) {
+      const nets = d?.kind === "route" ? [d.net] : d?.kind === "diffpair" ? [d.netA, d.netB] : [];
+      const show = routeHighlightBegin(highlightedNets(state.netHighlight, state.bcx.netHighlightMore), nets);
+      if (show) dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets: show });
+    } else if (!kind && before) {
+      dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets: routeHighlightEnd() });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a session's start and end
+  }, [state.drawState?.kind]);
 
   const registry = useMemo(() => {
     // A handler may take the one parameter an action carries (`TOOL_EVENT::Parameter`), e.g. the sheet path of `NavigateTool.changeSheet`.

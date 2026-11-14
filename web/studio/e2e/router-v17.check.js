@@ -16,6 +16,8 @@
 //                one Ctrl+Z puts the tracks back;
 //   no-net       a drag of a net with the highlight on another net (`highlightNets( true )`: the start set left empty), then a drag of two tracks of no net:
 //                its end puts back `m_startHighlightNetcodes` -- nothing, so the highlight goes off as KiCad's does;
+//   route-hl     the route tool started on the end of nets[0]'s track highlights nets[0] (`prepareInteractive`'s `highlightNets`); Esc ends the route
+//                and puts back the router tool's remembered highlight (nothing: off);
 //   lone-pad     the route tool on U1.12 (a pin on no net), a move and End: the track is on U1.12's `unconnected-(..)` net;
 //   strict       Highlight collisions, the two tracks dragged onto the tracks of no net: with the status bar's Strict on the gates refuse the commit, with it
 //                off the drag is committed (the router's commits follow the Strict switch as every edit does); Ctrl+Z puts it back, Strict back on;
@@ -214,6 +216,24 @@
     t(highlight().length === 0, `\`highlightNets( false )\` puts back the empty start set: the highlight is off: ${JSON.stringify(highlight())}`);
     await undo();
     t(snapshot(await state()) === withBus, "one Ctrl+Z puts the tracks back");
+  });
+
+  await scenario("route-hl", async (t) => {
+    await clearSelection();
+    t(highlight().length === 0, `nothing highlighted: ${JSON.stringify(highlight())}`);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await sleep(300);
+    const n = replies.length;
+    await clickAt(25_000_000, Y1);
+    const s = await waitReply("start", n);
+    t(s && s.body.ok !== false, `the route starts on the track's end: ${s && JSON.stringify(s.body.message ?? s.body.ok)}`);
+    await moveTo(27_000_000, Y1 - 2_000_000, "move");
+    t(JSON.stringify(highlight()) === JSON.stringify([nets[0]]), `its net is highlighted while it is routed: ${JSON.stringify(highlight())}`);
+    await E.run("common.Interactive.cancel");
+    await sleep(500);
+    t(highlight().length === 0, `Esc ends it and the highlight is off again: ${JSON.stringify(highlight())}`);
+    await leaveTool();
+    t(snapshot(await state()) === withBus, "nothing committed");
   });
 
   await scenario("lone-pad", async (t) => {
