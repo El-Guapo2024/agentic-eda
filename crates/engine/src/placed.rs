@@ -174,6 +174,10 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
         for l in &mut connectivity.shape_looks {
             l.graphic = shift_graphic(&l.graphic, dx, dy);
         }
+        // and the texts' looks (`LibConnectivity::text_looks`, UI-LEFT-3 S3-5)
+        for l in &mut connectivity.text_looks {
+            l.graphic = shift_graphic(&l.graphic, dx, dy);
+        }
         return LibSymbol {
             lib_id: lib_id.to_string(),
             graphics: sym.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),

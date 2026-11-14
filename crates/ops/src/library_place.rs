@@ -85,10 +85,24 @@ impl Board<'_> {
         for p in &mut entry.pins {
             p.id.clear();
         }
+        let old_ids: Vec<String> = entry.graphics.iter().map(|g| g.id().to_string()).collect();
         for g in &mut entry.graphics {
             g.set_id(String::new());
         }
         entry.assign_missing_ids();
+        // what the file keeps beside each graphic by its id -- a text's pen and `(hide yes)`, a line style, a shape's looks -- follows it to its new id (a library
+        // symbol placed from a `.kicad_sym` keeps every look `SCH_IO_KICAD_SEXPR_PARSER` read; UI-LEFT-3 S3-5)
+        fn rekey<V>(m: &mut std::collections::BTreeMap<String, V>, old: &[String], new: &[String]) {
+            for (k, v) in std::mem::take(m) {
+                if let Some(i) = old.iter().position(|o| *o == k) {
+                    m.insert(new[i].clone(), v);
+                }
+            }
+        }
+        let new_ids: Vec<String> = entry.graphics.iter().map(|g| g.id().to_string()).collect();
+        rekey(&mut entry.kicad.text_styles, &old_ids, &new_ids);
+        rekey(&mut entry.kicad.stroke_types, &old_ids, &new_ids);
+        rekey(&mut entry.kicad.graphic_looks, &old_ids, &new_ids);
         let lib = self.symbol_library_mut();
         lib.symbols.push(entry);
         lib.symbols.sort_by(|a, b| a.lib_id.cmp(&b.lib_id));

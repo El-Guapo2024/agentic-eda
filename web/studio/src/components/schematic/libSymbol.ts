@@ -12,6 +12,7 @@ import { DEFAULT_PIN_TEXTS, type PinTexts } from "./pinText";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 import type { SchColor, SchGraphicShape } from "../../api/schEditTypes";
 import { isVerticalAngle, itemOrientationOf, orientedText } from "../../kicad-port/symTextBoxPlaced";
+import { orientedDeviceText } from "../../kicad-port/symTextPlaced";
 
 /** A placed symbol's shape's looks (`LibShapeLooks`), the corner radius in nm. Absent: a shape drawn in the symbol's colour, solid, as before. */
 export interface ResolvedShapeLooks {
@@ -27,11 +28,31 @@ export type ResolvedGraphic =
   | { kind: "polyline"; pts: [number, number][]; strokeWidthNm: number; fill: LibFill; looks?: ResolvedShapeLooks }
   | { kind: "circle"; center: [number, number]; radiusNm: number; strokeWidthNm: number; fill: LibFill; looks?: ResolvedShapeLooks }
   | { kind: "arc"; start: [number, number]; mid: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill; looks?: ResolvedShapeLooks }
-  | { kind: "text"; content: string; at: [number, number]; angleDeg: number; sizeNm: number }
+  /**
+   * A library text on the placed symbol (kicad-port/symTextPlaced.ts): the anchor on the sheet, the direction and justification the symbol's orientation gives it,
+   * the shown text, its face, colour, pen and hidden flag (UI-LEFT-3 S3-5). `angleDeg` is 90 for a text that runs up the sheet, else 0.
+   */
+  | {
+      kind: "text";
+      content: string;
+      at: [number, number];
+      angleDeg: number;
+      sizeNm: number;
+      h?: "left" | "center" | "right";
+      v?: "top" | "center" | "bottom";
+      bold?: boolean;
+      italic?: boolean;
+      font?: string;
+      color?: SchColor;
+      thicknessNm?: number;
+      hidden?: boolean;
+      /** What a check reads it by (`window.__edaText.sch[recordId]`): `<symbol id>/text/<n>`, the n-th text of the symbol's drawn graphics. */
+      recordId?: string;
+    }
   /** A library symbol's bezier (the Symbol Editor's; a placed symbol's engine drawing has its polyline instead): `SCH_PAINTER`'s `DrawCurve( start, c1, c2, end )`. */
   | { kind: "bezier"; start: [number, number]; c1: [number, number]; c2: [number, number]; end: [number, number]; strokeWidthNm: number; fill: LibFill }
   /** The text of a library text box on the placed symbol (kicad-port/symTextBoxPlaced.ts), as a sheet text box's shape -- corners on the sheet, the shown text, the direction and justification the symbol's orientation gives it -- with its own text colour when it has one. Its border and fill are a `rectangle`. */
-  | { kind: "text_box"; shape: Extract<SchGraphicShape, { type: "text_box" }>; color?: SchColor };
+  | { kind: "text_box"; shape: Extract<SchGraphicShape, { type: "text_box" }>; color?: SchColor; font?: string };
 
 export interface ResolvedLibSymbol {
   graphics: ResolvedGraphic[];
@@ -96,9 +117,12 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
   };
 
   const graphics: ResolvedGraphic[] = [];
+  let textCount = 0;
   for (const g of sym.graphics) {
     if (!visibleFor(g.unit, g.body_style, unit, bodyStyle)) continue;
-    graphics.push(resolveGraphic(g, m, at, grow, instance.text_box_shown));
+    const r = resolveGraphic(g, m, at, grow, instance.text_box_shown, instance.text_shown);
+    if (r.kind === "text") r.recordId = `${instance.id}/text/${textCount++}`;
+    graphics.push(r);
   }
 
   const pins: ResolvedPin[] = [];
@@ -142,7 +166,7 @@ function withLooks<T extends ResolvedGraphic>(r: T, g: LibShapeLooks): T {
   return Object.keys(looks).length > 0 ? { ...r, looks } : r;
 }
 
-function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatrix>, at: [number, number], grow: (p: [number, number]) => void, textBoxShown?: Record<string, string>): ResolvedGraphic {
+function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatrix>, at: [number, number], grow: (p: [number, number]) => void, textBoxShown?: Record<string, string>, textShown?: Record<string, string>): ResolvedGraphic {
   const pt = (p: [Mm, Mm]) => {
     const r = resolveLibPoint(p, m, at);
     grow(r);
@@ -157,8 +181,19 @@ function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatri
       return withLooks({ kind: "circle", center: pt(g.center), radiusNm: mmToNm(g.radius), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill }, g);
     case "arc":
       return withLooks({ kind: "arc", start: pt(g.start), mid: pt(g.mid), end: pt(g.end), strokeWidthNm: mmToNm(g.stroke_width), fill: g.fill }, g);
-    case "text":
-      return { kind: "text", content: g.content, at: pt(g.at), angleDeg: g.angle_deg, sizeNm: mmToNm(g.size_mm) };
+    case "text": {
+      // `SCH_PAINTER::draw( SCH_SYMBOL )`'s temp copy: the anchor where the transform puts it, the direction and justification `OrientAndMirrorSymbolItems` gives
+      // the text (kicad-port/symTextPlaced.ts), its variables the symbol's (`text_shown`, by the stored text)
+      const o = orientedDeviceText(isVerticalAngle(g.angle_deg), g.h_align ?? "center", g.v_align ?? "center", itemOrientationOf(m));
+      const r: Extract<ResolvedGraphic, { kind: "text" }> = { kind: "text", content: textShown?.[g.content] ?? g.content, at: pt(g.at), angleDeg: o.vertical ? 90 : 0, sizeNm: mmToNm(g.size_mm), h: o.h, v: o.v };
+      if (g.bold) r.bold = true;
+      if (g.italic) r.italic = true;
+      if (g.font) r.font = g.font;
+      if (g.text_color) r.color = g.text_color;
+      if (g.thickness_mm && g.thickness_mm > 0) r.thicknessNm = mmToNm(g.thickness_mm);
+      if (g.hidden) r.hidden = true;
+      return r;
+    }
     case "text_box": {
       // `SCH_PAINTER::draw( SCH_SYMBOL )`'s temp copy: the corners where the transform puts them, the text turned and justified by `OrientAndMirrorSymbolItems`, and
       // its variables the symbol's (`text_box_shown`)
@@ -178,6 +213,7 @@ function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatri
         v_align: g.v_align,
         margin_nm: mmToNm(g.margin_mm),
       };
+      if (g.font) return g.text_color ? { kind: "text_box", shape, color: g.text_color, font: g.font } : { kind: "text_box", shape, font: g.font };
       return g.text_color ? { kind: "text_box", shape, color: g.text_color } : { kind: "text_box", shape };
     }
   }

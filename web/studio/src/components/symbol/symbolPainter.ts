@@ -20,7 +20,9 @@ import type { LibPin, LibrarySymbolGraphic, LibrarySymbolPin, SchField } from ".
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineNm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
-import { drawPinDecoration, drawPinText, drawRealGraphic } from "../schematic/painter";
+import { brightenedShadowWidth, drawPinDecoration, drawPinText, drawRealGraphic, withWiderLines } from "../schematic/painter";
+import { installColourScopes, memoColours, withFinalColourScope } from "../canvas/colourScope";
+import { cssOf, parseColor, withAlpha } from "../../kicad-port/color4d";
 import type { ResolvedGraphic } from "../schematic/libSymbol";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix } from "../schematic/transform";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_DISPLAY, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO, type GridDisplay } from "../../kicad-port/grid";
@@ -522,6 +524,23 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
     const ownColor = fl?.color && !(fl.color.r === 0 && fl.color.g === 0 && fl.color.b === 0 && fl.color.a === 0) ? rgba(fl.color) : null;
     drawField(ctx, fl?.font ? { ...f, font: fl.font } : f, opts.selection.has(f.id ?? "") ? layerColor("selection") : opts.brightened?.has(f.id ?? "") ? layerColor("LAYER_BRIGHTENED") : !f.visible ? hiddenColor : (ownColor ?? fieldColor(f.name)));
     ctx.restore();
+  }
+
+  // the brightened items' shadow (`drawingShadows` of an `IsBrightened()` item: `LAYER_BRIGHTENED` at 0.15 alpha, each line `getShadowWidth( true )` wider; UI-LEFT-3 S3-24)
+  const lit = opts.brightened;
+  if (lit && lit.size > 0) {
+    const shade = (() => {
+      const c = parseColor(layerColor("LAYER_BRIGHTENED"));
+      return c ? cssOf(withAlpha(c, 0.15)) : layerColor("LAYER_BRIGHTENED");
+    })();
+    installColourScopes(ctx);
+    withFinalColourScope(ctx, memoColours(`symshade|${shade}`, () => shade), () =>
+      withWiderLines(ctx, brightenedShadowWidth(view.scale), () => {
+        for (const g of symbol.graphics) if (g.id && lit.has(g.id) && visibleHere(g.unit, g.body_style, opts.activeUnit, opts.activeBodyStyle)) drawGraphic(g, shade);
+        for (const p of symbol.pins) if (p.id && lit.has(p.id) && pinShown(p.hidden, opts.showHiddenPins) && visibleHere(p.unit, p.body_style, opts.activeUnit, opts.activeBodyStyle)) drawPin(p, false);
+        for (const f of opts.fields ?? []) if (f.id && lit.has(f.id)) drawField(ctx, f, shade);
+      }),
+    );
   }
 
   if (!opts.itemsOnly) drawOrigin(ctx, view);

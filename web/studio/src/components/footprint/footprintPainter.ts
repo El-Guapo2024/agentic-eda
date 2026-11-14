@@ -19,7 +19,8 @@ import { dashPieces, isDashStyle } from "../../kicad-port/strokeDash";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineNm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
-import { installColourScopes, memoColours, withColourScope } from "../canvas/colourScope";
+import { installColourScopes, memoColours, withColourScope, withFinalColourScope } from "../canvas/colourScope";
+import { brightenedCss } from "../../kicad-port/brightened";
 import { edgeCutsDimFactor, hiContrastDim, hiContrastFactor } from "../../kicad-port/color4d";
 import { circleThrough, drawGridOrigin, drawPadNumber, drawShapeGeometry as drawBoardShapeGeometry, normalizeSweep } from "../canvas/painter";
 import type { LineEnding } from "../../kicad-port/lineEnding";
@@ -479,6 +480,8 @@ export interface FpPaintOptions {
   /** The Appearance manager's switches (layers by name or state key, objects under `obj:<id>`) and opacities; absent = everything shown, opaque. */
   layerVisible?: Record<string, boolean>;
   layerOpacity?: Record<string, number>;
+  /** The items the clarification menu's row under the pointer stands for, drawn brightened over the footprint (`doSelectionMenu`'s BRIGHTENED, UI-LEFT-3 S3-24). */
+  brightened?: readonly string[];
 }
 
 /**
@@ -590,6 +593,26 @@ export function paintFootprint(
       withContrast(ctx, opts, opts.activeLayer && fpPadOnLayer(layers, opts.activeLayer) ? opts.activeLayer : null, () => drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? ""), sketch: !!opts.sketchPads }));
       ctx.restore();
     }
+  }
+
+  // The items the clarification menu points at (`SELECTION_TOOL::doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`, UI-LEFT-3 S3-24): drawn again over
+  // the footprint, every colour they set brightened (`PCB_RENDER_SETTINGS::GetColor`: `color.Brightened( m_selectFactor ).WithAlpha( 0.8 )`), as the board's painter does
+  // (components/canvas/painter.ts, kicad-port/brightened.ts) -- the Footprint Editor's painter is that `PCB_PAINTER` in KiCad.
+  const lit = new Set(opts.brightened ?? []);
+  if (lit.size > 0) {
+    const on = (id: string | undefined) => !!id && lit.has(id);
+    const plain = { ...itemOpts, selection: new Set<string>(), highContrast: false };
+    withFinalColourScope(ctx, memoColours("brightened", brightenedCss), () => {
+      if (footprint.display) {
+        const only = Object.fromEntries(Object.entries(footprint.display).map(([k, v]) => [k, Array.isArray(v) ? v.filter((x) => on((x as { id?: string } | null)?.id)) : v])) as unknown as FootprintItemsDisplay;
+        paintFpItems(ctx, view, only, plain);
+      }
+      const strokeTypes = footprint.kicad?.stroke_types as Record<string, string> | undefined;
+      for (const g of footprint.graphics) if (on(g.id) && layerIsVisible(visible, g.layer)) drawGraphic(ctx, view, g, false, !!opts.sketchGraphics, g.id ? strokeTypes?.[g.id] : undefined, g.id ? fpEndingsOf(footprint, g.id) : undefined);
+      for (const t of footprint.texts) if (on(t.id) && layerIsVisible(visible, t.layer) && !isHiddenText(footprint, t.id)) drawText(ctx, view, t, false, !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined, textFaceOf(footprint, t.id));
+      if (footprint.fieldsToDraw) paintFpFields(ctx, view, footprint.fieldsToDraw.filter((f) => on(f.id)), plain);
+      for (const p of footprint.pads) if (on(p.id)) drawPad(ctx, view, p, { selected: false, sketch: !!opts.sketchPads });
+    });
   }
 
   drawAnchor(ctx, view);

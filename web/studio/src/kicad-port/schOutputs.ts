@@ -108,6 +108,9 @@ export interface SchPlotRequest {
   output_directory: string;
   /** "Design variant:" (KiCad 25ec2335 `SCH_PLOT_OPTS::m_variant`, kicad-cli's `--variant`): absent for the default. */
   variant?: string;
+  /** The schematic's default font (`DIALOG_PLOT_SCHEMATIC::plotSchematic`: `aSettings->SetDefaultFont( cfg->m_Appearance.default_font )`, kicad-cli's `--default-font`): absent is
+   *  the KiCad font (UI-LEFT-3 S3-29). */
+  default_font?: string;
 }
 
 /** "Plot All Pages" (`OnPlotAll`) or "Plot Current Page" (`OnPlotCurrent`). */

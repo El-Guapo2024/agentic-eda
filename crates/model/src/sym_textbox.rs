@@ -45,6 +45,50 @@ pub fn plotted_text_box(g: &LibrarySymbolGraphic, quarter_turn: bool, place: imp
     out
 }
 
+/// KiCad's `TRANSFORM` (`x1`, `y1`, `x2`, `y2`; `TransformCoordinate( p ) = ( x1 * p.x + y1 * p.y, x2 * p.x + y2 * p.y )`, y down) of a symbol placed with a turn
+/// (millidegrees, counter-clockwise on the sheet, rounded to a quarter) and a left-right mirror after it, as `eda_engine::symgeom::kicad_turn` folds an orientation
+/// (`SCH_SYMBOL::SetOrientation`: the turn's matrix, then `SYM_MIRROR_Y`'s, which negates x).
+pub fn kicad_transform(rot_millideg: u32, mirrored: bool) -> [i32; 4] {
+    let q = (((rot_millideg % 360_000) as f64 / 90_000.0).round() as u32) % 4;
+    let [x1, y1, x2, y2] = match q {
+        0 => [1, 0, 0, 1],
+        1 => [0, 1, -1, 0],
+        2 => [-1, 0, 0, -1],
+        _ => [0, -1, 1, 0],
+    };
+    if mirrored {
+        [-x1, -y1, x2, y2]
+    } else {
+        [x1, y1, x2, y2]
+    }
+}
+
+/// `SCH_TEXT::Plot` of a symbol's text (`LAYER_DEVICE`) drawn through the symbol's `TRANSFORM` `t` (UI-LEFT-3 S3-5): whether it runs up the sheet (`( t.x1 != 0 ) ^
+/// ( GetTextAngle() != ANGLE_HORIZONTAL )` keeps it horizontal), its horizontal justification flipped when the transform reverses its reading direction (`flipH`)
+/// and its vertical one when a mirroring transform reverses the order of its lines (`det < 0 && ( origHoriz == ( t.x1 > 0 ) )`). The derived `.kicad_sch` writes a
+/// symbol unturned with its library symbol baked, so its texts are baked with these: kicad-cli, whose transform is then the identity (which changes nothing here),
+/// plots them as it plots the unbaked symbol. (KiCad's canvas, `OrientAndMirrorSymbolItems`, differs for a mirrored text; the studio's canvas does that, web/studio
+/// `kicad-port/symTextPlaced.ts`.)
+pub fn plotted_text_attrs(vertical: bool, h: crate::sym_fields::FieldHAlign, v: crate::sym_fields::FieldVAlign, t: [i32; 4]) -> (bool, crate::sym_fields::FieldHAlign, crate::sym_fields::FieldVAlign) {
+    use crate::sym_fields::{FieldHAlign, FieldVAlign};
+    let [x1, y1, x2, y2] = t;
+    let screen_horiz = (x1 != 0) ^ vertical;
+    let orig_horiz = !vertical;
+    let flip_h = if orig_horiz { if screen_horiz { x1 < 0 } else { x2 > 0 } } else if screen_horiz { y1 > 0 } else { y2 < 0 };
+    let h = match (flip_h, h) {
+        (true, FieldHAlign::Left) => FieldHAlign::Right,
+        (true, FieldHAlign::Right) => FieldHAlign::Left,
+        (_, h) => h,
+    };
+    let det = x1 * y2 - x2 * y1;
+    let v = match (det < 0 && orig_horiz == (x1 > 0), v) {
+        (true, FieldVAlign::Top) => FieldVAlign::Bottom,
+        (true, FieldVAlign::Bottom) => FieldVAlign::Top,
+        (_, v) => v,
+    };
+    (!screen_horiz, h, v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +133,34 @@ mod tests {
         // a vertical box turned a quarter is horizontal
         let LibrarySymbolGraphic::TextBox { angle_deg, .. } = plotted_text_box(&plotted_text_box(&tb, true, |p| p), true, |p| p) else { panic!("a text box") };
         assert_eq!(angle_deg, 0.0);
+    }
+
+    #[test]
+    fn the_transform_of_each_orientation_is_set_orientation_s() {
+        assert_eq!(kicad_transform(0, false), [1, 0, 0, 1]);
+        assert_eq!(kicad_transform(90_000, false), [0, 1, -1, 0]);
+        assert_eq!(kicad_transform(180_000, false), [-1, 0, 0, -1]);
+        assert_eq!(kicad_transform(270_000, false), [0, -1, 1, 0]);
+        assert_eq!(kicad_transform(0, true), [-1, 0, 0, 1]);
+        assert_eq!(kicad_transform(90_000, true), [0, -1, -1, 0]);
+    }
+
+    #[test]
+    fn a_plotted_symbol_text_turns_and_flips_its_justification_as_sch_text_plot_does() {
+        use FieldHAlign::*;
+        use FieldVAlign::*;
+        // the identity changes nothing, so a baked text plots as written
+        assert_eq!(plotted_text_attrs(false, Left, Top, [1, 0, 0, 1]), (false, Left, Top));
+        assert_eq!(plotted_text_attrs(true, Right, Bottom, [1, 0, 0, 1]), (true, Right, Bottom));
+        // a quarter turn counter-clockwise: a horizontal text runs up the sheet, read the same way (x2 < 0)
+        assert_eq!(plotted_text_attrs(false, Left, FieldVAlign::Center, kicad_transform(90_000, false)), (true, Left, FieldVAlign::Center));
+        // ... a vertical one lies down, read backwards (y1 > 0)
+        assert_eq!(plotted_text_attrs(true, Left, FieldVAlign::Center, kicad_transform(90_000, false)), (false, Right, FieldVAlign::Center));
+        // a half turn reverses a horizontal text's reading direction
+        assert_eq!(plotted_text_attrs(false, Left, Top, kicad_transform(180_000, false)), (false, Right, Top));
+        // a left-right mirror: the justification flipped, and the lines of a horizontal text not reordered (x1 < 0)
+        assert_eq!(plotted_text_attrs(false, Left, Top, kicad_transform(0, true)), (false, Right, Top));
+        // a top-bottom mirror (a half turn and a left-right one): the lines reordered (det < 0, x1 > 0)
+        assert_eq!(plotted_text_attrs(false, Left, Top, kicad_transform(180_000, true)), (false, Left, Bottom));
     }
 }

@@ -301,10 +301,22 @@
       await tick(dlg, "Search the current sheet only");
       await sleep(1500);
       t(__eda.state().brightened.includes(`erc:${i}`), `the marker is brightened with the matches (${msg}; ${__eda.state().brightened.slice(0, 5)})`);
+      // drawn brightened on the canvas (`BrightenItem`: `LAYER_BRIGHTENED`, magenta in KiCad's theme; UI-LEFT-3 S3-24), no box over it
+      const magenta = () => {
+        const c = [...document.querySelectorAll(".pcb-canvas-container canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0];
+        const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let k = 0; k < d.length; k += 4) if (d[k] > 215 && d[k + 1] < 60 && d[k + 2] > 215) n++;
+        return n;
+      };
+      const lit = magenta();
       buttonText(dlg, "Find Next").click();
       await sleep(1500);
       t(/match/.test(dlg.innerText), "Find Next found matches");
       await closeDialogs();
+      await sleep(800);
+      const unlit = magenta();
+      t(lit > unlit + 20, `the matches are drawn in the brightened colour while Find is open (${lit} magenta pixels, ${unlit} once it closes)`);
     });
 
     if (dock()) await __eda.run("common.Interactive.search");

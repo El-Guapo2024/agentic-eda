@@ -1879,9 +1879,24 @@ fn write_unit_graphics(out: &mut String, sym: &eda_model::LibSymbol, unit: u32, 
     let boxes: Vec<&eda_model::ir::LibrarySymbolGraphic> = sym.connectivity.text_boxes_of_style(style).filter(|t| t.unit() == unit).collect();
     // the rectangles that are those boxes' borders, one for each
     let mut borders: Vec<eda_model::SymbolGraphic> = boxes.iter().flat_map(|t| t.to_engine_graphics()).collect();
+    let (rot, mirrored) = eda_engine::symgeom::kicad_turn(baker.rot, baker.mirrored, baker.mirror_y);
+    let transform = eda_model::sym_textbox::kicad_transform(rot, mirrored);
     for g in sym.graphics.iter().filter(|g| g.unit() == unit) {
         if let Some(i) = borders.iter().position(|b| b == g) {
             borders.swap_remove(i);
+            continue;
+        }
+        // a text with its justification, face, colour, pen and hidden flag (`LibConnectivity::text_looks`), turned and justified as `SCH_TEXT::Plot` draws it through
+        // the symbol's transform (`eda_model::sym_textbox::plotted_text_attrs`, UI-LEFT-3 S3-5)
+        if let eda_model::SymbolGraphic::Text { angle_deg, .. } = g {
+            let look = sym.connectivity.text_look(g);
+            let (vertical, h, v) = eda_model::sym_textbox::plotted_text_attrs(eda_model::sym_textbox::is_vertical(*angle_deg), look.map(|l| l.h_align).unwrap_or_default(), look.map(|l| l.v_align).unwrap_or_default(), transform);
+            let baked = match baked_graphic(g, baker, width, x0, y1) {
+                eda_model::SymbolGraphic::Text { unit, text, at, size_mm, .. } => eda_model::SymbolGraphic::Text { unit, text, at, angle_deg: if vertical { 90.0 } else { 0.0 }, size_mm },
+                other => other,
+            };
+            let baked_look = look.cloned().map(|l| eda_model::symbol::TextLook { h_align: h, v_align: v, ..l });
+            write_symbol_graphic_text(out, &baked, baked_look.as_ref());
             continue;
         }
         write_cache_shape(out, &baked_graphic(g, baker, width, x0, y1), sym.connectivity.shape_look(g));
@@ -1890,12 +1905,17 @@ fn write_unit_graphics(out: &mut String, sym: &eda_model::LibSymbol, unit: u32, 
     for l in sym.connectivity.private_shapes(unit, style) {
         write_cache_shape(out, &baked_graphic(&l.graphic, baker, width, x0, y1), Some(l));
     }
-    let (rot, _) = eda_engine::symgeom::kicad_turn(baker.rot, baker.mirrored, baker.mirror_y);
     let quarter_turn = eda_model::sym_textbox::turns_a_quarter(rot);
     for t in boxes {
         let placed = eda_model::sym_textbox::plotted_text_box(t, quarter_turn, |p| baked_real_point(baker, width, x0, y1, p));
-        crate::symbol_lib::write_symbol_graphic(out, &placed, None, None);
+        crate::symbol_lib::write_symbol_graphic(out, &placed, text_box_line_style(sym, t).as_deref(), None);
     }
+}
+
+/// The line style of a library text box's border (`STROKE_PARAMS`' type, kept as the look of the rectangle its border is drawn with,
+/// `LibConnectivity::shape_looks`, UI-LEFT-3 S3-8), `None` for the default one.
+fn text_box_line_style(sym: &eda_model::LibSymbol, t: &eda_model::ir::LibrarySymbolGraphic) -> Option<String> {
+    t.to_engine_graphics().first().and_then(|b| sym.connectivity.shape_look(b)).and_then(|l| l.stroke_type.clone())
 }
 
 /// A library pin's `(alternate "name" <type> <shape>)` forms, each on a line of its own, as `SCH_IO_KICAD_SEXPR_LIB_CACHE::savePin` writes them (in the order of
@@ -1930,11 +1950,26 @@ fn write_power_lib_symbol_named(out: &mut String, name: &str, value: &str, unit_
     write_property(out, "Datasheet", &resolved.datasheet, 0.0, 0.0, true);
 
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{unit_name}_0_1"))).unwrap();
+    // a text box as KiCad's `(text_box ..)` in place of the rectangle its border is drawn with (UI-LEFT-3 S3-8), as `write_unit_graphics` writes a symbol's; a power
+    // symbol is written unturned with its own `(at .. angle)`, so nothing of it is baked
+    let boxes: Vec<&eda_model::ir::LibrarySymbolGraphic> = resolved.connectivity.text_boxes_of_style(1).collect();
+    let mut borders: Vec<eda_model::SymbolGraphic> = boxes.iter().flat_map(|t| t.to_engine_graphics()).collect();
     for g in &resolved.graphics {
+        if let Some(i) = borders.iter().position(|b| b == g) {
+            borders.swap_remove(i);
+            continue;
+        }
+        if let eda_model::SymbolGraphic::Text { .. } = g {
+            write_symbol_graphic_text(out, g, resolved.connectivity.text_look(g));
+            continue;
+        }
         write_cache_shape(out, g, resolved.connectivity.shape_look(g));
     }
     for l in resolved.connectivity.private_shapes(0, 1).chain(resolved.connectivity.private_shapes(1, 1)) {
         write_cache_shape(out, &l.graphic, Some(l));
+    }
+    for t in boxes {
+        crate::symbol_lib::write_symbol_graphic(out, t, text_box_line_style(resolved, t).as_deref(), None);
     }
     writeln!(out, "\t\t\t)").unwrap();
 
@@ -1965,7 +2000,7 @@ fn write_cache_shape(out: &mut String, g: &eda_model::SymbolGraphic, look: Optio
     use eda_model::SymbolGraphic::*;
     let filled = match g {
         Rectangle { filled, .. } | Polyline { filled, .. } | Circle { filled, .. } | Arc { filled, .. } => *filled,
-        Text { .. } => return write_symbol_graphic_text(out, g),
+        Text { .. } => return write_symbol_graphic_text(out, g, None),
     };
     let private = if look.is_some_and(|l| l.looks.private) { " private" } else { "" };
     let kind = look.and_then(|l| l.stroke_type.as_deref()).unwrap_or("default");
@@ -2000,25 +2035,43 @@ fn write_cache_shape(out: &mut String, g: &eda_model::SymbolGraphic, look: Optio
     writeln!(out, "\t\t\t\t({tag}{private}\n\t\t\t\t\t{geometry}\n\t\t\t\t\t(stroke (width {}) (type {kind}){stroke_color})\n\t\t\t\t\t{fill}\n\t\t\t\t)", fmt_mm_f(width)).unwrap();
 }
 
-/// A symbol's text in the schematic's cache.
-fn write_symbol_graphic_text(out: &mut String, g: &eda_model::SymbolGraphic) {
+/// A symbol's text in the schematic's cache, with its look (`LibConnectivity::text_looks`, UI-LEFT-3 S3-5) as `EDA_TEXT::Format` writes it: the face first in
+/// `(font ..)`, the size, the pen, bold, italic and the colour; `(justify ..)` with the horizontal word, then the vertical one (each left out when centred); `(hide yes)`.
+fn write_symbol_graphic_text(out: &mut String, g: &eda_model::SymbolGraphic, look: Option<&eda_model::symbol::TextLook>) {
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
     use eda_model::SymbolGraphic::*;
-    match g {
-        Text { text, at, angle_deg, size_mm, .. } => {
-            writeln!(
-                out,
-                "\t\t\t\t(text {} (at {} {} {})\n\t\t\t\t\t(effects (font (size {} {})))\n\t\t\t\t)",
-                sexpr_str(text),
-                fmt_mm_f(at.x),
-                fmt_mm_f(at.y),
-                fmt_mm_f(*angle_deg),
-                fmt_mm_f(*size_mm),
-                fmt_mm_f(*size_mm),
-            )
-            .unwrap();
-        }
-        _ => {}
+    let Text { text, at, angle_deg, size_mm, .. } = g else { return };
+    let mut font = String::new();
+    if let Some(face) = look.and_then(|l| l.font.as_deref()) {
+        font.push_str(&format!("(face {}) ", sexpr_str(face)));
     }
+    font.push_str(&format!("(size {} {})", fmt_mm_f(*size_mm), fmt_mm_f(*size_mm)));
+    if let Some(t) = look.and_then(|l| l.thickness_mm) {
+        font.push_str(&format!(" (thickness {})", fmt_mm_f(t)));
+    }
+    if look.is_some_and(|l| l.bold) {
+        font.push_str(" bold");
+    }
+    if look.is_some_and(|l| l.italic) {
+        font.push_str(" italic");
+    }
+    if let Some(c) = look.and_then(|l| l.text_color) {
+        font.push_str(&format!(" (color {})", sch_extras_io::color_str(c)));
+    }
+    let mut words: Vec<&str> = Vec::new();
+    match look.map(|l| l.h_align).unwrap_or_default() {
+        FieldHAlign::Left => words.push("left"),
+        FieldHAlign::Right => words.push("right"),
+        FieldHAlign::Center => {}
+    }
+    match look.map(|l| l.v_align).unwrap_or_default() {
+        FieldVAlign::Top => words.push("top"),
+        FieldVAlign::Bottom => words.push("bottom"),
+        FieldVAlign::Center => {}
+    }
+    let justify = if words.is_empty() { String::new() } else { format!(" (justify {})", words.join(" ")) };
+    let hide = if look.is_some_and(|l| l.hidden) { " (hide yes)" } else { "" };
+    writeln!(out, "\t\t\t\t(text {} (at {} {} {})\n\t\t\t\t\t(effects (font {font}){justify}{hide})\n\t\t\t\t)", sexpr_str(text), fmt_mm_f(at.x), fmt_mm_f(at.y), fmt_mm_f(*angle_deg)).unwrap();
 }
 
 /// A pin's electrical type for the file: the real resolved library
@@ -2296,6 +2349,37 @@ pub(crate) fn duid_plain(seed: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_power_symbols_cache_entry_writes_its_text_boxes_and_its_texts_looks() {
+        // a power symbol with a dashed text box and a left-justified bold text (UI-LEFT-3 S3-5, S3-8), as the installed-library reader gives it
+        let lib = r##"(kicad_symbol_lib (version 20241209) (generator "test")
+  (symbol "PB" (power) (pin_names (offset 0) (hide yes)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+    (property "Reference" "#PWR" (at 0 -3.81 0) (effects (font (size 1.27 1.27)) (hide yes)))
+    (property "Value" "PB" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
+    (symbol "PB_0_1"
+      (text "V+" (at 1.27 0 0) (effects (font (size 1 1) bold) (justify left)))
+      (text_box "NOTE" (at -2.54 2.54 0) (size 5.08 -1.27) (margins 0.254 0.254 0.254 0.254) (stroke (width 0.1524) (type dot)) (fill (type none)) (effects (font (size 0.8 0.8)) (justify left top)))
+    )
+    (symbol "PB_1_1"
+      (pin power_in line (at 0 0 90) (length 0) (name "PB" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)
+"##;
+        let dir = std::env::temp_dir().join(format!("eda_power_text_box_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.kicad_sym");
+        std::fs::write(&path, lib).unwrap();
+        let sym = crate::list_symbols_in_file(&path, "p").into_iter().find(|s| s.lib_id == "p:PB").expect("the reader reads it");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut out = String::new();
+        super::write_power_lib_symbol(&mut out, "p:PB", &sym, false);
+        assert!(out.contains("(text_box \"NOTE\""), "the box is written as KiCad's text box: {out}");
+        assert!(out.contains("(type dot)"), "with its line style: {out}");
+        assert!(!out.contains("(rectangle"), "its border is not written as a rectangle too: {out}");
+        assert!(out.contains("(text \"V+\" (at 1.27 0 0)\n\t\t\t\t\t(effects (font (size 1 1) bold) (justify left))"), "the text with its looks: {out}");
+    }
+
     use eda_model::units::Nm;
     use super::*;
     use eda_engine::{derive_schematic, EngineOptions};

@@ -35,8 +35,6 @@ const SCH_BOX_COLOR = "rgba(51,51,51,1)"; // COLOR4D( 0.2, 0.2, 0.2, 1 )
 const SCH_BOX_WIDTH_NM = 76_200;
 /** The brightened item of a picker (the interactive delete tool's candidate): a heavy cyan outline. */
 const HOVER_BOX_COLOR = "#33ddff";
-/** A match of the open Find dialog: the brightened item. */
-const FIND_BOX_COLOR = "#ffd84a";
 
 export function CommonOverlay() {
   const studio = useStudioState();
@@ -115,28 +113,11 @@ export function CommonOverlay() {
       }
     }
 
-    // Every item a match of the open Find dialog sits on (`UpdateFind`: `BrightenItem` + `SetForceVisible`).
-    if (tab === "schematic" && tool.findHighlights.length > 0) {
-      ctx.strokeStyle = FIND_BOX_COLOR;
-      ctx.lineWidth = 2;
-      const boxes = adapter.itemBoxes();
-      for (const id of tool.findHighlights) {
-        const box = boxes.get(id);
-        if (box) strokeBox(box);
-      }
-    }
+    // Every item a match of the open Find dialog sits on (`UpdateFind`: `BrightenItem`) is drawn brightened by the schematic's painter (`LAYER_BRIGHTENED`, UI-LEFT-3 S3-24).
 
-    // The items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`): the board draws
-    // them brightened itself (components/canvas/painter.ts, UI-LEFT-2 PP19); the other editors still outline their boxes.
-    if (tab !== "pcb" && tool.menuHighlight && tool.menuHighlight.length > 0) {
-      const boxes = adapter.itemBoxes();
-      ctx.strokeStyle = HOVER_BOX_COLOR;
-      ctx.lineWidth = 2;
-      for (const id of tool.menuHighlight) {
-        const box = boxes.get(id);
-        if (box) strokeBox(box);
-      }
-    }
+    // The items the clarification menu's row under the pointer stands for (`doSelectionMenu`: `highlight( current, BRIGHTENED, &highlightGroup )`) are drawn brightened
+    // by each editor's painter itself: the board's and the Footprint Editor's (UI-LEFT-2 PP19, `PCB_RENDER_SETTINGS::GetColor`), the schematic's and the Symbol
+    // Editor's (`LAYER_BRIGHTENED`, UI-LEFT-3 S3-24). Nothing of them is drawn here.
 
     // The item a picker would take (`BrightenItem` of the delete tool's candidate).
     if (picker && tool.hover) {

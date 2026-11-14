@@ -43,10 +43,12 @@ import { globalLabelOutline, hierLabelOutline, inferSpin, LABEL_TEXT_SIZE_NM, ty
 import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_NM, PIN_TEXT_SIZE_NM, pinTextPlacements, type PinTexts } from "./pinText";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { beginTextRecord, paintKicadText } from "../text/kicadTextPaint";
-import { resolveFont } from "../../kicad-port/kicadText";
+import { lineAdvance, resolveFont, withDefaultFace } from "../../kicad-port/kicadText";
 import { deviceTextDrawSpec, labelTextBoxWidth, schFieldDrawSpec, schLabelDrawSpec, schTextDrawSpec, SCH_DEFAULT_PEN_NM } from "../../kicad-port/schTextSpecs";
 import { defaultPenNm, FIELD_SIZE_NM, textOrigin, type SchField } from "../../kicad-port/schText";
-import { shownText } from "../../kicad-port/schFieldEdit";
+import { fieldItems, shownText } from "../../kicad-port/schFieldEdit";
+import { installColourScopes, memoColours, withFinalColourScope } from "../canvas/colourScope";
+import { cssOf, parseColor, withAlpha } from "../../kicad-port/color4d";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { drawnUnit, referenceUnitSuffix, subpartIdsOf } from "../../kicad-port/schUnits";
@@ -102,6 +104,12 @@ export interface SchematicPaintOptions {
   display?: SchDisplayOptions;
   /** The group worked in (`SCH_SELECTION_TOOL::m_enteredGroup`): drawn in a box with its name. A group that is selected is drawn so too. */
   enteredGroup?: string | null;
+  /** The items the clarification menu's row under the pointer stands for, drawn brightened (`doSelectionMenu`'s BRIGHTENED, `LAYER_BRIGHTENED`; UI-LEFT-3 S3-24). */
+  brightened?: readonly string[];
+  /** Display Options' "Default font:" (`m_Appearance.default_font`): the face of every text with none of its own; absent or "KiCad Font" is the stroke font. */
+  defaultFont?: string | null;
+  /** Internal: the brightened pass's repaint of those items alone (no images, groups, selection boxes or markers, the text record kept). */
+  brightPass?: boolean;
 }
 
 const REF_FONT = 1.6;
@@ -222,9 +230,9 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
         const sizeNm = PIN_FONT * 1e6;
         const color = layerColor("LAYER_PINNAM");
         if (port.side === "left") {
-          drawStrokeText(ctx, pin.name, lx + pad, ly + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color });
+          drawPlainText(ctx, pin.name, lx + pad, ly + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color });
         } else if (port.side === "right") {
-          drawStrokeText(ctx, pin.name, lx - pad, ly + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "right", color });
+          drawPlainText(ctx, pin.name, lx - pad, ly + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "right", color });
         } else {
           // top/bottom: text sits fully above (top-side pin) or fully
           // below (bottom-side pin) the stub point. Baseline sits close
@@ -235,7 +243,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
           // down by one cap-height (CAP_HEIGHT) so the text's *top*
           // lands at the pad point instead.
           const y = port.side === "top" ? ly - pad : ly + pad + sizeNm * CAP_HEIGHT;
-          drawStrokeText(ctx, pin.name, lx, y, { sizeNm, justify: "center", color });
+          drawPlainText(ctx, pin.name, lx, y, { sizeNm, justify: "center", color });
         }
       }
       // Pin number: along the stub itself, at its midpoint, offset to
@@ -248,10 +256,10 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
         const my = (ly + sy) / 2;
         if (port.side === "left" || port.side === "right") {
           // Sits just above the stub line (bottom-anchored -- see CAP_HEIGHT's comment).
-          drawStrokeText(ctx, pin.number, mx, my - pad * 0.5, { sizeNm, justify: "center", color });
+          drawPlainText(ctx, pin.number, mx, my - pad * 0.5, { sizeNm, justify: "center", color });
         } else {
           const justify = port.side === "top" ? "right" : "left";
-          drawStrokeText(ctx, pin.number, mx + (port.side === "top" ? -pad * 0.5 : pad * 0.5), my + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify, color });
+          drawPlainText(ctx, pin.number, mx + (port.side === "top" ? -pad * 0.5 : pad * 0.5), my + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify, color });
         }
       }
       // No-connect: a small blue X centered on the stub's free end --
@@ -347,14 +355,34 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
  * counter-clockwise about the anchor (`kicad-port/schText.ts`, `FONT::Draw`'s placement). A pin's name and number (`drawPinText`), which have no face of their own;
  * the fields, labels and texts are drawn by the shared layout (`drawField`, `drawLabel`, `drawSchText`: kicad-port/schTextSpecs.ts).
  */
+/**
+ * A text with no face of its own that the studio lays out with the stroke font's helpers -- the box symbol's texts, a power symbol's or a sheet's fallback name: in the
+ * default font in force when that is an outline face (`strokeText`: `if( !font ) font = FONT::GetFont( eeconfig()->m_Appearance.default_font, .. )`, UI-LEFT-3 S3-29),
+ * its baseline-justified position read as a bottom justification; in the stroke font as before otherwise (the Symbol Editor's default).
+ */
+function drawPlainText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, o: { sizeNm: number; justify: "left" | "center" | "right"; color: string; thicknessNm?: number; angleRad?: number; italic?: boolean }) {
+  if (resolveFont(null).kind === "stroke") {
+    drawStrokeText(ctx, text, x, y, o);
+    return;
+  }
+  if (!text) return;
+  const spec = { text, pos: [x, y] as [number, number], size: [o.sizeNm, o.sizeNm] as [number, number], pen: o.thicknessNm ?? defaultPenNm(o.sizeNm), halign: o.justify, valign: "bottom" as const, angleDeg: o.angleRad ? (-o.angleRad * 180) / Math.PI : 0, italic: !!o.italic, multiline: false, iu: 100 };
+  paintKicadText(ctx, spec, null, { color: o.color });
+}
+
 function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeNm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessNm?: number; italic?: boolean }) {
   if (!text) return;
   const thickness = o.thicknessNm ?? defaultPenNm(o.sizeNm);
+  // a pin's name or number in the default font when that is an outline face (`PIN_LAYOUT_CACHE`: `FONT::GetFont( cfg->m_Appearance.default_font )`, UI-LEFT-3 S3-29)
+  if (resolveFont(null).kind === "outline") {
+    paintKicadText(ctx, { text, pos: anchor, size: [o.sizeNm, o.sizeNm], pen: thickness, halign: o.h, valign: o.v, angleDeg: o.vertical ? 90 : 0, italic: !!o.italic, multiline: false, iu: 100 }, null, { color: o.color });
+    return;
+  }
   const [dx, dy] = textOrigin(measureStrokeText(text, o.sizeNm), o.sizeNm, thickness, o.h, o.v);
   ctx.save();
   ctx.translate(anchor[0], anchor[1]);
   if (o.vertical) ctx.rotate(-Math.PI / 2);
-  drawStrokeText(ctx, text, dx, dy, { sizeNm: o.sizeNm, thicknessNm: thickness, justify: "left", color: o.color, italic: o.italic });
+  drawPlainText(ctx, text, dx, dy, { sizeNm: o.sizeNm, thicknessNm: thickness, justify: "left", color: o.color, italic: o.italic });
   ctx.restore();
 }
 
@@ -421,10 +449,10 @@ function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol,
   // "above and below"), above and below and centred for everything else.
   const at = fieldAnchors(bbox, verticalTwoPin);
   const refSizeNm = REF_FONT * 1e6;
-  drawStrokeText(ctx, (symbol.reference ?? symbol.id) + unitSuffix, at.ref[0], at.ref[1], { sizeNm: refSizeNm, thicknessNm: refSizeNm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
+  drawPlainText(ctx, (symbol.reference ?? symbol.id) + unitSuffix, at.ref[0], at.ref[1], { sizeNm: refSizeNm, thicknessNm: refSizeNm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
     const sizeNm = VALUE_FONT * 1e6;
-    drawStrokeText(ctx, symbol.shown?.value ?? symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeNm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
+    drawPlainText(ctx, symbol.shown?.value ?? symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeNm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
   }
   // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
   // draws alongside ref/value (this app has no separate "hide field"
@@ -432,7 +460,7 @@ function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol,
   const pkg = symbol.shown?.footprint ?? symbol.footprint ?? symbol.package;
   if (pkg) {
     const sizeNm = FIELD_FONT * 1e6;
-    drawStrokeText(ctx, pkg, at.footprint[0], at.footprint[1], { sizeNm, justify: at.justify, color: layerColor("LAYER_FIELDS") });
+    drawPlainText(ctx, pkg, at.footprint[0], at.footprint[1], { sizeNm, justify: at.justify, color: layerColor("LAYER_FIELDS") });
   }
 }
 
@@ -481,15 +509,21 @@ function applyFill(ctx: CanvasRenderingContext2D, mode: "none" | "outline" | "ba
 /** Exported for `components/symbol/symbolPainter.ts` (the Symbol Editor tab): the exact same resolved-graphic drawing logic applies there -- a library symbol's own graphics are this same `ResolvedGraphic` shape, just resolved with an identity transform/no instance offset instead of a placed instance's. */
 export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphic, strokeColor: string) {
   if (g.kind === "text") {
-    // `SCH_PAINTER::draw( SCH_TEXT )` on `LAYER_DEVICE`: a symbol's text (centred both ways here: the library graphic keeps no justification) at the centre of its box, centred
-    // vertically (kicad-port/schTextSpecs.ts `deviceTextDrawSpec`); a text at 90 degrees runs up the sheet
-    const vertical = Math.abs(Math.round(g.angleDeg)) % 180 === 90;
-    paintKicadText(ctx, deviceTextDrawSpec(g.content, { at: g.at, h: "center", v: "center", vertical, size_nm: g.sizeNm }, undefined, paintedPen), null, { color: strokeColor });
+    // `SCH_PAINTER::draw( SCH_TEXT )` on `LAYER_DEVICE` (UI-LEFT-3 S3-5): the text turned and justified by the symbol's orientation (libSymbol.ts, kicad-port/symTextPlaced.ts),
+    // at the centre of its box -- its left or right edge for a left or right justification -- centred vertically (kicad-port/schTextSpecs.ts `deviceTextDrawSpec`), in its
+    // face, with its own pen when it has one. Its colour (`getRenderColor`): its own when it has one (`isSymbolChild && GetTextColor() != UNSPECIFIED`) and the symbol is
+    // drawn in the device colour, else the symbol's; a hidden one only with Show Hidden Fields, in the hidden colour.
+    const device = strokeColor === layerColor("LAYER_DEVICE");
+    if (g.hidden && !paintedShowHiddenFields) return;
+    const color = g.hidden && device ? layerColor("LAYER_HIDDEN") : device && g.color && g.color.a > 0 && !overrideSchItemColors() ? rgba(g.color) : strokeColor;
+    const look = { at: g.at, h: g.h ?? "center", v: g.v ?? "center", vertical: Math.abs(Math.round(g.angleDeg)) % 180 === 90, size_nm: g.sizeNm, bold: !!g.bold, italic: !!g.italic, pen_nm: g.thicknessNm };
+    paintKicadText(ctx, deviceTextDrawSpec(g.content, look, resolveFont(g.font, look.bold, look.italic), paintedPen), g.font ?? null, { color, record: g.recordId ? { tag: "sch", id: g.recordId } : undefined });
     return;
   }
   if (g.kind === "text_box") {
-    // a library text box's text, drawn as a sheet text box's (`SCH_PAINTER::draw( SCH_TEXTBOX )`): its own text colour, else the symbol's; the border and fill are a rectangle
-    drawTextBoxText(ctx, { id: "", shape: g.shape }, g.color && g.color.a > 0 && !overrideSchItemColors() ? rgba(g.color) : strokeColor);
+    // a library text box's text, drawn as a sheet text box's (`SCH_PAINTER::draw( SCH_TEXTBOX )`): its own text colour, else the symbol's, in its face (UI-LEFT-3 S3-8);
+    // the border and fill are a rectangle with the box's line style and colours
+    drawTextBoxText(ctx, { id: "", shape: g.shape }, g.color && g.color.a > 0 && !overrideSchItemColors() ? rgba(g.color) : strokeColor, undefined, g.font ?? null, paintedPen);
     return;
   }
 
@@ -775,7 +809,7 @@ function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: Reso
     // functions and its name is drawn (`if( std::optional<TEXT_INFO> nameInfo = cache.GetPinNameInfo(..) )`); the name is the alternate a pin took
     const name = shownPinName(rp.pin.name);
     if (showPinAltIcons && rp.pin.alternates?.length && !texts.namesHidden && name !== "") {
-      const icon = pinAltIcon(rp.tip, rp.root, { widthNm: measureStrokeText(name, PIN_TEXT_SIZE_NM), sizeNm: PIN_TEXT_SIZE_NM }, texts.nameOffsetNm);
+      const icon = pinAltIcon(rp.tip, rp.root, { widthNm: plainMeasure()(name, PIN_TEXT_SIZE_NM), sizeNm: PIN_TEXT_SIZE_NM }, texts.nameOffsetNm);
       drawAltPinIcon(ctx, icon, hidden ? layerColor("LAYER_HIDDEN") : layerColor("LAYER_PINNAM"));
     }
   }
@@ -821,12 +855,12 @@ function drawPowerSymbolText(ctx: CanvasRenderingContext2D, ps: PowerSymbol, res
     const { root: R, dir } = resolvedPin;
     const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_NM, R[1] + dir[1] * PIN_NAME_OFFSET_NM];
     if (isHorizontalPin(dir)) {
-      drawStrokeText(ctx, ps.net, anchor[0], anchor[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: dir[0] >= 0 ? "left" : "right", color });
+      drawPlainText(ctx, ps.net, anchor[0], anchor[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: dir[0] >= 0 ? "left" : "right", color });
     } else {
-      drawStrokeText(ctx, ps.net, anchor[0], anchor[1], { sizeNm, angleRad: -Math.PI / 2, justify: dir[1] < 0 ? "left" : "right", color });
+      drawPlainText(ctx, ps.net, anchor[0], anchor[1], { sizeNm, angleRad: -Math.PI / 2, justify: dir[1] < 0 ? "left" : "right", color });
     }
   } else {
-    drawStrokeText(ctx, ps.net, ps.at[0] + PIN_NAME_OFFSET_NM, ps.at[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color });
+    drawPlainText(ctx, ps.net, ps.at[0] + PIN_NAME_OFFSET_NM, ps.at[1] + sizeNm * MIDDLE_OFFSET_FACTOR, { sizeNm, justify: "left", color });
   }
 }
 
@@ -923,10 +957,14 @@ function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolea
  * drew here, the view simply had no sheets to show) rather than full
  * pixel-parity with source's own pin glyphs.
  */
-function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, on: boolean, selection: ReadonlySet<string> = new Set()) {
+function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, on: boolean, selection: ReadonlySet<string> = new Set(), pinsOnly = false) {
   const hair = 1 / view.scale;
   const [x, y] = s.at;
   const [w, h] = s.size;
+  if (pinsOnly) {
+    drawSheetPins(ctx, view, s, selection);
+    return;
+  }
   // `SCH_PAINTER::draw( SCH_SHEET )`: the background in the sheet's own colour when it has one with some alpha (`LAYER_SHEET_BACKGROUND`, transparent in the
   // default theme, otherwise), the border in its own colour and width (`GetBorderColor`, `GetPenWidth`: 0 is the default line width), Sheet Properties' Style
   // (`Sheet::props`). **Differs**: a sheet with no style of its own is drawn as before, unfilled (the file gives it a pale yellow fill).
@@ -968,10 +1006,18 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   if (s.fields?.length) {
     drawSchFields(ctx, s.fields);
   } else {
-    drawStrokeText(ctx, s.name, x, y - 400, { sizeNm: nameSizeNm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
-    drawStrokeText(ctx, s.file, x, y + h + 400_000 + nameSizeNm * 0.8, { sizeNm: nameSizeNm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+    drawPlainText(ctx, s.name, x, y - 400, { sizeNm: nameSizeNm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
+    drawPlainText(ctx, s.file, x, y + h + 400_000 + nameSizeNm * 0.8, { sizeNm: nameSizeNm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
   }
 
+  drawSheetPins(ctx, view, s, selection);
+}
+
+/** A sheet's pins (`SCH_SHEET_PIN`s), each in the selection colour when it is selected. */
+function drawSheetPins(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, selection: ReadonlySet<string>) {
+  const hair = 1 / view.scale;
+  const [x, y] = s.at;
+  const [w] = s.size;
   // A sheet pin sits on the border it names (`SCH_SHEET_PIN::SetSide`): its flag points into the sheet from that edge and its name is
   // written inside, after the flag -- so a wire reaches the pin from outside and the name never runs over it.
   const sheetLabelColor = layerColor("LAYER_SHEETLABEL");
@@ -1127,7 +1173,18 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch
 // world transform is applied (see canvas/Canvas.tsx's PCB equivalent) --
 // not here, which would mean computing an inverse-transformed rect on
 // every repaint for no benefit.
+/** How wide a line of a text with no face of its own is in the default font in force (the stroke font's measure for the stroke font). */
+function plainMeasure(): (text: string, sizeNm: number) => number {
+  const font = resolveFont(null);
+  return font.kind === "stroke" ? measureStrokeText : (text, size) => lineAdvance(text, font, [size, size]);
+}
+
 export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
+  // Display Options' "Default font:" for every text with no face of its own (`SCH_RENDER_SETTINGS::SetDefaultFont( cfg->m_Appearance.default_font )`, UI-LEFT-3 S3-29)
+  withDefaultFace(opts.defaultFont ?? null, () => paintSchematicIn(ctx, view, sch, opts));
+}
+
+function paintSchematicIn(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
   // Schematic Setup > Formatting's ratios the sheet's labels, pins and overbars are laid out by (kicad-port/schFormattingLook.ts; the hit tests on the sheet
   // read the same), the overbar's height only while the sheet is drawn (the stroke font is every editor's)
   setSchFormattingLook(sch.setup);
@@ -1147,11 +1204,13 @@ function paintSchematicSheet(ctx: CanvasRenderingContext2D, view: ViewTransform,
   paintedSetup = sch.setup;
   // Schematic Setup's default line width is every text's pen when it has none of its own (`getTextThickness`)
   paintedPen = sch.setup?.default_line_width_nm && sch.setup.default_line_width_nm > 0 ? sch.setup.default_line_width_nm : SCH_DEFAULT_PEN_NM;
+  // the brightened pass's colours (`withFinalColourScope`)
+  installColourScopes(ctx);
   // what `window.__edaText.sch` reports is what this paint draws
-  beginTextRecord("sch");
+  if (!opts.brightPass) beginTextRecord("sch");
 
   // The images lie under everything else on the sheet (`LAYER_DRAW_BITMAPS`).
-  paintImages(ctx, view, sch.graphics ?? [], opts.selection, (sch.sheet_path ?? []).map((c) => c.id).join("/"));
+  if (!opts.brightPass) paintImages(ctx, view, sch.graphics ?? [], opts.selection, (sch.sheet_path ?? []).map((c) => c.id).join("/"));
 
   // Wires. `on`: net-highlighted (click a wire with no modifier), or
   // box/modified-click *selected* (new this session -- `opts.selection`
@@ -1271,7 +1330,7 @@ function paintSchematicSheet(ctx: CanvasRenderingContext2D, view: ViewTransform,
   // Power symbols (GND, +5V, PWR_FLAG, ...).
   for (const ps of sch.power_symbols) {
     const on = opts.netHighlight === ps.net || opts.selection.has(ps.id);
-    const resolved = resolveLibSymbol({ id: ps.id, lib_id: ps.lib_id, at: ps.at, rot: ps.rot, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [ps.pin] }, sch.lib_symbols);
+    const resolved = resolveLibSymbol({ id: ps.id, lib_id: ps.lib_id, at: ps.at, rot: ps.rot, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [ps.pin], text_shown: ps.text_shown, text_box_shown: ps.text_box_shown }, sch.lib_symbols);
     const m = symbolTransformMatrix(ps.rot, null);
     const resolvedPin = resolved?.pins[0] ?? (sch.lib_symbols[ps.lib_id]?.pins.find((p) => p.unit === 0 || p.unit === 1) ? resolvePin(sch.lib_symbols[ps.lib_id]!.pins.find((p) => p.unit === 0 || p.unit === 1)!, m, ps.at) : null);
     drawPowerSymbol(ctx, view, ps, resolved?.graphics ?? null, resolvedPin, on);
@@ -1300,6 +1359,8 @@ function paintSchematicSheet(ctx: CanvasRenderingContext2D, view: ViewTransform,
     }
   }
 
+  if (opts.brightPass) return;
+
   // A selected pin (`SCH_PIN_T`): its line and its decoration over the symbol, in the selection colour, thicker than the pin itself. Its name and number follow it.
   if (opts.selection.size > 0) {
     for (const id of opts.selection) {
@@ -1325,6 +1386,120 @@ function paintSchematicSheet(ctx: CanvasRenderingContext2D, view: ViewTransform,
   // ERC markers last of all -- an overlay above every sheet layer, matching real KiCad (and this app's own canvas/painter.ts for DRC).
   if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null, opts.ercStale, display);
   if (opts.lintViolations) drawLintMarkers(ctx, view, sch, opts.lintViolations, opts.lintSelected ?? null);
+
+  // The items the clarification menu points at and the open Find dialog's matches, brightened over everything (the view's overlay group; UI-LEFT-3 S3-24).
+  if (opts.brightened && opts.brightened.length > 0) paintBrightened(ctx, view, sch, opts, new Set(opts.brightened));
+}
+
+/**
+ * The items the clarification menu's row under the pointer stands for (`SELECTION_TOOL::doSelectionMenu` at 8303b2ad: `TA_CHOICE_MENU_UPDATE` -> `highlight( current,
+ * BRIGHTENED, &highlightGroup )`, the group drawn in the view's overlay), drawn again over the sheet as `SCH_PAINTER` draws a brightened item: every colour
+ * `getRenderColor` gives it is `LAYER_BRIGHTENED` (`if( aItem->IsBrightened() ) color = m_schSettings.GetLayerColor( LAYER_BRIGHTENED )`, ahead of the selection's), a
+ * background layer's at a fifth of its alpha (`isBackgroundLayer( aLayer )`: `color.WithAlpha( 0.2 )`); a brightened symbol's items are brightened with it
+ * (`tempItem.SetFlags( aSymbol->GetFlags() )`), and so are its fields. The sheet with only those items is painted again through a colour scope that makes every
+ * colour so (components/canvas/colourScope.ts); a pin, a field, a sheet pin or a table cell alone is drawn by itself. **Differs**: the brightened shadow
+ * (`LAYER_SELECTION_SHADOWS` at 0.15 alpha, `highlight_thickness` wider) is not drawn.
+ */
+function paintBrightened(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions, ids: ReadonlySet<string>): void {
+  const bright = layerColor("LAYER_BRIGHTENED");
+  const backgrounds = new Set(["LAYER_DEVICE_BACKGROUND", "LAYER_NOTES_BACKGROUND", "LAYER_SHEET_BACKGROUND", "LAYER_SHAPES_BACKGROUND"].map((k) => layerColor(k)));
+  const faint = brightenedBackground(bright);
+  const has = (id: string | undefined | null) => !!id && ids.has(id);
+  const only: Schematic = {
+    ...sch,
+    wires: sch.wires.filter((w) => has(w.id)),
+    bus_entries: sch.bus_entries.filter((b) => has(b.id)),
+    junctions: (sch.junctions ?? []).filter((j) => has(j.id)),
+    lines: (sch.lines ?? []).filter((l) => has(l.id)),
+    graphics: (sch.graphics ?? []).filter((g) => has(g.id) && g.shape.type !== "image"),
+    tables: (sch.tables ?? []).filter((t) => has(t.id)),
+    sheets: sch.sheets.filter((x) => has(x.id)),
+    no_connects: sch.no_connects.filter((n) => has(n.id)),
+    labels: sch.labels.filter((l) => has(l.id)),
+    texts: sch.texts.filter((t) => has(t.id)),
+    power_symbols: sch.power_symbols.filter((p) => has(p.id)),
+    symbols: sch.symbols.filter((x) => has(x.id)),
+  };
+  const kept = paintedSelection;
+  const ercs = (opts.ercViolations ?? []).filter((_, i) => ids.has(`erc:${i}`));
+  const drawAll = () => {
+    paintSchematicSheet(ctx, view, only, { selection: new Set(), netHighlight: null, display: opts.display, brightPass: true });
+    // an ERC marker a Find match sits on (`erc:<n>`)
+    if (ercs.length > 0) drawErcMarkers(ctx, view, sch, ercs, null, false, opts.display);
+    // the items drawn alone: a symbol's pin (`SCH_PIN_T`), a field, a sheet's pin, a table's cell
+    for (const id of ids) {
+      const pin = isPinItemId(id) ? pinById(sch, id) : null;
+      if (pin) {
+        ctx.save();
+        ctx.strokeStyle = bright;
+        ctx.lineWidth = Math.max(PIN_TEXT_PEN_NM, 1 / view.scale);
+        ctx.beginPath();
+        ctx.moveTo(pin.tip[0], pin.tip[1]);
+        ctx.lineTo(pin.root[0], pin.root[1]);
+        ctx.stroke();
+        ctx.restore();
+        drawPinText(ctx, { pin: { number: pin.number, name: pin.name } as ResolvedPin["pin"], tip: pin.tip, root: pin.root, dir: [0, 0] }, { name: bright, number: bright }, pin.texts);
+      }
+    }
+    for (const f of fieldItems(sch)) {
+      if (!has(f.id) || ids.has(f.owner.split("#")[0]!)) continue;
+      const text = shownText({ name: f.field.name, text: f.field.shown ?? f.field.text, name_shown: f.field.name_shown });
+      drawField(ctx, text, f.field, bright);
+    }
+    for (const sheet of sch.sheets) {
+      if (has(sheet.id)) continue;
+      const pins = sheet.pins.filter((p) => has(p.id));
+      if (pins.length > 0) drawSheet(ctx, view, { ...sheet, pins }, false, new Set(), true);
+    }
+    for (const t of sch.tables ?? []) {
+      if (has(t.id)) continue;
+      const cells = t.cells.filter((c) => has(c.id));
+      if (cells.length > 0) paintSchTables(ctx, view, [{ ...t, cells, borders: [] }], new Set(), paintedPen);
+    }
+  };
+  // the shadow first (`drawingShadows`: `LAYER_BRIGHTENED` at 0.15 alpha, each line `getShadowWidth( true )` wider -- Display Options' highlight thickness in pixels and
+  // in mils, `fabs( scale * milsWidth ) + MilsToIU( milsWidth )`), then the item itself
+  const shade = cssOfAlpha(bright, 0.15);
+  withFinalColourScope(ctx, memoColours(`schshade|${shade}`, () => shade), () => withWiderLines(ctx, brightenedShadowWidth(view.scale), drawAll));
+  withFinalColourScope(ctx, memoColours(`schbright|${bright}|${[...backgrounds].join("|")}`, (css) => (backgrounds.has(css) ? faint : bright)), drawAll);
+  paintedSelection = kept;
+}
+
+/** `EESCHEMA_SETTINGS::m_Selection.highlight_thickness` (`selection.highlight_thickness`, mils): KiCad's default, 2. */
+export const HIGHLIGHT_THICKNESS_MILS = 2;
+
+/** `SCH_PAINTER::getShadowWidth( true )`, nm: the highlight thickness in screen pixels (`GetScreenWorldMatrix().GetScale()`) plus as many mils. */
+export function brightenedShadowWidth(viewScale: number, mils = HIGHLIGHT_THICKNESS_MILS): number {
+  return Math.abs(mils / (viewScale || 1)) + mils * 25_400;
+}
+
+/** `draw` with every line it strokes `extra` wider (`attrs.m_StrokeWidth += getShadowWidth( .. )`, `getLineWidth`'s shadow branch): the context's `lineWidth` grown while it runs. */
+export function withWiderLines(ctx: CanvasRenderingContext2D, extra: number, draw: () => void): void {
+  let proto: object | null = Object.getPrototypeOf(ctx);
+  let native: PropertyDescriptor | undefined;
+  for (; proto && !native; proto = Object.getPrototypeOf(proto)) native = Object.getOwnPropertyDescriptor(proto, "lineWidth");
+  if (!native?.get || !native.set) return draw();
+  const was = native.get.call(ctx) as number;
+  Object.defineProperty(ctx, "lineWidth", { configurable: true, get: () => native!.get!.call(ctx), set: (v: number) => native!.set!.call(ctx, v + extra) });
+  try {
+    ctx.lineWidth = was;
+    draw();
+  } finally {
+    delete (ctx as unknown as { lineWidth?: number }).lineWidth;
+    native.set.call(ctx, was);
+  }
+}
+
+/** A CSS colour at `a` alpha (`COLOR4D::WithAlpha`). */
+function cssOfAlpha(css: string, a: number): string {
+  const c = parseColor(css);
+  return c ? cssOf(withAlpha(c, a)) : css;
+}
+
+/** `LAYER_BRIGHTENED` on a background layer: `color.WithAlpha( 0.2 )`. */
+function brightenedBackground(css: string): string {
+  const c = parseColor(css);
+  return c ? cssOf(withAlpha(c, 0.2)) : css;
 }
 
 // Re-exported for SchematicView.tsx's bounds/hit-testing, which need the

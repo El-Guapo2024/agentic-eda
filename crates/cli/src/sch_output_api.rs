@@ -100,8 +100,8 @@ pub(crate) const FORMATS: [&str; 5] = ["ps", "pdf", "svg", "dxf", "png"];
 /// Differs (no kicad-cli flag; the dialog shows each disabled with the reason): "Page size:" (kicad-cli plots at the schematic's size,
 /// `m_pageSizeSelect = PAGE_SIZE_AUTO`), "Minimum line width:", DXF's "Export units:" (kicad-cli always exports in mm, as KiCad's own comment
 /// in `onPlotFormatSelection` says), "Open file after plot". The design variant is `--variant` ([`crate::fab_api::variant_args`]). The hop-over is the
-/// project's ([`plot`] passes `--draw-hop-over` as `m_plotHopOver` is set, [`eda_kicad_engine::pictures::hop_over_args`]); the default font is the
-/// default of both (the KiCad font).
+/// project's ([`plot`] passes `--draw-hop-over` as `m_plotHopOver` is set, [`eda_kicad_engine::pictures::hop_over_args`]); the default font is Display Options'
+/// (`default_font`, `--default-font`), the KiCad font when the request names none.
 pub(crate) fn plot_args_for(format: &str, req: &Value, page: Option<String>) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     let color = bool_of(req, "color", true);
@@ -131,6 +131,11 @@ pub(crate) fn plot_args_for(format: &str, req: &Value, page: Option<String>) -> 
         if !bool_of(req, "png_antialias", true) {
             a.push("--no-antialias".into());
         }
+    }
+    // the schematic's default font (`DIALOG_PLOT_SCHEMATIC::plotSchematic`: `SetDefaultFont( cfg->m_Appearance.default_font )`, kicad-cli's `--default-font`, UI-LEFT-3 S3-29);
+    // the KiCad font is kicad-cli's own default. DXF has the flag too (`EXPORT_SCH_PLOT` options are common)
+    if let Some(font) = req.get("default_font").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty() && *f != "KiCad Font") {
+        a.extend(["--default-font".into(), font.into()]);
     }
     a.extend(pages_args(req, page));
     a
@@ -269,6 +274,9 @@ mod tests {
         );
         assert!(plot_args_for("svg", &json!({ "pdf_metadata": false }), None).is_empty(), "the PDF options are the PDF's");
         assert_eq!(plot_args_for("png", &json!({}), None), vec!["--dpi", "300"]);
+        // Display Options' default font (`SetDefaultFont( default_font )`, UI-LEFT-3 S3-29): passed unless it is the KiCad font, kicad-cli's own
+        assert_eq!(plot_args_for("svg", &json!({ "default_font": "DejaVu Sans" }), None), vec!["--default-font", "DejaVu Sans"]);
+        assert!(plot_args_for("pdf", &json!({ "default_font": "KiCad Font" }), None).is_empty());
         assert_eq!(plot_args_for("png", &json!({ "png_dpi": 5000, "png_antialias": false }), None), vec!["--dpi", "2400", "--no-antialias"], "the spin control's range");
         assert_eq!(plot_args_for("pdf", &json!({ "plot_all": false, "plot_drawing_sheet": false }), Some("2".into())), vec!["--exclude-drawing-sheet", "--pages", "2"]);
         assert_eq!(THEMES.map(|(_, n)| n), ["KiCad Classic", "KiCad Default"], "sorted by name, as GetColorSettingsList sorts them");
