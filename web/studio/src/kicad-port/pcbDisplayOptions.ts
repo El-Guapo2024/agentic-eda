@@ -50,6 +50,16 @@ export function netNamesOnPads(mode: NetNamesMode): boolean {
   return mode === 1 || mode === 3;
 }
 
+/**
+ * The net text `PCB_PAINTER::draw( const PAD* )` writes on a pad: its net name when net names are shown on pads, but "x" on a no-connect pad
+ * (`PAD::IsNoConnectPad`: the pin type contains `no_connect`) and "*" on a free pad (`PAD::IsFreePad`, the server's `free`) whatever the mode.
+ */
+export function padNetText(pad: { net: string | null; pin_type?: string | null; free?: boolean }, netNamesShown: boolean): string | null {
+  if (pad.pin_type?.includes("no_connect")) return "x";
+  if (pad.free) return "*";
+  return netNamesShown ? pad.net : null;
+}
+
 /** `draw( const PCB_TRACK* )`: "if( !pcbconfig() || pcbconfig()->m_Display.m_NetNames < 2 ) return;". */
 export function netNamesOnTracks(mode: NetNamesMode): boolean {
   return mode >= 2;

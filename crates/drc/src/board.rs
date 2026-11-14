@@ -158,6 +158,61 @@ pub struct DrcPad {
     pub orientation_mdeg: i64,
     /// The pad's and footprint's zone-connection overrides, thermal gap / spoke width / spoke angle.
     pub zone: PadZoneFacts,
+    /// `PAD::IsFreePad`: the pad of a "free" pin (`m_pinType == "free"`, a not-internally-connected pin) alone on its net, which the derived board names
+    /// `unconnected-(..)` (`GetShortNetname().StartsWith( "unconnected-(" )`). "A pad associated with a "free" pin (NIC) doesn't have a net until it has
+    /// been used": the router gives it no clearance to another net and lets a route end in it, the copper clearance check takes the first net that
+    /// touches it ([`pad_is_free`]).
+    pub free: bool,
+}
+
+/// `PAD::IsFreePad` (`pcbnew/pad.cpp`): `GetShortNetname().StartsWith( wxT( "unconnected-(" ) ) && m_pinType == wxT( "free" )`, of the net and the pin type the
+/// derived board writes for the pad. The short net name is what follows the last `/` (`NETINFO_ITEM::GetShortNetname`).
+pub fn pad_is_free(net: Option<&str>, pin_type: &str) -> bool {
+    let short = net.map(|n| n.rsplit('/').next().unwrap_or(n)).unwrap_or("");
+    short.starts_with("unconnected-(") && pin_type == "free"
+}
+
+/// [`pad_is_free`] of the `nth` pad numbered `number` of footprint `fp_id`, with the net and the pin type the writer gives it (`eda_kicad::pcb`'s pad
+/// block): the file's own net, else the number's net (`pin_net`) or its `unconnected-(..)` (`unconnected`); a pad edit's pin type, else the file's,
+/// else -- a footprint made here -- its schematic pin's.
+#[allow(clippy::too_many_arguments)]
+fn written_pad_is_free(design: &Design, model: &ConstraintModel, pin_net: &HashMap<String, String>, unconnected: &std::collections::BTreeMap<String, String>, fp_id: &str, extra: Option<&eda_model::ir::FootprintExtra>, pmask: Option<&eda_model::ir::PadMaskInfo>, number: &str, nth: u32) -> bool {
+    let key = format!("{fp_id}.{number}");
+    let made_here = pmask.is_none() || extra.is_some_and(|e| e.from_library);
+    let written_net = pmask.and_then(|m| m.net.as_deref()).filter(|n| !n.is_empty()).or_else(|| pin_net.get(&key).or_else(|| unconnected.get(&key)).map(String::as_str));
+    let pin_type = design
+        .footprint_edit(fp_id)
+        .and_then(|e| e.pad(number, nth))
+        .and_then(|e| e.pin_type.as_deref())
+        .or(pmask.map(|m| m.pin_type.as_str()).filter(|t| !(made_here && t.is_empty())))
+        .or_else(|| if made_here { model.symbol_links.get(fp_id).and_then(|l| l.pins.get(number)).map(|(_, t)| t.as_str()) } else { None })
+        .unwrap_or("");
+    pad_is_free(written_net, pin_type)
+}
+
+/// The free pads of the board (`PAD::IsFreePad`, [`DrcPad::free`]) as `"REF.NUM"`, for a reader that does not build the whole [`DrcBoard`].
+pub fn free_pads(design: &Design, model: &ConstraintModel) -> std::collections::BTreeSet<String> {
+    let pin_net: HashMap<String, String> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.clone(), n.name.clone()))).collect();
+    let unconnected = eda_engine::nets::unconnected_pad_nets(design, model);
+    let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
+    let mut out = std::collections::BTreeSet::new();
+    for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
+        let Some(footprint) = model.part(&fp.id).and_then(|part| model.footprint_of(part)) else { continue };
+        let extra = extras.get(fp.id.as_str()).copied();
+        let mut seen: HashMap<&str, u32> = HashMap::new();
+        for (pad_idx, pad) in footprint.pads.iter().enumerate() {
+            let nth = {
+                let n = seen.entry(pad.number.as_str()).or_insert(0);
+                *n += 1;
+                *n
+            };
+            let pmask = extra.and_then(|e| if e.pads.len() == footprint.pads.len() { e.pads.get(pad_idx) } else { None });
+            if pad.kind != PadKind::NonPlatedHole && written_pad_is_free(design, model, &pin_net, &unconnected, &fp.id, extra, pmask, &pad.number, nth) {
+                out.insert(format!("{}.{}", fp.id, pad.number));
+            }
+        }
+    }
+    out
 }
 
 impl DrcPad {
@@ -589,6 +644,8 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
 
     // "REF.PIN" -> net name, exactly `eda_kicad::pcb`'s own `pin_net` lookup.
     let pin_net: HashMap<String, String> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.clone(), n.name.clone()))).collect();
+    // ... and the `unconnected-(..)` net the derived board gives a pin the model has on no net (a free pad's)
+    let unconnected = eda_engine::nets::unconnected_pad_nets(design, model);
 
     let mut pads = Vec::new();
     let mut footprints = Vec::new();
@@ -614,7 +671,13 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             }
             let board_rot = fp.rot as i64;
             let half_turned = written_half_turned(design, fp);
+            let mut seen: HashMap<&str, u32> = HashMap::new();
             for (pad_idx, pad) in footprint.pads.iter().enumerate() {
+                let nth = {
+                    let n = seen.entry(pad.number.as_str()).or_insert(0);
+                    *n += 1;
+                    *n
+                };
                 let center = pad_center(fp, pad.at);
                 let pad_rot = board_rot + pad.rot as i64;
                 let copper = placed_pad_copper(fp, pad);
@@ -632,6 +695,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     PadKind::ThroughHole | PadKind::NonPlatedHole => layers.clone(),
                 };
                 let pmask = extra.and_then(|e| if e.pads.len() == footprint.pads.len() { e.pads.get(pad_idx) } else { None });
+                let free = pad.kind != PadKind::NonPlatedHole && written_pad_is_free(design, model, &pin_net, &unconnected, &fp.id, extra, pmask, &pad.number, nth);
                 mask.pads.push(DrcPadMask {
                     fp: Some(fp_mask_idx),
                     layers: pmask.map(|m| m.layers.clone()).unwrap_or_default(),
@@ -665,6 +729,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                         + if half_turned && pad.ext.is_default() { 180_000 } else { 0 })
                     .rem_euclid(360_000),
                     zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number),
+                    free,
                 });
             }
         }

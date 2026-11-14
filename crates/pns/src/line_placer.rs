@@ -1691,7 +1691,7 @@ mod tests {
     #[test]
     fn walks_around_an_obstacle_between_fixed_points() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
         let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
@@ -1704,7 +1704,7 @@ mod tests {
     #[test]
     fn mark_obstacles_commits_collision_only_when_can_violate_drc() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(1.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(1.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let mut settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         assert!(!settings.can_violate_drc);
@@ -1770,7 +1770,7 @@ mod tests {
     #[test]
     fn a_via_placed_on_a_pad_is_pushed_off_within_the_via_force_iteration_limit() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let mut placer = LinePlacer::start(&node, Point { x: mm(3.0), y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
         placer.toggle_via(true, mm(0.6), mm(0.3));
@@ -1798,7 +1798,7 @@ mod tests {
     fn a_failed_route_head_keeps_the_last_good_head() {
         let free = Node::new();
         let mut blocked = Node::new();
-        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(0.3), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(0.3), y: Nm::ZERO }, r: mm(0.1) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(0.3), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(0.3), y: Nm::ZERO }, r: mm(0.1) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         for mode in [Mode::Walkaround, Mode::Shove] {
             let settings = RoutingSettings { mode, ..RoutingSettings::default() };
@@ -1838,7 +1838,7 @@ mod tests {
     #[test]
     fn snaps_onto_a_same_net_pad_and_reports_real_end() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U2.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U2.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
@@ -1852,7 +1852,7 @@ mod tests {
     #[test]
     fn a_route_of_no_net_takes_an_end_item_of_any_net() {
         let mut node = Node::new();
-        let gnd = node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U2.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        let gnd = node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U2.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let near = Point { x: mm(3.01), y: mm(0.01) };
         let walk = RoutingSettings::default();
@@ -1917,7 +1917,7 @@ mod tests {
         use crate::item::{Segment, Solid};
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: mm(4.3), y: mm(-2.5) }, b: Point { x: mm(4.3), y: mm(-0.3) }, width: mm(0.2), source_track: Some(("trkP".into(), 0)), locked: false }));
         let rules = rules();
         let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
@@ -2238,7 +2238,7 @@ mod tests {
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let pads = |with_start: bool| {
             let mut node = Node::new();
-            let mut pad = |c: Point| node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.15) }, source: format!("U1.{}", c.x.get()), edge: false, rule: 0, anchor_points: Vec::new() }));
+            let mut pad = |c: Point| node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.15) }, source: format!("U1.{}", c.x.get()), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
             if with_start {
                 pad(at(0.0, 0.0));
             }
@@ -2271,7 +2271,7 @@ mod tests {
         let rules = rules();
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
         let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
         let mut pv = None;
@@ -2294,7 +2294,7 @@ mod tests {
         let rules = rules();
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let settings = RoutingSettings { mode: Mode::Walkaround, corner_mode: crate::direction45::CornerMode::Rounded45, ..RoutingSettings::default() };
         let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
         let mut merged = false;
@@ -2347,7 +2347,7 @@ mod tests {
         assert_eq!((st.tail.clone(), st.head.len(), st.direction), (vec![at(0.0, 0.0)], 0, Direction45::E));
         // a pad on the straight run from the start: the walk back stops at the segment whose trace meets it, and the last clear one is taken
         let mut blocked = Node::new();
-        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(1.5, 0.3), shape: Shape::Circle { c: at(1.5, 0.3), r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(1.5, 0.3), shape: Shape::Circle { c: at(1.5, 0.3), r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let mut st = ts(&[(0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (3.0, 1.0)], &[(3.0, 1.0), (4.0, 1.0)]);
         assert!(placer.reduce_tail(&mut st, &blocked, &rules, &settings, at(5.0, 0.0)));
         assert_eq!(st.tail, vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 1.0)]);
@@ -2361,7 +2361,7 @@ mod tests {
         let rules = rules();
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(5.0, 0.0), shape: Shape::Rect { x0: mm(4.5), y0: mm(-0.5), x1: mm(5.5), y1: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(5.0, 0.0), shape: Shape::Rect { x0: mm(4.5), y0: mm(-0.5), x1: mm(5.5), y1: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         let placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
         // the hull: the pad grown by the clearance and half the width, its left side at 4.5 - 0.2 - 0.1 = 4.2 mm
@@ -2440,7 +2440,7 @@ mod tests {
     #[test]
     fn a_head_via_on_a_pad_is_pushed_off_it_and_the_head_ends_at_the_via() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: mm(0.1) }, shape: Shape::Circle { c: Point { x: mm(4.0), y: mm(0.1) }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: mm(0.1) }, shape: Shape::Circle { c: Point { x: mm(4.0), y: mm(0.1) }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let shove = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
         let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
@@ -2551,7 +2551,7 @@ mod tests {
         use crate::item::Segment;
         let mut node = Node::new();
         for at in [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: Nm::ZERO }] {
-            node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "P".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+            node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "P".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         }
         let detour = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(2.0) }, Point { x: mm(3.0), y: mm(2.0) }, Point { x: mm(3.0), y: Nm::ZERO }];
         for (k, w) in detour.windows(2).enumerate() {

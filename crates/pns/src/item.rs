@@ -93,6 +93,10 @@ pub struct Solid {
     /// arc's ends and middle, a polygon's corners, a filled shape's centre. Empty for everything else, whose one anchor is `pos`
     /// (`SOLID::Anchor`: `m_anchorPoints.empty() ? m_pos : m_anchorPoints[n]`).
     pub anchor_points: Vec<Point>,
+    /// `ITEM::IsFreePad` (`SetIsFreePad`, `syncPad`: `if( aPad->IsFreePad() ) solid->SetIsFreePad()`): a pad of a "free" pin alone on its net
+    /// ([`eda_drc::board::DrcPad::free`]). `collideSimple` gives it no clearance to an item of another net -- "a pad associated with a "free" pin (NIC)
+    /// doesn't have a net until it has been used" -- and `pickSingleItem` takes it as the end of a route of any net when the cursor is in it.
+    pub free_pad: bool,
 }
 
 impl Solid {

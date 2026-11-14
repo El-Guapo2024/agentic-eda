@@ -446,6 +446,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// UI-LEFT-3 R3-7: a free pad (`PAD::IsFreePad`: U2.2 alone on its net, `unconnected-(U2-Pad2)`, with the pin type "free" a pad edit gives it). The router
+    /// lets the route from U1.2 end in it (`pickSingleItem`'s free pad, `collideSimple`'s no clearance), the gate takes U1.2's net as its net, and kicad-cli -- whose
+    /// copper clearance check gives a free pad the first net that touches it -- reports no clearance or short for it. Then the pad moved on its own ("Allow free
+    /// pads") is where kicad-cli's board file has it.
+    #[test]
+    fn a_route_into_a_free_pad_and_a_free_pad_moved_on_its_own_are_clean_for_kicad_cli() {
+        if !kicad_available() {
+            return;
+        }
+        let dir = scratch("free_pad");
+        crate::board::tests::setup(&dir);
+        // U2.2 leaves VCC: alone on its net
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.nets.iter_mut().find(|n| n.name == "VCC").unwrap().pins.retain(|p| p != "U2.2");
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let free = eda_model::fp_edit::PadEdit { pin_type: Some("free".into()), ..eda_model::fp_edit::PadEdit::none("2", 1) };
+        board::step(&dir, eda_ops::Cmd::EditBoardPad { part: "U2".into(), edit: free }, false, "test").expect("the pin type is set");
+        let (_, design, model) = board::load(&dir).unwrap();
+        assert_eq!(eda_drc::board::free_pads(&design, &model).into_iter().collect::<Vec<_>>(), ["U2.2"]);
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let mut router = eda_pns::router::Router::new(&design, &model);
+        router.start(p(mm(6.0), mm(5.0)), "F.Cu", mm(0.25)).expect("U1.2 starts VCC's route");
+        let pv = router.preview(p(mm(16.1), mm(5.05))).expect("a route");
+        assert_eq!(pv.snapped_end, Some(p(mm(16.0), mm(5.0))), "the cursor inside the free pad ends the route in it");
+        let commit = router.finish(p(mm(16.1), mm(5.05))).expect("the route is not refused");
+        // (VCC with U1.2 alone is `unconnected-(U1-Pad2)` by KiCad's names)
+        let start_net = model.nets.iter().find(|n| n.pins.iter().any(|p| p == "U1.2")).map(|n| n.name.clone()).expect("U1.2 has a net");
+        assert!(!commit.tracks.is_empty() && commit.tracks.iter().all(|t| t.net == start_net), "{:?}", commit.tracks.iter().map(|t| (&t.net, &t.pts)).collect::<Vec<_>>());
+        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group: None, keep_track_ids: vec![] };
+        board::step(&dir, cmd, false, "test").expect("the commit applies");
+        let (_, design, model) = board::load(&dir).unwrap();
+        let gate: Vec<_> = eda_gates::check_routing(&design, &model).into_iter().filter(|c| c.check == "routing_clearance" && c.status == CheckStatus::Fail).collect();
+        assert!(gate.is_empty(), "the gate takes the track into the free pad: {gate:?}");
+        let report = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
+        let count = |kind: &str| report["counts"][kind].as_u64().unwrap_or(0);
+        for kind in ["clearance", "shorting_items", "tracks_crossing", "copper_edge_clearance"] {
+            assert_eq!(count(kind), 0, "{kind}: {}", report["violations"]);
+        }
+        // "Allow free pads": the pad moved 1 mm down on its own; the board file has it there, in U2's frame
+        board::step(&dir, eda_ops::Cmd::MoveItems { ids: vec!["U2.2".into()], dx: Nm::ZERO, dy: mm(1.0) }, false, "test").expect("the pad moves");
+        let (_, design, model) = board::load(&dir).unwrap();
+        let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "board" }).expect("export");
+        let u2 = text.split("(footprint ").find(|b| b.contains("\"U2\"")).expect("U2 is written");
+        assert!(u2.lines().any(|l| l.contains("(pad \"2\"") && l.contains("(at 1 1 ")), "{u2}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// One of KiCad's own boards with arc tracks (`pcbnew/issue12609.kicad_pcb`: 47 of them, `issue8407.kicad_pcb`: 40), imported the way the studio imports a `.kicad_pcb`.
     fn arc_board(name: &str) -> Option<(Design, ConstraintModel)> {
         let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew");

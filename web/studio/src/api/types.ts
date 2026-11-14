@@ -85,6 +85,8 @@ export interface Pad {
   /** `PAD::GetPinFunction`, `GetPinType`: the schematic pin's name and electrical type, as the board file is written with them (`(pinfunction ..)`, `(pintype ..)`); absent for none. */
   pin_function?: string | null;
   pin_type?: string | null;
+  /** `PAD::IsFreePad`: the pad of a "free" pin alone on its net (`unconnected-(..)`), which the router and the copper clearance check let any net take (UI-LEFT-3 R3-7); absent for false. */
+  free?: boolean;
   /** Its own teardrop parameters (`PAD::GetTeardropParams`): the edit's, else the board file's; absent when Board Setup's block serves it. */
   teardrops?: TeardropParams | null;
   /** `PAD::GetProperty` as the file writes it (`pad_prop_heatsink` ..); absent for none. */

@@ -10,6 +10,7 @@ import {
   netNamesOnPads,
   netNamesOnTracks,
   netNamesOnVias,
+  padNetText,
   printableCharCount,
   routerShowsClearance,
   sanitizeNetNamesMode,
@@ -143,4 +144,13 @@ test("a custom pad's outline is grouped into polygons with their holes, and only
 test("a preview reply's clearances: the drag's line, via and fanout, the shoved items; none from an older server", () => {
   assert.deepEqual(previewClearancesOf({ clearance: 1, via_clearance: null, fanout_clearances: [2], displaced_clearances: [3, 4], displaced_via_clearances: [5] }), { line: 1, via: null, fanout: [2], displaced: [3, 4], displacedVias: [5] });
   assert.deepEqual(previewClearancesOf({}), { line: null, via: null, fanout: [], displaced: [], displacedVias: [] });
+});
+
+// UI-LEFT-3 R3-7: `draw( const PAD* )` writes "x" on a no-connect pad and "*" on a free pad whatever the net names mode, else the net name when pads show it.
+test("a pad's net text: x on a no-connect pad, * on a free pad", () => {
+  assert.equal(padNetText({ net: "GND" }, true), "GND");
+  assert.equal(padNetText({ net: "GND" }, false), null);
+  assert.equal(padNetText({ net: null, pin_type: "passive+no_connect" }, false), "x", "IsNoConnectPad: the pin type contains no_connect");
+  assert.equal(padNetText({ net: null, pin_type: "free", free: true }, false), "*", "IsFreePad");
+  assert.equal(padNetText({ net: null, pin_type: "free" }, true), null, "a free pin that is not alone on its net is no free pad");
 });

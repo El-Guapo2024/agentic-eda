@@ -484,3 +484,35 @@ fn a_footprints_pad_edit_that_differs_from_the_libraries_padstack_is_found_by_pa
     // The patched library footprint is the edited one again.
     assert_eq!(eda_model::fp_edit::patched_footprint(&lib, &edits).pads[0].ext.stack.back, edited.pads[0].ext.stack.back);
 }
+
+/// UI-LEFT-3 R3-7, "Allow free pads": a pad moved, turned or mirrored on its own (`PAD::Move`, `PAD::Rotate`, `mirrorPad`) keeps what it became as a pad edit of its
+/// footprint, in the footprint's frame, so the footprint moved after takes it along; two pads swap their copper's places (`PAD::SwapShapePositions`); a pad is
+/// turned over with its footprint only.
+#[test]
+fn a_free_pad_moves_turns_mirrors_and_swaps_on_its_own() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    // U1 at (30, 20) mm, unturned, top: pad 2 at (1.5, 0) in its frame, (31.5, 20) on the board; U2 at (60, 20) turned 90 degrees
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1.2"]), dx: mm(1.0), dy: mm(-2.0) }).unwrap();
+    let pad2 = |b: &Board<'_>| edit_of(b, "U1").and_then(|e| e.pad("2", 1)).cloned().unwrap();
+    assert_eq!((pad2(&b).at, pad2(&b).rot), (Some(p(mm(2.5), mm(-2.0))), Some(0)), "the pad's new place in the footprint's frame");
+    assert_eq!(pose(&b, "U1").at, p(mm(30.0), mm(20.0)), "the footprint stays");
+    // turned a quarter clockwise about its own position: the place stays, the pad turns
+    b.apply(&Cmd::RotateItems { ids: ids(&["U1.2"]), pivot: p(mm(32.5), mm(18.0)), angle_millideg: 90_000 }).unwrap();
+    assert_eq!((pad2(&b).at, pad2(&b).rot), (Some(p(mm(2.5), mm(-2.0))), Some(90_000)));
+    // mirrored left-right about the footprint's centre: the place mirrors, the orientation negates
+    b.apply(&Cmd::MirrorItems { ids: ids(&["U1.2"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((pad2(&b).at, pad2(&b).rot), (Some(p(mm(-2.5), mm(-2.0))), Some(270_000)));
+    // the footprint moved later takes the pad along: its edit is in the footprint's frame
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1"]), dx: mm(5.0), dy: Nm::ZERO }).unwrap();
+    assert_eq!(pad2(&b).at, Some(p(mm(-2.5), mm(-2.0))));
+    // a pad of a turned footprint: U2 is turned 90 degrees clockwise, so a move right on the board is a move up in its frame
+    b.apply(&Cmd::MoveItems { ids: ids(&["U2.1"]), dx: mm(1.0), dy: Nm::ZERO }).unwrap();
+    assert_eq!(edit_of(&b, "U2").and_then(|e| e.pad("1", 1)).and_then(|e| e.at), Some(p(mm(-1.5), mm(-1.6))));
+    // two pads swap their copper's places
+    let at = |b: &Board<'_>, r: &str, n: &str| edit_of(b, r).and_then(|e| e.pad(n, 1)).and_then(|e| e.at);
+    b.apply(&Cmd::SwapItems { ids: ids(&["U1.1", "U1.3"]), centres: Default::default() }).unwrap();
+    assert_eq!((at(&b, "U1", "1"), at(&b, "U1", "3")), (Some(p(mm(-1.5), mm(0.7))), Some(p(mm(-1.5), mm(-0.6)))));
+    // a pad is turned over with its footprint only
+    assert!(refusal(&mut b, Cmd::FlipItems { ids: ids(&["U1.2"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight }).contains("ops_bad_transform"));
+}

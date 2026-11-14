@@ -406,12 +406,18 @@ pub(crate) fn heal_stale_nets(design: &mut Design, model: &ConstraintModel) {
         return;
     }
     let net_of: BTreeMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
-    // every placed pad, with the net of its pin
+    // every placed pad, with the net of its pin -- but a free pad, which has no say in the net of what it touches (`CN_CLUSTER::Add`: only a pad that is
+    // not `IsFreePad()` ranks the cluster's nets; UI-LEFT-3 R3-7)
+    let free = eda_drc::board::free_pads(design, model);
     let mut pads: Vec<(eda_model::ir::Point, (eda_model::units::Nm, eda_model::units::Nm), &str)> = Vec::new();
     for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
         let Some(part) = model.part(&fp.id) else { continue };
         for pad in eda_model::footprint::placed_pads(model, part, fp).unwrap_or_default() {
-            if let Some(net) = net_of.get(format!("{}.{}", fp.id, pad.number).as_str()) {
+            let key = format!("{}.{}", fp.id, pad.number);
+            if free.contains(&key) {
+                continue;
+            }
+            if let Some(net) = net_of.get(key.as_str()) {
                 pads.push((pad.center, pad.size, net));
             }
         }

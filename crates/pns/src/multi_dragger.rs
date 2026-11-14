@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn a_connected_corner_falls_back_to_a_segment_drag_and_a_crossing_line_stays() {
         let (mut node, mut items) = bus();
-        node.add(Item::Solid(Solid { net: net_of("A"), layers: LayerRange::single(0), pos: p(10.0, 0.0), shape: Shape::Circle { c: p(10.0, 0.0), r: mm(0.3) }, source: "J1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("A"), layers: LayerRange::single(0), pos: p(10.0, 0.0), shape: Shape::Circle { c: p(10.0, 0.0), r: mm(0.3) }, source: "J1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let d = MultiDragger::start(&node, p(10.0, 0.0), &items).expect("starts");
         assert_eq!(d.mode(), MultiDragMode::Segment, "the corner is on a pad");
         // a vertical line D, selected too

@@ -303,6 +303,10 @@ pub struct PadEdit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "crate::units::de")]
     pub drill_slot: Option<(Nm, Nm)>,
+    /// `PAD::SetFPRelativePosition`: the pad's position in its footprint's own frame (`Pad::at`), nm -- a pad moved on its own with "Allow free pads"
+    /// (`PCBNEW_SETTINGS::m_AllowFreePads`: "pads can be moved with respect to the rest of the footprint", UI-LEFT-3 R3-7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Point>,
     /// `PAD::SetOffset`: how far the copper shape sits from the pad's position (where the hole is), in the pad's own frame, nm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<Point>,
@@ -382,6 +386,7 @@ impl PadEdit {
     /// Whether this edit changes anything (an empty one is dropped, not stored).
     pub fn is_empty(&self) -> bool {
         self.kind.is_none()
+            && self.at.is_none()
             && self.shape.is_none()
             && self.size.is_none()
             && self.drill.is_none()
@@ -411,6 +416,7 @@ impl PadEdit {
     /// offset, a trapezoid's delta, a chamfer, a custom pad's shapes), as opposed to what only the `.kicad_pcb` carries (the margins).
     pub fn changes_engine_pad(&self) -> bool {
         self.kind.is_some()
+            || self.at.is_some()
             || self.shape.is_some()
             || self.size.is_some()
             || self.drill.is_some()
@@ -761,6 +767,9 @@ pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
     }
     if let Some(r) = e.rot {
         pad.rot = r;
+    }
+    if let Some(at) = e.at {
+        pad.at = (at.x, at.y);
     }
     if let Some(r) = e.roundrect_ratio {
         pad.roundrect_ratio = Some(r);
