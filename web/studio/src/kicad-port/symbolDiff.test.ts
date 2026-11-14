@@ -182,3 +182,14 @@ test("a shape's line style and corner radius, a pin's text sizes, a field's font
   assert.deepEqual(diffSymbols(resolved({ exclude_from_pos_files: true } as Partial<LibSymbol>), library()), ["Exclude from position files settings differ."]);
   assert.deepEqual(diffSymbols(resolved({ exclude_from_pos_files: false } as Partial<LibSymbol>), library()), []);
 });
+
+test("a drawing a sheet this project drew moved to its box's corner is compared in the library's frame (UI-LEFT-3 S3-22)", () => {
+  // the resistor moved by (1.016, -2.54) mm, its origin at the top-left corner of its box (`corner_symbol`: by -x0, -y1), as `GET /api/schematic` sends it
+  // with `corner_offset_mm`
+  const moved = resolved({
+    graphics: [{ kind: "rectangle", start: [0, -5.08], end: [2.032, 0], stroke_width: 0.254, fill: "none", unit: 1, body_style: 1 }],
+    pins: [resolvedPin({ at: [1.016, 1.27] }), resolvedPin({ number: "2", at: [1.016, -6.35], angle_deg: 90 })],
+  });
+  assert.notDeepEqual(diffSymbols(moved, library()), [], "compared where it is drawn, everything is elsewhere");
+  assert.deepEqual(diffSymbols({ ...moved, corner_offset_mm: [1.016, -2.54] } as typeof moved, library()), [], "moved back: the same symbol");
+});

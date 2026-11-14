@@ -36,7 +36,40 @@ import { allFields, isMandatoryField } from "./symFields";
 import { libBezierPointsNm } from "./itemBoxes";
 
 /** The schematic's side: the resolved library symbol, with what the server may add of its options. */
-export type SchematicLibSymbol = LibSymbol & { power?: boolean; power_local?: boolean; keywords?: string; footprint_filters?: string[]; in_bom?: boolean; on_board?: boolean; exclude_from_pos_files?: boolean };
+export type SchematicLibSymbol = LibSymbol & {
+  power?: boolean;
+  power_local?: boolean;
+  keywords?: string;
+  footprint_filters?: string[];
+  in_bom?: boolean;
+  on_board?: boolean;
+  exclude_from_pos_files?: boolean;
+  /** How far a sheet this project drew moved the drawing from the library's frame (its origin to the corner of its box), mm, library Y up: the comparison is
+   *  in the library's frame, as KiCad's cache holds the symbol (UI-LEFT-3 S3-22). */
+  corner_offset_mm?: [number, number];
+};
+
+/** `s` in its library's frame: a drawing a sheet this project drew moved to the corner of its box moved back. */
+function inLibraryFrame(s: SchematicLibSymbol): SchematicLibSymbol {
+  const [dx, dy] = s.corner_offset_mm ?? [0, 0];
+  if (dx === 0 && dy === 0) return s;
+  const p = (q: [number, number]): [number, number] => [q[0] - dx, q[1] - dy];
+  const graphics = s.graphics.map((g): LibGraphic => {
+    switch (g.kind) {
+      case "rectangle":
+        return { ...g, start: p(g.start), end: p(g.end) };
+      case "polyline":
+        return { ...g, pts: g.pts.map(p) };
+      case "circle":
+        return { ...g, center: p(g.center) };
+      case "arc":
+        return { ...g, start: p(g.start), mid: p(g.mid), end: p(g.end) };
+      default:
+        return g;
+    }
+  });
+  return { ...s, graphics, pins: s.pins.map((q) => ({ ...q, at: p(q.at) })) };
+}
 
 /** The placed symbol whose fields `DiffSymbol` gives the schematic's side. */
 export interface PlacedSymbolFields {
@@ -180,12 +213,16 @@ function shapeOfLibrary(g: LibrarySymbolGraphic, sym: LibrarySymbol): Shape | nu
 const EPSILON = 2;
 const FILL_ORDER = ["none", "outline", "background", "color", "hatch", "reverse_hatch", "cross_hatch"];
 
-/** `SCH_SHAPE::compare( other, ERC )`: `SCH_ITEM::compare` (unit, body style, position, exactly), then `EDA_SHAPE::Compare`. 0 is the same. */
-function compareShapes(a: Shape, b: Shape): number {
+/**
+ * `SCH_SHAPE::compare( other, flags )`: `SCH_ITEM::compare` (the unit and body style when `flags` has `UNIT`, then the position, exactly), then
+ * `EDA_SHAPE::Compare`. 0 is the same. The set's order (`cmp_items`: `~COMPARE_FLAGS::UUID`) has `UNIT`; the report's comparison (`SymbolCompareFlags()`:
+ * `~( UUID | UNIT )`) has not.
+ */
+function compareShapes(a: Shape, b: Shape, withUnit = true): number {
   const e = (x: number, y: number) => (Math.abs(x - y) > EPSILON ? x - y : 0);
   const pt = (p: [number, number], q: [number, number]) => e(p[0], q[0]) || e(p[1], q[1]);
-  if (a.unit !== b.unit) return a.unit - b.unit;
-  if (a.bodyStyle !== b.bodyStyle) return a.bodyStyle - b.bodyStyle;
+  if (withUnit && a.unit !== b.unit) return a.unit - b.unit;
+  if (withUnit && a.bodyStyle !== b.bodyStyle) return a.bodyStyle - b.bodyStyle;
   const pa = position(a);
   const pb = position(b);
   if (pa[0] !== pb[0]) return pa[0] - pb[0];
@@ -240,8 +277,9 @@ const powerKind = (power: boolean | undefined, local: boolean | undefined): Powe
 /**
  * The lines `LIB_SYMBOL::Compare` reports, in its order. Empty means "No relevant differences detected."
  */
-export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbol, placed?: PlacedSymbolFields, flags: SymbolParitySettings = DEFAULT_SYMBOL_PARITY): string[] {
+export function diffSymbols(drawn: SchematicLibSymbol, library: LibrarySymbol, placed?: PlacedSymbolFields, flags: SymbolParitySettings = DEFAULT_SYMBOL_PARITY): string[] {
   const out: string[] = [];
+  const schematic = inLibraryFrame(drawn);
 
   // `m_options` (ENTRY_NORMAL / ENTRY_GLOBAL_POWER / ENTRY_LOCAL_POWER). A schematic side that does not say whether its power symbol is local
   // is taken to be the library's kind of power symbol.
@@ -249,19 +287,23 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
   const schKind = schematic.power && schematic.power_local === undefined && libKind !== "normal" ? libKind : powerKind(schematic.power, schematic.power_local);
   if (schKind !== libKind) out.push("Power flag differs.");
 
+  const singleBody = !library.has_alternate_body_style && (library.body_style_names?.length ?? 0) <= 1;
   const schPins = schematic.pins.map(pinOfResolved);
   const libPins = library.pins.map(pinOfLibrary);
   const unitsOf = (pins: Pin[], graphics: Array<{ unit: number }>) => Math.max(1, ...pins.map((p) => p.unit), ...graphics.map((g) => g.unit));
   if (unitsOf(schPins, schematic.graphics) !== Math.max(unitsOf(libPins, library.graphics), library.unit_count)) out.push("Unit count differs.");
 
-  const aShapes = shapeSet(schematic.graphics.map(shapeOfResolved).filter((s): s is Shape => s !== null));
-  const bShapes = shapeSet(library.graphics.map((g) => shapeOfLibrary(g, library)).filter((s): s is Shape => s !== null));
+  // a symbol of one body style: the server sends the items every body draws as body style 0 (shared), where the library's `<name>_<unit>_1` has them of body
+  // style 1 -- one and the same body
+  const oneBody = (s: Shape): Shape => (s.bodyStyle === 0 && singleBody ? { ...s, bodyStyle: 1 } : s);
+  const aShapes = shapeSet(schematic.graphics.map(shapeOfResolved).filter((s): s is Shape => s !== null).map(oneBody));
+  const bShapes = shapeSet(library.graphics.map((g) => shapeOfLibrary(g, library)).filter((s): s is Shape => s !== null).map(oneBody));
   if (aShapes.length !== bShapes.length) {
     out.push("Graphic item count differs.");
   } else {
     aShapes.forEach((a, i) => {
       const b = bShapes[i]!;
-      if (compareShapes(a, b) !== 0) out.push(`Graphic item differs: ${describeShape(a)}; ${describeShape(b)}.`);
+      if (compareShapes(a, b, false) !== 0) out.push(`Graphic item differs: ${describeShape(a)}; ${describeShape(b)}.`);
     });
   }
 

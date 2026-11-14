@@ -137,19 +137,23 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
   // the compatibility of each symbol the tree shows, asked as rows come into it (`m_compatCache`: once per id)
   const [compat, setCompat] = useState<ReadonlyMap<string, string[]>>(new Map());
   const asked = useRef(new Set<string>());
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const compatOf = pick?.compat;
   useEffect(() => {
     if (!compatOf) return;
     const ids = [...new Set(chooser.rows.flatMap((r) => (r.kind === "item" ? [r.item.id] : [])))].filter((i) => !asked.current.has(i));
     if (ids.length === 0) return;
     ids.forEach((i) => asked.current.add(i));
-    let cancelled = false;
+    // (an answer is kept however the rows change meanwhile: each id is asked once)
     compatOf(ids)
-      .then((issues) => !cancelled && setCompat((m) => new Map([...m, ...Object.entries(issues)])))
+      .then((issues) => mounted.current && setCompat((m) => new Map([...m, ...Object.entries(issues)])))
       .catch(() => ids.forEach((i) => asked.current.delete(i)));
-    return () => {
-      cancelled = true;
-    };
   }, [chooser.rows, compatOf]);
   const incompatible = useMemo(() => new Set([...compat].filter(([, issues]) => issues.length > 0).map(([i]) => i)), [compat]);
   const warnings = id ? (compat.get(id) ?? []) : [];

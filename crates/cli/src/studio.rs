@@ -2628,14 +2628,23 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             let instance = sch.symbols.iter().find(|s| (if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }) == *lib_id).or_else(|| overrides.iter().find(|(o, _)| o == lib_id).map(|(_, s)| *s));
             if let (false, Some(s)) = (sch.imported_from_kicad, instance) {
                 if let Some(part) = model.part(&s.id) {
+                    // how far the drawing is moved from the library's frame (`corner_offset_mm`, mm, library Y up): Compare Symbol with Library compares in the
+                    // library's frame, as KiCad's cache holds the symbol (UI-LEFT-3 S3-22)
+                    let with_offset = |mut v: Value, frame: Option<&eda_model::LibSymbol>| {
+                        if let Some(f) = frame {
+                            let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(f, s.unit);
+                            v["corner_offset_mm"] = json!([-x0, -y1]);
+                        }
+                        v
+                    };
                     if s.lib_id != *lib_id {
                         // a variant symbol: at the placed symbol's origin (`GetEffectiveLibSymbol`), the corner of the base symbol's box here (UI-LEFT-3 S3-14)
                         if let (Some(alt), Some(base)) = (model.symbol_of(lib_id), model.real_symbol_of(&s.lib_id, part)) {
-                            return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol_in_frame_of(lib_id, &alt, &base, s.unit)));
+                            return (lib_id.clone(), with_offset(lib_symbol_json(&eda_engine::placed::corner_symbol_in_frame_of(lib_id, &alt, &base, s.unit)), Some(&base)));
                         }
                     }
                     let resolved = if s.lib_id == *lib_id { model.real_symbol_of(&s.lib_id, part) } else { model.symbol_of(lib_id) };
-                    return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)));
+                    return (lib_id.clone(), with_offset(lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)), resolved.as_ref()));
                 }
             }
             let resolved = model.placed_symbol_of(lib_id);
