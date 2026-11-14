@@ -55,7 +55,7 @@ fn zone_properties_ok_makes_the_boards_default_zone_settings_without_its_net_or_
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     let z = Zone { id: "zone_x".into(), net: "GND".into(), layer: "F.Cu".into(), outline: sq(0.0, 0.0, 1.0, 1.0), clearance: mm(1.0), name: "Pour".into(), layers: vec!["F.Cu".into(), "B.Cu".into()], ..Default::default() };
-    b.apply(&Cmd::SetZoneDefaults { zone: Box::new(z) }).unwrap();
+    b.apply(&Cmd::SetZoneDefaults { zone: Box::new(z), locked: false }).unwrap();
     let d = drawings(&b).zone_defaults.clone().expect("the defaults");
     assert_eq!((d.clearance, d.name.as_str(), d.net.as_str(), d.outline.len(), d.id.as_str()), (mm(1.0), "Pour", "", 0, ""));
     assert_eq!(d.layer_set(), vec!["F.Cu", "B.Cu"]);
@@ -64,4 +64,17 @@ fn zone_properties_ok_makes_the_boards_default_zone_settings_without_its_net_or_
     let cmd: Cmd = serde_json::from_value(json).expect("the studio's command reads");
     b.apply(&cmd).unwrap();
     assert_eq!(drawings(&b).zone_defaults.as_ref().unwrap().clearance, Nm::new(200_000));
+}
+
+/// UI-LEFT-3 B3-4: Board Setup > Zones' "Locked" (`ZONE_SETTINGS::m_Locked`) is kept with the defaults (`zone_defaults_locked`), and the studio's command carries it.
+#[test]
+fn the_default_zone_settings_keep_their_locked_box() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let json = serde_json::json!({ "op": "set_zone_defaults", "zone": { "net": "", "layer": "F.Cu", "outline": [] }, "locked": true });
+    let cmd: Cmd = serde_json::from_value(json).expect("the studio's command reads");
+    b.apply(&cmd).unwrap();
+    assert!(drawings(&b).zone_defaults_locked);
+    b.apply(&Cmd::SetZoneDefaults { zone: Box::new(Zone { layer: "F.Cu".into(), ..Default::default() }), locked: false }).unwrap();
+    assert!(!drawings(&b).zone_defaults_locked, "an older studio's command, with no box, is unlocked");
 }

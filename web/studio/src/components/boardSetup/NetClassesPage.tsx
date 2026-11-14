@@ -23,12 +23,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStudioState } from "../../state/store";
 import { LINE_STYLE_NAMES, SCH_COLOR_HELP, cssFromHex, defaultClassSchematic, hexFromCss, lineStyleOfRow, lineStyleRow, schematicColumnsIssue, schematicOf, schematicToSend } from "../../kicad-port/schSetup";
-import { applyAssignments, assignmentRows, boardNetNames, classOfNet, classesOfNet, effectiveClassName, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
+import { MAXIMUM_CLEARANCE_NM, applyAssignments, assignmentRows, clipNetClassClearances, boardNetNames, classOfNet, classesOfNet, effectiveClassName, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
 import { hasRegexSyntax, isRegex } from "../../kicad-port/netPattern";
 import { carryRenamedClass } from "../../kicad-port/appearanceNets";
 import { classColorsInForce } from "../../kicad-port/appearance";
 import type { Cmd, NetClass, NetClassSchematic } from "../../api/types";
 import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
+import { lengthText } from "../pcbDialogKit";
 
 interface Draft {
   def: NetClass;
@@ -187,7 +188,14 @@ export function NetClassesPage({ hidden, onDirty, editor = "pcb" }: PageProps & 
   const onApply = () => {
     if (!draft) return;
     if (issues.length > 0) {
-      apply.setMessage({ text: `${issues[0]!.message} Fix the values marked in red first.`, bad: true });
+      const first = issues[0]!;
+      // `validateNetclassClearance`: the dialog's error, the cell clipped to `MAXIMUM_CLEARANCE`, OK refused
+      if (first.field === "clearance" && first.message.startsWith("Clearance was too large.")) {
+        apply.setMessage({ text: `Clearance was too large.  It has been clipped to ${lengthText(MAXIMUM_CLEARANCE_NM, units)} ${units}.`, bad: true });
+        page.edit((d) => ({ ...d, def: clipNetClassClearances([d.def])[0]!, classes: clipNetClassClearances(d.classes) }));
+        return;
+      }
+      apply.setMessage({ text: `${first.message} Fix the values marked in red first.`, bad: true });
       return;
     }
     if (schIssues.length > 0) {

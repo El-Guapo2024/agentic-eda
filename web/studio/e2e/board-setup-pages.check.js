@@ -402,7 +402,7 @@
       const after = (a, b) => order.indexOf(a) >= 0 && order.indexOf(b) === order.indexOf(a) + 1;
       // KiCad 25ec2335's `DIALOG_BOARD_SETUP`: Drill Chart is the last page of Board Stackup, right after Solder Mask/Paste; 8303b2ad's Zone Hatch Offsets
       // is on Design Rules > Zones, after Pre-defined Sizes (UI-LEFT-2 BB4).
-      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Drill Chart") && after("Pre-defined Sizes", "Zones") && after("Zones", "Teardrops") && !order.includes("Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
+      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Drill Chart") && after("Pre-defined Sizes", "Microvia Stacks") && after("Microvia Stacks", "Zones") && after("Zones", "Teardrops") && !order.includes("Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
       const stored = async () => (await state()).board_rules;
       const formattingBefore = JSON.stringify((await stored()).formatting);
       const dash = () => p.querySelector('input[aria-label="Dash length"]');
@@ -501,7 +501,8 @@
       await setText(p.querySelector('input[aria-label="Profile name"]'), "USB 90");
       await setSelect(p.querySelector('select[aria-label="Profile type"]'), "differential");
       await setText(p.querySelector('input[aria-label="Target impedance"]'), "90");
-      [...p.querySelectorAll("label.bs-check")].find((l) => l.textContent.includes("Enable time-domain tuning")).querySelector("input").click();
+      // a new profile has "Enable time domain tuning" ticked, as KiCad's panel (UI-LEFT-3 B3-4)
+      check("a new profile tunes in the time domain", [...p.querySelectorAll("label.bs-check")].find((l) => l.textContent.includes("Enable time domain tuning"))?.querySelector("input")?.checked === true, "");
       await setText(p.querySelector('input[aria-label="Via propagation delay"]'), "25");
       await press(p, "Add Layer");
       const row1 = { signal: p.querySelector('select[aria-label="Row 1 signal layer"]')?.value, top: p.querySelector('select[aria-label="Row 1 top reference"]')?.value, bottom: p.querySelector('select[aria-label="Row 1 bottom reference"]')?.value };

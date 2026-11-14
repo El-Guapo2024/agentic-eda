@@ -2,9 +2,9 @@
 // (`BOARD_DESIGN_SETTINGS::GetDefaultZoneSettings`, the project's `defaults.zones.*`) in the zone properties panel (`PANEL_ZONE_PROPERTIES` with no zone and no
 // net: `allowNetSpec = false`), and below it the hatch offsets panel (`PANEL_SETUP_ZONE_HATCH_OFFSETS`, `ZoneHatchOffsetsPage`). A new zone starts from these
 // (`ZONE_CREATE_HELPER::createNewZone`); 25ec2335's Zone Properties no longer changes them. Apply is `set_zone_defaults` (`DrawingsSection::zone_defaults`),
-// which, as KiCad's Board Setup, is no undo step; the derived project carries them as `defaults.zones`.
-//
-// Differs: the panel's "Locked" box is not here -- the studio keeps a zone's lock in the board's lock list, not in its settings, so a default has none.
+// which, as KiCad's Board Setup, is no undo step; the derived project carries them as `defaults.zones`. The panel's "Locked" box (`m_Locked`) is the defaults'
+// own (`DrawingsSection::zone_defaults_locked`): a new zone starts locked, put in the board's lock list (UI-LEFT-3 B3-4). **Differs**: KiCad keeps it in memory
+// only (no `defaults.zones.locked`), so it is gone when KiCad reopens the board; `design.json` keeps it here.
 import { useEffect, useMemo } from "react";
 import { DEFAULT_ZONE_SETTINGS, useStudioState } from "../../state/store";
 import type { IslandRemovalMode, PadConnection, ZoneBorderStyle, ZoneDefaults, ZoneSettingsFields, ZoneSmoothing } from "../../api/types";
@@ -19,12 +19,12 @@ const PITCH_MIN = 100_000;
 const PITCH_MAX = 2_000_000;
 const INT_MAX = 2_147_483_647;
 
-/** The page's settings: the zone settings, and the name (`m_Name`). */
-export type ZonesDraft = ZoneSettingsFields & { name: string };
+/** The page's settings: the zone settings, the name (`m_Name`) and "Locked" (`m_Locked`). */
+export type ZonesDraft = ZoneSettingsFields & { name: string; locked: boolean };
 
-/** `TransferZoneSettingsToWindow` over the board's defaults (`ZONE_SETTINGS()` where it has none). */
-export function zonesDraftOf(d: ZoneDefaults | undefined): ZonesDraft {
-  return { ...DEFAULT_ZONE_SETTINGS, ...(stickySettings(d) as Partial<ZoneSettingsFields>), name: d?.name ?? "" };
+/** `TransferZoneSettingsToWindow` over the board's defaults (`ZONE_SETTINGS()` where it has none: unlocked). */
+export function zonesDraftOf(d: ZoneDefaults | undefined, locked = false): ZonesDraft {
+  return { ...DEFAULT_ZONE_SETTINGS, ...(stickySettings(d) as Partial<ZoneSettingsFields>), name: d?.name ?? "", locked };
 }
 
 /**
@@ -72,10 +72,11 @@ export function ZonesPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
   const units = state.units;
   const stored = state.board?.drawings?.zone_defaults;
-  const source = useMemo(() => (state.board ? zonesDraftOf(stored) : undefined), [state.board, stored]);
+  const storedLocked = state.board?.drawings?.zone_defaults_locked ?? false;
+  const source = useMemo(() => (state.board ? zonesDraftOf(stored, storedLocked) : undefined), [state.board, stored, storedLocked]);
   const page = usePageDraft<ZonesDraft>(source);
   // "Import Settings from Another Board..." (`ImportSettingsFrom`, UI-LEFT-2 BB4)
-  useSetupImport("zones", (b) => zonesDraftOf(b.drawings?.zone_defaults ?? undefined), page.importDraft);
+  useSetupImport("zones", (b) => zonesDraftOf(b.drawings?.zone_defaults ?? undefined, b.drawings?.zone_defaults_locked ?? false), page.importDraft);
   const apply = usePageApply();
   useEffect(() => onDirty(page.dirty), [page.dirty, onDirty]);
   const d = page.draft;
@@ -90,9 +91,9 @@ export function ZonesPage({ hidden, onDirty }: PageProps) {
       return;
     }
     // `TransferDataFromWindow`: `settings.m_Netcode = NETINFO_LIST::ORPHANED; SetDefaultZoneSettings( settings )`; a corner radius only with smoothing
-    const { name, ...settings } = d;
+    const { name, locked, ...settings } = d;
     const form = { ...settings, corner_radius: settings.smoothing === "none" ? 0 : settings.corner_radius, hatch_orientation_mdeg: normalize180(settings.hatch_orientation_mdeg) };
-    void apply.run(zoneDefaultsCmd(form, stored?.layers ?? [stored?.layer ?? "F.Cu"], name), page.markClean);
+    void apply.run(zoneDefaultsCmd(form, stored?.layers ?? [stored?.layer ?? "F.Cu"], name, locked), page.markClean);
   };
 
   const row = (label: string, title: string | undefined, control: React.ReactNode) => (
@@ -111,6 +112,10 @@ export function ZonesPage({ hidden, onDirty }: PageProps) {
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr" }}>
             {row("Zone name:", "A unique name for this zone, used to identify it in DRC rules", <input type="text" aria-label="Zone name" value={d.name} onChange={(e) => set({ name: e.target.value })} />)}
           </div>
+          {/* `m_cbLocked`, below the name (panel_zone_properties_base.cpp's `bPropertiesSizer`) */}
+          <label className="filter-row" style={{ display: "block" }}>
+            <input type="checkbox" aria-label="Locked" checked={d.locked} onChange={(e) => set({ locked: e.target.checked })} /> Locked
+          </label>
           <div className="bs-section">Clearances &amp; Pad Connections</div>
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr" }}>
             {len("Clearance:", d.clearance, (v) => set({ clearance: v }), "Copper clearance for this zone (set to 0 to use the netclass clearance)")}

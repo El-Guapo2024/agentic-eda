@@ -17,7 +17,7 @@ import type { RuleSeverity } from "../api/types";
 
 /** `m_Notebook`'s pages in DIALOG_DRC (`dialog_drc_base.fbp`), plus the Lint page this app adds. */
 /** The pages of Schematic Setup (components/SchematicSetupDialog.tsx), which a marker menu or an action can open it on. */
-export type SchSetupPage = "formatting" | "annotation" | "field_templates" | "bom_presets" | "severities" | "pinmap" | "netclasses" | "bus_aliases" | "text_variables" | "embedded_files";
+export type SchSetupPage = "formatting" | "annotation" | "field_templates" | "bom_presets" | "severities" | "symbol_parity" | "pinmap" | "netclasses" | "bus_aliases" | "text_variables" | "embedded_files";
 
 export type DrcTab = "violations" | "unconnected" | "parity" | "ignored" | "lint";
 /** DIALOG_ERC's pages ("Violations", "Ignored Tests") plus Lint. */

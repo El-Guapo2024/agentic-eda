@@ -1,36 +1,38 @@
-// Compare Symbol with Library (`eeschema.InspectionTool.diffSymbol`, `SCH_INSPECTION_TOOL::DiffSymbol` -> `LIB_SYMBOL::Compare( ..., ERC flags, reporter )`,
-// eeschema/lib_symbol.cpp at 8303b2ad): the report of how the symbol the schematic draws differs from the library's.
+// Compare Symbol with Library (`eeschema.InspectionTool.diffSymbol`, `SCH_INSPECTION_TOOL::DiffSymbol` -> `LIB_SYMBOL::Compare( ..., SymbolCompareFlags(), reporter )`,
+// KiCad 25ec2335 eeschema/lib_symbol.cpp, schematic_settings.cpp): the report of how the symbol the schematic draws differs from the library's.
 //
 // The studio keeps no separate copy of a library symbol in the schematic (it draws the library's, as `GET /api/schematic` resolves it), so the two
 // sides here are the symbol the schematic is drawn from (`Schematic.lib_symbols`) and the library entry (the Symbol Editor's project entry when
 // there is one -- which may carry edits not yet used by the schematic -- else the same resolved symbol). `DiffSymbol` gives the schematic's side the
 // placed symbol's own fields, moved by `-symbol->GetPosition()`; so does `placed` here.
 //
-// What `Compare` reports under `COMPARE_FLAGS::ERC` (r6 C6-M4), in its order:
+// What `Compare` reports, in its order, with the flags Schematic Setup > Compare Symbol with Library gives (`SYMBOL_PARITY_SETTINGS`, UI-LEFT-3 B3-9):
 // - "Power flag differs." when `m_options` differ (normal, global power, local power);
 // - "Unit count differs.";
 // - the shapes (`SCH_SHAPE_T` only: a body text or text box is not a graphic item), sorted by `SCH_ITEM::cmp_items` (a `std::set`, so two equal
 //   shapes are one), their count, then each pair by `SCH_SHAPE::compare` -> `SCH_ITEM::compare` (unit, body style, position) and
 //   `EDA_SHAPE::Compare` (points within `EPSILON` 2 IU, 200 nm, the corner radius, the stroke width, its line style, the fill);
-// - each schematic pin not found by number, unit and body style in the library ("Extra pin"), or found at another place: `SCH_ITEM::compare`
-//   tests the type, unit, body style, `IsPrivate()` and position, and returns 0 under ERC, so a pin's name, type, shape, direction and length
-//   are not compared;
-// - each placed field the library lacks ("Extra field") or has at another place or privacy ("Field '%s' differs");
-// - the footprint filters, keywords and pin name offset.
-// "Missing pin" and "Missing field" are never printed: KiCad's second loops look the library's item up in the library itself
-// (`aRhs.GetPin( .. )`, `aRhs.GetField( .. )`), so it is always found.
+// - each schematic pin not found by number, unit and body style in the library ("Extra pin"), or found but different (`PIN_COMPARISON_VIEW::Compare`:
+//   the number, place, length, direction, shape and type; the hidden flag with "Compare pin name/number visibilities"; the alternates with "Compare
+//   alternate pin functions"; a pin's name is not compared), and each library pin the schematic's symbol lacks ("Missing pin");
+// - each placed field the library lacks ("Extra field", with "Check for extra fields"), and of one it has: its text but the Reference's ("Compare
+//   non-reference field text"), its text size and styles ("... sizes and styles"), its visibility and name-shown flags ("Compare field visibilities"),
+//   its privacy, its place ("Compare field positions"); then each library user field the placed symbol lacks ("Missing field", "Check for missing fields");
+// - the footprint filters, keywords and pin name offset; the show pin names and numbers flags ("Compare pin name/number visibilities"); the attribute
+//   flags the boxes of the page name.
 //
-// Left: neither side's JSON carries a shape's line style or corner radius (both compare equal here), and the schematic side's keywords and
-// footprint filters are compared only when the server sends them.
-import type { LibGraphic, LibPin, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibSymbol, PinElectricalType, PinShape, SchField } from "../api/types";
+// Left: neither side's JSON carries a shape's line style or corner radius, a pin's text sizes, a field's font, a symbol's DNP or (on the schematic's side)
+// position-file flag; those compare equal. The schematic side's keywords, footprint filters and attribute flags are compared only when the server sends them.
+import type { LibGraphic, LibPin, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibSymbol, PinAlternate, PinElectricalType, PinShape, SchField, SymbolParitySettings } from "../api/types";
+import { DEFAULT_SYMBOL_PARITY } from "./schSetup";
 import { messageTextFromValue } from "./messageText";
 import { ELECTRICAL_TYPE_NAMES } from "./symPinText";
 import { PIN_SHAPE_OPTIONS } from "./symPinAlternates";
-import { allFields } from "./symFields";
+import { allFields, isMandatoryField } from "./symFields";
 import { libBezierPointsNm } from "./itemBoxes";
 
 /** The schematic's side: the resolved library symbol, with what the server may add of its options. */
-export type SchematicLibSymbol = LibSymbol & { power?: boolean; power_local?: boolean; keywords?: string; footprint_filters?: string[] };
+export type SchematicLibSymbol = LibSymbol & { power?: boolean; power_local?: boolean; keywords?: string; footprint_filters?: string[]; in_bom?: boolean; on_board?: boolean; exclude_from_pos_files?: boolean };
 
 /** The placed symbol whose fields `DiffSymbol` gives the schematic's side. */
 export interface PlacedSymbolFields {
@@ -56,10 +58,16 @@ interface Pin {
   unit: number;
   bodyStyle: number;
   hidden: boolean;
+  /** IU, and the direction in degrees. */
+  length: number;
+  angle: number;
+  /** By name, as `std::map<wxString, PIN_ALTERNATE>` holds them. */
+  alternates: PinAlternate[];
 }
 
-const pinOfResolved = (p: LibPin): Pin => ({ number: p.number, name: p.name ?? "", type: p.electrical_type, shape: p.shape, pos: iu(p.at[0], p.at[1]), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden });
-const pinOfLibrary = (p: LibrarySymbolPin): Pin => ({ number: p.number, name: p.name, type: p.electrical_type, shape: p.shape, pos: iu(p.at.x, p.at.y), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden });
+const byName = (alts: readonly PinAlternate[] | undefined) => [...(alts ?? [])].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+const pinOfResolved = (p: LibPin): Pin => ({ number: p.number, name: p.name ?? "", type: p.electrical_type, shape: p.shape, pos: iu(p.at[0], p.at[1]), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden, length: iuLen(p.length_mm), angle: ((Math.round(p.angle_deg) % 360) + 360) % 360, alternates: byName(p.alternates) });
+const pinOfLibrary = (p: LibrarySymbolPin): Pin => ({ number: p.number, name: p.name, type: p.electrical_type, shape: p.shape, pos: iu(p.at.x, p.at.y), unit: p.unit, bodyStyle: p.body_style, hidden: p.hidden, length: iuLen(p.length_mm), angle: ((Math.round(p.angle_deg) % 360) + 360) % 360, alternates: byName(p.alternates) });
 
 const shapeName = (s: PinShape) => PIN_SHAPE_OPTIONS.find((o) => o.value === s)?.label ?? s;
 
@@ -202,8 +210,6 @@ function describeShape(s: Shape): string {
   }
 }
 
-/** `SCH_FIELD::GetItemDescription( .., false )`: "Field Value '10k'", "Field Footprint (empty)". */
-const describeField = (name: string, text: string) => (text === "" ? `Field ${name} (empty)` : `Field ${name} '${text}'`);
 
 type PowerKind = "normal" | "global" | "local";
 const powerKind = (power: boolean | undefined, local: boolean | undefined): PowerKind => (!power ? "normal" : local ? "local" : "global");
@@ -211,7 +217,7 @@ const powerKind = (power: boolean | undefined, local: boolean | undefined): Powe
 /**
  * The lines `LIB_SYMBOL::Compare` reports, in its order. Empty means "No relevant differences detected."
  */
-export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbol, placed?: PlacedSymbolFields): string[] {
+export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbol, placed?: PlacedSymbolFields, flags: SymbolParitySettings = DEFAULT_SYMBOL_PARITY): string[] {
   const out: string[] = [];
 
   // `m_options` (ENTRY_NORMAL / ENTRY_GLOBAL_POWER / ENTRY_LOCAL_POWER). A schematic side that does not say whether its power symbol is local
@@ -236,27 +242,49 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
     });
   }
 
+  // the pins (`SCH_PIN::compare` -> `PIN_COMPARISON_VIEW::Compare` under `SymbolCompareFlags`, whose UNIT bit is off): the number, place, length, direction,
+  // graphic shape and electrical type, the hidden flag with "Compare pin name/number visibilities", the alternates with "Compare alternate pin functions"
   for (const p of schPins) {
     const other = getPin(libPins, p.number, p.unit, p.bodyStyle);
     if (!other) out.push(`Extra pin in schematic symbol: ${describePin(p)}.`);
-    else if (p.pos[0] !== other.pos[0] || p.pos[1] !== other.pos[1]) out.push(`Pin ${p.number} differs: ${describePin(p)}; ${describePin(other)}`);
+    else if (comparePins(p, other, flags) !== 0) out.push(`Pin ${p.number} differs: ${describePin(p)}; ${describePin(other)}`);
+  }
+  // KiCad 25ec2335 looks each library pin up in the schematic's symbol (`GetPin( .. )` of `this`)
+  for (const p of libPins) {
+    if (!getPin(schPins, p.number, p.unit, p.bodyStyle)) out.push(`Missing pin in schematic symbol: ${describePin(p)}.`);
   }
 
   // the placed symbol's fields (`flattenedSchSymbol->SetFields( fields )`, each `Move( -symbol->GetPosition() )`): a mandatory one is found by id
-  // (always in the library), a user field by name; `SCH_ITEM::compare` under ERC is the position and `IsPrivate()` (a copied field is not private)
+  // (always in the library), a user field by name; each check as `SymbolCompareFlags` says (a copied field is not private)
   if (placed?.fields) {
     const libFields = allFields(library);
     const privateNames = new Set((library.fields ?? []).filter((f) => f.private).map((f) => f.name));
     for (const f of placed.fields) {
       const other = libFields.find((l) => l.name === f.name);
       if (!other) {
-        out.push(`Extra field in schematic symbol: ${describeField(f.name, f.text)}.`);
+        if (flags.extra_fields) out.push(`Extra field in schematic symbol: ${f.name}.`);
         continue;
       }
-      const [lx, ly] = iu(other.at.x, other.at.y);
-      // the placed field's offset (nanometres) in IU: `SCH_ITEM::compare` tests the position exactly, at 100 nm
-      const moved = Math.round((f.at[0] - placed.at[0]) / NM_PER_IU) !== lx || Math.round((f.at[1] - placed.at[1]) / NM_PER_IU) !== ly;
-      if (moved || privateNames.has(other.name)) out.push(`Field '${f.name}' differs: ${describeField(f.name, f.text)}; ${describeField(other.name, other.text)}.`);
+      if (flags.field_texts && f.name !== "Reference" && f.text !== other.text) out.push(`Field '${f.name}' differs: ${f.text}; ${other.text}.`);
+      if (flags.field_styles) {
+        // the text size in IU (absent is 50 mil); the styles are `TEXT_ATTRIBUTES::Compare`'s bold and italic (the font, which neither side sends, is not compared)
+        if (Math.round((f.size_nm ?? 1_270_000) / NM_PER_IU) !== iuLen(other.size_mm)) out.push(`Field '${f.name}' text sizes differ.`);
+        if (!!f.bold !== other.bold || !!f.italic !== other.italic) out.push(`Field '${f.name}' text styles differ.`);
+      }
+      if (flags.field_visibilities) {
+        if (f.visible !== !other.hidden) out.push(`Field '${f.name}' visibility flags differ.`);
+        if (!!f.name_shown !== other.show_name) out.push(`Field '${f.name}' name shown flags differ.`);
+      }
+      if (privateNames.has(other.name)) out.push(`Field '${f.name}' privacy flags differ.`);
+      if (flags.field_positions) {
+        const [lx, ly] = iu(other.at.x, other.at.y);
+        // the placed field's offset (nanometres) in IU: the position exactly, at 100 nm
+        if (Math.round((f.at[0] - placed.at[0]) / NM_PER_IU) !== lx || Math.round((f.at[1] - placed.at[1]) / NM_PER_IU) !== ly) out.push(`Field '${f.name}' positions differ.`);
+      }
+    }
+    // "Check for missing fields": a library field the placed symbol lacks (a mandatory field is on every symbol in KiCad, so only a user field can be missing)
+    if (flags.missing_fields) {
+      for (const l of libFields) if (!isMandatoryField(l.name) && !placed.fields.some((f) => f.name === l.name)) out.push(`Missing field in schematic symbol: ${l.name}.`);
     }
   }
 
@@ -268,6 +296,34 @@ export function diffSymbols(schematic: SchematicLibSymbol, library: LibrarySymbo
   }
   if (schematic.keywords !== undefined && schematic.keywords !== library.keywords) out.push("Symbol keywords differ.");
   if (schematic.pin_name_offset !== undefined && iuLen(schematic.pin_name_offset) !== iuLen(library.pin_name_offset_mm)) out.push("Symbol pin name offsets differ.");
+  if (flags.pin_visibilities) {
+    if (!!schematic.pin_names_hidden !== library.pin_names_hidden) out.push("Show pin names settings differ.");
+    if (!!schematic.pin_numbers_hidden !== library.pin_numbers_hidden) out.push("Show pin numbers settings differ.");
+  }
+  // the attribute flags, each when the schematic's side says it (the server sends "in BOM" and "on board"; a symbol's DNP and position-file flags not)
+  if (flags.exclude_from_bom && schematic.in_bom !== undefined && schematic.in_bom !== library.in_bom) out.push("Exclude from bill of materials settings differ.");
+  if (flags.exclude_from_board && schematic.on_board !== undefined && schematic.on_board !== library.on_board) out.push("Exclude from board settings differ.");
+  if (flags.exclude_from_pos_files && schematic.exclude_from_pos_files !== undefined && schematic.exclude_from_pos_files !== !!library.exclude_from_pos_files) out.push("Exclude from position files settings differ.");
 
   return out;
+}
+
+/** `PIN_COMPARISON_VIEW::Compare` with `SymbolCompareFlags` (UNIT off): 0 is the same. A pin's text sizes are not compared (the schematic's side does not send them). */
+function comparePins(a: Pin, b: Pin, flags: SymbolParitySettings): number {
+  if (a.number !== b.number) return a.number < b.number ? -1 : 1;
+  if (a.pos[0] !== b.pos[0]) return a.pos[0] - b.pos[0];
+  if (a.pos[1] !== b.pos[1]) return a.pos[1] - b.pos[1];
+  if (a.length !== b.length) return a.length - b.length;
+  if (a.angle !== b.angle) return a.angle - b.angle;
+  if (a.shape !== b.shape) return a.shape < b.shape ? -1 : 1;
+  if (a.type !== b.type) return a.type < b.type ? -1 : 1;
+  if (flags.pin_visibilities && a.hidden !== b.hidden) return a.hidden ? 1 : -1;
+  if (!flags.pin_alt_functions) return 0;
+  if (a.alternates.length !== b.alternates.length) return a.alternates.length - b.alternates.length;
+  for (let i = 0; i < a.alternates.length; i++) {
+    const x = a.alternates[i]!;
+    const y = b.alternates[i]!;
+    if (x.name !== y.name || x.electrical_type !== y.electrical_type || x.shape !== y.shape) return 1;
+  }
+  return 0;
 }

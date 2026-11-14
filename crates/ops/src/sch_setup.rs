@@ -48,6 +48,18 @@ pub(crate) fn set_annotation(design: &mut Design, settings: &AnnotationSettings,
     Ok(())
 }
 
+/// `Cmd::SetSymbolParity`: KiCad 25ec2335 `PANEL_SETUP_SYMBOL_PARITY::TransferDataFromWindow` -- the twelve boxes into `SYMBOL_PARITY_SETTINGS` (UI-LEFT-3
+/// B3-9). KiCad's defaults are kept as none.
+pub(crate) fn set_symbol_parity(design: &mut Design, settings: &eda_model::sch_setup::SymbolParitySettings) -> Done {
+    let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
+    let now = (*settings != eda_model::sch_setup::SymbolParitySettings::default()).then_some(*settings);
+    if sch.extras.symbol_parity == now {
+        return no_change("symbol_parity", "the symbol comparison settings are already set so");
+    }
+    sch.extras.symbol_parity = now;
+    Ok(())
+}
+
 /// `Cmd::SetFieldNameTemplates`: `PANEL_TEMPLATE_FIELDNAMES::TransferDataFromWindow` -- `DeleteAllFieldNameTemplates` and every row added again as
 /// `AddTemplateFieldName` adds it ([`eda_model::sch_setup::kept_template_fields`]).
 pub(crate) fn set_field_name_templates(design: &mut Design, fields: &[TemplateFieldName]) -> Done {

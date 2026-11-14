@@ -8,11 +8,13 @@
 // `missing_tuning_profile`; the page lists such classes.
 // The Track width, Diff pair gap and Delay cells each have the button of KiCad's `GRID_CELL_RUN_FUNCTION_EDITOR`: it works out that cell (and the delay) from the
 // profile's target impedance and the board's stackup (`calculateTrackParametersForCell`, kicad-port/tuningCalculator.ts over the transmission-line calculators of
-// kicad-port/transline.ts), and shows KiCad's error box when it cannot; the cells still take a typed value. The profile carries no frequency or "Model solder mask"
-// here, so the calculator uses a new KiCad page's 1 GHz and ticked box.
+// kicad-port/transline.ts), and shows KiCad's error box when it cannot; the cells still take a typed value. The calculator works at the profile's "Frequency"
+// (its value and Hz / kHz / MHz / GHz choice, `getFrequency`; shown in the largest unit it reaches, `LoadProfile`) and puts the solder mask over an outer
+// layer when "Model solder mask" is ticked; with "Net Chain Bridge Propagation"'s "Global unit delay" these are KiCad 25ec2335's `m_Frequency`,
+// `m_ModelSolderMask` and `m_NetChainBridgePropagationDelay`, written to the project's tuning profiles (schema 2) and read back (UI-LEFT-3 B3-4).
 import { useEffect, useState } from "react";
 import { useStudioState } from "../../state/store";
-import { PROFILE_TYPE_LABEL, addTrackRow, addViaOverride, asToPs, checkProfiles, emptyProfile, missingProfiles, profilesDraftOf, profilesToSend, psToAs, sameProfiles, type ProfilesDraft } from "../../kicad-port/setupPages";
+import { FREQUENCY_UNITS, PROFILE_TYPE_LABEL, addTrackRow, frequencyShown, addViaOverride, asToPs, checkProfiles, emptyProfile, missingProfiles, profilesDraftOf, profilesToSend, psToAs, sameProfiles, type ProfilesDraft } from "../../kicad-port/setupPages";
 import type { ProfileLayerEntry, ProfileViaOverride, TuningProfile, TuningProfileType } from "../../api/types";
 import { Check, LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
 import { defaultStackup } from "../../kicad-port/boardSetupRules";
@@ -39,6 +41,12 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
   const check = draft ? checkProfiles(draft, copper) : null;
   const index = draft ? Math.min(sel, draft.profiles.length - 1) : -1;
   const p = draft && index >= 0 ? draft.profiles[index] : undefined;
+  // `LoadProfile`: the frequency in the largest unit it reaches, the unit then kept as chosen while the number is typed (`m_frequencyUnits`)
+  const [freqUnits, setFreqUnits] = useState<Record<number, number>>({});
+  const hz = p?.frequency_hz ?? 1e9;
+  const unit = freqUnits[index] ?? frequencyShown(hz).unit;
+  const freq = { unit, value: hz / FREQUENCY_UNITS[unit]!.scale };
+  const pickUnit = (u: number) => setFreqUnits((m) => ({ ...m, [index]: u }));
   // the classes, as the board has them now, that name a profile this page does not define
   const missing = draft ? missingProfiles({ ...draft, classProfiles: stored?.class_profiles ?? {} }) : [];
 
@@ -52,7 +60,7 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
     const rules = board?.board_rules;
     if (!p || !e) return;
     const stackup = rules?.stackup ?? defaultStackup(rules?.copper_layers ?? copper.length, rules?.board_thickness_nm ?? 1_600_000);
-    const out = calculateTrackParametersForCell({ profileType: p.profile_type, targetImpedance: p.target_impedance, copperLayers: copper, stackup, row: e, column });
+    const out = calculateTrackParametersForCell({ profileType: p.profile_type, targetImpedance: p.target_impedance, frequencyHz: p.frequency_hz ?? 1e9, modelSolderMask: p.model_solder_mask ?? false, copperLayers: copper, stackup, row: e, column });
     if (out.kind === "error") setCalcError(out.message);
     else if (out.kind === "ok") setEntry(row, out.patch);
   };
@@ -100,7 +108,7 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
       ) : (
         <>
           <p className="bs-note">
-            A tuning profile says how long a signal takes along the copper of a net class, so tuning can aim at a delay and not only at a length. Delays are in picoseconds per millimetre (a via's in picoseconds). The button by a track width, gap or delay works it out from the target impedance and the board stackup (at 1 GHz, the solder mask modelled); a typed value is kept too.
+            A tuning profile says how long a signal takes along the copper of a net class, so tuning can aim at a delay and not only at a length. Delays are in picoseconds per millimetre (a via's in picoseconds). The button by a track width, gap or delay works it out from the target impedance and the board stackup at the profile's frequency; a typed value is kept too.
           </p>
           <div className="bs-toolbar">
             <select aria-label="Tuning profile" value={index >= 0 ? index : ""} disabled={draft.profiles.length === 0} onChange={(e) => setSel(Number(e.target.value))}>
@@ -165,14 +173,42 @@ export function TuningProfilesPage({ hidden, onDirty }: PageProps) {
                 </span>
                 <span />
               </div>
+              <div className="bs-row">
+                <span className="bs-label">Frequency:</span>
+                <span className="bs-control">
+                  {/* `m_frequency` (at most 15 characters) and `m_frequencyUnits`; `getFrequency` multiplies the two */}
+                  <NumberField ariaLabel="Frequency" value={freq.value} onChange={(v) => (pickUnit(freq.unit), editProfile((q) => ({ ...q, frequency_hz: v === undefined ? Number.NaN : v * FREQUENCY_UNITS[freq.unit]!.scale })))} />
+                  <select aria-label="Frequency units" value={freq.unit} onChange={(e) => (pickUnit(Number(e.target.value)), editProfile((q) => ({ ...q, frequency_hz: freq.value * FREQUENCY_UNITS[Number(e.target.value)]!.scale })))}>
+                    {FREQUENCY_UNITS.map((u, k) => (
+                      <option key={u.label} value={k}>
+                        {u.label}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+                <span />
+              </div>
               <Check checked={p.enable_time_domain_tuning} onChange={(v) => editProfile((q) => ({ ...q, enable_time_domain_tuning: v }))} title="Tune to a delay with this profile's propagation delays">
-                Enable time-domain tuning
+                Enable time domain tuning
+              </Check>
+              <Check checked={p.model_solder_mask ?? false} onChange={(v) => editProfile((q) => ({ ...q, model_solder_mask: v }))} title="Model the solder mask over an outer layer's tracks when calculating">
+                Model solder mask
               </Check>
               <div className="bs-row">
                 <span className="bs-label">Via propagation delay:</span>
                 <span className="bs-control">
                   <NumberField ariaLabel="Via propagation delay" value={asToPs(p.via_propagation_delay_as)} onChange={(v) => editProfile((q) => ({ ...q, via_propagation_delay_as: v === undefined ? Number.NaN : psToAs(v) }))} />
                   <span className="bs-unit">ps</span>
+                </span>
+                <span />
+              </div>
+
+              <div className="bs-section">Net Chain Bridge Propagation</div>
+              <div className="bs-row">
+                <span className="bs-label">Global unit delay:</span>
+                <span className="bs-control">
+                  <NumberField ariaLabel="Net chain bridge unit delay" value={asToPs(p.net_chain_bridge_delay_as_per_mm ?? 0)} onChange={(v) => editProfile((q) => ({ ...q, net_chain_bridge_delay_as_per_mm: v === undefined ? Number.NaN : psToAs(v) }))} />
+                  <span className="bs-unit">ps/mm</span>
                 </span>
                 <span />
               </div>

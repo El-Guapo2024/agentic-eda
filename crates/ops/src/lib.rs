@@ -443,6 +443,9 @@ pub enum Cmd {
     SetViaPresets { presets: Vec<ViaPreset> },
     /// Same panel's Differential Pairs grid, `m_DiffPairDimensionsList` (`.kicad_pro`'s `diff_pair_dimensions`), replaced wholesale.
     SetDiffPairPresets { presets: Vec<DiffPairPreset> },
+    /// Board Setup > Design Rules > Microvia Stacks (KiCad 25ec2335 `PANEL_SETUP_VIA_STACKS::TransferDataFromWindow`): the whole list of presets
+    /// (`eda_model::setup_pages::ViaStackPreset`), each one the Microvia Stack dialog would OK, no two of one name (case ignored). One undo step (UI-LEFT-3 B3-8).
+    SetViaStackPresets { presets: Vec<eda_model::setup_pages::ViaStackPreset> },
 
     /// `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-
     /// set width (tracks/arcs) and/or diameter+drill (vias) and/or layer
@@ -1296,7 +1299,14 @@ pub enum Cmd {
     /// `BOARD_DESIGN_SETTINGS::SetDefaultZoneSettings` (Zone Properties' OK on a zone, `PCB_EDIT_FRAME::Edit_Zone_Params`, UI-LEFT-2 PP10): the board's default zone
     /// settings become `zone`'s (`ZONE_SETTINGS << *aZone`, the net taken away: `m_Netcode = NETINFO_LIST::ORPHANED`), what the next new zone's dialog opens on.
     /// Its outline, holes, id and fill counts are not kept. Batched with the dialog's `edit_zone`: one undo step.
-    SetZoneDefaults { zone: Box<eda_model::ir::Zone> },
+    ///
+    /// `locked` is the defaults' "Locked" (`ZONE_SETTINGS::m_Locked`), which Board Setup > Zones sets (KiCad 25ec2335 `PANEL_ZONE_PROPERTIES`, UI-LEFT-3 B3-4):
+    /// [`eda_model::ir::DrawingsSection::zone_defaults_locked`]. Absent is unlocked.
+    SetZoneDefaults {
+        zone: Box<eda_model::ir::Zone>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        locked: bool,
+    },
     /// A shape's new geometry (and whatever else of it changed), in place: the id and the lock stay. The panel's "Start X", "Radius",
     /// "Width" and the like (`EDA_SHAPE` setters) send the whole shape.
     ReplaceShape { id: String, shape: Shape },
@@ -1743,6 +1753,10 @@ pub enum Cmd {
     /// the junction dot and hop-over sizes, the label offset and margin ratios, the overbar offset, the dashed lines and the operating-point overlay
     /// (`eda_model::sch_setup::SchFormatting`). KiCad's defaults are stored as none. One undo step.
     SetSchFormatting { settings: eda_model::sch_setup::SchFormatting },
+    /// Schematic Setup > Electrical Rules > Compare Symbol with Library (KiCad 25ec2335 `PANEL_SETUP_SYMBOL_PARITY::TransferDataFromWindow`): the twelve boxes
+    /// of `SYMBOL_PARITY_SETTINGS` (`eda_model::sch_setup::SymbolParitySettings`), the derived project's `compare_symbols.*` (UI-LEFT-3 B3-9). KiCad's defaults
+    /// are stored as none. One undo step.
+    SetSymbolParity { settings: eda_model::sch_setup::SymbolParitySettings },
     /// Schematic Setup > General > Annotation (`panel_eeschema_annotation_options.cpp`): the order, the numbering, the start number, "Allow reference reuse"
     /// and the symbol unit notation -- the first unit's id ('A' or '1') and the separator (0, '.', '-', '_') as character codes. One undo step.
     SetAnnotationSettings {
@@ -2610,6 +2624,7 @@ impl Cmd {
             | Cmd::SetIntersheetRefs { .. }
             | Cmd::SetSchFormatting { .. }
             | Cmd::SetAnnotationSettings { .. }
+            | Cmd::SetSymbolParity { .. }
             | Cmd::SetFieldNameTemplates { .. }
             | Cmd::SetBomPresets { .. }
             | Cmd::SetBomView { .. }
@@ -2889,6 +2904,7 @@ impl Cmd {
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::SetDiffPairPresets { .. } => vec!["diff_pair_presets"],
+            Cmd::SetViaStackPresets { .. } => vec!["via_stack_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, footprint, .. } => {
                 shape_ids.iter().chain(text_ids.iter()).chain(dimension_ids.iter()).chain(footprint.field_ids.iter()).chain(footprint.text_ids.iter()).chain(footprint.shape_ids.iter()).map(String::as_str).collect()
@@ -2991,6 +3007,7 @@ impl Cmd {
             Cmd::SetIntersheetRefs { .. } => vec!["intersheet_refs"],
             Cmd::SetSchFormatting { .. } => vec!["formatting"],
             Cmd::SetAnnotationSettings { .. } => vec!["annotation"],
+            Cmd::SetSymbolParity { .. } => vec!["symbol_parity"],
             Cmd::SetFieldNameTemplates { .. } => vec!["field_name_templates"],
             Cmd::SetBomPresets { .. } => vec!["bom_presets"],
             Cmd::SetBomView { .. } => vec!["bom_settings"],
@@ -3470,6 +3487,15 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
             Cmd::SetDiffPairPresets { presets } => self.set_diff_pair_presets(presets),
+            Cmd::SetViaStackPresets { presets } => {
+                let copper = self.model.board.layers.clone();
+                eda_model::setup_pages::validate_via_stack_presets(presets, &copper).map_err(|e| vec![e])?;
+                if self.design.drawings.as_ref().map_or(&[][..], |d| d.via_stack_presets.as_slice()) == presets.as_slice() {
+                    return Err(vec![CheckResult::fail("ops_no_change", "via_stack_presets", "the microvia stack presets are already so")]);
+                }
+                self.drawings_mut().via_stack_presets = presets.clone();
+                Ok(())
+            }
             Cmd::EditTracksAndVias { ids, track_width, via_size, layer, unconnected, protection } => {
                 self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref())?;
                 self.edit_via_padstacks(ids, *unconnected, *protection)
@@ -3504,6 +3530,7 @@ impl<'a> Board<'a> {
             Cmd::SetIntersheetRefs { settings } => review::set_intersheet_refs(&mut self.design, settings),
             Cmd::SetSchFormatting { settings } => sch_setup::set_formatting(&mut self.design, settings),
             Cmd::SetAnnotationSettings { settings, subpart_first_id, subpart_id_separator } => sch_setup::set_annotation(&mut self.design, settings, *subpart_first_id, *subpart_id_separator),
+            Cmd::SetSymbolParity { settings } => sch_setup::set_symbol_parity(&mut self.design, settings),
             Cmd::SetFieldNameTemplates { fields } => sch_setup::set_field_name_templates(&mut self.design, fields),
             Cmd::SetBomPresets { bom_presets, bom_fmt_presets } => sch_setup::set_bom_presets(&mut self.design, bom_presets, bom_fmt_presets),
             Cmd::SetBomView { save, delete, view, presets, fmt_presets, fmt_view } => {
@@ -3678,7 +3705,7 @@ impl<'a> Board<'a> {
             Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
-            Cmd::SetZoneDefaults { zone } => {
+            Cmd::SetZoneDefaults { zone, locked } => {
                 // `ZONE_SETTINGS << *aZone`: the settings, the layers and the name; the net restored to none (`m_Netcode = NETINFO_LIST::ORPHANED`)
                 let mut d = (**zone).clone();
                 d.id.clear();
@@ -3688,7 +3715,9 @@ impl<'a> Board<'a> {
                 d.holes.clear();
                 (d.fill_epoch, d.flip_epoch, d.flip_parity) = (0, 0, false);
                 d.parent_footprint = None;
-                self.drawings_mut().zone_defaults = Some(d);
+                let drawings = self.drawings_mut();
+                drawings.zone_defaults = Some(d);
+                drawings.zone_defaults_locked = *locked;
                 Ok(())
             }
             Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),

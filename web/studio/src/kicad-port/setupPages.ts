@@ -151,12 +151,48 @@ export interface ProfilesDraft {
 }
 
 export function profilesDraftOf(t: TuningProfiles | undefined | null): ProfilesDraft {
-  return { profiles: (t?.profiles ?? []).map((p) => ({ ...p, layer_entries: p.layer_entries.map((e) => ({ ...e })), via_overrides: p.via_overrides.map((v) => ({ ...v })) })), classProfiles: { ...(t?.class_profiles ?? {}) } };
+  return { profiles: (t?.profiles ?? []).map(withProfileDefaults).map((p) => ({ ...p, layer_entries: p.layer_entries.map((e) => ({ ...e })), via_overrides: p.via_overrides.map((v) => ({ ...v })) })), classProfiles: { ...(t?.class_profiles ?? {}) } };
 }
 
-/** A new profile (`OnAddTuningProfileClick`): named "Profile", single-ended, nothing in its grids. */
+/**
+ * A new profile (`OnAddTuningProfileClick`: a new `PANEL_SETUP_TUNING_PROFILE_INFO`): no name, single-ended, a target impedance of 0, "1" "GHz", "Enable time
+ * domain tuning" and "Model solder mask" ticked (panel_setup_tuning_profile_info_base.cpp's `SetValue( true )`), nothing in its grids (UI-LEFT-3 B3-4).
+ */
 export function emptyProfile(): TuningProfile {
-  return { name: "", profile_type: "single", target_impedance: 0, enable_time_domain_tuning: false, layer_entries: [], via_propagation_delay_as: 0, via_overrides: [] };
+  return {
+    name: "",
+    profile_type: "single",
+    target_impedance: 0,
+    enable_time_domain_tuning: true,
+    layer_entries: [],
+    via_propagation_delay_as: 0,
+    via_overrides: [],
+    frequency_hz: 1e9,
+    model_solder_mask: true,
+    net_chain_bridge_delay_as_per_mm: 0,
+  };
+}
+
+/** The profile with the fields KiCad 25ec2335 added filled in as the project's migrations fill an older one (1 GHz, the mask not modelled, no bridge delay). */
+export function withProfileDefaults(p: TuningProfile): TuningProfile {
+  // (the server leaves out an empty grid: `skip_serializing_if = "Vec::is_empty"`)
+  return { ...p, layer_entries: p.layer_entries ?? [], via_overrides: p.via_overrides ?? [], frequency_hz: p.frequency_hz ?? 1e9, model_solder_mask: p.model_solder_mask ?? false, net_chain_bridge_delay_as_per_mm: p.net_chain_bridge_delay_as_per_mm ?? 0 };
+}
+
+/** `FREQUENCY_UNITS`: the panel's `m_frequencyUnits` choice (Hz, kHz, MHz, GHz) and what each multiplies by (`getFrequency`). */
+export const FREQUENCY_UNITS: ReadonlyArray<{ label: string; scale: number }> = [
+  { label: "Hz", scale: 1 },
+  { label: "kHz", scale: 1e3 },
+  { label: "MHz", scale: 1e6 },
+  { label: "GHz", scale: 1e9 },
+];
+
+/** `LoadProfile`: the frequency shown in the largest unit it reaches (`>= 1e9` GHz, `>= 1e6` MHz, `>= 1e3` kHz, else Hz) and that unit's index. */
+export function frequencyShown(hz: number): { value: number; unit: number } {
+  if (hz >= 1e9) return { value: hz / 1e9, unit: 3 };
+  if (hz >= 1e6) return { value: hz / 1e6, unit: 2 };
+  if (hz >= 1e3) return { value: hz / 1e3, unit: 1 };
+  return { value: hz, unit: 0 };
 }
 
 /**
@@ -216,6 +252,8 @@ export function checkProfiles(d: ProfilesDraft, copper: readonly string[]): Prof
     if (!Number.isFinite(p.target_impedance) || p.target_impedance < 0 || p.target_impedance > 1e6) fail("The target impedance is a number of ohms from 0 up");
     if (p.layer_entries.length > MAX_PROFILE_ROWS || p.via_overrides.length > MAX_PROFILE_ROWS) fail(`A profile has at most ${MAX_PROFILE_ROWS} rows in each grid`);
     if (!Number.isFinite(p.via_propagation_delay_as) || p.via_propagation_delay_as < 0 || p.via_propagation_delay_as > MAX_DELAY_AS) fail("The via propagation delay is from 0 to 2147 ps");
+    if (p.frequency_hz !== undefined && (!Number.isFinite(p.frequency_hz) || p.frequency_hz < 0 || p.frequency_hz > 1e15)) fail("The frequency is a number of hertz from 0 up");
+    if (p.net_chain_bridge_delay_as_per_mm !== undefined && (!Number.isFinite(p.net_chain_bridge_delay_as_per_mm) || p.net_chain_bridge_delay_as_per_mm < 0 || p.net_chain_bridge_delay_as_per_mm > MAX_DELAY_AS)) fail("The net chain bridge unit delay is from 0 to 2147 ps/mm");
     const seen = new Set<string>();
     p.layer_entries.forEach((e, row) => {
       const key = `${i}:${row}`;
@@ -263,7 +301,7 @@ export function missingProfiles(d: ProfilesDraft): Array<[string, string]> {
 }
 
 export function sameProfiles(a: TuningProfiles | undefined | null, b: TuningProfiles | undefined | null): boolean {
-  const norm = (t: TuningProfiles | undefined | null) => JSON.stringify([(t?.profiles ?? []).map((p) => ({ ...p, layer_entries: p.layer_entries.map((e) => ({ ...e, top_reference_layer: e.top_reference_layer ?? null, bottom_reference_layer: e.bottom_reference_layer ?? null })) })), Object.entries(t?.class_profiles ?? {}).filter(([, p]) => p !== "").sort(([x], [y]) => (x < y ? -1 : 1))]);
+  const norm = (t: TuningProfiles | undefined | null) => JSON.stringify([(t?.profiles ?? []).map(withProfileDefaults).map((p) => [p.name, p.profile_type, p.target_impedance, p.enable_time_domain_tuning, p.via_propagation_delay_as, p.frequency_hz, p.model_solder_mask, p.net_chain_bridge_delay_as_per_mm, p.via_overrides.map((v) => [v.signal_layer_from, v.signal_layer_to, v.via_layer_from, v.via_layer_to, v.delay_as]), p.layer_entries.map((e) => [e.signal_layer, e.top_reference_layer ?? null, e.bottom_reference_layer ?? null, e.width_nm, e.diff_pair_gap_nm, e.delay_as_per_mm])]), Object.entries(t?.class_profiles ?? {}).filter(([, p]) => p !== "").sort(([x], [y]) => (x < y ? -1 : 1))]);
   return norm(a) === norm(b);
 }
 

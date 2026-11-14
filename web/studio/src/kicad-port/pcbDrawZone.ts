@@ -136,7 +136,8 @@ export function newZoneInitial(
   if (isCopperLayerName(opts.layer)) settings.priority = uniqueZonePriority(board.routing?.zones ?? []);
   // A rule area takes no net (`ExportSetting`: `if( !m_isRuleArea ) aTarget.SetNetCode( m_Netcode )`); the name is the defaults' (`m_Name`).
   // KiCad 25ec2335 `createNewZone`: "A new zone starts unnamed, do not inherit the last drawn zone's name (issue 23131)"
-  return { net: opts.ruleArea ? "" : newZoneNet(board, opts.highlighted, opts.selection), layers: [opts.layer], name: "", locked: false, settings };
+  // `ExportSetting`'s `SetLocked( m_Locked )`: the defaults' "Locked" (Board Setup > Zones, UI-LEFT-3 B3-4)
+  return { net: opts.ruleArea ? "" : newZoneNet(board, opts.highlighted, opts.selection), layers: [opts.layer], name: "", locked: board.drawings?.zone_defaults_locked ?? false, settings };
 }
 
 /** The keys of `ZONE_SETTINGS` a zone's dialog edits that the defaults carry over (`createNewZone` resets the layers and their properties, the net and the rule area flag). */
@@ -159,13 +160,13 @@ export function stickySettings(d: ZoneDefaults | undefined): Partial<ZoneSetting
  * zone's settings, layers and name (`ZONE_SETTINGS << *aZone`), the net restored to none (`m_Netcode = NETINFO_LIST::ORPHANED`). 8303b2ad; 25ec2335 moved the
  * defaults to Board Setup's Zones page.
  */
-export function zoneDefaultsCmd(form: Partial<ZoneSettingsFields & RuleAreaFields>, layers: readonly string[], name: string): Cmd {
+export function zoneDefaultsCmd(form: Partial<ZoneSettingsFields & RuleAreaFields>, layers: readonly string[], name: string, locked?: boolean): Cmd {
   const zone: Record<string, unknown> = { net: "", layer: layers[0] ?? "F.Cu", outline: [] };
   for (const k of STICKY_KEYS) if (form[k] !== undefined && form[k] !== null) zone[k] = form[k];
   zone.is_rule_area = !!form.is_rule_area;
   if (layers.length > 1) zone.layers = [...layers];
   if (name) zone.name = name;
-  return { op: "set_zone_defaults", zone: zone as ZoneDefaults & { net: string; layer: string; outline: [] } };
+  return { op: "set_zone_defaults", zone: zone as ZoneDefaults & { net: string; layer: string; outline: [] }, ...(locked ? { locked: true } : {}) };
 }
 
 /**

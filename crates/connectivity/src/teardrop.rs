@@ -290,11 +290,12 @@ fn pad_bounding_radius(lp: &Pad, groups: &[(Vec<String>, Geo)], center: Point64)
 /// The parameters an anchor is built with: its own (`GetTeardropParams()`, which alone govern it, as in `UpdateTeardrops`), else Board Setup's block when the block is
 /// on and targets the anchor's kind (`DIALOG_GLOBAL_EDIT_TEARDROPS`, which writes the block into every targeted item). `None`: the anchor gets no teardrop.
 /// The block is `TARGET_ROUND`'s for a via and a uniformly round pad, `TARGET_RECT`'s for any other pad (`processItem`: `TEARDROP_MANAGER::IsUniformlyRound`;
-/// UI-LEFT-2 BB8).
+/// UI-LEFT-2 BB8). With "Round pads only" (`m_UseRoundShapesOnly`) a pad that is not uniformly round is not targeted (`visitItem`'s `m_roundPadsFilter`;
+/// UI-LEFT-3 B3-4).
 fn anchor_params(own: Option<TeardropParams>, board: &TeardropSettings, targeted: bool, uniformly_round: bool) -> Option<TeardropParams> {
     match own {
         Some(p) => p.enabled.then_some(p),
-        None => (board.enabled && targeted).then(|| if uniformly_round { TeardropParams::of_settings(board) } else { board.rect_params() }),
+        None => (board.enabled && targeted && (uniformly_round || !board.round_shapes_only)).then(|| if uniformly_round { TeardropParams::of_settings(board) } else { board.rect_params() }),
     }
 }
 
@@ -3008,6 +3009,21 @@ mod tests {
         assert!(reach(&rect, 100_000_000) < reach(&plain, 100_000_000), "the pad's teardrop is shorter");
         assert_eq!(reach(&rect, 120_000_000), reach(&plain, 120_000_000), "the via's is the round block's");
         assert_eq!(settings.rect_params().enabled, true, "the round block's enable turns the rect block on");
+    }
+
+    /// UI-LEFT-3 B3-4: "Round pads only" (`m_UseRoundShapesOnly`, `visitItem`'s `if( !IsUniformlyRound( aItem ) ) return`) takes the rectangular pad's teardrop
+    /// away and leaves the via's (round) one.
+    #[test]
+    fn round_pads_only_leaves_a_rectangular_pad_without_a_teardrop() {
+        let (mut design, model) = smd_pad_model(PadShape::Rect, (1.5, 1.0), None);
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(track(vec![at(100.0, 145.0), at(105.0, 145.0)], 0.25));
+        rt.vias.push(via(120.0, 145.0, 0.8));
+        rt.tracks.push(track(vec![at(120.0, 145.0), at(125.0, 145.0)], 0.2));
+        assert_eq!(generate_teardrops(&design, &model, &enabled_settings()).len(), 2);
+        let round_only = generate_teardrops(&design, &model, &TeardropSettings { round_shapes_only: true, ..enabled_settings() });
+        assert_eq!(round_only.len(), 1, "{round_only:?}");
+        assert!(round_only[0].outline.iter().all(|p| p.x.get() > 110_000_000), "the one left is the via's");
     }
 
     /// A track crossing a rounded rectangle's centre gets one teardrop on each side (`buildCrossingStub`), as kicad-cli makes them.

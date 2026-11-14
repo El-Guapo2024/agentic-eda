@@ -333,6 +333,47 @@ pub struct TuningProfile {
     pub via_propagation_delay_as: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_overrides: Vec<ViaOverride>,
+    /// "Frequency" (KiCad 25ec2335 `TUNING_PROFILE::m_Frequency`, the project's `frequency`) in hertz: the frequency the Track Propagation grid's calculator
+    /// works at (`PANEL_SETUP_TUNING_PROFILE_INFO::getFrequency`). Additive: absent reads as `migrateSchema0to1`'s 1 GHz (UI-LEFT-3 B3-4).
+    #[serde(default = "default_profile_frequency", skip_serializing_if = "is_default_profile_frequency")]
+    pub frequency_hz: f64,
+    /// "Model solder mask" (`m_ModelSolderMask`, the project's `model_solder_mask`): the calculator puts the mask over an outer layer's microstrip. Additive:
+    /// absent reads as `migrateSchema0to1`'s false; a profile the page adds starts ticked, as the panel's box does (UI-LEFT-3 B3-4).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub model_solder_mask: bool,
+    /// "Net Chain Bridge Propagation" > "Global unit delay" (`m_NetChainBridgePropagationDelay`, the project's `net_chain_bridge_prop_delay`), in attoseconds
+    /// per millimetre as the project keeps it. Additive: absent reads as `migrateSchema1to2`'s 0 (UI-LEFT-3 B3-4).
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub net_chain_bridge_delay_as_per_mm: i64,
+}
+
+fn default_profile_frequency() -> f64 {
+    1.0e9
+}
+fn is_default_profile_frequency(f: &f64) -> bool {
+    *f == 1.0e9
+}
+fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
+}
+
+impl Default for TuningProfile {
+    /// A profile as the project file's migrations complete an old one (`migrateSchema0to1`, `migrateSchema1to2`): no name, single-ended, 1 GHz, the mask not
+    /// modelled, nothing in its grids.
+    fn default() -> Self {
+        TuningProfile {
+            name: String::new(),
+            profile_type: ProfileType::Single,
+            target_impedance: 0.0,
+            enable_time_domain_tuning: false,
+            layer_entries: vec![],
+            via_propagation_delay_as: 0,
+            via_overrides: vec![],
+            frequency_hz: default_profile_frequency(),
+            model_solder_mask: false,
+            net_chain_bridge_delay_as_per_mm: 0,
+        }
+    }
 }
 
 /// Design Rules > Tuning Profiles: the profiles, and the profile each net class names (`NETCLASS::SetTuningProfile`; a class not here names none). A class may name a profile the
@@ -395,6 +436,13 @@ impl TuningProfiles {
             if p.via_propagation_delay_as < 0 || p.via_propagation_delay_as > MAX_DELAY_AS {
                 return bad("The via propagation delay is from 0 to 2147 ps".into());
             }
+            // `getFrequency`: the field's number times its unit; the page sends hertz (a wxTextCtrl of at most 15 characters)
+            if !p.frequency_hz.is_finite() || p.frequency_hz < 0.0 || p.frequency_hz > 1.0e15 {
+                return bad("The frequency is a number of hertz from 0 up".into());
+            }
+            if p.net_chain_bridge_delay_as_per_mm < 0 || p.net_chain_bridge_delay_as_per_mm > MAX_DELAY_AS {
+                return bad("The net chain bridge unit delay is from 0 to 2147 ps/mm".into());
+            }
             let mut layers = BTreeSet::new();
             for (row, e) in p.layer_entries.iter().enumerate() {
                 if !have(&e.signal_layer) {
@@ -443,6 +491,152 @@ impl TuningProfiles {
     }
 }
 
+/// Design Rules > Microvia Stacks: one preset (KiCad 25ec2335 `VIA_STACK_PRESET`, `include/board_design_settings.h`; the project's
+/// `board.design_settings.via_stack_presets`), what Place Microvia Stack and a placed stack (`PCB_VIA_STACK::ApplyPreset`) take. Sizes in nanometres; a stacked
+/// preset is always copper-filled (`DIALOG_MICROVIA_STACK::TransferDataFromWindow`). UI-LEFT-3 B3-8.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViaStackPreset {
+    /// `m_Name`: the preset is named by it, so no two share one (case ignored: `nameIsFree`).
+    pub name: String,
+    /// `m_StartLayer` / `m_EndLayer`, copper layers by the names the board file writes.
+    pub start_layer: String,
+    pub end_layer: String,
+    /// `m_Staggered`: "Staggered" (each via offset by the pitch), else "Stacked".
+    #[serde(default)]
+    pub staggered: bool,
+    /// `m_ViaSize` / `m_ViaDrill` (0 with "Use netclass values").
+    #[serde(default, deserialize_with = "crate::units::de")]
+    pub via_size_nm: Nm,
+    #[serde(default, deserialize_with = "crate::units::de")]
+    pub via_drill_nm: Nm,
+    /// `m_UseNetclass`: "Use netclass values".
+    #[serde(default)]
+    pub use_netclass: bool,
+    /// `m_Filled`: "Copper-filled" (default on).
+    #[serde(default = "yes")]
+    pub filled: bool,
+    /// `m_Capped`: "Capped".
+    #[serde(default)]
+    pub capped: bool,
+    /// `m_Pitch`: the offset of a staggered stack's vias (0 for a stacked one).
+    #[serde(default, deserialize_with = "crate::units::de")]
+    pub pitch_nm: Nm,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// `MAX_MICROVIA_STACK_PITCH_MM` (`include/board_design_settings_defaults.h`): 25 mm.
+pub const MAX_MICROVIA_STACK_PITCH_NM: Nm = Nm::new(25_000_000);
+/// `GEOMETRY_MIN_SIZE` (`pcbnew/pcb_track.h`): 1 um.
+pub const GEOMETRY_MIN_SIZE_NM: Nm = Nm::new(1_000);
+
+impl ViaStackPreset {
+    /// `DIALOG_MICROVIA_STACK::TransferDataFromWindow`'s checks in its order with its messages word for word (`PCB_VIA_STACK::IsSpanValid`,
+    /// `PCB_VIA::ValidateViaParameters`), `copper` being the board's copper layers.
+    pub fn problem(&self, copper: &[String]) -> Option<String> {
+        if self.start_layer == self.end_layer {
+            return Some("The start and end layers must be different.".into());
+        }
+        let present = |l: &str| copper.iter().any(|c| c == l);
+        if !present(&self.start_layer) || !present(&self.end_layer) {
+            return Some("Select a start and an end layer present on this board.".into());
+        }
+        if self.staggered && self.pitch_nm <= Nm::ZERO {
+            return Some("Staggered stacks need a pitch greater than zero.".into());
+        }
+        if self.pitch_nm > MAX_MICROVIA_STACK_PITCH_NM {
+            return Some("The pitch must be 25 mm or less.".into());
+        }
+        if !self.use_netclass {
+            if self.via_size_nm < GEOMETRY_MIN_SIZE_NM {
+                return Some("Via diameter is too small.".into());
+            }
+            if self.via_drill_nm < GEOMETRY_MIN_SIZE_NM {
+                return Some("Via drill is too small.".into());
+            }
+            if self.via_size_nm <= self.via_drill_nm {
+                return Some("Via hole size must be smaller than via diameter".into());
+            }
+        }
+        None
+    }
+
+    /// The preset as KiCad's project reader takes an entry of `via_stack_presets` (`BOARD_DESIGN_SETTINGS`' `PARAM_LAMBDA` loader): a layer that is not a copper
+    /// layer's name is `F.Cu` (start) or `In1.Cu` (end); a size that is missing, not a number, negative or past an `int` of nanometres is 0; the pitch is
+    /// clamped to 0 .. 25 mm; "Copper-filled" is on and the rest off where the entry is silent. `None` for an entry with no name (skipped).
+    pub fn from_project(entry: &serde_json::Value) -> Option<ViaStackPreset> {
+        let name = entry.get("name")?.as_str()?.to_string();
+        let copper = |key: &str, fallback: &str| -> String {
+            entry.get(key).and_then(|v| v.as_str()).filter(|n| crate::layers::is_copper_layer_name(n)).map_or_else(|| fallback.to_string(), str::to_string)
+        };
+        let flag = |key: &str, fallback: bool| entry.get(key).and_then(|v| v.as_bool()).unwrap_or(fallback);
+        let mm = |key: &str| -> Nm {
+            match entry.get(key).and_then(|v| v.as_f64()) {
+                Some(v) if (0.0..=i32::MAX as f64 / 1e6).contains(&v) => Nm::new((v * 1e6).round() as i64),
+                _ => Nm::ZERO,
+            }
+        };
+        let pitch = entry.get("pitch").and_then(|v| v.as_f64()).map_or(Nm::ZERO, |v| Nm::new((v.clamp(0.0, 25.0) * 1e6).round() as i64));
+        Some(ViaStackPreset {
+            name,
+            start_layer: copper("start_layer", "F.Cu"),
+            end_layer: copper("end_layer", "In1.Cu"),
+            staggered: flag("staggered", false),
+            via_size_nm: mm("via_size"),
+            via_drill_nm: mm("via_drill"),
+            use_netclass: flag("use_netclass", false),
+            filled: flag("filled", true),
+            capped: flag("capped", false),
+            pitch_nm: pitch,
+        })
+    }
+
+    /// The entry KiCad's writer makes of a preset (`via_stack_presets`' `PARAM_LAMBDA` getter): the sizes in millimetres.
+    pub fn to_project(&self) -> serde_json::Value {
+        let mm = |n: Nm| n.get() as f64 / 1e6;
+        serde_json::json!({
+            "name": self.name,
+            "start_layer": self.start_layer,
+            "end_layer": self.end_layer,
+            "staggered": self.staggered,
+            "via_size": mm(self.via_size_nm),
+            "via_drill": mm(self.via_drill_nm),
+            "use_netclass": self.use_netclass,
+            "filled": self.filled,
+            "capped": self.capped,
+            "pitch": mm(self.pitch_nm),
+        })
+    }
+}
+
+/// `PANEL_SETUP_VIA_STACKS::TransferDataFromWindow` over a page of presets: every preset named, no two alike (case ignored, `nameIsFree`), and each one a
+/// preset the Microvia Stack dialog would have OK'd ([`ViaStackPreset::problem`]). The refusal's location is the preset's name.
+pub fn validate_via_stack_presets(presets: &[ViaStackPreset], copper: &[String]) -> Result<(), CheckResult> {
+    if presets.len() > MAX_PROFILES {
+        return Err(CheckResult::fail("ops_bad_via_stacks", "via_stack_presets", format!("A board has at most {MAX_PROFILES} microvia stack presets")));
+    }
+    let mut seen = BTreeSet::new();
+    for p in presets {
+        let at = if p.name.trim().is_empty() { "(unnamed preset)".to_string() } else { p.name.clone() };
+        if p.name.trim().is_empty() || p.name.trim() != p.name || p.name.len() > MAX_PROFILE_NAME || p.name.chars().any(|c| c.is_control()) {
+            return Err(CheckResult::fail("ops_bad_via_stacks", &at, "A preset is named, with no spaces around the name and no control characters"));
+        }
+        if !seen.insert(p.name.to_lowercase()) {
+            return Err(CheckResult::fail("ops_bad_via_stacks", &at, format!("A preset named \"{}\" already exists.", p.name)));
+        }
+        if let Some(why) = p.problem(copper) {
+            return Err(CheckResult::fail("ops_bad_via_stacks", &at, why));
+        }
+        if !p.staggered && !p.filled {
+            return Err(CheckResult::fail("ops_bad_via_stacks", &at, "A stacked preset is copper-filled"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,7 +646,7 @@ mod tests {
     }
 
     fn profile(name: &str) -> TuningProfile {
-        TuningProfile { name: name.into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: Nm::new(150), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 5_600_000 }], via_propagation_delay_as: 20_000_000, via_overrides: vec![] }
+        TuningProfile { name: name.into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: Nm::new(150), diff_pair_gap_nm: Nm::ZERO, delay_as_per_mm: 5_600_000 }], via_propagation_delay_as: 20_000_000, via_overrides: vec![], ..Default::default() }
     }
 
     #[test]

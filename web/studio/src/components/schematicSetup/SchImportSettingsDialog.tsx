@@ -3,8 +3,7 @@
 // "Import Settings" reads the other project (`POST /api/sch/import_settings`) and hands it to the pages (`SetupImportContext`), which show it unapplied until
 // each page's Apply, as KiCad's pages do until OK.
 //
-// Differs: a browser picks a file, not a path (`wxFileDialog` on `FILEEXT::ProjectFileWildcard()`). "Compare symbol with library settings" is not offered:
-// Schematic Setup here has no Symbol Parity page.
+// Differs: a browser picks a file, not a path (`wxFileDialog` on `FILEEXT::ProjectFileWildcard()`).
 import { useState } from "react";
 import { postSchImportSettings } from "../../api/client";
 import type { BoardState } from "../../api/types";
@@ -17,6 +16,7 @@ export const SCH_IMPORT_OPTIONS: ReadonlyArray<{ key: string; label: string }> =
   { key: "field_templates", label: "Field name templates" },
   { key: "bom_presets", label: "BOM presets" },
   { key: "bom_fmt_presets", label: "BOM format presets" },
+  { key: "symbol_parity", label: "Compare symbol with library settings" },
   { key: "severities", label: "Violation severities" },
   { key: "pinmap", label: "Pin conflict map" },
   { key: "net_classes", label: "Net classes" },

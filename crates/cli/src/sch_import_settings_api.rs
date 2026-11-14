@@ -71,7 +71,7 @@ mod tests {
         let refused = import_settings(&dir, json!({ "project": "not json", "project_name": "other.kicad_pro" }).to_string().as_bytes());
         assert_eq!(refused["message"], "Error importing settings from project:\nProject file other.kicad_pro could not be loaded.");
         let pro = json!({
-            "schematic": { "connection_grid_size": 25.0, "drawing": { "default_text_size": 60.0 }, "annotation": { "method": 1, "sort_order": 1 },
+            "schematic": { "connection_grid_size": 25.0, "drawing": { "default_text_size": 60.0 }, "annotation": { "method": 1, "sort_order": 1 }, "compare_symbols": { "field_positions": true, "missing_fields": false },
                 "bus_aliases": { "DATA": ["D0", "D1"] }, "bom_presets": [{ "name": "Mine" }] },
             "erc": { "rule_severities": { "pin_not_connected": "warning" } },
             "net_settings": { "classes": [{ "name": "Default" }, { "name": "Power", "wire_width": 12.0 }], "meta": { "version": 3 } },
@@ -81,6 +81,8 @@ mod tests {
         assert_eq!(got["ok"], true, "{got}");
         assert_eq!(got["formatting"]["connection_grid_mils"], 25);
         assert_eq!(got["setup"]["annotation"]["method"], 1);
+        // "Compare symbol with library settings" (UI-LEFT-3 B3-9)
+        assert_eq!((got["setup"]["symbol_parity"]["field_positions"].as_bool(), got["setup"]["symbol_parity"]["missing_fields"].as_bool(), got["setup"]["symbol_parity"]["field_texts"].as_bool()), (Some(true), Some(false), Some(true)));
         assert_eq!(got["setup"]["bus_aliases"][0]["name"], "DATA");
         assert_eq!(got["setup"]["bom_presets"], json!(["Mine"]));
         assert_eq!(got["severities"]["severities"]["pin_not_connected"], "warning");

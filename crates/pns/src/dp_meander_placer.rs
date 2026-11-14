@@ -907,6 +907,7 @@ mod tests {
             layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: mm(0.2), diff_pair_gap_nm: mm(0.2), delay_as_per_mm: 6_100_000 }],
             via_propagation_delay_as: 0,
             via_overrides: vec![],
+            ..Default::default()
         };
         e.rules.tuning_profiles = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "USB".to_string())].into() };
         let mut s = MeanderSettings::default();

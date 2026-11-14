@@ -93,7 +93,7 @@
   await scenario("Zones: the page, KiCad's spoke check, Apply stores the board's defaults", async (t) => {
     const p = await openPage("Zones");
     const tree = [...document.querySelectorAll(".bs-nav-item")].map((b) => b.textContent.trim());
-    t(tree.indexOf("Zones") === tree.indexOf("Pre-defined Sizes") + 1 && tree.indexOf("Teardrops") === tree.indexOf("Zones") + 1 && !tree.includes("Zone Hatch Offsets"), `after Pre-defined Sizes, before Teardrops (${tree.join(", ")})`);
+    t(tree.indexOf("Zones") === tree.indexOf("Microvia Stacks") + 1 && tree.indexOf("Microvia Stacks") === tree.indexOf("Pre-defined Sizes") + 1 && tree.indexOf("Teardrops") === tree.indexOf("Zones") + 1 && !tree.includes("Zone Hatch Offsets"), `after Pre-defined Sizes and Microvia Stacks (KiCad 25ec2335), before Teardrops (${tree.join(", ")})`);
     t(!document.querySelector('section.bs-page[aria-label="Zone Hatch Offsets"]')?.hidden, "the hatch offsets panel is on the page");
     await setValue(q(p, 'input[aria-label="Thermal spoke width"]'), "0.1mm");
     const refused = await apply(p);
@@ -173,7 +173,7 @@
     };
     const tick = async (label) => { [...dlg().querySelectorAll("label")].find((l) => l.textContent.trim() === label)?.querySelector("input")?.click(); await sleep(80); };
     const boxes = [...dlg().querySelectorAll("label")].map((l) => l.textContent.trim()).filter((x) => x !== "Import from:");
-    t(boxes.join("|") === "Formatting preferences|Annotation preferences|Field name templates|BOM presets|BOM format presets|Violation severities|Pin conflict map|Net classes|Bus alias definitions|Text variables", `KiCad's boxes in its order (${boxes.join("|")})`);
+    t(boxes.join("|") === "Formatting preferences|Annotation preferences|Field name templates|BOM presets|BOM format presets|Compare symbol with library settings|Violation severities|Pin conflict map|Net classes|Bus alias definitions|Text variables", `KiCad's boxes in its order (${boxes.join("|")})`);
     await pick("other.kicad_pro", "this is no project");
     for (const l of ["Formatting preferences", "Pin conflict map", "Bus alias definitions", "Text variables"]) await tick(l);
     await press(dlg(), "Import Settings", 1000);

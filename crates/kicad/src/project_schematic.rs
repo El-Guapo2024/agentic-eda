@@ -4,7 +4,8 @@
 //!
 //! * The settings the studio has a setting of its own for go into the design's root extras: the unit notation (`subpart_id_separator`, `subpart_first_id`), the
 //!   inter-sheet references (`drawing.intersheets_ref_*`), the simulator's settings (`ngspice`), Schematic Setup's Formatting (the rest of `drawing.*`:
-//!   [`formatting`]), Annotation (`annotation.*`, `annotate_start_num`, `reuse_designators`: [`annotation`]; `used_designators`, the tracker's memory) and Field Name Templates (`drawing.field_names`:
+//!   [`formatting`]), Annotation (`annotation.*`, `annotate_start_num`, `reuse_designators`: [`annotation`]; `used_designators`, the tracker's memory), Compare
+//!   Symbol with Library (`compare_symbols.*`: [`symbol_parity`]) and Field Name Templates (`drawing.field_names`:
 //!   [`field_names`]). The connection grid is read by `eda import-kicad` itself.
 //! * The rest is kept as KiCad wrote it ([`kept`], `SchExtras::project_schematic`), and the derived project starts its `schematic` object from it, so kicad-cli
 //!   reads the formatting, annotation, BOM, netlist and simulator keys of the project as KiCad saved them.
@@ -54,6 +55,18 @@ const LEFT_OUT: &[&str] = &[
     "annotation.method",
     "reuse_designators",
     "used_designators",
+    "compare_symbols.missing_fields",
+    "compare_symbols.extra_fields",
+    "compare_symbols.field_texts",
+    "compare_symbols.field_visibilities",
+    "compare_symbols.field_styles",
+    "compare_symbols.field_positions",
+    "compare_symbols.pin_name_number_visibilities",
+    "compare_symbols.pin_alt_function_definitions",
+    "compare_symbols.exclude_from_board_flags",
+    "compare_symbols.dnp_flags",
+    "compare_symbols.exclude_from_bom_flags",
+    "compare_symbols.exclude_from_position_file_flags",
 ];
 
 /// The project's `schematic` object without the keys the studio holds or that name files of the original folder (see the module doc). `None` when the
@@ -159,6 +172,13 @@ pub fn annotation(schematic: &Value) -> Option<AnnotationSettings> {
     (a != d).then_some(a)
 }
 
+/// Schematic Setup > Compare Symbol with Library as `SCHEMATIC_SETTINGS`' `compare_symbols.*` `PARAM<bool>`s read it (KiCad 25ec2335; each its default when
+/// missing or not a boolean). `None` when they are KiCad's defaults (UI-LEFT-3 B3-9).
+pub fn symbol_parity(schematic: &Value) -> Option<eda_model::sch_setup::SymbolParitySettings> {
+    let p = eda_model::sch_setup::SymbolParitySettings::from_project(schematic.get("compare_symbols").unwrap_or(&Value::Null));
+    (p != eda_model::sch_setup::SymbolParitySettings::default()).then_some(p)
+}
+
 /// Schematic Setup > Field Name Templates as `SCHEMATIC_SETTINGS`' `drawing.field_names` reader takes it: an entry lacking any of `name`, `url` and `visible`
 /// is skipped, and an empty list leaves none.
 pub fn field_names(schematic: &Value) -> Vec<TemplateFieldName> {
@@ -188,6 +208,7 @@ pub fn apply(extras: &mut SchExtras, project_json: &str) {
     }
     extras.formatting = formatting(schematic);
     extras.annotation = annotation(schematic);
+    extras.symbol_parity = symbol_parity(schematic);
     // `PARAM_LAMBDA<std::string>( "used_designators" )`'s loader: `REFDES_TRACKER::Deserialize`, which leaves the tracker empty on what it refuses
     extras.used_designators = schematic.get("used_designators").and_then(Value::as_str).and_then(eda_model::annotate::RefDesTracker::deserialize).unwrap_or_default();
     extras.field_name_templates = field_names(schematic);
@@ -350,5 +371,20 @@ mod tests {
         assert_eq!((e.subpart_id_separator, e.subpart_first_id), (None, None));
         apply(&mut e, r#"{ "schematic": { "subpart_id_separator": 0, "subpart_first_id": 65 } }"#);
         assert_eq!((e.subpart_id_separator, e.subpart_first_id, e.project_schematic), (None, None, None));
+    }
+
+    /// UI-LEFT-3 B3-9: Compare Symbol with Library is the project's `compare_symbols.*` (KiCad 25ec2335 `SCHEMATIC_SETTINGS`), read into the extras and kept
+    /// out of the rest of the `schematic` object; the defaults are none.
+    #[test]
+    fn compare_symbols_is_read_into_the_extras() {
+        let pro = r#"{ "schematic": { "compare_symbols": { "field_positions": true, "missing_fields": false, "dnp_flags": "x" }, "bom_export_filename": "b.csv" } }"#;
+        let mut extras = SchExtras::default();
+        apply(&mut extras, pro);
+        let p = extras.symbol_parity.expect("not the defaults");
+        assert!(p.field_positions && !p.missing_fields && !p.dnp && p.field_texts, "{p:?}");
+        assert!(extras.project_schematic.as_ref().is_some_and(|k| !k.contains_key("compare_symbols")), "{:?}", extras.project_schematic);
+        let mut defaults = SchExtras::default();
+        apply(&mut defaults, r#"{ "schematic": { "compare_symbols": { "missing_fields": true } } }"#);
+        assert_eq!(defaults.symbol_parity, None);
     }
 }

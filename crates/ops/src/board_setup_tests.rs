@@ -502,7 +502,7 @@ fn tuning_patterns_are_stored_as_a_page_and_refused_with_the_setting_they_break(
 }
 
 fn a_profile(name: &str) -> TuningProfile {
-    TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: mm(0.13), diff_pair_gap_nm: mm(0.15), delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+    TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: mm(0.13), diff_pair_gap_nm: mm(0.15), delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![], ..Default::default() }
 }
 
 #[test]
@@ -561,4 +561,45 @@ fn the_verbs_read_from_the_json_the_studio_sends() {
     assert!(matches!(&cmd, Cmd::SetTextVariables { variables } if variables.len() == 2 && variables["REVISION"] == "B"));
     assert_eq!(cmd.domain(), Domain::Pcb);
     assert!(!cmd.clears_routing());
+}
+
+/// UI-LEFT-3 B3-4: `PANEL_SETUP_NETCLASSES::Validate` takes every size as typed -- a negative track width or clearance and a via hole as large as its via --
+/// and the derived board writes them as they are.
+#[test]
+fn a_negative_net_class_size_and_a_wide_via_hole_are_taken_as_typed() {
+    let base = model();
+    let mut b = Board::new(design(), &base, mm(0.1), mm(0.3));
+    let odd = NetClass { track_width: Some(mm(-0.1)), clearance: Some(Nm::new(-1_000)), via_diameter: Some(mm(0.4)), via_drill: Some(mm(0.4)), ..class("odd", &["VBUS"], Nm::ZERO) };
+    let settings = NetClassSettings { default: NetClass { name: "Default".into(), nets: vec![], ..class("Default", &[], mm(0.2)) }, classes: vec![odd], schematic: Default::default(), pcb_colors: None };
+    b.apply(&Cmd::SetNetClasses { settings }).unwrap();
+    let m = effective(&b, &base);
+    let c = m.board.net_classes.iter().find(|c| c.name == "odd").unwrap();
+    assert_eq!((c.track_width, c.clearance, c.via_drill), (Some(mm(-0.1)), Some(Nm::new(-1_000)), Some(mm(0.4))));
+    let pro: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(b.design(), &m)).unwrap();
+    let text = serde_json::to_string(&pro).unwrap();
+    let pcb = eda_kicad::export_kicad_pcb(b.design(), &m, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    assert!(text.contains("-0.1") || pcb.contains("-0.1"), "the negative width is written as typed");
+}
+
+/// UI-LEFT-3 B3-8: Microvia Stacks' OK is one verb (`set_via_stack_presets`) refused with the Microvia Stack dialog's words when a preset is one it would not
+/// close on, and a second preset of one name (case ignored).
+#[test]
+fn microvia_stack_presets_are_stored_and_checked_as_the_dialog_checks_them() {
+    use eda_model::setup_pages::ViaStackPreset;
+    let mut base = model();
+    base.board.layers = copper_layer_names(4);
+    let mut b = Board::new(design(), &base, mm(0.1), mm(0.3));
+    let p = ViaStackPreset { name: "Hdi".into(), start_layer: "F.Cu".into(), end_layer: "In1.Cu".into(), staggered: false, via_size_nm: mm(0.3), via_drill_nm: mm(0.15), use_netclass: false, filled: true, capped: false, pitch_nm: Nm::ZERO };
+    b.apply(&Cmd::SetViaStackPresets { presets: vec![p.clone()] }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().via_stack_presets, vec![p.clone()]);
+    let refused = |q: ViaStackPreset, b: &mut Board| b.apply(&Cmd::SetViaStackPresets { presets: vec![q] }).unwrap_err()[0].hint.clone().unwrap_or_default();
+    assert_eq!(refused(ViaStackPreset { end_layer: "F.Cu".into(), ..p.clone() }, &mut b), "The start and end layers must be different.");
+    assert_eq!(refused(ViaStackPreset { end_layer: "In5.Cu".into(), ..p.clone() }, &mut b), "Select a start and an end layer present on this board.");
+    assert_eq!(refused(ViaStackPreset { staggered: true, ..p.clone() }, &mut b), "Staggered stacks need a pitch greater than zero.");
+    assert_eq!(refused(ViaStackPreset { staggered: true, pitch_nm: mm(26.0), ..p.clone() }, &mut b), "The pitch must be 25 mm or less.");
+    assert_eq!(refused(ViaStackPreset { via_drill_nm: mm(0.3), ..p.clone() }, &mut b), "Via hole size must be smaller than via diameter");
+    let by_class = ViaStackPreset { use_netclass: true, via_size_nm: Nm::ZERO, via_drill_nm: Nm::ZERO, ..p.clone() };
+    b.apply(&Cmd::SetViaStackPresets { presets: vec![by_class] }).unwrap();
+    let twice = b.apply(&Cmd::SetViaStackPresets { presets: vec![p.clone(), ViaStackPreset { name: "HDI".into(), ..p.clone() }] }).unwrap_err();
+    assert_eq!(twice[0].hint.as_deref(), Some("A preset named \"HDI\" already exists."));
 }

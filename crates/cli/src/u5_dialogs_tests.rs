@@ -227,7 +227,7 @@ fn constraints_resolution_sees_tuning_profiles_variables_and_from_to() {
     let rt = design.routing.as_ref().unwrap();
     let (gnd, vcc) = (rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone(), rt.tracks.iter().find(|t| t.net == "VCC").unwrap().id.clone());
     let entry = ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_nm: mm(0.35), diff_pair_gap_nm: eda_model::units::Nm::ZERO, delay_as_per_mm: 0 };
-    let profile = TuningProfile { name: "50R".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: false, layer_entries: vec![entry], via_propagation_delay_as: 0, via_overrides: vec![] };
+    let profile = TuningProfile { name: "50R".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: false, layer_entries: vec![entry], via_propagation_delay_as: 0, via_overrides: vec![], ..Default::default() };
     let settings = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "50R".to_string())].into_iter().collect() };
     step(&dir, Cmd::SetTuningProfiles { settings }, false, "test").unwrap();
     let constraints = |id: &str| crate::inspect_api::constraints(&dir, json!({ "item": id }).to_string().as_bytes()).to_string();

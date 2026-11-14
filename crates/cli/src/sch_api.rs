@@ -440,6 +440,8 @@ pub(crate) fn setup_of(design: &eda_model::ir::Design) -> Value {
     json!({
         "ok": true,
         "annotation": extras.annotation.clone().unwrap_or_default(),
+        // Compare Symbol with Library (KiCad 25ec2335 `SYMBOL_PARITY_SETTINGS`, UI-LEFT-3 B3-9): KiCad's defaults where none is kept
+        "symbol_parity": extras.symbol_parity.unwrap_or_default(),
         "subpart_first_id": extras.subpart_first_id.unwrap_or('A' as u32),
         "subpart_id_separator": extras.subpart_id_separator.unwrap_or(0),
         "field_name_templates": extras.field_name_templates,

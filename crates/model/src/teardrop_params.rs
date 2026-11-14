@@ -167,6 +167,7 @@ impl TeardropParams {
             track_end: TeardropParams::default(),
             // (a non-round anchor these govern takes them too)
             rect_shape: Some(*self),
+            round_shapes_only: false,
         }
     }
 
