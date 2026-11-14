@@ -565,34 +565,71 @@ input.prop-label {
   line-height: 14px;
 }
 
-/* ------------------------------------------------------------ the bottom dock */
-/* components/panels/BottomDock.tsx: the board editor's Net Inspector and Search panes under the canvas, side by side, the top edge a sash. */
+/* ------------------------------------------------------------ the movable panes' docks */
+/* components/panels/BottomDock.tsx: the movable panes (the board editor's Net Inspector and Search, the schematic's Search) docked round the canvas. A side
+   and layer's docks (`.pane-dock-area`) hold its rows (`.pane-dock-row`, one `wxAuiDockInfo` each): stacked at the top or bottom, side by side on the left or
+   right; a row's panes side by side at the top or bottom, one over the other on the left or right, a sizer between two. Each row's sash is on the canvas's
+   side of it: a bottom row's top edge, a top row's lower edge, a left row's right edge, a right row's left edge. */
 .bottom-dock {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   background: var(--chrome-bg-raised);
+}
+.pane-dock-area.left,
+.pane-dock-area.right {
+  flex-direction: row;
+  height: 100%;
+}
+.pane-dock-row {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  flex: 0 0 auto;
   border-top: 1px solid var(--chrome-border);
+}
+.pane-dock-row.top {
+  border-top: 0;
+  border-bottom: 1px solid var(--chrome-border);
+}
+.pane-dock-row.left,
+.pane-dock-row.right {
+  flex-direction: row;
+  border-top: 0;
+}
+.pane-dock-row.left {
+  border-right: 1px solid var(--chrome-border);
+}
+.pane-dock-row.right {
+  border-left: 1px solid var(--chrome-border);
 }
 .bottom-dock-sash {
   flex: 0 0 4px;
   cursor: ns-resize;
   background: var(--chrome-border);
 }
+.pane-dock-row.left > .bottom-dock-sash,
+.pane-dock-row.right > .bottom-dock-sash {
+  cursor: ew-resize;
+}
 .bottom-dock-panes {
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
+}
+.pane-dock-row.left > .bottom-dock-panes,
+.pane-dock-row.right > .bottom-dock-panes {
+  flex-direction: column;
 }
 .bottom-dock-pane {
   flex: 1 1 0;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--chrome-border);
-}
-.bottom-dock-pane:last-child {
-  border-right: 0;
 }
 .bottom-dock-pane .dock-panel {
   display: flex;
@@ -609,45 +646,30 @@ input.prop-label {
   min-height: 0;
   overflow: hidden;
 }
-/* The same panes docked on another side of the canvas, or floating (UI-LEFT-2 PP13): a top dock's sash is its lower edge, a left dock's its right edge, a right
-   dock's its left edge; a side dock holds its panes one over the other. */
-.pcb-pane-dock.top {
-  border-top: 0;
-  border-bottom: 1px solid var(--chrome-border);
+.pcb-pane-dock-pane:has(> .dock-panel.folded) {
+  flex: 0 0 auto !important;
 }
-.pcb-pane-dock.left,
-.pcb-pane-dock.right {
-  flex-direction: row;
-  height: 100%;
-  border-top: 0;
-}
-.pcb-pane-dock.left {
-  border-right: 1px solid var(--chrome-border);
-}
-.pcb-pane-dock.right {
-  border-left: 1px solid var(--chrome-border);
-}
-.pcb-pane-dock.left > .pcb-pane-dock-sash,
-.pcb-pane-dock.right > .pcb-pane-dock-sash {
+/* the sash between two panes of one dock (`typePaneSizer`) */
+.pane-dock-pane-sizer {
   flex: 0 0 4px;
+  background: var(--chrome-border);
+}
+.pane-dock-pane-sizer.across {
   cursor: ew-resize;
 }
-.pcb-pane-dock.left > .pcb-pane-dock-panes,
-.pcb-pane-dock.right > .pcb-pane-dock-panes {
+.pane-dock-pane-sizer.down {
+  cursor: ns-resize;
+}
+/* a ring of a layer above 0 round the editor (OuterDocks) */
+.aui-ring-dock {
+  display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
-.pcb-pane-dock.left .pcb-pane-dock-pane,
-.pcb-pane-dock.right .pcb-pane-dock-pane {
-  border-right: 0;
-  border-bottom: 1px solid var(--chrome-border);
-}
-.pcb-pane-dock.left .pcb-pane-dock-pane:last-child,
-.pcb-pane-dock.right .pcb-pane-dock-pane:last-child {
-  border-bottom: 0;
-}
-.pcb-pane-dock-pane:has(> .dock-panel.folded) {
-  flex: 0 0 auto;
+.aui-ring-dock.left,
+.aui-ring-dock.right {
+  flex-direction: row;
 }
 .dock-panel-caption.movable {
   cursor: move;
@@ -688,7 +710,13 @@ input.prop-label {
   min-width: 180px;
   min-height: 82px;
 }
-.pcb-pane-floating > .dock-panel {
+.pcb-pane-floating-holder {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.pcb-pane-floating-holder > .dock-panel {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -700,38 +728,13 @@ input.prop-label {
   min-height: 0;
   overflow: hidden;
 }
-/* While a caption is dragged: the pane's window under the pointer, the centre dock guide's arrows over the canvas, and the hint of where it would dock. */
-.pcb-pane-drag-ghost {
-  position: fixed;
-  z-index: 950;
-  pointer-events: none;
-  border: 2px solid var(--chrome-accent, #4a8cff);
-  background: rgba(74, 140, 255, 0.08);
-}
+/* While a caption is dragged: the hint of where a release would dock the pane (`wxAUI_MGR_TRANSPARENT_HINT`'s blue window). */
 .pcb-pane-dock-hint {
   position: fixed;
   z-index: 940;
   pointer-events: none;
   background: rgba(74, 140, 255, 0.25);
   border: 1px solid var(--chrome-accent, #4a8cff);
-}
-.pcb-pane-dock-guide {
-  position: fixed;
-  z-index: 960;
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  color: var(--chrome-text);
-  background: var(--chrome-bg-raised);
-  border: 1px solid var(--chrome-border);
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-.pcb-pane-dock-guide.active {
-  background: var(--chrome-accent, #4a8cff);
-  color: #fff;
 }
 
 /* A list heading's edge (the Net Inspector's and the Search panel's): dragged to size the column, double-clicked to fit it (Search). */

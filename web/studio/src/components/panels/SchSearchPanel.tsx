@@ -10,25 +10,26 @@
 // (`ActivateItem`) selects the row and opens its properties (`SCH_ACTIONS::properties`). Ctrl+A selects every row, Ctrl+C and the rows' menu's Copy copy the
 // selected rows (tab-separated).
 //
-// **Differs**: the pane docks under the canvas only (KiCad's can be dragged to another side or floated) and its columns are not dragged or sized by hand (the
-// board editor's pane has that).
+// The pane docks and floats as the board editor's does (components/panels/BottomDock.tsx; UI-LEFT-3 S3-34), in the schematic frame's own layout. Its list is
+// the same `SEARCH_PANE_LISTVIEW` as the board editor's (common/widgets/search_pane_tab.cpp): each column starts at its share of the list's width
+// (`RefreshColumnNames`), its edge is dragged to size it (to nothing, which Copy then leaves out) and double-clicked to fit its widest text, and a heading is
+// dragged to another place; the order and widths last while the page is open (KiCad saves neither).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { fetchSchematic } from "../../api/client";
 import { fetchHierarchy } from "../../api/schControlClient";
 import type { Schematic } from "../../api/types";
 import { SCH_SEARCH_TABS, schSearchColumnWidths, schSearchTab, schSearchTarget, sortSchSearchRows, type SchSearchContext, type SchSearchRow, type SchSearchSheet } from "../../kicad-port/schSearchHandlers";
-import { clickSearchColumn, searchRowsText, toggleSearchSetting } from "../../kicad-port/searchHandlers";
+import { autosizeListColumn, clickSearchColumn, moveSearchColumn, searchColumnOrder, searchRowsText, toggleSearchSetting } from "../../kicad-port/searchHandlers";
 import { groupBox, groupsOf } from "../../kicad-port/schGroups";
 import { unionBox, type Box as SchBox } from "../../kicad-port/schItemGeom";
 import { sheetBoxOf } from "../schematic/schGroupBounds";
 import { boxCentre, centerViewOn, zoomFitBox } from "../../kicad-port/zoomFit";
 import type { Box } from "../../kicad-port/itemBoxes";
-import { setSchSearchPane, useSchSearchPane } from "../../state/schSearchPane";
+import { getSchSearchPane, setSchSearchPane, useSchSearchPane } from "../../state/schSearchPane";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
-import { toggleDockPane, useDockLayout } from "../../state/dockLayoutStore";
-import { DockPanel } from "./Dock";
+import { clickEndsDrag, startColumnMove, startColumnResize, textWidthIn } from "./listColumns";
 
 /** Every sheet path of the hierarchy with the schematic its screen shows there, read again when the design changes. */
 function useHierarchySheets(version: string | null, shown: boolean): SchSearchSheet[] {
@@ -107,7 +108,20 @@ export function SchSearchPanel() {
   useEffect(() => {
     setSelected((s) => s.filter((id) => rowById.has(id)));
   }, [rowById]);
-  const widths = schSearchColumnWidths(tab.id, listWidth);
+  // The columns on screen: each column's share of the list's width until one is sized by hand, the order, the widths.
+  const tabColumns = pane.columns[tab.id];
+  const order = searchColumnOrder(tab.columns.length, tabColumns?.order);
+  const [liveWidth, setLiveWidth] = useState<{ col: number; w: number } | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const baseWidths = tabColumns?.widths?.length === tab.columns.length ? tabColumns.widths : schSearchColumnWidths(tab.id, listWidth);
+  const widths = baseWidths.map((w, i) => (liveWidth?.col === i ? liveWidth.w : w));
+  /** One column's width set: every column's width is fixed from then on (the rest at what they show now). */
+  const setColumnWidth = (col: number, w: number) => {
+    const cur = getSchSearchPane().columns[tab.id];
+    const base = cur?.widths?.length === tab.columns.length ? cur.widths : schSearchColumnWidths(tab.id, listWidth);
+    setSchSearchPane({ columns: { ...getSchSearchPane().columns, [tab.id]: { ...cur, widths: base.map((x, i) => (i === col ? w : x)) } } });
+  };
+  const headerEls = () => [...(listRef.current?.querySelectorAll('th[role="columnheader"]') ?? [])];
 
   /** `SCH_SEARCH_HANDLER::SelectItems`: `selectionClear`; rows all on one sheet go to it (`changeSheet`), select their items and pan or zoom to them. */
   const selectRows = async (ids: readonly string[]) => {
@@ -159,7 +173,10 @@ export function SchSearchPanel() {
   };
 
   const copy = () => {
-    const text = searchRowsText(rows.filter((r) => selected.includes(r.id)).map((r) => ({ id: r.id, cells: r.cells, select: [] })));
+    const text = searchRowsText(
+      rows.filter((r) => selected.includes(r.id)),
+      widths
+    );
     void navigator.clipboard?.writeText(text).catch(() => {});
   };
 
@@ -259,24 +276,72 @@ export function SchSearchPanel() {
       >
         <table style={{ width: tableWidth, borderCollapse: "collapse", tableLayout: "fixed" }}>
           <colgroup>
-            {tab.columns.map((c, i) => (
-              <col key={c.name} style={{ width: widths[i] }} />
+            {order.map((i) => (
+              <col key={tab.columns[i]!.name} style={{ width: widths[i] }} />
             ))}
           </colgroup>
           <thead>
             <tr>
-              {tab.columns.map((c, i) => (
-                <th
-                  key={c.name}
-                  role="columnheader"
-                  data-testid={`sch-search-pane-col-${i}`}
-                  style={{ textAlign: c.align, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", position: "sticky", top: 0, zIndex: 1, background: "var(--chrome-bg-raised)", fontWeight: 600 }}
-                  onClick={() => setSchSearchPane({ sort: { ...pane.sort, [tab.id]: clickSearchColumn(sort, i) } })}
-                >
-                  {c.name}
-                  {sort.col === i ? (sort.ascending ? " ▲" : " ▼") : ""}
-                </th>
-              ))}
+              {order.map((i, at) => {
+                const c = tab.columns[i]!;
+                return (
+                  <th
+                    key={c.name}
+                    role="columnheader"
+                    data-testid={`sch-search-pane-col-${i}`}
+                    data-col={i}
+                    style={{
+                      textAlign: c.align,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 1,
+                      background: "var(--chrome-bg-raised)",
+                      fontWeight: 600,
+                      boxShadow: dropAt === at ? "inset 2px 0 0 var(--chrome-accent, #4a8cff)" : dropAt === order.length && at === order.length - 1 ? "inset -2px 0 0 var(--chrome-accent, #4a8cff)" : undefined,
+                    }}
+                    onPointerDown={(e) =>
+                      startColumnMove(e, headerEls, setDropAt, (to) => {
+                        const cur = getSchSearchPane().columns[tab.id];
+                        setSchSearchPane({ columns: { ...getSchSearchPane().columns, [tab.id]: { ...cur, order: moveSearchColumn(tab.columns.length, cur?.order, i, to) } } });
+                      })
+                    }
+                    onClick={() => {
+                      if (clickEndsDrag()) return;
+                      setSchSearchPane({ sort: { ...pane.sort, [tab.id]: clickSearchColumn(sort, i) } });
+                    }}
+                  >
+                    {c.name}
+                    {sort.col === i ? (sort.ascending ? " ▲" : " ▼") : ""}
+                    <span
+                      className="list-col-resize"
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={`Resize ${c.name}`}
+                      data-testid={`sch-search-pane-resize-${i}`}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setColumnWidth(i, autosizeListColumn(c.name, i, rows, textWidthIn(listRef.current)));
+                      }}
+                      onPointerDown={(e) =>
+                        startColumnResize(
+                          e,
+                          widths[i] ?? 0,
+                          0,
+                          (w) => setLiveWidth({ col: i, w }),
+                          (w) => {
+                            setLiveWidth(null);
+                            setColumnWidth(i, w);
+                          }
+                        )
+                      }
+                    />
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -293,8 +358,8 @@ export function SchSearchPanel() {
                   onClick={(e) => clickRow(e, r.id)}
                   onDoubleClick={() => activate(r.id)}
                 >
-                  {tab.columns.map((c, i) => (
-                    <td key={c.name} style={{ textAlign: c.align, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {order.map((i) => (
+                    <td key={i} style={{ textAlign: tab.columns[i]?.align, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {r.cells[i]}
                     </td>
                   ))}
@@ -305,48 +370,6 @@ export function SchSearchPanel() {
         </table>
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} onClose={() => setMenu(null)} />}
-    </div>
-  );
-}
-
-/** The pane under the schematic's canvas (`.Bottom()`): its caption with the close button (`CloseButton( true )`), its top edge a sash. */
-export function SchSearchDock() {
-  const layout = useDockLayout();
-  const pane = useSchSearchPane();
-  const drag = useRef<{ at: number; height: number } | null>(null);
-  if (!layout.shown.schSearch) return null;
-  const onMove = (e: PointerEvent) => {
-    const d = drag.current;
-    if (d) setSchSearchPane({ height: Math.max(60, Math.min(window.innerHeight * 0.7, d.height + d.at - e.clientY)) });
-  };
-  const onUp = () => {
-    drag.current = null;
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-  };
-  return (
-    <div className="bottom-dock" data-testid="sch-search-dock" style={{ height: layout.folded.schSearch ? undefined : pane.height }}>
-      {!layout.folded.schSearch && (
-        <div
-          className="bottom-dock-sash"
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize the Search pane"
-          onPointerDown={(e) => {
-            e.preventDefault();
-            drag.current = { at: e.clientY, height: pane.height };
-            window.addEventListener("pointermove", onMove);
-            window.addEventListener("pointerup", onUp);
-          }}
-        />
-      )}
-      <div className="bottom-dock-panes">
-        <div className="bottom-dock-pane" data-bottom-pane="schSearch">
-          <DockPanel id="schSearch" title="Search" onClose={() => toggleDockPane("schSearch")}>
-            <SchSearchPanel />
-          </DockPanel>
-        </div>
-      </div>
     </div>
   );
 }

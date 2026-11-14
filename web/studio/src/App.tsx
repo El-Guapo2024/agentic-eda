@@ -41,8 +41,7 @@ import { ForeignImportDialogs } from "./components/ForeignImportDialogs";
 import { FileDropHost } from "./components/FileDropHost";
 import { BoardPadPropertiesDialog } from "./components/BoardPadPropertiesDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
-import { BottomDock, PcbFloatingPanes, PcbPaneDockArea } from "./components/panels/BottomDock";
-import { SchSearchDock } from "./components/panels/SchSearchPanel";
+import { FloatingPanes, OuterDocks, PaneDockArea } from "./components/panels/BottomDock";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { FootprintTextDialog } from "./components/FootprintTextDialog";
@@ -201,6 +200,8 @@ function StudioFrame() {
   // tab-aware via Toolbar's own schToolbarsFile lookup) -- so the tabbed
   // Appearance/Filter/Activity dock only makes sense on the PCB tab.
   const showRightDock = state.tab === "pcb";
+  // the frame whose movable panes are shown (kicad-port/auiDock.ts): the board editor's, the schematic editor's
+  const dockEditor = state.tab === "pcb" ? "pcb" : state.tab === "schematic" ? "sch" : null;
   return (
     <div className="app-frame">
       <div className="menubar-row">
@@ -215,6 +216,8 @@ function StudioFrame() {
           <QuickActions />
         </div>
       )}
+      {/* the layers of the movable panes above 0 (a pane dropped at an edge of the editor), round the auxiliary toolbar and the body (UI-LEFT-3 P3-37) */}
+      <OuterDocks editor={dockEditor}>
       {!hideBoardChrome && (
         <div className="aux-toolbar-row">
           <Toolbar id="auxiliary" />
@@ -256,31 +259,26 @@ function StudioFrame() {
           {/* Migrate 3D Models when the board opens (`PCB_EDIT_FRAME::OnBoardLoaded`) and its load notice */}
           <AutoMigrate3dModels />
         </div>
-        {/* The board editor's Net Inspector and Search panes (`.Bottom()`), under the canvas, or wherever the person docked them around it (UI-LEFT-2 PP13) */}
-        {state.tab === "pcb" && (
+        {/* The movable panes docked at layer 0 round the canvas: the board editor's Net Inspector and Search, the schematic's Search (`.Bottom()` to begin
+            with; UI-LEFT-2 PP13, SS10), wherever the person docked them (UI-LEFT-3 P3-37, S3-34) */}
+        {dockEditor && (
           <div className="bottom-dock-row">
-            <BottomDock />
+            <PaneDockArea editor={dockEditor} side="bottom" />
           </div>
         )}
-        {/* the schematic's Search pane (`SCH_SEARCH_PANE`, `.Bottom()`; UI-LEFT-2 SS10) */}
-        {state.tab === "schematic" && (
-          <div className="bottom-dock-row">
-            <SchSearchDock />
-          </div>
-        )}
-        {state.tab === "pcb" && (
+        {dockEditor && (
           <div className="top-dock-row">
-            <PcbPaneDockArea side="top" />
+            <PaneDockArea editor={dockEditor} side="top" />
           </div>
         )}
-        {state.tab === "pcb" && (
+        {dockEditor && (
           <div className="left-pane-dock-col">
-            <PcbPaneDockArea side="left" />
+            <PaneDockArea editor={dockEditor} side="left" />
           </div>
         )}
-        {state.tab === "pcb" && (
+        {dockEditor && (
           <div className="right-pane-dock-col">
-            <PcbPaneDockArea side="right" />
+            <PaneDockArea editor={dockEditor} side="right" />
           </div>
         )}
         {!hideBoardChrome && (
@@ -317,10 +315,11 @@ function StudioFrame() {
         )}
         {/* The schematic has no right dock: its Selection Filter (panel_sch_selection_filter.cpp) is a pane of the left column (SchematicDock). */}
       </div>
+      </OuterDocks>
       {/* a floating Design Blocks pane: a window over the editor (`FloatingPosition`, `FloatingSize`) */}
       {blocksEditor && blocksAt === "float" && <DesignBlocksDock editor={blocksEditor} />}
-      {/* the board editor's Net Inspector and Search panes when floating, and the dock guides while one is dragged */}
-      {state.tab === "pcb" && <PcbFloatingPanes />}
+      {/* the movable panes when floating, and the hint of where a dragged one would dock */}
+      {dockEditor && <FloatingPanes editor={dockEditor} />}
       <div className="message-panel-row">
         <MessagePanel />
       </div>

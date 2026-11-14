@@ -14,8 +14,6 @@ export interface SchSearchPaneState {
   tab: SchSearchTabId;
   sort: Partial<Record<SchSearchTabId, { col: number | null; ascending: boolean }>>;
   columns: Partial<Record<SchSearchTabId, { order?: number[]; widths?: number[] }>>;
-  /** The pane's height under the canvas, px (`BestSize( 180, 100 )`; dragged by its sash). */
-  height: number;
   focus: number;
 }
 
@@ -36,7 +34,7 @@ function loadSettings(): SearchPaneSettings {
   }
 }
 
-let current: SchSearchPaneState = { settings: loadSettings(), query: "", tab: "symbols", sort: {}, columns: {}, height: 200, focus: 0 };
+let current: SchSearchPaneState = { settings: loadSettings(), query: "", tab: "symbols", sort: {}, columns: {}, focus: 0 };
 const listeners = new Set<() => void>();
 
 function set(next: SchSearchPaneState): void {

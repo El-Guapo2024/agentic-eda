@@ -1,47 +1,65 @@
-// The board editor's Net Inspector and Search panes where wxAUI lets them go (kicad-port/pcbPaneDock.ts): `PCB_EDIT_FRAME` docks both `.Bottom()` at layer 0, right
-// under the canvas and inside the vertical toolbars, side by side in the order they are added; the person may drag either by its caption to another side of the
-// canvas -- the centre dock guide's arrows (`wxAuiCenterDockingGuide`) show while it is dragged, a hint shows where it would go, a drop on an arrow docks it
-// there, a drop anywhere else leaves it floating -- or double-click the caption to float it and to dock it back (`wxAuiManager::OnLeftDClick`). Two panes on one
-// side share that dock: in a row at the top or bottom, one over the other on the left or right. Each dock is as deep as its sash is dragged; a floating pane is
-// moved by its caption and sized by its corner. Each pane has a close button (`CloseButton( true )`) that its action shows again (`ToggleNetInspector`,
+// The editors' movable panes where wxAUI lets them go (kicad-port/auiDock.ts): the board editor's Net Inspector and Search (`PCB_EDIT_FRAME`) and the schematic
+// editor's Search (`SCH_EDIT_FRAME`), each frame with its own layout. Every pane starts `.Bottom()` at layer 0, under the canvas and inside the vertical
+// toolbars; the person drags a caption and the pane floats at once and follows the pointer, a hint showing where a release would dock it (`DoDrop`): along an
+// edge of the editor on a layer of its own (a ring round the editor, inside the main toolbar and the message panel), in a new row by a docked pane or in its row
+// before or after it, by a toolbar, or in a new row by an edge of the canvas; let go elsewhere it stays a floating window. A double click on the caption floats
+// a docked pane and docks a floating one back where it was (`OnLeftDClick`). The panes of one side, layer and row share a dock -- side by side at the top or
+// bottom, one over the other on the left or right -- with a sash between two of them; each dock's sash on the canvas's side sizes it. A floating pane is moved
+// by its caption and sized by its corner. Each pane has a close button (`CloseButton( true )`) that its action shows again (`ToggleNetInspector`,
 // `ToggleSearch`). The caption's arrow buttons move it as well (not KiCad's: wxAUI's caption has the close button alone).
-import { useCallback, useEffect, useRef, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { paneVisible, type DockLayout } from "../../kicad-port/dockLayout";
 import {
   DRAG_THRESHOLD_PX,
   PANE_FLOATING_SIZE,
-  dockGuideAt,
-  dockGuides,
-  dockHintRect,
+  doDrop,
+  dockRows,
+  dropHintRect,
+  floatGrab,
   floatingPanes,
+  newDockDepth,
+  outerLayers,
   paneDockChoices,
-  panesOnSide,
   sideIsHorizontal,
+  sideRows,
   toggledPaneDock,
+  type DockEditor,
+  type DockRow,
+  type DropGeometry,
+  type DropResult,
+  type MovablePaneId,
   type PageRect,
+  type PaneDockAt,
   type PaneRect,
   type PaneSide,
-  type PcbPaneDockAt,
-  type PcbPaneId,
-} from "../../kicad-port/pcbPaneDock";
+} from "../../kicad-port/auiDock";
 import { toggleDockPane, useDockLayout } from "../../state/dockLayoutStore";
-import { getPcbPaneDock, setPcbDockSize, setPcbPaneDock, setPcbPaneFloatRect, usePcbPaneDock } from "../../state/pcbPaneDock";
+import { dockPaneBack, getPaneDock, movePaneTo, paneShown, resizePanesBetween, setDockDepth, setPaneDock, setPaneFloatRect, usePaneDock } from "../../state/paneDock";
 import { DockPanel } from "./Dock";
 import { NetInspectorPanel } from "./NetInspectorPanel";
 import { SearchPanel } from "./SearchPanel";
+import { SchSearchPanel } from "./SchSearchPanel";
 
-const TITLE: Record<PcbPaneId, string> = { netInspector: "Net Inspector", search: "Search" };
-const GLYPH: Record<PcbPaneDockAt, string> = { top: "⤒", bottom: "⤓", left: "⇤", right: "⇥", float: "⧉" };
+const TITLE: Record<MovablePaneId, string> = { netInspector: "Net Inspector", search: "Search", schSearch: "Search" };
+const GLYPH: Record<PaneDockAt, string> = { top: "⤒", bottom: "⤓", left: "⇤", right: "⇥", float: "⧉" };
 
-const shownIn = (layout: DockLayout) => (id: PcbPaneId) => paneVisible(layout, id);
+const shownIn = (layout: DockLayout) => (id: MovablePaneId) => paneVisible(layout, id);
+
+function paneBody(id: MovablePaneId): ReactNode {
+  if (id === "netInspector") return <NetInspectorPanel />;
+  if (id === "search") return <SearchPanel />;
+  return <SchSearchPanel />;
+}
 
 // ---------------------------------------------------------------------------------------------------------------------------------- a caption dragged
 
-/** A pane being dragged by its caption: where its window is, and the guide under the pointer. */
+/** A pane being dragged by its caption: its window, and where a release would dock it. */
 interface PaneDrag {
-  id: PcbPaneId;
+  editor: DockEditor;
+  id: MovablePaneId;
   rect: PaneRect;
-  guide: PaneSide | null;
+  drop: DropResult | null;
+  hint: PageRect | null;
 }
 
 let drag: PaneDrag | null = null;
@@ -58,36 +76,73 @@ function useDrag(): PaneDrag | null {
   return useSyncExternalStore(subscribeDrag, () => drag, () => drag);
 }
 
-/** The canvas's rectangle on the page: what the dock guides and the hint are drawn over. */
-function canvasRect(): PageRect | null {
-  const r = document.querySelector(".app-body .canvas-col")?.getBoundingClientRect();
-  return r ? { left: r.left, top: r.top, width: r.width, height: r.height } : null;
+const pageRect = (el: Element | null | undefined): PageRect | null => {
+  const r = el?.getBoundingClientRect();
+  return r && (r.width > 0 || r.height > 0) ? { left: r.left, top: r.top, width: r.width, height: r.height } : null;
+};
+
+/**
+ * What `DoDrop`'s hit test sees on the page: the editor from its main toolbar to its message panel (the frame's client area), the canvas, the docked panes and
+ * docks' sashes of `editor`, the toolbars with their sides.
+ */
+function dropGeometry(editor: DockEditor): DropGeometry {
+  const all = pageRect(document.querySelector(".app-frame")) ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  const top = pageRect(document.querySelector(".app-frame .main-toolbar-row")) ?? pageRect(document.querySelector(".aui-frame"));
+  const bottom = pageRect(document.querySelector(".app-frame .message-panel-row")) ?? pageRect(document.querySelector(".aui-frame"));
+  const frame: PageRect = top && bottom ? { left: all.left, top: top.top, width: all.width, height: bottom.top + bottom.height - top.top } : all;
+  const panes = [...document.querySelectorAll<HTMLElement>(`[data-dock-editor="${editor}"] [data-dock-pane]`)].flatMap((el) => {
+    const rect = pageRect(el);
+    return rect ? [{ id: el.dataset.dockPane as MovablePaneId, rect }] : [];
+  });
+  const sashes = [...document.querySelectorAll<HTMLElement>(`[data-dock-editor="${editor}"] [data-dock-sash]`)].flatMap((el) => {
+    const rect = pageRect(el);
+    return rect ? [{ rect, panes: (el.dataset.dockSash ?? "").split(",").filter((p) => p !== "") as MovablePaneId[] }] : [];
+  });
+  const toolbars: { side: PaneSide; rect: PageRect }[] = [];
+  const bar = (sel: string, side: PaneSide) => {
+    const rect = pageRect(document.querySelector(sel));
+    if (rect) toolbars.push({ side, rect });
+  };
+  bar(".app-frame .main-toolbar-row", "top");
+  bar(".app-frame .aux-toolbar-row", "top");
+  bar(".app-body .options-toolbar-col", "left");
+  bar(".app-body .drawing-toolbar-col", "right");
+  return { frame, canvas: pageRect(document.querySelector(".app-body .canvas-col")), panes, sashes, toolbars };
 }
 
 /**
- * The caption's press: past the drag threshold the pane leaves its dock and follows the pointer as a floating window (wxAUI floats a docked pane as soon as its
- * caption is dragged), the dock guides showing; released on a guide it docks on that side, anywhere else it stays floating where it was let go.
+ * The caption's press: past the drag threshold the pane floats where it is (wxAUI floats a docked pane as soon as its caption is dragged) and its window
+ * follows the pointer, the hint showing where `DoDrop` would dock it; released, it docks there, or stays floating where it was let go.
  */
-function startCaptionDrag(id: PcbPaneId, e: ReactPointerEvent<HTMLElement>): void {
+function startCaptionDrag(editor: DockEditor, id: MovablePaneId, e: ReactPointerEvent<HTMLElement>): void {
   if (e.button !== 0 || (e.target as HTMLElement).closest("button, .dock-panel-chevron")) return;
   const pane = (e.currentTarget.closest("[data-dock-pane]") as HTMLElement | null) ?? e.currentTarget;
   const box = pane.getBoundingClientRect();
-  const dock = getPcbPaneDock();
-  const floating = dock.at[id] === "float";
-  const size = floating ? { w: dock.floating[id].w, h: dock.floating[id].h } : PANE_FLOATING_SIZE[id];
-  // where the pointer holds the window: the same offset into a floating window, the caption's left part for a pane taken out of its dock
-  const grab = floating ? { x: e.clientX - box.left, y: e.clientY - box.top } : { x: Math.min(e.clientX - box.left, size.w / 2), y: Math.min(e.clientY - box.top, 10) };
   const start = { x: e.clientX, y: e.clientY };
   let moving = false;
+  let grab = { x: e.clientX - box.left, y: e.clientY - box.top };
+  let size = { w: 0, h: 0 };
   const at = (ev: PointerEvent): PaneDrag => {
     const rect = { x: ev.clientX - grab.x, y: ev.clientY - grab.y, w: size.w, h: size.h };
-    const c = canvasRect();
-    return { id, rect, guide: c ? dockGuideAt(c, ev.clientX, ev.clientY) : null };
+    const g = dropGeometry(editor);
+    const drop = doDrop(editor, getPaneDock(editor), id, g, ev.clientX, ev.clientY, paneShown);
+    const depth = drop ? (drop.dock.depth[id] ?? newDockDepth(id, drop.side, g.frame)) : 0;
+    return { editor, id, rect, drop, hint: drop ? dropHintRect(drop, g, depth) : null };
   };
   const move = (ev: PointerEvent) => {
     if (!moving && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < DRAG_THRESHOLD_PX) return;
-    moving = true;
     ev.preventDefault();
+    if (!moving) {
+      moving = true;
+      const dock = getPaneDock(editor);
+      const kept = dock.floating[id];
+      size = kept ? { w: kept.w, h: kept.h } : { ...PANE_FLOATING_SIZE[id] };
+      if (dock.at[id] !== "float") {
+        // `paneInfo->Float()`: the pane leaves its dock at once, its window at its floating size under the pointer
+        grab = floatGrab(grab, size.w);
+        movePaneTo(editor, id, "float", { x: ev.clientX - grab.x, y: ev.clientY - grab.y });
+      }
+    }
     setDrag(at(ev));
   };
   const up = (ev: PointerEvent) => {
@@ -96,33 +151,30 @@ function startCaptionDrag(id: PcbPaneId, e: ReactPointerEvent<HTMLElement>): voi
     if (!moving) return;
     const d = at(ev);
     setDrag(null);
-    if (d.guide) setPcbPaneDock(id, d.guide);
-    else {
-      setPcbPaneDock(id, "float", { x: d.rect.x, y: d.rect.y });
-      setPcbPaneFloatRect(id, d.rect);
-    }
+    if (d.drop) setPaneDock(editor, d.drop.dock);
+    else setPaneFloatRect(editor, id, d.rect);
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
 }
 
 /** Where pane `id` is on the page, for a floating window opened where it was. */
-function paneOrigin(id: PcbPaneId): { x: number; y: number } | undefined {
+function paneOrigin(id: MovablePaneId): { x: number; y: number } | undefined {
   const box = document.querySelector(`[data-dock-pane="${id}"]`)?.getBoundingClientRect();
   return box ? { x: box.left, y: box.top } : undefined;
 }
 
 /** Put pane `id` at `to`; floated, its window opens where the pane was. */
-function moveTo(id: PcbPaneId, to: PcbPaneDockAt): void {
-  setPcbPaneDock(id, to, to === "float" ? paneOrigin(id) : undefined);
+function moveTo(editor: DockEditor, id: MovablePaneId, to: PaneDockAt): void {
+  movePaneTo(editor, id, to, to === "float" ? paneOrigin(id) : undefined);
 }
 
 /** One pane in its dock or window: the captioned panel with the places it may go. */
-function MovablePane({ id }: { id: PcbPaneId }) {
-  const dock = usePcbPaneDock();
-  const at = dock.at[id];
+function MovablePane({ editor, id }: { editor: DockEditor; id: MovablePaneId }) {
+  const dock = usePaneDock(editor);
+  const at = dock.at[id] ?? "bottom";
   const buttons = paneDockChoices(at, TITLE[id])
-    .filter((c): c is { to: PcbPaneDockAt; label: string } => c.to !== "close")
+    .filter((c): c is { to: PaneDockAt; label: string } => c.to !== "close")
     .map((c) => (
       <button
         key={c.to}
@@ -133,7 +185,7 @@ function MovablePane({ id }: { id: PcbPaneId }) {
         title={c.label}
         onClick={(e) => {
           e.stopPropagation();
-          moveTo(id, c.to);
+          moveTo(editor, id, c.to);
         }}
       >
         {GLYPH[c.to]}
@@ -145,94 +197,185 @@ function MovablePane({ id }: { id: PcbPaneId }) {
       title={TITLE[id]}
       onClose={() => toggleDockPane(id)}
       movable={{
-        onPointerDown: (e) => startCaptionDrag(id, e),
+        onPointerDown: (e) => startCaptionDrag(editor, id, e),
         onDoubleClick: (e) => {
           if ((e.target as HTMLElement).closest("button, .dock-panel-chevron")) return;
-          // `OnLeftDClick`: a docked pane floats where it is, a floating one docks back on the side it came from
-          moveTo(id, toggledPaneDock(getPcbPaneDock(), id));
+          // `OnLeftDClick`: a docked pane floats where it is, a floating one docks back where it was
+          if (toggledPaneDock(getPaneDock(editor), id) === "float") moveTo(editor, id, "float");
+          else dockPaneBack(editor, id);
         },
         hint: at === "float" ? "Drag to move or to dock; double-click to dock" : "Drag to move; double-click to float",
         buttons,
       }}
     >
-      {id === "netInspector" ? <NetInspectorPanel /> : <SearchPanel />}
+      {paneBody(id)}
     </DockPanel>
   );
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------------- the docks
 
-/** The panes docked on one side of the canvas, the sash on the canvas's side of them. */
-export function PcbPaneDockArea({ side }: { side: PaneSide }) {
-  const layout = useDockLayout();
-  const dock = usePcbPaneDock();
-  const panes = panesOnSide(dock, side, shownIn(layout));
-  const horizontal = sideIsHorizontal(side);
-  const sash = useRef<{ at: number; size: number; panes: PcbPaneId[] } | null>(null);
-
+/** A pointer drag of a sash: `onDelta` with how far it has gone (along y when `vertical`, else along x). */
+function useSashDrag(vertical: boolean, onDelta: (delta: number) => void) {
+  const live = useRef<{ at: number; onDelta: (d: number) => void } | null>(null);
   const onMove = useCallback(
     (e: PointerEvent) => {
-      const d = sash.current;
-      if (!d) return;
-      const pos = horizontal ? e.clientY : e.clientX;
-      // the bottom and right docks grow as the sash goes up or left
-      const grow = side === "bottom" || side === "right" ? d.at - pos : pos - d.at;
-      setPcbDockSize(side, d.size + grow, d.panes);
+      const d = live.current;
+      if (d) d.onDelta((vertical ? e.clientY : e.clientX) - d.at);
     },
-    [side, horizontal]
+    [vertical]
   );
   const onUp = useCallback(() => {
-    sash.current = null;
+    live.current = null;
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
   }, [onMove]);
   useEffect(() => onUp, [onUp]);
+  return (e: ReactPointerEvent<HTMLElement>) => {
+    e.preventDefault();
+    live.current = { at: vertical ? e.clientY : e.clientX, onDelta };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+}
 
-  if (panes.length === 0) return null;
-  const allFolded = panes.every((id) => layout.folded[id]);
-  const depth = dock.size[side];
-  const style = horizontal ? { height: allFolded ? undefined : depth } : { width: depth };
-  const sashEl = (!horizontal || !allFolded) && (
+/** The sash between two panes of one dock (`typePaneSizer`): their shares of the dock follow it. */
+function PaneSizer({ editor, side, a, b }: { editor: DockEditor; side: PaneSide; a: MovablePaneId; b: MovablePaneId }) {
+  const across = sideIsHorizontal(side);
+  const sizes = useRef({ a: 0, b: 0 });
+  const start = useSashDrag(!across, (delta) => resizePanesBetween(editor, side, a, b, sizes.current.a, sizes.current.b, delta));
+  return (
+    <div
+      className={`pane-dock-pane-sizer ${across ? "across" : "down"}`}
+      role="separator"
+      aria-orientation={across ? "vertical" : "horizontal"}
+      aria-label={`Resize ${TITLE[a]} and ${TITLE[b]}`}
+      data-testid={`pane-sizer-${a}-${b}`}
+      onPointerDown={(e) => {
+        const box = (id: MovablePaneId) => document.querySelector(`[data-dock-pane="${id}"]`)?.getBoundingClientRect();
+        const ra = box(a);
+        const rb = box(b);
+        sizes.current = { a: ra ? (across ? ra.width : ra.height) : 0, b: rb ? (across ? rb.width : rb.height) : 0 };
+        start(e);
+      }}
+    />
+  );
+}
+
+/** One dock (`wxAuiDockInfo`): its panes in a row or a column, the sash on the canvas's side sizing it. */
+function DockRowView({ editor, row, testSide }: { editor: DockEditor; row: DockRow; testSide: boolean }) {
+  const layout = useDockLayout();
+  const dock = usePaneDock(editor);
+  const { side } = row;
+  const horizontal = sideIsHorizontal(side);
+  const depthAtPress = useRef(row.depth);
+  const start = useSashDrag(horizontal, (delta) => {
+    // the bottom and right docks grow as the sash goes up or left
+    const grow = side === "bottom" || side === "right" ? -delta : delta;
+    setDockDepth(editor, side, depthAtPress.current + grow, row.panes);
+  });
+  const allFolded = row.panes.every((id) => layout.folded[id]);
+  const style: CSSProperties = horizontal ? { height: allFolded ? undefined : row.depth } : { width: row.depth };
+  const sash = (!horizontal || !allFolded) && (
     <div
       className="bottom-dock-sash pcb-pane-dock-sash"
       role="separator"
       aria-orientation={horizontal ? "horizontal" : "vertical"}
       aria-label={`Resize the ${side} panes`}
-      data-testid={`pcb-pane-sash-${side}`}
+      data-testid={testSide ? `${editor}-pane-sash-${side}` : undefined}
+      data-dock-sash={row.panes.join(",")}
       onPointerDown={(e) => {
-        e.preventDefault();
-        sash.current = { at: horizontal ? e.clientY : e.clientX, size: depth, panes };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp);
+        depthAtPress.current = row.depth;
+        start(e);
       }}
     />
   );
-  return (
-    <div className={`bottom-dock pcb-pane-dock ${side}`} data-testid={side === "bottom" ? "bottom-dock" : `pcb-pane-dock-${side}`} data-dock-side={side} style={style}>
-      {(side === "bottom" || side === "right") && sashEl}
-      <div className="bottom-dock-panes pcb-pane-dock-panes">
-        {panes.map((id) => (
-          <div key={id} className="bottom-dock-pane pcb-pane-dock-pane" data-bottom-pane={side === "bottom" ? id : undefined} data-dock-pane={id}>
-            <MovablePane id={id} />
-          </div>
-        ))}
+  const panes: ReactNode[] = [];
+  row.panes.forEach((id, i) => {
+    if (i > 0) panes.push(<PaneSizer key={`sizer-${id}`} editor={editor} side={side} a={row.panes[i - 1]!} b={id} />);
+    panes.push(
+      <div
+        key={id}
+        className="bottom-dock-pane pcb-pane-dock-pane"
+        style={{ flexGrow: dock.proportion[id] ?? 1 }}
+        data-bottom-pane={side === "bottom" && row.layer === 0 ? id : undefined}
+        data-dock-pane={id}
+        data-testid={id === "schSearch" ? "sch-search-dock" : undefined}
+      >
+        <MovablePane editor={editor} id={id} />
       </div>
-      {(side === "top" || side === "left") && sashEl}
+    );
+  });
+  return (
+    <div className={`pane-dock-row ${side}`} style={style} data-testid="pane-dock-row" data-dock-row={row.row} data-dock-layer={row.layer} data-dock-side={side}>
+      {(side === "bottom" || side === "right") && sash}
+      <div className="bottom-dock-panes pcb-pane-dock-panes">{panes}</div>
+      {(side === "top" || side === "left") && sash}
     </div>
   );
 }
 
-/** The bottom dock (`.Bottom()`): where both panes start. */
-export function BottomDock() {
-  return <PcbPaneDockArea side="bottom" />;
+/** The docks of one side and layer of `editor`, in the order they are laid out (row 0 at the editor's edge). */
+export function PaneDockArea({ editor, side, layer = 0 }: { editor: DockEditor; side: PaneSide; layer?: number }) {
+  const layout = useDockLayout();
+  const dock = usePaneDock(editor);
+  const rows = sideRows(dockRows(editor, dock, shownIn(layout)), side, layer);
+  if (rows.length === 0) return null;
+  const testid = layer > 0 ? `${editor}-pane-dock-${side}-${layer}` : editor === "pcb" && side === "bottom" ? "bottom-dock" : `${editor}-pane-dock-${side}`;
+  return (
+    <div className={`bottom-dock pcb-pane-dock pane-dock-area ${side}`} data-testid={testid} data-dock-side={side} data-dock-layer={layer} data-dock-editor={editor}>
+      {rows.map((r) => (
+        <DockRowView key={`${r.layer}-${r.row}`} editor={editor} row={r} testSide={layer === 0} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The rings of the layers above 0 (`LayoutAll`, a layer at a time from the inside out: its top dock over its left dock, the inside and its right dock, then
+ * its bottom dock), round `children` -- the auxiliary toolbar and the editor's body. One grid whatever the number of rings, so the editor inside is not built
+ * again when a ring comes or goes.
+ */
+export function OuterDocks({ editor, children }: { editor: DockEditor | null; children: ReactNode }) {
+  const layout = useDockLayout();
+  const pcb = usePaneDock("pcb");
+  const sch = usePaneDock("sch");
+  const dock = editor === "pcb" ? pcb : editor === "sch" ? sch : null;
+  const layers = editor && dock ? outerLayers(dockRows(editor, dock, shownIn(layout))) : [];
+  const n = layers.length;
+  // ring k from the outside is layers[n - 1 - k]: its left dock in grid column k + 1, its right dock in column 2n + 1 - k, its top and bottom docks in those rows
+  const cells: ReactNode[] = [];
+  layers.forEach((layer, i) => {
+    const k = n - 1 - i;
+    const near = k + 1;
+    const far = 2 * n + 1 - k;
+    const area = (side: PaneSide, style: CSSProperties) => (
+      <div key={`ring-${layer}-${side}`} className={`aui-ring-dock ${side}`} style={style}>
+        <PaneDockArea editor={editor!} side={side} layer={layer} />
+      </div>
+    );
+    cells.push(area("top", { gridRow: near, gridColumn: `${near} / ${far + 1}` }));
+    cells.push(area("bottom", { gridRow: far, gridColumn: `${near} / ${far + 1}` }));
+    cells.push(area("left", { gridColumn: near, gridRow: `${near + 1} / ${far}` }));
+    cells.push(area("right", { gridColumn: far, gridRow: `${near + 1} / ${far}` }));
+  });
+  const tracks = n > 0 ? `repeat(${n}, auto) minmax(0, 1fr) repeat(${n}, auto)` : "minmax(0, 1fr)";
+  return (
+    <div className="aui-frame" data-rings={n} style={{ gridTemplateColumns: tracks, gridTemplateRows: tracks }}>
+      <div key="inside" className="aui-inside" style={{ gridRow: n + 1, gridColumn: n + 1 }}>
+        {children}
+      </div>
+      {cells}
+    </div>
+  );
 }
 
 /** One floating pane: a window over the editor (`wxAuiFloatingFrame`), moved by its caption, sized by its corner. */
-function FloatingPane({ id }: { id: PcbPaneId }) {
-  const dock = usePcbPaneDock();
+function FloatingPane({ editor, id }: { editor: DockEditor; id: MovablePaneId }) {
+  const dock = usePaneDock(editor);
   const live = useDrag();
   const box = useRef<HTMLDivElement>(null);
-  const rect = live?.id === id ? live.rect : dock.floating[id];
+  const rect = live?.editor === editor && live.id === id ? live.rect : dock.floating[id]!;
 
   // sized by its corner (CSS `resize`): the size it is left at is the one it opens with next time
   useEffect(() => {
@@ -243,8 +386,8 @@ function FloatingPane({ id }: { id: PcbPaneId }) {
       clearTimeout(timer);
       timer = setTimeout(() => {
         if (drag?.id === id) return;
-        const r = getPcbPaneDock().floating[id];
-        if (Math.abs(el.offsetWidth - r.w) > 1 || Math.abs(el.offsetHeight - r.h) > 1) setPcbPaneFloatRect(id, { ...r, w: el.offsetWidth, h: el.offsetHeight });
+        const r = getPaneDock(editor).floating[id]!;
+        if (Math.abs(el.offsetWidth - r.w) > 1 || Math.abs(el.offsetHeight - r.h) > 1) setPaneFloatRect(editor, id, { ...r, w: el.offsetWidth, h: el.offsetHeight });
       }, 150);
     });
     seen.observe(el);
@@ -252,7 +395,7 @@ function FloatingPane({ id }: { id: PcbPaneId }) {
       clearTimeout(timer);
       seen.disconnect();
     };
-  }, [id]);
+  }, [editor, id]);
 
   return (
     <div
@@ -260,48 +403,38 @@ function FloatingPane({ id }: { id: PcbPaneId }) {
       className="pcb-pane-floating"
       role="dialog"
       aria-label={TITLE[id]}
-      data-testid={`pcb-pane-floating-${id}`}
-      data-dock-pane={id}
+      data-testid={`${editor}-pane-floating-${id}`}
+      data-dock-floating={id}
       style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
     >
-      <MovablePane id={id} />
+      <div className="pcb-pane-floating-holder" data-testid={id === "schSearch" ? "sch-search-dock" : undefined} data-dock-pane={id}>
+        <MovablePane editor={editor} id={id} />
+      </div>
     </div>
   );
 }
 
-/**
- * The floating panes, and while a caption is dragged the pane's window under the pointer, the centre dock guide over the canvas and, over a guide, the hint of
- * where the pane would dock.
- */
-export function PcbFloatingPanes() {
+/** The floating panes of `editor`, and while a caption is dragged the hint of where a release would dock the pane (`DrawHintRect`). */
+export function FloatingPanes({ editor }: { editor: DockEditor }) {
   const layout = useDockLayout();
-  const dock = usePcbPaneDock();
+  const dock = usePaneDock(editor);
   const live = useDrag();
-  const floating = floatingPanes(dock, shownIn(layout));
-  const canvas = live ? canvasRect() : null;
-  // a docked pane being dragged out is drawn as an outline under the pointer until it is let go (its panel stays in the dock meanwhile)
-  const ghost = live && dock.at[live.id] !== "float" ? live : null;
-  const hint = live?.guide && canvas ? dockHintRect(canvas, live.guide, dock.size[live.guide]) : null;
+  const floating = floatingPanes(editor, dock, shownIn(layout));
+  const hint = live?.editor === editor ? live.hint : null;
   return (
     <>
       {floating.map((id) => (
-        <FloatingPane key={id} id={id} />
+        <FloatingPane key={id} editor={editor} id={id} />
       ))}
-      {ghost && <div className="pcb-pane-drag-ghost" style={{ left: ghost.rect.x, top: ghost.rect.y, width: ghost.rect.w, height: ghost.rect.h }} data-testid="pcb-pane-drag-ghost" />}
-      {hint && <div className="pcb-pane-dock-hint" style={{ left: hint.left, top: hint.top, width: hint.width, height: hint.height }} data-testid="pcb-pane-dock-hint" data-side={live?.guide ?? ""} />}
-      {live &&
-        canvas &&
-        dockGuides(canvas).map((g) => (
-          <div
-            key={g.side}
-            className={`pcb-pane-dock-guide${live.guide === g.side ? " active" : ""}`}
-            style={{ left: g.rect.left, top: g.rect.top, width: g.rect.width, height: g.rect.height }}
-            data-testid={`pcb-pane-guide-${g.side}`}
-            data-side={g.side}
-          >
-            {GLYPH[g.side]}
-          </div>
-        ))}
+      {hint && (
+        <div
+          className="pcb-pane-dock-hint"
+          style={{ left: hint.left, top: hint.top, width: hint.width, height: hint.height }}
+          data-testid="pcb-pane-dock-hint"
+          data-side={live?.drop?.side ?? ""}
+          data-how={live?.drop?.how ?? ""}
+        />
+      )}
     </>
   );
 }

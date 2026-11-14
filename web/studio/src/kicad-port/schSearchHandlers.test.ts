@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { ErcViolation, Schematic } from "../api/types";
 import { DEFAULT_SEARCH_PANE_SETTINGS } from "./searchHandlers";
 import { SCH_SEARCH_TABS, schSearchColumnWidths, schSearchTab, schSearchTarget, sortSchSearchRows, type SchSearchContext, type SchSearchSheet } from "./schSearchHandlers";
-import { ercFindMarkers, ercMarkerIndex } from "./schFindMarkers";
+import { ercFindMarkers, ercFindMarkersOfSheets, ercMarkerIndex } from "./schFindMarkers";
 
 const field = (name: string, text: string, visible: boolean) => ({ name, text, visible, at: [0, 0], vertical: false, h: "left", v: "center" });
 
@@ -125,4 +125,22 @@ test("Find's ERC markers: the ones the canvas draws on the sheet, by their messa
   assert.deepEqual(markers[1]!.at, [123, 456]);
   assert.equal(ercMarkerIndex("erc:2"), 2);
   assert.equal(ercMarkerIndex("R1"), null);
+});
+
+test("Find over every sheet: each sheet's markers, those the canvas draws there, each with its sheet (UI-LEFT-3 S3-34)", () => {
+  const root = sheet([], "1", { symbols: [sym("R1", 1_000_000)] as never }).sch;
+  const sub = sheet(["s1"], "2", { symbols: [sym("Q9", 2_000_000)] as never }).sch;
+  const v = (location: string | null, hint: string): ErcViolation => ({ check: "pin_not_connected", severity: "error", location, hint });
+  const markers = ercFindMarkersOfSheets([v("R1", "Pin not connected"), v("Q9", "Pin not driven")], [
+    { path: [], sch: root },
+    { path: ["s1", "s2"], sch: sub },
+  ]);
+  assert.deepEqual(
+    markers.map((m) => [m.key, m.sheet]),
+    [
+      ["erc:0", ""],
+      ["erc:1", "s1/s2"],
+    ]
+  );
+  assert.deepEqual(ercFindMarkersOfSheets([], [{ path: [], sch: root }]), [], "no report, no markers");
 });

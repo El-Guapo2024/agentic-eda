@@ -81,6 +81,24 @@
   grid-area: status-bar;
 }
 
+/* The auxiliary toolbar and the body, inside the rings of the movable panes' layers above 0 (components/panels/BottomDock.tsx `OuterDocks`; UI-LEFT-3 P3-37):
+   one grid whose tracks the rings add, the editor in its middle cell. */
+.app-frame .aui-frame {
+  grid-row: aux-toolbar-start / body-end;
+  grid-column: 1;
+  display: grid;
+  min-height: 0;
+  min-width: 0;
+}
+.aui-frame > .aui-inside {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.aui-frame > .aui-inside > .app-body {
+  flex: 1 1 0;
+}
 .app-body {
   grid-area: body;
   display: grid;
