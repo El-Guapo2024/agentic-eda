@@ -11,7 +11,7 @@
       "common/hotkey_store.cpp",
       "eeschema/tools/sch_actions.cpp"
     ],
-    "kicad10Additions": "pcbnew.GridItem.place, pcbnew.InteractiveDrawing.drawViaStitchArea, pcbnew.Generator.excludeStitchVia, pcbnew.Generator.clearStitchViaExclusions, pcbnew.InteractiveDrawing.placeDrillChart, pcbnew.InteractiveDrawing.placeDrillMap, pcbnew.InteractiveDrawing.showDrillGroups, pcbnew.InteractiveDrawing.viaStack, pcbnew.Generator.makeViaStack: from pcbnew/tools/pcb_actions.cpp of KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
+    "kicad10Additions": "pcbnew.GridItem.place, pcbnew.InteractiveDrawing.drawViaStitchArea, pcbnew.Generator.excludeStitchVia, pcbnew.Generator.clearStitchViaExclusions, pcbnew.InteractiveDrawing.placeDrillChart, pcbnew.InteractiveDrawing.placeDrillMap, pcbnew.InteractiveDrawing.showDrillGroups, pcbnew.InteractiveDrawing.viaStack, pcbnew.Generator.makeViaStack, pcbnew.InteractiveRouter.PlaceViaStack (router_tool.cpp): from pcbnew/tools/pcb_actions.cpp of KiCad 25ec2335 (the commit of the box's kicad-cli), for the KiCad 10 items 8303b2ad predates"
   },
   "actions": [
     {
@@ -10702,6 +10702,23 @@
       "macHotkeyRaw": null,
       "macAltHotkeyRaw": null,
       "icon": "via_microvia",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.PlaceViaStack",
+      "label": "Place Microvia Stack at Track End",
+      "tooltip": "Drops the active microvia stack preset at the end of the currently routed track and continues on the target layer.",
+      "hotkey": "Ctrl+Shift+V",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'V'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "add_via_stack",
       "flags": [
         "AF_NONE"
       ]

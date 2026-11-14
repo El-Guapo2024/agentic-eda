@@ -1996,6 +1996,8 @@ export function Canvas() {
         : e.altKey && w ? "pcbnew.InteractiveRouter.SwitchRoundingArc90"
         // the router's other context actions (actions/routerViaActions.ts): Ctrl+V is Paste's elsewhere, and Alt+.. may type another character
         : ctrl && v && !e.altKey && !e.shiftKey ? "pcbnew.InteractiveRouter.PlaceMicroVia"
+        // KiCad 25ec2335's Place Microvia Stack at Track End (Ctrl+Shift+V; Paste Special's elsewhere), UI-LEFT-3 X3-1
+        : ctrl && v && !e.altKey && e.shiftKey ? "pcbnew.InteractiveRouter.PlaceViaStack"
         : !ctrl && e.altKey && e.shiftKey && v ? "pcbnew.InteractiveRouter.PlaceBlindVia"
         : !ctrl && e.altKey && less ? "pcbnew.InteractiveRouter.SelLayerAndPlaceBlindVia"
         : !ctrl && !e.altKey && less ? "pcbnew.InteractiveRouter.SelLayerAndPlaceVia"

@@ -19,7 +19,7 @@ import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
  * The loop of Place Microvia Stack on `settings` (what the dialog or the preset gave): refused with the info bar's error when the board has not the span, a staggered stack
  * without a pitch given twice its via, then the tool in force.
  */
-export function startViaStackPlacement(settings: BoardViaStack, board: BoardState, currentVia: number, dispatch: Dispatch<Action>): void {
+export function startViaStackPlacement(settings: BoardViaStack, board: BoardState, currentVia: number, dispatch: Dispatch<Action>, seed?: Parameters<typeof newPlacement>[2]): void {
   const copper = copperOf(board);
   if (!isSpanValid(copper, settings.start_layer, settings.end_layer)) {
     dispatch({ type: "SHOW_PCB_INFOBAR", message: STACK_LAYERS_MISSING, kind: "error", ms: 8000, close: true });
@@ -27,7 +27,7 @@ export function startViaStackPlacement(settings: BoardViaStack, board: BoardStat
     return;
   }
   const s = { ...settings, pitch_nm: placementPitch(settings, currentVia) };
-  setViaStackPlacement(newPlacement(s, copper));
+  setViaStackPlacement(newPlacement(s, copper, seed));
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "via_stack" });
 }
 

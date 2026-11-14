@@ -231,3 +231,59 @@ fn a_netclass_stack_takes_the_class_microvia_sizes() {
     let v = member_vias(&b, &stacks(&b)[0]);
     assert_eq!((v[0].diameter, v[0].drill), (mm(0.3), mm(0.15)));
 }
+
+/// Swap (Alt+S) of a stack with a via: a generator's `SetPosition` moves its origin alone (`m_origin = aPos`); its members stay until it is next rebuilt.
+#[test]
+fn a_stack_swaps_as_a_generator() {
+    let m = six();
+    let mut b = board(&m);
+    b.apply(&place(stacked("F.Cu", "In1.Cu", p(70.0, 70.0)))).unwrap();
+    let st = stacks(&b)[0].clone();
+    // `via_a` of the fixture is at (20, 50)
+    b.apply(&Cmd::SwapItems { ids: vec![st.id.clone(), "via_a".into()], centres: Default::default() }).unwrap();
+    let after = stacks(&b)[0].clone();
+    assert_eq!(after.origin, p(20.0, 50.0));
+    assert_eq!(member_vias(&b, &after)[0].at, p(70.0, 70.0), "the members stay");
+    let v = b.design().routing.as_ref().unwrap().vias.iter().find(|v| v.id == "via_a").unwrap().at;
+    assert_eq!(v, p(70.0, 70.0));
+}
+
+/// `placeStack` checks every member (`CheckItemDRCViolation` on each candidate): a staggered stack whose trace crosses another net's track is refused, its vias clear.
+#[test]
+fn a_staggered_stack_whose_trace_breaks_a_clearance_is_refused() {
+    let m = six();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "VCC".into(), layer: "In1.Cu".into(), width: mm(0.2), pts: vec![p(75.0, 60.0), p(75.0, 80.0)] }).unwrap();
+    let mut s = stacked("F.Cu", "In2.Cu", p(73.0, 70.0));
+    s.style = ViaStackStyle::Staggered;
+    s.pitch_nm = mm(4.0);
+    s.hops = Some(vec![p(73.0, 70.0), p(77.0, 70.0)]);
+    assert_eq!(b.apply(&place(s.clone())).unwrap_err()[0].hint.as_deref().unwrap(), STACK_VIOLATES_DRC);
+    // the same stack turned away from the track is placed
+    s.hops = Some(vec![p(73.0, 70.0), p(69.0, 70.0)]);
+    b.apply(&place(s)).unwrap();
+}
+
+/// The router's stacked drop: the multi-hop microvia it left at the drop's place becomes a stack of the preset (`ExpandMultiHopMicrovias`); a via elsewhere stays.
+#[test]
+fn a_routed_multi_hop_microvia_at_a_drop_becomes_a_stack() {
+    let m = six();
+    let mut b = board(&m);
+    for at in [p(80.0, 80.0), p(85.0, 80.0)] {
+        b.apply(&Cmd::AddVia { net: "GND".into(), x: at.x, y: at.y, drill: mm(0.1), diameter: mm(0.3), from_layer: "F.Cu".into(), to_layer: "In2.Cu".into() }).unwrap();
+    }
+    let ids: Vec<String> = b.design().routing.as_ref().unwrap().vias.iter().filter(|v| v.at.y == mm(80.0)).map(|v| v.id.clone()).collect();
+    for id in &ids {
+        b.drawings_mut().via_extras.push(ViaExtra { id: id.clone(), kind: ViaKind::Micro, tokens: vec![] });
+    }
+    let preset = eda_model::setup_pages::ViaStackPreset { name: "HDI".into(), start_layer: "F.Cu".into(), end_layer: "In2.Cu".into(), staggered: false, via_size_nm: Nm::ZERO, via_drill_nm: Nm::ZERO, use_netclass: false, filled: true, capped: true, pitch_nm: Nm::ZERO };
+    let drop = StackDrop { at: p(80.0, 80.0), start: "In2.Cu".into(), end: "F.Cu".into(), preset };
+    b.apply(&Cmd::PcbItem(PcbItemCmd::ExpandMicroviaStacks { drops: vec![drop], current: Default::default() })).unwrap();
+    let st = stacks(&b);
+    assert_eq!(st.len(), 1);
+    assert_eq!((st[0].start_layer.as_str(), st[0].end_layer.as_str(), st[0].preset.as_str(), st[0].capped, st[0].via_size_nm), ("F.Cu", "In2.Cu", "HDI", true, mm(0.3)));
+    let vias = member_vias(&b, &st[0]);
+    assert_eq!(vias.len(), 2);
+    assert!(vias.iter().all(|v| v.at == p(80.0, 80.0) && v.net == "GND" && v.diameter == mm(0.3)));
+    assert!(b.design().routing.as_ref().unwrap().vias.iter().any(|v| v.at == p(85.0, 80.0) && v.to_layer == "In2.Cu"), "the via elsewhere stays");
+}

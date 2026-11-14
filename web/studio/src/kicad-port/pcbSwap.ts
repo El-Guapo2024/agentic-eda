@@ -97,8 +97,8 @@ export function planSwap(board: BoardState, selection: readonly string[], entere
   if (ids.length < 2) return { cmd: null, lockedOut };
   const centres: Record<string, PointXY> = {};
   for (const id of ids) {
-    // a tuning pattern is a group here, but a `PCB_GENERATOR` whose position is its origin (the backend's)
-    if (itemKind(board, id) !== "group" || board.drawings?.tuning_patterns?.some((p) => p.id === id)) continue;
+    // a tuning pattern and a microvia stack are groups here, but `PCB_GENERATOR`s whose position is their origin (the backend's)
+    if (itemKind(board, id) !== "group" || board.drawings?.tuning_patterns?.some((p) => p.id === id) || board.drawings?.via_stacks?.some((v) => v.id === id)) continue;
     const c = groupSwapCentre(itemBounds(board, id));
     if (c) centres[id] = c;
   }

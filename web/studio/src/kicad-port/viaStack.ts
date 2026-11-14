@@ -211,3 +211,11 @@ export function makeStackIds(board: BoardState, selection: Iterable<string>): st
   const tracks = new Set((board.routing?.tracks ?? []).filter((t) => !t.arc_mid).map((t) => t.id));
   return [...selection].filter((id) => vias.has(id) || tracks.has(id));
 }
+
+/** `ViaStackTargetLayer( start, end, current )`: from the start layer the end, from the end layer the start ("the stack goes back the way it came"), else none. */
+export function viaStackTargetLayer(start: string, end: string, current: string): string | null {
+  if (start === end) return null;
+  if (current === start) return end;
+  if (current === end) return start;
+  return null;
+}

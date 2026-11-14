@@ -724,8 +724,8 @@ export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean; plac
 }
 
 /** `typed`: the via's type and the layers it spans (`ROUTER_TOOL::handleLayerSwitch`'s `sizes.SetViaType` / `AddLayerPair`, kicad-port/routerVia.ts); without it, a via from the layer being routed to `toLayer`. */
-export function routeToggleVia(enabled: boolean, diameter?: Nm, drill?: Nm, toLayer?: string, typed?: { viaType: string; span: [string, string] }): Promise<{ ok: boolean; message?: string }> {
-  return postJson("/api/route/via", { enabled, diameter, drill, to_layer: toLayer, ...(typed ? { via_type: typed.viaType, span: typed.span } : {}) });
+export function routeToggleVia(enabled: boolean, diameter?: Nm, drill?: Nm, toLayer?: string, typed?: { viaType: string; span: [string, string]; stack?: { start: string; end: string; preset: unknown } }): Promise<{ ok: boolean; message?: string }> {
+  return postJson("/api/route/via", { enabled, diameter, drill, to_layer: toLayer, ...(typed ? { via_type: typed.viaType, span: typed.span, ...(typed.stack ? { stack: typed.stack } : {}) } : {}) });
 }
 
 /** A layer key while routing (`ROUTER_TOOL::onLayerCommand`, R6-R3): `switched` when the head moved to `layer` (`ROUTER::SwitchLayer`); not switched, the caller arms a via to it. */

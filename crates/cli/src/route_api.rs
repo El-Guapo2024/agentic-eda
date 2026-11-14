@@ -210,6 +210,7 @@ fn auto_track_width(req: &Value) -> bool {
 /// `ROUTING_SETTINGS` ([`settings_of`]); `mode` and `remove_loops` at the top level still work, for a client that predates it.
 /// Without any, KiCad's defaults: `walkaround`, `remove_loops` on.
 pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    PENDING_DROPS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(k, _)| *k != cell_key(cell));
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
         Ok(v) => v,
@@ -354,6 +355,13 @@ fn event_sizes_json(s: &eda_pns::router::EventSizes) -> Value {
 /// with (the studio works them out, `kicad-port/routerVia.ts`); without `span` the via goes from the layer being routed to `to_layer`.
 pub fn via(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
+    // Place Microvia Stack at Track End with a stacked preset (`ROUTER_TOOL::onViaStackCommand`): `stack` is `{start, end, preset}`, the drop the route's end expands
+    // into a stack (`m_pendingStackedExpansions`; `commit_route`), UI-LEFT-3 X3-1
+    if req.get("enabled").and_then(Value::as_bool).unwrap_or(true) {
+        if let Some(drop) = req.get("stack").and_then(|v| serde_json::from_value::<PendingDrop>(v.clone()).ok()) {
+            PENDING_DROPS.lock().unwrap_or_else(|e| e.into_inner()).push((cell_key(cell), drop));
+        }
+    }
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
     let enabled = req.get("enabled").and_then(Value::as_bool).unwrap_or(true);
@@ -408,13 +416,53 @@ fn strict_of(req: &Value) -> bool {
     req.get("strict").and_then(Value::as_bool).unwrap_or(true)
 }
 
-fn commit_route(dir: &Path, commit: eda_pns::router::RouteCommit, append_undo: bool, group: Option<String>, strict: bool) -> Result<String, String> {
+fn commit_route(dir: &Path, cell: &RouteCell, commit: eda_pns::router::RouteCommit, append_undo: bool, group: Option<String>, strict: bool) -> Result<String, String> {
+    // the drops of the session: the micro vias the route placed that span a drop's layers, at their places (`recordPendingStackViaPos`)
+    let pending: Vec<PendingDrop> = {
+        let mut all = PENDING_DROPS.lock().unwrap_or_else(|e| e.into_inner());
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *all).into_iter().partition(|(k, _)| *k == cell_key(cell));
+        *all = rest;
+        mine.into_iter().map(|(_, d)| d).collect()
+    };
+    let drops: Vec<eda_ops::via_stack::StackDrop> = commit
+        .via_kinds
+        .iter()
+        .filter(|(_, k)| *k == ViaKind::Micro)
+        .filter_map(|(i, _)| commit.vias.get(*i))
+        .filter_map(|v| {
+            let d = pending.iter().find(|d| (d.start == v.from_layer && d.end == v.to_layer) || (d.start == v.to_layer && d.end == v.from_layer))?;
+            Some(eda_ops::via_stack::StackDrop { at: v.at, start: d.start.clone(), end: d.end.clone(), preset: d.preset.clone() })
+        })
+        .collect();
     let cmd = commit_cmd(commit, group);
     let summary = board::step(dir, cmd, strict, "ui").map_err(|e| board::reasons(&e))?;
     if append_undo {
         board::append_to_previous_undo(dir);
     }
+    // `finishInteractive`: `ExpandMultiHopMicrovias( board(), &commit, matcher )`, "Expand Microvia Stacks" with APPEND_UNDO
+    if !drops.is_empty() {
+        let expand = eda_ops::Cmd::PcbItem(eda_ops::pcb_items::PcbItemCmd::ExpandMicroviaStacks { drops, current: Default::default() });
+        if board::step(dir, expand, strict, "ui").is_ok() {
+            board::append_to_previous_undo(dir);
+        }
+    }
     Ok(summary)
+}
+
+/// A stacked drop armed by `via` (`PENDING_STACK_EXPANSION`): the layers its via spans and the preset its stack takes.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PendingDrop {
+    start: String,
+    end: String,
+    preset: eda_model::setup_pages::ViaStackPreset,
+}
+
+/// The drops of the routing session (`m_pendingStackedExpansions`), cleared when a route starts and taken by its commit.
+static PENDING_DROPS: Mutex<Vec<(usize, PendingDrop)>> = Mutex::new(Vec::new());
+
+/// The routing session a drop belongs to: its cell's address (one cell per served board).
+fn cell_key(cell: &RouteCell) -> usize {
+    cell as *const RouteCell as usize
 }
 
 /// `POST /api/route/finish`: `{x, y}`. Ends the session either way, as `ROUTER_TOOL::performRouting`'s finish (`FixRoute( .., forceFinish
@@ -428,7 +476,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let at = point_of(&req);
     let Some(commit) = router.finish(at) else {
-        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, cell, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
             Some(Err(e)) => return err(e),
             Some(Ok(_)) => true,
             None => false,
@@ -436,16 +484,10 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         let message = if committed { "final segment still collides; the segments fixed before it are committed" } else { "final segment still collides; route left uncommitted" };
         return json!({ "ok": false, "committed": committed, "message": message });
     };
-    let cmd = commit_cmd(commit, router.entered_group.clone());
-    match board::step(dir, cmd, strict_of(&req), "ui") {
-        Ok(summary) => {
-            // a route restarted from the other end is one undo with the part that was committed when it restarted
-            if router.append_undo {
-                board::append_to_previous_undo(dir);
-            }
-            json!({ "ok": true, "message": summary })
-        }
-        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+    // a route restarted from the other end is one undo with the part that was committed when it restarted (`commit_route`'s `append_undo`)
+    match commit_route(dir, cell, commit, router.append_undo, router.entered_group.clone(), strict_of(&req)) {
+        Ok(summary) => json!({ "ok": true, "message": summary }),
+        Err(e) => json!({ "ok": false, "message": e }),
     }
 }
 
@@ -467,7 +509,7 @@ pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
             let (append_undo, group) = (router.append_undo, router.entered_group.clone());
             *guard = None;
             drop(guard);
-            match commit_route(dir, commit, append_undo, group, strict_of(&req)) {
+            match commit_route(dir, cell, commit, append_undo, group, strict_of(&req)) {
                 Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
                 Err(e) => err(e),
             }
@@ -542,7 +584,7 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
 pub fn cancel(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let Some(mut router) = cell.lock().unwrap_or_else(|e| e.into_inner()).take() else { return json!({ "ok": true, "committed": false }) };
-    match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
+    match router.commit_fixed().map(|c| commit_route(dir, cell, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
         Some(Err(e)) => err(e),
         Some(Ok(_)) => json!({ "ok": true, "committed": true }),
         None => json!({ "ok": true, "committed": false }),
@@ -1028,7 +1070,7 @@ pub fn dp_attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
             let (append_undo, group) = (router.append_undo, router.entered_group.clone());
             *guard = None;
             drop(guard);
-            match commit_route(dir, commit, append_undo, group, strict_of(&req)) {
+            match commit_route(dir, cell, commit, append_undo, group, strict_of(&req)) {
                 Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
                 Err(e) => err(e),
             }
@@ -1050,7 +1092,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     let Some(commit) = router.finish_diff_pair(at) else {
         // as a single track's finish: the legs fixed before are committed (`CommitRouting()` after the loop)
-        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, cell, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
             Some(Err(e)) => return err(e),
             Some(Ok(_)) => true,
             None => false,
@@ -2054,6 +2096,32 @@ mod tests {
         let (_, design, _) = board::load(&dir).unwrap();
         assert!(design.routing.as_ref().unwrap().vias.is_empty(), "one undo took the route back");
         assert!(design.drawings.as_ref().is_none_or(|d| d.via_extras.is_empty()), "and the types with it");
+    }
+
+    /// UI-LEFT-3 X3-1: Place Microvia Stack at Track End with a stacked preset (`onViaStackCommand`): the route's microvia over the whole span becomes a stack of the
+    /// preset when the route is committed (`finishInteractive`'s `ExpandMultiHopMicrovias`), in the route's one undo step (APPEND_UNDO).
+    #[test]
+    fn a_stacked_drop_is_expanded_into_a_stack_when_the_route_is_committed() {
+        let dir = scratch("stack_drop");
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(mm(2.0), mm(8.0)), p(mm(4.0), mm(8.0))], arc_mid_offset: None };
+        setup_board_on(&dir, vec![stub], vec![], &["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+        let cell: RouteCell = Mutex::new(None);
+        assert_eq!(start(&dir, &cell, &body(json!({ "x": 4_000_000, "y": 8_000_000, "layer": "F.Cu", "width": 200_000, "settings": { "mode": "walkaround" } })))["ok"], json!(true));
+        let preset = json!({ "name": "HDI", "start_layer": "F.Cu", "end_layer": "In2.Cu", "staggered": false, "via_size_nm": 300_000, "via_drill_nm": 100_000, "use_netclass": false, "filled": true, "capped": true, "pitch_nm": 0 });
+        let armed = via(&cell, &body(json!({ "enabled": true, "diameter": 300_000, "drill": 100_000, "to_layer": "In2.Cu", "via_type": "micro", "span": ["F.Cu", "In2.Cu"], "stack": { "start": "F.Cu", "end": "In2.Cu", "preset": preset } })));
+        assert_eq!(armed["ok"], json!(true), "{armed}");
+        assert_eq!(fix(&cell, &body(json!({ "x": 8_000_000, "y": 8_000_000 })))["ok"], json!(true));
+        let finished = finish(&dir, &cell, &body(json!({ "x": 12_000_000, "y": 8_000_000 })));
+        assert_eq!(finished["ok"], json!(true), "{finished}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let stacks = &design.drawings.as_ref().unwrap().board_items.via_stacks;
+        assert_eq!(stacks.len(), 1, "the drop is a stack");
+        assert_eq!((stacks[0].start_layer.as_str(), stacks[0].end_layer.as_str(), stacks[0].preset.as_str(), stacks[0].origin), ("F.Cu", "In2.Cu", "HDI", p(mm(8.0), mm(8.0))));
+        let vias = &design.routing.as_ref().unwrap().vias;
+        assert_eq!(vias.len(), 2, "two single-hop microvias in place of the route's one: {vias:?}");
+        assert!(board::undo(&dir, "test", Some(eda_ops::Domain::Pcb)).is_ok());
+        let (_, design, _) = board::load(&dir).unwrap();
+        assert!(design.routing.as_ref().unwrap().vias.is_empty() && design.drawings.as_ref().is_none_or(|d| d.board_items.via_stacks.is_empty()), "one undo takes the route and the stack back");
     }
 
     /// `via_type` is one of the words the board file has for a via's type (`through`, `blind`, `buried`, `micro`), and `span` two copper layers

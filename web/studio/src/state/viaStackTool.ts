@@ -18,6 +18,8 @@ export interface ViaStackPlacement {
   lastDir: Pt;
   /** The members the preview draws (`previewItems`). */
   preview: PreviewMember[];
+  /** A router handoff (`m_viaStackSeeded`): the first hop is the routed head and stays; once the stack is placed the route goes on from its last via on the end layer. */
+  seeded?: { resume: (at: Pt, layer: string) => void };
 }
 
 export interface ViaStackToolState {

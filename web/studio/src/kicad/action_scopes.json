@@ -711,6 +711,7 @@
     "pcbnew.InteractiveRouter.InlineDrag": "AS_CONTEXT",
     "pcbnew.InteractiveRouter.PlaceBlindVia": "AS_CONTEXT",
     "pcbnew.InteractiveRouter.PlaceMicroVia": "AS_CONTEXT",
+    "pcbnew.InteractiveRouter.PlaceViaStack": "AS_CONTEXT",
     "pcbnew.InteractiveRouter.PlaceVia": "AS_CONTEXT",
     "pcbnew.InteractiveRouter.RouteSelected": "AS_GLOBAL",
     "pcbnew.InteractiveRouter.RouteSelectedFromEnd": "AS_GLOBAL",

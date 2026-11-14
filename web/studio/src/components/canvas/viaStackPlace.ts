@@ -74,6 +74,12 @@ export async function stackClick(inp: StackToolInput, cursor: Pt, place: (s: Boa
       const ok = await place(stackToPlace({ ...p, hops }, inp, cursor));
       const now = getViaStackTool().placement;
       if (!now) return;
+      // "A router handoff places exactly one stack, then returns to routing" -- from the last via, on the end layer
+      if (ok && now.seeded) {
+        setViaStackPlacement(null);
+        now.seeded.resume(hops[hops.length - 1]!, now.span[now.span.length - 1]!);
+        return;
+      }
       setViaStackPlacement(ok ? { ...now, hops: [], preview: [] } : { ...now, hops: hops.slice(0, -1) });
       return;
     }
@@ -95,13 +101,14 @@ export async function stackClick(inp: StackToolInput, cursor: Pt, place: (s: Boa
 /** Undo / Delete in the loop: a staggered stack's last hop taken back (`lastDir` reset to +X); swallowed otherwise. */
 export function stackUndo(): void {
   const p = getViaStackTool().placement;
-  if (!p || p.settings.style !== "staggered" || p.hops.length === 0) return;
+  // a router handoff's first hop is the routed head: "hops.size() > ( seeded ? 1u : 0u )"
+  if (!p || p.settings.style !== "staggered" || p.hops.length <= (p.seeded ? 1 : 0)) return;
   setViaStackPlacement({ ...p, hops: p.hops.slice(0, -1), lastDir: [1, 0] });
 }
 
 /** A new placement of `settings` (the span as the board has it). */
-export function newPlacement(settings: BoardViaStack, copper: readonly string[]): ViaStackPlacement {
-  return { settings, span: layerRange(copper, settings.start_layer, settings.end_layer), hops: [], lastDir: [1, 0], preview: [] };
+export function newPlacement(settings: BoardViaStack, copper: readonly string[], seed?: { head: Pt; resume: (at: Pt, layer: string) => void }): ViaStackPlacement {
+  return { settings, span: layerRange(copper, settings.start_layer, settings.end_layer), hops: seed ? [seed.head] : [], lastDir: [1, 0], preview: [], ...(seed ? { seeded: { resume: seed.resume } } : {}) };
 }
 
 /** The preview: each via a disc of the via colour, each trace a line of its width, half transparent (`m_view->Add( &preview )`). */
