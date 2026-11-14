@@ -45,7 +45,7 @@ import { flipCarriedText, rotateCarriedText } from "../kicad-port/carriedText";
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
 import { padStaysPad } from "../kicad-port/freePads";
-import { padsOnly } from "../kicad-port/gateSwap";
+import { padsOnly, swapNetsCmd } from "../kicad-port/gateSwap";
 import { extraItemById } from "../kicad-port/pcbExtraItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
@@ -2103,13 +2103,13 @@ export function useActionRunner() {
       // a multi-gate footprint) rotate in selection order, with the copper connected to them. When that copper reaches pads that are not selected KiCad asks what to do with
       // them (`PromptConnectedPadDecision`): the preview finds them, the dialog asks, and the answer goes with the verb.
       const swapNets = async (cmd: Cmd, title: string) => {
-        const reply = await postSwapPreview(cmd);
+        const reply = await postSwapPreview(swapNetsCmd(cmd, undefined, getOverrideLocks("pcb")));
         if (!reply.ok) {
           dispatch({ type: "TOAST", message: reply.message, kind: "error" });
           return;
         }
         if (reply.pads.length === 0) {
-          void api.cmd({ ...cmd, connected_pads: true } as Cmd);
+          void api.cmd(swapNetsCmd(cmd, true, getOverrideLocks("pcb")));
           return;
         }
         dispatch({ type: "SET_SWAP_NETS_PROMPT", prompt: { cmd, pads: reply.pads, title } });

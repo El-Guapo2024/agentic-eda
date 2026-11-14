@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Pad, Part } from "../api/types";
-import { gateSwapChoice, padsOnly, unselectedPadLabel } from "./gateSwap";
+import { gateSwapChoice, padsOnly, swapNetsCmd, unselectedPadLabel } from "./gateSwap";
 
 function board(parts: Part[]): BoardState {
   return { name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100, parts, rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle" } as BoardState;
@@ -59,4 +59,11 @@ test("the unselected pads are listed as KiCad lists them, the reference, a colon
   assert.equal(unselectedPadLabel("R2.1"), "R2:1");
   assert.equal(unselectedPadLabel("J1.A1#2"), "J1:A1");
   assert.equal(unselectedPadLabel("nothing"), "nothing");
+});
+
+test("swapNetsCmd: the answer goes with the verb, wrapped in override_locks while the box is checked (UI-LEFT-3 P3-23)", () => {
+  const cmd = { op: "swap_pad_nets", ids: ["U1.1", "U1.2"] } as const;
+  assert.deepEqual(swapNetsCmd(cmd, undefined, false), cmd);
+  assert.deepEqual(swapNetsCmd(cmd, true, false), { ...cmd, connected_pads: true });
+  assert.deepEqual(swapNetsCmd(cmd, false, true), { op: "override_locks", cmd: { ...cmd, connected_pads: false } });
 });

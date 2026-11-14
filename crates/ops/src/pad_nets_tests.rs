@@ -260,17 +260,22 @@ fn the_verbs_take_the_json_the_studio_sends() {
     assert!(matches!(c, Cmd::SwapGateNets { target: None, connected_pads: None, .. }));
 }
 
+/// UI-LEFT-3 P3-23, KiCad 25ec2335 `ScheduleNetSwap`: "Makes sure we don't try to assign two different new nets to an item." U1.1 and U2.1 are on N1 and a
+/// track joins them; U1.3 is on N3. All three asked for, U2.1 is to take N3 and the copper of U1.1 would give it N1: the swap is refused, nothing changes.
 #[test]
-fn selected_pads_that_the_copper_joins_still_take_the_nets_they_were_given() {
-    // U1.1 and U2.1 are on N1 and a track joins them; U1.3 is on N3. All three are asked for: U1.1 stays on N1 (it takes the net of U2.1), U2.1 takes N3, U1.3 takes N1.
+fn selected_pads_that_the_copper_joins_to_another_net_refuse_the_swap() {
     let m = model();
     let mut d = design_of(&m);
     let (a, b) = (centre(&d, &m, "U1", "1"), centre(&d, &m, "U2", "1"));
     d.routing.as_mut().unwrap().tracks.push(track_of("t_link", "N1", a, b));
     let mut board = Board::new(d, &m, mm(0.1), mm(0.3));
-    board.apply(&swap(&["U1.1", "U2.1", "U1.3"], None)).unwrap();
-    assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U2.1"), nets_of(&board, "U1.3")], ["N1", "N3", "N1"], "no question: every pad of the copper is one that was asked for");
-    // The track is in the cluster of both pads that join it: the last pad's new net wins, as the map of KiCad's tool is overwritten.
+    let err = board.apply(&swap(&["U1.1", "U2.1", "U1.3"], None)).unwrap_err();
+    assert_eq!(err[0].check, "ops_swap_conflict");
+    assert!(err[0].hint.as_deref().unwrap_or_default().contains("Cannot swap nets: connected items would receive conflicting nets."), "{err:?}");
+    assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U2.1"), nets_of(&board, "U1.3")], ["N1", "N1", "N3"]);
+    // U1.1 and U1.3 alone, Swap All Connected Pads: U2.1 goes with U1.1 and the track, no conflict
+    board.apply(&swap(&["U1.1", "U1.3"], Some(true))).unwrap();
+    assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U2.1"), nets_of(&board, "U1.3")], ["N3", "N3", "N1"]);
     assert_eq!(board.design().routing.as_ref().unwrap().tracks[0].net, "N3");
 }
 
@@ -337,4 +342,92 @@ fn a_short_to_no_net_names_the_empty_net_and_an_indeterminate_selector_its_mixed
     assert_eq!(e[0].hint.as_deref().unwrap_or_default(), "Applying these changes will short net N1 with .");
     let e = b.apply(&track_via_nets(&["t1"], None, None, None)).unwrap_err();
     assert_eq!(e[0].hint.as_deref().unwrap_or_default(), "Applying these changes will short net -- mixed values -- with .");
+}
+
+// ------------------------------------------------- KiCad 25ec2335's copper graphics, conflicts and locks (UI-LEFT-3 P3-23)
+
+/// A copper graphic on a pad's net that touches it is connected copper (`PCB_SHAPE_T` in `SwapPadNets`' switch): it takes the pad's new net, as the track does.
+#[test]
+fn a_copper_graphic_on_the_pad_takes_its_new_net() {
+    use eda_model::ir::Shape;
+    use eda_model::pcb_items::ShapeStyle;
+    let m = model();
+    let mut d = design_of(&m);
+    let a = centre(&d, &m, "U1", "1");
+    let seg = Shape::Segment { id: "shp_cu".into(), layer: "F.Cu".into(), stroke_width: mm(0.25), filled: false, start: a, end: Point { x: a.x, y: a.y + mm(4.0) } };
+    let dr = d.drawings.get_or_insert_with(Default::default);
+    dr.shapes.push(seg);
+    dr.board_items.shape_styles.push(ShapeStyle { net: Some("N1".into()), ..ShapeStyle::empty("shp_cu") });
+    let mut board = Board::new(d, &m, mm(0.1), mm(0.3));
+    board.apply(&swap(&["U1.1", "U1.2"], Some(false))).unwrap();
+    assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U1.2")], ["N2", "N1"]);
+    assert_eq!(board.design().drawings.as_ref().unwrap().board_items.net_of("shp_cu"), Some("N2"), "the graphic went with the pad");
+}
+
+/// `ValidateNetSwapLocks`: a pad of a locked footprint, or a locked track on a swapped pad, refuses the swap ("Cannot swap nets of locked pads or connected copper
+/// unless Override Locks is enabled."); with Override locks (`Cmd::OverrideLocks`) it goes. A locked pad that "Ignore Unselected Pads" leaves alone does not count.
+#[test]
+fn locked_pads_and_copper_refuse_the_swap_unless_locks_are_overridden() {
+    const LOCKED: &str = "Cannot swap nets of locked pads or connected copper unless Override Locks is enabled.";
+    let m = model();
+    // a locked footprint
+    let mut d = design_of(&m);
+    d.drawings.get_or_insert_with(Default::default).locked_ids.push("U1".into());
+    let mut board = Board::new(d.clone(), &m, mm(0.1), mm(0.3));
+    assert_eq!(refusal(&mut board, swap(&["U1.1", "U1.2"], Some(true))), ("ops_locked".to_string(), LOCKED.to_string()));
+    assert_eq!(nets_of(&board, "U1.1"), "N1", "nothing changed");
+    board.apply(&Cmd::OverrideLocks { cmd: Box::new(swap(&["U1.1", "U1.2"], Some(true))) }).unwrap();
+    assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U1.2")], ["N2", "N1"]);
+    // a locked track on a swapped pad of an unlocked footprint
+    let mut d = design_of(&m);
+    let a = centre(&d, &m, "U2", "1");
+    d.routing.as_mut().unwrap().tracks.push(track_of("t_locked", "N1", a, Point { x: a.x, y: a.y + mm(4.0) }));
+    d.drawings.get_or_insert_with(Default::default).locked_ids.push("t_locked".into());
+    let mut board = Board::new(d, &m, mm(0.1), mm(0.3));
+    assert_eq!(refusal(&mut board, swap(&["U2.1", "U2.2"], Some(true))).1, LOCKED);
+    // a locked footprint whose pad the copper reaches, left alone by "Ignore Unselected Pads"
+    let mut d = design_of(&m);
+    let (u1, u2) = (centre(&d, &m, "U1", "1"), centre(&d, &m, "U2", "1"));
+    d.routing.as_mut().unwrap().tracks.push(track_of("t_link", "N1", u1, u2));
+    d.drawings.get_or_insert_with(Default::default).locked_ids.push("U2".into());
+    let mut board = Board::new(d, &m, mm(0.1), mm(0.3));
+    assert_eq!(refusal(&mut board, swap(&["U1.1", "U1.3"], Some(true))).1, LOCKED, "Swap All Connected Pads would change the locked U2.1");
+    board.apply(&swap(&["U1.1", "U1.3"], Some(false))).unwrap();
+    assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U2.1"), nets_of(&board, "U1.3")], ["N3", "N1", "N1"]);
+}
+
+// ------------------------------------------------- split pad nets (UI-LEFT-3 P3-35)
+
+/// A footprint whose two pads are numbered 1 (`1 1 3 4`), both on N1, with a record of its pads.
+fn split_model() -> (ConstraintModel, Design) {
+    let mut m = model();
+    m.footprints[0].pads[1].number = "1".into();
+    m.parts[0].pins.retain(|p| p.number != "2");
+    m.nets.retain(|n| n.name != "N2");
+    m.nets.push(Net { name: "N2".into(), pins: vec!["U2.2".into()] });
+    let mut d = design_of(&m);
+    d.drawings.get_or_insert_with(Default::default).footprint_extras.push(FootprintExtra { id: "U1".into(), pads: vec![Default::default(); 4], ..Default::default() });
+    (m, d)
+}
+
+fn own_nets(b: &Board<'_>, reference: &str) -> Vec<Option<String>> {
+    b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == reference).map(|e| e.pads.iter().map(|p| p.net.clone()).collect()).unwrap_or_default()
+}
+
+/// Swap Pad Nets on one pad of a number two pads have (`U1.1#2`): that pad alone changes (`PAD::SetNetCode`), the other keeps the number's net -- each keeps its own
+/// (`PadMaskInfo::net`) and the number is on both nets; swapped back, the two share N1 again and keep no net of their own.
+#[test]
+fn a_swap_of_one_pad_of_a_shared_number_moves_that_pad_alone() {
+    let (m, d) = split_model();
+    let mut board = Board::new(d, &m, mm(0.1), mm(0.3));
+    board.apply(&swap(&["U1.1#2", "U1.3"], Some(false))).unwrap();
+    assert_eq!(own_nets(&board, "U1"), vec![Some("N1".to_string()), Some("N3".to_string()), None, None]);
+    let nets = board.design().nets.clone().unwrap();
+    let on = |name: &str| nets.iter().find(|n| n.name == name).map(|n| n.pins.clone()).unwrap_or_default();
+    assert!(on("N1").contains(&"U1.1".to_string()) && on("N3").contains(&"U1.1".to_string()), "{nets:?}");
+    assert_eq!(nets_of(&board, "U1.3"), "N1");
+    // and the swap reads each pad's own net: U1.1#2 is on N3 now
+    board.apply(&swap(&["U1.1#2", "U1.3"], Some(false))).unwrap();
+    assert_eq!(own_nets(&board, "U1"), vec![None, None, None, None], "one net again: the number's");
+    assert_eq!([nets_of(&board, "U1.1"), nets_of(&board, "U1.3")], ["N1", "N3"]);
 }

@@ -16,8 +16,12 @@ pub(crate) fn preview(dir: &Path, body: &[u8]) -> Value {
         Ok(c) => c,
         Err(e) => return fail(format!("not a board command: {e}")),
     };
-    // No answer yet: that is what the verb answers with the list.
-    match &mut cmd {
+    // No answer yet: that is what the verb answers with the list. (Wrapped in `override_locks` while Override locks is on: `ValidateNetSwapLocks` reads it.)
+    let inner = match &mut cmd {
+        eda_ops::Cmd::OverrideLocks { cmd } => &mut **cmd,
+        other => other,
+    };
+    match inner {
         eda_ops::Cmd::SwapPadNets { connected_pads, .. } | eda_ops::Cmd::SwapGateNets { connected_pads, .. } => *connected_pads = None,
         _ => return fail("not a swap of nets".to_string()),
     }

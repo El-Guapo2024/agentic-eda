@@ -713,12 +713,17 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 };
                 let hole = pad_hole_shape(center, pad, pad_rot);
                 let drill_slot = pad.drill_slot.map(|s| rotated_extent_by(pad_rot, s));
-                let net = pin_net.get(&format!("{}.{}", fp.id, pad.number)).cloned();
                 let pad_layers = match pad.kind {
                     PadKind::Smd => vec![if pad.on_back(fp.side) { "B.Cu".to_string() } else { "F.Cu".to_string() }],
                     PadKind::ThroughHole | PadKind::NonPlatedHole => layers.clone(),
                 };
                 let pmask = extra.and_then(|e| if e.pads.len() == footprint.pads.len() { e.pads.get(pad_idx) } else { None });
+                // `PAD::GetNetname` as the writer gives it: the pad's own net where its number is on two (`PadMaskInfo::net`, UI-LEFT-3 P3-35), else its number's,
+                // else the `unconnected-(..)` net the derived board gives a pin on no net (a no-connect pin's, a lone pin's; UI-LEFT-3 P3-30)
+                let net = match pmask.and_then(|m| m.net.clone()) {
+                    Some(own) => Some(own).filter(|n| !n.is_empty()),
+                    None => eda_engine::nets::written_pad_net(|k| pin_net.get(k).map(String::as_str), &unconnected, &fp.id, &pad.number, nth).map(str::to_string),
+                };
                 let free = pad.kind != PadKind::NonPlatedHole && written_pad_is_free(design, model, &pin_net, &unconnected, &fp.id, extra, pmask, &pad.number, nth);
                 mask.pads.push(DrcPadMask {
                     fp: Some(fp_mask_idx),

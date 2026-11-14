@@ -4,7 +4,8 @@
 // the verb as `connected_pads`. The question is asked by the action (actions/useActionRunner.ts) after `postSwapPreview` found such pads; with none, the swap happens.
 import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { unselectedPadLabel } from "../kicad-port/gateSwap";
+import { swapNetsCmd, unselectedPadLabel } from "../kicad-port/gateSwap";
+import { getOverrideLocks } from "../state/overrideLocks";
 
 export function SwapNetsDialog() {
   const state = useStudioState();
@@ -19,8 +20,9 @@ export function SwapNetsDialog() {
   const answer = async (include: boolean) => {
     setBusy(true);
     try {
-      const sent = { ...prompt.cmd, connected_pads: include } as typeof prompt.cmd;
-      if (await api.cmd(sent)) close();
+      // a refusal (`ValidateNetSwapLocks`' locks) is told by the command and the question closes, as KiCad's info bar follows its dialog
+      await api.cmd(swapNetsCmd(prompt.cmd, include, getOverrideLocks("pcb")));
+      close();
     } finally {
       setBusy(false);
     }

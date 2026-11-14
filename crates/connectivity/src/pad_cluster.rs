@@ -23,6 +23,8 @@ pub struct PadCluster {
     pub vias: BTreeSet<String>,
     /// The pads in it, the pad itself included: footprint reference, pad number and which of the pads with that number it is (1-based, the studio's `REF.NUM#k`).
     pub pads: BTreeSet<(String, String, u32)>,
+    /// The ids of the board graphics on copper in it (`PCB_SHAPE_T` with a net, `CN_LIST::Add( PCB_SHAPE* )`): KiCad 25ec2335's Swap Pad Nets moves their net too.
+    pub shapes: BTreeSet<String>,
 }
 
 /// [`PadCluster`] of each of the pads asked for (`wanted`: footprint reference, number, `nth`), in the same order. A pad with no net, or one the board does not have, is a
@@ -64,7 +66,10 @@ pub fn pad_clusters(design: &Design, model: &ConstraintModel, wanted: &[(String,
                                 out.pads.insert(p.clone());
                             }
                         }
-                        ItemRef::ZoneOutline { .. } | ItemRef::Shape { .. } => {}
+                        ItemRef::Shape { shape_id } => {
+                            out.shapes.insert(shape_id.clone());
+                        }
+                        ItemRef::ZoneOutline { .. } => {}
                     }
                 }
             }

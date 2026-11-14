@@ -53,7 +53,7 @@ use eda_kicad::netlist_reader::{self, ComponentNet, Netlist, NetlistComponent};
 use eda_model::ir::{BoardPart, FootprintInstance, Group, LabelSide, LibraryFootprint, Point, Side};
 use eda_model::netlist_import::{ImportedFootprint, ImportedNetlist};
 use eda_model::units::Nm;
-use eda_model::{CheckResult, Footprint, Net, PadKind, Part, SymbolLink};
+use eda_model::{CheckResult, Footprint, PadKind, Part, SymbolLink};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -281,7 +281,7 @@ struct Updater<'c> {
     /// The engine footprint of a footprint this run added or replaced.
     pads_now: BTreeMap<String, Footprint>,
     /// `m_padNets`: the dry run's pads' nets as the update would leave them (`getNetname`, which the zones read).
-    pad_net_cache: BTreeMap<(String, String), String>,
+    pad_net_cache: BTreeMap<(String, String, u32), String>,
     /// `m_addedNets`.
     added_nets: BTreeSet<String>,
     /// `m_oldToNewNets`.
@@ -418,11 +418,12 @@ impl<'c> Updater<'c> {
         b.design.effective_attrs(reference, &fp)
     }
 
-    /// `PAD::GetNetname` of a pad of the footprint (the update's, in a dry run, where it asks `getNetname`): its pin's net, or the `unconnected-(..)` net the
-    /// board gives a pin on no net (`SCH_PIN::GetDefaultNetName`, as the writer names it) while its symbol draws it.
-    fn pad_net(&self, b: &Board<'_>, reference: &str, number: &str, cached: bool) -> String {
+    /// `PAD::GetNetname` of the pad `nth` numbered `number` of the footprint (the update's, in a dry run, where it asks `getNetname`): its own net where its number
+    /// is on two (`PadMaskInfo::net`, UI-LEFT-3 P3-35), else its pin's net, or the `unconnected-(..)` net the board gives a pin on no net (`SCH_PIN::GetDefaultNetName`,
+    /// as the writer names it) while its symbol draws it.
+    fn pad_net(&self, b: &Board<'_>, reference: &str, number: &str, nth: u32, cached: bool) -> String {
         if cached && self.dry {
-            if let Some(n) = self.pad_net_cache.get(&(reference.to_string(), number.to_string())) {
+            if let Some(n) = self.pad_net_cache.get(&(reference.to_string(), number.to_string(), nth)) {
                 return n.clone();
             }
         }
@@ -431,8 +432,14 @@ impl<'c> Updater<'c> {
             if let Some((_, n)) = bp.pad_nets.iter().find(|(p, _)| p == number) {
                 return n.clone();
             }
-        } else if let Some(net) = b.design.nets.as_ref().unwrap_or(&b.model.nets).iter().find(|n| n.pins.iter().any(|p| *p == pin)) {
-            return net.name.clone();
+        } else {
+            let key = crate::pad_nets::PadKey { reference: reference.to_string(), number: number.to_string(), nth };
+            if let Some(own) = b.own_pad_net(&key) {
+                return own;
+            }
+            if let Some(net) = b.design.nets.as_ref().unwrap_or(&b.model.nets).iter().find(|n| n.pins.iter().any(|p| *p == pin)) {
+                return net.name.clone();
+            }
         }
         // a pin on no net: the board's own name for it, while its symbol draws it
         let link = self.link_of(b, reference);
@@ -458,15 +465,18 @@ impl<'c> Updater<'c> {
             || b.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|p| p.pad_nets.iter().any(|(_, n)| n == name)) || d.board_nets.iter().any(|n| n == name))
     }
 
-    /// Puts the pad `number` of the footprint on `net` (`""`: no net).
-    fn set_pad_net(&mut self, b: &mut Board<'_>, reference: &str, number: &str, net: &str) {
+    /// Puts the pad `nth` numbered `number` of the footprint on `net` (`""`: no net): `pad->SetNetCode`, the pad alone (UI-LEFT-3 P3-35: a number whose pads end
+    /// up on two nets keeps a net per pad, `Board::set_pad_nets`).
+    fn set_pad_net(&mut self, b: &mut Board<'_>, reference: &str, number: &str, nth: u32, net: &str) {
         let pin = format!("{reference}.{number}");
         // a pin the board names `unconnected-(..)` by itself is left on no net: the board file says the same
         let own = {
             let link = self.link_of(b, reference);
             b.model.part(reference).and_then(|p| p.pins.iter().find(|p| p.number == number)).map(|p| eda_engine::nets::unconnected_net_name(&pin, p.name.as_deref(), link.units.get(number).map(String::as_str)))
         };
-        let net = if own.as_deref() == Some(net) { "" } else { net };
+        // (a number two pads have keeps the name: its pads may be on two nets, each named, `_1`)
+        let shared = self.footprint_of(b, reference).is_some_and(|f| f.pads.iter().filter(|p| p.number == number).count() > 1);
+        let net = if own.as_deref() == Some(net) && !shared { "" } else { net };
         let is_board_part = Self::board_part(b, reference).is_some();
         if is_board_part {
             if let Some(bp) = b.drawings_mut().board_parts.iter_mut().find(|p| p.reference == reference) {
@@ -478,19 +488,14 @@ impl<'c> Updater<'c> {
             }
             return;
         }
-        let nets = b.design.nets.get_or_insert_with(Vec::new);
-        for n in nets.iter_mut() {
-            n.pins.retain(|p| *p != pin);
-        }
-        if !net.is_empty() {
-            match nets.iter_mut().find(|n| n.name == net) {
-                Some(n) => {
-                    n.pins.push(pin);
-                    n.pins.sort();
-                }
-                None => nets.push(Net { name: net.to_string(), pins: vec![pin] }),
-            }
-        }
+        let mut nets = b.design.nets.clone().unwrap_or_else(|| b.model.nets.clone());
+        let key = |k: u32| crate::pad_nets::PadKey { reference: reference.to_string(), number: number.to_string(), nth: k };
+        // the other pads of the number keep the nets they have, the `unconnected-(..)` name the board gives them by itself included
+        let count = self.footprint_of(b, reference).map_or(0, |f| f.pads.iter().filter(|p| p.number == number).count() as u32);
+        let mut moves: Vec<(crate::pad_nets::PadKey, String)> = (1..=count).filter(|&k| k != nth).map(|k| (key(k), self.pad_net(b, reference, number, k, false))).collect();
+        moves.push((key(nth), net.to_string()));
+        b.set_pad_nets(&mut nets, &moves);
+        b.design.nets = Some(nets);
     }
 
     // ---- PCB_EDIT_FRAME::LoadFootprints ----
@@ -591,14 +596,14 @@ impl<'c> Updater<'c> {
             b.design.nets = Some(nets);
         }
         // `cacheCopperZoneConnections`: the pads of each copper zone's net
-        let zone_pads: BTreeMap<String, Vec<(String, String)>> = self.zone_pads(b);
+        let zone_pads: BTreeMap<String, Vec<(String, String, u32)>> = self.zone_pads(b);
         let pre_existing = self.on_board(b);
         // the board's nets as it is (`GetNetInfo()`): the model's, the ones only footprints of the board have, the `unconnected-(..)` nets of the pins on none
         let mut nets_before: BTreeSet<String> = b.model.nets.iter().map(|n| n.name.clone()).collect();
         nets_before.extend(b.design.drawings.iter().flat_map(|d| d.board_nets.iter().cloned().chain(d.board_parts.iter().flat_map(|p| p.pad_nets.iter().map(|(_, n)| n.clone())))));
         for fp in &pre_existing {
-            for p in self.footprint_of(b, &fp.reference).map(|f| f.pads).unwrap_or_default() {
-                let n = self.pad_net(b, &fp.reference, &p.number, false);
+            for (p, nth) in with_nth(self.footprint_of(b, &fp.reference).map(|f| f.pads).unwrap_or_default()) {
+                let n = self.pad_net(b, &fp.reference, &p.number, nth, false);
                 if !n.is_empty() {
                     nets_before.insert(n);
                 }
@@ -702,9 +707,9 @@ impl<'c> Updater<'c> {
                         self.entry(b, &fp.reference).link.path = String::new();
                     }
                 }
-                let numbers: Vec<String> = self.footprint_of(b, &fp.reference).map(|f| f.pads.iter().map(|p| p.number.clone()).collect()).unwrap_or_default();
-                for n in numbers {
-                    let net = self.pad_net(b, &fp.reference, &n, false);
+                let pads = with_nth(self.footprint_of(b, &fp.reference).map(|f| f.pads).unwrap_or_default());
+                for (p, nth) in pads {
+                    let net = self.pad_net(b, &fp.reference, &p.number, nth, false);
                     if !net.is_empty() {
                         self.current.insert(net);
                     }
@@ -763,15 +768,15 @@ impl<'c> Updater<'c> {
     }
 
     /// `cacheCopperZoneConnections`: each copper zone's pads -- here, the pads on its net (KiCad: the pads its fill touches).
-    fn zone_pads(&self, b: &Board<'_>) -> BTreeMap<String, Vec<(String, String)>> {
+    fn zone_pads(&self, b: &Board<'_>) -> BTreeMap<String, Vec<(String, String, u32)>> {
         let mut out = BTreeMap::new();
         let Some(rt) = b.design.routing.as_ref() else { return out };
         for z in rt.zones.iter().filter(|z| !z.is_rule_area && z.layer_set().iter().any(|l| l.ends_with(".Cu")) && !z.net.is_empty()) {
             let mut pads = Vec::new();
             for f in &b.placement().footprints {
-                for p in self.footprint_of(b, &f.id).map(|fp| fp.pads).unwrap_or_default() {
-                    if self.pad_net(b, &f.id, &p.number, false) == z.net && !pads.contains(&(f.id.clone(), p.number.clone())) {
-                        pads.push((f.id.clone(), p.number.clone()));
+                for (p, nth) in with_nth(self.footprint_of(b, &f.id).map(|fp| fp.pads).unwrap_or_default()) {
+                    if self.pad_net(b, &f.id, &p.number, nth, false) == z.net {
+                        pads.push((f.id.clone(), p.number.clone(), nth));
                     }
                 }
             }
@@ -1236,12 +1241,8 @@ impl<'c> Updater<'c> {
         let shown = self.shown(reference).to_string();
         let pads = self.footprint_of(b, reference).map(|f| f.pads).unwrap_or_default();
         let mut pad_netnames: BTreeSet<String> = BTreeSet::new();
-        let mut seen: BTreeSet<String> = BTreeSet::new();
-        for pad in pads {
-            // one pin per number here: the first pad of a number stands for every pad that shares it
-            if !seen.insert(pad.number.clone()) {
-                continue;
-            }
+        // every pad, each with its own net (`for( PAD* pad : pads )`, UI-LEFT-3 P3-35): two pads of a no-connect pin get two nets (`_1`)
+        for (pad, nth) in with_nth(pads) {
             let num = pad.number.clone();
             let net: ComponentNet = c.net(&num);
             let (pin_function, pin_type) = if net.is_valid() { (net.pin_function.clone(), net.pin_type.clone()) } else { (String::new(), String::new()) };
@@ -1257,7 +1258,7 @@ impl<'c> Updater<'c> {
                     entry.link.pins.remove(&num);
                 }
             }
-            let cur = self.pad_net(b, reference, &num, false);
+            let cur = self.pad_net(b, reference, &num, nth, false);
             if !net.is_valid() || !copper {
                 if !cur.is_empty() {
                     let text = self.tense(format!("Disconnect {} pin {}.", shown, esc(&num)), format!("Disconnected {} pin {}.", shown, esc(&num)));
@@ -1266,10 +1267,10 @@ impl<'c> Updater<'c> {
                     self.warn(format!("No net found for component {} pad {} (no pin {} in symbol).", shown, esc(&num), esc(&num)));
                 }
                 if !self.dry {
-                    self.set_pad_net(b, reference, &num, "");
+                    self.set_pad_net(b, reference, &num, nth, "");
                     self.entry(b, reference).link.pins.remove(&num);
                 } else {
-                    self.pad_net_cache.insert((reference.to_string(), num.clone()), String::new());
+                    self.pad_net_cache.insert((reference.to_string(), num.clone(), nth), String::new());
                 }
                 continue;
             }
@@ -1304,9 +1305,9 @@ impl<'c> Updater<'c> {
                     self.say(Severity::Action, text);
                 }
                 if !self.dry {
-                    self.set_pad_net(b, reference, &num, &net_name);
+                    self.set_pad_net(b, reference, &num, nth, &net_name);
                 } else {
-                    self.pad_net_cache.insert((reference.to_string(), num.clone()), net_name.clone());
+                    self.pad_net_cache.insert((reference.to_string(), num.clone(), nth), net_name.clone());
                 }
             }
             if !self.dry {
@@ -1317,7 +1318,7 @@ impl<'c> Updater<'c> {
     }
 
     /// `BOARD_NETLIST_UPDATER::updateCopperZoneNets`.
-    fn update_copper_zone_nets(&mut self, b: &mut Board<'_>, netlist: &Netlist, zone_pads: &BTreeMap<String, Vec<(String, String)>>) {
+    fn update_copper_zone_nets(&mut self, b: &mut Board<'_>, netlist: &Netlist, zone_pads: &BTreeMap<String, Vec<(String, String, u32)>>) {
         let names: BTreeSet<String> = netlist.components.iter().flat_map(|c| c.nets.iter().map(|n| n.net.clone())).collect();
         let vias: Vec<(String, String)> = b.design.routing.as_ref().map(|r| r.vias.iter().map(|v| (v.id.clone(), v.net.clone())).collect()).unwrap_or_default();
         for (id, net) in vias {
@@ -1345,8 +1346,8 @@ impl<'c> Updater<'c> {
                 continue;
             }
             let mut updated = String::new();
-            for (r, n) in zone_pads.get(&z.id).map(Vec::as_slice).unwrap_or_default() {
-                let now = self.pad_net(b, r, n, true);
+            for (r, n, nth) in zone_pads.get(&z.id).map(Vec::as_slice).unwrap_or_default() {
+                let now = self.pad_net(b, r, n, *nth, true);
                 if now != z.net {
                     updated = now;
                     break;
@@ -1400,6 +1401,19 @@ impl<'c> Updater<'c> {
             }
         }
     }
+}
+
+/// The pads of a footprint, each with which of the pads of its number it is (1-based, the studio's `REF.NUM#k`).
+fn with_nth(pads: Vec<eda_model::Pad>) -> Vec<(eda_model::Pad, u32)> {
+    let mut seen: BTreeMap<String, u32> = BTreeMap::new();
+    pads.into_iter()
+        .map(|p| {
+            let n = seen.entry(p.number.clone()).or_insert(0);
+            *n += 1;
+            let nth = *n;
+            (p, nth)
+        })
+        .collect()
 }
 
 #[cfg(test)]
