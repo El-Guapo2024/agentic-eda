@@ -81,7 +81,7 @@ pub struct MicroviaStack {
     #[serde(default)]
     pub style: ViaStackStyle,
     /// `m_pitch`: "center to center distance, staggered only".
-    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(default, skip_serializing_if = "is_zero_nm", deserialize_with = "crate::units::de")]
     pub pitch_nm: Nm,
     /// `m_filled`: "copper filled hops, forced on when stacked".
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -90,9 +90,9 @@ pub struct MicroviaStack {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub capped: bool,
     /// `m_viaSize` / `m_viaDrill`: "0 means take from netclass / board defaults".
-    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(default, skip_serializing_if = "is_zero_nm", deserialize_with = "crate::units::de")]
     pub via_size_nm: Nm,
-    #[serde(default, skip_serializing_if = "is_zero_nm")]
+    #[serde(default, skip_serializing_if = "is_zero_nm", deserialize_with = "crate::units::de")]
     pub via_drill_nm: Nm,
     /// `m_useNetclass`: "Use netclass values".
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

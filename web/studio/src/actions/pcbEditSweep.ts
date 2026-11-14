@@ -456,6 +456,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       const id = [...state.selection][0]!;
       const track = board.routing?.tracks.find((t) => t.id === id);
       if (!track) return;
+      // KiCad 25ec2335 `breakTrack`: "Never split a via stack's connecting trace. The stack manages it as a unit" (UI-LEFT-3 X3-1)
+      if ((board.drawings?.via_stacks ?? []).some((s) => (s.member_ids ?? []).includes(track.id))) return;
       dispatch({ type: "CLEAR_SELECTION" }); // `RunAction( ACTIONS::selectionClear )`, before anything else
       const res = breakTrack(editBoardOf(board), { id: track.id, net: track.net, layer: track.layer, width: track.width, pts: track.pts, arc_mid: track.arc_mid }, [cursor.x, cursor.y], snapGridNm(board.snap ?? state.gridNm));
       if (!res.ok || !res.cmd) {
