@@ -122,3 +122,27 @@ test("F, Space, the arrows, Home and F1/F2/F5 do nothing with a modifier held (S
   assert.deepEqual(resolve3DAction(key("ArrowLeft"), false), { kind: "pan", direction: "left" });
   assert.deepEqual(resolve3DAction(key("F1"), false), { kind: "zoomIn" });
 });
+
+test("C3-4: keys given to the menus' and toolbar's 3D actions act: the 3D grid, the materials, the navigator, copy, export, the Appearance manager", () => {
+  try {
+    setUserHotkeyOverrides(
+      new Map([
+        ["3DViewer.Control.show5mmGrid", { hotkey: "G", altHotkey: null }],
+        ["3DViewer.Control.materialCAD", { hotkey: "M", altHotkey: null }],
+        ["3DViewer.Control.showNavigator", { hotkey: "N", altHotkey: null }],
+        ["3DViewer.Control.copyToClipboard", { hotkey: "Ctrl+Shift+C", altHotkey: null }],
+        ["3DViewer.Control.exportImage", { hotkey: "E", altHotkey: null }],
+        ["3DViewer.Control.showLayersManager", { hotkey: "L", altHotkey: null }],
+      ])
+    );
+    assert.deepEqual(resolve3DKey(key("g"), false), { kind: "grid", grid: "5mm" });
+    assert.deepEqual(resolve3DKey(key("m"), false), { kind: "material", mode: "cad" });
+    assert.deepEqual(resolve3DKey(key("n"), false), { kind: "row", row: "navigator" });
+    assert.deepEqual(resolve3DKey(key("C", { ctrlKey: true, shiftKey: true }), false), { kind: "copy" });
+    assert.deepEqual(resolve3DKey(key("e"), false), { kind: "export" });
+    assert.deepEqual(resolve3DKey(key("l"), false), { kind: "layersManager" });
+    assert.equal(resolve3DAction(key("g"), false), null, "not a camera action");
+  } finally {
+    setUserHotkeyOverrides(null);
+  }
+});

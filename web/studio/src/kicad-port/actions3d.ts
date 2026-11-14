@@ -11,6 +11,7 @@ import actionsData from "../kicad/actions.json";
 import actions3dData from "../kicad/actions3d.json";
 import type { ActionsFile, KicadAction } from "../kicad/types";
 import { effectiveHotkey, eventToHotkeyCandidates } from "../actions/hotkeys";
+import { GRID3D_ACTIONS, type Grid3DType } from "./grid3d";
 
 export type ViewFacePreset = "top" | "bottom" | "front" | "back" | "left" | "right";
 export type RotateAxis = "x" | "y" | "z";
@@ -53,15 +54,31 @@ export interface KeyInput {
 /** The Appearance rows the five model-attribute actions toggle (`EDA_3D_CONTROLLER::ToggleVisibility`'s `flipLayer( LAYER_3D_* )`). */
 export type ModelRow3D = "th_models" | "smd_models" | "virtual_models" | "not_in_pos_models" | "dnp_models";
 
-/** What a key does in the 3D view: a camera action, a model row toggled, the projection toggled (`ToggleOrtho`) or the board reloaded (`ReloadBoard`). */
-export type KeyTarget3D = Action3D | { kind: "modelRow"; row: ModelRow3D } | { kind: "ortho" } | { kind: "reload" };
+/**
+ * What a key does in the 3D view: a camera action, a model row toggled, the projection toggled (`ToggleOrtho`), the board reloaded (`ReloadBoard`), the 3D grid
+ * (`On3DGridSelection`), the material mode (`SetMaterial`), the navigator or the bounding boxes toggled (`ToggleVisibility`), the view copied or exported
+ * (`ExportImage`), or the Appearance manager toggled (`ToggleLayersManager`).
+ */
+export type KeyTarget3D =
+  | Action3D
+  | { kind: "modelRow"; row: ModelRow3D }
+  | { kind: "ortho" }
+  | { kind: "reload" }
+  | { kind: "grid"; grid: Grid3DType }
+  | { kind: "material"; mode: "realistic" | "solid" | "cad" }
+  | { kind: "row"; row: "navigator" | "bounding_boxes" }
+  | { kind: "copy" }
+  | { kind: "export" }
+  | { kind: "layersManager" };
 
 /**
  * `EDA_3D_CONTROLLER::setTransitions`: the actions a key reaches in the 3D view, by name -- the viewer's own (`EDA_3D_ACTIONS`, src/kicad/actions3d.json) first, then the
  * common ones it takes (`ACTIONS::panUp` .. `panRight`, `zoomRedraw`, `zoomInCenter`, `zoomOutCenter`, `zoomFitScreen`, and `zoomIn` / `zoomOut` -- "because F1 and F2
  * keys generate a zoomIn/zoomOut event, these events must be captured to use these hot keys"), as `ACTION_MANAGER::RunHotKey` prefers the active tool's actions to the
- * global ones (Home is both Home View and Zoom to Fit, the same view). The rest of the 3D actions (grids, materials, the navigator, bounding boxes, raytracing,
- * copy, export, the Appearance manager) are the toolbar's and menus' only: a key a person gives one of them does nothing in the 3D view.
+ * global ones (Home is both Home View and Zoom to Fit, the same view). Every other 3D action with a handler is here too, so a key a person gives it acts
+ * (UI-LEFT-3 C3-4): the 3D grids, the materials, the navigator and the bounding boxes, Copy 3D Image to Clipboard, Export Image..., Show Appearance Manager.
+ * Not here, as they do nothing in the studio: Use raytracing (one render engine) and Show parts without 3D model (KiCad's `render.show_missing_models`, not
+ * ported).
  */
 export const KEYED_ACTIONS_3D: ReadonlyArray<readonly [string, KeyTarget3D]> = [
   ["3DViewer.Control.pivotCenter", { kind: "pivot" }],
@@ -90,6 +107,15 @@ export const KEYED_ACTIONS_3D: ReadonlyArray<readonly [string, KeyTarget3D]> = [
   ["3DViewer.Control.attribute_dnp", { kind: "modelRow", row: "dnp_models" }],
   ["3DViewer.Control.toggleOrtho", { kind: "ortho" }],
   ["3DViewer.Control.reloadBoard", { kind: "reload" }],
+  ...Object.entries(GRID3D_ACTIONS).map(([name, grid]): readonly [string, KeyTarget3D] => [name, { kind: "grid", grid }]),
+  ["3DViewer.Control.materialNormal", { kind: "material", mode: "realistic" }],
+  ["3DViewer.Control.materialDiffuse", { kind: "material", mode: "solid" }],
+  ["3DViewer.Control.materialCAD", { kind: "material", mode: "cad" }],
+  ["3DViewer.Control.showNavigator", { kind: "row", row: "navigator" }],
+  ["3DViewer.Control.showBoundingBoxes", { kind: "row", row: "bounding_boxes" }],
+  ["3DViewer.Control.copyToClipboard", { kind: "copy" }],
+  ["3DViewer.Control.exportImage", { kind: "export" }],
+  ["3DViewer.Control.showLayersManager", { kind: "layersManager" }],
   ["common.Control.panUp", { kind: "pan", direction: "up" }],
   ["common.Control.panDown", { kind: "pan", direction: "down" }],
   ["common.Control.panLeft", { kind: "pan", direction: "left" }],
@@ -125,7 +151,8 @@ export function resolve3DKey(e: KeyInput, isMac: boolean): KeyTarget3D | null {
 /** `resolve3DKey` for the camera's actions only (the view presets, rotations, moves, zooms, pivot, flip and home); null for the rest. */
 export function resolve3DAction(e: KeyInput, isMac: boolean): Action3D | null {
   const t = resolve3DKey(e, isMac);
-  return t && t.kind !== "modelRow" && t.kind !== "ortho" && t.kind !== "reload" ? t : null;
+  const camera: ReadonlySet<string> = new Set(["viewPreset", "reset", "flip", "pivot", "zoomIn", "zoomOut", "zoomRedraw", "rotate", "pan"]);
+  return t && camera.has(t.kind) ? (t as Action3D) : null;
 }
 
 /** One entry of the 3D view's right-click menu: an action by its KiCad name, a separator, or a submenu with its title and icon. */

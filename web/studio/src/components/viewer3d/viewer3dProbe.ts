@@ -42,6 +42,8 @@ export interface Viewer3dSnapshot {
   padShapes: Record<string, { meshes: number; corners: number }>;
   /** The 3D Navigator is drawn. */
   navigator: boolean;
+  /** View > 3D Grid (`render.grid_type`) and the lines drawn (kicad-port/grid3d.ts). */
+  grid3d?: { type: string; lines: number };
   /** The copper layers drawn and each one's colour (`#rrggbb`, its material's diffuse): an inner layer only while the body does not hide it. */
   copperColors: Record<string, string>;
   /** What kicad-port/layers3d.ts built (`createLayers`): the through holes, the via annuli, the body's post-machining cuts, the plugs, the off-board pads, the via covers, and the server's polygon jobs (asked, answered). */
