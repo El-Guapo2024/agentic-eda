@@ -270,9 +270,9 @@
       if (!(await open(t, "pcbnew.EditorControl.generatePosFile", "Generate Placement Files"))) return;
       const radio = (name, i) => dialog().querySelectorAll(`input[name="${name}"]`)[i];
       t(radio("pos-format", 0)?.checked === true && !dialog().querySelector('input[name="pos-side"]'), "Plain text first, and no side choice (KiCad's dialog always does both sides)");
-      // X4: kicad-cli 10.99's `pcb export pos` has no Exclude from BOM flag: shown disabled; the design variant (S2, kicad-cli's `--variant`) is offered, the default first; the output folder is the dialog's.
+      // Exclude from BOM goes through kicad-cli's jobset runner (`exclude_bom`, UI-LEFT-3 P3-27): enabled; the design variant (S2, kicad-cli's `--variant`) is offered, the default first; the output folder is the dialog's.
       const variantBox = labelled("Design variant:")?.querySelector("select");
-      t(box("Exclude all footprints with the Exclude from BOM flag set")?.disabled === true && variantBox?.disabled === false && variantBox?.value === "< Default >" && !!testid("pos-output-dir"), "Exclude from BOM disabled, the design variant (the default) and the output directory offered");
+      t(box("Exclude all footprints with the Exclude from BOM flag set")?.disabled === false && variantBox?.disabled === false && variantBox?.value === "< Default >" && !!testid("pos-output-dir"), "Exclude from BOM enabled, the design variant (the default) and the output directory offered");
       radio("pos-format", 1)?.click(); // CSV
       await sleep(150);
       let res = await press(/^Generate/, "fab/pos");

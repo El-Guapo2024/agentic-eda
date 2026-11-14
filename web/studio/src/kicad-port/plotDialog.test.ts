@@ -39,6 +39,16 @@ test("the dialog opens as TransferDataToWindow reads the board: Gerber, no drill
   assert.deepEqual([f.dxfContours, f.dxfUnits, f.svgPrecision, f.pngDpi, f.pngAntialias], [true, "in", 4, 300, true]);
 });
 
+test("P3-25: \"Use KiCad font to plot text\" is enabled while the contours box is unticked, and is stored as dxfusepcbnewfont", () => {
+  const f = withFormat(initialPlotForm(BOARD, LISTED, DEFAULT_SESSION), "dxf");
+  assert.equal(plotEnables({ ...f, dxfContours: true }).dxfKiCadFont, false, "`Enable( !m_DXF_plotModeOpt->GetValue() )`");
+  const off = { ...withDxfContours(f, false), dxfKiCadFont: false };
+  assert.equal(plotEnables(off).dxfKiCadFont, true);
+  assert.equal(optionsFromForm(off).dxfusepcbnewfont, "no", "NATIVE text");
+  assert.equal(optionsFromForm({ ...off, dxfKiCadFont: true }).dxfusepcbnewfont, "yes");
+  assert.equal(optionsFromForm({ ...off, dxfContours: true }).dxfusepcbnewfont, "yes", "the disabled box plots with the KiCad font (`SetTextMode( DEFAULT )`)");
+});
+
 test("each format enables what SetPlotFormat enables, and kicad-cli's limits are named", () => {
   const f = initialPlotForm(BOARD, LISTED, DEFAULT_SESSION);
   const g = plotEnables(f);

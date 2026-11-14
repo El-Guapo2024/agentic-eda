@@ -458,6 +458,8 @@ export interface FabPosOptions {
   exclude_fp_th: boolean;
   /** "Exclude all footprints with the Do Not Populate flag set" (`m_excludeDNP`). */
   exclude_dnp?: boolean;
+  /** "Exclude all footprints with the Exclude from BOM flag set" (`m_excludeBOM`): the placement goes through kicad-cli's jobset runner (`exclude_bom`). */
+  exclude_bom?: boolean;
   /** "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
   use_aux_origin?: boolean;
   /** "Generate single file with both front and back positions" (`m_singleFile`, checked by default): with both sides asked and this

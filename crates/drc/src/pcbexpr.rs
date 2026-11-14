@@ -964,10 +964,11 @@ fn search_areas(ctx: &Ctx, arg: &str) -> Vec<Rc<AreaFacts>> {
     ctx.env.areas.iter().filter(|a| wx_matches(&a.name, arg)).cloned().collect()
 }
 
-/// The shape of an item on a layer, for the geometry functions (`GetEffectiveShape( layer )`): what it occupies, or for a zone its outline.
+/// The shape of an item on a layer, for the geometry functions (`GetEffectiveShape( layer )`): what it occupies, or for a zone its polygon (`ZONE::Outline()`),
+/// the holes bridged into the outline so that what lies in a hole is outside it (UI-LEFT-3 P3-21).
 fn item_shape(item: &RuleItem) -> Shape {
     if item.class == Class::Zone && item.outline.len() >= 3 {
-        return Shape::Polygon { pts: item.outline.clone() };
+        return Shape::Polygon { pts: crate::kimath::fractured_ring(&item.outline, &item.holes) };
     }
     match item.shapes.len() {
         0 => Shape::Circle { c: item.position, r: Nm::ZERO },
@@ -1641,6 +1642,33 @@ mod tests {
         assert!(cond.compile(&env), "{text}: {:?}", cond.compile_errors());
         assert!(cond.compile_errors().is_empty(), "{text}: {:?}", cond.compile_errors());
         cond.evaluate_for(&env, Some(a), b, 0, Some(layer), None)
+    }
+
+    /// UI-LEFT-3 P3-21: a zone's shape is its polygon with the holes (`ZONE::Outline()`, `GetEffectiveShape` of a rule area): a courtyard that lies in a hole of
+    /// the zone does not meet it, one across the zone's copper does.
+    #[test]
+    fn a_courtyard_in_a_zones_hole_is_clear_of_the_zone() {
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| vec![Point { x: mm(x0), y: mm(y0) }, Point { x: mm(x1), y: mm(y0) }, Point { x: mm(x1), y: mm(y1) }, Point { x: mm(x0), y: mm(y1) }];
+        let mut zone = RuleItem::new("z1", Class::Zone);
+        zone.layers = vec!["F.Cu".into()];
+        zone.outline = sq(0.0, 0.0, 20.0, 20.0);
+        zone.holes = vec![sq(5.0, 5.0, 15.0, 15.0)];
+        let zone = Rc::new(zone);
+        let fp = |reference: &str, court: Vec<Point>| {
+            let mut it = RuleItem::new(reference, Class::Footprint);
+            it.footprint = Some(Rc::new(FootprintFacts { reference: reference.into(), fpid: "Package:QFN".into(), courtyard_front: vec![court], ..Default::default() }));
+            Rc::new(it)
+        };
+        let mut e = Env::simple(&["F.Cu", "B.Cu"]);
+        e.footprints = vec![fp("U1", sq(8.0, 8.0, 12.0, 12.0)), fp("U2", sq(3.0, 3.0, 7.0, 7.0))];
+        let env = Rc::new(e);
+        let truth = |text: &str| {
+            let mut cond = Condition::new(text);
+            assert!(cond.compile(&env), "{text}: {:?}", cond.compile_errors());
+            cond.evaluate_for(&env, Some(&zone), None, 0, Some("F.Cu"), None)
+        };
+        assert!(!truth("A.intersectsCourtyard('U1')"), "U1's courtyard is in the zone's hole");
+        assert!(truth("A.intersectsCourtyard('U2')"), "U2's courtyard crosses the zone's copper");
     }
 
     #[test]

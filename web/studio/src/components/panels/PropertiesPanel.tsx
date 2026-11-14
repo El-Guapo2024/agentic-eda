@@ -8,9 +8,10 @@ import { pcbEdit, pcbGrid } from "../../kicad-port/pcbProperties";
 import { schEdit, schGrid } from "../../kicad-port/schItemProperties";
 import { withVariant } from "../../kicad-port/designVariants";
 import type { PropValue } from "../../kicad-port/propertyManager";
-import type { Rule } from "../../api/types";
+import type { Cmd, Rule } from "../../api/types";
 import { DockPanel } from "./Dock";
-import { PropertyGrid } from "./PropertyGrid";
+import { PropertyGrid, type CustomPropertyHandlers } from "./PropertyGrid";
+import { addCustomPropertyCmd, labelEdited, newCustomPropertyName, removeCustomPropertyCmd, setCustomPropertyCmd } from "../../kicad-port/pcbCustomProperties";
 import { useOriginTransforms } from "../../state/originTransforms";
 import { stillToPlace } from "../../kicad-port/updatePcb";
 
@@ -127,13 +128,29 @@ function PropertiesBody() {
     return null;
   };
 
+  // KiCad 25ec2335's "Custom Properties" (`PCB_PROPERTIES_PANEL`'s handlers): one `set_custom_property` each, one undo step (kicad-port/pcbCustomProperties.ts).
+  const send = async (cmd: Cmd): Promise<string | null> => ((await api.cmd(cmd)) ? null : "The board refused the custom property.");
+  const rowNames = model.groups.filter((g) => !g.custom).flatMap((g) => g.rows.map((r) => r.name));
+  const custom: CustomPropertyHandlers = {
+    add: async () => {
+      const name = newCustomPropertyName(board, ids);
+      return (await api.cmd(addCustomPropertyCmd(ids, name))) ? name : null;
+    },
+    commit: (name, text) => send(setCustomPropertyCmd(ids, name, text)),
+    label: async (oldName, newName, pending) => {
+      const cmd = labelEdited(board, ids, rowNames, oldName, newName, pending);
+      return cmd ? send(cmd) : null;
+    },
+    remove: (name) => send(removeCustomPropertyCmd(ids, name)),
+  };
+
   // The one app-specific section KiCad's grid does not have: the placement rules the intent states for a single footprint.
   const part = ids.length === 1 ? board.parts.find((x) => x.ref === ids[0]) : undefined;
   const rules = part ? board.rules.map((r) => ruleLine(r, part.ref)).filter((l): l is string => !!l) : [];
 
   return (
     <>
-      <PropertyGrid model={model} units={state.units} xf={xf} onCommit={commit} selectionKey={ids.join("\n")} />
+      <PropertyGrid model={model} units={state.units} xf={xf} onCommit={commit} selectionKey={ids.join("\n")} custom={custom} />
       {rules.length > 0 && (
         <div className="panel-section">
           <h3>Placement rules</h3>

@@ -1357,6 +1357,8 @@ export interface BoardState {
   checks: Check[];
   /** `BOARD_ITEM::IsLocked()` for every kind at once: a placed part's ref, or a track/via/zone/shape/text id (`DrawingsSection::locked_ids`, set by `set_locked`). Absent from an older backend = nothing locked. */
   locked?: string[];
+  /** KiCad 25ec2335's custom properties of the items (`EDA_ITEM::m_customProperties`), by item id (`DrawingsSection::custom_properties`). Absent from an older backend = none. */
+  custom_properties?: Record<string, Record<string, string>>;
   /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` nm; null/absent = (0, 0). */
   aux_origin?: [Nm, Nm] | null;
   /** The board's plot settings (`PCB_PLOT_PARAMS`, `(setup (pcbplotparams ..))`) the Plot and drill dialogs start from: the layer selection of the layers the board has, and "Use drill/place file origin". Absent from an older backend. */
@@ -2220,6 +2222,9 @@ export type Cmd =
   | { op: "boolean_shapes"; operation: "merge" | "subtract" | "intersect"; ids: string[] }
   /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
   | { op: "set_locked"; ids: string[]; locked: boolean }
+  /** KiCad 25ec2335's Custom Properties (`EDA_ITEM::SetCustomProperty`, `RemoveCustomProperty`, `PCB_PROPERTIES_PANEL::onKeyRenamed`): `name` set to `value` on every item, removed
+   *  with no `value`, renamed to `rename_to` (kicad-port/pcbCustomProperties.ts). One undo step. */
+  | { op: "set_custom_property"; ids: string[]; name: string; value?: string; rename_to?: string }
   /** `EDIT_TOOL::Swap` -- cyclic pose shift across `parts` in selection order (position, rotation, side). */
   | { op: "swap_chain"; parts: string[] }
   /** `EDIT_TOOL::Swap` (Alt+S) of any items in selection order (crates/ops/src/pcb_swap.rs, kicad-port/pcbSwap.ts); `centres`: each group's `GetPosition()`, the centre of its box. */

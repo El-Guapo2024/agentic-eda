@@ -21,6 +21,11 @@ export function registerSchImageActions(registry: ActionMap, ctx: SchEditContext
   });
 }
 
+/** Paste of a bitmap (`SCH_EDITOR_CONTROL::Paste`: `RunAction( SCH_ACTIONS::placeImage, bitmap.release() )`): Place Image with the image in the hand, in immediate mode. */
+export function pasteImage(ctx: SchEditContext, image: PickedImage): void {
+  startPlaceImage(ctx, image, true);
+}
+
 /**
  * `PlaceImage`. Without a file the tool asks for one at once (the "immediate actions" KiCad starts with); a file that is no image says so (`_( "Could not load image from '%s'." )`). With the
  * image in the hand a click drops it; the tool then waits for a click that asks for another file, unless `immediate` (a dropped file), which ends it. Escape drops the image and, a second time,

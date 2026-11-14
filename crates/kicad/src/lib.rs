@@ -25,6 +25,7 @@ use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 pub mod embedded;
 pub mod extruded_body_io;
 mod barcode_io;
+mod custom_props_io;
 mod pcb_image;
 mod pcb_items_io;
 mod line_ending_io;
@@ -2341,6 +2342,11 @@ pub(crate) fn start_uuid_map() {
 
 pub(crate) fn take_uuid_map() -> std::collections::HashMap<String, String> {
     UUID_MAP.with(|m| m.borrow_mut().take().unwrap_or_default())
+}
+
+/// The map [`start_uuid_map`] started, as it is now, or `None` when no mapped export runs.
+pub(crate) fn uuid_map_snapshot() -> Option<std::collections::HashMap<String, String>> {
+    UUID_MAP.with(|m| m.borrow().clone())
 }
 
 thread_local! {

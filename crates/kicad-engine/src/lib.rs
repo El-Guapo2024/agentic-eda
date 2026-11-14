@@ -2149,8 +2149,10 @@ pub fn export_pcb_into(design: &Design, model: &ConstraintModel, work: &Path, ro
 /// (`JOB_EXPORT_PCB_DXF`, `JOB_EXPORT_PCB_PLOT`'s parameters, KiCad 25ec2335 `common/jobs/job_export_pcb_{plot,dxf}.cpp`), with what the command
 /// line cannot say: "Plot graphic items using their contours" is the polygon mode alone (`--use-contours` sets
 /// `m_plotGraphicItemsUsingContours` too, `command_pcb_export_dxf.cpp`), and the graphic items stay filled, as `DIALOG_PLOT::applyPlotSettings`
-/// leaves `m_DXFPlotMode` (no control; `PCB_PLOT_PARAMS`' `FILLED`); black and white as the dialog sets it for DXF.
-pub fn dxf_job_settings(args: &[String]) -> Value {
+/// leaves `m_DXFPlotMode` (no control; `PCB_PLOT_PARAMS`' `FILLED`); black and white as the dialog sets it for DXF; "Use KiCad font to plot text" as
+/// `use_kicad_font` (`JOB_EXPORT_PCB_DXF::m_useKiCadFont`, KiCad 25ec2335 `DIALOG_PLOT::transferPlotParamsToJob`: `m_useKiCadFont = GetTextMode() !=
+/// PLOT_TEXT_MODE::NATIVE`; unticked, the texts are DXF text entities, UI-LEFT-3 P3-25).
+pub fn dxf_job_settings(args: &[String], use_kicad_font: bool) -> Value {
     let has = |flag: &str| args.iter().any(|a| a == flag);
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
     let list = |flag: &str| value(flag).map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
@@ -2180,19 +2182,65 @@ pub fn dxf_job_settings(args: &[String]) -> Value {
         "scale": value("--scale").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0),
         "plot_graphic_items_using_contours": false,
         "polygon_mode": has("--use-contours"),
-        "use_kicad_font": true,
+        "use_kicad_font": use_kicad_font,
         "units": if value("--output-units").as_deref() == Some("mm") { "mm" } else { "in" },
         "gen_mode": if has("--mode-single") { "single" } else { "multi" },
         "output_filename": "",
     })
 }
 
-/// The Plot dialog's DXF by kicad-cli's jobset runner (`kicad-cli jobset run`, `JOBS_RUNNER`), so the job takes the settings the `pcb export dxf`
-/// command has no flag for ([`dxf_job_settings`]): a one-job jobset with a folder output (`JOBS_OUTPUT_FOLDER`, `output_path` = `out_dir`) next to
-/// the derived project, which gets `PROJECT_FILE`'s `meta` (`{"filename", "version": 3}`, what KiCad writes in every project file: without it
-/// `SETTINGS_MANAGER::LoadProject` refuses the project and the runner exits with `ERR_INVALID_INPUT_FILE`). The files are those of `out_dir` the run
-/// wrote, as [`run_export`] lists them.
-pub fn export_pcb_dxf_job_into(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+/// The Plot dialog's DXF by kicad-cli's jobset runner ([`run_board_jobset`]), so the job takes the settings the `pcb export dxf` command has no flag
+/// for ([`dxf_job_settings`]).
+#[allow(clippy::too_many_arguments)]
+pub fn export_pcb_dxf_job_into(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], use_kicad_font: bool, out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    run_board_jobset(design, model, work, root, name, "pcb_export_dxf", "dxf", dxf_job_settings(args, use_kicad_font), out_dir)
+}
+
+/// `pcb export pos`'s arguments ([`export_pcb_placement_into`]'s) as the settings of a `pcb_export_pos` job (`JOB_EXPORT_PCB_POS`'s parameters, KiCad
+/// 25ec2335 `common/jobs/job_export_pcb_pos.cpp`), with what the command line cannot say: "Exclude all footprints with the Exclude from BOM flag set"
+/// (`exclude_bom`, `m_excludeBOM`: `kicad-cli pcb export pos` has no flag for it, UI-LEFT-3 P3-27). The output file is `<stem>.<ext>`, which the job
+/// decorates as the dialog names its files (`PLACE_FILE_EXPORTER::DecorateFilename`, `-pos` for a CSV, `PLACEFILE_GERBER_WRITER::GetPlaceFileName`:
+/// [`place_file_names`]), the job having no `naked_filename` parameter.
+pub fn pos_job_settings(args: &[String], single_file: bool, exclude_bom: bool, stem: &str) -> Value {
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
+    let format = value("--format").unwrap_or_else(|| "ascii".into());
+    let ext = match format.as_str() {
+        "csv" => "csv",
+        "gerber" => "gbr",
+        _ => "pos",
+    };
+    json!({
+        "use_drill_place_file_origin": has("--use-drill-file-origin"),
+        "smd_only": has("--smd-only"),
+        "exclude_footprints_with_th": has("--exclude-fp-th"),
+        "exclude_dnp": has("--exclude-dnp"),
+        "exclude_bom": exclude_bom,
+        "negate_bottom_x": has("--bottom-negate-x"),
+        "single_file": single_file,
+        "gerber_board_edge": has("--gerber-board-edge"),
+        "side": value("--side").unwrap_or_else(|| "both".into()),
+        "units": value("--units").unwrap_or_else(|| "in".into()),
+        "format": format,
+        "variant": value("--variant").unwrap_or_default(),
+        "output_filename": format!("{stem}.{ext}"),
+    })
+}
+
+/// The placement files by kicad-cli's jobset runner ([`run_board_jobset`]): what [`export_pcb_placement_into`] writes, with the dialog's "Exclude all
+/// footprints with the Exclude from BOM flag set" ([`pos_job_settings`]).
+#[allow(clippy::too_many_arguments)]
+pub fn export_pcb_placement_job_into(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, args: &[String], single_file: bool, exclude_bom: bool, out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let settings = pos_job_settings(args, single_file, exclude_bom, &file_stem(name));
+    run_board_jobset(design, model, work, root, name, "pcb_export_pos", "pos", settings, out_dir)
+}
+
+/// One board job by kicad-cli's jobset runner (`kicad-cli jobset run`, `JOBS_RUNNER`): a one-job jobset of `job_type` with `settings`, and a folder
+/// output (`JOBS_OUTPUT_FOLDER`, `output_path` = `out_dir`) next to the derived project, which gets `PROJECT_FILE`'s `meta` (`{"filename", "version": 3}`,
+/// what KiCad writes in every project file: without it `SETTINGS_MANAGER::LoadProject` refuses the project and the runner exits with
+/// `ERR_INVALID_INPUT_FILE`). The files are those of `out_dir` the run wrote, as [`run_export`] lists them; `what` names the export in a failure.
+#[allow(clippy::too_many_arguments)]
+fn run_board_jobset(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, job_type: &str, what: &str, settings: Value, out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let cli = need_cli()?;
     let stem = file_stem(name);
     export_board(design, model, work, &stem)?;
@@ -2205,11 +2253,11 @@ pub fn export_pcb_dxf_job_into(design: &Design, model: &ConstraintModel, work: &
     }
     let out_abs = std::fs::canonicalize(out_dir).unwrap_or_else(|_| out_dir.to_path_buf());
     let jobset = json!({
-        "jobs": [{ "id": "6d1f2a3e-0b8c-4c55-9d3f-000000000d0f", "type": "pcb_export_dxf", "description": "", "settings": dxf_job_settings(args) }],
+        "jobs": [{ "id": "6d1f2a3e-0b8c-4c55-9d3f-000000000d0f", "type": job_type, "description": "", "settings": settings }],
         "meta": { "version": 1 },
         "outputs": [{ "id": "6d1f2a3e-0b8c-4c55-9d3f-0000000001f0", "type": "folder", "description": "", "only": [], "settings": { "output_path": out_abs.to_string_lossy() } }],
     });
-    let jobset_file = work.join(format!("{stem}-plot.kicad_jobset"));
+    let jobset_file = work.join(format!("{stem}-{what}.kicad_jobset"));
     write_file(&jobset_file, format!("{}\n", serde_json::to_string_pretty(&jobset).unwrap_or_default()))?;
     let lock = folder_lock(out_dir);
     let _one_at_a_time = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -2233,13 +2281,13 @@ pub fn export_pcb_dxf_job_into(design: &Design, model: &ConstraintModel, work: &
         .collect();
     files.sort();
     if !out.status.success() || files.is_empty() {
-        return Err(fail("kicad_cli_export", "dxf", format!("kicad-cli jobset run (pcb_export_dxf) failed: {log}")));
+        return Err(fail("kicad_cli_export", what, format!("kicad-cli jobset run ({job_type}) failed: {log}")));
     }
-    // the runner's own frame ("| Running job 1 ..", "Job successful", the colour codes) is not the plotter's report
+    // the runner's own frame ("| Running job 1 ..", "Job successful", the colour codes) is not the exporter's report
     let said: Vec<&str> = log.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('|') && !l.contains('\u{1b}')).collect();
     let log = said.join("\n");
     let mut reply = json!({ "ok": true, "engine": format!("kicad-cli {} (jobset)", cli_version(&cli)), "files": files });
-    let warnings: Vec<String> = said.iter().filter(|l| !l.starts_with("Plotted to") && **l != "Done.").map(|l| l.to_string()).collect();
+    let warnings: Vec<String> = said.iter().filter(|l| !l.starts_with("Plotted to") && !l.starts_with("Wrote ") && **l != "Done.").map(|l| l.to_string()).collect();
     if !warnings.is_empty() {
         reply["warnings"] = json!(warnings);
     }
@@ -3170,13 +3218,15 @@ fi"#;
             .split(' ')
             .map(str::to_string)
             .collect();
-        let j = dxf_job_settings(&args);
+        let j = dxf_job_settings(&args, true);
+        assert_eq!(j["use_kicad_font"], json!(true));
         assert_eq!(j["layers"], json!(["F.Cu", "Edge.Cuts"]));
         assert_eq!(j["layers_to_include_on_all_layers"], json!(["Edge.Cuts"]));
         assert_eq!((j["polygon_mode"].clone(), j["plot_graphic_items_using_contours"].clone()), (json!(true), json!(false)));
         assert_eq!((j["plot_drawing_sheet"].clone(), j["drill_shape"].clone(), j["units"].clone(), j["gen_mode"].clone()), (json!(true), json!("small"), json!("mm"), json!("multi")));
         assert_eq!((j["use_drill_origin"].clone(), j["variant"].clone(), j["sketch_dnp_footprints_on_fab_layers"].clone()), (json!(true), json!("V1"), json!(true)));
-        let j = dxf_job_settings(&["--layers".into(), "F.Cu".into(), "--mode-single".into()]);
+        let j = dxf_job_settings(&["--layers".into(), "F.Cu".into(), "--mode-single".into()], false);
+        assert_eq!(j["use_kicad_font"], json!(false), "P3-25: the font box unticked");
         assert_eq!((j["polygon_mode"].clone(), j["gen_mode"].clone(), j["units"].clone(), j["drill_shape"].clone()), (json!(false), json!("single"), json!("in"), json!("full")));
     }
 

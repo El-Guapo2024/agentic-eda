@@ -96,15 +96,21 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
         s.tables++;
         break;
       case "group":
-        s.groups++;
+        // A tuning pattern is a `PCB_GENERATOR` (a `PCB_GROUP` underneath, so the studio lists it among the groups), whose `Type()` is `PCB_GENERATOR_T`, not
+        // `PCB_GROUP_T`: no Enter Group, no Ungroup (UI-LEFT-3 P3-17)
+        if (board.drawings?.tuning_patterns?.some((p) => p.id === id)) {
+          s.others = { ...s.others, generator: (s.others?.generator ?? 0) + 1 };
+          s.tuningPatterns = (s.tuningPatterns ?? 0) + 1;
+        } else s.groups++;
         break;
       default: {
         const other: OtherKind = kind === "field" || kind === "textbox" || kind === "barcode" || kind === "point" || kind === "image" ? kind : kind === "via_stitch" ? "generator" : "other";
         s.others = { ...s.others, [other]: (s.others?.[other] ?? 0) + 1 };
       }
     }
-    // GROUP_CONTEXT_MENU::update
-    if (kind === "group") {
+    // GROUP_CONTEXT_MENU::update (`item->Type() == PCB_GROUP_T`: a generator is an ungrouped item there)
+    const isPattern = kind === "group" && !!board.drawings?.tuning_patterns?.some((p) => p.id === id);
+    if (kind === "group" && !isPattern) {
       if (hasGroup) onlyOneGroup = false;
       else {
         onlyOneGroup = true;

@@ -1758,6 +1758,17 @@ fn commit_route_takes_a_lone_pins_net_and_no_net() {
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 2);
 }
 
+/// UI-LEFT-3 P3-20: Create Tracks from Selection's tracks have no net (`new PCB_TRACK( parent )`, net 0), which the commit takes.
+#[test]
+fn commit_route_takes_a_track_of_no_net() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: String::new(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(1.0), y: Nm::ZERO }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![], via_kinds: vec![], track_sources: vec![], group: None, keep_track_ids: vec![] }).unwrap();
+    let rt = b.design().routing.as_ref().unwrap();
+    assert_eq!(rt.tracks.len(), 1);
+    assert!(rt.tracks[0].net.is_empty());
+}
+
 #[test]
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
@@ -3677,4 +3688,34 @@ fn the_edge_band_reads_a_pads_offset() {
     };
     assert_eq!(place(0), 0, "the copper points away from the edge");
     assert_eq!(place(180_000), 1, "the copper points at the edge");
+}
+
+/// UI-LEFT-3 (the pcb-props leftovers): KiCad 25ec2335's Custom Properties -- Add Custom Property (an empty text), its text edited, renamed and removed, on a
+/// footprint and one of its pads; an unknown item refuses the command; a graphic that is deleted takes its properties with it, and a footprint renamed keeps them.
+#[test]
+fn custom_properties_are_added_edited_renamed_and_removed_and_go_with_their_item() {
+    let set = |ids: &[&str], name: &str, value: Option<&str>, rename_to: Option<&str>| Cmd::SetCustomProperty { ids: ids.iter().map(|s| s.to_string()).collect(), name: name.into(), value: value.map(str::to_string), rename_to: rename_to.map(str::to_string) };
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceEdge { part: "U1".into(), edge: Dir::West, fraction: 0.5 }).unwrap();
+    let props = |b: &Board| b.design().drawings.as_ref().map(|d| d.custom_properties.clone()).unwrap_or_default();
+    b.apply(&set(&["U1", "U1.1"], "Property0", Some(""), None)).unwrap();
+    assert_eq!(props(&b)["U1"]["Property0"], "");
+    assert_eq!(props(&b)["U1.1"]["Property0"], "");
+    b.apply(&set(&["U1"], "Property0", Some("ACME"), None)).unwrap();
+    b.apply(&set(&["U1", "U1.1"], "Property0", None, Some("Supplier"))).unwrap();
+    assert_eq!(props(&b)["U1"].get("Supplier").map(String::as_str), Some("ACME"), "the text stays with the new name");
+    assert!(!props(&b)["U1"].contains_key("Property0"));
+    b.apply(&set(&["U1.1"], "Supplier", None, None)).unwrap();
+    assert!(!props(&b).contains_key("U1.1"), "an item left with none has no entry");
+    assert!(b.apply(&set(&["nope"], "X", Some("1"), None)).is_err(), "an unknown item refuses the command");
+    assert!(b.apply(&set(&["U1"], "", Some("1"), None)).is_err(), "a property needs a name");
+    let shape = Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.15), filled: false, start: Point { x: Nm::ZERO, y: Nm::ZERO }, end: Point { x: mm(1.0), y: Nm::ZERO } };
+    b.apply(&Cmd::AddShape { shape }).unwrap();
+    let sid = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+    b.apply(&set(&[&sid], "Note", Some("x"), None)).unwrap();
+    assert_eq!(props(&b)[&sid]["Note"], "x");
+    b.apply(&Cmd::DeleteShape { id: sid.clone() }).unwrap();
+    assert!(!props(&b).contains_key(&sid), "the graphic took its properties with it");
+    assert!(props(&b).contains_key("U1"), "the footprint's stay");
 }

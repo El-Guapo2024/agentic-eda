@@ -238,11 +238,12 @@ export function deleteCmd(board: BoardState, id: string): Cmd {
 }
 
 /**
- * `CONVERT_TOOL::CreateLines` for `convertToTracks`: segments and arcs become tracks of the same width, polygon-like sources a closed track
- * run around each outline (`fallbackWidthNm` for a source with no width). Every track needs a net in this model (`net`), where KiCad
- * leaves the new tracks without one. The sources go when `deleteOriginals`.
+ * `CONVERT_TOOL::CreateLines` for `convertToTracks`: segments and arcs become tracks of the same width (`handleGraphicSeg`), polygon-like sources a closed track
+ * run around each outline and hole (`addTrackChain`, `fallbackWidthNm` -- `PCB_TRACK`'s own 0.2 mm -- for a source with no width), all on `layer`. The tracks have
+ * no net (`new PCB_TRACK( parent )`: net 0, `""` here; UI-LEFT-3 P3-20). The sources go when `deleteOriginals` (`m_userSettings.m_DeleteOriginals`).
  */
-export function planConvertToTracks(board: BoardState, ids: readonly string[], layer: string, net: string, fallbackWidthNm: number, deleteOriginals: boolean): ConversionPlan {
+export function planConvertToTracks(board: BoardState, ids: readonly string[], layer: string, fallbackWidthNm: number, deleteOriginals: boolean): ConversionPlan {
+  const net = "";
   const tracks: CmdRouteTrack[] = [];
   const removedShapes: string[] = [];
   for (const id of ids) {

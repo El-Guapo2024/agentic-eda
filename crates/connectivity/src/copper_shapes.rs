@@ -6,32 +6,8 @@ use eda_drc::kimath::Shape;
 use eda_model::ir::Point;
 use eda_model::units::Nm;
 
-/// `EDA_SHAPE::SetPolyShape`: a polygon with holes is kept fractured (`if( GetPolyShape().HoleCount( ii ) ) GetPolyShape().Fracture()`), one outline with each hole
-/// bridged into it, so its `SHAPE_SIMPLE` (`makeEffectiveShapes`' `COutline( ii )`) leaves the holes out and its stroke runs round them and along the bridges
-/// (UI-LEFT-3 P3-16). The outline as it is when it has no hole. (`SHAPE_POLY_SET::Fracture`, as the board writer bridges it: `eda_kicad::pcb`.)
-pub fn fractured_ring(outline: &[Point], holes: &[Vec<Point>]) -> Vec<Point> {
-    let holes: Vec<&Vec<Point>> = holes.iter().filter(|h| h.len() >= 3).collect();
-    if holes.is_empty() || outline.len() < 3 {
-        return outline.to_vec();
-    }
-    use eda_clipper2::Point64;
-    let p64 = |c: &[Point]| c.iter().map(|p| Point64::new(p.x.get(), p.y.get())).collect::<Vec<Point64>>();
-    let ring = p64(outline);
-    let ccw = eda_clipper2::area(&ring) > 0.0;
-    let mut poly = vec![ring];
-    for h in holes {
-        let mut hole = p64(h);
-        // a hole runs against its outline (`SHAPE_POLY_SET`'s convention, which the fracture bridges by)
-        if (eda_clipper2::area(&hole) > 0.0) == ccw {
-            hole.reverse();
-        }
-        poly.push(hole);
-    }
-    let mut set = eda_shape_poly_set::ShapePolySet::new();
-    set.add_polygon(poly);
-    set.fracture(false);
-    set.polys.first().and_then(|p| p.first()).map(|r| r.iter().map(|p| Point { x: Nm::new(p.x), y: Nm::new(p.y) }).collect()).unwrap_or_else(|| outline.to_vec())
-}
+/// [`eda_drc::kimath::fractured_ring`], where the DRC's own zone shapes take it too (UI-LEFT-3 P3-21).
+pub use eda_drc::kimath::fractured_ring;
 
 /// `PCB_SHAPE::GetEffectiveShape`: [`eda_drc::board::effective_shapes`] of the graphic, a polygon with holes (`holes`, `ShapeStyle::holes`) taken as its
 /// [`fractured_ring`].

@@ -120,6 +120,14 @@ impl Refs {
             note(&self.shapes, dr.shapes.iter().map(|s| s.id()).collect());
             note(&self.texts, dr.texts.iter().map(|t| t.id.as_str()).collect());
             note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
+            // the other kinds the groups name too, which hold custom properties as well (`crate::custom_props_io`)
+            note(&self.barcodes, dr.barcodes.iter().map(|b| b.id.as_str()).collect());
+            note(&self.board_items.text_boxes, dr.board_items.text_boxes.iter().map(|t| t.id.as_str()).collect());
+            note(&self.board_items.images, dr.board_items.images.iter().map(|i| i.id.as_str()).collect());
+            note(&self.board_items.points, dr.board_items.points.iter().map(|p| p.id.as_str()).collect());
+            note(&self.board_items.grid_items, dr.board_items.grid_items.iter().map(|g| g.id.as_str()).collect());
+            note(&self.board_items.drill_maps, dr.board_items.drill_maps.iter().map(|m| m.id.as_str()).collect());
+            note(&self.tables, dr.tables.iter().map(|t| t.id.as_str()).collect());
         }
         out
     }

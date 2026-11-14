@@ -369,6 +369,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     for (uuid, id) in refs.item_ids(&design) {
         notes.item_ids.entry(uuid).or_insert(id);
     }
+    // `(custom_property "name" "text")` of the items, by their ids (KiCad 25ec2335 `EDA_ITEM::m_customProperties`)
+    let custom = crate::custom_props_io::read(root, &notes.item_ids);
+    if !custom.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).custom_properties = custom;
+    }
     // The unread generators (KiCad 10's `via_stack`), their members named by our ids (`DrawingsSection::raw_generators`).
     let ids_by_uuid: BTreeMap<String, String> = refs.item_ids(&design).into_iter().collect();
     if let Some(dr) = design.drawings.as_mut() {
@@ -2666,6 +2671,8 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     const OWN: &[&str] = &[
         "layer", "uuid", "tstamp", "tedit", "at", "transform", "locked", "attr", "clearance", "zone_connect", "solder_mask_margin", "thermal_width", "thermal_gap", "net_tie_pad_groups", "fp_line", "fp_arc",
         "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "units", "path", "embedded_fonts", "embedded_files",
+        // the custom properties are the design's (`DrawingsSection::custom_properties`, `crate::custom_props_io`)
+        "custom_property",
     ];
     // A file from before footprint fields (20230620) held the symbol's keywords and description as properties of no place of their own (`parseFOOTPRINT_unchecked`,
     // `case T_property`, `if( m_requiredVersion < 20230620 )`): `ki_keywords` and `ki_locked` are dropped, `ki_description` is the text of the Description field, and a field
@@ -2847,6 +2854,8 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
         "clearance", "zone_connect", "thermal_bridge_width", "thermal_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "uuid", "tstamp",
         // The padstack is the pad's own (`Pad::ext.stack`): its layers and what becomes of the layers nothing connects to.
         "padstack", "remove_unused_layers", "keep_end_layers",
+        // the custom properties are the design's (`crate::custom_props_io`)
+        "custom_property",
     ];
     info.tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.
@@ -2887,7 +2896,7 @@ fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, 
     names.sort();
     names.dedup();
     let layers = (names != ["B.Mask", "F.Mask"]).then_some(names);
-    const OWN: &[&str] = &["at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "clearance", "uuid", "tstamp", "options", "primitives"];
+    const OWN: &[&str] = &["at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "clearance", "uuid", "tstamp", "options", "primitives", "custom_property"];
     let tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).filter(|l| {
         // In pre-9.0 files a margin of 0 meant "inherit" (`parsePAD`); written to a new file it would be a margin of its own.
         !(file_version <= 20240201 && matches!(sexpr::tag(l), Some("solder_mask_margin") | Some("solder_paste_margin") | Some("solder_paste_margin_ratio")) && sexpr::num(l, 1) == Some(0.0))

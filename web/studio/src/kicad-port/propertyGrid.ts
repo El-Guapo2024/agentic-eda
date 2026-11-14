@@ -37,6 +37,8 @@ export interface GridGroup {
   name: string;
   caption: string;
   rows: GridRow[];
+  /** KiCad 25ec2335's "Custom Properties" group (kicad-port/pcbCustomProperties.ts): its button adds a row, a row's name can be edited and it can be removed. */
+  custom?: boolean;
 }
 
 export interface GridModel {

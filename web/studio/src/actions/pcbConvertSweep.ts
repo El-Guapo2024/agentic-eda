@@ -7,7 +7,7 @@ import { createElement } from "react";
 import type { TextGraphicsDefaults } from "../api/types";
 import { lineThicknessNm } from "../kicad-port/layerDefaults";
 import { activeLayerName } from "../kicad-port/layerPresets";
-import type { BoardState, Cmd } from "../api/types";
+import type { Cmd } from "../api/types";
 import { convertPolys } from "../api/client";
 import {
   DEFAULT_CONVERT_SETTINGS,
@@ -29,18 +29,18 @@ import {
 } from "../kicad-port/pcbConvert";
 import { padById } from "../kicad-port/pcbItems";
 import { lockedForTools } from "../kicad-port/pcbTransform";
-import { ConversionSettingsDialog, CreateTracksDialog, OutsetItemsDialog } from "../components/PcbConvertDialogs";
+import { ConversionSettingsDialog, OutsetItemsDialog } from "../components/PcbConvertDialogs";
+import { SelectLayerDialog } from "../components/PcbRouterDialogs";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { showError } from "../components/library/libraryDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
 /** Remembered between invocations, like the C++ `m_userSettings` and `static` outset parameters. */
-const last: { convert: ConvertSettings; outset: OutsetParams | null; tracks: { layer: string; net: string; deleteOriginals: boolean } } = {
+const last: { convert: ConvertSettings; outset: OutsetParams | null } = {
   convert: { ...DEFAULT_CONVERT_SETTINGS },
   // `static outset_params_pcb_edit`, made on the first use with the board's Edge.Cuts line thickness (`GetLineThickness( Edge_Cuts )`).
   outset: null,
-  tracks: { layer: "", net: "", deleteOriginals: true },
 };
 
 /** What the zone dialog's "Conversion Settings" box chose, kept for the next conversion as `m_userSettings` is (Create Zone / Rule Area from Selection). */
@@ -51,13 +51,6 @@ export function rememberZoneConversion(chosen: Pick<ConvertSettings, "strategy" 
 /** `bds.m_LineThickness[ bds.GetLayerClass( layer ) ]`: the board's Text & Graphics default for the layer's class, KiCad's own table (copper 0.2 mm, silkscreen / fab / other 0.1 mm, edges and courtyard 0.05 mm) when the backend sends none. */
 export function layerLineWidthNm(layer: string, defaults?: TextGraphicsDefaults): number {
   return lineThicknessNm(defaults, layer);
-}
-
-/** Every net a pad of the board carries (the nets a new track can belong to). */
-function boardNets(board: BoardState): string[] {
-  const set = new Set<string>();
-  for (const p of board.parts) for (const pad of p.pads ?? []) if (pad.net) set.add(pad.net);
-  return [...set].sort();
 }
 
 export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCtx): void {
@@ -175,31 +168,24 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
         return s ? s.kind === "segment" || s.kind === "arc" || s.kind === "polygon" || s.kind === "rect" : !!api.zoneById(id);
       }, true);
       if (ids.length === 0 || !convertAvailability(board, ids).tracks) return;
-      const nets = boardNets(board);
-      if (nets.length === 0) {
-        toast("There is no net to give the new tracks.", "error");
+      // `m_userSettings.m_DeleteOriginals`, the setting the other conversions' dialog keeps: Create Tracks has no dialog of its own. The tracks have no net
+      // (`new PCB_TRACK( parent )`) and the selection is cleared when the sources go (`m_selectionTool->ClearSelection()`); one commit, "Create Lines".
+      const make = (layer: string) => {
+        const plan = planConvertToTracks(board, ids, layer, DEFAULT_CONVERTED_TRACK_WIDTH_NM, last.convert.deleteOriginals);
+        if (plan.empty) return;
+        void applyEdit(plan.cmds, plan.removed, null, { keep: !last.convert.deleteOriginals, selectCreated: false });
+      };
+      const active = destLayer();
+      // `targetLayer = m_frame->GetActiveLayer()`; `if( !IsCopperLayer( targetLayer ) ) targetLayer = frame->SelectOneLayer( F_Cu, LSET::AllNonCuMask() )`, a cancel
+      // makes nothing (UI-LEFT-3 P3-20)
+      if (active && board.layers.includes(active)) {
+        make(active);
         return;
       }
-      const active = destLayer();
-      // `if( !IsCopperLayer( targetLayer ) ) targetLayer = frame->SelectOneLayer( F_Cu, .. )`: the active copper layer, else F.Cu to start the choice from.
-      const layer = active && board.layers.includes(active) ? active : (board.layers[0] ?? "F.Cu");
+      const copper = board.layers;
       openSweepDialog({
         kind: "element",
-        element: createElement(CreateTracksDialog, {
-          nets,
-          copperLayers: board.layers,
-          layer,
-          net: nets.includes(last.tracks.net) ? last.tracks.net : (nets[0] ?? ""),
-          // `m_userSettings.m_DeleteOriginals`: the one setting Create Lines and the polygon conversions share.
-          deleteOriginals: last.convert.deleteOriginals,
-          onOk: (v: { layer: string; net: string; deleteOriginals: boolean }) => {
-            last.tracks = v;
-            last.convert = { ...last.convert, deleteOriginals: v.deleteOriginals };
-            const plan = planConvertToTracks(board, ids, v.layer, v.net, DEFAULT_CONVERTED_TRACK_WIDTH_NM, v.deleteOriginals);
-            if (plan.empty) return;
-            void applyEdit(plan.cmds, plan.removed, null, { keep: !v.deleteOriginals, selectCreated: false });
-          },
-        }),
+        element: createElement(SelectLayerDialog, { layers: copper, copper, current: copper[0] ?? "F.Cu", onPick: (layer: string) => make(layer), onCancel: () => {} }),
       });
     })
   );

@@ -669,7 +669,9 @@ impl<'a> RuleBoard<'a> {
         it.layer = Some(z.layer.clone());
         it.outline = z.outline.clone();
         it.holes = z.holes.clone();
-        it.shapes = vec![Shape::Polygon { pts: z.outline.clone() }];
+        // `ZONE::Outline()`, its holes with it (`GetEffectiveShape` of a rule area; the studio's stand-in for a pour's fill): the holes bridged into the outline
+        // ([`crate::kimath::fractured_ring`]), so an item in a hole is clear of the zone (UI-LEFT-3 P3-21)
+        it.shapes = vec![Shape::Polygon { pts: crate::kimath::fractured_ring(&z.outline, &z.holes) }];
         it.rule_area = z.is_rule_area;
         it.keepout = z.is_rule_area && (z.keepout_tracks || z.keepout_vias || z.keepout_pads || z.keepout_copper_pour || z.keepout_footprints);
         it.teardrop = z.teardrop;

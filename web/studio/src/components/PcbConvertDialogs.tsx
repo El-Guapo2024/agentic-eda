@@ -4,7 +4,6 @@
 //                              object's line width / centerlines / bounding hull with its gap and width) and "Delete
 //                              source objects after conversion"; the options a given conversion does not use are hidden.
 //   OutsetItemsDialog          DIALOG_OUTSET_ITEMS (pcbnew/dialogs/dialog_outset_items.cpp).
-//   CreateTracksDialog         the layer prompt of "Create Tracks from Selection" plus the net this model's tracks need.
 import { useState } from "react";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 import type { ConvertSettings, ConvertStrategy, OutsetParams } from "../kicad-port/pcbConvert";
@@ -149,60 +148,6 @@ export function OutsetItemsDialog({ params, layers, layerDefaultWidth, onOk }: {
         Delete source items after outset
       </label>
       {error && <div style={{ color: "#ef5b5b", fontSize: 11, marginTop: 6 }}>{error}</div>}
-    </DialogShell>
-  );
-}
-
-export function CreateTracksDialog({
-  nets,
-  copperLayers,
-  layer,
-  net,
-  deleteOriginals,
-  onOk,
-}: {
-  nets: readonly string[];
-  copperLayers: readonly string[];
-  layer: string;
-  net: string;
-  deleteOriginals: boolean;
-  onOk: (v: { layer: string; net: string; deleteOriginals: boolean }) => void;
-}) {
-  const [l, setL] = useState(layer);
-  const [n, setN] = useState(net || nets[0] || "");
-  const [del, setDel] = useState(deleteOriginals);
-  const ok = !!n && !!l;
-  const submit = () => {
-    if (!ok) return;
-    closeSweepDialog();
-    onOk({ layer: l, net: n, deleteOriginals: del });
-  };
-  return (
-    <DialogShell title="Create Tracks from Selection" width={380} onCancel={closeSweepDialog} onOk={submit} okDisabled={!ok}>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 6 }}>
-        <span style={{ minWidth: 90 }}>Copper layer:</span>
-        <select value={l} onChange={(e) => setL(e.target.value)} style={{ flex: 1 }}>
-          {copperLayers.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 6 }} title="Every track in this board model belongs to a net.">
-        <span style={{ minWidth: 90 }}>Net:</span>
-        <select value={n} onChange={(e) => setN(e.target.value)} style={{ flex: 1 }}>
-          {nets.map((x) => (
-            <option key={x} value={x}>
-              {x}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="filter-row">
-        <input type="checkbox" checked={del} onChange={(e) => setDel(e.target.checked)} />
-        Delete source objects after conversion
-      </label>
     </DialogShell>
   );
 }

@@ -478,6 +478,12 @@ pub(crate) fn drop_job_files(dir: &Path, files: Vec<String>) -> Vec<String> {
     kept
 }
 
+/// A copper layer the board lacks (`LSET::AllCuMask() & ~GetEnabledLayers()`, the inner layers from the last), which a plot skips
+/// (`copperLayerShouldBeSkipped`); none on a board of all 32.
+pub(crate) fn absent_copper_layer(board_layers: &[String]) -> Option<String> {
+    (1..=30).rev().map(|i| format!("In{i}.Cu")).chain(["F.Cu".to_string(), "B.Cu".to_string()]).find(|l| !board_layers.iter().any(|b| b == l))
+}
+
 /// `BOARD::GetLayerName` as `BuildPlotFileName` puts it in a file name: the name the board gives the layer, else KiCad's standard one
 /// (`F.Silkscreen`), its dots made underscores.
 fn layer_file_suffix(model: &eda_model::ConstraintModel, layer: &str) -> String {
@@ -489,9 +495,13 @@ fn layer_file_suffix(model: &eda_model::ConstraintModel, layer: &str) -> String 
 /// plot settings (`applyPlotSettings`, the `set_plot_settings` verb): `{"format": "gerber"|"ps"|"svg"|"dxf"|"pdf"|"png", "layers": [..],
 /// "check_zones": bool, ..}` plus the [`PlotSession`] values. An omitted format is the board's `outputformat`, omitted layers its selection.
 /// "Check zone fills before plotting" runs KiCad's filler first where a zone has no current fill (`ZONE_FILLER_TOOL::CheckAllZones`,
-/// `crate::fill_api::ensure_filled`). Writes into the board's output folder ([`board_output_folder`]). "No layer selected, Nothing to plot"
-/// when no layer is checked (KiCad's test is on the stored selection, which keeps the copper layers the board lacks, so on most boards it
-/// never fires and the plot writes nothing; here the checked layers are tested).
+/// `crate::fill_api::ensure_filled`). Writes into the board's output folder ([`board_output_folder`]).
+///
+/// No layer checked: KiCad's selection keeps the copper layers the board lacks (`applyPlotSettings`: `selectedLayers | disabledCopperLayers`), so
+/// "No layer selected, Nothing to plot" comes only on a board of all 32 copper layers; on any other `PCB_PLOTTER::Plot` skips those layers
+/// (`copperLayerShouldBeSkipped`), plots nothing and says "Done.", and a Gerber plot still writes its job file when "Generate Gerber job file" is
+/// ticked (`if( jobfile_writer && m_plotOpts.GetCreateGerberJobFile() )`, a job of no file): here kicad-cli is asked for one copper layer the
+/// board lacks ([`absent_copper_layer`]), which it skips the same way, so the job file it writes is the dialog's (UI-LEFT-3 P3-26).
 pub fn plot(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let (design, model) = match board::load(dir) {
@@ -510,12 +520,26 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
         Some(a) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
         None => board_plot_layers(&plot, &model.board.layers),
     };
-    if layers.is_empty() {
-        return err("No layer selected, Nothing to plot");
-    }
+    let absent = if layers.is_empty() {
+        let Some(absent) = absent_copper_layer(&model.board.layers) else { return err("No layer selected, Nothing to plot") };
+        Some(absent)
+    } else {
+        None
+    };
     let out_dir = match board_output_folder(dir, &plot, format.kind()) {
         Ok(d) => d,
         Err(why) => return err(why),
+    };
+    let layers = match absent {
+        // `EnsureFileDirectoryExists` has made the folder; the plot writes nothing but a Gerber job file
+        Some(absent) => {
+            let _ = std::fs::create_dir_all(&out_dir);
+            if format != PlotFormat::Gerber || !plot.flag("creategerberjobfile").unwrap_or(true) {
+                return json!({ "ok": true, "files": [], "message": "Done.", "format": format.kind() });
+            }
+            vec![absent]
+        }
+        None => layers,
     };
     if req.get("check_zones").and_then(Value::as_bool).unwrap_or(false) {
         if let Err(why) = crate::fill_api::ensure_filled(dir) {
@@ -528,9 +552,12 @@ pub fn plot(dir: &Path, body: &[u8]) -> Value {
     // Page Settings' drawing sheet file (`pcbnew.page_layout_descr_file`), which the plot's sheet is drawn from (`PCBNEW_JOBS_HANDLER`'s `--drawing-sheet` override)
     args.extend(crate::drawing_sheet_api::plot_args(dir, design.drawings.as_ref().map(|d| &d.embedded), design.drawings.as_ref().and_then(|d| d.drawing_sheet.as_deref())));
     // DXF with "Plot graphic items using their contours" ticked: the polygon mode alone, the graphic items filled, as the dialog plots it -- which
-    // `pcb export dxf --use-contours` cannot say (it sketches the graphic items too), so the job goes through kicad-cli's jobset runner
-    let by_job = format == PlotFormat::Dxf && args.iter().any(|a| a == "--use-contours");
-    let mut v = reply(if by_job { kicad_engine::export_dxf_job_into(dir, &args, &out_dir) } else { kicad_engine::export_into(dir, format.kind(), &args, &out_dir) });
+    // `pcb export dxf --use-contours` cannot say (it sketches the graphic items too) -- and DXF with "Use KiCad font to plot text" unticked (the text as
+    // DXF text, `PLOT_TEXT_MODE::NATIVE`; `pcb export dxf` has no flag for it, the job has `use_kicad_font`, UI-LEFT-3 P3-25): the job goes through
+    // kicad-cli's jobset runner. (`dxfusepcbnewfont` is ticked whenever the contours box is: `applyPlotSettings` forces `DEFAULT` while the font box is disabled.)
+    let kicad_font = plot.flag("dxfusepcbnewfont").unwrap_or(true) || args.iter().any(|a| a == "--use-contours");
+    let by_job = format == PlotFormat::Dxf && (args.iter().any(|a| a == "--use-contours") || !kicad_font);
+    let mut v = reply(if by_job { kicad_engine::export_dxf_job_into(dir, &args, kicad_font, &out_dir) } else { kicad_engine::export_into(dir, format.kind(), &args, &out_dir) });
     if v["ok"].as_bool().unwrap_or(false) {
         let mut files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
         if format == PlotFormat::Gerber && !plot.flag("creategerberjobfile").unwrap_or(true) {
@@ -887,7 +914,11 @@ pub fn pos(dir: &Path, body: &[u8]) -> Value {
         Ok(d) => d,
         Err(why) => return err(why),
     };
-    let mut v = match kicad_engine::export_pos_into(dir, &args, single_file, &out_dir) {
+    // "Exclude all footprints with the Exclude from BOM flag set" (`m_excludeBOM`, `PLACE_FILE_EXPORTER`'s and `CreatePlaceFile`'s `aExcludeBOM`, Gerber X3
+    // too: KiCad 25ec2335 `JOB_EXPORT_PCB_POS::FormatSupportsFilter`): `pcb export pos` has no flag for it, the jobset runner's `pcb_export_pos` job has
+    // (`exclude_bom`), so a placement that asks for it goes through the runner (UI-LEFT-3 P3-27)
+    let exported = if flag("exclude_bom") { kicad_engine::export_pos_job_into(dir, &args, single_file, true, &out_dir) } else { kicad_engine::export_pos_into(dir, &args, single_file, &out_dir) };
+    let mut v = match exported {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };

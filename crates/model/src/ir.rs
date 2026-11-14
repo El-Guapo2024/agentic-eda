@@ -2994,6 +2994,12 @@ pub struct DrawingsSection {
     /// `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub legacy_teardrops: bool,
+    /// `EDA_ITEM::m_customProperties` (KiCad 25ec2335, `std::map<wxString, wxString>`): the "Custom Properties" of a board item -- a name and a text, as many as
+    /// the Properties panel's "Add Custom Property" made (`PCB_PROPERTIES_PANEL::addBlankCustomProperty`) or the file held (`(custom_property "name" "text")`,
+    /// `KICAD_FORMAT::FormatCustomProperties`), by the item's id (a footprint's reference, a pad's `REF.NUM`, a graphic's, a text's, ..). An entry whose item is
+    /// gone goes with it (`Board::tidy_custom_properties`). Additive: absent reads as "none" (UI-LEFT-3, the pcb-props leftovers).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub custom_properties: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     /// The stroke width of the lines of `placement.outline` when they are written as `gr_line`s on `Edge.Cuts` (an imported board whose outline is one closed loop of lines
     /// of one width keeps the width: kicad-cli measures edge clearances from the drawn line, and plots it at that width). `None` is the width KiCad gives a line that
     /// says none. Additive: absent in an older `design.json` reads as `None`. Lives here for the reason `rules` does.

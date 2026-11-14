@@ -1856,6 +1856,8 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
         // `BOARD_ITEM::IsLocked()` for every kind at once (a part ref or a
         // track/via/zone/shape/text id) -- see `DrawingsSection::locked_ids`.
         "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
+        // KiCad 25ec2335's custom properties of the items (`EDA_ITEM::m_customProperties`), by item id: the Properties panel's "Custom Properties" group
+        "custom_properties": design.drawings.as_ref().map(|d| json!(d.custom_properties)).unwrap_or_else(|| json!({})),
         // The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`), `[x, y]` um, or null at (0, 0).
         "aux_origin": design.drawings.as_ref().and_then(|d| d.aux_origin).map(|p| json!([p.x, p.y])),
         // The board's plot settings as the Plot and Generate Drill Files dialogs start from them (`DIALOG_PLOT::init_Dialog`,
