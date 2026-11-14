@@ -139,13 +139,24 @@ pub(crate) struct TextAttrsEdit {
     pub thickness_nm: Option<Nm>,
 }
 
-/// `EDA_TEXT::SetBold` of a stroke font's text: the pen is set anew for the new weight, so the text's own pen (Auto Thickness unticked) goes.
-pub(crate) fn drop_own_pen(sch: &mut eda_model::ir::SchematicSection, id: &str) {
-    if let Some(a) = sch.extras.text_attrs.get_mut(id) {
-        a.thickness_nm = None;
-        if a.is_default() {
-            sch.extras.text_attrs.remove(id);
-        }
+/// `EDA_TEXT::SetBold( bold )` on the free text, label or text box `id` (`TextAttrs::set_bold_pen`): the stroke font's pen set anew for the weight, its size
+/// read off the item.
+pub(crate) fn rebold_pen(sch: &mut eda_model::ir::SchematicSection, id: &str, bold: bool) {
+    let size = if let Some(t) = sch.texts.iter().find(|t| t.id == id) {
+        t.size_nm
+    } else if sch.labels.iter().any(|l| l.id == id) {
+        sch.extras.label_looks.get(id).copied().unwrap_or_default().text_size_nm()
+    } else if let Some(eda_model::sch_extras::SchGraphicKind::TextBox { size_nm, .. }) = sch.extras.graphics.iter().find(|g| g.id == id).map(|g| &g.shape) {
+        *size_nm
+    } else {
+        return;
+    };
+    let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
+    a.set_bold_pen(bold, size);
+    if a.is_default() {
+        sch.extras.text_attrs.remove(id);
+    } else {
+        sch.extras.text_attrs.insert(id.to_string(), a);
     }
 }
 
@@ -253,7 +264,7 @@ impl<'a> Board<'a> {
         }
         // `SetBold`: the stroke font's pen set anew for the weight
         if now.bold != before.bold {
-            drop_own_pen(sch, id);
+            rebold_pen(sch, id, now.bold);
         }
         if let Some(auto) = look.auto_rotate {
             now.auto_rotate = auto && auto_supported;
@@ -274,11 +285,14 @@ impl<'a> Board<'a> {
             if scene.auto_rotate_item(crate::sch_scene::Item::Label(index)) {
                 let new_spin = scene.sch.extras.label_spins.get(id).copied().unwrap_or(before_spin);
                 if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
+                    // `SetSpinStyle`: the justification the spin says, a centred text or another vertical one gone
+                    sch.extras.label_justify.remove(id);
                     changed = true;
                 }
             }
         } else if let Some(new_spin) = spin {
             if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
+                sch.extras.label_justify.remove(id);
                 changed = true;
             }
         }
@@ -456,9 +470,10 @@ impl<'a> Board<'a> {
         for id in ids {
             let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
             if let Some(b) = edit.bold {
-                // `EDA_TEXT::SetBold`: a stroke font's pen is set anew for the weight (the text's own pen goes)
+                // `EDA_TEXT::SetBold`: a stroke font's pen is set anew for the weight
                 if a.bold != b {
-                    a.thickness_nm = None;
+                    let size = sch.texts.iter().find(|t| &t.id == id).map(|t| t.size_nm).unwrap_or(eda_model::ir::DEFAULT_FIELD_SIZE_NM);
+                    a.set_bold_pen(b, size);
                 }
                 a.bold = b;
             }

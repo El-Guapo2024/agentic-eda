@@ -24,7 +24,12 @@ import { LABEL_TOOL_OF, labelsOfEntry, type CarriedLabel } from "../kicad-port/s
 import { carryItem, changeCarried } from "../actions/schPlaceActions";
 import { getSchCarry, setSchCarry, useSchCarry } from "../state/schCarryStore";
 import { inferSpin } from "./schematic/labelShape";
-import type { LabelShape } from "../api/types";
+import type { LabelShape, Schematic } from "../api/types";
+import type { SchColor } from "../api/schEditTypes";
+import { LabelFieldsGrid, labelRowsOk } from "./LabelFieldsGrid";
+import { labelFieldEditOf, newLabelGridRow, type LabelGridRow } from "../kicad-port/labelFieldsGrid";
+import { labelFieldDisplayName } from "../kicad-port/schProperties";
+import { colorCell, colorOfCell, DEFAULT_FONT_NAME } from "../kicad-port/symbolPropsDialog";
 import { fetchExistingLabels } from "../api/client";
 
 const SHAPES: LabelShape[] = ["input", "output", "bidirectional", "tri_state", "passive"];
@@ -68,6 +73,45 @@ export function useExistingLabels(kind: "local" | "global" | "hierarchical" | nu
   return names;
 }
 
+/** Whether a global label's Sheet References are shown (Schematic Setup's, as a global label on the sheet shows them; off when there is none). */
+function isrShown(sch: Schematic | null | undefined): boolean {
+  return !!sch?.labels.some((l) => l.fields?.some((f) => f.intersheet_refs && f.visible));
+}
+
+/**
+ * The grid's rows a new label starts with (`DIALOG_LABEL_PROPERTIES` on the label `createNewLabel` made): a global label's Sheet References (its mandatory field,
+ * `SCH_GLOBALLABEL::SCH_GLOBALLABEL`), then the fields the label in the hand has when its Properties are open again.
+ */
+function newLabelRows(scope: "local" | "global" | "hierarchical", from: CarriedLabel | null, shown: boolean): LabelGridRow[] {
+  const rows: LabelGridRow[] = [];
+  if (scope === "global") {
+    const isr = newLabelGridRow(0, { name: "Intersheetrefs", text: "${INTERSHEET_REFS}", visible: shown, italic: false, ...(from?.intersheetRefs ?? {}) });
+    rows.push({ ...isr, isr: true, name: "Intersheetrefs", text: "${INTERSHEET_REFS}", visible: shown, wasLook: newLabelGridRow(0, { name: "", text: "", visible: true, italic: false }).look });
+  }
+  for (const [i, f] of (from?.fields ?? []).entries()) {
+    const r = newLabelGridRow(i + 1, f);
+    const look = from?.fieldLooks?.[f.name];
+    rows.push({ ...r, name: labelFieldDisplayName(f.name), look: { ...r.look, ...(look?.font ? { font: look.font } : {}), ...(look?.color ? { color: colorCell(look.color) } : {}) } });
+  }
+  return rows;
+}
+
+/** What the grid gives the label in the hand (`CarriedLabel`'s fields, Sheet References' looks and fonts), for `place_label` to make it with. */
+function carriedFieldsOf(rows: readonly LabelGridRow[]): Pick<CarriedLabel, "fields" | "intersheetRefs" | "fieldLooks"> {
+  const own = rows.filter((r) => !r.isr).map((r) => ({ ...labelFieldEditOf(r), name: r.name === "Net Class" ? "Netclass" : r.name }));
+  const isr = rows.find((r) => r.isr);
+  const looks: Record<string, { font?: string | null; color?: SchColor | null }> = {};
+  for (const r of rows) {
+    const name = r.isr ? "Intersheetrefs" : r.name === "Net Class" ? "Netclass" : r.name.trim();
+    const font = r.look.font && r.look.font !== DEFAULT_FONT_NAME ? r.look.font : null;
+    const color = r.look.color ? colorOfCell(r.look.color) : null;
+    if (name && (font || color)) looks[name] = { ...(font ? { font } : {}), ...(color ? { color } : {}) };
+  }
+  const isrLook = isr ? { ...labelFieldEditOf(isr), name: "Intersheetrefs", text: "" } : null;
+  const isrPlain = !isrLook || (!isrLook.bold && !isrLook.italic && !isrLook.name_shown && !isrLook.no_autoplace && (isrLook.size_nm ?? 1_270_000) === 1_270_000);
+  return { ...(own.length > 0 ? { fields: own } : {}), ...(isrPlain ? {} : { intersheetRefs: isrLook }), ...(Object.keys(looks).length > 0 ? { fieldLooks: looks } : {}) };
+}
+
 /** The label in the hand whose Properties are open, if they are. */
 function carriedBeingEdited(): CarriedLabel | null {
   const c = getSchCarry();
@@ -91,6 +135,8 @@ export function LabelDialog() {
   const [size, setSize] = useState(nmToMm(DEFAULT_SIZE_NM));
   const [bold, setBold] = useState(false);
   const [italic, setItalic] = useState(false);
+  // the fields grid (`m_grid`, `FIELDS_GRID_TABLE`, components/LabelFieldsGrid.tsx): a new global label's Sheet References, and the fields Add Field gives
+  const [rows, setRows] = useState<LabelGridRow[]>([]);
 
   // Seeded on every opening, not on every keystroke: from the label in the hand, or from what the tool last placed.
   useEffect(() => {
@@ -105,6 +151,7 @@ export function LabelDialog() {
     setSize(nmToMm(from ? (from.sizeNm ?? DEFAULT_SIZE_NM) : (state.schematic?.setup?.default_text_size_nm ?? DEFAULT_SIZE_NM)));
     setBold(from?.bold ?? last.bold);
     setItalic(from?.italic ?? last.italic);
+    setRows(newLabelRows(pending.scope, from, isrShown(state.schematic)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.at[0], pending?.at[1], pending?.scope]);
 
@@ -130,13 +177,13 @@ export function LabelDialog() {
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
   const sizeOk = sizeNm !== null && sizeNm >= 10_000 && sizeNm <= 1_000_000_000;
-  const canAdd = text.trim().length > 0 && sizeOk;
+  const canAdd = text.trim().length > 0 && sizeOk && labelRowsOk(rows);
 
   const submit = () => {
     if (!canAdd || sizeNm === null) return;
     // With Auto the label has the spin of what it was made on (`AutoRotateItem` in `TransferDataFromWindow`), and keeps it while it rides
     const madeSpin: LabelSpinName | "" = autoOn && autoSpin ? autoSpin : spin;
-    const base: CarriedLabel = { kind: "label", scope: pending.scope, text, shape, spin: madeSpin, sizeNm: sizeNm === DEFAULT_SIZE_NM ? null : sizeNm, bold, italic, autoRotate: autoOn };
+    const base: CarriedLabel = { kind: "label", scope: pending.scope, text, shape, spin: madeSpin, sizeNm: sizeNm === DEFAULT_SIZE_NM ? null : sizeNm, bold, italic, autoRotate: autoOn, ...carriedFieldsOf(rows) };
     dispatch({ type: "SET_SCH_LABEL_PENDING", pending: null });
     if (editing) {
       changeCarried(base);
@@ -151,7 +198,7 @@ export function LabelDialog() {
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 360 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 560 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>{TITLE[pending.scope]}</span>
         </div>
@@ -244,6 +291,7 @@ export function LabelDialog() {
               </label>
             </span>
           </div>
+          <LabelFieldsGrid rows={rows} setRows={setRows} placeless fontsId="label-dialog-fonts" />
         </div>
         <div className="dialog-footer">
           <button onClick={close}>Cancel</button>

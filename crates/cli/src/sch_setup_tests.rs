@@ -389,7 +389,7 @@ fn slow_kicad_cli_lays_labels_out_by_the_formatting_ratios() {
     let dir = mcu30_board("slow_label_ratios");
     let pt = |v: &serde_json::Value| (v[0].as_f64().unwrap(), v[1].as_f64().unwrap());
     let place = |net: &str, at: (f64, f64), kind: eda_model::ir::LabelKind| {
-        step(&dir, Cmd::SchEdit(eda_ops::sch_edit::SchCmd::PlaceLabel { net: net.into(), at: eda_model::ir::Point { x: mm(at.0), y: mm(at.1) }, kind, spin: Some(eda_model::sch_extras::LabelSpin::Right), size_nm: None, bold: None, italic: None, auto_rotate: None }), false, "test").unwrap();
+        step(&dir, Cmd::SchEdit(eda_ops::sch_edit::SchCmd::PlaceLabel { net: net.into(), at: eda_model::ir::Point { x: mm(at.0), y: mm(at.1) }, kind, spin: Some(eda_model::sch_extras::LabelSpin::Right), size_nm: None, bold: None, italic: None, auto_rotate: None, fields: None, intersheet_refs: None, field_looks: None }), false, "test").unwrap();
     };
     let (local, global) = (&fixture["local"], &fixture["global"]);
     place(local["text"].as_str().unwrap(), pt(&local["at"]), eda_model::ir::LabelKind::Local);

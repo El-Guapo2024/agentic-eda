@@ -77,7 +77,7 @@ fn ok(b: &mut Board, cmd: SchCmd) {
 }
 
 fn place(net: &str, at: Point, kind: LabelKind, auto: Option<bool>, spin: Option<LabelSpin>) -> SchCmd {
-    SchCmd::PlaceLabel { net: net.into(), at, kind, spin, size_nm: None, bold: None, italic: None, auto_rotate: auto }
+    SchCmd::PlaceLabel { net: net.into(), at, kind, spin, size_nm: None, bold: None, italic: None, auto_rotate: auto, fields: None, intersheet_refs: None, field_looks: None }
 }
 
 fn glob(shape: LabelShape) -> LabelKind {
@@ -303,14 +303,14 @@ fn place_label_with_auto_on_a_pin_reads_away_from_the_symbol() {
 fn place_label_applies_the_look_and_refuses_what_the_dialog_would() {
     let m = ConstraintModel::default();
     let mut b = board(section(), &m);
-    ok(&mut b, SchCmd::PlaceLabel { net: "VBUS".into(), at: p(Nm::ZERO, Nm::ZERO), kind: LabelKind::Local, spin: Some(LabelSpin::Left), size_nm: Some(mm(2.0)), bold: Some(true), italic: None, auto_rotate: None });
+    ok(&mut b, SchCmd::PlaceLabel { net: "VBUS".into(), at: p(Nm::ZERO, Nm::ZERO), kind: LabelKind::Local, spin: Some(LabelSpin::Left), size_nm: Some(mm(2.0)), bold: Some(true), italic: None, auto_rotate: None, fields: None, intersheet_refs: None, field_looks: None });
     let sch = sch_of(&b);
     let look = sch.extras.label_looks[&sch.labels[0].id];
     assert_eq!((look.size_nm, look.bold, look.italic, look.auto_rotate), (mm(2.0), true, false, false));
     assert_eq!(sch.extras.label_spins[&sch.labels[0].id], LabelSpin::Left);
     // an empty name, a text too small and "Auto" on a plain label are refused, and nothing is placed
     assert_eq!(err(&mut b, place("  ", p(Nm::ZERO, Nm::ZERO), LabelKind::Local, None, None)), "ops_bad_label");
-    assert_eq!(err(&mut b, SchCmd::PlaceLabel { net: "X".into(), at: p(Nm::ZERO, Nm::ZERO), kind: LabelKind::Local, spin: None, size_nm: Some(um(5.0)), bold: None, italic: None, auto_rotate: None }), "ops_bad_text_size");
+    assert_eq!(err(&mut b, SchCmd::PlaceLabel { net: "X".into(), at: p(Nm::ZERO, Nm::ZERO), kind: LabelKind::Local, spin: None, size_nm: Some(um(5.0)), bold: None, italic: None, auto_rotate: None, fields: None, intersheet_refs: None, field_looks: None }), "ops_bad_text_size");
     assert_eq!(err(&mut b, place("X", p(Nm::ZERO, Nm::ZERO), LabelKind::Local, Some(true), None)), "ops_label_no_auto_rotate");
     assert_eq!(sch_of(&b).labels.len(), 1);
 }
@@ -554,4 +554,25 @@ fn an_overlay_from_before_the_feature_reads_as_it_always_drew() {
     let s: SchematicSection = serde_json::from_str(r#"{"symbols":[],"wires":[],"labels":[],"texts":[{"id":"txt_a","content":"old","at":{"x":0,"y":0},"size_nm":1270}]}"#).unwrap();
     assert_eq!(s.extras.text_justify_of("txt_a"), SchTextJustify::default());
     assert_eq!(s.texts[0].angle, 0);
+}
+
+/// UI-LEFT-3 S3-31: a new label's dialog has the fields grid (`DIALOG_LABEL_PROPERTIES` on a new label): its fields as the OK takes them, a global label's Sheet
+/// References' looks and a field's font, all in the placing step; a name twice is refused and nothing is placed.
+#[test]
+fn place_label_takes_the_new_labels_fields_from_its_grid() {
+    use eda_model::sch_extras::{FieldFontLook, LabelField};
+    let m = ConstraintModel::default();
+    let mut b = board(section(), &m);
+    let field = |name: &str, text: &str| LabelField { name: name.into(), text: text.into(), ..Default::default() };
+    let looks = std::collections::BTreeMap::from([("Net Class".to_string(), FieldFontLook { font: Some("KiCad Font".into()), color: None })]);
+    let isr = LabelField { name: "Intersheetrefs".into(), bold: true, ..Default::default() };
+    ok(&mut b, SchCmd::PlaceLabel { net: "CLK".into(), at: p(Nm::ZERO, Nm::ZERO), kind: glob(LabelShape::Input), spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(vec![field("Net Class", "HV"), field("", "")]), intersheet_refs: Some(isr), field_looks: Some(looks) });
+    let sch = sch_of(&b);
+    let id = sch.labels[0].id.clone();
+    assert_eq!(sch.extras.label_fields[&id].iter().map(|f| (f.name.as_str(), f.text.as_str())).collect::<Vec<_>>(), vec![("Netclass", "HV")]);
+    assert!(sch.extras.intersheet_refs_looks[&id].bold);
+    assert_eq!(sch.extras.field_look(&id, "Netclass").and_then(|l| l.font.clone()).as_deref(), Some("KiCad Font"));
+    let twice = SchCmd::PlaceLabel { net: "X".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(vec![field("A", "1"), field("a", "2")]), intersheet_refs: None, field_looks: None };
+    assert_eq!(err(&mut b, twice), "ops_label_field_name");
+    assert_eq!(sch_of(&b).labels.len(), 1);
 }

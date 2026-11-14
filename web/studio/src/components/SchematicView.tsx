@@ -439,11 +439,24 @@ export function SchematicView() {
     if (paste && (paste.sheet.join("/") !== state.currentSheetPath.join("/") || state.activeTool !== "select")) cancelSchPaste();
   }, [paste, state.currentSheetPath, state.activeTool]);
   useEffect(() => () => void cancelSchPaste(), []);
-  // An item in the hand belongs to its tool and its sheet: leaving either (or the tab) throws it away, as `cleanup()` does when the tool ends.
+  // An item in the hand belongs to its tool and its sheet: leaving either throws it away, as `cleanup()` does when the tool ends. Another tab (the Symbol Editor of
+  // Edit Symbol... in the hand, which KiCad opens in a window of its own while `PlaceSymbol` keeps the symbol) leaves it in the hand: the schematic comes back
+  // with its tool and the item riding (UI-LEFT-3 S3-30).
+  const resumed = useRef(false);
   useEffect(() => {
+    if (!resumed.current) {
+      resumed.current = true;
+      if (carry && carry.tool !== state.activeTool && carry.sheet.join("/") === state.currentSheetPath.join("/")) {
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: carry.tool });
+        return;
+      }
+    }
     if (carry && (carry.tool !== state.activeTool || carry.sheet.join("/") !== state.currentSheetPath.join("/"))) cancelSchCarry();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [carry, state.activeTool, state.currentSheetPath]);
-  useEffect(() => () => void cancelSchCarry(), []);
+  const apiForUnmount = useRef(api);
+  apiForUnmount.current = api;
+  useEffect(() => () => void (apiForUnmount.current.getState().tab === "schematic" && cancelSchCarry()), []);
   // A symbol an action hands Place Symbol (`PLACE_SYMBOL_PARAMS{ symbol, .. }`: Place Next Symbol Unit, the Symbol Editor's Add Symbol to Schematic) rides at once
   // (`if( symbol ) { addSymbol( symbol ); .. }`), from the cursor, and the tool ends once it is placed (`placeOneOnly`).
   useEffect(() => {

@@ -1,4 +1,4 @@
-// UI-LEFT-3 lane sch-dialogs (task-v16-schdialogs, PARITY-sch section 98): S3-9, S3-10, S3-30, S3-31, S3-32 in the page.
+// UI-LEFT-3 lane sch-dialogs (task-v16-schdialogs, PARITY-sch section 99): S3-9, S3-10, S3-30, S3-31, S3-32 in the page.
 //   * S3-9: with "Override individual item colors" on, Shape (Rule Area), Text Box and Sheet Properties open with KiCad's note; Sheet Properties warns before
 //     setting a border colour (Do not show again); with it off, no note.
 //   * S3-10: Edit Text & Graphics' H Align turns a label's spin (one undo step).
@@ -365,6 +365,74 @@
     } finally {
       await setAutoplace(was);
     }
+  });
+
+
+  // ----- follow-ups: the carry across the Symbol Editor tab, a label's centred text, the new label's fields grid
+  const clickTab = async (name) => { [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === name)?.click(); await sleep(1500); };
+  await scenario("S3-30: Edit Symbol... from the hand opens the Symbol Editor and the symbol is still in the hand back on the schematic", async (t) => {
+    const before = await sch();
+    const dlg = await opensChooser();
+    if (!t(!!dlg && (await choose(dlg, "Device:R", "Device:R")), "the chooser finds Device:R")) return;
+    buttonText(dlg, "OK").click();
+    const c = await until(() => (state().carry?.server ? state().carry : null), 15000);
+    if (!t(!!c, "the resistor rides")) return;
+    await run("eeschema.InteractiveEdit.properties");
+    const props = await until(() => (tid("symbol-properties-title") ? dialog() : null), 6000);
+    if (!t(!!props && !tid("symbol-edit").disabled, "Edit Symbol... is enabled")) return;
+    tid("symbol-edit").click();
+    const away = await until(() => (state().tab === "symbol" ? true : null), 8000);
+    t(!!away, `the Symbol Editor's tab opens (${state().tab})`);
+    await clickTab("Schematic");
+    const back = await until(() => (state().tab === "schematic" && state().carry?.ref === c.ref ? state().carry : null), 8000);
+    t(!!back && state().tool === "sch_place_symbol", `the symbol is still in the hand, the tool armed (${JSON.stringify([state().tab, state().tool, state().carry?.ref])})`);
+    await hoverAt(X0, Y0);
+    await clickAt(X0, Y0);
+    const made = newOf(before.symbols, (await sch()).symbols);
+    t(made.length === 1 && made[0].id === c.ref, `the click places it (${JSON.stringify(made.map((x) => x.id))})`);
+    await toSelect();
+    await undo();
+  });
+
+  await scenario("S3-10: H Align Center and V Align Top on a label are kept, written and drawn, until its Orientation is set", async (t) => {
+    let r = await post({ op: "sch_edit", verb: "global_edit_text_graphics", spec: { global_labels: true, selected_only: true, selection: [glabel.id], h_align: "center", v_align: "top" } });
+    t(r.ok !== false, `the verb runs (${JSON.stringify(r).slice(0, 100)})`);
+    await sleep(800);
+    let l = (await sch()).labels.find((x) => x.id === glabel.id);
+    t(l?.justify?.center === true && l?.justify?.v === "top", `kept (${JSON.stringify(l?.justify)})`);
+    r = await post({ op: "sch_edit", verb: "global_edit_text_graphics", spec: { global_labels: true, selected_only: true, selection: [glabel.id], orientation: "up" } });
+    await sleep(800);
+    l = (await sch()).labels.find((x) => x.id === glabel.id);
+    t(!l?.justify, `SetSpinStyle puts them back (${JSON.stringify(l?.justify)})`);
+  });
+
+  await scenario("S3-31: the new label's dialog has the fields grid: a net class added there is placed with the label", async (t) => {
+    const before = await sch();
+    await hoverAt(X0 + 20 * G, Y0);
+    await run("eeschema.InteractiveDrawing.placeGlobalLabel");
+    const dlg = await opened(/^Global Label Properties/);
+    if (!t(!!dlg, "Ctrl+L opens Global Label Properties")) return;
+    const cols = [...dlg.querySelectorAll("table.label-fields thead th")].map((th) => th.textContent.trim()).filter(Boolean);
+    t(cols.join("|") === "Name|Value|Show|Show Name|H Align|V Align|Italic|Bold", `the grid's columns (${cols.join("|")})`);
+    t(!!dlg.querySelector('[data-row="isr"]'), "the Sheet References row");
+    setValue(aria("Label", dlg), "V16_NEW");
+    aria("Add field", dlg).click();
+    await sleep(200);
+    const v = aria("Field 1 value", dlg);
+    if (!t(!!v && aria("Field 1 name", dlg)?.value === "Net Class", "Add Field gives a net class")) return;
+    setValue(v, "V16_NEWCLASS");
+    aria("Field 1 bold", dlg)?.click();
+    await sleep(150);
+    buttonText(dlg, "OK").click();
+    await until(() => state().carry?.kind === "label", 6000);
+    await clickAt(X0 + 20 * G, Y0);
+    await sleep(800);
+    const made = (await sch()).labels.filter((l) => !before.labels.some((b) => b.id === l.id));
+    const nc = made[0]?.fields?.find((f) => f.name === "Netclass");
+    t(made.length === 1 && nc?.text === "V16_NEWCLASS" && nc?.bold === true, `placed with its net class, bold (${JSON.stringify(made.map((l) => [l.net, l.fields?.map((f) => [f.name, f.text, f.bold])]))})`);
+    await toSelect();
+    await undo();
+    t((await sch()).labels.length === before.labels.length, "one undo takes it away");
   });
 
   check.ok = results.every((r) => r.ok);

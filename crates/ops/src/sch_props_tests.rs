@@ -421,7 +421,9 @@ fn set_text_attrs_keeps_a_free_texts_bold_italic_colour_and_hyperlink_and_a_labe
     // UNSPECIFIED and no hyperlink take them away, and an entry that says nothing goes.
     ok(&mut b, attrs(&["txt_a", "lbl_l"], None, None, Some(SchColor { r: 0, g: 0, b: 0, a: 0 }), None));
     ok(&mut b, attrs(&["txt_a"], Some(false), None, None, Some("")));
-    assert!(sch_of(&b).extras.text_attrs.is_empty(), "{:?}", sch_of(&b).extras.text_attrs);
+    // unbolded, the text keeps `SetBold( false )`'s pen (`GetPenSizeForNormal`) and nothing else
+    let left: Vec<_> = sch_of(&b).extras.text_attrs.values().map(|a| (a.bold, a.color, a.href.clone(), a.thickness_nm.is_some())).collect();
+    assert_eq!(left, vec![(false, None, None, true)], "{:?}", sch_of(&b).extras.text_attrs);
     assert_eq!(err(&mut b, attrs(&["lbl_l"], Some(true), None, None, None)), "ops_bad_text", "a label's bold is Label Properties'");
     assert_eq!(err(&mut b, attrs(&["nope"], None, None, Some(red()), None)), "ops_unknown_item");
     assert_eq!(err(&mut b, attrs(&["txt_a"], Some(false), None, None, None)), "ops_nothing_to_change");
@@ -452,6 +454,10 @@ fn auto_thickness_keeps_a_texts_own_pen_and_a_change_of_bold_drops_it() {
     assert!(sch_of(&b).extras.text_attrs["txt_a"].auto_thickness(true));
     ok(&mut b, pen("lbl_l", mm(0.2)));
     assert_eq!(sch_of(&b).extras.text_attrs["lbl_l"].thickness_nm, Some(mm(0.2)));
+    // `SetBold( false )`: `GetPenSizeForNormal( size )`, an eighth of the size, the text's own from then on
+    ok(&mut b, bold(false));
+    let size = sch_of(&b).texts.iter().find(|t| t.id == "txt_a").unwrap().size_nm;
+    assert_eq!(sch_of(&b).extras.text_attrs["txt_a"].thickness_nm, Some(Nm::new(((size.as_f64() / 800.0).round() as i64) * 100)));
 }
 
 #[test]

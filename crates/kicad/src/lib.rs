@@ -1469,13 +1469,25 @@ pub(crate) fn write_page_field_of(out: &mut String, sch: &eda_model::ir::Schemat
 pub(crate) fn label_effects(sch: &eda_model::ir::SchematicSection, l: &NetLabel, local: bool) -> (u32, String) {
     let (angle, justify) = label_spin(sch, l);
     let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
-    let vertical_justify = if local { " bottom" } else { "" };
+    // a centred text or another vertical justification Edit Text & Graphics gave it (`SchExtras::label_justify`, `EDA_TEXT::Format`: centre is not named)
+    let own = sch.extras.label_justify.get(&l.id).copied().unwrap_or_default();
+    let justify = if own.center { "" } else { justify };
+    let vertical_justify = match own.v {
+        Some(eda_model::sch_extras::SchVAlign::Top) => " top",
+        Some(eda_model::sch_extras::SchVAlign::Bottom) => " bottom",
+        Some(eda_model::sch_extras::SchVAlign::Center) => "",
+        None if local => " bottom",
+        None => "",
+    };
+    let both = format!("{justify}{vertical_justify}");
+    let both = both.trim();
     // the font colour (`EDA_TEXT::Format`'s `(color ..)`, last in `(font ..)`, r7 M5)
     // and the font face Label Properties chose (`(face ..)`, first in `(font ..)`)
     let attrs = sch.extras.text_attrs.get(&l.id);
     let font = FieldLook { size_nm: look.text_size_nm().as_f64(), bold: look.bold, italic: look.italic, face: attrs.and_then(|a| a.font.clone()), color: attrs.and_then(|a| a.color), ..FieldLook::DEFAULT }.font();
     // its own pen (`(thickness ..)` after the size: the Properties panel's Auto Thickness unticked)
-    (angle, sch_extras_io::with_own_pen(format!("(effects {font} (justify {justify}{vertical_justify}))"), attrs))
+    let justify = if both.is_empty() { String::new() } else { format!(" (justify {both})") };
+    (angle, sch_extras_io::with_own_pen(format!("(effects {font}{justify})"), attrs))
 }
 
 /// `(fields_autoplaced yes)`: the fields of the item are where Autoplace Fields put them (`SCH_ITEM::GetFieldsAutoplaced`).

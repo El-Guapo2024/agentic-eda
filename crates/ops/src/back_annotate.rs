@@ -434,7 +434,7 @@ impl<'a> Planner<'a> {
                 self.line("error", format!("Net {old} cannot be changed to {new} because it is driven by a power pin."));
             }
             Driver::Pin => {
-                self.out.cmds.push(on_sheet(&item.path, SchCmd::PlaceLabel { net: new.to_string(), at: tip, kind: LabelKind::Local, spin: Some(spin), size_nm: None, bold: None, italic: None, auto_rotate: None }));
+                self.out.cmds.push(on_sheet(&item.path, SchCmd::PlaceLabel { net: new.to_string(), at: tip, kind: LabelKind::Local, spin: Some(spin), size_nm: None, bold: None, italic: None, auto_rotate: None, fields: None, intersheet_refs: None, field_looks: None }));
                 self.line("action", format!("Add label '{new}' to {} pin {number} net.", item.reference));
             }
         }

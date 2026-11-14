@@ -7,12 +7,13 @@
 // A free text's and a label's font, colour, a text's bold, italic, link and "Exclude from simulation" (UI-LEFT S6) are `set_text_attrs` (kicad-port/textLooks.ts),
 // batched with the dialog's other command. A label's own fields (its net class, ...) are the grid of Label Properties; a global label's Sheet References row is
 // shown, Schematic Setup shows or hides it.
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
 import type { SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
-import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, labelFieldDisplayName, newLabelField, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
+import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, mmToNm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, nmToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
+import { LabelFieldsGrid, labelRowsOk } from "./LabelFieldsGrid";
 import { itemColorsOverridden, SchColorOverrideNote } from "./SchColorOverrideNote";
 import { noteAnswer, rememberedAnswer } from "../kicad-port/kidialog";
 import { inferSpin } from "./schematic/labelShape";
@@ -24,9 +25,9 @@ import { ColorSwatch, FontSelect, LinkField, useFontFamilies, useLinkChoices } f
 import { useExistingLabels } from "./LabelDialog";
 import { sheetFlags } from "../kicad-port/designVariants";
 import { newSheetFieldRow, sheetFieldCmds, sheetFieldError, sheetFieldRow, SHEET_FIELD_COLUMNS, type SheetFieldRow } from "../kicad-port/sheetFieldLooks";
-import { columnMenu, DEFAULT_SHOWN_COLUMNS, FIELD_COLUMNS, shownColumns, toggleColumn, type FieldColumn } from "../kicad-port/symbolFieldsGrid";
-import { fieldLookError, fontChoices } from "../kicad-port/symbolPropsDialog";
-import { labelFieldEditOf, labelGridRows, labelLookCmds, labelPlaceCmds, newLabelGridRow, type LabelGridRow } from "../kicad-port/labelFieldsGrid";
+import { columnMenu, DEFAULT_SHOWN_COLUMNS, shownColumns, toggleColumn, type FieldColumn } from "../kicad-port/symbolFieldsGrid";
+import { fontChoices } from "../kicad-port/symbolPropsDialog";
+import { labelFieldEditOf, labelGridRows, labelLookCmds, labelPlaceCmds, type LabelGridRow } from "../kicad-port/labelFieldsGrid";
 import { lookCellOf } from "./fieldGridCells";
 import { ContextMenu } from "./canvas/ContextMenu";
 
@@ -104,21 +105,9 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
   const [font, setFont] = useState(label.font || DEFAULT_FONT);
   const [color, setColor] = useState(label.color ?? null);
   // the grid of the label's fields (`m_grid` over `m_fields`, kicad-port/labelFieldsGrid.ts): a global label's Sheet References first, then its own
-  const nextKey = useRef(1000);
   const [rows, setRows] = useState<LabelGridRow[]>(() => labelGridRows((label.fields ?? []).filter((f) => !f.intersheet_refs || label.scope === "global"), label.at));
-  // `m_grid->ShowHideColumns( "0 1 2 3 4 5 6 7" )`; a right-click on the column labels shows or hides the others
-  const [shownCols, setShownCols] = useState<Set<FieldColumn>>(() => shownColumns(DEFAULT_SHOWN_COLUMNS));
-  const [columnsMenu, setColumnsMenu] = useState<{ x: number; y: number } | null>(null);
-  const fontList = fontChoices(families);
   const own = rows.filter((r) => !r.isr);
-  const fieldSizesOk = rows.every((r) => fieldLookError(r.name, r.look) === null);
-  const isrRow = rows.find((r) => r.isr) ?? null;
-  const setRow = (key: number, change: Partial<LabelGridRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...change } : r)));
-  const addField = () => {
-    const f = newLabelField(own.map((r) => ({ ...labelFieldEditOf(r), name: r.name === "Net Class" ? "Netclass" : r.name })), isrRow ? isrRow.visible : null);
-    setRows((rs) => [...rs, { ...newLabelGridRow(nextKey.current++, f), name: labelFieldDisplayName(f.name) }]);
-  };
-  const deleteField = (key: number) => setRows((rs) => rs.filter((r) => r.key !== key));
+  const fieldSizesOk = labelRowsOk(rows);
   const title = label.scope === "global" ? "Global Label Properties" : label.scope === "hierarchical" ? "Hierarchical Label Properties" : "Label Properties";
   const sizeNm = mmToNm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
@@ -195,81 +184,8 @@ function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpi
         <span>Color:</span>
         <ColorSwatch label="Label color" color={color} onChange={setColor} />
       </Grid>
-      <datalist id="label-props-fonts">
-        {fontList.map((f) => (
-          <option key={f} value={f} />
-        ))}
-      </datalist>
-      <div style={{ overflowX: "auto", marginTop: 8 }}>
-        <table className="label-fields" aria-label="Label fields" style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead
-            // `GRID_TRICKS::onGridLabelRightClick`: a check item per column
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setColumnsMenu({ x: e.clientX, y: e.clientY });
-            }}
-            title="Right-click to show or hide columns"
-          >
-            <tr>
-              {FIELD_COLUMNS.filter((c) => shownCols.has(c.key)).map((c) => (
-                <th key={c.key} data-col={c.key} style={{ textAlign: c.key === "name" || c.key === "value" ? "left" : "center", whiteSpace: "nowrap" }}>
-                  {c.label}
-                </th>
-              ))}
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              // the own fields are "Field 1" .. in the cells' names; the Sheet References by their name
-              const n = r.isr ? "Sheet References" : `Field ${own.indexOf(r) + 1}`;
-              return (
-                <tr key={r.key} data-row={r.isr ? "isr" : n} title={r.isr ? "Intersheet reference visibility is controlled globally from Schematic Setup > General > Formatting" : undefined}>
-                  {FIELD_COLUMNS.filter((c) => shownCols.has(c.key)).map((c) => (
-                    <td key={c.key} style={c.key === "name" || c.key === "value" ? undefined : { textAlign: "center" }}>
-                      {c.key === "name" ? (
-                        r.isr ? (
-                          <span>Sheet References</span>
-                        ) : (
-                          <input aria-label={`${n} name`} value={r.name} onChange={(e) => setRow(r.key, { name: e.target.value })} style={{ width: 110 }} />
-                        )
-                      ) : c.key === "value" ? (
-                        r.isr ? (
-                          <span>{r.text}</span>
-                        ) : (
-                          <input aria-label={`${n} value`} value={r.text} onChange={(e) => setRow(r.key, { text: e.target.value })} />
-                        )
-                      ) : c.key === "shown" ? (
-                        <input type="checkbox" aria-label={r.isr ? "Show Sheet References" : `${n} shown`} checked={r.visible} disabled={r.isr} onChange={(e) => setRow(r.key, { visible: e.target.checked })} />
-                      ) : (
-                        lookCellOf(n, c.key, r.look, (patch) => setRow(r.key, { look: { ...r.look, ...patch } }), "label-props-fonts")
-                      )}
-                    </td>
-                  ))}
-                  <td>
-                    {!r.isr && (
-                      <button type="button" aria-label={`Delete field ${own.indexOf(r) + 1}`} title="Delete field" onClick={() => deleteField(r.key)}>
-                        ✕
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      {columnsMenu && (
-        <ContextMenu
-          x={columnsMenu.x}
-          y={columnsMenu.y}
-          entries={columnMenu(shownCols).map((c) => ({ label: `${c.checked ? "\u2713" : "\u2003"} ${c.label}`, checked: c.checked, onSelect: () => setShownCols((cols) => toggleColumn(cols, c.key)) }))}
-          onClose={() => setColumnsMenu(null)}
-        />
-      )}
-      <button type="button" aria-label="Add field" title="Add field" onClick={addField} style={{ marginTop: 4 }}>
-        + Add Field
-      </button>
+      <LabelFieldsGrid rows={rows} setRows={setRows} isrVisible={null} />
+
     </SchDialogShell>
   );
 }

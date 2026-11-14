@@ -107,6 +107,12 @@ pub struct SchExtras {
     /// set one; an entry is written only when a turn or a mirror set it, so a design that never turned a label serializes as before.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub label_spins: BTreeMap<String, LabelSpin>,
+    /// A label's justification beyond what its spin gives (`SCH_LABEL_BASE`'s `EDA_TEXT` attributes, which Edit Text & Graphics' H and V Align set with
+    /// `SetHorizJustify` / `SetVertJustify`): centred on its anchor, and a vertical justification other than `SetSpinStyle`'s (bottom for a local label, centre
+    /// for a global or hierarchical one), by label id. `SetSpinStyle` puts both back (no entry); a turn or a mirror keeps them (`Rotate90` / `MirrorSpinStyle`
+    /// flip a left or right justification only). Written in the label's `(justify ..)` and read back. Additive (UI-LEFT-3 S3-10).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub label_justify: BTreeMap<String, LabelJustify>,
     /// A wire's, bus's, bus entry's or graphic line's stroke (`SCH_LINE::GetStroke`, `SCH_BUS_ENTRY_BASE::GetStroke`), by item id, once
     /// Wire/Bus Properties (`DIALOG_WIRE_BUS_PROPERTIES`) or Line Properties set one. An item with no entry has the default stroke (the
     /// sheet's default width, a solid line, the layer's colour); an entry equal to the default is never stored. A graphic line's width
@@ -561,9 +567,38 @@ impl TextAttrs {
         }
     }
 
+    /// `EDA_TEXT::SetBold( aBold )` of a text of `size_nm` in the stroke font (no face of its own, or "KiCad Font"): bolded, the pen is the bold one
+    /// (`GetPenSizeForBold`, which the bold flag implies here: no pen of its own); unbolded, `GetPenSizeForNormal( size )`, an eighth of the size, its own from then
+    /// on (KiCad's `m_StoredStrokeWidth`, the pen before bolding, is not kept in a file, so a text read back has none to restore either). An outline font's
+    /// text keeps its pen.
+    pub fn set_bold_pen(&mut self, bold: bool, size_nm: Nm) {
+        if !self.font.as_deref().is_none_or(|f| f == "KiCad Font") {
+            return;
+        }
+        self.thickness_nm = if bold { None } else { Some(Nm::new(((size_nm.as_f64() / 100.0 / 8.0).round() as i64) * 100)) };
+    }
+
     /// The pen the text is drawn with when it has one of its own (`GetTextThickness() > 1`).
     pub fn own_pen(&self) -> Option<Nm> {
         self.thickness_nm.filter(|t| *t > Nm::new(1))
+    }
+}
+
+/// See [`SchExtras::label_justify`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabelJustify {
+    /// `GR_TEXT_H_ALIGN_CENTER`: the text centred on the anchor (its spin, as `GetSpinStyle` reads it, is RIGHT or UP).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub center: bool,
+    /// The vertical justification when it is not `SetSpinStyle`'s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v: Option<SchVAlign>,
+}
+
+impl LabelJustify {
+    pub fn is_default(&self) -> bool {
+        *self == LabelJustify::default()
     }
 }
 
@@ -1088,6 +1123,7 @@ impl SchExtras {
             && self.page.is_none()
             && self.drawing_sheet.is_none()
             && self.label_spins.is_empty()
+            && self.label_justify.is_empty()
             && self.strokes.is_empty()
             && self.junction_looks.is_empty()
             && self.label_looks.is_empty()

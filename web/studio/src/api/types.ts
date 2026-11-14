@@ -3480,6 +3480,8 @@ export interface SchematicLabel {
   id: string;
   /** Its own pen (`TextAttrs::thickness_nm`): Auto Thickness unticked; 0 ticked on a bold label; absent KiCad's for its size. */
   thickness_nm?: Nm | null;
+  /** The justification its spin does not say (`SchExtras::label_justify`): centred on its anchor, its own vertical one; `SetSpinStyle` puts them back. */
+  justify?: { center?: boolean; v?: "top" | "center" | "bottom" | null } | null;
   /** The label's text. */
   net: string;
   /** The net the label is on as the tracer names it (`/sub/X`, `A_EN`), the wire's under it; absent or null for a label on no wire (r3 A3-M4). */

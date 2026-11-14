@@ -141,6 +141,14 @@ pub enum SchCmd {
         italic: Option<bool>,
         #[serde(default)]
         auto_rotate: Option<bool>,
+        /// The new label's own fields from its dialog's grid (`DIALOG_LABEL_PROPERTIES` on a new label: its net class and the others, as `EditLabel`'s
+        /// `fields`), a global label's Sheet References' looks (`SchExtras::intersheet_refs_looks`) and each field's font and colour by name (UI-LEFT-3 S3-31).
+        #[serde(default)]
+        fields: Option<Vec<eda_model::sch_extras::LabelField>>,
+        #[serde(default)]
+        intersheet_refs: Option<eda_model::sch_extras::LabelField>,
+        #[serde(default)]
+        field_looks: Option<std::collections::BTreeMap<String, eda_model::sch_extras::FieldFontLook>>,
     },
     /// Place Text (`SCH_DRAWING_TOOLS::TwoClickPlace` after `createNewText`): a free text at `at` running along the sheet or, with `angle` 90000, up it, justified
     /// `h` and `v` about its anchor (KiCad's last-used justification is centre and centre, which a text placed without one has). Refused for an empty text.
@@ -776,9 +784,10 @@ impl<'a> Board<'a> {
                 self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate, fields: fields.clone() })
                     .and_then(|_| self.commit_clean_up())
             }
-            SchCmd::PlaceLabel { net, at, kind, spin, size_nm, bold, italic, auto_rotate } => {
+            SchCmd::PlaceLabel { net, at, kind, spin, size_nm, bold, italic, auto_rotate, fields, intersheet_refs, field_looks } => {
                 // a label is connectable: its commit runs the clean-up (`SCH_COMMIT::pushSchEdit`, `LOCAL_CLEANUP`; r4 C4-L1)
-                self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate }).and_then(|_| self.commit_clean_up())
+                let props = crate::sch_labels::PlacedLabel { spin: *spin, size_nm: *size_nm, bold: *bold, italic: *italic, auto_rotate: *auto_rotate, fields: fields.clone(), intersheet_refs: intersheet_refs.clone(), field_looks: field_looks.clone() };
+                self.place_label(net, *at, kind, &props).and_then(|_| self.commit_clean_up())
             }
             SchCmd::PlaceText { content, at, angle, size_nm, h, v } => self.place_text(content, *at, *angle, *size_nm, *h, *v),
             SchCmd::EditField { id, text, at, vertical, h, v, size_nm, bold, italic, visible, name_shown, allow_autoplace, local_at, local_vertical, keep_autoplaced } => self.edit_sch_field(
@@ -1171,12 +1180,14 @@ fn edit_graphic(sch: &mut SchematicSection, id: &str, mut graphic: SchGraphic) -
         return Err(vec![CheckResult::fail("ops_graphic_unchanged", id, "the graphic already has these properties")]);
     }
     // `EDA_TEXT::SetBold` on a text box: the stroke font's pen is set anew for the weight (its own pen goes, `TextAttrs::thickness_nm`)
-    if let (SchGraphicKind::TextBox { bold: now, .. }, SchGraphicKind::TextBox { bold: was, .. }) = (&graphic.shape, &sch.extras.graphics[i].shape) {
-        if now != was {
-            crate::sch_props::drop_own_pen(sch, id);
-        }
-    }
+    let rebolded = match (&graphic.shape, &sch.extras.graphics[i].shape) {
+        (SchGraphicKind::TextBox { bold: now, .. }, SchGraphicKind::TextBox { bold: was, .. }) if now != was => Some(*now),
+        _ => None,
+    };
     sch.extras.graphics[i] = graphic;
+    if let Some(bold) = rebolded {
+        crate::sch_props::rebold_pen(sch, id, bold);
+    }
     Ok(())
 }
 

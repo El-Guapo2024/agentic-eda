@@ -371,3 +371,20 @@ fn the_net_filter_names_a_shared_screens_wire_per_sheet_path() {
     assert_eq!(width("NA"), Some(vec!["pinw".to_string()]));
     assert_eq!(width("/C/LOC"), None, "no placement names it so");
 }
+
+/// UI-LEFT-3 S3-10: H Align Center centres a label's text on its anchor and V Align is its own (`SchExtras::label_justify`), both put back by `SetSpinStyle` (the
+/// Orientation) and kept by a turn.
+#[test]
+fn a_labels_centred_text_and_vertical_justification_are_kept_until_its_spin_is_set() {
+    let m = model();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    b.apply(&edit(GlobalEditSpec { wires: true, h_align: Some(SchHAlign::Center), v_align: Some(SchVAlign::Top), ..Default::default() })).unwrap();
+    let j = root(b.design()).extras.label_justify["l1"];
+    assert_eq!((j.center, j.v), (true, Some(SchVAlign::Top)));
+    // a local label's own bottom is `SetSpinStyle`'s: no entry for it
+    b.apply(&edit(GlobalEditSpec { wires: true, h_align: Some(SchHAlign::Left), v_align: Some(SchVAlign::Bottom), ..Default::default() })).unwrap();
+    assert!(!root(b.design()).extras.label_justify.contains_key("l1"));
+    b.apply(&edit(GlobalEditSpec { wires: true, h_align: Some(SchHAlign::Center), ..Default::default() })).unwrap();
+    b.apply(&edit(GlobalEditSpec { wires: true, orientation: Some(LabelSpin::Up), ..Default::default() })).unwrap();
+    assert!(!root(b.design()).extras.label_justify.contains_key("l1"), "SetSpinStyle puts the justification back");
+}

@@ -388,7 +388,7 @@ export function carriedPreview(item: CarriedItem, ctx: CarriedPreviewContext): S
         italic: item.italic,
         auto_rotate: item.scope !== "local" && item.autoRotate,
       };
-      // a global label's Sheet References, as the server placed them for this very label
+      // a global label's Sheet References and its own fields, as the server placed them for this very label
       const drawn = server && server.item.kind === "label" && sameItem(server.item, item) ? server.preview.labels[0] : undefined;
       if (drawn?.fields) label.fields = drawn.fields;
       return { ...EMPTY, labels: [label] };
@@ -421,7 +421,8 @@ export function needsServerDrawing(item: CarriedItem): boolean {
     case "power":
       return true;
     case "label":
-      return item.scope === "global";
+      // a global label's Sheet References, a label's own fields (placed by the server's `AutoplaceFields`)
+      return item.scope === "global" || (item.fields?.length ?? 0) > 0;
     case "text":
       return /[$@]\{/.test(item.content);
     case "directive":

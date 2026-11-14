@@ -13,9 +13,10 @@
 //!
 //! A directive label takes the size, bold, italic, font and colour; the net filter names an item on a screen shown twice per sheet path (`ScreenFacts`).
 //!
-//! **Differs** (each said where it is done): a label's justification is its spin, so H and V
-//! Align turn a label's spin as its `SetHorizJustify` does (`GetSpinStyle`), but a centred label keeps its side and V Align leaves a label as it is
-//! ([`spin_of_justify`]); a global label's Sheet References field takes its looks but keeps its visibility (it follows Schematic Setup); the user fields of a power symbol keep
+//! H and V Align reach a label: its spin as `GetSpinStyle` reads its `SetHorizJustify` back ([`spin_of_justify`]), a centred text and its own vertical
+//! justification (`SchExtras::label_justify`).
+//!
+//! **Differs** (each said where it is done): a global label's Sheet References field takes its looks but keeps its visibility (it follows Schematic Setup); the user fields of a power symbol keep
 //! their looks (they are not placed: `PowerProps`); a field of a symbol on a sheet read from a KiCad file has no place to keep its
 //! size, alignment or visibility in, and takes its font and colour only. Nothing changed is refused (KiCad pushes a commit of unchanged items).
 
@@ -417,8 +418,7 @@ fn visit(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[Str
 }
 
 /// `SCH_LABEL_BASE::GetSpinStyle` of a label whose `SetHorizJustify( h )` H Align set: `GR_TEXT_H_ALIGN_RIGHT` is LEFT (BOTTOM for a vertical label), anything
-/// else RIGHT (UP). **Differs**: a centred label's text stays at its side of the anchor (the model keeps a label's justification as its spin only), and
-/// V Align does not reach a label (its `SetVertJustify` has no place: a label is always bottom justified here, as `SetSpinStyle` leaves it).
+/// else RIGHT (UP); a centred one is kept as such beside its spin (`SchExtras::label_justify`).
 fn spin_of_justify(h: SchHAlign, vertical: bool) -> LabelSpin {
     match (h, vertical) {
         (SchHAlign::Right, false) => LabelSpin::Left,
@@ -524,9 +524,10 @@ fn edit_text_attrs(sch: &mut SchematicSection, id: &str, spec: &GlobalEditSpec, 
             a.italic = i;
         }
         if let Some(b) = spec.bold {
-            // `EDA_TEXT::SetBold`: a stroke font's pen set anew for the weight (the text's own pen goes)
+            // `EDA_TEXT::SetBold`: a stroke font's pen set anew for the weight
             if a.bold != b {
-                a.thickness_nm = None;
+                let size = sch.texts.iter().find(|t| t.id == id).map(|t| t.size_nm).unwrap_or(eda_model::ir::DEFAULT_FIELD_SIZE_NM);
+                a.set_bold_pen(b, size);
             }
             a.bold = b;
         }
@@ -677,7 +678,7 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                 }
                 let mut here = false;
                 if l.bold != before.bold {
-                    crate::sch_props::drop_own_pen(sch, id);
+                    crate::sch_props::rebold_pen(sch, id, l.bold);
                 }
                 if l != before {
                     here = true;
@@ -697,6 +698,29 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                     if shows.is_some_and(|s| s != spin) {
                         sch.extras.label_spins.insert(id.clone(), spin);
                         here = true;
+                    }
+                }
+                // the justification the spin does not say (`SchExtras::label_justify`): H Align Center centres the text on the anchor (Left and Right do not),
+                // V Align is the label's own; then `SetSpinStyle` of the Orientation puts both back to the spin's
+                let before_j = sch.extras.label_justify.get(id).copied().unwrap_or_default();
+                let mut j = before_j;
+                if let Some(h) = spec.h_align {
+                    j.center = h == SchHAlign::Center;
+                }
+                if let Some(v) = spec.v_align {
+                    let global_like = sch.labels.iter().any(|x| x.id == *id && !matches!(x.kind, LabelKind::Local));
+                    let spin_v = if global_like { SchVAlign::Center } else { SchVAlign::Bottom };
+                    j.v = (v != spin_v).then_some(v);
+                }
+                if spec.orientation.is_some() {
+                    j = Default::default();
+                }
+                if j != before_j {
+                    here = true;
+                    if j.is_default() {
+                        sch.extras.label_justify.remove(id);
+                    } else {
+                        sch.extras.label_justify.insert(id.clone(), j);
                     }
                 }
                 if here {
@@ -838,10 +862,13 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                     g.fill = if g.fill_color.is_some() { SchFill::Color } else { SchFill::None };
                 }
                 let text_box = matches!(g.shape, SchGraphicKind::TextBox { .. });
-                let rebolded = matches!((&g.shape, &before.shape), (SchGraphicKind::TextBox { bold: a, .. }, SchGraphicKind::TextBox { bold: b, .. }) if a != b);
+                let rebolded = match (&g.shape, &before.shape) {
+                    (SchGraphicKind::TextBox { bold: a, .. }, SchGraphicKind::TextBox { bold: b, .. }) if a != b => Some(*a),
+                    _ => None,
+                };
                 changed |= *g != before;
-                if rebolded {
-                    crate::sch_props::drop_own_pen(sch, id);
+                if let Some(bold) = rebolded {
+                    crate::sch_props::rebold_pen(sch, id, bold);
                 }
                 if text_box {
                     changed |= edit_text_attrs(sch, id, spec, false);

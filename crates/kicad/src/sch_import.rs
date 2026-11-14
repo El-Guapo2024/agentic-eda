@@ -736,6 +736,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut label_field_places: Vec<Option<Vec<eda_model::ir::FieldPlacement>>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
     let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
+    let mut label_justify_read: Vec<eda_model::sch_extras::LabelJustify> = Vec::new();
     // each global label's Sheet References' own looks, and each label's fields' font faces and colours, parallel to `labels` (UI-LEFT-3 S3-31)
     let mut label_isr_looks: Vec<Option<eda_model::sch_extras::LabelField>> = Vec::new();
     let mut label_field_looks: Vec<BTreeMap<String, eda_model::sch_extras::FieldFontLook>> = Vec::new();
@@ -764,6 +765,13 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             labels.push(eda_model::ir::NetLabel { id: String::new(), net, at: mm_point_to_um(at), kind });
             label_locked.push(is_locked(l));
             label_uuid.push(uuid_of(l));
+            // a centred text (neither left nor right) or a vertical justification other than `SetSpinStyle`'s: the label's own (`parseEDA_TEXT` after `(at ..)`)
+            {
+                let has = |w: &str| look.justify.iter().any(|j| j == w);
+                let v = if has("top") { eda_model::sch_extras::SchVAlign::Top } else if has("bottom") { eda_model::sch_extras::SchVAlign::Bottom } else { eda_model::sch_extras::SchVAlign::Center };
+                let spin_v = if global.is_none() { eda_model::sch_extras::SchVAlign::Bottom } else { eda_model::sch_extras::SchVAlign::Center };
+                label_justify_read.push(eda_model::sch_extras::LabelJustify { center: !has("left") && !has("right"), v: (v != spin_v).then_some(v) });
+            }
             label_geometry.push((spin, look));
             let attrs = crate::sch_extras_io::read_text_attrs(l);
             label_colors.push((attrs.color, attrs.font, attrs.thickness_nm));
@@ -1027,6 +1035,12 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             let label_look = eda_model::sch_extras::LabelLook { size_nm, bold: look.bold, italic: look.italic, auto_rotate: false };
             if !label_look.is_default() {
                 sch.extras.label_looks.insert(id, label_look);
+            }
+        }
+        // A label's centred text or own vertical justification (`SchExtras::label_justify`).
+        for (id, j) in sch.labels.iter().map(|l| l.id.clone()).zip(label_justify_read) {
+            if !id.is_empty() && !j.is_default() {
+                sch.extras.label_justify.insert(id, j);
             }
         }
         // A label's own fields (`SchExtras::label_fields`): its net class and the others, not a global label's Sheet References.

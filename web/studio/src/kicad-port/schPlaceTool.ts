@@ -31,7 +31,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Cmd, LabelScope, LabelShape } from "../api/types";
 import type { AnnotateOptions } from "../api/hierarchyTypes";
-import type { DirectiveShape, SchHAlign, SchVAlign } from "../api/schEditTypes";
+import type { DirectiveShape, LabelFieldEdit, SchColor, SchHAlign, SchVAlign } from "../api/schEditTypes";
 import { placeLabelCmd } from "./schLabelName";
 import { ATTRIBUTE_ACTIONS, type SymbolAttrKey } from "./schControl";
 import type { LabelSpinName } from "./schLastPlaced";
@@ -70,6 +70,11 @@ export interface CarriedLabel {
   italic: boolean;
   /** The "Auto" check of a global or hierarchical label: the click that places it turns it to what it lands on (`AutoRotateItem`). */
   autoRotate: boolean;
+  /** Its dialog's fields grid (`DIALOG_LABEL_PROPERTIES` on the new label, UI-LEFT-3 S3-31): its own fields, a global label's Sheet References' looks, each field's
+   *  font and colour by name, placed with it. */
+  fields?: LabelFieldEdit[];
+  intersheetRefs?: LabelFieldEdit | null;
+  fieldLooks?: Record<string, { font?: string | null; color?: SchColor | null }>;
 }
 
 export interface CarriedDirective {
@@ -263,7 +268,7 @@ const xy = (p: readonly [number, number]) => ({ x: p[0], y: p[1] });
 export function placeCmd(item: CarriedItem, at: readonly [number, number], o: PlaceOptions = {}): Cmd {
   switch (item.kind) {
     case "label":
-      return placeLabelCmd({ at, scope: item.scope, text: item.text, shape: item.shape, spin: item.spin, plainSpin: o.plainSpin ?? null, sizeNm: item.sizeNm, bold: item.bold, italic: item.italic, autoRotate: !o.preview && item.scope !== "local" && item.autoRotate });
+      return placeLabelCmd({ at, scope: item.scope, text: item.text, shape: item.shape, spin: item.spin, plainSpin: o.plainSpin ?? null, sizeNm: item.sizeNm, bold: item.bold, italic: item.italic, autoRotate: !o.preview && item.scope !== "local" && item.autoRotate, fields: item.fields, intersheetRefs: item.intersheetRefs, fieldLooks: item.fieldLooks });
     case "directive":
       return { op: "sch_edit", verb: "add_graphic", graphic: { shape: { type: "directive", at: xy(at), orientation: item.orientation, shape: item.shape, pin_length_nm: item.pinLengthNm, netclass: item.netclass, component_class: item.componentClass } } };
     case "text":

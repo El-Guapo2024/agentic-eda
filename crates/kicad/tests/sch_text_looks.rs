@@ -265,3 +265,18 @@ fn kicad_keeps_a_sheet_fields_looks_and_a_sheet_pins_font_and_colour() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+
+/// UI-LEFT-3 S3-10: a label's centred text and its own vertical justification (`SchExtras::label_justify`) are written in its `(justify ..)` and read back; a
+/// label with none is written and read as its spin says.
+#[test]
+fn a_labels_centred_text_and_vertical_justification_come_back() {
+    let (mut design, model) = drawn();
+    let j = eda_model::sch_extras::LabelJustify { center: true, v: Some(eda_model::sch_extras::SchVAlign::Top) };
+    design.schematic.as_mut().unwrap().extras.label_justify.insert("lbl_look_l".into(), j);
+    let text = export_kicad_sch(&design, &model, &META).expect("the sheet exports");
+    let (back, _, _) = import_kicad_sch(&text).expect("the file reads");
+    let sch = back.schematic.unwrap();
+    let id = |net: &str| sch.labels.iter().find(|l| l.net == net).unwrap().id.clone();
+    assert_eq!(sch.extras.label_justify.get(&id("LOOK_L")).copied(), Some(j), "{text}");
+    assert!(!sch.extras.label_justify.contains_key(&id("LOOK_G")), "a global label's own centre is its spin's");
+}

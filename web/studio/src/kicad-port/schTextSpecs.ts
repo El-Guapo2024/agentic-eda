@@ -152,6 +152,8 @@ export interface SchLabelLook {
   italic?: boolean;
   /** Its own pen (`TextAttrs::thickness_nm`: Auto Thickness unticked). */
   thickness_nm?: number | null;
+  /** The justification its spin does not say (`SchExtras::label_justify`): centred on the anchor, its own vertical one. */
+  justify?: { center?: boolean; v?: "top" | "center" | "bottom" | null } | null;
 }
 
 /** `SCH_LABEL_BASE::SetSpinStyle`: right and up are left-justified, left and bottom right-justified; up and bottom run up the sheet. */
@@ -194,7 +196,9 @@ export function schLabelDrawSpec(l: SchLabelLook, spin: LabelSpin, defaultPen = 
     size: [size, size],
     pen: schDrawPen(size, bold, defaultPen, l.thickness_nm),
     ...spinAttrs(spin),
-    valign: flagged ? "center" : "bottom",
+    // a centred text or its own vertical justification (Edit Text & Graphics' H and V Align; `SetSpinStyle` puts them back)
+    ...(l.justify?.center ? { halign: "center" as const } : {}),
+    valign: l.justify?.v ?? (flagged ? "center" : "bottom"),
     italic: !!l.italic,
     bold,
     multiline: false,
