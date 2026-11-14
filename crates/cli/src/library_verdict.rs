@@ -208,20 +208,48 @@ fn enabled(path: &Path) -> bool {
     #[allow(unreachable_code)]
     {
         let _ = path;
-        eda_kicad_engine::find_cli().is_some()
+        cli_found()
     }
 }
+
+/// Whether there is a kicad-cli to ask, looked up once (`find_cli` runs `which`, and a search asks about every library).
+fn cli_found() -> bool {
+    static FOUND: OnceLock<bool> = OnceLock::new();
+    *FOUND.get_or_init(|| eda_kicad_engine::find_cli().is_some())
+}
+
+/// What a look that asks nothing answered lately, by library: a search asks about every library on every key, and the state of a library is a look at
+/// each of its files.
+type Recent = Mutex<HashMap<(Kind, PathBuf), (std::time::Instant, Vec<PathBuf>)>>;
+
+fn recent() -> &'static Recent {
+    static R: OnceLock<Recent> = OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+/// How long a look that asks nothing is taken again without looking at the library's files.
+const RECENT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The files of the library at `path` KiCad's parser refuses: the verdict kept for its state, else kicad-cli asked now when `ask` (else none known yet).
 pub(crate) fn kicad_refused(kind: Kind, path: &Path, ask: bool) -> Vec<PathBuf> {
     if !enabled(path) {
         return Vec::new();
     }
+    let key = (kind, path.to_path_buf());
+    if !ask {
+        if let Some((at, hit)) = lock(recent()).get(&key) {
+            if at.elapsed() < RECENT {
+                return hit.clone();
+            }
+        }
+    }
     let Some(stamp) = stamp(kind, path) else { return Vec::new() };
     if let Some(hit) = known(kind, path, &stamp) {
+        lock(recent()).insert(key, (std::time::Instant::now(), hit.clone()));
         return hit;
     }
     if !ask {
+        lock(recent()).insert(key, (std::time::Instant::now(), Vec::new()));
         return Vec::new();
     }
     let _one = lock(running());
@@ -231,6 +259,7 @@ pub(crate) fn kicad_refused(kind: Kind, path: &Path, ask: bool) -> Vec<PathBuf> 
     match refused_files_with(kind, path, &kicad_loads) {
         Some(refused) => {
             keep(kind, path, &stamp, &refused);
+            lock(recent()).insert(key, (std::time::Instant::now(), refused.clone()));
             refused
         }
         None => Vec::new(),
@@ -262,7 +291,11 @@ pub(crate) fn footprint_refusals(dir: &Path, ask: bool) -> (Vec<String>, Vec<Str
 /// are fixed manually.").
 pub(crate) fn symbol_refusals(path: &Path, ask: bool) -> (Vec<String>, Option<String>) {
     let ours = eda_kicad::symbol_library_load_errors(path);
-    let refused = kicad_refused(Kind::Symbol, path, ask);
+    // a file this crate's reader refuses already says so, in its own words
+    let refused: Vec<PathBuf> = kicad_refused(Kind::Symbol, path, ask)
+        .into_iter()
+        .filter(|f| !ours.as_deref().is_some_and(|m| m.contains(&format!("Unable to read file '{}'", f.display()))))
+        .collect();
     if refused.is_empty() {
         return (Vec::new(), ours);
     }
@@ -295,7 +328,7 @@ pub(crate) mod tests {
     }
 
     pub(super) fn checked(path: &Path) -> bool {
-        lock(allowed()).iter().any(|r| path.starts_with(r)) && eda_kicad_engine::find_cli().is_some()
+        lock(allowed()).iter().any(|r| path.starts_with(r)) && super::cli_found()
     }
 
     fn temp(tag: &str) -> PathBuf {
