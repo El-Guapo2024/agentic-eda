@@ -848,3 +848,49 @@ fn a_placed_symbols_library_text_boxes_reach_the_canvas_with_the_symbols_variabl
     assert_eq!(text.matches("(text_box \"${REFERENCE} ${VALUE}\"").count(), 1, "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-3 S3-5: a placed symbol's library texts reach the canvas with their looks and with the symbol's variables (`expandLibItemTextVars`), by their stored text.
+#[test]
+fn a_placed_symbols_library_texts_reach_the_canvas_with_their_looks_and_the_symbols_variables() {
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    use serde_json::json;
+    let dir = scratch("s3_5_lib_text");
+    setup(&dir);
+    let mut s = base_symbol();
+    s.lib_id = "Lib:Texted".into();
+    let text = |t: &str, h: FieldHAlign| LibrarySymbolGraphic::Text { id: String::new(), unit: 1, body_style: 1, text: t.into(), at: SPoint { x: 0.0, y: 1.27 }, angle_deg: 0.0, size_mm: 1.27, bold: true, italic: false, h_align: h, v_align: FieldVAlign::Top, private: false, font: None, text_color: None };
+    s.graphics.push(text("${REFERENCE}:${VALUE}", FieldHAlign::Left));
+    s.graphics.push(text("plain", FieldHAlign::Right));
+    s.assign_missing_ids();
+    step(&dir, Cmd::EmbedLibSymbol { symbol: s }, false, "test").unwrap();
+    step(&dir, Cmd::AddSymbol { id: "U8".into(), lib_id: "Lib:Texted".into(), at: Point { x: mm(50.8), y: mm(50.8) }, rot_millideg: 0, value: "TXT".into(), footprint: String::new(), unit: 1, annotate: None }, false, "test").unwrap();
+    let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+    let graphics = sch["lib_symbols"]["Lib:Texted"]["graphics"].as_array().unwrap().clone();
+    let texts: Vec<(&str, &str, &str, bool)> = graphics.iter().filter(|g| g["kind"] == "text").map(|g| (g["content"].as_str().unwrap(), g["h_align"].as_str().unwrap_or("center"), g["v_align"].as_str().unwrap_or("center"), g["bold"].as_bool().unwrap_or(false))).collect();
+    assert_eq!(texts, [("${REFERENCE}:${VALUE}", "left", "top", true), ("plain", "right", "top", true)], "{graphics:?}");
+    let u8 = sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "U8").unwrap();
+    assert_eq!(u8["text_shown"], json!({ "${REFERENCE}:${VALUE}": "U8:TXT" }), "only the text a variable changes, as the symbol resolves it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// UI-LEFT-3 S3-5, S3-8: a power symbol's library text and text box show its variables (`expandLibItemTextVars`: a power symbol is a symbol).
+#[test]
+fn a_power_symbols_library_text_and_text_box_show_its_variables() {
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    let dir = scratch("s3_5_power_text");
+    setup(&dir);
+    let mut s = base_symbol();
+    s.lib_id = "Lib:PWRTXT".into();
+    s.power = true;
+    s.pins.truncate(1);
+    s.graphics.push(LibrarySymbolGraphic::Text { id: String::new(), unit: 1, body_style: 1, text: "${VALUE}!".into(), at: SPoint { x: 0.0, y: 2.54 }, angle_deg: 0.0, size_mm: 1.27, bold: false, italic: false, h_align: FieldHAlign::Center, v_align: FieldVAlign::Center, private: false, font: None, text_color: None });
+    s.graphics.push(text_box_at("net ${VALUE}", (-2.0, 5.0), (2.0, 3.0)));
+    s.assign_missing_ids();
+    step(&dir, Cmd::EmbedLibSymbol { symbol: s }, false, "test").unwrap();
+    step(&dir, Cmd::AddPowerSymbol { lib_id: "Lib:PWRTXT".into(), at: Point { x: mm(25.4), y: mm(25.4) }, rot_millideg: 0, net: "VBUS".into(), pin: String::new(), annotate: None }, false, "test").unwrap();
+    let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+    let p = sch["power_symbols"].as_array().unwrap().iter().find(|p| p["lib_id"] == "Lib:PWRTXT").expect("the power symbol");
+    assert_eq!(p["text_shown"]["${VALUE}!"], "VBUS!", "{p}");
+    assert_eq!(p["text_box_shown"]["0"], "net VBUS", "{p}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
