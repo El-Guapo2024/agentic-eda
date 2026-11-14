@@ -35,6 +35,8 @@ pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &N
         let bold = if f.bold { " (bold yes)" } else { "" };
         let size = crate::mm(if f.size_nm > eda_model::units::Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM });
         let show_name = if f.name_shown { " (show_name yes)" } else { "" };
+        // `KICAD_FORMAT::FormatBool( m_out, "do_not_autoplace", !aField->CanAutoplace() )`, after `show_name`
+        let show_name = if f.no_autoplace { format!("{show_name} (do_not_autoplace yes)") } else { show_name.to_string() };
         let mut j = String::new();
         match f.h {
             HJustify::Left => j.push_str(" left"),
@@ -151,6 +153,45 @@ pub(crate) fn read_sheet_user_field_places(item: &[Sexpr], sheet_at: Point, name
     out
 }
 
+/// `parseSchField`'s `(do_not_autoplace [yes])` (`SetCanAutoplace( !doNotAutoplace )`).
+fn do_not_autoplace(p: &[Sexpr]) -> bool {
+    crate::sch_extras_io::parse_bool(p, "do_not_autoplace").unwrap_or(false) || p.iter().skip(1).any(|c| c.text() == Some("do_not_autoplace"))
+}
+
+/// A global label's Sheet References' own looks as the file has them (`parseSchField` on its `INTERSHEET_REFS` field: the size and bold of `parseEDA_TEXT`,
+/// italic, `(show_name)`, `(do_not_autoplace)`; `SchExtras::intersheet_refs_looks`), or `None` for the field's defaults. Its text and visibility are not read:
+/// Schematic Setup decides them (`RecomputeIntersheetRefs`).
+pub(crate) fn read_intersheet_refs_look(item: &[Sexpr]) -> Option<LabelField> {
+    let p = sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1).is_some_and(|n| n.eq_ignore_ascii_case(INTERSHEET_REFS_FIELD) || n.eq_ignore_ascii_case("Intersheet References")))?;
+    let look = crate::sch_extras_io::read_effects(p);
+    let size_nm = if look.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { eda_model::units::Nm::ZERO } else { look.size_nm };
+    let name_shown = crate::sch_extras_io::parse_bool(p, "show_name").unwrap_or(false) || p.iter().skip(1).any(|c| c.text() == Some("show_name"));
+    let f = LabelField { name: INTERSHEET_REFS_FIELD.into(), text: String::new(), visible: true, italic: look.italic, size_nm, bold: look.bold, name_shown, no_autoplace: do_not_autoplace(p) };
+    (f != LabelField { name: INTERSHEET_REFS_FIELD.into(), ..Default::default() }).then_some(f)
+}
+
+/// The font face and colour of each of a label's fields (`(effects (font (face ..) (color ..)))`, `SchExtras::field_looks` under the label's id), by the field's
+/// canonical name (`Intersheetrefs` for a global label's Sheet References, `Netclass` for "Net Class").
+pub(crate) fn read_label_field_looks(item: &[Sexpr], global: bool) -> std::collections::BTreeMap<String, eda_model::sch_extras::FieldFontLook> {
+    let mut out = std::collections::BTreeMap::new();
+    for p in sexpr::find_all(item, "property") {
+        let Some(name) = sexpr::txt(p, 1) else { continue };
+        let name = if global && (name.eq_ignore_ascii_case(INTERSHEET_REFS_FIELD) || name.eq_ignore_ascii_case("Intersheet References")) {
+            INTERSHEET_REFS_FIELD
+        } else if name == "Net Class" {
+            eda_model::sch_extras::NETCLASS_FIELD
+        } else {
+            name
+        };
+        let attrs = crate::sch_extras_io::read_text_attrs(p);
+        let look = eda_model::sch_extras::FieldFontLook { font: attrs.font, color: attrs.color };
+        if !name.is_empty() && !look.is_default() {
+            out.insert(name.to_string(), look);
+        }
+    }
+    out
+}
+
 /// `parseSchText`'s `(property ..)`s of a label: its own fields, in order (`parseSchField`). A global label's Sheet References is not one of them: it is the label's
 /// mandatory field, shown as Schematic Setup says -- `parseSchField` knows it by its canonical name without regard to case, or by the name KiCad 6 wrote
 /// ("Intersheet References"), and only on a global label (on another label a field of that name is a field like any other). A field's place is not kept (see
@@ -171,7 +212,7 @@ pub(crate) fn read_label_fields(item: &[Sexpr], global: bool) -> Vec<LabelField>
         // `parseEDA_TEXT`'s size and bold, `parseSchField`'s `(show_name)`; the default size is kept as none
         let size_nm = if look.size_nm == eda_model::ir::DEFAULT_FIELD_SIZE_NM { eda_model::units::Nm::ZERO } else { look.size_nm };
         let name_shown = crate::sch_extras_io::parse_bool(p, "show_name").unwrap_or(false) || p.iter().skip(1).any(|c| c.text() == Some("show_name"));
-        out.push(LabelField { name: name.to_string(), text, visible: !hidden, italic: look.italic, size_nm, bold: look.bold, name_shown });
+        out.push(LabelField { name: name.to_string(), text, visible: !hidden, italic: look.italic, size_nm, bold: look.bold, name_shown, no_autoplace: do_not_autoplace(p) });
     }
     out
 }

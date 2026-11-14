@@ -81,6 +81,11 @@ pub struct SchExtras {
     /// (`Netclass`, which puts the label's net in that class: `CONNECTION_GRAPH` `checkNetclassDrivers`) and any field the user added. A label with no entry has none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub label_fields: BTreeMap<String, Vec<LabelField>>,
+    /// A global label's Sheet References' own looks (`SCH_GLOBALLABEL`'s `INTERSHEET_REFS` field, which Label Properties' grid, Field Properties and Edit
+    /// Text & Graphics set like any field), by label id: its size, bold, italic, shown name and `no_autoplace`. Its name, text (`${INTERSHEET_REFS}`) and
+    /// visibility (Schematic Setup's `m_IntersheetRefsShow`) are not kept here. A label with no entry has the field's defaults. Additive (UI-LEFT-3 S3-31).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intersheet_refs_looks: BTreeMap<String, LabelField>,
     /// Drawn graphics and annotations, in drawing order (later ones paint over earlier ones).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<SchGraphic>,
@@ -757,12 +762,16 @@ pub struct LabelField {
     /// `SCH_FIELD::IsNameShown` (`(show_name yes)`): drawn as `Name: value`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub name_shown: bool,
+    /// `!SCH_FIELD::CanAutoplace` (`(do_not_autoplace yes)`, the fields grid's Allow Autoplacement unticked). `SCH_LABEL_BASE::AutoplaceFields` places every
+    /// field of a label whatever it says, so for a label's field it is only kept, written and read back. Additive (UI-LEFT-3 S3-31).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_autoplace: bool,
 }
 
 impl Default for LabelField {
     /// A new field as `SCH_FIELD`'s constructor makes one: shown, 50 mil, regular, its value alone.
     fn default() -> Self {
-        LabelField { name: String::new(), text: String::new(), visible: true, italic: false, size_nm: Nm::ZERO, bold: false, name_shown: false }
+        LabelField { name: String::new(), text: String::new(), visible: true, italic: false, size_nm: Nm::ZERO, bold: false, name_shown: false, no_autoplace: false }
     }
 }
 
@@ -1062,6 +1071,7 @@ impl SchExtras {
             && self.junction_looks.is_empty()
             && self.label_looks.is_empty()
             && self.label_fields.is_empty()
+            && self.intersheet_refs_looks.is_empty()
             && self.sheet_pin_looks.is_empty()
             && self.sheet_fields.is_empty()
             && self.sheet_field_places.is_empty()

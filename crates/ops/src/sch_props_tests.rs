@@ -591,10 +591,17 @@ fn a_labels_field_keeps_its_size_bold_and_shown_name() {
     ok(&mut b, looks("fld:lbl_g:Netclass", Some(mm(1.27)), None, None));
     assert_eq!(sch_of(&b).extras.label_fields["lbl_g"][0].size_nm, Nm::ZERO);
     assert_eq!(err(&mut b, looks("fld:lbl_g:Netclass", Some(mm(1.27)), Some(true), Some(true))), "ops_field_unchanged");
-    // the Sheet References keep the default look (the studio stores nothing of that field)
-    assert_eq!(err(&mut b, looks("fld:lbl_g:Intersheetrefs", None, Some(true), None)), "ops_bad_field");
+    // the Sheet References keep their own looks (`SchExtras::intersheet_refs_looks`, UI-LEFT-3 S3-31)
+    ok(&mut b, looks("fld:lbl_g:Intersheetrefs", Some(mm(2.0)), Some(true), Some(true)));
+    let isr = &sch_of(&b).extras.intersheet_refs_looks["lbl_g"];
+    assert_eq!((isr.size_nm, isr.bold, isr.name_shown), (mm(2.0), true, true));
+    let placed = placed_field(&b, "Intersheetrefs");
+    assert_eq!((placed.size_nm, placed.bold, placed.name_shown, placed.intersheet_refs), (mm(2.0), true, true, true));
+    // back to the defaults: no entry
+    ok(&mut b, looks("fld:lbl_g:Intersheetrefs", Some(mm(1.27)), Some(false), Some(false)));
+    assert!(!sch_of(&b).extras.intersheet_refs_looks.contains_key("lbl_g"));
     // Label Properties' grid: the row's Text Size, Bold and Show Name
-    let row = eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true, size_nm: mm(1.778), bold: false, name_shown: true };
+    let row = eda_model::sch_extras::LabelField { name: "Netclass".into(), text: "HV".into(), visible: true, italic: true, size_nm: mm(1.778), bold: false, name_shown: true, no_autoplace: false };
     ok(&mut b, SchCmd::EditLabel { id: "lbl_g".into(), text: None, shape: None, spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(vec![row.clone()]) });
     assert_eq!(sch_of(&b).extras.label_fields["lbl_g"], vec![row]);
     // Edit Text & Graphics on the label fields: size, bold and Show Field Names
@@ -916,4 +923,30 @@ fn a_sheets_user_field_has_a_text_of_its_own_in_a_variant() {
     assert_eq!(err(&mut b, set(&[("Nope", "x")])), "ops_unknown_item");
     ok(&mut b, set(&[("Channel", "A")]));
     assert!(sch_of(&b).extras.sheet_variants.is_empty(), "the field's own text: no record left");
+}
+
+/// UI-LEFT-3 S3-31: Label Properties' X / Y Position, Orientation and Allow Autoplacement on a label's field (`FIELDS_GRID_TABLE` on the label's fields: the
+/// offset from the label's anchor, `positioningChanged` taking the fields out of the autoplaced ones), and Edit Text & Graphics reaching the Sheet References.
+#[test]
+fn label_properties_place_a_field_by_its_offset_and_keep_allow_autoplacement() {
+    let (m, d) = board(with_label_field());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let anchor = sch_of(&b).labels[0].at;
+    let place = SchCmd::EditField { id: "fld:lbl_g:Netclass".into(), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: None, name_shown: None, allow_autoplace: None, local_at: Some(p(mm(5.08), mm(2.54))), local_vertical: Some(true), keep_autoplaced: false };
+    ok(&mut b, place);
+    let f = placed_field(&b, "Netclass");
+    assert_eq!((f.at.x - anchor.x, f.at.y - anchor.y, f.vertical), (mm(5.08), mm(2.54), true));
+    assert!(eda_engine::label_fields::hand_placed(sch_of(&b), "lbl_g"), "positioningChanged: AUTOPLACE_NONE");
+    // the Sheet References kept where they were (every field keeps its place)
+    assert!(sch_of(&b).field_layout["lbl_g"].iter().any(|p| p.name == "Intersheetrefs"));
+    // Allow Autoplacement unticked: kept on the field (`SetCanAutoplace`)
+    let autoplace = SchCmd::EditField { id: "fld:lbl_g:Netclass".into(), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: None, name_shown: None, allow_autoplace: Some(false), local_at: None, local_vertical: None, keep_autoplaced: false };
+    ok(&mut b, autoplace);
+    assert!(sch_of(&b).extras.label_fields["lbl_g"][0].no_autoplace);
+    // Edit Text & Graphics' label fields: the Sheet References take the size and italic, not the visibility
+    let spec = crate::sch_global_edit::GlobalEditSpec { label_fields: true, text_size_nm: Some(mm(2.0)), italic: Some(true), visible: Some(true), ..Default::default() };
+    ok(&mut b, SchCmd::GlobalEditTextGraphics { spec });
+    let isr = &sch_of(&b).extras.intersheet_refs_looks["lbl_g"];
+    assert_eq!((isr.size_nm, isr.italic), (mm(2.0), true));
+    assert!(!placed_field(&b, "Intersheetrefs").visible, "Schematic Setup's visibility");
 }

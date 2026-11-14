@@ -736,6 +736,9 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     let mut label_field_places: Vec<Option<Vec<eda_model::ir::FieldPlacement>>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
     let mut label_fields_read: Vec<Vec<eda_model::sch_extras::LabelField>> = Vec::new();
+    // each global label's Sheet References' own looks, and each label's fields' font faces and colours, parallel to `labels` (UI-LEFT-3 S3-31)
+    let mut label_isr_looks: Vec<Option<eda_model::sch_extras::LabelField>> = Vec::new();
+    let mut label_field_looks: Vec<BTreeMap<String, eda_model::sch_extras::FieldFontLook>> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
         for l in sexpr::find_all(root, tag) {
             let Some(net) = sexpr::txt(l, 1).map(String::from) else { continue };
@@ -765,6 +768,8 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             let attrs = crate::sch_extras_io::read_text_attrs(l);
             label_colors.push((attrs.color, attrs.font));
             label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
+            label_isr_looks.push(if tag == "global_label" { crate::label_fields::read_intersheet_refs_look(l) } else { None });
+            label_field_looks.push(crate::label_fields::read_label_field_looks(l, tag == "global_label"));
             label_field_places.push(crate::label_fields::read_label_field_places(l, tag == "global_label", labels.last().map(|x| x.at).unwrap_or_default()));
         }
     }
@@ -1028,6 +1033,18 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         for (id, fields) in sch.labels.iter().map(|l| l.id.clone()).zip(label_fields_read) {
             if !id.is_empty() && !fields.is_empty() {
                 sch.extras.label_fields.insert(id, fields);
+            }
+        }
+        // A global label's Sheet References' looks (`SchExtras::intersheet_refs_looks`) and the font and colour of a label's fields (`field_looks` under its id).
+        for ((id, isr), looks) in sch.labels.iter().map(|l| l.id.clone()).zip(label_isr_looks).zip(label_field_looks) {
+            if id.is_empty() {
+                continue;
+            }
+            if let Some(isr) = isr {
+                sch.extras.intersheet_refs_looks.insert(id.clone(), isr);
+            }
+            if !looks.is_empty() {
+                sch.extras.field_looks.insert(id, looks);
             }
         }
         // Where a label's fields are when the file has them placed by hand (no `(fields_autoplaced ..)`): `field_layout` under the label's id.

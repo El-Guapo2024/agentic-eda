@@ -345,4 +345,6 @@ export interface LabelFieldEdit {
   size_nm?: number;
   bold?: boolean;
   name_shown?: boolean;
+  /** `!SCH_FIELD::CanAutoplace`: the grid's Allow Autoplacement unticked (kept, written as `(do_not_autoplace yes)`). */
+  no_autoplace?: boolean;
 }

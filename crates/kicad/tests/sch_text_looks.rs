@@ -193,7 +193,7 @@ fn with_sheet_looks() -> (eda_model::ir::Design, ConstraintModel) {
     let (mut design, model) = with_sheet();
     let id = "a1b2c3d4-0000-4000-8000-000000000001";
     let sch = design.schematic.as_mut().unwrap();
-    sch.extras.sheet_fields.insert(id.into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: true, italic: true, size_nm: mm(2.0), bold: true, name_shown: true }]);
+    sch.extras.sheet_fields.insert(id.into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: true, italic: true, size_nm: mm(2.0), bold: true, name_shown: true, no_autoplace: false }]);
     sch.extras.sheet_field_places.entry(id.into()).or_default().insert("Rev".into(), eda_model::sch_extras::SheetFieldPlace { dx: mm(5.08), dy: mm(25.4), angle: 90_000, h: eda_model::ir::TextJustify::Left, v: eda_model::ir::TextVAlign::Bottom });
     sch.extras.set_field_look(id, "Rev", eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()) });
     let s = sch.sheets.iter_mut().find(|s| s.id == id).unwrap();

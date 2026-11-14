@@ -2478,7 +2478,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     // the id the studio selects, moves and edits the field by (`fld:<label id>:<name>`, `eda_engine::fields_edit`), and the font and colour
                     // Field Properties set (`SchExtras::field_looks` under the label's id)
                     let look = sch.extras.field_look(&l.id, &f.name);
-                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": if f.size_nm > Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }, "bold": f.bold, "name_shown": f.name_shown, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
+                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": if f.size_nm > Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }, "bold": f.bold, "name_shown": f.name_shown, "allow_autoplace": !f.no_autoplace, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)

@@ -3499,6 +3499,8 @@ export interface SchLabelField {
   /** Its font face and colour (`SchExtras::field_looks` under the label's id); absent is the default font and the layer's colour. */
   font?: string | null;
   color?: { r: number; g: number; b: number; a: number } | null;
+  /** `SCH_FIELD::CanAutoplace` (`LabelField::no_autoplace`, kept only: a label's `AutoplaceFields` places every field); absent from an older backend. */
+  allow_autoplace?: boolean;
 }
 
 /** Schematic Setup > Formatting > Inter-sheet References (`SCHEMATIC_SETTINGS::m_IntersheetRefs*`). */

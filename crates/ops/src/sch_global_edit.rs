@@ -15,7 +15,7 @@
 //!
 //! **Differs** (each said where it is done): a label's justification is its spin, so H and V
 //! Align turn a label's spin as its `SetHorizJustify` does (`GetSpinStyle`), but a centred label keeps its side and V Align leaves a label as it is
-//! ([`spin_of_justify`]); a global label's Sheet References field keeps its visibility (it follows Schematic Setup); the user fields of a power symbol keep
+//! ([`spin_of_justify`]); a global label's Sheet References field takes its looks but keeps its visibility (it follows Schematic Setup); the user fields of a power symbol keep
 //! their looks (they are not placed: `PowerProps`); a field of a symbol on a sheet read from a KiCad file has no place to keep its
 //! size, alignment or visibility in, and takes its font and colour only. Nothing changed is refused (KiCad pushes a commit of unchanged items).
 
@@ -365,6 +365,11 @@ fn visit(sch: &SchematicSection, model: &eda_model::ConstraintModel, path: &[Str
             out.insert(Target::Label(l.id.clone()));
         }
         if spec.label_fields {
+            // a global label's Sheet References are one of its fields (`label->GetFields()`), with their own looks (`SchExtras::intersheet_refs_looks`)
+            let isr = eda_model::sch_extras::INTERSHEET_REFS_FIELD;
+            if matches!(l.kind, LabelKind::Global { .. }) && field_named(isr) && take(&eda_engine::fields_edit::field_id(&l.id, isr), Some(&l.id)) {
+                out.insert(Target::LabelField { label: l.id.clone(), name: isr.to_string() });
+            }
             for f in sch.extras.label_fields.get(&l.id).into_iter().flatten() {
                 if field_named(&f.name) && take(&eda_engine::fields_edit::field_id(&l.id, &f.name), Some(&l.id)) {
                     out.insert(Target::LabelField { label: l.id.clone(), name: f.name.clone() });
@@ -714,9 +719,16 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                 }
             }
             Target::LabelField { label, name } => {
-                if let Some(f) = sch.extras.label_fields.get_mut(label).and_then(|v| v.iter_mut().find(|f| f.name == *name)) {
+                let isr = name == eda_model::sch_extras::INTERSHEET_REFS_FIELD && sch.labels.iter().any(|l| l.id == *label && matches!(l.kind, LabelKind::Global { .. }));
+                let default_isr = || eda_model::sch_extras::LabelField { name: eda_model::sch_extras::INTERSHEET_REFS_FIELD.into(), ..Default::default() };
+                if isr {
+                    sch.extras.intersheet_refs_looks.entry(label.clone()).or_insert_with(default_isr);
+                }
+                let field = if isr { sch.extras.intersheet_refs_looks.get_mut(label) } else { sch.extras.label_fields.get_mut(label).and_then(|v| v.iter_mut().find(|f| f.name == *name)) };
+                if let Some(f) = field {
                     let before = f.clone();
-                    if let Some(v) = spec.visible {
+                    // the Sheet References' visibility is Schematic Setup's
+                    if let Some(v) = spec.visible.filter(|_| !isr) {
                         f.visible = v;
                     }
                     if let Some(i) = spec.italic {
@@ -733,6 +745,9 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                         f.name_shown = n;
                     }
                     changed |= *f != before;
+                }
+                if isr && sch.extras.intersheet_refs_looks.get(label).is_some_and(|f| *f == default_isr()) {
+                    sch.extras.intersheet_refs_looks.remove(label);
                 }
                 changed |= edit_field_look(sch, label, name, spec);
             }
