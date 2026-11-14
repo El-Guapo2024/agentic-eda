@@ -127,6 +127,8 @@ pub struct NearestHit {
     pub dist_first: Nm,
     /// `OBSTACLE::m_ipFirst`.
     pub ip: Point,
+    /// The obstacle is the item's hole (`HOLE_T`), not its copper: [`Node::obstacle_hulls`]' second hull.
+    pub hole: bool,
 }
 
 /// What [`Node::assemble_line_with`] may walk across (`NODE::AssembleLine`'s
@@ -1015,46 +1017,38 @@ impl Node {
         }
     }
 
-    /// The hull an obstacle is walked round: its copper's (`HullCache( item, clearance + extra, walk_width, layer )`, the clearance it asks
-    /// of `head`), or -- for a pad or via whose hole is an obstacle of its own in KiCad (`HOLE_T`, walked round as well) -- the hole's at the
-    /// hole's clearance when that reaches further. **Differs:** KiCad walks round both; the larger of the two (by the box it spans) is the one
-    /// that matters for the round pads and vias of a board.
-    pub fn obstacle_hull(&self, rules: &BoardRules, item: &Item, head: Side, extra: Nm, walk_width: Nm, layer: i32, use_epsilon: bool) -> Vec<Point> {
-        // `VIA::Hull`: "if( m_hole && !..->IsFlashedOnLayer( this, aLayer ) ) return m_hole->Hull( .. )" -- a via (and a pad, whose copper is then no
-        // obstacle and whose hole is) on a layer it has removed is its hole
+    /// The hulls an obstacle is walked round, each with whether it is the item's hole: its copper's (`HullCache( item, clearance + extra,
+    /// walk_width, layer )`, the clearance it asks of `head`), and -- for a pad or via of another net whose hole reaches past what the copper's
+    /// clearance keeps clear -- its hole's at the hole's clearance, the hole being an obstacle of its own in KiCad (`NODE::addSolid` / `addVia`:
+    /// `addHole( aSolid->Hole() )`, a `HOLE_T` item of the index that `NearestObstacle` and the walk's clusters meet like any other). On a layer
+    /// the pad or via has removed only the hole is there (`VIA::Hull`: "if( m_hole && !..->IsFlashedOnLayer( this, aLayer ) ) return m_hole->Hull(
+    /// .. )"). A hole well inside its copper ([`crate::rule_resolver::RuleResolver::hole_reach`]) has a hull inside the copper's, which a walk round
+    /// the copper never meets: it is left out.
+    pub fn obstacle_hulls(&self, rules: &BoardRules, item: &Item, head: Side, extra: Nm, walk_width: Nm, layer: i32, use_epsilon: bool) -> Vec<(Vec<Point>, bool)> {
         if self.rules.as_ref().is_some_and(|r| !r.is_flashed_on(item, LayerRange::single(layer))) {
             if let Some((hole, hole_side)) = self.hole_of(item) {
                 let hole_clearance = self.clearance_between(rules, hole_side, head, use_epsilon);
-                return crate::hull::primitive_hull(&hole, hole_clearance + extra, walk_width);
+                return vec![(crate::hull::primitive_hull(&hole, hole_clearance + extra, walk_width), true)];
             }
         }
         let clearance = self.clearance_between(rules, Side::Item(item), head, use_epsilon);
-        let hull = item.hull(clearance + extra, walk_width, layer);
+        let mut out = vec![(item.hull(clearance + extra, walk_width, layer), false)];
         if same_net(item.net(), head.net()) {
-            return hull;
+            return out;
         }
-        // a hole far enough inside its copper reaches no further than the copper does ([`crate::rule_resolver::RuleResolver::hole_reach`])
         let depth = match item {
             Item::Via(v) => (v.diameter_on(layer) - v.drill) / 2,
             Item::Solid(s) => self.rules.as_ref().map_or(Nm::ZERO, |r| r.hole_annulus(s)),
-            _ => return hull,
+            _ => return out,
         };
         if !self.rules.as_ref().is_some_and(|r| r.hole_reach(clearance, depth)) {
-            return hull;
+            return out;
         }
-        let Some((hole, hole_side)) = self.hole_of(item) else { return hull };
-        let hole_clearance = self.clearance_between(rules, hole_side, head, use_epsilon);
-        let hole_hull = crate::hull::primitive_hull(&hole, hole_clearance + extra, walk_width);
-        let span = |h: &[Point]| {
-            let (x0, x1) = (h.iter().map(|p| p.x).min().unwrap_or(Nm::ZERO), h.iter().map(|p| p.x).max().unwrap_or(Nm::ZERO));
-            let (y0, y1) = (h.iter().map(|p| p.y).min().unwrap_or(Nm::ZERO), h.iter().map(|p| p.y).max().unwrap_or(Nm::ZERO));
-            (x1 - x0).area(y1 - y0)
-        };
-        if span(&hole_hull) > span(&hull) {
-            hole_hull
-        } else {
-            hull
+        if let Some((hole, hole_side)) = self.hole_of(item) {
+            let hole_clearance = self.clearance_between(rules, hole_side, head, use_epsilon);
+            out.push((crate::hull::primitive_hull(&hole, hole_clearance + extra, walk_width), true));
         }
+        out
     }
 
     /// `NODE::QueryColliding`/`ITEM::Collide`, narrowed to "every obstacle
@@ -1294,19 +1288,24 @@ impl Node {
             let make_hull = |h: Vec<Point>| if opts.box_hull { crate::hull::bbox_hull(&h) } else { h };
             // `GetClearance( item, aLine )`: of the whole line (`evaluateLineSegments`)
             let head = Side::Line { net: &line.net, layer: line.layer, width: line.width, pts: &line.pts };
-            let hull = make_hull(self.obstacle_hull(rules, item, head, line.width / 2, Nm::ZERO, line.layer, opts.use_epsilon));
-            let mut dist: Option<(Nm, Point)> = first_entry(&hull);
-            if let Some(v) = via {
-                let via_hull = make_hull(self.obstacle_hull(rules, item, Side::via(v), v.diameter_on(line.layer) / 2, Nm::ZERO, line.layer, opts.use_epsilon));
-                if let Some(d) = first_entry(&via_hull) {
-                    if dist.is_none_or(|(bd, _)| d.0 < bd) {
-                        dist = Some(d);
+            // the copper and the hole are two obstacles (`HOLE_T` in the index): the one whose hull the line enters first is the nearest
+            let mut dist: Option<(Nm, Point, bool)> = None;
+            let mut take = |hulls: Vec<(Vec<Point>, bool)>| {
+                for (h, is_hole) in hulls {
+                    if let Some(d) = first_entry(&make_hull(h)) {
+                        if dist.is_none_or(|(bd, _, _)| d.0 < bd) {
+                            dist = Some((d.0, d.1, is_hole));
+                        }
                     }
                 }
+            };
+            take(self.obstacle_hulls(rules, item, head, line.width / 2, Nm::ZERO, line.layer, opts.use_epsilon));
+            if let Some(v) = via {
+                take(self.obstacle_hulls(rules, item, Side::via(v), v.diameter_on(line.layer) / 2, Nm::ZERO, line.layer, opts.use_epsilon));
             }
-            if let Some((d, ip)) = dist {
+            if let Some((d, ip, hole)) = dist {
                 if best.as_ref().is_none_or(|b| d < b.dist_first) {
-                    best = Some(NearestHit { id: o.id, kind: o.kind, dist_first: d, ip });
+                    best = Some(NearestHit { id: o.id, kind: o.kind, dist_first: d, ip, hole });
                     if d == Nm::ZERO {
                         break;
                     }
@@ -1314,7 +1313,7 @@ impl Node {
             }
         }
         // `if( nearest.m_distFirst == INT_MAX ) nearest = obstacles[0];`
-        best.or_else(|| found.values().next().map(|o| NearestHit { id: o.id, kind: o.kind, dist_first: Nm::MAX, ip: o.pos }))
+        best.or_else(|| found.values().next().map(|o| NearestHit { id: o.id, kind: o.kind, dist_first: Nm::MAX, ip: o.pos, hole: false }))
     }
 
     /// `QueryColliding` with `m_differentNetsOnly = false` and

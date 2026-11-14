@@ -283,6 +283,32 @@ fn a_lone_pins_pad_is_on_its_unconnected_net_for_the_router() {
     assert!(pv.head.pts.iter().any(|q| (q.y - mm(10.0)).abs() > mm(0.5)), "it goes round R2.1: {:?}", pv.head.pts);
 }
 
+/// A pad's hole is an obstacle of its own (`NODE::addSolid`: `addHole( aSolid->Hole() )`, `HOLE_T`): a vertical slot that pokes out of a wide oval
+/// pad, with a hole clearance of 0.4 mm against the copper's 0.2 mm. A track of another net just above the pad meets the slot's hull first
+/// (`NearestObstacle` reports the hole), and a walk along it goes round the hole and the copper both (UI-LEFT-3 R3-11).
+#[test]
+fn a_hole_that_pokes_out_of_its_pad_is_an_obstacle_of_its_own() {
+    let (design, mut model) = board(&[("J1", "SLOT", p(20.0, 10.0)), ("R2", "PAD1", p(5.0, 10.65)), ("R3", "PAD1", p(35.0, 10.65))], &[("N1", &["J1.1"]), ("N2", &["R2.1", "R3.1"])]);
+    model.footprints.push(footprint("SLOT", vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(2.0), mm(0.8)), shape: PadShape::Oval, kind: PadKind::ThroughHole, drill: None, drill_slot: Some((mm(0.6), mm(1.4))), rot: 0, roundrect_ratio: None }]));
+    model.parts[0] = part("J1", "SLOT", 1);
+    model.board.clearance = mm(0.2);
+    model.board.hole_clearance_nm = mm(0.4);
+    let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+    // above the copper's clearance, inside the slot's
+    let line = eda_pns::line::Line::from_points(eda_pns::item::net_of("N2"), 0, mm(0.2), vec![p(15.0, 10.85), p(25.0, 10.85)]);
+    let hit = node.nearest_obstacle(&line, None, &model.board, &[], eda_pns::node::QueryOpts::default()).expect("the slot");
+    assert!(hit.hole, "the hole is met first: {hit:?}");
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(p(5.0, 10.65), "F.Cu", mm(0.2)).expect("starts on R2");
+    let pv = router.preview(p(35.0, 10.65)).expect("a route");
+    assert!(!pv.colliding, "{pv:?}");
+    let commit = router.finish(p(35.0, 10.65)).expect("commits");
+    let after = apply(&design, &commit);
+    let (node, _) = eda_pns::from_ir::build_node(&after, &model);
+    assert!(violations(&node, &model.board).is_empty(), "clear of the pad's copper and of its hole: {:?}", violations(&node, &model.board));
+}
+
 /// D on two selected parallel tracks: `MULTI_DRAGGER`, the second following the first at its distance; the commit replaces both.
 #[test]
 fn a_multi_track_drag_moves_the_selected_tracks_together() {

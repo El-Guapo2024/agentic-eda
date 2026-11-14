@@ -319,15 +319,18 @@ impl<'a> Walker<'a> {
             }
             let Some(item) = self.node.get(id) else { continue };
             // `m_world->GetClearance( clItem, &aLine, false )`, `clItem->Hull( clearance, aLine.Width(), layer )`
-            let hull = self.node.obstacle_hull(self.rules, item, Side::Line { net, layer, width, pts: pts.as_slice() }, Nm::ZERO, width, layer, false);
-            let hull = if self.corner_mode.is_90() { crate::hull::bbox_hull(&hull) } else { hull };
-            let mut simplified = Line { arcs: self.arcs.clone(), ..Line::from_points(net.clone(), layer, width, std::mem::take(pts)) };
-            simplified.simplify2(); // `aLine.Line().Simplify2()`
-            match walk_around_hull(&simplified.pts, &hull, cw) {
-                Some(p) => *pts = p,
-                None => {
-                    *pts = simplified.pts;
-                    return false;
+            // the item's copper, then its hole where that is an obstacle of its own (`HOLE_T`, the cluster's next item in KiCad)
+            let hulls = self.node.obstacle_hulls(self.rules, item, Side::Line { net, layer, width, pts: pts.as_slice() }, Nm::ZERO, width, layer, false);
+            for (hull, _) in hulls {
+                let hull = if self.corner_mode.is_90() { crate::hull::bbox_hull(&hull) } else { hull };
+                let mut simplified = Line { arcs: self.arcs.clone(), ..Line::from_points(net.clone(), layer, width, std::mem::take(pts)) };
+                simplified.simplify2(); // `aLine.Line().Simplify2()`
+                match walk_around_hull(&simplified.pts, &hull, cw) {
+                    Some(p) => *pts = p,
+                    None => {
+                        *pts = simplified.pts;
+                        return false;
+                    }
                 }
             }
         }

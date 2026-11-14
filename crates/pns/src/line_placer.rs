@@ -175,6 +175,9 @@ pub struct LinePlacer {
     /// The cursor of the last `Move` and the tracer as it was before it: asking again about the same cursor (a click at the place the cursor is) starts
     /// from that state, so it gives the posture the person saw.
     last_move: RefCell<Option<(Point, MouseTrailTracer, TailState)>>,
+    /// `m_last_p_end`: the cursor of the last `routeStep` (set at its end, every mode; reset by `initPlacement` at `Start` only), the second lead
+    /// `buildInitialLine` pushes a pending via along ([`Self::push_via`]).
+    last_p_end: Cell<Option<Point>>,
     /// `m_tail`, `m_head`, `m_direction` and `m_initial_direction` of the leg being routed: what `routeStep` keeps from one `Move` to the next in
     /// Walk around and Shove ([`TailState`]).
     tail_state: RefCell<TailState>,
@@ -247,7 +250,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), tail_state: RefCell::new(TailState::new(direction)), stage_dirs: Vec::new(), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_p_end: Cell::new(None), tail_state: RefCell::new(TailState::new(direction)), stage_dirs: Vec::new(), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
     }
 
     /// `FixRoute`'s `setInitialDirection( d_last )` -- "if( m_tail.SegmentCount() == 0 ) m_direction = aDirection;" -- then
@@ -344,6 +347,8 @@ impl LinePlacer {
         }
         st.prune_arcs();
         *self.tail_state.borrow_mut() = st.clone();
+        // `m_last_p_end = aP;`, the last thing `routeStep` does
+        self.last_p_end.set(Some(p));
         match routed.filter(|_| !fail) {
             Some(mut r) => {
                 // `Trace()`: the tail and the head, with their arcs (a rounded corner merged into the tail stays an arc, UI-LEFT-2 RR4)
@@ -669,8 +674,8 @@ impl LinePlacer {
     /// &m_head, false )`, `HullCache( obs->m_item, clearance, m_head.Width(), m_head.Layer() )`) and the point of it nearest the cursor `p` --
     /// `hull.NearestPoint( aP )`, or in `MITERED_90` / `ROUNDED_90` `hull.BBox().NearestPoint( aP )`. When that point is within half the head's width
     /// of the cursor (`( nearest - aP ).EuclideanNorm() < m_head.Width() / 2`), the head is built to it instead (`buildInitialLine( nearest, .. )`):
-    /// the caller does that. `None`: no obstacle, or the cursor is not that close to its hull. **Differs:** for a pad or via whose hole reaches
-    /// further than its copper the hull is the hole's ([`Node::obstacle_hull`]), where KiCad's nearest obstacle may be the `HOLE` item itself.
+    /// the caller does that. `None`: no obstacle, or the cursor is not that close to its hull. The nearest obstacle may be a pad's or via's hole
+    /// (`HOLE_T`, [`crate::node::NearestHit::hole`]), whose own hull is then the one ([`Node::obstacle_hulls`]).
     fn mark_obstacles_snap(&self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, raw: &Line, p: Point) -> Option<Point> {
         // `buildInitialLine( aP, m_head, RM_MarkObstacles )`: a pending via is appended at the cursor
         let via = self.placing_via.then(|| self.make_via(p));
@@ -678,7 +683,8 @@ impl LinePlacer {
         let hit = world.nearest_obstacle(raw, via.as_ref(), rules, &self.exclude(), opts)?;
         let item = world.get(hit.id)?;
         let head = crate::rule_resolver::Side::of_line(raw);
-        let hull = world.obstacle_hull(rules, item, head, Nm::ZERO, self.width, self.current_layer, false);
+        let hulls = world.obstacle_hulls(rules, item, head, Nm::ZERO, self.width, self.current_layer, false);
+        let Some((hull, _)) = hulls.iter().find(|(_, h)| *h == hit.hole).or(hulls.first()).cloned() else { return None };
         if hull.is_empty() {
             return None;
         }
@@ -747,19 +753,28 @@ impl LinePlacer {
         self.push_via(node, rules, settings, at, to_layer, mask)
     }
 
-    /// `buildInitialLine`'s `v.PushoutForce( m_currentNode, lead, force, collMask, iterLimit )` for the pending via at `at`, the lead from where
-    /// this leg started: where it comes free of the items of `mask`, or `at` when it does not.
+    /// `buildInitialLine`'s `v.PushoutForce( m_currentNode, lead, force, collMask, iterLimit )` for the pending via at `at`, in two attempts
+    /// (`for( int attempt = 0; attempt < 2; attempt++ )`): along the lead from where this leg started (`aP - m_p_start`), then -- when the last
+    /// `routeStep` left a cursor (`m_last_p_end`) -- along the lead from that cursor (`aP - m_last_p_end.value()`): where it comes free of the items
+    /// of `mask`, or `at` when neither attempt frees it.
     fn push_via(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, at: Point, to_layer: i32, mask: u8) -> Point {
         if settings.mode == Mode::MarkObstacles {
             return at;
         }
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         let start = self.fixed_start();
-        let lead = (at.x - start.x, at.y - start.y);
-        match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
-            Some(force) => Point { x: at.x + force.0, y: at.y + force.1 },
-            None => at,
+        for attempt in 0..2 {
+            let from = match (attempt, self.last_p_end.get()) {
+                (0, _) => start,
+                (_, Some(last)) => last,
+                (_, None) => start,
+            };
+            let lead = (at.x - from.x, at.y - from.y);
+            if let Some(force) = crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
+                return Point { x: at.x + force.0, y: at.y + force.1 };
+            }
         }
+        at
     }
 
     /// `LINE_PLACER::Move`: the live preview, including end-of-route
@@ -1790,6 +1805,31 @@ mod tests {
         // Highlight collisions never moves a via.
         let marking = RoutingSettings { mode: Mode::MarkObstacles, ..settings };
         assert_eq!(placer.place_via(&node, &rules, &marking, on_the_pad, 1), on_the_pad);
+    }
+
+    /// `buildInitialLine`'s second attempt (UI-LEFT-3 R3-11): a via between two columns of pads, where the minimum translation vector only throws it
+    /// from one column to the other, is freed in the second half of `VIA::PushoutForce`'s steps by the lead alone. The lead from where the leg
+    /// started (`aP - m_p_start`, from above) runs down between the columns and never frees it; the second attempt's, from the cursor of the
+    /// last `routeStep` (`aP - m_last_p_end`, from below), runs up and out.
+    #[test]
+    fn a_via_the_first_lead_cannot_free_is_pushed_along_the_lead_from_the_last_cursor() {
+        let mut node = Node::new();
+        for (k, y) in [0.0, -1.0, -2.0, -3.0].into_iter().enumerate() {
+            for (side, x) in [("L", -0.55), ("R", 0.55)] {
+                let c = Point { x: mm(x), y: mm(y) };
+                node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.5) }, source: format!("U{k}.{side}"), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
+            }
+        }
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Walkaround, via_force_prop_iteration_limit: 20, ..RoutingSettings::default() };
+        let at = Point { x: Nm::ZERO, y: Nm::ZERO };
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: mm(10.0) }, None, net_of("SIG"), 0, mm(0.2));
+        placer.toggle_via(true, mm(0.6), mm(0.3));
+        assert_eq!(placer.place_via(&node, &rules, &settings, at, 1), at, "no last cursor: both attempts lead down, and the via stays");
+        placer.preview(&node, &rules, &settings, Point { x: Nm::ZERO, y: mm(-10.0) });
+        assert_eq!(placer.last_p_end.get(), Some(Point { x: Nm::ZERO, y: mm(-10.0) }));
+        let placed = placer.place_via(&node, &rules, &settings, at, 1);
+        assert!(placed.y > mm(0.8), "pushed up and out: {placed:?}");
     }
 
     /// findings p5 F2-4 / F2-5: a `Move` whose `routeHead` fails keeps the head of the last one that routed (`routeStep`: `m_head = std::move(
