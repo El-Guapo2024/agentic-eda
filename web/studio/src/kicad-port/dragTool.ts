@@ -193,3 +193,17 @@ export function findGroupDragTarget(board: BoardState, selection: readonly strin
   }
   return { target: null, lockedOut: false };
 }
+
+/**
+ * `PCB_SELECTION_TOOL::Main`'s `routable`: the selection is tracks (segments or arcs, any number) or a single via, and nothing else -- `( segs >= 1 || arcs >= 1 ||
+ * vias == 1 ) && segs + arcs + vias == m_selection.GetSize()` ("multi-track dragging is currently supported, but not multi-via"). A mouse drag of it is the router's
+ * drag unless "Track mouse-drag mode:" is Move (UI-LEFT-3 C3-10).
+ */
+export function routableSelection(board: { routing?: { tracks: ReadonlyArray<{ id: string }>; vias: ReadonlyArray<{ id: string }> } | null }, ids: readonly string[]): boolean {
+  if (ids.length === 0) return false;
+  const tracks = new Set((board.routing?.tracks ?? []).map((t) => t.id));
+  const vias = new Set((board.routing?.vias ?? []).map((v) => v.id));
+  const nTracks = ids.filter((id) => tracks.has(id)).length;
+  const nVias = ids.filter((id) => vias.has(id)).length;
+  return (nTracks >= 1 || nVias === 1) && nTracks + nVias === ids.length;
+}

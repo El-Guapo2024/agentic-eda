@@ -66,7 +66,7 @@ import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
 import { routeMove, routeDragMove, dpMove, fetchState, setRouterEnteredGroup, setRouterGrid } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
-import { dragStateFromPreview } from "../../kicad-port/dragTool";
+import { dragStateFromPreview, routableSelection } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
 import { finishEditPattern, fixTune, hoverTune, isPatternSliding, moveTune, startTune, TuneHandleDrag } from "./tuneRouting";
 import { handleAt } from "../../kicad-port/tuneTool";
@@ -196,7 +196,12 @@ type DragState =
   /** `onMotion`'s DRAG_ZOOMING: the view scales about the press point (`m_zoomStartPoint`) by the pointer's travel down the screen since the last motion. */
   | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean }
   | { kind: "move"; refs: string[]; pivotNm?: [number, number]; flipPivotNm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
-  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; /** `m_highlight_modifier`: a release with no drag highlights the net under the pointer (UI-LEFT-3 C3-10). */ highlight?: boolean }
+  /**
+   * `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` on a routable selection with Preferences' "Track mouse-drag mode:" a drag: the router's 45 degree or free-angle drag
+   * (`PCB_ACTIONS::drag45Degree` / `dragFreeAngle`) once the press becomes a drag; the release fixes it (`InlineDrag`'s `IsMouseUp( BUT_LEFT )`). UI-LEFT-3 C3-10.
+   */
+  | { kind: "routerDrag"; freeAngle: boolean; started: boolean }
   /** `selectTableCells`: a drag from a cell of `table` selects the cells under it, from the selection it began with (`before`); `candidates` is what the press would have picked, for a release that is a click. */
   | { kind: "cells"; table: string; startWorld: [number, number]; before: string[]; modifiers: ClickModifiers; candidates: SelectionCandidate[]; moved: boolean }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
@@ -348,6 +353,8 @@ export function Canvas() {
    * ONLY if the drag never actually moved anything.
    */
   const pendingClickRef = useRef<{ id: string; modifiers: ClickModifiers } | null>(null);
+  /** A mouse-drag's router drag released before its session had started (UI-LEFT-3 C3-10): fixed where it was released once the drag tool has it. */
+  const pendingDragFixRef = useRef<{ at: [number, number]; ctrl: boolean } | null>(null);
   /** Interactive router (gap #7): a mouse-move preview is a real HTTP round
    * trip now (the backend resolves walkaround/shove), so it needs the same
    * "don't flood the server, and never let a slow reply clobber a newer
@@ -497,6 +504,10 @@ export function Canvas() {
       ratsnestCurved: state.ratsnestCurved,
       ratsnestThicknessPx: state.prefs.ratsnestThicknessPx,
       showCourtyardCollisions: state.prefs.showCourtyardCollisions,
+      // Preferences > PCB Editor > Editing Options (UI-LEFT-3 C3-10): the sheet's outline, and the moving items' ratsnest with the board's hidden
+      showPageLimits: state.prefs.pcbShowPageLimits,
+      showSelectedRatsnest: state.prefs.pcbShowSelectedRatsnest,
+      movingRatsnestEdges: state.ratsnest && (state.movePreview || state.drawState) ? state.ratsnest.edges.filter((e) => !state.bcx.hiddenRatsnestNets.includes(e.net)) : null,
       ratsnestEdges: state.ratsnest
         ? displayedRatsnest(state.ratsnest.edges, {
             showGlobal: state.showRatsnest,
@@ -585,7 +596,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, state.prefs.pcbNetNames, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance, ownClearances, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, imagePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.prefs.pcbShowPageLimits, state.prefs.pcbShowSelectedRatsnest, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, state.prefs.pcbNetNames, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance, ownClearances, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, imagePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -878,6 +889,14 @@ export function Canvas() {
     finishRequestSeen.current = state.pcbx.drawFinishRequest;
     finishDraw();
   }, [state.pcbx.drawFinishRequest, finishDraw]);
+
+  // A mouse-drag's router drag released before its session had started: fixed as soon as the drag tool has it (UI-LEFT-3 C3-10)
+  useEffect(() => {
+    const fix = pendingDragFixRef.current;
+    if (!fix || state.activeTool !== "drag" || state.drawState?.kind !== "drag") return;
+    pendingDragFixRef.current = null;
+    void finishInlineDrag(fix.at[0], fix.at[1], dispatch, api, fix.ctrl, state.drawState);
+  }, [state.activeTool, state.drawState, dispatch, api]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     // Throws NotFoundError for a synthesized pointer (common.Control.cursorClick's
@@ -1325,7 +1344,14 @@ export function Canvas() {
 
     pendingClickRef.current = null;
     const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
-    const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
+    // `setModifiersState` with `ctrlClickHighlights()`: Preferences' Ctrl "Highlight net (for pads/tracks)" makes Ctrl alone the highlight modifier (UI-LEFT-3 C3-10)
+    const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey, state.prefs.pcbCtrlClickHighlight);
+    // `IsClick( BUT_LEFT )` with `m_highlight_modifier && brd_editor`: `RunAction( PCB_ACTIONS::highlightNet )` instead of `selectPoint` -- the click selects nothing.
+    // A drag from here draws the selection area (KiCad would drag an item under the press: Ctrl is no modifier then).
+    if (state.activeTool === "select" && modifiers.highlight && !e.altKey) {
+      dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], highlight: true };
+      return;
+    }
     // A left click on a DRC marker selects it: `PCB_SELECTION_TOOL::selectPoint` takes a `PCB_MARKER` like any item, and `DRC_TOOL::CrossProbe` then selects its row in the
     // dialog when that is shown. It is the selection, the items that were selected are not; Alt+click still gets the list of everything under the pointer.
     if (state.activeTool === "select" && !hasModifier(modifiers) && !e.altKey) {
@@ -1450,6 +1476,12 @@ export function Canvas() {
       } else {
         refs = applySingleClickModifier(state.selection, hit.id, modifiers);
         dispatch({ type: "SET_SELECTION", refs });
+      }
+      // "Track mouse-drag mode:" (`m_TrackDragAction`): a drag of a routable selection -- tracks and arcs, or one via, nothing else -- is the router's drag unless the
+      // mode is Move (`PCB_SELECTION_TOOL::Main`: `routable && trackDragAction == DRAG` -> `drag45Degree`, `DRAG_FREE_ANGLE` -> `dragFreeAngle`, else `move`)
+      if (board && state.prefs.pcbTrackDragAction !== "move" && routableSelection(board, refs)) {
+        dragRef.current = { kind: "routerDrag", freeAngle: state.prefs.pcbTrackDragAction === "drag_free_angle", started: false };
+        return;
       }
       if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0 && board) {
         // What the drag picks up: the selection as the click leaves it (a group stands for its members, a pad for its footprint), locked items out
@@ -1622,6 +1654,11 @@ export function Canvas() {
       if (motion?.dragging) drag.moved = true;
       dispatch({ type: "SET_VIEW", view: dragZoomView(state.view, drag.anchor, e.clientY - drag.lastY, state.prefs.zoomSpeed) });
       drag.lastY = e.clientY;
+    } else if (drag.kind === "routerDrag") {
+      // the press became a drag: `RunAction( drag45Degree / dragFreeAngle )` on the selection, from the cursor (the moves after it are the drag tool's, below)
+      if (!motion?.dragging || drag.started) return;
+      drag.started = true;
+      void run(drag.freeAngle ? "pcbnew.InteractiveRouter.DragFreeAngle" : "pcbnew.InteractiveRouter.Drag45Degree");
     } else if (drag.kind === "move") {
       // Until the press has become a drag it is a click that may still be released: nothing is picked up.
       if (!motion?.dragging) return;
@@ -1686,6 +1723,20 @@ export function Canvas() {
     if (!drag) return;
     if (drag.kind === "pan" || drag.kind === "zoom") {
       justPannedRef.current = drag.button === 2 && drag.moved;
+    } else if (drag.kind === "routerDrag") {
+      // `InlineDrag`: `hasMouseMoved && IsMouseUp( BUT_LEFT )` fixes the drag where the pointer is; a press that never became a drag was the click (it selected at the press).
+      // The drag starts after the server answers: a release before that fixes it once it has started (`pendingDragFixRef`).
+      if (drag.started) {
+        const [ux, uy] = worldAt(e);
+        const [fx, fy] = toolPoint("drag", ux, uy, e);
+        const ctrl = snapMods(e).ctrl;
+        if (state.activeTool === "drag" && state.drawState?.kind === "drag") void finishInlineDrag(fx, fy, dispatch, api, ctrl, state.drawState);
+        else pendingDragFixRef.current = { at: [fx, fy], ctrl };
+      } else if (pendingClickRef.current) {
+        // the click on one item of a larger selection, deferred by the press (`keepGroupForDrag`)
+        dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, pendingClickRef.current.id, pendingClickRef.current.modifiers) });
+      }
+      pendingClickRef.current = null;
     } else if (drag.kind === "move") {
       const held = state.movePreview;
       if (drag.moved && held) {
@@ -1712,7 +1763,10 @@ export function Canvas() {
         else if (!hasModifier(drag.modifiers)) dispatch({ type: "CLEAR_SELECTION" });
       }
     } else if (drag.kind === "box" && board) {
-      if (!marquee) {
+      if (!marquee && drag.highlight) {
+        // `m_highlight_modifier`'s click: the net under the pointer highlighted (`BOARD_INSPECTION_TOOL::HighlightNet`), the selection left as it is
+        void run("pcbnew.EditorControl.highlightNet");
+      } else if (!marquee) {
         // Truly zero movement (not even the sub-pixel jitter that
         // normally produces a marquee) -- same deferred-click apply as
         // above, for the "modifier held, landed on exactly one item"
@@ -1724,7 +1778,7 @@ export function Canvas() {
         }
       } else {
         const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
-        const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
+        const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey, state.prefs.pcbCtrlClickHighlight);
         const crossing = marquee.crossing;
         const [x0, y0] = drag.startWorld;
         const [x1, y1] = screenToWorld(state.view, flipLocalX(state.bcx.boardFlipped, containerSize.width, marquee.x1), marquee.y1);

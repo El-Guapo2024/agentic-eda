@@ -4,9 +4,11 @@
 //   * PCB Editor > Editing Options (`PANEL_EDIT_OPTIONS( .., false )`, pcbnew/dialogs/panel_edit_options.cpp and _base; `loadPCBSettings`, `TransferDataFromWindow`):
 //     Constrain actions to H, V, 45 degrees (`m_AngleSnapMode`: checked is DEG45, unchecked DIRECT -- so OK, once the page was shown, makes a board in 90 degree mode
 //     45, as KiCad's `TransferDataFromWindow` does), Step for rotate commands, Arc editing mode, Flip board items, the Magnetic Points, Show ratsnest with curved lines (the View
-//     menu's toggle), Ratsnest line thickness, <ESC> clears net highlighting, Show courtyard collisions when moving/dragging. Greyed: Track mouse-drag mode,
-//     Ctrl+click's Highlight net, Always show selected ratsnest, Show page limits. Automatically refill zones is live (UI-LEFT-2 PP10: kicad-cli fills,
-//     kicad-port/autoRefill.ts).
+//     menu's toggle), Ratsnest line thickness, <ESC> clears net highlighting, Show courtyard collisions when moving/dragging, and (UI-LEFT-3 C3-10) Track mouse-drag
+//     mode (`m_TrackDragAction`: a left drag of tracks moves them or starts the router's 45 degree or free-angle drag, components/canvas/Canvas.tsx), Ctrl's
+//     "Highlight net (for pads/tracks)" (`m_CtrlClickHighlight`), Always show selected ratsnest (`m_ShowModuleRatsnest`: the moving items' ratsnest with the board's
+//     hidden) and Show page limits (`m_ShowPageLimits`: the sheet's outline, components/canvas/appearancePaint.ts `drawSheet`). Automatically refill zones is live
+//     (UI-LEFT-2 PP10: kicad-cli fills, kicad-port/autoRefill.ts).
 //   * Schematic Editor > Editing Options (`PANEL_EESCHEMA_EDITING_OPTIONS`, eeschema/dialogs/panel_eeschema_editing_options.cpp and _base): Line drawing mode
 //     (kept between sessions, `m_Drawing.line_mode`), Arc editing mode, Mouse drag performs Drag (G) operation (`m_Input.drag_is_move`), Automatically start wires on
 //     unconnected pins (`m_Drawing.auto_start_wires`, `SCH_SELECTION_TOOL::autostartEvent`), <ESC> clears net highlighting, Allow unconstrained pin swaps, the new
@@ -19,7 +21,7 @@
 //     and Keep pins attached when dragging edges.
 // The lengths are typed in mils (KiCad's `UNIT_BINDER` shows the frame's units). The Footprint Editor's page is components/FpPreferencesPages.tsx.
 import type { ReactNode } from "react";
-import { sanitizePinStepMils, sanitizeRatsnestThickness, type Preferences } from "../kicad-port/preferences";
+import { sanitizePinStepMils, sanitizeRatsnestThickness, type Preferences, type TrackDragAction } from "../kicad-port/preferences";
 import { ColorSwatch } from "./TextLookControls";
 import type { ArcEditMode } from "../kicad-port/pcbPointEdit";
 import type { LineMode } from "../kicad-port/schLineMode";
@@ -147,14 +149,14 @@ export function PcbEditingOptionsPage({ draft, set, extra, setExtra, rotationTex
           <span>deg</span>
         </div>
         {arcModeRow(draft.pcbArcEditMode, (m) => set({ pcbArcEditMode: m }), "pref-pcb-arc-mode")}
-        <NotOffered reason="Not ported: a mouse drag of a track starts the router's drag (KiCad's default, Drag (45 degree mode)).">
+        <div className="filter-row">
           <span style={{ width: 170 }}>Track mouse-drag mode:</span>
-          <select disabled value="1" aria-label="Track mouse-drag mode:">
-            <option value="0">Move</option>
-            <option value="1">Drag (45 degree mode)</option>
-            <option value="2">Drag (free angle)</option>
+          <select aria-label="Track mouse-drag mode:" data-testid="pref-track-drag-mode" value={draft.pcbTrackDragAction} onChange={(e) => set({ pcbTrackDragAction: e.target.value as TrackDragAction })}>
+            <option value="move">Move</option>
+            <option value="drag">Drag (45 degree mode)</option>
+            <option value="drag_free_angle">Drag (free angle)</option>
           </select>
-        </NotOffered>
+        </div>
         <div className="filter-row" title="Which way Change Side / Flip turns a board item over.">
           <span style={{ width: 170 }}>Flip board items:</span>
           <label style={{ marginRight: 12 }}>
@@ -168,15 +170,16 @@ export function PcbEditingOptionsPage({ draft, set, extra, setExtra, rotationTex
         {heading("Left Click Mouse Commands")}
         <LeftClickCommands
           ctrlRow={
-            <NotOffered reason="Not ported: Ctrl+click toggles the selection (KiCad's default); Highlight Net is its own tool here.">
+            // `m_rbToggleSel` / `m_rbHighlightNet` (`m_rbToggleSelMac` / `m_rbHighlightNetMac` on macOS, where the key is Cmd)
+            <div className="filter-row">
               <span style={{ width: 86 }}>{isMac() ? "Cmd:" : "Ctrl:"}</span>
               <label style={{ marginRight: 12 }}>
-                <input type="radio" disabled checked readOnly /> Toggle selection
+                <input type="radio" name="ctrl-click" data-testid="pref-ctrl-click-toggle" checked={!draft.pcbCtrlClickHighlight} onChange={() => set({ pcbCtrlClickHighlight: false })} /> Toggle selection
               </label>
               <label>
-                <input type="radio" disabled checked={false} readOnly /> Highlight net (for pads/tracks)
+                <input type="radio" name="ctrl-click" data-testid="pref-ctrl-click-highlight" checked={draft.pcbCtrlClickHighlight} onChange={() => set({ pcbCtrlClickHighlight: true })} /> Highlight net (for pads/tracks)
               </label>
-            </NotOffered>
+            </div>
           }
         />
       </div>
@@ -192,7 +195,7 @@ export function PcbEditingOptionsPage({ draft, set, extra, setExtra, rotationTex
           </select>
         </div>
         {heading("Ratsnest")}
-        {offCheck("Always show selected ratsnest", true, "Not ported: a selected footprint's ratsnest is shown with the board's (the Ratsnest layer's visibility).")}
+        {check("Always show selected ratsnest", draft.pcbShowSelectedRatsnest, (v) => set({ pcbShowSelectedRatsnest: v }), "pref-show-selected-ratsnest")}
         {check("Show ratsnest with curved lines", extra.ratsnestCurved, (v) => setExtra({ ratsnestCurved: v }), "pref-ratsnest-curved")}
         <div className="filter-row">
           <span style={{ width: 170 }}>Ratsnest line thickness:</span>
@@ -210,7 +213,7 @@ export function PcbEditingOptionsPage({ draft, set, extra, setExtra, rotationTex
         </div>
         {heading("Miscellaneous")}
         {check("<ESC> clears net highlighting", draft.escClearsNetHighlight, (v) => set({ escClearsNetHighlight: v }), "pref-pcb-esc-clears-highlight")}
-        {offCheck("Show page limits", true, "Not ported: the board editor does not draw the page limits. KiCad: Draw an outline to show the sheet size.")}
+        {check("Show page limits", draft.pcbShowPageLimits, (v) => set({ pcbShowPageLimits: v }), "pref-show-page-limits", "Draw an outline to show the sheet size.")}
         {check("Show courtyard collisions when moving/dragging", draft.showCourtyardCollisions, (v) => set({ showCourtyardCollisions: v }), "pref-courtyard-collisions")}
         {check("Automatically refill zones", draft.autoRefillZones, (v) => set({ autoRefillZones: v }), "pref-auto-refill-zones", "If checked, zones will be re-filled after each edit operation")}
       </div>

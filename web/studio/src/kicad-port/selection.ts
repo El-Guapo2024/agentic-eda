@@ -18,11 +18,11 @@
 //                                    //  conflict that doesn't apply here)
 //
 // `ctrlClickHighlights()` is `PCBNEW_SETTINGS::m_CtrlClickHighlight`,
-// which defaults OFF (pcbnew_settings.cpp: `m_CtrlClickHighlight( false )`)
-// and has no Preferences UI equivalent in this app -- so this module
-// always takes the `else` branch above, exactly like a stock KiCad
-// install. Ctrl/Cmd-click is therefore always the exclusive-or (toggle)
-// modifier here, never "highlight this net instead."
+// which defaults OFF (pcbnew_settings.cpp: `m_CtrlClickHighlight( false )`):
+// Ctrl/Cmd-click is then the exclusive-or (toggle) modifier. With
+// Preferences > PCB Editor > Editing Options' Ctrl "Highlight net (for
+// pads/tracks)" on, the board editor passes `ctrlClickHighlights` and
+// Ctrl/Cmd-click highlights the net instead (UI-LEFT-3 C3-10).
 //
 // Ctrl vs Cmd: KiCad's own TOOL_EVENT::Modifier(MD_CTRL) is wx's
 // wxMOD_CONTROL, which wxWidgets itself maps to the Cmd key on macOS (not
@@ -39,14 +39,22 @@ export interface ClickModifiers {
   exclusiveOr: boolean;
   /** Alt held: skip GuessSelectionCandidates and always show the clarification menu for 2+ overlapping candidates. */
   skipHeuristics: boolean;
+  /** `m_highlight_modifier`: Ctrl/Cmd+click alone highlights the net under the pointer instead of toggling (the board editor with `m_CtrlClickHighlight` on). */
+  highlight?: boolean;
 }
 
-export function computeClickModifiers(shiftKey: boolean, ctrlOrCmd: boolean, altKey: boolean): ClickModifiers {
+/**
+ * `SELECTION_TOOL::setModifiersState`: Shift adds, Ctrl+Shift removes, Ctrl alone toggles -- unless `ctrlClickHighlights()` (Preferences > PCB Editor > Editing Options'
+ * Ctrl "Highlight net (for pads/tracks)", `m_CtrlClickHighlight`, the board editor only), when Ctrl alone is `m_highlight_modifier` and toggles nothing
+ * (`m_exclusive_or = false`, so it is no modifier for `hasModifier` either; UI-LEFT-3 C3-10).
+ */
+export function computeClickModifiers(shiftKey: boolean, ctrlOrCmd: boolean, altKey: boolean, ctrlClickHighlights = false): ClickModifiers {
   return {
     subtractive: ctrlOrCmd && shiftKey,
     additive: shiftKey && !ctrlOrCmd,
-    exclusiveOr: ctrlOrCmd && !shiftKey,
+    exclusiveOr: !ctrlClickHighlights && ctrlOrCmd && !shiftKey,
     skipHeuristics: altKey,
+    highlight: ctrlClickHighlights && ctrlOrCmd && !shiftKey,
   };
 }
 

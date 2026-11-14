@@ -49,6 +49,9 @@ export function defaultZoomSpeed(isMacPlatform: boolean): number {
 export type { DragAction, LeftDragAction, MotionPanModifier, ScrollModifier, FlipDirection };
 export type ScrollRow = "zoom" | "panH" | "panV";
 
+/** `TRACK_DRAG_ACTION` (pcbnew/pcbnew_settings.h): `MOVE`, `DRAG`, `DRAG_FREE_ANGLE` -- the choices of "Track mouse-drag mode:" in that order. */
+export type TrackDragAction = "move" | "drag" | "drag_free_angle";
+
 export interface Preferences {
   /** `input.scroll_modifier_zoom` / `_pan_h` / `_pan_v`: the key held while scrolling for each action. */
   scrollModifierZoom: ScrollModifier;
@@ -140,6 +143,18 @@ export interface Preferences {
   escClearsNetHighlight: boolean;
   /** `PCBNEW_SETTINGS::m_ShowCourtyardCollisions` ("Show courtyard collisions when moving/dragging", `editing.show_courtyard_collisions`). Default on. */
   showCourtyardCollisions: boolean;
+  /** `PCBNEW_SETTINGS::m_TrackDragAction` ("Track mouse-drag mode:", `editing.track_drag_action`): what a left drag of tracks and a via does -- `MOVE` moves them,
+   *  `DRAG` is the router's 45 degree drag (`PCB_ACTIONS::drag45Degree`), `DRAG_FREE_ANGLE` its free-angle drag (`PCB_SELECTION_TOOL::Main`). Default DRAG. */
+  pcbTrackDragAction: TrackDragAction;
+  /** `m_CtrlClickHighlight` (Left Click Mouse Commands' Ctrl: "Highlight net (for pads/tracks)", `editing.ctrl_click_highlight`): Ctrl+click highlights the net under
+   *  the pointer instead of toggling the selection (`SELECTION_TOOL::setModifiersState`, `ctrlClickHighlights`). Default off. */
+  pcbCtrlClickHighlight: boolean;
+  /** `m_Display.m_ShowModuleRatsnest` ("Always show selected ratsnest", `pcb_display.ratsnest_footprint`): while selected items move, their ratsnest is drawn even with
+   *  the board's ratsnest hidden (`BOARD_INSPECTION_TOOL::calculateSelectionRatsnest`). Default on. */
+  pcbShowSelectedRatsnest: boolean;
+  /** `m_ShowPageLimits` ("Show page limits", `pcb_display.show_page_borders`): the outline of the sheet's size, in the Page limits colour (`DS_PAINTER::DrawBorder`).
+   *  Default on. */
+  pcbShowPageLimits: boolean;
   /** `PCBNEW_SETTINGS::m_AutoRefillZones` ("Automatically refill zones", `editing.auto_fill_zones`): after each edit the zones it damaged and the unfilled ones are filled
    *  (`BOARD_COMMIT::Push` -> `zoneFillDirty`; kicad-port/autoRefill.ts). Default off (UI-LEFT-2 PP10). */
   autoRefillZones: boolean;
@@ -282,6 +297,10 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schArcEditMode: DEFAULT_ARC_EDIT_MODE,
   escClearsNetHighlight: true,
   showCourtyardCollisions: true,
+  pcbTrackDragAction: "drag",
+  pcbCtrlClickHighlight: false,
+  pcbShowSelectedRatsnest: true,
+  pcbShowPageLimits: true,
   autoRefillZones: false,
   ratsnestThicknessPx: 0.5,
   schEscClearsNetHighlight: true,
@@ -467,6 +486,10 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
     escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),
     showCourtyardCollisions: bool(o.showCourtyardCollisions, d.showCourtyardCollisions),
+    pcbTrackDragAction: o.pcbTrackDragAction === "move" || o.pcbTrackDragAction === "drag" || o.pcbTrackDragAction === "drag_free_angle" ? o.pcbTrackDragAction : d.pcbTrackDragAction,
+    pcbCtrlClickHighlight: bool(o.pcbCtrlClickHighlight, d.pcbCtrlClickHighlight),
+    pcbShowSelectedRatsnest: bool(o.pcbShowSelectedRatsnest, d.pcbShowSelectedRatsnest),
+    pcbShowPageLimits: bool(o.pcbShowPageLimits, d.pcbShowPageLimits),
     autoRefillZones: bool(o.autoRefillZones, d.autoRefillZones),
     ratsnestThicknessPx: sanitizeRatsnestThickness(o.ratsnestThicknessPx, d.ratsnestThicknessPx),
     schEscClearsNetHighlight: bool(o.schEscClearsNetHighlight, d.schEscClearsNetHighlight),

@@ -23,7 +23,7 @@ import { paintEditorGrid } from "./gridPaint";
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { leaderModeOf, zoneLeader, zoneLoop } from "../../kicad-port/pcbDrawZone";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
-import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, type MovedEdge } from "../../kicad-port/localRatsnest";
+import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, withSelectedRatsnest, type MovedEdge } from "../../kicad-port/localRatsnest";
 import { edgeCutsDimFactor, hiContrastFactor, cssOf, hiContrastDim, highlightBrighten, highlightDarken, parseColor, ratsnestCurveControl, ratsnestLineColor } from "../../kicad-port/color4d";
 import { padContrast, padHoleContrast, viaCopperContrast, viaHoleContrast, type ContrastLook } from "../../kicad-port/hiContrast";
 import { galDrawOrder } from "../../kicad-port/galLayerOrder";
@@ -119,6 +119,12 @@ export interface PaintOptions {
   ratsnestThicknessPx?: number;
   /** `PCBNEW_SETTINGS::m_ShowCourtyardCollisions` ("Show courtyard collisions when moving/dragging"); on when absent. */
   showCourtyardCollisions?: boolean;
+  /** Preferences > PCB Editor > Editing Options > "Show page limits" (`m_ShowPageLimits`): the sheet's outline (appearancePaint.ts `drawSheet`). Default on. */
+  showPageLimits?: boolean;
+  /** "Always show selected ratsnest" (`m_Display.m_ShowModuleRatsnest`): while items move, their ratsnest is drawn with the board's hidden. Default on. */
+  showSelectedRatsnest?: boolean;
+  /** Every ratsnest edge but the hidden nets' -- what the moving items' dynamic ratsnest is drawn from (`calculateSelectionRatsnest`). */
+  movingRatsnestEdges?: PaintOptions["ratsnestEdges"];
   /** GET /api/ratsnest's edges (crates/connectivity, KiCad's own ratsnest algorithm) -- null while the first fetch hasn't landed yet, in which case nothing is drawn (no client-side fallback computation anymore). */
   ratsnestEdges: RatsnestEdge[] | null;
   layerVisible: Record<string, boolean>;
@@ -2392,8 +2398,12 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     },
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: the airwires redrawn live from a moving footprint's previewed position (kicad-port/localRatsnest.ts).
     LAYER_RATSNEST: () => {
-      if (!opts.showRatsnest || !opts.ratsnestEdges) return;
-      const edges = carry && preview ? carryRatsnest(opts.ratsnestEdges, fullBoard, carry, (pt) => carryPoint(preview, pt)) : offsetRatsnestForPreview(opts.ratsnestEdges, fullBoard, opts.movePreview);
+      const moved = <E extends RatsnestEdge>(es: readonly E[]) => (carry && preview ? carryRatsnest(es, fullBoard, carry, (pt) => carryPoint(preview, pt)) : offsetRatsnestForPreview(es, fullBoard, opts.movePreview));
+      const shown = opts.showRatsnest && opts.ratsnestEdges ? moved(opts.ratsnestEdges) : [];
+      // the moving items' own lines, with "Always show selected ratsnest" even while the board's ratsnest is hidden (`calculateSelectionRatsnest`, UI-LEFT-3 C3-10)
+      const all = opts.showSelectedRatsnest !== false && opts.movingRatsnestEdges && (carry || opts.movePreview) ? moved(opts.movingRatsnestEdges) : [];
+      const edges = withSelectedRatsnest(shown, all, opts.showSelectedRatsnest !== false);
+      if (edges.length === 0) return;
       drawRatsnest(ctx, view, edges, opts.ratsnestCurved, opts.netHighlight, (net) => ratsnestColor(net, opts.appearance), opts.ratsnestThicknessPx);
     },
     LAYER_ANCHOR: () => drawAnchors(ctx, view, board, opts),

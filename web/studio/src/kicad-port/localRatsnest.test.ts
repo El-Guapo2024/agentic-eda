@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, type RatsnestBoardLike, type RatsnestEdgeLike } from "./localRatsnest";
+import { carryRatsnest, offsetRatsnestForPreview, ratsnestCross, withSelectedRatsnest, type RatsnestBoardLike, type RatsnestEdgeLike } from "./localRatsnest";
 
 const board: RatsnestBoardLike = {
   parts: [
@@ -92,4 +92,16 @@ test("the lines a move draws from the moving items are the dynamic ratsnest; the
   const carried = carryRatsnest(edges, board, { moving: { parts: [], routing: { vias: [{ x: 8000, y: 8000 }], tracks: [] } } }, (pt) => [pt[0] + 1, pt[1]]);
   assert.equal(carried[0]!.dynamic, undefined);
   assert.equal(carried[1]!.dynamic, true);
+});
+
+test("C3-10: Always show selected ratsnest -- the moving items' lines with the board's ratsnest hidden; off, only the ones the board shows", () => {
+  const a = { from: [0, 0] as [number, number], to: [1, 1] as [number, number], net: "A" };
+  const b = { from: [2, 2] as [number, number], to: [3, 3] as [number, number], net: "B", dynamic: true as const };
+  const c = { from: [4, 4] as [number, number], to: [5, 5] as [number, number], net: "C", dynamic: true as const };
+  // the board's ratsnest hidden: nothing shown; the moving items' lines b and c
+  assert.deepEqual(withSelectedRatsnest([], [a, b, c], true).map((e) => e.net), ["B", "C"]);
+  assert.deepEqual(withSelectedRatsnest([], [a, b, c], false), []);
+  // shown: a static line and one of the moving ones; on, every moving one once
+  assert.deepEqual(withSelectedRatsnest([a, b], [a, b, c], true).map((e) => e.net), ["A", "B", "C"]);
+  assert.deepEqual(withSelectedRatsnest([a, b], [a, b, c], false).map((e) => e.net), ["A", "B"]);
 });

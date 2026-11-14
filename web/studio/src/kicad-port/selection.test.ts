@@ -9,17 +9,17 @@ test("computeClickModifiers: plain click has no modifier", () => {
 
 test("computeClickModifiers: Shift alone is additive (selection_tool.cpp m_additive = !ctrl && shift)", () => {
   const m = computeClickModifiers(true, false, false);
-  assert.deepEqual(m, { additive: true, subtractive: false, exclusiveOr: false, skipHeuristics: false });
+  assert.deepEqual(m, { additive: true, subtractive: false, exclusiveOr: false, skipHeuristics: false, highlight: false });
 });
 
 test("computeClickModifiers: Ctrl/Cmd+Shift is subtractive", () => {
   const m = computeClickModifiers(true, true, false);
-  assert.deepEqual(m, { additive: false, subtractive: true, exclusiveOr: false, skipHeuristics: false });
+  assert.deepEqual(m, { additive: false, subtractive: true, exclusiveOr: false, skipHeuristics: false, highlight: false });
 });
 
-test("computeClickModifiers: Ctrl/Cmd alone is exclusive-or (toggle) -- this app never models m_CtrlClickHighlight, which defaults off anyway", () => {
+test("computeClickModifiers: Ctrl/Cmd alone is exclusive-or (toggle) while m_CtrlClickHighlight is off, its default", () => {
   const m = computeClickModifiers(false, true, false);
-  assert.deepEqual(m, { additive: false, subtractive: false, exclusiveOr: true, skipHeuristics: false });
+  assert.deepEqual(m, { additive: false, subtractive: false, exclusiveOr: true, skipHeuristics: false, highlight: false });
 });
 
 test("computeClickModifiers: Alt sets skipHeuristics independently of Shift/Ctrl", () => {
@@ -170,4 +170,15 @@ test("guessSelectionCandidates: a footprint more than 70 % covered (FOOTPRINT::C
   const far = { ...candidate(500, 10), kind: "via" };
   guessSelectionCandidates([pad, fp, text, far], 10, null, false, (_c, pool) => ((asked = pool.map((p) => p.slopNm)), 1));
   assert.deepEqual(asked, [0, 0, 0], "the sloppy via is out of the pool");
+});
+
+test("C3-10: with Ctrl+click highlighting on, Ctrl alone highlights and toggles nothing (no modifier for hasModifier); Ctrl+Shift still removes", () => {
+  const m = computeClickModifiers(false, true, false, true);
+  assert.equal(m.highlight, true);
+  assert.equal(m.exclusiveOr, false);
+  assert.equal(hasModifier(m), false);
+  const r = computeClickModifiers(true, true, false, true);
+  assert.equal(r.highlight, false);
+  assert.equal(r.subtractive, true);
+  assert.equal(computeClickModifiers(false, true, false).highlight, false, "off: Ctrl toggles");
 });
