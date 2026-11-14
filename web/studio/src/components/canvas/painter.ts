@@ -2123,7 +2123,8 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   if (draw.kind === "measure") {
     const end = frozen ? pts[1]! : rubberEnd;
     // Interactive Offset's ruler (`arrow`): the anchor colour, no ticks, an arrowhead (`POSITION_RELATIVE_TOOL::InteractiveOffset`)
-    if (end) paintRuler(ctx, rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true, flipX: opts.rulerFlip?.x, flipY: opts.rulerFlip?.y }, measureStrokeText), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"), "pcb");
+    // (`DrawTextNextToCursor` writes the strings in `LAYER_AUX_ITEMS` whatever the ruler's own colour; each layer's shadow is drawn first, UI-LEFT-3 C3-7)
+    if (end) paintRuler(ctx, (shadows) => rulerDrawing(pts[0]!, end, { scale: view.scale, viewport }, { units: opts.units, showTicks: !draw.arrow, showEndArrowHead: draw.arrow === true, flipX: opts.rulerFlip?.x, flipY: opts.rulerFlip?.y }, measureStrokeText, shadows), layerColor(draw.arrow ? "anchor" : "LAYER_AUX_ITEMS"), "pcb", layerColor("LAYER_AUX_ITEMS"));
     return;
   }
   strokeDashedPolyline(ctx, view, shown, color, hairlineNm(view, 1.5), (draw.kind === "zone" || loop.length > 0) && shown.length >= 2);

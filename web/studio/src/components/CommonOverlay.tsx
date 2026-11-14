@@ -159,7 +159,7 @@ export function CommonOverlay() {
         ctx.scale(v.scale, v.scale);
         // `PCB_VIEWER_TOOLS::MeasureTool` in the Footprint Editor: `RULER_ITEM( .., invertXAxis, invertYAxis )` of its own Origins & Axes (`m_DisplayInvertXAxis`)
         const flip = tab === "footprint" ? { flipX: studio.prefs.fpInvertXAxis, flipY: studio.prefs.fpInvertYAxis } : {};
-        paintRuler(ctx, rulerDrawing([start[0], start[1]], [end[0], end[1]], { scale: v.scale, viewport }, { units: studio.units, ...flip }, measureStrokeText), layerColor("LAYER_AUX_ITEMS"), tab);
+        paintRuler(ctx, (shadows) => rulerDrawing([start[0], start[1]], [end[0], end[1]], { scale: v.scale, viewport }, { units: studio.units, ...flip }, measureStrokeText, shadows), layerColor("LAYER_AUX_ITEMS"), tab);
         ctx.restore();
       }
     }
