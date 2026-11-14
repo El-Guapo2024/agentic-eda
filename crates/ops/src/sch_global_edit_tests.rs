@@ -279,7 +279,8 @@ fn a_symbol_placed_with_automatic_placement_off_has_its_fields_where_the_library
     use eda_model::sym_fields::LibrarySymbolField;
     let m = ConstraintModel { parts: vec![part("R1"), part("R7"), part("R7")], ..Default::default() };
     let mut d = design();
-    let mut lib = eda_model::ir::LibrarySymbol { lib_id: "Device:R".into(), reference_prefix: "R".into(), published: true, ..Default::default() };
+    // (not published: the sheet draws the model's Device:R, the copy keeps only the fields' places)
+    let mut lib = eda_model::ir::LibrarySymbol { lib_id: "Device:R".into(), reference_prefix: "R".into(), published: false, ..Default::default() };
     lib.set_fields(vec![LibrarySymbolField { name: "Reference".into(), text: "R".into(), at: eda_model::symbol::SPoint { x: 2.032, y: 0.0 }, ..LibrarySymbolField::default() }]);
     d.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![lib], ..Default::default() });
     let add = Cmd::AddSymbol { annotate: None, id: "R7".into(), lib_id: "Device:R".into(), at: p(101.6, 101.6), rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 };
