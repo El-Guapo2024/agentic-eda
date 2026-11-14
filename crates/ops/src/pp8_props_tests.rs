@@ -48,14 +48,53 @@ fn a_renumbered_pad_keeps_its_net_and_its_edit_and_its_old_number_leaves_the_net
 fn a_pad_renamed_to_a_shared_number_takes_its_place_among_the_pads_of_that_number() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
-    // Pad 3 (on no net) gets a margin, then becomes the second pad numbered 2: its edit is `2#2`, and it is on pad 2's pin.
+    // Pad 3 (on no net) gets a margin, then becomes the second pad numbered 2: its edit is `2#2`.
     let mut e = PadEdit::none("3", 1);
     e.solder_paste_margin = Some(mm(-0.02));
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: e }).unwrap();
     b.apply(&Cmd::SetPadNumber { pad: "U1.3".into(), number: "2".into() }).unwrap();
     let edits = &b.design().footprint_edit("U1").unwrap().pads;
     assert_eq!(edits.iter().map(|e| (e.number.as_str(), e.nth)).collect::<Vec<_>>(), vec![("2", 2)]);
+    // `PAD::SetNumber` keeps each pad's net (UI-LEFT-3 P3-9): pad 2 stays on VCC, the renamed pad on none -- each its own (`PadMaskInfo::net`), the net list untouched.
     assert_eq!(net_of(&nets_of(&b), "U1.2").as_deref(), Some("VCC"));
+    assert_eq!(net_of(&nets_of(&b), "U1.3"), None);
+    let extra = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").expect("U1's pads keep their own nets");
+    assert_eq!(extra.pads.iter().map(|p| p.net.as_deref()).collect::<Vec<_>>(), vec![None, Some("VCC"), Some("")]);
+}
+
+#[test]
+fn a_pad_renamed_to_another_pads_number_keeps_its_own_net_on_the_board_and_in_the_file() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    // Pad 1 (GND) becomes a second pad 2 (VCC): KiCad's `PAD::SetNumber` touches nothing else, so it stays on GND until Update PCB from Schematic.
+    b.apply(&Cmd::SetPadNumber { pad: "U1.1".into(), number: "2".into() }).unwrap();
+    let extra = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").unwrap();
+    assert_eq!(extra.pads.iter().map(|p| p.net.as_deref()).collect::<Vec<_>>(), vec![Some("GND"), Some("VCC"), None]);
+    // The connectivity reads each pad's own net.
+    let d = b.design().clone();
+    // (the model the server builds: the board's copy of U1's footprint, `fold_footprint_edits`)
+    let mut m2 = m.clone();
+    m2.instance_footprints.insert("U1".into(), d.footprint_assignment("U1").and_then(|a| a.definition.clone()).unwrap());
+    let items = eda_connectivity::items::build_items(&d, &m2, &Default::default());
+    let mut pad_nets: Vec<(String, String)> = items
+        .iter()
+        .filter(|i| i.pad_piece_of.is_none())
+        .filter_map(|i| match &i.item {
+            eda_connectivity::ItemRef::Pad { reference, number } if reference == "U1" => Some((format!("U1.{number}"), i.net.clone())),
+            _ => None,
+        })
+        .collect();
+    pad_nets.sort();
+    pad_nets.dedup();
+    assert_eq!(pad_nets, vec![("U1.2".to_string(), "GND".to_string()), ("U1.2".to_string(), "VCC".to_string()), ("U1.3".to_string(), String::new())]);
+    // The board file writes each pad's own net.
+    let pcb = eda_kicad::export_kicad_pcb(&d, &m2, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    let u1 = &pcb[pcb.find("\"U1\"").unwrap()..];
+    let pad_nets: Vec<&str> = u1.split("(pad ").skip(1).take(3).map(|p| p.split("(net ").nth(1).map_or("", |n| n.split(')').next().unwrap())).collect();
+    assert!(pad_nets[0].contains("GND") && pad_nets[1].contains("VCC") && pad_nets[2].is_empty(), "{pad_nets:?}");
+    // A pad renamed to a number nobody has: its pin joins the net it was on (the pads of a shared number keep theirs).
+    b.apply(&Cmd::SetPadNumber { pad: "U1.3".into(), number: "9".into() }).unwrap();
+    assert_eq!(net_of(&nets_of(&b), "U1.9"), None);
 }
 
 #[test]

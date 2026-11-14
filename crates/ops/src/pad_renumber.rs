@@ -8,12 +8,15 @@
 //! * the footprint's pads: the instance gets its own copy of the footprint it is on with the pad renamed (a [`FootprintAssignment`] with a definition, as the
 //!   footprint's own texts and Swap Layers make one: `fp_texts.rs`), its pad edits re-keyed to the pads' new numbers and places among the pads that share them
 //!   (`REF.NUM#k`);
-//! * the pad's net: `REF.NEW` joins the net `REF.OLD` is on (when it is on none of its own already), and `REF.OLD` leaves it once no pad of the footprint is
-//!   numbered so -- the net list in force becomes the design's own, as a swap of pad nets makes it; a board-only part's `pad_nets` the same;
+//! * the pad's net: `REF.NEW` joins the net `REF.OLD` is on, and `REF.OLD` leaves it once no pad of the footprint is numbered so -- the net list in force
+//!   becomes the design's own, as a swap of pad nets makes it; a board-only part's `pad_nets` the same;
+//! * a pad renamed to a number another pad of the footprint already has keeps its own net, and those pads keep theirs (UI-LEFT-3 P3-9): when the nets differ,
+//!   every pad of that number gets its own (`PadMaskInfo::net`, the per-`PAD` net an imported board keeps where a number is on two nets, UI-LEFT-2 PP21),
+//!   which the connectivity, the writer and the studio read over the number's; the net list is left as it is. Update PCB from Schematic then matches the
+//!   pads to the pins again, as in KiCad;
 //! * the zone overrides of the old number (`set_pad_zone_overrides`, which are per number here, per pad in KiCad) are the new number's too.
 //!
-//! Differs: a pad renamed to a number another pad of the footprint already has shares that pad's pin, and so its net (KiCad keeps each pad's own); a pad's
-//! number on an NPTH pad is not offered (`isCopperPad`), as in KiCad.
+//! A pad's number on an NPTH pad is not offered (`isCopperPad`), as in KiCad.
 
 use super::Board;
 use eda_model::fp_assign::FootprintAssignment;
@@ -60,6 +63,28 @@ impl Board<'_> {
         numbers_after[index] = number.to_string();
         let (keys_before, keys_after) = (keys_of(&numbers_before), keys_of(&numbers_after));
         let old_kept = numbers_after.iter().any(|n| *n == old);
+        // `PAD::SetNumber` touches nothing but the number: each pad's net before the rename, its own (`PadMaskInfo::net`) or its number's.
+        let nets_before = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
+        let own_before: Vec<Option<String>> = {
+            let infos = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).map(|e| &e.pads).filter(|p| p.len() == numbers_before.len());
+            (0..numbers_before.len()).map(|j| infos.and_then(|p| p[j].net.clone())).collect()
+        };
+        let board_pad_nets: Vec<(String, String)> = self.design.drawings.as_ref().and_then(|d| d.board_parts.iter().find(|p| p.reference == reference)).map(|p| p.pad_nets.clone()).unwrap_or_default();
+        let net_before = |j: usize| -> String {
+            own_before[j].clone().unwrap_or_else(|| {
+                let pin = format!("{reference}.{}", numbers_before[j]);
+                nets_before
+                    .iter()
+                    .find(|n| n.pins.contains(&pin))
+                    .map(|n| n.name.clone())
+                    .or_else(|| board_pad_nets.iter().find(|(n, _)| *n == numbers_before[j]).map(|(_, net)| net.clone()))
+                    .unwrap_or_default()
+            })
+        };
+        // Renamed to a number another pad has: every pad keeps the net it had (UI-LEFT-3 P3-9).
+        let shares = !number.is_empty() && numbers_before.iter().enumerate().any(|(j, n)| j != index && n == number);
+        let kept_nets: Option<Vec<(usize, String)>> = shares.then(|| (0..numbers_after.len()).filter(|&j| numbers_after[j] == number).map(|j| (j, net_before(j))).collect());
+        let split = kept_nets.as_ref().is_some_and(|k| k.iter().any(|(_, n)| *n != k[0].1));
 
         // The footprint's own copy, the pad renamed.
         let mut fp = before.clone();
@@ -91,13 +116,39 @@ impl Board<'_> {
             }
         }
 
-        // The pad keeps its net: its new pin joins the net its old pin is on.
+        // Each pad of a shared number keeps its own net where they differ (`PadMaskInfo::net`, in the footprint's pad order).
+        if split {
+            let pad_count = numbers_after.len();
+            // A footprint made here has no pad records: each new one takes the pin function and type its pad is written with now (its schematic pin's, as
+            // `updateComponentPadConnections` set them), since the writer reads a record's own over the pin's.
+            let pins: Vec<(String, String)> = numbers_before
+                .iter()
+                .map(|n| self.model.symbol_links.get(&reference).and_then(|l| l.pins.get(n)).cloned().unwrap_or_default())
+                .collect();
+            let dr = self.drawings_mut();
+            if !dr.footprint_extras.iter().any(|e| e.id == reference) {
+                dr.footprint_extras.push(eda_model::ir::FootprintExtra { id: reference.clone(), ..Default::default() });
+            }
+            let extra = dr.footprint_extras.iter_mut().find(|e| e.id == reference).expect("just made");
+            if extra.pads.len() != pad_count {
+                let made_here = !extra.from_library;
+                extra.pads = pins
+                    .into_iter()
+                    .map(|(pin_function, pin_type)| if made_here { eda_model::ir::PadMaskInfo { pin_function, pin_type, ..Default::default() } } else { Default::default() })
+                    .collect();
+            }
+            for (j, net) in kept_nets.iter().flatten() {
+                extra.pads[*j].net = Some(net.clone());
+            }
+        }
+
+        // The pad keeps its net: its new pin joins the net its old pin is on (a number another pad has keeps its pin where it is, above).
         let (old_pin, new_pin) = (format!("{reference}.{old}"), format!("{reference}.{number}"));
         let mut nets = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
         let was_on = nets.iter().position(|n| n.pins.contains(&old_pin));
         let new_is_on = nets.iter().any(|n| n.pins.contains(&new_pin));
         if let Some(i) = was_on {
-            if !new_is_on && !number.is_empty() {
+            if !new_is_on && !number.is_empty() && !shares {
                 let pins = &mut nets[i].pins;
                 let sorted = pins.windows(2).all(|w| w[0] <= w[1]);
                 pins.push(new_pin.clone());
@@ -112,7 +163,7 @@ impl Board<'_> {
         }
         if let Some(bp) = self.design.drawings.as_mut().and_then(|d| d.board_parts.iter_mut().find(|p| p.reference == reference)) {
             if let Some(net) = bp.pad_nets.iter().find(|(n, _)| *n == old).map(|(_, net)| net.clone()) {
-                if !bp.pad_nets.iter().any(|(n, _)| n == number) && !number.is_empty() {
+                if !bp.pad_nets.iter().any(|(n, _)| n == number) && !number.is_empty() && !shares {
                     bp.pad_nets.push((number.to_string(), net));
                 }
                 if !old_kept {
